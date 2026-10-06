@@ -54,6 +54,15 @@
 		/** What is being cropped, for the heading — a name, or a name plus
 		 *  "'s avatar". Absent for an image nothing else names. */
 		subject?: string
+		/**
+		 * Render in place, while `open`, instead of in a dialog of its own —
+		 * for a caller that is itself a modal dialog. A second dialog portals
+		 * outside the first one's content, where the open modal hides it from
+		 * assistive tech (`aria-hidden`) and blocks its pointer events, so its
+		 * controls cannot be used. Save and cancel still answer through
+		 * `onOpenChange`.
+		 */
+		inline?: boolean
 	}
 
 	let {
@@ -64,7 +73,8 @@
 		onSave,
 		onCancel,
 		onClosed,
-		subject
+		subject,
+		inline = false
 	}: Props = $props()
 
 	/** The image's natural size, and the units every frame is written in. */
@@ -130,7 +140,19 @@
 		}
 	})
 
-	let stage = $derived(Math.max(220, Math.min(stageWidth, 420)))
+	/** The previews' column beside the stage: two 96px previews, their gap,
+	 *  and the gap to the stage. */
+	const SIDE_COLUMN = 96 + 16 + 96 + 16
+	/** Side by side only when the row holds the smallest stage AND the column
+	 *  — measured on the row, so a narrow dialog (or this editor inline in
+	 *  one) stacks the previews below instead of pushing them past its edge. */
+	let sideBySide = $derived(stageWidth >= 220 + SIDE_COLUMN)
+	let stage = $derived(
+		Math.max(
+			220,
+			Math.min(sideBySide ? stageWidth - SIDE_COLUMN : stageWidth, 420)
+		)
+	)
 	let mask = $derived(Math.round(stage * 0.78))
 	let maskOffset = $derived(Math.round((stage - mask) / 2))
 
@@ -331,205 +353,213 @@
 	}
 </script>
 
-<Dialog {open} {onOpenChange}>
-	<Portal>
-		<Dialog.Backdrop
-			class="bg-surface-50-950/60 fixed inset-0 z-[1100] backdrop-blur-sm"
-		/>
-		<Dialog.Positioner
-			class="fixed inset-0 z-[1100] flex items-center justify-center p-4"
-		>
-			<Dialog.Content
-				class="card bg-surface-100-900 max-h-[90dvh] w-[min(92vw,720px)] overflow-y-auto p-4 shadow-xl"
+{#snippet editor()}
+	<header class="mb-3 flex items-center gap-2">
+		<Icons.Crop size={18} aria-hidden="true" />
+		<h2 class="h4" id="avatar-crop-title">
+			{subject ? `Crop ${subject}` : "Crop image"}
+		</h2>
+	</header>
+
+	<div
+		class="flex gap-4 {sideBySide ? 'flex-row' : 'flex-col'}"
+		bind:clientWidth={() => stageWidth, measureStage}
+	>
+		<div class="flex flex-col items-center gap-2">
+			<!-- The gesture surface. `role="application"` because it
+				     has its own keyboard model: arrows nudge the frame
+				     rather than moving focus, which is exactly what that
+				     role exists to announce. Svelte's a11y rules read
+				     `application` as non-interactive and would have this
+				     be a button, which would announce the wrong thing. -->
+			<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+			<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+			<div
+				class="bg-surface-200-800 relative touch-none overflow-hidden rounded select-none"
+				style="width:{stage}px;height:{stage}px;"
+				role="application"
+				tabindex="0"
+				aria-label="Crop area. Drag to move the image, arrow keys to nudge it, shift and an arrow to nudge further, plus and minus to zoom."
+				onpointerdown={onPointerDown}
+				onpointermove={onPointerMove}
+				onpointerup={onPointerUp}
+				onpointercancel={onPointerUp}
+				onwheel={onWheel}
+				onkeydown={onStageKeydown}
 			>
-				<header class="mb-3 flex items-center gap-2">
-					<Icons.Crop size={18} aria-hidden="true" />
-					<h2 class="h4" id="avatar-crop-title">
-						{subject ? `Crop ${subject}` : "Crop image"}
-					</h2>
-				</header>
-
+				<!-- Nothing is fetched without a source: a closed
+					     editor is still mounted, and an empty `src`
+					     would be one failed request per caller. Keyed
+					     on the source so opening the editor on a
+					     different image re-measures it: the frame is
+					     in THAT image's pixels. -->
+				{#if src}
+					{#key src}
+						<img
+							{src}
+							alt=""
+							draggable="false"
+							class="pointer-events-none absolute max-w-none"
+							style={placement
+								? `left:${placement.left}px;top:${placement.top}px;width:${placement.width}px;height:${placement.height}px;`
+								: "opacity:0;"}
+							onload={onImageLoad}
+							onerror={onImageError}
+						/>
+					{/key}
+				{/if}
+				<!-- Everything outside the frame, dimmed by one
+					     box-shadow rather than four rectangles. -->
 				<div
-					class="flex flex-col gap-4 sm:flex-row"
-					bind:clientWidth={() => stageWidth, measureStage}
-				>
-					<div class="flex flex-col items-center gap-2">
-						<!-- The gesture surface. `role="application"` because it
-						     has its own keyboard model: arrows nudge the frame
-						     rather than moving focus, which is exactly what that
-						     role exists to announce. Svelte's a11y rules read
-						     `application` as non-interactive and would have this
-						     be a button, which would announce the wrong thing. -->
-						<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-						<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+					bind:this={maskEl}
+					class="pointer-events-none absolute border-2 border-white/80"
+					style="left:{maskOffset}px;top:{maskOffset}px;width:{mask}px;height:{mask}px;box-shadow:0 0 0 9999px rgb(0 0 0 / 0.55);"
+					aria-hidden="true"
+				></div>
+				{#if failed}
+					<p
+						class="text-error-500 absolute inset-0 flex items-center justify-center p-4 text-center text-sm"
+					>
+						That image could not be loaded, so there is nothing to
+						crop.
+					</p>
+				{/if}
+			</div>
+
+			<label
+				class="flex w-full items-center gap-2 text-sm"
+				for="avatar-crop-zoom"
+			>
+				<Icons.ZoomOut size={16} aria-hidden="true" />
+				<input
+					id="avatar-crop-zoom"
+					type="range"
+					class="w-full"
+					min="1"
+					max={MAX_ZOOM}
+					step="0.01"
+					value={zoom}
+					disabled={!natural}
+					oninput={onZoomInput}
+					aria-label="Zoom"
+				/>
+				<Icons.ZoomIn size={16} aria-hidden="true" />
+			</label>
+		</div>
+
+		<div class="flex flex-1 flex-col gap-4">
+			<div class="flex flex-col gap-2">
+				<p class="text-surface-600-400 text-xs font-semibold">
+					Preview
+				</p>
+				<div class="flex items-end gap-4">
+					<div class="flex flex-col items-center gap-1">
 						<div
-							class="bg-surface-200-800 relative touch-none overflow-hidden rounded select-none"
-							style="width:{stage}px;height:{stage}px;"
-							role="application"
-							tabindex="0"
-							aria-label="Crop area. Drag to move the image, arrow keys to nudge it, shift and an arrow to nudge further, plus and minus to zoom."
-							onpointerdown={onPointerDown}
-							onpointermove={onPointerMove}
-							onpointerup={onPointerUp}
-							onpointercancel={onPointerUp}
-							onwheel={onWheel}
-							onkeydown={onStageKeydown}
+							class="bg-surface-200-800 relative h-24 w-24 overflow-hidden rounded-full"
 						>
-							<!-- Nothing is fetched without a source: a closed
-							     editor is still mounted, and an empty `src`
-							     would be one failed request per caller. Keyed
-							     on the source so opening the editor on a
-							     different image re-measures it: the frame is
-							     in THAT image's pixels. -->
-							{#if src}
-								{#key src}
-									<img
-										{src}
-										alt=""
-										draggable="false"
-										class="pointer-events-none absolute max-w-none"
-										style={placement
-											? `left:${placement.left}px;top:${placement.top}px;width:${placement.width}px;height:${placement.height}px;`
-											: "opacity:0;"}
-										onload={onImageLoad}
-										onerror={onImageError}
-									/>
-								{/key}
-							{/if}
-							<!-- Everything outside the frame, dimmed by one
-							     box-shadow rather than four rectangles. -->
-							<div
-								bind:this={maskEl}
-								class="pointer-events-none absolute border-2 border-white/80"
-								style="left:{maskOffset}px;top:{maskOffset}px;width:{mask}px;height:{mask}px;box-shadow:0 0 0 9999px rgb(0 0 0 / 0.55);"
-								aria-hidden="true"
-							></div>
-							{#if failed}
-								<p
-									class="text-error-500 absolute inset-0 flex items-center justify-center p-4 text-center text-sm"
-								>
-									That image could not be loaded, so there is
-									nothing to crop.
-								</p>
+							{#if natural}
+								<img
+									{src}
+									alt="Round preview of the crop"
+									draggable="false"
+									class="absolute max-w-none"
+									style={previewStyle(96)}
+								/>
 							{/if}
 						</div>
-
-						<label
-							class="flex w-full items-center gap-2 text-sm"
-							for="avatar-crop-zoom"
-						>
-							<Icons.ZoomOut size={16} aria-hidden="true" />
-							<input
-								id="avatar-crop-zoom"
-								type="range"
-								class="w-full"
-								min="1"
-								max={MAX_ZOOM}
-								step="0.01"
-								value={zoom}
-								disabled={!natural}
-								oninput={onZoomInput}
-								aria-label="Zoom"
-							/>
-							<Icons.ZoomIn size={16} aria-hidden="true" />
-						</label>
+						<span class="text-surface-600-400 text-xs">Round</span>
 					</div>
-
-					<div class="flex flex-1 flex-col gap-4">
-						<div class="flex flex-col gap-2">
-							<p
-								class="text-surface-600-400 text-xs font-semibold"
-							>
-								Preview
-							</p>
-							<div class="flex items-end gap-4">
-								<div class="flex flex-col items-center gap-1">
-									<div
-										class="bg-surface-200-800 relative h-24 w-24 overflow-hidden rounded-full"
-									>
-										{#if natural}
-											<img
-												{src}
-												alt="Round preview of the crop"
-												draggable="false"
-												class="absolute max-w-none"
-												style={previewStyle(96)}
-											/>
-										{/if}
-									</div>
-									<span class="text-surface-600-400 text-xs">
-										Round
-									</span>
-								</div>
-								<div class="flex flex-col items-center gap-1">
-									<div
-										class="bg-surface-200-800 relative h-24 w-24 overflow-hidden rounded"
-									>
-										{#if natural}
-											<img
-												{src}
-												alt="Square preview of the crop"
-												draggable="false"
-												class="absolute max-w-none"
-												style={previewStyle(96)}
-											/>
-										{/if}
-									</div>
-									<span class="text-surface-600-400 text-xs">
-										Square
-									</span>
-								</div>
-							</div>
+					<div class="flex flex-col items-center gap-1">
+						<div
+							class="bg-surface-200-800 relative h-24 w-24 overflow-hidden rounded"
+						>
+							{#if natural}
+								<img
+									{src}
+									alt="Square preview of the crop"
+									draggable="false"
+									class="absolute max-w-none"
+									style={previewStyle(96)}
+								/>
+							{/if}
 						</div>
-
-						<p class="text-surface-600-400 text-xs">
-							The crop decides what small pictures of this image
-							show. The full image is kept, so you can change this
-							at any time.
-						</p>
-
-						<div class="flex flex-wrap gap-2">
-							<button
-								type="button"
-								class="btn btn-sm preset-tonal-surface"
-								onclick={reset}
-								disabled={!natural || atDefault}
-								aria-label="Reset the crop to the largest square from the top of the image"
-							>
-								<Icons.RotateCcw size={16} aria-hidden="true" />
-								Reset
-							</button>
-						</div>
-
-						{#if natural && current}
-							<p class="text-surface-600-400 font-mono text-xs">
-								{current.w}×{current.h} from {current.x},{current.y}
-							</p>
-						{/if}
+						<span class="text-surface-600-400 text-xs">Square</span>
 					</div>
 				</div>
+			</div>
 
-				<footer class="mt-4 flex justify-end gap-2">
-					<button
-						type="button"
-						class="btn btn-sm preset-filled-surface-500"
-						onclick={cancel}
-						aria-label="Cancel cropping"
-					>
-						Cancel
-					</button>
-					<button
-						type="button"
-						class="btn btn-sm preset-filled-primary-500"
-						onclick={save}
-						disabled={!natural}
-						aria-label="Save this crop"
-					>
-						<Icons.Check size={16} aria-hidden="true" />
-						Save
-					</button>
-				</footer>
-			</Dialog.Content>
-		</Dialog.Positioner>
-	</Portal>
-</Dialog>
+			<p class="text-surface-600-400 text-xs">
+				The crop decides what small pictures of this image show. The
+				full image is kept, so you can change this at any time.
+			</p>
+
+			<div class="flex flex-wrap gap-2">
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					onclick={reset}
+					disabled={!natural || atDefault}
+					aria-label="Reset the crop to the largest square from the top of the image"
+				>
+					<Icons.RotateCcw size={16} aria-hidden="true" />
+					Reset
+				</button>
+			</div>
+
+			{#if natural && current}
+				<p class="text-surface-600-400 font-mono text-xs">
+					{current.w}×{current.h} from {current.x},{current.y}
+				</p>
+			{/if}
+		</div>
+	</div>
+
+	<footer class="mt-4 flex justify-end gap-2">
+		<button
+			type="button"
+			class="btn btn-sm preset-filled-surface-500"
+			onclick={cancel}
+			aria-label="Cancel cropping"
+		>
+			Cancel
+		</button>
+		<button
+			type="button"
+			class="btn btn-sm preset-filled-primary-500"
+			onclick={save}
+			disabled={!natural}
+			aria-label="Save this crop"
+		>
+			<Icons.Check size={16} aria-hidden="true" />
+			Save
+		</button>
+	</footer>
+{/snippet}
+
+{#if inline}
+	{#if open}
+		<section
+			class="card bg-surface-100-900 w-full p-4"
+			aria-labelledby="avatar-crop-title"
+		>
+			{@render editor()}
+		</section>
+	{/if}
+{:else}
+	<Dialog {open} {onOpenChange}>
+		<Portal>
+			<Dialog.Backdrop
+				class="bg-surface-50-950/60 fixed inset-0 z-[1100] backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-[1100] flex items-center justify-center p-4"
+			>
+				<Dialog.Content
+					class="card bg-surface-100-900 max-h-[90dvh] w-[min(92vw,720px)] overflow-y-auto p-4 shadow-xl"
+				>
+					{@render editor()}
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
+{/if}

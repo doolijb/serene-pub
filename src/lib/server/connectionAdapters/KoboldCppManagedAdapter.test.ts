@@ -66,7 +66,7 @@ vi.mock("$lib/server/koboldcpp/kcppHttp", () => ({
 // The header read, observed: `fs/promises` is mocked above without `open`, so
 // the real classifier would answer "unknown" for every file.
 const classifyMock = vi.fn(async (_path: string) => ({
-	kind: "unknown" as "text" | "image" | "unknown",
+	kind: "unknown" as Sockets.KoboldCPP.ModelKind,
 	reason: ""
 }))
 /** Which image files are on disk, for `resolveModelPath(..., {mustExist})`. */
@@ -82,6 +82,13 @@ vi.mock("$lib/server/koboldcpp/modelsDir", async (orig) => ({
 vi.mock("$lib/server/koboldcpp/modelKind", async (orig) => ({
 	...((await orig()) as any),
 	classifyModelFile: (p: string) => classifyMock(p)
+}))
+// The one-time re-read of `detected` text rows has its own tests
+// (`rereadDetectedKinds.int.test.ts`); here it would only consume the
+// `db.select` answers these cases hand `listImageModels`.
+const rereadMock = vi.fn(async () => [] as string[])
+vi.mock("$lib/server/koboldcpp/rereadDetectedKinds", () => ({
+	rereadDetectedTextModels: () => rereadMock()
 }))
 
 const exportsDefault = (await import("./KoboldCppManagedAdapter")).default
@@ -223,6 +230,44 @@ describe("KoboldCppManagedAdapter — base URL resolution", () => {
 			])
 		})
 
+		// An embedding GGUF measured before `embeddings` existed is a
+		// `detected` text row; the re-read runs BEFORE the registry is read,
+		// so this very sync files it as an embedding model.
+		test("re-reads detected kinds before reading the registry, and survives a failed re-read", async () => {
+			const order: string[] = []
+			rereadMock.mockImplementationOnce(async () => {
+				order.push("reread")
+				return []
+			})
+			localModelsMock.mockImplementationOnce(async () => {
+				order.push("registry")
+				return [
+					{
+						filename: "nomic.gguf",
+						kind: "embeddings",
+						status: "complete"
+					}
+				]
+			})
+			readdirMock.mockResolvedValue(["nomic.gguf"])
+			const result = await exportsDefault.listModels(makeConnection({}))
+			expect(order).toEqual(["reread", "registry"])
+			expect(result.models).toEqual([
+				{
+					model: "nomic.gguf",
+					name: "nomic.gguf",
+					modality: "embeddings"
+				}
+			])
+
+			rereadMock.mockRejectedValueOnce(new Error("disk went away"))
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+			const after = await exportsDefault.listModels(makeConnection({}))
+			expect(after.error).toBeUndefined()
+			expect(warn).toHaveBeenCalled()
+			warn.mockRestore()
+		})
+
 		test("files a classified image model under IMAGE, and leaves out one still downloading", async () => {
 			readdirMock.mockResolvedValue([
 				"chat.gguf",
@@ -256,7 +301,9 @@ describe("KoboldCppManagedAdapter — base URL resolution", () => {
 			])
 			imageFilesOnDisk = ["odd.gguf"]
 			const result = await exportsDefault.listModels(makeConnection({}))
-			expect(result.models.map((m: any) => [m.model, m.modality])).toEqual([
+			expect(
+				result.models.map((m: any) => [m.model, m.modality])
+			).toEqual([
 				["chat.gguf", "text-gen"],
 				// Its file is still there…
 				["odd.gguf", "image-gen"]
@@ -286,6 +333,48 @@ describe("KoboldCppManagedAdapter — base URL resolution", () => {
 			])
 			expect(classifyMock).toHaveBeenCalledTimes(1)
 			expect(classifyMock).toHaveBeenCalledWith("/models/llm/sdxs.gguf")
+			classifyMock.mockReset()
+			classifyMock.mockResolvedValue({ kind: "unknown", reason: "" })
+		})
+
+		// B1 (2026-10-05): an embedding GGUF sits in the text directory, and
+		// listing it as `text-gen` offered it for chat. `modality` is what
+		// `capabilityRefusal` gates the chat picker on.
+		test("lists an embedding model as EMBEDDINGS, never as a text model", async () => {
+			readdirMock.mockResolvedValue(["chat.gguf", "nomic.gguf"])
+			localModelsMock.mockResolvedValue([
+				{ filename: "chat.gguf", kind: "text", status: "complete" },
+				{
+					filename: "nomic.gguf",
+					kind: "embeddings",
+					status: "complete"
+				}
+			])
+			const result = await exportsDefault.listModels(makeConnection({}))
+			expect(result.models).toEqual([
+				{ model: "chat.gguf", name: "chat.gguf", modality: "text-gen" },
+				{
+					model: "nomic.gguf",
+					name: "nomic.gguf",
+					modality: "embeddings"
+				}
+			])
+		})
+
+		test("an unregistered file whose header says embeddings is listed as one", async () => {
+			readdirMock.mockResolvedValue(["chat.gguf", "bge.gguf"])
+			localModelsMock.mockResolvedValue([
+				{ filename: "chat.gguf", kind: "text", status: "complete" }
+			])
+			classifyMock.mockImplementation(async (p: string) => ({
+				kind: p.endsWith("bge.gguf") ? "embeddings" : "text",
+				reason: ""
+			}))
+			const result = await exportsDefault.listModels(makeConnection({}))
+			expect(result.models).toEqual([
+				{ model: "bge.gguf", name: "bge.gguf", modality: "embeddings" },
+				{ model: "chat.gguf", name: "chat.gguf", modality: "text-gen" }
+			])
 			classifyMock.mockReset()
 			classifyMock.mockResolvedValue({ kind: "unknown", reason: "" })
 		})
@@ -364,7 +453,7 @@ describe("KoboldCppManagedAdapter.preflight() — retry loop", () => {
 
 	test("resolves on the first attempt when ensureModelLoaded succeeds immediately", async () => {
 		const adapter = makeAdapter()
-		vi.mocked(ensureModelLoaded).mockResolvedValue(undefined)
+		vi.mocked(ensureModelLoaded).mockResolvedValue(true)
 
 		await adapter.preflight()
 
@@ -375,7 +464,7 @@ describe("KoboldCppManagedAdapter.preflight() — retry loop", () => {
 		const adapter = makeAdapter()
 		vi.mocked(ensureModelLoaded)
 			.mockRejectedValueOnce(new Error("transient"))
-			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce(true)
 
 		const promise = adapter.preflight()
 		await vi.advanceTimersByTimeAsync(2000) // first retry delay
@@ -389,7 +478,7 @@ describe("KoboldCppManagedAdapter.preflight() — retry loop", () => {
 		vi.mocked(ensureModelLoaded)
 			.mockRejectedValueOnce(new Error("transient 1"))
 			.mockRejectedValueOnce(new Error("transient 2"))
-			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce(true)
 
 		const promise = adapter.preflight()
 		await vi.advanceTimersByTimeAsync(2000) // 1 -> 2

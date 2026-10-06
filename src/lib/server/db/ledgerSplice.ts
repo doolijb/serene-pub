@@ -36,8 +36,21 @@ import {
  *   `./ledgerSpliceChain.ts`, and then the ledger is rewritten as above. Both
  *   in one transaction, so a failure leaves the database as it was.
  * - **Anything else** — a gap in the pre-squash rows, a squashed-chain row
- *   beside them, a row no build here knows: refused before anything is
- *   written, with one line telling the owner to move the data directory aside.
+ *   beside them, a row of a migration added since the squash, a row no build
+ *   here knows: refused before anything is written, with one line telling the
+ *   owner to move the data directory aside.
+ *
+ * ## What the squashed chain is
+ *
+ * The fixed set pr-1 shipped: 0.5.3's `0000`–`0093` and the pinned
+ * `SQUASHED_CHAIN` (`0094`–`0096`), never "every file in the journal".
+ * Migrations added since (`0097_ner_entity_label` on) are not the splice's:
+ * it leaves them pending, and the ordinary migrate that runs straight after
+ * applies them. Drizzle applies a file whose journal `when` exceeds the
+ * newest ledger stamp, and the splice deletes every pre-squash row and writes
+ * the squashed chain's own journal stamps, so the newest stamp left is
+ * `0096`'s — below every later file's (`migrationJournal.test.ts` holds the
+ * journal to that) — and none is skipped.
  *
  * Runs before `repairMigrationLedger` and before the pre-migration backup is
  * decided, so `beforeWrite` (the boot passes a backup) is how the one write it
@@ -122,18 +135,23 @@ export async function spliceSquashedLedger(
 	})
 	// Everything shipped before the squashed chain: 0.5.3's 0000–0093.
 	const base = new Set(shipped.slice(0, firstSquashed).map((m) => m.hash))
+	// Everything shipped after it. Only a ledger already on the squashed chain
+	// can have applied one: the splice runs before migrate.
+	const since = shipped.slice(firstSquashed + SQUASHED_CHAIN.length)
 
 	const applied = new Set<number>()
 	for (const { hash, createdAt } of ledgerRows) {
 		const at = presquashAt.get(hash)
 		if (at !== undefined) applied.add(at)
 		else if (!base.has(hash)) {
-			if (
-				squashedHashes.has(hash) ||
-				shipped.some((m) => m.hash === hash)
-			)
+			if (squashedHashes.has(hash))
 				refuse(
 					`its ledger mixes pre-squash rows with rows of the squashed chain`
+				)
+			const later = since.find((m) => m.hash === hash)
+			if (later)
+				refuse(
+					`its ledger mixes pre-squash rows with ${later.tag}, which this build added after the squashed chain`
 				)
 			// Stamped like a pre-squash file but hashed unlike it: that file was
 			// edited after this database applied it, and what ran is unknown.

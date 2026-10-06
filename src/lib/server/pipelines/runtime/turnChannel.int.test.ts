@@ -22,7 +22,7 @@
  * assembles is the same bytes whatever channel the request names, because
  * nothing about a channel can reach a genre that shapes none.
  *
- * Run through `runTurn` against the SHIPPED `core:spec/respond` loaded from the
+ * Run through `runTurn` against the SHIPPED `core:spec/chat-respond` loaded from the
  * database the bootstrap published it to, for the same reason
  * `continuation.int.test.ts` is: a test that compiled its own document would
  * wire the new port while writing it.
@@ -32,7 +32,7 @@ import { describe, it, expect, beforeAll, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import { spec } from "@serene-pub/sdk"
 import * as C from "@serene-pub/contracts"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 
@@ -119,7 +119,7 @@ beforeAll(async () => {
 	const [respondSpec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		.limit(1)
 	const decl = (await declarations(db, respondSpec.activeVersionId!)).find(
 		(d) =>
@@ -131,7 +131,7 @@ beforeAll(async () => {
 	const shipped = await resolveSelectedConfig(
 		db,
 		respondSpec.id,
-		RESPOND_SPEC_ID,
+		CHAT_RESPOND_SPEC_ID,
 		{}
 	)
 	const copy = await duplicateConfig(db, shipped!.configId, "Channel host")

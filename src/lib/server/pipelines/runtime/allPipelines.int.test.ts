@@ -123,16 +123,18 @@ describe("every provider has a dispatch path", () => {
 		const { STEP_TYPES_FOR_TEST } = await import(
 			"$lib/server/pipelines/runtime/host"
 		)
-		// STEP_TYPES go through one dispatcher; these five have a case of their
+		// STEP_TYPES go through one dispatcher; these six have a case of their
 		// own in `host.call()` because each reaches a different substrate —
 		// session generation (twice, for prose and for a document), the
-		// embedding runtime, the image adapters, and the tool registry with the
-		// plugin sandbox behind it.
+		// embedding runtime (twice: an embed, and the sprite picker's read and
+		// embed), the image adapters, and the tool registry with the plugin
+		// sandbox behind it.
 		const dispatchable = new Set([
 			...STEP_TYPES_FOR_TEST,
 			"core:oracle/generate-text",
 			"core:oracle/generate-json",
 			"core:oracle/embed-text",
+			"core:oracle/pick-sprite",
 			"core:oracle/generate-image",
 			"core:oracle/run-tool"
 		])

@@ -30,7 +30,7 @@ import {
 	type ConfigOption,
 	type NamespaceView
 } from "$lib/server/pipelines/config/panel"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import { groupOptions, groupSteps } from "$lib/server/pipelines/config/panel/groups"
 
 const SECRET = "test-instance-secret"
@@ -81,7 +81,7 @@ const view = (over: any = {}): Promise<NamespaceView> =>
 	namespaceView(
 		db,
 		SECRET,
-		RESPOND_SPEC_ID,
+		CHAT_RESPOND_SPEC_ID,
 		viewer(over)
 	) as Promise<NamespaceView>
 
@@ -90,7 +90,7 @@ const allOptions = (v: NamespaceView): ConfigOption[] => groupOptions(v.groups)
 describe("the namespace list", () => {
 	it("lists what core published, from rows", async () => {
 		const list = await listNamespaces(db)
-		expect(list.map((n) => n.slug)).toContain(RESPOND_SPEC_ID)
+		expect(list.map((n) => n.slug)).toContain(CHAT_RESPOND_SPEC_ID)
 	})
 })
 
@@ -133,7 +133,7 @@ describe("the option payload", () => {
 						schema.pipelineSpecs.id
 					)
 				)
-				.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+				.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		).map((k) => k.nodeKey)
 		expect(keys.length).toBeGreaterThan(3)
 
@@ -227,7 +227,7 @@ describe("the option payload", () => {
 							schema.pipelineSpecs.id
 						)
 					)
-					.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+					.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 			).map((k) => k.nodeKey.toLowerCase())
 		)
 		for (const o of allOptions(
@@ -274,7 +274,7 @@ describe("the option payload", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		const { declarations } = await import(
 			"$lib/server/pipelines/config/panel"
 		)
@@ -308,7 +308,7 @@ describe("the option payload", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer({ sessionId }),
 			ref.id,
 			prompt.id
@@ -326,7 +326,7 @@ describe("the option payload", () => {
 		await clearOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer({ sessionId }),
 			ref.id
 		)
@@ -414,7 +414,7 @@ describe("the option payload", () => {
 			writeOption(
 				db,
 				SECRET,
-				RESPOND_SPEC_ID,
+				CHAT_RESPOND_SPEC_ID,
 				viewer({ sessionId }),
 				param.id,
 				99
@@ -426,7 +426,7 @@ describe("the option payload", () => {
 			writeOption(
 				db,
 				SECRET,
-				RESPOND_SPEC_ID,
+				CHAT_RESPOND_SPEC_ID,
 				viewer(),
 				param.id,
 				99
@@ -463,7 +463,7 @@ describe("resolution and provenance", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		const [shipped] = await db
 			.select()
 			.from(schema.pipelineConfigs)
@@ -481,7 +481,7 @@ describe("resolution and provenance", () => {
 		await clearOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
 			target.id
 		)
@@ -493,7 +493,7 @@ describe("resolution and provenance", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
 			target.id,
 			"the config says so"
@@ -509,7 +509,7 @@ describe("resolution and provenance", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer({ sessionId }),
 			target.id,
 			"only in this session"
@@ -530,7 +530,7 @@ describe("resolution and provenance", () => {
 		await clearOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer({ sessionId }),
 			target.id
 		)
@@ -555,7 +555,7 @@ describe("resolution and provenance", () => {
 			writeOption(
 				db,
 				SECRET,
-				RESPOND_SPEC_ID,
+				CHAT_RESPOND_SPEC_ID,
 				viewer({ userId: adminId, isAdmin: true }),
 				param.id,
 				777
@@ -568,7 +568,7 @@ describe("resolution and provenance", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		const landing = await createConfig(db, spec.id, "Landing")
 		await selectConfig(
 			db,
@@ -582,7 +582,7 @@ describe("resolution and provenance", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
 			param.id,
 			777
@@ -602,7 +602,7 @@ describe("resolution and provenance", () => {
 		await clearOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
 			param.id
 		)
@@ -621,7 +621,7 @@ describe("resolution and provenance", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer({ sessionId }),
 			target.id,
 			"only here"
@@ -646,7 +646,7 @@ describe("resolution and provenance", () => {
 		await clearOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer({ sessionId }),
 			target.id
 		)
@@ -683,7 +683,7 @@ describe("what a write refuses", () => {
 			writeOption(
 				db,
 				SECRET,
-				RESPOND_SPEC_ID,
+				CHAT_RESPOND_SPEC_ID,
 				viewer(),
 				connection.id,
 				"7"
@@ -699,7 +699,7 @@ describe("what a write refuses", () => {
 			writeOption(
 				db,
 				SECRET,
-				RESPOND_SPEC_ID,
+				CHAT_RESPOND_SPEC_ID,
 				viewer(),
 				target.id,
 				"x"
@@ -721,7 +721,7 @@ describe("what a write refuses", () => {
 			writeOption(
 				db,
 				SECRET,
-				RESPOND_SPEC_ID,
+				CHAT_RESPOND_SPEC_ID,
 				viewer(),
 				forged,
 				"x"
@@ -745,7 +745,7 @@ describe("named configs", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		const [copy] = await db
 			.insert(schema.pipelineConfigs)
 			.values({ specId: spec.id, name: "My copy", isImmutable: false })
@@ -753,7 +753,7 @@ describe("named configs", () => {
 
 		await selectNamedConfig(
 			db,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
 			copy.id,
 			"pub"
@@ -779,7 +779,7 @@ describe("named configs", () => {
 		const [foreign] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/narrate"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-narrate"))
 		const [other] = await db
 			.insert(schema.pipelineConfigs)
 			.values({
@@ -792,7 +792,7 @@ describe("named configs", () => {
 		await expect(
 			selectNamedConfig(
 				db,
-				RESPOND_SPEC_ID,
+				CHAT_RESPOND_SPEC_ID,
 				viewer({ userId: adminId, isAdmin: true }),
 				other.id,
 				"pub"
@@ -822,7 +822,7 @@ describe("the curated set", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		specId = spec.id
 
 		const [off] = await db
@@ -859,7 +859,7 @@ describe("the curated set", () => {
 		await expect(
 			selectNamedConfig(
 				db,
-				RESPOND_SPEC_ID,
+				CHAT_RESPOND_SPEC_ID,
 				viewer({ sessionId }),
 				withdrawn,
 				"session"
@@ -884,7 +884,7 @@ describe("the curated set", () => {
 		// most likely to break by accident: choosing is the verb people keep.
 		await selectNamedConfig(
 			db,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer({ sessionId }),
 			offered,
 			"session"
@@ -900,7 +900,7 @@ describe("the curated set", () => {
 	it("lets an admin choose a withdrawn one, since it is their switch", async () => {
 		await selectNamedConfig(
 			db,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
 			withdrawn,
 			"pub"
@@ -920,7 +920,7 @@ describe("the curated set", () => {
 		await expect(
 			selectNamedConfig(
 				db,
-				RESPOND_SPEC_ID,
+				CHAT_RESPOND_SPEC_ID,
 				viewer(),
 				offered,
 				"session"
@@ -978,7 +978,7 @@ describe("whether the selection is this viewer's to make", () => {
 		await expect(
 			selectNamedConfig(
 				db,
-				RESPOND_SPEC_ID,
+				CHAT_RESPOND_SPEC_ID,
 				viewer(),
 				v.configs[0].id
 			)
@@ -1018,7 +1018,7 @@ describe("configurations hold their own values", () => {
 		const v = (await namespaceView(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			admin
 		)) as NamespaceView
 		// Any scalar option in the panel. This was the ranker's "Guaranteed
@@ -1042,7 +1042,7 @@ describe("configurations hold their own values", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		specId = spec.id
 		alpha = (await createConfig(db, specId, "Alpha")).id
 		beta = (await createConfig(db, specId, "Beta")).id
@@ -1053,7 +1053,7 @@ describe("configurations hold their own values", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			admin,
 			(await budget()).id,
 			1111,
@@ -1064,7 +1064,7 @@ describe("configurations hold their own values", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			admin,
 			(await budget()).id,
 			2222,
@@ -1086,7 +1086,7 @@ describe("configurations hold their own values", () => {
 		await clearOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			admin,
 			(await budget()).id,
 			beta
@@ -1115,7 +1115,7 @@ describe("configurations hold their own values", () => {
 			writeOption(
 				db,
 				SECRET,
-				RESPOND_SPEC_ID,
+				CHAT_RESPOND_SPEC_ID,
 				admin,
 				(await budget()).id,
 				4242,
@@ -1128,7 +1128,7 @@ describe("configurations hold their own values", () => {
 		const [narrate] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/narrate"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-narrate"))
 		const [foreign] = await db
 			.select()
 			.from(schema.pipelineConfigs)
@@ -1137,7 +1137,7 @@ describe("configurations hold their own values", () => {
 			writeOption(
 				db,
 				SECRET,
-				RESPOND_SPEC_ID,
+				CHAT_RESPOND_SPEC_ID,
 				admin,
 				(await budget()).id,
 				7,
@@ -1181,11 +1181,11 @@ describe("each source carries its own intent", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		return declarations(db, spec!.activeVersionId!)
 	}
 	const shareOptions = async () => {
-		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
+		const v = (await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
@@ -1243,7 +1243,7 @@ describe("each source carries its own intent", () => {
 	})
 
 	it("carries the real window once a sampling config is selected", async () => {
-		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
+		const v = (await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
@@ -1276,7 +1276,7 @@ describe("each source carries its own intent", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			{ userId: 1, isAdmin: true },
 			sampling!.id,
 			cfg.id
@@ -1290,7 +1290,7 @@ describe("each source carries its own intent", () => {
 	})
 
 	it("keeps the signal matrix per band on the ranker — the cross-source half", async () => {
-		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
+		const v = (await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
@@ -1410,7 +1410,7 @@ describe("a shared slot renders once, on its owner", () => {
 	]
 
 	it("shows the seven lore knobs once, on the world-lore lane, and the embed switch once, on the semantic embed", async () => {
-		const decls = await declsOf(RESPOND_SPEC_ID)
+		const decls = await declsOf(CHAT_RESPOND_SPEC_ID)
 		const paramsOn = (nodeKey: string) =>
 			decls.filter((d) => d.nodeKey === nodeKey && d.slot === "params")
 		// The losers read the owner's slot through `ofNode` for the SHARED
@@ -1452,7 +1452,7 @@ describe("a shared slot renders once, on its owner", () => {
 		// The other half of P2's line (R-7 P5): a field the declaration does
 		// not mark `shared` is the lane's own, so every lane renders one and
 		// the label says which lane it moves.
-		const decls = await declsOf(RESPOND_SPEC_ID)
+		const decls = await declsOf(CHAT_RESPOND_SPEC_ID)
 		const bandOf: Record<string, string> = {
 			"gather.worldLore.read": "world lore",
 			"gather.characterLore.read": "character lore",
@@ -1478,7 +1478,7 @@ describe("a shared slot renders once, on its owner", () => {
 		// The owner governs three sources. A label reading "world lore" over a
 		// control that moves character lore and history too was the U3
 		// review's W4; the wording is the shared one on the declaration.
-		const decls = await declsOf(RESPOND_SPEC_ID)
+		const decls = await declsOf(CHAT_RESPOND_SPEC_ID)
 		const scan = decls.find(
 			(d) =>
 				d.nodeKey === "gather.worldLore.read" &&
@@ -1496,14 +1496,14 @@ describe("a shared slot renders once, on its owner", () => {
 		// beside the reply step's. It is absent because it is SHARED — the
 		// document wires `prompt`'s to `generate`'s — not because there is no
 		// slot; the second assertion is what tells the two apart.
-		const decls = await declsOf(RESPOND_SPEC_ID)
+		const decls = await declsOf(CHAT_RESPOND_SPEC_ID)
 		const conns = decls.filter((d) => d.control === "connection-ref")
 		expect(conns.filter((d) => d.nodeKey === "generate").length).toBe(1)
 		expect(conns.some((d) => d.nodeKey === "prompt")).toBe(false)
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		const [prompt] = await db
 			.select()
 			.from(schema.pipelineNodes)
@@ -1524,7 +1524,7 @@ describe("a shared slot renders once, on its owner", () => {
 	it("adds no second Sampling control on the step that only reads the window", async () => {
 		// `contextBudget` reads `slot.samplingOf("generate")`: one control for
 		// the pair, which is what makes the two windows unable to disagree.
-		const decls = await declsOf(RESPOND_SPEC_ID)
+		const decls = await declsOf(CHAT_RESPOND_SPEC_ID)
 		expect(
 			decls.filter(
 				(d) => d.nodeKey === "contextBudget" && d.slot === "sampling"
@@ -1546,14 +1546,14 @@ describe("a shared slot renders once, on its owner", () => {
  */
 describe("every option drawn has a group", () => {
 	it("places each option once, whatever its kind", async () => {
-		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
+		const v = (await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		const { declarations } = await import(
 			"$lib/server/pipelines/config/panel/declarations"
 		)
@@ -1613,7 +1613,7 @@ describe("the substrate's settings render from the row, like any slot", () => {
 	}
 
 	it("offers `enabled` on every optional node and nowhere else, as the row declares it", async () => {
-		const { versionId, decls } = await declsOf(RESPOND_SPEC_ID)
+		const { versionId, decls } = await declsOf(CHAT_RESPOND_SPEC_ID)
 		const nodes = await db
 			.select()
 			.from(schema.pipelineNodes)
@@ -1646,7 +1646,7 @@ describe("the substrate's settings render from the row, like any slot", () => {
 	})
 
 	it("offers `review` on every gated node, at the declaration's own default", async () => {
-		const { versionId, decls } = await declsOf(RESPOND_SPEC_ID)
+		const { versionId, decls } = await declsOf(CHAT_RESPOND_SPEC_ID)
 		const nodes = await db
 			.select()
 			.from(schema.pipelineNodes)
@@ -1679,7 +1679,7 @@ describe("the substrate's settings render from the row, like any slot", () => {
 	})
 
 	it("offers `mode` on every gather clause, declared by the SDK from the clause's own row", async () => {
-		const { versionId, decls } = await declsOf(RESPOND_SPEC_ID)
+		const { versionId, decls } = await declsOf(CHAT_RESPOND_SPEC_ID)
 		const clauses = await db
 			.select()
 			.from(schema.pipelineClauses)
@@ -1713,7 +1713,7 @@ describe("the substrate's settings render from the row, like any slot", () => {
 		// because a row or the SDK declared it, never because the panel knew
 		// about a node. Every `settings` decl is one of the three declared
 		// paths, and each path's set was matched exactly above.
-		const { decls } = await declsOf(RESPOND_SPEC_ID)
+		const { decls } = await declsOf(CHAT_RESPOND_SPEC_ID)
 		const paths = new Set(
 			decls.filter((d) => d.slot === "settings").map((d) => d.path)
 		)
@@ -1807,7 +1807,7 @@ describe("the substrate's settings render from the row, like any slot", () => {
 
 describe("options arrive in the order they were declared", () => {
 	it("follows the parameter schema's own order within a slot", async () => {
-		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
+		const v = (await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
@@ -1821,7 +1821,7 @@ describe("options arrive in the order they were declared", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		const { declarations } = await import(
 			"$lib/server/pipelines/config/panel"
 		)
@@ -1894,7 +1894,7 @@ describe("options arrive in the order they were declared", () => {
 		// alphabetically that is params, template, variables, which would put
 		// "Post History Depth" first and the context template third. So this is
 		// the assertion that notices a tidy-minded `.sort()` in the slot walk.
-		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
+		const v = (await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
@@ -1911,7 +1911,7 @@ describe("options arrive in the order they were declared", () => {
 	})
 
 	it("follows node position across steps", async () => {
-		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
+		const v = (await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView

@@ -12,6 +12,7 @@
 	import EmbeddingSwitchDialog from "$lib/client/components/connections/EmbeddingSwitchDialog.svelte"
 	import EntitySwitchDialog from "$lib/client/components/connections/EntitySwitchDialog.svelte"
 	import { useStarConfirm } from "$lib/client/components/connections/useStarConfirm.svelte"
+	import { connectionTypeDisabledReason } from "$lib/shared/utils/connectionServiceItems"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
@@ -180,6 +181,14 @@
 				{@const starredModel = section
 					? starredModelId(section.starCapability)
 					: null}
+				<!-- A local ONNX connection where the runtime didn't load: its
+				     models can't be registered, and the server refuses with
+				     this sentence. Said in words above the disabled buttons,
+				     which take no focus. -->
+				{@const blocked = connectionTypeDisabledReason(
+					conn.type,
+					systemSettingsCtx.settings?.localOnnxAvailability
+				)}
 				<li class="a11y-list-item">
 					<h2>{conn.name}</h2>
 					<p>
@@ -198,6 +207,9 @@
 						</p>
 					{/if}
 					{#if section && usable.length}
+						{#if blocked}
+							<p id="connection-{conn.id}-blocked">{blocked}</p>
+						{/if}
 						<!-- One button per MODEL: a registration names the
 						     pair, never the bare endpoint. -->
 						<ul>
@@ -207,6 +219,10 @@
 										<button
 											type="button"
 											class="a11y-btn a11y-btn-small"
+											disabled={!!blocked}
+											aria-describedby={blocked
+												? `connection-${conn.id}-blocked`
+												: undefined}
 											onclick={() =>
 												setDefault(
 													section.starCapability,

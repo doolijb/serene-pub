@@ -8,7 +8,7 @@ var __export = (target, all) => {
 };
 var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
-// sdk-tests/fixtures/unified-plugin/src/index.ts
+// ../serene-pub-sdk/sdk-tests/fixtures/unified-plugin/src/index.ts
 var src_exports = {};
 __export(src_exports, {
   CREATE_SPEC_ID: () => CREATE_SPEC_ID,
@@ -22,7 +22,7 @@ __export(src_exports, {
   tallyHandler: () => tallyHandler
 });
 
-// sdk/src/shapes.ts
+// ../serene-pub-sdk/sdk/src/shapes.ts
 var registry = /* @__PURE__ */ new Map();
 function defineShape(def) {
   registry.set(def.id, def);
@@ -181,6 +181,15 @@ var S = {
    */
   participantRef: defineShape({ id: "core:shape/participant-ref@1" }),
   /**
+   * An ordered list of participant references, no duplicates (lair pass R3,
+   * 2026-09-28): the inlet's `recipients` — the cast members a press
+   * collected (`CollectedRecipients`). Its own id rather than `json@1` so a
+   * port that wants people is not handed any list. Consumed by
+   * `core:query/resolve-state-changes@1`'s `owners` (R10): the Whisper's
+   * one change, made on each recipient.
+   */
+  participantRefs: defineShape({ id: "core:shape/participant-refs@1" }),
+  /**
    * One **session change** (R-15, built 2026-09-16): the payload every
    * built-in write's event carries — `{ event, sessionId, messageId, at,
    * … }` plus what was lost or replaced (`lost` on a delete, `previous` on
@@ -203,6 +212,80 @@ var S = {
    */
   formAddressed: defineShape({ id: "core:shape/form-addressed@1" }),
   /**
+   * A **cast change** (PLAN-turn-order §4.1): the payload of
+   * `core:event/cast-changed@1` — `{ event, sessionId, at, cause, ref,
+   * change, value }` (`CastChangePayload`, events.ts). A seated
+   * participant was switched on or off, or its `position` or portrayal moved;
+   * a seat added or removed is `member-added` / `member-removed`, not
+   * this. Its own id for the reason `session-change@1` has.
+   */
+  castChange: defineShape({ id: "core:shape/cast-change@1" }),
+  /**
+   * **Annex changed** (PLAN-turn-order §4.14, R30): the payload of
+   * `core:event/annex-changed@1` — `{ event, sessionId, at, cause, owner }`
+   * (`AnnexChangePayload`, events.ts). Names whose entry moved, never the
+   * value.
+   */
+  annexChange: defineShape({ id: "core:shape/annex-change@1" }),
+  /** What a listener receives for an event a pipeline recorded: the envelope, the author's payload inside. */
+  recordedEvent: defineShape({ id: "core:shape/recorded-event@1" }),
+  /**
+   * **Turn order changed** (§4.1): the payload of
+   * `core:event/turn-order-changed@1` — `{ event, sessionId, at, cause,
+   * runId, turnOrder }` (`TurnOrderChangedPayload`, events.ts), the
+   * document as `core:outlet/set-turn-order@1` wrote it. Core-internal:
+   * the auto-advance listener and the `sessions:turnOrder` push read it;
+   * a genre may not bind a spec to it.
+   */
+  turnOrderChanged: defineShape({ id: "core:shape/turn-order-changed@1" }),
+  /**
+   * The session's **turn order** as state (§4.2): `TurnOrderV1` —
+   * `{ v, order, candidates, basedOnAt, computedAt, runId, event,
+   * strategy }`, stored at `sessions.metadata.turnOrder` and written by
+   * `core:outlet/set-turn-order@1` alone. Not the entries alone and not
+   * the candidates alone: the whole answer, with what it answered.
+   */
+  turnOrder: defineShape({ id: "core:shape/turn-order@1" }),
+  /**
+   * **Turn candidates** (§4.2): `TurnCandidateV1[]` — the participants the
+   * pool admitted this run, in pool order. What `core:task/turn-pool@1`
+   * publishes, an orderer rewrites, and a strategy reads. Open objects:
+   * an orderer or a plugin may add keys and core passes them through.
+   */
+  turnCandidates: defineShape({ id: "core:shape/turn-candidates@1" }),
+  /**
+   * **Turn entries** (§4.2): `TurnEntryV1[]` — prepared turns, each
+   * `{ ref, channel?, subject?, via }`. What a strategy publishes on
+   * `main` and `order`; the shape-based swap list keys a strategy on it,
+   * as it keyed one on `speaker-selection@1` before (that shape stays
+   * until the strategies are re-ported).
+   */
+  turnEntries: defineShape({ id: "core:shape/turn-entries@1" }),
+  /**
+   * **Sprite choices** (DESIGN-sprites §5.2): what a line's speaker can show
+   * — `{ characterId, set, defaultSet, labels, last, recent, decidedBy }`.
+   * `set` is the sprite set in force for the line (a session override, the
+   * cast member's amendment, or the card's default — `decidedBy` says
+   * which); `labels` are that set's sprite labels with an image; `last` is
+   * the speaker's previous shown sprite, for stickiness. What
+   * `core:oracle/pick-sprite@1` publishes beside its pick, for the receipt.
+   */
+  spriteChoices: defineShape({ id: "core:shape/sprite-choices@1" }),
+  /**
+   * **A sprite pick**: `{ set, label, score?, runnerUp?, held? } | null` — the
+   * sprite a picker chose for a line, or null for none. What the sprite
+   * picker publishes on `main` and `core:outlet/show-sprite@1` records.
+   */
+  spritePick: defineShape({ id: "core:shape/sprite-pick@1" }),
+  /**
+   * The **settings document** (§4.12): `SessionSettingsV1` — every
+   * setting a person can see in session settings, resolved once per run
+   * with the cascade applied (session > genre > core), and handed to the
+   * inlet as `session`. A spec reads `$.input.session.fields.tone` and
+   * never learns which table it came from.
+   */
+  sessionSettings: defineShape({ id: "core:shape/session-settings@1" }),
+  /**
    * A reference to stored media of any kind — the general port type.
    *
    * `image@1` and `audio@1` stay, and are assignable **to** this, so every
@@ -215,6 +298,22 @@ var S = {
   /** An ordered list of media references — what a multimodal request carries
    *  as its attachments. */
   mediaList: defineShape({ id: "core:shape/media-refs@1" }),
+  /**
+   * 🚧 **A transcript's attachments, by message** (PLAN-composer-attachments
+   * §3.5): `Record<messageId, HistoryAttachmentV1[]>` (media.ts) — each
+   * message's `core:image` / `core:file` parts, in part order. What
+   * `core:query/history-attachments@1` publishes and
+   * `core:task/place-attachments@1` reads, so each line's files travel with
+   * that line's own turn rather than with the request as a whole.
+   */
+  mediaByMessage: defineShape({ id: "core:shape/media-by-message@1" }),
+  /**
+   * A reply's **folded sections** (B4; D5, 2026-09-27): `FoldedSectionV1[]`
+   * (widgets.ts) — each `{ kind, label, content }` or `{ kind, label, items }`,
+   * shown collapsed beside the body and never read into the prompt. What the
+   * message outlets' `sections` in-port takes.
+   */
+  foldedSections: defineShape({ id: "core:shape/folded-sections@1" }),
   audio: defineShape({
     id: "core:shape/audio@1",
     assignableTo: ["core:shape/media-ref@1"]
@@ -224,6 +323,13 @@ var S = {
     assignableTo: ["core:shape/media-ref@1"]
   }),
   json: defineShape({ id: "core:shape/json@1" }),
+  /**
+   * What a ranker judged (PLAN-sdk-1.0 §3.9, R64): one `RankingDecisionV1`
+   * per candidate. A node whose out-port carries this shape is RECORDED by
+   * the host — core's rankers and a plugin's alike — into the ranking store.
+   * Reviewed with L1 (PLAN-sdk-1.0 §4 ✓); it carries `S`'s own tag.
+   */
+  decisions: defineShape({ id: "core:shape/decisions@1" }),
   // connection / sampling kinds — the same ids, which is the point (F17)
   /**
    * A model reply as an ordered list of typed parts (text, reasoning, media,
@@ -284,7 +390,7 @@ var S = {
   imageGen: defineShape({ id: "core:shape/image-gen@1" })
 };
 
-// sdk/src/i18n.ts
+// ../serene-pub-sdk/sdk/src/i18n.ts
 var blank = (s) => s.trim().length === 0;
 var isLocaleMap = (v2) => !!v2 && typeof v2 === "object" && !Array.isArray(v2) && typeof v2.en === "string";
 var isI18n = (v2) => typeof v2 === "string" ? !blank(v2) : isLocaleMap(v2) && !blank(v2.en);
@@ -320,44 +426,7 @@ function i18nText(v2, language = "en") {
   return typeof wanted === "string" && !blank(wanted) ? wanted : v2.en;
 }
 
-// sdk/src/settings.ts
-function settingsSchemaFindings(schema, where) {
-  if (schema === void 0) return [];
-  if (!schema || typeof schema !== "object" || Array.isArray(schema))
-    return [`${where}: a settings schema is an object keyed by field name \u2014 { depth: { type: 'integer', label: 'Depth' } }`];
-  const out = [];
-  for (const [key, raw] of Object.entries(schema)) {
-    const at = `${where}.${key}`;
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      out.push(`${at}: a field declaration is an object \u2014 { type: 'string', label: 'Name' }`);
-      continue;
-    }
-    const f = raw;
-    out.push(...i18nFindings(f.label, `${at}.label`));
-    out.push(...i18nFindings(f.i18n, `${at}.i18n`));
-    out.push(...i18nFindings(f.description, `${at}.description`));
-    if (f.members !== void 0) {
-      if (!Array.isArray(f.members))
-        out.push(`${at}.members: the bands are an array \u2014 [{ key: 'lore', label: 'Lore' }]`);
-      else
-        f.members.forEach((m, i) => {
-          const band = `${at}.members[${typeof m?.key === "string" ? m.key : i}]`;
-          if (!m || typeof m !== "object") {
-            out.push(`${band}: a band is an object \u2014 { key: 'lore', label: 'Lore' }`);
-            return;
-          }
-          out.push(...i18nFindings(m.label, `${band}.label`));
-          out.push(...i18nFindings(m.i18n, `${band}.i18n`));
-          out.push(...i18nFindings(m.description, `${band}.description`));
-        });
-    }
-    if (f.item !== void 0) out.push(...settingsSchemaFindings({ item: f.item }, at));
-    if (f.fields !== void 0) out.push(...settingsSchemaFindings(f.fields, `${at}.fields`));
-  }
-  return out;
-}
-
-// sdk/src/hash.ts
+// ../serene-pub-sdk/sdk/src/hash.ts
 var sortDeep = (v2) => {
   if (Array.isArray(v2)) return v2.map(sortDeep);
   if (v2 && typeof v2 === "object") {
@@ -384,332 +453,55 @@ function contentHash(v2) {
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);
 }
 var UNIVERSAL_DISPLAY = ["i18n", "description"];
-var stripDisplay = (v2, display) => {
-  if (typeof v2 === "function") return `[fn] ${String(v2)}`;
-  if (Array.isArray(v2)) return v2.map((e) => stripDisplay(e, display));
+var stripDisplay = (v2, display, functions = "source") => {
+  if (typeof v2 === "function") return functions === "source" ? `[fn] ${String(v2)}` : void 0;
+  if (Array.isArray(v2)) return v2.map((e) => stripDisplay(e, display, functions));
   if (v2 && typeof v2 === "object") {
     return Object.fromEntries(
-      Object.entries(v2).filter(([k]) => !display.has(k)).map(([k, val]) => [k, stripDisplay(val, display)])
+      Object.entries(v2).filter(([k, val]) => !display.has(k) && !(functions === "omit" && typeof val === "function")).map(([k, val]) => [k, stripDisplay(val, display, functions)])
     );
   }
   return v2;
 };
 var DEFAULT_DISPLAY = new Set(UNIVERSAL_DISPLAY);
 var displaySet = (opts) => opts?.display?.length ? /* @__PURE__ */ new Set([...UNIVERSAL_DISPLAY, ...opts.display]) : DEFAULT_DISPLAY;
+function declarationData(v2, opts) {
+  return stripDisplay(v2, displaySet(opts), "omit");
+}
 function declarationHash(v2, opts) {
   return contentHash(stripDisplay(v2, displaySet(opts)));
 }
 function refuseUnlessIdentical(existing, next, why, opts) {
-  const registered = declarationHash(existing, opts);
-  const redeclared = declarationHash(next, opts);
+  refuseUnlessSameHash(declarationHash(existing, opts), declarationHash(next, opts), why);
+}
+function refuseUnlessSameHash(registered, redeclared, why) {
   if (registered === redeclared) return;
   throw new Error(`${why} (registered ${registered}, redeclared ${redeclared})`);
 }
 
-// sdk/src/channels.ts
-var DEFAULT_CHANNEL = "main";
-
-// sdk/src/descriptors.ts
-var TEXT_TRANSFORM_KIND = "core:script:text/transform@1";
-var MESSAGE_VERB_FLOORS = ["stop", "branch", "edit"];
-var MESSAGE_VERB_BUILT_INS = ["delete", "hide", "swipe"];
-var MESSAGE_VERB_CONTENT = ["retry", "continue", "stepBack"];
-var MESSAGE_VERBS = [...MESSAGE_VERB_CONTENT, ...MESSAGE_VERB_BUILT_INS];
-var SESSION_WRITES = ["lore", "scenes"];
-function assertSessionWrites(shape, who) {
-  const writes = shape?.writes;
-  if (writes === void 0) return;
-  if (!writes || typeof writes !== "object" || Array.isArray(writes))
-    throw new Error(
-      `${who} declares a 'writes' that is not an object. A genre's writes are { lore?: boolean; scenes?: boolean } \u2014 absent means both on, and only an explicit false takes one away (R-B).`
-    );
-  const bad = SESSION_WRITES.filter(
-    (w) => writes[w] !== void 0 && typeof writes[w] !== "boolean"
-  );
-  if (!bad.length) return;
-  throw new Error(
-    `${who} declares writes { ${bad.map((w) => `${w}: ${JSON.stringify(writes[w])}`).join(", ")} }. Each write is a boolean or absent \u2014 absent means on, and only an explicit false takes the write away (R-B).`
-  );
-}
-var BUILTIN_SPEC_IDS = Object.freeze({
-  delete: "core:spec/builtin-delete",
-  hide: "core:spec/builtin-hide",
-  edit: "core:spec/builtin-edit",
-  swipe: "core:spec/builtin-swipe",
-  branch: "core:spec/builtin-branch"
-});
-var BUILTIN_OUTLET_IDS = Object.freeze({
-  delete: "core:outlet/delete-message@1",
-  hide: "core:outlet/hide-message@1",
-  edit: "core:outlet/edit-message@1",
-  swipe: "core:outlet/swipe-message@1",
-  branch: "core:outlet/branch-session@1"
-});
-function reviewFieldsFinding(d) {
-  if (d.effects !== "write" && d.effects !== "external") return null;
-  if (d.review && Array.isArray(d.review.fields)) return null;
-  return `${d.id} declares effects: '${d.effects}' and no review.fields. An effectful definition says which of its in-ports a reviewer may edit at the gate \u2014 review: { fields: ['text'] }, or review: { fields: [] } when the gate is approve-or-refuse. Until it does, the form is inferred from the whole payload and every field is editable, including any row id.`;
-}
-var registrationFindings = /* @__PURE__ */ new Map();
-function assertMessageVerbFloors(shape, who) {
-  const verbs = shape?.messageVerbs;
-  if (!verbs || typeof verbs !== "object") return;
-  const forbidden = MESSAGE_VERB_FLOORS.filter((floor) => verbs[floor] === false);
-  if (!forbidden.length) return;
-  throw new Error(
-    `${who} declares messageVerbs { ${forbidden.map((f) => `${f}: false`).join(", ")} }. Stop, branch and edit are floors \u2014 present in every genre, never switched off (R-15). A genre may switch off delete, hide or swipe, and may forbid retry, continue or stepBack; drop the floor from the declaration.`
-  );
-}
-var CHANNEL_ROLES = ["conversation", "folio"];
-var CHANNEL_VOICES = ["character", "narrator", "none"];
-function assertChannelDecls(shape, who) {
-  const channels = shape?.channels;
-  if (channels === void 0) return;
-  if (!Array.isArray(channels))
-    throw new Error(
-      `${who} declares a 'channels' that is not an array. A genre's channels are a list of slugs, each a bare string or a { slug, role?, voice?, messageVerbs? } (R-C).`
-    );
-  for (const raw of channels) {
-    const isString = typeof raw === "string";
-    if (!isString && (!raw || typeof raw !== "object" || Array.isArray(raw)))
-      throw new Error(
-        `${who} declares a channel that is neither a slug nor a declaration: ${JSON.stringify(raw)}. Each channel is a bare string or a { slug, role?, voice?, messageVerbs? } (R-C).`
-      );
-    const decl2 = isString ? { slug: raw } : raw;
-    const slug = typeof decl2.slug === "string" ? decl2.slug.trim() : "";
-    if (!slug)
-      throw new Error(
-        `${who} declares a channel with no slug. A channel is named by the slug it is referenced and stored under (R-C).`
-      );
-    if (slug.includes(":"))
-      throw new Error(
-        `${who} declares the channel '${slug}'. A channel is declared by its slug alone \u2014 lanes under it are runtime and open-ended, allocated by this genre's pipelines, and no lane count is declared anywhere (ruling 2026-09-09).`
-      );
-    const at = `${who} channel '${slug}'`;
-    if (decl2.role !== void 0 && !CHANNEL_ROLES.includes(decl2.role))
-      throw new Error(
-        `${at} declares role '${decl2.role}'. A channel's role is ${CHANNEL_ROLES.map((r) => `'${r}'`).join(" or ")} \u2014 how its messages enter a prompt, turns with speakers or one block of text (R-C).`
-      );
-    if (decl2.voice !== void 0 && !CHANNEL_VOICES.includes(decl2.voice))
-      throw new Error(
-        `${at} declares voice '${decl2.voice}'. A channel's voice is ${CHANNEL_VOICES.map((v2) => `'${v2}'`).join(", ")} \u2014 whose name a turn triggered here seeds under, or none for no seed row at all (R-C).`
-      );
-    assertMessageVerbFloors({ messageVerbs: decl2.messageVerbs }, at);
-    if (slug === DEFAULT_CHANNEL && (decl2.role ?? "conversation") !== "conversation")
-      throw new Error(
-        `${at} is declared role '${decl2.role}'. '${DEFAULT_CHANNEL}' is the channel every session has and the one a turn lands on by default, so it is always a conversation; declare another channel for the folio (R-C).`
-      );
+// ../serene-pub-sdk/sdk/src/predicates.ts
+var truthy = (v2) => !!v2 && !(Array.isArray(v2) && v2.length === 0);
+function readPath(value, path) {
+  if (!path) return value;
+  let cur = value;
+  for (const seg of path.split(".")) {
+    if (cur == null) return void 0;
+    cur = cur[seg];
   }
+  return cur;
 }
-var types = /* @__PURE__ */ new Map();
-var DESCRIPTOR_DISPLAY_KEYS = { display: ["label"] };
-function register(d) {
-  const existing = types.get(d.id);
-  if (existing)
-    refuseUnlessIdentical(existing, d, `duplicate type id: ${d.id}`, DESCRIPTOR_DISPLAY_KEYS);
-  checkWritePublishes(d);
-  checkNoAuthoredSettings(d);
-  checkNoSettingsPort(d);
-  checkScriptPointsAccept(d);
-  checkModeTitled(d);
-  checkDisplayText(d);
-  assertMessageVerbFloors(d.sessionShape, d.id);
-  assertSessionWrites(d.sessionShape, d.id);
-  assertChannelDecls(d.sessionShape, d.id);
-  const reviewFinding = reviewFieldsFinding(d);
-  if (reviewFinding) registrationFindings.set(d.id, [reviewFinding]);
-  else registrationFindings.delete(d.id);
-  types.set(d.id, d);
-  return d;
-}
-function checkWritePublishes(d) {
-  if (d.effects !== "write") return;
-  const bad = Object.entries(d.ports?.out ?? {}).filter(
-    ([, s]) => shapeIdOf(s) === "core:shape/row-ids@1"
-  );
-  if (!bad.length) return;
-  throw new Error(
-    `${d.id} declares effects: 'write' but publishes core:shape/row-ids@1 on ${bad.map(([k]) => `'${k}'`).join(", ")}. A gate-eligible write publishes core:shape/write-result@1 \u2014 pending under async review, committed otherwise \u2014 so a downstream port wanting raw ids fails at publish instead of writing a foreign key that dangles when the reviewer rejects (13 \xA77j-b).`
-  );
-}
-function checkNoAuthoredSettings(d) {
-  if (!d.slots) return;
-  if ("settings" in d.slots)
-    throw new Error(
-      `${d.id} declares a slot named 'settings'. That name is reserved for the substrate's own slot \u2014 \`enabled\` on an optional node, \`review\` on a gated one \u2014 which the registry projection declares and the executor reads. Name the slot for what it holds ('parameters' for tunables).`
-    );
-  const byKind = Object.entries(d.slots).find(([, decl2]) => decl2?.kind === "settings");
-  if (byKind)
-    throw new Error(
-      `${d.id} declares slot '${byKind[0]}' with kind 'settings'. That kind is the substrate's \u2014 derived from \`optional\` and \`effects\`, never authored. Declare 'parameters' for tunables.`
-    );
-}
-function checkNoSettingsPort(d) {
-  const port = Object.keys(d.ports?.out ?? {}).find(
-    (k) => k === "settings" || k.startsWith("settings.")
-  );
-  if (port === void 0) return;
-  throw new Error(
-    `${d.id} declares an out-port named '${port}'. '<node>.settings' (and paths under it) is the address of the substrate's own switches \u2014 \`enabled\`, \`review\`, \`mode\` \u2014 which the executor reads at the node and hands to nobody (F39: settings never travel), so an edge from a port of that name would be refused as a setting. Name the port for what it publishes ('result', 'applied', 'chosen').`
-  );
-}
-function checkScriptPointsAccept(d) {
-  for (const p of d.scriptPoints ?? []) {
-    if (typeof p === "string") continue;
-    const accepts = p.accepts;
-    if (Array.isArray(accepts) && accepts.length === 0)
-      throw new Error(
-        `${d.id} declares script point '${String(p.key)}' with accepts: []. A point that accepts no script kind is a hook nothing can attach to \u2014 list the kinds it takes (e.g. ['${TEXT_TRANSFORM_KIND}']), or omit \`accepts\` for the text-transform default.`
-      );
-  }
-}
-var shapeIdOf = (s) => typeof s === "string" ? s : s?.id ?? void 0;
-var hasDisplayText = (v2) => isI18n(v2);
-function checkModeTitled(d) {
-  if (d.kind !== "inlet" || !d.sessionShape) return;
-  if (hasDisplayText(d.i18n?.name)) return;
-  throw new Error(
-    `${d.id} declares a sessionShape but no i18n.name. A shape-bearing input type is a session mode, and the New Session picker renders every mode as a card \u2014 give it a title: i18n: { name: { en: '\u2026' } }. Add a description there too; the packager warns when a mode ships without one.`
-  );
-}
-function checkDisplayText(d) {
-  const findings = [];
-  findings.push(...i18nFindings(d.i18n?.name, `${d.id} i18n.name`));
-  findings.push(...i18nFindings(d.i18n?.description, `${d.id} i18n.description`));
-  for (const [slotName, slot] of Object.entries(d.slots ?? {})) {
-    if (!slot) continue;
-    const at = `${d.id} slots.${slotName}`;
-    findings.push(...i18nFindings(slot.description, `${at}.description`));
-    for (const [field, decl2] of Object.entries(slot.fields ?? {}))
-      findings.push(...i18nFindings(decl2?.i18n, `${at}.fields.${field}.i18n`));
-    findings.push(...settingsSchemaFindings(slot.schema, `${at}.schema`));
-  }
-  for (const p of d.scriptPoints ?? []) {
-    if (typeof p === "string") continue;
-    const at = `${d.id} scriptPoints[${String(p.key)}]`;
-    findings.push(...i18nFindings(p.label, `${at}.label`));
-    findings.push(...i18nFindings(p.description, `${at}.description`));
-    findings.push(...i18nFindings(p.i18n, `${at}.i18n`));
-  }
-  if (d.sessionShape) {
-    findings.push(...settingsSchemaFindings(d.sessionShape.fields, `${d.id} sessionShape.fields`));
-    findings.push(...widgetDeclsFindings(d.sessionShape.panels, `${d.id} sessionShape.panels`));
-  }
-  if (d.entryShape)
-    findings.push(...settingsSchemaFindings(d.entryShape.fields, `${d.id} entryShape.fields`));
-  if (findings.length)
-    throw new Error(
-      `${d.id} declares display text a publish refuses (R-20):
- \xB7 ${findings.join("\n \xB7 ")}`
-    );
-}
-function widgetDeclsFindings(raw, where) {
-  if (raw === void 0) return [];
-  if (!Array.isArray(raw)) return [`${where}: the widgets are an array of declarations`];
-  const out = [];
-  raw.forEach((w, i) => {
-    const decl2 = w;
-    const at = `${where}[${typeof decl2?.id === "string" ? decl2.id : i}]`;
-    if (!decl2 || typeof decl2 !== "object") {
-      out.push(`${at}: a widget declaration is an object \u2014 { id, title, surface }`);
-      return;
-    }
-    out.push(...i18nFindings(decl2.title, `${at}.title`, { required: true }));
-    out.push(...settingsSchemaFindings(decl2.settings, `${at}.settings`));
-  });
-  return out;
-}
-var describeTaskDefinition = (d) => register({ ...d, kind: "task" });
-function pin(descriptor) {
-  const version = /@(\d+)$/.exec(descriptor.id)?.[1] ?? "1";
-  const ctor = (config = {}) => ({
-    __node: true,
-    descriptor,
-    config
-  });
-  return { [`v${version}`]: ctor, id: descriptor.id, descriptor };
-}
-
-// sdk/src/refs.ts
-function $ref(node, port = "main") {
-  return { __ref: "data", node, port };
-}
-
-// sdk/src/scope.ts
-var REF_KEYS = /* @__PURE__ */ new Set(["__ref", "node", "port"]);
-function refAccessor(node, port = "main") {
-  const target = $ref(node, port);
-  return new Proxy(target, {
-    get(t, prop, recv) {
-      if (typeof prop !== "string") return Reflect.get(t, prop, recv);
-      if (REF_KEYS.has(prop) || prop === "toJSON" || prop === "then")
-        return Reflect.get(t, prop, recv);
-      if (prop in Object.prototype) return Reflect.get(t, prop, recv);
-      if (port !== "main") {
-        throw new Error(
-          `'${node}.${port}.${prop}' \u2014 ports are flat, so a ref cannot be refined twice. Reference the port you want directly, or reach inside the payload in the node's own hook.`
-        );
-      }
-      return refAccessor(node, prop);
-    }
-  });
-}
-function makeScope(knownKeys, localPrefix, clauseId) {
-  const resolveKey = (joined) => {
-    if (localPrefix && knownKeys.has(`${localPrefix}.${joined}`))
-      return `${localPrefix}.${joined}`;
-    return knownKeys.has(joined) ? joined : void 0;
-  };
-  const isPrefix = (joined) => [...knownKeys].some(
-    (k) => k.startsWith(`${joined}.`) || !!localPrefix && k.startsWith(`${localPrefix}.${joined}.`)
-  );
-  const walk = (path) => {
-    const joined = path.join(".");
-    const selfKey = joined ? resolveKey(joined) : void 0;
-    const itemKey = !selfKey && clauseId && joined === `${clauseId}.item` ? `${clauseId}.${ITEM}` : void 0;
-    const target = selfKey ? $ref(selfKey, "main") : itemKey ? $ref(itemKey, "main") : /* @__PURE__ */ Object.create(null);
-    return new Proxy(target, {
-      get(t, prop, recv) {
-        if (typeof prop !== "string") return Reflect.get(t, prop, recv);
-        if (REF_KEYS.has(prop) || prop === "toJSON" || prop === "then")
-          return Reflect.get(t, prop, recv);
-        if (prop in Object.prototype) return Reflect.get(t, prop, recv);
-        if (prop === ITEM && clauseId && path.length === 0)
-          return refAccessor(`${clauseId}.${ITEM}`);
-        const next = [...path, prop];
-        const nextJoined = next.join(".");
-        if (resolveKey(nextJoined) || isPrefix(nextJoined) || clauseId && nextJoined === `${clauseId}.item`)
-          return walk(next);
-        if (selfKey) return refAccessor(selfKey, prop);
-        throw new Error(
-          `'${nextJoined}' is not a node declared before this point.` + (knownKeys.size ? ` Available: ${[...knownKeys].join(", ")}.` : " No nodes are declared yet \u2014 the Input comes first (01 \xA72).") + ` Pipelines have no back-edges (F9), so a node cannot reference one declared later.`
-        );
-      }
-    });
-  };
-  return walk([]);
-}
-var ITEM = "$item";
-
-// sdk/src/identity.ts
-var SLUG_PART = /^[a-z0-9]+([./-][a-z0-9]+)*$/;
-function parseSpecId(id) {
-  const withoutPin = id.replace(/@\d+$/, "");
-  const i = withoutPin.indexOf(":");
-  if (i === -1) return { slug: withoutPin };
-  return { owner: withoutPin.slice(0, i), slug: withoutPin.slice(i + 1) };
-}
-function assertSpecId(id) {
-  const { owner, slug } = parseSpecId(id);
-  if (!SLUG_PART.test(slug) || owner !== void 0 && !SLUG_PART.test(owner)) {
-    throw new Error(
-      `'${id}' is not a valid spec id. Use 'owner:slug' \u2014 'chariot.rp:chat', 'core:chat-turn' \u2014 or a bare slug for a hand-imported document. Lowercase, digits, hyphens and dots only. The **semver** goes in meta.version, never in the id: a spec upgrades by version, and an id that carries one cannot be matched across upgrades.`
-    );
-  }
-}
-
-// sdk/src/predicates.ts
 var PREDICATE_CONDITION_KEYS = ["equals", "equalsPath", "truthy"];
+function predicateHolds(pred, value, scope) {
+  if (pred.equals !== void 0) return value === pred.equals;
+  if (pred.equalsPath !== void 0) {
+    if (typeof pred.equalsPath !== "string" || !pred.equalsPath) return false;
+    if (value === void 0) return false;
+    const other = readPath(scope, pred.equalsPath);
+    return other !== void 0 && value === other;
+  }
+  if (pred.truthy) return truthy(value);
+  return false;
+}
 var ENABLED_WHEN_KEYS = [
   "on",
   ...PREDICATE_CONDITION_KEYS,
@@ -725,6 +517,13 @@ function normalizeEnabledWhen(x) {
     ...p,
     reason: p.reason === void 0 ? p.reason : localeMapOf(p.reason)
   }));
+}
+function evaluateEnabledWhen(preds, doc) {
+  for (const pred of normalizeEnabledWhen(preds)) {
+    if (predicateHolds(pred, readPath(doc, pred.on), doc)) continue;
+    return { enabled: false, reason: localeMapOf(pred.reason), failed: pred };
+  }
+  return { enabled: true };
 }
 function enabledWhenFindings(raw, at = "enabledWhen") {
   if (raw === void 0 || raw === null) return [];
@@ -790,12 +589,7 @@ function enabledWhenFindings(raw, at = "enabledWhen") {
       out.push(
         `${where}: 'reason' is required \u2014 why the control is grey when the predicate does not hold, a locale map with 'en' (R-20)`
       );
-    else if (typeof e.reason === "string" || isLocaleMap(e.reason)) {
-      if (!i18nText(e.reason)?.trim())
-        out.push(
-          `${where}: 'reason' is empty \u2014 say why the control is grey, in a sentence a person can act on ('Set a location first')`
-        );
-    } else out.push(...i18nFindings(e.reason, `${where}.reason`));
+    else out.push(...i18nFindings(e.reason, `${where}.reason`));
     for (const k of Object.keys(e))
       if (!ENABLED_WHEN_KEYS.includes(k))
         out.push(
@@ -805,7 +599,2419 @@ function enabledWhenFindings(raw, at = "enabledWhen") {
   return out;
 }
 
-// sdk/src/genres.ts
+// ../serene-pub-sdk/sdk/src/participants.ts
+var PARTICIPANT_ROLES = ["owner", "admin", "participant", "person", "ai", "item", "run-owner"];
+function audienceHolds(refs, portrayals, viewer, item) {
+  for (const ref of refs) {
+    if (ref === "item") {
+      if (item === void 0 || item) return true;
+      continue;
+    }
+    const p = portrayals[ref];
+    if (p?.by === "person" && p.userId === String(viewer.userId)) return true;
+  }
+  return false;
+}
+function dataAudienceFindings(raw) {
+  if (raw === void 0) return void 0;
+  if (!Array.isArray(raw)) return "an audience is a list of participant references";
+  for (const ref of raw) {
+    try {
+      parseParticipantRef(ref);
+    } catch (e) {
+      return e.message;
+    }
+    if (ref === "item" || ref === "run-owner")
+      return `'${ref}' is not an audience for a stored value \u2014 it names a message or a run, and the value outlives both`;
+  }
+  return void 0;
+}
+var ID = /^[^\s:]+$/;
+var SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+var roles = new Set(PARTICIPANT_ROLES);
+function parseParticipantRef(raw) {
+  if (typeof raw !== "string")
+    throw new Error(
+      `a participant reference is a string \u2014 got ${raw === null ? "null" : typeof raw}`
+    );
+  const text = raw.trim();
+  if (roles.has(text)) return { kind: text };
+  const cut = text.indexOf(":");
+  if (cut === -1)
+    throw new Error(
+      `'${raw}' is not a participant reference \u2014 expected one of ${PARTICIPANT_ROLES.join(", ")}, or user:<id>, character:<id>, envoy:<slug>`
+    );
+  const kind = text.slice(0, cut);
+  const rest = text.slice(cut + 1);
+  switch (kind) {
+    case "user":
+    case "character":
+      if (!ID.test(rest))
+        throw new Error(
+          `'${raw}' names a ${kind} with no readable id \u2014 a ${kind} reference is '${kind}:<id>'`
+        );
+      return { kind, id: rest };
+    case "envoy":
+      if (!SLUG.test(rest))
+        throw new Error(
+          `'${raw}' names an envoy with no readable slug \u2014 an envoy reference is 'envoy:<slug>', the slug a letter or digit followed by letters, digits, '.', '_' or '-'`
+        );
+      return { kind, slug: rest };
+    default:
+      throw new Error(
+        `'${raw}' is not a participant reference \u2014 '${kind}:' is not a kind (user, character, envoy)`
+      );
+  }
+}
+function isParticipantRef(raw) {
+  try {
+    parseParticipantRef(raw);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ../serene-pub-sdk/sdk/src/pluginRuleRef.ts
+var PLUGIN_PERMISSIONS_GUIDE = "guides/plugin-permissions.md";
+var pluginRuleRef = (anchor) => ` (see ${PLUGIN_PERMISSIONS_GUIDE}#${anchor})`;
+
+// ../serene-pub-sdk/sdk/src/settings.ts
+var isSecret = (v2) => !!v2 && typeof v2 === "object" && v2.$secret === true;
+function settingsSchemaFindings(schema, where) {
+  if (schema === void 0) return [];
+  if (!schema || typeof schema !== "object" || Array.isArray(schema))
+    return [`${where}: a settings schema is an object keyed by field name \u2014 { depth: { type: 'integer', label: 'Depth' } }`];
+  const out = [];
+  for (const [key, raw] of Object.entries(schema)) {
+    const at = `${where}.${key}`;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      out.push(`${at}: a field declaration is an object \u2014 { type: 'string', label: 'Name' }`);
+      continue;
+    }
+    const f = raw;
+    out.push(...i18nFindings(f.label, `${at}.label`));
+    out.push(...i18nFindings(f.description, `${at}.description`));
+    if (f.members !== void 0) {
+      if (!Array.isArray(f.members))
+        out.push(`${at}.members: the bands are an array \u2014 [{ key: 'lore', label: 'Lore' }]`);
+      else
+        f.members.forEach((m, i) => {
+          const band = `${at}.members[${typeof m?.key === "string" ? m.key : i}]`;
+          if (!m || typeof m !== "object") {
+            out.push(`${band}: a band is an object \u2014 { key: 'lore', label: 'Lore' }`);
+            return;
+          }
+          out.push(...i18nFindings(m.label, `${band}.label`));
+          out.push(...i18nFindings(m.description, `${band}.description`));
+        });
+    }
+    if (f.item !== void 0) out.push(...settingsSchemaFindings({ item: f.item }, at));
+    if (f.fields !== void 0) out.push(...settingsSchemaFindings(f.fields, `${at}.fields`));
+  }
+  return out;
+}
+function checkNested(decl2, path) {
+  const f = [];
+  if (decl2.type === "secret")
+    f.push({
+      field: path,
+      severity: "error",
+      message: `'${path}' is a secret nested inside a list or object`,
+      fix: "declare it as a top-level field \u2014 redaction, export and receipts read the schema flat, so a nested secret would leak"
+    });
+  if (decl2.type === "list") {
+    if (!decl2.item)
+      f.push({
+        field: path,
+        severity: "error",
+        message: `'${path}' is a list with no element declaration`,
+        fix: "declare `item: { type: 'string' }` \u2014 a list whose elements are undeclared cannot be rendered or checked"
+      });
+    else f.push(...checkNested(decl2.item, `${path}[]`));
+  }
+  if (decl2.type === "object") {
+    if (!decl2.fields || !Object.keys(decl2.fields).length)
+      f.push({
+        field: path,
+        severity: "error",
+        message: `'${path}' is an object with no member declarations`,
+        fix: 'declare `fields: { \u2026 }` \u2014 a free-form map is `text` with `format: "json"`'
+      });
+    else
+      for (const [k, member] of Object.entries(decl2.fields))
+        f.push(...checkNested(member, `${path}.${k}`));
+  }
+  if (decl2.type === "enum" && !decl2.of?.length && !decl2.members?.length && !decl2.from)
+    f.push({
+      field: path,
+      severity: "error",
+      message: `'${path}' is an enum with no options`,
+      fix: "declare `of: ['a','b'] as const`, or source them from the connection with `from`"
+    });
+  return f;
+}
+function checkSchema(schema) {
+  const f = [];
+  for (const [key, d] of Object.entries(schema)) {
+    if (d.type === "list" || d.type === "object") f.push(...checkNested(d, key));
+    if (d.lend !== void 0 && d.type !== "secret")
+      f.push({
+        field: key,
+        severity: "error",
+        message: `'${key}' says 'lend', which only a secret has`,
+        fix: "remove 'lend' \u2014 only a secret is withheld from other packages' pipelines, so only a secret can be lent" + pluginRuleRef("secrets")
+      });
+    if (d.type === "secret") {
+      if (!SECRET_KEY.test(key))
+        f.push({
+          field: key,
+          severity: "error",
+          message: `'${key}' is a secret whose name a handle cannot carry`,
+          fix: 'name it with letters, digits, "_", "." and "-" only'
+        });
+      if (d.side === "component") {
+        f.push({
+          field: key,
+          severity: "error",
+          message: `'${key}' is a secret declared component-side`,
+          fix: "a component runs in the browser, so the value would be delivered to the client \u2014 declare it extension-side"
+        });
+      }
+      if (d.default !== void 0) {
+        f.push({
+          field: key,
+          severity: "error",
+          message: `'${key}' is a secret with a default`,
+          fix: "remove it \u2014 a shipped default credential is not a credential"
+        });
+      }
+    }
+    if (d.type === "enum" && !d.of?.length && !d.from) {
+      f.push({
+        field: key,
+        severity: "error",
+        message: `'${key}' is an enum with no options`,
+        fix: "declare `of: ['a','b'] as const`, or source them from the connection with `from`"
+      });
+    }
+    if (d.required && d.default !== void 0) {
+      f.push({
+        field: key,
+        severity: "warning",
+        message: `'${key}' is required and has a default, so it can never be unset`,
+        fix: "drop `required`, or drop the default if the admin genuinely has to choose"
+      });
+    }
+    if (d.showIf && !schema[d.showIf.field]) {
+      f.push({
+        field: key,
+        severity: "error",
+        message: `'${key}' is shown conditionally on '${d.showIf.field}', which is not a field`,
+        fix: `name a field this schema declares (${Object.keys(schema).join(", ")})`
+      });
+    }
+  }
+  return f;
+}
+function checkOne(decl2, value, path) {
+  const f = [];
+  const bad = (why, fix) => f.push({ field: path, severity: "error", message: `'${path}' ${why}`, fix });
+  switch (decl2.type) {
+    case "secret":
+      if (!isSecret(value)) bad("is not a secret value", "write it through the settings form; secrets are never set as plain strings");
+      break;
+    case "boolean":
+      if (typeof value !== "boolean") bad(`should be a boolean, got ${typeof value}`, "store true or false");
+      break;
+    case "integer":
+    case "number": {
+      if (typeof value !== "number" || Number.isNaN(value)) {
+        bad(`should be a number, got ${typeof value}`, "store a number");
+        break;
+      }
+      if (decl2.type === "integer" && !Number.isInteger(value)) bad("should be a whole number", "round it, or declare the field as `number`");
+      if (decl2.min !== void 0 && value < decl2.min) bad(`is below the minimum ${decl2.min}`, `use a value \u2265 ${decl2.min}`);
+      if (decl2.max !== void 0 && value > decl2.max) bad(`is above the maximum ${decl2.max}`, `use a value \u2264 ${decl2.max}`);
+      break;
+    }
+    case "enum":
+      if (decl2.of && !decl2.of.includes(value)) bad(`is not one of ${decl2.of.join(", ")}`, `use one of: ${decl2.of.join(", ")}`);
+      break;
+    case "string[]":
+      if (!Array.isArray(value)) bad("should be a list of strings", "store an array");
+      break;
+    case "list": {
+      if (!Array.isArray(value)) {
+        bad("should be a list", "store an array \u2014 the order is part of the value");
+        break;
+      }
+      if (decl2.min !== void 0 && value.length < decl2.min) bad(`has fewer than ${decl2.min} entries`, `keep at least ${decl2.min}`);
+      if (decl2.max !== void 0 && value.length > decl2.max) bad(`has more than ${decl2.max} entries`, `keep at most ${decl2.max}`);
+      if (decl2.item) for (let i = 0; i < value.length; i++) f.push(...checkOne(decl2.item, value[i], `${path}[${i}]`));
+      break;
+    }
+    case "object": {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        bad("should be an object", "store a record of the declared members");
+        break;
+      }
+      const row = value;
+      for (const [k, member] of Object.entries(decl2.fields ?? {})) {
+        const mv = row[k];
+        if (mv === void 0 || mv === null) {
+          if (member.required && member.default === void 0)
+            f.push({
+              field: `${path}.${k}`,
+              severity: "error",
+              message: `'${path}.${k}' is required and not set`,
+              fix: "fill it in \u2014 the row is incomplete without it"
+            });
+          continue;
+        }
+        f.push(...checkOne(member, mv, `${path}.${k}`));
+      }
+      break;
+    }
+    default:
+      if (typeof value !== "string") bad(`should be a string, got ${typeof value}`, "store a string");
+  }
+  return f;
+}
+function checkValues(schema, values) {
+  const f = [];
+  for (const [key, d] of Object.entries(schema)) {
+    const v2 = values[key];
+    if (v2 === void 0 || v2 === null) {
+      if (d.required && d.default === void 0) {
+        f.push({
+          field: key,
+          severity: "error",
+          message: `'${key}' is required and not set`,
+          fix: `set it in plugin settings \u2014 the plugin stays installed and listed until then, it is not broken`
+        });
+      }
+      continue;
+    }
+    f.push(...checkOne(d, v2, key));
+  }
+  return f;
+}
+var SECRET_KEY = /^[A-Za-z0-9_.-]+$/;
+
+// ../serene-pub-sdk/sdk/src/settingsSlot.ts
+var SETTINGS_SLOT = "settings";
+var ENABLED_FIELD = Object.freeze({
+  type: "boolean",
+  default: true,
+  quick: true,
+  label: { en: "Use this source" },
+  description: {
+    en: "Off skips the step entirely rather than fetching and discarding it \u2014 cheaper than starving it with a zero share."
+  }
+});
+var ENABLED_STEP_FIELD = Object.freeze({
+  type: "boolean",
+  default: true,
+  quick: true,
+  label: { en: "Run this step" },
+  description: {
+    en: "Off skips the step entirely: nothing is called or charged, and the steps after it go on without what it would have made."
+  }
+});
+function authoredSlots(slots) {
+  if (!slots || !(SETTINGS_SLOT in slots)) return slots ?? {};
+  const { [SETTINGS_SLOT]: _substrate, ...authored } = slots;
+  return authored;
+}
+
+// ../serene-pub-sdk/sdk/src/verdicts.ts
+var DOORS = [
+  "construction",
+  "registry",
+  "validate",
+  "publish",
+  "run",
+  "fire",
+  "write",
+  "list"
+];
+var VERDICT_ID = /^[a-z0-9]+(?:[.-][a-z0-9]+)*:verdict\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+var registry2 = /* @__PURE__ */ new Map();
+var doorSet = new Set(DOORS);
+function defineVerdict(decl2) {
+  if (typeof decl2.id !== "string" || !VERDICT_ID.test(decl2.id))
+    throw new Error(
+      `'${String(decl2.id)}' is not a verdict id \u2014 one is '<owner>:verdict/<slug>', the slug lowercase letters, digits and hyphens: core:verdict/effects-line`
+    );
+  if (typeof decl2.law !== "string" || !decl2.law.trim())
+    throw new Error(
+      `${decl2.id} names no law \u2014 'law' is the label a Finding carries for this rule ('F39', 'R-20')`
+    );
+  if (!Array.isArray(decl2.doors) || decl2.doors.length === 0)
+    throw new Error(
+      `${decl2.id} declares no door \u2014 list every place the rule is heard, one of ${DOORS.join(", ")}`
+    );
+  const unknown = decl2.doors.find((d) => !doorSet.has(d));
+  if (unknown !== void 0)
+    throw new Error(
+      `${decl2.id} declares the door '${String(unknown)}', which is not one \u2014 a door is one of ${DOORS.join(", ")}`
+    );
+  if (typeof decl2.judge !== "function" || typeof decl2.failing !== "function")
+    throw new Error(`${decl2.id} declares no judge or no failing input \u2014 a verdict is { id, law, doors, judge, failing }`);
+  const existing = registry2.get(decl2.id);
+  if (existing) refuseUnlessIdentical(existing, decl2, `duplicate verdict id: ${decl2.id}`);
+  const verdict = Object.freeze({ ...decl2, doors: Object.freeze([...decl2.doors]) });
+  registry2.set(decl2.id, verdict);
+  return verdict;
+}
+function refusalText(r) {
+  const sentence = i18nText(r.sentence) ?? "";
+  return r.fix === void 0 ? sentence : `${sentence} \u2014 ${i18nText(r.fix) ?? ""}`;
+}
+var i18nVerdict = defineVerdict({
+  id: "core:verdict/i18n",
+  law: "R-20",
+  doors: ["construction", "registry", "validate", "publish", "run"],
+  judge({ value, where, required }) {
+    const [sentence] = i18nFindings(value, where, { required });
+    return sentence === void 0 ? { ok: true } : { ok: false, sentence };
+  },
+  // The field each door is asked about — the sentence names it, so the
+  // door's own address has to be the one the kit expects to hear back: a
+  // definition's name at the registry, a preset's label where a document
+  // is built, validated or published, a status's text at the run.
+  failing: (door) => ({
+    value: { fr: "Titre" },
+    where: door === "registry" ? "i18n.name" : door === "run" ? "status.i18n" : "presets[lore].label",
+    required: true
+  })
+});
+var enablementVerdict = defineVerdict({
+  id: "core:verdict/enablement",
+  law: "U5e",
+  doors: ["list", "fire"],
+  judge({ preds, doc }) {
+    const heard = evaluateEnabledWhen(preds, doc);
+    return heard.enabled ? { ok: true } : { ok: false, sentence: heard.reason };
+  },
+  failing: () => ({
+    preds: [
+      {
+        on: "state.world.conformance",
+        truthy: true,
+        reason: { en: "conformance: the enabled-when predicate refused this press" }
+      }
+    ],
+    doc: { state: { world: { conformance: false } } }
+  })
+});
+var audienceVerdict = defineVerdict({
+  id: "core:verdict/audience",
+  law: "R-15",
+  doors: ["list", "fire"],
+  judge({ name, refs, portrayals, viewer, item }) {
+    if (audienceHolds(refs, portrayals, viewer, item)) return { ok: true };
+    return {
+      ok: false,
+      sentence: `'${name}' is not yours to use here \u2014 its audience is ${refs.length ? refs.join(", ") : "nobody"}.`
+    };
+  },
+  failing: () => ({
+    name: "grant",
+    refs: ["owner"],
+    portrayals: { owner: { by: "person", userId: "1" } },
+    viewer: { userId: 2 }
+  })
+});
+var isSettingsAddress = (name) => typeof name === "string" && (name === SETTINGS_SLOT || name.startsWith(`${SETTINGS_SLOT}.`));
+var settingsTravelVerdict = defineVerdict({
+  id: "core:verdict/settings-travel",
+  law: "F39",
+  doors: ["registry", "validate", "run"],
+  judge(input) {
+    switch (input.kind) {
+      case "edge": {
+        if (!isSettingsAddress(input.fromPort)) return { ok: true };
+        const { from, fromPort, to, toPort } = input;
+        return {
+          ok: false,
+          sentence: `'${to}.${toPort}' reads '${from}.${fromPort}' \u2014 a setting, not a port; settings never travel, only data does`,
+          fix: `wire a port '${from}' publishes (what it DID with the setting), or declare the value '${to}' needs on its own params and share the owner's with slot.params({ node: '${from}' }) \u2014 the substrate's switches (enabled, review, mode) are read at their owner by the executor and are never a value`
+        };
+      }
+      case "reference": {
+        if (!isSettingsAddress(input.slot)) return { ok: true };
+        const { node, key, target } = input;
+        return {
+          ok: false,
+          sentence: `'${node}.${key}' references '${target}.${SETTINGS_SLOT}' \u2014 the substrate's switches, read at their owner by the executor and never a value; settings never travel, only data does`,
+          fix: `read a port '${target}' publishes, or declare the value '${node}' needs on its own params and share the owner's with slot.params({ node: '${target}' }) \u2014 a switch (enabled, review, mode) belongs to no reference`
+        };
+      }
+      case "port": {
+        if (!isSettingsAddress(input.port)) return { ok: true };
+        const { definitionId, port } = input;
+        return {
+          ok: false,
+          sentence: `${definitionId} declares an out-port named '${port}'. '<node>.${SETTINGS_SLOT}' (and paths under it) is the address of the substrate's own switches \u2014 \`enabled\`, \`review\`, \`mode\` \u2014 which the executor reads at the node and hands to nobody (F39: settings never travel), so an edge from a port of that name would be refused as a setting`,
+          fix: `name the port for what it publishes ('result', 'applied', 'chosen')`
+        };
+      }
+      default:
+        return {
+          ok: false,
+          sentence: `'${String(input.kind)}' is not a shape this verdict judges \u2014 one of 'edge', 'reference', 'port'.`
+        };
+    }
+  },
+  failing: (door) => door === "registry" ? { kind: "port", definitionId: "conformance:task/claims-settings-port@1", port: "settings.review" } : door === "run" ? { kind: "reference", node: "probe", key: "main", slot: SETTINGS_SLOT, target: "save" } : { kind: "edge", from: "save", fromPort: `${SETTINGS_SLOT}.review`, to: "probe", toPort: "main" }
+});
+var provisionalVerdict = defineVerdict({
+  id: "core:verdict/provisional",
+  law: "R-2",
+  doors: ["validate", "run", "registry"],
+  judge(input) {
+    switch (input.kind) {
+      case "placement": {
+        if (!input.provisional) return { ok: true };
+        const { nodeKey, definitionId, definitionVersion } = input;
+        return {
+          ok: false,
+          sentence: `'${nodeKey}' places ${definitionId}@${definitionVersion}, which is provisional \u2014 declared, not bound: no handler runs it in this release (R-2)`,
+          fix: "bind it or remove the node"
+        };
+      }
+      case "publication": {
+        if (input.provisional || input.bound) return { ok: true };
+        return {
+          ok: false,
+          sentence: `${input.definitionId} is published with no handler behind it and no plan claiming it \u2014 declared, not bound (R-2)`,
+          fix: "bind it in bindings.ts, mark it `provisional: true` under the plan that owns it, or cull it"
+        };
+      }
+      default:
+        return {
+          ok: false,
+          sentence: `'${String(input.kind)}' is not a shape this verdict judges \u2014 one of 'placement', 'publication'.`
+        };
+    }
+  },
+  failing: (door) => door === "registry" ? { kind: "publication", definitionId: "core:task/stray-unbound@1", provisional: false, bound: false } : {
+    kind: "placement",
+    nodeKey: "pending",
+    definitionId: "conformance:oracle/pending",
+    definitionVersion: 1,
+    provisional: true
+  }
+});
+
+// ../serene-pub-sdk/sdk/src/variables.ts
+var variables = /* @__PURE__ */ new Map();
+function defineVariable(decl2) {
+  const existing = variables.get(decl2.id);
+  if (existing) refuseUnlessIdentical(existing, decl2, `duplicate variable id: ${decl2.id}`);
+  variables.set(decl2.id, decl2);
+  return decl2;
+}
+var getVariable = (id) => variables.get(id);
+var allVariables = () => [...variables.values()];
+function pluginVariableFindings(slug, raw, at = "variables") {
+  if (raw === void 0) return [];
+  if (!Array.isArray(raw)) return [`'${at}' is not a list of variable declarations`];
+  const out = [];
+  const seen = /* @__PURE__ */ new Map();
+  for (const [i, v2] of raw.entries()) {
+    const d = v2;
+    const id = typeof d?.id === "string" ? d.id : "";
+    if (!id) {
+      out.push(`${at}[${i}] has no id \u2014 a variable is '<slug>:var/<name>@<major>'`);
+      continue;
+    }
+    const ns = id.includes(":") ? id.slice(0, id.indexOf(":")) : "";
+    if (ns === "core")
+      out.push(
+        `variable '${id}': the 'core:' namespace is reserved. Declare it as '${slug}:${id.slice(id.indexOf(":") + 1)}'.`
+      );
+    else if (ns !== slug)
+      out.push(
+        `variable '${id}' is not in this package's namespace \u2014 declare it under '${slug}:var/\u2026'. A variable two packages can define renders differently by install order.`
+      );
+    if (!d?.scope || typeof d.scope !== "object" || Array.isArray(d.scope))
+      out.push(`variable '${id}' has no scope \u2014 what a template rendering it can name`);
+    const sig = JSON.stringify(d);
+    const prior = seen.get(id);
+    if (prior !== void 0 && prior !== sig)
+      out.push(`variable '${id}' is declared twice with different content \u2014 an id means one thing`);
+    seen.set(id, sig);
+  }
+  return out;
+}
+var CHARACTER_CARD = {
+  type: "object",
+  fields: {
+    name: { type: "string", description: { en: "What the character is called in the prompt." } },
+    nickname: {
+      type: "string",
+      optional: true,
+      description: { en: "Their short name, when they have one." }
+    },
+    description: {
+      type: "string",
+      optional: true,
+      description: { en: "Who they are." }
+    },
+    personality: {
+      type: "string",
+      optional: true,
+      description: { en: "How they behave. Absent for a non-speaker when the session shows brief character detail." }
+    }
+  }
+};
+var ash = {
+  name: "Ash",
+  nickname: "Ash",
+  description: "A rider who patrols the ash wastes.",
+  personality: "Terse, loyal, slow to trust."
+};
+var brannoc = {
+  name: "Brannoc",
+  description: "A caravan master who has crossed the wastes eleven times.",
+  personality: "Genial, and counting."
+};
+var varInstructions = defineVariable({
+  id: "core:var/instructions@1",
+  i18n: { name: { en: "Instructions" } },
+  description: {
+    en: "The system instructions for the reply, after macros are substituted."
+  },
+  scope: { instructions: { type: "string" } },
+  // Already interpolated, because that is how it arrives: macros expand
+  // upstream, and a sample still carrying `{{char}}` would read as a preview
+  // showing that macros do not work.
+  sample: "You are Ash. Stay in character and never speak for Rell."
+});
+var varCharacters = defineVariable({
+  id: "core:var/characters@1",
+  i18n: { name: { en: "Characters" } },
+  description: {
+    en: "Everyone in the scene except the user, with their descriptions."
+  },
+  scope: { characters: { type: "list", of: CHARACTER_CARD } },
+  sample: [ash, brannoc]
+});
+var varPersonas = defineVariable({
+  id: "core:var/personas@1",
+  i18n: { name: { en: "Personas" } },
+  // Two fields. A persona's private lore is Assemble's `characterLore`, like
+  // every cast member's, never a field of this card.
+  //
+  // `description` is optional for a different reason than a character's is:
+  // personas are built by hand in `resolveContextInput` and never go through
+  // `compileCharacter`, so nothing strips a null. The key is always present
+  // and its value can be null, which a template cannot tell from absent.
+  description: { en: "Who the user is playing, as the prompt sees them." },
+  scope: {
+    personas: {
+      type: "list",
+      of: {
+        type: "object",
+        fields: {
+          name: { type: "string" },
+          description: { type: "string", optional: true }
+        }
+      }
+    }
+  },
+  sample: [{ name: "Rell", description: "A cartographer looking for a way north." }]
+});
+var varScenario = defineVariable({
+  id: "core:var/scenario@1",
+  i18n: { name: { en: "Scenario" } },
+  description: { en: "The situation the scene opens in." },
+  scope: { scenario: { type: "string" } },
+  sample: "The caravan has stopped at the edge of the wastes."
+});
+var varExampleDialogue = defineVariable({
+  id: "core:var/example-dialogue@1",
+  i18n: { name: { en: "Example dialogue" } },
+  description: { en: "Sample exchanges that show the model how the characters speak." },
+  scope: { exampleDialogue: { type: "string" } },
+  // Interpolated, like `instructions` — the speaker's name is already
+  // substituted by the time a layout sees this.
+  sample: 'Ash: "Ash in the water again."'
+});
+var varPostHistoryInstructions = defineVariable({
+  id: "core:var/post-history-instructions@1",
+  i18n: { name: { en: "Post-history instructions" } },
+  description: {
+    en: "The reminder placed next to the generation point, after the conversation."
+  },
+  scope: { postHistoryInstructions: { type: "string" } },
+  sample: "Stay in character and write one paragraph."
+});
+var varCharacterNames = defineVariable({
+  id: "core:var/character-names@1",
+  i18n: { name: { en: "Character names" } },
+  description: { en: "Just the names of the characters in the scene." },
+  // A **string**, not a list. `joinWithAnd` runs upstream, so what a layout
+  // receives is already "Ash and Brannoc" — and declaring it as a list would
+  // be the same class of lie the hand-written preview data used to tell about
+  // `worldLore`: a template written against it looks right in the editor and
+  // renders wrong in a chat. Saying `type: 'string'` is the first time the
+  // declaration has been able to state this rather than leave it to a comment.
+  scope: { characterNames: { type: "string" } },
+  sample: "Ash and Brannoc"
+});
+var varPersonaNames = defineVariable({
+  id: "core:var/persona-names@1",
+  i18n: { name: { en: "Persona names" } },
+  description: { en: "Just the names of the user's personas in the scene." },
+  scope: { personaNames: { type: "string" } },
+  sample: "Rell"
+});
+var varWorldLore = defineVariable({
+  id: "core:var/world-lore@1",
+  i18n: { name: { en: "World lore" } },
+  description: {
+    en: "Lorebook entries about the world that fit the budget, keyed by entry name."
+  },
+  // `'any'` could not say this, and the shape it could not say is exactly the
+  // one a hand-written preview got wrong once already.
+  scope: { worldLore: { type: "record", of: { type: "string" } } },
+  sample: {
+    "The Ashguard": "Riders who patrol the ash wastes.",
+    "The Long Winter": "Nine years without a thaw."
+  }
+});
+var varHistory = defineVariable({
+  id: "core:var/history@1",
+  // "Story history" until 0.6. It is a *list of dated history entries*, and
+  // calling it a story invited people to look for the story — the summary of
+  // the chat so far, which is a different feature that does not exist here.
+  i18n: { name: { en: "History entries" } },
+  description: {
+    en: "Earlier events from the chat that fit the budget, newest first, keyed by date."
+  },
+  scope: { history: { type: "record", of: { type: "string" } } },
+  sample: {
+    "Year 412, Month 3": "The caravan reached the wastes.",
+    "Year 412, Month 1": "Ash left the Ashguard."
+  }
+});
+var varDocsExcerpts = defineVariable({
+  id: "core:var/docs-excerpts@1",
+  i18n: { name: { en: "Documentation excerpts" } },
+  description: {
+    en: "Documentation sections that match the latest question and fit the budget, keyed by page and section; each starts with the page path."
+  },
+  scope: { docsExcerpts: { type: "record", of: { type: "string" } } },
+  sample: {
+    "Connections \u203A Adding and removing by hand": "Path: /docs/connections#adding-and-removing-by-hand\nOpen Connections and choose Add\u2026"
+  }
+});
+var varRecalledLines = defineVariable({
+  id: "core:var/recalled-lines@1",
+  i18n: { name: { en: "Recalled lines" } },
+  description: {
+    en: "Earlier lines of the conversation that name what the scene is naming now and fit the budget, oldest first \u2014 each with its speaker, turn and text."
+  },
+  scope: {
+    recalledLines: {
+      type: "list",
+      of: {
+        type: "object",
+        fields: {
+          speaker: { type: "string", description: { en: "Who said it." } },
+          turn: {
+            type: "number",
+            description: {
+              en: "The line's position in its channel's conversation, counting from 1."
+            }
+          },
+          text: { type: "string", description: { en: "What was said." } }
+        }
+      }
+    }
+  },
+  sample: [
+    { speaker: "Mira", turn: 12, text: "I hid the brass key under the chapel floor." },
+    { speaker: "Ada", turn: 31, text: "The chapel? Mira, the chapel burned." }
+  ]
+});
+var CHARACTER_LORE_ENTRY = {
+  type: "object",
+  fields: {
+    title: { type: "string", description: { en: "The entry\u2019s title." } },
+    castMember: {
+      type: "string",
+      optional: true,
+      description: { en: "Whose lore it is. Absent when the entry is bound to nobody." }
+    },
+    content: { type: "string", description: { en: "What the entry says." } }
+  }
+};
+var varCharacterLore = defineVariable({
+  id: "core:var/character-lore@1",
+  i18n: { name: { en: "Character lore" } },
+  description: {
+    en: "Lore bound to a cast member that fit the budget: each entry\u2019s title, whose it is, and its text."
+  },
+  scope: { characterLore: { type: "list", of: CHARACTER_LORE_ENTRY } },
+  sample: [
+    { title: "The Ashguard brand", castMember: "Ash", content: "Carries a brand from the Ashguard." }
+  ]
+});
+var RELATIONSHIP = {
+  type: "object",
+  fields: {
+    type: { type: "string", description: { en: "What the relationship is." } },
+    secrecy: {
+      type: "string",
+      description: { en: 'Who knows about it \u2014 "Only I know", "We both know", and so on.' }
+    },
+    status: {
+      type: "string",
+      optional: true,
+      description: { en: "Only present when it is something other than active." }
+    },
+    theirState: {
+      type: "string",
+      optional: true,
+      description: { en: "The other party's node state, when it is not active." }
+    },
+    note: { type: "string", optional: true, description: { en: "The written detail." } }
+  }
+};
+var BY_OTHER = { type: "record", of: { type: "list", of: RELATIONSHIP } };
+var varRelationshipsPerspectives = defineVariable({
+  id: "core:var/relationships-perspectives@1",
+  i18n: { name: { en: "Relationships: their perspective" } },
+  description: {
+    en: "How the speaking character regards each of the others, from the narrative graph."
+  },
+  scope: {
+    relationshipsPerspectives: {
+      ...BY_OTHER,
+      description: { en: "How the speaker regards each other character." }
+    }
+  },
+  sample: {
+    Brannoc: [
+      {
+        type: "wary respect",
+        secrecy: "Only I know",
+        note: "Ash has never forgotten who opened the lower gate."
+      }
+    ]
+  }
+});
+var varRelationshipsKnown = defineVariable({
+  id: "core:var/relationships-known@1",
+  i18n: { name: { en: "Relationships: how others see them" } },
+  description: {
+    en: "How the others regard the speaking character, plus any figures the world knows of."
+  },
+  scope: {
+    relationshipsKnown: {
+      type: "object",
+      fields: {
+        howOthersRegardYou: {
+          ...BY_OTHER,
+          optional: true,
+          description: { en: "How each other character regards the speaker." }
+        },
+        legendaryFigures: {
+          type: "record",
+          optional: true,
+          description: { en: "Figures the world knows of, and their public relationships." },
+          of: {
+            type: "object",
+            fields: {
+              summary: { type: "string", optional: true },
+              state: { type: "string", optional: true },
+              relationships: { ...BY_OTHER, optional: true }
+            }
+          }
+        }
+      }
+    }
+  },
+  sample: {
+    howOthersRegardYou: {
+      Rell: [
+        {
+          type: "debt",
+          secrecy: "We both know",
+          status: "evolved",
+          note: "Rell owes Ash for the crossing."
+        }
+      ]
+    }
+  }
+});
+var varCurrentDate = defineVariable({
+  id: "core:var/current-date@1",
+  i18n: { name: { en: "Current date" } },
+  description: {
+    en: "The story's present date: the lorebook's clock when it is set, else the most recent history entry."
+  },
+  /**
+   * ⚠ Was `{ currentDate: { type: 'string' } }` with the sample
+   * `'Year 412, Month 3'`, and the sample was **wrong** — the value arrived
+   * pre-formatted by `formatDate` as `412-03`, so the preview showed a
+   * rendering the prompt never contained. That is the failure mode a sample
+   * exists to prevent, and it happened because the shape was a finished
+   * string: nothing could disagree with the formatting, so nothing did.
+   *
+   * The parts travel separately now and the layout joins them, which is what
+   * makes "state the date differently" a setting rather than a code change.
+   * `month` and `day` are absent rather than null when the entry has no such
+   * precision — `{{#if (isSet …)}}` is what a layout tests.
+   */
+  scope: {
+    currentDate: {
+      type: "object",
+      fields: {
+        year: { type: "number", description: { en: "The story year." } },
+        month: {
+          type: "number",
+          optional: true,
+          description: { en: "Absent when the entry is only dated to a year." }
+        },
+        day: {
+          type: "number",
+          optional: true,
+          description: { en: "Absent when the entry is only dated to a month." }
+        },
+        hour: {
+          type: "number",
+          optional: true,
+          description: { en: "The clock's hour (0\u201323), when the present has a time of day." }
+        },
+        minute: {
+          type: "number",
+          optional: true,
+          description: { en: "The clock's minute, when the present has a time of day." }
+        },
+        label: {
+          type: "string",
+          optional: true,
+          description: {
+            en: "The date spelled through the lorebook's calendar; absent when the book is free-form."
+          }
+        }
+      }
+    }
+  },
+  sample: { year: 412, month: 3, day: 5 }
+});
+
+// ../serene-pub-sdk/sdk/src/bands.ts
+var IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+var isBandKey = (key) => IDENTIFIER.test(key);
+function bandKeySuggestion(key) {
+  const camel = key.replace(/[^A-Za-z0-9_]+(.)?/g, (_, c) => c ? c.toUpperCase() : "").replace(/^[^A-Za-z_]+/, "");
+  return camel || "band";
+}
+var ASSEMBLE_OWN_TEMPLATE_NAMES = [
+  "sessionMessages",
+  "injectionsByIndex",
+  "budget",
+  "postHistory",
+  "blocks",
+  "prompts"
+];
+var variableIdOf = (v2) => typeof v2 === "string" ? v2 : v2?.id;
+var otherVariableRendering = (key, id) => allVariables().find(
+  (v2) => v2.id !== id && v2.id.startsWith("core:") && Object.prototype.hasOwnProperty.call(v2.scope, key)
+);
+function checkBandDeclarations(d, others) {
+  const bands = d.bands;
+  for (const key of Object.keys(d.bandPorts ?? {}))
+    if (!bands || !Object.prototype.hasOwnProperty.call(bands, key))
+      throw new Error(
+        `'${d.id}' names band '${key}' in bandPorts but does not declare it in bands. Declare it (bands: { ${key}: varMyBand }), or drop it from bandPorts.`
+      );
+  if (!bands) return;
+  for (const [key, decl2] of Object.entries(bands)) {
+    if (!isBandKey(key))
+      throw new Error(
+        `'${d.id}' declares band '${key}': a band key is a top-level template name, so it must be an identifier \u2014 letters, digits and '_', not starting with a digit. Rename it '${bandKeySuggestion(key)}', and emit that same key from bandIntent() and as each candidate's source.`
+      );
+    const id = variableIdOf(decl2);
+    if (!id || !decl2 || typeof decl2 !== "object")
+      throw new Error(
+        `'${d.id}' declares band '${key}' without a variable. Declare one with definePluginVariable() (defineVariable() in core) whose scope names '${key}', and pass the declaration: bands: { ${key}: varMyBand }.`
+      );
+    const registered = getVariable(id);
+    if (!registered)
+      throw new Error(
+        `'${d.id}' declares band '${key}' with variable '${id}', which is not registered. Declare it with definePluginVariable() (defineVariable() in core) before the definition that names it \u2014 the layout picker and the template editor read it from the registry.`
+      );
+    if (!Object.prototype.hasOwnProperty.call(registered.scope, key))
+      throw new Error(
+        `'${d.id}' declares band '${key}' with variable '${id}', whose scope does not declare '${key}' (it declares ${Object.keys(registered.scope).map((k) => `'${k}'`).join(", ") || "nothing"}). A layout renders the band as {{{${key}}}}, so add '${key}' to the variable's scope \u2014 or rename the band to the key the variable declares.`
+      );
+    if (ASSEMBLE_OWN_TEMPLATE_NAMES.includes(key))
+      throw new Error(
+        `'${d.id}' declares band '${key}', which collides with Assemble's own '${key}' \u2014 a template reading {{{${key}}}} would get one or the other depending on order. Rename the band.`
+      );
+    const core = otherVariableRendering(key, id);
+    if (core)
+      throw new Error(
+        `'${d.id}' declares band '${key}' as '${id}', which collides with '${core.id}' \u2014 that variable already renders the top-level name '${key}'. A band key means one thing; rename the band.`
+      );
+    const ports = d.bandPorts?.[key];
+    if (ports !== void 0) {
+      const out = Object.keys(d.ports?.out ?? {});
+      const unknown = ports.filter((p) => !out.includes(p));
+      if (!ports.length || unknown.length)
+        throw new Error(
+          `'${d.id}' says band '${key}' is carried on ` + (ports.length ? `${unknown.map((p) => `'${p}'`).join(", ")}, which ${unknown.length === 1 ? "is not an out-port" : "are not out-ports"} it declares` : "no out-port at all") + ` (it declares ${out.map((p) => `'${p}'`).join(", ") || "none"}). Name the out-ports that publish the band's candidates in bandPorts, or leave '${key}' out of bandPorts if every out-port may carry it.`
+        );
+    }
+    for (const other of others) {
+      if (other.id === d.id) continue;
+      const theirs = variableIdOf(other.bands?.[key]);
+      if (theirs && theirs !== id)
+        throw new Error(
+          `'${d.id}' declares band '${key}' as '${id}', but '${other.id}' already declares '${key}' as '${theirs}'. A band key is a top-level template name and means one thing \u2014 rename one of the two bands.`
+        );
+    }
+  }
+}
+
+// ../serene-pub-sdk/sdk/src/events.ts
+var bySlug = /* @__PURE__ */ new Map();
+var nextId = 1;
+function defineEvent(def) {
+  const existing = bySlug.get(def.slug);
+  const e = { ...def, id: existing?.id ?? nextId, ownerPluginId: null };
+  if (existing)
+    refuseUnlessIdentical(
+      existing,
+      e,
+      `duplicate event slug '${def.slug}' \u2014 slugs are unique because they are the reference used to sync seeded rows across pubs (13 \xA77g)`
+    );
+  if (def.family === "action" && def.causedBy?.length) {
+    throw new Error(
+      `action event '${def.slug}' declares causedBy. Action events are requests, not consequences of a write \u2014 that is what keeps them out of the cycle graph (13 \xA77)`
+    );
+  }
+  if (def.declaredRoot && def.causedBy?.length) {
+    throw new Error(
+      `event '${def.slug}' is a declared root and declares causedBy \u2014 a root starts outside every pipeline, so nothing writes it. Drop one of the two`
+    );
+  }
+  if (!existing) nextId++;
+  bySlug.set(def.slug, e);
+  return e;
+}
+function eventById(id) {
+  const m = /^core:event\/([a-z0-9]+(?:-[a-z0-9]+)*)@(\d+)$/.exec(id);
+  if (!m) return packageEventViews.get(id);
+  const e = bySlug.get(m[1]);
+  return e && String(e.version) === m[2] ? e : void 0;
+}
+var notADeclaredEvent = (id) => `'${id}' is not a declared event \u2014 core defines its own, and a package declares one with defineSessionEvent({ id, payload, \u2026 }) and names it in defineExtension({ events }).`;
+var EVENT_ID = /^[a-z0-9]+(?:[.-][a-z0-9]+)*:event\/[a-z0-9]+(?:-[a-z0-9]+)*@\d+$/;
+var isEventId = (id) => EVENT_ID.test(id);
+var packageEvents = /* @__PURE__ */ new Map();
+var packageEventViews = /* @__PURE__ */ new Map();
+var MAX_RECORDED_PAYLOAD_BYTES = 64 * 1024;
+var packageEventById = (id) => packageEvents.get(id);
+var isSessionEventDecl = (v2) => !!v2 && typeof v2 === "object" && v2.__decl === "session-event";
+var CORE_EVENTS = {
+  messageCreated: defineEvent({
+    slug: "message-created",
+    name: { en: "Message written" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/create-message", "core:outlet/seed-greetings"],
+    description: "A message was written into a session."
+  }),
+  /**
+   * A row was finished or rewritten by a pipeline's own write. A regenerate,
+   * a swipe's fresh alternative and an extend are THIS event with `verb`
+   * on the payload — `regenerate` · `swipe` · `extend` — rather than three
+   * events of their own (R-15, 2026-09-16): each is the genre's pipeline
+   * producing text plus core's rewrite of the row, and the rewrite is one
+   * outlet. A plain reply's finishing write carries no `verb`.
+   */
+  messageUpdated: defineEvent({
+    slug: "message-updated",
+    name: { en: "Message changed" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/update-message", "core:outlet/attach-image", "core:outlet/attach-audio"],
+    payload: S.sessionChange,
+    description: "An existing message was changed."
+  }),
+  // ── The built-in writes (R-15, 2026-09-16) — DATA family, each caused ──
+  // by the core outlet that performs it. Every one carries what changed
+  // and what was lost, lands on the receipt as `emitted`, and is written to
+  // the session's changes so the next reply's inlet publishes it.
+  messageDeleted: defineEvent({
+    slug: "message-deleted",
+    name: { en: "Message deleted" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/delete-message"],
+    payload: S.sessionChange,
+    description: "A message was deleted. The payload carries what was lost \u2014 its content, role, speaker and metadata."
+  }),
+  messageHidden: defineEvent({
+    slug: "message-hidden",
+    name: { en: "Message hidden or shown" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/hide-message"],
+    payload: S.sessionChange,
+    description: "A message was hidden from the prompt, or shown again. The payload says which."
+  }),
+  messageEdited: defineEvent({
+    slug: "message-edited",
+    name: { en: "Message edited" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/edit-message"],
+    payload: S.sessionChange,
+    description: "A person rewrote a settled message. The payload carries the previous content."
+  }),
+  messageSwiped: defineEvent({
+    slug: "message-swiped",
+    name: { en: "Message swiped" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/swipe-message"],
+    payload: S.sessionChange,
+    description: "A different alternative of a message was selected, or a new one recorded. The payload carries the alternative that was showing and the index now selected."
+  }),
+  /**
+   * A line's **shown sprite** changed (DESIGN-sprites §5.2): a sprite picker
+   * chose one after a reply, or a person changed it from the message menu.
+   * The payload names the line, the speaker, the `{ set, label }` now shown
+   * (null for none) and `source` — `picker` or `person`. What TTS line
+   * direction and any face-driven widget listen for.
+   */
+  spriteShown: defineEvent({
+    slug: "sprite-shown",
+    name: { en: "Sprite shown" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/show-sprite"],
+    payload: S.sessionChange,
+    description: "A line's sprite changed \u2014 chosen by a sprite picker after a reply, or by a person. The payload carries the set and label now shown and who chose it."
+  }),
+  /**
+   * Stop is not a write outlet: it is the run-level guarantee (R-17) —
+   * core finalises the row a cancelled run was filling — so it has no
+   * `causedBy`. Emitted by the host from that finalisation, and from the
+   * message's own Stop when it releases the row first.
+   */
+  messageStopped: defineEvent({
+    slug: "message-stopped",
+    name: { en: "Reply stopped" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    payload: S.sessionChange,
+    description: "A reply was stopped while it was being written. The payload carries how much text had arrived."
+  }),
+  sessionBranched: defineEvent({
+    slug: "session-branched",
+    name: { en: "Session branched" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/branch-session"],
+    payload: S.sessionChange,
+    description: "A session was branched at a message into a new session. The payload names the new session and the message it forked from."
+  }),
+  // ── Turn order as event-driven state (PLAN-turn-order §4.1, 2026-09-21) ──
+  // The four events the turn-order spec answers or causes. Every session
+  // event's payload carries a `cause` (`EventCause`): who or what fired
+  // it, which is what the auto-advance listener keys on.
+  /**
+   * A row that is **not generating** landed: a user send, a seeded
+   * greeting, a finalised reply, a stopped reply. Never for a placeholder
+   * or a generating row — the reply's *completion* is the fact, not its
+   * opening. Distinct from `message-created` (which fires at the write,
+   * placeholder included) and `message-updated` (which also fires on an
+   * attach): this is the one event that means "there is a new settled
+   * turn to answer".
+   */
+  messageCompleted: defineEvent({
+    slug: "message-completed",
+    name: { en: "Message completed" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: [
+      "core:outlet/create-message",
+      "core:outlet/seed-greetings",
+      "core:outlet/update-message"
+    ],
+    payload: S.sessionChange,
+    description: "A message finished landing \u2014 a send, a seeded greeting, a finished or stopped reply. Never a placeholder or a row still being written."
+  }),
+  /**
+   * A seated participant's row changed — switched on or off (`active`),
+   * `position` or portrayal. Not add or remove: those stay
+   * `member-added` / `member-removed`. No `causedBy`: the cast toggles are
+   * socket writes, not an outlet's.
+   */
+  castChanged: defineEvent({
+    slug: "cast-changed",
+    declaredRoot: true,
+    name: { en: "Cast changed" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    payload: S.castChange,
+    description: "A session character, persona or envoy row changed \u2014 switched on or off, position or portrayal. The payload names the participant and what moved."
+  }),
+  /**
+   * The session row changed. Two origins: a person's settings write
+   * (`sessions:update` and the other settings sockets — name, scenario,
+   * lorebook, genre fields, preset, channels, tags; cause `settings`), and
+   * `core:outlet/advance-story-clock`, which moves the session's story
+   * clock (`changed: ['storyClock']`, cause `run`). The payload's `changed`
+   * lists the fields by name. `causedBy` names the outlet, so the event map
+   * draws the edge a spec bound here that advances the clock would loop
+   * on; it is therefore not a declared root, though a person's write also
+   * starts it (as the auto-advance listener also causes `message-respond`).
+   * ⚠ Never emitted by `writeTurnOrder`, which is raw SQL for exactly this
+   * reason (§3).
+   */
+  sessionUpdated: defineEvent({
+    slug: "session-updated",
+    name: { en: "Session updated" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/advance-story-clock"],
+    payload: S.sessionChange,
+    description: "The session's settings changed \u2014 name, scenario, lorebook, genre fields, preset, channels or tags \u2014 or a pipeline moved its story clock. The payload lists which."
+  }),
+  /**
+   * `metadata.turnOrder` was written by `core:outlet/set-turn-order@1`.
+   * **Core-internal**: the auto-advance listener and the
+   * `sessions:turnOrder` push read it; `genre()` refuses it in a genre's
+   * `events`, so no preset can bind a spec to it and the recompute cannot
+   * feed itself.
+   */
+  turnOrderChanged: defineEvent({
+    slug: "turn-order-changed",
+    name: { en: "Turn order changed" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/set-turn-order"],
+    payload: S.turnOrderChanged,
+    description: "The session's turn order was recomputed and written. The payload carries the order as written and the cause that led to it."
+  }),
+  /**
+   * A pipeline's annex entry changed: "my state changed", for any genre.
+   * A package writes its annex through `core:outlet/set-session-annex@1`
+   * and binds this; for a named happening of its own it declares an event
+   * and records it. Emitted only
+   * when the merged value differs from the stored one, so a spec that
+   * rewrites the same value cannot feed itself; the lineage caps stop the
+   * rest.
+   */
+  annexChanged: defineEvent({
+    slug: "annex-changed",
+    name: { en: "Annex changed" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/set-session-annex", "core:outlet/set-annex-field"],
+    payload: S.annexChange,
+    description: "A pipeline's own session state changed \u2014 its annex entry. The payload names the owner whose entry moved."
+  }),
+  /**
+   * Not a write's event: the marker the `sessionChanges` list ends with when
+   * more than fifty changes waited between two replies (U5b review S1). The
+   * newest fifty are delivered and this one entry says how many older ones
+   * were not, so a pipeline can tell a full list from a truncated one. Never
+   * written to `session_changes` and never on a receipt's `emitted` — no
+   * `causedBy`, because no outlet causes it.
+   */
+  sessionChangesTruncated: defineEvent({
+    slug: "session-changes-truncated",
+    name: { en: "Session changes truncated" },
+    version: 1,
+    family: "data",
+    affectsUser: false,
+    payload: S.sessionChange,
+    description: "More session changes waited than one reply is handed. The newest fifty were delivered; the payload says how many older ones were dropped."
+  }),
+  /**
+   * A **form** — a `choices` or `form` block a message carries — was
+   * addressed to a participant the AI portrays this turn (R-15 *Forms*;
+   * R-21 (5); 30 §U5d). Caused by the write that carried the block, and
+   * dispatched through the same path as the lifecycle events, so every
+   * answer run is a child of the run that asked (`parentRunId`,
+   * `rootRunId`, `depth`) and 01 §8's cycle caps hold: a form whose answer
+   * asks another form stops at the depth cap, receipted. A form addressed
+   * to a person is no event: the block waits for the click.
+   */
+  formAddressed: defineEvent({
+    slug: "form-addressed",
+    name: { en: "Form addressed" },
+    version: 1,
+    family: "data",
+    affectsUser: false,
+    causedBy: ["core:outlet/create-message", "core:outlet/update-message"],
+    payload: S.formAddressed,
+    description: "A question or form in a message was addressed to a participant the AI portrays this turn \u2014 the genre's answer pipeline answers it. The payload names the message, the block, the action and the addressee."
+  }),
+  /**
+   * A form was **answered** — by a click, or by the answer pipeline's
+   * outlet committing an oracle's answer exactly as a click would. Lands in
+   * the session's changes so the next reply's inlet sees it (`answer`,
+   * `addressee`, `blockId`, `action` on the payload).
+   */
+  formAnswered: defineEvent({
+    slug: "form-answered",
+    name: { en: "Form answered" },
+    version: 1,
+    family: "data",
+    affectsUser: false,
+    causedBy: ["core:outlet/answer-form"],
+    payload: S.sessionChange,
+    description: "A question or form in a message was answered. The payload carries the answer, who answered as whom, and the action it fired."
+  }),
+  /**
+   * A form was **superseded** (plans/29 R-15 *Staleness and order*; 30
+   * §U5f): the channel head moved past the turn it was issued at before it
+   * was answered, and a press on it reached the door. Recorded ONCE per
+   * block, the first time the door sees it stale, so the next reply's
+   * inlet learns the question lapsed — not on every render, and never by a
+   * render. No outlet causes it: the door does, like the truncation marker.
+   */
+  formSuperseded: defineEvent({
+    slug: "form-superseded",
+    name: { en: "Form superseded" },
+    version: 1,
+    family: "data",
+    affectsUser: false,
+    payload: S.sessionChange,
+    description: "A question or form in a message was overtaken \u2014 the conversation moved on before it was answered, and a press on it was refused. The payload names the message and the block."
+  }),
+  loreEntryCreated: defineEvent({
+    slug: "lore-entry-created",
+    name: { en: "Lore entry written" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/create-lore-entry"],
+    description: "A lorebook entry was written."
+  }),
+  /**
+   * Two lore entries were linked (L2, 2026-09-17) — a room's exit, who keeps
+   * what, what stands near what.
+   *
+   * Its own event rather than `lore-entry-created`: a link is not an entry,
+   * nothing about it is created or changed, and a subscriber that wants to
+   * redraw a map wants exactly this and none of the writes that make rows.
+   *
+   * ⚠ It declares no payload shape — it rides the run's receipt as caused by
+   * the outlet, and the link itself (its name, its words both ways) is the
+   * outlet's `linkId` row, read where it is needed (places plan B2,
+   * 2026-09-29). An idempotent repeat that found the standing row wrote
+   * nothing, and causes no event (`written: false`).
+   */
+  loreLinkCreated: defineEvent({
+    slug: "lore-link-created",
+    name: { en: "Lore entries linked" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/link-lore-entries"],
+    description: "Two lorebook entries were linked."
+  }),
+  graphProposalCreated: defineEvent({
+    slug: "graph-proposal-created",
+    name: { en: "Graph proposal filed" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/graph-proposal"],
+    description: "A narrative-graph proposal was filed for review."
+  }),
+  // ── The session lifecycle (24 §5) — ACTION family: a person did it ──────
+  /** The create slot — required; exactly one pipeline per genre answers it. */
+  sessionCreated: defineEvent({
+    slug: "session-created",
+    declaredRoot: true,
+    name: { en: "Session created" },
+    version: 1,
+    family: "action",
+    affectsUser: false,
+    description: "A session was created \u2014 the genre's create pipeline answers this."
+  }),
+  /** The primary turn. A swipe is this pipeline re-run, not a new event. */
+  messageRespond: defineEvent({
+    slug: "message-respond",
+    declaredRoot: true,
+    name: { en: "Reply" },
+    version: 1,
+    family: "action",
+    affectsUser: true,
+    description: "A reply was asked for \u2014 the primary turn of a session."
+  }),
+  /** Arbitrary buttons/triggers — the contributed functions surface (19 §3). */
+  sessionAction: defineEvent({
+    slug: "session-action",
+    declaredRoot: true,
+    name: { en: "Action" },
+    version: 1,
+    family: "action",
+    affectsUser: true,
+    description: "A person triggered a contributed action in a session."
+  }),
+  memberAdded: defineEvent({
+    slug: "member-added",
+    declaredRoot: true,
+    name: { en: "Member joined" },
+    version: 1,
+    family: "action",
+    affectsUser: false,
+    // A seat is a cast change (R31): `change: 'added'`, `ref` the member.
+    payload: S.castChange,
+    description: "A character, persona or envoy joined a session; the payload carries which."
+  }),
+  memberRemoved: defineEvent({
+    slug: "member-removed",
+    declaredRoot: true,
+    name: { en: "Member left" },
+    version: 1,
+    family: "action",
+    affectsUser: false,
+    // An unseat is a cast change (R31): `change: 'removed'`, `ref` the member.
+    payload: S.castChange,
+    description: "A character, persona or envoy left a session; the payload carries which."
+  }),
+  /**
+   * A UI action asked for a run (13 §7). Carrying both users is what answers the
+   * budget-owner question without a separate rule: **budget and quota attach to the
+   * owner; the receipt's attribution records the trigger.** Group sessions need no
+   * special case.
+   *
+   * ⏳ Overlaps `session-action` since the fold (a contributed action IS a UI
+   * action). Kept because ruling 49 (`UiActionPayload`, the owner/trigger
+   * split) has no other home yet; nothing subscribes to it. Retire when the
+   * action model (30 §U5) gives the payload one.
+   */
+  uiAction: defineEvent({
+    slug: "ui-action",
+    name: { en: "Interface action" },
+    version: 1,
+    family: "action",
+    affectsUser: true,
+    description: "Someone asked for a run from the interface \u2014 a composer action, a message action, a re-roll. Payload: sessionId, ownerUserId, actorUserId, action, modeId, input."
+  }),
+  /**
+   * The path for scheduled model work (13 §7c). No callable may call an oracle
+   * (F32), and lifecycle callbacks may not trigger pipelines, so nightly
+   * summarization subscribes here instead — which also puts it on the consent
+   * screen, where a lifecycle callback doing the same work would have been
+   * invisible. Serene Pub emits it hourly (`cadence: 'hourly'`, `scheduledFor`
+   * the ISO instant it was due, `scope: 'pub'`), only to subscribed,
+   * granted listeners; `SCHEDULED_WORK_PATH` names it.
+   */
+  scheduleTick: defineEvent({
+    slug: "schedule-tick",
+    name: { en: "Schedule tick" },
+    version: 1,
+    family: "action",
+    affectsUser: false,
+    description: "A declared cadence elapsed. Payload: cadence, scheduledFor, scope."
+  })
+};
+
+// ../serene-pub-sdk/sdk/src/widgets.ts
+var MESSAGE_HOST_FIELDS = Object.freeze([
+  "userId",
+  "queueItemId",
+  "debugMeta",
+  "embedding",
+  "embeddingModel",
+  "embeddingSourceHash",
+  "embedTextHash",
+  "vectorizedAt",
+  "version"
+]);
+var HOST_FIELD_SET = new Set(MESSAGE_HOST_FIELDS);
+var WIDGET_SCOPED_SECTIONS = Object.freeze({
+  "session:full": "session_full",
+  "session:state": "session_state",
+  persona: "persona",
+  characters: "characters",
+  lore: "lore"
+});
+var SCOPED_SECTION_NAMES = new Set(Object.values(WIDGET_SCOPED_SECTIONS));
+var isWidgetScopedSectionName = (name) => typeof name === "string" && SCOPED_SECTION_NAMES.has(name);
+var BASE_SECTIONS = {
+  layout: true,
+  session: true,
+  channels: true,
+  messages: true,
+  props: true,
+  actions: true,
+  settings: true,
+  annex: true,
+  locale: true,
+  viewer: true,
+  turnOrder: true
+};
+var WIDGET_BASE_SECTIONS = Object.freeze(
+  Object.keys(BASE_SECTIONS)
+);
+var WIDGET_REQUEST_ASKERS = Object.freeze({
+  messages: "any",
+  "open-character": "any",
+  "view-avatar": "any",
+  "view-image": "any",
+  "open-lore": "any",
+  "prompt-details": "any",
+  "inspect-run": "any",
+  "pick-turn": "any",
+  "change-sprite": "any",
+  "actions-seen": "core",
+  summarize: "core",
+  send: "core",
+  "attach-files": "core",
+  "remove-tray-item": "core",
+  "remove-attachment": "core",
+  draft: "core",
+  "switch-persona": "core",
+  "add-persona": "core",
+  "fire-turn": "core",
+  "decide-proposal": "core",
+  "set-attribute-value": "core",
+  "set-sprite-set": "core",
+  "clear-scene-image": "core",
+  "session-entries": Object.freeze({ scope: "lore" }),
+  "set-entry-marks": "core",
+  "authors-note": "core",
+  "set-authors-note": "core"
+});
+var WIDGET_REQUEST_KINDS = Object.freeze(
+  Object.keys(WIDGET_REQUEST_ASKERS)
+);
+var WIDGET_EVENT_SCOPES = Object.freeze({
+  "lore:ranked": "lore",
+  "lore:marked": "lore"
+});
+
+// ../serene-pub-sdk/sdk/src/surfaces.ts
+var SAFE_PLUGIN_ID = /^[a-z0-9]+([.-][a-z0-9]+)*$/;
+function parsePluginWidgetId(id) {
+  const cut = id.indexOf(":");
+  if (cut <= 0) return null;
+  const pluginId = id.slice(0, cut);
+  const panelId = id.slice(cut + 1);
+  if (!SAFE_PLUGIN_ID.test(pluginId) || !isServablePanelId(panelId)) return null;
+  return { pluginId, panelId };
+}
+var SAFE_ENTRY = /^[a-zA-Z0-9_\-][a-zA-Z0-9._\-]*(\/[a-zA-Z0-9._\-]+)*$/;
+var SAFE_PANEL_ID = /^[a-z0-9_-]+$/;
+var isServableEntry = (path) => SAFE_ENTRY.test(path) && !path.split("/").some((seg) => seg === "." || seg === "..");
+var isServablePanelId = (id) => SAFE_PANEL_ID.test(id);
+
+// ../serene-pub-sdk/sdk/src/sessionLayout.ts
+var ZONE_IDS = ["left", "middle", "right"];
+var INSTANCE_NAME_SEPARATOR = "#";
+var INSTANCE_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
+var CORE_WIDGET_ID = /^[a-z][a-z0-9-]*$/;
+function widgetOfInstance(instanceId) {
+  const at = instanceId.indexOf(INSTANCE_NAME_SEPARATOR);
+  return at > 0 ? instanceId.slice(0, at) : instanceId;
+}
+function isWidgetInstanceId(id) {
+  if (typeof id !== "string" || !id) return false;
+  const at = id.indexOf(INSTANCE_NAME_SEPARATOR);
+  const widget2 = at < 0 ? id : id.slice(0, at);
+  if (at >= 0 && !INSTANCE_NAME.test(id.slice(at + 1))) return false;
+  return CORE_WIDGET_ID.test(widget2) || parsePluginWidgetId(widget2) !== null;
+}
+var RETIRED_WIDGET_IDS = /* @__PURE__ */ new Set(["composer", "inventory"]);
+var isObj = (x) => !!x && typeof x === "object" && !Array.isArray(x);
+var strings = (x) => Array.isArray(x) ? x.filter((s) => typeof s === "string") : [];
+function gridIn(layout, zone) {
+  const widgets = isObj(layout.widgetGrid) && Array.isArray(layout.widgetGrid.widgets) ? layout.widgetGrid.widgets : [];
+  return widgets.filter((w) => isObj(w) && w.zone === zone && typeof w.id === "string").map((w, n) => ({ id: w.id, order: typeof w.order === "number" ? w.order : n })).sort((a, b) => a.order - b.order).map((w) => w.id);
+}
+function arrangedIn(layout, zone) {
+  const frame = isObj(layout.arrangedGrid) ? layout.arrangedGrid[zone] : void 0;
+  if (!isObj(frame) || !Array.isArray(frame.items)) return null;
+  return frame.items.filter((i) => isObj(i) && typeof i.id === "string").map((i) => ({ id: i.id, x: Number(i.x) || 0, y: Number(i.y) || 0 })).sort((a, b) => a.y - b.y || a.x - b.x).map((i) => i.id);
+}
+function zoneDefs(layout) {
+  const zones = isObj(layout.zoneLayout) ? layout.zoneLayout.zones : void 0;
+  return isObj(zones) ? Object.values(zones).filter(isObj) : [];
+}
+function zoneDrawnAt(def) {
+  if (def.kind === "strip") return def.area === "bottom" ? "bottom" : "top";
+  return def.side === "left" ? "left" : "right";
+}
+function layoutWidgetIds(layout) {
+  const out = /* @__PURE__ */ new Set();
+  for (const z of zoneDefs(layout)) for (const id of strings(z.widgets)) out.add(id);
+  const grid = isObj(layout.widgetGrid) && Array.isArray(layout.widgetGrid.widgets) ? layout.widgetGrid.widgets : [];
+  for (const w of grid) if (isObj(w) && typeof w.id === "string") out.add(w.id);
+  for (const zone of ZONE_IDS) for (const id of arrangedIn(layout, zone) ?? []) out.add(id);
+  return [...out];
+}
+function drawnWidgetIds(layout) {
+  const out = [];
+  const add = (id) => {
+    if (!RETIRED_WIDGET_IDS.has(id) && !out.includes(id)) out.push(id);
+  };
+  (arrangedIn(layout, "middle") ?? gridIn(layout, "middle")).forEach(add);
+  const defs = zoneDefs(layout);
+  for (const side of ["left", "right"]) {
+    const frame = arrangedIn(layout, side);
+    if (frame?.length) {
+      frame.forEach(add);
+      continue;
+    }
+    const zones = defs.filter((z) => zoneDrawnAt(z) === side);
+    for (const z of zones) strings(z.widgets).forEach(add);
+    if (zones.length) gridIn(layout, side).forEach(add);
+  }
+  for (const z of defs) if (z.kind === "strip") strings(z.widgets).forEach(add);
+  return out;
+}
+var isInt = (x) => typeof x === "number" && Number.isInteger(x);
+var SLOTS = ["zoneLayout", "widgetGrid", "arrangedGrid", "widgetSettings", "widgetStyles"];
+var RETIRED_DOCUMENT_KEYS = ["layout", "version", "zones", "variants", "look"];
+function isSizeSpec(x) {
+  if (x === "grow" || x === "fixed") return true;
+  if (!isObj(x)) return false;
+  const keys = ["minCells", "maxCells", "cells"].filter((k) => x[k] !== void 0);
+  return keys.length > 0 && keys.every((k) => typeof x[k] === "number" && x[k] > 0);
+}
+function isAnchor(x) {
+  return isObj(x) && Object.entries(x).every(([k, v2]) => ["top", "bottom", "left", "right"].includes(k) && typeof v2 === "boolean");
+}
+function validateSessionLayout(layout, opts = {}) {
+  const errors = [];
+  const warnings = [];
+  if (!isObj(layout)) return { ok: false, errors: ["a session layout is an object"], warnings };
+  if (RETIRED_DOCUMENT_KEYS.some((k) => k in layout))
+    errors.push(
+      `a retired layout document (LayoutDoc v2: ${RETIRED_DOCUMENT_KEYS.filter((k) => k in layout).join(", ")}) \u2014 declare a session layout: { zoneLayout?, widgetGrid?, arrangedGrid?, widgetSettings?, widgetStyles? }`
+    );
+  for (const k of Object.keys(layout))
+    if (!SLOTS.includes(k) && !RETIRED_DOCUMENT_KEYS.includes(k))
+      warnings.push(`'${k}' is not a slot of the session layout \u2014 readers ignore it`);
+  const placedIn = /* @__PURE__ */ new Map();
+  const isInstanceId = (id, where) => {
+    if (isWidgetInstanceId(id)) return true;
+    errors.push(
+      `${where}: '${String(id)}' is not a widget instance id \u2014 a widget id, or '<widget id>#<instance name>' (${INSTANCE_NAME})`
+    );
+    return false;
+  };
+  const place = (id, zone, where, seen) => {
+    if (!isInstanceId(id, where)) return;
+    if (seen.has(id)) errors.push(`${where}: '${id}' is listed twice \u2014 a widget instance is placed once`);
+    seen.add(id);
+    const held = placedIn.get(id);
+    if (held && held.zone !== zone)
+      errors.push(`${where}: '${id}' is also placed in ${held.zone} (${held.where}) \u2014 a widget instance lives in one zone`);
+    else if (!held) placedIn.set(id, { zone, where });
+  };
+  const zoneKey = (k, where) => {
+    if (ZONE_IDS.includes(k)) return true;
+    errors.push(`${where}: '${k}' is not a zone \u2014 one of ${ZONE_IDS.join(", ")}`);
+    return false;
+  };
+  const zl = layout.zoneLayout;
+  if (zl !== void 0) {
+    if (!isObj(zl) || zl.version !== 1 || !isObj(zl.zones))
+      errors.push("zoneLayout: { version: 1, zones: { \u2026 } }");
+    else {
+      for (const [key, def] of Object.entries(zl.zones)) {
+        const at = `zoneLayout.zones.${key}`;
+        if (!isObj(def)) {
+          errors.push(`${at}: a zone is an object`);
+          continue;
+        }
+        if (def.kind !== "side" && def.kind !== "strip") errors.push(`${at}.kind: 'side' or 'strip'`);
+        if (def.side !== void 0 && def.side !== "left" && def.side !== "right")
+          errors.push(`${at}.side: 'left' or 'right'`);
+        if (def.area !== void 0 && def.area !== "top" && def.area !== "bottom")
+          errors.push(`${at}.area: 'top' or 'bottom'`);
+        if (def.pinned !== void 0 && typeof def.pinned !== "boolean") errors.push(`${at}.pinned: a boolean`);
+        if (def.rules !== void 0 && (!Array.isArray(def.rules) || def.rules.some((r) => !isObj(r) || typeof r.min !== "number")))
+          errors.push(`${at}.rules: a list of { min, mode?, width?, columns? }`);
+        const drawnAt = zoneDrawnAt(def);
+        if (key !== drawnAt) {
+          const strip = def.kind === "strip";
+          const field = strip ? "area" : "side";
+          const unstated = def[field] === void 0 ? ` (it states no ${field}, and ${strip ? "a strip with none is the top" : "a side zone with none is the right"})` : "";
+          const fixes = (strip ? ["top", "bottom"] : ["left", "right"]).includes(key) ? `key it '${drawnAt}', or set ${field}: '${key}'` : `key it '${drawnAt}'`;
+          errors.push(
+            `${at}: the page draws this ${strip ? "strip" : "side zone"} at the ${drawnAt}${unstated} \u2014 a zone is keyed by where it is drawn (a side by its side, a strip by its area${key === "middle" ? "; the middle's membership is the widget grid's" : ""}): ${fixes}`
+          );
+        }
+        if (!Array.isArray(def.widgets)) {
+          errors.push(`${at}.widgets: a list of widget instance ids`);
+          continue;
+        }
+        const seen = /* @__PURE__ */ new Set();
+        for (const id of def.widgets) place(id, drawnAt, `${at}.widgets`, seen);
+      }
+      if (zl.styles !== void 0 && (!isObj(zl.styles) || zl.styles.chat !== void 0 && typeof zl.styles.chat !== "string"))
+        errors.push("zoneLayout.styles: { chat?: string }");
+    }
+  }
+  const wg = layout.widgetGrid;
+  if (wg !== void 0) {
+    if (!isObj(wg) || wg.version !== 1 || !Array.isArray(wg.widgets))
+      errors.push("widgetGrid: { version: 1, cell, widgets: [ \u2026 ] }");
+    else {
+      if (typeof wg.cell !== "number" || !(wg.cell > 0)) errors.push("widgetGrid.cell: a positive number of px");
+      const seen = /* @__PURE__ */ new Set();
+      wg.widgets.forEach((w, n) => {
+        const at = `widgetGrid.widgets[${n}]`;
+        if (!isObj(w)) {
+          errors.push(`${at}: a grid widget is an object`);
+          return;
+        }
+        const zone = typeof w.zone === "string" ? w.zone : void 0;
+        const zoned = zone === void 0 ? (errors.push(`${at}.zone: one of ${ZONE_IDS.join(", ")}`), false) : zoneKey(zone, `${at}.zone`);
+        if (typeof w.order !== "number" || !Number.isFinite(w.order)) errors.push(`${at}.order: a number`);
+        if (!isObj(w.size) || !isSizeSpec(w.size.w) || !isSizeSpec(w.size.h))
+          errors.push(`${at}.size: { w, h }, each 'grow', 'fixed' or { cells | minCells | maxCells }`);
+        if (!isAnchor(w.anchor)) errors.push(`${at}.anchor: { top?, bottom?, left?, right? } of booleans`);
+        if (w.colSpan !== void 0 && !(isInt(w.colSpan) && w.colSpan > 0)) errors.push(`${at}.colSpan: a positive integer`);
+        if (w.group !== void 0 && typeof w.group !== "string") errors.push(`${at}.group: a string`);
+        if (zoned) place(w.id, zone, "widgetGrid.widgets", seen);
+        else isInstanceId(w.id, "widgetGrid.widgets");
+      });
+    }
+  }
+  const ag = layout.arrangedGrid;
+  if (ag !== void 0) {
+    if (!isObj(ag)) errors.push("arrangedGrid: { left?, middle?, right? }");
+    else
+      for (const [key, frame] of Object.entries(ag)) {
+        const at = `arrangedGrid.${key}`;
+        if (!zoneKey(key, at)) continue;
+        if (!isObj(frame) || !(isInt(frame.cols) && frame.cols > 0) || !(isInt(frame.rows) && frame.rows > 0) || !Array.isArray(frame.items)) {
+          errors.push(`${at}: { cols, rows, items } \u2014 whole, positive cols and rows`);
+          continue;
+        }
+        const { cols, rows } = frame;
+        const seen = /* @__PURE__ */ new Set();
+        const boxes = [];
+        frame.items.forEach((item, n) => {
+          const where = `${at}.items[${n}]`;
+          if (!isObj(item)) {
+            errors.push(`${where}: an arranged item is an object`);
+            return;
+          }
+          const { x, y, w, h } = item;
+          if (!isInt(x) || !isInt(y) || !isInt(w) || !isInt(h) || x < 0 || y < 0 || w < 1 || h < 1 || x + w > cols || y + h > rows)
+            errors.push(`${where}: whole cells inside ${cols} \xD7 ${rows} (x, y \u2265 0; w, h \u2265 1)`);
+          else if (typeof item.id === "string") boxes.push({ id: item.id, x, y, w, h });
+          if (item.anchor !== void 0 && !isAnchor(item.anchor)) errors.push(`${where}.anchor: { top?, bottom?, left?, right? } of booleans`);
+          if (item.group !== void 0 && typeof item.group !== "string") errors.push(`${where}.group: a string`);
+          if (item.pinned !== void 0 && typeof item.pinned !== "boolean") errors.push(`${where}.pinned: a boolean`);
+          place(item.id, key, `${at}.items`, seen);
+        });
+        boxes.forEach((a, i) => {
+          for (const b of boxes.slice(i + 1))
+            if (a.id !== b.id && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h)
+              warnings.push(`${at}: '${a.id}' and '${b.id}' share cells \u2014 one draws over the other`);
+        });
+      }
+  }
+  const ws = layout.widgetSettings;
+  if (ws !== void 0) {
+    if (!isObj(ws)) errors.push("widgetSettings: { [widget instance id]: { \u2026 } }");
+    else
+      for (const [id, v2] of Object.entries(ws)) {
+        if (!isWidgetInstanceId(id)) errors.push(`widgetSettings: '${id}' is not a widget instance id`);
+        if (!isObj(v2)) errors.push(`widgetSettings.${id}: the widget's settings, an object`);
+      }
+  }
+  const pins = layout.widgetStyles;
+  if (pins !== void 0) {
+    if (!isObj(pins)) errors.push("widgetStyles: { [widget instance id]: { slug, id? } }");
+    else
+      for (const [id, v2] of Object.entries(pins)) {
+        if (!isWidgetInstanceId(id)) errors.push(`widgetStyles: '${id}' is not a widget instance id`);
+        if (!isObj(v2) || typeof v2.slug !== "string" || !v2.slug || v2.id !== void 0 && !(isInt(v2.id) && v2.id > 0))
+          errors.push(`widgetStyles.${id}: a style pin, { slug, id? }`);
+      }
+  }
+  const drawn = new Set(drawnWidgetIds(layout));
+  const framed = (zone) => {
+    const frame = isObj(ag) ? ag[zone] : void 0;
+    return isObj(frame) && Array.isArray(frame.items) && (zone === "middle" || frame.items.length > 0);
+  };
+  for (const [id, { zone }] of placedIn) {
+    if (RETIRED_WIDGET_IDS.has(widgetOfInstance(id))) {
+      warnings.push(`'${id}' names a retired widget \u2014 no reader draws it`);
+      continue;
+    }
+    if (drawn.has(id)) continue;
+    const why = framed(zone) ? `the ${zone}'s arrangement draws there, and it does not place '${id}'` : `the grid puts it on the ${zone}, where the layout has no side zone to draw it in`;
+    warnings.push(`'${id}' is placed in the ${zone} but never drawn \u2014 ${why}`);
+  }
+  if (opts.widgets) {
+    const decls = new Map(opts.widgets.map((w) => [w.id, w]));
+    const counts = /* @__PURE__ */ new Map();
+    for (const id of placedIn.keys()) {
+      const widget2 = widgetOfInstance(id);
+      counts.set(widget2, (counts.get(widget2) ?? 0) + 1);
+      if (opts.unknownWidgets === "warn" && !decls.has(widget2) && !RETIRED_WIDGET_IDS.has(widget2))
+        warnings.push(`'${id}' names a widget this pub does not know \u2014 it draws as a placeholder`);
+    }
+    for (const [widget2, n] of counts) {
+      const cap = decls.get(widget2)?.maxInstances;
+      if (typeof cap === "number" && n > cap)
+        warnings.push(`'${widget2}' is placed ${n} times, over its maxInstances (${cap}) \u2014 readers draw the first ${cap}`);
+    }
+  }
+  return { ok: errors.length === 0, errors, warnings };
+}
+
+// ../serene-pub-sdk/sdk/src/widgetDecls.ts
+var REGISTRY = globalThis[/* @__PURE__ */ Symbol.for("serene-pub.widget-owners")] ??= {
+  owners: /* @__PURE__ */ new WeakMap(),
+  coreIds: /* @__PURE__ */ new Set()
+};
+var OWNERS = REGISTRY.owners;
+function ownWidgets(owner, widgets) {
+  for (const w of widgets) {
+    const held = OWNERS.get(w);
+    if (held && held !== owner)
+      throw new Error(`widget '${w.id}' is already ${held}'s \u2014 a widget belongs to the one package that declares it`);
+    OWNERS.set(w, owner);
+    if (owner === "core") REGISTRY.coreIds.add(w.id);
+  }
+}
+var coreWidgetIds = () => REGISTRY.coreIds;
+function widgetRef(w) {
+  const owner = OWNERS.get(w);
+  if (!owner)
+    throw new Error(
+      `widget '${w?.id}' belongs to no package yet \u2014 name a widget value from core (\`coreWidgets\`) or from a package's \`defineExtension({ widgets })\``
+    );
+  return owner === "core" ? w.id : `${owner}:${w.id}`;
+}
+var WIDGET_ID = /^[a-z][a-z0-9-]*$/;
+function widgetReadsFindings(reads, at) {
+  if (reads === void 0) return [];
+  const names = WIDGET_BASE_SECTIONS.map((s) => `'${s}'`).join(", ");
+  if (!Array.isArray(reads)) return [`${at}: a list of base section names \u2014 any of ${names}`];
+  const out = [];
+  for (const name of reads) {
+    if (WIDGET_BASE_SECTIONS.includes(name)) continue;
+    out.push(
+      isWidgetScopedSectionName(name) ? `${at}: '${name}' is a scoped section \u2014 ask for it in \`scopes\`, never in \`reads\`` : `${at}: '${String(name)}' is not a base section \u2014 one of ${names}`
+    );
+  }
+  return out;
+}
+function widget(d) {
+  const problems = [];
+  if (!WIDGET_ID.test(d.id ?? ""))
+    problems.push(`'${d.id}' is not a widget id \u2014 lowercase letters, digits and '-' (the package supplies the namespace)`);
+  problems.push(...i18nFindings(d.title, `widget '${d.id}' title`, { required: true }));
+  if (typeof d.component !== "string" || !d.component)
+    problems.push(`widget '${d.id}' names no component \u2014 give \`component\`, the slug of a component this package declares`);
+  if (d.surface !== void 0)
+    problems.push(`widget '${d.id}': \`surface\` is gone \u2014 name a component, and place an \`sp-frame\` inside it for a document`);
+  problems.push(...widgetReadsFindings(d.reads, `widget '${d.id}' reads`));
+  if (d.maxInstances !== void 0 && !(Number.isInteger(d.maxInstances) && d.maxInstances > 0))
+    problems.push(`widget '${d.id}' maxInstances: a positive whole number, or leave it out for no cap`);
+  const genres = d.genres?.map((g) => g?.id);
+  if (genres?.some((g) => typeof g !== "string" || !g))
+    problems.push(`widget '${d.id}' genres: each is a genre value (or use('<id>')), never a bare string`);
+  if (problems.length) throw new Error(problems.join("\n"));
+  const { genres: _g, ...rest } = d;
+  return Object.freeze({ ...rest, ...genres?.length ? { genres: [...new Set(genres)] } : {} });
+}
+
+// ../serene-pub-sdk/sdk/src/channels.ts
+var DEFAULT_CHANNEL = "main";
+
+// ../serene-pub-sdk/sdk/src/descriptors.ts
+function scriptPointsOf(d) {
+  return (d.scriptPoints ?? []).map((p) => ({
+    ...p,
+    key: String(p.key),
+    accepts: Array.isArray(p.accepts) ? [...p.accepts] : []
+  }));
+}
+var MESSAGE_VERB_FLOORS = ["stop", "branch", "edit"];
+var MESSAGE_VERB_BUILT_INS = ["delete", "hide", "swipe"];
+var MESSAGE_VERB_CONTENT = ["retry", "extend", "stepBack"];
+var MESSAGE_VERBS = [...MESSAGE_VERB_CONTENT, ...MESSAGE_VERB_BUILT_INS];
+var TURN_CONTROLS = ["advance", "pick", "narrate", "retake"];
+function plainObject(v2) {
+  return v2 && typeof v2 === "object" && !Array.isArray(v2) ? v2 : void 0;
+}
+function assertTurnControls(shape, who) {
+  const raw = shape?.turnControls;
+  if (raw === void 0) return;
+  const problems = [];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    problems.push(`turnControls is { ${TURN_CONTROLS.map((t) => `${t}?`).join(", ")} }`);
+  } else {
+    for (const [k, v2] of Object.entries(raw)) {
+      if (!TURN_CONTROLS.includes(k)) {
+        problems.push(`turnControls.${k}: not a turn control \u2014 one of ${TURN_CONTROLS.join(", ")}`);
+        continue;
+      }
+      if (typeof v2 === "boolean") continue;
+      if (!v2 || typeof v2 !== "object" || Array.isArray(v2) || !("presentWhen" in v2)) {
+        problems.push(
+          `turnControls.${k}: true, false, or { presentWhen } \u2014 enabled-when predicates over the published values, such as { on: 'session.fields.<field>', equals: '<value>', reason: { en: '<why it is absent>' } }`
+        );
+        continue;
+      }
+      const pw = v2.presentWhen;
+      problems.push(...enabledWhenFindings(pw, `turnControls.${k}.presentWhen`));
+      normalizeEnabledWhen(pw).forEach((p, i) => {
+        if (p.on === "item" || p.on.startsWith("item."))
+          problems.push(
+            `turnControls.${k}.presentWhen[${i}]: reads '${p.on}' \u2014 a turn control acts on no row, so it cannot read one`
+          );
+      });
+    }
+  }
+  if (problems.length) throw new Error(`${who}: ${problems.join("\n")}`);
+}
+var SESSION_WRITES = ["lore", "scenes"];
+function assertSessionWrites(shape, who) {
+  const writes = shape?.writes;
+  if (writes === void 0) return;
+  if (!writes || typeof writes !== "object" || Array.isArray(writes))
+    throw new Error(
+      `${who} declares a 'writes' that is not an object. A genre's writes are { lore?: boolean; scenes?: boolean } \u2014 absent means both on, and only an explicit false takes one away (R-B).`
+    );
+  const bad = SESSION_WRITES.filter(
+    (w) => writes[w] !== void 0 && typeof writes[w] !== "boolean"
+  );
+  if (!bad.length) return;
+  throw new Error(
+    `${who} declares writes { ${bad.map((w) => `${w}: ${JSON.stringify(writes[w])}`).join(", ")} }. Each write is a boolean or absent \u2014 absent means on, and only an explicit false takes the write away (R-B).`
+  );
+}
+var BUILTIN_SPEC_IDS = Object.freeze({
+  delete: "core:spec/builtin-delete",
+  hide: "core:spec/builtin-hide",
+  edit: "core:spec/builtin-edit",
+  swipe: "core:spec/builtin-swipe",
+  branch: "core:spec/builtin-branch"
+});
+var BUILTIN_OUTLET_IDS = Object.freeze({
+  delete: "core:outlet/delete-message@1",
+  hide: "core:outlet/hide-message@1",
+  edit: "core:outlet/edit-message@1",
+  swipe: "core:outlet/swipe-message@1",
+  branch: "core:outlet/branch-session@1"
+});
+function reviewFieldsFinding(d) {
+  if (d.effects !== "write" && d.effects !== "external") return null;
+  if (d.review && Array.isArray(d.review.fields)) return null;
+  return `${d.id} declares effects: '${d.effects}' and no review.fields. An effectful definition says which of its in-ports a reviewer may edit at the gate \u2014 review: { fields: ['text'] }, or review: { fields: [] } when the gate is approve-or-refuse. Until it does, the form is inferred from the whole payload and every field is editable, including any row id.`;
+}
+var registrationFindings = /* @__PURE__ */ new Map();
+function assertMessageVerbFloors(shape, who) {
+  const verbs = shape?.messageVerbs;
+  if (!verbs || typeof verbs !== "object") return;
+  const forbidden = MESSAGE_VERB_FLOORS.filter((floor) => verbs[floor] === false);
+  if (!forbidden.length) return;
+  throw new Error(
+    `${who} declares messageVerbs { ${forbidden.map((f) => `${f}: false`).join(", ")} }. Stop, branch and edit are floors \u2014 present in every genre, never switched off (R-15). A genre may switch off delete, hide or swipe, and may forbid retry, extend or stepBack; drop the floor from the declaration.`
+  );
+}
+var CHANNEL_ROLES = ["conversation", "folio"];
+var CHANNEL_VOICES = ["character", "narrator", "none"];
+function channelDecls(shape) {
+  const s = shape && typeof shape === "object" ? shape : {};
+  const genreVoice = typeof s.voice === "string" ? s.voice : void 0;
+  const genreVerbs = s.messageVerbs;
+  const genreControls = plainObject(s.turnControls);
+  const resolve = (raw) => {
+    const decl2 = typeof raw === "string" ? { slug: raw.trim() } : raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+    const slug = typeof decl2.slug === "string" ? decl2.slug.trim() : "";
+    if (!slug) return void 0;
+    const verbs = decl2.messageVerbs || genreVerbs ? { ...genreVerbs, ...decl2.messageVerbs } : void 0;
+    const ownControls = plainObject(decl2.turnControls);
+    const controls = ownControls || genreControls ? { ...genreControls, ...ownControls } : void 0;
+    return {
+      slug,
+      role: decl2.role ?? "conversation",
+      ...decl2.voice ?? genreVoice ? { voice: decl2.voice ?? genreVoice } : {},
+      ...verbs ? { messageVerbs: verbs } : {},
+      ...isI18n(decl2.label) ? { label: localeMapOf(decl2.label) } : {},
+      ...controls ? { turnControls: controls } : {}
+    };
+  };
+  const declared2 = (Array.isArray(s.channels) ? s.channels : []).map(resolve).filter((d) => d !== void 0);
+  const main = declared2.find((d) => d.slug === DEFAULT_CHANNEL);
+  return [main ?? resolve(DEFAULT_CHANNEL), ...declared2.filter((d) => d !== main)];
+}
+function assertChannelDecls(shape, who) {
+  const channels = shape?.channels;
+  if (channels === void 0) return;
+  if (!Array.isArray(channels))
+    throw new Error(
+      `${who} declares a 'channels' that is not an array. A genre's channels are a list of slugs, each a bare string or a { slug, role?, voice?, messageVerbs?, label?, turnControls? } (R-C).`
+    );
+  for (const raw of channels) {
+    const isString = typeof raw === "string";
+    if (!isString && (!raw || typeof raw !== "object" || Array.isArray(raw)))
+      throw new Error(
+        `${who} declares a channel that is neither a slug nor a declaration: ${JSON.stringify(raw)}. Each channel is a bare string or a { slug, role?, voice?, messageVerbs?, label?, turnControls? } (R-C).`
+      );
+    const decl2 = isString ? { slug: raw } : raw;
+    const slug = typeof decl2.slug === "string" ? decl2.slug.trim() : "";
+    if (!slug)
+      throw new Error(
+        `${who} declares a channel with no slug. A channel is named by the slug it is referenced and stored under (R-C).`
+      );
+    if (slug.includes(":"))
+      throw new Error(
+        `${who} declares the channel '${slug}'. A channel is declared by its slug alone \u2014 lanes under it are runtime and open-ended, allocated by this genre's pipelines, and no lane count is declared anywhere (ruling 2026-09-09).`
+      );
+    const at = `${who} channel '${slug}'`;
+    if (decl2.role !== void 0 && !CHANNEL_ROLES.includes(decl2.role))
+      throw new Error(
+        `${at} declares role '${decl2.role}'. A channel's role is ${CHANNEL_ROLES.map((r) => `'${r}'`).join(" or ")} \u2014 how its messages enter a prompt, turns with speakers or one block of text (R-C).`
+      );
+    if (decl2.voice !== void 0 && !CHANNEL_VOICES.includes(decl2.voice))
+      throw new Error(
+        `${at} declares voice '${decl2.voice}'. A channel's voice is ${CHANNEL_VOICES.map((v2) => `'${v2}'`).join(", ")} \u2014 whose name a turn triggered here seeds under, or none for no seed row at all (R-C).`
+      );
+    assertMessageVerbFloors({ messageVerbs: decl2.messageVerbs }, at);
+    const label = i18nFindings(decl2.label, `${at} label`);
+    if (label.length) throw new Error(label.join("\n"));
+    assertTurnControls({ turnControls: decl2.turnControls }, at);
+    if (slug === DEFAULT_CHANNEL && (decl2.role ?? "conversation") !== "conversation")
+      throw new Error(
+        `${at} is declared role '${decl2.role}'. '${DEFAULT_CHANNEL}' is the channel every session has and the one a turn lands on by default, so it is always a conversation; declare another channel for the folio (R-C).`
+      );
+  }
+}
+var types = /* @__PURE__ */ new Map();
+var DESCRIPTOR_DISPLAY_KEYS = { display: ["label"] };
+function bandsMaterial(bands) {
+  if (!bands || !Object.keys(bands).length) return void 0;
+  return Object.fromEntries(
+    Object.entries(bands).map(([k, v2]) => [k, typeof v2 === "string" ? v2 : v2.id]).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+  );
+}
+function bandPortsMaterial(bandPorts) {
+  if (!bandPorts || !Object.keys(bandPorts).length) return void 0;
+  return Object.fromEntries(
+    Object.entries(bandPorts).map(([k, ports]) => [k, [...ports].sort()]).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+  );
+}
+function portSchemasMaterial(p) {
+  if (!p?.out || !Object.keys(p.out).length) return void 0;
+  return contractData({ out: p.out });
+}
+var contractData = (v2) => declarationData(v2, DESCRIPTOR_DISPLAY_KEYS);
+var flag = (v2) => v2 === true ? true : void 0;
+var portShapes = (ports) => Object.fromEntries(
+  Object.entries(ports ?? {}).map(([k, v2]) => [
+    k,
+    typeof v2 === "string" ? v2 : v2?.id ?? void 0
+  ])
+);
+function definitionContract(source) {
+  const at = source.id.lastIndexOf("@");
+  const pinned = at > 0 && /^\d+$/.test(source.id.slice(at + 1));
+  const entryShape = source.entryShape && typeof source.entryShape === "object" ? {
+    ...source.entryShape,
+    ...source.configSchema !== void 0 ? { fields: source.configSchema } : {}
+  } : void 0;
+  return {
+    id: pinned ? source.id.slice(0, at) : source.id,
+    version: source.version ?? (pinned ? Number(source.id.slice(at + 1)) : 1),
+    kind: source.kind,
+    ports: { in: portShapes(source.ports?.in), out: portShapes(source.ports?.out) },
+    slots: contractData(authoredSlots(source.slots)),
+    effects: source.effects,
+    review: source.review ? { fields: [...source.review.fields] } : void 0,
+    shape: source.shape,
+    optional: flag(source.optional),
+    declaresRandomness: flag(source.declaresRandomness),
+    scriptPoints: source.scriptPoints ? contractData(scriptPointsOf(source)) : void 0,
+    sessionShape: contractData(source.sessionShape),
+    earlyExit: flag(source.earlyExit),
+    causesEvent: source.causesEvent,
+    causesEventFrom: source.causesEventFrom,
+    // Sorted: which payloads an inlet reads is a set, not a sequence.
+    payloads: source.payloads?.length ? [...source.payloads].sort() : void 0,
+    liveRow: flag(source.liveRow),
+    media: contractData(source.media),
+    entryShape: contractData(entryShape),
+    // Contract that rides the row's policy (owner ruling 2026-09-27): a
+    // descriptor's own field, else the row's policy spelling — one hash.
+    bands: bandsMaterial(source.bands ?? source.policy?.bands ?? void 0),
+    bandPorts: bandPortsMaterial(source.bandPorts ?? source.policy?.bandPorts ?? void 0),
+    portSchemas: portSchemasMaterial(source.portSchemas ?? source.policy?.portSchemas ?? void 0),
+    semantics: source.semantics
+  };
+}
+function definitionContractHash(source) {
+  return contentHash(definitionContract(source));
+}
+function register(d) {
+  const existing = types.get(d.id);
+  if (existing)
+    refuseUnlessSameHash(
+      definitionContractHash(existing),
+      definitionContractHash(d),
+      `duplicate type id: ${d.id}`
+    );
+  checkWritePublishes(d);
+  checkNoAuthoredSettings(d);
+  checkNoSettingsPort(d);
+  checkScriptPointsAccept(d);
+  checkCausesEvent(d);
+  checkNoAmbientExtras(d);
+  checkModeTitled(d);
+  checkDisplayText(d);
+  checkBandDeclarations(d, types.values());
+  assertMessageVerbFloors(d.sessionShape, d.id);
+  assertSessionWrites(d.sessionShape, d.id);
+  assertTurnControls(d.sessionShape, d.id);
+  assertChannelDecls(d.sessionShape, d.id);
+  const reviewFinding = reviewFieldsFinding(d);
+  if (reviewFinding) registrationFindings.set(d.id, [reviewFinding]);
+  else registrationFindings.delete(d.id);
+  types.set(d.id, d);
+  return d;
+}
+var AMBIENT_SCRIPT_EXTRAS = ["session"];
+function checkNoAmbientExtras(d) {
+  for (const [name, slot] of Object.entries(d.slots ?? {})) {
+    const listed = slot.extras ?? [];
+    const ambient = listed.filter((e) => AMBIENT_SCRIPT_EXTRAS.includes(e));
+    if (ambient.length)
+      throw new Error(
+        `${d.id}: slot '${name}' lists ${ambient.map((e) => `'${e}'`).join(", ")} in its extras \u2014 every script site is handed ${AMBIENT_SCRIPT_EXTRAS.map((e) => `'${e}'`).join(", ")} already (R32); drop it from the list`
+      );
+  }
+}
+var portLine = (ports) => Object.entries(ports ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([k, v2]) => `${k}: ${String(v2)}`).join(", ");
+var slotLine = (slots) => Object.keys(authoredSlots(slots) ?? {}).sort().join(", ");
+function swapFitFinding(key, pinned, swap) {
+  if (swap.provisional)
+    return `'${swap.id}' cannot stand in for '${key}': it is provisional \u2014 declared, with no handler to run`;
+  const usesConnection = Object.values(pinned.slots ?? {}).some(
+    (slot) => slot?.kind === "connection"
+  );
+  if (usesConnection && !swap.id.startsWith("core:"))
+    return `'${swap.id}' cannot stand in for '${key}': that node uses a connection, and a plugin's code never touches connection data or calls a model (R53) \u2014 shape the core node with prompts or a config instead` + pluginRuleRef("connections");
+  const want = `a ${pinned.kind} with in { ${portLine(pinned.ports?.in)} } \u2192 out { ${portLine(pinned.ports?.out)} } and slots [${slotLine(pinned.slots)}]`;
+  const got = `a ${swap.kind} with in { ${portLine(swap.ports?.in)} } \u2192 out { ${portLine(swap.ports?.out)} } and slots [${slotLine(swap.slots)}]`;
+  return want === got ? void 0 : `'${swap.id}' cannot stand in for '${key}': a swap must match the pin's kind, ports and slots \u2014 ${want}; it is ${got}`;
+}
+function eventsLockFindings(inlet, events) {
+  const reads = inlet.payloads ?? [];
+  if (!reads.length)
+    return [
+      `'${inlet.id}' declares no payloads, so it answers one event: { genre, event }. A spec answering several events uses an inlet that reads them all \u2014 core:inlet/session-event@1 (PLAN-turn-order \xA74.14)`
+    ];
+  const out = [];
+  for (const e of events) {
+    const shape = eventById(e)?.payload;
+    if (!eventById(e)) continue;
+    if (!shape)
+      out.push(
+        `'${e}' carries no payload, so it cannot share an inlet with other events \u2014 lock it alone: { genre, event }`
+      );
+    else if (!reads.includes(shape))
+      out.push(
+        `'${inlet.id}' does not read '${shape}', the payload of '${e}' \u2014 it reads ${reads.map((r) => `'${r}'`).join(", ")}`
+      );
+  }
+  return out;
+}
+function checkCausesEvent(d) {
+  if (d.causesEventFrom !== void 0) {
+    if (d.kind !== "outlet" || d.effects !== "write")
+      throw new Error(`'${d.id}' declares causesEventFrom \u2014 only a write outlet causes an event`);
+    if (d.causesEvent)
+      throw new Error(`'${d.id}' declares both causesEvent and causesEventFrom \u2014 one says which event, not both`);
+    if (!d.ports.in?.[d.causesEventFrom])
+      throw new Error(`'${d.id}' names causesEventFrom '${d.causesEventFrom}', which is not one of its in-ports`);
+    return;
+  }
+  if (!d.causesEvent) return;
+  const event = eventById(d.causesEvent);
+  if (!event) throw new Error(`${d.id}: ${notADeclaredEvent(d.causesEvent)}`);
+  const base = d.id.replace(/@\d+$/, "");
+  if (!event.causedBy?.includes(base))
+    throw new Error(
+      `'${d.id}' causes '${d.causesEvent}', but that event's causedBy does not name '${base}'. causedBy is the one statement of what causes what \u2014 add '${base}' there, or drop causesEvent (R33)`
+    );
+}
+function checkWritePublishes(d) {
+  if (d.effects !== "write") return;
+  const bad = Object.entries(d.ports?.out ?? {}).filter(
+    ([, s]) => shapeIdOf(s) === "core:shape/row-ids@1"
+  );
+  if (!bad.length) return;
+  throw new Error(
+    `${d.id} declares effects: 'write' but publishes core:shape/row-ids@1 on ${bad.map(([k]) => `'${k}'`).join(", ")}. A gate-eligible write publishes core:shape/write-result@1 \u2014 pending under async review, committed otherwise \u2014 so a downstream port wanting raw ids fails at publish instead of writing a foreign key that dangles when the reviewer rejects (13 \xA77j-b).`
+  );
+}
+function checkNoAuthoredSettings(d) {
+  if (!d.slots) return;
+  if ("settings" in d.slots)
+    throw new Error(
+      `${d.id} declares a slot named 'settings'. That name is reserved for the substrate's own slot \u2014 \`enabled\` on an optional node, \`review\` on a gated one \u2014 which the registry projection declares and the executor reads. Name the slot for what it holds ('parameters' for tunables).`
+    );
+  const byKind = Object.entries(d.slots).find(([, decl2]) => decl2?.kind === "settings");
+  if (byKind)
+    throw new Error(
+      `${d.id} declares slot '${byKind[0]}' with kind 'settings'. That kind is the substrate's \u2014 derived from \`optional\` and \`effects\`, never authored. Declare 'parameters' for tunables.`
+    );
+}
+function checkNoSettingsPort(d) {
+  for (const port of Object.keys(d.ports?.out ?? {})) {
+    const heard = settingsTravelVerdict.judge({ kind: "port", definitionId: d.id, port });
+    if (!heard.ok) throw new Error(refusalText(heard));
+  }
+}
+function checkScriptPointsAccept(d) {
+  for (const p of d.scriptPoints ?? []) {
+    const point = p;
+    const key = typeof point === "string" ? point : String(point?.key);
+    const accepts = typeof point === "string" ? void 0 : point?.accepts;
+    if (!Array.isArray(accepts) || accepts.length === 0)
+      throw new Error(
+        `${d.id} declares script point '${key}' accepting no script kind. A point is { key, accepts, label } \u2014 list the kinds it takes (e.g. ['core:script:text/transform@1']); a point that accepts nothing is a hook nothing can attach to.`
+      );
+  }
+}
+var shapeIdOf = (s) => typeof s === "string" ? s : s?.id ?? void 0;
+var hasDisplayText = (v2) => isI18n(v2);
+function checkModeTitled(d) {
+  if (d.kind !== "inlet" || !d.sessionShape) return;
+  if (hasDisplayText(d.i18n?.name)) return;
+  throw new Error(
+    `${d.id} declares a sessionShape but no i18n.name. A shape-bearing input type is a session mode, and the New Session picker renders every mode as a card \u2014 give it a title: i18n: { name: { en: '\u2026' } }. Add a description there too; the packager warns when a mode ships without one.`
+  );
+}
+function checkDisplayText(d) {
+  const findings = [];
+  findings.push(...i18nFindings(d.i18n?.name, `${d.id} i18n.name`));
+  findings.push(...i18nFindings(d.i18n?.description, `${d.id} i18n.description`));
+  for (const [slotName, slot] of Object.entries(d.slots ?? {})) {
+    if (!slot) continue;
+    const at = `${d.id} slots.${slotName}`;
+    findings.push(...i18nFindings(slot.description, `${at}.description`));
+    for (const [field, decl2] of Object.entries(slot.fields ?? {}))
+      findings.push(...i18nFindings(decl2?.i18n, `${at}.fields.${field}.i18n`));
+    findings.push(...settingsSchemaFindings(slot.schema, `${at}.schema`));
+  }
+  for (const p of d.scriptPoints ?? []) {
+    const at = `${d.id} scriptPoints[${String(p.key)}]`;
+    findings.push(...i18nFindings(p.label, `${at}.label`));
+    findings.push(...i18nFindings(p.description, `${at}.description`));
+  }
+  if (d.sessionShape) {
+    findings.push(...settingsSchemaFindings(d.sessionShape.fields, `${d.id} sessionShape.fields`));
+    findings.push(...widgetDeclsFindings(d.sessionShape.panels, `${d.id} sessionShape.panels`));
+  }
+  if (d.entryShape)
+    findings.push(...settingsSchemaFindings(d.entryShape.fields, `${d.id} entryShape.fields`));
+  if (findings.length)
+    throw new Error(
+      `${d.id} declares display text a publish refuses (R-20):
+ \xB7 ${findings.join("\n \xB7 ")}`
+    );
+}
+function widgetDeclsFindings(raw, where) {
+  if (raw === void 0) return [];
+  if (!Array.isArray(raw)) return [`${where}: the widgets are an array of declarations`];
+  const out = [];
+  raw.forEach((w, i) => {
+    const decl2 = w;
+    const at = `${where}[${typeof decl2?.id === "string" ? decl2.id : i}]`;
+    if (!decl2 || typeof decl2 !== "object") {
+      out.push(`${at}: a widget declaration is an object \u2014 { id, title, component }`);
+      return;
+    }
+    out.push(...i18nFindings(decl2.title, `${at}.title`, { required: true }));
+    out.push(...settingsSchemaFindings(decl2.settings, `${at}.settings`));
+    out.push(...widgetReadsFindings(decl2.reads, `${at}.reads`));
+    if (decl2.surface !== void 0)
+      out.push(`${at}.surface: gone \u2014 give \`component\`, and place an \`sp-frame\` inside it for a document`);
+    else if (decl2.component === void 0)
+      out.push(`${at}: names nothing to render \u2014 give \`component\`, a component's slug`);
+    else if (typeof decl2.component !== "string" || !decl2.component)
+      out.push(`${at}.component: a component's slug`);
+  });
+  return out;
+}
+function getDefinition(id) {
+  return types.get(id);
+}
+var describeTaskDefinition = (d) => register({ ...d, kind: "task" });
+function pin(descriptor) {
+  const version = /@(\d+)$/.exec(descriptor.id)?.[1] ?? "1";
+  const ctor = (config2 = {}) => ({
+    __node: true,
+    descriptor,
+    config: config2
+  });
+  return { [`v${version}`]: ctor, id: descriptor.id, descriptor };
+}
+
+// ../serene-pub-sdk/sdk/src/refs.ts
+function $ref(node, port = "main") {
+  return { __ref: "data", node, port };
+}
+var isDataRef = (v2) => typeof v2 === "object" && v2 !== null && v2.__ref === "data";
+var isSlotRef = (v2) => typeof v2 === "object" && v2 !== null && v2.__ref === "slot";
+
+// ../serene-pub-sdk/sdk/src/scope.ts
+var REF_KEYS = /* @__PURE__ */ new Set(["__ref", "node", "port"]);
+function refAccessor(node, port = "main") {
+  const target = $ref(node, port);
+  return new Proxy(target, {
+    get(t, prop, recv) {
+      if (typeof prop !== "string") return Reflect.get(t, prop, recv);
+      if (REF_KEYS.has(prop) || prop === "toJSON" || prop === "then")
+        return Reflect.get(t, prop, recv);
+      if (prop in Object.prototype) return Reflect.get(t, prop, recv);
+      if (port !== "main") {
+        throw new Error(
+          `'${node}.${port}.${prop}' \u2014 ports are flat, so a ref cannot be refined twice. Reference the port you want directly, or reach inside the payload in the node's own hook.`
+        );
+      }
+      return refAccessor(node, prop);
+    }
+  });
+}
+function makeScope(knownKeys, localPrefix, clauseId) {
+  const resolveKey = (joined) => {
+    if (localPrefix && knownKeys.has(`${localPrefix}.${joined}`))
+      return `${localPrefix}.${joined}`;
+    return knownKeys.has(joined) ? joined : void 0;
+  };
+  const isPrefix = (joined) => [...knownKeys].some(
+    (k) => k.startsWith(`${joined}.`) || !!localPrefix && k.startsWith(`${localPrefix}.${joined}.`)
+  );
+  const walk = (path) => {
+    const joined = path.join(".");
+    const selfKey = joined ? resolveKey(joined) : void 0;
+    const itemKey = !selfKey && clauseId && joined === `${clauseId}.item` ? `${clauseId}.${ITEM}` : void 0;
+    const target = selfKey ? $ref(selfKey, "main") : itemKey ? $ref(itemKey, "main") : /* @__PURE__ */ Object.create(null);
+    return new Proxy(target, {
+      get(t, prop, recv) {
+        if (typeof prop !== "string") return Reflect.get(t, prop, recv);
+        if (REF_KEYS.has(prop) || prop === "toJSON" || prop === "then")
+          return Reflect.get(t, prop, recv);
+        if (prop in Object.prototype) return Reflect.get(t, prop, recv);
+        if (prop === ITEM && clauseId && path.length === 0)
+          return refAccessor(`${clauseId}.${ITEM}`);
+        const next = [...path, prop];
+        const nextJoined = next.join(".");
+        if (resolveKey(nextJoined) || isPrefix(nextJoined) || clauseId && nextJoined === `${clauseId}.item`)
+          return walk(next);
+        if (selfKey) return refAccessor(selfKey, prop);
+        throw new Error(
+          `'${nextJoined}' is not a node declared before this point.` + (knownKeys.size ? ` Available: ${[...knownKeys].join(", ")}.` : " No nodes are declared yet \u2014 the Input comes first (01 \xA72).") + ` Pipelines have no back-edges (F9), so a node cannot reference one declared later.`
+        );
+      }
+    });
+  };
+  return walk([]);
+}
+var ITEM = "$item";
+
+// ../serene-pub-sdk/sdk/src/identity.ts
+var SLUG_PART = /^[a-z0-9]+([./-][a-z0-9]+)*$/;
+function parseSpecId(id) {
+  const withoutPin = id.replace(/@\d+$/, "");
+  const i = withoutPin.indexOf(":");
+  if (i === -1) return { slug: withoutPin };
+  return { owner: withoutPin.slice(0, i), slug: withoutPin.slice(i + 1) };
+}
+function assertSpecId(id) {
+  const { owner, slug } = parseSpecId(id);
+  if (!SLUG_PART.test(slug) || owner !== void 0 && !SLUG_PART.test(owner)) {
+    throw new Error(
+      `'${id}' is not a valid spec id. Use 'owner:slug' \u2014 'chariot.rp:chat', 'core:chat-turn' \u2014 or a bare slug for a hand-imported document. Lowercase, digits, hyphens and dots only. The **semver** goes in meta.version, never in the id: a spec upgrades by version, and an id that carries one cannot be matched across upgrades.`
+    );
+  }
+}
+var CORE_ACTION_SPEC_ID = "core";
+var ACTION_IDENTITY = /^[a-z0-9:./-]+#[a-z0-9-]+$/;
+var ACTION_IDENTITY_MAX_LENGTH = 200;
+function isActionIdentity(v2) {
+  return typeof v2 === "string" && v2.length <= ACTION_IDENTITY_MAX_LENGTH && ACTION_IDENTITY.test(v2);
+}
+
+// ../serene-pub-sdk/sdk/src/attributes.ts
+var SLOT_ID = /^[a-z0-9]+(?:[.-][a-z0-9]+)*:slot\/[a-z0-9]+(?:-[a-z0-9]+)*@\d+$/;
+function assertSlotId(id) {
+  if (!SLOT_ID.test(id))
+    throw new Error(
+      `'${id}' is not a valid attribute slot id. Use 'owner:slot/name@N' \u2014 'core:slot/hp@1', 'acme.rp:slot/tension@1'. The id is what a stored value is filed under for the life of the card that carries it; the display name lives in the declaration.`
+    );
+}
+var derivations = Object.freeze({
+  /**
+   * How old someone is: a `birthdate` value on the same owner, against the
+   * session's story date. Absent — not zero — when either is missing, which
+   * is the whole reason age is derived and not typed in.
+   */
+  age: Object.freeze({
+    id: "core:derive/age@1",
+    requiresFrom: true,
+    description: "A birthdate slot on the same owner, read against the session's story date."
+  }),
+  /**
+   * A LiquidJS expression written on the declaration itself (`derive`),
+   * evaluated over the state pinned at run start.
+   *
+   * It earns an id even though the *text* is the author's, because a derived
+   * slot always names the computation behind it: a receipt says which one
+   * produced a number, and "an expression" is an answer only if it is one
+   * declared thing rather than a hole in the set. What the author supplies is
+   * the expression; the evaluator is still core's.
+   *
+   * `requiresFrom: false` — the expression names whatever it reads, which is
+   * exactly the reason it is not `age`.
+   */
+  liquid: Object.freeze({
+    id: "core:derive/liquid@1",
+    requiresFrom: false,
+    description: "A LiquidJS expression on the declaration, evaluated over the state pinned at run start."
+  })
+});
+var SLOT_EARSHOTS = Object.freeze(["all", "holder"]);
+
+// ../serene-pub-sdk/sdk/src/genres.ts
 var GENRE_ID = /^[a-z0-9]+(?:[.-][a-z0-9]+)*:genre\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
 function assertGenreId(id) {
   if (!GENRE_ID.test(id))
@@ -829,8 +3035,40 @@ var sessionEvents = Object.freeze({
    * (R-15 *Forms*; U5d). Optional in every genre's surface: a genre that
    * binds nothing leaves such a form waiting, as it would for a person.
    */
-  formAddressed: "core:event/form-addressed@1"
+  formAddressed: "core:event/form-addressed@1",
+  // ── Turn order as event-driven state (PLAN-turn-order §4.1, 2026-09-21) ──
+  // The events a genre may bind its turn-order spec to. A genre that
+  // binds the spec lists every event it binds it to, all optional (`{}`).
+  /** A row that is not generating landed — a send, a greeting, a finished or stopped reply. */
+  messageCompleted: "core:event/message-completed@1",
+  /** A person rewrote a settled message. */
+  messageEdited: "core:event/message-edited@1",
+  /** A message was deleted. */
+  messageDeleted: "core:event/message-deleted@1",
+  /** A message was hidden from the prompt, or shown again. */
+  messageHidden: "core:event/message-hidden@1",
+  /** A line's shown sprite changed — a picker's choice or a person's (DESIGN-sprites). */
+  spriteShown: "core:event/sprite-shown@1",
+  /** A seated participant's row changed — active, position, visibility or portrayal. */
+  castChanged: "core:event/cast-changed@1",
+  /** `sessions:update` landed — name, scenario, lorebook, genre fields, preset, channels, tags. */
+  sessionUpdated: "core:event/session-updated@1",
+  /** A session was branched at a message into a new session; recorded on the branch. */
+  sessionBranched: "core:event/session-branched@1",
+  /**
+   * A pipeline's annex entry changed — "my state changed". Caused by
+   * `core:outlet/set-session-annex@1`; the payload names the owner.
+   */
+  annexChanged: "core:event/annex-changed@1",
+  /**
+   * `metadata.turnOrder` was written. **For typing only**: core-internal,
+   * read by the auto-advance listener and the `sessions:turnOrder` push;
+   * `genre()` refuses it in `events`, so no preset can bind it.
+   */
+  turnOrderChanged: "core:event/turn-order-changed@1"
 });
+var TURN_ORDER_CHANGED_IS_INTERNAL = `'${sessionEvents.turnOrderChanged}' is core-internal \u2014 the auto-advance listener and the turn-order push read it, and a pipeline bound to it would recompute the order it was told about. Bind '${sessionEvents.messageCompleted}' and the other session events instead.`;
+var UNCLAIMED_LINE_NAME = Object.freeze({ en: "Narrator" });
 var ENVOY_KEY = /^[a-z][a-z0-9-]*$/;
 var ENVOY_IMAGE = /^(?:https?:\/\/\S+|data:image\/[a-z0-9.+-]+(?:;[^,]*)?,.+)$/i;
 var ENVOY_SPEAKS = /* @__PURE__ */ new Set(["in-turn", "on-action"]);
@@ -859,6 +3097,27 @@ function envoyFindings(raw, at, owner = "genre") {
   }
   if (e.default !== void 0 && typeof e.default !== "boolean")
     out.push(`${where}: 'default' is a boolean`);
+  if (e.fallback !== void 0) {
+    if (typeof e.fallback !== "boolean") out.push(`${where}: 'fallback' is a boolean`);
+    else if (owner === "action" && e.fallback)
+      out.push(
+        `${where}: an action's envoy cannot be the fallback \u2014 it speaks for its action only; declare the fallback on the genre's envoys`
+      );
+  }
+  if (e.greeting !== void 0) {
+    const g = e.greeting;
+    if (owner === "action")
+      out.push(
+        `${where}: an action's envoy cannot declare a greeting \u2014 it speaks for its action only; declare the greeting on the genre's envoy (R6)`
+      );
+    else if (!g || typeof g !== "object" || Array.isArray(g))
+      out.push(`${where}: 'greeting' is { text, channel? } \u2014 the line this envoy opens a new session with`);
+    else {
+      out.push(...i18nFindings(g.text, `${where}.greeting.text`, { required: true }));
+      if (g.channel !== void 0 && (typeof g.channel !== "string" || !g.channel.trim()))
+        out.push(`${where}: greeting.channel is a channel slug the genre declares \u2014 'main' when absent`);
+    }
+  }
   if (e.speaks !== void 0) {
     if (!ENVOY_SPEAKS.has(e.speaks))
       out.push(`${where}: 'speaks' is 'in-turn' or 'on-action' (R-21 (6))`);
@@ -869,19 +3128,30 @@ function envoyFindings(raw, at, owner = "genre") {
   }
   return out;
 }
-function envoysFindings(raw, at = "envoys") {
+function envoysFindings(raw, at = "envoys", channels) {
   if (raw === void 0) return [];
   if (!Array.isArray(raw)) return [`${at}: a genre's envoys are an array`];
   const out = [];
   const keys = /* @__PURE__ */ new Map();
   let defaults = 0;
+  const fallbacks = [];
   raw.forEach((e, i) => {
     out.push(...envoyFindings(e, at, "genre"));
     const key = e?.key;
     if (typeof key === "string") keys.set(key, (keys.get(key) ?? 0) + 1);
     if (e?.default === true) defaults++;
+    if (e?.fallback === true) fallbacks.push(typeof key === "string" ? key : "?");
+    const lands = e?.greeting?.channel;
+    if (channels && typeof lands === "string" && lands.trim() && !channels.includes(lands.trim()))
+      out.push(
+        `${at}[${typeof key === "string" ? key : "?"}]: greeting.channel '${lands}' is not a channel this genre declares \u2014 it declares ${channels.map((c) => `'${c}'`).join(", ")} (R6)`
+      );
     void i;
   });
+  if (fallbacks.length > 1)
+    out.push(
+      `${at}: ${fallbacks.map((k) => `'${k}'`).join(", ")} are all 'fallback: true' \u2014 a line nobody claims posts as one envoy; mark one`
+    );
   for (const [key, n] of keys)
     if (n > 1) out.push(`${at}: the key '${key}' is declared ${n} times \u2014 an envoy's key is unique within its genre`);
   if (defaults > 1)
@@ -897,12 +3167,15 @@ function genreEnabledWhenFindings(raw, at = "enabledWhen") {
   if (raw === void 0) return [];
   if (!raw || typeof raw !== "object" || Array.isArray(raw))
     return [
-      `${at}: a genre's enabled-when defaults are an object keyed by function key \u2014 { look: { on: 'state.world.location', truthy: true, reason: { en: '\u2026' } } }`
+      `${at}: a genre's enabled-when defaults are an object keyed by action identity \u2014 { 'core:spec/look#look': { on: 'state.world.location', truthy: true, reason: { en: '\u2026' } } }`
     ];
   const out = [];
-  for (const [fn, decl2] of Object.entries(raw)) {
-    if (!fn) out.push(`${at}: a default is keyed by the function key it applies to \u2014 got ''`);
-    out.push(...enabledWhenFindings(decl2, `${at}[${fn}]`));
+  for (const [id, decl2] of Object.entries(raw)) {
+    if (!isActionIdentity(id))
+      out.push(
+        `${at}: a default is keyed by the identity of the action it applies to \u2014 '<spec slug>#<key>', or 'core#<verb>' for a message verb \u2014 got '${id}'`
+      );
+    out.push(...enabledWhenFindings(decl2, `${at}[${id}]`));
   }
   return out;
 }
@@ -936,25 +3209,89 @@ function assertDisplayText(props, genreId) {
   const findings = genreDisplayTextFindings(props, genreId);
   if (findings.length) throw new Error(findings.join("\n"));
 }
-function assertEnvoys(envoys, genreId) {
+function assertPlayerLabel(props, genreId) {
+  if (props.playerLabel === void 0) return void 0;
+  const findings = i18nFindings(props.playerLabel, `${genreId}.playerLabel`);
+  if (findings.length) throw new Error(findings.join("\n"));
+  if ((props.shape?.personas?.min ?? 0) >= 1)
+    throw new Error(
+      `${genreId}.playerLabel: this genre requires a persona (shape.personas.min \u2265 1), so a persona always names the person's line and no line would ever carry the label \u2014 drop playerLabel, or let the genre run without a persona`
+    );
+  return Object.freeze({ ...localeMapOf(props.playerLabel) });
+}
+function assertEnvoys(envoys, genreId, shape) {
   if (!envoys) return [];
-  const findings = envoysFindings(envoys, `${genreId}.envoys`);
+  const findings = envoysFindings(
+    envoys,
+    `${genreId}.envoys`,
+    channelDecls(shape).map((c) => c.slug)
+  );
   if (findings.length) throw new Error(findings.join("\n"));
   return envoys.map((e) => normalizeEnvoy(e, e.speaks ?? "in-turn"));
+}
+var CONVERSATION_WIDGET_ID = "messages";
+function assertGenreWidgets(props, id) {
+  const problems = [];
+  const omitWidgets = [];
+  for (const w of props.omitWidgets ?? []) {
+    if (typeof w === "string") {
+      problems.push(`${id} omitWidgets: '${w}' is a string \u2014 name the widget value (coreWidgets.x, or the package's widget)`);
+      continue;
+    }
+    try {
+      omitWidgets.push(widgetRef(w));
+    } catch (e) {
+      problems.push(`${id} omitWidgets: ${e.message}`);
+    }
+  }
+  const layouts = [...props.layouts ?? []];
+  if (layouts.length && layouts[0].slug !== "default")
+    problems.push(`${id} layouts: the first is the genre's default \u2014 give it slug 'default' (it is '${layouts[0].slug}')`);
+  const slugs = /* @__PURE__ */ new Set();
+  for (const l of layouts) {
+    if (slugs.has(l.slug)) problems.push(`${id} layouts: two layouts are '${l.slug}' \u2014 a slug names one`);
+    slugs.add(l.slug);
+    for (const w of layoutWidgetIds(l.preset))
+      if (omitWidgets.includes(widgetOfInstance(w)))
+        problems.push(`${id} layout '${l.slug}' places '${w}', which the genre omits`);
+  }
+  if (omitWidgets.includes(CONVERSATION_WIDGET_ID)) {
+    const first = layouts[0];
+    if (!first || !drawnWidgetIds(first.preset).length)
+      problems.push(
+        `${id} omits the conversation \u2014 ship a layout (layouts: [layout({ \u2026 })]) that places the widget that takes its place (its role: 'primary' widget), in any zone`
+      );
+  }
+  if (problems.length) throw new Error(problems.join("\n"));
+  return { omitWidgets: [...new Set(omitWidgets)], layouts };
 }
 function genre(id, props) {
   assertGenreId(id);
   assertMessageVerbFloors(props.shape, id);
   assertSessionWrites(props.shape, id);
+  assertTurnControls(props.shape, id);
   assertChannelDecls(props.shape, id);
   const events = { ...props.events ?? {} };
+  if (sessionEvents.turnOrderChanged in events)
+    throw new Error(`${id} lists it in its events: ${TURN_ORDER_CHANGED_IS_INTERNAL}`);
+  for (const event of Object.keys(events)) {
+    if (!eventById(event)) throw new Error(`${id}: ${notADeclaredEvent(event)}`);
+    if (!event.startsWith("core:"))
+      throw new Error(
+        `${id} lists '${event}', a package's event \u2014 add it to the genre from defineExtension({ events: [{ event, genre, recordedBy }] }), which also says who may record it`
+      );
+  }
   events[sessionEvents.sessionCreated] = {
     ...events[sessionEvents.sessionCreated] ?? {},
     required: true
   };
   assertDisplayText(props, id);
-  const envoys = assertEnvoys(props.envoys, id);
+  const envoys = assertEnvoys(props.envoys, id, props.shape);
   const enabledWhen = assertEnabledWhen(props.enabledWhen, id);
+  const { omitWidgets, layouts } = assertGenreWidgets(props, id);
+  if (props.customAttributes !== void 0 && props.customAttributes !== "allow" && props.customAttributes !== "deny")
+    throw new Error(`${id}.customAttributes: 'allow' or 'deny' \u2014 not ${JSON.stringify(props.customAttributes)}`);
+  const playerLabel = assertPlayerLabel(props, id);
   const decl2 = Object.freeze({
     id,
     name: props.name,
@@ -964,16 +3301,26 @@ function genre(id, props) {
     events: Object.freeze(events),
     slots: props.slots ? Object.freeze([...props.slots]) : void 0,
     sheets: props.sheets ? Object.freeze([...props.sheets]) : void 0,
+    // Absent unless allowed, so a genre that denies (or says nothing) hashes as it did.
+    ...props.customAttributes === "allow" ? { customAttributes: "allow" } : {},
     ...envoys.length ? { envoys: Object.freeze(envoys) } : {},
-    ...enabledWhen && Object.keys(enabledWhen).length ? { enabledWhen } : {}
+    // R4: absent when unstated, so a genre that says nothing hashes as it did.
+    ...playerLabel ? { playerLabel } : {},
+    ...enabledWhen && Object.keys(enabledWhen).length ? { enabledWhen } : {},
+    // The pinned settings (§4.13): copied when stated, frozen like the
+    // rest, absent otherwise — so an unpinned genre hashes as it did.
+    ...props.settings && Object.keys(props.settings).length ? { settings: Object.freeze({ ...props.settings }) } : {},
+    // R71: absent when unstated, so a genre that says nothing hashes as it did.
+    ...omitWidgets.length ? { omitWidgets: Object.freeze(omitWidgets) } : {},
+    ...layouts.length ? { layouts: Object.freeze(layouts) } : {}
   });
-  const existing = registry2.get(id);
+  const existing = registry3.get(id);
   if (existing)
     refuseUnlessIdentical(existing, decl2, `duplicate genre id: ${id}`, GENRE_DISPLAY_KEYS);
-  registry2.set(id, decl2);
+  registry3.set(id, decl2);
   return decl2;
 }
-var registry2 = /* @__PURE__ */ new Map();
+var registry3 = /* @__PURE__ */ new Map();
 var GENRE_DISPLAY_KEYS = { display: ["name", "description"] };
 var genreIdOf = (g) => {
   const id = typeof g === "string" ? g : g.id;
@@ -981,57 +3328,13 @@ var genreIdOf = (g) => {
   return id;
 };
 
-// sdk/src/participants.ts
-var PARTICIPANT_ROLES = ["owner", "admin", "participant", "item", "run-owner"];
-var ID = /^[^\s:]+$/;
-var SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-var roles = new Set(PARTICIPANT_ROLES);
-function parseParticipantRef(raw) {
-  if (typeof raw !== "string")
-    throw new Error(
-      `a participant reference is a string \u2014 got ${raw === null ? "null" : typeof raw}`
-    );
-  const text2 = raw.trim();
-  if (roles.has(text2)) return { kind: text2 };
-  const cut = text2.indexOf(":");
-  if (cut === -1)
-    throw new Error(
-      `'${raw}' is not a participant reference \u2014 expected one of ${PARTICIPANT_ROLES.join(", ")}, or user:<id>, character:<id>, envoy:<slug>`
-    );
-  const kind = text2.slice(0, cut);
-  const rest = text2.slice(cut + 1);
-  switch (kind) {
-    case "user":
-    case "character":
-      if (!ID.test(rest))
-        throw new Error(
-          `'${raw}' names a ${kind} with no readable id \u2014 a ${kind} reference is '${kind}:<id>'`
-        );
-      return { kind, id: rest };
-    case "envoy":
-      if (!SLUG.test(rest))
-        throw new Error(
-          `'${raw}' names an envoy with no readable slug \u2014 an envoy reference is 'envoy:<slug>', the slug a letter or digit followed by letters, digits, '.', '_' or '-'`
-        );
-      return { kind, slug: rest };
-    default:
-      throw new Error(
-        `'${raw}' is not a participant reference \u2014 '${kind}:' is not a kind (user, character, envoy)`
-      );
-  }
-}
-function isParticipantRef(raw) {
-  try {
-    parseParticipantRef(raw);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// sdk/src/actions.ts
+// ../serene-pub-sdk/sdk/src/actions.ts
 var ACTION_EFFECTS = ["fiction", "world"];
-var WORLD_ACTION_VENUES = ["composer", "session-settings", "admin", "review"];
+var TEXT_NEEDS = ["required", "optional"];
+var COLLECTS_KEYS = ["text", "recipients"];
+var COLLECTED_TEXT_KEYS = ["need", "label", "placeholder", "ifEmpty"];
+var COLLECTED_RECIPIENTS_KEYS = ["label", "min", "max", "overwrites"];
+var WORLD_ACTION_VENUES = ["composer", "message", "session-settings", "admin", "review"];
 var WORLD_ACTION_ACTORS = ["owner", "admin"];
 var VENUE_KINDS = [
   "composer",
@@ -1068,6 +3371,88 @@ function slashNameOf(action, specId) {
   return isCoreNamespace(ns) || !ns ? action.key : `${ns}.${action.key}`;
 }
 var KEY = /^[a-z][a-z0-9-]*$/;
+var EFFECTS_LINE_FIX = `move the action to a venue on the owner's side of the line (${WORLD_ACTION_VENUES.join(", ")}) and keep audience.act to ${WORLD_ACTION_ACTORS.join(" and/or ")} \u2014 or declare effects: 'fiction' if its result stays inside the story`;
+function worldActionCrossing(input) {
+  if (input.effects !== "world") return { ok: true };
+  if (input.kind === "venue") {
+    const kind = input.venue;
+    if (typeof kind !== "string" || WORLD_ACTION_VENUES.includes(kind)) return { ok: true };
+    return {
+      ok: false,
+      sentence: `${input.where}: a 'world' action may not appear in the '${kind}' venue \u2014 its result reaches outside the fiction (cards, lore, settings, permissions), so it belongs in ${WORLD_ACTION_VENUES.join(", ")} and never where a character could be asked to answer it (the effects line, R-15)`,
+      fix: EFFECTS_LINE_FIX
+    };
+  }
+  if (WORLD_ACTION_ACTORS.includes(String(input.ref))) return { ok: true };
+  return {
+    ok: false,
+    sentence: `${input.where}: a 'world' action's audience.act names '${String(input.ref)}' \u2014 an out-of-fiction effect is the owner's (or an administrator's) to invoke, never a participant's or a character's (the effects line, R-15)`,
+    fix: EFFECTS_LINE_FIX
+  };
+}
+function collectsFindings(raw, where) {
+  const out = [];
+  const unknownKeys = (o, known, at) => {
+    for (const k of Object.keys(o))
+      if (!known.includes(k))
+        out.push(`${at}: '${k}' is not something an action collects here \u2014 one of ${known.join(", ")}`);
+  };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw))
+    return [`${where} is { text?, recipients? } \u2014 what the press asks for before it fires`];
+  const c = raw;
+  unknownKeys(c, COLLECTS_KEYS, where);
+  if (c.text !== void 0) {
+    const at = `${where}.text`;
+    const t = c.text;
+    if (!t || typeof t !== "object" || Array.isArray(t))
+      out.push(`${at} is { need, label, placeholder?, ifEmpty? } \u2014 the text the modal asks for`);
+    else {
+      unknownKeys(t, COLLECTED_TEXT_KEYS, at);
+      if (!TEXT_NEEDS.includes(t.need))
+        out.push(
+          `${at}.need is one of ${TEXT_NEEDS.join(", ")} \u2014 whether the press fires without any text`
+        );
+      out.push(...i18nFindings(t.label, `${at}.label`, { required: true }));
+      out.push(...i18nFindings(t.placeholder, `${at}.placeholder`));
+      if (t.need === "optional" && t.ifEmpty === void 0)
+        out.push(
+          `${at}.ifEmpty is required when need is 'optional' \u2014 one sentence saying what an empty submit does ('The room decides.')`
+        );
+      else out.push(...i18nFindings(t.ifEmpty, `${at}.ifEmpty`));
+    }
+  }
+  if (c.recipients !== void 0) {
+    const at = `${where}.recipients`;
+    const r = c.recipients;
+    if (!r || typeof r !== "object" || Array.isArray(r))
+      out.push(`${at} is { label, min?, max?, overwrites? } \u2014 the cast members the modal asks for`);
+    else {
+      unknownKeys(r, COLLECTED_RECIPIENTS_KEYS, at);
+      out.push(...i18nFindings(r.label, `${at}.label`, { required: true }));
+      const count = (v2) => typeof v2 === "number" && Number.isInteger(v2);
+      if (r.min !== void 0 && (!count(r.min) || r.min < 1))
+        out.push(`${at}.min is a whole number, 1 or more \u2014 the fewest who may be picked`);
+      if (r.max !== void 0) {
+        const min = count(r.min) ? r.min : 1;
+        if (!count(r.max) || r.max < min)
+          out.push(`${at}.max is a whole number no smaller than min (${min}) \u2014 the most who may be picked`);
+      }
+      if (r.overwrites !== void 0) {
+        try {
+          if (typeof r.overwrites !== "string") throw new Error("not a string");
+          assertSlotId(r.overwrites);
+        } catch {
+          out.push(
+            `${at}.overwrites is a slot id ('core:slot/whisper@1') \u2014 the per-cast slot the action writes on each recipient`
+          );
+        }
+      }
+    }
+  }
+  if (c.text === void 0 && c.recipients === void 0 && !out.length)
+    out.push(`${where} collects nothing \u2014 declare text, recipients, or leave collects out`);
+  return out;
+}
 function actionFindings(raw, specId, at = "contributes.actions") {
   return actionFindingsByLaw(raw, specId, at).map((f) => f.message);
 }
@@ -1076,15 +3461,15 @@ function actionFindingsByLaw(raw, specId, at = "contributes.actions") {
   const shape = (...messages) => {
     for (const message of messages) out.push({ law: "R-15", message });
   };
-  const line = (message) => out.push({ law: "F41", message });
+  const line = (heard) => {
+    if (!heard.ok) out.push({ law: "F41", message: i18nText(heard.sentence), fix: i18nText(heard.fix) });
+  };
   if (!raw || typeof raw !== "object")
     return [{ law: "R-15", message: `${at}: an action is an object \u2014 got ${typeof raw}` }];
   const a = raw;
   const where = `${at}[${typeof a.key === "string" ? a.key : "?"}]`;
   if (typeof a.key !== "string" || !KEY.test(a.key))
     shape(`${where}: 'key' is required \u2014 a lowercase kebab token (${KEY.source})`);
-  if (typeof a.function !== "string" || !a.function)
-    shape(`${where}: 'function' is required \u2014 the function key the fire routes (19 \xA73)`);
   if (typeof a.genre !== "string" || !a.genre)
     shape(
       `${where}: 'genre' is required \u2014 the genre id this action is offered to (24 \xA73), such as core:genre/chat`
@@ -1123,29 +3508,36 @@ function actionFindingsByLaw(raw, specId, at = "contributes.actions") {
   }
   if (a.quick !== void 0 && typeof a.quick !== "boolean")
     shape(`${where}: 'quick' is a boolean \u2014 the one prominence flag`);
+  if (a.collects !== void 0) shape(...collectsFindings(a.collects, `${where}.collects`));
   if (a.effects !== void 0 && !ACTION_EFFECTS.includes(a.effects))
     shape(
       `${where}: 'effects' is one of ${ACTION_EFFECTS.join(", ")} \u2014 what the result touches (the effects line, R-15)`
     );
-  if (a.effects === "world") {
-    for (const v2 of venues) {
-      const kind = v2?.kind;
-      if (typeof kind === "string" && !WORLD_ACTION_VENUES.includes(kind))
-        line(
-          `${where}: a 'world' action may not appear in the '${kind}' venue \u2014 its result reaches outside the fiction (cards, lore, settings, permissions), so it belongs in ${WORLD_ACTION_VENUES.join(", ")} and never where a character could be asked to answer it (the effects line, R-15)`
-        );
-    }
-    const act = a.audience?.act;
-    if (Array.isArray(act)) {
-      for (const r of act)
-        if (!WORLD_ACTION_ACTORS.includes(String(r)))
-          line(
-            `${where}: a 'world' action's audience.act names '${String(r)}' \u2014 an out-of-fiction effect is the owner's (or an administrator's) to invoke, never a participant's or a character's (the effects line, R-15)`
-          );
-    }
-  }
+  for (const v2 of venues)
+    line(
+      worldActionCrossing({
+        kind: "venue",
+        where,
+        effects: a.effects,
+        venue: v2?.kind
+      })
+    );
+  const act = a.audience?.act;
+  if (Array.isArray(act))
+    for (const r of act) line(worldActionCrossing({ kind: "actor", where, effects: a.effects, ref: r }));
   shape(...i18nFindings(a.label, `${where}.label`, { required: true }));
-  if (a.description !== void 0) shape(...i18nFindings(a.description, `${where}.description`));
+  if (a.description === void 0)
+    shape(
+      `${where}: 'description' is required \u2014 one plain sentence saying what the action does, shown in the session's action legend and as the control's tooltip ({ en: 'Roll the dice and post the result.' })`
+    );
+  else shape(...i18nFindings(a.description, `${where}.description`));
+  if (a.iconAlt !== void 0) {
+    shape(...i18nFindings(a.iconAlt, `${where}.iconAlt`));
+    if (a.icon === void 0)
+      shape(
+        `${where}: 'iconAlt' needs an 'icon' \u2014 it is what the icon says when it stands alone; drop it, or declare the icon`
+      );
+  }
   if (a.slash !== void 0) {
     if (typeof a.slash !== "string") shape(`${where}: 'slash' is a string`);
     else shape(...slashFindings(a.slash, specId, where));
@@ -1163,6 +3555,13 @@ function actionFindingsByLaw(raw, specId, at = "contributes.actions") {
           `${where}.enabledWhen[${i}]: reads '${p.on}', which only a press on a message can answer \u2014 add a { kind: 'message' } venue, or read a session value ('state.world.\u2026', 'session.generating') instead`
         );
     });
+  shape(...enabledWhenFindings(a.presentWhen, `${where}.presentWhen`));
+  normalizeEnabledWhen(a.presentWhen).forEach((p, i) => {
+    if (p.on === "item" || p.on.startsWith("item."))
+      shape(
+        `${where}.presentWhen[${i}]: reads '${p.on}' \u2014 whether an action is present is decided for a listing, which has no message to read; read a session value ('state.world.\u2026', 'session.openForm.action') instead, or grey it per row with enabledWhen`
+      );
+  });
   return out;
 }
 function slashFindings(slash, specId, where = "slash") {
@@ -1186,57 +3585,56 @@ function slashFindings(slash, specId, where = "slash") {
 }
 function normalizeAction(raw) {
   const a = { ...raw };
-  if (a.mode && !a.genre) a.genre = a.mode;
-  delete a.mode;
-  if (a.i18n !== void 0 && a.label === void 0) a.label = a.i18n;
-  delete a.i18n;
-  if (typeof a.venue === "string") a.venue = [{ kind: a.venue }];
-  else if (a.venue && !Array.isArray(a.venue)) a.venue = [a.venue];
+  if (a.venue && !Array.isArray(a.venue)) a.venue = [a.venue];
   else if (!Array.isArray(a.venue)) a.venue = [];
-  if (typeof a.key !== "string" && typeof a.function === "string") {
-    a.key = a.function;
-    if (a.label === void 0) a.label = { en: a.function };
-  }
   if (a.envoy && typeof a.envoy === "object")
     a.envoy = { ...a.envoy, speaks: "on-action" };
   if (a.enabledWhen !== void 0 && a.enabledWhen !== null) {
     const list = Array.isArray(a.enabledWhen) ? a.enabledWhen : [a.enabledWhen];
     if (list.every(isEnabledWhenShaped)) a.enabledWhen = normalizeEnabledWhen(a.enabledWhen);
   }
+  if (a.presentWhen !== void 0 && a.presentWhen !== null) {
+    const list = Array.isArray(a.presentWhen) ? a.presentWhen : [a.presentWhen];
+    if (list.every(isEnabledWhenShaped)) a.presentWhen = normalizeEnabledWhen(a.presentWhen);
+  }
   return a;
 }
 function normalizeContributes(contributes) {
   if (!contributes) return contributes;
-  const { triggers, actions, ...rest } = contributes;
-  const merged = [...actions ?? [], ...triggers ?? []];
-  if (!merged.length) return rest;
-  return { ...rest, actions: merged.map(normalizeAction) };
+  const { actions, ...rest } = contributes;
+  if (!actions?.length) return rest;
+  return { ...rest, actions: actions.map(normalizeAction) };
 }
 function actionsOf(doc) {
   const c = doc.contributes;
   const normalized = normalizeContributes(c);
   return (normalized?.actions ?? []).map((a) => ({ ...a, specId: doc.id }));
 }
-var CORE_ACTION_SPEC_ID = "core";
 function slashCollisions(actions) {
   const seen = /* @__PURE__ */ new Map();
   const out = [];
   for (const genre2 of new Set(actions.map((a) => a.genre ?? "")))
     for (const c of CORE_ACTIONS) {
       const slash = slashNameOf(c, CORE_ACTION_SPEC_ID);
-      seen.set(`${genre2}#${slash}`, { function: c.function, specId: CORE_ACTION_SPEC_ID, slash });
+      seen.set(`${genre2}#${slash}`, {
+        identity: `${CORE_ACTION_SPEC_ID}#${c.key}`,
+        specId: CORE_ACTION_SPEC_ID,
+        key: c.key,
+        slash
+      });
     }
   for (const a of actions) {
     const slash = slashNameOf(a, a.specId);
+    const identity = `${a.specId}#${a.key}`;
     const key = `${a.genre ?? ""}#${slash}`;
     const prior = seen.get(key);
     if (!prior) {
-      seen.set(key, { function: a.function, specId: a.specId, slash });
+      seen.set(key, { identity, specId: a.specId, key: a.key, slash });
       continue;
     }
-    if (prior.function === a.function) continue;
+    if (prior.identity === identity) continue;
     out.push(
-      `'/${slash}' is claimed twice for genre '${a.genre ?? "(none)"}': by '${prior.specId}' for '${prior.function}' and by '${a.specId}' for '${a.function}' \u2014 one slash name means one function; rename one of them`
+      `'/${slash}' is claimed twice for genre '${a.genre ?? "(none)"}': by '${prior.specId}' for '${prior.key}' and by '${a.specId}' for '${a.key}' \u2014 one slash name means one action; rename one of them`
     );
   }
   return out;
@@ -1247,9 +3645,8 @@ function actionDocumentFindings(doc) {
 function actionDocumentFindingsByLaw(doc) {
   const c = doc.contributes;
   if (!c) return [];
-  const raw = [...c.actions ?? [], ...c.triggers ?? []];
   const out = [];
-  for (const entry of raw) {
+  for (const entry of c.actions ?? []) {
     const a = normalizeAction(entry);
     out.push(...actionFindingsByLaw(a, doc.id));
   }
@@ -1261,7 +3658,9 @@ var CORE_VERB_REASONS = Object.freeze({
   hidden: { en: "unhide it first" },
   notNewest: { en: "only the newest reply can be regenerated" },
   noSwipe: { en: "nothing to swipe to" },
-  greeting: { en: "a greeting is swiped, not regenerated" }
+  greeting: { en: "a greeting is swiped, not regenerated" },
+  ownLine: { en: "your own line is edited, not regenerated" },
+  nobodySeated: { en: "nobody is seated to pick" }
 });
 var NOT_GENERATING = {
   on: "session.generating",
@@ -1269,24 +3668,25 @@ var NOT_GENERATING = {
   reason: CORE_VERB_REASONS.generating
 };
 var NEWEST = { on: "item.isNewest", truthy: true, reason: CORE_VERB_REASONS.notNewest };
+var REPLY = { on: "item.role", equals: "assistant", reason: CORE_VERB_REASONS.ownLine };
 var CORE_ACTIONS = Object.freeze([
   {
     key: "stop",
-    function: "stop",
     venue: [{ kind: "message" }],
     audience: { see: ["participant"], act: ["participant"] },
     quick: true,
     label: { en: "Stop generating" },
+    description: { en: "Stop the reply being written now; what it wrote so far is kept." },
     icon: "square",
     floor: true
   },
   {
     key: "edit",
-    function: "edit",
     venue: [{ kind: "message" }],
     audience: ITEM_AUDIENCE,
     quick: true,
     label: { en: "Edit" },
+    description: { en: "Change the text of this message." },
     icon: "pencil",
     enabledWhen: [
       { on: "item.hidden", equals: false, reason: CORE_VERB_REASONS.hidden },
@@ -1296,25 +3696,26 @@ var CORE_ACTIONS = Object.freeze([
   },
   {
     key: "branch",
-    function: "branch",
     venue: [{ kind: "message" }],
     audience: { see: ["participant"], act: ["owner"] },
     label: { en: "Branch from here" },
+    description: { en: "Start a copy of the session from this message, leaving this one as it is." },
     icon: "git-branch",
     enabledWhen: [NOT_GENERATING],
     floor: true
   },
   {
     key: "retry",
-    function: "retry",
     venue: [{ kind: "message" }, { kind: "extra" }],
     audience: ITEM_AUDIENCE,
     quick: true,
     slash: "retry",
     label: { en: "Regenerate" },
+    description: { en: "Write the newest reply again, in place of the one there." },
     icon: "refresh-cw",
     enabledWhen: [
       NEWEST,
+      REPLY,
       { on: "item.greeting", equals: false, reason: CORE_VERB_REASONS.greeting },
       { on: "item.hidden", equals: false, reason: CORE_VERB_REASONS.hidden },
       NOT_GENERATING
@@ -1322,25 +3723,100 @@ var CORE_ACTIONS = Object.freeze([
     floor: false
   },
   {
-    key: "continue",
-    function: "continue",
-    venue: [{ kind: "message" }, { kind: "extra" }],
+    // The prefill extend: carry this reply on (ruling 2026-09-08; renamed
+    // from `continue` 2026-09-28). A message verb only — the composer's
+    // Continue is `advance` below.
+    key: "extend",
+    venue: [{ kind: "message" }],
     audience: ITEM_AUDIENCE,
-    slash: "continue",
-    label: { en: "Continue" },
+    label: { en: "Extend" },
+    description: { en: "Carry on writing this reply from where it stopped." },
     icon: "arrow-down",
-    enabledWhen: [NEWEST, NOT_GENERATING],
+    enabledWhen: [NEWEST, REPLY, NOT_GENERATING],
+    floor: false
+  },
+  {
+    // The composer's Continue (lair pass B7): fire the turn order's head.
+    // A turn control, not a message verb — no row, so no `item.*`
+    // predicate; who may fire which entry is the fire's own rule.
+    key: "advance",
+    venue: [{ kind: "extra" }],
+    audience: { see: ["participant"], act: ["participant"] },
+    slash: "advance",
+    label: { en: "Continue" },
+    description: { en: "Let whoever is next in the turn order speak." },
+    icon: "message-square-more",
+    enabledWhen: [NOT_GENERATING],
+    floor: false
+  },
+  {
+    // Pick who speaks (lair pass B8): fire a character the person names.
+    // A turn control — present where the genre's `turnControls.pick`
+    // says it applies; greyed here while busy or with nobody to pick.
+    key: "pick",
+    venue: [{ kind: "extra" }],
+    audience: { see: ["participant"], act: ["participant"] },
+    // Not `/pick`: too plain a word to take from every plugin's palette.
+    slash: "pick-speaker",
+    label: { en: "Pick who speaks" },
+    description: { en: "Choose which character speaks next." },
+    icon: "message-square-plus",
+    enabledWhen: [
+      NOT_GENERATING,
+      { on: "state.who.active", truthy: true, reason: CORE_VERB_REASONS.nobodySeated }
+    ],
+    floor: false
+  },
+  {
+    // The genre's own voice narrates (lair pass B8, D3; R8): fire it with
+    // no new direction — Adventure's narrator, the Lair's Castellan (the
+    // host stamps the fire `via: 'narrate'`). Opt-in — only a `voice:
+    // 'narrator'` genre has one (`turnControls.narrate`). The owner's, as
+    // a pick out of order is.
+    key: "narrate",
+    venue: [{ kind: "extra" }],
+    audience: { see: ["participant"], act: ["owner"] },
+    // Not `/narrate`: Chat's narrate spec claims that name, and one
+    // slash name means one action (`slashCollisions`).
+    slash: "narrator",
+    label: { en: "Narrate" },
+    // Voice-neutral (lair pass R8, 2026-09-28): whose voice narrates is
+    // the genre's — Adventure's narrator, the Lair's Castellan.
+    description: { en: "Describe what happens next, with no new direction." },
+    icon: "cloud-sun",
+    enabledWhen: [NOT_GENERATING],
+    floor: false
+  },
+  {
+    // Regenerate the last turn, as a whole (lair pass R2, owner
+    // 2026-09-28): delete the newest turn's yield — every row its run
+    // created, on every channel, never a person's own line — and take
+    // the same turn again. Opt-in (`turnControls.retake`), for a genre
+    // whose turn writes more than one row; where it is offered, `retry`
+    // leaves the extra venue so one genre never shows two _Regenerate_
+    // chips. The owner's: it deletes what everybody at the table saw.
+    key: "retake",
+    venue: [{ kind: "extra" }],
+    audience: { see: ["participant"], act: ["owner"] },
+    slash: "retake",
+    label: { en: "Regenerate" },
+    description: {
+      en: "Delete the last turn's messages and take the same turn again. Your own lines stay."
+    },
+    icon: "refresh-cw",
+    enabledWhen: [NOT_GENERATING],
     floor: false
   },
   {
     key: "swipe",
-    function: "swipe",
     venue: [{ kind: "message" }],
     audience: ITEM_AUDIENCE,
     label: { en: "Swipe" },
+    description: { en: "Step between the other versions of this reply." },
     icon: "chevrons-left-right",
     enabledWhen: [
       NEWEST,
+      REPLY,
       { on: "item.hasSwipes", truthy: true, reason: CORE_VERB_REASONS.noSwipe },
       NOT_GENERATING
     ],
@@ -1348,27 +3824,73 @@ var CORE_ACTIONS = Object.freeze([
   },
   {
     key: "hide",
-    function: "hide",
     venue: [{ kind: "message" }],
     audience: ITEM_AUDIENCE,
     label: { en: "Hide" },
+    description: { en: "Leave this message out of what the characters remember; it stays on the page." },
     icon: "ghost",
     enabledWhen: [NOT_GENERATING],
     floor: false
   },
   {
     key: "delete",
-    function: "delete",
     venue: [{ kind: "message" }],
     audience: ITEM_AUDIENCE,
     label: { en: "Delete" },
+    description: { en: "Remove this message from the session." },
     icon: "trash-2",
     enabledWhen: [NOT_GENERATING],
     floor: false
   }
 ]);
 
-// sdk/src/builder.ts
+// ../serene-pub-sdk/sdk/src/builder.ts
+function exposeOf(key, pinned, expose) {
+  if (expose.session === false && expose.swaps?.length)
+    throw new Error(
+      `node '${key}': expose.swaps offers a choice in session settings, so it cannot be combined with session: false`
+    );
+  const swaps = swapIds(key, pinned, expose.swaps);
+  for (const field of ["status", "label", "purpose"]) {
+    if (expose[field] === void 0) continue;
+    const bad = i18nFindings(expose[field], `node '${key}': expose.${field}`);
+    if (bad.length) throw new Error(bad[0]);
+  }
+  if (expose.purpose !== void 0 && !isModelCall(pinned))
+    throw new Error(stepPurposeRefusal(key, pinned.id));
+  const shown = {
+    ...expose.stream === true ? { stream: true } : {},
+    ...expose.status !== void 0 ? { status: expose.status } : {},
+    ...expose.label !== void 0 ? { label: expose.label } : {},
+    ...expose.purpose !== void 0 ? { purpose: expose.purpose } : {}
+  };
+  if (swaps.length) return { session: true, swaps, ...shown };
+  if (expose.session === true) return { session: true, ...shown };
+  return Object.keys(shown).length ? shown : void 0;
+}
+function isModelCall(def) {
+  return def.kind === "oracle" && Object.values(def.slots ?? {}).some((s) => s.kind === "connection");
+}
+var stepPurposeRefusal = (key, definitionId) => `node '${key}': expose.purpose says what a model call is for, but ${definitionId} calls no model \u2014 put the purpose on the oracle that does, or give this step a label instead`;
+function swapIds(key, pinned, swaps) {
+  const out = [];
+  for (const s of swaps ?? []) {
+    if (!s?.descriptor)
+      throw new Error(
+        `node '${key}': expose.swaps takes pins (C.turnRandom), not ids \u2014 got ${JSON.stringify(s)}`
+      );
+    const id = s.descriptor.id;
+    if (id === pinned.id)
+      throw new Error(
+        `node '${key}': '${id}' is the pin \u2014 it is always offered first, so it is never listed in expose.swaps`
+      );
+    if (out.includes(id)) throw new Error(`node '${key}': expose.swaps lists '${id}' twice`);
+    const misfit = swapFitFinding(key, pinned, s.descriptor);
+    if (misfit) throw new Error(misfit);
+    out.push(id);
+  }
+  return out;
+}
 var SLUG2 = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 var parseId = (definitionId) => {
   const m = /^(.*)@(\d+)$/.exec(definitionId);
@@ -1389,7 +3911,7 @@ var ChainBuilder = class _ChainBuilder {
     const scope = makeScope(known, localPrefix, this.clauseCtx?.clauseId);
     return arg(scope);
   }
-  add(kind, key, arg) {
+  add(kind, key, arg, opts) {
     const node = this.resolve(arg);
     if (node?.descriptor?.kind !== kind) {
       throw new Error(
@@ -1417,11 +3939,25 @@ var ChainBuilder = class _ChainBuilder {
       kind,
       definitionId: base,
       definitionVersion: version,
-      config: node.config,
+      // A declaration value given as a literal (an event you declared)
+      // is written as its id: the document is JSON, the source is typed.
+      config: Object.fromEntries(
+        Object.entries(node.config ?? {}).map(([k, v2]) => [
+          k,
+          // A ref is a proxy that refuses any other property: test it first.
+          !isDataRef(v2) && !isSlotRef(v2) && isSessionEventDecl(v2) ? v2.id : v2
+        ])
+      ),
       clauseId: this.clauseCtx?.clauseId,
       clauseKind: this.clauseCtx ? this.spec.clauses.find((b) => b.id === this.clauseCtx.clauseId)?.kind ?? "gather" : void 0,
       clauseChain: this.clauseCtx?.chain,
-      position: this.spec.nodes.length
+      position: this.spec.nodes.length,
+      // Only when stated: a document written before the mark existed
+      // hashes exactly as it did, and a node nobody marked carries no key.
+      ...(() => {
+        const expose = opts?.expose ? exposeOf(key, node.descriptor, opts.expose) : void 0;
+        return expose ? { expose } : {};
+      })()
     });
     return this;
   }
@@ -1534,17 +4070,17 @@ var ChainBuilder = class _ChainBuilder {
     fn(new JunctionBuilder(this.spec, qualified, clause));
     return this;
   }
-  query(key, node) {
-    return this.add("query", key, node);
+  query(key, node, opts) {
+    return this.add("query", key, node, opts);
   }
-  task(key, node) {
-    return this.add("task", key, node);
+  task(key, node, opts) {
+    return this.add("task", key, node, opts);
   }
-  oracle(key, node) {
-    return this.add("oracle", key, node);
+  oracle(key, node, opts) {
+    return this.add("oracle", key, node, opts);
   }
-  outlet(key, node) {
-    return this.add("outlet", key, node);
+  outlet(key, node, opts) {
+    return this.add("outlet", key, node, opts);
   }
 };
 var GatherBuilder = class {
@@ -1601,8 +4137,8 @@ var JunctionBuilder = class {
   }
 };
 var PresetBuilder = class {
-  constructor(preset) {
-    __publicField(this, "preset", preset);
+  constructor(preset2) {
+    __publicField(this, "preset", preset2);
   }
   set(nodeKey, slot, value) {
     this.preset.values.push({ nodeKey, slot, value });
@@ -1644,22 +4180,25 @@ var SpecBuilder = class extends ChainBuilder {
     const parsed = parseSpecId(rawId);
     const id = rawId.replace(/@\d+$/, "");
     const normalized = { ...meta };
-    if (normalized.mode && !normalized.genre) normalized.genre = normalized.mode;
-    delete normalized.mode;
     if (normalized.taxonomy) {
       const t = { ...normalized.taxonomy };
-      if (t.mode && !t.genre) t.genre = t.mode;
-      delete t.mode;
+      if (t.genre !== void 0)
+        throw new Error(
+          `spec '${id}' states taxonomy.genre \u2014 drop it: the genre comes from the inlet lock (.inlet(key, node, { genre, event })), and taxonomy is filled from there`
+        );
       normalized.taxonomy = t;
     }
     if (normalized.contributes) {
+      const stated = (normalized.contributes.actions ?? []).find(
+        (a) => a.genre !== void 0
+      );
+      if (stated)
+        throw new Error(
+          `spec '${id}' action '${stated.key ?? "?"}' states a genre \u2014 drop it: an action is offered to the genre of the spec's inlet lock`
+        );
       normalized.contributes = normalizeContributes(normalized.contributes);
       const actions = normalized.contributes?.actions ?? [];
-      const faults = actions.flatMap((a) => actionFindings(a, id));
-      if (!faults.length)
-        faults.push(
-          ...slashCollisions(actions.map((a) => ({ ...a, specId: id })))
-        );
+      const faults = actions.flatMap((a) => actionFindings({ ...a, genre: PENDING_GENRE }, id));
       if (faults.length)
         throw new Error(`spec '${id}' declares an action core cannot offer:
  \xB7 ${faults.join("\n \xB7 ")}`);
@@ -1676,17 +4215,17 @@ var SpecBuilder = class extends ChainBuilder {
   }
   // The four node methods are re-declared here purely so the spine keeps offering
   // .gather(), .each(), .include() and .build(). Same implementation, narrower return.
-  query(key, node) {
-    return this.add("query", key, node);
+  query(key, node, opts) {
+    return this.add("query", key, node, opts);
   }
-  task(key, node) {
-    return this.add("task", key, node);
+  task(key, node, opts) {
+    return this.add("task", key, node, opts);
   }
-  oracle(key, node) {
-    return this.add("oracle", key, node);
+  oracle(key, node, opts) {
+    return this.add("oracle", key, node, opts);
   }
-  outlet(key, node) {
-    return this.add("outlet", key, node);
+  outlet(key, node, opts) {
+    return this.add("outlet", key, node, opts);
   }
   /**
    * A named configuration the spec ships with (12 §3a). Declared **after** the nodes,
@@ -1747,17 +4286,74 @@ var SpecBuilder = class extends ChainBuilder {
    * 2026-09-16 — nothing read them at dispatch.
    */
   inlet(key, node, binding) {
+    if (binding) {
+      const idOf = (e) => isSessionEventDecl(e) ? e.id : e;
+      binding = "events" in binding ? { ...binding, events: binding.events?.map(idOf) } : { ...binding, event: idOf(binding.event) };
+    }
     if (this.inletDone)
       throw new Error("a spec has exactly one inlet (01 \xA72) \u2014 .inlet() may be called once");
     if (this.spec.nodes.length > 0) throw new Error("the inlet must be the first node (01 \xA72)");
     if (binding) {
-      if (!binding.event)
+      const many = "events" in binding ? binding.events : void 0;
+      const one = "event" in binding ? binding.event : void 0;
+      if (many !== void 0) {
+        if (!Array.isArray(many) || many.length === 0)
+          throw new Error(
+            "an inlet binding over several events lists them \u2014 { genre, events: [ \u2026 ] } (PLAN-turn-order \xA74.1)"
+          );
+        if (many.some((e) => typeof e !== "string" || !e))
+          throw new Error("an inlet binding lists event ids \u2014 every entry of `events` is a string");
+        if (new Set(many).size !== many.length)
+          throw new Error(
+            `an inlet binding lists each event once \u2014 { genre, events: [${many.map((e) => `'${e}'`).join(", ")}] } repeats one`
+          );
+      } else if (!one)
         throw new Error("an inlet binding names its event \u2014 { genre, event } (24 \xA74)");
+      for (const e of many ?? [one]) {
+        if (!eventById(e)) throw new Error(notADeclaredEvent(e));
+        if (e === sessionEvents.turnOrderChanged) throw new Error(TURN_ORDER_CHANGED_IS_INTERNAL);
+      }
+      if (many === void 0 && one && packageEventById(one)) {
+        const d = node?.descriptor;
+        const [first] = eventsLockFindings(d, [one]);
+        if (first) throw new Error(first);
+      }
+      if (many !== void 0) {
+        const d = node?.descriptor;
+        const [first] = eventsLockFindings(d, many);
+        if (first) throw new Error(first);
+      }
+      if (typeof binding.genre === "string")
+        throw new Error(
+          `the inlet lock names its genre as the string '${binding.genre}' \u2014 pass the genre value (import it), or use('${binding.genre}') for one you cannot import`
+        );
       if (!binding.genre)
         throw new Error(
-          `a spec answering '${binding.event}' must declare the genre it serves \u2014 { genre, event } (24 \xA74). Required for now; multi-genre opens later without breaking this declaration.`
+          `a spec answering '${one ?? many.join(", ")}' must declare the genre it serves \u2014 { genre, event } (24 \xA74). Required for now; multi-genre opens later without breaking this declaration.`
         );
-      this.spec.input = { genre: genreIdOf(binding.genre), event: binding.event };
+      const genre2 = genreIdOf(binding.genre);
+      this.spec.input = many !== void 0 ? { genre: genre2, events: [...many] } : { genre: genre2, event: one };
+      const actions = this.spec.meta.contributes?.actions;
+      if (actions?.length) {
+        const collisions = slashCollisions(
+          actions.map((a) => ({ ...a, genre: genre2, specId: this.spec.id }))
+        );
+        if (collisions.length)
+          throw new Error(
+            `spec '${this.spec.id}' declares an action core cannot offer:
+ \xB7 ${collisions.join("\n \xB7 ")}`
+          );
+      }
+      this.spec.meta = {
+        ...this.spec.meta,
+        ...this.spec.meta.taxonomy ? { taxonomy: { ...this.spec.meta.taxonomy, genre: genre2 } } : {},
+        ...this.spec.meta.contributes?.actions ? {
+          contributes: {
+            ...this.spec.meta.contributes,
+            actions: this.spec.meta.contributes.actions.map((a) => ({ ...a, genre: genre2 }))
+          }
+        } : {}
+      };
     }
     this.inletDone = true;
     return this.add("inlet", key, node);
@@ -1798,14 +4394,20 @@ var SpecBuilder = class extends ChainBuilder {
     return this;
   }
   build() {
+    const orphan = this.spec.meta.contributes?.actions?.find((a) => !a.genre);
+    if (orphan)
+      throw new Error(
+        `spec '${this.spec.id}' contributes action '${orphan.key}' but has no inlet lock \u2014 an action is offered to the genre of the lock: .inlet(key, node, { genre, event })`
+      );
     return this.spec;
   }
 };
+var PENDING_GENRE = "pending:genre/lock";
 function spec(id, meta) {
   return new SpecBuilder(id, meta);
 }
 
-// sdk/src/templateIds.ts
+// ../serene-pub-sdk/sdk/src/templateIds.ts
 var TEMPLATE_ID = /^[a-z0-9]+(?:[.-][a-z0-9]+)*:template\/[a-z0-9]+(?:-[a-z0-9]+)*@\d+$/;
 function isTemplateId(value) {
   return typeof value === "string" && TEMPLATE_ID.test(value);
@@ -1889,295 +4491,7 @@ function templateSeedProblems(t, owner) {
   return problems;
 }
 
-// sdk/src/events.ts
-var bySlug = /* @__PURE__ */ new Map();
-var nextId = 1;
-function defineEvent(def) {
-  const existing = bySlug.get(def.slug);
-  const e = { ...def, id: existing?.id ?? nextId, ownerPluginId: null };
-  if (existing)
-    refuseUnlessIdentical(
-      existing,
-      e,
-      `duplicate event slug '${def.slug}' \u2014 slugs are unique because they are the reference used to sync seeded rows across instances (13 \xA77g)`
-    );
-  if (def.family === "action" && def.causedBy?.length) {
-    throw new Error(
-      `action event '${def.slug}' declares causedBy. Action events are requests, not consequences of a write \u2014 that is what keeps them out of the cycle graph (13 \xA77)`
-    );
-  }
-  if (!existing) nextId++;
-  bySlug.set(def.slug, e);
-  return e;
-}
-var EVENT_ID = /^[a-z0-9]+(?:[.-][a-z0-9]+)*:event\/[a-z0-9]+(?:-[a-z0-9]+)*@\d+$/;
-var isEventId = (id) => EVENT_ID.test(id);
-var CORE_EVENTS = {
-  messageCreated: defineEvent({
-    slug: "message-created",
-    name: { en: "Message written" },
-    version: 1,
-    family: "data",
-    affectsUser: true,
-    causedBy: ["core:outlet/create-message", "core:outlet/seed-greetings"],
-    description: "A message was written into a session."
-  }),
-  /**
-   * A row was finished or rewritten by a pipeline's own write. A regenerate,
-   * a swipe's fresh alternative and a continue are THIS event with `verb`
-   * on the payload — `regenerate` · `swipe` · `continue` — rather than three
-   * events of their own (R-15, 2026-09-16): each is the genre's pipeline
-   * producing text plus core's rewrite of the row, and the rewrite is one
-   * outlet. A plain reply's finishing write carries no `verb`.
-   */
-  messageUpdated: defineEvent({
-    slug: "message-updated",
-    name: { en: "Message changed" },
-    version: 1,
-    family: "data",
-    affectsUser: true,
-    causedBy: ["core:outlet/update-message", "core:outlet/attach-image", "core:outlet/attach-audio"],
-    payload: S.sessionChange,
-    description: "An existing message was changed."
-  }),
-  // ── The built-in writes (R-15, 2026-09-16) — DATA family, each caused ──
-  // by the core outlet that performs it. Every one carries what changed
-  // and what was lost, lands on the receipt as `emitted`, and is written to
-  // the session's changes so the next reply's inlet publishes it.
-  messageDeleted: defineEvent({
-    slug: "message-deleted",
-    name: { en: "Message deleted" },
-    version: 1,
-    family: "data",
-    affectsUser: true,
-    causedBy: ["core:outlet/delete-message"],
-    payload: S.sessionChange,
-    description: "A message was deleted. The payload carries what was lost \u2014 its content, role, speaker and metadata."
-  }),
-  messageHidden: defineEvent({
-    slug: "message-hidden",
-    name: { en: "Message hidden or shown" },
-    version: 1,
-    family: "data",
-    affectsUser: true,
-    causedBy: ["core:outlet/hide-message"],
-    payload: S.sessionChange,
-    description: "A message was hidden from the prompt, or shown again. The payload says which."
-  }),
-  messageEdited: defineEvent({
-    slug: "message-edited",
-    name: { en: "Message edited" },
-    version: 1,
-    family: "data",
-    affectsUser: true,
-    causedBy: ["core:outlet/edit-message"],
-    payload: S.sessionChange,
-    description: "A person rewrote a settled message. The payload carries the previous content."
-  }),
-  messageSwiped: defineEvent({
-    slug: "message-swiped",
-    name: { en: "Message swiped" },
-    version: 1,
-    family: "data",
-    affectsUser: true,
-    causedBy: ["core:outlet/swipe-message"],
-    payload: S.sessionChange,
-    description: "A different alternative of a message was selected, or a new one recorded. The payload carries the alternative that was showing and the index now selected."
-  }),
-  /**
-   * Stop is not a write outlet: it is the run-level guarantee (R-17) —
-   * core finalises the row a cancelled run was filling — so it has no
-   * `causedBy`. Emitted by the host from that finalisation, and from the
-   * message's own Stop when it releases the row first.
-   */
-  messageStopped: defineEvent({
-    slug: "message-stopped",
-    name: { en: "Reply stopped" },
-    version: 1,
-    family: "data",
-    affectsUser: true,
-    payload: S.sessionChange,
-    description: "A reply was stopped while it was being written. The payload carries how much text had arrived."
-  }),
-  sessionBranched: defineEvent({
-    slug: "session-branched",
-    name: { en: "Session branched" },
-    version: 1,
-    family: "data",
-    affectsUser: true,
-    causedBy: ["core:outlet/branch-session"],
-    payload: S.sessionChange,
-    description: "A session was branched at a message into a new session. The payload names the new session and the message it forked from."
-  }),
-  /**
-   * Not a write's event: the marker the `sessionChanges` list ends with when
-   * more than fifty changes waited between two replies (U5b review S1). The
-   * newest fifty are delivered and this one entry says how many older ones
-   * were not, so a pipeline can tell a full list from a truncated one. Never
-   * written to `session_changes` and never on a receipt's `emitted` — no
-   * `causedBy`, because no outlet causes it.
-   */
-  sessionChangesTruncated: defineEvent({
-    slug: "session-changes-truncated",
-    name: { en: "Session changes truncated" },
-    version: 1,
-    family: "data",
-    affectsUser: false,
-    payload: S.sessionChange,
-    description: "More session changes waited than one reply is handed. The newest fifty were delivered; the payload says how many older ones were dropped."
-  }),
-  /**
-   * A **form** — a `choices` or `form` block a message carries — was
-   * addressed to a participant the AI portrays this turn (R-15 *Forms*;
-   * R-21 (5); 30 §U5d). Caused by the write that carried the block, and
-   * dispatched through the same path as the lifecycle events, so every
-   * answer run is a child of the run that asked (`parentRunId`,
-   * `rootRunId`, `depth`) and 01 §8's cycle caps hold: a form whose answer
-   * asks another form stops at the depth cap, receipted. A form addressed
-   * to a person is no event: the block waits for the click.
-   */
-  formAddressed: defineEvent({
-    slug: "form-addressed",
-    name: { en: "Form addressed" },
-    version: 1,
-    family: "data",
-    affectsUser: false,
-    causedBy: ["core:outlet/create-message", "core:outlet/update-message"],
-    payload: S.formAddressed,
-    description: "A question or form in a message was addressed to a participant the AI portrays this turn \u2014 the genre's answer pipeline answers it. The payload names the message, the block, the action and the addressee."
-  }),
-  /**
-   * A form was **answered** — by a click, or by the answer pipeline's
-   * outlet committing an oracle's answer exactly as a click would. Lands in
-   * the session's changes so the next reply's inlet sees it (`answer`,
-   * `addressee`, `blockId`, `action` on the payload).
-   */
-  formAnswered: defineEvent({
-    slug: "form-answered",
-    name: { en: "Form answered" },
-    version: 1,
-    family: "data",
-    affectsUser: false,
-    causedBy: ["core:outlet/answer-form"],
-    payload: S.sessionChange,
-    description: "A question or form in a message was answered. The payload carries the answer, who answered as whom, and the action it fired."
-  }),
-  /**
-   * A form was **superseded** (plans/29 R-15 *Staleness and order*; 30
-   * §U5f): the channel head moved past the turn it was issued at before it
-   * was answered, and a press on it reached the door. Recorded ONCE per
-   * block, the first time the door sees it stale, so the next reply's
-   * inlet learns the question lapsed — not on every render, and never by a
-   * render. No outlet causes it: the door does, like the truncation marker.
-   */
-  formSuperseded: defineEvent({
-    slug: "form-superseded",
-    name: { en: "Form superseded" },
-    version: 1,
-    family: "data",
-    affectsUser: false,
-    payload: S.sessionChange,
-    description: "A question or form in a message was overtaken \u2014 the conversation moved on before it was answered, and a press on it was refused. The payload names the message and the block."
-  }),
-  loreEntryCreated: defineEvent({
-    slug: "lore-entry-created",
-    name: { en: "Lore entry written" },
-    version: 1,
-    family: "data",
-    affectsUser: true,
-    causedBy: ["core:outlet/create-lore-entry"],
-    description: "A lorebook entry was written."
-  }),
-  graphProposalCreated: defineEvent({
-    slug: "graph-proposal-created",
-    name: { en: "Graph proposal filed" },
-    version: 1,
-    family: "data",
-    affectsUser: true,
-    causedBy: ["core:outlet/graph-proposal"],
-    description: "A narrative-graph proposal was filed for review."
-  }),
-  // ── The session lifecycle (24 §5) — ACTION family: a person did it ──────
-  /** The create slot — required; exactly one pipeline per genre answers it. */
-  sessionCreated: defineEvent({
-    slug: "session-created",
-    name: { en: "Session created" },
-    version: 1,
-    family: "action",
-    affectsUser: false,
-    description: "A session was created \u2014 the genre's create pipeline answers this."
-  }),
-  /** The primary turn. A swipe is this pipeline re-run, not a new event. */
-  messageRespond: defineEvent({
-    slug: "message-respond",
-    name: { en: "Reply" },
-    version: 1,
-    family: "action",
-    affectsUser: true,
-    description: "A reply was asked for \u2014 the primary turn of a session."
-  }),
-  /** Arbitrary buttons/triggers — the contributed functions surface (19 §3). */
-  sessionAction: defineEvent({
-    slug: "session-action",
-    name: { en: "Action" },
-    version: 1,
-    family: "action",
-    affectsUser: true,
-    description: "A person triggered a contributed action in a session."
-  }),
-  memberAdded: defineEvent({
-    slug: "member-added",
-    name: { en: "Member joined" },
-    version: 1,
-    family: "action",
-    affectsUser: false,
-    description: "A character or persona joined a session; the payload carries which."
-  }),
-  memberRemoved: defineEvent({
-    slug: "member-removed",
-    name: { en: "Member left" },
-    version: 1,
-    family: "action",
-    affectsUser: false,
-    description: "A character or persona left a session; the payload carries which."
-  }),
-  /**
-   * A UI action asked for a run (13 §7). Carrying both users is what answers the
-   * budget-owner question without a separate rule: **budget and quota attach to the
-   * owner; the receipt's attribution records the trigger.** Group sessions need no
-   * special case.
-   *
-   * ⏳ Overlaps `session-action` since the fold (a contributed action IS a UI
-   * action). Kept because ruling 49 (`UiActionPayload`, the owner/trigger
-   * split) has no other home yet; nothing subscribes to it. Retire when the
-   * action model (30 §U5) gives the payload one.
-   */
-  uiAction: defineEvent({
-    slug: "ui-action",
-    name: { en: "Interface action" },
-    version: 1,
-    family: "action",
-    affectsUser: true,
-    description: "Someone asked for a run from the interface \u2014 a composer action, a message action, a re-roll. Payload: sessionId, ownerUserId, triggeringUserId, action, modeId, input."
-  }),
-  /**
-   * The path for scheduled model work (13 §7c). No callable may call an oracle
-   * (F32), and lifecycle callbacks may not trigger pipelines, so nightly
-   * summarization subscribes here instead — which also puts it on the consent
-   * screen, where a lifecycle callback doing the same work would have been
-   * invisible. ⏳ Nothing emits it yet; `SCHEDULED_WORK_PATH` names it.
-   */
-  scheduleTick: defineEvent({
-    slug: "schedule-tick",
-    name: { en: "Schedule tick" },
-    version: 1,
-    family: "action",
-    affectsUser: false,
-    description: "A declared cadence elapsed. Payload: cadence, scheduledFor, scope."
-  })
-};
-
-// sdk/src/values.ts
+// ../serene-pub-sdk/sdk/src/values.ts
 var VALUE_TYPE_ID = /^([a-z0-9]+(?:[.-][a-z0-9]+)*:)?[a-z0-9]+(?:-[a-z0-9]+)*@\d+$/;
 function assertValueTypeId(id) {
   if (!VALUE_TYPE_ID.test(id))
@@ -2242,7 +4556,7 @@ function makeValueToolkit(ns) {
     custom: (kind, version, props) => {
       if (!ns)
         throw new Error(
-          `custom value kinds need a package context \u2014 use the toolkit announce() hands you, so '${kind}' serializes namespaced ('yourpkg:${kind}@${version}') and cannot shadow a core kind.`
+          `custom value kinds need a package context \u2014 mint them with makeValueToolkit('<your slug>'), so '${kind}' serializes namespaced ('yourpkg:${kind}@${version}') and cannot shadow a core kind.`
         );
       return declared(`${ns}:${kind}@${version}`, props);
     }
@@ -2336,13 +4650,213 @@ var valueValidators = {
 var isTodo = (value) => typeof value === "object" && value !== null && Object.keys(value).length === 1 && "todo@1" in value;
 var shippedValueKinds = Object.freeze(Object.keys(valueValidators));
 
-// sdk/src/surfaces.ts
-var SAFE_ENTRY = /^[a-zA-Z0-9_\-][a-zA-Z0-9._\-]*(\/[a-zA-Z0-9._\-]+)*$/;
-var SAFE_PANEL_ID = /^[a-z0-9_-]+$/;
-var isServableEntry = (path) => SAFE_ENTRY.test(path) && !path.split("/").some((seg) => seg === "." || seg === "..");
-var isServablePanelId = (id) => SAFE_PANEL_ID.test(id);
+// ../serene-pub-sdk/sdk/src/annexFields.ts
+var ANNEX_FIELD_KEY = /^[a-z][a-z0-9-]*$/;
+var NOT_A_PRESSER = /* @__PURE__ */ new Set(["ai", "item", "run-owner"]);
+function holdsSecret(shape) {
+  if (!shape || typeof shape !== "object") return false;
+  if (shape.type === "secret") return true;
+  if (shape.type === "list") return holdsSecret(shape.item);
+  if (shape.type === "object") return Object.values(shape.fields ?? {}).some((f) => holdsSecret(f));
+  return false;
+}
+function annexFieldFindings(raw, at = "annexFields") {
+  if (!raw || typeof raw !== "object") return [`${at}: an annex field is annexField({ key, shape, see?, act? })`];
+  const f = raw;
+  const where = `${at}[${typeof f.key === "string" ? f.key : "?"}]`;
+  const out = [];
+  if (typeof f.key !== "string" || !ANNEX_FIELD_KEY.test(f.key))
+    out.push(
+      `${where}: 'key' is a lowercase kebab token (${ANNEX_FIELD_KEY.source}) \u2014 the field sits in your own package's annex document, so it never names an owner`
+    );
+  const shape = f.shape;
+  if (!shape || typeof shape !== "object" || typeof shape.type !== "string")
+    out.push(`${where}: 'shape' is a field declaration \u2014 { type: 'integer', min: 1, max: 20 }`);
+  else if (holdsSecret(shape))
+    out.push(
+      `${where}: the shape holds a secret \u2014 the annex never keeps credentials or personal data (R61); keep a secret in plugin settings`
+    );
+  else
+    for (const finding of checkSchema({ [String(f.key)]: shape }))
+      if (finding.severity === "error") out.push(`${where}: ${finding.message} \u2014 ${finding.fix}`);
+  const see = dataAudienceFindings(f.see);
+  if (see) out.push(`${where}.see: ${see}`);
+  if (f.act !== void 0) {
+    if (!Array.isArray(f.act) || !f.act.length)
+      out.push(`${where}.act: a non-empty list of participant references \u2014 who may set the value`);
+    else
+      for (const r of f.act) {
+        if (!isParticipantRef(r))
+          out.push(`${where}.act: '${String(r)}' is not a participant reference`);
+        else if (NOT_A_PRESSER.has(String(r).trim()))
+          out.push(`${where}.act: '${String(r)}' cannot press anything \u2014 name who sets the value`);
+      }
+  }
+  if (f.genre !== void 0) {
+    const g = typeof f.genre === "string" ? f.genre : f.genre?.id;
+    if (typeof g !== "string" || !/^[a-z0-9.-]+:genre\/[a-z0-9.-]+/.test(g))
+      out.push(`${where}.genre: a genre \u2014 the value genre() returned, or its id ('acme.dice:genre/table')`);
+  }
+  out.push(...i18nFindings(f.label, `${where}.label`));
+  out.push(...i18nFindings(f.description, `${where}.description`));
+  return out;
+}
+function annexFieldListFindings(raw, at = "annexFields") {
+  if (raw === void 0) return [];
+  if (!Array.isArray(raw)) return [`${at}: a list of annexField(\u2026) values`];
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const f of raw) {
+    out.push(...annexFieldFindings(f, at));
+    const key = f?.key;
+    if (typeof key === "string") {
+      if (seen.has(key)) out.push(`${at}: '${key}' is declared twice \u2014 a key has one shape and one audience`);
+      seen.add(key);
+    }
+  }
+  return out;
+}
+function annexFieldValueRefusal(field, payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload) || !("value" in payload))
+    return `'${field.key}' is set with { payload: { value } }`;
+  const value = payload.value;
+  if (value === void 0) return `'${field.key}' is set with { payload: { value } }`;
+  if (holdsSecret(field.shape)) return `'${field.key}' holds a secret, which the annex never keeps (R61)`;
+  const faults = checkValues({ [field.key]: field.shape }, { [field.key]: value }).filter(
+    (f) => f.severity === "error"
+  );
+  return faults.length ? faults.map((f) => f.message).join("; ") : null;
+}
+var declarations = /* @__PURE__ */ new Map();
+var annexDeclarationOf = (owner) => declarations.get(owner);
+function annexFieldsInGenre(fields, genre2) {
+  return fields.filter((f) => f.genre === void 0 || genre2 === void 0 || f.genre === genre2);
+}
+var annexOwnerOfSpec = (specId) => {
+  if (!specId) return "core";
+  const at = specId.indexOf(":");
+  return at > 0 ? specId.slice(0, at) : specId;
+};
+function annexWriteKeysOf(config2, edgesIntoValue = []) {
+  if (edgesIntoValue.includes("value")) return null;
+  const value = config2?.value;
+  const fromEdges = edgesIntoValue.filter((p) => p.startsWith("value.")).map((p) => p.split(".")[1]);
+  if (value === void 0) return [...new Set(fromEdges)];
+  if (isDataRef(value) || !value || typeof value !== "object" || Array.isArray(value)) return null;
+  return [.../* @__PURE__ */ new Set([...Object.keys(value), ...fromEdges])];
+}
+function annexWriteRefusals(fields, w) {
+  const out = [];
+  const inForce = annexFieldsInGenre(fields ?? [], w.genre);
+  for (const key of w.keys) {
+    const decl2 = inForce.find((f) => f.key === key);
+    if (!decl2) {
+      const elsewhere = (fields ?? []).find((f) => f.key === key);
+      out.push(
+        `'${key}' is not a key '${w.owner}' declares in its annex` + (elsewhere?.genre ? ` for this genre (it is declared for '${elsewhere.genre}')` : "") + ` \u2014 declare it once, with annexField({ key: '${key}', shape, see }) on the owner's annexFields`
+      );
+      continue;
+    }
+    if (w.values && Object.hasOwn(w.values, key)) {
+      const value = w.values[key];
+      if (value !== null && value !== void 0) {
+        const fault = annexFieldValueRefusal(decl2, { value });
+        if (fault) out.push(fault);
+      }
+    }
+  }
+  return out;
+}
+function annexStepFindings(spec2, fieldsOf) {
+  const out = [];
+  const specOwner = annexOwnerOfSpec(spec2.id);
+  for (const n of spec2.nodes) {
+    if (n.definitionId !== "core:outlet/set-session-annex") continue;
+    const params = n.config?.params ?? {};
+    const named = typeof params.owner === "string" && params.owner.trim() ? params.owner.trim() : null;
+    const owner = named && params.sharedAnnex === true ? named : specOwner;
+    const fields = fieldsOf(owner);
+    if (fields === void 0) continue;
+    const into = (spec2.edges ?? []).filter((e) => e.to === n.key).map((e) => e.toPort);
+    const keys = annexWriteKeysOf(n.config, into.filter((p) => p === "value" || p.startsWith("value.")));
+    const refusals = annexWriteRefusals(fields, {
+      owner,
+      keys: keys ?? [],
+      genre: spec2.input?.genre,
+      values: keys && n.config?.value && typeof n.config.value === "object" && !isDataRef(n.config.value) ? Object.fromEntries(
+        Object.entries(n.config.value).filter(([, v2]) => !collectsRef(v2))
+      ) : void 0
+    });
+    if (refusals.length) out.push({ nodeKey: n.key, owner, refusals });
+  }
+  return out;
+}
+function collectsRef(v2) {
+  if (isDataRef(v2)) return true;
+  if (Array.isArray(v2)) return v2.some(collectsRef);
+  if (v2 && typeof v2 === "object") return Object.values(v2).some(collectsRef);
+  return false;
+}
 
-// sdk/src/declarations.ts
+// ../serene-pub-sdk/sdk/src/declarations.ts
+var storedSwap = (c) => ({
+  // Read defensively: a JS modder's entry may name nothing at all, and the
+  // checks below say so in a sentence rather than a TypeError.
+  spec: typeof c?.spec === "string" ? c.spec : c?.spec?.id ?? "",
+  node: c?.node,
+  definition: typeof c?.definition === "string" ? c.definition : c?.definition?.id ?? ""
+});
+function swapInputFindings(swaps) {
+  const out = [];
+  for (const c of swaps) {
+    const { spec: spec2, node, definition } = storedSwap(c);
+    if (typeof c?.spec === "string")
+      out.push(
+        `swap names the spec '${spec2}' as a string \u2014 pass the spec value, or use('${spec2}') for one you cannot import`
+      );
+    if (typeof c?.definition === "string")
+      out.push(`swap onto '${spec2}#${node}' names the definition '${definition}' as a string \u2014 pass its pin`);
+    const known = c?.spec && typeof c.spec === "object" && "nodes" in c.spec ? c.spec : void 0;
+    const target = known ? known.nodes.find(
+      (n) => n.key === node
+    ) : void 0;
+    if (known && node && !target) out.push(`swap names node '${node}', which '${spec2}' does not have`);
+    const pinned = definitionOfNode(target);
+    const offered = definition ? getDefinition(definition) : void 0;
+    const misfit = pinned && offered && swapFitFinding(node, pinned, offered);
+    if (misfit) out.push(misfit);
+  }
+  return out;
+}
+var DEFINITION_ID = /^[a-z0-9]+(?:[.-][a-z0-9]+)*:[a-z]+\/[a-z0-9]+(?:-[a-z0-9]+)*@\d+$/;
+function swapContributionFindings(swaps, ns, declaredSpecs) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const c of swaps) {
+    const { spec: spec2, node, definition } = storedSwap(c);
+    if (!spec2?.includes(":spec/")) out.push(`swap names spec '${spec2}', which is not a spec id`);
+    if (!node) out.push(`swap onto '${spec2}' names no node`);
+    if (!DEFINITION_ID.test(definition)) {
+      out.push(
+        `swap onto '${spec2}#${node}' names definition '${definition}', which is not a pinned id ('ns:kind/name@N') \u2014 pass the pin`
+      );
+      continue;
+    }
+    const owner = definition.slice(0, definition.indexOf(":"));
+    if (owner !== ns)
+      out.push(
+        `swap '${definition}' is owned by '${owner}' \u2014 a package contributes its own definitions`
+      );
+    if (declaredSpecs.has(spec2) || spec2.startsWith(`${ns}:`))
+      out.push(
+        `'${spec2}' is this package's own spec \u2014 list the swap on its node with expose.swaps, not as a contribution`
+      );
+    const key = `${spec2}#${node}#${definition}`;
+    if (seen.has(key)) out.push(`contributes '${definition}' to '${spec2}#${node}' twice`);
+    seen.add(key);
+  }
+  return out;
+}
 function labelFindings(at, meta) {
   return [
     ...i18nFindings(meta.label, `${at}.label`, { required: true }),
@@ -2360,24 +4874,51 @@ function genreOwnershipFindings(genres, ns) {
   }
   return out;
 }
+var nodesOf = (s) => s.nodes;
+var definitionOfNode = (n) => n ? getDefinition(`${n.definitionId}@${n.definitionVersion}`) : void 0;
+function exposeSwapFindings(pipelines) {
+  const out = [];
+  for (const s of pipelines)
+    for (const n of nodesOf(s)) {
+      const pinned = definitionOfNode(n);
+      if (!pinned || !n.expose?.swaps?.length) continue;
+      for (const id of n.expose.swaps) {
+        const swap = getDefinition(id);
+        const misfit = swap && swapFitFinding(n.key, pinned, swap);
+        if (misfit) out.push(`pipeline '${s.id}': ${misfit}`);
+      }
+    }
+  return out;
+}
 function inputLockFindings(pipelines, declaredGenres, ns, requires) {
   const out = [];
-  const sessionEventSet = new Set(Object.values(sessionEvents));
   for (const s of pipelines) {
-    if (!s.input?.event) continue;
-    const genreId = s.input.genre;
+    const locked = lockedEvents(s.input);
+    if (!locked.length) continue;
+    const genreId = s.input?.genre;
     if (!genreId) {
-      out.push(`pipeline '${s.id}' answers '${s.input.event}' with no genre (24 \xA74)`);
+      out.push(`pipeline '${s.id}' answers '${locked.join(", ")}' with no genre (24 \xA74)`);
       continue;
     }
     if (!declaredGenres.has(genreId)) requires.add(genreId);
-    if (!sessionEventSet.has(s.input.event) && !s.input.event.includes(":"))
-      out.push(
-        `pipeline '${s.id}' answers unknown event '${s.input.event}' \u2014 core events come from sessionEvents; custom ones are namespaced ('${ns}:your-event')`
-      );
+    for (const event of locked) {
+      if (!eventById(event)) out.push(`pipeline '${s.id}': ${notADeclaredEvent(event)}`);
+      else if (event === sessionEvents.turnOrderChanged)
+        out.push(`pipeline '${s.id}': ${TURN_ORDER_CHANGED_IS_INTERNAL}`);
+    }
+    if (s.input?.events?.length) {
+      const inlet = definitionOfNode(nodesOf(s)[0]);
+      if (inlet) for (const f of eventsLockFindings(inlet, s.input.events)) out.push(`pipeline '${s.id}': ${f}`);
+    }
   }
   return out;
 }
+function lockedEvents(input) {
+  if (!input) return [];
+  if (input.events?.length) return [...input.events];
+  return input.event ? [input.event] : [];
+}
+var lockAnswers = (input, event) => lockedEvents(input).includes(event);
 function createPipelineFindings(genres, pipelines) {
   const out = [];
   for (const g of genres) {
@@ -2392,6 +4933,16 @@ function createPipelineFindings(genres, pipelines) {
       out.push(
         `genre '${g.id}' has ${creates.length} create pipelines (${creates.map((s) => s.id).join(", ")}) \u2014 exactly one (24 \xA73)`
       );
+  }
+  return out;
+}
+function genrePresetFindings(genres, presets) {
+  const out = [];
+  for (const g of genres) {
+    if (presets.some((p) => p.genre === g.id)) continue;
+    out.push(
+      `genre '${g.id}' has no preset \u2014 a custom pipeline must include a default preset: declare a preset() for this genre binding its pipelines, so sessions can start on it and the Pipelines view lists them under it (the first one is the genre's default)`
+    );
   }
   return out;
 }
@@ -2451,6 +5002,10 @@ function presetFindings(presets, declaredGenres, declaredSpecs, configs, require
     for (const event of events) {
       const declared2 = surface[event];
       const binding = p.bindings[event];
+      if (binding && isEventId(event) && !eventById(event)) {
+        errors.push(`preset '${p.slug}': ${notADeclaredEvent(event)}`);
+        continue;
+      }
       if (binding && !isEventId(event)) {
         errors.push(
           `preset '${p.slug}' binds '${event}', which is not an event id \u2014 bindings are keyed 'owner:event/name@N' (sessionEvents.messageRespond is '${sessionEvents.messageRespond}'), never by bare name (R-4)`
@@ -2486,9 +5041,9 @@ function presetFindings(presets, declaredGenres, declaredSpecs, configs, require
           status: "bound-external"
         });
       } else {
-        if (bound.input?.event !== event)
+        if (!lockAnswers(bound.input, event))
           errors.push(
-            `preset '${p.slug}' binds '${bound.id}' to '${event}', but that spec answers '${bound.input?.event ?? "nothing"}' (24 \xA74)`
+            `preset '${p.slug}' binds '${bound.id}' to '${event}', but that spec answers '${lockedEvents(bound.input).join(", ") || "nothing"}' (24 \xA74)`
           );
         if (bound.input?.genre !== p.genre)
           errors.push(
@@ -2506,6 +5061,32 @@ function presetFindings(presets, declaredGenres, declaredSpecs, configs, require
         });
       }
     }
+    for (const c of p.defaults?.swaps ?? []) {
+      const { spec: spec2, node, definition } = storedSwap(c);
+      if (!spec2?.includes(":spec/"))
+        errors.push(`preset '${p.slug}' seeds a swap on '${spec2}', which is not a spec id`);
+      if (!node) errors.push(`preset '${p.slug}' seeds a swap onto '${spec2}' that names no node`);
+      if (!DEFINITION_ID.test(definition))
+        errors.push(
+          `preset '${p.slug}' seeds a swap onto '${spec2}#${node}' naming '${definition}', which is not a pinned id \u2014 pass the pin`
+        );
+      const own = declaredSpecs.get(spec2);
+      if (own && node) {
+        if (own.input?.genre && own.input.genre !== p.genre)
+          errors.push(
+            `preset '${p.slug}' (genre '${p.genre}') seeds a swap on '${spec2}', which serves '${own.input.genre}'`
+          );
+        const n = own.nodes.find((x) => x.key === node);
+        const offered = n ? [`${n.definitionId}@${n.definitionVersion}`, ...n.expose?.swaps ?? []] : [];
+        if (!n) errors.push(`preset '${p.slug}' seeds a swap onto '${spec2}#${node}', which has no such node`);
+        else if (!n.expose?.session)
+          errors.push(`preset '${p.slug}' seeds a swap onto '${spec2}#${node}', which is not in session settings (expose)`);
+        else if (!offered.includes(definition))
+          errors.push(
+            `preset '${p.slug}' seeds '${definition}' onto '${spec2}#${node}', which offers ${offered.map((o) => `'${o}'`).join(", ")}`
+          );
+      }
+    }
     for (const a of p.actions?.include ?? []) {
       const hash = a.lastIndexOf("#");
       const specId = hash === -1 ? a : a.slice(0, hash);
@@ -2517,46 +5098,114 @@ function presetFindings(presets, declaredGenres, declaredSpecs, configs, require
 }
 function surfaceFindings(surfaces) {
   const out = [];
-  const panelIds = /* @__PURE__ */ new Set();
-  for (const [i, p] of (surfaces?.panels ?? []).entries()) {
-    if (!p?.id) out.push(`surfaces.panels[${i}] has no id \u2014 a layout row keys on it`);
-    else if (panelIds.has(p.id))
-      out.push(`duplicate panel id '${p.id}' \u2014 ids are the layout key (21 \xA76)`);
-    else {
-      panelIds.add(p.id);
-      if (!isServablePanelId(p.id))
-        out.push(
-          `panel id '${p.id}' is not one an instance accepts (lowercase letters, digits, '-' and '_') \u2014 it would be dropped silently at install`
-        );
-    }
-    if (!p?.entry) out.push(`surfaces.panels[${i}] has no entry document`);
-    else if (!isServableEntry(p.entry))
-      out.push(
-        `surfaces.panels[${i}] entry '${p.entry}' is not a path an instance will serve \u2014 it would be dropped silently at install`
-      );
-  }
+  if (surfaces?.panels !== void 0)
+    out.push(
+      "surfaces.panels is gone \u2014 declare each panel as a widget in `widgets` naming a component, and place an `sp-frame` inside the component for the document"
+    );
   for (const [where, decl2] of [
     ["session-view", surfaces?.["session-view"]],
     ["page", surfaces?.page]
   ]) {
     if (decl2 && !decl2.entry) out.push(`surfaces.${where} has no entry document`);
     else if (decl2?.entry && !isServableEntry(decl2.entry))
-      out.push(`surfaces.${where} entry '${decl2.entry}' is not a path an instance will serve`);
+      out.push(`surfaces.${where} entry '${decl2.entry}' is not a path a pub will serve`);
+    if (decl2?.settings !== void 0)
+      out.push(
+        `surfaces.${where}.settings is gone \u2014 a ${where} frame is handed no declared values; declare settings on a widget, which its component reads as \`ctx.settings\``
+      );
   }
   return out;
 }
+var COMPONENT_SLUG = /^[a-z][a-z0-9-]*$/;
+var SOURCE_HASH = /^[0-9a-f]{64}$/;
 function componentFindings(components) {
   const out = [];
   const slugs = /* @__PURE__ */ new Set();
   for (const [i, c] of components.entries()) {
-    if (!c?.slug) out.push(`components[${i}] has no slug \u2014 slugs are the sync key (12 \xA73b)`);
-    else if (slugs.has(c.slug))
-      out.push(`duplicate component slug '${c.slug}' \u2014 slugs are the sync key (12 \xA73b).`);
+    const at = `component '${c?.slug ?? `components[${i}]`}'`;
+    if (!c?.slug) out.push(`components[${i}] has no slug \u2014 a widget's component names it`);
+    else if (!COMPONENT_SLUG.test(c.slug))
+      out.push(`component slug '${c.slug}' is lowercase letters, digits and '-' \u2014 it names the built module's file`);
+    else if (slugs.has(c.slug)) out.push(`duplicate component slug '${c.slug}' \u2014 a widget's component names it`);
     else slugs.add(c.slug);
-    if (!c?.entry) out.push(`components[${i}] ('${c?.slug ?? "?"}') has no entry`);
-    if (!c?.surface) out.push(`components[${i}] ('${c?.slug ?? "?"}') names no surface point`);
+    out.push(...i18nFindings(c?.label, `${at}.label`, { required: true }));
+    if (!c?.entry) out.push(`${at} has no entry`);
+    else if (!isServableEntry(c.entry.replace(/^\.\//, "")))
+      out.push(`${at} entry '${c.entry}' is not a path a pub will serve`);
+    if (c?.surface !== void 0)
+      out.push(
+        `${at} names a surface point \u2014 a component has none now; declare a widget whose \`component\` is '${c.slug}' (R25)`
+      );
+    if (c?.basedOn && (typeof c.basedOn.component !== "string" || typeof c.basedOn.version !== "string"))
+      out.push(`${at}.basedOn is { component, version, sourceHash? } \u2014 the upstream a clone was made from`);
+    else if (c?.basedOn?.sourceHash !== void 0 && !SOURCE_HASH.test(String(c.basedOn.sourceHash)))
+      out.push(`${at}.basedOn.sourceHash is the upstream source's SHA-256, 64 lowercase hex digits`);
+    if (c?.framework && !COMPONENT_FRAMEWORKS.includes(c.framework))
+      out.push(
+        ["react", "preact"].includes(c.framework) ? `component '${c.slug}' declares framework '${c.framework}', which arrives after SDK 1.0 \u2014 use ${COMPONENT_FRAMEWORKS.map((f) => `'${f}'`).join(" or ")}` : `component '${c.slug}' declares framework '${c.framework}', which is not a component framework \u2014 SDK 1.0 ships ${COMPONENT_FRAMEWORKS.map((f) => `'${f}'`).join(" and ")}`
+      );
   }
   return out;
+}
+function widgetComponentFindings(genres, components) {
+  const declared2 = new Set(components.map((c) => c?.slug).filter(Boolean));
+  const out = [];
+  for (const g of genres)
+    for (const w of g.shape?.panels ?? []) {
+      if (typeof w?.component !== "string") continue;
+      if (!declared2.has(w.component))
+        out.push(
+          `${g.id} panel '${w.id}' names component '${w.component}', which this package does not declare \u2014 add it to \`components\``
+        );
+    }
+  return out;
+}
+function packageWidgetFindings(widgets, components) {
+  const declared2 = new Set(components.map((c) => c?.slug).filter(Boolean));
+  const out = [];
+  const ids = /* @__PURE__ */ new Set();
+  for (const w of widgets) {
+    if (ids.has(w?.id)) out.push(`two widgets are '${w?.id}' \u2014 a widget id names one`);
+    ids.add(w?.id);
+    if (coreWidgetIds().has(w?.id))
+      out.push(`widget '${w.id}' is core's widget's id \u2014 a layout names core's and yours by bare id, so choose another`);
+    if (typeof w?.component === "string" && !declared2.has(w.component))
+      out.push(`widget '${w.id}' names component '${w.component}', which this package does not declare \u2014 add it to \`components\``);
+    if (!w?.component) out.push(`widget '${w?.id}' names no component`);
+    if (w?.surface !== void 0)
+      out.push(`widget '${w.id}': \`surface\` is gone \u2014 name a component, and place an \`sp-frame\` inside it for a document`);
+    out.push(...widgetReadsFindings(w?.reads, `widget '${w?.id}' reads`));
+  }
+  return out;
+}
+function genreLayoutFindings(genres, widgets, ns) {
+  const errors = [];
+  const warnings = [];
+  const own = (id) => {
+    const widget2 = widgetOfInstance(id);
+    const bare = widget2.startsWith(`${ns}:`) ? widget2.slice(ns.length + 1) : widget2;
+    return widgets?.find((w) => w?.id === bare);
+  };
+  const capped = (widgets ?? []).filter((w) => typeof w?.maxInstances === "number").flatMap((w) => [w, { id: `${ns}:${w.id}`, maxInstances: w.maxInstances }]);
+  for (const g of genres) {
+    const layouts = g.layouts ?? [];
+    for (const l of layouts)
+      for (const w of validateSessionLayout(l.preset, { widgets: capped }).warnings)
+        warnings.push(`${g.id} layout '${l.slug}': ${w}`);
+    if (!widgets || !layouts[0] || !(g.omitWidgets ?? []).includes(CONVERSATION_WIDGET_ID)) continue;
+    const drawn = drawnWidgetIds(layouts[0].preset);
+    const standsIn = drawn.some((id) => {
+      const decl2 = own(id);
+      if (decl2) return decl2.role === "primary";
+      const widget2 = widgetOfInstance(id);
+      return widget2.includes(":") && !widget2.startsWith(`${ns}:`);
+    });
+    if (!standsIn)
+      errors.push(
+        `${g.id} omits the conversation, and its layout '${layouts[0].slug}' draws none of this package's role: 'primary' widgets${drawn.length ? ` (it draws ${drawn.map((id) => `'${id}'`).join(", ")})` : ""} \u2014 declare the widget that stands in its place role: 'primary', and place it (any zone)`
+      );
+  }
+  return { errors, warnings };
 }
 function todoHoles(configs) {
   const out = [];
@@ -2581,13 +5230,25 @@ function declarationFindings(p) {
     ...genreOwnershipFindings(genres, p.ns),
     ...inputLockFindings(pipelines, new Set(declaredGenres.keys()), p.ns, requires),
     ...createPipelineFindings(genres, pipelines),
+    ...genrePresetFindings(genres, p.presets ?? []),
     ...contributedActionFindings(pipelines),
+    ...exposeSwapFindings(pipelines),
+    ...swapContributionFindings(p.swaps ?? [], p.ns, declaredSpecs),
     ...promptFindings(p.prompts ?? []),
-    ...configFindings(configs, declaredSpecs, requires)
+    ...configFindings(configs, declaredSpecs, requires),
+    ...eventDeclarationFindings(p.events ?? [], p.ns, pipelines, declaredGenres, requires, p.presets ?? []),
+    ...annexDeclarationFindings(p.ns, pipelines, p.annexFields)
   ];
+  const withEvents = new Map(
+    [...declaredGenres].map(([id, g]) => {
+      const own = (p.events ?? []).filter((e) => e.genre === id);
+      if (!own.length) return [id, g];
+      return [id, { ...g, events: { ...g.events, ...Object.fromEntries(own.map((e) => [e.event, {}])) } }];
+    })
+  );
   const presets = presetFindings(
     p.presets ?? [],
-    declaredGenres,
+    withEvents,
     declaredSpecs,
     configs,
     requires
@@ -2595,27 +5256,329 @@ function declarationFindings(p) {
   errors.push(
     ...presets.errors,
     ...surfaceFindings(p.surfaces),
-    ...componentFindings(p.components ?? [])
+    ...componentFindings(p.components ?? []),
+    ...widgetComponentFindings(genres, p.components ?? []),
+    ...packageWidgetFindings(p.widgets ?? [], p.components ?? [])
   );
+  const layouts = genreLayoutFindings(genres, p.widgets, p.ns);
+  errors.push(...layouts.errors);
   return {
     errors,
+    warnings: layouts.warnings,
     coverage: { presets: presets.coverage, todos: todoHoles(configs) },
     requires: [...requires].sort()
   };
 }
+var subjectsOf = (spec2) => {
+  const lock = spec2.input;
+  const locked = lock?.events ? [...lock.events] : lock?.event ? [lock.event] : [];
+  if (!locked.includes(sessionEvents.sessionAction)) return locked;
+  const contributes = "meta" in spec2 ? spec2.meta.contributes : spec2.contributes;
+  const keys = actionsOf({ id: spec2.id, contributes }).map((a) => a.key);
+  return [...locked.filter((e) => e !== sessionEvents.sessionAction), ...keys.map((k) => `${spec2.id}#${k}`)];
+};
+function eventDeclarationFindings(events, ns, pipelines, declaredGenres, requires, presets = []) {
+  const out = [];
+  const keyOf = (event, genre2) => `${event} ${genre2}`;
+  const byKey = /* @__PURE__ */ new Map();
+  const genresOf = /* @__PURE__ */ new Map();
+  for (const e of events) {
+    const owner = e.event.slice(0, e.event.indexOf(":"));
+    if (owner !== ns) out.push(`event '${e.event}' is declared by '${ns}' but sits under '${owner}' \u2014 a package declares its own`);
+    if (!declaredGenres.has(e.genre)) requires.add(e.genre);
+    if (e.recordedBy !== "any" && !e.recordedBy.length)
+      out.push(`event '${e.event}' names nothing that may record it`);
+    if (byKey.has(keyOf(e.event, e.genre)))
+      out.push(`event '${e.event}' is declared twice for genre '${e.genre}'`);
+    byKey.set(keyOf(e.event, e.genre), e);
+    genresOf.set(e.event, /* @__PURE__ */ new Set([...genresOf.get(e.event) ?? [], e.genre]));
+  }
+  const isOwn = (id) => id.slice(0, id.indexOf(":")) === ns;
+  const unlisted = (id, where) => `${where} names '${id}', this package's own event, but defineExtension({ events }) does not list it \u2014 add { event, genre, recordedBy } so it has a genre and a scope`;
+  for (const spec2 of pipelines) {
+    const lock = spec2.input;
+    const lockGenre = lock?.genre;
+    for (const heard of lock?.events ?? (lock?.event ? [lock.event] : [])) {
+      if (heard.startsWith("core:") || !isOwn(heard)) continue;
+      const genres = genresOf.get(heard);
+      if (!genres) out.push(unlisted(heard, `pipeline '${spec2.id}'`));
+      else if (lockGenre && !genres.has(lockGenre))
+        out.push(
+          `pipeline '${spec2.id}' listens for '${heard}' on '${lockGenre}', but it is declared for ${[...genres].join(", ")}`
+        );
+    }
+    const nodes = spec2.nodes;
+    for (const n of nodes) {
+      const from = getDefinition(`${n.definitionId}@${n.definitionVersion}`)?.causesEventFrom;
+      const recorded = from ? n.config?.[from] : void 0;
+      if (typeof recorded !== "string") continue;
+      const genres = genresOf.get(recorded);
+      if (!genres) {
+        if (isOwn(recorded)) out.push(unlisted(recorded, `pipeline '${spec2.id}' at '${n.key}'`));
+        else requires.add(recorded);
+        continue;
+      }
+      const decl2 = lockGenre ? byKey.get(keyOf(recorded, lockGenre)) : void 0;
+      if (!decl2) {
+        out.push(
+          `pipeline '${spec2.id}' records '${recorded}' at '${n.key}' for genre '${lockGenre ?? "none"}', but it is declared for ${[...genres].join(", ")}`
+        );
+        continue;
+      }
+      if (decl2.recordedBy === "any") continue;
+      const subjects = subjectsOf(spec2);
+      if (!subjects.some((sub) => decl2.recordedBy.includes(sub)))
+        out.push(
+          `pipeline '${spec2.id}' records '${recorded}' at '${n.key}', but serves none of the subjects that may record it (${decl2.recordedBy.join(", ")}) \u2014 add one of its subjects to recordedBy, or declare your own event`
+        );
+    }
+  }
+  for (const p of presets)
+    for (const event of Object.keys(p.bindings ?? {})) {
+      if (event.startsWith("core:") || !isOwn(event)) continue;
+      const genres = genresOf.get(event);
+      if (!genres) out.push(unlisted(event, `preset '${p.slug}'`));
+      else if (!genres.has(p.genre))
+        out.push(`preset '${p.slug}' binds '${event}' on '${p.genre}', but it is declared for ${[...genres].join(", ")}`);
+    }
+  return out;
+}
+function annexDeclarationFindings(ns, pipelines, fields) {
+  if (fields === void 0) return [];
+  const out = [];
+  for (const spec2 of pipelines) {
+    const s = spec2;
+    for (const hit of annexStepFindings(s, (owner) => owner === ns ? fields : annexDeclarationOf(owner)))
+      for (const r of hit.refusals) out.push(`pipeline '${spec2.id}' at '${hit.nodeKey}': ${r}`);
+  }
+  return out;
+}
 
-// sdk/src/extension.ts
+// ../serene-pub-sdk/sdk/src/announce.ts
+function use(ref) {
+  const m = /^(.*?)@([~^]?\d[^@]*)$/.exec(ref);
+  return Object.freeze(
+    m ? { kind: "external-ref", id: m[1], range: m[2] } : { kind: "external-ref", id: ref }
+  );
+}
+var isExternalRef = (v2) => !!v2 && typeof v2 === "object" && v2.kind === "external-ref";
+function specIdOf(v2, where) {
+  if (typeof v2 === "string")
+    throw new Error(
+      `${where} names the spec '${v2}' as a string \u2014 pass the spec value you built, or use('${v2}') for another package's`
+    );
+  if (!v2 || typeof v2 !== "object" || typeof v2.id !== "string")
+    throw new Error(
+      `${where} names no spec \u2014 pass the spec value you built, or use('<spec id>') for another package's`
+    );
+  return v2.id;
+}
+var lockEventsOf = (v2) => {
+  if (isExternalRef(v2)) return void 0;
+  const lock = v2.input;
+  return lock?.events ? [...lock.events] : lock?.event ? [lock.event] : [];
+};
+var actionKeysOf = (v2) => {
+  if (isExternalRef(v2)) return void 0;
+  const contributes = "meta" in v2 ? v2.meta.contributes : v2.contributes;
+  return actionsOf({ id: v2.id, contributes }).map((a) => a.key);
+};
+function config(spec2, slug, meta, values) {
+  assertDisplayText2(`config '${slug}'`, meta);
+  specIdOf(spec2, `config '${slug}'`);
+  return { spec: spec2, slug, label: meta.label, description: meta.description, values };
+}
+function storedConfig(c) {
+  return {
+    spec: specIdOf(c?.spec, `config '${c?.slug}'`),
+    slug: c.slug,
+    label: c.label,
+    ...c.description !== void 0 ? { description: c.description } : {},
+    values: c.values
+  };
+}
+function assertDisplayText2(at, meta) {
+  const findings = labelFindings(at, meta);
+  if (findings.length)
+    throw new Error(`${at} declares display text a publish refuses (R-20):
+ \xB7 ${findings.join("\n \xB7 ")}`);
+}
+function storedEventDeclaration(d) {
+  const where = `event '${d?.event?.id ?? "?"}'`;
+  if (!isSessionEventDecl(d?.event))
+    throw new Error(`${where}: 'event' is the value defineSessionEvent() returned, not an id`);
+  if (typeof d.genre === "string")
+    throw new Error(`${where} names its genre as a string \u2014 pass the genre value, or use('${d.genre}')`);
+  const genre2 = isExternalRef(d.genre) ? d.genre.id : genreIdOf(d.genre);
+  let recordedBy;
+  if (d.recordedBy === "any") recordedBy = "any";
+  else {
+    if (!Array.isArray(d.recordedBy) || !d.recordedBy.length)
+      throw new Error(
+        `${where} names nothing that may record it \u2014 list the subjects whose pipelines record it, or 'any'`
+      );
+    recordedBy = d.recordedBy.flatMap((entry, n) => {
+      const at = `${where} recordedBy ${n + 1}`;
+      if (typeof entry === "string") {
+        if (!isEventId(entry) || !eventById(entry))
+          throw new Error(`${at}: '${entry}' is not a declared event id \u2014 pass an event of the genre, a spec, or { spec, key }`);
+        if (entry === sessionEvents.sessionAction)
+          throw new Error(
+            `${at}: the action event serves each action on its own \u2014 pick the action: { spec, key }, or pass the spec`
+          );
+        return [entry];
+      }
+      if (isBindingObject(entry)) {
+        const { spec: ref, key } = entry;
+        const id = specIdOf(ref, at);
+        if (typeof key !== "string") throw new Error(`${at} picks from '${id}' without a key \u2014 { spec, key }`);
+        const keys = actionKeysOf(ref);
+        if (keys && !keys.includes(key))
+          throw new Error(`${at} picks '${key}' from '${id}', which contributes ${keys.map((k) => `'${k}'`).join(", ") || "no actions"}`);
+        return [`${id}#${key}`];
+      }
+      specIdOf(entry, at);
+      const subjects = subjectsOf(entry);
+      if (!subjects.length) throw new Error(`${at}: '${entry.id}' has no inlet lock \u2014 it serves no subject`);
+      return subjects;
+    });
+  }
+  return {
+    event: d.event.id,
+    payload: d.event.payload,
+    name: d.event.name,
+    description: d.event.description,
+    domain: d.event.domain,
+    genre: genre2,
+    recordedBy
+  };
+}
+var isBindingObject = (v2) => !!v2 && typeof v2 === "object" && "spec" in v2;
+function preset(input) {
+  const where = `preset '${input?.slug}'`;
+  assertDisplayText2(where, input);
+  if (typeof input.genre === "string")
+    throw new Error(
+      `${where} names its genre as a string \u2014 pass the genre value (import it), or use('${input.genre}')`
+    );
+  const genre2 = isExternalRef(input.genre) ? input.genre.id : genreIdOf(input.genre);
+  const bindings = {};
+  if (!Array.isArray(input.bindings))
+    throw new Error(
+      `${where}: bindings is a list of specs \u2014 [createSession, { spec: respond, config: tuned }]; each is bound on the events its inlet lock answers`
+    );
+  for (const [i, raw] of input.bindings.entries()) {
+    const entry = isBindingObject(raw) ? raw : { spec: raw };
+    const at = `${where} binding ${i + 1}`;
+    const id = specIdOf(entry.spec, at);
+    const locked = lockEventsOf(entry.spec);
+    let events = entry.events;
+    if (events === void 0) {
+      if (!locked)
+        throw new Error(
+          `${at} binds '${id}', another package's spec \u2014 name the events it answers: { spec: use('${id}'), events: [ \u2026 ] }`
+        );
+      if (!locked.length)
+        throw new Error(
+          `${at} binds '${id}', which has no inlet lock \u2014 a preset binds a spec on the events its lock answers`
+        );
+      events = locked;
+    } else if (!events.length) {
+      throw new Error(`${at} binds '${id}' on no events \u2014 drop \`events\` to bind every event its lock answers`);
+    } else if (locked) {
+      const outside = events.filter((e) => !locked.includes(e));
+      if (outside.length)
+        throw new Error(
+          `${at} binds '${id}' on ${outside.map((e) => `'${e}'`).join(", ")}, which its inlet lock does not answer (${locked.join(", ") || "no lock"})`
+        );
+    }
+    let configSlug;
+    if (entry.config !== void 0) {
+      const configured = specIdOf(entry.config?.spec, `${at} config`);
+      if (configured !== id)
+        throw new Error(
+          `${at} binds '${id}' with config '${entry.config.slug}', which was made for '${configured}'`
+        );
+      configSlug = entry.config.slug;
+    }
+    for (const event of events) {
+      if (bindings[event])
+        throw new Error(`${where} binds '${event}' twice \u2014 to '${bindings[event].spec}' and to '${id}'`);
+      bindings[event] = { spec: id, ...configSlug !== void 0 ? { config: configSlug } : {} };
+    }
+  }
+  const include = (pick, n) => {
+    const at = `${where} action ${n + 1}`;
+    if (typeof pick === "string")
+      throw new Error(
+        `${at} names '${pick}' as a string \u2014 pass the spec value (every action it contributes) or { spec, key } for one`
+      );
+    if (isBindingObject(pick)) {
+      const { spec: ref, key } = pick;
+      const id2 = specIdOf(ref, at);
+      if (typeof key !== "string" || !ACTION_IDENTITY.test(`${id2}#${key}`))
+        throw new Error(`${at} picks from '${id2}' without a valid key \u2014 { spec, key: '<action key>' }`);
+      const keys2 = actionKeysOf(ref);
+      if (keys2 && !keys2.includes(key))
+        throw new Error(
+          `${at} picks '${key}' from '${id2}', which contributes ${keys2.length ? keys2.map((k) => `'${k}'`).join(", ") : "no actions"}`
+        );
+      return [`${id2}#${key}`];
+    }
+    const id = specIdOf(pick, at);
+    const keys = actionKeysOf(pick);
+    if (!keys)
+      throw new Error(
+        `${at} includes '${id}', another package's spec \u2014 name the action: { spec: use('${id}'), key: '<action key>' }`
+      );
+    if (!keys.length)
+      throw new Error(`${at} includes '${id}', which contributes no actions \u2014 nothing to bring along`);
+    return keys.map((k) => `${id}#${k}`);
+  };
+  const swapsOf = (swaps) => {
+    const faults = swapInputFindings(swaps);
+    if (faults.length) throw new Error(`${where} defaults.swaps: ${faults.join("; ")}`);
+    return swaps.map((c) => storedSwap(c));
+  };
+  return {
+    slug: input.slug,
+    genre: genre2,
+    label: input.label,
+    description: input.description,
+    bindings,
+    ...input.actions ? { actions: { include: input.actions.include.flatMap(include) } } : {},
+    ...input.defaults ? {
+      defaults: {
+        ...input.defaults,
+        ...input.defaults.swaps ? { swaps: swapsOf(input.defaults.swaps) } : {}
+      }
+    } : {},
+    // Omitted rather than defaulted to `false`, so a declaration that says
+    // nothing hashes as it always did — the announcement is content-hashed
+    // like every other declaration here.
+    ...input.enabled === void 0 ? {} : { enabled: input.enabled }
+  };
+}
+
+// ../serene-pub-sdk/sdk/src/extension.ts
 function handler(definition, fn, opts = {}) {
   const descriptor = "descriptor" in definition ? definition.descriptor : definition;
   return {
     __decl: "handler",
     type: descriptor,
-    visibility: opts.visibility ?? (descriptor.public ? "public" : "private"),
+    // The one knob (R62): a node is as public as its handler, private
+    // unless its author says otherwise here.
+    visibility: opts.visibility ?? "private",
     handler: fn,
     // Not configurable. See the note on the field.
     runtime: "process"
   };
 }
+var COMPONENT_FRAMEWORKS = ["svelte", "vanilla"];
+var component = (d) => ({
+  __decl: "component",
+  ...d
+});
 var MIN_STORAGE_QUOTA = 1024;
 var MAX_STORAGE_QUOTA = 256 * 1024 * 1024;
 var HOSTNAME = /^(?:\*|(?:\*\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*)(?::\d+)?$/i;
@@ -2626,7 +5589,7 @@ function permissionFindings(p) {
     const q = p.storage.quotaBytes;
     if (q !== void 0 && (typeof q !== "number" || !Number.isFinite(q) || q < MIN_STORAGE_QUOTA || q > MAX_STORAGE_QUOTA))
       out.push(
-        `permissions.storage.quotaBytes must be ${MIN_STORAGE_QUOTA}\u2026${MAX_STORAGE_QUOTA}. An instance clamps whatever it is handed, so a number outside the band is not a bigger grant \u2014 it is a declaration that says something other than what you get.`
+        `permissions.storage.quotaBytes must be ${MIN_STORAGE_QUOTA}\u2026${MAX_STORAGE_QUOTA}. A pub clamps whatever it is handed, so a number outside the band is not a bigger grant \u2014 it is a declaration that says something other than what you get.`
       );
   }
   if (p.network) {
@@ -2644,6 +5607,7 @@ function permissionFindings(p) {
   }
   return out;
 }
+var TEMPLATE_ENGINE_ID = /^([a-z0-9][a-z0-9.-]*):template\/([a-z0-9][a-z0-9-]*)@(\d+)$/;
 var ExtensionError = class extends Error {
 };
 var SLUG3 = /^[a-z0-9]+([.-][a-z0-9]+)*$/;
@@ -2661,7 +5625,29 @@ function defineExtension(d) {
   }
   problems.push(...i18nFindings(d.name, "name", { required: true }));
   problems.push(...i18nFindings(d.description, "description"));
-  for (const h of d.hooks ?? []) {
+  for (const key of Object.keys(d.engines ?? {}))
+    if (key.includes(":"))
+      problems.push(
+        `engines['${key}'] is a template engine id \u2014 'engines' holds Serene Pub version ranges only. Declare it under templateEngines: { '${key}': renderFn }.`
+      );
+  for (const [id, fn] of Object.entries(d.templateEngines ?? {})) {
+    const m = TEMPLATE_ENGINE_ID.exec(id);
+    if (!m)
+      problems.push(
+        `templateEngines['${id}'] is not a template engine id. The grammar is '<slug>:template/<name>@<major>' \u2014 '${d.slug}:template/mustache@1'.`
+      );
+    else if (m[1] !== d.slug)
+      problems.push(
+        `templateEngines['${id}'] is not in this plugin's namespace \u2014 declare it as '${d.slug}:template/${m[2]}@${m[3]}'.`
+      );
+    if (typeof fn !== "function")
+      problems.push(`templateEngines['${id}'] must be the function that renders it.`);
+  }
+  if (Array.isArray(d.hooks))
+    problems.push(
+      `'hooks' is a list \u2014 the code a plugin runs is declared under 'handlers' now: rename hooks: [handler(\u2026), \u2026] to handlers: [handler(\u2026), \u2026]. 'hooks' declares the points your package defines, by key.`
+    );
+  for (const h of d.handlers ?? []) {
     if (h.__decl !== "handler") continue;
     const ns = h.type.id.split(":")[0];
     if (ns !== d.slug) {
@@ -2684,16 +5670,55 @@ function defineExtension(d) {
     templateIds.add(t.id);
   }
   problems.push(...permissionFindings(d.permissions));
+  problems.push(...annexFieldListFindings(d.annexFields));
+  problems.push(...pluginVariableFindings(d.slug, variablesOf(d)));
+  try {
+    ownWidgets(d.slug, d.widgets ?? []);
+  } catch (e) {
+    problems.push(e.message);
+  }
+  const stored = (list, fn) => {
+    if (!list) return void 0;
+    const out = [];
+    for (const item of list) {
+      try {
+        out.push(fn(item));
+      } catch (e) {
+        problems.push(e.message);
+      }
+    }
+    return out;
+  };
+  problems.push(...swapInputFindings(d.swaps ?? []));
+  for (const c of d.swaps ?? []) {
+    const id = typeof c?.definition === "string" ? c.definition : c?.definition?.id;
+    const impl = (d.handlers ?? []).find(
+      (h) => h.__decl === "handler" && h.type?.id === id
+    );
+    if (impl && impl.visibility !== "public")
+      problems.push(
+        `swap contributes '${id}', whose handler is private \u2014 a swap runs your node in another package's pipeline; write handler(definition, fn, { visibility: 'public' })` + pluginRuleRef("private-nodes")
+      );
+  }
+  const configs = stored(d.configs, storedConfig);
+  const presets = stored(d.presets, preset);
+  const events = stored(d.events, storedEventDeclaration);
   problems.push(
     ...declarationFindings({
       ns: d.slug,
       genres: d.genres,
       pipelines: d.pipelines,
       prompts: d.prompts,
-      configs: d.configs,
-      presets: d.presets,
+      configs,
+      presets,
       surfaces: d.surfaces,
-      components: d.components
+      components: d.components,
+      widgets: d.widgets,
+      swaps: d.swaps,
+      events,
+      // Declared nothing is `[]`: every key a pipeline of this package
+      // writes to its own annex must be declared (ruling 2026-09-26).
+      annexFields: d.annexFields ?? []
     }).errors
   );
   if (problems.length) {
@@ -2702,16 +5727,41 @@ function defineExtension(d) {
 ` + problems.map((p) => `  \u2022 ${p}`).join("\n")
     );
   }
-  return { __extension: true, ...d };
+  return {
+    __extension: true,
+    ...d,
+    ...configs ? { configs } : {},
+    ...presets ? { presets } : {},
+    ...events ? { events } : {},
+    ...d.swaps ? { swaps: d.swaps.map(storedSwap) } : {}
+  };
+}
+function variablesOf(e) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (v2) => {
+    if (!v2 || typeof v2 !== "object") return;
+    const sig = JSON.stringify(v2);
+    if (seen.has(sig)) return;
+    seen.add(sig);
+    out.push(v2);
+  };
+  for (const v2 of e.variables ?? []) add(v2);
+  for (const h of e.handlers ?? []) {
+    if (h.__decl !== "handler") continue;
+    const bands = h.type?.bands;
+    for (const v2 of Object.values(bands ?? {})) add(v2);
+  }
+  return out;
 }
 
-// sdk/src/executor.ts
+// ../serene-pub-sdk/sdk/src/executor.ts
 var ok = (value) => ({ kind: "ok", value });
 
-// sdk/dist/shapes.js
-var registry3 = /* @__PURE__ */ new Map();
+// ../serene-pub-sdk/sdk/dist/shapes.js
+var registry4 = /* @__PURE__ */ new Map();
 function defineShape2(def) {
-  registry3.set(def.id, def);
+  registry4.set(def.id, def);
   return def.id;
 }
 var S2 = {
@@ -2867,6 +5917,15 @@ var S2 = {
    */
   participantRef: defineShape2({ id: "core:shape/participant-ref@1" }),
   /**
+   * An ordered list of participant references, no duplicates (lair pass R3,
+   * 2026-09-28): the inlet's `recipients` — the cast members a press
+   * collected (`CollectedRecipients`). Its own id rather than `json@1` so a
+   * port that wants people is not handed any list. Consumed by
+   * `core:query/resolve-state-changes@1`'s `owners` (R10): the Whisper's
+   * one change, made on each recipient.
+   */
+  participantRefs: defineShape2({ id: "core:shape/participant-refs@1" }),
+  /**
    * One **session change** (R-15, built 2026-09-16): the payload every
    * built-in write's event carries — `{ event, sessionId, messageId, at,
    * … }` plus what was lost or replaced (`lost` on a delete, `previous` on
@@ -2889,6 +5948,80 @@ var S2 = {
    */
   formAddressed: defineShape2({ id: "core:shape/form-addressed@1" }),
   /**
+   * A **cast change** (PLAN-turn-order §4.1): the payload of
+   * `core:event/cast-changed@1` — `{ event, sessionId, at, cause, ref,
+   * change, value }` (`CastChangePayload`, events.ts). A seated
+   * participant was switched on or off, or its `position` or portrayal moved;
+   * a seat added or removed is `member-added` / `member-removed`, not
+   * this. Its own id for the reason `session-change@1` has.
+   */
+  castChange: defineShape2({ id: "core:shape/cast-change@1" }),
+  /**
+   * **Annex changed** (PLAN-turn-order §4.14, R30): the payload of
+   * `core:event/annex-changed@1` — `{ event, sessionId, at, cause, owner }`
+   * (`AnnexChangePayload`, events.ts). Names whose entry moved, never the
+   * value.
+   */
+  annexChange: defineShape2({ id: "core:shape/annex-change@1" }),
+  /** What a listener receives for an event a pipeline recorded: the envelope, the author's payload inside. */
+  recordedEvent: defineShape2({ id: "core:shape/recorded-event@1" }),
+  /**
+   * **Turn order changed** (§4.1): the payload of
+   * `core:event/turn-order-changed@1` — `{ event, sessionId, at, cause,
+   * runId, turnOrder }` (`TurnOrderChangedPayload`, events.ts), the
+   * document as `core:outlet/set-turn-order@1` wrote it. Core-internal:
+   * the auto-advance listener and the `sessions:turnOrder` push read it;
+   * a genre may not bind a spec to it.
+   */
+  turnOrderChanged: defineShape2({ id: "core:shape/turn-order-changed@1" }),
+  /**
+   * The session's **turn order** as state (§4.2): `TurnOrderV1` —
+   * `{ v, order, candidates, basedOnAt, computedAt, runId, event,
+   * strategy }`, stored at `sessions.metadata.turnOrder` and written by
+   * `core:outlet/set-turn-order@1` alone. Not the entries alone and not
+   * the candidates alone: the whole answer, with what it answered.
+   */
+  turnOrder: defineShape2({ id: "core:shape/turn-order@1" }),
+  /**
+   * **Turn candidates** (§4.2): `TurnCandidateV1[]` — the participants the
+   * pool admitted this run, in pool order. What `core:task/turn-pool@1`
+   * publishes, an orderer rewrites, and a strategy reads. Open objects:
+   * an orderer or a plugin may add keys and core passes them through.
+   */
+  turnCandidates: defineShape2({ id: "core:shape/turn-candidates@1" }),
+  /**
+   * **Turn entries** (§4.2): `TurnEntryV1[]` — prepared turns, each
+   * `{ ref, channel?, subject?, via }`. What a strategy publishes on
+   * `main` and `order`; the shape-based swap list keys a strategy on it,
+   * as it keyed one on `speaker-selection@1` before (that shape stays
+   * until the strategies are re-ported).
+   */
+  turnEntries: defineShape2({ id: "core:shape/turn-entries@1" }),
+  /**
+   * **Sprite choices** (DESIGN-sprites §5.2): what a line's speaker can show
+   * — `{ characterId, set, defaultSet, labels, last, recent, decidedBy }`.
+   * `set` is the sprite set in force for the line (a session override, the
+   * cast member's amendment, or the card's default — `decidedBy` says
+   * which); `labels` are that set's sprite labels with an image; `last` is
+   * the speaker's previous shown sprite, for stickiness. What
+   * `core:oracle/pick-sprite@1` publishes beside its pick, for the receipt.
+   */
+  spriteChoices: defineShape2({ id: "core:shape/sprite-choices@1" }),
+  /**
+   * **A sprite pick**: `{ set, label, score?, runnerUp?, held? } | null` — the
+   * sprite a picker chose for a line, or null for none. What the sprite
+   * picker publishes on `main` and `core:outlet/show-sprite@1` records.
+   */
+  spritePick: defineShape2({ id: "core:shape/sprite-pick@1" }),
+  /**
+   * The **settings document** (§4.12): `SessionSettingsV1` — every
+   * setting a person can see in session settings, resolved once per run
+   * with the cascade applied (session > genre > core), and handed to the
+   * inlet as `session`. A spec reads `$.input.session.fields.tone` and
+   * never learns which table it came from.
+   */
+  sessionSettings: defineShape2({ id: "core:shape/session-settings@1" }),
+  /**
    * A reference to stored media of any kind — the general port type.
    *
    * `image@1` and `audio@1` stay, and are assignable **to** this, so every
@@ -2901,6 +6034,22 @@ var S2 = {
   /** An ordered list of media references — what a multimodal request carries
    *  as its attachments. */
   mediaList: defineShape2({ id: "core:shape/media-refs@1" }),
+  /**
+   * 🚧 **A transcript's attachments, by message** (PLAN-composer-attachments
+   * §3.5): `Record<messageId, HistoryAttachmentV1[]>` (media.ts) — each
+   * message's `core:image` / `core:file` parts, in part order. What
+   * `core:query/history-attachments@1` publishes and
+   * `core:task/place-attachments@1` reads, so each line's files travel with
+   * that line's own turn rather than with the request as a whole.
+   */
+  mediaByMessage: defineShape2({ id: "core:shape/media-by-message@1" }),
+  /**
+   * A reply's **folded sections** (B4; D5, 2026-09-27): `FoldedSectionV1[]`
+   * (widgets.ts) — each `{ kind, label, content }` or `{ kind, label, items }`,
+   * shown collapsed beside the body and never read into the prompt. What the
+   * message outlets' `sections` in-port takes.
+   */
+  foldedSections: defineShape2({ id: "core:shape/folded-sections@1" }),
   audio: defineShape2({
     id: "core:shape/audio@1",
     assignableTo: ["core:shape/media-ref@1"]
@@ -2910,6 +6059,13 @@ var S2 = {
     assignableTo: ["core:shape/media-ref@1"]
   }),
   json: defineShape2({ id: "core:shape/json@1" }),
+  /**
+   * What a ranker judged (PLAN-sdk-1.0 §3.9, R64): one `RankingDecisionV1`
+   * per candidate. A node whose out-port carries this shape is RECORDED by
+   * the host — core's rankers and a plugin's alike — into the ranking store.
+   * Reviewed with L1 (PLAN-sdk-1.0 §4 ✓); it carries `S`'s own tag.
+   */
+  decisions: defineShape2({ id: "core:shape/decisions@1" }),
   // connection / sampling kinds — the same ids, which is the point (F17)
   /**
    * A model reply as an ordered list of typed parts (text, reasoning, media,
@@ -2970,13 +6126,11 @@ var S2 = {
   imageGen: defineShape2({ id: "core:shape/image-gen@1" })
 };
 
-// sdk/dist/candidates.js
-var BAND_PRIORITIES = ["low", "normal", "high", "always"];
-
-// sdk/dist/i18n.js
+// ../serene-pub-sdk/sdk/dist/i18n.js
 var blank2 = (s) => s.trim().length === 0;
 var isLocaleMap2 = (v2) => !!v2 && typeof v2 === "object" && !Array.isArray(v2) && typeof v2.en === "string";
 var isI18n2 = (v2) => typeof v2 === "string" ? !blank2(v2) : isLocaleMap2(v2) && !blank2(v2.en);
+var localeMapOf2 = (v2) => typeof v2 === "string" ? { en: v2 } : v2;
 var describe2 = (v2) => {
   if (v2 === null)
     return "null";
@@ -3004,48 +6158,16 @@ function i18nFindings2(v2, where, opts = {}) {
     `${where}: a locale map with a required 'en' (R-20) \u2014 got ${describe2(v2)}; write 'Title' or { en: 'Title', fr: 'Titre' }`
   ];
 }
-
-// sdk/dist/settings.js
-function settingsSchemaFindings2(schema, where) {
-  if (schema === void 0)
-    return [];
-  if (!schema || typeof schema !== "object" || Array.isArray(schema))
-    return [`${where}: a settings schema is an object keyed by field name \u2014 { depth: { type: 'integer', label: 'Depth' } }`];
-  const out = [];
-  for (const [key, raw] of Object.entries(schema)) {
-    const at = `${where}.${key}`;
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      out.push(`${at}: a field declaration is an object \u2014 { type: 'string', label: 'Name' }`);
-      continue;
-    }
-    const f = raw;
-    out.push(...i18nFindings2(f.label, `${at}.label`));
-    out.push(...i18nFindings2(f.i18n, `${at}.i18n`));
-    out.push(...i18nFindings2(f.description, `${at}.description`));
-    if (f.members !== void 0) {
-      if (!Array.isArray(f.members))
-        out.push(`${at}.members: the bands are an array \u2014 [{ key: 'lore', label: 'Lore' }]`);
-      else
-        f.members.forEach((m, i) => {
-          const band = `${at}.members[${typeof m?.key === "string" ? m.key : i}]`;
-          if (!m || typeof m !== "object") {
-            out.push(`${band}: a band is an object \u2014 { key: 'lore', label: 'Lore' }`);
-            return;
-          }
-          out.push(...i18nFindings2(m.label, `${band}.label`));
-          out.push(...i18nFindings2(m.i18n, `${band}.i18n`));
-          out.push(...i18nFindings2(m.description, `${band}.description`));
-        });
-    }
-    if (f.item !== void 0)
-      out.push(...settingsSchemaFindings2({ item: f.item }, at));
-    if (f.fields !== void 0)
-      out.push(...settingsSchemaFindings2(f.fields, `${at}.fields`));
-  }
-  return out;
+function i18nText2(v2, language = "en") {
+  if (typeof v2 === "string")
+    return v2;
+  if (!isLocaleMap2(v2))
+    return void 0;
+  const wanted = v2[language];
+  return typeof wanted === "string" && !blank2(wanted) ? wanted : v2.en;
 }
 
-// sdk/dist/hash.js
+// ../serene-pub-sdk/sdk/dist/hash.js
 var sortDeep2 = (v2) => {
   if (Array.isArray(v2))
     return v2.map(sortDeep2);
@@ -3071,38 +6193,1414 @@ function contentHash2(v2) {
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);
 }
 var UNIVERSAL_DISPLAY2 = ["i18n", "description"];
-var stripDisplay2 = (v2, display) => {
+var stripDisplay2 = (v2, display, functions = "source") => {
   if (typeof v2 === "function")
-    return `[fn] ${String(v2)}`;
+    return functions === "source" ? `[fn] ${String(v2)}` : void 0;
   if (Array.isArray(v2))
-    return v2.map((e) => stripDisplay2(e, display));
+    return v2.map((e) => stripDisplay2(e, display, functions));
   if (v2 && typeof v2 === "object") {
-    return Object.fromEntries(Object.entries(v2).filter(([k]) => !display.has(k)).map(([k, val]) => [k, stripDisplay2(val, display)]));
+    return Object.fromEntries(Object.entries(v2).filter(([k, val]) => !display.has(k) && !(functions === "omit" && typeof val === "function")).map(([k, val]) => [k, stripDisplay2(val, display, functions)]));
   }
   return v2;
 };
 var DEFAULT_DISPLAY2 = new Set(UNIVERSAL_DISPLAY2);
 var displaySet2 = (opts) => opts?.display?.length ? /* @__PURE__ */ new Set([...UNIVERSAL_DISPLAY2, ...opts.display]) : DEFAULT_DISPLAY2;
+function declarationData2(v2, opts) {
+  return stripDisplay2(v2, displaySet2(opts), "omit");
+}
 function declarationHash2(v2, opts) {
   return contentHash2(stripDisplay2(v2, displaySet2(opts)));
 }
 function refuseUnlessIdentical2(existing, next, why, opts) {
-  const registered = declarationHash2(existing, opts);
-  const redeclared = declarationHash2(next, opts);
+  refuseUnlessSameHash2(declarationHash2(existing, opts), declarationHash2(next, opts), why);
+}
+function refuseUnlessSameHash2(registered, redeclared, why) {
   if (registered === redeclared)
     return;
   throw new Error(`${why} (registered ${registered}, redeclared ${redeclared})`);
 }
 
-// sdk/dist/channels.js
+// ../serene-pub-sdk/sdk/dist/predicates.js
+var truthy2 = (v2) => !!v2 && !(Array.isArray(v2) && v2.length === 0);
+function readPath2(value, path) {
+  if (!path)
+    return value;
+  let cur = value;
+  for (const seg of path.split(".")) {
+    if (cur == null)
+      return void 0;
+    cur = cur[seg];
+  }
+  return cur;
+}
+var PREDICATE_CONDITION_KEYS2 = ["equals", "equalsPath", "truthy"];
+function predicateHolds2(pred, value, scope) {
+  if (pred.equals !== void 0)
+    return value === pred.equals;
+  if (pred.equalsPath !== void 0) {
+    if (typeof pred.equalsPath !== "string" || !pred.equalsPath)
+      return false;
+    if (value === void 0)
+      return false;
+    const other = readPath2(scope, pred.equalsPath);
+    return other !== void 0 && value === other;
+  }
+  if (pred.truthy)
+    return truthy2(value);
+  return false;
+}
+var ENABLED_WHEN_KEYS2 = [
+  "on",
+  ...PREDICATE_CONDITION_KEYS2,
+  "reason"
+];
+var FORBIDDEN_SEGMENTS2 = /* @__PURE__ */ new Set(["__proto__", "constructor", "prototype"]);
+var isPrimitive2 = (v2) => v2 === null || ["string", "number", "boolean"].includes(typeof v2);
+var isEnabledWhenShaped2 = (p) => !!p && typeof p === "object" && !Array.isArray(p) && typeof p.on === "string";
+function normalizeEnabledWhen2(x) {
+  if (x == null)
+    return [];
+  const list = Array.isArray(x) ? x : [x];
+  return list.filter(isEnabledWhenShaped2).map((p) => ({
+    ...p,
+    reason: p.reason === void 0 ? p.reason : localeMapOf2(p.reason)
+  }));
+}
+function evaluateEnabledWhen2(preds, doc) {
+  for (const pred of normalizeEnabledWhen2(preds)) {
+    if (predicateHolds2(pred, readPath2(doc, pred.on), doc))
+      continue;
+    return { enabled: false, reason: localeMapOf2(pred.reason), failed: pred };
+  }
+  return { enabled: true };
+}
+function enabledWhenFindings2(raw, at = "enabledWhen") {
+  if (raw === void 0 || raw === null)
+    return [];
+  const list = Array.isArray(raw) ? raw : [raw];
+  const out = [];
+  list.forEach((p, i) => {
+    const where = Array.isArray(raw) ? `${at}[${i}]` : at;
+    if (!p || typeof p !== "object" || Array.isArray(p)) {
+      out.push(`${where}: an enabled-when is { on, equals | truthy, reason } \u2014 a predicate over the session's published values, such as { on: 'state.world.location', truthy: true, reason: { en: 'Set a location first' } }`);
+      return;
+    }
+    const e = p;
+    if (typeof e.on !== "string" || !e.on)
+      out.push(`${where}: 'on' is required \u2014 a published-values path such as 'state.world.location' or 'session.generating' (never a port reference: actions live outside a run)`);
+    else if (e.on.startsWith("$"))
+      out.push(`${where}: 'on' is '${e.on}', which reads as a port reference \u2014 an enabled-when names a published-values path such as 'state.world.location'; actions live outside a run and have no ports to read`);
+    else {
+      const walked = e.on.split(".").find((seg) => FORBIDDEN_SEGMENTS2.has(seg));
+      if (walked)
+        out.push(`${where}: 'on' walks '${walked}' \u2014 a published-values path names data ('state.world.location', 'item.hidden'), never a prototype`);
+    }
+    const stated = PREDICATE_CONDITION_KEYS2.filter((k) => e[k] !== void 0);
+    if (stated.length !== 1)
+      out.push(`${where}: states ${stated.length || "no"} conditions \u2014 exactly one of ${PREDICATE_CONDITION_KEYS2.join(" / ")} per predicate (the junction rule, 20 \xA710); a richer decision belongs in a value the pipeline publishes`);
+    if (e.truthy !== void 0 && typeof e.truthy !== "boolean")
+      out.push(`${where}: 'truthy' is a boolean \u2014 write truthy: true`);
+    else if (e.truthy === false)
+      out.push(`${where}: 'truthy: false' states nothing \u2014 write truthy: true to require a value, or equals: false to require a false one`);
+    if (e.equals !== void 0 && !isPrimitive2(e.equals))
+      out.push(`${where}: 'equals' is a primitive \u2014 a string, number, boolean or null; a structured comparison belongs in a value the pipeline publishes as one`);
+    if (e.equalsPath !== void 0) {
+      if (typeof e.equalsPath !== "string" || !e.equalsPath)
+        out.push(`${where}: 'equalsPath' is a path, not a value \u2014 the OTHER side of the comparison, read from the same document as 'on' (e.g. 'state.world.culprit'); to compare against a literal, write equals:`);
+      else if (e.equalsPath.startsWith("$"))
+        out.push(`${where}: 'equalsPath' is '${e.equalsPath}', which reads as a port reference \u2014 it names a published-values path exactly as 'on' does; actions live outside a run and have no ports to read`);
+      else {
+        const walkedOther = e.equalsPath.split(".").find((seg) => FORBIDDEN_SEGMENTS2.has(seg));
+        if (walkedOther)
+          out.push(`${where}: 'equalsPath' walks '${walkedOther}' \u2014 a published-values path names data ('state.world.location', 'item.hidden'), never a prototype`);
+      }
+    }
+    if (e.reason === void 0)
+      out.push(`${where}: 'reason' is required \u2014 why the control is grey when the predicate does not hold, a locale map with 'en' (R-20)`);
+    else
+      out.push(...i18nFindings2(e.reason, `${where}.reason`));
+    for (const k of Object.keys(e))
+      if (!ENABLED_WHEN_KEYS2.includes(k))
+        out.push(`${where}: '${k}' is not part of an enabled-when \u2014 one of ${ENABLED_WHEN_KEYS2.join(", ")}`);
+  });
+  return out;
+}
+
+// ../serene-pub-sdk/sdk/dist/participants.js
+var PARTICIPANT_ROLES2 = ["owner", "admin", "participant", "person", "ai", "item", "run-owner"];
+function audienceHolds2(refs, portrayals, viewer, item) {
+  for (const ref of refs) {
+    if (ref === "item") {
+      if (item === void 0 || item)
+        return true;
+      continue;
+    }
+    const p = portrayals[ref];
+    if (p?.by === "person" && p.userId === String(viewer.userId))
+      return true;
+  }
+  return false;
+}
+var roles2 = new Set(PARTICIPANT_ROLES2);
+
+// ../serene-pub-sdk/sdk/dist/settings.js
+function settingsSchemaFindings2(schema, where) {
+  if (schema === void 0)
+    return [];
+  if (!schema || typeof schema !== "object" || Array.isArray(schema))
+    return [`${where}: a settings schema is an object keyed by field name \u2014 { depth: { type: 'integer', label: 'Depth' } }`];
+  const out = [];
+  for (const [key, raw] of Object.entries(schema)) {
+    const at = `${where}.${key}`;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      out.push(`${at}: a field declaration is an object \u2014 { type: 'string', label: 'Name' }`);
+      continue;
+    }
+    const f = raw;
+    out.push(...i18nFindings2(f.label, `${at}.label`));
+    out.push(...i18nFindings2(f.description, `${at}.description`));
+    if (f.members !== void 0) {
+      if (!Array.isArray(f.members))
+        out.push(`${at}.members: the bands are an array \u2014 [{ key: 'lore', label: 'Lore' }]`);
+      else
+        f.members.forEach((m, i) => {
+          const band = `${at}.members[${typeof m?.key === "string" ? m.key : i}]`;
+          if (!m || typeof m !== "object") {
+            out.push(`${band}: a band is an object \u2014 { key: 'lore', label: 'Lore' }`);
+            return;
+          }
+          out.push(...i18nFindings2(m.label, `${band}.label`));
+          out.push(...i18nFindings2(m.description, `${band}.description`));
+        });
+    }
+    if (f.item !== void 0)
+      out.push(...settingsSchemaFindings2({ item: f.item }, at));
+    if (f.fields !== void 0)
+      out.push(...settingsSchemaFindings2(f.fields, `${at}.fields`));
+  }
+  return out;
+}
+
+// ../serene-pub-sdk/sdk/dist/settingsSlot.js
+var SETTINGS_SLOT2 = "settings";
+var ENABLED_FIELD2 = Object.freeze({
+  type: "boolean",
+  default: true,
+  quick: true,
+  label: { en: "Use this source" },
+  description: {
+    en: "Off skips the step entirely rather than fetching and discarding it \u2014 cheaper than starving it with a zero share."
+  }
+});
+var ENABLED_STEP_FIELD2 = Object.freeze({
+  type: "boolean",
+  default: true,
+  quick: true,
+  label: { en: "Run this step" },
+  description: {
+    en: "Off skips the step entirely: nothing is called or charged, and the steps after it go on without what it would have made."
+  }
+});
+function authoredSlots2(slots) {
+  if (!slots || !(SETTINGS_SLOT2 in slots))
+    return slots ?? {};
+  const { [SETTINGS_SLOT2]: _substrate, ...authored } = slots;
+  return authored;
+}
+
+// ../serene-pub-sdk/sdk/dist/verdicts.js
+var DOORS2 = [
+  "construction",
+  "registry",
+  "validate",
+  "publish",
+  "run",
+  "fire",
+  "write",
+  "list"
+];
+var VERDICT_ID2 = /^[a-z0-9]+(?:[.-][a-z0-9]+)*:verdict\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+var registry5 = /* @__PURE__ */ new Map();
+var doorSet2 = new Set(DOORS2);
+function defineVerdict2(decl2) {
+  if (typeof decl2.id !== "string" || !VERDICT_ID2.test(decl2.id))
+    throw new Error(`'${String(decl2.id)}' is not a verdict id \u2014 one is '<owner>:verdict/<slug>', the slug lowercase letters, digits and hyphens: core:verdict/effects-line`);
+  if (typeof decl2.law !== "string" || !decl2.law.trim())
+    throw new Error(`${decl2.id} names no law \u2014 'law' is the label a Finding carries for this rule ('F39', 'R-20')`);
+  if (!Array.isArray(decl2.doors) || decl2.doors.length === 0)
+    throw new Error(`${decl2.id} declares no door \u2014 list every place the rule is heard, one of ${DOORS2.join(", ")}`);
+  const unknown = decl2.doors.find((d) => !doorSet2.has(d));
+  if (unknown !== void 0)
+    throw new Error(`${decl2.id} declares the door '${String(unknown)}', which is not one \u2014 a door is one of ${DOORS2.join(", ")}`);
+  if (typeof decl2.judge !== "function" || typeof decl2.failing !== "function")
+    throw new Error(`${decl2.id} declares no judge or no failing input \u2014 a verdict is { id, law, doors, judge, failing }`);
+  const existing = registry5.get(decl2.id);
+  if (existing)
+    refuseUnlessIdentical2(existing, decl2, `duplicate verdict id: ${decl2.id}`);
+  const verdict = Object.freeze({ ...decl2, doors: Object.freeze([...decl2.doors]) });
+  registry5.set(decl2.id, verdict);
+  return verdict;
+}
+function refusalText2(r) {
+  const sentence = i18nText2(r.sentence) ?? "";
+  return r.fix === void 0 ? sentence : `${sentence} \u2014 ${i18nText2(r.fix) ?? ""}`;
+}
+var i18nVerdict2 = defineVerdict2({
+  id: "core:verdict/i18n",
+  law: "R-20",
+  doors: ["construction", "registry", "validate", "publish", "run"],
+  judge({ value, where, required }) {
+    const [sentence] = i18nFindings2(value, where, { required });
+    return sentence === void 0 ? { ok: true } : { ok: false, sentence };
+  },
+  // The field each door is asked about — the sentence names it, so the
+  // door's own address has to be the one the kit expects to hear back: a
+  // definition's name at the registry, a preset's label where a document
+  // is built, validated or published, a status's text at the run.
+  failing: (door) => ({
+    value: { fr: "Titre" },
+    where: door === "registry" ? "i18n.name" : door === "run" ? "status.i18n" : "presets[lore].label",
+    required: true
+  })
+});
+var enablementVerdict2 = defineVerdict2({
+  id: "core:verdict/enablement",
+  law: "U5e",
+  doors: ["list", "fire"],
+  judge({ preds, doc }) {
+    const heard = evaluateEnabledWhen2(preds, doc);
+    return heard.enabled ? { ok: true } : { ok: false, sentence: heard.reason };
+  },
+  failing: () => ({
+    preds: [
+      {
+        on: "state.world.conformance",
+        truthy: true,
+        reason: { en: "conformance: the enabled-when predicate refused this press" }
+      }
+    ],
+    doc: { state: { world: { conformance: false } } }
+  })
+});
+var audienceVerdict2 = defineVerdict2({
+  id: "core:verdict/audience",
+  law: "R-15",
+  doors: ["list", "fire"],
+  judge({ name, refs, portrayals, viewer, item }) {
+    if (audienceHolds2(refs, portrayals, viewer, item))
+      return { ok: true };
+    return {
+      ok: false,
+      sentence: `'${name}' is not yours to use here \u2014 its audience is ${refs.length ? refs.join(", ") : "nobody"}.`
+    };
+  },
+  failing: () => ({
+    name: "grant",
+    refs: ["owner"],
+    portrayals: { owner: { by: "person", userId: "1" } },
+    viewer: { userId: 2 }
+  })
+});
+var isSettingsAddress2 = (name) => typeof name === "string" && (name === SETTINGS_SLOT2 || name.startsWith(`${SETTINGS_SLOT2}.`));
+var settingsTravelVerdict2 = defineVerdict2({
+  id: "core:verdict/settings-travel",
+  law: "F39",
+  doors: ["registry", "validate", "run"],
+  judge(input) {
+    switch (input.kind) {
+      case "edge": {
+        if (!isSettingsAddress2(input.fromPort))
+          return { ok: true };
+        const { from, fromPort, to, toPort } = input;
+        return {
+          ok: false,
+          sentence: `'${to}.${toPort}' reads '${from}.${fromPort}' \u2014 a setting, not a port; settings never travel, only data does`,
+          fix: `wire a port '${from}' publishes (what it DID with the setting), or declare the value '${to}' needs on its own params and share the owner's with slot.params({ node: '${from}' }) \u2014 the substrate's switches (enabled, review, mode) are read at their owner by the executor and are never a value`
+        };
+      }
+      case "reference": {
+        if (!isSettingsAddress2(input.slot))
+          return { ok: true };
+        const { node, key, target } = input;
+        return {
+          ok: false,
+          sentence: `'${node}.${key}' references '${target}.${SETTINGS_SLOT2}' \u2014 the substrate's switches, read at their owner by the executor and never a value; settings never travel, only data does`,
+          fix: `read a port '${target}' publishes, or declare the value '${node}' needs on its own params and share the owner's with slot.params({ node: '${target}' }) \u2014 a switch (enabled, review, mode) belongs to no reference`
+        };
+      }
+      case "port": {
+        if (!isSettingsAddress2(input.port))
+          return { ok: true };
+        const { definitionId, port } = input;
+        return {
+          ok: false,
+          sentence: `${definitionId} declares an out-port named '${port}'. '<node>.${SETTINGS_SLOT2}' (and paths under it) is the address of the substrate's own switches \u2014 \`enabled\`, \`review\`, \`mode\` \u2014 which the executor reads at the node and hands to nobody (F39: settings never travel), so an edge from a port of that name would be refused as a setting`,
+          fix: `name the port for what it publishes ('result', 'applied', 'chosen')`
+        };
+      }
+      default:
+        return {
+          ok: false,
+          sentence: `'${String(input.kind)}' is not a shape this verdict judges \u2014 one of 'edge', 'reference', 'port'.`
+        };
+    }
+  },
+  failing: (door) => door === "registry" ? { kind: "port", definitionId: "conformance:task/claims-settings-port@1", port: "settings.review" } : door === "run" ? { kind: "reference", node: "probe", key: "main", slot: SETTINGS_SLOT2, target: "save" } : { kind: "edge", from: "save", fromPort: `${SETTINGS_SLOT2}.review`, to: "probe", toPort: "main" }
+});
+var provisionalVerdict2 = defineVerdict2({
+  id: "core:verdict/provisional",
+  law: "R-2",
+  doors: ["validate", "run", "registry"],
+  judge(input) {
+    switch (input.kind) {
+      case "placement": {
+        if (!input.provisional)
+          return { ok: true };
+        const { nodeKey, definitionId, definitionVersion } = input;
+        return {
+          ok: false,
+          sentence: `'${nodeKey}' places ${definitionId}@${definitionVersion}, which is provisional \u2014 declared, not bound: no handler runs it in this release (R-2)`,
+          fix: "bind it or remove the node"
+        };
+      }
+      case "publication": {
+        if (input.provisional || input.bound)
+          return { ok: true };
+        return {
+          ok: false,
+          sentence: `${input.definitionId} is published with no handler behind it and no plan claiming it \u2014 declared, not bound (R-2)`,
+          fix: "bind it in bindings.ts, mark it `provisional: true` under the plan that owns it, or cull it"
+        };
+      }
+      default:
+        return {
+          ok: false,
+          sentence: `'${String(input.kind)}' is not a shape this verdict judges \u2014 one of 'placement', 'publication'.`
+        };
+    }
+  },
+  failing: (door) => door === "registry" ? { kind: "publication", definitionId: "core:task/stray-unbound@1", provisional: false, bound: false } : {
+    kind: "placement",
+    nodeKey: "pending",
+    definitionId: "conformance:oracle/pending",
+    definitionVersion: 1,
+    provisional: true
+  }
+});
+
+// ../serene-pub-sdk/sdk/dist/variables.js
+var variables2 = /* @__PURE__ */ new Map();
+function defineVariable2(decl2) {
+  const existing = variables2.get(decl2.id);
+  if (existing)
+    refuseUnlessIdentical2(existing, decl2, `duplicate variable id: ${decl2.id}`);
+  variables2.set(decl2.id, decl2);
+  return decl2;
+}
+var getVariable2 = (id) => variables2.get(id);
+var allVariables2 = () => [...variables2.values()];
+var CHARACTER_CARD2 = {
+  type: "object",
+  fields: {
+    name: { type: "string", description: { en: "What the character is called in the prompt." } },
+    nickname: {
+      type: "string",
+      optional: true,
+      description: { en: "Their short name, when they have one." }
+    },
+    description: {
+      type: "string",
+      optional: true,
+      description: { en: "Who they are." }
+    },
+    personality: {
+      type: "string",
+      optional: true,
+      description: { en: "How they behave. Absent for a non-speaker when the session shows brief character detail." }
+    }
+  }
+};
+var ash2 = {
+  name: "Ash",
+  nickname: "Ash",
+  description: "A rider who patrols the ash wastes.",
+  personality: "Terse, loyal, slow to trust."
+};
+var brannoc2 = {
+  name: "Brannoc",
+  description: "A caravan master who has crossed the wastes eleven times.",
+  personality: "Genial, and counting."
+};
+var varInstructions2 = defineVariable2({
+  id: "core:var/instructions@1",
+  i18n: { name: { en: "Instructions" } },
+  description: {
+    en: "The system instructions for the reply, after macros are substituted."
+  },
+  scope: { instructions: { type: "string" } },
+  // Already interpolated, because that is how it arrives: macros expand
+  // upstream, and a sample still carrying `{{char}}` would read as a preview
+  // showing that macros do not work.
+  sample: "You are Ash. Stay in character and never speak for Rell."
+});
+var varCharacters2 = defineVariable2({
+  id: "core:var/characters@1",
+  i18n: { name: { en: "Characters" } },
+  description: {
+    en: "Everyone in the scene except the user, with their descriptions."
+  },
+  scope: { characters: { type: "list", of: CHARACTER_CARD2 } },
+  sample: [ash2, brannoc2]
+});
+var varPersonas2 = defineVariable2({
+  id: "core:var/personas@1",
+  i18n: { name: { en: "Personas" } },
+  // Two fields. A persona's private lore is Assemble's `characterLore`, like
+  // every cast member's, never a field of this card.
+  //
+  // `description` is optional for a different reason than a character's is:
+  // personas are built by hand in `resolveContextInput` and never go through
+  // `compileCharacter`, so nothing strips a null. The key is always present
+  // and its value can be null, which a template cannot tell from absent.
+  description: { en: "Who the user is playing, as the prompt sees them." },
+  scope: {
+    personas: {
+      type: "list",
+      of: {
+        type: "object",
+        fields: {
+          name: { type: "string" },
+          description: { type: "string", optional: true }
+        }
+      }
+    }
+  },
+  sample: [{ name: "Rell", description: "A cartographer looking for a way north." }]
+});
+var varScenario2 = defineVariable2({
+  id: "core:var/scenario@1",
+  i18n: { name: { en: "Scenario" } },
+  description: { en: "The situation the scene opens in." },
+  scope: { scenario: { type: "string" } },
+  sample: "The caravan has stopped at the edge of the wastes."
+});
+var varExampleDialogue2 = defineVariable2({
+  id: "core:var/example-dialogue@1",
+  i18n: { name: { en: "Example dialogue" } },
+  description: { en: "Sample exchanges that show the model how the characters speak." },
+  scope: { exampleDialogue: { type: "string" } },
+  // Interpolated, like `instructions` — the speaker's name is already
+  // substituted by the time a layout sees this.
+  sample: 'Ash: "Ash in the water again."'
+});
+var varPostHistoryInstructions2 = defineVariable2({
+  id: "core:var/post-history-instructions@1",
+  i18n: { name: { en: "Post-history instructions" } },
+  description: {
+    en: "The reminder placed next to the generation point, after the conversation."
+  },
+  scope: { postHistoryInstructions: { type: "string" } },
+  sample: "Stay in character and write one paragraph."
+});
+var varCharacterNames2 = defineVariable2({
+  id: "core:var/character-names@1",
+  i18n: { name: { en: "Character names" } },
+  description: { en: "Just the names of the characters in the scene." },
+  // A **string**, not a list. `joinWithAnd` runs upstream, so what a layout
+  // receives is already "Ash and Brannoc" — and declaring it as a list would
+  // be the same class of lie the hand-written preview data used to tell about
+  // `worldLore`: a template written against it looks right in the editor and
+  // renders wrong in a chat. Saying `type: 'string'` is the first time the
+  // declaration has been able to state this rather than leave it to a comment.
+  scope: { characterNames: { type: "string" } },
+  sample: "Ash and Brannoc"
+});
+var varPersonaNames2 = defineVariable2({
+  id: "core:var/persona-names@1",
+  i18n: { name: { en: "Persona names" } },
+  description: { en: "Just the names of the user's personas in the scene." },
+  scope: { personaNames: { type: "string" } },
+  sample: "Rell"
+});
+var varWorldLore2 = defineVariable2({
+  id: "core:var/world-lore@1",
+  i18n: { name: { en: "World lore" } },
+  description: {
+    en: "Lorebook entries about the world that fit the budget, keyed by entry name."
+  },
+  // `'any'` could not say this, and the shape it could not say is exactly the
+  // one a hand-written preview got wrong once already.
+  scope: { worldLore: { type: "record", of: { type: "string" } } },
+  sample: {
+    "The Ashguard": "Riders who patrol the ash wastes.",
+    "The Long Winter": "Nine years without a thaw."
+  }
+});
+var varHistory2 = defineVariable2({
+  id: "core:var/history@1",
+  // "Story history" until 0.6. It is a *list of dated history entries*, and
+  // calling it a story invited people to look for the story — the summary of
+  // the chat so far, which is a different feature that does not exist here.
+  i18n: { name: { en: "History entries" } },
+  description: {
+    en: "Earlier events from the chat that fit the budget, newest first, keyed by date."
+  },
+  scope: { history: { type: "record", of: { type: "string" } } },
+  sample: {
+    "Year 412, Month 3": "The caravan reached the wastes.",
+    "Year 412, Month 1": "Ash left the Ashguard."
+  }
+});
+var varDocsExcerpts2 = defineVariable2({
+  id: "core:var/docs-excerpts@1",
+  i18n: { name: { en: "Documentation excerpts" } },
+  description: {
+    en: "Documentation sections that match the latest question and fit the budget, keyed by page and section; each starts with the page path."
+  },
+  scope: { docsExcerpts: { type: "record", of: { type: "string" } } },
+  sample: {
+    "Connections \u203A Adding and removing by hand": "Path: /docs/connections#adding-and-removing-by-hand\nOpen Connections and choose Add\u2026"
+  }
+});
+var varRecalledLines2 = defineVariable2({
+  id: "core:var/recalled-lines@1",
+  i18n: { name: { en: "Recalled lines" } },
+  description: {
+    en: "Earlier lines of the conversation that name what the scene is naming now and fit the budget, oldest first \u2014 each with its speaker, turn and text."
+  },
+  scope: {
+    recalledLines: {
+      type: "list",
+      of: {
+        type: "object",
+        fields: {
+          speaker: { type: "string", description: { en: "Who said it." } },
+          turn: {
+            type: "number",
+            description: {
+              en: "The line's position in its channel's conversation, counting from 1."
+            }
+          },
+          text: { type: "string", description: { en: "What was said." } }
+        }
+      }
+    }
+  },
+  sample: [
+    { speaker: "Mira", turn: 12, text: "I hid the brass key under the chapel floor." },
+    { speaker: "Ada", turn: 31, text: "The chapel? Mira, the chapel burned." }
+  ]
+});
+var CHARACTER_LORE_ENTRY2 = {
+  type: "object",
+  fields: {
+    title: { type: "string", description: { en: "The entry\u2019s title." } },
+    castMember: {
+      type: "string",
+      optional: true,
+      description: { en: "Whose lore it is. Absent when the entry is bound to nobody." }
+    },
+    content: { type: "string", description: { en: "What the entry says." } }
+  }
+};
+var varCharacterLore2 = defineVariable2({
+  id: "core:var/character-lore@1",
+  i18n: { name: { en: "Character lore" } },
+  description: {
+    en: "Lore bound to a cast member that fit the budget: each entry\u2019s title, whose it is, and its text."
+  },
+  scope: { characterLore: { type: "list", of: CHARACTER_LORE_ENTRY2 } },
+  sample: [
+    { title: "The Ashguard brand", castMember: "Ash", content: "Carries a brand from the Ashguard." }
+  ]
+});
+var RELATIONSHIP2 = {
+  type: "object",
+  fields: {
+    type: { type: "string", description: { en: "What the relationship is." } },
+    secrecy: {
+      type: "string",
+      description: { en: 'Who knows about it \u2014 "Only I know", "We both know", and so on.' }
+    },
+    status: {
+      type: "string",
+      optional: true,
+      description: { en: "Only present when it is something other than active." }
+    },
+    theirState: {
+      type: "string",
+      optional: true,
+      description: { en: "The other party's node state, when it is not active." }
+    },
+    note: { type: "string", optional: true, description: { en: "The written detail." } }
+  }
+};
+var BY_OTHER2 = { type: "record", of: { type: "list", of: RELATIONSHIP2 } };
+var varRelationshipsPerspectives2 = defineVariable2({
+  id: "core:var/relationships-perspectives@1",
+  i18n: { name: { en: "Relationships: their perspective" } },
+  description: {
+    en: "How the speaking character regards each of the others, from the narrative graph."
+  },
+  scope: {
+    relationshipsPerspectives: {
+      ...BY_OTHER2,
+      description: { en: "How the speaker regards each other character." }
+    }
+  },
+  sample: {
+    Brannoc: [
+      {
+        type: "wary respect",
+        secrecy: "Only I know",
+        note: "Ash has never forgotten who opened the lower gate."
+      }
+    ]
+  }
+});
+var varRelationshipsKnown2 = defineVariable2({
+  id: "core:var/relationships-known@1",
+  i18n: { name: { en: "Relationships: how others see them" } },
+  description: {
+    en: "How the others regard the speaking character, plus any figures the world knows of."
+  },
+  scope: {
+    relationshipsKnown: {
+      type: "object",
+      fields: {
+        howOthersRegardYou: {
+          ...BY_OTHER2,
+          optional: true,
+          description: { en: "How each other character regards the speaker." }
+        },
+        legendaryFigures: {
+          type: "record",
+          optional: true,
+          description: { en: "Figures the world knows of, and their public relationships." },
+          of: {
+            type: "object",
+            fields: {
+              summary: { type: "string", optional: true },
+              state: { type: "string", optional: true },
+              relationships: { ...BY_OTHER2, optional: true }
+            }
+          }
+        }
+      }
+    }
+  },
+  sample: {
+    howOthersRegardYou: {
+      Rell: [
+        {
+          type: "debt",
+          secrecy: "We both know",
+          status: "evolved",
+          note: "Rell owes Ash for the crossing."
+        }
+      ]
+    }
+  }
+});
+var varCurrentDate2 = defineVariable2({
+  id: "core:var/current-date@1",
+  i18n: { name: { en: "Current date" } },
+  description: {
+    en: "The story's present date: the lorebook's clock when it is set, else the most recent history entry."
+  },
+  /**
+   * ⚠ Was `{ currentDate: { type: 'string' } }` with the sample
+   * `'Year 412, Month 3'`, and the sample was **wrong** — the value arrived
+   * pre-formatted by `formatDate` as `412-03`, so the preview showed a
+   * rendering the prompt never contained. That is the failure mode a sample
+   * exists to prevent, and it happened because the shape was a finished
+   * string: nothing could disagree with the formatting, so nothing did.
+   *
+   * The parts travel separately now and the layout joins them, which is what
+   * makes "state the date differently" a setting rather than a code change.
+   * `month` and `day` are absent rather than null when the entry has no such
+   * precision — `{{#if (isSet …)}}` is what a layout tests.
+   */
+  scope: {
+    currentDate: {
+      type: "object",
+      fields: {
+        year: { type: "number", description: { en: "The story year." } },
+        month: {
+          type: "number",
+          optional: true,
+          description: { en: "Absent when the entry is only dated to a year." }
+        },
+        day: {
+          type: "number",
+          optional: true,
+          description: { en: "Absent when the entry is only dated to a month." }
+        },
+        hour: {
+          type: "number",
+          optional: true,
+          description: { en: "The clock's hour (0\u201323), when the present has a time of day." }
+        },
+        minute: {
+          type: "number",
+          optional: true,
+          description: { en: "The clock's minute, when the present has a time of day." }
+        },
+        label: {
+          type: "string",
+          optional: true,
+          description: {
+            en: "The date spelled through the lorebook's calendar; absent when the book is free-form."
+          }
+        }
+      }
+    }
+  },
+  sample: { year: 412, month: 3, day: 5 }
+});
+
+// ../serene-pub-sdk/sdk/dist/bands.js
+var IDENTIFIER2 = /^[A-Za-z_][A-Za-z0-9_]*$/;
+var isBandKey2 = (key) => IDENTIFIER2.test(key);
+function bandKeySuggestion2(key) {
+  const camel = key.replace(/[^A-Za-z0-9_]+(.)?/g, (_, c) => c ? c.toUpperCase() : "").replace(/^[^A-Za-z_]+/, "");
+  return camel || "band";
+}
+var ASSEMBLE_OWN_TEMPLATE_NAMES2 = [
+  "sessionMessages",
+  "injectionsByIndex",
+  "budget",
+  "postHistory",
+  "blocks",
+  "prompts"
+];
+var variableIdOf2 = (v2) => typeof v2 === "string" ? v2 : v2?.id;
+var otherVariableRendering2 = (key, id) => allVariables2().find((v2) => v2.id !== id && v2.id.startsWith("core:") && Object.prototype.hasOwnProperty.call(v2.scope, key));
+function checkBandDeclarations2(d, others) {
+  const bands = d.bands;
+  for (const key of Object.keys(d.bandPorts ?? {}))
+    if (!bands || !Object.prototype.hasOwnProperty.call(bands, key))
+      throw new Error(`'${d.id}' names band '${key}' in bandPorts but does not declare it in bands. Declare it (bands: { ${key}: varMyBand }), or drop it from bandPorts.`);
+  if (!bands)
+    return;
+  for (const [key, decl2] of Object.entries(bands)) {
+    if (!isBandKey2(key))
+      throw new Error(`'${d.id}' declares band '${key}': a band key is a top-level template name, so it must be an identifier \u2014 letters, digits and '_', not starting with a digit. Rename it '${bandKeySuggestion2(key)}', and emit that same key from bandIntent() and as each candidate's source.`);
+    const id = variableIdOf2(decl2);
+    if (!id || !decl2 || typeof decl2 !== "object")
+      throw new Error(`'${d.id}' declares band '${key}' without a variable. Declare one with definePluginVariable() (defineVariable() in core) whose scope names '${key}', and pass the declaration: bands: { ${key}: varMyBand }.`);
+    const registered = getVariable2(id);
+    if (!registered)
+      throw new Error(`'${d.id}' declares band '${key}' with variable '${id}', which is not registered. Declare it with definePluginVariable() (defineVariable() in core) before the definition that names it \u2014 the layout picker and the template editor read it from the registry.`);
+    if (!Object.prototype.hasOwnProperty.call(registered.scope, key))
+      throw new Error(`'${d.id}' declares band '${key}' with variable '${id}', whose scope does not declare '${key}' (it declares ${Object.keys(registered.scope).map((k) => `'${k}'`).join(", ") || "nothing"}). A layout renders the band as {{{${key}}}}, so add '${key}' to the variable's scope \u2014 or rename the band to the key the variable declares.`);
+    if (ASSEMBLE_OWN_TEMPLATE_NAMES2.includes(key))
+      throw new Error(`'${d.id}' declares band '${key}', which collides with Assemble's own '${key}' \u2014 a template reading {{{${key}}}} would get one or the other depending on order. Rename the band.`);
+    const core = otherVariableRendering2(key, id);
+    if (core)
+      throw new Error(`'${d.id}' declares band '${key}' as '${id}', which collides with '${core.id}' \u2014 that variable already renders the top-level name '${key}'. A band key means one thing; rename the band.`);
+    const ports = d.bandPorts?.[key];
+    if (ports !== void 0) {
+      const out = Object.keys(d.ports?.out ?? {});
+      const unknown = ports.filter((p) => !out.includes(p));
+      if (!ports.length || unknown.length)
+        throw new Error(`'${d.id}' says band '${key}' is carried on ` + (ports.length ? `${unknown.map((p) => `'${p}'`).join(", ")}, which ${unknown.length === 1 ? "is not an out-port" : "are not out-ports"} it declares` : "no out-port at all") + ` (it declares ${out.map((p) => `'${p}'`).join(", ") || "none"}). Name the out-ports that publish the band's candidates in bandPorts, or leave '${key}' out of bandPorts if every out-port may carry it.`);
+    }
+    for (const other of others) {
+      if (other.id === d.id)
+        continue;
+      const theirs = variableIdOf2(other.bands?.[key]);
+      if (theirs && theirs !== id)
+        throw new Error(`'${d.id}' declares band '${key}' as '${id}', but '${other.id}' already declares '${key}' as '${theirs}'. A band key is a top-level template name and means one thing \u2014 rename one of the two bands.`);
+    }
+  }
+}
+
+// ../serene-pub-sdk/sdk/dist/events.js
+var bySlug2 = /* @__PURE__ */ new Map();
+var nextId2 = 1;
+function defineEvent2(def) {
+  const existing = bySlug2.get(def.slug);
+  const e = { ...def, id: existing?.id ?? nextId2, ownerPluginId: null };
+  if (existing)
+    refuseUnlessIdentical2(existing, e, `duplicate event slug '${def.slug}' \u2014 slugs are unique because they are the reference used to sync seeded rows across pubs (13 \xA77g)`);
+  if (def.family === "action" && def.causedBy?.length) {
+    throw new Error(`action event '${def.slug}' declares causedBy. Action events are requests, not consequences of a write \u2014 that is what keeps them out of the cycle graph (13 \xA77)`);
+  }
+  if (def.declaredRoot && def.causedBy?.length) {
+    throw new Error(`event '${def.slug}' is a declared root and declares causedBy \u2014 a root starts outside every pipeline, so nothing writes it. Drop one of the two`);
+  }
+  if (!existing)
+    nextId2++;
+  bySlug2.set(def.slug, e);
+  return e;
+}
+function eventById2(id) {
+  const m = /^core:event\/([a-z0-9]+(?:-[a-z0-9]+)*)@(\d+)$/.exec(id);
+  if (!m)
+    return packageEventViews2.get(id);
+  const e = bySlug2.get(m[1]);
+  return e && String(e.version) === m[2] ? e : void 0;
+}
+var notADeclaredEvent2 = (id) => `'${id}' is not a declared event \u2014 core defines its own, and a package declares one with defineSessionEvent({ id, payload, \u2026 }) and names it in defineExtension({ events }).`;
+var packageEventViews2 = /* @__PURE__ */ new Map();
+var MAX_RECORDED_PAYLOAD_BYTES2 = 64 * 1024;
+var CORE_EVENTS2 = {
+  messageCreated: defineEvent2({
+    slug: "message-created",
+    name: { en: "Message written" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/create-message", "core:outlet/seed-greetings"],
+    description: "A message was written into a session."
+  }),
+  /**
+   * A row was finished or rewritten by a pipeline's own write. A regenerate,
+   * a swipe's fresh alternative and an extend are THIS event with `verb`
+   * on the payload — `regenerate` · `swipe` · `extend` — rather than three
+   * events of their own (R-15, 2026-09-16): each is the genre's pipeline
+   * producing text plus core's rewrite of the row, and the rewrite is one
+   * outlet. A plain reply's finishing write carries no `verb`.
+   */
+  messageUpdated: defineEvent2({
+    slug: "message-updated",
+    name: { en: "Message changed" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/update-message", "core:outlet/attach-image", "core:outlet/attach-audio"],
+    payload: S2.sessionChange,
+    description: "An existing message was changed."
+  }),
+  // ── The built-in writes (R-15, 2026-09-16) — DATA family, each caused ──
+  // by the core outlet that performs it. Every one carries what changed
+  // and what was lost, lands on the receipt as `emitted`, and is written to
+  // the session's changes so the next reply's inlet publishes it.
+  messageDeleted: defineEvent2({
+    slug: "message-deleted",
+    name: { en: "Message deleted" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/delete-message"],
+    payload: S2.sessionChange,
+    description: "A message was deleted. The payload carries what was lost \u2014 its content, role, speaker and metadata."
+  }),
+  messageHidden: defineEvent2({
+    slug: "message-hidden",
+    name: { en: "Message hidden or shown" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/hide-message"],
+    payload: S2.sessionChange,
+    description: "A message was hidden from the prompt, or shown again. The payload says which."
+  }),
+  messageEdited: defineEvent2({
+    slug: "message-edited",
+    name: { en: "Message edited" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/edit-message"],
+    payload: S2.sessionChange,
+    description: "A person rewrote a settled message. The payload carries the previous content."
+  }),
+  messageSwiped: defineEvent2({
+    slug: "message-swiped",
+    name: { en: "Message swiped" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/swipe-message"],
+    payload: S2.sessionChange,
+    description: "A different alternative of a message was selected, or a new one recorded. The payload carries the alternative that was showing and the index now selected."
+  }),
+  /**
+   * A line's **shown sprite** changed (DESIGN-sprites §5.2): a sprite picker
+   * chose one after a reply, or a person changed it from the message menu.
+   * The payload names the line, the speaker, the `{ set, label }` now shown
+   * (null for none) and `source` — `picker` or `person`. What TTS line
+   * direction and any face-driven widget listen for.
+   */
+  spriteShown: defineEvent2({
+    slug: "sprite-shown",
+    name: { en: "Sprite shown" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/show-sprite"],
+    payload: S2.sessionChange,
+    description: "A line's sprite changed \u2014 chosen by a sprite picker after a reply, or by a person. The payload carries the set and label now shown and who chose it."
+  }),
+  /**
+   * Stop is not a write outlet: it is the run-level guarantee (R-17) —
+   * core finalises the row a cancelled run was filling — so it has no
+   * `causedBy`. Emitted by the host from that finalisation, and from the
+   * message's own Stop when it releases the row first.
+   */
+  messageStopped: defineEvent2({
+    slug: "message-stopped",
+    name: { en: "Reply stopped" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    payload: S2.sessionChange,
+    description: "A reply was stopped while it was being written. The payload carries how much text had arrived."
+  }),
+  sessionBranched: defineEvent2({
+    slug: "session-branched",
+    name: { en: "Session branched" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/branch-session"],
+    payload: S2.sessionChange,
+    description: "A session was branched at a message into a new session. The payload names the new session and the message it forked from."
+  }),
+  // ── Turn order as event-driven state (PLAN-turn-order §4.1, 2026-09-21) ──
+  // The four events the turn-order spec answers or causes. Every session
+  // event's payload carries a `cause` (`EventCause`): who or what fired
+  // it, which is what the auto-advance listener keys on.
+  /**
+   * A row that is **not generating** landed: a user send, a seeded
+   * greeting, a finalised reply, a stopped reply. Never for a placeholder
+   * or a generating row — the reply's *completion* is the fact, not its
+   * opening. Distinct from `message-created` (which fires at the write,
+   * placeholder included) and `message-updated` (which also fires on an
+   * attach): this is the one event that means "there is a new settled
+   * turn to answer".
+   */
+  messageCompleted: defineEvent2({
+    slug: "message-completed",
+    name: { en: "Message completed" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: [
+      "core:outlet/create-message",
+      "core:outlet/seed-greetings",
+      "core:outlet/update-message"
+    ],
+    payload: S2.sessionChange,
+    description: "A message finished landing \u2014 a send, a seeded greeting, a finished or stopped reply. Never a placeholder or a row still being written."
+  }),
+  /**
+   * A seated participant's row changed — switched on or off (`active`),
+   * `position` or portrayal. Not add or remove: those stay
+   * `member-added` / `member-removed`. No `causedBy`: the cast toggles are
+   * socket writes, not an outlet's.
+   */
+  castChanged: defineEvent2({
+    slug: "cast-changed",
+    declaredRoot: true,
+    name: { en: "Cast changed" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    payload: S2.castChange,
+    description: "A session character, persona or envoy row changed \u2014 switched on or off, position or portrayal. The payload names the participant and what moved."
+  }),
+  /**
+   * The session row changed. Two origins: a person's settings write
+   * (`sessions:update` and the other settings sockets — name, scenario,
+   * lorebook, genre fields, preset, channels, tags; cause `settings`), and
+   * `core:outlet/advance-story-clock`, which moves the session's story
+   * clock (`changed: ['storyClock']`, cause `run`). The payload's `changed`
+   * lists the fields by name. `causedBy` names the outlet, so the event map
+   * draws the edge a spec bound here that advances the clock would loop
+   * on; it is therefore not a declared root, though a person's write also
+   * starts it (as the auto-advance listener also causes `message-respond`).
+   * ⚠ Never emitted by `writeTurnOrder`, which is raw SQL for exactly this
+   * reason (§3).
+   */
+  sessionUpdated: defineEvent2({
+    slug: "session-updated",
+    name: { en: "Session updated" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/advance-story-clock"],
+    payload: S2.sessionChange,
+    description: "The session's settings changed \u2014 name, scenario, lorebook, genre fields, preset, channels or tags \u2014 or a pipeline moved its story clock. The payload lists which."
+  }),
+  /**
+   * `metadata.turnOrder` was written by `core:outlet/set-turn-order@1`.
+   * **Core-internal**: the auto-advance listener and the
+   * `sessions:turnOrder` push read it; `genre()` refuses it in a genre's
+   * `events`, so no preset can bind a spec to it and the recompute cannot
+   * feed itself.
+   */
+  turnOrderChanged: defineEvent2({
+    slug: "turn-order-changed",
+    name: { en: "Turn order changed" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/set-turn-order"],
+    payload: S2.turnOrderChanged,
+    description: "The session's turn order was recomputed and written. The payload carries the order as written and the cause that led to it."
+  }),
+  /**
+   * A pipeline's annex entry changed: "my state changed", for any genre.
+   * A package writes its annex through `core:outlet/set-session-annex@1`
+   * and binds this; for a named happening of its own it declares an event
+   * and records it. Emitted only
+   * when the merged value differs from the stored one, so a spec that
+   * rewrites the same value cannot feed itself; the lineage caps stop the
+   * rest.
+   */
+  annexChanged: defineEvent2({
+    slug: "annex-changed",
+    name: { en: "Annex changed" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/set-session-annex", "core:outlet/set-annex-field"],
+    payload: S2.annexChange,
+    description: "A pipeline's own session state changed \u2014 its annex entry. The payload names the owner whose entry moved."
+  }),
+  /**
+   * Not a write's event: the marker the `sessionChanges` list ends with when
+   * more than fifty changes waited between two replies (U5b review S1). The
+   * newest fifty are delivered and this one entry says how many older ones
+   * were not, so a pipeline can tell a full list from a truncated one. Never
+   * written to `session_changes` and never on a receipt's `emitted` — no
+   * `causedBy`, because no outlet causes it.
+   */
+  sessionChangesTruncated: defineEvent2({
+    slug: "session-changes-truncated",
+    name: { en: "Session changes truncated" },
+    version: 1,
+    family: "data",
+    affectsUser: false,
+    payload: S2.sessionChange,
+    description: "More session changes waited than one reply is handed. The newest fifty were delivered; the payload says how many older ones were dropped."
+  }),
+  /**
+   * A **form** — a `choices` or `form` block a message carries — was
+   * addressed to a participant the AI portrays this turn (R-15 *Forms*;
+   * R-21 (5); 30 §U5d). Caused by the write that carried the block, and
+   * dispatched through the same path as the lifecycle events, so every
+   * answer run is a child of the run that asked (`parentRunId`,
+   * `rootRunId`, `depth`) and 01 §8's cycle caps hold: a form whose answer
+   * asks another form stops at the depth cap, receipted. A form addressed
+   * to a person is no event: the block waits for the click.
+   */
+  formAddressed: defineEvent2({
+    slug: "form-addressed",
+    name: { en: "Form addressed" },
+    version: 1,
+    family: "data",
+    affectsUser: false,
+    causedBy: ["core:outlet/create-message", "core:outlet/update-message"],
+    payload: S2.formAddressed,
+    description: "A question or form in a message was addressed to a participant the AI portrays this turn \u2014 the genre's answer pipeline answers it. The payload names the message, the block, the action and the addressee."
+  }),
+  /**
+   * A form was **answered** — by a click, or by the answer pipeline's
+   * outlet committing an oracle's answer exactly as a click would. Lands in
+   * the session's changes so the next reply's inlet sees it (`answer`,
+   * `addressee`, `blockId`, `action` on the payload).
+   */
+  formAnswered: defineEvent2({
+    slug: "form-answered",
+    name: { en: "Form answered" },
+    version: 1,
+    family: "data",
+    affectsUser: false,
+    causedBy: ["core:outlet/answer-form"],
+    payload: S2.sessionChange,
+    description: "A question or form in a message was answered. The payload carries the answer, who answered as whom, and the action it fired."
+  }),
+  /**
+   * A form was **superseded** (plans/29 R-15 *Staleness and order*; 30
+   * §U5f): the channel head moved past the turn it was issued at before it
+   * was answered, and a press on it reached the door. Recorded ONCE per
+   * block, the first time the door sees it stale, so the next reply's
+   * inlet learns the question lapsed — not on every render, and never by a
+   * render. No outlet causes it: the door does, like the truncation marker.
+   */
+  formSuperseded: defineEvent2({
+    slug: "form-superseded",
+    name: { en: "Form superseded" },
+    version: 1,
+    family: "data",
+    affectsUser: false,
+    payload: S2.sessionChange,
+    description: "A question or form in a message was overtaken \u2014 the conversation moved on before it was answered, and a press on it was refused. The payload names the message and the block."
+  }),
+  loreEntryCreated: defineEvent2({
+    slug: "lore-entry-created",
+    name: { en: "Lore entry written" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/create-lore-entry"],
+    description: "A lorebook entry was written."
+  }),
+  /**
+   * Two lore entries were linked (L2, 2026-09-17) — a room's exit, who keeps
+   * what, what stands near what.
+   *
+   * Its own event rather than `lore-entry-created`: a link is not an entry,
+   * nothing about it is created or changed, and a subscriber that wants to
+   * redraw a map wants exactly this and none of the writes that make rows.
+   *
+   * ⚠ It declares no payload shape — it rides the run's receipt as caused by
+   * the outlet, and the link itself (its name, its words both ways) is the
+   * outlet's `linkId` row, read where it is needed (places plan B2,
+   * 2026-09-29). An idempotent repeat that found the standing row wrote
+   * nothing, and causes no event (`written: false`).
+   */
+  loreLinkCreated: defineEvent2({
+    slug: "lore-link-created",
+    name: { en: "Lore entries linked" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/link-lore-entries"],
+    description: "Two lorebook entries were linked."
+  }),
+  graphProposalCreated: defineEvent2({
+    slug: "graph-proposal-created",
+    name: { en: "Graph proposal filed" },
+    version: 1,
+    family: "data",
+    affectsUser: true,
+    causedBy: ["core:outlet/graph-proposal"],
+    description: "A narrative-graph proposal was filed for review."
+  }),
+  // ── The session lifecycle (24 §5) — ACTION family: a person did it ──────
+  /** The create slot — required; exactly one pipeline per genre answers it. */
+  sessionCreated: defineEvent2({
+    slug: "session-created",
+    declaredRoot: true,
+    name: { en: "Session created" },
+    version: 1,
+    family: "action",
+    affectsUser: false,
+    description: "A session was created \u2014 the genre's create pipeline answers this."
+  }),
+  /** The primary turn. A swipe is this pipeline re-run, not a new event. */
+  messageRespond: defineEvent2({
+    slug: "message-respond",
+    declaredRoot: true,
+    name: { en: "Reply" },
+    version: 1,
+    family: "action",
+    affectsUser: true,
+    description: "A reply was asked for \u2014 the primary turn of a session."
+  }),
+  /** Arbitrary buttons/triggers — the contributed functions surface (19 §3). */
+  sessionAction: defineEvent2({
+    slug: "session-action",
+    declaredRoot: true,
+    name: { en: "Action" },
+    version: 1,
+    family: "action",
+    affectsUser: true,
+    description: "A person triggered a contributed action in a session."
+  }),
+  memberAdded: defineEvent2({
+    slug: "member-added",
+    declaredRoot: true,
+    name: { en: "Member joined" },
+    version: 1,
+    family: "action",
+    affectsUser: false,
+    // A seat is a cast change (R31): `change: 'added'`, `ref` the member.
+    payload: S2.castChange,
+    description: "A character, persona or envoy joined a session; the payload carries which."
+  }),
+  memberRemoved: defineEvent2({
+    slug: "member-removed",
+    declaredRoot: true,
+    name: { en: "Member left" },
+    version: 1,
+    family: "action",
+    affectsUser: false,
+    // An unseat is a cast change (R31): `change: 'removed'`, `ref` the member.
+    payload: S2.castChange,
+    description: "A character, persona or envoy left a session; the payload carries which."
+  }),
+  /**
+   * A UI action asked for a run (13 §7). Carrying both users is what answers the
+   * budget-owner question without a separate rule: **budget and quota attach to the
+   * owner; the receipt's attribution records the trigger.** Group sessions need no
+   * special case.
+   *
+   * ⏳ Overlaps `session-action` since the fold (a contributed action IS a UI
+   * action). Kept because ruling 49 (`UiActionPayload`, the owner/trigger
+   * split) has no other home yet; nothing subscribes to it. Retire when the
+   * action model (30 §U5) gives the payload one.
+   */
+  uiAction: defineEvent2({
+    slug: "ui-action",
+    name: { en: "Interface action" },
+    version: 1,
+    family: "action",
+    affectsUser: true,
+    description: "Someone asked for a run from the interface \u2014 a composer action, a message action, a re-roll. Payload: sessionId, ownerUserId, actorUserId, action, modeId, input."
+  }),
+  /**
+   * The path for scheduled model work (13 §7c). No callable may call an oracle
+   * (F32), and lifecycle callbacks may not trigger pipelines, so nightly
+   * summarization subscribes here instead — which also puts it on the consent
+   * screen, where a lifecycle callback doing the same work would have been
+   * invisible. Serene Pub emits it hourly (`cadence: 'hourly'`, `scheduledFor`
+   * the ISO instant it was due, `scope: 'pub'`), only to subscribed,
+   * granted listeners; `SCHEDULED_WORK_PATH` names it.
+   */
+  scheduleTick: defineEvent2({
+    slug: "schedule-tick",
+    name: { en: "Schedule tick" },
+    version: 1,
+    family: "action",
+    affectsUser: false,
+    description: "A declared cadence elapsed. Payload: cadence, scheduledFor, scope."
+  })
+};
+
+// ../serene-pub-sdk/sdk/dist/widgets.js
+var MESSAGE_HOST_FIELDS2 = Object.freeze([
+  "userId",
+  "queueItemId",
+  "debugMeta",
+  "embedding",
+  "embeddingModel",
+  "embeddingSourceHash",
+  "embedTextHash",
+  "vectorizedAt",
+  "version"
+]);
+var HOST_FIELD_SET2 = new Set(MESSAGE_HOST_FIELDS2);
+var WIDGET_SCOPED_SECTIONS2 = Object.freeze({
+  "session:full": "session_full",
+  "session:state": "session_state",
+  persona: "persona",
+  characters: "characters",
+  lore: "lore"
+});
+var SCOPED_SECTION_NAMES2 = new Set(Object.values(WIDGET_SCOPED_SECTIONS2));
+var isWidgetScopedSectionName2 = (name) => typeof name === "string" && SCOPED_SECTION_NAMES2.has(name);
+var BASE_SECTIONS2 = {
+  layout: true,
+  session: true,
+  channels: true,
+  messages: true,
+  props: true,
+  actions: true,
+  settings: true,
+  annex: true,
+  locale: true,
+  viewer: true,
+  turnOrder: true
+};
+var WIDGET_BASE_SECTIONS2 = Object.freeze(Object.keys(BASE_SECTIONS2));
+var WIDGET_REQUEST_ASKERS2 = Object.freeze({
+  messages: "any",
+  "open-character": "any",
+  "view-avatar": "any",
+  "view-image": "any",
+  "open-lore": "any",
+  "prompt-details": "any",
+  "inspect-run": "any",
+  "pick-turn": "any",
+  "change-sprite": "any",
+  "actions-seen": "core",
+  summarize: "core",
+  send: "core",
+  "attach-files": "core",
+  "remove-tray-item": "core",
+  "remove-attachment": "core",
+  draft: "core",
+  "switch-persona": "core",
+  "add-persona": "core",
+  "fire-turn": "core",
+  "decide-proposal": "core",
+  "set-attribute-value": "core",
+  "set-sprite-set": "core",
+  "clear-scene-image": "core",
+  "session-entries": Object.freeze({ scope: "lore" }),
+  "set-entry-marks": "core",
+  "authors-note": "core",
+  "set-authors-note": "core"
+});
+var WIDGET_REQUEST_KINDS2 = Object.freeze(Object.keys(WIDGET_REQUEST_ASKERS2));
+var WIDGET_EVENT_SCOPES2 = Object.freeze({
+  "lore:ranked": "lore",
+  "lore:marked": "lore"
+});
+
+// ../serene-pub-sdk/sdk/dist/widgetDecls.js
+var REGISTRY2 = globalThis[/* @__PURE__ */ Symbol.for("serene-pub.widget-owners")] ??= {
+  owners: /* @__PURE__ */ new WeakMap(),
+  coreIds: /* @__PURE__ */ new Set()
+};
+var OWNERS2 = REGISTRY2.owners;
+function widgetReadsFindings2(reads, at) {
+  if (reads === void 0)
+    return [];
+  const names = WIDGET_BASE_SECTIONS2.map((s) => `'${s}'`).join(", ");
+  if (!Array.isArray(reads))
+    return [`${at}: a list of base section names \u2014 any of ${names}`];
+  const out = [];
+  for (const name of reads) {
+    if (WIDGET_BASE_SECTIONS2.includes(name))
+      continue;
+    out.push(isWidgetScopedSectionName2(name) ? `${at}: '${name}' is a scoped section \u2014 ask for it in \`scopes\`, never in \`reads\`` : `${at}: '${String(name)}' is not a base section \u2014 one of ${names}`);
+  }
+  return out;
+}
+
+// ../serene-pub-sdk/sdk/dist/channels.js
 var DEFAULT_CHANNEL2 = "main";
 
-// sdk/dist/descriptors.js
-var TEXT_TRANSFORM_KIND2 = "core:script:text/transform@1";
+// ../serene-pub-sdk/sdk/dist/descriptors.js
+function scriptPointsOf2(d) {
+  return (d.scriptPoints ?? []).map((p) => ({
+    ...p,
+    key: String(p.key),
+    accepts: Array.isArray(p.accepts) ? [...p.accepts] : []
+  }));
+}
 var MESSAGE_VERB_FLOORS2 = ["stop", "branch", "edit"];
 var MESSAGE_VERB_BUILT_INS2 = ["delete", "hide", "swipe"];
-var MESSAGE_VERB_CONTENT2 = ["retry", "continue", "stepBack"];
+var MESSAGE_VERB_CONTENT2 = ["retry", "extend", "stepBack"];
 var MESSAGE_VERBS2 = [...MESSAGE_VERB_CONTENT2, ...MESSAGE_VERB_BUILT_INS2];
+var TURN_CONTROLS2 = ["advance", "pick", "narrate", "retake"];
+function assertTurnControls2(shape, who) {
+  const raw = shape?.turnControls;
+  if (raw === void 0)
+    return;
+  const problems = [];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    problems.push(`turnControls is { ${TURN_CONTROLS2.map((t) => `${t}?`).join(", ")} }`);
+  } else {
+    for (const [k, v2] of Object.entries(raw)) {
+      if (!TURN_CONTROLS2.includes(k)) {
+        problems.push(`turnControls.${k}: not a turn control \u2014 one of ${TURN_CONTROLS2.join(", ")}`);
+        continue;
+      }
+      if (typeof v2 === "boolean")
+        continue;
+      if (!v2 || typeof v2 !== "object" || Array.isArray(v2) || !("presentWhen" in v2)) {
+        problems.push(`turnControls.${k}: true, false, or { presentWhen } \u2014 enabled-when predicates over the published values, such as { on: 'session.fields.<field>', equals: '<value>', reason: { en: '<why it is absent>' } }`);
+        continue;
+      }
+      const pw = v2.presentWhen;
+      problems.push(...enabledWhenFindings2(pw, `turnControls.${k}.presentWhen`));
+      normalizeEnabledWhen2(pw).forEach((p, i) => {
+        if (p.on === "item" || p.on.startsWith("item."))
+          problems.push(`turnControls.${k}.presentWhen[${i}]: reads '${p.on}' \u2014 a turn control acts on no row, so it cannot read one`);
+      });
+    }
+  }
+  if (problems.length)
+    throw new Error(`${who}: ${problems.join("\n")}`);
+}
 var SESSION_WRITES2 = ["lore", "scenes"];
 function assertSessionWrites2(shape, who) {
   const writes = shape?.writes;
@@ -3144,7 +7642,7 @@ function assertMessageVerbFloors2(shape, who) {
   const forbidden = MESSAGE_VERB_FLOORS2.filter((floor) => verbs[floor] === false);
   if (!forbidden.length)
     return;
-  throw new Error(`${who} declares messageVerbs { ${forbidden.map((f) => `${f}: false`).join(", ")} }. Stop, branch and edit are floors \u2014 present in every genre, never switched off (R-15). A genre may switch off delete, hide or swipe, and may forbid retry, continue or stepBack; drop the floor from the declaration.`);
+  throw new Error(`${who} declares messageVerbs { ${forbidden.map((f) => `${f}: false`).join(", ")} }. Stop, branch and edit are floors \u2014 present in every genre, never switched off (R-15). A genre may switch off delete, hide or swipe, and may forbid retry, extend or stepBack; drop the floor from the declaration.`);
 }
 var CHANNEL_ROLES2 = ["conversation", "folio"];
 var CHANNEL_VOICES2 = ["character", "narrator", "none"];
@@ -3153,11 +7651,11 @@ function assertChannelDecls2(shape, who) {
   if (channels === void 0)
     return;
   if (!Array.isArray(channels))
-    throw new Error(`${who} declares a 'channels' that is not an array. A genre's channels are a list of slugs, each a bare string or a { slug, role?, voice?, messageVerbs? } (R-C).`);
+    throw new Error(`${who} declares a 'channels' that is not an array. A genre's channels are a list of slugs, each a bare string or a { slug, role?, voice?, messageVerbs?, label?, turnControls? } (R-C).`);
   for (const raw of channels) {
     const isString = typeof raw === "string";
     if (!isString && (!raw || typeof raw !== "object" || Array.isArray(raw)))
-      throw new Error(`${who} declares a channel that is neither a slug nor a declaration: ${JSON.stringify(raw)}. Each channel is a bare string or a { slug, role?, voice?, messageVerbs? } (R-C).`);
+      throw new Error(`${who} declares a channel that is neither a slug nor a declaration: ${JSON.stringify(raw)}. Each channel is a bare string or a { slug, role?, voice?, messageVerbs?, label?, turnControls? } (R-C).`);
     const decl2 = isString ? { slug: raw } : raw;
     const slug = typeof decl2.slug === "string" ? decl2.slug.trim() : "";
     if (!slug)
@@ -3170,24 +7668,92 @@ function assertChannelDecls2(shape, who) {
     if (decl2.voice !== void 0 && !CHANNEL_VOICES2.includes(decl2.voice))
       throw new Error(`${at} declares voice '${decl2.voice}'. A channel's voice is ${CHANNEL_VOICES2.map((v2) => `'${v2}'`).join(", ")} \u2014 whose name a turn triggered here seeds under, or none for no seed row at all (R-C).`);
     assertMessageVerbFloors2({ messageVerbs: decl2.messageVerbs }, at);
+    const label = i18nFindings2(decl2.label, `${at} label`);
+    if (label.length)
+      throw new Error(label.join("\n"));
+    assertTurnControls2({ turnControls: decl2.turnControls }, at);
     if (slug === DEFAULT_CHANNEL2 && (decl2.role ?? "conversation") !== "conversation")
       throw new Error(`${at} is declared role '${decl2.role}'. '${DEFAULT_CHANNEL2}' is the channel every session has and the one a turn lands on by default, so it is always a conversation; declare another channel for the folio (R-C).`);
   }
 }
 var types2 = /* @__PURE__ */ new Map();
 var DESCRIPTOR_DISPLAY_KEYS2 = { display: ["label"] };
+function bandsMaterial2(bands) {
+  if (!bands || !Object.keys(bands).length)
+    return void 0;
+  return Object.fromEntries(Object.entries(bands).map(([k, v2]) => [k, typeof v2 === "string" ? v2 : v2.id]).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+}
+function bandPortsMaterial2(bandPorts) {
+  if (!bandPorts || !Object.keys(bandPorts).length)
+    return void 0;
+  return Object.fromEntries(Object.entries(bandPorts).map(([k, ports]) => [k, [...ports].sort()]).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+}
+function portSchemasMaterial2(p) {
+  if (!p?.out || !Object.keys(p.out).length)
+    return void 0;
+  return contractData2({ out: p.out });
+}
+var contractData2 = (v2) => declarationData2(v2, DESCRIPTOR_DISPLAY_KEYS2);
+var flag2 = (v2) => v2 === true ? true : void 0;
+var portShapes2 = (ports) => Object.fromEntries(Object.entries(ports ?? {}).map(([k, v2]) => [
+  k,
+  typeof v2 === "string" ? v2 : v2?.id ?? void 0
+]));
+function definitionContract2(source) {
+  const at = source.id.lastIndexOf("@");
+  const pinned = at > 0 && /^\d+$/.test(source.id.slice(at + 1));
+  const entryShape = source.entryShape && typeof source.entryShape === "object" ? {
+    ...source.entryShape,
+    ...source.configSchema !== void 0 ? { fields: source.configSchema } : {}
+  } : void 0;
+  return {
+    id: pinned ? source.id.slice(0, at) : source.id,
+    version: source.version ?? (pinned ? Number(source.id.slice(at + 1)) : 1),
+    kind: source.kind,
+    ports: { in: portShapes2(source.ports?.in), out: portShapes2(source.ports?.out) },
+    slots: contractData2(authoredSlots2(source.slots)),
+    effects: source.effects,
+    review: source.review ? { fields: [...source.review.fields] } : void 0,
+    shape: source.shape,
+    optional: flag2(source.optional),
+    declaresRandomness: flag2(source.declaresRandomness),
+    scriptPoints: source.scriptPoints ? contractData2(scriptPointsOf2(source)) : void 0,
+    sessionShape: contractData2(source.sessionShape),
+    earlyExit: flag2(source.earlyExit),
+    causesEvent: source.causesEvent,
+    causesEventFrom: source.causesEventFrom,
+    // Sorted: which payloads an inlet reads is a set, not a sequence.
+    payloads: source.payloads?.length ? [...source.payloads].sort() : void 0,
+    liveRow: flag2(source.liveRow),
+    media: contractData2(source.media),
+    entryShape: contractData2(entryShape),
+    // Contract that rides the row's policy (owner ruling 2026-09-27): a
+    // descriptor's own field, else the row's policy spelling — one hash.
+    bands: bandsMaterial2(source.bands ?? source.policy?.bands ?? void 0),
+    bandPorts: bandPortsMaterial2(source.bandPorts ?? source.policy?.bandPorts ?? void 0),
+    portSchemas: portSchemasMaterial2(source.portSchemas ?? source.policy?.portSchemas ?? void 0),
+    semantics: source.semantics
+  };
+}
+function definitionContractHash2(source) {
+  return contentHash2(definitionContract2(source));
+}
 function register2(d) {
   const existing = types2.get(d.id);
   if (existing)
-    refuseUnlessIdentical2(existing, d, `duplicate type id: ${d.id}`, DESCRIPTOR_DISPLAY_KEYS2);
+    refuseUnlessSameHash2(definitionContractHash2(existing), definitionContractHash2(d), `duplicate type id: ${d.id}`);
   checkWritePublishes2(d);
   checkNoAuthoredSettings2(d);
   checkNoSettingsPort2(d);
   checkScriptPointsAccept2(d);
+  checkCausesEvent2(d);
+  checkNoAmbientExtras2(d);
   checkModeTitled2(d);
   checkDisplayText2(d);
+  checkBandDeclarations2(d, types2.values());
   assertMessageVerbFloors2(d.sessionShape, d.id);
   assertSessionWrites2(d.sessionShape, d.id);
+  assertTurnControls2(d.sessionShape, d.id);
   assertChannelDecls2(d.sessionShape, d.id);
   const reviewFinding = reviewFieldsFinding2(d);
   if (reviewFinding)
@@ -3196,6 +7762,34 @@ function register2(d) {
     registrationFindings2.delete(d.id);
   types2.set(d.id, d);
   return d;
+}
+var AMBIENT_SCRIPT_EXTRAS2 = ["session"];
+function checkNoAmbientExtras2(d) {
+  for (const [name, slot] of Object.entries(d.slots ?? {})) {
+    const listed = slot.extras ?? [];
+    const ambient = listed.filter((e) => AMBIENT_SCRIPT_EXTRAS2.includes(e));
+    if (ambient.length)
+      throw new Error(`${d.id}: slot '${name}' lists ${ambient.map((e) => `'${e}'`).join(", ")} in its extras \u2014 every script site is handed ${AMBIENT_SCRIPT_EXTRAS2.map((e) => `'${e}'`).join(", ")} already (R32); drop it from the list`);
+  }
+}
+function checkCausesEvent2(d) {
+  if (d.causesEventFrom !== void 0) {
+    if (d.kind !== "outlet" || d.effects !== "write")
+      throw new Error(`'${d.id}' declares causesEventFrom \u2014 only a write outlet causes an event`);
+    if (d.causesEvent)
+      throw new Error(`'${d.id}' declares both causesEvent and causesEventFrom \u2014 one says which event, not both`);
+    if (!d.ports.in?.[d.causesEventFrom])
+      throw new Error(`'${d.id}' names causesEventFrom '${d.causesEventFrom}', which is not one of its in-ports`);
+    return;
+  }
+  if (!d.causesEvent)
+    return;
+  const event = eventById2(d.causesEvent);
+  if (!event)
+    throw new Error(`${d.id}: ${notADeclaredEvent2(d.causesEvent)}`);
+  const base = d.id.replace(/@\d+$/, "");
+  if (!event.causedBy?.includes(base))
+    throw new Error(`'${d.id}' causes '${d.causesEvent}', but that event's causedBy does not name '${base}'. causedBy is the one statement of what causes what \u2014 add '${base}' there, or drop causesEvent (R33)`);
 }
 function checkWritePublishes2(d) {
   if (d.effects !== "write")
@@ -3215,18 +7809,19 @@ function checkNoAuthoredSettings2(d) {
     throw new Error(`${d.id} declares slot '${byKind[0]}' with kind 'settings'. That kind is the substrate's \u2014 derived from \`optional\` and \`effects\`, never authored. Declare 'parameters' for tunables.`);
 }
 function checkNoSettingsPort2(d) {
-  const port = Object.keys(d.ports?.out ?? {}).find((k) => k === "settings" || k.startsWith("settings."));
-  if (port === void 0)
-    return;
-  throw new Error(`${d.id} declares an out-port named '${port}'. '<node>.settings' (and paths under it) is the address of the substrate's own switches \u2014 \`enabled\`, \`review\`, \`mode\` \u2014 which the executor reads at the node and hands to nobody (F39: settings never travel), so an edge from a port of that name would be refused as a setting. Name the port for what it publishes ('result', 'applied', 'chosen').`);
+  for (const port of Object.keys(d.ports?.out ?? {})) {
+    const heard = settingsTravelVerdict2.judge({ kind: "port", definitionId: d.id, port });
+    if (!heard.ok)
+      throw new Error(refusalText2(heard));
+  }
 }
 function checkScriptPointsAccept2(d) {
   for (const p of d.scriptPoints ?? []) {
-    if (typeof p === "string")
-      continue;
-    const accepts = p.accepts;
-    if (Array.isArray(accepts) && accepts.length === 0)
-      throw new Error(`${d.id} declares script point '${String(p.key)}' with accepts: []. A point that accepts no script kind is a hook nothing can attach to \u2014 list the kinds it takes (e.g. ['${TEXT_TRANSFORM_KIND2}']), or omit \`accepts\` for the text-transform default.`);
+    const point = p;
+    const key = typeof point === "string" ? point : String(point?.key);
+    const accepts = typeof point === "string" ? void 0 : point?.accepts;
+    if (!Array.isArray(accepts) || accepts.length === 0)
+      throw new Error(`${d.id} declares script point '${key}' accepting no script kind. A point is { key, accepts, label } \u2014 list the kinds it takes (e.g. ['core:script:text/transform@1']); a point that accepts nothing is a hook nothing can attach to.`);
   }
 }
 var shapeIdOf2 = (s) => typeof s === "string" ? s : s?.id ?? void 0;
@@ -3252,12 +7847,9 @@ function checkDisplayText2(d) {
     findings.push(...settingsSchemaFindings2(slot.schema, `${at}.schema`));
   }
   for (const p of d.scriptPoints ?? []) {
-    if (typeof p === "string")
-      continue;
     const at = `${d.id} scriptPoints[${String(p.key)}]`;
     findings.push(...i18nFindings2(p.label, `${at}.label`));
     findings.push(...i18nFindings2(p.description, `${at}.description`));
-    findings.push(...i18nFindings2(p.i18n, `${at}.i18n`));
   }
   if (d.sessionShape) {
     findings.push(...settingsSchemaFindings2(d.sessionShape.fields, `${d.id} sessionShape.fields`));
@@ -3279,499 +7871,33 @@ function widgetDeclsFindings2(raw, where) {
     const decl2 = w;
     const at = `${where}[${typeof decl2?.id === "string" ? decl2.id : i}]`;
     if (!decl2 || typeof decl2 !== "object") {
-      out.push(`${at}: a widget declaration is an object \u2014 { id, title, surface }`);
+      out.push(`${at}: a widget declaration is an object \u2014 { id, title, component }`);
       return;
     }
     out.push(...i18nFindings2(decl2.title, `${at}.title`, { required: true }));
     out.push(...settingsSchemaFindings2(decl2.settings, `${at}.settings`));
+    out.push(...widgetReadsFindings2(decl2.reads, `${at}.reads`));
+    if (decl2.surface !== void 0)
+      out.push(`${at}.surface: gone \u2014 give \`component\`, and place an \`sp-frame\` inside it for a document`);
+    else if (decl2.component === void 0)
+      out.push(`${at}: names nothing to render \u2014 give \`component\`, a component's slug`);
+    else if (typeof decl2.component !== "string" || !decl2.component)
+      out.push(`${at}.component: a component's slug`);
   });
   return out;
 }
 var describeInletDefinition = (d) => register2({ ...d, kind: "inlet" });
-var describeQueryDefinition = (d) => register2({ ...d, kind: "query" });
-var describeTaskDefinition2 = (d) => register2({ ...d, kind: "task" });
-var describeOracleDefinition = (d) => register2({ ...d, kind: "oracle" });
-var describeOutletDefinition = (d) => register2({ ...d, kind: "outlet" });
 function pin2(descriptor) {
   const version = /@(\d+)$/.exec(descriptor.id)?.[1] ?? "1";
-  const ctor = (config = {}) => ({
+  const ctor = (config2 = {}) => ({
     __node: true,
     descriptor,
-    config
+    config: config2
   });
   return { [`v${version}`]: ctor, id: descriptor.id, descriptor };
 }
 
-// sdk/dist/media.js
-var MEDIA_KINDS = ["image", "audio", "video", "document"];
-
-// sdk/dist/capabilities.js
-var IO_KINDS = ["text", ...MEDIA_KINDS, "embedding", "entities"];
-var KIND_ORDER = new Map(IO_KINDS.map((k, i) => [k, i]));
-var side = (kinds) => [...new Set(kinds)].sort((a, b) => (KIND_ORDER.get(a) ?? 99) - (KIND_ORDER.get(b) ?? 99)).join("+");
-var IoKinds = {
-  text: "text",
-  image: "image",
-  audio: "audio",
-  video: "video",
-  document: "document",
-  embedding: "embedding",
-  entities: "entities"
-};
-function tf(t) {
-  return build(t);
-}
-var build = (t) => `${side(t.in)}->${side(t.out)}`;
-var BAND = {
-  none: "none",
-  emulated: "emulated",
-  native: "native"
-};
-var BAND_ORDER = [BAND.none, BAND.emulated, BAND.native];
-var BANDS = {
-  json_object: [BAND.none, BAND.emulated, BAND.native],
-  json_schema: [BAND.none, BAND.emulated, BAND.native],
-  tools: [BAND.none, BAND.emulated, BAND.native]
-};
-var DEFAULT_BANDS = [BAND.none, BAND.native];
-
-// sdk/dist/promptBlocks.js
-var SHIPPED_PROMPT_BLOCK_IDS = [
-  "currentDate",
-  "instructions",
-  "characters",
-  "personas",
-  "scenario",
-  "worldLore",
-  "history",
-  "relationshipsPerspectives",
-  "relationshipsKnown"
-];
-var BLOCK_LABELS = {
-  currentDate: "Current date",
-  instructions: "Instructions",
-  characters: "Characters",
-  personas: "Personas",
-  scenario: "Scenario",
-  worldLore: "World lore",
-  history: "History",
-  relationshipsPerspectives: "Relationships \u2014 their view",
-  relationshipsKnown: "Relationships \u2014 how others see them"
-};
-var BLOCK_MEMBERS = SHIPPED_PROMPT_BLOCK_IDS.map((key) => ({
-  key,
-  label: { en: BLOCK_LABELS[key] }
-}));
-var SHIPPED_PROMPT_BLOCKS = SHIPPED_PROMPT_BLOCK_IDS.map((id) => ({ id, enabled: true }));
-var PROMPT_BLOCKS_DECL = {
-  type: "list",
-  label: { en: "Prompt blocks" },
-  description: {
-    en: "Which sections the prompt is built from, and in what order. Blocks the selected context template does not render are ignored."
-  },
-  default: SHIPPED_PROMPT_BLOCKS,
-  item: {
-    type: "object",
-    fields: {
-      id: {
-        type: "enum",
-        label: { en: "Block" },
-        of: SHIPPED_PROMPT_BLOCK_IDS,
-        members: BLOCK_MEMBERS
-      },
-      enabled: {
-        type: "boolean",
-        label: { en: "In the prompt" },
-        default: true
-      }
-    }
-  }
-};
-
-// sdk/dist/template.js
-var EXPR = /\{\{\s*([^}]+?)\s*\}\}/g;
-var FOR = /\{%\s*for\s+(\w+)\s+in\s+([\w.]+)\s*%\}/g;
-function extractRefs(src) {
-  const bound = /* @__PURE__ */ new Set();
-  const loopSources = [];
-  for (const m of src.matchAll(FOR))
-    bound.add(m[1]);
-  for (const m of src.matchAll(FOR)) {
-    const parts = m[2].split(".");
-    loopSources.push({
-      root: parts[0],
-      path: parts.slice(1),
-      bound: bound.has(parts[0]),
-      dynamic: false
-    });
-  }
-  const refs = [...loopSources];
-  for (const m of src.matchAll(EXPR)) {
-    const expr = m[1].trim();
-    const dynamic = /[\[\(]/.test(expr);
-    const parts = expr.split(".");
-    refs.push({
-      root: parts[0].replace(/[\[\(].*$/, ""),
-      path: parts.slice(1),
-      bound: bound.has(parts[0].replace(/[\[\(].*$/, "")),
-      dynamic
-    });
-  }
-  return refs;
-}
-function render(src, baseScope) {
-  let out = src;
-  let prev;
-  const scope = { ...baseScope };
-  {
-    const { masked, blocks } = maskLoops(out);
-    out = masked;
-    out = out.replace(/\{%\s*set\s+(\w+)\s*=\s*([^%]+?)\s*%\}/g, (_m, name, expr) => {
-      const raw = expr.trim();
-      scope[name] = /^-?\d+$/.test(raw) ? Number(raw) : /^['"].*['"]$/.test(raw) ? raw.slice(1, -1) : get(scope, raw.split("."));
-      return "";
-    });
-    out = out.replace(/\u0000(\d+)\u0000/g, (_m, i) => blocks[Number(i)]);
-  }
-  out = renderLoops(out, scope);
-  do {
-    prev = out;
-    out = out.replace(/\{%\s*if\s+([^%]+?)\s*%\}((?:(?!\{%\s*if\s)[\s\S])*?)\{%\s*endif\s*%\}/g, (_m, cond, body) => evaluate(cond, scope) ? body : "");
-  } while (out !== prev);
-  return out.replace(EXPR, (_m, expr) => {
-    const v2 = get(scope, expr.trim().split("."));
-    return v2 === void 0 || v2 === null ? "" : String(v2);
-  });
-}
-function evaluate(cond, scope) {
-  const cmp = /^(.+?)\s*(==|!=)\s*(.+)$/.exec(cond.trim());
-  if (!cmp)
-    return Boolean(get(scope, cond.trim().split(".")));
-  const left = get(scope, cmp[1].trim().split("."));
-  const rightRaw = cmp[3].trim();
-  const right = /^-?\d+$/.test(rightRaw) ? Number(rightRaw) : /^['"].*['"]$/.test(rightRaw) ? rightRaw.slice(1, -1) : get(scope, rightRaw.split("."));
-  return cmp[2] === "==" ? left === right : left !== right;
-}
-function get(scope, path) {
-  let cur = scope;
-  for (const k of path) {
-    if (cur === void 0 || cur === null)
-      return void 0;
-    cur = cur[k];
-  }
-  return cur;
-}
-function checkTemplate(src, scope) {
-  const known = Object.keys(scope);
-  const bindings = loopBindings(src);
-  const out = [];
-  const report = (r, base) => out.push({
-    severity: "error",
-    message: r.message ?? `'${base}' does not exist`,
-    fix: r.available?.length ? `'${base}' has: ${r.available.join(", ")}` : "check the shape this template declares \u2014 the path does not exist on it"
-  });
-  for (const ref of extractRefs(src)) {
-    if (ref.dynamic) {
-      out.push({
-        severity: "warning",
-        message: `'${ref.root}' is accessed dynamically and cannot be checked`,
-        fix: "this is allowed \u2014 a computed key is not knowable here, so confirm this one yourself"
-      });
-      continue;
-    }
-    if (ref.bound) {
-      const element = boundType(ref.root, bindings, scope, /* @__PURE__ */ new Set());
-      if (!element)
-        continue;
-      const r2 = resolvePath(element, ref.path, ref.root);
-      if (!r2.ok)
-        report(r2, ref.root);
-      continue;
-    }
-    if (!known.includes(ref.root)) {
-      out.push({
-        severity: "error",
-        message: `'${ref.root}' is not available to this template`,
-        fix: known.length ? `available here: ${known.join(", ")}` : "this template slot declares no variables \u2014 check the node type"
-      });
-      continue;
-    }
-    const r = resolvePath(scope[ref.root], ref.path, ref.root);
-    if (!r.ok)
-      report(r, ref.root);
-  }
-  return out;
-}
-function loopBindings(src) {
-  const out = /* @__PURE__ */ new Map();
-  for (const m of src.matchAll(FOR))
-    out.set(m[1], m[2].split("."));
-  return out;
-}
-function boundType(name, bindings, scope, seen) {
-  const source = bindings.get(name);
-  if (!source || seen.has(name))
-    return void 0;
-  seen.add(name);
-  const [root, ...rest] = source;
-  const decl2 = bindings.has(root) ? boundType(root, bindings, scope, seen) : scope[root];
-  const r = resolvePath(decl2, rest);
-  return r.ok ? elementOf(r.field) : void 0;
-}
-var UNCHECKED = { ok: true, checked: false };
-var INTRINSIC = "length";
-function resolvePath(decl2, path, base = "") {
-  if (decl2 === void 0 || decl2 === "any")
-    return UNCHECKED;
-  if (Array.isArray(decl2)) {
-    if (!path.length)
-      return UNCHECKED;
-    if (decl2.includes(path[0]))
-      return UNCHECKED;
-    return {
-      ok: false,
-      checked: true,
-      at: path[0],
-      available: decl2,
-      message: `'${label(base, [path[0]])}' does not exist`
-    };
-  }
-  let cur = decl2;
-  for (let i = 0; i < path.length; i++) {
-    const seg = path[i];
-    const where = label(base, path.slice(0, i + 1));
-    switch (cur.type) {
-      case "object": {
-        const fields = cur.fields;
-        if (!fields)
-          return UNCHECKED;
-        const next = fields[seg];
-        if (!next)
-          return {
-            ok: false,
-            checked: true,
-            at: seg,
-            available: Object.keys(fields),
-            message: `'${where}' does not exist`
-          };
-        cur = next;
-        break;
-      }
-      case "record": {
-        if (!cur.of)
-          return UNCHECKED;
-        cur = cur.of;
-        break;
-      }
-      case "list": {
-        if (seg === INTRINSIC)
-          return { ok: true, checked: true, field: { type: "number" } };
-        if (!/^\d+$/.test(seg))
-          return {
-            ok: false,
-            checked: true,
-            at: seg,
-            message: `'${where}' does not exist \u2014 '${label(base, path.slice(0, i)) || "this"}' is a list, so it is reached by position. Loop over it and read '${seg}' from each entry instead.`
-          };
-        if (!cur.of)
-          return UNCHECKED;
-        cur = cur.of;
-        break;
-      }
-      default: {
-        if (seg === INTRINSIC && cur.type === "string")
-          return { ok: true, checked: true, field: { type: "number" } };
-        return {
-          ok: false,
-          checked: true,
-          at: seg,
-          message: `'${where}' does not exist \u2014 '${label(base, path.slice(0, i)) || "this"}' is a ${cur.type}.`
-        };
-      }
-    }
-  }
-  return { ok: true, checked: true, field: cur };
-}
-function label(base, path) {
-  return [base, ...path].filter(Boolean).join(".");
-}
-function elementOf(decl2) {
-  if (!decl2 || decl2 === "any" || Array.isArray(decl2))
-    return void 0;
-  if (decl2.type === "list" || decl2.type === "record")
-    return decl2.of;
-  return void 0;
-}
-function maskLoops(src) {
-  const blocks = [];
-  let out = "";
-  let i = 0;
-  const FOR_OPEN = /\{%\s*for\s/g;
-  const TAG = /\{%\s*(for|endfor)\b[^%]*%\}/g;
-  while (i < src.length) {
-    FOR_OPEN.lastIndex = i;
-    const open = FOR_OPEN.exec(src);
-    if (!open) {
-      out += src.slice(i);
-      break;
-    }
-    out += src.slice(i, open.index);
-    let depth = 0;
-    TAG.lastIndex = open.index;
-    let m;
-    let end = -1;
-    while (m = TAG.exec(src)) {
-      if (m[1] === "for")
-        depth++;
-      else if (--depth === 0) {
-        end = m.index + m[0].length;
-        break;
-      }
-    }
-    if (end === -1) {
-      out += src.slice(open.index);
-      break;
-    }
-    out += `\0${blocks.push(src.slice(open.index, end)) - 1}\0`;
-    i = end;
-  }
-  return { masked: out, blocks };
-}
-function renderLoops(src, scope) {
-  const { masked, blocks } = maskLoops(src);
-  if (!blocks.length)
-    return src;
-  return masked.replace(/\u0000(\d+)\u0000/g, (_m, idx) => {
-    const block = blocks[Number(idx)];
-    const head = /^\{%\s*for\s+(\w+)\s+in\s+([\w.]+)\s*%\}/.exec(block);
-    if (!head)
-      return block;
-    const body = block.slice(head[0].length, block.lastIndexOf("{%"));
-    const items = get(scope, head[2].split("."));
-    if (!Array.isArray(items))
-      return "";
-    return items.map((item, i) => render(body, {
-      ...scope,
-      [head[1]]: item,
-      loop: { index: i + 1, index0: i, revindex: items.length - i, length: items.length }
-    })).join("");
-  });
-}
-
-// sdk/dist/engines.js
-var engines = /* @__PURE__ */ new Map();
-function defineEngine(e) {
-  const existing = engines.get(e.id);
-  if (existing)
-    refuseUnlessIdentical2(existing, e, `duplicate template engine id: ${e.id}`, {
-      display: ["label"]
-    });
-  engines.set(e.id, e);
-  return e;
-}
-function jinjaCost(source, count) {
-  const loops = [
-    ...source.matchAll(/\{%\s*for\s+\w+\s+in\s+(\w+)\s*%\}([\s\S]*?)\{%\s*endfor\s*%\}/g)
-  ];
-  const perIteration = {};
-  let body = source;
-  for (const m of loops) {
-    const literal = m[2].replace(/\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\}/g, "");
-    perIteration[m[1]] = (perIteration[m[1]] ?? 0) + count(literal);
-    body = body.replace(m[0], "");
-  }
-  const fixedLiteral = body.replace(/\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\}/g, "");
-  return { fixed: count(fixedLiteral), perIteration, exact: true };
-}
-var jinja2 = defineEngine({
-  id: "core:template/jinja2@1",
-  label: "Jinja2",
-  render,
-  extract: (s) => [...new Set(extractRefs(s).map((r) => r.path.join(".")))],
-  check: checkTemplate,
-  costProfile: jinjaCost
-});
-var plain = defineEngine({
-  id: "core:template/plain@1",
-  label: "Plain text",
-  render: (s) => s,
-  extract: () => [],
-  check: () => [],
-  costProfile: (s, count) => ({
-    fixed: count(s),
-    perIteration: {},
-    exact: true
-  })
-});
-var handlebars = defineEngine({
-  id: "core:template/handlebars@1",
-  label: "Handlebars",
-  render: () => {
-    throw new Error("the Handlebars engine is host-supplied: core renders with its own registered helper set, and a second implementation here would differ in ways that read as template bugs");
-  },
-  // `{{a.b}}`, `{{#each xs}}`, `{{#if x}}` — enough to answer "what does this template
-  // reference", which is what variable-awareness needs (16 §4).
-  // Two patterns, not one: a single pattern with an optional keyword backtracks on
-  // `{{/each}}` and reports `each` as a variable, and a diagnostics list with helper
-  // names in it teaches a user to distrust the panel.
-  // One pass, in source order. The lookahead skips closing tags outright —
-  // without it, `{{/each}}` backtracks into reporting `each` as a variable.
-  extract: (s) => {
-    const found = /* @__PURE__ */ new Set();
-    for (const m of s.matchAll(/\{\{(?!\/)#?\s*(?:each|if|unless|with)?\s*([\w.]+)/g))
-      if (m[1] && m[1] !== "this")
-        found.add(m[1]);
-    return [...found];
-  },
-  check: () => [],
-  // Not exact: the helper set can expand a reference into arbitrary text, so a
-  // character count is an estimate and says so (16 §7a).
-  costProfile: (s, count) => ({
-    fixed: count(s),
-    perIteration: {},
-    exact: false
-  })
-});
-var liquid = defineEngine({
-  id: "core:template/liquid@1",
-  label: "Liquid",
-  render: () => {
-    throw new Error("the Liquid engine is host-supplied: core renders with its own registered tag and filter set, and a second implementation here would differ in ways that read as template bugs");
-  },
-  // `{{ a.b }}`, `{% for x in xs %}`, `{% if x %}` — enough to answer "what does this
-  // template reference", which is what variable-awareness needs (16 §4). Filters,
-  // literals and the loop's own binding are excluded: a diagnostics list with
-  // `upcase` or `"quoted"` in it teaches a user to distrust the panel.
-  extract: (s) => {
-    const found = /* @__PURE__ */ new Set();
-    for (const m of s.matchAll(/\{\{-?\s*([A-Za-z_][\w.]*)/g))
-      found.add(m[1]);
-    for (const m of s.matchAll(/\{%-?\s*(?:if|elsif|unless|case|when|assign\s+\w+\s*=|echo)\s+([A-Za-z_][\w.]*)/g))
-      found.add(m[1]);
-    for (const m of s.matchAll(/\{%-?\s*(?:for|tablerow)\s+\w+\s+in\s+([A-Za-z_][\w.]*)/g))
-      found.add(m[1]);
-    return [...found];
-  },
-  check: () => [],
-  // Not exact, for the same reason Handlebars is not: a filter or a custom tag can
-  // expand a reference into arbitrary text (16 §7a).
-  costProfile: (s, count) => ({
-    fixed: count(s),
-    perIteration: {},
-    exact: false
-  })
-});
-var templateOf = (engine) => (source) => ({ engine: engine.id, source });
-var jinja = templateOf(jinja2);
-var text = templateOf(plain);
-
-// contracts/src/index.ts
-var streamingParam = () => ({
-  type: "enum",
-  of: ["auto", "off"],
-  default: "auto",
-  description: "auto streams when a reader is listening; off sends one request and waits, which is cheaper for background stages."
-});
+// ../serene-pub-sdk/contracts/src/inlets.ts
 var userMessage = pin2(
   describeInletDefinition({
     id: "core:inlet/user-message@1",
@@ -3847,6 +7973,44 @@ var userMessage = pin2(
          */
         characterId: S2.rowIds,
         /**
+         * Who **pressed** — the reference of whoever sent the message
+         * or fired the action this run answers (G9, 2026-09-17).
+         *
+         * `user:<id>` for a person with no presence in the session,
+         * `character:<id>` when they hold a persona here — their
+         * persona is a character (0132), so a line written as them is
+         * written as that character — and, when an answer pipeline
+         * pressed on a participant's behalf, that participant's own
+         * reference, so the AI-portrayed presser is named rather than
+         * the machinery that spoke for them.
+         *
+         * ⚠ **Not `speaker`.** `speaker` is whose turn it is — who the
+         * reply comes out as — and on nearly every turn the two differ:
+         * a person types and a character answers. This is the other
+         * end of that sentence, and the port a spec wires into
+         * `core:outlet/create-message@1`'s `speaker` when it wants to
+         * write a line AS the person who pressed: the host already had
+         * the path (`speaker: 'user:<id>'` writes a user-role row) and
+         * no inlet carried the reference to put in it, so a plugin that
+         * wanted the player's own line had to ride it on the model's
+         * reply as a block (Battleship, plan §12).
+         *
+         * Never null on a turn or a fire: a run has an owner, and the
+         * owner is a person. Absent only where the inlet is resolved
+         * without one, which no shipped path does.
+         */
+        presser: S2.participantRef,
+        /**
+         * The cast members a press collected (lair pass R3,
+         * 2026-09-28): `character:<id>` references, for an action
+         * declaring `collects.recipients` — picked in the collect
+         * modal, and validated by the host (seated and enabled, no
+         * duplicates, within the declared `min` and `max`) before
+         * the run starts. Absent on a turn and on every press of an
+         * action that collects none.
+         */
+        recipients: S2.participantRefs,
+        /**
          * Values for the mode's declared `fields` (19 §1), filtered to
          * the declared schema keys — the supply side of the round
          * trip: declaration → chat settings → chat row → this port →
@@ -3855,11 +8019,12 @@ var userMessage = pin2(
         fields: S2.json,
         /**
          * Text an in-progress reply has already produced, when this turn
-         * is a **continue** (ruling 2026-09-08, D-2).
+         * is an **extend** (ruling 2026-09-08, D-2; the verb was `continue`
+         * until 2026-09-28).
          *
          * Empty on every other turn, which is nearly all of them. It is
-         * here rather than on a `continue`-only input type because a
-         * continue is the standard chat's own verb — it answers the same
+         * here rather than on an `extend`-only input type because an
+         * extend is the standard chat's own verb — it answers the same
          * event, in the same session, from the same cast — and a second
          * input type would restate this one's `sessionShape`, which is
          * the thing `side-character-turn@1`'s note says a shape-bearing
@@ -3874,7 +8039,7 @@ var userMessage = pin2(
         continuationPrefill: S2.text,
         /**
          * The reply row this turn re-drives, when it is a regenerate, a
-         * swipe or a continue of a message that already exists. Null on
+         * swipe or an extend of a message that already exists. Null on
          * a fresh turn, which is nearly all of them.
          *
          * The pipeline owns its reply row (R-17): a fresh turn's row is
@@ -3949,7 +8114,32 @@ var userMessage = pin2(
          * branches on it at a junction, and a junction can only read
          * what a port carries.
          */
-        channel: S2.text
+        /**
+         * The session's **settings document** (PLAN-turn-order §4.12,
+         * R13): every setting a person can see in session settings,
+         * resolved once per run by the host and handed in here —
+         * title, guests, genre fields (cascade applied, §4.13),
+         * scenario, lorebook, tags, channels, the cast with its
+         * envoys, the session-scope rebinds and param overrides per
+         * bound spec, the turn-order state, `metadata` (read-only)
+         * and the annex. `$.input.session.fields.tone` reads in any
+         * spec, and no node re-queries a table for a setting.
+         */
+        session: S2.sessionSettings,
+        channel: S2.text,
+        /**
+         * **How this turn was reached** (lair pass R8, 2026-09-28) —
+         * the fired turn entry's `via`: `strategy`, `script` or
+         * `voice` for a prepared turn, `pick` for one a person chose,
+         * and **`narrate`** when the press was the `core#narrate` turn
+         * control (the genre's own voice asked to narrate what happens
+         * next). A verb re-driving a row carries the `via` of the run
+         * that created it, so a regenerated narration narrates again.
+         * Empty when nothing says (an action's fire). A genre routes
+         * on it at a junction — the Lair narrates on `narrate` ahead
+         * of every other branch.
+         */
+        via: S2.text
       }
     }
   })
@@ -3972,8 +8162,27 @@ var builtInRequest = pin2(
         index: S2.json,
         /** A branch's fork point — the last message the copy keeps. */
         fromMessage: S2.rowIds,
+        /**
+         * The session's **settings document** (PLAN-turn-order §4.12,
+         * R13): every setting a person can see in session settings,
+         * resolved once per run by the host and handed in here —
+         * title, guests, genre fields (cascade applied, §4.13),
+         * scenario, lorebook, tags, channels, the cast with its
+         * envoys, the session-scope rebinds and param overrides per
+         * bound spec, the turn-order state, `metadata` (read-only)
+         * and the annex. `$.input.session.fields.tone` reads in any
+         * spec, and no node re-queries a table for a setting.
+         */
+        session: S2.sessionSettings,
         /** A branch's name. */
-        title: S2.text
+        title: S2.text,
+        /**
+         * A person's sprite for the line: `{ set, label }`, or null to
+         * clear it (DESIGN-sprites §6) — a `sprite-pick@1`, the shape a
+         * picker publishes, so `core:outlet/show-sprite@1` takes one
+         * shape from both. Read by `core:spec/show-sprite`.
+         */
+        sprite: S2.spritePick
       }
     }
   })
@@ -3998,8 +8207,72 @@ var sessionCreated = pin2(
          * before the session existed.
          */
         request: S2.json,
+        /**
+         * The session's **settings document** (PLAN-turn-order §4.12,
+         * R13): every setting a person can see in session settings,
+         * resolved once per run by the host and handed in here —
+         * title, guests, genre fields (cascade applied, §4.13),
+         * scenario, lorebook, tags, channels, the cast with its
+         * envoys, the session-scope rebinds and param overrides per
+         * bound spec, the turn-order state, `metadata` (read-only)
+         * and the annex. `$.input.session.fields.tone` reads in any
+         * spec, and no node re-queries a table for a setting.
+         */
+        session: S2.sessionSettings,
         /** Values for the genre's declared fields, filtered to the schema. */
         fields: S2.json
+      }
+    }
+  })
+);
+var sessionEvent = pin2(
+  describeInletDefinition({
+    id: "core:inlet/session-event@1",
+    i18n: {
+      name: { en: "Session event" },
+      description: {
+        en: "Fires whenever something happens in a session \u2014 a message lands, the cast changes, a setting moves. The pipeline that answers it reads what happened and why."
+      }
+    },
+    /**
+     * The event payloads this inlet reads: a spec may lock it to several
+     * events only when every one carries one of these. A session change, a
+     * cast change (member-added/-removed included), an annex change, and
+     * the envelope every event a package declared arrives in — its own
+     * payload is the envelope's `payload`.
+     */
+    payloads: [S2.sessionChange, S2.castChange, S2.annexChange, S2.recordedEvent],
+    ports: {
+      out: {
+        /** The event id that fired — `core:event/message-completed@1`. */
+        event: S2.text,
+        sessionId: S2.rowIds,
+        /** The event's own payload, as its registry entry's shape declares it. */
+        payload: S2.json,
+        /** Why it fired (`EventCause`). Carried through to the write. */
+        cause: S2.json,
+        /** When, as epoch milliseconds — what an order `basedOnAt` answers. */
+        at: S2.json,
+        sessionScope: S2.sessionScope,
+        /**
+         * The session's **settings document** (§4.12, R13), resolved
+         * once per run by the host after the write that caused this
+         * event — so the cast below is the cast as it is now, and no
+         * node needs a cast read of its own.
+         */
+        session: S2.sessionSettings,
+        /**
+         * The settings document's **cast**, on its own port (PLAN
+         * §8 (17)): what `core:query/session-cast@1` publishes,
+         * envoys included, projected from `session` by the host.
+         *
+         * A port rather than a path, because an edge is `{ node,
+         * port }` and nothing in the graph addresses a field inside
+         * a port's value. §4.5 wires the pool's `cast` from the
+         * document; this is that wire, with the shape the pool's
+         * in-port declares.
+         */
+        cast: S2.sessionCast
       }
     }
   })
@@ -4077,12 +8350,24 @@ var sideCharacterTurn = pin2(
          * carrying a free-form name is not a reference to anybody.
          */
         sideCharacter: S2.json,
+        /**
+         * The session's **settings document** (PLAN-turn-order §4.12,
+         * R13): every setting a person can see in session settings,
+         * resolved once per run by the host and handed in here —
+         * title, guests, genre fields (cascade applied, §4.13),
+         * scenario, lorebook, tags, channels, the cast with its
+         * envoys, the session-scope rebinds and param overrides per
+         * bound spec, the turn-order state, `metadata` (read-only)
+         * and the annex. `$.input.session.fields.tone` reads in any
+         * spec, and no node re-queries a table for a setting.
+         */
+        session: S2.sessionSettings,
         /** Values for the genre's declared fields, filtered to the schema. */
         fields: S2.json,
         /**
          * The row this turn re-drives, on the same terms as
          * `user-message@1`'s port of the same name: a regenerate, swipe
-         * or continue of a side character's line routes back to the
+         * or extend of a side character's line routes back to the
          * narrate-character spec, and its placeholder claims the verb's
          * row through this instead of inserting a second one. Null on
          * a fresh turn.
@@ -4095,3940 +8380,6 @@ var sideCharacterTurn = pin2(
          */
         sessionChanges: S2.json
       }
-    }
-  })
-);
-var sessionHistory = pin2(
-  describeQueryDefinition({
-    id: "core:query/session-history@1",
-    i18n: { name: { en: "Session history" } },
-    timeoutMs: 2e3,
-    slots: {
-      /**
-       * ⚠ No `template` slot, and there was one.
-       *
-       * It declared "how each chat message is written into the context",
-       * and three things were true of it: no binding ever read it, no row
-       * was ever seeded for its pool, and so the panel rendered a picker
-       * with **nothing in it** on every pipeline that used this node. A
-       * control that cannot be given a value and would not be used if it
-       * could is worse than the absence of the feature — the same
-       * judgement `variableLayouts.ts` records about a layout for
-       * `characterLore`.
-       *
-       * If per-message wording becomes configurable, it belongs on
-       * `core:task/process-messages@1`, which is what actually formats a
-       * line. This node fetches rows.
-       */
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: {
-          /**
-           * ⚠ The default is **100 because 100 is what every install
-           * has been getting**, not because 100 was chosen.
-           *
-           * It read 40 here and nothing read it: the binding took
-           * `input.limit`, a key nothing supplies, and fell through to
-           * a literal 100 on every run. Wiring the control while
-           * leaving the declared number at 40 would have moved the
-           * transcript window from 100 to 40 on every install at
-           * defaults — a retrieval change smuggled in behind a typing
-           * fix. So the declaration is corrected to the effective
-           * value first; changing the number is a separate decision,
-           * made against the measure corpus.
-           *
-           * Exactly the ruling `topK` got (2026-09-07), for exactly
-           * the same defect.
-           */
-          limit: {
-            type: "integer",
-            default: 100,
-            description: "How many recent messages are considered for the context."
-          },
-          /**
-           * The channel this history reads (20 §7). A session's
-           * lanes are the mode's declaration; a pipeline chooses
-           * which one builds its context — the map narrator reads
-           * `map`, the chat pipeline reads `main`, and a custom
-           * spec may do otherwise on purpose.
-           */
-          channel: {
-            type: "string",
-            default: "main",
-            description: "Which of the session's channels this history reads. The chat log is 'main'."
-          },
-          /**
-           * The transcript's intent, on the node that produces the
-           * transcript (R-7 P5, built 2026-09-16 — see
-           * `bandIntentFields`). `weight: 0.4` and `minInclude: 6`
-           * were here once, moved to the ranker's per-source map as
-           * `share.messages` and `minEntries.messages`, and are back
-           * where 16 §5a always said they belonged, at the numbers
-           * the map held: half the window is `MESSAGE_FILL_FRACTION`,
-           * and six is the minimum the map carried for the one band
-           * R6 allows one.
-           *
-           * ⚠ This node ranks **no candidates** in any shipped spec
-           * — `main` carries the transcript rows for
-           * `process-messages`, and `assemble` builds the transcript
-           * from those, never from ranked candidates. Its intent
-           * still reaches the ranker, on the `band` out-port a spec
-           * concatenates in with the lore, and its `share` is what
-           * halves the pool the lore sources divide: the
-           * conversation's slice is reserved and whatever it does
-           * not spend is swept to the others, exactly as the map's
-           * `messages: 0.5` did. `maxEntries` and `minEntries` bind
-           * only when a spec does rank message candidates (an
-           * `entity-search` `messages` port, a compression region);
-           * they are declared at the map's values so that spec
-           * inherits what every install has stored, not so a person
-           * moving them today sees a prompt change — they will not.
-           */
-          share: {
-            type: "number",
-            min: 0,
-            default: 0.5,
-            quick: true,
-            i18n: { en: "Share \u2014 conversation" },
-            description: {
-              en: "How much of the context window the conversation may take, relative to every other source. What it does not spend is handed to the lore. Set to zero to give the whole window to the other sources."
-            }
-          },
-          maxEntries: {
-            type: "integer",
-            min: 0,
-            default: 50,
-            i18n: { en: "Most entries \u2014 conversation" },
-            description: {
-              en: "A ceiling on how many retrieved messages may reach the prompt as ranked entries, whatever the share. The transcript itself is sized by the window, not by this."
-            }
-          },
-          minEntries: {
-            type: "integer",
-            min: 0,
-            default: 6,
-            i18n: { en: "Always keep at least" },
-            description: {
-              en: "Recent messages kept as ranked entries whatever the shares say, so a lore-heavy chat stays readable. Dropped when there is no room. Lore has no minimum \u2014 it competes on score (R6)."
-            }
-          },
-          /**
-           * Read, at last (R-7 P5; it was declared and read by nothing
-           * from the day it was written, allow-listed in the
-           * declared-reads guard until this landed). `normal` is no
-           * ordering at all; see `BAND_PRIORITIES` in the SDK for
-           * what the other three do to the ranker's sweep.
-           */
-          priority: {
-            type: "enum",
-            of: BAND_PRIORITIES,
-            default: "normal",
-            i18n: { en: "Priority \u2014 conversation" },
-            description: {
-              en: "How strongly the conversation resists being trimmed once the shares are spent \u2014 'always' keeps every message the window can hold."
-            }
-          }
-        }
-      }
-    },
-    ports: {
-      /**
-       * ⚠ No `budget` in-port, and there was one (culled 2026-09-16,
-       * R-12). It was declared and read by nothing: the window this
-       * node fetches is `params.limit`, a count of messages, and a
-       * token budget arriving here had no reader and no spec wiring it.
-       * Fitting history to a budget is `core:task/rank-hybrid@1`'s job,
-       * on ITS `budget` port.
-       */
-      in: { scope: S2.sessionScope },
-      out: {
-        /**
-         * Transcript rows, on both — `messages@1` (was
-         * `context-candidates@1` until 2026-09-17, U5d review W9: the
-         * value had always been rows, for `process-messages` and
-         * `prose-transcript`, and the intent rides `band` alone).
-         * Neither is a candidates list (R-a, the same day): a spec that
-         * wires either into a merge, a concat or `assemble`'s
-         * `candidates` gets a `validate()` warning naming `band` — the
-         * host drops rows handed as candidates rather than ranking them.
-         */
-        main: S2.messages,
-        messages: S2.messages,
-        /**
-         * The conversation's **band intent**, alone — a candidates
-         * list holding one element and no items (`BandIntent`), for a
-         * spec to concatenate in with the lore so the ranker reserves
-         * the transcript's slice. Its own port because `main` and
-         * `messages` carry transcript rows for `process-messages`, and
-         * an intent element ahead of them would be read as a message.
-         * Opens with a band-intent element (and holds nothing else)
-         * — readers call `splitCandidates()`.
-         */
-        band: S2.candidates
-      }
-    }
-  })
-);
-var LEXICAL_SCORING = {
-  type: "enum",
-  default: "overlap",
-  i18n: { en: "Relevance balance" },
-  members: [
-    {
-      key: "overlap",
-      i18n: { en: "Raw overlap" },
-      description: {
-        en: "Every repeat of a word counts again, so a longer entry has more chances to score."
-      }
-    },
-    {
-      key: "balanced",
-      i18n: { en: "Length-aware" },
-      description: {
-        en: "A repeated word stops adding as much, and an entry is judged against how long lorebook entries usually are. Better when entries differ a lot in length."
-      }
-    }
-  ],
-  description: {
-    en: "How an entry's own wording is weighed when deciding how relevant it is to what is being said."
-  }
-};
-var TRIGRAM_FOLDING = {
-  type: "number",
-  default: 0,
-  min: 0,
-  max: 1,
-  i18n: { en: "Match near-misses" },
-  description: {
-    en: "How much a keyword that is nearly present counts \u2014 a different ending, a typo, or a language that does not put spaces between words. 0 requires an exact match; try 0.5 to turn it on."
-  }
-};
-var TITLE_WEIGHT = {
-  type: "number",
-  default: 1,
-  min: 0,
-  max: 5,
-  i18n: { en: "Title counts extra" },
-  description: {
-    en: "How much more a word in an entry's title counts than the same word among its keywords. 1 treats them alike."
-  }
-};
-var GUARANTEED_MESSAGES = {
-  type: "integer",
-  default: 10,
-  min: 1,
-  i18n: { en: 'Messages that count as "now"' },
-  description: "How much of the recent conversation counts as the current moment when judging relevance \u2014 which characters are present, and which words the scene is actually using. Separate from how far back a keyword may fire from."
-};
-var ADMIT_THRESHOLD = {
-  type: "number",
-  default: 0,
-  min: 0,
-  max: 1,
-  quick: true,
-  i18n: { en: "Find without keywords" },
-  description: {
-    en: "How readily an entry is brought in on relevance alone when none of its keywords matched \u2014 the names the conversation is using, and the distinctive words it shares with the entry. 0 keeps keywords the only way in; try 0.3 to turn it on."
-  }
-};
-var bandIntentFields = (band, defaults) => ({
-  share: {
-    type: "number",
-    min: 0,
-    default: defaults.share,
-    quick: true,
-    i18n: { en: `Share \u2014 ${band.label}` },
-    description: {
-      en: `How much of the context window ${band.noun} may take, relative to every other source. The ranker normalises the shares it is handed; set this to zero to leave ${band.noun} out.`
-    }
-  },
-  maxEntries: {
-    type: "integer",
-    min: 0,
-    ...defaults.maxEntries === void 0 ? {} : { default: defaults.maxEntries },
-    i18n: { en: `Most entries \u2014 ${band.label}` },
-    description: {
-      en: `A ceiling on how many entries ${band.noun} may contribute, whatever its share.`
-    }
-  },
-  priority: {
-    type: "enum",
-    of: BAND_PRIORITIES,
-    default: "normal",
-    i18n: { en: `Priority \u2014 ${band.label}` },
-    description: {
-      en: `How strongly ${band.noun} resists being trimmed once the shares are spent \u2014 'high' and 'low' sort its entries ahead of or behind the others when leftover room is handed out; 'always' keeps every entry the window can hold.`
-    }
-  }
-});
-var LORE_BANDS = {
-  worldLore: {
-    band: { label: "world lore", noun: "world lore" },
-    defaults: { share: 0.1667, maxEntries: 20 }
-  },
-  characterLore: {
-    band: { label: "character lore", noun: "character lore" },
-    defaults: { share: 0.1667, maxEntries: 15 }
-  },
-  history: {
-    band: { label: "history", noun: "history entries" },
-    defaults: { share: 0.1666, maxEntries: 10 }
-  }
-};
-var bandIntentFieldsOf = (band) => {
-  const f = bandIntentFields(LORE_BANDS[band].band, LORE_BANDS[band].defaults);
-  return {
-    [`${band}Share`]: f.share,
-    [`${band}MaxEntries`]: f.maxEntries,
-    [`${band}Priority`]: f.priority
-  };
-};
-var lorebookTriggers = pin2(
-  describeQueryDefinition({
-    id: "core:query/lorebook-triggers@1",
-    i18n: { name: { en: "Lorebook triggers" } },
-    timeoutMs: 2e3,
-    slots: {
-      /**
-       * ⚠ No `template` slot, and there was one — a *source* template for
-       * "how one triggered entry is written into the context".
-       *
-       * Nothing read it and nothing seeded a row for it, so it rendered as
-       * an empty picker. A source template belongs on the node whose job
-       * is the rendering — a `render-entries` task, when one is bound
-       * (culled unbound, plans/29 R-2); two declarations of one idea, one
-       * of them inert, is how they drift.
-       */
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: {
-          /**
-           * The three bands' intents, first, as on the lanes (R-7
-           * P5; U3b review W1, 2026-09-16). This node produces world
-           * lore, character lore AND history through one port, so it
-           * declares all three — namespaced, `worldLoreShare` … —
-           * and publishes three band intents at the head of its
-           * candidates. Same defaults and labels as the three lanes,
-           * from `LORE_BANDS`, so the narrator's split is the reply's
-           * split until somebody moves one. Before this the node
-           * declared no intent at all and the ranker fell back to its
-           * own table for every lore band — the same numbers, but a
-           * tuned share on `narrate`'s ranker had nowhere to move to
-           * (0135 culled it) and nothing on this node could be tuned.
-           */
-          ...bandIntentFieldsOf("worldLore"),
-          ...bandIntentFieldsOf("characterLore"),
-          ...bandIntentFieldsOf("history"),
-          /**
-           * 10, matching `DEFAULT_RETRIEVAL.scanDepth` — the value the
-           * scan actually ran on while this declaration said 3 and
-           * nothing read it.
-           *
-           * Round-sized on purpose. A group session with five
-           * characters takes five messages to come back round, so a
-           * depth of 3 cannot see the turn it belongs to: the window
-           * has already slid past where the round began. Scan depth
-           * has to be at least a round, and a round grows with the
-           * cast.
-           */
-          scanDepth: {
-            type: "integer",
-            default: 10,
-            i18n: { en: "Messages scanned for keywords" },
-            description: "How many recent messages are scanned for lorebook keywords."
-          },
-          /**
-           * On this type as well as on `loreSlots`, for the reason its
-           * three siblings below give: the narrator runs its lore
-           * through this type, and this number reaches the same
-           * `keywordQuery` from the same `retrievalParamsFrom` seam —
-           * so a control that exists on the reply pipeline and not on
-           * the narrator is a difference no user could discover a
-           * reason for.
-           */
-          guaranteedMessages: GUARANTEED_MESSAGES,
-          /**
-           * The ceiling, spelled the way its three siblings spell it.
-           *
-           * ⚠ This was `recursionDepth`, and the one letter of
-           * difference is why it looked wired and was not:
-           * `retrievalParamsFrom` reads `maxRecursionDepth`, so the
-           * number this node stored was handed to nothing and the
-           * narrator ran on `DEFAULT_RETRIEVAL` whatever anybody
-           * typed. `narrate@1.10.0`'s own note says "Scan Depth and
-           * Max Recursion Depth rendered, validated and saved here
-           * without ever being read" — half of that was fixed by
-           * wiring the slot, and this is the other half, because the
-           * control it names was never called that here.
-           *
-           * Renamed rather than read under both spellings: two names
-           * for one ceiling is how the four lore types drift apart
-           * again, and `loreSlots` below has the older claim on the
-           * name. Migration 0195 carries the stored values across so
-           * a number somebody typed keeps its meaning — it simply
-           * starts working, which is the 0186 rule.
-           *
-           * Same default and same words as `loreSlots`': the narrator
-           * runs its lore through this type, and a ceiling that
-           * exists on the reply pipeline and not on the narrator is a
-           * difference no user could discover a reason for.
-           */
-          maxRecursionDepth: {
-            type: "integer",
-            default: 0,
-            i18n: { en: "Follow keyword chains this deep" },
-            description: "A ceiling on how far entries may trigger further entries via keywords found in their text, however deep an individual entry asks to go. It never follows links between entries."
-          },
-          /**
-           * ⚠ `caseSensitive`, `useRegex`, `weight` and `minInclude`
-           * were here, and are gone rather than wired. All four
-           * rendered, validated, stored a row and resolved through
-           * every scope layer while `retrievalParamsFrom` read none
-           * of them — plan bug 15, and the last of the dead-control
-           * clusters bug 12 found the first of.
-           *
-           * They divide cleanly in two, and neither half is a control
-           * this node should own:
-           *
-           *   · `caseSensitive` and `useRegex` describe how an *entry*
-           *     matches. `loreSlots` below already states the rule —
-           *     the entry is what somebody is looking at when they
-           *     want to change that — and the entry is where they
-           *     live: `signals.ts` reads `entry.caseSensitive` and
-           *     folds `entry.useRegex` into `entry.matchMode`, both
-           *     columns with their own editor control. A node-level
-           *     copy could only ever be a second answer to a question
-           *     the row already answers.
-           *   · `weight` and `minInclude` are the ranker's, and this
-           *     is the same pair `core:query/session-history@1` lost
-           *     for the same reason: they ask how one source fares
-           *     against everything else, and a node that fetches rows
-           *     cannot see everything else to answer it. They are
-           *     `share` / `signal*` and `minEntries` on
-           *     `core:task/rank-hybrid@1` now, beside their peers,
-           *     where a share is normalised against the others rather
-           *     than free to disagree with them.
-           *
-           * Deleting an address culls it: `reconcileConfigs` removes
-           * the stored value and writes a notice carrying what it
-           * was, which the admin workspace renders. That is the
-           * whole reason a cull is allowed to be the answer here —
-           * before the notices surface had a reader, "delete it" and
-           * "lose it silently" were the same act.
-           */
-          admitThreshold: ADMIT_THRESHOLD,
-          /**
-           * The three lexical-quality controls, on this type as well
-           * as on `loreSlots` and for `admitThreshold`'s reason: the
-           * narrator runs its lore through this type, and a control
-           * that exists on the reply pipeline and not on the narrator
-           * is a difference no user could discover a reason for.
-           */
-          lexicalScoring: LEXICAL_SCORING,
-          trigramFolding: TRIGRAM_FOLDING,
-          titleWeight: TITLE_WEIGHT
-        }
-      }
-    },
-    ports: {
-      /**
-       * ⚠ No `text` in-port, and this and the three lore lanes had one
-       * (culled 2026-09-16, R-12). It was filled by no spec and read by
-       * no handler — the scan derives its window from `scope`, which is
-       * where it actually comes from — and each of the four carried a
-       * standing excuse in `wiring.test.ts` saying so.
-       */
-      in: {
-        scope: S2.sessionScope,
-        /**
-         * **Whose private lore this read is for** — a participant
-         * reference (`character:<id>`), additive, 2026-09-17 (W1).
-         *
-         * Character-lore visibility is decided at the host read against
-         * ONE subject, and until this port existed that subject was the
-         * run's scope — so every voice of a multi-agent turn was handed
-         * every character's private lore, because one gather ran once for
-         * all of them. Wired inside a repeating clause
-         * (`speaker: $.voices.item.context.speaker`) it names the speaker
-         * THIS iteration is writing as, and the host applies the same
-         * binding-visibility gate for that character instead of the
-         * scope's.
-         *
-         * Unwired, absent, or a reference naming nobody the host can
-         * resolve to a character row, the scope decides exactly as it
-         * always did — including `null`, which is the omniscient
-         * narrator's read. A reference is never *widened* here: the port
-         * chooses whose secrets are readable, never whether the gate runs.
-         */
-        speaker: S2.participantRef
-      },
-      // Both open with band-intent elements — three, one per lore band
-      // — ahead of the items; readers call `splitCandidates()`.
-      out: { main: S2.candidates, hits: S2.candidates }
-    }
-  })
-);
-var loreScanFields = () => ({
-  /**
-   * 10, matching `DEFAULT_RETRIEVAL.scanDepth` — the value every scan
-   * has actually run on. This said 3 for as long as the three lore
-   * lanes shipped without a wired `params` slot, so the number was
-   * never handed to anything and the two could not be seen to
-   * disagree.
-   *
-   * Round-sized on purpose. A group session with five characters
-   * takes five messages to come back round, so a depth of 3 cannot
-   * see the turn it belongs to: the window has already slid past
-   * where the round began. Scan depth has to be at least a round,
-   * and a round grows with the cast.
-   */
-  scanDepth: {
-    type: "integer",
-    default: 10,
-    quick: true,
-    shared: true,
-    i18n: { en: "Messages scanned for lore triggers" },
-    description: "How many recent messages are scanned for lore triggers in the conversation. One setting for the three lore lanes \u2014 it applies to world lore, character lore and history. An entry is not reached through its links to other entries."
-  },
-  /**
-   * Beside `scanDepth` because the pair is only legible together:
-   * one is how far back a key may fire from, the other is how much
-   * conversation counts as the present moment. See
-   * `GUARANTEED_MESSAGES`.
-   */
-  guaranteedMessages: { ...GUARANTEED_MESSAGES, shared: true },
-  maxRecursionDepth: {
-    type: "integer",
-    default: 0,
-    shared: true,
-    i18n: { en: "Follow keyword chains this deep" },
-    description: "A ceiling on how far entries may trigger further entries via keywords found in their text, however deep an individual entry asks to go. It never follows links between entries."
-  },
-  /**
-   * Declared on all three lanes, held by one: since R-7 P2 a spec
-   * names ONE owner for the seven knobs and the other lanes read the
-   * owner's slot, so this is one row governing world lore, character
-   * lore and history alike — not one row per lane. World lore
-   * without keys is the case it exists for; the other two sources
-   * take the same answer. A per-source answer is a weight, and
-   * weights live on the source (`bandIntentFields`), not here.
-   */
-  admitThreshold: { ...ADMIT_THRESHOLD, shared: true },
-  /**
-   * One row for the three lanes, like `admitThreshold`: the owner's
-   * value reaches world lore, where entry lengths differ most,
-   * character lore, already narrowed to whoever is speaking, and
-   * dated history — which has no title at all, so the value reaches
-   * it and moves nothing. That is the honest state rather than a
-   * fourth declaration.
-   */
-  lexicalScoring: { ...LEXICAL_SCORING, shared: true },
-  trigramFolding: { ...TRIGRAM_FOLDING, shared: true },
-  titleWeight: { ...TITLE_WEIGHT, shared: true }
-});
-var loreSlots = (band, defaults) => ({
-  params: {
-    kind: "parameters",
-    facet: "weights",
-    schema: {
-      // The lane's own intent first: `share` is the knob a person
-      // reaches for, and on a lane that reads the scan knobs through
-      // the owner it is all the panel shows.
-      ...bandIntentFields(band, defaults),
-      ...loreScanFields()
-    }
-  }
-});
-var worldLore = pin2(
-  describeQueryDefinition({
-    id: "core:query/world-lore@1",
-    i18n: { name: { en: "World lore" } },
-    timeoutMs: 2e3,
-    /**
-     * A chat with no world lore is an ordinary chat, so nothing downstream
-     * needs this to have produced anything — which is also what makes it
-     * safe to switch off entirely. The template guards the block and the
-     * ranker simply has one fewer source.
-     */
-    optional: true,
-    slots: loreSlots(LORE_BANDS.worldLore.band, LORE_BANDS.worldLore.defaults),
-    ports: {
-      // No `text` in-port — see `lorebookTriggers`: the scan reads its
-      // window through `scope` (culled 2026-09-16, R-12).
-      in: { scope: S2.sessionScope },
-      // Both open with a band-intent element — this lane's own — ahead
-      // of the items; readers call `splitCandidates()`.
-      out: { main: S2.candidates, hits: S2.candidates }
-    }
-  })
-);
-var characterLore = pin2(
-  describeQueryDefinition({
-    id: "core:query/character-lore@1",
-    i18n: { name: { en: "Character lore" } },
-    timeoutMs: 2e3,
-    /** As `worldLore`: absent is a normal state, so off is a safe state. */
-    optional: true,
-    slots: loreSlots(LORE_BANDS.characterLore.band, LORE_BANDS.characterLore.defaults),
-    ports: {
-      // No `text` in-port — see `lorebookTriggers`: the scan reads its
-      // window through `scope` (culled 2026-09-16, R-12).
-      in: {
-        scope: S2.sessionScope,
-        /**
-         * **Whose private lore this read is for** — a participant
-         * reference (`character:<id>`), additive, 2026-09-17 (W1).
-         *
-         * Character-lore visibility is decided at the host read against
-         * ONE subject, and until this port existed that subject was the
-         * run's scope — so every voice of a multi-agent turn was handed
-         * every character's private lore, because one gather ran once for
-         * all of them. Wired inside a repeating clause
-         * (`speaker: $.voices.item.context.speaker`) it names the speaker
-         * THIS iteration is writing as, and the host applies the same
-         * binding-visibility gate for that character instead of the
-         * scope's.
-         *
-         * Unwired, absent, or a reference naming nobody the host can
-         * resolve to a character row, the scope decides exactly as it
-         * always did — including `null`, which is the omniscient
-         * narrator's read. A reference is never *widened* here: the port
-         * chooses whose secrets are readable, never whether the gate runs.
-         */
-        speaker: S2.participantRef
-      },
-      // Both open with a band-intent element — this lane's own — ahead
-      // of the items; readers call `splitCandidates()`.
-      out: { main: S2.candidates, hits: S2.candidates }
-    }
-  })
-);
-var historyEntries = pin2(
-  describeQueryDefinition({
-    id: "core:query/history-entries@1",
-    i18n: { name: { en: "History entries" } },
-    timeoutMs: 2e3,
-    /** As the lore queries: a chat with no history is an ordinary chat. */
-    optional: true,
-    // 0.1666, not 0.1667 — see `LORE_BANDS`.
-    slots: loreSlots(LORE_BANDS.history.band, LORE_BANDS.history.defaults),
-    ports: {
-      // No `text` in-port — see `lorebookTriggers`: the scan reads its
-      // window through `scope` (culled 2026-09-16, R-12).
-      in: { scope: S2.sessionScope },
-      // Both open with a band-intent element — this lane's own — ahead
-      // of the items; readers call `splitCandidates()`.
-      out: { main: S2.candidates, hits: S2.candidates }
-    }
-  })
-);
-var vectorSearch = pin2(
-  describeQueryDefinition({
-    id: "core:query/vector-search@1",
-    i18n: { name: { en: "Semantic search" } },
-    timeoutMs: 3e3,
-    /**
-     * A session whose install has no embedding model is an ordinary
-     * session, so producing nothing is a normal outcome and the mechanism can be
-     * switched off entirely — exactly as the lore queries and the entity
-     * mechanism are.
-     */
-    optional: true,
-    slots: {
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: {
-          /**
-           * ⚠ **0 is off, and is the shipped default** — the
-           * convention `maxRecursionDepth`, `admitThreshold` and
-           * `entity-search`'s own caps use, for their reason: this
-           * changes what reaches the model, so it is turned on rather
-           * than arrived at on upgrade.
-           *
-           * A **cap on what this mechanism contributes**, not a cap on what
-           * it looks at — `topK` is that, one field down. The two are
-           * different questions and only this one decides whether the
-           * mechanism is running at all.
-           */
-          maxEntries: {
-            type: "integer",
-            default: 0,
-            min: 0,
-            quick: true,
-            i18n: { en: "Entries found by meaning" },
-            description: "How many lorebook entries this may bring in for being about what the conversation is about, rather than for matching a keyword. Needs an embedding model; 0 turns the whole arm off, try 5. A pipeline that ranks this arm separately reads its per-query lists instead, which this does not cut."
-          },
-          /**
-           * ⚠ **40, and it was 12.** The number never reached the
-           * host: the binding read `input?.topK` — an *in-port* name
-           * this node does not declare — and fell through to a
-           * literal `?? 40` on every run since the mechanism was
-           * written. So 40 is the value every install has actually
-           * been searching at, and 12 is a number that was rendered,
-           * validated, saved and resolved through the whole scope
-           * chain without ever being handed to anything.
-           *
-           * Defaulted to the effective behaviour rather than to the
-           * declared one on purpose. Wiring a control is not a licence
-           * to re-tune every install that never touched it: the fix is
-           * that the number now *means* something, and it means what
-           * it has been doing.
-           *
-           * A cap on what each query *looks at*, which is a different
-           * question from `maxEntries` one field up — that one caps
-           * what the mechanism *contributes*. Raising this widens the
-           * pool the ranker's other signals get to score; raising
-           * `maxEntries` is what decides whether the mechanism runs at
-           * all.
-           */
-          topK: {
-            type: "integer",
-            default: 40,
-            min: 1,
-            i18n: { en: "Closest matches per query" },
-            description: "How many of the closest matches each retrieval query returns. A wider pool for the ranker to score, not a cap on what this arm contributes."
-          },
-          /**
-           * How sharply a weak resemblance is discounted — and
-           * emphatically **not** a minimum.
-           *
-           * ⚠ **This replaced `minScore: 0.35`, and the replacement is
-           * a ruling rather than a rename.** A minimum similarity
-           * removes a row from the pool outright, and a row that is not
-           * in the pool can no longer be found by keyword, by name or
-           * by proximity either — one mechanism's opinion silently
-           * disabling four others. The governing rule is that a weak or
-           * unavailable mechanism *subtracts a signal* and never
-           * removes a candidate, so the cutoff could not stay whatever
-           * number it was set to. (It was never read either; nothing
-           * anywhere consumed `minScore`.)
-           *
-           * What replaces it shapes the **contribution** instead:
-           *
-           *     semantic = cos ** similarityFalloff
-           *
-           * 1 is the raw cosine and is the off position. Above 1 the
-           * curve is convex, fixed at both ends (0→0, 1→1), so a
-           * near-miss loses most of its contribution while a strong
-           * match keeps nearly all of its own — and the row stays in
-           * the pool at every value, which is the whole point.
-           *
-           * ⚠ **Chosen as a shape because a threshold is not
-           * portable.** Cosine distributions are not comparable across
-           * embedding models: one model puts unrelated text at 0.1 and
-           * another at 0.6, so `0.35` means "almost everything" on the
-           * first and "almost nothing" on the second, and an install
-           * that swaps models silently changes what its lorebook
-           * retrieves. An exponent has no cliff to move. It is
-           * strictly monotonic, so it can never reorder this
-           * mechanism's own hits or turn one off — it only decides how
-           * much the semantic signal is allowed to outweigh a keyword
-           * that actually fired.
-           */
-          similarityFalloff: {
-            type: "number",
-            default: 1,
-            min: 1,
-            max: 8,
-            i18n: { en: "Discount weak matches" },
-            description: "How sharply a loose resemblance counts for less than a close one. 1 takes the similarity as it comes; higher pushes vague matches down without ever removing them, so they can still be found by a keyword or a name."
-          }
-        }
-      }
-    },
-    ports: {
-      in: {
-        /**
-         * Several query vectors, one ranked list each — a list, so
-         * `json@1` (was `vector@1` until 2026-09-17, U5d review W9):
-         * what `embed-text@1`'s `vectors` publishes and what the
-         * host's search reads.
-         */
-        vectors: S2.json,
-        scope: S2.sessionScope
-      },
-      out: {
-        main: S2.candidates,
-        hits: S2.candidates,
-        /** One ranked list per query vector, in the order they were given. */
-        lists: S2.json,
-        /**
-         * `cos(i, j)` over `hits`, by index. What MMR needs, without any
-         * embedding leaving the host.
-         */
-        similarity: S2.json
-      }
-    }
-  })
-);
-var entitySearch = pin2(
-  describeQueryDefinition({
-    id: "core:query/entity-search@1",
-    i18n: { name: { en: "Entity search" } },
-    timeoutMs: 2e3,
-    /**
-     * Off by default, so a session with nothing to find is a normal session
-     * and the mechanism can be switched off entirely without anything downstream
-     * noticing — exactly as the two lore queries are.
-     */
-    optional: true,
-    slots: {
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: {
-          /**
-           * ⚠ **0 is off, and is the shipped default** — the
-           * convention `maxRecursionDepth` and `admitThreshold` use,
-           * and for the same reason: this changes what reaches the
-           * model, so it is turned on rather than arrived at on
-           * upgrade.
-           */
-          maxEntries: {
-            type: "integer",
-            default: 0,
-            min: 0,
-            quick: true,
-            i18n: { en: "Entries found by name" },
-            description: "How many lorebook entries this may bring in because the conversation is naming the same people, places and things they do. 0 turns it off; try 5."
-          },
-          /**
-           * Separate from `maxEntries`, because the two answer
-           * different questions and only one of them has somewhere to
-           * go today.
-           */
-          maxMessages: {
-            type: "integer",
-            default: 0,
-            min: 0,
-            i18n: { en: "Earlier messages found by name" },
-            description: "How many earlier messages this may return for naming what the scene is naming. The shipped pipelines do not place retrieved messages into the prompt yet \u2014 the conversation reaches the prompt as the verbatim recent window \u2014 so this returns them for a pipeline that wires them somewhere, and is off by default."
-          },
-          scanDepth: {
-            type: "integer",
-            default: 10,
-            i18n: { en: "Messages read for names" },
-            description: "How many recent messages are read to decide what the scene is currently about."
-          },
-          /**
-           * The mechanism's strength, and it is declared rather than
-           * constant because the graded overlap *compresses* what it
-           * measures: one strongly-shared name saturates around 0.63
-           * and two around 0.86, so a weight sized for a 0/1 signal
-           * would leave the improvement invisible.
-           *
-           * The default is deliberately the keyword weight: one thing
-           * the conversation is naming that not every entry names is
-           * worth about as much as one of an entry's own keys firing,
-           * and the saturation then keeps it strictly below a full
-           * keyword match — so authored keys still win, and this only
-           * ever adds.
-           */
-          entityWeight: {
-            type: "number",
-            default: 0.35,
-            min: 0,
-            max: 1,
-            i18n: { en: "Strength" },
-            description: "How much weight a shared name carries against the other ways an entry can be found. 0 leaves the arm finding things and ranking them last."
-          }
-        }
-      }
-    },
-    ports: {
-      /**
-       * ⚠ **No `text` in-port.** The four lore queries declared one that
-       * nothing filled and nothing read — `loreFor` derives its window
-       * from `scope` — and this declaration refused to ship a fifth with
-       * the same standing excuse written for it. Theirs are culled now
-       * (2026-09-16, R-12); the window comes from `scope`, which is where
-       * it actually comes from.
-       */
-      in: { scope: S2.sessionScope },
-      out: {
-        main: S2.candidates,
-        hits: S2.candidates,
-        /**
-         * Earlier messages, as candidates in the `messages` band.
-         *
-         * A port of its own rather than part of `main`, because the two
-         * are budgeted separately and a pipeline that wants lore found
-         * by name almost certainly does not want half its context
-         * window spent on retrieved transcript by accident.
-         */
-        messages: S2.candidates
-      }
-    }
-  })
-);
-var docsSearch = pin2(
-  describeQueryDefinition({
-    id: "core:query/docs-search@1",
-    i18n: {
-      name: { en: "Docs search" },
-      description: {
-        en: "Finds the documentation sections that share the most words with the recent conversation, so the guide can ground its answer in them."
-      }
-    },
-    timeoutMs: 2e3,
-    optional: true,
-    slots: {
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: {
-          ...bandIntentFields(
-            { label: "documentation", noun: "documentation excerpts" },
-            { share: 0.25, maxEntries: 6 }
-          ),
-          scanDepth: {
-            type: "integer",
-            min: 1,
-            default: 4,
-            quick: true,
-            i18n: { en: "Messages searched" },
-            description: {
-              en: "How many of the most recent messages the documentation is matched against. The newest message counts most."
-            }
-          }
-        }
-      }
-    },
-    ports: {
-      // The scope, like the lore lanes: the newest rows are read through
-      // the host's one message seam (hidden and generating rows excluded
-      // there), so this can sit beside `history` in a parallel gather
-      // rather than after it.
-      in: { scope: S2.sessionScope },
-      out: { main: S2.candidates, candidates: S2.candidates }
-    }
-  })
-);
-var mentionSpans = pin2(
-  describeQueryDefinition({
-    id: "core:query/mention-spans@1",
-    i18n: { name: { en: "Descriptive mentions" } },
-    timeoutMs: 1e3,
-    /**
-     * Producing nothing is the ordinary outcome — most windows describe
-     * nothing — and an install that has not switched the mechanism on must not
-     * be able to lose a turn to it.
-     */
-    optional: true,
-    slots: {
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: {
-          /**
-           * ⚠ **0 is off, and is the shipped default** — the
-           * `maxRecursionDepth` / `admitThreshold` convention.
-           *
-           * **This is the entity-vector mechanism's one switch**, and it is
-           * on the first node of the chain on purpose: switched off,
-           * this returns before reading anything, `embed-text` is
-           * handed no texts and makes no model call, and `entity-link`
-           * returns before its own read. The mechanism costs literally
-           * nothing until somebody asks for it — not a message read,
-           * not an embedding.
-           *
-           * `entity-link.maxLinks` is therefore a ceiling rather than
-           * a second switch and ships non-zero: a feature whose two
-           * controls both default to off is one where turning the
-           * first one up appears to do nothing.
-           */
-          maxMentions: {
-            type: "integer",
-            default: 0,
-            min: 0,
-            quick: true,
-            i18n: { en: "Descriptions to follow up" },
-            description: 'How many descriptive references in the recent messages \u2014 "the captain", "the order" \u2014 are matched against what your entries are called, for entries no keyword reached. Needs an embedding model; 0 turns the whole arm off, try 4.'
-          },
-          scanDepth: {
-            type: "integer",
-            default: 10,
-            i18n: { en: "Messages read for descriptions" },
-            description: "How many recent messages are read for descriptions. A description points at what is being discussed now, so this is deliberately short."
-          }
-        }
-      }
-    },
-    ports: {
-      /** The window comes from `scope`, like the entity mechanism's. */
-      in: { scope: S2.sessionScope },
-      out: {
-        main: S2.json,
-        /** The mentions with their offsets, for a receipt to point at. */
-        mentions: S2.json,
-        /** The same strings in the same order, for the embed Provider. */
-        texts: S2.json
-      }
-    }
-  })
-);
-var entityLink = pin2(
-  describeQueryDefinition({
-    id: "core:query/entity-link@1",
-    i18n: { name: { en: "Entries called by a description" } },
-    /**
-     * `embed-text`'s budget rather than `vector-search`'s, because this node
-     * can *embed*: it brings a bounded slice of the name index up to date
-     * before it reads. Being cut short costs the remainder of that pass and
-     * nothing else — each entry is written before the next is embedded, so
-     * progress survives and the mechanism links whatever is already indexed.
-     */
-    timeoutMs: 5e3,
-    /**
-     * Empty from this node means *the ranker sees the candidate list
-     * unchanged*, never *the ranker sees nothing*: it is wired as the first
-     * source of a concatenation whose second source is the unenriched list.
-     * So every way it can produce nothing — off, no model, an error the
-     * executor recovered as empty — lands on exactly what the ranker would
-     * have seen without it.
-     */
-    optional: true,
-    slots: {
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: {
-          /**
-           * A **ceiling, not the mechanism's switch** — see
-           * `mention-spans.maxMentions`, which is. Non-zero so that
-           * turning the mechanism on with one control does something.
-           */
-          maxLinks: {
-            type: "integer",
-            default: 5,
-            min: 0,
-            i18n: { en: "Most entries linked" },
-            description: "A ceiling on how many entries one turn may have matched to a description. The best matches are kept; this never brings in an entry nothing else found, it only changes where one comes in the order."
-          }
-        }
-      }
-    },
-    ports: {
-      in: {
-        scope: S2.sessionScope,
-        /**
-         * ⚠ **The pool, and the reason this mechanism cannot admit.** It
-         * scores what arrives here and returns it; an entry no other
-         * mechanism produced is not in this list and therefore cannot
-         * be in the output.
-         */
-        candidates: S2.candidates,
-        /** The descriptions, from `core:query/mention-spans@1`. */
-        mentions: S2.json,
-        /** Their embeddings, in the same order. Index alignment is the contract. */
-        vectors: S2.json
-      },
-      out: {
-        main: S2.candidates,
-        candidates: S2.candidates,
-        /** Each link as text — *matched "the captain" → Captain Vell*. */
-        links: S2.json
-      }
-    }
-  })
-);
-var network = pin2(
-  describeQueryDefinition({
-    id: "test:query/network@1",
-    timeoutMs: 1e3,
-    ports: { out: { main: S2.json } }
-  })
-);
-var contextBudget = pin2(
-  describeTaskDefinition2({
-    id: "core:task/context-budget@1",
-    timeoutMs: 500,
-    slots: {
-      /**
-       * Where the window comes from.
-       *
-       * The context window belongs to the sampling config, never to a knob
-       * on a node (17 §1a) — and the executor resolves a `sampling` slot to
-       * the config's switched-on *values*, so this stays a pure Task reading
-       * data it was handed rather than a Query looking one up.
-       *
-       * ⚠ Point this at the same config the generating step uses. A budget
-       * computed against one window and a prompt sent against another is
-       * wrong in the direction that truncates, silently.
-       */
-      sampling: { kind: "sampling", quick: true },
-      /**
-       * The connection the reply is sent on — for the model's own
-       * context window (0114), which caps the sampling config's when
-       * the model states one.
-       *
-       * Shared with the generating step in every shipped spec
-       * (`slot.connectionOf('generate')`), on the same terms as
-       * `sampling` above: the budget has to be sized to the window the
-       * request is actually sent against, and the ONE computation of
-       * that window (R-8) reads both halves off the same resolved pair.
-       */
-      connection: { kind: "connection" },
-      params: {
-        kind: "parameters",
-        schema: {
-          /**
-           * ⚠ There is no `reserveForReply` here, and there was: an
-           * integer defaulting to 512, sitting beside the sampling
-           * config's own `responseTokens` that also defaults to 512. The same mistake as the ranker's `budget: 4096` —
-           * re-entering a number the system already knows, free to
-           * drift from the model actually being called and warning
-           * nobody when it did. Context in, response out: the reserve
-           * *is* the response allowance, so it is read, not typed.
-           */
-          safetyMargin: {
-            type: "number",
-            default: 0.05,
-            description: "Fraction of the window kept free as a buffer against token-count drift."
-          }
-        }
-      }
-    },
-    ports: { out: { main: S2.budget, available: S2.budget } }
-  })
-);
-var mergeCandidates = pin2(
-  describeTaskDefinition2({
-    id: "core:task/merge-candidates@1",
-    timeoutMs: 500,
-    ports: {
-      in: { sources: S2.candidates },
-      out: {
-        // Both open with the band-intent elements the sources carried
-        // (lifted out before the fusion, put back after — a fused rank
-        // is never stamped on one); readers call `splitCandidates()`.
-        main: S2.candidates,
-        candidates: S2.candidates,
-        /** What fused with what — and a complaint when nothing did. */
-        diagnostics: S2.json
-      }
-    }
-  })
-);
-var concatCandidates = pin2(
-  describeTaskDefinition2({
-    id: "core:task/concat-candidates@1",
-    i18n: { name: { en: "Combine candidates" } },
-    timeoutMs: 500,
-    ports: {
-      in: { sources: S2.candidates },
-      out: {
-        // Both open with band-intent elements — the first per band
-        // across every source, hoisted ahead of the items; readers
-        // call `splitCandidates()`.
-        main: S2.candidates,
-        candidates: S2.candidates,
-        /** How many arrived per list, and how many repeats were dropped. */
-        diagnostics: S2.json
-      }
-    }
-  })
-);
-var rankPorts = {
-  in: { candidates: S2.candidates, budget: S2.budget },
-  out: {
-    main: S2.candidates,
-    candidates: S2.candidates,
-    /**
-     * The per-candidate trail: score, included, reason, and the signal
-     * breakdown behind it.
-     *
-     * A declared out-port rather than an implementation detail, because it is
-     * what Assemble allocates from — and because a ranker swapped in by a
-     * plugin has to produce it too, or the budget panel goes blank the moment
-     * anyone changes rankers (16 §5c).
-     */
-    decisions: S2.json
-  }
-};
-var SOURCES = [
-  {
-    key: "messages",
-    i18n: { en: "Conversation" },
-    description: { en: "The chat itself \u2014 what was actually said." },
-    tone: 0
-  },
-  {
-    key: "worldLore",
-    i18n: { en: "World lore" },
-    description: { en: "Lorebook entries about the world." },
-    tone: 1
-  },
-  {
-    key: "characterLore",
-    i18n: { en: "Character lore" },
-    description: { en: "Lorebook entries bound to a character." },
-    tone: 2
-  },
-  {
-    key: "history",
-    i18n: { en: "History entries" },
-    description: { en: "Dated entries recording earlier events." },
-    tone: 3
-  },
-  {
-    key: "relationships",
-    i18n: { en: "Relationships" },
-    description: { en: "The narrative graph. Off by default." },
-    tone: 4
-  }
-];
-var SHARE_NORMALISATION = {
-  type: "enum",
-  of: ["relative", "fixed"],
-  default: "relative",
-  i18n: { en: "How shares divide the window" },
-  description: {
-    en: "'relative' treats each source's share as a ratio against the others, so they always add up to the whole window. 'fixed' reads each share as the fraction of the window it states, scaling them down only when they exceed it."
-  }
-};
-var SIGNAL_WEIGHT_FIELDS = {
-  signalKeyword: {
-    type: "perMember",
-    members: SOURCES,
-    default: {
-      messages: 0,
-      worldLore: 0.35,
-      characterLore: 0.35,
-      history: 0.35,
-      relationships: 0
-    },
-    i18n: { en: "Keyword match" },
-    description: {
-      en: "How much an entry's own trigger keywords appearing in recent messages counts toward its score."
-    }
-  },
-  signalNameMatch: {
-    type: "perMember",
-    members: SOURCES,
-    default: {
-      messages: 0,
-      worldLore: 0.25,
-      characterLore: 0.25,
-      history: 0,
-      relationships: 0
-    },
-    i18n: { en: "Name mentioned" },
-    description: {
-      en: "How much a cast member's name appearing in the entry counts when that character is in the scene."
-    }
-  },
-  /**
-   * Two questions under one name, split by source — bug 16, and it stays split.
-   *
-   * World lore and history ask *how much of what the scene is naming does this
-   * entry name too*; character lore asks *did this entry's own character speak
-   * in the guaranteed window*. A character-lore entry names its own character
-   * by construction, so the first question scores every present character's
-   * private lore alike and distinguishes nothing.
-   *
-   * ⚠ **The world-lore half is graded now, and this weight moved with it**
-   * (design §13.10, retrieval plan phase 3). It used to be a binary substring
-   * test — does the entry's title or keys contain a cast name, `Al` firing on
-   * `Alchemy` — worth exactly `{0, 0.2}`. It is now the rarity-weighted,
-   * word-boundary, two-sided overlap the admission gate already used: what the
-   * conversation named, intersected with what this entry names, weighted so
-   * that a thing every entry mentions counts for nothing.
-   *
-   * That measure **saturates**: about 0.63 for one rare shared entity and 0.86
-   * for two, so at the old 0.2 its live range would have been ~[0.13, 0.17] —
-   * *narrower* than the crude signal it replaces. Grading without re-weighting
-   * makes a signal more correct and less influential at the same time, so the
-   * weight is sized for the measure that is actually running: 0.35, the same
-   * anchor `entity-search`'s own strength uses, which keeps one strongly
-   * shared name worth a little less than an entry whose every key fired.
-   *
-   * Character lore keeps **0.2**. Its measurement did not change, so its
-   * weight must not either.
-   */
-  signalEntityCooccurrence: {
-    type: "perMember",
-    members: SOURCES,
-    default: { messages: 0, worldLore: 0.35, characterLore: 0.2, history: 0, relationships: 0 },
-    i18n: { en: "Shared entities" },
-    description: {
-      en: "How much an entry naming the same people and places as the recent conversation counts. For character lore it asks something else: whether that character has been speaking."
-    }
-  },
-  /**
-   * How much *being about the same thing* counts, as an embedding measures it.
-   *
-   * The fourth mechanism and the only one that needs a model. It arrives on
-   * candidates the semantic mechanism found — `core:query/vector-search@1`, wired
-   * into the reply pipeline as a sibling of the lore lanes — and it is a
-   * **score component**, not a rival ordering: an entry both the keyword scan
-   * and the semantic mechanism found keeps its keyword signals and gains this one,
-   * so agreement between two independent mechanisms compounds by addition and
-   * there is no fusion step to reconcile two incomparable scales.
-   *
-   * ⚠ **Not zero, and that is deliberate.** The `admitThreshold` convention
-   * says a control that changes what reaches the model ships off — and it does
-   * here, one level up: the mechanism's own cap (`vector-search.maxEntries`) is 0, so
-   * nothing carries this signal until somebody raises it. Making *both* the cap
-   * and the weight zero would mean raising the cap changed nothing, which is
-   * the trap a two-switch feature always sets. One switch, and it is the one
-   * named after what it does.
-   *
-   * Sized below a keyword hit on purpose. A cosine above the mechanism's own
-   * threshold is real evidence and weaker evidence than an authored key
-   * firing: keys still guarantee, meaning still only adds.
-   */
-  signalSemantic: {
-    type: "perMember",
-    members: SOURCES,
-    default: {
-      messages: 0,
-      worldLore: 0.3,
-      characterLore: 0.3,
-      history: 0.3,
-      relationships: 0
-    },
-    i18n: { en: "Similar meaning" },
-    description: {
-      en: "How much it counts that an entry is about what the conversation is about, even with no shared words. Needs an embedding model and the semantic arm switched on."
-    }
-  },
-  /**
-   * How much *being called that* counts, as an embedding measures it.
-   *
-   * The fifth mechanism, and the one that catches the reference nothing else
-   * can. It arrives on candidates `core:query/entity-link@1` matched a
-   * **description** in the conversation to one of an entry's **names** —
-   * *"the captain"* → Captain Vell, *"the order"* → The Ashguard Riders.
-   * Neither reference shares a character with its target, so keywords,
-   * trigrams and the gazetteer all miss them.
-   *
-   * ⚠ **Sized to sit strictly below `signalNameMatch`, and that is a rule.**
-   * Invented proper nouns are where embeddings are least reliable — "Vell"
-   * has no learned meaning, so its vector comes from subword fragments and
-   * Vell, Vall and Vela cluster — so exact and trigram matching own invented
-   * names, entity vectors own descriptive references, and a vector link must
-   * never outrank an entry whose title literally occurred. A similarity
-   * cannot exceed 1, so 0.2 against `signalNameMatch`'s 0.25 keeps that true
-   * at every value the mechanism can produce.
-   *
-   * Not zero, for `signalSemantic`'s reason one field up: the mechanism's switch is
-   * `mention-spans.maxMentions` and it is 0, so nothing carries this signal
-   * until somebody raises it. One switch, not two.
-   */
-  signalEntityVector: {
-    type: "perMember",
-    members: SOURCES,
-    default: {
-      messages: 0,
-      worldLore: 0.2,
-      characterLore: 0.2,
-      history: 0.2,
-      relationships: 0
-    },
-    i18n: { en: "Called by a description" },
-    description: {
-      en: 'How much it counts that the conversation described something \u2014 "the captain", "the order" \u2014 that matches what an entry is called. Needs an embedding model and the description arm switched on. Deliberately weaker than an entry whose name was actually said.'
-    }
-  },
-  signalTfidf: {
-    type: "perMember",
-    members: SOURCES,
-    default: {
-      messages: 0.1,
-      worldLore: 0.1,
-      characterLore: 0.1,
-      history: 0.1,
-      relationships: 0
-    },
-    i18n: { en: "Distinctive words" },
-    description: {
-      en: "How much rare, distinctive vocabulary shared with the conversation counts \u2014 common words prove little."
-    }
-  },
-  signalLastRefRecency: {
-    type: "perMember",
-    members: SOURCES,
-    default: {
-      messages: 0,
-      worldLore: 0.1,
-      characterLore: 0.1,
-      history: 0.1,
-      relationships: 0
-    },
-    i18n: { en: "Recently referenced" },
-    description: {
-      en: "How much an entry the conversation touched a moment ago outranks one it has not mentioned in a while."
-    }
-  },
-  /**
-   * ⚠ **`signalRecency` and `signalSceneAffinity` were declared here and are
-   * gone (migration 0099).** Neither had a producer — anywhere, ever. No
-   * mechanism wrote `signals.recency` and none wrote `signals.sceneAffinity`,
-   * so both weights multiplied a permanent zero: two controls that rendered,
-   * validated, saved, resolved through the whole scope chain, and could not
-   * move a single prompt at any value on any install.
-   *
-   * They are removed rather than wired because each needs a *design decision*
-   * this change is not entitled to make, and both are the kind that is
-   * cheaper to get right later than to guess at now:
-   *
-   *   · **Recency** carried `history: 0.2`, on a band that really is
-   *     populated, so building a producer for it would reorder every install's
-   *     history entries — and the number it would rank on is genuinely
-   *     ambiguous. A dated entry has an *in-world* date and an *authored*
-   *     order, they disagree constantly (a flashback is old and new at once),
-   *     and picking one silently is a worse answer than picking neither.
-   *   · **Scene affinity** has no fact to read. `scenes` and
-   *     `lorebook_bindings.scene_id` exist in the schema, but nothing in
-   *     retrieval knows which scene a session is *in*, so the producer is a
-   *     feature and not a wiring job.
-   *
-   * Both are welcome back the day something produces them — as a new field
-   * beside its producer, which is the order that keeps this from happening a
-   * third time. `runtime/signalWiring.test.ts` is what enforces that: a signal
-   * declared here and producible by nothing fails, and so does the reverse.
-   *
-   * `signalDensity` survives the same audit for the opposite reason — it now
-   * has one. `densitySignal` had existed in `ranking/signals.ts` with no
-   * caller for as long as this weight had existed with no producer; the scan
-   * writes it on every candidate now, exactly as it writes `proximity`.
-   */
-  signalDensity: {
-    type: "perMember",
-    members: SOURCES,
-    /**
-     * ⚠ **Unmoved, and the lore bands' 0 is what makes wiring it safe.**
-     *
-     * `signalProximity`'s case exactly: the number falls out of the key walk
-     * that was already happening, so the only thing this weight decides is
-     * whether it counts — and turning it on reorders lore in an upgraded
-     * install that never asked. Every lore band therefore stays at 0 and the
-     * scan simply starts *reporting* the number, where a reader can see its
-     * value before deciding to weight it.
-     *
-     * `messages: 0.1` is left exactly as it was rather than tidied to 0.
-     * That band is not populated on the shipped path (the entity
-     * mechanism's `messages` out-port is deliberately unwired) and nothing
-     * writes `density` on a message candidate even when it is, so the number
-     * is inert either way — and moving a default that cannot change an
-     * outcome is a re-tune with no reason attached.
-     */
-    default: { messages: 0.1, worldLore: 0, characterLore: 0, history: 0, relationships: 0 },
-    i18n: { en: "Length against the pool" },
-    description: {
-      en: "How much a longer-than-average entry outranks a short one. Length is a proxy for how much an entry has to say; raise it when your book mixes one-line stubs with real articles."
-    }
-  },
-  /**
-   * How tightly an entry's matched keys clustered in the window.
-   *
-   * Two keys matching adjacent is stronger evidence than the same two
-   * matching twenty words apart: "the Ashguard rode" is about the Ashguard
-   * riding, and the same two words either side of a paragraph break are two
-   * unrelated sentences. `signalKeyword` cannot tell those apart — it counts
-   * *how many* of an entry's keys matched and never *where* — so this is the
-   * distinction that signal is missing rather than a second reading of it.
-   *
-   * ⚠ **0 everywhere, which is the one default it can have.** The number is
-   * computed on every scan (it falls out of the key walk that was already
-   * happening), so the only thing this weight decides is whether it counts —
-   * and turning it on reorders lore in an upgraded install that never asked.
-   * Same convention as `admitThreshold` and `scoreLedAllocation`.
-   */
-  signalProximity: {
-    type: "perMember",
-    members: SOURCES,
-    default: { messages: 0, worldLore: 0, characterLore: 0, history: 0, relationships: 0 },
-    i18n: { en: "Keywords close together" },
-    description: {
-      en: "How much it counts that an entry's keywords appeared near each other rather than scattered across the window."
-    }
-  },
-  signalPriorityBonus: {
-    type: "perMember",
-    members: SOURCES,
-    default: {
-      messages: 0,
-      worldLore: 0.15,
-      characterLore: 0.15,
-      history: 0,
-      relationships: 0
-    },
-    i18n: { en: "Author priority" },
-    description: {
-      en: "Score added per step of an entry's own priority setting \u2014 the author's thumb on the scale."
-    }
-  }
-};
-var MECHANISM_WEIGHTS = {
-  type: "strengths",
-  min: 0,
-  max: 1,
-  quick: true,
-  members: [
-    {
-      key: "keyword",
-      i18n: { en: "Keywords" },
-      description: {
-        en: "The author's own trigger words, how distinctive the shared vocabulary is, and how closely the matches clustered."
-      },
-      tone: 1
-    },
-    {
-      key: "semantic",
-      i18n: { en: "Meaning" },
-      description: {
-        en: "Similarity of meaning, with no shared words required. Needs an embedding model and the semantic arm switched on."
-      },
-      tone: 3
-    },
-    {
-      key: "name",
-      i18n: { en: "Names" },
-      description: {
-        en: "An entry called by its own name, and entries naming the same people and places as the scene."
-      },
-      tone: 2
-    }
-  ],
-  default: { keyword: 1, semantic: 1, name: 1 },
-  i18n: { en: "How entries are found" },
-  description: {
-    en: "How much each way of finding an entry counts toward its score. Turning one up takes nothing from the others \u2014 this is not the context split."
-  }
-};
-var SCORE_LED_ALLOCATION = {
-  type: "boolean",
-  default: false,
-  i18n: { en: "Let the best entries lead" },
-  description: {
-    en: "Spend the whole context on whatever scored highest, wherever it came from, and treat each band as a ceiling rather than a reserved slice. Off divides the context into bands first and fills each one separately, which is how it has always worked."
-  }
-};
-var rankHybrid = pin2(
-  describeTaskDefinition2({
-    id: "core:task/rank-hybrid@1",
-    timeoutMs: 500,
-    slots: {
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: {
-          // Cross-source only (R-7 P5). Ahead of the nine, because it
-          // is the altitude a reader starts at: the grouped mechanisms
-          // first, the individual signals under them for anyone who
-          // wants that far in, then how the sources' shares divide
-          // the window and in what precedence it is filled.
-          mechanismWeights: MECHANISM_WEIGHTS,
-          ...SIGNAL_WEIGHT_FIELDS,
-          shareNormalisation: SHARE_NORMALISATION,
-          scoreLedAllocation: SCORE_LED_ALLOCATION
-        }
-      },
-      /**
-       * The post-retrieval hook (18 §4a): user chains over the candidate
-       * pool before ranking sees it. Spread onto this type alone rather
-       * than into `rankSlots` — widening a sibling's accepted set is a
-       * hash change on a type nobody meant to touch (S3).
-       */
-      scripts: {
-        kind: "scripts",
-        accepts: ["core:script:candidates/filter@1", "core:script:candidates/rescore@1"],
-        port: "candidates",
-        phase: "before",
-        description: "Scripts that drop or rescore retrieved entries before the ranker orders them. Dropping excludes with a reason; rescoring changes the order."
-      }
-    },
-    ports: {
-      in: rankPorts.in,
-      out: {
-        ...rankPorts.out,
-        /**
-         * What each band was allotted, what it spent, and how many
-         * entries it got there (D-H).
-         *
-         * ⚠ **Published by the binding since it was written, declared
-         * by nobody.** `select()` returns this beside the decisions and
-         * the binding has always returned it on this key — but an
-         * undeclared out-port is invisible: nothing downstream could
-         * learn it existed, `validate.ts` skipped the edge, and
-         * `core:task/assemble@2` ran its allocation on empty defaults
-         * while the numbers sat one node upstream.
-         *
-         * Spread onto this type alone rather than into `rankPorts` —
-         * the same reason the `scripts` hook above is, one construct up
-         * (S3). The `rank-recall` example computes no per-band usage;
-         * giving it a port it cannot fill would move a hash to declare
-         * a promise it does not keep.
-         *
-         * `json` rather than a shape of its own. It is
-         * `Record<band, {allocated, used, entries}>` and the band
-         * vocabulary is the ranker's `SOURCES` list, which a plugin may
-         * extend — a shape id pinned here would freeze the very list
-         * that is meant to grow.
-         */
-        groups: S2.json
-      }
-    }
-  })
-);
-var queryWindows = pin2(
-  describeTaskDefinition2({
-    id: "core:task/query-windows@1",
-    i18n: { name: { en: "Retrieval queries" } },
-    timeoutMs: 500,
-    slots: {
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: {
-          currentWindow: {
-            type: "integer",
-            default: 2,
-            description: "How many of the latest messages form the 'current' retrieval query."
-          },
-          recentWindow: {
-            type: "integer",
-            default: 3,
-            description: "How many messages before those form the wider 'recent' retrieval query."
-          }
-        }
-      }
-    },
-    ports: {
-      in: { messages: S2.messages, cast: S2.sessionCast },
-      out: { main: S2.json, current: S2.json, recent: S2.json }
-    }
-  })
-);
-var rankSemantic = pin2(
-  describeTaskDefinition2({
-    id: "core:task/rank-semantic@1",
-    i18n: { name: { en: "Rank semantic results" } },
-    timeoutMs: 1e3,
-    slots: {
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: {
-          /**
-           * ⚠ No `currentWindow` / `recentWindow` here, and there
-           * were (culled 2026-09-16, R-12). They size the two query
-           * windows — how many messages form the 'current' and the
-           * 'recent' question — which `core:task/query-windows@1`
-           * cuts and declares as its own params. Declared here too,
-           * they were rendered twice and read once: the ranker
-           * receives windows already cut and consults neither.
-           */
-          rrfK: {
-            type: "integer",
-            default: 60,
-            description: "Rank-fusion constant \u2014 higher values flatten the difference between ranks."
-          },
-          recencyBoost: {
-            type: "number",
-            default: 0.15,
-            description: "Extra score given to recent entries."
-          },
-          recencyDecay: {
-            type: "number",
-            default: 0.01,
-            description: "How quickly the recency boost fades per message of age."
-          },
-          thresholdMin: {
-            type: "number",
-            default: 0.3,
-            description: "Minimum similarity a match needs to be considered at all."
-          },
-          relativeThreshold: {
-            type: "number",
-            default: 0.7,
-            description: "Drop matches scoring below this fraction of the best match."
-          },
-          mmrLambda: {
-            type: "number",
-            default: 0.7,
-            description: "Balance between relevance and variety \u2014 1 is pure relevance, 0 maximum variety."
-          },
-          /**
-           * ⚠ Not the five `SOURCES` the budget split uses. These are
-           * the semantic mechanism's own record kinds — what a stored vector
-           * *is* — and `historyEntry` vs `history` is a real
-           * difference, not a spelling. Mapping one vocabulary onto
-           * the other here would quietly rename keys the ranker
-           * matches literally (`weights.ts DEFAULT_SEMANTIC`).
-           */
-          sourceBudget: {
-            type: "perMember",
-            members: [
-              {
-                key: "message",
-                i18n: { en: "Messages" },
-                description: { en: "Chat messages found by meaning." },
-                tone: 0
-              },
-              {
-                key: "worldLore",
-                i18n: { en: "World lore" },
-                description: { en: "Lorebook entries about the world." },
-                tone: 1
-              },
-              {
-                key: "characterLore",
-                i18n: { en: "Character lore" },
-                description: { en: "Lorebook entries bound to a character." },
-                tone: 2
-              },
-              {
-                key: "historyEntry",
-                i18n: { en: "History entries" },
-                description: { en: "Dated entries recording earlier events." },
-                tone: 3
-              },
-              {
-                key: "narrativeRelationship",
-                i18n: { en: "Relationships" },
-                description: { en: "The narrative graph. Off by default." },
-                tone: 4
-              }
-            ],
-            default: {
-              message: 12,
-              worldLore: 8,
-              characterLore: 6,
-              historyEntry: 6,
-              narrativeRelationship: 5
-            },
-            i18n: { en: "Most matches per kind" },
-            description: {
-              en: "A ceiling on how many semantic matches of each kind survive fusion, before the budget ranker sees them."
-            }
-          },
-          defaultSourceBudget: {
-            type: "integer",
-            default: 20,
-            description: "The ceiling for any match kind not named above \u2014 what a plugin-added source gets until it declares its own."
-          }
-        }
-      }
-    },
-    ports: {
-      in: {
-        /**
-         * One entry per query window, each carrying its own per-message
-         * ranked lists and its own similarity matrix. The whole stack
-         * runs per window; the results are concatenated, not fused.
-         */
-        windows: S2.json,
-        messages: S2.messages
-      },
-      out: {
-        main: S2.candidates,
-        candidates: S2.candidates,
-        diagnostics: S2.json
-      }
-    }
-  })
-);
-var rankRecall = pin2(
-  describeTaskDefinition2({
-    id: "chariot.recall:rank-recall@1",
-    timeoutMs: 500,
-    public: true,
-    ports: rankPorts
-  })
-);
-var assemble = pin2(
-  describeTaskDefinition2({
-    id: "core:task/assemble@2",
-    timeoutMs: 1e3,
-    slots: {
-      // An *assembly* template: its scope really is the input ports, so this half of
-      // 16 §4's claim holds.
-      template: {
-        kind: "template",
-        // Handlebars FIRST, then Liquid: the first entry is what a new
-        // template here is written in, and every shipped row holds
-        // Handlebars — so the order is what keeps the parity corpus
-        // byte-identical. Both are accepted because a story string is a
-        // layout, not a dialect: the same arrangement is expressible in
-        // either, and a slot naming one makes the other unselectable
-        // everywhere. Jinja is absent because core renders neither
-        // parity nor helpers for it (12 §2a).
-        engines: [handlebars.id, liquid.id],
-        facet: "templates",
-        variables: {
-          blocks: "any",
-          budget: ["total", "remaining"],
-          prompts: ["system", "postHistory"]
-        },
-        description: "The story string: the overall layout of the finished prompt \u2014 where the character cards, lore, history and instructions sit. Leave empty to use the built-in layout."
-      },
-      prompts: {
-        kind: "prompts",
-        quick: true,
-        facet: "prompts",
-        fields: {
-          system: { type: "text" },
-          postHistory: { type: "text" }
-        }
-      },
-      /**
-       * How the values Assemble itself produces are laid out.
-       *
-       * These three exist here rather than upstream because they come out
-       * the other side of the budget: what a layout receives is what
-       * actually fit, which no earlier node knows.
-       *
-       * `characterLore` is deliberately absent. It is a top-level value on
-       * the assembly context that no template renders — qualifying entries
-       * are folded into their bound character inside `characters`, under
-       * an `"extra lore"` key. A layout for it would be a setting that
-       * changes nothing.
-       */
-      variables: {
-        kind: "variables",
-        facet: "variables",
-        description: "How the retrieved lore and history are laid out \u2014 JSON, prose, or whatever you write. Duplicate one to change it.",
-        renders: {
-          worldLore: "core:var/world-lore@1",
-          history: "core:var/history@1",
-          currentDate: "core:var/current-date@1"
-        }
-      },
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: {
-          /**
-           * ⚠ No `budget` here either. It was an integer defaulting to
-           * 4096 — the same re-entered number the ranker carried, with
-           * the same defect: an absolute count on a node cannot know
-           * which model the prompt is about to be sent to, so it was
-           * free to disagree with the window and warn nobody. The
-           * total now arrives on the `budget` in-port from
-           * `core:task/context-budget@1`, which derives it from the
-           * sampling config the reply is generated against.
-           */
-          /**
-           * Where the post-history reminder goes, and whether it goes
-           * at all.
-           *
-           * Numbers, so they are parameters rather than prompt text —
-           * a `prompts` slot carries authored strings and typing a
-           * count as one would be the wrong shape wearing a
-           * convenient home. The trigger is a **suppression**: below
-           * it a short chat gets no reminder, because a reinforcement
-           * note two messages after the system prompt is noise.
-           */
-          postHistoryDepth: {
-            type: "integer",
-            default: 0,
-            description: "Place the post-history reminder this many messages before the end. 0 puts it last."
-          },
-          postHistoryTokenTrigger: {
-            type: "integer",
-            default: 0,
-            description: "Only add the reminder once the chat is at least this many tokens long. 0 always adds it."
-          },
-          /**
-           * ⚠ No `truncation` here, and there was one — an enum of
-           * `oldest-first | lowest-weight`, "what gets dropped first
-           * when the context is over budget" — declared, rendered,
-           * and read by nothing (culled 2026-09-16, R-12). Assemble
-           * drops nothing: what fits is decided upstream by the
-           * ranker's `select`, per band, against `share`,
-           * `maxEntries`, `minEntries` and `scoreLedAllocation` on
-           * `core:task/rank-hybrid@1`, and this node renders the
-           * decisions it is handed. A second drop rule here would be
-           * a second owner of one decision. NOMENCLATURE §25 records
-           * the cull.
-           */
-          /**
-           * Which sections the prompt is built from, and in what order —
-           * SillyTavern's *prompt list*, as a param on the node that
-           * assembles the prompt (ruling 2026-09-10).
-           *
-           * A param and not a session setting, and not a table: it is the
-           * same kind of fact as "which prompt does this step use", so it
-           * belongs in the configuration a preset selects and it is an
-           * administrator's. A preset carries it to every session started
-           * from it for free, because a preset's configuration is already
-           * what a run resolves against.
-           *
-           * ⚠ **The declared default means "leave the template alone".** It
-           * is the shipped template's own order, so a configuration nobody
-           * has touched stores nothing and renders the bytes it always did —
-           * and a template somebody WROTE, whose sections sit in an order
-           * they chose, is not silently reordered into this one. See
-           * `isShippedPromptBlocks`.
-           */
-          blocks: PROMPT_BLOCKS_DECL
-        }
-      },
-      /**
-       * Which connection this prompt is being written FOR.
-       *
-       * Not compute, and this node calls nothing: the only thing read out
-       * of it is `metadata.promptFormat` — whether the finished prompt is
-       * one instruct-wrapped string or a role-tagged array, and which
-       * wrapper. A wire format is a property of the endpoint, and until
-       * this slot existed there was no way for the node that renders the
-       * prompt to learn it. `renderers.ts` fell back to Vicuna on every
-       * run, so a ChatML or Llama-2 connection was sent Vicuna markers and
-       * nothing anywhere said so.
-       *
-       * ## Wire it to the SENDING node, always
-       *
-       * `slot.connectionOf('generate')`, exactly as `contextBudget` shares
-       * the sampling reference, and for the same reason stated there: a
-       * prompt wrapped for one endpoint and sent to another is wrong
-       * silently. Sharing the reference makes the two impossible to point
-       * apart rather than documenting that they must agree and hoping.
-       *
-       * ## No `requires`
-       *
-       * The sibling connection slots declare one because they are about to
-       * CALL the connection and an unmet capability should refuse at bind.
-       * This one reads a label. Declaring a capability it never exercises
-       * would let an untested connection grey itself out of a picker for a
-       * node that was never going to send it anything.
-       */
-      connection: {
-        kind: "connection",
-        shape: S2.textGen,
-        description: "Which connection this prompt is formatted for. Point it at the step that sends the reply \u2014 a prompt wrapped for one endpoint and sent to another is wrong in a way nothing reports."
-      }
-    },
-    ports: {
-      in: {
-        candidates: S2.candidates,
-        budget: S2.budget,
-        templateContext: S2.templateContext,
-        /**
-         * The ranker's per-candidate trail — score, verdict, reason.
-         *
-         * ⚠ **Supplied since the node was written, declared only now.**
-         * All three shipped specs wire `decisions: $.rank.decisions`,
-         * and the binding halts without them ("wire a ranker between
-         * retrieval and assembly"), so this is not a new input — it is
-         * the load-bearing one. What was missing was the declaration,
-         * and the cost of that is exact: `validate.ts` skips its shape
-         * check when either side is undeclared (`if (!outShape ||
-         * !inShape) continue`), so a plugin ranker publishing the wrong
-         * shape on this edge got no finding, and a plugin ASSEMBLER had
-         * nothing to read to learn the port existed.
-         *
-         * `json`, matching `rankPorts.out.decisions` — a decision is a
-         * candidate with its arithmetic attached, and the panel reads
-         * the same objects the allocator does.
-         */
-        decisions: S2.json,
-        /**
-         * The finished chat lines, from `core:task/process-messages@1`.
-         *
-         * Wired by all three specs (`messages: $.lines.messages`) and
-         * undeclared for the same stretch as `decisions`. Two readers
-         * depend on it and neither is optional: the transcript the
-         * template renders, and the depth the post-history reminder is
-         * placed at — which is computed against *these* lines because
-         * the context builder ships a placeholder index, the final
-         * array not existing when it runs.
-         */
-        messages: S2.messages,
-        /**
-         * Per band: allocated, used, entries — the arithmetic the
-         * ranker did while deciding (D-H).
-         *
-         * ⚠ **The one genuinely new edge in this set.** The two
-         * above were supplied and undeclared; this was PUBLISHED by
-         * `core:task/rank-hybrid@1` and wired by nobody, so `allocate`
-         * fell to its own `{}` and the per-band numbers the ranker had
-         * already computed were dropped on the floor between two
-         * adjacent nodes.
-         *
-         * What it does NOT touch is the prompt: `allocate` puts this
-         * straight onto `AllocatedContext.groups` and reads it nowhere
-         * else, so `blocks`, `totalTokens` and `budget` — everything
-         * the render sees — are byte-identical with it wired or not.
-         * What changes is the receipt: `dispatch.ts` publishes
-         * `payload.groups` as the run's `sources`, which is the budget
-         * panel's whole data set and has been empty on every run.
-         *
-         * Undeclared on purpose for the other rankers. A ranker that
-         * computes no per-band usage leaves this unwired and
-         * `allocate` takes the branch it has always taken.
-         */
-        groups: S2.json
-      },
-      out: { main: S2.assembled, context: S2.assembled }
-    }
-  })
-);
-var sessionCast = pin2(
-  describeQueryDefinition({
-    id: "core:query/session-cast@1",
-    i18n: { name: { en: "Session cast" } },
-    timeoutMs: 2e3,
-    ports: {
-      in: { scope: S2.sessionScope },
-      out: { main: S2.sessionCast, cast: S2.sessionCast }
-    }
-  })
-);
-var relationshipSlots = (what) => ({
-  params: {
-    kind: "parameters",
-    facet: "weights",
-    schema: {
-      maxEntries: {
-        type: "integer",
-        /**
-         * ⚠ **No `default:`, and its absence is the declaration.**
-         *
-         * Neither spec ever named this slot, so `resolveInput` never
-         * resolved it and `bindings.ts` called `capRelationships` with
-         * `undefined` on every run this node type has ever made — which
-         * that function reads as *no ceiling at all* and returns the
-         * section whole. `respond` wires `params: slot.params()` now, so
-         * whatever is declared here becomes live; under ruling D-8 the
-         * declared default must therefore BE the value every run has
-         * actually used, and that value is "uncapped".
-         *
-         * Uncapped is not expressible as a number here. `0` is already
-         * taken and means the opposite — `capRelationships` returns
-         * `null` for it, so the section is dropped entirely, which is the
-         * `admitThreshold` / `maxEntries` off-switch convention this
-         * package uses everywhere. A negative sentinel IS what
-         * `capRelationships` reads as "no cap" (`cap < 0` returns the
-         * section), but `min: 0` forbids one and no other parameter in
-         * this package uses a negative sentinel; inventing the convention
-         * here would be a design decision riding in on a wiring fix. And
-         * a large finite number is not the value either — it is a
-         * different value that is *usually* indistinguishable, which is
-         * the kind of nearly-right that D-8 exists to refuse.
-         *
-         * So: no default. `resolveSlot`'s params branch copies a schema
-         * default only `if (v?.default !== undefined)`, and
-         * `reconcileConfigs` back-fills a row only when a declaration
-         * carries one — so an untouched install resolves `undefined` and
-         * stays uncapped, exactly as before. The control renders as an
-         * empty box, which `NumberControl` and the panel already treat as
-         * "unset" (an emptied box commits `undefined` and clears the
-         * row), so the empty state round-trips rather than being a hole.
-         *
-         * `drizzle/0111` deletes the stored `12` that `reconcileConfigs`
-         * back-filled from the old declaration; without it, wiring the
-         * slot would cap every upgraded install at 12 as a side effect.
-         */
-        min: 0,
-        quick: true,
-        i18n: { en: "Most relationships" },
-        description: {
-          en: `A ceiling on how many ${what} reach the prompt, closest first. Leave it empty for no ceiling; 0 leaves the section out altogether.`
-        }
-      }
-    }
-  }
-});
-var RELATIONSHIP_TIMEOUT = 5e3;
-var relationshipsPerspectives = pin2(
-  describeQueryDefinition({
-    id: "core:query/relationships-perspectives@1",
-    i18n: {
-      name: { en: "Relationships: their perspective" },
-      description: {
-        en: "How the speaking character regards the others, read from the narrative graph. Produces nothing when the chat has no lorebook or the speaker has no node in it."
-      }
-    },
-    optional: true,
-    timeoutMs: RELATIONSHIP_TIMEOUT,
-    slots: relationshipSlots("of their own views"),
-    ports: {
-      in: { scope: S2.sessionScope },
-      /**
-       * `json`, not `text`. The summary used to be stringified inside
-       * `buildGraphContext` and handed on as a finished blob, which made
-       * it the one context value a layout could do nothing with — you
-       * cannot render relationships as prose, drop a section, or even
-       * change the indent if the shape was flattened upstream. The node
-       * emits the structure and the variable layout renders it.
-       */
-      out: { main: S2.json, relationshipsPerspectives: S2.json }
-    }
-  })
-);
-var relationshipsKnown = pin2(
-  describeQueryDefinition({
-    id: "core:query/relationships-known@1",
-    i18n: {
-      name: { en: "Relationships: how others see them" },
-      description: {
-        en: "How the others regard the speaking character, plus any figures known to everyone. Read from the narrative graph."
-      }
-    },
-    optional: true,
-    timeoutMs: RELATIONSHIP_TIMEOUT,
-    slots: relationshipSlots("views of them"),
-    ports: {
-      in: { scope: S2.sessionScope },
-      out: { main: S2.json, relationshipsKnown: S2.json }
-    }
-  })
-);
-var relationshipSearch = pin2(
-  describeQueryDefinition({
-    id: "core:query/relationship-search@1",
-    i18n: {
-      name: { en: "Relationships: ranked" },
-      description: {
-        en: "The narrative graph as ranked candidates that compete for the context window, ordered by who is in the scene, who is speaking, and what changed most recently."
-      }
-    },
-    optional: true,
-    timeoutMs: RELATIONSHIP_TIMEOUT,
-    slots: {
-      params: {
-        ...relationshipSlots("graph relationships").params,
-        schema: {
-          /**
-           * The band's intent (R-7 P5), on the one relationship read
-           * that ranks. `share` is 0, which is what the ranker's map
-           * held: the band ships inert and the share is its switch —
-           * every candidate leaves as `excluded_group_disabled` with
-           * that reason until somebody raises it, and the two dump
-           * nodes render the graph whole meanwhile.
-           *
-           * `maxEntries` is `relationshipSlots`' own — the ceiling
-           * this node already applies before it publishes — and it is
-           * the band's ceiling too: one number, the query's, rather
-           * than a second on the ranker free to disagree. Absent
-           * means uncapped, as it always has here, where the map's
-           * `relationships: 0` was a cap of nothing sitting behind a
-           * share of nothing — raising the share alone used to
-           * exclude every relationship as over its ceiling. It does
-           * not now. Migration 0135 culls a stored 0 for that reason
-           * and moves anything else.
-           */
-          ...bandIntentFields({ label: "relationships", noun: "the narrative graph" }, { share: 0 }),
-          // Declared second so the query's own wording and `min: 0`
-          // win over the generic ceiling above.
-          ...relationshipSlots("graph relationships").params.schema
-        }
-      }
-    },
-    ports: {
-      /**
-       * ⚠ **No `text` in-port**, for `core:query/entity-search@1`'s
-       * reason: the four lore queries declared one that nothing filled
-       * and nothing read (culled 2026-09-16), and shipping a fifth with
-       * the same standing excuse written for it would have been adding
-       * the defect on purpose. A relationship is reached by walking edges
-       * from the speaker's node, so the scope is the whole of the
-       * question.
-       */
-      in: { scope: S2.sessionScope },
-      out: {
-        // Both open with a band-intent element — the graph's own,
-        // published whether or not a tie was found — ahead of the
-        // items; readers call `splitCandidates()`.
-        main: S2.candidates,
-        hits: S2.candidates,
-        /**
-         * How many ties were walked, how many the scene was present
-         * for, and what the ceiling did — the mechanism-level half of
-         * the trail, which no per-candidate row can carry.
-         *
-         * Declared rather than merely published, unlike the lore lanes'
-         * own diagnostics: an undeclared out-port is invisible to
-         * `validate.ts` and unreadable by a plugin, which is the finding
-         * `core:task/rank-hybrid@1`'s `groups` cost a release.
-         */
-        diagnostics: S2.json
-      }
-    }
-  })
-);
-var contextPorts = {
-  in: {
-    cast: S2.sessionCast,
-    /**
-     * Whose voice the reply is, when a next-speaker node decided (19 §5).
-     * Optional: unwired, the speaker still rides the cast bundle (the
-     * scope's value), which is how every spec worked before the node
-     * existed — and how the narrator's context, which has no speaker,
-     * still works. Wired, it wins, so the receipt's speaker and the
-     * prompt's speaker cannot disagree.
-     */
-    currentCharacterId: S2.rowIds
-  },
-  out: {
-    main: S2.templateContext,
-    templateContext: S2.templateContext,
-    /**
-     * The name on the trailing assistant line.
-     *
-     * Its own port rather than a field inside the context, because
-     * nothing renders `{{seedName}}` — it is not a template variable.
-     * It is what the message processor writes on the line the model
-     * continues from, and in narrator mode it is the one name that
-     * must *not* be the joined cast list: seeding "Alice and Cara:"
-     * teaches the model to write joint dialogue instead of narrating.
-     */
-    seedName: S2.text
-  }
-};
-var PROMPTS_DESCRIPTION = "The written instructions this pipeline sends the model \u2014 pick a prompt, or duplicate one and make it yours.";
-var VARIABLES_DESCRIPTION = "How each part of the prompt is laid out \u2014 JSON, prose, or whatever you write. Duplicate one to change it.";
-var sharedRenders = {
-  instructions: "core:var/instructions@1",
-  characters: "core:var/characters@1",
-  personas: "core:var/personas@1",
-  scenario: "core:var/scenario@1",
-  postHistoryInstructions: "core:var/post-history-instructions@1",
-  characterNames: "core:var/character-names@1",
-  personaNames: "core:var/persona-names@1"
-};
-var buildTemplateContext = pin2(
-  describeTaskDefinition2({
-    id: "core:task/build-template-context@1",
-    i18n: { name: { en: "Build template context" } },
-    timeoutMs: 2e3,
-    /**
-     * The example-dialogue pick. Declaring it is what gets `ctx.random` — the
-     * run-seeded RNG — instead of `Math.random()`, so the same run replayed
-     * chooses the same example and a different turn still gets variety.
-     */
-    declaresRandomness: true,
-    /**
-     * The authored text. It arrives as config rather than on a port because it
-     * *is* config — the same prompt config the assembly template renders from,
-     * layered instance → user → chat like every other slot.
-     */
-    slots: {
-      prompts: {
-        kind: "prompts",
-        quick: true,
-        facet: "prompts",
-        description: PROMPTS_DESCRIPTION,
-        fields: {
-          systemPrompt: { type: "text" },
-          postHistoryInstructions: { type: "text" }
-        }
-      },
-      variables: {
-        kind: "variables",
-        facet: "variables",
-        description: VARIABLES_DESCRIPTION,
-        renders: {
-          ...sharedRenders,
-          /** From the speaking character's card. */
-          exampleDialogue: "core:var/example-dialogue@1",
-          /**
-           * The narrative graph, as two variables rather than one.
-           *
-           * They were `speakerRelationships` — a single block holding
-           * both what the speaker thinks of everyone and what everyone
-           * thinks of the speaker. Opposite claims under one heading,
-           * which a model reads as one list, and one layout, one
-           * priority and one on/off switch for both.
-           */
-          relationshipsPerspectives: "core:var/relationships-perspectives@1",
-          relationshipsKnown: "core:var/relationships-known@1"
-        }
-      },
-      /**
-       * The pre-assemble context hook (18 §4a): user chains over the
-       * finished template context — conditional style guides, seeded
-       * event tables — after this node resolves it and before anything
-       * renders it.
-       *
-       * `messages/inject` lives here too — **not** on the message
-       * processor — because of the ruling of 2026-08-23: injections are
-       * template-context *data* (`context.injections`, resolved to
-       * `injectionsByIndex` beside `postHistory.targetIndex`), rendered
-       * by the template's own message loop. Splicing them into the list
-       * behind the template's back would be the §20 defect again, one
-       * layer down: a position the template cannot express, an author
-       * cannot see, and a corpus cannot check.
-       */
-      scripts: {
-        kind: "scripts",
-        accepts: ["core:script:context/transform@1", "core:script:messages/inject@1"],
-        port: "main",
-        phase: "after",
-        description: "Scripts over what the prompt template renders \u2014 edit the instructions, roll an occasional event, or inject a reminder at a depth in the conversation."
-      }
-    },
-    ports: {
-      in: {
-        ...contextPorts.in,
-        /**
-         * The narrative graph, as the two claims it really is — how the
-         * speaker regards everyone, and how everyone regards the
-         * speaker (D-I).
-         *
-         * ⚠ **Supplied by `respond` since the split, declared here
-         * only now.** The spec wires both off
-         * `core:query/relationships-perspectives@1` and
-         * `core:query/relationships-known@1`, the two `renders` above
-         * name the variables they feed, and the builder reads both by
-         * these exact names — so every part of the round trip was
-         * written down except the ports themselves.
-         *
-         * `json`, matching what those queries publish and for the
-         * reason stated at them: the structure travels so a variable
-         * layout can render it, rather than a blob nothing can
-         * restyle.
-         *
-         * ⚠ Declared on THIS type alone rather than in `contextPorts`,
-         * which the narrator builder shares. Its own docblock says the
-         * narrate spec never supplies these because graph context
-         * needs a speaker's perspective and a narrator has none — so
-         * widening the shared map would give it two ports it must
-         * leave empty forever, and move its hash to say so (S3).
-         */
-        relationshipsPerspectives: S2.json,
-        relationshipsKnown: S2.json,
-        /**
-         * Who is speaking, when the speaker is not in the cast.
-         *
-         * ⚠ **Neither is wired by any spec, and both are supplied on
-         * every side-character turn.** `core:task/build-side-character-
-         * context@1` is not a separate implementation — the host's
-         * binding for it unwraps its `sideCharacter` in-port and calls THIS
-         * type's handler with the name and the card spread onto the
-         * input, because `resolveContextInput` owns the card rules and
-         * a side character's card and a cast member's must compile
-         * through one function.
-         *
-         * So the supplier is the host rather than a document, and that
-         * is exactly why declaring them matters: it is the only record
-         * that this type's input surface is wider than its edges. An
-         * undeclared key reaching a handler is indistinguishable from a
-         * typo until someone reads both files at once.
-         *
-         * `speakerName` is `text` — it is the name on the seed line and
-         * what `{{char}}` renders. `speakerCharacter` is `json`: the
-         * card, or `null` for a free-form name, which is a normal turn
-         * rather than a degraded one.
-         */
-        speakerName: S2.text,
-        speakerCharacter: S2.json,
-        /**
-         * Who is speaking, as a participant reference (R-18 (3); U5g,
-         * 2026-09-16) — the turn strategy's `speaker`. Read for one
-         * thing: an **envoy** (`envoy:<slug>`) has no character row, so
-         * its card — name and description, off the genre's declaration
-         * the cast read carries — is compiled here where a cast
-         * member's would be, through the same `speakerName` /
-         * `speakerCharacter` seam a side character uses. A `character:`
-         * reference changes nothing: `currentCharacterId` already says
-         * it. Optional; unwired on the specs that seat no envoy.
-         */
-        speaker: S2.participantRef,
-        /**
-         * The session's resolved stats and states, as
-         * `core:query/session-state@1` publishes them:
-         * `{ world, cast, possessions }`, already resolved down the
-         * session → lorebook → card → default chain.
-         *
-         * A template reads `state.world.weather` and
-         * `state.cast.verity.hp` — the **resolved** value and nothing
-         * below it. Which layer a number came from is a question for
-         * the Cast member page, not for a prompt.
-         *
-         * ⚠ Declared on THIS type alone rather than in `contextPorts`,
-         * following `relationshipsPerspectives` above and for the same
-         * reason: widening the shared map moves the narrator's hash to
-         * declare a port no shipped spec fills. Unwired — which is
-         * every shipped spec today — the key is absent and the context
-         * has no `state`, which is what a chat session should have.
-         */
-        state: S2.json
-      },
-      out: contextPorts.out
-    }
-  })
-);
-var buildNarratorContext = pin2(
-  describeTaskDefinition2({
-    id: "core:task/build-narrator-context@1",
-    i18n: { name: { en: "Build narrator context" } },
-    timeoutMs: 2e3,
-    slots: {
-      prompts: {
-        kind: "prompts",
-        quick: true,
-        facet: "prompts",
-        description: PROMPTS_DESCRIPTION,
-        fields: {
-          systemPrompt: { type: "text" },
-          postHistoryInstructions: { type: "text" },
-          narratorName: { type: "text" }
-        }
-      },
-      variables: {
-        kind: "variables",
-        facet: "variables",
-        description: VARIABLES_DESCRIPTION,
-        renders: { ...sharedRenders }
-      },
-      /** The same hook as `build-template-context` — see it for the terms. */
-      scripts: {
-        kind: "scripts",
-        accepts: ["core:script:context/transform@1", "core:script:messages/inject@1"],
-        port: "main",
-        phase: "after",
-        description: "Scripts over what the prompt template renders \u2014 edit the instructions, roll an occasional event, or inject a reminder at a depth in the conversation."
-      }
-    },
-    ports: contextPorts
-  })
-);
-var buildSideCharacterContext = pin2(
-  describeTaskDefinition2({
-    id: "core:task/build-side-character-context@1",
-    i18n: { name: { en: "Build side character context" } },
-    timeoutMs: 2e3,
-    slots: {
-      prompts: {
-        kind: "prompts",
-        quick: true,
-        facet: "prompts",
-        description: PROMPTS_DESCRIPTION,
-        fields: {
-          systemPrompt: { type: "text" },
-          postHistoryInstructions: { type: "text" }
-        }
-      },
-      variables: {
-        kind: "variables",
-        facet: "variables",
-        description: VARIABLES_DESCRIPTION,
-        renders: { ...sharedRenders }
-      },
-      /** The same hook as the other two builders — see them for the terms. */
-      scripts: {
-        kind: "scripts",
-        accepts: ["core:script:context/transform@1", "core:script:messages/inject@1"],
-        port: "main",
-        phase: "after",
-        description: "Scripts over what the prompt template renders \u2014 edit the instructions, roll an occasional event, or inject a reminder at a depth in the conversation."
-      }
-    },
-    ports: {
-      in: {
-        cast: contextPorts.in.cast,
-        /**
-         * `{ name, characterId, known, character }`, from the trigger's
-         * first step. `name` is what the seed line carries and what
-         * `{{char}}` renders; `character` is the card, absent for a
-         * free-form name, which is a normal turn rather than a degraded
-         * one — the builder falls back to the name it was given,
-         * because a typed name is all there is.
-         *
-         * Was `speaker` until 2026-09-16 — see the inlet's port of
-         * this name for why the fact moved off that word.
-         */
-        sideCharacter: S2.json,
-        /**
-         * Where this turn is happening, as the world state says it.
-         *
-         * Declared late, and for a defect rather than for symmetry: a
-         * voice built with no place in front of it answered from
-         * whatever the transcript suggested and moved the scene to a
-         * harbour the plan had never mentioned. Unwired on every
-         * pipeline that had this node before it, so those keep the
-         * context they already had.
-         */
-        state: S2.json,
-        /**
-         * The planner's document, for the one fact the state cannot
-         * supply on a first turn: where the scene is, before anything
-         * has written a location down.
-         */
-        plan: S2.json
-      },
-      out: {
-        ...contextPorts.out,
-        /**
-         * Who this voice is, as a **participant reference** —
-         * `character:<id>` for a name the cast holds, null for a
-         * free-form one. Additive, 2026-09-17 (W1).
-         *
-         * The resolution already happened: this node derives the
-         * speaking character from the `sideCharacter` fact so the card,
-         * `{{char}}` and the seed line agree. Publishing it is what lets
-         * a lore lane INSIDE the same `each` be handed the same answer
-         * — `speaker: $.voices.item.context.speaker` on
-         * `core:query/character-lore@1` — rather than a second
-         * name-to-row match somewhere downstream, which is how the
-         * prompt's speaker and the lore's speaker come to disagree.
-         *
-         * ⚠ It is published, never taken: there is still no
-         * `currentCharacterId` IN-port here, for the reason the header
-         * gives. What changed is that the id the node computed is now
-         * readable, not that a spec may set it.
-         */
-        speaker: S2.participantRef
-      }
-    }
-  })
-);
-var agentContextSlots = (promptFields) => ({
-  prompts: {
-    kind: "prompts",
-    quick: true,
-    facet: "prompts",
-    description: PROMPTS_DESCRIPTION,
-    fields: promptFields
-  },
-  variables: {
-    kind: "variables",
-    facet: "variables",
-    description: VARIABLES_DESCRIPTION,
-    renders: { ...sharedRenders }
-  },
-  /** The same pre-assemble hook the other three builders carry. */
-  scripts: {
-    kind: "scripts",
-    accepts: ["core:script:context/transform@1", "core:script:messages/inject@1"],
-    port: "main",
-    phase: "after",
-    description: "Scripts over what the prompt template renders \u2014 edit the instructions, roll an occasional event, or inject a reminder at a depth in the conversation."
-  }
-});
-var buildPlannerContext = pin2(
-  describeTaskDefinition2({
-    id: "core:task/build-planner-context@1",
-    i18n: { name: { en: "Build planner context" } },
-    timeoutMs: 2e3,
-    slots: agentContextSlots({
-      systemPrompt: { type: "text" },
-      postHistoryInstructions: { type: "text" }
-    }),
-    ports: {
-      in: {
-        cast: contextPorts.in.cast,
-        state: S2.json,
-        /**
-         * The session's own genre fields, by key — `tone`,
-         * `difficulty` and whatever else the genre declared.
-         *
-         * On the template context under their own names, so an
-         * authored prompt writes `{{tone}}` the way it writes
-         * `{{char}}`. That is the whole round trip the genre's `fields`
-         * declaration promises: declared on the genre, edited in
-         * session settings, stored on the row, published by the input
-         * node, and read here by the agent whose wording depends on
-         * them. Without this port the last step was missing and a
-         * prompt naming `{{tone}}` rendered a blank.
-         */
-        fields: S2.json
-      },
-      out: contextPorts.out
-    }
-  })
-);
-var buildSceneContext = pin2(
-  describeTaskDefinition2({
-    id: "core:task/build-scene-context@1",
-    i18n: { name: { en: "Build scene context" } },
-    timeoutMs: 2e3,
-    slots: agentContextSlots({
-      systemPrompt: { type: "text" },
-      postHistoryInstructions: { type: "text" },
-      narratorName: { type: "text" }
-    }),
-    ports: {
-      in: {
-        cast: contextPorts.in.cast,
-        state: S2.json,
-        /** What the planning step decided this turn is about. */
-        plan: S2.json,
-        /**
-         * The session's own genre fields, by key — `tone`,
-         * `difficulty` and whatever else the genre declared.
-         *
-         * On the template context under their own names, so an
-         * authored prompt writes `{{tone}}` the way it writes
-         * `{{char}}`. That is the whole round trip the genre's `fields`
-         * declaration promises: declared on the genre, edited in
-         * session settings, stored on the row, published by the input
-         * node, and read here by the agent whose wording depends on
-         * them. Without this port the last step was missing and a
-         * prompt naming `{{tone}}` rendered a blank.
-         */
-        fields: S2.json
-      },
-      out: contextPorts.out
-    }
-  })
-);
-var buildKeeperContext = pin2(
-  describeTaskDefinition2({
-    id: "core:task/build-keeper-context@1",
-    i18n: { name: { en: "Build state keeper context" } },
-    timeoutMs: 2e3,
-    slots: agentContextSlots({
-      systemPrompt: { type: "text" },
-      postHistoryInstructions: { type: "text" }
-    }),
-    ports: {
-      in: {
-        cast: contextPorts.in.cast,
-        state: S2.json,
-        /**
-         * The reply this keeper is reading, as text — put on the
-         * template context under `reply`, because the thing a keeper
-         * reports on is the scene that was just written and the
-         * transcript does not contain it yet.
-         */
-        reply: S2.text,
-        /**
-         * ⚠ **An ORDERING edge, and nothing else reads it.**
-         *
-         * A state change is anchored to the newest message in the
-         * session, which is how a swipe takes its changes back with it.
-         * So the keeper has to run AFTER the reply is written, not
-         * merely beside it — and in a graph whose order is its edges,
-         * the only way to say "after that write" is to take the write's
-         * result on a port. It is the write result rather than the text
-         * for exactly that reason: the text exists before the write and
-         * would order nothing.
-         *
-         * ⚠ Typed `json`, NOT `write-result@1`, and the difference is
-         * the standing rule rather than a convenience.
-         * `core:shape/write-result@1` is deliberately accepted nowhere:
-         * under async review a write is a proposal a reviewer may still
-         * reject, so a port declaring that shape is a port promising to
-         * handle both arms of it. This node handles neither — it never
-         * looks inside — and declaring the shape would claim otherwise.
-         * `json` is the honest type for a value taken as opaque, and
-         * write results are assignable to it like everything else.
-         */
-        afterWrite: S2.json,
-        /**
-         * The session's own genre fields, by key — `tone`,
-         * `difficulty` and whatever else the genre declared.
-         *
-         * On the template context under their own names, so an
-         * authored prompt writes `{{tone}}` the way it writes
-         * `{{char}}`. That is the whole round trip the genre's `fields`
-         * declaration promises: declared on the genre, edited in
-         * session settings, stored on the row, published by the input
-         * node, and read here by the agent whose wording depends on
-         * them. Without this port the last step was missing and a
-         * prompt naming `{{tone}}` rendered a blank.
-         */
-        fields: S2.json
-      },
-      out: contextPorts.out
-    }
-  })
-);
-var processMessages = pin2(
-  describeTaskDefinition2({
-    id: "core:task/process-messages@1",
-    i18n: { name: { en: "Process messages" } },
-    timeoutMs: 1e3,
-    slots: {
-      /**
-       * The message-rewrite hook (18 §4a), on the *processed* list —
-       * names resolved, per-message interpolation done. `transform` only:
-       * `messages/inject` deliberately does **not** live here. Injection
-       * is a statement about *position in the rendered conversation*, and
-       * position belongs to the template (§20, ruling of 2026-08-23) —
-       * inject chains attach on the context builders, land as
-       * `context.injections`, and the template's own loop renders them.
-       * Splicing rows into this list would be a position the template
-       * cannot express and an author cannot see.
-       */
-      scripts: {
-        kind: "scripts",
-        accepts: ["core:script:messages/transform@1"],
-        port: "main",
-        phase: "after",
-        description: "Scripts over the message list the model will see \u2014 rewrite or drop lines. Reminders at a depth attach on the context step instead."
-      }
-    },
-    ports: {
-      in: {
-        messages: S2.messages,
-        cast: S2.sessionCast,
-        templateContext: S2.templateContext,
-        seedName: S2.text,
-        /**
-         * Text the model is being asked to CONTINUE — the seed line's
-         * body rather than a message of its own (ruling 2026-09-08,
-         * D-2).
-         *
-         * ⚠ **Absent on an ordinary turn, and that is the normal case.**
-         * There is no `optional` marker for a port: a port nothing wires
-         * resolves to `undefined`, the seed line renders empty, and the
-         * model starts the reply. Every spec but a continue leaves it
-         * unwired on purpose.
-         *
-         * It is a port rather than a second synthetic message because a
-         * partial reply is not a turn: appending it as one produces two
-         * consecutive assistant entries on a chat endpoint and a
-         * wrongly-closed block on a completion one. The seed is the one
-         * place in the prompt whose block is deliberately left open
-         * (`includeClose: false` for id -2), which is exactly what a
-         * continuation needs.
-         *
-         * ⚠ It is **not** a stored message, and nothing downstream may
-         * treat it as one. The row holding it is `isGenerating` and is
-         * excluded from every message read, so lore scans, semantic and
-         * entity queries and history windows do not see it. It counts
-         * against the token budget, because it is in the prompt.
-         */
-        continuationPrefill: S2.text
-      },
-      out: { main: S2.messages, messages: S2.messages }
-    }
-  })
-);
-var proseTranscript = pin2(
-  describeTaskDefinition2({
-    id: "core:task/prose-transcript@1",
-    i18n: { name: { en: "Transcript as prose" } },
-    timeoutMs: 1e3,
-    ports: {
-      in: {
-        messages: S2.messages,
-        cast: S2.sessionCast,
-        templateContext: S2.templateContext
-      },
-      out: { main: S2.messages, messages: S2.messages }
-    }
-  })
-);
-var turnStrategy = (id, label2, extras = {}) => describeTaskDefinition2({
-  id,
-  i18n: { name: { en: label2 } },
-  timeoutMs: 1e3,
-  ...extras,
-  ports: {
-    in: {
-      cast: S2.sessionCast,
-      messages: S2.messages,
-      /**
-       * The explicit pick, when the trigger made one, as a
-       * participant reference (R-18 (3)) — `character:<id>` or
-       * `envoy:<slug>`. Always wins. Wired from the inlet's port of
-       * the same name.
-       */
-      speaker: S2.participantRef,
-      /**
-       * @deprecated The explicit pick as a bare character id (one
-       * release, from 2026-09-16). Honoured when `speaker` is unwired
-       * or null; read `speaker`.
-       */
-      characterId: S2.rowIds
-    },
-    out: {
-      main: S2.speakerSelection,
-      /**
-       * Who speaks, as a participant reference — the pick, or the
-       * strategy's own `character:<id>`; null when nobody does.
-       */
-      speaker: S2.participantRef,
-      /**
-       * The bare id, for wiring into context and generation. Null
-       * for an envoy, which has no row — the context and generation
-       * consumers keep reading this until they speak references.
-       */
-      characterId: S2.rowIds,
-      /** What decided — the receipt line §5 exists for. */
-      strategy: S2.text
-    }
-  }
-});
-var turnRoundRobin = pin2(turnStrategy("core:task/turn-round-robin@1", "Round robin"));
-var turnRandom = pin2(
-  turnStrategy("core:task/turn-random@1", "Random", {
-    declaresRandomness: true
-  })
-);
-var turnManual = pin2(turnStrategy("core:task/turn-manual@1", "Manual"));
-var turnNone = pin2(turnStrategy("core:task/turn-none@1", "No speaker"));
-var attachImage = pin2(
-  describeOutletDefinition({
-    id: "core:outlet/attach-image@1",
-    effects: "write",
-    /** The image is a reference to an asset this run rendered; nothing to retype (R-15 review fields). */
-    review: { fields: [] },
-    timeoutMs: 5e3,
-    reviewDefault: "on",
-    causesEvent: "core:event/message-updated@1",
-    ports: { in: { target: S2.rowIds, image: S2.image }, out: { main: S2.writeResult } }
-  })
-);
-var advertiseTools = pin2(
-  describeTaskDefinition2({
-    id: "core:task/advertise-tools@1",
-    i18n: { name: { en: "Advertise tools" } },
-    timeoutMs: 500,
-    slots: {
-      params: {
-        kind: "parameters",
-        schema: {
-          style: {
-            type: "enum",
-            of: ["native", "prompt"],
-            default: "prompt",
-            description: "How the model learns its tools: 'native' hands the declarations to the API's own tool-calling; 'prompt' writes them into the context for models without one."
-          }
-        }
-      }
-    },
-    ports: {
-      // [{ name, description, parameters }] — parameters as JSON Schema.
-      in: { tools: S2.json },
-      out: { main: S2.json, native: S2.json, prompt: S2.text }
-    }
-  })
-);
-var parseToolCall = pin2(
-  describeTaskDefinition2({
-    id: "core:task/parse-tool-call@1",
-    i18n: { name: { en: "Parse tool call" } },
-    timeoutMs: 500,
-    ports: {
-      in: { text: S2.text, tools: S2.json },
-      // `call` is { tool, args } | null — null is the loop's exit
-      // predicate, not an error: a reply with no call is the model being
-      // done. `text` is the reply with the call block stripped, so what
-      // renders is prose and what dispatches is data.
-      out: { main: S2.json, call: S2.json, text: S2.text }
-    }
-  })
-);
-var availableTools = pin2(
-  describeQueryDefinition({
-    id: "core:query/available-tools@1",
-    i18n: { name: { en: "Available tools" } },
-    timeoutMs: 2e3,
-    slots: {
-      params: {
-        kind: "parameters",
-        schema: {
-          include: {
-            type: "string[]",
-            description: "Offer only these tools, by name, in this order. Empty offers every tool the session has."
-          },
-          plugins: {
-            type: "boolean",
-            default: true,
-            description: "Offer tools contributed by the session's enabled extensions, as well as the built-in ones."
-          }
-        }
-      }
-    },
-    ports: { in: { scope: S2.sessionScope }, out: { main: S2.json, tools: S2.json } }
-  })
-);
-var runTool = pin2(
-  describeOracleDefinition({
-    id: "core:oracle/run-tool@1",
-    i18n: { name: { en: "Run tool" } },
-    effects: "external",
-    /** The call was the model's and the tool list the install's: approve or refuse (R-15 review fields). */
-    review: { fields: [] },
-    timeoutMs: 3e4,
-    ports: {
-      // `call` is parse-tool-call's `{ tool, args } | null`; `tools` is
-      // advertise-tools' input, so refusal reads the same list the model
-      // saw; `text` is the prose parse-tool-call stripped the call out of.
-      in: { call: S2.json, tools: S2.json, text: S2.text },
-      /**
-       * Three ports because an iteration produces up to three different
-       * things and one port carrying two of them is a port a downstream
-       * node has to interrogate.
-       *
-       *  - `main` — `{ tool, result }` or `{ tool, error }`, or null when
-       *    nothing was called. One shape, two arms, so nothing downstream
-       *    decides what happened by looking for a missing key.
-       *  - `text` — that rendered as the tool-result block **the next
-       *    prompt carries**. Empty when nothing ran.
-       *  - `answer` — what this iteration contributes to the
-       *    **conversation**: the model's prose, and only on the iteration
-       *    that called no tool, which is the one where the model stopped
-       *    working and answered. Empty otherwise, so joining every
-       *    iteration's `answer` yields the turn's reply and nothing else.
-       */
-      out: { main: S2.json, text: S2.text, answer: S2.text }
-    }
-  })
-);
-var joinText = pin2(
-  describeTaskDefinition2({
-    id: "core:task/join-text@1",
-    i18n: { name: { en: "Join text" } },
-    timeoutMs: 500,
-    slots: {
-      params: {
-        kind: "parameters",
-        schema: {
-          path: {
-            type: "string",
-            default: "text",
-            description: "Which key to read off each entry. Empty reads the entry itself, for a list of plain strings."
-          },
-          separator: {
-            type: "string",
-            default: "\n\n",
-            description: "What goes between the entries that had something to say."
-          }
-        }
-      }
-    },
-    ports: { in: { items: S2.json }, out: { main: S2.text, text: S2.text } }
-  })
-);
-var parseJson = pin2(
-  describeTaskDefinition2({
-    id: "core:task/parse-json@1",
-    i18n: { name: { en: "Read JSON" } },
-    timeoutMs: 1e3,
-    /**
-     * A reply nobody can read subtracts the structure and nothing else.
-     *
-     * The binding answers `err` with the reason, the executor absorbs it as
-     * `recoveredAsEmpty`, and every downstream port reads absent: a `map`
-     * over the missing list runs zero times, a template renders no block. So
-     * a model that ignored the schema costs a turn its plan, not its reply —
-     * which is the same "an unavailable mechanism subtracts a signal, it
-     * never disables a path" rule retrieval already works by.
-     */
-    optional: true,
-    slots: {
-      params: {
-        kind: "parameters",
-        schema: {
-          path: {
-            type: "string",
-            quick: true,
-            description: "Which value inside the answer to publish on `value` and `items`, as a dotted path. Empty publishes the whole answer."
-          }
-        }
-      }
-    },
-    ports: {
-      in: { text: S2.textStream },
-      out: {
-        main: S2.json,
-        /** The whole parsed document, whatever `path` says. */
-        json: S2.json,
-        /** The value at `path` — the document itself when `path` is empty. */
-        value: S2.json,
-        /** That same value as a list, for a `map` to iterate. */
-        items: S2.json
-      }
-    }
-  })
-);
-var roll = pin2(
-  describeTaskDefinition2({
-    id: "chariot.dice-tray:roll@1",
-    i18n: { name: { en: "Roll dice" } },
-    timeoutMs: 200,
-    declaresRandomness: true,
-    public: true,
-    ports: {
-      in: { notation: S2.text },
-      out: { main: S2.json, total: S2.json }
-    }
-  })
-);
-var gate = pin2(
-  describeTaskDefinition2({
-    id: "test:task/gate@1",
-    timeoutMs: 500,
-    ports: { in: { main: S2.json }, out: { main: S2.json } }
-  })
-);
-var slow = pin2(
-  describeTaskDefinition2({
-    id: "test:task/slow@1",
-    timeoutMs: 30,
-    ports: { in: { main: S2.json }, out: { main: S2.json } }
-  })
-);
-var passthrough = pin2(
-  describeTaskDefinition2({
-    id: "test:task/passthrough@1",
-    timeoutMs: 500,
-    toggleable: true,
-    ports: { in: { main: S2.json }, out: { main: S2.json } }
-  })
-);
-var badToggleable = pin2(
-  describeTaskDefinition2({
-    id: "test:task/bad-toggleable@1",
-    timeoutMs: 500,
-    toggleable: true,
-    ports: { in: { main: S2.text }, out: { main: S2.image } }
-  })
-);
-var embedText = pin2(
-  describeOracleDefinition({
-    id: "core:oracle/embed-text@1",
-    shape: S2.embeddings,
-    effects: "external",
-    /** Nothing to edit: an embedding of a text somebody else wrote (R-15 review fields). */
-    review: { fields: [] },
-    timeoutMs: 5e3,
-    /**
-     * ⚠ **Producing nothing is a legitimate outcome, and this is what makes
-     * that structural rather than careful.**
-     *
-     * Embeddings are optional in this product by design: most installs have
-     * no model loaded, and the retrieval plan's second governing rule is an
-     * absolute — *an unavailable mechanism subtracts a signal; it never
-     * reroutes, disables a path, or excludes a candidate.* The host answers
-     * "no embedding model is loaded and validated" by **throwing**, which is
-     * the right answer to give a caller and the wrong thing to let end a
-     * turn.
-     *
-     * `optional` is what turns that error into an empty `ok` in the executor
-     * — recorded, with `recoveredAsEmpty` and the reason on the receipt, so
-     * it is tolerated rather than hidden. The binding's `enabled` parameter
-     * decides how *loudly*: `auto` treats an unavailable model as an absence
-     * and returns no vectors without calling it a failure, `on` lets the
-     * failure be recorded as one. Neither can cost somebody a reply, and
-     * that is the point of putting the guarantee here instead of in a
-     * `try`.
-     *
-     * It also earns the node a "Use this source" switch, which is the
-     * zero-cost way to turn the semantic mechanism off entirely on an install that
-     * has a model and does not want it spent on retrieval.
-     */
-    optional: true,
-    slots: {
-      connection: {
-        kind: "connection",
-        quick: true,
-        shape: S2.embeddings,
-        // The two production rows carrying `modality: 'embeddings'` fell
-        // through every modality switch in the app; `text->embedding` is
-        // the home they never had.
-        requires: [tf({ in: [IoKinds.text], out: [IoKinds.embedding] })]
-      },
-      params: {
-        kind: "parameters",
-        schema: {
-          /**
-           * `shared`: one switch for every embed step of a spec (R-7
-           * P2). `respond` puts it on the semantic mechanism's embed
-           * and the entity-vector mechanism's embed reads it through
-           * `slot.params({ node })` — an install with no embedding
-           * model switches both off in one place, which is the only
-           * reading of "embedding: off" a person means.
-           */
-          enabled: {
-            type: "enum",
-            of: ["auto", "on", "off"],
-            default: "auto",
-            shared: true
-          }
-        }
-      }
-    },
-    ports: {
-      in: {
-        text: S2.text,
-        /** Batched: one call, one vector each, in order. */
-        texts: S2.json
-      },
-      out: { main: S2.vector, vector: S2.vector, vectors: S2.json }
-    }
-  })
-);
-var mcpTool = pin2(
-  describeOracleDefinition({
-    id: "core:oracle/mcp-tool@1",
-    i18n: {
-      name: { en: "MCP tool" },
-      description: {
-        en: "Call one tool on a Model Context Protocol server, recorded verbatim and gated like every effectful step."
-      }
-    },
-    shape: S2.mcp,
-    effects: "external",
-    /** Declared, not bound — plans/28 owns the handler (plans/29 R-2). */
-    provisional: true,
-    /** The arguments are the model's invocation: approve or refuse it, never rewrite it (R-15 review fields). */
-    review: { fields: [] },
-    timeoutMs: 6e4,
-    slots: {
-      connection: {
-        kind: "connection",
-        quick: true,
-        shape: S2.mcp,
-        /**
-         * ⚠ No `requires`, and that is deliberate rather than an omission.
-         *
-         * The capability space describes io TRANSFORMS — what a model can
-         * be handed and what it gives back. An MCP server is not one: it
-         * serves tools, it does not turn text into anything. The nearest
-         * id, `text->text`, would be false, and claiming it would make
-         * every chat connection in the install look offerable here.
-         *
-         * So this slot keeps filtering by `shape` alone, which is the
-         * right axis for it. `requires` is for slots whose answer is "what
-         * must this connection be able to DO".
-         */
-        description: "Which MCP server this step calls."
-      },
-      params: {
-        kind: "parameters",
-        schema: {
-          tool: {
-            type: "string",
-            quick: true,
-            i18n: { en: "Tool" },
-            description: {
-              en: "The advertised tool name on the connected server."
-            }
-          }
-        }
-      }
-    },
-    ports: {
-      in: {
-        /** Arguments for the tool, merged over any declared in params. */
-        args: S2.json
-      },
-      out: {
-        main: S2.json,
-        text: S2.text,
-        /** The content blocks exactly as the server returned them. */
-        content: S2.json
-      }
-    }
-  })
-);
-var mcpResource = pin2(
-  describeOracleDefinition({
-    id: "core:oracle/mcp-resource@1",
-    i18n: {
-      name: { en: "MCP resource" },
-      description: {
-        en: "Read one resource from a Model Context Protocol server, recorded verbatim."
-      }
-    },
-    shape: S2.mcp,
-    effects: "external",
-    /** Declared, not bound — plans/28 owns the handler (plans/29 R-2). */
-    provisional: true,
-    /** The uri is the invocation: approve or refuse (R-15 review fields). */
-    review: { fields: [] },
-    timeoutMs: 6e4,
-    slots: {
-      connection: {
-        kind: "connection",
-        quick: true,
-        shape: S2.mcp,
-        // No `requires` — see the sibling MCP node above: a tool server is
-        // not an io transform, so `shape` is the right filter here.
-        description: "Which MCP server this step reads from."
-      },
-      params: {
-        kind: "parameters",
-        schema: {
-          uri: {
-            type: "string",
-            quick: true,
-            i18n: { en: "Resource URI" },
-            description: {
-              en: "The advertised resource URI on the connected server."
-            }
-          }
-        }
-      }
-    },
-    ports: {
-      in: {
-        /** Overrides the declared URI when wired. */
-        uri: S2.text
-      },
-      out: {
-        main: S2.json,
-        text: S2.text,
-        content: S2.json
-      }
-    }
-  })
-);
-var generateText = pin2(
-  describeOracleDefinition({
-    id: "core:oracle/generate-text@1",
-    i18n: { name: { en: "Generate reply" } },
-    shape: S2.textGen,
-    effects: "external",
-    /** The payload is the compiled prompt; a prompt rewritten at the gate is one the receipt cannot explain — approve or refuse (R-15 review fields). */
-    review: { fields: [] },
-    timeoutMs: 12e4,
-    timeoutKind: "idle",
-    usage: "response.usage",
-    slots: {
-      connection: {
-        kind: "connection",
-        quick: true,
-        shape: S2.textGen,
-        /**
-         * What the connection must be able to do, as opposed to what it
-         * is called. `shape` above still types the SLOT; this types the
-         * connection, and it is what the picker filters on and what the
-         * bind check refuses by — naming "Chat" rather than an id.
-         *
-         * Only `requires`, deliberately — still, now that the binding DOES
-         * consume `attachments`. It is the Anthropic adapter that sends
-         * them today (as base64 content blocks on the last user turn); a
-         * connection whose adapter has no such code REFUSES a request
-         * carrying files rather than sending it without them, so the
-         * `attachments` port is honest without a slot-level requirement.
-         *
-         * An `optional` vision requirement would meanwhile put a "no
-         * vision" caveat on every text connection in the app, on every
-         * run — and the port is empty on nearly all of them.
-         */
-        requires: [tf({ in: [IoKinds.text], out: [IoKinds.text] })],
-        description: "Which model server this step sends its request to."
-      },
-      sampling: {
-        kind: "sampling",
-        quick: true,
-        shape: S2.textGen,
-        description: "The sampling settings \u2014 temperature and friends \u2014 used for this request."
-      },
-      /**
-       * ⚠ No `prompts` slot, and there was one — `system` and
-       * `postHistory`, "the written instructions sent with every request
-       * from this step" (culled 2026-09-16, R-12). No handler read it:
-       * the instructions reach the model INSIDE the assembled context,
-       * through `core:task/assemble@2`'s own `prompts` slot, and this
-       * node sends what it is handed on `context`. Every shipped spec
-       * wired it as `slot.prompts({ node: 'context' })` for one reason
-       * only — so the panel would not render a second copy of the
-       * context builder's text — which is a declaration existing to hide
-       * itself. The same slot on `generate-with-tools@1` and
-       * `generate-json@1` went with it.
-       */
-      /**
-       * ⚠ No `template` slot, and there was one — "how the assembled
-       * context is wrapped for this model before sending".
-       *
-       * Nothing read it and nothing seeded a row, so it rendered as an
-       * empty picker beside the settings that do work. Wrapping for the
-       * wire is the `wire` slot's job and the connection adapter's; a
-       * second, inert way to express it invited the two to disagree.
-       */
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: {
-          stopSequences: {
-            type: "string[]",
-            description: "Sequences that end the reply the moment the model writes one. One per line."
-          },
-          streaming: streamingParam()
-        }
-      }
-    },
-    /**
-     * Vision and interleaved output, declared.
-     *
-     * `accepts` is what makes a multimodal model reachable at all: before
-     * this the only image ports in the whole graph pointed *outward*
-     * (render, attach), so an image could be produced and stored but never
-     * sent. `emits` says a reply may contain generated media — which is
-     * what a single call now routinely returns, interleaved with the prose
-     * rather than beside it.
-     *
-     * Declaring both here does not oblige a connection to do either; the
-     * adapter reports what its model actually supports and the two are
-     * resolved at bind time.
-     */
-    media: {
-      accepts: ["image", "document"],
-      emits: ["image"]
-    },
-    ports: {
-      in: {
-        context: S2.assembled,
-        /**
-         * Whose reply is being generated — the stop-string exclusion
-         * (§27l): the speaking character's own name must not stop
-         * their own reply. The host already preferred a payload value
-         * over the run scope's; this port is what lets a spec supply
-         * one, so the exclusion follows the next-speaker node's output
-         * (19 §5) instead of the pre-run guess.
-         */
-        currentCharacterId: S2.rowIds,
-        /**
-         * Media travelling with the request — the page a user
-         * attached, the frame a vision step is asked about. A list
-         * because interleaving is ordered and a single ref could not
-         * express "these three, in this order".
-         *
-         * Optional, and never quietly ignored: the host forwards these
-         * references to the dispatch, which resolves each one to bytes
-         * (checking it belongs to this run's session or user) and hands
-         * them to the adapter in this order. A request whose connection
-         * has vision switched off, or whose adapter has no code that
-         * sends files, is REFUSED rather than sent without them —
-         * dropping a file is indistinguishable from a model ignoring it.
-         */
-        attachments: S2.mediaList
-      },
-      /**
-       * `parts` is the honest shape of a completion: an ordered list of
-       * text, reasoning, generated media and tool calls. `main` and
-       * `text` stay exactly as they were — `part-stream` is assignable
-       * to `text-stream`, so every spec wired to them keeps working and
-       * degrades by concatenating the prose.
-       *
-       * `thinking` is the reasoning trace the dispatch separated from
-       * the text before the text reached the port — published by the
-       * binding since it first stripped one, declared now that a
-       * downstream write (`update-message`) takes it. Empty when the
-       * model produced none.
-       */
-      out: {
-        main: S2.partStream,
-        text: S2.textStream,
-        parts: S2.partStream,
-        thinking: S2.text
-      }
-    }
-  })
-);
-var generateWithTools = pin2(
-  describeOracleDefinition({
-    id: "core:oracle/generate-with-tools@1",
-    i18n: { name: { en: "Generate with tools" } },
-    shape: S2.textGen,
-    effects: "external",
-    /** The compiled prompt and the tool list: approve or refuse, as `generate-text` (R-15 review fields). */
-    review: { fields: [] },
-    timeoutMs: 12e4,
-    timeoutKind: "idle",
-    usage: "response.usage",
-    slots: {
-      connection: {
-        kind: "connection",
-        quick: true,
-        shape: S2.textGen,
-        requires: [tf({ in: [IoKinds.text], out: [IoKinds.text] })],
-        /**
-         * Asked rather than required, so this node is bindable to every
-         * text connection and the author decides what to do without one
-         * — which is the ruling on `optional` (`ctx.can`): the type
-         * system makes absence impossible to forget about, and the
-         * fallback is the author's to write. A spec that wants the
-         * emulated door instead wires `advertise-tools`' `prompt`.
-         */
-        optional: ["tools"],
-        description: "Which model server this step sends its request to."
-      },
-      sampling: { kind: "sampling", quick: true, shape: S2.textGen },
-      // No `prompts` slot — see `generateText` (culled 2026-09-16, R-12).
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: {
-          stopSequences: {
-            type: "string[]",
-            description: "Sequences that end the reply the moment the model writes one. One per line."
-          },
-          streaming: streamingParam()
-        }
-      }
-    },
-    media: { accepts: ["image", "document"], emits: ["image"] },
-    ports: {
-      in: {
-        context: S2.assembled,
-        /** `advertise-tools`' `native` port — the declarations, verbatim. */
-        tools: S2.json,
-        currentCharacterId: S2.rowIds,
-        attachments: S2.mediaList
-      },
-      out: {
-        main: S2.partStream,
-        text: S2.textStream,
-        parts: S2.partStream,
-        /**
-         * `{ tool, args }` when the model called one, null when it
-         * answered — the same shape `parse-tool-call` publishes, so
-         * `run-tool` and the loop's predicate take either door without
-         * knowing which was used.
-         */
-        toolCall: S2.json
-      }
-    }
-  })
-);
-var generateJson = pin2(
-  describeOracleDefinition({
-    id: "core:oracle/generate-json@1",
-    i18n: { name: { en: "Generate JSON" } },
-    shape: S2.textGen,
-    effects: "external",
-    /** The compiled prompt and the schema: approve or refuse, as `generate-text` (R-15 review fields). */
-    review: { fields: [] },
-    timeoutMs: 12e4,
-    timeoutKind: "idle",
-    usage: "response.usage",
-    /**
-     * An answer nobody can read costs the structure and nothing else.
-     *
-     * The same guarantee `parse-json@1` makes, kept here because this node
-     * replaced it in the chain: a planner whose document came back malformed
-     * should leave a turn with no plan, narrated anyway, rather than a turn
-     * that failed. The executor records `recoveredAsEmpty` and every
-     * downstream port reads absent, so a `map` over the missing list runs
-     * zero times.
-     */
-    optional: true,
-    slots: {
-      connection: {
-        kind: "connection",
-        quick: true,
-        shape: S2.textGen,
-        requires: [tf({ in: [IoKinds.text], out: [IoKinds.text] })],
-        /**
-         * Asked rather than required, which is the `ctx.can` ruling: the
-         * node binds to every text connection and the binding decides
-         * what to do without them. The ladder is `json_schema` (the
-         * shape on the wire, natively or compiled to a grammar), then
-         * `json_object` (JSON, shape unsaid), then a sentence in the
-         * prompt — and the last rung works everywhere, so an absence
-         * costs fidelity rather than the step.
-         */
-        optional: ["json_schema", "json_object"],
-        description: "Which model server this step sends its request to."
-      },
-      sampling: { kind: "sampling", quick: true, shape: S2.textGen },
-      // No `prompts` slot — see `generateText` (culled 2026-09-16, R-12).
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: {
-          /**
-           * Which value inside the answer reaches `value` and `items`.
-           *
-           * A data reference is `{node, port}` with no sub-path, so a
-           * downstream `map` cannot iterate `plan.speakers` off a port
-           * carrying the whole document — the same reason `parse-json`
-           * carries this parameter, and the same spelling.
-           *
-           * Several dotted paths separated by commas are read in order
-           * and their lists joined. That is what makes an answer split
-           * into arms wireable at all: a keeper reports
-           * `{values, possessions}` because a schema can only be strict
-           * about a list whose items are all one shape, and the node
-           * that resolves them takes one list.
-           */
-          path: {
-            type: "string",
-            quick: true,
-            description: "Which value inside the answer to publish on `value` and `items`, as a dotted path. Several paths, separated by commas, are joined in order. Empty publishes the whole answer."
-          },
-          stopSequences: {
-            type: "string[]",
-            description: "Sequences that end the reply the moment the model writes one. One per line."
-          },
-          streaming: streamingParam()
-        }
-      }
-    },
-    ports: {
-      in: {
-        context: S2.assembled,
-        /**
-         * The shape the answer must take, as a JSON Schema document.
-         *
-         * Optional, and the node is useful without it: an unschema'd
-         * request still asks for JSON rather than prose. Supplied, it
-         * reaches whichever field the connection's service calls it —
-         * Ollama's `format`, OpenAI's `json_schema`, a GBNF grammar on
-         * the llama.cpp family — and a connection that takes none
-         * ignores it, which is the degradation rule the adapters
-         * already follow for `responseFormat`.
-         */
-        schema: S2.json
-      },
-      out: {
-        /** The parsed document, which is what this node is for. */
-        main: S2.json,
-        json: S2.json,
-        /** The value at `path` — the document itself when `path` is empty. */
-        value: S2.json,
-        /** That same value as a list, for a `map` to iterate. */
-        items: S2.json,
-        /** What the model actually wrote, for a reader diagnosing the above. */
-        text: S2.textStream
-      }
-    }
-  })
-);
-var speak = pin2(
-  describeOracleDefinition({
-    id: "core:oracle/speak@1",
-    i18n: { name: { en: "Speak" } },
-    shape: S2.tts,
-    effects: "external",
-    /** Declared, not bound — plans/14 owns the handler (plans/29 R-2). */
-    provisional: true,
-    /** The words to be spoken may be corrected before the call (R-15 review fields). */
-    review: { fields: ["text"] },
-    timeoutMs: 6e4,
-    slots: {
-      connection: {
-        kind: "connection",
-        quick: true,
-        shape: S2.tts,
-        requires: [tf({ in: [IoKinds.text], out: [IoKinds.audio] })]
-      },
-      sampling: { kind: "sampling", quick: true, shape: S2.tts },
-      template: {
-        kind: "template",
-        engine: jinja2.id,
-        facet: "templates"
-      },
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: { skipCodeBlocks: { type: "boolean", default: true } }
-      }
-    },
-    ports: { in: { text: S2.text }, out: { main: S2.audio, audio: S2.audio } }
-  })
-);
-var generateImage = pin2(
-  describeOracleDefinition({
-    id: "core:oracle/generate-image@1",
-    i18n: { name: { en: "Generate image" } },
-    shape: S2.imageGen,
-    effects: "external",
-    /** The prompt and the negative may be edited; `init` names an asset and may not (R-15 review fields). */
-    review: { fields: ["prompt", "negative"] },
-    // Idle rather than wall: a render is minutes on modest hardware, and a
-    // backend still reporting progress is working, not hung.
-    timeoutMs: 6e5,
-    timeoutKind: "idle",
-    slots: {
-      connection: {
-        kind: "connection",
-        quick: true,
-        shape: S2.imageGen,
-        /**
-         * The declaration that makes a KoboldCPP connection offerable
-         * here at all: its TYPE says text, and what it can do says
-         * otherwise.
-         */
-        requires: [tf({ in: [IoKinds.text], out: [IoKinds.image] })],
-        description: "Which image server this step sends its request to."
-      },
-      sampling: {
-        kind: "sampling",
-        quick: true,
-        shape: S2.imageGen,
-        description: "Steps, CFG, size, seed \u2014 the settings every image backend shares."
-      },
-      prompts: {
-        kind: "prompts",
-        quick: true,
-        facet: "prompts",
-        description: "How the incoming text becomes what the image model is asked for.",
-        fields: {
-          positive: { type: "text" },
-          negative: { type: "text" }
-        }
-      },
-      /**
-       * No `facet`, unlike the text nodes' `weights`: the one parameter
-       * here decides how the request is SENT, and the weights facet is
-       * where a person looks for what the model is asked for.
-       *
-       * On an image backend `off` is the difference between one request
-       * and a render polled for progress and previews, which is the
-       * whole of what a background stage saves by turning it off.
-       */
-      params: {
-        kind: "parameters",
-        schema: { streaming: streamingParam() }
-      }
-    },
-    media: { emits: ["image", "video"] },
-    ports: {
-      in: {
-        prompt: S2.text,
-        negative: S2.text,
-        /** An input image, for backends that report `img2img`. */
-        init: S2.media
-      },
-      out: {
-        main: S2.mediaList,
-        media: S2.mediaList,
-        image: S2.image,
-        caption: S2.text
-      }
-    }
-  })
-);
-var renderImage = pin2(
-  describeOracleDefinition({
-    id: "chariot.comfy:render-image@1",
-    shape: S2.imageGen,
-    effects: "external",
-    /** A sample plugin oracle: its payload is a compiled prompt — approve or refuse (R-15 review fields). */
-    review: { fields: [] },
-    public: true,
-    timeoutMs: 3e5,
-    slots: {
-      connection: {
-        kind: "connection",
-        quick: true,
-        shape: S2.imageGen,
-        requires: [tf({ in: [IoKinds.text], out: [IoKinds.image] })]
-      },
-      sampling: { kind: "sampling", quick: true, shape: S2.imageGen },
-      prompts: {
-        kind: "prompts",
-        quick: true,
-        facet: "prompts",
-        fields: {
-          positive: { type: "text" },
-          negative: { type: "text" }
-        }
-      },
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: { steps: { type: "integer", default: 25 } }
-      }
-    },
-    ports: {
-      in: { context: S2.assembled },
-      out: { main: S2.image, image: S2.image }
-    }
-  })
-);
-var sloppyStream = pin2(
-  describeTaskDefinition2({
-    id: "test:task/sloppy-stream@1",
-    timeoutMs: 5e3,
-    ports: { in: { main: S2.textStream }, out: { main: S2.json } }
-  })
-);
-var sessionGreetings = pin2(
-  describeQueryDefinition({
-    id: "core:query/session-greetings@1",
-    i18n: { name: { en: "Session greetings" } },
-    timeoutMs: 2e3,
-    ports: {
-      in: { scope: S2.sessionScope },
-      out: { main: S2.json, greetings: S2.json }
-    }
-  })
-);
-var seedGreetings = pin2(
-  describeOutletDefinition({
-    id: "core:outlet/seed-greetings@1",
-    effects: "write",
-    /** The greetings are the cards' own text and the channel the genre's: approve or refuse (R-15 review fields). */
-    review: { fields: [] },
-    timeoutMs: 5e3,
-    causesEvent: "core:event/message-created@1",
-    ports: {
-      in: {
-        greetings: S2.json,
-        /**
-         * The channel the greetings land on (20 §7) — the genre's
-         * declared greeting channel, written by the create specs as a
-         * literal (`createChat.ts`, `adventure.ts`). Absent is `main`.
-         * Declared 2026-09-16 (U2 residual): the host read it off the
-         * payload while no declaration supplied it.
-         */
-        channel: S2.text
-      },
-      out: { main: S2.writeResult, messageIds: S2.writeResult }
-    }
-  })
-);
-var createMessage = pin2(
-  describeOutletDefinition({
-    id: "core:outlet/create-message@1",
-    effects: "write",
-    /** The text may be reviewed; who speaks, which row and which channel are the run's identity (R-15 review fields). */
-    review: { fields: ["text"] },
-    reviewDefault: "off",
-    liveRow: true,
-    timeoutMs: 5e3,
-    causesEvent: "core:event/message-created@1",
-    slots: {
-      /**
-       * The write hook (18 §4a): one chain rewrites the final output, the
-       * other decides where a streamed reply stops. Stop is a verdict —
-       * min-reduction across every attached script, and the connection's
-       * own guards join the same union at dispatch (18 §4b), which is why
-       * order never needs ruling. `speakerName` and `castNames` are
-       * extras: readable, never writable, by construction (18 §6a).
-       */
-      scripts: {
-        kind: "scripts",
-        accepts: ["core:script:text/transform@1", "core:script:text/stop@1"],
-        port: "text",
-        phase: "before",
-        extras: ["speakerName", "castNames"],
-        description: "Scripts over the reply as it is saved \u2014 clean up the text, or stop a streaming reply early."
-      }
-    },
-    ports: {
-      in: {
-        text: S2.text,
-        /**
-         * Media to post WITH the message, as references.
-         *
-         * Posting an image as a NEW message is one write, not a create
-         * followed by an `attach-image`: the answer is the same one
-         * streaming got — one node with a settled output, not two nodes
-         * and a hope. The write that creates the message is the write
-         * that attaches its images.
-         */
-        media: S2.mediaList,
-        /**
-         * Who is speaking, as a cast row — the inlet's `characterId`.
-         * Null or absent means nobody in particular: narration, or a
-         * message no character voices.
-         */
-        characterId: S2.rowIds,
-        /**
-         * The participant voicing this message when they are **not** a
-         * cast row — the side-character fact `{ name, characterId, known }`
-         * off `side-character-turn@1`'s `sideCharacter` port. Stored
-         * beside the message under `metadata.sideCharacter` (was
-         * `metadata.speaker` until U5g, 2026-09-16 — that key is the
-         * participant reference now, on the row as on the inlet, R1),
-         * where the run and the receipt read it from; it never writes a
-         * cast row and never enters the rotation.
-         *
-         * Was `speaker` until 2026-09-16 — the inlet's port of that
-         * name is a participant reference now (R-18 (3)).
-         */
-        sideCharacter: S2.json,
-        /**
-         * Who is speaking, as a **participant reference** (R-18 (3);
-         * U5g, 2026-09-16) — `character:<id>` or `envoy:<slug>`, the
-         * inlet's `speaker`. Stored beside the message as
-         * `metadata.speaker`; it is the only identity an envoy's turn
-         * carries, since an envoy has no row for `characterId` to name.
-         * Optional: a spec that wires only `characterId` writes the row
-         * it always wrote.
-         */
-        speaker: S2.participantRef,
-        /**
-         * Create the row as a **placeholder**: empty, generating, and the
-         * run's live row — filled by a later `update-message`, or
-         * finalised by core if the run stops first.
-         *
-         * A port, not a parameter, and the call site is what decides:
-         * the reply specs write `generating: true` as a literal into the
-         * node's config, in the same map as `text`, and `resolveInput`
-         * passes it through untouched — so the binding reads it exactly
-         * the way it reads a port (see `summarize-batch`'s `loreType`
-         * for the same reasoning at length). A `params` field would put
-         * a structural fact of the document in the panel as a knob.
-         */
-        generating: S2.json,
-        /**
-         * The message is **narration** — not a character's turn. Shown
-         * under the narrator's name, never counted by the rotation. A
-         * literal, on the same terms as `generating`. The name is the
-         * session's narrator name, or the `speaker`'s where one was
-         * named; the host resolves it at the write, which is where the
-         * row is.
-         */
-        narration: S2.json,
-        /**
-         * Instructions this message was asked for — a narrator's focus
-         * note. Stored beside the message and shown with it; never its
-         * text. Wired from the inlet's `text` on the narrate specs, which
-         * is what a narrator turn's triggering text is.
-         */
-        instructions: S2.text,
-        /**
-         * The channel the row lands on (20 §7). Absent is `main`, so a
-         * pipeline that has never heard of channels writes where it
-         * always did; a channel the session's genre never declared is
-         * refused at the write. Declared 2026-09-16 (U2 residual) for
-         * the same reason `seed-greetings` declares its own.
-         */
-        channel: S2.text,
-        /**
-         * An existing message row to take as the placeholder instead of
-         * inserting one — the inlet's `messageId` on a regenerate, swipe
-         * or continue. The row is reset to generating and becomes the
-         * run's live row; its text and swipe history stay as the verb
-         * left them. Absent on a fresh turn, which inserts.
-         */
-        row: S2.rowIds,
-        /**
-         * Message **blocks** to post with the row (20 §6; R-15
-         * *Forms*; U5d, 2026-09-17): a list of `MessageBlock` — text,
-         * tables, meters, and the two interactive kinds, `choices` and
-         * `form`, which are **forms** when they carry an `addressee`.
-         * The host validates the tree (`checkMessageBlocks`), refuses
-         * a block naming a function this spec declares no action for
-         * or one whose action is `world` (the effects line), stamps
-         * each form with the writing spec's action identity and an
-         * id, stores them as a `core:blocks` part, and — for a form
-         * whose addressee the run's pinned portrayals say the AI
-         * portrays — records `core:event/form-addressed@1` for the
-         * genre's answer pipeline once this run's receipt is saved.
-         * Absent on nearly every message.
-         */
-        blocks: S2.json
-      },
-      out: { main: S2.writeResult, messageId: S2.writeResult }
-    }
-  })
-);
-var updateMessage = pin2(
-  describeOutletDefinition({
-    id: "core:outlet/update-message@1",
-    effects: "write",
-    /** The text may be reviewed; the row may not, nor the reasoning trace (R-15 review fields). */
-    review: { fields: ["text"] },
-    timeoutMs: 5e3,
-    causesEvent: "core:event/message-updated@1",
-    slots: {
-      /** The same write hook as `create-message` — see it for the terms. */
-      scripts: {
-        kind: "scripts",
-        accepts: ["core:script:text/transform@1", "core:script:text/stop@1"],
-        port: "text",
-        phase: "before",
-        extras: ["speakerName", "castNames"],
-        description: "Scripts over the reply as it is saved \u2014 clean up the text, or stop a streaming reply early."
-      }
-    },
-    ports: {
-      in: {
-        target: S2.rowIds,
-        text: S2.text,
-        /**
-         * The reasoning trace the oracle separated from its text, when
-         * the model produced one. Stored beside the message as the
-         * thinking pane reads it; absent means none.
-         */
-        thinking: S2.text,
-        /**
-         * Blocks to append to the row — the same list, the same
-         * checks and the same stamping as `create-message`'s
-         * `blocks`; appended as a `core:blocks` part after the text
-         * lands, so a reply can end with a question put to the cast.
-         */
-        blocks: S2.json
-      },
-      out: { main: S2.writeResult, messageId: S2.writeResult }
-    }
-  })
-);
-var deleteMessage = pin2(
-  describeOutletDefinition({
-    id: "core:outlet/delete-message@1",
-    effects: "write",
-    reviewDefault: "off",
-    // Nothing to edit at the gate: approve the delete or refuse it. The
-    // row it is about was judged by the handler (the item rule) before
-    // the run began, and a reviewer retyping `target` would re-aim the
-    // write at a row nobody judged (U5b review C1).
-    review: { fields: [] },
-    timeoutMs: 5e3,
-    causesEvent: "core:event/message-deleted@1",
-    ports: {
-      in: { target: S2.rowIds },
-      out: { main: S2.writeResult, messageId: S2.writeResult, lost: S2.json }
-    }
-  })
-);
-var hideMessage = pin2(
-  describeOutletDefinition({
-    id: "core:outlet/hide-message@1",
-    effects: "write",
-    reviewDefault: "off",
-    /** The direction may be reviewed; the row may not (see `delete-message`). */
-    review: { fields: ["hidden"] },
-    timeoutMs: 5e3,
-    causesEvent: "core:event/message-hidden@1",
-    ports: {
-      in: { target: S2.rowIds, hidden: S2.json },
-      out: { main: S2.writeResult, messageId: S2.writeResult, hidden: S2.json }
-    }
-  })
-);
-var editMessage = pin2(
-  describeOutletDefinition({
-    id: "core:outlet/edit-message@1",
-    effects: "write",
-    reviewDefault: "off",
-    /** The text may be reviewed; the row may not (see `delete-message`). */
-    review: { fields: ["text"] },
-    timeoutMs: 5e3,
-    causesEvent: "core:event/message-edited@1",
-    ports: {
-      in: { target: S2.rowIds, text: S2.text },
-      out: { main: S2.writeResult, messageId: S2.writeResult, previous: S2.json }
-    }
-  })
-);
-var swipeMessage = pin2(
-  describeOutletDefinition({
-    id: "core:outlet/swipe-message@1",
-    effects: "write",
-    reviewDefault: "off",
-    /**
-     * A recorded alternative's text may be reviewed; neither the row nor
-     * the `index` — which alternative a navigation selects is as much the
-     * request's identity as the row is (see `delete-message`).
-     */
-    review: { fields: ["text"] },
-    timeoutMs: 5e3,
-    causesEvent: "core:event/message-swiped@1",
-    ports: {
-      in: { target: S2.rowIds, index: S2.json, text: S2.text },
-      out: {
-        main: S2.writeResult,
-        messageId: S2.writeResult,
-        swipeIndex: S2.json,
-        previous: S2.json
-      }
-    }
-  })
-);
-var branchSession = pin2(
-  describeOutletDefinition({
-    id: "core:outlet/branch-session@1",
-    effects: "write",
-    reviewDefault: "off",
-    /** The title may be reviewed; the fork point may not (see `delete-message`). */
-    review: { fields: ["title"] },
-    timeoutMs: 3e4,
-    causesEvent: "core:event/session-branched@1",
-    ports: {
-      in: { fromMessage: S2.rowIds, title: S2.text },
-      out: { main: S2.writeResult, sessionId: S2.writeResult }
     }
   })
 );
@@ -8046,6 +8397,18 @@ var formAddressed = pin2(
         main: S2.formAddressed,
         sessionScope: S2.sessionScope,
         sessionId: S2.rowIds,
+        /**
+         * The session's **settings document** (PLAN-turn-order §4.12,
+         * R13): every setting a person can see in session settings,
+         * resolved once per run by the host and handed in here —
+         * title, guests, genre fields (cascade applied, §4.13),
+         * scenario, lorebook, tags, channels, the cast with its
+         * envoys, the session-scope rebinds and param overrides per
+         * bound spec, the turn-order state, `metadata` (read-only)
+         * and the annex. `$.input.session.fields.tone` reads in any
+         * spec, and no node re-queries a table for a setting.
+         */
+        session: S2.sessionSettings,
         /** The message carrying the block. */
         messageId: S2.rowIds,
         /** The block's id within the message. */
@@ -8064,139 +8427,6 @@ var formAddressed = pin2(
     }
   })
 );
-var formContext = pin2(
-  describeTaskDefinition2({
-    id: "core:task/form-context@1",
-    i18n: { name: { en: "Form as prompt and schema" } },
-    timeoutMs: 1e3,
-    ports: {
-      in: { form: S2.json, templateContext: S2.templateContext },
-      out: {
-        main: S2.templateContext,
-        templateContext: S2.templateContext,
-        schema: S2.json,
-        question: S2.text
-      }
-    }
-  })
-);
-var makeChoices = pin2(
-  describeTaskDefinition2({
-    id: "core:task/make-choices@1",
-    i18n: { name: { en: "Question as choices" } },
-    timeoutMs: 1e3,
-    ports: {
-      in: {
-        /** The oracle's document: `{ question, options, addressee? }`. */
-        json: S2.json,
-        /** The function every option fires — the block's `fn`. */
-        fn: S2.text,
-        /**
-         * The identity of the declaration the options fire, when it is
-         * another spec's (`core:spec/adventure-answer#answer`). Absent,
-         * the host stamps this spec's own declaration for `fn` at the
-         * write.
-         */
-        action: S2.text,
-        /** Who the question is put to. Wired, it wins over the document's. */
-        addressee: S2.participantRef,
-        /** The cast, to resolve a name the document used into a reference. */
-        cast: S2.sessionCast
-      },
-      out: {
-        main: S2.json,
-        blocks: S2.json,
-        /** The question as prose — the row's content. */
-        text: S2.text,
-        /** Who the block was addressed to, resolved; null when nobody. */
-        addressee: S2.participantRef
-      }
-    }
-  })
-);
-var readAnswer = pin2(
-  describeTaskDefinition2({
-    id: "core:task/read-answer@1",
-    i18n: { name: { en: "Read the answer" } },
-    timeoutMs: 1e3,
-    ports: {
-      in: { payload: S2.json, form: S2.json },
-      out: {
-        main: S2.json,
-        /** The chosen option's key (`choices`), else null. */
-        choice: S2.text,
-        /** The chosen option's label, else null. */
-        label: S2.text,
-        /** Who answered, as a participant reference — the form's addressee. */
-        addressee: S2.participantRef,
-        /** The addressee's character row, null for an envoy or a person. */
-        characterId: S2.rowIds,
-        question: S2.text,
-        /** The whole answer: `{ choice }` or the entered values. */
-        values: S2.json
-      }
-    }
-  })
-);
-var answerForm = pin2(
-  describeOutletDefinition({
-    id: "core:outlet/answer-form@1",
-    i18n: { name: { en: "Answer the form" } },
-    effects: "write",
-    reviewDefault: "off",
-    /** The answer may be corrected at the gate; which form, and who answers, may not (R-15 review fields). */
-    review: { fields: ["answer"] },
-    /**
-     * A write's timeout, not a run's (was 600000 until 2026-09-17, U5d
-     * review W2): the commit checks the answer, asks the cycle caps and
-     * **collects** the fire — the action's run is dispatched by the host
-     * after this run's receipt is saved, outside any node timeout, as
-     * this run's child. A grandchild parked at review parks nothing here.
-     *
-     * Thirty seconds rather than a write's usual five (U5d review S-a,
-     * the same day): the commit does database work of its own — the
-     * block off the row, the session, the routing, a cap refusal's
-     * receipt — and under PGlite contention (a full test run, a busy
-     * install) five seconds turned a legible **halt** into a timeout
-     * `err` with no sentence. The ceiling is still a write's order of
-     * magnitude, never a model call's: nothing here waits on an oracle.
-     */
-    timeoutMs: 3e4,
-    causesEvent: "core:event/form-answered@1",
-    ports: {
-      in: {
-        /** The block, as the inlet published it. */
-        form: S2.json,
-        /** The oracle's document — checked against `formAnswerSchema(form)`. */
-        answer: S2.json,
-        messageId: S2.rowIds,
-        blockId: S2.text,
-        addressee: S2.participantRef
-      },
-      out: {
-        main: S2.writeResult,
-        messageId: S2.writeResult,
-        /** The answer as committed: `{ choice }` or the values. */
-        answer: S2.json,
-        /** The identity of the action the answer fires — `<spec slug>#<key>`. */
-        firedAction: S2.text,
-        /** The child run's id, chosen at the commit so this receipt can name it. */
-        firedRunId: S2.text
-      }
-    }
-  })
-);
-var attachAudio = pin2(
-  describeOutletDefinition({
-    id: "core:outlet/attach-audio@1",
-    effects: "write",
-    /** A reference to rendered audio; nothing to retype (R-15 review fields). */
-    review: { fields: [] },
-    timeoutMs: 5e3,
-    causesEvent: "core:event/message-updated@1",
-    ports: { in: { target: S2.rowIds, audio: S2.audio }, out: { main: S2.writeResult } }
-  })
-);
 var summarizeRequest = pin2(
   describeInletDefinition({
     id: "core:inlet/summarize-request@1",
@@ -8204,908 +8434,25 @@ var summarizeRequest = pin2(
       out: {
         main: S2.summarizeRequest,
         scope: S2.sessionScope,
+        /**
+         * The session's **settings document** (PLAN-turn-order §4.12,
+         * R13): every setting a person can see in session settings,
+         * resolved once per run by the host and handed in here —
+         * title, guests, genre fields (cascade applied, §4.13),
+         * scenario, lorebook, tags, channels, the cast with its
+         * envoys, the session-scope rebinds and param overrides per
+         * bound spec, the turn-order state, `metadata` (read-only)
+         * and the annex. `$.input.session.fields.tone` reads in any
+         * spec, and no node re-queries a table for a setting.
+         */
+        session: S2.sessionSettings,
         request: S2.summarizeRequest
-      }
-    }
-  })
-);
-var summarizeSource = pin2(
-  describeQueryDefinition({
-    id: "core:query/summarize-source@1",
-    i18n: { name: { en: "Messages to summarize" } },
-    timeoutMs: 5e3,
-    ports: {
-      in: { scope: S2.sessionScope, request: S2.summarizeRequest },
-      out: { main: S2.messages, messages: S2.messages }
-    }
-  })
-);
-var batchMessages = pin2(
-  describeTaskDefinition2({
-    id: "core:task/batch-messages@1",
-    i18n: { name: { en: "Batch messages" } },
-    timeoutMs: 2e3,
-    slots: {
-      /**
-       * The window the cut is clamped to — the same slot, by reference,
-       * that the drafting step generates against.
-       *
-       * The context window belongs to the sampling config, never to a knob
-       * on a node (17 §1a), and the executor resolves a `sampling` slot to
-       * the config's switched-on *values* — so this stays a pure Task
-       * reading data it was handed rather than a Query looking one up. Same
-       * shape and same reason as `core:task/context-budget@1`.
-       *
-       * ⚠ Wire it as a REFERENCE to the drafting Provider's slot
-       * (`slot.samplingOf(...)`), not as a picker of its own. A batch cut
-       * against one window and drafted against another is wrong in the
-       * direction that overflows, silently — and unlike the assembled
-       * context there is no truncation on this path to catch it, because
-       * the batch prompt is injected whole.
-       */
-      sampling: { kind: "sampling", quick: true },
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: {
-          /**
-           * The chat half of a batch prompt, and only that half — the
-           * template around it and the room the draft is written back
-           * into are a reserve the binding adds on top, which is why
-           * this can be raised right up to the window minus that
-           * reserve and no further.
-           *
-           * ⚠ Bigger is not better. Long-context models degrade in the
-           * middle, so this is a QUALITY point rather than a fraction
-           * of whatever window happens to be available: nothing scales
-           * it up to fill a large one, and the window is only ever a
-           * ceiling on what an admin asks for.
-           *
-           * 2560 is 0.5's effective batch (`4096 - 1500`) at a round
-           * 2.5 Ki, so arriving here re-tunes nobody.
-           */
-          batchTokens: {
-            type: "integer",
-            default: 2560,
-            i18n: { en: "How much chat each batch holds" },
-            description: {
-              en: "Tokens of chat one summary draft is written from. Capped by the drafting step\u2019s Context Tokens, less room for the prompt and the draft itself."
-            }
-          },
-          minBatchMessages: {
-            type: "integer",
-            default: 1,
-            description: "Never cut a batch smaller than this many messages."
-          }
-        }
-      }
-    },
-    ports: {
-      in: { messages: S2.messages },
-      out: { main: S2.drafts, batches: S2.drafts }
-    }
-  })
-);
-var summarizeBatch = pin2(
-  describeOracleDefinition({
-    id: "core:oracle/summarize-batch@1",
-    i18n: { name: { en: "Draft a batch" } },
-    shape: S2.textGen,
-    effects: "external",
-    /** A drafting call over a batch: approve or refuse (R-15 review fields). */
-    review: { fields: [] },
-    timeoutMs: 12e4,
-    timeoutKind: "idle",
-    usage: "response.usage",
-    /**
-     * The first interior point (18 §4e), and core dogfooding it (07 §0b):
-     * every intermediate draft passes the user's chain before synthesis
-     * reads it — slop killed in the material summaries are built *from*,
-     * not only in final replies. Invoked by the binding via
-     * `ctx.scripts.applyText('each-draft', …)`; recorded per application
-     * as `appliedBy: 'binding'`. Declares what it accepts (R-11): a draft
-     * is text, so text transforms — said here rather than assumed by the
-     * broker, which is the difference between a point a plugin can shape
-     * and a literal in the executor.
-     */
-    scriptPoints: [
-      {
-        key: "each-draft",
-        accepts: ["core:script:text/transform@1"],
-        label: { en: "Each draft" },
-        description: {
-          en: "Runs over every intermediate draft this step produces, before synthesis reads them."
-        }
-      }
-    ],
-    slots: {
-      connection: {
-        kind: "connection",
-        quick: true,
-        shape: S2.textGen,
-        requires: [tf({ in: [IoKinds.text], out: [IoKinds.text] })]
-      },
-      sampling: { kind: "sampling", quick: true, shape: S2.textGen },
-      prompts: {
-        kind: "prompts",
-        quick: true,
-        facet: "prompts",
-        fields: { batch: { type: "text" } }
-      }
-    },
-    ports: {
-      // `request` carries what a person asked for — the topic line, most
-      // visibly — so the drafting prompt can honour it. The whole request
-      // object travels rather than a plucked field, because what the
-      // request holds is the socket's contract with its modal, not this
-      // node's to enumerate.
-      in: {
-        batch: S2.messages,
-        request: S2.summarizeRequest,
-        /**
-         * Which kind of entry this pipeline writes — the word every
-         * summarize prompt template branches on (D-I).
-         *
-         * ## A port, not a parameter, and the call site is what decides
-         *
-         * `summarizeSpec` writes it as a **literal into the node's
-         * config**, in the same map as `batch` and `request` and
-         * alongside them: `C.summarizeBatch.v1({ batch, request,
-         * loreType, … })`. `resolveInput` passes a non-ref config value
-         * through untouched, so the binding reads `input.loreType`
-         * exactly the way it reads a port — same position, same access,
-         * same absence-is-`undefined`. Declaring it as anything else
-         * would describe a mechanism that is not the one running.
-         *
-         * A `params` field is the alternative, and it is the wrong one
-         * twice over. It would move the read to `input.params.loreType`
-         * — a different value from a different layer — and it would put
-         * the control in the panel, stored per configuration and
-         * layered instance → user → session like every other parameter.
-         * `SummarizeShape` in the catalog already rules on that: this is
-         * "the thing that distinguishes the four namespaces from one
-         * another", and a user who changed it "would turn their scene
-         * summarizer into a world summarizer without renaming
-         * anything".
-         *
-         * ⚠ An in-port no edge feeds is not a contradiction here. A
-         * port is a named input the node reads; where the value comes
-         * from — an upstream node, or an author writing it down — is the
-         * document's business. What the declaration buys is that the
-         * name is now checkable: the app's binding types derive their
-         * legal reads from `ports.in`, so `input.loreTypes` stops
-         * compiling, and the panel and the plugin validator can both see
-         * that this node takes one.
-         *
-         * `text` rather than an enum shape: a shape ids a payload, and
-         * the four legal words are the prompt templates' vocabulary,
-         * which a plugin summarizer is free to extend.
-         */
-        loreType: S2.text
-      },
-      out: { main: S2.textStream, draft: S2.textStream }
-    }
-  })
-);
-var summarizeSynth = pin2(
-  describeOracleDefinition({
-    id: "core:oracle/summarize-synth@1",
-    i18n: { name: { en: "Synthesize the drafts" } },
-    shape: S2.textGen,
-    effects: "external",
-    /** The merge call: approve or refuse (R-15 review fields). */
-    review: { fields: [] },
-    timeoutMs: 12e4,
-    timeoutKind: "idle",
-    usage: "response.usage",
-    slots: {
-      connection: {
-        kind: "connection",
-        quick: true,
-        shape: S2.textGen,
-        requires: [tf({ in: [IoKinds.text], out: [IoKinds.text] })]
-      },
-      sampling: { kind: "sampling", quick: true, shape: S2.textGen },
-      prompts: {
-        kind: "prompts",
-        quick: true,
-        facet: "prompts",
-        fields: { synth: { type: "text" } }
-      }
-    },
-    ports: {
-      // Same `request` pass-through as the batch step: the topic reaches
-      // synthesis too, or a focused summary drifts back to a general one
-      // the moment the drafts are merged.
-      in: {
-        drafts: S2.drafts,
-        request: S2.summarizeRequest,
-        /** Authored on the node, exactly as on the batch step — see it. */
-        loreType: S2.text
-      },
-      out: { main: S2.textStream, content: S2.textStream }
-    }
-  })
-);
-var nameEntry = pin2(
-  describeOracleDefinition({
-    id: "core:oracle/name-entry@1",
-    i18n: { name: { en: "Name the entry" } },
-    shape: S2.textGen,
-    effects: "external",
-    /** Approve or refuse; the name it produces is reviewed at the entry's write (R-15 review fields). */
-    review: { fields: [] },
-    timeoutMs: 6e4,
-    usage: "response.usage",
-    slots: {
-      connection: {
-        kind: "connection",
-        quick: true,
-        shape: S2.textGen,
-        requires: [tf({ in: [IoKinds.text], out: [IoKinds.text] })]
-      },
-      sampling: { kind: "sampling", quick: true, shape: S2.textGen },
-      prompts: {
-        kind: "prompts",
-        quick: true,
-        facet: "prompts",
-        fields: { name: { type: "text" } }
-      }
-    },
-    ports: {
-      in: {
-        content: S2.text,
-        /** Authored on the node, exactly as on the two steps above — see them. */
-        loreType: S2.text
-      },
-      out: { main: S2.textStream, name: S2.textStream }
-    }
-  })
-);
-var extractCast = pin2(
-  describeOracleDefinition({
-    id: "core:oracle/extract-cast@1",
-    i18n: { name: { en: "Extract the cast" } },
-    shape: S2.textGen,
-    effects: "external",
-    /** Approve or refuse (R-15 review fields). */
-    review: { fields: [] },
-    timeoutMs: 6e4,
-    usage: "response.usage",
-    slots: {
-      connection: {
-        kind: "connection",
-        quick: true,
-        shape: S2.textGen,
-        requires: [tf({ in: [IoKinds.text], out: [IoKinds.text] })]
-      },
-      sampling: { kind: "sampling", quick: true, shape: S2.textGen },
-      prompts: {
-        kind: "prompts",
-        quick: true,
-        facet: "prompts",
-        fields: { characterExtraction: { type: "text" } }
-      },
-      /**
-       * The two halves of a replaceable core function, on the scripts
-       * rung. Scripts here *shape* the extraction — what the model reads,
-       * what the pipeline keeps. Replacing the extractor itself is the
-       * other rung: a same-shaped provider offered by the swap list,
-       * because extraction calls a model and scripts are pure compute.
-       */
-      scripts: {
-        kind: "scripts",
-        accepts: ["core:script:text/transform@1"],
-        port: "content",
-        phase: "before",
-        description: "Scripts over the scene text before the extractor reads it \u2014 strip out-of-character chatter, normalise a nickname, redact."
-      },
-      castScripts: {
-        kind: "scripts",
-        accepts: ["core:script:cast/transform@1"],
-        port: "cast",
-        phase: "after",
-        description: "Scripts over the extracted cast \u2014 rename someone, merge aliases, drop a junk detection, add someone the model missed."
-      }
-    },
-    ports: {
-      // `request` carries the known cast list ([id: N] entries) so the
-      // extraction prompt can reference real ids — without it the model
-      // invents castIds and the resolve step silently drops every one.
-      //
-      // ⚠ No `messages` in-port, and there was one (culled 2026-09-16,
-      // R-12). `summarize` wired the transcript into it and the handler
-      // never read it: the extractor works from `content` — the synthesised
-      // summary — which is what the prompt builder takes. A port a spec
-      // fills and nothing reads costs the run a copy of the transcript
-      // and tells a reader the extractor sees it.
-      in: {
-        content: S2.text,
-        request: S2.summarizeRequest
-      },
-      out: { main: S2.json, cast: S2.json }
-    }
-  })
-);
-var entryKeys = pin2(
-  describeQueryDefinition({
-    id: "core:query/entry-keys@1",
-    i18n: {
-      name: { en: "Suggest keywords" },
-      description: {
-        en: "Proposes the keywords an entry should be found by, taken from its own text. Runs on your machine, calls no model, and can only ever suggest words the text actually contains."
-      }
-    },
-    /**
-     * Pure computation over rows already in the database — one pass over the
-     * lorebook per candidate word. It reads no network and loads no model, so
-     * the only way it can take long is a very large book.
-     */
-    timeoutMs: 5e3,
-    /**
-     * Producing nothing is an ordinary and correct outcome — a passage with
-     * nothing distinctive in it gets no keys rather than the five least
-     * common words it happens to contain — and a suggestion must never be
-     * able to cost somebody their summary. Both are the same `optional`.
-     */
-    optional: true,
-    slots: {
-      params: {
-        kind: "parameters",
-        facet: "weights",
-        schema: {
-          /**
-           * ⚠ **A ceiling on firing opportunities, not a display
-           * preference.** Any single key matching admits the entry, so
-           * this is how wide the entry's door is — and the keyword
-           * signal is `matched / keys.length`, so a longer list also
-           * makes the entry *rank* worse for the same single hit.
-           *
-           * Five: a scene is about a place, a thing and an event or
-           * two. Measured at eight, with the ordinary-word cap opened
-           * with it, **six of twelve** history entries fire on
-           * narrative prose naming nothing from any scene — against
-           * one at five — and the shared-name probe stops being clean.
-           * **0 is off**, in the `admitThreshold` convention.
-           *
-           * It is a ceiling and never a target — fewer is the normal
-           * result and none is a valid one.
-           */
-          maxKeys: {
-            type: "integer",
-            default: 5,
-            min: 0,
-            max: 20,
-            quick: true,
-            i18n: { en: "Most keywords suggested" },
-            description: "A ceiling on how many keywords are proposed for one entry. Each one is another way the entry can be pulled into a prompt, so a short list is usually a better one. 0 suggests none."
-          },
-          /**
-           * ⚠ **The one calibration a user can actually reason about**,
-           * and the reason the others are not here. How rare a word has
-           * to be, how short it may be, how much of a name to keep —
-           * those are measurements, not preferences, and a settings
-           * panel cannot perform them.
-           *
-           * This one is a preference, because it trades two things a
-           * user can feel: an ordinary word like "watch" or "left" is
-           * how an entry gets found when it names nothing proper, and
-           * it is also how an entry starts firing on any scene at all.
-           * Two ordinary words of five; 0 restricts suggestions to
-           * names and places, which measured cleanest and left two of
-           * twelve summaries with no keys at all.
-           */
-          maxOrdinaryWords: {
-            type: "integer",
-            default: 2,
-            min: 0,
-            max: 20,
-            i18n: { en: "Ordinary words allowed" },
-            description: "How many of the suggestions may be everyday words rather than names of people, places or things. Names are far less likely to pull the entry into an unrelated scene; 0 suggests names only."
-          }
-        }
-      }
-    },
-    ports: {
-      in: {
-        /** The lorebook and the cast — what distinctiveness is measured against. */
-        scope: S2.sessionScope,
-        /**
-         * The passage keys are proposed for.
-         *
-         * `content`, matching `name-entry@1`, so both proposal steps take
-         * the drafted summary off the same out-port under the same name.
-         */
-        content: S2.text
-      },
-      out: {
-        main: S2.json,
-        /** The proposals, each with the evidence for it. */
-        keys: S2.json,
-        /** Every candidate turned away, and the rule that turned it away. */
-        rejected: S2.json
-      }
-    }
-  })
-);
-var createLoreEntry = pin2(
-  describeOutletDefinition({
-    id: "core:outlet/create-lore-entry@1",
-    i18n: { name: { en: "Save the lore entry" } },
-    effects: "write",
-    /** Both the name and the content may be edited before the entry lands (R-15 review fields). */
-    review: { fields: ["name", "content"] },
-    timeoutMs: 1e4,
-    causesEvent: "core:event/lore-entry-created@1",
-    ports: {
-      in: { name: S2.text, content: S2.text },
-      out: { main: S2.writeResult, entryId: S2.writeResult }
-    }
-  })
-);
-var graphScenes = pin2(
-  describeQueryDefinition({
-    id: "core:query/graph-scenes@1",
-    i18n: { name: { en: "Scenes to build from" } },
-    timeoutMs: 5e3,
-    ports: {
-      in: { scope: S2.sessionScope },
-      out: { main: S2.graphScenes, scenes: S2.graphScenes }
-    }
-  })
-);
-var graphStep = (id, label2, field, extra = {}) => pin2(
-  describeOracleDefinition({
-    id,
-    i18n: { name: { en: label2 } },
-    shape: S2.textGen,
-    effects: "external",
-    /** Each graph step sends a compiled prompt: approve or refuse (R-15 review fields). */
-    review: { fields: [] },
-    timeoutMs: extra.timeoutMs ?? 12e4,
-    timeoutKind: "idle",
-    usage: "response.usage",
-    slots: {
-      connection: {
-        kind: "connection",
-        quick: true,
-        shape: S2.textGen,
-        requires: [tf({ in: [IoKinds.text], out: [IoKinds.text] })]
-      },
-      sampling: { kind: "sampling", quick: true, shape: S2.textGen },
-      prompts: {
-        kind: "prompts",
-        quick: true,
-        facet: "prompts",
-        fields: { [field]: { type: "text" } }
-      }
-    },
-    ports: {
-      in: { scenes: S2.graphScenes },
-      out: { main: S2.json, result: S2.json }
-    }
-  })
-);
-var graphNodeResolution = graphStep(
-  "core:oracle/graph-node-resolution@1",
-  "Resolve nodes",
-  "nodeResolution"
-);
-var graphPreFilter = graphStep(
-  "core:oracle/graph-pre-filter@1",
-  "Pre-filter",
-  "preFilter"
-);
-var graphPerspective = graphStep(
-  "core:oracle/graph-perspective@1",
-  "Perspective",
-  "perspective"
-);
-var graphNodeDescription = graphStep(
-  "core:oracle/graph-node-description@1",
-  "Describe new nodes",
-  "nodeDescription"
-);
-var graphStateDetection = graphStep(
-  "core:oracle/graph-state-detection@1",
-  "Detect state changes",
-  "stateDetection"
-);
-var graphProposal = pin2(
-  describeOutletDefinition({
-    id: "core:outlet/graph-proposal@1",
-    i18n: { name: { en: "Propose graph changes" } },
-    effects: "write",
-    /** The proposal is what the review screen exists to edit (R-15 review fields). */
-    review: { fields: ["proposal"] },
-    timeoutMs: 1e4,
-    causesEvent: "core:event/graph-proposal-created@1",
-    ports: {
-      in: { proposal: S2.json },
-      out: { main: S2.writeResult, proposalId: S2.writeResult }
-    }
-  })
-);
-var sessionState = pin2(
-  describeQueryDefinition({
-    id: "core:query/session-state@1",
-    i18n: { name: { en: "Session state" } },
-    timeoutMs: 2e3,
-    ports: {
-      in: { scope: S2.sessionScope },
-      out: { main: S2.json, state: S2.json, version: S2.json }
-    }
-  })
-);
-var resolveStateChanges = pin2(
-  describeQueryDefinition({
-    id: "core:query/resolve-state-changes@1",
-    i18n: { name: { en: "Resolve state changes" } },
-    timeoutMs: 5e3,
-    ports: {
-      in: {
-        /**
-         * `[{ owner, slot, value } | { owner, entryId, delta }]` as a
-         * model writes them: `owner` is a name from the conversation or
-         * `world`, `slot` is a stat's local name (`hp`) or its full id.
-         */
-        changes: S2.json,
-        /** Which session's cast the names are resolved against. */
-        scope: S2.sessionScope,
-        /**
-         * The planner's document, whose `worldHints` are a second,
-         * smaller set of named changes: where this turn happens, the
-         * time of day and the weather.
-         *
-         * Its own port rather than more entries on `changes`, because
-         * a reference is `{node, port}` with no sub-path — a spec
-         * cannot join one node's list to another node's object on one
-         * port, and the two are written by different agents answering
-         * different questions. A hint that repeats what the world
-         * already says proposes nothing, which is what makes "repeat
-         * the state when this turn changes none of it" safe to ask of
-         * the planner.
-         */
-        plan: S2.json,
-        /**
-         * The **state version** this turn read (U5f): the session-state
-         * query's `version`. Passed through onto every resolved change
-         * as `base`, so `set-state` can tell a delta against the state
-         * the model saw from one against a state that has since moved.
-         * Optional: a spec that wires none proposes against whatever
-         * is current at the write.
-         */
-        base: S2.json
-      },
-      out: {
-        main: S2.json,
-        /** Ready for `core:task/set-state@1`'s `changes` port — each carrying `base` when one was wired. */
-        changes: S2.json,
-        /** One sentence per change that named something not here. */
-        refused: S2.json
-      }
-    }
-  })
-);
-var setState = pin2(
-  describeTaskDefinition2({
-    id: "core:task/set-state@1",
-    i18n: { name: { en: "Set state" } },
-    timeoutMs: 5e3,
-    slots: {
-      params: {
-        kind: "parameters",
-        schema: {
-          mode: {
-            type: "enum",
-            of: ["propose", "apply"],
-            default: "propose",
-            quick: true,
-            description: "'propose' holds the changes for the player to accept or reject; 'apply' writes them immediately, stamped with this run. Use 'apply' only where the pipeline itself decided the number."
-          }
-        }
-      }
-    },
-    ports: {
-      // [{ owner: { kind, id }, slotId, value, base? } | { owner, entryId, delta, base? }]
-      // `scope` is what says which session, and therefore which message a
-      // change is anchored to — a change with no anchor is one a swipe
-      // could not take back.
-      in: {
-        changes: S2.json,
-        scope: S2.sessionScope,
-        /**
-         * The **state version** the changes are deltas against (plans/29
-         * R-15 *Staleness and order*; U5f) — the session-state query's
-         * `version`, for every change that does not carry its own
-         * `base`. In `apply` mode a base behind the current version is
-         * **rebased**: a change whose slot is untouched since the base
-         * still holds and is applied; one whose slot moved is put on
-         * `refused` with the versions named, and the next turn's
-         * `resolve-state-changes` re-resolves it — a run never re-enters
-         * an earlier node. In `propose` mode the base is stamped on the
-         * proposal for the accept to judge the same way. Optional: with
-         * none, the write is against whatever is current.
-         */
-        base: S2.json
-      },
-      /**
-       * What happened, as three lists: `applied` for rows written,
-       * `proposed` for rows held, `refused` for the sentences — a value
-       * the slot does not accept, or a slot that moved since `base`.
-       * The first two are always present and one of them is always
-       * empty, so nothing downstream decides which mode ran by looking
-       * for a missing key.
-       */
-      out: { main: S2.json, applied: S2.json, proposed: S2.json, refused: S2.json }
-    }
-  })
-);
-var lorebookEntries = pin2(
-  describeQueryDefinition({
-    id: "core:query/lorebook-entries@1",
-    i18n: {
-      name: { en: "Lorebook entries" },
-      description: {
-        en: "Lists the entries of the session\u2019s lorebook \u2014 all of them, or the one with a given name. Retrieval is not involved: nothing is matched against the conversation, nothing is scored and nothing is ranked."
-      }
-    },
-    /**
-     * The lore definitions' number. One indexed read of one book plus the
-     * bindings it hydrates, which is the same work their shared scan pays
-     * for before it scans anything.
-     */
-    timeoutMs: 2e3,
-    slots: {
-      params: {
-        kind: "parameters",
-        schema: {
-          /**
-           * Which entry types to list — `core:entry/world-lore`,
-           * `core:entry/character-lore`, `core:entry/history`, or a
-           * plugin's own. Bare ids, no `@version`: the version is a
-           * separate column and a type's rows are its rows across
-           * versions.
-           *
-           * A `list` of `text` rather than an `enum` of the three
-           * core ids, because the set is open — an install with a
-           * plugin entry type has more of them, and an enum frozen
-           * into this definition's content hash could not grow
-           * without a re-projection. An id no type declares matches
-           * nothing, which is the honest answer to a typo.
-           *
-           * Empty or absent lists every entry type.
-           *
-           * Named `entryTypes` rather than `types` (R3): *type* alone
-           * is the word four other vocabularies use — a node type, a
-           * session type, a part type — and a parameter may not take
-           * the bare noun.
-           */
-          entryTypes: {
-            type: "list",
-            item: { type: "text" },
-            i18n: { en: "Entry types listed" },
-            description: "Which kinds of entry to list, by type id \u2014 world lore, character lore, history, or a type an extension declares. Leave it empty for all of them."
-          },
-          /**
-           * The *does it exist* case: one exact name, matched
-           * case-insensitively with surrounding whitespace trimmed
-           * on both sides.
-           *
-           * Exact and never a substring or a pattern. A genre asking
-           * "is there a room called the Cellar?" needs *yes* or *no*,
-           * and a match that also returned "Cellar Door" and "The
-           * Wine Cellars" would answer a question nobody asked — the
-           * search-shaped reading of this node is the keyword scan
-           * above, which already exists and is better at it.
-           *
-           * History entries have no name at all (the type declares no
-           * title role), so naming one lists nothing.
-           *
-           * Absent lists every entry of the chosen types.
-           */
-          name: {
-            type: "text",
-            quick: true,
-            i18n: { en: "Only the entry named" },
-            description: "List only the entry with exactly this name, ignoring capitalisation and surrounding spaces. Leave it empty to list them all."
-          },
-          /**
-           * A ceiling on rows read, not a page: there is no offset
-           * and no cursor, so raising it is the only way to see more.
-           *
-           * 500 is a large lorebook and 2000 is a ceiling on the
-           * ceiling — this list is usually on its way into a prompt,
-           * and a book that would not fit in a context window is not
-           * made to fit by asking for all of it. The cap is enforced
-           * at the read as well as declared here; a node's parameter
-           * is a control, never a promise the host takes on trust.
-           */
-          limit: {
-            type: "integer",
-            default: 500,
-            min: 1,
-            max: 2e3,
-            i18n: { en: "Most entries listed" },
-            description: "A ceiling on how many entries are listed. There is no second page \u2014 raising this is the only way to see more."
-          }
-        }
-      }
-    },
-    ports: {
-      /**
-       * Which session's lorebook, and — through `currentCharacterId` —
-       * who is speaking, which is what the binding-visibility policy
-       * reads. No `text` in-port: there is nothing here to match text
-       * against.
-       */
-      in: { scope: S2.sessionScope },
-      /**
-       * One bare list of rows on both ports, `main` for a spec that
-       * wires the node's output and `entries` for one that names what it
-       * is reading. Same value, same order — world lore, then character
-       * lore, then history, each by row id.
-       *
-       * ⚠ `S.json` and deliberately **not** `S.candidates`. A candidate
-       * is something a mechanism proposed, carrying signals a ranker
-       * reads; these rows were proposed by nothing and carry no signals,
-       * and publishing them as candidates would let a spec wire a
-       * whole lorebook into `select` as if a scan had found it.
-       */
-      out: { main: S2.json, entries: S2.json }
-    }
-  })
-);
-var pickByHash = pin2(
-  describeTaskDefinition2({
-    id: "core:task/pick-by-hash@1",
-    i18n: {
-      name: { en: "Pick by hash" },
-      description: {
-        en: "Picks one entry of a list for this session, the same one every time, without writing anything down. Adding an entry almost never moves the pick."
-      }
-    },
-    /** Pure arithmetic over a list that is already in memory. */
-    timeoutMs: 500,
-    slots: {
-      params: {
-        kind: "parameters",
-        schema: {
-          /**
-           * Which field on each entry identifies it.
-           *
-           * The identity is what the hash is taken over, so it
-           * decides the answer: two runs that disagree about it
-           * disagree about the pick. Absent, an entry that IS a
-           * string is its own identity and anything else is
-           * identified by `id` — the two shapes a core list
-           * actually arrives in (`cast-choices` publishes `key`,
-           * a lore listing publishes rows with `id`).
-           *
-           * ⚠ It must be **stable**: a name the author may edit
-           * moves the pick the day they edit it. A row id does not.
-           */
-          by: {
-            type: "string",
-            quick: true,
-            i18n: { en: "Identified by" },
-            description: "Which field on each entry identifies it \u2014 a row id, or the option key. Leave it empty for plain strings, or for rows with an `id`."
-          }
-        }
-      }
-    },
-    ports: {
-      in: {
-        /** The list to pick from. */
-        items: S2.json,
-        /**
-         * The stable key this session picks under.
-         *
-         * Either the session's **scope** — `$.input.sessionScope`,
-         * which the binding spells `session:<id>` — or a literal
-         * string for a pick that is not per-session.
-         *
-         * ⚠ `S.json` rather than `S.text`, and not for want of a
-         * type. `session-scope@1` is not assignable to `text@1`, and
-         * there is no text-shaped port anywhere that carries a
-         * session's identity — so a `text` port here could be wired
-         * to a literal and to nothing else, which would give every
-         * session of a genre the same answer. `json` is the
-         * permissive sink, so the scope wires, a literal wires, and
-         * anything a spec wires that the binding cannot read as a key
-         * halts with a sentence naming what to wire instead.
-         */
-        scopeKey: S2.json
-      },
-      out: {
-        /** The chosen entry, whole and exactly as it arrived. */
-        main: S2.json,
-        /**
-         * Where it sat in the list **as handed in**, not among the
-         * identifiable entries. `pickIndex` rather than `index`
-         * (R3): a bare *index* is a database index, a message's
-         * position and a list offset all at once.
-         */
-        pickIndex: S2.json,
-        /**
-         * The identity it won under — the string the hash was taken
-         * over. This is the side a later junction compares an answer
-         * against with `equalsPath`, which is why it is published at
-         * all: the chosen item is a document, and a predicate
-         * compares keys.
-         */
-        chosenKey: S2.text
-      }
-    }
-  })
-);
-var castChoices = pin2(
-  describeTaskDefinition2({
-    id: "core:task/cast-choices@1",
-    i18n: {
-      name: { en: "The cast as choices" },
-      description: {
-        en: "Turns the session\u2019s cast into the option list a question is asked with \u2014 one option per live character, keyed by who they are."
-      }
-    },
-    timeoutMs: 500,
-    slots: {
-      params: {
-        kind: "parameters",
-        schema: {
-          /**
-           * Which half of the room to leave out.
-           *
-           * A persona is a character the player voices (0132), so
-           * both halves are cast members and which one a question
-           * is about depends entirely on the question: *who do you
-           * accuse* is asked about the suspects and must not offer
-           * the detective, while *who do you play* is the other way
-           * round.
-           */
-          exclude: {
-            type: "enum",
-            of: ["none", "personas", "characters"],
-            default: "none",
-            quick: true,
-            i18n: { en: "Left out" },
-            description: "Leave out the characters the players voice (personas), the rest of the cast (characters), or nobody."
-          }
-        }
-      }
-    },
-    ports: {
-      in: {
-        cast: S2.sessionCast,
-        /**
-         * The question the options answer — the prose that sits
-         * above them on the block, and the row's own content.
-         *
-         * Unwired it is the empty string, and `make-choices@1`
-         * publishes no block for a document with no question — the
-         * same silence it answers an empty option list with, rather
-         * than a block asking nothing.
-         */
-        question: S2.text
-      },
-      out: {
-        /** `{ key, label }[]`, in seating order: characters, then personas. */
-        main: S2.json,
-        options: S2.json,
-        /**
-         * `{ question, options }` — the document
-         * `core:task/make-choices@1` reads off its own `json` port,
-         * in exactly that shape, so the two wire straight to each
-         * other and no oracle stands between a cast read and the
-         * question it is asked with.
-         */
-        json: S2.json
       }
     }
   })
 );
 
-// sdk-tests/fixtures/unified-plugin/src/index.ts
+// ../serene-pub-sdk/sdk-tests/fixtures/unified-plugin/src/index.ts
 var PLUGIN_SLUG = "demo.unified";
 var TALLY_PANEL_ID = "tally";
 var tallyGenre = genre(`${PLUGIN_SLUG}:genre/tally`, {
@@ -9135,34 +8482,35 @@ var respond = spec(RESPOND_SPEC_ID, { version: "1.0.0" }).inlet("input", userMes
   genre: tallyGenre,
   event: sessionEvents.messageRespond
 }).task("tally", ($) => tallyDefinition.v1({ text: $.input.text })).build();
+var tallyDefault = config(
+  respond,
+  "tally-default",
+  { label: "Tally", description: "As shipped." },
+  { tally: { params: { trim: true } } }
+);
 var extension = defineExtension({
   slug: PLUGIN_SLUG,
   name: "Tally",
   version: "1.0.0",
   description: "Counts words and says so.",
   engines: { "serene-pub": ">=0.7 <0.8" },
-  hooks: [handler(tallyDefinition, tallyHandler)],
+  handlers: [handler(tallyDefinition, tallyHandler)],
   pipelines: [createSession, respond],
   genres: [tallyGenre],
-  surfaces: {
-    panels: [{ id: TALLY_PANEL_ID, entry: "ui/tally.html", title: "Tally", channels: ["main"] }]
-  },
+  widgets: [
+    widget({
+      id: TALLY_PANEL_ID,
+      title: "Tally",
+      component: TALLY_PANEL_ID,
+      channels: ["main"]
+    })
+  ],
+  components: [component({ slug: TALLY_PANEL_ID, label: "Tally", entry: "components/tally.ts", framework: "vanilla" })],
   configs: [
-    {
-      spec: RESPOND_SPEC_ID,
-      slug: "tally-default",
-      label: "Tally",
-      description: "As shipped.",
-      values: { tally: { params: { trim: true } } }
-    },
+    tallyDefault,
     // A config over somebody else's spec: legitimate, and the one thing in
     // this package that has to land in `requires`.
-    {
-      spec: "core:spec/respond",
-      slug: "tally-flavoured",
-      label: "Tally flavoured",
-      values: {}
-    }
+    config(use("core:spec/chat-respond"), "tally-flavoured", { label: "Tally flavoured" }, {})
   ],
   prompts: [
     {
@@ -9176,13 +8524,10 @@ var extension = defineExtension({
   presets: [
     {
       slug: "tally",
-      genre: tallyGenre.id,
+      genre: tallyGenre,
       label: "Tally",
       description: "Counts what you say.",
-      bindings: {
-        [sessionEvents.sessionCreated]: { spec: CREATE_SPEC_ID },
-        [sessionEvents.messageRespond]: { spec: RESPOND_SPEC_ID, config: "tally-default" }
-      }
+      bindings: [createSession, { spec: respond, config: tallyDefault }]
     }
   ],
   permissions: { storage: { quotaBytes: 4 * 1024 * 1024 } }
@@ -9191,7 +8536,7 @@ var src_default = extension;
 
 // <stdin>
 var __ext = src_exports && (src_default || extension) || src_exports;
-var __hooks = __ext && __ext.hooks || [];
+var __hooks = __ext && __ext.handlers || [];
 function __pick(want, decl2, nth) {
   let n = 0;
   for (const h of __hooks) {

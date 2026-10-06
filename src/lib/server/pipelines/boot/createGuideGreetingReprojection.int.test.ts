@@ -1,7 +1,7 @@
 /**
  * The Guide's shipped create configuration, re-projected so Serene greets.
  *
- * `core:spec/create-guide` writes Serene's declared greeting through its
+ * `core:spec/guide-create` writes Serene's declared greeting through its
  * `welcome` query, and the envoy it reads is a value on the spec's default
  * preset (`welcome` → `envoy: 'mascot'`). `ensureDefaultConfig` writes the
  * shipped config once, and `reconcileConfigs` back-fills a missing address from
@@ -32,7 +32,13 @@ vi.mock("$lib/server/db", async () => {
 	return { db, getCryptoSecretKey: () => "create-guide-greeting-test-secret" }
 })
 
-const SEED_KEY = "pipeline-default:core:spec/create-guide"
+const SEED_KEY = "pipeline-default:core:spec/guide-create"
+/**
+ * The same row's key as the migration names it: it was written before the
+ * 2026-10-05 spec id rename (`create-guide` → `guide-create`), and the splice
+ * replays it on a pre-squash database before boot renames anything.
+ */
+const SEED_KEY_AT_MIGRATION = "pipeline-default:core:spec/create-guide"
 
 const boot = async () => {
 	const { bootstrapPipelines } = await import(
@@ -47,7 +53,7 @@ const welcomeParams = async () => {
 		.select()
 		.from(schema.pipelineConfigs)
 		.where(eq(schema.pipelineConfigs.seedKey, SEED_KEY))
-	expect(config, "create-guide has no shipped config").toBeTruthy()
+	expect(config, "guide-create has no shipped config").toBeTruthy()
 	const rows = await db
 		.select()
 		.from(schema.pipelineConfigValues)
@@ -90,7 +96,7 @@ afterAll(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true })
 })
 
-describe("create-guide's shipped config", () => {
+describe("guide-create's shipped config", () => {
 	it("carries the welcome preset's envoy on a fresh install", async () => {
 		const { byPath } = await welcomeParams()
 		expect(byPath.get("envoy")).toBe("mascot")
@@ -113,11 +119,21 @@ describe("create-guide's shipped config", () => {
 			await boot()
 			expect((await welcomeParams()).byPath.get("envoy")).toBeUndefined()
 
+			// As a pre-squash database holds it when the splice replays.
+			await db
+				.update(schema.pipelineConfigs)
+				.set({ seedKey: SEED_KEY_AT_MIGRATION })
+				.where(eq(schema.pipelineConfigs.seedKey, SEED_KEY))
 			for (const statement of (await migrationSql())
 				.split("--> statement-breakpoint")
 				.map((s) => s.trim())
 				.filter(Boolean))
 				await db.execute(sql.raw(statement))
+			const [left] = await db
+				.select()
+				.from(schema.pipelineConfigs)
+				.where(eq(schema.pipelineConfigs.seedKey, SEED_KEY_AT_MIGRATION))
+			expect(left, "the migration left the shipped row").toBeUndefined()
 			await boot()
 
 			const after = await welcomeParams()

@@ -580,6 +580,16 @@ async function testConnection(
 	}
 }
 
+/**
+ * One downloaded model's modality, from LM Studio's `type`: `"embedding"` is an
+ * embedding model, `"llm"` a text model, anything else undefined.
+ */
+export function lmStudioModelModality(type: unknown): string | undefined {
+	if (type === "embedding") return "embeddings"
+	if (type === "llm") return "text-gen"
+	return undefined
+}
+
 async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
@@ -595,16 +605,24 @@ async function listModels(
 			// parameter string, quantisation and size it already holds. Mapping
 			// to two fields here would lose them before the shared normalizer
 			// ever saw the entry.
+			//
+			// What each model is FOR comes from the SDK's own `type`, mapped
+			// into the app's modality words so the per-model gate keeps an
+			// embedding model out of the chat picker and a chat model out of
+			// the embeddings one. A `type` this does not know is left unsaid
+			// (stored as NULL, ungated) rather than guessed.
 			const models = res.map((model) => {
 				const { modelKey, displayName, ...rest } =
 					model as unknown as Record<string, unknown> & {
 						modelKey: string
 						displayName: string
 					}
+				const modality = lmStudioModelModality(rest.type)
 				return {
 					...rest,
 					model: modelKey,
-					name: displayName
+					name: displayName,
+					...(modality ? { modality } : {})
 				}
 			})
 			return {

@@ -9,7 +9,7 @@
 # failure takes the whole local-embeddings engine down with it: the import
 # probe in embedding/index.ts throws, and the app reports local embeddings as
 # unsupported on every Docker deployment.
-FROM node:24-bookworm-slim AS builder
+FROM node:26-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -42,7 +42,7 @@ RUN npm prune --omit=dev
 # (used by @huggingface/transformers for local embeddings) has no musl build
 # and fails to dlopen on Alpine with "Error loading shared library
 # ld-linux-x86-64.so.2".
-FROM node:24-bookworm-slim
+FROM node:26-bookworm-slim
 
 WORKDIR /app
 

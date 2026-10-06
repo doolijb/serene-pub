@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
-import { writeFile } from "fs/promises"
+import { access, writeFile } from "fs/promises"
 
 // modelManager.ts keeps module-level mutable state (loadedSignature,
 // loadingPromise) that isn't exported for reset — vi.resetModules() plus a
@@ -9,17 +9,22 @@ import { writeFile } from "fs/promises"
 const fetchCurrentModelStatusMock = vi.fn()
 const fetchModelStatusForPollMock = vi.fn()
 const fetchImageModelStatusMock = vi.fn()
+const fetchLoadedEmbeddingModelMock = vi.fn()
 vi.mock("./kcppHttp", () => ({
 	fetchCurrentModelStatus: (...args: any[]) =>
 		fetchCurrentModelStatusMock(...args),
 	fetchModelStatusForPoll: (...args: any[]) =>
 		fetchModelStatusForPollMock(...args),
 	fetchImageModelStatus: (...args: any[]) =>
-		fetchImageModelStatusMock(...args)
+		fetchImageModelStatusMock(...args),
+	fetchLoadedEmbeddingModel: (...args: any[]) =>
+		fetchLoadedEmbeddingModelMock(...args)
 }))
 
 vi.mock("fs/promises", () => ({
-	writeFile: vi.fn().mockResolvedValue(undefined)
+	writeFile: vi.fn().mockResolvedValue(undefined),
+	// The standing embedding model's file-still-there check.
+	access: vi.fn().mockResolvedValue(undefined)
 }))
 
 const TEXT_PATH = "/models/llm/some-model.gguf"
@@ -161,12 +166,13 @@ describe("ensureModelLoaded", () => {
 		const { ensureModelLoaded } = await freshImport()
 		textHappyPath()
 
-		// First call establishes the residency record.
-		await settle(ensureModelLoaded(baseOpts()))
+		// First call establishes the residency record — a load, and says so.
+		expect(await settle(ensureModelLoaded(baseOpts()))).toBe(true)
 		fetchMock.mockClear()
 
-		// Second call, identical request — should skip the reload entirely.
-		await settle(ensureModelLoaded(baseOpts()))
+		// Second call, identical request — should skip the reload entirely,
+		// and answer that nothing was loaded (the preflight then logs nothing).
+		expect(await settle(ensureModelLoaded(baseOpts()))).toBe(false)
 		expect(fetchMock).not.toHaveBeenCalled()
 	})
 
@@ -198,7 +204,9 @@ describe("ensureModelLoaded", () => {
 			text: textRequest({ mmproj: "x.gguf", mmprojPath: MMPROJ })
 		})
 		expect(config.mmproj).toBe(MMPROJ)
-		expect("mmproj" in buildConfigContent({ text: textRequest() })).toBe(false)
+		expect("mmproj" in buildConfigContent({ text: textRequest() })).toBe(
+			false
+		)
 	})
 
 	// Regression: a busy koboldcpp (mid-load, or holding its single worker for
@@ -315,7 +323,9 @@ describe("ensureModelLoaded", () => {
 		await settle(ensureModelLoaded(baseOpts()))
 		fetchMock.mockClear()
 
-		await settle(ensureModelLoaded(baseOpts(textRequest({ contextSize: 8192 }))))
+		await settle(
+			ensureModelLoaded(baseOpts(textRequest({ contextSize: 8192 })))
+		)
 		expect(fetchMock).toHaveBeenCalled()
 	})
 
@@ -326,7 +336,9 @@ describe("ensureModelLoaded", () => {
 		await settle(ensureModelLoaded(baseOpts()))
 		fetchMock.mockClear()
 
-		await settle(ensureModelLoaded(baseOpts(textRequest({ gpuLayers: 10 }))))
+		await settle(
+			ensureModelLoaded(baseOpts(textRequest({ gpuLayers: 10 })))
+		)
 		expect(fetchMock).toHaveBeenCalled()
 	})
 
@@ -360,7 +372,9 @@ describe("ensureModelLoaded", () => {
 			imageHappyPath()
 
 			await settle(
-				ensureModelLoaded(baseOpts(imageRequest({ threads: 7, quant: 1 })))
+				ensureModelLoaded(
+					baseOpts(imageRequest({ threads: 7, quant: 1 }))
+				)
 			)
 
 			expect(lastConfig()).toEqual({
@@ -390,7 +404,9 @@ describe("ensureModelLoaded", () => {
 			const { ensureModelLoaded } = await freshImport()
 			imageHappyPath()
 
-			await settle(ensureModelLoaded(baseOpts(imageRequest({ quant: 0 }))))
+			await settle(
+				ensureModelLoaded(baseOpts(imageRequest({ quant: 0 })))
+			)
 
 			// 0 is koboldcpp's own default, so sending it says nothing extra.
 			expect("sdquant" in lastConfig()).toBe(false)
@@ -563,7 +579,7 @@ describe("ensureModelLoaded", () => {
 			const promise = ensureModelLoaded(baseOpts(imageRequest()))
 			await vi.advanceTimersByTimeAsync(21_000)
 
-			await expect(promise).resolves.toBeUndefined()
+			await expect(promise).resolves.toBe(true)
 		})
 
 		test("accepts the first affirmative answer when the flag was known to be off before the reload", async () => {
@@ -575,7 +591,7 @@ describe("ensureModelLoaded", () => {
 			const promise = ensureModelLoaded(baseOpts(imageRequest()))
 			await vi.advanceTimersByTimeAsync(0)
 
-			await expect(promise).resolves.toBeUndefined()
+			await expect(promise).resolves.toBe(true)
 		})
 	})
 
@@ -631,7 +647,9 @@ describe("ensureModelLoaded", () => {
 		for (let i = 0; i < 32; i++) {
 			await vi.advanceTimersByTimeAsync(2000)
 		}
-		await expect(promise).rejects.toThrow(/did not become ready|crashed|not reachable/i)
+		await expect(promise).rejects.toThrow(
+			/did not become ready|crashed|not reachable/i
+		)
 	})
 
 	describe("waiting for a text model to become ready", () => {
@@ -691,7 +709,7 @@ describe("ensureModelLoaded", () => {
 			const promise = ensureModelLoaded(baseOpts())
 			await vi.advanceTimersByTimeAsync(21_000)
 
-			await expect(promise).resolves.toBeUndefined()
+			await expect(promise).resolves.toBe(true)
 		})
 
 		test("accepts the first affirmative answer when nothing was resident before the reload", async () => {
@@ -707,7 +725,7 @@ describe("ensureModelLoaded", () => {
 			const promise = ensureModelLoaded(baseOpts())
 			await vi.advanceTimersByTimeAsync(0)
 
-			await expect(promise).resolves.toBeUndefined()
+			await expect(promise).resolves.toBe(true)
 		})
 
 		// Without a process handle (external, or adopted-external) the old
@@ -734,7 +752,7 @@ describe("ensureModelLoaded", () => {
 				await vi.advanceTimersByTimeAsync(2000)
 			}
 
-			await expect(promise).resolves.toBeUndefined()
+			await expect(promise).resolves.toBe(true)
 			expect(pollCalls).toBe(16)
 		})
 
@@ -754,7 +772,9 @@ describe("ensureModelLoaded", () => {
 				await vi.advanceTimersByTimeAsync(2000)
 			}
 
-			await expect(promise).rejects.toThrow(/refused connections for 300s/)
+			await expect(promise).rejects.toThrow(
+				/refused connections for 300s/
+			)
 		})
 	})
 
@@ -848,3 +868,461 @@ describe("ensureModelLoaded", () => {
 		await expect(promise).rejects.toThrow(/no longer running/)
 	})
 })
+
+// B1 (2026-10-05): koboldcpp's `--embeddingsmodel` slot, co-resident with the
+// text or image model.
+const EMBED_PATH = "/models/llm/nomic-embed-text-v1.5.Q4_K_M.gguf"
+
+function embeddingsRequest(over: Record<string, any> = {}) {
+	return {
+		kind: "embeddings" as const,
+		file: "nomic-embed-text-v1.5.Q4_K_M.gguf",
+		path: EMBED_PATH,
+		...over
+	}
+}
+
+/** What `/v1/embeddings` names: koboldcpp drops the `.gguf`. */
+const EMBED_LOADED = { name: "nomic-embed-text-v1.5.Q4_K_M", determined: true }
+const EMBED_NONE = { name: null, determined: true }
+const EMBED_UNANSWERED = { name: null, determined: false }
+
+describe("the embeddings slot", () => {
+	let fetchMock: ReturnType<typeof vi.fn>
+
+	beforeEach(() => {
+		vi.useFakeTimers()
+		vi.mocked(writeFile).mockClear()
+		vi.mocked(access).mockReset().mockResolvedValue(undefined)
+		fetchCurrentModelStatusMock.mockReset()
+		fetchModelStatusForPollMock.mockReset()
+		fetchImageModelStatusMock.mockReset()
+		fetchLoadedEmbeddingModelMock.mockReset()
+		fetchMock = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ success: true })
+		})
+		vi.stubGlobal("fetch", fetchMock)
+	})
+
+	afterEach(() => {
+		vi.useRealTimers()
+		vi.unstubAllGlobals()
+	})
+
+	const reloads = () =>
+		fetchMock.mock.calls.filter((c) =>
+			String(c[0]).endsWith("/api/admin/reload_config")
+		)
+
+	/** A text model "some-model" loaded by THIS process, so the record holds it. */
+	async function withTextResident(
+		mod: Awaited<ReturnType<typeof freshImport>>
+	) {
+		fetchCurrentModelStatusMock.mockResolvedValue({
+			modelName: null,
+			refused: false,
+			determined: true
+		})
+		fetchModelStatusForPollMock.mockResolvedValue({
+			modelName: "some-model",
+			refused: false
+		})
+		await settle(mod.ensureModelLoaded(baseOpts()))
+		fetchCurrentModelStatusMock.mockResolvedValue({
+			modelName: "some-model",
+			refused: false,
+			determined: true
+		})
+		fetchMock.mockClear()
+		vi.mocked(writeFile).mockClear()
+	}
+
+	describe("the .kcpps", () => {
+		test("text + embeddings: both models, the text knobs, the embedding path", async () => {
+			const { buildConfigContent } = await freshImport()
+			const config = buildConfigContent({
+				text: {
+					file: "some-model.gguf",
+					path: TEXT_PATH,
+					gpuLayers: -1,
+					flashAttention: false,
+					batchSize: 512,
+					contextSize: 8192
+				},
+				embeddings: { file: "nomic.gguf", path: EMBED_PATH }
+			})
+			expect(config).toEqual({
+				model: [TEXT_PATH],
+				gpulayers: -1,
+				contextsize: 8192,
+				flashattention: false,
+				batchsize: 512,
+				jinja: true,
+				// A bare string, like sdmodel — never a one-element list.
+				embeddingsmodel: EMBED_PATH
+			})
+		})
+
+		test("image + embeddings: no text model, the embedding model beside the image one", async () => {
+			const { buildConfigContent } = await freshImport()
+			expect(
+				buildConfigContent({
+					image: { file: "sdxl_q4_0.gguf", path: IMAGE_PATH },
+					embeddings: { file: "nomic.gguf", path: EMBED_PATH }
+				})
+			).toEqual({
+				nomodel: true,
+				jinja: true,
+				sdmodel: IMAGE_PATH,
+				embeddingsmodel: EMBED_PATH
+			})
+		})
+
+		test("embeddings only: nomodel, and no context size to disagree with the next text load", async () => {
+			const { buildConfigContent } = await freshImport()
+			const config = buildConfigContent({
+				embeddings: { file: "nomic.gguf", path: EMBED_PATH }
+			})
+			// The shape verified against koboldcpp 1.119: it loads the
+			// embedding model alone and reports embeddings on, llm off.
+			expect(config).toEqual({
+				nomodel: true,
+				jinja: true,
+				embeddingsmodel: EMBED_PATH
+			})
+		})
+
+		test("embeddingsmaxctx and embeddingsgpu only when set", async () => {
+			const { buildConfigContent } = await freshImport()
+			const config = buildConfigContent({
+				embeddings: {
+					file: "nomic.gguf",
+					path: EMBED_PATH,
+					contextSize: 2048,
+					gpu: true
+				}
+			})
+			expect(config.embeddingsmaxctx).toBe(2048)
+			expect(config.embeddingsgpu).toBe(true)
+			const bare = buildConfigContent({
+				embeddings: { file: "nomic.gguf", path: EMBED_PATH }
+			})
+			expect("embeddingsmaxctx" in bare).toBe(false)
+			expect("embeddingsgpu" in bare).toBe(false)
+		})
+	})
+
+	describe("planResidency", () => {
+		const TEXT = {
+			file: "some-model.gguf",
+			path: TEXT_PATH,
+			gpuLayers: -1,
+			flashAttention: false,
+			batchSize: 512,
+			contextSize: 4096
+		}
+		const EMBED = { file: "nomic.gguf", path: EMBED_PATH }
+
+		test("an embeddings request never evicts the text or image model", async () => {
+			const { planResidency } = await freshImport()
+			expect(planResidency(embeddingsRequest(), { text: TEXT })).toEqual({
+				text: TEXT,
+				embeddings: expect.objectContaining({ path: EMBED_PATH })
+			})
+			expect(
+				Object.keys(
+					planResidency(embeddingsRequest(), {
+						image: { file: "sdxl_q4_0.gguf", path: IMAGE_PATH }
+					})
+				).sort()
+			).toEqual(["embeddings", "image"])
+			expect(Object.keys(planResidency(embeddingsRequest(), {}))).toEqual(
+				["embeddings"]
+			)
+		})
+
+		test("a text or image swap keeps the standing embedding model", async () => {
+			const { planResidency } = await freshImport()
+			expect(
+				planResidency(
+					textRequest({ file: "other.gguf" }),
+					{ text: TEXT, embeddings: EMBED },
+					EMBED
+				)
+			).toEqual({
+				text: expect.objectContaining({ file: "other.gguf" }),
+				embeddings: EMBED
+			})
+			// Image still evicts text — and only text.
+			expect(
+				Object.keys(
+					planResidency(
+						imageRequest(),
+						{ text: TEXT, embeddings: EMBED },
+						EMBED
+					)
+				).sort()
+			).toEqual(["embeddings", "image"])
+		})
+
+		test("the STANDING model decides, not the record: a cleared one is dropped", async () => {
+			const { planResidency } = await freshImport()
+			expect(
+				planResidency(
+					textRequest(),
+					{ text: TEXT, embeddings: EMBED },
+					null
+				)
+			).toEqual({
+				text: expect.objectContaining({ file: "some-model.gguf" })
+			})
+		})
+	})
+
+	test("loading the embedding model beside a resident text model is one reload carrying both", async () => {
+		const mod = await freshImport()
+		await withTextResident(mod)
+		fetchLoadedEmbeddingModelMock
+			.mockResolvedValueOnce(EMBED_NONE) // asked before the reload
+			.mockResolvedValueOnce(EMBED_UNANSWERED) // the listener down mid-load
+			.mockResolvedValue(EMBED_LOADED)
+
+		await settle(mod.ensureModelLoaded(baseOpts(embeddingsRequest())))
+
+		expect(reloads()).toHaveLength(1)
+		expect(lastConfigFilename()).toContain(
+			"serene_embeddings_nomic-embed-text-v1.5.Q4_K_M.kcpps"
+		)
+		expect(lastConfig()).toMatchObject({
+			model: [TEXT_PATH],
+			embeddingsmodel: EMBED_PATH
+		})
+		expect(mod.getLoadedEmbeddingModel()).toBe(
+			"nomic-embed-text-v1.5.Q4_K_M.gguf"
+		)
+		expect(mod.getEmbeddingModel()).toMatchObject({ path: EMBED_PATH })
+		expect(Object.keys(mod.getLoadedSignature()!.resident).sort()).toEqual([
+			"embeddings",
+			"text"
+		])
+	})
+
+	test("embedding use with the model already resident reloads nothing and keeps the idle timer from firing", async () => {
+		const mod = await freshImport()
+		fetchLoadedEmbeddingModelMock
+			.mockResolvedValueOnce(EMBED_NONE)
+			.mockResolvedValue(EMBED_LOADED)
+		const opts = () => baseOpts(embeddingsRequest(), { ttlSecs: 60 })
+		await settle(mod.ensureModelLoaded(opts()))
+		fetchMock.mockClear()
+
+		await vi.advanceTimersByTimeAsync(50_000)
+		await settle(mod.ensureModelLoaded(opts()))
+		await vi.advanceTimersByTimeAsync(50_000)
+		// 100 s since the load, 50 s since the last use: still loaded.
+		expect(reloads()).toHaveLength(0)
+		expect(fetchMock).not.toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({
+				body: JSON.stringify({ filename: "unload_model" })
+			})
+		)
+		await vi.advanceTimersByTimeAsync(11_000)
+		expect(fetchMock).toHaveBeenCalledWith(
+			"http://localhost:5001/api/admin/reload_config",
+			expect.objectContaining({
+				body: JSON.stringify({ filename: "unload_model" })
+			})
+		)
+	})
+
+	test("a chat-model swap keeps the embedding model in the .kcpps, with no extra wait", async () => {
+		const mod = await freshImport()
+		await withTextResident(mod)
+		fetchLoadedEmbeddingModelMock
+			.mockResolvedValueOnce(EMBED_NONE)
+			.mockResolvedValue(EMBED_LOADED)
+		await settle(mod.ensureModelLoaded(baseOpts(embeddingsRequest())))
+		fetchMock.mockClear()
+
+		// The swap: koboldcpp still reports the embedding model, goes down
+		// for the load, and comes back with both.
+		fetchLoadedEmbeddingModelMock
+			.mockReset()
+			.mockResolvedValueOnce(EMBED_LOADED) // asked before the reload
+			.mockResolvedValueOnce(EMBED_LOADED) // the outgoing listener
+			.mockResolvedValueOnce(EMBED_UNANSWERED)
+			.mockResolvedValue(EMBED_LOADED)
+		fetchModelStatusForPollMock.mockResolvedValue({
+			modelName: "other-model",
+			refused: false
+		})
+		const startedAt = Date.now()
+		await settle(
+			mod.ensureModelLoaded(
+				baseOpts(textRequest({ file: "other-model.gguf" }))
+			)
+		)
+
+		expect(reloads()).toHaveLength(1)
+		expect(lastConfig()).toMatchObject({
+			model: [TEXT_PATH],
+			embeddingsmodel: EMBED_PATH
+		})
+		// The text wait ran after the embeddings wait had seen the reload
+		// through, so it did not sit out the 20 s settle backstop.
+		expect(Date.now() - startedAt).toBeLessThan(10_000)
+		expect(mod.getLoadedEmbeddingModel()).toBe(
+			"nomic-embed-text-v1.5.Q4_K_M.gguf"
+		)
+	})
+
+	test("a text request on the cheap path never asks about the embedding model", async () => {
+		const mod = await freshImport()
+		await withTextResident(mod)
+		fetchLoadedEmbeddingModelMock
+			.mockResolvedValueOnce(EMBED_NONE)
+			.mockResolvedValue(EMBED_LOADED)
+		await settle(mod.ensureModelLoaded(baseOpts(embeddingsRequest())))
+		fetchMock.mockClear()
+		fetchLoadedEmbeddingModelMock.mockClear()
+
+		await settle(mod.ensureModelLoaded(baseOpts()))
+
+		expect(reloads()).toHaveLength(0)
+		// No embedding probe on every chat message.
+		expect(fetchLoadedEmbeddingModelMock).not.toHaveBeenCalled()
+	})
+
+	test("clearing the embedding model costs exactly one reload, on the next load", async () => {
+		const mod = await freshImport()
+		await withTextResident(mod)
+		fetchLoadedEmbeddingModelMock
+			.mockResolvedValueOnce(EMBED_NONE)
+			.mockResolvedValue(EMBED_LOADED)
+		await settle(mod.ensureModelLoaded(baseOpts(embeddingsRequest())))
+		fetchMock.mockClear()
+
+		mod.setEmbeddingModel(null)
+		// No I/O of its own.
+		expect(fetchMock).not.toHaveBeenCalled()
+
+		await settle(mod.ensureModelLoaded(baseOpts()))
+		expect(reloads()).toHaveLength(1)
+		expect("embeddingsmodel" in lastConfig()).toBe(false)
+		expect(mod.getLoadedEmbeddingModel()).toBeNull()
+
+		fetchMock.mockClear()
+		await settle(mod.ensureModelLoaded(baseOpts()))
+		expect(reloads()).toHaveLength(0)
+	})
+
+	test("a standing model outlives an idle unload, and comes back with the next chat load", async () => {
+		const mod = await freshImport()
+		fetchLoadedEmbeddingModelMock
+			.mockResolvedValueOnce(EMBED_NONE)
+			.mockResolvedValue(EMBED_LOADED)
+		await settle(mod.ensureModelLoaded(baseOpts(embeddingsRequest())))
+		await mod.unloadModel("http://localhost:5001", "pw")
+		expect(mod.getLoadedSignature()).toBeNull()
+		fetchMock.mockClear()
+
+		fetchCurrentModelStatusMock.mockResolvedValue({
+			modelName: null,
+			refused: false,
+			determined: true
+		})
+		fetchLoadedEmbeddingModelMock
+			.mockReset()
+			.mockResolvedValueOnce(EMBED_NONE)
+			.mockResolvedValue(EMBED_LOADED)
+		fetchModelStatusForPollMock.mockResolvedValue({
+			modelName: "some-model",
+			refused: false
+		})
+		await settle(mod.ensureModelLoaded(baseOpts()))
+
+		expect(reloads()).toHaveLength(1)
+		expect(lastConfig()).toMatchObject({
+			model: [TEXT_PATH],
+			embeddingsmodel: EMBED_PATH
+		})
+	})
+
+	test("a standing model whose file is gone is left out, not handed to koboldcpp", async () => {
+		// koboldcpp answers a missing embeddingsmodel by abandoning the WHOLE
+		// config for its launch one (1.119: "recover to safe mode") — the chat
+		// model would never load.
+		const mod = await freshImport()
+		mod.setEmbeddingModel({
+			file: "gone.gguf",
+			path: "/models/llm/gone.gguf"
+		})
+		vi.mocked(access).mockRejectedValue(
+			Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+		)
+		fetchCurrentModelStatusMock.mockResolvedValue({
+			modelName: null,
+			refused: false,
+			determined: true
+		})
+		fetchModelStatusForPollMock.mockResolvedValue({
+			modelName: "some-model",
+			refused: false
+		})
+
+		await settle(mod.ensureModelLoaded(baseOpts()))
+
+		expect("embeddingsmodel" in lastConfig()).toBe(false)
+		expect(mod.getEmbeddingModel()).toBeNull()
+		expect(fetchLoadedEmbeddingModelMock).not.toHaveBeenCalled()
+	})
+
+	test("a chat load the embedding model does not come back from drops it, so the retry loads chat alone", async () => {
+		const mod = await freshImport()
+		mod.setEmbeddingModel({ file: "nomic.gguf", path: EMBED_PATH })
+		fetchCurrentModelStatusMock.mockResolvedValue({
+			modelName: null,
+			refused: false,
+			determined: true
+		})
+		fetchLoadedEmbeddingModelMock
+			.mockResolvedValueOnce(EMBED_NONE) // before
+			.mockResolvedValueOnce(EMBED_UNANSWERED) // down for the load
+			.mockResolvedValue(EMBED_NONE) // back up, without it
+		fetchModelStatusForPollMock.mockResolvedValue({
+			modelName: KCPP_INACTIVE,
+			refused: false
+		})
+
+		await expect(settle(mod.ensureModelLoaded(baseOpts()))).rejects.toThrow(
+			/embedding model "nomic.gguf" did not load/
+		)
+		expect(mod.getEmbeddingModel()).toBeNull()
+
+		// The preflight's retry: chat alone, no embeddings key.
+		fetchModelStatusForPollMock.mockResolvedValue({
+			modelName: "some-model",
+			refused: false
+		})
+		await settle(mod.ensureModelLoaded(baseOpts()))
+		expect("embeddingsmodel" in lastConfig()).toBe(false)
+	})
+
+	test("an embedding model that does not load fails ITS request and never becomes standing", async () => {
+		const mod = await freshImport()
+		fetchLoadedEmbeddingModelMock
+			.mockResolvedValueOnce(EMBED_NONE)
+			.mockResolvedValueOnce(EMBED_UNANSWERED)
+			.mockResolvedValue(EMBED_NONE)
+
+		await expect(
+			settle(mod.ensureModelLoaded(baseOpts(embeddingsRequest())))
+		).rejects.toThrow(/did not load — koboldcpp came back without one/)
+		expect(mod.getEmbeddingModel()).toBeNull()
+		expect(mod.getLoadedEmbeddingModel()).toBeNull()
+	})
+})
+
+const KCPP_INACTIVE = "inactive"

@@ -196,7 +196,7 @@ async function seedRun(
 ) {
 	await testDb.insert(schema.pipelineRuns).values({
 		runId,
-		specSlug: "core:spec/respond",
+		specSlug: "core:spec/chat-respond",
 		specVersion: "1.0.0",
 		userId,
 		sessionId,
@@ -382,7 +382,7 @@ describe("pipelines:runExplain — what the entry says now, against what it said
 	const seedWardRun = async (runId: string, sessionId: number | null) => {
 		await testDb.insert(schema.pipelineRuns).values({
 			runId,
-			specSlug: "core:spec/respond",
+			specSlug: "core:spec/chat-respond",
 			specVersion: "1.0.0",
 			userId: ownerId,
 			sessionId,

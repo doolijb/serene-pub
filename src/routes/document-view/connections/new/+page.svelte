@@ -6,7 +6,10 @@
 	import { announce } from "$lib/client/accessibility/state.svelte"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
-	import { isKoboldCppManagedType } from "$lib/shared/utils/connectionServiceItems"
+	import {
+		connectionTypeDisabledReason,
+		isKoboldCppManagedType
+	} from "$lib/shared/utils/connectionServiceItems"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import {
 		NOTE_MAX_LENGTH,
@@ -35,6 +38,30 @@
 	const typeOptions = CONNECTION_TYPE.options.filter(
 		(o) => !isKoboldCppManagedType(o.value)
 	)
+
+	const systemSettingsCtx: SystemSettingsCtx | undefined =
+		getContext("systemSettingsCtx")
+	/**
+	 * The types this machine can't create, each with why — the local ONNX
+	 * types where the runtime didn't load. They stay in the list, disabled,
+	 * with the reason in the option's own text (a native option has no second
+	 * line) and once more in the hint the select is described by: the server
+	 * would refuse Create with the same sentence.
+	 */
+	const blockedTypes = $derived(
+		typeOptions
+			.map((o) => ({
+				label: o.label,
+				value: o.value,
+				reason: connectionTypeDisabledReason(
+					o.value,
+					systemSettingsCtx?.settings?.localOnnxAvailability
+				)
+			}))
+			.filter((o) => o.reason != null)
+	)
+	const blockedReason = (value: string) =>
+		blockedTypes.find((o) => o.value === value)?.reason ?? null
 
 	let name = $state("")
 	let type = $state(CONNECTION_TYPE.OLLAMA)
@@ -103,6 +130,12 @@
 		}
 		if (!baseUrl.trim()) {
 			error = "Base URL is required."
+			announce(error)
+			return
+		}
+		const blocked = blockedReason(type)
+		if (blocked) {
+			error = blocked
 			announce(error)
 			return
 		}
@@ -192,14 +225,28 @@
 		     panel documents refusing. -->
 		<div class="a11y-field">
 			<label for="a11y-conn-type">Service type</label>
+			{#if blockedTypes.length}
+				<!-- One verdict covers both local ONNX types (they load one
+				     runtime), so the first one's reason is every one's. -->
+				<p id="a11y-conn-type-unavailable" class="a11y-hint">
+					{blockedTypes.map((o) => o.label).join(" and ")} can't be
+					chosen. {blockedTypes[0].reason}.
+				</p>
+			{/if}
 			<select
 				id="a11y-conn-type"
 				bind:value={type}
 				onchange={onTypeChange}
 				disabled={saving}
+				aria-describedby={blockedTypes.length
+					? "a11y-conn-type-unavailable"
+					: undefined}
 			>
 				{#each typeOptions as opt}
-					<option value={opt.value}>{opt.label}</option>
+					{@const blocked = blockedReason(opt.value)}
+					<option value={opt.value} disabled={!!blocked}>
+						{blocked ? `${opt.label} — ${blocked}` : opt.label}
+					</option>
 				{/each}
 			</select>
 		</div>

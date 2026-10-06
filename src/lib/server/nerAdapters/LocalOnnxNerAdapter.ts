@@ -19,7 +19,8 @@ import {
 	type EntitySpan,
 	type ExtractEntitiesRequest,
 	type NerAdapterExports,
-	type NerModelOption
+	type NerModelOption,
+	type NerResidency
 } from "./BaseNerAdapter"
 import { NER_MODELS } from "$lib/server/ner/models"
 import { recommendedNerModels } from "$lib/server/localModels/onnxList"
@@ -37,6 +38,19 @@ export class LocalOnnxNerAdapter extends BaseNerAdapter {
 				"This entity connection names no model. Choose one on the connection."
 			)
 
+		// Dynamic, and not only for Android: `ner/index` is the module that holds
+		// the loaded pipeline, and importing it statically from here would make
+		// the adapter registry's thunk pointless.
+		const { loadNerModel, extractNerSpans, getLoadedNerModelId } =
+			await import("$lib/server/ner")
+
+		// The annotation lane's path, row after row: its broker loaded this model,
+		// and the loader refused anything unknown on the way in. Checking the
+		// list again here would cost a registry query per row for a downloaded
+		// model.
+		if (getLoadedNerModelId() === model)
+			return await extractNerSpans(req.text)
+
 		// Refused HERE, against this adapter's own list, rather than deep inside
 		// the loader. The loader checks platform support first, so on a machine
 		// where `onnxruntime-node` will not load, a mistyped model name would
@@ -50,16 +64,38 @@ export class LocalOnnxNerAdapter extends BaseNerAdapter {
 				throw new Error(`Unknown entity model: ${model}`)
 		}
 
-		// Dynamic, and not only for Android: `ner/index` is the module that holds
-		// the loaded pipeline, and importing it statically from here would make
-		// the adapter registry's thunk pointless.
-		const { loadNerModel, extractNerSpans, getLoadedNerModelId } =
-			await import("$lib/server/ner")
-		// Idempotent when the right model is already up, which is the common
-		// case: the lane's broker loads once and then annotates hundreds of rows
-		// through the resident pipeline.
-		if (getLoadedNerModelId() !== model) await loadNerModel(model)
+		// A caller with no broker behind it (a test, a one-off extraction) loads
+		// on demand. The lane never reaches this line: its broker leased the
+		// model resident before the row was picked.
+		await loadNerModel(model)
 		return await extractNerSpans(req.text)
+	}
+}
+
+/**
+ * This backend's residency, for the annotation lane's broker: `$lib/server/ner`,
+ * the module that holds the loaded pipeline.
+ *
+ * ⚠ Built from the module's own functions rather than handed over as an object
+ * it exports, so every test that stubs `$lib/server/ner` stubs this too.
+ */
+async function residency(): Promise<NerResidency> {
+	const {
+		getLoadedNerModelId,
+		isNerModelLoading,
+		isNerModelReady,
+		loadNerModel,
+		setNerTtlMinutes
+	} = await import("$lib/server/ner")
+	return {
+		resident: () => (isNerModelReady() ? getLoadedNerModelId() : null),
+		loading: () => isNerModelLoading(),
+		async load(model, ttlMinutes) {
+			// Set before the load so the idle timer starts on the connection's
+			// own number rather than on the previous star's.
+			setNerTtlMinutes(ttlMinutes)
+			await loadNerModel(model)
+		}
 	}
 }
 
@@ -147,9 +183,7 @@ async function listModels(
 async function testConnection(
 	connection: SelectConnection
 ): Promise<{ ok: boolean; error?: string; extra?: Record<string, unknown> }> {
-	const { getLocalNerUnsupportedReason } = await import(
-		"$lib/server/ner"
-	)
+	const { getLocalNerUnsupportedReason } = await import("$lib/server/ner")
 	const reason = await getLocalNerUnsupportedReason()
 	if (reason) return { ok: false, error: reason }
 	// The endpoint only: connections have no default model, so a test names
@@ -162,7 +196,8 @@ async function testConnection(
 const exports: NerAdapterExports = {
 	Adapter: LocalOnnxNerAdapter,
 	listModels,
-	testConnection
+	testConnection,
+	residency
 }
 
 export default exports

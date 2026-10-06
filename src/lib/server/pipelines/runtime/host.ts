@@ -229,14 +229,6 @@ export interface HostScope {
 	 */
 	verb?: "regenerate" | "swipe" | "extend"
 	/**
-	 * "Choose sprites" is off for this run: the sprite picker's `enabled`
-	 * parameter, as the run's own world resolves it (`runSpec`). Read by
-	 * `sprites_for`, which sits BEFORE the picker and would otherwise embed
-	 * the line for a choice nobody will make — a provider call per reply with
-	 * an embedding service starred. Absent means on.
-	 */
-	spriteChoiceOff?: boolean
-	/**
 	 * Which channel this turn was **triggered on** — the stored string, lane
 	 * included (`main`, `manuscript`, `phone:3`). Absent means `main`, which
 	 * is every session whose genre declares no channel of its own.
@@ -640,13 +632,13 @@ export async function narratorNameFor(
 	sessionId: number,
 	_userId: number | undefined
 ): Promise<string | null> {
-	const [{ buildWorld }, { resolveConfigSources }, { NARRATE_SPEC_ID }] =
+	const [{ buildWorld }, { resolveConfigSources }, { CHAT_NARRATE_SPEC_ID }] =
 		await Promise.all([
 			import("$lib/server/pipelines/config/world"),
 			import("@serene-pub/sdk"),
 			import("$lib/server/pipelines/specs")
 		])
-	const world = await buildWorld(db, { specId: NARRATE_SPEC_ID, sessionId })
+	const world = await buildWorld(db, { specId: CHAT_NARRATE_SPEC_ID, sessionId })
 	const sourced = resolveConfigSources(world as any, ["context"]) as any
 	const name = sourced?.context?.prompts?.narratorName?.value
 	return typeof name === "string" && name.trim() ? name : null
@@ -4326,6 +4318,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					const {
 						loadVocabulary,
 						readEntryAnnotations,
+						residentModelSpans,
 						searchMessageAnnotations
 					} = await import("$lib/server/annotations")
 					const {
@@ -4397,9 +4390,23 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 
 					const window: string =
 						typeof q.window === "string" ? q.window : ""
+					/**
+					 * Tier zero over the window as well, when — and only when —
+					 * the entity model is resident. The stored rows were read
+					 * by it, so a window read the same way names what they
+					 * name, lower-case and unfamiliar names included.
+					 *
+					 * ⚠ Never a load and never a wait: `residentModelSpans`
+					 * asks the lease and nothing else, so a model that is not
+					 * up answers no spans and the window is extracted
+					 * lexically, exactly as before — an unavailable mechanism
+					 * subtracts a signal.
+					 */
+					const windowPass = await residentModelSpans(window)
 					const { entities, extractorVersion } = extractEntities(
 						window,
-						vocabulary.gazetteer
+						vocabulary.gazetteer,
+						windowPass.spans
 					)
 
 					const maxMessages = Math.max(0, Number(q.maxMessages) || 0)
@@ -4452,7 +4459,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						entities,
 						entries: [...index].map(([id, keys]) => ({
 							id,
-							keys
+							keys,
+							entityLabels: index.entityLabels.get(id) ?? {}
 						})),
 						messages,
 						diagnostics: {
@@ -4535,57 +4543,6 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						...toMessage(r.row),
 						turn: Number(r.turn)
 					}))
-				}
-
-				case "sprites_for": {
-					/**
-					 * What a line's speaker can show (DESIGN-sprites §5.2): the
-					 * sprite set in force and its labels, the speaker's recent
-					 * faces, and the line's text. The set is decided in
-					 * `spriteChoicesFor` — override, then amendment, then the
-					 * card's default — and `decidedBy` rides out on the receipt.
-					 */
-					const sessionId = q.sessionId ?? scope.sessionId
-					assertScoped(node, q.sessionId, scope.sessionId)
-					const messageId = messageRefId(q.message)
-					if (sessionId === undefined || messageId === null) return null
-					const { spriteChoicesFor } = await import(
-						"$lib/server/sprites/choices"
-					)
-					// The tail runs AFTER the reply is saved: a fault choosing a
-					// face must never turn a delivered reply into a failed turn,
-					// so a read that throws degrades to "nothing to choose".
-					let choices: Awaited<ReturnType<typeof spriteChoicesFor>>
-					try {
-						choices = await spriteChoicesFor(db, { sessionId, messageId })
-					} catch (e) {
-						console.warn(
-							`${node.key}: could not read the speaker's sprites — ${String(e)}`
-						)
-						return null
-					}
-					if (!choices.has || scope.spriteChoiceOff)
-						return { ...choices, lineVector: null, labelVectors: null }
-					// Through the install's embedding model, exactly as
-					// `entity-link` embeds names: no connection slot on the spec.
-					// ⚠ Not "no model call" (corrected 2026-09-29, genre uplift
-					// C3): `batchEmbed` is the same function retrieval uses, and
-					// with an API embedding connection starred it is a provider
-					// call (`embedding/index.ts`) — one per reply whose speaker
-					// has sprites, after the save. Free only on a local ONNX
-					// model. Reached only past `has`, so a speaker without
-					// sprites costs nothing, and only with the picker's
-					// `enabled` on (`scope.spriteChoiceOff`, resolved by
-					// `runSpec`), so "Choose sprites" off costs nothing either.
-					const { spriteVectors } = await import(
-						"$lib/server/sprites/vectors"
-					)
-					const { getLoadedModelId, batchEmbed } = await embeddingApi()
-					const vectors = await spriteVectors(choices.text, choices.labels, {
-						modelId: getLoadedModelId(),
-						batchEmbed
-					})
-					return { ...choices, ...vectors }
 				}
 
 				case "mention_spans": {
@@ -4868,6 +4825,59 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							? await batchEmbed(texts)
 							: [await embed(texts[0]!)]
 					return { vectors, vector: vectors[0] }
+				}
+
+				case "core:oracle/pick-sprite": {
+					/**
+					 * The sprite picker's two effects (DESIGN-sprites §5.2):
+					 * what the speaker can show, and the vectors to choose
+					 * with. The binding decides who is speaking and does the
+					 * arithmetic; this reads and embeds, and nothing else.
+					 *
+					 * ⚠ The line's text arrives on the payload, wired from the
+					 * step that wrote it — never re-read from the row (owner,
+					 * 2026-10-05). The run's own row is named only to leave it
+					 * out of the speaker's recent faces.
+					 *
+					 * The set is decided in `spriteChoicesFor` — the spec's
+					 * `set`, then the override, the amendment, the card's
+					 * default — and `decidedBy` rides out on the receipt.
+					 */
+					const sessionId = p.sessionId ?? scope.sessionId
+					assertScoped(node, p.sessionId, scope.sessionId)
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to choose a sprite in — wire 'scope' from the inlet.`
+						)
+					const characterId = Number(p.characterId)
+					const { spriteChoicesFor } = await import(
+						"$lib/server/sprites/choices"
+					)
+					const choices = await spriteChoicesFor(db, {
+						sessionId,
+						characterId,
+						set: p.set,
+						excludeMessageId:
+							typeof run.liveRow === "number" ? run.liveRow : undefined
+					})
+					if (choices.labels.length === 0)
+						return { choices, lineVector: null, labelVectors: null }
+					// Through the install's active embedding connection — the
+					// star, by policy: the picker has no connection slot, as
+					// `embed-text` has none. ⚠ With an embedding service that
+					// is a provider call, one per reply whose speaker has
+					// sprites; a speaker without sprites never reaches here.
+					// Label vectors are cached per model (`sprites/vectors.ts`).
+					const { spriteVectors } = await import(
+						"$lib/server/sprites/vectors"
+					)
+					const { getLoadedModelId, batchEmbed } = await embeddingApi()
+					const text = typeof p.text === "string" ? p.text : ""
+					const vectors = await spriteVectors(text, choices.labels, {
+						modelId: getLoadedModelId(),
+						batchEmbed
+					})
+					return { choices, ...vectors }
 				}
 
 				/**
@@ -6602,13 +6612,19 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * its ACTIVE swipe — `swipes.spriteHistory[currentIdx]`,
 					 * mirrored to `metadata.sprite` exactly as `reasoning` is.
 					 *
-					 * Who chose it is decided HERE, never by a port: a run of
-					 * `core:spec/show-sprite` is a person's pick from the
-					 * message menu (checked against the item rule like an
-					 * edit); every other run is a picker's. A picker never
-					 * overwrites a person's pick, and a picker that chose
-					 * nothing leaves a line that shows nothing untouched.
+					 * Who chose it is the node's `source`, a literal the spec
+					 * wrote (2026-10-05): `picker` on the reply specs, `person`
+					 * in `core:spec/show-sprite`. Stated, not trusted — a
+					 * `person` is accepted from core's own sprite action and
+					 * no other spec, and the item rule is checked like an
+					 * edit's. A picker never overwrites a person's pick, and a
+					 * picker's null pick writes nothing.
 					 */
+					if (p.source !== "picker" && p.source !== "person")
+						throw new HostScopeError(
+							`${node.key} was given no source — write source: 'picker' or 'person'.`
+						)
+					const byPerson = p.source === "person"
 					const id = messageRefId(p.target)
 					if (id === null)
 						throw new HostScopeError(
@@ -6620,9 +6636,11 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							`${node.key}: no message ${id} to show a sprite on`
 						)
 					assertScoped(node, current.sessionId, scope.sessionId)
-					const byPerson = scope.specId === SHOW_SPRITE_SPEC_ID
 					if (byPerson) {
-						if (scope.ownerPluginId !== undefined)
+						if (
+							scope.ownerPluginId !== undefined ||
+							scope.specId !== SHOW_SPRITE_SPEC_ID
+						)
 							throw new HostScopeError(
 								`${node.key}: only core's own sprite action records a person's pick.`
 							)
@@ -6633,12 +6651,17 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						p.pick,
 						byPerson
 					)
+					// Nothing written — a picker's null pick, a person's pick
+					// standing, the same sprite again — so `written: false`:
+					// the executor causes no `sprite-shown`. The step runs
+					// after every reply, faceless or not.
 					if (decided.kept) {
 						return {
 							id: current.id,
 							sessionId: current.sessionId,
 							sprite: decided.sprite,
-							kept: true
+							kept: true,
+							written: false
 						}
 					}
 					const next = decided.sprite

@@ -45,13 +45,20 @@ const conn = (over: Record<string, unknown> = {}) =>
  * answer that makes the catalogue assertions exact — `registry.rows` is
  * swappable for the one case that needs a downloaded model to be there.
  */
-const registry = vi.hoisted(() => ({ rows: [] as any[] }))
+const registry = vi.hoisted(() => ({ rows: [] as any[], reads: 0 }))
 vi.mock("$lib/server/db", () => ({
 	getCryptoSecretKey: () => "test-secret",
 	db: {
 		select: () => ({
 			from: () => ({
-				where: async () => registry.rows
+				// Awaitable as it is (the adapter's listing) and with `.limit`
+				// (the loader's registry check), counting every read.
+				where: () => {
+					registry.reads++
+					return Object.assign(Promise.resolve(registry.rows), {
+						limit: async () => registry.rows
+					})
+				}
 			})
 		})
 	}
@@ -264,6 +271,40 @@ models:
 		expect(spans.map((s) => s.text)).toEqual(["Vell"])
 	})
 
+	/**
+	 * The annotation lane's path. Its broker loaded the model, so a row reads
+	 * the resident pipeline and nothing else: a downloaded model is not looked
+	 * up in the registry again for every row of a thousand-row book.
+	 */
+	it("reads a resident model without consulting the registry again", async () => {
+		registry.rows = [
+			{
+				modelName: "some-org/hand-placed",
+				filename: "some-org/hand-placed.onnx",
+				description: "Downloaded"
+			}
+		]
+		try {
+			answer = [{ entity_group: "PER", score: 0.9, word: "Vell" }]
+			const mod = (await import("./LocalOnnxNerAdapter")).default
+			const adapter = new mod.Adapter(
+				conn({ model: "some-org/hand-placed" })
+			)
+			await adapter.extractEntities({ text: "Vell answered." })
+			const readsAfterLoad = registry.reads
+			expect(readsAfterLoad).toBeGreaterThan(0)
+
+			const spans = await adapter.extractEntities({ text: "Vell left." })
+			expect(spans.map((s) => s.text)).toEqual(["Vell"])
+			expect(registry.reads).toBe(readsAfterLoad)
+			expect(loaded).toEqual([
+				"token-classification:some-org/hand-placed"
+			])
+		} finally {
+			registry.rows = []
+		}
+	})
+
 	it("returns nothing for empty text without loading anything", async () => {
 		const mod = (await import("./LocalOnnxNerAdapter")).default
 		const spans = await new mod.Adapter(conn()).extractEntities({
@@ -271,6 +312,163 @@ models:
 		})
 		expect(spans).toEqual([])
 		expect(loaded).toEqual([])
+	})
+})
+
+/**
+ * The residency the module lends the annotation lane's broker. The broker
+ * loads through this and never names `$lib/server/ner`, so this is the one
+ * place that says the local backend's residency IS that module's.
+ */
+describe("local ONNX residency", () => {
+	it("loads with the connection's idle window and reports what is resident", async () => {
+		const mod = (await import("./LocalOnnxNerAdapter")).default
+		expect(mod.residency).toBeTypeOf("function")
+		const residency = await mod.residency!()
+		const { getNerTtlMinutes } = await import("$lib/server/ner")
+
+		expect(residency.resident()).toBeNull()
+		expect(residency.loading()).toBe(false)
+
+		await residency.load("Xenova/bert-base-NER", 9)
+		expect(residency.resident()).toBe("Xenova/bert-base-NER")
+		expect(getNerTtlMinutes()).toBe(9)
+		expect(loaded).toEqual(["token-classification:Xenova/bert-base-NER"])
+	})
+
+	it("loads at the catalogue's dtype, exactly as the lane always has", async () => {
+		const { pipeline } = await import("@huggingface/transformers")
+		const mod = (await import("./LocalOnnxNerAdapter")).default
+		await (await mod.residency!()).load("Xenova/bert-base-NER", 5)
+		expect(vi.mocked(pipeline).mock.lastCall?.[2]).toMatchObject({
+			dtype: "q8"
+		})
+	})
+
+	it("refuses a model the catalogue and the registry do not name", async () => {
+		const mod = (await import("./LocalOnnxNerAdapter")).default
+		const residency = await mod.residency!()
+		await expect(
+			residency.load("Xenova/not-a-real-model", 5)
+		).rejects.toThrow(/Unknown entity model/)
+		expect(residency.resident()).toBeNull()
+	})
+
+	/**
+	 * A Hub-added model's precision is set on its model row and used by the
+	 * DOWNLOAD, which records it on the registry row (`local_models.
+	 * quantization`). Loading at any other precision asks for a weights file
+	 * that was never fetched.
+	 */
+	it("loads a downloaded model at the precision its download recorded", async () => {
+		registry.rows = [
+			{
+				modelName: "some-org/hand-added",
+				filename: "some-org/hand-added",
+				quantization: "fp16"
+			}
+		]
+		try {
+			const { pipeline } = await import("@huggingface/transformers")
+			const mod = (await import("./LocalOnnxNerAdapter")).default
+			await (await mod.residency!()).load("some-org/hand-added", 5)
+			expect(vi.mocked(pipeline).mock.lastCall?.[2]).toMatchObject({
+				dtype: "fp16"
+			})
+		} finally {
+			registry.rows = []
+		}
+	})
+
+	it("names no precision for a downloaded model whose row records none", async () => {
+		registry.rows = [
+			{
+				modelName: "some-org/hand-placed",
+				filename: "some-org/hand-placed.onnx",
+				quantization: null
+			}
+		]
+		try {
+			const { pipeline } = await import("@huggingface/transformers")
+			const mod = (await import("./LocalOnnxNerAdapter")).default
+			await (await mod.residency!()).load("some-org/hand-placed", 5)
+			expect(vi.mocked(pipeline).mock.lastCall?.[2]).not.toHaveProperty(
+				"dtype"
+			)
+		} finally {
+			registry.rows = []
+		}
+	})
+})
+
+/**
+ * ⚠ A model already on disk loads from its DIRECTORY, by path.
+ *
+ * transformers.js 4.2.0 decides which files a repo id needs by looking in
+ * `env.cacheDir`, not the per-call `cache_dir`, so offline a repo id finds no
+ * `config.json` (or no tokenizer) and the load fails. A path is not a repo id:
+ * every file is read straight from it. Verified against the real
+ * `Xenova/bert-base-NER` with remote models refused (lane C1, 2026-10-05).
+ */
+describe("local ONNX loading from disk", () => {
+	const MODEL = "Xenova/bert-base-NER"
+	let dir: string
+
+	beforeEach(async () => {
+		const { modelDirFor, clearCachedScans } = await import(
+			"$lib/server/localModels/onnxCache"
+		)
+		dir = modelDirFor(MODEL, "ner")!
+		const fs = await import("node:fs/promises")
+		const path = await import("node:path")
+		await fs.mkdir(path.join(dir, "onnx"), { recursive: true })
+		await fs.writeFile(path.join(dir, "onnx", "model_quantized.onnx"), "")
+		clearCachedScans()
+	})
+
+	afterEach(async () => {
+		const fs = await import("node:fs/promises")
+		await fs.rm(dir, { recursive: true, force: true })
+		const { clearCachedScans } = await import(
+			"$lib/server/localModels/onnxCache"
+		)
+		clearCachedScans()
+		const { env } = await import("@huggingface/transformers")
+		delete (env as any).allowRemoteModels
+	})
+
+	it("hands the pipeline the model's directory, not its repo id", async () => {
+		const path = await import("node:path")
+		const mod = (await import("./LocalOnnxNerAdapter")).default
+		await (await mod.residency!()).load(MODEL, 5)
+		expect(path.isAbsolute(dir)).toBe(true)
+		expect(loaded).toEqual([`token-classification:${dir}`])
+	})
+
+	it("falls back to the repo id when the directory cannot serve the load", async () => {
+		const { pipeline } = await import("@huggingface/transformers")
+		vi.mocked(pipeline).mockImplementationOnce(async () => {
+			throw new Error("model_quantized.onnx is not here")
+		})
+		const mod = (await import("./LocalOnnxNerAdapter")).default
+		const residency = await mod.residency!()
+		await residency.load(MODEL, 5)
+		expect(vi.mocked(pipeline).mock.calls.at(-1)?.[1]).toBe(MODEL)
+		expect(residency.resident()).toBe(MODEL)
+	})
+
+	it("does not reach for the Hub when remote models are refused", async () => {
+		const { env, pipeline } = await import("@huggingface/transformers")
+		;(env as any).allowRemoteModels = false
+		vi.mocked(pipeline).mockImplementationOnce(async () => {
+			throw new Error("model_quantized.onnx is not here")
+		})
+		const calls = vi.mocked(pipeline).mock.calls.length
+		const mod = (await import("./LocalOnnxNerAdapter")).default
+		const residency = await mod.residency!()
+		await expect(residency.load(MODEL, 5)).rejects.toThrow(/is not here/)
+		expect(vi.mocked(pipeline).mock.calls.length).toBe(calls + 1)
+		expect(residency.resident()).toBeNull()
 	})
 })
 

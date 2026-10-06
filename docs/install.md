@@ -47,7 +47,7 @@ xattr -dr com.apple.quarantine "/Applications/Serene Pub.app"
 :::
 
 :::note Intel Macs
-Everything works on Intel Macs except the built-in *local* memory model (embeddings), which that chip can't run. You can use an online one instead. This won't matter for your first sessions.
+Everything works on Intel Macs, including the built-in *local* models for memory (embeddings) and for spotting names (named entities). On an Intel Mac they run on an older version of the engine behind them, because newer versions no longer support that chip. You won't notice a difference.
 :::
 
 Skip ahead to [Check that it worked](#check-that-it-worked).

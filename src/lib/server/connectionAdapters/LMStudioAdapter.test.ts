@@ -142,6 +142,33 @@ describe("LMStudioAdapter — base URL trailing-slash normalization", () => {
 	})
 })
 
+describe("LMStudioAdapter.listModels() — what each model is for", () => {
+	test("files LM Studio's `type` as the app's modality, so an embedding model is never offered for chat", async () => {
+		listDownloadedModelsMock.mockResolvedValue([
+			{ modelKey: "qwen3-8b", displayName: "Qwen3 8B", type: "llm" },
+			{
+				modelKey: "text-embedding-nomic-embed-text-v1.5",
+				displayName: "Nomic Embed Text v1.5",
+				type: "embedding"
+			},
+			// A kind this does not know is left unsaid, never guessed.
+			{ modelKey: "mystery", displayName: "Mystery", type: "speech" }
+		])
+		const { models } = await exportsDefault.listModels(makeConnection())
+		expect(models.map((m: any) => [m.model, m.name, m.modality])).toEqual([
+			["qwen3-8b", "Qwen3 8B", "text-gen"],
+			[
+				"text-embedding-nomic-embed-text-v1.5",
+				"Nomic Embed Text v1.5",
+				"embeddings"
+			],
+			["mystery", "Mystery", undefined]
+		])
+		// The SDK's own descriptor still rides along for `readModelFacts`.
+		expect(models[1].type).toBe("embedding")
+	})
+})
+
 describe("LMStudioAdapter.mapSamplingConfig()", () => {
 	// `sampling` arrives already resolved, so a switched-off sampler reaches the
 	// adapter as an absent key — omission is the only "off" there is. The

@@ -257,11 +257,11 @@ async function attach(httpServer: HttpServer): Promise<void> {
 		// indexed on an install that has configured nothing at all.
 		startPeriodicAnnotationScan()
 
-		// Fire-and-forget: warms the local-embedding support probe (a cached,
-		// one-time dynamic import attempt — see embedding/index.ts) so it's
+		// Fire-and-forget: warms the local ONNX probe (a cached, one-time
+		// dynamic import attempt — see localModels/onnxRuntime.ts) so it's
 		// usually already resolved by the time a client's first
-		// systemSettings:get request needs the localEmbeddingsSupported flag,
-		// instead of that request paying the one-time import cost.
+		// systemSettings:get request needs `localOnnxAvailability`, instead of
+		// that request paying the one-time import cost.
 		warmLocalEmbeddingSupportProbe()
 	}
 }
@@ -330,6 +330,11 @@ export async function attachSocketServerAfterRecovery(): Promise<void> {
 	await attachSocketServer(httpServer)
 }
 
+/**
+ * Asked through the embedding lane rather than `onnxRuntime.ts` directly: the
+ * lane's question IS the shared verdict, worded, so one call warms both lanes
+ * and the client's flag at once.
+ */
 async function warmLocalEmbeddingSupportProbe() {
 	try {
 		const { isLocalEmbeddingSupported } = await import(

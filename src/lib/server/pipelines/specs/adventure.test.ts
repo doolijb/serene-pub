@@ -29,7 +29,7 @@ import {
 	corePresetSeeds,
 	CORE_PROMPTS,
 	CORE_SPECS,
-	RESPOND_SPEC_ID,
+	CHAT_RESPOND_SPEC_ID,
 	adventureGenre
 } from "@serene-pub/core-catalog"
 
@@ -337,7 +337,7 @@ describe("the preset and the prompts", () => {
 		// The optional form event (R-15 *Forms*; U5d), bound so a question put
 		// to an AI-portrayed cast member is answered out of the box.
 		expect(p.bindings[sessionEvents.formAddressed]?.spec).toBe(
-			"core:spec/answer-form-adventure"
+			"core:spec/adventure-answer-form"
 		)
 		// By identity (W-A): the declaration, not the spec. Ask and Answer are
 		// the worked form (U5d).
@@ -566,6 +566,12 @@ describe("parity", () => {
 		// missed. (was "df7c86394a82")
 		// Moved 2026-10-03 (history window: `session-history` reads by `budget`)
 		// — not adventure's; `boot/specHashes.test.ts` records it. (was "75db48c05464b")
-		expect(canonicalHash(built(RESPOND_SPEC_ID))).toBe("6b320446a5eb1")
+		// Moved 2026-10-05 (sprites in-pipeline: the written-out sprite step
+		// replaces the tail; D-c: the embed steps lose their connection slot and
+		// `semantic.arm.queries` wires its own) — not adventure's;
+		// `boot/specHashes.test.ts` records it. (was "6b320446a5eb1")
+		// Moved 2026-10-05 (rename: the id `core:spec/respond` is now
+		// `core:spec/chat-respond`) — not adventure's. (was "520aa324cf15f")
+		expect(canonicalHash(built(CHAT_RESPOND_SPEC_ID))).toBe("1f99b0cdffb35d")
 	})
 })

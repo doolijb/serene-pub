@@ -104,8 +104,10 @@ export const ANNOTATION_BATCH = 200
  * Tier zero's spans for one passage, or none — with the model that read it
  * (`ModelPass`).
  *
- * `modelId` is the identity the lane took a LEASE on. Two things follow from
- * reading it here rather than asking the runtime what is loaded:
+ * `modelId` is the identity the lane took a LEASE on, and the spans come from
+ * the starred connection's own NER adapter, reached through that lease
+ * (`leasedNerAdapter`). Two things follow from asking the lease rather than a
+ * loader:
  *
  *  - **Nothing is loaded by this path.** Residency is the broker's, so an
  *    annotate call that arrives with nothing resident contributes no spans
@@ -125,11 +127,13 @@ async function modelSpansFor(
 	const lexical: ModelPass = { spans: [], entityModel: null }
 	if (!modelId || !text) return lexical
 	try {
-		const { extractNerSpans, getLoadedNerModelId } = await import(
-			"$lib/server/ner"
-		)
-		if (getLoadedNerModelId() !== modelId) return lexical
-		return { spans: await extractNerSpans(text), entityModel: modelId }
+		const { leasedNerAdapter } = await import("$lib/server/ner/broker")
+		const adapter = await leasedNerAdapter(modelId)
+		if (!adapter) return lexical
+		return {
+			spans: await adapter.extractEntities({ text, model: modelId }),
+			entityModel: modelId
+		}
 	} catch (err) {
 		console.warn("[annotations] entity model produced nothing:", err)
 		return lexical
@@ -145,9 +149,42 @@ async function modelSpansFor(
  * stamped with (`entry_annotations.entity_model`), and what a move of the
  * entity star is judged against.
  */
-interface ModelPass {
+export interface ModelPass {
 	spans: ModelSpan[]
 	entityModel: string | null
+}
+
+/**
+ * Tier zero for a passage nothing stores — the live query window — and only
+ * from an entity model that is resident RIGHT NOW.
+ *
+ * The starred model's identity is read (`nerBroker.peek`: a database read, no
+ * load) and the lease is asked for it exactly as a stored row's pass asks
+ * (`modelSpansFor`). Nothing here loads or waits: a turn must never sit behind
+ * a 100MB download, so no star, a star that failed to load, a model not yet
+ * resident or one swapped away all answer no spans, and the window is read by
+ * the lexical tiers alone, as it always was.
+ *
+ * Bounded at `MAX_ANNOTATED_LENGTH` like every stored passage. The spans are
+ * offsets into that prefix, which are offsets into `text`.
+ *
+ * Never throws, for `modelSpansFor`'s reason.
+ */
+export async function residentModelSpans(text: string): Promise<ModelPass> {
+	const lexical: ModelPass = { spans: [], entityModel: null }
+	if (!text.trim()) return lexical
+	try {
+		const { nerBroker } = await import("$lib/server/ner/broker")
+		const peek = await nerBroker.peek()
+		if (peek.kind !== "configured") return lexical
+		return await modelSpansFor(
+			text.slice(0, MAX_ANNOTATED_LENGTH),
+			peek.modelId
+		)
+	} catch (err) {
+		console.warn("[annotations] no entity model for the window:", err)
+		return lexical
+	}
 }
 
 /** Short digests: enough to distinguish, short enough to store on every row. */
@@ -462,6 +499,8 @@ interface AnnotationValues {
 	sourceHash: string
 	gazetteerHash: string
 	entityModel: string | null
+	/** The model's own label — model tier only (`entry_annotations.entity_label`). */
+	entityLabel: string | null
 }
 
 /**
@@ -504,6 +543,7 @@ const valuesFor = (
 				confidence: 0,
 				mentions: 0,
 				spans: [],
+				entityLabel: null,
 				...base
 			}
 		]
@@ -517,6 +557,9 @@ const valuesFor = (
 		confidence: e.confidence ?? CONFIDENCE[e.tier] ?? 0.5,
 		mentions: e.count,
 		spans: e.spans,
+		// Only a model-tier entity carries one: a span that landed on a name
+		// the gazetteer resolved is that resolved entity, label dropped.
+		entityLabel: e.tier === "model" ? (e.label ?? null) : null,
 		...base
 	}))
 }
@@ -611,6 +654,7 @@ async function writeAnnotations(
 					sourceHash: sql`excluded.source_hash`,
 					gazetteerHash: sql`excluded.gazetteer_hash`,
 					entityModel: sql`excluded.entity_model`,
+					entityLabel: sql`excluded.entity_label`,
 					annotatedAt: sql`excluded.annotated_at`
 				}
 			})
@@ -964,8 +1008,27 @@ export async function annotateSessionMessages(
  * bound, and a place for a turn to say *"index these ones first, I am waiting"*.
  */
 
-/** `parentId -> the entity keys it names`, sentinel excluded. */
-export type AnnotationIndex = Map<number, string[]>
+/**
+ * `parentId -> the entity keys it names`, sentinel excluded.
+ *
+ * `entityLabels` rides beside it: `parentId -> entityKey -> entity label`, for
+ * the keys a model labelled on that parent. A key absent there has none — a
+ * gazetteer or open-tier name, or a model row written before labels were
+ * stored. Beside the keys rather than in them, so every reader of the keys
+ * reads them unchanged.
+ */
+export interface AnnotationIndex extends Map<number, string[]> {
+	entityLabels: Map<number, Record<string, string>>
+}
+
+/** Record one row's entity label, when it has one. */
+const noteLabel = (
+	labels: Record<string, string>,
+	entityKey: string,
+	entityLabel: string | null
+) => {
+	if (entityLabel) labels[entityKey] = entityLabel
+}
 
 /**
  * Which of a set of entries names which entities.
@@ -983,12 +1046,15 @@ export async function readEntryAnnotations(
 	entryIds: readonly number[],
 	vocabulary: AnnotationVocabulary
 ): Promise<AnnotationIndex> {
-	const out: AnnotationIndex = new Map()
+	const out: AnnotationIndex = Object.assign(new Map<number, string[]>(), {
+		entityLabels: new Map<number, Record<string, string>>()
+	})
 	if (!entryIds.length) return out
 	const rows = await db
 		.select({
 			entryId: schema.entryAnnotations.entryId,
 			entityKey: schema.entryAnnotations.entityKey,
+			entityLabel: schema.entryAnnotations.entityLabel,
 			gazetteerHash: schema.entryAnnotations.gazetteerHash,
 			version: schema.entryAnnotations.extractorVersion,
 			sourceHash: schema.entryAnnotations.sourceHash,
@@ -1011,6 +1077,11 @@ export async function readEntryAnnotations(
 		const seen = out.get(row.entryId)
 		if (seen) seen.push(row.entityKey)
 		else out.set(row.entryId, [row.entityKey])
+		if (row.entityLabel) {
+			const labels = out.entityLabels.get(row.entryId) ?? {}
+			noteLabel(labels, row.entityKey, row.entityLabel)
+			out.entityLabels.set(row.entryId, labels)
+		}
 	}
 	return out
 }
@@ -1019,6 +1090,8 @@ export interface MessageAnnotationHit {
 	id: number
 	content: string
 	keys: string[]
+	/** `entityKey -> entity label`, for the keys a model labelled — see `AnnotationIndex`. */
+	entityLabels: Record<string, string>
 }
 
 /**
@@ -1054,6 +1127,7 @@ export async function searchMessageAnnotations(
 		.select({
 			id: schema.messageAnnotations.messageId,
 			entityKey: schema.messageAnnotations.entityKey,
+			entityLabel: schema.messageAnnotations.entityLabel,
 			content: schema.sessionMessages.content,
 			gazetteerHash: schema.messageAnnotations.gazetteerHash,
 			version: schema.messageAnnotations.extractorVersion,
@@ -1098,14 +1172,19 @@ export async function searchMessageAnnotations(
 		 */
 		if (row.sourceHash !== row.currentHash) continue
 		const seen = byId.get(row.id)
-		if (seen) seen.keys.push(row.entityKey)
-		else if (byId.size < limit)
-			byId.set(row.id, {
+		if (seen) {
+			seen.keys.push(row.entityKey)
+			noteLabel(seen.entityLabels, row.entityKey, row.entityLabel)
+		} else if (byId.size < limit) {
+			const hit: MessageAnnotationHit = {
 				id: row.id,
 				content: row.content ?? "",
-				keys: [row.entityKey]
-			})
-		else truncated = true
+				keys: [row.entityKey],
+				entityLabels: {}
+			}
+			noteLabel(hit.entityLabels, row.entityKey, row.entityLabel)
+			byId.set(row.id, hit)
+		} else truncated = true
 	}
 	return { hits: [...byId.values()], truncated }
 }

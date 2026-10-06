@@ -2385,6 +2385,14 @@ declare global {
 				interface ConnectionOption {
 					id: number
 					name: string
+					/**
+					 * The connection's type (`CONNECTION_TYPE`). A fact, not a
+					 * verdict: the screen greys a local ONNX row with the
+					 * machine's reason where the runtime didn't load
+					 * (`connectionTypeDisabledReason`), beside what `eligible`
+					 * already says.
+					 */
+					type: string
 					/** False disables the row; `reason` says why, in words. */
 					eligible: boolean
 					reason?: string
@@ -8196,6 +8204,11 @@ declare global {
 				interface LibraryPipeline {
 					slug: string
 					name: string
+					/**
+					 * The name with its genre beside it ("Reply · Adventure"):
+					 * the string `usedBy` and `origin` name it by.
+					 */
+					label: string
 					version: string | null
 					status: string | null
 					nodeCount: number
@@ -8217,7 +8230,10 @@ declare global {
 					fields: Record<string, string>
 					/** Text for fields the slot no longer declares. */
 					archived: Record<string, string>
-					/** Pipelines currently pointing at it, by display name. */
+					/**
+					 * Pipelines currently pointing at it, by label — the name
+					 * with its genre beside it (`LibraryPipeline.label`).
+					 */
 					usedBy: string[]
 				}
 				interface LibraryTemplate {
@@ -8270,7 +8286,7 @@ declare global {
 					engines?: Array<{ id: string; owner: string }>
 					/**
 					 * Sampling config id → the pipelines whose sampling slots
-					 * pick it, by display name (Admin → Sampling's "Used by").
+					 * pick it, by `LibraryPipeline.label` (Admin → Sampling's "Used by").
 					 */
 					samplingUsedBy?: Record<number, string[]>
 					error?: string
@@ -9026,9 +9042,11 @@ declare global {
 		}
 
 		namespace KoboldCPP {
-			/** What a model file is. "unknown" = the classifier could not tell;
-			 * shown in both lists rather than hidden from either. */
-			type ModelKind = "text" | "image" | "unknown"
+			/** What a model file is: which of koboldcpp's loaders opens it
+			 * (`--model`, `--sdmodel`, `--embeddingsmodel`). "unknown" = the
+			 * classifier could not tell; shown in both the text and image
+			 * lists rather than hidden from either. */
+			type ModelKind = "text" | "image" | "embeddings" | "unknown"
 			/** How good the `kind` answer is, descending: who is allowed to
 			 * overwrite it. Nothing automatic ever overwrites "user". */
 			type ModelKindSource = "user" | "detected" | "declared" | "assumed"
@@ -9178,6 +9196,29 @@ declare global {
 				interface Response {
 					success?: string
 					error?: string
+				}
+			}
+			/**
+			 * "Use for embeddings": this file as an `embeddings` model on the
+			 * managed endpoint — and NOT the star. Moving the embedding star
+			 * re-indexes, so it goes through `connections:setDefault` behind
+			 * the caller's confirmation (`useStarConfirm`); this answers the
+			 * pair that confirmation is about. A refusal is
+			 * `koboldcpp:connectEmbeddingModel:error`.
+			 */
+			namespace ConnectEmbeddingModel {
+				interface Params {
+					filename: string
+				}
+				interface Response {
+					/** The file asked about, so a waiting caller knows its answer. */
+					filename: string
+					/** The managed endpoint. */
+					connectionId: number
+					/** Its `connection_models` row for the file. */
+					modelId: number
+					/** That row's display name. */
+					name: string
 				}
 			}
 			namespace Perf {
@@ -9342,7 +9383,12 @@ declare global {
 			namespace SetModelKind {
 				interface Params {
 					filename: string
-					kind: ModelKindFilter
+					/**
+					 * Every kind but "unknown" — wider than `ModelKindFilter`,
+					 * which also names a models DIRECTORY, and embedding models
+					 * have none of their own (they share the text one).
+					 */
+					kind: Exclude<ModelKind, "unknown">
 				}
 				interface Response {
 					success: boolean
@@ -9681,12 +9727,20 @@ declare global {
 						"id" | "koboldCppManagedAdminPassword"
 					> & { koboldCppManagedAdminPasswordSet: boolean }
 					isAndroidWrapper: boolean
-					// Capability, not platform — true unless the current process
-					// can't load onnxruntime-node's native binary (Android's Bionic
-					// userspace, Intel Macs since onnxruntime-node 1.24.3, or any
-					// future platform gap). See embedding/index.ts's
-					// getLocalEmbeddingUnsupportedReason().
-					localEmbeddingsSupported: boolean
+					/**
+					 * Whether this machine can run local ONNX models — both
+					 * `local-onnx` and `local-onnx-ner`, which load one runtime.
+					 * Capability, not platform: `available` is false when the
+					 * process can't load onnxruntime-node's native binary
+					 * (Android's Bionic userspace, a desktop build without one,
+					 * or any future platform gap). `reason` is a lower-case
+					 * clause, null when available. See
+					 * `localModels/onnxRuntime.ts`.
+					 */
+					localOnnxAvailability: {
+						available: boolean
+						reason: string | null
+					}
 					/**
 					 * What every embedded row's `embedding_model` is compared
 					 * against — a HuggingFace id, or `api::baseUrl::model`.

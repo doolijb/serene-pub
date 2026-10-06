@@ -63,7 +63,7 @@ import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
-import { respondSpec, RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { respondSpec, CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 
 // No embedding model. The gazetteer is the half that carries name resolution
 // and needs none (design §11) — that is the whole claim under test.
@@ -212,7 +212,7 @@ beforeAll(async () => {
 		await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 			.limit(1)
 	)[0]
 }, 120_000)
@@ -230,7 +230,7 @@ const worldLoreLane = async () => {
 		bindings: coreBindings(),
 		world: await buildWorld(db, {
 			sessionId,
-			specId: RESPOND_SPEC_ID
+			specId: CHAT_RESPOND_SPEC_ID
 		}),
 		host: createHost(db, { sessionId, userId }),
 		preview: true
@@ -255,7 +255,7 @@ const setThreshold = async (value: number) => {
 	const selected = await resolveSelectedConfig(
 		db,
 		respondSpecRow.id,
-		RESPOND_SPEC_ID,
+		CHAT_RESPOND_SPEC_ID,
 		{ sessionId }
 	)
 	expect(selected, "the reply spec resolves to no configuration").toBeTruthy()

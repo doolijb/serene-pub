@@ -29,7 +29,7 @@ const venues: LegendVenues = {
 		primary: [
 			act({
 				key: "narrate",
-				specSlug: "core:spec/narrate",
+				specSlug: "core:spec/chat-narrate",
 				name: "Narrate",
 				description: "Ask the narrator to describe what happens next.",
 				icon: "book-open-text",
@@ -101,7 +101,7 @@ describe("legendSections", () => {
 		expect(
 			sections.flatMap((s) => s.entries.map((e) => `${s.venue}:${e.identity}:${e.description}`))
 		).toEqual([
-			"composer:core:spec/narrate#narrate:Ask the narrator to describe what happens next.",
+			"composer:core:spec/chat-narrate#narrate:Ask the narrator to describe what happens next.",
 			"composer:core:spec/lair-build-room#build-room:Draft a new room.",
 			"composer:core:spec/adventure-look#look:Describe where the party is.",
 			"extra:core#advance:Let whoever is next in the turn order speak.",

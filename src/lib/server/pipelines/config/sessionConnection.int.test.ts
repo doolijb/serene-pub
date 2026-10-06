@@ -23,7 +23,7 @@ import { and, eq } from "drizzle-orm"
 import { resolveConfigSources, SLOT_VALUE } from "@serene-pub/sdk"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 180_000 })
 
@@ -65,7 +65,7 @@ beforeAll(async () => {
 	const [spec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 	specId = spec.id
 	specVersionId = spec.activeVersionId!
 
@@ -170,7 +170,7 @@ describe("writing a connection at session scope", () => {
 		const write = writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			{ userId: adminId, isAdmin: true, sessionId },
 			id,
 			{ ref: pickedConnectionId, modelId: pickedModelId }
@@ -195,7 +195,7 @@ describe("writing a connection at session scope", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			{ userId: adminId, isAdmin: true, sessionId },
 			optionId(
 				SECRET,
@@ -220,7 +220,7 @@ describe("a leftover session connection row", () => {
 		)
 		const world = await buildWorld(db, {
 			sessionId,
-			specId: RESPOND_SPEC_ID
+			specId: CHAT_RESPOND_SPEC_ID
 		})
 		const sourced: any = resolveConfigSources(world as any, [
 			connectionDecl.nodeKey
@@ -239,7 +239,7 @@ describe("a leftover session connection row", () => {
 		const { groupOptions } = await import(
 			"$lib/server/pipelines/config/panel/groups"
 		)
-		const view: any = await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
+		const view: any = await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, {
 			userId: adminId,
 			isAdmin: true,
 			sessionId
@@ -261,7 +261,7 @@ describe("a leftover session connection row", () => {
 		const { groupOptions } = await import(
 			"$lib/server/pipelines/config/panel/groups"
 		)
-		const view: any = await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
+		const view: any = await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, {
 			userId,
 			isAdmin: false,
 			sessionId
@@ -275,7 +275,7 @@ describe("a leftover session connection row", () => {
 		const { reconcileConfigs, resolveSelectedConfig } = await import(
 			"$lib/server/pipelines/config/named"
 		)
-		await reconcileConfigs(db, specId, specVersionId, RESPOND_SPEC_ID)
+		await reconcileConfigs(db, specId, specVersionId, CHAT_RESPOND_SPEC_ID)
 
 		const left = await sessionRows()
 		expect(left.filter((r) => r.slot === connectionDecl.slot)).toEqual([])
@@ -285,7 +285,7 @@ describe("a leftover session connection row", () => {
 		const selected = await resolveSelectedConfig(
 			db,
 			specId,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			{ sessionId }
 		)
 		const notices = await db
@@ -309,7 +309,7 @@ describe("a leftover session connection row", () => {
 		})
 
 		// Idempotent: a second boot finds nothing and says nothing more.
-		await reconcileConfigs(db, specId, specVersionId, RESPOND_SPEC_ID)
+		await reconcileConfigs(db, specId, specVersionId, CHAT_RESPOND_SPEC_ID)
 		const again = await db
 			.select()
 			.from(schema.pipelineConfigNotices)

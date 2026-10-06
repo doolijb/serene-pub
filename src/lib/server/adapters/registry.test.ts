@@ -70,6 +70,18 @@ vi.mock(
 	"$lib/server/embeddingAdapters/OllamaEmbeddingAdapter",
 	stub("OllamaEmbedding")
 )
+vi.mock(
+	"$lib/server/embeddingAdapters/LMStudioEmbeddingAdapter",
+	stub("LMStudioEmbedding")
+)
+vi.mock(
+	"$lib/server/embeddingAdapters/LlamaCppEmbeddingAdapter",
+	stub("LlamaCppEmbedding")
+)
+vi.mock(
+	"$lib/server/embeddingAdapters/KoboldCppManagedEmbeddingAdapter",
+	stub("KoboldCppManagedEmbedding")
+)
 vi.mock("$lib/server/nerAdapters/LocalOnnxNerAdapter", stub("LocalOnnxNer"))
 
 describe("ADAPTER_REGISTRY", () => {
@@ -193,5 +205,20 @@ describe("the loaders", () => {
 		await expect(getNerAdapter("not-a-type")).rejects.toThrow(
 			/No NER adapter/
 		)
+	})
+
+	it("serve a NER type from its map entry alone", async () => {
+		// The annotation lane reaches its backend only through `getNerAdapter`,
+		// so this is the whole of what a new NER type (LLM-prompted entities,
+		// say) needs from the loader side: an entry, and no case anywhere.
+		const { ADAPTER_REGISTRY } = await import("./registry")
+		const { getNerAdapter } = await import("../utils/getNerAdapter")
+		const module = { Adapter: class {}, __name: "C0TestNer" } as any
+		ADAPTER_REGISTRY["c0-test-ner"] = { ner: async () => module }
+		try {
+			expect(await getNerAdapter("c0-test-ner")).toBe(module)
+		} finally {
+			delete ADAPTER_REGISTRY["c0-test-ner"]
+		}
 	})
 })

@@ -3,7 +3,7 @@
  *
  * ## The defect
  *
- * Until the narrator split (ruling 2026-09-07) `core:spec/narrate` wired the
+ * Until the narrator split (ruling 2026-09-07) `core:spec/chat-narrate` wired the
  * keyword mechanism and the ranker and **nothing else**. Every other retrieval
  * control the panel renders for that pipeline — "find entries by meaning",
  * "find entries by name", the entity scan — resolved through the whole scope
@@ -219,8 +219,8 @@ const rankedKeys = (receipt: any): string[] =>
 	)
 
 const SPECS: Array<[string, () => any]> = [
-	["core:spec/narrate", narrateSpec],
-	["core:spec/narrate-character", narrateCharacterSpec]
+	["core:spec/chat-narrate", narrateSpec],
+	["core:spec/chat-side-character", narrateCharacterSpec]
 ]
 
 describe.each(SPECS)("%s — the semantic control moves retrieval", (_, spec) => {

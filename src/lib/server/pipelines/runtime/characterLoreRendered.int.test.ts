@@ -31,9 +31,9 @@ import {
 	CORE_SPECS,
 	LAIR_GENRE_ID,
 	LAIR_RESPOND_SPEC_ID,
-	NARRATE_CHARACTER_SPEC_ID,
-	NARRATE_SPEC_ID,
-	RESPOND_SPEC_ID
+	CHAT_SIDE_CHARACTER_SPEC_ID,
+	CHAT_NARRATE_SPEC_ID,
+	CHAT_RESPOND_SPEC_ID
 } from "@serene-pub/core-catalog"
 import * as schema from "$lib/server/db/schema"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
@@ -253,7 +253,7 @@ function expectVerityOnly(prompt: string) {
 describe("Chat: the speaking character's admitted lore is rendered", () => {
 	it("Verity's reply prompt carries her secret and not Brask's", async () => {
 		const b = await book("core:genre/chat")
-		const receipt = await turn(b, RESPOND_SPEC_ID, {
+		const receipt = await turn(b, CHAT_RESPOND_SPEC_ID, {
 			characterId: b.cast.Verity,
 			sessionScope: { sessionId: b.session.id, currentCharacterId: b.cast.Verity }
 		})
@@ -266,7 +266,7 @@ describe("Chat: the speaking character's admitted lore is rendered", () => {
 describe("Chat narrator: the narrator's prompt carries the lore the narrator may read", () => {
 	it("narrate renders the background member's secret, and no carded character's", async () => {
 		const b = await book("core:genre/chat")
-		const receipt = await turn(b, NARRATE_SPEC_ID, {
+		const receipt = await turn(b, CHAT_NARRATE_SPEC_ID, {
 			characterId: null,
 			sessionScope: { sessionId: b.session.id, currentCharacterId: null }
 		})
@@ -280,7 +280,7 @@ describe("Chat narrator: the narrator's prompt carries the lore the narrator may
 
 	it("narrate-character, speaking as Verity, renders her secret and not Brask's", async () => {
 		const b = await book("core:genre/chat")
-		const receipt = await turn(b, NARRATE_CHARACTER_SPEC_ID, {
+		const receipt = await turn(b, CHAT_SIDE_CHARACTER_SPEC_ID, {
 			characterId: b.cast.Verity,
 			sessionScope: { sessionId: b.session.id, currentCharacterId: b.cast.Verity },
 			sideCharacter: { characterId: b.cast.Verity, name: "Verity" },

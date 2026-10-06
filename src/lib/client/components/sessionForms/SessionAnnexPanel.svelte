@@ -17,6 +17,7 @@
 	 * (`sessions:annex`) is each member's own filtered view, sent only when
 	 * someone may see something, so it cannot stand in for this read.
 	 */
+	import { v4 as uuid } from "uuid"
 	import * as Icons from "@lucide/svelte"
 	import { SvelteSet } from "svelte/reactivity"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
@@ -106,7 +107,7 @@
 			sessionId,
 			action: editing,
 			payload: { value: draft },
-			runId: crypto.randomUUID()
+			runId: uuid()
 		})
 	}
 

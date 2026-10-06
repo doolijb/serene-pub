@@ -1,5 +1,5 @@
 {
-	"total": 590,
+	"total": 574,
 	"byFile": {
 		"src/hooks.server.ts": 7,
 		"src/lib/client/accessibility/AccessibleShell.svelte": 3,
@@ -108,8 +108,8 @@
 		"src/lib/server/media/thumbnail.ts": 1,
 		"src/lib/server/media/variants.ts": 1,
 		"src/lib/server/messages/assets.ts": 4,
-		"src/lib/server/messages/store.ts": 2,
 		"src/lib/server/messages/reasoningMetadata.ts": 1,
+		"src/lib/server/messages/store.ts": 2,
 		"src/lib/server/net/publicUrl.ts": 2,
 		"src/lib/server/pipelines/boot/bindingCompat.ts": 1,
 		"src/lib/server/pipelines/boot/entryProjection.ts": 1,
@@ -124,7 +124,6 @@
 		"src/lib/server/pipelines/config/panel/types.ts": 1,
 		"src/lib/server/pipelines/config/panel/write.ts": 2,
 		"src/lib/server/pipelines/config/stepConfig.ts": 1,
-		"src/lib/server/pipelines/config/world.ts": 9,
 		"src/lib/server/pipelines/entities/presetBindings.ts": 2,
 		"src/lib/server/pipelines/entities/prompts.ts": 6,
 		"src/lib/server/pipelines/entities/variableLayouts.ts": 4,
@@ -218,7 +217,6 @@
 		"src/lib/shared/capabilities/samplingShape.ts": 1,
 		"src/lib/shared/capabilities/sides.ts": 1,
 		"src/lib/shared/connectionAdapters/capabilityRows.ts": 4,
-		"src/lib/shared/connectionAdapters/manifest.ts": 7,
 		"src/lib/shared/connectionAdapters/presetSlug.ts": 2,
 		"src/lib/shared/connectionAdapters/wireMode.ts": 1,
 		"src/lib/shared/connections/identity.ts": 1,

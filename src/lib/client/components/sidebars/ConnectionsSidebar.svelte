@@ -111,6 +111,7 @@
 		ConnectionServiceCategory,
 		ConnectionServiceItem
 	} from "$lib/shared/utils/connectionServiceItems"
+	import { connectionTypeDisabledReason } from "$lib/shared/utils/connectionServiceItems"
 	import {
 		NOTE_MAX_LENGTH,
 		normalizeNote
@@ -218,6 +219,18 @@
 	let showNewConnectionModal = $state(false)
 	let newConnectionName = $state("")
 	let newConnectionService: ConnectionServiceItem | undefined = $state()
+	/**
+	 * Why the chosen service can't be created on this machine, or null. The
+	 * picker already disables such a card; this covers a choice made before
+	 * the machine's verdict arrived, and Enter in the name field, which
+	 * submits without the Create button.
+	 */
+	const newConnectionBlocked = $derived(
+		connectionTypeDisabledReason(
+			newConnectionService?.type,
+			systemSettingsCtx?.settings?.localOnnxAvailability
+		)
+	)
 	/** Which modality the New Connection picker opens on. */
 	let newConnectionModality = $state<string>("text-gen")
 	/**
@@ -880,6 +893,10 @@
 		}
 		if (!newConnectionService) {
 			toaster.error({ title: "Choose a service to connect to" })
+			return
+		}
+		if (newConnectionBlocked) {
+			toaster.error({ title: newConnectionBlocked })
 			return
 		}
 		// Same rule the server enforces, checked up front so the dialog can
@@ -2228,9 +2245,17 @@
 							<div
 								class="bg-surface-500/25 mt-4 flex flex-col gap-2 rounded p-4"
 							>
-								<span class="preset-filled-primary-500 p-2">
-									Difficulty: {newConnectionService.difficulty}
-								</span>
+								<!-- The reason in place of the difficulty, as on the
+								     picker's card: the server would refuse Create. -->
+								{#if newConnectionBlocked}
+									<span class="preset-tonal-warning p-2 break-words">
+										{newConnectionBlocked}
+									</span>
+								{:else}
+									<span class="preset-filled-primary-500 p-2">
+										Difficulty: {newConnectionService.difficulty}
+									</span>
+								{/if}
 								{@html newConnectionService.description}
 							</div>
 						{/if}
@@ -2249,12 +2274,15 @@
 							class="btn preset-filled-primary-500"
 							onclick={handleNewConnectionConfirm}
 							disabled={!newConnectionName.trim() ||
-								!newConnectionService}
+								!newConnectionService ||
+								!!newConnectionBlocked}
 							aria-label={!newConnectionName.trim()
 								? "Enter a name to create connection"
 								: !newConnectionService
 									? "Choose a service to create connection"
-									: `Create connection named ${newConnectionName}`}
+									: newConnectionBlocked
+										? `Create connection — ${newConnectionBlocked}`
+										: `Create connection named ${newConnectionName}`}
 						>
 							Create
 						</button>

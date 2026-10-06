@@ -31,6 +31,15 @@
  * keyed on the identity, so it clears itself the moment the star names anything
  * else, and `forgetNerLoadFailure()` clears it for a caller that has reason to
  * believe the world changed.
+ *
+ * ## Through the adapter, never around it
+ *
+ * The broker names no loader and no backend. It reaches the starred type's
+ * module through `getNerAdapter`, loads through that module's `residency`, and
+ * the lane's unit of work extracts through the same module's adapter
+ * (`leasedNerAdapter`). A module with no `residency` has nothing to load, so its
+ * target is leased `resident` at once. That is what lets a NER type that does
+ * not run in this process serve the lane with no change here.
  */
 
 import type {
@@ -38,15 +47,13 @@ import type {
 	LaneModelPeek,
 	ModelLease
 } from "$lib/server/indexing/lane"
+import type {
+	BaseNerAdapter,
+	NerResidency
+} from "$lib/server/nerAdapters/BaseNerAdapter"
+import { getNerAdapter } from "$lib/server/utils/getNerAdapter"
 import { DEFAULT_NER_TTL_MINUTES } from "$lib/shared/constants/ner"
-import { resolveNerTarget } from "./target"
-import {
-	getLoadedNerModelId,
-	isNerModelLoading,
-	isNerModelReady,
-	loadNerModel,
-	setNerTtlMinutes
-} from "./index"
+import { resolveNerTarget, type NerTarget } from "./target"
 
 /**
  * The TTL last read off the starred connection, so `spec` can answer
@@ -62,6 +69,13 @@ let lastKnownTtlMinutes = DEFAULT_NER_TTL_MINUTES
 
 /** The model identity whose load failed, and what it said. */
 let failed: { modelId: string; reason: string } | null = null
+
+/**
+ * The target the last `resident` lease was taken on — what `leasedNerAdapter`
+ * builds the adapter from. Replaced by every lease, so a star moved onto
+ * another row naming the same model is picked up by the lane's next request.
+ */
+let leased: NerTarget | null = null
 
 /** Forget a remembered load failure, so the next peek tries the star again. */
 export function forgetNerLoadFailure(): void {
@@ -118,9 +132,25 @@ export const nerBroker: LaneModelBroker = {
 		if (failed && failed.modelId === target.modelId)
 			return { kind: "none", modelId: null }
 
-		const loaded = getLoadedNerModelId()
-		if (isNerModelReady() && loaded === target.modelId)
-			return { kind: "resident", modelId: loaded }
+		let residency: NerResidency | null
+		try {
+			residency = await residencyFor(target.type)
+		} catch (err) {
+			// A type no NER module serves cannot load anything, which is the
+			// same steady state as a model that cannot: remembered, and the
+			// lane annotates without it.
+			const reason =
+				err instanceof Error
+					? `the entity connection cannot run: ${err.message}`
+					: "the entity connection cannot run"
+			console.warn(`[ner] ${reason} — annotating without it`)
+			return refuse(target, reason)
+		}
+		// Nothing to load: a backend that is up whenever its host is. A call
+		// that fails then subtracts that row's spans and nothing more.
+		if (!residency) return lease(target)
+
+		if (residency.resident() === target.modelId) return lease(target)
 
 		if (!opts?.wait) {
 			/**
@@ -131,7 +161,7 @@ export const nerBroker: LaneModelBroker = {
 			 * degrades to the lexical tier and the background pass uses what
 			 * this warmed.
 			 */
-			if (!isNerModelLoading())
+			if (!residency.loading())
 				void this.request({ wait: true }).catch(() => {})
 			return {
 				kind: "pending",
@@ -141,26 +171,67 @@ export const nerBroker: LaneModelBroker = {
 		}
 
 		try {
-			// Set before the load so the idle timer starts on the connection's
-			// own number rather than on the previous star's.
-			setNerTtlMinutes(target.ttlMinutes)
-			await loadNerModel(target.modelId)
+			await residency.load(target.modelId, target.ttlMinutes)
 		} catch (err) {
 			const reason =
 				err instanceof Error
 					? `the entity model failed to load: ${err.message}`
 					: "the entity model failed to load"
-			failed = { modelId: target.modelId, reason }
 			console.warn(`[ner] ${reason} — annotating without it`)
-			return { kind: "unavailable", modelId: null, reason }
+			return refuse(target, reason)
 		}
 
-		const after = getLoadedNerModelId()
-		if (!isNerModelReady() || after !== target.modelId) {
-			const reason = "the entity model did not come up"
-			failed = { modelId: target.modelId, reason }
-			return { kind: "unavailable", modelId: null, reason }
-		}
-		return { kind: "resident", modelId: after }
+		if (residency.resident() !== target.modelId)
+			return refuse(target, "the entity model did not come up")
+		return lease(target)
 	}
+}
+
+/**
+ * The residency of the backend a connection type names, or null for one with
+ * nothing to load. Throws for a type no NER module serves.
+ */
+async function residencyFor(type: string): Promise<NerResidency | null> {
+	const mod = await getNerAdapter(type)
+	return mod.residency ? await mod.residency() : null
+}
+
+/** A `resident` lease on `target`, remembered for `leasedNerAdapter`. */
+function lease(target: NerTarget): ModelLease {
+	leased = target
+	return { kind: "resident", modelId: target.modelId }
+}
+
+/** Remember that `target` cannot run, and say so as an `unavailable` lease. */
+function refuse(target: NerTarget, reason: string): ModelLease {
+	failed = { modelId: target.modelId, reason }
+	return { kind: "unavailable", modelId: null, reason }
+}
+
+/**
+ * The adapter the lane extracts through while its lease on `modelId` holds,
+ * and null otherwise.
+ *
+ * The lane leases before every item and hands the leased identity to the unit
+ * of work, which asks here. Null when:
+ *
+ *  - **the lease moved on.** The last lease names another identity, or none.
+ *  - **an in-process model is not resident.** Unloaded on its idle timer or
+ *    swapped underneath the pass. Answering null rather than letting the
+ *    adapter load on demand is what keeps a 100MB download out of whoever asked
+ *    first, and keeps another model's spans out of a row whose neighbours came
+ *    from this one.
+ *
+ * Throws only when the adapter module cannot load; the caller treats that as a
+ * subtracted signal.
+ */
+export async function leasedNerAdapter(
+	modelId: string
+): Promise<BaseNerAdapter | null> {
+	const target = leased
+	if (!target || target.modelId !== modelId) return null
+	const mod = await getNerAdapter(target.type)
+	if (mod.residency && (await mod.residency()).resident() !== modelId)
+		return null
+	return new mod.Adapter(target.connection)
 }

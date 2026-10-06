@@ -8,11 +8,12 @@
  *    bundles prebuilt binaries for some platform/arch combos and not others,
  *    and that list has already changed once (Intel Mac support silently
  *    dropped as of 1.24.3) and will again. Rather than hardcode a platform
- *    denylist that's guaranteed to go stale, getLocalEmbeddingUnsupportedReason()
- *    below actually attempts the import once, caches whether it threw, and
- *    reports that. See that function for the one hardcoded exception
- *    (Android), which is a fast path for a genuine architectural
- *    impossibility, not a prediction.
+ *    denylist that's guaranteed to go stale, `localOnnxAvailability()`
+ *    (`localModels/onnxRuntime.ts`, shared with the entity lane) attempts the
+ *    import once, caches whether it threw, and reports that;
+ *    getLocalEmbeddingUnsupportedReason() below words it for this lane.
+ *    Android is the one hardcoded answer there, a fast path for a genuine
+ *    architectural impossibility, not a prediction.
  *  - "api": a host, reached through an EMBEDDING ADAPTER
  *    (`server/embeddingAdapters/`) — OpenAI-compatible `/embeddings`, or
  *    Ollama's own `/api/embed`. Just an HTTP request, so it works everywhere
@@ -34,9 +35,9 @@
  */
 
 import type { FeatureExtractionPipeline } from "@huggingface/transformers"
-import { findModel, isRegisteredLocalEmbeddingModel } from "./models"
-import { isAndroidWrapper } from "$lib/server/utils"
+import { findModel } from "./models"
 import { cacheDirFor, isCached } from "$lib/server/localModels/onnxCache"
+import { localOnnxAvailability } from "$lib/server/localModels/onnxRuntime"
 import type { BaseEmbeddingAdapter } from "$lib/server/embeddingAdapters/BaseEmbeddingAdapter"
 import {
 	buildApiModelId,
@@ -60,71 +61,34 @@ import {
 
 export { buildApiModelId }
 
-type LocalEmbeddingProbeResult = { supported: boolean; reason: string | null }
-
-// In-memory only, per process lifetime — deliberately never persisted.
-// A persisted "unsupported" verdict would survive an onnxruntime-node
-// upgrade that fixes this exact platform, which is precisely the class of
-// upstream churn this probe exists to stop chasing. One dynamic import per
-// server boot is cheap enough to never need a durable cache.
-let probeResult: LocalEmbeddingProbeResult | null = null
-let probePromise: Promise<LocalEmbeddingProbeResult> | null = null
-
-/**
- * Attempts the real dynamic import once and caches whether it threw. This
- * is a pure loadability check — it must stay a bare `import()` with nothing
- * else in the try block. Do not fold model-loading (loadEmbeddingModel's
- * createPipeline(...) call) into this function or its try/catch: a later
- * failure to download model weights or write to disk is a transient error,
- * not a capability fact, and would otherwise get cached here as a
- * false-permanent "platform unsupported" verdict.
- */
-async function probeLocalEmbeddingSupport(): Promise<LocalEmbeddingProbeResult> {
-	if (probeResult) return probeResult
-	if (!probePromise) {
-		probePromise = (async () => {
-			try {
-				await import("@huggingface/transformers")
-				probeResult = { supported: true, reason: null }
-			} catch (err: any) {
-				probeResult = {
-					supported: false,
-					reason: `Local embeddings are not available on this system (${err?.message ?? "failed to load the local embedding engine"}) — use an external API instead.`
-				}
-			}
-			return probeResult
-		})()
-	}
-	return probePromise
-}
-
 /**
  * Checked before the dynamic import in loadEmbeddingModel() below so every
  * caller — vectorization.ts's handlers, vectorizationQueue.ts's
  * resume-on-boot retry, and loadSockets.server.ts's auto-load — gets this
  * specific message instead of the socket dispatcher's generic "An error
  * occurred" fallback (thrown errors aren't forwarded verbatim to the
- * client, see sockets/index.ts's register()). Exported so systemSettings.ts
- * can surface the same condition to the client as a single
- * `localEmbeddingsSupported` capability flag — named by capability, not by
- * platform, so the setup UI (which only cares "can I offer Local as a
- * choice") doesn't need a new prop every time upstream drops support for
- * another platform.
+ * client, see sockets/index.ts's register()).
+ *
+ * The verdict itself is `localOnnxAvailability()`
+ * (`localModels/onnxRuntime.ts`), shared with the entity lane because the two
+ * load one runtime; only this sentence is the embedding lane's. The client is
+ * sent the verdict, not this sentence — see `systemSettings:get`'s
+ * `localOnnxAvailability`.
  */
 export async function getLocalEmbeddingUnsupportedReason(): Promise<
 	string | null
 > {
-	if (isAndroidWrapper()) {
-		// A genuine architectural impossibility (Bionic can't dlopen glibc
-		// binaries), not a "true today" fact that could change with an
-		// onnxruntime-node release — worth a fast, specific message without
-		// waiting on an import attempt that would fail anyway.
-		return "Local embeddings are not available in the Android app — use an external API instead."
-	}
-	return (await probeLocalEmbeddingSupport()).reason
+	const availability = await localOnnxAvailability()
+	return availability.available
+		? null
+		: `Local embeddings are not available on this system: ${availability.reason} — use an external API instead.`
 }
 
-/** The capability flag sent to the client — see getLocalEmbeddingUnsupportedReason() above. */
+/**
+ * Whether the local embedding lane can load. Also what boot calls to warm the
+ * shared probe (`loadSockets.server.ts`), so the first `systemSettings:get`
+ * finds the verdict already cached.
+ */
 export async function isLocalEmbeddingSupported(): Promise<boolean> {
 	return (await getLocalEmbeddingUnsupportedReason()) === null
 }
@@ -227,14 +191,17 @@ export async function loadEmbeddingModel(
 	const unsupportedReason = await getLocalEmbeddingUnsupportedReason()
 	if (unsupportedReason) throw new Error(unsupportedReason)
 
-	// The catalogue first, because that is where a `dtype` comes from and it is
-	// the answer in the ordinary case. A model the registry holds — an `.onnx`
-	// the user downloaded, filed under modality `embeddings` — is loadable too,
-	// with no dtype override: nothing here knows what precision its weights were
-	// exported at, and guessing one is how a working file stops loading.
+	// The catalogue first, because its `dtype` is the answer in the ordinary
+	// case. A model the registry holds — an `.onnx` the user downloaded, filed
+	// under modality `embeddings` — is loadable too, at the precision its
+	// download fetched (`registeredEmbeddingModel`), or with no dtype override
+	// when the row records none: guessing a precision is how a working file
+	// stops loading. The entity loader resolves it the same way.
 	const modelDef = findModel(modelId)
-	if (!modelDef && !(await isRegisteredLocalEmbeddingModel(modelId)))
+	const registered = modelDef ? null : await registeredEmbeddingModel(modelId)
+	if (!modelDef && !registered)
 		throw new Error(`Unknown embedding model: ${modelId}`)
+	const dtype = modelDef?.dtype ?? registered?.dtype ?? null
 
 	isLoading = true
 	pipeline = null
@@ -258,7 +225,7 @@ export async function loadEmbeddingModel(
 		onProgress?.({ modelId, status: "loading" })
 
 		pipeline = (await createPipeline("feature-extraction", modelId, {
-			...(modelDef?.dtype ? { dtype: modelDef.dtype } : {}),
+			...(dtype ? { dtype: dtype as any } : {}),
 			// @ts-ignore — progress_callback is valid but not in all type defs
 			progress_callback: (event: any) => {
 				if (event?.status === "downloading") {
@@ -289,6 +256,51 @@ export async function loadEmbeddingModel(
 }
 
 /**
+ * The local model registry's row for an id the catalogue does not name, or
+ * null when it holds none. The mirror of the entity lane's
+ * `registeredNerModel` (`ner/index.ts`).
+ *
+ * `dtype` is the precision the row's download fetched — `local_models.
+ * quantization`, which `connections:downloadModel` records from the same
+ * resolution it downloads with (catalogue, then the model's declared
+ * `extra_json.onnx.dtype`). Loading at any other precision asks for weights
+ * the download never fetched: a Hub-added model set to `fp16` downloaded
+ * `model_fp16.onnx` and then looked for `model.onnx`. Null for a row that
+ * records none.
+ *
+ * Answers null rather than throwing when the database is unreachable: the
+ * caller's next step is a refusal naming the model, which is a better sentence
+ * than a database error in a path about loading a model.
+ */
+async function registeredEmbeddingModel(
+	id: string
+): Promise<{ dtype: string | null } | null> {
+	if (!id) return null
+	try {
+		const { db } = await import("$lib/server/db")
+		const schema = await import("$lib/server/db/schema")
+		const { and, eq, or } = await import("drizzle-orm")
+		const [row] = await db
+			.select({ quantization: schema.localModels.quantization })
+			.from(schema.localModels)
+			.where(
+				and(
+					eq(schema.localModels.modality, "embeddings"),
+					or(
+						eq(schema.localModels.modelName, id),
+						eq(schema.localModels.filename, id)
+					)
+				)
+			)
+			.limit(1)
+		if (!row) return null
+		return { dtype: row.quantization || null }
+	} catch {
+		return null
+	}
+}
+
+/**
  * Validate and activate a host-backed embedding connection as the backend.
  *
  * Issues one REAL embed call before activating anything, exactly as before: a
@@ -301,17 +313,22 @@ export async function loadEmbeddingModel(
  * hand-rolled client — and the type is what chooses between `/embeddings` and
  * Ollama's `/api/embed`. The adapter also reads the key off the row itself, so
  * no plaintext secret has to be threaded through this call at all.
+ *
+ * `modelId` is the identity the star resolved to (`EmbeddingTarget.modelId`),
+ * which every vector is stamped with — passed in rather than rebuilt here, so
+ * a type with a spelling of its own (`buildManagedKoboldCppModelId`) stamps the
+ * identity staleness is judged by.
  */
 export async function activateApiEmbedding(
 	connection: AdapterConnection,
-	onProgress?: DownloadProgressCallback
-): Promise<{ dimensions: number }> {
-	if (isLoading) throw new Error("Model is already loading")
-
-	const modelId = buildApiModelId(
+	onProgress?: DownloadProgressCallback,
+	modelId: string = buildApiModelId(
 		connection.baseUrl ?? "",
 		connection.model ?? ""
 	)
+): Promise<{ dimensions: number }> {
+	if (isLoading) throw new Error("Model is already loading")
+
 	isLoading = true
 	pipeline = null
 	loadedModelId = null
@@ -426,8 +443,14 @@ export async function loadConfiguredEmbeddingModel(
 
 	if (target.mode === "api") {
 		// The merged row, so the adapter reads its own base URL, model and
-		// (encrypted) key off the connection it was built from.
-		await activateApiEmbedding(target.connection, onProgress)
+		// (encrypted) key off the connection it was built from — and the
+		// identity the star resolved to, which is what every vector is stamped
+		// with and what staleness compares.
+		await activateApiEmbedding(
+			target.connection,
+			onProgress,
+			target.modelId
+		)
 	} else {
 		// ⚠ `onProgress` is not optional in practice on this arm: a first local
 		// load DOWNLOADS several hundred megabytes, and a button that sits there

@@ -25,8 +25,8 @@ import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import { CORE_SPECS } from "$lib/server/pipelines/specs"
 import {
 	GRAPH_BUILD_SPEC_ID,
-	NARRATE_SPEC_ID,
-	RESPOND_SPEC_ID,
+	CHAT_NARRATE_SPEC_ID,
+	CHAT_RESPOND_SPEC_ID,
 	SUMMARIZE_CHARACTER_SPEC_ID,
 	SUMMARIZE_HISTORY_SPEC_ID,
 	SUMMARIZE_SCENE_SPEC_ID,
@@ -177,7 +177,7 @@ describe("every pipeline arrives usable", () => {
 		// rather than by a column: the reply's context node and the world
 		// summarizer's drafting node are different types, so the two pools
 		// cannot overlap however many pipelines share them.
-		const reply = await promptDeclsOf(RESPOND_SPEC_ID)
+		const reply = await promptDeclsOf(CHAT_RESPOND_SPEC_ID)
 		const world = await promptDeclsOf(SUMMARIZE_WORLD_SPEC_ID)
 		const replyPools = new Set(
 			reply.map((d: any) => `${d.nodeDefinitionId}#${d.slot}`)
@@ -312,7 +312,7 @@ describe("the wording is the wording", () => {
 	})
 
 	it("gives the narrator its display name, which seeds the line it speaks on", async () => {
-		for (const d of await promptDeclsOf(NARRATE_SPEC_ID))
+		for (const d of await promptDeclsOf(CHAT_NARRATE_SPEC_ID))
 			if ((d as any).promptFields?.includes("narratorName"))
 				for (const p of await poolRows(d.nodeDefinitionId!, d.slot))
 					expect(p.fields.narratorName).toBeTruthy()
@@ -415,7 +415,7 @@ describe("re-seeding", () => {
 		const { createPrompt } = await import(
 			"$lib/server/pipelines/entities/prompts"
 		)
-		const decl = (await promptDeclsOf(RESPOND_SPEC_ID))[0]!
+		const decl = (await promptDeclsOf(CHAT_RESPOND_SPEC_ID))[0]!
 		const mine = await createPrompt(db, {
 			nodeDefinitionId: decl.nodeDefinitionId!,
 			slot: decl.slot,

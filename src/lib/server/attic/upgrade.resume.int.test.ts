@@ -66,7 +66,7 @@ describe("a failure in the wiring, after the restore committed", () => {
 		)
 		const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
 		await bootstrapPipelines(db)
-		const marker = "migrated:core:spec/respond:900"
+		const marker = "migrated:core:spec/chat-respond:900"
 		expect(await count(`pipeline_configs WHERE seed_key = '${marker}'`)).toBe(1)
 		await db.execute(sql.raw(`DELETE FROM pipeline_configs WHERE seed_key = '${marker}'`))
 

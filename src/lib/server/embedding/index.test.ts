@@ -7,14 +7,30 @@ vi.mock("$lib/server/utils", () => ({
 	isAndroidWrapper: () => isAndroidWrapperMock()
 }))
 
+/**
+ * What the local model registry answers, for the loader's dtype lookup. Every
+ * select answers these rows; the dtype tests set them.
+ */
+const { registryRows } = vi.hoisted(() => ({
+	registryRows: [] as Array<{ quantization: string | null }>
+}))
+
 // index.ts imports tokenCrypto.ts (for resolveVectorizationApiKey), which
 // imports the real `db` module for getCryptoSecretKey() — that otherwise
 // triggers a real connection/lock-check against the on-disk dev database
-// purely as an import side effect. A bare stub is enough since nothing in
-// this file calls it.
-vi.mock("$lib/server/db", () => ({
-	getCryptoSecretKey: () => "test-crypto-secret-key"
-}))
+// purely as an import side effect. A stub is enough: the one query made here
+// is the loader's registry lookup, answered from `registryRows`.
+vi.mock("$lib/server/db", () => {
+	const chain: any = {
+		from: () => chain,
+		where: () => chain,
+		limit: async () => registryRows
+	}
+	return {
+		getCryptoSecretKey: () => "test-crypto-secret-key",
+		db: { select: () => chain }
+	}
+})
 
 /**
  * The probe result is cached at module scope (deliberately — see
@@ -98,5 +114,73 @@ describe("getLocalEmbeddingUnsupportedReason / isLocalEmbeddingSupported", () =>
 		])
 
 		expect(importAttempt).toHaveBeenCalledTimes(1)
+	})
+})
+
+/**
+ * The precision the loader asks for: the catalogue's `dtype` first, then the
+ * one the download recorded on the registry row (`local_models.
+ * quantization`), else none. Loading at any other precision asks for a
+ * weights file the download never fetched — a Hub-added model set to `fp16`
+ * downloaded `model_fp16.onnx` and then looked for `model.onnx`.
+ */
+describe("loadEmbeddingModel's dtype", () => {
+	const pipelineSpy = vi.fn(async () => ({}))
+
+	beforeEach(() => {
+		isAndroidWrapperMock.mockReturnValue(false)
+		registryRows.length = 0
+		pipelineSpy.mockClear()
+		vi.doMock("@huggingface/transformers", () => ({
+			pipeline: pipelineSpy,
+			env: {}
+		}))
+		vi.doMock("./models", () => ({
+			findModel: (id: string) =>
+				id === "catalogued/model"
+					? { id, name: "catalogued", dtype: "q8" }
+					: undefined
+		}))
+	})
+
+	afterEach(() => {
+		vi.doUnmock("@huggingface/transformers")
+		vi.doUnmock("./models")
+	})
+
+	/** The options the one `pipeline()` call was handed. */
+	const loadedWith = () => (pipelineSpy.mock.lastCall as any)?.[2]
+
+	test("is the catalogue's for a catalogued model, whatever the registry says", async () => {
+		registryRows.push({ quantization: "fp16" })
+		const mod = await freshImport()
+		await mod.loadEmbeddingModel("catalogued/model")
+		expect((pipelineSpy.mock.lastCall as any)?.[1]).toBe("catalogued/model")
+		expect(loadedWith()).toMatchObject({ dtype: "q8" })
+		mod.unloadEmbeddingModel()
+	})
+
+	test("is the registry row's for a model the catalogue doesn't name", async () => {
+		registryRows.push({ quantization: "fp16" })
+		const mod = await freshImport()
+		await mod.loadEmbeddingModel("someone/hand-added")
+		expect(loadedWith()).toMatchObject({ dtype: "fp16" })
+		mod.unloadEmbeddingModel()
+	})
+
+	test("is left to the runtime when the registry row records none", async () => {
+		registryRows.push({ quantization: null })
+		const mod = await freshImport()
+		await mod.loadEmbeddingModel("someone/hand-added")
+		expect(loadedWith()).not.toHaveProperty("dtype")
+		mod.unloadEmbeddingModel()
+	})
+
+	test("refuses a model neither the catalogue nor the registry knows", async () => {
+		const mod = await freshImport()
+		await expect(mod.loadEmbeddingModel("nobody/knows")).rejects.toThrow(
+			"Unknown embedding model: nobody/knows"
+		)
+		expect(pipelineSpy).not.toHaveBeenCalled()
 	})
 })

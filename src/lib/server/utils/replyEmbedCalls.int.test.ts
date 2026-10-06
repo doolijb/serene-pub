@@ -34,8 +34,8 @@
  * terms as the local ones, and nothing here asks where a model runs.
  *
  * "Set up" is the embedding **connection**, read off the capability default
- * for `text->embedding` — the star — which is what the embed step's
- * connection slot resolves to. The model's readiness is the mocked module's,
+ * for `text->embedding` — the star — which is what the queries step's own
+ * embedding connection slot resolves to (a held slot: no pick stands on it). The model's readiness is the mocked module's,
  * as before: a star with no model loaded still costs no embed.
  *
  * ## What is asserted, and on what
@@ -50,7 +50,7 @@
  *    person opts into by starring an embedding model, not a retrieval call,
  *    and whether it counts against "one call" is an owner question (C3 (d)).
  *
- * Driven through `runReply` against the SHIPPED `core:spec/respond` on the
+ * Driven through `runReply` against the SHIPPED `core:spec/chat-respond` on the
  * chat-default preset's configuration — the road the socket handlers take.
  *
  * ## The other embed: descriptions to follow up (R5, 2026-10-02)
@@ -323,13 +323,17 @@ async function starEmbedding(
 	return conn.id
 }
 
-/** A pick on the embed step's own connection slot — the panel's write, by hand. */
+/**
+ * A stored pick on the queries step's embedding connection slot — the one
+ * embedding slot a retrieval spec declares since 2026-10-05 (owner ruling
+ * D-c), written by hand because the panel offers no pick for it.
+ */
 async function pickEmbedConnection(sessionId: number, connectionId: number) {
 	await db.insert(schema.pipelineNodeOverrides).values({
 		specId: respondSpecId,
 		scopeKind: "session",
 		scopeId: sessionId,
-		nodeKey: "semantic.arm.embed",
+		nodeKey: "semantic.arm.queries",
 		slot: "connection",
 		path: "",
 		value: { id: connectionId, modelId: null } as any
@@ -383,14 +387,14 @@ beforeAll(async () => {
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	db = (await import("$lib/server/db")).db as unknown as TestDb
 
-	const { bootstrapPipelines, RESPOND_SPEC_ID } = await import(
+	const { bootstrapPipelines, CHAT_RESPOND_SPEC_ID } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	await bootstrapPipelines(db)
 	const [spec] = await db
 		.select({ id: schema.pipelineSpecs.id })
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 	respondSpecId = spec!.id
 
 	const { createTestUser } = await import("$lib/server/utils/testDb")
@@ -659,11 +663,12 @@ describe("On and Off override Automatic, both ways", () => {
 })
 
 /**
- * Whether a model is set up is decided on the STAR, whatever the embed step's
- * slot names (review 2026-09-29). The host embeds through the star —
- * `embed-text`'s `connection` slot is read by nothing — so a pick there would
- * make *Automatic* decide about a connection the embed never uses. The slot is
- * held at the star (`isUnreadSlot`): the run drops a stored pick.
+ * Whether a model is set up is decided on the STAR, whatever a stored pick
+ * says (review 2026-09-29). The host embeds through the star — a pipeline
+ * never chooses its embedding connection (owner ruling D-c, 2026-10-05) — so
+ * a pick on `query-windows`' connection would make *Automatic* decide about a
+ * connection the embed never uses. The slot is a held connection slot
+ * (`isHeldConnectionSlot`): the run drops a stored pick.
  */
 describe("Automatic decides on the star, not on a pick the embed never uses", () => {
 	it("a pick with no star makes no search embed", async () => {

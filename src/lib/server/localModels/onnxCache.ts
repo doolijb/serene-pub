@@ -410,7 +410,8 @@ export async function registryMapFor(
 				sizeBytes: r.sizeBytes ?? null
 			}
 			// Filed under the Hub id on either column, the way the two
-			// `isRegisteredLocal*Model` readers already look it up.
+			// lanes' registry readers (`registeredEmbeddingModel`,
+			// `registeredNerModel`) look it up.
 			if (r.filename) out.set(r.filename, fact)
 			if (r.modelName && !out.has(r.modelName)) out.set(r.modelName, fact)
 		}

@@ -8,6 +8,7 @@ import {
 	defaultChipLabel,
 	finderNote,
 	getModelButtonLabel,
+	getModelDisabledReason,
 	hiddenSentence,
 	kindIcon,
 	modelFact,
@@ -94,6 +95,23 @@ describe("the verb, and the copy built from it", () => {
 		expect(finderNote("Embeddings")).toBe(
 			"Opens the model finder scoped to embeddings."
 		)
+	})
+	test("the finder door is closed only where local ONNX is the one provider and can't run", () => {
+		const off = { available: false, reason: "the ONNX runtime didn't load" }
+		expect(getModelDisabledReason("text->entities", off)).toBe(
+			"Not available on this machine: the ONNX runtime didn't load"
+		)
+		// A service can still embed, and chat has nothing to do with ONNX.
+		expect(getModelDisabledReason("text->embedding", off)).toBeNull()
+		expect(getModelDisabledReason("text->text", off)).toBeNull()
+		// Available, or not yet answered, reads as open.
+		expect(
+			getModelDisabledReason("text->entities", {
+				available: true,
+				reason: null
+			})
+		).toBeNull()
+		expect(getModelDisabledReason("text->entities", undefined)).toBeNull()
 	})
 	test("one per install is ACTIVE, everything else is a default", () => {
 		expect(defaultChipLabel("text->text")).toBe("Default")

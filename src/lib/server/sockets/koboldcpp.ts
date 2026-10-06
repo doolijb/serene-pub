@@ -53,6 +53,7 @@ import {
 	modelsDirsToScan,
 	resolveModelPath
 } from "$lib/server/koboldcpp/modelsDir"
+import { rereadDetectedTextModels } from "$lib/server/koboldcpp/rereadDetectedKinds"
 import {
 	formatForFilename,
 	modalityForKind
@@ -281,6 +282,12 @@ export async function buildKoboldCppListModels(): Promise<Sockets.KoboldCPP.List
 	} catch {
 		// KoboldCPP offline — return empty gracefully
 	}
+
+	// GGUFs an older classifier called text are read once more, so an
+	// embedding model measured before `embeddings` existed is listed as one
+	// (`rereadDetectedKinds.ts`). Before the records are read, so this listing
+	// already shows the answer.
+	await rereadDetectedTextModels(db, settings)
 
 	// Load DB records; exclude anything still downloading (or errored)
 	const dbModels = await db.query.localModels.findMany()
@@ -723,6 +730,107 @@ export const koboldCppConnectImageModelHandler: Handler<
 			success: "Image model set as default"
 		}
 		emitToUser("koboldcpp:connectImageModel", res)
+		return res
+	}
+}
+
+/**
+ * "Use for embeddings": the same managed endpoint, an embedding model on it —
+ * and the pair, NOT the star.
+ *
+ * The third Use-for handler, and the one that stops short. Chat and image
+ * register their default here; the embedding star cannot, because moving it
+ * re-indexes every stored vector (`applyEmbeddingStarChange`), and that is a
+ * cost a person reads before agreeing to it (`useStarConfirm` and its
+ * `EmbeddingSwitchDialog`). So this does the half only this module can — checks
+ * the file, and ensures its model row as `embeddings`, so the star is judged by
+ * the right modality before any sync has run — and answers the pair. The
+ * caller then moves the star through `connections:setDefault`, as it would on
+ * any other connection.
+ *
+ * Nothing is loaded here either: the embedding adapter loads the file into
+ * koboldcpp's co-resident embeddings slot on its first embed.
+ */
+export const koboldCppConnectEmbeddingModelHandler: Handler<
+	Sockets.KoboldCPP.ConnectEmbeddingModel.Params,
+	Sockets.KoboldCPP.ConnectEmbeddingModel.Response | Sockets.ErrorResponse
+> = {
+	event: "koboldcpp:connectEmbeddingModel",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		const settings = (await db.query.koboldCppSettings.findFirst())!
+
+		const fail = (error: string) => {
+			emitToUser("koboldcpp:connectEmbeddingModel:error", { error })
+			return { error }
+		}
+
+		if (!settings.koboldCppManagerEnabled) {
+			return fail("KoboldCPP, run by Serene Pub, is turned off")
+		}
+
+		// Embedding models live in the text models folder (`modelsDirFor`).
+		let filePath: string
+		try {
+			filePath = await resolveModelPath(
+				"embeddings",
+				params.filename,
+				settings,
+				{ mustExist: true }
+			)
+		} catch {
+			return fail("That model file is no longer on disk")
+		}
+
+		// What the file is: the registry's answer, or — for a file dropped in
+		// the folder that only the endpoint's listing has seen, which reads its
+		// header without registering it — the header's. Only an embedding
+		// model goes in `--embeddingsmodel`: koboldcpp cannot load anything
+		// else there, and every embed would pay a reload that fails.
+		const rec = await db.query.localModels.findFirst({
+			where: eq(schema.localModels.filename, params.filename)
+		})
+		if (rec && rec.status !== "complete") {
+			return fail("That model isn't installed")
+		}
+		const kind = rec ? rec.kind : (await classifyModelFile(filePath)).kind
+		if (kind === "text") {
+			return fail(
+				"That's a text model. Mark it as an embedding model first if you're sure."
+			)
+		}
+		if (kind === "image") {
+			return fail("That's an image model, not an embedding model.")
+		}
+		if (kind !== "embeddings") {
+			return fail(
+				"Serene Pub could not tell what that file is. Mark it as an embedding model first if you're sure."
+			)
+		}
+
+		const connection = await ensureManagedKoboldCppEndpoint(
+			db,
+			settings.koboldCppManagerBaseUrl
+		)
+		const model = await ensureConnectionModel(
+			db,
+			connection.id,
+			params.filename,
+			null,
+			"embeddings"
+		)
+		if (!model) return fail("That model is not on this connection.")
+
+		// The row may be new, or newly `embeddings`.
+		await emitToUser("connections:list", () => buildConnectionsList())
+
+		const res: Sockets.KoboldCPP.ConnectEmbeddingModel.Response = {
+			filename: params.filename,
+			connectionId: connection.id,
+			modelId: model.id,
+			name: model.name
+		}
+		emitToUser("koboldcpp:connectEmbeddingModel", res)
 		return res
 	}
 }
@@ -2412,12 +2520,16 @@ export const koboldCppDeleteModelHandler: Handler<
 }
 
 /**
- * The user's answer for a file the classifier could not read.
+ * The user's answer for a file the classifier could not read — or read wrong.
  *
  * `kind_source: "user"` is the top of the trust order, so nothing automatic
  * ever overwrites it — including the re-sniff the next directory scan runs
  * against every row that was only measured, guessed at, or claimed by the folder
  * it turned up in.
+ *
+ * Any of the three loaders: an embedding GGUF converted without its
+ * `pooling_type` key reads as a chat model, and moving it to the embedding
+ * models is how a person says so.
  */
 export const koboldCppSetModelKindHandler: Handler<
 	Sockets.KoboldCPP.SetModelKind.Params,
@@ -2426,13 +2538,24 @@ export const koboldCppSetModelKindHandler: Handler<
 	event: "koboldcpp:setModelKind",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		if (params.kind !== "text" && params.kind !== "image") {
+		if (
+			params.kind !== "text" &&
+			params.kind !== "image" &&
+			params.kind !== "embeddings"
+		) {
 			throw new Error("Invalid model kind")
 		}
 		const rec = await db.query.localModels.findFirst({
 			where: eq(schema.localModels.filename, params.filename)
 		})
 		if (!rec) throw new Error("That model isn't installed")
+		// koboldcpp opens only a GGUF as a text or embedding model; a
+		// `.safetensors` relabelled as one would fail every load it was named in.
+		if (!extensionAllowedForKind(params.filename, params.kind)) {
+			const error = `Only a .gguf file can be ${params.kind === "embeddings" ? "an embedding" : "a text"} model.`
+			emitToUser("koboldcpp:setModelKind:error", { error })
+			throw new Error(error)
+		}
 
 		await db
 			.update(schema.localModels)
@@ -2452,7 +2575,27 @@ export const koboldCppSetModelKindHandler: Handler<
 
 		const res: Sockets.KoboldCPP.SetModelKind.Response = { success: true }
 		emitToUser("koboldcpp:setModelKind", res)
-		// The Models tab re-reads the listing to see the new label; the
+		// The managed connection's Models tab files each row by its
+		// `connection_models.modality`, which only a sync rewrites — so the move
+		// is synced now, or the row would sit in the section it was just moved
+		// out of until somebody pressed Refresh. Best-effort: a sync failure is
+		// recorded on the endpoint, never a failed relabel.
+		try {
+			await syncManyConnectionModels(db, {
+				types: [
+					CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+					CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
+				],
+				force: true
+			})
+			await emitToUser("connections:list", () => buildConnectionsList())
+		} catch (syncErr) {
+			console.error(
+				"[koboldcpp] model sync after a kind change:",
+				syncErr
+			)
+		}
+		// The document view re-reads the listing to see the new label; the
 		// discarded return says this cascade is only ever that view being
 		// refreshed. See `buildKoboldCppListModels` for what it costs.
 		await emitToUser("koboldcpp:listModels", () =>
@@ -2480,6 +2623,7 @@ export function registerKoboldCppHandlers(
 	register(socket, koboldCppLoadModelHandler, emitToUser)
 	register(socket, koboldCppConnectModelHandler, emitToUser)
 	register(socket, koboldCppConnectImageModelHandler, emitToUser)
+	register(socket, koboldCppConnectEmbeddingModelHandler, emitToUser)
 	register(socket, koboldCppPerfHandler, emitToUser)
 	register(socket, koboldCppGetLoadedConfigHandler, emitToUser)
 	register(socket, koboldCppSearchModelsHandler, emitToUser)

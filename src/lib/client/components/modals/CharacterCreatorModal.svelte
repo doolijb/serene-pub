@@ -7,6 +7,13 @@
 	import { z } from "zod"
 	import Avatar from "../Avatar.svelte"
 	import FileDropzone from "../FileDropzone.svelte"
+	import AvatarCropEditor from "../media/AvatarCropEditor.svelte"
+	import {
+		avatarFrameCommit,
+		type PendingAvatarFrame
+	} from "../media/avatarFrameCommit"
+	import type { MediaFrame } from "$lib/shared/media/frame"
+	import { onDestroy } from "svelte"
 
 	interface Props {
 		open: boolean
@@ -155,6 +162,25 @@
 		}
 	}
 
+	/**
+	 * The crop editor's answer, held until the create comes back with a media
+	 * id to attach it to — the avatar is uploaded with the character, so the
+	 * file has no id before then. Null means "upload it as it is". The same
+	 * flow as the character editor (CharacterForm.svelte).
+	 */
+	let pendingFrame = $state<PendingAvatarFrame | null>(null)
+	let cropOpen = $state(false)
+	/** An object URL for the chosen file; revoked when it is replaced. */
+	let cropSrc = $state("")
+	let cropObjectUrl: string | null = null
+	/** The crop chosen so far, so reopening the editor starts from it. */
+	let cropFrame = $state<MediaFrame | null>(null)
+
+	function releaseCropUrl() {
+		if (cropObjectUrl) URL.revokeObjectURL(cropObjectUrl)
+		cropObjectUrl = null
+	}
+
 	// Avatar handling
 	function handleAvatarChange(details: FileAcceptDetails) {
 		const file = details.files?.[0]
@@ -169,7 +195,35 @@
 
 		// Store file for later upload
 		characterData._avatarFile = file
+
+		// The editor measures the file itself, so the frame is in the pixels
+		// the server will store.
+		releaseCropUrl()
+		cropObjectUrl = URL.createObjectURL(file)
+		cropSrc = cropObjectUrl
+		cropFrame = null
+		pendingFrame = null
+		cropOpen = true
 	}
+
+	function onCropSaved(frame: MediaFrame | null) {
+		pendingFrame = { frame }
+		cropFrame = frame
+	}
+
+	/** Drops the picked file, its preview and its crop. */
+	function clearAvatarSelection() {
+		characterData._avatarFile = undefined
+		characterData._avatar = ""
+		pendingFrame = null
+		cropFrame = null
+		releaseCropUrl()
+		// The editor stays mounted, so a revoked url left here is one it
+		// would try to load.
+		cropSrc = ""
+	}
+
+	onDestroy(releaseCropUrl)
 
 	// Navigation functions
 	function handleNext() {
@@ -241,6 +295,10 @@
 			_avatarFile: undefined,
 			_avatar: ""
 		}
+		pendingFrame = null
+		cropFrame = null
+		releaseCropUrl()
+		cropSrc = ""
 		validationErrors = {}
 		currentStep = 0
 		awaitingCreate = false
@@ -297,6 +355,10 @@
 	) => {
 		if (!awaitingCreate || !res.character) return
 		const created = res.character
+		// Only the modal that is mid-create attaches its crop (the guard
+		// above), so another tab's create never takes this avatar's frame.
+		const commit = avatarFrameCommit(pendingFrame, created.avatarMediaId)
+		if (commit) socket.emit("media:setFrame", commit)
 		resetForm() // This will close the modal and reset data
 		onCreated?.(created)
 	}
@@ -559,7 +621,26 @@
 									</p>
 								</div>
 
-								<div class="flex items-center gap-6">
+								<!-- The crop editor renders in place: this modal is a
+								     dialog already, and a second dialog would sit
+								     outside its content — hidden and unclickable. -->
+								<AvatarCropEditor
+									inline
+									open={cropOpen}
+									onOpenChange={(e) => (cropOpen = e.open)}
+									src={cropSrc}
+									frame={cropFrame}
+									subject={`${
+										characterData.nickname ||
+										characterData.name ||
+										"this character"
+									}'s avatar`}
+									onSave={onCropSaved}
+								/>
+								<div
+									class="flex items-center gap-6"
+									hidden={cropOpen}
+								>
 									<!-- Avatar Preview -->
 									<div class="flex-shrink-0">
 										<Avatar
@@ -582,12 +663,16 @@
 										{#if characterData._avatarFile}
 											<button
 												type="button"
+												class="btn btn-sm preset-tonal w-full"
+												onclick={() => (cropOpen = true)}
+											>
+												<Icons.Crop size={16} />
+												Adjust crop
+											</button>
+											<button
+												type="button"
 												class="btn btn-sm preset-tonal-error w-full"
-												onclick={() => {
-													characterData._avatarFile =
-														undefined
-													characterData._avatar = ""
-												}}
+												onclick={clearAvatarSelection}
 											>
 												<Icons.Trash2 size={16} />
 												Remove image

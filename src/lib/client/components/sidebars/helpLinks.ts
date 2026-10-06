@@ -57,7 +57,7 @@ export function resolveInViewLink(
 	if (pathname !== DOCS_BASE && !pathname.startsWith(`${DOCS_BASE}/`))
 		return null
 
-	// A reference page's slug carries slashes (`sdk/pipelines/core_spec_respond`),
+	// A reference page's slug carries slashes (`sdk/pipelines/core_spec_chat-respond`),
 	// so everything after the base is the slug — trailing slash and all, which a
 	// hand-written link may have and no manifest key does.
 	const slug = pathname.slice(DOCS_BASE.length).replace(/^\/+|\/+$/g, "")

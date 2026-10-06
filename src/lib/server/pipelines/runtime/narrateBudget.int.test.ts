@@ -1,7 +1,7 @@
 /**
  * The narrator retrieves lore, and the number that decides whether it can.
  *
- * ⚠ This exists because it did not. `core:spec/narrate` wired its `rank` node's
+ * ⚠ This exists because it did not. `core:spec/chat-narrate` wired its `rank` node's
  * `candidates` in-port and never its `budget` one, and the reply pipeline had
  * already retired the typed `budget: 4096` fallback in its 1.6.0 — an absolute
  * count on a node cannot know which model it is about to be sent to. So

@@ -20,6 +20,7 @@ import { fileURLToPath, pathToFileURL } from "url"
 
 import pkg from "../package.json" with { type: "json" }
 import { pruneDist } from "./prune-dist.js"
+import { applyOnnxRuntimeOverride } from "./onnxRuntimeOverride.js"
 import {
 	appDir,
 	bundleRootDir,
@@ -436,6 +437,12 @@ async function main() {
 			path.resolve(__dirname, "../node_modules"),
 			path.join(payloadDir, "node_modules")
 		)
+
+		// Intel macOS only: onnxruntime-node ships no darwin/x64 binary after
+		// 1.23.2, so that bundle carries 1.23.2 in place of the pinned runtime
+		// (scripts/onnxRuntimeOverride.js). Before pruneDist, which then strips
+		// every other platform's binary from it as usual.
+		applyOnnxRuntimeOverride(payloadDir, target)
 
 		// Copy drizzle migrations folder. drizzle.config.ts resolves it as the
 		// relative "./drizzle", so it has to sit beside build/ in whatever

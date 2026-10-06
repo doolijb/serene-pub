@@ -41,7 +41,7 @@ import { createHost } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import { EXTRACTOR_VERSION } from "$lib/server/pipelines/ranking/entities"
-import { respondSpec, RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { respondSpec, CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { SHIPPED_CONTEXT_TEMPLATE } from "$lib/server/pipelines/entities/contextTemplateDefaults"
 
@@ -194,7 +194,7 @@ beforeAll(async () => {
 		await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 			.limit(1)
 	)[0]
 }, 120_000)
@@ -212,7 +212,7 @@ const turn = async () => {
 		bindings: coreBindings(),
 		world: await buildWorld(db, {
 			sessionId,
-			specId: RESPOND_SPEC_ID
+			specId: CHAT_RESPOND_SPEC_ID
 		}),
 		host: createHost(db, { sessionId, userId }),
 		// Stops before the provider, which needs a connection this test has no
@@ -251,7 +251,7 @@ const selectedConfigId = async () => {
 	const selected = await resolveSelectedConfig(
 		db,
 		respondSpecRow.id,
-		RESPOND_SPEC_ID,
+		CHAT_RESPOND_SPEC_ID,
 		{ sessionId }
 	)
 	expect(selected, "the reply spec resolves to no configuration").toBeTruthy()
@@ -609,7 +609,7 @@ describe("the transcript half", () => {
 				}
 			]
 		}
-		const world = await buildWorld(db, { sessionId, specId: RESPOND_SPEC_ID })
+		const world = await buildWorld(db, { sessionId, specId: CHAT_RESPOND_SPEC_ID })
 		world.overrides.push(
 			{
 				nodeKey: "prompt",

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import {
 	PipelinesSidebarNav,
 	genreRows,
+	libraryRows,
 	presetConfigFor,
 	presetPipelineGroups,
 	presetPipelines,
@@ -96,8 +97,8 @@ describe("presetConfigFor", () => {
 
 describe("presetPipelines", () => {
 	const namespaces = [
-		{ slug: "respond", name: "Respond" },
-		{ slug: "create-chat", name: "Create chat" },
+		{ slug: "respond", name: "Reply" },
+		{ slug: "create-chat", name: "Create session" },
 		{ slug: "narrate", name: "Narrate" }
 	] as Sockets.Pipelines.Namespace[]
 
@@ -115,14 +116,14 @@ describe("presetPipelines", () => {
 		expect(presetPipelines(p, namespaces)).toEqual([
 			{
 				slug: "create-chat",
-				name: "Create chat",
+				name: "Create session",
 				events: ["core:event/session-created@1"],
 				actions: [],
 				configId: null
 			},
 			{
 				slug: "respond",
-				name: "Respond",
+				name: "Reply",
 				events: [
 					"core:event/message-respond@1",
 					"core:event/message-continue@1"
@@ -171,7 +172,7 @@ describe("a preset's actions (effective included set)", () => {
 		specSlug
 	})
 	const namespaces = [
-		{ slug: "core:respond", name: "Respond" },
+		{ slug: "core:respond", name: "Reply" },
 		{ slug: "core:narrate", name: "Narrate" },
 		{ slug: "core:lair-nudge", name: "Lair nudge" },
 		{ slug: "core:lair-whisper", name: "Lair whisper" },
@@ -257,6 +258,76 @@ describe("a preset's actions (effective included set)", () => {
 			["core:respond", ["Retell"]]
 		])
 		expect(groups.actions).toEqual([])
+	})
+})
+
+describe("libraryRows (All pipelines)", () => {
+	// Names carry no genre (NOMENCLATURE §2, ruled 2026-10-05): four genres'
+	// replies are all "Reply", so the list shows each one's genre beside it.
+	const ns = (
+		slug: string,
+		name: string,
+		genre?: string,
+		enabled = true
+	): Sockets.Pipelines.Namespace => ({
+		slug,
+		name,
+		version: "1.0.0",
+		event: null,
+		enabled,
+		taxonomy: genre ? { role: "primary", genre } : { role: "maintenance" }
+	})
+	const list = [
+		ns("core:spec/chat-respond", "Reply", "core:genre/chat"),
+		ns("core:spec/lair-respond", "Reply", "core:genre/lair"),
+		ns("core:spec/summarize-scene", "Summarize scene"),
+		ns("plug:spec/respond", "Reply", "plug:genre/gone", false)
+	]
+
+	it("shows the genre's display name beside each genre pipeline, none on a shared one", () => {
+		expect(
+			libraryRows(list, genres).map((r) => [r.slug, r.name, r.genre])
+		).toEqual([
+			["core:spec/chat-respond", "Reply", "Chat"],
+			["core:spec/lair-respond", "Reply", "Lair"],
+			["core:spec/summarize-scene", "Summarize scene", null],
+			// A genre the registry list does not carry shows its id, never
+			// nothing: the row still says it belongs to one genre.
+			["plug:spec/respond", "Reply", "plug:genre/gone"]
+		])
+	})
+
+	it("reads the genre from the declared claim, never the slug", () => {
+		const [row] = libraryRows(
+			[ns("core:spec/chat-respond", "Reply", "core:genre/guide")],
+			genres
+		)
+		expect(row.genre).toBe("Guide")
+	})
+
+	it("names no genre until the genres have arrived", () => {
+		expect(libraryRows(list, null).map((r) => r.genre)).toEqual([
+			null,
+			null,
+			null,
+			null
+		])
+	})
+
+	it("keeps the server's order, the version and the enabled flag", () => {
+		const rows = libraryRows(list, genres)
+		expect(rows.map((r) => r.slug)).toEqual(list.map((n) => n.slug))
+		expect(rows[3]).toMatchObject({ version: "1.0.0", enabled: false })
+	})
+
+	it("filters on the name, the slug or the genre, any case", () => {
+		const slugs = (q: string) =>
+			libraryRows(list, genres, q).map((r) => r.slug)
+		expect(slugs("  LAIR ")).toEqual(["core:spec/lair-respond"])
+		expect(slugs("chat-respond")).toEqual(["core:spec/chat-respond"])
+		expect(slugs("summarize")).toEqual(["core:spec/summarize-scene"])
+		expect(slugs("reply")).toHaveLength(3)
+		expect(slugs("")).toHaveLength(4)
 	})
 })
 

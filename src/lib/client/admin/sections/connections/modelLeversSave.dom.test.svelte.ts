@@ -254,3 +254,87 @@ describe("the model levers wait for Save", () => {
 		])
 	})
 })
+
+/**
+ * A local ONNX endpoint on a machine whose ONNX runtime didn't load. Download
+ * and Retry would be refused by the server with the same sentence, so they
+ * give way to it, said once above the rows; the rows themselves stay listed.
+ */
+describe("a local ONNX endpoint where the runtime didn't load", () => {
+	const onnxModel = (id: number, name: string, state: string) => ({
+		...model(id, name, true),
+		satisfiableCapabilities: ["text->embedding"],
+		local: { state }
+	})
+	const ONNX_ROW = {
+		...ROW,
+		name: "Local embeddings",
+		type: "local-onnx",
+		baseUrl: null,
+		modality: "embeddings",
+		models: [
+			onnxModel(1, "MiniLM", "not_downloaded"),
+			onnxModel(2, "BGE", "error"),
+			onnxModel(3, "Gemma", "on_disk")
+		]
+	}
+	const REASON = "the Android app can't run the ONNX runtime"
+
+	async function remount(localOnnxAvailability: {
+		available: boolean
+		reason: string | null
+	}) {
+		unmount(page)
+		target.replaceChildren()
+		listeners.clear()
+		page = mount(IdPage, {
+			target,
+			context: new Map<string, unknown>([
+				[
+					"systemSettingsCtx",
+					{ settings: { localOnnxAvailability }, capabilityDefaults: {} }
+				],
+				["koboldCppSettingsCtx", { settings: undefined }],
+				["panelsCtx", { digest: {}, openPanel: () => {} }],
+				["userCtx", { user: { id: 1, isAdmin: true } }]
+			])
+		})
+		flushSync()
+		hear("connections:list", { connectionsList: [ONNX_ROW] })
+		hear("connections:get", {
+			connection: { id: 7, name: ONNX_ROW.name, type: "local-onnx", baseUrl: "", notes: "" }
+		})
+		await settle()
+	}
+	const button = (label: string) =>
+		target.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)
+
+	test("unavailable: the reason is said, Download and Retry are not offered", async () => {
+		await remount({ available: false, reason: REASON })
+		expect(text(target)).toContain(`Not available on this machine: ${REASON}`)
+		expect(button("Download")).toBeNull()
+		expect(button("Retry")).toBeNull()
+		// Every row is still listed; an on-disk model's Make active stays,
+		// disabled and saying why — the server refuses the star with it.
+		for (const name of ["MiniLM", "BGE", "Gemma"]) expect(text(target)).toContain(name)
+		const makeActive = button(`Make active — Not available on this machine: ${REASON}`)
+		expect(makeActive?.disabled).toBe(true)
+		makeActive!.click()
+		flushSync()
+		expect(text(target)).not.toContain("Waiting for Save")
+		expect(text(target)).not.toContain("Refresh, Download and Add by name")
+	})
+
+	test("available: Download and Retry, and no reason", async () => {
+		await remount({ available: true, reason: null })
+		expect(text(target)).not.toContain("Not available on this machine")
+		expect(button("Download")).not.toBeNull()
+		expect(button("Retry")).not.toBeNull()
+		expect(button("Make active")?.disabled).toBe(false)
+		emitted.length = 0
+		button("Download")!.click()
+		expect(sentOf("connections:downloadModel")).toEqual([
+			["connections:downloadModel", { id: 7, modelId: 1 }]
+		])
+	})
+})

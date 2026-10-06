@@ -27,7 +27,7 @@ import {
 import { optionId } from "$lib/server/pipelines/config/panel/ids"
 import {
 	type BootstrapReport,
-	RESPOND_SPEC_ID
+	CHAT_RESPOND_SPEC_ID
 } from "$lib/server/pipelines/boot/bootstrap"
 import {
 	ContextTemplateNotUsableError,
@@ -113,7 +113,7 @@ beforeAll(async () => {
 		.values({ username: "template-fit-admin", isAdmin: true })
 		.returning()
 	adminId = adminRow.id
-	await mutableConfig(RESPOND_SPEC_ID)
+	await mutableConfig(CHAT_RESPOND_SPEC_ID)
 }, 120_000)
 
 describe("the shipped catalog", () => {
@@ -166,7 +166,7 @@ describe("the shipped catalog", () => {
 
 describe("selection", () => {
 	it("refuses a template naming something nothing supplies, with did-you-mean", async () => {
-		const option = await templateOption(RESPOND_SPEC_ID)
+		const option = await templateOption(CHAT_RESPOND_SPEC_ID)
 		const row = await createContextTemplate(db, {
 			nodeDefinitionId: ASSEMBLE_POOL,
 			name: "Riddle layout",
@@ -175,14 +175,14 @@ describe("selection", () => {
 		const attempt = writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			admin(),
 			option.id,
 			row.id
 		)
 		await expect(attempt).rejects.toThrow(ContextTemplateNotUsableError)
 		await expect(
-			writeOption(db, SECRET, RESPOND_SPEC_ID, admin(), option.id, row.id)
+			writeOption(db, SECRET, CHAT_RESPOND_SPEC_ID, admin(), option.id, row.id)
 		).rejects.toThrow(
 			new RegExp(
 				`^'${option.nodeKey}' can't render 'Riddle layout': it uses \`scenaro\`, ` +
@@ -190,12 +190,12 @@ describe("selection", () => {
 			)
 		)
 		// Refused means not stored: the panel still shows what it showed.
-		const after = await templateOption(RESPOND_SPEC_ID)
+		const after = await templateOption(CHAT_RESPOND_SPEC_ID)
 		expect(after.value).not.toBe(row.id)
 	})
 
 	it("allows a template that fits", async () => {
-		const option = await templateOption(RESPOND_SPEC_ID)
+		const option = await templateOption(CHAT_RESPOND_SPEC_ID)
 		const row = await createContextTemplate(db, {
 			nodeDefinitionId: ASSEMBLE_POOL,
 			name: unique("Fits"),
@@ -204,12 +204,12 @@ describe("selection", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			admin(),
 			option.id,
 			row.id
 		)
-		expect((await templateOption(RESPOND_SPEC_ID)).value).toBe(row.id)
+		expect((await templateOption(CHAT_RESPOND_SPEC_ID)).value).toBe(row.id)
 	})
 
 	it("allows a selection whose only findings are warnings — an untyped step upstream", async () => {
@@ -281,7 +281,7 @@ describe("the library save", () => {
 			warnings!.some(
 				(w) =>
 					w.name === "scenaro" &&
-					w.message.startsWith(`In '${RESPOND_SPEC_ID}' at '`) &&
+					w.message.startsWith(`In '${CHAT_RESPOND_SPEC_ID}' at '`) &&
 					/Did you mean "scenario"\?/.test(w.message)
 			)
 		).toBe(true)
@@ -290,7 +290,7 @@ describe("the library save", () => {
 
 describe("the boot scan", () => {
 	it("reports a stored misfit, and refuses and changes nothing", async () => {
-		const option = await templateOption(RESPOND_SPEC_ID)
+		const option = await templateOption(CHAT_RESPOND_SPEC_ID)
 		const row = await createContextTemplate(db, {
 			nodeDefinitionId: ASSEMBLE_POOL,
 			name: unique("Stored before P5"),
@@ -301,11 +301,11 @@ describe("the boot scan", () => {
 		const { resolveSelectedConfig } = await import(
 			"$lib/server/pipelines/config/named"
 		)
-		const s = await specRow(RESPOND_SPEC_ID)
+		const s = await specRow(CHAT_RESPOND_SPEC_ID)
 		const selected = await resolveSelectedConfig(
 			db,
 			s.id,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			{}
 		)
 		await db
@@ -330,7 +330,7 @@ describe("the boot scan", () => {
 		const first = await scanContextTemplateFits(db)
 		const hit = first.misfits.find((m) => m.templateId === row.id)
 		expect(hit).toBeDefined()
-		expect(hit!.specSlug).toBe(RESPOND_SPEC_ID)
+		expect(hit!.specSlug).toBe(CHAT_RESPOND_SPEC_ID)
 		expect(hit!.configIds).toContain(selected!.configId)
 		expect(hit!.message).toMatch(
 			/can't render '.*': it uses `secretEntri`, which nothing supplies here/
@@ -365,14 +365,14 @@ describe("the boot scan", () => {
 	})
 
 	it("writes one `misfit` notice per selecting config, never twice, and clears it once the template fits", async () => {
-		const option = await templateOption(RESPOND_SPEC_ID)
+		const option = await templateOption(CHAT_RESPOND_SPEC_ID)
 		const row = await createContextTemplate(db, {
 			nodeDefinitionId: ASSEMBLE_POOL,
 			name: unique("Misfit notice"),
 			source: "{{{secretEntri}}}"
 		})
-		const configA = await mutableConfig(RESPOND_SPEC_ID)
-		const configB = await mutableConfig(RESPOND_SPEC_ID)
+		const configA = await mutableConfig(CHAT_RESPOND_SPEC_ID)
+		const configB = await mutableConfig(CHAT_RESPOND_SPEC_ID)
 		for (const configId of [configA, configB])
 			await db
 				.insert(schema.pipelineConfigValues)
@@ -393,7 +393,7 @@ describe("the boot scan", () => {
 					set: { value: row.id }
 				})
 		// The sibling kinds, which this scan must leave alone.
-		const s = await specRow(RESPOND_SPEC_ID)
+		const s = await specRow(CHAT_RESPOND_SPEC_ID)
 		await db.insert(schema.pipelineConfigNotices).values([
 			{
 				configId: configA,

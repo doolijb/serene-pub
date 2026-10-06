@@ -403,7 +403,7 @@ describe("W1 · the oracle road", () => {
 		const slugs = runs.map((r) => r.specSlug)
 		expect(slugs.filter((x) => !x.endsWith("-turn-order"))).toEqual([
 			askId,
-			"core:spec/answer-form-chat",
+			"core:spec/chat-answer-form",
 			answerId
 		])
 		expect(slugs.filter((x) => x.endsWith("-turn-order")).length).toBe(2)

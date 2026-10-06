@@ -11,6 +11,7 @@ import * as path from "path"
 import { backfillMissingBindingNames } from "$lib/server/utils/characterBindingSync"
 import { backfillRelationshipHistoryEntries } from "$lib/server/utils/graphBackfill"
 import { mergeOllamaEmbeddingsType } from "$lib/server/connections/ollamaMultiModality"
+import { mergeOpenAIEmbeddingsType } from "$lib/server/connections/openAIMultiModality"
 import { foldKoboldCppManagedImage } from "$lib/server/connections/koboldCppManagedFold"
 import { refreshConnectionCapabilityCaches } from "$lib/server/connections/resolve"
 
@@ -482,6 +483,22 @@ export async function sync() {
 		await mergeOllamaEmbeddingsType(db)
 	} catch (error) {
 		console.error("Error merging Ollama embeddings connections:", error)
+	}
+
+	try {
+		// The same ruling for OpenAI-compatible services (2026-10-05): old
+		// `openai-embeddings` rows are renamed onto `openai` in place, keeping
+		// embeddings switched on and their models marked as embedding models.
+		// BEFORE the cache refresh, so a renamed row resolves as the type it
+		// now is. The 0.5.3 upgrade runs it again for the row it restores (see
+		// the module header). `db` passed in for the packaged-build reason
+		// given above.
+		await mergeOpenAIEmbeddingsType(db)
+	} catch (error) {
+		console.error(
+			"Error merging OpenAI-compatible embeddings connections:",
+			error
+		)
 	}
 
 	try {

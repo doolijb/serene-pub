@@ -5,6 +5,11 @@
 	import { announce } from "$lib/client/accessibility/state.svelte"
 	import { isListedUnder } from "$lib/client/components/koboldcppManager/modelKindView"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+	import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
+	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
+	import { isLocalOnnxType } from "$lib/client/components/connections/modelManagement"
+	import EmbeddingSwitchDialog from "$lib/client/components/connections/EmbeddingSwitchDialog.svelte"
+	import { useStarConfirm } from "$lib/client/components/connections/useStarConfirm.svelte"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
@@ -29,6 +34,8 @@
 	let currentModel: string | null = $state(null)
 	let availableModels: Sockets.KoboldCPP.ListModels.Response["availableModels"] =
 		$state([])
+	let embeddingModels: Sockets.KoboldCPP.ListModels.Response["availableModels"] =
+		$state([])
 	let modelsDirSet = $state(true)
 	let loaded = $state(false)
 	// Only source for "which text model is the instance's chat default": a
@@ -37,13 +44,12 @@
 	let connectionsList = $state<Sockets.Connections.List.Row[]>([])
 
 	/**
-	 * The (endpoint, model) pair the chat capability default names, read the
-	 * same way KoboldCppModelsTab does: the endpoint must be THIS manager's
-	 * own connection type, not some other KoboldCPP endpoint or a different
-	 * provider entirely.
+	 * The model a capability default names, when the pair is on THIS
+	 * manager's own endpoint — not some other KoboldCPP endpoint or a
+	 * different provider entirely. For chat and for embeddings.
 	 */
-	function defaultTextModelName(): string | null {
-		const pair = systemSettingsCtx.capabilityDefaults?.["text->text"]
+	function defaultModelName(capability: string): string | null {
+		const pair = systemSettingsCtx.capabilityDefaults?.[capability]
 		if (!pair?.connectionId || !pair.connectionModelId) return null
 		const connection = connectionsList.find(
 			(c) =>
@@ -55,7 +61,8 @@
 				?.model ?? null
 		)
 	}
-	let inUseForChat = $derived(defaultTextModelName())
+	let inUseForChat = $derived(defaultModelName("text->text"))
+	let inUseForEmbeddings = $derived(defaultModelName(EMBEDDING_CAPABILITY))
 
 	let subprocessStatus:
 		| Sockets.KoboldCPP.SubprocessStatus.Response
@@ -122,6 +129,76 @@
 		if (!confirm(`Delete model "${modelName}"? This cannot be undone.`))
 			return
 		socket.emit("koboldcpp:deleteModel", { modelName })
+	}
+	/**
+	 * Which list a file belongs in, when its header got it wrong — an
+	 * embedding GGUF converted without its pooling key reads as a text model.
+	 * The server re-sends the listing once the label is written.
+	 */
+	function moveModel(filename: string, kind: "text" | "embeddings") {
+		error = ""
+		socket.emit("koboldcpp:setModelKind", { filename, kind })
+	}
+
+	/**
+	 * "Use for embeddings", as the Connections view's Models tab does it: the
+	 * server checks the file and ensures its row as an embedding model
+	 * (`koboldcpp:connectEmbeddingModel`), answering the pair without starring
+	 * it; the star then moves through `connections:setDefault` behind the same
+	 * re-embed confirmation (`useStarConfirm`, `EmbeddingSwitchDialog`).
+	 */
+	let lastEmbeddingPair: Sockets.KoboldCPP.ConnectEmbeddingModel.Response | null =
+		null
+	const stars = useStarConfirm({
+		getDefaults: () => systemSettingsCtx.capabilityDefaults ?? undefined,
+		modelOf: (connectionId, modelId) => {
+			const conn = connectionsList.find((c) => c.id === connectionId)
+			const model = conn?.models?.find((m) => m.id === modelId)
+			if (model)
+				return {
+					name: model.name,
+					isLocal: isLocalOnnxType(conn!.type)
+				}
+			// The row the server just ensured, before the list caught up.
+			return lastEmbeddingPair?.modelId === modelId
+				? { name: lastEmbeddingPair.name, isLocal: false }
+				: null
+		},
+		commit: (moves) => {
+			for (const move of moves)
+				socket.emit("connections:setDefault", {
+					capability: move.capability,
+					id: move.connectionId,
+					modelId: move.modelId
+				})
+		}
+	})
+	async function useForEmbeddings(filename: string) {
+		error = ""
+		try {
+			const pair = await awaitReply({
+				socket,
+				event: "koboldcpp:connectEmbeddingModel",
+				errorEvent: "koboldcpp:connectEmbeddingModel:error",
+				params: { filename },
+				match: (r) => r.filename === filename
+			})
+			lastEmbeddingPair = pair
+			stars.stage([
+				{
+					capability: EMBEDDING_CAPABILITY,
+					connectionId: pair.connectionId,
+					modelId: pair.modelId
+				}
+			])
+		} catch (err) {
+			error = isReplyTimeout(err)
+				? "The embedding model was not chosen: the server did not answer in time."
+				: err instanceof Error
+					? err.message
+					: String(err)
+			announce(error)
+		}
 	}
 
 	function startSubprocess() {
@@ -215,6 +292,12 @@
 		availableModels = (msg.availableModels || []).filter((m) =>
 			isListedUnder(m.kind, "text")
 		)
+		// Embedding models in their own list, offered for embeddings only. A
+		// file the classifier gave up on stays in the text list alone, as the
+		// Models tab lists it; "Move to embedding models" is the way across.
+		embeddingModels = (msg.availableModels || []).filter(
+			(m) => m.kind === "embeddings"
+		)
 		modelsDirSet = msg.modelsDirSet
 		loaded = true
 	}
@@ -258,6 +341,19 @@
 	}
 	function handleDeleteModel() {
 		announce("Model deleted.")
+		refresh()
+	}
+	function handleSetModelKind() {
+		status = "Model moved."
+		announce(status)
+	}
+	function handleSetDefault(msg: Sockets.Connections.SetDefault.Response) {
+		if (msg?.capability !== EMBEDDING_CAPABILITY) return
+		status =
+			msg.id == null
+				? "No embedding model is in use now."
+				: "Now using this model for embeddings."
+		announce(status)
 		refresh()
 	}
 	function handleGetSubprocessStatus(
@@ -342,6 +438,22 @@
 		"koboldcpp:deleteModel",
 		handleDeleteModel
 	)
+	useInterest<"koboldcpp:setModelKind">(
+		"koboldcpp:setModelKind",
+		handleSetModelKind
+	)
+	// The embedding star's write; this page moves no other star through it.
+	useInterest<"connections:setDefault">(
+		"connections:setDefault",
+		handleSetDefault
+	)
+	// A refused move or star arrives as the bare `error` too; said here, since
+	// this view has no toasts.
+	useInterest<"error">("error", (msg: { error?: string }) => {
+		if (!msg?.error) return
+		error = msg.error
+		announce(error)
+	})
 	useInterest<"koboldcpp:getSubprocessStatus">(
 		"koboldcpp:getSubprocessStatus",
 		handleGetSubprocessStatus
@@ -643,7 +755,7 @@
 		{/if}
 	{/if}
 
-	<h2>Models</h2>
+	<h2>Text models</h2>
 	{#if !modelsDirSet}
 		<p>Set a models directory above to see available models.</p>
 	{:else if !loaded}
@@ -680,6 +792,56 @@
 						</button>
 						<button
 							type="button"
+							class="a11y-btn a11y-btn-small"
+							onclick={() => moveModel(m.name, "embeddings")}
+						>
+							Move to embedding models
+						</button>
+						<button
+							type="button"
+							class="a11y-btn a11y-btn-danger a11y-btn-small"
+							onclick={() => deleteModel(m.name)}
+						>
+							Delete
+						</button>
+					</div>
+				</li>
+			{/each}
+		</ul>
+	{/if}
+
+	{#if modelsDirSet && embeddingModels.length}
+		<h2>Embedding models</h2>
+		<p class="a11y-hint">
+			Loaded beside the chat model, so embedding never swaps it out.
+		</p>
+		<ul class="a11y-list">
+			{#each embeddingModels as m (m.name)}
+				{@const modelName = m.modelName || m.name}
+				{@const inUse = inUseForEmbeddings === m.name}
+				<li class="a11y-list-item">
+					<h3>{modelName}</h3>
+					<div class="a11y-list-item-actions">
+						<button
+							type="button"
+							class="a11y-btn a11y-btn-small"
+							onclick={() => useForEmbeddings(m.name)}
+							disabled={inUse}
+							aria-pressed={inUse}
+						>
+							{inUse
+								? "In use for embeddings"
+								: "Use for embeddings"}
+						</button>
+						<button
+							type="button"
+							class="a11y-btn a11y-btn-small"
+							onclick={() => moveModel(m.name, "text")}
+						>
+							Move to text models
+						</button>
+						<button
+							type="button"
 							class="a11y-btn a11y-btn-danger a11y-btn-small"
 							onclick={() => deleteModel(m.name)}
 						>
@@ -696,3 +858,6 @@
 		use the standard site for those.
 	</p>
 {/if}
+
+<!-- Moving the embedding star asks first, with the price of re-embedding. -->
+<EmbeddingSwitchDialog {...stars.embeddingDialog} />

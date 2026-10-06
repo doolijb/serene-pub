@@ -35,7 +35,7 @@ import {
 	WORLD_LORE_TYPE_ID,
 	entryInsert
 } from "$lib/server/utils/lorebookEntries"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import {
 	SHIPPED_VARIABLE_TEMPLATES,
 	seedKeyFor
@@ -176,7 +176,7 @@ describe("the shipped spec renders what the floor renders", () => {
 			userId,
 			currentCharacterId: characterId,
 			text: "Have you seen the ashguard?",
-			specId: RESPOND_SPEC_ID,
+			specId: CHAT_RESPOND_SPEC_ID,
 			preview: true,
 			skipReceipt: true,
 			seed: "production-parity"
@@ -201,7 +201,7 @@ describe("the shipped spec renders what the floor renders", () => {
 		const { resolveConfig } = await import("@serene-pub/sdk")
 		const world = await buildWorld(db, {
 			sessionId,
-			specId: RESPOND_SPEC_ID
+			specId: CHAT_RESPOND_SPEC_ID
 		})
 		const layouts = (resolveConfig(world, ["context"]).context?.variables ??
 			{}) as any

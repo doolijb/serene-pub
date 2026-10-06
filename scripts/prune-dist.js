@@ -667,8 +667,8 @@ export function dirSizeBytes(dir) {
 //     115.4 MB  node           <- the bundled Node runtime
 //      18.8 MB  build
 //
-// The driver is the bundled runtime, not dependency bloat: release.yml pins and
-// ships Node v24.18.0, whose binary is substantially larger than the Node 20
+// The driver is the bundled runtime, not dependency bloat: release.yml then
+// pinned Node v24.18.0, whose binary is substantially larger than the Node 20
 // one these ceilings were originally measured against. node_modules itself was
 // verified healthy — onnxruntime-node at 34.6 MB is a single platform, and a
 // local simulation of pruneDist reduced a real tree 1317 MB -> 533 MB, so every
@@ -688,10 +688,29 @@ export function dirSizeBytes(dir) {
 // budgeted at up to ~8 MB (Windows statically links libstdc++), plus ~1.2 MB
 // for macOS's favicon.icns. Once the first CI run prints real sizes, tighten
 // these to that plus the usual margin.
+//
+// Raised for linux-x64 only, 370 -> 405, for the Node v26.10.0 runtime
+// (2026-10-05). MEASURED, per target, v24.18.0 -> v26.10.0 binary: linux-x64
+// 117.9 -> 142.8 MB, macos-x64 117.6 -> 142.6, macos-arm64 115.4 -> 140.1,
+// windows-x64 88.2 -> 99.9 (node.exe). The pr-3 CI bundles, read from their
+// zips' central directories, were linux-x64 362.1 MB, macos-x64 322.1 and
+// windows-x64 316.3, so Node 26 puts linux-x64 at ~386.9 MB, past 370; 405
+// restores the ~18 MB margin it was set with. macos-x64 (~347.0) and
+// windows-x64 (~327.9) stay under 380 and are unchanged. macos-arm64 had no
+// pr-3 asset to measure; its runtime is the smallest of the three Unix ones.
+//
+// Raised for both macOS targets, 380 -> 405, the same day (2026-10-05):
+//   - macos-x64 now carries onnxruntime-node 1.23.2's darwin/x64 library
+//     (scripts/onnxRuntimeOverride.js; 38.4 MB that the pr-3 bundle lacked
+//     entirely), so ~347 + 38.4 = ~385.4.
+//   - macos-arm64's pr-3 CI run measured 398.8 with onnxruntime-node 1.30's
+//     library shipped twice; dropping the duplicate (dedupeOrtLibraries) takes
+//     off 42.5, and Node 26 adds ~23.6, so ~379.9, at the old line.
+// Both are MiB, as check-dist-size.js measures.
 export const SIZE_THRESHOLD_MB = {
-	"linux-x64": 370,
-	"macos-x64": 380,
-	"macos-arm64": 380,
+	"linux-x64": 405,
+	"macos-x64": 405,
+	"macos-arm64": 405,
 	"windows-x64": 380
 }
 

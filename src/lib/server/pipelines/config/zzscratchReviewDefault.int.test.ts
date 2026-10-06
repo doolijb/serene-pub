@@ -36,7 +36,7 @@ describe("scratch", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/generate-image"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-generate-image"))
 			.limit(1)
 		console.log("SPEC", JSON.stringify(spec))
 		const presets = await db
@@ -59,7 +59,7 @@ describe("scratch", () => {
 			.where(
 				eq(
 					schema.pipelineConfigs.seedKey,
-					"pipeline-default:core:spec/generate-image"
+					"pipeline-default:core:spec/chat-generate-image"
 				)
 			)
 			.limit(1)

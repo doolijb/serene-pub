@@ -238,7 +238,6 @@ export type HostTable =
 	| "mention_spans"
 	| "entity_link"
 	| "available_tools"
-	| "sprites_for"
 
 /**
  * A Query's context: the SDK's `QueryCtx` with one member narrowed.

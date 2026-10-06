@@ -47,7 +47,7 @@ What it exercises, deliberately:
   or the picker card comes up blank;
 - two pipelines, one of them using the package's own node definition;
 - a config over its **own** spec and one over **somebody else's**
-  (`core:spec/respond`), which is also the package's one `requires` entry;
+  (`core:spec/chat-respond`), which is also the package's one `requires` entry;
 - a prompt in D-1's `prompts` vocabulary rather than `templates`;
 - a preset binding both of the genre's events;
 - a component widget (`widgets[0].component: 'tally'`) whose component places

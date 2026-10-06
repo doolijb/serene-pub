@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { provideCharacterImports } from "$lib/client/contexts/characterImports.svelte"
 	/**
 	 * The Document View (accessible) shell — a self-contained layout that
 	 * intentionally does NOT reuse Layout.svelte or panelsCtx (sidebar-
@@ -68,6 +69,9 @@
 	// instead of importing it, and stores in `.svelte.ts` modules, which
 	// cannot `getContext`, keep calling the module directly.
 	setContext(INTEREST_CONTEXT, interestContextValue())
+	// The one subscriber to the card-import events; views take the outcome
+	// from this context (contexts/characterImports.svelte.ts).
+	provideCharacterImports()
 	setContext("systemSettingsCtx", systemSettingsCtx)
 	setContext("ollamaSettingsCtx", ollamaSettingsCtx)
 	setContext("koboldCppSettingsCtx", koboldCppSettingsCtx)
@@ -94,7 +98,7 @@
 		systemSettingsCtx.settings = {
 			...message.systemSettings,
 			isAndroidWrapper: message.isAndroidWrapper,
-			localEmbeddingsSupported: message.localEmbeddingsSupported,
+			localOnnxAvailability: message.localOnnxAvailability,
 			// Derived from the `text->embedding` star, not a column — carried
 			// across for the same reason the capability defaults below are.
 			activeEmbeddingModel: message.activeEmbeddingModel

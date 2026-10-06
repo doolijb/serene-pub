@@ -345,13 +345,23 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:outlet/edit-message@1": "1f8b8b73d43d57",
 	"core:outlet/swipe-message@1": "9f6bbbdd40316",
 	"core:outlet/branch-session@1": "aedd725871d9d",
-	// Sprites (DESIGN-sprites §5, 2026-09-24). NEW types — no migration, just
-	// lines. The reply specs' sprite tail: what the speaker can show (with the
-	// line's and labels' vectors from the local lane), core's picker (every
-	// picker publishes `sprite-pick@1` on `main`), and the write.
-	"core:query/sprites-for@1": "1582ff1430d4c0",
-	"core:task/pick-sprite-similarity@1": "1ded5f377e9a30",
-	"core:outlet/show-sprite@1": "1aed02b2dfc4c0",
+	// Sprites (DESIGN-sprites §5, 2026-09-24; in-pipeline 2026-10-05). The
+	// sprite picker is ONE oracle now (owner: "not a wrapper", "the explicit
+	// text or string passed in") — a NEW type, no migration, just a line: in
+	// `text` · `speaker` · `scope` · `set`, params `enabled` · `margin` ·
+	// `floor`, no connection slot. It REPLACES `core:query/sprites-for@1`
+	// (was "1582ff1430d4c0", which re-read the line from its message id and
+	// embedded inside the host) and `core:task/pick-sprite-similarity@1` (was
+	// "1ded5f377e9a30"), both removed with no alias (no back-compat before
+	// distribution; the five reply specs pinning them were repinned in the
+	// same change, and a session's stored settings move with the node key —
+	// `boot/spritePickerMove.ts`).
+	"core:oracle/pick-sprite@1": "1624d1aaa2f77",
+	// Moved 2026-10-05 (plan D1): +`source` in-port, a literal the spec writes
+	// (`picker` on the reply specs, `person` in `core:spec/show-sprite`) —
+	// the host decided it from the running spec's id until then. Same `@1`,
+	// re-recorded pre-release. (was "1aed02b2dfc4c0")
+	"core:outlet/show-sprite@1": "1c703cdec6bb9",
 	// The session's story clock (DESIGN-story-time P3, 2026-09-28). A NEW type
 	// — no migration, just a line: moves the SESSION's clock through its
 	// book's calendar, never the book's present.
@@ -415,7 +425,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (enum member labels, 2026-09-29): `enabled` gained `members` — a label
 	// and hint per option, so the Pipelines panel stops showing raw values. Display
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "145a24d51e143c")
-	"core:oracle/embed-text@1": "1d244c261dfbb8",
+	// Moved 2026-10-05 (owner ruling D-c, "remove `embed-text`'s inert
+	// connection control"): the `connection` slot is deleted — it was declared
+	// and never read, held at the star, ten inert controls on the retrieval
+	// arms. A narrowed declaration under the pre-release freeze: every spec
+	// pinning it was repinned in the same change. (was "1d244c261dfbb8")
+	"core:oracle/embed-text@1": "39efca38c5da4",
 	// Gained its two script hooks in 0.6-preview (migration 0146): `scripts`
 	// before over `content`, `castScripts` after over `cast` — the paste-rung
 	// half of replaceable cast extraction (ruling of 2026-08-26). Replacing
@@ -1231,7 +1246,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// it. (Its absence is also what keeps it out of `UNFILLED_IN_PORTS` —
 	// there is no port to excuse.)
 	// ⚠ MOVED: two declared in-ports, `state` and `plan`, both unwired on the
-	// pipeline that had this node first (`core:spec/narrate-character`), so
+	// pipeline that had this node first (`core:spec/chat-side-character`), so
 	// nothing it does changes. A voice built with no place in front of it
 	// answered from whatever the transcript suggested.
 	// Moved (U5a, 2026-09-16): the fact's in-port is `sideCharacter` (was
@@ -1452,7 +1467,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// service for retrieval): `auto` now reads only whether that slot resolves
 	// — any embedding model set up searches — and only display text moved,
 	// which is stripped before hashing.
-	"core:task/query-windows@1": "15ef89ff8f32d7",
+	// Moved 2026-10-05 (owner ruling D-c): the `connection` slot states its
+	// own kind — `shape` embeddings, `requires: ['text->embedding']` — where
+	// it was wired by reference to the embed step's, which no longer declares
+	// one. Held at the active embedding connection (`config/heldSlots.ts`).
+	// (was "15ef89ff8f32d7")
+	"core:task/query-windows@1": "163334e27456c",
 	// Re-projected by **0201**, and it is the one type in that migration nobody
 	// set out to touch. Ruling R6 removes per-source floors — *"lore competes on
 	// score alone"* — which narrows `minEntries` from the five bands to

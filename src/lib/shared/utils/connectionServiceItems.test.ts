@@ -4,21 +4,35 @@ import {
 	groupConnectionServiceItems,
 	filterConnectionServiceItems,
 	isKoboldCppManagedType,
+	connectionTypeDisabledReason,
+	localOnnxDisabledReason,
 	CATEGORY_ORDER,
 	KOBOLDCPP_MANAGED_TYPES
 } from "./connectionServiceItems"
 import { CONNECTION_TYPE, CONNECTION_TYPES } from "../constants/ConnectionTypes"
 import { OPENAI_COMPATIBLE_PRESETS } from "./connectionDefaults"
+import { PRESET_CAPABILITIES } from "$lib/shared/connectionAdapters/manifest"
+
+/** The presets whose service the manifest says embeds. */
+const EMBEDDING_PRESETS = OPENAI_COMPATIBLE_PRESETS.filter(
+	(p) =>
+		PRESET_CAPABILITIES[(p as { slug?: string }).slug ?? ""]?.[
+			"text->embedding"
+		] === true
+)
 
 describe("buildConnectionServiceItems", () => {
 	const items = buildConnectionServiceItems()
 
-	test("has one item per native type (except OPENAI and the managed types) plus one per preset", () => {
+	test("has one item per native type (except OPENAI, the managed types and the two merged embedding types) plus one per preset, plus Ollama and the embedding presets under Embeddings", () => {
 		const expectedCount =
 			CONNECTION_TYPES.length -
 			1 -
-			KOBOLDCPP_MANAGED_TYPES.length +
-			OPENAI_COMPATIBLE_PRESETS.length
+			KOBOLDCPP_MANAGED_TYPES.length -
+			2 +
+			OPENAI_COMPATIBLE_PRESETS.length +
+			1 +
+			EMBEDDING_PRESETS.length
 		expect(items.length).toBe(expectedCount)
 	})
 
@@ -77,9 +91,83 @@ describe("buildConnectionServiceItems", () => {
 		expect(new Set(items.map((i) => i.key)).size).toBe(items.length)
 	})
 
+	test("the presets that embed are offered under Embeddings, each creating its own openai connection", () => {
+		// `openai-embeddings` merged into `openai` (owner ruling 2026-10-05),
+		// so these are that section's OpenAI-compatible services. The list is
+		// the manifest's preset layer, never a second copy.
+		expect(
+			EMBEDDING_PRESETS.map((p) => (p as { slug?: string }).slug).sort()
+		).toEqual(
+			[
+				"google-gemini",
+				"local-ai",
+				"mistral-ai",
+				"openai-official",
+				"openrouter",
+				"together-ai"
+			].sort()
+		)
+		const embeddings = items.filter(
+			(i) =>
+				i.modality === "embeddings" && i.type === CONNECTION_TYPE.OPENAI
+		)
+		expect(embeddings.map((i) => i.presetValue).sort()).toEqual(
+			EMBEDDING_PRESETS.map((p) => p.value).sort()
+		)
+		for (const preset of EMBEDDING_PRESETS) {
+			const embed = embeddings.find(
+				(i) => i.presetValue === preset.value
+			)!
+			const text = items.find((i) => i.key === `preset:${preset.value}`)!
+			// The SAME connection as the text entry: type, preset, slug.
+			expect(embed.type).toBe(text.type)
+			expect(embed.presetSlug).toBe(text.presetSlug)
+			expect(embed.label).toBe(text.label)
+			expect(embed.category).toBe(text.category)
+			// Its own key: a duplicate `preset:<n>` is a duplicate-key crash.
+			expect(embed.key).not.toBe(text.key)
+		}
+		// A lookup by type and preset finds the text entry first.
+		for (const preset of EMBEDDING_PRESETS)
+			expect(
+				items.find(
+					(i) =>
+						i.type === CONNECTION_TYPE.OPENAI &&
+						i.presetValue === preset.value
+				)!.modality
+			).toBe("text-gen")
+	})
+
+	test("a preset whose service doesn't embed is not offered under Embeddings", () => {
+		for (const slug of ["groq", "deepseek", "vllm"]) {
+			const preset = OPENAI_COMPATIBLE_PRESETS.find(
+				(p) => (p as { slug?: string }).slug === slug
+			)!
+			expect(
+				items
+					.filter((i) => i.presetValue === preset.value)
+					.map((i) => i.modality),
+				slug
+			).toEqual(["text-gen"])
+		}
+		// Nor the custom entry: the format can't tell whether an endpoint
+		// embeds, so the generic type leaves it off.
+		expect(
+			items.filter((i) => i.presetValue === 0).map((i) => i.modality)
+		).toEqual(["text-gen"])
+	})
+
 	test("the merged ollama-embeddings type is never offered", () => {
 		expect(
 			items.find((i) => i.type === CONNECTION_TYPE.OLLAMA_EMBEDDINGS)
+		).toBeUndefined()
+	})
+
+	test("the merged openai-embeddings type is never offered", () => {
+		// Merged into `openai` (owner ruling 2026-10-05); an OpenAI-compatible
+		// service embeds from its one `openai` connection.
+		expect(
+			items.find((i) => i.type === CONNECTION_TYPE.OPENAI_EMBEDDINGS)
 		).toBeUndefined()
 	})
 
@@ -106,9 +194,11 @@ describe("buildConnectionServiceItems", () => {
 			if (
 				t.value === CONNECTION_TYPE.OPENAI ||
 				isKoboldCppManagedType(t.value) ||
-				// Merged into `ollama` (2026-09-25): never created by hand, for
-				// the same reason the managed types above are not.
-				t.value === CONNECTION_TYPE.OLLAMA_EMBEDDINGS
+				// Merged into `ollama` (2026-09-25) and `openai` (2026-10-05):
+				// never created by hand, for the same reason the managed types
+				// above are not.
+				t.value === CONNECTION_TYPE.OLLAMA_EMBEDDINGS ||
+				t.value === CONNECTION_TYPE.OPENAI_EMBEDDINGS
 			)
 				continue
 			const item = items.find((i) => i.key === `type:${t.value}`)
@@ -202,8 +292,88 @@ describe("filterConnectionServiceItems", () => {
 	})
 
 	test("a substring match finds services regardless of position in the label", () => {
-		const result = filterConnectionServiceItems(items, "experimental")
-		// All 11 new presets carry the "(Experimental)" suffix.
+		const result = filterConnectionServiceItems(
+			items.filter((i) => i.modality === "text-gen"),
+			"experimental"
+		)
+		// All 11 new presets carry the "(Experimental)" suffix. Counted in
+		// text generation: Mistral and Gemini are listed again under
+		// Embeddings.
 		expect(result.length).toBe(11)
+	})
+})
+
+describe("local ONNX types on a machine that can't run them", () => {
+	const ONNX = [
+		CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
+		CONNECTION_TYPE.LOCAL_ONNX_NER
+	]
+	const verdict = {
+		available: false,
+		reason: "the Android app can't run the ONNX runtime"
+	}
+
+	test("are still listed, each disabled with the machine's reason", () => {
+		const items = buildConnectionServiceItems({ localOnnx: verdict })
+		for (const type of ONNX) {
+			const item = items.find((i) => i.type === type)
+			// Listed, not hidden: a missing option reads as "not built".
+			expect(item, type).toBeDefined()
+			expect(item!.disabledReason).toBe(
+				"Not available on this machine: the Android app can't run the ONNX runtime"
+			)
+		}
+	})
+
+	test("disable nothing else", () => {
+		const items = buildConnectionServiceItems({ localOnnx: verdict })
+		const disabled = items.filter((i) => i.disabledReason)
+		expect(disabled.map((i) => i.type).sort()).toEqual([...ONNX].sort())
+	})
+
+	test("a machine that runs them, or settings not yet arrived, disables none", () => {
+		for (const localOnnx of [
+			{ available: true, reason: null },
+			null,
+			undefined
+		]) {
+			const items = buildConnectionServiceItems({ localOnnx })
+			expect(items.some((i) => i.disabledReason)).toBe(false)
+		}
+		expect(
+			buildConnectionServiceItems().some((i) => i.disabledReason)
+		).toBe(false)
+	})
+
+	test("the sentence still reads when the server sent no reason", () => {
+		expect(
+			localOnnxDisabledReason({ available: false, reason: null })
+		).toBe("Not available on this machine: the ONNX runtime didn't load")
+		expect(localOnnxDisabledReason({ available: true, reason: null })).toBe(
+			null
+		)
+	})
+
+	test("asked by type: the ONNX types answer with the reason, others never", () => {
+		for (const type of ONNX)
+			expect(connectionTypeDisabledReason(type, verdict)).toBe(
+				"Not available on this machine: the Android app can't run the ONNX runtime"
+			)
+		for (const type of [
+			CONNECTION_TYPE.OLLAMA,
+			CONNECTION_TYPE.OPENAI,
+			null,
+			undefined
+		])
+			expect(connectionTypeDisabledReason(type, verdict)).toBe(null)
+		for (const type of ONNX) {
+			expect(
+				connectionTypeDisabledReason(type, {
+					available: true,
+					reason: null
+				})
+			).toBe(null)
+			expect(connectionTypeDisabledReason(type, undefined)).toBe(null)
+		}
 	})
 })

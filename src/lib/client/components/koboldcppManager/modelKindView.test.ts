@@ -37,9 +37,20 @@ describe("isListedUnder", () => {
 	// in the app while plainly present on disk, which reads as the directory
 	// scan being broken — and the Unverified override is then unreachable, so
 	// the user has no way to correct it either.
-	it("shows an unverified model in BOTH lists, so no file can become invisible", () => {
+	it("shows an unverified model in EVERY list, so no file can become invisible", () => {
 		expect(isListedUnder("unknown", "text")).toBe(true)
 		expect(isListedUnder("unknown", "image")).toBe(true)
+		expect(isListedUnder("unknown", "embeddings")).toBe(true)
+	})
+
+	// An embedding model used to fall out of both lists: shown nowhere, while
+	// the file sat in the text folder. It has a list of its own now — and is
+	// still kept out of the text one, where it would be offered for chat.
+	it("shows an embedding model only in the embeddings list", () => {
+		expect(isListedUnder("embeddings", "embeddings")).toBe(true)
+		expect(isListedUnder("embeddings", "text")).toBe(false)
+		expect(isListedUnder("embeddings", "image")).toBe(false)
+		expect(isListedUnder("text", "embeddings")).toBe(false)
 	})
 })
 
@@ -50,6 +61,10 @@ describe("countTextModels", () => {
 	it("ignores image models, so a user holding only an image model still counts as empty", () => {
 		expect(countTextModels([model("image")])).toBe(0)
 		expect(countTextModels([model("image"), model("image")])).toBe(0)
+	})
+
+	it("ignores embedding models — nothing to chat with, so still empty", () => {
+		expect(countTextModels([model("embeddings")])).toBe(0)
 	})
 
 	it("counts unverified models, matching exactly what the text list renders", () => {

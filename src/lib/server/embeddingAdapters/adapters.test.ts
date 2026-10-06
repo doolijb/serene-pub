@@ -165,12 +165,72 @@ describe("OpenAI-compatible embeddings", () => {
 		const f = vi.fn()
 		vi.stubGlobal("fetch", f)
 		const mod = (await import("./OpenAIEmbeddingAdapter")).default
-		const res = await mod.testConnection(
+		const res = await mod.testConnection!(
 			conn({ type: CONNECTION_TYPE.OPENAI_EMBEDDINGS, baseUrl: "" })
 		)
 		expect(res.ok).toBe(false)
 		expect(res.error).toMatch(/base url/i)
 		expect(f).not.toHaveBeenCalled()
+	})
+	it("posts to the base URL exactly as typed, plus /embeddings — never a /v1 of its own", async () => {
+		// Pinned because every existing row resolves through it: these bases
+		// carry their version segment already, and one that does not is left
+		// alone rather than guessed at.
+		const urls: string[] = []
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: any) => {
+				urls.push(String(url))
+				return {
+					ok: true,
+					status: 200,
+					json: async () => ({ data: [{ index: 0, embedding: [1] }] })
+				}
+			})
+		)
+		const mod = (await import("./OpenAIEmbeddingAdapter")).default
+		for (const baseUrl of [
+			"https://api.openai.com/v1",
+			"http://localhost:1234/v1/",
+			"http://localhost:8080"
+		])
+			await new mod.Adapter(
+				conn({ type: CONNECTION_TYPE.OPENAI_EMBEDDINGS, baseUrl })
+			).embedText({ input: ["a"] })
+		expect(urls).toEqual([
+			"https://api.openai.com/v1/embeddings",
+			"http://localhost:1234/v1/embeddings",
+			"http://localhost:8080/embeddings"
+		])
+	})
+
+	it("sends the connection's key as a bearer token, and reports the model it named", async () => {
+		const f = vi.fn(async (_url: any, _init: any) => ({
+			ok: true,
+			status: 200,
+			json: async () => ({
+				data: [{ index: 0, embedding: [1, 2] }],
+				model: "text-embedding-3-small-2024"
+			})
+		}))
+		vi.stubGlobal("fetch", f)
+		const mod = (await import("./OpenAIEmbeddingAdapter")).default
+		const res = await new mod.Adapter(
+			conn({
+				type: CONNECTION_TYPE.OPENAI_EMBEDDINGS,
+				baseUrl: "https://api.openai.com/v1",
+				model: "text-embedding-3-small",
+				// A legacy plaintext key — `decryptApiKeyField` passes it through.
+				extraJson: { apiKey: "sk-test" }
+			})
+		).embedText({ input: ["a"] })
+		const init = f.mock.calls[0][1]
+		expect(init.headers.Authorization).toBe("Bearer sk-test")
+		expect(JSON.parse(init.body)).toEqual({
+			model: "text-embedding-3-small",
+			input: ["a"]
+		})
+		expect(res.model).toBe("text-embedding-3-small-2024")
 	})
 })
 
@@ -222,6 +282,58 @@ describe("KoboldCPP embeddings — only from the model the pair names", () => {
 			new mod.Adapter(kcpp()).embedText({ input: ["a"] })
 		).rejects.toThrow(/did not say which embedding model/)
 	})
+	it("adds /v1 to the base URL, exactly as it always has", async () => {
+		// Pinned for existing rows: the root of the server, `/v1` added here —
+		// including onto a base that already ends in it, which is how such a
+		// row has always resolved.
+		const f = answering("nomic-embed-text-v1.5.Q4_K_M")
+		const mod = (await import("./KoboldCppEmbeddingAdapter")).default
+		for (const baseUrl of ["", "http://10.0.0.5:5001", "http://h:5001/v1"])
+			await new mod.Adapter({ ...kcpp(), baseUrl }).embedText({
+				input: ["a"]
+			})
+		expect(f.mock.calls.map((c) => c[0])).toEqual([
+			"http://localhost:5001/v1/embeddings",
+			"http://10.0.0.5:5001/v1/embeddings",
+			"http://h:5001/v1/v1/embeddings"
+		])
+		// No key: KoboldCPP has never been sent one.
+		expect((f.mock.calls[0][1] as any).headers).toEqual({
+			"Content-Type": "application/json"
+		})
+	})
+
+	it("matches one model however it is spelled — .gguf and koboldcpp/ on either side", async () => {
+		// A managed install records the FILE it loaded; koboldcpp reports the
+		// model without its extension, sometimes under `koboldcpp/`. One model.
+		const mod = (await import("./KoboldCppEmbeddingAdapter")).default
+		for (const [pair, reported] of [
+			["nomic-embed-text-v1.5.Q4_K_M.gguf", "nomic-embed-text-v1.5.Q4_K_M"],
+			["nomic-embed-text-v1.5.Q4_K_M", "koboldcpp/nomic-embed-text-v1.5.Q4_K_M"],
+			["koboldcpp/nomic-embed-text-v1.5.Q4_K_M", "nomic-embed-text-v1.5.Q4_K_M.GGUF"]
+		]) {
+			answering(reported)
+			const res = await new mod.Adapter({
+				...kcpp(),
+				model: pair
+			}).embedText({ input: ["a"] })
+			// What actually answered, as koboldcpp named it.
+			expect(res.model).toBe(reported)
+		}
+		// Still a refusal when the bare names differ.
+		answering("koboldcpp/bge-m3-Q8_0")
+		await expect(
+			new mod.Adapter({
+				...kcpp(),
+				model: "nomic-embed-text-v1.5.Q4_K_M.gguf"
+			}).embedText({ input: ["a"] })
+		).rejects.toThrow(/cannot be mixed/)
+	})
+
+	it("exports the action alone — its connection lists and tests through the text module", async () => {
+		const mod = (await import("./KoboldCppEmbeddingAdapter")).default
+		expect(Object.keys(mod)).toEqual(["Adapter"])
+	})
 })
 
 describe("local ONNX embeddings", () => {
@@ -252,7 +364,7 @@ describe("local ONNX embeddings", () => {
 			"$lib/server/embedding/models"
 		)
 		const mod = (await import("./LocalOnnxEmbeddingAdapter")).default
-		const { models } = await mod.listModels(
+		const { models } = await mod.listModels!(
 			conn({
 				type: CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
 				baseUrl: null,
@@ -320,7 +432,7 @@ models:
 		]
 		try {
 			const mod = (await import("./LocalOnnxEmbeddingAdapter")).default
-			const { models } = await mod.listModels(
+			const { models } = await mod.listModels!(
 				conn({
 					type: CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
 					baseUrl: null,
@@ -405,8 +517,167 @@ describe("the family is registered", () => {
 		)
 		const mod = await getEmbeddingAdapter(CONNECTION_TYPE.OLLAMA_EMBEDDINGS)
 		expect(mod.Adapter).toBeTypeOf("function")
-		await expect(getEmbeddingAdapter("openai")).rejects.toThrow(
-			/No embedding adapter/
+		await expect(
+			getEmbeddingAdapter(CONNECTION_TYPE.ANTHROPIC)
+		).rejects.toThrow(/No embedding adapter/)
+	})
+
+	it("serves OpenAI-compatible embeddings from the `openai` connection, through the module `openai-embeddings` used", async () => {
+		// Owner ruling 2026-10-05: one OpenAI-compatible connection per
+		// service. A merged row embeds exactly as the row it replaced did.
+		const { getEmbeddingAdapter } = await import(
+			"$lib/server/utils/getEmbeddingAdapter"
 		)
+		expect(await getEmbeddingAdapter(CONNECTION_TYPE.OPENAI)).toBe(
+			await getEmbeddingAdapter(CONNECTION_TYPE.OPENAI_EMBEDDINGS)
+		)
+	})
+
+	it("serves LM Studio's and llama.cpp's embeddings beside their chat module", async () => {
+		const { ADAPTER_REGISTRY } = await import(
+			"$lib/server/adapters/registry"
+		)
+		for (const type of [
+			CONNECTION_TYPE.LM_STUDIO,
+			CONNECTION_TYPE.LLAMACPP
+		]) {
+			expect(ADAPTER_REGISTRY[type]?.text, type).toBeTypeOf("function")
+			expect(ADAPTER_REGISTRY[type]?.embedding, type).toBeTypeOf(
+				"function"
+			)
+		}
+	})
+})
+
+describe("LM Studio embeddings — the SDK's server, over HTTP", () => {
+	function answering() {
+		const f = vi.fn(async (_url: string, _init?: unknown) => ({
+			ok: true,
+			status: 200,
+			json: async () => ({
+				object: "list",
+				data: [{ index: 0, embedding: [0.4, 0.5] }],
+				model: "text-embedding-nomic-embed-text-v1.5"
+			})
+		}))
+		vi.stubGlobal("fetch", f)
+		return f
+	}
+	const lms = (over: Record<string, unknown> = {}) =>
+		conn({
+			type: CONNECTION_TYPE.LM_STUDIO,
+			baseUrl: "ws://localhost:1234",
+			model: "text-embedding-nomic-embed-text-v1.5",
+			...over
+		})
+
+	it("swaps the stored ws:// address for http:// and posts to /v1/embeddings", async () => {
+		const f = answering()
+		const mod = (await import("./LMStudioEmbeddingAdapter")).default
+		const res = await new mod.Adapter(lms()).embedText({ input: ["a"] })
+		expect(res.vectors).toEqual([[0.4, 0.5]])
+		expect(res.dimensions).toBe(2)
+		expect(f.mock.calls[0][0]).toBe("http://localhost:1234/v1/embeddings")
+		expect(JSON.parse((f.mock.calls[0][1] as any).body)).toEqual({
+			model: "text-embedding-nomic-embed-text-v1.5",
+			input: ["a"]
+		})
+	})
+
+	it("maps every spelling of the address onto the same HTTP server", async () => {
+		const { lmStudioHttpBase } = await import("./LMStudioEmbeddingAdapter")
+		expect(lmStudioHttpBase("ws://10.0.0.5:1234/")).toBe(
+			"http://10.0.0.5:1234"
+		)
+		expect(lmStudioHttpBase("wss://lms.example")).toBe(
+			"https://lms.example"
+		)
+		expect(lmStudioHttpBase("http://h:1234")).toBe("http://h:1234")
+		// Unset: the type's own default address, as the chat adapter uses.
+		expect(lmStudioHttpBase("")).toBe("http://localhost:1234")
+	})
+
+	it("refuses before the wire when the pair names no model", async () => {
+		const f = answering()
+		const mod = (await import("./LMStudioEmbeddingAdapter")).default
+		await expect(
+			new mod.Adapter(lms({ model: "" })).embedText({ input: ["a"] })
+		).rejects.toThrow(/names no embedding model/)
+		expect(f).not.toHaveBeenCalled()
+	})
+
+	it("exports the action alone — its connection lists and tests through the text module", async () => {
+		const mod = (await import("./LMStudioEmbeddingAdapter")).default
+		expect(Object.keys(mod)).toEqual(["Adapter"])
+	})
+})
+
+describe("llama.cpp embeddings — /v1/embeddings, never the bare route", () => {
+	function answering(status = 200, body: unknown = undefined) {
+		const f = vi.fn(async (_url: string, _init?: unknown) => ({
+			ok: status >= 200 && status < 300,
+			status,
+			text: async () => JSON.stringify(body ?? {}),
+			json: async () =>
+				body ?? {
+					object: "list",
+					data: [{ index: 0, embedding: [1, 2, 3] }],
+					// llama-server echoes the request's model.
+					model: "nomic-embed-text-v1.5.Q8_0.gguf"
+				}
+		}))
+		vi.stubGlobal("fetch", f)
+		return f
+	}
+	const llama = (over: Record<string, unknown> = {}) =>
+		conn({
+			type: CONNECTION_TYPE.LLAMACPP,
+			baseUrl: "http://localhost:8080/",
+			model: "nomic-embed-text-v1.5.Q8_0.gguf",
+			...over
+		})
+
+	it("adds /v1 to the server's root, and to nothing else", async () => {
+		const f = answering()
+		const mod = (await import("./LlamaCppEmbeddingAdapter")).default
+		for (const baseUrl of ["", "http://localhost:8080/", "http://gpu:8081"])
+			await new mod.Adapter(llama({ baseUrl })).embedText({
+				input: ["a"]
+			})
+		expect(f.mock.calls.map((c) => c[0])).toEqual([
+			"http://localhost:8080/v1/embeddings",
+			"http://localhost:8080/v1/embeddings",
+			"http://gpu:8081/v1/embeddings"
+		])
+	})
+
+	it("reports the pair's own model, since the server only echoes it", async () => {
+		answering()
+		const mod = (await import("./LlamaCppEmbeddingAdapter")).default
+		const res = await new mod.Adapter(llama()).embedText({ input: ["a"] })
+		expect(res.vectors).toEqual([[1, 2, 3]])
+		expect(res.model).toBe("nomic-embed-text-v1.5.Q8_0.gguf")
+	})
+
+	it("says what llama-server said when it was not started for embeddings", async () => {
+		answering(501, {
+			error: {
+				code: 501,
+				message:
+					"This server does not support embeddings. Start it with `--embeddings`",
+				type: "not_supported_error"
+			}
+		})
+		const mod = (await import("./LlamaCppEmbeddingAdapter")).default
+		await expect(
+			new mod.Adapter(llama()).embedText({ input: ["a"] })
+		).rejects.toThrow(
+			/llama\.cpp's embeddings request failed \(501\).*--embeddings/
+		)
+	})
+
+	it("exports the action alone — its connection lists and tests through the text module", async () => {
+		const mod = (await import("./LlamaCppEmbeddingAdapter")).default
+		expect(Object.keys(mod)).toEqual(["Adapter"])
 	})
 })

@@ -22,25 +22,23 @@
  * dispatch path — never in anything a binding can see (F18).
  */
 
-import { and, eq } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	S,
 	SLOT_VALUE,
 	isTransformId,
 	type ConfigWorld,
-	type OverrideRow
+	type OverrideRow,
+	type SlotDecl
 } from "@serene-pub/sdk"
 import {
 	capabilityDefaults,
 	capabilityForSamplingShape
 } from "$lib/server/connections/capabilityDefaults"
-// Imported rather than re-declared. It was a `const TEXT_CAPABILITY` at the
-// bottom of this file and another in `capabilityTarget.ts`, which is the same
-// two-spellings shape the dropped `system_settings` columns had — and the string
-// keys the `connection_defaults` PRIMARY KEY (as its two sides since 0183), so a
-// divergence would not be a mismatch, it would be a capability nothing can ever
-// satisfy.
+// Imported rather than re-declared. The string keys the `connection_defaults`
+// PRIMARY KEY (as its two sides), so a second spelling that diverged would not
+// be a mismatch, it would be a capability nothing can ever satisfy.
 import { TEXT_CAPABILITY } from "$lib/server/connections/capabilityTarget"
 import { completionTemplatesByKey } from "$lib/server/connections/completionTemplates"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
@@ -51,6 +49,7 @@ import { resolveWireMode } from "$lib/server/connections/resolve"
 import { midSystemFor } from "$lib/shared/connectionAdapters/midSystem"
 import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
 import { unreadSlotsOf } from "$lib/server/pipelines/boot/unreadAllowList"
+import { isHeldConnectionSlot } from "$lib/server/pipelines/config/heldSlots"
 
 export interface WorldScope {
 	sessionId?: number
@@ -78,12 +77,11 @@ export interface WorldScope {
  * configured, and a write here would mean resolving somebody's config had a
  * side effect on it.
  *
- * That invariant used to be spelled as a `type Db = { select: any }` alias,
- * which bought it at a price that was not worth paying: `any` on `select` makes
- * every ROW read through it an `any` too, so a column this schema does not have
- * would have type-checked in all five of this file's readers. It is now a rule
- * this file keeps rather than one the parameter type enforces — and the rows
- * are checked.
+ * That invariant is a rule this file keeps, not one the parameter type
+ * enforces. A read-only alias such as `{ select: any }` would make every ROW
+ * read through it an `any` too, so a column this schema does not have would
+ * type-check in all five of this file's readers; the full `Db` keeps the rows
+ * checked.
  */
 export async function buildWorld(
 	db: Db,
@@ -173,13 +171,10 @@ export async function buildWorld(
 		? defaultsByCapability[oracleCapability]
 		: undefined
 
-	// The table, and only the table (0181). This used to read
-	// `?? (oracleIsText ? system.defaultConnectionId : undefined)`, because
-	// 0175 seeded `connection_defaults` from that column ONCE and a later star
-	// press landed only in the column — so the fallback existed to stop the
-	// screen and the run disagreeing. Both writers now write here, so the
-	// fallback has nothing left to rescue and would only be a second place for a
-	// default to live.
+	// The table, and only the table (0181). Every star writer writes
+	// `connection_defaults`, so no fallback reads a default from anywhere else:
+	// a second place for a default to live is how the screen and the run come
+	// to disagree.
 	//
 	// The PAIR, not the endpoint alone. `connection_defaults` stores both
 	// halves, and the executor resolves a slot's pair against `world.connections`
@@ -269,12 +264,10 @@ export async function buildWorld(
 	// today; only the shapes would put the new table out of the executor's
 	// reach. Both, until the executor is keyed by capability too.
 	//
-	// ⚠ Seeded from what is REGISTERED, and nothing else. The loop used to start
-	// from `new Set([TEXT_CAPABILITY, ...keys])`, so `text->text` was always
-	// asked about — harmless only while the legacy column could answer it. With
-	// the column gone that entry resolves to nothing, and adding a key with no
-	// value is how "the instance has chat set up" becomes true on an instance
-	// where nobody set it up.
+	// ⚠ Seeded from what is REGISTERED, and nothing else — never from a fixed
+	// `text->text`. A capability nobody starred resolves to nothing, and adding
+	// a key with no value is how "the instance has chat set up" becomes true on
+	// an instance where nobody set it up.
 	const activeConnection: Record<string, string | null> = {}
 	for (const capability of Object.keys(defaultsByCapability)) {
 		const id = defaultConnectionFor(capability)
@@ -302,15 +295,13 @@ export async function buildWorld(
 	 * embeddings", 01 §10): the star the embedding lane loads its model from
 	 * (`resolveEmbeddingTarget`).
 	 *
-	 * ⚠ Published since 2026-09-29. Until then an embed step with no pick
-	 * resolved its connection slot to null — harmless while nothing read it
-	 * (the host embeds through the loaded model, not the slot).
-	 * `core:task/query-windows@1` reads it now, through
-	 * `slot.connectionOf('semantic.arm.embed')`, to decide whether
-	 * *Automatic* searches by meaning: whenever an embedding model is set up,
-	 * wherever it runs (owner, 2026-09-30). No pick ever stands on that slot
-	 * (`isUnreadSlot`, `applyPipelineLayer`), so what it resolves to IS this
-	 * star — the connection the host embeds through.
+	 * ⚠ Published. `core:task/query-windows@1` reads it, through its own
+	 * embedding connection slot (`slot.connection()`; the embed step declares
+	 * none), to decide whether *Automatic* searches by meaning: whenever an
+	 * embedding model is set up, wherever it runs (owner, 2026-09-30). No
+	 * pick ever stands on that slot (`isHeldConnectionSlot`,
+	 * `applyPipelineLayer`), so what it resolves to IS this star — the
+	 * connection the host embeds through.
 	 */
 	const embeddingsId = defaultConnectionFor(EMBEDDING_CAPABILITY)
 	if (embeddingsId) activeConnection[S.embeddings] = embeddingsId
@@ -424,11 +415,10 @@ export async function buildWorld(
 				 * assemble node reads this to decide which of the two shapes to
 				 * produce, and the SENDING adapter reads the same value off the
 				 * row it is handed (`withWireMode`) to decide which request to
-				 * build. One resolution, two readers — which is the whole of the
-				 * fix: the shape a prompt is BUILT in and the shape it is SENT in
-				 * used to be decided independently, by a spec that could not see
-				 * an adapter's `extraJson` flag and an adapter that never saw the
-				 * render.
+				 * build. One resolution, two readers: the shape a prompt is BUILT
+				 * in and the shape it is SENT in are one decision, never one made
+				 * by a spec that cannot see an adapter's `extraJson` flag and
+				 * another by an adapter that never sees the render.
 				 *
 				 * Resolved live from the row rather than read off the cached
 				 * capability set beside it — see `resolveWireMode`: the cache on
@@ -557,37 +547,57 @@ async function applyPipelineLayer(
 	if (!spec) return
 
 	/**
-	 * The addresses that take no pick: a slot no handler reads
-	 * (`isUnreadSlot`), at every node of this spec that carries one — today
-	 * the embed steps' `connection`.
+	 * The addresses that take no pick, at every node of this spec that
+	 * carries one: a **held connection slot** (`isHeldConnectionSlot` —
+	 * today `query-windows`' embedding connection, which the host holds at
+	 * the active embedding connection by policy), and a slot no handler reads
+	 * (`isUnreadSlot` — none today).
 	 *
 	 * ⚠ Dropped here, at the one door every stored value comes through — the
 	 * selected config and the session's own rows alike — so the executor sees
-	 * no pick and resolves the slot to the instance default: the star the
-	 * host embeds through. A pick left standing made *Automatic* decide about
-	 * a connection the embed never used (review 2026-09-29), and a stale
-	 * one naming a deleted row resolved to nothing and said "no embedding
-	 * model is set up" beside a star.
+	 * no pick and resolves the slot to the instance default: the connection
+	 * the host embeds through. A pick left standing made *Automatic* decide
+	 * about a connection the embed never used (review 2026-09-29), and a
+	 * stale one naming a deleted row resolved to nothing and said "no
+	 * embedding model is set up" beside an active one.
 	 */
-	const unreadSlots = new Set<string>(
-		spec.activeVersionId
+	const nodes = spec.activeVersionId
+		? await db
+				.select({
+					nodeKey: schema.pipelineNodes.nodeKey,
+					definitionId: schema.pipelineNodes.definitionId,
+					definitionVersion: schema.pipelineNodes.definitionVersion
+				})
+				.from(schema.pipelineNodes)
+				.where(eq(schema.pipelineNodes.specVersionId, spec.activeVersionId))
+		: []
+	const pins = [...new Set(nodes.map((n) => n.definitionId))]
+	const slotsByPin = new Map<string, Record<string, SlotDecl>>(
+		pins.length
 			? (
 					await db
 						.select({
-							nodeKey: schema.pipelineNodes.nodeKey,
-							definitionId: schema.pipelineNodes.definitionId,
-							definitionVersion: schema.pipelineNodes.definitionVersion
+							definitionId: schema.pipelineDefinitionRegistry.definitionId,
+							version: schema.pipelineDefinitionRegistry.version,
+							slots: schema.pipelineDefinitionRegistry.slots
 						})
-						.from(schema.pipelineNodes)
+						.from(schema.pipelineDefinitionRegistry)
 						.where(
-							eq(schema.pipelineNodes.specVersionId, spec.activeVersionId)
+							inArray(schema.pipelineDefinitionRegistry.definitionId, pins)
 						)
-				).flatMap((n) =>
-					unreadSlotsOf(`${n.definitionId}@${n.definitionVersion}`).map(
-						(slot) => `${n.nodeKey}\u0000${slot}`
-					)
-				)
+				).map((r) => [`${r.definitionId}@${r.version}`, r.slots ?? {}])
 			: []
+	)
+	const noPick = new Set<string>(
+		nodes.flatMap((n) => {
+			const pin = `${n.definitionId}@${n.definitionVersion}`
+			const held = Object.entries(slotsByPin.get(pin) ?? {})
+				.filter(([, decl]) => isHeldConnectionSlot(decl))
+				.map(([slot]) => slot)
+			return [...held, ...unreadSlotsOf(pin)].map(
+				(slot) => `${n.nodeKey}\u0000${slot}`
+			)
+		})
 	)
 
 	const push = (
@@ -599,7 +609,7 @@ async function applyPipelineLayer(
 		value: unknown
 	) => {
 		if (value === undefined) return
-		if (unreadSlots.has(`${nodeKey}\u0000${slot}`)) return
+		if (noPick.has(`${nodeKey}\u0000${slot}`)) return
 		overrides.push({ nodeKey, slot, path, value, scopeKind, scopeId })
 	}
 
@@ -640,13 +650,11 @@ async function applyPipelineLayer(
 	)
 	/**
 	 * Which slots hold a *prompt* reference — same argument as the two sets
-	 * above, and it stopped being hypothetical when prompts became pooled by
-	 * (node type, slot). The literal `"prompts"` used to work only because every
-	 * shipped node happens to name its slot that; a plugin naming its slot
-	 * anything else had its reference left underefenced, and the pool key that
-	 * FINDS the prompt is built from the real slot name two lines from where the
-	 * result was pushed at the literal — so the two could disagree about which
-	 * slot a prompt belonged to.
+	 * above, and it binds because prompts are pooled by (node type, slot).
+	 * Never the literal `"prompts"`: every shipped node happens to name its slot
+	 * that, but a plugin may not, and the pool key that FINDS the prompt is built
+	 * from the real slot name — a literal here would leave a plugin's reference
+	 * unresolved and let the two disagree about which slot a prompt belongs to.
 	 */
 	const promptSlots = new Set(
 		allDecls
@@ -736,8 +744,7 @@ async function applyPipelineLayer(
 	 * lives, and the reference is an implementation detail of where the string
 	 * came from. `engine` sits beside it because a template is a piece of
 	 * writing *in a language*, and the two are one fact: a source without its
-	 * engine is a string somebody has to guess about, which is exactly what
-	 * used to happen.
+	 * engine is a string somebody has to guess about.
 	 *
 	 * Emitting them together in one helper, rather than as two `push` calls at
 	 * each of the two call sites, is the point. Two calls is four places to get
@@ -912,13 +919,12 @@ async function applyPipelineLayer(
 	// conflict, which returned early by design; that particular route is gone
 	// and the net stays, because "boot did not finish" has other causes.
 	//
-	// ⚠ **Resolved per pool, not once per pipeline.** This used to resolve ONE
-	// `defaultPromptFor(db, spec.id)` and push its fields onto EVERY prompts
-	// node in the spec. Pool-blind, that is actively wrong now: a summarize run
-	// has four different prompts nodes, and one row's fields on all of them
-	// means the world summarizer's drafting instructions land on the
-	// name-entry step. That text renders. It reads as plausible English. The
-	// only way to notice is to compare the prompt against the step it came
+	// ⚠ **Resolved per pool, not once per pipeline.** Never one
+	// `defaultPromptFor(db, spec.id)` pushed onto EVERY prompts node in the
+	// spec: a summarize run has four different prompts nodes, and one row's
+	// fields on all of them puts the world summarizer's drafting instructions
+	// on the name-entry step. That text renders. It reads as plausible English.
+	// The only way to notice is to compare the prompt against the step it came
 	// from, which nobody does when the output merely looks a bit off.
 	//
 	// Pushed last, so anything already at this scope wins — this fills the
@@ -1027,16 +1033,11 @@ const requiredTransform = (requires?: readonly string[]): string | undefined =>
 const idOrNull = (v: number | null | undefined) =>
 	v == null ? undefined : String(v)
 
-// `samplingValues(row)` used to live here: it took `Object.entries` of the whole
-// row and kept everything outside a six-name skip list, which was how sampler
-// values were separated from bookkeeping when they were columns side by side.
-//
-// They are not columns any more (0171) — the row carries a `values` object — so
-// the projection above reads that field directly. Left as a note because the old
-// function would have gone on "working": it would have produced
-// `{shape, values, enabled}` as if those were three samplers, and handed that to
-// the adapter, where every key would have missed the key map and every real
-// sampler would have silently vanished.
+// Sampler values are the row's `values` object (0171), read directly by the
+// projection above — never `Object.entries` of the whole row minus a skip
+// list. That form would produce `{shape, values, enabled}` as if those were
+// three samplers and hand them to the adapter, where every key misses the key
+// map and every real sampler silently vanishes.
 
 /**
  * Every connection's reading verdicts, for the world's descriptors (see the

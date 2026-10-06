@@ -36,7 +36,7 @@ let db: TestDb
 const PLUGIN = "acme.guess"
 const JUDGE = `${PLUGIN}:spec/judge-guess`
 const MULTI = `${PLUGIN}:spec/multi`
-const CORE_RESPOND = "core:spec/respond"
+const CORE_RESPOND = "core:spec/chat-respond"
 
 const doc = (id: string) =>
 	compile(

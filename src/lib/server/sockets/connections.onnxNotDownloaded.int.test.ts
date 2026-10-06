@@ -6,11 +6,13 @@
  * downloaded points every embed or scan at nothing. The capability view once
  * offered **Use** on every catalogue row, downloaded or not, and the handler
  * accepted it — this pins the server half of that fix, so no client (and no raw
- * socket call) can make the choice.
+ * socket call) can make the choice. On a machine whose ONNX runtime didn't
+ * load, none can be made active at all.
  */
 
 import {
 	afterAll,
+	afterEach,
 	beforeAll,
 	beforeEach,
 	describe,
@@ -156,5 +158,71 @@ describe("making a local ONNX model active", () => {
 		const row = await registered()
 		expect(row?.connectionId).toBe(connectionId)
 		expect(row?.connectionModelId).toBe(modelId)
+	}, 60_000)
+})
+
+/**
+ * A machine whose ONNX runtime didn't load: no local ONNX model can be made
+ * active, downloaded or not, and the refusal is the machine's reason — the
+ * sentence the create, download and add-by-Hub-id gates give. Clearing the
+ * star stays open, so a person can always switch away. Made the honest way:
+ * `SERENE_PUB_PLATFORM=android`, which the probe reads first.
+ */
+describe("making a local ONNX model active where the runtime didn't load", () => {
+	beforeEach(() => {
+		process.env.SERENE_PUB_PLATFORM = "android"
+	})
+	afterEach(() => {
+		delete process.env.SERENE_PUB_PLATFORM
+	})
+
+	async function onDisk(model: string) {
+		const ids = await makeOnnxConnection(model)
+		const dir = path.join(cacheDir, ...model.split("/"))
+		await fs.mkdir(path.join(dir, "onnx"), { recursive: true })
+		await fs.writeFile(path.join(dir, "config.json"), "{}")
+		await fs.writeFile(path.join(dir, "onnx", "model.onnx"), "weights")
+		return ids
+	}
+
+	it("is refused with the machine's reason, even with the weights on disk", async () => {
+		const { connectionId, modelId } = await onDisk("Xenova/stranded")
+		const emitted: Array<[string, any]> = []
+		const { connectionsSetDefault } = await import("./connections")
+		await expect(
+			connectionsSetDefault.handler(
+				socket,
+				{ capability: "text->embedding", id: connectionId, modelId } as any,
+				(event: string, data: any) => emitted.push([event, data])
+			)
+		).rejects.toThrow(
+			/^Local ONNX models aren't available on this machine: .*Android/
+		)
+		expect(emitted.map(([event]) => event)).toEqual([
+			"error",
+			"connections:setDefault:error"
+		])
+		expect(await registered()).toBeUndefined()
+	}, 60_000)
+
+	it("still clears the star, so the lane can be switched away", async () => {
+		const { connectionId, modelId } = await onDisk("Xenova/was-active")
+		const { setCapabilityDefault } = await import(
+			"$lib/server/connections/capabilityDefaults"
+		)
+		await setCapabilityDefault(testDb as any, "text->embedding", {
+			connectionId,
+			connectionModelId: modelId
+		})
+
+		const { connectionsSetDefault } = await import("./connections")
+		await connectionsSetDefault.handler(
+			socket,
+			{ capability: "text->embedding", id: null, modelId: null } as any,
+			noop
+		)
+		const row = await registered()
+		expect(row?.connectionId ?? null).toBeNull()
+		expect(row?.connectionModelId ?? null).toBeNull()
 	}, 60_000)
 })

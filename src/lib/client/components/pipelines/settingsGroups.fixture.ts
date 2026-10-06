@@ -187,7 +187,7 @@ export function adventureView(
 ): Sockets.Pipelines.NamespaceDetail {
 	return {
 		slug: "core:spec/adventure-respond",
-		name: "Adventure turn",
+		name: "Reply",
 		version: "1.0.0",
 		event: null,
 		enabled: true,
@@ -288,7 +288,7 @@ export function creationSessionView(
 	return {
 		...view,
 		slug: "core:spec/adventure-create",
-		name: "Create adventure",
+		name: "Create session",
 		canSelectConfig: !readOnlyBecause,
 		groups,
 		scope: { kind: "session", sessionId, ...(readOnlyBecause ? { readOnlyBecause } : {}) }

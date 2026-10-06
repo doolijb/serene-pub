@@ -145,14 +145,14 @@ describe("a user's own config comes across", () => {
 			.where(
 				eq(
 					schema.pipelineConfigs.seedKey,
-					`migrated:core:spec/respond:${mineId}`
+					`migrated:core:spec/chat-respond:${mineId}`
 				)
 			)
 		expect(config).toBeTruthy()
 		expect(config.name).toBe("My Questions-Only Config")
 		// Theirs, so editable — unlike the prompts core ships.
 		expect(config.isImmutable).toBe(false)
-		expect(config.specId).toBe(await specIdOf("core:spec/respond"))
+		expect(config.specId).toBe(await specIdOf("core:spec/chat-respond"))
 	})
 
 	it("keeps their wording exactly", async () => {
@@ -160,7 +160,7 @@ describe("a user's own config comes across", () => {
 		// prompt lands in the POOL its step reads from, and that pool is shared
 		// with every other pipeline reusing the step. Which pipeline it was
 		// written in is now a grouping fact, which is exactly what this asserts.
-		const specId = await specIdOf("core:spec/respond")
+		const specId = await specIdOf("core:spec/chat-respond")
 		const prompts = await db
 			.select()
 			.from(schema.pipelinePrompts)
@@ -290,14 +290,14 @@ describe("a user's own config comes across", () => {
 	})
 
 	it("puts the narrator's own config in the narrator namespace, not the reply one", async () => {
-		const narrateId = await specIdOf("core:spec/narrate")
+		const narrateId = await specIdOf("core:spec/chat-narrate")
 		const [config] = await db
 			.select()
 			.from(schema.pipelineConfigs)
 			.where(
 				eq(
 					schema.pipelineConfigs.seedKey,
-					`migrated:core:spec/narrate:${narratorMineId}`
+					`migrated:core:spec/chat-narrate:${narratorMineId}`
 				)
 			)
 		expect(config.specId).toBe(narrateId)
@@ -314,7 +314,7 @@ describe("a user's own config comes across", () => {
 		// 0.5.3 appended what a person typed in the Narrator modal to the
 		// prompt in code (`promptBuilder.compilePrompt`), whatever the config
 		// said. In 0.6 the prompt row says it, so a carried row has to.
-		const narrateId = await specIdOf("core:spec/narrate")
+		const narrateId = await specIdOf("core:spec/chat-narrate")
 		const prompts = await db
 			.select()
 			.from(schema.pipelinePrompts)
@@ -340,14 +340,14 @@ describe("selections follow", () => {
 	it("selects it at the scopes that had it selected", async () => {
 		// Without this the migration copies everything across and then shows the
 		// user a default they did not choose, which is worse than not migrating.
-		const specId = await specIdOf("core:spec/respond")
+		const specId = await specIdOf("core:spec/chat-respond")
 		const [config] = await db
 			.select()
 			.from(schema.pipelineConfigs)
 			.where(
 				eq(
 					schema.pipelineConfigs.seedKey,
-					`migrated:core:spec/respond:${mineId}`
+					`migrated:core:spec/chat-respond:${mineId}`
 				)
 			)
 
@@ -377,7 +377,7 @@ describe("prompt text only (owner ruling, 2026-10-01)", () => {
 		const [config] = await db
 			.select()
 			.from(schema.pipelineConfigs)
-			.where(eq(schema.pipelineConfigs.seedKey, `migrated:core:spec/respond:${mineId}`))
+			.where(eq(schema.pipelineConfigs.seedKey, `migrated:core:spec/chat-respond:${mineId}`))
 		const postHistory = async (configId: number) =>
 			(
 				await db
@@ -391,7 +391,7 @@ describe("prompt text only (owner ruling, 2026-10-01)", () => {
 		const [shipped] = await db
 			.select()
 			.from(schema.pipelineConfigs)
-			.where(eq(schema.pipelineConfigs.seedKey, "pipeline-default:core:spec/respond"))
+			.where(eq(schema.pipelineConfigs.seedKey, "pipeline-default:core:spec/chat-respond"))
 		// The shipped default's numbers, whatever they are — never the 3 and
 		// 500 this person's 0.5.3 config held.
 		expect(await postHistory(config.id)).toEqual(await postHistory(shipped.id))

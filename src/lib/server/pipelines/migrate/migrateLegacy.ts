@@ -47,8 +47,8 @@ import { createPrompt } from "$lib/server/pipelines/entities/prompts"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 import {
 	GRAPH_BUILD_SPEC_ID,
-	NARRATE_SPEC_ID,
-	RESPOND_SPEC_ID,
+	CHAT_NARRATE_SPEC_ID,
+	CHAT_RESPOND_SPEC_ID,
 	SUMMARIZE_CHARACTER_SPEC_ID,
 	SUMMARIZE_HISTORY_SPEC_ID,
 	SUMMARIZE_SCENE_SPEC_ID,
@@ -146,13 +146,13 @@ const summarizeFields = (row: any) => ({
 
 const SOURCES: LegacySource[] = [
 	{
-		specSlug: RESPOND_SPEC_ID,
+		specSlug: CHAT_RESPOND_SPEC_ID,
 		table: attic.promptConfigs,
 		legacyTable: "prompt_configs",
 		fields: (r) => sessionFields(r)
 	},
 	{
-		specSlug: NARRATE_SPEC_ID,
+		specSlug: CHAT_NARRATE_SPEC_ID,
 		table: attic.narratorPromptConfigs,
 		legacyTable: "narrator_prompt_configs",
 		fields: narratorFields
@@ -600,13 +600,13 @@ interface Pointer {
 
 const POINTERS: Pointer[] = [
 	{
-		specSlug: RESPOND_SPEC_ID,
+		specSlug: CHAT_RESPOND_SPEC_ID,
 		table: attic.promptConfigs,
 		system: "defaultPromptConfigId",
 		user: "activePromptConfigId"
 	},
 	{
-		specSlug: NARRATE_SPEC_ID,
+		specSlug: CHAT_NARRATE_SPEC_ID,
 		table: attic.narratorPromptConfigs,
 		system: "defaultNarratorPromptConfigId",
 		user: "activeNarratorPromptConfigId",

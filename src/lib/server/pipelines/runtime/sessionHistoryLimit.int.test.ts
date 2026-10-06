@@ -47,11 +47,11 @@ import { buildWorld } from "$lib/server/pipelines/config/world"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import {
 	respondSpec,
-	RESPOND_SPEC_ID,
+	CHAT_RESPOND_SPEC_ID,
 	narrateSpec,
-	NARRATE_SPEC_ID
+	CHAT_NARRATE_SPEC_ID
 } from "$lib/server/pipelines/specs"
-import { answerFormChatSpec, ANSWER_FORM_CHAT_SPEC_ID } from "@serene-pub/core-catalog"
+import { answerFormChatSpec, CHAT_ANSWER_FORM_SPEC_ID } from "@serene-pub/core-catalog"
 
 // No embedding model: the retrieval mechanisms downstream of `history` stay on
 // the keyword path, which needs no network. Nothing here asserts on them — this
@@ -86,11 +86,11 @@ const NARROWED = 3
 
 /** Where the control lives in each shipped document. */
 const HISTORY_NODE = {
-	[RESPOND_SPEC_ID]: "gather.history.read",
-	[NARRATE_SPEC_ID]: "history",
+	[CHAT_RESPOND_SPEC_ID]: "gather.history.read",
+	[CHAT_NARRATE_SPEC_ID]: "history",
 	// A read the window does NOT size (history window, 2026-10-03): an
 	// asking step's, which keeps its count.
-	[ANSWER_FORM_CHAT_SPEC_ID]: "gather.history.read"
+	[CHAT_ANSWER_FORM_SPEC_ID]: "gather.history.read"
 } as const
 
 beforeAll(async () => {
@@ -124,21 +124,21 @@ beforeAll(async () => {
 		await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 			.limit(1)
 	)[0]
 	narrateSpecRow = (
 		await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, NARRATE_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_NARRATE_SPEC_ID))
 			.limit(1)
 	)[0]
 	answerSpecRow = (
 		await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, ANSWER_FORM_CHAT_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_ANSWER_FORM_SPEC_ID))
 			.limit(1)
 	)[0]
 }, 120_000)
@@ -230,14 +230,14 @@ describe("the session history window reaches the query", () => {
 	// well above the corpus is exactly what let the dead control hide. An
 	// unwired node returns all 8 here too; the next test is the one that fails.
 	it("both pipelines run and return the whole conversation at the shipped window", async () => {
-		expect(await historyLengthOn(respondSpec(), RESPOND_SPEC_ID)).toBe(
+		expect(await historyLengthOn(respondSpec(), CHAT_RESPOND_SPEC_ID)).toBe(
 			MESSAGE_COUNT
 		)
-		expect(await historyLengthOn(narrateSpec(), NARRATE_SPEC_ID)).toBe(
+		expect(await historyLengthOn(narrateSpec(), CHAT_NARRATE_SPEC_ID)).toBe(
 			MESSAGE_COUNT
 		)
 		expect(
-			await historyLengthOn(answerFormChatSpec(), ANSWER_FORM_CHAT_SPEC_ID)
+			await historyLengthOn(answerFormChatSpec(), CHAT_ANSWER_FORM_SPEC_ID)
 		).toBe(MESSAGE_COUNT)
 	}, 60_000)
 
@@ -246,18 +246,18 @@ describe("the session history window reaches the query", () => {
 		// a key nothing supplies, and the slot carrying the number was never
 		// resolved, so this came back as all 8 whatever was stored. On the
 		// answer form, whose read the window does not size (2026-10-03).
-		await setLimit(ANSWER_FORM_CHAT_SPEC_ID, answerSpecRow.id, NARROWED)
+		await setLimit(CHAT_ANSWER_FORM_SPEC_ID, answerSpecRow.id, NARROWED)
 		try {
 			expect(
-				await historyLengthOn(answerFormChatSpec(), ANSWER_FORM_CHAT_SPEC_ID)
+				await historyLengthOn(answerFormChatSpec(), CHAT_ANSWER_FORM_SPEC_ID)
 			).toBe(NARROWED)
 			// Each pipeline owns its own row. One spec's number reaching the
 			// other would be the same defect wearing the opposite sign.
-			expect(await historyLengthOn(respondSpec(), RESPOND_SPEC_ID)).toBe(
+			expect(await historyLengthOn(respondSpec(), CHAT_RESPOND_SPEC_ID)).toBe(
 				MESSAGE_COUNT
 			)
 		} finally {
-			await resetLimit(ANSWER_FORM_CHAT_SPEC_ID, answerSpecRow.id)
+			await resetLimit(CHAT_ANSWER_FORM_SPEC_ID, answerSpecRow.id)
 		}
 	}, 60_000)
 
@@ -267,18 +267,18 @@ describe("the session history window reaches the query", () => {
 		// the transcript fit decides where the conversation starts. Both
 		// documents asserted, for the reason the narrator's was asserted
 		// separately before — a change applied to one and not the other.
-		await setLimit(RESPOND_SPEC_ID, respondSpecRow.id, NARROWED)
-		await setLimit(NARRATE_SPEC_ID, narrateSpecRow.id, NARROWED)
+		await setLimit(CHAT_RESPOND_SPEC_ID, respondSpecRow.id, NARROWED)
+		await setLimit(CHAT_NARRATE_SPEC_ID, narrateSpecRow.id, NARROWED)
 		try {
-			expect(await historyLengthOn(respondSpec(), RESPOND_SPEC_ID)).toBe(
+			expect(await historyLengthOn(respondSpec(), CHAT_RESPOND_SPEC_ID)).toBe(
 				MESSAGE_COUNT
 			)
-			expect(await historyLengthOn(narrateSpec(), NARRATE_SPEC_ID)).toBe(
+			expect(await historyLengthOn(narrateSpec(), CHAT_NARRATE_SPEC_ID)).toBe(
 				MESSAGE_COUNT
 			)
 		} finally {
-			await resetLimit(RESPOND_SPEC_ID, respondSpecRow.id)
-			await resetLimit(NARRATE_SPEC_ID, narrateSpecRow.id)
+			await resetLimit(CHAT_RESPOND_SPEC_ID, respondSpecRow.id)
+			await resetLimit(CHAT_NARRATE_SPEC_ID, narrateSpecRow.id)
 		}
 	}, 60_000)
 })

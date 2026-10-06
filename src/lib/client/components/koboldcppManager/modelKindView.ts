@@ -12,24 +12,29 @@
 
 type ModelKind = Sockets.KoboldCPP.ModelKind
 type ModelKindFilter = Sockets.KoboldCPP.ModelKindFilter
+/** A list a caller can ask for: one per loader, so embeddings too — wider than
+ * `ModelKindFilter`, which also names a models DIRECTORY and embedding models
+ * have none of their own. */
+type ModelListing = Exclude<ModelKind, "unknown">
 
 /**
  * Is a row with this `kind` shown while the managed KoboldCPP is listing `listing`?
  *
- * "unknown" is admitted into BOTH lists deliberately. The classifier gives up
+ * Each kind in its own list — an embedding model in the embeddings one, and in
+ * neither of the other two: it is not a chat model, and offering it as one is
+ * the misclassification the `embeddings` kind exists to end.
+ *
+ * "unknown" is admitted into EVERY list deliberately. The classifier gives up
  * on a truncated download, an unreadable file, or an architecture nobody has
  * added to the allowlists yet — and a file the user can see on disk but not in
  * the managed KoboldCPP reads as the scan being broken, not as the file being
- * unclassifiable. It appears in both, wearing an Unverified badge, with the
- * two-button override as the way out.
+ * unclassifiable. It appears in each, wearing an Unverified badge, with the
+ * override as the way out.
  *
- * There is deliberately no third "Unknown" segment in the toggle to put these
+ * There is deliberately no "Unknown" segment in the toggle to put these
  * behind: a segment nobody visits is where unknowns would go to die.
  */
-export function isListedUnder(
-	kind: ModelKind,
-	listing: ModelKindFilter
-): boolean {
+export function isListedUnder(kind: ModelKind, listing: ModelListing): boolean {
 	return kind === listing || kind === "unknown"
 }
 

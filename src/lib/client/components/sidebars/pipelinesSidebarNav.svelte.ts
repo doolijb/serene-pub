@@ -11,6 +11,8 @@
  * should start anyway.
  */
 
+import { pipelineGenreName } from "$lib/client/utils/pipelineGenre"
+
 type Preset = Sockets.SessionAdmin.PresetRow
 
 /** Where the view is. One variable, the pattern the sampling view uses. */
@@ -116,6 +118,47 @@ export function genreRows(
 		description: g.description,
 		presetCount: counts.get(g.genreId) ?? 0
 	}))
+}
+
+export interface LibraryRow {
+	slug: string
+	name: string
+	/** The genre's display name, or null for a pipeline every genre shares. */
+	genre: string | null
+	version: string
+	enabled: boolean
+}
+
+/**
+ * The All pipelines list: every published pipeline, in the server's order,
+ * each with its genre beside its name — the one list in this view that mixes
+ * genres, where four genres' _Reply_ would otherwise be four identical rows
+ * (`$lib/client/utils/pipelineGenre`). `filter` matches the name, the slug
+ * or the genre, any case.
+ */
+export function libraryRows(
+	list: Pick<
+		Sockets.Pipelines.Namespace,
+		"slug" | "name" | "version" | "enabled" | "taxonomy"
+	>[],
+	genres: { genreId: string; name: string }[] | null,
+	filter = ""
+): LibraryRow[] {
+	const q = filter.trim().toLowerCase()
+	const rows = list.map((ns) => ({
+		slug: ns.slug,
+		name: ns.name,
+		genre: pipelineGenreName(ns, genres),
+		version: ns.version,
+		enabled: ns.enabled
+	}))
+	if (!q) return rows
+	return rows.filter(
+		(r) =>
+			r.name.toLowerCase().includes(q) ||
+			r.slug.toLowerCase().includes(q) ||
+			!!r.genre?.toLowerCase().includes(q)
+	)
 }
 
 /** A genre's presets — the default first, then by name. */

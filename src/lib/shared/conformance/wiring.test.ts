@@ -305,6 +305,34 @@ const UNCONSUMED_OUT_SHAPES: Deliberate[] = [
 			"Nothing wants the envelope as one value: the shape exists so the " +
 			"port is typed and the document has a name, not as a wire."
 	},
+	{
+		subject: shapeSubject(
+			"core:shape/sprite-choices@1",
+			OUT_PORTS.filter((p) => p.shape === "core:shape/sprite-choices@1")
+		),
+		reason:
+			"What the sprite picker could choose from, and how the set was " +
+			"decided (`decidedBy`, `missing`) — published beside the pick for " +
+			"the receipt, so a person reading the run can answer \"why this " +
+			"face\" (DESIGN-sprites §5.2). Never for the line: the outlet records " +
+			"the pick alone. Its one consumer was the retired picker task's " +
+			"`choices` in-port, which the all-in-one `core:oracle/pick-sprite@1` " +
+			"replaced on 2026-10-05 (owner: \"not a wrapper\")."
+	},
+	{
+		subject: shapeSubject(
+			"core:shape/vector@1",
+			OUT_PORTS.filter((p) => p.shape === "core:shape/vector@1")
+		),
+		reason:
+			"The singular half of `embed-text`'s pair: `text` in, one vector " +
+			"out on `main` and `vector`, beside `vectors` for a batch. Every " +
+			"shipped spec embeds a batch (`texts` → `vectors`), so nothing takes " +
+			"the one vector — its one consumer was the retired picker task's " +
+			"`lineVector`, gone 2026-10-05 when the sprite picker came to embed " +
+			"for itself. The port stays for a spec that embeds one string, the " +
+			"pair `UNFILLED_IN_PORTS` excuses from the other side."
+	},
 ]
 
 /**
@@ -444,6 +472,16 @@ const UNFILLED_IN_PORTS: Deliberate[] = [
 			"1.19.0's semantic mechanism wires `texts`, which is what made this " +
 			"reachable at all — the node was in no shipped spec before it, so " +
 			"neither port had an excuse and neither needed one."
+	},
+	{
+		subject: "core:oracle/pick-sprite@1.set",
+		reason:
+			"The sprite set to choose within, when a spec knows it (2026-10-05). " +
+			"No core spec does: absent, the set is decided from the speaker — " +
+			"the session's override, then the cast member's set, then the " +
+			"card's default (`spriteChoicesFor`). Declared for a plugin's spec " +
+			"that dresses a character by its own rule; the receipt says so " +
+			"(`decidedBy: spec`) when one does."
 	},
 	// ⚠ Five entries were here and are gone rather than annotated (R-12,
 	// 2026-09-16): `session-history@1.budget` and the `text` in-port on the

@@ -229,7 +229,7 @@ async function seedRun(opts: {
 	const at = new Date(Date.UTC(2026, 0, 1 + seq++))
 	const [row] = await testDb.insert(schema.pipelineRuns).values({
 		runId: opts.runId,
-		specSlug: "core:spec/respond",
+		specSlug: "core:spec/chat-respond",
 		specVersion: "1.0.0",
 		userId: opts.userId,
 		sessionId: opts.sessionId,

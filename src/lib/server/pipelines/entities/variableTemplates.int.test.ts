@@ -30,8 +30,8 @@ import {
 } from "$lib/server/pipelines/entities/variableTemplates"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { resolveConfig } from "@serene-pub/sdk"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
-import { NARRATE_SPEC_ID } from "$lib/server/pipelines/specs/narrate"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { CHAT_NARRATE_SPEC_ID } from "$lib/server/pipelines/specs/narrate"
 import { renderVariable } from "$lib/server/pipelines/entities/variableLayouts"
 import {
 	SHIPPED_VARIABLE_TEMPLATES,
@@ -64,7 +64,7 @@ beforeAll(async () => {
 	// would duplicate before tuning.
 	const { resolveSelectedConfig, duplicateConfig, selectConfig } =
 		await import("$lib/server/pipelines/config/named")
-	for (const slug of [RESPOND_SPEC_ID, NARRATE_SPEC_ID]) {
+	for (const slug of [CHAT_RESPOND_SPEC_ID, CHAT_NARRATE_SPEC_ID]) {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
@@ -139,7 +139,7 @@ describe("what ships", () => {
 	})
 
 	it("points the shipped config at one, so the picker opens on a choice", async () => {
-		const option = await charactersOption(RESPOND_SPEC_ID)
+		const option = await charactersOption(CHAT_RESPOND_SPEC_ID)
 		expect(typeof option.value).toBe("number")
 		expect(option.variableTemplate?.name).toBe("Titled JSON block")
 		expect(option.variableTemplate?.readOnly).toBe(true)
@@ -150,7 +150,7 @@ describe("what ships", () => {
 		// under *its* step. Worth pinning: they are about lore and history,
 		// which reads like the context builder's business until you remember
 		// that what a layout receives is what actually fit.
-		const v = await view(RESPOND_SPEC_ID)
+		const v = await view(CHAT_RESPOND_SPEC_ID)
 		const stepOf = (label: string) =>
 			v.groups
 				.flatMap((g) => g.advanced)
@@ -170,7 +170,7 @@ describe("what ships", () => {
 
 	it("resolves assembly's layouts to sources at run time", async () => {
 		const world = await buildWorld(db, {
-			specId: RESPOND_SPEC_ID
+			specId: CHAT_RESPOND_SPEC_ID
 		})
 		const layouts = (resolveConfig(world, ["prompt"]).prompt?.variables ??
 			{}) as any
@@ -213,10 +213,10 @@ describe("what ships", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 			.limit(1)
 
-		const before = await charactersOption(RESPOND_SPEC_ID)
+		const before = await charactersOption(CHAT_RESPOND_SPEC_ID)
 		expect(typeof before.value).toBe("number")
 
 		// Rewind: drop every layout value, as an older version's config would
@@ -234,10 +234,10 @@ describe("what ships", () => {
 			db,
 			spec.id,
 			spec.activeVersionId!,
-			RESPOND_SPEC_ID
+			CHAT_RESPOND_SPEC_ID
 		)
 
-		const after = await charactersOption(RESPOND_SPEC_ID)
+		const after = await charactersOption(CHAT_RESPOND_SPEC_ID)
 		expect(after.value).toBe(before.value)
 		expect(after.variableTemplate?.name).toBe("Titled JSON block")
 	})
@@ -246,7 +246,7 @@ describe("what ships", () => {
 		// `core:var/history@1` matches `\bhistory\b`, and `history` is a node key
 		// in the respond spec. The payload is scanned for topology (05 §0a), so
 		// this field is deliberately server-side only.
-		const option = await charactersOption(RESPOND_SPEC_ID)
+		const option = await charactersOption(CHAT_RESPOND_SPEC_ID)
 		expect(JSON.stringify(option)).not.toContain("core:var/")
 	})
 })
@@ -259,7 +259,7 @@ describe("the picker", () => {
 			source: "{{#each personas}}{{this.name}}\n{{/each}}"
 		})
 
-		const option = await charactersOption(RESPOND_SPEC_ID)
+		const option = await charactersOption(CHAT_RESPOND_SPEC_ID)
 		expect(option.choices?.some((c) => c.id === foreign.id)).toBe(false)
 		// And it does offer the ones that belong to it.
 		const mine = await listVariableTemplates(db, CHARACTERS)
@@ -328,16 +328,16 @@ describe("cross-pipeline reuse", () => {
 			source: "{{#each characters}}{{this.name}} — {{this.description}}\n{{/each}}"
 		})
 
-		const respondOption = await charactersOption(RESPOND_SPEC_ID)
-		const narrateOption = await charactersOption(NARRATE_SPEC_ID)
+		const respondOption = await charactersOption(CHAT_RESPOND_SPEC_ID)
+		const narrateOption = await charactersOption(CHAT_NARRATE_SPEC_ID)
 
 		// Both pickers offer it, without it having been written "for" either.
 		expect(respondOption.choices?.some((c) => c.id === prose.id)).toBe(true)
 		expect(narrateOption.choices?.some((c) => c.id === prose.id)).toBe(true)
 
 		for (const [slug, option] of [
-			[RESPOND_SPEC_ID, respondOption],
-			[NARRATE_SPEC_ID, narrateOption]
+			[CHAT_RESPOND_SPEC_ID, respondOption],
+			[CHAT_NARRATE_SPEC_ID, narrateOption]
 		] as const)
 			await writeOption(
 				db,
@@ -348,7 +348,7 @@ describe("cross-pipeline reuse", () => {
 				prose.id
 			)
 
-		for (const slug of [RESPOND_SPEC_ID, NARRATE_SPEC_ID]) {
+		for (const slug of [CHAT_RESPOND_SPEC_ID, CHAT_NARRATE_SPEC_ID]) {
 			const after = await charactersOption(slug)
 			expect(after.value).toBe(prose.id)
 			expect(after.variableTemplate?.source).toContain(
@@ -363,11 +363,11 @@ describe("cross-pipeline reuse", () => {
 
 		// Release only the reply pipeline's selection. The narrator's still
 		// holds the row, and this is the case a per-spec check would miss.
-		const respondOption = await charactersOption(RESPOND_SPEC_ID)
+		const respondOption = await charactersOption(CHAT_RESPOND_SPEC_ID)
 		await clearOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			{ userId: adminId, isAdmin: true },
 			respondOption.id
 		)
@@ -393,7 +393,7 @@ describe("the runtime resolves what the panel shows", () => {
 	}
 
 	it("hands the node a template source, not a row id", async () => {
-		const layouts = await resolvedLayouts(NARRATE_SPEC_ID)
+		const layouts = await resolvedLayouts(CHAT_NARRATE_SPEC_ID)
 		expect(layouts.characters).toMatchObject({
 			source: expect.stringContaining("{{#each characters}}")
 		})
@@ -401,7 +401,7 @@ describe("the runtime resolves what the panel shows", () => {
 	})
 
 	it("renders through the selected layout", async () => {
-		const layouts = await resolvedLayouts(NARRATE_SPEC_ID)
+		const layouts = await resolvedLayouts(CHAT_NARRATE_SPEC_ID)
 		const cast = [{ name: "Ash", description: "A rider." }]
 		expect(await renderVariable(layouts as any, "characters", cast)).toBe(
 			"Ash — A rider.\n"
@@ -412,7 +412,7 @@ describe("the runtime resolves what the panel shows", () => {
 		// Cleared above for the reply pipeline: with no override, the shipped
 		// layout projected at `defaults` wins, and it renders what the old
 		// TypeScript rendered.
-		const layouts = await resolvedLayouts(RESPOND_SPEC_ID)
+		const layouts = await resolvedLayouts(CHAT_RESPOND_SPEC_ID)
 		const cast = [{ name: "Ash", description: "A rider." }]
 		expect(await renderVariable(layouts as any, "characters", cast)).toBe(
 			"Assistant Characters (AI-controlled):\n```json\n" +
@@ -451,21 +451,21 @@ describe("the mutation gate", () => {
 		return await variableOptionGate(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer,
 			id
 		)
 	}
 
 	it("resolves the option's variable for an admin", async () => {
-		const option = await charactersOption(RESPOND_SPEC_ID)
+		const option = await charactersOption(CHAT_RESPOND_SPEC_ID)
 		await expect(
 			gate({ userId: adminId, isAdmin: true }, option.id)
 		).resolves.toEqual({ variableId: CHARACTERS })
 	})
 
 	it("refuses a non-admin, where the panel would not have offered it", async () => {
-		const option = await charactersOption(RESPOND_SPEC_ID)
+		const option = await charactersOption(CHAT_RESPOND_SPEC_ID)
 		const [plain] = await db
 			.insert(schema.users)
 			.values({ username: "layout-guesser", isAdmin: false })
@@ -478,7 +478,7 @@ describe("the mutation gate", () => {
 	})
 
 	it("refuses an option that does not choose a layout", async () => {
-		const v = await view(RESPOND_SPEC_ID)
+		const v = await view(CHAT_RESPOND_SPEC_ID)
 		const other = groupOptions(v.groups)
 			.find((o) => o.control === "prompts-ref")!
 		await expect(
@@ -504,7 +504,7 @@ describe("who may change a layout", () => {
 			.values({ username: "layout-plain", isAdmin: false })
 			.returning()
 
-		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
+		const v = (await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, {
 			userId: plain.id,
 			isAdmin: false
 		})) as NamespaceView
@@ -512,7 +512,7 @@ describe("who may change a layout", () => {
 	})
 
 	it("lands an admin's global choice in the selected configuration", async () => {
-		const option = await charactersOption(RESPOND_SPEC_ID)
+		const option = await charactersOption(CHAT_RESPOND_SPEC_ID)
 		expect(option.writable).toBe(true)
 
 		// The selections written by the reuse test above live as the mutable

@@ -119,7 +119,7 @@ describe("creation as a run (24 §12)", () => {
 				fields: {}
 			}
 		})
-		expect(dispatched?.specSlug).toBe("core:spec/create-chat")
+		expect(dispatched?.specSlug).toBe("core:spec/chat-create")
 		expect((dispatched?.receipt as any)?.outcome).not.toBe("err")
 
 		const viaFloor = await makeSession("via-floor")

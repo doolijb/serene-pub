@@ -120,6 +120,16 @@ import { tokenize } from "$lib/server/pipelines/ranking/signals"
  * `buildGazetteer` → `distinctiveTokens` → `compileMatcher`, none of which this
  * change goes near. Their output is byte-identical, and a bump that re-extracts
  * work for a producer that did not move is the same lie in the other direction.
+ *
+ * ## Not bumped for `entity_label` (0097)
+ *
+ * Persisting the model's label changed what the writer STORES, not what this
+ * extracts: `Entity.label` was already on every model-tier entity, and no key,
+ * count or span moved. A bump would re-extract every row on every install —
+ * the lexical ones, which have no label to gain, included — so a model row
+ * written before 0097 keeps a NULL label until its text, vocabulary or entity
+ * model next moves. Nothing reads the label yet; the first reader that needs
+ * it on old rows is what earns the bump.
  */
 export const EXTRACTOR_VERSION = "core:extract/entities-heuristic@2"
 
@@ -857,12 +867,16 @@ export function extractEntities(
 			existing.count++
 			existing.spans.push({ start: span.start, end: span.end })
 			// The most confident mention is what the row records: a mention the
-			// model was sure of is not made less certain by a later hedge.
-			if (existing.tier === "model")
-				existing.confidence = Math.max(
-					existing.confidence ?? 0,
-					span.score
-				)
+			// model was sure of is not made less certain by a later hedge. Its
+			// label goes with it — one name read as PER and once, less surely,
+			// as ORG is a person, and the row stores one label.
+			if (
+				existing.tier === "model" &&
+				span.score > (existing.confidence ?? 0)
+			) {
+				existing.confidence = span.score
+				existing.label = span.label
+			}
 		} else {
 			found.set(key, {
 				key,

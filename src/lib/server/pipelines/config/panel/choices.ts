@@ -22,6 +22,7 @@ import {
 import { shapeOfModality } from "$lib/shared/constants/ConnectionTypes"
 import * as schema from "$lib/server/db/schema"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
+import { pipelineLabelsById } from "$lib/server/pipelines/entities/pipelineLabels"
 import { storedCapabilities } from "$lib/server/pipelines/runtime/capabilityGuard"
 import { contextPoolKeyFor } from "$lib/shared/pipelines/poolKey"
 import {
@@ -130,13 +131,12 @@ export async function choiceSets(db: Db, specId: number) {
 			.orderBy(asc(schema.pipelineContextTemplates.id))
 	).filter((r) => !off.owns(r.ownerPluginId))
 
-	const specRows = await db.select().from(schema.pipelineSpecs)
-	// The display name, not the slug: `from core:spec/respond` is the id a
-	// developer reads and `from Session reply` is the thing a user recognises,
-	// and this string is a subtitle in a picker.
-	const nameById = new Map<number, string>(
-		(specRows as any[]).map((r) => [r.id, r.name ?? r.slug])
-	)
+	// The display name, not the slug: `from core:spec/chat-respond` is the id a
+	// developer reads and `from Reply · Chat` is the thing a user recognises,
+	// and this string is a subtitle in a picker. The genre rides beside it
+	// (`pipelineLabelsById`): in the Lair's Reply, a row from Chat's would
+	// otherwise read `from Reply`, as if it were written here.
+	const nameById = await pipelineLabelsById(db)
 
 	const POOL_ORDER = { usedHere: 0, shipped: 1, alsoFits: 2 } as const
 

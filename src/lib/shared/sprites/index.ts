@@ -186,11 +186,14 @@ export function asShownSprite(value: unknown): ShownSprite | null {
  *  - The sprite lands on the ACTIVE swipe (`swipes.spriteHistory[currentIdx]`,
  *    kept parallel to `history`) and is mirrored to `metadata.sprite`.
  *  - A picker never overwrites a person's pick.
- *  - Writing what is already there is no write (`kept`), so a picker that
- *    chose nothing for a faceless line costs nothing and emits nothing.
+ *  - A picker's null pick writes nothing (`kept`): the line keeps what it
+ *    shows. Only a person clears a line's sprite (2026-10-05, the
+ *    `show-sprite` contract — the outlet now runs after every reply, faceless
+ *    or not, so "chose nothing" must not read as "show nothing").
+ *  - Writing what is already there is no write (`kept`).
  *
  * `pick` is untrusted (a port value): anything without a string set and label
- * clears the line's sprite.
+ * is no pick — a person's clears the line's sprite, a picker's is kept.
  */
 export function nextSpriteMetadata(
 	metadata: Record<string, any> | null | undefined,
@@ -208,7 +211,7 @@ export function nextSpriteMetadata(
 	const next: ShownSprite | null =
 		set && label ? { set, label, source: byPerson ? "person" : "picker" } : null
 	const existing = asShownSprite(meta.sprite)
-	if (!byPerson && existing?.source === "person")
+	if (!byPerson && (next === null || existing?.source === "person"))
 		return { kept: true, sprite: existing }
 	const same =
 		(next === null && existing === null) ||

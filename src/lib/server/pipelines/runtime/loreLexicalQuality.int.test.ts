@@ -53,7 +53,7 @@ import {
 	DEFAULT_RETRIEVAL,
 	DEFAULT_SIGNAL_WEIGHTS
 } from "$lib/server/pipelines/ranking/weights"
-import { respondSpec, RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { respondSpec, CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 
 // No embedding model: everything here belongs to the keyword mechanism, and the whole
 // point of the lexical stack is that it needs none (design §11).
@@ -175,7 +175,7 @@ beforeAll(async () => {
 		await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 			.limit(1)
 	)[0]
 }, 120_000)
@@ -193,7 +193,7 @@ const turn = async () =>
 		bindings: coreBindings(),
 		world: await buildWorld(db, {
 			sessionId,
-			specId: RESPOND_SPEC_ID
+			specId: CHAT_RESPOND_SPEC_ID
 		}),
 		host: createHost(db, { sessionId, userId }),
 		// Stops before the provider, which needs a connection this test has no
@@ -250,7 +250,7 @@ const selectedConfigId = async () => {
 	const selected = await resolveSelectedConfig(
 		db,
 		respondSpecRow.id,
-		RESPOND_SPEC_ID,
+		CHAT_RESPOND_SPEC_ID,
 		{ sessionId }
 	)
 	expect(selected, "the reply spec resolves to no configuration").toBeTruthy()

@@ -2339,7 +2339,7 @@
 					{/if}
 
 					<!-- One card per pipeline this session runs — the reply's,
-					     titled by its pipeline (*Adventure turn*), then each
+					     titled by its pipeline (*Reply*), then each
 					     enabled action's — each drawn by the settings panel at this
 					     session's scope: every model call's switch, Prompt, Model
 					     (read-only: a session names no model) and Sampling — each

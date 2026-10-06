@@ -26,7 +26,7 @@ import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import {
 	bootstrapPipelines,
-	RESPOND_SPEC_ID
+	CHAT_RESPOND_SPEC_ID
 } from "$lib/server/pipelines/boot/bootstrap"
 import {
 	declaredFieldsByPool,
@@ -48,17 +48,17 @@ beforeAll(async () => {
 	const [respond] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 	const decl = (await declarations(db, respond.activeVersionId!)).find(
 		(d) => d.control === "prompts-ref"
 	)!
 	pool = { nodeDefinitionId: decl.nodeDefinitionId!, slot: decl.slot }
 
-	const { NARRATE_SPEC_ID } = await import("$lib/server/pipelines/specs")
+	const { CHAT_NARRATE_SPEC_ID } = await import("$lib/server/pipelines/specs")
 	const [narrate] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, NARRATE_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_NARRATE_SPEC_ID))
 	const nDecl = (
 		await declarations(db, narrate.activeVersionId!)
 	).find((d) => d.control === "prompts-ref")!

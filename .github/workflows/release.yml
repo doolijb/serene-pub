@@ -40,7 +40,7 @@ jobs:
             - name: Set up Node.js
               uses: actions/setup-node@v4
               with:
-                  node-version: "24"
+                  node-version: "26"
 
             # Never interpolate ${{ github.ref_name }} directly into a run:
             # script body — GitHub substitutes it as raw text before bash
@@ -111,7 +111,7 @@ jobs:
             - name: Set up Node.js
               uses: actions/setup-node@v4
               with:
-                  node-version: "24"
+                  node-version: "26"
 
             - name: Fetch the SDK docs content
               uses: actions/download-artifact@v4
@@ -166,7 +166,7 @@ jobs:
             - name: Set up Node.js
               uses: actions/setup-node@v4
               with:
-                  node-version: "24"
+                  node-version: "26"
 
             - name: Fetch the SDK docs content
               uses: actions/download-artifact@v4
@@ -256,7 +256,7 @@ jobs:
             - name: Set up Node.js
               uses: actions/setup-node@v4
               with:
-                  node-version: "24"
+                  node-version: "26"
 
             - name: Fetch the app build
               uses: actions/download-artifact@v4
@@ -343,7 +343,7 @@ jobs:
             # SHASUMS256.txt before it goes anywhere near the zip.
             - name: Download Node.js runtime for the target
               env:
-                  NODE_VERSION: v24.18.0
+                  NODE_VERSION: v26.10.0
               run: |
                   case "$TARGET" in
                     linux-x64)   ARCHIVE="node-$NODE_VERSION-linux-x64.tar.xz" ;;
@@ -399,6 +399,29 @@ jobs:
 
             - name: Check dist bundle size
               run: node scripts/check-dist-size.js "$TARGET"
+
+            # Runs the bundle's own local-ONNX runtime with the bundle's own
+            # Node: embeds one sentence (scripts/onnx-smoke.mjs). Catches a
+            # runtime the prune left without the library its binding loads
+            # (dedupeOrtLibraries in prune-dist.js), and an Intel bundle that
+            # kept the stock runtime, which has no darwin/x64 build
+            # (scripts/onnxRuntimeOverride.js; --target checks the version).
+            # Before signing: it only reads the payload and writes to a temp dir.
+            - name: Smoke-test local ONNX in the bundle
+              shell: bash
+              run: |
+                  if [ "$RUNNER_OS" = "macOS" ]; then
+                    PAYLOAD="$(ls -d dist/serene-pub-*-"$TARGET"/serene-pub/"Serene Pub.app"/Contents/Resources/app | head -1)"
+                  else
+                    PAYLOAD="$(ls -d dist/serene-pub-*-"$TARGET"/serene-pub/app | head -1)"
+                  fi
+                  NODE_BIN="$PAYLOAD/node"
+                  if [ "$RUNNER_OS" = "Windows" ]; then NODE_BIN="$PAYLOAD/node.exe"; fi
+                  if [ -z "$PAYLOAD" ] || [ ! -x "$NODE_BIN" ]; then
+                    echo "::error::no bundled Node at '$NODE_BIN' (scripts/dist-layout.js)"
+                    exit 1
+                  fi
+                  "$NODE_BIN" scripts/onnx-smoke.mjs "$PAYLOAD" --target "$TARGET"
 
             # Ad-hoc signature over the finished bundle — after the payload is
             # complete, before zipping; nothing may touch the .app after this.

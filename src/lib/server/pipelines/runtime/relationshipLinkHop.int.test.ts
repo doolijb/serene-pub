@@ -36,7 +36,7 @@ import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
-import { respondSpec, RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { respondSpec, CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 
 // No embedding model: the lore mechanisms stay on the keyword path, which needs
 // no network. Nothing here asserts on the semantic one.
@@ -101,7 +101,7 @@ beforeAll(async () => {
 	const [spec] = await db
 		.select({ id: schema.pipelineSpecs.id })
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 	await db.insert(schema.pipelineNodeOverrides).values({
 		specId: spec!.id,
 		scopeKind: "session",
@@ -168,7 +168,7 @@ const turn = async (id: number) =>
 		},
 		seed: "seed:link-hop",
 		bindings: coreBindings(),
-		world: await buildWorld(db, { sessionId: id, specId: RESPOND_SPEC_ID }),
+		world: await buildWorld(db, { sessionId: id, specId: CHAT_RESPOND_SPEC_ID }),
 		host: createHost(db, { sessionId: id, userId }),
 		preview: true
 	} as any)

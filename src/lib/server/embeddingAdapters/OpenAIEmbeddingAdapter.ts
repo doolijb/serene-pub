@@ -1,18 +1,25 @@
 /**
  * Any OpenAI-compatible `/embeddings` endpoint.
  *
- * One adapter, every service behind that wire: OpenAI itself, LM Studio,
- * llama.cpp server, vLLM, a hosted gateway — the same argument `A1111Adapter`
- * makes for scoping by API FORMAT rather than by vendor.
+ * One adapter, every service behind that wire: OpenAI itself, OpenRouter,
+ * Gemini's compatibility layer, LocalAI, a hosted gateway — the same argument
+ * `A1111Adapter` makes for scoping by API FORMAT rather than by vendor.
  *
- * ⚠ Its own connection type rather than a capability on `openai`, because
- * `OpenAIChatAdapter` speaks `/v1/chat/completions` and nothing else; the
- * manifest's own note on that entry says image generation would be a different
- * route hence a different adapter, and `/embeddings` is that case again.
+ * The `embedding` module of the `openai` type (`adapters/registry.ts`): one
+ * OpenAI-compatible connection per service chats through `OpenAIChatAdapter`
+ * and embeds through this (owner ruling 2026-10-05), so `openai-embeddings`
+ * rows merge into `openai` at boot (`connections/openAIMultiModality.ts`). A
+ * module of its own because `/embeddings` is a different route from
+ * `/chat/completions`, the case the manifest's note on that entry makes for
+ * image generation. Whether a service embeds is the `text->embedding` switch
+ * — its preset's claim, or the person's — never this file's.
  *
- * Plain `fetch` rather than the `openai` package, which `embedding/index.ts`
- * used. The package adds retries and a client object for one POST with no
- * streaming, and the request body is three fields.
+ * The wire itself — request, auth header, response checks — is
+ * `./openAIEmbeddings`, shared with every other type that speaks it. What is
+ * this module's own is the base URL, taken exactly as typed (see `embedText`).
+ * Its `/models` listing and test answer only for a row the merge has not
+ * reached yet (⏳ `openai-embeddings`): an `openai` row is listed by its text
+ * adapter, and its test ends in a probe embed through this one (`adapterIO`).
  */
 
 import {
@@ -22,61 +29,13 @@ import {
 	type EmbeddingAdapterExports,
 	type EmbeddingModelOption
 } from "./BaseEmbeddingAdapter"
-
-/**
- * The base URL with one trailing slash removed.
- *
- * ⚠ Never append `/v1`. A base URL is what the person typed, half these services
- * want `/v1` on it and llama.cpp's server does not, so a suffix invented here is
- * wrong for one of them and unfixable from the form.
- */
-function root(baseUrl: string | null | undefined): string {
-	return (baseUrl ?? "").trim().replace(/\/+$/, "")
-}
-
-/**
- * This connection's key, decrypted.
- *
- * `extraJson.apiKey` is an encrypted envelope at rest (tokenCrypto) and
- * `decryptApiKeyField` also passes a legacy plaintext string through, which is
- * what keeps a row that has not been re-saved since working.
- *
- * ⚠ `tokenCrypto` is imported DYNAMICALLY and must stay that way. It imports
- * `$lib/server/db` for the root secret, and that module migrates a PGlite
- * database at import time — so a static import here would make constructing this
- * adapter, or merely loading its module in a unit test, pay a full database
- * migration. Same reason every entry in `ADAPTER_REGISTRY` is a thunk.
- */
-export async function embeddingApiKey(
-	connection: SelectConnection
-): Promise<string | null> {
-	const key = (connection.extraJson as any)?.apiKey
-	if (!key) return null
-	const { decryptApiKeyField } = await import("$lib/server/utils/tokenCrypto")
-	return decryptApiKeyField(key) ?? null
-}
-
-async function refusal(res: Response, what: string): Promise<Error> {
-	let detail = ""
-	try {
-		detail = (await res.text())?.slice(0, 500) ?? ""
-	} catch {
-		detail = ""
-	}
-	return new Error(
-		`Embeddings ${what} failed (${res.status})${detail ? `: ${detail}` : ""}`
-	)
-}
-
-async function headers(
-	connection: SelectConnection
-): Promise<Record<string, string>> {
-	const key = await embeddingApiKey(connection)
-	return {
-		"Content-Type": "application/json",
-		...(key ? { Authorization: `Bearer ${key}` } : {})
-	}
-}
+import {
+	embeddingApiKey,
+	embeddingsRefusal,
+	openAIHeaders,
+	postOpenAIEmbeddings
+} from "./openAIEmbeddings"
+import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 
 export class OpenAIEmbeddingAdapter extends BaseEmbeddingAdapter {
 	async embedText(
@@ -95,43 +54,32 @@ export class OpenAIEmbeddingAdapter extends BaseEmbeddingAdapter {
 			throw new Error(
 				"This embeddings connection names no model. Choose one on the connection."
 			)
-		const base = root(this.connection.baseUrl)
+		const base = normalizeBaseUrl(this.connection.baseUrl)
 		if (!base)
 			throw new Error(
 				"This embeddings connection has no base URL. Set one on the connection."
 			)
 
-		const res = await fetch(`${base}/embeddings`, {
-			method: "POST",
-			headers: await headers(this.connection),
-			body: JSON.stringify({ model, input: req.input }),
+		// `appendV1: false` — this type's base URL is used exactly as typed. Its
+		// rows conventionally carry the version segment already
+		// (`https://api.openai.com/v1`, `http://localhost:1234/v1`), and a `/v1`
+		// added here would double it on every one of them, from a form with no
+		// way to undo it. A llama-server is reached by typing its `/v1` too: its
+		// bare `/embeddings` is a different, non-OpenAI shape, which the shared
+		// response check refuses rather than misreads.
+		const answer = await postOpenAIEmbeddings({
+			baseUrl: base,
+			appendV1: false,
+			model,
+			input: req.input,
+			apiKey: await embeddingApiKey(this.connection),
 			signal: opts?.signal
 		})
-		if (!res.ok) throw await refusal(res, "request")
-
-		const body = (await res.json()) as {
-			data?: Array<{ index: number; embedding: number[] }>
-			model?: string
-		}
-		const data = body?.data
-		if (!Array.isArray(data) || data.length !== req.input.length)
-			throw new Error(
-				`The embeddings endpoint returned ${Array.isArray(data) ? data.length : 0} vectors for ${req.input.length} inputs.`
-			)
-
-		// ⚠ Sorted by the API's OWN index, never trusted to arrive in order. The
-		// spec says each item carries its index precisely because the response is
-		// not required to be ordered, and a vector filed against the wrong row is
-		// a retrieval failure that surfaces as bad results rather than an error.
-		const vectors = [...data]
-			.sort((a, b) => a.index - b.index)
-			.map((d) => d.embedding)
-
 		return {
-			vectors,
-			model: body.model ?? model,
-			dimensions: vectors[0]?.length ?? 0,
-			raw: body
+			vectors: answer.vectors,
+			model: answer.model ?? model,
+			dimensions: answer.dimensions,
+			raw: answer.raw
 		}
 	}
 }
@@ -139,11 +87,11 @@ export class OpenAIEmbeddingAdapter extends BaseEmbeddingAdapter {
 async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: EmbeddingModelOption[]; error?: string }> {
-	const base = root(connection.baseUrl)
+	const base = normalizeBaseUrl(connection.baseUrl)
 	if (!base) return { models: [], error: "No base URL is set." }
 	try {
 		const res = await fetch(`${base}/models`, {
-			headers: await headers(connection)
+			headers: openAIHeaders(await embeddingApiKey(connection))
 		})
 		// Not every compatible host serves `/models`; llama.cpp's server and a
 		// few gateways do not. That is a host without a catalogue, not a broken
@@ -152,7 +100,8 @@ async function listModels(
 		if (!res.ok)
 			return {
 				models: [],
-				error: (await refusal(res, "model list")).message
+				error: (await embeddingsRefusal(res, "Embeddings model list"))
+					.message
 			}
 		const body = (await res.json()) as { data?: Array<{ id?: string }> }
 		return {
@@ -168,7 +117,7 @@ async function listModels(
 async function testConnection(
 	connection: SelectConnection & { model?: string | null }
 ): Promise<{ ok: boolean; error?: string; extra?: Record<string, unknown> }> {
-	const base = root(connection.baseUrl)
+	const base = normalizeBaseUrl(connection.baseUrl)
 	if (!base) return { ok: false, error: "No base URL is set." }
 	// A REAL embed call, not a `/models` probe, when a model is named: a host
 	// that lists models and then refuses to embed with the one chosen is the

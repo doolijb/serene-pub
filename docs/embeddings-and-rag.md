@@ -22,7 +22,7 @@ The starred connection's queue reads **Running** while it indexes, then **Idle**
 
 :::warning If this didn't work
 - **The queue stays Idle with nothing done.** Press **Start** on the status card. If it says **Backend not loaded**, press **Load now**. See [Troubleshooting a stuck or empty queue](#troubleshooting-a-stuck-or-empty-queue).
-- **Local embeddings isn't offered.** It isn't available in the Android app; use a service or a computer on your network instead.
+- **Local embeddings (ONNX) is greyed out.** This device can't run it (Android, and some desktop builds); the card in the **New connection** dialog says why. Use a service, or Ollama or another embeddings host on a computer on your network.
 :::
 
 ## Embedding connections
@@ -32,9 +32,18 @@ An embedding connection is a connection like any other: a service, an address an
 | Service | Runs | Cost | Good for |
 | --- | --- | --- | --- |
 | **Local embeddings (ONNX)** | On this computer, offline | Free | Most people. Pick, download and star a model in the Connections view. See [Local ONNX models](./connections.md#local-onnx-models). |
-| **Ollama embeddings** | In Ollama, on this computer or your network | Free | People already running Ollama: any embedding model it has pulled. |
-| **Embeddings (OpenAI-compatible)** | A service such as OpenAI, or LM Studio or llama.cpp on your network | Per request on a paid service | No spare memory locally, or a preferred hosted model. |
+| **Ollama** | In Ollama, on this computer or your network | Free | People already running Ollama: any embedding model it has pulled. |
+| **LM Studio** | In LM Studio, on this computer or your network | Free | People already running LM Studio: any embedding model it has downloaded. |
+| **KoboldCPP, run by Serene Pub** | On this computer | Free | People already chatting through it: put an embedding model in its Models Directory and press **Use for embeddings**. It loads beside the chat model, on the processor, so neither unloads the other. See [Embeddings from the same connection](./connections.md#embeddings-from-the-same-connection). |
 | **KoboldCPP** | Your KoboldCPP | Free | A KoboldCPP connection with an embedding model loaded can answer embeddings on the same address as text. |
+| **Llama.cpp** | A `llama-server` started with `--embeddings` | Free | An embedding model you already serve with llama.cpp. |
+| **OpenAI-compatible services** | A service such as OpenAI, OpenRouter or Mistral, or LocalAI or vLLM on your network | Per request on a paid service | No spare memory locally, or a preferred hosted model. |
+
+Apart from the local ONNX models, embeddings come from the same connection that chats: there is no separate embeddings connection to add. Where the program says which of its models are embedding models (Ollama, LM Studio, KoboldCPP), only those are offered for embeddings, and never for chat.
+
+- **Llama.cpp** embeds only when `llama-server` was started with `--embeddings`, usually with an embedding model and nothing else. **Test** on the connection finds out, and from then on its model is offered for embeddings instead of chat. Until a test has said so, the connection isn't offered for embeddings.
+- **OpenAI-compatible services**: **OpenAI (Official)**, **OpenRouter**, **Google Gemini**, **Together AI**, **Mistral AI** and **LocalAI** can embed as soon as they're added. Any other, including a **Custom** address or a vLLM serving an embedding model, can embed once you switch on **Embeddings** under the connection's **What this connection can do**. These services don't say which of their models are embedding models, so choose one by name (OpenAI's is `text-embedding-3-small`, for example; **Add by name** adds one the list doesn't show).
+- A connection made as **Embeddings (OpenAI-compatible)** in an earlier version becomes an ordinary OpenAI-compatible connection the next time Serene Pub starts. It keeps its address, key and model, stays the embedding model if it was one, and nothing is indexed again.
 
 An administrator can also set the embedding model in **Admin › Defaults**, under **Embeddings**. It's the same choice as the star, and changing it asks first in the same way.
 
@@ -84,7 +93,7 @@ Adventure and the Lair search by meaning and by name too, as Chat does. A charac
 
 ### What a starred model costs per turn
 
-With a model **on this computer** (local, Ollama, KoboldCPP), these are work on your own hardware and nothing is billed. With a **paid service**, each is a billed request:
+With a model **on this computer** (local, Ollama, LM Studio, KoboldCPP, llama.cpp), these are work on your own hardware and nothing is billed. With a **paid service**, each is a billed request:
 
 - **Search by meaning**, when it searches: one request per turn. On **Automatic**, that's every turn; set **Off** if you want the index without the searches.
 - **Indexing the reply** once it lands: one request.
@@ -116,7 +125,7 @@ So pinning, switching off, archiving, reordering, editing keywords or dating an 
 
 Every stored embedding remembers which model and address made it. When you star a different model, Serene Pub counts the embeddings the new model can't use, tells you how many will be redone across how many lorebooks and sessions, and asks first. On confirm, those are deleted and indexing starts again with the new model. If there's nothing to redo (the first model on a new install, or the same model again), the star simply moves.
 
-Editing the starred connection's address or model counts as a change of model and asks the same way. The same address written differently (a trailing slash, capitals, the default port) is not a change. `localhost` and `127.0.0.1` count as two different addresses.
+Editing the starred connection's address or model counts as a change of model and asks the same way. The same address written differently (a trailing slash, capitals, the default port) is not a change. `localhost` and `127.0.0.1` count as two different addresses. The KoboldCPP run by Serene Pub is the exception: there is only one, so its embeddings remember the model alone, and changing its port never re-indexes.
 
 Unstarring, or deleting the starred connection, stops indexing and keeps the embeddings, so starring the same model again later picks up where it left off.
 
@@ -162,6 +171,8 @@ Lorebook entry rows and character rows carry a small icon for their own index st
 **Named entities** is a fourth section of the Connections view, with one service, **Local named entities (ONNX)**. Its models, from a small English one (about 67 MB) to larger multilingual ones, find the people, places and things a message names. Download one and star it with **Use for entity extraction**.
 
 It helps lore be matched by name even when nobody set a keyword, or when a scene writes a name in lower case. Without it, Serene Pub matches on the names the lorebook already knows and on capitalised words, which works well for most books.
+
+Once downloaded, the model works without an internet connection. It reads a long entry or message all the way through, a piece at a time. While the model is loaded, it also reads the scene each reply is written from, so lore can be found by a name the scene has only just mentioned. When it has been unloaded after its [idle timeout](#model-idle-timeout), replies don't wait for it to load again: the scene is matched on known names and capitalised words, as it would be without a model.
 
 Starring a different entity model asks first and says how many rows will be re-read. Like embeddings, only a change to the text re-reads a row.
 

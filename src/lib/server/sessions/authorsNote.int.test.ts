@@ -39,7 +39,7 @@ async function receipt(sessionId: number, runId: string, nodes: unknown[]) {
 	const at = new Date()
 	await db.insert(schema.pipelineRuns).values({
 		runId,
-		specSlug: "core:spec/respond",
+		specSlug: "core:spec/chat-respond",
 		specVersion: "1.21.0",
 		sessionId,
 		userId: owner,

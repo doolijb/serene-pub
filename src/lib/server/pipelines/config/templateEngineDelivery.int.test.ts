@@ -38,7 +38,7 @@ import { eq } from "drizzle-orm"
 import { resolveConfigSources } from "@serene-pub/sdk"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 import {
 	CORE_TEMPLATE_ENGINE,
 	TemplateEngineError,
@@ -95,7 +95,7 @@ beforeAll(async () => {
 	const [spec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 	specId = spec.id
 
 	// Read rather than hardcoded: the slot's name is the spec author's, and a
@@ -129,7 +129,7 @@ const templateSlotValue = async () => {
 	const { buildWorld } = await import("$lib/server/pipelines/config/world")
 	const world = await buildWorld(db, {
 		sessionId,
-		specId: RESPOND_SPEC_ID
+		specId: CHAT_RESPOND_SPEC_ID
 	})
 	const sourced = resolveConfigSources(world as any, [templateNodeKey])
 	const slot = sourced[templateNodeKey]?.[templateSlot]

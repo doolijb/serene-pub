@@ -86,10 +86,10 @@ export async function restoreFromAttic(
 	)
 	const { allEntryTypes } = await import("@serene-pub/sdk")
 	await import("@serene-pub/core-catalog")
-	const { RESPOND_VERSION } = await import("$lib/server/pipelines/specs/respond")
+	const { CHAT_RESPOND_VERSION } = await import("$lib/server/pipelines/specs/respond")
 
 	const report = await db.transaction(async (tx) => {
-		await syncDefinitionRegistry(tx, allEntryTypes(), { release: RESPOND_VERSION })
+		await syncDefinitionRegistry(tx, allEntryTypes(), { release: CHAT_RESPOND_VERSION })
 
 		const [settings] = await tx.select().from(attic.systemSettings).limit(1)
 		const [vc] = await tx.select().from(attic.vectorizationConfigs).limit(1)
@@ -170,6 +170,18 @@ export async function restoreFromAttic(
 					`so nothing was changed and the upgrade will be retried at the next start:\n · ` +
 					wrong.join("\n · ")
 			)
+
+		// The last of those repairs, after the count: the reconciliation finds
+		// the embedding connection's model by the modality the ETL wrote, and
+		// this renames an `openai-embeddings` row onto `openai` (`text-gen`) —
+		// in place, no row coming or going. Its key may still be quarantined;
+		// `migrateEmbeddingConnection` finds it by that. The renamed row's
+		// cache is then rebuilt as the type it now is, as the sync would.
+		const { mergeOpenAIEmbeddingsType } = await import(
+			"$lib/server/connections/openAIMultiModality"
+		)
+		if ((await mergeOpenAIEmbeddingsType(tx)).renamed)
+			await refreshConnectionCapabilityCaches(tx)
 
 		await noteUncarriedConfigParts(ctx)
 		summarize(ctx, await carriedVectorCounts(tx))

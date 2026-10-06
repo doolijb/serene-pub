@@ -181,7 +181,7 @@ describe("the shipped prompt catalog is seedable", () => {
 		const claimants = CORE_PROMPTS.filter(
 			(p) =>
 				p.nodeType === "core:task/build-template-context" &&
-				p.defaultForSpecs.includes("core:spec/respond")
+				p.defaultForSpecs.includes("core:spec/chat-respond")
 		)
 		expect(claimants.map((p) => p.name)).toEqual(["Roleplay - Living Scene"])
 		const simple = CORE_PROMPTS.find((p) => p.name === "Roleplay - Simple")

@@ -503,6 +503,52 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 	}
 }
 
+/**
+ * What one listed model is FOR, in the app's modality words, from the
+ * `architecture.output_modalities` OpenRouter puts on every entry (and any
+ * OpenAI-compatible host that copies its shape).
+ *
+ * Only a one-sided answer is an answer, as for Ollama's `capabilities`
+ * (`ollamaModelModality`): `embeddings` without `text` is an embedding model,
+ * `text` without `embeddings` a text model — an image or audio model that also
+ * writes text included, since it can chat. Both, neither, or no list at all is
+ * undefined, which the sync stores as NULL and `capabilityRefusal` leaves
+ * ungated. Most services' `/models` say nothing here, and nothing guesses from
+ * a model's id.
+ */
+export function openAIModelModality(entry: unknown): string | undefined {
+	const out = (
+		entry as { architecture?: { output_modalities?: unknown } } | null
+	)?.architecture?.output_modalities
+	if (!Array.isArray(out)) return undefined
+	const embeds = out.includes("embeddings")
+	const writes = out.includes("text")
+	if (embeds === writes) return undefined
+	return embeds ? "embeddings" : "text-gen"
+}
+
+/**
+ * Whether this connection lists from OpenRouter: its preset says so, or its
+ * address is OpenRouter's whatever the preset.
+ */
+function isOpenRouter(connection: SelectConnection, baseURL: string): boolean {
+	if (connection.preset === "openrouter") return true
+	try {
+		return new URL(baseURL).hostname.toLowerCase() === "openrouter.ai"
+	} catch {
+		return false
+	}
+}
+
+/**
+ * OpenRouter's `/models` lists only text models unless asked
+ * (`output_modalities` defaults to `text`), so its embedding models would
+ * never be listed — and the sync would mark a starred one missing. Asked for
+ * both, the two the `openai` type serves; nothing else, because every listed
+ * model is a row in the pickers.
+ */
+const OPENROUTER_LISTING = { output_modalities: "text,embeddings" }
+
 async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
@@ -520,9 +566,21 @@ async function listModels(
 				"User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)"
 			}
 		})
-		const res = await openai.models.list()
+		const res = await openai.models.list(
+			isOpenRouter(connection, baseURL)
+				? { query: OPENROUTER_LISTING }
+				: undefined
+		)
 		if (res && Array.isArray(res.data)) {
-			return { models: res.data }
+			// The entries ride along whole, so `readModelFacts` reads the
+			// context window, price and input modalities they carry; what each
+			// model is FOR is added where the host said (`openAIModelModality`).
+			return {
+				models: res.data.map((m) => {
+					const modality = openAIModelModality(m)
+					return modality ? { ...m, modality } : m
+				})
+			}
 		} else {
 			return {
 				models: [],

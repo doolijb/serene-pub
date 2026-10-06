@@ -258,7 +258,7 @@ describe("plugins:installLocal — the projection", () => {
 			expect(row.activeVersionId).not.toBeNull()
 		}
 		// Core's are untouched.
-		expect((await specRow("core:spec/respond")).sourcePluginId).toBeNull()
+		expect((await specRow("core:spec/chat-respond")).sourcePluginId).toBeNull()
 
 		// The configs: one over the package's own spec, one over core's — the
 		// second is the case a `source_plugin_id` on the spec cannot express.
@@ -269,7 +269,7 @@ describe("plugins:installLocal — the projection", () => {
 		// Keyed per spec (`plugin:<id>:<spec>#<slug>`): a config slug is scoped
 		// to its spec, so two specs may ship the same slug without colliding.
 		expect(configs.map((c) => c.seedKey).sort()).toEqual([
-			`plugin:${SLUG}:core:spec/respond#tally-flavoured`,
+			`plugin:${SLUG}:core:spec/chat-respond#tally-flavoured`,
 			`plugin:${SLUG}:${RESPOND}#tally-default`
 		])
 		const own = configs.find((c) => c.seedKey!.endsWith("tally-default"))!
@@ -291,7 +291,7 @@ describe("plugins:installLocal — the projection", () => {
 		const foreign = configs.find((c) =>
 			c.seedKey!.endsWith("tally-flavoured")
 		)!
-		expect(foreign.specId).toBe((await specRow("core:spec/respond")).id)
+		expect(foreign.specId).toBe((await specRow("core:spec/chat-respond")).id)
 
 		// (3) The frame is servable: the declared entry AND what it loads.
 		const { frameSrc, readPluginFile } = await import(
@@ -413,7 +413,7 @@ describe("plugins:installLocal — the projection", () => {
 		expect(await specOwnerPluginId(db as any, CREATE)).toBe(SLUG)
 		// Core's specs are owned by nobody — the same absence a host with no
 		// owner has, not a lookup that failed.
-		expect(await specOwnerPluginId(db as any, "core:spec/respond")).toBeUndefined()
+		expect(await specOwnerPluginId(db as any, "core:spec/chat-respond")).toBeUndefined()
 
 		const { createHost } = await import(
 			"$lib/server/pipelines/runtime/host"
@@ -424,7 +424,7 @@ describe("plugins:installLocal — the projection", () => {
 			ownerPluginId: SLUG
 		})
 		expect(owned.ownerPluginId).toBe(SLUG)
-		expect(createHost(db as any, { specId: "core:spec/respond" }).ownerPluginId)
+		expect(createHost(db as any, { specId: "core:spec/chat-respond" }).ownerPluginId)
 			.toBeUndefined()
 
 		// …and a built-in write is refused by OWNERSHIP, not by the id: this

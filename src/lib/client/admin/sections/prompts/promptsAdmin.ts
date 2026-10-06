@@ -21,7 +21,7 @@ type Pipeline = Pick<
 >
 
 /** The pipelines with a step whose prompts slot reads this prompt's pool. */
-export function pipelinesFitting(prompt: Prompt, pipelines: readonly Pipeline[]): Pipeline[] {
+export function pipelinesFitting<P extends Pipeline>(prompt: Prompt, pipelines: readonly P[]): P[] {
 	return pipelines.filter((p) => (p.promptPools ?? []).includes(prompt.poolId))
 }
 

@@ -46,10 +46,10 @@ describe("preset bindings validation", () => {
 				eq(schema.sessionPresets.seedKey, "core-chat-default")
 			)) as any[]
 		expect(preset.bindings["core:event/session-created@1"]?.spec).toBe(
-			"core:spec/create-chat"
+			"core:spec/chat-create"
 		)
 		expect(preset.bindings["core:event/message-respond@1"]?.spec).toBe(
-			"core:spec/respond"
+			"core:spec/chat-respond"
 		)
 	}, 60_000)
 
@@ -65,7 +65,7 @@ describe("preset bindings validation", () => {
 		const id = created.preset!.id
 		// The create defaulted the bindings from the locks.
 		expect(created.preset!.bindings["core:event/message-respond@1"]?.spec).toBe(
-			"core:spec/respond"
+			"core:spec/chat-respond"
 		)
 
 		const wrong = await sessionPresetsUpdate.handler(
@@ -73,9 +73,9 @@ describe("preset bindings validation", () => {
 			{
 				id,
 				bindings: {
-					"core:event/session-created@1": { spec: "core:spec/create-chat" },
+					"core:event/session-created@1": { spec: "core:spec/chat-create" },
 					// narrate answers session-action, not message-respond.
-					"core:event/message-respond@1": { spec: "core:spec/narrate" }
+					"core:event/message-respond@1": { spec: "core:spec/chat-narrate" }
 				}
 			},
 			noop
@@ -88,7 +88,7 @@ describe("preset bindings validation", () => {
 				id,
 				enabled: true,
 				bindings: {
-					"core:event/session-created@1": { spec: "core:spec/create-chat" }
+					"core:event/session-created@1": { spec: "core:spec/chat-create" }
 				}
 			},
 			noop
@@ -100,9 +100,9 @@ describe("preset bindings validation", () => {
 			{
 				id,
 				bindings: {
-					"core:event/session-created@1": { spec: "core:spec/create-chat" },
+					"core:event/session-created@1": { spec: "core:spec/chat-create" },
 					"core:event/message-respond@1": {
-						spec: "core:spec/respond",
+						spec: "core:spec/chat-respond",
 						config: 999999
 					}
 				}
@@ -116,8 +116,8 @@ describe("preset bindings validation", () => {
 			{
 				id,
 				bindings: {
-					"core:event/session-created@1": { spec: "core:spec/create-chat" },
-					"core:event/message-respond@1": { spec: "core:spec/respond" }
+					"core:event/session-created@1": { spec: "core:spec/chat-create" },
+					"core:event/message-respond@1": { spec: "core:spec/chat-respond" }
 				}
 			},
 			noop
@@ -165,16 +165,16 @@ describe("the genre dashboard", () => {
 			{ genreId: "core:genre/chat" },
 			noop
 		)
-		expect(res.genre?.createSpecSlug).toBe("core:spec/create-chat")
+		expect(res.genre?.createSpecSlug).toBe("core:spec/chat-create")
 		const respond = res.slots.find((s) => s.event === "core:event/message-respond@1")
 		expect(respond?.required).toBe(true)
 		expect(respond?.candidates.map((c) => c.slug)).toContain(
-			"core:spec/respond"
+			"core:spec/chat-respond"
 		)
 		const action = res.slots.find((s) => s.event === "core:event/session-action@1")
 		expect(action?.open).toBe(true)
 		expect(action?.candidates.map((c) => c.slug)).toContain(
-			"core:spec/narrate"
+			"core:spec/chat-narrate"
 		)
 		expect(res.presets.length).toBeGreaterThan(0)
 	}, 60_000)
@@ -204,7 +204,7 @@ describe("the configurations index", () => {
 				eq(schema.pipelineSpecs.id, schema.pipelineConfigs.specId)
 			)
 			.where(
-				eq(schema.pipelineSpecs.slug, "core:spec/respond")
+				eq(schema.pipelineSpecs.slug, "core:spec/chat-respond")
 			)) as any[]
 		const cfgId = respondConfig[0].id
 
@@ -218,9 +218,9 @@ describe("the configurations index", () => {
 			{
 				id: created.preset!.id,
 				bindings: {
-					"core:event/session-created@1": { spec: "core:spec/create-chat" },
+					"core:event/session-created@1": { spec: "core:spec/chat-create" },
 					"core:event/message-respond@1": {
-						spec: "core:spec/respond",
+						spec: "core:spec/chat-respond",
 						config: cfgId
 					}
 				}
@@ -248,7 +248,7 @@ describe("the preset decides the run", () => {
 		const [respond] = (await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/respond"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-respond"))
 			.limit(1)) as any[]
 		const [spec] = (await db
 			.insert(schema.pipelineSpecs)
@@ -315,7 +315,7 @@ describe("the preset decides the run", () => {
 			{
 				id: presetId,
 				bindings: {
-					"core:event/session-created@1": { spec: "core:spec/create-chat" },
+					"core:event/session-created@1": { spec: "core:spec/chat-create" },
 					"core:event/message-respond@1": { spec: clone }
 				}
 			},
@@ -353,7 +353,7 @@ describe("the preset decides the run", () => {
 			await resolveSubjectSpec(db as any, GENRE, "core:event/message-respond@1", {
 				sessionId: plain.id
 			})
-		).toBe("core:spec/respond")
+		).toBe("core:spec/chat-respond")
 	}, 60_000)
 
 	test("a preset naming a configuration gets that configuration", async () => {
@@ -364,12 +364,12 @@ describe("the preset decides the run", () => {
 		const [spec] = (await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/respond"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-respond"))
 			.limit(1)) as any[]
 		const shipped = await resolveSelectedConfig(
 			db as any,
 			spec.id,
-			"core:spec/respond",
+			"core:spec/chat-respond",
 			{}
 		)
 		const copy = await duplicateConfig(
@@ -384,9 +384,9 @@ describe("the preset decides the run", () => {
 			{
 				id: presetId,
 				bindings: {
-					"core:event/session-created@1": { spec: "core:spec/create-chat" },
+					"core:event/session-created@1": { spec: "core:spec/chat-create" },
 					"core:event/message-respond@1": {
-						spec: "core:spec/respond",
+						spec: "core:spec/chat-respond",
 						config: copy.id
 					}
 				}
@@ -398,7 +398,7 @@ describe("the preset decides the run", () => {
 		const selected = await resolveSelectedConfig(
 			db as any,
 			spec.id,
-			"core:spec/respond",
+			"core:spec/chat-respond",
 			{ sessionId }
 		)
 		expect(selected?.configId).toBe(copy.id)
@@ -421,12 +421,12 @@ describe("the preset decides the run", () => {
 		const [narrate] = (await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/narrate"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-narrate"))
 			.limit(1)) as any[]
 		const shipped = await resolveSelectedConfig(
 			db as any,
 			narrate.id,
-			"core:spec/narrate",
+			"core:spec/chat-narrate",
 			{}
 		)
 		const copy = await duplicateConfig(
@@ -439,7 +439,7 @@ describe("the preset decides the run", () => {
 			admin(),
 			{
 				id: presetId,
-				configSelections: { "core:spec/narrate": copy.id }
+				configSelections: { "core:spec/chat-narrate": copy.id }
 			},
 			noop
 		)
@@ -447,7 +447,7 @@ describe("the preset decides the run", () => {
 		const selected = await resolveSelectedConfig(
 			db as any,
 			narrate.id,
-			"core:spec/narrate",
+			"core:spec/chat-narrate",
 			{ sessionId }
 		)
 		expect(selected?.configId).toBe(copy.id)
@@ -463,12 +463,12 @@ describe("the preset decides the run", () => {
 		const [spec] = (await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/respond"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-respond"))
 			.limit(1)) as any[]
 		const shipped = await resolveSelectedConfig(
 			db as any,
 			spec.id,
-			"core:spec/respond",
+			"core:spec/chat-respond",
 			{}
 		)
 
@@ -496,8 +496,8 @@ describe("the preset decides the run", () => {
 			.update(schema.sessionPresets)
 			.set({
 				bindings: {
-					"core:event/session-created@1": { spec: "core:spec/create-chat" },
-					"core:event/message-respond@1": { spec: "core:spec/narrate" }
+					"core:event/session-created@1": { spec: "core:spec/chat-create" },
+					"core:event/message-respond@1": { spec: "core:spec/chat-narrate" }
 				}
 			})
 			.where(eq(schema.sessionPresets.id, presetId))
@@ -513,12 +513,12 @@ describe("the preset decides the run", () => {
 			{ sessionId }
 		)
 		// The genre's own answer runs — the session keeps working.
-		expect(verdict.spec).toBe("core:spec/respond")
+		expect(verdict.spec).toBe("core:spec/chat-respond")
 		// And the substitution is stated, by preset and by slug.
 		expect(verdict.fallback?.preset).toBe("Went stale")
-		expect(verdict.fallback?.bound).toBe("core:spec/narrate")
+		expect(verdict.fallback?.bound).toBe("core:spec/chat-narrate")
 		expect(verdict.fallback?.event).toBe("core:event/message-respond@1")
-		expect(verdict.fallback?.reason).toMatch(/core:spec\/narrate/)
+		expect(verdict.fallback?.reason).toMatch(/core:spec\/chat-narrate/)
 
 		// The reply seam agrees with the dispatch seam, as it must.
 		const { resolveSubjectVerdict } = await import(
@@ -530,8 +530,8 @@ describe("the preset decides the run", () => {
 			"core:event/message-respond@1",
 			{ sessionId }
 		)
-		expect(reply.spec).toBe("core:spec/respond")
-		expect(reply.fallback?.bound).toBe("core:spec/narrate")
+		expect(reply.spec).toBe("core:spec/chat-respond")
+		expect(reply.fallback?.bound).toBe("core:spec/chat-narrate")
 	}, 60_000)
 })
 

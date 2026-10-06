@@ -163,7 +163,7 @@ describe("tiny 0.5.3 fixture, dev-mode meta", () => {
 		const sel = await rows<{ seed_key: string; name: string; config_id: number }>(sql`
 			SELECT c.seed_key, c.name, c.id AS config_id FROM pipeline_config_selections s
 			JOIN pipeline_configs c ON c.id = s.config_id JOIN pipeline_specs p ON p.id = s.spec_id
-			WHERE p.slug = 'core:spec/respond' AND s.scope_kind = 'pub'`)
+			WHERE p.slug = 'core:spec/chat-respond' AND s.scope_kind = 'pub'`)
 		expect(sel).toHaveLength(1)
 		expect(sel[0].name).toBe("Neutral - Session")
 		const prompts = await rows<{ seed_key: string }>(sql`

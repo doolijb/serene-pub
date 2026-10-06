@@ -171,7 +171,7 @@ describe("pause", () => {
  *
  * A doc slug stopped being one word when the SDK reference pages arrived: they
  * are namespaced under their source and named after node ids, so
- * "sdk/pipelines/core_spec_respond" has to survive the round trip. The regexes
+ * "sdk/pipelines/core_spec_chat-respond" has to survive the round trip. The regexes
  * matched `[a-z0-9-]+` and quietly fell through to the Document View home
  * instead — which looks like the toggle working, on the wrong page.
  */
@@ -188,7 +188,7 @@ describe("documentation route mapping", () => {
 
 	it("maps a reference page whose slug has slashes and underscores", async () => {
 		const m = await loadModule()
-		const slug = "sdk/pipelines/core_spec_respond"
+		const slug = "sdk/pipelines/core_spec_chat-respond"
 		expect(m.mapToAccessibleRoute(`/docs/${slug}`)).toBe(
 			`/document-view/docs/${slug}`
 		)

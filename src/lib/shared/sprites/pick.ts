@@ -1,7 +1,8 @@
 /**
- * The default sprite picker's arithmetic (`core:task/pick-sprite-similarity@1`,
- * DESIGN-sprites §5.2). Pure — no db, no model — so it is unit-tested here and
- * the binding is a wrapper.
+ * The sprite picker's arithmetic (`core:oracle/pick-sprite@1`, DESIGN-sprites
+ * §5.2). Pure — no db, no model — so it is unit-tested here, and the picker's
+ * binding hands it what the host read and embedded. The Sprites tab's test box
+ * (`characters:testSprite`) runs the same function.
  *
  * 1. Cosine similarity between the line and each sprite label.
  * 2. A small **recency penalty** on labels the speaker showed in its recent

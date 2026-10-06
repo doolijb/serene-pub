@@ -16,6 +16,7 @@
 	 * the layout names `pageIds`; the widget skin applies to the box
 	 * through `WidgetHost`.
 	 */
+	import { v4 as uuid } from "uuid"
 	import { onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import type { SessionV1, WidgetBaseSection, WidgetSectionScope } from "@serene-pub/sdk"
@@ -241,7 +242,7 @@
 			"invoke"
 		]
 		for (const type of boxEvents) box.addEventListener(type, stopAtBox)
-		const mountId = crypto.randomUUID()
+		const mountId = uuid()
 		// Named by its module, so a worker that has imported too many is
 		// recycled (`uiWorkers.ts`, C6 P5); released by the worker it took.
 		const worker = acquireWorker(owner, src)

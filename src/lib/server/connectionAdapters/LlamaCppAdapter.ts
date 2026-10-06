@@ -23,6 +23,8 @@ import { JSON_OBJECT_GBNF } from "./jsonGrammar"
 import { jsonSchemaToGbnf } from "./jsonSchemaToGbnf"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import { LLM_IDLE_TIMEOUT_MS } from "./idleTimeout"
+import { openAIEmbeddingsUrl } from "$lib/server/embeddingAdapters/openAIEmbeddings"
+import { topGrade } from "@serene-pub/sdk"
 
 /**
  * What llama.cpp says about the prompt, and how much of it the KV cache held.
@@ -788,9 +790,56 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 	}
 }
 
+/** How long the embeddings probe may take; the same budget KoboldCPP's has. */
+const EMBEDDINGS_PROBE_TIMEOUT_MS = 5000
+
+/**
+ * Whether this llama-server embeds: `true`, `false`, or `null` when it could
+ * not be asked (down, loading a model, busy past the timeout).
+ *
+ * ⚠ A one-word `POST /v1/embeddings`, because nothing cheaper says so.
+ * `--embeddings` is visible in neither `/props` (no field for it) nor
+ * `/v1/models` (`capabilities` is always `["completion"]`), checked against
+ * llama-server's source on 2026-10-05. The probe is the exact call
+ * `LlamaCppEmbeddingAdapter` makes, so it cannot pass where the lane would fail.
+ * A server started without the flag refuses it before touching the model (501,
+ * "This server does not support embeddings"), so on a chat server it costs a
+ * round trip and nothing more.
+ *
+ * `false` only for an answer that says no: 501 (no `--embeddings`), 400
+ * (pooling `none`, which the OpenAI route refuses), 404 (a build older than the
+ * route), or a success that carries no vector.
+ */
+export async function llamaCppServesEmbeddings(
+	baseUrl: string,
+	model?: string | null
+): Promise<boolean | null> {
+	try {
+		const res = await axios.post(
+			openAIEmbeddingsUrl(baseUrl, true),
+			{ ...(model ? { model } : {}), input: ["probe"] },
+			{
+				headers: { "Content-Type": "application/json" },
+				timeout: EMBEDDINGS_PROBE_TIMEOUT_MS,
+				validateStatus: () => true
+			}
+		)
+		const status = res?.status
+		if (typeof status !== "number") return null
+		if (status >= 200 && status < 300) {
+			const vector = (res.data as any)?.data?.[0]?.embedding
+			return Array.isArray(vector) && vector.length > 0
+		}
+		if (status === 501 || status === 400 || status === 404) return false
+		return null
+	} catch {
+		return null
+	}
+}
+
 async function testConnection(
 	connection: SelectConnection
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; extra?: Record<string, unknown> }> {
 	try {
 		const baseUrl =
 			normalizeBaseUrl(connection.baseUrl) || "http://localhost:8080"
@@ -802,7 +851,25 @@ async function testConnection(
 			"status" in res.data &&
 			res.data.status === "ok"
 		) {
-			return { ok: true }
+			// What this server can do RIGHT NOW: whether it was started with
+			// `--embeddings`. The probe layer for the manifest's unproven
+			// `text->embedding`; left out when the server could not be asked,
+			// so a busy server keeps the last answer instead of losing it.
+			const embeds = await llamaCppServesEmbeddings(
+				baseUrl,
+				(connection as { model?: string | null }).model
+			)
+			if (embeds === null) return { ok: true }
+			return {
+				ok: true,
+				extra: {
+					capabilities: {
+						"text->embedding": embeds
+							? topGrade("text->embedding")
+							: 0
+					}
+				}
+			}
 		} else {
 			return {
 				ok: false,
@@ -814,23 +881,54 @@ async function testConnection(
 	}
 }
 
+/**
+ * The one model this llama-server was started with, and what it is for.
+ *
+ * `GET /v1/models`, whose `data[0].id` is the model's alias or file name. This
+ * read `/show` until 2026-10-05 — a route llama-server has never served, so
+ * every listing (and with it every Test, which lists too) failed with a 404.
+ *
+ * The modality is the embeddings probe's answer (`llamaCppServesEmbeddings`):
+ * a server started with `--embeddings` is an embedding server, so its model is
+ * `embeddings` and is kept out of the chat picker; otherwise `text-gen`. A probe
+ * that could not be asked fails the whole listing, the way KoboldCPP's does:
+ * a model listed with no modality would be stored as "nobody said", undoing
+ * what the last listing knew every time the server is busy.
+ */
 async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
 	try {
 		const baseUrl =
 			normalizeBaseUrl(connection.baseUrl) || "http://localhost:8080"
-		const res = await axios.get<{ model?: string }>(baseUrl + "/show")
-		if (res && typeof res.data === "object" && res.data.model) {
-			return {
-				models: [{ model: res.data.model, name: res.data.model }],
-				error: undefined
-			}
-		} else {
+		const res = await axios.get<{
+			data?: Array<{ id?: unknown }>
+			models?: Array<{ model?: unknown; name?: unknown }>
+		}>(baseUrl + "/v1/models")
+		const body = res?.data
+		const id = [body?.data?.[0]?.id, body?.models?.[0]?.model].find(
+			(v): v is string => typeof v === "string" && !!v.trim()
+		)
+		if (!id)
 			return {
 				models: [],
 				error: "No model loaded or unexpected response from llama.cpp server"
 			}
+		const embeds = await llamaCppServesEmbeddings(baseUrl, id.trim())
+		if (embeds === null)
+			return {
+				models: [],
+				error: "llama.cpp did not say whether it serves embeddings — it may be loading a model or busy."
+			}
+		return {
+			models: [
+				{
+					model: id.trim(),
+					name: id.trim(),
+					modality: embeds ? "embeddings" : "text-gen"
+				}
+			],
+			error: undefined
 		}
 	} catch (e: any) {
 		return { models: [], error: e.message || String(e) }

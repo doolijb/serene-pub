@@ -95,7 +95,7 @@ describe("sessions:actions — the contributed set", () => {
 				key: "narrate",
 				venue: "composer",
 				name: "Narrate",
-				specSlug: "core:spec/narrate"
+				specSlug: "core:spec/chat-narrate"
 			})
 		)
 
@@ -108,7 +108,7 @@ describe("sessions:actions — the contributed set", () => {
 			expect.objectContaining({
 				key: "narrate-character",
 				venue: "composer",
-				specSlug: "core:spec/narrate-character"
+				specSlug: "core:spec/chat-side-character"
 			})
 		)
 
@@ -178,7 +178,7 @@ describe("sessions:fireAction", () => {
 				STANDARD_GENRE_ID,
 				NARRATE_CHARACTER_ACTION
 			)
-		).toBe("core:spec/narrate-character")
+		).toBe("core:spec/chat-side-character")
 		// And the world narrator still answers its own, unmoved by the split.
 		expect(
 			await resolveSubjectSpec(
@@ -186,7 +186,7 @@ describe("sessions:fireAction", () => {
 				STANDARD_GENRE_ID,
 				NARRATE_ACTION
 			)
-		).toBe("core:spec/narrate")
+		).toBe("core:spec/chat-narrate")
 	})
 
 	test("a function nothing serves refuses with the reason", async () => {
@@ -316,7 +316,7 @@ describe("a session's action set gates both the surface and the fire", () => {
 		const [spec] = await testDb
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/respond"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-respond"))
 			.limit(1)
 		const [cfg] = await testDb
 			.insert(schema.pipelineConfigs)

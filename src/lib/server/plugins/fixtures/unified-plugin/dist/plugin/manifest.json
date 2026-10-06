@@ -164,7 +164,7 @@
       }
     },
     {
-      "spec": "core:spec/respond",
+      "spec": "core:spec/chat-respond",
       "slug": "tally-flavoured",
       "label": "Tally flavoured",
       "values": {}
@@ -182,6 +182,6 @@
     }
   ],
   "requires": [
-    "core:spec/respond"
+    "core:spec/chat-respond"
   ]
 }

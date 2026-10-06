@@ -23,7 +23,7 @@ import * as schema from "$lib/server/db/schema"
 import { releaseDataDir, type TestDb } from "$lib/server/utils/testDb"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
-import { respondSpec, RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { respondSpec, CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import {
 	characterLoreValues,
@@ -157,7 +157,7 @@ afterAll(async () => {
 /** One turn of the shipped reply spec with Search by meaning on: its prompt. */
 const prompt = async (): Promise<string> => {
 	const { buildWorld } = await import("$lib/server/pipelines/config/world")
-	const world = await buildWorld(db, { sessionId, specId: RESPOND_SPEC_ID })
+	const world = await buildWorld(db, { sessionId, specId: CHAT_RESPOND_SPEC_ID })
 	world.overrides.push({
 		nodeKey: "semantic.arm.queries",
 		slot: "params",

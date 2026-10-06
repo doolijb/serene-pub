@@ -1023,6 +1023,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"koboldcpp:cancelDownload",
 	"koboldcpp:checkManagedBinaryUpdate",
 	"koboldcpp:clearDownloadHistory",
+	"koboldcpp:connectEmbeddingModel",
 	"koboldcpp:connectImageModel",
 	"koboldcpp:connectModel",
 	"koboldcpp:deleteModel",

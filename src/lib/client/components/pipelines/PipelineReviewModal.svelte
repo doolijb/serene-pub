@@ -25,6 +25,7 @@
 	import SchemaForm from "./SchemaForm.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { queueAfterThis, queuePosition } from "./reviewQueue"
+	import { pipelineLabel } from "$lib/client/utils/pipelineGenre"
 
 	const socket = useTypedSocket()
 
@@ -38,8 +39,36 @@
 
 	const current = $derived(queue[0] ?? null)
 
-	/** `core:spec/respond` → "Respond": the pipeline the card belongs to. */
+	/**
+	 * The published pipelines and the genres' names, asked for only while a
+	 * card is up: a card can come from any session, and pipeline names carry
+	 * no genre (NOMENCLATURE §2), so it names both — "Reply · Adventure".
+	 */
+	let pipelines = $state<Sockets.Pipelines.Namespace[] | null>(null)
+	let genres = $state<Sockets.Sessions.Genres.Response["genres"] | null>(
+		null
+	)
+	const carded = $derived(!!current)
+	$effect(() => {
+		if (!carded) return
+		return requestWithInterest("pipelines:list", {}, (res) => {
+			pipelines = res.pipelinesList
+		})
+	})
+	$effect(() => {
+		if (!carded) return
+		return requestWithInterest("sessions:genres", {}, (res) => {
+			genres = res.genres ?? []
+		})
+	})
+
+	/**
+	 * The pipeline the card belongs to: its name and genre, and until those
+	 * arrive the slug's tail (`core:spec/chat-respond` → "Chat respond").
+	 */
 	const specLabel = (specId: string) => {
+		const named = pipelineLabel(specId, pipelines, genres)
+		if (named) return named
 		const tail = specId.slice(specId.lastIndexOf("/") + 1).replace(/-/g, " ")
 		return tail ? tail[0].toUpperCase() + tail.slice(1) : specId
 	}

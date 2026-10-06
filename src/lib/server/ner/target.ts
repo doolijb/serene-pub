@@ -25,21 +25,31 @@
  *
  * ## The identity string is what a star change is judged on
  *
- * `modelId` is the bare HuggingFace id for a local model and
- * `api::<baseUrl>::<model>` for an endpoint — the same spelling
- * `embedding/target.ts` uses, and for the same reason: two connection rows
- * naming one endpoint and one model produce identical annotations, so comparing
- * ids rather than connection ids is what makes pressing the star twice a no-op
- * instead of a re-scan of every annotated row.
+ * `modelId` is the model the starred pair names, exactly as the adapter is sent
+ * it — the bare HuggingFace id for a local model. Two connection rows naming
+ * one model produce identical annotations, so comparing ids rather than
+ * connection ids is what makes pressing the star twice a no-op instead of a
+ * re-scan of every annotated row.
+ *
+ * ⚠ It is also what every annotation row is stamped with
+ * (`entry_annotations.entity_model`), and a star move clears every row whose
+ * stamp differs. Respelling it re-annotates every install's whole corpus.
+ *
+ * ## The type routes, and nothing here branches on it
+ *
+ * The target carries the connection's TYPE and the merged connection, and the
+ * broker reaches the backend through `getNerAdapter(type)`. There is no
+ * local/hosted arm: where a model runs is its adapter module's business, so a
+ * new NER type is an adapter module and a registry entry, with no change here.
  */
 
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { capabilityDefault } from "$lib/server/connections/capabilityDefaults"
 import {
 	connectionModelById,
-	mergeEndpointModel
+	mergeEndpointModel,
+	type ResolvedConnectionPair
 } from "$lib/server/connections/models"
 import {
 	DEFAULT_NER_TTL_MINUTES,
@@ -57,21 +67,13 @@ export interface NerTarget {
 	/** The connection TYPE — what routes a target to its adapter. */
 	type: string
 	/**
-	 * `local` runs the model in this process; `api` posts to a host.
-	 *
-	 * There is no `api` type today. The arm exists because the resolver is where
-	 * one would be added, and a `mode` invented later would be a second place to
-	 * decide something this one already decides.
+	 * The model the adapter is sent, and the identity a star change is compared
+	 * on and every annotation row is stamped with. See the header.
 	 */
-	mode: "local" | "api"
-	/** What a star change is compared on. See the header. */
 	modelId: string
 	ttlMinutes: number
-	localModelName?: string
-	apiBaseUrl?: string
-	apiModel?: string
-	/** The endpoint row with the starred model merged in. */
-	connection: SelectConnection
+	/** The endpoint row with the starred model merged in — what the adapter is built on. */
+	connection: ResolvedConnectionPair
 }
 
 /**
@@ -131,29 +133,12 @@ export async function resolveNerTarget(db: Db): Promise<NerTarget | null> {
 	const ttlMinutes =
 		typeof ttl === "number" && ttl >= 0 ? ttl : DEFAULT_NER_TTL_MINUTES
 
-	const base = {
+	return {
 		connectionId: endpoint.id,
 		connectionName: endpoint.name,
 		type: endpoint.type,
+		modelId: modelName,
 		ttlMinutes,
 		connection
-	}
-
-	if (endpoint.type === CONNECTION_TYPE.LOCAL_ONNX_NER)
-		return {
-			...base,
-			mode: "local",
-			modelId: modelName,
-			localModelName: modelName
-		}
-
-	const baseUrl = (endpoint.baseUrl ?? "").trim()
-	if (!baseUrl) return null
-	return {
-		...base,
-		mode: "api",
-		modelId: `api::${baseUrl}::${modelName}`,
-		apiBaseUrl: baseUrl,
-		apiModel: modelName
 	}
 }

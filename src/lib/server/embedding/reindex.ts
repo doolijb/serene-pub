@@ -46,7 +46,11 @@
  * vectors are re-stamped (`restampEquivalentVectors`), never re-embedded.
  */
 
-import { resolveEmbeddingPair, resolveEmbeddingTarget } from "./target"
+import {
+	isManagedKoboldCppModelId,
+	resolveEmbeddingPair,
+	resolveEmbeddingTarget
+} from "./target"
 import { capabilityDefault } from "$lib/server/connections/capabilityDefaults"
 import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
 import {
@@ -228,6 +232,20 @@ export async function applyEmbeddingStarChange(
 
 	stopVectorization()
 	unloadEmbeddingModel("the embedding connection changed")
+	// The managed KoboldCPP keeps its embedding model loaded beside the chat
+	// model, and carries it into every later load. A star that leaves it —
+	// for another endpoint, or for none — releases that slot; its next load
+	// of any kind goes without it (one reload). A move between two of its own
+	// models needs nothing: the new one's first embed swaps the slot.
+	if (
+		isManagedKoboldCppModelId(before) &&
+		!isManagedKoboldCppModelId(after)
+	) {
+		const { setEmbeddingModel } = await import(
+			"$lib/server/koboldcpp/modelManager"
+		)
+		setEmbeddingModel(null)
+	}
 
 	if (!after) {
 		// Unstarred: embeddings are off. The vectors stay — see the header.

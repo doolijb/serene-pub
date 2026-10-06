@@ -5,7 +5,7 @@ import { resolveEmbeddingTarget } from "$lib/server/embedding/target"
 import { eq } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { isAndroidWrapper } from "$lib/server/utils"
-import { isLocalEmbeddingSupported } from "$lib/server/embedding"
+import { localOnnxAvailability } from "$lib/server/localModels/onnxRuntime"
 import { assertSupportedLanguage } from "./language"
 import { refusable } from "./refusable"
 import { isLoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
@@ -78,7 +78,13 @@ export async function buildSystemSettingsGet(): Promise<Sockets.SystemSettings.G
 				!!koboldCppAdminPasswordRow?.koboldCppManagedAdminPassword
 		} as any,
 		isAndroidWrapper: isAndroidWrapper(),
-		localEmbeddingsSupported: await isLocalEmbeddingSupported(),
+		/**
+		 * Whether this machine can run the local ONNX types at all, and why
+		 * not. One verdict for embeddings and entities, which load one
+		 * runtime; the client shows those types disabled with the reason
+		 * rather than hiding them.
+		 */
+		localOnnxAvailability: await localOnnxAvailability(),
 		/**
 		 * The identity every embedded row's `embedding_model` is
 		 * compared against, so a "vectors up to date / stale" badge can

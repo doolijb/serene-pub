@@ -3,7 +3,7 @@
  * migration (`living_scene_look_reprojection`, squashed away; see `migrationSql`).
  *
  * - **Chat's reply prompt** (owner note 44): "Roleplay - Living Scene" claims
- *   `core:spec/respond` in place of "Roleplay - Simple". The seed pass moves
+ *   `core:spec/chat-respond` in place of "Roleplay - Simple". The seed pass moves
  *   the claim by itself, but the shipped respond config stores the row id
  *   `ensureDefaultConfig` resolved once, so an older install kept Simple.
  * - **Adventure's Look** moved onto the scene builder, with the places
@@ -37,7 +37,13 @@ vi.mock("$lib/server/db", async () => {
 	}
 })
 
-const RESPOND = "core:spec/respond"
+const RESPOND = "core:spec/chat-respond"
+/**
+ * The same spec as the migration names it: it was written before the
+ * 2026-10-05 spec id rename (`respond` → `chat-respond`), and the splice
+ * replays it on a pre-squash database before boot renames anything.
+ */
+const RESPOND_AT_MIGRATION = "core:spec/respond"
 const LOOK = "core:spec/adventure-look"
 const SHIPPED = (slug: string) => `pipeline-default:${slug}`
 /** Not named by the migration: its shipped row must outlive the replay. */
@@ -145,18 +151,28 @@ const migrationSql = async () => {
 	return file!.sql!
 }
 
-/** The shipped-config seed keys the migration deletes, read from the file. */
+/** The shipped-config seed keys the migration deletes, read from the file, by today's spec ids. */
 const listedSeedKeys = async () =>
 	[...(await migrationSql()).matchAll(/'(pipeline-default:[^']+)'/g)].map(
-		(m) => m[1]
+		(m) => (m[1] === SHIPPED(RESPOND_AT_MIGRATION) ? SHIPPED(RESPOND) : m[1])
 	)
 
 const replayMigration = async () => {
+	// The shipped reply row as a pre-squash database holds it when the splice
+	// replays: under the spec id the migration names.
+	await db
+		.update(schema.pipelineConfigs)
+		.set({ seedKey: SHIPPED(RESPOND_AT_MIGRATION) })
+		.where(eq(schema.pipelineConfigs.seedKey, SHIPPED(RESPOND)))
 	for (const statement of (await migrationSql())
 		.split("--> statement-breakpoint")
 		.map((s) => s.trim())
 		.filter(Boolean))
 		await db.execute(sql.raw(statement))
+	expect(
+		await configBySeed(SHIPPED(RESPOND_AT_MIGRATION)),
+		"the migration left the shipped reply row"
+	).toBeUndefined()
 }
 
 const shippedIds = async () =>

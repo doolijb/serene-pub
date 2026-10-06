@@ -20,6 +20,13 @@
  * what lets there be several configured, one starred, and a switch between them
  * that states its cost, instead of a hidden setting with one possible value.
  *
+ * ## The adapter is the production path
+ *
+ * The annotation lane reads spans through `extractEntities` and loads through
+ * the module's `residency`, both reached by `getNerAdapter(type)`. Neither the
+ * lane nor its broker names a backend, so a new NER type is a module here plus
+ * its registry and manifest entries, and nothing in the lane changes.
+ *
  * ## One row, one model
  *
  * A NER connection names one model, exactly as every other connection does. The
@@ -68,6 +75,38 @@ export interface NerAdapterExports {
 		error?: string
 		extra?: Record<string, unknown>
 	}>
+	/**
+	 * The residency of a backend whose model runs in THIS process, or absent
+	 * for one that has nothing to load.
+	 *
+	 * What the annotation lane's broker (`ner/broker.ts`) loads through, so
+	 * the broker never names a loader. Absent is a real answer, not a
+	 * missing one: a hosted endpoint or a prompted text model is up whenever
+	 * its host is, so the broker leases it at once and a failed call
+	 * subtracts that row's spans. A thunk because the residency module holds
+	 * the loaded pipeline and must stay behind a dynamic import (see
+	 * `LocalOnnxNerAdapter`).
+	 */
+	residency?: () => Promise<NerResidency>
+}
+
+/**
+ * Load, and say what is loaded, for one in-process NER backend.
+ *
+ * `resident()` and `loading()` are synchronous on purpose: the broker reads
+ * them back to back with no await between, which is what stops two callers
+ * that arrive together from both starting a load.
+ */
+export interface NerResidency {
+	/** The model loaded and ready to run, or null. */
+	resident(): string | null
+	/** Whether a load is in flight. */
+	loading(): boolean
+	/**
+	 * Load (or hot-swap to) `model`, with the idle timer armed on
+	 * `ttlMinutes`. Throws when the model cannot load.
+	 */
+	load(model: string, ttlMinutes: number): Promise<void>
 }
 
 /**

@@ -84,14 +84,131 @@ describe("LlamaCppAdapter — base URL trailing-slash normalization", () => {
 	})
 
 	test("listModels() hits the normalized URL and reports the loaded model", async () => {
+		// `/v1/models`, the route llama-server serves — it read `/show`, which
+		// llama-server never had, so every listing and every Test 404'd.
 		vi.mocked(axios.get).mockResolvedValue({
-			data: { model: "some-model.gguf" }
+			data: { object: "list", data: [{ id: "some-model.gguf" }] }
 		})
+		vi.mocked(axios.post).mockResolvedValue({ status: 501, data: {} })
 		const result = await exportsDefault.listModels(
 			makeConnection({ baseUrl: "http://localhost:8080///" })
 		)
-		expect(axios.get).toHaveBeenLastCalledWith("http://localhost:8080/show")
+		expect(axios.get).toHaveBeenLastCalledWith(
+			"http://localhost:8080/v1/models"
+		)
 		expect(result.models[0].model).toBe("some-model.gguf")
+	})
+})
+
+/**
+ * Whether a llama-server embeds is the `--embeddings` it was started with, and
+ * nothing it serves says so — so one word is embedded, and the answer is read.
+ */
+describe("LlamaCppAdapter — the embeddings probe", () => {
+	const notSupported = {
+		status: 501,
+		data: {
+			error: {
+				code: 501,
+				message:
+					"This server does not support embeddings. Start it with `--embeddings`",
+				type: "not_supported_error"
+			}
+		}
+	}
+	const embeds = {
+		status: 200,
+		data: {
+			object: "list",
+			data: [{ index: 0, embedding: [0.1, 0.2] }],
+			model: "nomic.gguf"
+		}
+	}
+
+	test("asks /v1/embeddings, with the listed model, and reads yes, no and could-not-ask apart", async () => {
+		const { llamaCppServesEmbeddings } = await import("./LlamaCppAdapter")
+		vi.mocked(axios.post).mockResolvedValueOnce(embeds)
+		expect(
+			await llamaCppServesEmbeddings(
+				"http://localhost:8080",
+				"nomic.gguf"
+			)
+		).toBe(true)
+		expect(vi.mocked(axios.post).mock.lastCall?.[0]).toBe(
+			"http://localhost:8080/v1/embeddings"
+		)
+		expect(vi.mocked(axios.post).mock.lastCall?.[1]).toEqual({
+			model: "nomic.gguf",
+			input: ["probe"]
+		})
+
+		vi.mocked(axios.post).mockResolvedValueOnce(notSupported)
+		expect(await llamaCppServesEmbeddings("http://h:8080")).toBe(false)
+		// Pooling `none`: the OpenAI route refuses it, so this server cannot
+		// embed the way the lane asks.
+		vi.mocked(axios.post).mockResolvedValueOnce({ status: 400, data: {} })
+		expect(await llamaCppServesEmbeddings("http://h:8080")).toBe(false)
+
+		// Loading, down, timed out: not an answer.
+		vi.mocked(axios.post).mockResolvedValueOnce({ status: 503, data: {} })
+		expect(await llamaCppServesEmbeddings("http://h:8080")).toBeNull()
+		vi.mocked(axios.post).mockRejectedValueOnce(new Error("timeout"))
+		expect(await llamaCppServesEmbeddings("http://h:8080")).toBeNull()
+	})
+
+	test("testConnection() answers the probe layer for text->embedding", async () => {
+		vi.mocked(axios.get).mockResolvedValue({ data: { status: "ok" } })
+
+		vi.mocked(axios.post).mockResolvedValueOnce(embeds)
+		const yes = await exportsDefault.testConnection(makeConnection())
+		expect(yes).toEqual({
+			ok: true,
+			extra: { capabilities: { "text->embedding": 1 } }
+		})
+
+		vi.mocked(axios.post).mockResolvedValueOnce(notSupported)
+		const no = await exportsDefault.testConnection(makeConnection())
+		expect(no).toEqual({
+			ok: true,
+			extra: { capabilities: { "text->embedding": 0 } }
+		})
+
+		// Could not ask: no answer at all, so the stored one stands.
+		vi.mocked(axios.post).mockResolvedValueOnce({ status: 503, data: {} })
+		expect(await exportsDefault.testConnection(makeConnection())).toEqual({
+			ok: true
+		})
+	})
+
+	test("listModels() files the one model as an embedding model only on an embedding server", async () => {
+		vi.mocked(axios.get).mockResolvedValue({
+			data: { object: "list", data: [{ id: "nomic.gguf" }] }
+		})
+		vi.mocked(axios.post).mockResolvedValueOnce(embeds)
+		expect(
+			(await exportsDefault.listModels(makeConnection())).models
+		).toEqual([
+			{ model: "nomic.gguf", name: "nomic.gguf", modality: "embeddings" }
+		])
+
+		vi.mocked(axios.post).mockResolvedValueOnce(notSupported)
+		expect(
+			(await exportsDefault.listModels(makeConnection())).models
+		).toEqual([
+			{ model: "nomic.gguf", name: "nomic.gguf", modality: "text-gen" }
+		])
+	})
+
+	test("listModels() fails whole rather than list a model with no modality", async () => {
+		// A model listed as "nobody said" would undo what the last listing knew
+		// every time the server is busy.
+		vi.mocked(axios.get).mockResolvedValue({
+			data: { object: "list", data: [{ id: "nomic.gguf" }] }
+		})
+		vi.mocked(axios.post).mockResolvedValueOnce({ status: 503, data: {} })
+		const busy = await exportsDefault.listModels(makeConnection())
+		expect(busy.models).toEqual([])
+		expect(busy.error).toMatch(/did not say whether it serves embeddings/)
 	})
 })
 

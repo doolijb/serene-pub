@@ -29,7 +29,7 @@
  *     model's own context window (0114) caps both — and the panel's figure —
  *     through the one function (`runtime/contextWindow.ts`).
  *
- * Asserted through `runReply` against the SHIPPED `core:spec/respond` document
+ * Asserted through `runReply` against the SHIPPED `core:spec/chat-respond` document
  * published by the bootstrap — the road the socket handlers take — with a fake
  * adapter standing in for the model.
  */
@@ -238,11 +238,11 @@ beforeAll(async () => {
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	db = (await import("$lib/server/db")).db as unknown as TestDb
 
-	const { bootstrapPipelines, RESPOND_SPEC_ID } = await import(
+	const { bootstrapPipelines, CHAT_RESPOND_SPEC_ID } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	await bootstrapPipelines(db)
-	RESPOND = RESPOND_SPEC_ID
+	RESPOND = CHAT_RESPOND_SPEC_ID
 
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	userId = (await createTestUser(db, "reply-road")).id
@@ -422,10 +422,12 @@ describe("the pipeline owns its row", () => {
 		expect(keys).not.toContain("speaker")
 		expect(keys[1]).toBe("placeholder")
 		expect(keys.indexOf("placeholder")).toBeLessThan(keys.indexOf("generate"))
-		// The save fills the row; only the sprite tail (DESIGN-sprites §5)
-		// follows it, and it writes nothing for a card with no sprites.
-		expect(keys.indexOf("save")).toBe(keys.length - 2)
-		expect(keys.at(-1)).toBe("sprites")
+		// The save fills the row; only the sprite step (DESIGN-sprites §5,
+		// written into the spec since 2026-10-05) follows it — the picker,
+		// then the outlet, which writes nothing for a card with no sprites.
+		expect(keys.slice(-3)).toEqual(["save", "spritePick", "spriteShow"])
+		const spriteShow = receipt.nodes.find((n) => n.nodeKey === "spriteShow")!
+		expect((spriteShow.output as any).kept).toBe(true)
 		const generate = receipt.nodes.find((n) => n.nodeKey === "generate")!
 		expect(generate.result).toBe("ok")
 		expect((generate.output as any).text).toBe(CHUNKS.join(""))
@@ -610,10 +612,10 @@ describe("the pipeline owns its row", () => {
 			messageId: existing.id
 		})
 		expect(outcome.ok, outcome.error).toBe(true)
-		const { NARRATE_SPEC_ID } = await import(
+		const { CHAT_NARRATE_SPEC_ID } = await import(
 			"$lib/server/pipelines/specs/narrate"
 		)
-		expect(outcome.receipt!.specId).toBe(NARRATE_SPEC_ID)
+		expect(outcome.receipt!.specId).toBe(CHAT_NARRATE_SPEC_ID)
 
 		const after = await messagesOf(sessionId)
 		expect(after.length, "a second narration was inserted").toBe(
@@ -649,10 +651,10 @@ describe("the pipeline owns its row", () => {
 			messageId: existing.id
 		})
 		expect(outcome.ok, outcome.error).toBe(true)
-		const { NARRATE_CHARACTER_SPEC_ID } = await import(
+		const { CHAT_SIDE_CHARACTER_SPEC_ID } = await import(
 			"$lib/server/pipelines/specs/narrate"
 		)
-		expect(outcome.receipt!.specId).toBe(NARRATE_CHARACTER_SPEC_ID)
+		expect(outcome.receipt!.specId).toBe(CHAT_SIDE_CHARACTER_SPEC_ID)
 
 		const after = await messagesOf(sessionId)
 		expect(after.length).toBe(before.length)
@@ -756,9 +758,20 @@ describe("the pipeline owns its row", () => {
 		const sessionId = await makeSession("regen-tools")
 		const existing = await verbRow(sessionId)
 		const before = await messagesOf(sessionId)
-		const { TOOL_LOOP_SPEC_ID } = await import(
+		const { TOOL_LOOP_SPEC_ID, toolLoopSpec } = await import(
 			"$lib/server/pipelines/specs"
 		)
+		// A reference spec, not seeded since it left `CORE_SPECS`
+		// (2026-10-05): published here, with the shipped config a publish
+		// gives any pipeline.
+		const { saveDocument } = await import(
+			"$lib/server/pipelines/boot/store"
+		)
+		const { reconcilePublishedConfigs } = await import(
+			"$lib/server/pipelines/boot/seed"
+		)
+		await saveDocument(db as any, toolLoopSpec(), { publish: true })
+		await reconcilePublishedConfigs(db as any)
 		const { runTurn } = await import(
 			"$lib/server/pipelines/runtime/runTurn"
 		)
@@ -1045,7 +1058,7 @@ describe("Stop is a run-level guarantee", () => {
 			runId: "render-in-progress",
 			userId,
 			sessionId,
-			specId: "core:spec/generate-image",
+			specId: "core:spec/chat-generate-image",
 			kind: "action"
 		})
 		try {

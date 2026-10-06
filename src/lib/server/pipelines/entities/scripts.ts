@@ -27,6 +27,7 @@
 import { AMBIENT_SCRIPT_EXTRAS } from "@serene-pub/sdk"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { pipelineLabelsById } from "$lib/server/pipelines/entities/pipelineLabels"
 import { i18nText, parseScriptKindId, type I18n } from "@serene-pub/sdk"
 
 /** The script named nothing here. */
@@ -87,7 +88,7 @@ export interface ScriptRecord {
 	source: string
 	varsIn: string[]
 	varsOut: string[]
-	/** Pipelines whose chains currently include it, by display name. */
+	/** Pipelines whose chains currently include it, by label (name · genre). */
 	usedBy: string[]
 }
 
@@ -199,10 +200,9 @@ export async function scriptType(
 async function scriptUsageIndex(db: Db): Promise<Map<number, Set<string>>> {
 	const out = new Map<number, Set<string>>()
 
-	const specs = await db.select().from(schema.pipelineSpecs)
-	const nameById = new Map<number, string>(
-		(specs as any[]).map((s) => [s.id, s.name ?? s.slug])
-	)
+	// By label — the name with its genre beside it — so four genres'
+	// "Reply" stay four pipelines in the set.
+	const nameById = await pipelineLabelsById(db)
 	const configs = await db.select().from(schema.pipelineConfigs)
 	const specOfConfig = new Map<number, number>(
 		(configs as any[]).map((c) => [c.id, c.specId])

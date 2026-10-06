@@ -12,7 +12,7 @@
 
 import { describe, it, expect, beforeAll } from "vitest"
 import { sessionEvents } from "@serene-pub/sdk"
-import { RESPOND_SPEC_ID, CHAT_TURN_ORDER_SPEC_ID as TURN_ORDER_SPEC_ID } from "@serene-pub/core-catalog"
+import { CHAT_RESPOND_SPEC_ID, CHAT_TURN_ORDER_SPEC_ID as TURN_ORDER_SPEC_ID } from "@serene-pub/core-catalog"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import { STANDARD_GENRE_ID } from "$lib/server/pipelines/entities/sessionGenres"
@@ -58,10 +58,10 @@ describe("the chat event map", () => {
 			hasEdge(map, AUTO_ADVANCE_LISTENER_ID, sessionEvents.messageRespond, "causes")
 		).toBe(true)
 		expect(
-			hasEdge(map, sessionEvents.messageRespond, RESPOND_SPEC_ID, "binds")
+			hasEdge(map, sessionEvents.messageRespond, CHAT_RESPOND_SPEC_ID, "binds")
 		).toBe(true)
 		expect(
-			hasEdge(map, RESPOND_SPEC_ID, sessionEvents.messageCompleted, "causes")
+			hasEdge(map, CHAT_RESPOND_SPEC_ID, sessionEvents.messageCompleted, "causes")
 		).toBe(true)
 	})
 
@@ -89,7 +89,7 @@ describe("the chat event map", () => {
 	it("labels a spec and an event with display text", () => {
 		expect(
 			map.nodes.find((n) => n.id === TURN_ORDER_SPEC_ID)?.label
-		).toBe("Chat Turn Order") // humanised from core:spec/chat-turn-order (R27)
+		).toBe("Turn order · Chat") // its name with its genre beside it (NOMENCLATURE §2)
 		expect(
 			map.nodes.find((n) => n.id === sessionEvents.messageCompleted)?.label
 		).toBe("Message completed")

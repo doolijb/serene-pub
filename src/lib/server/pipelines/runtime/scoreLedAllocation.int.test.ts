@@ -44,8 +44,8 @@ import { buildWorld } from "$lib/server/pipelines/config/world"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import {
 	respondSpec,
-	RESPOND_SPEC_ID,
-	NARRATE_SPEC_ID
+	CHAT_RESPOND_SPEC_ID,
+	CHAT_NARRATE_SPEC_ID
 } from "$lib/server/pipelines/specs"
 
 // No embedding model: the keyword mechanism is what every install has on first boot,
@@ -161,14 +161,14 @@ beforeAll(async () => {
 		await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 			.limit(1)
 	)[0]
 	narrateSpecRow = (
 		await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, NARRATE_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_NARRATE_SPEC_ID))
 			.limit(1)
 	)[0]
 }, 120_000)
@@ -186,7 +186,7 @@ const rankNode = async () => {
 		bindings: coreBindings(),
 		world: await buildWorld(db, {
 			sessionId,
-			specId: RESPOND_SPEC_ID
+			specId: CHAT_RESPOND_SPEC_ID
 		}),
 		host: createHost(db, { sessionId, userId }),
 		// Stops before the provider, which needs a connection this test has no
@@ -237,7 +237,7 @@ const selectedConfigId = async () => {
 	const selected = await resolveSelectedConfig(
 		db,
 		respondSpecRow.id,
-		RESPOND_SPEC_ID,
+		CHAT_RESPOND_SPEC_ID,
 		{ sessionId }
 	)
 	expect(selected, "the reply spec resolves to no configuration").toBeTruthy()
@@ -317,8 +317,8 @@ describe("the declared switch and the shipped behaviour are one answer", () => {
 		const { resolveConfigSources } = await import("@serene-pub/sdk")
 
 		for (const [spec, slug] of [
-			[respondSpecRow, RESPOND_SPEC_ID],
-			[narrateSpecRow, NARRATE_SPEC_ID]
+			[respondSpecRow, CHAT_RESPOND_SPEC_ID],
+			[narrateSpecRow, CHAT_NARRATE_SPEC_ID]
 		] as const) {
 			const configs = await db
 				.select()

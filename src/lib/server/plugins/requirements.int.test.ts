@@ -29,9 +29,9 @@ describe("missingRequirements", () => {
 		const { missingRequirements } = await import("./requirements")
 		expect(
 			await missingRequirements(db, [
-				"core:spec/respond",
+				"core:spec/chat-respond",
 				"core:genre/chat",
-				"core:spec/create-chat"
+				"core:spec/chat-create"
 			])
 		).toEqual([])
 		expect(

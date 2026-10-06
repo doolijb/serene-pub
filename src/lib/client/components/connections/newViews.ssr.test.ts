@@ -175,6 +175,32 @@ describe("ModelRow", () => {
 		expect(offered).not.toContain("preset-filled-error")
 	})
 
+	test("a Use that can't be pressed stays, disabled, and says why", () => {
+		const reason =
+			"Not available on this machine: the ONNX runtime didn't load"
+		const html = render(ModelRow, {
+			props: {
+				model,
+				canUse: true,
+				useLabel: "Make active",
+				useDisabledReason: reason,
+				onUse: noop
+			}
+		}).body
+		const use = html.match(
+			/<button\b[^>]*aria-label="Make active[^"]*"[^>]*>/
+		)
+		expect(use?.[0]).toMatch(/\sdisabled(?=[\s=>]|$)/)
+		expect(use?.[0]).toContain(`aria-label="Make active — ${reason}"`)
+		expect(use?.[0]).toContain(`title="${reason}"`)
+		const enabled = render(ModelRow, {
+			props: { model, canUse: true, useLabel: "Make active", onUse: noop }
+		}).body
+		expect(
+			enabled.match(/<button\b[^>]*aria-label="Make active"[^>]*>/)?.[0]
+		).not.toMatch(/\sdisabled(?=[\s=>]|$)/)
+	})
+
 	test("delete is in the menu, never a red button on the row", () => {
 		const html = render(ModelRow, {
 			props: {

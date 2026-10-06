@@ -537,7 +537,7 @@ describe("Stop mid-typing", () => {
 		)
 		const inspected = {
 			runId: run!.runId,
-			specSlug: "core:spec/respond",
+			specSlug: "core:spec/chat-respond",
 			specVersion: "1",
 			specHash: null,
 			specHashIsCurrent: true,

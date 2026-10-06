@@ -56,11 +56,12 @@ function walk(dir: string, out: string[] = []): string[] {
  * Sites that build an adapter from a family with NO PROMPT, named rather than
  * pattern-matched.
  *
- * Neither `BaseImageAdapter` nor `BaseEmbeddingAdapter` has a prompt, a
- * completion template or a stop path: `generateImage(req, opts)` and
- * `embedText(req, opts)` each take their whole request as a parameter, so a stop
- * list would be meaningless on either. Listed by file so each exemption is a
- * decision somebody made rather than a regex that happened not to match.
+ * None of `BaseImageAdapter`, `BaseEmbeddingAdapter` or `BaseNerAdapter` has a
+ * prompt, a completion template or a stop path: `generateImage(req, opts)`,
+ * `embedText(req, opts)` and `extractEntities(req, opts)` each take their whole
+ * request as a parameter, so a stop list would be meaningless on any of them.
+ * Listed by file so each exemption is a decision somebody made rather than a
+ * regex that happened not to match.
  */
 const NO_PROMPT = new Set([
 	"lib/server/sockets/images.ts",
@@ -68,7 +69,15 @@ const NO_PROMPT = new Set([
 	// `activateApiEmbedding` constructs the embedding adapter the star names and
 	// asks it for one vector to learn the width. Nothing about that request has
 	// an end to stop at.
-	"lib/server/embedding/index.ts"
+	"lib/server/embedding/index.ts",
+	// `withEmbeddingProbe` constructs the EMBEDDING adapter `getEmbeddingAdapter`
+	// returns and embeds one word, to fail a connection test where the
+	// vectorization lane would. It builds no text adapter; listing and testing
+	// go through the text module's functions, which construct nothing here.
+	"lib/server/connections/modelSync.ts",
+	// `leasedNerAdapter` constructs the NER adapter `getNerAdapter` returns, for
+	// the annotation lane's `extractEntities`. An entity call has no prompt.
+	"lib/server/ner/broker.ts"
 ])
 
 interface Site {

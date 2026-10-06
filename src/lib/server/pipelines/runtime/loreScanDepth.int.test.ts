@@ -38,9 +38,9 @@ import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import { DEFAULT_RETRIEVAL } from "$lib/server/pipelines/ranking/weights"
 import {
 	respondSpec,
-	RESPOND_SPEC_ID,
+	CHAT_RESPOND_SPEC_ID,
 	narrateSpec,
-	NARRATE_SPEC_ID
+	CHAT_NARRATE_SPEC_ID
 } from "$lib/server/pipelines/specs"
 
 // No embedding model, so the keyword mechanism runs — which is the mechanism `scanDepth`
@@ -116,14 +116,14 @@ beforeAll(async () => {
 		await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 			.limit(1)
 	)[0]
 	narrateSpecRow = (
 		await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, NARRATE_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_NARRATE_SPEC_ID))
 			.limit(1)
 	)[0]
 }, 120_000)
@@ -219,14 +219,14 @@ describe("a lore node's scan depth reaches the scan", () => {
 	// equal to the engine's fallback is exactly what let the dead control hide.
 	// An unwired lane reports 10 here too; the next test is the one that fails.
 	it("every lane runs and reports the shipped window", async () => {
-		const depths = await scanned(respondSpec(), RESPOND_SPEC_ID)
+		const depths = await scanned(respondSpec(), CHAT_RESPOND_SPEC_ID)
 		for (const lane of LORE_LANES)
 			expect(
 				depths[lane],
 				`${lane} reported no scan window at all — it did not run`
 			).toBe(DEFAULT_RETRIEVAL.scanDepth)
 
-		const narrator = await scanned(narrateSpec(), NARRATE_SPEC_ID)
+		const narrator = await scanned(narrateSpec(), CHAT_NARRATE_SPEC_ID)
 		expect(narrator["lore"]).toBe(DEFAULT_RETRIEVAL.scanDepth)
 	}, 60_000)
 
@@ -235,7 +235,7 @@ describe("a lore node's scan depth reaches the scan", () => {
 		// resolves to nothing regardless of what is stored, so every number
 		// below came back as the engine default however the row read.
 		const configId = await selectedConfigId(
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			respondSpecRow.id
 		)
 
@@ -247,7 +247,7 @@ describe("a lore node's scan depth reaches the scan", () => {
 		await setConfigValue(db, configId, SCAN_DEPTH_AT, 4)
 
 		try {
-			const depths = await scanned(respondSpec(), RESPOND_SPEC_ID)
+			const depths = await scanned(respondSpec(), CHAT_RESPOND_SPEC_ID)
 			expect(depths["gather.worldLore.read"]).toBe(4)
 			// One owner per setting per spec (R-7 P2, ruled 2026-09-15): the
 			// world-lore lane owns the seven knobs and the other two read them
@@ -286,7 +286,7 @@ describe("a lore node's guaranteed window reaches the scan", () => {
 	it("every lane runs and reports the shipped window", async () => {
 		const windows = await scannedOn(
 			respondSpec(),
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			"guaranteedMessages"
 		)
 		for (const lane of LORE_LANES)
@@ -297,7 +297,7 @@ describe("a lore node's guaranteed window reaches the scan", () => {
 
 		const narrator = await scannedOn(
 			narrateSpec(),
-			NARRATE_SPEC_ID,
+			CHAT_NARRATE_SPEC_ID,
 			"guaranteedMessages"
 		)
 		expect(narrator["lore"]).toBe(DEFAULT_RETRIEVAL.guaranteedMessages)
@@ -305,7 +305,7 @@ describe("a lore node's guaranteed window reaches the scan", () => {
 
 	it("a value configured on the owner lane reaches all three lanes (R-7 P2)", async () => {
 		const configId = await selectedConfigId(
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			respondSpecRow.id
 		)
 		const windowAt = (nodeKey: string) => ({
@@ -320,7 +320,7 @@ describe("a lore node's guaranteed window reaches the scan", () => {
 		try {
 			const windows = await scannedOn(
 				respondSpec(),
-				RESPOND_SPEC_ID,
+				CHAT_RESPOND_SPEC_ID,
 				"guaranteedMessages"
 			)
 			expect(windows["gather.worldLore.read"]).toBe(3)
@@ -331,7 +331,7 @@ describe("a lore node's guaranteed window reaches the scan", () => {
 			// are two controls is that one install wants a deep scan and a
 			// short guarantee; a change that moved both would be the shared
 			// constant back under two names.
-			const depths = await scanned(respondSpec(), RESPOND_SPEC_ID)
+			const depths = await scanned(respondSpec(), CHAT_RESPOND_SPEC_ID)
 			expect(depths["gather.worldLore.read"]).toBe(
 				DEFAULT_RETRIEVAL.scanDepth
 			)

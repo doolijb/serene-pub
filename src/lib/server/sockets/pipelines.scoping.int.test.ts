@@ -22,7 +22,7 @@ import path from "path"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import { ADVENTURE_CREATE_SPEC_ID, ADVENTURE_GENRE_ID } from "@serene-pub/core-catalog"
 import { humanizeTypeId } from "$lib/server/pipelines/config/panel"
 import { groupOptions, groupSteps } from "$lib/server/pipelines/config/panel/groups"
@@ -104,7 +104,7 @@ async function firstWritableOptionId(userId: number) {
 	const view = await namespaceView(
 		testDb as any,
 		"socket-scoping-test-secret",
-		RESPOND_SPEC_ID,
+		CHAT_RESPOND_SPEC_ID,
 		{ userId, isAdmin: true }
 	)
 	// A prompts option, minted from an admin view — option ids are HMAC
@@ -126,7 +126,7 @@ describe("a session id from the client is not a capability", () => {
 		await pipelinesSetOption.handler(
 			socketFor(stranger.id),
 			{
-				slug: RESPOND_SPEC_ID,
+				slug: CHAT_RESPOND_SPEC_ID,
 				optionId,
 				value: "I should not reach that session",
 				sessionId: ownersSessionId
@@ -167,7 +167,7 @@ describe("a session id from the client is not a capability", () => {
 		await pipelinesSetOption.handler(
 			socketFor(owner.id),
 			{
-				slug: RESPOND_SPEC_ID,
+				slug: CHAT_RESPOND_SPEC_ID,
 				optionId,
 				value: "only in my session",
 				sessionId: ownersSessionId
@@ -201,7 +201,7 @@ describe("a session's scope covers only the pipelines it runs (owner Q7)", () =>
 				(p) => p.slug
 			)
 		)
-		expect(runs.has(RESPOND_SPEC_ID)).toBe(true)
+		expect(runs.has(CHAT_RESPOND_SPEC_ID)).toBe(true)
 		const other = (await listNamespaces(testDb as any)).find((n) => !runs.has(n.slug))
 		if (!other) throw new Error("every published pipeline is run by the session")
 		return other.slug
@@ -211,7 +211,7 @@ describe("a session's scope covers only the pipelines it runs (owner Q7)", () =>
 		const { pipelinesGet } = await import("./pipelines")
 		const res = await pipelinesGet.handler(
 			socketFor(owner.id),
-			{ slug: RESPOND_SPEC_ID, sessionId: ownersSessionId },
+			{ slug: CHAT_RESPOND_SPEC_ID, sessionId: ownersSessionId },
 			noopEmit
 		)
 		expect(res.pipeline?.scope).toEqual({ kind: "session", sessionId: ownersSessionId })
@@ -452,7 +452,7 @@ describe("a session's creation pipeline (owner ruling 2026-09-30)", () => {
 			})
 		}
 		// A reply's run is not the create run, whichever came first.
-		await runOf(RESPOND_SPEC_ID, `scoping-reply-${sessionId}`)
+		await runOf(CHAT_RESPOND_SPEC_ID, `scoping-reply-${sessionId}`)
 		await runOf(LAIR_CREATE_SPEC_ID, `scoping-create-${sessionId}`)
 
 		const after = (await sessionPipelines(testDb as any, sessionId, admin.id)).pipelines
@@ -508,7 +508,7 @@ describe("instance scope is the administrator's", () => {
 		await pipelinesSetOption.handler(
 			socketFor(stranger.id),
 			{
-				slug: RESPOND_SPEC_ID,
+				slug: CHAT_RESPOND_SPEC_ID,
 				optionId,
 				value: "for everyone"
 			},
@@ -536,7 +536,7 @@ describe("instance scope is the administrator's", () => {
 		await pipelinesSetOption.handler(
 			socketFor(admin.id, true),
 			{
-				slug: RESPOND_SPEC_ID,
+				slug: CHAT_RESPOND_SPEC_ID,
 				optionId,
 				value: "for everyone"
 			},
@@ -553,11 +553,11 @@ describe("instance scope is the administrator's", () => {
 		const [spec] = await testDb
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		const shipped = await resolveSelectedConfig(
 			testDb as any,
 			spec.id,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			{}
 		)
 		const copy = await duplicateConfig(
@@ -570,7 +570,7 @@ describe("instance scope is the administrator's", () => {
 		await pipelinesSetOption.handler(
 			socketFor(admin.id, true),
 			{
-				slug: RESPOND_SPEC_ID,
+				slug: CHAT_RESPOND_SPEC_ID,
 				optionId,
 				value: "for everyone"
 			},
@@ -599,7 +599,7 @@ describe("the management view is admin-only", () => {
 		const rec = recordingEmit()
 		const res: any = await pipelinesDetail.handler(
 			socketFor(stranger.id),
-			{ slug: RESPOND_SPEC_ID },
+			{ slug: CHAT_RESPOND_SPEC_ID },
 			rec.emit
 		)
 		expect(res.error).toMatch(/admin/i)
@@ -612,7 +612,7 @@ describe("the management view is admin-only", () => {
 		const { pipelinesDetail } = await import("./pipelines")
 		const res: any = await pipelinesDetail.handler(
 			socketFor(admin.id, true),
-			{ slug: RESPOND_SPEC_ID },
+			{ slug: CHAT_RESPOND_SPEC_ID },
 			noopEmit
 		)
 		expect(res.spec?.versions?.length).toBeGreaterThan(0)
@@ -625,7 +625,7 @@ describe("run receipts are an administrator's (R55)", () => {
 	test("nobody but an admin gets the runs list — not the session's owner, not a stranger", async () => {
 		await testDb.insert(schema.pipelineRuns).values({
 			runId: "run-scoping-1",
-			specSlug: RESPOND_SPEC_ID,
+			specSlug: CHAT_RESPOND_SPEC_ID,
 			specVersion: "1.0.0",
 			sessionId: ownersSessionId,
 			userId: owner.id,
@@ -674,7 +674,7 @@ describe("run receipts are an administrator's (R55)", () => {
 
 		const run = (runId: string, userId: number) => ({
 			runId,
-			specSlug: RESPOND_SPEC_ID,
+			specSlug: CHAT_RESPOND_SPEC_ID,
 			specVersion: "1.0.0",
 			sessionId: ownersSessionId,
 			userId,
@@ -721,7 +721,7 @@ describe("run receipts are an administrator's (R55)", () => {
 		const [spec] = await testDb
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		// A retired, renamed version row under a hash of its own, the way
 		// 0134 leaves the row a receipt pinned: superseded by the republish
 		// that followed the migration, marked with when it was renamed.
@@ -738,7 +738,7 @@ describe("run receipts are an administrator's (R55)", () => {
 			.returning()
 		await testDb.insert(schema.pipelineRuns).values({
 			runId: "run-scoping-renamed",
-			specSlug: RESPOND_SPEC_ID,
+			specSlug: CHAT_RESPOND_SPEC_ID,
 			specVersion: "1.20.0",
 			specVersionId: old.id,
 			specHash: "prerename0123",
@@ -763,7 +763,7 @@ describe("run receipts are an administrator's (R55)", () => {
 		// And a receipt whose slug simply moved on says nothing about a rename.
 		await testDb.insert(schema.pipelineRuns).values({
 			runId: "run-scoping-edited",
-			specSlug: RESPOND_SPEC_ID,
+			specSlug: CHAT_RESPOND_SPEC_ID,
 			specVersion: "1.20.0",
 			specHash: "editedaway0456",
 			sessionId: ownersSessionId,
@@ -804,7 +804,7 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 		const [spec] = await testDb
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		specId = spec.id
 
 		// The pool comes off the declaration, and so does the handle every
@@ -840,7 +840,7 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 	/** The owner edits from inside their own session, which is where a
 	 * non-admin's prompt edits land (the write matrix's `prompts` line). */
 	const asOwner = <T extends object>(extra: T) => ({
-		slug: RESPOND_SPEC_ID,
+		slug: CHAT_RESPOND_SPEC_ID,
 		optionId,
 		sessionId: ownersSessionId,
 		...extra
@@ -940,11 +940,11 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 		// sentence is no longer true of anything — a prompt travels with its
 		// node — and telling somebody it was would send them looking for a
 		// setting that does not exist.
-		const { NARRATE_SPEC_ID } = await import("$lib/server/pipelines/specs")
+		const { CHAT_NARRATE_SPEC_ID } = await import("$lib/server/pipelines/specs")
 		const [narrate] = await testDb
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, NARRATE_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_NARRATE_SPEC_ID))
 		const { declarations } = await import(
 			"$lib/server/pipelines/config/panel"
 		)
@@ -995,7 +995,7 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 		const res: any = await pipelinesUpdatePrompt.handler(
 			socketFor(owner.id),
 			{
-				slug: RESPOND_SPEC_ID,
+				slug: CHAT_RESPOND_SPEC_ID,
 				optionId,
 				promptId,
 				fields: { systemPrompt: "from nowhere" }
@@ -1014,7 +1014,7 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 		const view = await namespaceView(
 			testDb as any,
 			"socket-scoping-test-secret",
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			{ userId: admin.id, isAdmin: true }
 		)
 		const other = groupOptions(view!.groups)
@@ -1023,7 +1023,7 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 		const res: any = await pipelinesUpdatePrompt.handler(
 			socketFor(owner.id),
 			{
-				slug: RESPOND_SPEC_ID,
+				slug: CHAT_RESPOND_SPEC_ID,
 				optionId: other.id,
 				promptId,
 				sessionId: ownersSessionId,
@@ -1157,7 +1157,7 @@ describe("named-config CRUD", () => {
 		const [spec] = await testDb
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		return await testDb
 			.select()
 			.from(schema.pipelineConfigs)
@@ -1166,7 +1166,7 @@ describe("named-config CRUD", () => {
 
 	test("creates one, and it shows up in the view", async () => {
 		const { res } = await call("pipelinesCreateConfig", {
-			slug: RESPOND_SPEC_ID,
+			slug: CHAT_RESPOND_SPEC_ID,
 			name: "Nighttime"
 		})
 		expect(res.error).toBeUndefined()
@@ -1178,7 +1178,7 @@ describe("named-config CRUD", () => {
 
 	test("refuses a name the pipeline already uses", async () => {
 		const { res } = await call("pipelinesCreateConfig", {
-			slug: RESPOND_SPEC_ID,
+			slug: CHAT_RESPOND_SPEC_ID,
 			name: "Nighttime"
 		})
 		expect(res.error).toMatch(/already has a configuration/i)
@@ -1201,7 +1201,7 @@ describe("named-config CRUD", () => {
 		})
 
 		const { res } = await call("pipelinesCreateConfig", {
-			slug: RESPOND_SPEC_ID,
+			slug: CHAT_RESPOND_SPEC_ID,
 			name: "Nighttime (copy)",
 			fromConfigId: source.id
 		})
@@ -1227,7 +1227,7 @@ describe("named-config CRUD", () => {
 			(c: any) => c.name === "Nighttime (copy)"
 		)!
 		const renamed = await call("pipelinesRenameConfig", {
-			slug: RESPOND_SPEC_ID,
+			slug: CHAT_RESPOND_SPEC_ID,
 			configId: target.id,
 			name: "Daytime"
 		})
@@ -1235,7 +1235,7 @@ describe("named-config CRUD", () => {
 		expect((await configsIn()).map((c: any) => c.name)).toContain("Daytime")
 
 		const deleted = await call("pipelinesDeleteConfig", {
-			slug: RESPOND_SPEC_ID,
+			slug: CHAT_RESPOND_SPEC_ID,
 			configId: target.id
 		})
 		expect(deleted.res.error).toBeUndefined()
@@ -1248,7 +1248,7 @@ describe("named-config CRUD", () => {
 		const shipped = (await configsIn()).find((c: any) => c.isImmutable)
 		expect(shipped, "no immutable config to test against").toBeTruthy()
 		const { res } = await call("pipelinesDeleteConfig", {
-			slug: RESPOND_SPEC_ID,
+			slug: CHAT_RESPOND_SPEC_ID,
 			configId: shipped!.id
 		})
 		expect(res.error).toMatch(/ships|default/i)
@@ -1264,7 +1264,7 @@ describe("named-config CRUD", () => {
 		const [narrate] = await testDb
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/narrate"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-narrate"))
 		const [foreign] = await testDb
 			.select()
 			.from(schema.pipelineConfigs)
@@ -1272,7 +1272,7 @@ describe("named-config CRUD", () => {
 		expect(foreign, "narrate has no config to borrow").toBeTruthy()
 
 		const { res } = await call("pipelinesRenameConfig", {
-			slug: RESPOND_SPEC_ID,
+			slug: CHAT_RESPOND_SPEC_ID,
 			configId: foreign.id,
 			name: "Hijacked"
 		})
@@ -1288,7 +1288,7 @@ describe("named-config CRUD", () => {
 	test("a non-admin cannot create one", async () => {
 		const { res } = await call(
 			"pipelinesCreateConfig",
-			{ slug: RESPOND_SPEC_ID, name: "Sneaky" },
+			{ slug: CHAT_RESPOND_SPEC_ID, name: "Sneaky" },
 			owner
 		)
 		expect(res.error).toMatch(/admin/i)
@@ -1324,7 +1324,7 @@ describe("the builder's structural payload", () => {
 		const rec = recordingEmit()
 		const res: any = await pipelinesDetail.handler(
 			socketFor(owner.id),
-			{ slug: RESPOND_SPEC_ID },
+			{ slug: CHAT_RESPOND_SPEC_ID },
 			rec.emit
 		)
 		expect(res.error).toMatch(/admin/i)
@@ -1335,7 +1335,7 @@ describe("the builder's structural payload", () => {
 		// The page used to render `steps`, which exist only for configurable
 		// nodes — so a twelve-node pipeline drew as eight and the reader had no
 		// way to know four were missing.
-		const spec = await detailFor(RESPOND_SPEC_ID)
+		const spec = await detailFor(CHAT_RESPOND_SPEC_ID)
 		const keys = spec.graph.nodes.map((n: any) => n.key)
 		expect(keys).toContain("input")
 		expect(keys).toContain("gather.cast.read")
@@ -1349,14 +1349,14 @@ describe("the builder's structural payload", () => {
 	test("a configurable node names the step that configures it", async () => {
 		// The map is keyed by node and the inspector by step; if this pairing
 		// is wrong, clicking a card opens somebody else's settings.
-		const spec = await detailFor(RESPOND_SPEC_ID)
+		const spec = await detailFor(CHAT_RESPOND_SPEC_ID)
 		const { namespaceView } = await import(
 			"$lib/server/pipelines/config/panel"
 		)
 		const view: any = await namespaceView(
 			testDb as any,
 			"socket-scoping-test-secret",
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			{ userId: admin.id, isAdmin: true }
 		)
 		const generate = spec.graph.nodes.find((n: any) => n.key === "generate")
@@ -1372,7 +1372,7 @@ describe("the builder's structural payload", () => {
 		// different clauseChain. Were they to arrive with no block, or all on
 		// one chain, the page would draw four sequential cards for something
 		// that runs at once — which is the drawing being wrong about the run.
-		const spec = await detailFor(RESPOND_SPEC_ID)
+		const spec = await detailFor(CHAT_RESPOND_SPEC_ID)
 		const reads = spec.graph.nodes.filter(
 			(n: any) => n.clauseId === "gather"
 		)
@@ -1432,7 +1432,7 @@ describe("the builder's structural payload", () => {
 		//
 		// Asserted on a type whose declared name is *not* what humanizing its
 		// id produces, or the test passes either way.
-		const spec = await detailFor(RESPOND_SPEC_ID)
+		const spec = await detailFor(CHAT_RESPOND_SPEC_ID)
 		const node = spec.graph.nodes.find((n: any) =>
 			String(n.definitionId).startsWith("core:query/relationships-perspectives")
 		)

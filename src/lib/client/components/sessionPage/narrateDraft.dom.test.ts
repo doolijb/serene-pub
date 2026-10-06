@@ -65,7 +65,7 @@ const NARRATE_COLLECTS: ListedCollects = {
 const PALETTE = [
 	{
 		key: "narrate",
-		specSlug: "core:spec/narrate",
+		specSlug: "core:spec/chat-narrate",
 		name: "Narrate",
 		slash: "narrate",
 		collects: NARRATE_COLLECTS,

@@ -148,6 +148,10 @@ describe("a lane with no model starred indexes anyway", () => {
 			kind: "none",
 			modelId: null
 		})
+		// And with nothing leased, a unit of work has no adapter to read
+		// through, whatever identity it carries: its rows are lexical.
+		const { leasedNerAdapter } = await import("$lib/server/ner/broker")
+		expect(await leasedNerAdapter("Xenova/bert-base-NER")).toBeNull()
 	}, 60_000)
 
 	test("annotates a book the background sweep has never seen", async () => {
@@ -488,6 +492,50 @@ describe("staleness is the text, not the clock", () => {
 		expect(
 			(await annotationsOf(hedgeId)).map((r) => r.entityKey)
 		).not.toContain(`entry:${entries[0]!.id}`)
+	}, 60_000)
+
+	/**
+	 * `entity_label` is the model's, so a lexical pass writes none — and a
+	 * labelled row's label comes back beside its key. Written directly here,
+	 * because nothing in this file stars a model.
+	 */
+	test("an entity label is read back beside its key; a lexical row has none", async () => {
+		const { user, lorebook, entries } = await makeBook([
+			{ name: "Stonefast", content: "A keep on the northern ridge." }
+		])
+		const session = await makeSession(lorebook.id, user.id)
+		const message = await addMessage(
+			session.id,
+			"They rode for Stonefast before the snow."
+		)
+		const { annotateMessage, loadVocabulary, searchMessageAnnotations } =
+			await import("./index")
+		const vocabulary = await loadVocabulary(testDb as any, lorebook.id)
+		await annotateMessage(testDb as any, message.id, vocabulary)
+		const rows = await messageAnnotationsOf(message.id)
+		expect(rows.length).toBeGreaterThan(0)
+		for (const r of rows) expect(r.entityLabel).toBeNull()
+
+		const key = `entry:${entries[0]!.id}`
+		expect(rows.map((r) => r.entityKey)).toContain(key)
+		await testDb
+			.update(schema.messageAnnotations)
+			.set({ entityLabel: "LOC" })
+			.where(eq(schema.messageAnnotations.messageId, message.id))
+
+		const { hits } = await searchMessageAnnotations(
+			testDb as any,
+			session.id,
+			[key],
+			vocabulary
+		)
+		expect(hits).toEqual([
+			expect.objectContaining({
+				id: message.id,
+				keys: [key],
+				entityLabels: { [key]: "LOC" }
+			})
+		])
 	}, 60_000)
 
 	test("a message whose text did not move is not annotated again", async () => {

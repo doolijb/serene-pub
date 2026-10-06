@@ -119,6 +119,16 @@ describe("the boot · retired core genres", () => {
 			expect(genres).not.toContain(WRITING_ROOM)
 			for (const kept of ["core:genre/chat", "core:genre/adventure", "core:genre/guide", "core:genre/lair"])
 				expect(genres).toContain(kept)
+			// The cull is by retired stem only: every spec this build ships
+			// survives it, the genre-first ids of 2026-10-05 included
+			// (`chat-create`, `chat-respond`, `guide-create`, `<genre>-answer-form`).
+			const { CORE_SPECS } = await import("@serene-pub/core-catalog")
+			const left = new Set(
+				(await db.select({ slug: schema.pipelineSpecs.slug }).from(schema.pipelineSpecs)).map(
+					(r) => r.slug
+				)
+			)
+			for (const entry of CORE_SPECS) expect(left, entry.build().id).toContain(entry.build().id)
 			expect(
 				await db
 					.select()
@@ -169,6 +179,31 @@ describe("the boot · retired core genres", () => {
 	)
 })
 
+describe("the retired lists · never a live core spec", () => {
+	it("no spec this build ships matches a retired genre's stem or a retired spec", async () => {
+		const { CORE_SPECS } = await import("@serene-pub/core-catalog")
+		const { RETIRED_CORE_GENRES, RETIRED_CORE_SPECS } = await import(
+			"$lib/server/pipelines/boot/retiredGenres"
+		)
+		const shipped = CORE_SPECS.map((e) => e.build().id)
+		for (const id of [
+			"core:spec/chat-create",
+			"core:spec/chat-respond",
+			"core:spec/guide-create",
+			"core:spec/chat-answer-form",
+			"core:spec/lair-answer-form"
+		])
+			expect(shipped).toContain(id)
+		for (const id of shipped) {
+			for (const r of RETIRED_CORE_GENRES) {
+				expect(id.startsWith(`core:spec/${r.specStem}-`), id).toBe(false)
+				expect(r.otherSpecs, id).not.toContain(id)
+			}
+			expect(RETIRED_CORE_SPECS, id).not.toContain(id)
+		}
+	})
+})
+
 describe("the boot · retired core specs", () => {
 	it(
 		"Echo (owner note 35): a core:spec/echo row an older build left is deleted, a person's spec is not",
@@ -205,5 +240,119 @@ describe("the boot · retired core specs", () => {
 			expect(await cullRetiredCoreSpecs(db)).toBe(0)
 		},
 		60_000
+	)
+})
+
+describe("the boot · tool-loop leaves", () => {
+	it(
+		"deletes its spec, shipped config and shipped prompt, and nothing a person wrote",
+		async () => {
+			const { cullRetiredCoreSpecs } = await import(
+				"$lib/server/pipelines/boot/retiredGenres"
+			)
+			const db = await createTestDb()
+			const KEY = "pipeline-prompt:core:task/assemble:prompts:tool-loop-default"
+			const [loop] = await db
+				.insert(schema.pipelineSpecs)
+				.values({ slug: "core:spec/tool-loop", name: "Tool loop" })
+				.returning()
+			await db.insert(schema.pipelineConfigs).values({
+				specId: loop!.id,
+				seedKey: "pipeline-default:core:spec/tool-loop",
+				name: "Tool loop",
+				isImmutable: true,
+				isDefault: true
+			})
+			await db.insert(schema.pipelinePrompts).values([
+				{
+					nodeDefinitionId: "core:task/assemble",
+					slot: "prompts",
+					seedKey: KEY,
+					name: "Tool loop",
+					isImmutable: true,
+					createdForSpecId: loop!.id,
+					defaultForSpecs: ["core:spec/tool-loop"],
+					fields: { system: "loop" }
+				},
+				{
+					nodeDefinitionId: "core:task/assemble",
+					slot: "prompts",
+					name: "My loop",
+					fields: { system: "mine" }
+				}
+			])
+			// A plugin's own spec of the same name is not core's.
+			await db
+				.insert(schema.pipelineSpecs)
+				.values({ slug: "acme:spec/tool-loop", name: "Acme loop" })
+
+			expect(await cullRetiredCoreSpecs(db)).toBe(1)
+			const specs = (
+				await db.select({ slug: schema.pipelineSpecs.slug }).from(schema.pipelineSpecs)
+			).map((r) => r.slug)
+			expect(specs).not.toContain("core:spec/tool-loop")
+			expect(specs).toContain("acme:spec/tool-loop")
+			expect(
+				await db
+					.select()
+					.from(schema.pipelineConfigs)
+					.where(eq(schema.pipelineConfigs.seedKey, "pipeline-default:core:spec/tool-loop"))
+			).toEqual([])
+			const prompts = await db
+				.select({ name: schema.pipelinePrompts.name, seedKey: schema.pipelinePrompts.seedKey })
+				.from(schema.pipelinePrompts)
+				.where(eq(schema.pipelinePrompts.nodeDefinitionId, "core:task/assemble"))
+			expect(prompts).toEqual([{ name: "My loop", seedKey: null }])
+			expect(await cullRetiredCoreSpecs(db)).toBe(0)
+		},
+		60_000
+	)
+
+	it(
+		"hands its prompt over, rather than deleting it, while another config still selects it",
+		async () => {
+			const { cullRetiredCoreSpecs } = await import(
+				"$lib/server/pipelines/boot/retiredGenres"
+			)
+			const db = await createTestDb()
+			await bootstrap(db)
+			const KEY = "pipeline-prompt:core:task/assemble:prompts:tool-loop-default"
+			const [prompt] = await db
+				.insert(schema.pipelinePrompts)
+				.values({
+					nodeDefinitionId: "core:task/assemble",
+					slot: "prompts",
+					seedKey: KEY,
+					templateId: "core:template/assemble-prompts-tool-loop-default@1",
+					name: "Tool loop",
+					isImmutable: true,
+					fields: { system: "loop" }
+				})
+				.returning()
+			// Some surviving config selects it at a prompts slot.
+			const [config] = await db
+				.select({ id: schema.pipelineConfigs.id })
+				.from(schema.pipelineConfigs)
+				.limit(1)
+			await db.insert(schema.pipelineConfigValues).values({
+				configId: config!.id,
+				nodeKey: "somewhere",
+				slot: "prompts",
+				path: "",
+				value: prompt!.id
+			})
+			await cullRetiredCoreSpecs(db)
+			const [kept] = await db
+				.select()
+				.from(schema.pipelinePrompts)
+				.where(eq(schema.pipelinePrompts.id, prompt!.id))
+			expect(kept).toMatchObject({
+				name: "Tool loop",
+				seedKey: null,
+				templateId: null,
+				isImmutable: false
+			})
+		},
+		240_000
 	)
 })

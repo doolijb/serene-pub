@@ -37,6 +37,7 @@ import {
 } from "@serene-pub/sdk"
 import { type Decl } from "$lib/server/pipelines/config/panel/types"
 import { isUnreadSlot } from "$lib/server/pipelines/boot/unreadAllowList"
+import { isHeldConnectionSlot } from "$lib/server/pipelines/config/heldSlots"
 
 const KIND_TO_MATRIX_SLOT: Record<string, string> = {
 	connection: "connection",
@@ -709,13 +710,17 @@ export async function declarations(
 			i18nText(row.i18n?.name) ?? humanizeTypeId(node.definitionId)
 		const slots = (row.slots ?? {}) as Record<string, SlotDecl>
 		for (const [slotName, decl] of Object.entries(slots)) {
-			// A slot no handler reads is not a choice (`isUnreadSlot`): the run
-			// drops a value stored there and resolves the instance default, so
-			// a picker for it would change nothing — today the embed steps'
-			// connection, which the host embeds through the star whatever it
-			// says (review 2026-09-29). Off this list, a stored row at the
-			// address is culled by `reconcileConfigs` as orphaned.
+			// A slot that takes no pick is not a choice: the run drops a value
+			// stored there and resolves the instance default, so a picker for
+			// it would change nothing. Two kinds: a held connection slot
+			// (`isHeldConnectionSlot` — today `query-windows`' embedding
+			// connection, held at the active one by policy: a pipeline never
+			// chooses its embedding connection, owner 2026-10-05), and a slot
+			// no handler reads (`isUnreadSlot` — none today). Off this list, a
+			// stored row at the address is culled by `reconcileConfigs` as
+			// orphaned.
 			if (
+				isHeldConnectionSlot(decl) ||
 				isUnreadSlot(`${node.definitionId}@${node.definitionVersion}`, slotName)
 			)
 				continue

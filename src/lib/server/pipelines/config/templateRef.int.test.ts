@@ -49,7 +49,7 @@ import * as schema from "$lib/server/db/schema"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
-const RESPOND = "core:spec/respond"
+const RESPOND = "core:spec/chat-respond"
 
 let db: TestDb
 let spec: { id: number; activeVersionId: number | null; slug: string }
@@ -59,7 +59,7 @@ let presetId: number
 async function promptsDecl() {
 	const decls = await declarations(db, spec.activeVersionId!)
 	const d = decls.find((x) => x.control === "prompts-ref")
-	expect(d, "core:spec/respond declares a prompts slot").toBeTruthy()
+	expect(d, "core:spec/chat-respond declares a prompts slot").toBeTruthy()
 	return d!
 }
 

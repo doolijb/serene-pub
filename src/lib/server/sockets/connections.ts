@@ -43,11 +43,12 @@ import {
 } from "$lib/server/koboldcpp/visionProjector"
 import { visionProjectorOf } from "$lib/shared/connections/hostCapabilities"
 import { withStarConsequences } from "$lib/server/connections/starConsequences"
+import { starRefusal } from "$lib/server/connections/starRefusal"
 import {
-	localModelState,
 	localModelStates,
 	onnxModalityOf
 } from "$lib/server/localModels/onnxCache"
+import { localOnnxRefusal } from "$lib/server/localModels/onnxRuntime"
 import {
 	allConnectionModels as listAllConnectionModels,
 	connectionModelById,
@@ -389,6 +390,19 @@ export const connectionsCreate: Handler<
 			throw new Error(
 				"Access denied. Only admin users can manage connections."
 			)
+		}
+
+		// A local ONNX connection on a machine that cannot load the runtime
+		// would be a connection whose every model is a Download that fails.
+		// The pickers show these types disabled with the same reason; this is
+		// the refusal behind them, for the Document View form and raw calls.
+		// Existing rows are left alone — a later build may run them.
+		if (onnxModalityOf(String(params.connection?.type ?? ""))) {
+			const unrunnable = await localOnnxRefusal()
+			if (unrunnable) {
+				emitToUser("connections:create:error", { error: unrunnable })
+				throw new Error(unrunnable)
+			}
 		}
 
 		let data = { ...params.connection }
@@ -909,72 +923,17 @@ export const connectionsSetDefault: Handler<
 		// than accepted and failed later at dispatch. Registering an image-only
 		// endpoint as the chat default is a write that succeeds, shows a star on
 		// screen, and then fails every Send with a sentence about adapters — and
-		// it is exactly what the deleted auto-star did on its own. Judged with
-		// `capabilityRefusal`, the same reader the picker and the bind guard use,
-		// so all three agree about what a connection can do.
+		// it is exactly what the deleted auto-star did on its own.
 		//
-		// Clearing (`id: null`) is never refused: it names no connection to
-		// judge, and refusing to un-star would be a trap.
-		if (params.id != null) {
-			const row = await db.query.connections.findFirst({
-				where: (c, { eq }) => eq(c.id, params.id!),
-				columns: {
-					id: true,
-					name: true,
-					type: true,
-					// The merge resolves capabilities through the preset too, so
-					// the pair is judged in the same key space the picker greyed
-					// the row in.
-					preset: true,
-					capabilities: true
-				}
-			})
-			if (!row) refuse("Connection not found.")
-			// The MODEL half, validated before anything is stored: a
-			// registration whose two halves name different connections is a pair
-			// no picker can display and no run can resolve. It is REQUIRED —
-			// connections have no default model, so "the endpoint, whichever
-			// model" is not a registration.
-			if (params.modelId == null)
-				refuse(
-					"Choose a model on this connection — connections have no default model."
-				)
-			const model = await connectionModelById(db, params.modelId)
-			{
-				const bad = !model
-					? "That model no longer exists."
-					: model.connectionId !== params.id
-						? "That model is not on the connection you chose."
-						: !model.enabled
-							? "That model is switched off. Switch it on, or choose another."
-							: model.missingSince
-								? "That model is no longer listed by its host. Refresh the connection's models, or choose another."
-								: null
-				if (bad) refuse(bad)
-			}
-			// A local ONNX model runs from files on THIS disk and nothing
-			// fetches them on use — registering one that is not downloaded
-			// points every embed or scan at nothing. Every other endpoint's
-			// models are a host's, and `localModelState` answers null for them.
-			if (onnxModalityOf(row.type)) {
-				const local = await localModelState(db, row, model!)
-				if (local && local.state !== "on_disk")
-					refuse(
-						local.state === "downloading"
-							? "That model is still downloading. Make it active once it has finished."
-							: "That model isn't downloaded yet. Download it first, then make it active."
-					)
-			}
-			// Judged as the PAIR (0114): one host serves a vision checkpoint and
-			// a text-only one at the same base URL, so judging the bare endpoint
-			// would star the text-only one for vision and fail at the first
-			// image.
-			const refusal = capabilityRefusal(
-				mergeEndpointModel(row as any, model) as any,
-				params.capability as CapabilityId
-			)
-			if (refusal) refuse(refusal)
-		}
+		// `starRefusal` is the ONE judgement, shared with Admin → Defaults
+		// (`connectionDefaults:set`) so the two doors cannot disagree about
+		// which choices a star accepts. Clearing (`id: null`) is never refused.
+		const refusal = await starRefusal(db, {
+			capability: params.capability,
+			connectionId: params.id,
+			connectionModelId: params.modelId
+		})
+		if (refusal) refuse(refusal)
 
 		/**
 		 * The write, and the consequence of the star it moves.

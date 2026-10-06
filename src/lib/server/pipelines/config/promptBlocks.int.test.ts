@@ -22,7 +22,7 @@ import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import {
 	bootstrapPipelines,
-	RESPOND_SPEC_ID
+	CHAT_RESPOND_SPEC_ID
 } from "$lib/server/pipelines/boot/bootstrap"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { resolveConfigSources } from "@serene-pub/sdk"
@@ -61,7 +61,7 @@ beforeAll(async () => {
 	const [spec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 	specId = spec.id
 
 	const [admin] = await db
@@ -78,7 +78,7 @@ const shippedConfig = async () => {
 		.where(
 			eq(
 				schema.pipelineConfigs.seedKey,
-				`pipeline-default:${RESPOND_SPEC_ID}`
+				`pipeline-default:${CHAT_RESPOND_SPEC_ID}`
 			)
 		)
 	return row
@@ -101,7 +101,7 @@ const rowAt = async (configId: number) => {
 
 /** What a run resolves, through the executor's own two calls. */
 const resolvedBlocks = async (sessionId?: number) => {
-	const world = await buildWorld(db, { specId: RESPOND_SPEC_ID, sessionId })
+	const world = await buildWorld(db, { specId: CHAT_RESPOND_SPEC_ID, sessionId })
 	const sources: any = resolveConfigSources(world as any, [NODE])
 	return sources?.[NODE]?.[SLOT]?.[PATH]
 }
@@ -137,7 +137,7 @@ describe("the declared default costs no row", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			{ userId: adminId, isAdmin: true },
 			handle(),
 			REORDERED,
@@ -148,7 +148,7 @@ describe("the declared default costs no row", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			{ userId: adminId, isAdmin: true },
 			handle(),
 			SHIPPED_PROMPT_BLOCKS,
@@ -183,7 +183,7 @@ describe("a preset carries the pack to its sessions", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			{ userId: adminId, isAdmin: true },
 			handle(),
 			REORDERED,
@@ -195,7 +195,7 @@ describe("a preset carries the pack to its sessions", () => {
 			.values({
 				name: "Cast first",
 				genreId: "core:genre/chat",
-				configSelections: { [RESPOND_SPEC_ID]: presetConfigId }
+				configSelections: { [CHAT_RESPOND_SPEC_ID]: presetConfigId }
 			})
 			.returning()
 

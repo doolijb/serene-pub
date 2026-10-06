@@ -474,8 +474,14 @@ async function restoreEmbeddingConnection(
 	if (!row) return
 	// The name a new connection of its type gets, as every other connection
 	// the upgrade builds is named (`connectionGroups.ts`). It is never one of
-	// the groups: no 0.5.3 connection had an embedding type, and 0.6's
-	// OpenAI-compatible chat type cannot embed.
+	// the groups: no 0.5.3 connection had an embedding type. And it is written
+	// as `openai-embeddings` although 0.6's `openai` type embeds now, because
+	// the reconciliation counts its model by `modality = 'embeddings'`; the
+	// merge (`connections/openAIMultiModality.ts`) renames it into `openai`
+	// once that count is done, in the same restore (`restore.ts`), as a
+	// connection of its own even where a group has its address. Its key waits
+	// in quarantine for `migrateEmbeddingConnection`, which finds the row by
+	// the quarantine.
 	row.name = uniqueName(serviceName(row.type) ?? "Embeddings", taken)
 	if (vc && vc.embeddingModelTtlMinutes != null && vc.embeddingModelTtlMinutes !== 5)
 		(row.extraJson as Record<string, unknown>).embeddingModelTtlMinutes =

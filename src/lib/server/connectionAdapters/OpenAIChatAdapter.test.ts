@@ -31,7 +31,8 @@ vi.mock("openai", () => ({
 	}
 }))
 
-const exportsDefault = (await import("./OpenAIChatAdapter")).default
+const adapterModule = await import("./OpenAIChatAdapter")
+const exportsDefault = adapterModule.default
 
 function makeConnection(overrides: Record<string, any> = {}): any {
 	return {
@@ -129,6 +130,99 @@ describe("OpenAIChatAdapter — base URL trailing-slash normalization", () => {
 		expect(openAIConstructorMock).toHaveBeenLastCalledWith(
 			expect.objectContaining({ baseURL: undefined })
 		)
+	})
+})
+
+describe("OpenAIChatAdapter — what each listed model is for", () => {
+	const { openAIModelModality } = adapterModule
+	const listed = (out: unknown) => ({
+		id: "m",
+		architecture: { output_modalities: out }
+	})
+
+	test("a one-sided output_modalities answers; anything else says nothing", () => {
+		expect(openAIModelModality(listed(["embeddings"]))).toBe("embeddings")
+		expect(openAIModelModality(listed(["text"]))).toBe("text-gen")
+		// It writes text, so it can chat.
+		expect(openAIModelModality(listed(["image", "text"]))).toBe("text-gen")
+		expect(openAIModelModality(listed(["text", "embeddings"]))).toBe(
+			undefined
+		)
+		expect(openAIModelModality(listed(["image"]))).toBe(undefined)
+		expect(openAIModelModality(listed("text"))).toBe(undefined)
+		// Most services: `{id, object, created, owned_by}` and no guess from
+		// the id.
+		expect(
+			openAIModelModality({
+				id: "text-embedding-3-small",
+				object: "model"
+			})
+		).toBe(undefined)
+		expect(openAIModelModality(null)).toBe(undefined)
+	})
+
+	const OPENROUTER_DATA = [
+		{
+			id: "openai/gpt-4o",
+			architecture: { output_modalities: ["text"] }
+		},
+		{
+			id: "google/gemini-embedding-2",
+			architecture: { output_modalities: ["embeddings"] }
+		}
+	]
+
+	test.each([
+		[
+			"its preset",
+			{ preset: "openrouter", baseUrl: "https://proxy.test/v1" }
+		],
+		[
+			"its address",
+			{ preset: null, baseUrl: "https://OpenRouter.ai/api/v1/" }
+		]
+	])(
+		"OpenRouter, known by %s, is asked for embedding models too, and each says what it is for",
+		async (_, overrides) => {
+			modelsListMock.mockReset()
+			modelsListMock.mockResolvedValue({ data: OPENROUTER_DATA })
+			const res = await exportsDefault.listModels(
+				makeConnection(overrides)
+			)
+			// OpenRouter's `/models` lists text models only unless asked.
+			expect(modelsListMock).toHaveBeenCalledWith({
+				query: { output_modalities: "text,embeddings" }
+			})
+			expect(res.models.map((m: any) => [m.id, m.modality])).toEqual([
+				["openai/gpt-4o", "text-gen"],
+				["google/gemini-embedding-2", "embeddings"]
+			])
+			// The rest of the entry rides along for `readModelFacts`.
+			expect(res.models[0].architecture).toEqual(
+				OPENROUTER_DATA[0].architecture
+			)
+			// And the shared reader keeps the word.
+			const { normalizeProbedModels } = await import(
+				"$lib/shared/connections/probedModels"
+			)
+			expect(
+				normalizeProbedModels(res.models).map((m) => m.modality)
+			).toEqual(["text-gen", "embeddings"])
+		}
+	)
+
+	test("any other service is listed as before, with no modality claimed", async () => {
+		modelsListMock.mockReset()
+		modelsListMock.mockResolvedValue({
+			data: [{ id: "gpt-4o", object: "model", owned_by: "openai" }]
+		})
+		const res = await exportsDefault.listModels(
+			makeConnection({ preset: "openai-official" })
+		)
+		expect(modelsListMock).toHaveBeenCalledWith(undefined)
+		expect(res.models).toEqual([
+			{ id: "gpt-4o", object: "model", owned_by: "openai" }
+		])
 	})
 })
 

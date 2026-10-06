@@ -58,23 +58,20 @@
  * descriptor for every node, to have seen params slots, and to have found
  * correctly-wired ones — before anything is concluded from its silence.
  *
- * ## ⚠ This file is green over open debt
+ * ## The debt is paid — and the ledger stays, at zero
  *
- * The catalog is **not** clean today. The first run of this walk found 17
- * declared-and-unwired slots across the shipped specs, in three distinct
- * shapes, and fixing them is spec work rather than test work. Eleven of them are
- * now closed — every instance of shapes 1 and 2, the last three by the
+ * The first run of this walk found 17 declared-and-unwired slots across the
+ * shipped specs, in three distinct shapes, and fixing them was spec work
+ * rather than test work. Eleven closed as shapes 1 and 2, the last three by the
  * catalog's `params: slot.params()` on the three reply specs' `generate`
- * node. So the ledger stands at **ten**, and every one of them is shape 3: a
- * slot whose fix is a reader or a deleted declaration, not a `slot.*()`. They
- * are written down in
- * `LEDGER` below, one line each, with what a person setting that control is
- * actually getting — and asserted in **both** directions plus by count, so a
- * ledger line cannot outlive its debt, a new instance cannot hide behind one,
- * and the total cannot drift without an edit here. Read `LEDGER`'s own comment
- * before reading a green tick here as "the catalog wires every slot it
- * declares"; what is actually guaranteed is that the number cannot grow
- * silently.
+ * node. The last ten were shape 3 — `embed-text.connection`, a slot with no
+ * reader — and they closed on 2026-10-05 by owner ruling D-c ("remove
+ * `embed-text`'s inert connection control"), which deleted the declaration.
+ * So the ledger stands at **zero**. It is still derived, asserted in **both**
+ * directions plus by count, so a new instance cannot hide behind a line and
+ * the total cannot drift without an edit here. Read `LEDGER`'s own comment
+ * before reading a green tick here as more than "the number cannot grow
+ * silently".
  */
 
 import { describe, it, expect } from "vitest"
@@ -234,8 +231,7 @@ const shipped = (): WalkableDoc[] =>
  * declarations. So the ledger here is computed from that file's ONE allow-list:
  * a slot a definition is allowed to declare unread is, on every shipped node of
  * that definition, a slot the spec is correctly not naming. One reason, written
- * once, read by both guards; the day a handler reads `embed-text.connection`
- * the allow-list line goes and these ten entries go with it.
+ * once, read by both guards. Empty today: the allow-list holds no slot line.
  *
  * Three distinct shapes were in here. **Shapes 1 and 2 are closed** — eleven
  * entries, deleted rather than annotated, because a ledger that outlives its
@@ -260,13 +256,15 @@ const shipped = (): WalkableDoc[] =>
  *     `contextBudget` and `prompt` — which read the same slots by reference —
  *     followed the pick. `runtime/samplingSlotDispatch.int.test.ts` is where
  *     that is asserted end to end.
- *  3. **Slots with no reader at all** — the ten that remain, and the only shape
- *     naming the slot does not fix. `core:oracle/embed-text@1`'s `connection`
- *     is never consulted — `host.ts` embeds through the local model
- *     (`embeddingApi()`), which is what the "embedding models become
- *     connections" work exists to change. Naming it would resolve a value into a
- *     port nobody reads, so its fix is a reader or a deleted declaration, not a
- *     `slot.*()`.
+ *  3. **Slots with no reader at all** — closed 2026-10-05, ten entries, the
+ *     only shape naming the slot could not fix. `core:oracle/embed-text@1`'s
+ *     `connection` was never consulted — `host.ts` embeds through the active
+ *     embedding connection (`embeddingApi()`) — so its fix was a reader or a
+ *     deleted declaration, and owner ruling D-c chose the deletion: a pipeline
+ *     never chooses its embedding connection. The one embedding slot that IS
+ *     read, `core:task/query-windows@1`'s, is wired (`slot.connection()`) and
+ *     held at the active connection by policy (`config/heldSlots.ts`), so it
+ *     renders no control and adds no line here.
  *
  * ⚠ **`generate-text`'s `params.stopSequences` was the third shape-1 group and
  * it is closed.** It is worth keeping the sequence, because the halves landed
@@ -348,7 +346,7 @@ describe("the walk is capable of the measurement it is used for", () => {
 			result.wired.some(
 				(f) =>
 					f.key ===
-					'core:spec/respond node "gather.history.read" slot "params"'
+					'core:spec/chat-respond node "gather.history.read" slot "params"'
 			),
 			"`respond`'s history node must show up as wired. Either the " +
 				"matcher stopped recognising the SlotRef shape, or the history " +
@@ -415,44 +413,71 @@ describe("every declared slot is named by the spec that uses it", () => {
 	 * and it is the assertion that made closing shapes 1 and 2 a visible event
 	 * rather than eight quiet deletions.
 	 *
-	 * ⚠ **10, and every one of them is shape 3.** The number may only go DOWN without a ruling:
-	 * a shape-3 entry is a slot with no reader anywhere in the app, so adding
-	 * one means shipping a control that is inert by construction.
+	 * ⚠ **0** (owner ruling 2026-10-05, D-c: "remove `embed-text`'s inert
+	 * connection control"). The number may only go DOWN without a ruling, and
+	 * it is at the floor: a new entry is a slot with no reader anywhere in the
+	 * app, so adding one means shipping a control that is inert by
+	 * construction.
 	 *
-	 * 10 = `embed-text.connection` on the two retrieval arms (`semantic.arm.embed`,
-	 * `names.arm.embed`) of each of the five specs that retrieve: respond,
-	 * adventure, lair, narrate, narrate-character. Lorebooks wave 8 (2026-10-02)
-	 * gave narrate and narrate-character the two arms, under the SAME
-	 * allow-list ruling (awaiting embeddings-as-connections), and that slot is
-	 * held at the star (`isUnreadSlot`): the panel offers no pick for it, so no
-	 * new inert control reaches a person. A reader for the slot closes all ten.
+	 * It was 10 — `embed-text.connection` on the two retrieval arms
+	 * (`semantic.arm.embed`, `names.arm.embed`) of each of the five specs that
+	 * retrieve — held at the star so no person ever saw the control. The
+	 * ruling deleted the slot rather than reading it, so all ten closed at
+	 * once. ⚠ The hold did not go with it: `query-windows` declares its own
+	 * embedding connection now and reads it, held at the active embedding
+	 * connection by policy (`isHeldConnectionSlot`) — read, so no ledger line,
+	 * and held, so no control.
 	 *
-	 * Derived now, so the two ways it can move are both visible: a new
-	 * allow-list SLOT line in `declaredReads.ts` (a ruling), or a spec gaining
-	 * or losing a node of an allow-listed definition (a spec edit).
+	 * Derived, so the two ways it can move are both visible: a new allow-list
+	 * SLOT line in `unreadAllowList.ts` (a ruling), or a spec gaining a node of
+	 * an allow-listed definition (a spec edit).
 	 */
-	it("stands at ten open entries", () => {
+	it("stands at zero open entries", () => {
 		expect(
 			LEDGER.size,
-			"the ledger's size moved. Down is a fix — say which shape closed in " +
-				"the header. Up is a new inert control, and needs the ruling that " +
-				"decided to ship one."
-		).toBe(10)
+			"the ledger's size moved. It is at zero; up is a new inert control, " +
+				"and needs the ruling that decided to ship one."
+		).toBe(0)
 		const kindOf = new Map(result.findings.map((f) => [f.key, f.slotKind]))
-		// One member and no second: `embed-text.connection`, ten of them, one
-		// per arm per spec. Spelled out so a regression cannot be absorbed by a
-		// line that merely looks plausible — and `parameters` is asserted at
-		// ZERO rather than left unmentioned, because that is the group
-		// the reply specs' wiring emptied and an entry creeping back into it is exactly
-		// what this pair exists to catch.
+		// By kind as well, so a regression cannot be absorbed by a line that
+		// merely looks plausible — `connection` is where the last ten were,
+		// and `parameters` is the group the reply specs' wiring emptied.
 		expect(
 			[...LEDGER.keys()].filter((k) => kindOf.get(k) === "connection")
 				.length
-		).toBe(10)
+		).toBe(0)
 		expect(
 			[...LEDGER.keys()].filter((k) => kindOf.get(k) === "parameters")
 				.length
 		).toBe(0)
+	})
+
+	/**
+	 * The hold that replaced the ten (2026-10-05): the retrieval specs' one
+	 * embedding connection is `query-windows`' own, NAMED by the spec — so it
+	 * is read and not inert — and the embed steps declare none at all.
+	 */
+	it("the semantic arm's queries step wires its own embedding connection", () => {
+		const wired = new Set(result.wired.map((f) => f.key))
+		for (const slug of [
+			"core:spec/chat-respond",
+			"core:spec/chat-narrate",
+			"core:spec/chat-side-character"
+		])
+			expect(
+				wired.has(
+					`${slug} node "semantic.arm.queries" slot "connection"`
+				),
+				`${slug}'s queries step does not name its connection slot — ` +
+					`Automatic would read no connection and never search by meaning`
+			).toBe(true)
+		expect(
+			[...result.findings, ...result.wired].filter((f) =>
+				/node "(semantic|names)\.arm\.embed" slot "connection"/.test(
+					f.key
+				)
+			)
+		).toEqual([])
 	})
 
 	/**
@@ -464,9 +489,9 @@ describe("every declared slot is named by the spec that uses it", () => {
 	it("all three reply specs wire the generate node's connection, sampling and params", () => {
 		const wired = new Set(result.wired.map((f) => f.key))
 		const missing = [
-			"core:spec/respond",
-			"core:spec/narrate",
-			"core:spec/narrate-character"
+			"core:spec/chat-respond",
+			"core:spec/chat-narrate",
+			"core:spec/chat-side-character"
 		]
 			.flatMap((slug) =>
 				["connection", "sampling", "params"].map(
@@ -493,7 +518,7 @@ describe("every declared slot is named by the spec that uses it", () => {
 			"gather.relationshipsKnown.read"
 		])
 			expect(
-				wired.has(`core:spec/respond node "${node}" slot "params"`),
+				wired.has(`core:spec/chat-respond node "${node}" slot "params"`),
 				`${node} does not name its params slot — capRelationships is ` +
 					`back to being called with undefined on every turn`
 			).toBe(true)
@@ -511,7 +536,7 @@ describe("every declared slot is named by the spec that uses it", () => {
 	it("the image spec wires the render node's params slot", () => {
 		const wired = new Set(result.wired.map((f) => f.key))
 		expect(
-			wired.has('core:spec/generate-image node "render" slot "params"'),
+			wired.has('core:spec/chat-generate-image node "render" slot "params"'),
 			"the render node does not name its params slot — `streaming` is a " +
 				"control that stores and is never read"
 		).toBe(true)
@@ -537,7 +562,7 @@ describe("the check fails when a slot goes unwired", () => {
 			...d,
 			nodes: d.nodes.map((n) => ({ ...n, config: { ...n.config } }))
 		}))
-		const respond = docs.find((d) => d.id === "core:spec/respond")!
+		const respond = docs.find((d) => d.id === "core:spec/chat-respond")!
 		const history = respond.nodes.find(
 			(n) => n.key === "gather.history.read"
 		)!
@@ -550,7 +575,7 @@ describe("the check fails when a slot goes unwired", () => {
 		const broken = walk(docs)
 		const sentences = broken.findings.map((f) => f.sentence)
 		expect(sentences).toContain(
-			`core:spec/respond@${respond.version} node "gather.history.read" ` +
+			`core:spec/chat-respond@${respond.version} node "gather.history.read" ` +
 				`(core:query/session-history@1) declares a params slot the spec ` +
 				`never wires — the control renders and does nothing.`
 		)
@@ -558,7 +583,7 @@ describe("the check fails when a slot goes unwired", () => {
 		expect(
 			broken.findings.filter((f) => !LEDGER.has(f.key)).map((f) => f.key)
 		).toEqual([
-			'core:spec/respond node "gather.history.read" slot "params"'
+			'core:spec/chat-respond node "gather.history.read" slot "params"'
 		])
 	})
 })

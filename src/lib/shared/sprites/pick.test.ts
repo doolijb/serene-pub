@@ -156,21 +156,29 @@ describe("nextSpriteMetadata (show-sprite's one rule)", () => {
 		expect(byPerson.sprite).toMatchObject({ label: "joy", source: "person" })
 	})
 
-	test("no pick on a faceless line is no write; no pick on a picked line clears it", () => {
+	test("a picker's null pick is no write, faceless line or not; a person's clears", () => {
+		// The `show-sprite` contract (2026-10-05): the outlet runs after every
+		// reply, so a picker that chose nothing must leave the line as it is.
 		expect(nextSpriteMetadata({}, null, false)).toEqual({ kept: true, sprite: null })
-		const cleared = nextSpriteMetadata(
-			{ sprite: { set: "d", label: "joy", source: "picker" } },
-			null,
-			false
-		)
+		const shown = { sprite: { set: "d", label: "joy", source: "picker" } }
+		expect(nextSpriteMetadata(shown, null, false)).toEqual({
+			kept: true,
+			sprite: shown.sprite
+		})
+		const cleared = nextSpriteMetadata(shown, null, true)
 		expect(cleared.kept).toBe(false)
 		expect(cleared.sprite).toBeNull()
 	})
 
-	test("the same sprite again is no write; junk picks clear", () => {
+	test("the same sprite again is no write; junk is no pick", () => {
 		const meta = { sprite: { set: "default", label: "joy", source: "picker" } }
 		expect(nextSpriteMetadata(meta, pick, false).kept).toBe(true)
-		const junk = nextSpriteMetadata(meta, { set: 3, label: "" }, false)
+		// A picker's junk keeps the line; a person's clears it.
+		expect(nextSpriteMetadata(meta, { set: 3, label: "" }, false)).toEqual({
+			kept: true,
+			sprite: meta.sprite
+		})
+		const junk = nextSpriteMetadata(meta, { set: 3, label: "" }, true)
 		expect(junk.sprite).toBeNull()
 	})
 })

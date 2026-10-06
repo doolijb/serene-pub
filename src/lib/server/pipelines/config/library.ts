@@ -42,6 +42,7 @@ import {
 	poolKeyFor
 } from "$lib/server/pipelines/entities/contextTemplateDefaults"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
+import { pipelineLabelsById } from "$lib/server/pipelines/entities/pipelineLabels"
 import {
 	CORE_TEMPLATE_ENGINE,
 	knownEngines
@@ -65,6 +66,11 @@ const languageOf = (engineId: string): string => {
 export interface LibraryPipeline {
 	slug: string
 	name: string
+	/**
+	 * The name with its genre beside it ("Reply · Adventure"), the string
+	 * `usedBy` and `origin` name this pipeline by (`pipelineLabelsById`).
+	 */
+	label: string
 	version: string | null
 	status: string | null
 	nodeCount: number
@@ -111,6 +117,7 @@ export interface LibraryPrompt {
 	 * merely unused. This is the "reference/copy it later" half of the ruling.
 	 */
 	archived: Record<string, string>
+	/** Pipelines currently pointing at it, by `LibraryPipeline.label`. */
 	usedBy: string[]
 }
 
@@ -193,7 +200,7 @@ export interface LibraryView {
 	engines: Array<{ id: string; owner: string }>
 	/**
 	 * Sampling config id → the pipelines whose `sampling-ref` slots pick it,
-	 * by display name. Sampling configs are not library rows (they live in
+	 * by label (the name with its genre beside it). Sampling configs are not library rows (they live in
 	 * Admin → Sampling), but "which pipelines use this" is the same walk, so
 	 * it is answered here rather than by a second copy of `usageIndex`.
 	 */
@@ -214,19 +221,17 @@ export interface LibraryView {
  */
 async function usageIndex(
 	db: Db,
-	slots: Set<string>
+	slots: Set<string>,
+	labels: Map<number, string>
 ): Promise<Map<number, Set<string>>> {
 	const out = new Map<number, Set<string>>()
 	if (!slots.size) return out
 
-	const specs = await db.select().from(schema.pipelineSpecs)
-	const nameById = new Map<number, string>(
-		(specs as any[]).map((s) => [s.id, s.name ?? s.slug])
-	)
-
+	// By label, not bare name: four genres' "Reply" are four pipelines, and
+	// a set of names would count them as one.
 	const note = (value: unknown, specId: number | null) => {
 		if (typeof value !== "number") return
-		const label = specId != null ? nameById.get(specId) : undefined
+		const label = specId != null ? labels.get(specId) : undefined
 		if (!label) return
 		const set = out.get(value) ?? new Set<string>()
 		set.add(label)
@@ -258,6 +263,7 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 		.orderBy(asc(schema.pipelineSpecs.id))
 
 	const pipelines: LibraryPipeline[] = []
+	const labels = await pipelineLabelsById(db)
 	const promptSlots = new Set<string>()
 	const templateSlots = new Set<string>()
 	const variableSlots = new Set<string>()
@@ -350,6 +356,7 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 		pipelines.push({
 			slug: spec.slug,
 			name: spec.name,
+			label: labels.get(spec.id) ?? spec.name,
 			version: version?.semver ?? null,
 			status: version?.status ?? null,
 			nodeCount,
@@ -381,11 +388,7 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			.map(([id, name]) => ({ id, name }))
 			.sort((a, b) => a.name.localeCompare(b.name))
 
-	const specName = new Map<number, string>(
-		(specs as any[]).map((s) => [s.id, s.name ?? s.slug])
-	)
-
-	const promptUse = await usageIndex(db, promptSlots)
+	const promptUse = await usageIndex(db, promptSlots, labels)
 	const prompts: LibraryPrompt[] = (
 		await db
 			.select()
@@ -406,7 +409,7 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 				promptLabels.get(poolId) ??
 				`${humanizeTypeId(p.nodeDefinitionId)} · ${p.slot}`,
 			...(p.createdForSpecId != null
-				? { origin: specName.get(p.createdForSpecId) }
+				? { origin: labels.get(p.createdForSpecId) }
 				: {}),
 			name: p.name,
 			isImmutable: !!p.isImmutable,
@@ -416,7 +419,7 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 		}
 	})
 
-	const templateUse = await usageIndex(db, templateSlots)
+	const templateUse = await usageIndex(db, templateSlots, labels)
 	const contextTemplates: LibraryTemplate[] = (
 		await db
 			.select()
@@ -437,13 +440,13 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 				nodeTypeLabels.get(contextPoolKeyFor(t.nodeDefinitionId, engine)) ??
 				`${humanizeTypeId(t.nodeDefinitionId)} · ${languageOf(engine)}`,
 			...(t.createdForSpecId != null
-				? { origin: specName.get(t.createdForSpecId) }
+				? { origin: labels.get(t.createdForSpecId) }
 				: {}),
 			usedBy: [...(templateUse.get(t.id) ?? [])].sort()
 		}
 	})
 
-	const variableUse = await usageIndex(db, variableSlots)
+	const variableUse = await usageIndex(db, variableSlots, labels)
 	const variableTemplates: LibraryTemplate[] = (
 		await db
 			.select()
@@ -497,7 +500,7 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 		promptPools: asPools(promptLabels),
 		engines: knownEngines(),
 		samplingUsedBy: Object.fromEntries(
-			[...(await usageIndex(db, samplingSlots))].map(([id, names]) => [
+			[...(await usageIndex(db, samplingSlots, labels))].map(([id, names]) => [
 				id,
 				[...names].sort()
 			])

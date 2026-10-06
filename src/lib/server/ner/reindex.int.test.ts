@@ -69,6 +69,21 @@ vi.mock("$lib/server/ner", () => ({
 	}
 }))
 
+/**
+ * NER modules a test serves by type, ahead of the real registry — which every
+ * other type still goes through. Stands in for a registry entry without this
+ * file importing the registry (`importBoundary.test.ts` enumerates who does).
+ */
+const fakes = vi.hoisted(() => new Map<string, unknown>())
+vi.mock("$lib/server/utils/getNerAdapter", async (importOriginal) => {
+	const real =
+		await importOriginal<typeof import("$lib/server/utils/getNerAdapter")>()
+	return {
+		getNerAdapter: async (type: string) =>
+			(fakes.get(type) as any) ?? (await real.getNerAdapter(type))
+	}
+})
+
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
 	const db = await createTestDb()
@@ -209,6 +224,27 @@ describe("starring an entity model", () => {
 		expect(fromModel!.confidence).toBeCloseTo(0.77, 2)
 		expect(fromModel!.mentions).toBe(1)
 		expect(fromModel!.spans.length).toBe(1)
+		// ⚠ The stamp, pinned. A star move clears every row whose
+		// `entity_model` differs from the new identity, so a respelling for
+		// local ONNX (a prefix, a connection id) would re-annotate every
+		// install's whole corpus on the first restart after it shipped.
+		expect(rebuilt.map((r) => r.entityModel)).toEqual(
+			rebuilt.map(() => "Xenova/bert-base-NER")
+		)
+	}, 60_000)
+
+	test("a local ONNX star resolves to the bare HuggingFace id", async () => {
+		// The identity half of the pin above, read where the broker reads it.
+		const { resolveNerTarget } = await import("./target")
+		const conn = await nerConnection("Xenova/bert-base-NER")
+		await star(conn.id)
+		const target = await resolveNerTarget(testDb)
+		expect(target).toMatchObject({
+			connectionId: conn.id,
+			type: CONNECTION_TYPE.LOCAL_ONNX_NER,
+			modelId: "Xenova/bert-base-NER"
+		})
+		expect(target!.connection.model).toBe("Xenova/bert-base-NER")
 	}, 60_000)
 
 	test("pressing the star again costs nothing", async () => {
@@ -408,6 +444,246 @@ describe("starring an entity model", () => {
 		expect(stop).toHaveBeenCalled()
 		expect(resident).toBeNull()
 		stop.mockRestore()
+	}, 60_000)
+})
+
+/**
+ * The annotation lane reads entities through the starred type's ADAPTER — the
+ * seam a NER type that does not run in this process (LLM-prompted entities, say)
+ * will plug into. Served by type the way a registry entry would serve it, by a
+ * module with no `residency`, because it has nothing to load.
+ */
+describe("the lane reads entities through the adapter", () => {
+	test("a starred type's adapter is where the lane's model spans come from", async () => {
+		const FAKE = "c0-int-test-ner"
+		const PHRASE = "kestrel moor"
+		const calls: Array<{ text: string; model?: string }> = []
+		fakes.set(FAKE, {
+			Adapter: class {
+				constructor(public connection: any) {}
+				async extractEntities(req: { text: string; model?: string }) {
+					calls.push(req)
+					const start = req.text.toLowerCase().indexOf(PHRASE)
+					if (start < 0) return []
+					return [
+						{
+							text: req.text.slice(start, start + PHRASE.length),
+							label: "LOC",
+							start,
+							end: start + PHRASE.length,
+							score: 0.42
+						}
+					]
+				}
+			},
+			listModels: async () => ({ models: [] }),
+			testConnection: async () => ({ ok: true })
+		})
+		const { enqueueLorebookAnnotation, settleAnnotationQueue } =
+			await import("$lib/server/annotations/queue")
+		const { applyNerStarChange, currentNerModelId } = await import(
+			"./reindex"
+		)
+		await settleAnnotationQueue()
+		try {
+			const [conn] = await testDb
+				.insert(schema.connections)
+				.values({
+					name: "Hosted entities",
+					type: FAKE,
+					modality: "ner",
+					extraJson: {},
+					capabilities: {}
+				} as any)
+				.returning()
+			await testDb.insert(schema.connectionModels).values({
+				connectionId: conn!.id,
+				model: "hosted-ner-1",
+				name: "hosted-ner-1"
+			})
+			const before = await currentNerModelId(testDb)
+			await star(conn!.id)
+			await applyNerStarChange(testDb, before)
+
+			const { lorebook, entry } = await seedBook(
+				"Riders crossed the kestrel moor at dusk."
+			)
+			enqueueLorebookAnnotation(lorebook.id, "Book")
+			await settleAnnotationQueue()
+
+			const rows = await annotationsOf(entry.id)
+			const fromModel = rows.find((r) => r.tier === "model")
+			expect(
+				fromModel,
+				"the adapter's spans never reached entry_annotations"
+			).toBeTruthy()
+			expect(fromModel!.entityKey).toBe("open:kestrel moor")
+			expect(fromModel!.confidence).toBeCloseTo(0.42, 2)
+			expect(rows.map((r) => r.entityModel)).toEqual(
+				rows.map(() => "hosted-ner-1")
+			)
+			// Called with the leased model, on the row's own text.
+			expect(
+				calls.some(
+					(c) => c.model === "hosted-ner-1" && c.text.includes(PHRASE)
+				)
+			).toBe(true)
+			// And the in-process runtime was never asked to load anything:
+			// a backend with no residency is leased as it stands.
+			expect(resident).toBeNull()
+
+			// The model's label rides on the model row, and only there…
+			expect(fromModel!.entityLabel).toBe("LOC")
+			for (const r of rows.filter((r) => r.tier !== "model"))
+				expect(r.entityLabel).toBeNull()
+			// …and is read back beside the keys.
+			const { loadVocabulary, readEntryAnnotations } = await import(
+				"$lib/server/annotations"
+			)
+			const index = await readEntryAnnotations(
+				testDb as any,
+				[entry.id],
+				await loadVocabulary(testDb as any, lorebook.id)
+			)
+			expect(index.entityLabels.get(entry.id)).toEqual({
+				"open:kestrel moor": "LOC"
+			})
+		} finally {
+			const before = await currentNerModelId(testDb)
+			await star(null)
+			await applyNerStarChange(testDb, before)
+			await settleAnnotationQueue()
+			fakes.delete(FAKE)
+		}
+	}, 60_000)
+})
+
+/**
+ * The live query window is read by the entity model too — when, and only when,
+ * a lease on it holds. Never a load and never a wait: with nothing leased the
+ * window is the lexical tiers' alone, exactly as before.
+ */
+describe("the query window", () => {
+	test("is read by the leased adapter, and lexically without one", async () => {
+		const FAKE = "c1-int-test-ner"
+		const PHRASE = "kestrel moor"
+		const calls: string[] = []
+		fakes.set(FAKE, {
+			Adapter: class {
+				constructor(public connection: any) {}
+				async extractEntities(req: { text: string }) {
+					calls.push(req.text)
+					const start = req.text.toLowerCase().indexOf(PHRASE)
+					if (start < 0) return []
+					return [
+						{
+							text: req.text.slice(start, start + PHRASE.length),
+							label: "LOC",
+							start,
+							end: start + PHRASE.length,
+							score: 0.42
+						}
+					]
+				}
+			},
+			listModels: async () => ({ models: [] }),
+			testConnection: async () => ({ ok: true })
+		})
+		const { enqueueLorebookAnnotation, settleAnnotationQueue } =
+			await import("$lib/server/annotations/queue")
+		const { applyNerStarChange, currentNerModelId } = await import(
+			"./reindex"
+		)
+		const { createHost } = await import(
+			"$lib/server/pipelines/runtime/host"
+		)
+		await settleAnnotationQueue()
+		try {
+			const [conn] = await testDb
+				.insert(schema.connections)
+				.values({
+					name: "Hosted entities, windowed",
+					type: FAKE,
+					modality: "ner",
+					extraJson: {},
+					capabilities: {}
+				} as any)
+				.returning()
+			await testDb.insert(schema.connectionModels).values({
+				connectionId: conn!.id,
+				model: "hosted-ner-2",
+				name: "hosted-ner-2"
+			})
+			const before = await currentNerModelId(testDb)
+			await star(conn!.id)
+			await applyNerStarChange(testDb, before)
+
+			// The lane annotates the book, which is what takes the lease.
+			const { lorebook, entry } = await seedBook(
+				"Riders crossed the kestrel moor at dusk."
+			)
+			enqueueLorebookAnnotation(lorebook.id, "Book")
+			await settleAnnotationQueue()
+
+			const [session] = await testDb
+				.insert(schema.sessions)
+				.values({
+					userId: lorebook.userId,
+					isGroup: false,
+					lorebookId: lorebook.id
+				})
+				.returning()
+			const window = "At dusk they reached the kestrel moor."
+			const node = {
+				key: "entities",
+				definitionId: "core:query/entity-search@1"
+			} as any
+			const ask = () =>
+				createHost(testDb as any, { sessionId: session!.id }).read!(
+					"entity_annotations",
+					{
+						sessionId: session!.id,
+						entryIds: [entry.id],
+						window,
+						maxMessages: 0
+					},
+					node
+				) as Promise<any>
+
+			const read = await ask()
+			expect(calls).toContain(window)
+			// Lower case, so only the model can have named it.
+			expect(read.entities).toContainEqual(
+				expect.objectContaining({
+					key: "open:kestrel moor",
+					tier: "model",
+					label: "LOC"
+				})
+			)
+			expect(read.entries).toEqual([
+				expect.objectContaining({
+					id: entry.id,
+					entityLabels: { "open:kestrel moor": "LOC" }
+				})
+			])
+
+			// No star: nothing is asked, and the window is read lexically.
+			const starred = await currentNerModelId(testDb)
+			await star(null)
+			await applyNerStarChange(testDb, starred)
+			calls.length = 0
+			const lexical = await ask()
+			expect(calls).not.toContain(window)
+			expect(
+				lexical.entities.some((e: any) => e.key === "open:kestrel moor")
+			).toBe(false)
+		} finally {
+			const before = await currentNerModelId(testDb)
+			await star(null)
+			await applyNerStarChange(testDb, before)
+			await settleAnnotationQueue()
+			fakes.delete(FAKE)
+		}
 	}, 60_000)
 })
 

@@ -45,6 +45,7 @@
  * read them off this `root` flag.
  */
 
+import { pipelineLabelsById } from "$lib/server/pipelines/entities/pipelineLabels"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import { notCoreRow } from "$lib/server/plugins/frameHost"
 import * as schema from "$lib/server/db/schema"
@@ -144,6 +145,7 @@ export async function eventMap(
 	// ── Binds: published active specs and their inlet locks ────────────────
 	const specRows = await db
 		.select({
+			id: schema.pipelineSpecs.id,
 			slug: schema.pipelineSpecs.slug,
 			activeVersionId: schema.pipelineSpecs.activeVersionId,
 			versionId: schema.pipelineSpecVersions.id,
@@ -185,6 +187,7 @@ export async function eventMap(
 		for (const e of r.inputEvents ?? []) locked.add(e)
 		return locked
 	}
+	const specLabels = await pipelineLabelsById(db)
 
 	// A preset or a session narrows the drawing to what it runs (B2 review):
 	// for each event, the one spec its resolution picks — the session through
@@ -349,7 +352,9 @@ export async function eventMap(
 		...scopeSpecs.map((r) => ({
 			id: r.slug,
 			kind: "spec" as const,
-			label: humanise(nameOf(r.slug)),
+			// The pipeline's name with its genre beside it (NOMENCLATURE §2,
+			// "Pipeline names"): a map can hold several genres' _Reply_.
+			label: specLabels.get(r.id) ?? humanise(nameOf(r.slug)),
 			root: false
 		})),
 		{

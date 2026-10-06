@@ -324,13 +324,15 @@ export async function persistCapabilities(
 	// An empty rebuild keeps the stored cache ONLY when the type declares nothing
 	// — never merely because the rebuild came out empty.
 	//
-	// The case this protects is real: `resolveConnectionCapabilities` returns `{}`
-	// for a type no manifest entry declares, and `openai-embeddings` and
-	// `local-onnx` are exactly that. 0175 determined `text->embedding` for those
-	// rows from their old modality column, and without the guard the
-	// first unrelated edit would write `{}` back, which the bind guard reads as
-	// "not determined yet" and falls through to the modality test — quietly making
-	// an embeddings connection acceptable for chat again.
+	// The case this protects: `resolveConnectionCapabilities` returns `{}` for a
+	// type no manifest entry declares. `openai-embeddings` and `local-onnx` were
+	// exactly that when 0175 determined `text->embedding` for their rows from the
+	// old modality column; both are declared now (the first only until its boot
+	// merge into `openai`), and the guard stays for any row whose type this build
+	// does not describe. Without it the first unrelated edit would write `{}`
+	// back, which the bind guard reads as "not determined yet" and falls through
+	// to the modality test — quietly making an embeddings connection acceptable
+	// for chat again.
 	//
 	// ⚠ But keying on EMPTINESS made a deliberate answer indistinguishable from an
 	// unknown type, and on an image-only connection those are the same rebuild.
@@ -392,12 +394,13 @@ function sameResolved(
  * Through `persistCapabilities`, the one write path, so each row's probe and
  * the person's own toggles survive exactly as they are.
  *
- * ⚠ **A type the manifest declares nothing for is skipped.** For those
- * (`openai-embeddings`, `local-onnx`) `resolveConnectionCapabilities` answers
- * `{}` and `persistCapabilities`' empty-rebuild guard keeps the stored cache —
- * the one 0175 determined from the old modality column. Refreshing them would
- * only rewrite the same value on every boot, and "settled installs do no
- * writes" is the property that makes this safe to run at startup.
+ * ⚠ **A type the manifest declares nothing for is skipped.** For one,
+ * `resolveConnectionCapabilities` answers `{}` and `persistCapabilities`'
+ * empty-rebuild guard keeps the stored cache (`openai-embeddings` and
+ * `local-onnx` were such types when 0175 determined theirs from the old
+ * modality column; both are declared now, so both are refreshed). Refreshing
+ * one would only rewrite the same value on every boot, and "settled installs
+ * do no writes" is the property that makes this safe to run at startup.
  *
  * Idempotent; a row whose rebuilt set matches its stored one is not written.
  */

@@ -184,7 +184,7 @@ describe("a voice is given the same place and the same cast", () => {
 	})
 
 	it("leaves a pipeline that wires neither state nor plan exactly as it was", async () => {
-		// `core:spec/narrate-character` shares this surface and wires neither,
+		// `core:spec/chat-side-character` shares this surface and wires neither,
 		// so nothing computed for the adventure may appear in its context.
 		const result: any = await bindings[
 			"core:task/build-side-character-context@1"

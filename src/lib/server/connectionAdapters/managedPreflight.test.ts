@@ -62,11 +62,14 @@ vi.mock("$lib/server/embedding", () => ({
 /** What `ensureModelLoaded` was asked to load. */
 let loadOpts: any = null
 let loadError: Error | null = null
+/** Whether it loaded (true) or found the model already resident (false). */
+let loaded = true
 
 vi.mock("$lib/server/koboldcpp/modelManager", () => ({
 	ensureModelLoaded: async (opts: any) => {
 		loadOpts = opts
 		if (loadError) throw loadError
+		return loaded
 	},
 	resetTtl: () => {},
 	getLoadedSignature: () => null,
@@ -113,6 +116,7 @@ afterAll(async () => {
 beforeEach(() => {
 	loadOpts = null
 	loadError = null
+	loaded = true
 	settings.koboldCppManagerEnabled = true
 	settings.koboldCppManagedMode = "managed"
 	settings.koboldCppManagerModelsDir = textDir
@@ -310,6 +314,52 @@ describe("ensureManagedReady — the text path", () => {
 			ensureManagedReady(textSpec({ file: "" }), { connectionId: 3 })
 		).rejects.toThrow(/No model selected/)
 		expect(loadOpts).toBeNull()
+	})
+})
+
+describe("ensureManagedReady — what it logs", () => {
+	/**
+	 * The embedding lane calls this once per batch, and the model is almost
+	 * always resident already: a line per call was two lines per batch. A load
+	 * is said; a call that found its model resident is not.
+	 */
+	const preflightLines = (spy: { mock: { calls: unknown[][] } }) =>
+		spy.mock.calls.filter((args) =>
+			String(args[0]).includes("[KoboldCPP] preflight")
+		)
+
+	it("says nothing when the model was already resident", async () => {
+		loaded = false
+		const log = vi.spyOn(console, "log").mockImplementation(() => {})
+		try {
+			const ensureManagedReady = await loadReady()
+			await ensureManagedReady(
+				{ kind: "embeddings", file: "llama-3.gguf" } as any,
+				{ connectionId: 3 }
+			)
+			await ensureManagedReady(textSpec(), { connectionId: 3 })
+			expect(preflightLines(log)).toEqual([])
+		} finally {
+			log.mockRestore()
+		}
+	})
+
+	it("says a load once, naming the model and the connection", async () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {})
+		try {
+			const ensureManagedReady = await loadReady()
+			await ensureManagedReady(textSpec({ contextSize: 8192 }), {
+				connectionId: 3
+			})
+			const lines = preflightLines(log)
+			expect(lines).toHaveLength(1)
+			expect(lines[0].join(" ")).toContain("loaded text model")
+			expect(lines[0]).toContain("llama-3.gguf")
+			expect(lines[0]).toContain(3)
+			expect(lines[0]).toContain("contextSize 8192")
+		} finally {
+			log.mockRestore()
+		}
 	})
 })
 

@@ -68,6 +68,12 @@ describe("modelsDirFor", () => {
 		expect(modelsDirFor("text", split)).toBe(textDir)
 	})
 
+	test("an embedding model lives in the TEXT directory, even on a split install", () => {
+		// A GGUF like any LLM; it has no directory of its own.
+		expect(modelsDirFor("embeddings", flat)).toBe(textDir)
+		expect(modelsDirFor("embeddings", split)).toBe(textDir)
+	})
+
 	test("nothing configured at all is null rather than a guessed path", () => {
 		expect(
 			modelsDirFor("image", {

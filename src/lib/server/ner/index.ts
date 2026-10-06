@@ -4,8 +4,10 @@
  * The mirror of `$lib/server/embedding/index.ts`, and parallel to it for the
  * reason that file gives: an adapter is constructed per request and has nowhere
  * to keep a loaded pipeline, an idle timer or a readiness flag, so those belong
- * to the instance. The adapter delegates here; the lane's broker asks here; the
- * annotation pass reads spans from here.
+ * to the instance. `LocalOnnxNerAdapter` delegates here, for both of its
+ * halves: its `extractEntities` runs the pipeline held here, and its module's
+ * `residency` is how the lane's broker loads one. Nothing else calls the
+ * loader; the annotation pass reads spans through the adapter.
  *
  * ⚠ **Every reference to `@huggingface/transformers` must stay behind a dynamic
  * import**, here and in everything this reaches. `onnxruntime-node` is a native
@@ -24,68 +26,54 @@
  * different positions, and **drops a word it cannot find** rather than guessing:
  * an unavailable mechanism subtracts a signal, and a span pointing at text that
  * does not say it would put a wrong key in the annotation store.
+ *
+ * ## A long passage is read in windows
+ *
+ * The checkpoint reads 512 tokens at a time and the pipeline truncates past
+ * that, so `extractNerSpans` cuts a longer passage into overlapping windows
+ * (`planWindows`), runs each, and maps the spans back onto the whole string.
+ * Each window is located on its own, so `locateSpans`' forward cursor never
+ * crosses a cut, and the overlap is what lets a name a cut falls inside be read
+ * whole by the neighbouring window.
  */
 
-import { isAndroidWrapper } from "$lib/server/utils"
-import { cacheDirFor } from "$lib/server/localModels/onnxCache"
+import {
+	cacheDirFor,
+	invalidateCachedScan,
+	isCached,
+	modelDirFor
+} from "$lib/server/localModels/onnxCache"
+import { localOnnxAvailability } from "$lib/server/localModels/onnxRuntime"
 import type { EntitySpan } from "$lib/server/adapters/actions"
-import { findNerModel, isRegisteredLocalNerModel } from "./models"
-
-type NerProbeResult = { supported: boolean; reason: string | null }
+import { findNerModel } from "./models"
 
 /**
- * In-memory only, per process lifetime — deliberately never persisted.
+ * Why local NER cannot run here, or null when it can.
  *
- * A stored "unsupported" verdict would survive an `onnxruntime-node` upgrade
- * that fixes this exact platform, which is the class of upstream churn this
- * probe exists to stop chasing. Same argument, same shape, as the embedding
- * probe next door; kept separate rather than shared because the SENTENCE
- * differs, and the sentence is the whole product of the function.
+ * The verdict is `localOnnxAvailability()` (`localModels/onnxRuntime.ts`): the
+ * embedding lane loads the same runtime, so the two share one probe and cannot
+ * disagree. Only the SENTENCE is this lane's.
  */
-let probeResult: NerProbeResult | null = null
-let probePromise: Promise<NerProbeResult> | null = null
-
-/**
- * Attempts the real dynamic import once and caches whether it threw.
- *
- * ⚠ A pure loadability check: nothing else may go in the try block. Folding a
- * model load in would cache a failed download as a permanent "this platform
- * cannot" verdict.
- */
-async function probeLocalNerSupport(): Promise<NerProbeResult> {
-	if (probeResult) return probeResult
-	if (!probePromise) {
-		probePromise = (async () => {
-			try {
-				await import("@huggingface/transformers")
-				probeResult = { supported: true, reason: null }
-			} catch (err: any) {
-				probeResult = {
-					supported: false,
-					reason: `Local entity extraction is not available on this system (${err?.message ?? "failed to load the local model engine"}).`
-				}
-			}
-			return probeResult
-		})()
-	}
-	return probePromise
-}
-
-/** Why local NER cannot run here, or null when it can. */
 export async function getLocalNerUnsupportedReason(): Promise<string | null> {
-	if (isAndroidWrapper()) {
-		// A genuine architectural impossibility (Bionic cannot dlopen glibc
-		// binaries), not a "true today" fact an upstream release could change.
-		return "Local entity extraction is not available in the Android app."
-	}
-	return (await probeLocalNerSupport()).reason
+	const availability = await localOnnxAvailability()
+	return availability.available
+		? null
+		: `Local entity extraction is not available on this system: ${availability.reason}.`
 }
 
 /** What the loaded pipeline is called, at the shape this module uses it. */
-type TokenClassifier = (
-	text: string,
-	options: { aggregation_strategy: "simple" }
-) => Promise<Array<{ entity_group: string; score: number; word: string }>>
+interface TokenClassifier {
+	(
+		text: string,
+		options: { aggregation_strategy: "simple" }
+	): Promise<Array<{ entity_group: string; score: number; word: string }>>
+	/** The checkpoint's tokenizer — what a window is measured with. */
+	tokenizer?: {
+		encode(text: string): number[]
+		model_max_length?: number
+	}
+	model?: { config?: { max_position_embeddings?: number } }
+}
 
 let classifier: TokenClassifier | null = null
 let loadedModelId: string | null = null
@@ -155,24 +143,26 @@ export async function loadNerModel(modelId: string): Promise<void> {
 	const unsupportedReason = await getLocalNerUnsupportedReason()
 	if (unsupportedReason) throw new Error(unsupportedReason)
 
-	// The catalogue first, because that is where a `dtype` comes from and it is
-	// the answer in the ordinary case. A model the registry holds — an `.onnx`
-	// the user downloaded, filed under modality `ner` — is loadable too, with no
-	// dtype override: nothing here knows what precision its weights were
-	// exported at, and guessing one is how a working file stops loading.
+	// The catalogue first, because its `dtype` is the answer in the ordinary
+	// case. A model the registry holds — an `.onnx` the user downloaded, filed
+	// under modality `ner` — is loadable too, at the precision its download
+	// fetched (`registeredNerModel`), or with no dtype override when the row
+	// records none: guessing a precision is how a working file stops loading.
 	const modelDef = findNerModel(modelId)
-	if (!modelDef && !(await isRegisteredLocalNerModel(modelId)))
+	const registered = modelDef ? null : await registeredNerModel(modelId)
+	if (!modelDef && !registered)
 		throw new Error(`Unknown entity model: ${modelId}`)
+	const dtype = modelDef?.dtype ?? registered?.dtype ?? null
 
 	isLoading = true
 	classifier = null
 	loadedModelId = null
 	loadError = null
 	try {
-		const { pipeline: createPipeline } = await import(
+		const { pipeline: createPipeline, env } = await import(
 			"@huggingface/transformers"
 		)
-		classifier = (await createPipeline("token-classification", modelId, {
+		const options = {
 			/**
 			 * ⚠ Per call, NOT `env.cacheDir`.
 			 *
@@ -187,8 +177,50 @@ export async function loadNerModel(modelId: string): Promise<void> {
 			 * shared directory would make one cache entry mean two things.
 			 */
 			cache_dir: cacheDirFor("ner"),
-			...(modelDef?.dtype ? { dtype: modelDef.dtype } : {})
-		})) as unknown as TokenClassifier
+			...(dtype ? { dtype: dtype as any } : {})
+		}
+		/**
+		 * ⚠ A model on disk is loaded from its DIRECTORY, by path, not by repo
+		 * id — the only way it loads offline.
+		 *
+		 * transformers.js 4.2.0 honours `cache_dir` for the files it fetches but
+		 * not for the step that decides which files to fetch: `pipeline()`'s
+		 * `get_pipeline_files` and the tokenizer's `get_tokenizer_files` look
+		 * in `env.cacheDir` — the embedding lane's directory, or the package's
+		 * own. With remote models refused that lookup finds nothing, and the
+		 * load fails on `config.json` or yields a pipeline with no tokenizer
+		 * ("this.tokenizer is not a function" on the first passage); online it
+		 * asks the Hub, and fetches `config.json` into whatever `env.cacheDir`
+		 * names. A path is not a repo id, so every file is read straight from
+		 * the directory the download filled: no cache lookup, no network, and
+		 * nothing of `env` consulted.
+		 *
+		 * By repo id when nothing is on disk yet — a first load, which
+		 * downloads and needs the network anyway — and as the fallback when
+		 * the directory lacks a file this precision needs and the Hub may
+		 * supply it.
+		 */
+		const dir = (await isCached(modelId, "ner"))
+			? modelDirFor(modelId, "ner")
+			: null
+		const load = (source: string) =>
+			createPipeline(
+				"token-classification",
+				source,
+				options
+			) as unknown as Promise<TokenClassifier>
+		try {
+			classifier = await load(dir ?? modelId)
+		} catch (err) {
+			if (!dir || env?.allowRemoteModels === false) throw err
+			console.warn(
+				`[ner] ${modelId} did not load from ${dir}; trying the Hub:`,
+				err
+			)
+			classifier = await load(modelId)
+		}
+		// A load by repo id may have downloaded; the scan memo would not know.
+		if (!dir) invalidateCachedScan(modelId, "ner")
 		loadedModelId = modelId
 		console.log(`[ner] Model loaded: ${modelId}`)
 		resetTtlTimer()
@@ -198,6 +230,48 @@ export async function loadNerModel(modelId: string): Promise<void> {
 		throw err
 	} finally {
 		isLoading = false
+	}
+}
+
+/**
+ * The local model registry's row for an id the catalogue does not name, or
+ * null when it holds none.
+ *
+ * `dtype` is the precision the row's download fetched — `local_models.
+ * quantization`, which `connections:downloadModel` records from the same
+ * resolution it downloads with (catalogue, then the model's declared
+ * `extra_json.onnx.dtype`). Loading at any other precision asks for weights
+ * the download never fetched. Null for a row that records none.
+ *
+ * Answers null rather than throwing when the database is unreachable: the
+ * caller's next step is a refusal naming the model, which is a better sentence
+ * than a database error in a path about loading a model.
+ */
+async function registeredNerModel(
+	id: string
+): Promise<{ dtype: string | null } | null> {
+	if (!id) return null
+	try {
+		const { db } = await import("$lib/server/db")
+		const schema = await import("$lib/server/db/schema")
+		const { and, eq, or } = await import("drizzle-orm")
+		const [row] = await db
+			.select({ quantization: schema.localModels.quantization })
+			.from(schema.localModels)
+			.where(
+				and(
+					eq(schema.localModels.modality, "ner"),
+					or(
+						eq(schema.localModels.modelName, id),
+						eq(schema.localModels.filename, id)
+					)
+				)
+			)
+			.limit(1)
+		if (!row) return null
+		return { dtype: row.quantization || null }
+	} catch {
+		return null
 	}
 }
 
@@ -289,6 +363,169 @@ export function locateSpans(
 }
 
 /**
+ * How far one window reaches before the tokenizer is asked, in characters.
+ *
+ * About 350 tokens of English prose, well inside a 512-token checkpoint, so the
+ * ordinary window is never measured twice. Denser text — a script the
+ * vocabulary splits finely, a run of numbers — is shrunk to fit by
+ * `planWindows`, which is the only place the real limit is known.
+ */
+export const NER_WINDOW_CHARS = 1500
+
+/**
+ * What two neighbouring windows share, in characters.
+ *
+ * Longer than any name a passage plausibly contains — a titled, multi-word name
+ * runs to a few dozen characters — because that is the property the merge
+ * relies on: a name a cut falls inside lies whole inside the neighbouring
+ * window, so the clipped copy can always be dropped for the whole one.
+ */
+export const NER_WINDOW_OVERLAP_CHARS = 200
+
+/** The token window when the checkpoint publishes none — BERT's. */
+const DEFAULT_MAX_TOKENS = 512
+
+/**
+ * A window narrower than this is not shrunk further; the pipeline's own
+ * truncation is the floor.
+ */
+const MIN_WINDOW_CHARS = 64
+
+/** One stretch of the passage the model reads in a single call. */
+export interface NerWindow {
+	start: number
+	end: number
+}
+
+const isSpace = (c: string | undefined) => c !== undefined && /\s/.test(c)
+
+/**
+ * Pull a cut back to the end of the last whole word before it, so the window
+ * ends on a word and whitespace follows.
+ *
+ * A cut inside a word hands the model half a word, and wordpiece decodes half a
+ * name as a confident different one. Ending ON the word, never on trailing
+ * whitespace, is what lets the merge see that a span in the window's last word
+ * may continue past the cut (`clipped`). Kept where it is when there is no
+ * whitespace in the back half of the window — one enormous token is cut hard
+ * rather than shrinking the window to nothing.
+ */
+function snapBack(text: string, start: number, end: number): number {
+	if (end >= text.length) return text.length
+	if (isSpace(text[end]) && !isSpace(text[end - 1])) return end
+	let i = end
+	while (i > start && !isSpace(text[i])) i--
+	while (i > start && isSpace(text[i - 1])) i--
+	return i - start >= (end - start) / 2 ? i : end
+}
+
+/**
+ * Move a window's start forward to the beginning of a word, never past
+ * `limit` (the previous window's end).
+ */
+function snapForward(text: string, pos: number, limit: number): number {
+	let i = pos
+	if (i > 0 && !isSpace(text[i - 1]))
+		while (i < limit && !isSpace(text[i])) i++
+	while (i < limit && isSpace(text[i])) i++
+	return i
+}
+
+/**
+ * The windows a passage is read in: one when it fits, otherwise overlapping
+ * windows of at most `size` characters, each shrunk until `fits` accepts it.
+ *
+ * `fits` is the tokenizer's verdict (`encode(window).length` against the
+ * checkpoint's limit), or null when no tokenizer is to hand, which makes the
+ * windows purely by characters. A passage the tokenizer says fits whole is one
+ * window at any length up to four windows' worth — past that it cannot fit
+ * and is not worth encoding to be told so.
+ *
+ * Exported for the test: like `locateSpans`, it is arithmetic that can be wrong
+ * without anything failing loudly.
+ */
+export function planWindows(
+	text: string,
+	fits: ((window: string) => boolean) | null,
+	size = NER_WINDOW_CHARS,
+	overlap = NER_WINDOW_OVERLAP_CHARS
+): NerWindow[] {
+	if (!text) return []
+	const whole = fits
+		? text.length <= size * 4 && fits(text)
+		: text.length <= size
+	if (whole) return [{ start: 0, end: text.length }]
+	const accepts = fits ?? (() => true)
+	const out: NerWindow[] = []
+	let start = 0
+	while (start < text.length) {
+		let end = snapBack(text, start, Math.min(text.length, start + size))
+		while (!accepts(text.slice(start, end))) {
+			const shorter = snapBack(
+				text,
+				start,
+				start + Math.floor((end - start) * 0.75)
+			)
+			if (shorter >= end || shorter - start < MIN_WINDOW_CHARS) break
+			end = shorter
+		}
+		out.push({ start, end })
+		if (end >= text.length) break
+		const share = Math.min(overlap, Math.floor((end - start) / 2))
+		start = snapForward(text, end - share, end)
+	}
+	return out
+}
+
+/** A span located in one window, with whether a cut may have clipped it. */
+export interface NerWindowSpan extends EntitySpan {
+	/** It touches a cut — it may be the visible half of a longer name. */
+	clipped: boolean
+}
+
+/**
+ * Which of two overlapping spans the passage keeps.
+ *
+ * A clipped span loses to one that is not: the overlap guarantees the
+ * neighbouring window read the same stretch whole. Otherwise the higher score,
+ * then the longer span, then the first seen.
+ */
+function preferred(a: NerWindowSpan, b: NerWindowSpan): NerWindowSpan {
+	if (a.clipped !== b.clipped) return a.clipped ? b : a
+	if (a.score !== b.score) return a.score > b.score ? a : b
+	return b.end - b.start > a.end - a.start ? b : a
+}
+
+/**
+ * The spans of every window, as one non-overlapping list over the passage.
+ *
+ * A stretch two windows both read comes back twice — the same name, or one
+ * whole and one clipped — and exactly one survives (`preferred`).
+ */
+export function mergeWindowSpans(spans: NerWindowSpan[]): EntitySpan[] {
+	const sorted = [...spans].sort((a, b) => a.start - b.start || b.end - a.end)
+	const kept: NerWindowSpan[] = []
+	for (const span of sorted) {
+		const last = kept.at(-1)
+		if (last && span.start < last.end)
+			kept[kept.length - 1] = preferred(last, span)
+		else kept.push(span)
+	}
+	return kept.map(({ clipped: _clipped, ...span }) => span)
+}
+
+/** The checkpoint's token limit: the tighter of what its tokenizer and config publish. */
+function tokenLimit(run: TokenClassifier): number {
+	const published = [
+		run.tokenizer?.model_max_length,
+		run.model?.config?.max_position_embeddings
+	].filter(
+		(n): n is number => typeof n === "number" && Number.isFinite(n) && n > 0
+	)
+	return published.length ? Math.min(...published) : DEFAULT_MAX_TOKENS
+}
+
+/**
  * Run the resident model over one passage.
  *
  * ⚠ Loads nothing. Residency is the broker's business (a lane requests a model,
@@ -297,16 +534,39 @@ export function locateSpans(
  * reaches this with nothing resident gets `[]`, which is the heuristic tiers
  * running alone — a subtracted signal, not a failure.
  *
- * ⚠ The pipeline tokenizes with `truncation: true`, so a passage past the
- * checkpoint's window (512 tokens on both catalogue models) is read only as far
- * as that window. The tail keeps its gazetteer and capitalisation hits, which is
- * the same shape of partial answer every bound in this stack produces, and the
- * offsets that do come back still describe this string.
+ * A passage past the checkpoint's window (512 tokens on both catalogue models)
+ * is read in overlapping windows rather than truncated — see the header. The
+ * offsets that come back describe THIS string, whichever window found them.
  */
 export async function extractNerSpans(text: string): Promise<EntitySpan[]> {
-	if (!classifier || !text.trim()) return []
-	const found = await classifier(text, { aggregation_strategy: "simple" })
+	// Held for the whole passage: a swap mid-passage must not put a second
+	// model's spans beside the first one's.
+	const run = classifier
+	if (!run || !text.trim()) return []
+
+	const limit = tokenLimit(run)
+	const encode = run.tokenizer?.encode?.bind(run.tokenizer)
+	const fits = encode
+		? (window: string) => encode(window).length <= limit
+		: null
+
+	const spans: NerWindowSpan[] = []
+	for (const w of planWindows(text, fits)) {
+		const window = text.slice(w.start, w.end)
+		const found = await run(window, { aggregation_strategy: "simple" })
+		for (const span of locateSpans(window, found ?? [])) {
+			const clipped =
+				(w.start > 0 && !/\s/.test(window.slice(0, span.start))) ||
+				(w.end < text.length && !/\s/.test(window.slice(span.end)))
+			spans.push({
+				...span,
+				start: span.start + w.start,
+				end: span.end + w.start,
+				clipped
+			})
+		}
+	}
 	lastUsedAt = new Date()
 	resetTtlTimer()
-	return locateSpans(text, found ?? [])
+	return mergeWindowSpans(spans)
 }

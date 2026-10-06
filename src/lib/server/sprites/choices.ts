@@ -1,10 +1,16 @@
 /**
- * What a line's speaker can show — the host half of
- * `core:query/sprites-for@1` (DESIGN-sprites §2.3, §5.2).
+ * What a line's speaker can show — the host half of the sprite picker,
+ * `core:oracle/pick-sprite@1` (DESIGN-sprites §2.3, §5.2).
+ *
+ * Keyed by WHO is speaking, never by a message: the picker is handed the
+ * line's text and its speaker by the reply spec (owner, 2026-10-05: "the
+ * explicit text or string passed in"), so nothing here reads a line back.
  *
  * The sprite SET is decided in one order, and `decidedBy` names which rung
  * decided it so the receipt answers "why this outfit":
  *
+ *   0. `spec`      — a set the spec wired to the picker's `set` port (no core
+ *                    spec does; a plugin's may);
  *   1. `override`  — the session's `core:slot/sprite-set@1` on the speaker
  *                    (play, not canon: "she changed clothes in this scene");
  *   2. `amendment` — the cast member's `spriteSet`, resolved through
@@ -32,7 +38,7 @@
  * until a speaker can name which appearance is talking.
  */
 
-import { and, desc, eq, lt } from "drizzle-orm"
+import { and, desc, eq, ne } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { valueOf } from "$lib/server/state/resolve"
 import { sessionReadingOf, lineOfReading } from "$lib/server/state/reading"
@@ -50,7 +56,7 @@ export const SPRITE_SET_SLOT_ID = "core:slot/sprite-set@1"
 /** How far back "recent" reaches, for the picker's recency penalty. */
 const RECENT_LINES = 5
 
-export type SpriteSetDecidedBy = "override" | "amendment" | "default"
+export type SpriteSetDecidedBy = "spec" | "override" | "amendment" | "default"
 
 /** `core:shape/sprite-choices@1`. */
 export interface SpriteChoicesV1 {
@@ -71,48 +77,44 @@ export interface SpriteChoicesV1 {
 	/**
 	 * Beside `missing`: which rung asked for it (plan A25). `decidedBy` is
 	 * `default` then — the card's default set is what shows — and this keeps
-	 * the session's override, or the member's set, on the receipt.
+	 * the spec's set, the session's override, or the member's set, on the
+	 * receipt.
 	 */
 	missingAskedBy?: Exclude<SpriteSetDecidedBy, "default">
-	/** The line's text. */
-	text: string
-	/** Anything to choose between — the tail's junction reads this. */
-	has: boolean
 }
 
-const nothing = (text = ""): SpriteChoicesV1 => ({
+const nothing = (): SpriteChoicesV1 => ({
 	characterId: null,
 	set: null,
 	defaultSet: null,
 	labels: [],
 	last: null,
 	recent: [],
-	decidedBy: "default",
-	text,
-	has: false
+	decidedBy: "default"
 })
 
+/**
+ * What `speaker` can show in this session, for the picker.
+ *
+ * `excludeMessageId` is the row the run is writing — the reply the picker is
+ * choosing a face for — so it is never one of the speaker's own "recent"
+ * lines, whatever it showed before a regenerate. Every other line of the
+ * speaker's in the session counts, newest first.
+ */
 export async function spriteChoicesFor(
 	db: Db,
-	params: { sessionId: number; messageId: number }
+	params: {
+		sessionId: number
+		/** The speaker's card — `character:<id>`'s id. */
+		characterId: number
+		/** A set the spec wired to the picker (`decidedBy: "spec"`). */
+		set?: unknown
+		/** The run's own row (`run.liveRow`), left out of "recent". */
+		excludeMessageId?: number
+	}
 ): Promise<SpriteChoicesV1> {
-	const message = await db.query.sessionMessages.findFirst({
-		where: and(
-			eq(schema.sessionMessages.id, params.messageId),
-			eq(schema.sessionMessages.sessionId, params.sessionId)
-		),
-		columns: {
-			id: true,
-			content: true,
-			characterId: true,
-			isNarratorResponse: true
-		}
-	})
-	if (!message) return nothing()
-	const text = message.content ?? ""
-	// A narrator's line, a person's line: no character speaker, no face.
-	if (!message.characterId || message.isNarratorResponse) return nothing(text)
-	const speakerId = message.characterId
+	const speakerId = params.characterId
+	if (!Number.isInteger(speakerId) || speakerId <= 0) return nothing()
 
 	const reading = await sessionReadingOf(db, params.sessionId)
 
@@ -150,6 +152,11 @@ export async function spriteChoicesFor(
 		wanted = overridden
 		decidedBy = "override"
 	}
+	const asked = normalizeSpriteName(params.set)
+	if (asked) {
+		wanted = asked
+		decidedBy = "spec"
+	}
 
 	let art = (await spriteLabelsFor(db, [cardId])).get(cardId)
 	// The swapped-in card has no art: the member's own card still does.
@@ -160,7 +167,7 @@ export async function spriteChoicesFor(
 			art = own
 		}
 	}
-	if (!art || art.sets.size === 0) return { ...nothing(text), characterId: cardId }
+	if (!art || art.sets.size === 0) return { ...nothing(), characterId: cardId }
 	const defaultSet = art.defaultSet ?? [...art.sets.keys()][0]
 
 	let set = defaultSet
@@ -187,7 +194,9 @@ export async function spriteChoicesFor(
 			and(
 				eq(schema.sessionMessages.sessionId, params.sessionId),
 				eq(schema.sessionMessages.characterId, speakerId),
-				lt(schema.sessionMessages.id, message.id)
+				...(params.excludeMessageId !== undefined
+					? [ne(schema.sessionMessages.id, params.excludeMessageId)]
+					: [])
 			)
 		)
 		.orderBy(desc(schema.sessionMessages.id))
@@ -208,9 +217,7 @@ export async function spriteChoicesFor(
 		recent,
 		decidedBy,
 		...(missing ? { missing } : {}),
-		...(missingAskedBy ? { missingAskedBy } : {}),
-		text,
-		has: labels.length > 0
+		...(missingAskedBy ? { missingAskedBy } : {})
 	}
 }
 

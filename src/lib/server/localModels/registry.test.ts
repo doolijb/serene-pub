@@ -105,9 +105,12 @@ describe("enginesFor", () => {
 })
 
 describe("modalityForKind", () => {
-	it("projects the two decided kinds", () => {
+	it("projects the three decided kinds", () => {
 		expect(modalityForKind("text")).toBe("text-gen")
 		expect(modalityForKind("image")).toBe("image-gen")
+		// koboldcpp's `--embeddingsmodel` lane, and the modality name the
+		// connections vocabulary already uses for the role.
+		expect(modalityForKind("embeddings")).toBe("embeddings")
 	})
 
 	it("gives 'unknown' no modality at all", () => {

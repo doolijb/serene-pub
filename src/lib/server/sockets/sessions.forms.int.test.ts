@@ -16,7 +16,7 @@
  *     `answeredBy: 'click'`. A person addressee: **no event, no child run**.
  *  3. **Elara asks Tom.** Tom is a cast character nobody portrays. The
  *     asking run writes the block; `form-addressed` is dispatched **after
- *     its receipt is saved**; `core:spec/answer-form-chat` runs as its child
+ *     its receipt is saved**; `core:spec/chat-answer-form` runs as its child
  *     (`parent_run_id`, depth 1) with a fake JSON oracle answering one
  *     option; `answer-form` **collects** the fire and the host dispatches it
  *     after the answer's receipt (review W2) — the block's action runs as
@@ -689,7 +689,7 @@ describe("R-15 · Elara asks Tom, and the AI answers as Tom", () => {
 		const runs = await runsOf(session.id)
 		expect(runs.map((r) => r.specSlug)).toEqual([
 			askId,
-			"core:spec/answer-form-chat",
+			"core:spec/chat-answer-form",
 			answerId
 		])
 		const [root, child, grandchild] = runs
@@ -809,7 +809,7 @@ describe("R-15 · Elara asks Tom, and the AI answers as Tom", () => {
 			const parked = await runsOf(session.id)
 			expect(parked.map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
 				`${askId}:ok`,
-				"core:spec/answer-form-chat:ok"
+				"core:spec/chat-answer-form:ok"
 			])
 			const answerNode = (parked[1]!.receipt as any).nodes.find(
 				(n: any) => n.nodeKey === "answer"
@@ -852,9 +852,9 @@ describe("R-15 · Elara asks Tom, and the AI answers as Tom", () => {
 		const runs = await runsOf(session.id)
 		expect(runs.map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
 			`${askId}:ok`,
-			"core:spec/answer-form-chat:ok",
+			"core:spec/chat-answer-form:ok",
 			`${askId}:ok`,
-			"core:spec/answer-form-chat:halt",
+			"core:spec/chat-answer-form:halt",
 			`${answerId}:ok`
 		])
 		const landed = runs[4]!
@@ -985,7 +985,7 @@ describe("R-15 · Elara asks Tom, and the AI answers as Tom", () => {
 		const runs = await runsOf(session.id)
 		expect(runs.map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
 			`${askId}:ok`,
-			"core:spec/answer-form-chat:ok",
+			"core:spec/chat-answer-form:ok",
 			`${answerId}:ok`
 		])
 		const line = (
@@ -1022,7 +1022,7 @@ describe("R-15 · Elara asks Tom, and the AI answers as Tom", () => {
 			modelAnswer = '{"choice":"maybe"}'
 		}
 		const runs = await runsOf(session.id)
-		expect(runs.map((r) => r.specSlug)).toEqual([askId, "core:spec/answer-form-chat"])
+		expect(runs.map((r) => r.specSlug)).toEqual([askId, "core:spec/chat-answer-form"])
 		const child = runs[1]!
 		expect(child.outcome).toBe("halt")
 		expect(child.haltReason).toMatch(/does not fit the form/)
@@ -1063,9 +1063,9 @@ describe("01 §8 · the cycle guard", () => {
 		// the fifth dispatch parks: no row, nothing run.
 		expect(runs.map((r) => `${r.specSlug}@${r.depth}`)).toEqual([
 			`${askId}@0`,
-			"core:spec/answer-form-chat@1",
+			"core:spec/chat-answer-form@1",
 			`${answerId}@2`,
-			"core:spec/answer-form-chat@3",
+			"core:spec/chat-answer-form@3",
 			`${answerId}@4`
 		])
 		for (const r of runs) expect(r.outcome).toBe("ok")
@@ -1075,7 +1075,7 @@ describe("01 §8 · the cycle guard", () => {
 		const [pause, ...more] = pendingCapPausesFor(owner.id)
 		expect(more).toEqual([])
 		expect(pause!.depth).toBe(5)
-		expect(pause!.specSlug).toBe("core:spec/answer-form-chat")
+		expect(pause!.specSlug).toBe("core:spec/chat-answer-form")
 		expect(pause!.chain).toHaveLength(6)
 		expect(pause!.cap).toMatch(/cycle guard.*5 dispatches deep.*cap of 4/)
 		// Only the owner: the guest does not see it, and cannot answer it.
@@ -1144,7 +1144,7 @@ describe("01 §8 · the cycle guard", () => {
 		const runs = await runsOf(session.id)
 		// No `err` anywhere: a missed answer and a refused fire are halts.
 		expect(runs.filter((r) => r.outcome === "err")).toEqual([])
-		const children = runs.filter((r) => r.specSlug === "core:spec/answer-form-chat")
+		const children = runs.filter((r) => r.specSlug === "core:spec/chat-answer-form")
 		const grandchildren = runs.filter((r) => r.specSlug === answerId)
 		expect(children).toHaveLength(9)
 		expect(grandchildren).toHaveLength(8)
@@ -1220,7 +1220,7 @@ describe("W-a · every fire leaves a row under the id the answer named", () => {
 				// aborted before it starts.
 				const answer = runRegistry
 					.active()
-					.find((h) => h.sessionId === session.id && h.specId === "core:spec/answer-form-chat")
+					.find((h) => h.sessionId === session.id && h.specId === "core:spec/chat-answer-form")
 				expect(answer).toBeDefined()
 				stoppedAnswer = answer!.runId
 				expect(runRegistry.cancel(answer!.runId, owner.id)).toEqual({ found: true, allowed: true })
@@ -1232,7 +1232,7 @@ describe("W-a · every fire leaves a row under the id the answer named", () => {
 		const runs = await runsOf(session.id)
 		expect(runs.map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
 			`${askId}:ok`,
-			"core:spec/answer-form-chat:ok",
+			"core:spec/chat-answer-form:ok",
 			`${answerId}:cancelled`
 		])
 		expect(runs[1]!.runId).toBe(stoppedAnswer)
@@ -1286,7 +1286,7 @@ describe("W-a · every fire leaves a row under the id the answer named", () => {
 		const runs = await runsOf(session.id)
 		expect(runs.map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
 			`${askId}:ok`,
-			"core:spec/answer-form-chat:ok",
+			"core:spec/chat-answer-form:ok",
 			`${answerId}:halt`
 		])
 		const firedRunId = (runs[1]!.receipt as any).nodes.find((n: any) => n.nodeKey === "answer")
@@ -1862,7 +1862,7 @@ describe("the narrator names the player's persona", () => {
 		expect(((await lastBlockTree(session.id))!.blocks[0] as any).addressee).toBe(`character:${tom}`)
 		expect((await runsOf(session.id)).map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
 			`${askId}:ok`,
-			"core:spec/answer-form-chat:ok",
+			"core:spec/chat-answer-form:ok",
 			`${answerId}:ok`
 		])
 		const line = await lastLine(session.id)
@@ -2042,7 +2042,7 @@ describe("R-15 · staleness and order", () => {
 		const runs = await runsOf(session.id)
 		expect(runs.map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
 			`${askId}:ok`,
-			"core:spec/answer-form-chat:ok",
+			"core:spec/chat-answer-form:ok",
 			`${answerId}:halt`
 		])
 		const fireRow = runs[2]!
@@ -2115,11 +2115,11 @@ describe("R-15 · staleness and order", () => {
 		// Ask, then three (answer-form → answer) pairs, every one `ok`.
 		expect(runs.map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
 			`${askId}:ok`,
-			"core:spec/answer-form-chat:ok",
+			"core:spec/chat-answer-form:ok",
 			`${answerId}:ok`,
-			"core:spec/answer-form-chat:ok",
+			"core:spec/chat-answer-form:ok",
 			`${answerId}:ok`,
-			"core:spec/answer-form-chat:ok",
+			"core:spec/chat-answer-form:ok",
 			`${answerId}:ok`
 		])
 		const written = (await lastBlockTree(session.id))!

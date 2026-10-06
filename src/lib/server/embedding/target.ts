@@ -30,6 +30,10 @@
  * model and `api::<baseUrl>::<model>` for an endpoint — byte for byte what the
  * singleton produced. A new spelling would mark every vector on every upgraded
  * install stale, and the re-index would run unasked.
+ *
+ * The one exception is the managed KoboldCPP, which could not embed before it
+ * had a spelling of its own: `koboldcpp_managed::<model>`, with no address in
+ * it (`buildManagedKoboldCppModelId`).
  */
 
 import { eq } from "drizzle-orm"
@@ -42,6 +46,7 @@ import {
 } from "$lib/server/connections/models"
 import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
 import { hostKey } from "$lib/shared/connections/hostKey"
+import { normalizeModelName } from "$lib/server/koboldcpp/modelManager"
 import {
 	DEFAULT_EMBEDDING_TTL_MINUTES,
 	EMBEDDING_CAPABILITY
@@ -70,6 +75,37 @@ export {
  */
 export function buildApiModelId(baseUrl: string, model: string): string {
 	return `api::${baseUrl}::${model}`
+}
+
+const MANAGED_KOBOLDCPP_IDENTITY_PREFIX = "koboldcpp_managed::"
+
+/**
+ * The identity of a vector made by KoboldCPP, run by Serene Pub: the model,
+ * and NOT the address.
+ *
+ * ⚠ Not `buildApiModelId`. The managed row's `baseUrl` is display only — the
+ * process is wherever `koboldCppManagerBaseUrl` says, and nothing keeps the
+ * two in step — so an identity carrying it would name a column that does not
+ * decide which model answers, and a change to it (or to the manager's port, the
+ * day the row follows) would throw away an index made by the very same model.
+ * There is one managed process per install, so the model alone is the whole
+ * identity.
+ *
+ * The model is `normalizeModelName`'s: the file name without a directory or
+ * `.gguf`, the one spelling koboldcpp's answer and the stored row agree on.
+ *
+ * The prefix is spelled out rather than read off `CONNECTION_TYPE`: it is
+ * written into every vector, and renaming the type must not re-index anybody.
+ */
+export function buildManagedKoboldCppModelId(model: string): string {
+	return `${MANAGED_KOBOLDCPP_IDENTITY_PREFIX}${normalizeModelName(model)}`
+}
+
+/** Whether an identity names a vector from KoboldCPP, run by Serene Pub. */
+export function isManagedKoboldCppModelId(
+	id: string | null | undefined
+): boolean {
+	return !!id && id.startsWith(MANAGED_KOBOLDCPP_IDENTITY_PREFIX)
 }
 
 /**
@@ -273,6 +309,17 @@ export async function resolveEmbeddingPair(
 			mode: "local",
 			modelId: modelName,
 			localModelName: modelName
+		}
+
+	// Before the address check: the managed row's address is display only, so
+	// it neither enters the identity nor is required (see
+	// `buildManagedKoboldCppModelId`). Its adapter reads the real one.
+	if (endpoint.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED)
+		return {
+			...base,
+			mode: "api",
+			modelId: buildManagedKoboldCppModelId(modelName),
+			apiModel: modelName
 		}
 
 	const baseUrl = (endpoint.baseUrl ?? "").trim()

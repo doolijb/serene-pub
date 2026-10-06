@@ -56,7 +56,7 @@ afterAll(async () => {
 const SHIPPED_TRIGGER = 3000
 
 const RESPOND_SPECS = [
-	"core:spec/respond",
+	"core:spec/chat-respond",
 	"core:spec/guide-respond",
 	"core:spec/adventure-respond",
 	"core:spec/lair-respond"
@@ -110,7 +110,7 @@ describe("the prose actions ship the trigger; the structured calls do not", () =
 	}
 
 	it.each([
-		"core:spec/narrate-character",
+		"core:spec/chat-side-character",
 		"core:spec/adventure-look",
 		"core:spec/lair-trap",
 		"core:spec/lair-reveal"
@@ -120,15 +120,14 @@ describe("the prose actions ship the trigger; the structured calls do not", () =
 
 	it.each([
 		// 0.5.3's narrator: the reminder carries the press's direction beside the seed.
-		"core:spec/narrate",
+		"core:spec/chat-narrate",
 		"core:spec/adventure-ask",
 		"core:spec/adventure-rest",
 		"core:spec/adventure-advance-time",
 		"core:spec/lair-build-room",
 		"core:spec/lair-room-answer",
 		"core:spec/lair-file-room",
-		"core:spec/answer-form-chat",
-		"core:spec/tool-loop"
+		"core:spec/chat-answer-form"
 	])("%s keeps the declaration's 0", async (slug) => {
 		for (const v of await resolvedOf(slug)) expect(v).toBe(0)
 	}, 60_000)
@@ -137,7 +136,7 @@ describe("the prose actions ship the trigger; the structured calls do not", () =
 		const [row] = await db
 			.select()
 			.from(schema.pipelineConfigs)
-			.where(eq(schema.pipelineConfigs.seedKey, "pipeline-default:core:spec/respond"))
+			.where(eq(schema.pipelineConfigs.seedKey, "pipeline-default:core:spec/chat-respond"))
 		expect(row?.name).toBe("Default")
 	})
 })

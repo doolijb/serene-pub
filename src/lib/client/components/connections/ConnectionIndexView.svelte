@@ -117,6 +117,8 @@
 	import type { CapabilityDefaultRef } from "./modelSystemDefaults"
 	import { buildJobTiles, chatFacts } from "./jobTile"
 	import { kcppInstallState } from "./managedConnectionView"
+	import { connectionTypeDisabledReason } from "$lib/shared/utils/connectionServiceItems"
+	import { getModelDisabledReason } from "./capabilityView"
 
 	type Row = Sockets.Connections.List.Row & { id: number }
 	type ModelOf = Row["models"][number]
@@ -236,6 +238,23 @@
 	 */
 	const localRuntimes = $derived(
 		canRunLocalRuntimes(systemSettingsCtx?.settings)
+	)
+	/**
+	 * Whether this machine runs local ONNX models — the "Later, optionally"
+	 * doors depend on it. Embeddings still come from a service where it
+	 * doesn't, so that door stays and only stops promising a local download;
+	 * named entities come from local ONNX alone, so that door is disabled
+	 * with the reason (`getModelDisabledReason`) rather than opening a view
+	 * whose every way to a model is disabled.
+	 */
+	const localOnnxRuns = $derived(
+		systemSettingsCtx?.settings?.localOnnxAvailability?.available !== false
+	)
+	const entitiesBlocked = $derived(
+		getModelDisabledReason(
+			"text->entities",
+			systemSettingsCtx?.settings?.localOnnxAvailability
+		)
 	)
 
 	let query = $state("")
@@ -637,7 +656,26 @@
 		return null
 	}
 
+	/**
+	 * ⚠ A local ONNX row on a machine whose runtime didn't load says why, in
+	 * place of whatever its lane reports: its Set up and Fix lead to a
+	 * Download the server refuses, and "Active" would claim a model that
+	 * can't load. Quiet, not red — nothing the person did is broken. The row
+	 * still opens, and its view says the same above the models.
+	 */
 	function statusOf(connection: Row): RowStatus {
+		const unavailable = connectionTypeDisabledReason(
+			connection.type,
+			systemSettingsCtx?.settings?.localOnnxAvailability
+		)
+		if (unavailable)
+			return {
+				state: "idle",
+				label: "Unavailable",
+				detail: unavailable,
+				metric: null,
+				action: null
+			}
 		const kind = endpointKind(connection.type)
 		return connectionRowStatus(connection as any, {
 			kind,
@@ -844,12 +882,17 @@
 	tile: string,
 	size: string,
 	run: () => void,
-	trades: string[] = []
+	trades: string[] = [],
+	/** Why this door leads nowhere here: it is disabled and says so. */
+	blocked: string | null = null
 )}
 	{@const DoorIcon = icon}
 	<button
 		type="button"
-		class="hover:preset-tonal-primary focus-visible:ring-primary-500 flex min-h-11 w-full items-start gap-2.5 rounded-[10px] px-1.5 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none"
+		class="focus-visible:ring-primary-500 flex min-h-11 w-full items-start gap-2.5 rounded-[10px] px-1.5 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none {blocked
+			? 'cursor-not-allowed opacity-70'
+			: 'hover:preset-tonal-primary'}"
+		disabled={!!blocked}
 		onclick={run}
 	>
 		<span
@@ -860,9 +903,18 @@
 		</span>
 		<span class="min-w-0 flex-1">
 			<span class="block truncate text-sm font-medium">{title}</span>
-			<span class="text-surface-600-400 block truncate text-xs">
-				{blurb}
-			</span>
+			{#if blocked}
+				<!-- The reason in place of the blurb, and whole: it often
+				     quotes the runtime's own error, and a disabled button
+				     takes no focus, so no tooltip would be reachable (§9). -->
+				<span class="text-surface-600-400 block text-xs break-words">
+					{blocked}
+				</span>
+			{:else}
+				<span class="text-surface-600-400 block truncate text-xs">
+					{blurb}
+				</span>
+			{/if}
 			{#if trades.length}
 				<span class="mt-1.5 flex flex-wrap gap-1">
 					{#each trades as trade (trade)}
@@ -1107,7 +1159,9 @@
 				{@render doorRow(
 					Icons.Zap,
 					"Embeddings",
-					"Smarter lore retrieval · local download",
+					localOnnxRuns
+						? "Smarter lore retrieval · local download"
+						: "Smarter lore retrieval",
 					"preset-tonal-surface",
 					"size-8",
 					() => onOpenCapability("text->embedding")
@@ -1118,7 +1172,9 @@
 					"Find people and places in text · local",
 					"preset-tonal-surface",
 					"size-8",
-					() => onOpenCapability("text->entities")
+					() => onOpenCapability("text->entities"),
+					[],
+					entitiesBlocked
 				)}
 			</section>
 		{:else}

@@ -28,6 +28,18 @@
  *   3. every row the listing does NOT name has `missing_since` set — to now,
  *      or left at its earlier value, so the sidebar can say since when.
  *
+ * A row the listing names again takes the listing's display name (where
+ * nobody renamed it), its facts and its modality, by one rule each. The
+ * modality's rule is the one to know: a NON-NULL modality is a fact and
+ * replaces the row's; a null one means "not reported" and leaves the row's
+ * alone. Most services say nothing about what a model is for (OpenAI,
+ * Together, Mistral, Gemini, LocalAI), and silence must not erase what is
+ * already known — the `openai-embeddings` merge (`openAIMultiModality.ts`)
+ * and "Use for embeddings" (`ensureConnectionModel`, which keeps the same
+ * rule) both write `embeddings` onto a row such a service then re-lists, and
+ * clearing it offered the embedding model for chat again. A NEW row takes
+ * whatever the listing says, null included.
+ *
  * A listing that FAILED does none of the three. It records the error on the
  * endpoint and stops. An unreachable host is a fact about the host, not about
  * any model, and marking a whole endpoint missing because it was asleep would
@@ -64,7 +76,14 @@ import { getConnectionAdapter } from "../utils/getConnectionAdapter"
 import { getImageAdapter } from "../utils/getImageAdapter"
 import { getEmbeddingAdapter } from "../utils/getEmbeddingAdapter"
 import { getNerAdapter } from "../utils/getNerAdapter"
-import { connectionModels } from "./models"
+import { ADAPTER_REGISTRY } from "../adapters/registry"
+import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
+import { capabilityDefault } from "./capabilityDefaults"
+import {
+	connectionModelById,
+	connectionModels,
+	mergeEndpointModel
+} from "./models"
 import { markAdminOverviewStale } from "$lib/server/admin/overviewStale"
 
 /** What an adapter's `listModels` answers, in the shape every family shares. */
@@ -119,6 +138,13 @@ export const MODEL_SYNC_STALE_MS = 10 * 60 * 1000
 export const MODEL_SYNC_TIMEOUT_MS = 15_000
 
 /**
+ * How long the probe embed at the end of a connection test may take. Longer
+ * than a listing's budget: a host may have to load the embedding model first,
+ * and a test that gave up on a cold load would fail a working setup.
+ */
+export const EMBEDDING_PROBE_TIMEOUT_MS = 60_000
+
+/**
  * Resolve a connection's test/list functions, picking the adapter FAMILY by
  * the type's declared modality.
  *
@@ -130,17 +156,112 @@ export const MODEL_SYNC_TIMEOUT_MS = 15_000
  * old form was `isImage(type) ? image : text`, which files an embeddings type
  * as TEXT — so a test on an embedding endpoint would load `OpenAIChatAdapter`
  * and probe `/v1/models` for a chat model.
+ *
+ * ## A text type that also embeds
+ *
+ * `koboldcpp` and `ollama` declare `text-gen` and register an `embedding`
+ * module too, so the switch hands them the TEXT family, and that stays right
+ * for listing: their text listing names every model with its modality, the
+ * embedding one included. Testing is where the type alone is not enough. A
+ * test of the connection the embedding star names — or of a pair whose model
+ * is an `embeddings` one — ends in one probe embed through the embedding
+ * module, the exact call the vectorization lane will make, so the test fails
+ * where the lane would (a model swapped under the star, embeddings not enabled
+ * on the host) instead of passing on the chat half alone.
+ *
+ * `db` is for a caller that has its own handle (a test); the socket handlers
+ * pass none, and the probe then reads the app's.
  */
-export async function adapterIO(type: string) {
+export async function adapterIO(type: string, db?: Db) {
 	switch (CONNECTION_TYPE.modalityOf(type)) {
 		case "image-gen":
 			return await getImageAdapter(type)
-		case "embeddings":
-			return await getEmbeddingAdapter(type)
+		case "embeddings": {
+			const { listModels, testConnection } =
+				await getEmbeddingAdapter(type)
+			// Never reached for a shipped type — see `EmbeddingAdapterExports`.
+			if (!listModels || !testConnection)
+				throw new Error(
+					`The embedding adapter for "${type}" cannot list or test an endpoint on its own.`
+				)
+			return { listModels, testConnection }
+		}
 		case "ner":
 			return await getNerAdapter(type)
-		default:
-			return await getConnectionAdapter(type)
+		default: {
+			const text = await getConnectionAdapter(type)
+			if (!ADAPTER_REGISTRY[type]?.embedding) return text
+			return {
+				...text,
+				testConnection: async (connection: SelectConnection) => {
+					const result = await text.testConnection(connection)
+					if (!result.ok) return result
+					return await withEmbeddingProbe(
+						db,
+						type,
+						connection,
+						result
+					)
+				}
+			}
+		}
+	}
+}
+
+/**
+ * The pair a connection test should also embed with, or null when the
+ * connection is not doing that job.
+ *
+ * A connection handed in with a model already on it is a PAIR, judged by its
+ * own model row's modality. An endpoint is judged by the star: the pair it
+ * names, merged onto the connection AS HANDED IN — the form's base URL, which
+ * is what a person pressing Test on an unsaved edit is asking about. An
+ * unsaved connection has no rows and nothing can star it.
+ */
+async function embeddingPairUnderTest(
+	db: Db,
+	connection: SelectConnection & { model?: string | null }
+): Promise<SelectConnection | null> {
+	if (connection?.id == null) return null
+	if (connection.model) {
+		const rows = await connectionModels(db, connection.id)
+		const row = rows.find((r) => r.model === connection.model)
+		return row?.modality === "embeddings" ? connection : null
+	}
+	const star = await capabilityDefault(db, EMBEDDING_CAPABILITY)
+	if (star?.connectionId !== connection.id || !star.connectionModelId)
+		return null
+	const row = await connectionModelById(db, star.connectionModelId)
+	return row && row.connectionId === connection.id
+		? mergeEndpointModel(connection, row)
+		: null
+}
+
+/** A passing text test, followed by the probe embed when the connection embeds. */
+async function withEmbeddingProbe<T extends { ok: boolean; error?: string }>(
+	db: Db | undefined,
+	type: string,
+	connection: SelectConnection,
+	passed: T
+): Promise<T | { ok: false; error: string }> {
+	try {
+		const handle = db ?? (await import("$lib/server/db")).db
+		const pair = await embeddingPairUnderTest(handle, connection)
+		if (!pair) return passed
+		const { Adapter } = await getEmbeddingAdapter(type)
+		await new Adapter(pair).embedText(
+			{ input: ["test"] },
+			{ signal: AbortSignal.timeout(EMBEDDING_PROBE_TIMEOUT_MS) }
+		)
+		return passed
+	} catch (e: any) {
+		return {
+			ok: false,
+			error:
+				e?.name === "TimeoutError"
+					? `The embedding model did not answer within ${Math.round(EMBEDDING_PROBE_TIMEOUT_MS / 1000)} seconds.`
+					: (e?.message ?? String(e))
+		}
 	}
 }
 
@@ -280,10 +401,12 @@ export async function syncConnectionModels(
 		// bag that differs is worth a write on every ten-minute sync.
 		const factsChanged =
 			JSON.stringify(nextFacts) !== JSON.stringify(r.facts ?? {})
-		// Replaced like the facts, for the same reason: a host that stops
-		// saying what a model is for has stopped claiming it.
+		// NOT replaced like the facts: a listing's modality is a fact when it
+		// says one and silence when it doesn't, and silence keeps what is
+		// known (the header says why). Only a stated, different one is a write.
 		const nextModality = offered.modality ?? null
-		const modalityChanged = nextModality !== (r.modality ?? null)
+		const modalityChanged =
+			nextModality != null && nextModality !== (r.modality ?? null)
 		if (!renaming && !factsChanged && !modalityChanged) continue
 		await db
 			.update(schema.connectionModels)

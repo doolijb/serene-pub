@@ -58,7 +58,7 @@ const fixture: DocsManifest = {
 		{
 			group: "SDK reference",
 			source: "sdk",
-			pages: ["sdk/pipelines/core_spec_respond"]
+			pages: ["sdk/pipelines/core_spec_chat-respond"]
 		}
 	],
 	pages: {
@@ -67,9 +67,9 @@ const fixture: DocsManifest = {
 			order: 0
 		}),
 		sessions: page("sessions", { title: "Sessions", order: 1 }),
-		"sdk/pipelines/core_spec_respond": page(
-			"sdk/pipelines/core_spec_respond",
-			{ title: "core:spec/respond", source: "sdk", order: 0 }
+		"sdk/pipelines/core_spec_chat-respond": page(
+			"sdk/pipelines/core_spec_chat-respond",
+			{ title: "core:spec/chat-respond", source: "sdk", order: 0 }
 		)
 	},
 	assets: { count: 3, bytes: 1024, budgetBytes: 6 * 1024 * 1024 }
@@ -106,7 +106,7 @@ describe("buildDocsIndex", () => {
 		expect(buildDocsIndex(fixture).map((p) => p.slug)).toEqual([
 			"getting-started",
 			"sessions",
-			"sdk/pipelines/core_spec_respond"
+			"sdk/pipelines/core_spec_chat-respond"
 		])
 	})
 

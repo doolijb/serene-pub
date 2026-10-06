@@ -1,3 +1,4 @@
+import { v4 as uuid } from "uuid"
 import {
 	declareInterest,
 	requestWithInterest
@@ -45,7 +46,7 @@ export function resolveOrCreateBindingByName(
 	sessionId?: number
 ): Promise<{ id: number; created: boolean }> {
 	return new Promise((resolve, reject) => {
-		const requestId = crypto.randomUUID()
+		const requestId = uuid()
 
 		function cleanup() {
 			clearTimeout(timeout)

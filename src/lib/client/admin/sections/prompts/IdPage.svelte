@@ -278,7 +278,7 @@
 			rows={fitting}
 			rowKey={(p) => p.slug}
 			columns={[
-				{ key: "name", label: "Pipeline", primary: true, text: (p) => p.name },
+				{ key: "name", label: "Pipeline", primary: true, text: (p) => p.label },
 				{
 					key: "genres",
 					label: "Genres",
@@ -287,7 +287,8 @@
 				{
 					key: "picks",
 					label: "Picks it now",
-					text: (p) => (row!.usedBy.includes(p.name) ? "Yes" : "No")
+					// `usedBy` names pipelines by label: four genres' "Reply" are four.
+					text: (p) => (row!.usedBy.includes(p.label) ? "Yes" : "No")
 				}
 			]}
 			rowHref={(p) => `/admin/pipelines/${encodeURIComponent(p.slug)}`}

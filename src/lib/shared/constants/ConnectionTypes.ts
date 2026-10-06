@@ -135,13 +135,18 @@ export class CONNECTION_TYPE {
 	 */
 	static LOCAL_ONNX_EMBEDDINGS = "local-onnx"
 	/**
-	 * Any OpenAI-compatible `/embeddings` endpoint — OpenAI itself, LM Studio,
-	 * llama.cpp server, vLLM.
+	 * ⏳ Retired: any OpenAI-compatible `/embeddings` endpoint is now an
+	 * {@link OPENAI} connection, which declares `text->embedding` itself (owner
+	 * ruling 2026-10-05: one OpenAI-compatible connection per service). This was
+	 * its own type because a connection once named one model of one modality;
+	 * a second module on the same type (`OpenAIEmbeddingAdapter`, registered for
+	 * both) is how a different route is served now.
 	 *
-	 * Its own type rather than a capability on {@link OPENAI}, because
-	 * `OpenAIChatAdapter`
-	 * speaks `/v1/chat/completions` and nothing else; `/embeddings` is a different
-	 * route, hence a different adapter.
+	 * Rows of this type are renamed onto `openai` in place at boot
+	 * (`connections/openAIMultiModality.ts`); the id stays declared so a row the
+	 * merge has not reached still resolves, and the 0.5.3 upgrade still writes
+	 * one for an API embedding singleton (the merge renames it the boot after).
+	 * Nothing else creates one.
 	 *
 	 * ⚠ Id fixed by the same migration that fixes `local-onnx` above.
 	 */

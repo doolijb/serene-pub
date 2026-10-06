@@ -6,11 +6,17 @@
  * ONNX types — a model on a host is the host's business, and there is nothing
  * on this machine to download or delete.
  *
+ * A download and an add-by-Hub-id are also refused on a machine that cannot
+ * run the runtime (`localOnnxRefusal`, the shared probe): a file that can never
+ * load is a few hundred megabytes of nothing. Cancel and remove are not — they
+ * only ever free what is already here.
+ *
  * ## ⚠ A download is a WARM, not a transfer
  *
- * There is no downloader here. `pipeline()` is called exactly as the two loaders
- * call it — same task, same cache directory, same dtype — and transformers.js
- * fetches whatever it does not already have. That is deliberate: a hand-rolled
+ * There is no downloader here. transformers.js's own loaders — the config, the
+ * task's model class, the tokenizer — are called for the same task, dtype and
+ * cache directory the lane's loader uses, and they fetch whatever is not
+ * already there (`fetchModelFiles`). That is deliberate: a hand-rolled
  * downloader would have to guess which files a repo needs (`config.json`, a
  * tokenizer, one of six `onnx/*.onnx` variants chosen by dtype), and a guess
  * that is wrong produces a directory that looks complete and will not load.
@@ -72,6 +78,7 @@ import {
 	type OnnxDownload,
 	type OnnxModality
 } from "$lib/server/localModels/onnxCache"
+import { localOnnxRefusal } from "$lib/server/localModels/onnxRuntime"
 import { buildConnectionsList, connectionModelsView } from "./connections"
 import {
 	downloadHref,
@@ -206,8 +213,18 @@ async function stateResponse(
  * `filename` is UNIQUE table-wide, so the row is matched on it and updated
  * rather than inserted blindly: a retry after a failure, or a second download
  * after a remove, must reuse the row instead of failing on the constraint.
+ *
+ * `quantization` is the precision this download fetches (`dtypeFor`), or null
+ * for the runtime's default. It is what both loaders read for a model the
+ * catalogue does not name (`registeredNerModel` in `ner/index.ts`,
+ * `registeredEmbeddingModel` in `embedding/index.ts`), so the load asks for
+ * the same weights file the download put on disk.
  */
-async function beginRegistryRow(modality: OnnxModality, modelId: string) {
+async function beginRegistryRow(
+	modality: OnnxModality,
+	modelId: string,
+	dtype: string | undefined
+) {
 	const values = {
 		filename: modelId,
 		modelName: modelId,
@@ -217,6 +234,7 @@ async function beginRegistryRow(modality: OnnxModality, modelId: string) {
 		modality,
 		kind: "unknown" as const,
 		kindSource: "declared" as const,
+		quantization: dtype ?? null,
 		status: "downloading",
 		errorMessage: null
 	}
@@ -269,11 +287,10 @@ async function dropRegistryRow(modelId: string, modality: OnnxModality) {
  *
  * ⚠ `extra_json.onnx.dtype` is read as a fallback for a model the list does not
  * name, which is the only case a person can set it in (`connections:addHubModel`
- * is the one writer). The loaders do NOT read that field — they consult the
- * catalogue and nothing else — so a hand-set dtype makes the download and the
- * load disagree about which weights file is wanted. Flagged rather than fixed
- * here: teaching the load path to read a row's dtype is a change to the hot
- * path and belongs to whoever rules on it.
+ * is the one writer). The loaders do not read that field; the answer reaches
+ * them through the registry row instead (`beginRegistryRow` records it as
+ * `local_models.quantization`), which both loaders read for a model the
+ * catalogue does not name (`registeredEmbeddingModel`, `registeredNerModel`).
  */
 function dtypeFor(
 	modality: OnnxModality,
@@ -288,6 +305,121 @@ function dtypeFor(
 	return (listed ?? (typeof declared === "string" ? declared : undefined)) as
 		| string
 		| undefined
+}
+
+/** Bytes across every file of one download, as one bar. */
+type DownloadTotal = { progress: number; loaded: number; total: number }
+
+/**
+ * Fetch every file the lane's loader reads, into this modality's cache
+ * directory and nowhere else. Answers the model it built, for the caller to
+ * dispose.
+ *
+ * ## ⚠ Not `pipeline()`, because its file discovery ignores `cache_dir`
+ *
+ * transformers.js 4.2.0's `pipeline()` decides which files a repo needs
+ * (`get_pipeline_files`) before it fetches any, and that step reads the
+ * model's `config.json` with no cache directory — so it lands in
+ * `env.cacheDir`, the one global the embedding loader sets to ITS directory.
+ * An entity model's download left `config.json` among the embedding weights
+ * that way. And `env.cacheDir` can't be pointed here for the duration: the
+ * embedding lane may load concurrently, and a global assignment races it.
+ *
+ * So the same steps run by hand, each handed `cache_dir`, in the order
+ * `pipeline()` takes them: the config first, then the pipeline's own file list
+ * with that config in hand (which then asks nothing of the cache), then the
+ * task's model class and its tokenizer. Which files is still the library's
+ * answer, never a guess. The model class is the one `pipeline()` picks for
+ * the task — `AutoModel` for `feature-extraction`, `AutoModelForTokenClassification`
+ * for `token-classification` — named here because the task table that maps
+ * them is not exported.
+ *
+ * ## One bar across every file
+ *
+ * `pipeline()` sized each file up front and reported one aggregate, so the bar
+ * never jumped back as a new file started. This does the same: the sizes are
+ * read first, every per-file `progress` event updates its file, and the sum is
+ * reported. The model class reports its own `progress_total` over its own
+ * files only; that is ignored, because the tokenizer's are not in it.
+ */
+async function fetchModelFiles(
+	modality: OnnxModality,
+	modelId: string,
+	dtype: string | undefined,
+	onTotal: (total: DownloadTotal) => void
+): Promise<{ dispose?: () => unknown } | null> {
+	const {
+		AutoConfig,
+		AutoModel,
+		AutoModelForTokenClassification,
+		AutoTokenizer,
+		ModelRegistry
+	} = await import("@huggingface/transformers")
+	const cache_dir = cacheDirFor(modality)
+	const task =
+		modality === "embeddings"
+			? "feature-extraction"
+			: "token-classification"
+	const precision = dtype ? { dtype: dtype as any } : {}
+
+	const config = await AutoConfig.from_pretrained(modelId, { cache_dir })
+	const files = await ModelRegistry.get_pipeline_files(task, modelId, {
+		config,
+		...precision
+	})
+
+	const loading: Record<string, { loaded: number; total: number }> = {}
+	const sizes = await Promise.all(
+		files.map((file) =>
+			ModelRegistry.get_file_metadata(modelId, file, { cache_dir })
+		)
+	)
+	sizes.forEach((meta, i) => {
+		if (!meta.exists) return
+		// `config.json` is already here, fetched above.
+		const size = meta.size ?? 0
+		loading[files[i]] = {
+			loaded: files[i] === "config.json" ? size : 0,
+			total: size
+		}
+	})
+	const progress_callback = (event: any) => {
+		if (event?.status !== "progress" || typeof event.file !== "string")
+			return
+		loading[event.file] = {
+			loaded: Number(event.loaded) || 0,
+			total: Number(event.total) || 0
+		}
+		let loaded = 0
+		let total = 0
+		for (const file of Object.values(loading)) {
+			loaded += file.loaded
+			total += file.total
+		}
+		onTotal({
+			progress: total > 0 ? (loaded / total) * 100 : 0,
+			loaded,
+			total
+		})
+	}
+
+	const Model =
+		modality === "embeddings" ? AutoModel : AutoModelForTokenClassification
+	const [model] = await Promise.all([
+		Model.from_pretrained(modelId, {
+			cache_dir,
+			config,
+			...precision,
+			progress_callback
+		}),
+		files.includes("tokenizer.json")
+			? AutoTokenizer.from_pretrained(modelId, {
+					cache_dir,
+					progress_callback
+				})
+			: null
+	])
+	return model as { dispose?: () => unknown } | null
 }
 
 /** When each download last pushed, so the throttle is per download. */
@@ -339,47 +471,27 @@ async function runWarm(
 	const { modality, modelId } = download
 	let failure: string | null = null
 	try {
-		await beginRegistryRow(modality, modelId)
-		const { pipeline: createPipeline } = await import(
-			"@huggingface/transformers"
-		)
 		const dtype = dtypeFor(modality, modelId, row)
-		const task =
-			modality === "embeddings"
-				? "feature-extraction"
-				: "token-classification"
-		const warmed = await createPipeline(task as any, modelId, {
-			/**
-			 * ⚠ Per call, NOT `env.cacheDir` — the rule `ner/index.ts` states:
-			 * `env` is one object shared with both lanes, and a global
-			 * assignment from a download could be overwritten between this line
-			 * and the fetch it governs, putting one lane's weights in the
-			 * other's directory. The VALUE is the same one the loaders use.
-			 */
-			cache_dir: cacheDirFor(modality),
-			...(dtype ? { dtype: dtype as any } : {}),
-			// @ts-ignore — progress_callback is valid but not in all type defs
-			progress_callback: (event: any) => {
-				// `progress_total` is the aggregate transformers.js computes
-				// across every file of the repo; the per-file `progress` events
-				// would make the bar jump back on each new file.
-				if (event?.status !== "progress_total") return
+		await beginRegistryRow(modality, modelId, dtype)
+		const warmed = await fetchModelFiles(
+			modality,
+			modelId,
+			dtype,
+			(total) => {
 				download.percent = Math.max(
 					0,
-					Math.min(100, Math.round(event.progress ?? 0))
+					Math.min(100, Math.round(total.progress))
 				)
-				if (typeof event.loaded === "number")
-					download.downloadedBytes = event.loaded
-				if (typeof event.total === "number")
-					download.totalBytes = event.total
+				download.downloadedBytes = total.loaded
+				download.totalBytes = total.total
 				pushProgress(download, endpoint, row)
 			}
-		})
+		)
 		/**
 		 * ⚠ Disposed unconditionally, and that is the point: a DOWNLOAD MUST
-		 * NOT LOAD ANYTHING into a lane. This is a private pipeline instance —
-		 * `pipeline()` builds fresh ORT sessions per call and never hands back
-		 * the lane's — so disposing it frees exactly what this function
+		 * NOT LOAD ANYTHING into a lane. This is a private model instance —
+		 * `from_pretrained` builds fresh ORT sessions per call and never hands
+		 * back the lane's — so disposing it frees exactly what this function
 		 * allocated and cannot disturb a model the lane has resident.
 		 */
 		try {
@@ -503,6 +615,16 @@ export const connectionsDownloadModel: Handler<
 				},
 				error
 			}
+		}
+
+		// Before the claim, and so before `runWarm`'s import of transformers:
+		// nothing is claimed, no registry row is written, and the answer is the
+		// machine's own reason rather than a failed download naming a missing
+		// binary.
+		const unrunnable = await localOnnxRefusal()
+		if (unrunnable) {
+			emitToUser("connections:downloadModel:error", { error: unrunnable })
+			return await stateResponse(endpoint, row, unrunnable)
 		}
 
 		// ⚠ One download per `${modality}:${modelId}`, claimed before anything
@@ -753,6 +875,11 @@ export const connectionsAddHubModel: Handler<
 		)
 		if (isRefusal(resolved)) return fail(resolved.error)
 		const { endpoint, modality } = resolved
+
+		// A row added here exists to be downloaded, which this machine
+		// cannot do — refused before the Hub is asked anything.
+		const unrunnable = await localOnnxRefusal()
+		if (unrunnable) return fail(unrunnable)
 
 		const hubId = (params.hubId ?? "").trim()
 		if (!HUB_ID.test(hubId))

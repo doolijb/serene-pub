@@ -33,6 +33,8 @@
 	import * as Icons from "@lucide/svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
+	import { toaster } from "$lib/client/utils/toaster"
 	import ModelRow, { type ModelRowAction } from "./ModelRow.svelte"
 	import { modelDisplay } from "./modelDisplay"
 	import type { CapabilityDefaultRef } from "./modelSystemDefaults"
@@ -103,7 +105,8 @@
 	const LANES: Record<"koboldcpp" | "ollama", LaneSpec[]> = {
 		koboldcpp: [
 			{ lane: "text", heading: "Text models", useLabel: "Use for chat", capability: "text->text" },
-			{ lane: "image", heading: "Image models", useLabel: "Use for images", capability: "text->image" }
+			{ lane: "image", heading: "Image models", useLabel: "Use for images", capability: "text->image" },
+			{ lane: "embeddings", heading: "Embedding models", useLabel: "Use for embeddings", capability: "text->embedding" }
 		],
 		ollama: [
 			{ lane: "text", heading: "Chat models", useLabel: "Use for chat", capability: "text->text" },
@@ -116,6 +119,19 @@
 			: m.modality === "embeddings"
 				? "embeddings"
 				: "text"
+
+	/** Where a KoboldCPP file may be moved from each section. */
+	type Move = "toText" | "toImage" | "toEmbeddings"
+	const MOVES: Record<Lane, Move[]> = {
+		text: ["toImage", "toEmbeddings"],
+		image: ["toText"],
+		embeddings: ["toText"]
+	}
+	const MOVE_LABELS: Record<Move, string> = {
+		toText: "Move to text models",
+		toImage: "Move to image models",
+		toEmbeddings: "Move to embedding models"
+	}
 
 	const lanes = $derived(
 		LANES[kind]
@@ -153,15 +169,17 @@
 		const items: ModelRowAction[] = [
 			{ id: "open", label: "Model settings", icon: "Settings2" }
 		]
-		if (kind === "koboldcpp" && lane !== "embeddings")
-			items.push({
-				id: lane === "text" ? "toImage" : "toText",
-				label:
-					lane === "text"
-						? "Move to image models"
-						: "Move to text models",
-				icon: "ArrowLeftRight"
-			})
+		// A KoboldCPP file's section is what its header said it was, and a
+		// header can be wrong — an embedding GGUF converted without its pooling
+		// key reads as a chat model. The moves are how a person says otherwise;
+		// image ↔ embeddings is not offered, since no header confuses those two.
+		if (kind === "koboldcpp")
+			for (const to of MOVES[lane])
+				items.push({
+					id: to,
+					label: MOVE_LABELS[to],
+					icon: "ArrowLeftRight"
+				})
 		if (kind === "ollama")
 			items.push({
 				id: "site",
@@ -199,9 +217,15 @@
 				return
 			case "toImage":
 			case "toText":
+			case "toEmbeddings":
 				socket.emit("koboldcpp:setModelKind", {
 					filename: model.model,
-					kind: id === "toImage" ? "image" : "text"
+					kind:
+						id === "toImage"
+							? "image"
+							: id === "toEmbeddings"
+								? "embeddings"
+								: "text"
 				})
 				return
 		}
@@ -211,6 +235,10 @@
 		// Embeddings go through the panel's own default flow: switching the
 		// embedding model rebuilds the index, and that flow asks first.
 		if (spec.lane === "embeddings") {
+			if (kind === "koboldcpp") {
+				void useKoboldCppEmbeddings(spec, model)
+				return
+			}
 			if (connection)
 				onSetDefault(spec.capability, connection.id, {
 					id: model.id,
@@ -235,6 +263,35 @@
 			socket.emit("koboldcpp:connectModel", {
 				modelName: model.model
 			} as any)
+	}
+
+	/**
+	 * KoboldCPP's "Use for embeddings": the server checks the file and makes
+	 * sure its row is an embedding model (`koboldcpp:connectEmbeddingModel`),
+	 * and answers the pair — it never stars it. The star then moves through
+	 * the panel's flow like any other embedding star, behind its re-index
+	 * confirmation. A refusal is Layout's toast; only silence is said here.
+	 */
+	async function useKoboldCppEmbeddings(spec: LaneSpec, model: ModelOf) {
+		try {
+			const pair = await awaitReply({
+				socket,
+				event: "koboldcpp:connectEmbeddingModel",
+				errorEvent: "koboldcpp:connectEmbeddingModel:error",
+				params: { filename: model.model },
+				match: (r) => r.filename === model.model
+			})
+			onSetDefault(spec.capability, pair.connectionId, {
+				id: pair.modelId,
+				name: pair.name
+			})
+		} catch (err) {
+			if (isReplyTimeout(err))
+				toaster.error({
+					title: "The embedding model was not chosen",
+					description: "The server did not answer in time."
+				})
+		}
 	}
 
 	function confirmDelete() {

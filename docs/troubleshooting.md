@@ -65,6 +65,7 @@ Open the reply's prompt details first. An image the model was sent shows as a fi
 - **The embeddings queue sits at Idle with work waiting**: the embedding model may need loading, or its service stopped answering. See [Troubleshooting a stuck or empty queue](./embeddings-and-rag.md#troubleshooting-a-stuck-or-empty-queue).
 - **One session's memory notice never clears**: press **Prioritize in queue** on the notice.
 - **A short session shows no notice**: sessions of 10 messages or fewer never do; Search by meaning still works in them. See [Why some short sessions never show a RAG notice](./embeddings-and-rag.md#why-some-short-sessions-never-show-a-rag-notice).
+- **Local embeddings (ONNX) is greyed out, or a local model says it's not available on this machine**: this device can't run local ONNX models (Android, and some desktop builds). The message gives the reason. Use an embeddings service instead. See [Local ONNX models](./connections.md#local-onnx-models).
 
 ## Lore is missing from a reply
 
@@ -103,7 +104,7 @@ Most problems behind a reverse proxy or tunnel (nothing updates, "Mixed Content"
 
 ## A feature is missing on Android
 
-Running models on the phone, local embeddings, SillyTavern import and a few connection types aren't available there. See [Android app → Feature limitations](./android.md#feature-limitations).
+Running models on the phone, SillyTavern import and a few connection types aren't available there. The local ONNX connections (embeddings and named entities) are listed but greyed out, with the reason. See [Android app → Feature limitations](./android.md#feature-limitations).
 
 ## Database
 

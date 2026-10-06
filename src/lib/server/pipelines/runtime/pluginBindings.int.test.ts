@@ -351,14 +351,14 @@ describe("R62 · every door judges a private node the same way", () => {
 	it("mayStandIn: a private node stands in only in its own package's spec; public anywhere", async () => {
 		const { mayStandIn } = await import("$lib/server/pipelines/entities/bindings")
 		const candidate = "acme.tools:task/lookup@1"
-		expect(await mayStandIn(db as any, "core:spec/respond", "core:task/concat-candidates@1", candidate)).toBe(false)
+		expect(await mayStandIn(db as any, "core:spec/chat-respond", "core:task/concat-candidates@1", candidate)).toBe(false)
 		expect(await mayStandIn(db as any, "acme.tools:spec/lookup-turn", "core:task/concat-candidates@1", candidate)).toBe(true)
 		await db
 			.update(schema.pipelineDefinitionRegistry)
 			.set({ isPublic: true } as any)
 			.where(eq(schema.pipelineDefinitionRegistry.definitionId, "acme.tools:task/lookup"))
 		try {
-			expect(await mayStandIn(db as any, "core:spec/respond", "core:task/concat-candidates@1", candidate)).toBe(true)
+			expect(await mayStandIn(db as any, "core:spec/chat-respond", "core:task/concat-candidates@1", candidate)).toBe(true)
 		} finally {
 			await db
 				.update(schema.pipelineDefinitionRegistry)

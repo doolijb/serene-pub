@@ -123,7 +123,7 @@ let characterId: number
 // The document under test: the prompt path, wired end to end.
 const promptPipeline = () =>
 	compile(
-		spec("core:spec/respond", { version: "1.0.0" })
+		spec("core:spec/chat-respond", { version: "1.0.0" })
 			.inlet("input", C.userMessage.v1())
 			.query("history", ($) =>
 				C.sessionHistory.v1({ scope: $.input.sessionScope })

@@ -196,17 +196,17 @@ async function routeFor(
 	speakerRef?: ParticipantRef
 	narration: boolean
 }> {
-	const { NARRATE_SPEC_ID, NARRATE_CHARACTER_SPEC_ID } = await import(
+	const { CHAT_NARRATE_SPEC_ID, CHAT_SIDE_CHARACTER_SPEC_ID } = await import(
 		"$lib/server/pipelines/specs/narrate"
 	)
-	const { RESPOND_SPEC_ID } = await import(
+	const { CHAT_RESPOND_SPEC_ID } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	if (turn.kind === "respond")
 		return {
 			subject: sessionEvents.messageRespond,
 			label: "respond",
-			floorSpecId: RESPOND_SPEC_ID,
+			floorSpecId: CHAT_RESPOND_SPEC_ID,
 			currentCharacterId: turn.speaker ? null : (turn.characterId ?? null),
 			speaker: null,
 			...(turn.speaker ? { speakerRef: turn.speaker } : {}),
@@ -214,18 +214,18 @@ async function routeFor(
 		}
 	if (turn.kind === "narrate")
 		return {
-			subject: `${NARRATE_SPEC_ID}#narrate`,
+			subject: `${CHAT_NARRATE_SPEC_ID}#narrate`,
 			label: "narrate",
-			floorSpecId: NARRATE_SPEC_ID,
+			floorSpecId: CHAT_NARRATE_SPEC_ID,
 			currentCharacterId: null,
 			speaker: null,
 			narration: true
 		}
 	if (turn.kind === "narrate-character")
 		return {
-			subject: `${NARRATE_CHARACTER_SPEC_ID}#narrate-character`,
+			subject: `${CHAT_SIDE_CHARACTER_SPEC_ID}#narrate-character`,
 			label: "narrate-character",
-			floorSpecId: NARRATE_CHARACTER_SPEC_ID,
+			floorSpecId: CHAT_SIDE_CHARACTER_SPEC_ID,
 			// The side character's id reaches the RUN but never the row: it
 			// is what makes character lore bound to them visible, while the
 			// row stays narration with a null `characterId`.
@@ -250,17 +250,17 @@ async function routeFor(
 	if (narration)
 		return speaker
 			? {
-					subject: `${NARRATE_CHARACTER_SPEC_ID}#narrate-character`,
+					subject: `${CHAT_SIDE_CHARACTER_SPEC_ID}#narrate-character`,
 					label: "narrate-character",
-					floorSpecId: NARRATE_CHARACTER_SPEC_ID,
+					floorSpecId: CHAT_SIDE_CHARACTER_SPEC_ID,
 					currentCharacterId: speaker.characterId,
 					speaker,
 					narration
 				}
 			: {
-					subject: `${NARRATE_SPEC_ID}#narrate`,
+					subject: `${CHAT_NARRATE_SPEC_ID}#narrate`,
 					label: "narrate",
-					floorSpecId: NARRATE_SPEC_ID,
+					floorSpecId: CHAT_NARRATE_SPEC_ID,
 					currentCharacterId: null,
 					speaker: null,
 					narration
@@ -268,7 +268,7 @@ async function routeFor(
 	return {
 		subject: turn.kind === "extend" ? `${CORE_ACTION_SPEC}#extend` : sessionEvents.messageRespond,
 		label: turn.kind === "extend" ? "extend" : "respond",
-		floorSpecId: RESPOND_SPEC_ID,
+		floorSpecId: CHAT_RESPOND_SPEC_ID,
 		currentCharacterId: existing?.characterId ?? null,
 		speaker: null,
 		...(envoySlug ? { speakerRef: `envoy:${envoySlug}` as EnvoyRef } : {}),

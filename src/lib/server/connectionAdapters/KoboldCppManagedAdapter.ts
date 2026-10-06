@@ -20,6 +20,7 @@ import {
 	classifyModelFile,
 	extensionAllowedForKind
 } from "$lib/server/koboldcpp/modelKind"
+import { rereadDetectedTextModels } from "$lib/server/koboldcpp/rereadDetectedKinds"
 import path from "path"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
@@ -203,8 +204,12 @@ async function testConnection(
 }
 
 /**
- * The text models this managed KoboldCPP can serve — what the sync persists as this
- * endpoint's rows, and therefore what decides `missing_since`.
+ * The text and embedding models this managed KoboldCPP can serve — what the
+ * sync persists as this endpoint's rows, and therefore what decides
+ * `missing_since`. Both are GGUFs in the text models directory; each entry's
+ * `modality` says which it is, from the registry's `kind` (`embeddings` is
+ * koboldcpp's `--embeddingsmodel` slot), so `capabilityRefusal` never offers an
+ * embedding model for chat.
  *
  * Read off the managed KoboldCPP's own text models directory, NOT off koboldcpp's
  * `/api/admin/list_options`. That endpoint lists the `--admindir` — the
@@ -254,9 +259,22 @@ async function listTextModels(
 			}
 		}
 
+		// A GGUF an older classifier called text is read once more, so an
+		// embedding model measured before `embeddings` existed is offered as
+		// one by this very sync (`rereadDetectedKinds.ts`). Best-effort: a
+		// failed re-read leaves the row as it was, never the listing failed.
+		try {
+			await rereadDetectedTextModels(db, settings)
+		} catch (e) {
+			console.warn("[KoboldCPP] re-reading model kinds failed:", e)
+		}
+
 		const rows = await db.query.localModels.findMany()
 		const imageLane = new Set(
 			rows.filter((m) => m.kind === "image").map((m) => m.filename)
+		)
+		const embeddingsLane = new Set(
+			rows.filter((m) => m.kind === "embeddings").map((m) => m.filename)
 		)
 		const incomplete = new Set(
 			rows.filter((m) => m.status !== "complete").map((m) => m.filename)
@@ -273,12 +291,15 @@ async function listTextModels(
 		// dropped in this folder was listed under Text models with a Use
 		// button until something else happened to classify it (walk
 		// 2026-09-24, plan C5). Only unregistered files pay for the read.
+		// An embedding GGUF read here goes to the embeddings half, the same
+		// way a registered one does.
 		const registered = new Set(rows.map((m) => m.filename))
 		const unregisteredImages = new Set<string>()
 		for (const name of candidates) {
 			if (registered.has(name)) continue
 			const verdict = await classifyModelFile(path.join(dir, name))
 			if (verdict.kind === "image") unregisteredImages.add(name)
+			if (verdict.kind === "embeddings") embeddingsLane.add(name)
 		}
 		const models = candidates
 			.filter((name) => !unregisteredImages.has(name))
@@ -308,6 +329,9 @@ async function listTextModels(
 					// The registry's own name where it has one — a filename is
 					// an identifier, not a title.
 					name: row?.modelName || filename,
+					modality: embeddingsLane.has(filename)
+						? "embeddings"
+						: "text-gen",
 					...(Object.keys(facts).length > 1 ? { facts } : {})
 				}
 			})
@@ -387,20 +411,22 @@ async function listImageModels(
 }
 
 /**
- * Everything this managed KoboldCPP can serve — text models, then image models — each
- * entry carrying its `modality`. A text listing that FAILS fails the whole
- * listing, so the sync touches no row (modelSync.ts's header): half a listing
- * would mark every text model missing.
+ * Everything this managed KoboldCPP can serve — text and embedding models, then
+ * image models — each entry carrying its `modality`. A text listing that FAILS
+ * fails the whole listing, so the sync touches no row (modelSync.ts's header):
+ * half a listing would mark every text model missing.
  */
 async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
 	const text = await listTextModels(connection)
 	if (text.error) return text
+	// The directory listing names each entry's modality; the legacy admin
+	// listing names none, and everything it lists is a text model.
 	const textModels = text.models.map((m) =>
 		typeof m === "string"
 			? { model: m, name: m, modality: "text-gen" }
-			: { ...m, modality: "text-gen" }
+			: { modality: "text-gen", ...m }
 	)
 	try {
 		const images = await listImageModels(

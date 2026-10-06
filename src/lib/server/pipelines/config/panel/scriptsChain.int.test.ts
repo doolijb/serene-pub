@@ -19,7 +19,7 @@ import {
 	OptionNotWritableError,
 	type ConfigOption
 } from "$lib/server/pipelines/config/panel"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import {
 	createScript,
 	deleteScript,
@@ -41,7 +41,7 @@ async function writeHookOption(): Promise<ConfigOption> {
 	const view = await namespaceView(
 		db,
 		SECRET,
-		RESPOND_SPEC_ID,
+		CHAT_RESPOND_SPEC_ID,
 		admin()
 	)
 	const all = groupOptions(view!.groups)
@@ -73,11 +73,11 @@ beforeAll(async () => {
 	const [spec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 	const shipped = await resolveSelectedConfig(
 		db,
 		spec.id,
-		RESPOND_SPEC_ID,
+		CHAT_RESPOND_SPEC_ID,
 		{}
 	)
 	const copy = await duplicateConfig(
@@ -94,7 +94,7 @@ describe("the hook in the panel", () => {
 		expect(option.writable).toBe(true)
 		expect(option.scripts ?? []).toEqual([])
 		// A non-admin sees prompts and nothing else (§26a) — no chain options.
-		const view = await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
+		const view = await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, {
 			userId: adminId + 1,
 			isAdmin: false
 		})
@@ -131,7 +131,7 @@ describe("the hook in the panel", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			admin(),
 			option.id,
 			[guard.id, slop.id]
@@ -163,7 +163,7 @@ describe("the hook in the panel", () => {
 			writeOption(
 				db,
 				SECRET,
-				RESPOND_SPEC_ID,
+				CHAT_RESPOND_SPEC_ID,
 				admin(),
 				option.id,
 				[wrongKind.id]
@@ -220,7 +220,7 @@ describe("the hook in the panel", () => {
 		const view = await namespaceView(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			admin()
 		)
 		const rankChain = groupOptions(view!.groups)
@@ -234,7 +234,7 @@ describe("the hook in the panel", () => {
 			writeOption(
 				db,
 				SECRET,
-				RESPOND_SPEC_ID,
+				CHAT_RESPOND_SPEC_ID,
 				admin(),
 				option.id,
 				["not-an-id"]
@@ -244,7 +244,7 @@ describe("the hook in the panel", () => {
 			writeOption(
 				db,
 				SECRET,
-				RESPOND_SPEC_ID,
+				CHAT_RESPOND_SPEC_ID,
 				admin(),
 				option.id,
 				[999_999]

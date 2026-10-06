@@ -1,7 +1,7 @@
 /**
  * The rebind move (PLAN-turn-order §5 A5, R20; retargeted by M2, R27): the
  * Turn order control's row follows the node it names. Until 0152 a
- * session's choice was a `pipeline_node_rebinds` row on `core:spec/respond`
+ * session's choice was a `pipeline_node_rebinds` row on `core:spec/chat-respond`
  * node `speaker`; at A6 it moved to the shared `core:spec/turn-order` node
  * `strategy`; since the modder pass every genre has its own turn-order spec
  * (`core:spec/<genre>-turn-order`), so a row lands on the spec of **the
@@ -28,7 +28,7 @@ let userId: number
 const specs: Record<string, number> = {}
 
 const SPECS = [
-	"core:spec/respond",
+	"core:spec/chat-respond",
 	"core:spec/guide-respond",
 	// Retired by the modder pass; an A5/A6 boot may have left rows on them.
 	"core:spec/turn-order",
@@ -136,7 +136,7 @@ describe("moveSpeakerRebinds", () => {
 	it("moves a 0152-shaped row to the session genre's turn-order spec, once", async () => {
 		const sessionId = await makeSession()
 		await rebind({
-			spec: "core:spec/respond",
+			spec: "core:spec/chat-respond",
 			sessionId,
 			nodeKey: "speaker",
 			definitionId: "core:task/turn-user-split@1"
@@ -207,7 +207,7 @@ describe("moveSpeakerRebinds", () => {
 	it("renames turn-none to turn-manual as it moves", async () => {
 		const sessionId = await makeSession()
 		await rebind({
-			spec: "core:spec/respond",
+			spec: "core:spec/chat-respond",
 			sessionId,
 			nodeKey: "speaker",
 			definitionId: "core:task/turn-none@1"
@@ -221,7 +221,7 @@ describe("moveSpeakerRebinds", () => {
 	it("never overwrites a strategy row the person already has", async () => {
 		const sessionId = await makeSession()
 		await rebind({
-			spec: "core:spec/respond",
+			spec: "core:spec/chat-respond",
 			sessionId,
 			nodeKey: "speaker",
 			definitionId: "core:task/turn-user-split@1"
@@ -244,7 +244,7 @@ describe("moveSpeakerRebinds", () => {
 	it("drops a row whose session's genre has no core turn-order spec, and says so", async () => {
 		const sessionId = await makeSession("acme.rp:genre/tavern")
 		await rebind({
-			spec: "core:spec/respond",
+			spec: "core:spec/chat-respond",
 			sessionId,
 			nodeKey: "speaker",
 			definitionId: "core:task/turn-random@1"
@@ -256,13 +256,13 @@ describe("moveSpeakerRebinds", () => {
 	it("leaves rebinds on other nodes and other scopes alone", async () => {
 		const sessionId = await makeSession()
 		await rebind({
-			spec: "core:spec/respond",
+			spec: "core:spec/chat-respond",
 			sessionId,
 			nodeKey: "gather",
 			definitionId: "core:task/rank-hybrid@1"
 		})
 		await db.insert(schema.pipelineNodeRebinds).values({
-			specId: specs["core:spec/respond"]!,
+			specId: specs["core:spec/chat-respond"]!,
 			scopeKind: "pub",
 			scopeId: 0,
 			nodeKey: "speaker",
@@ -273,7 +273,7 @@ describe("moveSpeakerRebinds", () => {
 		expect(await moveSpeakerRebinds(db)).toMatchObject({ moved: 0, kept: 0, dropped: 0 })
 		expect(await rebindsOf(sessionId)).toEqual([
 			{
-				spec: "core:spec/respond",
+				spec: "core:spec/chat-respond",
 				nodeKey: "gather",
 				definitionId: "core:task/rank-hybrid@1",
 				updatedBy: userId
@@ -289,7 +289,7 @@ describe("moveSpeakerRebinds", () => {
 	it("leaves a row in place until its genre's spec exists, then moves it", async () => {
 		const sessionId = await makeSession()
 		await rebind({
-			spec: "core:spec/respond",
+			spec: "core:spec/chat-respond",
 			sessionId,
 			nodeKey: "speaker",
 			definitionId: "core:task/turn-user-split@1"
@@ -305,7 +305,7 @@ describe("moveSpeakerRebinds", () => {
 			expect(await moveSpeakerRebinds(db)).toEqual({ moved: 0, kept: 0, dropped: 0 })
 			expect(await rebindsOf(sessionId)).toEqual([
 				{
-					spec: "core:spec/respond",
+					spec: "core:spec/chat-respond",
 					nodeKey: "speaker",
 					definitionId: "core:task/turn-user-split@1",
 					updatedBy: userId

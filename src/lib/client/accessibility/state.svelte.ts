@@ -244,7 +244,7 @@ export function mapToAccessibleRoute(pathname: string): string {
 	if (pathname === "/docs") return "/document-view/docs"
 	// A doc slug can contain slashes and underscores: the SDK reference pages
 	// are namespaced under their source and named after node ids
-	// ("sdk/pipelines/core_spec_respond"). The quantifier is lazy so the
+	// ("sdk/pipelines/core_spec_chat-respond"). The quantifier is lazy so the
 	// optional trailing slash is not swallowed into the capture.
 	const docMatch = pathname.match(/^\/docs\/([a-z0-9_/-]+?)\/?$/i)
 	if (docMatch) return `/document-view/docs/${docMatch[1]}`

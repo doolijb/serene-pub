@@ -40,13 +40,14 @@ import { outputKindOf } from "$lib/shared/capabilities/samplingShape"
  * connection the instance may not have yet, and a servable-but-undemanded one
  * is simply available.
  *
- * ⚠ `servable` is WORDING ONLY. Never gate on it. `openai-embeddings` and
- * `local-onnx` are live connection types with NO manifest entry, and
- * `storedCapabilities` returns their cached capabilities un-intersected — so
- * those connections genuinely carry `text->embedding` while
- * `servableTransforms()` says false. Gate on it and the embeddings default
- * becomes unsettable on exactly the installs that have one. Check the INSTANCE
- * first and the BUILD second.
+ * ⚠ `servable` is WORDING ONLY. Never gate on it. A connection whose type this
+ * build's manifest does not describe — a row from a newer build, or a type
+ * since removed — has its cached capabilities returned un-intersected by
+ * `storedCapabilities`, so it can genuinely carry a transform that
+ * `servableTransforms()` says nothing here can express. The embedding types
+ * were that case until they gained manifest entries, and gating on `servable`
+ * then made the embeddings default unsettable on exactly the installs that had
+ * one. Check the INSTANCE first and the BUILD second.
  */
 export interface ComboRow {
 	/** The canonical transform id, e.g. `text+image->text`. The storage key. */

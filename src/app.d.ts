@@ -262,7 +262,11 @@ declare global {
 			| "charaVaultTokenAuthTag"
 		> & {
 			isAndroidWrapper?: boolean
-			localEmbeddingsSupported?: boolean
+			/** Can local ONNX models run here — see `SystemSettings.Get.Response`. */
+			localOnnxAvailability?: {
+				available: boolean
+				reason: string | null
+			}
 			/**
 			 * What an embedded row's `embedding_model` is compared against, or
 			 * null when nothing is starred. Derived from the star, not a column

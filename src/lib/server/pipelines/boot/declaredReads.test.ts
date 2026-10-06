@@ -141,29 +141,27 @@ describe("the allow-list", () => {
 	/**
 	 * The total, as a number this file has to be edited to move.
 	 *
-	 * ⚠ **Two.** `embed-text.connection` (embeddings-as-connections) and
-	 * `build-keeper-context.afterWrite` (an ordering edge). It was three until
-	 * 2026-09-16: `session-history.params.priority` left the list when U3b
-	 * (R-7 P5) made it the conversation's band intent, read by the handler
-	 * and honoured by the ranker's sweep. The number may only go DOWN without
-	 * a ruling: every entry is a declared name no run consults.
+	 * ⚠ **One.** `build-keeper-context.afterWrite` (an ordering edge). It was
+	 * three until 2026-09-16: `session-history.params.priority` left the list
+	 * when U3b (R-7 P5) made it the conversation's band intent, read by the
+	 * handler and honoured by the ranker's sweep. It was two until 2026-10-05:
+	 * `embed-text.connection` left it by owner ruling D-c ("remove
+	 * `embed-text`'s inert connection control" — a pipeline never chooses its
+	 * embedding connection), which deleted the slot rather than reading it; the
+	 * hold the line carried moved to `config/heldSlots.ts`. The number may only
+	 * go DOWN without a ruling: every entry is a declared name no run consults.
 	 */
-	it("stands at two entries, and each is the one it says", () => {
-		expect(UNREAD_ALLOW_LIST.length).toBeLessThanOrEqual(2)
+	it("stands at one entry, and it is the one it says", () => {
+		expect(UNREAD_ALLOW_LIST.length).toBeLessThanOrEqual(1)
 		expect(
 			UNREAD_ALLOW_LIST.map((a) => allowKey(a.definition, a.name)).sort()
-		).toEqual(
-			[
-				"core:oracle/embed-text@1 connection",
-				"core:task/build-keeper-context@1 afterWrite"
-			].sort()
-		)
+		).toEqual(["core:task/build-keeper-context@1 afterWrite"])
 		const kinds = new Map(report.unread.map((f) => [f.key, f.kind]))
-		// The read that closed the third entry: not a finding at all now.
+		// The reads that closed the earlier entries: not findings at all now.
 		expect(kinds.has("core:query/session-history@1 params.priority")).toBe(
 			false
 		)
-		expect(kinds.get("core:oracle/embed-text@1 connection")).toBe("slot")
+		expect(kinds.has("core:oracle/embed-text@1 connection")).toBe(false)
 		expect(kinds.get("core:task/build-keeper-context@1 afterWrite")).toBe(
 			"port"
 		)

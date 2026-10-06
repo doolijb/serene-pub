@@ -87,6 +87,12 @@
 		 * row that has not been downloaded named the wrong press.
 		 */
 		useShortLabel?: string
+		/**
+		 * Why Use can't be pressed, or null. The button stays, disabled, and
+		 * says why — a local ONNX row's Make active where the runtime didn't
+		 * load, which the server refuses with the same sentence.
+		 */
+		useDisabledReason?: string | null
 		selected?: boolean
 		actions?: readonly ModelRowAction[]
 		onOpen?: () => void
@@ -100,6 +106,7 @@
 		canUse = false,
 		useLabel = "Use",
 		useShortLabel = "Use",
+		useDisabledReason = null,
 		selected = false,
 		actions = [],
 		onOpen,
@@ -192,10 +199,13 @@
 		     width so a settled list is a settled list. -->
 		<button
 			type="button"
-			class="btn btn-sm preset-tonal-surface mr-0.5 shrink-0 text-[11px] font-semibold opacity-100 @min-[900px]/view:opacity-0 @min-[900px]/view:group-focus-within:opacity-100 @min-[900px]/view:group-hover:opacity-100"
+			class="btn btn-sm preset-tonal-surface mr-0.5 shrink-0 text-[11px] font-semibold opacity-100 disabled:cursor-not-allowed @min-[900px]/view:opacity-0 @min-[900px]/view:group-focus-within:opacity-100 @min-[900px]/view:group-hover:opacity-100"
 			onclick={() => onUse?.()}
-			aria-label={useLabel}
-			title={useLabel}
+			disabled={!!useDisabledReason}
+			aria-label={useDisabledReason
+				? `${useLabel} — ${useDisabledReason}`
+				: useLabel}
+			title={useDisabledReason ?? useLabel}
 		>
 			<!-- "Use" in the dock, the whole verb where there is room: the long
 			     label took the width the model's name needed. -->

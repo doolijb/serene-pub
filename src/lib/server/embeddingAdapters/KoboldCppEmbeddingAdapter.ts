@@ -18,9 +18,14 @@
  * lists the new one, and switching to it is a person's choice (with its
  * reindex confirmation), never a side effect.
  *
- * The connection's own listing (`KoboldCppAdapter.listModels`) carries every
- * loaded model with its modality; this module's `listModels` answers for the
- * embedding model alone, from the same reader.
+ * ## Only the action
+ *
+ * The connection's own listing (`KoboldCppAdapter.listModels`) names every
+ * loaded model with its modality, the embedding one included, and a test of a
+ * connection doing the embedding job ends in one probe embed through this class
+ * (`adapterIO` in `connections/modelSync.ts`). So this module exports no
+ * `listModels` or `testConnection` of its own: a second listing of the same
+ * process would be code nothing calls.
  */
 
 import {
@@ -29,8 +34,9 @@ import {
 	type EmbedResult,
 	type EmbeddingAdapterExports
 } from "./BaseEmbeddingAdapter"
+import { postOpenAIEmbeddings } from "./openAIEmbeddings"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
-import { fetchLoadedEmbeddingModel } from "$lib/server/koboldcpp/kcppHttp"
+import { normalizeModelName } from "$lib/server/koboldcpp/modelManager"
 
 const DEFAULT_BASE_URL = "http://localhost:5001"
 
@@ -46,84 +52,46 @@ export class KoboldCppEmbeddingAdapter extends BaseEmbeddingAdapter {
 			throw new Error(
 				"This KoboldCPP connection names no embedding model. Choose one on the connection."
 			)
-		const base =
-			normalizeBaseUrl(this.connection.baseUrl) || DEFAULT_BASE_URL
 
-		const res = await fetch(`${base}/v1/embeddings`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ model: expected, input: req.input }),
+		// `appendV1: true` — a KoboldCPP base URL is the server's root, as its
+		// text adapter treats it too (`{base}/v1/chat/completions`).
+		const answer = await postOpenAIEmbeddings({
+			baseUrl:
+				normalizeBaseUrl(this.connection.baseUrl) || DEFAULT_BASE_URL,
+			appendV1: true,
+			model: expected,
+			input: req.input,
+			service: "KoboldCPP",
 			signal: opts?.signal
 		})
-		if (!res.ok) {
-			const detail = (await res.text().catch(() => "")).slice(0, 500)
-			throw new Error(
-				`KoboldCPP's embeddings request failed (${res.status})${detail ? `: ${detail}` : ""}`
-			)
-		}
-		const body = (await res.json()) as {
-			data?: Array<{ index: number; embedding: number[] }>
-			model?: string
-		}
 
-		const loaded = typeof body?.model === "string" ? body.model.trim() : ""
-		if (loaded !== expected)
+		// One model however it is spelled: KoboldCPP reports a model without its
+		// extension and sometimes under `koboldcpp/`, while a managed install
+		// records the file it loaded (`nomic-embed-text-v1.5.Q4_K_M.gguf`).
+		// Refusing that pair would refuse every vector a working setup makes.
+		const loaded = answer.model ?? ""
+		if (
+			!loaded ||
+			normalizeModelName(loaded) !== normalizeModelName(expected)
+		)
 			throw new Error(
 				loaded
 					? `KoboldCPP is embedding with "${loaded}", but this connection is set to "${expected}". ` +
-							`Vectors from two models cannot be mixed. Refresh the connection's models and choose the one it has loaded.`
+						`Vectors from two models cannot be mixed. Refresh the connection's models and choose the one it has loaded.`
 					: `KoboldCPP did not say which embedding model answered, so its vectors cannot be trusted to match "${expected}".`
 			)
 
-		const data = body?.data
-		if (!Array.isArray(data) || data.length !== req.input.length)
-			throw new Error(
-				`KoboldCPP returned ${Array.isArray(data) ? data.length : 0} vectors for ${req.input.length} inputs.`
-			)
-		// By the API's own index, never arrival order — see OpenAIEmbeddingAdapter.
-		const vectors = [...data]
-			.sort((a, b) => a.index - b.index)
-			.map((d) => d.embedding)
 		return {
-			vectors,
+			vectors: answer.vectors,
 			model: loaded,
-			dimensions: vectors[0]?.length ?? 0,
-			raw: body
+			dimensions: answer.dimensions,
+			raw: answer.raw
 		}
 	}
 }
 
-/** The loaded embedding model, as a one-entry list — see `fetchLoadedEmbeddingModel`. */
-async function listModels(
-	connection: SelectConnection
-): Promise<{ models: { model: string }[]; error?: string }> {
-	const base = normalizeBaseUrl(connection.baseUrl) || DEFAULT_BASE_URL
-	const loaded = await fetchLoadedEmbeddingModel(base)
-	if (!loaded.determined)
-		return {
-			models: [],
-			error: "KoboldCPP did not say which embedding model it has loaded."
-		}
-	return { models: loaded.name ? [{ model: loaded.name }] : [] }
-}
-
-async function testConnection(
-	connection: SelectConnection
-): Promise<{ ok: boolean; error?: string }> {
-	const { models, error } = await listModels(connection)
-	if (error) return { ok: false, error }
-	return models.length
-		? { ok: true }
-		: {
-				ok: false,
-				error: "KoboldCPP has no embedding model loaded. Start it with --embeddingsmodel."
-			}
-}
-
 const exports: EmbeddingAdapterExports = {
-	Adapter: KoboldCppEmbeddingAdapter,
-	listModels,
-	testConnection
+	Adapter: KoboldCppEmbeddingAdapter
 }
 
 export default exports

@@ -425,7 +425,7 @@ describe("cause at every emitter", () => {
 				fields: {}
 			}
 		})
-		expect(dispatched?.specSlug).toBe("core:spec/create-chat")
+		expect(dispatched?.specSlug).toBe("core:spec/chat-create")
 		expect((dispatched?.receipt as any).outcome).not.toBe("err")
 		const seeded = await db
 			.select()

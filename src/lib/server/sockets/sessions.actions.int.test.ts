@@ -384,7 +384,7 @@ describe("listSessionActions — audiences", () => {
 		)
 		expect(narrate).toMatchObject({
 			key: "narrate",
-			specSlug: "core:spec/narrate",
+			specSlug: "core:spec/chat-narrate",
 			slash: "narrate",
 			quick: true,
 			canAct: true,
@@ -907,7 +907,7 @@ describe("sessions:fireAction reads the declaration it was handed", () => {
 		})
 		const narrate = (
 			await listSessionFunctions(testDb as any, session.id, CHAT, owner.id)
-		).find((f) => f.specSlug === "core:spec/narrate")
+		).find((f) => f.specSlug === "core:spec/chat-narrate")
 		expect(narrate).toMatchObject({ enabled: true, source: "default", explicit: false })
 
 		// A write stores the identity and answers from then on.
@@ -915,14 +915,14 @@ describe("sessions:fireAction reads the declaration it was handed", () => {
 			testDb as any,
 			session.id,
 			CHAT,
-			"core:spec/narrate#narrate",
+			"core:spec/chat-narrate#narrate",
 			false,
 			{ userId: owner.id }
 		)
 		expect(
 			(
 				await listSessionFunctions(testDb as any, session.id, CHAT, owner.id)
-			).find((f) => f.specSlug === "core:spec/narrate")
+			).find((f) => f.specSlug === "core:spec/chat-narrate")
 		).toMatchObject({ enabled: false, source: "session", explicit: true })
 		expect(
 			(
@@ -933,7 +933,7 @@ describe("sessions:fireAction reads the declaration it was handed", () => {
 			)
 				.map((r) => r.functionKey)
 				.sort()
-		).toEqual(["core:spec/narrate#narrate", "narrate"])
+		).toEqual(["core:spec/chat-narrate#narrate", "narrate"])
 	}, 60_000)
 
 	test("a channel filters where an action is listed, never who may fire it (W2)", async () => {
@@ -1105,10 +1105,10 @@ describe("sessions:actionsSeen", () => {
 			{
 				sessionId: session.id,
 				keys: [
-					"core:spec/narrate#narrate",
+					"core:spec/chat-narrate#narrate",
 					"narrate",
 					"#narrate",
-					"core:spec/narrate#",
+					"core:spec/chat-narrate#",
 					"<script>alert(1)</script>#x",
 					`${"a".repeat(200)}#k`,
 					42 as any,
@@ -1128,7 +1128,7 @@ describe("sessions:actionsSeen", () => {
 			)
 				.map((r) => r.actionKey)
 				.sort()
-		).toEqual(["acme:spec/roll#roll-again", "core:spec/narrate#narrate"])
+		).toEqual(["acme:spec/roll#roll-again", "core:spec/chat-narrate#narrate"])
 	})
 })
 
@@ -1236,7 +1236,7 @@ describe("a preset includes actions by identity (W-A)", () => {
 		)
 		expect(stored.error).toBeUndefined()
 		expect(stored.preset?.includedActions).toEqual([
-			"core:spec/narrate#narrate",
+			"core:spec/chat-narrate#narrate",
 			"acme:spec/summarize#summarize"
 		])
 	}, 60_000)
@@ -1271,7 +1271,7 @@ describe("a preset includes actions by identity (W-A)", () => {
 		)
 		expect(res.error).toBeUndefined()
 		expect(res.preset?.includedActions).toEqual([
-			"core:spec/narrate#narrate",
+			"core:spec/chat-narrate#narrate",
 			"acme:spec/tally#tally",
 			"summarize",
 			"teleport",
@@ -1299,7 +1299,7 @@ describe("a preset includes actions by identity (W-A)", () => {
 		const [respond] = await testDb
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/respond"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-respond"))
 			.limit(1)
 		const [cfg] = await testDb
 			.insert(schema.pipelineConfigs)
@@ -1318,7 +1318,7 @@ describe("a preset includes actions by identity (W-A)", () => {
 			.select({ includedActions: schema.pipelineConfigs.includedActions })
 			.from(schema.pipelineConfigs)
 			.where(eq(schema.pipelineConfigs.id, cfg!.id))
-		expect(row!.includedActions).toEqual(["core:spec/narrate#narrate"])
+		expect(row!.includedActions).toEqual(["core:spec/chat-narrate#narrate"])
 	}, 60_000)
 })
 
@@ -1361,7 +1361,7 @@ describe("R-6 narrowing at sessions:bindFunction (subjects, plans/31 V2)", () =>
 			{
 				sessionId: session.id,
 				subject: "acme:spec/greet#greet",
-				specSlug: "core:spec/narrate",
+				specSlug: "core:spec/chat-narrate",
 				scope: "session"
 			},
 			noopEmit
@@ -1416,8 +1416,8 @@ describe("R-6 narrowing at sessions:bindFunction (subjects, plans/31 V2)", () =>
 			fakeSocket(owner.id),
 			{
 				sessionId: session.id,
-				subject: "core:spec/narrate#narrate",
-				specSlug: "core:spec/narrate",
+				subject: "core:spec/chat-narrate#narrate",
+				specSlug: "core:spec/chat-narrate",
 				scope: "session"
 			},
 			noopEmit
@@ -1784,7 +1784,7 @@ describe("enabled-when (U5e)", () => {
 			{
 				sessionId: session.id,
 				subject: "core:event/message-respond@1",
-				specSlug: "core:spec/respond",
+				specSlug: "core:spec/chat-respond",
 				scope: "session",
 				enabledWhen: { on: "state.world.location", truthy: true, reason: { en: "r" } }
 			},

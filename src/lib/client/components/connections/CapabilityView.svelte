@@ -30,6 +30,13 @@
 	 *
 	 * Every sentence, row, count and verb comes out of `capabilityView.ts` and
 	 * `readiness.ts`; this file decides none of them.
+	 *
+	 * ⚠ On a machine whose local ONNX runtime didn't load, both ways to a
+	 * download — the fix's Download and the "N more" door — stay on screen,
+	 * disabled, with the reason beside them (`connectionTypeDisabledReason`).
+	 * So does a local ONNX row's Use, which the server refuses with the same
+	 * sentence, and the finder door where local ONNX is the only provider
+	 * (`getModelDisabledReason`: named entities).
 	 */
 	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
@@ -48,6 +55,7 @@
 		defaultChipLabel,
 		finderNote,
 		getModelButtonLabel,
+		getModelDisabledReason,
 		hiddenSentence,
 		modelFact,
 		nothingCanSentence,
@@ -57,6 +65,10 @@
 	} from "./capabilityView"
 	import type { PairDefaultSelection } from "./modelSystemDefaults"
 	import { connectionTypeIcon } from "./connectionTypeIcon"
+	import {
+		connectionTypeDisabledReason,
+		localOnnxDisabledReason
+	} from "$lib/shared/utils/connectionServiceItems"
 
 	interface Props {
 		/** A transform id, e.g. `text->text`. */
@@ -137,6 +149,20 @@
 	const sentence = $derived(statusSentence(status))
 	/** A fix is offered for a fault, never for a blank: `Set up` is the list below. */
 	const fix = $derived(status.state === "warning" ? status.action : null)
+	/** This machine's local ONNX verdict; absent reads as available. */
+	const localOnnx = $derived(
+		systemSettingsCtx?.settings?.localOnnxAvailability
+	)
+	/**
+	 * Why the fix's Download can't run here, or null. Only a local ONNX pair
+	 * has files to fetch, and where the runtime didn't load the server refuses
+	 * them with this same sentence — so the button is disabled and says so.
+	 */
+	const fixBlocked = $derived(
+		fix?.verb === "download"
+			? connectionTypeDisabledReason(entry.connection?.type, localOnnx)
+			: null
+	)
 
 	const pairFact = $derived(entry.model ? modelFact(entry.model) : null)
 	const chip = $derived(defaultChipLabel(capability))
@@ -150,6 +176,31 @@
 	const nothingServes = $derived(!entry.set && candidates.rows.length === 0)
 	const hidden = $derived(hiddenSentence(candidates.hidden))
 	const toDownload = $derived(toDownloadSentence(candidates.toDownload))
+	/**
+	 * Why those downloads can't happen here, or null. Every model the count
+	 * holds is a local ONNX file — no other connection's models carry a
+	 * `local` state (`candidateRows`) — so the ONNX verdict is the answer.
+	 */
+	const toDownloadBlocked = $derived(
+		toDownload ? localOnnxDisabledReason(localOnnx) : null
+	)
+	/** Why a row's Use can't register it here, or null — local ONNX rows only. */
+	const useBlocked = (row: { connectionType: string | null }) =>
+		connectionTypeDisabledReason(row.connectionType, localOnnx)
+	/**
+	 * The reason, once under the rows, when any shown row's Use is disabled
+	 * and the "N more" door below is not already saying it.
+	 */
+	const rowsBlocked = $derived.by(() => {
+		if (toDownloadBlocked) return null
+		for (const row of shown) {
+			const reason = row.usable ? useBlocked(row) : null
+			if (reason) return reason
+		}
+		return null
+	})
+	/** Why the finder door leads nowhere here, or null (`getModelDisabledReason`). */
+	const getBlocked = $derived(getModelDisabledReason(capability, localOnnx))
 	let showAll = $state(false)
 
 	/**
@@ -203,6 +254,7 @@
 	function runFix() {
 		switch (fix?.verb) {
 			case "download":
+				if (fixBlocked) return
 				if (status.connectionId != null && status.modelId != null)
 					socket.emit("connections:downloadModel", {
 						id: status.connectionId,
@@ -265,11 +317,20 @@
 					<p class="text-surface-600-400 text-xs leading-relaxed">
 						{sentence}
 					</p>
+					<!-- In words, not only the button's tooltip: nothing is
+					     hover-only (§9), and a disabled button takes no focus. -->
+					{#if fixBlocked}
+						<p class="text-surface-600-400 mt-1 text-xs break-words">
+							{fixBlocked}
+						</p>
+					{/if}
 				</div>
 				{#if fix}
 					<button
 						type="button"
-						class="btn btn-sm preset-tonal-surface shrink-0 text-xs"
+						class="btn btn-sm preset-tonal-surface shrink-0 text-xs disabled:cursor-not-allowed disabled:opacity-70"
+						disabled={!!fixBlocked}
+						title={fixBlocked}
 						onclick={runFix}
 						aria-label={`${fix.label} — ${label}`}
 					>
@@ -441,11 +502,16 @@
 							</span>
 						</button>
 						{#if row.usable}
+							{@const blocked = useBlocked(row)}
 							<button
 								type="button"
-								class="btn btn-sm preset-tonal-surface shrink-0 text-xs"
+								class="btn btn-sm preset-tonal-surface shrink-0 text-xs disabled:cursor-not-allowed disabled:opacity-70"
+								disabled={!!blocked}
+								title={blocked}
 								onclick={() => use(row)}
-								aria-label={`Use ${row.modelName} for ${label}`}
+								aria-label={blocked
+									? `Use ${row.modelName} for ${label} — ${blocked}`
+									: `Use ${row.modelName} for ${label}`}
 							>
 								Use
 							</button>
@@ -471,34 +537,53 @@
 				{/if}
 			{/if}
 
+			{#if rowsBlocked}
+				<!-- In words, not only the buttons' tooltips: a disabled button
+				     takes no focus (§9). Once, for every row it holds for. -->
+				<p class="text-surface-600-400 px-1.5 text-xs break-words">
+					{rowsBlocked}
+				</p>
+			{/if}
 			{#if hidden}
 				<p class="text-surface-600-400 px-1.5 text-xs">{hidden}</p>
 			{/if}
 			{#if toDownload}
 				<button
 					type="button"
-					class="hover:preset-tonal-primary text-surface-600-400 flex min-h-9 items-center gap-2 rounded-[10px] px-1.5 text-left text-xs"
+					class="text-surface-600-400 flex min-h-9 items-center gap-2 rounded-[10px] px-1.5 text-left text-xs {toDownloadBlocked
+						? 'cursor-not-allowed opacity-70'
+						: 'hover:preset-tonal-primary'}"
+					disabled={!!toDownloadBlocked}
+					title={toDownloadBlocked}
 					onclick={() => onGetModel(capability)}
 				>
 					<Icons.Download size={14} aria-hidden="true" />
 					{toDownload}
 				</button>
+				{#if toDownloadBlocked}
+					<p class="text-surface-600-400 px-1.5 text-xs break-words">
+						{toDownloadBlocked}
+					</p>
+				{/if}
 			{/if}
 		</section>
 
 		<div class="flex flex-col gap-1.5 pt-3">
 			<button
 				type="button"
-				class="btn w-full {nothingServes
+				class="btn w-full disabled:cursor-not-allowed {nothingServes
 					? 'preset-filled-primary-500'
 					: 'preset-tonal-surface'}"
+				disabled={!!getBlocked}
+				title={getBlocked}
 				onclick={() => onGetModel(capability)}
 			>
 				<Icons.Download size={16} aria-hidden="true" />
 				{getModelButtonLabel(label, nothingServes)}
 			</button>
-			<p class="text-surface-600-400 px-0.5 text-xs">
-				{finderNote(label, capability)}
+			<!-- The reason in place of where the door goes: it goes nowhere. -->
+			<p class="text-surface-600-400 px-0.5 text-xs break-words">
+				{getBlocked ?? finderNote(label, capability)}
 			</p>
 		</div>
 	</div>

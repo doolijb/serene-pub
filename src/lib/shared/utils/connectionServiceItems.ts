@@ -6,6 +6,7 @@
  * having to first guess that they live two levels deep under "OpenAI Chat".
  */
 import { CONNECTION_TYPE, CONNECTION_TYPES } from "../constants/ConnectionTypes"
+import { PRESET_CAPABILITIES } from "$lib/shared/connectionAdapters/manifest"
 import { OPENAI_COMPATIBLE_PRESETS } from "./connectionDefaults"
 
 export type ConnectionServiceCategory = "cloud" | "local" | "custom"
@@ -36,6 +37,61 @@ export interface ConnectionServiceItem {
 	 * one entry there and nothing here.
 	 */
 	modality: string
+	/**
+	 * Why this service can't be created here, as a sentence the card shows in
+	 * place of its difficulty — the option stays listed, disabled, so a person
+	 * looking for it learns why rather than finding nothing. Absent when it can
+	 * be created. Only the local ONNX types set it today
+	 * (`localOnnxDisabledReason`).
+	 */
+	disabledReason?: string
+}
+
+/**
+ * Whether this machine can run local ONNX models: `systemSettings:get`'s
+ * `localOnnxAvailability`, one verdict for both ONNX types because they load
+ * one runtime. `reason` is a lower-case clause, null when available.
+ */
+export interface LocalOnnxAvailability {
+	available: boolean
+	reason: string | null
+}
+
+/** The connection types that run in this process on the ONNX runtime. */
+const LOCAL_ONNX_SERVICE_TYPES: readonly string[] = [
+	CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
+	CONNECTION_TYPE.LOCAL_ONNX_NER
+]
+
+/**
+ * The sentence every surface shows on a local ONNX option this machine can't
+ * run — the picker's card, the finder's destination, Admin › Defaults, the
+ * ONNX views — or null when it can.
+ *
+ * Settings not yet arrived read as available, the way `canRunLocalRuntimes`
+ * reads them: the server refuses the action either way, and a flash of every
+ * ONNX option disabled on a machine that runs them would be the wrong guess
+ * far more often than the right one.
+ */
+export function localOnnxDisabledReason(
+	availability: LocalOnnxAvailability | null | undefined
+): string | null {
+	if (!availability || availability.available) return null
+	return `Not available on this machine: ${availability.reason ?? "the ONNX runtime didn't load"}`
+}
+
+/**
+ * Why a connection of this type can't be created, or fetch a model, on this
+ * machine — `localOnnxDisabledReason` for the local ONNX types, null for every
+ * other type. The one question each surface that offers a type, or a model
+ * download on a connection of one, asks before it offers it.
+ */
+export function connectionTypeDisabledReason(
+	type: string | null | undefined,
+	availability: LocalOnnxAvailability | null | undefined
+): string | null {
+	if (!type || !LOCAL_ONNX_SERVICE_TYPES.includes(type)) return null
+	return localOnnxDisabledReason(availability)
 }
 
 /**
@@ -80,7 +136,12 @@ const PRESET_LABEL_OVERRIDES: Record<string, string> = {
 	KoboldCPP: "KoboldCPP (via OpenAI-Compatible API)"
 }
 
-export function buildConnectionServiceItems(): ConnectionServiceItem[] {
+export function buildConnectionServiceItems(
+	opts: {
+		/** This machine's local ONNX verdict; absent reads as available. */
+		localOnnx?: LocalOnnxAvailability | null
+	} = {}
+): ConnectionServiceItem[] {
 	const items: ConnectionServiceItem[] = []
 
 	for (const t of CONNECTION_TYPES) {
@@ -97,6 +158,12 @@ export function buildConnectionServiceItems(): ConnectionServiceItem[] {
 		// per host serves every modality it has, and the boot sync renames any
 		// old row. Its option entry stays so a straggler still has a label.
 		if (t.value === CONNECTION_TYPE.OLLAMA_EMBEDDINGS) continue
+		// Merged into `openai` the same way (owner ruling 2026-10-05).
+		if (t.value === CONNECTION_TYPE.OPENAI_EMBEDDINGS) continue
+		const disabledReason = connectionTypeDisabledReason(
+			t.value,
+			opts.localOnnx
+		)
 		items.push({
 			key: `type:${t.value}`,
 			label: t.label,
@@ -104,7 +171,8 @@ export function buildConnectionServiceItems(): ConnectionServiceItem[] {
 			type: t.value,
 			difficulty: t.difficulty,
 			description: t.description,
-			modality: t.modality ?? "text-gen"
+			modality: t.modality ?? "text-gen",
+			...(disabledReason ? { disabledReason } : {})
 		})
 	}
 
@@ -150,8 +218,41 @@ export function buildConnectionServiceItems(): ConnectionServiceItem[] {
 			presetSlug: (preset as { slug?: string }).slug,
 			difficulty: openaiType.difficulty,
 			description: openaiType.description,
-			// OpenAI-compatible presets are all text generation.
+			// Every preset is listed under text generation; the ones that
+			// also embed are listed again below.
 			modality: "text-gen"
+		})
+	}
+
+	// The presets whose service embeds, under Embeddings too — the way Ollama
+	// is, and for the same reason: `openai-embeddings` merged into `openai`
+	// (owner ruling 2026-10-05), so without these that section has no
+	// OpenAI-compatible service at all. Each creates the SAME `openai`
+	// connection with the same preset as its text generation entry; only the
+	// section differs. Read from the manifest's preset layer, where
+	// `"text->embedding": true` is the claim that the service serves
+	// `/embeddings` — never a second list kept here. Pushed after the text
+	// entries, so a lookup by type and preset finds those first.
+	for (const preset of OPENAI_COMPATIBLE_PRESETS) {
+		const slug = (preset as { slug?: string }).slug
+		if (!slug || PRESET_CAPABILITIES[slug]?.["text->embedding"] !== true)
+			continue
+		items.push({
+			// ⚠ Its own key, as Ollama's: `preset:<n>` is already taken.
+			key: `preset:${preset.value}@embeddings`,
+			label: PRESET_LABEL_OVERRIDES[preset.name] ?? preset.name,
+			category: preset.category as ConnectionServiceCategory,
+			type: CONNECTION_TYPE.OPENAI,
+			presetValue: preset.value,
+			presetSlug: slug,
+			difficulty: openaiType.difficulty,
+			description:
+				"<p>The service's OpenAI-compatible embedding route, " +
+				"<b>POST /embeddings</b>, on the same connection that serves " +
+				"chat — one per service.</p>" +
+				"<p>Pick one of its embedding models. Not every service's " +
+				"model list says which models embed.</p>",
+			modality: "embeddings"
 		})
 	}
 

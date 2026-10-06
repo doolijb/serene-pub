@@ -1,4 +1,8 @@
 <script lang="ts">
+	import {
+		onCardImported,
+		onCardImportFailed
+	} from "$lib/client/contexts/characterImports.svelte"
 	import { isAwaitingUser } from "$lib/client/sessions/sessionGroups"
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import AvatarStack from "$lib/client/components/AvatarStack.svelte"
@@ -1186,10 +1190,8 @@
 		const wasPersonaDrop = wizardImportingPersonaCard
 		wizardImportingCharacterCard = false
 		wizardImportingPersonaCard = false
+		// The toast is the characters-import context's, once for every view.
 		if (msg.character) {
-			toaster.success({
-				title: `Imported ${msg.character.nickname || msg.character.name}`
-			})
 			if (setupComplete) return
 			if (wasPersonaDrop && currentWizardStep === "persona") {
 				adoptAsPersona(msg.character.id)
@@ -1200,13 +1202,10 @@
 		}
 	}
 
-	function handleCharactersImportCardError(msg: any) {
+	function handleCharactersImportCardError() {
+		// The error toast is the characters-import context's.
 		wizardImportingCharacterCard = false
 		wizardImportingPersonaCard = false
-		toaster.error({
-			title: "Import failed",
-			description: msg.error ?? "Could not import character card"
-		})
 	}
 
 	// Binding linker modal
@@ -1245,14 +1244,10 @@
 		"characters:create",
 		handleCharacterCreated
 	)
-	interest.useInterest<"characters:importCard">(
-		"characters:importCard",
-		handleCharactersImportCard
-	)
-	interest.useInterest<"characters:importCard:error">(
-		"characters:importCard:error",
-		handleCharactersImportCardError
-	)
+	// The import events are the characters-import context's; this page takes
+	// the outcome for the wizard's selection.
+	onCardImported(handleCharactersImportCard)
+	onCardImportFailed(handleCharactersImportCardError)
 
 	/**
 	 * The orphaned-binding sweep's answer, BARE. It is a push rather than a

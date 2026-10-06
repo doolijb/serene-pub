@@ -149,12 +149,29 @@ export async function cullRetiredCoreGenres(
  *
  * - `core:spec/echo` — the review-gate demo action (`/echo`), removed
  *   2026-10-02 (owner note 35). No back-compat.
+ * - `core:spec/tool-loop` — the reference agentic turn, not seeded (ruled
+ *   2026-10-05, PLAN-catalogue-and-pipeline-names C3). It stays in
+ *   core-catalog as an example and a test fixture; nothing ran it.
  */
-export const RETIRED_CORE_SPECS: readonly string[] = ["core:spec/echo"]
+export const RETIRED_CORE_SPECS: readonly string[] = [
+	"core:spec/echo",
+	"core:spec/tool-loop"
+]
+
+/**
+ * The shipped prompts that left with them, by seed key — a prompt is pooled
+ * by node, not spec, so the spec's delete does not reach it.
+ *
+ * - tool-loop's `Tool loop` (`TOOL_LOOP_PROMPT` in core-catalog).
+ */
+export const RETIRED_CORE_PROMPTS: readonly string[] = [
+	"pipeline-prompt:core:task/assemble:prompts:tool-loop-default"
+]
 
 export async function cullRetiredCoreSpecs(
 	db: any,
-	slugs: readonly string[] = RETIRED_CORE_SPECS
+	slugs: readonly string[] = RETIRED_CORE_SPECS,
+	promptSeedKeys: readonly string[] = RETIRED_CORE_PROMPTS
 ): Promise<number> {
 	if (!slugs.length) return 0
 	const gone = await db
@@ -166,5 +183,58 @@ export async function cullRetiredCoreSpecs(
 			)
 		)
 		.returning({ id: schema.pipelineSpecs.id })
+	if (promptSeedKeys.length) await cullRetiredCorePrompts(db, promptSeedKeys)
 	return gone.length
+}
+
+/**
+ * Core's rows only — owner-less, shipped immutable, by seed key. After the
+ * spec's delete, so its own configs hold none of them. A row some other
+ * config or override still selects is not deleted out from under it (the
+ * rule `deletePrompt` keeps): it is handed over instead, as a prompt like any
+ * a person wrote — no seed key, editable — so the selection still means what
+ * it meant.
+ */
+async function cullRetiredCorePrompts(
+	db: any,
+	seedKeys: readonly string[]
+): Promise<void> {
+	const rows = await db
+		.select({ id: schema.pipelinePrompts.id })
+		.from(schema.pipelinePrompts)
+		.where(
+			and(
+				isNull(schema.pipelinePrompts.ownerPluginId),
+				eq(schema.pipelinePrompts.isImmutable, true),
+				inArray(schema.pipelinePrompts.seedKey, [...seedKeys])
+			)
+		)
+	if (!rows.length) return
+	const { promptSlotNames } = await import(
+		"$lib/server/pipelines/entities/prompts"
+	)
+	const slots = await promptSlotNames(db)
+	const held = new Set<unknown>()
+	if (slots.length) {
+		for (const v of await db
+			.select({ value: schema.pipelineConfigValues.value })
+			.from(schema.pipelineConfigValues)
+			.where(inArray(schema.pipelineConfigValues.slot, slots)))
+			held.add(v.value)
+		for (const o of await db
+			.select({ value: schema.pipelineNodeOverrides.value })
+			.from(schema.pipelineNodeOverrides)
+			.where(inArray(schema.pipelineNodeOverrides.slot, slots)))
+			held.add(o.value)
+	}
+	for (const { id } of rows as Array<{ id: number }>)
+		if (held.has(id))
+			await db
+				.update(schema.pipelinePrompts)
+				.set({ seedKey: null, templateId: null, isImmutable: false })
+				.where(eq(schema.pipelinePrompts.id, id))
+		else
+			await db
+				.delete(schema.pipelinePrompts)
+				.where(eq(schema.pipelinePrompts.id, id))
 }

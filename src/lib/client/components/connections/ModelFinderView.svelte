@@ -137,6 +137,12 @@
 	const koboldCppSettingsCtx: KoboldCppSettingsCtx | undefined = getContext(
 		"koboldCppSettingsCtx"
 	)
+	const systemSettingsCtx: SystemSettingsCtx | undefined =
+		getContext("systemSettingsCtx")
+	/** On a machine without the ONNX runtime, ONNX destinations come disabled. */
+	const localOnnx = $derived(
+		systemSettingsCtx?.settings?.localOnnxAvailability
+	)
 
 	// ── What the person is asking for ───────────────────────────────────────
 
@@ -179,7 +185,9 @@
 		connectionsList = msg.connectionsList ?? []
 	}
 
-	const destinations = $derived(destinationsFor(scope, connectionsList))
+	const destinations = $derived(
+		destinationsFor(scope, connectionsList, { localOnnx })
+	)
 	/**
 	 * The "For" pills. In a connection's Get tab only what THAT connection can
 	 * hold: the destination pills are hidden there, so picking Embeddings in
@@ -188,7 +196,9 @@
 	const scopeOptions = $derived(
 		inTab && connectionId != null
 			? FINDER_SCOPES.filter((option) =>
-					destinationsFor(option.value, connectionsList).some(
+					destinationsFor(option.value, connectionsList, {
+						localOnnx
+					}).some(
 						(d) => d.connectionId === connectionId
 					)
 				)
@@ -795,13 +805,19 @@
 			>
 				{#each destinations as option (option.id)}
 					{@const on = destination?.id === option.id}
+					<!-- A disabled destination stays pickable: picking it is how
+					     its reason reaches the note line below, and every Get
+					     under it is disabled instead. -->
 					<button
 						type="button"
 						role="radio"
 						aria-checked={on}
+						title={option.disabledReason}
 						class="flex min-h-9 min-w-0 items-center rounded-full px-2.5 text-xs pointer-coarse:min-h-11 {on
 							? 'preset-tonal-primary'
-							: 'bg-surface-200-800 text-surface-700-300 hover:preset-tonal-primary'}"
+							: 'bg-surface-200-800 text-surface-700-300 hover:preset-tonal-primary'} {option.disabledReason
+							? 'opacity-70'
+							: ''}"
 						onclick={() => (destinationOverride = option.id)}
 					>
 						<span class="min-w-0 truncate">{option.label}</span>
@@ -842,7 +858,13 @@
 			class="text-surface-600-400 flex min-w-0 flex-wrap items-center gap-1 text-xs"
 		>
 			{#if note}
-				<span class="min-w-0 truncate">{note}</span>
+				<!-- A reason wraps: cut short, it would hide the one thing
+				     the person needs to read. -->
+				<span
+					class="min-w-0 {destination?.disabledReason
+						? 'break-words'
+						: 'truncate'}">{note}</span
+				>
 				{#if destination?.kind !== "onnx"}
 					<span aria-hidden="true">·</span>
 				{/if}
@@ -1008,7 +1030,9 @@
 					{:else}
 						<button
 							type="button"
-							class="hover:preset-tonal-primary flex min-h-11 w-full items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left"
+							class="hover:preset-tonal-primary flex min-h-11 w-full items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left disabled:cursor-not-allowed disabled:opacity-70"
+							disabled={!!destination?.disabledReason}
+							title={destination?.disabledReason}
 							onclick={() => (hubOpen = true)}
 						>
 							<span
@@ -1150,6 +1174,8 @@
 					class="btn btn-sm shrink-0 text-xs {gold
 						? 'preset-filled-primary-500'
 						: 'preset-tonal-surface'}"
+					disabled={!!destination?.disabledReason}
+					title={destination?.disabledReason}
 					onclick={() => getRecommended(row)}
 					aria-label={`Get ${row.name}`}
 				>

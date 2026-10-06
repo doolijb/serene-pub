@@ -14,6 +14,21 @@ describe("prompt filters", () => {
 		expect(pipelinesFitting(reply, pipelines).map((p) => p.slug)).toEqual(["core:chat", "core:adv"])
 		expect(pipelinesFitting(narrate, pipelines).map((p) => p.slug)).toEqual(["core:adv"])
 	})
+	it("hands back the caller's own rows, label included, for the Picks it now match", () => {
+		// `usedBy` names pipelines by label ("Reply · Chat"): two genres'
+		// "Reply" are two pipelines, so the page matches on the label.
+		const labelled = [
+			{ ...pipelines[0], name: "Reply", label: "Reply · Chat" },
+			{ ...pipelines[1], name: "Reply", label: "Reply · Adventure" }
+		]
+		const held = { ...reply, usedBy: ["Reply · Adventure"] }
+		expect(
+			pipelinesFitting(held, labelled).map((p) => [p.label, held.usedBy.includes(p.label)])
+		).toEqual([
+			["Reply · Chat", false],
+			["Reply · Adventure", true]
+		])
+	})
 	it("genres come through the pipelines it fits — no cross-pipeline leakage", () => {
 		expect(genresFitting(reply, pipelines).map((g) => g.id)).toEqual(["core:chat", "core:adventure"])
 		expect(genresFitting(narrate, pipelines).map((g) => g.id)).toEqual(["core:adventure"])

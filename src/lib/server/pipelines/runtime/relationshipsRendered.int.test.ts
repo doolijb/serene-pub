@@ -32,7 +32,7 @@ import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
-import { respondSpec, RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { respondSpec, CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 
 // No embedding model: the other retrieval mechanisms stay on the keyword path,
 // which needs no network. Nothing here asserts on them.
@@ -151,7 +151,7 @@ beforeAll(async () => {
 		await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 			.limit(1)
 	)[0]
 }, 120_000)
@@ -171,12 +171,12 @@ const selectedConfigId = async () => {
 	const selected = await resolveSelectedConfig(
 		db,
 		specRow.id,
-		RESPOND_SPEC_ID,
+		CHAT_RESPOND_SPEC_ID,
 		{ sessionId }
 	)
 	expect(
 		selected,
-		`${RESPOND_SPEC_ID} resolves to no configuration`
+		`${CHAT_RESPOND_SPEC_ID} resolves to no configuration`
 	).toBeTruthy()
 	return selected!.configId
 }
@@ -248,7 +248,7 @@ const turn = async () =>
 		},
 		seed: "seed:relationships-rendered",
 		bindings: coreBindings(),
-		world: await buildWorld(db, { sessionId, specId: RESPOND_SPEC_ID }),
+		world: await buildWorld(db, { sessionId, specId: CHAT_RESPOND_SPEC_ID }),
 		host: createHost(db, { sessionId, userId }),
 		preview: true
 	} as any)

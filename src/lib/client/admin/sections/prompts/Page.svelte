@@ -62,7 +62,8 @@
 
 	const rows = $derived((view.prompts ?? []) as Prompt[])
 	const pipelines = $derived((view.pipelines ?? []) as Pipeline[])
-	const pipelineName = $derived(new Map(pipelines.map((p) => [p.slug, p.name])))
+	/** By label — the name with its genre beside it — so each genre's "Reply" reads apart. */
+	const pipelineName = $derived(new Map(pipelines.map((p) => [p.slug, p.label])))
 	const genreName = $derived(
 		new Map(pipelines.flatMap((p) => (p.genres ?? []).map((g) => [g.id, g.name] as const)))
 	)

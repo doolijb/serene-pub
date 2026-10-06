@@ -1,6 +1,6 @@
 # Pipelines and configurations
 
-A **pipeline** is the series of steps that produces one thing: a character's reply, a narrator's line, a summary, an image. Most pipelines gather what the model needs (the characters, the lore, the recent conversation), build a prompt, call a model, and save the result. A **configuration** is a named set of choices for one pipeline: which prompt each step uses, which model it calls, how much of the context window lore may take. Every pipeline comes with a configuration Serene Pub ships, and sessions use it unless an administrator picks another.
+A **pipeline** is the series of steps that produces one thing: a character's reply, a narrator's line, a summary, an image. Most pipelines gather what the model needs (the characters, the lore, the recent conversation), build a prompt, call a model, and save the result. A **configuration** is a named set of choices for one pipeline: which prompt each step uses, which model it calls, how much of the context window lore may take. Every pipeline comes with a configuration Serene Pub ships, named **Default**, and sessions use it unless an administrator picks another.
 
 :::tip You may never need this page
 Sessions work well on the shipped configurations. Come here when you want to change a prompt's wording, put a different model on one part of a turn, or find out why a reply came out the way it did.
@@ -20,7 +20,9 @@ A setting your role normally changes but which is locked right now stays visible
 
 The **Pipelines** view opens on the **genres**: Chat, Adventure, Lair and the rest, plus any from plugins you have switched on. Pick a genre to see its **session presets**; the default is marked _Default_, a shipped one _Built-in_, and the one the current session started on _This session_. Pick a preset to see the pipelines it runs: one for each event it answers (a reply, the session being created, a form being answered), then, under **Actions**, one for each action its sessions offer, such as Chat's _Narrate_ or the Lair's _Nudge_. Open a pipeline to see its settings, grouped by [agent](#agents). If the preset uses a different configuration from the one shown, a line above the settings says so.
 
-**All pipelines**, under the genres, lists every pipeline on the pub, including ones no preset uses, with a box to filter them by name. Administrators also get a **Manage in Admin** button (the gear) at the top of the view, of a preset and of a pipeline: on a pipeline it opens the pipeline's page in Admin (its settings, **Changes**, **Runs**, versions, and what uses it), and on a preset that preset's page (which pipeline answers each event, and whether it is offered). An open pipeline card on a preset has its own **Manage pipeline** link too.
+**All pipelines**, under the genres, lists every pipeline on the pub, including ones no preset uses, with a box to filter them by name or genre. Each row shows the pipeline's genre beside its version, since every genre has its own _Reply_ and _Turn order_. Administrators also get a **Manage in Admin** button (the gear) at the top of the view, of a preset and of a pipeline: on a pipeline it opens the pipeline's page in Admin (its settings, **Changes**, **Runs**, versions, and what uses it), and on a preset that preset's page (which pipeline answers each event, and whether it is offered). An open pipeline card on a preset has its own **Manage pipeline** link too.
+
+A pipeline is named for what it does, so each genre has its own **Reply**, **Create session**, **Answer a form** and **Turn order**. Under a genre you see only that genre's, and **Admin › Pipelines** shows each pipeline's genre beside its name.
 
 ## A genre's default preset
 
@@ -132,7 +134,7 @@ A step can be given **tools**: read-only lookups the model may ask for mid-turn 
 
 The step asks the model, runs whatever tool it asked for, shows it the answer, and asks again, until it answers or reaches the step's **maximum passes**. Set that maximum with care: it is what stops a model that keeps asking from making a turn that never ends. The run's report says what ended it, how many passes there were and what each tool returned. Tools only read; nothing they do changes your data.
 
-**Tool loop (reference)**, in the pipelines list, is a worked example for reading and copying. No session preset uses it.
+A worked example of a tool loop ships with the SDK for plugin authors (see [For plugin authors](#for-plugin-authors)). It isn't one of the pub's pipelines: earlier versions listed it as **Tool loop (reference)**, and it leaves the list when you update.
 
 ## When a preset's pipeline is missing
 
@@ -158,7 +160,7 @@ Review on the reply's **placeholder** step instead (the empty message made befor
 
 **The context window is worked out once.** The budget the prompt is sized to, the window the connection is told about, and the token figure shown beside a share all come from the same two facts: the call's sampling config and the model's own context window where the connection reports one.
 
-**A character's reply ends by choosing its face.** After saving, reply pipelines that voice a character pick a sprite for the line, if the speaker has a sprite set. A sprite you chose yourself with **Change sprite** is never replaced. See [Sessions → Sprites](./sessions.md#sprites).
+**A character's reply ends by choosing its face.** After saving, every reply pipeline has a sprite step: one step is handed the reply's text and who said it and picks the closest sprite, if the speaker has any, and the next records it on the line. Both are ordinary steps you can see in the pipeline. The pick uses the active embedding connection; like the semantic search, it has no connection of its own to choose. A sprite you chose yourself with **Change sprite** is never replaced, and a step that picks nothing leaves the line's face as it was. See [Sessions → Sprites](./sessions.md#sprites).
 
 ## What changed since the last reply
 
@@ -180,7 +182,7 @@ A pipeline sees every member of the session's cast, including characters switche
 
 ## Attachments in a prompt
 
-A pipeline sends the files on its messages only if it has a **Place attachments** step, between the transcript and the prompt. The shipped Chat, Guide, Adventure (narrator and voices), Lair (every voice) and narrate pipelines have one, and so do the actions that write with a model (Adventure's Look, Ask, Rest and Advance time; the Lair's Build room, Trigger trap, Reveal and drafted rooms), the form answers and the tool loop. A pipeline without one sends no files; when nothing in the session places a kind, the composer says it can't be attached. The summarize pipelines name each file in their batches instead (`[image: cat.png]`), through the **Batch messages** step's attachments. The step is judged on the model of the step it writes for, so in Adventure the Narrator may see an image while the Planner does not. Its two settings are **Media lookback** (how many recent messages send their images and PDFs; older ones are sent as names, 10 by default) and **Text file budget** (how much of each text file goes in, 4,000 tokens by default). What a model sees is in [Sessions → What the model sees](./sessions.md#what-the-model-sees).
+A pipeline sends the files on its messages only if it has a **Place attachments** step, between the transcript and the prompt. The shipped replies (Chat, Guide, Adventure's narrator and voices, every Lair voice) have one, and so do the actions that write with a model (Chat's Narrate and Side character; Adventure's Look, Ask, Rest and Time passes; the Lair's Build room, Trigger trap, Reveal and drafted rooms) and the form answers. A pipeline without one sends no files; when nothing in the session places a kind, the composer says it can't be attached. The summarize pipelines name each file in their batches instead (`[image: cat.png]`), through the **Batch messages** step's attachments. The step is judged on the model of the step it writes for, so in Adventure the Narrator may see an image while the Planner does not. Its two settings are **Media lookback** (how many recent messages send their images and PDFs; older ones are sent as names, 10 by default) and **Text file budget** (how much of each text file goes in, 4,000 tokens by default). What a model sees is in [Sessions → What the model sees](./sessions.md#what-the-model-sees).
 
 ## The story clock
 

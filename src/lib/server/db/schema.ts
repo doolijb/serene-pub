@@ -3440,26 +3440,23 @@ export const localModels = pgTable("local_models", {
 	 */
 	format: text("format").notNull().default("gguf").$type<LocalModelFormat>(),
 	/**
-	 * "text" | "image" | "unknown" — which of koboldcpp's two loaders can open
-	 * this file, and so which of its two models directories the file belongs in
-	 * (`modelsDirFor`). Never inferred from the extension: the curated image
-	 * models at huggingface.co/koboldcpp/imgmodel are every one of them .gguf.
-	 * `classifyModelFile` reads the GGUF header instead, and answers "unknown"
-	 * rather than guessing.
+	 * "text" | "image" | "embeddings" | "unknown" — which of koboldcpp's loaders
+	 * can open this file: the text model, the image model, or the co-resident
+	 * embeddings slot (`--embeddingsmodel`). Embedding GGUFs share the text
+	 * models directory (`modelsDirFor`). Never inferred from the extension: the
+	 * curated image models at huggingface.co/koboldcpp/imgmodel are every one of
+	 * them .gguf. `classifyModelFile` reads the GGUF header instead — an
+	 * `<arch>.pooling_type` key marks an embedding model whatever its
+	 * architecture — and answers "unknown" rather than guessing.
 	 *
 	 * ⚠ NOT a second spelling of `modality`, and the two cannot drift apart
 	 * because `modalityForKind` is the only thing that projects one into the
-	 * other. `kind` is a LOADER lane with three values; `modality` is the ROLE.
-	 * The header sniff can only answer the first: `bert` is in its
-	 * language-model list, so a BERT GGUF lands on `kind: "text"` while its
-	 * modality is `embeddings`, not `text-gen`. Collapsing the two would make
-	 * that sniff record `text-gen` at `detected` — the highest automatic trust
-	 * there is — for a file it cannot tell apart from an embedding model.
+	 * other. `kind` is a LOADER lane; `modality` is the ROLE.
 	 */
 	kind: text("kind")
 		.notNull()
 		.default("text")
-		.$type<"text" | "image" | "unknown">(),
+		.$type<"text" | "image" | "embeddings" | "unknown">(),
 	/**
 	 * "user" | "detected" | "declared" | "assumed", in descending trust. A scan
 	 * may overwrite anything below "user"; nothing automatic overwrites "user".
@@ -4598,7 +4595,7 @@ export const sessionFunctions = pgTable(
 		/** The full genre id the choice was made under. */
 		genreId: text("genre_id").notNull(),
 		/**
-		 * The action's identity — `<spec slug>#<key>`, `core:spec/narrate#narrate`
+		 * The action's identity — `<spec slug>#<key>`, `core:spec/chat-narrate#narrate`
 		 * (U5c review, W1): enablement is per action, so two actions sharing a
 		 * key switch independently. Identity only (plans/31 V2): the bare-key
 		 * reading of a row is gone, and the column keeps its name because a
@@ -4642,7 +4639,7 @@ export const seenActions = pgTable(
 		userId: integer("user_id")
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
-		/** `<spec slug>#<action key>` — `core:spec/narrate#narrate`. */
+		/** `<spec slug>#<action key>` — `core:spec/chat-narrate#narrate`. */
 		actionKey: text("action_key").notNull(),
 		seenAt: timestamp("seen_at").notNull().defaultNow()
 	},
@@ -7999,7 +7996,7 @@ export const entryAnnotations = pgTable(
 		surface: text("surface").notNull().default(""),
 		/** Lowercased, whitespace-collapsed — what the matcher compares. */
 		normalized: text("normalized").notNull().default(""),
-		/** `gazetteer` | `open` | `none` (the sentinel). */
+		/** `model` | `gazetteer` | `open` | `none` (the sentinel). */
 		tier: text("tier").notNull(),
 		characterId: integer("character_id").references(() => characters.id, {
 			onDelete: "set null"
@@ -8047,6 +8044,20 @@ export const entryAnnotations = pgTable(
 		 * re-scans only what it did not write.
 		 */
 		entityModel: text("entity_model"),
+		/**
+		 * The entity model's own label for a `model`-tier row — `PER`, `LOC`,
+		 * `ORG`, `MISC`, `DATE`, whatever the checkpoint's `id2label` names —
+		 * carried untranslated (`Entity.label`). NULL on every other tier: a
+		 * gazetteer row is answered by its resolved reference and an open row
+		 * by a capitalisation rule, and neither has a label to record. NULL too
+		 * on a model row written before the column existed (0097); it gains one
+		 * when the row is next re-extracted.
+		 *
+		 * ⚠ R3: never the bare `label`, which reads as display text. Not part
+		 * of the freshness triple: the label is the model's answer, not an
+		 * input to it.
+		 */
+		entityLabel: text("entity_label"),
 		annotatedAt: timestamp("annotated_at").notNull().defaultNow()
 	},
 	(t) => [
@@ -8105,6 +8116,8 @@ export const messageAnnotations = pgTable(
 		gazetteerHash: text("gazetteer_hash").notNull(),
 		/** As on `entry_annotations`. */
 		entityModel: text("entity_model"),
+		/** As on `entry_annotations`. */
+		entityLabel: text("entity_label"),
 		annotatedAt: timestamp("annotated_at").notNull().defaultNow()
 	},
 	(t) => [

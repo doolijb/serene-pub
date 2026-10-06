@@ -13,7 +13,7 @@
  * refusal is a join.
  */
 
-import { beforeAll, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
@@ -46,6 +46,8 @@ let hostListing: { models: unknown[]; error?: string } = { models: [] }
  * one, where the whole question is what happens between the read and the write.
  */
 let hostDelayMs = 0
+/** What the text half of a connection test answers. */
+let hostTest: { ok: boolean; error?: string; extra?: unknown } = { ok: true }
 vi.mock("$lib/server/utils/getConnectionAdapter", () => ({
 	getConnectionAdapter: async () => ({
 		listModels: async () => {
@@ -53,7 +55,7 @@ vi.mock("$lib/server/utils/getConnectionAdapter", () => ({
 				await new Promise((r) => setTimeout(r, hostDelayMs))
 			return hostListing
 		},
-		testConnection: async () => ({ ok: true })
+		testConnection: async () => hostTest
 	})
 }))
 
@@ -235,7 +237,7 @@ describe("syncConnectionModels — one listing, one endpoint", () => {
 })
 
 describe("a model's modality, as the listing says", () => {
-	test("is stored on insert, replaced when the host revises it, cleared when it stops saying", async () => {
+	test("is stored on insert, replaced when the host states another, kept when it says nothing", async () => {
 		const { syncConnectionModels } = await import("./modelSync")
 		const c = await endpoint("modality")
 		await syncConnectionModels(db, c.id, {
@@ -255,18 +257,75 @@ describe("a model's modality, as the listing says", () => {
 		await syncConnectionModels(db, c.id, {
 			models: [
 				{ model: "nomic-embed-text", modality: "embeddings" },
-				// An older host: no capabilities array, so nothing claimed.
+				// An older host: no capabilities array, so nothing claimed —
+				// and nothing claimed is not a claim that it is nothing.
 				{ model: "llama3.1:8b" },
 				{ model: "mystery", modality: "text-gen" }
 			]
 		})
 		const second = await modelsOf(c.id)
 		expect(second.map((r) => [r.model, r.modality])).toEqual([
-			["llama3.1:8b", null],
+			["llama3.1:8b", "text-gen"],
 			["mystery", "text-gen"],
 			["nomic-embed-text", "embeddings"]
 		])
 	})
+
+	test("a service that says nothing keeps a known modality; one that says something replaces it", async () => {
+		// The case that bit: an OpenAI-compatible service whose `/models` is
+		// `{id, object, owned_by}` claims no modality, and a sync once wrote
+		// that silence over the `embeddings` the `openai-embeddings` merge (or
+		// "Use for embeddings") had stored — offering the embedding model for
+		// chat again.
+		const { syncConnectionModels } = await import("./modelSync")
+		const [c] = await db
+			.insert(schema.connections)
+			.values({
+				name: `silent service ${Math.random()}`,
+				type: CONNECTION_TYPE.OPENAI,
+				baseUrl: "https://silent.test/v1",
+				modality: "text-gen",
+				capabilities: {
+					resolved: { "text->text": 2, "text->embedding": 2 }
+				}
+			})
+			.returning()
+		await db.insert(schema.connectionModels).values({
+			connectionId: c.id,
+			model: "text-embedding-3-small",
+			name: "text-embedding-3-small",
+			modality: "embeddings"
+		})
+
+		// Null: not reported, so the known value stands. A NEW row takes
+		// what the listing says, and here that is nothing.
+		await syncConnectionModels(db, c.id, {
+			models: [
+				{ id: "text-embedding-3-small", object: "model" },
+				{ id: "gpt-4o-mini", object: "model" }
+			]
+		})
+		expect(
+			(await modelsOf(c.id)).map((r) => [r.model, r.modality])
+		).toEqual([
+			["gpt-4o-mini", null],
+			["text-embedding-3-small", "embeddings"]
+		])
+
+		// Non-null: a fact, and it replaces the row's.
+		await syncConnectionModels(db, c.id, {
+			models: [
+				{ model: "text-embedding-3-small", modality: "text-gen" },
+				{ model: "gpt-4o-mini", modality: "text-gen" }
+			]
+		})
+		expect(
+			(await modelsOf(c.id)).map((r) => [r.model, r.modality])
+		).toEqual([
+			["gpt-4o-mini", "text-gen"],
+			["text-embedding-3-small", "text-gen"]
+		])
+	}, 60_000)
 
 	test("an embedding model on a chat-and-embed endpoint satisfies only embeddings", async () => {
 		const { syncConnectionModels } = await import("./modelSync")
@@ -299,6 +358,69 @@ describe("a model's modality, as the listing says", () => {
 		expect(capabilityRefusal(pair(chat), "text->embedding")).not.toBeNull()
 		expect(capabilityRefusal(pair(chat), "text->text")).toBeNull()
 	})
+
+	test("an OpenAI-compatible endpoint keeps its embedding model's modality where the service says it (OpenRouter)", async () => {
+		// The merge of `openai-embeddings` (`openAIMultiModality.ts`) marks
+		// every model of a renamed row `embeddings`; a sync replaces that
+		// where the listing says otherwise. OpenRouter says it, through the
+		// adapter's own reading of `architecture.output_modalities`; a
+		// service that says nothing leaves what the rows already say.
+		const { syncConnectionModels } = await import("./modelSync")
+		const { openAIModelModality } = await import(
+			"$lib/server/connectionAdapters/OpenAIChatAdapter"
+		)
+		const [c] = await db
+			.insert(schema.connections)
+			.values({
+				name: `openrouter ${Math.random()}`,
+				type: CONNECTION_TYPE.OPENAI,
+				preset: "openrouter",
+				baseUrl: "https://openrouter.ai/api/v1",
+				modality: "text-gen",
+				capabilities: {
+					resolved: { "text->text": 2, "text->embedding": 2 }
+				}
+			})
+			.returning()
+		await db.insert(schema.connectionModels).values({
+			connectionId: c.id,
+			model: "google/gemini-embedding-2",
+			name: "google/gemini-embedding-2",
+			modality: "embeddings"
+		})
+		const listed = (id: string, out: string[]) => {
+			const entry = { id, architecture: { output_modalities: out } }
+			const modality = openAIModelModality(entry)
+			return modality ? { ...entry, modality } : entry
+		}
+		await syncConnectionModels(db, c.id, {
+			models: [
+				listed("google/gemini-embedding-2", ["embeddings"]),
+				listed("openai/gpt-4o", ["text"])
+			]
+		})
+		expect(
+			(await modelsOf(c.id)).map((r) => [r.model, r.modality])
+		).toEqual([
+			["google/gemini-embedding-2", "embeddings"],
+			["openai/gpt-4o", "text-gen"]
+		])
+
+		// A service whose `/models` is `{id, object, owned_by}` claims
+		// nothing, so both rows keep what OpenRouter said.
+		await syncConnectionModels(db, c.id, {
+			models: [
+				{ id: "google/gemini-embedding-2", object: "model" },
+				{ id: "openai/gpt-4o", object: "model" }
+			]
+		})
+		expect(
+			(await modelsOf(c.id)).map((r) => [r.model, r.modality])
+		).toEqual([
+			["google/gemini-embedding-2", "embeddings"],
+			["openai/gpt-4o", "text-gen"]
+		])
+	}, 60_000)
 })
 
 describe("syncConnectionModelsById — staleness and the adapter", () => {
@@ -499,5 +621,165 @@ describe("a listing that repeats itself, and two syncs that overlap", () => {
 		// And between them they claim to have added exactly three: the loser
 		// of the race reports what it actually wrote, not what it tried to.
 		expect(first.added + second.added).toBe(3)
+	})
+})
+
+describe("adapterIO — a text type that also embeds", () => {
+	// KoboldCPP declares `text-gen`, so list and test reach its TEXT module —
+	// right for listing, which names the embedding model with its modality. A
+	// test of the connection the embedding star names must still exercise the
+	// embedding path, or a model swapped under the star passes Test and fails
+	// the lane. The embedding module here is the REAL one; only the host is fake.
+	afterEach(async () => {
+		vi.unstubAllGlobals()
+		hostTest = { ok: true }
+		const { setCapabilityDefault } = await import("./capabilityDefaults")
+		await setCapabilityDefault(db, "text->embedding", {
+			connectionId: null
+		})
+	})
+
+	async function kcppEndpoint(name: string) {
+		const [row] = await db
+			.insert(schema.connections)
+			.values({
+				name: `${name} ${Math.random()}`,
+				type: CONNECTION_TYPE.KOBOLDCPP,
+				baseUrl: "http://kcpp.test:5001/",
+				modality: "text-gen",
+				capabilities: { resolved: { "text->text": "native" } }
+			})
+			.returning()
+		const [embed, chat] = await db
+			.insert(schema.connectionModels)
+			.values([
+				{
+					connectionId: row.id,
+					// As a managed install records it — the file, `.gguf` on.
+					model: "nomic-embed-text-v1.5.Q4_K_M.gguf",
+					name: "nomic",
+					modality: "embeddings"
+				},
+				{
+					connectionId: row.id,
+					model: "MN-12B-Lyra-v4-Q4_K_M",
+					name: "lyra",
+					modality: "text-gen"
+				}
+			])
+			.returning()
+		return { row, embed, chat }
+	}
+
+	/** A KoboldCPP whose `/v1/embeddings` answers as `model`. */
+	function embeddingsHost(model: string) {
+		const f = vi.fn(async (_url: any, _init?: any) => ({
+			ok: true,
+			status: 200,
+			json: async () => ({
+				data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }],
+				model
+			})
+		}))
+		vi.stubGlobal("fetch", f)
+		return f
+	}
+
+	async function starEmbeddings(
+		connectionId: number,
+		connectionModelId: number
+	) {
+		const { setCapabilityDefault } = await import("./capabilityDefaults")
+		await setCapabilityDefault(db, "text->embedding", {
+			connectionId,
+			connectionModelId
+		})
+	}
+
+	test("the starred connection's test ends in one probe embed with the starred model", async () => {
+		const { adapterIO } = await import("./modelSync")
+		const { row, embed } = await kcppEndpoint("starred")
+		await starEmbeddings(row.id, embed.id)
+		// KoboldCPP names the model without `.gguf`: the same model.
+		const f = embeddingsHost("nomic-embed-text-v1.5.Q4_K_M")
+		hostTest = { ok: true, extra: { version: "1.119" } }
+
+		const { testConnection } = await adapterIO(row.type, db as any)
+		// The form's state — an unsaved base URL is what Test is asked about.
+		const res = await testConnection({
+			...row,
+			baseUrl: "http://edited:5001"
+		})
+
+		// The text half's answer, untouched.
+		expect(res).toEqual({ ok: true, extra: { version: "1.119" } })
+		expect(f).toHaveBeenCalledTimes(1)
+		expect(f.mock.calls[0][0]).toBe("http://edited:5001/v1/embeddings")
+		expect(JSON.parse(f.mock.calls[0][1].body)).toEqual({
+			model: "nomic-embed-text-v1.5.Q4_K_M.gguf",
+			input: ["test"]
+		})
+	})
+
+	test("fails the test where the lane would fail: a model swapped under the star", async () => {
+		const { adapterIO } = await import("./modelSync")
+		const { row, embed } = await kcppEndpoint("swapped")
+		await starEmbeddings(row.id, embed.id)
+		embeddingsHost("bge-m3-Q8_0")
+
+		const { testConnection } = await adapterIO(row.type, db as any)
+		const res = await testConnection(row)
+		expect(res.ok).toBe(false)
+		expect(res.error).toMatch(/"bge-m3-Q8_0".*cannot be mixed/)
+	})
+
+	test("tests a pair whose model is an embeddings one the same way", async () => {
+		const { adapterIO } = await import("./modelSync")
+		const { row, embed, chat } = await kcppEndpoint("pair")
+		const f = embeddingsHost("nomic-embed-text-v1.5.Q4_K_M")
+		const { testConnection } = await adapterIO(row.type, db as any)
+
+		expect(
+			(await testConnection({ ...row, model: embed.model } as any)).ok
+		).toBe(true)
+		expect(f).toHaveBeenCalledTimes(1)
+		// A chat pair on the same endpoint is the text half alone.
+		expect(
+			(await testConnection({ ...row, model: chat.model } as any)).ok
+		).toBe(true)
+		expect(f).toHaveBeenCalledTimes(1)
+	})
+
+	test("no probe for a connection not doing the embedding job, or a failing text half", async () => {
+		const { adapterIO } = await import("./modelSync")
+		const starred = await kcppEndpoint("starred elsewhere")
+		const other = await kcppEndpoint("not starred")
+		await starEmbeddings(starred.row.id, starred.embed.id)
+		const f = embeddingsHost("nomic-embed-text-v1.5.Q4_K_M")
+		const { testConnection } = await adapterIO(
+			CONNECTION_TYPE.KOBOLDCPP,
+			db as any
+		)
+
+		expect(await testConnection(other.row)).toEqual({ ok: true })
+		// Unsaved: no rows, and nothing can star it.
+		expect(
+			await testConnection({ ...other.row, id: undefined } as any)
+		).toEqual({
+			ok: true
+		})
+		hostTest = { ok: false, error: "Nothing is listening at this address." }
+		expect(await testConnection(starred.row)).toEqual(hostTest)
+		expect(f).not.toHaveBeenCalled()
+	})
+
+	test("listing stays with the text module", async () => {
+		const { adapterIO } = await import("./modelSync")
+		hostListing = { models: ["from-the-text-module"] }
+		const { listModels } = await adapterIO(
+			CONNECTION_TYPE.KOBOLDCPP,
+			db as any
+		)
+		expect(await listModels({} as any)).toEqual(hostListing)
 	})
 })

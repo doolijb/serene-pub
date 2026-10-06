@@ -46,7 +46,7 @@ vi.mock("$lib/server/db", async () => {
 const SEED_PREFIX = "pipeline-default:"
 const ADVENTURE = `${SEED_PREFIX}core:spec/adventure-respond`
 /** Not named by the migration: its shipped row must outlive the replay. */
-const UNLISTED = `${SEED_PREFIX}core:spec/create-guide`
+const UNLISTED = `${SEED_PREFIX}core:spec/guide-create`
 
 const PLACE = { nodeKey: "place", slot: "params", path: "path" }
 const ENTITY_SEARCH = {

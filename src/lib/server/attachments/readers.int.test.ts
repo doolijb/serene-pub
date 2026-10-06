@@ -173,7 +173,7 @@ describe("attachmentReaders (PGlite integration)", () => {
 			// Look, Ask and the form answer, keyed by spec and node, headed by name.
 			expect(byKey.get("core:spec/adventure-look#write")?.label).toBe("Look")
 			expect(byKey.get("core:spec/adventure-ask#write")?.label).toBe("Ask")
-			expect(byKey.get("core:spec/answer-form-adventure#generate")?.label).toBe("Form answers")
+			expect(byKey.get("core:spec/adventure-answer-form#generate")?.label).toBe("Form answers")
 			expect(byKey.get("core:spec/adventure-look#write")?.reads).toEqual(["image", "text", "pdf"])
 			expect(new Set(r.calls.map((c) => c.key)).size).toBe(r.calls.length)
 			expect(new Set(r.calls.map((c) => c.label)).size).toBe(r.calls.length)

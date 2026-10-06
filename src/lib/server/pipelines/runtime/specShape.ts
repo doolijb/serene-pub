@@ -10,7 +10,7 @@
  *
  * ⚠ **An oracle inside a clause is not on the spine** (`spineProviders`, what
  * the preview halt and the step count read), and that is deliberate:
- * `core:spec/respond` puts its two `embed` oracles inside gather clauses
+ * `core:spec/chat-respond` puts its two `embed` oracles inside gather clauses
  * precisely so the preview does not halt on them (see the note on its
  * `names` block). It says nothing about streaming, which is declared.
  */

@@ -39,7 +39,7 @@ import {
 } from "$lib/server/connections/visibility"
 import type { ReviewDecision, Reviewer } from "@serene-pub/sdk"
 
-const SPEC_ID = "core:spec/generate-image"
+const SPEC_ID = "core:spec/chat-generate-image"
 
 /** The connection an ADMINISTRATOR set for this capability. */
 const ADMIN_CONNECTION = {

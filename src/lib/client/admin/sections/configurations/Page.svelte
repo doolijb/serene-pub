@@ -17,6 +17,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { requestWithInterest, useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { pipelineLabel } from "$lib/client/utils/pipelineGenre"
 	import AdminChangelist from "$lib/client/components/admin/AdminChangelist.svelte"
 	import {
 		deletionFor,
@@ -52,6 +53,32 @@
 		return load()
 	})
 
+	/**
+	 * The published pipelines and the genres' names, for the genre beside
+	 * each pipeline's name: names carry none (NOMENCLATURE §2), so every
+	 * genre's _Reply_ — each with its _Default_ — would read alike. Read the
+	 * way Admin › Pipelines' Genre column reads them. BARE, like the index.
+	 */
+	let pipelines = $state<Sockets.Pipelines.Namespace[] | null>(null)
+	let genres = $state<Sockets.Sessions.Genres.Response["genres"] | null>(null)
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const releases = [
+			requestWithInterest("pipelines:list", {}, (res) => {
+				pipelines = res.pipelinesList
+			}),
+			requestWithInterest("sessions:genres", {}, (res) => {
+				genres = res.genres ?? []
+			})
+		]
+		return () => {
+			for (const release of releases) release()
+		}
+	})
+	/** "Reply · Adventure"; the bare name until both lists arrive. */
+	const pipelineOf = (r: Pick<Row, "specSlug" | "specName">) =>
+		pipelineLabel(r.specSlug, pipelines, genres) ?? r.specName
+
 	let deleting = $state(0)
 	useInterest<"pipelines:deleteConfig">("pipelines:deleteConfig", () => {
 		if (!deleting) return
@@ -78,7 +105,7 @@
 			text: (r) => r.name + (r.isDefault ? " (default)" : ""),
 			sortValue: (r) => r.name
 		},
-		{ key: "pipeline", label: "Pipeline", text: (r) => r.specName, sortValue: (r) => r.specName },
+		{ key: "pipeline", label: "Pipeline", text: pipelineOf, sortValue: pipelineOf },
 		{
 			key: "usedByPresets",
 			label: "Presets",
@@ -106,7 +133,10 @@
 			key: "pipeline",
 			label: "Pipeline",
 			values: (r) => r.specSlug,
-			optionLabel: (v) => rows.find((r) => r.specSlug === v)?.specName ?? v
+			optionLabel: (v) => {
+				const r = rows.find((r) => r.specSlug === v)
+				return r ? pipelineOf(r) : v
+			}
 		},
 		{
 			key: "origin",
@@ -149,7 +179,7 @@
 			confirm: (selected) =>
 				deletionFor(selected, {
 					noun,
-					label: (r) => `${r.name} (${r.specName})`,
+					label: (r) => `${r.name} (${pipelineOf(r)})`,
 					protect
 				}),
 			run: (selected) => {
@@ -172,7 +202,7 @@
 	{bulkActions}
 	{loading}
 	{noun}
-	searchText={(r) => `${r.name} ${r.specName} ${r.specSlug}`}
+	searchText={(r) => `${r.name} ${pipelineOf(r)} ${r.specSlug}`}
 	rowHref={workspaceHref}
 	defaultSort="pipeline"
 	emptyIcon={Icons.SlidersVertical}

@@ -125,14 +125,20 @@ export function enginesFor(
  * turn "we do not know" into an assertion, and the row's `kind_source` would
  * grade that assertion as though something had measured it.
  *
- * This does NOT run in the other direction. A `.gguf` whose modality is
- * `embeddings` is still `kind: "text"` — koboldcpp's text loader is what opens
- * it — so modality → kind is many-to-one and not a projection at all.
+ * `embeddings` is koboldcpp's third loader (`--embeddingsmodel`), decided by
+ * the header's `<arch>.pooling_type` (`modelKind.ts`), so a measured kind
+ * projects to the measured role here too. Until 2026-10-05 an embedding GGUF
+ * was `kind: "text"` because nothing could tell it apart.
+ *
+ * This does NOT run in the other direction. Modality is an open vocabulary
+ * (`ner`, `tts`, …) that no koboldcpp loader serves, so modality → kind is not
+ * a projection at all.
  */
 export function modalityForKind(
 	kind: Sockets.KoboldCPP.ModelKind
 ): string | null {
 	if (kind === "text") return "text-gen"
 	if (kind === "image") return "image-gen"
+	if (kind === "embeddings") return "embeddings"
 	return null
 }

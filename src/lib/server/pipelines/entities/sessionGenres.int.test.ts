@@ -33,8 +33,8 @@ import {
 	upgradeSessionGenre
 } from "$lib/server/pipelines/entities/sessionGenres"
 import { sessionEvents } from "@serene-pub/sdk"
-import { NARRATE_SPEC_ID } from "$lib/server/pipelines/specs/narrate"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/specs/respond"
+import { CHAT_NARRATE_SPEC_ID } from "$lib/server/pipelines/specs/narrate"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs/respond"
 
 let db: TestDb
 
@@ -170,7 +170,7 @@ describe("subject routing (19 §3, U-C3; plans/31 V2)", () => {
 	it("the primary turn is the bucket: the inlet lock pins (genre, event)", async () => {
 		expect(
 			await resolveSubjectSpec(db, STANDARD_GENRE_ID, sessionEvents.messageRespond)
-		).toBe(RESPOND_SPEC_ID)
+		).toBe(CHAT_RESPOND_SPEC_ID)
 	})
 
 	it("the narrator action resolves to its declarer through contributed data, not a hardcoded branch", async () => {
@@ -179,8 +179,8 @@ describe("subject routing (19 §3, U-C3; plans/31 V2)", () => {
 		// declaration from the spec would break this test — not a string
 		// comparison in generateResponse.
 		expect(
-			await resolveSubjectSpec(db, STANDARD_GENRE_ID, `${NARRATE_SPEC_ID}#narrate`)
-		).toBe(NARRATE_SPEC_ID)
+			await resolveSubjectSpec(db, STANDARD_GENRE_ID, `${CHAT_NARRATE_SPEC_ID}#narrate`)
+		).toBe(CHAT_NARRATE_SPEC_ID)
 	})
 
 	it("a subject nothing serves resolves to null — the caller keeps its floor; so does a bare key", async () => {
@@ -318,9 +318,9 @@ describe("the trigger set (19 §4, U-C5)", () => {
 					ifEmpty: "The narrator decides."
 				}
 			},
-			specSlug: NARRATE_SPEC_ID,
+			specSlug: CHAT_NARRATE_SPEC_ID,
 			// Classified where it is read, not where it is used (19 §3):
-			// `core:spec/narrate` contributing to `core:inlet/user-message@1`
+			// `core:spec/chat-narrate` contributing to `core:inlet/user-message@1`
 			// is the mode owner's own namespace, so a companion — present by
 			// default. A foreign spec's would be an attachment, opt-in.
 			origin: "companion",
@@ -350,7 +350,7 @@ describe("the trigger set (19 §4, U-C5)", () => {
 			icon: "image",
 			name: "Image",
 			description: "Describe an image, make it and post it in the session.",
-			specSlug: "core:spec/generate-image",
+			specSlug: "core:spec/chat-generate-image",
 			origin: "companion",
 			enabledByDefault: true
 		})
@@ -361,7 +361,7 @@ describe("the trigger set (19 §4, U-C5)", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, NARRATE_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_NARRATE_SPEC_ID))
 		await db
 			.update(schema.pipelineSpecs)
 			.set({ activeVersionId: null })
@@ -374,7 +374,7 @@ describe("the trigger set (19 §4, U-C5)", () => {
 				await resolveSubjectSpec(
 					db,
 					STANDARD_GENRE_ID,
-					`${NARRATE_SPEC_ID}#narrate`
+					`${CHAT_NARRATE_SPEC_ID}#narrate`
 				)
 			).toBe(null)
 		} finally {
@@ -676,7 +676,7 @@ describe("session actions resolve through session, preset, then default", () => 
 
 	it("starts a companion on, with the default answering", async () => {
 		const n = await narrate()
-		// core:spec/narrate contributing to core:inlet/user-message@1 — same
+		// core:spec/chat-narrate contributing to core:inlet/user-message@1 — same
 		// namespace, so a companion by the mechanical rule.
 		expect(n.origin).toBe("companion")
 		expect(n.enabled).toBe(true)
@@ -788,7 +788,7 @@ describe("a preset decides what a session includes", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 			.limit(1)
 		const [cfg] = await db
 			.insert(schema.pipelineConfigs)
@@ -932,7 +932,7 @@ describe("a session runs on a preset", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 			.limit(1)
 		specId = spec.id
 		const [extra] = await db
@@ -952,7 +952,7 @@ describe("a session runs on a preset", () => {
 				isAdmin: false
 			}
 		)
-		expect(r.specSlug).toBe(RESPOND_SPEC_ID)
+		expect(r.specSlug).toBe(CHAT_RESPOND_SPEC_ID)
 		expect(r.options.map((o) => o.configId)).toContain(extraId)
 		// Nothing chosen yet, so the shipped default is what is in force —
 		// "default preset pre-selected" without anybody having selected it.
@@ -1044,7 +1044,7 @@ describe("a session runs on a preset", () => {
 		const [other] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, NARRATE_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_NARRATE_SPEC_ID))
 			.limit(1)
 		const [foreign] = await db
 			.insert(schema.pipelineConfigs)
@@ -1198,7 +1198,7 @@ describe("a session's own binding beats its preset (R-6)", () => {
 		const [respond] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 			.limit(1)
 		respondSpecId = respond!.id
 
@@ -1210,7 +1210,7 @@ describe("a session's own binding beats its preset (R-6)", () => {
 				name: "R-6 preset",
 				genreId: STANDARD_GENRE_ID,
 				bindings: {
-					"core:event/message-respond@1": { spec: RESPOND_SPEC_ID }
+					"core:event/message-respond@1": { spec: CHAT_RESPOND_SPEC_ID }
 				}
 			})
 			.returning()) as any[]
@@ -1233,7 +1233,7 @@ describe("a session's own binding beats its preset (R-6)", () => {
 
 	it("with no binding of its own, the preset decides", async () => {
 		await unbind()
-		expect((await verdict()).spec).toBe(RESPOND_SPEC_ID)
+		expect((await verdict()).spec).toBe(CHAT_RESPOND_SPEC_ID)
 	})
 
 	it("a session binding beats its preset", async () => {
@@ -1256,7 +1256,7 @@ describe("a session's own binding beats its preset (R-6)", () => {
 		await unbind()
 		await bindAt("session", sessionId, graphSpecId)
 		try {
-			expect((await verdict()).spec).toBe(RESPOND_SPEC_ID)
+			expect((await verdict()).spec).toBe(CHAT_RESPOND_SPEC_ID)
 		} finally {
 			await unbind()
 		}
@@ -1267,7 +1267,7 @@ describe("a session's own binding beats its preset (R-6)", () => {
 		await bindAt("pub", 0, otherSpecId)
 		try {
 			// The preset's session: the preset wins over the instance row.
-			expect((await verdict()).spec).toBe(RESPOND_SPEC_ID)
+			expect((await verdict()).spec).toBe(CHAT_RESPOND_SPEC_ID)
 			// A session on no preset: the instance row is the top layer left.
 			const { resolveSubjectVerdict } = await import(
 				"$lib/server/pipelines/entities/sessionGenres"
@@ -1300,7 +1300,7 @@ describe("the respond bucket is read *and* write", () => {
 			STANDARD_GENRE_ID,
 			sessionEvents.messageRespond
 		)
-		expect(slug).toBe(RESPOND_SPEC_ID)
+		expect(slug).toBe(CHAT_RESPOND_SPEC_ID)
 	})
 
 	it("leaves out a pipeline that reads a session but writes something else", async () => {
@@ -1351,7 +1351,7 @@ describe("the respond bucket is read *and* write", () => {
 				STANDARD_GENRE_ID,
 				sessionEvents.messageRespond
 			)
-			expect(slug).toBe(RESPOND_SPEC_ID)
+			expect(slug).toBe(CHAT_RESPOND_SPEC_ID)
 		} finally {
 			await db
 				.delete(schema.pipelineBindings)
@@ -1375,6 +1375,6 @@ describe("the respond bucket is read *and* write", () => {
 			STANDARD_GENRE_ID,
 			u.id
 		)
-		expect(pipeline?.specSlug).toBe(RESPOND_SPEC_ID)
+		expect(pipeline?.specSlug).toBe(CHAT_RESPOND_SPEC_ID)
 	})
 })

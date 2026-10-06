@@ -543,6 +543,29 @@ describe("the model tier", () => {
 		expect(entities[0]!.confidence).toBeCloseTo(0.9)
 	})
 
+	it("labels a name by its most confident mention", () => {
+		// The row stores ONE label (`entity_label`), so a name the model read
+		// two ways is filed under the reading it was surer of, whichever came
+		// first.
+		const text = "Kestrel waited. Kestrel left."
+		const later = extractEntities(text, gaz, [
+			span("Kestrel", "ORG", 0, 0.6),
+			span("Kestrel", "PER", 16, 0.95)
+		])
+		expect(later.entities[0]).toMatchObject({
+			label: "PER",
+			confidence: 0.95
+		})
+		const earlier = extractEntities(text, gaz, [
+			span("Kestrel", "PER", 0, 0.95),
+			span("Kestrel", "ORG", 16, 0.6)
+		])
+		expect(earlier.entities[0]).toMatchObject({
+			label: "PER",
+			confidence: 0.95
+		})
+	})
+
 	it("does not let the open tier claim a span the model already took", () => {
 		// Tier 0 claims first, so one name is one entity rather than an open
 		// duplicate sitting beside the model's.

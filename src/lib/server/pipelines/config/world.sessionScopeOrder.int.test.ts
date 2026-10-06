@@ -39,7 +39,7 @@ import { eq } from "drizzle-orm"
 import { resolveConfigSources, SLOT_VALUE } from "@serene-pub/sdk"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 
 let db: TestDb
 let dataDir: string
@@ -122,7 +122,7 @@ beforeAll(async () => {
 	const [spec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 	specId = spec.id
 }, 180_000)
 
@@ -135,7 +135,7 @@ const resolvedSampling = async () => {
 	const { buildWorld } = await import("$lib/server/pipelines/config/world")
 	const world = await buildWorld(db, {
 		sessionId,
-		specId: RESPOND_SPEC_ID
+		specId: CHAT_RESPOND_SPEC_ID
 	})
 	const sourced: any = resolveConfigSources(world as any, ["generate"])
 	return sourced?.generate?.sampling?.[SLOT_VALUE]

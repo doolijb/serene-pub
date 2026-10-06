@@ -1,4 +1,8 @@
 <script lang="ts">
+	import {
+		onLibraryImported,
+		onLibraryImportFailed
+	} from "$lib/client/contexts/characterImports.svelte"
 	/**
 	 * The **Library** sidebar view — the community character library, browsed
 	 * beside whatever is open and imported into Characters (NOMENCLATURE §26).
@@ -534,7 +538,7 @@
 		if (importingKey) imported.set(importingKey, msg.character.id)
 		importing = false
 		importingKey = null
-		toaster.success({ title: `Imported ${msg.character.name}` })
+		// No toast here: the characters-import context announces the import.
 	}
 
 	function handleCharactersImportFromLibraryError(
@@ -543,9 +547,7 @@
 		if (!importing) return
 		importing = false
 		importingKey = null
-		toaster.error({
-			title: msg.error || "Failed to import the character"
-		})
+		// The error toast is the characters-import context's.
 	}
 
 	function handleCardSourcesCapabilities(
@@ -590,14 +592,10 @@
 		"characters:searchLibrary:error",
 		handleCharactersSearchLibraryError
 	)
-	useInterest<"characters:importFromLibrary">(
-		"characters:importFromLibrary",
-		handleCharactersImportFromLibrary
-	)
-	useInterest<"characters:importFromLibrary:error">(
-		"characters:importFromLibrary:error",
-		handleCharactersImportFromLibraryError
-	)
+	// The import events are the characters-import context's; this view takes
+	// the outcome for its "imported" marks.
+	onLibraryImported(handleCharactersImportFromLibrary)
+	onLibraryImportFailed(handleCharactersImportFromLibraryError)
 	useInterest<"cardSources:cardDetail">(
 		"cardSources:cardDetail",
 		handleCardSourcesCardDetail

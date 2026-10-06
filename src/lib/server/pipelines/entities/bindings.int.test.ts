@@ -101,9 +101,9 @@ let characterId: number
 
 // The standard genre's own id (24 §3) — the id sessions carry.
 const STANDARD = "core:genre/chat"
-const CORE_NARRATE = "core:spec/narrate"
+const CORE_NARRATE = "core:spec/chat-narrate"
 const STAGE_NARRATE = "chariot.stage:spec/dramatic-narrate"
-const CORE_RESPOND = "core:spec/respond"
+const CORE_RESPOND = "core:spec/chat-respond"
 /** A second member of the primary-turn bucket, seeded below: the same lock, and a message write. */
 const STAGE_RESPOND = "chariot.stage:spec/dramatic-respond"
 

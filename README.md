@@ -304,11 +304,11 @@ Bring your own model, or download and run one from inside the app.
 
 The core app is the same everywhere. Two features depend on native binaries that don't exist for every platform, and the app says so up front rather than failing at runtime.
 
-| Platform | Distribution | Local embedding models | KoboldCPP / Ollama run by Serene Pub |
+| Platform | Distribution | Local embedding and entity models | KoboldCPP / Ollama run by Serene Pub |
 | --- | --- | --- | --- |
 | 🪟 Windows (x64) | [GitHub Release](https://github.com/doolijb/serene-pub/releases) `.zip` | ✅ | ✅ |
 | 🍎 macOS — Apple Silicon (arm64) | [GitHub Release](https://github.com/doolijb/serene-pub/releases) `.zip` | ✅ | ✅ |
-| 🍎 macOS — Intel (x64) | [GitHub Release](https://github.com/doolijb/serene-pub/releases) `.zip` | ⚠️ Unavailable¹ | ✅ |
+| 🍎 macOS — Intel (x64) | [GitHub Release](https://github.com/doolijb/serene-pub/releases) `.zip` | ✅¹ | ✅ |
 | 🐧 Linux (x64) | [GitHub Release](https://github.com/doolijb/serene-pub/releases) `.zip` | ✅ | ✅ |
 | 🐧 Linux (arm64) | Docker only² | ✅ | ✅ |
 | 🐳 Docker (`linux/amd64`, `linux/arm64`) | [ghcr.io/doolijb/serene-pub](https://github.com/doolijb/serene-pub/pkgs/container/serene-pub) | ✅ | ✅ |
@@ -316,9 +316,9 @@ The core app is the same everywhere. Two features depend on native binaries that
 
 **Annotations:**
 
-1. **macOS Intel — no local embedding models**: `onnxruntime-node`, which powers in-app embeddings, stopped shipping Intel Mac binaries at v1.24.3. Use any OpenAI-compatible `/embeddings` endpoint instead, which behaves identically. The Docker image keeps full local support, since the container runs Linux binaries.
+1. **macOS Intel — on an older runtime**: `onnxruntime-node`, which powers in-app embeddings and named entities, stopped shipping Intel Mac binaries after v1.23.2. The Intel Mac bundle carries v1.23.2 in place of the newer version the other platforms use.
 2. **Linux arm64 — Docker only**: GitHub-hosted CI runners can't cross-compile the native dependencies, so there's no standalone desktop build. The multi-arch Docker image covers this architecture with the full feature set.
-3. **Android — no local embedding models**: Android's Bionic userspace isn't glibc-compatible and `onnxruntime-node` requires glibc. Not fixable by packaging. Use an external embeddings API, as on Intel Mac.
+3. **Android — no local embedding or entity models**: Android's Bionic userspace isn't glibc-compatible and `onnxruntime-node` requires glibc. Not fixable by packaging. Use an external embeddings API instead.
 4. **Android — no KoboldCPP/Ollama run by Serene Pub**: the *managed* auto-download-and-run modes are hidden, since KoboldCPP publishes no Linux arm64 binary. **Connecting to a remote KoboldCPP or Ollama server still works**, via the Connections panel.
 
 See [`android/README.md`](android/README.md) for all Android-specific constraints.
@@ -345,7 +345,7 @@ On a desktop, Serene Pub starts with a tray icon and opens in its own window (or
 
 #### Requirements
 
-- [Node.js](https://nodejs.org/en) 24 or later
+- [Node.js](https://nodejs.org/en) 24 or later (the release bundles and the Docker image ship Node.js 26)
 - (Optional) [Ollama](https://ollama.com/download) for local models
 
 #### Steps

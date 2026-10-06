@@ -68,7 +68,7 @@ Each file goes to the model with the message it belongs to, not only with the ne
 
 An image on a character's line, such as a generated picture, is sent with the next message from you, because models accept images only on your turns.
 
-The same goes for every action that writes with a model and reads the conversation: Adventure's **Look**, **Ask**, **Rest** and **Advance time**, the Lair's **Build room**, **Trigger trap**, **Reveal** and the rooms the Castellan drafts, the tool loop, and a character answering a form. Each judges by its own model, so a Look on a model that sees images gets the picture even when the reply's model gets its name.
+The same goes for every action that writes with a model and reads the conversation: Adventure's **Look**, **Ask**, **Rest** and **Time passes**, the Lair's **Build room**, **Trigger trap**, **Reveal** and the rooms the Castellan drafts, the tool loop, and a character answering a form. Each judges by its own model, so a Look on a model that sees images gets the picture even when the reply's model gets its name.
 
 A **summary** reads your files as names: each file is written after its message's text, as `[image: cat.png — a grey cat]` or `[file: notes.txt]`, so a message that is only a picture is summarized as that picture, not skipped. See [Summarization](./summarization.md).
 
@@ -292,7 +292,7 @@ A session never picks a connection or a model itself. Each reply runs on the mod
 
 ## Pipeline settings in a session
 
-Every reply and action is run by a [pipeline](./pipelines.md). The **Pipelines** section of the Settings tab has a card for each one the session runs: the reply first (such as *Session reply* or *Adventure turn*), then each action. Changes here apply to this session only and save as you make them.
+Every reply and action is run by a [pipeline](./pipelines.md). The **Pipelines** section of the Settings tab has a card for each one the session runs: the reply first (*Reply*), then each action. Changes here apply to this session only and save as you make them.
 
 Each card is grouped by **model call**: a block per call, with its name, a sentence on what it does, and its choices:
 
@@ -356,7 +356,7 @@ With context debugging on, a thin bar along the top of the composer fills as the
 
 When a character has [sprites](./characters.md#sprites) (faces for different moods), a session can show the face that fits each line.
 
-- **Chosen automatically.** After a character's reply is saved, Serene Pub compares it with the character's sprite labels and picks the closest. This uses your embedding model, not the reply's model: on this device for a local model, or one request per reply to an online one. With no embedding model set up, faces stay as they are.
+- **Chosen automatically.** After a character's reply is saved, Serene Pub compares the reply's text with the character's sprite labels and picks the closest. Every genre's reply does this, the Lair's delvers included; a narrator's line has no face to choose. This uses your active embedding model, not the reply's model: on this device for a local model, or one request per reply to an online one. With no embedding model set up, or when nothing fits, the line keeps the face it had.
 - **Settings.** The choice has three settings on the reply pipeline's sprite step: **Choose sprites** turns it off (no embedding request is made then), **Stickiness** sets how much better a new face must fit before it replaces the last one, and **Minimum similarity** how close a line must be to any face. The session's own settings don't show them yet; an administrator changes them in the Pipelines view.
 - **Pick one yourself.** **Change sprite** in a message's menu lets anyone who can edit that line pick its face, or none. The automatic choice never overrides yours.
 - **Swipes.** Each version of a message keeps its own face.

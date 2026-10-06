@@ -57,7 +57,7 @@ A compile remembers the line and date it started from, so reopening its review l
 
 ## Changing the prompts
 
-Each kind of summary is a pipeline in the **Pipelines** view: **Summarize: world lore**, **Summarize: character lore**, **Summarize: scene** and **Summarize: history entry**, plus **Narrative graph build**. A summary runs in three steps, **Drafting**, **Combining** and **Naming**, each with its own prompt, model and sampling. So drafting can run on a smaller, cheaper model than combining.
+Each kind of summary is a pipeline in the **Pipelines** view: **Summarize world lore**, **Summarize character lore**, **Summarize scene** and **Summarize history entry**, plus **Build the story graph**. A summary runs in three steps, **Drafting**, **Combining** and **Naming**, each with its own prompt, model and sampling. So drafting can run on a smaller, cheaper model than combining.
 
 To change the wording, clone a built-in prompt and pick your clone on the step. See [Pipelines](./pipelines.md#prompts).
 

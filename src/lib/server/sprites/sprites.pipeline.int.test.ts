@@ -1,8 +1,9 @@
 /**
  * Sprites in a session (DESIGN-sprites §2.3, §5, §6), against a real PGlite
  * database with core's pipelines published: which set a line's speaker is
- * shown in, a person's pick through `core:spec/show-sprite`, and swipes
- * keeping each alternative's face.
+ * shown in (keyed by the speaker, as the sprite picker hands it — never by a
+ * message the host re-reads), a person's pick through `core:spec/show-sprite`,
+ * and swipes keeping each alternative's face.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -106,16 +107,17 @@ describe("which set a line's speaker is shown in", () => {
 	test("the card's default set, with its labels, when nothing else says", async () => {
 		const { spriteChoicesFor } = await import("$lib/server/sprites/choices")
 		const { session, message, character } = await scene("sprites-choices-default")
-		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: message.characterId! })
 		expect(c).toMatchObject({
 			characterId: character.id,
 			set: "default",
 			defaultSet: "default",
 			labels: ["joy", "neutral"],
-			decidedBy: "default",
-			has: true,
-			text: "I'm so happy to see you!"
+			decidedBy: "default"
 		})
+		// What the speaker can show, never the line: the picker is handed the
+		// line's text by the spec, so the choices carry none.
+		expect(c).not.toHaveProperty("text")
 	}, 60_000)
 
 	test("the session override wins, and clearing it restores the default", async () => {
@@ -127,7 +129,7 @@ describe("which set a line's speaker is shown in", () => {
 			set: "Armour",
 			updatedBy: "user"
 		})
-		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: message.characterId! })
 		expect(c).toMatchObject({ set: "armour", labels: ["stern"], decidedBy: "override" })
 		await setSessionSpriteSet(testDb as any, {
 			sessionId: session.id,
@@ -135,7 +137,7 @@ describe("which set a line's speaker is shown in", () => {
 			set: null,
 			updatedBy: "user"
 		})
-		const back = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		const back = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: message.characterId! })
 		expect(back).toMatchObject({ set: "default", decidedBy: "default" })
 	}, 60_000)
 
@@ -146,14 +148,14 @@ describe("which set a line's speaker is shown in", () => {
 			.update(schema.lorebookBindings)
 			.set({ spriteSet: "armour" })
 			.where(eq(schema.lorebookBindings.id, bindingId!))
-		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: message.characterId! })
 		expect(c).toMatchObject({ set: "armour", decidedBy: "amendment" })
 
 		await testDb
 			.update(schema.lorebookBindings)
 			.set({ spriteSet: "winter" })
 			.where(eq(schema.lorebookBindings.id, bindingId!))
-		const missing = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		const missing = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: message.characterId! })
 		expect(missing).toMatchObject({
 			set: "default",
 			decidedBy: "default",
@@ -178,7 +180,7 @@ describe("which set a line's speaker is shown in", () => {
 			set: "winter",
 			updatedBy: "user"
 		})
-		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: message.characterId! })
 		expect(c).toMatchObject({
 			set: "default",
 			decidedBy: "default",
@@ -206,7 +208,7 @@ describe("which set a line's speaker is shown in", () => {
 			.returning()
 
 		// Main at the head: Y10 has happened.
-		const head = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		const head = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: message.characterId! })
 		expect(head).toMatchObject({ set: "armour", decidedBy: "amendment" })
 
 		// Main with the story clock at Y3: Y10 has not happened yet.
@@ -214,7 +216,7 @@ describe("which set a line's speaker is shown in", () => {
 			.update(schema.sessions)
 			.set({ storyClockYear: 3 })
 			.where(eq(schema.sessions.id, session.id))
-		const early = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		const early = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: message.characterId! })
 		expect(early).toMatchObject({ set: "default", decidedBy: "default" })
 
 		// The branch at its head: main's Y10 is past the Y5 fork, so cut.
@@ -222,7 +224,7 @@ describe("which set a line's speaker is shown in", () => {
 			.update(schema.sessions)
 			.set({ storyClockYear: null, lorebookBranchId: fork.id })
 			.where(eq(schema.sessions.id, session.id))
-		const branch = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		const branch = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: message.characterId! })
 		expect(branch).toMatchObject({ set: "default", decidedBy: "default" })
 	}, 60_000)
 
@@ -243,8 +245,9 @@ describe("which set a line's speaker is shown in", () => {
 			year: 20,
 			fields: { characterId: bare.id }
 		})
-		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
-		expect(c).toMatchObject({ characterId: character.id, set: "default", has: true })
+		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: message.characterId! })
+		expect(c).toMatchObject({ characterId: character.id, set: "default" })
+		expect(c.labels.length).toBeGreaterThan(0)
 	}, 60_000)
 
 	test("a seat holding the dated card is drawn as the book has her at the session's point (A25)", async () => {
@@ -282,7 +285,7 @@ describe("which set a line's speaker is shown in", () => {
 			.update(schema.sessions)
 			.set({ storyClockYear: 5 })
 			.where(eq(schema.sessions.id, session.id))
-		const early = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		const early = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: keeper.id })
 		expect(early).toMatchObject({ characterId: character.id })
 		expect(early.labels).toContain("joy")
 
@@ -291,19 +294,72 @@ describe("which set a line's speaker is shown in", () => {
 			.update(schema.sessions)
 			.set({ storyClockYear: null })
 			.where(eq(schema.sessions.id, session.id))
-		const head = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		const head = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: keeper.id })
 		expect(head).toMatchObject({ characterId: keeper.id, labels: ["lamp"] })
 	}, 60_000)
 
-	test("a narrator's line has nothing to choose", async () => {
+	test("a set the spec names asks first, and a name the card lacks says the spec asked", async () => {
+		const { spriteChoicesFor, setSessionSpriteSet } = await import("$lib/server/sprites/choices")
+		const { session, character } = await scene("sprites-choices-spec-set")
+		await setSessionSpriteSet(testDb as any, {
+			sessionId: session.id,
+			characterId: character.id,
+			set: "default",
+			updatedBy: "user"
+		})
+		const c = await spriteChoicesFor(testDb as any, {
+			sessionId: session.id,
+			characterId: character.id,
+			set: "Armour"
+		})
+		expect(c).toMatchObject({ set: "armour", labels: ["stern"], decidedBy: "spec" })
+		const missing = await spriteChoicesFor(testDb as any, {
+			sessionId: session.id,
+			characterId: character.id,
+			set: "winter"
+		})
+		expect(missing).toMatchObject({
+			set: "default",
+			decidedBy: "default",
+			missing: "winter",
+			missingAskedBy: "spec"
+		})
+	}, 60_000)
+
+	test("the speaker's recent faces leave out the run's own row, and a card with no art has nothing", async () => {
 		const { spriteChoicesFor } = await import("$lib/server/sprites/choices")
-		const { session } = await scene("sprites-choices-narrator")
-		const [line] = await testDb
+		const { session, character, message, user } = await scene("sprites-choices-recent")
+		await testDb
+			.update(schema.sessionMessages)
+			.set({ metadata: { sprite: { set: "default", label: "joy", source: "picker" } } })
+			.where(eq(schema.sessionMessages.id, message.id))
+		const [live] = await testDb
 			.insert(schema.sessionMessages)
-			.values({ sessionId: session.id, role: "assistant", isNarratorResponse: true, content: "Rain." })
+			.values({
+				sessionId: session.id,
+				role: "assistant",
+				characterId: character.id,
+				content: "A regenerated line.",
+				metadata: { sprite: { set: "default", label: "neutral", source: "picker" } }
+			})
 			.returning()
-		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: line.id })
-		expect(c.has).toBe(false)
+		const c = await spriteChoicesFor(testDb as any, {
+			sessionId: session.id,
+			characterId: character.id,
+			excludeMessageId: live.id
+		})
+		expect(c.last).toEqual({ set: "default", label: "joy", source: "picker" })
+		expect(c.recent).toEqual(["joy"])
+
+		const [bare] = await testDb
+			.insert(schema.characters)
+			.values({ userId: user.id, name: "No art", description: "" })
+			.returning()
+		const none = await spriteChoicesFor(testDb as any, {
+			sessionId: session.id,
+			characterId: bare.id
+		})
+		expect(none).toMatchObject({ characterId: bare.id, labels: [], set: null })
 	}, 60_000)
 })
 
@@ -395,6 +451,64 @@ describe("a person's pick, and swipes", () => {
 	}, 60_000)
 })
 
+/**
+ * `show-sprite`'s `source` is the node's input — a literal the spec writes —
+ * never the running spec's id (2026-10-05). Stated, not trusted: `person` is
+ * accepted from core's own sprite action alone.
+ */
+describe("show-sprite takes who chose it from the spec", () => {
+	const node = { key: "spriteShow", definitionId: "core:outlet/show-sprite", definitionVersion: 1 }
+	const hostFor = async (sessionId: number, userId: number, specId = "core:spec/chat-respond") => {
+		const { createHost } = await import("$lib/server/pipelines/runtime/host")
+		return createHost(testDb as any, { sessionId, userId, specId })
+	}
+	const spriteOf = async (id: number) =>
+		((await testDb.query.sessionMessages.findFirst({ where: eq(schema.sessionMessages.id, id) }))!
+			.metadata as any)?.sprite ?? null
+
+	test("a picker's pick is recorded as the picker's; its null pick keeps what the line shows", async () => {
+		const { user, session, message } = await scene("sprites-source-picker")
+		const host = await hostFor(session.id, user.id)
+		const shown: any = await host.commit!(
+			{ target: message.id, pick: { set: "default", label: "joy" }, source: "picker" },
+			node as any
+		)
+		expect(shown).toMatchObject({ kept: false, sprite: { label: "joy", source: "picker" } })
+		const kept: any = await host.commit!({ target: message.id, pick: null, source: "picker" }, node as any)
+		expect(kept.kept).toBe(true)
+		expect(await spriteOf(message.id)).toEqual({ set: "default", label: "joy", source: "picker" })
+	}, 60_000)
+
+	test("a picker never overwrites a person's pick", async () => {
+		const { sessionMessagesSetSprite } = await import("$lib/server/sockets/sprites")
+		const { user, session, message } = await scene("sprites-source-person-wins")
+		await sessionMessagesSetSprite.handler(
+			socket(user.id),
+			{ id: message.id, sprite: { set: "armour", label: "stern" } },
+			noop
+		)
+		const host = await hostFor(session.id, user.id)
+		const r: any = await host.commit!(
+			{ target: message.id, pick: { set: "default", label: "joy" }, source: "picker" },
+			node as any
+		)
+		expect(r.kept).toBe(true)
+		expect(await spriteOf(message.id)).toEqual({ set: "armour", label: "stern", source: "person" })
+	}, 60_000)
+
+	test("'person' from any spec but core's sprite action is refused, and so is no source", async () => {
+		const { user, session, message } = await scene("sprites-source-refused")
+		const host = await hostFor(session.id, user.id)
+		await expect(
+			host.commit!({ target: message.id, pick: { set: "default", label: "joy" }, source: "person" }, node as any)
+		).rejects.toThrow(/only core's own sprite action/)
+		await expect(
+			host.commit!({ target: message.id, pick: { set: "default", label: "joy" } }, node as any)
+		).rejects.toThrow(/no source/)
+		expect(await spriteOf(message.id)).toBeNull()
+	}, 60_000)
+})
+
 describe("A session's sprite-set override", () => {
 	test("the owner changes it, the next line reads it, a stranger and a missing set are refused", async () => {
 		const { sessionsSetSpriteSet } = await import("$lib/server/sockets/sprites")
@@ -409,7 +523,7 @@ describe("A session's sprite-set override", () => {
 		)
 		expect(ok).toMatchObject({ set: "armour" })
 		expect(ok.error).toBeUndefined()
-		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: message.characterId! })
 		expect(c).toMatchObject({ set: "armour", decidedBy: "override" })
 
 		const missing = await sessionsSetSpriteSet.handler(
@@ -433,7 +547,7 @@ describe("A session's sprite-set override", () => {
 			noop
 		)
 		expect(cleared.set).toBeNull()
-		const back = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		const back = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: message.characterId! })
 		expect(back.decidedBy).toBe("default")
 	}, 60_000)
 })

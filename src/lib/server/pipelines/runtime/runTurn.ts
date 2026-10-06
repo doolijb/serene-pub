@@ -24,7 +24,6 @@
  */
 
 import {
-	resolveConfig,
 	run,
 	sessionEvents,
 	type FormAddressedPayload,
@@ -52,12 +51,11 @@ import {
 	type PendingFire
 } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
-import { SPRITE_PICKER_NODE_KEY } from "@serene-pub/core-catalog"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { pluginNodeBindings } from "$lib/server/pipelines/runtime/pluginBindings"
 import {
 	loadPublished,
-	RESPOND_SPEC_ID
+	CHAT_RESPOND_SPEC_ID
 } from "$lib/server/pipelines/boot/bootstrap"
 import { specOwnerPluginId } from "$lib/server/pipelines/boot/store"
 import {
@@ -150,7 +148,7 @@ export interface TurnRequest {
 	 * 2026-09-08, D-2).
 	 *
 	 * Absent on every other turn. It travels to the input node's
-	 * `continuationPrefill` port and from there, on `core:spec/respond`, to
+	 * `continuationPrefill` port and from there, on `core:spec/chat-respond`, to
 	 * `core:task/process-messages@1`, which puts it in the seed line the model
 	 * writes from. Nothing else reads it.
 	 *
@@ -789,15 +787,6 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 	// is written and the next turn resolves exactly as it would have.
 	forceOverrides(world, request.overrides, request.sessionId)
 
-	// "Choose sprites" off spares the sprite tail's embed, not only its choice:
-	// the picker's `enabled`, resolved from this run's world exactly as the
-	// executor will resolve it for the picker, handed to the host before the
-	// tail's `sprites_for` read embeds anything.
-	if (doc.nodes.some((n: any) => n.key === SPRITE_PICKER_NODE_KEY))
-		scope.spriteChoiceOff =
-			resolveConfig(world, [SPRITE_PICKER_NODE_KEY])[SPRITE_PICKER_NODE_KEY]
-				?.params?.enabled === false
-
 	/**
 	 * The settings document (PLAN-turn-order §4.12, R13), resolved **once
 	 * per run, here, after every write that caused this run has landed** and
@@ -1179,7 +1168,7 @@ async function dispatchFires(
 
 /**
  * A child run is starting: one frame on the parent's progress card naming
- * it (U5d review, S4) — *Answer a form (chat)*, the spec's display name —
+ * it (U5d review, S4) — *Answer a form*, the spec's display name —
  * so the person who pressed sees the tree being made, before the child's
  * own statuses arrive on the same card.
  *
@@ -1387,7 +1376,7 @@ async function runTurnUnderHold(request: TurnRequest): Promise<Receipt> {
 		db: request.db,
 		sessionId: request.sessionId,
 		userId: request.userId,
-		specId: request.specId ?? RESPOND_SPEC_ID,
+		specId: request.specId ?? CHAT_RESPOND_SPEC_ID,
 		currentCharacterId: request.currentCharacterId,
 		speaker,
 		draftMessage: request.draftMessage,

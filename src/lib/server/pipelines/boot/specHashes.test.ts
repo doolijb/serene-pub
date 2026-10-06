@@ -80,13 +80,16 @@ const PUBLISHED: Record<string, string> = {
 	 */
 	// One turn-order spec per genre since the modder pass (R27, M2); the
 	// shared `turn-order` / `turn-order-narrator` pins are retired.
-	"core:spec/chat-turn-order@1.0.0": "2d13f7b17a0fb",
-	"core:spec/guide-turn-order@1.0.0": "1e155929f443a5",
+	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "2d13f7b17a0fb")
+	"core:spec/chat-turn-order@1.0.0": "13d6a6453f2412",
+	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "1e155929f443a5")
+	"core:spec/guide-turn-order@1.0.0": "127cf804a74c6d",
 	// Moved 2026-09-27 (lair pass B9): the `TURN_ORDER_NARRATOR_EVENTS` list gains `message-deleted` and
 	// `message-hidden`, so Continue re-decides after a delete or a hide.
 	// Proven: with those two event ids removed, the document hashes back to
 	// the old pin. (was 'b605f68c2205f')
-	"core:spec/adventure-turn-order@1.0.0": "61d38f952d6ab",
+	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "61d38f952d6ab")
+	"core:spec/adventure-turn-order@1.0.0": "1c8ef96c2530a2",
 	// Moved 2026-09-27 (lair pass B9): the `TURN_ORDER_NARRATOR_EVENTS` list gains `message-deleted` and
 	// `message-hidden`, so Continue re-decides after a delete or a hide.
 	// Proven: with those two event ids removed, the document hashes back to
@@ -99,7 +102,8 @@ const PUBLISHED: Record<string, string> = {
 	// kept at the write. Proven (SDK and app pins alike): a copy of core-catalog/src with only this
 	// lane's edits reverted (lair.ts, turnOrder.ts, genres.ts) hashes back to
 	// every old Lair pin. (was "1bee84716ce1fa")
-	"core:spec/lair-turn-order@1.0.0": "c0edd4e6d3d23",
+	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "c0edd4e6d3d23")
+	"core:spec/lair-turn-order@1.0.0": "1a6264ad2eae4f",
 	/**
 	 * ⚠ Every respond spec bumped a semver at A6 (§4.4, §7): the `speaker`
 	 * node moved to the turn-order spec and `placeholder` returned to
@@ -149,7 +153,16 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (history window): `contextBudget` runs before the
 	// reads and the transcript read takes its `budget` — sized by the window,
 	// not the newest 100 rows. Edited in place under the freeze. (was "75db48c05464b")
-	"core:spec/respond@1.21.0": "6b320446a5eb1",
+	// Moved 2026-10-05 (sprites in-pipeline, plan D1/D-b; owner: "not a
+	// wrapper"): the retired `withSpriteTail` nodes give way to the sprite step
+	// written out after `save` — `spritePick` (`core:oracle/pick-sprite@1`,
+	// handed the reply's text and speaker) and `spriteShow` (`source:
+	// 'picker'`). And D-c: the retrieval arms' embed steps lose their
+	// `connection` slot, and `semantic.arm.queries` wires its own
+	// (`slot.connection()`). Edited in place under the freeze. Measured with other lanes'
+	// in-flight core-catalog edits in the tree. (was "6b320446a5eb1")
+	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/respond`; nothing else changed. (was "520aa324cf15f")
+	"core:spec/chat-respond@1.21.0": "1f99b0cdffb35d",
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
 	// two keys stripped, the document hashes back to the old pin. (was 'b0c3e32a16d1d')
@@ -180,7 +193,13 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): GUIDE_RESPOND_TEMPLATE renders `{{{attachments}}}` in its message loop (the `attached` step placed files the template dropped).
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "1293f671d6b4bc")
-	"core:spec/guide-respond@1.2.0": "abff4d2cceef8",
+	// Moved 2026-10-05 (sprites in-pipeline, plan D1/D-b; owner: "not a
+	// wrapper"): the retired `withSpriteTail` nodes give way to the sprite step
+	// written out after `save` — `spritePick` (`core:oracle/pick-sprite@1`,
+	// handed the reply's text and speaker) and `spriteShow` (`source:
+	// 'picker'`). Edited in place under the freeze. Measured with other lanes'
+	// in-flight core-catalog edits in the tree. (was "abff4d2cceef8")
+	"core:spec/guide-respond@1.2.0": "100e883f026237",
 	// Moved 2026-09-27 (characterDetail genre field): Chat and Adventure
 	// declare `fields.characterDetail` (CHARACTER_DETAIL_FIELD: full / brief /
 	// speaker-only). Proven: a copy of core-catalog/src with just those two
@@ -191,7 +210,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (owner ruling: placed text at the end): `meta.genre`
 	// carries Chat's shape, and the author's note field's `depth` default is
 	// 0 (was 4). Edited in place under the freeze. (was "1566992a444e50")
-	"core:spec/create-chat@2.2.0": "18b84026deb74b",
+	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/create-chat`; nothing else changed. (was "18b84026deb74b")
+	"core:spec/chat-create@2.2.0": "1cd1222a275dec",
 	/**
 	 * The guide genre (plans/29 R-18; U5g, 2026-09-16) — two new slugs, and
 	 * nothing above them moves. `create-guide` carries the genre's
@@ -226,7 +246,8 @@ const PUBLISHED: Record<string, string> = {
 	// reverted builds create-guide@1.0.0 at its recorded pin. Paired with
 	// `drizzle/0101_create_guide_greeting_reprojection`, which re-seeds the
 	// shipped config so an existing install's Guide greets too.
-	"core:spec/create-guide@1.1.0": "6b6c45bf731ba",
+	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/create-guide`; nothing else changed. (was "6b6c45bf731ba")
+	"core:spec/guide-create@1.1.0": "1cb7b0cfc1ae44",
 	// (was "1d39898d4c7a0c") — W9 shape pins, see the note above adventure-ask.
 	"core:spec/guide-respond@1.0.0": "b7997d7b1d904",
 	/**
@@ -342,7 +363,13 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (history window): `contextBudget` runs before the
 	// reads and the transcript read takes its `budget` — sized by the window,
 	// not the newest 100 rows. Edited in place under the freeze. (was "9ddd07c218618")
-	"core:spec/adventure-respond@1.0.0": "70163343495a2",
+	// Moved 2026-10-05 (sprites in-pipeline, plan D-a): gains the sprite step
+	// after `save` — `spritePick` (`core:oracle/pick-sprite@1`, handed the
+	// reply's text and speaker) and `spriteShow` (`source: 'picker'`). And D-c: the retrieval arms' embed steps lose their
+	// `connection` slot, and `semantic.arm.queries` wires its own
+	// (`slot.connection()`). Edited in place under the freeze. Measured with other lanes'
+	// in-flight core-catalog edits in the tree. (was "70163343495a2")
+	"core:spec/adventure-respond@1.0.0": "1b99741eb2c332",
 	// ⚠ MOVED, unreleased-genre terms (R-8, 2026-09-15): the three actions'
 	// `contextBudget` shares the writing step's connection for the model's
 	// own window, like every other budget node.
@@ -503,7 +530,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): `attachments` + `attached` (on `generate`'s pair) before `prompt`, and `{{{attachments}}}` in ANSWER_FORM_TEMPLATE's message loop.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "ef5be600b6ed7")
-	"core:spec/answer-form-chat@1.0.0": "1a1744b015b27a",
+	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/answer-form-chat`; nothing else changed. (was "1a1744b015b27a")
+	"core:spec/chat-answer-form@1.0.0": "a10f3d0d9292d",
 	// (was "b89f3d6c0484b") — W9 shape pins, see the note above adventure-ask.
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
@@ -511,7 +539,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): `attachments` + `attached` (on `generate`'s pair) before `prompt`, and `{{{attachments}}}` in ANSWER_FORM_TEMPLATE's message loop.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "d38acc496a3c1")
-	"core:spec/answer-form-adventure@1.0.0": "8175a60b3bfc4",
+	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/answer-form-adventure`; nothing else changed. (was "8175a60b3bfc4")
+	"core:spec/adventure-answer-form@1.0.0": "9a0a93d0fce6f",
 	// (was "1ddc286846b82d") — W9 shape pins, see the note above adventure-ask.
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
@@ -519,7 +548,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): `attachments` + `attached` (on `generate`'s pair) before `prompt`, and `{{{attachments}}}` in ANSWER_FORM_TEMPLATE's message loop.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "811b474234fb8")
-	"core:spec/answer-form-guide@1.0.0": "4cc69e9d12db0",
+	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/answer-form-guide`; nothing else changed. (was "4cc69e9d12db0")
+	"core:spec/guide-answer-form@1.0.0": "ee8145c98c894",
 	"core:spec/create-chat@2.1.0": "ea80f2679383c",
 	"core:spec/create-chat@2.0.0": "a6281141b21ea",
 	// 1.16.0 / 1.10.0: the three lore gather branches and the narrator's trigger query
@@ -762,7 +792,16 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (history window): `contextBudget` runs before the
 	// reads and the transcript read takes its `budget` — sized by the window,
 	// not the newest 100 rows. Edited in place under the freeze. (was "ed49d36f3f595")
-	"core:spec/narrate-character@1.0.0": "1fa23cc37eaad0",
+	// Moved 2026-10-05 (sprites in-pipeline, plan D1/D-b; owner: "not a
+	// wrapper"): the retired `withSpriteTail` nodes give way to the sprite step
+	// written out after `save` — `spritePick` (`core:oracle/pick-sprite@1`,
+	// handed the reply's text and speaker) and `spriteShow` (`source:
+	// 'picker'`). And D-c: the retrieval arms' embed steps lose their
+	// `connection` slot, and `semantic.arm.queries` wires its own
+	// (`slot.connection()`). Edited in place under the freeze. Measured with other lanes'
+	// in-flight core-catalog edits in the tree. (was "1fa23cc37eaad0")
+	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/narrate-character`; nothing else changed. (was "8bfbf7d9b46e9")
+	"core:spec/chat-side-character@1.0.0": "15899aae9ed73d",
 	// (was "b6ba835e86244", then "431aa4254af1", then "12971669b900fd",
 	//  then "bc304a8a52b71")
 	// ⚠ MOVED on the same terms as `narrate-character` above (09-B B4):
@@ -830,7 +869,14 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (history window): `contextBudget` runs before the
 	// reads and the transcript read takes its `budget` — sized by the window,
 	// not the newest 100 rows. Edited in place under the freeze. (was "a539352dbc260")
-	"core:spec/narrate@1.11.0": "a98a294e26041",
+	// Moved 2026-10-05 (sprites in-pipeline, plan D-a): gains the sprite step
+	// after `save` — `spritePick` (`core:oracle/pick-sprite@1`, handed the
+	// narration's text and no speaker, so it picks nothing) and `spriteShow` (`source: 'picker'`). And D-c: the retrieval arms' embed steps lose their
+	// `connection` slot, and `semantic.arm.queries` wires its own
+	// (`slot.connection()`). Edited in place under the freeze. Measured with other lanes'
+	// in-flight core-catalog edits in the tree. (was "a98a294e26041")
+	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/narrate`; nothing else changed. (was "cdba24cd29eaf")
+	"core:spec/chat-narrate@1.11.0": "1890d6de7d7cfc",
 	// ⚠ `core:spec/respond@1.20.0`'s hash MOVED for the SECOND time without a
 	// bump, on the same terms as the two paragraphs above and paired with
 	// `drizzle/0106_continuation_prefill_reprojection`, which deletes its
@@ -991,7 +1037,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): an `attachments` query (history-attachments) wired into `batches`, which names each file after its message's text and counts it in the cut.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "1b308b18a35d96")
-	"core:spec/summarize-world@1.3.0": "17b311b14fdba7",
+	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "17b311b14fdba7")
+	"core:spec/summarize-world@1.3.0": "8bc929819eff7",
 	// Moved 2026-09-30 (config grouping, catalog lane): `expose.label` (and, on
 	// a model call of a multi-call spec, `expose.purpose`) names the step in
 	// settings. Display text only; the run is unchanged. Proven: a copy of
@@ -1000,7 +1047,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): an `attachments` query (history-attachments) wired into `batches`, which names each file after its message's text and counts it in the cut.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "1bad3c7575bf71")
-	"core:spec/summarize-character@1.3.0": "1832ba27d42a06",
+	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "1832ba27d42a06")
+	"core:spec/summarize-character@1.3.0": "28cbabf6ea61b",
 	// ⚠ `summarize-scene@1.3.0`'s hash MOVED a SECOND time, again under an
 	// unchanged version, and again paired with a migration —
 	// `drizzle/0104_ice_scene_cast_extraction.sql` deletes its published
@@ -1023,7 +1071,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): an `attachments` query (history-attachments) wired into `batches`, which names each file after its message's text and counts it in the cut.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "1ba1f48dae9bdb")
-	"core:spec/summarize-scene@1.3.0": "7469e93c1c11c",
+	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "7469e93c1c11c")
+	"core:spec/summarize-scene@1.3.0": "e0c98ab5632b4",
 	// Moved 2026-09-30 (config grouping, catalog lane): `expose.label` (and, on
 	// a model call of a multi-call spec, `expose.purpose`) names the step in
 	// settings. Display text only; the run is unchanged. Proven: a copy of
@@ -1032,7 +1081,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): an `attachments` query (history-attachments) wired into `batches`, which names each file after its message's text and counts it in the cut.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "6a6de8aef8046")
-	"core:spec/summarize-history@1.3.0": "1f93de35465e8c",
+	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "1f93de35465e8c")
+	"core:spec/summarize-history@1.3.0": "49cbc8b7ae8dc",
 	// Moved 2026-09-30 (config grouping, catalog lane): `expose.label` (and, on
 	// a model call of a multi-call spec, `expose.purpose`) names the step in
 	// settings. Display text only; the run is unchanged. Proven: a copy of
@@ -1060,7 +1110,8 @@ const PUBLISHED: Record<string, string> = {
 	// core:spec/echo@1.0.0 was here until 2026-10-02: the review-gate demo
 	// action, removed with its `/echo` slash (owner note 35). (was "11ae37dfe16695")
 	// 2026-09-26: annex fields — core's one pipeline for every declared field.
-	"core:spec/set-annex-field@1.0.0": "7e5c1e7091921",
+	// Moved 2026-10-05 (lock, PLAN-catalogue-and-pipeline-names N3): its inlet loses the Chat lock. (was "7e5c1e7091921")
+	"core:spec/set-annex-field@1.0.0": "1fc239ad46fb2d",
 	/**
 	 * The built-in writes (U5b, R-15, 2026-09-16) — five NEW slugs, one per
 	 * message verb core implements: `core:inlet/built-in-request@1` straight
@@ -1076,7 +1127,10 @@ const PUBLISHED: Record<string, string> = {
 	// built-in (its outlet is also placed by the reply specs' sprite tail).
 	// The five reply specs above moved in place for the tail; re-projected by
 	// drizzle/0169_sprite_tail_reprojection.
-	"core:spec/show-sprite@1.0.0": "1546b4989f83e5",
+	// Moved 2026-10-05 (plan D1): the outlet states `source: 'person'`, which
+	// the host decided from this spec's id until then. Edited in place under
+	// the freeze. (was "1546b4989f83e5")
+	"core:spec/show-sprite@1.0.0": "17dc7bd666c9b9",
 	// 1.0.0: local image generation end to end — a composer button, the review
 	// gate as the prompt entry, and the render posted as a message.
 	// Hash moved: `render` names its `params` slot, which the node type now
@@ -1093,7 +1147,8 @@ const PUBLISHED: Record<string, string> = {
 	// should the image show?', required) — it read `$.input.text` and got none since B10 — and the
 	// description says _Describe an image_. Proven: the built document with `collects` deleted and
 	// the old description hashes back to the old pin. (was "98d860e73c870")
-	"core:spec/generate-image@1.0.0": "13c2fc5dd571ad",
+	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/generate-image`; nothing else changed. (was "13c2fc5dd571ad")
+	"core:spec/chat-generate-image@1.0.0": "136d2be67a5584",
 	// 1.0.0: the tool-loop reference (20 §9, 01 §4a) — a bounded agentic turn
 	// written out, bound to no genre so it is never offered in a composer. New
 	// slug, not a bump: the 0.6 freeze forbids moving an existing semver and
@@ -1126,7 +1181,15 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): placement steps outside the loop, and the template's conversation section walks `sessionMessages` (it read `{{{chatMessages}}}`, which nothing supplies — the transcript never rendered).
 	// ⚠ So this prompt moved for every run, files or none — the one spec
 	// here outside the parity guard. (was "17e31a156cbbd1")
-	"core:spec/tool-loop@1.0.0": "1978e9fb475a8",
+	// Moved 2026-10-05 (sprites in-pipeline, plan D1/D-b; owner: "not a
+	// wrapper"): the retired `withSpriteTail` nodes give way to the sprite step
+	// written out after `save` — `spritePick` (`core:oracle/pick-sprite@1`,
+	// handed the reply's text and speaker) and `spriteShow` (`source:
+	// 'picker'`). Edited in place under the freeze. Measured with other lanes'
+	// in-flight core-catalog edits in the tree. (was "1978e9fb475a8")
+	// 2026-10-05 (PLAN-catalogue-and-pipeline-names N3): left `CORE_SPECS` — a reference spec, no longer
+	// seeded — so this pin is a record and checks nothing; the SDK's own tests pin it.
+	"core:spec/tool-loop@1.0.0": "94d7aa42be32b",
 	/**
 	 * The **Lair** genre (plans/genres-and-showcase-plugins §3, U3) — nine new
 	 * slugs, and nothing above them moves. Every node they pin is one core
@@ -1327,7 +1390,13 @@ const PUBLISHED: Record<string, string> = {
 	// reads; `gather.history.read` and the Sanctum's `talk` take its `budget` —
 	// sized by the window, not the newest 100 rows. Edited in place under the
 	// freeze. (was "a3874a2f8cc28")
-	"core:spec/lair-respond@1.0.0": "13506ae2e7456",
+	// Moved 2026-10-05 (sprites in-pipeline, plan D-a): gains the sprite step
+	// in the character turn, after its `save` — `spritePick` (`core:oracle/pick-sprite@1`, handed the
+	// reply's text and speaker) and `spriteShow` (`source: 'picker'`). And D-c: the retrieval arms' embed steps lose their
+	// `connection` slot, and `semantic.arm.queries` wires its own
+	// (`slot.connection()`). Edited in place under the freeze. Measured with other lanes'
+	// in-flight core-catalog edits in the tree. (was "13506ae2e7456")
+	"core:spec/lair-respond@1.0.0": "198869a81e17d5",
 	// Moved twice on 2026-09-17. First (L3, contracts batch 2): `params:
 	// slot.params()` on the `create-lore-entry` node. That outlet now declares
 	// an `entryType` parameters slot, and a slot the spec never NAMES is not a
@@ -1536,7 +1605,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): `attachments` + `attached` (on `generate`'s pair) before `prompt`, and `{{{attachments}}}` in ANSWER_FORM_TEMPLATE's message loop.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "1c32eb6a456349")
-	"core:spec/answer-form-lair@1.0.0": "d5cd2911aa349",
+	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/answer-form-lair`; nothing else changed. (was "d5cd2911aa349")
+	"core:spec/lair-answer-form@1.0.0": "1e04feae5374a",
 }
 
 describe("published spec hashes", () => {

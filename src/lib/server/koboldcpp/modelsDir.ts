@@ -30,6 +30,15 @@
  * — a migration shuffling multi-gigabyte models would be unrecoverable if it were
  * interrupted, and the read-side retry below makes it unnecessary.
  *
+ * ## Embedding models live with the text models
+ *
+ * The third kind, `embeddings`, has no directory of its own: an embedding GGUF
+ * is a GGUF like any LLM, and it resolves to the text directory for reads and
+ * writes alike. A column of its own (the image precedent) would be a settings
+ * row, a migration and a Settings-tab field for a folder that holds a handful
+ * of small files; `modelsDirFor` is the one place that would change if it ever
+ * gets one.
+ *
  * ## Reads may retry; writes never do
  *
  * A read (load, delete, size) tries the kind's own directory and then the other
@@ -41,6 +50,7 @@
 
 import * as path from "path"
 import * as fsPromises from "fs/promises"
+import type { DecidedModelKind } from "./modelKind"
 
 /** Only the two columns this module reads, so a caller can hand it a settings
  * row, a patch, or a test fixture without dragging the whole table along. */
@@ -51,9 +61,12 @@ export interface ModelsDirSettings {
 
 type ModelKindFilter = Sockets.KoboldCPP.ModelKindFilter
 
-const OTHER_KIND: Record<ModelKindFilter, ModelKindFilter> = {
+/** The directory a read retries in. Embeddings' own directory IS the text
+ * one, so its other is the image one, exactly as text's is. */
+const OTHER_KIND: Record<DecidedModelKind, ModelKindFilter> = {
 	text: "image",
-	image: "text"
+	image: "text",
+	embeddings: "image"
 }
 
 /**
@@ -61,12 +74,14 @@ const OTHER_KIND: Record<ModelKindFilter, ModelKindFilter> = {
  *
  * Image falls back to the text directory rather than to a derived sibling: a
  * sibling would be a folder the user never chose and has nothing in.
+ * Embeddings IS the text directory (see the header).
  */
 export function modelsDirFor(
-	kind: ModelKindFilter,
+	kind: DecidedModelKind,
 	settings: ModelsDirSettings
 ): string | null {
-	if (kind === "text") return settings.koboldCppManagerModelsDir || null
+	if (kind === "text" || kind === "embeddings")
+		return settings.koboldCppManagerModelsDir || null
 	return (
 		settings.koboldCppImageModelsDir ||
 		settings.koboldCppManagerModelsDir ||
@@ -132,7 +147,7 @@ async function fileExists(full: string): Promise<boolean> {
  *     fallback.
  */
 export async function resolveModelPath(
-	kind: ModelKindFilter,
+	kind: DecidedModelKind,
 	filename: string,
 	settings: ModelsDirSettings,
 	opts: { mustExist: boolean }
@@ -141,7 +156,7 @@ export async function resolveModelPath(
 	const primary = modelsDirFor(kind, settings)
 	if (!primary) {
 		throw new Error(
-			`No ${kind === "text" ? "" : "image "}models directory is configured — set one in the Settings tab of KoboldCPP, run by Serene Pub.`
+			`No ${kind === "image" ? "image " : ""}models directory is configured — set one in the Settings tab of KoboldCPP, run by Serene Pub.`
 		)
 	}
 	const primaryPath = containedPath(primary, filename)

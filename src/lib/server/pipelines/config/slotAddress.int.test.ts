@@ -43,7 +43,7 @@ import {
 	type NamespaceView
 } from "$lib/server/pipelines/config/panel"
 import { buildWorld } from "$lib/server/pipelines/config/world"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import { groupOptions } from "$lib/server/pipelines/config/panel/groups"
 
 const SECRET = "slot-address-secret"
@@ -113,7 +113,7 @@ beforeAll(async () => {
 	const [spec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 	const [shipped] = await db
 		.select()
 		.from(schema.pipelineConfigs)
@@ -136,7 +136,7 @@ const connectionOption = async (): Promise<ConfigOption> => {
 	const v = (await namespaceView(
 		db,
 		SECRET,
-		RESPOND_SPEC_ID,
+		CHAT_RESPOND_SPEC_ID,
 		viewer()
 	)) as NamespaceView
 	const found = allOptions(v).find((o) => o.control === "connection-ref")
@@ -160,7 +160,7 @@ describe("a connection pick reaches the executor", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer(),
 			option.id,
 			chosenId
@@ -181,14 +181,14 @@ describe("a connection pick reaches the executor", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer(),
 			option.id,
 			chosenId
 		)
 
 		const nodeKey = await nodeKeyOf(option)
-		const world = await buildWorld(db, { specId: RESPOND_SPEC_ID })
+		const world = await buildWorld(db, { specId: CHAT_RESPOND_SPEC_ID })
 		const resolved = resolveConfig(world, [nodeKey])
 
 		expect(resolved[nodeKey]?.connection?.[SLOT_VALUE]).toBeDefined()
@@ -205,14 +205,14 @@ describe("a connection pick reaches the executor", () => {
 		await writeOption(
 			db,
 			SECRET,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			viewer(),
 			option.id,
 			chosenId
 		)
 
 		const nodeKey = await nodeKeyOf(option)
-		const world = await buildWorld(db, { specId: RESPOND_SPEC_ID })
+		const world = await buildWorld(db, { specId: CHAT_RESPOND_SPEC_ID })
 		const resolved = resolveConfig(world, [nodeKey])
 		const picked = String(resolved[nodeKey]!.connection![SLOT_VALUE])
 
@@ -231,7 +231,7 @@ describe("a connection pick reaches the executor", () => {
 	it("still falls back to the instance default when nothing is picked", async () => {
 		// The fallback is correct behaviour, not the bug — the bug was that it was
 		// the ONLY behaviour. A node with no pick must still resolve.
-		const world = await buildWorld(db, { specId: RESPOND_SPEC_ID })
+		const world = await buildWorld(db, { specId: CHAT_RESPOND_SPEC_ID })
 		expect(Object.values(world.activeConnection)).toContain(String(defaultId))
 	})
 })

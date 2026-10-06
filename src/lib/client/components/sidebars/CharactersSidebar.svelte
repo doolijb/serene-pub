@@ -1,4 +1,8 @@
 <script lang="ts">
+	import {
+		onCardImported,
+		onImportResolved
+	} from "$lib/client/contexts/characterImports.svelte"
 	import { avatarSrc } from "$lib/client/utils/media"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
@@ -966,30 +970,10 @@
 			showCharacterImportConflictModal = true
 			return
 		}
-		if (msg.status === "unchanged") {
-			toaster.success({
-				title: "Character already imported",
-				description: `"${msg.character?.nickname || msg.character?.name}" is unchanged — using the existing character.`
-			})
-			return
-		}
+		// The toast is the characters-import context's, once for every view.
+		if (msg.status === "unchanged") return
 		importingLorebook = msg.book || null
 		importingLorebookName = msg.book?.name ?? ""
-		// A warning means the character DID import, with part of the card
-		// (usually an over-sized image) skipped. It is a warning toast and
-		// never an error one: an error reads as "nothing was imported", which
-		// is the opposite of what happened.
-		if (msg.warnings?.length) {
-			toaster.warning({
-				title: `Character imported with warnings`,
-				description: `${msg.character!.nickname || msg.character!.name} was imported. ${msg.warnings.join(" ")}`
-			})
-		} else {
-			toaster.success({
-				title: `Character imported`,
-				description: `Character ${msg.character!.nickname || msg.character!.name} imported successfully.`
-			})
-		}
 		if (!!importingLorebook) {
 			importingLorebookCharacter = msg.character || null
 			showLorebookImportConfirmationModal = true
@@ -999,29 +983,13 @@
 	function handleCharactersImportResolve(
 		msg: Sockets.Characters.ImportResolve.Response
 	) {
+		// The toast is the characters-import context's, once for every view.
 		importingLorebook = msg.book || null
 		importingLorebookName = msg.book?.name ?? ""
-		if (msg.warnings?.length) {
-			toaster.warning({
-				title: `Character imported with warnings`,
-				description: `${msg.character.nickname || msg.character.name} was imported. ${msg.warnings.join(" ")}`
-			})
-		} else {
-			toaster.success({
-				title: `Character imported`,
-				description: `Character ${msg.character.nickname || msg.character.name} imported successfully.`
-			})
-		}
 		if (!!importingLorebook) {
 			importingLorebookCharacter = msg.character || null
 			showLorebookImportConfirmationModal = true
 		}
-	}
-
-	function handleCharactersImportResolveError(msg: Sockets.ErrorResponse) {
-		toaster.error({
-			title: msg.error || "Failed to resolve character import"
-		})
 	}
 
 	function handleCharactersExportCard(
@@ -1141,18 +1109,10 @@
 		"characterFolders:update:error",
 		handleCharacterFoldersWriteError
 	)
-	useInterest<"characters:importCard">(
-		"characters:importCard",
-		handleCharactersImportCard
-	)
-	useInterest<"characters:importResolve">(
-		"characters:importResolve",
-		handleCharactersImportResolve
-	)
-	useInterest<"characters:importResolve:error">(
-		"characters:importResolve:error",
-		handleCharactersImportResolveError
-	)
+	// The import events are the characters-import context's; this view takes
+	// the outcome for its conflict and lorebook dialogs.
+	onCardImported(handleCharactersImportCard)
+	onImportResolved(handleCharactersImportResolve)
 	useInterest<"characters:exportCard">(
 		"characters:exportCard",
 		handleCharactersExportCard

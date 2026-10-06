@@ -37,7 +37,7 @@ import * as schema from "$lib/server/db/schema"
 import { asc, notInArray } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { buildSystemSettingsGet } from "./systemSettings"
-import { S, type CapabilityId } from "@serene-pub/sdk"
+import { S } from "@serene-pub/sdk"
 import {
 	aggregateCombos,
 	compareCombos,
@@ -49,19 +49,13 @@ import {
 	judgeAgainst,
 	type ChoiceList
 } from "$lib/server/pipelines/config/panel/choices"
-import {
-	capabilityRefusal,
-	storedCapabilities
-} from "$lib/server/pipelines/runtime/capabilityGuard"
+import { storedCapabilities } from "$lib/server/pipelines/runtime/capabilityGuard"
 import {
 	capabilityDefaults,
 	setCapabilityDefault
 } from "$lib/server/connections/capabilityDefaults"
 import { withStarConsequences } from "$lib/server/connections/starConsequences"
-import {
-	connectionModelById,
-	mergeEndpointModel
-} from "$lib/server/connections/models"
+import { starRefusal } from "$lib/server/connections/starRefusal"
 
 const DENIED = "Access denied. Only admin users can manage capability defaults."
 
@@ -107,10 +101,12 @@ export async function combosFor(database: typeof db) {
 	/**
 	 * Plus every capability a Connections section's star registers.
 	 *
-	 * `text->entities` is demanded by no node definition and declared by no
-	 * manifest entry — the NER lane reads its star directly — so the union
-	 * above never lists it, and Defaults could neither show nor set the one
-	 * job the entity lane runs on. A star the Connections view can press is a
+	 * `text->entities` is demanded by no node definition — the NER lane reads
+	 * its star directly — so the union above lists it only through its
+	 * servable half, because the `local-onnx-ner` manifest entry declares it.
+	 * Without that entry Defaults could neither show nor set the one job the
+	 * entity lane runs on, so the section stars are added whatever the union
+	 * says. A star the Connections view can press is a
 	 * default this screen must be able to show; the list is closed and
 	 * already shared, so nothing here is a hardcoded capability. `servable`
 	 * is set because a section exists only for connections this build can
@@ -171,6 +167,12 @@ export async function buildConnectionDefaultsList(): Promise<Sockets.ConnectionD
 	// is not something anything reasons about. Carried, not consulted.
 	const notesById = new Map<number, string | null>(
 		(connectionRows as any[]).map((c) => [c.id, c.notes ?? null])
+	)
+	// Each connection's type, carried the same way: a fact the screen needs
+	// beside the verdict (a local ONNX row is greyed with the machine's
+	// reason where the runtime didn't load), never an input to it.
+	const typesById = new Map<number, string>(
+		(connectionRows as any[]).map((c) => [c.id, c.type])
 	)
 
 	const samplingRows = await db
@@ -233,6 +235,7 @@ export async function buildConnectionDefaultsList(): Promise<Sockets.ConnectionD
 			(entry) => ({
 				id: entry.id,
 				name: entry.label,
+				type: typesById.get(entry.id)!,
 				eligible: !entry.disabled,
 				...(entry.reason ? { reason: entry.reason } : {}),
 				...(notesById.get(entry.id)
@@ -311,84 +314,23 @@ export const connectionDefaultsSet: Handler<
 			throw new Error(error)
 		}
 
-		// A connection is judged before it is registered, by the SAME reader the
-		// picker above greyed the row with (`capabilityRefusal` →
-		// `storedCapabilities` → `judgeAgainst`). A write path that accepts what
-		// its own screen disables is not a hypothetical: the picker's `disabled`
-		// is markup, and this handler is reachable from a stale tab whose option
-		// list predates the connection being re-typed. Registering an image-only
-		// endpoint for chat succeeds, shows a check on screen, and then fails
-		// every Send with a sentence about adapters — exactly the failure an
-		// unguarded auto-star would produce.
+		// A connection is judged before it is registered, by `starRefusal` —
+		// the ONE judgement `connections:setDefault` asks too, so this door
+		// cannot accept what the star refuses (it once took a model its host no
+		// longer lists, and a local ONNX model that isn't downloaded). A write
+		// path that accepts what its own screen disables is not a hypothetical:
+		// the picker's `disabled` is markup, and this handler is reachable from
+		// a stale tab whose option list predates the connection being re-typed.
 		//
 		// Clearing (`id: null`) is never judged: it names no connection, and
-		// refusing to un-register would be a trap.
-		if (params.half === "connection" && params.id != null) {
-			const row = await db.query.connections.findFirst({
-				where: (c, { eq }) => eq(c.id, params.id!),
-				columns: {
-					id: true,
-					name: true,
-					type: true,
-					preset: true,
-					capabilities: true
-				}
+		// refusing to un-register would be a trap. The sampling half names no
+		// connection either.
+		if (params.half === "connection") {
+			const refusal = await starRefusal(db, {
+				capability: params.capability,
+				connectionId: params.id,
+				connectionModelId: params.modelId
 			})
-			if (!row) {
-				const error = "Connection not found."
-				emitToUser("connectionDefaults:set:error", { error })
-				throw new Error(error)
-			}
-			/**
-			 * The MODEL half of the pair, validated before it is stored
-			 * and judged WITH the endpoint rather than after it.
-			 *
-			 * REQUIRED, not optional: connections have no default model, so a
-			 * registration without one is incomplete. A registration whose two
-			 * halves name different connections is a pair no picker can display
-			 * and no run can resolve — the resolver refuses it, at dispatch,
-			 * about a choice this screen accepted. So the coherence check lives
-			 * here, at the write, which is also the only place that can answer
-			 * it: `connection_defaults` has two foreign keys and no constraint
-			 * spanning them, because a check cannot span two tables and a
-			 * trigger would be a fourth place that decides what a pair means.
-			 */
-			if (params.modelId == null) {
-				const error =
-					"Choose a model on this connection — connections have no default model."
-				emitToUser("connectionDefaults:set:error", { error })
-				throw new Error(error)
-			}
-			{
-				const model = await connectionModelById(db, params.modelId)
-				const bad = !model
-					? "That model no longer exists."
-					: model.connectionId !== params.id
-						? "That model is not on the connection you chose."
-						: !model.enabled
-							? "That model is switched off. Switch it on, or choose another."
-							: null
-				if (bad) {
-					emitToUser("connectionDefaults:set:error", { error: bad })
-					throw new Error(bad)
-				}
-			}
-			/**
-			 * Judged as the PAIR, not as the endpoint.
-			 *
-			 * After the split "what can this do" is a question about a model: one
-			 * host serves a vision checkpoint and a text-only one at the same base
-			 * URL, and judging the bare endpoint would register the text-only one
-			 * for vision and fail at the first image. `mergeEndpointModel` is the
-			 * same merge the resolver performs, so this screen and the run agree
-			 * about what was registered. That agreement is why `capabilityRefusal`
-			 * is imported here rather than re-derived.
-			 */
-			const model = await connectionModelById(db, params.modelId)
-			const refusal = capabilityRefusal(
-				mergeEndpointModel(row as any, model) as any,
-				params.capability as CapabilityId
-			)
 			if (refusal) {
 				emitToUser("connectionDefaults:set:error", { error: refusal })
 				throw new Error(refusal)

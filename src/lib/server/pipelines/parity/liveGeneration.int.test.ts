@@ -25,7 +25,7 @@ import path from "path"
 import { eq } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 
 const OLLAMA = "http://localhost:11434"
 
@@ -202,7 +202,7 @@ describe("a real reply, all the way through", () => {
 			userId,
 			currentCharacterId: characterId,
 			text: "Say hello in five words or fewer.",
-			specId: RESPOND_SPEC_ID,
+			specId: CHAT_RESPOND_SPEC_ID,
 			seed: "live-generation"
 		})
 

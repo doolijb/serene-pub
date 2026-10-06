@@ -318,19 +318,21 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 				name,
 				batch
 			})
-		else {
-			// The display name is display, not content: a copyedit in the
-			// catalog reaches existing installs without a version bump —
-			// the same rule the definition registry applies to i18n.
-			await db
-				.update(schema.pipelineSpecs)
-				.set({ name })
-				.where(
-					and(
-						eq(schema.pipelineSpecs.slug, doc.id),
-						ne(schema.pipelineSpecs.name, name)
-					)
+		// The display name is display, not content: a copyedit in the catalog
+		// reaches existing installs without a version bump — the same rule the
+		// definition registry applies to i18n. On BOTH paths: `saveDocument`
+		// names a row only when it inserts one, so a new version of an
+		// existing pipeline would otherwise keep its old name.
+		await db
+			.update(schema.pipelineSpecs)
+			.set({ name })
+			.where(
+				and(
+					eq(schema.pipelineSpecs.slug, doc.id),
+					ne(schema.pipelineSpecs.name, name)
 				)
+			)
+		if (action === "present") {
 			// `pipeline_nodes.expose` (0155, R28) arrived after documents
 			// already carried the mark: a version stored in between is
 			// "present" under the right hash with the column NULL, which
@@ -602,7 +604,7 @@ export interface RebindMoveReport {
 
 /** The speaker rebind's old homes — core's two respond specs (§7), node `speaker`. */
 const SPEAKER_REBIND_SPECS = [
-	"core:spec/respond",
+	"core:spec/chat-respond",
 	"core:spec/guide-respond"
 ]
 

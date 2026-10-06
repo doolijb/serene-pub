@@ -1,16 +1,20 @@
 /**
- * "Choose sprites" off makes no embedding request.
+ * The sprite picker's embedding request (`core:oracle/pick-sprite@1`, in each
+ * reply spec since 2026-10-05).
  *
- * The sprite tail embeds the line and the speaker's sprite labels inside
- * `sprites-for`, a query that sits BEFORE the picker whose `enabled` is the
- * switch — so with the switch off the picker picked nothing but the embed was
- * still made: a provider call per reply, with an embedding service starred,
- * that bought nothing. The host now reads the picker's resolved `enabled` for
- * the run and skips the embed when it is off.
+ * "Choose sprites" off makes no embedding request: the embed lives behind the
+ * picker's own call, and the binding returns before it when `enabled` is
+ * false — so no host pre-read of the setting is needed, and none exists. (The
+ * retired sprite tail embedded in a query BEFORE the picker, so the host had
+ * to read the picker's `enabled` ahead of the run.)
+ *
+ * And the picker embeds the line it is HANDED — the reply text the spec wires
+ * to its `text` — never a row the host re-reads (owner, 2026-10-05: "the
+ * explicit text or string passed in").
  *
  * Counted on the embedding module's spy, through `runReply` on the shipped
- * `core:spec/respond`, with Search by meaning switched Off so the only embed a
- * turn can make is the sprite tail's.
+ * `core:spec/chat-respond`, with Search by meaning switched Off so the only embed a
+ * turn can make is the picker's.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
@@ -136,7 +140,7 @@ async function makeSession() {
 		role: "user",
 		content: "How are you today?"
 	} as any)
-	// Only the sprite tail may embed in these turns.
+	// Only the sprite picker may embed in these turns.
 	await sessionOverride(
 		session.id,
 		"semantic.arm.queries",
@@ -168,14 +172,14 @@ beforeAll(async () => {
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	db = (await import("$lib/server/db")).db as unknown as TestDb
 
-	const { bootstrapPipelines, RESPOND_SPEC_ID } = await import(
+	const { bootstrapPipelines, CHAT_RESPOND_SPEC_ID } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	await bootstrapPipelines(db)
 	const [spec] = await db
 		.select({ id: schema.pipelineSpecs.id })
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 	respondSpecId = spec!.id
 
 	const { createTestUser } = await import("$lib/server/utils/testDb")
@@ -228,12 +232,14 @@ afterAll(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true })
 })
 
-describe("the sprite tail's embedding request", () => {
-	it("is made once per reply while Choose sprites is on (the control)", async () => {
+describe("the sprite picker's embedding request", () => {
+	it("is made once per reply while Choose sprites is on, with the reply's text (the control)", async () => {
 		const sessionId = await makeSession()
 		await turn(sessionId)
 		expect(embedCalls.length).toBe(1)
-		// …and the tail reached the saved line: a face was chosen for it.
+		// The line it was handed first, then the labels not cached yet.
+		expect(embedCalls[0]![0]).toBe("She smiled, full of joy.")
+		// …and the step reached the saved line: a face was chosen for it.
 		const [reply] = await db
 			.select({ metadata: schema.sessionMessages.metadata })
 			.from(schema.sessionMessages)
@@ -251,10 +257,116 @@ describe("the sprite tail's embedding request", () => {
 		await sessionOverride(sessionId, SPRITE_PICKER_NODE_KEY, "enabled", false)
 		const outcome: any = await turn(sessionId)
 		expect(embedCalls).toEqual([])
-		// The tail still ran, and picked nothing.
+		// The step still ran, and picked nothing.
 		const pick = (outcome.receipt?.nodes ?? []).find(
 			(n: any) => n.nodeKey === SPRITE_PICKER_NODE_KEY
 		)
+		expect(pick).toBeTruthy()
 		expect(pick?.output?.main ?? null).toBeNull()
+	})
+})
+
+/**
+ * The binding and the host together, off a run: the picker handed one string
+ * while the row it will be recorded on says another. Only the wired string
+ * may reach the embedding model.
+ */
+describe("the picker embeds the text it is wired, never the saved row", () => {
+	const node = {
+		key: "spritePick",
+		definitionId: "core:oracle/pick-sprite",
+		definitionVersion: 1
+	}
+
+	async function pickWith(
+		sessionId: number,
+		liveRow: number,
+		input: Record<string, unknown>
+	) {
+		const { coreBindings } = await import(
+			"$lib/server/pipelines/runtime/bindings"
+		)
+		const { createHost } = await import("$lib/server/pipelines/runtime/host")
+		const host = createHost(db as any, { sessionId, userId })
+		const calls: unknown[] = []
+		const ctx = {
+			call: (payload: unknown) => {
+				calls.push(payload)
+				return host.call!(payload, node as any, { liveRow } as any)
+			},
+			log: () => {}
+		}
+		embedCalls.length = 0
+		const result: any = await (coreBindings() as any)[
+			"core:oracle/pick-sprite@1"
+		](
+			{
+				scope: { sessionId },
+				speaker: `character:${characterId}`,
+				params: {},
+				...input
+			},
+			ctx
+		)
+		return { result, calls }
+	}
+
+	it("embeds the wired text, and the choices carry no text of their own", async () => {
+		const sessionId = await makeSession()
+		const [saved] = await db
+			.insert(schema.sessionMessages)
+			.values({
+				sessionId,
+				role: "assistant",
+				characterId,
+				content: "Words the row holds and nobody wired."
+			} as any)
+			.returning()
+		const { result, calls } = await pickWith(sessionId, saved.id, {
+			text: "She smiled, full of joy."
+		})
+		expect(calls).toEqual([
+			expect.objectContaining({ text: "She smiled, full of joy." })
+		])
+		expect(embedCalls.length).toBe(1)
+		expect(embedCalls[0]![0]).toBe("She smiled, full of joy.")
+		expect(embedCalls.flat()).not.toContain(
+			"Words the row holds and nobody wired."
+		)
+		expect(result.kind).toBe("ok")
+		expect(result.value.main).toMatchObject({ set: "default" })
+		expect(result.value.choices).toMatchObject({ labels: ["joy", "neutral"] })
+		expect(result.value.choices).not.toHaveProperty("text")
+	})
+
+	it("makes no call for a speaker who is not a character, or with Choose sprites off", async () => {
+		const sessionId = await makeSession()
+		for (const input of [
+			{ text: "Rain.", speaker: undefined },
+			{ text: "Rain.", speaker: "envoy:keeper" },
+			{ text: "Hello.", params: { enabled: false } }
+		]) {
+			const { result, calls } = await pickWith(sessionId, 0, input)
+			expect(calls).toEqual([])
+			expect(embedCalls).toEqual([])
+			expect(result).toEqual({
+				kind: "ok",
+				value: { main: null, pick: null, choices: null }
+			})
+		}
+	})
+
+	it("answers a failure with no pick, never an error", async () => {
+		const sessionId = await makeSession()
+		const { result } = await pickWith(sessionId, 0, {
+			text: "Hello.",
+			// Another session's scope: the host refuses it, the binding
+			// swallows the refusal — a face is never worth a failed reply.
+			scope: { sessionId: sessionId + 10_000 }
+		})
+		expect(result).toEqual({
+			kind: "ok",
+			value: { main: null, pick: null, choices: null }
+		})
 	})
 })

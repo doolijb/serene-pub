@@ -34,7 +34,7 @@ import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { run } from "@serene-pub/sdk"
 import { loadTokenizer } from "@serene-pub/sdk/tokenizers"
 import { eq } from "drizzle-orm"
-import { respondSpec, RESPOND_SPEC_ID } from "$lib/server/pipelines/specs/respond"
+import { respondSpec, CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs/respond"
 import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults"
 import { TEXT_CAPABILITY } from "$lib/server/connections/capabilityTarget"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
@@ -163,7 +163,7 @@ describe("tokenizerFor — which connection's setting a run budgets with", () =>
 		const { buildWorld } = await import(
 			"$lib/server/pipelines/config/world"
 		)
-		return await buildWorld(db, { sessionId, specId: RESPOND_SPEC_ID })
+		return await buildWorld(db, { sessionId, specId: CHAT_RESPOND_SPEC_ID })
 	}
 
 	it("reads the column off the registered text->text default", async () => {
@@ -182,7 +182,7 @@ describe("tokenizerFor — which connection's setting a run budgets with", () =>
 		const [spec] = await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		const [config] = await db
 			.insert(schema.pipelineConfigs)
 			.values({
@@ -217,7 +217,7 @@ describe("tokenizerFor — which connection's setting a run budgets with", () =>
 		const [spec] = await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		await db.insert(schema.pipelineNodeOverrides).values({
 			specId: spec!.id,
 			scopeKind: "session",
@@ -285,7 +285,7 @@ describe("the id reaches the number", () => {
 			"$lib/server/pipelines/config/world"
 		)
 		const id = tokenizerFor(
-			await buildWorld(db, { sessionId, specId: RESPOND_SPEC_ID }),
+			await buildWorld(db, { sessionId, specId: CHAT_RESPOND_SPEC_ID }),
 			respondSpec()
 		)
 		expect(id).toBe(TokenCounterOptions.OPENAI_GPT4O)

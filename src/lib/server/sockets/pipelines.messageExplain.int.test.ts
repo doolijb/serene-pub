@@ -133,7 +133,7 @@ beforeAll(async () => {
 		.insert(schema.pipelineRuns)
 		.values({
 			runId: "message-explain-run",
-			specSlug: "core:spec/respond",
+			specSlug: "core:spec/chat-respond",
 			specVersion: "1.0.0",
 			userId: ownerId,
 			sessionId,

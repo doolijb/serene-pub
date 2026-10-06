@@ -43,7 +43,13 @@
 	 * Downloading switches nothing — which is the one sentence on this screen
 	 * that people most need, and why it is in the info line rather than a
 	 * tooltip.
+	 *
+	 * ⚠ **On a machine whose ONNX runtime didn't load** the endpoint still
+	 * opens — the row is real, and a later build may run it — but it says why
+	 * at the top and offers no Download or Retry: each would be refused with
+	 * the same sentence (`localOnnxRefusal` on the server).
 	 */
+	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -66,6 +72,7 @@
 	import DownloadsView from "./DownloadsView.svelte"
 	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
 	import type { CapabilityDefaultRef } from "./modelSystemDefaults"
+	import { localOnnxDisabledReason } from "$lib/shared/utils/connectionServiceItems"
 
 	type ModelRow = Sockets.Connections.Models.ModelRow
 
@@ -108,6 +115,14 @@
 	}: Props = $props()
 
 	const socket = useTypedSocket()
+	const systemSettingsCtx: SystemSettingsCtx | undefined =
+		getContext("systemSettingsCtx")
+	/** Why nothing can download here, or null when it can. */
+	const unavailable = $derived(
+		localOnnxDisabledReason(
+			systemSettingsCtx?.settings?.localOnnxAvailability
+		)
+	)
 
 	const modality = $derived<OnnxModality>(
 		connection.type === CONNECTION_TYPE.LOCAL_ONNX_NER ||
@@ -237,21 +252,35 @@
 	 * The ONE action a row offers. Mirrors `rowAction` in spirit, spelled out
 	 * here because the table's active row shows no action at all — there is
 	 * nothing left to ask of the model already in charge.
+	 *
+	 * Where the runtime didn't load, Make active stays on a downloaded row,
+	 * disabled with the reason (`disabledReason`): the server refuses the
+	 * star with the same sentence, and the files are real. Download and Retry
+	 * give way entirely — the warning above already says why.
 	 */
-	function rowVerb(model: ModelRow) {
+	function rowVerb(
+		model: ModelRow
+	): { label: string; press: () => void; disabledReason?: string } | null {
 		if (isActiveRow(model)) return null
 		switch (model.local?.state) {
 			case "on_disk":
 				return {
 					label: "Make active",
-					press: () => onMakeActive(model)
+					press: () => {
+						if (!unavailable) onMakeActive(model)
+					},
+					...(unavailable ? { disabledReason: unavailable } : {})
 				}
 			case "downloading":
 				return { label: "Cancel", press: () => onCancel(model) }
 			case "error":
-				return { label: "Retry", press: () => onRetry(model) }
+				return unavailable
+					? null
+					: { label: "Retry", press: () => onRetry(model) }
 			case "not_downloaded":
-				return { label: "Download", press: () => onDownload(model) }
+				return unavailable
+					? null
+					: { label: "Download", press: () => onDownload(model) }
 			default:
 				// The server has not answered for this row; an action guessed
 				// from silence is one that fails on press.
@@ -284,6 +313,19 @@
 		<SectionIcon size={14} aria-hidden="true" />
 		Runs inside Serene Pub · no server to run · loads on use
 	</p>
+
+	{#if unavailable}
+		<p
+			class="preset-tonal-warning flex items-start gap-2 rounded-lg p-2 text-xs break-words"
+		>
+			<Icons.TriangleAlert
+				size={14}
+				class="mt-0.5 shrink-0"
+				aria-hidden="true"
+			/>
+			<span class="min-w-0">{unavailable}</span>
+		</p>
+	{/if}
 
 	<!-- The lane, as pills. Each one is a fact the server answered; a lane that
 	     has not answered shows none of them rather than a placeholder. -->
@@ -358,6 +400,7 @@
 			canUse={!!verb}
 			useLabel={verb?.label ?? ""}
 			useShortLabel={verb?.label ?? ""}
+			useDisabledReason={verb?.disabledReason}
 			onOpen={() => onOpenModel(model)}
 			onUse={() => verb?.press()}
 		/>
@@ -492,18 +535,27 @@
 		     second copy of that form here: one way in per endpoint. -->
 		<div class="panel-card flex flex-col items-start gap-2">
 			<p class="text-sm font-medium">No models yet</p>
-			<p class="text-surface-600-400 text-xs">
-				Nothing is downloaded to this machine. Get one and it appears
-				here — it downloads once.
-			</p>
-			<button
-				type="button"
-				class="btn btn-sm preset-filled-primary-500"
-				onclick={() => (tab = "get")}
-			>
-				<Icons.Download size={15} aria-hidden="true" />
-				Get a model
-			</button>
+			{#if unavailable}
+				<!-- The warning above already says why; a Get button here
+				     would lead to a finder whose every Get is disabled. -->
+				<p class="text-surface-600-400 text-xs">
+					Nothing is downloaded to this machine, and nothing can be
+					until it can run local models.
+				</p>
+			{:else}
+				<p class="text-surface-600-400 text-xs">
+					Nothing is downloaded to this machine. Get one and it appears
+					here — it downloads once.
+				</p>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-primary-500"
+					onclick={() => (tab = "get")}
+				>
+					<Icons.Download size={15} aria-hidden="true" />
+					Get a model
+				</button>
+			{/if}
 		</div>
 	{/snippet}
 
@@ -583,7 +635,12 @@
 				{#if verb}
 					<button
 						type="button"
-						class="btn btn-sm preset-filled-surface-400-600 whitespace-nowrap"
+						class="btn btn-sm preset-filled-surface-400-600 whitespace-nowrap disabled:cursor-not-allowed"
+						disabled={!!verb.disabledReason}
+						title={verb.disabledReason}
+						aria-label={verb.disabledReason
+							? `${verb.label} — ${verb.disabledReason}`
+							: undefined}
 						onclick={(e) => {
 							e.stopPropagation()
 							verb.press()

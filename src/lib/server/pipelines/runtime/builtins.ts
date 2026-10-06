@@ -94,8 +94,9 @@ export async function runBuiltIn(
  * A person's message action that is not a built-in but runs like one — the
  * same one-node shape, receipt, gate and row push. Today: a line's sprite
  * (`core:spec/show-sprite`, DESIGN-sprites §6), whose outlet the reply specs'
- * sprite tail also places, which is exactly why it cannot be a built-in (a
- * built-in outlet may appear in its own spec and nowhere else).
+ * sprite step also places (`spriteShow`, `source: 'picker'`), which is exactly
+ * why it cannot be a built-in (a built-in outlet may appear in its own spec
+ * and nowhere else).
  */
 export async function runSpriteAction(
 	db: Db,

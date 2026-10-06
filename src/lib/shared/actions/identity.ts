@@ -12,7 +12,7 @@
  * or may not be allowed to press.
  *
  * Core's message verbs are listed under the spec slug `core` (a name, not a
- * row), so `core#edit` is one of them and `core:spec/narrate#narrate` is a
+ * row), so `core#edit` is one of them and `core:spec/chat-narrate#narrate` is a
  * contributed action.
  */
 
@@ -27,7 +27,7 @@ export const CORE_ACTION_SPEC = CORE_ACTION_SPEC_ID
 
 /**
  * What an identity looks like on the wire: a spec slug (`core`,
- * `core:spec/narrate`, `acme:spec/roll`) and a key (a lowercase kebab
+ * `core:spec/chat-narrate`, `acme:spec/roll`) and a key (a lowercase kebab
  * token), joined by `#`. What `sessions:actionsSeen` accepts and nothing
  * looser (U5c review, S3). ONE grammar: the SDK's, which the block
  * validator (`checkMessageBlocks`) and the preset builder (`preset()`) apply
@@ -51,8 +51,8 @@ export const isCoreActionIdentity = (identity: string): boolean =>
  * narrator button and its side-character half. Both have a bespoke road: the
  * client opens the narrator modal for either and fires the dedicated event,
  * and `fireAction` refuses them by name. The slugs are the catalog's
- * (`NARRATE_SPEC_ID`, `NARRATE_CHARACTER_SPEC_ID`), spelled here so the
+ * (`CHAT_NARRATE_SPEC_ID`, `CHAT_SIDE_CHARACTER_SPEC_ID`), spelled here so the
  * client never imports the catalog for two strings.
  */
-export const NARRATE_ACTION = "core:spec/narrate#narrate"
-export const NARRATE_CHARACTER_ACTION = "core:spec/narrate-character#narrate-character"
+export const NARRATE_ACTION = "core:spec/chat-narrate#narrate"
+export const NARRATE_CHARACTER_ACTION = "core:spec/chat-side-character#narrate-character"

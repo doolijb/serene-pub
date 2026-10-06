@@ -13,10 +13,17 @@
  * chain's database with the old ledger rows: that is what these cases build,
  * from the real `drizzle/` and the pinned pre-squash hashes. Older prefixes
  * would need the pre-squash `0095` itself, which lives only in the archive.
+ *
+ * Built from the squashed chain as pr-1 shipped it (`0000`–`0096`), never the
+ * whole of `drizzle/`: a pre-squash database never applied a migration added
+ * since the squash (`0097_ner_entity_label` on). Those are what the ordinary
+ * migrate after a splice applies, and one case below follows it that far.
  */
 
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { createHash } from "node:crypto"
+import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { PGlite } from "@electric-sql/pglite"
 import { drizzle } from "drizzle-orm/pglite"
@@ -32,6 +39,34 @@ import { runMigrationsWithUpgrades } from "./dataUpgrades"
 const REAL = path.resolve(process.cwd(), "drizzle")
 const tagIndex = (tag: string) =>
 	PRESQUASH_CHAIN.findIndex((m) => m.tag === tag)
+
+const shipped = readJournalMigrations(REAL)
+const squashEnd =
+	shipped.findIndex((m) => m.tag === SQUASHED_CHAIN.at(-1)!.tag) + 1
+/** What this build added since the squash, pending after a splice. */
+const since = shipped.slice(squashEnd)
+
+/** `drizzle/` through the squashed chain: what pr-1 shipped. */
+let squashSet: string
+beforeAll(() => {
+	squashSet = fs.mkdtempSync(
+		path.join(os.tmpdir(), "serene-pub-vitest-ledger-squash-set-")
+	)
+	const journal = JSON.parse(
+		fs.readFileSync(path.join(REAL, "meta/_journal.json"), "utf8")
+	)
+	journal.entries = journal.entries.slice(0, squashEnd)
+	fs.mkdirSync(path.join(squashSet, "meta"))
+	fs.writeFileSync(
+		path.join(squashSet, "meta/_journal.json"),
+		JSON.stringify(journal)
+	)
+	for (const { tag } of journal.entries)
+		fs.copyFileSync(
+			path.join(REAL, `${tag}.sql`),
+			path.join(squashSet, `${tag}.sql`)
+		)
+})
 
 type Ledger = { hash: string; created_at: number }[]
 
@@ -61,23 +96,36 @@ async function presquashLedgerThrough(through: string) {
 		)
 }
 
+/** The tables `0097_ner_entity_label` gives an `entity_label`. */
+async function labelledTables(): Promise<string[]> {
+	return (
+		await client.query<{ table_name: string }>(
+			`select table_name from information_schema.columns
+			where table_schema = 'public' and column_name = 'entity_label'
+			order by table_name`
+		)
+	).rows.map((r) => r.table_name)
+}
+
 const splice = () =>
 	spliceSquashedLedger(db as unknown as MigrationDb, {
 		migrationsFolder: REAL
 	})
 
-let freshLedger: Ledger
+/** The ledger of a database on the squashed chain, nothing added since. */
+let squashLedger: Ledger
 
 beforeEach(async () => {
 	client = new PGlite()
 	clients.push(client)
 	db = drizzle(client)
-	await migrate(db, { migrationsFolder: REAL })
-	freshLedger ??= await ledger()
+	await migrate(db, { migrationsFolder: squashSet })
+	squashLedger ??= await ledger()
 }, 60_000)
 
 afterAll(async () => {
 	for (const c of clients) await c.close().catch(() => {})
+	fs.rmSync(squashSet, { recursive: true, force: true })
 })
 
 describe("the pins", () => {
@@ -102,7 +150,15 @@ describe("the pins", () => {
 describe("a database the splice is not for", () => {
 	it("is left alone when it is on the squashed chain", async () => {
 		expect(await splice()).toEqual({ spliced: false, replayed: [] })
-		expect(await ledger()).toEqual(freshLedger)
+		expect(await ledger()).toEqual(squashLedger)
+	}, 60_000)
+
+	it("is left alone when it has applied what came after", async () => {
+		await migrate(db, { migrationsFolder: REAL })
+		const current = await ledger()
+		expect(current.length).toBe(shipped.length)
+		expect(await splice()).toEqual({ spliced: false, replayed: [] })
+		expect(await ledger()).toEqual(current)
 	}, 60_000)
 
 	it("is left alone when it has no ledger yet", async () => {
@@ -120,7 +176,7 @@ describe("a database the splice is not for", () => {
 })
 
 describe("the whole pre-squash chain applied", () => {
-	it("records the squashed chain in its place, and nothing is pending after", async () => {
+	it("records the squashed chain in its place", async () => {
 		await presquashLedgerThrough("0111_living_scene_look_reprojection")
 		const written: string[] = []
 		const result = await spliceSquashedLedger(
@@ -134,24 +190,48 @@ describe("the whole pre-squash chain applied", () => {
 		)
 		expect(result).toEqual({ spliced: true, replayed: [] })
 		expect(written).toEqual(["backup"])
-		expect(await ledger()).toEqual(freshLedger)
+		expect(await ledger()).toEqual(squashLedger)
+		// And the next boot does nothing.
+		expect(await splice()).toEqual({ spliced: false, replayed: [] })
+	}, 60_000)
 
-		const run = await runMigrationsWithUpgrades(
-			db as unknown as MigrationDb,
-			{
-				migrationsFolder: REAL,
-				skipUpgrades: true
-			}
-		)
-		expect(run.applied).toEqual([])
-		expect(await ledger()).toEqual(freshLedger)
+	it("then takes what this build added since the squash, through the ordinary migrate", async () => {
+		await presquashLedgerThrough("0111_living_scene_look_reprojection")
+		await splice()
+		expect(await labelledTables()).toEqual([])
+
+		// Each pending only if its stamp is above the newest the splice left:
+		// below it, drizzle would skip the file without a word.
+		const newest = Math.max(...(await ledger()).map((r) => r.created_at))
+		for (const m of since) expect(m.when, m.tag).toBeGreaterThan(newest)
+
+		await runMigrationsWithUpgrades(db as unknown as MigrationDb, {
+			migrationsFolder: REAL,
+			skipUpgrades: true
+		})
+		expect(await ledger()).toEqual([
+			...squashLedger,
+			...since.map((m) => ({ hash: m.hash, created_at: m.when }))
+		])
+		// 0097_ner_entity_label, by what it does rather than by its row.
+		expect(await labelledTables()).toEqual([
+			"entry_annotations",
+			"message_annotations"
+		])
+
+		// And nothing is left for the boots after.
 		expect(
 			await repairMigrationLedger(db as unknown as MigrationDb, {
 				migrationsFolder: REAL
 			})
 		).toEqual({ repaired: [], unrecognised: [] })
-		// And the next boot does nothing.
 		expect(await splice()).toEqual({ spliced: false, replayed: [] })
+		const settled = await ledger()
+		await runMigrationsWithUpgrades(db as unknown as MigrationDb, {
+			migrationsFolder: REAL,
+			skipUpgrades: true
+		})
+		expect(await ledger()).toEqual(settled)
 	}, 60_000)
 })
 
@@ -179,7 +259,7 @@ describe("a prefix of it applied", () => {
 				"0111_living_scene_look_reprojection"
 			]
 		})
-		expect(await ledger()).toEqual(freshLedger)
+		expect(await ledger()).toEqual(squashLedger)
 
 		const meta = (
 			await client.query<{ metadata: unknown }>(
@@ -236,6 +316,17 @@ describe("a ledger the splice refuses", () => {
 			[SQUASHED_CHAIN[1].hash]
 		)
 		expect(await refused()).toMatch(/mixes pre-squash rows/)
+	}, 60_000)
+
+	it("mixes them with a row of a migration added since the squash", async () => {
+		await presquashLedgerThrough("0111_living_scene_look_reprojection")
+		await client.query(
+			`insert into drizzle.__drizzle_migrations (hash, created_at) values ($1, $2)`,
+			[since[0].hash, since[0].when]
+		)
+		expect(await refused()).toMatch(
+			new RegExp(`mixes pre-squash rows with ${since[0].tag}, which`)
+		)
 	}, 60_000)
 
 	it("holds a row no migration here matches", async () => {

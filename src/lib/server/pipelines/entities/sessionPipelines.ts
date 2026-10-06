@@ -96,7 +96,7 @@ export async function sessionPipelines(
 	}
 
 	// The reply pipeline is always involved, titled by its own name
-	// (*Adventure turn*); then every function the session has switched on
+	// (*Reply*); then every function the session has switched on
 	// (19 §4). The verdict rather than the slug (ruled 2026-09-10): a preset
 	// binding that stopped resolving must not fail this read, and the list
 	// must not show a pipeline the preset does not name as though it had.

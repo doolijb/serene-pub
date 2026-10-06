@@ -20,7 +20,7 @@ To install it, see [Install Serene Pub](./install.md#android). If you'd rather u
 A phone can't do everything a computer can, so a few things differ:
 
 - **No model runs on the phone.** Serene Pub can't download and run KoboldCPP or Ollama for you here. Use an online service, or connect to a KoboldCPP, Ollama or similar program running on a computer on your network, from the Connections view like any other connection. See [Connect a model](./connect-a-model.md).
-- **Embeddings need an online or networked service.** The on-device **Local embeddings (ONNX)** and **Local named entities (ONNX)** connections don't work on Android. An embeddings connection to an API (OpenAI, or Ollama, LM Studio or llama.cpp on another computer) works normally. See [Embeddings and search by meaning](./embeddings-and-rag.md#embedding-connections).
+- **Embeddings need an online or networked service.** The on-device **Local embeddings (ONNX)** and **Local named entities (ONNX)** connections don't work on Android. They're still listed, greyed out, with the reason. An embeddings connection to an API (OpenAI, or Ollama, LM Studio or llama.cpp on another computer) works normally. See [Embeddings and search by meaning](./embeddings-and-rag.md#embedding-connections).
 - **One person only.** User accounts can't be turned on, so there's no sign-in and no inviting others.
 - **No tunnel.** The built-in tunnel for reaching your pub from elsewhere isn't available.
 - **No SillyTavern import.** Bringing in a whole SillyTavern library isn't offered. Character cards still import one at a time with **Import a card** (PNG, JSON, CHARX and the other card formats). Files are picked by tapping; there's no drag and drop.
@@ -28,7 +28,7 @@ A phone can't do everything a computer can, so a few things differ:
 
 ## Node.js runtime
 
-The app carries its own copy of Node.js, the engine Serene Pub's server runs on: **Node.js 24**, the same major version the desktop builds require.
+The app carries its own copy of Node.js, the engine Serene Pub's server runs on: **Node.js 24**, the oldest version Serene Pub supports. (The desktop builds ship Node.js 26; no Android build of Node.js 26 exists yet.)
 
 - **Dates and numbers format natively.** The engine has `Intl` built in, so no add-on is loaded for it. Text the server itself formats (rather than your phone's browser view) uses English conventions.
 - **Phones with 16 KB memory pages are supported.** Android 15 and newer can use 16 KB pages; every native library in the app is built for them.

@@ -13,6 +13,7 @@
 	 * fields above the divider are what every image connection has, and the
 	 * generated section below is what this backend alone offers.
 	 */
+	import { v4 as uuid } from "uuid"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
@@ -156,7 +157,7 @@
 		genMedia = []
 		ignored = []
 		progress = null
-		runId = crypto.randomUUID()
+		runId = uuid()
 		socket.emit("images:generate", {
 			connectionId: connection.id,
 			runId,

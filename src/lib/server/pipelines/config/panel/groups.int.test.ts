@@ -20,7 +20,7 @@ import {
 	type NamespaceView,
 	type SettingsGroup
 } from "$lib/server/pipelines/config/panel"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import { groupSteps } from "$lib/server/pipelines/config/panel/groups"
 
 const SECRET = "test-instance-secret"
@@ -159,7 +159,7 @@ describe("Adventure's turn: one group per model call", () => {
 
 	it("never numbers a heading", async () => {
 		const numbered = (hs: string[]) => hs.filter((h) => /\s\d+$/.test(h))
-		for (const v of [await asAdmin(ADVENTURE), await asAdmin(LAIR), await asAdmin(RESPOND_SPEC_ID)]) {
+		for (const v of [await asAdmin(ADVENTURE), await asAdmin(LAIR), await asAdmin(CHAT_RESPOND_SPEC_ID)]) {
 			// Once, step headings read "Generate reply 2"; no option's step does.
 			expect(numbered(groupSteps(v.groups).map((s) => s.heading))).toEqual([])
 			expect(numbered(headings(v))).toEqual([])
@@ -193,7 +193,7 @@ describe("a heading never names a node", () => {
 
 describe("Chat's reply: one model call, one unheaded group", () => {
 	it("holds everything in one group with no heading", async () => {
-		const v = await asAdmin(RESPOND_SPEC_ID)
+		const v = await asAdmin(CHAT_RESPOND_SPEC_ID)
 		expect(v.groups).toHaveLength(1)
 		const [g] = v.groups
 		expect(g!.heading).toBeUndefined()
@@ -204,7 +204,7 @@ describe("Chat's reply: one model call, one unheaded group", () => {
 	})
 
 	it("fronts Prompt, Model and Sampling, then each source's switch labelled by its step", async () => {
-		const [g] = (await asAdmin(RESPOND_SPEC_ID)).groups
+		const [g] = (await asAdmin(CHAT_RESPOND_SPEC_ID)).groups
 		expect(g!.front.slice(0, 3).map((o) => o.control)).toEqual([
 			"prompts-ref",
 			"connection-ref",

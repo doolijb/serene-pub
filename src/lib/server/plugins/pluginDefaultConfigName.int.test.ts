@@ -149,7 +149,7 @@ describe("the shipped default beside a package's own config", () => {
 		const { defaultConfigNameCandidates } = await import(
 			"$lib/server/pipelines/config/named"
 		)
-		const names = defaultConfigNameCandidates("Twenty Questions")
+		const names = defaultConfigNameCandidates()
 		const firstTwo = [names.next().value, names.next().value]
 		const mine: number[] = []
 		for (const name of firstTwo)

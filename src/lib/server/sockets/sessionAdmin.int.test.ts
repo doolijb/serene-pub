@@ -127,9 +127,9 @@ describe("preset mutations", () => {
 	test("create copies selections from fromPresetId", async () => {
 		const { sessionPresetsCreate } = await import("./sessionAdmin")
 		const source = await makePreset({
-			primarySlug: "core:spec/respond",
-			configSelections: { "core:spec/respond": 7 },
-			includedActions: ["core:spec/narrate"]
+			primarySlug: "core:spec/chat-respond",
+			configSelections: { "core:spec/chat-respond": 7 },
+			includedActions: ["core:spec/chat-narrate"]
 		})
 		const res = await sessionPresetsCreate.handler(
 			admin(),
@@ -140,11 +140,11 @@ describe("preset mutations", () => {
 			},
 			noopEmit
 		)
-		expect(res.preset?.primarySlug).toBe("core:spec/respond")
+		expect(res.preset?.primarySlug).toBe("core:spec/chat-respond")
 		expect(res.preset?.configSelections).toEqual({
-			"core:spec/respond": 7
+			"core:spec/chat-respond": 7
 		})
-		expect(res.preset?.includedActions).toEqual(["core:spec/narrate"])
+		expect(res.preset?.includedActions).toEqual(["core:spec/chat-narrate"])
 	}, 60_000)
 
 	test("immutable presets accept availability flags only and refuse delete", async () => {

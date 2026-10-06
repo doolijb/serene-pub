@@ -454,10 +454,11 @@ async function previewSpec(
 }
 
 describe("the action specs keep the parity guard", async () => {
-	const { CORE_SPECS, ANSWER_FORM_TEMPLATE, TOOL_LOOP_TEMPLATE } = await import(
-		"$lib/server/pipelines/specs"
-	)
+	const { CORE_SPECS, ANSWER_FORM_TEMPLATE, TOOL_LOOP_TEMPLATE, TOOL_LOOP_SPEC_ID, toolLoopSpec } =
+		await import("$lib/server/pipelines/specs")
 	const shipped = (slug: string) => {
+		// The reference spec left `CORE_SPECS` (2026-10-05) but still ships beside it.
+		if (slug === TOOL_LOOP_SPEC_ID) return toolLoopSpec()
 		const entry = (CORE_SPECS as any[]).find((e) => e.slug === slug)
 		expect(entry, slug).toBeTruthy()
 		return entry.build()
@@ -473,7 +474,7 @@ describe("the action specs keep the parity guard", async () => {
 		]
 	}
 	const cases: Array<{ slug: string; promptKey: string; template: string; input?: Record<string, unknown>; atNode?: string }> = [
-		{ slug: "core:spec/answer-form-chat", promptKey: "prompt", template: ANSWER_FORM_TEMPLATE, input: { form, addressee: "character:1" } },
+		{ slug: "core:spec/chat-answer-form", promptKey: "prompt", template: ANSWER_FORM_TEMPLATE, input: { form, addressee: "character:1" } },
 		{ slug: "core:spec/tool-loop", promptKey: "tools.item.prompt", template: TOOL_LOOP_TEMPLATE, atNode: "tools.item.generate" },
 		{ slug: "core:spec/adventure-look", promptKey: "prompt", template: SHIPPED_CONTEXT_TEMPLATE },
 		{ slug: "core:spec/adventure-rest", promptKey: "prompt", template: SHIPPED_CONTEXT_TEMPLATE },

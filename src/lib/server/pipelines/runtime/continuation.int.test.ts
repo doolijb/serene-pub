@@ -27,7 +27,7 @@
  * control entry beside it ("ashguard", named by the stored user line) is what
  * separates "the scan does not see the partial" from "the scan is broken".
  *
- * Asserted through `runTurn` against the SHIPPED `core:spec/respond` document
+ * Asserted through `runTurn` against the SHIPPED `core:spec/chat-respond` document
  * loaded from the database the bootstrap published it to — not an ad-hoc spec.
  * A test that compiled its own pipeline would wire the new port while writing
  * it, and the defect lives in the shipped document.
@@ -35,7 +35,7 @@
 
 import { describe, it, expect, beforeAll, vi } from "vitest"
 import { eq } from "drizzle-orm"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
@@ -173,7 +173,7 @@ beforeAll(async () => {
 	const [respondSpec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		.limit(1)
 	const decl = (
 		await declarations(db, respondSpec.activeVersionId!)
@@ -187,7 +187,7 @@ beforeAll(async () => {
 	const shipped = await resolveSelectedConfig(
 		db,
 		respondSpec.id,
-		RESPOND_SPEC_ID,
+		CHAT_RESPOND_SPEC_ID,
 		{}
 	)
 	const copy = await duplicateConfig(

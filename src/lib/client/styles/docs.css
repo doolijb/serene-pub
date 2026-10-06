@@ -166,7 +166,7 @@
    the standalone site theme these pages differently — so this stylesheet is
    the only place any of it gets a colour. Same card recipe as `.doc-figure`
    (STYLE-GUIDE §6.4): rounded, 1px border, page-ground background.
-   `overflow-x: auto` because core's own `core:spec/respond` lays out at
+   `overflow-x: auto` because core's own `core:spec/chat-respond` lays out at
    about 2400×1360 — without it a wide graph would either overrun the column
    or scale into illegibility, exactly as an unwrapped `.doc-table` would. */
 .docs-article .doc-graph {

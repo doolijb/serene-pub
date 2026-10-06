@@ -55,7 +55,7 @@ jobs:
             - name: Set up Node.js
               uses: actions/setup-node@v4
               with:
-                  node-version: "24"
+                  node-version: "26"
 
             # Never interpolate ${{ github.ref_name }} directly into a run:
             # script body (script injection via a crafted tag name) — every

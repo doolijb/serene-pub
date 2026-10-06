@@ -7,7 +7,7 @@ import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import { declarations } from "$lib/server/pipelines/config/panel/declarations"
-import { NARRATE_SPEC_ID } from "$lib/server/pipelines/specs"
+import { CHAT_NARRATE_SPEC_ID } from "$lib/server/pipelines/specs"
 
 // The db module is mocked so `defaults.sync()` and `bootstrapPipelines` run
 // against the test database, in the order `db/index.ts` guarantees at boot.
@@ -40,7 +40,7 @@ beforeAll(async () => {
 				activeVersionId: schema.pipelineSpecs.activeVersionId
 			})
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, NARRATE_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_NARRATE_SPEC_ID))
 			.limit(1)
 	)[0] as any
 }, 120_000)

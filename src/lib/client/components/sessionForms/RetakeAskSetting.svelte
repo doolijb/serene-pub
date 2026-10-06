@@ -9,6 +9,7 @@
 	 * (`sessions:annex`) and set through its ready-made action
 	 * (`core:annex#retake-quietly`), the same press the dialog's checkbox makes.
 	 */
+	import { v4 as uuid } from "uuid"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
@@ -52,7 +53,7 @@
 			sessionId,
 			action: RETAKE_QUIETLY,
 			payload: { value: !ask },
-			runId: crypto.randomUUID()
+			runId: uuid()
 		})
 	}
 </script>

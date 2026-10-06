@@ -1,4 +1,8 @@
 <script lang="ts">
+	import {
+		onLibraryImported,
+		onLibraryImportFailed
+	} from "$lib/client/contexts/characterImports.svelte"
 	import { onMount, getContext } from "svelte"
 	import { goto } from "$app/navigation"
 	import { v4 as uuid } from "uuid"
@@ -195,6 +199,9 @@
 		if (detailsFor) detailsFor = { ...detailsFor, ...msg }
 	}
 	function handleCharactersImportFromLibrary(msg: any) {
+		// Every open view hears every Library import; only the one this page
+		// started may take it over (and navigate away).
+		if (!downloadingKey) return
 		downloadingKey = null
 		if (msg.character) {
 			announce(`Downloaded ${msg.character.name}.`)
@@ -202,6 +209,7 @@
 		}
 	}
 	function handleCharactersImportFromLibraryError(msg: { error?: string }) {
+		if (!downloadingKey) return
 		downloadingKey = null
 		status = msg.error || "Failed to download character."
 		announce(status)
@@ -233,14 +241,9 @@
 		"cardSources:cardDetail",
 		handleCardSourcesCardDetail
 	)
-	useInterest<"characters:importFromLibrary">(
-		"characters:importFromLibrary",
-		handleCharactersImportFromLibrary
-	)
-	useInterest<"characters:importFromLibrary:error">(
-		"characters:importFromLibrary:error",
-		handleCharactersImportFromLibraryError
-	)
+	// The import events are the characters-import context's.
+	onLibraryImported(handleCharactersImportFromLibrary)
+	onLibraryImportFailed(handleCharactersImportFromLibraryError)
 	$effect(() =>
 		requestWithInterest(
 			"cardSources:capabilities",

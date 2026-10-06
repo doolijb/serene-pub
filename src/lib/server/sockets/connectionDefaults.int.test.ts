@@ -7,7 +7,16 @@
  * writes a `connection_defaults` row that is a valid primary key and matches
  * nothing, forever. Neither throws, and neither shows up on a screen.
  */
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	test,
+	vi
+} from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -27,6 +36,15 @@ vi.mock("$lib/server/db", async () => {
 	const db = await createTestDb()
 	return { db, getCryptoSecretKey: () => "test-crypto-secret-key" }
 })
+
+// Observed, not run: moving the embedding star stops the queue and unloads
+// the model, and running a real lane here would need an embedding backend.
+vi.mock("$lib/server/embedding/vectorizationQueue", () => ({
+	stopVectorization: () => {},
+	startVectorizationQueue: async () => {},
+	clearVectorizationFailureTracking: () => {},
+	clearInlineEmbedCooldown: () => {}
+}))
 
 beforeAll(async () => {
 	dataDir = await fs.mkdtemp(
@@ -194,6 +212,28 @@ describe("connectionDefaults:list", () => {
 			expect(res.samplingOptions["text->embedding"]).toEqual([])
 	})
 
+	test("each option carries its connection's type", async () => {
+		// What lets the screen grey a local ONNX row where the runtime didn't
+		// load, without asking for the connections list as well.
+		const { connectionDefaultsList } = await import("./connectionDefaults")
+		const admin = await makeAdmin("conn-defaults-type-user")
+		const onnx = await makeConnection(
+			"Typed local embeddings",
+			CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
+			{ "text->embedding": 1 }
+		)
+
+		const res = await connectionDefaultsList.handler(
+			socketFor(admin.id),
+			{},
+			noopEmit
+		)
+		for (const options of Object.values(res.connectionOptions))
+			expect(options.find((o) => o.id === onnx.id)?.type).toBe(
+				CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS
+			)
+	})
+
 	test("a non-admin is refused", async () => {
 		const { connectionDefaultsList } = await import("./connectionDefaults")
 		const [user] = await testDb
@@ -359,4 +399,77 @@ describe("connectionDefaults:set", () => {
 			)
 		).rejects.toThrow(/admin/i)
 	})
+})
+
+/**
+ * A machine whose ONNX runtime didn't load: this door refuses a local ONNX
+ * star with the machine's reason, as `connections:setDefault` does — a raw
+ * call (or a stale tab) must not register a lane that fails on every embed.
+ * Clearing stays open, so the job can always be switched away. Made the
+ * honest way: `SERENE_PUB_PLATFORM=android`, which the probe reads first.
+ */
+describe("connectionDefaults:set where local ONNX can't run", () => {
+	const EMBED = "text->embedding"
+
+	beforeEach(() => {
+		process.env.SERENE_PUB_PLATFORM = "android"
+	})
+	afterEach(() => {
+		delete process.env.SERENE_PUB_PLATFORM
+	})
+
+	async function onnxPair(name: string) {
+		const conn = await makeConnection(
+			name,
+			CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
+			{ "text->embedding": 1 }
+		)
+		return { id: conn.id, modelId: await modelOn(conn.id) }
+	}
+
+	test("a local ONNX star is refused with the machine's reason", async () => {
+		const { connectionDefaultsSet } = await import("./connectionDefaults")
+		const admin = await makeAdmin("conn-defaults-onnx-refused")
+		const { id, modelId } = await onnxPair("Stranded local embeddings")
+		const emitted: Array<[string, any]> = []
+
+		await expect(
+			connectionDefaultsSet.handler(
+				socketFor(admin.id),
+				{ capability: EMBED, half: "connection", id, modelId },
+				(event: string, data: any) => emitted.push([event, data])
+			)
+		).rejects.toThrow(
+			/^Local ONNX models aren't available on this machine: .*Android/
+		)
+		expect(emitted.map(([event]) => event)).toEqual([
+			"connectionDefaults:set:error"
+		])
+		const [row] = await testDb
+			.select()
+			.from(schema.connectionDefaults)
+			.where(byCapability(EMBED))
+		expect(row?.connectionId ?? null).not.toBe(id)
+	}, 60_000)
+
+	test("clearing the star is still allowed", async () => {
+		const { connectionDefaultsSet } = await import("./connectionDefaults")
+		const { setCapabilityDefault } = await import(
+			"$lib/server/connections/capabilityDefaults"
+		)
+		const admin = await makeAdmin("conn-defaults-onnx-clear")
+		const { id, modelId } = await onnxPair("Was-active local embeddings")
+		await setCapabilityDefault(testDb as any, EMBED, {
+			connectionId: id,
+			connectionModelId: modelId
+		})
+
+		const res = await connectionDefaultsSet.handler(
+			socketFor(admin.id),
+			{ capability: EMBED, half: "connection", id: null },
+			noopEmit
+		)
+		expect(res.defaults[EMBED]?.connectionId ?? null).toBeNull()
+		expect(res.defaults[EMBED]?.connectionModelId ?? null).toBeNull()
+	}, 60_000)
 })

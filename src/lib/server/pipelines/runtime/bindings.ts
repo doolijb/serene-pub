@@ -79,6 +79,7 @@ const STATUS = {
 import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 import { participantRowId } from "$lib/server/pipelines/runtime/portrayals"
 import { pickSpriteBySimilarity } from "$lib/shared/sprites/pick"
+import type { SpriteChoicesV1 } from "$lib/server/sprites/choices"
 /**
  * The node declarations themselves, as types.
  *
@@ -544,9 +545,10 @@ export type SearchByMeaningSetting = "auto" | "on" | "off"
  * that's what they are there for. Don't do that."* So nothing about the
  * connection is read here but that there is one.
  *
- * The connection is the embed step's slot, and that slot is held at the star
- * (`isUnreadSlot`): the host embeds through the star whatever a slot names,
- * so "set up" means the model the embed actually uses. Whether that model is
+ * The connection is this step's own embedding slot, held at the star
+ * (`isHeldConnectionSlot`: no pick offered, a stored one dropped): the host
+ * embeds through the star, so "set up" means the model the embed actually
+ * uses. Whether that model is
  * *loaded* is the host's moment-to-moment fact, not this Task's: a star that
  * is not ready still searches here, `embed-text` makes no call, and
  * `vector-search` names the model — the thing to fix.
@@ -1657,6 +1659,24 @@ const stepSlots = (input: { connection?: unknown; sampling?: unknown }) => ({
 	connection: input?.connection ?? null,
 	sampling: input?.sampling ?? null
 })
+
+/**
+ * The card a line's speaker has, when it has one — `character:<id>`'s id, the
+ * one participant reference a sprite can belong to. Anything else (a
+ * narrator's line wires no speaker; an envoy, a person, a role) is null, and
+ * so is a reference that does not parse.
+ */
+const speakingCharacterId = (speaker: unknown): number | null => {
+	if (typeof speaker !== "string") return null
+	try {
+		const parsed = parseParticipantRef(speaker)
+		if (parsed.kind !== "character") return null
+		const id = Number(parsed.id)
+		return Number.isInteger(id) && id > 0 ? id : null
+	} catch {
+		return null
+	}
+}
 
 /**
  * @param run Which run these bindings are executing for.
@@ -4468,12 +4488,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 *     not when none is (R5). Local or a service billed per request
 		 *     alike — the owner, 2026-09-30: *"I never said to skip paid
 		 *     services for retrieval, that's what they are there for."* "Set
-		 *     up" is the embed step's resolved connection —
-		 *     `slot.connectionOf('semantic.arm.embed')` in every shipped spec,
-		 *     a slot held at the star (`isUnreadSlot`: no pick offered, a
-		 *     stored one dropped) because the host embeds through the star
-		 *     whatever the slot names. A Task reading data it was handed: the
-		 *     connection resolves before the run, as `context-budget`'s does.
+		 *     up" is this step's own embedding connection — `slot.connection()`
+		 *     in every shipped spec, a slot held at the star
+		 *     (`isHeldConnectionSlot`: no pick offered, a stored one dropped)
+		 *     because the host embeds through the star and a pipeline never
+		 *     chooses its embedding connection (owner, 2026-10-05). A Task
+		 *     reading data it was handed: the connection resolves before the
+		 *     run, as `context-budget`'s does.
 		 *
 		 * A value that is none of the three — a boolean stored before the switch
 		 * had three positions — reads as the default, `auto`. Nothing is carried
@@ -5688,9 +5709,9 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					vectors: result?.vectors ?? []
 				})
 			},
-			// The `connection` slot is declared and not read — the host embeds
-			// through the local model (`embeddingApi()`). Allow-listed in
-			// `boot/declaredReads.ts` until embeddings become connections.
+			// No connection slot (owner ruling D-c, 2026-10-05): the host
+			// embeds through the install's active embedding connection
+			// (`embeddingApi()`), and a pipeline never chooses it.
 			{ ports: ["text", "texts"], params: ["enabled"] }
 		),
 
@@ -7343,74 +7364,78 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			},
 			{ ports: ["form", "answer", "messageId", "blockId", "addressee"] }
 		),
-		// ── Sprites (DESIGN-sprites §5, 2026-09-24) ─────────────────────────
+		// ── Sprites (DESIGN-sprites §5; in-pipeline 2026-10-05) ──────────────
 		//
-		// The reply specs' sprite tail: read what the speaker can show, let a
-		// picker choose, record it on the line. The host owns both effects —
-		// the read (`sprites_for`, which decides the set) and the write
-		// (`show-sprite`, which decides who chose it).
-		"core:query/sprites-for@1": reads<typeof C.spritesFor>(
-			async (
-				input: NodeInput<typeof C.spritesFor>,
-				ctx: CoreQueryCtx
-			) => {
-				const choices = (await ctx.read("sprites_for", {
-					sessionId: input?.scope?.sessionId,
-					message: input?.message
-				})) as {
-					labels?: string[]
-					text?: string
-					has?: boolean
-					lineVector?: number[] | null
-					labelVectors?: number[][] | null
+		// The reply specs' sprite step, written into each spec after `save`:
+		// the picker chooses a face for the line it is handed, and the outlet
+		// records it. The host owns every effect — the read and the embed
+		// behind the picker's `ctx.call`, and the write (`show-sprite`, whose
+		// `source` the spec states).
+		/**
+		 * The sprite picker, all in one (owner, 2026-10-05): what the speaker
+		 * can show, the line and the labels embedded, and the closest label
+		 * picked by `pickSpriteBySimilarity` — stickiness, the recency penalty
+		 * and the floor.
+		 *
+		 * Everything it works from is wired: the line's `text` (the reply
+		 * string itself — the host never re-reads the row), whose line it is
+		 * (`speaker`), the session (`scope`), and an optional `set`.
+		 *
+		 * **Picks nothing — null, and no call — when "Choose sprites" is off
+		 * or the speaker is not a character** (a narrator's line, an envoy).
+		 * So an off picker costs nothing: the embed is behind the call.
+		 *
+		 * ⚠ **Any failure is null, never an error.** The step runs after the
+		 * reply is saved, and a face that could not be chosen must not turn a
+		 * delivered reply into a failed turn: an unavailable mechanism
+		 * subtracts a signal. The reason goes to the run's log.
+		 */
+		"core:oracle/pick-sprite@1": reads<typeof C.pickSprite>(
+			async (input: NodeInput<typeof C.pickSprite>, ctx: OracleCtx) => {
+				const none = ok({ main: null, pick: null, choices: null })
+				if (input?.params?.enabled === false) return none
+				const characterId = speakingCharacterId(input?.speaker)
+				if (characterId === null) return none
+
+				let found: {
+					choices?: SpriteChoicesV1 | null
+					lineVector?: unknown
+					labelVectors?: unknown
 				} | null
-				const {
-					lineVector = null,
-					labelVectors = null,
-					...safe
-				} = choices ?? { labels: [], text: "", has: false }
-				return ok({
-					main: safe,
-					choices: safe,
-					labels: safe.labels ?? [],
-					text: safe.text ?? "",
-					lineVector,
-					labelVectors,
-					has: safe.has === true
-				})
-			},
-			{ ports: ["scope", "message"] }
-		),
-		"core:task/pick-sprite-similarity@1": reads<
-			typeof C.pickSpriteSimilarity
-		>(
-			async (input: NodeInput<typeof C.pickSpriteSimilarity>) => {
-				if (input?.params?.enabled === false)
-					return ok({ main: null, pick: null })
-				const choices = (input?.choices ?? {}) as {
-					set?: string | null
-					labels?: string[]
-					last?: { set: string; label: string } | null
-					recent?: string[]
+				try {
+					found = (await ctx.call({
+						sessionId: input?.scope?.sessionId,
+						characterId,
+						text: typeof input?.text === "string" ? input.text : "",
+						set: input?.set ?? null
+					})) as typeof found
+				} catch (e) {
+					ctx.log(
+						"warn",
+						`no sprite chosen: ${e instanceof Error ? e.message : String(e)}`
+					)
+					return none
 				}
+				const choices = found?.choices ?? null
+				if (!choices) return none
 				const pick = pickSpriteBySimilarity(
 					{
-						set: choices.set ?? null,
-						labels: choices.labels ?? [],
-						last: choices.last ?? null,
-						recent: choices.recent ?? []
+						set: choices.set,
+						labels: choices.labels,
+						last: choices.last,
+						recent: choices.recent
 					},
-					input?.lineVector,
-					input?.labelVectors,
+					found?.lineVector,
+					found?.labelVectors,
 					{
 						margin: input?.params?.margin,
 						floor: input?.params?.floor
 					}
 				)
-				return ok({ main: pick, pick })
+				return ok({ main: pick, pick, choices })
 			},
 			{
-				ports: ["choices", "lineVector", "labelVectors"],
+				ports: ["text", "speaker", "scope", "set"],
 				params: ["enabled", "margin", "floor"]
 			}
 		),
@@ -7433,11 +7458,15 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		),
 		"core:outlet/show-sprite@1": reads<typeof C.showSprite>(
 			async (input: NodeInput<typeof C.showSprite>, ctx: OutletCtx) => {
-				const { sprite, kept, ...ids } = (await ctx.commit(input)) as {
+				// `written` is the executor's (no write, no event), not a row id.
+				const { sprite, kept, written: _, ...ids } = (await ctx.commit(
+					input
+				)) as {
 					id: unknown
 					sessionId?: unknown
 					sprite?: unknown
 					kept?: unknown
+					written?: unknown
 				}
 				return ok({
 					status: "committed",
@@ -7446,7 +7475,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					kept: kept === true
 				})
 			},
-			{ ports: ["target", "pick"] }
+			{ ports: ["target", "pick", "source"] }
 		),
 
 		// ── The built-in writes (R-15, 2026-09-16) ──────────────────────────
@@ -7732,7 +7761,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 	 * template did on every live turn. See `prompt/adventureContext.ts`.
 	 *
 	 * Gated on there being a state or a plan at all, so the one non-adventure
-	 * pipeline that shares a surface here — `core:spec/narrate-character`,
+	 * pipeline that shares a surface here — `core:spec/chat-side-character`,
 	 * which wires neither — gets the context it always got, key for key.
 	 *
 	 * Takes the three ports by name rather than the whole input, so a surface
@@ -8125,7 +8154,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 	 * ⚠ **Through `mergeContext` like its three siblings**, so a voice is told
 	 * where it is standing and who else is there. Without it a voice answered
 	 * from whatever the transcript suggested and walked the scene to a harbour
-	 * the plan had never mentioned. `core:spec/narrate-character` wires neither
+	 * the plan had never mentioned. `core:spec/chat-side-character` wires neither
 	 * `state` nor `plan`, so its context is unchanged key for key. This
 	 * definition declares no `fields` port, so no genre fields are read here —
 	 * which is what the untyped wrapper did too, one `undefined` later.

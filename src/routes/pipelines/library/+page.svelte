@@ -613,7 +613,7 @@
 					>
 						<Icons.Workflow size={18} class="shrink-0" />
 						<div class="min-w-0 flex-1">
-							<p class="truncate font-medium">{p.name}</p>
+							<p class="truncate font-medium">{p.label}</p>
 							<p class="text-surface-600-400 truncate font-mono text-xs">
 								{p.slug}
 							</p>

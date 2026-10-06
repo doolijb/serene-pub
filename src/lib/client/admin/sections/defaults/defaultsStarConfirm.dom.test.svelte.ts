@@ -286,3 +286,136 @@ describe("Admin → Defaults moves a star only after the confirmation", () => {
 		])
 	})
 })
+
+/**
+ * Where the local ONNX runtime didn't load, a local ONNX connection can't be
+ * made active — the server refuses the star with the machine's reason. The
+ * page learns which connections are local ONNX from the type each option of
+ * `connectionDefaults:list` carries, and greys them with that reason like any
+ * ineligible row. Choosing one writes and asks nothing; switching away still
+ * works.
+ */
+describe("Admin → Defaults where local ONNX can't run", () => {
+	const REASON = "the Android app can't run the ONNX runtime"
+
+	beforeEach(() => {
+		if (app) unmount(app)
+		emitted.length = 0
+		pickers.length = 0
+		listeners.clear()
+		document.body.innerHTML = ""
+		const host = document.createElement("div")
+		document.body.append(host)
+		app = mount(Page, {
+			target: host,
+			context: new Map<string, unknown>([
+				["userCtx", { user: { id: 1, isAdmin: true } }],
+				[
+					"systemSettingsCtx",
+					{
+						settings: {
+							localOnnxAvailability: {
+								available: false,
+								reason: REASON
+							}
+						},
+						capabilityDefaults: {}
+					}
+				],
+				["panelsCtx", { digest: {}, openPanel: () => {} }]
+			])
+		})
+		flushSync()
+		listeners.get("connectionDefaults:list")!(typedList())
+		flushSync()
+	})
+
+	/** `LIST`, with the type each option carries. */
+	const typedList = () => {
+		const types: Record<number, string> = {
+			1: "openai",
+			2: "local-onnx",
+			3: "local-onnx-ner",
+			4: "local-onnx-ner"
+		}
+		const typed = structuredClone(LIST)
+		for (const options of Object.values(typed.connectionOptions))
+			for (const o of options as any[]) o.type = types[o.id]
+		return typed
+	}
+
+	const option = (label: string, value: string) =>
+		picker(label).options.find((o: any) => o.value === value)
+
+	test("greys every local ONNX connection with the machine's reason", () => {
+		// The list says each option's type; nothing else is asked for.
+		expect(emitted.map(([e]) => e)).not.toContain("connections:list")
+		const embed = `Connection for ${capabilityLabel(EMBED as any)}`
+		expect(option(embed, "1")).toMatchObject({ disabled: false })
+		expect(option(embed, "2")).toMatchObject({
+			disabled: true,
+			hint: `Not available on this machine: ${REASON}`
+		})
+		const ner = `Connection for ${capabilityLabel(NER as any)}`
+		expect(option(ner, "4")).toMatchObject({ disabled: true })
+		// The registered entity model can't be swapped on that connection either.
+		expect(
+			picker(`Model for ${capabilityLabel(NER as any)}`).options[0]
+		).toMatchObject({
+			disabled: true,
+			hint: `Not available on this machine: ${REASON}`
+		})
+	})
+
+	test("choosing one writes and asks nothing; clearing still writes", () => {
+		picker(`Connection for ${capabilityLabel(EMBED as any)}`).onValueChange(
+			"2"
+		)
+		expect(
+			emitted.filter(([e]) => e === "vectorization:reindexCost")
+		).toEqual([])
+		expect(setDefaults()).toEqual([])
+		picker(`Connection for ${capabilityLabel(NER as any)}`).onValueChange(
+			""
+		)
+		expect(setDefaults()).toEqual([
+			[
+				"connections:setDefault",
+				{ capability: NER, id: null, modelId: null }
+			]
+		])
+	})
+
+	test("an available machine leaves local ONNX connections choosable", async () => {
+		unmount(app!)
+		emitted.length = 0
+		pickers.length = 0
+		const host = document.createElement("div")
+		document.body.append(host)
+		app = mount(Page, {
+			target: host,
+			context: new Map<string, unknown>([
+				["userCtx", { user: { id: 1, isAdmin: true } }],
+				[
+					"systemSettingsCtx",
+					{
+						settings: {
+							localOnnxAvailability: {
+								available: true,
+								reason: null
+							}
+						},
+						capabilityDefaults: {}
+					}
+				],
+				["panelsCtx", { digest: {}, openPanel: () => {} }]
+			])
+		})
+		flushSync()
+		listeners.get("connectionDefaults:list")!(typedList())
+		flushSync()
+		const embed = `Connection for ${capabilityLabel(EMBED as any)}`
+		expect(option(embed, "2")).toMatchObject({ disabled: false })
+		expect(option(embed, "2")?.hint).toBeUndefined()
+	})
+})

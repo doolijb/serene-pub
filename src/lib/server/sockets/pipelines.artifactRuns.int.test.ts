@@ -140,7 +140,7 @@ beforeAll(async () => {
 	// turn writes.
 	const sent = await run({
 		runId: "artifact-runs-sent",
-		specSlug: "core:spec/respond",
+		specSlug: "core:spec/chat-respond",
 		isPreview: false
 	})
 	await testDb.insert(schema.pipelineRunArtifacts).values([
@@ -164,7 +164,7 @@ beforeAll(async () => {
 	// and stopped. It is newer and weaker, and both facts have to survive.
 	const previewed = await run({
 		runId: "artifact-runs-preview",
-		specSlug: "core:spec/generate-image",
+		specSlug: "core:spec/chat-generate-image",
 		isPreview: true
 	})
 	await testDb.insert(schema.pipelineRunArtifacts).values({
@@ -204,7 +204,7 @@ describe("pipelines:artifactRuns", () => {
 			"artifact-runs-sent"
 		])
 		expect(res.runs[0].isPreview).toBe(true)
-		expect(res.runs[0].specSlug).toBe("core:spec/generate-image")
+		expect(res.runs[0].specSlug).toBe("core:spec/chat-generate-image")
 		expect(res.runs[1].isPreview).toBe(false)
 		expect(res.runs[1].startedAt).toBeDefined()
 	}, 60_000)

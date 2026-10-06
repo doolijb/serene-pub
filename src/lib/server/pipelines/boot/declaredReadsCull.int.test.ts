@@ -32,7 +32,7 @@ import {
 	pendingNotices,
 	reconcileConfigs
 } from "$lib/server/pipelines/config/named"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
@@ -82,7 +82,7 @@ beforeAll(async () => {
 				activeVersionId: schema.pipelineSpecs.activeVersionId
 			})
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 			.limit(1)
 	)[0] as any
 
@@ -147,7 +147,7 @@ describe("reconciling a configuration that held them", () => {
 			db,
 			spec.id,
 			spec.activeVersionId,
-			RESPOND_SPEC_ID
+			CHAT_RESPOND_SPEC_ID
 		)
 		const notices = (await pendingNotices(db, configId)) as Array<{
 			kind: string

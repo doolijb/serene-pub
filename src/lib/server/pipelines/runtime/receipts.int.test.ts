@@ -188,7 +188,7 @@ describe("recording what a run did", () => {
 		const run = await lastRunFor(db, sessionId)
 		expect(run).toBeTruthy()
 		expect(run.outcome).toBe("ok")
-		expect(run.specSlug).toBe("core:spec/respond")
+		expect(run.specSlug).toBe("core:spec/chat-respond")
 		expect(run.seed).toBe("receipt:1")
 	}, 30_000)
 
@@ -307,11 +307,12 @@ describe("recording what a run did", () => {
 			"prompt",
 			"generate",
 			"save",
-			// The sprite tail (DESIGN-sprites §5), after the save: what the
-			// speaker can show. A card with no sprites stops here — the
-			// junction's branch is skipped, which is a stated outcome, not a
-			// node in the trail.
-			"sprites"
+			// The sprite step (DESIGN-sprites §5, written into the spec since
+			// 2026-10-05), after the save: the picker, handed the reply's
+			// text and speaker, then the outlet. A card with no sprites runs
+			// both — the picker picks nothing and the outlet writes nothing.
+			"spritePick",
+			"spriteShow"
 		])
 		expect(found!.nodes.every((n: any) => n.result === "ok")).toBe(true)
 
@@ -389,7 +390,7 @@ describe("recording what a run did", () => {
 			db,
 			{
 				runId: "receipt:3b:continue",
-				specId: "core:spec/respond",
+				specId: "core:spec/chat-respond",
 				specVersion: "1.0.0",
 				outcome: "ok",
 				triggerSource: "event",
@@ -442,7 +443,7 @@ describe("recording what a run did", () => {
 		const long = "x".repeat(WIRE_RAW_LIMIT + 1000)
 		const receipt: any = {
 			runId: "receipt:cap",
-			specId: "core:spec/respond",
+			specId: "core:spec/chat-respond",
 			specVersion: "1.0.0",
 			outcome: "ok",
 			triggerSource: "event",
@@ -515,7 +516,7 @@ describe("recording what a run did", () => {
 		const long = "x".repeat(WIRE_RAW_LIMIT + 1000)
 		const receipt: any = {
 			runId: "receipt:cap-input",
-			specId: "core:spec/respond",
+			specId: "core:spec/chat-respond",
 			specVersion: "1.0.0",
 			outcome: "ok",
 			triggerSource: "event",

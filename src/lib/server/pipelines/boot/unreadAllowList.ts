@@ -36,27 +36,16 @@ export interface AllowedUnread {
 }
 
 /**
- * ⚠ **Two, and each names what closes it.** The cap is asserted; adding a
+ * ⚠ **One, and it names what closes it.** The cap is asserted; adding a
  * line means shipping a control that is inert by construction, and needs the
  * ruling that decided to. (`session-history.params.priority` was the third
  * until U3b landed R-7 P5 on 2026-09-16: it is read now, as the conversation's
- * band intent.)
+ * band intent. `core:oracle/embed-text@1 connection` was the second until
+ * 2026-10-05: owner ruling D-c removed the slot — a pipeline never chooses its
+ * embedding connection — and the hold it needed moved to
+ * `config/heldSlots.ts`, on the one slot that is read.)
  */
 export const UNREAD_ALLOW_LIST: readonly AllowedUnread[] = [
-	{
-		definition: "core:oracle/embed-text@1",
-		name: "connection",
-		kind: "slot",
-		reason:
-			"awaiting embeddings-as-connections (DESIGN-embedding-ner-connections): " +
-			"the host embeds through the star (`embeddingApi()` in host.ts), so " +
-			"the slot resolves a value into a port nobody reads. Held at the " +
-			"star meanwhile (`isUnreadSlot`): the panel offers no pick and the " +
-			"run drops a stored one, because Search by meaning's Automatic reads " +
-			"this slot to learn where the embed runs. Its fix is a reader, which " +
-			"that design supplies — ten spec nodes carry the unwired slot " +
-			"meanwhile (paramsSlotWiring.test.ts derives them from this line)."
-	},
 	{
 		definition: "core:task/build-keeper-context@1",
 		name: "afterWrite",
@@ -81,15 +70,11 @@ export const allowKey = (definition: string, name: string) =>
  * picked (review 2026-09-29).
  *
  * ⚠ The reason is not tidiness. A pick on a slot nothing reads is a setting
- * that changes nothing — except for whoever reads the slot BY REFERENCE. The
- * embed step's connection is read that way: `query-windows` takes
- * `slot.connectionOf('semantic.arm.embed')` to decide whether *Automatic*
- * searches by meaning (whether an embedding model is set up), while the host
- * embeds through the star whatever the slot says. A pick there made the
- * decision about a connection the embed never used — searching with no model
- * starred, or a stale pick hiding the star that is. Held at the star, the two
- * cannot disagree. The line comes off the
- * list the day a reader exists, and the pick is a choice again.
+ * that changes nothing — except for whoever reads the slot BY REFERENCE, which
+ * is how the embed step's connection was read until 2026-10-05 (`query-windows`
+ * took `slot.connectionOf('semantic.arm.embed')`). That slot is gone and its
+ * hold is policy now (`isHeldConnectionSlot`); no slot line stands, so this
+ * answers no for every definition until a ruling adds one.
  */
 export const isUnreadSlot = (definition: string, slot: string): boolean =>
 	unreadSlotsOf(definition).includes(slot)

@@ -11,7 +11,7 @@
 
 import { describe, it, expect, beforeAll, vi } from "vitest"
 import { eq } from "drizzle-orm"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
@@ -219,7 +219,7 @@ beforeAll(async () => {
 	const [respondSpec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 		.limit(1)
 	// By node type, not "the first template slot": every `template` slot is a
 	// reference now, so the history and lore queries have one too, and picking
@@ -237,7 +237,7 @@ beforeAll(async () => {
 		const shipped = await resolveSelectedConfig(
 			db,
 			respondSpec.id,
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			{}
 		)
 		const copy = await duplicateConfig(db, shipped!.configId, "Turn host")
@@ -647,14 +647,14 @@ describe("who portrays whom on a turn", () => {
 		const { runSpec } = await import(
 			"$lib/server/pipelines/runtime/runTurn"
 		)
-		const { RESPOND_SPEC_ID } = await import(
+		const { CHAT_RESPOND_SPEC_ID } = await import(
 			"$lib/server/pipelines/boot/bootstrap"
 		)
 		const gated: any = await runSpec({
 			db: db as any,
 			sessionId,
 			userId,
-			specId: RESPOND_SPEC_ID,
+			specId: CHAT_RESPOND_SPEC_ID,
 			currentCharacterId: characterId,
 			speaker: `character:${characterId}`,
 			input: {
@@ -702,7 +702,7 @@ describe("script chains on a turn", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 			.limit(1)
 		const nodes = await db
 			.select()

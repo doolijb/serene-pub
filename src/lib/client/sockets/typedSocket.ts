@@ -2373,6 +2373,13 @@ export type SocketEventMap = {
 		params: Sockets.KoboldCPP.ConnectImageModel.Params
 		response: Sockets.KoboldCPP.ConnectImageModel.Response
 	}
+	// The embeddings counterpart ensures an `embeddings` model row and answers
+	// the pair WITHOUT starring it: the embedding star moves through
+	// `connections:setDefault`, behind its re-index confirmation.
+	"koboldcpp:connectEmbeddingModel": {
+		params: Sockets.KoboldCPP.ConnectEmbeddingModel.Params
+		response: Sockets.KoboldCPP.ConnectEmbeddingModel.Response
+	}
 	"koboldcpp:perf": {
 		params: Sockets.KoboldCPP.Perf.Params
 		response: Sockets.KoboldCPP.Perf.Response
@@ -2450,6 +2457,10 @@ export type SocketEventMap = {
 	// chosen file went missing, or is not a tracked complete image model — and
 	// the Models tab has to say which, not just fail to change state.
 	"koboldcpp:connectImageModel:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"koboldcpp:connectEmbeddingModel:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}

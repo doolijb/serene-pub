@@ -39,6 +39,10 @@ import {
 	type MemoryTier
 } from "./memoryTier"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import {
+	localOnnxDisabledReason,
+	type LocalOnnxAvailability
+} from "$lib/shared/utils/connectionServiceItems"
 
 // ── Scopes ──────────────────────────────────────────────────────────────────
 
@@ -131,6 +135,13 @@ export interface Destination {
 	label: string
 	/** Set only on a KoboldCPP destination: which directory this scope uses. */
 	kcppKind?: "text" | "image"
+	/**
+	 * Why nothing can be downloaded here, as the sentence the pill and the
+	 * note show. Only an ONNX destination on a machine whose runtime didn't
+	 * load sets it: the pill stays, disabled, because the connection is real
+	 * and a missing pill would read as a missing connection.
+	 */
+	disabledReason?: string
 }
 
 /** The fields of a `connections:list` row a destination is derived from. */
@@ -194,10 +205,15 @@ function typesFor(kind: DestinationKind, scope: FinderScope): string[] {
  */
 export function destinationsFor(
 	scope: FinderScope,
-	rows: readonly DestinationRow[]
+	rows: readonly DestinationRow[],
+	opts: {
+		/** This machine's local ONNX verdict; absent reads as available. */
+		localOnnx?: LocalOnnxAvailability | null
+	} = {}
 ): Destination[] {
 	const out: Destination[] = []
 	const kcppKind = kcppKindForScope(scope) ?? undefined
+	const onnxDisabled = localOnnxDisabledReason(opts.localOnnx)
 	for (const kind of SCOPE_KINDS[scope]) {
 		const types = typesFor(kind, scope)
 		// KoboldCPP is one destination however many managed rows exist: the
@@ -229,7 +245,10 @@ export function destinationsFor(
 					title.toLowerCase() === SERVICE_LABEL[kind].toLowerCase()
 						? title
 						: `${title} · ${SERVICE_LABEL[kind]}`,
-				...(kind === "koboldcpp" && kcppKind ? { kcppKind } : {})
+				...(kind === "koboldcpp" && kcppKind ? { kcppKind } : {}),
+				...(kind === "onnx" && onnxDisabled
+					? { disabledReason: onnxDisabled }
+					: {})
 			})
 		}
 	}
@@ -243,6 +262,11 @@ export function destinationsFor(
  * "The first" alone defaulted Chat to a KoboldCPP that was not installed while
  * Ollama sat running beside it (walk 2026-09-24, plan C6) — the finder's first
  * screen offered Get buttons that led nowhere.
+ *
+ * A disabled destination is never "ready", whatever `isReady` says: Embeddings
+ * on a machine without the ONNX runtime opens on Ollama when there is one. It
+ * is still the answer when the caller asked for it or nothing else exists, so
+ * the finder shows its reason rather than an empty pane.
  */
 export function pickDestination(
 	destinations: readonly Destination[],
@@ -253,14 +277,22 @@ export function pickDestination(
 		const asked = destinations.find((d) => d.connectionId === connectionId)
 		if (asked) return asked
 	}
-	return destinations.find(isReady) ?? destinations[0] ?? null
+	return (
+		destinations.find((d) => !d.disabledReason && isReady(d)) ??
+		destinations[0] ??
+		null
+	)
 }
 
-/** Where a destination's files land, as a sentence fragment. */
+/**
+ * Where a destination's files land, as a sentence fragment — or, on a
+ * destination nothing can be downloaded to, why not.
+ */
 export function landingNote(
 	destination: Destination,
 	kcppModelsDir?: string | null
 ): string {
+	if (destination.disabledReason) return destination.disabledReason
 	switch (destination.kind) {
 		case "koboldcpp":
 			return kcppModelsDir?.trim()

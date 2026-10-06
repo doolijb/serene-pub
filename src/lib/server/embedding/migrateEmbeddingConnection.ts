@@ -19,6 +19,12 @@
  * quarantine name must never be `apiKey`: that is the name the whole crypto path
  * walks, and a row this step has not reached yet would then read as configured.
  *
+ * The row is found by that quarantine as well as by `modality = 'embeddings'`.
+ * The 0.5.3 upgrade writes its API embedding row as `openai-embeddings`, and
+ * the OpenAI-compatible merge (`connections/openAIMultiModality.ts`) renames
+ * it onto `openai` — a `text-gen` row — in the same boot, before this runs. A
+ * lookup by modality alone would leave its key quarantined for good.
+ *
  * ⚠ The conversion is one-way and the quarantine is CONSUMED, so a second boot
  * finds nothing. An envelope this cannot read (a backup restored beside a
  * different `meta.json`) is DROPPED with a warning rather than carried forward,
@@ -46,7 +52,7 @@
  * already dropped by 0127's own DDL.
  */
 
-import { and, eq, isNotNull, sql } from "drizzle-orm"
+import { eq, isNotNull, or, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	decryptToken,
@@ -84,7 +90,14 @@ export async function migrateEmbeddingConnection(
 	const rows = await db
 		.select()
 		.from(schema.connections)
-		.where(eq(schema.connections.modality, "embeddings"))
+		.where(
+			or(
+				eq(schema.connections.modality, "embeddings"),
+				isNotNull(
+					sql`${schema.connections.extraJson} -> ${LEGACY_KEY}::text`
+				)
+			)
+		)
 
 	for (const row of rows) {
 		const extra = { ...((row.extraJson ?? {}) as Record<string, any>) }

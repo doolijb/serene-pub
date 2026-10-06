@@ -32,7 +32,7 @@ import {
 } from "$lib/server/pipelines/runtime/reviewGate"
 import type { ReviewDecision, Reviewer } from "@serene-pub/sdk"
 
-const SPEC_ID = "core:spec/generate-image"
+const SPEC_ID = "core:spec/chat-generate-image"
 
 /** Fresh per test: `parked` is module state, and users are how it partitions. */
 let nextUserId = 1000
@@ -312,7 +312,7 @@ describe("whatIsReviewed — the card says what it is asking about", () => {
 			if (event === "pipelines:reviewRequested") pushed.push(payload)
 		})
 		const userId = newUser()
-		const reviewer = createReviewer({ userId, specId: "core:spec/respond" })
+		const reviewer = createReviewer({ userId, specId: "core:spec/chat-respond" })
 		void reviewer({
 			nodeKey: "placeholder",
 			definitionId: "core:outlet/create-message@1",

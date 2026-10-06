@@ -522,7 +522,7 @@ describe("merging the mechanisms", () => {
 /**
  * Concatenation, which is deliberately **not** fusion.
  *
- * ⚠ The reason this node exists: `core:spec/respond` wired its three lore lanes
+ * ⚠ The reason this node exists: `core:spec/chat-respond` wired its three lore lanes
  * into the merge above, and the merge stamps a reciprocal-rank `presetScore` on
  * everything it passes through. `select`'s `scoreOf` reads `presetScore` before
  * it computes anything, so with three disjoint lists every entry ranked by its

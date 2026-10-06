@@ -10,7 +10,7 @@ For anything beyond a small fix, please [open an issue](https://github.com/dooli
 
 ### Requirements
 
-- [Node.js](https://nodejs.org/en) 24 or later
+- [Node.js](https://nodejs.org/en) 24 or later; 26 matches the release bundles, the Docker image and CI
 - (Optional) [Ollama](https://ollama.com/download) or [KoboldCPP](https://github.com/LostRuins/koboldcpp) for testing against a real local model
 
 ### Steps

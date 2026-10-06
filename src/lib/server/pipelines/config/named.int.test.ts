@@ -22,7 +22,7 @@ import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import {
 	bootstrapPipelines,
-	RESPOND_SPEC_ID
+	CHAT_RESPOND_SPEC_ID
 } from "$lib/server/pipelines/boot/bootstrap"
 import {
 	acknowledgeNotices,
@@ -45,7 +45,7 @@ beforeAll(async () => {
 	const [spec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 	specId = spec.id
 	specVersionId = spec.activeVersionId!
 }, 60_000)
@@ -62,7 +62,7 @@ describe("the shipped default", () => {
 			db,
 			specId,
 			specVersionId,
-			RESPOND_SPEC_ID
+			CHAT_RESPOND_SPEC_ID
 		)
 		const [config] = await db
 			.select()
@@ -122,7 +122,7 @@ describe("the shipped default", () => {
 			db,
 			specId,
 			specVersionId,
-			RESPOND_SPEC_ID
+			CHAT_RESPOND_SPEC_ID
 		)
 		expect(again.action).toBe("present")
 
@@ -154,7 +154,7 @@ describe("the shipped default", () => {
 			.where(
 				eq(
 					schema.pipelineConfigs.seedKey,
-					`pipeline-default:${RESPOND_SPEC_ID}`
+					`pipeline-default:${CHAT_RESPOND_SPEC_ID}`
 				)
 			)
 		let checked = 0
@@ -214,7 +214,7 @@ describe("what a new version does to a tuned config", () => {
 	})
 
 	it("culls a value the new version no longer declares", async () => {
-		await reconcileConfigs(db, specId, specVersionId, RESPOND_SPEC_ID)
+		await reconcileConfigs(db, specId, specVersionId, CHAT_RESPOND_SPEC_ID)
 
 		const rows = await valuesOf(mine)
 		expect(
@@ -295,7 +295,7 @@ describe("what a new version does to a tuned config", () => {
 			db,
 			specId,
 			specVersionId,
-			RESPOND_SPEC_ID
+			CHAT_RESPOND_SPEC_ID
 		)
 		expect(report).toEqual([])
 		expect((await pendingNotices(db, mine)).length).toBe(before)
@@ -333,7 +333,7 @@ describe("which config a scope has selected", () => {
 	})
 
 	it("falls back to what core shipped when nothing has chosen", async () => {
-		const res = await resolveSelectedConfig(db, specId, RESPOND_SPEC_ID, {})
+		const res = await resolveSelectedConfig(db, specId, CHAT_RESPOND_SPEC_ID, {})
 		expect(res!.source).toBe("shipped")
 
 		const [shipped] = await db
@@ -342,7 +342,7 @@ describe("which config a scope has selected", () => {
 			.where(
 				eq(
 					schema.pipelineConfigs.seedKey,
-					`pipeline-default:${RESPOND_SPEC_ID}`
+					`pipeline-default:${CHAT_RESPOND_SPEC_ID}`
 				)
 			)
 		expect(res!.configId).toBe(shipped.id)
@@ -353,13 +353,13 @@ describe("which config a scope has selected", () => {
 		// config is made per session, or it is the instance's.
 		await selectConfig(db, specId, "pub", 0, mine, userId)
 		expect(
-			(await resolveSelectedConfig(db, specId, RESPOND_SPEC_ID, {}))!
+			(await resolveSelectedConfig(db, specId, CHAT_RESPOND_SPEC_ID, {}))!
 				.source
 		).toBe("pub")
 
 		await selectConfig(db, specId, "session", sessionId, mine, userId)
 		expect(
-			(await resolveSelectedConfig(db, specId, RESPOND_SPEC_ID, {
+			(await resolveSelectedConfig(db, specId, CHAT_RESPOND_SPEC_ID, {
 				sessionId
 			}))!.source
 		).toBe("session")
@@ -380,7 +380,7 @@ describe("which config a scope has selected", () => {
 		expect(rows.length).toBeGreaterThan(0)
 		for (const r of rows) expect(r.configId).toBeNull()
 
-		const res = await resolveSelectedConfig(db, specId, RESPOND_SPEC_ID, {
+		const res = await resolveSelectedConfig(db, specId, CHAT_RESPOND_SPEC_ID, {
 			sessionId
 		})
 		expect(res!.source).toBe("shipped")
@@ -408,7 +408,7 @@ describe("which config a scope has selected", () => {
 /**
  * Upgrading past the narrator split does not silently drop somebody's tuning.
  *
- * `core:spec/narrate` moved to its own context-builder type, which stopped
+ * `core:spec/chat-narrate` moved to its own context-builder type, which stopped
  * declaring two layouts it could never fill — `exampleDialogue`, read off a
  * speaking character a narrator does not have, and `speakerRelationships`,
  * which that spec never supplies. Any configuration written before the split
@@ -429,7 +429,7 @@ describe("the narrator split, from an older configuration", () => {
 		const [narrate] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/narrate"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-narrate"))
 		narrateSpecId = narrate.id
 		narrateVersionId = narrate.activeVersionId!
 
@@ -471,7 +471,7 @@ describe("the narrator split, from an older configuration", () => {
 			db,
 			narrateSpecId,
 			narrateVersionId,
-			"core:spec/narrate"
+			"core:spec/chat-narrate"
 		)
 		const paths = (await valuesOf(configId))
 			.filter((v: any) => v.slot === "variables")
@@ -525,7 +525,7 @@ describe("the narrator split, from an older configuration", () => {
  * for as long as it only matched the exact spelling, every author preset that
  * set `settings` was dropped in silence and the config took the author default.
  *
- * The visible cost of that: `core:spec/generate-image` ships `review-on` as its
+ * The visible cost of that: `core:spec/chat-generate-image` ships `review-on` as its
  * DEFAULT preset, labelled "Ask for the prompt". The shipped config was named
  * after it — so the panel said "Ask for the prompt" — and pressing Image
  * rendered immediately with whatever the prompts slot happened to hold, because
@@ -553,7 +553,7 @@ describe("an author preset that sets a whole settings slot", () => {
 	}
 
 	it("reaches the field the declaration names", async () => {
-		const values = await configFor("core:spec/generate-image")
+		const values = await configFor("core:spec/chat-generate-image")
 		expect(values.get("render|settings|review")).toBe("on")
 	})
 
@@ -568,7 +568,7 @@ describe("an author preset that sets a whole settings slot", () => {
 		// and not there at all — because "no row" alone would also be satisfied
 		// by a seeder that had stopped writing this slot entirely, and `not on`
 		// alone would be satisfied by the materialized copy this ruling removes.
-		const values = await configFor("core:spec/generate-image")
+		const values = await configFor("core:spec/chat-generate-image")
 		expect(
 			values.get("post|settings|review"),
 			"the sibling node caught the preset's whole-slot value"
@@ -583,24 +583,24 @@ describe("an author preset that sets a whole settings slot", () => {
 		expect(values.get("render|settings|review")).toBe("on")
 	})
 
-	it("names the config after the preset it actually applied", async () => {
-		// The two travelled separately before: the NAME came from the preset and
-		// the VALUES did not, which is what made the failure so hard to see.
+	it("names the shipped default config \"Default\", whatever preset it applied", async () => {
+		// Owner ruling 2026-10-05 (C5): default configs are "Default", not the
+		// label of the genre or preset they were seeded from.
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/generate-image"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-generate-image"))
 		const res = await ensureDefaultConfig(
 			db,
 			spec.id,
 			spec.activeVersionId!,
-			"core:spec/generate-image"
+			"core:spec/chat-generate-image"
 		)
 		const [config] = await db
 			.select()
 			.from(schema.pipelineConfigs)
 			.where(eq(schema.pipelineConfigs.id, res.configId))
-		expect(config.name).toBe("Ask for the prompt")
+		expect(config.name).toBe("Default")
 	})
 })
 
@@ -691,7 +691,7 @@ describe("naming what was culled", () => {
 	}, 60_000)
 
 	it("labels the cull with what the version that declared it called it", async () => {
-		await reconcileConfigs(db, specId, specVersionId, RESPOND_SPEC_ID)
+		await reconcileConfigs(db, specId, specVersionId, CHAT_RESPOND_SPEC_ID)
 		const culled = (await pendingNotices(db, mine)).filter(
 			(n: any) => n.kind === "culled" && n.path === retired.path
 		)

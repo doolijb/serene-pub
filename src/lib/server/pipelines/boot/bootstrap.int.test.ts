@@ -14,7 +14,7 @@ import {
 	bootstrapPipelines,
 	loadPublished,
 	respondSpec,
-	RESPOND_SPEC_ID
+	CHAT_RESPOND_SPEC_ID
 } from "$lib/server/pipelines/boot/bootstrap"
 import { CORE_SPECS } from "$lib/server/pipelines/specs"
 import * as schema from "$lib/server/db/schema"
@@ -39,7 +39,7 @@ describe("bootstrapping the pipeline tables", () => {
 			expect(s.action).toBe("published")
 			expect(s.reconciled).toEqual([])
 		}
-		expect(report.specs.map((s) => s.id)).toContain(RESPOND_SPEC_ID)
+		expect(report.specs.map((s) => s.id)).toContain(CHAT_RESPOND_SPEC_ID)
 	}, 60_000)
 
 	it("changes nothing on the next boot", async () => {
@@ -58,7 +58,7 @@ describe("bootstrapping the pipeline tables", () => {
 	it("publishes a document that loads back and runs", async () => {
 		// Round-tripping is the real assertion: a spec that saved but cannot be
 		// loaded is a table full of rows nobody can execute.
-		const doc = await loadPublished(db, RESPOND_SPEC_ID)
+		const doc = await loadPublished(db, CHAT_RESPOND_SPEC_ID)
 		expect(doc).toBeTruthy()
 		expect(doc!.nodes.map((n: any) => n.key)).toEqual(
 			respondSpec().nodes.map((n: any) => n.key)

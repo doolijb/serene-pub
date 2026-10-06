@@ -40,10 +40,10 @@
 	 *   3. nothing on the instance qualifies AND no adapter in this build can
 	 *      express it → say that instead. `text->audio` is here today.
 	 *
-	 * ⚠ Instance FIRST. `servable` is wording, never a gate: `openai-embeddings`
-	 * and `local-onnx` carry `text->embedding` with no manifest entry at all, so
-	 * asking the build first would tell an admin who HAS an embeddings connection
-	 * that this build cannot do embeddings.
+	 * ⚠ Instance FIRST. `servable` is wording, never a gate: a connection whose
+	 * type this build's manifest does not describe keeps its cached transforms
+	 * (see `ComboRow` in combos.ts), so asking the build first could tell an
+	 * admin who HAS such a connection that this build cannot do its job.
 	 */
 	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
@@ -61,6 +61,7 @@
 	} from "$lib/shared/constants/outputKinds"
 	import type { ComboRow } from "$lib/shared/capabilities/combos"
 	import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
+	import { connectionTypeDisabledReason } from "$lib/shared/utils/connectionServiceItems"
 	import { NER_CAPABILITY } from "$lib/shared/constants/ner"
 	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
 	import EmbeddingSwitchDialog from "$lib/client/components/connections/EmbeddingSwitchDialog.svelte"
@@ -101,6 +102,27 @@
 			"Finds the people and places in passages. Switching models re-scans them."
 	}
 
+	/**
+	 * The two jobs a local ONNX model can do, and what still works for each on
+	 * a machine whose ONNX runtime didn't load. Every machine, not only
+	 * Android: the verdict is probed (`localOnnxAvailability`), and a desktop
+	 * build without the native runtime is the same case.
+	 */
+	const ONNX_FALLBACKS: Record<string, string> = {
+		[EMBEDDING_CAPABILITY]: "An embeddings service works.",
+		[NER_CAPABILITY]:
+			"Names the lorebook already knows are still matched."
+	}
+	const localOnnx = $derived(
+		systemSettingsCtx?.settings?.localOnnxAvailability
+	)
+	const localOnnxReason = $derived.by(() => {
+		const verdict = localOnnx
+		return verdict && !verdict.available
+			? (verdict.reason ?? "the ONNX runtime didn't load")
+			: null
+	})
+
 	type ConnectionOption = Sockets.ConnectionDefaults.List.ConnectionOption
 	type SamplingOption = Sockets.ConnectionDefaults.List.SamplingOption
 
@@ -109,6 +131,28 @@
 	let connectionOptions = $state<Record<string, ConnectionOption[]>>({})
 	let samplingOptions = $state<Record<string, SamplingOption[]>>({})
 	let loading = $state(true)
+
+	/**
+	 * Each connection's type, by id, from the options `connectionDefaults:list`
+	 * sent. Wanted where the local ONNX runtime didn't load: there a local
+	 * ONNX connection can't be made active (the server refuses the star with
+	 * the same sentence), so such a row is greyed with the reason like any
+	 * ineligible one (`blockedReason`).
+	 */
+	const connectionTypes = $derived.by(() => {
+		const types: Record<number, string> = {}
+		for (const options of Object.values(connectionOptions))
+			for (const o of options) types[o.id] = o.type
+		return types
+	})
+	/**
+	 * Why this connection can't be chosen on this machine, beyond what the
+	 * server judged about it, or null (`connectionTypeDisabledReason`).
+	 */
+	const blockedReason = (id: number | null | undefined): string | null =>
+		id == null
+			? null
+			: connectionTypeDisabledReason(connectionTypes[id], localOnnx)
 
 	/**
 	 * The cards, already grouped.
@@ -201,7 +245,9 @@
 
 	/** Does any connection on this instance qualify for this capability? */
 	const hasEligible = (id: string): boolean =>
-		(connectionOptions[id] ?? []).some((o) => o.eligible)
+		(connectionOptions[id] ?? []).some(
+			(o) => o.eligible && !blockedReason(o.id)
+		)
 
 	/**
 	 * The sampling config the whole group is on, `"mixed"` when its cards
@@ -501,13 +547,14 @@
 										{JOB_NOTES[combo.id]}
 									</p>
 								{/if}
-								{#if combo.id === EMBEDDING_CAPABILITY && systemSettingsCtx?.settings?.isAndroidWrapper}
+								{#if localOnnxReason && ONNX_FALLBACKS[combo.id]}
 									<p
-										class="text-surface-600-400 mt-0.5 text-xs"
+										class="text-surface-600-400 mt-0.5 text-xs break-words"
 									>
-										Local embeddings aren't available in the
-										Android app; an external embeddings API
-										works.
+										Local ONNX models aren't available on
+										this machine: {localOnnxReason}. {ONNX_FALLBACKS[
+											combo.id
+										]}
 									</p>
 								{/if}
 								{#if users.length}
@@ -562,10 +609,14 @@
 												...options.map((opt) => ({
 													value: String(opt.id),
 													label: opt.name,
-													disabled: !opt.eligible,
+													disabled:
+														!opt.eligible ||
+														!!blockedReason(opt.id),
 													hint:
 														[
-															opt.reason,
+															blockedReason(
+																opt.id
+															) ?? opt.reason,
 															notePreview(
 																opt.notes
 															)
@@ -587,6 +638,8 @@
 													)
 													return
 												}
+												if (blockedReason(Number(v)))
+													return
 												// Pin the first switched-on model: the
 												// registration needs both halves and
 												// connections have no default model.
@@ -638,11 +691,17 @@
 														disabled:
 															!m.enabled ||
 															m.missingSince !=
-																null,
+																null ||
+															!!blockedReason(
+																current
+															),
 														hint: m.missingSince
 															? "No longer listed by its host"
 															: m.enabled
-																? undefined
+																? (blockedReason(
+																		current
+																	) ??
+																	undefined)
 																: "Switched off"
 													})
 												)}

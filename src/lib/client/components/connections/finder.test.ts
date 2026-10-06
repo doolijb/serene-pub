@@ -168,6 +168,62 @@ describe("destinationsFor — only somewhere a file could actually land", () => 
 	})
 })
 
+describe("ONNX destinations on a machine that can't run local ONNX", () => {
+	const rows = [
+		{ id: 3, name: "Ollama", type: CONNECTION_TYPE.OLLAMA },
+		{
+			id: 4,
+			name: "Embeddings",
+			type: CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS
+		},
+		{ id: 5, name: "Entities", type: CONNECTION_TYPE.LOCAL_ONNX_NER }
+	]
+	const localOnnx = {
+		available: false,
+		reason: "the ONNX runtime didn't load (no binding)"
+	}
+	const REASON =
+		"Not available on this machine: the ONNX runtime didn't load (no binding)"
+
+	test("stay listed, disabled with the reason; nothing else is", () => {
+		const out = destinationsFor("embeddings", rows, { localOnnx })
+		expect(out.map((d) => [d.kind, d.disabledReason])).toEqual([
+			["onnx", REASON],
+			["ollama", undefined]
+		])
+		expect(
+			destinationsFor("entities", rows, { localOnnx }).map(
+				(d) => d.disabledReason
+			)
+		).toEqual([REASON])
+	})
+
+	test("a machine that runs them, or no verdict yet, disables none", () => {
+		for (const verdict of [{ available: true, reason: null }, undefined]) {
+			const out = destinationsFor("embeddings", rows, {
+				localOnnx: verdict
+			})
+			expect(out.some((d) => d.disabledReason)).toBe(false)
+		}
+	})
+
+	test("pickDestination passes a disabled one over, unless asked for it or alone", () => {
+		const out = destinationsFor("embeddings", rows, { localOnnx })
+		// Ollama, though ONNX comes first and `isReady` says yes to both.
+		expect(pickDestination(out)?.connectionId).toBe(3)
+		// The ONNX endpoint's own Get tab asks for it by id.
+		expect(pickDestination(out, 4)?.connectionId).toBe(4)
+		// Entities has nowhere else: the disabled one, so its reason shows.
+		const entities = destinationsFor("entities", rows, { localOnnx })
+		expect(pickDestination(entities)?.connectionId).toBe(5)
+	})
+
+	test("the landing note is the reason", () => {
+		const [onnx] = destinationsFor("entities", rows, { localOnnx })
+		expect(landingNote(onnx)).toBe(REASON)
+	})
+})
+
 describe("landingNote names where files go", () => {
 	const dest = (kind: Destination["kind"]): Destination => ({
 		id: `${kind}:1`,

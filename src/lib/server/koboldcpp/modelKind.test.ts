@@ -60,6 +60,72 @@ function u32(n: number): Buffer {
 const archKv = (value: string) =>
 	Buffer.concat([gstr("general.architecture"), u32(8), gstr(value)])
 
+// --- More value types, for the KV walk that finds `<arch>.pooling_type`.
+
+const u64 = (n: number) => {
+	const b = Buffer.alloc(8)
+	b.writeBigUInt64LE(BigInt(n))
+	return b
+}
+const f32 = (n: number) => {
+	const b = Buffer.alloc(4)
+	b.writeFloatLE(n)
+	return b
+}
+/** A UINT32 (type 4) KV — what `pooling_type` is written as. */
+const u32Kv = (key: string, value: number) =>
+	Buffer.concat([gstr(key), u32(4), u32(value)])
+/** A STRING (type 8) KV. */
+const strKv = (key: string, value: string) =>
+	Buffer.concat([gstr(key), u32(8), gstr(value)])
+/** An ARRAY (type 9) of STRING KV — `general.tags`, `tokenizer.ggml.tokens`. */
+const strArrayKv = (key: string, values: string[]) =>
+	Buffer.concat([
+		gstr(key),
+		u32(9),
+		u32(8),
+		u64(values.length),
+		...values.map(gstr)
+	])
+
+/** A GGUF of `kvs`, its header counting them. */
+function gguf(...kvs: Buffer[]): Buffer {
+	return Buffer.concat([
+		hex("47 47 55 46 03 00 00 00"),
+		u64(112),
+		u64(kvs.length),
+		...kvs
+	])
+}
+
+/**
+ * nomic-ai/nomic-embed-text-v1.5-GGUF nomic-embed-text-v1.5.Q4_K_M.gguf, KV by
+ * KV in its own order (read off the file LM Studio bundles): `pooling_type`
+ * is the 11th key, at byte 470, and the tokenizer's 30 522-entry vocabulary
+ * runs on past any window this file reads.
+ */
+const NOMIC_EMBED = gguf(
+	archKv("nomic-bert"),
+	strKv("general.name", "nomic-embed-text-v1.5"),
+	u32Kv("nomic-bert.block_count", 12),
+	u32Kv("nomic-bert.context_length", 2048),
+	u32Kv("nomic-bert.embedding_length", 768),
+	u32Kv("nomic-bert.feed_forward_length", 3072),
+	u32Kv("nomic-bert.attention.head_count", 12),
+	Buffer.concat([
+		gstr("nomic-bert.attention.layer_norm_epsilon"),
+		u32(6),
+		f32(1e-12)
+	]),
+	u32Kv("general.file_type", 15),
+	Buffer.concat([gstr("nomic-bert.attention.causal"), u32(7), hex("00")]),
+	u32Kv("nomic-bert.pooling_type", 1),
+	strKv("tokenizer.ggml.model", "bert"),
+	// The vocabulary array's header, and then the window simply ends.
+	Buffer.concat([gstr("tokenizer.ggml.tokens"), u32(9), u32(8), u64(30522)]),
+	gstr("[PAD]")
+)
+
 const NO_KV = "00 00 00 00 00 00 00 00"
 
 // --- SD.CPP GGUFs: zero metadata, straight into Stable-Diffusion tensor names.
@@ -250,6 +316,120 @@ describe("classifying a GGUF by its header", () => {
 	})
 })
 
+describe("telling an embedding model apart", () => {
+	// B1 (2026-10-05). koboldcpp loads an embedding GGUF into a slot of its
+	// own, beside the chat model; filed as `text`, it was offered for chat and
+	// "Use for chat" pointed `--model` at it.
+
+	test("a real embedding GGUF's pooling key makes it embeddings", () => {
+		const verdict = classifyGgufHeader(NOMIC_EMBED)
+		expect(verdict.kind).toBe("embeddings")
+		expect(verdict.reason).toContain("nomic-bert.pooling_type")
+		expect(verdict.reason).toContain("(mean)")
+	})
+
+	test("the pooling key decides, not the architecture: qwen3 can be either", () => {
+		// Qwen3-Embedding ships as arch `qwen3`, exactly as the Qwen3 chat
+		// models do — the case an architecture list cannot get right.
+		const embedding = gguf(
+			archKv("qwen3"),
+			strArrayKv("general.tags", ["sentence-transformers", "embeddings"]),
+			u32Kv("qwen3.context_length", 32768),
+			u32Kv("qwen3.pooling_type", 3)
+		)
+		expect(classifyGgufHeader(embedding)).toMatchObject({
+			kind: "embeddings",
+			reason: expect.stringContaining("(last)")
+		})
+		const chat = gguf(
+			archKv("qwen3"),
+			u32Kv("qwen3.context_length", 40960),
+			strKv("tokenizer.ggml.model", "gpt2")
+		)
+		expect(classifyGgufHeader(chat).kind).toBe("text")
+	})
+
+	test("every embedding pooling counts, written as any integer type", () => {
+		for (const pooling of [0, 1, 2, 3]) {
+			expect(
+				classifyGgufHeader(
+					gguf(archKv("bert"), u32Kv("bert.pooling_type", pooling))
+				).kind,
+				`pooling ${pooling}`
+			).toBe("embeddings")
+		}
+		// INT32 (type 5) rather than UINT32: the enum is signed in llama.cpp.
+		const int32 = gguf(
+			archKv("qwen3"),
+			Buffer.concat([gstr("qwen3.pooling_type"), u32(5), u32(2)])
+		)
+		expect(classifyGgufHeader(int32).kind).toBe("embeddings")
+	})
+
+	test("a reranker is not an embedding model, and says so", () => {
+		// `rank` pooling (4): bge-reranker, Qwen3-Reranker. It scores a passage
+		// against a query; the embeddings slot would load it and answer garbage.
+		const verdict = classifyGgufHeader(
+			gguf(archKv("qwen3"), u32Kv("qwen3.pooling_type", 4))
+		)
+		expect(verdict.kind).toBe("unknown")
+		expect(verdict.reason).toMatch(/reranker/)
+	})
+
+	test("a pooling type nobody has defined is unknown, and names it", () => {
+		const verdict = classifyGgufHeader(
+			gguf(archKv("qwen3"), u32Kv("qwen3.pooling_type", 9))
+		)
+		expect(verdict.kind).toBe("unknown")
+		expect(verdict.reason).toContain("9")
+	})
+
+	test("another architecture's pooling key is not this file's", () => {
+		const verdict = classifyGgufHeader(
+			gguf(archKv("llama"), u32Kv("bert.pooling_type", 1))
+		)
+		expect(verdict.kind).toBe("text")
+	})
+
+	test("without a pooling key, an embedding-only architecture still lands", () => {
+		// The fallback: an older conversion with no pooling key. `bert` was in
+		// the LANGUAGE-model list until B1, which filed every BGE and MiniLM
+		// GGUF as a chat model.
+		expect(classifyGgufHeader(withArch("bert")).kind).toBe("embeddings")
+		expect(classifyGgufHeader(withArch("nomic-bert-moe")).kind).toBe(
+			"embeddings"
+		)
+		expect(classifyGgufHeader(withArch("jina-bert-v2")).kind).toBe(
+			"embeddings"
+		)
+		// The longer prefix wins over `gemma`, as qwen_image does over `qwen`.
+		expect(classifyGgufHeader(withArch("gemma-embedding")).kind).toBe(
+			"embeddings"
+		)
+		expect(classifyGgufHeader(withArch("gemma3")).kind).toBe("text")
+	})
+
+	test("a pooling key past a value the walk cannot decode is not guessed at", () => {
+		// An unknown value type (99) ends the walk; the architecture, found by
+		// the scan fallback, decides — never a throw.
+		const buf = gguf(
+			archKv("qwen3"),
+			Buffer.concat([gstr("odd.key"), u32(99), u32(0)]),
+			u32Kv("qwen3.pooling_type", 1)
+		)
+		expect(() => classifyGgufHeader(buf)).not.toThrow()
+		expect(classifyGgufHeader(buf).kind).toBe("text")
+	})
+
+	test("a header cut off inside the pooling value falls back to the architecture", () => {
+		const whole = gguf(archKv("bert"), u32Kv("bert.pooling_type", 4))
+		const cut = whole.subarray(0, whole.length - 2)
+		expect(() => classifyGgufHeader(cut)).not.toThrow()
+		// Without the key, `bert` is an embedding-only architecture.
+		expect(classifyGgufHeader(cut).kind).toBe("embeddings")
+	})
+})
+
 describe("headers that are not headers", () => {
 	// Every one of these is reachable in the models directory: a download that
 	// died halfway, a README somebody renamed, a zero-byte placeholder. None of
@@ -346,20 +526,50 @@ describe("reading a real file off disk", () => {
 
 	test("a file on disk is classified from its first bytes", async () => {
 		const file = path.join(dir, "Llama-3.2-1B-Instruct-Q4_K_M.gguf")
-		// Padded well past the 4 KiB window so this exercises a positional read
+		// Padded well past the 64 KiB window so this exercises a positional read
 		// of a prefix rather than a whole-file slurp.
 		await fs.writeFile(
 			file,
-			Buffer.concat([LLAMA_3_2_1B, Buffer.alloc(64_000)])
+			Buffer.concat([LLAMA_3_2_1B, Buffer.alloc(200_000)])
 		)
 		expect((await classifyModelFile(file)).kind).toBe("text")
 
 		const sd = path.join(dir, "imgmodel_xl_q4_0.gguf")
 		await fs.writeFile(
 			sd,
-			Buffer.concat([IMGMODEL_XL, Buffer.alloc(64_000)])
+			Buffer.concat([IMGMODEL_XL, Buffer.alloc(200_000)])
 		)
 		expect((await classifyModelFile(sd)).kind).toBe("image")
+	})
+
+	test("a pooling key past the first 4 KiB is still read", async () => {
+		// A quantizer's description, tags and base-model list ahead of the
+		// model's own keys. The window was 4 KiB until B1; at that size this
+		// Qwen3-Embedding listed as a chat model.
+		const file = path.join(dir, "Qwen3-Embedding-0.6B-Q8_0.gguf")
+		await fs.writeFile(
+			file,
+			Buffer.concat([
+				gguf(
+					archKv("qwen3"),
+					strKv("general.description", "x".repeat(6000)),
+					strArrayKv(
+						"general.tags",
+						Array.from({ length: 50 }, (_, i) => `tag-${i}`)
+					),
+					u32Kv("qwen3.pooling_type", 3)
+				),
+				Buffer.alloc(200_000)
+			])
+		)
+		expect((await classifyModelFile(file)).kind).toBe("embeddings")
+
+		const nomic = path.join(dir, "nomic-embed-text-v1.5.Q4_K_M.gguf")
+		await fs.writeFile(
+			nomic,
+			Buffer.concat([NOMIC_EMBED, Buffer.alloc(200_000)])
+		)
+		expect((await classifyModelFile(nomic)).kind).toBe("embeddings")
 	})
 
 	test("a file that vanished mid-scan is unknown, not a thrown listing", async () => {

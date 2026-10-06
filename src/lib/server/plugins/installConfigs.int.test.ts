@@ -169,7 +169,7 @@ beforeAll(async () => {
 	const [respondCore] = await db
 		.select({ specId: schema.pipelineConfigs.specId })
 		.from(schema.pipelineConfigs)
-		.where(eq(schema.pipelineConfigs.seedKey, "pipeline-default:core:spec/respond"))
+		.where(eq(schema.pipelineConfigs.seedKey, "pipeline-default:core:spec/chat-respond"))
 		.limit(1)
 	const [mine] = await db
 		.insert(schema.pipelineConfigs)

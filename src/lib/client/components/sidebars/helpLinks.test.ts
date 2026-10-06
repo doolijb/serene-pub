@@ -26,8 +26,8 @@ describe("resolveInViewLink", () => {
 
 	it("keeps a reference page, whose slug has slashes in it", () => {
 		expect(
-			resolveInViewLink("/docs/sdk/pipelines/core_spec_respond#slots")
-		).toEqual({ slug: "sdk/pipelines/core_spec_respond", anchor: "slots" })
+			resolveInViewLink("/docs/sdk/pipelines/core_spec_chat-respond#slots")
+		).toEqual({ slug: "sdk/pipelines/core_spec_chat-respond", anchor: "slots" })
 	})
 
 	it.each(["/docs", "/docs/", "/docs#top"])(

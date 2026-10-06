@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { v4 as uuid } from "uuid"
 	import { avatarSrc, withRevisedAvatar } from "$lib/client/utils/media"
 	import {
 		setHostParticipants,
@@ -3939,7 +3940,7 @@
 			...(p.payload && Object.keys(p.payload).length
 				? { payload: p.payload }
 				: {}),
-			runId: crypto.randomUUID()
+			runId: uuid()
 		})
 	}
 

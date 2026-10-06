@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { provideCharacterImports } from "$lib/client/contexts/characterImports.svelte"
 	import Header from "./Header.svelte"
 	import PanelHeader from "./panels/PanelHeader.svelte"
 	import Avatar from "./Avatar.svelte"
@@ -87,6 +88,11 @@
 	// double-toast (or override an intentional suppression) - see the
 	// wildcard error handling note near `handleAnyEvent`.
 	const HANDLED_ERROR_EVENTS = new Set<string>([
+		// The characters-import context toasts a refused import itself
+		// (contexts/characterImports.svelte.ts), once for every view.
+		"characters:importCard:error",
+		"characters:importFromLibrary:error",
+		"characters:importResolve:error",
 		// The folder dialog shows the server's refusal (a name this user
 		// already has) INLINE under its name field, so a toast saying the same
 		// thing would be the same correction twice, in two places.
@@ -1927,6 +1933,9 @@
 	// shouldShowApp}` — and the interest registry should not depend on that
 	// accident. The value is module functions, so there is nothing to wait for.
 	setContext(INTEREST_CONTEXT, interestContextValue())
+	// The one subscriber to the card-import events; views take the outcome
+	// from this context (contexts/characterImports.svelte.ts).
+	provideCharacterImports()
 
 	/**
 	 * **Jump** — the shell owns the overlay; the views own their search boxes.
@@ -2038,7 +2047,7 @@
 		systemSettingsCtx.settings = {
 			...message.systemSettings,
 			isAndroidWrapper: message.isAndroidWrapper,
-			localEmbeddingsSupported: message.localEmbeddingsSupported,
+			localOnnxAvailability: message.localOnnxAvailability,
 			// Not a column: derived from the `text->embedding` star, and folded
 			// in here beside the other two derivations so every screen that used
 			// to read `settings.embeddingModelName` keeps reading one object.

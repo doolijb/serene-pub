@@ -420,7 +420,7 @@ async function presetValuesFor(
 		// set `settings` was silently dropped and the config fell back to
 		// the author default.
 		//
-		// That was not a small miss. `core:spec/generate-image` ships
+		// That was not a small miss. `core:spec/chat-generate-image` ships
 		// `review-on` as its DEFAULT preset, labelled "Ask for the prompt" —
 		// so the shipped config was named after a preset whose one value
 		// never landed, and pressing Image rendered immediately instead of
@@ -450,20 +450,15 @@ async function presetValuesFor(
 /**
  * The names the shipped default may take, in order of preference.
  *
- * The preset's label first (or "Default" where the document ships none), then
- * the same qualified as the default, then numbered. Unbounded on purpose:
- * `(spec_id, name)` is unique, so some finite prefix of these is always free.
+ * "Default", then numbered (ruled 2026-10-05, C5). It was the default author
+ * preset's label ("Chat", "Ask for the prompt"), which named a configuration
+ * after one of its settings, or after its genre on a screen that already
+ * shows the genre. Unbounded on purpose: `(spec_id, name)` is unique, so some
+ * finite prefix of these is always free.
  */
-export function* defaultConfigNameCandidates(
-	label: string | null
-): Generator<string, never> {
-	if (label === null) {
-		yield "Default"
-		for (let i = 2; ; i++) yield `Default ${i}`
-	}
-	yield label
-	yield `${label} (default)`
-	for (let i = 2; ; i++) yield `${label} (default ${i})`
+export function* defaultConfigNameCandidates(): Generator<string, never> {
+	yield "Default"
+	for (let i = 2; ; i++) yield `Default ${i}`
 }
 
 /**
@@ -497,12 +492,12 @@ export async function ensureDefaultConfig(
 	const preset = await presetValuesFor(db, specVersionId)
 	const presetValues = preset.values
 
-	// The name is picked from those this spec's configs leave free, because the
-	// preset's label is not ours to hold: a plugin package ships a config
-	// labelled like its own default preset (Twenty Questions calls both
-	// "Twenty Questions"), and a person may have named a copy anything. The
-	// row is found by `seedKey`, never by name, so which free name it lands
-	// on changes nothing that reads it — and nobody else's row is renamed.
+	// The name is picked from those this spec's configs leave free, because
+	// "Default" is not ours to hold: a person may have named a copy anything,
+	// that included, and a plugin package ships configs of its own beside
+	// this one. The row is found by `seedKey`, never by name, so which free
+	// name it lands on changes nothing that reads it — and nobody else's row
+	// is renamed.
 	const taken = new Set(
 		(
 			await db
@@ -512,8 +507,7 @@ export async function ensureDefaultConfig(
 		).map((r) => r.name)
 	)
 	let name = ""
-	for (name of defaultConfigNameCandidates(preset.label))
-		if (!taken.has(name)) break
+	for (name of defaultConfigNameCandidates()) if (!taken.has(name)) break
 
 	const [config] = await db
 		.insert(schema.pipelineConfigs)
@@ -568,7 +562,7 @@ export async function ensureDefaultConfig(
 		// ⚠ This does not empty the shipped config. What survives is everything
 		// the declaration cannot supply: every `*-ref` (no author default at
 		// all — the whole of `refs` above) and every author-preset value that
-		// differs from the declared one. `core:spec/generate-image` is the case
+		// differs from the declared one. `core:spec/chat-generate-image` is the case
 		// to keep in mind: its default preset sets `render|settings|review` to
 		// `on` where the substrate's `settings` slot — projected from the
 		// definition's `reviewDefault` (R-9), which that oracle leaves unset —

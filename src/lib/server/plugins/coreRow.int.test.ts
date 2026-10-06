@@ -48,7 +48,7 @@ const LAYOUT = {
 /** The event every row subscribes to — a granted permission, reviewed. */
 const EVENT = "core:event/message-completed@1"
 /** Core's create pipeline for Chat, as the swaps test seeds it: what a swap names. */
-const SWAPPED_SPEC = "core:spec/create-chat"
+const SWAPPED_SPEC = "core:spec/chat-create"
 /** The node of it a session may swap. */
 const SWAPPED_NODE = "create"
 
@@ -275,7 +275,7 @@ describe("a stored 'core' plugin row", () => {
 	test("contributes no swap: not on the genre hub, not in a session's picker", async () => {
 		// Core's create pipeline for Chat, with a node a session may swap —
 		// what both rows' swaps name — and the definitions they name, live.
-		const [spec] = await testDb.insert(schema.pipelineSpecs).values({ slug: SWAPPED_SPEC, name: "Create chat" }).returning()
+		const [spec] = await testDb.insert(schema.pipelineSpecs).values({ slug: SWAPPED_SPEC, name: "Create session" }).returning()
 		const [version] = await testDb
 			.insert(schema.pipelineSpecVersions)
 			.values({

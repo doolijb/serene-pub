@@ -207,9 +207,9 @@ describe("a pipeline's settings, by group", () => {
 
 describe("inside a session's settings", () => {
 	test("is a card titled by the pipeline, with front rows only and the model read-only", async () => {
-		await open({ sessionId: 9, mode: "session", title: "Adventure turn" }, adventureSessionView(9))
+		await open({ sessionId: 9, mode: "session", title: "Reply" }, adventureSessionView(9))
 		const card = host.querySelector<HTMLElement>("[data-pipeline-card]")!
-		expect(card.querySelector("[data-card-title]")!.textContent!.trim()).toBe("Adventure turn")
+		expect(card.querySelector("[data-card-title]")!.textContent!.trim()).toBe("Reply")
 		expect(host.querySelectorAll("details")).toHaveLength(0)
 		// Whole pipeline has nothing a session draws.
 		expect(blocks().map(headingOf)).toEqual(["Planner", "Narrator", "Voices", "State keeper"])
@@ -223,10 +223,10 @@ describe("inside a session's settings", () => {
 
 	test("shows a non-admin a prompt-bearing card: their prompts, no model, no admin links", async () => {
 		setInterestUser({ id: 1, isAdmin: false })
-		await open({ sessionId: 9, mode: "session", title: "Adventure turn" }, nonAdminSessionView(9), false)
+		await open({ sessionId: 9, mode: "session", title: "Reply" }, nonAdminSessionView(9), false)
 		const card = host.querySelector<HTMLElement>("[data-pipeline-card]")!
 		expect(card).toBeTruthy()
-		expect(card.querySelector("[data-card-title]")!.textContent!.trim()).toBe("Adventure turn")
+		expect(card.querySelector("[data-card-title]")!.textContent!.trim()).toBe("Reply")
 		expect(card.querySelectorAll('[data-option-row="prompts-ref"]')).toHaveLength(4)
 		expect(card.querySelector('[data-option-row="connection-ref"]')).toBeNull()
 		expect(labelsIn(card)).not.toContain("Model")
@@ -242,7 +242,7 @@ describe("inside a session's settings", () => {
 	})
 
 	test("takes no view of another scope for the same pipeline", async () => {
-		await open({ sessionId: 9, mode: "session", title: "Adventure turn" }, adventureSessionView(9))
+		await open({ sessionId: 9, mode: "session", title: "Reply" }, adventureSessionView(9))
 		client.dispatch("pipelines:get", { pipeline: adventureView({ groups: [] }) })
 		await settle()
 		expect(blocks()).toHaveLength(4)
@@ -254,13 +254,13 @@ describe("a session's creation pipeline (owner ruling 2026-09-30)", () => {
 
 	test("once created, its card starts collapsed, every row read-only, with one note saying why", async () => {
 		await open(
-			{ sessionId: 9, mode: "session", title: "Create adventure" },
+			{ sessionId: 9, mode: "session", title: "Create session" },
 			creationSessionView(9, NOTE)
 		)
 		const card = host.querySelector<HTMLElement>("[data-pipeline-card]")!
 		expect(card.tagName).toBe("DETAILS")
 		expect((card as HTMLDetailsElement).open).toBe(false)
-		expect(card.querySelector("[data-card-title]")!.textContent!.trim()).toBe("Create adventure")
+		expect(card.querySelector("[data-card-title]")!.textContent!.trim()).toBe("Create session")
 
 		;(card as HTMLDetailsElement).open = true
 		await settle()
@@ -276,7 +276,7 @@ describe("a session's creation pipeline (owner ruling 2026-09-30)", () => {
 
 	test("while creating, it is an ordinary card: open and editable, with no note", async () => {
 		await open(
-			{ sessionId: 9, mode: "session", title: "Create adventure" },
+			{ sessionId: 9, mode: "session", title: "Create session" },
 			creationSessionView(9)
 		)
 		const card = host.querySelector<HTMLElement>("[data-pipeline-card]")!

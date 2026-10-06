@@ -223,17 +223,6 @@ async function attemptLoad(
 		)
 	}
 
-	console.log(
-		`[KoboldCPP] preflight attempt ${attemptNum}: connection`,
-		opts.connectionId,
-		`${request.kind} model`,
-		request.file,
-		request.kind === "text" ? `contextSize ${request.contextSize}` : "",
-		request.kind === "text" && request.mmproj
-			? `mmproj ${request.mmproj}`
-			: ""
-	)
-
 	// A model load can leave koboldcpp unresponsive to other requests for
 	// minutes on a large GGUF/slow disk — well beyond the health check's
 	// own failure-tolerance window. Suspend it for the duration so a slow
@@ -241,7 +230,7 @@ async function attemptLoad(
 	// down while this exact request is still waiting on it.
 	subprocessManager.suspendHealthCheck()
 	try {
-		await ensureModelLoaded({
+		const loaded = await ensureModelLoaded({
 			connectionId: opts.connectionId,
 			request,
 			baseUrl,
@@ -259,9 +248,22 @@ async function attemptLoad(
 					? () => subprocessManager.isRunning()
 					: undefined
 		})
-		console.log(
-			`[KoboldCPP] preflight attempt ${attemptNum}: ensureModelLoaded completed OK`
-		)
+		// Said when something was loaded, and on failure below — not on every
+		// call that found its model resident, which on the embedding lane is
+		// every batch. `ensureModelLoaded` says when a load starts.
+		if (loaded)
+			console.log(
+				`[KoboldCPP] preflight attempt ${attemptNum}: loaded ${request.kind} model`,
+				request.file,
+				"for connection",
+				opts.connectionId,
+				request.kind === "text"
+					? `contextSize ${request.contextSize}`
+					: "",
+				request.kind === "text" && request.mmproj
+					? `mmproj ${request.mmproj}`
+					: ""
+			)
 		subprocessManager.pingActivity()
 	} catch (err: any) {
 		console.error(

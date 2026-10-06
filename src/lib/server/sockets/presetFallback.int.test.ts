@@ -132,8 +132,8 @@ async function presetBinding(
 		.update(schema.sessionPresets)
 		.set({
 			bindings: {
-				"core:event/session-created@1": { spec: "core:spec/create-chat" },
-				"core:event/message-respond@1": { spec: "core:spec/respond" },
+				"core:event/session-created@1": { spec: "core:spec/chat-create" },
+				"core:event/message-respond@1": { spec: "core:spec/chat-respond" },
 				...bindings
 			}
 		})
@@ -178,7 +178,7 @@ describe("a binding that stopped resolving", () => {
 			await resolveSessionEventSpec(db as any, GENRE, "core:event/session-created@1", {
 				sessionId
 			})
-		).toBe("core:spec/create-chat")
+		).toBe("core:spec/chat-create")
 
 		// (b) the run happens, on the default, and records the fact.
 		const dispatched = await dispatchSessionEvent(db as any, {
@@ -194,7 +194,7 @@ describe("a binding that stopped resolving", () => {
 				fields: {}
 			}
 		})
-		expect(dispatched?.specSlug).toBe("core:spec/create-chat")
+		expect(dispatched?.specSlug).toBe("core:spec/chat-create")
 		// The fire's own recompute opens a turn-order run ahead of the one the
 		// binding answered, so the receipt that carries the fact is the second
 		// — never a guess picked by `limit`.
@@ -207,10 +207,10 @@ describe("a binding that stopped resolving", () => {
 		// The recompute runs on the session's queue after the writer (PLAN
 		// §8 (27)), so its row may land either side of the create's.
 		expect(allRuns.map((r) => r.specSlug).sort()).toEqual([
-			"core:spec/chat-turn-order",
-			"core:spec/create-chat"
+			"core:spec/chat-create",
+			"core:spec/chat-turn-order"
 		])
-		const run = allRuns.find((r) => r.specSlug === "core:spec/create-chat")!
+		const run = allRuns.find((r) => r.specSlug === "core:spec/chat-create")!
 		expect(run?.receipt?.meta?.preset).toMatchObject({
 			via: "fallback",
 			preset: "Plugin creation",
@@ -298,15 +298,15 @@ describe("a binding that stopped resolving", () => {
 			noop
 		)
 		expect(listed.pipelines.map((p) => p.slug)).toContain(
-			"core:spec/respond"
+			"core:spec/chat-respond"
 		)
 		// The reply's card is titled by its pipeline, never a fixed "Respond".
 		const [replySpec] = await db
 			.select({ name: schema.pipelineSpecs.name })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/respond"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-respond"))
 		expect(
-			listed.pipelines.find((p) => p.slug === "core:spec/respond")?.label
+			listed.pipelines.find((p) => p.slug === "core:spec/chat-respond")?.label
 		).toBe(replySpec!.name)
 		expect(listed.presetFallbacks?.[0]).toMatchObject({
 			event: "core:event/message-respond@1",
@@ -324,7 +324,7 @@ describe("a binding that stopped resolving", () => {
 		expect(status.stale?.[0]).toMatchObject({
 			event: "core:event/message-respond@1",
 			bound: "test:spec/respond-plugin-2",
-			fallbackSpec: "core:spec/respond"
+			fallbackSpec: "core:spec/chat-respond"
 		})
 	}, 120_000)
 
@@ -368,8 +368,8 @@ describe("a binding that stopped resolving", () => {
 			{
 				id: created.preset!.id,
 				bindings: {
-					"core:event/session-created@1": { spec: "core:spec/create-chat" },
-					"core:event/message-respond@1": { spec: "core:spec/narrate" }
+					"core:event/session-created@1": { spec: "core:spec/chat-create" },
+					"core:event/message-respond@1": { spec: "core:spec/chat-narrate" }
 				}
 			},
 			noop

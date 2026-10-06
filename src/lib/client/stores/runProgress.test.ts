@@ -174,14 +174,14 @@ describe("runProgress", () => {
 		})
 		runProgress.apply({
 			runId: "r1",
-			stage: "Answer a form (adventure)",
+			stage: "Answer a form",
 			status: null
 		})
 		expect(runProgress.get("r1")).toMatchObject({
 			sessionId: SESSION,
 			label: "ask",
 			steps: 3,
-			stage: "Answer a form (adventure)",
+			stage: "Answer a form",
 			status: null
 		})
 	})

@@ -20,26 +20,30 @@ const streamingKeys = (d: SpecDocument) => [...streamingSteps(d)].sort()
 const doc = (slug: string) =>
 	CORE_SPECS.find((s) => s.slug === slug)!.build() as unknown as SpecDocument
 
+// The sprite picker (`core:oracle/pick-sprite@1`, 2026-10-05) is an oracle
+// on the spine, written into every reply spec after `save` — so it is counted
+// here, and always after the reply's own step: the preview halts at that one
+// first, and `budgetConnectionOf` reads the first.
 describe("the steps on the spine", () => {
 	it("counts the spine only — respond's two embed providers sit in blocks", () => {
 		expect(
-			spineProviders(doc("core:spec/respond")).map((n) => n.key)
-		).toEqual(["generate"])
+			spineProviders(doc("core:spec/chat-respond")).map((n) => n.key)
+		).toEqual(["generate", "spritePick"])
 	})
 
-	it("sees all three of an Adventure turn's steps", () => {
+	it("sees all four of an Adventure turn's steps", () => {
 		expect(
 			spineProviders(doc("core:spec/adventure-respond")).map((n) => n.key)
-		).toEqual(["planWrite", "scene", "keeperWrite"])
+		).toEqual(["planWrite", "scene", "spritePick", "keeperWrite"])
 	})
 })
 
 describe("which step streams — declared (lair pass B3, D6)", () => {
 	it("is the declared generate on every single-step reply spec", () => {
 		for (const slug of [
-			"core:spec/respond",
-			"core:spec/narrate",
-			"core:spec/narrate-character",
+			"core:spec/chat-respond",
+			"core:spec/chat-narrate",
+			"core:spec/chat-side-character",
 			"core:spec/guide-respond"
 		])
 			expect(streamingKeys(doc(slug)), slug).toEqual(["generate"])

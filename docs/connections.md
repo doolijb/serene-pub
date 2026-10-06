@@ -79,7 +79,7 @@ The finder searches the recommended model lists and Hugging Face from one box. O
 
 1. **Search.** Typing narrows the recommended models at once and, after a pause, searches Hugging Face for GGUF files. For a local ONNX connection there is no search; **Add from Hugging Face by id** takes a model's id instead.
 2. **For**: **Chat**, **Images**, **Embeddings** or **Entities**.
-3. **Download to**: which of your managed connections the files go into, such as your KoboldCPP, your Ollama, or a local ONNX connection. Only programs Serene Pub can download into are offered; an online service never is. A line under it says where files will land and which memory size is set, with **Change**.
+3. **Download to**: which of your managed connections the files go into, such as your KoboldCPP, your Ollama, or a local ONNX connection. Only programs Serene Pub can download into are offered; an online service never is. A line under it says where files will land and which memory size is set, with **Change**. On a device that can't run local ONNX models, a local ONNX connection's pill stays but is dimmed; picking it shows why on that line, and its **Get** buttons are greyed out.
 4. **Results.** **Recommended** rows come from Serene Pub's curated lists; **Hugging Face** rows come from the search. Each row has a tier chip (_Ultra Budget_ to _Enthusiast_ for GGUF files, _Fast_, _Balanced_ or _Best_ for ONNX), its size and a short description. A model you already have says so instead of offering **Get**.
 
 **Memory size.** **Change** asks _How much memory does this machine have?_ with five answers: 4 GB, 8 GB, 12 GB, 24 GB+ or **Not sure**. Answer with your graphics card's memory, or your Mac's memory. Rows that suit it turn gold, and the first one that fits gets the one gold **Get**. **Not sure** switches all the size hints off rather than guessing. The answer is remembered in this browser, so a phone and a desktop can answer differently.
@@ -94,7 +94,7 @@ Everything the pub is downloading, in one list: model files for KoboldCPP, the K
 
 Tap a connection and its view opens. For a service you connect to, such as OpenRouter, Anthropic or your own llama.cpp, it has a status card and up to two tabs.
 
-- **Status card.** One word and one sentence: _Reachable · Answered just now_, _Not reachable · ECONNREFUSED_, _Couldn't list models · 401 Unauthorized_, or _Not checked yet_. **Test** asks the service using the settings as they are on screen, saved or not. A service that still needs a key says **Needs an API key**, in gold, with a **Get a key ↗** link to that service's key page.
+- **Status card.** One word and one sentence: _Reachable · Answered just now_, _Not reachable · ECONNREFUSED_, _Couldn't list models · 401 Unauthorized_, or _Not checked yet_. **Test** asks the service using the settings as they are on screen, saved or not. On the connection starred for embeddings, **Test** also embeds one word with the starred model, so a model swapped on the host fails the test. A service that still needs a key says **Needs an API key**, in gold, with a **Get a key ↗** link to that service's key page.
 - **Models tab**, when the service offers models to choose from: how many it lists and how many are no longer listed, **Refresh**, the models themselves, each with **Use** (a table with context and prices where the view is wide enough), and **Add by name** for a service that doesn't publish a list. Tap a model to open its own settings.
 - **Settings tab.** The name, the API key, the address, and **Request settings** (token counter, streaming and anything particular to that service). Under **Advanced and notes** are your notes, **What this connection can do** (see [Chat messages or text completion](#chat-messages-or-text-completion)), any embedding or entity settings, and stop scripts. **Delete connection** is at the foot.
 
@@ -130,14 +130,13 @@ The **New connection** dialog lists every service in one searchable box, grouped
 | --- | --- | --- |
 | **KoboldCPP, run by Serene Pub** | On this machine | Most people running models locally. Serene Pub installs and looks after it. Added from **Add**, not from this dialog. |
 | **Ollama** | On this machine or your network | People who already use Ollama. Chat and embeddings from one connection. |
-| **LM Studio** | On this machine or your network | People who already use LM Studio and its window for managing models. |
+| **LM Studio** | On this machine or your network | People who already use LM Studio and its window for managing models. Chat and embeddings from one connection. |
 | **KoboldCPP** | On this machine or your network | A KoboldCPP you start yourself. |
-| **Llama.cpp** | On this machine or your network | People who build and run `llama-server` themselves. |
-| **OpenRouter**, **OpenAI (Official)** and other OpenAI-compatible services | Online | Hosted models. OpenRouter reaches hundreds with one key. |
+| **Llama.cpp** | On this machine or your network | People who build and run `llama-server` themselves. Embeddings too, from a server started for them. |
+| **OpenRouter**, **OpenAI (Official)** and other OpenAI-compatible services | Online | Hosted models. OpenRouter reaches hundreds with one key. Several also embed (see [Embeddings](#embeddings-from-an-openai-compatible-service)). |
 | **Anthropic (Claude)** | Online | Claude models, direct from Anthropic. |
 | **Stable Diffusion (A1111-compatible)** | On this machine or your network | Images from AUTOMATIC1111, Forge, SD.Next or a KoboldCPP with an image model. |
-| **Local embeddings (ONNX)**, **Local named entities (ONNX)** | Inside Serene Pub | Helping characters remember a long story. See [Local ONNX models](#local-onnx-models). |
-| **Embeddings (OpenAI-compatible)** | Online or your network | Embeddings from a service's `/embeddings` endpoint. |
+| **Local embeddings (ONNX)**, **Local named entities (ONNX)** | Inside Serene Pub | Helping characters remember a long story. Greyed out, with the reason, on devices that can't run it (Android, and some desktop builds). See [Local ONNX models](#local-onnx-models). |
 
 :::note Most people: pick one
 Running models on your own computer: **KoboldCPP, run by Serene Pub**. Using an online service: **OpenRouter**. Either can be added to later.
@@ -145,11 +144,13 @@ Running models on your own computer: **KoboldCPP, run by Serene Pub**. Using an 
 
 Every connection form shares a pattern: the key or address it can't work without comes first, then a **Token Counter**, then **Request settings** for how requests are sent. There is no Test button on the form; **Test** is on the connection's [status card](#a-connections-view).
 
-Most connections serve one kind of model. **Ollama** and the **KoboldCPP run by Serene Pub** serve several: one Ollama connection offers every chat and embedding model its host has pulled, and the managed KoboldCPP both writes and draws. Each model knows what it is for, so an embedding model is never offered for chat and an image model never for text.
+One connection serves every kind of model its program has. One Ollama or LM Studio connection offers every chat and embedding model it holds, a KoboldCPP offers what it has loaded, the managed KoboldCPP writes, draws and embeds, and an OpenAI-compatible service that embeds does so from the same connection that chats. Where the program says what each model is for, an embedding model is never offered for chat and an image model never for text. There is no separate connection type for embeddings any more: a connection made as **Embeddings (OpenAI-compatible)** in an earlier version becomes an ordinary OpenAI-compatible connection the next time Serene Pub starts, keeping its address, key, model and index.
 
 ## LM Studio
 
 Connects to LM Studio's REST API, which you must first switch on in LM Studio's own settings. Its models are the ones LM Studio has downloaded, listed automatically. **Request settings** hold the **Base URL** (default `ws://localhost:1234`, a `ws://` address rather than `http://`), **Stream**, and **Keep Alive (seconds)** (default 60), which is how long LM Studio keeps a model loaded after a request.
+
+The same connection serves **embeddings**: LM Studio says which of its models are embedding models, and those are the ones offered for Embeddings. They are asked over LM Studio's OpenAI-compatible address on the same port (`http://localhost:1234/v1` for the default `ws://localhost:1234`), so its server must be running, as it must be for chat.
 
 ## Ollama
 
@@ -189,6 +190,10 @@ Many services accept requests in the same shape as OpenAI's API, so one kind of 
 
 _Experimental_ services have had less testing with Serene Pub; check the address and the service's own notes. Everything a preset fills in can be changed afterwards.
 
+### Embeddings from an OpenAI-compatible service
+
+**OpenAI (Official)**, **OpenRouter**, **Google Gemini**, **Together AI**, **Mistral AI** and **LocalAI** serve embeddings, so a connection to one of them can be chosen for Embeddings as soon as it's added. The New connection dialog lists them under embedding services too; picking one there adds the same connection. Others either don't (Groq, DeepSeek) or only when started for it (vLLM, SGLang, text-generation-webui). For those, and for a **Custom** address, switch on **Embeddings** under **What this connection can do** if the service has an `/embeddings` endpoint. OpenRouter lists its embedding models with the rest and says which they are, so only those are offered for Embeddings and never for chat. The other services don't say, so choose one by name for Embeddings, such as OpenAI's `text-embedding-3-small`; **Add by name** adds one the list doesn't show.
+
 The **(via OpenAI-Compatible API)** entries for Ollama and KoboldCPP use those programs' OpenAI-style endpoints. The dedicated [Ollama](#ollama) and [KoboldCPP](#koboldcpp-you-run-yourself) connections use their own native APIs, which Serene Pub supports more fully; prefer those.
 
 ### Where the API keys come from
@@ -198,6 +203,8 @@ Make an account on the service's website, create an API key there, and paste it 
 ## Llama.cpp
 
 Connects to `llama-server`. **Request settings** hold the **Base URL** (default `http://localhost:8080/`) and **Stream**. There is no API key and no model list to choose from: llama-server runs the one model it was started with, and the connection lists that model. It sends a text completion by default, so a **Prompt Format** setting is shown; its chat API can be used instead (see [Chat messages or text completion](#chat-messages-or-text-completion)).
+
+A `llama-server` started with `--embeddings` serves **embeddings** instead. Nothing it reports says so, so **Test** asks it to embed one word: when it can, the connection can do Embeddings and its model is offered for them rather than for chat. Restarted without the flag, the next test or model refresh says so and the model goes back to chat.
 
 ## Anthropic (Claude)
 
@@ -252,9 +259,9 @@ In Managed mode the card shows the process state (_Running_, _Starting_, _Stoppe
 
 ### Models tab
 
-Lists every model file the connection has, under **Text models** and **Image models**. **Use for chat** on a text model, or **Use for images** on an image model, makes it that job's default without loading it: it loads the first time something asks. Each row's **⋯** menu has **Model settings**, **Move to image models** or **Move to text models** (for a file Serene Pub sorted wrongly), and **Delete from disk**, which asks first.
+Lists every model file the connection has, under **Text models**, **Image models** and **Embedding models**. **Use for chat** on a text model, or **Use for images** on an image model, makes it that job's default without loading it: it loads the first time something asks. **Use for embeddings** on an embedding model does the same for embeddings, but asks first, because changing the embedding model re-indexes your stored lore and messages (see [Embeddings from the same connection](#embeddings-from-the-same-connection)). Each row's **⋯** menu has **Model settings**, a move to another section (**Move to text models**, **Move to image models** or **Move to embedding models**) for a file Serene Pub sorted wrongly, and **Delete from disk**, which asks first.
 
-Whether a file is a text or an image model is read from inside the file, not guessed from its name or folder.
+Whether a file is a text, image or embedding model is read from inside the file, not guessed from its name or folder. An embedding model that an earlier version listed under Text models moves to Embedding models the first time the list refreshes after updating; one you moved yourself stays where you put it.
 
 ### Get and Arriving tabs
 
@@ -267,7 +274,7 @@ Whether a file is a text or an image model is read from inside the file, not gue
 - **Subprocess idle timeout**: seconds of no use before KoboldCPP itself is stopped (default 1800; 0 means never).
 - **Server URL** and **Port** (default 5001): where Serene Pub reaches KoboldCPP. Changing the port needs a restart. If the two disagree, a warning says so: requests go to the Server URL, so make them match.
 - **Base URL** (External mode only): the address of your KoboldCPP.
-- **Models Directory**: where text models are stored and downloaded to. It must be set before anything can be listed or downloaded.
+- **Models Directory**: where text and embedding models are stored and downloaded to. It must be set before anything can be listed or downloaded.
 - **Image Models Directory**: where image models go. Left blank, image models are looked for in the Models Directory. Setting it never moves files; models already in the Models Directory keep working.
 - **Active capabilities**: what the running KoboldCPP build supports (Image Gen, Vision, TTS, Speech-to-Text, Embeddings, Multiplayer, Web Search, Admin API).
 - **Image generation**: the thread count and quantization level for loading image models, and **Test Generation**, which draws a test picture with the current image default.
@@ -289,6 +296,14 @@ The connection's settings also have the **Prompt Format**, **Token Counter** and
 ### Images from the same connection
 
 The managed KoboldCPP draws as well as writes. **Use for images** on an image model makes it the image default. The image model is loaded when a picture is asked for. KoboldCPP holds one model at a time, so drawing a picture unloads the chat model and the next reply loads it again; with large models that can take minutes each way.
+
+### Embeddings from the same connection
+
+The managed KoboldCPP can also do the embeddings behind [search by meaning](./embeddings-and-rag.md). Put an embedding model in the Models Directory (a GGUF such as nomic-embed-text or bge-m3, from the **Get** tab or copied in by hand); it is listed under **Embedding models**. **Use for embeddings** makes it the embedding model, after asking first and saying how much will be re-indexed.
+
+The embedding model loads beside the chat model, not instead of it. KoboldCPP keeps it in a slot of its own, on the processor by default, so it doesn't take graphics memory from the chat model: embedding never unloads the chat model, and a reply or a picture never unloads the embedding model. It is loaded the first time something is embedded. Changing the embedding model, or choosing one from another connection, reloads KoboldCPP once, the next time any of its models is used. Embedding counts as use, so it keeps the **Model unload timer** from running out.
+
+If something other than the KoboldCPP Serene Pub started answers on its port with a different embedding model, Serene Pub refuses its results and names both models, rather than mixing two models' results in your lore.
 
 ### Troubleshooting: no model loaded, or a rejected model load
 
@@ -314,7 +329,17 @@ The **status card** reads, for example, _Running · 0.30.7 · 4 models_, with an
 
 ## Local ONNX models
 
-**Local embeddings (ONNX)** and **Local named entities (ONNX)** run small models inside Serene Pub, on the processor, with no program to install and no key. They power the long-term memory described in [Embeddings and search by meaning](./embeddings-and-rag.md). They are not available on Android.
+**Local embeddings (ONNX)** and **Local named entities (ONNX)** run small models inside Serene Pub, on the processor, with no program to install and no key. They power the long-term memory described in [Embeddings and search by meaning](./embeddings-and-rag.md).
+
+They need a part of Serene Pub that doesn't run on every device. On devices that can't run it (Android, and some desktop builds), they stay listed but can't be used, and each place says why:
+
+- **New connection** shows both greyed out, with the reason in place of the setup difficulty. Document View's **New connection** form greys out both too.
+- In the connections list, a local ONNX connection made earlier reads **Unavailable**, with the reason. Its own view and **Admin › Connections** show the reason above its models, where **Download** and **Retry** would be.
+- **Make active** (or **Use**) stays greyed out on its downloaded models for as long as the reason holds: in the connection's view, a model's view, a job's [view](#the-capability-view), **Admin › Connections**, Document View and **Admin › Defaults**, which also notes the reason on the embeddings and named-entities jobs. Switching a job to another connection, or to none, still works.
+- A job's view greys out **Download** and _N more are available to download_. The [model finder](#the-model-finder) dims the destination and greys out **Get**.
+- Named entities come only from local ONNX models, so the first-run **Named entities** door and **Get a named entities model** are greyed out with the reason. The **Embeddings** door stays, because a service can do that job.
+
+Use an embeddings service instead (see [Embedding connections](./embeddings-and-rag.md#embedding-connections)); without an entity model, names the lorebook already knows are still matched.
 
 Their models come from a recommended list Serene Pub downloads from [github.com/SerenePub/serene-pub-onnx-list](https://github.com/SerenePub/serene-pub-onnx-list) (with a built-in copy for when you're offline). Each model has a tier (_Fast_, _Balanced_, _Best_), a download size, the languages it handles and its licence. **Add from Hugging Face…** adds another model by its Hugging Face id (`org/name`), after checking it has what Serene Pub needs.
 

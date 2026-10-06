@@ -76,6 +76,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import {
 		genreRows,
+		libraryRows,
 		pipelinesSidebarNav as nav,
 		presetPipelineGroups,
 		presetsOfGenre,
@@ -102,18 +103,12 @@
 	let genres = $state<Genre[] | null>(null)
 	let presets = $state<Preset[] | null>(null)
 	let list = $state<Sockets.Pipelines.Namespace[] | null>(null)
-	/** The All pipelines list's filter box: name or slug, any case. */
+	/** The All pipelines list's filter box: name, slug or genre, any case. */
 	let libraryFilter = $state("")
-	const filteredLibrary = $derived.by(() => {
-		const q = libraryFilter.trim().toLowerCase()
-		if (!list) return []
-		if (!q) return list
-		return list.filter(
-			(ns) =>
-				ns.name.toLowerCase().includes(q) ||
-				ns.slug.toLowerCase().includes(q)
-		)
-	})
+	/** Each row with its genre beside its name — the one list here that mixes genres. */
+	const filteredLibrary = $derived(
+		list ? libraryRows(list, genres, libraryFilter) : []
+	)
 	/** The preset this session was started on, when opened inside one. */
 	let sessionPresetId = $state<number | null>(null)
 	/**
@@ -162,6 +157,14 @@
 			? (list?.find((ns) => ns.slug === location.slug)?.name ??
 					location.slug)
 			: ""
+	)
+	/** Which genre's — the pipeline was picked from a list of several. */
+	const currentPipelineGenre = $derived(
+		location.level === "pipeline"
+			? (libraryRows(list ?? [], genres).find(
+					(r) => r.slug === location.slug
+				)?.genre ?? null)
+			: null
 	)
 
 	/**
@@ -867,10 +870,16 @@
 							<span class="block truncate font-medium">
 								{ns.name}
 							</span>
+							<!-- The genre leads the meta line: names carry
+							     none (NOMENCLATURE §2), and it is what tells
+							     four genres' Reply apart. -->
 							<span
 								class="text-surface-600-400 block truncate text-xs"
+								data-pipeline-genre={ns.genre ?? undefined}
 							>
-								v{ns.version}{ns.enabled ? "" : " · disabled"}
+								{ns.genre
+									? `${ns.genre} · `
+									: ""}v{ns.version}{ns.enabled ? "" : " · disabled"}
 							</span>
 						</span>
 						<Icons.ChevronRight
@@ -892,7 +901,15 @@
 				title={currentPipelineName}
 				onBack={back}
 				backLabel="All pipelines"
-			/>
+			>
+				{#snippet subtitle()}
+					{#if currentPipelineGenre}
+						<p class="text-surface-600-400 text-sm">
+							{currentPipelineGenre}
+						</p>
+					{/if}
+				{/snippet}
+			</PanelNavHeader>
 		</div>
 
 		{#if isAdmin}

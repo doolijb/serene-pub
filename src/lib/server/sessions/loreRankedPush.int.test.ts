@@ -64,7 +64,7 @@ const lore = (id: number) => ({ id, source: "worldLore", tokens: 10, payload: { 
 const receiptWith = (decisions: unknown[], extra: Record<string, unknown> = {}) =>
 	({
 		runId: `lore-ranked:${n++}`,
-		specId: "core:spec/respond",
+		specId: "core:spec/chat-respond",
 		specVersion: "1.0.0",
 		outcome: "ok",
 		triggerSource: "event",

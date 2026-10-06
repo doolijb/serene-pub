@@ -27,7 +27,15 @@
 	 * reports residency, not bytes held, and no queue measures throughput — so
 	 * both would be invented numbers on the one screen whose job is to state a
 	 * cost honestly.
+	 *
+	 * ⚠ On a machine whose ONNX runtime didn't load, Download and Retry give
+	 * way to the reason (`notOnThisMachine`): the server refuses both with the
+	 * same sentence, and a button that can only fail is a worse answer than the
+	 * sentence itself. Make active stays on a downloaded model, disabled, with
+	 * the reason under it — the files are real, and the star is refused with
+	 * that sentence too.
 	 */
+	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -48,6 +56,7 @@
 		CapabilityDefaultRef,
 		PairDefaultSelection
 	} from "./modelSystemDefaults"
+	import { localOnnxDisabledReason } from "$lib/shared/utils/connectionServiceItems"
 
 	type ModelRow = Sockets.Connections.Models.ModelRow
 
@@ -85,6 +94,14 @@
 	}: Props = $props()
 
 	const socket = useTypedSocket()
+	const systemSettingsCtx: SystemSettingsCtx | undefined =
+		getContext("systemSettingsCtx")
+	/** Why this model can't be downloaded here, or null when it can. */
+	const unavailable = $derived(
+		localOnnxDisabledReason(
+			systemSettingsCtx?.settings?.localOnnxAvailability
+		)
+	)
 
 	const modality = $derived<OnnxModality>(
 		connection.type === CONNECTION_TYPE.LOCAL_ONNX_NER ||
@@ -172,7 +189,7 @@
 		})
 	}
 	function makeActive() {
-		if (!starCapability) return
+		if (!starCapability || unavailable) return
 		onSelectDefault(model, { kind: "one", capability: starCapability })
 	}
 	function unloadNow() {
@@ -415,25 +432,33 @@
 							{local.error}
 						</p>
 					{/if}
-					<button
-						type="button"
-						class="{action} preset-filled-primary-500"
-						disabled={busy}
-						onclick={download}
-					>
-						<Icons.RefreshCw size={14} aria-hidden="true" />
-						Retry
-					</button>
+					{#if unavailable}
+						{@render notOnThisMachine()}
+					{:else}
+						<button
+							type="button"
+							class="{action} preset-filled-primary-500"
+							disabled={busy}
+							onclick={download}
+						>
+							<Icons.RefreshCw size={14} aria-hidden="true" />
+							Retry
+						</button>
+					{/if}
 				{:else if local?.state === "not_downloaded"}
-					<button
-						type="button"
-						class="{action} preset-filled-primary-500"
-						disabled={busy}
-						onclick={download}
-					>
-						<Icons.Download size={14} aria-hidden="true" />
-						Download
-					</button>
+					{#if unavailable}
+						{@render notOnThisMachine()}
+					{:else}
+						<button
+							type="button"
+							class="{action} preset-filled-primary-500"
+							disabled={busy}
+							onclick={download}
+						>
+							<Icons.Download size={14} aria-hidden="true" />
+							Download
+						</button>
+					{/if}
 				{/if}
 
 				{#if lane.status}
@@ -508,16 +533,23 @@
 					<button
 						type="button"
 						class="{action} preset-filled-primary-500"
-						disabled={!starCapability || !model.enabled}
-						title={model.enabled
-							? undefined
-							: "Switch the model on first — the star refuses it while it is off"}
+						disabled={!starCapability ||
+							!model.enabled ||
+							!!unavailable}
+						title={unavailable ??
+							(model.enabled
+								? undefined
+								: "Switch the model on first — the star refuses it while it is off")}
 						onclick={makeActive}
 					>
 						<Icons.Star size={14} aria-hidden="true" />
 						Make active
 					</button>
-					{#if switchCost}
+					{#if unavailable}
+						<!-- In words under the button, not only its tooltip: a
+						     disabled button takes no focus (§9). -->
+						{@render notOnThisMachine()}
+					{:else if switchCost}
 						<p
 							class="{lane.cost?.rows
 								? 'preset-tonal-warning'
@@ -537,25 +569,33 @@
 						Cancel
 					</button>
 				{:else if local?.state === "error"}
-					<button
-						type="button"
-						class="{action} preset-filled-primary-500"
-						disabled={busy}
-						onclick={download}
-					>
-						<Icons.RefreshCw size={14} aria-hidden="true" />
-						Retry
-					</button>
+					{#if unavailable}
+						{@render notOnThisMachine()}
+					{:else}
+						<button
+							type="button"
+							class="{action} preset-filled-primary-500"
+							disabled={busy}
+							onclick={download}
+						>
+							<Icons.RefreshCw size={14} aria-hidden="true" />
+							Retry
+						</button>
+					{/if}
 				{:else if local}
-					<button
-						type="button"
-						class="{action} preset-filled-primary-500"
-						disabled={busy}
-						onclick={download}
-					>
-						<Icons.Download size={14} aria-hidden="true" />
-						Download
-					</button>
+					{#if unavailable}
+						{@render notOnThisMachine()}
+					{:else}
+						<button
+							type="button"
+							class="{action} preset-filled-primary-500"
+							disabled={busy}
+							onclick={download}
+						>
+							<Icons.Download size={14} aria-hidden="true" />
+							Download
+						</button>
+					{/if}
 				{/if}
 			{/if}
 		</div>
@@ -674,3 +714,19 @@
 		{/if}
 	</div>
 </div>
+
+{#snippet notOnThisMachine()}
+	<!-- In place of Download or Retry, and under a disabled Make active. The
+	     reason wraps: it often quotes the runtime's own error, and cut short
+	     it would hide the part that says what is missing. -->
+	<p
+		class="preset-tonal-warning flex items-start gap-2 rounded-lg p-2 text-xs break-words"
+	>
+		<Icons.TriangleAlert
+			size={14}
+			class="mt-0.5 shrink-0"
+			aria-hidden="true"
+		/>
+		<span class="min-w-0">{unavailable}</span>
+	</p>
+{/snippet}

@@ -32,7 +32,7 @@ import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import {
 	bootstrapPipelines,
-	RESPOND_SPEC_ID
+	CHAT_RESPOND_SPEC_ID
 } from "$lib/server/pipelines/boot/bootstrap"
 import {
 	assertSelectable,
@@ -64,7 +64,7 @@ beforeAll(async () => {
 	const [spec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 	specId = spec.id
 	specVersionId = spec.activeVersionId!
 
@@ -77,11 +77,11 @@ beforeAll(async () => {
 	)!
 	pool = { nodeDefinitionId: decl.nodeDefinitionId!, slot: decl.slot }
 
-	const { NARRATE_SPEC_ID } = await import("$lib/server/pipelines/specs")
+	const { CHAT_NARRATE_SPEC_ID } = await import("$lib/server/pipelines/specs")
 	const [narrate] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, NARRATE_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, CHAT_NARRATE_SPEC_ID))
 	narrateVersionId = narrate.activeVersionId!
 	const nDecl = (await declarations(db, narrateVersionId)).find(
 		(d) => d.control === "prompts-ref"
@@ -324,7 +324,7 @@ describe("a prompt follows its node", () => {
 		// Offered, and honestly labelled: it says where it came from rather
 		// than pretending it was written here.
 		expect(seen!.group).toBe("alsoFits")
-		expect(seen!.originSlug).toBe(RESPOND_SPEC_ID)
+		expect(seen!.originSlug).toBe(CHAT_RESPOND_SPEC_ID)
 	})
 
 	it("sorts the pipeline's own first, then shipped, then everything else", async () => {
@@ -538,7 +538,7 @@ describe("what the picker is sent", () => {
 		const view = await namespaceView(
 			db,
 			"prompt-picker-test-secret",
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			{ userId: 1, isAdmin: true }
 		)
 		const refs = groupOptions(view!.groups)
@@ -578,7 +578,7 @@ describe("what the picker is sent", () => {
 		const view = await namespaceView(
 			db,
 			"prompt-picker-test-secret",
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			{ userId: 1, isAdmin: true }
 		)
 		const refs = groupOptions(view!.groups).filter(
@@ -607,7 +607,7 @@ describe("what the picker is sent", () => {
 		const view = await namespaceView(
 			db,
 			"prompt-picker-test-secret",
-			RESPOND_SPEC_ID,
+			CHAT_RESPOND_SPEC_ID,
 			{ userId: 1, isAdmin: true }
 		)
 		for (const option of groupOptions(view!.groups))

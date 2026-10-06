@@ -78,7 +78,7 @@ describe("configs for a spec core did not ship", () => {
 			.where(
 				eq(
 					schema.pipelineConfigs.seedKey,
-					"pipeline-default:core:spec/respond"
+					"pipeline-default:core:spec/chat-respond"
 				)
 			)
 			.limit(1)
@@ -88,6 +88,6 @@ describe("configs for a spec core did not ship", () => {
 	it("reports per slug, which is how the seed pass picks out its own", async () => {
 		const reports = await reconcilePublishedConfigs(db)
 		expect(reports.has(SLUG)).toBe(true)
-		expect(reports.has("core:spec/respond")).toBe(true)
+		expect(reports.has("core:spec/chat-respond")).toBe(true)
 	}, 60_000)
 })

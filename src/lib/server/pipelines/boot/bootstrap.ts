@@ -57,11 +57,11 @@ import {
 // Re-exported rather than moved out from under its importers: the spec now
 // lives in `specs/respond.ts`, and half the pipeline tests name it from here.
 export {
-	RESPOND_SPEC_ID,
-	RESPOND_VERSION,
+	CHAT_RESPOND_SPEC_ID,
+	CHAT_RESPOND_VERSION,
 	respondSpec
 } from "$lib/server/pipelines/specs/respond"
-import { RESPOND_VERSION } from "$lib/server/pipelines/specs/respond"
+import { CHAT_RESPOND_VERSION } from "$lib/server/pipelines/specs/respond"
 import { loadDocument } from "$lib/server/pipelines/boot/store"
 import { syncDefinitionRegistry } from "$lib/server/pipelines/boot/registrySync"
 import { pluginDefinitionPins } from "$lib/server/plugins/pluginDefinitions"
@@ -142,6 +142,21 @@ export interface BootstrapReport {
 	 * has not published the spec.
 	 */
 	rebindMove?: RebindMoveReport
+	/**
+	 * ⏳ How many of the sprite picker's stored settings moved from
+	 * `spriteTail.show.spritePick` to `spritePick` this boot (plan D4). Zero
+	 * on every boot after the first.
+	 */
+	spritePickerMove?: import("$lib/server/pipelines/boot/spritePickerMove").SpritePickerMoveReport
+	/**
+	 * ⏳ Which core pipelines moved to their new ids this boot, what else was
+	 * rewritten to name them, and how many shipped defaults were named
+	 * "Default" (PLAN-catalogue-and-pipeline-names C4, C5). Empty on every
+	 * boot after the first.
+	 */
+	specSlugRename?: import("$lib/server/pipelines/boot/specSlugRename").SpecSlugRenameReport
+	/** Named-config values for `embed-text`'s retired connection slot, removed quietly. */
+	embedTextConnectionDropped?: number
 	/**
 	 * What the attribute registry loaded from this install's rows, and what it
 	 * mirrored back as last-seen (R1, R4).
@@ -271,7 +286,7 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 			),
 			// Everything core publishes, so a core row this build does not
 			// declare is marked `removed` (the reverse-diff, R-2).
-			{ release: RESPOND_VERSION, complete: true }
+			{ release: CHAT_RESPOND_VERSION, complete: true }
 		)
 		report.types = {
 			inserted: synced.inserted.length,
@@ -368,6 +383,17 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		present: templates.present.length
 	}
 
+	// ⏳ Before the culls, the moves and the seed below, all of which name
+	// specs by their new ids: ten core pipelines took new ids on 2026-10-05
+	// (PLAN-catalogue-and-pipeline-names C4), and their rows and every stored
+	// string naming them move first, so the seed finds them home rather than
+	// publishing beside them. It names the shipped default configs "Default"
+	// (C5) in the same pass. See `specSlugRename.ts`.
+	const { renameSpecSlugs } = await import(
+		"$lib/server/pipelines/boot/specSlugRename"
+	)
+	report.specSlugRename = await renameSpecSlugs(db)
+
 	// Before the specs: a genre core stopped shipping keeps its rows until
 	// something deletes them, and the picker lists it from its create spec.
 	const { cullRetiredCoreGenres } = await import(
@@ -379,6 +405,23 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		"$lib/server/pipelines/boot/retiredGenres"
 	)
 	report.retiredSpecs = await cullRetiredCoreSpecs(db)
+
+	// ⏳ Before the specs, and the order is the point: the seed below
+	// publishes the reply specs' new versions and reconciles configs against
+	// them, culling a config value at an address the new version does not
+	// declare. The sprite picker's settings move from the retired tail's key
+	// to `spritePick` first (plan D4), so the reconcile finds them home. The
+	// spec rows are the same ones, so nothing has to be seeded before it.
+	const { moveSpritePickerSettings } = await import(
+		"$lib/server/pipelines/boot/spritePickerMove"
+	)
+	report.spritePickerMove = await moveSpritePickerSettings(db)
+	// And `embed-text`'s connection value, which never did anything, leaves
+	// named configs quietly rather than as a culled-value notice (plan D-c).
+	const { dropEmbedTextConnectionValues } = await import(
+		"$lib/server/pipelines/boot/embedTextConnectionDrop"
+	)
+	report.embedTextConnectionDropped = await dropEmbedTextConnectionValues(db)
 
 	report.specs = await seedCoreSpecs(db)
 

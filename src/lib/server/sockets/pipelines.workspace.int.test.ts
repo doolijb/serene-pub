@@ -82,7 +82,7 @@ function collecting() {
 	}
 }
 
-const RESPOND = "core:spec/respond"
+const RESPOND = "core:spec/chat-respond"
 
 /**
  * A writable configuration to land batch writes in. Shipped Default refuses

@@ -96,7 +96,7 @@ describe("a disabled plugin in the listings (R67)", () => {
 		const [respond] = await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/respond"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-respond"))
 		await db
 			.update(schema.pipelineSpecs)
 			.set({ sourcePluginId: plugin.id })
@@ -124,7 +124,7 @@ describe("a disabled plugin in the listings (R67)", () => {
 		const off = await disabledPlugins(db)
 		expect(off.ownsId("acme.dark:spec/x")).toBe(true)
 		expect(off.ownsId("acme.darker:spec/x")).toBe(false)
-		expect(off.ownsId("core:spec/respond")).toBe(false)
+		expect(off.ownsId("core:spec/chat-respond")).toBe(false)
 	})
 })
 

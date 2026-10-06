@@ -16,10 +16,12 @@ import { flushSync, mount, tick, unmount } from "svelte"
 
 vi.mock("$app/environment", () => ({ dev: true, building: false, browser: true }))
 
-const { emitted, socket, listeners, listen } = vi.hoisted(() => {
+const { emitted, socket, listeners, listen, pickers } = vi.hoisted(() => {
 	const emitted: Array<[string, any]> = []
 	const listeners = new Map<string, Set<(msg: any) => void>>()
 	return {
+		/** The New Connection picker's props: `selectedItem` is its binding. */
+		pickers: [] as Array<Record<string, any>>,
 		emitted,
 		socket: {
 			emit: (event: string, payload: unknown) => emitted.push([event, payload]),
@@ -63,7 +65,11 @@ vi.mock("$lib/client/components/connections/EmbeddingQueuePanel.svelte", () => (
 vi.mock("$lib/client/components/connections/NerLanePanel.svelte", () => ({ default: () => {} }))
 vi.mock("$lib/client/components/connections/EmbeddingSwitchDialog.svelte", () => ({ default: () => {} }))
 vi.mock("$lib/client/components/connections/EntitySwitchDialog.svelte", () => ({ default: () => {} }))
-vi.mock("$lib/client/components/sidebars/ConnectionServicePicker.svelte", () => ({ default: () => {} }))
+vi.mock("$lib/client/components/sidebars/ConnectionServicePicker.svelte", () => ({
+	default: (_anchor: unknown, props: Record<string, any>) => {
+		pickers.push(props)
+	}
+}))
 
 import ConnectionsSidebar from "./ConnectionsSidebar.svelte"
 
@@ -120,6 +126,7 @@ let view: Record<string, any>
 beforeEach(async () => {
 	emitted.length = 0
 	listeners.clear()
+	pickers.length = 0
 	try {
 		globalThis.localStorage?.removeItem?.("serene-pub:viewMode:connectionsIndex")
 	} catch {
@@ -220,5 +227,78 @@ describe("the Connections view lists connections", () => {
 		await settle()
 		expect(text(target)).toContain("Connections 2")
 		expect(text(target)).not.toContain("Qwen")
+	})
+})
+
+/**
+ * New connection on a machine whose ONNX runtime didn't load. The picker
+ * disables the local ONNX cards itself (its own test); a card chosen before
+ * the machine's verdict arrived must still not create, and the dialog says
+ * why in place of the difficulty — Enter in the name field included, which
+ * submits without the Create button.
+ */
+describe("New connection with a local ONNX service this machine can't run", () => {
+	const REASON =
+		"Not available on this machine: the Android app can't run the ONNX runtime"
+
+	test("Create is disabled, the reason is shown, and Enter sends nothing", async () => {
+		unmount(view)
+		target.replaceChildren()
+		listeners.clear()
+		view = mount(ConnectionsSidebar, {
+			target,
+			context: new Map<string, unknown>([
+				[
+					"systemSettingsCtx",
+					{
+						settings: {
+							isAndroidWrapper: true,
+							localOnnxAvailability: {
+								available: false,
+								reason: "the Android app can't run the ONNX runtime"
+							}
+						},
+						capabilityDefaults: {}
+					}
+				],
+				["koboldCppSettingsCtx", { settings: undefined }],
+				["panelsCtx", { digest: {}, openPanel: () => {}, closePanel: () => {} }],
+				["userCtx", { user: { id: 1, isAdmin: true } }]
+			])
+		})
+		flushSync()
+		// Nothing connected: the empty index's "Add a connection" opens New.
+		hear("connections:list", { connectionsList: [] })
+		await settle()
+		button(target, "Add a connection")!.click()
+		await settle()
+		expect(pickers.length).toBeGreaterThan(0)
+
+		pickers.at(-1)!.selectedItem = {
+			key: "type:local-onnx",
+			label: "Local embeddings (ONNX)",
+			category: "local",
+			type: "local-onnx",
+			difficulty: "One download",
+			description: "",
+			modality: "embeddings"
+		}
+		await settle()
+
+		const dialog = document.body
+		expect(text(dialog)).toContain(REASON)
+		expect(text(dialog)).not.toContain("Difficulty: One download")
+		// Named with its visible word first (label in name), then why.
+		const create = button(dialog, `Create connection — ${REASON}`)!
+		expect(create.textContent?.trim()).toBe("Create")
+		expect(create.disabled).toBe(true)
+
+		emitted.length = 0
+		const name = document.getElementById("newConnName") as HTMLInputElement
+		// The service's label prefilled the name, so Enter would submit.
+		expect(name.value).toBe("Local embeddings (ONNX)")
+		name.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
+		await settle()
+		expect(emitted.filter(([e]) => e === "connections:create")).toHaveLength(0)
 	})
 })

@@ -590,17 +590,22 @@ describe("connections and sampling (0096/0097/0105/0114/0127)", () => {
 		}
 	})
 
-	test("the embedding singleton is a starred embedding connection with its key re-encrypted (0127)", async () => {
-		const emb = await one(`SELECT * FROM connections WHERE modality = 'embeddings'`)
-		expect(emb.type).toBe("openai-embeddings")
+	test("the embedding singleton is a starred OpenAI-compatible connection that embeds, its key re-encrypted (0127)", async () => {
+		const star = await one(`SELECT * FROM connection_defaults WHERE input = 'text' AND output = 'embedding'`)
+		const emb = await one(`SELECT * FROM connections WHERE id = $1`, star.connection_id)
+		// Restored as `openai-embeddings`, renamed onto `openai` in the same
+		// restore (connections/openAIMultiModality.ts), embeddings switched on.
+		expect(emb.type).toBe("openai")
+		expect(emb.modality).toBe("text-gen")
+		expect(emb.capabilities.overrides).toEqual({ "text->embedding": 1 })
+		expect(Object.keys(emb.capabilities.resolved)).toContain("text->embedding")
 		expect(emb.base_url).toBe(manifest.detail.vectorizationConfig.api_base_url)
 		expect(emb.extra_json.__legacyVectorizationApiKey).toBeUndefined()
 		const { decryptApiKeyField } = await import("$lib/server/utils/tokenCrypto")
 		expect(decryptApiKeyField(emb.extra_json.apiKey)).toBeTruthy()
-		const star = await one(`SELECT * FROM connection_defaults WHERE input = 'text' AND output = 'embedding'`)
-		expect(star.connection_id).toBe(emb.id)
-		const model = await one(`SELECT model FROM connection_models WHERE id = $1`, star.connection_model_id)
+		const model = await one(`SELECT model, modality FROM connection_models WHERE id = $1`, star.connection_model_id)
 		expect(model.model).toBe(manifest.detail.vectorizationConfig.api_model)
+		expect(model.modality).toBe("embeddings")
 	})
 
 	test("the instance's default connection and sampling config are the text default", async () => {
@@ -643,7 +648,7 @@ describe("configurations wired from the attic", () => {
 	test("every 0.5.3 config a person wrote has its migrated pipeline config", async () => {
 		const markers = (await q(`SELECT seed_key FROM pipeline_configs WHERE seed_key LIKE 'migrated:%'`)).map((r) => r.seed_key)
 		for (const p of before.prompt_configs.filter((r) => !r.seed_key))
-			expect(markers).toContain(`migrated:core:spec/respond:${p.id}`)
+			expect(markers).toContain(`migrated:core:spec/chat-respond:${p.id}`)
 		expect(markers.length).toBeGreaterThanOrEqual(
 			before.prompt_configs.filter((r) => !r.seed_key).length +
 				before.narrator_prompt_configs.filter((r) => !r.seed_key).length
@@ -663,7 +668,7 @@ describe("configurations wired from the attic", () => {
 			)
 		const mine = before.prompt_configs.find((p) => p.name === "My prompt")!
 		expect(mine.connection_id).not.toBeNull()
-		const respond = await valuesOf(`migrated:core:spec/respond:${mine.id}`)
+		const respond = await valuesOf(`migrated:core:spec/chat-respond:${mine.id}`)
 		expect(respond.map((v) => v.value)).not.toContainEqual(expect.objectContaining({ ref: mine.connection_id }))
 		const dry = await one(`SELECT id FROM sampling_configs WHERE name = 'DRY + XTC'`)
 		expect(respond.filter((v) => v.slot === "sampling").map((v) => v.value)).not.toContain(dry.id)
@@ -677,10 +682,10 @@ describe("configurations wired from the attic", () => {
 		const sel = await one(
 			`SELECT c.seed_key FROM pipeline_config_selections s JOIN pipeline_configs c ON c.id = s.config_id
 			 JOIN pipeline_specs p ON p.id = s.spec_id
-			 WHERE s.scope_kind = 'session' AND s.scope_id = $1 AND p.slug = 'core:spec/respond'`,
+			 WHERE s.scope_kind = 'session' AND s.scope_id = $1 AND p.slug = 'core:spec/chat-respond'`,
 			ids.chats.visibility
 		)
-		expect(sel.seed_key).toBe(`migrated:core:spec/respond:${ids.legacyConfigs.prompt}`)
+		expect(sel.seed_key).toBe(`migrated:core:spec/chat-respond:${ids.legacyConfigs.prompt}`)
 	})
 })
 

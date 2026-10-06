@@ -56,6 +56,11 @@ import {
 	type ModelFacts
 } from "$lib/shared/connections/modelFacts"
 import { formatSize } from "./modelDisplay"
+import { NER_CAPABILITY } from "$lib/shared/constants/ner"
+import {
+	localOnnxDisabledReason,
+	type LocalOnnxAvailability
+} from "$lib/shared/utils/connectionServiceItems"
 
 /**
  * One model, as this view reads it: the index's fields plus the disk state the
@@ -170,6 +175,32 @@ export function getModelButtonLabel(label: string, empty: boolean): string {
 	return empty
 		? `Get ${article(lower)} ${lower} model`
 		: `Get another ${lower} model`
+}
+
+/**
+ * The capabilities only a local ONNX model serves today: named entities. No
+ * host has a token-classification endpoint, so the finder's `entities` scope
+ * has one destination kind, ONNX. ⏳ Until LLM-prompted extraction on a text
+ * connection (plan C3, ruled "later") gives entities a second provider.
+ */
+const LOCAL_ONNX_ONLY_CAPABILITIES: ReadonlySet<string> = new Set([
+	NER_CAPABILITY
+])
+
+/**
+ * Why there is nothing to get for this capability on this machine, or null:
+ * a capability only local ONNX serves, where the runtime didn't load. A door
+ * to the finder — the capability view's "Get a named entities model", the
+ * first-run Named entities door — is disabled with this sentence rather than
+ * opening a finder whose one destination is disabled.
+ */
+export function getModelDisabledReason(
+	capability: string,
+	localOnnx: LocalOnnxAvailability | null | undefined
+): string | null {
+	return LOCAL_ONNX_ONLY_CAPABILITIES.has(capability)
+		? localOnnxDisabledReason(localOnnx)
+		: null
 }
 
 /** The 12px note under it. */

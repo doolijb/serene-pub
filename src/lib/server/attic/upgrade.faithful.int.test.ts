@@ -107,7 +107,7 @@ beforeAll(async () => {
 }, 900_000)
 
 /** 0.5.3's seeded reply default, which 0.6 no longer ships as the respond default. */
-const SHIPPED_053_REPLY = "migrated:core:spec/respond:prompt-roleplay-simple"
+const SHIPPED_053_REPLY = "migrated:core:spec/chat-respond:prompt-roleplay-simple"
 
 const ownerOf = (chatId: number) => before.chats.find((c) => c.id === chatId)!.user_id
 const adminSessions = () => before.chats.filter((c) => c.user_id === ids.users.admin).map((c) => c.id)
@@ -157,8 +157,8 @@ describe("each person's 0.5.3 picks select at session scope (B1)", () => {
 	test("reply, narration and every summarizer select the admin's configs on each admin session, and nowhere else", async () => {
 		const admin = new Set(adminSessions())
 		const picks: Record<string, string> = {
-			"core:spec/respond": `migrated:core:spec/respond:${ids.legacyConfigs.prompt}`,
-			"core:spec/narrate": `migrated:core:spec/narrate:${ids.legacyConfigs.narrator}`,
+			"core:spec/chat-respond": `migrated:core:spec/chat-respond:${ids.legacyConfigs.prompt}`,
+			"core:spec/chat-narrate": `migrated:core:spec/chat-narrate:${ids.legacyConfigs.narrator}`,
 			"core:spec/summarize-world": `migrated:core:spec/summarize-world:${ids.legacyConfigs.world}`,
 			"core:spec/summarize-character": `migrated:core:spec/summarize-character:${ids.legacyConfigs.character}`,
 			"core:spec/summarize-scene": `migrated:core:spec/summarize-scene:${ids.legacyConfigs.scene}`,
@@ -176,13 +176,13 @@ describe("each person's 0.5.3 picks select at session scope (B1)", () => {
 			// 0.6 ships a different reply default, so every other existing session
 			// keeps 0.5.3's shipped prompt by its own selection.
 			const others = rows.filter((r) => !admin.has(r.scope_id))
-			if (slug === "core:spec/respond") {
+			if (slug === "core:spec/chat-respond") {
 				const theirs = before.chats.filter((c) => !admin.has(c.id)).map((c) => c.id)
 				expect(others.map((r) => r.scope_id), slug).toEqual(theirs)
 				for (const r of others) expect(r.seed_key, `session ${r.scope_id}`).toBe(SHIPPED_053_REPLY)
 				continue
 			}
-			expect(others.map((r) => r.scope_id), slug).toEqual(slug === "core:spec/narrate" ? narratorOverrides : [])
+			expect(others.map((r) => r.scope_id), slug).toEqual(slug === "core:spec/chat-narrate" ? narratorOverrides : [])
 		}
 		const graph = await selections("core:spec/graph-build")
 		expect(graph.map((r) => [r.scope_kind, r.seed_key])).toEqual([
@@ -196,10 +196,10 @@ describe("each person's 0.5.3 picks select at session scope (B1)", () => {
 		const spec = (slug: string) => specs.find((s) => s.slug === slug)!
 		const resolved = async (slug: string, sessionId: number) =>
 			(await resolveSelectedConfig(db, spec(slug).id, slug, { sessionId }))?.name
-		expect(await resolved("core:spec/narrate", ids.chats.solo)).toBe("My narrator")
+		expect(await resolved("core:spec/chat-narrate", ids.chats.solo)).toBe("My narrator")
 		expect(await resolved("core:spec/summarize-world", ids.chats.solo)).toBe("My world summarizer")
 		expect(await resolved("core:spec/summarize-scene", ids.chats.solo)).toBe("My scene summarizer")
-		expect(await resolved("core:spec/narrate", ids.chats.bard)).not.toBe("My narrator")
+		expect(await resolved("core:spec/chat-narrate", ids.chats.bard)).not.toBe("My narrator")
 	})
 })
 
@@ -207,16 +207,16 @@ describe("a chat's own prompt config (\"AI Override\") is carried, never selecte
 	test("no session selects a chat's prompt override, and a note lists each one", async () => {
 		const overridden = before.chats.filter((c) => c.prompt_config_id != null)
 		expect(overridden.length).toBeGreaterThan(0)
-		const respond = new Map((await selections("core:spec/respond")).map((r) => [r.scope_id, r.seed_key]))
+		const respond = new Map((await selections("core:spec/chat-respond")).map((r) => [r.scope_id, r.seed_key]))
 		for (const c of overridden) {
 			const expected =
 				c.user_id === ids.users.admin
-					? `migrated:core:spec/respond:${ids.legacyConfigs.prompt}`
+					? `migrated:core:spec/chat-respond:${ids.legacyConfigs.prompt}`
 					: SHIPPED_053_REPLY
 			expect(respond.get(c.id), `session ${c.id}`).toBe(expected)
 		}
 		// The terse override is still a configuration someone can pick.
-		const terse = await one(`SELECT name FROM pipeline_configs WHERE seed_key = $1`, `migrated:core:spec/respond:${ids.legacyConfigs.prompt2}`)
+		const terse = await one(`SELECT name FROM pipeline_configs WHERE seed_key = $1`, `migrated:core:spec/chat-respond:${ids.legacyConfigs.prompt2}`)
 		expect(terse.name).toBe("Terse prompt")
 		const notes = await q(`SELECT object_label, summary FROM admin_logbook WHERE object_type = 'data-upgrade' AND object_id = 'prompt-override'`)
 		expect(notes).toHaveLength(overridden.length)
@@ -246,7 +246,7 @@ describe("prompt text only (owner ruling, 2026-10-01)", () => {
 		expect(await q(`SELECT scope_id FROM pipeline_node_overrides WHERE path <> 'searchByMeaning'`)).toEqual([])
 		// A pub that only defaulted to a shipped 0.5.3 prompt follows 0.6's shipped default.
 		const pub = await q(
-			`SELECT s.scope_id FROM pipeline_config_selections s JOIN pipeline_specs p ON p.id = s.spec_id WHERE p.slug = 'core:spec/respond' AND s.scope_kind = 'pub'`
+			`SELECT s.scope_id FROM pipeline_config_selections s JOIN pipeline_specs p ON p.id = s.spec_id WHERE p.slug = 'core:spec/chat-respond' AND s.scope_kind = 'pub'`
 		)
 		expect(pub).toEqual([])
 	})
@@ -298,7 +298,7 @@ describe("ragIgnored (M4)", () => {
 			`SELECT o.scope_id, o.value, p.slug FROM pipeline_node_overrides o JOIN pipeline_specs p ON p.id = o.spec_id
 			 WHERE o.scope_kind = 'session' AND o.slot = 'params' AND o.path = 'searchByMeaning'`
 		)
-		const respond = rows.filter((r) => r.slug === "core:spec/respond")
+		const respond = rows.filter((r) => r.slug === "core:spec/chat-respond")
 		expect(respond.map((r) => r.scope_id).sort((a, b) => a - b)).toEqual(ignored)
 		expect(rows.every((r) => r.value === "off")).toBe(true)
 		for (const id of ignored)

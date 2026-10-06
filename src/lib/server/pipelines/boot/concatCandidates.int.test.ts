@@ -6,7 +6,7 @@ import { and, eq, inArray } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 
 // The db module is mocked so `defaults.sync()` and `bootstrapPipelines` run
 // against the test database, in the order `db/index.ts` guarantees at boot.
@@ -54,7 +54,7 @@ beforeAll(async () => {
 		await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
 			.limit(1)
 	)[0]
 }, 120_000)

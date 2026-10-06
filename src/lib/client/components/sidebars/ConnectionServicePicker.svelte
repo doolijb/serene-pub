@@ -12,7 +12,12 @@
 	 * one never offers another. The toggle is built from
 	 * `CONNECTION_SECTIONS`, not from hardcoded buttons: the hardcoded pair
 	 * is what made embeddings a separate panel rather than a third entry.
+	 *
+	 * A service this machine can't run (the local ONNX types, where the
+	 * runtime didn't load) stays listed as a disabled card with its reason
+	 * in place of the difficulty — hidden, it would read as "not built".
 	 */
+	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import {
 		buildConnectionServiceItems,
@@ -48,10 +53,18 @@
 		categoryCleared ? null : (initialCategory ?? null)
 	)
 
-	// Static for the app's lifetime (built from CONNECTION_TYPES +
-	// OPENAI_COMPATIBLE_PRESETS, neither of which change at runtime) — computed
-	// once rather than on every keystroke.
-	const ALL_ITEMS = buildConnectionServiceItems()
+	const systemSettingsCtx = getContext<SystemSettingsCtx | undefined>(
+		"systemSettingsCtx"
+	)
+	// Built from CONNECTION_TYPES + OPENAI_COMPATIBLE_PRESETS, which never
+	// change at runtime, and the local ONNX verdict, which arrives once with
+	// the system settings — derived from that alone, so a keystroke never
+	// rebuilds it.
+	const allItems = $derived(
+		buildConnectionServiceItems({
+			localOnnx: systemSettingsCtx?.settings?.localOnnxAvailability
+		})
+	)
 
 	// One button per section, seeded from the current selection so re-opening
 	// on an image connection stays on Image. A hand-set choice wins; the seed
@@ -76,7 +89,7 @@
 	let search = $state("")
 	let visibleItems = $derived(
 		filterConnectionServiceItems(
-			filterConnectionServiceItemsByModality(ALL_ITEMS, modality),
+			filterConnectionServiceItemsByModality(allItems, modality),
 			search
 		).filter((i) => !category || i.category === category)
 	)
@@ -155,14 +168,20 @@
 		</p>
 		{#each group.items as item (item.key)}
 			{@const active = selectedItem?.key === item.key}
+			<!-- A disabled card says why in its own second line, not only in a
+			     tooltip: nothing is hover-only (STYLE-GUIDE §9). -->
 			<button
 				type="button"
 				role="radio"
 				aria-checked={active}
+				disabled={!!item.disabledReason}
+				title={item.disabledReason}
 				onclick={() => (selectedItem = item)}
-				class="card preset-filled-surface-100-900 flex w-full cursor-pointer items-start justify-between gap-2 rounded-xl p-3 text-left {active
-					? 'ring-primary-500 ring-offset-surface-50 dark:ring-offset-surface-950 ring-2 ring-offset-2'
-					: 'hover:preset-tonal-primary'}"
+				class="card preset-filled-surface-100-900 flex w-full items-start justify-between gap-2 rounded-xl p-3 text-left {item.disabledReason
+					? 'cursor-not-allowed opacity-70'
+					: active
+						? 'ring-primary-500 ring-offset-surface-50 dark:ring-offset-surface-950 cursor-pointer ring-2 ring-offset-2'
+						: 'hover:preset-tonal-primary cursor-pointer'}"
 			>
 				<span class="min-w-0">
 					<span class="block truncate text-sm font-semibold">
@@ -173,7 +192,7 @@
 							? 'opacity-80'
 							: ''}"
 					>
-						{item.difficulty}
+						{item.disabledReason ?? item.difficulty}
 					</span>
 				</span>
 				{#if active}

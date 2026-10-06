@@ -354,6 +354,11 @@ describe("the eager load stays in one place", () => {
 	test("registry consumers are enumerated", () => {
 		const CONSUMERS = [
 			"src/lib/server/connectionAdapters/manifest.conformance.test.ts",
+			// Awaits NO thunk. `adapterIO` reads `ADAPTER_REGISTRY[type]?.embedding`
+			// as a presence test — "does this text type also embed?" — and loads
+			// the one module it needs through `getEmbeddingAdapter`. Runs on the
+			// server's socket handlers, never in the resolver's graph (its header).
+			"src/lib/server/connections/modelSync.ts",
 			// Awaits ONE thunk, its own family's, to prove the loader routes
 			// through this map rather than a switch of its own. A key lookup and
 			// a single `import()` of a module that speaks `fetch`, in a Node

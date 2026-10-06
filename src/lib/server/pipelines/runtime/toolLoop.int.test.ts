@@ -22,7 +22,7 @@ import { buildWorld } from "$lib/server/pipelines/config/world"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { run } from "@serene-pub/sdk"
 import { TOOL_LOOP_TEMPLATE, toolLoopSpec } from "$lib/server/pipelines/specs"
-import { CORE_PROMPTS } from "@serene-pub/core-catalog"
+import { TOOL_LOOP_PROMPT as TOOL_LOOP_PROMPT_SEED } from "@serene-pub/core-catalog"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
@@ -130,12 +130,12 @@ let userId: number
 const callFor = (tool: string, args: Record<string, unknown>) =>
 	"```tool_call\n" + JSON.stringify({ tool, args }) + "\n```"
 
-/** The pool's shipped row — the prose `tools.item.prompt` renders. */
-const TOOL_LOOP_PROMPT = CORE_PROMPTS.find(
-	(p) =>
-		p.seedKey ===
-		"pipeline-prompt:core:task/assemble:prompts:tool-loop-default"
-)!.fields
+/**
+ * The spec's own prompt row — the prose `tools.item.prompt` renders. Not in
+ * the shipped pool since tool-loop left `CORE_SPECS` (2026-10-05), so read
+ * from the catalog beside the spec.
+ */
+const TOOL_LOOP_PROMPT = TOOL_LOOP_PROMPT_SEED.fields
 
 beforeAll(async () => {
 	db = await createTestDb()

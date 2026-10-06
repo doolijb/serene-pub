@@ -61,11 +61,20 @@ export interface EmbeddingAdapterExports {
 	 * Answers `{models: []}` with an `error` rather than throwing, matching both
 	 * other families: a host that is down is a thing the form has to SAY, not an
 	 * exception for the socket layer to turn into "An error occurred".
+	 *
+	 * ⚠ This and `testConnection` are REQUIRED of a module serving a type whose
+	 * declared modality is `embeddings` — this family is that type's only one,
+	 * so `adapterIO` lists and tests through them. A module serving only types
+	 * that also have a text module (`koboldcpp`) leaves both off: the text
+	 * module's listing already names each model's modality, and `adapterIO`
+	 * follows its test with one probe embed through `Adapter`, so a second pair
+	 * here would be code nothing calls. (Ollama's keeps them for
+	 * `ollama-embeddings`, which routes to the same module.)
 	 */
-	listModels: (
+	listModels?: (
 		connection: SelectConnection
 	) => Promise<{ models: EmbeddingModelOption[]; error?: string }>
-	testConnection: (connection: SelectConnection) => Promise<{
+	testConnection?: (connection: SelectConnection) => Promise<{
 		ok: boolean
 		error?: string
 		extra?: Record<string, unknown>

@@ -17,6 +17,7 @@
 	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { docsHref } from "$lib/shared/utils/docsHref"
+	import { withGenre } from "$lib/client/utils/pipelineGenre"
 	import {
 		adminGoto as goto,
 		adminPage,
@@ -85,6 +86,11 @@
 	/** The publisher's namespace — "core:…", "acme.plugin:…". */
 	const sourceOf = (p: Pipeline) => p.slug.split(":")[0] || "unknown"
 	const genreName = (id: string) => genreNames.get(id) ?? id
+	/**
+	 * "Reply · Adventure" — where a list names pipelines without the Genre
+	 * column beside it (Recent runs): names carry no genre (NOMENCLATURE §2).
+	 */
+	const nameWithGenre = (p: Pipeline) => withGenre(p.name, genreOf(p) ? genreName(genreOf(p)!) : null)
 	const roleWord = (r: string) => r.charAt(0).toUpperCase() + r.slice(1)
 
 	/** The last N outcomes for a slug, newest first (runs arrive desc). */
@@ -250,7 +256,7 @@
 										: 'bg-warning-500'}"
 									aria-hidden="true"
 								></span>
-								<span class="min-w-0 flex-1 truncate">{p?.name ?? r.specSlug}</span>
+								<span class="min-w-0 flex-1 truncate">{p ? nameWithGenre(p) : r.specSlug}</span>
 								<span class="text-surface-600-400 shrink-0 text-xs whitespace-nowrap">
 									{r.outcome === "ok" ? "" : `${r.outcome} · `}{whenShort(r.startedAt)}
 								</span>

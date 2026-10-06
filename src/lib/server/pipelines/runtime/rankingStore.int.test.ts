@@ -46,7 +46,7 @@ async function runRow(): Promise<number> {
 		.insert(schema.pipelineRuns)
 		.values({
 			runId: `r-${n++}`,
-			specSlug: "core:spec/respond",
+			specSlug: "core:spec/chat-respond",
 			specVersion: "1.0.0",
 			outcome: "ok",
 			triggerSource: "test",
@@ -79,7 +79,7 @@ const rankNode = (decisions: unknown[], nodeKey = "rank") => ({
 const receiptWith = (...rankings: unknown[][]) =>
 	({
 		runId: "x",
-		specId: "core:spec/respond",
+		specId: "core:spec/chat-respond",
 		nodes: [
 			{ nodeKey: "input", kind: "inlet", definitionId: "core:inlet/user-message@1", result: "ok", output: { speaker: "character:3" } },
 			...rankings.map((d, i) => rankNode(d, i ? `rank-${i}` : "rank"))

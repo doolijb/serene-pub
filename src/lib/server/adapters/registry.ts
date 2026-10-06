@@ -49,7 +49,14 @@ export interface AdapterModules {
 export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 	[CONNECTION_TYPE.LM_STUDIO]: {
 		text: async () =>
-			(await import("../connectionAdapters/LMStudioAdapter")).default
+			(await import("../connectionAdapters/LMStudioAdapter")).default,
+		// `POST /v1/embeddings` on LM Studio's own server, over plain HTTP —
+		// not through `@lmstudio/sdk`, so embedding never needs the module
+		// Android cannot parse. Which models embed is per model: LM Studio's
+		// listing says `type: "embedding"`.
+		embedding: async () =>
+			(await import("../embeddingAdapters/LMStudioEmbeddingAdapter"))
+				.default
 	},
 
 	[CONNECTION_TYPE.OLLAMA]: {
@@ -69,7 +76,15 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 
 	[CONNECTION_TYPE.OPENAI]: {
 		text: async () =>
-			(await import("../connectionAdapters/OpenAIChatAdapter")).default
+			(await import("../connectionAdapters/OpenAIChatAdapter")).default,
+		// `/embeddings` on the same service (owner ruling 2026-10-05): one
+		// OpenAI-compatible connection per service, so `openai-embeddings` rows
+		// merge into this type (`connections/openAIMultiModality.ts`) and embed
+		// through the very module they used before. Whether a service embeds is
+		// its preset's claim or the person's switch, not this map's.
+		embedding: async () =>
+			(await import("../embeddingAdapters/OpenAIEmbeddingAdapter"))
+				.default
 		// No `image`, and the manifest no longer claims `text->image` for this
 		// type either. It used to: the `openai-official` preset asserted it, the
 		// declaration was `probed`, so it resolved to `native`, the bind guard
@@ -81,12 +96,18 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 
 	[CONNECTION_TYPE.LLAMACPP]: {
 		text: async () =>
-			(await import("../connectionAdapters/LlamaCppAdapter")).default
+			(await import("../connectionAdapters/LlamaCppAdapter")).default,
 		// One module, BOTH wires. `LlamaCppAdapter` branches on `isChatWire`
 		// between llama-server's native `/completion` and its OpenAI-compatible
 		// `/v1/chat/completions`, which is why this stayed one type when the id
 		// lost its `_completion` suffix: the service is the type, the wire is a
 		// capability.
+		//
+		// `POST /v1/embeddings` — answered only by a llama-server started with
+		// `--embeddings`, which the text module's probe finds out on Test.
+		embedding: async () =>
+			(await import("../embeddingAdapters/LlamaCppEmbeddingAdapter"))
+				.default
 	},
 
 	[CONNECTION_TYPE.KOBOLDCPP]: {
@@ -118,7 +139,16 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 		// MODEL's modality (`capabilityRefusal`), not the type's.
 		image: async () =>
 			(await import("../imageAdapters/KoboldCppManagedImageAdapter"))
-				.default
+				.default,
+		// And embeds, from koboldcpp's co-resident embeddings slot: the
+		// adapter loads the pair's GGUF there first, beside whatever chat or
+		// image model is resident, and refuses an answer from any other model.
+		embedding: async () =>
+			(
+				await import(
+					"../embeddingAdapters/KoboldCppManagedEmbeddingAdapter"
+				)
+			).default
 	},
 
 	[CONNECTION_TYPE.ANTHROPIC]: {
@@ -164,6 +194,8 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 				.default
 	},
 
+	// ⏳ Merged into `openai` at boot (owner ruling 2026-10-05); kept so a row
+	// the merge has not reached still embeds. The same module `openai` uses.
 	[CONNECTION_TYPE.OPENAI_EMBEDDINGS]: {
 		embedding: async () =>
 			(await import("../embeddingAdapters/OpenAIEmbeddingAdapter"))

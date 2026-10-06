@@ -27,7 +27,7 @@
  *
  * A capability absent from an entry's `supports` can never be switched on by any
  * of the three layers below it, because the protocol has no field for it. That
- * is the whole reason an adapter is scoped by API FORMAT rather than by vendor:
+ * is why an adapter is scoped by API FORMAT rather than by vendor:
  * Claude reached through an OpenAI-compatible endpoint and Claude reached
  * through the native Anthropic API differ in precisely this.
  *
@@ -211,15 +211,15 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 	 * deliberately: the compatible zoo supports the loose mode far more widely
 	 * than the strict one, which is a difference presets exist to record.
 	 *
-	 * ⚠ No `text->image`, and its absence is now structural. This entry used to
-	 * declare it `{unproven:true, until:"none"}` and the `openai-official` preset
-	 * asserted it `true`, which resolved to `native` — so the bind guard passed,
-	 * an image slot accepted the connection, and `getImageAdapter` then threw `No
-	 * image adapter for connection type` minutes into the session. `OpenAIChatAdapter`
-	 * speaks `/v1/chat/completions` and nothing else; no image module is registered
-	 * for this type, so nothing implements `generateImage` and the key cannot come
-	 * back without one. Image generation over an OpenAI-compatible endpoint would
-	 * be `/v1/images/generations` — a different route, hence a different adapter.
+	 * ⚠ No `text->image`, and its absence is structural. `OpenAIChatAdapter`
+	 * speaks `/v1/chat/completions` and nothing else; no image module is
+	 * registered for this type, so nothing implements `generateImage` and the key
+	 * cannot be declared without one. Declared and asserted by a preset, it would
+	 * resolve to `native` — the bind guard passes, an image slot accepts the
+	 * connection, and `getImageAdapter` throws `No image adapter for connection
+	 * type` minutes into the session. Image generation over an OpenAI-compatible
+	 * endpoint is `/v1/images/generations` — a different route, hence a
+	 * different adapter.
 	 */
 	[CONNECTION_TYPE.OPENAI]: {
 		id: CONNECTION_TYPE.OPENAI,
@@ -238,10 +238,10 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				 * because it is not the endpoint you would guess.
 				 *
 				 * `OpenAIChatAdapter` speaks `/v1/chat/completions` and nothing
-				 * else — there is no `/v1/completions` branch in it and this
-				 * change adds none. What `wire_completion` means here is the
-				 * behaviour `extraJson.prerenderPrompt` used to name: render the
-				 * whole prompt flat through the connection's completion template,
+				 * else — there is no `/v1/completions` branch in it. What
+				 * `wire_completion` means here — and what a 0.5.3 row's
+				 * `extraJson.prerenderPrompt` maps to — is: render the whole
+				 * prompt flat through the connection's completion template,
 				 * with that template's stop strings, and hand the model that one
 				 * string (carried in a single user turn, because the envelope has
 				 * nowhere else to put it). Which is precisely what the wire mode
@@ -267,7 +267,26 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				 * as a trailing `{role:"assistant"}` message, which this format
 				 * hands to a chat template rather than treating as a prefill.
 				 */
-				continue_reply: "native"
+				continue_reply: "native",
+				/**
+				 * `POST {base}/embeddings` through `OpenAIEmbeddingAdapter`
+				 * (owner ruling 2026-10-05: one OpenAI-compatible connection per
+				 * service, so `openai-embeddings` rows merge into this type).
+				 *
+				 * ⚠ **SUPPORTED but not DEFAULTED.** Of the twenty-four
+				 * services behind this format some serve `/embeddings` and many
+				 * do not (Groq, DeepSeek, Anthropic's compatibility layer), and
+				 * the format cannot tell them apart — nothing probes it. So it is
+				 * off until somebody who knows says otherwise: the PRESET where
+				 * the service is known to embed (`PRESET_CAPABILITIES`), the
+				 * person's own switch for a custom endpoint, and the merge's
+				 * override for a row that was an embeddings connection. On by
+				 * default it would put every chat model of every
+				 * OpenAI-compatible connection in the embeddings picker. Which
+				 * of a service's models embeds is the person's pick: `/models`
+				 * does not say.
+				 */
+				"text->embedding": "native"
 			},
 			defaults: [
 				"text->text",
@@ -282,6 +301,7 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				// is the one that carries it. Nothing to switch by hand for
 				// somebody already sending completions.
 				"continue_reply"
+				// No `text->embedding` — see the note above. Switchable, not on.
 			]
 		},
 		continuesIn: ["completion"],
@@ -374,7 +394,7 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				 * the button disabled with a sentence saying which switch to
 				 * flip.
 				 *
-				 * So it is deliberately NOT in `defaults` below. Somebody pointed
+				 * So it stays out of `defaults` below. Somebody pointed
 				 * at a 4.5-family model switches it on and it stays on; nothing
 				 * probes it, because `testConnection` here answers with a key
 				 * check rather than a capability report.
@@ -694,8 +714,14 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 	/**
 	 * The same wire format, with the admin API assumed.
 	 *
-	 * The same three extras are gone for the same reason as on plain KOBOLDCPP:
-	 * no `synthesizeSpeech`, no `transcribeAudio`, no `embedText` exists to call.
+	 * `text->audio` and `audio->text` are gone for the same reason as on plain
+	 * KOBOLDCPP: no `synthesizeSpeech` or `transcribeAudio` exists to call.
+	 *
+	 * `text->embedding` is native here and probed on plain KOBOLDCPP, because
+	 * this app decides what the managed process holds: the embedding adapter
+	 * (`KoboldCppManagedEmbeddingAdapter`) loads the pair's GGUF into
+	 * koboldcpp's co-resident embeddings slot (`--embeddingsmodel`) before it
+	 * embeds, so there is no instance-level flag left to find out.
 	 */
 	[CONNECTION_TYPE.KOBOLDCPP_MANAGED]: {
 		id: CONNECTION_TYPE.KOBOLDCPP_MANAGED,
@@ -720,7 +746,12 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				wire_chat: "native",
 				wire_completion: "native",
 				// Inherited with the send path: this type extends KoboldCppAdapter.
-				continue_reply: "native"
+				continue_reply: "native",
+				// And embeds — from the co-resident embeddings slot, so an
+				// embedding model never evicts the chat model. Per MODEL, like
+				// the other two: `capabilityRefusal` refuses it to a `text-gen`
+				// row, as it refuses chat to an `embeddings` one.
+				"text->embedding": "native"
 			},
 			defaults: [
 				"text->text",
@@ -730,7 +761,10 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				"streaming",
 				"wire_chat",
 				"wire_completion",
-				"continue_reply"
+				"continue_reply",
+				// ON means ELIGIBLE, as on Ollama: whether this endpoint is the
+				// embedding lane is still the star's decision, made separately.
+				"text->embedding"
 			]
 		},
 		continuesIn: ["completion"],
@@ -755,29 +789,36 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 		midSystem: "fold"
 	},
 
-	/** llama.cpp's llama-server. Grammar, and text, and no more. */
+	/**
+	 * llama.cpp's llama-server. Grammar and text — and embeddings, from a
+	 * server started for them.
+	 *
+	 * `text->embedding` is `/v1/embeddings` through `LlamaCppEmbeddingAdapter`,
+	 * and it is probed, like KOBOLDCPP's: llama-server embeds only when started
+	 * with `--embeddings`, which is per-instance, and nothing it serves reports
+	 * the flag. The probe is a one-word embed on Test (`llamaCppServesEmbeddings`);
+	 * until it answers, `until: "none"`.
+	 */
 	[CONNECTION_TYPE.LLAMACPP]: {
 		id: CONNECTION_TYPE.LLAMACPP,
 		capabilities: {
 			supports: {
 				"text->text": "native",
 				"text+image->text": { unproven: true, until: "none" },
+				// Probed — see above. Which model is the embedding one is the
+				// listing's answer: the server's one model, `embeddings` when the
+				// same probe says so.
+				"text->embedding": { unproven: true, until: "none" },
 				grammar: "native",
 				tools: "emulated",
 				streaming: "native",
 				/**
-				 * Both wires, and the day the key arrived is the day the branch
-				 * did.
-				 *
-				 * This entry used to declare `wire_completion` alone, with a
-				 * paragraph explaining that llama-server exposes
-				 * `/v1/chat/completions` but this TYPE could not reach it — no
-				 * chat branch in `LlamaCppAdapter`, so declaring the key would
-				 * have been a key with no code behind it, which is the
-				 * `text->image` failure this whole file was written to end. The
-				 * branch exists now (`isChatWire`, the same `useChat` idiom
-				 * `OllamaAdapter` and `KoboldCppAdapter` use), so the
-				 * declaration follows it rather than anticipating it.
+				 * Both wires, because `LlamaCppAdapter` has both branches: it
+				 * reaches llama-server's `/v1/chat/completions` through
+				 * `isChatWire`, the same `useChat` idiom `OllamaAdapter` and
+				 * `KoboldCppAdapter` use. A wire key follows the branch behind it
+				 * and never anticipates one — a key with no code behind it is the
+				 * `text->image` failure this file is written to end.
 				 *
 				 * ⚠ **`wire_chat` is SUPPORTED but not DEFAULTED, and the
 				 * asymmetry is the whole point.** `supports` is a gate and
@@ -828,7 +869,15 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 		midSystem: "fold"
 	},
 
-	/** The LM Studio SDK. Native structured output, emulated tools. */
+	/**
+	 * The LM Studio SDK. Native structured output, emulated tools.
+	 *
+	 * `text->embedding` is `/v1/embeddings` on the same server, over HTTP,
+	 * through `LMStudioEmbeddingAdapter`. Native and on, like OLLAMA's: the route
+	 * is always there, and which of the host's models embed is per model — LM
+	 * Studio's listing says `type: "embedding"`, stored as
+	 * `connection_models.modality`.
+	 */
 	[CONNECTION_TYPE.LM_STUDIO]: {
 		id: CONNECTION_TYPE.LM_STUDIO,
 		capabilities: {
@@ -845,7 +894,8 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				wire_completion: "native",
 				// `.complete()` is handed the prompt string; `.respond()` is
 				// handed messages and templates them.
-				continue_reply: "native"
+				continue_reply: "native",
+				"text->embedding": "native"
 			},
 			defaults: [
 				"text->text",
@@ -855,7 +905,11 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				"streaming",
 				"wire_chat",
 				"wire_completion",
-				"continue_reply"
+				"continue_reply",
+				// ON means ELIGIBLE: whether this host is the embedding lane is
+				// still the star's decision, and only its embedding models are
+				// offered for it.
+				"text->embedding"
 			]
 		},
 		continuesIn: ["completion"],
@@ -913,17 +967,18 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 	/**
 	 * An image connection by construction, which is why it needs no probe.
 	 *
-	 * KOBOLDCPP declares text->image as `probed`, because it points at somebody
-	 * else's instance and whether that process can draw depends on what they
-	 * loaded. KOBOLDCPP_MANAGED declares it NOWHERE AT ALL — see its entry above,
-	 * where the key is absent from `supports` on purpose: a key the adapter does
-	 * not declare can never appear, whatever any other layer says, and that
-	 * asymmetry is the structural half of stopping a managed LLM connection from
-	 * turning up in the image picker. Do not "restore" it. This type names an
-	 * image model in `connection.model` and the managed KoboldCPP loads it on demand, so the
-	 * answer is known before anything is running — which is what dissolves the
-	 * refused→never-loaded→never-probed cycle that imageCapability.ts existed to
-	 * break.
+	 * KOBOLDCPP declares text->image `unproven` until a probe, because it points
+	 * at somebody else's instance and whether that process can draw depends on
+	 * what they loaded. This type's model is a file the managed KoboldCPP loads
+	 * on demand, so the answer is known before anything is running — which is
+	 * what dissolved the refused→never-loaded→never-probed cycle that
+	 * imageCapability.ts existed to break.
+	 *
+	 * Rows of this type are folded at boot (`koboldCppManagedFold.ts`) into THE
+	 * managed endpoint, whose entry above declares `text->image` itself.
+	 * What keeps a text model out of the image picker there is the MODEL's
+	 * `connection_models.modality`, judged by `capabilityRefusal`, not an absent
+	 * key.
 	 *
 	 * One transform and no more, which is now the same set A1111 itself has: this
 	 * type re-exports `A1111Adapter` unchanged, that class is txt2img-only, and
@@ -977,6 +1032,8 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 		}
 	},
 
+	// ⏳ Merged into OPENAI at boot (`connections/openAIMultiModality.ts`, owner
+	// ruling 2026-10-05); declared until then so an unmerged row still resolves.
 	[CONNECTION_TYPE.OPENAI_EMBEDDINGS]: {
 		id: CONNECTION_TYPE.OPENAI_EMBEDDINGS,
 		capabilities: {
@@ -1032,16 +1089,12 @@ export const PRESET_CAPABILITIES: Record<
 	// Reaching Claude through an OpenAI-compatible endpoint: vision works, so the
 	// preset asserts it rather than leaving it probed.
 	//
-	// This used to carry `"text->image": false` as the worked example of the
-	// adapter-gate-versus-preset-default distinction — the toggle existing here
-	// and being off, versus not existing at all on the native Anthropic type.
-	// That key is gone because OPENAI no longer declares `text->image` for
-	// anyone (see its entry: nothing implements `generateImage` for that type),
-	// and a preset key the adapter does not declare is inert — `resolveCapabilities`
-	// iterates `supports`, so it would have been a line that looked like it did
-	// something. The distinction it illustrated is alive in `json_schema`, one
-	// line down: OPENAI declares it probed and a preset may assert it, while
-	// the native ANTHROPIC entry does not declare it at all and no preset can.
+	// No `text->image` key: OPENAI declares none (see its entry), and a preset
+	// key the adapter does not declare is inert — `resolveCapabilities` iterates
+	// `supports`, so it would be a line that looks like it does something. The
+	// adapter-gate-versus-preset-default distinction lives in `json_schema`:
+	// OPENAI declares it probed and a preset may assert it, while the native
+	// ANTHROPIC entry does not declare it at all and no preset can.
 	anthropic: { "text+image->text": true },
 
 	"openai-official": {
@@ -1072,17 +1125,36 @@ export const PRESET_CAPABILITIES: Record<
 		// Removing the key from `supports` alone would have left this line inert
 		// but still readable as an intent somebody would later try to honour.
 		json_schema: true,
-		strict_schema: true
+		strict_schema: true,
+		"text->embedding": true
 	},
-	openrouter: { "text+image->text": true, json_schema: true },
-	"google-gemini": { "text+image->text": true, json_schema: true },
+	/**
+	 * `"text->embedding": true` only where the service's own API reference
+	 * documents `/embeddings` at the preset's base URL (checked 2026-10-05):
+	 * OpenAI, OpenRouter (`/api/v1/embeddings`), Gemini's OpenAI compatibility
+	 * layer, Together, Mistral and LocalAI. Absent — the type's default, off —
+	 * for Groq and DeepSeek (no such route), and for vLLM, SGLang and
+	 * text-generation-webui, which serve it only when started for it (a pooling
+	 * model, `--is-embedding`, sentence-transformers installed): per-instance,
+	 * so the person's switch rather than a claim about every install.
+	 */
+	openrouter: {
+		"text+image->text": true,
+		json_schema: true,
+		"text->embedding": true
+	},
+	"google-gemini": {
+		"text+image->text": true,
+		json_schema: true,
+		"text->embedding": true
+	},
 	groq: { json_schema: true },
-	"together-ai": { json_schema: true },
-	"mistral-ai": { json_schema: true },
+	"together-ai": { json_schema: true, "text->embedding": true },
+	"mistral-ai": { json_schema: true, "text->embedding": true },
 	deepseek: { json_object: true },
 	// The local OpenAI-compatible servers: schema support varies by build, so
 	// the loose mode stays on and the strict one stays off until probed.
-	"local-ai": { json_schema: false },
+	"local-ai": { json_schema: false, "text->embedding": true },
 	vllm: { json_schema: true },
 	sglang: { json_schema: true },
 	"aphrodite-engine": { json_schema: true },

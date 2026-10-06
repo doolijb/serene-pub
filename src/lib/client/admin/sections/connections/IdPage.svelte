@@ -15,7 +15,9 @@
 	 *   switches, Use and, on a local ONNX endpoint, Download / Cancel. The
 	 *   switches and Use are pending changes that wait for Save (owner ruling
 	 *   2026-10-03, `modelEdits.ts`); Refresh, Add by name and Download /
-	 *   Cancel are one-shot acts and still act when pressed.
+	 *   Cancel are one-shot acts and still act when pressed. Where this
+	 *   machine can't run local ONNX models, Download and Retry give way to
+	 *   the reason, said once above the rows (`localOnnxBlocked`).
 	 * - **Defaults** — which capability defaults point here.
 	 * - **Stop scripts**, and under **Advanced**, the capability overrides
 	 *   and the lane panels.
@@ -53,6 +55,7 @@
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { NOTE_MAX_LENGTH, normalizeNote } from "$lib/shared/utils/connectionNotes"
 	import { keyUrlFor, needsCredential } from "$lib/shared/connections/credentials"
+	import { connectionTypeDisabledReason } from "$lib/shared/utils/connectionServiceItems"
 	import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
 	import { NER_CAPABILITY } from "$lib/shared/constants/ner"
 	import AdminChangeForm, {
@@ -389,6 +392,17 @@
 	const defaults = $derived(systemSettingsCtx?.capabilityDefaults ?? {})
 	const kind = $derived(endpointKind(row?.type ?? connection?.type))
 	const isOnnx = $derived(isLocalOnnxType(row?.type ?? connection?.type))
+	/**
+	 * Why a local ONNX endpoint can download nothing on this machine, or null
+	 * when it can. Said once above its models, where Download and Retry give
+	 * way to it — the endpoint's own view does the same (`OnnxEndpointView`).
+	 */
+	const localOnnxBlocked = $derived(
+		connectionTypeDisabledReason(
+			row?.type ?? connection?.type,
+			systemSettingsCtx?.settings?.localOnnxAvailability
+		)
+	)
 	const isManagedKcpp = $derived(
 		(row?.type ?? connection?.type) === CONNECTION_TYPE.KOBOLDCPP_MANAGED
 	)
@@ -493,10 +507,27 @@
 	function dropPending(label: string) {
 		modelEdits = withoutSteps(modelEdits, pendingSteps, [label])
 	}
+	/**
+	 * A model row's one press: `rowAction`, less Download and Retry where
+	 * this machine can't run local ONNX models — the server refuses both, and
+	 * the reason is already said above the rows. Make active stays, disabled
+	 * (`localOnnxBlocked` on the row's Use): the files are real, and the star
+	 * is refused with the same sentence.
+	 */
+	function actionFor(model: ListRow["models"][number]) {
+		const action = rowAction(kind, model, {
+			isDefault: !!defaultsByModel[model.id]?.length
+		})
+		if (
+			localOnnxBlocked &&
+			(action?.verb === "download" || action?.verb === "retry")
+		)
+			return null
+		return action
+	}
 	function modelAction(model: ListRow["models"][number]) {
-		const isDefault = !!defaultsByModel[model.id]?.length
-		const action = rowAction(kind, model, { isDefault })
-		if (!action) return
+		const action = actionFor(model)
+		if (!action || (localOnnxBlocked && action.verb === "makeActive")) return
 		if (action.verb === "download" || action.verb === "retry")
 			socket.emit("connections:downloadModel", { id, modelId: model.id })
 		else if (action.verb === "cancel")
@@ -720,7 +751,7 @@
 			<AdminFieldset
 				id="models"
 				title="Models"
-				description={`${modelsHeadline({ modelCount: row.models.length, missingCount })}. Hide, Show and Use wait for Save; Refresh${isOnnx ? ", Download" : ""} and Add by name act at once.`}
+				description={`${modelsHeadline({ modelCount: row.models.length, missingCount })}. Hide, Show and Use wait for Save; Refresh${isOnnx && !localOnnxBlocked ? ", Download" : ""} and Add by name act at once.`}
 			>
 				{#snippet aside()}
 					<button
@@ -739,9 +770,27 @@
 					</button>
 				{/snippet}
 				<div class="flex min-w-0 flex-col gap-3" bind:clientWidth={modelsWidth}>
+					{#if localOnnxBlocked}
+						<!-- Said once, above the rows, rather than on each: the
+						     reason often quotes the runtime's own error, so it
+						     wraps (OnnxEndpointView's warning, same words). -->
+						<p
+							class="preset-tonal-warning flex items-start gap-2 rounded-lg p-2 text-xs break-words"
+						>
+							<Icons.TriangleAlert
+								size={14}
+								class="mt-0.5 shrink-0"
+								aria-hidden="true"
+							/>
+							<span class="min-w-0">{localOnnxBlocked}</span>
+						</p>
+					{/if}
 					{#if !row.models.length}
 						<p class="text-surface-600-400 text-sm">
-							{#if isOnnx || kind === "koboldcpp-managed" || kind === "ollama"}
+							{#if localOnnxBlocked}
+								Nothing is downloaded to this machine, and nothing can be
+								until it can run local models.
+							{:else if isOnnx || kind === "koboldcpp-managed" || kind === "ollama"}
 								No models on this machine yet. Find and download them in
 								the Connections view.
 							{:else}
@@ -750,15 +799,16 @@
 						</p>
 					{:else if isOnnx}
 						{#each shownModels as m (m.id)}
-							{@const action = rowAction(kind, m, {
-								isDefault: !!defaultsByModel[m.id]?.length
-							})}
+							{@const action = actionFor(m)}
 							<ModelRow
 								model={m}
 								defaultFor={defaultsByModel[m.id] ?? []}
 								canUse={!!action}
 								useLabel={action?.label ?? "Use"}
 								useShortLabel={action?.label ?? "Use"}
+								useDisabledReason={action?.verb === "makeActive"
+									? localOnnxBlocked
+									: null}
 								note={m.local?.state === "downloading"
 									? `Downloading ${Math.round(m.local.percent ?? 0)}%`
 									: m.local?.state === "on_disk"

@@ -268,7 +268,7 @@ describe("a preview never parks on a review gate", () => {
 			const [respond] = await db
 				.select()
 				.from(schema.pipelineSpecs)
-				.where(eq(schema.pipelineSpecs.slug, "core:spec/respond"))
+				.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-respond"))
 			const configs = await db
 				.select()
 				.from(schema.pipelineConfigs)
