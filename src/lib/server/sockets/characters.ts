@@ -27,6 +27,17 @@ import {
 } from "../utils/characterCardParser"
 import { autoEnqueueCharacter } from "$lib/server/embedding/vectorizationQueue"
 import { canViewCharacter } from "$lib/server/utils/sessionAccess"
+import {
+	isSharedWith,
+	listSharedWith,
+	replaceShares,
+	sharedCharacterIdsFor
+} from "$lib/server/utils/shares"
+import { pushToUser } from "./utils/userPush"
+import type {
+	CharactersShareParams,
+	CharactersShareResponse
+} from "$lib/shared/sockets/conversations"
 import { markCharacterAsPersona } from "$lib/server/utils/markCharacterAsPersona"
 import {
 	resolveCardSource,
@@ -50,6 +61,21 @@ import {
 } from "$lib/server/imports/importFailure"
 import { holdImport, takeHeldImport } from "$lib/server/imports/heldImports"
 import { withImportLimit } from "$lib/server/imports/importLimit"
+import { STROKE_LIMITS } from "@serene-pub/sdk"
+import { applyStrokesToCard } from "$lib/server/characters/strokes"
+import { STROKES_ENABLED } from "$lib/shared/characters/strokesFlag"
+import { countStrokeTokens } from "$lib/server/characters/strokeTokens"
+import {
+	planCardImport,
+	type CardImportPlan
+} from "$lib/server/characters/cardIO"
+import { buildCardDowry, importCardDowry } from "$lib/server/characters/dowry"
+import {
+	readLikeness,
+	sanitizeLikeness,
+	withLikeness,
+	type CharacterLikeness
+} from "$lib/server/characters/likeness"
 
 // Helper function to process tags for character creation/update. Tags are
 // per-user (schema.tags.userId): lookups/creates must stay scoped to the
@@ -124,6 +150,37 @@ async function processCharacterTags(
 	}
 }
 
+const CHARACTER_LIST_COLUMNS = {
+	id: true,
+	name: true,
+	nickname: true,
+	avatarMediaId: true,
+	isFavorite: true,
+	description: true,
+	creatorNotes: true,
+	// The row's summary line reads this first (`characterSummary`,
+	// less-confusing plan F1): the card's own one-line blurb.
+	summary: true,
+	embeddingModel: true,
+	// The persona picker and the folder-grouped library are reads of
+	// THIS list, not of a second family — so these three ride the row
+	// rather than costing a query each.
+	isPersona: true,
+	isDefaultPersona: true,
+	folderId: true
+} as const
+
+const CHARACTER_LIST_WITH = {
+	avatarMedia: {
+		columns: { uuid: true, rev: true, frame: true }
+	},
+	characterTags: {
+		with: {
+			tag: true
+		}
+	}
+} as const
+
 /**
  * The character list, as every surface that shows one reads it.
  *
@@ -139,37 +196,44 @@ async function processCharacterTags(
 export async function buildCharactersList(
 	userId: number
 ): Promise<Sockets.Characters.List.Response> {
-	const characterList = await db.query.characters.findMany({
-		columns: {
-			id: true,
-			name: true,
-			nickname: true,
-			avatarMediaId: true,
-			isFavorite: true,
-			description: true,
-			creatorNotes: true,
-			embeddingModel: true,
-			// The persona picker and the folder-grouped library are reads of
-			// THIS list, not of a second family — so these three ride the row
-			// rather than costing a query each.
-			isPersona: true,
-			isDefaultPersona: true,
-			folderId: true
-		},
-		with: {
-			avatarMedia: {
-				columns: { uuid: true, rev: true, frame: true }
+	const characterList: Sockets.Characters.List.Response["characterList"] =
+		await db.query.characters.findMany({
+			columns: CHARACTER_LIST_COLUMNS,
+			with: CHARACTER_LIST_WITH,
+			where: (c, { and, eq }) =>
+				and(eq(c.userId, userId), eq(c.isDeleted, false)),
+			orderBy: (c, { asc }) => asc(c.id)
+		})
+
+	// Characters other people **shared** with the asker (PLAN-private-messages
+	// §6.7), after the owned rows, each marked and named by its owner. The
+	// owned rows above are unchanged.
+	const sharedIds = await sharedCharacterIdsFor(db as unknown as Db, userId)
+	if (sharedIds.length) {
+		const shared = await db.query.characters.findMany({
+			columns: CHARACTER_LIST_COLUMNS,
+			with: {
+				...CHARACTER_LIST_WITH,
+				user: { columns: { username: true, displayName: true } }
 			},
-			characterTags: {
-				with: {
-					tag: true
-				}
-			}
-		},
-		where: (c, { and, eq }) =>
-			and(eq(c.userId, userId), eq(c.isDeleted, false)),
-		orderBy: (c, { asc }) => asc(c.id)
-	})
+			where: (c, { and, eq, inArray, ne }) =>
+				and(
+					inArray(c.id, sharedIds),
+					eq(c.isDeleted, false),
+					ne(c.userId, userId)
+				),
+			orderBy: (c, { asc }) => asc(c.id)
+		})
+		for (const { user, ...row } of shared)
+			characterList.push({
+				...row,
+				// A sharer's folder is theirs: it means nothing in this library.
+				folderId: null,
+				isDefaultPersona: false,
+				isSharedWithMe: true,
+				ownerName: user?.displayName || user?.username || null
+			})
+	}
 	return { characterList }
 }
 
@@ -237,13 +301,33 @@ async function buildCharacterGet(
 		character &&
 		(isOwner || (await canViewCharacter(character.id, userId)))
 	) {
+		// Shares (PLAN-private-messages §4): the owner reads who it is shared
+		// with; a recipient reads that it is shared with them, and nothing
+		// about anyone else it is shared with.
+		const shareFields = isOwner
+			? {
+					sharedWith: await listSharedWith(
+						db as unknown as Db,
+						"character",
+						character.id
+					)
+				}
+			: {
+					isSharedWithMe: await isSharedWith(
+						db as unknown as Db,
+						"character",
+						character.id,
+						userId
+					)
+				}
 		// Transform the character data to include tags as string array
 		const characterWithTags = {
 			...character,
 			tags: character.characterTags.map((ct) => ct.tag.name),
 			isOwner,
 			ownerName:
-				character.user?.displayName || character.user?.username || null
+				character.user?.displayName || character.user?.username || null,
+			...shareFields
 		}
 		const { characterTags, user, ...characterWithoutTags } =
 			characterWithTags
@@ -264,6 +348,72 @@ export const charactersGet: Handler<
 		return res
 	}
 }
+
+/**
+ * `characters:share` — replace who a character is **shared** with
+ * (PLAN-private-messages §4 "Shares"). Owner only; a replace-set in one
+ * transaction; every recipient a live account. The reply reaches every tab of
+ * the owner; each person added or removed gets a fresh `characters:list`
+ * (gated: only a tab showing one pays for the read), and the owner's open
+ * detail re-reads its **Shared with** line from `characters:get`.
+ */
+export const charactersShare = refusable<
+	CharactersShareParams,
+	CharactersShareResponse
+>(
+	"characters:share",
+	async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const characterId = params?.characterId
+		if (!Number.isSafeInteger(characterId))
+			throw new Error("Character not found.")
+		const changed = await db.transaction(async (tx) => {
+			const [owned] = await tx
+				.select({ id: schema.characters.id })
+				.from(schema.characters)
+				.where(
+					and(
+						eq(schema.characters.id, characterId),
+						eq(schema.characters.userId, userId),
+						eq(schema.characters.isDeleted, false)
+					)
+				)
+				.limit(1)
+			if (!owned) throw new Error("Character not found.")
+			return replaceShares(
+				tx as unknown as Db,
+				"character",
+				characterId,
+				userId,
+				params.userIds
+			)
+		})
+		const res: CharactersShareResponse = {
+			characterId,
+			sharedWith: await listSharedWith(
+				db as unknown as Db,
+				"character",
+				characterId
+			)
+		}
+		emitToUser("characters:share", res)
+		await emitToUser("characters:get", () =>
+			buildCharacterGet(userId, characterId)
+		)
+		for (const recipient of [...changed.added, ...changed.removed]) {
+			pushToUser(recipient, "characters:list", () =>
+				buildCharactersList(recipient)
+			)
+			pushToUser(recipient, "characters:get", () =>
+				buildCharacterGet(recipient, characterId)
+			)
+		}
+		return res
+	},
+	"Couldn't change who this character is shared with.",
+	undefined,
+	(raw) => ({ characterId: (raw as { characterId?: unknown })?.characterId })
+)
 
 /**
  * The character as a broadcast has to carry it: re-read AFTER every write the
@@ -289,6 +439,45 @@ async function characterForBroadcast(
 		}
 	})
 	return row ?? fallback
+}
+
+/**
+ * 🚧 A likeness a save sent, made safe to store: sanitized, and its image
+ * kept only when the file is the saver's own — a role pointer at someone
+ * else's file is not one this person may set. `null` clears it.
+ */
+async function likenessForWrite(
+	raw: unknown,
+	userId: number,
+	dbOrTx: Db = db
+): Promise<CharacterLikeness | null> {
+	const clean = sanitizeLikeness(raw)
+	if (!clean?.imageMediaId) return clean
+	const file = await dbOrTx.query.files.findFirst({
+		where: (f, { eq }) => eq(f.id, clean.imageMediaId!),
+		columns: { userId: true }
+	})
+	if (file?.userId === userId) return clean
+	const { imageMediaId: _drop, ...rest } = clean
+	return Object.keys(rest).length ? rest : null
+}
+
+/**
+ * An imported card's `extensions` with its likeness image kept only when the
+ * file is the importer's own: an id another install wrote names some other
+ * file here (or none), and the likeness then falls back to the avatar.
+ */
+async function importedLikenessChecked(
+	extensions: Record<string, unknown> | undefined,
+	userId: number,
+	dbOrTx: Db
+): Promise<Record<string, unknown> | undefined> {
+	const likeness = readLikeness(extensions)
+	if (!likeness?.imageMediaId) return extensions
+	return withLikeness(
+		extensions,
+		await likenessForWrite(likeness, userId, dbOrTx)
+	)
 }
 
 export const charactersCreate: Handler<
@@ -337,10 +526,21 @@ export const charactersCreate: Handler<
 				if (!folder) data.folderId = null
 			}
 
+			// Strokes are the source when there are any: the prose columns are
+			// then their compiled cache (DESIGN-card-strokes §A.3). Malformed
+			// strokes refuse the create with the first finding's sentence.
+			const carded = applyStrokesToCard(data)
+			// 🚧 The likeness rides beside the row, into `extensions`.
+			if (params.likeness !== undefined)
+				(carded as any).extensions = withLikeness(
+					(carded as any).extensions,
+					await likenessForWrite(params.likeness, socket.user!.id)
+				)
+
 			const [character] = await db
 				.insert(schema.characters)
 				.values({
-					...data,
+					...carded,
 					...(makeDefault ? { isPersona: true } : {}),
 					userId: socket.user!.id
 				})
@@ -469,8 +669,53 @@ export const charactersUpdate: Handler<
 					eq(schema.characters.id, id),
 					eq(schema.characters.userId, userId)
 				),
-				columns: { name: true, description: true }
+				columns: {
+					name: true,
+					description: true,
+					strokes: true,
+					extensions: true
+				}
 			})
+
+			// 🚧 The likeness (DESIGN-image-generation §5): merged into the
+			// STORED extensions, so another tool's keys and ours survive a
+			// save that only moves the likeness. Absent: untouched.
+			if (params.likeness !== undefined && stored)
+				(data as any).extensions = withLikeness(
+					"extensions" in data ? data.extensions : stored.extensions,
+					await likenessForWrite(params.likeness, userId)
+				)
+
+			// Strokes (DESIGN-card-strokes §A.3). Sent: they are the new
+			// source, and the prose columns their compile — or, sent empty, the
+			// card returns to the legacy shape keeping whatever prose this save
+			// carries (else the last compile). Absent: untouched — but a card
+			// that HAS strokes keeps its prose derived, so prose sent without
+			// them is recompiled from the stored strokes rather than written
+			// over the cache.
+			//
+			// Strokes paused (`STROKES_ENABLED` off): none of that. The prose
+			// sent is what is stored, any `strokes` sent are dropped, and a
+			// save that writes prose clears the stored strokes (`[]`).
+			const strokesSent = "strokes" in data && data.strokes !== undefined
+			const sendsProse = "description" in data || "personality" in data
+			if (!STROKES_ENABLED) {
+				delete (data as any).strokes
+				Object.assign(data, applyStrokesToCard(data))
+			} else {
+				Object.assign(
+					data,
+					applyStrokesToCard(
+						strokesSent
+							? data
+							: sendsProse && stored?.strokes?.length
+								? { ...data, strokes: stored.strokes }
+								: data
+					)
+				)
+				if (!strokesSent) delete (data as any).strokes
+			}
+
 			const movesEmbeddedText =
 				!!stored &&
 				((typeof data.name === "string" && data.name !== stored.name) ||
@@ -637,13 +882,21 @@ function firstArray<T>(...candidates: unknown[]): T[] | undefined {
 }
 
 export function characterFieldsFromParsedData(
-	data: any
+	data: any,
+	plan: CardImportPlan = planCardImport(data)
 ): Omit<typeof schema.characters.$inferInsert, "userId" | "isFavorite"> {
 	return {
 		name: data.name || "Unnamed Character",
 		nickname: data.nickname || null,
-		description: data.description || "",
-		personality: data.personality || null,
+		// Strokes (A.6): Serene Pub's own win, a small and plain book becomes
+		// keyword strokes, else none — and the prose is what they compile to,
+		// or the card's as written. `extensions`: the card's own, minus
+		// `serenepub`, so another tool's keys survive the round trip — plus
+		// the card's likeness under `serenepub.likeness` (`planCardImport`).
+		description: plan.fields.description || "",
+		personality: plan.fields.personality || null,
+		strokes: plan.fields.strokes,
+		extensions: plan.fields.extensions,
 		scenario: data.scenario || null,
 		firstMessage: data.first_mes || null,
 		exampleDialogues: data.mes_example
@@ -770,22 +1023,35 @@ export async function createCharacterFromParsedData(
 	avatarBuffer: Buffer | undefined,
 	userId: number,
 	dbOrTx: Db = db,
-	warnings?: ImportWarning[]
+	warnings?: ImportWarning[],
+	summary?: string[]
 ) {
 	const uuidToStamp = await claimIncomingCharacterUuid(
 		extractCharacterUuid(data),
 		userId,
 		dbOrTx
 	)
+	const plan = planCardImport(data)
+	const fields = characterFieldsFromParsedData(data, plan)
+	fields.extensions = await importedLikenessChecked(
+		fields.extensions as Record<string, unknown> | undefined,
+		userId,
+		dbOrTx
+	)
 	const [character] = await dbOrTx
 		.insert(schema.characters)
 		.values({
-			...characterFieldsFromParsedData(data),
+			...fields,
 			...(uuidToStamp ? { uuid: uuidToStamp } : {}),
 			userId,
 			isFavorite: false
 		})
 		.returning()
+	summary?.push(...plan.summary)
+	const dowry = await importCardDowry(dbOrTx, character.id, plan.dowry, {
+		userId
+	})
+	summary?.push(...dowry.summary)
 	const applied = await applyAvatarAndTags(
 		character,
 		avatarBuffer,
@@ -807,12 +1073,31 @@ export async function overwriteCharacterFromParsedData(
 	avatarBuffer: Buffer | undefined,
 	userId: number,
 	dbOrTx: Db = db,
-	warnings?: ImportWarning[]
+	warnings?: ImportWarning[],
+	summary?: string[]
 ) {
+	const plan = planCardImport(data)
+	const fields = characterFieldsFromParsedData(data, plan)
+	fields.extensions = await importedLikenessChecked(
+		fields.extensions as Record<string, unknown> | undefined,
+		userId,
+		dbOrTx
+	)
 	await dbOrTx
 		.update(schema.characters)
-		.set(characterFieldsFromParsedData(data))
+		.set(fields)
 		.where(eq(schema.characters.id, existingId))
+	summary?.push(...plan.summary)
+	// An overwrite is wholesale: a card that brings stats replaces the card's
+	// own sheets and card-layer rows. One that brings none leaves them.
+	const dowry = await importCardDowry(
+		dbOrTx,
+		existingId,
+		plan.dowry,
+		{ userId },
+		{ replace: true }
+	)
+	summary?.push(...dowry.summary)
 	const character = await dbOrTx.query.characters.findFirst({
 		where: eq(schema.characters.id, existingId)
 	})
@@ -839,7 +1124,8 @@ export async function overwriteCharacterFromParsedData(
  */
 export async function buildExistingCharacterComparisonData(
 	characterId: number,
-	dbOrTx: Db = db
+	dbOrTx: Db = db,
+	opts: { withDowry?: boolean } = {}
 ) {
 	const character = await dbOrTx.query.characters.findFirst({
 		where: eq(schema.characters.id, characterId),
@@ -848,9 +1134,15 @@ export async function buildExistingCharacterComparisonData(
 	if (!character) return null
 	const built = buildCharacterCardV3({
 		...character,
-		tags: character.characterTags?.map((ct) => ct.tag.name) || []
+		tags: character.characterTags?.map((ct) => ct.tag.name) || [],
+		// A card file carries its dowry and is compared with it; a card
+		// embedded in a lorebook export never carries one, so it is not.
+		dowry: opts.withDowry ? await buildCardDowry(dbOrTx, characterId) : null
 	})
-	return { character, comparisonData: built.data }
+	// The book never takes part (see above) — and it now also carries the
+	// keyword strokes, which `serenepub.strokes` already compares.
+	const { character_book: _book, ...comparisonData } = built.data as any
+	return { character, comparisonData }
 }
 
 /**
@@ -970,6 +1262,17 @@ export const charactersImportCard = refusable<
 )
 
 /**
+ * The parsed card's `data` with the parser's book on it when `data` has none
+ * — a V1 card keeps its book at the top level, where `toSpecV3` does not look.
+ * The strokes decision (`planCardImport`) reads the book from `data`.
+ */
+function withParsedBook(data: any, lorebook: unknown): any {
+	return lorebook && !data?.character_book
+		? { ...data, character_book: lorebook }
+		: data
+}
+
+/**
  * The card's embedded lorebook, HELD for the "Import the lorebook?" dialog
  * (NOMENCLATURE §16) rather than sent: the book can be 16 MB, and a reply
  * reaches every tab only for the dialog to send it straight back (S4 review).
@@ -977,7 +1280,7 @@ export const charactersImportCard = refusable<
  */
 function holdCardBook(
 	userId: number,
-	lorebook: SpecV3.Lorebook | undefined
+	lorebook: SpecV3.Lorebook | Record<string, unknown> | undefined
 ): Sockets.Characters.HeldCardBook | null {
 	if (!lorebook) return null
 	return {
@@ -1005,7 +1308,7 @@ async function importCardFile(
 
 	// getRobustSpecV3Data (not a bare card.toSpecV3()) so older/V1
 	// cards import with full fidelity — see its own doc comment.
-	const data = getRobustSpecV3Data(card)
+	const data = withParsedBook(getRobustSpecV3Data(card), lorebook)
 
 	const incomingUuid = extractCharacterUuid(data)
 
@@ -1020,7 +1323,9 @@ async function importCardFile(
 
 		if (existing) {
 			const existingComparison =
-				await buildExistingCharacterComparisonData(existing.id)
+				await buildExistingCharacterComparisonData(existing.id, db, {
+					withDowry: true
+				})
 			if (existingComparison) {
 				const { character_book, ...incomingForHash } =
 					data as any
@@ -1057,6 +1362,7 @@ async function importCardFile(
 	}
 
 	const warnings: ImportWarning[] = []
+	const summary: string[] = []
 	// The V3 spec requires telling the user when a card's assets are
 	// not kept, since a re-export will leave them out.
 	const assetNote = describeUnimportedAssets(unimportedAssets)
@@ -1066,7 +1372,8 @@ async function importCardFile(
 		avatarBuffer,
 		userId,
 		db,
-		warnings
+		warnings,
+		summary
 	)
 	await importCardSprites(
 		userId,
@@ -1086,8 +1393,9 @@ async function importCardFile(
 	const res: Sockets.Characters.ImportCard.Response = {
 		status: "created",
 		character,
-		book: holdCardBook(userId, lorebook),
-		...(warnings.length > 0 ? { warnings } : {})
+		book: holdCardBook(userId, planCardImport(data).heldBook),
+		...(warnings.length > 0 ? { warnings } : {}),
+		...(summary.length > 0 ? { summary } : {})
 	}
 	emitToUser("characters:importCard", res)
 	return res
@@ -1111,9 +1419,10 @@ export const charactersImportResolve = refusable<
 			const bytes = takeHeldImport(userId, "card", params?.heldImportId)
 			const { card, avatarBuffer, lorebook, unimportedAssets, sprites } =
 				await parseCharacterCard(bytes)
-			const data = getRobustSpecV3Data(card)
+			const data = withParsedBook(getRobustSpecV3Data(card), lorebook)
 
 			const warnings: ImportWarning[] = []
+			const summary: string[] = []
 			const assetNote = describeUnimportedAssets(unimportedAssets)
 			if (assetNote) warnings.push(assetNote)
 			let character
@@ -1132,7 +1441,8 @@ export const charactersImportResolve = refusable<
 					avatarBuffer,
 					userId,
 					db,
-					warnings
+					warnings,
+					summary
 				)
 			} else {
 				character = await createCharacterFromParsedData(
@@ -1140,7 +1450,8 @@ export const charactersImportResolve = refusable<
 					avatarBuffer,
 					userId,
 					db,
-					warnings
+					warnings,
+					summary
 				)
 			}
 
@@ -1155,8 +1466,9 @@ export const charactersImportResolve = refusable<
 
 			const res: Sockets.Characters.ImportResolve.Response = {
 				character,
-				book: holdCardBook(userId, lorebook),
-				...(warnings.length > 0 ? { warnings } : {})
+				book: holdCardBook(userId, planCardImport(data).heldBook),
+				...(warnings.length > 0 ? { warnings } : {}),
+				...(summary.length > 0 ? { summary } : {})
 			}
 			emitToUser("characters:importResolve", res)
 			return res
@@ -1312,7 +1624,10 @@ export const charactersImportFromLibrary = refusable<
 
 		const res: Sockets.Characters.ImportFromLibrary.Response = {
 			character: importResult.character,
-			book: importResult.book
+			book: importResult.book,
+			...(importResult.summary?.length
+				? { summary: importResult.summary }
+				: {})
 		}
 		emitToUser("characters:importFromLibrary", res)
 		return res
@@ -1333,13 +1648,15 @@ export const charactersExportCard: Handler<
 			const userId = socket.user!.id
 			const format = params.format || "json"
 
-			// Fetch the character with all its data — owner-only (export is a
-			// data-extraction action, unlike viewing a character in a shared
-			// session, so this deliberately does NOT use canViewCharacter).
+			// Fetch the character with all its data — the owner, or someone it
+			// was explicitly **shared** with (a share grants read and copy,
+			// ruled 2026-10-12). Export is a data-extraction action, so seeing
+			// a character in a shared session is deliberately NOT enough: this
+			// does not use canViewCharacter.
 			const character = await db.query.characters.findFirst({
 				where: and(
 					eq(schema.characters.id, params.id),
-					eq(schema.characters.userId, userId)
+					eq(schema.characters.isDeleted, false)
 				),
 				with: {
 					characterTags: {
@@ -1350,9 +1667,16 @@ export const charactersExportCard: Handler<
 				}
 			})
 
-			if (!character) {
+			const isOwner = character?.userId === userId
+			if (
+				!character ||
+				(!isOwner &&
+					!(await isSharedWith(db, "character", character.id, userId)))
+			) {
 				throw new Error("Character not found")
 			}
+			// A recipient's export never embeds the owner's lorebook.
+			if (!isOwner) params = { ...params, lorebookId: undefined }
 
 			// Embedding a lorebook is optional — only when the caller picked
 			// one from this character's own binding list (verified below, not
@@ -1392,7 +1716,8 @@ export const charactersExportCard: Handler<
 			const charCardData = buildCharacterCardV3({
 				...character,
 				tags: character.characterTags?.map((ct) => ct.tag.name) || [],
-				lorebook
+				lorebook,
+				dowry: await buildCardDowry(db, character.id)
 			})
 
 			if (format === "charx") {
@@ -1502,6 +1827,26 @@ async function buildCharactersGallery(
 	return { images, characterId }
 }
 
+/**
+ * May this caller list a character's gallery (F2, 2026-10-11 — W6 ruling 4)?
+ * Its owner; anyone in a session it sits in, as cast or as a voice
+ * (`canViewCharacter`, the rule `characters:get` and the media route already
+ * keep); or an administrator. Before this the read took any id from anyone
+ * signed in.
+ */
+async function mayListGallery(
+	user: { id: number; isAdmin?: boolean | null },
+	characterId: number
+): Promise<boolean> {
+	if (user.isAdmin) return true
+	const own = await db.query.characters.findFirst({
+		where: (c, { and, eq }) =>
+			and(eq(c.id, characterId), eq(c.userId, user.id)),
+		columns: { id: true }
+	})
+	return !!own || (await canViewCharacter(characterId, user.id))
+}
+
 export const charactersListGallery: Handler<
 	Sockets.Characters.ListGallery.Params,
 	Sockets.Characters.ListGallery.Response
@@ -1509,6 +1854,10 @@ export const charactersListGallery: Handler<
 	event: "characters:listGallery",
 	handler: async (socket, params, emitToUser) => {
 		try {
+			// Refused as `characters:listSprites` refuses: the same words, so
+			// a stranger cannot tell a missing character from a hidden one.
+			if (!(await mayListGallery(socket.user!, params.characterId)))
+				throw new Error("Character not found or access denied")
 			const res = await buildCharactersGallery(
 				socket.user!.id,
 				params.characterId
@@ -1618,6 +1967,43 @@ export const charactersDeleteGalleryImage: Handler<
 		}
 	}
 }
+
+/**
+ * Token counts for a card's strokes while the form edits them (§A.5). Nothing
+ * is read from or written to the card — the strokes are the draft on screen.
+ */
+export const charactersCountStrokeTokens = refusable<
+	Sockets.Characters.CountStrokeTokens.Params,
+	Sockets.Characters.CountStrokeTokens.Response
+>(
+	"characters:countStrokeTokens",
+	async (socket, params, emitToUser) => {
+		if (!STROKES_ENABLED)
+			throw new Error("Strokes are switched off in this build.")
+		const strokes = params?.strokes
+		if (!Array.isArray(strokes))
+			throw new Error("Strokes to count are a list.")
+		if (strokes.length > STROKE_LIMITS.maxStrokes)
+			throw new Error(
+				`A card holds at most ${STROKE_LIMITS.maxStrokes} strokes; this one has ${strokes.length}.`
+			)
+		const counts = await countStrokeTokens(db, socket.user ?? {}, strokes)
+		const res: Sockets.Characters.CountStrokeTokens.Response = {
+			...counts,
+			...(typeof params.requestId === "string"
+				? { requestId: params.requestId }
+				: {})
+		}
+		emitToUser("characters:countStrokeTokens", res)
+		return res
+	},
+	"Could not count the strokes' tokens.",
+	undefined,
+	(p) =>
+		typeof (p as { requestId?: unknown } | null)?.requestId === "string"
+			? { requestId: (p as { requestId: string }).requestId }
+			: {}
+)
 
 export const charactersReorderGallery: Handler<
 	Sockets.Characters.ReorderGallery.Params,
@@ -1792,6 +2178,112 @@ export const charactersSetAvatar: Handler<
 	}
 }
 
+/**
+ * `characters:duplicate` — **Copy to my characters** (PLAN-private-messages
+ * §6.7, ruled Q3: a share grants read AND copy). The owner, or anyone who may
+ * read the character (`canViewCharacter`: a share, or a session they are in),
+ * gets a full card copy under their own account: same name, `isPersona` kept,
+ * the avatar file duplicated through `handleCharacterAvatarUpload`, the tags
+ * re-made as the asker's own. No share rows, no folder, no favourite, no
+ * default-persona claim and no link back to the original. The sharer's
+ * lorebook link is kept only when the asker owns the original (it is theirs).
+ */
+export const charactersDuplicate = refusable<
+	{ characterId: number },
+	Sockets.Characters.Create.Response
+>(
+	"characters:duplicate",
+	async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const characterId = params?.characterId
+		if (!Number.isSafeInteger(characterId))
+			throw new Error("Character not found.")
+		const original = await db.query.characters.findFirst({
+			where: (c, { and, eq }) =>
+				and(eq(c.id, characterId), eq(c.isDeleted, false)),
+			with: { characterTags: { with: { tag: true } } }
+		})
+		const isOwner = original?.userId === userId
+		if (
+			!original ||
+			(!isOwner && !(await canViewCharacter(characterId, userId)))
+		)
+			throw new Error("Character not found.")
+
+		const {
+			id: _id,
+			uuid: _uuid,
+			userId: _userId,
+			folderId: _folderId,
+			isFavorite: _isFavorite,
+			isDefaultPersona: _isDefaultPersona,
+			isDeleted: _isDeleted,
+			avatarMediaId,
+			createdAt: _createdAt,
+			updatedAt: _updatedAt,
+			embedding: _embedding,
+			embeddingModel: _embeddingModel,
+			embeddingSourceHash: _embeddingSourceHash,
+			embedTextHash: _embedTextHash,
+			vectorizedAt: _vectorizedAt,
+			lorebookId,
+			characterTags,
+			...card
+		} = original as typeof original & Record<string, any>
+
+		const [character] = await db
+			.insert(schema.characters)
+			.values({
+				...(card as any),
+				lorebookId: isOwner ? lorebookId : null,
+				userId
+			})
+			.returning()
+
+		const tagNames = (characterTags ?? [])
+			.map((ct: any) => ct?.tag?.name)
+			.filter((name: unknown): name is string => !!name)
+		if (tagNames.length)
+			await processCharacterTags(character.id, tagNames, userId)
+
+		// The avatar is a new FILE owned by the asker, not a second pointer
+		// at the sharer's: a revoked share or a deleted original must not
+		// take the copy's face with it.
+		if (avatarMediaId) {
+			try {
+				const avatar = await readMedia(
+					db,
+					avatarMediaId,
+					MediaVariant.ORIGINAL
+				)
+				if (avatar) {
+					const created = await handleCharacterAvatarUpload({
+						character: { id: character.id, userId },
+						avatarFile: Buffer.from(avatar.bytes)
+					})
+					character.avatarMediaId = created.file.id
+				}
+			} catch (error) {
+				// The copy stands without its face; the card is the point.
+				console.error("Copying a character's avatar failed:", error)
+			}
+		}
+
+		autoEnqueueCharacter(character.id, character.name).catch(
+			console.error
+		)
+		await emitToUser("characters:list", () => buildCharactersList(userId))
+		const res: Sockets.Characters.Create.Response = {
+			character: await characterForBroadcast(character.id, character)
+		}
+		emitToUser("characters:duplicate", res)
+		return res
+	},
+	"Couldn't copy this character.",
+	undefined,
+	(raw) => ({ characterId: (raw as { characterId?: unknown })?.characterId })
+)
+
 // Registration function for all character handlers
 export function registerCharacterHandlers(
 	socket: any,
@@ -1804,6 +2296,8 @@ export function registerCharacterHandlers(
 ) {
 	register(socket, charactersList, emitToUser)
 	register(socket, charactersGet, emitToUser)
+	register(socket, charactersShare, emitToUser)
+	register(socket, charactersDuplicate, emitToUser)
 	register(socket, charactersCreate, emitToUser)
 	register(socket, charactersUpdate, emitToUser)
 	register(socket, charactersDelete, emitToUser)
@@ -1816,6 +2310,7 @@ export function registerCharacterHandlers(
 	register(socket, charactersUploadGalleryImage, emitToUser)
 	register(socket, charactersDeleteGalleryImage, emitToUser)
 	register(socket, charactersReorderGallery, emitToUser)
+	register(socket, charactersCountStrokeTokens, emitToUser)
 	register(socket, charactersSetAvatar, emitToUser)
 	register(socket, charactersSetDefaultPersona, emitToUser)
 }

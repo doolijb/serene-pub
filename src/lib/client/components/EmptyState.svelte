@@ -19,11 +19,15 @@
 	}: Props = $props()
 </script>
 
+<!-- A dashed card (STYLE-GUIDE §6.7, 2026-10-11): the view has a shape
+     before it has data, instead of a sentence floating in 400 by 800. The
+     edge is the ground's own border stop, never a signal colour — a dashed
+     primary edge is the drop target's. -->
 <div
-	class="flex flex-col items-center gap-2 px-4 py-12 text-center"
+	class="border-surface-200-800 flex flex-col items-center gap-3 rounded-[12px] border border-dashed px-4 py-12 text-center"
 	role="status"
 >
-	<Icon size={32} class="text-surface-600-400" />
+	<Icon size={40} class="text-surface-600-400" aria-hidden="true" />
 	<p class="text-surface-600-400 text-sm">{message}</p>
 	{#if (ctaLabel && onCta) || (secondaryLabel && onSecondary)}
 		<div class="mt-2 flex flex-wrap items-center justify-center gap-2">

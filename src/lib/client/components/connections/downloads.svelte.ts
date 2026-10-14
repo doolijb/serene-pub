@@ -16,12 +16,20 @@
  * arriving a frame apart, so the index hands the rows in with `setOnnx` and
  * this store reads the `local` state they already carry.
  *
+ * ## The fifth feed: the background remover
+ *
+ * The matting model no connection owns (`localModels/matting.ts`) is fetched
+ * by the cut-out task on first use, so it has no list row to ride. Its
+ * `localModels:matting` answer — the Models view row's own read — is pushed
+ * to connected admins while it downloads, and read here as one item.
+ *
  * ## Bytes, never time
  *
  * `percent` is overall BYTES and is `null` the moment any in-flight item has
  * no total — a bar built from three known totals and one unknown is a bar
  * that jumps backwards. Nothing here estimates a finish time (ruling R7).
  */
+import { untrack } from "svelte"
 import { SvelteMap } from "svelte/reactivity"
 import { declareInterest } from "$lib/client/sockets/interest.svelte"
 import { typedSocketOrNull } from "$lib/client/sockets/typedSocket"
@@ -31,6 +39,7 @@ export type DownloadSource =
 	| "koboldcpp-binary"
 	| "ollama"
 	| "onnx"
+	| "matting"
 
 export interface DownloadItem {
 	/** Unique across sources: `<source>:<whatever that source keys by>`. */
@@ -46,7 +55,11 @@ export interface DownloadItem {
 	totalBytes?: number
 	/** 0–100 when the feed reports one directly. */
 	percent?: number
-	state: "in_flight" | "cancelling" | "done" | "failed"
+	/**
+	 * `cancelled` is the managers' own word for a download stopped on purpose
+	 * — neither a success nor a failure, so it is neither `done` nor `failed`.
+	 */
+	state: "in_flight" | "cancelling" | "done" | "failed" | "cancelled"
 	error?: string
 	startedAt?: number
 }
@@ -61,6 +74,23 @@ export interface DownloadTotals {
 }
 
 // ── The four feeds, as pure functions ───────────────────────────────────────
+
+/**
+ * A manager's `isDone` + `status` as one item state.
+ *
+ * ⚠ `isDone` is true for EVERY ending, a cancel included — reading "done and
+ * not an error" as success put a cancelled pull in the Finished list with a
+ * "Use in Reply" beside a file that never arrived.
+ */
+function endedState(
+	isDone: boolean,
+	status: string | undefined
+): DownloadItem["state"] {
+	if (!isDone) return "in_flight"
+	if (status === "error") return "failed"
+	if (status === "cancelled") return "cancelled"
+	return "done"
+}
 
 type KcppDownloads = Record<
 	string,
@@ -84,11 +114,7 @@ export function kcppItems(
 		name: d.modelName || d.filename,
 		downloadedBytes: d.downloaded,
 		totalBytes: d.total,
-		state: d.isDone
-			? d.status === "error"
-				? ("failed" as const)
-				: ("done" as const)
-			: ("in_flight" as const)
+		state: endedState(d.isDone, d.status)
 	}))
 }
 
@@ -113,11 +139,7 @@ export function kcppBinaryItem(
 		name: download.assetName,
 		downloadedBytes: download.downloaded,
 		totalBytes: download.total,
-		state: download.isDone
-			? download.status === "error"
-				? "failed"
-				: "done"
-			: "in_flight",
+		state: endedState(download.isDone, download.status),
 		error: download.error
 	}
 }
@@ -158,11 +180,7 @@ export function ollamaItems(quants: OllamaQuants | undefined): DownloadItem[] {
 				: {}),
 			downloadedBytes: completed,
 			totalBytes: total || undefined,
-			state: pull.isDone
-				? pull.status === "error"
-					? "failed"
-					: "done"
-				: "in_flight"
+			state: endedState(pull.isDone, pull.status)
 		})
 	}
 	return out
@@ -210,6 +228,55 @@ export function onnxItems(
 		}
 	}
 	return out
+}
+
+/**
+ * The background remover's one line, from its `localModels:matting` answer.
+ * A model already on disk is a finished line only when this tray saw it in
+ * flight (`wasInFlight`) — otherwise every admin would see it under Finished
+ * forever.
+ */
+export function mattingItem(
+	msg:
+		| {
+				name: string
+				state: "not_downloaded" | "downloading" | "on_disk" | "error"
+				percent?: number | null
+				cancelling?: boolean
+				sizeBytes?: number
+				error?: string
+		  }
+		| null
+		| undefined,
+	wasInFlight = false
+): DownloadItem | null {
+	if (!msg) return null
+	const base = {
+		id: "matting",
+		source: "matting" as const,
+		destinationLabel: "This machine",
+		name: msg.name
+	}
+	if (msg.state === "downloading")
+		return {
+			...base,
+			...(msg.percent != null ? { percent: msg.percent } : {}),
+			state: msg.cancelling ? "cancelling" : "in_flight"
+		}
+	if (msg.state === "error")
+		return { ...base, state: "failed", error: msg.error }
+	if (msg.state === "on_disk" && wasInFlight)
+		return {
+			...base,
+			...(msg.sizeBytes != null
+				? { downloadedBytes: msg.sizeBytes, totalBytes: msg.sizeBytes }
+				: {}),
+			state: "done"
+		}
+	// In flight a moment ago and gone now: a cancel settled.
+	if (msg.state === "not_downloaded" && wasInFlight)
+		return { ...base, state: "cancelled" }
+	return null
 }
 
 /**
@@ -287,10 +354,38 @@ class DownloadsStore {
 	get failed(): DownloadItem[] {
 		return this.items.filter((i) => i.state === "failed")
 	}
+	get cancelled(): DownloadItem[] {
+		return this.items.filter((i) => i.state === "cancelled")
+	}
 
 	/** The ONNX feed, handed in from whoever holds `connections:list`. */
 	setOnnx(connections: readonly OnnxRowsConnection[]) {
-		this.#feeds.set("onnx", onnxItems(connections))
+		this.#setFeed("onnx", onnxItems(connections))
+	}
+
+	/**
+	 * Replace one feed's items.
+	 *
+	 * A cleared id is forgotten the moment an item under it is arriving
+	 * again: ids are reused (the same file re-downloaded, the same tag
+	 * re-pulled), and a dismissal that outlived its download hid the new one
+	 * — in flight, invisible, uncancellable — for as long as a view stayed
+	 * subscribed.
+	 *
+	 * ⚠ Untracked: the index calls `setOnnx` from an `$effect`, and a read of
+	 * `#cleared` there would subscribe that effect to the map it writes.
+	 */
+	#setFeed(source: DownloadSource, items: DownloadItem[]) {
+		untrack(() => {
+			for (const item of items)
+				if (
+					(item.state === "in_flight" ||
+						item.state === "cancelling") &&
+					this.#cleared.has(item.id)
+				)
+					this.#cleared.delete(item.id)
+			this.#feeds.set(source, items)
+		})
 	}
 
 	/**
@@ -310,11 +405,11 @@ class DownloadsStore {
 		const releases = [
 			declareInterest<"koboldcpp:getDownloadProgress">(
 				"koboldcpp:getDownloadProgress",
-				(msg) => this.#feeds.set("koboldcpp", kcppItems(msg.downloads))
+				(msg) => this.#setFeed("koboldcpp", kcppItems(msg.downloads))
 			),
 			declareInterest<"koboldcpp:downloadProgress">(
 				"koboldcpp:downloadProgress",
-				(msg) => this.#feeds.set("koboldcpp", kcppItems(msg.downloads))
+				(msg) => this.#setFeed("koboldcpp", kcppItems(msg.downloads))
 			),
 			declareInterest<"koboldcpp:getBinaryDownloadProgress">(
 				"koboldcpp:getBinaryDownloadProgress",
@@ -327,23 +422,22 @@ class DownloadsStore {
 			declareInterest<"ollama:getDownloadProgress">(
 				"ollama:getDownloadProgress",
 				(msg) =>
-					this.#feeds.set(
-						"ollama",
-						ollamaItems(msg.downloadingQuants)
-					)
+					this.#setFeed("ollama", ollamaItems(msg.downloadingQuants))
 			),
 			declareInterest<"ollama:pullProgress">(
 				"ollama:pullProgress",
 				(msg) =>
-					this.#feeds.set(
-						"ollama",
-						ollamaItems(msg.downloadingQuants)
-					)
+					this.#setFeed("ollama", ollamaItems(msg.downloadingQuants))
+			),
+			declareInterest<"localModels:matting">(
+				"localModels:matting",
+				(msg) => this.#setMatting(msg)
 			)
 		]
 		socket?.emit("koboldcpp:getDownloadProgress", {})
 		socket?.emit("koboldcpp:getBinaryDownloadProgress", {})
 		socket?.emit("ollama:getDownloadProgress", {})
+		socket?.emit("localModels:matting", {})
 		return () => {
 			for (const release of releases) release()
 			this.#subscribers = Math.max(0, this.#subscribers - 1)
@@ -353,14 +447,25 @@ class DownloadsStore {
 				this.#feeds.delete("koboldcpp")
 				this.#feeds.delete("koboldcpp-binary")
 				this.#feeds.delete("ollama")
+				this.#feeds.delete("matting")
 				this.#cleared.clear()
 			}
 		}
 	}
 
+	#setMatting(msg: Parameters<typeof mattingItem>[0]) {
+		const wasInFlight = untrack(() =>
+			(this.#feeds.get("matting") ?? []).some(
+				(i) => i.state === "in_flight" || i.state === "cancelling"
+			)
+		)
+		const item = mattingItem(msg, wasInFlight)
+		this.#setFeed("matting", item ? [item] : [])
+	}
+
 	#setBinary(download: Parameters<typeof kcppBinaryItem>[0]) {
 		const item = kcppBinaryItem(download)
-		this.#feeds.set("koboldcpp-binary", item ? [item] : [])
+		this.#setFeed("koboldcpp-binary", item ? [item] : [])
 	}
 
 	/**
@@ -393,6 +498,9 @@ class DownloadsStore {
 						: {})
 				})
 				break
+			case "matting":
+				socket.emit("localModels:cancelMatting", {})
+				break
 			case "onnx": {
 				const [, id, modelId] = item.id.split(":")
 				socket.emit("connections:cancelModelDownload", {
@@ -408,7 +516,11 @@ class DownloadsStore {
 	/** Forget what has finished — locally, and in the two managers' histories. */
 	clearFinished() {
 		for (const item of this.items)
-			if (item.state === "done" || item.state === "failed")
+			if (
+				item.state === "done" ||
+				item.state === "failed" ||
+				item.state === "cancelled"
+			)
 				this.#cleared.set(item.id, true)
 		const socket = typedSocketOrNull()
 		socket?.emit("koboldcpp:clearDownloadHistory", {})

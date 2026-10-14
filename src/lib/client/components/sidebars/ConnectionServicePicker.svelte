@@ -15,9 +15,12 @@
 	 *
 	 * A service this machine can't run (the local ONNX types, where the
 	 * runtime didn't load) stays listed as a disabled card with its reason
-	 * in place of the difficulty — hidden, it would read as "not built".
+	 * in place of its setup-need chip — hidden, it would read as "not built".
+	 *
+	 * Each card's chip says what the service asks of the person: **Needs an
+	 * API key**, **Runs locally** or **Address only** (`SETUP_NEED_LABELS`).
 	 */
-	import { getContext } from "svelte"
+	import { getContext, tick } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import {
 		buildConnectionServiceItems,
@@ -25,6 +28,7 @@
 		filterConnectionServiceItems,
 		filterConnectionServiceItemsByModality,
 		CATEGORY_LABELS,
+		SETUP_NEED_LABELS,
 		type ConnectionServiceCategory,
 		type ConnectionServiceItem
 	} from "$lib/shared/utils/connectionServiceItems"
@@ -36,7 +40,7 @@
 		/** Seed the modality toggle (e.g. the Embeddings section). */
 		initialModality?: string
 		/**
-		 * Open narrowed to one category — the "Something I already run" door
+		 * Open narrowed to one category — the "A custom connection" door
 		 * opens on Local / Self-hosted (ruled 2026-09-24). Clearable.
 		 */
 		initialCategory?: ConnectionServiceCategory
@@ -87,13 +91,73 @@
 	}
 
 	let search = $state("")
-	let visibleItems = $derived(
+	/** This section's services matching the search, in every category. */
+	const matchingItems = $derived(
 		filterConnectionServiceItems(
 			filterConnectionServiceItemsByModality(allItems, modality),
 			search
-		).filter((i) => !category || i.category === category)
+		)
+	)
+	let visibleItems = $derived(
+		matchingItems.filter((i) => !category || i.category === category)
 	)
 	let groups = $derived(groupConnectionServiceItems(visibleItems))
+
+	// ── Nothing matches ──────────────────────────────────────────────────
+	// The line names two ways out, and both are controls. Each removes the
+	// control that was pressed, so focus moves to what took its place.
+	let searchInput = $state<HTMLInputElement>()
+	let cardList = $state<HTMLElement>()
+	/** The bare OpenAI-compatible entry, where this section offers one. */
+	const customItem = $derived(
+		allItems.find(
+			(i) =>
+				i.category === "custom" &&
+				i.modality === modality &&
+				!i.disabledReason
+		)
+	)
+	/**
+	 * Drop the category, and the search too when nothing outside the
+	 * category matches it either — "Show all" must never show nothing.
+	 */
+	function showAll() {
+		categoryCleared = true
+		if (matchingItems.length === 0) search = ""
+		void tick().then(() => searchInput?.focus())
+	}
+	/**
+	 * The line, as text and controls in order. Rendered part after part with
+	 * no whitespace between them — the formatter breaks lines between
+	 * elements, and a break before a comma would print " ," otherwise.
+	 */
+	const noMatchLine = $derived.by(() => {
+		const q = search.trim()
+		return [
+			{
+				text: `${q ? `No service called “${q}”.` : "No service here."} Try `
+			},
+			{ text: "Show all", onclick: showAll },
+			...(customItem
+				? [
+						{ text: ", or pick " },
+						{ text: customItem.label, onclick: pickCustom }
+					]
+				: []),
+			{ text: "." }
+		] as { text: string; onclick?: () => void }[]
+	})
+	function pickCustom() {
+		if (!customItem) return
+		categoryCleared = true
+		search = ""
+		selectedItem = customItem
+		void tick().then(() =>
+			cardList
+				?.querySelector<HTMLElement>("[role=radio][aria-checked=true]")
+				?.focus()
+		)
+	}
 </script>
 
 <!-- One button per section. The modalities never mix in one picker. -->
@@ -144,6 +208,7 @@
 		type="search"
 		class="input w-full pl-8 text-sm"
 		placeholder="Search for a service (Groq, Ollama, Mistral, ...)"
+		bind:this={searchInput}
 		bind:value={search}
 		aria-label="Search for a service"
 	/>
@@ -152,53 +217,76 @@
 <!-- Cards, not a dropdown: what is on offer should be visible. Native
      buttons, so Tab/Enter come free; arrow-key roving would be polish on a
      list the search already narrows. -->
-<div
-	class="mt-2 flex max-h-72 flex-col gap-2 overflow-y-auto pr-0.5"
-	role="radiogroup"
-	aria-label={label}
->
-	{#if groups.length === 0}
-		<p class="text-surface-700-300 p-2 text-sm">No matching service.</p>
-	{/if}
-	{#each groups as group (group.category)}
-		<p
-			class="text-surface-600-400 px-1 pt-1 text-xs"
-		>
-			{group.label}
-		</p>
-		{#each group.items as item (item.key)}
-			{@const active = selectedItem?.key === item.key}
-			<!-- A disabled card says why in its own second line, not only in a
-			     tooltip: nothing is hover-only (STYLE-GUIDE §9). -->
-			<button
-				type="button"
-				role="radio"
-				aria-checked={active}
-				disabled={!!item.disabledReason}
-				title={item.disabledReason}
-				onclick={() => (selectedItem = item)}
-				class="card preset-filled-surface-100-900 flex w-full items-start justify-between gap-2 rounded-xl p-3 text-left {item.disabledReason
-					? 'cursor-not-allowed opacity-70'
-					: active
-						? 'ring-primary-500 ring-offset-surface-50 dark:ring-offset-surface-950 cursor-pointer ring-2 ring-offset-2'
-						: 'hover:preset-tonal-primary cursor-pointer'}"
-			>
-				<span class="min-w-0">
-					<span class="block truncate text-sm font-semibold">
-						{item.label}
-					</span>
-					<span
-						class="text-surface-600-400 mt-0.5 block text-xs {active
-							? 'opacity-80'
-							: ''}"
-					>
-						{item.disabledReason ?? item.difficulty}
-					</span>
-				</span>
-				{#if active}
-					<Icons.Check size={16} class="mt-0.5 shrink-0" />
-				{/if}
-			</button>
+{#if groups.length === 0}
+	<!-- Outside the radiogroup: it holds radios only. -->
+	<p class="text-surface-700-300 mt-2 p-2 text-sm">
+		{#each noMatchLine as part, i (i)}
+			{#if part.onclick}
+				<button type="button" class="anchor" onclick={part.onclick}>
+					{part.text}
+				</button>
+			{:else}
+				{part.text}
+			{/if}
 		{/each}
-	{/each}
-</div>
+	</p>
+{:else}
+	<div
+		bind:this={cardList}
+		class="mt-2 flex max-h-72 flex-col gap-2 overflow-y-auto pr-0.5"
+		role="radiogroup"
+		aria-label={label}
+	>
+		{#each groups as group (group.category)}
+			<p class="text-surface-600-400 px-1 pt-1 text-xs">
+				{group.label}
+			</p>
+			{#each group.items as item (item.key)}
+				{@const active = selectedItem?.key === item.key}
+				<!-- A disabled card says why in its own second line, not only in a
+			     tooltip: nothing is hover-only (STYLE-GUIDE §9). -->
+				<button
+					type="button"
+					role="radio"
+					aria-checked={active}
+					disabled={!!item.disabledReason}
+					title={item.disabledReason}
+					onclick={() => (selectedItem = item)}
+					class="card preset-filled-surface-100-900 flex w-full items-start justify-between gap-2 rounded-xl p-3 text-left {item.disabledReason
+						? 'cursor-not-allowed opacity-70'
+						: active
+							? 'ring-primary-500 ring-offset-surface-50 dark:ring-offset-surface-950 cursor-pointer ring-2 ring-offset-2'
+							: 'hover:preset-tonal-primary cursor-pointer'}"
+				>
+					<span class="min-w-0">
+						<span class="block truncate text-sm font-semibold">
+							{item.label}
+						</span>
+						{#if item.disabledReason}
+							<span
+								class="text-surface-600-400 mt-0.5 block text-xs {active
+									? 'opacity-80'
+									: ''}"
+							>
+								{item.disabledReason}
+							</span>
+						{:else}
+							<!-- Outlined, never filled: the whole card is the
+						     button, so nothing inside it may look like one. -->
+							<span
+								class="border-surface-300-700 text-surface-600-400 mt-1 inline-block rounded-full border px-1.5 py-0.5 text-[11px] {active
+									? 'opacity-80'
+									: ''}"
+							>
+								{SETUP_NEED_LABELS[item.setupNeed]}
+							</span>
+						{/if}
+					</span>
+					{#if active}
+						<Icons.Check size={16} class="mt-0.5 shrink-0" />
+					{/if}
+				</button>
+			{/each}
+		{/each}
+	</div>
+{/if}

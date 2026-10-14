@@ -293,7 +293,7 @@ describe("the first open copies a starting point into the person's own row", () 
 			await testDb.insert(schema.widgetSettings).values({
 				sessionId: s.session.id,
 				userId: s.owner.id,
-				widgetSlug: "messages",
+				widgetInstanceId: "messages",
 				values: { composer: "minimal" }
 			})
 			const res = await get(s.owner.id, s.session.id)

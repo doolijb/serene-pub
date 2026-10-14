@@ -27,8 +27,15 @@ describe("StatusStrip", () => {
 				onSetUp: noop
 			}
 		}).body
-		expect(html).toContain("Sessions can reply")
+		// One line in words (less-confusing I3): what replies, then where.
+		expect(html).toContain("Replies:")
+		expect(html).not.toContain("Sessions can reply")
 		expect(html).toContain("Claude Sonnet 4.5")
+		const words = html
+			.replace(/<!--[\s\S]*?-->/g, "")
+			.replace(/<[^>]+>/g, "")
+			.replace(/\s+/g, " ")
+		expect(words).toContain("Replies: Claude Sonnet 4.5 · Anthropic")
 		expect(html).toContain("Change")
 	})
 
@@ -37,7 +44,26 @@ describe("StatusStrip", () => {
 			props: { onChange: noop, onSetUp: noop }
 		}).body
 		expect(html).toContain("Sessions can't reply yet")
+		expect(html).toContain("Fill the Reply loadout to start")
 		expect(html).toContain("Set up chat")
+		expect(html).toContain("preset-filled-primary-500")
+	})
+
+	test("unset beside a listed service offers Fill the Reply loadout, not Set up chat", () => {
+		// Plan §A: Set up chat installs KoboldCPP, which is never the answer
+		// while a connection already lists chat models.
+		const html = render(StatusStrip, {
+			props: {
+				choose: true,
+				choiceSentence: "OpenRouter lists 503 models · pick one",
+				onChange: noop,
+				onSetUp: noop
+			}
+		}).body
+		expect(html).toContain("Sessions can't reply yet")
+		expect(html).toContain("OpenRouter lists 503 models · pick one")
+		expect(html).toContain("Fill the Reply loadout")
+		expect(html).not.toContain("Set up chat")
 		expect(html).toContain("preset-filled-primary-500")
 	})
 
@@ -164,7 +190,7 @@ describe("ModelRow", () => {
 			props: {
 				model,
 				canUse: true,
-				useLabel: "Use for chat",
+				useLabel: "Use in Reply",
 				onUse: noop
 			}
 		}).body
@@ -182,22 +208,22 @@ describe("ModelRow", () => {
 			props: {
 				model,
 				canUse: true,
-				useLabel: "Make active",
+				useLabel: "Use in Embeddings",
 				useDisabledReason: reason,
 				onUse: noop
 			}
 		}).body
 		const use = html.match(
-			/<button\b[^>]*aria-label="Make active[^"]*"[^>]*>/
+			/<button\b[^>]*aria-label="Use in Embeddings[^"]*"[^>]*>/
 		)
 		expect(use?.[0]).toMatch(/\sdisabled(?=[\s=>]|$)/)
-		expect(use?.[0]).toContain(`aria-label="Make active — ${reason}"`)
+		expect(use?.[0]).toContain(`aria-label="Use in Embeddings — ${reason}"`)
 		expect(use?.[0]).toContain(`title="${reason}"`)
 		const enabled = render(ModelRow, {
-			props: { model, canUse: true, useLabel: "Make active", onUse: noop }
+			props: { model, canUse: true, useLabel: "Use in Embeddings", onUse: noop }
 		}).body
 		expect(
-			enabled.match(/<button\b[^>]*aria-label="Make active"[^>]*>/)?.[0]
+			enabled.match(/<button\b[^>]*aria-label="Use in Embeddings"[^>]*>/)?.[0]
 		).not.toMatch(/\sdisabled(?=[\s=>]|$)/)
 	})
 

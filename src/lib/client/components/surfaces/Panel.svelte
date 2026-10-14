@@ -13,6 +13,7 @@
 	import { widgetSettingValues } from "$lib/client/stores/widgetSettings.svelte"
 	import { resolveWidgetInstance } from "$lib/shared/widgets/settings"
 	import {
+		projectScopedSections,
 		SCOPED_SECTION_CONTEXT_KEYS,
 		withHostCard
 	} from "$lib/shared/widgets/context"
@@ -20,11 +21,7 @@
 		HOST_CARD_CLASS,
 		hostCardShown
 	} from "$lib/client/sessionLayout/hostCard"
-	import {
-		WIDGET_SCOPED_SECTIONS,
-		type WidgetScopedSectionValues,
-		type WidgetSectionScope
-	} from "@serene-pub/sdk"
+	import type { WidgetSectionScope } from "@serene-pub/sdk"
 	import type { PanelInstance } from "$lib/client/surfaces/types"
 	import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
 	import type {
@@ -118,9 +115,10 @@
 	 * What this widget was granted beyond the base sections (C5, R21): each
 	 * granted scope's section, read off the page context that supplies it
 	 * (`SCOPED_SECTION_CONTEXT_KEYS`: the dossier for `session:full`, the
-	 * session's state for `session:state`, the cast for `characters`) and
-	 * filed under the name the SDK's table posts it as, and posted to the
-	 * remote. A scope
+	 * session's state for `session:state`, the cast for `characters` and,
+	 * cut from it, the viewer's own for `persona`; `lore` the grant marker)
+	 * and filed under the name the SDK's table posts it as, and posted to
+	 * the remote — `projectScopedSections`, the one grant check. A scope
 	 * whose context the page does not set (or has not filled yet) is simply
 	 * absent: "not granted", never an empty.
 	 *
@@ -132,14 +130,9 @@
 			([scope, key]) => [scope, getContext<{ current: unknown } | undefined>(key)] as const
 		)
 	)
-	const grantedScoped = $derived.by(() => {
-		const out: Record<string, unknown> = {}
-		for (const scope of instance.grants ?? []) {
-			const value = scopedContexts.get(scope)?.current
-			if (value != null) out[WIDGET_SCOPED_SECTIONS[scope]] = value
-		}
-		return Object.keys(out).length ? (out as Partial<WidgetScopedSectionValues>) : undefined
-	})
+	const grantedScoped = $derived(
+		projectScopedSections(instance.grants, (scope) => scopedContexts.get(scope)?.current)
+	)
 
 	let resolved = $derived.by(() => {
 		const r = resolveWidgetInstance(

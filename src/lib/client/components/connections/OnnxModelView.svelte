@@ -38,6 +38,7 @@
 	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
+	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -239,6 +240,13 @@
 		"connections:deleteModel:error",
 		() => (removingRow = false)
 	)
+	// A refused download (model gone, the runtime cannot run here) leaves the
+	// disk state exactly where it was, so the state-change effect above never
+	// fires — without this the Download button spun forever.
+	useInterest<"connections:downloadModel:error">(
+		"connections:downloadModel:error",
+		() => (busy = false)
+	)
 	useInterest<"connections:updateModel:error">(
 		"connections:updateModel:error",
 		() => (togglingEnabled = false)
@@ -263,8 +271,7 @@
 
 	const activeSentence = $derived.by(() => {
 		if (isEmbeddings) {
-			const lead =
-				"Every embedding in this pub is made by this model."
+			const lead = "Every embedding in this pub is made by this model."
 			if (!loaded) return `${lead} Loads when the queue has work.`
 			const ttlClause = ttl
 				? `unloads after ${ttl} min idle, reloads when the queue has work`
@@ -289,20 +296,20 @@
 		if (rows === 0)
 			return "Nothing is stored yet, so switching costs nothing."
 		if (!isEmbeddings)
-			return `Making this active re-scans ${plural(rows, "entry", "entries")} and messages for names. You will be asked to confirm.`
+			return `Putting this in the Entities loadout re-scans ${plural(rows, "entry", "entries")} and messages for names. You will be asked to confirm.`
 		const parts: string[] = []
 		if (lane.cost?.lorebooks)
 			parts.push(plural(lane.cost.lorebooks, "lorebook"))
 		if (lane.cost?.sessions)
 			parts.push(plural(lane.cost.sessions, "session"))
 		const across = parts.length ? ` across ${parts.join(" and ")}` : ""
-		return `Making this active re-embeds ${plural(rows, "vector")}${across}. Retrieval answers from keywords until that finishes. You will be asked to confirm.`
+		return `Putting this in the Embeddings loadout re-embeds ${plural(rows, "vector")}${across}. Retrieval answers from keywords until that finishes. You will be asked to confirm.`
 	})
 
 	const laneFooter = $derived(
 		isEmbeddings
-			? "Pipelines never choose an embedding model — they always get the active one."
-			: "Pipelines never choose an entity model — they always get the active one."
+			? "Pipelines never choose an embedding model — they always use the Embeddings loadout."
+			: "Pipelines never choose an entity model — they always use the Entities loadout."
 	)
 
 	const hubUrl = $derived(`https://huggingface.co/${model.model}`)
@@ -316,28 +323,18 @@
 </script>
 
 <div class="flex h-full flex-col gap-3">
-	<div class="flex items-center gap-2">
-		<!-- At every width: at full page this view is reached from the
-		     endpoint table or a capability, and the list row is not a way
-		     back to either (plan 2026-09-24 B9). -->
-		<button
-			type="button"
-			class="btn btn-sm preset-filled-surface-400-600 p-2"
-			onclick={onBack}
-			title="Back"
-			aria-label="Back"
-		>
-			<Icons.ChevronLeft size={16} />
-		</button>
-		<div class="min-w-0 flex-1">
-			<h2 class="truncate text-sm font-semibold">{model.name}</h2>
+	<!-- Back at every width: at full page this view is reached from the
+	     endpoint table or a capability, and the list row is not a way back
+	     to either (plan 2026-09-24 B9). -->
+	<PanelNavHeader title={model.name} {onBack} backLabel="Back">
+		{#snippet subtitle()}
 			<p class="text-surface-600-400 truncate text-xs">
 				on {connection.name}{model.model && model.model !== model.name
 					? ` · ${model.model}`
 					: ""}
 			</p>
-		</div>
-	</div>
+		{/snippet}
+	</PanelNavHeader>
 
 	<div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pb-4">
 		<!-- 1. STATUS. What this model is right now, and the one thing to do
@@ -358,10 +355,10 @@
 				{#if isActive && section}
 					<span
 						class="preset-tonal-primary inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium"
-						title={`The pub default for ${section.starVerb}`}
+						title={`In the ${isEmbeddings ? "Embeddings" : "Entities"} loadout`}
 					>
 						<Icons.Star size={9} aria-hidden="true" />
-						{isEmbeddings ? "embeddings" : "entities"}
+						{isEmbeddings ? "Embeddings loadout" : "Entities loadout"}
 					</span>
 				{/if}
 			</div>
@@ -374,7 +371,7 @@
 						{#if loaded}
 							<button
 								type="button"
-								class="btn preset-filled-surface-400-600 min-h-11 flex-1"
+								class="btn preset-tonal-surface min-h-11 flex-1"
 								onclick={unloadNow}
 							>
 								<Icons.PowerOff size={14} aria-hidden="true" />
@@ -383,7 +380,7 @@
 						{:else if isEmbeddings && onDisk}
 							<button
 								type="button"
-								class="btn preset-filled-surface-400-600 min-h-11 flex-1"
+								class="btn preset-tonal-surface min-h-11 flex-1"
 								onclick={loadNow}
 							>
 								<Icons.Power size={14} aria-hidden="true" />
@@ -419,7 +416,7 @@
 					</div>
 					<button
 						type="button"
-						class="{action} preset-filled-surface-400-600"
+						class="{action} preset-tonal-error"
 						disabled={cancelling}
 						onclick={cancelDownload}
 					>
@@ -543,7 +540,7 @@
 						onclick={makeActive}
 					>
 						<Icons.Star size={14} aria-hidden="true" />
-						Make active
+						{isEmbeddings ? "Use in Embeddings" : "Use in Entities"}
 					</button>
 					{#if unavailable}
 						<!-- In words under the button, not only its tooltip: a
@@ -561,7 +558,7 @@
 				{:else if local?.state === "downloading"}
 					<button
 						type="button"
-						class="{action} preset-filled-surface-400-600"
+						class="{action} preset-tonal-error"
 						disabled={cancelling}
 						onclick={cancelDownload}
 					>
@@ -614,7 +611,7 @@
 					</span>
 					<button
 						type="button"
-						class="btn btn-sm hover:preset-tonal-surface min-h-11"
+						class="btn btn-sm text-error-600-400 hover:preset-tonal-error min-h-11"
 						disabled={isActive || removingFiles}
 						onclick={removeFiles}
 					>
@@ -624,8 +621,10 @@
 				</div>
 				{#if isActive}
 					<p class="text-surface-600-400 text-xs">
-						The active model can't be removed from disk. Make
-						another model active first.
+						The model in the {isEmbeddings
+							? "Embeddings"
+							: "Entities"} loadout can't be removed from disk. Put
+						another model in that loadout first.
 					</p>
 				{/if}
 			</div>
@@ -637,7 +636,7 @@
 		{#if local?.addedByUser && !onDisk}
 			<button
 				type="button"
-				class="btn btn-sm hover:preset-tonal-surface min-h-11 w-full"
+				class="btn btn-sm text-error-600-400 hover:preset-tonal-error min-h-11 w-full"
 				disabled={removingRow}
 				onclick={removeRow}
 			>
@@ -650,7 +649,9 @@
 		<div class="flex flex-col gap-2">
 			<span class="text-xs font-semibold">About</span>
 			{#if catalog?.description}
-				<p class="text-surface-600-400 text-xs">{catalog.description}</p>
+				<p class="text-surface-600-400 text-xs">
+					{catalog.description}
+				</p>
 			{/if}
 			{#if facts.length}
 				<dl class="grid grid-cols-2 gap-2 text-xs">
@@ -689,7 +690,9 @@
 						{ttl != null ? `${ttl} min` : "—"}
 					</span>
 				</div>
-				<p class="text-surface-600-400 text-xs">Set on the connection.</p>
+				<p class="text-surface-600-400 text-xs">
+					Set on the connection.
+				</p>
 
 				<Switch
 					name="onnx-model-enabled"

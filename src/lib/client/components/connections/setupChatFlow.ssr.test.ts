@@ -1,8 +1,9 @@
 /**
- * The Set up chat flow, rendered — the same `svelte/server` pattern as
+ * The Set up chat stepper, rendered — the same `svelte/server` pattern as
  * `finderViews.ssr.test.ts`. The step decision has its own tests
  * (`setupChatFlow.test.ts`); this pins that each step's screen assembles,
- * and that the finder folds in without its own header.
+ * and that the finder folds in without its own header. Skeleton's `Portal`
+ * renders in place on the server, so an open dialog's content is in the body.
  *
  * ⚠ Effects do not run under SSR, so the entry side effects (ensure the
  * runtime, choose managed mode, register the first model) never fire here.
@@ -22,10 +23,11 @@ vi.mock("$lib/client/sockets/socketInstance", () => ({
 import SetupChatFlow from "./SetupChatFlow.svelte"
 
 const base = {
+	open: true,
 	onEnsureRuntime: () => {},
-	onSelectDefault: () => {},
+	onChooseJobModel: () => {},
 	onOpenConnection: () => {},
-	onBack: () => {}
+	onClose: () => {}
 }
 // The binary picker reads `koboldCppSettingsCtx` with no fallback (Layout
 // always provides it), so the render is given one.
@@ -38,8 +40,12 @@ const flow = (props: Record<string, unknown> = {}) =>
 		context
 	}).body
 
-describe("the Set up chat flow", () => {
-	test("header, the three step dots, and the first step's wait line", () => {
+describe("the Set up chat stepper", () => {
+	test("closed, it draws nothing", () => {
+		expect(flow({ open: false })).not.toContain("Setup steps")
+	})
+
+	test("title, the three step dots, and the first step's wait line", () => {
 		const html = flow()
 		expect(html).toContain("Set up chat")
 		for (const label of ["Runtime", "Model", "Done"])

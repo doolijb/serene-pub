@@ -43,12 +43,28 @@ Start one by picking the **Guide** genre on the start screen, or **Talk to an AI
 **Your own notes.** A Guide session can read a lorebook. Entries whose keywords come up in the conversation are handed to Serene beside the docs, as your own reference notes, so you can tell her how your own setup is arranged. She never writes to the lorebook.
 
 :::note Admins only
-What Serene is told is part of the Guide's pipeline settings: open the Pipelines view and edit the **System prompt** on the Guide's reply. The change reaches the next answer.
+What Serene is told is part of the Guide's pipeline settings: open **Admin › Pipelines** and edit the **System prompt** on the Guide's reply. The change reaches the next answer.
 :::
 
 ## Genres from plugins
 
 Every genre beyond the four above comes from a plugin. Once an administrator has installed the plugin and enabled its preset, its genre appears on the start screen beside the built-in ones. Serene Pub's showcase plugins, such as **Whodunit** (a case, a room of suspects and you as the detective) and **Writing Room** (co-writing a manuscript with a companion), each document themselves in their own README.
+
+## Making a genre of your own
+
+**Admin › Session genres › Add genre** makes a genre in the app. You pick an owner slug once (`acme.lab`): every id the genre and its pipelines get lives under it, and it never changes. Then a name, a label, and what to start from: a copy of Chat, Adventure, Guide or the Lair, either everything that genre runs or just its create pipeline. The copy publishes the pipelines under your slug with the genre rewritten, makes a default preset that binds them, carries the genre's layout across, and the genre is playable at once.
+
+The genre's page then shows a **readiness** list in the order that works: name, session fields, create pipeline, reply pipeline, default preset, state, layout, other events, export. Gold until set, green when done; only the next line carries a button. The same page edits the genre's name and family, its **session fields** (what a session asks for when it starts, with a live preview of the form), and **events**: which pipeline answers each, written to the default preset. Pipelines themselves are edited on their own pages' Canvas tab.
+
+A genre Serene Pub or a plugin ships stays as written. Copy it to change it.
+
+### Bundling it
+
+**Export as plugin…** on the genre's page writes a zip in the plugin package layout: the genre, its pipelines as documents, presets, configurations, layouts, and any frames. Another pub installs it from **Admin › Plugins › Install a package…**. Both need plugins switched on (`SP_PLUGINS_ENABLED`). A package cannot be installed on the pub that still has the genre it was exported from: its owner name belongs to your in-app work there, and the install is refused rather than taking those pipelines over. The package carries no code, so it installs its declarations and nothing runs in a sandbox; anything that needs code — a node with storage or network, a custom event, a Svelte widget — is a plugin built with the SDK.
+
+Tick **Include the source** in the export dialog to get that plugin's starting point: the same package plus a `src/` folder, `package.json` and a README, which `npx serene-pub build .` turns back into the same package. The pipelines stay as the documents the pub saved, and the genre, presets and configurations as data. What a pub never stores — the code behind a plugin's own node, for one — is listed in the README under *What is left for you to write*, and in the export's warnings.
+
+The package also lists the Serene Pub events its pipelines answer, such as a reply to a message. A pub on an older Serene Pub that lacks one refuses the install and says the package needs a newer Serene Pub.
 
 ## Envoys
 
@@ -60,7 +76,7 @@ An **envoy** is a speaker a genre brings with it: someone who takes part in the 
 - **Everyone has a name.** No line is shown as *Unknown*. A line a pipeline writes without saying who speaks belongs to the genre's main envoy (the Guide's **Serene**, the Lair's **Castellan**), or, in a genre without one, is shown under the narrator's name.
 
 :::note Admins only
-An envoy's words are its pipeline's settings: the **System prompt** and **Post-history instructions** of the agent that speaks for it, in the Pipelines view. Clear a field to go back to what the genre ships.
+An envoy's words are its pipeline's settings: the **System prompt** and **Post-history instructions** of the agent that speaks for it, in **Admin › Pipelines**. Clear a field to go back to what the genre ships.
 :::
 
 ## Related

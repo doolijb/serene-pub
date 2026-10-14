@@ -31,7 +31,10 @@ import { StateRefusal } from "$lib/server/state/write"
 import { describeSlot } from "./state"
 import { broadcastToSessionUsers } from "./utils/broadcastHelpers"
 import { refusable } from "./refusable"
-import { assertOwnedBook } from "$lib/server/utils/ownedBook"
+import {
+	assertOwnedBook,
+	assertReadableBook
+} from "$lib/server/utils/ownedBook"
 
 type GetParams = Sockets.LorebookState.Get.Params
 type SetParams = Sockets.LorebookState.Set.Params
@@ -58,12 +61,19 @@ function aboutRequest(raw: unknown): { lorebookId?: number; requestId?: string }
 /** The params every call carries, checked; refuses anything that is not them. */
 async function scoped(
 	socket: any,
-	params: GetParams | undefined
+	params: GetParams | undefined,
+	mode: "read" | "write"
 ): Promise<{ lorebookId: number; placeId: number; branchId: number | null; moment: GetParams["moment"]; requestId?: string }> {
 	const requestId = requestIdOf(params?.requestId)
 	const lorebookId = Number(params?.lorebookId)
 	// Another user's book reads exactly as a missing one (plan B3's helper).
-	await assertOwnedBook(db, socket.user?.id, lorebookId)
+	// A read lets a share recipient (and an admin) in; a write is the owner's
+	// alone (lane A3).
+	if (mode === "read")
+		await assertReadableBook(db, socket.user?.id, lorebookId, {
+			isAdmin: !!socket.user?.isAdmin
+		})
+	else await assertOwnedBook(db, socket.user?.id, lorebookId)
 	const owner = params?.owner as { kind?: unknown; id?: unknown } | undefined
 	if (owner?.kind !== "location")
 		throw new Error("Only a place's stats are set in the lorebook, for now.")
@@ -134,7 +144,7 @@ const SAVED_BUT_UNREAD =
 export const lorebookStateGet: Handler<GetParams, Reply> = refusable(
 	"lorebookState:get",
 	async (socket, params: GetParams, emitToUser) => {
-		const at = await scoped(socket, params)
+		const at = await scoped(socket, params, "read")
 		const stats = await placeStatsFor(db, {
 			lorebookId: at.lorebookId,
 			placeId: at.placeId,
@@ -153,7 +163,7 @@ export const lorebookStateGet: Handler<GetParams, Reply> = refusable(
 export const lorebookStateSet: Handler<SetParams, Reply> = refusable(
 	"lorebookState:set",
 	async (socket, params: SetParams, emitToUser) => {
-		const at = await scoped(socket, params)
+		const at = await scoped(socket, params, "write")
 		if (typeof params?.slotId !== "string" || !params.slotId)
 			throw new Error("Name the stat to set.")
 		await setPlaceStat(db, {

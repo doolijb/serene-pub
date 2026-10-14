@@ -41,7 +41,7 @@
 		releaseWorker,
 		routeMount
 	} from "./uiWorkers"
-	import { FN } from "@serene-pub/sdk"
+	import { FN, personPressCurrent } from "@serene-pub/sdk"
 	import { componentRuntimeError, type ComponentRuntimeError } from "./runtimeError"
 	import { registerVoucher } from "$lib/client/components/hostElements/activation"
 
@@ -208,6 +208,9 @@
 				? { allowed: true }
 				: frameInvokeVerdict(action, { lastInteractionAt }, Date.now()),
 		trusted: coreTrusted,
+		// A plugin's write request (D4) needs a person's press in this box, as
+		// a message-changing invoke does: the last trusted event, still current.
+		personBehind: () => personPressCurrent(lastInteractionAt, Date.now()),
 		onFatal: (message) => (fatal = message)
 	})
 

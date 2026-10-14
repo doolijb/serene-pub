@@ -213,7 +213,7 @@
 				</article>
 				<footer class="flex justify-end gap-4">
 					<button
-						class="btn preset-filled-surface-500"
+						class="btn preset-tonal-surface"
 						onclick={onCancel}
 						type="button"
 						aria-label="Cancel and close modal"

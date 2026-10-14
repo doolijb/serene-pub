@@ -100,11 +100,11 @@ describe("samplingDeletion", () => {
 		expect(d.confirmLabel).toBe("Delete sampling config")
 		expect(d.objects).toHaveLength(1)
 		expect(d.objects[0].related?.map((r) => r.label)).toEqual([
-			"Default released for",
+			"Loadouts losing it",
 			"Picked by pipelines"
 		])
 		expect(d.objects[0].related?.[1].items).toEqual(["Chat", "Summarize"])
-		expect(d.summary).toMatch(/^One default goes unset/)
+		expect(d.summary).toMatch(/^One loadout loses its sampling/)
 		expect(d.summary).toMatch(/2 pipelines need another choice/)
 	})
 
@@ -113,7 +113,7 @@ describe("samplingDeletion", () => {
 		expect(d.objects.map((o) => o.label)).toEqual(["Creative", "SDXL"])
 		expect(d.title).toBe("Delete 2 sampling configs?")
 		expect(d.summary).toMatch(/Default stays/)
-		expect(d.summary).toMatch(/2 defaults go unset/)
+		expect(d.summary).toMatch(/2 loadouts lose their sampling/)
 		expect(d.summary).toMatch(/3 pipelines need/)
 	})
 

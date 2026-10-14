@@ -259,7 +259,6 @@ export async function attachmentReaders(
 		calls.push(
 			...(await readingCallsOf(db, {
 				sessionId: input.sessionId,
-				genreId: session.genreId,
 				...spec
 			}))
 		)
@@ -275,7 +274,7 @@ export async function attachmentReaders(
  */
 async function readingCallsOf(
 	db: Db,
-	input: { sessionId: number; genreId: string; slug: string; title?: string }
+	input: { sessionId: number; slug: string; title?: string }
 ): Promise<AttachmentReadingCall[]> {
 	const { slug } = input
 	const { resolveConfigSources } = await import("@serene-pub/sdk")
@@ -364,8 +363,7 @@ async function readingCallsOf(
 			pipelineConfig:
 				connectionId != null
 					? { connectionId, connectionModelId: slotModelId(slot) }
-					: null,
-			genreId: input.genreId
+					: null
 		})
 		const heading = groupHeadingOf(
 			{ expose: node.expose as any },

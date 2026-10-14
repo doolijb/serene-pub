@@ -147,19 +147,16 @@ export async function openJumpHit(
 			openView("tags")
 			return
 
-		// Reader: the `digestId` seeding in ConnectionsSidebar's `onMount`.
-		// The digest is now the mechanism for external navigation that OPENS
-		// that view only — a page that EMBEDS its own copy passes
-		// `initialConnectionId` instead (S3), because one shared slot is
-		// consumed by whichever copy mounts first.
+		// Reader: the `digest.connectionId` effect in the CONNECTIONS view
+		// (`ConnectionsSidebar`; plan 2026-10-11 split it from Models, which
+		// never reads this key). The digest is the one way in from outside the
+		// view, and it is consumed on read: one shared slot, so the copy that
+		// mounts first takes it.
 		//
-		// ⚠ Two things this branch cannot promise, both the shell lane's to
-		// settle if it wants them: `leftNav.connections` is registered only for
-		// an admin (Layout.svelte:421), so opening it is a silent no-op for
-		// anyone else — harmless, since the server never sends a non-admin a
-		// `connection` hit to click; and that sidebar consumes the digest in
-		// `onMount` rather than an `$effect`, so jumping to a second connection
-		// while the panel is already open sets a key nothing reads again.
+		// ⚠ `leftNav.connections` is registered only for an admin
+		// (Layout.svelte), so opening it is a silent no-op for anyone else —
+		// harmless, since the server never sends a non-admin a `connection`
+		// hit to click.
 		case "connection":
 			panelsCtx.digest.connectionId = id
 			openView("connections")

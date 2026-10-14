@@ -11,6 +11,7 @@
 	import { untrack } from "svelte"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
+	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 
 	interface Props {
 		user?: SelectUser
@@ -18,9 +19,23 @@
 		onCancel?: () => void
 		/** Out: the form holds edits nobody saved (a host's close gate reads it). */
 		dirty?: boolean
+		/**
+		 * Whether the header draws its back chevron. Pass `false` where the
+		 * list this form was opened from is on screen beside it (a desk
+		 * split), where a back that goes nowhere visible is only a button to
+		 * explain (ruling Q3). The chevron runs Cancel; Cancel is also in the
+		 * header's `⋯`, so it is reachable at every width.
+		 */
+		showBack?: boolean
 	}
 
-	let { user, onSave, onCancel, dirty = $bindable(false) }: Props = $props()
+	let {
+		user,
+		onSave,
+		onCancel,
+		dirty = $bindable(false),
+		showBack = true
+	}: Props = $props()
 
 	const socket = useTypedSocket()
 
@@ -295,31 +310,39 @@
 	}
 </script>
 
-<div class="flex h-full flex-col p-4">
-	<div class="mb-4 flex items-center gap-2">
-		<button
-			aria-label="Cancel"
-			class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
-			onclick={handleCancel}
-			title="Cancel"
-		>
-			<Icons.ChevronLeft size={16} />
-		</button>
-		<h1 class="flex-1 truncate font-semibold">
-			{isCreating
-				? "New user"
-				: user?.displayName || user?.username || "Edit user"}
-		</h1>
-		<button
-			class="btn btn-sm preset-filled-primary-500 shrink-0"
-			onclick={saveUser}
-		>
-			<Icons.Save size={16} />
-			{isCreating ? "Create" : "Update"}
-		</button>
-	</div>
+<!-- No padding of its own: the split's detail pane owns the 16px, and the
+     space under the header is this column's gap (STYLE-GUIDE §6.3). -->
+<div class="flex min-h-0 flex-1 flex-col gap-3">
+	<PanelNavHeader
+		title={isCreating ? "New user" : "Edit user"}
+		onBack={showBack ? handleCancel : undefined}
+		backLabel="Cancel"
+		actionsLabel={isCreating ? "New user" : "Edit user"}
+		menuItems={[{ label: "Cancel", icon: Icons.X, onSelect: handleCancel }]}
+	>
+		{#snippet primaryAction()}
+			<button
+				type="button"
+				class="btn btn-sm preset-filled-primary-500 shrink-0"
+				onclick={saveUser}
+			>
+				<Icons.Save size={16} aria-hidden="true" />
+				{isCreating ? "Create" : "Update"}
+			</button>
+		{/snippet}
+		{#snippet subtitle()}
+			{#if user}
+				<!-- Which account: the title says only the kind. -->
+				<p class="text-surface-600-400 truncate text-xs">
+					{user.displayName
+						? `${user.displayName} · @${user.username}`
+						: `@${user.username}`}
+				</p>
+			{/if}
+		{/snippet}
+	</PanelNavHeader>
 
-	<div class="flex-1 overflow-y-auto">
+	<div class="min-h-0 flex-1 overflow-y-auto">
 		<!-- Two columns once the detail has the room (notes 14): a name
 		     beside its display name, a passphrase beside its confirmation. -->
 		<div class="grid max-w-3xl gap-4 @xl/detail:grid-cols-2">
@@ -447,7 +470,7 @@
 				<div class="flex gap-2">
 					<button
 						type="button"
-						class="btn btn-sm preset-filled-secondary-500"
+						class="btn btn-sm preset-tonal-surface"
 						onclick={generateRandomPassphrase}
 					>
 						<Icons.Dices size={16} />
@@ -455,7 +478,7 @@
 					</button>
 					<button
 						type="button"
-						class="btn btn-sm preset-filled-secondary-500"
+						class="btn btn-sm preset-tonal-surface"
 						onclick={copyPassphrase}
 						disabled={!formPassphrase || !isPassphraseValid}
 					>
@@ -534,7 +557,7 @@
 				</article>
 				<footer class="flex justify-end gap-2">
 					<button
-						class="btn btn-sm preset-filled-surface-500"
+						class="btn btn-sm preset-tonal-surface"
 						onclick={cancelAdminChange}
 					>
 						Cancel

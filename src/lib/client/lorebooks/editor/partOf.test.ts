@@ -143,6 +143,14 @@ describe("deleteWarning", () => {
 		expect(deleteWarning(0)).not.toContain("Contains")
 	})
 
+	it("names what goes with any entry, and that there is no undo (G5)", () => {
+		expect(deleteWarning(0)).toBe(
+			"Its relationships and amendments are deleted with it. This cannot be undone."
+		)
+		expect(deleteWarning(2)).toContain("relationship and amendment")
+		expect(deleteWarning(2)).toContain("This cannot be undone.")
+	})
+
 	it("says a shared entry leaves every line, and names the line-only way", () => {
 		const text = deleteWarning(0, { everyLine: true })
 		expect(text).toContain("removes it from every line")

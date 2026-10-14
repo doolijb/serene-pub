@@ -71,6 +71,13 @@
 		placing: boolean
 		/** The zone template, read for one thing: a zone's own pin. */
 		layout: ZoneLayoutV1
+		/**
+		 * The arrangement as STORED. A side it does not arrange is drawn from
+		 * its zone list, so its pin is the ZONE's and every card offers it —
+		 * judged here, not on the working arrangement, which holds a seed
+		 * frame for every zone the moment its gridstack zone reports.
+		 */
+		storedArranged: ArrangedGridV1
 		toggleZonePin: (zoneId: string | null) => void
 		removeWidget: (widgetId: string) => void
 		/**
@@ -81,7 +88,13 @@
 		/** A card landed in a zone. SessionLayout keeps `lastDropped`. */
 		onDropped: (id: string, zoneKey: ZoneId) => void
 		pinOnDrop: (zoneId: string | null) => void
-		markSimDirty: () => void
+		/**
+		 * A hand moved something in this zone (`GridStackZone`'s
+		 * `onGesture`): the zone is AUTHORED, so Done writes its frame
+		 * (./donePlacement `arrangementAtDone`), and a previewed width's clamp
+		 * becomes an arrangement the user made.
+		 */
+		markSimDirty: (zone: ZoneId) => void
 		/** The Rails lens: the previewed columns and the model resolved over them. */
 		leftPreview: PreviewColumn
 		rightPreview: PreviewColumn
@@ -127,6 +140,7 @@
 		onZoneClick,
 		placing,
 		layout,
+		storedArranged,
 		toggleZonePin,
 		removeWidget,
 		duplicateWidget,
@@ -230,10 +244,10 @@
 				<GridStackZone
 					items={gsItems}
 					{frame}
-					pinned={zoneId && showZonePin(frame)
+					pinned={zoneId && showZonePin(storedArranged[zoneKey])
 						? layout.zones[zoneId]?.pinned !== false
 						: undefined}
-					onTogglePin={zoneId && showZonePin(frame)
+					onTogglePin={zoneId && showZonePin(storedArranged[zoneKey])
 						? () => toggleZonePin(zoneId)
 						: undefined}
 					{onChange}
@@ -245,7 +259,7 @@
 						onDropped(id, zoneKey)
 						pinOnDrop(zoneId)
 					}}
-					onGesture={markSimDirty}
+					onGesture={() => markSimDirty(zoneKey)}
 				/>
 			{/key}
 		</div>

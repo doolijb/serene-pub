@@ -23,7 +23,17 @@
 	 * inside the menu, so nothing is truncated or left to an icon alone.
 	 */
 	interface Props {
+		/**
+		 * Set by the component at one size everywhere — 15px semibold in the
+		 * heading face (PLAN-sidebar-nav-normalization §2.2).
+		 */
 		title: string
+		/**
+		 * Draws the back button. Pass it only when the level it returns to
+		 * is OFF screen (ruling Q3): at desk a list column or a section list
+		 * is beside the detail, so its header has no back; at compact the
+		 * detail replaced the list, so it does.
+		 */
 		onBack?: () => void
 		/** Accessible name + tooltip for the back button. */
 		backLabel?: string
@@ -31,11 +41,22 @@
 		    Tabs.Content that already sits under an <h2> (the lorebookForms
 		    managers) — keeps the heading outline honest. */
 		headingLevel?: 2 | 3
-		/** eg. "text-sm" — several callers size the title down. */
+		/**
+		 * @deprecated The title has one size (15px, set here). The class is
+		 * still appended, but a size in it loses to `text-[15px]`, which
+		 * Tailwind emits after `text-sm`. Pass nothing.
+		 * The view phase removes them; do not add new uses.
+		 */
 		titleClass?: string
-		/** Stays INLINE next to the title, so it should be icon-only with a
-		    title/aria-label. For the one action that must not cost a second
-		    click — the lore edit screens put Save here. */
+		/**
+		 * The level's one primary, INLINE after the title — the action that
+		 * must not cost a second click. Normally a short LABELLED button
+		 * (`btn btn-sm`): a form's Save or Create, a detail's Edit
+		 * (STYLE-GUIDE §6.3). Keep the label to one word — the title is what
+		 * truncates when the row runs short. An icon-only button is fine
+		 * where the icon is unambiguous; give it `title` and `aria-label`.
+		 * Everything else goes in `menuItems`.
+		 */
 		primaryAction?: Snippet
 		/** The `⋯` menu's items, with full text labels (a `RowMenu`). */
 		menuItems?: RowMenuEntries
@@ -60,12 +81,14 @@
 	const tag = $derived(`h${headingLevel}` as "h2" | "h3")
 </script>
 
-<div class="flex min-w-0 flex-col gap-2">
-	<div class="flex min-w-0 items-center gap-2">
+<!-- `shrink-0`: in a flex-column pane the header is never what gives
+     ground — the content under it scrolls instead. -->
+<div class="flex min-w-0 shrink-0 flex-col gap-2">
+	<div class="flex min-w-0 shrink-0 items-center gap-2">
 		{#if onBack}
 			<button
 				type="button"
-				class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
+				class="btn btn-sm preset-tonal-surface shrink-0 p-2"
 				onclick={onBack}
 				title={backLabel}
 				aria-label={backLabel}
@@ -84,7 +107,7 @@
 		<svelte:element
 			this={tag}
 			data-panel-title
-			class="min-w-0 flex-1 truncate font-semibold {titleClass}"
+			class="min-w-0 flex-1 truncate [font-family:var(--typo-heading--font-family)] text-[15px] leading-tight font-semibold {titleClass}"
 		>
 			{title}
 		</svelte:element>

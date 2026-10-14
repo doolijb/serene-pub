@@ -27,6 +27,7 @@
 	} from "$lib/client/components/admin/changelist"
 	import { hookOutcome, HOOK_OUTCOME_CLASS } from "./hookOutcome"
 	import { PLUGIN_NOUN, backendWord, pluginStatus, pluginUninstall } from "./pluginsAdmin"
+	import { awaitReply } from "$lib/client/utils/awaitReply"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const socket = useTypedSocket()
@@ -41,6 +42,54 @@
 	let sandboxEnabled = $state(false)
 	let loading = $state(true)
 	let pollTimer: ReturnType<typeof setInterval> | null = null
+
+	/* ── install a package from a file (PLAN-pipeline-canvas-and-genre-authoring P5) ── */
+	let fileInput = $state<HTMLInputElement | null>(null)
+	let installing = $state(false)
+	let installNote = $state<{ tone: "ok" | "error"; text: string } | null>(null)
+	const MAX_PACKAGE_BYTES = 8 * 1024 * 1024
+
+	const toBase64 = (file: File) =>
+		new Promise<string>((resolve, reject) => {
+			const reader = new FileReader()
+			reader.onerror = () => reject(new Error("The file could not be read."))
+			reader.onload = () => {
+				const url = String(reader.result ?? "")
+				resolve(url.slice(url.indexOf(",") + 1))
+			}
+			reader.readAsDataURL(file)
+		})
+
+	async function installFromFile(file: File) {
+		installNote = null
+		if (file.size > MAX_PACKAGE_BYTES) {
+			installNote = { tone: "error", text: `${file.name} is over the 8 MiB a package may be.` }
+			return
+		}
+		installing = true
+		try {
+			const bytes = await toBase64(file)
+			const res = (await awaitReply({
+				socket,
+				event: "plugins:installPackage",
+				errorEvent: "plugins:installPackage:error",
+				params: { filename: file.name, bytes },
+				match: (r) => typeof r?.pluginId === "string",
+				timeoutMs: 120_000
+			})) as Sockets.Plugins.InstallPackage.Response
+			const counts = `${res.specs.length} ${res.specs.length === 1 ? "pipeline" : "pipelines"}, ${res.genres.length} ${res.genres.length === 1 ? "genre" : "genres"}, ${res.configs.length} ${res.configs.length === 1 ? "configuration" : "configurations"}, ${res.files} ${res.files === 1 ? "file" : "files"}`
+			installNote = res.warnings.length
+				? { tone: "error", text: `${res.pluginId} installed (${counts}) with ${res.warnings.length} ${res.warnings.length === 1 ? "warning" : "warnings"}: ${res.warnings.join(" · ")}` }
+				: { tone: "ok", text: `${res.pluginId} installed: ${counts}. It lands switched off; open it to turn it on.` }
+			if (res.plugins) plugins = res.plugins
+			socket.emit("plugins:list", {})
+		} catch (e) {
+			installNote = { tone: "error", text: e instanceof Error ? e.message : "The package was refused." }
+		} finally {
+			installing = false
+			if (fileInput) fileInput.value = ""
+		}
+	}
 
 	/**
 	 * The three page-wide reads, each asked for and listened for in one. All
@@ -175,6 +224,34 @@
 		emptyMessage="No extensions installed."
 	>
 		{#snippet headerExtra()}
+			<div class="flex flex-wrap items-center gap-2">
+				<input
+					bind:this={fileInput}
+					type="file"
+					accept=".zip,application/zip"
+					class="sr-only"
+					aria-label="Choose a package file"
+					onchange={(e) => {
+						const f = (e.currentTarget as HTMLInputElement).files?.[0]
+						if (f) void installFromFile(f)
+					}}
+				/>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					disabled={installing}
+					title="A content-only package: a zip in the dist/plugin layout, as Export as plugin writes"
+					onclick={() => fileInput?.click()}
+				>
+					<Icons.PackagePlus size={14} /> {installing ? "Installing…" : "Install a package…"}
+				</button>
+				{#if installNote}
+					<p class="flex items-start gap-2 text-sm {installNote.tone === 'error' ? 'text-error-600-400' : 'text-surface-700-300'}" role="status">
+						<span class="mt-1.5 size-2 shrink-0 rounded-full {installNote.tone === 'error' ? 'bg-error-500' : 'bg-success-500'}" aria-hidden="true"></span>
+						<span>{installNote.text}</span>
+					</p>
+				{/if}
+			</div>
 			{#if !loading && !sandboxEnabled}
 				<!-- The one status line (§6.11): a dot plus words and the fix. -->
 				<p
@@ -222,7 +299,7 @@
 							     hears it; Kill is what is left. -->
 							<button
 								type="button"
-								class="btn btn-sm preset-tonal-surface"
+								class="btn btn-sm preset-tonal-warning"
 								title="Ask the hook to stop itself and wind down"
 								onclick={() => socket.emit("plugins:abort", { callId: a.callId })}
 							>

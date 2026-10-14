@@ -41,7 +41,7 @@ There are two kinds, and neither is wrong. Here's the honest trade:
 
 Serene Pub can download, start and look after a program called **KoboldCPP**, which runs models on your computer. You never have to open it yourself.
 
-1. In the setup wizard's **Choose an LLM** step, under **Or set one up**, choose **KoboldCPP, run by Serene Pub**. The **Connections** view opens beside the wizard on **Set up chat**.
+1. In the setup wizard's **Choose an AI** step, under **Or set one up**, choose **KoboldCPP, run by Serene Pub**. The **Models** view opens beside the wizard on **Set up chat**.
 2. **Pick a build.** Serene Pub lists versions of KoboldCPP for different kinds of computer, each with a short description saying which hardware it suits (for example, NVIDIA graphics cards, other graphics cards, or no graphics card). Pick the one that matches yours. It downloads and starts on its own.
 3. **Pick a model.** A list of recommended models appears. Serene Pub asks **How much memory does this machine have?** Answer with your graphics card's memory (or your Mac's memory), or **Not sure**. Rows that fit turn gold, and the first one that fits gets a gold **Get** button.
 4. Click **Get**. A small window lists the model's files; each says whether it **Fits**, is **Tight**, or is **Too big** for your memory. Choose one that fits and click **Download**. Models are several GB, so this can take a while.
@@ -50,7 +50,7 @@ Serene Pub can download, start and look after a program called **KoboldCPP**, wh
 <!-- SHOT: the model finder with a memory tier set and one gold Get button -->
 
 :::note We'll come back to this
-You'll see settings such as **GPU Layers**, sampling and prompt formats along the way. Leave them all as they are; the defaults are chosen to work. [Connections](./connections.md) explains them when you want to tune things.
+You'll see settings such as **GPU layers**, sampling and prompt formats along the way. Leave them all as they are; the defaults are chosen to work. [Connections](./connections.md) explains them when you want to tune things.
 :::
 
 ### Already running Ollama, LM Studio, llama.cpp or KoboldCPP?
@@ -59,7 +59,7 @@ The wizard looks for them. Anything it finds running on this computer is listed 
 
 If the card says the program is running but has no chat model loaded, load one in that program (for Ollama, **Get a model** opens it in Connections so you can pull one there), then **Check again**. Started the program after the wizard opened? **Scan again**.
 
-If you'd rather Serene Pub download models into Ollama for you, choose **Ollama, managed by Serene Pub** under **Or set one up** instead.
+If you'd rather Serene Pub download models into Ollama for you, press **Let Serene Pub download models into it instead** under the Ollama card. When no running Ollama was found, choose **Ollama** under **Or set one up** instead (Ollama must be installed).
 
 ## If you chose hosted: OpenRouter (recommended)
 
@@ -67,9 +67,11 @@ If you'd rather Serene Pub download models into Ollama for you, choose **Ollama,
 
 1. Go to [openrouter.ai](https://openrouter.ai), make an account, and add some credit (a few dollars goes a long way).
 2. In OpenRouter's settings, create an **API key** and copy it. An API key is a long password that lets Serene Pub use your account. Keep it private.
-3. In the setup wizard's **Choose an LLM** step, choose **An online service**. In the **New connection** window that opens, type **OpenRouter** into the **Service** search, pick it, and click **Create**.
-4. Paste your key into the **API Key** field and click **Test**.
-5. Choose a model from the list and save.
+3. In the setup wizard's **Choose an AI** step, choose **An online service**. In the **New connection** window that opens, type **OpenRouter** into the **Service** search, pick it, and click **Create**.
+4. Paste your key into the **API Key** field and click **Save**, at the foot of the view. Not sure what's next? The status card at the top of the connection always says, naming the button to press.
+5. Click **Choose a model** on the status card (or open the **Models** tab), find a model you like, and press **Use in Reply** beside it. That fills the **Reply** [loadout](./connections.md#loadouts), what session replies run on: a model on a connection, and the settings it is driven with. OpenRouter lists hundreds, so type part of a name, such as `mistral`, into the **Filter** box.
+
+While you do this, the wizard beside the Connections view ticks off **Connection added**, **Key saved** and **Model chosen**, and the one step left has a button.
 
 :::tip What does it cost?
 Services charge by the amount of text sent and written, measured in **tokens** (roughly three-quarters of a word each). Every reply sends the story so far, so replies cost a little more as a session grows. With a mid-range model, a long evening's session typically costs somewhere between a few cents and a dollar. Each service shows prices per model and a running total in your account.
@@ -84,17 +86,18 @@ On the Android app, or if a stronger computer in your home already runs KoboldCP
 ## Check that it worked
 
 :::tip You should see
-The wizard moves on by itself to **What would you like to do?** (If you come back to the model step later, it reads **Your pub can reply**, naming your connection.) In the **Connections** view (open it from the rail, the strip down the left edge of the window) the status line at the top reads **Sessions can reply**, with the model and connection that answer.
+The wizard moves on by itself to **What would you like to do?** (If you come back to the model step later, it reads **Your pub can reply**, naming your connection.) In the **Loadouts** view (open it from the rail, the strip down the left edge of the window) the status line at the top reads **Replies:** with the model that answers and its connection, such as _Replies: Claude Sonnet 4.5 · Anthropic_.
 :::
 
-<!-- SHOT: the Connections view's status strip reading "Sessions can reply" -->
+<!-- SHOT: the Loadouts view's status strip reading "Replies: ‹model› · ‹connection›" -->
 
 That's it: your pub can write. The wizard now asks what you'd like to do first: **Talk to an AI** (a conversation with Serene, Serene Pub's guide) or **Play with characters** (pick a character, and a persona for yourself). Either is a fine place to start.
 
 :::warning If this didn't work
-- **The connection says _Needs a key_.** It's waiting for you, not broken: open it and paste the API key.
+- **The connection says _Needs a key_.** It's waiting for you, not broken: open it, paste the API key and press **Save**.
+- **The connection says _Pick a model_.** It works, but no model has been chosen to reply yet. Press **Choose**, then **Use in Reply** beside a model on its **Models** tab.
 - **The connection says _Not reachable_.** Serene Pub can't find the program or service. For a local program, check it's running; for another computer, check the address and that both are on the same network; for a service, check your internet connection.
-- **KoboldCPP says _Crashed_, or the model never finishes loading.** The model is probably too big for your memory. Get a smaller one: set your memory in the model list and choose one marked **Fits**.
+- **KoboldCPP says _Crashed_, or the model never finishes loading.** The model is probably too big for your memory. Get a smaller one: set your memory in the model list and choose one marked **Fits**. If it says _Crashed_ before any model loaded, read the reason under its status card and press **Start** to try again.
 - **Replies are very slow.** On a computer without a graphics card, local models are slow; try a smaller model, or an online service.
 - **Replies are garbled, or the AI writes your lines too.** Leave it for now and finish Start here; if it persists, see [Troubleshooting](./troubleshooting.md#replies-are-garbled-or-wrong).
 - **The service refuses to write your scene.** That's its content rules, not Serene Pub. Try another model, or a local one.
@@ -102,7 +105,7 @@ That's it: your pub can write. The wizard now asks what you'd like to do first: 
 
 ## Changing it later
 
-The wizard is only a shortcut. Everything it set up lives in the **Connections** view on the rail, which administrators can open at any time to add a second connection, swap which model answers your sessions, or remove one. The same connections are listed under **Admin › Models › Connections**, for managing them in bulk. You can also set up extras there later, such as image generation or long-term memory for your stories.
+The wizard is only a shortcut. Everything it set up lives in two views on the rail, which administrators can open at any time: **Models**, to swap which model answers your sessions or get another model, and **Connections**, to add a second service or remove one. How a model writes is in **Sampling**. The same connections are listed under **Admin › Models › Connections**, for managing them in bulk. You can also set up extras there later, such as [pictures](./images.md) or long-term memory for your stories.
 
 ## Going further
 

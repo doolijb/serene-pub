@@ -17,7 +17,7 @@
 	 *
 	 * ⚠ Only PLACED members get a lane. Someone the book has never placed is in
 	 * the world at every moment, which is a fact about all of time and nothing
-	 * a line can draw; the World bar's roster already lists them. A full-width
+	 * a line can draw; the roster popover already lists them. A full-width
 	 * bar per undated member would bury the two or three lives that were
 	 * actually placed.
 	 */

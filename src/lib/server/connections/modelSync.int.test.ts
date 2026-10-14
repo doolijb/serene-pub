@@ -275,7 +275,7 @@ describe("a model's modality, as the listing says", () => {
 		// The case that bit: an OpenAI-compatible service whose `/models` is
 		// `{id, object, owned_by}` claims no modality, and a sync once wrote
 		// that silence over the `embeddings` the `openai-embeddings` merge (or
-		// "Use for embeddings") had stored — offering the embedding model for
+		// "Use in Embeddings") had stored — offering the embedding model for
 		// chat again.
 		const { syncConnectionModels } = await import("./modelSync")
 		const [c] = await db
@@ -325,6 +325,77 @@ describe("a model's modality, as the listing says", () => {
 			["gpt-4o-mini", "text-gen"],
 			["text-embedding-3-small", "text-gen"]
 		])
+	}, 60_000)
+
+	test("a person's What it's for survives a listing that says nothing, and a listing that answers replaces it", async () => {
+		const { syncConnectionModels } = await import("./modelSync")
+		const { connectionsUpdateModel } = await import(
+			"../sockets/connections"
+		)
+		const [c] = await db
+			.insert(schema.connections)
+			.values({
+				name: `person sets it ${Math.random()}`,
+				type: CONNECTION_TYPE.OPENAI,
+				baseUrl: "https://person.test/v1",
+				modality: "text-gen",
+				capabilities: {
+					resolved: { "text->text": 2, "text->embedding": 2 }
+				}
+			})
+			.returning()
+		await syncConnectionModels(db, c.id, {
+			models: [
+				{ id: "embed-large", object: "model" },
+				{ id: "chat-small", object: "model" }
+			]
+		})
+		const byModel = async () =>
+			Object.fromEntries(
+				(await modelsOf(c.id)).map((r) => [r.model, r.modality])
+			)
+		expect(await byModel()).toEqual({
+			"chat-small": null,
+			"embed-large": null
+		})
+
+		const embed = (await modelsOf(c.id)).find(
+			(r) => r.model === "embed-large"
+		)!
+		const res = await connectionsUpdateModel.handler(
+			admin(),
+			{
+				id: c.id,
+				modelId: embed.id,
+				model: { modality: "embeddings" } as any
+			},
+			noop
+		)
+		expect(res.error).toBeUndefined()
+
+		// Silence: the person's value stands.
+		await syncConnectionModels(db, c.id, {
+			models: [
+				{ id: "embed-large", object: "model" },
+				{ id: "chat-small", object: "model" }
+			]
+		})
+		expect(await byModel()).toEqual({
+			"chat-small": null,
+			"embed-large": "embeddings"
+		})
+
+		// An answer: the service's word wins over the person's.
+		await syncConnectionModels(db, c.id, {
+			models: [
+				{ model: "embed-large", modality: "text-gen" },
+				{ model: "chat-small" }
+			]
+		})
+		expect(await byModel()).toEqual({
+			"chat-small": null,
+			"embed-large": "text-gen"
+		})
 	}, 60_000)
 
 	test("an embedding model on a chat-and-embed endpoint satisfies only embeddings", async () => {
@@ -420,6 +491,99 @@ describe("a model's modality, as the listing says", () => {
 			["google/gemini-embedding-2", "embeddings"],
 			["openai/gpt-4o", "text-gen"]
 		])
+	}, 60_000)
+
+	// The service's answer stands even under a default: the default is
+	// neither cleared nor moved, it is reported as refused, and the admin
+	// Overview is told to read again.
+	test("a restated modality under a default stands, leaves the default, and marks the Overview stale", async () => {
+		const { syncConnectionModels } = await import("./modelSync")
+		const { capabilityDefaults, setCapabilityDefault } = await import(
+			"./capabilityDefaults"
+		)
+		const { readRefusedDefaults } = await import("./refusedDefaults")
+		const { installAdminOverviewStale } = await import(
+			"$lib/server/admin/overviewStale"
+		)
+		const pushes: string[] = []
+		installAdminOverviewStale(
+			{
+				sockets: {
+					sockets: {
+						values: () =>
+							[{ user: { id: 1, isAdmin: true } }].values()
+					}
+				}
+			},
+			(_userId, event) => pushes.push(event),
+			0
+		)
+		const settle = () => new Promise((r) => setTimeout(r, 20))
+		try {
+			const [c] = await db
+				.insert(schema.connections)
+				.values({
+					name: `restated ${Math.random()}`,
+					type: CONNECTION_TYPE.OLLAMA,
+					baseUrl: "http://localhost:11434",
+					modality: "text-gen",
+					capabilities: {
+						resolved: {
+							"text->text": "native",
+							"text->embedding": "native"
+						}
+					}
+				})
+				.returning()
+			await syncConnectionModels(db, c.id, {
+				models: [{ model: "qwen-or-embed", modality: "text-gen" }]
+			})
+			const [m] = await modelsOf(c.id)
+			await setCapabilityDefault(db, "text->text", {
+				connectionId: c.id,
+				connectionModelId: m.id
+			})
+			await settle()
+			pushes.length = 0
+
+			await syncConnectionModels(db, c.id, {
+				models: [{ model: "qwen-or-embed", modality: "embeddings" }]
+			})
+			expect((await modelsOf(c.id))[0].modality).toBe("embeddings")
+			const defaults = await capabilityDefaults(db)
+			expect(defaults["text->text"]).toMatchObject({
+				connectionId: c.id,
+				connectionModelId: m.id
+			})
+			const refused = (await readRefusedDefaults(db, defaults)).filter(
+				(r) => r.connectionId === c.id
+			)
+			expect(refused).toEqual([
+				expect.objectContaining({
+					capability: "text->text",
+					connectionModelId: m.id,
+					modelName: "qwen-or-embed",
+					refusal: expect.stringContaining("Chat")
+				})
+			])
+			await settle()
+			expect(pushes).toEqual(["admin:overviewStale"])
+
+			// The same answer again restates nothing, so nothing is pushed.
+			pushes.length = 0
+			await syncConnectionModels(db, c.id, {
+				models: [{ model: "qwen-or-embed", modality: "embeddings" }]
+			})
+			await settle()
+			expect(pushes).toEqual([])
+
+			await setCapabilityDefault(db, "text->text", { connectionId: null })
+		} finally {
+			installAdminOverviewStale(
+				{ sockets: { sockets: { values: () => [].values() } } },
+				() => {}
+			)
+		}
 	}, 60_000)
 })
 

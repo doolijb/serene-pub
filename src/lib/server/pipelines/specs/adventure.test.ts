@@ -509,12 +509,22 @@ describe("the Adventure layout", () => {
 			"stats"
 		])
 		// Unpinned: an icon strip that pops over the conversation, which is what
-		// "collapsed to the rail" means.
+		// "collapsed to the rail" means — the Chronicle and Lore entries.
 		expect(l.zoneLayout.zones.left.pinned).toBe(false)
-		// The middle zone is world-state over the one conversation widget:
-		// the composer is a setting of `messages`, not a widget of its own.
+		expect(l.zoneLayout.zones.left.widgets).toEqual([
+			"chronicle",
+			"lore-entries"
+		])
+		// The middle zone is the world's stats (a copy of Stats, W7) over the
+		// one conversation widget: the composer is a setting of `messages`,
+		// not a widget of its own.
 		const middle = l.widgetGrid.widgets.map((w: any) => w.id)
-		expect(middle).toEqual(["world-state", "messages"])
+		expect(middle).toEqual(["stats#world", "messages"])
+		expect(l.widgetSettings["stats#world"]).toEqual({
+			owners: "world",
+			arrangement: "strip",
+			title: "World State"
+		})
 		expect(l.widgetSettings["scene-portraits"].bars).toBe(true)
 	})
 })
@@ -572,6 +582,15 @@ describe("parity", () => {
 		// `boot/specHashes.test.ts` records it. (was "6b320446a5eb1")
 		// Moved 2026-10-05 (rename: the id `core:spec/respond` is now
 		// `core:spec/chat-respond`) — not adventure's. (was "520aa324cf15f")
-		expect(canonicalHash(built(CHAT_RESPOND_SPEC_ID))).toBe("1f99b0cdffb35d")
+		// Moved 2026-10-12 (I12): chat-respond's Default config names core:loadout/reply@1 — not adventure's. (was "1f99b0cdffb35d")
+		// Moved 2026-10-13 (live scenes lane D: Chat's reply tick, `tick` +
+		// `clock`) — not adventure's; `boot/specHashes.test.ts` records it. (was "82d96ae3629ac")
+		// Moved 2026-10-13 (live scenes §15 G4: the tick's *Advance story clock*
+		// says `cause: 'tick'`) — not adventure's; `boot/specHashes.test.ts`
+		// records it. (was "1306e64e696429")
+		// Moved 2026-10-13 (live scenes §15 G12: the tick's *Advance story
+		// clock* says `onRefusal: 'skip'`) — not adventure's;
+		// `boot/specHashes.test.ts` records it. (was "1384332893aea")
+		expect(canonicalHash(built(CHAT_RESPOND_SPEC_ID))).toBe("1ce32d3e6de41a")
 	})
 })

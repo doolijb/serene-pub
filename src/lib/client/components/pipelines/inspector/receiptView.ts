@@ -103,8 +103,33 @@ export interface NodeRow {
 	 * outcome rather than in it. Empty for nearly every node.
 	 */
 	refused: string[]
+	/**
+	 * The scripts that ran at this step (`NodeReceipt.scripts`), in the order
+	 * the receipt holds them. Empty on a step no script touched.
+	 */
+	scripts: ScriptRow[]
 	/** The node as the receipt holds it, for the detail pane's own readers. */
 	raw: ReceiptNode
+}
+
+/** One `ScriptApplicationRecord`, as the detail pane lists it. */
+export interface ScriptRow {
+	name: string
+	/** The script kind id as the receipt spelled it (`scriptKind`, or the older `typeId`). */
+	kind: string
+	/** `core:script:text/stop@1` → "text / stop". */
+	kindLabel: string
+	/** The seam address (`in:text`, `out:cast`, a point key), else how it was applied. */
+	at: string
+	/** Where the script came from: the pipeline's own chain, the connection, or a binding. */
+	via: "pipeline" | "connection" | "binding"
+	result: "ok" | "err" | "skip"
+	reason?: string
+	/** A stop verdict that was the earliest and cut the text. */
+	won?: boolean
+	/** A transform that actually moved the value. */
+	changed?: boolean
+	durationMs?: number
 }
 
 /** One config value's layer, as the detail pane lists it. */
@@ -150,6 +175,61 @@ function layersOf(node: ReceiptNode): ValueLayerRow[] {
 		.map((r, i) => ({ r, i }))
 		.sort((a, b) => rank(a.r.layer) - rank(b.r.layer) || a.i - b.i)
 		.map(({ r }) => r)
+}
+
+/**
+ * A script kind id's `content/operation` segment, for a reader:
+ * `core:script:text/stop@1` → "text / stop". An id this does not recognise is
+ * shown as written.
+ */
+export function scriptKindLabel(kind: string): string {
+	const m = /^[^:]+:script:([^@]+)(?:@.*)?$/.exec(kind)
+	return m ? m[1]!.split("/").join(" / ") : kind
+}
+
+/**
+ * `NodeReceipt.scripts`, read structurally. A receipt is stored JSON, so a
+ * record missing its result reads as `err` — a word this does not know is not
+ * a word to render as success — and the seam falls back from the record's own
+ * `at`, to its `point`, to `phase` + `port`, to how it was applied.
+ */
+function scriptsOf(node: ReceiptNode): ScriptRow[] {
+	return asArray(node.scripts)
+		.map(asRecord)
+		.filter((r): r is Record<string, any> => r !== null)
+		.map((r): ScriptRow => {
+			const kind = asString(r.scriptKind) ?? asString(r.typeId) ?? ""
+			const viaWord = asString(r.via)
+			const port = asString(r.port)
+			const phase = asString(r.phase)
+			const at =
+				asString(r.at) ??
+				asString(r.point) ??
+				(port && (phase === "before" || phase === "after")
+					? `${phase === "before" ? "in" : "out"}:${port}`
+					: (asString(r.appliedBy) ?? ""))
+			const result: ScriptRow["result"] =
+				r.result === "ok" || r.result === "skip" ? r.result : "err"
+			const row: ScriptRow = {
+				name: asString(r.name) ?? (r.scriptId != null ? `#${r.scriptId}` : ""),
+				kind,
+				kindLabel: scriptKindLabel(kind),
+				at,
+				via:
+					viaWord === "connection" || viaWord?.startsWith("connection:")
+						? "connection"
+						: r.appliedBy === "binding"
+							? "binding"
+							: "pipeline",
+				result
+			}
+			const reason = asString(r.reason)
+			if (reason) row.reason = reason
+			if (typeof r.won === "boolean") row.won = r.won
+			if (typeof r.changed === "boolean") row.changed = r.changed
+			if (typeof r.durationMs === "number") row.durationMs = r.durationMs
+			return row
+		})
 }
 
 /** `NodeReceipt.swap`, checked rather than cast. */
@@ -238,6 +318,7 @@ export function nodeRows(receipt: unknown): NodeRow[] {
 				swap: swapOf(raw ?? {}),
 				pinned: raw?.swap === null,
 				refused: refusedOf(raw?.output),
+				scripts: scriptsOf(raw ?? {}),
 				raw: raw ?? {}
 			}
 		})
@@ -806,6 +887,57 @@ export function postHistoryView(
 		line: `Post-history reminder: carried, gated at ${gatedBy}`,
 		notes: []
 	}
+}
+
+/* ── variable layouts ───────────────────────────────── */
+
+/** One placed key and what laid it out, as the Prompt tab lists it. */
+export interface LayoutLine {
+	key: string
+	/** The variable the key meant in this run — `acme:var/ranked-lore@1`. */
+	variableId: string | null
+	/** "Titled JSON block (Serene Pub's)", or "built-in default" with no row. */
+	line: string
+	/** True when no row rendered it — the variable's built-in default did. */
+	floor: boolean
+}
+
+const ORIGIN_LABEL: Record<string, string> = {
+	shipped: "Serene Pub's",
+	package: "from a plugin",
+	own: "made here"
+}
+
+/**
+ * What each key the template placed rendered through (2026-10-13, P5).
+ *
+ * The variable is the point: a key is the template's word, and what it held
+ * depends on what it meant in this pipeline — core's, or a variable a plugin
+ * or the spec put there. Empty for a node that recorded none, and for a
+ * receipt from before it was recorded.
+ */
+export function layoutsView(node: ReceiptNode | null | undefined): LayoutLine[] {
+	const output = asRecord(node?.output)
+	const recorded =
+		output?.layouts ?? asRecord(output?.context)?.layouts ?? asRecord(output?.main)?.layouts
+	return asArray(recorded)
+		.map((u) => asRecord(u))
+		.filter((u): u is Record<string, any> => !!u && typeof u.key === "string")
+		.map((u) => {
+			const layout = asString(u.layout)
+			const origin = asString(u.origin)
+			const floor = layout === null
+			return {
+				key: u.key as string,
+				variableId: asString(u.variableId),
+				line: floor
+					? "built-in default"
+					: origin && ORIGIN_LABEL[origin]
+						? `${layout} (${ORIGIN_LABEL[origin]})`
+						: layout,
+				floor
+			}
+		})
 }
 
 /* ── the author's note ──────────────────────────────── */

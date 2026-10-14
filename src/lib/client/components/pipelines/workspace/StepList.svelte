@@ -12,12 +12,23 @@
 	interface Props {
 		steps: BuilderStep[]
 		activeKey: string | null
+		/** The agent picked instead of a step, by group key. */
+		activeGroup?: string | null
 		/** Unsaved-draft count for a step — the amber dot. */
 		pendingFor: (stepKey: string) => number
 		onSelect: (stepKey: string) => void
+		/** Given, an agent's heading is a button that picks the agent. */
+		onSelectGroup?: (groupKey: string) => void
 	}
 
-	let { steps, activeKey, pendingFor, onSelect }: Props = $props()
+	let {
+		steps,
+		activeKey,
+		activeGroup = null,
+		pendingFor,
+		onSelect,
+		onSelectGroup
+	}: Props = $props()
 
 	const countsFor = (step: BuilderStep) => ({
 		total: step.options.length,
@@ -26,11 +37,11 @@
 
 	/** The steps under their agent's heading, in order; `agent` absent for the one unheaded group. */
 	const sections = $derived.by(() => {
-		const out: { agent?: string; steps: BuilderStep[] }[] = []
+		const out: { group: string; agent?: string; steps: BuilderStep[] }[] = []
 		for (const step of steps) {
 			const last = out.at(-1)
-			if (last && last.agent === step.agent) last.steps.push(step)
-			else out.push({ agent: step.agent, steps: [step] })
+			if (last && last.group === step.group) last.steps.push(step)
+			else out.push({ group: step.group, agent: step.agent, steps: [step] })
 		}
 		return out
 	})
@@ -53,7 +64,19 @@
 	class="flex flex-col gap-1.5 p-2"
 >
 	{#each sections as section, i (i)}
-		{#if section.agent}
+		{#if section.agent && onSelectGroup}
+			<button
+				type="button"
+				class="mt-1 rounded-[10px] px-1 pt-1 pb-0.5 text-left text-xs font-medium
+					{section.group === activeGroup
+					? 'sidebar-row-active'
+					: 'text-surface-600-400 hover:text-surface-950-50'}"
+				aria-current={section.group === activeGroup ? "step" : undefined}
+				onclick={() => onSelectGroup(section.group)}
+			>
+				{section.agent}
+			</button>
+		{:else if section.agent}
 			<p class="text-surface-600-400 px-1 pt-2 text-xs font-medium">
 				{section.agent}
 			</p>

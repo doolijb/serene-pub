@@ -172,11 +172,14 @@ export function countNotInStory(
 const plural = (n: number, one: string, many: string) =>
 	`${n} ${n === 1 ? one : many}`
 
-/** The pool at this moment, said out loud. */
-export function poolAsOfSentence(total: number, notYet: number): string {
-	const entries = plural(total, "entry", "entries")
+/**
+ * The pool at this moment, as the moment bar says it after the save
+ * sentence: the count, and how many of those the story has not reached.
+ */
+export function asOfCountSentence(total: number, notYet: number): string {
+	const entries = `${plural(total, "entry", "entries")} as of this moment`
 	if (notYet === 0) return entries
-	return `${entries} · ${notYet} not in the story yet at this moment`
+	return `${entries}, ${notYet} not in the story yet`
 }
 
 /** The cast at this moment, said out loud. */
@@ -197,26 +200,22 @@ export function amendmentsAheadSentence(notYet: number, total: number): string {
 	)
 }
 
-/** The bar's own chip. */
-export function momentChipLabel(key: string | null | undefined): string {
-	return `Moment · ${momentLabel(key)}`
+/** The moment in words, as the moment bar leads with it. */
+export function momentWords(key: string | null | undefined): string {
+	return key ? `Reading as of ${momentLabel(key)}` : "Reading now"
 }
 
 /**
- * What the banner over the editor says an edit made here is saved as.
+ * What a save does while reading as of a date, said beside the moment.
  *
  * ⚠ The sentence names the CHOICE, never one outcome: at a moment a save is
  * either an amendment or a change to the base, and neither is the default.
- * The Save control is where it is made.
+ * The Save control is where it is made. "A change", not "the entry": the
+ * moment bar stands under the Cast board too, where the subject is a member,
+ * and under any scope added later.
  */
-export function momentBannerSentence(key: string): string {
-	// ⚠ "it", not "the entry": this banner stands over the Cast board too,
-	// where the subject is a member, and over any scope added later.
-	return (
-		`Reading as of ${momentLabel(key)}. A change saved here can begin at ` +
-		`this date, or change it everywhere.`
-	)
-}
+export const MOMENT_SAVE_SENTENCE =
+	"A change saved here can begin at this date, or change it everywhere."
 
 /**
  * The date a drag onto the line lands on.

@@ -39,6 +39,10 @@ import {
 	promptPoolKeyFor
 } from "$lib/server/pipelines/entities/promptPool"
 import { coreTemplateIdFor } from "$lib/server/pipelines/entities/templateIds"
+import {
+	namesTakenBesides,
+	shippedNameFor
+} from "$lib/server/pipelines/boot/shippedName"
 
 export interface PromptSeedResult {
 	/** `<node definition>#<slot>` — the pool, for a log line and for the tests. */
@@ -90,6 +94,25 @@ export async function seedPipelinePrompts(db: Db): Promise<PromptSeedResult[]> {
 			refreshed: []
 		}
 
+		// Every name the pool holds, kept current as this pass writes, so a
+		// shipped row yields to a person's row of the same name instead of
+		// hitting the pool's unique name index (`shippedName.ts`).
+		const poolNames = (await db
+			.select({
+				id: schema.pipelinePrompts.id,
+				name: schema.pipelinePrompts.name
+			})
+			.from(schema.pipelinePrompts)
+			.where(
+				and(
+					eq(
+						schema.pipelinePrompts.nodeDefinitionId,
+						poolKeyFor(prompts[0]!.nodeType)
+					),
+					eq(schema.pipelinePrompts.slot, prompts[0]!.slot)
+				)
+			)) as Array<{ id: number; name: string }>
+
 		for (const prompt of prompts) {
 			const createdForSpecId =
 				(prompt.createdForSpec != null
@@ -113,8 +136,18 @@ export async function seedPipelinePrompts(db: Db): Promise<PromptSeedResult[]> {
 				// already, and this is what gives one to a row seeded before
 				// that and to a row seeded after it, identically.
 				const templateId = coreTemplateIdFor(prompt.seedKey)
+				// The catalog's name, unless a person's row holds it; then the
+				// "(Built-in)" form, which drops again once theirs is gone.
+				const name = shippedNameFor(
+					prompt.name,
+					namesTakenBesides(poolNames, existing.id)
+				)
+				// `isImmutable` too: a row an older catalog demoted
+				// (`unshipPrompts.ts` keeps its key) is shipped again, so it
+				// is locked again — adopted, never inserted a second time.
 				const drifted =
-					existing.name !== prompt.name ||
+					!existing.isImmutable ||
+					existing.name !== name ||
 					existing.templateId !== templateId ||
 					!sameFields(
 						(existing.fields ?? {}) as Record<string, string>,
@@ -132,7 +165,8 @@ export async function seedPipelinePrompts(db: Db): Promise<PromptSeedResult[]> {
 				await db
 					.update(schema.pipelinePrompts)
 					.set({
-						name: prompt.name,
+						isImmutable: true,
+						name,
 						templateId,
 						fields: prompt.fields,
 						defaultForSpecs: prompt.defaultForSpecs,
@@ -140,21 +174,31 @@ export async function seedPipelinePrompts(db: Db): Promise<PromptSeedResult[]> {
 						updatedAt: new Date()
 					})
 					.where(eq(schema.pipelinePrompts.id, existing.id))
+				const mine = poolNames.find((r) => r.id === existing.id)
+				if (mine) mine.name = name
 				result.refreshed.push(prompt.seedKey)
 				continue
 			}
 
-			await db.insert(schema.pipelinePrompts).values({
-				nodeDefinitionId: poolKeyFor(prompt.nodeType),
-				slot: prompt.slot,
-				seedKey: prompt.seedKey,
-				templateId: coreTemplateIdFor(prompt.seedKey),
-				name: prompt.name,
-				isImmutable: true,
-				fields: prompt.fields,
-				defaultForSpecs: prompt.defaultForSpecs,
-				createdForSpecId
-			})
+			const name = shippedNameFor(
+				prompt.name,
+				namesTakenBesides(poolNames, null)
+			)
+			const [made] = await db
+				.insert(schema.pipelinePrompts)
+				.values({
+					nodeDefinitionId: poolKeyFor(prompt.nodeType),
+					slot: prompt.slot,
+					seedKey: prompt.seedKey,
+					templateId: coreTemplateIdFor(prompt.seedKey),
+					name,
+					isImmutable: true,
+					fields: prompt.fields,
+					defaultForSpecs: prompt.defaultForSpecs,
+					createdForSpecId
+				})
+				.returning({ id: schema.pipelinePrompts.id })
+			poolNames.push({ id: made!.id, name })
 			result.created.push(prompt.seedKey)
 		}
 		out.push(result)

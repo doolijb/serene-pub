@@ -4,11 +4,13 @@ import {
 	filterConnections,
 	indexTotals,
 	isCustomOpenAiPreset,
+	listedState,
 	needsAttention,
 	parseIndexFilter,
 	servesCapability,
 	type IndexConnection
 } from "./connectionIndexFilter"
+import { CONNECTION_STATES } from "./connectionRowStatus"
 
 const rows: IndexConnection[] = [
 	{
@@ -92,34 +94,58 @@ describe("filterConnections — the unit is the connection", () => {
 		expect(ids(filterConnections(rows, opts))).toEqual([1, 2, 3])
 	})
 
-	test("attention keeps a failed listing and a connection with a missing model", () => {
+	test("attention keeps the red and the gold rows: a failed listing, a model gone", () => {
+		expect(rows.map(listedState)).toEqual(["unfinished", "broken", "idle"])
 		expect(
 			ids(filterConnections(rows, { ...opts, filter: "attention" }))
 		).toEqual([1, 2])
 	})
 
-	test("a local file that failed to download needs attention too", () => {
-		const onnx: IndexConnection = {
-			id: 9,
-			name: "Embeddings",
-			type: "local_onnx_embeddings",
-			baseUrl: null,
+	test("a missing key is gold, and gold needs attention", () => {
+		const keyless: IndexConnection = {
+			id: 7,
+			name: "OpenRouter",
+			type: "openai",
+			preset: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1/",
+			hasCredential: false,
 			notes: null,
-			modelsSync: { at: null, error: null },
-			models: [
-				{
-					id: 91,
-					name: "bge-small",
-					model: "bge-small",
-					enabled: true,
-					missingSince: null,
-					local: { state: "error" }
-				}
-			]
+			modelsSync: { at: null, error: "Missing credentials" },
+			models: []
 		}
-		expect(needsAttention(onnx)).toBe(true)
-		// A model somebody switched off is a choice, not a fault.
-		expect(needsAttention(rows[2])).toBe(false)
+		// Unfinished, not broken: the listing error is the missing key's symptom.
+		expect(listedState(keyless)).toBe("unfinished")
+		expect(needsAttention(keyless)).toBe(true)
+	})
+
+	test("a model somebody switched off is a choice, not a fault", () => {
+		const listed: IndexConnection = {
+			...rows[1],
+			id: 8,
+			modelsSync: { at: "2026-09-14T10:00:00Z", error: null }
+		}
+		expect(listedState(listed)).toBe("ready")
+		expect(needsAttention(listed)).toBe(false)
+	})
+
+	test("the view's stateOf is what the filter and its count read", () => {
+		// The view knows what a listing cannot — chat unset makes a listed
+		// row "Pick a model" (gold), a crashed process is red.
+		const stateOf = (c: IndexConnection) =>
+			c.id === 3 ? ("unfinished" as const) : ("ready" as const)
+		expect(
+			ids(
+				filterConnections(rows, { ...opts, filter: "attention", stateOf })
+			)
+		).toEqual([3])
+		expect(countConnections(rows, "attention", stateOf)).toBe(1)
+	})
+
+	test("only unfinished and broken need attention", () => {
+		for (const state of CONNECTION_STATES)
+			expect(needsAttention(rows[0], () => state)).toBe(
+				state === "unfinished" || state === "broken"
+			)
 	})
 
 	test("a preset-less OpenAI-compatible row is the custom one", () => {

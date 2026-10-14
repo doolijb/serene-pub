@@ -12,7 +12,13 @@
 import type { ArrangedGridV1 } from "@serene-pub/sdk"
 import { describe, expect, test } from "vitest"
 import { frameCovers } from "./arrangedGeometry"
-import { editorSeedKey, editorZoneIds, type ZoneMembers } from "./editorSeed"
+import {
+	editorSeedKey,
+	editorZoneIds,
+	middleSeedPlace,
+	sideSeedPin,
+	type ZoneMembers
+} from "./editorSeed"
 import { floorKeptId, withPrimaryFloor } from "./primaryFloor"
 import { normalizeZoneLayout } from "./schema"
 import { loadChatLayout, widgetsInZone } from "./widgetGrid"
@@ -157,5 +163,34 @@ describe("the editor's middle, opened on a layout that never saved a grid", () =
 		})
 		expect(new Set(keys).size).toBe(1)
 		expect(cards.every((c) => c.join() === "messages")).toBe(true)
+	})
+})
+
+describe("sideSeedPin — a side's cards are seeded with the ZONE's pin (lane E1)", () => {
+	test("an unpinned zone seeds unpinned cards, so a frame Done writes for it stays an icon rail", () => {
+		expect(sideSeedPin({ pinned: false })).toEqual({ pinned: false })
+	})
+	test("a pinned zone — or one that says nothing (absent means pinned) — seeds docked cards", () => {
+		expect(sideSeedPin({ pinned: true })).toEqual({})
+		expect(sideSeedPin({})).toEqual({})
+		expect(sideSeedPin(undefined)).toEqual({})
+	})
+})
+
+describe("middleSeedPlace — the grid's own shape, read as the editor's seed", () => {
+	const entry = (h: "grow" | "fixed", bottom = false) => ({
+		size: { h },
+		anchor: bottom ? { bottom: true } : { top: true }
+	})
+	test("a grow-height widget fills what is left", () => {
+		expect(middleSeedPlace(entry("grow"), false)).toEqual({ place: "fill" })
+	})
+	test("a fixed strip docks three cells deep at the edge it anchors to", () => {
+		expect(middleSeedPlace(entry("fixed"), false)).toEqual({ place: "top", h: 3 })
+		expect(middleSeedPlace(entry("fixed", true), false)).toEqual({ place: "bottom", h: 3 })
+	})
+	test("a card with no grid entry fills when it is a log, else it is a strip", () => {
+		expect(middleSeedPlace(undefined, true)).toEqual({ place: "fill" })
+		expect(middleSeedPlace(undefined, false)).toEqual({ place: "top", h: 3 })
 	})
 })

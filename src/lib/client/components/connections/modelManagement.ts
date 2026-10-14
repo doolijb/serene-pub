@@ -134,7 +134,7 @@ export function modelsSourceHint(
 	if (manager)
 		return `Models are downloaded and removed in the ${manager.label} connection; this list follows it.`
 	if (isLocalOnnxType(type))
-		return "Models come from the recommended list and anything added by Hugging Face id. Download one to this machine, then make it active."
+		return "Models come from the recommended list and anything added by Hugging Face id. Download one to this machine, then put it in its loadout with Use in."
 	return null
 }
 
@@ -211,7 +211,13 @@ export function rowAction(
 			case "on_disk":
 				return ctx.isDefault
 					? null
-					: { verb: "makeActive", label: "Make active" }
+					: {
+							verb: "makeActive",
+							label:
+								kind === "onnx-entities"
+									? "Use in Entities"
+									: "Use in Embeddings"
+						}
 			case "not_downloaded":
 				return { verb: "download", label: "Download" }
 			default:

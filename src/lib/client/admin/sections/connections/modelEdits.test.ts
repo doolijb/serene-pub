@@ -4,6 +4,7 @@ import {
 	liveModelEdits,
 	modelEditCount,
 	modelEditPlan,
+	outcomeInLabels,
 	modelsWithEdits,
 	noModelEdits,
 	withDefaultEdit,
@@ -16,7 +17,7 @@ const nemo = { id: 1, name: "Nemo 12B", model: "nemo.gguf", enabled: true }
 const qwen = { id: 2, name: null, model: "qwen3-8b", enabled: false }
 const llama = { id: 3, name: "Llama 3", model: "llama3", enabled: null }
 const models = [nemo, qwen, llama]
-const word = (c: string) => ({ "text->text": "Chat", "text->image": "Image generation" })[c] ?? c
+const word = (c: string) => ({ "text->text": "Reply", "text->image": "Images" })[c] ?? c
 const saved = {
 	"text->text": { connectionId: CONN, connectionModelId: 1 },
 	"text->image": { connectionId: 99, connectionModelId: 50 }
@@ -81,14 +82,14 @@ describe("what the table draws", () => {
 
 	it("a pending Use moves the mark off the model that had it", () => {
 		const edits = withDefaultEdit(noModelEdits(), "text->text", 3, saved, CONN)
-		expect(defaultMarksWithEdits(saved, noModelEdits(), CONN, word)).toEqual({ 1: ["Chat"] })
-		expect(defaultMarksWithEdits(saved, edits, CONN, word)).toEqual({ 3: ["Chat"] })
+		expect(defaultMarksWithEdits(saved, noModelEdits(), CONN, word)).toEqual({ 1: ["Reply"] })
+		expect(defaultMarksWithEdits(saved, edits, CONN, word)).toEqual({ 3: ["Reply"] })
 	})
 
 	it("another connection's default is never marked here, until a Use takes it", () => {
 		const edits = withDefaultEdit(noModelEdits(), "text->image", 1, saved, CONN)
 		expect(defaultMarksWithEdits(saved, edits, CONN, word)).toEqual({
-			1: ["Chat", "Image generation"]
+			1: ["Reply", "Images"]
 		})
 	})
 })
@@ -98,7 +99,7 @@ describe("what Save sends", () => {
 		let edits = withDefaultEdit(noModelEdits(), "text->text", 3, saved, CONN)
 		edits = withEnabledEdit(edits, nemo, false)
 		const plan = modelEditPlan(edits, models, word)
-		expect(plan.map((s) => s.label)).toEqual(["Hide Nemo 12B", "Use Llama 3 for chat"])
+		expect(plan.map((s) => s.label)).toEqual(["Hide Nemo 12B", "Use Llama 3 in Reply"])
 		expect(plan[1]).not.toHaveProperty("after")
 	})
 
@@ -108,15 +109,40 @@ describe("what Save sends", () => {
 		const plan = modelEditPlan(edits, models, word)
 		// A model with no name of its own is called what its row shows: the
 		// identifier with the parameter count lifted out (`modelDisplay`).
-		expect(plan.map((s) => s.label)).toEqual(["Show qwen3", "Use qwen3 for chat"])
-		expect(plan[1]).toMatchObject({ kind: "default", after: ["Show qwen3"] })
+		expect(plan.map((s) => s.label)).toEqual(["Show qwen3", "Use qwen3 in Reply"])
+		expect(plan[1]).toMatchObject({ kind: "default", after: ["enabled:2"] })
 	})
 
 	it("what landed leaves the draft; what was refused stays pending", () => {
 		let edits = withEnabledEdit(noModelEdits(), nemo, false)
 		edits = withDefaultEdit(edits, "text->text", 3, saved, CONN)
 		const plan = modelEditPlan(edits, models, word)
-		const rest = withoutSteps(edits, plan, ["Hide Nemo 12B"])
+		const rest = withoutSteps(edits, plan, ["enabled:1"])
 		expect(rest).toEqual({ enabled: {}, defaults: { "text->text": 3 } })
+	})
+
+	it("two models that read alike are two edits, keyed by id", () => {
+		const twins = [
+			{ id: 41, name: "Twin", model: "twin-a" },
+			{ id: 42, name: "Twin", model: "twin-b" }
+		]
+		let edits = withEnabledEdit(noModelEdits(), twins[0], false)
+		edits = withEnabledEdit(edits, twins[1], false)
+		const plan = modelEditPlan(edits, twins, word)
+		expect(plan.map((s) => s.label)).toEqual(["Hide Twin", "Hide Twin"])
+		expect(withoutSteps(edits, plan, ["enabled:41"])).toEqual({
+			enabled: { 42: false },
+			defaults: {}
+		})
+		expect(
+			outcomeInLabels(
+				{ landed: ["enabled:41"], refused: [{ label: "enabled:42", error: "no" }], skipped: [] },
+				plan
+			)
+		).toEqual({
+			landed: ["Hide Twin"],
+			refused: [{ label: "Hide Twin", error: "no" }],
+			skipped: []
+		})
 	})
 })

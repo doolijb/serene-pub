@@ -4,7 +4,10 @@
  * widget's own (R77): the write owns its error.
  */
 import { describe, expect, test } from "vitest"
+import { WIDGET_REQUEST_ASKERS } from "@serene-pub/sdk"
 import { answerSetAttributeValue, type AttributeWriter } from "./setAttributeValue"
+import { guardWidgetRequests } from "./askers"
+import type { WidgetRequestHandler } from "$lib/shared/widgets/context"
 
 const world = { key: "world", kind: "session" as const, id: 7, label: "World", configs: { "core:slot/weather@1": {} } }
 const ada = { key: "ada", kind: "session_cast" as const, id: 3, label: "Ada", configs: { "core:slot/hp@1": { max: 20 } } }
@@ -98,5 +101,37 @@ describe("answerSetAttributeValue", () => {
 		await expect(
 			answerSetAttributeValue({ owner: { kind: "session_cast", id: 3 }, slotId: "core:slot/hp@1", value: 99 }, store, 7)
 		).rejects.toThrow("hp does not go above 20")
+	})
+
+	test("🚧 a plugin's write (D4) is asked again here: `session:state:write`, never the read", async () => {
+		const { store, writes } = writer()
+		const params = { owner: { kind: "session", id: 7 }, slotId: "core:slot/weather@1", value: "rain" }
+		const acme = (grants?: string[]) => ({ widgetId: "acme:stats", owner: "acme", ...(grants ? { grants } : {}) })
+		for (const grants of [undefined, ["session:state"], ["widget:session:state:write"]])
+			await expect(answerSetAttributeValue(params, store, 7, acme(grants))).rejects.toThrow(
+				"not granted the write grant 'session:state:write'"
+			)
+		expect(writes).toEqual([])
+		await answerSetAttributeValue(params, store, 7, acme(["session:state", "session:state:write"]))
+		// Core's own widget, with or without a `from`.
+		await answerSetAttributeValue(params, store, 7, { widgetId: "stats", owner: "core" })
+		expect(writes).toHaveLength(2)
+	})
+})
+
+/** Through the page's door (`guardWidgetRequests`) — the SDK's askers table, D4's once the SDK is rebuilt. */
+describe("set-attribute-value behind the askers table", () => {
+	test("🚧 D4: refused with the read alone, answered with the write grant", async () => {
+		expect(WIDGET_REQUEST_ASKERS["set-attribute-value"]).toEqual({ scope: "session:state", write: true })
+		const { store, writes } = writer()
+		const ask = guardWidgetRequests((async (_k: string, p: unknown, from: never) =>
+			answerSetAttributeValue(p, store, 7, from)) as WidgetRequestHandler)
+		const params = { owner: { kind: "session", id: 7 }, slotId: "core:slot/weather@1", value: "rain" }
+		await expect(
+			ask("set-attribute-value", params as never, { widgetId: "acme:x", owner: "acme", grants: ["session:state"] })
+		).rejects.toThrow("not granted the write grant 'session:state:write'")
+		expect(writes).toEqual([])
+		await ask("set-attribute-value", params as never, { widgetId: "acme:x", owner: "acme", grants: ["session:state:write"] })
+		expect(writes).toHaveLength(1)
 	})
 })

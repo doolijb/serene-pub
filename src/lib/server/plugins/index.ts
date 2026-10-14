@@ -19,6 +19,7 @@ import {
 	registerPluginDefinitions
 } from "./pluginDefinitions"
 import { registerPluginEvents } from "./pluginEvents"
+import { registerPluginHookPoints } from "./pluginHookPoints"
 import { registerPluginAnnex } from "./pluginAnnex"
 import { syncPluginVariables } from "./pluginVariables"
 import { makePluginRowPort } from "./rowStore"
@@ -107,7 +108,15 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 				const events = registerPluginEvents(row.manifest, row.pluginId)
 				// And its annex declaration (ruling 2026-09-26).
 				const annex = registerPluginAnnex(row.manifest, row.pluginId)
-				for (const line of [...refused, ...registered.refused, ...events, ...annex])
+				// And the hook points it declares (R54).
+				const hookPoints = registerPluginHookPoints(row.manifest, row.pluginId)
+				for (const line of [
+					...refused,
+					...registered.refused,
+					...events,
+					...annex,
+					...hookPoints
+				])
 					console.warn(`[plugins] '${row.pluginId}': ${line}`)
 			}
 		} catch (e) {
@@ -250,6 +259,21 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 		} catch (e) {
 			console.warn("[plugins] widget-style sync failed:", e)
 		}
+	}
+
+	// In-app genres (PLAN-pipeline-canvas-and-genre-authoring §6.1), back in
+	// this process's genre registry. Outside the plugin gate: an in-app genre
+	// is the pub's own, not a plugin's, and its sessions read their stats
+	// and sheets through the registry whether the subsystem is on or not.
+	// After the plugin genres, so a copy of a plugin genre finds its source.
+	try {
+		const { registerPubGenres } = await import(
+			"$lib/server/pipelines/entities/pubGenres"
+		)
+		for (const line of await registerPubGenres(db))
+			console.warn(`[genres] in-app genre not registered: ${line}`)
+	} catch (e) {
+		console.warn("[genres] in-app genre registration failed:", e)
 	}
 
 	mgr.markReady()

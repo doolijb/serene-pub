@@ -1,8 +1,11 @@
 <script lang="ts">
 	/**
 	 * Admin › Scripts (18 §4d): the changelist (note 37, Django admin) of
-	 * typed text transforms — type, scope, status and the chains using each;
-	 * filters by type, scope, status, origin and use; bulk Export and Delete.
+	 * typed text transforms — type, scope, status, the chains using each and
+	 * how many seams it fits; filters by where it **fits** (genre, pipeline,
+	 * step, seam — its kind is in the seam's `accepts`), type, scope, status,
+	 * origin and use (in a pipeline, on a connection, unplaced, unused);
+	 * bulk Export and Delete.
 	 * A row opens its change form (`/admin/scripts/<id>`), "Add script" the
 	 * add form. Import stays here as an explicit review-then-submit dialog
 	 * (per-script opt-in, source visible, unknown types flagged, re-validated
@@ -28,7 +31,14 @@
 		AdminChangelistColumn,
 		AdminChangelistFilter
 	} from "$lib/client/components/admin/changelist"
-	import { SCRIPT_NOUN, scriptDeletion } from "./scriptsAdmin"
+	import {
+		SCRIPT_NOUN,
+		USE_LABEL,
+		USE_ORDER,
+		scriptDeletion,
+		useFacets,
+		type UseFacet
+	} from "./scriptsAdmin"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { downloadBlob } from "$lib/client/utils/downloadBlob"
 
@@ -64,10 +74,28 @@
 			numeric: true,
 			text: (r) => (r.usedBy.length ? String(r.usedBy.length) : "—"),
 			sortValue: (r) => r.usedBy.length || null
+		},
+		{
+			key: "fits",
+			label: "Fits",
+			numeric: true,
+			text: (r) => (r.fits?.seams ? String(r.fits.seams) : "—"),
+			sortValue: (r) => r.fits?.seams || null
 		}
 	]
 
+	const pipelineName = (slug: string) => view.pipelineLabels?.[slug] ?? slug
+
 	const filters: AdminChangelistFilter<Script>[] = $derived([
+		{ key: "genre", label: "Genre", values: (r) => r.fits?.genres ?? [] },
+		{
+			key: "pipeline",
+			label: "Pipeline",
+			values: (r) => r.fits?.pipelines ?? [],
+			optionLabel: pipelineName
+		},
+		{ key: "step", label: "Step", values: (r) => r.fits?.steps ?? [] },
+		{ key: "seam", label: "Seam", values: (r) => r.fits?.at ?? [] },
 		{ key: "type", label: "Type", values: (r) => r.typeId, optionLabel: (v) => types.get(v)?.name ?? v },
 		{ key: "scope", label: "Scope", values: scopeOf, optionLabel: scopeLabel },
 		{
@@ -87,9 +115,9 @@
 		{
 			key: "use",
 			label: "Use",
-			values: (r) => (r.usedBy.length ? "chained" : "unused"),
-			optionLabel: (v) => (v === "chained" ? "In a chain" : "Unused"),
-			order: ["chained", "unused"]
+			values: (r) => useFacets(r.use ?? []),
+			optionLabel: (v) => USE_LABEL[v as UseFacet] ?? v,
+			order: USE_ORDER
 		}
 	])
 

@@ -25,6 +25,7 @@
 	import SchemaForm from "./SchemaForm.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { queueAfterThis, queuePosition } from "./reviewQueue"
+	import { reviewPlainLine } from "./reviewWording"
 	import { pipelineLabel } from "$lib/client/utils/pipelineGenre"
 
 	const socket = useTypedSocket()
@@ -170,7 +171,8 @@
 		class="fixed inset-0 z-50 flex items-center justify-center bg-surface-950/60 p-4"
 		role="dialog"
 		aria-modal="true"
-		aria-label="Review a pipeline write"
+		aria-labelledby="review-title"
+		aria-describedby="review-plain"
 	>
 		<div
 			class="bg-surface-100-900 flex max-h-[85vh] w-full max-w-lg flex-col gap-3 overflow-y-auto rounded-xl p-4 shadow-xl"
@@ -178,26 +180,37 @@
 			<div class="flex items-start gap-2">
 				<Icons.ShieldQuestion size={20} class="mt-0.5 shrink-0" />
 				<div class="min-w-0 flex-1">
-					<p class="font-semibold">
+					<p class="font-semibold" id="review-title">
 						Waiting for your review{#if queuePosition(queue.length)}
 							<span class="text-surface-600-400 font-normal">
 								· {queuePosition(queue.length)}</span
 							>{/if}
 					</p>
+					<!-- Plain words first (D3): what is about to happen and
+					     what Approve does. The pipeline and the step are under
+					     Details, for whoever wants them. -->
+					<p class="mt-1 text-sm" id="review-plain">
+						{reviewPlainLine(current)}
+					</p>
 					<p class="text-surface-600-400 text-xs">
-						A pipeline is paused before it acts. Nothing happens
-						until you decide — waiting costs nothing.
+						Nothing happens until you decide, and waiting costs
+						nothing.
 						{#if queueAfterThis(queue.length)}
 							· {queueAfterThis(queue.length)}
 						{/if}
 					</p>
 					{#if current.whatIsReviewed}
-						<p class="mt-1 text-sm" data-testid="review-what">
-							<span class="text-surface-600-400"
-								>{specLabel(current.specId)} · step “{current.nodeKey}”:</span
-							>
-							{current.whatIsReviewed}
-						</p>
+						<details class="mt-1 text-xs">
+							<summary class="text-surface-600-400 cursor-pointer">
+								Details
+							</summary>
+							<p class="mt-1" data-testid="review-what">
+								<span class="text-surface-600-400"
+									>{specLabel(current.specId)} · step “{current.nodeKey}”:</span
+								>
+								{current.whatIsReviewed}
+							</p>
+						</details>
 					{/if}
 				</div>
 			</div>
@@ -209,8 +222,8 @@
 					class="preset-tonal-error rounded-lg p-2 text-xs"
 					role="alert"
 				>
-					{lastError} Nothing has happened yet — the run is still waiting
-					on you.
+					{lastError} Nothing has happened yet; it is still waiting on
+					you.
 				</p>
 			{/if}
 
@@ -219,7 +232,7 @@
 					class="btn btn-sm preset-tonal-error"
 					onclick={() => decide("reject")}
 					disabled={submitting}
-					title="Halt the run — a rejection is a halt, not an error"
+					title="Stop here without doing this"
 				>
 					<Icons.X size={14} /> Reject
 				</button>
@@ -228,8 +241,8 @@
 					onclick={() => decide(dirty ? "edit" : "approve")}
 					disabled={submitting}
 					title={dirty
-						? "Continue with your edits — the pipeline receives them as if they were its own"
-						: "Continue with the payload untouched"}
+						? "Continue with your changes, used as if the AI had written them"
+						: "Continue as it is"}
 				>
 					<Icons.Check size={14} />
 					{dirty ? "Approve with edits" : "Approve"}

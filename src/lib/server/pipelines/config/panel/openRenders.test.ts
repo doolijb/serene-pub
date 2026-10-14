@@ -107,3 +107,48 @@ describe("openRenders (typed templates P2)", () => {
 		)
 	})
 })
+
+describe("openRenders with the spec's own renders (owner rulings 2026-10-13)", () => {
+	const slot = assemble.descriptor.slots!.variables as SlotDecl
+	const RANKED = "acme:var/ranked-lore@1"
+	/** Assemble re-pointed, fed by a plugin source declaring that band — no core lore beside it. */
+	const repointed = {
+		nodes: [
+			node("mine", "acme:task/ranked-lore"),
+			node("pool", "core:task/concat-candidates"),
+			node("rank", "core:task/rank-hybrid"),
+			{ ...node("prompt", "core:task/assemble"), renders: { characterLore: RANKED } }
+		],
+		edges: [
+			{ from: "mine", fromPort: "candidates", to: "pool", toPort: "sources.0" },
+			{ from: "pool", fromPort: "candidates", to: "rank", toPort: "candidates" },
+			{ from: "rank", fromPort: "candidates", to: "prompt", toPort: "candidates" }
+		]
+	} as unknown as SpecDocument
+	const withMine = new Map(rows)
+	withMine.set("acme:task/ranked-lore@1", {
+		ports: { in: {} },
+		policy: { bands: { characterLore: RANKED } }
+	})
+
+	it("the key means the spec's variable, and is the node's own key — not a band", async () => {
+		const opened = await openRenders(async () => repointed, "prompt", slot, withMine)
+		expect(opened.renders!.characterLore).toBe(RANKED)
+		expect(opened.renders!.worldLore).toBe("core:var/world-lore@1")
+		expect(opened.bandKeys).toEqual([])
+	})
+
+	it("refuses the same document with core's lore query still upstream, naming both", async () => {
+		const both = {
+			...repointed,
+			nodes: [node("lore", "core:query/lorebook-triggers"), ...repointed.nodes],
+			edges: [
+				{ from: "lore", fromPort: "hits", to: "pool", toPort: "sources.1" },
+				...repointed.edges
+			]
+		} as unknown as SpecDocument
+		await expect(openRenders(async () => both, "prompt", slot, withMine)).rejects.toThrow(
+			/band 'characterLore'.*'lore' \(core:query\/lorebook-triggers@1\).*'mine' \(acme:task\/ranked-lore@1\)/s
+		)
+	})
+})

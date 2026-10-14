@@ -5,10 +5,11 @@
  * The page replaces its session payload wholesale on every streamed chunk, so
  * a section that read the whole payload would rebuild itself, and every
  * granted widget's wire would re-serialise it, once per token. Here the cast,
- * the owner and the sprite-set picks are each read as their own value (the
+ * the owner, the sprite-set picks and the cast's faces are each read as their own value (the
  * same references across a chunk), and the log only through the members'
- * current sprites, reduced to a string: a chunk that changes no member's
- * current sprite leaves the section exactly as it was.
+ * current sprites and last lines' times (W6), each reduced to a string: a
+ * chunk that changes neither leaves the section exactly as it was — a
+ * streamed line keeps its time, so only a new line moves it.
  *
  * Construct during component init; the deriveds belong to the component.
  */
@@ -17,9 +18,12 @@ import type { SessionCharactersV1 } from "@serene-pub/sdk"
 import {
 	castIdsOf,
 	currentSpritesOf,
+	lastSpokeOf,
 	projectCharacters,
 	type CharactersSourceSession
 } from "./characters"
+
+const NO_CAST_FACES: Readonly<Record<number, number>> = Object.freeze({})
 
 export interface CharactersSectionInputs {
 	/** The session the page is on. */
@@ -41,6 +45,8 @@ export function charactersSection(input: CharactersSectionInputs): {
 	const characters = $derived(input.session()?.sessionCharacters)
 	const personas = $derived(input.session()?.sessionPersonas)
 	const picks = $derived(input.session()?.spriteSetOverrides)
+	// One shared empty when the payload carries none, so a chunk keeps the reference.
+	const castFaces = $derived(input.session()?.castFaces ?? NO_CAST_FACES)
 	// Re-read on every chunk, but only a changed current sprite changes the key.
 	const sprites = $derived(
 		currentSpritesOf(
@@ -49,21 +55,31 @@ export function charactersSection(input: CharactersSectionInputs): {
 		)
 	)
 	const spritesKey = $derived(JSON.stringify([...sprites]))
+	const lastSpoke = $derived(
+		lastSpokeOf(
+			castIdsOf({ sessionCharacters: characters, sessionPersonas: personas }),
+			input.session()?.sessionMessages ?? []
+		)
+	)
+	const lastSpokeKey = $derived(JSON.stringify([...lastSpoke]))
 	const current = $derived.by(() => {
 		const id = input.sessionId()
 		if (id == null || loadedId !== id) return undefined
 		void spritesKey
+		void lastSpokeKey
 		return projectCharacters({
 			session: {
 				userId: owner,
 				sessionCharacters: characters,
 				sessionPersonas: personas,
-				spriteSetOverrides: picks
+				spriteSetOverrides: picks,
+				castFaces
 			},
 			viewerUserId: input.viewerUserId(),
 			voicedPersonaId: input.voicedPersonaId(),
 			sceneImages: input.sceneImages(),
-			currentSprites: untrack(() => sprites)
+			currentSprites: untrack(() => sprites),
+			lastSpoke: untrack(() => lastSpoke)
 		})
 	})
 	return {

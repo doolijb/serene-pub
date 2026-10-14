@@ -97,4 +97,44 @@ describe("the shell's sidebar views", () => {
 			expect(footAt).toBeGreaterThan(pushAt)
 		})
 	})
+
+	/**
+	 * Models and Connections are two views (plan 2026-10-11): Models first in
+	 * Tune, both admin-only, each with its own branch.
+	 */
+	describe("Models", () => {
+		it("is registered beside Connections and rendered", () => {
+			expect(source).toMatch(
+				/panelsCtx\.leftNav\.models = \{\s*icon: Icons\.Boxes,\s*title: "Models"/
+			)
+			expect(rendered).toContain("models")
+			expect(source).toContain("<ModelsSidebar bind:onclose")
+		})
+
+		it("leads the Tune group", () => {
+			expect(source).toMatch(
+				/SYSTEM_ORDER = \[\s*"connections",\s*"models",\s*"loadouts",\s*"sampling",\s*"settings"\s*\]/
+			)
+		})
+	})
+
+	/** Loadouts (I12, DESIGN-image-generation §14): admin-only, right after Models. */
+	describe("Loadouts", () => {
+		it("is registered beside Models and rendered", () => {
+			expect(source).toMatch(
+				/panelsCtx\.leftNav\.loadouts = \{\s*icon: Icons\.Combine,\s*title: "Loadouts"/
+			)
+			expect(rendered).toContain("loadouts")
+			expect(source).toContain("<LoadoutsSidebar bind:onclose")
+		})
+	})
+
+	/** The Pipelines rail view is retired (2026-10-12): Admin › Pipelines is the home. */
+	describe("Pipelines", () => {
+		it("is neither registered nor rendered", () => {
+			expect(source).not.toContain("leftNav.pipelines =")
+			expect(source).not.toContain("PipelinesSidebar")
+			expect(source).not.toMatch(/key === "pipelines"/)
+		})
+	})
 })

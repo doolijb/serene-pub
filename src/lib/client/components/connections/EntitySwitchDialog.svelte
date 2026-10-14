@@ -110,7 +110,7 @@
 					<footer class="mt-5 flex justify-end gap-2">
 						<button
 							type="button"
-							class="btn preset-filled-surface-500"
+							class="btn preset-tonal-surface"
 							onclick={onCancel}
 						>
 							{currentName ? `Keep ${currentName}` : "Cancel"}

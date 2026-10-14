@@ -38,7 +38,7 @@
 					</Dialog.Description>
 				</article>
 				<footer class="flex justify-end gap-4">
-					<button class="btn preset-filled-surface-500" onclick={onCancel}>
+					<button class="btn preset-tonal-surface" onclick={onCancel}>
 						Keep editing
 					</button>
 					<button class="btn preset-filled-error-500" onclick={onConfirm}>

@@ -9,34 +9,57 @@
  * channel strip.
  *
  * Pure, so the rule is tested without a page: `SessionLayout` feeds it the
- * placed ids and each one's settings, and hands every copy its channels as
- * the dossier's `composer.channels` (the list the conversation shows rows
- * for and writes on).
+ * placed ids and each one's stored settings, and hands every copy its
+ * channels as the dossier's `composer.channels` (the list the conversation
+ * shows rows for and writes on).
  */
 import { isInstanceOf } from "@serene-pub/sdk"
+import {
+	effectiveWidgetSettings,
+	type WidgetSettingsDecl
+} from "$lib/shared/widgets/settings"
+import { CORE_WIDGETS } from "$lib/shared/widgets/types"
 
 /** The conversation's widget id — the widget every claiming copy is an instance of. */
 export const CONVERSATION_WIDGET = "messages"
 
-/** A copy's claim, read off its settings: a non-empty trimmed `channel`, else none. */
-export function claimOf(settings: Record<string, unknown> | undefined): string | null {
-	const raw = settings?.channel
+/** The conversation's declaration — what a copy's `channel` setting is read against. */
+function conversationDecl(): WidgetSettingsDecl {
+	const w = CORE_WIDGETS.find((d) => d.id === CONVERSATION_WIDGET)
+	return {
+		id: CONVERSATION_WIDGET,
+		title: w?.title ?? "Messages",
+		channels: w?.channels,
+		settings: w?.settings
+	}
+}
+
+/**
+ * A copy's claim: the non-empty trimmed `channel` of its EFFECTIVE settings,
+ * else none. `stored` is the copy's own stored values (its
+ * `widget_settings` row); they are read through the one settings reader
+ * (`effectiveWidgetSettings`, against the conversation's declaration), so a
+ * value the declaration refuses claims nothing here, exactly as it reaches
+ * nothing in the widget.
+ */
+export function claimOf(stored: unknown): string | null {
+	const raw = effectiveWidgetSettings({ decl: conversationDecl(), stored }).channel
 	return typeof raw === "string" && raw.trim() ? raw.trim() : null
 }
 
 /**
  * Every claim in a layout: placed conversation copy → the channel it claims.
  * A placed id that is not a conversation copy claims nothing, whatever its
- * settings say.
+ * settings say. `storedOf` answers each copy's stored values (`claimOf`).
  */
 export function channelClaims(
 	placed: Iterable<string>,
-	settingsOf: (id: string) => Record<string, unknown> | undefined
+	storedOf: (id: string) => unknown
 ): Map<string, string> {
 	const out = new Map<string, string>()
 	for (const id of placed) {
 		if (!isInstanceOf(id, CONVERSATION_WIDGET)) continue
-		const claim = claimOf(settingsOf(id))
+		const claim = claimOf(storedOf(id))
 		if (claim) out.set(id, claim)
 	}
 	return out

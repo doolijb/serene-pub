@@ -66,6 +66,9 @@ function walk(dir: string, out: string[] = []): string[] {
 const NO_PROMPT = new Set([
 	"lib/server/sockets/images.ts",
 	"lib/server/pipelines/runtime/dispatchImage.ts",
+	// `reexpressSprite` constructs the NovelAI image adapter for `expressImage(ref, label)`:
+	// a picture in, a picture out, no prompt and nothing to stop at (2026-10-12, D2).
+	"lib/server/sprites/reexpress.ts",
 	// `activateApiEmbedding` constructs the embedding adapter the star names and
 	// asks it for one vector to learn the width. Nothing about that request has
 	// an end to stop at.

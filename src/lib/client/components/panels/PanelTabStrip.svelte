@@ -31,16 +31,13 @@
 	 * The LABELLED tab strip: a full-width row of equal icon-and-text tabs
 	 * under a rule, with the selected one underlined in primary.
 	 *
-	 * ⚠ Not the only tab strip. `PanelTabList` + `PanelTab` are the ICON-ONLY
-	 * strip a 400px sidebar panel wears — no text at all, because a label that
-	 * can be trimmed reads as a bug (the reasoning lives there). This one is
-	 * for a view whose tabs are few and whose labels are short enough to spell
-	 * out, and for panels that must all stay mounted: it renders the tablist
-	 * and nothing else, so the caller owns its panels and decides what
-	 * `hidden` means for each of them.
-	 *
-	 * The two look the same on purpose — same height, same rule, same primary
-	 * underline — so a person moving between views sees one idiom.
+	 * The app's one tab strip, for tabs inside a detail. A view's own places
+	 * are a section list (`SectionList`), not tabs — the icon-only
+	 * `PanelTabList` + `PanelTab` rail was retired for it (2026-10-09). This
+	 * is for a detail whose tabs are few and whose labels are short enough to
+	 * spell out, and for panels that must all stay mounted: it renders the
+	 * tablist and nothing else, so the caller owns its panels and decides
+	 * what `hidden` means for each of them.
 	 *
 	 * ## Ids
 	 *
@@ -143,8 +140,9 @@
 			{#if tab.count != null}
 				<span
 					class="text-surface-600-400 shrink-0 text-[11px] font-normal tabular-nums"
-					>{tab.count}</span
 				>
+					{tab.count}
+				</span>
 			{/if}
 		</button>
 	{/each}

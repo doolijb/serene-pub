@@ -20,7 +20,7 @@
  * ## The split and the ladder are two different things
  *
  * The live side zones resolve their width and their COLUMN COUNT from a rule
- * ladder (`DEFAULT_SIDE_RULES` in ./schema) — and from 2400px up that ladder
+ * ladder (the SDK's `DEFAULT_SIDE_RULES`) — and from 2400px up that ladder
  * turns each rail into a 344px TWO-column grid. The editor's ¼ | ½ | ¼ does not
  * follow it, and deliberately: a SIDE TRACK of `.edit-canvas` is the app
  * shell's own reclaimed margin — the box a rail rides IN, not the rail.

@@ -89,7 +89,7 @@ export interface PresenceAt {
  * story, not this line's (the same cut every dated row takes: a presence is
  * dated by its arrival). Never a sibling line's.
  *
- * ⚠ The one filter. The member page's list, the World bar (`appearancesOf`)
+ * ⚠ The one filter. The member page's list, the roster popover (`appearancesOf`)
  * and the Lives lens all read through it, so one screen cannot list a
  * presence another says is not on the line.
  */

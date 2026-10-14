@@ -18,7 +18,11 @@
 
 import type { Component } from "svelte"
 import type { Line } from "$lib/shared/lorebooks/lineReading"
-import type { LoreLens, LoreRoute, LoreScope } from "$lib/shared/lorebooks/loreRoute"
+import type {
+	LoreLens,
+	LoreRoute,
+	LoreScope
+} from "$lib/shared/lorebooks/loreRoute"
 import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
 import type { LoreLayoutMode } from "../layoutMode"
 import type { LoreDrawing } from "../graphs"
@@ -75,7 +79,7 @@ export interface LensEmptyCopy {
 export interface LensDescriptor {
 	/** The route's spelling (`?lens=`); the registry holds every `LORE_LENSES` id. */
 	readonly id: LoreLens
-	/** The lens row's label, and the button's name. */
+	/** The lens track's label (its tooltip), and the button's name. */
 	readonly label: string
 	/** NOMENCLATURE §22: the lens's icon is canon here (I2, declared source). */
 	readonly icon: Component<any>
@@ -168,7 +172,11 @@ export interface LensBench {
 		onLeave: () => void
 	} | null
 	/** Ask the entry editor to focus a field (a loose end's fix). */
-	readonly focusField: { entryId: number; field: ChoreField; n: number } | null
+	readonly focusField: {
+		entryId: number
+		field: ChoreField
+		n: number
+	} | null
 	/** Ask the Cast board to open Suggestions or Duplicates. */
 	readonly suggestionsRequest: {
 		tab: "suggestions" | "duplicates"

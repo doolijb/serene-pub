@@ -146,6 +146,66 @@ Output ONLY in this exact format — no other text before or after:
 	}
 }
 
+// ── Phase 1 over a rendered transcript ──────────────────────────────────────
+
+/** What goes between the `<content>` tags, per kind of entry — the shapes `buildBatchPrompt` asks for. */
+const CONTENT_SHAPE: Record<
+	"world" | "history" | "character" | "scene",
+	string
+> = {
+	character:
+		"• [Character fact, ability, relationship, or event]\n• [Character fact, ability, relationship, or event]",
+	history: "• [Key event or change]\n• [Key event or change]",
+	scene: "[Scene summary paragraph(s)]",
+	world: "• [World lore fact or change]\n• [World lore fact or change]"
+}
+
+/** `{{batch}}`, `{{{batch}}}` or `{{ batch }}` — where a drafting row places the transcript. */
+const BATCH_PLACEHOLDER = /\{\{\{?\s*batch\s*\}?\}\}/
+
+/**
+ * 🚧 Phase 1 when the batch is **text** (live scenes §13–§14): the
+ * genre-owned summarize-scene specs hand each batch to the drafting step
+ * already laid out by the genre's transcript template, and their drafting
+ * rows place it with `{{batch}}`.
+ *
+ * The row is the system prompt, as on the JSON path, with the transcript put
+ * where the row says — verbatim, never through an engine, so a quote or an
+ * ampersand in the story reaches the model as written. A row with no
+ * `{{batch}}` (one written for the JSON path, picked for a genre spec) has the
+ * transcript appended under a heading rather than dropped, and no row at all
+ * falls back to the kind of entry's own default. The user prompt is the topic
+ * line and the `<content>` contract the JSON path ends on, so the reply parses
+ * the same way.
+ */
+export function buildTranscriptBatchPrompt(opts: {
+	transcript: string
+	loreType: "world" | "history" | "character" | "scene"
+	topic?: string
+	prompt?: string | null
+}): SummaryPrompt {
+	const { transcript, loreType, topic } = opts
+	const row = opts.prompt?.trim()
+		? opts.prompt
+		: `${buildBatchPrompt({ jsonMessages: "", loreType }).systemPrompt}\n\nThe transcript:\n{{batch}}`
+	const placed = BATCH_PLACEHOLDER.test(row)
+		? row.replace(
+				new RegExp(BATCH_PLACEHOLDER.source, "g"),
+				() => transcript
+			)
+		: `${row}\n\nThe transcript:\n${transcript}`
+	const topicLine = topic?.trim()
+		? `Focus specifically on: "${topic.trim()}"\n\n`
+		: ""
+	return {
+		systemPrompt: placed,
+		userPrompt: `${topicLine}Output ONLY in this exact format — no other text before or after:
+<content>
+${CONTENT_SHAPE[loreType] ?? CONTENT_SHAPE.world}
+</content>`
+	}
+}
+
 // ── Name generation prompt ───────────────────────────────────────────────────
 
 export function buildNamePrompt(opts: {

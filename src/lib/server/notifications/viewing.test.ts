@@ -20,6 +20,12 @@ const snap = (over: Partial<ViewingSnapshot> = {}): ViewingSnapshot => ({
 })
 
 describe("parseViewing", () => {
+	it("keeps the Messages address when the tab sends one, and refuses a malformed one", () => {
+		const raw = { ...snap({ activeView: "conversations" }), messagesHref: "/messages/7" }
+		expect(parseViewing(raw)?.messagesHref).toBe("/messages/7")
+		expect(parseViewing({ ...raw, messagesHref: 7 })).toBeNull()
+	})
+
 	it("keeps a well-formed snapshot, field for field, and drops extras", () => {
 		const raw = { ...snap({ activeView: "admin", adminHref: "/admin/data" }), extra: 1 }
 		expect(parseViewing(raw)).toEqual(

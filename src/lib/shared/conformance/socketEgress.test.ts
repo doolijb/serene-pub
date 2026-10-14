@@ -480,6 +480,18 @@ const BARE = SITES.filter((s) => !s.redacting).map((s) => s.subject)
 const REDACTING_EMITTERS: Deliberate[] = [
 	{
 		subject:
+			"src/lib/server/sockets/connections.ts :: replyToAsker → socket.emit(<computed>)",
+		reason:
+			"The create ack (`connections:create`) answers the socket that asked " +
+			"and no other: a second tab mid-way through its own New connection " +
+			"dialog must not have it closed by a sibling's create. The room is " +
+			"that socket and the subject is its own `socket.user`, so recipient " +
+			"and subject are the same person — redacted per socket, as " +
+			"`emitToUser` does per room. The list that follows still goes to " +
+			"the user room."
+	},
+	{
+		subject:
 			"src/lib/server/sockets/attachments.ts :: replyToAsker → socket.emit(<computed>)",
 		reason:
 			"The composer tray's asker-only replies (`attachments:begin`, " +

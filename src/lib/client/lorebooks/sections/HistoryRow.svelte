@@ -50,7 +50,7 @@
 	{/if}
 	{#if compiling?.status === "running"}
 		<button
-			class="preset-filled-tertiary-500 rounded px-1.5 py-0.5 text-xs"
+			class="preset-tonal-warning rounded px-1.5 py-0.5 text-xs"
 			title="Compiling. Click to view progress"
 			onclick={(e) => {
 				e.stopPropagation()

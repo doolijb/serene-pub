@@ -2,7 +2,8 @@
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	/**
 	 * Pub › General — who this instance is and who may use it: its
-	 * language, user accounts, the shared community-library account, the
+	 * language, user accounts, messages between people, the shared
+	 * community-library account, the
 	 * instance-wide scripts switch, and how sessions write to lorebooks. Split out of the old one-page System settings (2026-09-27);
 	 * each card owns its own save.
 	 */
@@ -14,6 +15,7 @@
 	import AccountsCard from "$lib/client/components/admin/pub/AccountsCard.svelte"
 	import CharaVaultCard from "$lib/client/components/admin/pub/CharaVaultCard.svelte"
 	import ScriptsCard from "$lib/client/components/admin/pub/ScriptsCard.svelte"
+	import MessagingCard from "$lib/client/components/admin/pub/MessagingCard.svelte"
 	import LoreWriteModeCard from "$lib/client/components/admin/pub/LoreWriteModeCard.svelte"
 
 	let systemSettingsCtx: SystemSettingsCtx = $state(
@@ -46,6 +48,9 @@
 			     change regardless. -->
 			{#if !systemSettingsCtx.settings.isAndroidWrapper}
 				<AccountsCard />
+				<!-- Messages need accounts, so they sit with them and are
+				     absent where accounts are (Android). -->
+				<MessagingCard />
 			{/if}
 			<CharaVaultCard bind:hasUnsavedChanges={charaVaultDirty} />
 			<ScriptsCard />

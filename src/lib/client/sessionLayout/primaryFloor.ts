@@ -24,23 +24,27 @@
  *
  * "Placed" means DRAWN (`drawnIdsOf`), never merely named: a grid entry or a
  * zone list that the arrangement shadows puts nothing on screen, so it does
- * not satisfy the floor either.
+ * not satisfy the floor either. What is drawn is the SDK's one reading of a
+ * layout (`resolveDrawn`, `drawnOf` here); the floor never reads the three
+ * places a second way.
  *
  * Pure: the session layout feeds it the three places a widget can be placed
  * (the side zone lists, the middle widget grid, the saved arrangement).
  */
 import {
 	type ArrangedGridV1,
-	drawnWidgetIds,
+	type DrawnLayout,
+	drawnInstances,
 	isInstanceOf,
 	primaryPlaced,
+	resolveDrawn,
 	type SessionLayoutV1,
 	type WidgetGridV1,
 	type ZoneLayoutV1
 } from "@serene-pub/sdk"
-import { firstSlot, makeRoom } from "./arrangedGeometry"
-import { withoutWidget } from "./schema"
-import { defaultChatLayout } from "./widgetGrid"
+import { firstSlot, loadArranged, makeRoom } from "./arrangedGeometry"
+import { normalizeZoneLayout, withoutWidget } from "./schema"
+import { defaultChatLayout, loadChatLayout } from "./widgetGrid"
 
 /** The three places a session layout places widgets. */
 export interface SessionPlacement {
@@ -59,32 +63,72 @@ interface FrameCells {
 }
 
 /**
- * Every id the layout DRAWS, in reading order: middle, left, right, then the
- * strips — the SDK's one reading of the page's precedence (`drawnWidgetIds`),
- * so the floor, a genre's check and any other reader agree on what "placed"
- * means:
+ * What these three places DRAW, and where, in a session box `box.inline` px
+ * wide — the SDK's `resolveDrawn`, the one reading of the page's precedence:
  *
  * - the middle draws its arranged frame whenever one exists (an emptied middle
  *   stays empty), else the grid's middle;
  * - a side draws its arranged frame when it places anything, else its zones'
  *   lists — and, folded into them, any grid entry naming that side, but only
- *   when the template has a zone on that side to fold it into;
+ *   when the template has a zone on that side to fold it into; the width
+ *   ladder then says how an un-arranged side is drawn;
  * - a strip draws its list.
  *
- * So a grid entry or a list entry the arrangement shadows is named but not
- * drawn, and is not counted.
+ * Every instance carries one `pinned` (`pinnedOf`: absent means pinned). The
+ * box only moves a side's ladder rung; membership is the same at any width.
  */
-export function drawnIdsOf(p: SessionPlacement): string[] {
-	return drawnWidgetIds(sessionLayoutOf(p))
+export function drawnOf(
+	p: SessionPlacement,
+	box: { inline: number; block?: number } = { inline: 0 }
+): DrawnLayout {
+	return resolveDrawn(sessionLayoutOf(p), box)
 }
 
 /**
- * The session layout's arrangement these three places are — what the SDK's
- * readers take (`drawnWidgetIds`, `primaryPlaced`), so the floor asks them
+ * Every id the layout DRAWS, in reading order: middle, left, right, then the
+ * strips (`drawnOf`), so the floor, a genre's check and any other reader
+ * agree on what "placed" means. A grid entry or a list entry the arrangement
+ * shadows is named but not drawn, and is not counted.
+ */
+export function drawnIdsOf(p: SessionPlacement): string[] {
+	return drawnInstances(drawnOf(p)).map((i) => i.instanceId)
+}
+
+/**
+ * The session layout these three places are — the input the SDK's reader
+ * takes (`resolveDrawn`, and `primaryPlaced` over it), so the floor asks it
  * rather than a second reading of its own.
  */
 export function sessionLayoutOf(p: SessionPlacement): SessionLayoutV1 {
 	return { zoneLayout: p.zones, widgetGrid: p.grid, arrangedGrid: p.arranged }
+}
+
+/**
+ * A STORED session layout — a preset's `layout`, a genre's shipped one, any
+ * blob this build did not write — as the three places, repaired the way the
+ * page repairs its own (`normalizeZoneLayout`, `loadChatLayout`,
+ * `loadArranged`: retired ids out, malformed entries dropped, every cell back
+ * inside its frame) and with the primary floor applied. So `drawnOf` of it is
+ * what applying that layout would draw. The one place a stored blob's three
+ * slots are read into a placement; anything that is not an object reads as a
+ * layout that saved nothing.
+ */
+export function readStoredLayout(
+	layout: unknown,
+	primaryId = "messages",
+	omit: ReadonlySet<string> = new Set()
+): SessionPlacement {
+	const blob: SessionLayoutV1 =
+		layout && typeof layout === "object" && !Array.isArray(layout) ? layout : {}
+	const { zoneLayout, widgetGrid, arrangedGrid } = blob
+	return withPrimaryFloor(
+		{
+			zones: normalizeZoneLayout(zoneLayout),
+			grid: loadChatLayout(widgetGrid, primaryId, omit),
+			arranged: loadArranged(arrangedGrid)
+		},
+		primaryId
+	)
 }
 
 /** The placed instances of `primaryId` — the bare id and every `#name` copy. */

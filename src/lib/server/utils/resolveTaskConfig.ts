@@ -1,4 +1,6 @@
+import { and, eq } from "drizzle-orm"
 import { db } from "$lib/server/db"
+import * as schema from "$lib/server/db/schema"
 import {
 	resolveCapabilityTarget,
 	TEXT_CAPABILITY,
@@ -60,8 +62,8 @@ export interface ResolvedTaskConfig {
  *
  *   pair      the calling node's own slots → the instance's `text->text`
  *             default
- *   sampling  the session's own `sampling_config_id` → the node's own slot →
- *             the instance default
+ *   sampling  the session's own pick (its pipeline panel row on the oracle's
+ *             `sampling` slot) → the node's own slot → the instance default
  *
  * The floor is the capability default, and `resolveCapabilityTarget` reads it
  * — this function's job is to say what ITS own tiers said, not to have an
@@ -92,14 +94,9 @@ export async function resolveTaskConfig(params: {
 	const { sessionId } = params
 
 	// ── The session's own override — SAMPLING, and nothing else ──────────────
-	let sessionSamplingId: number | null = null
-	if (sessionId) {
-		const session = await db.query.sessions.findFirst({
-			where: (c, { eq }) => eq(c.id, sessionId),
-			columns: { samplingConfigId: true }
-		})
-		sessionSamplingId = session?.samplingConfigId ?? null
-	}
+	const sessionSamplingId = sessionId
+		? await sessionSamplingPick(sessionId)
+		: null
 
 	// ── The instance's capability default, and the guard ──────────────────────
 	//
@@ -141,4 +138,45 @@ export async function resolveTaskConfig(params: {
 		connectionName: target.connection.name ?? "System default",
 		samplingName: target.sampling?.name ?? "System default"
 	}
+}
+
+/**
+ * The session's own sampling pick: the session-scope pipeline panel row on the
+ * oracle's `sampling` slot of the pipeline serving its turns
+ * (`sessionPipeline`), or null when it set none.
+ *
+ * The one session layer — the same row the executor projects at `session`
+ * scope (`world.ts`, `applyPipelineLayer`), so a run outside the executor
+ * samples with the pick the session's Pipelines card shows. The panel stores
+ * the id as a JSON number; a value that is not a whole id is no pick.
+ */
+async function sessionSamplingPick(sessionId: number): Promise<number | null> {
+	const [session] = await db
+		.select({ genreId: schema.sessions.genreId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	if (!session) return null
+	const [{ sessionPipeline }, { ORACLE_NODE_KEY }] = await Promise.all([
+		import("$lib/server/pipelines/entities/sessionGenres"),
+		import("$lib/server/pipelines/config/world")
+	])
+	const pipeline = await sessionPipeline(db, sessionId, session.genreId)
+	if (!pipeline) return null
+	const [row] = await db
+		.select({ value: schema.pipelineNodeOverrides.value })
+		.from(schema.pipelineNodeOverrides)
+		.where(
+			and(
+				eq(schema.pipelineNodeOverrides.specId, pipeline.specId),
+				eq(schema.pipelineNodeOverrides.scopeKind, "session"),
+				eq(schema.pipelineNodeOverrides.scopeId, sessionId),
+				eq(schema.pipelineNodeOverrides.nodeKey, ORACLE_NODE_KEY),
+				eq(schema.pipelineNodeOverrides.slot, "sampling"),
+				eq(schema.pipelineNodeOverrides.path, "")
+			)
+		)
+		.limit(1)
+	const id = Number(row?.value)
+	return row?.value != null && Number.isInteger(id) && id > 0 ? id : null
 }

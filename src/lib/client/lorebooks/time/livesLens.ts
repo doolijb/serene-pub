@@ -14,10 +14,7 @@ import {
 	dateValue,
 	type StoryDate
 } from "$lib/shared/lorebooks/storyDate"
-import {
-	presencesOnLine,
-	type Presence
-} from "$lib/shared/lorebooks/presence"
+import { presencesOnLine, type Presence } from "$lib/shared/lorebooks/presence"
 import { MAIN_LINE, type Line } from "$lib/shared/lorebooks/lineReading"
 
 export interface LaneRun {
@@ -134,7 +131,7 @@ export function buildAxis(
 ): Axis {
 	// ⚠ `presencesOnLine`, the filter `appearancesOf` reads by: the line's own
 	// and its ancestors' presences, an ancestor's only when it began by that
-	// line's fork cut — so the weave and the World bar name the same people.
+	// line's fork cut — so the weave and the roster popover name the same people.
 	const mine = presencesOnLine(presences, at.line ?? MAIN_LINE)
 
 	const values: number[] = pins.map(dateValue)

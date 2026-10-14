@@ -64,12 +64,24 @@ export const LORE_WRITES_OFF =
 	`Its owner can change this in ${LORE_WRITE_MODE_SETTING}.`
 
 /**
+ * The notice's sentence on its own: what Off means for this screen. The
+ * notice draws it beside a button that opens the setting (less-confusing
+ * G6), so the button, not the sentence, says where the setting is.
+ */
+export const LORE_WRITES_OFF_NOTICE_LEAD =
+	"Lorebook writes from sessions are off, so this can't be saved to the lorebook."
+
+/** The notice's button: opens Settings › User, where the setting lives. */
+export const LORE_WRITES_OFF_NOTICE_ACTION = "Change it in Settings › User"
+
+/**
  * Said before the work, by a review screen that could not save under Off —
  * screens only the lorebook's owner opens, so it names their own setting.
+ * The whole sentence, for a surface that cannot open Settings (an error
+ * line, a notice drawn with no shell around it).
  */
 export const LORE_WRITES_OFF_NOTICE =
-	`Lorebook writes from sessions are off, so this can't be saved to the lorebook. ` +
-	`Change this in ${LORE_WRITE_MODE_SETTING}.`
+	`${LORE_WRITES_OFF_NOTICE_LEAD} ` + `Change this in ${LORE_WRITE_MODE_SETTING}.`
 
 /** Whether a value is one of the three modes. */
 export function isLoreWriteMode(value: unknown): value is LoreWriteMode {

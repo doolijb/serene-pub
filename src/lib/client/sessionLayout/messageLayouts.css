@@ -388,7 +388,8 @@ button[data-widget-part~="messages.message-name"]:hover {
 [data-widget-part~="messages.message"] button:focus-visible,
 [data-widget-part~="messages.message"] [role="button"]:focus-visible,
 [data-widget-part~="messages.history-marker"]:focus-visible,
-[data-widget-part~="messages.scene-title"]:focus-visible {
+[data-widget-part~="messages.scene-title"]:focus-visible,
+[data-widget-part~="messages.scene-name-field"]:focus-visible {
 	outline: 2px solid var(--color-primary-500);
 	outline-offset: 2px;
 }
@@ -532,6 +533,226 @@ button[data-widget-part~="messages.scene-title"]:hover {
 	font-size: 0.75rem;
 	font-weight: 400;
 	color: var(--color-surface-500);
+}
+
+/* 🚧 A scene divider (live scenes §7): one quiet line where a scene begins —
+   its swatch and name in the scene's colour (`--sp-scene`, set on the item),
+   then its day, its count and its faces in muted 12px, the ⋯ at the end. A
+   rule runs from the facts to the menu so the boundary reads as a line
+   across the log, not a heading. */
+[data-widget-part~="messages.scene-divider-body"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.25rem 0.5rem;
+	padding: 0.25rem 0;
+	min-inline-size: 0;
+}
+[data-widget-part~="messages.scene-swatch"] {
+	inline-size: 0.625rem;
+	block-size: 0.625rem;
+	flex: none;
+	border-radius: 9999px;
+	background: var(--sp-scene, var(--color-surface-500));
+}
+[data-widget-part~="messages.scene-name-field"] {
+	min-inline-size: 8rem;
+	max-inline-size: 20rem;
+	padding: 0.125rem 0.5rem;
+	border: 1px solid var(--color-surface-300);
+	border-radius: 6px;
+	background: var(--color-surface-50);
+	font-family: var(--typo-heading--font-family);
+	font-size: 0.875rem;
+	font-weight: 600;
+	color: inherit;
+}
+[data-mode="dark"] [data-widget-part~="messages.scene-name-field"] {
+	border-color: var(--color-surface-700);
+	background: var(--color-surface-950);
+}
+[data-widget-part~="messages.scene-facts"],
+[data-widget-part~="messages.scene-summary"] {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	font-size: 0.75rem;
+	line-height: 1.4;
+	color: var(--color-surface-500);
+}
+[data-widget-part~="messages.scene-faces"] {
+	display: inline-flex;
+	align-items: center;
+	margin-inline-start: auto;
+}
+[data-widget-part~="messages.scene-face"] {
+	display: inline-grid;
+	place-items: center;
+	inline-size: 1.25rem;
+	block-size: 1.25rem;
+	border-radius: 9999px;
+	object-fit: cover;
+	font-size: 0.625rem;
+	font-weight: 600;
+	background: var(--color-surface-200);
+	color: var(--color-surface-700);
+	box-shadow: 0 0 0 2px var(--color-surface-50);
+}
+[data-widget-part~="messages.scene-face"] + [data-widget-part~="messages.scene-face"] {
+	margin-inline-start: -0.375rem;
+}
+[data-mode="dark"] [data-widget-part~="messages.scene-face"] {
+	background: var(--color-surface-800);
+	color: var(--color-surface-300);
+	box-shadow: 0 0 0 2px var(--color-surface-950);
+}
+[data-widget-part~="messages.scene-faces-more"] {
+	margin-inline-start: 0.25rem;
+	font-size: 0.6875rem;
+	color: var(--color-surface-500);
+}
+/* The ⋯ sits at the line's end; after the faces, beside them. */
+[data-widget-part~="messages.scene-menu"] {
+	display: inline-flex;
+	margin-inline-start: auto;
+}
+[data-widget-part~="messages.scene-faces"] + [data-widget-part~="messages.scene-menu"] {
+	margin-inline-start: 0;
+}
+/* 🚧 The divider's drag grip (lane E): quiet until the divider is hovered or
+   the grip held; the drag itself is the host's (`sp-drag-handle`). */
+[data-widget-part~="messages.scene-drag"] {
+	display: inline-flex;
+	flex: none;
+}
+[data-widget-part~="messages.scene-grip"] {
+	display: inline-grid;
+	place-items: center;
+	inline-size: 1rem;
+	block-size: 1.25rem;
+	margin-inline-start: -0.25rem;
+	color: var(--color-surface-500);
+	opacity: 0.5;
+	cursor: grab;
+	touch-action: none;
+}
+[data-widget-part~="messages.scene-divider"]:hover [data-widget-part~="messages.scene-grip"],
+[data-widget-part~="messages.scene-grip"]:active {
+	opacity: 1;
+}
+[data-widget-part~="messages.scene-grip"]:active {
+	cursor: grabbing;
+}
+/* A summary a moved boundary left behind: said, in the warning's tone. */
+[data-widget-part~="messages.scene-summary-stale"] {
+	color: var(--color-warning-700);
+}
+[data-mode="dark"] [data-widget-part~="messages.scene-summary-stale"] {
+	color: var(--color-warning-400);
+}
+/* 🚧 A finished run waiting for the person (§15 G8): *Ready to review*, a
+   quiet text button in the primary tone that opens the review. */
+[data-widget-part~="messages.scene-summary-review"] {
+	padding: 0;
+	border: 0;
+	background: none;
+	font: inherit;
+	font-size: 0.75rem;
+	font-weight: 600;
+	color: var(--color-primary-700);
+	cursor: pointer;
+}
+[data-widget-part~="messages.scene-summary-review"]:hover {
+	text-decoration: underline;
+}
+[data-mode="dark"] [data-widget-part~="messages.scene-summary-review"] {
+	color: var(--color-primary-300);
+}
+/* 🚧 A scene cue's chip (Suggested mode, lane E): in the divider's slot, one
+   quiet line — the question and why in muted 12px, then Yes and Not here as
+   small text buttons. A suggestion, so it never shouts. */
+[data-widget-part~="messages.scene-cue-body"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.25rem 0.5rem;
+	padding: 0.25rem 0;
+	font-size: 0.75rem;
+	line-height: 1.4;
+	color: var(--color-surface-600);
+}
+[data-mode="dark"] [data-widget-part~="messages.scene-cue-body"] {
+	color: var(--color-surface-400);
+}
+[data-widget-part~="messages.scene-cue-icon"] {
+	color: var(--color-primary-600);
+}
+[data-mode="dark"] [data-widget-part~="messages.scene-cue-icon"] {
+	color: var(--color-primary-400);
+}
+[data-widget-part~="messages.scene-cue-text"] {
+	font-weight: 600;
+}
+[data-widget-part~="messages.scene-cue-reason"] {
+	font-weight: 400;
+}
+[data-widget-part~="messages.scene-cue-accept"],
+[data-widget-part~="messages.scene-cue-decline"] {
+	padding: 0.125rem 0.5rem;
+	border: 0;
+	border-radius: 6px;
+	background: none;
+	font: inherit;
+	font-weight: 600;
+	cursor: pointer;
+}
+[data-widget-part~="messages.scene-cue-accept"] {
+	color: var(--color-primary-700);
+}
+[data-mode="dark"] [data-widget-part~="messages.scene-cue-accept"] {
+	color: var(--color-primary-300);
+}
+[data-widget-part~="messages.scene-cue-decline"] {
+	color: var(--color-surface-600);
+}
+[data-mode="dark"] [data-widget-part~="messages.scene-cue-decline"] {
+	color: var(--color-surface-400);
+}
+[data-widget-part~="messages.scene-cue-accept"]:hover,
+[data-widget-part~="messages.scene-cue-decline"]:hover {
+	background: var(--color-surface-200);
+}
+[data-mode="dark"] [data-widget-part~="messages.scene-cue-accept"]:hover,
+[data-mode="dark"] [data-widget-part~="messages.scene-cue-decline"]:hover {
+	background: var(--color-surface-800);
+}
+[data-widget-part~="messages.scene-cue-accept"]:focus-visible,
+[data-widget-part~="messages.scene-cue-decline"]:focus-visible {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: 1px;
+}
+[data-widget-part~="messages.scene-cue-accept"][aria-disabled="true"],
+[data-widget-part~="messages.scene-cue-decline"][aria-disabled="true"] {
+	opacity: 0.5;
+	cursor: default;
+}
+/* A refusal, said where it was asked: under a line, in a divider, or above
+   the selection bar. The error's tone in text, never a toast. */
+[data-widget-part~="messages.scene-refusal"] {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	margin: 0.125rem 0;
+	font-size: 0.8125rem;
+	line-height: 1.4;
+	color: var(--color-error-700);
+}
+[data-mode="dark"] [data-widget-part~="messages.scene-refusal"] {
+	color: var(--color-error-400);
+}
+[data-widget-part~="messages.scene-refusal-text"] {
+	flex: 1;
+	min-inline-size: 0;
 }
 
 /* ── Message state (all styles) ─────────────────────────────────────────── */

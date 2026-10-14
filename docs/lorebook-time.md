@@ -10,25 +10,34 @@ You will know how to date your history, read your book as it stood at any point 
 
 A **history entry** is something that happened, anchored to a date: a year, optionally a month and a day. The History list keeps them in date order and refuses a date that would put an entry out of order with its neighbours. History always stands at the top level of the book: it is never filed inside another entry, though other lore can be filed under it.
 
-A history entry without a year is listed under **Undated history** in the book's [Loose ends](./lorebooks.md#finding-your-way-around-a-book), which opens it with the date ready to fill in. In the **Time** lens the timeline and the editor sit side by side, split by the same divider as the entry list (drag it, or use the arrow keys; the width is shared).
+A history entry without a year is listed under **Undated history** in the book's [Loose ends](./lorebooks.md#finding-your-way-around-a-book), which opens it with the date ready to fill in. In **Show as › Time** the timeline and the editor sit side by side, split by the same divider as the entry list (drag it, or use the arrow keys; the width is shared).
 
-In the Time lens, entries with no date are listed under **Not on the line**. Drag one onto the line to date it where you drop it, or press it to date it at the end of the line. A history entry opens in the editor with that date filled in, ready to save; anything else gets a new dated history entry about it. If the entry you have open has unsaved changes, you're asked first, and **Cancel** leaves it exactly as you typed it.
+In **Show as › Time**, entries with no date are listed under **Not on the timeline**. Drag one onto the timeline to date it where you drop it, or press it to date it at the end of the timeline. A history entry opens in the editor with that date filled in, ready to save; anything else gets a new dated history entry about it. If the entry you have open has unsaved changes, you're asked first, and **Cancel** leaves it exactly as you typed it.
 
 **Add the next date in sequence** (the calendar-plus button over the history list) adds an entry one step after the latest: the next day, or the next month or year if the latest entry only has a month or a year.
 
-A **scene** is a saved run of consecutive messages from a session, with a name, a summary and a list of who was there. You don't type scenes: you capture them from a session with **Summarize to lorebook**, and each one sits under the history entry it belongs to — in the **Time** lens's list, nested beneath it. Deleting the messages, or the whole session, later keeps the scene's name, summary and cast. A message can only be in one scene.
+A **scene** is a saved run of consecutive messages from a session, with a name, a summary and a list of who was there. You don't type scenes: you capture them from a session with **Summarize to lorebook**, and each one sits under the history entry it belongs to — in **Show as › Time**'s list, nested beneath it. Deleting the messages, or the whole session, later keeps the scene's name, summary and cast. A message can only be in one scene.
 
 On a history entry with scenes, **Compile to entry** has the model write the entry's content from its scenes, and shows you the changes before anything is saved. See [Summarization](./summarization.md) for capturing scenes, processing them and compiling.
 
 ## Reading the book at a moment
 
-The **moment bar** along the bottom of the workspace is the story's timeline. It has a tick for every dated entry, and its **now** end names the story's present.
+The **moment bar** along the bottom of the workspace is the book's one place for time. From left to right it holds:
 
-- **Drag it, click a tick, or use the arrow keys** to step between the book's dated moments.
+- the **line** chip, naming the line of the story you're reading (see [Branches](#branches));
+- the moment in words: **Reading now**, or **Reading as of ‹date›**;
+- the story's timeline, with a tick for every dated entry; its **now** end names the story's present;
+- **Go to date…** and **Open timeline** (**Show as › Time**, the same timeline drawn large); and, while you read at a date, **Make this the present** and **Return to now**.
+
+To move through the story:
+
+- **Drag the timeline, click a tick, or use the arrow keys** to step between the book's dated moments.
 - **Go to date…** stands you at any date, even one nothing happened on. A date the book's calendar doesn't have is refused, never rounded.
-- **Return to now** (in the banner above the editor) brings you back.
+- **Return to now**, at the right end of the bar, brings you back.
 
-While you read at a moment, the book shows what was true then: dated entries and links appear only once they've happened, and cast members who don't appear in the story yet are listed dimmed. Undated entries always show.
+While you read at a date, the whole bar is tinted, and beside the date it says what saving does there (see [Amendments](#amendments-changes-that-start-at-a-date)) and how many entries the book holds at that moment. The book shows what was true then: dated entries and links appear only once they've happened, and cast members who don't appear in the story yet are listed dimmed. Undated entries always show.
+
+On a narrow screen, or docked beside a session, the bar folds to one line: the line chip, the moment, and **Return to now** while you're away from now. Tap the moment to open the rest of the bar, and tap it again to fold it.
 
 The moment bar is only your view. Moving it never changes what a session reads; sessions have their own clock (see [The story clock](#the-story-clock)).
 
@@ -86,7 +95,29 @@ With a calendar, every date in the workspace and the date the model is told are 
 
 The **clock** is where the story stands: its present. With no clock set, the present is the newest history entry. **Set the clock** when the story stands somewhere else: between entries, before the latest one, or at a time of day. Once set, **Next day** (or **Next month**, **Next year**, as precise as the clock's date) steps it on, **Move the clock** changes it, and **Follow the newest entry** clears it. While reading as of a date, **Make this the present** on the moment bar sets the clock there.
 
-**Each session can have its own clock.** A session follows the book's present until you set its **Story clock** in the session's settings, or a pipeline step such as **Advance story clock** moves it (see [Where the session reads its lorebook](./sessions.md#where-the-session-reads-its-lorebook)). Two sessions on one book can stand at different dates, and moving a session's clock never moves the book's.
+**Each session can have its own clock.** A session follows the book's present until you set its **Story clock** in the session's settings, or a pipeline step such as **Advance story clock** moves it (see [Where the session reads its lorebook](./sessions.md#where-the-session-reads-its-lorebook)). Two sessions on one book can stand at different dates, and moving a session's clock never moves the book's. The session's **Chronicle** widget shows its clock and moves it in place: **Next day**, **Move the clock…** and **Follow the line's present** (see [Session layout](./session-layout.md#the-widgets)).
+
+**What moves a session's clock.** Only a person or a fixed tick, never the model on its own:
+
+- **Time passes…**, an action above the composer, moves it by the amount you pick (see [Sessions](./sessions.md#time-passes)).
+- In Adventure, the state-keeper can suggest how long a scene or a rest took. The clock moves only when you accept, or at once when the session trusts the narrator (see [Adventure](./genre-adventure.md#time-the-scene-took)).
+- Chat's reply can tick it on by a fixed amount after every reply: the reply pipeline's step **Each reply advances the clock by** (**By** and **Unit**; **By** 0, the default, is off). The session's owner sets it in the session's settings, under **The story**, below the story clock; an administrator sets it for every session in **Admin › Pipelines**, on Chat's **Reply**. A regenerated or swiped reply doesn't tick again.
+- The session's settings and the **Chronicle** widget, by hand.
+
+**Every move leaves a line, and goes back with its message.** A move made by **Time passes…**, by the state-keeper, by an accepted suggestion or by a reply's tick shows under the message it came with, beside that turn's other changes: *Time passes: 3 hours (…, 14:00 → …, 17:00)*. Delete that message, or regenerate or swipe the reply, and the clock steps back by the same amount, the way a stat goes back with the line that changed it. A move you made by hand since stays where you put it. Two exceptions:
+
+- A reply's **tick** stays when the reply is regenerated or swiped, because the new reply doesn't tick again. Deleting the reply takes the tick back.
+- A session that has gone back to following its line's present has no clock of its own to step back, so nothing moves.
+
+If the calendar can't place the step back (the clock was set somewhere the step would run off the calendar), the delete, regenerate or swipe is refused and says why.
+
+When a move was asked for but the story had no clock yet (nothing in the lorebook is dated and no clock is set, or the session reads no lorebook), the line says so instead: *Time passes: 3 hours, not on the clock. This story has no clock yet: set one in the lorebook to track time.* That goes for **Time passes…** in every genre, a reply's tick, and the state-keeper's move or suggestion in Adventure. Nothing else stops: the reply stands, the press finishes, and the keeper's other changes are kept.
+
+A move made before the session has any line at all, not even a greeting, shows at the head of the conversation, above the first message. Once there is a line, a move shows under the newest one, a greeting included.
+
+**A branched session starts with the clock as it stood at the message it was branched from.** **Branch from here** gives the copy the original's clock with every move made after that message taken off, and copies the moves up to it under their copied lines. A session following its line's present gives the branch the present. A move you made by hand after that message isn't recorded, so the branch keeps it.
+
+Every line in a session is stamped with the clock as it stood when the line was written, so the conversation can mark each new day, and a session can [suggest a new scene](./sessions.md#when-a-new-scene-begins) when the day changes or time passes. **Time passes…**, a move you make by hand, an accepted suggestion and the state-keeper's move under **Trust the narrator** all count as time passing; a reply's tick doesn't.
 
 The present, or the session's own clock, is:
 
@@ -96,7 +127,7 @@ The present, or the session's own clock, is:
 
 ## Branches
 
-A **branch** is another line of the same story: what if the duel had gone the other way? The chip beside the book's name says which line you're reading. **main** is the line every book starts with.
+A **branch** is another line of the same story: what if the duel had gone the other way? The line chip at the left end of the moment bar says which line you're reading. **main** is the line every book starts with.
 
 ### Forking
 
@@ -130,4 +161,4 @@ Nothing ever merges between lines, by design. To take something across, read the
 
 Each session chooses its **Line** and its **Story clock** in its settings (see [Where the session reads its lorebook](./sessions.md#where-the-session-reads-its-lorebook)). A new session starts on the line played most recently. The session then reads the entries on its line, as amended up to its clock, and whatever it writes to the book lands on that line, dated where its story stands.
 
-When a session is reading your book, the top of the Lorebooks view names it with its line and clock. If you've moved the moment bar or switched lines, **Read what it reads** puts you back on the session's line at its clock.
+When a session is reading your book, the line under the book's name says so: **Read by** the session, its line and clock when those aren't main at now, and how many entries reached its last turn. If you've moved the moment bar or switched lines, **Read what it reads** puts you back on the session's line at its clock.

@@ -15,6 +15,7 @@
 	 */
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { DEFAULT_NER_TTL_MINUTES } from "$lib/shared/constants/ner"
+	import { untrack } from "svelte"
 
 	interface Props {
 		connection: SelectConnection
@@ -40,6 +41,13 @@
 				DEFAULT_NER_TTL_MINUTES
 		)
 	)
+	// Re-read when `extraJson` changes identity — the draft replaced after an
+	// external save, or Reset — so the box never shows a stale value. Only
+	// the local text is written; `connection` is never touched here.
+	$effect(() => {
+		const stored = (connection?.extraJson as any)?.nerModelTtlMinutes
+		untrack(() => (ttlInput = String(stored ?? DEFAULT_NER_TTL_MINUTES)))
+	})
 	function commitTtl() {
 		const n = parseInt(ttlInput, 10)
 		if (Number.isNaN(n) || n < 0) {

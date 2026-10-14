@@ -286,7 +286,7 @@
 				</h4>
 				<button
 					type="button"
-					class="btn btn-sm preset-filled-surface-500"
+					class="btn btn-sm preset-tonal-surface"
 					onclick={triggerUpload}
 					disabled={isUploading}
 					title="Upload a background image"
@@ -402,7 +402,7 @@
 				</p>
 				<footer class="flex justify-end gap-2">
 					<button
-						class="btn preset-filled-surface-400-600"
+						class="btn preset-tonal-surface"
 						onclick={cancelDelete}
 					>
 						Cancel

@@ -241,7 +241,16 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		// 14B model, that is a ~9 GB reload on every single message, paid before
 		// the first token of the next reply. The per-connection override below is
 		// untouched; only the fallback moves.
-		const keep_alive = this.connection!.extraJson?.keepAlive || "5m"
+		// A value Ollama wouldn't parse (a bare unit, "NaNm", an older form's
+		// mangling) falls back too, rather than failing the whole request.
+		const keepAliveSetting = this.connection!.extraJson?.keepAlive
+		const keep_alive: string | number =
+			(typeof keepAliveSetting === "string" &&
+				/^-?\d+(ms|s|m|h)?$/.test(keepAliveSetting)) ||
+			(typeof keepAliveSetting === "number" &&
+				Number.isFinite(keepAliveSetting))
+				? keepAliveSetting
+				: "5m"
 		if (typeof model !== "string")
 			throw new Error("OllamaAdapter: model must be a string")
 		// After the check, because the level is decided by the model NAME and a

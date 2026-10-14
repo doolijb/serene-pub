@@ -59,7 +59,9 @@ import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	holdsRow,
-	isDeviation
+	isDeviation,
+	rowsToDropOnPresetChange,
+	type AddressedValue
 } from "$lib/server/pipelines/config/deviations"
 import { presetConfigForSpec } from "$lib/server/pipelines/entities/presetBindings"
 import {
@@ -72,6 +74,10 @@ import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 import { defaultVariableTemplateFor } from "$lib/server/pipelines/boot/seedVariableTemplates"
 import { defaultContextTemplateFor } from "$lib/server/pipelines/boot/seedContextTemplates"
 import { defaultEngineOf } from "$lib/shared/pipelines/templateEngines"
+import {
+	chainNodesFor,
+	isUnplacedChain
+} from "$lib/server/pipelines/config/chainAddresses"
 
 // `\u0000` as an escape, never the raw byte: a literal NUL makes git
 // classify this file as binary, and a patch generated without `--binary`
@@ -220,10 +226,20 @@ async function refDefaults(
 				templateRefOf(presetValues.get(key)),
 				{ specSlug, nodeKey: d.nodeKey, what: "variable layout" }
 			)
-			if (named != null) {
+			// Only a row for the variable the key renders. A preset naming
+			// core's row for a key the spec's `renders` points elsewhere
+			// (2026-10-13) would be written here, culled by
+			// `repointedLayoutPicks` and written back on every boot — so it
+			// falls through to that variable's own default instead.
+			if (named != null && (await layoutVariableOf(db, named)) === d.variableId) {
 				out.set(key, named)
 				continue
 			}
+			if (named != null)
+				console.warn(
+					`[pipelines] ${specSlug}: ${d.nodeKey}'s preset names a layout for another ` +
+						`variable than '${d.variableId}', which the key renders; using its default`
+				)
 			if (!layouts.has(d.variableId))
 				layouts.set(
 					d.variableId,
@@ -420,12 +436,18 @@ async function presetValuesFor(
 		// set `settings` was silently dropped and the config fell back to
 		// the author default.
 		//
-		// That was not a small miss. `core:spec/chat-generate-image` ships
-		// `review-on` as its DEFAULT preset, labelled "Ask for the prompt" —
-		// so the shipped config was named after a preset whose one value
-		// never landed, and pressing Image rendered immediately instead of
-		// asking for a prompt. The summarize spec's `save` node had the same
-		// hole.
+		// That was not a small miss. `core:spec/chat-generate-image` 1.0.0
+		// shipped `review-on` as its DEFAULT preset, labelled "Ask for the
+		// prompt", so the shipped config was named after a preset whose one
+		// value never landed, and pressing Image rendered immediately instead
+		// of asking for a prompt. The summarize spec's `save` node had the
+		// same hole.
+		//
+		// Since 1.1.0 (2026-10-11) that preset ships OFF and is not the
+		// default; it is labelled "Review the prompt before rendering". The
+		// action's form collects the prompt, so a review of it is a second
+		// dialog for one image. The explode below stays, because
+		// any preset that sets a whole slot still needs it.
 		//
 		// Exploding here rather than at the writer because it also repairs
 		// preset rows already seeded on existing installs; the per-field
@@ -451,7 +473,8 @@ async function presetValuesFor(
  * The names the shipped default may take, in order of preference.
  *
  * "Default", then numbered (ruled 2026-10-05, C5). It was the default author
- * preset's label ("Chat", "Ask for the prompt"), which named a configuration
+ * preset's label ("Chat", or the image action's "Ask for the prompt" before
+ * its 1.1.0), which named a configuration
  * after one of its settings, or after its genre on a screen that already
  * shows the genre. Unbounded on purpose: `(spec_id, name)` is unique, so some
  * finite prefix of these is always free.
@@ -538,13 +561,7 @@ export async function ensureDefaultConfig(
 			// The three template controls read the same way as sampling since
 			// R19: `{ templateId }` / `{ seedKey }` is a NAME for a row, so it
 			// is resolved or it is dropped, never stored.
-			const seedRef =
-				(d.control === "sampling-ref" &&
-					samplingSeedKeyOf(presetValues.get(key)) !== null) ||
-				((d.control === "prompts-ref" ||
-					d.control === "context-template-ref" ||
-					d.control === "variable-template-ref") &&
-					templateRefOf(presetValues.get(key)) !== null)
+			const seedRef = isSeedRef(d, presetValues.get(key))
 			const value = seedRef
 				? refs.get(key)
 				: presetValues.has(key)
@@ -562,13 +579,17 @@ export async function ensureDefaultConfig(
 		// ⚠ This does not empty the shipped config. What survives is everything
 		// the declaration cannot supply: every `*-ref` (no author default at
 		// all — the whole of `refs` above) and every author-preset value that
-		// differs from the declared one. `core:spec/chat-generate-image` is the case
-		// to keep in mind: its default preset sets `render|settings|review` to
-		// `on` where the substrate's `settings` slot — projected from the
-		// definition's `reviewDefault` (R-9), which that oracle leaves unset —
-		// says `off`, so that row is a
-		// deviation and stays. Shipping a preset IS departing from the bare
-		// declaration; the row is how it says so.
+		// differs from the declared one. The respond presets' post-history
+		// trigger (3000 shipped, 0 declared) is the case to keep in mind: that
+		// row is a deviation and stays. Shipping a preset IS departing from
+		// the bare declaration; the row is how it says so.
+		//
+		// `core:spec/chat-generate-image` was the other example until 1.1.0
+		// (2026-10-11). Its 1.0.0 default preset set `render|settings|review`
+		// to `on` where the substrate's `settings` slot (projected from the
+		// definition's `reviewDefault`, R-9) says `off`. 1.1.0 ships that
+		// preset OFF, so a fresh install writes no row there, and
+		// `followDefaultPreset` drops the `on` row an upgraded install holds.
 		.filter(({ d, value }) => isDeviation(d, value))
 		.map(({ d, value }) => ({
 			configId: config.id,
@@ -584,6 +605,130 @@ export async function ensureDefaultConfig(
 	return { configId: config.id, action: "created" }
 }
 
+/**
+ * Whether a preset value at a reference slot is the author's NAME for a row
+ * (`{ seedKey }`, `{ templateId }`) rather than a value to store. A name is
+ * resolved by `refDefaults` or dropped, never stored as written.
+ */
+function isSeedRef(d: Decl, value: unknown): boolean {
+	return (
+		(d.control === "sampling-ref" && samplingSeedKeyOf(value) !== null) ||
+		((d.control === "prompts-ref" ||
+			d.control === "context-template-ref" ||
+			d.control === "variable-template-ref") &&
+			templateRefOf(value) !== null)
+	)
+}
+
+/** A version's default preset values, one entry per address. */
+async function presetEntriesFor(
+	db: Db,
+	specVersionId: number
+): Promise<AddressedValue[]> {
+	const { values } = await presetValuesFor(db, specVersionId)
+	return [...values].map(([key, value]) => {
+		const [nodeKey, slot, path] = key.split(SEP)
+		return { nodeKey: nodeKey!, slot: slot!, path: path ?? "", value }
+	})
+}
+
+export interface FollowPresetResult {
+	/** Rows of the shipped Default that held the old preset's value. */
+	dropped: number
+	/** Of those, the ones the new preset sets to another value, written. */
+	replaced: number
+}
+
+/**
+ * **The shipped Default follows its preset across a version change** (owner
+ * ruling 2026-10-11).
+ *
+ * `ensureDefaultConfig` projects the default author preset once, when the
+ * config is created, and returns early on every later boot. So a release that
+ * changes what its preset sets never reached an install that had already
+ * booted: the shipped config kept the old preset's value at that address. Until
+ * now that took a hand-written migration deleting the whole config (the
+ * re-projections in `ledgerSpliceChain.ts`); this is the general answer.
+ *
+ * Called by `saveDocument` when it moves a spec's pointer from one version to
+ * another, inside that transaction. Only the config seeded as
+ * `pipeline-default:<slug>` is touched, and in it only the rows
+ * `rowsToDropOnPresetChange` names: a row still holding exactly what the OLD
+ * default preset set there, which the NEW one does not set to that value. A
+ * row holding anything else is a change somebody made and is kept. Where the
+ * new preset sets that address to a different value, the new value is written
+ * in the dropped row's place when it departs from the declaration, the same
+ * test `ensureDefaultConfig` applies; otherwise the address inherits the
+ * declaration. A new value that names a row (`{ seedKey }`) is left to the
+ * reconcile that follows, whose back-fill resolves it through `refDefaults`.
+ *
+ * Configs copied from the Default are not touched: their rows are a person's.
+ */
+export async function followDefaultPreset(
+	db: Db,
+	specSlug: string,
+	fromVersionId: number,
+	toVersionId: number
+): Promise<FollowPresetResult> {
+	const none: FollowPresetResult = { dropped: 0, replaced: 0 }
+	if (fromVersionId === toVersionId) return none
+
+	const [config] = await db
+		.select({ id: schema.pipelineConfigs.id })
+		.from(schema.pipelineConfigs)
+		.where(
+			eq(schema.pipelineConfigs.seedKey, `pipeline-default:${specSlug}`)
+		)
+		.limit(1)
+	if (!config) return none
+
+	const before = await presetEntriesFor(db, fromVersionId)
+	if (!before.length) return none
+	const after = await presetEntriesFor(db, toVersionId)
+
+	const rows = await db
+		.select()
+		.from(schema.pipelineConfigValues)
+		.where(eq(schema.pipelineConfigValues.configId, config.id))
+	const drop = rowsToDropOnPresetChange(before, after, rows as any[])
+	if (!drop.length) return none
+
+	await db.delete(schema.pipelineConfigValues).where(
+		inArray(
+			schema.pipelineConfigValues.id,
+			drop.map((r) => r.id)
+		)
+	)
+
+	const next = new Map(after.map((v) => [addrOf(v), v.value]))
+	const declByAddr = new Map(
+		(await declarations(db, toVersionId)).map((d) => [
+			addr(d.nodeKey, d.slot, d.path),
+			d
+		])
+	)
+	const replacements = drop.flatMap((r) => {
+		const key = addrOf(r)
+		const d = declByAddr.get(key)
+		if (!d || !next.has(key)) return []
+		const value = next.get(key)
+		if (isSeedRef(d, value) || !isDeviation(d, value)) return []
+		return [
+			{
+				configId: config.id,
+				nodeKey: d.nodeKey,
+				slot: d.slot,
+				path: d.path,
+				value
+			}
+		]
+	})
+	if (replacements.length)
+		await db.insert(schema.pipelineConfigValues).values(replacements)
+
+	return { dropped: drop.length, replaced: replacements.length }
+}
+
 /* ------------------------------------------------------------------ *
  * Reconciliation
  * ------------------------------------------------------------------ */
@@ -593,6 +738,13 @@ export interface ReconcileReport {
 	name: string
 	culled: Array<{ nodeKey: string; slot: string; path: string }>
 	backfilled: Array<{ nodeKey: string; slot: string; path: string }>
+	/**
+	 * Script chains at a seam this version does not declare, on a node it
+	 * still has (PLAN-script-placement D4, *unplaced*). Kept, not culled — the
+	 * one exception to the cull rule — and listed so an admin hears of them
+	 * before a halted reply tells them. `label` is what the option was called.
+	 */
+	unplaced: Array<{ nodeKey: string; slot: string; path: string; label: string }>
 }
 
 /**
@@ -691,6 +843,50 @@ export async function inheritedValues(
  * the back-fill reads from, so a default that had not yet learned about a new
  * parameter would back-fill nothing and leave every user config missing it.
  */
+/** The variable a layout row lays out, or `undefined` for no such row. */
+async function layoutVariableOf(db: Db, id: number): Promise<string | undefined> {
+	const [row] = await db
+		.select({ variableId: schema.pipelineVariableTemplates.variableId })
+		.from(schema.pipelineVariableTemplates)
+		.where(eq(schema.pipelineVariableTemplates.id, id))
+		.limit(1)
+	return row?.variableId
+}
+
+/**
+ * The layout picks at a `variable-template-ref` address whose row lays out a
+ * different variable than the address now renders — what a spec's `renders`
+ * leaves behind when it re-points a key (owner rulings 2026-10-13). A pick
+ * naming no row at all is not one of these: a dangle stays visible.
+ */
+async function repointedLayoutPicks<
+	R extends { nodeKey: string; slot: string; path: string | null; value: unknown }
+>(db: Db, rows: readonly R[], declByAddr: ReadonlyMap<string, Decl>): Promise<R[]> {
+	const picks = rows.filter((r) => {
+		const d = declByAddr.get(addr(r.nodeKey, r.slot, r.path ?? ""))
+		return d?.control === "variable-template-ref" && d.variableId && typeof r.value === "number"
+	})
+	if (!picks.length) return []
+	const layouts = await db
+		.select({
+			id: schema.pipelineVariableTemplates.id,
+			variableId: schema.pipelineVariableTemplates.variableId
+		})
+		.from(schema.pipelineVariableTemplates)
+		.where(
+			inArray(
+				schema.pipelineVariableTemplates.id,
+				picks.map((r) => r.value as number)
+			)
+		)
+	const variableOf = new Map(layouts.map((l: { id: number; variableId: string }) => [l.id, l.variableId]))
+	return picks.filter((r) => {
+		const theirs = variableOf.get(r.value as number)
+		const ours = declByAddr.get(addr(r.nodeKey, r.slot, r.path ?? ""))?.variableId
+		return theirs !== undefined && theirs !== ours
+	})
+}
+
 export async function reconcileConfigs(
 	db: Db,
 	specId: number,
@@ -703,6 +899,9 @@ export async function reconcileConfigs(
 	const declByAddr = new Map(
 		decls.map((d) => [addr(d.nodeKey, d.slot, d.path), d])
 	)
+	// The nodes this version still has, beside their rows — what tells an
+	// unplaced chain (kept) from an orphaned value (culled).
+	const chainNodes = await chainNodesFor(db, specVersionId)
 	// The preset is read here as well as inside `ensureDefaultConfig`, and it has
 	// to be: that one returns the moment the shipped config exists, so on every
 	// boot after the first it is this call that carries an author's sampling
@@ -752,13 +951,41 @@ export async function reconcileConfigs(
 			configId: config.id,
 			name: config.name,
 			culled: [],
-			backfilled: []
+			backfilled: [],
+			unplaced: []
 		}
 
 		// ── cull: values whose address the new version does not declare ──
-		const orphaned = (rows as any[]).filter(
+		//
+		// With ONE exception (PLAN-script-placement D4, R-Q4): a script chain
+		// whose seam is gone, on a node the spec still has, is **unplaced** —
+		// kept and reported, never culled. Scoped by address, not guesswork:
+		// a `scripts`-kind slot's whole value or anything under the `scripts`
+		// facet (`isChainAddress`). The run skips it with a receipt note, or
+		// halts for a stop guard, so a guard never silently stops applying.
+		// A node that is gone still takes its chains with it.
+		const undeclared = (rows as any[]).filter(
 			(r) => !declByAddr.has(addrOf(r))
 		)
+		const unplacedRows = undeclared.filter((r) =>
+			isUnplacedChain(chainNodes, r.nodeKey, r.slot, r.path ?? "")
+		)
+		const orphaned = [
+			...undeclared.filter((r) => !unplacedRows.includes(r)),
+			// A layout picked for a different variable than the key renders —
+			// the spec's `renders` points the key at another one (2026-10-13).
+			// The run ignores it (`world.ts`); left in place it would sit in
+			// the picker as a choice that is not one. Culled with a notice,
+			// like an address that is gone.
+			...(await repointedLayoutPicks(db, rows as any[], declByAddr))
+		]
+		for (const r of unplacedRows)
+			report.unplaced.push({
+				nodeKey: r.nodeKey,
+				slot: r.slot,
+				path: r.path ?? "",
+				label: await labelForCulled(r)
+			})
 		if (orphaned.length) {
 			const labels = new Map<string, string>()
 			for (const r of orphaned)
@@ -908,7 +1135,11 @@ export async function reconcileConfigs(
 				defaults.set(addrOf(r), { value: r.value })
 		}
 
-		if (report.culled.length || report.backfilled.length)
+		if (
+			report.culled.length ||
+			report.backfilled.length ||
+			report.unplaced.length
+		)
 			reports.push(report)
 	}
 

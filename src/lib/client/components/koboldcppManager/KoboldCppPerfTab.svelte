@@ -503,7 +503,7 @@
 	<div class="flex items-center justify-between">
 		<h3 class="font-semibold">Performance</h3>
 		<button
-			class="btn btn-sm preset-filled-surface-500"
+			class="btn btn-sm preset-tonal-surface"
 			onclick={refreshPerf}
 			disabled={isLoadingPerf}
 			title="Refresh stats"
@@ -662,7 +662,7 @@
 						""}</pre>
 				<footer class="flex justify-end">
 					<button
-						class="btn preset-filled-surface-400-600"
+						class="btn preset-tonal-surface"
 						onclick={() => (showFullConfigModal = false)}
 					>
 						Close

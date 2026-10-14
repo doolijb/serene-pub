@@ -19,6 +19,15 @@
  *   §state-widgets    — was styles/state-widgets.css (World State, Stats, slot control)
  *   §scene-portraits  — was styles/scene-portraits.css
  *   §authors-note     — new with the widget (2026-10-02, AN1)
+ *   §turn-order       — new with the widget (2026-10-10, W1)
+ *   §actions          — new with the widget (2026-10-11, W8)
+ *   §annex            — new with the widget (2026-10-11, W9)
+ *   §album            — new with the widget (2026-10-11, W2)
+ *   §chronicle        — new with the widget (2026-10-11, W3)
+ *   §places           — new with the widget (2026-10-11, W4)
+ *   §map-canvas       — the shared map control Places draws with (2026-10-11, W4)
+ *   §attendance       — Who's here, new with the widget (2026-10-11, W10)
+ *   §backdrop         — new with the widget (2026-10-12, DESIGN-image-generation §6.4)
  * The P3 phases re-key these rules on widget parts (`data-widget-part`,
  * STYLE-GUIDE §6.16 "Widget parts"), one widget at a time: Stats (P3a),
  * World State (P3b), Scene Portraits (P3c), Lore entries (P3d), and the
@@ -405,39 +414,213 @@
 	font-weight: var(--font-weight-semibold);
 }
 
-/* Who is due next (NextCharacterBlock): one line under the log, the order's
-   head or an invitation to pick, with who follows under it as a list. */
-[data-widget-part~="messages.next-up"] {
-	list-style: none;
-	margin: 0;
-	padding: 0;
-}
-[data-widget-part~="messages.next-up-waiting"],
-[data-widget-part~="messages.next-up-head"] {
-	margin-block: calc(var(--spacing) * 2);
+/* The turn line (TurnLine, PLAN-core-widgets §3.16): ONE row between the
+   log and the composer — what the last run did on the left
+   (`messages.turn-line-run`), who is next on the right
+   (`messages.turn-line-next`). One row at every width: in a box under 40rem
+   the left half is its pill alone (the links are in the pill's panel), and
+   the right half keeps the next-up text and Continue. The ⏳ aliases
+   `messages.next-up-*` ride on the same elements; the look is keyed here. */
+[data-widget-part~="messages.turn-line"] {
 	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
 	min-width: 0px;
 	padding-inline: calc(var(--spacing) * 4);
 }
-[data-widget-part~="messages.next-up-waiting"] {
+/* Left: the status pill, then Review and Inspect run. */
+[data-widget-part~="messages.turn-line-run"] {
+	display: flex;
+	flex: 0 1 auto;
+	align-items: center;
+	gap: var(--spacing);
+	min-width: 0px;
+	margin-block: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.turn-line-status"] {
+	display: inline-flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+	min-width: 0px;
+	max-inline-size: 100%;
+	border-radius: var(--sp-w-chip-radius);
+	padding: calc(var(--spacing) * 0.5) calc(var(--spacing) * 2.5);
+	background: var(--sp-w-chip-bg);
+	color: light-dark(var(--color-surface-700), var(--color-surface-300));
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+}
+button[data-widget-part~="messages.turn-line-status"]:focus-visible {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: 2px;
+}
+@media (hover: hover) {
+	button[data-widget-part~="messages.turn-line-status"]:hover {
+		background: var(--sp-w-chip-on-bg);
+	}
+}
+/* The ember while the reply is being written: the message row's own dot
+   (`messages.message-ember`, STYLE-GUIDE §8). */
+[data-widget-part~="messages.turn-line-status"][data-turn-state="live"]::before {
+	content: "";
+	flex: none;
+	inline-size: 6px;
+	block-size: 6px;
+	border-radius: 9999px;
+	background: var(--color-warning-500);
+	animation: sp-dot-pulse 1.6s ease-out infinite;
+}
+[data-widget-part~="messages.turn-line-status"][data-turn-state="failed"] {
+	background: color-mix(in oklab, var(--color-error-500) 14%, transparent);
+	color: light-dark(var(--color-error-800), var(--color-error-200));
+}
+@media (prefers-reduced-motion: reduce) {
+	[data-widget-part~="messages.turn-line-status"][data-turn-state="live"]::before {
+		animation: none;
+	}
+}
+[data-widget-part~="messages.turn-line-status-text"] {
+	min-width: 0px;
+	max-inline-size: 48ch;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+[data-widget-part~="messages.turn-line-status-more"] {
+	flex: none;
+	opacity: var(--sp-w-muted-opacity);
+}
+/* Review and Inspect run beside the pill: the quiet button, as Pick. */
+[data-widget-part~="messages.turn-line-links"] {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: var(--spacing);
+}
+[data-widget-part~="messages.turn-line-review"],
+[data-widget-part~="messages.turn-line-inspect"],
+[data-widget-part~="messages.turn-line-panel-inspect"] {
+	display: inline-flex;
+	height: calc(var(--spacing) * 7);
+	align-items: center;
+	gap: var(--spacing);
+	border-radius: 6px;
+	padding-inline: calc(var(--spacing) * 2);
+	white-space: nowrap;
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+@media (hover: hover) {
+	[data-widget-part~="messages.turn-line-review"]:hover,
+	[data-widget-part~="messages.turn-line-inspect"]:hover,
+	[data-widget-part~="messages.turn-line-panel-inspect"]:hover {
+		color: light-dark(var(--color-surface-900), var(--color-surface-50));
+	}
+}
+[data-widget-part~="messages.turn-line-review"]:focus-visible,
+[data-widget-part~="messages.turn-line-inspect"]:focus-visible,
+[data-widget-part~="messages.turn-line-panel-inspect"]:focus-visible {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: 2px;
+}
+/* A narrow box: the pill alone; its panel holds the links. */
+@container sp-widget (width < 40rem) {
+	[data-widget-part~="messages.turn-line-links"] {
+		display: none;
+	}
+	[data-widget-part~="messages.turn-line-status-text"] {
+		max-inline-size: 22ch;
+	}
+}
+/* Right: who is typing, then who is due next — or Stop, or Try again. */
+[data-widget-part~="messages.turn-line-next"] {
+	display: flex;
+	flex: 1 1 auto;
+	align-items: center;
+	justify-content: flex-end;
+	gap: calc(var(--spacing) * 2);
+	min-width: 0px;
+	margin-inline-start: auto;
+	list-style: none;
+	padding: 0;
+}
+/* The page draws who is typing (a pill, when someone is); the part only
+   places it. */
+[data-widget-part~="messages.turn-line-typing"] {
+	display: contents;
+}
+[data-widget-part~="messages.turn-line-stop"],
+[data-widget-part~="messages.turn-line-retry"] {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	gap: calc(var(--spacing) * 1.5);
+	height: calc(var(--spacing) * 8);
+	margin-block: calc(var(--spacing) * 2);
+	border-radius: calc(infinity * 1px);
+	padding-inline: calc(var(--spacing) * 3);
+	white-space: nowrap;
+	font-size: 13px;
+	line-height: 1.45;
+	font-weight: var(--font-weight-medium);
+}
+/* Stop, in the error's tone, as the composer's. */
+[data-widget-part~="messages.turn-line-stop"] {
+	background-color: var(--color-error-50-950);
+	color: var(--color-error-950-50);
+}
+/* Try again, filled, as Continue. */
+[data-widget-part~="messages.turn-line-retry"] {
+	background-color: var(--color-primary-500);
+	color: var(--color-primary-contrast-500);
+}
+[data-widget-part~="messages.turn-line-stop"] > sp-icon,
+[data-widget-part~="messages.turn-line-retry"] > sp-icon {
+	width: calc(var(--spacing) * 4);
+	height: calc(var(--spacing) * 4);
+}
+[data-widget-part~="messages.turn-line-stop"]:focus-visible,
+[data-widget-part~="messages.turn-line-retry"]:focus-visible {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: 2px;
+}
+@media (hover: hover) {
+	[data-widget-part~="messages.turn-line-stop"]:hover,
+	[data-widget-part~="messages.turn-line-retry"]:hover {
+		filter: brightness(110%);
+	}
+}
+
+/* Who is due next (NextCharacterBlock), in the right half: the order's head
+   or an invitation to pick, with who follows under it as a list. */
+[data-widget-part~="messages.turn-line-waiting"],
+[data-widget-part~="messages.turn-line-head"] {
+	margin-block: calc(var(--spacing) * 2);
+	display: flex;
+	flex: 1 1 auto;
+	min-width: 0px;
+}
+[data-widget-part~="messages.turn-line-waiting"] {
 	align-items: center;
 	gap: calc(var(--spacing) * 2);
 }
-[data-widget-part~="messages.next-up-head"] {
+[data-widget-part~="messages.turn-line-head"] {
 	flex-direction: column;
 	gap: var(--spacing);
 }
-[data-widget-part~="messages.next-up-line"] {
+[data-widget-part~="messages.turn-line-due"] {
 	display: flex;
 	min-width: 0px;
 	align-items: center;
 	gap: calc(var(--spacing) * 2);
 }
-[data-widget-part~="messages.next-up-narrator"] {
+[data-widget-part~="messages.turn-line-narrator"] {
 	color: light-dark(var(--color-surface-600), var(--color-surface-400));
 }
 /* The line itself: one line, cut with an ellipsis rather than wrapped. */
-[data-widget-part~="messages.next-up-text"] {
+[data-widget-part~="messages.turn-line-text"] {
 	color: var(--color-surface-700);
 	min-width: 0px;
 	overflow: hidden;
@@ -446,10 +629,10 @@
 	font-size: 13px;
 	line-height: 1.45;
 }
-[data-widget-part~="messages.next-up-text"]:where([data-mode="dark"], [data-mode="dark"] *) {
+[data-widget-part~="messages.turn-line-text"]:where([data-mode="dark"], [data-mode="dark"] *) {
 	color: var(--color-surface-300);
 }
-[data-widget-part~="messages.next-up-controls"] {
+[data-widget-part~="messages.turn-line-controls"] {
 	margin-left: auto;
 	display: flex;
 	flex-shrink: 0;
@@ -457,7 +640,7 @@
 	gap: var(--spacing);
 }
 /* Pick, and Someone else: the composer's quiet button (as Back to compose). */
-[data-widget-part~="messages.next-up-pick"] {
+[data-widget-part~="messages.turn-line-pick"] {
 	display: inline-flex;
 	height: calc(var(--spacing) * 7);
 	align-items: center;
@@ -469,32 +652,32 @@
 	color: var(--color-surface-600);
 }
 @media (hover: hover) {
-	[data-widget-part~="messages.next-up-pick"]:hover {
+	[data-widget-part~="messages.turn-line-pick"]:hover {
 		color: var(--color-surface-900);
 	}
 }
-[data-widget-part~="messages.next-up-pick"]:where([data-mode="dark"], [data-mode="dark"] *) {
+[data-widget-part~="messages.turn-line-pick"]:where([data-mode="dark"], [data-mode="dark"] *) {
 	color: var(--color-surface-400);
 }
 @media (hover: hover) {
-	[data-widget-part~="messages.next-up-pick"]:where([data-mode="dark"], [data-mode="dark"] *):hover {
+	[data-widget-part~="messages.turn-line-pick"]:where([data-mode="dark"], [data-mode="dark"] *):hover {
 		color: var(--color-surface-50);
 	}
 }
-[data-widget-part~="messages.next-up-pick"]:focus-visible {
+[data-widget-part~="messages.turn-line-pick"]:focus-visible {
 	outline-style: solid;
 	outline-width: 2px;
 	outline-offset: 2px;
 	outline-color: var(--color-primary-500);
 }
 /* Waiting, Pick sits at the line's end. */
-[data-widget-part~="messages.next-up-waiting"] > [data-widget-part~="messages.next-up-pick"] {
+[data-widget-part~="messages.turn-line-waiting"] > [data-widget-part~="messages.turn-line-pick"] {
 	margin-left: auto;
 	flex-shrink: 0;
 }
 /* In a narrow box "Someone else" is said to a screen reader only; its icon and title stay. */
 @container sp-widget (width < 40rem) {
-	[data-widget-part~="messages.next-up-pick-label"] {
+	[data-widget-part~="messages.turn-line-pick-label"] {
 		position: absolute;
 		width: 1px;
 		height: 1px;
@@ -507,7 +690,7 @@
 	}
 }
 /* Continue: the composer's Send, filled. */
-[data-widget-part~="messages.next-up-continue"] {
+[data-widget-part~="messages.turn-line-continue"] {
 	display: inline-flex;
 	flex-direction: row;
 	align-items: center;
@@ -529,17 +712,17 @@
 	transition-duration: var(--default-transition-duration);
 }
 @container sp-widget (width < 64rem) {
-	[data-widget-part~="messages.next-up-continue"] {
+	[data-widget-part~="messages.turn-line-continue"] {
 		height: calc(var(--spacing) * 11);
 		padding-inline: calc(var(--spacing) * 4);
 	}
 }
-[data-widget-part~="messages.next-up-continue"] > sp-icon {
+[data-widget-part~="messages.turn-line-continue"] > sp-icon {
 	width: calc(var(--spacing) * 4);
 	height: calc(var(--spacing) * 4);
 }
 /* That after-line: who follows the head, when the setting lists them. */
-[data-widget-part~="messages.next-up-after"] {
+[data-widget-part~="messages.turn-line-after"] {
 	color: light-dark(var(--color-surface-600), var(--color-surface-400));
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -553,25 +736,25 @@
    primary ring outside a 2px offset, and dimmed when disabled. */
 @media (hover: hover) {
 	[data-widget-part~="messages.selection-button"]:not(:disabled):hover,
-	[data-widget-part~="messages.next-up-continue"]:not(:disabled):hover {
+	[data-widget-part~="messages.turn-line-continue"]:not(:disabled):hover {
 		filter: brightness(125%);
 	}
 	[data-widget-part~="messages.selection-button"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *),
-	[data-widget-part~="messages.next-up-continue"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *) {
+	[data-widget-part~="messages.turn-line-continue"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *) {
 		filter: brightness(75%);
 	}
 }
 [data-widget-part~="messages.selection-button"]:not(:disabled):active,
-[data-widget-part~="messages.next-up-continue"]:not(:disabled):active {
+[data-widget-part~="messages.turn-line-continue"]:not(:disabled):active {
 	filter: brightness(90%);
 	transform: scale(0.98);
 }
 [data-widget-part~="messages.selection-button"]:not(:disabled):active:where([data-mode="dark"], [data-mode="dark"] *),
-[data-widget-part~="messages.next-up-continue"]:not(:disabled):active:where([data-mode="dark"], [data-mode="dark"] *) {
+[data-widget-part~="messages.turn-line-continue"]:not(:disabled):active:where([data-mode="dark"], [data-mode="dark"] *) {
 	filter: brightness(115%);
 }
 [data-widget-part~="messages.selection-button"]:focus-visible,
-[data-widget-part~="messages.next-up-continue"]:focus-visible {
+[data-widget-part~="messages.turn-line-continue"]:focus-visible {
 	box-shadow:
 		0 0 #0000,
 		0 0 #0000,
@@ -581,7 +764,7 @@
 	outline-style: none;
 }
 [data-widget-part~="messages.selection-button"]:disabled,
-[data-widget-part~="messages.next-up-continue"]:disabled {
+[data-widget-part~="messages.turn-line-continue"]:disabled {
 	pointer-events: none;
 	opacity: 40%;
 	filter: grayscale(0.3);
@@ -589,10 +772,19 @@
 
 /* STYLE-GUIDE §9: a finger lands on 44px, however small the control reads. */
 @media (pointer: coarse) {
-	[data-widget-part~="messages.next-up-pick"] {
+	[data-widget-part~="messages.turn-line-pick"],
+	[data-widget-part~="messages.turn-line-review"],
+	[data-widget-part~="messages.turn-line-inspect"],
+	[data-widget-part~="messages.turn-line-panel-inspect"],
+	[data-widget-part~="messages.turn-line-stop"],
+	[data-widget-part~="messages.turn-line-retry"],
+	button[data-widget-part~="messages.turn-line-status"] {
+		min-height: calc(var(--spacing) * 11);
+	}
+	[data-widget-part~="messages.turn-line-pick"] {
 		height: calc(var(--spacing) * 11);
 	}
-	[data-widget-part~="messages.next-up-continue"] {
+	[data-widget-part~="messages.turn-line-continue"] {
 		height: calc(var(--spacing) * 11);
 		padding-inline: calc(var(--spacing) * 4);
 	}
@@ -2239,6 +2431,112 @@ button[data-widget-part~="messages.composer-persona"] {
 [data-widget-part~="messages.log-item"] {
 	width: 100%;
 }
+
+/* Folio (PLAN-core-widgets §3.7): a copy whose Presentation is Folio reads its
+   lines as one block of prose. The stage carries `messages.folio`; each line
+   is a paragraph — the component draws its content cell alone, with no
+   avatar, identity or controls cell — and a thin rule names the speaker
+   wherever the speaker changes (`messages.folio-rule`). The line keeps its
+   element, so the shared state overlays (selected, dim, editing, hidden;
+   messageLayouts.css) still draw on it. A pack's row look is guarded off this
+   stage in the pack itself (shared/widgets/corePresets.ts, `OFF_FOLIO`): a
+   pack is unlayered, so nothing here could undo it. */
+[data-widget-part~="messages.folio"] [data-widget-part~="messages.message-list"] {
+	gap: 0;
+}
+[data-widget-part~="messages.folio"] [data-widget-part~="messages.message-row"] + [data-widget-part~="messages.message-row"] {
+	margin-block-start: calc(var(--spacing) * 3);
+}
+[data-widget-part~="messages.folio"] [data-widget-part~="messages.message"] {
+	position: relative;
+	display: block;
+	padding: 0;
+	border-radius: 0;
+}
+/* Holds the controls' float (a coarse pointer's) inside its own paragraph. */
+[data-widget-part~="messages.folio"] [data-widget-part~="messages.message-content"] {
+	display: flow-root;
+}
+/* The manuscript's face (STYLE-GUIDE §3.3): a pack's own prose face, where it
+   sets one, still wins. */
+[data-widget-part~="messages.folio"] [data-widget-part~="messages.message-body"] {
+	font-family: var(--sp-prose);
+	font-size: calc(17px * var(--sp-prose-scale, 1));
+	line-height: 1.75;
+}
+/* The speaker's rule: the name in small type, then a hairline to the edge. */
+[data-widget-part~="messages.folio-rule"] {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	margin-block: calc(var(--spacing) * 6) calc(var(--spacing) * 2);
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+[data-widget-part~="messages.folio-rule"]:first-child {
+	margin-block-start: 0;
+}
+[data-widget-part~="messages.folio-rule"]::after {
+	content: "";
+	flex: 1;
+	border-block-start: 1px solid color-mix(in oklab, currentColor 35%, transparent);
+}
+[data-widget-part~="messages.folio-rule-name"] {
+	max-inline-size: 70%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--sp-w-font-meta);
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+/* A paragraph's controls: the controls cell's, less the time and the swipes.
+   Nothing is hover-only (STYLE-GUIDE §9): on a coarse pointer they stand at
+   the paragraph's trailing edge and the text wraps round them; under a fine
+   pointer they float over its top edge, shown on hover and focus (a tap or
+   j/k focuses the line) and standing while it is edited, selected or
+   generating. */
+[data-widget-part~="messages.folio-controls"] {
+	float: inline-end;
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	margin-inline-start: calc(var(--spacing) * 2);
+	padding: 2px;
+	border-radius: var(--sp-w-control-radius);
+	background-color: var(--color-surface-50-950);
+}
+@media (pointer: fine) {
+	[data-widget-part~="messages.folio-controls"] {
+		float: none;
+		position: absolute;
+		z-index: 1;
+		inset-block-start: 0;
+		inset-inline-end: 0;
+		translate: 0 -50%;
+		box-shadow: 0 1px 3px color-mix(in oklab, var(--color-surface-950) 25%, transparent);
+		opacity: 0;
+		pointer-events: none;
+		transition: opacity 120ms ease-out;
+	}
+	[data-widget-part~="messages.folio"] [data-widget-part~="messages.message"]:is(
+			:hover,
+			:focus-within,
+			[data-msg-state="editing"],
+			[data-msg-state="selected"],
+			[data-msg-state="dim"],
+			[data-msg-generating]
+		)
+		[data-widget-part~="messages.folio-controls"] {
+		opacity: 1;
+		pointer-events: auto;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	[data-widget-part~="messages.folio-controls"] {
+		transition: none;
+	}
+}
 /* What the log says instead of lines: not granted, loading, nothing yet. */
 [data-widget-part~="messages.log-floor"] {
 	display: flex;
@@ -2643,15 +2941,17 @@ button[data-widget-part~="messages.composer-persona"] {
 }
 
 /* The Review panel of everything waiting (the popover's body, portalled): a
-   `card`, its head and its note. */
-[data-widget-part~="messages.ledger-review-panel"] {
+   `card`, its head and its note — under a line's ledger, and in the turn
+   line's pill (`messages.turn-line-panel`, with Inspect run). */
+[data-widget-part~="messages.ledger-review-panel"],
+[data-widget-part~="messages.turn-line-panel"] {
 	border-radius: var(--radius-container);
 	width: min(92vw, 360px);
 	padding: calc(var(--spacing) * 3);
 	background-color: light-dark(var(--color-surface-100), var(--color-surface-900));
 }
 /* `space-y-2`, as weightless as the utility's `:where()`. */
-:where([data-widget-part~="messages.ledger-review-panel"] > :not(:last-child)) {
+:where([data-widget-part~="messages.ledger-review-panel"], [data-widget-part~="messages.turn-line-panel"]) > :where(:not(:last-child)) {
 	margin-block-start: 0;
 	margin-block-end: calc(var(--spacing) * 2);
 }
@@ -3504,15 +3804,24 @@ button[data-widget-part~="messages.composer-persona"] {
    ════════════════════════════════════════════════════════════════════════ */
 
 /*
- * Core's two state widgets — World State and Stats — and the slot control
- * they share (R21), as global rules: a component's `<style>` does not
- * survive a remote build, so what the native widgets' own style blocks drew
- * lives here, keyed on widget parts: Stats (P3a) and World State (P3b) on
- * their own, the slot control (P3e) on the parts it owns as a shared control
- * (`stat-slot.<part>`), whichever widget draws it.
+ * Core's state widget — Stats, which World State became (W7, 2026-10-11: an
+ * alias, `owners: world` in a strip) — and the slot control it draws (R21),
+ * as global rules: a component's `<style>` does not survive a remote build,
+ * so what the native widgets' own style blocks drew lives here, keyed on
+ * widget parts: Stats (P3a; its list and strip are World State's P3b,
+ * moved), ⏳ World State's own parts for one release, and the slot control
+ * (P3e) on the parts it owns as a shared control (`stat-slot.<part>`),
+ * whichever widget draws it.
  */
 
-/* ── World State ─────────────────────────────────────────────────────────── */
+/* ── World State ⏳ ───────────────────────────────────────────────────────── */
+
+/* ⏳ REMOVE in 0.7.0. World State is Stats now: the page draws a placed
+   `world-state` as Stats (`stats.*` parts, below — the same rules, written
+   for `stats.root[data-arrangement]`, `stats.strip`, `stats.strip-head`,
+   `stats.strip-name`). These stay one release for what still names the old
+   parts: a style a person wrote against them, a module served before the
+   alias. */
 
 /* Keyed on the widget's parts (`data-widget-part`, P3b); the markup carries
    no look. Parts: world-state.root · world-state.alert · world-state.empty ·
@@ -3605,14 +3914,18 @@ button[data-widget-part~="messages.composer-persona"] {
 
 /* Keyed on the widget's parts (`data-widget-part`, P3a); the markup carries
    no look. Parts: stats.root · stats.alert · stats.empty · stats.card ·
-   stats.card-head · stats.card-name · stats.card-note · stats.card-body
-   (STYLE-GUIDE §6.16). The type and colour values are the theme's, exactly
+   stats.card-head · stats.card-name · stats.card-note · stats.card-body ·
+   stats.group · stats.group-head · stats.strip · stats.strip-head ·
+   stats.strip-name (STYLE-GUIDE §6.16); on the root `data-arrangement`
+   (`cards` · `list` · `strip`) and `data-owners`. The type and colour values are the theme's, exactly
    what the utilities they replaced drew (`text-xs`, `font-semibold`,
    `text-error-700-300`, `text-surface-500`). `text-xs` is written as the
    utility compiles it, scaled on the element (`--text-scaling` is a theme's,
    and a theme can sit below the root), not through the root's `--text-xs`. */
 
-/* The widget's box: its cards stacked, and it scrolls when they overflow. */
+/* The widget's box: its cards stacked, and it scrolls when they overflow.
+   A list or a strip is drawn by its own rules (§Stats: list and strip); the
+   cards' rules carry `:where()` so they keep their specificity. */
 [data-widget-part~="stats.root"] {
 	display: flex;
 	flex-direction: column;
@@ -3635,12 +3948,16 @@ button[data-widget-part~="messages.composer-persona"] {
    across it. After the root's own rule, so it wins at equal specificity;
    anything that is not a card (an alert, the empty floor) spans the row. */
 @container sp-widget (min-width: 40rem) {
-	[data-widget-part~="stats.root"] {
+	[data-widget-part~="stats.root"]:where(:not([data-arrangement="list"], [data-arrangement="strip"])),
+	[data-widget-part~="stats.root"]:where(:not([data-arrangement="list"], [data-arrangement="strip"]))
+		> [data-widget-part~="stats.group"] {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
 		align-content: start;
 	}
-	[data-widget-part~="stats.root"] > :not([data-widget-part~="stats.card"]) {
+	[data-widget-part~="stats.root"]:where(:not([data-arrangement="list"], [data-arrangement="strip"]))
+		> :not([data-widget-part~="stats.card"]),
+	[data-widget-part~="stats.group"] > [data-widget-part~="stats.group-head"] {
 		grid-column: 1 / -1;
 	}
 }
@@ -3702,6 +4019,208 @@ button[data-widget-part~="messages.composer-persona"] {
 	flex: 1 1 9rem;
 }
 
+/* ── Stats: groups ───────────────────────────────────────────────────────── */
+
+/* `owners: all` heads each kind — world, cast, places — with a group (W7):
+   its head, then its owners, laid out as the box lays them (a card stack,
+   a grid of cards in a wide cell, a list, a strip). */
+[data-widget-part~="stats.group"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	min-width: 0;
+}
+[data-widget-part~="stats.group-head"] {
+	display: flex;
+	align-items: center;
+	gap: 0.3rem;
+	font-size: 0.7rem;
+	font-weight: var(--font-weight-semibold);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* ── Stats: list and strip (World State's drawing, moved) ────────────────── */
+
+/* Parts: `data-arrangement` (`list` · `strip`) on stats.root; stats.strip
+   (one owner's line — a cast member's or a place's name, then its slots; the
+   world's own slots sit bare, the scene needs no name) · stats.strip-head ·
+   stats.strip-name. The same rules as World State's root, place, place-head
+   and place-name (§World State ⏳). A part, not the layout's strip zone. */
+[data-widget-part~="stats.root"]:is([data-arrangement="list"], [data-arrangement="strip"]) {
+	display: flex;
+	gap: 0.35rem 0.9rem;
+	height: auto;
+	padding: 0.35rem 0.5rem;
+	min-width: 0;
+}
+/* A strip reads across the top of the messages and wraps rather than
+   scrolls, so no stat is hidden behind an edge nobody drags. */
+[data-widget-part~="stats.root"][data-arrangement="strip"],
+[data-widget-part~="stats.root"][data-arrangement="strip"] > [data-widget-part~="stats.group"] {
+	flex-flow: row wrap;
+	align-items: center;
+	overflow: visible;
+}
+[data-widget-part~="stats.root"][data-arrangement="strip"] > [data-widget-part~="stats.group"] {
+	gap: 0.35rem 0.9rem;
+}
+[data-widget-part~="stats.root"][data-arrangement="strip"] [data-widget-part~="stat-slot.root"] {
+	flex: 0 1 auto;
+}
+[data-widget-part~="stats.root"][data-arrangement="list"] {
+	flex-direction: column;
+	overflow: auto;
+}
+[data-widget-part~="stats.root"][data-arrangement="list"] > [data-widget-part~="stats.group"] {
+	gap: 0.35rem 0.9rem;
+}
+/* A list given a wide cell reads in columns rather than one long line of
+   label, gap, value across the whole width (the `sp-widget` container is the
+   host box). After the base rules, so it wins at equal specificity. */
+@container sp-widget (min-width: 40rem) {
+	[data-widget-part~="stats.root"][data-arrangement="list"],
+	[data-widget-part~="stats.root"][data-arrangement="list"] > [data-widget-part~="stats.group"] {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+		align-content: start;
+	}
+	[data-widget-part~="stats.root"][data-arrangement="list"]
+		> :not([data-widget-part~="stat-slot.root"], [data-widget-part~="stats.strip"]),
+	[data-widget-part~="stats.root"][data-arrangement="list"]
+		> [data-widget-part~="stats.group"]
+		> :not([data-widget-part~="stat-slot.root"], [data-widget-part~="stats.strip"]) {
+		grid-column: 1 / -1;
+	}
+}
+/* The empty floor, as a line rather than a centred block. */
+[data-widget-part~="stats.root"]:is([data-arrangement="list"], [data-arrangement="strip"]) > [data-widget-part~="stats.empty"] {
+	flex-direction: row;
+	justify-content: flex-start;
+	gap: 0.4rem;
+	height: auto;
+	padding: 0;
+	text-align: start;
+	font-size: 0.7rem;
+}
+/* One owner's line: its name, then its slots, as one group — in a strip it
+   wraps with the rest; in a list it stacks. */
+[data-widget-part~="stats.strip"] {
+	display: flex;
+	flex-flow: row wrap;
+	align-items: center;
+	gap: 0.35rem 0.9rem;
+	min-width: 0;
+}
+[data-widget-part~="stats.root"][data-arrangement="list"] [data-widget-part~="stats.strip"] {
+	flex-direction: column;
+	align-items: stretch;
+}
+/* An owner's head in a line is not a card's, so it carries no generic
+   `card-head`. */
+[data-widget-part~="stats.strip-head"] {
+	display: flex;
+	align-items: center;
+	gap: 0.3rem;
+	font-size: 0.72rem;
+	min-width: 0;
+}
+/* The owner's name: one line, cut with an ellipsis rather than wrapped. */
+[data-widget-part~="stats.strip-name"] {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: var(--font-weight-semibold);
+}
+
+/* ── Stats: the stat trail (F2) ──────────────────────────────────────────── */
+
+/* Parts: stats.trail (the `sp-popover`, last in a slot's row) · stats.trail-open
+   (its button) · stats.trail-panel (the popover's body, portalled to <body>,
+   where these global rules still reach it) · stats.trail-head · stats.trail-list
+   · stats.trail-row (`data-by`: user · model · pipeline) · stats.trail-value ·
+   stats.trail-by · stats.trail-note. The row makes room for the button as a
+   third column, so the button sits beside the value, never over it; the label
+   column is the slot row's own (below). */
+[data-widget-part~="stat-slot.root"]:has(> [data-widget-part~="stats.trail"]) {
+	grid-template-columns: minmax(3.5rem, min(7rem, 38%)) minmax(0, 1fr) auto;
+}
+[data-widget-part~="stat-slot.root"][data-density="compact"]:has(> [data-widget-part~="stats.trail"]) {
+	grid-template-columns: auto minmax(0, 1fr) auto;
+}
+[data-widget-part~="stats.trail-open"] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: var(--sp-w-icon-button-pad);
+	border-radius: var(--sp-w-icon-button-radius);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="stats.trail-open"]:hover,
+[data-widget-part~="stats.trail-open"]:focus-visible,
+[data-widget-part~="stats.trail-open"][aria-expanded="true"] {
+	opacity: 1;
+	background: var(--sp-w-hover-bg);
+}
+/* STYLE-GUIDE §9: a 44px target on a coarse pointer. */
+@media (pointer: coarse) {
+	[data-widget-part~="stats.trail-open"] {
+		min-width: 44px;
+		min-height: 44px;
+	}
+}
+/* The popover's body: the sprite-set panel's card (`bg-primary-200-800`). */
+[data-widget-part~="stats.trail-panel"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	width: min(90vw, 260px);
+	max-height: min(60vh, 22rem);
+	overflow: auto;
+	padding: calc(var(--spacing) * 3);
+	border-radius: var(--radius-container);
+	background-color: light-dark(var(--color-primary-200), var(--color-primary-800));
+	box-shadow:
+		0 20px 25px -5px rgb(0 0 0 / 0.1),
+		0 8px 10px -6px rgb(0 0 0 / 0.1);
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="stats.trail-head"] {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	font-size: var(--sp-w-font-head);
+	font-weight: var(--font-weight-semibold);
+}
+[data-widget-part~="stats.trail-list"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.3rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="stats.trail-row"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.05rem;
+	padding-block: 0.15rem;
+	border-block-end: 1px solid color-mix(in oklab, currentColor 12%, transparent);
+}
+[data-widget-part~="stats.trail-row"]:last-child {
+	border-block-end: 0;
+}
+[data-widget-part~="stats.trail-value"] {
+	font-variant-numeric: tabular-nums;
+	overflow-wrap: anywhere;
+}
+[data-widget-part~="stats.trail-by"],
+[data-widget-part~="stats.trail-note"] {
+	font-size: var(--sp-w-font-meta);
+	opacity: var(--sp-w-muted-opacity);
+}
+
 /* ── One slot (SlotControl) ──────────────────────────────────────────────── */
 
 /* Keyed on the slot control's own parts (`data-widget-part`, P3e): a shared
@@ -3727,9 +4246,11 @@ button[data-widget-part~="messages.composer-persona"] {
    ring offset), each with the fallback its registration gives. The coarse
    targets are `@media (pointer: coarse)`, as they were. */
 
+/* The label takes at most 38% of the row, and 7rem at most, so a narrow card
+   still leaves its control room for a bar and its value. */
 [data-widget-part~="stat-slot.root"] {
 	display: grid;
-	grid-template-columns: minmax(4.5rem, 7rem) minmax(0, 1fr);
+	grid-template-columns: minmax(3.5rem, min(7rem, 38%)) minmax(0, 1fr);
 	align-items: center;
 	gap: 0.4rem;
 	font-size: var(--sp-w-font-row);
@@ -4075,12 +4596,17 @@ button[data-widget-part~="messages.composer-persona"] {
 /*
  * Core's Scene Portraits widget (R21), keyed on its widget parts
  * (`data-widget-part`, P3c); the markup carries no look. Parts:
- * scene-portraits.root · .alert · .alert-text · .dismiss · .empty · .scene ·
- * .face · .face-img (`data-blank`: no picture) · .face-name · .set-menu ·
- * .set · .set-name · .set-panel · .set-title · .set-list · .set-option ·
- * .set-note · .pins · .pin · .pin-img · .pin-clear · .pin-placeholder, and
- * the mini bars' .bars · .bar · .bar-label · .bar-track · .bar-fill
- * (STYLE-GUIDE §6.16).
+ * scene-portraits.root (`data-arrangement`: row · grid · column · stage) ·
+ * .alert · .alert-text · .dismiss · .empty · .scene · .stage · .face
+ * (`data-chosen`: its chosen image is drawn) · .face-img (`data-blank`: no
+ * picture) · .face-name · .recent-rank · .choose · .set-menu · .set ·
+ * .set-name · .set-panel · .set-title · .set-list · .set-option · .set-note,
+ * the chooser's .chooser · .chooser-head · .chooser-close · .chooser-list ·
+ * .chooser-tile (`data-chosen`) · .chooser-more · .chooser-note, and the
+ * mini bars' .bars · .bar · .bar-label · .bar-track · .bar-fill
+ * (STYLE-GUIDE §6.16). The pinned source's .pins · .pin · .pin-img ·
+ * .pin-clear · .pin-placeholder went with it (W6, 2026-10-11): a stage of
+ * chosen images is that look now.
  *
  * What the utilities and Skeleton classes it carried drew (`btn-icon`,
  * `btn-icon-sm`, `preset-tonal-surface`, `card`, `btn btn-sm`, the app's
@@ -4218,6 +4744,184 @@ button[data-widget-part~="messages.composer-persona"] {
 	opacity: 0.8;
 }
 
+/* ── the arrangements (W6): grid is the wrap above ───────────────────────── */
+
+/* A row: one line that scrolls across rather than wrapping. */
+[data-widget-part~="scene-portraits.root"][data-arrangement="row"] [data-widget-part~="scene-portraits.scene"] {
+	flex-wrap: nowrap;
+	overflow-x: auto;
+	overflow-y: hidden;
+}
+[data-widget-part~="scene-portraits.root"][data-arrangement="row"] [data-widget-part~="scene-portraits.face"] {
+	flex: 0 0 clamp(4.5rem, 28cqi, 9rem);
+}
+/* A column: one face under the next, each as wide as the rail allows. */
+[data-widget-part~="scene-portraits.root"][data-arrangement="column"] [data-widget-part~="scene-portraits.scene"] {
+	flex-direction: column;
+	flex-wrap: nowrap;
+	align-items: center;
+}
+[data-widget-part~="scene-portraits.root"][data-arrangement="column"] [data-widget-part~="scene-portraits.face"] {
+	flex: 0 0 auto;
+	inline-size: min(100%, 12rem);
+	max-width: none;
+}
+/* A stage: the first two, large, side by side, each standing on the floor
+   of its half — the look the pinned portraits had. One alone takes both. */
+[data-widget-part~="scene-portraits.stage"] {
+	display: grid;
+	flex: 1;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: calc(var(--spacing) * 2);
+	min-height: 0;
+}
+[data-widget-part~="scene-portraits.stage"] > [data-widget-part~="scene-portraits.face"] {
+	justify-content: flex-end;
+	max-width: none;
+	min-height: 0;
+}
+[data-widget-part~="scene-portraits.stage"] > [data-widget-part~="scene-portraits.face"]:only-child {
+	grid-column: 1 / -1;
+}
+[data-widget-part~="scene-portraits.stage"] [data-widget-part~="scene-portraits.face-img"]:not([data-blank]) {
+	inline-size: 100%;
+	aspect-ratio: auto;
+	max-height: 100%;
+	min-height: 0;
+	object-fit: contain;
+	object-position: bottom;
+	background: none;
+	/* Tailwind's `drop-shadow-lg` (its `--drop-shadow-lg`, written out). */
+	filter: drop-shadow(0 4px 4px rgb(0 0 0 / 0.15));
+}
+
+/* Whoever spoke last is 1 (who: recent), in the face's top right corner. */
+[data-widget-part~="scene-portraits.recent-rank"] {
+	position: absolute;
+	top: 0.25rem;
+	right: 0.25rem;
+	min-inline-size: 1.1rem;
+	padding: 0 0.3rem;
+	border-radius: var(--sp-w-chip-radius);
+	background: color-mix(in oklab, var(--color-surface-950) 55%, transparent);
+	color: var(--color-surface-50);
+	font-size: var(--sp-w-font-meta);
+	font-weight: var(--font-weight-semibold);
+	line-height: 1.1rem;
+	text-align: center;
+}
+/* ⋯ on a face (face: chosen): a quiet square over the portrait's corner,
+   below the rank when there is one. */
+[data-widget-part~="scene-portraits.choose"] {
+	position: absolute;
+	top: 0.25rem;
+	right: 0.25rem;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	inline-size: 1.5rem;
+	block-size: 1.5rem;
+	border-radius: var(--sp-w-icon-button-radius);
+	color: var(--color-surface-950-50);
+	background-color: var(--color-surface-50-950);
+	opacity: 70%;
+}
+[data-widget-part~="scene-portraits.root"][data-who="recent"] [data-widget-part~="scene-portraits.choose"] {
+	top: 1.6rem;
+}
+[data-widget-part~="scene-portraits.choose"]:hover,
+[data-widget-part~="scene-portraits.choose"]:focus-visible {
+	opacity: 100%;
+}
+@media (pointer: coarse) {
+	[data-widget-part~="scene-portraits.choose"] {
+		inline-size: 2.75rem;
+		block-size: 2.75rem;
+	}
+}
+
+/* ── the chooser (⋯ → Choose image): a member's gallery, paged ───────────── */
+
+[data-widget-part~="scene-portraits.chooser"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.4rem;
+	min-height: 0;
+	overflow: auto;
+}
+[data-widget-part~="scene-portraits.chooser-head"] {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.4rem;
+	font-size: var(--sp-w-font-head);
+	font-weight: var(--font-weight-semibold);
+}
+[data-widget-part~="scene-portraits.chooser-close"] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	inline-size: 1.5rem;
+	block-size: 1.5rem;
+	border-radius: var(--sp-w-icon-button-radius);
+}
+[data-widget-part~="scene-portraits.chooser-close"]:hover,
+[data-widget-part~="scene-portraits.chooser-close"]:focus-visible {
+	background: var(--sp-w-hover-bg);
+}
+[data-widget-part~="scene-portraits.chooser-list"] {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(4rem, 1fr));
+	gap: 0.35rem;
+}
+[data-widget-part~="scene-portraits.chooser-tile"] {
+	aspect-ratio: 1;
+	padding: 0;
+	overflow: hidden;
+	border: 2px solid transparent;
+	border-radius: var(--sp-w-control-radius);
+	background: var(--sp-w-card-bg);
+}
+[data-widget-part~="scene-portraits.chooser-tile"] > img {
+	inline-size: 100%;
+	block-size: 100%;
+	object-fit: cover;
+}
+/* The image this face shows. */
+[data-widget-part~="scene-portraits.chooser-tile"][data-chosen] {
+	border-color: var(--color-primary-500);
+}
+[data-widget-part~="scene-portraits.chooser-tile"]:focus-visible {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: 1px;
+}
+[data-widget-part~="scene-portraits.chooser-more"] {
+	align-self: center;
+	padding: var(--sp-w-control-pad);
+	border-radius: var(--sp-w-control-radius);
+	background: var(--sp-w-control-bg);
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="scene-portraits.chooser-more"]:hover {
+	background: var(--sp-w-chip-on-bg);
+}
+/* Use the avatar (F2): takes the chosen image away — quieter than Show more. */
+[data-widget-part~="scene-portraits.chooser-clear"] {
+	align-self: flex-start;
+	padding: var(--sp-w-control-pad);
+	border-radius: var(--sp-w-control-radius);
+	font-size: var(--sp-w-font-row);
+	text-decoration-line: underline;
+	text-underline-offset: 2px;
+}
+[data-widget-part~="scene-portraits.chooser-clear"]:hover {
+	background: var(--sp-w-hover-bg);
+}
+[data-widget-part~="scene-portraits.chooser-note"] {
+	font-size: var(--sp-w-font-note);
+	opacity: var(--sp-w-muted-opacity);
+}
+
 /* The sprite-set switch: over the portrait's top corner, not under the name —
    a short widget clips everything below the face, and the switch must stay
    reachable. The `sp-popover` (which wraps the trigger) is what sits in the
@@ -4352,87 +5056,6 @@ button[data-widget-part~="messages.composer-persona"] {
 	font-size: calc(0.75rem * var(--text-scaling));
 	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
 	opacity: 80%;
-}
-
-/* ── the pinned source: two pins, side by side ───────────────────────────── */
-
-[data-widget-part~="scene-portraits.pins"] {
-	display: grid;
-	flex: 1;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: calc(var(--spacing) * 2);
-	min-height: 0;
-}
-/* A pin stands on the cell's floor, its bars under it. */
-[data-widget-part~="scene-portraits.pin"] {
-	position: relative;
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: flex-end;
-	min-height: 0;
-}
-[data-widget-part~="scene-portraits.pin-img"] {
-	width: 100%;
-	max-height: 100%;
-	min-height: 0;
-	object-fit: contain;
-	object-position: bottom;
-	/* Tailwind's `drop-shadow-lg` (its `--drop-shadow-lg`, written out). */
-	filter: drop-shadow(0 4px 4px rgb(0 0 0 / 0.15));
-}
-/* Clear a pin: a quiet tonal square in the pin's corner (`btn-icon
-   btn-icon-sm preset-tonal-surface`, `opacity-70`, full on hover). */
-[data-widget-part~="scene-portraits.pin-clear"] {
-	position: absolute;
-	top: var(--spacing);
-	right: var(--spacing);
-	display: inline-flex;
-	justify-content: center;
-	align-items: center;
-	width: calc(var(--text-sm) * 2 - calc(var(--spacing) * 0.5));
-	height: calc(var(--text-sm) * 2 - calc(var(--spacing) * 0.5));
-	padding: calc((var(--text-sm) - calc(var(--spacing) * 0.5)) / 2);
-	border-radius: var(--radius-base);
-	font-size: var(--text-sm);
-	line-height: var(--text-sm);
-	white-space: nowrap;
-	text-decoration-line: none;
-	color: var(--color-surface-950-50);
-	background-color: var(--color-surface-50-950);
-	opacity: 70%;
-	transition-property: var(--default-transition-property);
-	transition-timing-function: var(--default-transition-timing-function);
-	transition-duration: var(--default-transition-duration);
-}
-[data-widget-part~="scene-portraits.pin-clear"] > sp-icon {
-	inline-size: var(--text-sm);
-	block-size: var(--text-sm);
-}
-@media (hover: hover) {
-	[data-widget-part~="scene-portraits.pin-clear"]:hover {
-		opacity: 100%;
-	}
-	[data-widget-part~="scene-portraits.pin-clear"]:not(:disabled):hover {
-		filter: brightness(125%);
-	}
-	[data-widget-part~="scene-portraits.pin-clear"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *) {
-		filter: brightness(75%);
-	}
-}
-/* A side with nothing pinned says so, inside a dashed frame. */
-[data-widget-part~="scene-portraits.pin-placeholder"] {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	width: 100%;
-	height: 100%;
-	border-width: var(--default-border-width, 1px);
-	border-style: dashed;
-	border-color: light-dark(var(--color-surface-300), var(--color-surface-700));
-	border-radius: var(--radius-lg);
-	font-size: 11px;
-	color: var(--color-surface-500);
 }
 
 /* ── the mini bar row (StatBars) ─────────────────────────────────────────── */
@@ -4617,6 +5240,2232 @@ button[data-widget-part~="messages.composer-persona"] {
 	[data-widget-part~="authors-note.save"],
 	[data-widget-part~="authors-note.discard"],
 	[data-widget-part~="authors-note.number"] {
+		min-height: 44px;
+	}
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   §turn-order (new with the widget, 2026-10-10, W1)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Core's Turn order widget, keyed on its widget parts; the markup carries no
+ * look. Parts: turn-order.root · .alert · .empty · .head · .head-text ·
+ * .voice · .list · .row · .face · .name · .state · .controls · .pick ·
+ * .continue · .strategy (STYLE-GUIDE §6.16). State is the elements' own: a
+ * row's chip on its `data-state` (`due` · `then` · `you`), a face with no
+ * picture `data-blank`, a control the viewer may not press its `disabled`.
+ * The same visual language as the composer's who-is-due-next line
+ * (§conversation, `messages.turn-line-*`): Pick is its quiet button, Continue
+ * its filled pill; the rows are a card's, with the `--sp-w-*` chip.
+ */
+
+/* The widget's box: the head line, the rows, the controls, the strategy. */
+[data-widget-part~="turn-order.root"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	height: 100%;
+	min-width: 0;
+	padding: calc(var(--spacing) * 2);
+	overflow: auto;
+}
+/* A press the page declined (R77): this widget's own line. */
+[data-widget-part~="turn-order.alert"] {
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+/* Nobody to take a turn: why, quietly, where the rows would be. */
+[data-widget-part~="turn-order.empty"] {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: var(--sp-w-empty-gap);
+	flex: 1;
+	padding: var(--sp-w-empty-pad);
+	text-align: center;
+	font-size: var(--sp-w-font-empty);
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* The head line: whose turn it is, in the composer line's words. */
+[data-widget-part~="turn-order.head"] {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	min-width: 0;
+	margin: 0;
+	font-size: 13px;
+	line-height: 1.45;
+	font-weight: var(--font-weight-medium);
+}
+[data-widget-part~="turn-order.head-text"] {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* The pipeline's own voice (a narrator turn) has no face: its glyph. */
+[data-widget-part~="turn-order.voice"] {
+	flex-shrink: 0;
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+
+/* The rows: one prepared turn each, in the order's order. */
+[data-widget-part~="turn-order.list"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.2rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="turn-order.row"] {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	min-width: 0;
+	padding: var(--sp-w-card-pad);
+	border-radius: var(--sp-w-card-radius);
+	font-size: var(--sp-w-font-row);
+}
+/* The head row stands out as the composer's line does: a card behind it. */
+[data-widget-part~="turn-order.row"][data-state="due"],
+[data-widget-part~="turn-order.row"][data-state="you"]:first-child {
+	background: var(--sp-w-card-bg);
+}
+/* A face: the member's picture, or a glyph where there is none. */
+[data-widget-part~="turn-order.face"] {
+	flex-shrink: 0;
+	width: calc(var(--spacing) * 6);
+	height: calc(var(--spacing) * 6);
+	border-radius: 999px;
+	object-fit: cover;
+}
+[data-widget-part~="turn-order.face"][data-blank] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	background: var(--sp-w-chip-bg);
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+[data-widget-part~="turn-order.head"] > [data-widget-part~="turn-order.face"] {
+	width: calc(var(--spacing) * 7);
+	height: calc(var(--spacing) * 7);
+}
+/* The name: one line, cut with an ellipsis rather than wrapped. */
+[data-widget-part~="turn-order.name"] {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+[data-widget-part~="turn-order.row"][data-state="due"] > [data-widget-part~="turn-order.name"],
+[data-widget-part~="turn-order.row"][data-state="you"] > [data-widget-part~="turn-order.name"] {
+	font-weight: var(--font-weight-semibold);
+}
+/* The chip: Due reads as selection (STYLE-GUIDE §2.4, tonal primary), You
+   as the viewer's own (tonal secondary), Then quiet. */
+[data-widget-part~="turn-order.state"] {
+	flex-shrink: 0;
+	padding: var(--sp-w-chip-pad);
+	border-radius: var(--sp-w-chip-radius);
+	background: var(--sp-w-chip-bg);
+	font-size: var(--sp-w-font-meta);
+	white-space: nowrap;
+}
+[data-widget-part~="turn-order.row"][data-state="then"] > [data-widget-part~="turn-order.state"] {
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="turn-order.row"][data-state="due"] > [data-widget-part~="turn-order.state"] {
+	background: color-mix(in oklab, var(--color-primary-500) 20%, transparent);
+	color: light-dark(var(--color-primary-800), var(--color-primary-200));
+}
+[data-widget-part~="turn-order.row"][data-state="you"] > [data-widget-part~="turn-order.state"] {
+	background: color-mix(in oklab, var(--color-secondary-500) 20%, transparent);
+	color: light-dark(var(--color-secondary-800), var(--color-secondary-200));
+}
+/* 🚧 W6 (`showBenched`): the benched characters, after the order and set
+   apart from it — in the session, out of the turns, so drawn quieter. */
+[data-widget-part~="turn-order.benched"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.2rem;
+	margin: 0;
+	padding: 0.3rem 0 0;
+	border-top: 1px dashed color-mix(in oklab, currentColor 18%, transparent);
+	list-style: none;
+}
+[data-widget-part~="turn-order.row"][data-state="benched"] {
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* The controls: Pick who speaks, then Continue at the row's end. */
+[data-widget-part~="turn-order.controls"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: var(--spacing);
+}
+/* Pick who speaks: the composer's quiet button (as Someone else). */
+[data-widget-part~="turn-order.pick"] {
+	display: inline-flex;
+	height: calc(var(--spacing) * 8);
+	align-items: center;
+	gap: var(--spacing);
+	border-radius: 6px;
+	padding-inline: calc(var(--spacing) * 2);
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+@media (hover: hover) {
+	[data-widget-part~="turn-order.pick"]:not(:disabled):hover {
+		color: light-dark(var(--color-surface-900), var(--color-surface-50));
+	}
+}
+/* Continue: the composer's, filled. */
+[data-widget-part~="turn-order.continue"] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: calc(var(--spacing) * 1.5);
+	height: calc(var(--spacing) * 8);
+	border-radius: calc(infinity * 1px);
+	padding-inline: calc(var(--spacing) * 3);
+	white-space: nowrap;
+	font-size: 13px;
+	line-height: 1.45;
+	font-weight: var(--font-weight-medium);
+	background-color: var(--color-primary-500);
+	color: var(--color-primary-contrast-500);
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+@media (hover: hover) {
+	[data-widget-part~="turn-order.continue"]:not(:disabled):hover {
+		filter: brightness(125%);
+	}
+	[data-widget-part~="turn-order.continue"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *) {
+		filter: brightness(75%);
+	}
+}
+[data-widget-part~="turn-order.continue"]:not(:disabled):active {
+	filter: brightness(90%);
+	transform: scale(0.98);
+}
+/* A 2px primary ring outside a 2px offset, never the outline. */
+[data-widget-part~="turn-order.pick"]:focus-visible,
+[data-widget-part~="turn-order.continue"]:focus-visible {
+	box-shadow:
+		0 0 0 2px #fff,
+		0 0 0 4px var(--color-primary-500);
+	outline-style: none;
+}
+/* Greyed, never hidden: the reason is the control's title. */
+[data-widget-part~="turn-order.pick"]:disabled,
+[data-widget-part~="turn-order.continue"]:disabled {
+	cursor: not-allowed;
+	opacity: 40%;
+	filter: grayscale(0.3);
+}
+/* The strategy in force: one quiet line under the controls. */
+[data-widget-part~="turn-order.strategy"] {
+	margin: 0;
+	text-align: end;
+	font-size: var(--sp-w-font-note);
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* STYLE-GUIDE §9: a finger lands on 44px, however small the control reads. */
+@media (pointer: coarse) {
+	[data-widget-part~="turn-order.pick"],
+	[data-widget-part~="turn-order.continue"] {
+		height: 44px;
+	}
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   §actions (new with the widget, 2026-10-11, W8)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Core's Actions widget, keyed on its widget parts; the markup carries no
+ * look. Parts: actions.root · .alert · .empty · .group · .group-head ·
+ * .button · .reason (STYLE-GUIDE §6.16). State is the elements' own: the
+ * size on the root's `data-size` (`compact` · `large`), a group's kind on
+ * its `data-group` (`turn` · `genre` · `foreign`), a newcomer on its
+ * button's `data-new`, a greyed action its `aria-disabled`. Compact draws
+ * the composer's chips (§conversation, `messages.composer-chips`): one
+ * surface tone, a pill each, wrapping; Large draws a grid of tiles a finger
+ * lands on, the reason a visible second line.
+ */
+
+/* The widget's box: one group under another. */
+[data-widget-part~="actions.root"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 3);
+	height: 100%;
+	min-width: 0;
+	padding: calc(var(--spacing) * 2);
+	overflow: auto;
+}
+/* A press that did not go through: this widget's own line. */
+[data-widget-part~="actions.alert"] {
+	margin: 0;
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+/* Nothing to press: why, quietly, where the buttons would be. */
+[data-widget-part~="actions.empty"] {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: var(--sp-w-empty-gap);
+	flex: 1;
+	padding: var(--sp-w-empty-pad);
+	text-align: center;
+	font-size: var(--sp-w-font-empty);
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* A group: its heading on a line of its own, then its buttons, wrapping. */
+[data-widget-part~="actions.group"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+	min-width: 0;
+}
+[data-widget-part~="actions.group-head"] {
+	flex-basis: 100%;
+	margin: 0;
+	font-size: var(--sp-w-font-head);
+	font-weight: var(--font-weight-semibold);
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* A button: the composer's chip — icon and name on one pill, one surface tone. */
+[data-widget-part~="actions.button"] {
+	position: relative;
+	display: inline-flex;
+	height: calc(var(--spacing) * 8);
+	max-width: 100%;
+	align-items: center;
+	justify-content: center;
+	gap: calc(var(--spacing) * 1.5);
+	border-radius: calc(infinity * 1px);
+	border-style: none;
+	padding-inline: calc(var(--spacing) * 3);
+	font-size: 13px;
+	line-height: 1.45;
+	font-weight: var(--font-weight-medium);
+	white-space: nowrap;
+	background-color: var(--color-surface-200);
+	color: var(--color-surface-700);
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+[data-widget-part~="actions.button"]:where([data-mode="dark"], [data-mode="dark"] *) {
+	background-color: var(--color-surface-800);
+	color: var(--color-surface-200);
+}
+[data-widget-part~="actions.button"] > :where(svg, sp-icon) {
+	flex-shrink: 0;
+	width: calc(var(--spacing) * 4);
+	height: calc(var(--spacing) * 4);
+}
+[data-widget-part~="actions.button"] > span:not([data-widget-part]) {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+@media (hover: hover) {
+	[data-widget-part~="actions.button"]:not([aria-disabled="true"]):hover {
+		filter: brightness(105%);
+	}
+	[data-widget-part~="actions.button"]:not([aria-disabled="true"]):hover:where([data-mode="dark"], [data-mode="dark"] *) {
+		filter: brightness(120%);
+	}
+}
+[data-widget-part~="actions.button"]:not([aria-disabled="true"]):active {
+	transform: scale(0.98);
+}
+/* A 2px primary ring outside a 2px offset, never the outline. */
+[data-widget-part~="actions.button"]:focus-visible {
+	box-shadow:
+		0 0 0 2px #fff,
+		0 0 0 4px var(--color-primary-500);
+	outline-style: none;
+}
+/* Greyed, never hidden: the reason is the button's title and description. */
+[data-widget-part~="actions.button"][aria-disabled="true"] {
+	cursor: not-allowed;
+	opacity: 60%;
+}
+/* The *new* mark: the composer's dot, on the button itself. */
+[data-widget-part~="actions.button"][data-new]::after {
+	content: "";
+	position: absolute;
+	top: calc(var(--spacing) * -0.5);
+	right: calc(var(--spacing) * -0.5);
+	width: calc(var(--spacing) * 2);
+	height: calc(var(--spacing) * 2);
+	border-radius: calc(infinity * 1px);
+	background-color: var(--color-primary-500);
+}
+/* Why it is grey: read to a screen reader in compact (`sr-only`), a second
+   line in large. */
+[data-widget-part~="actions.reason"] {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border-width: 0;
+}
+
+/* Large: a grid of tiles, icon over name, the reason under them. */
+[data-widget-part~="actions.root"][data-size="large"] [data-widget-part~="actions.group"] {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+	align-items: stretch;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="actions.root"][data-size="large"] [data-widget-part~="actions.group-head"] {
+	grid-column: 1 / -1;
+}
+[data-widget-part~="actions.root"][data-size="large"] [data-widget-part~="actions.button"] {
+	flex-direction: column;
+	height: auto;
+	min-height: calc(var(--spacing) * 18);
+	gap: var(--spacing);
+	border-radius: var(--sp-w-card-radius);
+	padding: calc(var(--spacing) * 2);
+	white-space: normal;
+	text-align: center;
+}
+[data-widget-part~="actions.root"][data-size="large"] [data-widget-part~="actions.button"] > :where(svg, sp-icon) {
+	width: calc(var(--spacing) * 6);
+	height: calc(var(--spacing) * 6);
+}
+[data-widget-part~="actions.root"][data-size="large"] [data-widget-part~="actions.reason"] {
+	position: static;
+	width: auto;
+	height: auto;
+	margin: 0;
+	overflow: visible;
+	clip-path: none;
+	white-space: normal;
+	font-size: var(--sp-w-font-note);
+	font-weight: var(--font-weight-normal);
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* STYLE-GUIDE §9: a finger lands on 44px, however small the control reads. */
+@media (pointer: coarse) {
+	[data-widget-part~="actions.button"] {
+		height: calc(var(--spacing) * 11);
+		padding-inline: calc(var(--spacing) * 4);
+	}
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   §annex (new with the widget, 2026-10-11, W9)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Core's Annex widget, keyed on its widget parts; the markup carries no
+ * look. Parts: annex.root · .alert · .label · .empty · .value · .prose ·
+ * .rows · .row · .row-label · .row-value · .chips · .chip · .edit ·
+ * .editor · .text · .editor-actions · .save · .cancel (STYLE-GUIDE §6.16).
+ * State is the root's own: `data-state` (`pick` · `unwritten` · `hidden` ·
+ * `value`) and, with a value, the shape it is drawn by on `data-shape`
+ * (`text`, `integer`, `list`, `object`, …). The editor is the author's
+ * note's field and buttons (§authors-note).
+ */
+
+/* The widget's box: the value, then its Edit. */
+[data-widget-part~="annex.root"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	height: 100%;
+	min-width: 0;
+	padding: calc(var(--spacing) * 2);
+	overflow: auto;
+}
+/* A press that did not go through: this widget's own line. */
+[data-widget-part~="annex.alert"] {
+	margin: 0;
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+/* The field's label, when the setting draws it. */
+[data-widget-part~="annex.label"] {
+	margin: 0;
+	font-size: var(--sp-w-font-head);
+	font-weight: var(--font-weight-semibold);
+	opacity: var(--sp-w-muted-opacity);
+}
+/* Nothing to show: which nothing, quietly, where the value would be. */
+[data-widget-part~="annex.empty"] {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: var(--sp-w-empty-gap);
+	flex: 1;
+	padding: var(--sp-w-empty-pad);
+	text-align: center;
+	font-size: var(--sp-w-font-empty);
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* Text: prose, its own line breaks kept. */
+[data-widget-part~="annex.prose"] {
+	margin: 0;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+}
+
+/* A number, a choice, an object's members: label and value, a row each. */
+[data-widget-part~="annex.rows"] {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	gap: calc(var(--spacing) * 1) calc(var(--spacing) * 3);
+	margin: 0;
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="annex.row"] {
+	display: contents;
+}
+[data-widget-part~="annex.row-label"] {
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="annex.row-value"] {
+	margin: 0;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	font-weight: var(--font-weight-medium);
+}
+
+/* A list: a chip per item, wrapping. */
+[data-widget-part~="annex.chips"] {
+	display: flex;
+	flex-wrap: wrap;
+	gap: calc(var(--spacing) * 1.5);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="annex.chip"] {
+	max-width: 100%;
+	padding: var(--sp-w-chip-pad);
+	border-radius: var(--sp-w-chip-radius);
+	background: var(--sp-w-chip-bg);
+	font-size: var(--sp-w-font-row);
+	overflow-wrap: anywhere;
+}
+
+/* Edit, at the value's foot: the Session data list's button. */
+[data-widget-part~="annex.edit"] {
+	display: inline-flex;
+	align-self: flex-start;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+	min-height: calc(var(--spacing) * 8);
+	padding-inline: calc(var(--spacing) * 3);
+	border-radius: var(--radius-base);
+	font-size: var(--text-sm);
+	background-color: var(--sp-w-control-bg);
+	transition-property: var(--default-transition-property);
+	transition-duration: var(--default-transition-duration);
+}
+[data-widget-part~="annex.edit"] > :where(svg, sp-icon) {
+	flex-shrink: 0;
+	width: calc(var(--spacing) * 3.5);
+	height: calc(var(--spacing) * 3.5);
+}
+
+/* The editor: the author's note's field, then Cancel and Save. */
+[data-widget-part~="annex.editor"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="annex.text"] {
+	display: block;
+	width: 100%;
+	min-height: calc(var(--spacing) * 24);
+	padding: calc(var(--spacing) * 2);
+	border-width: 0;
+	border-radius: var(--radius-base);
+	resize: vertical;
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+	color: var(--color-surface-950-50);
+	background-color: var(--color-surface-50-950);
+	box-shadow: inset 0 0 0 1px var(--color-surface-300-700);
+	outline-color: transparent;
+}
+[data-widget-part~="annex.text"]:focus {
+	box-shadow: inset 0 0 0 2px var(--color-primary-500);
+}
+[data-widget-part~="annex.editor-actions"] {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="annex.save"],
+[data-widget-part~="annex.cancel"] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: calc(var(--spacing) * 9);
+	padding-inline: calc(var(--spacing) * 3);
+	border-radius: var(--radius-base);
+	font-size: var(--text-sm);
+	white-space: nowrap;
+	transition-property: var(--default-transition-property);
+	transition-duration: var(--default-transition-duration);
+}
+/* `btn preset-filled-primary-500`. */
+[data-widget-part~="annex.save"] {
+	background-color: var(--color-primary-500);
+	color: var(--color-primary-contrast-500);
+}
+@media (hover: hover) {
+	[data-widget-part~="annex.edit"]:hover,
+	[data-widget-part~="annex.save"]:hover,
+	[data-widget-part~="annex.cancel"]:hover {
+		filter: brightness(110%);
+	}
+	[data-widget-part~="annex.cancel"]:hover {
+		background-color: var(--color-surface-50-950);
+	}
+}
+/* A 2px primary ring outside a 2px offset, never the outline. */
+[data-widget-part~="annex.edit"]:focus-visible,
+[data-widget-part~="annex.save"]:focus-visible,
+[data-widget-part~="annex.cancel"]:focus-visible {
+	box-shadow:
+		0 0 0 2px #fff,
+		0 0 0 4px var(--color-primary-500);
+	outline-style: none;
+}
+
+/* STYLE-GUIDE §9: a finger lands on 44px, however small the control reads. */
+@media (pointer: coarse) {
+	[data-widget-part~="annex.edit"],
+	[data-widget-part~="annex.save"],
+	[data-widget-part~="annex.cancel"] {
+		min-height: calc(var(--spacing) * 11);
+		padding-inline: calc(var(--spacing) * 4);
+	}
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   §album (new with the widget, 2026-10-11, W2)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Core's Album widget, keyed on its widget parts; the markup carries no
+ * look. Parts: album.root · .alert · .toolbar · .grid · .latest · .strip ·
+ * .tile · .origin · .caption · .empty (STYLE-GUIDE §6.16). The settings
+ * ride on the root: `data-tile` (`small` · `medium` · `large`, the tile's
+ * side) and `data-arrangement` (`grid` · `latest`); a tile's origin on its
+ * `data-origin` (`attached` · `generated`), a file that is gone on
+ * `data-missing`. A tile is drawn as the media strip's is (§6.18): square,
+ * cropped to fill, bordered, radius 12px, a primary border on hover.
+ */
+
+/* The widget's box: the count, then the tiles, scrolling when they overrun. */
+[data-widget-part~="album.root"] {
+	--sp-album-tile: 7rem;
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	height: 100%;
+	min-width: 0;
+	padding: calc(var(--spacing) * 2);
+	overflow: auto;
+}
+[data-widget-part~="album.root"][data-tile="small"] {
+	--sp-album-tile: 4.5rem;
+}
+[data-widget-part~="album.root"][data-tile="large"] {
+	--sp-album-tile: 10rem;
+}
+/* A press the page declined: this widget's own line. */
+[data-widget-part~="album.alert"] {
+	margin: 0;
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+/* How many pictures: one quiet line above them. */
+[data-widget-part~="album.toolbar"] {
+	margin: 0;
+	font-size: var(--sp-w-font-meta);
+	opacity: var(--sp-w-muted-opacity);
+}
+/* Nothing yet: the one line, quietly, where the tiles would be. */
+[data-widget-part~="album.empty"] {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: var(--sp-w-empty-gap);
+	flex: 1;
+	padding: var(--sp-w-empty-pad);
+	text-align: center;
+	font-size: var(--sp-w-font-empty);
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* Grid: as many tiles of the chosen side as the box holds, stretched to
+   fill the row so no ragged gap sits at its end. */
+[data-widget-part~="album.grid"],
+[data-widget-part~="album.strip"] {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	min-width: 0;
+}
+[data-widget-part~="album.grid"] {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(var(--sp-album-tile), 1fr));
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="album.grid"] > li,
+[data-widget-part~="album.strip"] > li {
+	display: block;
+	min-width: 0;
+}
+/* Newest large: the newest picture whole, the rest one row that scrolls
+   sideways and never wraps. */
+[data-widget-part~="album.latest"] {
+	min-width: 0;
+}
+[data-widget-part~="album.strip"] {
+	display: flex;
+	gap: calc(var(--spacing) * 2);
+	overflow-x: auto;
+	padding-block-end: var(--spacing);
+}
+[data-widget-part~="album.strip"] > li {
+	flex: none;
+	inline-size: var(--sp-album-tile);
+}
+
+/* One tile: the strip's square, the picture cropped to fill it. */
+[data-widget-part~="album.tile"] {
+	position: relative;
+	display: block;
+	inline-size: 100%;
+	aspect-ratio: 1;
+	padding: 0;
+	border: 1px solid var(--color-surface-300-700);
+	border-radius: 12px;
+	overflow: hidden;
+	background-color: var(--color-surface-200-800);
+	cursor: zoom-in;
+}
+[data-widget-part~="album.tile"] > img {
+	display: block;
+	inline-size: 100%;
+	block-size: 100%;
+	object-fit: cover;
+}
+/* The newest, large: the whole picture, never cropped, on the tile's ground. */
+[data-widget-part~="album.latest"] > [data-widget-part~="album.tile"] {
+	aspect-ratio: 4 / 3;
+}
+[data-widget-part~="album.latest"] > [data-widget-part~="album.tile"] > img {
+	object-fit: contain;
+}
+/* A file that is gone: a dashed tile that says so, never a broken image. */
+[data-widget-part~="album.tile"][data-missing] {
+	display: grid;
+	place-content: center;
+	justify-items: center;
+	gap: var(--spacing);
+	padding: var(--spacing);
+	border-style: dashed;
+	border-color: var(--color-surface-400-600);
+	text-align: center;
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: 1.2;
+	color: var(--color-surface-700-300);
+	cursor: default;
+}
+/* Where it came from: a small round glyph in the top trailing corner. */
+[data-widget-part~="album.origin"] {
+	position: absolute;
+	inset-block-start: var(--spacing);
+	inset-inline-end: var(--spacing);
+	display: grid;
+	place-items: center;
+	inline-size: 1.4rem;
+	block-size: 1.4rem;
+	border-radius: 999px;
+	background-color: color-mix(in oklab, var(--color-surface-50-950) 85%, transparent);
+	color: var(--color-surface-950-50);
+	pointer-events: none;
+}
+/* Who showed it and when: along the bottom on a scrim, on hover or focus —
+   always, on the newest large. */
+[data-widget-part~="album.caption"] {
+	position: absolute;
+	inset-inline: 0;
+	inset-block-end: 0;
+	padding: calc(var(--spacing) * 1) calc(var(--spacing) * 1.5);
+	background: linear-gradient(
+		to top,
+		color-mix(in oklab, var(--color-surface-950) 72%, transparent),
+		transparent
+	);
+	color: var(--color-surface-50);
+	font-size: var(--sp-w-font-meta);
+	line-height: 1.3;
+	text-align: start;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	opacity: 0;
+	transition: opacity 120ms ease-out;
+	pointer-events: none;
+}
+[data-widget-part~="album.tile"]:hover > [data-widget-part~="album.caption"],
+[data-widget-part~="album.tile"]:focus-visible > [data-widget-part~="album.caption"],
+[data-widget-part~="album.latest"] [data-widget-part~="album.caption"] {
+	opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+	[data-widget-part~="album.caption"] {
+		transition: none;
+	}
+}
+@media (hover: hover) {
+	[data-widget-part~="album.tile"]:not([data-missing]):hover {
+		border-color: var(--color-primary-500);
+	}
+}
+[data-widget-part~="album.tile"]:focus-visible {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: 2px;
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   §chronicle (new with the widget, 2026-10-11, W3)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Core's Chronicle widget, keyed on its widget parts; the markup carries no
+ * look. Parts: chronicle.root · .alert · .empty · .note · .clock ·
+ * .clock-head · .clock-date · .behind · .clock-note · .clock-controls ·
+ * .step · .move · .follow · .move-form · .fields · .field · .field-label ·
+ * .field-input · .form-actions · .cancel · .save · .now · .heading ·
+ * .entry · .entry-date · .entry-line · .entry-scenes · .toolbar · .open ·
+ * .start · .scenes · .scene-list · .scene · .scene-open · .scene-swatch ·
+ * .scene-name · .scene-span · .scene-actions · .summarize · .extend ·
+ * .earlier · .earlier-list · .earlier-row · .earlier-entry · .earlier-more
+ * · 🚧 live scenes (§7, lane D): .open-scene · .open-scene-head ·
+ * .open-scene-name · .open-scene-meta · .open-scene-since · .cast ·
+ * .cast-member · .cast-evidence · .open-scene-actions · .close ·
+ * .close-summarize · .open-scene-note · .scene-status · .scene-summarize ·
+ * .summarize-all (STYLE-GUIDE §6.16). State is the elements' own: a scene's colour on its
+ * swatch's `data-swatch` (0–7, the conversation's scene palette, in the
+ * order the session's scenes began), an entry that says nothing yet on its
+ * line's `data-blank`. Earlier folds in the host's accordion
+ * (`sp-accordion`, its trigger the head), which draws its own fold. Its
+ * buttons are the Annex's (§annex).
+ */
+
+/* The widget's box: the clock, Now, the scenes, Earlier. */
+[data-widget-part~="chronicle.root"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 3);
+	height: 100%;
+	min-width: 0;
+	padding: calc(var(--spacing) * 2);
+	overflow: auto;
+}
+/* A read or a press the page declined (R77): this widget's own line. */
+[data-widget-part~="chronicle.alert"] {
+	margin: 0;
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+/* Nothing to show here: why, quietly. */
+[data-widget-part~="chronicle.empty"],
+[data-widget-part~="chronicle.note"] {
+	margin: 0;
+	padding: calc(var(--spacing) * 1) 0;
+	font-size: var(--sp-w-font-empty);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="chronicle.root"][data-state="no-book"] > [data-widget-part~="chronicle.empty"] {
+	display: flex;
+	flex: 1;
+	align-items: center;
+	justify-content: center;
+	padding: var(--sp-w-empty-pad);
+	text-align: center;
+}
+
+/* The clock: the date large, whose clock it is beneath, the owner's controls. */
+[data-widget-part~="chronicle.clock"] {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing);
+	padding: var(--sp-w-card-pad);
+	border-radius: var(--sp-w-card-radius);
+	background: var(--sp-w-card-bg);
+}
+[data-widget-part~="chronicle.clock-head"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: calc(var(--spacing) * 2);
+	min-width: 0;
+}
+[data-widget-part~="chronicle.clock-date"] {
+	min-width: 0;
+	font-size: calc(1rem * var(--text-scaling));
+	line-height: 1.3;
+	font-weight: var(--font-weight-semibold);
+}
+/* Behind the line: a tonal warning chip, its meaning in its title. */
+[data-widget-part~="chronicle.behind"] {
+	padding: var(--sp-w-chip-pad);
+	border-radius: var(--sp-w-chip-radius);
+	background: color-mix(in oklab, var(--color-warning-500) 20%, transparent);
+	color: light-dark(var(--color-warning-800), var(--color-warning-200));
+	font-size: var(--sp-w-font-meta);
+	white-space: nowrap;
+}
+[data-widget-part~="chronicle.clock-note"] {
+	margin: 0;
+	font-size: var(--sp-w-font-note);
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* Every row of buttons: wrapping, the gap of a toolbar. */
+[data-widget-part~="chronicle.clock-controls"],
+[data-widget-part~="chronicle.toolbar"],
+[data-widget-part~="chronicle.scene-actions"],
+[data-widget-part~="chronicle.form-actions"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+}
+[data-widget-part~="chronicle.form-actions"] {
+	justify-content: flex-end;
+}
+/* Its buttons: the Annex's Edit (a quiet control), Save filled. */
+[data-widget-part~="chronicle.step"],
+[data-widget-part~="chronicle.move"],
+[data-widget-part~="chronicle.follow"],
+[data-widget-part~="chronicle.open"],
+[data-widget-part~="chronicle.start"],
+[data-widget-part~="chronicle.summarize"],
+[data-widget-part~="chronicle.extend"],
+[data-widget-part~="chronicle.cancel"],
+[data-widget-part~="chronicle.save"],
+[data-widget-part~="chronicle.close"],
+[data-widget-part~="chronicle.close-summarize"],
+[data-widget-part~="chronicle.summarize-all"],
+[data-widget-part~="chronicle.scene-summarize"] {
+	display: inline-flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+	min-height: calc(var(--spacing) * 8);
+	padding-inline: calc(var(--spacing) * 2.5);
+	border-radius: var(--radius-base);
+	font-size: calc(0.75rem * var(--text-scaling));
+	white-space: nowrap;
+	background-color: var(--sp-w-control-bg);
+	transition-property: var(--default-transition-property);
+	transition-duration: var(--default-transition-duration);
+}
+[data-widget-part~="chronicle.step"] > :where(svg, sp-icon),
+[data-widget-part~="chronicle.move"] > :where(svg, sp-icon),
+[data-widget-part~="chronicle.open"] > :where(svg, sp-icon),
+[data-widget-part~="chronicle.start"] > :where(svg, sp-icon),
+[data-widget-part~="chronicle.summarize"] > :where(svg, sp-icon),
+[data-widget-part~="chronicle.extend"] > :where(svg, sp-icon),
+[data-widget-part~="chronicle.close"] > :where(svg, sp-icon),
+[data-widget-part~="chronicle.close-summarize"] > :where(svg, sp-icon),
+[data-widget-part~="chronicle.summarize-all"] > :where(svg, sp-icon) {
+	flex-shrink: 0;
+	width: calc(var(--spacing) * 3.5);
+	height: calc(var(--spacing) * 3.5);
+}
+/* `btn preset-filled-primary-500`. */
+[data-widget-part~="chronicle.save"] {
+	background-color: var(--color-primary-500);
+	color: var(--color-primary-contrast-500);
+}
+/* Extend graph is work waiting: the old pane's tonal warning. */
+[data-widget-part~="chronicle.extend"] {
+	background: color-mix(in oklab, var(--color-warning-500) 20%, transparent);
+	color: light-dark(var(--color-warning-800), var(--color-warning-200));
+}
+@media (hover: hover) {
+	:is(
+			[data-widget-part~="chronicle.step"],
+			[data-widget-part~="chronicle.move"],
+			[data-widget-part~="chronicle.follow"],
+			[data-widget-part~="chronicle.open"],
+			[data-widget-part~="chronicle.start"],
+			[data-widget-part~="chronicle.summarize"],
+			[data-widget-part~="chronicle.extend"],
+			[data-widget-part~="chronicle.cancel"],
+			[data-widget-part~="chronicle.save"],
+			[data-widget-part~="chronicle.close"],
+			[data-widget-part~="chronicle.close-summarize"],
+			[data-widget-part~="chronicle.summarize-all"],
+			[data-widget-part~="chronicle.scene-summarize"]
+		):not(:disabled):hover {
+		filter: brightness(110%);
+	}
+}
+/* A 2px primary ring outside a 2px offset, never the outline. */
+:is(
+		[data-widget-part~="chronicle.step"],
+		[data-widget-part~="chronicle.move"],
+		[data-widget-part~="chronicle.follow"],
+		[data-widget-part~="chronicle.open"],
+		[data-widget-part~="chronicle.start"],
+		[data-widget-part~="chronicle.summarize"],
+		[data-widget-part~="chronicle.extend"],
+		[data-widget-part~="chronicle.cancel"],
+		[data-widget-part~="chronicle.save"],
+		[data-widget-part~="chronicle.scene-open"],
+		[data-widget-part~="chronicle.earlier-entry"],
+		[data-widget-part~="chronicle.close"],
+		[data-widget-part~="chronicle.close-summarize"],
+		[data-widget-part~="chronicle.summarize-all"],
+		[data-widget-part~="chronicle.scene-summarize"]
+	):focus-visible {
+	box-shadow:
+		0 0 0 2px #fff,
+		0 0 0 4px var(--color-primary-500);
+	outline-style: none;
+}
+/* A press in flight: greyed, never hidden. */
+:is(
+		[data-widget-part~="chronicle.step"],
+		[data-widget-part~="chronicle.move"],
+		[data-widget-part~="chronicle.follow"],
+		[data-widget-part~="chronicle.start"],
+		[data-widget-part~="chronicle.summarize"],
+		[data-widget-part~="chronicle.extend"],
+		[data-widget-part~="chronicle.save"],
+		[data-widget-part~="chronicle.close"],
+		[data-widget-part~="chronicle.close-summarize"],
+		[data-widget-part~="chronicle.summarize-all"],
+		[data-widget-part~="chronicle.scene-summarize"]
+	):disabled {
+	cursor: not-allowed;
+	opacity: 50%;
+}
+
+/* Move the clock…: the five parts in a wrapping row, then Cancel and Set. */
+[data-widget-part~="chronicle.move-form"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	padding-top: var(--spacing);
+}
+[data-widget-part~="chronicle.fields"] {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(4.5rem, 1fr));
+	gap: calc(var(--spacing) * 1.5);
+}
+[data-widget-part~="chronicle.field"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.15rem;
+	min-width: 0;
+}
+[data-widget-part~="chronicle.field-label"] {
+	font-size: var(--sp-w-font-meta);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="chronicle.field-input"] {
+	width: 100%;
+	min-width: 0;
+	padding: calc(var(--spacing) * 1) calc(var(--spacing) * 1.5);
+	border-width: 0;
+	border-radius: var(--radius-base);
+	font-size: calc(0.8125rem * var(--text-scaling));
+	color: var(--color-surface-950-50);
+	background-color: var(--color-surface-50-950);
+	box-shadow: inset 0 0 0 1px var(--color-surface-300-700);
+	outline-color: transparent;
+}
+[data-widget-part~="chronicle.field-input"]:focus {
+	box-shadow: inset 0 0 0 2px var(--color-primary-500);
+}
+
+/* Now and Scenes: a quiet heading over each. */
+[data-widget-part~="chronicle.now"],
+[data-widget-part~="chronicle.scenes"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 1.5);
+	min-width: 0;
+}
+[data-widget-part~="chronicle.heading"] {
+	margin: 0;
+	font-size: var(--sp-w-font-head);
+	font-weight: var(--font-weight-semibold);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	opacity: var(--sp-w-muted-opacity);
+}
+/* An entry: its date, its first line, how many scenes — a card for Now. */
+[data-widget-part~="chronicle.entry"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.15rem;
+	min-width: 0;
+	padding: var(--sp-w-card-pad);
+	border-radius: var(--sp-w-card-radius);
+	background: var(--sp-w-card-bg);
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="chronicle.entry-date"] {
+	font-weight: var(--font-weight-semibold);
+}
+[data-widget-part~="chronicle.entry-line"] {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+[data-widget-part~="chronicle.entry-line"][data-blank] {
+	font-style: italic;
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="chronicle.entry-scenes"] {
+	font-size: var(--sp-w-font-meta);
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* The scenes: one row each, its colour, its name, how many lines. */
+[data-widget-part~="chronicle.scene-list"],
+[data-widget-part~="chronicle.earlier-list"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.2rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="chronicle.scene-open"],
+[data-widget-part~="chronicle.earlier-entry"] {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	width: 100%;
+	min-width: 0;
+	min-height: calc(var(--spacing) * 8);
+	padding: var(--sp-w-card-pad);
+	border-radius: var(--sp-w-card-radius);
+	text-align: start;
+	font-size: var(--sp-w-font-row);
+}
+@media (hover: hover) {
+	[data-widget-part~="chronicle.scene-open"]:hover,
+	[data-widget-part~="chronicle.earlier-entry"]:hover {
+		background: var(--sp-w-hover-bg);
+	}
+}
+[data-widget-part~="chronicle.scene-swatch"] {
+	flex-shrink: 0;
+	width: 0.25rem;
+	align-self: stretch;
+	min-height: 1rem;
+	border-radius: 999px;
+	background: hsl(220, 65%, 62%);
+}
+/* The conversation's scene palette (messages' SessionContainer), in order. */
+[data-widget-part~="chronicle.scene-swatch"][data-swatch="1"] { background: hsl(150, 52%, 48%); }
+[data-widget-part~="chronicle.scene-swatch"][data-swatch="2"] { background: hsl(35, 75%, 55%); }
+[data-widget-part~="chronicle.scene-swatch"][data-swatch="3"] { background: hsl(280, 55%, 62%); }
+[data-widget-part~="chronicle.scene-swatch"][data-swatch="4"] { background: hsl(340, 60%, 58%); }
+[data-widget-part~="chronicle.scene-swatch"][data-swatch="5"] { background: hsl(190, 60%, 48%); }
+[data-widget-part~="chronicle.scene-swatch"][data-swatch="6"] { background: hsl(55, 70%, 50%); }
+[data-widget-part~="chronicle.scene-swatch"][data-swatch="7"] { background: hsl(15, 70%, 55%); }
+[data-widget-part~="chronicle.scene-name"] {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+[data-widget-part~="chronicle.scene-span"] {
+	flex-shrink: 0;
+	font-size: var(--sp-w-font-meta);
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* 🚧 The open scene (live scenes §7): a card under the clock — its colour
+   and name, since when and its lines, the proposed cast as quiet pills (each
+   pill's evidence in its title, and muted beside the name), then Close. */
+[data-widget-part~="chronicle.open-scene"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 1.5);
+	min-width: 0;
+	padding: var(--sp-w-card-pad);
+	border-radius: var(--sp-w-card-radius);
+	background: var(--sp-w-card-bg);
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="chronicle.open-scene-head"] {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	min-width: 0;
+}
+[data-widget-part~="chronicle.open-scene-name"] {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: var(--font-weight-semibold);
+}
+[data-widget-part~="chronicle.open-scene-meta"] {
+	display: flex;
+	flex-wrap: wrap;
+	gap: calc(var(--spacing) * 2);
+	margin: 0;
+	font-size: var(--sp-w-font-meta);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="chronicle.cast"] {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.3rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="chronicle.cast-member"] {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 0.3rem;
+	padding: var(--sp-w-chip-pad);
+	border-radius: var(--sp-w-chip-radius);
+	background: var(--sp-w-chip-bg);
+	font-size: var(--sp-w-font-meta);
+}
+[data-widget-part~="chronicle.cast-evidence"] {
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="chronicle.open-scene-actions"] {
+	display: flex;
+	flex-wrap: wrap;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="chronicle.open-scene-note"] {
+	margin: 0;
+	font-size: var(--sp-w-font-note);
+	opacity: var(--sp-w-muted-opacity);
+}
+/* A scene row: the row's button, then its Summarize beside it. */
+[data-widget-part~="chronicle.scene"] {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+	min-width: 0;
+}
+/* The summary dot: hollow none, pulsing running, the primary tone review
+   (🚧 a finished run waiting for the person), filled done, the error's tone
+   failed. Its words are its label and title, never the colour alone. */
+[data-widget-part~="chronicle.scene-status"] {
+	flex-shrink: 0;
+	width: 0.5rem;
+	height: 0.5rem;
+	border-radius: 999px;
+	border: 1.5px solid currentColor;
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="chronicle.scene-status"][data-status="running"] {
+	border-color: var(--color-primary-500);
+	animation: chronicle-summary-running 1.2s ease-in-out infinite;
+}
+[data-widget-part~="chronicle.scene-status"][data-status="review"] {
+	border-color: var(--color-primary-500);
+	background: var(--color-primary-500);
+	opacity: 1;
+}
+[data-widget-part~="chronicle.scene-status"][data-status="done"] {
+	border-color: var(--color-success-500);
+	background: var(--color-success-500);
+	opacity: 1;
+}
+[data-widget-part~="chronicle.scene-status"][data-status="failed"] {
+	border-color: var(--color-error-500);
+	background: var(--color-error-500);
+	opacity: 1;
+}
+@keyframes chronicle-summary-running {
+	50% {
+		opacity: 1;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	[data-widget-part~="chronicle.scene-status"][data-status="running"] {
+		animation: none;
+		opacity: 1;
+	}
+}
+
+/* Earlier: folded in the host's accordion; each entry a row of date, first
+   line, scenes. */
+[data-widget-part~="chronicle.earlier"] {
+	display: block;
+	min-width: 0;
+}
+[data-widget-part~="chronicle.earlier-entry"] > [data-widget-part~="chronicle.entry-date"] {
+	flex-shrink: 0;
+}
+[data-widget-part~="chronicle.earlier-entry"] > [data-widget-part~="chronicle.entry-line"] {
+	flex: 1;
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="chronicle.earlier-entry"] > [data-widget-part~="chronicle.entry-scenes"] {
+	flex-shrink: 0;
+}
+[data-widget-part~="chronicle.earlier-more"] {
+	margin: 0;
+	font-size: var(--sp-w-font-note);
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* STYLE-GUIDE §9: a finger lands on 44px, however small the control reads. */
+@media (pointer: coarse) {
+	:is(
+			[data-widget-part~="chronicle.step"],
+			[data-widget-part~="chronicle.move"],
+			[data-widget-part~="chronicle.follow"],
+			[data-widget-part~="chronicle.open"],
+			[data-widget-part~="chronicle.start"],
+			[data-widget-part~="chronicle.summarize"],
+			[data-widget-part~="chronicle.extend"],
+			[data-widget-part~="chronicle.cancel"],
+			[data-widget-part~="chronicle.save"],
+			[data-widget-part~="chronicle.scene-open"],
+			[data-widget-part~="chronicle.earlier-entry"],
+			[data-widget-part~="chronicle.field-input"],
+			[data-widget-part~="chronicle.close"],
+			[data-widget-part~="chronicle.close-summarize"],
+			[data-widget-part~="chronicle.summarize-all"],
+			[data-widget-part~="chronicle.scene-summarize"]
+		) {
+		min-height: 44px;
+	}
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   §places (new with the widget, 2026-10-11, W4)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Core's Places widget, keyed on its widget parts; the markup carries no
+ * look. Parts: places.root · .alert · .grant-note · .empty · .toolbar · .headline · .flip ·
+ * .list · .row · .row-open · .name · .here · .category · .present · .face ·
+ * .ways · .detail · .detail-head · .detail-name · .close · .detail-heading ·
+ * .detail-ways · .detail-none · .linked · .detail-present · .stats ·
+ * .detail-actions · .open (STYLE-GUIDE §6.16). State is the elements' own:
+ * a category's hue on `data-tint` (0–5, dealt in the lorebook's Places lens
+ * order, so a category is one hue on the book's map and here), the place
+ * the scene is at on its row's `data-here`. The map is the shared map
+ * canvas (§map-canvas). The hues are tokens a skin may retune.
+ */
+:root {
+	/* The lens's category palette (GraphVisualization), kept clear of the
+	   signal colours so a tint never reads as a warning. */
+	--sp-w-place-tint-0: #14b8a6;
+	--sp-w-place-tint-1: #a855f7;
+	--sp-w-place-tint-2: #ec4899;
+	--sp-w-place-tint-3: #0891b2;
+	--sp-w-place-tint-4: #d946ef;
+	--sp-w-place-tint-5: #78716c;
+}
+:is([data-widget-part~="places.root"], [data-widget-part~="map-canvas.root"]) [data-tint="0"] { --sp-place-tint: var(--sp-w-place-tint-0); }
+:is([data-widget-part~="places.root"], [data-widget-part~="map-canvas.root"]) [data-tint="1"] { --sp-place-tint: var(--sp-w-place-tint-1); }
+:is([data-widget-part~="places.root"], [data-widget-part~="map-canvas.root"]) [data-tint="2"] { --sp-place-tint: var(--sp-w-place-tint-2); }
+:is([data-widget-part~="places.root"], [data-widget-part~="map-canvas.root"]) [data-tint="3"] { --sp-place-tint: var(--sp-w-place-tint-3); }
+:is([data-widget-part~="places.root"], [data-widget-part~="map-canvas.root"]) [data-tint="4"] { --sp-place-tint: var(--sp-w-place-tint-4); }
+:is([data-widget-part~="places.root"], [data-widget-part~="map-canvas.root"]) [data-tint="5"] { --sp-place-tint: var(--sp-w-place-tint-5); }
+
+/* The widget's box: the headline and the flip, then the list or the map. */
+[data-widget-part~="places.root"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	height: 100%;
+	min-width: 0;
+	padding: calc(var(--spacing) * 2);
+	overflow: auto;
+}
+/* A read or a press the page declined (R77): this widget's own line. */
+[data-widget-part~="places.alert"] {
+	margin: 0;
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+/* Not granted `session:state`: one quiet line over the list, why nobody is in it. */
+[data-widget-part~="places.grant-note"] {
+	margin: 0;
+	font-size: var(--sp-w-font-note);
+	opacity: var(--sp-w-muted-opacity);
+}
+/* Nothing to draw: why, quietly, in the middle of the box. */
+[data-widget-part~="places.empty"] {
+	display: flex;
+	flex: 1;
+	align-items: center;
+	justify-content: center;
+	margin: 0;
+	padding: var(--sp-w-empty-pad);
+	font-size: var(--sp-w-font-empty);
+	text-align: center;
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="places.toolbar"],
+[data-widget-part~="places.detail-actions"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+}
+[data-widget-part~="places.headline"] {
+	flex: 1;
+	min-width: 0;
+	font-size: var(--sp-w-font-meta);
+	opacity: var(--sp-w-muted-opacity);
+}
+/* Its buttons: the Chronicle's quiet control. */
+[data-widget-part~="places.flip"],
+[data-widget-part~="places.open"],
+[data-widget-part~="places.close"] {
+	display: inline-flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+	min-height: calc(var(--spacing) * 8);
+	padding-inline: calc(var(--spacing) * 2.5);
+	border-radius: var(--radius-base);
+	font-size: calc(0.75rem * var(--text-scaling));
+	white-space: nowrap;
+	background-color: var(--sp-w-control-bg);
+	transition-property: var(--default-transition-property);
+	transition-duration: var(--default-transition-duration);
+}
+[data-widget-part~="places.close"] {
+	margin-inline-start: auto;
+	min-height: calc(var(--spacing) * 7);
+	padding-inline: calc(var(--spacing) * 1.5);
+	background: transparent;
+}
+[data-widget-part~="places.flip"] > :where(svg, sp-icon),
+[data-widget-part~="places.open"] > :where(svg, sp-icon) {
+	flex-shrink: 0;
+	width: calc(var(--spacing) * 3.5);
+	height: calc(var(--spacing) * 3.5);
+}
+
+/* The list: a row per place — its press (name, Here, category), the faces
+   of who stands there, the ways out beneath. */
+[data-widget-part~="places.list"] {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="places.row"] {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	column-gap: calc(var(--spacing) * 2);
+	padding: calc(var(--spacing) * 1) calc(var(--spacing) * 1.5);
+	border-inline-start: 3px solid var(--sp-place-tint, transparent);
+	border-radius: var(--sp-w-control-radius);
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="places.row"][data-here] {
+	background: color-mix(in oklab, var(--color-primary-500) 10%, transparent);
+}
+[data-widget-part~="places.row-open"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+	min-width: 0;
+	min-height: calc(var(--spacing) * 7);
+	text-align: start;
+	border-radius: var(--sp-w-control-radius);
+}
+[data-widget-part~="places.name"] {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: var(--font-weight-medium);
+}
+/* Here: the primary chip — where the scene is. */
+[data-widget-part~="places.here"] {
+	padding: var(--sp-w-chip-pad);
+	border-radius: var(--sp-w-chip-radius);
+	background: var(--color-primary-500);
+	color: var(--color-primary-contrast-500);
+	font-size: var(--sp-w-font-meta);
+	white-space: nowrap;
+}
+/* A category: a chip washed in its hue. */
+[data-widget-part~="places.category"] {
+	padding: var(--sp-w-chip-pad);
+	border-radius: var(--sp-w-chip-radius);
+	background: color-mix(in oklab, var(--sp-place-tint, currentColor) 22%, transparent);
+	font-size: var(--sp-w-font-meta);
+	white-space: nowrap;
+}
+[data-widget-part~="places.present"] {
+	display: inline-flex;
+	align-items: center;
+}
+[data-widget-part~="places.present"] > [data-widget-part~="places.face"] + [data-widget-part~="places.face"] {
+	margin-inline-start: -0.4rem;
+}
+[data-widget-part~="places.face"] {
+	display: inline-flex;
+	border-radius: 999px;
+	box-shadow: 0 0 0 2px light-dark(var(--color-surface-50), var(--color-surface-900));
+}
+/* The ways out: one muted line under the row. */
+[data-widget-part~="places.ways"] {
+	grid-column: 1 / -1;
+	margin: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--sp-w-font-note);
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* The detail: a card beside (beneath) the map. */
+[data-widget-part~="places.detail"] {
+	display: flex;
+	flex-direction: column;
+	gap: var(--sp-w-card-gap);
+	padding: var(--sp-w-card-pad);
+	border-radius: var(--sp-w-card-radius);
+	background: var(--sp-w-card-bg);
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="places.detail-head"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+}
+[data-widget-part~="places.detail-name"] {
+	margin: 0;
+	font-size: calc(0.875rem * var(--text-scaling));
+	font-weight: var(--font-weight-semibold);
+}
+[data-widget-part~="places.detail-heading"] {
+	margin: calc(var(--spacing) * 1) 0 0;
+	font-size: var(--sp-w-font-meta);
+	font-weight: var(--font-weight-semibold);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="places.detail-ways"],
+[data-widget-part~="places.linked"],
+[data-widget-part~="places.detail-present"] {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="places.detail-present"] > li {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+}
+[data-widget-part~="places.detail-none"] {
+	margin: 0;
+	font-size: var(--sp-w-font-note);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="places.stats"] {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	gap: 2px calc(var(--spacing) * 2);
+	margin: 0;
+}
+[data-widget-part~="places.stats"] > dt {
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="places.stats"] > dd {
+	margin: 0;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+@media (hover: hover) {
+	:is(
+			[data-widget-part~="places.flip"],
+			[data-widget-part~="places.open"],
+			[data-widget-part~="places.close"]
+		):hover {
+		filter: brightness(110%);
+	}
+	[data-widget-part~="places.row-open"]:hover > [data-widget-part~="places.name"] {
+		text-decoration: underline;
+	}
+}
+/* A 2px primary ring outside a 2px offset, never the outline. */
+:is(
+		[data-widget-part~="places.flip"],
+		[data-widget-part~="places.open"],
+		[data-widget-part~="places.close"],
+		[data-widget-part~="places.row-open"]
+	):focus-visible {
+	box-shadow:
+		0 0 0 2px #fff,
+		0 0 0 4px var(--color-primary-500);
+	outline-style: none;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   §map-canvas (the shared map control, 2026-10-11, W4)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Core's map canvas (components/shared/map-canvas): squares joined by
+ * arrows, which Places draws its map with (and Dungeon Crawler's map will).
+ * The host mirrors no SVG, so everything is a box placed by the custom
+ * properties the control writes — a square by `--sp-map-x` / `--sp-map-y`
+ * at `--sp-map-node-w` × `--sp-map-node-h`, a line by its start, length
+ * (`--sp-map-len`) and angle (`--sp-map-angle`, degrees clockwise from east),
+ * the plane by `--sp-map-w` × `--sp-map-h` at `--sp-map-zoom`. Parts:
+ * map-canvas.root · .controls · .zoom · .viewport · .surface · .plane · .edge ·
+ * .stub · .label · .node · .here · .faces · .face (STYLE-GUIDE §6.16). State:
+ * a square's hue on `data-tint` (0–5, §places' palette), the scene's place
+ * on `data-here`, the picked one on `aria-pressed`, a line that reads both
+ * ways on `data-both`, a zoom button's job on `data-zoom`.
+ */
+[data-widget-part~="map-canvas.root"] {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing);
+	min-width: 0;
+	min-height: 0;
+}
+[data-widget-part~="map-canvas.controls"] {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 2px;
+}
+[data-widget-part~="map-canvas.zoom"] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: calc(var(--spacing) * 7);
+	min-height: calc(var(--spacing) * 7);
+	padding-inline: var(--spacing);
+	border-radius: var(--sp-w-icon-button-radius);
+	font-size: var(--sp-w-font-meta);
+	font-variant-numeric: tabular-nums;
+	background-color: var(--sp-w-control-bg);
+}
+[data-widget-part~="map-canvas.zoom"]:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+/* Pan is the viewport's own scroll. */
+[data-widget-part~="map-canvas.viewport"] {
+	min-height: 7.5rem;
+	max-height: 100%;
+	overflow: auto;
+	border-radius: var(--sp-w-card-radius);
+	background: var(--sp-w-card-bg);
+	overscroll-behavior: contain;
+}
+/* The plane, at the zoom: the surface is its scaled size, so the scroll is right. */
+[data-widget-part~="map-canvas.surface"] {
+	position: relative;
+	width: calc(var(--sp-map-w) * var(--sp-map-zoom) * 1px);
+	height: calc(var(--sp-map-h) * var(--sp-map-zoom) * 1px);
+}
+[data-widget-part~="map-canvas.plane"] {
+	position: absolute;
+	inset-block-start: 0;
+	inset-inline-start: 0;
+	width: calc(var(--sp-map-w) * 1px);
+	height: calc(var(--sp-map-h) * 1px);
+	transform: scale(var(--sp-map-zoom));
+	transform-origin: 0 0;
+}
+/* A line: a 2px bar from its start, turned to its angle; arrowheads its own. */
+[data-widget-part~="map-canvas.edge"],
+[data-widget-part~="map-canvas.stub"] {
+	--sp-map-line: color-mix(in oklab, currentColor 55%, transparent);
+	position: absolute;
+	left: calc(var(--sp-map-x) * 1px);
+	top: calc(var(--sp-map-y) * 1px);
+	width: calc(var(--sp-map-len) * 1px);
+	height: 2px;
+	background: var(--sp-map-line);
+	transform-origin: 0 0;
+	transform: rotate(calc(var(--sp-map-angle) * 1deg)) translateY(-1px);
+	pointer-events: none;
+}
+[data-widget-part~="map-canvas.edge"]::after,
+[data-widget-part~="map-canvas.edge"][data-both]::before {
+	content: "";
+	position: absolute;
+	top: -3px;
+	border-block: 4px solid transparent;
+}
+[data-widget-part~="map-canvas.edge"]::after {
+	right: 0;
+	border-inline-start: 8px solid var(--sp-map-line);
+}
+[data-widget-part~="map-canvas.edge"][data-both]::before {
+	left: 0;
+	border-inline-end: 8px solid var(--sp-map-line);
+}
+/* A stub: dashed, toward somewhere not drawn. */
+[data-widget-part~="map-canvas.stub"] {
+	background: repeating-linear-gradient(90deg, var(--sp-map-line) 0 4px, transparent 4px 7px);
+}
+[data-widget-part~="map-canvas.plane"] > [data-widget-part~="map-canvas.label"] {
+	position: absolute;
+	left: calc(var(--sp-map-x) * 1px);
+	top: calc(var(--sp-map-y) * 1px);
+	transform: translate(-50%, -50%);
+	padding: 0 0.25rem;
+	border-radius: var(--sp-w-control-radius);
+	background: light-dark(var(--color-surface-50), var(--color-surface-900));
+	font-size: var(--sp-w-font-meta);
+	white-space: nowrap;
+	pointer-events: none;
+}
+/* A square: the place's name, washed in its category's hue over the ground. */
+[data-widget-part~="map-canvas.node"] {
+	position: absolute;
+	left: calc(var(--sp-map-x) * 1px);
+	top: calc(var(--sp-map-y) * 1px);
+	width: calc(var(--sp-map-node-w) * 1px);
+	height: calc(var(--sp-map-node-h) * 1px);
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 2px;
+	padding: 2px 6px;
+	border: 1px solid color-mix(in oklab, var(--sp-place-tint, currentColor) 55%, transparent);
+	border-radius: var(--sp-w-control-radius);
+	background: color-mix(
+		in oklab,
+		var(--sp-place-tint, currentColor) 18%,
+		light-dark(var(--color-surface-50), var(--color-surface-900))
+	);
+	font-size: var(--sp-w-font-row);
+	line-height: 1.2;
+	text-align: center;
+}
+[data-widget-part~="map-canvas.node"] > [data-widget-part~="map-canvas.label"] {
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+[data-widget-part~="map-canvas.node"][aria-pressed="true"] {
+	border-width: 2px;
+	border-color: var(--sp-place-tint, currentColor);
+	font-weight: var(--font-weight-semibold);
+}
+/* Here: a primary ring around the square. */
+[data-widget-part~="map-canvas.here"] {
+	position: absolute;
+	inset: -5px;
+	border: 2px solid var(--color-primary-500);
+	border-radius: calc(var(--sp-w-control-radius) + 4px);
+	pointer-events: none;
+}
+[data-widget-part~="map-canvas.faces"] {
+	display: inline-flex;
+	align-items: center;
+}
+[data-widget-part~="map-canvas.face"] {
+	display: inline-flex;
+	border-radius: 999px;
+	box-shadow: 0 0 0 2px light-dark(var(--color-surface-50), var(--color-surface-900));
+}
+[data-widget-part~="map-canvas.face"] + [data-widget-part~="map-canvas.face"] {
+	margin-inline-start: -0.4rem;
+}
+@media (hover: hover) {
+	[data-widget-part~="map-canvas.node"]:hover,
+	[data-widget-part~="map-canvas.zoom"]:not(:disabled):hover {
+		filter: brightness(110%);
+	}
+}
+:is([data-widget-part~="map-canvas.node"], [data-widget-part~="map-canvas.zoom"]):focus-visible {
+	box-shadow:
+		0 0 0 2px #fff,
+		0 0 0 4px var(--color-primary-500);
+	outline-style: none;
+}
+
+/* STYLE-GUIDE §9: a finger lands on 44px, however small the control reads. */
+@media (pointer: coarse) {
+	:is(
+			[data-widget-part~="places.flip"],
+			[data-widget-part~="places.open"],
+			[data-widget-part~="places.close"],
+			[data-widget-part~="places.row-open"],
+			[data-widget-part~="map-canvas.zoom"]
+		) {
+		min-height: 44px;
+	}
+	[data-widget-part~="map-canvas.zoom"] {
+		min-width: 44px;
+	}
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   §attendance (Who's here, new with the widget, 2026-10-11, W10)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Core's Who's here widget, keyed on its widget parts; the markup carries no
+ * look. Parts: attendance.root · .alert · .group · .group-head · .list ·
+ * .person · .name · .you · .persona · .face · .typing · .away · .role ·
+ * .empty (STYLE-GUIDE §6.16). State is the elements' own: a group's
+ * `data-group` (`here` · `away`), a row's `data-state` and `data-role`
+ * (`owner` · `guest`), the viewer's own row `data-you`, a face with no
+ * picture `data-blank`. The rows are a card's, the role a quiet `--sp-w-*`
+ * chip; the typing pulse is the conversation's ember dot (`sp-dot-pulse`).
+ */
+
+[data-widget-part~="attendance.root"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 3);
+	height: 100%;
+	min-width: 0;
+	padding: calc(var(--spacing) * 2);
+	overflow: auto;
+}
+/* A press the page declined (R77): this widget's own line. */
+[data-widget-part~="attendance.alert"] {
+	margin: 0;
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+[data-widget-part~="attendance.group"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 1);
+	min-width: 0;
+}
+/* Here · Away: a quiet small-caps head over each group. */
+[data-widget-part~="attendance.group-head"] {
+	margin: 0;
+	font-size: var(--sp-w-font-meta);
+	font-weight: var(--font-weight-semibold);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="attendance.list"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.2rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+/* One person: name, you, the personas they write as, typing, the role chip
+   at the end — wrapping onto a second line in a narrow column. */
+[data-widget-part~="attendance.person"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+	min-width: 0;
+	padding: var(--sp-w-card-pad);
+	border-radius: var(--sp-w-card-radius);
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="attendance.person"][data-state="here"] {
+	background: var(--sp-w-card-bg);
+}
+/* Someone away reads quieter than someone here. */
+[data-widget-part~="attendance.person"][data-state="away"] > :not([data-widget-part~="attendance.role"]) {
+	opacity: 0.8;
+}
+[data-widget-part~="attendance.name"] {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: var(--font-weight-medium);
+}
+[data-widget-part~="attendance.you"] {
+	font-size: var(--sp-w-font-meta);
+	opacity: var(--sp-w-muted-opacity);
+}
+/* A persona: its face and name, a quiet pill that opens its sheet. */
+[data-widget-part~="attendance.persona"] {
+	display: inline-flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 1);
+	min-width: 0;
+	max-inline-size: 100%;
+	padding: 0.05rem 0.45rem 0.05rem 0.1rem;
+	border: 0;
+	border-radius: var(--sp-w-chip-radius);
+	background: var(--sp-w-control-bg);
+	color: inherit;
+	font: inherit;
+	font-size: var(--sp-w-font-meta);
+	cursor: pointer;
+}
+[data-widget-part~="attendance.persona"] > span:last-child {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* Faces off: the pill pads its own start, with no face to sit against. */
+[data-widget-part~="attendance.root"]:not([data-faces]) [data-widget-part~="attendance.persona"] {
+	padding-inline-start: 0.45rem;
+}
+@media (hover: hover) {
+	[data-widget-part~="attendance.persona"]:hover {
+		background: var(--sp-w-hover-bg);
+		filter: brightness(110%);
+	}
+}
+[data-widget-part~="attendance.persona"]:focus-visible {
+	box-shadow:
+		0 0 0 2px #fff,
+		0 0 0 4px var(--color-primary-500);
+	outline-style: none;
+}
+[data-widget-part~="attendance.face"] {
+	flex-shrink: 0;
+	width: calc(var(--spacing) * 5);
+	height: calc(var(--spacing) * 5);
+	border-radius: 999px;
+	object-fit: cover;
+}
+[data-widget-part~="attendance.face"][data-blank] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	background: var(--sp-w-chip-bg);
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+/* Typing: the conversation's ember dot, pulsing, beside the word. */
+[data-widget-part~="attendance.typing"] {
+	display: inline-flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 1);
+	font-size: var(--sp-w-font-meta);
+	font-style: italic;
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="attendance.typing"]::before {
+	content: "";
+	flex: none;
+	inline-size: 6px;
+	block-size: 6px;
+	border-radius: 9999px;
+	background: var(--color-warning-500);
+	animation: sp-dot-pulse 1.6s ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	[data-widget-part~="attendance.typing"]::before {
+		animation: none;
+	}
+}
+/* When someone away was last here. */
+[data-widget-part~="attendance.away"] {
+	font-size: var(--sp-w-font-meta);
+	opacity: var(--sp-w-muted-opacity);
+}
+/* Owner · Guest: a quiet chip at the row's end; the owner's tonal primary. */
+[data-widget-part~="attendance.role"] {
+	flex-shrink: 0;
+	margin-inline-start: auto;
+	padding: var(--sp-w-chip-pad);
+	border-radius: var(--sp-w-chip-radius);
+	background: var(--sp-w-chip-bg);
+	font-size: var(--sp-w-font-meta);
+	white-space: nowrap;
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="attendance.person"][data-role="owner"] > [data-widget-part~="attendance.role"] {
+	background: color-mix(in oklab, var(--color-primary-500) 16%, transparent);
+	color: light-dark(var(--color-primary-800), var(--color-primary-200));
+	opacity: 1;
+}
+/* Nobody else is here: quietly, under the viewer's own row. */
+[data-widget-part~="attendance.empty"] {
+	margin: 0;
+	padding: calc(var(--spacing) * 1) var(--sp-w-empty-pad);
+	text-align: center;
+	font-size: var(--sp-w-font-empty);
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* STYLE-GUIDE §9: a finger lands on 44px, however small the pill reads. */
+@media (pointer: coarse) {
+	[data-widget-part~="attendance.persona"] {
+		min-height: 44px;
+	}
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   §backdrop (new with the widget, 2026-10-12, DESIGN-image-generation §6.4)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Core's Backdrop widget, keyed on its widget parts; the markup carries no
+ * look. Parts: backdrop.root · .image · .dim · .missing · .alert · .empty ·
+ * .toolbar · .change · .clear · .chooser · .chooser-head · .chooser-close ·
+ * .members · .member · .chooser-list · .chooser-tile · .chooser-more ·
+ * .chooser-note (STYLE-GUIDE §6.16). The picture fills the box under
+ * everything else; `data-fit` (`cover` · `contain`) is how, and
+ * `--sp-backdrop-dim` (0–1, the `dim` setting) how dark the overlay is.
+ */
+[data-widget-part~="backdrop.root"] {
+	--sp-backdrop-dim: 0;
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	height: 100%;
+	min-width: 0;
+	min-height: 6rem;
+	padding: calc(var(--spacing) * 2);
+	overflow: hidden;
+	isolation: isolate;
+}
+[data-widget-part~="backdrop.image"] {
+	position: absolute;
+	inset: 0;
+	z-index: -2;
+	inline-size: 100%;
+	block-size: 100%;
+	object-fit: cover;
+}
+[data-widget-part~="backdrop.root"][data-fit="contain"] > [data-widget-part~="backdrop.image"] {
+	object-fit: contain;
+}
+[data-widget-part~="backdrop.dim"] {
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	background: #000;
+	opacity: var(--sp-backdrop-dim);
+	pointer-events: none;
+}
+/* The file is gone: said where the picture was, never a broken image. */
+[data-widget-part~="backdrop.missing"],
+[data-widget-part~="backdrop.empty"] {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: var(--sp-w-empty-gap);
+	flex: 1;
+	padding: var(--sp-w-empty-pad);
+	text-align: center;
+	font-size: var(--sp-w-font-empty);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="backdrop.alert"] {
+	margin: 0;
+	padding: var(--sp-w-control-pad);
+	border-radius: var(--sp-w-control-radius);
+	background: var(--sp-w-card-bg);
+	font-size: calc(0.75rem * var(--text-scaling));
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+/* Illustrate, Change and Clear: small, at the foot, on a card so they read over any picture. */
+[data-widget-part~="backdrop.toolbar"] {
+	display: flex;
+	gap: calc(var(--spacing) * 1);
+	margin-top: auto;
+	align-self: flex-end;
+}
+[data-widget-part~="backdrop.illustrate"],
+[data-widget-part~="backdrop.change"],
+[data-widget-part~="backdrop.clear"],
+[data-widget-part~="backdrop.chooser-more"] {
+	padding: var(--sp-w-control-pad);
+	border-radius: var(--sp-w-control-radius);
+	background: var(--sp-w-control-bg);
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="backdrop.illustrate"]:hover,
+[data-widget-part~="backdrop.change"]:hover,
+[data-widget-part~="backdrop.clear"]:hover,
+[data-widget-part~="backdrop.chooser-more"]:hover {
+	background: var(--sp-w-chip-on-bg);
+}
+/* Illustrate when the Scene action is listed but greyed: still focusable, dimmed. */
+[data-widget-part~="backdrop.illustrate"][aria-disabled="true"] {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
+/* The chooser: on a card over the picture, scrolling when it overruns. */
+[data-widget-part~="backdrop.chooser"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.4rem;
+	min-height: 0;
+	padding: calc(var(--spacing) * 2);
+	border-radius: var(--sp-w-control-radius);
+	background: var(--sp-w-card-bg);
+	overflow: auto;
+}
+[data-widget-part~="backdrop.chooser-head"] {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.4rem;
+	font-size: var(--sp-w-font-head);
+	font-weight: var(--font-weight-semibold);
+}
+[data-widget-part~="backdrop.chooser-close"] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	inline-size: 1.5rem;
+	block-size: 1.5rem;
+	border-radius: var(--sp-w-icon-button-radius);
+}
+[data-widget-part~="backdrop.chooser-close"]:hover,
+[data-widget-part~="backdrop.chooser-close"]:focus-visible {
+	background: var(--sp-w-hover-bg);
+}
+[data-widget-part~="backdrop.members"] {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem;
+}
+[data-widget-part~="backdrop.member"] {
+	padding: var(--sp-w-chip-pad);
+	border-radius: var(--sp-w-chip-radius);
+	background: var(--sp-w-chip-bg);
+	font-size: var(--sp-w-font-meta);
+}
+[data-widget-part~="backdrop.member"][aria-pressed="true"] {
+	background: var(--sp-w-chip-on-bg);
+	font-weight: var(--font-weight-semibold);
+}
+[data-widget-part~="backdrop.chooser-list"] {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(4rem, 1fr));
+	gap: 0.35rem;
+}
+[data-widget-part~="backdrop.chooser-tile"] {
+	aspect-ratio: 1;
+	padding: 0;
+	overflow: hidden;
+	border: 2px solid transparent;
+	border-radius: var(--sp-w-control-radius);
+	background: var(--sp-w-card-bg);
+}
+[data-widget-part~="backdrop.chooser-tile"] > img {
+	inline-size: 100%;
+	block-size: 100%;
+	object-fit: cover;
+}
+[data-widget-part~="backdrop.chooser-tile"]:hover {
+	border-color: var(--color-primary-500);
+}
+[data-widget-part~="backdrop.chooser-tile"]:focus-visible,
+[data-widget-part~="backdrop.member"]:focus-visible,
+[data-widget-part~="backdrop.illustrate"]:focus-visible,
+[data-widget-part~="backdrop.change"]:focus-visible,
+[data-widget-part~="backdrop.clear"]:focus-visible,
+[data-widget-part~="backdrop.chooser-more"]:focus-visible {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: 1px;
+}
+[data-widget-part~="backdrop.chooser-more"] {
+	align-self: center;
+}
+/* From this session (D3): the session's generated pictures, below the cast's galleries. */
+[data-widget-part~="backdrop.from-session"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.35rem;
+	padding-top: 0.4rem;
+	border-block-start: 1px solid var(--color-surface-300-700);
+}
+[data-widget-part~="backdrop.chooser-subhead"] {
+	margin: 0;
+	font-size: var(--sp-w-font-meta);
+	font-weight: var(--font-weight-semibold);
+}
+[data-widget-part~="backdrop.chooser-note"] {
+	margin: 0;
+	font-size: var(--sp-w-font-note);
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* STYLE-GUIDE §9: a finger lands on 44px. */
+@media (pointer: coarse) {
+	[data-widget-part~="backdrop.illustrate"],
+	[data-widget-part~="backdrop.change"],
+	[data-widget-part~="backdrop.clear"],
+	[data-widget-part~="backdrop.member"] {
 		min-height: 44px;
 	}
 }

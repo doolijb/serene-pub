@@ -498,11 +498,16 @@ export async function migrateLegacyConfigs(db: Db): Promise<MigrationReport[]> {
 }
 
 /**
- * 0.5.3 seed keys 0.6 spells differently (plan E4.1). The session rename
- * reached one shipped prompt's key; every other seed kept its spelling.
+ * 0.5.3 seed keys 0.6 answers under another key (plan E4.1): the session
+ * rename reached one shipped prompt's key, and the Writer merge folded two
+ * prompts into one. Every other seed kept its spelling; a seed 0.6 does not
+ * ship finds nothing and the shipped default stands.
  */
 const RENAMED_SEEDS: Readonly<Record<string, string>> = {
-	"prompt-neutral-chat": "prompt-neutral-session"
+	"prompt-neutral-chat": "prompt-neutral-session",
+	// The two Writer prompts were merged into one, under the realistic key
+	// (owner ruling 2026-10-13), so a pick of either lands on Writer.
+	"prompt-writer-creative": "prompt-writer-realistic"
 }
 
 /**

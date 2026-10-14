@@ -162,7 +162,10 @@
 			<Select
 				label="Address to share"
 				class="text-xs"
-				options={choices.map((c) => ({ value: c.origin, label: c.label }))}
+				options={choices.map((c) => ({
+					value: c.origin,
+					label: c.label
+				}))}
 				bind:value={selectedHost}
 			/>
 
@@ -189,7 +192,7 @@
 					<div class="panel-actions">
 						<button
 							type="button"
-							class="btn btn-sm preset-filled-surface-400-600"
+							class="btn btn-sm preset-tonal-surface"
 							onclick={copyLink}
 						>
 							<Icons.Copy size={14} /> Copy
@@ -243,7 +246,7 @@
 			/>
 			<button
 				type="button"
-				class="btn btn-sm preset-tonal-error"
+				class="btn btn-sm preset-tonal-warning"
 				disabled={busy || accountUserId === null}
 				onclick={() => create("account")}
 			>

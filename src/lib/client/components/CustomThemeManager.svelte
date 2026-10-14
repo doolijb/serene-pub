@@ -469,7 +469,7 @@
 									</span>
 								{/if}
 								<button
-									class="btn btn-sm preset-filled-surface-400-600 text-xs"
+									class="btn btn-sm preset-tonal-surface text-xs"
 									onclick={() => (editing = theme)}
 								>
 									<Icons.Pencil size={12} />
@@ -515,7 +515,7 @@
 							</div>
 							{#if isAdmin}
 								<button
-									class="btn btn-sm preset-filled-surface-400-600 text-xs"
+									class="btn btn-sm preset-tonal-surface text-xs"
 									onclick={() => (editing = theme)}
 								>
 									<Icons.Pencil size={12} />

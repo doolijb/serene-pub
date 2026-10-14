@@ -7,6 +7,7 @@
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import { announce } from "$lib/client/accessibility/state.svelte"
+	import { canRunLocalRuntimes } from "$lib/client/components/connections/addMenuItems"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
@@ -16,7 +17,6 @@
 		"koboldCppSettingsCtx"
 	)
 
-	let koboldCppBaseUrl = $state("")
 	let status = $state("")
 	let error = $state("")
 
@@ -33,17 +33,18 @@
 	let newPassphrase = $state("")
 	let enablingAccounts = $state(false)
 
-	function toggleOllamaManager(enabled: boolean) {
-		socket.emit("systemSettings:updateOllamaManagerEnabled", { enabled })
+	// The managers are turned ON from their own pages, which add the
+	// connection in the same press (less-confusing J1); this page only says
+	// where they are, and keeps the way to turn one off.
+	function turnOffOllamaManager() {
+		socket.emit("systemSettings:updateOllamaManagerEnabled", {
+			enabled: false
+		})
 	}
 
-	function toggleKoboldCppManager(enabled: boolean) {
-		socket.emit("systemSettings:updateKoboldCppManagerEnabled", { enabled })
-	}
-	function saveKoboldCppBaseUrl(event: SubmitEvent) {
-		event.preventDefault()
-		socket.emit("koboldcpp:setBaseUrl", {
-			baseUrl: koboldCppBaseUrl.trim()
+	function turnOffKoboldCppManager() {
+		socket.emit("systemSettings:updateKoboldCppManagerEnabled", {
+			enabled: false
 		})
 	}
 
@@ -93,30 +94,20 @@
 		socket.emit("cardSources:charaVault:disconnect", {})
 	}
 
-	// Both settings objects arrive asynchronously (AccessibleShell's own
-	// socket round-trip, kicked off after this page has already mounted) —
-	// a one-time read in onMount would often run first and capture empty
-	// strings permanently. Each field only ever auto-fills once, so it
-	// doesn't overwrite whatever the admin is actively typing afterward.
-	let koboldCppBaseUrlInitialized = $state(false)
-	$effect(() => {
-		if (!koboldCppBaseUrlInitialized && koboldCppSettingsCtx.settings) {
-			koboldCppBaseUrl =
-				koboldCppSettingsCtx.settings.koboldCppManagerBaseUrl || ""
-			koboldCppBaseUrlInitialized = true
-		}
-	})
-
-	function handleUpdateOllamaManagerEnabled() {
-		status = "Managed Ollama setting saved."
+	function handleUpdateOllamaManagerEnabled(
+		msg: Sockets.SystemSettings.UpdateOllamaManagerEnabled.Response
+	) {
+		status = msg.enabled
+			? "Ollama, managed, is on."
+			: "Ollama, managed, is off."
 		announce(status)
 	}
-	function handleUpdateKoboldCppManagerEnabled() {
-		status = "KoboldCPP, run by Serene Pub setting saved."
-		announce(status)
-	}
-	function handleKoboldcppSetBaseUrl() {
-		status = "KoboldCPP base URL saved."
+	function handleUpdateKoboldCppManagerEnabled(
+		msg: Sockets.SystemSettings.UpdateKoboldCppManagerEnabled.Response
+	) {
+		status = msg.enabled
+			? "KoboldCPP, run by Serene Pub, is on."
+			: "KoboldCPP, run by Serene Pub, is off."
 		announce(status)
 	}
 	function handleUpdateContextDebuggingEnabled() {
@@ -238,18 +229,6 @@
 	)
 
 	/**
-	 * The KoboldCPP URL save's own reply. BARE — nothing in `koboldcpp:` has an
-	 * interest scope — and STANDING, because the field can be saved again
-	 * without this page reloading. `koboldcpp:` is RESTRICTED interest, so the
-	 * registry refuses the key for a known non-admin and holds it while the
-	 * user is still unknown; this page is admin-only either way.
-	 */
-	useInterest<"koboldcpp:setBaseUrl">(
-		"koboldcpp:setBaseUrl",
-		handleKoboldcppSetBaseUrl
-	)
-
-	/**
 	 * Whether this admin has a passphrase yet — the thing that decides whether
 	 * accounts may be turned on at all. Asked for and listened for in one, and
 	 * STANDING because setting one re-emits it.
@@ -272,10 +251,10 @@
 </script>
 
 <svelte:head>
-	<title>System settings — Document View — Serene Pub</title>
+	<title>Pub settings — Document View — Serene Pub</title>
 </svelte:head>
 
-<h1>System settings</h1>
+<h1>Pub settings</h1>
 
 {#if !userCtx.user?.isAdmin}
 	<p>Admin access required.</p>
@@ -291,50 +270,45 @@
 		</div>
 	{/if}
 
-	<h2>Ollama, managed</h2>
-	<p class="a11y-hint">
-		Lets Serene Pub browse, download, and connect to models running in
-		Ollama.
-	</p>
-	<div class="a11y-checkbox-field">
-		<input
-			id="a11y-sys-ollama-enabled"
-			type="checkbox"
-			checked={ollamaSettingsCtx.settings?.ollamaManagerEnabled}
-			onchange={(e) => toggleOllamaManager(e.currentTarget.checked)}
-		/>
-		<label for="a11y-sys-ollama-enabled">Enable managed Ollama</label>
-	</div>
-	<p class="a11y-hint">
-		Base URL is only configured from the Ollama connection's view
-		(Connections), not here.
-	</p>
+	{#if canRunLocalRuntimes(systemSettingsCtx.settings)}
+		<h2>Ollama, managed</h2>
+		<p class="a11y-hint">
+			Lets Serene Pub browse, download, and connect to models running in
+			Ollama. It is turned on, and its server URL set, on its own page.
+		</p>
+		<p>
+			{ollamaSettingsCtx.settings?.ollamaManagerEnabled ? "On" : "Off"}.
+			<a href="/document-view/ollama">Open Ollama, managed</a>
+		</p>
+		{#if ollamaSettingsCtx.settings?.ollamaManagerEnabled}
+			<button
+				type="button"
+				class="a11y-btn a11y-btn-secondary a11y-btn-small"
+				onclick={turnOffOllamaManager}
+			>
+				Turn off Ollama, managed
+			</button>
+		{/if}
 
-	<h2>KoboldCPP, run by Serene Pub</h2>
-	<p class="a11y-hint">
-		Lets Serene Pub browse, download, and connect to models running in
-		KoboldCPP.
-	</p>
-	<div class="a11y-checkbox-field">
-		<input
-			id="a11y-sys-kcpp-enabled"
-			type="checkbox"
-			checked={koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
-			onchange={(e) => toggleKoboldCppManager(e.currentTarget.checked)}
-		/>
-		<label for="a11y-sys-kcpp-enabled">Let Serene Pub run KoboldCPP</label>
-	</div>
-	<form onsubmit={saveKoboldCppBaseUrl}>
-		<div class="a11y-field">
-			<label for="a11y-sys-kcpp-url">KoboldCPP Server URL</label>
-			<input
-				id="a11y-sys-kcpp-url"
-				type="text"
-				bind:value={koboldCppBaseUrl}
-			/>
-		</div>
-		<button type="submit" class="a11y-btn a11y-btn-small">Save URL</button>
-	</form>
+		<h2>KoboldCPP, run by Serene Pub</h2>
+		<p class="a11y-hint">
+			Lets Serene Pub download and run KoboldCPP and its models on this
+			computer. It is turned on, and its server URL set, on its own page.
+		</p>
+		<p>
+			{koboldCppSettingsCtx.settings?.koboldCppManagerEnabled ? "On" : "Off"}.
+			<a href="/document-view/koboldcpp">Open KoboldCPP, run by Serene Pub</a>
+		</p>
+		{#if koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
+			<button
+				type="button"
+				class="a11y-btn a11y-btn-secondary a11y-btn-small"
+				onclick={turnOffKoboldCppManager}
+			>
+				Turn off KoboldCPP, run by Serene Pub
+			</button>
+		{/if}
+	{/if}
 
 	<h2>Context debugging</h2>
 	<p class="a11y-hint">
@@ -353,13 +327,13 @@
 
 	<h2>Embeddings</h2>
 	<p class="a11y-hint">
-		Powers retrieval-augmented context (RAG) for lore, history, and past
-		messages. Status:
+		Powers Search by meaning, which finds lorebook entries by what they
+		mean, not only by their words. Status:
 		{embeddingsStarred(systemSettingsCtx.capabilityDefaults)
 			? "In use"
-			: "Not in use"}. Embeddings run on whichever embedding connection is
-		marked in use; choosing one isn't available in Document View yet, so use
-		the standard site.
+			: "Not in use"}. To choose the model, open
+		<a href="/document-view/connections">Connections</a>
+		and press "Use … for embeddings" beside it.
 	</p>
 
 	<h2>CharaVault</h2>

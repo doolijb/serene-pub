@@ -44,10 +44,10 @@ describe("connectionDeletion", () => {
 		const d = connectionDeletion([kcpp, claude], defaults)
 		expect(d.title).toBe("Delete 2 connections?")
 		expect(d.confirmLabel).toBe("Delete 2 connections")
-		expect(d.summary).toMatch(/2 defaults go unset/)
+		expect(d.summary).toMatch(/2 loadouts are emptied/)
 		expect(d.objects[0].related?.map((r) => r.label)).toEqual([
 			"2 models",
-			"Default released for"
+			"Loadouts emptied"
 		])
 		expect(d.objects[1].related).toEqual([])
 	})
@@ -69,6 +69,13 @@ describe("managerFlagsReleased", () => {
 		expect(managerFlagsReleased([3], rows)).toEqual([])
 		expect(managerFlagsReleased([3, 4], rows)).toEqual([
 			"systemSettings:updateOllamaManagerEnabled"
+		])
+	})
+	it("turns KoboldCPP off only with the last managed KoboldCPP row", () => {
+		const spare = { ...kcpp, id: 5, name: "KoboldCPP 2" }
+		expect(managerFlagsReleased([5], [...rows, spare])).toEqual([])
+		expect(managerFlagsReleased([1, 5], [...rows, spare])).toEqual([
+			"systemSettings:updateKoboldCppManagerEnabled"
 		])
 	})
 	it("leaves both alone for an ordinary connection", () => {

@@ -565,7 +565,7 @@
 
 			<div class="panel-actions">
 				<button
-					class="btn btn-sm preset-filled-surface-400-600 text-xs"
+					class="btn btn-sm preset-tonal-surface text-xs"
 					onclick={checkManagedBinaryUpdate}
 					disabled={isCheckingManagedUpdate}
 				>
@@ -577,7 +577,7 @@
 					Check for updates
 				</button>
 				<button
-					class="btn btn-sm preset-filled-surface-400-600 text-xs"
+					class="btn btn-sm preset-tonal-surface text-xs"
 					onclick={onUpdateBinary}
 				>
 					<Icons.Settings size={12} />
@@ -611,7 +611,7 @@
 					/>
 					<span class="text-surface-700-300 text-xs">seconds</span>
 					<button
-						class="btn btn-sm preset-filled-surface-400-600 text-xs"
+						class="btn btn-sm preset-filled-primary-500 text-xs"
 						onclick={saveTtl}
 						disabled={savingTtl}
 					>
@@ -647,7 +647,7 @@
 					/>
 					<span class="text-surface-700-300 text-xs">seconds</span>
 					<button
-						class="btn btn-sm preset-filled-surface-400-600 text-xs"
+						class="btn btn-sm preset-filled-primary-500 text-xs"
 						onclick={saveSubprocessTimeout}
 						disabled={savingSubprocessTimeout}
 					>
@@ -683,7 +683,7 @@
 						bind:value={baseUrlField}
 					/>
 					<button
-						class="btn btn-sm preset-filled-surface-400-600 text-xs"
+						class="btn btn-sm preset-filled-primary-500 text-xs"
 						onclick={saveBaseUrl}
 						disabled={isSavingBaseUrl}
 					>
@@ -721,7 +721,7 @@
 						placeholder="5001"
 					/>
 					<button
-						class="btn btn-sm preset-filled-surface-400-600 text-xs"
+						class="btn btn-sm preset-filled-primary-500 text-xs"
 						onclick={savePort}
 						disabled={savingPort}
 					>
@@ -875,7 +875,7 @@
 
 				<div class="panel-actions">
 					<button
-						class="btn btn-sm preset-filled-surface-500"
+						class="btn btn-sm preset-tonal-surface"
 						onclick={checkVersion}
 						disabled={isCheckingVersion}
 					>
@@ -887,7 +887,7 @@
 						Check version
 					</button>
 					<button
-						class="btn btn-sm preset-filled-surface-500"
+						class="btn btn-sm preset-tonal-surface"
 						onclick={checkForUpdates}
 						disabled={isCheckingUpdates}
 					>

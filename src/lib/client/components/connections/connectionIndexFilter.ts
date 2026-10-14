@@ -8,12 +8,12 @@
  *
  * ## The unit is the CONNECTION
  *
- * Not the model. Models left the index with the
- * 2026-09-17 concept ruling (readiness card + connections list), so there is
- * nothing left to narrow inside a connection — a filter either keeps a
- * connection or drops it. A capability filter therefore asks whether ANY of a
- * connection's models can serve that capability, which is the question a
- * person filtering by "Images" is actually asking.
+ * Not the model. Models are not on the index (2026-09-17 concept ruling:
+ * readiness + connections list), so there is nothing to narrow inside a
+ * connection — a filter either keeps a connection or drops it. A `cap:`
+ * filter therefore asks whether ANY of a connection's models has that
+ * capability, which is the question a person filtering by "Images" is
+ * actually asking.
  *
  * ## The filter's values
  *
@@ -24,8 +24,13 @@
  * - `all` — every connection, including one with no models. That is a
  *   connection somebody has not finished setting up, and hiding it is how it
  *   stays unfinished.
- * - `attention` — only what needs a person: the host's last listing failed,
- *   a model it listed before is gone, or a local file failed to download.
+ * - `attention` — **Needs attention**: every connection whose row state is
+ *   `broken` (red) or `unfinished` (gold), the dots the list itself draws —
+ *   a failed listing and a crash, and equally a missing key, a model to
+ *   pick, a runtime not set up, a model its host stopped listing. The view
+ *   passes `stateOf`, its own row reader with the live facts, so the filter
+ *   and the dots cannot disagree; without one, each connection is read from
+ *   its own listing alone (`listedState`).
  * - `defaults` — narrows nothing. The view swaps the list for the ledger (see
  *   `DefaultsLedger`'s header), so this value is a MODE, not a predicate, and
  *   `filterConnections` is never asked about it.
@@ -40,6 +45,11 @@
 
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { presetLabel } from "$lib/shared/utils/connectionDefaults"
+import {
+	connectionRowStatus,
+	needsAttention as stateNeedsAttention,
+	type ConnectionState
+} from "./connectionRowStatus"
 import { endpointKind, isLocalOnnxType } from "./modelManagement"
 
 export type IndexFilter = "all" | "defaults" | "attention" | `cap:${string}`
@@ -63,13 +73,28 @@ export interface IndexConnection {
 	notes?: string | null
 	/** The OpenAI-compatible preset slug, when the row names one. */
 	preset?: string | null
+	/** Whether a credential is stored. Absent means the server did not say. */
+	hasCredential?: boolean
 	models: IndexModel[]
 	modelsSync: { at: string | null; error: string | null }
 }
 
-export interface FilterConnectionsOptions {
+/** A connection's row state, as the list draws it. */
+export type ConnectionStateOf<C extends IndexConnection = IndexConnection> = (
+	connection: C
+) => ConnectionState
+
+export interface FilterConnectionsOptions<
+	C extends IndexConnection = IndexConnection
+> {
 	query: string
 	filter: IndexFilter
+	/**
+	 * Each connection's row state, for `attention`. The view's own reader
+	 * (`connectionRowStatus` with the live facts it holds); absent, the
+	 * listing-only reading `listedState`.
+	 */
+	stateOf?: ConnectionStateOf<C>
 	/**
 	 * What this connection's service is CALLED, for search.
 	 *
@@ -90,19 +115,27 @@ export function parseIndexFilter(
 }
 
 /**
- * Whether this connection is waiting on a person.
- *
- * Three facts, and all three are about the connection rather than one model:
- * a host that could not be listed, a model that has stopped being listed, and
- * a local file whose download failed. A model merely switched off is NOT here
- * — that is somebody's choice, and a list that nags about it is a list people
- * stop reading.
+ * A connection's row state from its own listing alone — `connectionRowStatus`
+ * with no live facts. What the row says before any process, lane or defaults
+ * summary has answered; a silent fact is left out, never guessed.
  */
-export function needsAttention(connection: IndexConnection): boolean {
-	if (connection.modelsSync.error) return true
-	return connection.models.some(
-		(m) => m.missingSince != null || m.local?.state === "error"
-	)
+export function listedState(connection: IndexConnection): ConnectionState {
+	return connectionRowStatus(connection, {
+		kind: endpointKind(connection.type)
+	}).state
+}
+
+/**
+ * Whether this connection is waiting on a person: its row state is `broken`
+ * or `unfinished`, red or gold (`needsAttention` in `connectionRowStatus`).
+ * A model merely switched off is NOT here — that is somebody's choice, and a
+ * list that nags about it is a list people stop reading.
+ */
+export function needsAttention<C extends IndexConnection>(
+	connection: C,
+	stateOf: ConnectionStateOf<C> = listedState
+): boolean {
+	return stateNeedsAttention(stateOf(connection))
 }
 
 /**
@@ -113,7 +146,7 @@ export function needsAttention(connection: IndexConnection): boolean {
  */
 /**
  * What a connection's SERVICE is called — the chip beside its title, and what
- * search sees (R5). One function for the index row, the capability view and
+ * search sees (R5). One function for the index row, the job picker and
  * the finder's destination pills, so one endpoint is one word everywhere. The
  * kind is folded through `endpointKind`, so the Ollama embeddings type is the
  * same "Ollama" the text one is; a custom OpenAI-compatible preset reads
@@ -155,12 +188,13 @@ export function servesCapability(
 	)
 }
 
-function keptByFilter(
-	connection: IndexConnection,
-	filter: IndexFilter
+function keptByFilter<C extends IndexConnection>(
+	connection: C,
+	filter: IndexFilter,
+	stateOf: ConnectionStateOf<C> = listedState
 ): boolean {
 	if (filter === "all" || filter === "defaults") return true
-	if (filter === "attention") return needsAttention(connection)
+	if (filter === "attention") return needsAttention(connection, stateOf)
 	return servesCapability(connection, filter.slice(4))
 }
 
@@ -186,12 +220,12 @@ function matchesQuery(
 
 export function filterConnections<C extends IndexConnection>(
 	rows: readonly C[],
-	opts: FilterConnectionsOptions
+	opts: FilterConnectionsOptions<C>
 ): C[] {
 	const q = opts.query.trim().toLowerCase()
 	return rows.filter(
 		(c) =>
-			keptByFilter(c, opts.filter) &&
+			keptByFilter(c, opts.filter, opts.stateOf) &&
 			matchesQuery(c, q, opts.serviceLabel)
 	)
 }
@@ -202,14 +236,17 @@ export function filterConnections<C extends IndexConnection>(
  * Ignoring it on purpose: the count is what tells a person whether pressing
  * the row is worth it, and a count that moved as they typed would be
  * answering a question they have not asked yet. `defaults` counts nothing —
- * it is a mode, not a narrowing — and the caller omits its count.
+ * it is a mode, not a narrowing — and the caller omits its count. Pass the
+ * same `stateOf` the list is filtered with, so the count is what the press
+ * then shows.
  */
-export function countConnections(
-	rows: readonly IndexConnection[],
-	filter: IndexFilter
+export function countConnections<C extends IndexConnection>(
+	rows: readonly C[],
+	filter: IndexFilter,
+	stateOf?: ConnectionStateOf<C>
 ): number {
 	if (filter === "defaults") return 0
-	return rows.filter((c) => keptByFilter(c, filter)).length
+	return rows.filter((c) => keptByFilter(c, filter, stateOf)).length
 }
 
 /** What the index says about the whole list, for its summary line. */

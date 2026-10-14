@@ -75,6 +75,7 @@ import {
 	registerPluginDefinitions
 } from "./pluginDefinitions"
 import { registerPluginEvents } from "./pluginEvents"
+import { registerPluginHookPoints } from "./pluginHookPoints"
 import { registerPluginAnnex } from "./pluginAnnex"
 import { registerPluginVariables } from "./pluginVariables"
 import { storePluginFiles } from "./frameHost"
@@ -84,7 +85,11 @@ import {
 	type PluginPackage,
 	type PluginPackageManifest
 } from "./pluginPackage"
-import { missingRequirements, requirementsOf } from "./requirements"
+import {
+	missingRequirements,
+	missingRequirementsMessage,
+	requirementsOf
+} from "./requirements"
 import { upsertPlugin } from "./store"
 
 /** The event a genre's one required member answers (24 §3). */
@@ -410,6 +415,10 @@ export async function projectPluginPackage(
 	// And its annex declaration, before a document writing the annex is
 	// validated (ruling 2026-09-26; `pluginAnnex.ts`).
 	report.refused.push(...registerPluginAnnex(pkg.manifest, pkg.manifest.slug))
+	// And the hook points it declares (R54; `pluginHookPoints.ts`).
+	report.refused.push(
+		...registerPluginHookPoints(pkg.manifest, pkg.manifest.slug)
+	)
 
 	// The whole set publishes together, so a package that renames a slash name
 	// between two of its own specs is not refused one spec at a time.
@@ -677,10 +686,36 @@ export async function installPluginPackage(
 	// T7b) — the same gate `plugins:install` runs, before anything is written.
 	const missing = await missingRequirements(db, requirementsOf(pkg.manifest))
 	if (missing.length)
-		throw new Error(
-			`'${pluginId}' requires ${missing.join(", ")} — not installed on this ` +
-				`pub. Install what it builds on first.`
-		)
+		throw new Error(missingRequirementsMessage(`'${pluginId}'`, missing))
+
+	// An owner name that in-app work already uses is not a package's to take
+	// (plan P5 §7.3): a package installing under it would own those spec rows,
+	// and its uninstall would delete them with it. `createPubGenre` refuses
+	// the mirror case — an owner name that is an installed plugin's.
+	{
+		const taken = await db
+			.select({ slug: schema.pipelineSpecs.slug })
+			.from(schema.pipelineSpecs)
+			.where(
+				and(
+					isNull(schema.pipelineSpecs.sourcePluginId),
+					like(schema.pipelineSpecs.slug, `${pluginId}:%`)
+				)
+			)
+		if (taken.length) {
+			const named = taken
+				.slice(0, 3)
+				.map((t) => `'${t.slug}'`)
+				.join(", ")
+			throw new Error(
+				`'${pluginId}' is the owner name of ${
+					taken.length === 1 ? "a pipeline" : `${taken.length} pipelines`
+				} made on this pub (${named}${taken.length > 3 ? ", …" : ""}). ` +
+					`A package cannot install over in-app work: export it under another ` +
+					`owner name, or remove those pipelines first.`
+			)
+		}
+	}
 
 	// A custom pipeline must include a default preset (owner ruling
 	// 2026-10-02): a genre the package declares with no preset for it has

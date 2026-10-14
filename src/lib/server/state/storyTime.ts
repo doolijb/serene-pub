@@ -57,6 +57,7 @@ import {
 	advanceStoryTime,
 	compareDates,
 	dateProblem,
+	clockSpanWords,
 	datesThatDoNotLand,
 	formatDate,
 	readStoryCalendar,
@@ -418,6 +419,53 @@ export async function advanceSessionStoryClock(
 		}
 		await tx.update(schema.sessions).set(clockColumns(clock)).where(eq(schema.sessions.id, sessionId))
 		return { clock: compactClock(clock), label: formatDate(clock, calendar), from: compactClock(start) }
+	})
+}
+
+/**
+ * 🚧 **Take a clock move back** (live scenes §15 G5, 2026-10-13): move the
+ * session's OWN clock back by the step a recorded move made — `by` of `unit`
+ * the other way, through the book's calendar, under the lock
+ * `advanceSessionStoryClock` takes. A delta, not a restore: a person who
+ * moved the clock since keeps their move.
+ *
+ * Null — and nothing written — when there is nothing of the session's to
+ * move back: no lorebook, or no clock of its own (it follows its line's
+ * present, so the move is already gone from what it reads). Throws
+ * `StoryClockRefusal` with a sentence when the calendar cannot place the
+ * result.
+ */
+export async function stepBackSessionStoryClock(
+	db: Db,
+	sessionId: number,
+	by: number,
+	unit: StoryTimeUnit
+): Promise<{ clock: StoryClock; from: StoryClock } | null> {
+	const found = await sessionStoryClockRow(db, sessionId)
+	if (!found?.lorebookId || !clockOf(found)) return null
+	const lorebookId = found.lorebookId
+	return await db.transaction(async (tx) => {
+		await lockBookCalendar(tx, lorebookId)
+		await tx.execute(
+			sql`select 1 from ${schema.sessions} where ${schema.sessions.id} = ${sessionId} for update`
+		)
+		const row = await sessionStoryClockRow(tx, sessionId)
+		const start = clockOf(row)
+		if (!row || row.lorebookId !== lorebookId || !start) return null
+		const moved = advanceStoryTime(start, -by, unit, await bookCalendarOf(tx, lorebookId))
+		if (moved.problem !== undefined)
+			throw new StoryClockRefusal(
+				`The story clock can't be taken back by ${clockSpanWords(by, unit)}: ${moved.problem}`
+			)
+		const clock: StoryClock = {
+			year: moved.time.year,
+			month: moved.time.month ?? null,
+			day: moved.time.day ?? null,
+			hour: moved.time.hour ?? null,
+			minute: moved.time.minute ?? null
+		}
+		await tx.update(schema.sessions).set(clockColumns(clock)).where(eq(schema.sessions.id, sessionId))
+		return { clock: compactClock(clock), from: compactClock(start) }
 	})
 }
 

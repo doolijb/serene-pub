@@ -125,6 +125,9 @@ describe("characters import/export (PGlite integration)", () => {
 							content: "A magic sword",
 							extensions: {},
 							enabled: true,
+							// Always on: not "small and plain" (A.6), so the
+							// book is held as a lorebook rather than made strokes.
+							constant: true,
 							insertion_order: 0
 						}
 					]
@@ -165,7 +168,7 @@ describe("characters import/export (PGlite integration)", () => {
 					name: "Risa's Lore",
 					extensions: {},
 					entries: [
-						{ keys: ["tower"], content: "It leans.", extensions: {}, enabled: true, insertion_order: 0 }
+						{ keys: ["tower"], content: "It leans.", extensions: {}, enabled: true, constant: true, insertion_order: 0 }
 					]
 				},
 				assets: [

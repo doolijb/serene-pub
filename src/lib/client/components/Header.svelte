@@ -53,6 +53,12 @@
 	/** Five faces read as a stack at a glance; more reads as a list. */
 	const CAST_SHOWN = 5
 
+	/**
+	 * The session's one-line **header notice** (PLAN-core-widgets §3.16), the
+	 * stale-preset notice today: the page writes it, with its own dismiss.
+	 */
+	const notice = $derived(openSessionCtx?.headerNotice ?? null)
+
 	const sessionName = $derived(openSessionCtx?.sessionName ?? null)
 	const genreName = $derived(openSessionCtx?.genreName ?? null)
 	const cast = $derived((openSessionCtx?.cast ?? []).slice(0, CAST_SHOWN))
@@ -215,6 +221,35 @@
 				</button>
 			</div>
 		</div>
+		<!-- The notice slot: one line under the bar, on the same measure,
+		     dismissible for this view (the page keeps the flag). Said, not
+		     announced: it is true from the moment the session opens. -->
+		{#if notice}
+			<div
+				class="preset-tonal-warning sp-head-notice flex items-center gap-2 px-4 py-1 text-sm lg:rounded-lg"
+				role="status"
+				data-header-notice
+			>
+				<Icons.Replace size={16} class="shrink-0" aria-hidden="true" />
+				<p class="min-w-0 flex-1 truncate" title={notice.text}>
+					{notice.text}
+				</p>
+				{#if notice.link}
+					<a class="shrink-0 underline" href={notice.link.href}>
+						{notice.link.label}
+					</a>
+				{/if}
+				<button
+					type="button"
+					class="btn-icon btn-icon-sm hover:preset-tonal shrink-0 pointer-coarse:size-11"
+					title="Dismiss"
+					aria-label="Dismiss this notice"
+					onclick={() => notice?.dismiss()}
+				>
+					<Icons.X size={14} aria-hidden="true" />
+				</button>
+			</div>
+		{/if}
 	</header>
 {/if}
 
@@ -391,6 +426,11 @@
 			position: absolute;
 			inset: 0 0 -1rem 0;
 		}
+	}
+
+	/* The notice slot: one line under the bar, a hair apart from it. */
+	.sp-head-notice {
+		margin-block-start: 0.25rem;
 	}
 
 	.sp-head-genre {

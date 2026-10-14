@@ -13,9 +13,15 @@ A session is one story or conversation: your characters, the persona you play, a
 ### Start a session
 
 1. Open **Sessions** on the rail and press **New** (or **New session** on the home screen). The **Start a session** screen opens.
-2. **Genre** and **Preset** are usually picked for you. The genre is the kind of session: **Chat** is the everyday one. See [Genres](./genres.md).
-3. Under **Who is in it**, pick the characters to talk to, and under **Who you play as**, the persona you'll write as. Your default persona is already picked. Both lists look the same and filter by name or tag. Nobody can be on both sides: the character you play as isn't offered for the cast, and a character in the cast isn't offered to play as.
-4. If the genre needs a **Lorebook** (Adventure and the Lair do), pick one.
+2. The **Genre** is usually picked for you. The genre is the kind of session: **Chat** is the everyday one. Each genre's card says in a line what it has, such as *a character you play*, *a narrator tells the story* or *you don't type messages*. See [Genres](./genres.md).
+
+   A **Preset** card appears only when the genre has more than one preset to start from. A preset is a starting recipe for the genre: the settings and actions the session begins with. The default is fine.
+3. Under **Who is in it**, choose who the session voices and who you play:
+   - **Characters** lists the ones you've chosen, in cast order: the order they take turns in a group session. Press **Add characters** to open a picker, search it, tick everyone you want, and press **Add**. They join the end of the list in the order you ticked them. Use **↑** and **↓** on a row to change the order, and **×** to take someone out. If the genre takes only so many characters, **Add characters** turns grey once the cast is full and says why.
+   - **Who you play as** shows the persona you'll write as. Your default persona is already chosen. Press **Change** to pick another (or **Choose who you play as** if nobody is chosen yet). The picker shows your personas first; turn on **Show all characters** to play any character.
+
+   Nobody can be on both sides: the character you play as isn't offered for the cast, and a character in the cast isn't offered to play as.
+4. If the genre needs a **Lorebook** (Adventure and the Lair do), pick one. If you have none yet, press **Create a lorebook** on the card, name it and press **Create**: the new book is chosen for you.
 5. Optionally give the session a **Name** at the top. Left empty, it's named after its cast, such as *Session with Wren*.
 6. Press **Start**.
 
@@ -24,8 +30,8 @@ The session opens. In a Chat session, each character's greeting from their card 
 :::
 
 :::warning If this didn't work
-- **Start stays grey**: a required answer is missing. A card marked with `*` (such as **Lorebook\***) needs a choice. If the genre needs a lorebook and you have none, the card says so: create one in [Lorebooks](./lorebooks.md) first.
-- **"No preset is available for this genre"**: an administrator hasn't enabled a preset for it. Pick another genre, or ask them.
+- **Start stays grey**: a required answer is missing, and the line under **Start** says which, such as *Add at least one character.* or *This genre needs a lorebook.* A card marked with `*` (such as **Lorebook\***) needs a choice. If the genre needs a lorebook and you have none, press **Create a lorebook** on its card.
+- **"No preset is available for this genre"**: an administrator hasn't enabled a preset for it. Pick another genre, or ask them. Administrators get a link straight to **Admin › Play › Presets**.
 :::
 
 A **persona** is a character you play: see [Personas](./personas.md). You can play any of your characters, and one you pick becomes one of your personas.
@@ -82,6 +88,8 @@ Not happy with a reply? Hover it (or tap it on a touch screen) and press **Regen
 
 The bar across the top shows the session's name, the faces of its cast (a dot marks whoever is up next), and its genre.
 
+If the session's preset names a pipeline that is no longer available, one line under the bar says the session is running the default pipeline instead; administrators also get **Fix the binding**. Its **✕** hides it until you next open the session.
+
 Want the room? The small double arrow at the bar's top right (**Hide the session header**) rolls the bar up, along with any strip your layout has across the top. A small tab at the middle of the top edge (**Show the session header**) brings it back; while the bar is hidden, the Jump search pill steps out too (Ctrl K still opens Jump). This browser remembers your choice.
 
 Below it is the conversation, and at the foot, the **composer** where you write. Its footer holds, left to right:
@@ -89,14 +97,21 @@ Below it is the conversation, and at the foot, the **composer** where you write.
 - **Your persona**: the face and name you're writing as. When more than one of your personas is in the session, click it to switch (see below).
 - **Attach** (the paperclip): adds images and files to your message (see [Attach images and files](#attach-images-and-files)).
 - **Preview** (the eye): shows your draft formatted as it will appear. Press it again to go back to writing.
-- **More** (⋮): the composer's panels: **Lore**, **Pinned images** and **Statistics** (see [The composer's panels](#the-composers-panels)), and **What can be attached** (see [Attach images and files](#attach-images-and-files)).
+- **More** (⋮): the composer's panels: **Lore** and **Statistics** (see [The composer's panels](#the-composers-panels)), and **What can be attached** (see [Attach images and files](#attach-images-and-files)).
 - **Send**, or **Stop** while a reply is being written.
 
 The first time you focus the composer on a computer, a hint under it says *Enter sends. Shift Enter for a new line.* once.
 
-Clicking a message's picture opens a gallery of that character's or persona's images. Clicking their name opens them in the [Characters](./characters.md) view, so you can check or edit them without losing your place.
+Just above the composer runs the **turn line**: one row saying what just happened and who is next.
 
-You can move the conversation and add other widgets around it: see [Session layout](./session-layout.md).
+- On the left, what the last reply did: *Narrator replied · 6.2 s* (the time shows for replies written while you were watching), *Wren is thinking* while one is being written, or *Last run failed* with the reason. **Review 2 changes** appears when the AI has proposed changes that wait for you, and administrators get **Inspect run** (see [Inspecting a run](./pipelines.md#inspecting-a-run)). On a narrow screen only the status shows: tap it for the rest.
+- On the right, who is due next, with **Someone else** and **Continue** (see [Who is due next](./group-sessions.md#who-is-due-next)), and who else is typing. While a reply is being written it offers **Stop**; after one fails, **Try again**.
+
+Clicking a message's picture opens a gallery of that character's or persona's images. Clicking their name opens them as this story knows them: if the session's lorebook has them in its [cast](./lorebook-cast.md), their cast member's page opens in the Lorebooks panel; otherwise their card opens in the [Characters](./characters.md) view. Either way you keep your place. A guest, who can't read the host's lorebook, always gets the card.
+
+You can move the conversation and add other widgets around it: see [Session layout](./session-layout.md). Adventure and Lair sessions start with some placed for you, such as the party's stats and, in a Lair, the dungeon's rooms (see [Layouts](./session-layout.md#layouts)).
+
+Some genres keep more than one channel, and their layouts can give a channel its own panel: the Lair's *Sanctum*, or the *Manuscript* of the Writing Room (a genre that comes from a plugin), which reads as one block of prose (the Messages widget's [Folio](./session-layout.md#what-the-messages-widget-offers) presentation) rather than as rows of messages.
 
 ### Images and files on a message
 
@@ -104,23 +119,45 @@ Images and files on a message (a generated image, or a file sent with it) show a
 
 Click an image to open it full size. With more than one, use the arrow keys, the arrows at its sides, or swipe on a phone to go through the message's images; the counter says which one you are on. **Download** saves the file, **Info** shows what is known about it — for a generated image its prompt, seed and model, for any file its name, type and size — and **Esc** closes it.
 
+To find a picture again without scrolling, add the **Album** widget: it gathers every picture in the session, newest first (see [Session layout](./session-layout.md)).
+
+A session can also have a **backdrop**: one picture that sets the scene, shown by the **Backdrop** widget. The [Scene](#scene) action or you can set it; the session's owner changes or clears it from the widget, and everyone in the session sees the same one (see [Session layout](./session-layout.md)).
+
 ### Switch which persona you write as
 
 If more than one of your personas is in the session, the persona in the composer's footer has a chevron. Click it (**Switch persona**) and pick who to write as next.
 
 A guest who has no persona in the session yet sees *Add a persona to this session to send messages.* with an **Add your persona** button instead.
 
+If nobody is chosen for you to play as and you press **Send**, the **Choose who you play as** picker opens instead of sending. Your message stays in the box: pick someone, then press **Send** again.
+
 ## Actions
 
 Above the composer is the word **Actions**. Click it to open one row of buttons for this session, all alike:
 
 - first, the **turn controls**: **Continue**, **Pick who speaks** and **Regenerate** (see [Group sessions](./group-sessions.md#continue-and-pick-who-speaks));
-- then what the genre offers: in Chat, **Narrate**, **Side character** and **Image**; in Adventure, **Look**, **Rest**, **Time passes** and **Ask**;
+- then what the genre offers: in Chat, **Narrate**, **Side character**, **Image**, **Scene** and **Time passes…**; in Adventure, **Look**, **Rest**, **Time passes…** and **Ask**;
 - then **More**, which lists every action, including ones without a button of their own.
 
 Hover any button to see what it does. **What do these do?** (the **?** at the end of the row) lists every action the session offers you right now, with a sentence each. A greyed button says why in its tooltip, such as *wait for the reply to finish*.
 
 An action that needs words from you opens a small window asking for them.
+
+### Image
+
+**Image** asks *What should the image show?*, draws what you describe and posts it in the session as a message. It draws with the pub's **Images** [loadout](./connections.md#loadouts) (the model on a connection that pictures run on); while it is empty, the run ends with a sentence saying an administrator has to choose one (see [Images](./images.md#when-it-says-no-model-is-set)).
+
+### Scene
+
+**Scene** draws the scene as it stands, with one press and no window. Chat and Adventure sessions both offer it. It reads the last few messages (six by default) and how everyone in the session looks (each character's and persona's likeness, from the **Likeness** tab of their card), asks the model for a picture description, then draws a wide picture. Each person's likeness image, or their avatar when they have none, is sent along so the picture can resemble them, when the image model can take reference pictures.
+
+By default the picture is both posted in the session as a message and set as the session's **backdrop**. An administrator can change that in **Admin › Pipelines**, on the **Illustrate scene** pipeline's **Placement** step: **Post it**, **Backdrop** or **Both**. The **Backdrop** widget's **Illustrate** button runs the same action but only sets the backdrop, and posts nothing.
+
+Scene is offered in Chat sessions. Getting pictures working, and giving characters a likeness, is in [Images](./images.md). For administrators: the description runs on the **Scene prompt** [loadout](./connections.md#loadouts) and the picture on the **Scene** loadout; one left unfilled runs on **Reply** or **Images** instead.
+
+### Time passes…
+
+**Time passes…** moves the session's [story clock](./lorebook-time.md#the-story-clock) on, or back, by as much as you choose: a number, a unit (minutes, hours, days, months or years) and **Forward** or **Back**. It opens at one hour forward. Nothing is posted in the conversation and no model is asked; the next line carries the new time. Chat and the Lair offer it, and Adventure's **Time passes…** does the same after its state-keeper has said what the world does over that span (see [Adventure](./genre-adventure.md#actions)). It needs the session to read a lorebook with a date to start from; otherwise nothing moves and a line says so: *Time passes: 1 hour, not on the clock…* (Adventure's keeps the world's changes all the same). Pressed before the session has any line at all, the move shows at the head of the conversation. The move shows under the message as *Time passes: 1 hour (…)*, and deleting that message takes it back (see [The story clock](./lorebook-time.md#the-story-clock)). Moving the clock this way can [suggest a new scene](#when-a-new-scene-begins) at the next line.
 
 ### Slash commands
 
@@ -151,6 +188,8 @@ Each message has a **⋮** menu on the right of its name row. Hovering (or tappi
 | **Delete** | Removes the message, after you confirm. | Any message |
 | **Branch from here** | Starts a copy of the session ending at this message. | Any message (owner only) |
 | **Select for summary** | Starts choosing messages to summarize into the lorebook. | When the session reads a lorebook |
+| **Start scene here** | Starts a scene at this line; an open scene ends at the line before. See [Scenes](#scenes-start-and-end-them). | Sessions you own that read a lorebook, where the genre keeps scenes |
+| **End scene here** | Ends the open scene at this line; what follows depends on [how scenes begin](#when-a-new-scene-begins). | Lines of the open scene, as above |
 | **Change sprite** | Picks the face shown with this line. | Characters with [sprites](#sprites) |
 | **Inspect run** | Shows every step of the run that wrote this reply. | Administrators |
 | **Prompt details** | Shows the prompt this reply was written from. | With context debugging on |
@@ -167,15 +206,19 @@ These work only on the **newest** reply, never on your own lines (edit those ins
 - **Extend** keeps the reply and writes more onto the end: useful when it was cut off.
 - **Swipe** keeps every version. The arrows show *2 / 3* and so on; on the newest version, the right arrow writes a new one.
 
+A regenerate, or a swipe that writes a new version, takes back what the old reply changed (its stats, its suggestions, its moves of the story clock) before the new one is written, and every open tab shows it straight away.
+
 A **greeting** is a character's opening line from their card, marked with a handshake. Swiping a greeting steps through the greetings written on the card; it never writes a new one.
 
 ### Branch from here
 
-**Branch from here** asks for a title, then makes a new session holding every message up to and including this one, and takes you there. The original is left as it was. Leave the title empty to keep the original's name. Only the session's owner can branch. What a branch copies is listed in [Session actions](./session-actions.md#what-a-branch-copies).
+**Branch from here** asks for a title, then makes a new session holding every message up to and including this one, and takes you there. The original is left as it was. Leave the title empty to keep the original's name. Only the session's owner can branch. The branch's [story clock](./lorebook-time.md#the-story-clock) stands where it stood at that message. What a branch copies is listed in [Session actions](./session-actions.md#what-a-branch-copies).
 
 ### Select messages for a summary
 
 **Select for summary** turns the conversation into a checklist. Tick messages (or use **Select all above** / **Select all below** on a message), then choose where the summary goes: **Scene**, **World lore** or **Character lore**. Messages already in a scene can't be picked again. See [Summarization](./summarization.md).
+
+Where you can start scenes (see [Scenes](#scenes-start-and-end-them)), the bar offers **Mark as scene** first: the lines from the first you ticked to the last become one finished scene, with nothing summarized yet. Any run that's in no scene can be marked, an earlier stretch of the story too; a run that starts after the open scene began ends that scene at the line before. **Scene summary**, beside it, is the older way: the ticked lines become a scene and are summarized at once. Lines inside a scene, the open one included, can't be ticked.
 
 ### When a reply goes wrong
 
@@ -208,9 +251,18 @@ Opening the sessions list from a character's details shows only sessions with th
 
 Choose **Delete** in a session's menu and confirm. The session and all its messages are removed for good. Scenes it saved to a lorebook stay there, with their name, summary and cast.
 
+### Every session on the pub
+
+Administrators also have **Admin › Play › Sessions**: every session on the pub, whoever owns it, with its owner, genre, preset, number of messages and members, and when it last changed. Filter by owner, genre, preset or kind (_One character_ or _Group_), or search by name, owner, genre or preset. A session's preset links to that preset's page. The list is read-only: sessions belong to the people who made them, so there is nothing to add, edit or delete there.
+
 ## Session settings
 
 Open a session's settings with **Edit** in the Sessions view: in a row's menu, or beside **Open session** in its details. The form has three tabs, and **Save** at the top. A dot on a tab means something there still needs an answer. Closing with unsaved changes asks before throwing them away.
+
+Above the tabs:
+
+- **Session name**: what the session is called in the Sessions view. It waits for **Save**.
+- **Genre**, with **Upgrade to version 2** (or whichever version is newer), shown only when a newer version of the session's genre is installed. A session keeps its genre for life; upgrading moves it to the newer version and keeps the session and its settings. It happens at once.
 
 ### Participants
 
@@ -218,21 +270,21 @@ Everything on this tab waits for **Save**: adding, removing and reordering peopl
 
 - **Characters**: drag to change their order, use the switch to [bench](./group-sessions.md#bench-a-character) one, or remove one. Add more here too. The character picker leaves out your personas in this session, and the persona picker leaves out the cast.
 - **Personas**: who people write as.
-- **Envoys**: speakers the genre brings with it, such as the Lair's Castellan. See [Envoys](./genres.md#envoys).
+- **Envoys**: characters this genre brings along, such as a narrator or the Lair's Castellan. Switch one on to include it. See [Envoys](./genres.md#envoys).
 - **Removed**: characters and personas you took out, with **Reassign…** to hand their messages to someone else.
 - **Guests**: other people invited to the session (see [Guests](#guests)). Only the owner can add or remove them.
 
 ### Settings
 
-The session's own fields (the story, genre settings, what your lines are called, tags) wait for **Save**. The controls marked **Applies at once** (stats, **Preset**, **Actions**, **Pipelines**, **Ask before regenerating a turn**) change the session as you set them, and the pipeline choices have their own **Apply** button.
+The session's own fields (the story, genre settings, what your lines are called, tags) wait for **Save**. The controls marked **Applies at once** (stats, **Preset**, **Actions**, **Pipelines**, **Ask before regenerating a turn**) change the session as you set them, and each choice under **How replies are made** applies when you press its **Apply now**.
 
 From the top:
 
-- **The story**: the **Scenario** and the **Lorebook**. The scenario is a few lines describing the setting or situation; the model reads it on every reply.
-- **Line** and **Story clock**, once a lorebook is chosen (see [The session's lorebook](#the-sessions-lorebook)).
+- **The story**: the **Scenario** and the **Lorebook**. The scenario is a few lines describing the setting or situation; the model reads it on every reply. Once a lorebook is chosen, **Scenes**: where a new scene begins while you play, and when its summary is written (see [When a new scene begins](#when-a-new-scene-begins)).
+- **Line** (which version of the lorebook this session reads) and **Story clock** (the in-story date), once a lorebook is chosen (see [The session's lorebook](#the-sessions-lorebook)).
 - The session's stats, when the genre has them. These save as you change them.
-- **Preset** and **Actions**: which preset the session runs and which actions it offers.
-- Choices for the session's pipelines, such as the Chat turn order's **Strategy** (see [Group sessions](./group-sessions.md#choose-how-the-turn-order-works)).
+- **Preset** and **Actions**: which preset the session runs (a starting recipe for the genre: the settings and actions the session begins with) and which actions it offers, each with a line on what it does. Actions the genre offers but the preset leaves out are listed under **Not in this preset**.
+- **How replies are made**: choices for the session's pipelines, such as the Chat turn order's **Strategy** (see [Group sessions](./group-sessions.md#choose-how-the-turn-order-works)). Each applies when you press **Apply now**, not with **Save**.
 - **Genre settings**: whatever the genre offers, such as Chat's **Auto-advance** and **Author's note**, or Adventure's **Tone**. See [Genres](./genres.md).
 - **Pipelines**: per-session settings for each model call (see [Pipeline settings in a session](#pipeline-settings-in-a-session)).
 - **Tags**, which the Sessions view's search reads. See [Tags](./tags.md).
@@ -265,22 +317,50 @@ At the foot of the Settings tab, for the session's owner and administrators. It 
 
 A text value you're allowed to change has an **Edit** button. That's how you correct something no widget shows, such as the Lair Castellan's scratchpad. A value marked secret is never shown.
 
+To keep a value on screen beside the story, add an **Annex** widget and set its **Key** to the value's owner and key with a dot between, such as `core.retake-quietly` (see [the widgets](./session-layout.md#the-widgets)). It shows only what the person looking may see.
+
 ## The session's lorebook
 
-A session can read one [lorebook](./lorebooks.md): its world lore, character lore and history. Choose it under **The story** in the session's settings, or, for a session you own, use **Read into this session** in the lorebook's **Manage** menu in the Lorebooks view (**Stop reading** takes it out). A session reads one book at a time, so switching asks first. See [Reading a book into a session](./lorebooks.md#reading-a-book-into-a-session).
+A session can read one [lorebook](./lorebooks.md): its world lore, character lore and history. Choose it under **The story** in the session's settings, or, for a session you own, use **Read into this session** beside the book's name in the Lorebooks view (the first item under **⋯** on a narrow screen); **Stop reading** takes it out. A session reads one book at a time, so switching asks first. See [Reading a book into a session](./lorebooks.md#reading-a-book-into-a-session).
 
-Once it reads a lorebook, the conversation shows the lorebook's history: a date marks where a history entry begins, and a scene begins with its name in the scene's colour. Click either to open it in the lorebook. **Show scenes and dates** in the Messages widget's settings hides them.
+Once it reads a lorebook, the conversation shows the story's days and scenes. A date marks the first line of each new day in the story (the [story clock](./lorebook-time.md#the-story-clock) when the line was written); click it to open that day's history entry. Dates are written in the lorebook's [calendar](./lorebook-time.md#calendar-and-clock), with its month names (*5 Bloom, Year 412*); a lorebook without one writes them plainly (*Year 412, Mo. 3, Day 5*). A **scene divider** marks where a scene begins: its colour, its name, the day it began, how many lines it holds and the faces of who is in it (its cast; on a guest's screen, who speaks in it). The scene still going reads *since* its day and is marked **open**. Scenes summarized the older way, by picking lines, show their history entry's date above them instead.
+
+On a session you own, click a divider's name to rename it. Its **⋯** menu has:
+
+- **End scene** (the open scene, at its newest line) or **Summarize** (a finished scene, in the same review as below; not offered when the session's summaries are **Never**). While a summary waits for your review it reads **Review summary** and opens that review;
+- **Open in lorebook**;
+- **Move start up one line** and **Move start down one line**, to nudge where the scene begins. You can also drag the divider by its grip and drop it between two lines: the scene then starts at the line below the drop;
+- **Reopen scene**, on a finished scene with nothing after it on its channel: it runs on to the newest line again;
+- **Remove boundary**, which asks first. A scene with another before it on its channel **joins** that one: its lines become the earlier scene's, its own summary goes, and the earlier scene's summary is kept but marked out of date. The first scene on a channel has nothing to join: its lines stay in the conversation, outside any scene, and the scene leaves the lorebook with its summary.
+
+A finished summary waits for you: the divider says **Ready to review** until you apply or discard it; click it to open the review (see [Summarization](./summarization.md#processing-a-scene)). When a scene's boundaries move, its summary no longer matches its lines. The summary is kept, and the divider says **Summary out of date** until you summarize it again. A refusal (a scene can't overlap another, say) is said under the divider, not as a pop-up. A guest's click on the name opens the scene in the lorebook. **Show scenes and dates** in the Messages widget's settings hides the dates, dividers and suggestions.
+
+### Scenes: start and end them
+
+A scene runs from the line it starts at to the line it ends at, on one channel. Use **Start scene here** and **End scene here** in a message's menu. Starting a scene while another is open ends that one at the line before. **End scene here** follows **How scenes begin** (below): under **Automatic** the next scene starts at the line after; under **Suggested** a *New scene? — the last scene ended* suggestion waits there; under **Manual** the scene just ends. Ending at the newest line, the next line you write takes its place. They're offered on sessions you own, when the session reads a lorebook and its genre keeps scenes, and only where they'd work: not inside a finished scene, and not before the open one. A new scene is filed under the history entry the story is in (a new day makes a new entry), named *Scene 3* and so on (with the place, in a genre that keeps one: *Scene 3 · the Crypt*), and its cast is proposed from who speaks in it, and kept up to date as new people speak while it's open; nothing here asks the model. Summarize it from its divider when you like.
+
+### When a new scene begins
+
+Under **The story** in the session's settings, **Scenes** decides what happens at the moments a new scene might begin. Its default is the genre's; change it for one session and **Use the genre's settings** puts it back.
+
+- **How scenes begin**: **Suggested** (the default) puts a quiet *New scene? — the day changed* in the conversation, just above the line, with **Yes** (start a scene there; an open scene ends at the line before) and **Not here** (it isn't offered at that line again). **Automatic** starts the scene there itself; you can move or remove the boundary afterwards. **Manual** leaves every scene to **Start scene here** and **End scene here**.
+- **Suggest a new scene when** (or **Begin a new scene when**, under Automatic): **The story's day changes** (the [story clock](./lorebook-time.md#the-story-clock) on a line is a later day than on the line before), **Time passes** (**Time passes…**, you moved the clock, you accepted Adventure's suggestion that [time passed](./genre-adventure.md#time-the-scene-took), or its state-keeper moved the clock under **Trust the narrator**, since the line before; Chat's reply tick doesn't count), **The place changes** (only in a genre that keeps a place, as [Adventure](./genre-adventure.md) and the [Lair](./genre-lair.md) keep the party's **Location**: where the story was when a line was written differs from the line before and from where the open scene began, however it changed: the state-keeper, your own edit, an accepted suggestion), and, off unless you tick them, **A narrator line is posted**, **The scene reaches** a number of lines, and **A pause in play of more than** a number of real hours. The first three are on by default. A genre can add moments of its own, listed after these and on by default, such as the Lair's **The party reached a new floor**; the suggestion then says it in the same words.
+- **Summaries**: **On request** (the default) summarizes a scene when you ask, from its divider or the [Chronicle](./session-layout.md#the-widgets); **On close** writes each scene's summary in the background as the scene ends, ready for review in the activity list; **Never** offers no **Summarize** in this session.
+
+None of this asks the model: each moment is read off what the story already holds. The suggestions only appear for the session's owner, and only once the session reads a lorebook.
 
 ### Where the session reads its lorebook
 
 A lorebook can have [branches](./lorebook-time.md#branches) (lines of the story that part from the main one) and a [calendar](./lorebook-time.md#calendar-and-clock). Once a lorebook is chosen and saved, two settings appear under it:
 
-- **Line**: **Main**, or one of the lorebook's branches.
-- **Story clock**: where this session's story stands in time. **Follow the line's present** moves with the lorebook; **This session's own clock** gives the session a date of its own (a year, and optionally a month, a day and a time of day).
+- **Line**: which version of the lorebook this session reads. **Main** is the original; the others are the lorebook's branches.
+- **Story clock**: the in-story date, where this session's story stands in time. **Follow the line's present** moves with the lorebook; **This session's own clock** gives the session a date of its own (a year, and optionally a month, a day and a time of day).
 
 A new session starts on the lorebook's most recently played line, following its present. It gets a clock of its own when you choose one or step it here, or when a pipeline moves the story's time on.
 
 **The clock is the session's own.** Moving it never moves the lorebook's present or any other session's clock, so two sessions on one lorebook can stand years apart. Under the clock, **Step by** minutes, hours, days, months or years, **Forward** or **Back**. A date the lorebook's calendar can't place is refused with the reason, such as *There is no month 13: this calendar has 12.*
+
+In a Chat session you own, **Each reply advances the clock by** sits under the clock: **By** and **Unit** move the story on by a fixed amount after every reply (**By** 0, the default, is off; a regenerated or swiped reply doesn't move it again). It applies at once, unlike the rest of the card, and **Reset** puts back what the session's preset says.
 
 The line and clock decide what the session reads: the lore on its line, history dated up to its clock, the lorebook's dated changes that have happened by then, and the stats recorded so far. On a branch, the lines it came from count only up to where it forked.
 
@@ -288,7 +368,9 @@ If the line a session reads is deleted, the session moves to the line it forked 
 
 ## Which connection a session uses
 
-A session never picks a connection or a model itself. Each reply runs on the model its pipeline's configuration names, or on the pub's default from **Admin › Defaults** when it names none. To run one session on a different model, an administrator gives it a different configuration. See [Connections](./connections.md#choosing-a-pair) and [Pipelines](./pipelines.md).
+A session never picks a connection or a model itself. Each reply runs on the model its pipeline's configuration names, or on its [loadout](./connections.md#loadouts) (the **Reply** loadout, for replies) when it names none. To run one session on a different model, an administrator gives it a different configuration. See [Connections](./connections.md#choosing-a-pair) and [Pipelines](./pipelines.md).
+
+While the **Reply** loadout has no model, a session can't reply, and one line above the composer says so, to everyone in it. A member's line reads _No model is set up to reply. Ask your administrator._; an administrator's reads _The Reply loadout has no model._ with **Fill the Reply loadout**, which opens that loadout's sheet in the **Loadouts** view. The line goes as soon as the Reply loadout has a model.
 
 ## Pipeline settings in a session
 
@@ -296,16 +378,20 @@ Every reply and action is run by a [pipeline](./pipelines.md). The **Pipelines**
 
 Each card is grouped by **model call**: a block per call, with its name, a sentence on what it does, and its choices:
 
-- **Prompt**: which prompt it sends.
+- **Prompt**: which prompt it sends. The eye button beside it opens every prompt that call offers, with what each one tells the model; pick one to read it, and **Use** to choose it for this session. A read-only prompt has **Read the wording** instead, which opens the same list without **Use**.
 - **Model**: which model it runs on. Shown to administrators only, read-only, with **Change in Pipelines**.
-- **Sampling**: how the model writes (administrators only). The first entry says what you get with nothing chosen; **Reset** goes back to it.
+- **Sampling**: how the model writes (administrators only). The first entry says what you get with nothing chosen; **Reset** goes back to it. This is the only place a session's own sampling is set; a chat that had its own sampling config in 0.5 has it here.
 - An **On/Off** switch, for a call that can be skipped (administrators only).
 
 You only see what your role can change: someone who isn't an administrator sees prompts and nothing else, and a pipeline with nothing for you has no card. A setting you could normally change but that's locked right now stays visible, read-only, with a line saying why.
 
 The last card is the pipeline that created the session. Its settings only mattered while creating it, so it's read-only afterwards: *This session has been created; these settings only applied while creating it.*
 
-Everything else about a pipeline (its context template, budgets and retrieval) is set by administrators through **More settings in Pipelines** at the foot of each card. See [Pipelines → Agents](./pipelines.md#agents).
+Everything else about a pipeline (its context template, budgets and retrieval) is set by administrators through **More settings in Pipelines** at the foot of each card. See [Pipelines › Agents](./pipelines.md#agents).
+
+### Step settings
+
+Some steps of a pipeline are the session's to set, whoever owns it: Chat's reply tick, shown under the [story clock](#where-the-session-reads-its-lorebook), and, on the **Step settings** card, the sprite choice (**Choose sprites**, **Stickiness**, **Minimum similarity**) and the turn order's own settings: who may take a turn (**Characters**, **Personas**, **Envoys**) and how far back a mention counts (**Messages scanned**). The card covers the pipelines the session runs on its own events, such as the turn order, as well as its reply and actions. Each applies at once; **Reset** goes back to what the session's preset says. These are story settings only. A step that runs on a model never appears here (the turn order's model path among them), and neither does a model, connection, sampling or loadout, or a setting that holds a list: those stay with the administrator.
 
 ## Guests
 
@@ -320,29 +406,23 @@ When accounts are on, a session's owner can invite other people: **Add guests** 
 
 Only the owner can change the session's settings, branch it, ask for a Narrator Response, use **Pick who speaks** out of turn, or open the composer's panels. A guest sees a greyed button with the reason rather than nothing. See [Users and accounts](./users-and-accounts.md) and, for the exact rules, [Session actions](./session-actions.md#who-may-use-it).
 
+To see who else has the session open, and who is typing, add the **Who's here** widget (see [Session layout](./session-layout.md)).
+
 ## The composer's panels
 
 The composer's **More** menu opens a panel in place of the text box, with **Back to compose** to return. Guests don't get these.
 
 ### Lore
 
-Offered when the session reads a lorebook. It shows the lorebook's current history entry and its scenes, with:
+Offered when the session reads a lorebook. Test what the next reply would pull in from the lorebook for the message you're writing, and see which entries have come up in this session so far.
 
-- **Open in lorebook**;
-- **Start new history entry**;
-- **Summarize Scene**, which starts choosing messages for a scene;
-- **Extend Graph (N)**, when this session has scenes not yet added to the lorebook's relationship graph;
-- **Recent Entries**, to jump back to earlier history.
+The session's history and scenes are in the **Chronicle** widget (see [Session layout](./session-layout.md#the-widgets)): where the story stands, the history entry the session is in with its scenes, **Start new history entry**, **Summarize scene**, **Extend graph** and the earlier entries.
 
-Below that, you can test what the next reply would pull in from the lorebook for the message you're writing, and see which entries have come up in this session so far.
-
-### Pinned images
-
-Pin any character's or persona's picture (their avatar or one from their gallery) to a **Left** or **Right** slot. The **Scene Portraits** widget, with **Show** set to **Pinned**, draws them beside the conversation. Your pins are remembered in this browser only.
+To show a character's picture beside the conversation, use the **Scene Portraits** widget: its **Picture** setting can show an image chosen from the character's gallery (see [Session layout](./session-layout.md#scene-portraits)). Pictures you pinned in an earlier version move into Scene Portraits the first time you open the session.
 
 ### Statistics
 
-Offered when an administrator has turned on context debugging (in [Admin › Diagnostics](./system-settings.md#diagnostics)). It shows how many tokens your draft's prompt uses and how many messages fit, with **Details** to open **Prompt Details**:
+Offered when an administrator has turned on context debugging (in [Admin › Pub › Diagnostics](./system-settings.md#diagnostics)). It shows how many tokens your draft's prompt uses and how many messages fit, with **Details** to open **Prompt Details**:
 
 - **Token budget**: the total against the limit, and why anything was cut.
 - **Messages**: which messages were included and which left out.
@@ -356,22 +436,23 @@ With context debugging on, a thin bar along the top of the composer fills as the
 
 When a character has [sprites](./characters.md#sprites) (faces for different moods), a session can show the face that fits each line.
 
-- **Chosen automatically.** After a character's reply is saved, Serene Pub compares the reply's text with the character's sprite labels and picks the closest. Every genre's reply does this, the Lair's delvers included; a narrator's line has no face to choose. This uses your active embedding model, not the reply's model: on this device for a local model, or one request per reply to an online one. With no embedding model set up, or when nothing fits, the line keeps the face it had.
-- **Settings.** The choice has three settings on the reply pipeline's sprite step: **Choose sprites** turns it off (no embedding request is made then), **Stickiness** sets how much better a new face must fit before it replaces the last one, and **Minimum similarity** how close a line must be to any face. The session's own settings don't show them yet; an administrator changes them in the Pipelines view.
+- **Chosen automatically.** After a character's reply is saved, Serene Pub compares the reply's text with the character's sprite labels and picks the closest. Every genre's reply does this, the Lair's delvers included; a narrator's line has no face to choose. This uses the model in the **Embeddings** loadout, not the reply's model: on this device for a local model, or one request per reply to an online one. With the Embeddings loadout empty, or when nothing fits, the line keeps the face it had.
+- **Settings.** The choice has three settings on the reply pipeline's sprite step: **Choose sprites** turns it off (no embedding request is made then), **Stickiness** sets how much better a new face must fit before it replaces the last one, and **Minimum similarity** how close a line must be to any face. The session's owner changes them for one session under **Step settings** in its settings (they apply at once); an administrator sets them for everyone in **Admin › Pipelines**.
 - **Pick one yourself.** **Change sprite** in a message's menu lets anyone who can edit that line pick its face, or none. The automatic choice never overrides yours.
 - **Swipes.** Each version of a message keeps its own face.
 
-Faces show in the **Scene Portraits** widget (set to show the scene), beside each line in the **Messages** widget when **Face beside each line** is set to the line's sprite, and in the session's header.
+Faces show in the **Scene Portraits** widget (with **Picture** set to **Current sprite**, its default), beside each line in the **Messages** widget when **Face beside each line** is set to the line's sprite, and in the session's header.
 
 **Another outfit for this session.** On a Scene Portraits face, the sprite-set menu shows the character in another of their card's sets, for this session only. It's there when the card has more than one set, for the session's owner and the character's owner.
 
 ## Search by meaning notice
 
-When an [embedding model](./embeddings-and-rag.md) is set up, a quiet line can appear above the composer in a longer session, saying the session's lorebook isn't fully indexed for **Search by meaning** yet. **Prioritize in queue** moves this session to the front; **Hide for this session** hides the line (owner only). It goes by itself once every entry is indexed. See [Understanding RAG notices](./embeddings-and-rag.md#understanding-rag-notices).
+When an [embedding model](./embeddings-and-rag.md) is set up, a quiet line can appear above the composer in a longer session, saying the session's lorebook isn't fully indexed for **Search by meaning** yet. An administrator can press **Re-index now** when the entries need re-indexing, or **Prioritize in queue** to move this session to the front; **Hide for this session** hides the line (owner only). It goes by itself once every entry is indexed. See [Understanding indexing notices](./embeddings-and-rag.md#understanding-indexing-notices).
 
 ## Troubleshooting
 
 :::warning Nobody replies after I send
+- The **Reply** loadout may have no model yet. Then one line sits above the composer: _Sessions can't reply yet. No model is set up to reply. Ask your administrator._ An administrator sees _The Reply loadout has no model._ and **Fill the Reply loadout** there instead, which opens that loadout's sheet in **Loadouts** (see [Connect a model](./connect-a-model.md)).
 - In a group session, **Auto-advance** may be **Off**, or the turn-order strategy **Manual**. Press **Continue** or **Pick who speaks**. See [Group sessions](./group-sessions.md#auto-advance).
 - The *ready to continue* line hides while you have a draft or are editing a message.
 - The session may have no active character: check the switches under **Participants**.
@@ -412,4 +493,5 @@ Long sessions load 25 messages at a time. Scroll to the top to load more.
 - [Characters](./characters.md) and [Personas](./personas.md): who takes part.
 - [Lorebooks](./lorebooks.md): the world a session reads.
 - [Session layout](./session-layout.md): arranging the session screen.
+- [Images](./images.md): the Image and Scene actions, and backdrops.
 - [Session actions](./session-actions.md): how actions and permissions work, for power users.

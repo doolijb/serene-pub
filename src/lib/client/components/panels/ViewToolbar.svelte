@@ -68,7 +68,7 @@
 			{#if hasMenu}
 				<RowMenu
 					items={menuItems!}
-					label={label}
+					{label}
 					triggerLabel="More for {label.toLowerCase()}"
 					triggerTitle="More"
 					triggerClass={toolbarButtonClass()}

@@ -15,16 +15,19 @@
 import type { Receipt } from "@serene-pub/sdk"
 import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelpers"
 
-/** Whether any `set-state` node in this run applied or proposed something. */
+/**
+ * Whether any `set-state` node in this run applied or proposed something —
+ * 🚧 or wrote a skipped clock line (live scenes §15 G16): the ledger moved.
+ */
 export function stateMoved(receipt: Receipt): boolean {
 	return receipt.nodes.some((node) => {
 		if (!String(node.definitionId ?? "").startsWith("core:task/set-state"))
 			return false
 		const out = node.output as
-			| { applied?: unknown[]; proposed?: unknown[] }
+			| { applied?: unknown[]; proposed?: unknown[]; skipped?: unknown[] }
 			| null
 			| undefined
-		return Boolean(out?.applied?.length || out?.proposed?.length)
+		return Boolean(out?.applied?.length || out?.proposed?.length || out?.skipped?.length)
 	})
 }
 

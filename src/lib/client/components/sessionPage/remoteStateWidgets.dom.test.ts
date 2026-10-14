@@ -17,7 +17,17 @@
  * the native's Enter on a number field threw (its bound value is a number)
  * and wrote nothing, the remote's writes; a refused write is only the asking
  * widget's line (R77); required and retired slots are marked (a retired
- * slot is not editable).
+ * slot is not editable); a pick that matches nothing says "Nothing in this
+ * session matches" — since W7 a pick may name the world or a place, not
+ * only a cast member.
+ *
+ * W7 (2026-10-11): World State is Stats now — an alias — so the last block
+ * mounts STATS with World State's settings and holds it to what the native
+ * World State drew, then draws every owner, the groups, bars and a strip.
+ *
+ * F2 (2026-10-11): a stat's **stat trail** — opened from the button beside
+ * it, asked through the page's own `stat-trail` answer, readable by a guest
+ * — is the last block.
  */
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest"
 import { realpathSync } from "node:fs"
@@ -26,6 +36,7 @@ import { mountComponent, type MountedComponent } from "@serene-pub/cli/testing"
 import type { SessionStateV1 } from "@serene-pub/sdk"
 import { projectSessionState } from "./projections/sessionState"
 import { answerSetAttributeValue } from "./requests/setAttributeValue"
+import { answerStatTrail, type StatTrailRead } from "./requests/statTrail"
 import { NATIVE_DREW } from "./nativeStateWidgets.recorded"
 
 const wire = vi.hoisted(() => ({
@@ -217,7 +228,12 @@ describe.each([
 		expect(native.widget).toBe(slug)
 		const remote = await mountRemote(slug, settings)
 		expect(remote.refused).toEqual([])
-		expect(drawn(remote.root)).toEqual(native)
+		// DIFFERENCE (W7): a pick matching nothing no longer says "No cast member".
+		const expected =
+			"pickMembers" in settings && settings.pickMembers[0] === "nobody"
+				? { ...native, empty: "Nothing in this session matches the names in this widget's settings." }
+				: native
+		expect(drawn(remote.root)).toEqual(expected)
 	})
 })
 
@@ -327,5 +343,180 @@ describe("marked, where the native said nothing", () => {
 		const gold = stats.query(`[data-owner-key="mira"] [data-slot-id="${id("gold")}"]`)!
 		expect(gold.hasAttribute("data-retired")).toBe(true)
 		expect(gold.querySelector("button")?.hasAttribute("disabled")).toBe(true)
+	})
+})
+
+/** The server's answer with a place in play (attributes phase 4): the harbor holds gold. */
+function withPlace() {
+	const answer = stateGet()
+	return {
+		...answer,
+		state: { ...answer.state, locations: { byId: { "41": { "core.gold": 5 } } } },
+		owners: [
+			...answer.owners,
+			{ key: "location:harbor", kind: "session_location" as const, id: 41, label: "Harbor", configs: { [id("gold")]: {} } },
+			{ key: "location:crypt", kind: "session_location" as const, id: 42, label: "Crypt", configs: { [id("gold")]: {} } }
+		]
+	}
+}
+
+describe("W7: World State is Stats — one widget for every owner's state", () => {
+	test.each([
+		[{}, { owners: "world", arrangement: "strip" }],
+		[
+			{ layout: "list", slots: "pick", pickSlots: ["Omen", "danger"] },
+			{ owners: "world", arrangement: "list", slots: "pick", pickSlots: ["Omen", "danger"] }
+		]
+	] as const)("Stats in World State's settings %j draws what the native World State drew", { timeout: 60_000 }, async (was, settings) => {
+		const native = NATIVE_DREW[`world-state ${JSON.stringify(was)}`] as ReturnType<typeof drawn>
+		const remote = await mountRemote("stats", settings)
+		expect(remote.refused).toEqual([])
+		expect(drawn(remote.root)).toEqual({ ...native, widget: "stats" })
+		expect(remote.query("[data-state-widget]")?.getAttribute("data-arrangement")).toBe(settings.arrangement)
+	})
+
+	test("owners all: a head per kind — world, cast, places — and a card per owner", { timeout: 60_000 }, async () => {
+		serverSays("state:get", withPlace())
+		const remote = await mountRemote("stats", { owners: "all", castScope: "all" })
+		const groups = [...remote.root.querySelectorAll('[data-widget-part~="stats.group"]')].map((g) => [
+			g.getAttribute("data-owner-group"),
+			text(g.querySelector('[data-widget-part~="stats.group-head"]'))
+		])
+		expect(groups).toEqual([
+			["world", "World"],
+			["cast", "Cast"],
+			["places", "Places"]
+		])
+		// The crypt holds nothing in play, so it is not drawn.
+		expect(drawn(remote.root).cards).toEqual([
+			["world", "World"],
+			["mira", "Mira"],
+			["bram", "Bram"],
+			["location:harbor", "Harbor"]
+		])
+	})
+
+	test("slots bars: only the numbers with a floor and a ceiling", { timeout: 60_000 }, async () => {
+		const remote = await mountRemote("stats", { owners: "all", slots: "bars" })
+		expect(drawn(remote.root).slots.map((s) => [s.id, s.fill])).toEqual([
+			[id("danger"), 60],
+			[id("hp"), 70]
+		])
+	})
+
+	test("arrangement strip: the world's slots bare, each other owner a named line, every slot compact", { timeout: 60_000 }, async () => {
+		serverSays("state:get", withPlace())
+		const remote = await mountRemote("stats", { owners: "all", arrangement: "strip" })
+		expect(remote.query("[data-state-widget]")?.getAttribute("data-arrangement")).toBe("strip")
+		expect(remote.root.querySelectorAll('[data-widget-part~="stats.card"]').length).toBe(0)
+		const lines = [...remote.root.querySelectorAll('[data-widget-part~="stats.strip"]')].map((l) => [
+			l.getAttribute("data-owner-key"),
+			text(l.querySelector('[data-widget-part~="stats.strip-name"]'))
+		])
+		expect(lines).toEqual([
+			["mira", "Mira"],
+			["location:harbor", "Harbor"]
+		])
+		expect(remote.query(`[data-slot-id="${id("weather")}"]`)?.closest('[data-widget-part~="stats.strip"]')).toBeNull()
+		const rows = [...remote.root.querySelectorAll('[data-widget-part~="stat-slot.root"]')]
+		expect(rows.length).toBeGreaterThan(0)
+		expect(rows.every((r) => r.getAttribute("data-density") === "compact")).toBe(true)
+	})
+
+	test("owners places: each place in play, its valued stats only; an edit is written as the place", { timeout: 60_000 }, async () => {
+		serverSays("state:get", withPlace())
+		const remote = await mountRemote("stats", { owners: "places" })
+		const seen = drawn(remote.root)
+		expect(seen.cards).toEqual([["location:harbor", "Harbor"]])
+		expect(seen.slots.map((s) => s.id)).toEqual([id("gold")])
+		const gold = `[data-owner-key="location:harbor"] [data-slot-id="${id("gold")}"]`
+		await remote.click(`${gold} button`)
+		await remote.input(`${gold} input`, "7")
+		await remote.pressKey(`${gold} input`, "Enter")
+		await settle()
+		expect(writes()).toEqual([
+			{ sessionId: SESSION, owner: { kind: "session_location", id: 41 }, slotId: id("gold"), value: 7 }
+		])
+	})
+})
+
+describe("F2: a stat's trail, from the button beside it", () => {
+	test("opened, it asks the page for that owner's slot in the page's session, and lists the changes newest first — for a guest too", { timeout: 60_000 }, async () => {
+		const asked: unknown[] = []
+		const read: StatTrailRead = async (ask) => {
+			asked.push(ask)
+			return {
+				sessionId: ask.sessionId,
+				trail: {
+					changes: [
+						{ messageId: 21, at: Date.UTC(2026, 9, 1, 10), from: 20, to: 17, by: "model" },
+						{ messageId: 24, at: Date.UTC(2026, 9, 1, 11), from: 17, to: 14, by: "user" }
+					]
+				}
+			}
+		}
+		const view = await mountComponent({
+			root: CORE_CATALOG,
+			entry: "dist/components/stats.js",
+			owner: "core",
+			timeoutMs: 60_000,
+			context: {
+				session: { id: SESSION, name: "Proof" },
+				settings: {},
+				viewer: { userId: 2, isAdmin: false, isGuest: true },
+				scoped: { session_state: section() }
+			},
+			requests: (kind, params) => (kind === "stat-trail" ? answerStatTrail(params as never, SESSION, read) : undefined)
+		})
+		remotes.push(view)
+		const hp = `[data-owner-key="mira"] [data-slot-id="${id("hp")}"]`
+		const button = view.query(`${hp} [data-widget-part~="stats.trail-open"]`)
+		expect(button?.getAttribute("aria-label")).toBe("How Hp changed")
+		// The row keeps the control where it was: the trail is the row's last piece.
+		expect(view.query(hp)?.lastElementChild?.getAttribute("data-widget-part")).toBe("stats.trail")
+		expect(asked).toEqual([])
+		await view.dispatch(`${hp} sp-popover`, "open-change", { open: true })
+		await settle()
+		expect(asked).toEqual([
+			{ sessionId: SESSION, owner: { kind: "session_cast", id: 11 }, slotId: id("hp"), limit: 20 }
+		])
+		const rows = view.queryAll(`${hp} [data-widget-part~="stats.trail-row"]`)
+		expect(rows.map((r) => [r.getAttribute("data-message-id"), text(r.querySelector('[data-widget-part~="stats.trail-value"]'))])).toEqual([
+			["24", "17 → 14"],
+			["21", "20 → 17"]
+		])
+		expect(text(rows[0]!.querySelector('[data-widget-part~="stats.trail-by"]'))).toMatch(/^Edited · /)
+		expect(text(view.query(`${hp} [data-widget-part~="stats.trail-head"]`))).toBe("Hp · Mira")
+		// Nothing was written: reading a trail is not an edit.
+		expect(writes()).toEqual([])
+	})
+
+	test("a refusal is said in the popover, never as the widget's alert; with trail off there is no button", { timeout: 60_000 }, async () => {
+		const read: StatTrailRead = async (ask) => ({ sessionId: ask.sessionId, error: "This session is not one you are in." })
+		const view = await mountComponent({
+			root: CORE_CATALOG,
+			entry: "dist/components/stats.js",
+			owner: "core",
+			timeoutMs: 60_000,
+			context: {
+				session: { id: SESSION, name: "Proof" },
+				settings: { owners: "world" },
+				viewer: { userId: 1, isAdmin: false, isGuest: false },
+				scoped: { session_state: section() }
+			},
+			requests: (kind, params) => (kind === "stat-trail" ? answerStatTrail(params as never, SESSION, read) : undefined)
+		})
+		remotes.push(view)
+		const weather = `[data-slot-id="${id("weather")}"]`
+		// A derived stat has no trail to show.
+		expect(view.query(`[data-slot-id="${id("tension")}"] [data-widget-part~="stats.trail-open"]`)).toBeNull()
+		await view.dispatch(`${weather} sp-popover`, "open-change", { open: true })
+		await settle()
+		expect(text(view.query(`${weather} [data-widget-part~="stats.trail-note"][role="alert"]`))).toBe(
+			"This session is not one you are in."
+		)
+		expect(view.query('[data-widget-part~="stats.alert"]')).toBeNull()
+		await view.push("settings", { owners: "world", trail: false })
+		expect(view.queryAll('[data-widget-part~="stats.trail-open"]').length).toBe(0)
 	})
 })

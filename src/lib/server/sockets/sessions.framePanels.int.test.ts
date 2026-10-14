@@ -272,8 +272,10 @@ describe("sessions:view — a genre's panels (21)", () => {
 		// The declared schema reaches the wire — without it the settings card
 		// draws no controls, whoever declared the widget.
 		expect(tray.settings).toEqual({ sides: { type: "number", default: 6 } })
-		// Offered, never on: an install must not rearrange a live session.
-		expect(tray.defaultActive).toBe(false)
+		// Offered, never on: whether a widget is on is the session layout's
+		// (C2), so an install cannot rearrange a live session — and the wire
+		// carries no flag that could.
+		expect(tray).not.toHaveProperty("defaultActive")
 
 		// The genre's plain `map` is untouched and still first, and it now
 		// carries ITS declared settings too.

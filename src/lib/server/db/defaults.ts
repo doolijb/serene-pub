@@ -138,6 +138,33 @@ export async function sync() {
 				]
 			},
 			{
+				// The Extraction and Scene prompt loadouts' sampling (I12,
+				// `CORE_LOADOUTS`): low temperature and a SHORT answer — an
+				// extraction step emits a small object, and a scene prompt is a
+				// sentence or two. Its own row rather than "Precise (Extraction)"
+				// so retuning the loadout's preset never retunes the graph
+				// build's. NO `id`, per the rule above.
+				seedKey: "sampling-extraction",
+				name: "Extraction",
+				isImmutable: true,
+				shape: S.textGen,
+				values: {
+					temperature: 0.2,
+					topP: 0.9,
+					topK: 20,
+					contextTokens: 8192,
+					responseTokens: 512
+				},
+				enabled: [
+					"temperature",
+					"topP",
+					"topK",
+					"contextTokens",
+					"responseTokens",
+					"reasoning"
+				]
+			},
+			{
 				// For stages nobody reads: planning, state keeping, summaries.
 				//
 				// Precise (Extraction)'s numbers, under a name that says WHEN to
@@ -203,13 +230,14 @@ export async function sync() {
 			// names are a property of the connection's checkpoint and build, so the
 			// only backend-independent answer is "whatever it already uses".
 			//
-			// And there is deliberately NO hosted/"DALL·E" sixth row. These are
-			// LOCAL-DIFFUSION families. A hosted image service has no sampling
-			// knobs to preset — gpt-image-1 takes a `size` enum, `quality`,
-			// `background` and `n`, with no steps, CFG, sampler or seed — so what
-			// it offers belongs on its CONNECTION as the adapter's `profileSchema`,
-			// and what it cannot honour is reported through `applied`/`ignored`.
-			// See the SDK's imageSamplingSchema doc comment.
+			// The last row, Hosted, is not a diffusion family: a hosted image
+			// service (OpenAI's gpt-image, Gemini) has no steps, CFG, sampler or
+			// seed. What it does offer — quality, moderation, compression — is
+			// on its CONNECTION as the adapter's `profileSchema`. The Hosted row
+			// exists so the sampling line for a hosted pair says what is sent
+			// (size and count) instead of implying 25 steps happened
+			// (DESIGN-image-generation §7). See the SDK's imageSamplingSchema
+			// doc comment.
 			{
 				// Retargeted in place, NOT replaced. This row was "Default
 				// (Image)"; it still holds the instance's `text->image` sampling
@@ -280,13 +308,26 @@ export async function sync() {
 				shape: S.imageGen,
 				values: { steps: 4, cfg: 1, width: 512, height: 512 },
 				enabled: ["steps", "cfg", "width", "height", "batch", "seed"]
+			},
+			{
+				// Size and count only — the two things a hosted service takes.
+				// Steps, CFG and seed are left disabled rather than set, so none
+				// is sent and the form reads "2 of 10 sent". 1024² is a size
+				// every gpt-image model and Gemini accept as asked. Offered,
+				// never the default: the Images job keeps whatever it has.
+				seedKey: "sampling-image-hosted",
+				name: "Hosted (OpenAI, Gemini)",
+				isImmutable: true,
+				shape: S.imageGen,
+				values: { width: 1024, height: 1024, batch: 1 },
+				enabled: ["width", "height", "batch"]
 			}
 		]
 
 		// ── A seed YIELDS a colliding name to the user ────────────────────────
 		//
 		// 0179 made `name` unique per modality, and this list is where that
-		// constraint is most likely to bite: the five image presets ship under
+		// constraint is most likely to bite: the six image presets ship under
 		// names ("SD 1.5", "Flux") a person may well have already given a config
 		// of their own, and "Default" has always been an obvious thing to type.
 		//
@@ -398,6 +439,21 @@ export async function sync() {
 
 		// Completion Templates — see ./seedCompletionTemplates.ts.
 		await seedCompletionTemplates(db)
+
+		// 🚧 The starter ComfyUI workflows, by seed key —
+		// `imageGen/comfy/starters.ts` (DESIGN-image-generation §4.5).
+		{
+			const { seedWorkflows } = await import(
+				"$lib/server/imageGen/comfy/starters"
+			)
+			await seedWorkflows(db)
+			// ⏳ Ruling 13 reversed 2026-10-12: workflows have no sampling
+			// configs; the ones it seeded go, once.
+			const { removeWorkflowSamplingConfigs } = await import(
+				"$lib/server/pipelines/boot/workflowSamplingCleanup"
+			)
+			await removeWorkflowSamplingConfigs(db)
+		}
 
 		// Users
 
@@ -571,6 +627,22 @@ export async function sync() {
 		// the migration — or one whose default was cleared by its row being
 		// deleted (`connection_defaults.sampling_config_id` is ON DELETE SET
 		// NULL) — picks the seeded config back up.
+		// ── loadouts (I12) ───────────────────────────────────────────────
+		//
+		// Core's shipped set, unfilled, by seed key; then the one-shot that
+		// moves an upgraded install's `connection_defaults` rows into default
+		// loadouts — BEFORE the first-run registration below, so an upgrade's
+		// own defaults win over a fresh install's seeding.
+		const { seedCoreLoadouts, seedPluginLoadouts } = await import(
+			"$lib/server/loadouts/seed"
+		)
+		await seedCoreLoadouts(db)
+		await seedPluginLoadouts(db)
+		const { moveConnectionDefaultsToLoadouts } = await import(
+			"$lib/server/loadouts/fromConnectionDefaults"
+		)
+		await moveConnectionDefaultsToLoadouts(db)
+
 		const SEEDED_SAMPLING_DEFAULTS: Record<string, string> = {
 			"text->text": "sampling-default",
 			"text->image": "sampling-image-default"

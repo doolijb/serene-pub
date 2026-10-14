@@ -1,86 +1,29 @@
 /**
  * Core's default session widgets — the conversation, and the widgets beside
- * it — from ONE table, each mounted remote: core's own component module,
- * served at `/core-ui/<slug>` and run in the page's UI worker (R79).
+ * it — projected from core's ONE declaration (`CORE_WIDGETS`), each mounted
+ * remote: core's own component module, served at `/core-ui/<slug>` and run in
+ * the page's UI worker (R79).
  *
- * A row is what only the page decides about a core widget (its title, icon,
- * layout, whether it starts on); everything the widget declares — settings,
- * the base sections it reads (R75), the scopes it holds — is read off core's
- * own declaration (`CORE_WIDGETS`), never retyped, so a field added to the
- * announcement reaches the widget with it.
+ * Nothing here is retyped. Title, icon, packing hints (`layout`), settings,
+ * the base sections it reads (R75) and the scopes it holds are the
+ * declaration's, so a field added to a core widget reaches the page with it.
+ * Whether a widget starts ON is not a widget fact at all: it is on exactly
+ * when the session's layout draws it (`SurfaceManager`, C2) — Stats (World
+ * State's too, an alias of it since W7) is offered and placed by the genres
+ * whose layouts want it, never seated empty in every chat. No Inventory: R79 removed that widget for now,
+ * and a stored layout naming it draws nothing (`RETIRED_WIDGET_IDS`).
  */
 import {
+	WIDGET_ID_ALIASES,
 	WIDGET_SCOPED_SECTIONS,
 	resolveWidgetSurface,
 	widgetReads,
 	type WidgetBaseSection,
 	type WidgetSectionScope
 } from "@serene-pub/sdk"
-import { CORE_WIDGETS } from "$lib/shared/widgets/types"
+import { CORE_WIDGETS, type WidgetDecl } from "$lib/shared/widgets/types"
 
 type ModePanel = Sockets.Sessions.View.ModePanel
-
-/** What the page decides about one core widget; the rest is its declaration. */
-interface CoreWidgetRow {
-	/** The widget id core declares (and its component slug). */
-	id: string
-	title: string
-	icon: string
-	layout: NonNullable<ModePanel["layout"]>
-	defaultActive: boolean
-}
-
-/**
- * The table. Stats and world state (docs/stats-and-states.md) are offered,
- * never on: a genre that declares no slots would otherwise seat two empty
- * widgets in every chat session, and a newcomer must never see a bar — a
- * genre that wants them docked ships a layout preset. Lore entries (L1)
- * likewise: a session with no lorebook would seat an empty widget. No
- * Inventory row: R79 removed that widget for now, and a stored layout naming
- * it draws nothing (`RETIRED_WIDGET_IDS`).
- */
-export const CORE_WIDGET_ROWS: readonly CoreWidgetRow[] = Object.freeze([
-	{
-		id: "scene-portraits",
-		title: "Scene Portraits",
-		icon: "Users",
-		layout: { span: { ideal: 1 }, minInline: 200 },
-		defaultActive: true
-	},
-	{
-		id: "stats",
-		title: "Stats",
-		icon: "HeartPulse",
-		layout: { span: { ideal: 1 }, minInline: 220 },
-		defaultActive: false
-	},
-	{
-		id: "world-state",
-		title: "World State",
-		icon: "CloudSun",
-		layout: { span: { ideal: 2 }, minInline: 240, minBlock: 60 },
-		defaultActive: false
-	},
-	{
-		id: "lore-entries",
-		title: "Lore entries",
-		icon: "BookOpen",
-		layout: { span: { ideal: 1 }, minInline: 260 },
-		defaultActive: false
-	},
-	/**
-	 * 🚧 The author's note (AN1): Chat's alone among core's genres (the
-	 * others omit it), offered and never on — Chat's default layout is the
-	 * conversation on its own, so a person adds it in the layout editor.
-	 */
-	{
-		id: "authors-note",
-		title: "Author's note",
-		icon: "NotebookPen",
-		layout: { span: { ideal: 1 }, minInline: 240 },
-		defaultActive: false
-	}
-])
 
 const coreDecl = (id: string) => {
 	const decl = CORE_WIDGETS.find((w) => w.id === id)
@@ -103,27 +46,41 @@ export const CORE_CONVERSATION: { src: string; reads: readonly WidgetBaseSection
 })
 
 /**
- * The side widgets, resolved. Core's own widgets hold every section scope
- * they declare.
+ * One core side widget as the page offers it: its declaration, projected —
+ * plus where its module is served and the section scopes it holds (core's own
+ * widgets hold every one they declare).
+ */
+function coreWidgetPanel(decl: WidgetDecl): ModePanel {
+	const surface = resolveWidgetSurface(decl, "core")
+	if (surface?.kind !== "remote") throw new Error(`core widget '${decl.id}' declares no component`)
+	const grants = sectionScopes(decl.scopes)
+	return {
+		id: decl.id,
+		title: decl.title,
+		...(decl.icon !== undefined ? { icon: decl.icon } : {}),
+		role: "secondary",
+		surface,
+		src: `/core-ui/${surface.component}`,
+		...(decl.layout ? { layout: decl.layout } : {}),
+		settings: decl.settings as Record<string, unknown> | undefined,
+		...(Array.isArray(decl.reads) ? { reads: [...widgetReads(decl)] } : {}),
+		...(grants.length ? { grants } : {})
+	}
+}
+
+/**
+ * The side widgets, resolved: every widget core declares but its primary
+ * (the conversation, which the layout mounts itself — `CORE_CONVERSATION`),
+ * in the catalogue's order.
+ *
+ * ⏳ Not an aliased one (`world-state`, the SDK's `WIDGET_ID_ALIASES`): it is
+ * declared only so its style rows survive a release, and offering it would
+ * put a second World State in the tray and seat a widget the layout's id no
+ * longer means. A layout that places `world-state` draws it as a copy of
+ * Stats (`SurfaceManager`'s copies: `widgetOfInstance` reads it as one).
  */
 export function coreDefaultWidgets(): ModePanel[] {
-	return CORE_WIDGET_ROWS.map((row) => {
-		const decl = coreDecl(row.id)
-		const surface = resolveWidgetSurface(decl, "core")
-		if (surface?.kind !== "remote") throw new Error(`core widget '${row.id}' declares no component`)
-		const grants = sectionScopes(decl.scopes)
-		return {
-			id: row.id,
-			title: row.title,
-			icon: row.icon,
-			role: "secondary",
-			surface,
-			src: `/core-ui/${surface.component}`,
-			layout: row.layout,
-			settings: decl.settings as Record<string, unknown> | undefined,
-			...(Array.isArray(decl.reads) ? { reads: [...widgetReads(decl)] } : {}),
-			...(grants.length ? { grants } : {}),
-			defaultActive: row.defaultActive
-		}
-	})
+	return CORE_WIDGETS.filter(
+		(w) => w.role !== "primary" && !Object.hasOwn(WIDGET_ID_ALIASES, w.id)
+	).map(coreWidgetPanel)
 }

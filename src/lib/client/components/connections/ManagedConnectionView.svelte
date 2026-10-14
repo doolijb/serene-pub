@@ -99,7 +99,12 @@
 			connectionId: number,
 			model: { id: number; name: string }
 		) => void
-		onBack: () => void
+		/**
+		 * Back from the connection. The panel passes it only when the level
+		 * it returns to is off screen — always at compact; at desk only when
+		 * the trail leads somewhere other than the list beside it.
+		 */
+		onBack?: () => void
 		/** Ask the host for its models again. */
 		onRefreshModels: () => void
 		/** Switch the manager off and delete its rows. Confirmed here first. */
@@ -338,7 +343,9 @@
 	 * A managed KoboldCPP never has one: the boot fold keeps it to one row.
 	 */
 	const sameHostRows = $derived(
-		kind === "ollama" ? duplicateOllamaHosts(textConnection, connections) : []
+		kind === "ollama"
+			? duplicateOllamaHosts(textConnection, connections)
+			: []
 	)
 
 	let showDetails = $state(false)
@@ -419,6 +426,11 @@
 		stopping = false
 		if (msg.status === "running")
 			socket.emit("koboldcpp:getLoadedConfig", {})
+		// A process that is gone holds nothing. Without this the Loaded line
+		// kept naming the last model, with an Unload button, after a stop or
+		// a crash — until the view was reopened.
+		else if (msg.status === "stopped" || msg.status === "crashed")
+			resident = null
 	}
 	function handleGetSubprocessStatus(
 		msg: Sockets.KoboldCPP.GetSubprocessStatus.Response
@@ -749,7 +761,7 @@
 	</div>
 {/snippet}
 
-<div class="flex h-full min-h-0 flex-col gap-3 p-1">
+<div class="flex h-full min-h-0 flex-col gap-3">
 	<PanelNavHeader
 		{title}
 		{onBack}
@@ -798,7 +810,7 @@
 					{#if !offline && (subStatus?.status === "running" || subStatus?.status === "starting" || subStatus?.status === "stopping")}
 						<button
 							type="button"
-							class="btn btn-sm preset-tonal shrink-0"
+							class="btn btn-sm preset-tonal-error shrink-0"
 							onclick={stopProcess}
 							disabled={stopping || subStatus?.isExternal}
 							title={subStatus?.isExternal
@@ -1092,7 +1104,9 @@
 								<button
 									type="button"
 									class="anchor underline underline-offset-2"
-									onclick={() => row.id != null && onOpenConnection(row.id)}
+									onclick={() =>
+										row.id != null &&
+										onOpenConnection(row.id)}
 								>
 									{row.name}
 								</button>
@@ -1100,9 +1114,9 @@
 						{/each}
 					</ul>
 					<p class="text-xs">
-						One Ollama connection serves both chat and embeddings for its host,
-						so you only need one. Either can be deleted — check which one is
-						set as a default first.
+						One Ollama connection serves both chat and embeddings
+						for its host, so you only need one. Either can be
+						deleted — check which one is set as a default first.
 					</p>
 				</div>
 			{/if}
@@ -1126,7 +1140,8 @@
 							{capabilityDefaults}
 							{isAdmin}
 							onOpenModel={(c, m) => onOpenModel?.(c, m)}
-							onSetDefault={(cap, c, m) => onSetDefault?.(cap, c, m)}
+							onSetDefault={(cap, c, m) =>
+								onSetDefault?.(cap, c, m)}
 							onGetModels={() => (tab = "get")}
 							onRefresh={onRefreshModels}
 						/>
@@ -1264,7 +1279,6 @@
 		{label}
 	</span>
 {/snippet}
-
 
 <Dialog open={confirmRemove} onOpenChange={(e) => (confirmRemove = e.open)}>
 	<Portal>

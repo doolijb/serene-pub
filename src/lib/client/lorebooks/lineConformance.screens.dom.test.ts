@@ -11,13 +11,7 @@
  * presences or amendments by line belongs here.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
-import {
-	flushSync,
-	mount,
-	tick,
-	unmount,
-	type ComponentProps
-} from "svelte"
+import { flushSync, mount, tick, unmount, type ComponentProps } from "svelte"
 
 vi.mock("$app/environment", () => ({
 	dev: true,
@@ -25,7 +19,12 @@ vi.mock("$app/environment", () => ({
 	browser: true
 }))
 vi.mock("$lib/client/utils/toaster", () => ({
-	toaster: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() }
+	toaster: {
+		success: vi.fn(),
+		error: vi.fn(),
+		info: vi.fn(),
+		warning: vi.fn()
+	}
 }))
 
 import { setSocket } from "$lib/client/sockets/socketInstance"
@@ -115,10 +114,26 @@ const TIES = CASE_ROWS.map((r) => ({
 	reason: null
 }))
 const MEMBERS = [
-	{ id: VERITY, name: "Verity", binding: "{{char:1}}", characterId: null, character: null },
-	{ id: OREN, name: "Oren", binding: "{{char:2}}", characterId: null, character: null }
+	{
+		id: VERITY,
+		name: "Verity",
+		binding: "{{char:1}}",
+		characterId: null,
+		character: null
+	},
+	{
+		id: OREN,
+		name: "Oren",
+		binding: "{{char:2}}",
+		characterId: null,
+		character: null
+	}
 ]
-const NODES = MEMBERS.map((m) => ({ id: m.id, name: m.name, parentNodeId: null }))
+const NODES = MEMBERS.map((m) => ({
+	id: m.id,
+	name: m.name,
+	parentNodeId: null
+}))
 
 let client: ReturnType<typeof makeClientSocket>
 let store: BookRelationships
@@ -186,12 +201,8 @@ async function memberPageOn(line: Line) {
 	await settle()
 }
 
-/** The ties the Relationships panel lists, every one of them. */
+/** The ties the Relationships tab lists, every one of them. */
 async function panelTies(): Promise<number[]> {
-	const more = [
-		...document.querySelectorAll("[data-cast-relationships] button")
-	].find((b) => /more/i.test(b.textContent ?? "")) as HTMLButtonElement | undefined
-	more?.click()
 	await settle()
 	return [...document.querySelectorAll("[data-cast-edge]")]
 		.map((li) => Number(li.getAttribute("data-cast-edge")))
@@ -250,7 +261,9 @@ describe("the Cast board reads the workspace's book (plan B4)", () => {
 		])
 			expect(asked, event).not.toContain(event)
 		// …and still draws the member it was handed.
-		expect(document.querySelector(`[data-cast-id="${VERITY}"]`)).not.toBeNull()
+		expect(
+			document.querySelector(`[data-cast-id="${VERITY}"]`)
+		).not.toBeNull()
 	})
 })
 
@@ -261,8 +274,10 @@ describe("the Cast board reads the workspace's book (plan B4)", () => {
  * check: `npm run check` refuses a screen whose `line` is optional.
  */
 type Requires<P, K extends keyof P> = {} extends Pick<P, K> ? false : true
-const castNeedsLine: Requires<ComponentProps<typeof CastWorkspace>, "line"> =
-	true
+const castNeedsLine: Requires<
+	ComponentProps<typeof CastWorkspace>,
+	"line"
+> = true
 const entryNeedsLine: Requires<
 	ComponentProps<typeof EntryWorkspace>,
 	"line"

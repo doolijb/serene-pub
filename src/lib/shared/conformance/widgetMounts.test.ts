@@ -28,7 +28,7 @@
  * which is the only moment anyone is looking at the right lines.
  */
 
-import { readFileSync } from "node:fs"
+import { readdirSync, readFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { describe, expect, test } from "vitest"
 
@@ -45,7 +45,12 @@ const PAGE = "src/routes/sessions/[id]/+page.svelte"
 
 const HOSTS = [
 	PAGE,
+	// The session layout's composition root hands the pair to its renderer,
+	// which holds every live widget mount of the layout (C6): a side's one
+	// mount (`SideMount`) draws the renderer's own snippets, never a mount of
+	// its own.
 	"src/lib/client/sessionLayout/SessionLayout.svelte",
+	"src/lib/client/sessionLayout/SessionLayoutRender.svelte",
 	"src/lib/client/components/surfaces/Panel.svelte",
 	"src/lib/client/components/surfaces/SurfaceGrid.svelte"
 ]
@@ -57,6 +62,7 @@ const MOUNTS = [
 	"RemoteWidget",
 	"Panel",
 	"SessionLayout",
+	"SessionLayoutRender",
 	"SurfaceGrid"
 ]
 
@@ -133,6 +139,26 @@ describe("every widget mount is handed the session's actions", () => {
 			})
 		}
 	}
+
+	test("no other session-layout component mounts a widget of its own", () => {
+		// The renderer is where the layout's mounts are threaded; a mount
+		// added to any other component in the folder (a side's mount, the
+		// editor, a rail) would be a host this list does not read. Move it
+		// into the renderer — or add the file to HOSTS, threaded.
+		const dir = "src/lib/client/sessionLayout"
+		const unread = readdirSync(join(ROOT, dir))
+			.filter((f) => f.endsWith(".svelte"))
+			.map((f) => `${dir}/${f}`)
+			.filter((f) => !HOSTS.includes(f))
+			.filter((f) =>
+				mountsIn(readFileSync(join(ROOT, f), "utf8")).some(
+					(m) =>
+						m.tag !== "SessionLayout" &&
+						m.tag !== "SessionLayoutRender"
+				)
+			)
+		expect(unread).toEqual([])
+	})
 
 	test("the fire keeps all five arguments the whole way down", () => {
 		// `action` (the pressed declaration's identity) and `blockId` (the form

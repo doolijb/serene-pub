@@ -19,7 +19,7 @@ import {
 	type CapabilitySet,
 	type I18n
 } from "@serene-pub/sdk"
-import { shapeOfModality } from "$lib/shared/constants/ConnectionTypes"
+import { CONNECTION_TYPE, shapeOfModality } from "$lib/shared/constants/ConnectionTypes"
 import * as schema from "$lib/server/db/schema"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 import { pipelineLabelsById } from "$lib/server/pipelines/entities/pipelineLabels"
@@ -40,6 +40,10 @@ export type ChoiceList = Array<{
 	disabled?: boolean
 	/** Why — in a person's words, never a raw capability id. */
 	reason?: string
+	/** 🚧 For a connection choice: `template` when it draws with a workflow (ComfyUI). */
+	payload?: "flat" | "template"
+	/** 🚧 For a workflow choice: its dialect. */
+	dialect?: string
 	/**
 	 * For a connection choice: the MODELS on that endpoint (0114) — the second
 	 * half of the pair the slot stores. Absent for every other kind of choice,
@@ -118,6 +122,18 @@ export async function choiceSets(db: Db, specId: number) {
 		.select()
 		.from(schema.samplingConfigs)
 		.orderBy(asc(schema.samplingConfigs.id))
+
+	// 🚧 Every workflow (DESIGN-image-generation §4.10) — offered only on a
+	// `workflow-ref`, which the editor shows only for a template-payload pair.
+	const workflowRows = await db
+		.select({
+			id: schema.workflows.id,
+			name: schema.workflows.name,
+			dialect: schema.workflows.dialect,
+			description: schema.workflows.description
+		})
+		.from(schema.workflows)
+		.orderBy(asc(schema.workflows.name), asc(schema.workflows.id))
 
 	// Every context template on the instance, pooled by node definition rather than
 	// by spec — the same rule layouts follow, for the same reason: session reply
@@ -332,6 +348,11 @@ export async function choiceSets(db: Db, specId: number) {
 			// the run then refuses it, and nothing on screen explains why the
 			// two disagreed. One reader, one answer.
 			capabilities: storedCapabilities(c),
+			// 🚧 What one call ships (§4.10): a ComfyUI draws with a workflow,
+			// so the `workflow-ref` control beside this slot shows itself only
+			// when the chosen connection says `template`. The type is the
+			// fact; reading the adapter's sheet would load its module here.
+			...(c.type === CONNECTION_TYPE.COMFYUI ? { payload: "template" as const } : {}),
 			// The pair's second half, carried rather than fetched on selection.
 			...(modelsByConnection.get(c.id)
 				? { models: modelsByConnection.get(c.id)! }
@@ -341,6 +362,12 @@ export async function choiceSets(db: Db, specId: number) {
 			id: s.id,
 			label: s.name,
 			shape: s.shape ?? S.textGen
+		})) as ChoiceList,
+		workflows: workflowRows.map((w) => ({
+			id: w.id,
+			label: w.name,
+			dialect: w.dialect,
+			...(w.description ? { description: w.description } : {})
 		})) as ChoiceList,
 		contextTemplatesBy,
 		/** The full rows, for the inline editor — same reason as `promptRows`. */
@@ -534,7 +561,11 @@ export const choicesFor = (
 	// Sampling stays on shape. A sampling config is not a backend and has no
 	// capabilities to test; its shape is the vocabulary its values speak (F17),
 	// which is exactly the right question to ask of it.
+	// A step drawing with a ComfyUI workflow is offered the image configs like
+	// any image step; the knobs its workflow does not read are ignored and
+	// reported (ruling 13's per-workflow shape was reversed 2026-10-12).
 	if (d.control === "sampling-ref") return ofShape(sets.sampling, d.shape)
+	if (d.control === "workflow-ref") return sets.workflows
 	if (d.control === "variable-template-ref")
 		return d.variableId
 			? (sets.variableTemplatesBy.get(d.variableId) ?? [])

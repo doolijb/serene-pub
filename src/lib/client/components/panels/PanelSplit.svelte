@@ -18,9 +18,31 @@
 	 * the view needs that answer for more than this component — which back
 	 * button to show, which row to mark — and two observers on one element that
 	 * could disagree by a frame is a worse bargain than one prop.
+	 *
+	 * Two kinds of left column (PLAN-sidebar-nav-normalization §2.1):
+	 *
+	 * - `kind="list"` (default) — the column IS the items (Sessions, Users,
+	 *   Tags, Help, Connections). A padded pane, `listWidth` wide, with its
+	 *   own edge. Pass `toolbar` and the pane pins it: the toolbar is
+	 *   `shrink-0`, 12px above the `list` (Q4), and the list alone scrolls,
+	 *   so views stop writing `min-h-0 flex-1 overflow-y-auto` wrappers and
+	 *   nobody's filter scrolls away. `listFills` keeps Connections' desk
+	 *   index (Q5): with nothing open the list takes the whole view at the
+	 *   1120px reading width instead of sitting beside an empty column.
+	 * - `kind="sections"` — the column is the PLACES in the view (Settings,
+	 *   Admin, Sampling, Pipelines): a 240px column with no padding and no
+	 *   edge of its own, because the `SectionList` it holds is flush and
+	 *   draws both. At compact width the split tells the `SectionList`
+	 *   (`provideSectionColumn`) to fill the pane instead, so the view writes
+	 *   one list for both widths. `toolbar`, `listFills`, `listWidth` and
+	 *   `detailWidth` are list-kind only and ignored here.
+	 *
+	 * Compact is one pane at a time in both kinds: the list, or the detail
+	 * once `hasDetail`. The detail pane is padded (`p-4`) in every shape.
 	 */
 	import type { Snippet } from "svelte"
 	import type { ViewMode } from "$lib/client/shell/viewMode.svelte"
+	import { provideSectionColumn } from "./sectionList"
 
 	interface Props {
 		/**
@@ -36,8 +58,31 @@
 		 * empty column.
 		 */
 		hasDetail?: boolean
-		/** The list column. The whole of it: toolbar, filter, rows. */
+		/**
+		 * The list column's rows. Without `toolbar` it is the whole column —
+		 * toolbar, filter, rows — and scrolls with the pane, as before.
+		 */
 		list: Snippet
+		/**
+		 * The list's toolbar (`ViewToolbar`, a filter row). Given, it is
+		 * pinned at the top of the list pane, `shrink-0`, 12px above the
+		 * list, and `list` is wrapped in the pane's one scroller. List kind
+		 * only.
+		 */
+		toolbar?: Snippet
+		/**
+		 * `list` (default): the column is the items — padded, `listWidth`.
+		 * `sections`: the column is a flush 240px `SectionList`; no pane
+		 * padding, no edge of its own. See the header comment.
+		 */
+		kind?: "list" | "sections"
+		/**
+		 * Desk with nothing open: the list pane alone fills the whole view,
+		 * its content centred at `max-w-[1120px]`, instead of a column beside
+		 * the empty message (Connections' index, ruling Q5). Opening
+		 * something splits it as usual. List kind only; default false.
+		 */
+		listFills?: boolean
 		/** What the list opens — a view panel, an edit form, a creator. */
 		detail: Snippet
 		/**
@@ -69,6 +114,9 @@
 		mode,
 		hasDetail = false,
 		list,
+		toolbar,
+		kind = "list",
+		listFills = false,
 		detail,
 		empty,
 		emptyMessage = "Nothing selected.",
@@ -76,18 +124,81 @@
 		detailWidth
 	}: Props = $props()
 
+	const sections = $derived(kind === "sections")
+	const pinned = $derived(!!toolbar && !sections)
+	const fills = $derived(listFills && !sections && !hasDetail)
+
+	// Read through a getter so the answer follows `mode` without the
+	// context being set again (it can only be set during init).
+	provideSectionColumn({
+		get fill() {
+			return kind === "sections" && mode !== "desk"
+		}
+	})
+
 	const columns = $derived(
-		detailWidth
-			? `minmax(0, 1fr) ${detailWidth}`
-			: `max(${listWidth}, min(22%, 560px)) minmax(0, 1fr)`
+		sections
+			? "15rem minmax(0, 1fr)"
+			: detailWidth
+				? `minmax(0, 1fr) ${detailWidth}`
+				: `max(${listWidth}, min(22%, 560px)) minmax(0, 1fr)`
 	)
 
 	// Both panes scroll themselves rather than letting the shell's wrapper
 	// scroll the pair: in desk mode a single outer scrollbar would move the
 	// list and the detail together, which is exactly what a two-pane layout
 	// exists to stop.
-	const paneClass = "flex min-h-0 flex-col overflow-y-auto p-4"
+	// A scroller never carries padding (owner ruling 2026-10-11): padding on
+	// the scrolling box put the card at its clip edge — a ring or border at
+	// the list's end, and the scrollbar over the right edge of every card.
+	// The inset is a MARGIN on the content wrapper inside it instead, so the
+	// scrollable overflow includes it on every side.
+	const paneClass = "flex min-h-0 flex-col overflow-y-auto"
+	// With a pinned toolbar the pane stays a column (the rare toolbar taller
+	// than the pane still scrolls) and the list below it is the scroller.
+	const listPaneClass = paneClass
+	// The section column: a flex ROW, so the flush `SectionList` inside is
+	// stretched to the pane's full height and its own scroller is bounded.
+	const sectionPaneClass = "flex min-h-0 overflow-y-auto"
 </script>
+
+<!-- The list pane's body. The toolbar pinned over the scrolling list when
+     there is one, else the list as it always was. Under `listFills` with
+     nothing open the content is capped at the app's 1120px reading width;
+     otherwise the cap wrappers are `display: contents` and change nothing.
+     The wrappers are ALWAYS there, so opening a detail beside a filling
+     list re-lays the same elements instead of remounting the list (its
+     filter, its scroll) — Connections' old full-width bypass did remount.
+     With a toolbar the scroller spans the whole pane, so its bar sits at
+     the view's edge, not in the middle of a wide Focus. -->
+{#snippet listBody(capped: boolean)}
+	{#if pinned}
+		<div
+			class="mx-4 mt-4 shrink-0 {capped
+				? 'w-[calc(100%-2rem)] max-w-[1120px] self-center'
+				: ''}"
+		>
+			{@render toolbar?.()}
+		</div>
+		<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+			<div
+				class="mx-4 mt-3 mb-4 flex flex-1 flex-col {capped
+					? 'w-[calc(100%-2rem)] max-w-[1120px] self-center'
+					: ''}"
+			>
+				{@render list()}
+			</div>
+		</div>
+	{:else}
+		<div
+			class="m-4 flex flex-1 flex-col {capped
+				? 'w-[calc(100%-2rem)] max-w-[1120px] self-center'
+				: ''}"
+		>
+			{@render list()}
+		</div>
+	{/if}
+{/snippet}
 
 {#if mode === "desk"}
 	<!-- The list is `listWidth` up to ~1600px of view, then grows with it
@@ -98,43 +209,67 @@
 	     the panel instead of scrolling inside itself. -->
 	<div
 		class="grid min-h-0 flex-1"
-		style="grid-template-columns: {columns};"
+		style="grid-template-columns: {fills ? 'minmax(0, 1fr)' : columns};"
 	>
 		<!-- Each pane is a named inline-size container (`list`, `detail`;
 		     STYLE-GUIDE §5.3), so what is inside it answers the room IT has —
 		     the `view` container is the whole view, list and detail together,
 		     and a detail asking it would grow columns into the list's width. -->
-		<div class="{paneClass} panel-edge @container/list border-r">
-			{@render list()}
-		</div>
-		<div class="{paneClass} @container/detail">
-			{#if hasDetail}
-				<!-- A reading width, centred in whatever room is left: at 4K
-				     the detail pane is ~3400px, and a description set across
-				     all of it is one unreadable line with its tabs a screen
-				     apart. The same 1120px the app's other reading columns use. -->
-				<div class="mx-auto flex w-full max-w-[1120px] min-h-0 flex-1 flex-col">
-					{@render detail()}
-				</div>
-			{:else if empty}
-				{@render empty()}
-			{:else}
-				<p class="text-surface-600-400 m-auto px-6 text-center text-sm">
-					{emptyMessage}
-				</p>
-			{/if}
+		{#if sections}
+			<div class={sectionPaneClass} data-panel-split-sections>
+				{@render list()}
+			</div>
+		{:else}
+			<div
+				class="{listPaneClass} @container/list {fills
+					? ''
+					: 'panel-edge border-r'}"
+				data-panel-split-fills={fills || undefined}
+			>
+				{@render listBody(fills)}
+			</div>
+		{/if}
+		{#if !fills}
+			<div class="{paneClass} @container/detail">
+				{#if hasDetail}
+					<!-- A reading width, centred in whatever room is left: at 4K
+					     the detail pane is ~3400px, and a description set across
+					     all of it is one unreadable line with its tabs a screen
+					     apart. The same 1120px the app's other reading columns use. -->
+					<div
+						class="m-4 flex min-h-0 w-[calc(100%-2rem)] max-w-[1120px] flex-1 flex-col self-center"
+					>
+						{@render detail()}
+					</div>
+				{:else if empty}
+					{@render empty()}
+				{:else}
+					<p
+						class="text-surface-600-400 m-auto px-6 text-center text-sm"
+					>
+						{emptyMessage}
+					</p>
+				{/if}
+			</div>
+		{/if}
+	</div>
+{:else if hasDetail}
+	<div class="{paneClass} @container/detail flex-1">
+		<div class="m-4 flex min-h-0 flex-1 flex-col">
+			{@render detail()}
 		</div>
 	</div>
-{:else}
+{:else if sections}
+	<!-- The section list fills the pane (it reads `fill` from the split)
+	     and brings its own inset and scroller, so no padding here. -->
 	<div
-		class="{paneClass} flex-1 {hasDetail
-			? '@container/detail'
-			: '@container/list'}"
+		class="flex min-h-0 flex-1 flex-col overflow-y-auto"
+		data-panel-split-sections
 	>
-		{#if hasDetail}
-			{@render detail()}
-		{:else}
-			{@render list()}
-		{/if}
+		{@render list()}
+	</div>
+{:else}
+	<div class="{listPaneClass} @container/list flex-1">
+		{@render listBody(false)}
 	</div>
 {/if}

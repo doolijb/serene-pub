@@ -7,7 +7,13 @@ function facts(over: Partial<{ [K in keyof OverviewFacts]: Partial<OverviewFacts
 	const base: OverviewFacts = {
 		app: { version: "0.6.0", accountsEnabled: true, uptimeSeconds: 10 },
 		people: { userCount: 1, sessionCount: 0 },
-		models: { jobsTotal: 3, jobsSet: 3, missing: [], syncErrors: [] },
+		models: {
+			jobsTotal: 3,
+			jobsSet: 3,
+			missing: [],
+			syncErrors: [],
+			refusedDefaults: []
+		},
 		network: {
 			tunnelAvailable: true,
 			tunnelConfigured: false,
@@ -44,34 +50,77 @@ describe("attentionFor", () => {
 		expect(attentionFor(facts(), NOW)).toEqual([])
 	})
 
-	it("chat with no default is an error pointing at its row on Defaults", () => {
-		const [item] = attentionFor(
-			facts({ models: { missing: [{ capability: "text->text", requiredBy: ["core:node/reply"] }] } }),
+	// Gold until set (owner ruling 2026-10-06): every fresh pub starts here,
+	// and unfinished is not broken, so the rail says "needs you", never red.
+	it("chat with no default is attention, not an error, pointing at its row on Defaults", () => {
+		const items = attentionFor(
+			facts({ models: { missing: [{ capability: "text->text", requiredBy: ["core:node/reply"], neededBecause: "replies" }] } }),
 			NOW
 		)
+		expect(items).toHaveLength(1)
+		const [item] = items
 		expect(item).toMatchObject({
 			id: "models:missing:text->text",
-			level: "error",
+			level: "attention",
 			section: "/admin/defaults",
 			action: { href: "/admin/defaults#default:text->text" }
 		})
+		expect(item.title).toBe("The Reply loadout needs a model")
+		expect(item.title).not.toMatch(/broken|fail|error/i)
 		expect(item.detail).toContain("core:node/reply")
+		expect(item.detail).toContain("Runs that need it will fail.")
 	})
 
-	// Demanded by some node on every fresh pub; a row nobody can act on is noise.
-	it("other unset capabilities stay off the list", () => {
+	it("a chosen chat default whose connection stopped answering is still the red row", () => {
+		const syncErrors = [
+			{ connectionId: 7, name: "Home OpenAI", capabilities: ["text->text"], error: "401 Unauthorized" }
+		]
+		expect(
+			attentionFor(facts({ models: { syncErrors } }), NOW).map((a) => [a.id, a.level])
+		).toEqual([["connections:syncError:7", "error"]])
+		// Beside an unset chat (here the broken default is images'): the broken
+		// one first, red; the unset chat after it, gold.
+		const out = attentionFor(
+			facts({
+				models: {
+					missing: [{ capability: "text->text", requiredBy: ["core:node/reply"], neededBecause: "replies" }],
+					syncErrors: [{ ...syncErrors[0], capabilities: ["text->image"] }]
+				}
+			}),
+			NOW
+		)
+		expect(out.map((a) => [a.id, a.level])).toEqual([
+			["connections:syncError:7", "error"],
+			["models:missing:text->text", "attention"]
+		])
+	})
+
+	// One rule (plan less-confusing C1): `missing` is already only the jobs
+	// this pub NEEDS (jobUse.ts), so every one is an item — the Models card
+	// counts the same list, and the rail's dot is the worst of these.
+	it("two missing needed jobs are two gold items, each landing on its own row", () => {
 		const items = attentionFor(
 			facts({
 				models: {
 					missing: [
-						{ capability: "text->image", requiredBy: ["core:oracle/generate-image"] },
-						{ capability: "text->embedding", requiredBy: ["core:query/semantic"] }
+						{ capability: "text->text", requiredBy: ["core:node/reply"], neededBecause: "replies" },
+						{
+							capability: "text->image",
+							requiredBy: ["core:oracle/generate-image"],
+							neededBecause: "failedRun"
+						}
 					]
 				}
 			}),
 			NOW
 		)
-		expect(items.filter((i) => i.id.startsWith("models:missing"))).toEqual([])
+		expect(items.map((i) => [i.id, i.level, i.action.href])).toEqual([
+			["models:missing:text->text", "attention", "/admin/defaults#default:text->text"],
+			["models:missing:text->image", "attention", "/admin/defaults#default:text->image"]
+		])
+		expect(items[0].title).toBe("The Reply loadout needs a model")
+		expect(items[1].detail).toBe("A run needed it in the last 7 days and failed without it.")
+		expect(items.every((i) => i.section === "/admin/defaults")).toBe(true)
 	})
 
 	it("failed runs in the last day are an error on Pipelines", () => {
@@ -213,6 +262,45 @@ describe("attentionFor", () => {
 				})
 			)
 		).toEqual([])
+	})
+
+	// A sync restated the model's modality after it was chosen: the default
+	// stays, every run it names is refused, and that is broken — red — for any
+	// job, not only chat.
+	it("a default whose pair can no longer do its job is an error per job, pointing at its row on Defaults", () => {
+		const refused = (capability: string) => ({
+			capability,
+			connectionId: 4,
+			connectionName: "Ollama",
+			connectionModelId: 41,
+			modelName: "nomic-embed-text",
+			refusal: "This model cannot do Chat. Choose a model that can."
+		})
+		const items = attentionFor(
+			facts({
+				models: {
+					refusedDefaults: [
+						refused("text->text"),
+						refused("text->image")
+					]
+				}
+			}),
+			NOW
+		)
+		expect(items.map((a) => [a.id, a.level])).toEqual([
+			["defaults:refused:text->text", "error"],
+			["defaults:refused:text->image", "error"]
+		])
+		expect(items[0]).toMatchObject({
+			title: "The Reply loadout can't use its model",
+			section: "/admin/defaults",
+			action: {
+				label: "Choose a model",
+				href: "/admin/defaults#default:text->text"
+			}
+		})
+		expect(items[0].detail).toContain("nomic-embed-text on Ollama")
+		expect(items[0].detail).toContain("Runs that need it will fail")
 	})
 
 	it("plugins waiting for review are one attention item on Plugins, counted", () => {

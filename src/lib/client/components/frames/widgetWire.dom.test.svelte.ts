@@ -48,6 +48,7 @@ describe("a document nested in a component (sp-frame)", () => {
 		expect(kinds).not.toContain("annex")
 		expect(kinds).not.toContain("viewer")
 		expect(kinds).not.toContain("turn-order")
+		expect(kinds).not.toContain("attendance")
 		// `messages` declines silently (the frame protocol's rule); anything else answers no.
 		await w.send({ t: "request", requestId: "r1", what: "messages" })
 		expect(w.got.some((m) => m.requestId === "r1")).toBe(false)
@@ -91,11 +92,14 @@ describe("a document nested in a component (sp-frame)", () => {
 describe("a page widget", () => {
 	test("gets the page's sections, and a scoped section once per change — withdrawn when the grant goes", async () => {
 		const live = $state({
-			scoped: { session_full: { n: 1 } } as WireInputs["scoped"],
+			// A stand-in dossier: the wire never reads a section's shape.
+			scoped: { session_full: { n: 1 } } as unknown as WireInputs["scoped"],
 			session: { id: 1, name: "a" as string | null }
 		})
 		const w = await open(() => ({ ...base(), session: live.session, scoped: live.scoped }))
-		expect(w.got.map((m) => m.t)).toEqual(expect.arrayContaining(["annex", "viewer", "turn-order", "scoped"]))
+		expect(w.got.map((m) => m.t)).toEqual(
+			expect.arrayContaining(["annex", "viewer", "turn-order", "attendance", "scoped"])
+		)
 		const scopedPosts = () => w.got.filter((m) => m.t === "scoped")
 		expect(scopedPosts()).toHaveLength(1)
 		// Another section changes: the unchanged dossier is not re-sent.
@@ -112,7 +116,11 @@ describe("a page widget", () => {
 	})
 
 	test("a `ready` said again on the same port is sent every section it reads again — it holds nothing (K4)", async () => {
-		const w = await open(() => ({ ...base(), scoped: { session_full: { n: 1 } }, settings: { layout: "strip" } }))
+		const w = await open(() => ({
+			...base(),
+			scoped: { session_full: { n: 1 } } as unknown as WireInputs["scoped"],
+			settings: { layout: "strip" }
+		}))
 		const before = w.got.length
 		await w.send({ t: "ready" })
 		const again = w.got.slice(before).map((m) => m.t)
@@ -221,6 +229,43 @@ describe("only the sections a widget reads, each only when it moved (R75, F4)", 
 		w.close()
 	})
 
+	test("attendance (W10) reaches only a widget that reads it — once per change, never on a move elsewhere", async () => {
+		const room = $state({
+			current: {
+				v: 1,
+				people: [{ userId: 1, name: "Mira", role: "owner", personaRefs: [], typing: false, lastSeenAt: 1, here: true }]
+			}
+		})
+		const live = $state({ messages: [{ id: 1, content: "Hel" }] })
+		const inputs = (reads: string[]) => () => ({
+			...base(),
+			messages: $state.snapshot(live.messages),
+			settings: { showAway: true },
+			reads: reads as WireInputs["reads"]
+		})
+		const blind = await open(inputs(["settings", "viewer", "turnOrder"]), { attendance: room })
+		const reader = await open(inputs(["attendance", "settings"]), { attendance: room })
+		const posts = (w: typeof reader) => w.got.filter((m) => m.t === "attendance")
+		expect(posts(blind)).toEqual([])
+		expect(posts(reader)).toEqual([{ t: "attendance", attendance: $state.snapshot(room.current) }])
+
+		// Someone else typing: posted to the reader, and still never to the other.
+		room.current = { ...room.current, people: [{ ...room.current.people[0]!, typing: true }] }
+		flushSync()
+		await settle()
+		expect(posts(blind)).toEqual([])
+		expect(posts(reader)).toHaveLength(2)
+		expect((posts(reader).at(-1)!.attendance as { people: Array<{ typing: boolean }> }).people[0]!.typing).toBe(true)
+
+		// A token moves the log, not the room: nothing re-posted.
+		live.messages[0]!.content = "Hello"
+		flushSync()
+		await settle()
+		expect(posts(reader)).toHaveLength(2)
+		blind.close()
+		reader.close()
+	})
+
 	test("the conversation still streams: a token re-posts the log, and only the log", async () => {
 		const live = $state({ messages: [{ id: 1, content: "Hel" }] })
 		const w = await open(() => ({
@@ -278,18 +323,43 @@ describe("a request carries who asks, and the askers table is held (F9)", () => 
 	test("a plugin's widget asking a core-only kind is declined in words, and the page is never asked", async () => {
 		const asked: unknown[] = []
 		const w = await open(() => ({ ...base(), owner: "acme", widgetId: "acme:dice" }), { requests: recording(asked) })
-		await w.send({
-			t: "request",
-			requestId: "r1",
-			what: "set-attribute-value",
-			params: { owner: { kind: "session", id: 1 }, slotId: "s", value: 3 }
-		})
+		await w.send({ t: "request", requestId: "r1", what: "fire-turn", params: {} })
 		expect(w.got.find((m) => m.requestId === "r1")).toMatchObject({
 			t: "response",
 			ok: false,
-			error: "only core's own widgets ask 'set-attribute-value'"
+			error: "only core's own widgets ask 'fire-turn'"
 		})
 		expect(asked).toEqual([])
+		w.close()
+	})
+
+	test("🚧 D4: a plugin's write needs its write grant, then a person's press — and the page hears its channels", async () => {
+		const asked: unknown[] = []
+		let grants: string[] = ["session:state"]
+		let pressing = false
+		const w = await open(
+			() => ({ ...base(), owner: "acme", widgetId: "acme:dice", channels: ["dice"], grants: grants as never }),
+			{ requests: recording(asked), options: { personBehind: () => pressing } }
+		)
+		const write = { owner: { kind: "session", id: 1 }, slotId: "s", value: 3 }
+		// The read is not the write.
+		await w.send({ t: "request", requestId: "r1", what: "set-attribute-value", params: write })
+		expect(String(w.got.find((m) => m.requestId === "r1")?.error)).toMatch(/write grant 'session:state:write'/)
+		// Granted, but nobody pressing: declined, never on its own.
+		grants = ["session:state:write", "channel:dice:write"]
+		await w.send({ t: "request", requestId: "r2", what: "set-attribute-value", params: write })
+		expect(String(w.got.find((m) => m.requestId === "r2")?.error)).toMatch(/needs a person's press behind it/)
+		// A channel it did not declare, whatever it holds.
+		pressing = true
+		await w.send({ t: "request", requestId: "r3", what: "send", params: { content: "4", personaId: null, channel: "main" } })
+		expect(String(w.got.find((m) => m.requestId === "r3")?.error)).toMatch(/'main', which is not one of this widget's channels/)
+		expect(asked).toEqual([])
+		// Granted, declared, pressed: the page is asked, with the widget's channels beside `from`.
+		await w.send({ t: "request", requestId: "r4", what: "send", params: { content: "4", personaId: null, channel: "dice" } })
+		expect(w.got.find((m) => m.requestId === "r4")).toMatchObject({ t: "response", ok: true })
+		expect(asked).toEqual([
+			["send", { widgetId: "acme:dice", owner: "acme", grants: ["session:state:write", "channel:dice:write"], channels: ["dice"] }]
+		])
 		w.close()
 	})
 
@@ -306,7 +376,7 @@ describe("a request carries who asks, and the askers table is held (F9)", () => 
 		grants = ["lore"]
 		await w.send({ t: "request", requestId: "r2", what: "session-entries", params: {} })
 		expect(w.got.find((m) => m.requestId === "r2")).toMatchObject({ t: "response", ok: true })
-		expect(asked).toEqual([["session-entries", { widgetId: "acme:lore", owner: "acme", grants: ["lore"] }]])
+		expect(asked).toEqual([["session-entries", { widgetId: "acme:lore", owner: "acme", grants: ["lore"], channels: [] }]])
 		w.close()
 	})
 })
@@ -336,7 +406,7 @@ describe("what the widget holds is what went out (sent-recorded-before-post)", (
 		const live = $state({ granted: true })
 		const w = await open(() => ({
 			...base(),
-			scoped: live.granted ? ({ session_full: cyclic } as WireInputs["scoped"]) : undefined
+			scoped: live.granted ? ({ session_full: cyclic } as unknown as WireInputs["scoped"]) : undefined
 		}))
 		// Posted (it cannot be compared, so it may go more than once)…
 		expect(w.got.filter((m) => m.t === "scoped").length).toBeGreaterThan(0)

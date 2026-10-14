@@ -33,15 +33,15 @@ describe("the Card setting is universal and off by default", () => {
 			.toMatchObject({ type: "boolean", label: "Card", default: false })
 	})
 	test("the effective settings say off until someone turns it on", () => {
-		expect(effectiveWidgetSettings(decl, {}).hostCard).toBe(false)
-		expect(effectiveWidgetSettings(decl, { hostCard: true }).hostCard).toBe(true)
+		expect(effectiveWidgetSettings({ decl, stored: {} }).hostCard).toBe(false)
+		expect(effectiveWidgetSettings({ decl, stored: { hostCard: true } }).hostCard).toBe(true)
 	})
 	test("a widget cannot redeclare it", () => {
 		const own = {
 			...decl,
 			settings: { hostCard: { type: "string" as const, label: "Mine", default: "x" } }
 		}
-		expect(effectiveWidgetSettings(own, {}).hostCard).toBe(false)
+		expect(effectiveWidgetSettings({ decl: own, stored: {} }).hostCard).toBe(false)
 	})
 })
 

@@ -187,7 +187,7 @@
 >
 	<div class="flex flex-wrap items-center gap-2">
 		<button
-			class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
+			class="btn btn-sm preset-tonal-surface shrink-0 p-2"
 			type="button"
 			onclick={onClose}
 			title="Back to the entries"

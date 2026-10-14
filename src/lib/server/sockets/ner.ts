@@ -44,6 +44,9 @@ async function buildNerStatus(): Promise<Sockets.Ner.Status.Response> {
 	return {
 		starred: target !== null,
 		modelId: target?.modelId ?? null,
+		// Which connection that identity belongs to: the lane is app-wide,
+		// so a row must not read another connection's model as its own.
+		connectionId: target?.connectionId ?? null,
 		modelReady: target !== null && getLoadedNerModelId() === target.modelId,
 		loadError: getNerLoadError(),
 		annotatedRows: rows,

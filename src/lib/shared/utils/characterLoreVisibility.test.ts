@@ -41,8 +41,10 @@ describe("getCharacterLoreVisibility", () => {
 	test("null bindingId is unbound", () => {
 		const v = getCharacterLoreVisibility(null, allBindings)
 		expect(v.kind).toBe("unbound")
-		expect(v.label).toBe("Unbound")
-		expect(v.description).toContain("never be included")
+		expect(v.label).toBe("Narrator only")
+		// The server reads unanchored lore to the narrator (W3, 2026-09-17).
+		expect(v.description).toContain("only the narrator reads")
+		expect(v.description).not.toContain("never be included")
 	})
 
 	test("undefined bindingId is unbound", () => {
@@ -89,6 +91,9 @@ describe("getCharacterLoreVisibility", () => {
 		expect(v.kind).toBe("character")
 		expect(v.label).toBe("Private to Traveler")
 		expect(v.description).toContain("Traveler's perspective")
+		// …and says the persona rule: a card played as a persona has its
+		// lore read for the whole session.
+		expect(v.description).toContain("plays Traveler as their persona")
 	})
 
 	test("falls back to a generic noun when the bound character record is missing", () => {

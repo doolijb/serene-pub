@@ -412,16 +412,26 @@ describe("Sanctum talk steers the story — off (R13)", () => {
 })
 
 describe("the Castellan's scratchpad (R13)", () => {
-	it("is hidden from every person's view, edited by the owner through its action, and read by the planner and the Sanctum talk — never the party", async () => {
+	it("is in the owner's view and no other person's, edited by the owner through its action, and read by the planner and the Sanctum talk — never the party", async () => {
 		plan = PLAN
 		const sessionId = await createLairSession("scratchpad")
 		expect((await editScratchpad(sessionId, EDITED))?.error).toBeUndefined()
 		expect((await annexOf(sessionId))["castellan-scratchpad"]).toBe(EDITED)
 
-		// Hidden: the owner's own annex view does not carry it.
+		// The owner's own annex view (annex.v1, what the Annex widget reads)
+		// carries it (ruled 2026-10-11: `see` += `owner`) …
 		const { annexViewFor } = await import("$lib/server/sessions/annexViews")
 		const view = await annexViewFor(db as any, sessionId, userId)
-		expect(view?.core?.["castellan-scratchpad"]).toBeUndefined()
+		expect(view?.core?.["castellan-scratchpad"]).toBe(EDITED)
+		// … and a guest's does not.
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const guestId = (await createTestUser(db, "lair-steers-guest")).id
+		await db
+			.insert(schema.sessionGuests)
+			.values({ sessionId, userId: guestId } as any)
+		const guestView = await annexViewFor(db as any, sessionId, guestId)
+		expect(guestView).not.toBeNull()
+		expect(guestView?.core?.["castellan-scratchpad"]).toBeUndefined()
 		// … but the Session data panel lists it, settable by the owner.
 		const { inspectAnnex } = await import("$lib/server/sessions/annexInspect")
 		const inspected = await inspectAnnex(db as any, sessionId, { id: userId })
@@ -432,7 +442,7 @@ describe("the Castellan's scratchpad (R13)", () => {
 			: undefined
 		expect(field).toMatchObject({
 			value: EDITED,
-			see: ["envoy:castellan"],
+			see: ["envoy:castellan", "owner"],
 			act: ["owner"],
 			genre: "core:genre/lair"
 		})

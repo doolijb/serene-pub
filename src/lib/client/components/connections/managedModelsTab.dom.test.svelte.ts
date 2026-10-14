@@ -5,11 +5,15 @@
  *
  *   · an `embeddings` row on the managed KoboldCPP is listed under its own
  *     heading, beside Text and Image, rather than nowhere;
- *   · its "Use for embeddings" never stars on its own: the server checks the
+ *   · its "Use in Embeddings" never stars on its own: the server checks the
  *     file and answers the pair (`koboldcpp:connectEmbeddingModel`), and the
  *     star goes through the panel's flow (`onSetDefault`), which confirms the
  *     re-index first;
  *   · a file in the wrong section can be moved to the embedding models.
+ *
+ * And on both runtimes, a section lists what the server says a model can do
+ * (`satisfiableCapabilities`), never its raw modality: a Not sure model is
+ * listed under each job it can serve.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
@@ -37,7 +41,19 @@ vi.mock("$lib/client/utils/toaster", () => ({
 
 import ManagedModelsTab from "./ManagedModelsTab.svelte"
 
-const model = (id: number, file: string, modality: string) => ({
+/** What the server answers for a pair whose model holds this modality. */
+const SERVES: Record<string, string[]> = {
+	"text-gen": ["text->text"],
+	"image-gen": ["text->image"],
+	embeddings: ["text->embedding"]
+}
+
+const model = (
+	id: number,
+	file: string,
+	modality: string | null,
+	satisfiableCapabilities: string[] = SERVES[modality ?? ""] ?? []
+) => ({
 	id,
 	model: file,
 	name: file.replace(/\.gguf$/, ""),
@@ -45,7 +61,8 @@ const model = (id: number, file: string, modality: string) => ({
 	enabled: true,
 	missingSince: null,
 	facts: null,
-	contextWindow: null
+	contextWindow: null,
+	satisfiableCapabilities
 })
 
 const connection = {
@@ -75,16 +92,23 @@ afterEach(() => {
 	document.body.innerHTML = ""
 })
 
-function render(onSetDefault = vi.fn()) {
+function render(
+	onSetDefault = vi.fn(),
+	overrides: {
+		connection?: any
+		capabilityDefaults?: any
+		kind?: "koboldcpp" | "ollama"
+	} = {}
+) {
 	const target = document.createElement("div")
 	document.body.appendChild(target)
 	mounted.push(
 		mount(ManagedModelsTab, {
 			target,
 			props: {
-				kind: "koboldcpp",
-				connection,
-				capabilityDefaults: {},
+				kind: overrides.kind ?? "koboldcpp",
+				connection: overrides.connection ?? connection,
+				capabilityDefaults: overrides.capabilityDefaults ?? {},
 				isAdmin: true,
 				onOpenModel: () => {},
 				onSetDefault,
@@ -113,14 +137,14 @@ describe("the managed KoboldCPP's Models tab", () => {
 			"Image models",
 			"Embedding models"
 		])
-		expect(button(target, "Use for embeddings")).toBeTruthy()
-		expect(button(target, "Use for chat")).toBeTruthy()
-		expect(button(target, "Use for images")).toBeTruthy()
+		expect(button(target, "Use in Embeddings")).toBeTruthy()
+		expect(button(target, "Use in Reply")).toBeTruthy()
+		expect(button(target, "Use in Images")).toBeTruthy()
 	})
 
-	test("Use for embeddings asks the server for the pair, then stars it through the panel's flow", async () => {
+	test("Use in Embeddings asks the server for the pair, then stars it through the panel's flow", async () => {
 		const { target, onSetDefault } = render()
-		button(target, "Use for embeddings")!.click()
+		button(target, "Use in Embeddings")!.click()
 		await tick()
 		await new Promise((r) => setTimeout(r, 0))
 
@@ -146,7 +170,7 @@ describe("the managed KoboldCPP's Models tab", () => {
 			throw new Error("That's a text model.")
 		}
 		const { target, onSetDefault } = render()
-		button(target, "Use for embeddings")!.click()
+		button(target, "Use in Embeddings")!.click()
 		await tick()
 		await new Promise((r) => setTimeout(r, 0))
 		expect(onSetDefault).not.toHaveBeenCalled()
@@ -167,5 +191,253 @@ describe("the managed KoboldCPP's Models tab", () => {
 			"koboldcpp:setModelKind",
 			{ filename: "chat.gguf", kind: "embeddings" }
 		])
+	})
+
+	test("Delete from disk is the ⋯ menu's destructive item, and asks first", async () => {
+		const { target } = render()
+		// Nothing on a row is a filled button: no green Use, no red Delete.
+		expect(
+			target.querySelectorAll(
+				"[data-managed-models] [class*='preset-filled']"
+			)
+		).toHaveLength(0)
+		expect(button(target, "Delete")).toBeUndefined()
+
+		button(target, "More actions — chat")!.click()
+		await tick()
+		flushSync()
+		const items = [...document.querySelectorAll("button")]
+		const del = items.find((b) =>
+			b.textContent?.includes("Delete from disk")
+		)!
+		expect(del.className).toContain("text-error")
+		del.click()
+		await tick()
+		flushSync()
+		expect(emitted.map(([e]) => e)).not.toContain("koboldcpp:deleteModel")
+		const dialog = document.querySelector("[role='alertdialog']")
+		expect(dialog?.textContent).toContain("Delete this model?")
+		;[...dialog!.querySelectorAll("button")]
+			.find((b) => b.textContent?.trim() === "Delete from disk")!
+			.click()
+		expect(emitted).toContainEqual([
+			"koboldcpp:deleteModel",
+			{ modelName: "chat.gguf" }
+		])
+	})
+})
+
+describe("the managed Models tab follows the model-row contract", () => {
+	const textOnly = (ids: number[]) =>
+		({
+			...connection,
+			models: ids.map((id) => model(id, `m${id}.gguf`, "text-gen"))
+		}) as any
+	const names = (root: ParentNode) =>
+		[
+			...root.querySelectorAll(
+				"[data-managed-models] button[title]:not([aria-label])"
+			)
+		].map((b) => b.getAttribute("title"))
+
+	test("Use says Use in Reply while chat has no model, then Use in the dock", () => {
+		const unset = render(vi.fn(), { connection: textOnly([41, 42]) })
+		const before = button(unset.target, "Use in Reply")!
+		expect(before.querySelector("span")!.textContent).toBe("Use in Reply")
+		for (const app of mounted.splice(0)) unmount(app)
+		document.body.innerHTML = ""
+
+		const { target } = render(vi.fn(), {
+			connection: textOnly([41, 42]),
+			capabilityDefaults: {
+				"text->text": { connectionId: 9, connectionModelId: 42 }
+			}
+		})
+		// One Use left (the default wears its mark instead), and it keeps
+		// the whole verb as its name: the verb is the consequence.
+		const use = button(target, "Use in Reply")!
+		expect(use.querySelector("span")!.textContent).toBe("Use")
+		expect(
+			target.querySelectorAll("button[aria-label='Use in Reply']")
+		).toHaveLength(1)
+	})
+
+	test("a chat default naming a model this runtime does not list is unset", () => {
+		const { target } = render(vi.fn(), {
+			connection: textOnly([41]),
+			capabilityDefaults: {
+				"text->text": { connectionId: 9, connectionModelId: 99 }
+			}
+		})
+		const use = button(target, "Use in Reply")!
+		expect(use.querySelector("span")!.textContent).toBe("Use in Reply")
+	})
+
+	test("the chat default leads the text models", () => {
+		const { target } = render(vi.fn(), {
+			connection: textOnly([41, 42, 43]),
+			capabilityDefaults: {
+				"text->text": { connectionId: 9, connectionModelId: 43 }
+			}
+		})
+		expect(names(target)).toEqual(["m43.gguf", "m41.gguf", "m42.gguf"])
+	})
+
+	test("the count heads the list; the filter box appears past twelve models", () => {
+		const few = render(vi.fn(), { connection: textOnly([41, 42, 43]) })
+		expect(few.target.textContent).toContain("3 models")
+		expect(few.target.querySelector("#managed-model-filter")).toBeNull()
+		for (const app of mounted.splice(0)) unmount(app)
+		document.body.innerHTML = ""
+
+		const ids = Array.from({ length: 13 }, (_, i) => 50 + i)
+		const { target } = render(vi.fn(), { connection: textOnly(ids) })
+		const filter = target.querySelector<HTMLInputElement>(
+			"#managed-model-filter"
+		)!
+		expect(filter.placeholder).toBe("Filter 13 models")
+		filter.value = "m55"
+		filter.dispatchEvent(new Event("input"))
+		flushSync()
+		expect(names(target)).toEqual(["m55.gguf"])
+	})
+
+	test("no models is an empty state with one way in", () => {
+		const onGetModels = vi.fn()
+		const target = document.createElement("div")
+		document.body.appendChild(target)
+		mounted.push(
+			mount(ManagedModelsTab, {
+				target,
+				props: {
+					kind: "ollama",
+					connection: { ...connection, models: [] },
+					capabilityDefaults: {},
+					isAdmin: true,
+					onOpenModel: () => {},
+					onSetDefault: () => {},
+					onGetModels,
+					onRefresh: () => {}
+				}
+			})
+		)
+		flushSync()
+		const status = target.querySelector("[role='status']")!
+		expect(status.textContent).toContain("No models yet")
+		;[...status.querySelectorAll("button")]
+			.find((b) => b.textContent?.trim() === "Get a model")!
+			.click()
+		expect(onGetModels).toHaveBeenCalledOnce()
+	})
+})
+
+describe("the sections follow the server's answer (satisfiableCapabilities)", () => {
+	const ollama = (models: any[]) =>
+		({ id: 9, name: "Ollama", type: "ollama", models }) as any
+	const section = (root: ParentNode, lane: string) =>
+		root.querySelector<HTMLElement>(`[data-managed-models='${lane}']`)
+	const listed = (root: ParentNode | null) =>
+		root
+			? [...root.querySelectorAll("button[title]:not([aria-label])")].map(
+					(b) => b.getAttribute("title")
+				)
+			: []
+	const uses = (root: ParentNode | null, label: string) =>
+		root
+			? [...root.querySelectorAll("button")].filter(
+					(b) => b.getAttribute("aria-label") === label
+				)
+			: []
+
+	test("a Not sure model is listed under every job the server says it can do, with Use in each", () => {
+		const onSetDefault = vi.fn()
+		const { target } = render(onSetDefault, {
+			kind: "ollama",
+			connection: ollama([
+				model(41, "llama3", "text-gen"),
+				model(42, "nomic-embed-text", "embeddings"),
+				model(43, "mystery", null, ["text->text", "text->embedding"])
+			])
+		})
+		const chat = section(target, "text")
+		const embeddings = section(target, "embeddings")
+		expect(listed(chat)).toEqual(["llama3", "mystery"])
+		expect(listed(embeddings)).toEqual(["nomic-embed-text", "mystery"])
+		expect(uses(chat, "Use in Reply")).toHaveLength(2)
+		expect(uses(embeddings, "Use in Embeddings")).toHaveLength(2)
+
+		uses(embeddings, "Use in Embeddings")[1].click()
+		expect(onSetDefault).toHaveBeenCalledWith("text->embedding", 9, {
+			id: 43,
+			name: "mystery"
+		})
+	})
+
+	test("a Not sure model with no embedding job on this endpoint is listed for chat only", () => {
+		const { target } = render(vi.fn(), {
+			kind: "ollama",
+			connection: ollama([
+				model(41, "llama3", "text-gen"),
+				model(43, "mystery", null, ["text->text"])
+			])
+		})
+		expect(section(target, "embeddings")).toBeNull()
+		expect(listed(section(target, "text"))).toEqual(["llama3", "mystery"])
+	})
+
+	test("Use is offered per job: the chat default still offers Use in Embeddings", () => {
+		const { target } = render(vi.fn(), {
+			kind: "ollama",
+			connection: ollama([
+				model(41, "llama3", "text-gen"),
+				model(43, "mystery", null, ["text->text", "text->embedding"])
+			]),
+			capabilityDefaults: {
+				"text->text": { connectionId: 9, connectionModelId: 43 }
+			}
+		})
+		const chat = section(target, "text")!
+		// The default leads its section and wears the mark, without Use.
+		expect(listed(chat)).toEqual(["mystery", "llama3"])
+		expect(uses(chat, "Use in Reply")).toHaveLength(1)
+		expect(
+			uses(section(target, "embeddings"), "Use in Embeddings")
+		).toHaveLength(1)
+	})
+
+	test("a model the server says serves nothing stays listed under its own section, without Use", () => {
+		const off = { ...model(41, "llama3", "text-gen", []), enabled: false }
+		const gone = {
+			...model(42, "nomic-embed-text", "embeddings", []),
+			missingSince: "2026-10-01T00:00:00Z"
+		}
+		const unsure = { ...model(43, "mystery", null, []), enabled: false }
+		const { target } = render(vi.fn(), {
+			kind: "ollama",
+			connection: ollama([off, gone, unsure])
+		})
+		expect(listed(section(target, "text"))).toEqual(["llama3", "mystery"])
+		expect(listed(section(target, "embeddings"))).toEqual([
+			"nomic-embed-text"
+		])
+		expect(uses(target, "Use in Reply")).toHaveLength(0)
+		expect(uses(target, "Use in Embeddings")).toHaveLength(0)
+	})
+
+	test("a KoboldCPP model the server refuses for chat offers no Use in Reply", () => {
+		const { target } = render(vi.fn(), {
+			connection: {
+				...connection,
+				models: [
+					model(31, "chat.gguf", "text-gen"),
+					model(34, "odd.gguf", "text-gen", [])
+				]
+			}
+		})
+		expect(listed(section(target, "text"))).toEqual([
+			"chat.gguf",
+			"odd.gguf"
+		])
+		expect(uses(target, "Use in Reply")).toHaveLength(1)
 	})
 })

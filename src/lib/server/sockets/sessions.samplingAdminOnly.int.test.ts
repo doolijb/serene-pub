@@ -1,14 +1,15 @@
 /**
- * A session's sampling override is an admin's to set (owner ruling): a
- * session owner who is not an admin is refused with a sentence and the stored
- * value stays; an admin may set it; and a form that posts the stored value
- * back unchanged is not a write and is not refused.
+ * A session's sampling pick is its pipeline panel row (Pipelines card ›
+ * Sampling), which only an admin writes. `sessions:update` carries no sampling
+ * field: an old client that still posts `samplingConfigId` is not refused, the
+ * rest of its save lands, and no sampling pick is written — for an owner who
+ * is not an admin, and for an admin alike.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -57,67 +58,52 @@ async function makeSampling(name: string) {
 	return row
 }
 
-async function storedSampling(sessionId: number) {
-	const [row] = await testDb
-		.select({ samplingConfigId: schema.sessions.samplingConfigId })
-		.from(schema.sessions)
-		.where(eq(schema.sessions.id, sessionId))
-	return row.samplingConfigId
+/** The session's sampling picks, on any pipeline. */
+async function samplingPicks(sessionId: number) {
+	return testDb
+		.select()
+		.from(schema.pipelineNodeOverrides)
+		.where(
+			and(
+				eq(schema.pipelineNodeOverrides.scopeKind, "session"),
+				eq(schema.pipelineNodeOverrides.scopeId, sessionId),
+				eq(schema.pipelineNodeOverrides.slot, "sampling")
+			)
+		)
 }
 
-describe("sessions:update — the sampling override is admin-only", () => {
-	test("a non-admin owner is refused with a sentence and the stored value stays", async () => {
+describe("sessions:update — no sampling is set through it", () => {
+	test("a non-admin owner's old field is dropped in silence and the rest of the save lands", async () => {
 		const { sessionsUpdateHandler } = await import("./sessions")
 		const owner = await makeUser("sampling-owner-1")
-		const kept = await makeSampling("Kept")
 		const wanted = await makeSampling("Wanted")
 		const [session] = await testDb
 			.insert(schema.sessions)
-			.values({ userId: owner.id, isGroup: false, samplingConfigId: kept.id })
+			.values({ userId: owner.id, isGroup: false })
 			.returning()
 
 		const emitted: Array<[string, any]> = []
-		await expect(
-			sessionsUpdateHandler.handler(
-				fakeSocket(owner.id, false),
-				{ session: { id: session.id, samplingConfigId: wanted.id } } as any,
-				(e: string, d: any) => emitted.push([e, d])
-			)
-		).rejects.toThrow()
-
-		const refusal = emitted.find(([e]) => e === "sessions:update:error")
-		expect(refusal?.[1].error).toMatch(/Only an admin can change a session's sampling/)
-		expect(await storedSampling(session.id)).toBe(kept.id)
-	})
-
-	test("a non-admin owner posting the stored value back unchanged is not refused", async () => {
-		const { sessionsUpdateHandler } = await import("./sessions")
-		const owner = await makeUser("sampling-owner-2")
-		const kept = await makeSampling("Kept 2")
-		const [session] = await testDb
-			.insert(schema.sessions)
-			.values({ userId: owner.id, isGroup: false, samplingConfigId: kept.id })
-			.returning()
-
 		await sessionsUpdateHandler.handler(
 			fakeSocket(owner.id, false),
 			{
-				session: { id: session.id, name: "Renamed", samplingConfigId: kept.id }
+				session: { id: session.id, name: "Renamed", samplingConfigId: wanted.id }
 			} as any,
-			() => {}
+			(e: string, d: any) => emitted.push([e, d])
 		)
-		expect(await storedSampling(session.id)).toBe(kept.id)
+
+		expect(emitted.find(([e]) => e === "sessions:update:error")).toBeUndefined()
 		const [row] = await testDb
 			.select({ name: schema.sessions.name })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, session.id))
 		expect(row.name).toBe("Renamed")
+		expect(await samplingPicks(session.id)).toEqual([])
 	})
 
-	test("an admin owner may set it", async () => {
+	test("an admin's old field writes no pick either: the panel row is the one session layer", async () => {
 		const { sessionsUpdateHandler } = await import("./sessions")
 		const admin = await makeUser("sampling-admin-1", true)
-		const wanted = await makeSampling("Wanted 3")
+		const wanted = await makeSampling("Wanted 2")
 		const [session] = await testDb
 			.insert(schema.sessions)
 			.values({ userId: admin.id, isGroup: false })
@@ -128,6 +114,6 @@ describe("sessions:update — the sampling override is admin-only", () => {
 			{ session: { id: session.id, samplingConfigId: wanted.id } } as any,
 			() => {}
 		)
-		expect(await storedSampling(session.id)).toBe(wanted.id)
+		expect(await samplingPicks(session.id)).toEqual([])
 	})
 })

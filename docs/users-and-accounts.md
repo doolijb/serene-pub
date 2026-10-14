@@ -11,7 +11,7 @@ User accounts let several people share one pub, each signing in to their own cha
 
 A new pub has **accounts off**. There's no sign-in screen: everyone who opens it is you, the administrator, with full access to everything. That's the simplest way to run Serene Pub for yourself on your own computer, and fine on a home network you trust.
 
-Turn accounts on when anyone else will reach your pub. From then on, everyone signs in with a username and passphrase, and each account has its own characters, personas, sessions, lorebooks and tags.
+Turn accounts on when anyone else will reach your pub. From then on, everyone signs in with a username and passphrase, and each account has its own characters, personas, sessions, lorebooks and tags. People on the same pub can write to each other with [Messages](./messages.md), and can share characters and lorebooks with each other read-only.
 
 :::warning Accounts can't be turned off again
 Once accounts are on, they stay on. There's no switch to go back.
@@ -46,7 +46,7 @@ Only administrators can invite people or create accounts.
 
 The easiest way to add someone is an **invite link**: they pick their own username and passphrase.
 
-1. Open **Users** on the rail and press **Invite links**, the button beside **New** (or open **Admin › People › Users** and press **Invites**).
+1. Open **Users** on the rail and press **Invite links**, the button beside **New** (or open **Admin › Pub › Users** and press **Invites**).
 2. Under the registration text, press **New registration link**.
 3. The link is shown once, with a QR code. If your pub can be reached at more than one address (for example your home network and a running tunnel), pick the right one under **Address to share**. Press **Copy** and send it.
 
@@ -62,9 +62,9 @@ An invite link works once and stops working after two hours. It never creates an
 The **Users** icon appears on the rail for administrators, once accounts are on.
 :::
 
-**Users** on the rail lists every account. Search by username or display name. Each row shows the display name, the `@username` and an **Admin** badge for administrators. Click a row to see the account, with **Edit** to change it. **New** creates an account yourself, **Invite links** shows the invite options, and each row except your own has **Edit** and **Delete**.
+**Users** on the rail lists every account. Search by username or display name. Each row shows the display name, the `@username` and an **Admin** badge for administrators. Click a row to see the account, with **Edit** to change it and **Delete** in its **⋯** menu. **New** creates an account yourself, **Invite links** shows the invite options, and each row except your own has a **⋯** menu with **Edit** and **Delete**. On the form, **Cancel** is in the **⋯** menu beside **Create** or **Update**.
 
-**Admin › People › Users** is the same roster in the admin area, as a table: filter it by role or by whether the person has ever signed in, tick rows to delete several at once (your own account is always kept), and click a row to open the account's form. **Add user** and **Invites** are at the top. Deleting an account signs it out everywhere and stops it signing in; what the person made stays on the pub.
+**Admin › Pub › Users** is the same roster in the admin area, as a table: filter it by role or by whether the person has ever signed in, tick rows to delete several at once (your own account is always kept), and click a row to open the account's form. **Add user** and **Invites** are at the top. Deleting an account signs it out everywhere and stops it signing in; what the person made stays on the pub.
 
 ### Creating a user yourself
 
@@ -82,7 +82,7 @@ Press **Create**. Every passphrase follows the same rule: at least 10 characters
 
 ### Making someone an administrator
 
-Tick **Administrator** on their form. In the Users view a **Grant administrator privileges?** dialog lists what that allows; in **Admin › People › Users** the same warning shows under the box, and nothing changes until you save. A new account can't be an administrator: the box only becomes available once that person has signed in at least once.
+Tick **Administrator** on their form. In the Users view a **Grant administrator privileges?** dialog lists what that allows; in **Admin › Pub › Users** the same warning shows under the box, and nothing changes until you save. A new account can't be an administrator: the box only becomes available once that person has signed in at least once.
 
 ## Administrators and members
 
@@ -90,7 +90,7 @@ There are two kinds of account and nothing in between.
 
 **Administrators** can see and change everything on the pub: every account, the [admin area](./getting-around.md#the-admin-area), connections and sampling, and every other person's characters and sessions. Grant it only to people you'd trust with the whole pub.
 
-**Members** have their own characters, personas, sessions, lorebooks and tags, and their own settings. They don't see the Users, Connections, Sampling or Admin icons. Their setup wizard skips **Choose an LLM**, because connecting a model is the administrator's job. The **Data** tab in their Settings only says that an administrator manages backups.
+**Members** have their own characters, personas, sessions, lorebooks and tags, and their own settings. They don't see the Users, Models, Connections, Sampling, Pipelines or Admin icons. While no model is set up for chat, their sessions say so in one line above the composer, ending _Ask your administrator._ Their setup wizard skips **Choose an AI**, because connecting a model is the administrator's job. The **Data** tab in their Settings only says that an administrator manages backups.
 
 To play in the same story as someone else, add them to a session as a guest: see [Guests](./sessions.md#guests).
 
@@ -125,7 +125,7 @@ An administrator can do either of these from the Users view:
 
 ### Lost your authenticator and your recovery codes
 
-Another administrator can open **Admin › People › Users**, pick your account and press **Clear two-factor for this user**. Your passphrase still works, and all your sessions are signed out.
+Another administrator can open **Admin › Pub › Users**, pick your account and press **Clear two-factor for this user**. Your passphrase still works, and all your sessions are signed out.
 
 ### If the admin account itself is locked out
 

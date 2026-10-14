@@ -53,7 +53,11 @@ import {
 } from "$lib/server/state/reading"
 import { onLineSql } from "$lib/server/state/lineSql"
 import { lockBookCalendar } from "$lib/server/state/storyTime"
-import { assertOwnedBook, findOwnedBook } from "$lib/server/utils/ownedBook"
+import {
+	assertOwnedBook,
+	assertReadableBook,
+	findOwnedBook
+} from "$lib/server/utils/ownedBook"
 
 /**
  * Every downstream consumer (graphBuilder.ts, lorebookExportMapper.ts,
@@ -153,6 +157,11 @@ async function capturableMessageIds(
 			.filter((s) => s.id !== exceptSceneId)
 			.flatMap((s) => s.selectedMessageIds ?? [])
 	)
+	// 🚧 A live scene's range is captured too (lane E) — the open scene's
+	// included, whose lines are recorded only when it closes.
+	const { liveRangeLineIds } = await import("$lib/server/scenes/liveScenes")
+	for (const [messageId, sceneId] of await liveRangeLineIds(tx, sessionId))
+		if (sceneId !== exceptSceneId) captured.add(messageId)
 	const overlap = ids.filter((id) => captured.has(id)).length
 	if (overlap > 0)
 		throw new Error(
@@ -218,8 +227,16 @@ async function buildSceneList(
 		}
 	})
 
+	// 🚧 Each scene's cast (lane E), projected from `scene_characters` — the
+	// wire's `SceneCast` arrays — so a divider's faces read who is IN the
+	// scene, not only who spoke in its loaded lines.
+	const casts = await readSceneCasts(
+		(scenes as Array<{ id: number }>).map((s) => s.id),
+		db
+	)
 	const sceneList = (scenes as any[]).map((s) => ({
 		...s,
+		...castFor(casts, s.id),
 		historyEntry: s.historyEntry
 			? {
 					id: s.historyEntry.id,
@@ -566,6 +583,13 @@ export const sceneUpdateHandler: Handler<
 				.set({
 					...(name !== undefined ? { name } : {}),
 					...(summary !== undefined ? { summary } : {}),
+					// 🚧 A summary written (by a review's save or by hand) is a
+					// summary done; cleared, there is none (lane E) — so a
+					// scene divider says *out of date* only of a summary a
+					// moved boundary left behind.
+					...(summary !== undefined
+						? { summaryStatus: summary?.trim() ? ("done" as const) : ("none" as const) }
+						: {}),
 					...(selectedMessageIds !== undefined
 						? { selectedMessageIds }
 						: {}),
@@ -600,6 +624,7 @@ export const sceneUpdateHandler: Handler<
 		}
 
 		const res = {
+			...askerOf(params),
 			scene: { ...updated, ...(await readSceneCast(params.scene.id)) }
 		}
 
@@ -633,7 +658,9 @@ export const sceneUpdateHandler: Handler<
 		emitToUser("scenes:update", res)
 		return res
 	},
-	"The scene could not be saved."
+	"The scene could not be saved.",
+	undefined,
+	askerOf
 )
 
 export const sceneDeleteHandler: Handler<
@@ -681,6 +708,7 @@ export const sceneDeleteHandler: Handler<
 		 * the session it was in and each listener filters on the one it shows.
 		 */
 		const res: Sockets.Scenes.Delete.Response = {
+			...askerOf(params),
 			success: "Scene deleted.",
 			id: params.id,
 			lorebookId: existing.lorebookId,
@@ -689,7 +717,9 @@ export const sceneDeleteHandler: Handler<
 		emitToUser("scenes:delete", res)
 		return res
 	},
-	"The scene could not be deleted."
+	"The scene could not be deleted.",
+	undefined,
+	askerOf
 )
 
 /**
@@ -713,11 +743,17 @@ async function buildScenedMessageIds(
 		where: eq(schema.scenes.sessionId, sessionId),
 		columns: { selectedMessageIds: true }
 	})
+	// 🚧 And every line inside a live scene's range (lane E): the open
+	// scene's too, whose lines are recorded only when it closes.
+	const { liveRangeLineIds } = await import("$lib/server/scenes/liveScenes")
+	const scened = new Set(scenes.flatMap((s) => s.selectedMessageIds ?? []))
+	for (const messageId of (await liveRangeLineIds(db, sessionId)).keys())
+		scened.add(messageId)
 
 	return {
 		// Present so the interest scope can be derived — see `buildSceneList`.
 		sessionId,
-		scenedMessageIds: scenes.flatMap((s) => s.selectedMessageIds ?? [])
+		scenedMessageIds: [...scened].sort((a, b) => a - b)
 	}
 }
 
@@ -745,8 +781,10 @@ export const sceneListByLorebookHandler: Handler<
 	async (socket, params: Sockets.Scenes.ListByLorebook.Params, emitToUser) => {
 		const userId = socket.user!.id
 
-		// Verify lorebook ownership
-		const lorebook = await assertOwnedBook(db, userId, params.lorebookId)
+		// A read: owner, share recipient or admin (lane A3).
+		const lorebook = await assertReadableBook(db, userId, params.lorebookId, {
+			isAdmin: !!socket.user?.isAdmin
+		})
 
 		const scenes = await db.query.scenes.findMany({
 			where: eq(schema.scenes.lorebookId, params.lorebookId),
@@ -754,12 +792,16 @@ export const sceneListByLorebookHandler: Handler<
 			columns: SCENE_REPLY_COLUMNS
 		})
 
-		// Resolve session names in a single query
-		const sessionIds = [
-			...new Set(
-				scenes.filter((s) => s.sessionId).map((s) => s.sessionId!)
-			)
-		]
+		// Resolve session names in a single query. A share recipient reads the
+		// book, never the owner's sessions: no names, so none are resolved.
+		const sessionIds =
+			lorebook.access === "shared"
+				? []
+				: [
+						...new Set(
+							scenes.filter((s) => s.sessionId).map((s) => s.sessionId!)
+						)
+					]
 		const sessions =
 			sessionIds.length > 0
 				? await db.query.sessions.findMany({
@@ -1004,8 +1046,8 @@ export const sceneCompileHandler: Handler<
 		// `db/defaults.ts` re-seeds `text->text` on every boot while it is unset.
 		if (!target.sampling)
 			return refuse(
-				"No sampling config is set for chat, and summarizing needs one. " +
-					"Choose one in Admin → Defaults."
+				"The Reply loadout has no sampling config, and summarizing needs one. " +
+					"Choose one in Admin › Models › Loadouts."
 			)
 		const compileSampling = target.sampling
 
@@ -1203,6 +1245,27 @@ export const sceneProcessHandler: Handler<
 					a.sceneId === params.sceneId &&
 					a.ephemeralOnCancel === true
 			)
+		/**
+		 * 🚧 The status a cancel or a discarded review puts back (§15 G8): the
+		 * scene's own, unless a run or review of this scene is being
+		 * superseded — then that run's, so a regenerate then discard restores
+		 * what the scene was before the FIRST run. A `running` or `review`
+		 * left with no run behind it (a restart) is no status to restore:
+		 * `none`.
+		 */
+		const supersededRun = activityStore
+			.getFor(userId, false)
+			.find(
+				(a) =>
+					a.kind === "scene_summarize" &&
+					a.sceneId === params.sceneId &&
+					a.summaryStatusBefore != null
+			) as { summaryStatusBefore?: schema.SceneSummaryStatus } | undefined
+		const statusBefore: schema.SceneSummaryStatus =
+			supersededRun?.summaryStatusBefore ??
+			(scene.summaryStatus === "running" || scene.summaryStatus === "review"
+				? "none"
+				: (scene.summaryStatus ?? "none"))
 
 		const abortController = new AbortController()
 		const activityId = activityStore.startScene(
@@ -1214,7 +1277,8 @@ export const sceneProcessHandler: Handler<
 				lorebookLabel: lorebook.name,
 				historyEntryId: scene.historyEntryId ?? undefined,
 				ephemeralOnCancel:
-					params.ephemeralOnCancel === true || inheritedEphemeral
+					params.ephemeralOnCancel === true || inheritedEphemeral,
+				summaryStatusBefore: statusBefore
 			},
 			abortController
 		)
@@ -1226,19 +1290,76 @@ export const sceneProcessHandler: Handler<
 		 * scene. A card left "running" refuses every retry.
 		 */
 		let ended = false
+		/**
+		 * 🚧 `summary_status` (PROPOSAL-live-scenes §14 B, §15 G8): `running`
+		 * while the run goes, `review` once it produced a summary — the
+		 * result waits for the person in the Scene summary window, and only
+		 * **Apply** (`scenes:update` carrying the summary) makes it `done`;
+		 * `failed` when it produced none. A cancelled run, and a review
+		 * discarded unapplied (`activityStore.setSceneReviewDiscarded`), put
+		 * back what the scene was. Best-effort: a status that could not be
+		 * written never fails the run.
+		 */
+		const setSummaryStatus = async (
+			status: schema.SceneSummaryStatus,
+			extra: Partial<typeof schema.scenes.$inferInsert> = {}
+		) => {
+			try {
+				await db
+					.update(schema.scenes)
+					.set({ summaryStatus: status, ...extra })
+					.where(eq(schema.scenes.id, params.sceneId))
+			} catch (e) {
+				console.warn("[scenes:process] summary status not written:", e)
+				return
+			}
+			// The session's scene list follows the status (lazy, as every
+			// scene write's cascade), so a divider and a Chronicle dot read
+			// *Summarizing…*, *Ready to review* and *failed* as they happen.
+			const sessionId = scene.sessionId
+			if (sessionId != null)
+				try {
+					await emitToUser("scenes:list", () => buildSceneList(sessionId, userId))
+				} catch (e) {
+					console.warn("[scenes:process] scene list not sent:", e)
+				}
+		}
 		const failRun = (error: string): never => {
 			ended = true
 			activityStore.updateScene(activityId, {
 				status: "error",
 				errorMessage: error
 			})
+			void setSummaryStatus("failed")
 			throw new Error(error)
 		}
 
 		try {
-			if (!scene.sessionId || !scene.selectedMessageIds?.length) {
+			/**
+			 * The scene's messages: a live scene's are its range — the story
+			 * lines of its channel between its boundaries (to the newest line
+			 * while it is open); a scene captured by selection keeps its
+			 * picked list.
+			 */
+			let sceneMessageIds: number[] = scene.selectedMessageIds ?? []
+			if (scene.sessionId && scene.openedAtMessageId != null) {
+				const { storyLinesInRange } = await import(
+					"$lib/server/scenes/liveScenes"
+				)
+				sceneMessageIds = (
+					await storyLinesInRange(
+						db,
+						scene.sessionId,
+						scene.channel,
+						scene.openedAtMessageId,
+						scene.closedAtMessageId
+					)
+				).map((m) => m.id)
+			}
+			if (!scene.sessionId || !sceneMessageIds.length) {
 				return failRun("Scene has no linked messages to process.")
 			}
+			await setSummaryStatus("running")
 
 			// Snapshot inside the lock, LLM outside it.
 			//
@@ -1256,13 +1377,16 @@ export const sceneProcessHandler: Handler<
 						where: (cm, { and, eq, inArray }) =>
 							and(
 								eq(cm.sessionId, scene.sessionId!),
-								inArray(cm.id, scene.selectedMessageIds!)
+								inArray(cm.id, sceneMessageIds)
 							),
 						orderBy: (cm, { asc }) => asc(cm.id)
 					})
 			)
 
-			if (abortController.signal.aborted) return null as any
+			if (abortController.signal.aborted) {
+				await setSummaryStatus(statusBefore)
+				return null as any
+			}
 
 			if (rawMessages.length === 0) {
 				return failRun("No messages found for this scene.")
@@ -1306,8 +1430,14 @@ export const sceneProcessHandler: Handler<
 			const { runSpec } = await import(
 				"$lib/server/pipelines/runtime/runTurn"
 			)
-			const { SUMMARIZE_SCENE_SPEC_ID } = await import(
-				"$lib/server/pipelines/specs/summarize"
+			// The spec is the session's genre's (`summarize.scene`), else
+			// core's default — resolved here, never by the view (§13 item 2).
+			const { resolveSummarizeSceneSpec, sceneHeaderOf } = await import(
+				"$lib/server/scenes/liveScenes"
+			)
+			const resolvedSpec = await resolveSummarizeSceneSpec(
+				db,
+				scene.sessionId
 			)
 
 			let batchesSeen = 0
@@ -1332,12 +1462,28 @@ export const sceneProcessHandler: Handler<
 				db,
 				sessionId: scene.sessionId,
 				userId,
-				specId: SUMMARIZE_SCENE_SPEC_ID,
+				specId: resolvedSpec.specId,
 				input: {
 					scope: { sessionId: scene.sessionId },
 					request: {
-						messageIds: scene.selectedMessageIds,
-						knownCast
+						// `summarize-source@1` reads the ids; `@2` the range
+						// (`sceneId`, `channel`, `openedAt`, `closedAt`) and
+						// the asides beside it.
+						messageIds: sceneMessageIds,
+						knownCast,
+						sceneId: scene.id,
+						channel: scene.channel,
+						// What the transcript's preamble names (`render`'s
+						// `scene` port reads `request.scene`).
+						scene: await sceneHeaderOf(db, scene),
+						...(scene.openedAtMessageId != null
+							? {
+									openedAt: scene.openedAtMessageId,
+									closedAt:
+										scene.closedAtMessageId ??
+										sceneMessageIds[sceneMessageIds.length - 1]
+								}
+							: {})
 					}
 				},
 				signal: abortController.signal,
@@ -1407,8 +1553,13 @@ export const sceneProcessHandler: Handler<
 			// binding-creation/DB-write work below runs against a cancelled
 			// generation's partial result.
 			if (abortController.signal.aborted) {
+				await setSummaryStatus(statusBefore)
 				return null as any
 			}
+			// The run's receipt is the spec that processed it, applied or not.
+			await setSummaryStatus("review", {
+				processedBySpecId: resolvedSpec.specId
+			})
 
 			// Resolve the LLM's raw name output against the same knownCast built
 			// above — a name that matches nothing becomes a suggested name
@@ -1487,7 +1638,9 @@ export const sceneProcessHandler: Handler<
 			const response: Sockets.Scenes.Process.Response = {
 				sceneId: params.sceneId,
 				activityId,
-				...pendingResult
+				...pendingResult,
+				specId: resolvedSpec.specId,
+				...(resolvedSpec.note ? { note: resolvedSpec.note } : {})
 			}
 			emitToUser("scenes:process:complete", response)
 			return response
@@ -1500,9 +1653,11 @@ export const sceneProcessHandler: Handler<
 			// only add a way to misfire on a cancellation from somewhere else
 			// and strand this activity at "running" forever.
 			if (abortController.signal.aborted) {
+				await setSummaryStatus(statusBefore)
 				return null as any // already removed by activityStore.cancel() — nothing to update
 			}
 			if (ended) throw err
+			await setSummaryStatus("failed")
 			// The card's sentence, never `err.message`: this record is served
 			// back to a non-admin by `activityStore.getFor`, and an adapter
 			// failure's words are the base URL and the model file; a failed
@@ -1553,6 +1708,557 @@ activityStore.setEphemeralSceneCleanup(async (sceneId, userId) => {
 	await db.delete(schema.scenes).where(eq(schema.scenes.id, sceneId))
 })
 
+/**
+ * 🚧 A scene review that went away unapplied (§15 G8) — discarded in the
+ * Scene summary window, dismissed from the Activity panel — puts back the
+ * status from before its run, while the scene still reads `review`. The page
+ * reads its scene list again when it sees the review go (`scenesFlow`).
+ */
+activityStore.setSceneReviewDiscarded(async (sceneId, statusBefore) => {
+	const { restoreDiscardedReview } = await import("$lib/server/scenes/summaryStatus")
+	await restoreDiscardedReview(db, sceneId, statusBefore)
+})
+
+// ── 🚧 Live scenes: boundaries (PROPOSAL-live-scenes §3, §14 B) ────────────
+
+/**
+ * The reply of a boundary write, then the two cascades every scene write
+ * sends (lazy, as `scenes:create`'s are).
+ */
+async function replyLiveScene(
+	event: string,
+	result: import("$lib/server/scenes/liveScenes").LiveSceneResult,
+	params: unknown,
+	userId: number,
+	emitToUser: (event: string, data: any) => void | Promise<void>,
+	extra: {
+		/** 🚧 The scene *End scene here* opened after it (Automatic, lane E). */
+		openedScene?: import("$lib/server/scenes/liveScenes").LiveSceneResult
+		/** 🚧 The scene that went in a merge. */
+		removedSceneId?: number
+		/** 🚧 The reply's own scene was closed by this write (an atomic closed scene). */
+		closesScene?: boolean
+	} = {}
+): Promise<Sockets.Scenes.LiveSceneReply & {
+	castProposal?: import("$lib/server/scenes/liveScenes").ProposedSceneCastMember[]
+	removedSceneId?: number
+}> {
+	const { sceneReplyRow } = await import("$lib/server/scenes/liveScenes")
+	const res = {
+		...askerOf(params),
+		sessionId: result.sessionId,
+		scene: (await sceneReplyRow(db, result.scene)) as any,
+		...(result.closedScene
+			? { closedScene: (await sceneReplyRow(db, result.closedScene)) as any }
+			: {}),
+		...(result.createdHistoryEntry !== undefined
+			? { createdHistoryEntry: result.createdHistoryEntry }
+			: {}),
+		...(result.castProposal ? { castProposal: result.castProposal } : {}),
+		...(extra.openedScene
+			? { openedScene: (await sceneReplyRow(db, extra.openedScene.scene)) as any }
+			: {}),
+		...(extra.removedSceneId !== undefined
+			? { removedSceneId: extra.removedSceneId }
+			: {})
+	}
+	emitToUser(event, res)
+	const sessionId = result.sessionId
+	await emitToUser("scenes:list", () => buildSceneList(sessionId, userId))
+	await emitToUser("scenes:scenedMessageIds", () =>
+		buildScenedMessageIds(sessionId, userId)
+	)
+	// 🚧 A boundary moved, so which cues are offered may have (a scene
+	// opened at or past a cue makes it moot) — and a scene that closed here
+	// is summarized now when the session's summaries run on close (§5).
+	await emitToUser("scenes:cues", () => buildSceneCuesReply(sessionId))
+	const closed = [
+		...(result.closedScene ? [result.closedScene.id] : []),
+		...(event === "scenes:close" || extra.closesScene ? [result.scene.id] : [])
+	]
+	if (closed.length) await summarizeOnClose(sessionId, closed, userId, emitToUser)
+	return res
+}
+
+export const sceneOpenHandler: Handler<
+	Sockets.Scenes.Open.Params,
+	Sockets.Scenes.Open.Response
+> = refusable(
+	"scenes:open",
+	async (socket, params: Sockets.Scenes.Open.Params, emitToUser) => {
+		const { openScene } = await import("$lib/server/scenes/liveScenes")
+		const userId = socket.user!.id
+		const closeAt = params?.closeAt != null ? Number(params.closeAt) : null
+		const result = await openScene(db, {
+			sessionId: Number(params?.sessionId),
+			userId,
+			channel: params?.channel ?? null,
+			atMessageId: Number(params?.atMessageId),
+			closeAt
+		})
+		// 🚧 Opened closed (*Mark as scene*, lane E): a close, so the moment
+		// a session's numbers are written onto the world's timeline, as
+		// `scenes:close` writes them — best-effort, the scene stands.
+		if (closeAt != null) await recordClose(result)
+		return replyLiveScene("scenes:open", result, params, userId, emitToUser, {
+			closesScene: closeAt != null
+		})
+	},
+	"The scene could not be opened.",
+	undefined,
+	askerOf
+)
+
+export const sceneCloseHandler: Handler<
+	Sockets.Scenes.Close.Params,
+	Sockets.Scenes.Close.Response
+> = refusable(
+	"scenes:close",
+	async (socket, params: Sockets.Scenes.Close.Params, emitToUser) => {
+		const { closeScene } = await import("$lib/server/scenes/liveScenes")
+		const userId = socket.user!.id
+		const result = await closeScene(db, {
+			sceneId: Number(params?.sceneId),
+			userId,
+			atMessageId: params?.atMessageId ?? null
+		})
+		await recordClose(result)
+		// 🚧 *End scene here* (a line named, §7, lane E): the scene mode says
+		// what follows — Automatic opens the next scene at the lane's
+		// following line, Suggested leaves a cue there, Manual nothing. A
+		// close with no line named (a divider's *End scene*, Chronicle's
+		// *Close scene*) is the close alone.
+		let openedScene:
+			| import("$lib/server/scenes/liveScenes").LiveSceneResult
+			| undefined
+		if (params?.atMessageId != null && result.scene.closedAtMessageId != null) {
+			const { followEndedScene } = await import("$lib/server/scenes/boundaryWatcher")
+			openedScene = (
+				await followEndedScene(db, {
+					sessionId: result.sessionId,
+					channel: result.scene.channel,
+					endedAt: result.scene.closedAtMessageId,
+					userId
+				})
+			).opened
+		}
+		return replyLiveScene("scenes:close", result, params, userId, emitToUser, {
+			openedScene
+		})
+	},
+	"The scene could not be closed.",
+	undefined,
+	askerOf
+)
+
+export const sceneMoveBoundaryHandler: Handler<
+	Sockets.Scenes.MoveBoundary.Params,
+	Sockets.Scenes.MoveBoundary.Response
+> = refusable(
+	"scenes:moveBoundary",
+	async (socket, params: Sockets.Scenes.MoveBoundary.Params, emitToUser) => {
+		const { moveSceneBoundary } = await import("$lib/server/scenes/liveScenes")
+		const userId = socket.user!.id
+		const result = await moveSceneBoundary(db, {
+			sceneId: Number(params?.sceneId),
+			userId,
+			openedAt: params?.openedAt ?? null,
+			// 🚧 `null` said is a reopen (lane E); absent is no move.
+			closedAt: params && "closedAt" in params ? params.closedAt : undefined
+		})
+		return replyLiveScene(
+			"scenes:moveBoundary",
+			result,
+			params,
+			userId,
+			emitToUser
+		)
+	},
+	"The scene's boundary could not be moved.",
+	undefined,
+	askerOf
+)
+
+/**
+ * 🚧 `scenes:merge` (lane E): a live scene joins the one before it on its
+ * lane — a scene divider's *Remove boundary* where a scene precedes it.
+ */
+export const sceneMergeHandler: Handler<
+	Sockets.Scenes.Merge.Params,
+	Sockets.Scenes.Merge.Response
+> = refusable(
+	"scenes:merge",
+	async (socket, params: Sockets.Scenes.Merge.Params, emitToUser) => {
+		const { mergeScene } = await import("$lib/server/scenes/liveScenes")
+		const userId = socket.user!.id
+		const result = await mergeScene(db, {
+			sceneId: Number(params?.sceneId),
+			userId
+		})
+		return (await replyLiveScene(
+			"scenes:merge",
+			result,
+			params,
+			userId,
+			emitToUser,
+			{ removedSceneId: result.removedSceneId }
+		)) as Sockets.Scenes.Merge.Response
+	},
+	"The scenes could not be joined.",
+	undefined,
+	askerOf
+)
+
+/**
+ * A close is one of the moments a session's numbers are written onto the
+ * world's timeline, as a capture is (`scenes:create`, R8). Best-effort and
+ * silent: the scene stands either way.
+ */
+async function recordClose(
+	result: import("$lib/server/scenes/liveScenes").LiveSceneResult
+): Promise<void> {
+	try {
+		const { recordToTimeline } = await import("$lib/server/state/durable")
+		await recordToTimeline(db, result.sessionId, {
+			reason: "scene",
+			sceneId: result.scene.id,
+			historyEntryId: result.scene.historyEntryId
+		})
+	} catch (e) {
+		console.warn("[scenes] state was not recorded to the timeline:", e)
+	}
+}
+
+// ── 🚧 Scene cues, summary modes and the open scene (live scenes §4–§7, lane D) ──
+
+/**
+ * `scenes:cues`' payload — the cues a session offers now and its scene
+ * settings, resolved. One builder, so the reply and every push agree.
+ */
+export async function buildSceneCuesReply(
+	sessionId: number
+): Promise<Sockets.Scenes.Cues.Response> {
+	const [{ offeredSceneCues }, { sessionSceneContext }] = await Promise.all([
+		import("$lib/server/scenes/boundaryWatcher"),
+		import("$lib/server/sessions/sceneSettings")
+	])
+	const ctx = await sessionSceneContext(db, sessionId)
+	const { DEFAULT_SCENE_SETTINGS } = await import("@serene-pub/sdk")
+	return {
+		sessionId,
+		cues: ctx ? await offeredSceneCues(db, sessionId) : [],
+		settings: ctx?.settings ?? DEFAULT_SCENE_SETTINGS,
+		mayPlace: ctx?.mayPlace ?? false
+	}
+}
+
+/**
+ * Summarize scenes in the background, one after another, each through
+ * `scenes:process` as `userId` — its activity card, then its review. Never
+ * awaited by a reply and never throws: a scene that cannot be summarized
+ * says so on its own card (and `scenes:process:error`), and the next runs.
+ */
+export function runSceneSummaries(
+	sceneIds: readonly number[],
+	userId: number,
+	emitToUser: (event: string, data: any) => void | Promise<void>
+): Promise<void> {
+	return (async () => {
+		for (const sceneId of sceneIds) {
+			try {
+				await sceneProcessHandler.handler(
+					{ user: { id: userId } },
+					{ sceneId },
+					emitToUser as (event: string, data: any) => void
+				)
+			} catch (err) {
+				console.warn(`[scenes] scene ${sceneId} was not summarized:`, err)
+			}
+		}
+	})()
+}
+
+/**
+ * 🚧 Summary mode *On close* (§5): the scenes just closed — by a person's
+ * close, an accepted cue or Automatic mode — summarized in the background.
+ * Any other mode does nothing here.
+ */
+async function summarizeOnClose(
+	sessionId: number,
+	sceneIds: number[],
+	userId: number,
+	emitToUser: (event: string, data: any) => void | Promise<void>
+): Promise<void> {
+	try {
+		const { sessionSceneContext } = await import("$lib/server/sessions/sceneSettings")
+		const ctx = await sessionSceneContext(db, sessionId)
+		if (ctx?.settings.summary !== "onClose") return
+		void runSceneSummaries(sceneIds, userId, emitToUser)
+	} catch (err) {
+		console.warn("[scenes] the summaries on close did not start:", err)
+	}
+}
+
+/**
+ * 🚧 The scene list to every page of the session (live scenes §15 G3): the
+ * boundary watcher's call when an open scene's stored cast moved, so the
+ * divider's faces follow — no socket of its own, a no-op without one.
+ */
+export async function pushSceneList(
+	io: unknown,
+	params: { sessionId: number; userId: number }
+): Promise<void> {
+	if (!io) return
+	const { broadcastToSessionUsers } = await import(
+		"$lib/server/sockets/utils/broadcastHelpers"
+	)
+	await broadcastToSessionUsers(io as any, params.sessionId, "scenes:list", () =>
+		buildSceneList(params.sessionId, params.userId)
+	)
+}
+
+/**
+ * 🚧 What follows a boundary Automatic mode placed (the boundary watcher's
+ * call, with no socket of its own): the scene list, the scened lines and
+ * the cues to every page of the session, then *On close* summaries for the
+ * scene it closed, as the session's owner.
+ */
+export async function afterBoundaryPlaced(
+	io: unknown,
+	params: { sessionId: number; userId: number; closedSceneIds: number[] }
+): Promise<void> {
+	const { sessionId, userId } = params
+	const emitToOwner = async (event: string, data: any) => {
+		if (!io) return
+		const { emitToUserRedacted } = await import(
+			"$lib/server/sockets/utils/broadcastHelpers"
+		)
+		await emitToUserRedacted(io as any, userId, event, data)
+	}
+	if (io) {
+		const { broadcastToSessionUsers } = await import(
+			"$lib/server/sockets/utils/broadcastHelpers"
+		)
+		await broadcastToSessionUsers(io as any, sessionId, "scenes:list", () =>
+			buildSceneList(sessionId, userId)
+		)
+		await broadcastToSessionUsers(
+			io as any,
+			sessionId,
+			"scenes:scenedMessageIds",
+			() => buildScenedMessageIds(sessionId, userId)
+		)
+		await emitToOwner("scenes:cues", () => buildSceneCuesReply(sessionId))
+	}
+	if (params.closedSceneIds.length)
+		await summarizeOnClose(sessionId, params.closedSceneIds, userId, emitToOwner)
+}
+
+export const sceneCuesHandler: Handler<
+	Sockets.Scenes.Cues.Params,
+	Sockets.Scenes.Cues.Response
+> = refusable(
+	"scenes:cues",
+	async (socket, params: Sockets.Scenes.Cues.Params, emitToUser) => {
+		const sessionId = Number(params?.sessionId)
+		const access = await checkSessionAccess(sessionId, socket.user!.id)
+		if (!access.hasAccess) throw new Error("Session not found or access denied.")
+		const res = await buildSceneCuesReply(sessionId)
+		emitToUser("scenes:cues", res)
+		return res
+	},
+	"The session's scene suggestions could not be read."
+)
+
+export const sceneDecideCueHandler: Handler<
+	Sockets.Scenes.DecideCue.Params,
+	Sockets.Scenes.DecideCue.Response
+> = refusable(
+	"scenes:decideCue",
+	async (socket, params: Sockets.Scenes.DecideCue.Params, emitToUser) => {
+		const { decideSceneCue } = await import("$lib/server/scenes/boundaryWatcher")
+		const userId = socket.user!.id
+		const decided = await decideSceneCue(db, {
+			cueId: Number(params?.cueId),
+			userId,
+			accept: params?.accept === true
+		})
+		const res: Sockets.Scenes.DecideCue.Response = {
+			...askerOf(params),
+			sessionId: decided.sessionId,
+			sceneId: decided.sceneId
+		}
+		emitToUser("scenes:decideCue", res)
+		if (decided.opened) {
+			// The scene opened as *Start scene here* opens one: its reply's
+			// cascades, and *On close* for the scene it closed.
+			await replyLiveScene("scenes:open", decided.opened, params, userId, emitToUser)
+		} else {
+			await emitToUser("scenes:cues", () => buildSceneCuesReply(decided.sessionId))
+		}
+		return res
+	},
+	"The suggestion could not be decided.",
+	undefined,
+	askerOf
+)
+
+/**
+ * A scene's summary has not run, or failed. A live scene's status is the
+ * whole answer — its text after a moved boundary is out of date, and the
+ * move set `none`; a scene captured by selection with text and no status
+ * predates the status and counts as written (the client's `summaryStatusOf`).
+ */
+const unsummarized = (s: {
+	summaryStatus: string | null
+	summary: string | null
+	opened: number | null
+}) =>
+	(s.summaryStatus === "none" || s.summaryStatus === "failed" || s.summaryStatus == null) &&
+	(!s.summary?.trim() ||
+		(s.opened != null && (s.summaryStatus === "none" || s.summaryStatus === "failed")))
+
+/**
+ * 🚧 Which of a session's scenes `scenes:processAll` queues, in id order:
+ * never the open scene (it is still being played), never one already
+ * summarizing, and never one whose finished run waits in `review` (§15 G8 —
+ * a re-run would supersede the person's pending review); the ones `asked`
+ * names, or — none named — every scene whose summary has not run or failed
+ * (*Summarize all (N)*).
+ */
+export function scenesToSummarize(
+	rows: ReadonlyArray<{
+		id: number
+		summary: string | null
+		summaryStatus: string | null
+		opened: number | null
+		closed: number | null
+	}>,
+	asked: ReadonlySet<number> | null
+): number[] {
+	return [...rows]
+		.sort((a, b) => a.id - b.id)
+		.filter((r) => !(r.opened != null && r.closed == null))
+		.filter((r) => r.summaryStatus !== "running" && r.summaryStatus !== "review")
+		.filter((r) => (asked ? asked.has(r.id) : unsummarized(r)))
+		.map((r) => r.id)
+}
+
+export const sceneProcessAllHandler: Handler<
+	Sockets.Scenes.ProcessAll.Params,
+	Sockets.Scenes.ProcessAll.Response
+> = refusable(
+	"scenes:processAll",
+	async (socket, params: Sockets.Scenes.ProcessAll.Params, emitToUser) => {
+		const userId = socket.user!.id
+		const sessionId = Number(params?.sessionId)
+		const access = await checkSessionAccess(sessionId, userId)
+		if (!access.hasAccess || !access.isOwner)
+			throw new Error("Only the session's owner summarizes its scenes.")
+		const { sessionSceneContext } = await import("$lib/server/sessions/sceneSettings")
+		const ctx = await sessionSceneContext(db, sessionId)
+		if (ctx?.settings.summary === "never")
+			throw new Error("This session's scene summaries are off (Summaries: Never).")
+		const asked = Array.isArray(params?.sceneIds)
+			? new Set(params.sceneIds.map(Number).filter(Number.isInteger))
+			: null
+		const rows = await db
+			.select({
+				id: schema.scenes.id,
+				summary: schema.scenes.summary,
+				summaryStatus: schema.scenes.summaryStatus,
+				opened: schema.scenes.openedAtMessageId,
+				closed: schema.scenes.closedAtMessageId
+			})
+			.from(schema.scenes)
+			.where(eq(schema.scenes.sessionId, sessionId))
+			.orderBy(asc(schema.scenes.id))
+		const queued = scenesToSummarize(rows, asked)
+		const res: Sockets.Scenes.ProcessAll.Response = {
+			...askerOf(params),
+			sessionId,
+			sceneIds: queued
+		}
+		emitToUser("scenes:processAll", res)
+		void runSceneSummaries(queued, userId, emitToUser)
+		return res
+	},
+	"The scenes could not be summarized.",
+	undefined,
+	askerOf
+)
+
+export const sceneOpenScenesHandler: Handler<
+	Sockets.Scenes.OpenScenes.Params,
+	Sockets.Scenes.OpenScenes.Response
+> = refusable(
+	"scenes:openScenes",
+	async (socket, params: Sockets.Scenes.OpenScenes.Params, emitToUser) => {
+		const sessionId = Number(params?.sessionId)
+		const access = await checkSessionAccess(sessionId, socket.user!.id)
+		if (!access.hasAccess) throw new Error("Session not found or access denied.")
+		const [{ readCastProposal, sceneClockOf }, { sessionSceneContext }] =
+			await Promise.all([
+				import("$lib/server/scenes/liveScenes"),
+				import("$lib/server/sessions/sceneSettings")
+			])
+		const { bookCalendarOf } = await import("$lib/server/state/storyTime")
+		const open = await db
+			.select()
+			.from(schema.scenes)
+			.where(
+				and(
+					eq(schema.scenes.sessionId, sessionId),
+					sql`${schema.scenes.openedAtMessageId} IS NOT NULL`,
+					sql`${schema.scenes.closedAtMessageId} IS NULL`
+				)
+			)
+			.orderBy(asc(schema.scenes.id))
+		const scenes: Sockets.Scenes.OpenScenes.Response["scenes"] = []
+		for (const scene of open) {
+			const proposal = await readCastProposal(db, scene)
+			const clock = sceneClockOf(scene, "opened")
+			scenes.push({
+				id: scene.id,
+				name: scene.name ?? null,
+				channel: scene.channel,
+				openedAtMessageId: scene.openedAtMessageId!,
+				since: clock
+					? formatDate(
+							{
+								year: clock.year,
+								month: clock.month ?? null,
+								day: clock.month != null ? (clock.day ?? null) : null
+							},
+							await bookCalendarOf(db, scene.lorebookId)
+						)
+					: "",
+				lineCount: proposal?.lineCount ?? 0,
+				cast: (proposal?.participants ?? []).map((p) => ({
+					name: p.name,
+					evidence: p.evidenceLabel
+				}))
+			})
+		}
+		const ctx = await sessionSceneContext(db, sessionId)
+		const { DEFAULT_SCENE_SETTINGS } = await import("@serene-pub/sdk")
+		const res: Sockets.Scenes.OpenScenes.Response = {
+			...(typeof params?.request === "string" ? { request: params.request } : {}),
+			sessionId,
+			scenes,
+			settings: ctx?.settings ?? DEFAULT_SCENE_SETTINGS
+		}
+		emitToUser("scenes:openScenes", res)
+		return res
+	},
+	"The session's open scene could not be read.",
+	undefined,
+	(params) =>
+		typeof (params as { request?: unknown } | undefined)?.request === "string"
+			? { request: (params as { request: string }).request }
+			: {}
+)
+
 export function registerSceneHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -1570,4 +2276,12 @@ export function registerSceneHandlers(
 	register(socket, sceneListByLorebookHandler, emitToUser)
 	register(socket, sceneCompileHandler, emitToUser)
 	register(socket, sceneProcessHandler, emitToUser)
+	register(socket, sceneOpenHandler, emitToUser)
+	register(socket, sceneCloseHandler, emitToUser)
+	register(socket, sceneMoveBoundaryHandler, emitToUser)
+	register(socket, sceneMergeHandler, emitToUser)
+	register(socket, sceneCuesHandler, emitToUser)
+	register(socket, sceneDecideCueHandler, emitToUser)
+	register(socket, sceneProcessAllHandler, emitToUser)
+	register(socket, sceneOpenScenesHandler, emitToUser)
 }

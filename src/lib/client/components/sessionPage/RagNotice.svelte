@@ -8,11 +8,16 @@
 	 * `requestWithInterest` whose handler IS the reply.
 	 */
 	import * as Icons from "@lucide/svelte"
-	import { onDestroy } from "svelte"
+	import { getContext, onDestroy } from "svelte"
 	import {
 		requestWithInterest,
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
+	import {
+		ragNoticeActions,
+		ragNoticeSentence,
+		ragNoticeVariant
+	} from "./ragNotice"
 
 	interface Props {
 		sessionId: number
@@ -147,22 +152,12 @@
 	let totals = $derived.by(() => ragStatus?.lorebook ?? null)
 
 	/**
-	 * What the lorebook's indexing has to say, hidden or not:
-	 *   "none"       — nothing has been embedded
-	 *   "stale"      — all embedded content uses a stale model
-	 *   "processing" — partially indexed (mix of ready + pending)
-	 *   null         — every entry is ready; nothing to say
+	 * What the lorebook's indexing has to say, hidden or not (`ragNoticeVariant`):
+	 * not indexed yet, needs re-indexing, or part way there. Null once every
+	 * entry is indexed.
 	 */
-	let pendingVariant = $derived.by(
-		(): "none" | "stale" | "processing" | null => {
-			if (!ragStatus?.applicable || !totals) return null
-			const { total, nullCount, staleCount, readyCount } = totals
-			if (total === 0) return null
-			if (readyCount === total) return null // all good
-			if (staleCount > 0 && nullCount === 0) return "stale"
-			if (nullCount === total) return "none"
-			return "processing"
-		}
+	let pendingVariant = $derived.by(() =>
+		ragStatus?.applicable ? ragNoticeVariant(totals) : null
 	)
 
 	/** The notice as shown: nothing once its owner hid it for the session. */
@@ -175,6 +170,26 @@
 	 * sees the notice, and nothing once it is hidden.
 	 */
 	let canHide = $derived.by(() => ragStatus?.canHide === true)
+
+	/**
+	 * Re-index, prioritize and the setup link are an administrator's: the
+	 * server refuses `vectorization:addToQueue` to anyone else, and Admin is
+	 * theirs alone (`ragNoticeActions`).
+	 */
+	const userCtx = getContext<UserCtx | undefined>("userCtx")
+	const isAdmin = $derived(!!userCtx?.user?.isAdmin)
+
+	let sentence = $derived.by(() =>
+		variant && ragStatus
+			? ragNoticeSentence(variant, {
+					modelName: ragStatus.activeModelName,
+					readyCount: totals?.readyCount ?? 0,
+					total: totals?.total ?? 0,
+					queueRunning: ragStatus.queueRunning
+				})
+			: ""
+	)
+	let actions = $derived(variant ? ragNoticeActions(variant, isAdmin) : [])
 </script>
 
 <!-- One quiet line, sized and placed by whatever hosts it: the composer sets
@@ -200,31 +215,30 @@
 		{/if}
 
 		<span class="text-surface-600 dark:text-surface-400 min-w-0">
-			{#if variant === "none"}
-				Lorebook entries aren't indexed yet, so Search by meaning can't
-				find them.
-			{:else if variant === "stale"}
-				Lorebook entries were embedded with a different model and need
-				re-indexing with {ragStatus.activeModelName}.
-			{:else if variant === "processing"}
-				{#if ragStatus.queueRunning}
-					Indexing {totals?.readyCount} of {totals?.total} lorebook entries.
-				{:else}
-					{totals?.readyCount} of {totals?.total} lorebook entries are indexed.
-					The rest are waiting in the embedding queue.
-				{/if}
-			{/if}
+			{sentence}
 		</span>
 
-		<button
-			type="button"
-			class="rag-notice-link"
-			onclick={handleMoveToTop}
-			disabled={prioritizing}
-			title="Move this session and its linked content to the top of the embedding queue"
-		>
-			Prioritize in queue
-		</button>
+		{#each actions as action (action.label)}
+			{#if action.kind === "link"}
+				<a
+					class="rag-notice-link"
+					href={action.href}
+					title={action.title}
+				>
+					{action.label}
+				</a>
+			{:else}
+				<button
+					type="button"
+					class="rag-notice-link"
+					onclick={handleMoveToTop}
+					disabled={prioritizing}
+					title={action.title}
+				>
+					{action.label}
+				</button>
+			{/if}
+		{/each}
 
 		<!-- Hides this notice and nothing else: `ragIgnored` is read by the
 		     notice alone, so Search by meaning keeps searching the lorebook. -->

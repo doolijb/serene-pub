@@ -36,29 +36,6 @@ function item(over: Partial<PoolItem> & { id: number }): PoolItem {
 }
 
 describe("filterPool", () => {
-	it("narrows to the chosen kinds and leaves the rest of the pool alone", () => {
-		const pool = [
-			item({ id: 1, kind: WORLD }),
-			item({ id: 2, kind: HISTORY }),
-			item({ id: 3, kind: SCENE, key: "scene#3" })
-		]
-		expect(
-			filterPool(pool, { ...emptyFilters(), kinds: [HISTORY] }).map(
-				(i) => i.id
-			)
-		).toEqual([2])
-		expect(
-			filterPool(pool, {
-				...emptyFilters(),
-				kinds: [HISTORY, SCENE]
-			}).map((i) => i.id)
-		).toEqual([2, 3])
-		// No kinds chosen is the whole pool, never an empty one.
-		expect(filterPool(pool, emptyFilters()).map((i) => i.id)).toEqual([
-			1, 2, 3
-		])
-	})
-
 	it("hides archived entries until the filter asks for them", () => {
 		const pool = [
 			item({ id: 1 }),
@@ -129,11 +106,10 @@ describe("filterPool", () => {
 		expect(
 			activeFilterCount({
 				...emptyFilters(),
-				kinds: [WORLD],
 				pinned: true,
 				keywords: "has"
 			})
-		).toBe(3)
+		).toBe(2)
 		expect(
 			activeFilterCount({
 				...emptyFilters(),
@@ -325,7 +301,12 @@ describe("buildTree — history is top level", () => {
 	it("draws a history entry as a root whatever its anchor says", () => {
 		const pool = [
 			item({ id: 1, key: "entry#1" }),
-			item({ id: 2, key: "entry#2", kind: HISTORY, parentKey: "entry#1" }),
+			item({
+				id: 2,
+				key: "entry#2",
+				kind: HISTORY,
+				parentKey: "entry#1"
+			}),
 			item({
 				id: 3,
 				key: "scene#3",

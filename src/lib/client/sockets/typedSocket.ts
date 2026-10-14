@@ -35,6 +35,8 @@ import { getSocket } from "./socketInstance"
 import type {
 	ImageProfileSchemaParams,
 	ImageProfileSchemaResponse,
+	ImageDrawingSheetParams,
+	ImageDrawingSheetResponse,
 	ImagesCancelParams,
 	ImagesCancelResponse,
 	ImagesGenerateParams,
@@ -70,6 +72,40 @@ import type {
 	NotificationsListResponse,
 	NotificationsViewingParams
 } from "$lib/shared/sockets/notifications"
+import type {
+	ConversationsListParams,
+	ConversationsListResponse,
+	ConversationsOpenParams,
+	ConversationsOpenResponse,
+	ConversationsCreateParams,
+	ConversationsCreateResponse,
+	ConversationsSendParams,
+	ConversationsSendResponse,
+	ConversationsEditParams,
+	ConversationsRemoveParams,
+	ConversationsMessageResponse,
+	ConversationsReadParams,
+	ConversationsReadResponse,
+	ConversationsRenameParams,
+	ConversationsAddMembersParams,
+	ConversationsRemoveMemberParams,
+	ConversationsLeaveParams,
+	ConversationsLeaveResponse,
+	ConversationsMuteParams,
+	ConversationsSummaryResponse,
+	ConversationsPeopleParams,
+	ConversationsPeopleResponse,
+	ConversationsAttachableParams,
+	ConversationsAttachableResponse,
+	ConversationsPersonParams,
+	ConversationsPersonResponse,
+	ConversationsMessagePush,
+	ConversationsChangedPush,
+	CharactersShareParams,
+	CharactersShareResponse,
+	LorebooksShareParams,
+	LorebooksShareResponse
+} from "$lib/shared/sockets/conversations"
 
 // Type mapping for socket events - this maps event names to their param/response types
 export type SocketEventMap = {
@@ -354,6 +390,14 @@ export type SocketEventMap = {
 		params: Sockets.Characters.ReorderSprites.Params
 		response: Sockets.ErrorResponse & { characterId: number }
 	}
+	"characters:countStrokeTokens": {
+		params: Sockets.Characters.CountStrokeTokens.Params
+		response: Sockets.Characters.CountStrokeTokens.Response
+	}
+	"characters:countStrokeTokens:error": {
+		params: Sockets.Characters.CountStrokeTokens.Params
+		response: Sockets.ErrorResponse
+	}
 	"characters:reorderGallery": {
 		params: Sockets.Characters.ReorderGallery.Params
 		response: Sockets.Characters.ReorderGallery.Response
@@ -421,6 +465,22 @@ export type SocketEventMap = {
 	"plugins:installLocal": {
 		params: Sockets.Plugins.InstallLocal.Params
 		response: Sockets.Plugins.InstallLocal.Response
+	}
+	"plugins:exportPackage": {
+		params: Sockets.Plugins.ExportPackage.Params
+		response: Sockets.Plugins.ExportPackage.Response
+	}
+	"plugins:exportPackage:error": {
+		params: never
+		response: { error?: string }
+	}
+	"plugins:installPackage": {
+		params: Sockets.Plugins.InstallPackage.Params
+		response: Sockets.Plugins.InstallPackage.Response
+	}
+	"plugins:installPackage:error": {
+		params: never
+		response: { error?: string }
 	}
 	"plugins:setEnabled": {
 		params: Sockets.Plugins.SetEnabled.Params
@@ -707,6 +767,63 @@ export type SocketEventMap = {
 		params: Sockets.ConnectionDefaults.Set.Params
 		response: Sockets.ConnectionDefaults.Set.Response
 	}
+	"connectionDefaults:set:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	// Loadouts (I12) — the Loadouts view, the loadout sheet, the pickers.
+	// Admin-only, every one.
+	"loadouts:list": {
+		params: Sockets.Loadouts.List.Params
+		response: Sockets.Loadouts.List.Response
+	}
+	"loadouts:create": {
+		params: Sockets.Loadouts.Create.Params
+		response: Sockets.Loadouts.Create.Response
+	}
+	"loadouts:update": {
+		params: Sockets.Loadouts.Update.Params
+		response: Sockets.Loadouts.Update.Response
+	}
+	"loadouts:delete": {
+		params: Sockets.Loadouts.Delete.Params
+		response: Sockets.Loadouts.Delete.Response
+	}
+	"loadouts:setDefault": {
+		params: Sockets.Loadouts.SetDefault.Params
+		response: Sockets.Loadouts.SetDefault.Response
+	}
+	"loadouts:merge": {
+		params: Sockets.Loadouts.Merge.Params
+		response: Sockets.Loadouts.Merge.Response
+	}
+	"loadouts:makeIt": {
+		params: Sockets.Loadouts.MakeIt.Params
+		response: Sockets.Loadouts.MakeIt.Response
+	}
+	"loadouts:create:error": { params: Sockets.ErrorResponse; response: Sockets.ErrorResponse }
+	"loadouts:update:error": { params: Sockets.ErrorResponse; response: Sockets.ErrorResponse }
+	"loadouts:delete:error": { params: Sockets.ErrorResponse; response: Sockets.ErrorResponse }
+	"loadouts:setDefault:error": { params: Sockets.ErrorResponse; response: Sockets.ErrorResponse }
+	"loadouts:merge:error": { params: Sockets.ErrorResponse; response: Sockets.ErrorResponse }
+	"loadouts:makeIt:error": { params: Sockets.ErrorResponse; response: Sockets.ErrorResponse }
+	// The background remover's row in the Models view (local_models, modality matting).
+	"localModels:matting": {
+		params: Sockets.LocalModels.Matting.Params
+		response: Sockets.LocalModels.Matting.Response
+	}
+	"localModels:cancelMatting": {
+		params: Sockets.LocalModels.CancelMatting.Params
+		response: Sockets.LocalModels.CancelMatting.Response
+	}
+	"localModels:mattingRemove": {
+		params: Sockets.LocalModels.MattingRemove.Params
+		response: Sockets.LocalModels.MattingRemove.Response
+	}
+	"localModels:mattingRemove:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	// The admin Overview: every section's status plus the Needs you list.
 	"admin:overview": {
 		params: Sockets.Admin.Overview.Params
@@ -748,6 +865,15 @@ export type SocketEventMap = {
 	"images:profileSchema": {
 		params: ImageProfileSchemaParams
 		response: ImageProfileSchemaResponse
+	}
+	"images:drawingSheet": {
+		params: ImageDrawingSheetParams
+		response: ImageDrawingSheetResponse
+	}
+	/** Never emitted — `awaitReply` needs a sibling; silence times out. */
+	"images:drawingSheet:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	// A pipeline run a person can watch and stop. `runStarted` and `progress`
 	// are server-pushed only; `cancelRun` is the one a client emits.
@@ -992,6 +1118,11 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.RunStatus.Params
 		response: Sockets.Sessions.RunStatus.Response
 	}
+	// Server-pushed only: who of a session's people has it open now (W10).
+	"sessions:attendance": {
+		params: Sockets.Sessions.Attendance.Params
+		response: Sockets.Sessions.Attendance.Response
+	}
 	// Server-pushed only: a session's list row moved (a message landed, was
 	// edited, hidden, deleted, swiped, regenerated or streamed).
 	"sessions:rowChanged": {
@@ -1053,6 +1184,14 @@ export type SocketEventMap = {
 	"sessionGenres:list": {
 		params: Sockets.SessionAdmin.Genres.Params
 		response: Sockets.SessionAdmin.Genres.Response
+	}
+	"sessionGenres:create": {
+		params: Sockets.SessionAdmin.CreateGenre.Params
+		response: Sockets.SessionAdmin.CreateGenre.Response
+	}
+	"sessionGenres:create:error": {
+		params: never
+		response: Sockets.SessionAdmin.CreateGenre.Response
 	}
 	"sessionGenres:update": {
 		params: Sockets.SessionAdmin.UpdateGenre.Params
@@ -1121,6 +1260,14 @@ export type SocketEventMap = {
 	"sessions:panelLayout:get": {
 		params: Sockets.Sessions.PanelLayout.Get.Params
 		response: Sockets.Sessions.PanelLayout.Get.Response
+	}
+	"sessions:messagesPage": {
+		params: Sockets.Sessions.MessagesPage.Params
+		response: Sockets.Sessions.MessagesPage.Response
+	}
+	"sessions:channelLanes": {
+		params: Sockets.Sessions.ChannelLanes.Params
+		response: Sockets.Sessions.ChannelLanes.Response
 	}
 	"sessions:surfaceIntent": {
 		params: Sockets.Sessions.SurfaceIntent.Push
@@ -1275,6 +1422,16 @@ export type SocketEventMap = {
 	"sessions:setNodeRebind": {
 		params: Sockets.Sessions.Bindings.SetNodeRebind.Params
 		response: Sockets.Sessions.Bindings.SetNodeRebind.Response
+	}
+	// 🚧 Step settings (PROPOSAL-live-scenes §15 G11): an exposed step's
+	// story settings, read and set at session scope by its owner.
+	"sessions:stepSettings": {
+		params: Sockets.Sessions.Bindings.StepSettings.Params
+		response: Sockets.Sessions.Bindings.StepSettings.Response
+	}
+	"sessions:setStepSetting": {
+		params: Sockets.Sessions.Bindings.SetStepSetting.Params
+		response: Sockets.Sessions.Bindings.SetStepSetting.Response
 	}
 	"sessions:accountVisibility": {
 		params: Sockets.Sessions.AccountVisibility.Params
@@ -1482,6 +1639,54 @@ export type SocketEventMap = {
 		params: never
 		response: Sockets.Sessions.SetAuthorsNote.Response
 	}
+	// 🚧 Backdrop (DESIGN-image-generation §6.4): set or clear, and the push.
+	"sessions:setBackdrop": {
+		params: Sockets.Sessions.SetBackdrop.Params
+		response: Sockets.Sessions.SetBackdrop.Response
+	}
+	"sessions:setBackdrop:error": {
+		params: never
+		response: Sockets.Sessions.SetBackdrop.Response
+	}
+	"sessions:backdropChanged": {
+		params: never
+		response: Sockets.Sessions.BackdropChanged.Response
+	}
+	// 🚧 Chronicle (W3): the session's story clock, read and moved.
+	"sessions:storyClock": {
+		params: Sockets.Sessions.StoryClock.Params
+		response: Sockets.Sessions.StoryClock.Response
+	}
+	"sessions:storyClock:error": {
+		params: never
+		response: Sockets.Sessions.StoryClock.Response
+	}
+	"sessions:setStoryClock": {
+		params: Sockets.Sessions.SetStoryClock.Params
+		response: Sockets.Sessions.SetStoryClock.Response
+	}
+	"sessions:setStoryClock:error": {
+		params: never
+		response: Sockets.Sessions.SetStoryClock.Response
+	}
+	// 🚧 Places (W4): the session's places and the ways between them.
+	"sessions:places": {
+		params: Sockets.Sessions.Places.Params
+		response: Sockets.Sessions.Places.Response
+	}
+	"sessions:places:error": {
+		params: never
+		response: Sockets.Sessions.Places.Response
+	}
+	// 🚧 Stats (F2): one stat's trail in the session.
+	"sessions:statTrail": {
+		params: Sockets.Sessions.StatTrail.Params
+		response: Sockets.Sessions.StatTrail.Response
+	}
+	"sessions:statTrail:error": {
+		params: never
+		response: Sockets.Sessions.StatTrail.Response
+	}
 	// Server-pushed only: a session's stored genre fields moved.
 	"sessions:genreFieldsChanged": {
 		params: never
@@ -1498,6 +1703,74 @@ export type SocketEventMap = {
 	"characters:testSprite": {
 		params: Sockets.Characters.TestSprite.Params
 		response: Sockets.Characters.TestSprite.Response
+	}
+	"characters:previewSpriteFill": {
+		params: Sockets.Characters.PreviewSpriteFill.Params
+		response: Sockets.Characters.PreviewSpriteFill.Response
+	}
+	"characters:fillSprites": {
+		params: Sockets.Characters.FillSprites.Params
+		response: Sockets.Characters.FillSprites.Response
+	}
+	"characters:previewSpriteFill:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"characters:fillSprites:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"characters:expressSprite": {
+		params: Sockets.Characters.ExpressSprite.Params
+		response: Sockets.Characters.ExpressSprite.Response
+	}
+	"characters:expressSprite:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	// Server-pushed only: a fill's progress, until `done` or `failed`.
+	"characters:spriteFill": {
+		params: Sockets.Characters.SpriteFill.Progress
+		response: Sockets.Characters.SpriteFill.Progress
+	}
+	// 🚧 Generate portrait (I8).
+	"characters:previewPortrait": {
+		params: Sockets.Characters.PreviewPortrait.Params
+		response: Sockets.Characters.PreviewPortrait.Response
+	}
+	"characters:generatePortrait": {
+		params: Sockets.Characters.GeneratePortrait.Params
+		response: Sockets.Characters.GeneratePortrait.Response
+	}
+	"characters:setLikenessImage": {
+		params: Sockets.Characters.SetLikenessImage.Params
+		response: Sockets.Characters.SetLikenessImage.Response
+	}
+	"characters:previewPortrait:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"characters:generatePortrait:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"characters:setLikenessImage:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	// 🚧 Describe from image (D1).
+	"characters:describeLikeness": {
+		params: Sockets.Characters.DescribeLikeness.Params
+		response: Sockets.Characters.DescribeLikeness.Response
+	}
+	"characters:describeLikeness:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	// Server-pushed only: a portrait's progress, until `done` or `failed`.
+	"characters:portrait": {
+		params: Sockets.Characters.Portrait.Progress
+		response: Sockets.Characters.Portrait.Progress
 	}
 	"sessionMessages:setSprite": {
 		params: Sockets.SessionMessages.SetSprite.Params
@@ -1767,6 +2040,87 @@ export type SocketEventMap = {
 		response: Sockets.ErrorResponse
 	}
 
+	// 🚧 Workflows (DESIGN-image-generation §4.12) — admin-only.
+	"workflows:list": {
+		params: Sockets.Workflows.List.Params
+		response: Sockets.Workflows.List.Response
+	}
+	"workflows:get": {
+		params: Sockets.Workflows.Get.Params
+		response: Sockets.Workflows.Get.Response
+	}
+	"workflows:create": {
+		params: Sockets.Workflows.Create.Params
+		response: Sockets.Workflows.Create.Response
+	}
+	"workflows:update": {
+		params: Sockets.Workflows.Update.Params
+		response: Sockets.Workflows.Update.Response
+	}
+	"workflows:delete": {
+		params: Sockets.Workflows.Delete.Params
+		response: Sockets.Workflows.Delete.Response
+	}
+	"workflows:duplicate": {
+		params: Sockets.Workflows.Duplicate.Params
+		response: Sockets.Workflows.Duplicate.Response
+	}
+	"workflows:export": {
+		params: Sockets.Workflows.Export.Params
+		response: Sockets.Workflows.Export.Response
+	}
+	"workflows:import": {
+		params: Sockets.Workflows.Import.Params
+		response: Sockets.Workflows.Import.Response
+	}
+	"workflows:fit": {
+		params: Sockets.Workflows.Fit.Params
+		response: Sockets.Workflows.Fit.Response
+	}
+	"workflows:validate": {
+		params: Sockets.Workflows.Validate.Params
+		response: Sockets.Workflows.Validate.Response
+	}
+	"workflows:onServer": {
+		params: Sockets.Workflows.OnServer.Params
+		response: Sockets.Workflows.OnServer.Response
+	}
+	"workflows:create:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"workflows:update:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"workflows:delete:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"workflows:duplicate:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"workflows:export:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"workflows:import:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"workflows:fit:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"workflows:validate:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"workflows:onServer:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"samplingConfigs:list": {
 		params: Sockets.SamplingConfigs.List.Params
 		response: Sockets.SamplingConfigs.List.Response
@@ -1803,9 +2157,20 @@ export type SocketEventMap = {
 		params: Sockets.SamplingConfigs.Delete.Params
 		response: Sockets.SamplingConfigs.Delete.Response
 	}
-	"samplingConfigs:setUserActive": {
-		params: Sockets.SamplingConfigs.SetUserActive.Params
-		response: Sockets.SamplingConfigs.SetUserActive.Response
+	"samplingConfigs:setDefaultFor": {
+		params: Sockets.SamplingConfigs.SetDefaultFor.Params
+		response: Sockets.SamplingConfigs.SetDefaultFor.Response
+	}
+	// Emitted by the server since `setDefaultFor` was built; registered so a
+	// job's sheet can put its radio back when a pick is refused. The toast
+	// stays Layout's catch-all's (not in HANDLED_ERROR_EVENTS).
+	"samplingConfigs:setDefaultFor:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"samplingConfigs:usedBy": {
+		params: Sockets.SamplingConfigs.UsedBy.Params
+		response: Sockets.SamplingConfigs.UsedBy.Response
 	}
 
 	// Pipeline events — the pipeline view (05 §0a) and the management page.
@@ -1988,6 +2353,14 @@ export type SocketEventMap = {
 	"pipelines:acknowledgeConfigNotices:error": {
 		params: never
 		response: { error?: string }
+	}
+	"pipelines:promptWording": {
+		params: Sockets.Pipelines.PromptWording.Params
+		response: Sockets.Pipelines.PromptWording.Response
+	}
+	"pipelines:promptWording:error": {
+		params: never
+		response: Sockets.Pipelines.PromptWording.Response
 	}
 	"pipelines:createPrompt": {
 		params: Sockets.Pipelines.CreatePrompt.Params
@@ -2258,6 +2631,86 @@ export type SocketEventMap = {
 		response: Sockets.Pipelines.Detail.Response
 	}
 	"pipelines:detail:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:document": {
+		params: Sockets.Pipelines.Document.Params
+		response: Sockets.Pipelines.Document.Response
+	}
+	"pipelines:document:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:draft:get": {
+		params: Sockets.Pipelines.DraftGet.Params
+		response: Sockets.Pipelines.DraftGet.Response
+	}
+	"pipelines:draft:get:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:draft:put": {
+		params: Sockets.Pipelines.DraftPut.Params
+		response: Sockets.Pipelines.DraftPut.Response
+	}
+	"pipelines:draft:put:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:draft:discard": {
+		params: Sockets.Pipelines.DraftDiscard.Params
+		response: Sockets.Pipelines.DraftDiscard.Response
+	}
+	"pipelines:draft:discard:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:draft:preview": {
+		params: Sockets.Pipelines.DraftPreview.Params
+		response: Sockets.Pipelines.DraftPreview.Response
+	}
+	"pipelines:draft:preview:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:draft:publish": {
+		params: Sockets.Pipelines.DraftPublish.Params
+		response: Sockets.Pipelines.DraftPublish.Response
+	}
+	"pipelines:draft:publish:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:catalogue": {
+		params: Sockets.Pipelines.Catalogue.Params
+		response: Sockets.Pipelines.Catalogue.Response
+	}
+	"pipelines:catalogue:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:composite:save": {
+		params: Sockets.Pipelines.CompositeSave.Params
+		response: Sockets.Pipelines.CompositeSave.Response
+	}
+	"pipelines:composite:save:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:composite:delete": {
+		params: Sockets.Pipelines.CompositeDelete.Params
+		response: Sockets.Pipelines.CompositeDelete.Response
+	}
+	"pipelines:composite:delete:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:fork": {
+		params: Sockets.Pipelines.Fork.Params
+		response: Sockets.Pipelines.Fork.Response
+	}
+	"pipelines:fork:error": {
 		params: never
 		response: { error?: string }
 	}
@@ -2690,6 +3143,14 @@ export type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
+	"systemSettings:updateMessagingEnabled": {
+		params: Sockets.SystemSettings.UpdateMessagingEnabled.Params
+		response: Sockets.SystemSettings.UpdateMessagingEnabled.Response
+	}
+	"systemSettings:updateMessagingEnabled:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"systemSettings:updateAutoTranslate": {
 		params: Sockets.SystemSettings.UpdateAutoTranslate.Params
 		response: Sockets.SystemSettings.UpdateAutoTranslate.Response
@@ -2997,6 +3458,23 @@ export type SocketEventMap = {
 		params: never
 		response: { error?: string }
 	}
+	// A cast member's face, uploaded to the book (PLAN-cast-retold-fields).
+	"lorebooks:uploadMemberFace": {
+		params: Sockets.Lorebooks.UploadMemberFace.Params
+		response: Sockets.Lorebooks.UploadMemberFace.Response
+	}
+	"lorebooks:uploadMemberFace:error": {
+		params: never
+		response: { error?: string }
+	}
+	"lorebooks:listMemberFaces": {
+		params: Sockets.Lorebooks.ListMemberFaces.Params
+		response: Sockets.Lorebooks.ListMemberFaces.Response
+	}
+	"lorebooks:listMemberFaces:error": {
+		params: never
+		response: { error?: string }
+	}
 	"lorebooks:resolveOrCreateBindingByName": {
 		params: Sockets.Lorebooks.ResolveOrCreateBindingByName.Params
 		response: Sockets.Lorebooks.ResolveOrCreateBindingByName.Response
@@ -3131,6 +3609,11 @@ export type SocketEventMap = {
 		params: Sockets.Entries.List.Params
 		response: Sockets.Entries.List.Response
 	}
+	// Its refusal (`refusable`): Chronicle's history read waits on it (W3).
+	"entries:list:error": {
+		params: never
+		response: { error?: string }
+	}
 	"entries:create": {
 		params: Sockets.Entries.Create.Params
 		response: Sockets.Entries.Create.Response
@@ -3237,13 +3720,97 @@ export type SocketEventMap = {
 		response: Sockets.Scenes.Update.Response
 	}
 	// Synthesised by `register()` on a throw — see `entries:update:error`.
+	// 🚧 Echoes `requestId` when the update carried one (lane E): a scene
+	// divider's rename says its own refusal, and Layout's catch-all leaves a
+	// refusal that names an asker alone (`HANDLED_WHEN_ASKED_ERROR_EVENTS`).
 	"scenes:update:error": {
 		params: never
-		response: { error?: string }
+		response: { error?: string; requestId?: string }
 	}
 	"scenes:delete": {
 		params: Sockets.Scenes.Delete.Params
 		response: Sockets.Scenes.Delete.Response
+	}
+	// Synthesised by `register()` on a throw — see `entries:update:error`.
+	// Layout's catch-all says it — unless it echoes a `requestId` (lane E: a
+	// scene divider's *Remove boundary*, which says it in place).
+	"scenes:delete:error": {
+		params: never
+		response: { error?: string; requestId?: string }
+	}
+	// 🚧 Live scenes (PROPOSAL-live-scenes §14): the three boundary writes,
+	// each answered on its own name with the scene, then the `scenes:list`
+	// and `scenes:scenedMessageIds` cascades; a refusal echoes `requestId`
+	// and is said by the asking widget (Layout's HANDLED_ERROR_EVENTS).
+	"scenes:open": {
+		params: Sockets.Scenes.Open.Params
+		response: Sockets.Scenes.Open.Response
+	}
+	"scenes:open:error": {
+		params: never
+		response: { error?: string; requestId?: string }
+	}
+	"scenes:close": {
+		params: Sockets.Scenes.Close.Params
+		response: Sockets.Scenes.Close.Response
+	}
+	"scenes:close:error": {
+		params: never
+		response: { error?: string; requestId?: string }
+	}
+	"scenes:moveBoundary": {
+		params: Sockets.Scenes.MoveBoundary.Params
+		response: Sockets.Scenes.MoveBoundary.Response
+	}
+	"scenes:moveBoundary:error": {
+		params: never
+		response: { error?: string; requestId?: string }
+	}
+	// 🚧 Lane E: a live scene joins the one before it on its lane (a
+	// divider's *Remove boundary*); its refusal echoes `requestId` and is
+	// said by the divider (Layout's HANDLED_ERROR_EVENTS).
+	"scenes:merge": {
+		params: Sockets.Scenes.Merge.Params
+		response: Sockets.Scenes.Merge.Response
+	}
+	"scenes:merge:error": {
+		params: never
+		response: { error?: string; requestId?: string }
+	}
+	// 🚧 Live scenes, lane D (PROPOSAL-live-scenes §4–§7): the session's
+	// scene cues and settings, a cue decided, background summaries, and the
+	// Chronicle's open-scene read.
+	"scenes:cues": {
+		params: Sockets.Scenes.Cues.Params
+		response: Sockets.Scenes.Cues.Response
+	}
+	"scenes:cues:error": {
+		params: never
+		response: { error?: string }
+	}
+	"scenes:decideCue": {
+		params: Sockets.Scenes.DecideCue.Params
+		response: Sockets.Scenes.DecideCue.Response
+	}
+	"scenes:decideCue:error": {
+		params: never
+		response: { error?: string; requestId?: string }
+	}
+	"scenes:processAll": {
+		params: Sockets.Scenes.ProcessAll.Params
+		response: Sockets.Scenes.ProcessAll.Response
+	}
+	"scenes:processAll:error": {
+		params: never
+		response: { error?: string; requestId?: string }
+	}
+	"scenes:openScenes": {
+		params: Sockets.Scenes.OpenScenes.Params
+		response: Sockets.Scenes.OpenScenes.Response
+	}
+	"scenes:openScenes:error": {
+		params: never
+		response: { error?: string; request?: string }
 	}
 	"scenes:process": {
 		params: Sockets.Scenes.Process.Params
@@ -3695,6 +4262,69 @@ export type SocketEventMap = {
 		params: Sockets.LorebookState.Set.ErrorResponse
 		response: Sockets.LorebookState.Set.ErrorResponse
 	}
+	// 🚧 A card's own stats, with no session (card dowry §B.4): the character
+	// form's Stats tab. `get`/`set`/`setSheets` answer with the card's read;
+	// `changed` is the push after a write.
+	"cardState:get": {
+		params: Sockets.CardState.Get.Params
+		response: Sockets.CardState.Get.Response
+	}
+	"cardState:get:error": {
+		params: Sockets.CardState.Get.ErrorResponse
+		response: Sockets.CardState.Get.ErrorResponse
+	}
+	"cardState:set": {
+		params: Sockets.CardState.Set.Params
+		response: Sockets.CardState.Set.Response
+	}
+	"cardState:set:error": {
+		params: Sockets.CardState.Set.ErrorResponse
+		response: Sockets.CardState.Set.ErrorResponse
+	}
+	"cardState:setSheets": {
+		params: Sockets.CardState.SetSheets.Params
+		response: Sockets.CardState.SetSheets.Response
+	}
+	"cardState:setSheets:error": {
+		params: Sockets.CardState.SetSheets.ErrorResponse
+		response: Sockets.CardState.SetSheets.ErrorResponse
+	}
+	"cardState:changed": {
+		params: Sockets.CardState.Changed.Response
+		response: Sockets.CardState.Changed.Response
+	}
+	"cardState:declareSlot": {
+		params: Sockets.CardState.DeclareSlot.Params
+		response: Sockets.CardState.DeclareSlot.Response
+	}
+	"cardState:declareSlot:error": {
+		params: Sockets.CardState.DeclareSlot.ErrorResponse
+		response: Sockets.CardState.DeclareSlot.ErrorResponse
+	}
+	"cardState:updateSlot": {
+		params: Sockets.CardState.UpdateSlot.Params
+		response: Sockets.CardState.UpdateSlot.Response
+	}
+	"cardState:updateSlot:error": {
+		params: Sockets.CardState.UpdateSlot.ErrorResponse
+		response: Sockets.CardState.UpdateSlot.ErrorResponse
+	}
+	"cardState:declareSheet": {
+		params: Sockets.CardState.DeclareSheet.Params
+		response: Sockets.CardState.DeclareSheet.Response
+	}
+	"cardState:declareSheet:error": {
+		params: Sockets.CardState.DeclareSheet.ErrorResponse
+		response: Sockets.CardState.DeclareSheet.ErrorResponse
+	}
+	"cardState:updateSheet": {
+		params: Sockets.CardState.UpdateSheet.Params
+		response: Sockets.CardState.UpdateSheet.Response
+	}
+	"cardState:updateSheet:error": {
+		params: Sockets.CardState.UpdateSheet.ErrorResponse
+		response: Sockets.CardState.UpdateSheet.ErrorResponse
+	}
 	"state:configure": {
 		params: Sockets.State.Configure.Params
 		response: Sockets.State.Configure.Response
@@ -3848,6 +4478,167 @@ export type SocketEventMap = {
 	"notifications:viewing": {
 		params: NotificationsViewingParams
 		response: never
+	}
+
+	// Private conversations between people (PLAN-private-messages-2026-10-12).
+	// Every request replies on its own name to every tab of the asker and
+	// refuses on `:error` to the asking socket. Types in
+	// shared/sockets/conversations.
+	"conversations:list": {
+		params: ConversationsListParams
+		response: ConversationsListResponse
+	}
+	"conversations:list:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"conversations:open": {
+		params: ConversationsOpenParams
+		response: ConversationsOpenResponse
+	}
+	"conversations:open:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"conversations:create": {
+		params: ConversationsCreateParams
+		response: ConversationsCreateResponse
+	}
+	"conversations:create:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"conversations:send": {
+		params: ConversationsSendParams
+		response: ConversationsSendResponse
+	}
+	"conversations:send:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"conversations:edit": {
+		params: ConversationsEditParams
+		response: ConversationsMessageResponse
+	}
+	"conversations:edit:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"conversations:remove": {
+		params: ConversationsRemoveParams
+		response: ConversationsMessageResponse
+	}
+	"conversations:remove:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"conversations:read": {
+		params: ConversationsReadParams
+		response: ConversationsReadResponse
+	}
+	"conversations:read:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"conversations:rename": {
+		params: ConversationsRenameParams
+		response: ConversationsSummaryResponse
+	}
+	"conversations:rename:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"conversations:addMembers": {
+		params: ConversationsAddMembersParams
+		response: ConversationsSummaryResponse
+	}
+	"conversations:addMembers:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"conversations:removeMember": {
+		params: ConversationsRemoveMemberParams
+		response: ConversationsSummaryResponse
+	}
+	"conversations:removeMember:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"conversations:leave": {
+		params: ConversationsLeaveParams
+		response: ConversationsLeaveResponse
+	}
+	"conversations:leave:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"conversations:mute": {
+		params: ConversationsMuteParams
+		response: ConversationsSummaryResponse
+	}
+	"conversations:mute:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"conversations:people": {
+		params: ConversationsPeopleParams
+		response: ConversationsPeopleResponse
+	}
+	"conversations:people:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"conversations:attachable": {
+		params: ConversationsAttachableParams
+		response: ConversationsAttachableResponse
+	}
+	"conversations:attachable:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"conversations:person": {
+		params: ConversationsPersonParams
+		response: ConversationsPersonResponse
+	}
+	"conversations:person:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	// Server → client pushes: a message changed, or membership/name did.
+	"conversations:message": {
+		params: never
+		response: ConversationsMessagePush
+	}
+	"conversations:changed": {
+		params: never
+		response: ConversationsChangedPush
+	}
+	// Shares (replace-set, owner only): read and copy for the recipients.
+	"characters:share": {
+		params: CharactersShareParams
+		response: CharactersShareResponse
+	}
+	"characters:share:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	// Copy to my characters (PLAN-private-messages §6.7, Q3): the owner or a
+	// reader gets a full card copy under their own account.
+	"characters:duplicate": {
+		params: { characterId: number }
+		response: Sockets.Characters.Create.Response
+	}
+	"characters:duplicate:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"lorebooks:share": {
+		params: LorebooksShareParams
+		response: LorebooksShareResponse
+	}
+	"lorebooks:share:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 
 	/**

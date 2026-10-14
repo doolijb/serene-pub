@@ -6,7 +6,10 @@
 	import EntryMarks from "./EntryMarks.svelte"
 
 	/**
-	 * Character lore reads as its name plus who it is private to.
+	 * Character lore reads as its name plus who it is private to. Lore with no
+	 * cast member is the narrator's (the server's rule), so it reads as a muted
+	 * "Narrator only", never as a fault; only a binding that points at nothing
+	 * wears the warning.
 	 *
 	 * The visibility badge is `shrink-0` and the name `flex-1` with a floor, so
 	 * a long badge drops to its own line instead of squeezing the name down to
@@ -19,9 +22,7 @@
 	let visibility = $derived(
 		getCharacterLoreVisibility(source.lorebookBindingId, bindings)
 	)
-	let needsAttention = $derived(
-		visibility.kind === "orphaned" || visibility.kind === "unbound"
-	)
+	let needsAttention = $derived(visibility.kind === "orphaned")
 </script>
 
 <div
@@ -32,15 +33,13 @@
 		class="shrink-0 text-xs font-normal"
 		class:text-warning-500={needsAttention}
 		class:text-tertiary-600-400={visibility.kind === "narrator"}
-		class:text-surface-700-300={!needsAttention &&
-			visibility.kind !== "narrator"}
+		class:text-surface-600-400={visibility.kind === "unbound"}
+		class:text-surface-700-300={visibility.kind === "character"}
 		title={visibility.description}
 	>
 		{#if visibility.kind === "orphaned"}
 			<Icons.AlertTriangle size={11} class="inline" />
-		{:else if visibility.kind === "unbound"}
-			<Icons.LockOpen size={11} class="inline" />
-		{:else if visibility.kind === "narrator"}
+		{:else if visibility.kind === "unbound" || visibility.kind === "narrator"}
 			<Icons.Drama size={11} class="inline" />
 		{:else}
 			<Icons.Lock size={11} class="inline" />

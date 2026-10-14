@@ -1,7 +1,7 @@
 /**
  * Owner note 23 (2026-10-02): the SillyTavern import moved from its own
  * `/import` page into Settings as the **Import** section, opened by the same
- * buttons through `digest.settingsSection`. An admin gets the tab and the
+ * buttons through `digest.settingsSection`. An admin gets the row and the
  * digest lands on it (and is consumed); anyone else gets neither.
  */
 import { afterEach, describe, expect, test, vi } from "vitest"
@@ -55,18 +55,22 @@ function mountAs(isAdmin: boolean) {
 	return panelsCtx
 }
 
+// The sections are a section list (a nav of buttons), not a tablist, since
+// the 2026-10-09 nav normalisation (ruling Q1).
 const importTab = () =>
-	[...document.querySelectorAll("[role=tab]")].find(
-		(t) =>
-			t.getAttribute("aria-label") === "Import" ||
-			t.textContent?.trim() === "Import"
-	)
+	[
+		...document.querySelectorAll(
+			'nav[aria-label="Settings sections"] button'
+		)
+	].find((t) => t.textContent?.trim() === "Import")
 
 describe("Settings › Import", () => {
-	test("an admin has the tab, and the digest opens it", async () => {
+	test("an admin has the row, and the digest opens it", async () => {
 		const panelsCtx = mountAs(true)
 		expect(importTab()).toBeTruthy()
-		expect(rendered).toEqual(["user"])
+		// Unmeasured (jsdom) is compact, and a fresh open at compact is the
+		// section list, so no section has mounted yet.
+		expect(rendered).toEqual([])
 
 		panelsCtx.digest.settingsSection = "import"
 		flushSync()
@@ -76,7 +80,7 @@ describe("Settings › Import", () => {
 		expect(panelsCtx.digest.settingsSection).toBeUndefined()
 	})
 
-	test("anyone else has no tab, and the digest is spent on nothing", async () => {
+	test("anyone else has no row, and the digest is spent on nothing", async () => {
 		const panelsCtx = mountAs(false)
 		expect(importTab()).toBeFalsy()
 
@@ -86,5 +90,37 @@ describe("Settings › Import", () => {
 
 		expect(rendered).not.toContain("import")
 		expect(panelsCtx.digest.settingsSection).toBeUndefined()
+	})
+
+	test("Import stays mounted when back returns to the list", async () => {
+		// A scan in flight answers on Import's interest, so leaving the
+		// section — here, compact's back to the list — must not unmount it.
+		const panelsCtx = mountAs(true)
+		panelsCtx.digest.settingsSection = "import"
+		flushSync()
+		await tick()
+		expect(
+			document.querySelector("[data-panel-title]")?.textContent?.trim()
+		).toBe("Import")
+		// Shown: its host has moved out of the hidden parking box.
+		const parking = document.querySelector("div[hidden]")
+		expect(parking?.children).toHaveLength(0)
+
+		const back = document.querySelector<HTMLButtonElement>(
+			'button[aria-label="Settings"]'
+		)
+		expect(back).toBeTruthy()
+		back!.click()
+		flushSync()
+		await tick()
+		expect(document.querySelector("[data-panel-title]")).toBeNull()
+		expect(parking?.children).toHaveLength(1)
+		;(importTab() as HTMLButtonElement).click()
+		flushSync()
+		await tick()
+		expect(
+			document.querySelector("[data-panel-title]")?.textContent?.trim()
+		).toBe("Import")
+		expect(rendered.filter((r) => r === "import")).toHaveLength(1)
 	})
 })

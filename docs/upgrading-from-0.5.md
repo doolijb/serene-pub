@@ -38,7 +38,7 @@ A few things work differently in 0.6, so they live somewhere new:
 
 - **Chats are sessions**, in the **Sessions** view. See [Sessions](./sessions.md).
 - **Personas are characters** marked as personas. They're in the **Characters** view: the filter's **Personas** pick lists them, **Write a persona** is under **New**, and a character's **⋮** menu has **Use as persona** and **Set as default persona**. See [Personas](./personas.md).
-- **Which model replies** is no longer chosen per chat. It's set once in **Admin › Models › Defaults**, or per pipeline. See [Connections](./connections.md).
+- **Which model replies** is no longer chosen per chat. It's the **Reply** [loadout](./connections.md#loadouts) (a model on a connection plus its sampling), filled once in **Admin › Models › Loadouts** or the **Loadouts** view, or set per pipeline. See [Connections](./connections.md).
 - **Prompts and configs** belong to pipelines now, in **Admin › Pipelines**. See [Pipelines](./pipelines.md#upgrading-from-05).
 - **Context configs** are replaced by [context templates](./context-templates.md#upgrading-from-05).
 
@@ -62,14 +62,14 @@ A few things work differently in 0.6, so they live somewhere new:
     - A text connection's prompt format becomes the matching completion template; a format 0.6 doesn't have is left unset, with a note. Your default connection and sampling become the defaults for writing replies, on the model that connection used.
 - **Sampling configs**, with their values and switches. A name that now clashes with another (ignoring case) gets ` (2)`, and a value outside what 0.6 accepts moves to the nearest allowed one. Both get a note.
 - **Embeddings**: your embedding setup becomes an embedding connection, set as the default. Stored embeddings are kept only if they came from that same model; the rest are made again when an embedding model is starred. On a paid service, that first re-index is billed once, like any new index.
-- **Prompt text**: each prompt, narrator, summarizer and graph-build config you wrote becomes a configuration of the pipeline it fed, with its text. Each person's active choices are selected on every session they own (and, with one person, for the whole server). A chat's own narrator config stays that session's. A chat that ran on 0.5's built-in reply prompt keeps it as that session's; new sessions start on 0.6's default.
+- **Prompt text**: each prompt, narrator, summarizer and graph-build config you wrote becomes a configuration of the pipeline it fed, with its text. Each person's active choices are selected on every session they own (and, with one person, for the whole server). A chat's own narrator config stays that session's. A chat that ran on 0.5's built-in reply prompt keeps it as that session's; new sessions start on 0.6's default. The built-in prompts themselves changed in 0.6 (0.5's had been copied from SillyTavern): **Roleplay - Simple** continues as **Roleplay - Plain** and the Writer prompts as **Writer**, with new wording, and a session that picked one keeps its pick. A pick of one of the others (Immersive, Detailed, Text Adventure, Neutral, Lightning, Chain of Thought, the Assistant prompts, Actor) is not carried: 0.6 doesn't ship them, so those sessions start on 0.6's default. Your own prompt text is never touched.
 - **Ollama and KoboldCPP settings**, KoboldCPP's model list, custom themes, tags, and the duplicate pairs you dismissed.
 
 ## What doesn't come across
 
 0.6 has no place for these. They stay in the pre-upgrade backup, and the notes list them:
 
-- **A chat's own connection.** Replies use the default connection (**Admin › Models › Defaults**) or a pipeline configuration's own choice.
+- **A chat's own connection.** Replies use the Reply loadout (**Admin › Models › Loadouts**) or a pipeline configuration's own choice.
 - **A chat's own "AI Override" prompt config.** 0.5 stored it but never used it, so replies were written with the owner's active config, as they still are. The config itself comes across and can be selected.
 - **Everything in a prompt config other than its text**: its post-history placement and token trigger, its own connection and sampling, and its other settings. Set them again in **Admin › Pipelines** if you want them.
 - **Context configs.** Every pipeline uses the shipped [context template](./context-templates.md#upgrading-from-05). A template you wrote is named in the notes, and its text is in the backup.

@@ -116,10 +116,17 @@ const MIGRATED_FAMILIES = [
 	// Notifications (2026-09-28): born gated; its consumer is the shell's
 	// notifications store, declared at init scope in both shells.
 	"notifications:",
+	// Private messages (2026-10-12): born gated; its consumer is the client's
+	// conversations domain context, on the registry by construction.
+	"conversations:",
 	// A lorebook's own stats (plan places-graph L4, 2026-09-29): born gated
 	// and scoped by book; its consumer (places/placeStatsApi.ts, the place
 	// editor's Stats section) asks through `awaitReply`.
 	"lorebookState:",
+	// A card's own stats (card dowry §B.4, 2026-10-11): born gated, scoped by
+	// character; its consumer (the character form's Stats tab) is written on
+	// the registry — the facade has no other listener path.
+	"cardState:",
 	// Admin › Updates (2026-10-01): born gated; its one consumer
 	// (admin/sections/updates/Page.svelte) is on the registry.
 	"updates:"
@@ -256,6 +263,16 @@ describe("scopeOfPayload", () => {
 		expect(isGatedEvent("sessions:rowChanged")).toBe(true)
 	})
 
+	test("reads `sessionId` off the attendance push (W10) — the key whose holding is being here", () => {
+		expect(
+			scopeOfPayload("sessions:attendance", {
+				sessionId: 7,
+				people: [{ userId: 1, name: "Mira", role: "owner", here: true, lastSeenAt: 1 }]
+			})
+		).toBe("7")
+		expect(isGatedEvent("sessions:attendance")).toBe(true)
+	})
+
 	test("reads sessions:get's scope off the session, which is where it is", () => {
 		// The successful reply carries the id on the session and nowhere else —
 		// the trap this table exists to keep out of a client's key.
@@ -325,6 +342,31 @@ describe("scopeOfPayload", () => {
 		expect(scopeOfPayload("lorebookState:set", reply)).toBe("12")
 		expect(isGatedEvent("lorebookState:set")).toBe(true)
 		expect(isGatedEvent("lorebookState:set:error")).toBe(false)
+	})
+
+	test("reads `characterId` off a card's own stats replies and its push (card dowry)", () => {
+		const reply = { characterId: 9, sheets: [], vocabulary: [], values: {} }
+		for (const event of ["cardState:get", "cardState:set", "cardState:setSheets"])
+			expect(scopeOfPayload(event, reply)).toBe("9")
+		expect(scopeOfPayload("cardState:changed", { characterId: 9 })).toBe("9")
+		// The declaration verbs name no card: gated, never scoped.
+		expect(isScopedEvent("cardState:declareSlot")).toBe(false)
+		expect(isGatedEvent("cardState:declareSlot")).toBe(true)
+		expect(isGatedEvent("cardState:set:error")).toBe(false)
+	})
+
+	test("reads `conversationId` off a conversation's message push and its page", () => {
+		const message = { id: 5, conversationId: 3, body: "hi", attachments: [] }
+		expect(
+			scopeOfPayload("conversations:message", { conversationId: 3, message, change: "new" })
+		).toBe("3")
+		expect(
+			scopeOfPayload("conversations:open", { conversationId: 3, messages: [], hasEarlier: false })
+		).toBe("3")
+		// The list and `changed` are bare: gated, never scoped.
+		expect(isScopedEvent("conversations:list")).toBe(false)
+		expect(isGatedEvent("conversations:changed")).toBe(true)
+		expect(isGatedEvent("conversations:send:error")).toBe(false)
 	})
 
 	test("is null for an event with no scope", () => {

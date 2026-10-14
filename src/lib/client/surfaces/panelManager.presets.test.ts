@@ -27,8 +27,7 @@ const PANELS: ModePanel[] = [
 		id: "tasks",
 		title: "Tasks",
 		role: "secondary",
-		surface: { kind: "remote", owner: "core", component: "sample-notes" },
-		defaultActive: false
+		surface: { kind: "remote", owner: "core", component: "sample-notes" }
 	}
 ]
 

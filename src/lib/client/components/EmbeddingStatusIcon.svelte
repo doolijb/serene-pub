@@ -26,6 +26,8 @@
 		embeddingsStarred(systemSettingsCtx?.capabilityDefaults)
 	)
 
+	// The words are NOMENCLATURE §11's (less-confusing H1): an entry is
+	// "indexed" or "needs re-indexing" for Search by meaning, never "vectors".
 	let status = $derived.by(() => {
 		if (!vectorizationEnabled || !activeModel) return "hidden"
 		if (embeddingModel === activeModel) return "current"
@@ -37,16 +39,16 @@
 {#if status === "current"}
 	<span
 		class="text-success-500 inline-flex shrink-0 items-center"
-		title="Vectors up to date"
-		aria-label="Vectors up to date"
+		title="Indexed for Search by meaning"
+		aria-label="Indexed for Search by meaning"
 	>
 		<Icons.Zap {size} aria-hidden="true" />
 	</span>
 {:else if status === "stale"}
 	<span
 		class="text-warning-500 inline-flex shrink-0 items-center"
-		title="Vectors stale — model changed"
-		aria-label="Vectors stale — model changed"
+		title="Needs re-indexing: indexed with a different model"
+		aria-label="Needs re-indexing: indexed with a different model"
 	>
 		<Icons.RefreshCw {size} aria-hidden="true" />
 	</span>

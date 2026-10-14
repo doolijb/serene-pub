@@ -106,6 +106,43 @@ export const WIDGET_SCOPE_LABELS: Readonly<Record<WidgetSectionScope, string>> =
 }
 
 /**
+ * 🚧 The **write grants** a plugin's widget may ask for (D4, ruled Q2) —
+ * each its own permission, `widget:<scope>:write`, reviewed and deniable
+ * apart from the read it sits beside: an admin who granted
+ * `widget:session:state` is asked again before a widget may CHANGE the
+ * session's state. Keyed by the bare grant, as the widget's `scopes` and the
+ * page's `from.grants` carry it (`session:state:write`). Holding one never
+ * grants the read. A channel's write (`channel:<slug>:write`, for `send` and
+ * `draft`) names the plugin's own slug, so it is labelled by
+ * {@link widgetGrantLabel} rather than listed here. Every write is
+ * account-affecting: it goes in as the viewer.
+ */
+export const WIDGET_WRITE_LABELS: Readonly<Partial<Record<`${WidgetSectionScope}:write`, string>>> = {
+	"session:state:write": "Its widgets may change the session's stats and states as you, when you press in them"
+}
+
+/** A channel's write grant: `channel:<slug>:write`, the slug one lane-free channel slug. */
+const CHANNEL_WRITE_GRANT = /^channel:([A-Za-z0-9][A-Za-z0-9_-]{0,63}):write$/
+
+/**
+ * The sentence a widget grant is reviewed under — a read scope
+ * ({@link WIDGET_SCOPE_LABELS}), a write grant ({@link WIDGET_WRITE_LABELS},
+ * or a channel's `channel:<slug>:write`) — or null when this build supplies
+ * nothing for it. The ONE recogniser every derivation below goes through, so
+ * a grant is known everywhere or nowhere.
+ */
+export function widgetGrantLabel(grant: unknown): string | null {
+	if (typeof grant !== "string") return null
+	if (Object.hasOwn(WIDGET_SCOPE_LABELS, grant)) return WIDGET_SCOPE_LABELS[grant as WidgetSectionScope]
+	if (Object.hasOwn(WIDGET_WRITE_LABELS, grant))
+		return WIDGET_WRITE_LABELS[grant as keyof typeof WIDGET_WRITE_LABELS] ?? null
+	const channel = CHANNEL_WRITE_GRANT.exec(grant)?.[1]
+	return channel
+		? `Its widgets may send and draft lines as you on the '${channel}' channel, when you press in them`
+		: null
+}
+
+/**
  * The scopes a manifest's widgets declare, read off the declarations
  * themselves — a genre's panels (`genres[].shape.panels[].scopes`) and the
  * package's own widgets (R71, `widgets[].scopes`) alike — never trusted to a
@@ -117,7 +154,7 @@ export function declaredWidgetScopes(manifest: PluginManifest | null | undefined
 	const take = (decl: unknown) => {
 		const scopes = (decl as { scopes?: unknown } | null)?.scopes
 		for (const scope of Array.isArray(scopes) ? scopes : [])
-			if (typeof scope === "string" && Object.hasOwn(WIDGET_SCOPE_LABELS, scope)) out.add(scope)
+			if (typeof scope === "string" && widgetGrantLabel(scope) !== null) out.add(scope)
 	}
 	const genres = Array.isArray(manifest?.genres) ? (manifest!.genres as unknown[]) : []
 	for (const g of genres) {
@@ -145,7 +182,8 @@ export function panelGrants(
 
 /**
  * The widget scopes an admin has granted this plugin (declared − denied −
- * unreviewed) — only scopes this build knows (`WIDGET_SCOPE_LABELS`). A
+ * unreviewed), write grants among them (`session:state:write`) — only those
+ * this build knows (`widgetGrantLabel`). A
  * compiled `widget:<x>` this build does not recognise is surfaced for review
  * as an unknown permission, and approving THAT grants no data: nothing here
  * supplies `<x>`, and a scope a later build learns is reviewed again under
@@ -170,25 +208,25 @@ export function grantedWidgetScopes(
  */
 export function widgetScopePermissions(scopes: unknown): Permission[] {
 	if (!Array.isArray(scopes)) return []
-	const known = new Set(
-		scopes.filter(
-			(s): s is WidgetSectionScope => typeof s === "string" && Object.hasOwn(WIDGET_SCOPE_LABELS, s)
-		)
-	)
-	return [...known].sort().map((scope) => ({
+	const known = new Map<string, string>()
+	for (const s of scopes) {
+		const label = widgetGrantLabel(s)
+		if (label !== null) known.set(s as string, label)
+	}
+	return [...known.keys()].sort().map((scope) => ({
 		key: `widget:${scope}`,
 		kind: "resource" as const,
-		label: WIDGET_SCOPE_LABELS[scope],
+		label: known.get(scope)!,
 		accountAffecting: true
 	}))
 }
 
-/** A recognised widget scope's permission — `widget:<scope>` for a scope in the SDK's table. */
+/** A recognised widget grant's permission — `widget:<scope>` or `widget:<scope>:write` this build knows. */
 function isWidgetScopePermission(p: Permission): boolean {
 	return (
 		p.kind === "resource" &&
 		p.key.startsWith("widget:") &&
-		Object.hasOwn(WIDGET_SCOPE_LABELS, p.key.slice("widget:".length))
+		widgetGrantLabel(p.key.slice("widget:".length)) !== null
 	)
 }
 
@@ -287,7 +325,7 @@ function toDeclared(
 			events.push(raw.slice("event:".length))
 		// Read off the panels and widgets themselves (`declaredWidgetScopes`); the compiled
 		// key is the CLI's echo of the same declaration.
-		else if (raw.startsWith("widget:") && Object.hasOwn(WIDGET_SCOPE_LABELS, raw.slice("widget:".length))) continue
+		else if (raw.startsWith("widget:") && widgetGrantLabel(raw.slice("widget:".length)) !== null) continue
 		else unknown.push(raw)
 	}
 	if (storage && !declared.storage) declared.storage = {}

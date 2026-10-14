@@ -17,7 +17,7 @@
  * `rowsReadingOnLine` / `entryAsOf`), `EntryWorkspace`'s scenes,
  * `GraphsWorkspace` and `PlaceLinks` (`edgesOnLine`), `AmendmentList`'s
  * "not yet" (`amendmentsAheadOnLine`), and the session's history lists
- * (`SessionWorkflowTab`, `SummarizeLoreModal`: `rowsReadingOnLine`).
+ * (the Chronicle's `history-entries` answer, `SummarizeLoreModal`: `rowsReadingOnLine`).
  *
  * A new shared reader belongs here; a new screen, in the screens file.
  */

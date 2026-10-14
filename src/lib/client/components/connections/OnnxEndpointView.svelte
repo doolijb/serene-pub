@@ -180,8 +180,8 @@
 		},
 		{ value: "settings", label: "Settings", icon: Icons.Settings }
 	])
-	/** The chip on the active row: "Active", the word these lanes use. */
-	const activeWord = "Active"
+	/** The chip on the row its loadout holds: "In use" (never *active*). */
+	const activeWord = "In use"
 
 	/** How much of this endpoint's list is actually on this machine. */
 	const onDisk = $derived(models.filter((m) => m.local?.state === "on_disk"))
@@ -189,8 +189,21 @@
 		onDisk.reduce((sum, m) => sum + (m.local?.sizeBytes ?? 0), 0)
 	)
 
+	/**
+	 * Whether the app-wide lane is THIS endpoint's. ⚠ The lane is one per
+	 * family, not one per connection: with two local endpoints, the one not
+	 * holding the star must not offer Unload (it would free the other's
+	 * model) or show the other's queue as its own. With nothing starred no
+	 * connection owns the lane, and any model still resident is left over —
+	 * any endpoint may free it.
+	 */
+	const holdsLane = $derived(
+		!!lane.status &&
+			(lane.status.connectionId == null ||
+				lane.status.connectionId === connection.id)
+	)
 	const idle = $derived(idleMinutes(lane.status?.lastUsedAt))
-	const loaded = $derived(lane.status?.loaded ?? false)
+	const loaded = $derived(holdsLane && (lane.status?.loaded ?? false))
 
 	/** "loaded, idle 4 min" / "on disk, not loaded" / "not downloaded". */
 	const activeResidency = $derived.by(() => {
@@ -234,7 +247,7 @@
 		// contradicting itself.
 		const state =
 			active && model.local && lane.status
-				? { ...model.local, loaded: lane.status.loaded }
+				? { ...model.local, loaded }
 				: model.local
 		const headline = onnxModelHeadline(state, active)
 		if (model.local?.state === "downloading") return null
@@ -265,7 +278,7 @@
 		switch (model.local?.state) {
 			case "on_disk":
 				return {
-					label: "Make active",
+					label: isEmbeddings ? "Use in Embeddings" : "Use in Entities",
 					press: () => {
 						if (!unavailable) onMakeActive(model)
 					},
@@ -300,8 +313,8 @@
 
 	const infoLine = $derived(
 		isEmbeddings
-			? "One active model app-wide. Switching re-embeds every stored vector — the switch asks first and names the cost. Downloading never switches anything."
-			: "One active model app-wide. Switching re-scans every stored message — the switch asks first and names the cost. Downloading never switches anything."
+			? "The Embeddings loadout holds one model app-wide. Switching re-embeds every stored vector — the switch asks first and names the cost. Downloading never switches anything."
+			: "The Entities loadout holds one model app-wide. Switching re-scans every stored message — the switch asks first and names the cost. Downloading never switches anything."
 	)
 </script>
 
@@ -357,7 +370,7 @@
 						: ""}
 				</span>
 			{/if}
-			{#if isEmbeddings && lane.status?.pending != null}
+			{#if isEmbeddings && holdsLane && lane.status?.pending != null}
 				<span class="preset-tonal-surface rounded-full px-2 py-1">
 					{lane.status.pending === 0
 						? "queue idle"
@@ -371,7 +384,7 @@
 		{#if loaded}
 			<button
 				type="button"
-				class="btn btn-sm preset-filled-surface-400-600 min-h-11"
+				class="btn btn-sm preset-tonal-surface min-h-11"
 				onclick={unloadNow}
 			>
 				<Icons.PowerOff size={14} aria-hidden="true" />
@@ -424,7 +437,10 @@
 			     downloaded is the Get tab, the same door every managed
 			     runtime has. -->
 			{#if mode === "compact"}
-				<section class="flex flex-col gap-3 pt-3" aria-label="On this machine">
+				<section
+					class="flex flex-col gap-3 pt-3"
+					aria-label="On this machine"
+				>
 					{#if split.here.length}
 						{#each split.here as model (model.id)}
 							{@render listRow(model)}
@@ -544,8 +560,8 @@
 				</p>
 			{:else}
 				<p class="text-surface-600-400 text-xs">
-					Nothing is downloaded to this machine. Get one and it appears
-					here — it downloads once.
+					Nothing is downloaded to this machine. Get one and it
+					appears here — it downloads once.
 				</p>
 				<button
 					type="button"
@@ -635,7 +651,7 @@
 				{#if verb}
 					<button
 						type="button"
-						class="btn btn-sm preset-filled-surface-400-600 whitespace-nowrap disabled:cursor-not-allowed"
+						class="btn btn-sm preset-tonal-surface whitespace-nowrap disabled:cursor-not-allowed"
 						disabled={!!verb.disabledReason}
 						title={verb.disabledReason}
 						aria-label={verb.disabledReason
@@ -652,5 +668,4 @@
 			</td>
 		</tr>
 	{/snippet}
-
 </div>

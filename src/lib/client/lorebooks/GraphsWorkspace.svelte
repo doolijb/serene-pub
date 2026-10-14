@@ -5,7 +5,6 @@
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
-	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import PipelineConfigOptions from "$lib/client/components/pipelines/PipelineConfigOptions.svelte"
 	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
@@ -99,7 +98,7 @@
 	/**
 	 * The drawings the lorebook can make, over the scope being read.
 	 *
-	 * Which drawing is on screen is the lens, so the rail's lens row is this
+	 * Which drawing is on screen is the lens, so the lens track is this
 	 * place's navigation: the canvas takes the width the list and editor
 	 * columns would have had, and the column beside it is whatever is selected
 	 * on the canvas.
@@ -162,6 +161,11 @@
 	 * amended ones).
 	 */
 	const book = getBookData()
+	/**
+	 * A shared book is read-only (PLAN-private-messages §6.7): no build,
+	 * extend, link, merge, delete or new place — the graph and the map read.
+	 */
+	let readOnly = $derived(book.readOnly)
 
 	const REL_STATUS_BADGE: Record<string, string> = {
 		active: "preset-tonal-success",
@@ -182,7 +186,9 @@
 	/** Every scene of the book on every line (a session's Extend count). */
 	let scenes = $derived(book.allScenes as unknown as SceneRow[])
 	/** The resolved rows the Places lens draws from. */
-	let resolvedEntries = $derived(book.rows as Record<string, readonly unknown[]>)
+	let resolvedEntries = $derived(
+		book.rows as Record<string, readonly unknown[]>
+	)
 	/**
 	 * Why the graph is not on screen, when it is not: a refused read or a
 	 * silent one (the store's clock), never a spinner left turning.
@@ -419,7 +425,8 @@
 	let heldBack = $derived(
 		drawing === "places"
 			? relationshipsOfPlaces(lineRelationships, places.placeIds).length -
-					relationshipsOfPlaces(visibleRelationships, places.placeIds).length
+					relationshipsOfPlaces(visibleRelationships, places.placeIds)
+						.length
 			: lineRelationships.length - visibleRelationships.length
 	)
 
@@ -448,7 +455,11 @@
 	 */
 	let castCandidates = $derived(
 		drawing === "places"
-			? graphNodes({ cast: parentNodes, relationships: [], scopeEntries: [] })
+			? graphNodes({
+					cast: parentNodes,
+					relationships: [],
+					scopeEntries: []
+				})
 			: []
 	)
 	let linkCandidates = $derived(
@@ -472,8 +483,9 @@
 		if (!rel || (rel.from.kind === "cast" && rel.to.kind === "cast"))
 			return []
 		const nameOf = (end: RelationshipEndRef) =>
-			names.get(end.kind === "cast" ? castKey(end.id) : entryKey(end.id)) ??
-			`#${end.id}`
+			names.get(
+				end.kind === "cast" ? castKey(end.id) : entryKey(end.id)
+			) ?? `#${end.id}`
 		return [rel.from, rel.to].map((end) => {
 			const subject = relationshipEndRef(end)
 			return {
@@ -545,17 +557,16 @@
 		drawing === "places"
 			? placeGraphHeadline(places, placeCategory)
 			: graphHeaderLine({
-			scopeLabel: SCOPE_LABELS[route.scope],
-			entriesWithLinks: entriesWithLinks(
-				scopeEntries,
-				visibleRelationships
-			),
-			entriesTotal: scopeEntries.length,
-			linkCount: edges.length,
-			scenesNamingNone: scenesWithNothingNamed
-		})
+					scopeLabel: SCOPE_LABELS[route.scope],
+					entriesWithLinks: entriesWithLinks(
+						scopeEntries,
+						visibleRelationships
+					),
+					entriesTotal: scopeEntries.length,
+					linkCount: edges.length,
+					scenesNamingNone: scenesWithNothingNamed
+				})
 	)
-
 
 	/**
 	 * What the last turn sent of the graph it walked.
@@ -571,6 +582,21 @@
 
 	/** This book's build — never another book's newer one (plan B8). */
 	let activeBuild = $derived(graphBuildsCtx?.buildFor(lorebookId) ?? null)
+
+	/**
+	 * The empty graph's own Build button (less-confusing G4): offered only
+	 * where the header's Build would be live and the book has no graph at all
+	 * (an empty SCOPE of a built graph is not a reason to rebuild).
+	 */
+	let canStartBuild = $derived(
+		drawing !== "places" && !activeBuild && !buildReason && nodes.length === 0
+	)
+
+	function startBuild() {
+		buildMode = "replace"
+		showBuildModal = true
+	}
+
 	/**
 	 * The session an Extend reads, or null for the whole line: the open
 	 * session, when it reads this book on the line being read (#51). Reading
@@ -615,7 +641,8 @@
 	let extendReadyCount = $derived(
 		extendSessionId !== null
 			? sessionUngraphed.ready
-			: lineCounts.ungraphedSceneCount + lineCounts.ungraphedHistoryEntryCount
+			: lineCounts.ungraphedSceneCount +
+					lineCounts.ungraphedHistoryEntryCount
 	)
 	let extendUnsummarizedCount = $derived(
 		extendSessionId !== null
@@ -645,7 +672,9 @@
 	)
 	/** Something typed in the edit since it opened (or last followed). */
 	let relTypedHere = $derived(
-		!!editingRel && !!editingFrom && linkFieldsDiffer(editingFrom, editingRel)
+		!!editingRel &&
+			!!editingFrom &&
+			linkFieldsDiffer(editingFrom, editingRel)
 	)
 	/** The stored row moved since the edit opened. */
 	let relChangedElsewhere = $derived(
@@ -997,7 +1026,8 @@
 			if (deleteTarget?.id === node.id) deleteCheck = res
 		} catch (err) {
 			if (deleteTarget?.id === node.id)
-				deleteCheckError = err instanceof Error ? err.message : String(err)
+				deleteCheckError =
+					err instanceof Error ? err.message : String(err)
 		}
 	}
 
@@ -1037,7 +1067,9 @@
 		deleting = false
 		deleteTarget = null
 		deleteCheck = null
-		toaster.success({ title: deletedMemberToast(name, res.deletedLoreCount) })
+		toaster.success({
+			title: deletedMemberToast(name, res.deletedLoreCount)
+		})
 	}
 
 	/**
@@ -1139,7 +1171,9 @@
 </script>
 
 {#snippet buildActions()}
-	{#if activeBuild}
+	{#if readOnly}
+		<!-- Shared with the reader: the graph reads, nothing builds it. -->
+	{:else if activeBuild}
 		{#if activeBuild.status === "building"}
 			<div class="flex items-center gap-2">
 				<div
@@ -1159,10 +1193,7 @@
 			type="button"
 			disabled={!!buildReason}
 			data-graph-build
-			onclick={() => {
-				buildMode = "replace"
-				showBuildModal = true
-			}}
+			onclick={startBuild}
 			title={buildReason ??
 				(nodes.length > 0
 					? "Rebuild the links between cast members from scenes"
@@ -1172,7 +1203,7 @@
 			{nodes.length > 0 ? "Rebuild" : "Build"}
 		</button>
 		<button
-			class="btn btn-sm preset-filled-surface-400-600"
+			class="btn btn-sm preset-tonal-surface"
 			type="button"
 			disabled={!!buildReason ||
 				nodes.length === 0 ||
@@ -1194,7 +1225,9 @@
 			}}
 		>
 			<Icons.Layers size={14} aria-hidden="true" />
-			{extendSessionId !== null ? "Extend from this session" : "Extend graph"}
+			{extendSessionId !== null
+				? "Extend from this session"
+				: "Extend graph"}
 			{#if extendReadyCount > 0}
 				<span class="badge-icon preset-tonal-primary text-[11px]">
 					{extendReadyCount}
@@ -1203,7 +1236,7 @@
 		</button>
 	{/if}
 	<button
-		class="btn btn-sm preset-filled-surface-400-600"
+		class="btn btn-sm preset-tonal-surface"
 		type="button"
 		onclick={load}
 		title="Refresh"
@@ -1211,10 +1244,11 @@
 	>
 		<Icons.RefreshCw size={14} aria-hidden="true" />
 	</button>
+	{#if !readOnly}
 	<button
 		class="btn btn-sm {showPipelinePanel
-			? 'preset-filled-surface-500'
-			: 'preset-filled-surface-400-600'}"
+			? 'preset-tonal-surface'
+			: 'preset-tonal-surface'}"
 		type="button"
 		title="The pipeline behind the build: which model, sampling profile and prompt each step runs on"
 		aria-label="Graph build pipeline settings"
@@ -1223,6 +1257,7 @@
 	>
 		<Icons.Workflow size={14} aria-hidden="true" />
 	</button>
+	{/if}
 {/snippet}
 
 {#snippet relationshipForm(rel: NarrativeRelationship)}
@@ -1241,8 +1276,8 @@
 				role="status"
 				data-graph-link-stale
 			>
-				This link was changed elsewhere while you were editing it. Update
-				puts yours in its place; Cancel keeps the other.
+				This link was changed elsewhere while you were editing it.
+				Update puts yours in its place; Cancel keeps the other.
 			</p>
 		{/if}
 		{#if relError}
@@ -1250,7 +1285,7 @@
 		{/if}
 		<div class="flex justify-end gap-2">
 			<button
-				class="btn btn-sm preset-filled-surface-400-600"
+				class="btn btn-sm preset-tonal-surface"
 				type="button"
 				onclick={resetRelForm}
 			>
@@ -1279,6 +1314,7 @@
 				{node.nodeVisibility}
 			</span>
 		{/if}
+		{#if !readOnly}
 		<div class="ml-auto flex gap-1">
 			<button
 				class="btn btn-sm preset-tonal-warning p-1.5"
@@ -1302,6 +1338,7 @@
 				<Icons.Trash2 size={13} aria-hidden="true" />
 			</button>
 		</div>
+		{/if}
 	</div>
 	{#if node.summary}
 		<p class="text-surface-700-300 text-xs">{node.summary}</p>
@@ -1318,7 +1355,11 @@
 				icon={drawing === "places" ? Icons.Map : Icons.Network}
 				message={drawing === "places"
 					? "Pick a place on the map to see what joins it."
-					: lensEmptyMessage("graph")}
+					: readOnly
+						? "No graph yet."
+						: lensEmptyMessage("graph")}
+				ctaLabel={canStartBuild && !readOnly ? "Build a graph" : undefined}
+				onCta={canStartBuild && !readOnly ? startBuild : undefined}
 			/>
 		{:else}
 			{#each graph as node (node.key)}
@@ -1387,14 +1428,17 @@
 						? 'preset-tonal-primary'
 						: 'preset-tonal-surface'}"
 					aria-pressed={active}
-					onclick={() => (placeCategoryChip = active ? null : category)}
+					onclick={() =>
+						(placeCategoryChip = active ? null : category)}
 				>
 					{category}
 				</button>
 			{/each}
 		</div>
 	{/if}
-	{#if newPlaceOpen}
+	{#if readOnly}
+		<!-- A shared book: no new place. -->
+	{:else if newPlaceOpen}
 		<NewPlaceField
 			onCreate={async (name) => {
 				const node = await createPlace(name)
@@ -1422,9 +1466,9 @@
 {#snippet placesEmpty()}
 	<EmptyState
 		icon={Icons.Map}
-		message={lensEmptyMessage("places")}
-		ctaLabel={newPlaceOpen ? undefined : "New place"}
-		onCta={() => (newPlaceOpen = true)}
+		message={readOnly ? "No places yet." : lensEmptyMessage("places")}
+		ctaLabel={newPlaceOpen || readOnly ? undefined : "New place"}
+		onCta={readOnly ? undefined : () => (newPlaceOpen = true)}
 	/>
 {/snippet}
 
@@ -1439,7 +1483,7 @@
 		{selectedKey}
 		onNodeClick={selectNode}
 		onEdgeClick={selectEdge}
-		onLinkDraw={startLink}
+		onLinkDraw={readOnly ? undefined : startLink}
 		toolbar={drawing === "places" ? placesToolbar : undefined}
 		empty={drawing === "places" ? placesEmpty : undefined}
 		categoryOrder={drawing === "places" ? places.categories : undefined}
@@ -1463,8 +1507,9 @@
 							: entryKey(selectedRel.to.entryId)
 					) ?? "?"}
 				</span>
+				{#if !readOnly}
 				<button
-					class="btn btn-sm preset-filled-surface-400-600 p-1.5"
+					class="btn btn-sm preset-tonal-surface p-1.5"
 					type="button"
 					title={relLockedReason(selectedRel) ?? "Edit relationship"}
 					aria-label="Edit relationship"
@@ -1480,15 +1525,17 @@
 				<button
 					class="btn btn-sm preset-tonal-error p-1.5"
 					type="button"
-					title={relLockedReason(selectedRel) ?? "Delete relationship"}
+					title={relLockedReason(selectedRel) ??
+						"Delete relationship"}
 					aria-label="Delete relationship"
 					disabled={!!relLockedReason(selectedRel)}
 					onclick={() => (confirmingRelDelete = selectedRel!.id)}
 				>
 					<Icons.Trash2 size={13} aria-hidden="true" />
 				</button>
+				{/if}
 				<button
-					class="btn btn-sm preset-filled-surface-400-600 p-1.5"
+					class="btn btn-sm preset-tonal-surface p-1.5"
 					type="button"
 					title="Close"
 					aria-label="Close"
@@ -1537,7 +1584,9 @@
 					<ul class="flex flex-col gap-1 text-xs" data-link-sentences>
 						{#each selectedSentences as said (said.key)}
 							<li>
-								<span class="font-semibold">{said.subject}</span>
+								<span class="font-semibold">
+									{said.subject}
+								</span>
 								<span class="text-surface-600-400">·</span>
 								{said.sentence}
 							</li>
@@ -1591,7 +1640,7 @@
 				{ceiling}
 				isNew={(edge) => newEdgeIds.has(edge.id)}
 				candidates={linkCandidates}
-				canCreatePlace
+				canCreatePlace={!readOnly}
 				onOpen={() => openNode(selectedNode!)}
 				onLinkTo={(other) => openLinkForm(selectedNode!, other)}
 				onNewPlace={(typed) =>
@@ -1600,7 +1649,9 @@
 				onEdgeClick={selectEdge}
 				onDeleteEdge={(edge) => deleteRel(edge.id)}
 				lockedReason={(edge) =>
-					relLockedReason(relationships.find((r) => r.id === edge.id))}
+					relLockedReason(
+						relationships.find((r) => r.id === edge.id)
+					)}
 				onOpenScene={openScene}
 				onRaiseCeiling={() => (showPipelinePanel = true)}
 				onClose={() => selectNode(null)}
@@ -1608,9 +1659,7 @@
 			{#if selectedNode.kind === "cast"}
 				{@const row = nodes.find((n) => n.id === selectedNode!.id)}
 				{#if row}
-					<div
-						class="panel-inset flex flex-col gap-2"
-					>
+					<div class="panel-inset flex flex-col gap-2">
 						{@render castActions(row)}
 					</div>
 				{/if}
@@ -1623,9 +1672,9 @@
 
 <div class="flex min-h-0 flex-1 flex-col gap-3" data-lore-drawing={drawing}>
 	{#if drawing === "relationships"}
-		<PanelToolbar label="Graph actions">
+		<div class="panel-actions" role="group" aria-label="Graph actions">
 			{@render buildActions()}
-		</PanelToolbar>
+		</div>
 	{/if}
 
 	{#if showPipelinePanel}
@@ -1658,7 +1707,7 @@
 		</div>
 	{/if}
 
-	{#if activeBuild && drawing === "relationships"}
+	{#if activeBuild && drawing === "relationships" && !readOnly}
 		<div
 			class="bg-surface-200-800 panel-edge flex flex-col gap-2 rounded-lg border p-3 text-sm"
 		>
@@ -1692,7 +1741,7 @@
 						</button>
 					{/if}
 					<button
-						class="btn btn-sm preset-filled-surface-400-600"
+						class="btn btn-sm preset-tonal-surface"
 						type="button"
 						onclick={() => {
 							buildMode = activeBuild!.mode
@@ -1749,7 +1798,7 @@
 		</div>
 	{/if}
 
-	{#if namelessBindingCount > 0 && drawing === "relationships"}
+	{#if namelessBindingCount > 0 && drawing === "relationships" && !readOnly}
 		<!-- A row with an empty name matches no extracted name, so a build
 		     proposes a fresh one beside it every time. Surfaced so it can be
 		     named or removed by hand. -->
@@ -1793,7 +1842,10 @@
 		</div>
 	{:else if isLoading}
 		<div class="flex items-center justify-center py-10">
-			<Icons.Loader2 size={20} class="text-surface-600-400 animate-spin" />
+			<Icons.Loader2
+				size={20}
+				class="text-surface-600-400 animate-spin"
+			/>
 		</div>
 	{:else if mode === "desk"}
 		<div class="flex min-h-0 flex-1 gap-4">
@@ -1813,7 +1865,7 @@
 		{#if hasSideColumn}
 			<div class="flex min-h-0 flex-1 flex-col gap-2">
 				<button
-					class="btn btn-sm preset-filled-surface-400-600 self-start"
+					class="btn btn-sm preset-tonal-surface self-start"
 					type="button"
 					onclick={() => (canvasOpen = false)}
 				>

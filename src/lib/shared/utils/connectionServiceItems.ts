@@ -8,8 +8,35 @@
 import { CONNECTION_TYPE, CONNECTION_TYPES } from "../constants/ConnectionTypes"
 import { PRESET_CAPABILITIES } from "$lib/shared/connectionAdapters/manifest"
 import { OPENAI_COMPATIBLE_PRESETS } from "./connectionDefaults"
+import { KEY_URLS, credentialPolicy } from "../connections/credentials"
 
 export type ConnectionServiceCategory = "cloud" | "local" | "custom"
+
+/**
+ * What a service in the New connection picker asks of the person before it
+ * works — the chip on its card:
+ *
+ * - `key` — it will not answer without an API key (`credentialPolicy` says
+ *   `required`);
+ * - `local` — it runs on their own machine;
+ * - `address` — neither: its address, and a key only if that server asks.
+ *
+ * Derived from `credentialPolicy` and the category (`serviceSetupNeed`), never
+ * stated per service. ⚠ Not the **service chip**, which says what a
+ * connection IS, beside its title in the index.
+ */
+export type ServiceSetupNeed = "key" | "local" | "address" | "free"
+
+/**
+ * `free` — 🚧 a hosted service that answers without a key, in a queue (AI
+ * Horde). A key is optional and only buys priority.
+ */
+export const SETUP_NEED_LABELS: Record<ServiceSetupNeed, string> = {
+	key: "Needs an API key",
+	local: "Runs locally",
+	address: "Address only",
+	free: "Free · queued"
+}
 
 export interface ConnectionServiceItem {
 	/** Unique across the whole flattened list — used as the collection's item value. */
@@ -27,7 +54,12 @@ export interface ConnectionServiceItem {
 	 * OpenAI-compatible URL genuinely is.
 	 */
 	presetSlug?: string
-	difficulty: string
+	/** What it asks of the person — the chip on the picker's card. */
+	setupNeed: ServiceSetupNeed
+	/**
+	 * HTML for the New connection dialog. A native type's own prose; for an
+	 * OpenAI-compatible preset, one line from `presetDescription`.
+	 */
 	description: string
 	/**
 	 * Model modality — drives the picker's modality button-group filter.
@@ -39,7 +71,7 @@ export interface ConnectionServiceItem {
 	modality: string
 	/**
 	 * Why this service can't be created here, as a sentence the card shows in
-	 * place of its difficulty — the option stays listed, disabled, so a person
+	 * place of its setup-need chip — the option stays listed, disabled, so a person
 	 * looking for it learns why rather than finding nothing. Absent when it can
 	 * be created. Only the local ONNX types set it today
 	 * (`localOnnxDisabledReason`).
@@ -97,8 +129,8 @@ export function connectionTypeDisabledReason(
 /**
  * The connection types of KoboldCPP, run by Serene Pub.
  *
- * The managed endpoint is created FROM the managed KoboldCPP (Models tab → Use for chat
- * or Use for images), never from the generic New Connection picker, and is not
+ * The managed endpoint is created FROM the managed KoboldCPP (Models tab → Use in Reply
+ * or Use in Images), never from the generic New Connection picker, and is not
  * usable while the managed KoboldCPP is switched off. ⏳ Two ids until the boot fold has
  * retired `KOBOLDCPP_MANAGED_IMAGE`; a set, so every consumer asks of both.
  */
@@ -125,6 +157,12 @@ export const CATEGORY_LABELS: Record<ConnectionServiceCategory, string> = {
 	custom: "Custom"
 }
 
+/**
+ * The picker's label for the "Empty" preset: a bare OpenAI-compatible
+ * address. Exported for the picker's no-results line, which offers it by name.
+ */
+export const CUSTOM_SERVICE_LABEL = "Custom (OpenAI-Compatible)"
+
 // Two OPENAI_COMPATIBLE_PRESETS entries share a name with a native adapter type
 // that talks to the same underlying software via a different wire protocol
 // (Ollama's/KoboldCPP's own native API vs. their OpenAI-compatible endpoint)
@@ -134,6 +172,73 @@ export const CATEGORY_LABELS: Record<ConnectionServiceCategory, string> = {
 const PRESET_LABEL_OVERRIDES: Record<string, string> = {
 	Ollama: "Ollama (via OpenAI-Compatible API)",
 	KoboldCPP: "KoboldCPP (via OpenAI-Compatible API)"
+}
+
+/**
+ * What a service asks of the person, from the same `credentialPolicy` the
+ * index and the connection view read — so the card that promised "Needs an
+ * API key" and the row that later says "Needs a key" can't disagree.
+ */
+export function serviceSetupNeed(service: {
+	type: string
+	presetSlug?: string
+	baseUrl?: string | null
+	category: ConnectionServiceCategory
+}): ServiceSetupNeed {
+	const policy = credentialPolicy({
+		type: service.type,
+		preset: service.presetSlug,
+		baseUrl: service.baseUrl
+	})
+	if (policy === "required") return "key"
+	if (service.type === CONNECTION_TYPE.HORDE) return "free"
+	// A host this pub only talks to, though it runs on the person's machine:
+	// its address is the whole setup (DESIGN-image-generation §4.9).
+	if (service.type === CONNECTION_TYPE.COMFYUI) return "address"
+	if (service.category === "local") return "local"
+	return "address"
+}
+
+type OpenAiCompatiblePreset = (typeof OPENAI_COMPATIBLE_PRESETS)[number]
+
+/** The page where this preset's service hands out keys, or null. */
+export function presetKeyUrl(preset: OpenAiCompatiblePreset): string | null {
+	const slug = (preset as { slug?: string }).slug
+	return slug ? (KEY_URLS[slug] ?? null) : null
+}
+
+/** `https://www.example.com/x` → `example.com`; null when it isn't a URL. */
+function hostOf(url: string | null | undefined): string | null {
+	if (!url) return null
+	try {
+		return new URL(url).hostname.replace(/^www\./, "") || null
+	} catch {
+		return null
+	}
+}
+
+/**
+ * The one line an OpenAI-compatible preset's dialog shows — the same
+ * template for every preset, never prose per preset, and never another
+ * service's description (OpenRouter is not where OpenAI hands out keys).
+ *
+ * Every part is a code constant (a preset's name, a `KEY_URLS` entry), so the
+ * HTML needs no escaping.
+ */
+export function presetDescription(
+	preset: OpenAiCompatiblePreset,
+	label: string,
+	setupNeed: ServiceSetupNeed
+): string {
+	if (setupNeed === "local") return "<p>Runs on your own machine · no key</p>"
+	if (setupNeed === "address")
+		return "<p>Any OpenAI-compatible server · paste its address, and a key only if it asks for one</p>"
+	const keyUrl = presetKeyUrl(preset)
+	const host = hostOf(keyUrl) ?? hostOf(preset.connectionDefaults.baseUrl)
+	const where = keyUrl
+		? `<a class="anchor" href="${keyUrl}" target="_blank" rel="noopener noreferrer">${host}</a>`
+		: (host ?? "the service")
+	return `<p>${label} — needs an API key from ${where}</p>`
 }
 
 export function buildConnectionServiceItems(
@@ -169,7 +274,10 @@ export function buildConnectionServiceItems(
 			label: t.label,
 			category: t.category,
 			type: t.value,
-			difficulty: t.difficulty,
+			setupNeed: serviceSetupNeed({
+				type: t.value,
+				category: t.category
+			}),
 			description: t.description,
 			modality: t.modality ?? "text-gen",
 			...(disabledReason ? { disabledReason } : {})
@@ -192,7 +300,10 @@ export function buildConnectionServiceItems(
 			label: ollamaType.label,
 			category: ollamaType.category,
 			type: CONNECTION_TYPE.OLLAMA,
-			difficulty: ollamaType.difficulty,
+			setupNeed: serviceSetupNeed({
+				type: CONNECTION_TYPE.OLLAMA,
+				category: ollamaType.category
+			}),
 			description:
 				"<p>Ollama's own embedding route, <b>POST /api/embed</b>, on the " +
 				"same connection that serves chat — one per host.</p>" +
@@ -201,23 +312,30 @@ export function buildConnectionServiceItems(
 			modality: "embeddings"
 		})
 
-	const openaiType = CONNECTION_TYPES.find(
-		(t) => t.value === CONNECTION_TYPE.OPENAI
-	)!
+	/** What a preset asks of the person, read off the row it would create. */
+	const presetSetupNeed = (preset: OpenAiCompatiblePreset) =>
+		serviceSetupNeed({
+			type: CONNECTION_TYPE.OPENAI,
+			presetSlug: (preset as { slug?: string }).slug,
+			baseUrl: preset.connectionDefaults.baseUrl,
+			category: preset.category as ConnectionServiceCategory
+		})
 
 	for (const preset of OPENAI_COMPATIBLE_PRESETS) {
 		const isCustom = preset.category === "custom"
+		const label = isCustom
+			? CUSTOM_SERVICE_LABEL
+			: (PRESET_LABEL_OVERRIDES[preset.name] ?? preset.name)
+		const setupNeed = presetSetupNeed(preset)
 		items.push({
 			key: `preset:${preset.value}`,
-			label: isCustom
-				? "Custom (OpenAI-Compatible)"
-				: (PRESET_LABEL_OVERRIDES[preset.name] ?? preset.name),
+			label,
 			category: preset.category as ConnectionServiceCategory,
 			type: CONNECTION_TYPE.OPENAI,
 			presetValue: preset.value,
 			presetSlug: (preset as { slug?: string }).slug,
-			difficulty: openaiType.difficulty,
-			description: openaiType.description,
+			setupNeed,
+			description: presetDescription(preset, label, setupNeed),
 			// Every preset is listed under text generation; the ones that
 			// also embed are listed again below.
 			modality: "text-gen"
@@ -237,22 +355,54 @@ export function buildConnectionServiceItems(
 		const slug = (preset as { slug?: string }).slug
 		if (!slug || PRESET_CAPABILITIES[slug]?.["text->embedding"] !== true)
 			continue
+		const label = PRESET_LABEL_OVERRIDES[preset.name] ?? preset.name
+		const setupNeed = presetSetupNeed(preset)
 		items.push({
 			// ⚠ Its own key, as Ollama's: `preset:<n>` is already taken.
 			key: `preset:${preset.value}@embeddings`,
-			label: PRESET_LABEL_OVERRIDES[preset.name] ?? preset.name,
+			label,
 			category: preset.category as ConnectionServiceCategory,
 			type: CONNECTION_TYPE.OPENAI,
 			presetValue: preset.value,
 			presetSlug: slug,
-			difficulty: openaiType.difficulty,
+			setupNeed,
+			// The preset's own line first, so the key and where to get it
+			// read the same in either section.
 			description:
+				presetDescription(preset, label, setupNeed) +
 				"<p>The service's OpenAI-compatible embedding route, " +
 				"<b>POST /embeddings</b>, on the same connection that serves " +
 				"chat — one per service.</p>" +
 				"<p>Pick one of its embedding models. Not every service's " +
 				"model list says which models embed.</p>",
 			modality: "embeddings"
+		})
+	}
+
+	// The presets whose service draws, under Images too — the same move as
+	// embeddings above, read from the same preset layer (`"text->image":
+	// true`): OpenAI's gpt-image, Together, xAI and Gemini all create the
+	// SAME `openai` connection, listed in the section a person opens.
+	for (const preset of OPENAI_COMPATIBLE_PRESETS) {
+		const slug = (preset as { slug?: string }).slug
+		if (!slug || PRESET_CAPABILITIES[slug]?.["text->image"] !== true)
+			continue
+		const label = PRESET_LABEL_OVERRIDES[preset.name] ?? preset.name
+		const setupNeed = presetSetupNeed(preset)
+		items.push({
+			// ⚠ Its own key, as the embedding entries'.
+			key: `preset:${preset.value}@image-gen`,
+			label,
+			category: preset.category as ConnectionServiceCategory,
+			type: CONNECTION_TYPE.OPENAI,
+			presetValue: preset.value,
+			presetSlug: slug,
+			setupNeed,
+			description:
+				presetDescription(preset, label, setupNeed) +
+				"<p>Draws pictures on the same connection that serves chat — " +
+				"one per service. Pick one of its image models.</p>",
+			modality: "image-gen"
 		})
 	}
 

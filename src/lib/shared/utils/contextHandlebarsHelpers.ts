@@ -1,6 +1,7 @@
 import type Handlebars from "handlebars"
 import type { CompletionTemplate } from "$lib/shared/constants/completionTemplates"
 import { PromptBlockFormatter } from "./PromptBlockFormatter"
+import { strokeList } from "./strokeList"
 
 // Shared between the real prompt builder and the isolated preview compiler so both render identically.
 /**
@@ -118,6 +119,16 @@ export function registerContextHandlebarsHelpers(
 			)
 		})
 	}
+
+	// `{{{jsonValue (or (strokeList strokes "description") description) 4}}}`
+	// — a card field as the list of its strokes, or nothing when the card has
+	// none of that kind (`strokeList.ts`). The characters layout's one helper
+	// beyond `jsonValue`; returned as a value, not a SafeString, because it is
+	// only ever an argument to another helper.
+	if (!handlebars.helpers.strokeList)
+		handlebars.registerHelper("strokeList", (strokes: unknown, kind: unknown) =>
+			strokeList(strokes, kind)
+		)
 
 	if (!handlebars.helpers.systemBlock) {
 		handlebars.registerHelper(

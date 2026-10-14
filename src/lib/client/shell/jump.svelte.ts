@@ -46,10 +46,8 @@ import {
  * than running a second search over the same data.
  */
 export interface JumpScopeRegistration {
-	/** The scope chip's word, and the pill's: "Characters". */
+	/** The scope chip's word: "Characters". */
 	label: string
-	/** The overlay input's placeholder: "Filter characters". */
-	placeholder?: string
 	getQuery: () => string
 	setQuery: (q: string) => void
 	/** The view's filtered rows as jump hits. The overlay shows the first 8. */
@@ -72,6 +70,13 @@ export interface JumpScope {
 }
 
 export const EVERYWHERE_LABEL = "Everywhere"
+/**
+ * The Jump pill's label and the overlay input's placeholder, in every scope
+ * (less-confusing B4, 2026-10-11). Neither relabels per view ("Search
+ * Library", "Filter characters"): one control reads as one. The scope chip
+ * inside the overlay is what says where it is looking.
+ */
+export const JUMP_PLACEHOLDER = "Jump to anything"
 export const ADMIN_SCOPE_KEY = "admin"
 export const ADMIN_SCOPE_LABEL = "Admin"
 
@@ -213,7 +218,10 @@ export interface JumpCtx {
 	readonly scope: JumpScope
 	/** The registration backing the current scope, when a view owns it. */
 	readonly registration: JumpScopeRegistration | null
-	/** The overlay input's placeholder for the current scope. */
+	/**
+	 * The overlay input's placeholder: "Jump to anything", whatever the scope
+	 * (less-confusing B4, 2026-10-11). The scope chip says where it looks.
+	 */
 	readonly placeholder: string
 	/**
 	 * The query. Reads and writes the SCOPED VIEW's own filter state whenever
@@ -279,10 +287,7 @@ class JumpController implements JumpCtx {
 	}
 
 	get placeholder(): string {
-		const reg = this.registration
-		if (reg?.placeholder) return reg.placeholder
-		const scope = this.#scope
-		return scope.key === null ? "Jump to anything" : `Search ${scope.label}`
+		return JUMP_PLACEHOLDER
 	}
 
 	get query(): string {

@@ -11,6 +11,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
+import {  } from "$lib/server/loadouts/testing"
 
 vi.mock("$lib/server/db", async (orig) => {
 	const actual = (await orig()) as any
@@ -52,7 +53,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
 	queueCalls.length = 0
-	await testDb.delete(schema.connectionDefaults)
+	await testDb.delete(schema.loadouts)
 })
 
 const admin = () => ({ user: { id: 1, isAdmin: true } }) as any
@@ -76,6 +77,8 @@ describe("vectorization:status", () => {
 		expect(res).toEqual({
 			starred: false,
 			modelId: null,
+			// Which connection holds the lane; null while nothing is starred.
+			connectionId: null,
 			loaded: false,
 			loadError: null,
 			lastUsedAt: null,
@@ -125,6 +128,7 @@ describe("ner:status", () => {
 		expect(res).toEqual({
 			starred: false,
 			modelId: null,
+			connectionId: null,
 			modelReady: false,
 			loadError: null,
 			annotatedRows: 0,

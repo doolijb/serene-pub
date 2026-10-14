@@ -4,18 +4,15 @@
 
 	let userCtx: UserCtx = getContext("userCtx")
 	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
-	let ollamaSettingsCtx: OllamaSettingsCtx = getContext("ollamaSettingsCtx")
-	let koboldCppSettingsCtx: KoboldCppSettingsCtx = getContext(
-		"koboldCppSettingsCtx"
-	)
 
 	let isAdmin = $derived(!!userCtx.user?.isAdmin)
 	let isAccountsEnabled = $derived(
 		!!systemSettingsCtx.settings?.isAccountsEnabled
 	)
 	// The Android app can't run either local runtime (the server refuses to
-	// switch them on), so their pages are hidden there — as the shell's nav
-	// hides them.
+	// switch them on), so their pages are hidden there, as the shell's nav
+	// hides them. Elsewhere they are listed whether or not their manager is
+	// on: each page turns its own manager on (less-confusing J1).
 	let localRuntimes = $derived(
 		canRunLocalRuntimes(systemSettingsCtx.settings)
 	)
@@ -56,9 +53,9 @@
 					},
 					{
 						href: "/document-view/sessions/new",
-						label: "Start a New session",
+						label: "Start a session",
 						description:
-							"Create a session with one or more characters and personas.",
+							"Start a session with your characters and the character you play.",
 						show: true
 					}
 				]
@@ -78,7 +75,7 @@
 					},
 					{
 						href: "/document-view/characters/new",
-						label: "Create a New character",
+						label: "Create a character",
 						description: "Simplified character creation.",
 						show: true
 					},
@@ -109,7 +106,7 @@
 						href: "/document-view/connections",
 						label: "Connections",
 						description:
-							"Manage AI service connections and the system default.",
+							"Manage AI service connections and choose the model for chat.",
 						show: isAdmin
 					},
 					{
@@ -117,27 +114,20 @@
 						label: "Ollama, managed",
 						description:
 							"Browse, download, and connect Ollama models.",
-						show:
-							isAdmin &&
-							localRuntimes &&
-							!!ollamaSettingsCtx.settings?.ollamaManagerEnabled
+						show: isAdmin && localRuntimes
 					},
 					{
 						href: "/document-view/koboldcpp",
 						label: "KoboldCPP, run by Serene Pub",
 						description:
 							"Browse, download, and connect KoboldCPP models.",
-						show:
-							isAdmin &&
-							localRuntimes &&
-							!!koboldCppSettingsCtx.settings
-								?.koboldCppManagerEnabled
+						show: isAdmin && localRuntimes
 					},
 					{
 						href: "/document-view/settings/system",
-						label: "System settings",
+						label: "Pub settings",
 						description:
-							"Settings for the whole pub: managers, accounts, summarization, and more.",
+							"Settings for the whole pub: user accounts, embeddings, CharaVault, and more.",
 						show: isAdmin
 					},
 					{

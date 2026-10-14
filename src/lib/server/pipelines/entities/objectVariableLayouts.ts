@@ -173,7 +173,7 @@ export function objectLayoutSeedsFor(
 
 /**
  * Core's automatic layouts: one per `core:` object variable core ships no
- * layout for. Empty today — every core object variable has hand-written rows
+ * layout for — `core:var/likenesses@1` (2026-10-12) is the first; the rest have hand-written rows
  * (`variableLayouts.ts`) — and it is what keeps a new one from ever reaching a
  * prompt without a layout. Seeded under the variable's `content` seed key,
  * the key a hand-written bare row would take, so writing one later adopts the

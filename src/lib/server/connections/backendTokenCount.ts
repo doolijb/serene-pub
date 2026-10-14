@@ -78,6 +78,77 @@ export function tokenCountEndpointFor(
 	return null
 }
 
+/** How a server is asked for one text's token ids, and which model answers. */
+export interface TokenIdsEndpoint {
+	url: string
+	body: (text: string) => Record<string, unknown>
+	read: (json: unknown) => number[] | null
+	/** Where the server names the model it has loaded (a GET). */
+	loadedModel: { url: string; read: (json: unknown) => string | null }
+}
+
+/**
+ * Where (and whether) a connection type's server gives the token IDS of a
+ * text — the routes the counts use, asked for the text's own tokens with no
+ * BOS. Logit bias biases every id it is handed (plan logit-bias L5), and a BOS
+ * among them would be biased too.
+ *
+ * - KoboldCPP: `/api/extra/tokencount` answers `{ value, ids }`. Its `special`
+ *   flag defaults to true and adds the BOS, so it is sent false (koboldcpp
+ *   1.119's handler). The loaded model is `/api/v1/model`'s `result`.
+ * - llama.cpp: `/tokenize` answers `{ tokens }` with `add_special: false`. The
+ *   loaded model is `/props`' `model_path`.
+ *
+ * `null` for every other type and for an empty base URL.
+ */
+export function tokenIdsEndpointFor(
+	type: string | null | undefined,
+	baseUrl: string | null | undefined
+): TokenIdsEndpoint | null {
+	const base = normalizeBaseUrl(baseUrl)
+	if (!base) return null
+	if (
+		type === CONNECTION_TYPE.KOBOLDCPP ||
+		type === CONNECTION_TYPE.KOBOLDCPP_MANAGED
+	)
+		return {
+			url: `${base}/api/extra/tokencount`,
+			body: (text) => ({ prompt: text, special: false }),
+			read: (json) =>
+				tokenIdList((json as { ids?: unknown } | null)?.ids),
+			loadedModel: {
+				url: `${base}/api/v1/model`,
+				read: (json) =>
+					nonEmptyString(
+						(json as { result?: unknown } | null)?.result
+					)
+			}
+		}
+	if (type === CONNECTION_TYPE.LLAMACPP)
+		return {
+			url: `${base}/tokenize`,
+			body: (text) => ({ content: text, add_special: false }),
+			read: (json) =>
+				tokenIdList((json as { tokens?: unknown } | null)?.tokens),
+			loadedModel: {
+				url: `${base}/props`,
+				read: (json) =>
+					nonEmptyString(
+						(json as { model_path?: unknown } | null)?.model_path
+					)
+			}
+		}
+	return null
+}
+
+const tokenIdList = (v: unknown): number[] | null =>
+	Array.isArray(v) && v.every((id) => Number.isSafeInteger(id) && id >= 0)
+		? (v as number[])
+		: null
+
+const nonEmptyString = (v: unknown): string | null =>
+	typeof v === "string" && v ? v : null
+
 /**
  * What an uncounted text is scaled by before the server has answered
  * anything: estimates run UNDER real counts often enough (JSON cards, names,

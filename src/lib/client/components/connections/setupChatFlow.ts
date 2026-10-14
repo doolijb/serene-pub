@@ -3,17 +3,20 @@
  *
  * The flow is Runtime → Model → Done (concept ruling, U5): install KoboldCPP,
  * fetch one chat model, and sessions can reply. ⚠ The step is DERIVED, never
- * stored — a person who closes the sidebar mid-download and comes back lands
+ * stored — a person who closes the stepper mid-download and comes back lands
  * on the step the pub is actually at, and a runtime somebody installed
  * through the managed view counts exactly as one installed here.
  *
- * "First model becomes the chat default when none is set" is the flow's one
- * side effect, and `firstModelToRegister` is the whole of that decision: it
- * names a pair only while the chat default is unset, so a pub that already
- * answers with something is never silently re-pointed.
+ * "First model becomes the model for Chat replies when none is set" is the
+ * flow's one side effect, and `firstModelToRegister` is the whole of that
+ * decision: it names a pair only while the chat default is unset, so a pub
+ * that already answers with something is never re-pointed.
  */
 
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import { chosenSentence } from "./jobPicker"
+
+const CHAT = "text->text"
 
 export type SetupChatStep = "runtime" | "model" | "done"
 
@@ -124,14 +127,18 @@ export const SETUP_CHAT_STEPS: readonly {
 	{ value: "done", label: "Done" }
 ]
 
-/** What the Done card says, given what is now registered. */
+/**
+ * What the Done step says, given what is now registered — the flow's one
+ * side effect said out loud, in the same words as the toast after any other
+ * Use (`chosenSentence`).
+ */
 export function doneSentence(
 	facts: SetupChatFacts,
 	registeredName: string | null
 ): string {
-	if (registeredName) return `Sessions reply with ${registeredName}.`
+	if (registeredName) return chosenSentence(registeredName, [CHAT])
 	const [first] = presentModels(facts.connection)
 	if (facts.chatDefault && first)
-		return "A chat model is set — sessions can reply."
+		return "The Reply loadout is filled — sessions can reply."
 	return "Sessions can reply."
 }

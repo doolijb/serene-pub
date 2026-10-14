@@ -8,17 +8,19 @@ Only administrators can open the admin area or change these. The server checks e
 
 Nothing here needs setting up before you use the app: a new pub starts with sensible defaults (accounts off, daily backups on). Your own preferences, such as your theme and language, are in **Settings** instead: see [Themes and settings](./themes-and-settings.md).
 
-Open **Admin** on the rail and look under **Pub**. Each page is a column of cards, and each card saves on its own.
+Open **Admin** on the rail: **Pub** is the first group, under **Overview**. Each page is a column of cards, and each card saves on its own.
 
 | Page | What it holds |
 | --- | --- |
-| [General](#general) | Language and translation, user accounts, the CharaVault account, scripts, lorebook writes |
+| [General](#general) | Language and translation, user accounts, messages between people, the CharaVault account, scripts, lorebook writes |
+| **Users** | The account roster, once accounts are on: see [Users and accounts](./users-and-accounts.md) |
 | [Network](#network) | The tunnel that makes your pub reachable from outside, and the allowed hosts |
 | [Data and backups](#data-and-backups) | The backup policy, and the backups themselves |
-| [Diagnostics](#diagnostics) | The support report, and context debugging |
+| [Diagnostics](#diagnostics) | The support report, context debugging, and scripts with no place to run |
 | [History](#history) | Who changed what on this pub, and when |
+| [Updates](#update-notifications) | A newer release, and installing it (not on pre-release builds) |
 
-Defaults for which model does which job are under **Models › Defaults** instead: see [System-wide defaults](#system-wide-defaults).
+Which model each kind of work runs on is set by its [loadout](./connections.md#loadouts) (a model on a connection plus its sampling), under **Models › Loadouts** instead: see [System-wide defaults](#system-wide-defaults).
 
 ## General
 
@@ -32,6 +34,10 @@ The **User accounts** switch turns sign-in on for everyone. It's **permanent**: 
 
 Step by step, and what happens next (inviting people, roles, passphrases): [Users and accounts](./users-and-accounts.md#enabling-user-accounts).
 
+### Messages between people
+
+**Messages between people** lets people with accounts on this pub write to each other privately, one to one or in a group, from **Messages** on the rail. It is on by default, and it only matters while user accounts are on: with one person there is nobody to message, and the Android app never shows it. Turning it off hides Messages for everyone and refuses every message request; nothing already written is deleted, and it all comes back when you turn it on again.
+
 ### Language and automatic translation
 
 The **Language** card sets the pub's default language; the **Automatic translation** card decides whether interface strings with no translation are sent to a translation service. See [Languages](./languages.md).
@@ -44,7 +50,7 @@ To connect: create an App Password at charavault.net named "Serene Pub", enter t
 
 ### Scripts
 
-**Run scripts** is the off switch for scripts people have written into pipelines. Turning it off deletes nothing: every script stays where it is and simply doesn't run until you turn it back on. Use it when a script misbehaves and you need the pub working first.
+**Run scripts** is the off switch for scripts people have written into pipelines. Turning it off deletes nothing: every script stays where it is and simply doesn't run until you turn it back on. Use it when a script misbehaves and you need the pub working first. What scripts are and where they run is in [Scripts](./scripts.md).
 
 ### Lorebook writes from sessions
 
@@ -52,7 +58,7 @@ How sessions may change the lorebooks they read (a stat a session records, a sum
 
 ### Embeddings
 
-Embeddings (the model behind Search by meaning) are chosen in **Admin › Models › Defaults**, not here. See [Embeddings and search by meaning](./embeddings-and-rag.md).
+The model behind Search by meaning is the **Embeddings** loadout's, filled in **Admin › Models › Loadouts** or the **Loadouts** view, not here. See [Embeddings and search by meaning](./embeddings-and-rag.md).
 
 ## Network
 
@@ -78,11 +84,13 @@ Below it is the backups list: **Back up now** (with a one-off _include user file
 
 ## Diagnostics
 
+When a script list has lost its place, because a pipeline update or a removed plugin took away the point it was attached to, a line at the top of Diagnostics counts them: _1 script chain has no place to run_, or _3 script chains have no place to run_. It opens **Admin › Pipelines › Scripts** filtered to **Unplaced**. See [Scripts → When a seam disappears](./scripts.md#when-a-seam-disappears).
+
 ### Support report
 
 **Copy report** puts a description of this pub on the clipboard, ready to paste into a bug report or hand to an AI assistant; **Download .md** saves the same text as a Markdown file. A preview shows exactly what will be shared, and **Refresh** makes it again. Nothing is stored: the report is built when you open the page or press Refresh.
 
-It covers the app, SDK and core catalogue versions (and a few key packages), Node and the operating system, the pub's switches, which environment variables are set, database migrations and backups, connections (type, capabilities, models, last sync error), capability defaults, installed plugins with their version, source link, author and the SDK they were built against, plugin hook failures from the last seven days, recent failed pipeline runs with the node that stopped them, the server's recent warnings and errors (the last 300 since it started, kept in memory only), the **Needs you** list, and your browser's user agent, language, time zone and window size.
+It covers the app, SDK and core catalogue versions (and a few key packages), Node and the operating system, the pub's switches, which environment variables are set, database migrations and backups, connections (type, capabilities, models, last sync error), the default loadouts, installed plugins with their version, source link, author and the SDK they were built against, plugin hook failures from the last seven days, recent failed pipeline runs with the node that stopped them, the server's recent warnings and errors (the last 300 since it started, kept in memory only), the **Needs you** list, and your browser's user agent, language, time zone and window size.
 
 Before it leaves the server, one redaction step removes API keys, tokens, passwords and other secrets; credentials and query strings in URLs; email addresses; IP addresses and host names other than localhost and a short list of well-known public services; user names (shown as `user#1`, `user#2`, …) and the machine's name; and paths under your home folder (shown as `~`). A database error keeps its reason and the shape of its query, but never the values the query was writing — those can be message or lore text — so they read `[params withheld]`. Environment variable values are shown only for a few harmless ones such as `NODE_ENV` and `PORT`. Message text, characters and lore are never read. The report says at the top what was redacted, and stays under about 50 KB by dropping its oldest log lines first. Read it before you share it.
 
@@ -96,7 +104,7 @@ Every section has a fixed heading and the whole report ends with the same facts 
 
 **History** lists every change an admin has made to this pub, newest first: when, who, what kind of change (added, changed, deleted, or an action such as starting a process), the object it touched, and a one-line summary such as *Changed default language from “en” to “fr”*. Select a change to open its own page, read-only: when, who, the action, the object and the event, then each changed field with its old and new value. Its **Open** button goes to the object (unless the change deleted it), and **This object's history** lists every change to that object.
 
-What is recorded: pub settings (General, backups policy, the KoboldCPP and Ollama runtimes, the pub theme, the CharaVault account), the tunnel, users, invites and clearing a user's two-factor, backups made and deleted, connections and their models and scripts, capability defaults, sampling configs, genres and presets, pipeline configurations and options changed for the whole pub, prompts, the three template kinds, scripts, plugins and components. A change made inside one session, or by someone who is not an admin, is not a change to the pub and is not recorded. A change that fails records nothing.
+What is recorded: pub settings (General, backups policy, the KoboldCPP and Ollama runtimes, the pub theme, the CharaVault account), the tunnel, users, invites and clearing a user's two-factor, backups made and deleted, connections and their models and scripts, default loadouts, sampling configs, genres and presets, pipeline configurations and options changed for the whole pub, prompts, the three template kinds, scripts, plugins and components. A change made inside one session, or by someone who is not an admin, is not a change to the pub and is not recorded. A change that fails records nothing.
 
 **Secrets are never written down.** Passwords, API keys, tokens and other credentials show only that they changed, never their value, and a pipeline option's value is not recorded at all because an option can hold a credential. Long values are shortened.
 
@@ -110,7 +118,7 @@ A KoboldCPP or Ollama that your pub runs for you is a **connection**, set up and
 
 ## System-wide defaults
 
-Which connection and model each job uses (writing replies, embeddings, images and so on) is set in **Admin › Models › Defaults**: see [Connections](./connections.md). Default sampling and pipeline configurations are chosen on their own admin pages.
+Which connection and model each kind of work uses (writing replies, embeddings, images and so on) is set by its default [loadout](./connections.md#loadouts) (a named choice of model on a connection, plus its sampling): _the Reply loadout_, _the Images loadout_, _the Embeddings loadout_ and so on. Fill them in the **Loadouts** view or in **Admin › Models › Loadouts**. Getting pictures working is in [Images](./images.md). Default sampling and pipeline configurations are chosen on their own admin pages.
 
 ## Update notifications
 

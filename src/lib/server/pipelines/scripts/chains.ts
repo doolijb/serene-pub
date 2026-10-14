@@ -31,13 +31,42 @@ import type {
 	ScriptApplicationRecord,
 	SessionSettingsV1
 } from "@serene-pub/sdk"
-import { splitCandidates, withBandIntents } from "@serene-pub/sdk"
+import { seamAddressOf, splitCandidates, withBandIntents } from "@serene-pub/sdk"
+
+/**
+ * The seam address a site names. The executor sets `at` on every site it
+ * builds; a hand-built site (tests, a host-side probe) may carry only the
+ * older `phase` + `port`, and those spell the same address.
+ */
+const seamOf = (site: Pick<ScriptHookSite, "at" | "phase" | "port">): string =>
+	site.at ?? seamAddressOf({ port: site.port, phase: site.phase })
 import {
 	scriptTypeInfos,
 	type ScriptTypeInfo
 } from "$lib/server/pipelines/entities/scripts"
 import { runScriptSource } from "$lib/server/pipelines/scripts/host"
 import type { PluginHookDispatch } from "$lib/server/pipelines/scripts/pluginDispatch"
+
+/**
+ * The `params` field a step with a `scripts` slot may declare to set how long
+ * each of its links may run (`core:task/run-script@1`'s, plan 2026-10-12 §5).
+ * The host reads it — the binding never sees the chain it bounds.
+ */
+export const SCRIPT_BUDGET_PARAM = "budgetMs"
+
+/** A connection's attached stop guards, as the applier evaluates them (18 §4b). */
+export interface ConnectionStops {
+	connectionId: number
+	connectionName: string
+	rows: Array<{
+		id: number
+		name: string
+		typeId: string
+		enabled: boolean
+		source: string
+		varsIn: string[]
+	}>
+}
 
 export interface ScriptApplierOptions {
 	/** The run seed — link streams derive from it (see header). */
@@ -46,7 +75,14 @@ export interface ScriptApplierOptions {
 	nowMs: number
 	/** Values for declared hook extras — speaker name, cast names. */
 	extras?: Record<string, unknown>
+	/** The seam default: how long one link may run (250 ms when unset). */
 	timeoutMs?: number
+	/**
+	 * Per step, the time limit its own `params.budgetMs` sets
+	 * (`scriptBudgetsByNode`, `runSeams.ts`) — wins over `timeoutMs` for every
+	 * link at that step's seams. A step absent here takes the seam default.
+	 */
+	budgetMsByNode?: Record<string, number>
 	/**
 	 * The run's connection and its attached stop guards (18 §4b). Evaluated
 	 * into the same min-reduction as any hook that accepts `text/stop` — legal
@@ -54,18 +90,16 @@ export interface ScriptApplierOptions {
 	 * needs no precedence rule. Each application records `via` so the receipt
 	 * says which side supplied the guard (18 §4c).
 	 */
-	connectionStops?: {
-		connectionId: number
-		connectionName: string
-		rows: Array<{
-			id: number
-			name: string
-			typeId: string
-			enabled: boolean
-			source: string
-			varsIn: string[]
-		}>
-	}
+	connectionStops?: ConnectionStops
+	/**
+	 * The same, per node: the guards of the connection THAT node runs on.
+	 * A configuration may give a step a connection other than the instance
+	 * default, and a guard from a connection the step is not using is worse
+	 * than none — the receipt would say a guard was in play. A node present
+	 * here (even as `undefined`) reads its own entry; any other falls back
+	 * to `connectionStops`.
+	 */
+	connectionStopsByNode?: Record<string, ConnectionStops | undefined>
 	/**
 	 * The extension-hook executor, present only when plugins are enabled and the
 	 * sandbox is ready. A chain link whose type is plugin-owned
@@ -163,7 +197,7 @@ export function makeScriptApplier(
 			...applied,
 			value,
 			notes: [
-				`scripts: the ${site.slot} chain on ${site.port} returned a non-list where candidates were expected — value kept, band intents kept`
+				`scripts at ${seamOf(site)} (${site.slot} on ${site.port}) returned a non-list where candidates were expected — value kept, band intents kept`
 			]
 		}
 	}
@@ -173,13 +207,25 @@ export function makeScriptApplier(
 		const record = (
 			r: Omit<ScriptApplicationRecord, "phase" | "appliedBy">
 		) => {
-			applications.push({
+			// Where the link ran, as the seam address (PLAN-script-placement
+			// D1) — the one spelling the panel, the script map and the
+			// inspector share. `slot`/`port`/`phase` stay beside it for one
+			// release (⏳), so a reader of an older receipt still finds them.
+			const placed: ScriptApplicationRecord & {
+				at: string
+				slot: string
+				port: string
+			} = {
 				...r,
+				at: site.at,
+				slot: site.slot,
+				port: site.port,
 				phase: site.phase,
 				// Substrate hooks and binding-invoked interior points (18 §4e)
 				// share the applier; the site says which one asked.
 				appliedBy: site.origin ?? "substrate"
-			})
+			}
+			applications.push(placed)
 		}
 
 		const ids = (Array.isArray(chain) ? chain : []).filter(
@@ -188,11 +234,21 @@ export function makeScriptApplier(
 		// The connection's guards apply whether or not the pipeline configured
 		// a chain of its own (18 §4b) — an empty chain and an absent one both
 		// still carry the endpoint's model knowledge.
+		const conn =
+			opts.connectionStopsByNode &&
+			Object.hasOwn(opts.connectionStopsByNode, site.nodeKey)
+				? opts.connectionStopsByNode[site.nodeKey]
+				: opts.connectionStops
 		const connApplies =
-			!!opts.connectionStops?.rows.length &&
+			!!conn?.rows.length &&
 			site.accepts.includes("core:script:text/stop@1") &&
 			typeof value === "string"
 		if (!ids.length && !connApplies) return { value, applications }
+
+		// Each link's time limit: the step's own `params.budgetMs` where its
+		// definition declares one (the script step), else the seam default.
+		const linkTimeoutMs =
+			opts.budgetMsByNode?.[site.nodeKey] ?? opts.timeoutMs ?? 250
 
 		const [typeMap, rows] = [await types(), await rowsFor(ids)]
 
@@ -279,7 +335,7 @@ export function makeScriptApplier(
 					extras,
 					seedLabel,
 					nowMs: opts.nowMs,
-					timeoutMs: opts.timeoutMs ?? 250,
+					timeoutMs: linkTimeoutMs,
 					runId: opts.runId,
 					user: opts.user
 				})
@@ -290,7 +346,7 @@ export function makeScriptApplier(
 					extras,
 					seedLabel,
 					nowMs: opts.nowMs,
-					timeoutMs: opts.timeoutMs ?? 250
+					timeoutMs: linkTimeoutMs
 				})
 			}
 
@@ -475,7 +531,6 @@ export function makeScriptApplier(
 		// doesn't suffer it. Only at hooks that accept `text/stop`, only rows
 		// of that type, each recorded with `via` so the receipt names the side
 		// that supplied the guard (18 §4c).
-		const conn = opts.connectionStops
 		if (
 			conn?.rows.length &&
 			site.accepts.includes("core:script:text/stop@1") &&
@@ -485,11 +540,12 @@ export function makeScriptApplier(
 				const row = conn.rows[i]!
 				// `via` says which SIDE supplied the guard (18 §4c), and the
 				// side is what the receipt reader needs; WHICH connection it
-				// was is identity, and this record is stored in the receipt
-				// blob that `pipelines:run` serves back to whoever owns the run
-				// — a non-admin included. So the side stays in the string and
-				// the name moves to `connectionName`, a key
-				// `withoutConnectionIdentity` has always removed.
+				// was is identity. Receipts are admin-only today
+				// (`receiptsAdminOnly`, `sockets/pipelines.ts`) — a member
+				// sees only the progress card's explanation — but the side
+				// still stays in the string and the name in `connectionName`,
+				// a key `withoutConnectionIdentity` removes, so the record is
+				// safe on any surface a receipt may yet reach.
 				const base = {
 					scriptId: row.id,
 					name: row.name,
@@ -525,7 +581,7 @@ export function makeScriptApplier(
 					extras,
 					seedLabel: `${opts.seed}:scripts:connection:${conn.connectionId}:${i}:${row.id}`,
 					nowMs: opts.nowMs,
-					timeoutMs: opts.timeoutMs ?? 250
+					timeoutMs: linkTimeoutMs
 				})
 				if (!res.ok) {
 					record({
@@ -671,8 +727,10 @@ export async function scriptExtras(
 
 /**
  * The run's connection and its stop guards, by the one rule the runtime uses:
- * the instance's registered `text->text` default — the same connection dispatch
- * resolves for the generate step. Best-effort like `scriptExtras`: no default,
+ * the step's configured connection (tier 2) over the instance's registered
+ * `text->text` default — the same resolution dispatch makes for the generate
+ * step. Until 2026-10-10 this passed no tier 2, so a configuration naming
+ * another connection for the reply step ran under the DEFAULT's guards. Best-effort like `scriptExtras`: no default,
  * no rows, or a failed read means no guards, never a failed turn.
  *
  * ⚠ It read `system_settings.default_connection_id` directly until 0181, which
@@ -683,14 +741,36 @@ export async function scriptExtras(
  * guard, because the receipt says a guard was in play.
  */
 export async function connectionStopsFor(
-	db: Db
-): Promise<ScriptApplierOptions["connectionStops"]> {
+	db: Db,
+	/**
+	 * What the pipeline's configuration selected for the step the guards
+	 * join — the same tier-2 candidate `dispatch.ts` hands the resolver for
+	 * that step (`connectionId`/`connectionModelId` off its `connection`
+	 * slot). Absent or null: the instance default, as before.
+	 */
+	pipelineConfig?: {
+		connectionId?: number | null
+		connectionModelId?: number | null
+	} | null
+): Promise<ConnectionStops | undefined> {
 	try {
 		const { resolveCapabilityTarget, TEXT_CAPABILITY } = await import(
 			"$lib/server/connections/capabilityTarget"
 		)
 		const target = await resolveCapabilityTarget(db, {
-			capability: TEXT_CAPABILITY
+			capability: TEXT_CAPABILITY,
+			// Only when the configuration named something: a lookup with no
+			// tier 2 is the instance default's, as it always was.
+			...(pipelineConfig &&
+			(pipelineConfig.connectionId != null ||
+				pipelineConfig.connectionModelId != null)
+				? {
+						pipelineConfig: {
+							connectionId: pipelineConfig.connectionId ?? null,
+							connectionModelId: pipelineConfig.connectionModelId ?? null
+						}
+					}
+				: {})
 		})
 		// The refusal sentence is deliberately dropped rather than surfaced.
 		// Nothing here is the run: the turn fails (or doesn't) at dispatch, with

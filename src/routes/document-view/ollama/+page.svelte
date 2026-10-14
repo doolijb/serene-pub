@@ -5,6 +5,8 @@
 	import { OllamaModelSearchSource } from "$lib/shared/constants/OllamaModelSource"
 	import { announce } from "$lib/client/accessibility/state.svelte"
 	import { ollamaChatDefaultModelName } from "$lib/client/components/ollamaManager/defaultModel"
+	import { enableManager } from "$lib/client/components/connections/managers"
+	import { canRunLocalRuntimes } from "$lib/client/components/connections/addMenuItems"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
@@ -159,14 +161,14 @@
 	function handleConnectModel() {
 		// `ollama:connectModel` registers the (endpoint, model) PAIR as the
 		// instance's chat capability default — what the button says it does.
-		baseUrlStatus = "Now using this model for chat."
+		baseUrlStatus = "This model now fills the Reply loadout."
 		announce(baseUrlStatus)
 		// Re-requests `connections:list` so `inUseForChat` picks up the new
 		// pair and the marker moves to this model.
 		refresh()
 	}
 	function handleConnectModelError(msg: { error?: string }) {
-		error = msg.error || "Failed to use that model for chat."
+		error = msg.error || "Could not put that model in the Reply loadout."
 		announce(error)
 	}
 	function handleDeleteModel() {
@@ -293,8 +295,35 @@
 		"ollama:searchAvailableModels:error",
 		handleSearchAvailableModelsError
 	)
+	/**
+	 * Off is not a dead end (less-confusing J1). The press is the Add menu's
+	 * own (`enableManager`): it switches the manager on and adds the Ollama
+	 * connection when there is none, so nobody is sent to Pub settings first.
+	 * It waits for `connections:list`, which is how it knows whether a row
+	 * already exists, and the lists load again once the flag lands.
+	 */
+	let connectionsLoaded = $state(false)
+	let turningOn = $state(false)
+	function turnOn() {
+		turningOn = true
+		enableManager("ollama", socket, connectionsList)
+		announce("Turning on Ollama, managed.")
+	}
+	let wasOn: boolean | undefined
+	$effect(() => {
+		const settings = ollamaSettingsCtx.settings
+		if (!settings) return
+		const on = !!settings.ollamaManagerEnabled
+		if (wasOn === false && on) {
+			turningOn = false
+			refresh()
+		}
+		wasOn = on
+	})
+
 	useInterest<"connections:list">("connections:list", (msg) => {
 		connectionsList = msg.connectionsList ?? []
+		connectionsLoaded = true
 	})
 
 	onMount(() => {
@@ -312,10 +341,26 @@
 {#if !userCtx.user?.isAdmin}
 	<p>Admin access required.</p>
 {:else if !ollamaSettingsCtx.settings?.ollamaManagerEnabled}
-	<p>
-		Ollama, managed, is turned off. Enable it from System settings first.
-	</p>
-	<p><a href="/document-view/settings/system">Go to System settings</a></p>
+	{#if canRunLocalRuntimes(systemSettingsCtx.settings)}
+		<p>
+			Ollama, managed, is off on this pub. Turning it on lets Serene Pub
+			browse and download models into Ollama, and adds an Ollama
+			connection if you don't have one.
+		</p>
+		<p>
+			<button
+				type="button"
+				class="a11y-btn"
+				disabled={!connectionsLoaded || turningOn}
+				onclick={turnOn}
+			>
+				{turningOn ? "Turning on…" : "Turn on Ollama, managed"}
+			</button>
+		</p>
+	{:else}
+		<p>Ollama, managed, is not available in the Android app.</p>
+	{/if}
+	<p><a href="/document-view/connections">Back to Connections</a></p>
 {:else}
 	{#if error}
 		<div class="a11y-status a11y-status-error" role="alert">
@@ -480,7 +525,7 @@
 							disabled={inUse}
 							aria-pressed={inUse}
 						>
-							{inUse ? "In use for chat" : "Use for chat"}
+							{inUse ? "In the Reply loadout" : "Use in Reply"}
 						</button>
 						<button
 							type="button"

@@ -26,9 +26,13 @@ import ModelFinderView from "./ModelFinderView.svelte"
 import DownloadsView from "./DownloadsView.svelte"
 import QuantPicker from "./QuantPicker.svelte"
 import { downloads } from "./downloads.svelte"
+import { connectionsTestContext } from "$lib/client/contexts/testProvideConnections"
 
 const finder = (props: Record<string, unknown> = {}) =>
-	render(ModelFinderView, { props: { onBack: () => {}, ...props } }).body
+	render(ModelFinderView, {
+		props: { onBack: () => {}, ...props },
+		context: new Map([connectionsTestContext()])
+	}).body
 
 describe("the model finder", () => {
 	test("asks its four questions in order", () => {
@@ -73,7 +77,10 @@ describe("the downloads view", () => {
 	afterEach(() => downloads.setOnnx([]))
 
 	test("empty is one sentence, no icon and no button", () => {
-		const html = render(DownloadsView, { props: { onBack: () => {} } }).body
+		const html = render(DownloadsView, {
+			props: { onBack: () => {} },
+			context: new Map([connectionsTestContext()])
+		}).body
 		expect(html).toContain("Downloads")
 		expect(html).toContain("Nothing is downloading.")
 		expect(html).not.toContain("In flight")
@@ -100,7 +107,10 @@ describe("the downloads view", () => {
 				]
 			}
 		])
-		const html = render(DownloadsView, { props: { onBack: () => {} } }).body
+		const html = render(DownloadsView, {
+			props: { onBack: () => {} },
+			context: new Map([connectionsTestContext()])
+		}).body
 		expect(html).toContain("In flight · 1")
 		expect(html).toContain("bge-small-en-v1.5")
 		expect(html).toContain("Embeddings")
@@ -130,7 +140,10 @@ describe("the downloads view", () => {
 				]
 			}
 		])
-		const html = render(DownloadsView, { props: { onBack: () => {} } }).body
+		const html = render(DownloadsView, {
+			props: { onBack: () => {} },
+			context: new Map([connectionsTestContext()])
+		}).body
 		expect(html).toContain("Failed · 1")
 		expect(html).toContain("The Hub returned 404 for that export.")
 	})

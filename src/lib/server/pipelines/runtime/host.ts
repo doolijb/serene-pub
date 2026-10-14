@@ -98,6 +98,11 @@ import {
 } from "$lib/server/utils/relationshipGuards"
 import { RELATIONSHIP_TEXT_LIMITS } from "$lib/shared/lorebooks/linkVocabulary"
 import type { LineReading } from "$lib/server/state/reading"
+import {
+	applyRetold,
+	retoldByCard,
+	type RetoldMember
+} from "$lib/server/lorebooks/retold"
 import { SHOW_SPRITE_SPEC_ID } from "@serene-pub/core-catalog"
 import {
 	asShownSprite,
@@ -109,6 +114,7 @@ import {
 	DEFAULT_LANE,
 	byLaneThenTime,
 	canonicalChannel,
+	channelPrefixWhere,
 	channelRefusal,
 	channelsOf,
 	channelSpansLanes,
@@ -171,6 +177,11 @@ export interface HostScope {
 	 * would name a run nobody can find.
 	 */
 	runId?: string
+	/**
+	 * Each model call's loadout chain in receipt words, keyed by node key
+	 * (I12; `loadoutChainsOf(world)`). Absent on a host wired by hand.
+	 */
+	loadoutChains?: Record<string, string>
 	/** The session this run belongs to. Reads outside it are refused, not filtered. */
 	sessionId?: number
 	/**
@@ -181,6 +192,13 @@ export interface HostScope {
 	 * one and refuse any other (`lorebookInScope`).
 	 */
 	lorebookId?: number
+	/**
+	 * 🚧 The card a **card action** runs on (`runtime/cardAction.ts`) — set
+	 * only there, with no session. A model call's files may be that card's
+	 * own (`dispatch.ts` `resolveAttachments`): the caller checked the person
+	 * may act on the card.
+	 */
+	cardCharacterId?: number
 	/** Who triggered the run, for authorship on writes. */
 	userId?: number
 	/**
@@ -705,6 +723,23 @@ const TOOL_HOOK_TIMEOUT_MS = 15_000
  * Asked FIRST, because on a sampling slot the values may legitimately contain
  * neither `ref` nor `id` and the fallthrough below would go back to `null`.
  */
+/**
+ * The dials a `workflow` slot carries beside its id (`{ id, values }`, or the
+ * panel's stored `{ "": { id, values } }`) — a loadout's, projected by
+ * `applyLoadoutLayer`. Null when it carries none.
+ */
+const workflowSlotValues = (v: unknown): Record<string, unknown> | null => {
+	const slot =
+		v && typeof v === "object" && "" in (v as object)
+			? (v as Record<string, unknown>)[""]
+			: v
+	const values =
+		slot && typeof slot === "object" ? (slot as { values?: unknown }).values : null
+	return values && typeof values === "object" && !Array.isArray(values)
+		? (values as Record<string, unknown>)
+		: null
+}
+
 const refId = (v: unknown): number | null => {
 	if (typeof v === "number") return v
 	if (typeof v === "string" && /^\d+$/.test(v)) return Number(v)
@@ -2649,6 +2684,194 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					}))
 				}
 
+				case "summarize_span": {
+					/**
+					 * 🚧 A scene's span, for `core:query/summarize-source@2`
+					 * (PROPOSAL-live-scenes §12.2, §14 B): the **story** rows
+					 * — one lane, exact, by id between the boundaries — and
+					 * the **aside** rows of the named aside channels over the
+					 * same ids (every lane of each, prefix-matched), each
+					 * attached to the story line it follows.
+					 *
+					 * Both by message id, the order key of every session read;
+					 * hidden rows are left out of a range. A picked id list
+					 * (a scene captured by selection) is taken as given for the
+					 * story, as `summarize_source` takes it, and its asides are
+					 * read over the list's id span.
+					 *
+					 * Names are `summarize_source`'s, read through it, so the
+					 * two cannot name a line differently.
+					 */
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined) return { messages: [], asides: [] }
+					const limit = Math.min(Number(q.limit) || 5000, 5000)
+
+					let channel: string | null =
+						typeof q.channel === "string" && q.channel
+							? canonicalChannel(q.channel)
+							: null
+					let openedAt: number | null = Number.isInteger(q.openedAt)
+						? q.openedAt
+						: null
+					let closedAt: number | null = Number.isInteger(q.closedAt)
+						? q.closedAt
+						: null
+					let picked: number[] | undefined = Array.isArray(q.messageIds)
+						? q.messageIds.map(Number).filter(Number.isFinite)
+						: undefined
+
+					// A scene id names its own range — read from the row, and
+					// only a scene of THIS session.
+					if (q.sceneId != null) {
+						const [scene] = await db
+							.select({
+								sessionId: schema.scenes.sessionId,
+								channel: schema.scenes.channel,
+								openedAt: schema.scenes.openedAtMessageId,
+								closedAt: schema.scenes.closedAtMessageId,
+								selected: schema.scenes.selectedMessageIds
+							})
+							.from(schema.scenes)
+							.where(eq(schema.scenes.id, Number(q.sceneId)))
+							.limit(1)
+						if (!scene || scene.sessionId !== sessionId)
+							return { messages: [], asides: [] }
+						channel = canonicalChannel(scene.channel)
+						if (scene.openedAt != null) {
+							openedAt = scene.openedAt
+							closedAt = scene.closedAt ?? closedAt
+							picked = undefined
+						} else if (!picked?.length)
+							picked = (scene.selected ?? []) as number[]
+					}
+					channel ??= DEFAULT_CHANNEL
+
+					let storyIds: number[]
+					if (openedAt != null) {
+						const rows = await db
+							.select({ id: schema.sessionMessages.id })
+							.from(schema.sessionMessages)
+							.where(
+								and(
+									eq(schema.sessionMessages.sessionId, sessionId),
+									eq(schema.sessionMessages.channel, channel),
+									eq(schema.sessionMessages.isHidden, false),
+									gte(schema.sessionMessages.id, openedAt),
+									closedAt != null
+										? sql`${schema.sessionMessages.id} <= ${closedAt}`
+										: undefined
+								)
+							)
+							.orderBy(asc(schema.sessionMessages.id))
+							.limit(limit)
+						storyIds = rows.map((r) => r.id)
+					} else storyIds = picked ?? []
+
+					const story = storyIds.length
+						? ((await host.read!(
+								"summarize_source",
+								{ sessionId, messageIds: storyIds, limit },
+								node
+							)) as Array<Record<string, any>>)
+						: []
+
+					// The asides, over the story's id span.
+					const asideSlugs: string[] = (
+						Array.isArray(q.asides) ? q.asides : []
+					).filter(
+						(a: unknown): a is string => typeof a === "string" && !!a
+					)
+					const from = openedAt ?? (storyIds.length ? Math.min(...storyIds) : null)
+					const to =
+						closedAt ??
+						(openedAt == null && storyIds.length
+							? Math.max(...storyIds)
+							: null)
+					let asides: Array<Record<string, any>> = []
+					if (asideSlugs.length && from != null) {
+						const asideRows = await db
+							.select({ id: schema.sessionMessages.id })
+							.from(schema.sessionMessages)
+							.where(
+								and(
+									eq(schema.sessionMessages.sessionId, sessionId),
+									eq(schema.sessionMessages.isHidden, false),
+									gte(schema.sessionMessages.id, from),
+									to != null
+										? sql`${schema.sessionMessages.id} <= ${to}`
+										: undefined,
+									sql`(${sql.join(
+										asideSlugs.map((slug) =>
+											channelPrefixWhere(
+												schema.sessionMessages.channel,
+												parseChannel(slug).slug
+											)
+										),
+										sql` OR `
+									)})`
+								)
+							)
+							.orderBy(asc(schema.sessionMessages.id))
+							.limit(limit)
+						const named = asideRows.length
+							? ((await host.read!(
+									"summarize_source",
+									{
+										sessionId,
+										messageIds: asideRows.map((r) => r.id),
+										limit
+									},
+									node
+								)) as Array<Record<string, any>>)
+							: []
+						// Attach each to the story line with the greatest id
+						// below it (null: before the first story line), then
+						// lane-then-time within each gap.
+						const sortedStory = [...storyIds].sort((a, b) => a - b)
+						const afterOf = (id: number): number | null => {
+							let after: number | null = null
+							for (const s of sortedStory) {
+								if (s < id) after = s
+								else break
+							}
+							return after
+						}
+						const gaps = new Map<number | null, Array<Record<string, any>>>()
+						for (const row of named) {
+							const key = afterOf(Number(row.id))
+							const gap = gaps.get(key) ?? []
+							gap.push({ ...row, afterMessageId: key })
+							gaps.set(key, gap)
+						}
+						asides = [...gaps.values()].flatMap((gap) =>
+							byLaneThenTime(gap as Array<{ channel?: string | null }>)
+						) as Array<Record<string, any>>
+					}
+					// Each row's story-clock stamp (`clock`, null when it has
+					// none) — what a transcript's day marks read. Only on this
+					// read: the prompt reads stay byte-identical.
+					const stampIds = [...story, ...asides].map((r) => Number(r.id))
+					if (stampIds.length) {
+						const { clockOf } = await import("$lib/server/state/storyTime")
+						const stamps = await db
+							.select({
+								id: schema.sessionMessages.id,
+								storyClockYear: schema.sessionMessages.storyClockYear,
+								storyClockMonth: schema.sessionMessages.storyClockMonth,
+								storyClockDay: schema.sessionMessages.storyClockDay,
+								storyClockHour: schema.sessionMessages.storyClockHour,
+								storyClockMinute: schema.sessionMessages.storyClockMinute
+							})
+							.from(schema.sessionMessages)
+							.where(inArray(schema.sessionMessages.id, stampIds))
+						const clockById = new Map(stamps.map((r) => [r.id, clockOf(r)]))
+						for (const row of [...story, ...asides])
+							row.clock = clockById.get(Number(row.id)) ?? null
+					}
+					return { messages: story, asides }
+				}
+
 				case "lorebook_entries": {
 					// The session's lorebook, or nothing. A pipeline cannot name a
 					// lorebook it was not triggered against — lore is session-scoped
@@ -3453,6 +3676,14 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						aliases: string[]
 						absorbedAliases: string[]
 					}> = []
+					/**
+					 * Card → the member who retells it (PLAN-cast-retold-
+					 * fields): a seat whose card is a member of the session's
+					 * book reads the member's retold fields in place of the
+					 * card's. Empty when nobody retells — every member until
+					 * someone toggles a field — so the cast is the rows it was.
+					 */
+					let retoldCards = new Map<number, RetoldMember>()
 					if (session.lorebookId) {
 						const stored = await db
 							.select({
@@ -3462,7 +3693,24 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								name: schema.lorebookBindings.name,
 								aliases: schema.lorebookBindings.aliases,
 								absorbedAliases:
-									schema.lorebookBindings.absorbedAliases
+									schema.lorebookBindings.absorbedAliases,
+								// The retold columns (PLAN-cast-retold-fields):
+								// what a member tells in their own words, read
+								// over the seat's card below.
+								description:
+									schema.lorebookBindings.description,
+								personality:
+									schema.lorebookBindings.personality,
+								scenario: schema.lorebookBindings.scenario,
+								firstMessage:
+									schema.lorebookBindings.firstMessage,
+								alternateGreetings:
+									schema.lorebookBindings.alternateGreetings,
+								exampleDialogues:
+									schema.lorebookBindings.exampleDialogues,
+								faceMediaId:
+									schema.lorebookBindings.faceMediaId,
+								retold: schema.lorebookBindings.retold
 							})
 							.from(schema.lorebookBindings)
 							.where(
@@ -3517,9 +3765,16 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						const { castMemberCards } = await import(
 							"$lib/server/utils/castMemberCards"
 						)
-						const { cardsOf } = await castMemberCards(
+						const { cardsOf, memberOf } = await castMemberCards(
 							db,
 							session.lorebookId
+						)
+						retoldCards = retoldByCard(
+							stored,
+							castOverlays,
+							castReading,
+							memberOf,
+							castMemberAt
 						)
 						for (const [i, b] of bindings.entries()) {
 							const names = Array.isArray(b.absorbedAliases)
@@ -3737,6 +3992,15 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						...(replyCount !== undefined ? { replyCount } : {}),
 						sessionCharacters: sessionCharacters.map((cc) => ({
 							...cc,
+							...(cc.character &&
+							retoldCards.has(cc.character.id)
+								? {
+										character: applyRetold(
+											cc.character,
+											retoldCards.get(cc.character.id)!
+										)
+									}
+								: {}),
 							enabled: cc.enabled !== false,
 							absorbedAliases:
 								absorbedByCharacter.get(cc.character?.id) ?? []
@@ -4024,6 +4288,19 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						"$lib/server/state/presencesOnReading"
 					)
 					return await presencesOnReading(db, sessionId)
+				}
+
+				case "likeness_images": {
+					// 🚧 The Scene action's references (I9): everyone on
+					// stage's likeness image, in stage order. Always the run's
+					// own session (`illustrateScene.ts`).
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined) return []
+					const { likenessImagesFor } = await import(
+						"$lib/server/pipelines/runtime/illustrateScene"
+					)
+					return await likenessImagesFor(db, sessionId)
 				}
 
 				case "graph_entry_links": {
@@ -4793,6 +5070,13 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 			 */
 			const line = tether(handles, scope.signal)
 
+			// The loadout chain this model call resolved through (I12), onto the
+			// request the receipt holds — *Extraction (merged) → Reply
+			// (unfilled fallback)*. Said by `buildWorld`, never recomputed here.
+			const loadoutChain = scope.loadoutChains?.[node.key]
+			if (loadoutChain && payload && typeof payload === "object")
+				(payload as Record<string, unknown>).loadout = loadoutChain
+
 			switch (node.definitionId) {
 				case "core:oracle/embed-text": {
 					// The embedding call is a Provider because it reaches a model
@@ -5079,6 +5363,27 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					return result
 				}
 
+				/**
+				 * 🚧 Describe image (D1): one instruction and the pictures, to
+				 * the job that reads pictures — in a session or out of one (a
+				 * card action). `describeImage` explains the request.
+				 */
+				case "core:oracle/describe-image": {
+					const { describeImage } = await import(
+						"$lib/server/pipelines/runtime/describeImage"
+					)
+					return await line.hold(() =>
+						describeImage(db, {
+							payload: p,
+							sessionId: scope.sessionId,
+							userId: scope.userId,
+							characterId: scope.cardCharacterId,
+							signal: line.signal,
+							onChunk: () => line.pulse()
+						})
+					)
+				}
+
 				case "core:oracle/generate-image": {
 					/**
 					 * The render, through the image adapters.
@@ -5091,9 +5396,49 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					const { dispatchImage } = await import(
 						"$lib/server/pipelines/runtime/dispatchImage"
 					)
+					// The picture's params (DESIGN-image-generation §4.1), read
+					// off the `params` slot only: `references` is ALSO an in-port
+					// name, and the port is the images, the param the policy.
+					const imageParams = (p.params ?? {}) as Record<string, unknown>
+					const oneOf = <T extends string>(v: unknown, of: readonly T[]) =>
+						of.includes(v as T) ? (v as T) : null
 					// A render pulses like a reply: on every progress report
 					// and on the in-flight beat (`callTether`).
 					return await line.hold(() => dispatchImage(db, {
+						series: Array.isArray(p.series) ? p.series : null,
+						references: Array.isArray(p.references)
+							? p.references
+							: null,
+						init: p.init ?? null,
+						mask: p.mask ?? null,
+						orientation: oneOf(imageParams.orientation, [
+							"free",
+							"square",
+							"portrait",
+							"landscape"
+						] as const),
+						cutOut: oneOf(imageParams.cutOut, [
+							"off",
+							"native-or-task",
+							"native-only"
+						] as const),
+						referencesPolicy: oneOf(imageParams.references, [
+							"preferred",
+							"required"
+						] as const),
+						// 🚧 One seed for the whole step (I5).
+						seedPolicy: oneOf(imageParams.seed, [
+							"as-set",
+							"per-run"
+						] as const),
+						// The call plan, onto the request the receipt already
+						// holds (the executor records the payload before this
+						// call), BEFORE the first adapter call — so a render
+						// that fails still says what it meant to do.
+						onPlan: (plan) => {
+							if (payload && typeof payload === "object")
+								(payload as Record<string, unknown>).callPlan = plan
+						},
 						prompt: String(p.prompt ?? ""),
 						negative:
 							p.negative === undefined || p.negative === null
@@ -5105,6 +5450,16 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							p.connection
 						),
 						samplingId: refId(p.sampling),
+						// The `workflow` slot (§4.10): `{ id }`, or the panel's
+						// stored `{ "": { id } }`; null = none chosen.
+						workflowId: refId(
+							p.workflow && typeof p.workflow === "object" && "" in p.workflow
+								? (p.workflow as Record<string, unknown>)[""]
+								: p.workflow
+						),
+						// The loadout's dials, riding on the slot's `{ id, values }`
+						// (lane E2; `applyLoadoutLayer`).
+						workflowValues: workflowSlotValues(p.workflow),
 						sessionId: scope.sessionId ?? null,
 						userId: scope.userId ?? null,
 						// The run, for the prompts-slot render. Inert while that
@@ -6522,11 +6877,33 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					const { deleteLegacy } = await import(
 						"$lib/server/messages/store"
 					)
+					const { revertClockMovesAnchoredTo, StoryClockRefusal } =
+						await import("$lib/server/state/clockMoves")
 					// Both worlds — the store owns the mirror — and the
 					// `messages.id` cascade retracts the state this line
-					// anchored.
-					await deleteLegacy(db, id)
+					// anchored. 🚧 The clock moves it carried are taken back
+					// first, in the same transaction (live scenes §15 G5): the
+					// cascade drops their rows but cannot move a column back.
+					let clockMoved = false
+					try {
+						clockMoved = await db.transaction(async (tx) => {
+							const t = tx as unknown as Db
+							const { sessionIds } = await revertClockMovesAnchoredTo(t, [id])
+							await deleteLegacy(t, id)
+							return sessionIds.length > 0
+						})
+					} catch (e) {
+						if (e instanceof StoryClockRefusal)
+							throw new HostScopeError(`${node.key}: ${e.message}`)
+						throw e
+					}
 					record(node, "message", id, "deleted")
+					if (clockMoved && scope.io) {
+						const { broadcastSessionRow } = await import(
+							"$lib/server/sessions/rowPush"
+						)
+						broadcastSessionRow(scope.io, current.sessionId)
+					}
 					const lost = {
 						content: current.content,
 						role: current.role,
@@ -6547,10 +6924,17 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * Move the SESSION's story clock (DESIGN-story-time P3,
 					 * §5 `advance(n, unit)`) through its book's calendar —
 					 * never the book's present. A wired `by` / `unit` wins
-					 * over the parameter. Every refusal halts the run with
-					 * the sentence and writes nothing: no book, no present
-					 * to start from, a step of nothing, a result that does
-					 * not land.
+					 * over the parameter. A refusal halts the run with the
+					 * sentence and writes nothing — no book, no present to
+					 * start from, a step of nothing, a result that does not
+					 * land — unless the spec says `onRefusal: 'skip'`.
+					 *
+					 * 🚧 Every move writes a **clock move** to the session's
+					 * state ledger in the same transaction (live scenes §15
+					 * G5, `state/clockMoves.ts`), anchored where the world's
+					 * changes are, so a delete, swipe or retake of that
+					 * message takes it back. Why it moved is the spec's
+					 * literal `cause` (G4) — never inferred from the inlet.
 					 */
 					const sessionId = scope.sessionId
 					if (sessionId === undefined)
@@ -6563,25 +6947,76 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						typeof p.unit === "string" && p.unit.trim()
 							? p.unit.trim()
 							: (params.unit ?? "hours")
+					const {
+						clockSkipReason,
+						readClockMoveCause,
+						recordClockMove
+					} = await import("$lib/server/state/clockMoves")
+					const cause = readClockMoveCause(p.cause)
+					if (!cause)
+						throw new HostScopeError(
+							`${node.key}: cause takes 'action', 'keeper' or 'tick', not '${String(p.cause)}'`
+						)
+					const onRefusal = p.onRefusal ?? "halt"
+					if (onRefusal !== "halt" && onRefusal !== "skip")
+						throw new HostScopeError(
+							`${node.key}: onRefusal takes 'halt' or 'skip', not '${String(p.onRefusal)}'`
+						)
+					const updatedBy = `run:${scope.runId ?? "unknown"}`
 					const { advanceSessionStoryClock, StoryClockRefusal } = await import(
 						"$lib/server/state/storyTime"
 					)
+					const step = {
+						by: by as number,
+						unit: unit as import("$lib/shared/lorebooks/storyDate").StoryTimeUnit
+					}
 					let moved: Awaited<ReturnType<typeof advanceSessionStoryClock>>
 					try {
-						moved = await advanceSessionStoryClock(
-							db,
-							sessionId,
-							by as number,
-							unit as import("$lib/shared/lorebooks/storyDate").StoryTimeUnit
-						)
+						moved = await db.transaction(async (tx) => {
+							const t = tx as unknown as Db
+							const done = await advanceSessionStoryClock(t, sessionId, step.by, step.unit)
+							await recordClockMove(t, {
+								sessionId,
+								...step,
+								cause,
+								updatedBy,
+								from: done.from,
+								to: done.clock
+							})
+							return done
+						})
 					} catch (e) {
-						if (e instanceof StoryClockRefusal)
+						if (!(e instanceof StoryClockRefusal)) throw e
+						// 🚧 `onRefusal: 'skip'` (§15 G7): a well-formed step the
+						// story cannot take — no clock yet, a date the calendar
+						// cannot place — moves nothing and says why in the
+						// ledger and on the receipt, and the run finishes. A
+						// malformed step is the spec's mistake and still halts.
+						const { clockStepRefusal } = await import("@serene-pub/sdk")
+						if (onRefusal !== "skip" || clockStepRefusal(step) !== null)
 							throw new HostScopeError(`${node.key}: ${e.message}`)
-						throw e
+						const skipped = await clockSkipReason(db, sessionId, e.message)
+						await recordClockMove(db, { sessionId, ...step, cause, updatedBy, skipped })
+						record(node, "session", sessionId, "updated")
+						if (scope.io)
+							await broadcastToSessionUsers(scope.io, sessionId, "state:changed", {
+								sessionId
+							} satisfies Sockets.State.Changed.Response)
+						return { id: sessionId, sessionId, clock: null, label: "", skipped }
 					}
 					record(node, "session", sessionId, "updated")
+					// 🚧 A **time action** (live scenes §4, §15 G4): the clock
+					// moved on a person's press or the keeper's trusted move,
+					// so the next line of each lane may begin a new scene. A
+					// reply's fixed tick never is one — the watcher's rule,
+					// read off the cause the spec wrote.
+					const { noteTimeAction } = await import(
+						"$lib/server/scenes/boundaryWatcher"
+					)
+					await noteTimeAction(db, { sessionId, cause })
 					// What the session inherits is read as of its clock, so
-					// every tab reads its state afresh.
+					// every tab reads its state afresh — and the ledger the
+					// move's line.
 					if (scope.io)
 						await broadcastToSessionUsers(scope.io, sessionId, "state:changed", {
 							sessionId
@@ -6603,7 +7038,197 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						)
 						broadcastSessionRow(scope.io, sessionId)
 					}
-					return { id: sessionId, sessionId, clock: moved.clock, label: moved.label }
+					return { id: sessionId, sessionId, clock: moved.clock, label: moved.label, skipped: "" }
+				}
+
+				case "core:outlet/set-backdrop": {
+					/**
+					 * 🚧 The session's **backdrop** (DESIGN-image-generation
+					 * §6.4): `sessions.backdropMediaId` → the FIRST image of
+					 * `media`, keyed or not. The file is checked as
+					 * `create-message`'s media is — the session's, the run's
+					 * user's, or already shown in the session — and a file
+					 * that is none of those halts the step. An empty list, or
+					 * one with no image in it, writes nothing (`written:
+					 * false`, no event): a pipeline replaces a backdrop, a
+					 * person clears one.
+					 *
+					 * Who: the socket's rule — the session's owner or an
+					 * admin (`backdropWriterRefusal`). A guest who pressed
+					 * Scene is refused HERE without halting, the reason
+					 * recorded on the run (`notes`), so the picture still
+					 * posts on the message branch.
+					 */
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to set a backdrop for — the run was started without a session scope`
+						)
+					const {
+						BackdropRefusal,
+						announceBackdrop,
+						backdropFileFor,
+						backdropWriterRefusal,
+						writeBackdrop
+					} = await import("$lib/server/sessions/backdrop")
+					const refs = Array.isArray(p.media) ? p.media : p.media ? [p.media] : []
+					const who = await backdropWriterRefusal(
+						db,
+						sessionId,
+						scope.userId ?? null
+					)
+					if (who)
+						return {
+							written: false,
+							sessionId,
+							mediaId: null,
+							notes: [`refused: ${who}`]
+						}
+					let file: { id: number } | null = null
+					for (const ref of refs) {
+						const kind = (ref as { kind?: unknown } | null)?.kind
+						if (kind !== undefined && kind !== "image") continue
+						try {
+							file = await backdropFileFor(db, ref, {
+								sessionId,
+								userId: scope.userId ?? null,
+								castImages: false
+							})
+						} catch (e) {
+							if (e instanceof BackdropRefusal)
+								throw new HostScopeError(`${node.key}: refused — ${e.message}`)
+							throw e
+						}
+						if (file) break
+					}
+					if (!file) return { written: false, sessionId, mediaId: null }
+					const write = await writeBackdrop(db, sessionId, file.id)
+					if (!write.changed)
+						return { written: false, id: sessionId, sessionId, mediaId: file.id }
+					record(node, "session", sessionId, "updated")
+					await emit(
+						"core:event/backdrop-set@1",
+						{
+							sessionId,
+							backdropMediaId: write.next,
+							previousBackdropMediaId: write.previous
+						},
+						{ kind: "run" }
+					)
+					await announceBackdrop(scope.io, sessionId, write.next)
+					return { id: sessionId, sessionId, mediaId: file.id }
+				}
+
+				case "core:outlet/offer-media": {
+					/**
+					 * 🚧 Put each picture in the card's gallery
+					 * (DESIGN-image-generation §6.2; I8) —
+					 * `characters/portrait.ts` holds the rule. About a CARD:
+					 * writes no session row; nothing is chosen for the
+					 * person. Refused unless the run's person owns the card
+					 * or is an admin.
+					 */
+					const characterId = Number(
+						Array.isArray(p.characterId) ? p.characterId[0] : p.characterId
+					)
+					if (!Number.isSafeInteger(characterId) || characterId <= 0)
+						throw new HostScopeError(
+							`${node.key} was given no card — wire 'characterId' from the card action.`
+						)
+					if (scope.userId == null)
+						throw new HostScopeError(
+							`${node.key} has nobody to act as — the run was started without a user.`
+						)
+					const { offerMediaToGallery, OfferMediaRefusal } = await import(
+						"$lib/server/characters/portrait"
+					)
+					let result: Awaited<ReturnType<typeof offerMediaToGallery>>
+					try {
+						result = await offerMediaToGallery(db, {
+							characterId,
+							media: p.media,
+							userId: scope.userId
+						})
+					} catch (e) {
+						if (e instanceof OfferMediaRefusal)
+							throw new HostScopeError(`${node.key}: refused — ${e.message}`)
+						throw e
+					}
+					for (const o of result.offered)
+						record(node, "file", o.mediaId, "attached")
+					// Nothing placed is no write: the executor causes no
+					// `media-offered`.
+					if (!result.offered.length)
+						return { written: false, characterId, offered: [] }
+					return {
+						id: characterId,
+						characterId,
+						offered: result.offered
+					}
+				}
+
+				case "core:outlet/attach-sprite": {
+					/**
+					 * 🚧 File each keyed picture as a card's sprite
+					 * (DESIGN-image-generation §6.3; I5) — `sprites/attach.ts`
+					 * holds the rule. About a CARD: runs with or without a
+					 * session, writes no session row, and its event is
+					 * recorded on the receipt by the executor (it has no
+					 * session to be a session change of). Refused unless the
+					 * run's person owns the card or is an admin.
+					 */
+					const characterId = Number(
+						Array.isArray(p.characterId) ? p.characterId[0] : p.characterId
+					)
+					if (!Number.isSafeInteger(characterId) || characterId <= 0)
+						throw new HostScopeError(
+							`${node.key} was given no card — wire 'characterId' from the card action.`
+						)
+					if (scope.userId == null)
+						throw new HostScopeError(
+							`${node.key} has nobody to act as — the run was started without a user.`
+						)
+					const { attachGeneratedSprites, AttachSpriteRefusal } = await import(
+						"$lib/server/sprites/attach"
+					)
+					let result: Awaited<ReturnType<typeof attachGeneratedSprites>>
+					try {
+						result = await attachGeneratedSprites(db, {
+							characterId,
+							setName: typeof p.setName === "string" ? p.setName : null,
+							media: p.media,
+							series: p.series,
+							userId: scope.userId
+						})
+					} catch (e) {
+						if (e instanceof AttachSpriteRefusal)
+							throw new HostScopeError(`${node.key}: refused — ${e.message}`)
+						throw e
+					}
+					for (const a of result.attached)
+						record(node, "sprite", a.spriteId, "created")
+					const attached = result.attached.map(({ label, spriteId }) => ({
+						label,
+						spriteId
+					}))
+					// Nothing filed — every picture unkeyed or missing — is no
+					// write: the executor causes no `sprites-attached`.
+					if (!attached.length)
+						return {
+							written: false,
+							characterId,
+							setId: result.setId,
+							attached,
+							missing: result.missing
+						}
+					return {
+						id: result.setId,
+						characterId,
+						setId: result.setId,
+						setName: result.setName,
+						attached,
+						missing: result.missing
+					}
 				}
 
 				case "core:outlet/show-sprite": {

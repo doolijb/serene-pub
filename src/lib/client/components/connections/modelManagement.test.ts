@@ -120,7 +120,11 @@ describe("rowAction", () => {
 			).toEqual({ verb: "retry", label: "Retry" })
 			expect(
 				rowAction(kind, { model: "bge", local: { state: "on_disk" } })
-			).toEqual({ verb: "makeActive", label: "Make active" })
+			).toEqual({
+				verb: "makeActive",
+				label:
+					kind === "onnx-entities" ? "Use in Entities" : "Use in Embeddings"
+			})
 		}
 	})
 

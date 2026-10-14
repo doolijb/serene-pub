@@ -211,3 +211,60 @@ describe("CollectModal · who will and won't hear it (R10)", () => {
 		expect(reach().textContent).toBe("Vell will hear this. Brannoc and Isolde will not.")
 	})
 })
+
+/**
+ * 🚧 Time passes… (live scenes §6): the clock step's stepper — how many, a
+ * unit, Forward or Back — opening at the action's default; Back sends the
+ * step negative; nothing is sent while it reads no whole number.
+ */
+describe("CollectModal · the clock step's stepper (live scenes §6)", () => {
+	const TIME_PASSES = {
+		name: "Time passes…",
+		collects: {
+			clockStep: { label: "How much time passes?", default: { by: 1, unit: "hours" } }
+		} as ListedCollects
+	}
+	const amount = () => document.querySelector<HTMLInputElement>("[data-collect-step-by]")!
+	async function setAmount(value: string) {
+		amount().value = value
+		amount().dispatchEvent(new Event("input", { bubbles: true }))
+		flushSync()
+		await tick()
+	}
+
+	test("opens at the default, going forward, and sends it — one hour", async () => {
+		const sent: Collected[] = []
+		await open(TIME_PASSES as any, sent)
+		expect(document.querySelector("[data-collect-clock-step] legend")?.textContent?.trim()).toBe(
+			"How much time passes?"
+		)
+		expect(amount().value).toBe("1")
+		expect(button("Forward")!.getAttribute("aria-pressed")).toBe("true")
+		expect(button("Back")!.getAttribute("aria-pressed")).toBe("false")
+		button("Time passes…")!.click()
+		flushSync()
+		expect(sent).toEqual([{ text: "", recipients: [], clockStep: { by: 1, unit: "hours" } }])
+	})
+
+	test("Back sends the step negative; an empty amount greys the press and says why", async () => {
+		const sent: Collected[] = []
+		await open(TIME_PASSES as any, sent)
+		await setAmount("3")
+		button("Back")!.click()
+		flushSync()
+		await tick()
+		expect(button("Back")!.getAttribute("aria-pressed")).toBe("true")
+		button("Time passes…")!.click()
+		flushSync()
+		expect(sent).toEqual([{ text: "", recipients: [], clockStep: { by: -3, unit: "hours" } }])
+
+		await setAmount("")
+		expect(button("Time passes…")!.disabled).toBe(true)
+		expect(document.body.textContent).toContain("Pass a whole number of units, at least one.")
+	})
+
+	test("a stepper always opens the modal — an argument cannot say how much", () => {
+		expect(opensModal({ collects: TIME_PASSES.collects })).toBe(true)
+		expect(opensModal({ collects: TIME_PASSES.collects }, "3 hours")).toBe(true)
+	})
+})

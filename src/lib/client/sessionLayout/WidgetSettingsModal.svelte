@@ -148,7 +148,7 @@
 					{#if !editing}
 						<footer class="wsm-foot">
 							<Dialog.CloseTrigger
-								class="btn preset-filled-surface-500"
+								class="btn preset-tonal-surface"
 							>
 								Close
 							</Dialog.CloseTrigger>

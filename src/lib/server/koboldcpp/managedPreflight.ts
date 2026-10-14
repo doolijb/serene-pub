@@ -155,12 +155,16 @@ export async function ensureManagedReady(
 				}
 			: { ...spec, path: modelPath }
 
-	const baseUrl = settings.koboldCppManagerBaseUrl
 	const totalAttempts = PREFLIGHT_RETRY_DELAYS_MS.length + 1
 	for (let attemptNum = 1; ; attemptNum++) {
 		try {
-			await attemptLoad(settings, adminDir, request, opts, attemptNum)
-			return { baseUrl }
+			return await attemptLoad(
+				settings,
+				adminDir,
+				request,
+				opts,
+				attemptNum
+			)
 		} catch (err: any) {
 			if (opts.signal?.aborted) throw err
 			const delayMs = PREFLIGHT_RETRY_DELAYS_MS[attemptNum - 1]
@@ -180,12 +184,20 @@ export async function ensureManagedReady(
  * restarted outside this app's tracking) — so every request gets a
  * fresh check, not just the first one after a cold start. */
 async function attemptLoad(
-	settings: KoboldCppSettings,
+	initialSettings: KoboldCppSettings,
 	adminDir: string,
 	request: ManagedModelRequest,
 	opts: { connectionId: number; signal?: AbortSignal },
 	attemptNum: number
-): Promise<void> {
+): Promise<{ baseUrl: string }> {
+	// Read per attempt, not once for all of them, and again after a start:
+	// start() writes this row (doStart generates the admin password when there
+	// is none), so a load sent with the row as it was before the spawn carries
+	// a password the process was never given, and fails every attempt that
+	// reuses it.
+	const readSettings = async () =>
+		(await db.query.koboldCppSettings.findFirst()) ?? initialSettings
+	let settings = await readSettings()
 	const baseUrl = settings.koboldCppManagerBaseUrl
 	const alreadyResponding = await pingKoboldCPP(baseUrl, 3000)
 
@@ -218,9 +230,19 @@ async function attemptLoad(
 				`KoboldCPP managed subprocess failed to start: ${err?.message || err}`
 			)
 		}
+		// start() resolving is not proof of a process. A start that left none
+		// running fails here with its own reason, never as three load attempts
+		// against a port nothing listens on.
+		if (!subprocessManager.isRunning()) {
+			const { status, lastError } = subprocessManager.getStatus()
+			throw new Error(
+				`KoboldCPP did not start: ${lastError ?? `its status is "${status}"`}`
+			)
+		}
 		console.log(
 			`[KoboldCPP] preflight attempt ${attemptNum}: subprocess started`
 		)
+		settings = await readSettings()
 	}
 
 	// A model load can leave koboldcpp unresponsive to other requests for
@@ -265,6 +287,7 @@ async function attemptLoad(
 					: ""
 			)
 		subprocessManager.pingActivity()
+		return { baseUrl }
 	} catch (err: any) {
 		console.error(
 			`[KoboldCPP] preflight attempt ${attemptNum}: ensureModelLoaded FAILED:`,

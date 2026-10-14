@@ -20,6 +20,8 @@ import { itemValuesOf, paletteRowState } from "@serene-pub/core-catalog/conversa
 import type { StatusText } from "@serene-pub/sdk"
 
 const PAGE = resolve(__dirname, "../../../../routes/sessions/[id]/+page.svelte")
+/** Where the page's chips are judged: its action list, and the host views that draw the session actions row. */
+const CHIP_FILES = [resolve(__dirname, "actionList.svelte.ts"), resolve(__dirname, "SessionHostViews.svelte")]
 
 /** A Regenerate chip whose newest row is not the viewer's own. */
 const chip = (reason: { en: string; es?: string }, statusText?: (s: StatusText | null | undefined) => string) =>
@@ -56,8 +58,11 @@ describe("the session page's chip reasons", () => {
 	})
 
 	test("the page hands the app's `statusText` to every `paletteRowState` call, and sets no realm resolver", () => {
-		const src = readFileSync(PAGE, "utf8")
-		expect(src).toMatch(/\bimport\s*\{[^}]*\bstatusText\b[^}]*\}\s*from\s*"\$lib\/client\/i18n\/state\.svelte"/)
+		for (const file of CHIP_FILES)
+			expect(readFileSync(file, "utf8")).toMatch(
+				/\bimport\s*\{[^}]*\bstatusText\b[^}]*\}\s*from\s*"\$lib\/client\/i18n\/state\.svelte"/
+			)
+		const src = [PAGE, ...CHIP_FILES].map((file) => readFileSync(file, "utf8")).join("\n")
 		const calls = [...src.matchAll(/\bpaletteRowState\(chipVerdict\(t\),\s*\{([^}]*)\}\)/g)].map((m) => m[1])
 		// `extraChip` (Regenerate, Continue), the session actions row, and the
 		// action legend's composer and message verdicts (2026-09-28).

@@ -4,11 +4,10 @@
 	 *
 	 * ## Why tiles and not rows
 	 *
-	 * The readiness card gave each capability a row with a sentence and a **Set
-	 * up** button. At 400px every one of those sentences truncated — *"Not set ·
-	 * pictures stay off until yo…"*, *"Not set · lore retrieval answers fr…"* —
-	 * and the six the card could not fit folded behind *"6 more · vision,
-	 * document reading, image editin…"*, truncated in its turn.
+	 * A row per job with a sentence and a **Set up** button truncates at
+	 * 400px — *"Not set · pictures stay off until yo…"*, *"Not set · lore
+	 * retrieval answers fr…"* — and a fold over the rest truncates in its
+	 * turn: *"6 more · vision, document reading, image editin…"*.
 	 *
 	 * A tile is the button. Two words and a state fit in half a column, so two
 	 * fit across the dock and four across the page, and there is no per-row
@@ -27,9 +26,17 @@
 	 * stops there. Nine of these are optional and off is a perfectly good
 	 * answer for all nine; scoring them turns a list of things you *could* do
 	 * into a list of things you have failed to do.
+	 *
+	 * ## The colour is the connection state
+	 *
+	 * A tile wears its `jobTileState` through `CONNECTION_STATE_TEXT`, the one
+	 * scale: green when it runs, amber while its model downloads, red when its
+	 * pair cannot run, and quiet when nothing is registered (`idle` — off is
+	 * an answer, so an unset tile is never gold).
 	 */
 	import * as Icons from "@lucide/svelte"
-	import type { JobTile } from "./jobTile"
+	import { CONNECTION_STATE_TEXT } from "./connectionRowStatus"
+	import { jobTileState, type JobTile } from "./jobTile"
 
 	interface Props {
 		tiles: readonly JobTile[]
@@ -75,9 +82,8 @@
 
 	let expanded = $state(false)
 
-	const setCount = $derived(
-		tiles.filter((t) => t.modelName && !t.problem).length
-	)
+	const isReady = (t: JobTile) => jobTileState(t) === "ready"
+	const setCount = $derived(tiles.filter(isReady).length)
 	/**
 	 * A folded tile that is SET is pulled forward, so "2 set up" and the tiles
 	 * on screen never disagree. Nothing is more confusing than a count that
@@ -85,8 +91,8 @@
 	 */
 	const ordered = $derived.by(() => {
 		if (expanded || tiles.length <= limit) return tiles
-		const set = tiles.filter((t) => t.modelName && !t.problem)
-		const rest = tiles.filter((t) => !(t.modelName && !t.problem))
+		const set = tiles.filter(isReady)
+		const rest = tiles.filter((t) => !isReady(t))
 		return [...set, ...rest].slice(0, limit)
 	})
 	/**
@@ -97,9 +103,9 @@
 	const folded = $derived(tiles.filter((t) => !ordered.includes(t)))
 </script>
 
-<section aria-label="Other jobs">
+<section aria-label="Other loadouts">
 	<div class="mb-2 flex items-baseline gap-2 px-0.5">
-		<h3 class="text-surface-600-400 text-xs font-medium">Other jobs</h3>
+		<h3 class="text-surface-600-400 text-xs font-medium">Other loadouts</h3>
 		<span class="text-surface-600-400 text-[11px]">
 			{setCount
 				? `${setCount} set up · the rest optional`
@@ -118,20 +124,22 @@
 		{#each ordered as tile (tile.capability)}
 			{@const TileIcon =
 				((Icons as any)[tile.icon ?? ""] as any) ?? Icons.Sparkles}
-			{@const on = !!tile.modelName && !tile.problem}
+			{@const state = jobTileState(tile)}
+			{@const on = state === "ready"}
 			<button
 				type="button"
 				class="panel-card hover:preset-tonal-primary focus-visible:ring-primary-500 flex min-h-[72px] flex-col gap-1 !p-3 text-left focus-visible:ring-2 focus-visible:outline-none {on
 					? 'border-success-500/30!'
 					: ''}"
+				data-state={state}
 				onclick={() => onOpen(tile.capability)}
 			>
 				<span class="flex min-w-0 items-center gap-1.5">
 					<TileIcon
 						size={14}
-						class={on
-							? "text-success-800 dark:text-success-300 shrink-0"
-							: "text-surface-600-400 shrink-0"}
+						class="shrink-0 {on
+							? CONNECTION_STATE_TEXT.ready
+							: 'text-surface-600-400'}"
 						aria-hidden="true"
 					/>
 					<span class="min-w-0 truncate text-[13px] font-medium">
@@ -139,11 +147,7 @@
 					</span>
 				</span>
 				<span
-					class="block truncate text-xs {tile.problem
-						? 'text-primary-900 dark:text-primary-300'
-						: on
-							? 'text-success-800 dark:text-success-300'
-							: 'text-surface-600-400'}"
+					class="block truncate text-xs {CONNECTION_STATE_TEXT[state]}"
 				>
 					{tile.problem ?? tile.modelName ?? "Not set up"}
 				</span>

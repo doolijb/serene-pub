@@ -1,7 +1,8 @@
 /**
  * 🚧 `characters.v1` (R76): the session's cast as a widget draws it, with the
- * portraits pinned beside the conversation riding along — built from what the
- * page already holds (the session payload, who is looking, the page's pins).
+ * portraits pinned beside the conversation riding along (⏳ until 0.7.0, W6)
+ * — built from what the page already holds (the session payload, who is
+ * looking, the page's pins).
  *
  * Pure: plain values in, a detached section out. The page wraps it in a
  * `$derived` and sets it under `SESSION_CHARACTERS_KEY`; a panel granted
@@ -9,12 +10,15 @@
  * remote — so both read ONE projection.
  *
  * **Cast over card.** Each member is the character card overlaid by what the
- * session's cast says of it, the cast winning wherever both speak. Today the
- * one cast fact the session payload carries is the cast member's sprite-set
- * pick (`spriteSetOverrides` — the `session_cast` sprite-set value,
- * DESIGN-sprites §2.3), so that is the one overlay here; the name is the one
- * the session shows everywhere else (nickname over name, as the header's cast
- * discs and the log's speaker labels have it) and the face is the card's.
+ * session's cast says of it, the cast winning wherever both speak. The session
+ * payload carries two cast facts, so those are the two overlays here: the
+ * cast member's sprite-set pick (`spriteSetOverrides` — the `session_cast`
+ * sprite-set value, DESIGN-sprites §2.3), and the face a lorebook cast member
+ * retells (`castFaces`, a `files` id by character id) — present, it is the
+ * face; absent, the card's avatar is. Personas are voiced, not cast, so
+ * neither overlay touches them. The name is the one the session shows
+ * everywhere else (nickname over name, as the header's cast discs and the
+ * log's speaker labels have it); a retold name is not on this payload.
  *
  * Every URL is resolved here exactly as the native Scene Portraits widget
  * resolves it (`avatarSrc`/`spriteSrc`, full size), so a pinned portrait is
@@ -52,12 +56,16 @@ export interface CharacterCard extends HasSprites {
 	nickname?: string | null
 }
 
-/** A line of the log, as far as a current sprite needs it. */
+/** A line of the log, as far as a current sprite and a last line need it. */
 export interface CharactersSourceMessage {
 	id: number
 	characterId?: number | null
+	/** A persona's line names its persona here, not in `characterId`. */
+	personaId?: number | null
 	isHidden?: boolean | null
 	metadata?: unknown
+	/** When the line was written: an ISO string on the wire, a `Date` or ms in a test. */
+	createdAt?: string | number | Date | null
 }
 
 /** The session payload (`sessions:get`), as this projection reads it. */
@@ -77,6 +85,11 @@ export interface CharactersSourceSession {
 	}[] | null
 	/** The cast's sprite-set picks, by character id (DESIGN-sprites §2.3). */
 	spriteSetOverrides?: Readonly<Record<number, string>> | null
+	/**
+	 * The faces the session's lorebook cast retells, by character id: a
+	 * `files` id, present only for a seat whose cast member retells its face.
+	 */
+	castFaces?: Readonly<Record<number, number>> | null
 	sessionMessages?: readonly CharactersSourceMessage[] | null
 }
 
@@ -96,6 +109,11 @@ export interface CharactersSource {
 	 * already (`currentSpritesOf`); absent, they are read off the log.
 	 */
 	currentSprites?: ReadonlyMap<number, ShownSprite | null>
+	/**
+	 * When each member last spoke, when the caller has worked it out already
+	 * (`lastSpokeOf`); absent, it is read off the log.
+	 */
+	lastSpoke?: ReadonlyMap<number, number | null>
 }
 
 /**
@@ -117,6 +135,36 @@ export function currentSpritesOf(
 		if (!sprite) continue
 		newest.set(id, m.id)
 		out.set(id, sprite)
+	}
+	return out
+}
+
+/** A line's time in ms; null for one with no readable time. */
+function msOf(at: CharactersSourceMessage["createdAt"]): number | null {
+	if (at == null) return null
+	const ms = typeof at === "number" ? at : at instanceof Date ? at.getTime() : Date.parse(at)
+	return Number.isFinite(ms) ? ms : null
+}
+
+/**
+ * When each listed member last spoke (W6) — the time of the newest visible
+ * line it wrote: a character's by `characterId`, a persona's by
+ * `personaId` — in one pass over the log; null for one that has spoken
+ * none here.
+ */
+export function lastSpokeOf(
+	ids: Iterable<number>,
+	messages: readonly CharactersSourceMessage[]
+): Map<number, number | null> {
+	const out = new Map<number, number | null>()
+	for (const id of ids) out.set(id, null)
+	for (const m of messages) {
+		if (m.isHidden) continue
+		const id = m.characterId ?? m.personaId
+		if (id == null || !out.has(id)) continue
+		const at = msOf(m.createdAt)
+		if (at === null) continue
+		if ((out.get(id) ?? -Infinity) < at) out.set(id, at)
 	}
 	return out
 }
@@ -148,20 +196,38 @@ function cardSetOf(card: CharacterCard): string | null {
 	return (sets.find((s) => s.isDefault) ?? sets[0])?.name ?? null
 }
 
+/**
+ * The face the cast retells for a seated character, full size — null when
+ * the cast leaves the face to the card.
+ */
+export function castFaceOf(
+	session: CharactersSourceSession,
+	id: number,
+	opts: { full?: boolean } = { full: true }
+): string | null {
+	const mediaId = session.castFaces?.[id]
+	if (typeof mediaId !== "number") return null
+	return avatarSrc({ avatarMediaId: mediaId }, opts) ?? null
+}
+
 interface Seat {
 	card: CharacterCard & { id: number }
 	isPersona: boolean
+	/** Switched off in Participants: in the session, out of the turns (W6). */
+	benched: boolean
 }
 
 function memberOf(
-	{ card, isPersona }: Seat,
+	{ card, isPersona, benched }: Seat,
 	session: CharactersSourceSession,
 	viewerUserId: number | null,
 	voiced: number | null,
-	sprites: ReadonlyMap<number, ShownSprite | null>
+	sprites: ReadonlyMap<number, ShownSprite | null>,
+	lastSpoke: ReadonlyMap<number, number | null>
 ): SessionCharacterV1 {
 	const id = card.id
 	const picked = isPersona ? null : (session.spriteSetOverrides?.[id] ?? null)
+	const castFace = isPersona ? null : castFaceOf(session, id)
 	const wanted = currentSpriteIn(sprites.get(id) ?? null, picked)
 	const viewer = viewerUserId
 	return {
@@ -170,7 +236,7 @@ function memberOf(
 		isPersona,
 		mine: isPersona && voiced === id,
 		name: resolveCharacterName(card, ""),
-		face: avatarSrc(card, { full: true }) ?? null,
+		face: castFace ?? avatarSrc(card, { full: true }) ?? null,
 		sprite: resolveSprite(card, wanted)
 			? (spriteSrc(card, wanted, { full: true }) ?? null)
 			: null,
@@ -180,43 +246,59 @@ function memberOf(
 		canChangeSpriteSet:
 			!isPersona &&
 			viewer != null &&
-			(session.userId === viewer || card.userId === viewer)
+			(session.userId === viewer || card.userId === viewer),
+		lastSpokeAt: lastSpoke.get(id) ?? null,
+		// `galleryCount` is left out: the session payload carries no count,
+		// and absent says "not known" where 0 would say "none".
+		benched
 	}
 }
 
 /**
  * A pinned portrait, with the member it pictures. A pin is stored as a bare
  * image URL, so it is matched by face: the full avatar a portrait shows, or
- * the thumbnail the Scene images tab pins. An image pinned from a gallery
- * pictures nobody the page can name.
+ * the thumbnail the Scene images tab pins — the cast's retold face as well as
+ * the card's, since a pin made before or after the cast retold it shows one
+ * or the other. An image pinned from a gallery pictures nobody the page can
+ * name.
  */
 function pinOf(
 	src: string | null,
-	cards: readonly Seat[]
+	cards: readonly Seat[],
+	session: CharactersSourceSession
 ): SessionSceneImageV1 | null {
 	if (!src) return null
 	const seat = cards.find(
-		({ card }) =>
-			avatarSrc(card, { full: true }) === src || avatarSrc(card) === src
+		({ card, isPersona }) =>
+			avatarSrc(card, { full: true }) === src ||
+			avatarSrc(card) === src ||
+			(!isPersona &&
+				(castFaceOf(session, card.id) === src ||
+					castFaceOf(session, card.id, {}) === src))
 	)
 	return { src, ref: seat ? `character:${seat.card.id}` : null }
 }
 
 /**
- * The section for the page's session: its characters still seated and
- * active, then its personas still voiced, each once.
+ * The section for the page's session: its characters still seated — a
+ * benched one included, marked `benched` (W6: a reader that means "in the
+ * scene" leaves it out) — then its personas still voiced, each once.
  */
 export function projectCharacters(source: CharactersSource): SessionCharactersV1 {
 	const session = source.session ?? {}
 	const seats: Seat[] = []
 	const seen = new Set<number>()
-	const seat = (card: CharacterCard | null | undefined, isPersona: boolean) => {
+	const seat = (
+		card: CharacterCard | null | undefined,
+		isPersona: boolean,
+		benched = false
+	) => {
 		if (typeof card?.id !== "number" || seen.has(card.id)) return
 		seen.add(card.id)
-		seats.push({ card: card as Seat["card"], isPersona })
+		seats.push({ card: card as Seat["card"], isPersona, benched })
 	}
 	for (const link of byPosition(session.sessionCharacters ?? []))
-		if (link.isActive !== false && !link.removedAt) seat(link.character, false)
+		if (!link.removedAt) seat(link.character, false, link.isActive === false)
 	for (const link of byPosition(session.sessionPersonas ?? []))
 		if (!link.removedAt) seat(link.persona, true)
 
@@ -232,11 +314,19 @@ export function projectCharacters(source: CharactersSource): SessionCharactersV1
 			seats.map((s) => s.card.id),
 			session.sessionMessages ?? []
 		)
+	const lastSpoke =
+		source.lastSpoke ??
+		lastSpokeOf(
+			seats.map((s) => s.card.id),
+			session.sessionMessages ?? []
+		)
 	return {
-		members: seats.map((s) => memberOf(s, session, viewer, voiced, sprites)),
+		members: seats.map((s) =>
+			memberOf(s, session, viewer, voiced, sprites, lastSpoke)
+		),
 		sceneImages: {
-			left: pinOf(source.sceneImages.left, seats),
-			right: pinOf(source.sceneImages.right, seats)
+			left: pinOf(source.sceneImages.left, seats, session),
+			right: pinOf(source.sceneImages.right, seats, session)
 		}
 	}
 }

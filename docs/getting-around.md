@@ -6,12 +6,12 @@ _Written for Serene Pub 0.6. This is the last step of [Start here](./getting-sta
 
 ## The rail
 
-The strip down the left edge is the **rail**. Hover an icon for its name. From the top:
+The strip down the left edge is the **rail**. Hover an icon for its name, and for what its dot means when it has one. From the top:
 
 - **Home**.
 - **Play**: **Sessions**, **Characters**, **Lorebooks** and **Tags**, the things you make and play with.
-- **Tune**: **Pipelines** and **Settings** for everyone; **Connections** and **Sampling** for administrators, and **Users** too once [accounts](./users-and-accounts.md) are on. **Help**, this documentation, is last.
-- At the foot: **Activity** (your notifications), **Admin** (administrators only) and your account.
+- **Tune**: **Connections**, **Models**, **Loadouts** and **Sampling** for administrators (Loadouts is where you choose what each kind of work runs on; see [Loadouts](./connections.md#loadouts)), then **Settings** for everyone, **Users** for administrators once [accounts](./users-and-accounts.md) are on, and **Help**, this documentation, last. A member's Tune is Settings and Help. Pipelines and their prompts have no icon of their own: they live in the [admin area](#the-admin-area), under **Admin › Pipelines**.
+- At the foot: **Activity** (your notifications), **Admin** (administrators only) and your account (opens **Settings**).
 
 Click an icon and its **view** opens in the sidebar beside the rail; the icon gets a gold bar while its view is showing. The small button above your account widens the rail to show each icon's name, with the groups headed **Play** and **Tune**; press it again to hide them. This browser remembers your choice.
 
@@ -19,9 +19,11 @@ The community character [Library](./characters.md#browsing-the-character-library
 
 ## The sidebar
 
-The sidebar shows one view at a time, but it doesn't forget the others. Open Characters, then Settings, and Characters keeps its scroll position, its filter and anything you were typing. A small gold dot on a rail icon means that view is still open in the background; click the icon to bring it back. Up to six views stay open this way; opening a seventh closes the one you used least recently.
+The sidebar shows one view at a time, but it doesn't forget the others. Open Characters, then Settings, and Characters keeps its scroll position, its filter and anything you were typing. With the rail widened, a small grey dot at the end of a row means that view is still open in the background (hover it and the row says *still open*); click the row to bring it back. The narrow rail leaves that dot out. Up to six views stay open this way; opening a seventh closes the one you used least recently.
 
-Click the icon of the view you're looking at and the sidebar folds away, with the view still open behind its dot. The **×** in the sidebar's header closes a view for good and forgets its state; a view with unsaved changes asks first. After a reload the same views are open again, though not what was inside them.
+Click the icon of the view you're looking at and the sidebar folds away, with the view still open in the background. The **×** in the sidebar's header closes a view for good and forgets its state; a view with unsaved changes asks first. After a reload the same views are open again, though not what was inside them.
+
+A view that is wide enough shows either its list (your sessions, your characters) or its sections (the parts of **Settings** or **Admin**) down the left, with whatever you picked beside it. Docked, or whenever the view is narrow, the two take turns: what you pick fills the view, and the back button at its top returns you to the list. **Settings** works this way too now.
 
 ## The admin area
 
@@ -29,20 +31,19 @@ Click the icon of the view you're looking at and the sidebar folds away, with th
 Only administrators see the Admin icon.
 :::
 
-**Admin** opens the whole admin area as one view, like Characters or Lorebooks: dock it beside a session to change a setting while the story runs, or give it Focus to work in it. Its sections are grouped by job:
+**Admin** opens the whole admin area as one view, like Characters or Lorebooks: dock it beside a session to change a setting while the story runs, or give it Focus to work in it. Its sections are grouped by purpose:
 
 | Group | Sections |
 | --- | --- |
 | *(top)* | **Overview**, headed **Your pub** |
-| **Models** | Defaults, Connections, Sampling |
-| **People** | Users (once accounts are on), Sessions |
-| **Play** | Genres, Presets |
-| **Pipelines** | Pipelines, Events, Configurations, Scripts |
+| **Pub** | General, Users (once accounts are on), Network, Data and backups, Diagnostics, History, Updates ([Pub settings](./system-settings.md)) |
+| **Models** | Loadouts, Connections, Sampling |
+| **Play** | Sessions, Genres, Presets |
 | **Writing** | Prompts, Context templates, Completion templates, Variable templates |
+| **Pipelines** | Pipelines, Configurations, Events, Scripts |
 | **Extensions** | Plugins, Components |
-| **Pub** | General, Network, Data and backups, Diagnostics, History ([Pub settings](./system-settings.md)) |
 
-Docked, the view lists the sections, and picking one shows it with **All sections** to go back; in Focus the list stays beside the section. In Focus each section has its own address (`/admin/prompts`, `/admin/users/3`), so Back, bookmarks and links work.
+Docked, the view lists the sections, and picking one shows it with a back button at the top of the section to return to the list; in Focus the list stays beside the section. In Focus each section has its own address (`/admin/prompts`, `/admin/users/3`), so Back, bookmarks and links work.
 
 ### Lists, forms and deleting
 
@@ -54,11 +55,13 @@ Every section that holds many things of one kind works the same way, after the D
 - **Nothing on a form saves until you press Save** — switches, ticks and permission approvals included. The save row says _Unsaved changes_ while anything differs, leaving asks first, and Save waits for every change to be accepted before it says _Saved_. If the server refuses one, the form names it at the top and keeps it, so you can fix it and save again.
 - **Deleting** always asks on its own page first. It lists everything that would go and what goes or changes with it, and names anything that stays and why: a built-in, something still in use, your own account. **No, take me back** returns you untouched.
 
-A line of links at the top of every admin page, such as **Admin › Writing › Prompts › Reply**, says where you are. The section's link brings the list back exactly as you left it: the same search, filters, sort and page. Sections that hold one set of settings (General, Network, Defaults) are a single form instead of a list.
+Admin keeps the lists; the rail's views are where you make things work. So some admin pages have a door back: **Open in Loadouts** on a row of **Admin › Models › Loadouts** opens that loadout's sheet in the [Loadouts](./connections.md#loadouts) view, **Open in Connections** on a row or form of **Admin › Models › Connections** opens that connection in the [Connections](./connections.md#the-connections-view) view, **Open in Sampling** on a row or form of **Admin › Models › Sampling** opens that config in the [Sampling](./connections.md#sampling-configs) view. The Connections and Sampling lists also have **Open Connections view** and **Open Sampling view** at the top. Going the other way, a pipeline named in the Loadouts or Sampling view opens its page in **Admin › Pipelines**.
 
-**Your pub** says which version is running, whether accounts are on and how long the server has been up. Its **Needs you** card lists what wants attention anywhere in the admin area, each with a button to the exact place to fix it: a job with no model chosen, pipeline runs that failed today, a daily backup that failed or hasn't run in two days, a tunnel that stopped with an error, a default connection that can no longer list its models, a plugin update or permission waiting for review. Below it, one card per area shows how that area is doing.
+A line of links at the top of every admin page, such as **Admin › Writing › Prompts › Reply**, says where you are. The section's link brings the list back exactly as you left it: the same search, filters, sort and page. Sections that hold one set of settings (General, Network, Loadouts) are a single form instead of a list.
 
-The Admin icon, and each section in the list, carries a dot when something needs you: **red** when something is broken or missing, **gold** when something waits on you. The dot updates the moment it happens, wherever you are in the app.
+**Your pub** says which version is running, whether accounts are on and how long the server has been up. Its **Needs you** card lists what wants attention anywhere in the admin area, each with a button to the exact place to fix it: a loadout the pub needs with no model (the Reply loadout, or one a run failed without in the last 7 days), pipeline runs that failed today, a daily backup that failed or hasn't run in two days, a tunnel that stopped with an error, a connection a loadout uses that can no longer list its models, a loadout whose model can no longer do its work, a plugin update or permission waiting for review. Below it, one card per area shows how that area is doing.
+
+The Admin icon, and each section in the list, carries a dot when something needs you: **red** when something is broken, such as a default connection that stopped answering or a backup that failed, and **gold** when something waits on you, such as **Chat needs a model** on a new pub where nobody has chosen one yet. The dot updates the moment it happens, wherever you are in the app.
 
 ## Activity
 
@@ -108,6 +111,13 @@ icon carries a dot while something is new: **red** when something failed, **gold
 something is waiting on you. News that asks nothing of you lights no dot. On a phone, the same
 dot shows on the **Views** button. Administrators also get an **LLM queue** tab here, which
 lists the generation work running across the whole server.
+
+## Messages
+
+On a pub with accounts, the **Messages** icon on the rail opens your private conversations with
+the other people on the pub, one to one or in groups, with sessions, characters, lorebooks and
+files attached where everyone in the conversation may see them. A dot on the icon means something
+is unread. See [Messages](./messages.md).
 
 ## Widths: Dock, Half and Focus
 
@@ -168,8 +178,9 @@ that reaches everything you can already see. Type, move with the arrow keys, pre
 **Shift+Enter** (or Shift-click) opens the result focused, across the whole window, instead of in
 the sidebar; a session is a page either way.
 
-Jump searches whatever you are looking at. With Characters open in the sidebar, the chip at the
-left of the box reads **Characters** and the list behind the box filters as you type; close Jump
+Jump searches whatever you are looking at. The pill and the box always say *Jump to anything*;
+the chip at the left of the box says where it is looking. With Characters open in the sidebar, the
+chip reads **Characters** and the list behind the box filters as you type; close Jump
 and the filter stays. Inside the admin area the chip reads **Admin** and matches the admin pages
 and their individual settings: type "tunnel" or "back up" and the result opens the right section
 with that setting highlighted.

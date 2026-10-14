@@ -16,7 +16,9 @@ Still stuck? Ask in [Discord](https://discord.gg/3kUx3MDcSa) or [open an issue](
 
 ## Nobody replies
 
-- **The Connections view doesn't say *Sessions can reply***: open it from the rail. A connection that says **Needs a key** wants its API key; **Not reachable** means the program or service can't be found (is it running? is the address right?). See [Connect a model](./connect-a-model.md#check-that-it-worked).
+- **A line above the composer says *Sessions can't reply yet***: the **Reply** [loadout](./connections.md#loadouts) (what replies run on: a model on a connection and its settings) has no model. An administrator presses **Fill the Reply loadout** on that line, which opens its sheet in **Loadouts**; a member sees _Ask your administrator._ instead, so let them know. See [Connect a model](./connect-a-model.md).
+- **The Loadouts view doesn't say *Replies:* with a model's name**: open **Loadouts** from the rail and read its status strip, then open **Connections** to see each connection's state. A connection that says **Needs a key** wants its API key (paste it and press **Save**); **Pick a model** works but has no model chosen to reply, so press **Choose**, then **Use in Reply** beside one; **Not reachable** means the program or service can't be found (is it running? is the address right?). See [Connect a model](./connect-a-model.md#check-that-it-worked).
+- **A reply fails with *No model is set for Reply***: the Reply loadout is empty. An administrator fills it with **Use in Reply** beside a model in **Connections**, **Use in…** in **Models**, or **Fill the Reply loadout** on the **Loadouts** view's status strip. If someone else runs your pub, let them know.
 - **KoboldCPP says *Crashed*, or the model never finishes loading**: the model is probably too big for your memory. Pick a smaller one. The connection's status card shows the real error. See [KoboldCPP, run by Serene Pub](./connections.md#troubleshooting-download-or-start-failures).
 - **The first reply after changing a KoboldCPP setting takes ages**: settings like GPU layers reload the model on the next reply, which can take several minutes for a big one. See [Launch settings](./connections.md#launch-settings-and-when-a-model-reloads).
 - **In a group session, nobody takes a turn**: **Auto-advance** may be off, or the turn order **Manual**. Press **Continue** or **Pick who speaks**. See [Sessions → Troubleshooting](./sessions.md#troubleshooting).
@@ -64,7 +66,7 @@ Open the reply's prompt details first. An image the model was sent shows as a fi
 
 - **The embeddings queue sits at Idle with work waiting**: the embedding model may need loading, or its service stopped answering. See [Troubleshooting a stuck or empty queue](./embeddings-and-rag.md#troubleshooting-a-stuck-or-empty-queue).
 - **One session's memory notice never clears**: press **Prioritize in queue** on the notice.
-- **A short session shows no notice**: sessions of 10 messages or fewer never do; Search by meaning still works in them. See [Why some short sessions never show a RAG notice](./embeddings-and-rag.md#why-some-short-sessions-never-show-a-rag-notice).
+- **A short session shows no notice**: sessions of 10 messages or fewer never do; Search by meaning still works in them. See [Why some short sessions never show an indexing notice](./embeddings-and-rag.md#why-some-short-sessions-never-show-an-indexing-notice).
 - **Local embeddings (ONNX) is greyed out, or a local model says it's not available on this machine**: this device can't run local ONNX models (Android, and some desktop builds). The message gives the reason. Use an embeddings service instead. See [Local ONNX models](./connections.md#local-onnx-models).
 
 ## Lore is missing from a reply

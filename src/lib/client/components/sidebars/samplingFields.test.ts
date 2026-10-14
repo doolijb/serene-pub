@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
 	countEnabled,
+	countEnabledByGroup,
 	defaultOnEnable,
 	groupSamplingFields,
 	nextEnabled
@@ -104,6 +105,22 @@ describe("countEnabled", () => {
 		expect(countEnabled(toy, [])).toEqual({ on: 0, total: 4 })
 		expect(countEnabled(toy, null)).toEqual({ on: 0, total: 4 })
 		expect(countEnabled(toy, undefined)).toEqual({ on: 0, total: 4 })
+	})
+})
+
+describe("countEnabledByGroup", () => {
+	it("counts per group against the whole schema, in both form modes", () => {
+		const counts = countEnabledByGroup(toy, ["a", "fromTheFuture"])
+		expect(counts.get("Core")).toEqual({ on: 1, total: 2 })
+		expect(counts.get("Advanced")).toEqual({ on: 0, total: 1 })
+		expect(counts.get("Other")).toEqual({ on: 0, total: 1 })
+	})
+
+	it("reads a missing enabled list as nothing sent", () => {
+		expect(countEnabledByGroup(toy, null).get("Core")).toEqual({
+			on: 0,
+			total: 2
+		})
 	})
 })
 

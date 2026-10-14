@@ -10,14 +10,14 @@ You'll have an embedding model set up, your lorebook indexed, and Search by mean
 
 ## Turning it on
 
-1. Open the **Connections** view from the rail and find the **Embeddings** section.
-2. Add a connection. Most people should pick **Local embeddings (ONNX)**: it runs on your own computer, offline and free.
-3. Choose a model from the recommended list (see [Choosing a local embedding model](#choosing-a-local-embedding-model)), download it, and press **Use for embeddings** to star it.
+1. Open the **Loadouts** view from the rail and tap the **Embeddings** tile. That is the Embeddings [loadout](./connections.md#loadouts), the model on a connection that every embedding runs on. Its sheet lists every model you have that can embed; if one suits you, pick it and skip to the end.
+2. Otherwise, add a connection in the **Connections** view with **Add › A connection**. Most people should pick **Local embeddings (ONNX)**: it runs on your own computer, offline and free.
+3. Choose a model from the recommended list (see [Choosing a local embedding model](#choosing-a-local-embedding-model)), download it, and press **Use in Embeddings** to put it in the Embeddings loadout.
 
-That's all. Indexing starts by itself, and **Search by meaning** is on its default, **Automatic**, which searches whenever an embedding model is starred.
+That's all. Indexing starts by itself, and **Search by meaning** is on its default, **Automatic**, which searches whenever the Embeddings loadout has a model.
 
 :::tip You should see
-The starred connection's queue reads **Running** while it indexes, then **Idle**. Open a session with a lorebook: each entry row in the lorebook shows a small lightning bolt once it's indexed. Later, an entry's **Read in?** tab shows a meaning score beside the keyword score.
+The queue of the connection the Embeddings loadout uses reads **Running** while it indexes, then **Idle**. Open a session with a lorebook: each entry row in the lorebook shows a small lightning bolt once it's indexed. Later, an entry's **Read in?** tab shows a meaning score beside the keyword score.
 :::
 
 :::warning If this didn't work
@@ -27,14 +27,14 @@ The starred connection's queue reads **Running** while it indexes, then **Idle**
 
 ## Embedding connections
 
-An embedding connection is a connection like any other: a service, an address and key where the service needs them, and a model. One of them is starred, **Use for embeddings**, and that star decides which model indexes your lore. With no star, retrieval runs on keywords alone.
+An embedding connection is a connection like any other: a service, an address and key where the service needs them, and a model. The model in the **Embeddings** loadout, put there with **Use in Embeddings**, decides which model indexes your lore. With the loadout empty, retrieval runs on keywords alone.
 
 | Service | Runs | Cost | Good for |
 | --- | --- | --- | --- |
-| **Local embeddings (ONNX)** | On this computer, offline | Free | Most people. Pick, download and star a model in the Connections view. See [Local ONNX models](./connections.md#local-onnx-models). |
+| **Local embeddings (ONNX)** | On this computer, offline | Free | Most people. Add it in the Connections view, then pick, download and **Use in Embeddings** a model. See [Local ONNX models](./connections.md#local-onnx-models). |
 | **Ollama** | In Ollama, on this computer or your network | Free | People already running Ollama: any embedding model it has pulled. |
 | **LM Studio** | In LM Studio, on this computer or your network | Free | People already running LM Studio: any embedding model it has downloaded. |
-| **KoboldCPP, run by Serene Pub** | On this computer | Free | People already chatting through it: put an embedding model in its Models Directory and press **Use for embeddings**. It loads beside the chat model, on the processor, so neither unloads the other. See [Embeddings from the same connection](./connections.md#embeddings-from-the-same-connection). |
+| **KoboldCPP, run by Serene Pub** | On this computer | Free | People already chatting through it: put an embedding model in its Models directory and press **Use in Embeddings**. It loads beside the model that writes replies, on the processor, so neither unloads the other. See [Embeddings from the same connection](./connections.md#embeddings-from-the-same-connection). |
 | **KoboldCPP** | Your KoboldCPP | Free | A KoboldCPP connection with an embedding model loaded can answer embeddings on the same address as text. |
 | **Llama.cpp** | A `llama-server` started with `--embeddings` | Free | An embedding model you already serve with llama.cpp. |
 | **OpenAI-compatible services** | A service such as OpenAI, OpenRouter or Mistral, or LocalAI or vLLM on your network | Per request on a paid service | No spare memory locally, or a preferred hosted model. |
@@ -45,7 +45,7 @@ Apart from the local ONNX models, embeddings come from the same connection that 
 - **OpenAI-compatible services**: **OpenAI (Official)**, **OpenRouter**, **Google Gemini**, **Together AI**, **Mistral AI** and **LocalAI** can embed as soon as they're added. Any other, including a **Custom** address or a vLLM serving an embedding model, can embed once you switch on **Embeddings** under the connection's **What this connection can do**. These services don't say which of their models are embedding models, so choose one by name (OpenAI's is `text-embedding-3-small`, for example; **Add by name** adds one the list doesn't show).
 - A connection made as **Embeddings (OpenAI-compatible)** in an earlier version becomes an ordinary OpenAI-compatible connection the next time Serene Pub starts. It keeps its address, key and model, stays the embedding model if it was one, and nothing is indexed again.
 
-An administrator can also set the embedding model in **Admin › Defaults**, under **Embeddings**. It's the same choice as the star, and changing it asks first in the same way.
+An administrator can also fill the Embeddings loadout in **Admin › Models › Loadouts**. It's the same choice, and changing it asks first in the same way.
 
 The setup wizard doesn't ask about embeddings. Turn them on whenever you like.
 
@@ -67,9 +67,9 @@ On a local connection, **Model idle timeout** unloads the model after it has had
 
 ## Search by meaning
 
-**Search by meaning** is a setting on the **Retrieval queries** step of the reply pipeline, in the **Pipelines** view:
+**Search by meaning** is a setting on the **Retrieval queries** step of the reply pipeline, in **Admin › Pipelines**:
 
-- **Automatic** (the default) searches whenever an embedding model is starred, local or paid.
+- **Automatic** (the default) searches whenever the Embeddings loadout has a model, local or paid.
 - **On** searches on every turn.
 - **Off** never searches by meaning, but keeps the index up to date.
 
@@ -79,7 +79,7 @@ Its companions are on the **Semantic search** step:
 - **Closest matches per query** (40): how many candidates each search looks at.
 - **Discount weak matches** (1): how much a loose resemblance counts against a close one. Higher pushes vague matches down without removing them.
 
-The search always uses the starred model, because a question embedded by a different model wouldn't match the index. The retrieval explanation for a turn says whether it searched, and why not when it didn't.
+The search always uses the model in the Embeddings loadout, because a question embedded by a different model wouldn't match the index. The retrieval explanation for a turn says whether it searched, and why not when it didn't.
 
 ### What it searches
 
@@ -91,7 +91,7 @@ An entry found by meaning reaches the prompt exactly as one found by keyword. If
 
 Adventure and the Lair search by meaning and by name too, as Chat does. A character's own turn there searches as that character, so it finds their private lore and never another's.
 
-### What a starred model costs per turn
+### What the Embeddings loadout's model costs per turn
 
 With a model **on this computer** (local, Ollama, LM Studio, KoboldCPP, llama.cpp), these are work on your own hardware and nothing is billed. With a **paid service**, each is a billed request:
 
@@ -123,15 +123,15 @@ So pinning, switching off, archiving, reordering, editing keywords or dating an 
 
 ### Changing the embedding model
 
-Every stored embedding remembers which model and address made it. When you star a different model, Serene Pub counts the embeddings the new model can't use, tells you how many will be redone across how many lorebooks and sessions, and asks first. On confirm, those are deleted and indexing starts again with the new model. If there's nothing to redo (the first model on a new install, or the same model again), the star simply moves.
+Every stored embedding remembers which model and address made it. When you put a different model in the Embeddings loadout, Serene Pub counts the embeddings the new model can't use, tells you how many will be redone across how many lorebooks and sessions, and asks first. On confirm, those are deleted and indexing starts again with the new model. If there's nothing to redo (the first model on a new install, or the same model again), the star simply moves.
 
-Editing the starred connection's address or model counts as a change of model and asks the same way. The same address written differently (a trailing slash, capitals, the default port) is not a change. `localhost` and `127.0.0.1` count as two different addresses. The KoboldCPP run by Serene Pub is the exception: there is only one, so its embeddings remember the model alone, and changing its port never re-indexes.
+Editing the address or model of the connection the Embeddings loadout uses counts as a change of model and asks the same way. The same address written differently (a trailing slash, capitals, the default port) is not a change. `localhost` and `127.0.0.1` count as two different addresses. The KoboldCPP run by Serene Pub is the exception: there is only one, so its embeddings remember the model alone, and changing its port never re-indexes.
 
-Unstarring, or deleting the starred connection, stops indexing and keeps the embeddings, so starring the same model again later picks up where it left off.
+Emptying the Embeddings loadout, or deleting its connection, stops indexing and keeps the embeddings, so putting the same model back later picks up where it left off.
 
 ### The queue
 
-The starred connection's view shows its queue:
+The view of the connection the Embeddings loadout uses shows its queue:
 
 - A **status card**, **Running** or **Idle**, with **Start** and **Stop**, live counts, and what is being embedded now.
 - **Queue**: what's waiting, grouped by session (with its lorebook and characters) so a session's content is indexed together.
@@ -148,27 +148,27 @@ If the queue sits at **Idle** with content still waiting:
 
 The server log has a warning whenever the queue stops by itself.
 
-## Understanding RAG notices
+## Understanding indexing notices
 
 Once a session passes 10 messages, a quiet line can appear above the composer when its lorebook isn't fully searchable yet:
 
 - *Lorebook entries aren't indexed yet, so Search by meaning can't find them.*
-- *Lorebook entries were embedded with a different model and need re-indexing with ‹model›.*
-- *Indexing 12 of 40 lorebook entries.* While the queue isn't running, it says *12 of 40 lorebook entries are indexed. The rest are waiting in the embedding queue.*
+- *Lorebook entries were indexed with a different model and need re-indexing with ‹model›.*
+- *Indexing 12 of 40 lorebook entries.* While the queue isn't running, it says *12 of 40 lorebook entries are indexed. The rest are waiting to be indexed.*
 
-**Prioritize in queue** moves the session to the front. **Hide for this session** hides the notice; Search by meaning still searches whatever is indexed, and **Show again** brings it back. Only the session's owner can hide it. The notice goes away by itself once every entry is indexed.
+An administrator also gets the press the sentence calls for: **Re-index now** when entries need re-indexing, which puts the session at the front of the queue and re-indexes them with the current model; **Prioritize in queue** while entries are on their way, which moves the session to the front; and, when none is indexed yet, **Set up search by meaning** too, which opens **Admin › Models › Loadouts**, where the Embeddings loadout is filled. Other people see the sentence alone. **Hide for this session** hides the notice; Search by meaning still searches whatever is indexed, and **Show again** brings it back. Only the session's owner can hide it. The notice goes away by itself once every entry is indexed.
 
-### Why some short sessions never show a RAG notice
+### Why some short sessions never show an indexing notice
 
 Sessions with 10 messages or fewer show no notice. Search by meaning still searches their lorebook on every turn it's set to.
 
 ### The status icon
 
-Lorebook entry rows and character rows carry a small icon for their own index state: a lightning bolt when they're indexed with the current model, a refresh icon when they were indexed with a different one, and nothing when embeddings are off or they haven't been indexed yet.
+Lorebook entry rows and character rows carry a small icon for their own index state: a lightning bolt (*Indexed for Search by meaning*) when they're indexed with the current model, a refresh icon (*Needs re-indexing*) when they were indexed with a different one, and nothing when embeddings are off or they haven't been indexed yet.
 
 ## Named entities
 
-**Named entities** is a fourth section of the Connections view, with one service, **Local named entities (ONNX)**. Its models, from a small English one (about 67 MB) to larger multilingual ones, find the people, places and things a message names. Download one and star it with **Use for entity extraction**.
+**Named entities** has its own loadout, **Entities**, with its own tile in the Loadouts view and one service, **Local named entities (ONNX)**. Its models, from a small English one (about 67 MB) to larger multilingual ones, find the people, places and things a message names. Download one and put it in the **Entities** loadout with **Use in Entities**.
 
 It helps lore be matched by name even when nobody set a keyword, or when a scene writes a name in lower case. Without it, Serene Pub matches on the names the lorebook already knows and on capitalised words, which works well for most books.
 

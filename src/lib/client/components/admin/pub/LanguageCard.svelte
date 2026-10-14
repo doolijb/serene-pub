@@ -31,9 +31,8 @@
 		onValueChange={handleDefaultLanguageChange}
 	/>
 	<p id="default-language-note" class="text-surface-600-400 text-sm">
-		The language also decides which retrieval features apply: stemming is
-		used for the languages a stemmer exists for, and trigram matching —
-		which works for every language — for the rest. See the Languages
-		documentation page.
+		Some search features depend on the language: word stems are matched
+		for the languages a stemmer exists for, and partial matches for the
+		rest. See the Languages documentation page.
 	</p>
 </section>

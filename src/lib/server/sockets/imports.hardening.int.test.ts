@@ -268,7 +268,11 @@ describe("a card's own lorebook is held, not sent back", () => {
 				{
 					keys: ["tea"],
 					content: "The tea is always cold.",
-					enabled: true
+					enabled: true,
+					// Pinned: a small, plain book would become keyword strokes on
+					// the card (DESIGN-card-strokes-and-dowry A.6); this test is
+					// about the held-book path.
+					constant: true
 				}
 			]
 		}

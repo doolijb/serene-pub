@@ -3,15 +3,14 @@
 	import type { GraphEdge, PanelEdge } from "../graphs/graphModel"
 	import type { CastFace } from "../castPool"
 	import CastAvatar from "./CastAvatar.svelte"
-	import { moreLine, relationshipsAtMomentLine } from "./castRelationships"
+	import { relationshipsAtMomentLine } from "./castRelationships"
 
 	/**
-	 * A member's relationships, on their own page.
+	 * A member's relationships, on their own tab of the member page.
 	 *
 	 * The same edges the graph draws, said in words: what it is called, which
-	 * way it points, who is at the far end, and where it came from. The list
-	 * shows a handful and offers the rest, because a member with twenty edges
-	 * would otherwise bury the lore underneath them.
+	 * way it points, who is at the far end, and where it came from. Every one
+	 * is listed: the tab holds nothing else for them to bury.
 	 */
 	interface Props {
 		rows: PanelEdge[]
@@ -42,12 +41,6 @@
 		onOpenMember
 	}: Props = $props()
 
-	/** What fits before the lore below it is pushed off the screen. */
-	const HEAD = 4
-
-	let showAll = $state(false)
-	let shown = $derived(showAll ? rows : rows.slice(0, HEAD))
-	let hidden = $derived(rows.length - shown.length)
 	let momentLine = $derived(relationshipsAtMomentLine(inStory, rows.length))
 </script>
 
@@ -76,7 +69,7 @@
 		</p>
 	{:else}
 		<ul class="flex flex-col gap-1.5">
-			{#each shown as row (row.edge.id)}
+			{#each rows as row (row.edge.id)}
 				{@const later = laterLabel(row.edge)}
 				{@const face = faceOf?.(row.otherKey)}
 				<li
@@ -162,14 +155,5 @@
 				</li>
 			{/each}
 		</ul>
-		{#if hidden > 0}
-			<button
-				class="anchor self-start text-xs"
-				type="button"
-				onclick={() => (showAll = true)}
-			>
-				{moreLine(hidden)}
-			</button>
-		{/if}
 	{/if}
 </div>

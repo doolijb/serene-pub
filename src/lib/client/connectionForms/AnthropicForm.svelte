@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
-	import Select from "$lib/client/components/inputs/Select.svelte"
-	import { onMount } from "svelte"
+	import ConnectionFieldSelect from "./ConnectionFieldSelect.svelte"
+	import { TOKEN_COUNTER } from "./connectionFieldWords"
+	import { useExtraJsonSync } from "./extraJsonSync.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { z } from "zod"
@@ -49,6 +50,10 @@
 	// listener for the event and fans it out, so the parent sidebar's own
 	// interest is untouched by this form coming and going.
 	const onConnectionsTest = (msg: Sockets.Connections.Test.Response) => {
+		// The event fans out to every open form: another connection's result
+		// is not this one's.
+		if (msg.connectionId != null && msg.connectionId !== connection.id)
+			return
 		testResult = msg
 	}
 	useInterest<"connections:test">("connections:test", onConnectionsTest)
@@ -89,17 +94,21 @@
 		}
 	}
 
-	$effect(() => {
-		if (fields) {
-			connection.extraJson = fieldsToExtraJson(fields)
-		}
-	})
-
-	onMount(() => {
-		fields = extraJsonToFields({
-			...defaultExtraJson,
-			...(connection.extraJson || {})
-		})
+	// Seeds the fields from `{...defaults, ...connection.extraJson}` on mount
+	// and whenever the draft is replaced from outside (an external save, Reset),
+	// and writes back only on a real edit — merged over `extraJson`. Writing
+	// on mount made the panel report unsaved changes the instant it opened
+	// and block leaving behind a Discard dialog. See `useExtraJsonSync`.
+	useExtraJsonSync<ExtraFieldData>({
+		connection: () => connection,
+		fields: () => fields,
+		seed: (extraJson) => {
+			fields = extraJsonToFields({
+				...defaultExtraJson,
+				...(extraJson ?? {})
+			} as ExtraJson)
+		},
+		project: (f) => fieldsToExtraJson(f)
 	})
 </script>
 
@@ -115,9 +124,9 @@
 		</p>
 	{/if}
 
-	<Select
+	<ConnectionFieldSelect
 		class="mt-2"
-		label="Token Counter"
+		words={TOKEN_COUNTER}
 		options={TokenCounterOptions.options}
 		bind:value={connection.tokenCounter}
 	/>

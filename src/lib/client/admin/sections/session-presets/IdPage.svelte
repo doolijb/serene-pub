@@ -13,6 +13,9 @@
 	 * built-ins accept availability flags only — duplicate to change what
 	 * they bind. Fieldsets: Preset (name, genre, description, availability),
 	 * Event bindings, Creation defaults; Delete asks on the confirmation page.
+	 * **Pipelines** opens Admin › Pipelines (the Pipelines rail view that
+	 * opened at this preset was retired 2026-10-12); the event bindings below
+	 * link to each pipeline this preset reaches.
 	 */
 	import { getContext, onMount, untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
@@ -403,6 +406,9 @@
 		onSave={save}
 	>
 		{#snippet headerActions()}
+			<a class="btn btn-sm preset-tonal-surface" href="/admin/pipelines">
+				<Icons.Workflow size={16} aria-hidden="true" /> Pipelines
+			</a>
 			<button type="button" class="btn btn-sm preset-tonal-surface" onclick={duplicate}>
 				<Icons.Copy size={16} aria-hidden="true" /> Duplicate
 			</button>

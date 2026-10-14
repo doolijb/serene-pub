@@ -61,19 +61,25 @@ describe("getImageAdapter", () => {
 		expect(await getImageAdapter(CONNECTION_TYPE.A1111)).toBe(a1111)
 	})
 
-	it("refuses OpenAI chat, which has no image code of any kind", async () => {
-		// The live bug this pairs with. `PRESET_CAPABILITIES["openai-official"]`
-		// asserted `text->image`, the OPENAI declaration was `probed`, so it
-		// resolved `native`, the bind guard passed — and then THIS threw, minutes
-		// into a session, from a file whose name tells the user nothing. The
-		// manifest no longer grants the key; this is the second half saying the
-		// same thing, and the two can no longer disagree.
-		//
-		// Not a statement about the vendor: the API has an images endpoint. It is a
-		// statement about this repo, which has no adapter for it — and that is
-		// exactly what the derivation is meant to report.
+	it("routes OpenAI to the OpenAI-images dialect", async () => {
+		// This used to be a refusal: the manifest granted `text->image` to OPENAI
+		// with no image module behind it, and THIS threw minutes into a session.
+		// The module exists now (DESIGN-image-generation §9.6), and the
+		// conformance test keeps the manifest and the module agreeing.
+		const openaiImages = (await import("../imageAdapters/OpenAIImagesAdapter"))
+			.default
+		// With the Gemini image dialect folded in (`withGeminiImages`): the
+		// OpenAI-images module underneath, Gemini's fields beside its own.
+		const routed = await getImageAdapter(CONNECTION_TYPE.OPENAI)
+		expect(routed.sheet).toBe(openaiImages.sheet)
+		expect(Object.keys(routed.profileSchema ?? {})).toEqual(
+			expect.arrayContaining(["quality", "imageSize"])
+		)
+	})
+
+	it("refuses a type with no image code of any kind", async () => {
 		await expect(
-			getImageAdapter(CONNECTION_TYPE.OPENAI)
+			getImageAdapter(CONNECTION_TYPE.ANTHROPIC)
 		).rejects.toThrow(/No image adapter/)
 	})
 })

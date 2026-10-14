@@ -634,7 +634,9 @@
 						role="combobox"
 						class="text-surface-950-50 placeholder:text-surface-500 focus:ring-primary-500 min-w-0 flex-1 border-0 bg-transparent p-0 text-base shadow-none outline-none focus:ring-2"
 						placeholder={jumpCtx.placeholder}
-						aria-label={jumpCtx.placeholder}
+						aria-label={scope.key === null
+							? jumpCtx.placeholder
+							: `${jumpCtx.placeholder}, in ${scope.label}`}
 						aria-expanded={flatRows.length > 0}
 						aria-controls="jump-results"
 						aria-activedescendant={activeRow

@@ -56,6 +56,7 @@ import { getDefinition, readsOf, type SlotDecl } from "@serene-pub/sdk"
 import type { Bindings } from "@serene-pub/sdk"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { structuralCompat } from "$lib/server/pipelines/runtime/structuralCompat"
+import { SCRIPT_BUDGET_PARAM } from "$lib/server/pipelines/scripts/chains"
 
 /**
  * Slot kinds the host supplies out of the scope chain rather than through
@@ -65,8 +66,27 @@ import { structuralCompat } from "$lib/server/pipelines/runtime/structuralCompat
  */
 export const HOST_SUPPLIED_SLOT_KINDS: ReadonlySet<string> = new Set([
 	"scripts",
-	"wire"
+	"wire",
+	// `loadout` (I12) and `workflow` (I7), 2026-10-12: `world.ts applyLoadoutLayer` and
+	// `dispatchImage`'s `resolveWorkflow` read them from the scope chain before the
+	// handler runs; the handler sees the connection, sampling and workflow they resolve to.
+	"loadout",
+	"workflow"
 ])
+
+/**
+ * The one `params` field the HOST reads rather than the handler: a `scripts`
+ * slot's time limit (`SCRIPT_BUDGET_PARAM`, `scripts/chains.ts`). The chain it
+ * bounds is host-supplied (above), so its limit is too — the seam applier
+ * reads it off the scope chain per step (`scriptBudgetsByNode`). Exempt only
+ * on a definition that declares a `scripts` slot; anywhere else the name is
+ * an ordinary parameter and its handler must read it.
+ */
+const isHostSuppliedParam = (
+	param: string,
+	slots: ReadonlyArray<[string, SlotDecl]>
+): boolean =>
+	param === SCRIPT_BUDGET_PARAM && slots.some(([, d]) => d.kind === "scripts")
 
 // The allow-list itself lives in a leaf module so `paramsSlotWiring.test.ts`
 // can read it without importing the bindings; re-exported here so every
@@ -200,7 +220,7 @@ export function checkDeclaredReads(
 					)
 				)
 		for (const param of params)
-			if (!readParams.has(param))
+			if (!readParams.has(param) && !isHostSuppliedParam(param, slots))
 				report.unread.push(
 					finding(
 						id,

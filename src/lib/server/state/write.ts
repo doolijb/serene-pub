@@ -145,8 +145,12 @@ import {
 } from "$lib/server/state/owners"
 import { locationOwnerKey } from "$lib/server/state/keys"
 import { sessionReadingOf, writeDatingAt } from "$lib/server/state/reading"
-import { bookCalendarOf } from "$lib/server/state/storyTime"
-import { dateProblem } from "$lib/shared/lorebooks/storyDate"
+import {
+	advanceSessionStoryClock,
+	bookCalendarOf,
+	StoryClockRefusal
+} from "$lib/server/state/storyTime"
+import { dateProblem, type StoryTimeUnit } from "$lib/shared/lorebooks/storyDate"
 import { sessionLoreWriteMode } from "$lib/server/state/loreWriteMode"
 import {
 	LORE_WRITES_OFF,
@@ -210,6 +214,37 @@ export type StateChange = ValueChange
 /** Whether a payload is a change this gate writes — the retired possession arm is not. */
 export const isValueChange = (c: unknown): c is ValueChange =>
 	!!c && typeof (c as ValueChange).slotId === "string"
+
+/**
+ * 🚧 A **clock line** (live scenes §6, ★3; lane F, 2026-10-13): the
+ * state-keeper asking to move the session's story clock FORWARD by `by` of
+ * `unit` — what `core:query/resolve-state-changes@1` makes of the keeper's
+ * `clock` list, and the payload of a `state_proposals` row of kind `clock` (a
+ * **clock proposal**, `proposeClockChange`).
+ *
+ * Not a `StateChange`: it names no owner and no slot, never reaches the gate,
+ * and is never applied by `set-state` — Accept advances the clock
+ * (`decideProposal`), and a run that trusts the narrator moves it through
+ * *Advance story clock*. ⚠ Not the world's *Time of day* stat, which is a
+ * value like any other.
+ *
+ * 🚧 `skipped` (live scenes §15 G16): a well-formed ask the story cannot take
+ * — no clock yet, a date the calendar cannot place — with why, in the
+ * person's words. Never proposed and never moved: `set-state` writes it to
+ * the ledger as a **skipped** clock row (`recordClockMove`), in either mode,
+ * so the person reads *not on the clock* under the reply as a skipped
+ * *Advance story clock* reads.
+ */
+export interface ClockChange {
+	kind: "clock"
+	by: number
+	unit: StoryTimeUnit
+	skipped?: string
+}
+
+/** Whether a change (or a proposal's payload) is a clock line. */
+export const isClockChange = (c: unknown): c is ClockChange =>
+	!!c && typeof c === "object" && (c as { kind?: unknown }).kind === "clock"
 
 /** Refused for a reason a person can read. Callers turn it into their own refusal. */
 export class StateRefusal extends Error {}
@@ -456,20 +491,49 @@ async function sealerName(
  * id and replaces only the text: nothing is deleted, so nothing cascades, and
  * the values the old reply wrote would otherwise survive the reply itself. That
  * is the case this exists for.
+ *
+ * 🚧 **The clock moves with it** (live scenes §15 G5, 2026-10-13): the moves
+ * this message carried — the keeper's under Trust the narrator, an accepted
+ * clock proposal, a *Time passes…* filed against it — are taken back by
+ * their steps before their rows go (`revertClockMovesAnchoredTo`), all in
+ * one transaction. A reply's **tick** stays, row and move: the re-driven
+ * reply never ticks again. Throws `StoryClockRefusal` with the sentence, and
+ * takes nothing back, when the calendar cannot place a step back.
+ *
+ * `clockMoved`: the session's clock moved back, for the caller to announce.
+ * 🚧 `changed` (live scenes §15 G14): anything at all was taken back — a
+ * value, a configuration, a proposal or clock row, the clock — so the
+ * caller broadcasts `state:changed` once this has committed, as an outlet's
+ * write does; a reply that changed nothing announces nothing.
  */
 export async function retractStateAnchoredTo(
 	db: Db,
 	messageId: number
-): Promise<void> {
-	await db
-		.delete(schema.attributeValues)
-		.where(eq(schema.attributeValues.validFromMessageId, messageId))
-	await db
-		.delete(schema.attributeConfigs)
-		.where(eq(schema.attributeConfigs.validFromMessageId, messageId))
-	await db
-		.delete(schema.stateProposals)
-		.where(eq(schema.stateProposals.messageId, messageId))
+): Promise<{ clockMoved: boolean; changed: boolean }> {
+	const { notATickSql, revertClockMovesAnchoredTo } = await import(
+		"$lib/server/state/clockMoves"
+	)
+	return await db.transaction(async (tx) => {
+		const t = tx as unknown as Db
+		const { sessionIds } = await revertClockMovesAnchoredTo(t, [messageId], { keepTicks: true })
+		const values = await t
+			.delete(schema.attributeValues)
+			.where(eq(schema.attributeValues.validFromMessageId, messageId))
+			.returning({ id: schema.attributeValues.id })
+		const configs = await t
+			.delete(schema.attributeConfigs)
+			.where(eq(schema.attributeConfigs.validFromMessageId, messageId))
+			.returning({ id: schema.attributeConfigs.id })
+		const proposals = await t
+			.delete(schema.stateProposals)
+			.where(and(eq(schema.stateProposals.messageId, messageId), notATickSql))
+			.returning({ id: schema.stateProposals.id })
+		const clockMoved = sessionIds.length > 0
+		return {
+			clockMoved,
+			changed: clockMoved || values.length > 0 || configs.length > 0 || proposals.length > 0
+		}
+	})
 }
 
 // ── Validation ──────────────────────────────────────────────────────────────
@@ -1572,6 +1636,12 @@ export interface ProposalDecision {
 	status: "accepted" | "rejected" | "superseded"
 	appliedId?: number
 	/**
+	 * 🚧 An accepted **clock proposal**: the session's story clock moved, and
+	 * this is where it stands now (`label`, in the book's calendar). The
+	 * caller announces it — a moved clock is a time action (live scenes §4).
+	 */
+	clock?: { label: string }
+	/**
 	 * `superseded` only: the targets that moved since the proposal's base —
 	 * one entry for a one-change proposal, by name (`changeTargetName`).
 	 */
@@ -1622,6 +1692,7 @@ export async function decideProposal(
 	if (!proposal) throw new StateRefusal("that proposal no longer exists.")
 	if (proposal.status !== "pending")
 		throw new StateRefusal(`that proposal was already ${proposal.status}.`)
+	if (proposal.kind === "clock") return await decideClockProposal(db, proposal, accept)
 
 	const change = proposal.payload as unknown as StateChange
 	return await db.transaction(async (tx) => {
@@ -1677,6 +1748,74 @@ export async function decideProposal(
 		)
 		await mark("accepted")
 		return { status: "accepted", appliedId }
+	})
+}
+
+/**
+ * 🚧 Decide a **clock proposal** (live scenes §6, ★3). Accept advances the
+ * session's story clock by the step, on `tx` and under the state-version lock
+ * the value path takes, so two decisions racing on one row cannot both move
+ * it; Reject drops it. Anyone the session admits decides one, as a session
+ * value: the clock is the session's own, never the book's.
+ *
+ * Never **superseded**: a step is a delta that holds from wherever the clock
+ * stands — the keeper said the scene took three hours, and a person moving
+ * the clock since does not make that untrue. A clock that cannot move now (no
+ * present to start from, a result that does not land) is refused with the
+ * clock's own sentence and the proposal stays pending, for Reject.
+ */
+async function decideClockProposal(
+	db: Db,
+	proposal: typeof schema.stateProposals.$inferSelect,
+	accept: boolean
+): Promise<ProposalDecision> {
+	const change = proposal.payload as unknown as Partial<ClockChange>
+	return await db.transaction(async (tx) => {
+		await lockStateVersion(tx, proposal.sessionId)
+		const [held] = await tx
+			.select({ status: schema.stateProposals.status })
+			.from(schema.stateProposals)
+			.where(eq(schema.stateProposals.id, proposal.id))
+		if (!held) throw new StateRefusal("that proposal no longer exists.")
+		if (held.status !== "pending")
+			throw new StateRefusal(`that proposal was already ${held.status}.`)
+		const mark = async (status: ProposalDecision["status"]) => {
+			await tx
+				.update(schema.stateProposals)
+				.set({ status, decidedAt: new Date() })
+				.where(eq(schema.stateProposals.id, proposal.id))
+		}
+		if (!accept) {
+			await mark("rejected")
+			return { status: "rejected" }
+		}
+		if (typeof change.by !== "number" || typeof change.unit !== "string")
+			throw new StateRefusal("that clock proposal does not say how far the clock moves.")
+		let moved: Awaited<ReturnType<typeof advanceSessionStoryClock>>
+		try {
+			moved = await advanceSessionStoryClock(tx, proposal.sessionId, change.by, change.unit)
+		} catch (e) {
+			if (e instanceof StoryClockRefusal) throw new StateRefusal(e.message)
+			throw e
+		}
+		// 🚧 The accepted row IS the move's record (live scenes §15 G5): where
+		// the clock stood and where it now stands, for the ledger's line,
+		// and the keeper's cause — what a swipe or a delete of the reply
+		// moves the clock back by (`state/clockMoves.ts`).
+		await tx
+			.update(schema.stateProposals)
+			.set({
+				status: "accepted",
+				decidedAt: new Date(),
+				payload: {
+					...((proposal.payload ?? {}) as Record<string, unknown>),
+					cause: "keeper",
+					from: moved.from,
+					to: moved.clock
+				}
+			})
+			.where(eq(schema.stateProposals.id, proposal.id))
+		return { status: "accepted", clock: { label: moved.label } }
 	})
 }
 

@@ -3,7 +3,7 @@
  * migration (`living_scene_look_reprojection`, squashed away; see `migrationSql`).
  *
  * - **Chat's reply prompt** (owner note 44): "Roleplay - Living Scene" claims
- *   `core:spec/chat-respond` in place of "Roleplay - Simple". The seed pass moves
+ *   `core:spec/chat-respond` in place of "Roleplay - Simple" (now "Roleplay - Plain"). The seed pass moves
  *   the claim by itself, but the shipped respond config stores the row id
  *   `ensureDefaultConfig` resolved once, so an older install kept Simple.
  * - **Adventure's Look** moved onto the scene builder, with the places

@@ -35,6 +35,7 @@ import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import {  } from "$lib/server/loadouts/testing"
 
 let testDb: TestDb
 let dataDir: string
@@ -152,7 +153,7 @@ async function setDefault(
 beforeEach(async () => {
 	queueCalls.length = 0
 	unloads.length = 0
-	await testDb.delete(schema.connectionDefaults)
+	await testDb.delete(schema.loadouts)
 	await testDb.delete(schema.characters)
 	await testDb.delete(schema.connectionModels)
 	await testDb.delete(schema.connections)

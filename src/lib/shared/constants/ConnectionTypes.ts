@@ -7,7 +7,6 @@ const llamaCppDesc = `
 <p>For more information, visit the <a class="text-primary-500 hover:underline" href="https://github.com/ggml-org/llama.cpp" target="_blank">Llama.cpp GitHub repository</a>.</p>
 `
 
-const llamaCppDiff = "Intermediate - Not for beginners"
 
 const lmStudioDesc = `
 <p>Serene Pub supports LM Studio through their <a class="text-primary-500 hover:underline" href="https://lmstudio.ai/docs/app/api/endpoints/rest" target="_blank">"LM Studio REST API (beta)"</a>.</p>
@@ -16,7 +15,6 @@ const lmStudioDesc = `
 <p>PS: You will have to enable the REST API in LM Studio settings.</p>
 `
 
-const lmStudioDiff = "Beginner (GUI) - Minimal setup required"
 
 const ollamaDesc = `
 <p>Serene Pub supports Ollama through its <a class="text-primary-500 hover:underline" href="https://github.com/ollama/ollama/blob/main/docs/api.md" target="_blank">native API.</a></p>
@@ -26,7 +24,6 @@ const ollamaDesc = `
 <p>Models can be downloaded from <a class="text-primary-500 hover:underline" href="https://ollama.com/library" target="_blank">Ollama's model library</a> or via GGUF releases on <a class="text-primary-500 hover:underline" href="https://huggingface.co/" target="_blank">Hugging Face</a>.</p>
 `
 
-const ollamaDiff = "Beginner (No GUI) - Minimal setup required"
 
 const openaiChatDesc = `
 <p>Serene Pub supports OpenAI's chat completion API.</p>
@@ -35,7 +32,6 @@ const openaiChatDesc = `
 <p>OpenAI's API is well-documented and widely used, making it a good choice for many applications.</p>
 `
 
-const openaiChatDiff = "Beginner - Nothing to install"
 
 const koboldCppDesc = `
 <p>Serene Pub supports KoboldCPP through its <a class="text-primary-500 hover:underline" href="https://github.com/LostRuins/koboldcpp/wiki" target="_blank">native API</a>.</p>
@@ -45,7 +41,6 @@ const koboldCppDesc = `
 <p>You can download KoboldCPP from the <a class="text-primary-500 hover:underline" href="https://github.com/LostRuins/koboldcpp/releases" target="_blank">GitHub releases page</a>.</p>
 `
 
-const koboldCppDiff = "Beginner (GUI) - Simple setup"
 
 const koboldCppManagedDesc = `
 <p><b>KoboldCPP, run by Serene Pub</b>: a KoboldCPP that Serene Pub installs, starts and stops.</p>
@@ -53,7 +48,6 @@ const koboldCppManagedDesc = `
 <p>Turned on from Connections → Add → KoboldCPP, run by Serene Pub.</p>
 `
 
-const koboldCppManagedDiff = "Beginner (GUI) - Managed by Serene Pub"
 
 const anthropicDesc = `
 <p>Serene Pub supports Anthropic's Claude API directly.</p>
@@ -62,7 +56,6 @@ const anthropicDesc = `
 <p>Extended thinking is supported on Claude 3.7+ models. Turn it on with <strong>Reasoning</strong> (and, if you like, <strong>Reasoning budget</strong>) on the sampling config, not on the connection.</p>
 `
 
-const anthropicDiff = "Beginner - Nothing to install"
 
 export class CONNECTION_TYPE {
 	/**
@@ -119,6 +112,23 @@ export class CONNECTION_TYPE {
 	 * upstream, and its adapter went with it.
 	 */
 	static A1111 = "a1111"
+	/**
+	 * 🚧 ComfyUI — a graph backend this pub talks to and never runs
+	 * (DESIGN-image-generation §4.9). It draws with a **workflow** (a
+	 * `workflows` row, chosen on the image oracle's `workflow` slot); its
+	 * models are the checkpoints and UNETs its `/object_info` lists.
+	 */
+	static COMFYUI = "comfyui"
+	/**
+	 * 🚧 AI Horde — a crowd of volunteer workers drawing for free, queued
+	 * (the **Horde dialect**, DESIGN-image-generation §4.4). Key optional:
+	 * anonymous requests wait at the back of the queue.
+	 */
+	static HORDE = "horde"
+	/** 🚧 NovelAI's image API (the **NovelAI dialect**). Needs a subscription key. */
+	static NOVELAI = "novelai"
+	/** 🚧 Black Forest Labs' FLUX API (the **BFL dialect**). Needs a key. */
+	static BFL = "bfl"
 
 	/**
 	 * Embeddings from an in-process ONNX model (`@huggingface/transformers`).
@@ -181,7 +191,6 @@ export class CONNECTION_TYPE {
 		value: string
 		label: string
 		description: string
-		difficulty: string
 		/**
 		 * Which model modality this connection type is for. Absent = "text-gen".
 		 *
@@ -206,42 +215,36 @@ export class CONNECTION_TYPE {
 			value: CONNECTION_TYPE.LM_STUDIO,
 			label: "LM Studio",
 			description: lmStudioDesc,
-			difficulty: lmStudioDiff,
 			category: "local"
 		},
 		{
 			value: CONNECTION_TYPE.OLLAMA,
 			label: "Ollama",
 			description: ollamaDesc,
-			difficulty: ollamaDiff,
 			category: "local"
 		},
 		{
 			value: CONNECTION_TYPE.OPENAI,
 			label: "OpenAI Chat",
 			description: openaiChatDesc,
-			difficulty: openaiChatDiff,
 			category: "cloud"
 		},
 		{
 			value: CONNECTION_TYPE.LLAMACPP,
 			label: "Llama.cpp",
 			description: llamaCppDesc,
-			difficulty: llamaCppDiff,
 			category: "local"
 		},
 		{
 			value: CONNECTION_TYPE.KOBOLDCPP,
 			label: "KoboldCPP",
 			description: koboldCppDesc,
-			difficulty: koboldCppDiff,
 			category: "local"
 		},
 		{
 			value: CONNECTION_TYPE.KOBOLDCPP_MANAGED,
 			label: "KoboldCPP, run by Serene Pub",
 			description: koboldCppManagedDesc,
-			difficulty: koboldCppManagedDiff,
 			category: "local"
 		},
 		{
@@ -251,7 +254,6 @@ export class CONNECTION_TYPE {
 				"Image generation through KoboldCPP, run by Serene Pub. One connection per " +
 				"image model, loaded on demand exactly as an LLM is — KoboldCPP holds " +
 				"one model at a time today, so drawing a picture swaps the chat model out.",
-			difficulty: "Beginner - Managed for you",
 			category: "local",
 			modality: "image-gen"
 		},
@@ -259,7 +261,6 @@ export class CONNECTION_TYPE {
 			value: CONNECTION_TYPE.ANTHROPIC,
 			label: "Anthropic (Claude)",
 			description: anthropicDesc,
-			difficulty: anthropicDiff,
 			category: "cloud"
 		},
 		{
@@ -269,8 +270,52 @@ export class CONNECTION_TYPE {
 				"Local image generation over the A1111 API — KoboldCPP with an " +
 				"image model loaded, AUTOMATIC1111, Forge or SD.Next. Point this " +
 				"at whichever is running; they all speak the same endpoints.",
-			difficulty: "Beginner (with KoboldCPP) - Simple setup",
 			category: "local",
+			modality: "image-gen"
+		},
+		{
+			value: CONNECTION_TYPE.COMFYUI,
+			label: "ComfyUI",
+			description:
+				"<p>Image generation through your own <b>ComfyUI</b>. Serene Pub " +
+				"sends it a workflow and reads back the pictures; it never " +
+				"installs nodes or downloads models there.</p>" +
+				"<p>Point it at ComfyUI's address. Its models are the checkpoints " +
+				"ComfyUI lists.</p>",
+			category: "local",
+			modality: "image-gen"
+		},
+		{
+			value: CONNECTION_TYPE.HORDE,
+			label: "AI Horde",
+			description:
+				"<p>Free image generation from <b>AI Horde</b>, a crowd of " +
+				"volunteers' computers. Pictures wait in a queue — seconds to " +
+				"minutes.</p>" +
+				"<p>No key needed; a free key from aihorde.net moves you up " +
+				"the queue.</p>",
+			category: "cloud",
+			modality: "image-gen"
+		},
+		{
+			value: CONNECTION_TYPE.NOVELAI,
+			label: "NovelAI (Image)",
+			description:
+				"<p>Anime-style pictures from <b>NovelAI</b> (V4.5 and V5). " +
+				"Needs a subscription and a persistent API token from your " +
+				"NovelAI account settings.</p>",
+			category: "cloud",
+			modality: "image-gen"
+		},
+		{
+			value: CONNECTION_TYPE.BFL,
+			label: "Black Forest Labs (FLUX)",
+			description:
+				"<p>FLUX.2, FLUX.1 Kontext and FLUX 3 from <b>Black Forest " +
+				"Labs</b>, who make FLUX. Good at following a prompt and at " +
+				"keeping a character from reference pictures.</p>" +
+				"<p>Needs an API key from bfl.ai.</p>",
+			category: "cloud",
 			modality: "image-gen"
 		},
 		{
@@ -282,7 +327,6 @@ export class CONNECTION_TYPE {
 				"network and no API key.</p>" +
 				"<p>Not available on Android, and not on every desktop build of " +
 				"onnxruntime-node — the connection says so when it cannot load.</p>",
-			difficulty: "Beginner - One download",
 			category: "local",
 			modality: "embeddings"
 		},
@@ -294,7 +338,6 @@ export class CONNECTION_TYPE {
 				"itself, LM Studio, llama.cpp server, vLLM, a hosted gateway.</p>" +
 				"<p>Point it at the base URL and name the embedding model; the " +
 				"vector width is read back from the endpoint rather than assumed.</p>",
-			difficulty: "Beginner - Nothing to install",
 			category: "cloud",
 			modality: "embeddings"
 		},
@@ -305,7 +348,6 @@ export class CONNECTION_TYPE {
 				"<p>Ollama's own embedding route, <b>POST /api/embed</b>.</p>" +
 				"<p>Pull an embedding model (<code>ollama pull nomic-embed-text</code>) " +
 				"and pick it here. Ollama loads and unloads it for you.</p>",
-			difficulty: "Beginner (No GUI) - Minimal setup required",
 			category: "local",
 			modality: "embeddings"
 		},
@@ -321,7 +363,6 @@ export class CONNECTION_TYPE {
 				"uses even when nobody set a keyword for it.</p>" +
 				"<p>Not available on Android, and not on every desktop build of " +
 				"onnxruntime-node — the connection says so when it cannot load.</p>",
-			difficulty: "Beginner - One download",
 			category: "local",
 			modality: "ner"
 		}

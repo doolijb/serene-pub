@@ -79,6 +79,15 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		// `{ sessionId }` and nothing else — the signal to re-read state.
 		["state:changed", (payload) => payload?.sessionId],
 
+		// `{ conversationId, message, change }` — a private conversation's
+		// message arrived, changed or was removed (PLAN-private-messages). The
+		// open conversation may declare its scope; the list declares it bare.
+		["conversations:message", (payload) => payload?.conversationId],
+
+		// `{ conversationId, messages, hasEarlier }` — a page of one
+		// conversation, every reply carrying the id it answers.
+		["conversations:open", (payload) => payload?.conversationId],
+
 		// The session itself, so the id is normally on the row rather than
 		// beside it. A NOT-FOUND reply has no session to read an id off, so the
 		// server puts the requested id on `sessionId` for exactly that case
@@ -104,8 +113,18 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		// own scope.
 		["sessions:rowChanged", (payload) => payload?.sessionId],
 
+		// `{ sessionId, people }` — who of the session's people has it open
+		// (W10). Only the session page declares it, scoped — and its holding
+		// `sessions:attendance#<id>` is what "has it open" means to the push
+		// (`server/sessions/attendance.ts`).
+		["sessions:attendance", (payload) => payload?.sessionId],
+
 		// `{ sessionId, annex }` — the viewer's own annex view (R57).
 		["sessions:annex", (payload) => payload?.sessionId],
+
+		// 🚧 `{ sessionId, backdropMediaId }` — the session's backdrop moved
+		// (a pipeline's `set-backdrop` or a person's `sessions:setBackdrop`).
+		["sessions:backdropChanged", (payload) => payload?.sessionId],
 
 		// `{ sessionId, groups, legacy }` — the session data panel's read
 		// (owner and administrators only). Only the panel declares it, scoped.
@@ -176,6 +195,21 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		["characters:deleteSprite", (payload) => payload?.characterId],
 		["characters:reorderSprites", (payload) => payload?.characterId],
 		["characters:testSprite", (payload) => payload?.characterId],
+		// 🚧 Fill empty sprites (I5): the form preview, the start ack and
+		// the run's progress pushes all carry the card's id top-level.
+		["characters:previewSpriteFill", (payload) => payload?.characterId],
+		["characters:fillSprites", (payload) => payload?.characterId],
+		["characters:spriteFill", (payload) => payload?.characterId],
+		// 🚧 Re-express from neutral (§6.3): the whole list, like every write.
+		["characters:expressSprite", (payload) => payload?.characterId],
+		// 🚧 Generate portrait (I8): the preview, the start ack, the run's
+		// progress pushes and the likeness pick carry the card's id top-level.
+		["characters:previewPortrait", (payload) => payload?.characterId],
+		["characters:generatePortrait", (payload) => payload?.characterId],
+		["characters:portrait", (payload) => payload?.characterId],
+		["characters:setLikenessImage", (payload) => payload?.characterId],
+		// 🚧 Describe from image (D1): the probe and the run's answer.
+		["characters:describeLikeness", (payload) => payload?.characterId],
 		// `characters:setFolder` answers with the character it moved, so a
 		// panel open on one character hears about that one and no other. The
 		// id is top-level beside the ack, the not-found treatment.
@@ -220,6 +254,14 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		// top-level; the refusals carry it too, and stay ungated.
 		["lorebookState:get", (payload) => payload?.lorebookId],
 		["lorebookState:set", (payload) => payload?.lorebookId],
+		// 🚧 A card's own stats (card dowry §B.4): the character form's Stats
+		// tab. The three replies are the card's whole read and the push is
+		// `{ characterId }` — `characterId` top-level on every one; the
+		// refusals carry it too, and stay ungated.
+		["cardState:get", (payload) => payload?.characterId],
+		["cardState:set", (payload) => payload?.characterId],
+		["cardState:setSheets", (payload) => payload?.characterId],
+		["cardState:changed", (payload) => payload?.characterId],
 		// `{ lorebookId, sessionId, orphanedBindings }`.
 		["bindingCheck:result", (payload) => payload?.sessionId],
 
@@ -236,6 +278,22 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		["scenes:process:progress", (payload) => payload?.sceneId],
 		["scenes:process:complete", (payload) => payload?.sceneId],
 		["scenes:process:error", (payload) => payload?.sceneId],
+		// 🚧 Live scenes (PROPOSAL-live-scenes §14): a boundary write answers
+		// with the scene and its `sessionId` (`LiveSceneReply`), so only a
+		// tab reading that session hears it — the session page's widget asks
+		// (`sessionPage/pageAsks.ts`) declare `event#<sessionId>`.
+		["scenes:open", (payload) => payload?.sessionId],
+		["scenes:close", (payload) => payload?.sessionId],
+		["scenes:moveBoundary", (payload) => payload?.sessionId],
+		// 🚧 Lane E: a merge answers the same way.
+		["scenes:merge", (payload) => payload?.sessionId],
+		// 🚧 Live scenes, lane D: the cues and the settings a session's page
+		// holds, and the Chronicle's open-scene read and summary asks — each
+		// answered with the session's `sessionId`.
+		["scenes:cues", (payload) => payload?.sessionId],
+		["scenes:decideCue", (payload) => payload?.sessionId],
+		["scenes:processAll", (payload) => payload?.sessionId],
+		["scenes:openScenes", (payload) => payload?.sessionId],
 		["scenes:compile:progress", (payload) => payload?.historyEntryId],
 		["scenes:compile:complete", (payload) => payload?.historyEntryId],
 		["narrativeGraph:list", (payload) => payload?.lorebookId],
@@ -343,8 +401,9 @@ export const COMPONENT_ADMIN_EVENTS: readonly string[] = [
  *                     handlers live in that file but are not in this family.)
  *   - `ollama:`       `sockets/ollama.ts`, 13 handlers, all `isAdmin`.
  *   - `ner:`          `sockets/ner.ts`, 1 handler (`ner:status`), `isAdmin`.
- *   - `plugins:`      `sockets/plugins.ts`, 17 handlers, all `requireAdmin`.
- *   - `sessionGenres:` `sockets/sessionAdmin.ts`, 3 handlers, all `adminOnly`.
+ *   - `plugins:`      `sockets/plugins.ts`, 17 handlers, all `requireAdmin`;
+ *                     `sockets/pluginPackages.ts`, 2 more, admin as well.
+ *   - `sessionGenres:` `sockets/sessionAdmin.ts`, 6 handlers, all `adminOnly`.
  *
  * Removed:
  *   - `sessionAdmin:` matched NOTHING. No event in the application is spelled
@@ -392,9 +451,16 @@ export const RESTRICTED_INTEREST_PREFIXES: readonly string[] = [
 	"taskQueue:",
 	"completionTemplates:",
 	"samplingConfigs:",
+	// 🚧 `sockets/workflows.ts` (DESIGN-image-generation §4.12): every
+	// handler `requireAdmin`.
+	"workflows:",
 	// Slice 8 (2026-09-15): `sockets/connectionDefaults.ts`, 2 handlers, both
 	// `requireAdmin`; no read-shaped surface exists for anyone else.
 	"connectionDefaults:",
+	// I12 (2026-10-12): `sockets/loadouts.ts` — every `loadouts:` handler and
+	// the matting pair (`localModels:`) are `requireAdmin`.
+	"loadouts:",
+	"localModels:",
 	// The admin overhaul (2026-09-27): `sockets/adminOverview.ts`, one
 	// handler, admin-only. Read by `client/admin/adminHealth.svelte.ts`.
 	"admin:",
@@ -515,6 +581,13 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// sessionForms/SessionAnnexPanel.svelte, SCOPED. Its `:error` twin is
 	// never gated.
 	"sessions:annexInspect",
+	// Who of the session's people has it open (W10) — consumer: the session
+	// page, SCOPED, which hands it to its widgets as `attendance.v1`. Its
+	// key is also the push's own signal of who is here.
+	"sessions:attendance",
+	// 🚧 The session's backdrop moved — consumer: the session page, SCOPED,
+	// which hands it to its widgets on the `session` section.
+	"sessions:backdropChanged",
 	"sessions:actions",
 	"sessions:actionsSeen",
 	"sessions:addGuest",
@@ -546,6 +619,10 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// The lore-ranked push (R81) — consumer: the session page, SCOPED, which
 	// hands it to its widgets as `lore:ranked`.
 	"sessions:loreRanked",
+	// One widget's page of lines (`messages` request, D7 ruling A) — consumer: the session page, matched by requestId.
+	// The channel lanes under a channel (`channel-lanes` request) — consumer: the session page, matched by requestId.
+	"sessions:channelLanes",
+	"sessions:messagesPage",
 	"sessions:panelLayout:get",
 	"sessions:panelLayout:set",
 	// The copy model's one replace verb (Start from · Start again from ·
@@ -593,7 +670,6 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// handlers), so it is NOT a restricted prefix. Consumers, all on the registry:
 	// client/components/pipelines/** (RunProgressCard, PipelineReviewModal,
 	// inspector/RunInspector, workspace/*, ConfigNotices, PipelineConfigOptions),
-	// client/components/sidebars/PipelinesSidebar.svelte,
 	// client/components/media/MediaManagerTab.svelte,
 	// client/components/lorebookForms/EntryFireTest.svelte,
 	// client/lorebooks/editor/retrievalReadout.svelte.ts,
@@ -616,11 +692,14 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"pipelines:capPauseClosed",
 	"pipelines:capPauseRequested",
 	"pipelines:capPauses",
+	"pipelines:catalogue",
 	"pipelines:clearOption",
 	"pipelines:cloneContextTemplate",
 	"pipelines:clonePrompt",
 	"pipelines:cloneScript",
 	"pipelines:cloneVariableTemplate",
+	"pipelines:composite:delete",
+	"pipelines:composite:save",
 	"pipelines:configNotices",
 	"pipelines:configsIndex",
 	"pipelines:createConfig",
@@ -633,8 +712,15 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"pipelines:deleteScript",
 	"pipelines:deleteVariableTemplate",
 	"pipelines:detail",
+	"pipelines:document",
+	"pipelines:draft:get",
+	"pipelines:draft:put",
+	"pipelines:draft:discard",
+	"pipelines:draft:preview",
+	"pipelines:draft:publish",
 	"pipelines:eventMap",
 	"pipelines:exportScripts",
+	"pipelines:fork",
 	"pipelines:get",
 	"pipelines:importScripts",
 	"pipelines:library",
@@ -650,6 +736,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"pipelines:previewRetrieval",
 	"pipelines:previewTemplate",
 	"pipelines:progress",
+	"pipelines:promptWording",
 	"pipelines:renameConfig",
 	"pipelines:resetConfig",
 	"pipelines:resolveCapPause",
@@ -722,6 +809,23 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"characters:deleteSprite",
 	"characters:reorderSprites",
 	"characters:testSprite",
+	// 🚧 Fill empty sprites (I5) — consumer: client/components/sprites/
+	// SpritesTab.svelte, on the registry; all three SCOPED on characterId.
+	"characters:previewSpriteFill",
+	"characters:fillSprites",
+	"characters:spriteFill",
+	// 🚧 Re-express from neutral — consumer: SpritesTab.svelte; SCOPED.
+	"characters:expressSprite",
+	// 🚧 Generate portrait (I8) — consumer: client/components/gallery/
+	// GeneratePortraitDialog.svelte and EntityGalleryTab.svelte, on the
+	// registry; all four SCOPED on characterId.
+	"characters:previewPortrait",
+	"characters:generatePortrait",
+	"characters:portrait",
+	"characters:setLikenessImage",
+	// 🚧 Describe from image (D1) — consumer: client/components/
+	// characterForms/LikenessTab.svelte, on the registry; SCOPED.
+	"characters:describeLikeness",
 	"tags:create",
 	"tags:delete",
 	"tags:getRelatedData",
@@ -767,12 +871,14 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"lorebooks:importResolve",
 	"lorebooks:lines",
 	"lorebooks:list",
+	"lorebooks:listMemberFaces",
 	"lorebooks:resolveOrCreateBindingByName",
 	"lorebooks:setCalendar",
 	"lorebooks:setClock",
 	"lorebooks:storyTime",
 	"lorebooks:update",
 	"lorebooks:updateBinding",
+	"lorebooks:uploadMemberFace",
 
 	// Session-adjacent — slice 6 (2026-09-15): scenes, sessionGenres (restricted),
 	// sessionPresets, narrativeGraph, media, vectorization (part), taskQueue
@@ -823,6 +929,27 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"scenes:process:progress",
 	"scenes:scenedMessageIds",
 	"scenes:update",
+	// 🚧 Live scenes' boundary writes, SCOPED by `sessionId`. Consumer:
+	// client/components/sessionPage/pageAsks.ts (the conversation's
+	// `scene-open` / `scene-close` / `scene-move` asks, on the registry
+	// through `awaitReply`). Their refusals stay ungated (rule 1).
+	"scenes:open",
+	"scenes:close",
+	"scenes:moveBoundary",
+	// 🚧 Lane E: `scenes:merge` (a divider's *Remove boundary* into the scene
+	// before it), the same consumer and the same scope.
+	"scenes:merge",
+	// 🚧 Live scenes, lane D, SCOPED by `sessionId`. Consumers:
+	// client/components/sessionPage/sceneCuesFlow.svelte.ts (`scenes:cues`,
+	// the page's standing interest: the cues the conversation's chip draws and
+	// the settings Chronicle reads) and sessionPage/pageAsks.ts (the
+	// `decide-scene-cue`, `summarize-scenes` and Chronicle open-scene asks,
+	// through `awaitReply`). Their refusals stay ungated (rule 1).
+	"scenes:cues",
+	"scenes:decideCue",
+	"scenes:processAll",
+	"scenes:openScenes",
+	"sessionGenres:create",
 	"sessionGenres:detail",
 	"sessionGenres:list",
 	"sessionGenres:setPresetsEnabled",
@@ -872,9 +999,11 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"invites:revoke",
 	"plugins:abort",
 	"plugins:active",
+	"plugins:exportPackage",
 	"plugins:getSettings",
 	"plugins:install",
 	"plugins:installLocal",
+	"plugins:installPackage",
 	"plugins:kill",
 	"plugins:list",
 	"plugins:logs",
@@ -896,8 +1025,9 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"samplingConfigs:delete",
 	"samplingConfigs:get",
 	"samplingConfigs:list",
-	"samplingConfigs:setUserActive",
+	"samplingConfigs:setDefaultFor",
 	"samplingConfigs:update",
+	"samplingConfigs:usedBy",
 	"setup:get",
 	"setup:markComplete",
 	"systemSettings:get",
@@ -908,6 +1038,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"systemSettings:updateDefaultLanguage",
 	"systemSettings:updateKoboldCppManagerEnabled",
 	"systemSettings:updateLoreWriteModeDefault",
+	"systemSettings:updateMessagingEnabled",
 	"systemSettings:updateOllamaManagerEnabled",
 	"systemSettings:updateRequireTwoFactor",
 	"systemSettings:updateScriptsEnabled",
@@ -1100,6 +1231,10 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"images:generate",
 	"images:profileSchema",
 	"images:progress",
+	// … and the sampling form's drawing-sheet read, which greys the knobs the
+	// Image default's pair drops — sidebars/SamplingSidebar. Admin only, in
+	// the handler (the prefix is shared with member-reachable events).
+	"images:drawingSheet",
 
 	// components: (C6, P4) — consumers: the admin components pages (P6) and,
 	// for `components:changed`, the session page (P5); both are on the
@@ -1132,13 +1267,53 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"notifications:list",
 	"notifications:changed",
 
+	// `conversations:` — private messages between people (PLAN-private-
+	// messages-2026-10-12), born gated. Consumer: the client's conversations
+	// domain context (its one registered listener). NOT a restricted prefix —
+	// every user with accounts and messaging on has conversations; the store
+	// scopes every read by membership. `conversations:message` and
+	// `conversations:open` are SCOPED by `conversationId` (see SCOPED_EVENTS):
+	// the open conversation may declare its own scope, the list declares them
+	// bare. Pushed through `utils/userPush.ts`, which honours this gate.
+	"conversations:list",
+	"conversations:open",
+	"conversations:create",
+	"conversations:send",
+	"conversations:edit",
+	"conversations:remove",
+	"conversations:read",
+	"conversations:rename",
+	"conversations:addMembers",
+	"conversations:removeMember",
+	"conversations:leave",
+	"conversations:mute",
+	"conversations:people",
+	"conversations:attachable",
+	"conversations:person",
+	"conversations:message",
+	"conversations:changed",
+
 	// `lorebookState:` — a lorebook's own stats, read and written with no
 	// session (plan places-graph L4, 2026-09-29), born gated and SCOPED by
 	// `lorebookId`. Consumer: client/lorebooks/places/placeStatsApi.ts (the
 	// place editor's Stats section), on the registry through `awaitReply`.
 	// The book's sessions hear a write as `state:changed`.
 	"lorebookState:get",
-	"lorebookState:set"
+	"lorebookState:set",
+
+	// `cardState:` — a character card's own stats (card dowry §B.4,
+	// 2026-10-11), born gated. `get`/`set`/`setSheets`/`changed` are SCOPED by
+	// `characterId`; the four declaration verbs are bare (they name no card).
+	// Consumer: the character form's Stats tab (S6b), on the registry. The
+	// character's sessions hear a write as `state:changed`.
+	"cardState:get",
+	"cardState:set",
+	"cardState:setSheets",
+	"cardState:changed",
+	"cardState:declareSlot",
+	"cardState:updateSlot",
+	"cardState:declareSheet",
+	"cardState:updateSheet"
 ])
 
 export function isGatedEvent(event: string): boolean {

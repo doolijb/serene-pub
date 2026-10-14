@@ -7,12 +7,20 @@
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
-	import { onMount } from "svelte"
+	import ConnectionFieldSelect from "./ConnectionFieldSelect.svelte"
+	import { PROMPT_FORMAT, TOKEN_COUNTER } from "./connectionFieldWords"
+	import { useExtraJsonSync } from "./extraJsonSync.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { z } from "zod"
 
+	// BARE is a number with no unit, which Ollama reads as seconds — and is
+	// how the documented "-1" (keep loaded forever) is written. A sentinel
+	// rather than "" because the picker reads an empty value as "nothing
+	// selected".
+	const BARE = "bare"
 	const KEEP_ALIVE_UNITS = [
+		{ value: BARE, label: "none" },
 		{ value: "ms", label: "ms" },
 		{ value: "s", label: "s" },
 		{ value: "m", label: "m" },
@@ -29,7 +37,9 @@
 	 */
 	interface ExtraFieldData {
 		stream: boolean
-		keepAliveNumber: number
+		/** `null` when the input is emptied: the key is then left out and the
+		 *  adapter's own fallback ("5m") applies. */
+		keepAliveNumber: number | null
 		keepAliveUnit: string
 	}
 
@@ -73,8 +83,8 @@
 
 	const socket = useTypedSocket()
 	/**
-	 * The format picker's options, read from `completion_templates` instead of
-	 * the eight-entry constant that used to sit beside the table — so a template
+	 * The format picker's options, read from `completion_templates` rather
+	 * than a constant beside the table — so a template
 	 * an admin authored is offered by the one control that selects it. Falls back
 	 * to the built-ins until the reply lands.
 	 */
@@ -92,6 +102,10 @@
 	// listener for the event and fans it out, so the parent sidebar's own
 	// interest is untouched by this form coming and going.
 	const onConnectionsTest = (msg: Sockets.Connections.Test.Response) => {
+		// The event fans out to every open form: another connection's result
+		// is not this one's.
+		if (msg.connectionId != null && msg.connectionId !== connection.id)
+			return
 		testResult = {
 			ok: msg.ok,
 			error: msg.error ?? undefined,
@@ -133,63 +147,61 @@
 	// (removed: the old validity check read `connection.model`, and
 	// connections have no default model to be valid against.)
 
+	/**
+	 * Parsed losslessly: "0m" stays 0 (unload at once; a `|| default` on the
+	 * parse would read it as unset) and "-1" stays -1 with no unit (forever).
+	 * Anything unparseable shows the default rather than a mangled value.
+	 */
+	function parseKeepAlive(value: unknown): { number: number; unit: string } {
+		const fallback = { number: 5, unit: "m" }
+		if (typeof value === "number" && Number.isFinite(value))
+			return { number: value, unit: BARE }
+		if (typeof value !== "string") return fallback
+		const match = /^(-?\d+)(ms|s|m|h)?$/.exec(value.trim())
+		if (!match) return fallback
+		return { number: Number(match[1]), unit: match[2] ?? BARE }
+	}
+
 	function extraJsonToExtraFields(extraJson: ExtraJson): ExtraFieldData {
+		const keepAlive = parseKeepAlive(extraJson.keepAlive)
 		return {
 			stream: extraJson.stream || false,
-			keepAliveNumber: extraJson.keepAlive
-				? parseInt(extraJson.keepAlive) || 300
-				: 300,
-			keepAliveUnit: extraJson.keepAlive
-				? extraJson.keepAlive.replace(/^[0-9]+/, "")
-				: "ms"
+			keepAliveNumber: keepAlive.number,
+			keepAliveUnit: keepAlive.unit
 		}
 	}
 
 	function extraFieldsToExtraJson(fields: ExtraFieldData): ExtraJson {
+		const number = fields.keepAliveNumber
 		return {
 			stream: fields.stream,
-			keepAlive: `${fields.keepAliveNumber}${fields.keepAliveUnit}`
+			// Emptied input → key removed (see mergeExtraJson), never "nullm".
+			keepAlive:
+				typeof number === "number" && Number.isFinite(number)
+					? `${Math.trunc(number)}${
+							fields.keepAliveUnit && fields.keepAliveUnit !== BARE
+								? fields.keepAliveUnit
+								: ""
+						}`
+					: undefined
 		}
 	}
 
-	// Skips the FIRST write-back, which is the defaults normalization done in
-	// onMount, not a user edit.
-	//
-	// onMount builds the field state from `{...defaults, ...connection.extraJson}`,
-	// so it legitimately gains every default key the stored row lacked. Writing
-	// that straight back into `connection` made the form differ from the
-	// parent's `originalConnection` the instant it opened — the panel reported
-	// unsaved changes with nothing touched, and then blocked closing behind a
-	// destructive-sounding confirm. Real edits still write through, and a save
-	// still persists the full normalized set.
-	let extraJsonInitialized = false
-	$effect(() => {
-		const _ollamaFields = ollamaFields
-		if (!_ollamaFields) return
-		// Computed on EVERY run, before the skip check, and deliberately so:
-		// an effect only subscribes to the state it actually reads, and the
-		// individual field values are read inside this call. Returning before
-		// it — as a first attempt did — meant the effect never subscribed to
-		// them, so later toggles re-triggered nothing and the form never went
-		// dirty. Skip the WRITE, never the read.
-		const nextExtraJson = extraFieldsToExtraJson(_ollamaFields)
-		// The first populated run is onMount's defaults normalization, not a
-		// user edit — writing it back made the panel report unsaved changes the
-		// instant it opened, then block closing behind a destructive confirm.
-		if (!extraJsonInitialized) {
-			extraJsonInitialized = true
-			return
-		}
-		connection.extraJson = nextExtraJson
-	})
-
-	onMount(() => {
-		if (connection.extraJson) {
-			const extraJson = { ...defaultExtraJson, ...connection.extraJson }
-			ollamaFields = extraJsonToExtraFields(extraJson)
-		} else {
-			ollamaFields = extraJsonToExtraFields(defaultExtraJson)
-		}
+	// Seeds the fields from `{...defaults, ...connection.extraJson}` on mount
+	// and whenever the draft is replaced from outside (an external save, Reset),
+	// and writes back only on a real edit — merged over `extraJson`. See
+	// `useExtraJsonSync` for why the seed's own write-back is skipped.
+	useExtraJsonSync<ExtraFieldData>({
+		connection: () => connection,
+		fields: () => ollamaFields,
+		seed: (extraJson) => {
+			ollamaFields = extraJsonToExtraFields({
+				...defaultExtraJson,
+				...(extraJson ?? {})
+			} as ExtraJson)
+		},
+		project: (fields) =>
+			extraFieldsToExtraJson(fields)
 	})
 </script>
 
@@ -216,16 +228,16 @@
 		/>
 	</div>
 	{#if showFormat}
-		<Select
+		<ConnectionFieldSelect
 			class="mt-2"
-			label="Prompt Format"
+			words={PROMPT_FORMAT}
 			options={formatOptions.value}
 			bind:value={connection.promptFormat}
 		/>
 	{/if}
-	<Select
+	<ConnectionFieldSelect
 		class="mt-2"
-		label="Token Counter"
+		words={TOKEN_COUNTER}
 		options={TokenCounterOptions.options}
 		bind:value={connection.tokenCounter}
 	/>
@@ -238,7 +250,7 @@
 		{#if ollamaFields}
 			<div class="mt-2 flex flex-col gap-1">
 				<!-- Points at the number, which is what "Keep Alive" actually
-				     labels; it used to name an id no element had. The unit
+				     labels. The unit
 				     picker carries its own label, hidden so the pair still
 				     reads as one field. -->
 				<label class="font-semibold" for="keepAliveNumber">
@@ -248,7 +260,7 @@
 					<input
 						id="keepAliveNumber"
 						type="number"
-						min="0"
+						step="1"
 						bind:value={ollamaFields.keepAliveNumber}
 						class="input bg-background border-muted w-32 rounded border"
 					/>

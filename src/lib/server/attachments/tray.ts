@@ -96,10 +96,42 @@ const STORE_FAILED = "This file couldn't be stored. Try attaching it again."
 
 /* --- in-flight uploads (memory) ------------------------------------- */
 
+/**
+ * Where a tray lives: one session's composer, or one private conversation's
+ * (PLAN-private-messages §4 "Uploads"). Exactly one is set, as
+ * `tray_items`' CHECK holds.
+ */
+export type TrayScope =
+	| { sessionId: number; conversationId?: null }
+	| { conversationId: number; sessionId?: null }
+
+/** Both keys, the absent one null — the row's shape. */
+function scopeOf(scope: {
+	sessionId?: number | null
+	conversationId?: number | null
+}): { sessionId: number | null; conversationId: number | null } {
+	const sessionId = scope.sessionId ?? null
+	const conversationId = scope.conversationId ?? null
+	if ((sessionId == null) === (conversationId == null))
+		throw new Error("A tray belongs to exactly one session or conversation.")
+	return { sessionId, conversationId }
+}
+
+/** The where-clause for one tray scope. */
+function scopeWhere(scope: {
+	sessionId: number | null
+	conversationId: number | null
+}) {
+	return scope.sessionId != null
+		? eq(schema.trayItems.sessionId, scope.sessionId)
+		: eq(schema.trayItems.conversationId, scope.conversationId!)
+}
+
 interface Upload {
 	id: string
 	userId: number
-	sessionId: number
+	sessionId: number | null
+	conversationId: number | null
 	filename: string
 	declared: number
 	received: number
@@ -200,7 +232,9 @@ async function abortUpload(
 
 export interface BeginTrayUploadInput {
 	userId: number
-	sessionId: number
+	/** Exactly one of `sessionId` / `conversationId`. */
+	sessionId?: number | null
+	conversationId?: number | null
 	filename: string
 	bytes: number
 	head: Buffer | Uint8Array
@@ -233,6 +267,7 @@ export async function beginTrayUpload(
 	now = Date.now()
 ): Promise<{ trayItemId: string; chunkBytes: number; filename: string }> {
 	const filename = cleanFilename(input.filename)
+	const scope = scopeOf(input)
 	const declared = input.bytes
 	if (!Number.isSafeInteger(declared) || declared <= 0)
 		throw new TrayRefusal("That file is empty.")
@@ -273,7 +308,7 @@ export async function beginTrayUpload(
 		.where(
 			and(
 				eq(schema.trayItems.userId, input.userId),
-				eq(schema.trayItems.sessionId, input.sessionId),
+				scopeWhere(scope),
 				ne(schema.trayItems.status, "refused")
 			)
 		)
@@ -313,14 +348,15 @@ export async function beginTrayUpload(
 		.where(
 			and(
 				eq(schema.trayItems.userId, input.userId),
-				eq(schema.trayItems.sessionId, input.sessionId)
+				scopeWhere(scope)
 			)
 		)
 	const [row] = await db
 		.insert(schema.trayItems)
 		.values({
 			userId: input.userId,
-			sessionId: input.sessionId,
+			sessionId: scope.sessionId,
+			conversationId: scope.conversationId,
 			filename,
 			bytes: declared,
 			status: "uploading",
@@ -331,7 +367,8 @@ export async function beginTrayUpload(
 	uploads.set(row.id, {
 		id: row.id,
 		userId: input.userId,
-		sessionId: input.sessionId,
+		sessionId: scope.sessionId,
+		conversationId: scope.conversationId,
 		filename,
 		declared,
 		received: 0,
@@ -407,7 +444,12 @@ export async function appendTrayChunk(
 	userId: number,
 	params: { trayItemId: string; index: number; data: Buffer | Uint8Array },
 	now = Date.now()
-): Promise<{ sessionId: number; received: number; bytes: number }> {
+): Promise<{
+	sessionId: number | null
+	conversationId: number | null
+	received: number
+	bytes: number
+}> {
 	const upload = ownUpload(userId, params.trayItemId)
 	const data = Buffer.isBuffer(params.data)
 		? params.data
@@ -435,6 +477,7 @@ export async function appendTrayChunk(
 	upload.lastAt = now
 	return {
 		sessionId: upload.sessionId,
+		conversationId: upload.conversationId,
 		received: upload.received,
 		bytes: upload.declared
 	}
@@ -512,6 +555,9 @@ async function storeUpload(
 		const created = await createMedia(db, {
 			userId,
 			sessionId: upload.sessionId,
+			// A conversation's upload lands in its own bucket
+			// (`conversations/<id>/`) and every member may view it.
+			conversationId: upload.conversationId,
 			bytes,
 			filename: upload.filename,
 			allowDocuments: true
@@ -556,7 +602,7 @@ export async function removeTrayItem(
 	db: Db,
 	userId: number,
 	trayItemId: string
-): Promise<{ sessionId: number }> {
+): Promise<{ sessionId: number | null; conversationId: number | null }> {
 	if (typeof trayItemId !== "string") throw new TrayRefusal(TRAY_ITEM_GONE)
 	const upload = uploads.get(trayItemId)
 	if (upload?.userId === userId) uploads.delete(trayItemId)
@@ -571,14 +617,15 @@ export async function removeTrayItem(
 		.returning()
 	if (!row) throw new TrayRefusal(TRAY_ITEM_GONE)
 	if (row.fresh && row.fileId != null) await releaseTrayFile(db, row.fileId)
-	return { sessionId: row.sessionId }
+	return { sessionId: row.sessionId, conversationId: row.conversationId }
 }
 
-/** One person's tray for one session, in tray order. */
+/** One person's tray for one session (a bare id) or one conversation, in
+ *  tray order. */
 export async function listTray(
 	db: Db,
 	userId: number,
-	sessionId: number
+	scope: number | TrayScope
 ): Promise<TrayItemView[]> {
 	const rows = await db
 		.select()
@@ -586,7 +633,9 @@ export async function listTray(
 		.where(
 			and(
 				eq(schema.trayItems.userId, userId),
-				eq(schema.trayItems.sessionId, sessionId)
+				scopeWhere(
+					scopeOf(typeof scope === "number" ? { sessionId: scope } : scope)
+				)
 			)
 		)
 		.orderBy(asc(schema.trayItems.position), asc(schema.trayItems.createdAt))
@@ -618,6 +667,7 @@ async function toView(db: Db, row: TrayRow): Promise<TrayItemView> {
 	return {
 		id: row.id,
 		sessionId: row.sessionId,
+		conversationId: row.conversationId,
 		status: orphaned ? "refused" : (row.status as TrayItemView["status"]),
 		refusal: orphaned ? TRAY_UPLOAD_INTERRUPTED : row.refusal,
 		filename: row.filename,

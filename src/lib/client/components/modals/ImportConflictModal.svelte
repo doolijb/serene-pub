@@ -64,7 +64,7 @@
 				</article>
 				<footer class="flex flex-wrap justify-end gap-2">
 					<button
-						class="btn preset-filled-surface-500"
+						class="btn preset-tonal-surface"
 						onclick={onCancel}
 					>
 						Cancel

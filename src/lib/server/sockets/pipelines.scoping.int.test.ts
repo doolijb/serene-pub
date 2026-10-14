@@ -794,11 +794,12 @@ describe("run receipts are an administrator's (R55)", () => {
 	}, 60_000)
 })
 
-describe("prompt CRUD is gated on the option, not on ownership", () => {
+describe("prompt CRUD: administrators only, gated on the option", () => {
 	let specId: number
 	let promptId: number
 	let optionId: string
 	let pool: { nodeDefinitionId: string; slot: string }
+	let adminsSessionId: number
 
 	beforeAll(async () => {
 		const [spec] = await testDb
@@ -835,23 +836,76 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 			})
 			.returning()
 		promptId = p.id
+
+		const [s] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: admin.id, isGroup: false })
+			.returning()
+		adminsSessionId = s.id
 	})
 
-	/** The owner edits from inside their own session, which is where a
-	 * non-admin's prompt edits land (the write matrix's `prompts` line). */
-	const asOwner = <T extends object>(extra: T) => ({
+	/** An administrator writing from inside a session they own: only an
+	 * administrator writes prompts (owner ruling 2026-10-09). */
+	const asAdmin = <T extends object>(extra: T) => ({
 		slug: CHAT_RESPOND_SPEC_ID,
 		optionId,
-		sessionId: ownersSessionId,
+		sessionId: adminsSessionId,
 		...extra
+	})
+
+	test("a member's prompt writes are refused, even inside their own session", async () => {
+		const {
+			pipelinesCreatePrompt,
+			pipelinesClonePrompt,
+			pipelinesUpdatePrompt,
+			pipelinesDeletePrompt
+		} = await import("./pipelines")
+		const asMember = <T extends object>(extra: T) => ({
+			slug: CHAT_RESPOND_SPEC_ID,
+			optionId,
+			sessionId: ownersSessionId,
+			...extra
+		})
+		const before = await testDb.select().from(schema.pipelinePrompts)
+		const answers: any[] = [
+			await pipelinesCreatePrompt.handler(
+				socketFor(owner.id),
+				asMember({ name: "Member's own", fields: { systemPrompt: "x" } }),
+				noopEmit
+			),
+			await pipelinesClonePrompt.handler(
+				socketFor(owner.id),
+				asMember({ promptId }),
+				noopEmit
+			),
+			await pipelinesUpdatePrompt.handler(
+				socketFor(owner.id),
+				asMember({ promptId, name: "Reworded by a member" }),
+				noopEmit
+			),
+			await pipelinesDeletePrompt.handler(
+				socketFor(owner.id),
+				asMember({ promptId }),
+				noopEmit
+			)
+		]
+		for (const res of answers)
+			expect(res.error).toMatch(/Only an administrator writes or edits prompts/)
+		const after = await testDb.select().from(schema.pipelinePrompts)
+		expect(after).toHaveLength(before.length)
+		const [original] = await testDb
+			.select()
+			.from(schema.pipelinePrompts)
+			.where(eq(schema.pipelinePrompts.id, promptId))
+		expect(original.name).toBe("Socket original")
 	})
 
 	test("clone answers with the copy's id and a fresh view", async () => {
 		const { pipelinesClonePrompt } = await import("./pipelines")
 		const rec = recordingEmit()
 		const res: any = await pipelinesClonePrompt.handler(
-			socketFor(owner.id),
-			asOwner({ promptId }),
+			socketFor(admin.id, true),
+			asAdmin({ promptId }),
 			rec.emit
 		)
 		expect(res.error).toBeUndefined()
@@ -869,8 +923,8 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 	test("a copy lands in the option's own pool, or the picker would not offer it", async () => {
 		const { pipelinesClonePrompt } = await import("./pipelines")
 		const cloned: any = await pipelinesClonePrompt.handler(
-			socketFor(owner.id),
-			asOwner({ promptId, name: "Pool check" }),
+			socketFor(admin.id, true),
+			asAdmin({ promptId, name: "Pool check" }),
 			noopEmit
 		)
 		const [row] = await testDb
@@ -887,8 +941,8 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 		// given one.
 		const { pipelinesCreatePrompt } = await import("./pipelines")
 		const res: any = await pipelinesCreatePrompt.handler(
-			socketFor(owner.id),
-			asOwner({ name: "From nothing", fields: { systemPrompt: "x" } }),
+			socketFor(admin.id, true),
+			asAdmin({ name: "From nothing", fields: { systemPrompt: "x" } }),
 			noopEmit
 		)
 		expect(res.error).toBeUndefined()
@@ -906,13 +960,13 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 			"./pipelines"
 		)
 		const cloned: any = await pipelinesClonePrompt.handler(
-			socketFor(owner.id),
-			asOwner({ promptId, name: "Reworded" }),
+			socketFor(admin.id, true),
+			asAdmin({ promptId, name: "Reworded" }),
 			noopEmit
 		)
 		const res: any = await pipelinesUpdatePrompt.handler(
-			socketFor(owner.id),
-			asOwner({
+			socketFor(admin.id, true),
+			asAdmin({
 				promptId: cloned.promptId,
 				fields: {
 					systemPrompt: "new words",
@@ -968,8 +1022,8 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 		)
 		const rec = recordingEmit()
 		const res: any = await pipelinesUpdatePrompt.handler(
-			socketFor(owner.id),
-			asOwner({
+			socketFor(admin.id, true),
+			asAdmin({
 				promptId: foreign.id,
 				fields: { systemPrompt: "hijacked" }
 			}),
@@ -979,8 +1033,8 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 		expect(rec.last("pipelines:updatePrompt:error")).toBeTruthy()
 
 		const del: any = await pipelinesDeletePrompt.handler(
-			socketFor(owner.id),
-			asOwner({ promptId: foreign.id }),
+			socketFor(admin.id, true),
+			asAdmin({ promptId: foreign.id }),
 			noopEmit
 		)
 		expect(del.error).toMatch(/different kind of step/)
@@ -1039,13 +1093,13 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 			"./pipelines"
 		)
 		const cloned: any = await pipelinesClonePrompt.handler(
-			socketFor(owner.id),
-			asOwner({ promptId, name: "Disposable copy" }),
+			socketFor(admin.id, true),
+			asAdmin({ promptId, name: "Disposable copy" }),
 			noopEmit
 		)
 		const res: any = await pipelinesDeletePrompt.handler(
-			socketFor(owner.id),
-			asOwner({ promptId: cloned.promptId }),
+			socketFor(admin.id, true),
+			asAdmin({ promptId: cloned.promptId }),
 			noopEmit
 		)
 		expect(res.error).toBeUndefined()
@@ -1059,12 +1113,12 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 			"./pipelines"
 		)
 		const cloned: any = await pipelinesClonePrompt.handler(
-			socketFor(owner.id),
-			asOwner({ promptId, name: "Selected copy" }),
+			socketFor(admin.id, true),
+			asAdmin({ promptId, name: "Selected copy" }),
 			noopEmit
 		)
-		// Selections are session overrides now (the layers as simplified
-		// 2026-08-24) — the owner's in their session, somebody else's in theirs.
+		// Selections are session overrides (the layers as simplified
+		// 2026-08-24) — the administrator's in their session, somebody else's in theirs.
 		const [strangersSession] = await testDb
 			.insert(schema.sessions)
 			.values({ userId: stranger.id, isGroup: false })
@@ -1093,17 +1147,17 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 		}
 
 		// Someone else's session selected it too: refuse, and leave both rows.
-		await select(ownersSessionId, owner.id)
+		await select(adminsSessionId, admin.id)
 		await select(strangersSession.id, stranger.id)
 		const refused: any = await pipelinesDeletePrompt.handler(
-			socketFor(owner.id),
-			asOwner({ promptId: cloned.promptId }),
+			socketFor(admin.id, true),
+			asAdmin({ promptId: cloned.promptId }),
 			noopEmit
 		)
 		expect(refused.error).toMatch(/still selected/)
 
-		// Only the owner's own selection remains: delete goes through and the
-		// selection row goes with it.
+		// Only the administrator's own selection remains: delete goes through
+		// and the selection row goes with it.
 		await testDb
 			.delete(schema.pipelineNodeOverrides)
 			.where(
@@ -1116,15 +1170,15 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 				)
 			)
 		const res: any = await pipelinesDeletePrompt.handler(
-			socketFor(owner.id),
-			asOwner({ promptId: cloned.promptId }),
+			socketFor(admin.id, true),
+			asAdmin({ promptId: cloned.promptId }),
 			noopEmit
 		)
 		expect(res.error).toBeUndefined()
 		const leftover = await testDb
 			.select()
 			.from(schema.pipelineNodeOverrides)
-			.where(eq(schema.pipelineNodeOverrides.scopeId, ownersSessionId))
+			.where(eq(schema.pipelineNodeOverrides.scopeId, adminsSessionId))
 		expect(
 			(leftover as any[]).filter((r) => r.value === cloned.promptId)
 		).toHaveLength(0)

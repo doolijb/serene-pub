@@ -55,6 +55,21 @@ vi.mock(
 vi.mock("$lib/server/connectionAdapters/AnthropicAdapter", stub("Anthropic"))
 vi.mock("$lib/server/imageAdapters/A1111Adapter", stub("A1111"))
 vi.mock(
+	"$lib/server/imageAdapters/OpenAIImagesAdapter",
+	stub("OpenAIImages")
+)
+vi.mock("$lib/server/imageAdapters/HordeAdapter", stub("Horde"))
+vi.mock("$lib/server/imageAdapters/NovelAIImageAdapter", stub("NovelAIImage"))
+vi.mock("$lib/server/imageAdapters/BflAdapter", stub("Bfl"))
+// Folded into OPENAI's image module, so the stub carries the fold too.
+vi.mock("$lib/server/imageAdapters/GeminiImageAdapter", () => {
+	const base = stub("GeminiImage")()
+	return {
+		...base,
+		withGeminiImages: (openai: unknown) => openai
+	}
+})
+vi.mock(
 	"$lib/server/imageAdapters/KoboldCppManagedImageAdapter",
 	stub("KoboldCppManagedImage")
 )

@@ -10,7 +10,9 @@
 	 */
 	import * as Icons from "@lucide/svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
-	import RowMenu from "$lib/client/components/menus/RowMenu.svelte"
+	import RowMenu, {
+		type RowMenuEntries
+	} from "$lib/client/components/menus/RowMenu.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
@@ -18,6 +20,13 @@
 	import { mediaRevUrl } from "$lib/client/utils/media"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
+	import SpriteContactSheet from "$lib/client/components/sprites/SpriteContactSheet.svelte"
+	import type { ContactTile } from "$lib/client/components/sprites/contactSheet"
+	import { getContext } from "svelte"
+	import { SvelteSet } from "svelte/reactivity"
+	import { v4 as uuidv4 } from "uuid"
+	import { statusText as statusTextOf } from "$lib/client/i18n/state.svelte"
+	import type { StatusText } from "@serene-pub/sdk"
 	import {
 		spriteLabelFromFilename,
 		normalizeSpriteName,
@@ -70,8 +79,8 @@
 	)
 
 	// ── Upload ────────────────────────────────────────────────────────────
-	let bulkInput: HTMLInputElement
-	let slotInput: HTMLInputElement
+	let bulkInput = $state<HTMLInputElement>()
+	let slotInput = $state<HTMLInputElement>()
 	/** The label a slot or "add variant" upload goes to. */
 	let slotLabel = $state<string | null>(null)
 
@@ -131,7 +140,10 @@
 		menuOpenFor = null
 		const group = groups.find((g) => g.label === label)
 		if (!group || !activeSet) return
-		const ids = [sprite.id, ...group.sprites.filter((s) => s.id !== sprite.id).map((s) => s.id)]
+		const ids = [
+			sprite.id,
+			...group.sprites.filter((s) => s.id !== sprite.id).map((s) => s.id)
+		]
 		socket.emit("characters:reorderSprites", {
 			characterId,
 			setId: activeSet.id,
@@ -254,7 +266,9 @@
 		pendingUploads = Math.max(0, pendingUploads - 1)
 		handleList(msg)
 	}
-	function handleStandard(msg: Sockets.Characters.AddStandardSprites.Response) {
+	function handleStandard(
+		msg: Sockets.Characters.AddStandardSprites.Response
+	) {
 		if (msg.characterId !== characterId) return
 		handleList(msg)
 		toaster.success({
@@ -323,8 +337,14 @@
 			...LIST_ERROR_EVENTS.map((event) =>
 				declareInterest<any>(event, handleError)
 			),
-			declareInterest<any>("characters:uploadSprite:error", handleUploadError),
-			declareInterest<any>("characters:addStandardSprites:error", handleError)
+			declareInterest<any>(
+				"characters:uploadSprite:error",
+				handleUploadError
+			),
+			declareInterest<any>(
+				"characters:addStandardSprites:error",
+				handleError
+			)
 		]
 		socket.emit("characters:listSprites", { characterId: id })
 		return () => {
@@ -362,6 +382,397 @@
 		)
 		return release
 	})
+
+	// ── Fill empty sprites (DESIGN-image-generation §6.3; I5) ────────────
+	/**
+	 * The card's owner or an admin may draw its sprites. Only the owner may
+	 * move one to another label (the sprite writes are the owner's).
+	 */
+	const userCtx = (() => {
+		try {
+			return getContext<{ user?: { isAdmin?: boolean } } | undefined>(
+				"userCtx"
+			)
+		} catch {
+			return undefined
+		}
+	})()
+	let canFill = $derived(isOwner || !!userCtx?.user?.isAdmin)
+
+	let fillOpen = $state(false)
+	let fillSetValue = $state<string | null>(null)
+	/** The labels ticked on the form. */
+	const fillSelected = new SvelteSet<string>()
+	let fillPreview =
+		$state<Sockets.Characters.PreviewSpriteFill.Response | null>(null)
+	let previewing = $state(false)
+	/** The next preview replaces the ticks with its default (the empty sprites). */
+	let takeDefaultTicks = false
+
+	function openFill() {
+		fillSetValue = activeSet ? String(activeSet.id) : null
+		fillOpen = true
+		requestPreview(true)
+	}
+	function requestPreview(resetTicks = false) {
+		if (resetTicks) {
+			fillSelected.clear()
+			takeDefaultTicks = true
+		}
+		if (!resetTicks && fillSelected.size === 0) {
+			fillPreview = fillPreview
+				? { ...fillPreview, line: "", notices: [], refusal: undefined }
+				: null
+			return
+		}
+		previewing = true
+		socket.emit("characters:previewSpriteFill", {
+			characterId,
+			setId: fillSetValue ? Number(fillSetValue) : undefined,
+			labels: resetTicks ? undefined : [...fillSelected]
+		})
+	}
+	function handlePreview(msg: Sockets.Characters.PreviewSpriteFill.Response) {
+		if (msg.characterId !== characterId) return
+		previewing = false
+		fillPreview = msg
+		if (takeDefaultTicks) {
+			takeDefaultTicks = false
+			fillSelected.clear()
+			for (const l of msg.labels) fillSelected.add(l)
+		}
+	}
+	function handlePreviewError(msg: { error?: string; characterId?: number }) {
+		if (msg.characterId !== characterId) return
+		previewing = false
+		fillPreview = fillPreview
+			? {
+					...fillPreview,
+					refusal: msg.error ?? "Could not prepare the fill."
+				}
+			: null
+	}
+	function toggleLabel(label: string, on: boolean) {
+		if (on) fillSelected.add(label)
+		else fillSelected.delete(label)
+		requestPreview()
+	}
+	function tickOnly(labels: string[]) {
+		fillSelected.clear()
+		for (const l of labels) fillSelected.add(l)
+		requestPreview()
+	}
+
+	/** One fill's contact sheet: its labels, and what each came back as. */
+	interface FillRun {
+		runId: string
+		setId: number | null
+		/** Every label on the sheet, in order. */
+		labels: string[]
+		/** The labels the current run draws. */
+		active: string[]
+		phase: Sockets.Characters.SpriteFill.Progress["phase"] | "starting"
+		status: string
+		percent: number | null
+		error: string | null
+		drawn: Record<string, string>
+		attached: Record<string, number>
+		kept: string[]
+	}
+	let fillRun = $state<FillRun | null>(null)
+	let running = $derived(
+		!!fillRun && fillRun.phase !== "done" && fillRun.phase !== "failed"
+	)
+
+	function startFill(labels: string[], setId: number | null) {
+		if (!labels.length || running) return
+		const runId = uuidv4()
+		const same = fillRun && fillRun.setId === setId
+		const sheet = same
+			? [
+					...fillRun!.labels,
+					...labels.filter((l) => !fillRun!.labels.includes(l))
+				]
+			: [...labels]
+		const keep = <T,>(rec: Record<string, T>) =>
+			same
+				? Object.fromEntries(
+						Object.entries(rec).filter(([l]) => !labels.includes(l))
+					)
+				: {}
+		fillRun = {
+			runId,
+			setId,
+			labels: sheet,
+			active: [...labels],
+			phase: "starting",
+			status: "",
+			percent: null,
+			error: null,
+			drawn: keep(fillRun?.drawn ?? {}),
+			attached: keep(fillRun?.attached ?? {}),
+			kept: same ? fillRun!.kept.filter((l) => !labels.includes(l)) : []
+		}
+		socket.emit("characters:fillSprites", {
+			characterId,
+			setId: setId ?? undefined,
+			labels,
+			runId
+		})
+	}
+	function generate() {
+		fillOpen = false
+		startFill([...fillSelected], fillSetValue ? Number(fillSetValue) : null)
+	}
+	function handleFillProgress(msg: Sockets.Characters.SpriteFill.Progress) {
+		if (
+			msg.characterId !== characterId ||
+			!fillRun ||
+			msg.runId !== fillRun.runId
+		)
+			return
+		fillRun.phase = msg.phase
+		if (msg.status) fillRun.status = statusTextOf(msg.status as StatusText)
+		else if (msg.phase === "cutting")
+			fillRun.status = "Removing backgrounds…"
+		else if (msg.phase === "attaching")
+			fillRun.status = "Filing the sprites…"
+		if (msg.percent != null) fillRun.percent = msg.percent
+		for (const d of msg.drawn ?? []) fillRun.drawn[d.label] = d.uuid
+		for (const a of msg.attached ?? [])
+			fillRun.attached[a.label] = a.spriteId
+		if (msg.phase === "done") {
+			const n = msg.attached?.length ?? 0
+			const missing = msg.missing?.length ?? 0
+			fillRun.status =
+				`${n} ${n === 1 ? "sprite" : "sprites"} added` +
+				(missing ? `, ${missing} came back empty` : "")
+			fillRun.percent = null
+		}
+		if (msg.phase === "failed") {
+			fillRun.error = msg.error ?? "The fill stopped."
+			fillRun.status = ""
+		}
+	}
+	function handleFillError(msg: { error?: string; characterId?: number }) {
+		if (msg.characterId !== characterId || !fillRun) return
+		fillRun.phase = "failed"
+		fillRun.error = msg.error ?? "The fill did not start."
+	}
+	function stopFill() {
+		if (fillRun)
+			socket.emit("pipelines:cancelRun", { runId: fillRun.runId })
+	}
+	function keepTile(label: string) {
+		if (fillRun && !fillRun.kept.includes(label)) fillRun.kept.push(label)
+	}
+	function moveTile(spriteId: number, toLabel: string) {
+		if (!fillRun) return
+		const from = Object.entries(fillRun.attached).find(
+			([, id]) => id === spriteId
+		)?.[0]
+		socket.emit("characters:updateSprite", {
+			characterId,
+			spriteId,
+			label: toLabel
+		})
+		if (from) delete fillRun.attached[from]
+		if (from) delete fillRun.drawn[from]
+		fillRun.attached[toLabel] = spriteId
+	}
+
+	function spriteById(id: number): SpriteView | undefined {
+		for (const set of sets) {
+			const found = set.sprites.find((s) => s.id === id)
+			if (found) return found
+		}
+		return undefined
+	}
+	let tiles = $derived.by((): ContactTile[] => {
+		const run = fillRun
+		if (!run) return []
+		const final = run.phase === "done" || run.phase === "failed"
+		return run.labels.map((label) => {
+			const spriteId = run.attached[label]
+			const sprite = spriteId != null ? spriteById(spriteId) : undefined
+			const drawn = run.drawn[label]
+			const src = sprite?.media
+				? mediaRevUrl(sprite.media.uuid, sprite.media.rev)
+				: drawn
+					? mediaRevUrl(drawn, 0)
+					: null
+			const state: ContactTile["state"] =
+				spriteId != null
+					? "attached"
+					: drawn
+						? "drawn"
+						: final || !run.active.includes(label)
+							? "missing"
+							: "waiting"
+			return {
+				label,
+				state,
+				src,
+				spriteId,
+				kept: run.kept.includes(label)
+			}
+		})
+	})
+
+	$effect(() => {
+		const id = characterId
+		fillRun = null
+		const releases = [
+			declareInterest<any>(
+				interestKey("characters:previewSpriteFill", id),
+				handlePreview
+			),
+			declareInterest<any>(
+				interestKey("characters:spriteFill", id),
+				handleFillProgress
+			),
+			declareInterest<any>(
+				"characters:previewSpriteFill:error",
+				handlePreviewError
+			),
+			declareInterest<any>(
+				"characters:fillSprites:error",
+				handleFillError
+			)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
+	})
+
+	// ── Re-express from neutral (DESIGN-image-generation §6.3) ───────────
+	/**
+	 * Offered when the pair the card's sprites are drawn with says
+	 * `expressions` on its drawing sheet (NovelAI) — asked through
+	 * `images:drawingSheet` with this card's id, which a member owner may ask.
+	 */
+	let expressionsOffered = $state(false)
+	/** Labels with a re-express in flight. */
+	const reexpressing = new SvelteSet<string>()
+
+	/** Whether the set has a neutral sprite with a picture to start from. */
+	function hasNeutral(setId: number | null | undefined): boolean {
+		const set = sets.find((s) => s.id === setId) ?? activeSet
+		return !!set?.sprites.some((s) => s.label === "neutral" && s.media)
+	}
+	function mayReexpress(
+		label: string,
+		setId: number | null | undefined
+	): boolean {
+		return (
+			canFill &&
+			expressionsOffered &&
+			label !== "neutral" &&
+			hasNeutral(setId)
+		)
+	}
+	function reexpress(label: string, setId: number | null | undefined) {
+		menuOpenFor = null
+		if (reexpressing.has(label)) return
+		reexpressing.add(label)
+		socket.emit("characters:expressSprite", {
+			characterId,
+			setId: setId ?? undefined,
+			label
+		})
+	}
+	function handleExpressed(msg: Sockets.Characters.ExpressSprite.Response) {
+		if (msg.characterId !== characterId) return
+		if (msg.label) reexpressing.delete(msg.label)
+		else reexpressing.clear()
+		handleList(msg)
+	}
+	function handleExpressError(msg: { error?: string; characterId?: number }) {
+		if (msg.characterId !== characterId) return
+		reexpressing.clear()
+		handleError(msg)
+	}
+	function handleSheet(msg: { characterId?: number; expressions?: boolean }) {
+		if (msg?.characterId !== characterId) return
+		expressionsOffered = msg.expressions === true
+	}
+
+	$effect(() => {
+		const id = characterId
+		const ask = canFill
+		expressionsOffered = false
+		reexpressing.clear()
+		if (!ask) return
+		const releases = [
+			declareInterest<any>(
+				interestKey("characters:expressSprite", id),
+				handleExpressed
+			),
+			declareInterest<any>(
+				"characters:expressSprite:error",
+				handleExpressError
+			),
+			declareInterest<any>("images:drawingSheet", handleSheet)
+		]
+		socket.emit("images:drawingSheet", { characterId: id })
+		return () => {
+			for (const release of releases) release()
+		}
+	})
+
+	/** One sprite's menu: re-express for whoever may draw, the rest for the owner. */
+	function spriteMenu(
+		group: { label: string; sprites: SpriteView[] },
+		sprite: SpriteView
+	): RowMenuEntries {
+		const express = mayReexpress(group.label, activeSet?.id)
+		return [
+			express && {
+				label: reexpressing.has(group.label)
+					? "Re-expressing…"
+					: "Re-express from neutral",
+				icon: Icons.Sparkles,
+				disabled: reexpressing.has(group.label),
+				onSelect: () => reexpress(group.label, activeSet?.id)
+			},
+			...(isOwner
+				? [
+						(sprite.position > 0 ||
+							group.sprites[0].id !== sprite.id) && {
+							label: "Make first",
+							icon: Icons.ArrowUpToLine,
+							onSelect: () => makePrimary(group.label, sprite)
+						},
+						{
+							label: sprite.media
+								? "Add a variant"
+								: "Upload an image",
+							icon: Icons.ImagePlus,
+							onSelect: () => uploadInto(group.label)
+						},
+						{
+							label: "Change label",
+							icon: Icons.Tag,
+							onSelect: () => openRelabel(sprite)
+						},
+						...sets
+							.filter((o) => o.id !== activeSet?.id)
+							.map((other) => ({
+								label: `Move to ${other.name}`,
+								icon: Icons.FolderInput,
+								onSelect: () => moveTo(sprite, other.id)
+							})),
+						{ separator: true as const },
+						{
+							label: "Delete",
+							icon: Icons.Trash2,
+							destructive: true,
+							onSelect: () => openDelete(sprite)
+						}
+					]
+				: [])
+		]
+	}
 
 	const thumb = (sprite: SpriteView) =>
 		sprite.media ? mediaRevUrl(sprite.media.uuid, sprite.media.rev) : null
@@ -424,7 +835,11 @@
 					triggerClass="btn btn-sm preset-tonal-surface"
 					bind:open={setMenuOpen}
 					items={[
-						{ label: "New set", icon: Icons.Plus, onSelect: openNewSet },
+						{
+							label: "New set",
+							icon: Icons.Plus,
+							onSelect: openNewSet
+						},
 						{
 							label: "Rename set",
 							icon: Icons.Pencil,
@@ -450,6 +865,19 @@
 						}
 					]}
 				/>
+			{/if}
+			{#if canFill}
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-primary"
+					onclick={openFill}
+					disabled={running}
+				>
+					<Icons.WandSparkles size={16} aria-hidden="true" />
+					Fill empty sprites
+				</button>
+			{/if}
+			{#if isOwner}
 				<button
 					type="button"
 					class="btn btn-sm preset-filled-primary-500"
@@ -457,7 +885,11 @@
 					disabled={pendingUploads > 0}
 				>
 					{#if pendingUploads > 0}
-						<Icons.Loader2 size={16} class="animate-spin" aria-hidden="true" />
+						<Icons.Loader2
+							size={16}
+							class="animate-spin"
+							aria-hidden="true"
+						/>
 					{:else}
 						<Icons.Upload size={16} aria-hidden="true" />
 					{/if}
@@ -468,9 +900,33 @@
 
 		<p class="text-surface-600-400 text-xs">
 			{groups.length} labels, {imageCount} images. Uploaded images are labelled
-			by file name: <code>joy.png</code> and <code>joy-2.png</code> are both
-			"joy".
+			by file name:
+			<code>joy.png</code>
+			and
+			<code>joy-2.png</code>
+			are both "joy".
 		</p>
+
+		{#if fillRun}
+			<SpriteContactSheet
+				{tiles}
+				{running}
+				statusText={fillRun.status}
+				percent={fillRun.percent}
+				error={fillRun.error}
+				canMove={isOwner}
+				onKeep={keepTile}
+				onRedo={(label) => startFill([label], fillRun?.setId ?? null)}
+				onRedoAll={() =>
+					fillRun && startFill([...fillRun.labels], fillRun.setId)}
+				onMove={moveTile}
+				canReexpress={(label) => mayReexpress(label, fillRun?.setId)}
+				{reexpressing}
+				onReexpress={(label) => reexpress(label, fillRun?.setId)}
+				onStop={stopFill}
+				onClose={() => (fillRun = null)}
+			/>
+		{/if}
 
 		{#if groups.length === 0}
 			<EmptyState
@@ -480,10 +936,15 @@
 				onCta={isOwner ? () => bulkInput?.click() : undefined}
 			/>
 		{:else}
-			<ul class="grid grid-cols-[repeat(auto-fill,minmax(128px,1fr))] gap-2">
+			<ul
+				class="grid grid-cols-[repeat(auto-fill,minmax(128px,1fr))] gap-2"
+			>
 				{#each groups as group (group.label)}
 					<li class="panel-card space-y-1.5 p-2">
-						<p class="truncate text-sm font-medium" title={group.label}>
+						<p
+							class="truncate text-sm font-medium"
+							title={group.label}
+						>
 							{group.label}
 						</p>
 						<div class="flex flex-wrap gap-1.5">
@@ -503,21 +964,28 @@
 										<button
 											type="button"
 											class="text-surface-500 hover:text-primary-500 flex h-full w-full items-center justify-center border-2 border-dashed"
-											onclick={() => uploadInto(group.label)}
+											onclick={() =>
+												uploadInto(group.label)}
 											aria-label="Upload an image for {group.label}"
 										>
-											<Icons.ImagePlus size={20} aria-hidden="true" />
+											<Icons.ImagePlus
+												size={20}
+												aria-hidden="true"
+											/>
 										</button>
 									{:else}
 										<div
 											class="text-surface-500 flex h-full w-full items-center justify-center"
 											aria-label="No image yet"
 										>
-											<Icons.ImageOff size={18} aria-hidden="true" />
+											<Icons.ImageOff
+												size={18}
+												aria-hidden="true"
+											/>
 										</div>
 									{/if}
 
-									{#if isOwner}
+									{#if isOwner || mayReexpress(group.label, activeSet?.id)}
 										<div class="absolute top-0.5 right-0.5">
 											<RowMenu
 												label={group.label}
@@ -525,46 +993,24 @@
 												triggerLabel="Options for this {group.label} sprite"
 												triggerClass="bg-surface-950/60 hover:bg-surface-950/80 rounded-full p-0.5 text-white"
 												bind:open={
-													() => menuOpenFor === sprite.id,
-													(v) => (menuOpenFor = v ? sprite.id : null)
+													() =>
+														menuOpenFor ===
+														sprite.id,
+													(v) =>
+														(menuOpenFor = v
+															? sprite.id
+															: null)
 												}
-												items={[
-													(sprite.position > 0 ||
-														group.sprites[0].id !== sprite.id) && {
-														label: "Make first",
-														icon: Icons.ArrowUpToLine,
-														onSelect: () => makePrimary(group.label, sprite)
-													},
-													{
-														label: sprite.media
-															? "Add a variant"
-															: "Upload an image",
-														icon: Icons.ImagePlus,
-														onSelect: () => uploadInto(group.label)
-													},
-													{
-														label: "Change label",
-														icon: Icons.Tag,
-														onSelect: () => openRelabel(sprite)
-													},
-													...sets
-														.filter((o) => o.id !== activeSet?.id)
-														.map((other) => ({
-															label: `Move to ${other.name}`,
-															icon: Icons.FolderInput,
-															onSelect: () => moveTo(sprite, other.id)
-														})),
-													{ separator: true },
-													{
-														label: "Delete",
-														icon: Icons.Trash2,
-														destructive: true,
-														onSelect: () => openDelete(sprite)
-													}
-												]}
+												items={spriteMenu(
+													group,
+													sprite
+												)}
 											>
 												{#snippet trigger()}
-													<Icons.EllipsisVertical class="h-3 w-3" aria-hidden="true" />
+													<Icons.EllipsisVertical
+														class="h-3 w-3"
+														aria-hidden="true"
+													/>
 												{/snippet}
 											</RowMenu>
 										</div>
@@ -577,13 +1023,18 @@
 			</ul>
 		{/if}
 
-		<section class="panel-card space-y-2 p-3" aria-labelledby="sprite-test-title">
-			<h3 id="sprite-test-title" class="text-sm font-medium">Try a line</h3>
+		<section
+			class="panel-card space-y-2 p-3"
+			aria-labelledby="sprite-test-title"
+		>
+			<h3 id="sprite-test-title" class="text-sm font-medium">
+				Try a line
+			</h3>
 			<p class="text-surface-600-400 text-xs">
-				See which sprite a reply like this would show. Replies choose a sprite
-				automatically when an embedding model is set up under Connections —
-				it is brought up on demand, so the first test after a quiet spell
-				takes a moment.
+				See which sprite a reply like this would show. Replies choose a
+				sprite automatically when an embedding model is set up under
+				Connections — it is brought up on demand, so the first test
+				after a quiet spell takes a moment.
 			</p>
 			<form
 				class="flex gap-2"
@@ -592,7 +1043,9 @@
 					runTest()
 				}}
 			>
-				<label class="sr-only" for="sprite-test-line">A line to test</label>
+				<label class="sr-only" for="sprite-test-line">
+					A line to test
+				</label>
 				<input
 					id="sprite-test-line"
 					class="input min-w-0 flex-1"
@@ -606,7 +1059,11 @@
 					disabled={testing || !testText.trim()}
 				>
 					{#if testing}
-						<Icons.Loader2 size={16} class="animate-spin" aria-hidden="true" />
+						<Icons.Loader2
+							size={16}
+							class="animate-spin"
+							aria-hidden="true"
+						/>
 					{/if}
 					Try it
 				</button>
@@ -615,8 +1072,10 @@
 				<p class="text-sm" role="status">
 					{#if testResult.pick}
 						Shows <strong>{testResult.pick.label}</strong>
-						(similarity {testResult.pick.score.toFixed(2)}{#if testResult.pick.runnerUp},
-							then {testResult.pick.runnerUp.label}
+						(similarity {testResult.pick.score.toFixed(
+							2
+						)}{#if testResult.pick.runnerUp}, then {testResult.pick
+								.runnerUp.label}
 							{testResult.pick.runnerUp.score.toFixed(2)}{/if}).
 					{:else}
 						{testResult.reason ?? "No sprite would be chosen."}
@@ -635,11 +1094,19 @@
 	}}
 >
 	<Portal>
-		<Dialog.Backdrop class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 w-full max-w-sm space-y-4 p-6 shadow-xl">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 w-full max-w-sm space-y-4 p-6 shadow-xl"
+			>
 				<h2 class="text-lg font-bold">
-					{nameDialog === "new" ? "New sprite set" : "Rename sprite set"}
+					{nameDialog === "new"
+						? "New sprite set"
+						: "Rename sprite set"}
 				</h2>
 				<form
 					class="space-y-4"
@@ -660,9 +1127,9 @@
 					</label>
 					{#if nameDialog === "rename"}
 						<p class="text-surface-600-400 text-xs">
-							Cast members in a lorebook choose a set by name. Any that chose
-							"{activeSet?.name}" will show the default set until they are
-							pointed at the new name.
+							Cast members in a lorebook choose a set by name. Any
+							that chose "{activeSet?.name}" will show the default
+							set until they are pointed at the new name.
 						</p>
 					{/if}
 					<footer class="flex justify-end gap-2">
@@ -694,9 +1161,15 @@
 	}}
 >
 	<Portal>
-		<Dialog.Backdrop class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 w-full max-w-sm space-y-4 p-6 shadow-xl">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 w-full max-w-sm space-y-4 p-6 shadow-xl"
+			>
 				<h2 class="text-lg font-bold">Change label</h2>
 				<form
 					class="space-y-4"
@@ -744,22 +1217,38 @@
 	}}
 >
 	<Portal>
-		<Dialog.Backdrop class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 max-w-sm space-y-4 p-6 shadow-xl">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 max-w-sm space-y-4 p-6 shadow-xl"
+			>
 				<header class="flex items-center gap-3">
-					<Icons.Trash2 class="text-error-500 h-5 w-5 shrink-0" aria-hidden="true" />
+					<Icons.Trash2
+						class="text-error-500 h-5 w-5 shrink-0"
+						aria-hidden="true"
+					/>
 					<h2 class="text-lg font-bold">Delete sprite</h2>
 				</header>
 				<p class="text-surface-600-400 text-sm">
-					Delete this "{deleteFor?.label}" sprite? This cannot be undone. Lines
-					that showed it fall back to another sprite, or the avatar.
+					Delete this "{deleteFor?.label}" sprite? This cannot be
+					undone. Lines that showed it fall back to another sprite, or
+					the avatar.
 				</p>
 				<footer class="flex justify-end gap-2">
-					<button class="btn preset-tonal-surface" onclick={() => (deleteFor = null)}>
+					<button
+						class="btn preset-tonal-surface"
+						onclick={() => (deleteFor = null)}
+					>
 						Cancel
 					</button>
-					<button class="btn preset-filled-error-500" onclick={confirmDelete}>
+					<button
+						class="btn preset-filled-error-500"
+						onclick={confirmDelete}
+					>
 						<Icons.Trash2 class="h-4 w-4" aria-hidden="true" />
 						Delete
 					</button>
@@ -769,27 +1258,37 @@
 	</Portal>
 </Dialog>
 
-<Dialog
-	open={deleteSetOpen}
-	onOpenChange={(e) => (deleteSetOpen = e.open)}
->
+<Dialog open={deleteSetOpen} onOpenChange={(e) => (deleteSetOpen = e.open)}>
 	<Portal>
-		<Dialog.Backdrop class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 max-w-sm space-y-4 p-6 shadow-xl">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 max-w-sm space-y-4 p-6 shadow-xl"
+			>
 				<header class="flex items-center gap-3">
-					<Icons.Trash2 class="text-error-500 h-5 w-5 shrink-0" aria-hidden="true" />
+					<Icons.Trash2
+						class="text-error-500 h-5 w-5 shrink-0"
+						aria-hidden="true"
+					/>
 					<h2 class="text-lg font-bold">Delete sprite set</h2>
 				</header>
 				<p class="text-surface-600-400 text-sm">
-					Delete "{activeSet?.name}" and its {activeSet?.sprites.length ?? 0}
+					Delete "{activeSet?.name}" and its {activeSet?.sprites
+						.length ?? 0}
 					sprites? This cannot be undone.
 					{#if activeSet?.isDefault && sets.length > 1}
 						Make another set the default first.
 					{/if}
 				</p>
 				<footer class="flex justify-end gap-2">
-					<button class="btn preset-tonal-surface" onclick={() => (deleteSetOpen = false)}>
+					<button
+						class="btn preset-tonal-surface"
+						onclick={() => (deleteSetOpen = false)}
+					>
 						Cancel
 					</button>
 					<button
@@ -801,6 +1300,181 @@
 						Delete
 					</button>
 				</footer>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
+
+<!-- Fill empty sprites: the set, the labels, what it will cost, then Generate. -->
+<Dialog open={fillOpen} onOpenChange={(e) => (fillOpen = e.open)}>
+	<Portal>
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 flex max-h-[90vh] w-full max-w-lg flex-col gap-4 p-6 shadow-xl"
+			>
+				<header class="space-y-1">
+					<h2 class="text-lg font-bold">Fill empty sprites</h2>
+					<p class="text-surface-600-400 text-sm">
+						Draw a picture for each sprite label from {characterName}'s
+						likeness. New pictures are added beside any already
+						there.
+					</p>
+				</header>
+				<form
+					class="flex min-h-0 flex-col gap-4"
+					onsubmit={(e) => {
+						e.preventDefault()
+						generate()
+					}}
+				>
+					<Select
+						label="Sprite set"
+						options={setOptions}
+						bind:value={
+							() => fillSetValue,
+							(v) => {
+								fillSetValue = v
+								requestPreview(true)
+							}
+						}
+					/>
+					<fieldset class="flex min-h-0 flex-col gap-2">
+						<legend class="label-text mb-1">Sprite labels</legend>
+						{#if fillPreview && fillPreview.allLabels.length}
+							<div class="flex gap-2 text-xs">
+								<button
+									type="button"
+									class="anchor"
+									onclick={() =>
+										tickOnly(
+											fillPreview?.emptyLabels ?? []
+										)}
+								>
+									Empty ones ({fillPreview.emptyLabels
+										.length})
+								</button>
+								<button
+									type="button"
+									class="anchor"
+									onclick={() =>
+										tickOnly(fillPreview?.allLabels ?? [])}
+								>
+									All ({fillPreview.allLabels.length})
+								</button>
+							</div>
+							<ul
+								class="grid max-h-56 grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-1 overflow-y-auto"
+							>
+								{#each fillPreview.allLabels as label (label)}
+									<li>
+										<label
+											class="flex items-center gap-2 text-sm"
+										>
+											<input
+												type="checkbox"
+												class="checkbox"
+												checked={fillSelected.has(
+													label
+												)}
+												onchange={(e) =>
+													toggleLabel(
+														label,
+														(
+															e.target as HTMLInputElement
+														).checked
+													)}
+											/>
+											<span class="truncate">
+												{label}
+											</span>
+										</label>
+									</li>
+								{/each}
+							</ul>
+						{:else if fillPreview}
+							<p class="text-surface-600-400 text-sm">
+								This set has no sprite labels yet.
+								{#if isOwner}
+									<button
+										type="button"
+										class="anchor"
+										onclick={addStandardSet}
+									>
+										Add the standard set
+									</button>
+									of 28 emotions first.
+								{/if}
+							</p>
+						{:else}
+							<Icons.Loader2
+								class="text-surface-500 h-5 w-5 animate-spin"
+								aria-hidden="true"
+							/>
+						{/if}
+					</fieldset>
+
+					<div class="space-y-1" aria-live="polite">
+						{#if previewing}
+							<p class="text-surface-600-400 text-sm">
+								Working out the cost…
+							</p>
+						{:else if fillSelected.size === 0 && fillPreview?.allLabels.length}
+							<p class="text-surface-600-400 text-sm">
+								Pick at least one label.
+							</p>
+						{:else if fillPreview?.line}
+							<p
+								class="text-sm font-medium"
+								data-testid="fill-plan-line"
+							>
+								{fillPreview.line}
+							</p>
+						{/if}
+						{#if fillPreview?.refusal && !previewing}
+							<p class="text-error-600-400 text-sm" role="alert">
+								{fillPreview.refusal}
+							</p>
+						{/if}
+						{#each fillPreview?.notices ?? [] as notice (notice)}
+							<p
+								class="text-warning-700-300 flex gap-1.5 text-xs"
+							>
+								<Icons.Info
+									size={14}
+									class="mt-0.5 shrink-0"
+									aria-hidden="true"
+								/>
+								<span>{notice}</span>
+							</p>
+						{/each}
+					</div>
+
+					<footer class="flex justify-end gap-2">
+						<button
+							type="button"
+							class="btn preset-tonal-surface"
+							onclick={() => (fillOpen = false)}
+						>
+							Cancel
+						</button>
+						<button
+							type="submit"
+							class="btn preset-filled-primary-500"
+							disabled={previewing ||
+								running ||
+								fillSelected.size === 0 ||
+								!!fillPreview?.refusal}
+						>
+							<Icons.WandSparkles size={16} aria-hidden="true" />
+							Generate
+						</button>
+					</footer>
+				</form>
 			</Dialog.Content>
 		</Dialog.Positioner>
 	</Portal>

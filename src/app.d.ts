@@ -201,6 +201,17 @@ declare global {
 			characterId?: number
 			/** Open the character sidebar straight to its detail/view screen, not the edit form */
 			viewCharacterId?: number
+			/**
+			 * Open the **Messages** view on one conversation — `/messages/<id>`,
+			 * a conversation-message notification's href (`openHref`). The
+			 * Messages view consumes it once.
+			 */
+			viewConversationId?: number
+			/**
+			 * Open the **Messages** view on one person's detail —
+			 * `/messages/people/<id>`. The Messages view consumes it once.
+			 */
+			viewPersonId?: number
 			sessionId?: number
 			sessionPersonaId?: number
 			sessionCharacterId?: number
@@ -219,26 +230,57 @@ declare global {
 			/** Where the lorebook workspace should open — one address for the
 			 * book, the section, the entry and how it is presented. */
 			lore?: LoreRoute
-			/** Open the connections sidebar and select a specific connection */
+			/**
+			 * Open the **Connections** view on one connection (its own view:
+			 * status, models, settings). Admin › Connections rows' **Open in
+			 * Connections**, Jump's connection hits and the Models view's
+			 * "Open in Connections" presses set it; the Connections view
+			 * consumes it.
+			 */
 			connectionId?: number
-			/** Open the connections sidebar straight to one modality's section. */
+			/** Open the **Connections** view straight to one modality's section. */
 			connectionsModality?: string
 			/**
-			 * Open the connections sidebar through one of its first-run doors:
-			 * `setup-chat` the Set up chat flow (KoboldCPP run by this pub),
-			 * `service` the Add picker narrowed to online services, `local`
-			 * narrowed to servers the person already runs, `chat` the chat
-			 * capability view (which model answers). The home wizard's
-			 * Choose an LLM step is the caller; the sidebar consumes it.
+			 * A first-run door (plan 2026-10-11, the Models / Connections
+			 * split), consumed once by whichever view it names:
+			 * - **Models**: `setup-chat` the Set up chat stepper (KoboldCPP
+			 *   run by this pub), `chat` the job sheet for Chat replies (which
+			 *   model answers);
+			 * - **Connections**: `service` the Add picker narrowed to online
+			 *   services, `local` narrowed to servers the person already runs.
+			 * The home wizard's Choose an AI step, Sampling's Used by and the
+			 * Connections view's first-run KoboldCPP door are the callers.
 			 */
 			connectionsDoor?: "setup-chat" | "service" | "local" | "chat"
+			/**
+			 * Open the **Models** view on one job's **sheet** (the job picker:
+			 * which model answers, how it writes, where that applies) — the
+			 * job's transform id, `text->text` for chat. Admin › Defaults rows'
+			 * **Open in Models**, Sampling's Used by and the composer's
+			 * readiness strip set it; the Models view consumes it once.
+			 */
+			connectionsJob?: string
+			/**
+			 * Open the **Loadouts** view (I12) on one loadout's **sheet**, by
+			 * row id — a Models row's **Use in…** menu, the Pipelines settings
+			 * group's *Change*. The Loadouts view consumes it once. A
+			 * `connectionsJob` reaching the Loadouts view opens that
+			 * transform's DEFAULT loadout's sheet (the job sheet's successor).
+			 */
+			loadoutId?: number
 			/**
 			 * Open the Settings view at one of its sections — the SillyTavern
 			 * import's "Import from SillyTavern" buttons name `import`. The
 			 * sidebar consumes it (an effect, so it lands whether Settings was
 			 * already open or not).
 			 */
-			settingsSection?: "user" | "media" | "data" | "themes" | "import" | "about"
+			settingsSection?:
+				| "user"
+				| "media"
+				| "data"
+				| "themes"
+				| "import"
+				| "about"
 		}
 		leftNavOrder: string[]
 		rightNavOrder: string[]
@@ -367,13 +409,36 @@ declare global {
 		 * (owner ruling 3, 2026-09-28), so the lorebook workspace needs it to
 		 * say — and to stand at — what the session reads.
 		 */
-		storyClock: { year: number; month: number | null; day: number | null } | null
+		storyClock: {
+			year: number
+			month: number | null
+			day: number | null
+		} | null
 		isOwner: boolean
 		/**
 		 * A reply is being written. Read by the shell's spine, which keeps
 		 * the session in view while a view is focused over it.
 		 */
 		isGenerating: boolean
+		/**
+		 * 🚧 The session's **header notice** (PLAN-core-widgets §3.16): one
+		 * line the session header draws under its bar, dismissible. Today
+		 * only the stale-preset notice (`sessionPage/presetNotice.ts`), which
+		 * left the composer's area — a pipeline substitution is not a turn
+		 * fact. Absent or null: none. ⚠ Not a config **notice** (a culled
+		 * value's record, NOMENCLATURE §6).
+		 */
+		headerNotice?: SessionHeaderNotice | null
+	}
+
+	/** 🚧 One line the session header shows under its bar (`OpenSessionCtx.headerNotice`). */
+	interface SessionHeaderNotice {
+		/** The line itself; the header cuts it with an ellipsis and shows it whole on hover. */
+		text: string
+		/** Where to put it right, for whoever may (an administrator's binding). */
+		link: { href: string; label: string } | null
+		/** Dismissed for this view only: the page keeps the flag, never storage. */
+		dismiss: () => void
 	}
 
 	interface GraphBuildState {

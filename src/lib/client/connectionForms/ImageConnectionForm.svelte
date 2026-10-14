@@ -19,6 +19,8 @@
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { mediaUrl } from "$lib/client/utils/media"
 	import SchemaForm from "$lib/client/components/pipelines/SchemaForm.svelte"
+	import ComfyDrawTest from "$lib/client/components/connections/comfy/ComfyDrawTest.svelte"
+	import { useExtraJsonSync } from "./extraJsonSync.svelte"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { S } from "@serene-pub/sdk"
 	import type { RunProgress } from "$lib/shared/sockets/progress"
@@ -66,26 +68,50 @@
 	let profileSchema = $state<Record<string, any> | null>(null)
 	let capabilities = $state<Record<string, any> | null>(null)
 
+	/** The adapter's declared defaults, once its schema reply lands. */
+	let profileDefaults = $state<Record<string, unknown>>({})
+	/**
+	 * What the backend-settings form shows and edits: the declared defaults
+	 * under the row's stored `profile`. A LOCAL view, so materialising the
+	 * defaults never writes into the draft — a write on open makes the panel
+	 * report unsaved changes with nothing touched, then blocks leaving behind
+	 * a Discard dialog. Only a person's edit reaches `extraJson.profile`
+	 * (merged, so the keys other forms own survive).
+	 */
+	let profileView = $state<Record<string, unknown>>({})
+
+	const profileSync = useExtraJsonSync<Record<string, unknown>>({
+		connection: () => connection,
+		fields: () => profileView,
+		seed: (extraJson) => {
+			profileView = {
+				...profileDefaults,
+				...((extraJson?.profile as Record<string, unknown>) ?? {})
+			}
+		},
+		// Serialised so every nested value is read — that read is what
+		// subscribes the write-back to an edit anywhere in the view.
+		project: (view) => ({ profile: JSON.parse(JSON.stringify(view)) })
+	})
+
 	const onProfileSchema = (msg: ImageProfileSchemaResponse) => {
 		if (msg.type !== connection.type) return
 		profileSchema = (msg.schema as Record<string, any>) ?? null
 		capabilities = (msg.capabilities as Record<string, any>) ?? null
-		// Materialise the declared defaults so the form shows real values rather
-		// than blanks that mean "whatever the adapter falls back to".
-		if (msg.defaults && connection.extraJson) {
-			const current = (connection.extraJson as any).profile ?? {}
-			;(connection.extraJson as any).profile = {
-				...msg.defaults,
-				...current
-			}
-		}
+		// Shown as real values rather than blanks that mean "whatever the
+		// adapter falls back to" — in the view only, never the draft.
+		profileDefaults = (msg.defaults as Record<string, unknown>) ?? {}
+		profileSync.reseed()
 	}
 	useInterest<"images:profileSchema">("images:profileSchema", onProfileSchema)
 
-	// The apiKey and profile bindings both need a container object.
-	$effect(() => {
-		if (connection && !connection.extraJson) connection.extraJson = {}
-	})
+	/** The key is written only when typed into, merged over `extraJson`. */
+	function setApiKey(value: string) {
+		connection.extraJson = {
+			...((connection.extraJson as Record<string, unknown>) ?? {}),
+			apiKey: value
+		}
+	}
 
 	// ── Test connection ──────────────────────────────────────────────────
 	// The registry keeps ONE raw listener per event and fans it out, so this
@@ -209,20 +235,21 @@
 		{/if}
 	</div>
 
-	{#if connection.extraJson}
-		<div class="mt-2 flex flex-col gap-1">
-			<label class="font-semibold" for="img-key">
-				API Key (optional)
-			</label>
-			<input
-				id="img-key"
-				type="password"
-				class="input"
-				placeholder="Only if the server requires one"
-				bind:value={connection.extraJson.apiKey}
-			/>
-		</div>
-	{/if}
+	<div class="mt-2 flex flex-col gap-1">
+		<label class="font-semibold" for="img-key">
+			API Key (optional)
+		</label>
+		<input
+			id="img-key"
+			type="password"
+			class="input"
+			placeholder="Only if the server requires one"
+			value={typeof (connection.extraJson as any)?.apiKey === "string"
+				? (connection.extraJson as any).apiKey
+				: ""}
+			oninput={(e) => setApiKey(e.currentTarget.value)}
+		/>
+	</div>
 
 	<!-- The Test button lives on the connection view's status card, not
 	     here. Two Test buttons on one screen, styled differently and
@@ -238,7 +265,7 @@
 	     Models live in the Models section below. -->
 	<!-- Everything below is this backend's own, rendered from what its adapter
 	     declares. Core has no idea what any of these fields mean. -->
-	{#if profileSchema && Object.keys(profileSchema).length && connection.extraJson}
+	{#if profileSchema && Object.keys(profileSchema).length}
 		<div class={embedded ? "mt-6" : "border-surface-500/20 mt-5 border-t pt-4"}>
 			<h4 class="mb-1 flex items-center gap-1.5 font-semibold">
 				<Icons.SlidersHorizontal size={14} />
@@ -258,12 +285,12 @@
 			{/if}
 			<SchemaForm
 				schema={profileSchema}
-				bind:values={connection.extraJson.profile}
+				bind:values={profileView}
 			/>
 		</div>
 	{/if}
 
-	{#if capabilities && capabilities.freeSize === false}
+	{#if capabilities?.size && capabilities.size.kind !== "free"}
 		<p
 			class="text-surface-600-400 border-surface-500/20 mt-3 rounded border p-2 text-xs"
 		>
@@ -284,6 +311,13 @@
 				<Icons.Sparkles size={14} />
 				Test Generation
 			</summary>
+			{#if connection.type === CONNECTION_TYPE.COMFYUI}
+				<!-- 🚧 A ComfyUI draws with a workflow (§4.8 step 5): the
+				     test names one and offers only what its sheet takes. -->
+				<div class="mt-2">
+					<ComfyDrawTest connectionId={connection.id} />
+				</div>
+			{:else}
 			<div class="mt-2 flex flex-col gap-2">
 				<textarea
 					class="textarea h-20"
@@ -300,7 +334,7 @@
 					<div class="flex gap-2">
 						<button
 							type="button"
-							class="btn preset-filled-error-500 btn-sm flex-1"
+							class="btn preset-tonal-error btn-sm flex-1"
 							onclick={handleCancel}
 						>
 							<Icons.X size={14} />
@@ -386,6 +420,7 @@
 					</div>
 				{/if}
 			</div>
+			{/if}
 		</details>
 	{/if}
 {/if}

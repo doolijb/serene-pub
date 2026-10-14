@@ -312,9 +312,29 @@ describe("recording what a run did", () => {
 			// text and speaker, then the outlet. A card with no sprites runs
 			// both — the picker picks nothing and the outlet writes nothing.
 			"spritePick",
-			"spriteShow"
+			"spriteShow",
+			// 🚧 The reply tick (live scenes §6, 2026-10-13): *Each reply
+			// advances the clock by …*, last, after the line and its face.
+			// It runs on every reply; the clock junction behind it does not
+			// at the shipped By 0 — asserted below.
+			"tick"
 		])
 		expect(found!.nodes.every((n: any) => n.result === "ok")).toBe(true)
+
+		// The tick decided "nothing" (By 0 = off), so *Advance story clock*
+		// never ran: no `clock` junction or outlet line in the trail.
+		const tickRow = found!.nodes.find((n: any) => n.nodeKey === "tick")
+		expect(tickRow!.definitionId).toBe("core:task/clock-step@1")
+		const tick = receipt.nodes.find((n: any) => n.nodeKey === "tick")
+		expect(tick!.output).toMatchObject({ moves: false, by: 0 })
+		expect(
+			found!.nodes.filter((n: any) => /^clock(\.|$)/.test(n.nodeKey))
+		).toEqual([])
+		expect(
+			found!.nodes.some(
+				(n: any) => n.definitionId === "core:outlet/advance-story-clock@1"
+			)
+		).toBe(false)
 
 		// "Why did Bram speak" is now a receipt line (19 §5): the trigger's
 		// Who spoke is the ENTRY's, not a node's (PLAN-turn-order §4.4):

@@ -20,12 +20,14 @@ import { and, count, eq, gte, isNotNull } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { combosFor } from "./connectionDefaults"
 import { capabilityDefaults } from "$lib/server/connections/capabilityDefaults"
+import { readRefusedDefaults } from "$lib/server/connections/refusedDefaults"
 import { tunnelsUnavailableReason } from "./tunnels"
 import { isWildcardAllowed, listAllowedHosts } from "./originAllowlist"
 import { pluginsEnabled } from "$lib/server/plugins/flag"
 import { needsReview, type PluginManifest } from "$lib/server/plugins/permissions"
 import { listNamespaces } from "$lib/server/pipelines/config/panel/read"
 import { attentionFor, type OverviewFacts } from "$lib/server/admin/attention"
+import { readNeededJobs } from "$lib/server/admin/jobUse"
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -57,15 +59,20 @@ export async function buildAdminOverview(): Promise<Sockets.Admin.Overview.Respo
 		.limit(1)
 	const accountsEnabled = settings?.isAccountsEnabled ?? false
 
-	// Models — the Defaults screen's own two reads, and its own two counts.
+	// Models — the Defaults screen's own reads, and its own counts. Missing
+	// is NEEDED and unset (`readNeededJobs`, the set Defaults marks "Needed"),
+	// never merely demanded: image generation is demanded on every pub, and
+	// a text-only pub that never asked to draw has nothing missing.
 	const combos = await combosFor(db)
 	const defaults = await capabilityDefaults(db)
+	const needed = await readNeededJobs(db, combos, now)
 	const isSet = (id: string) => defaults[id]?.connectionId != null
 	const missing = combos
-		.filter((c) => c.demanded && !isSet(c.id))
+		.filter((c) => needed[c.id] && !isSet(c.id))
 		.map((c) => ({
 			capability: c.id,
-			requiredBy: [...new Set(c.requiredBy.map((r) => r.definitionId))]
+			requiredBy: [...new Set(c.requiredBy.map((r) => r.definitionId))],
+			neededBecause: needed[c.id]
 		}))
 	// Connections whose last model sync failed, each with the jobs it is the
 	// default for — attention.ts decides which of them are worth a row.
@@ -85,6 +92,9 @@ export async function buildAdminOverview(): Promise<Sockets.Admin.Overview.Respo
 			(id) => defaults[id]?.connectionId === c.id
 		)
 	}))
+	// Defaults whose pair cannot do its job — the same judgement the
+	// Defaults screen marks its rows with.
+	const refusedDefaults = await readRefusedDefaults(db, defaults)
 
 	// Network — the tunnel row plus the supervisor's word on liveness.
 	const unavailable = tunnelsUnavailableReason()
@@ -159,7 +169,8 @@ export async function buildAdminOverview(): Promise<Sockets.Admin.Overview.Respo
 			jobsTotal: combos.length,
 			jobsSet: combos.filter((c) => isSet(c.id)).length,
 			missing,
-			syncErrors
+			syncErrors,
+			refusedDefaults
 		},
 		network: {
 			tunnelAvailable: !unavailable,

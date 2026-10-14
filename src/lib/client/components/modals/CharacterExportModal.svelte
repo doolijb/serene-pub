@@ -169,7 +169,7 @@
 								</button>
 							{:else}
 								<button
-									class="btn preset-filled-surface-500 justify-start"
+									class="btn preset-tonal-surface justify-start"
 									disabled
 									title="Character has no avatar image"
 								>
@@ -183,7 +183,7 @@
 						</div>
 						<div class="mt-4 flex justify-end gap-2">
 							<button
-								class="btn preset-filled-surface-500"
+								class="btn preset-tonal-surface"
 								onclick={onCancel}
 							>
 								Cancel

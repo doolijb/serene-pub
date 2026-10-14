@@ -33,10 +33,13 @@
 	import CharacterFolderNameModal from "../modals/CharacterFolderNameModal.svelte"
 	import CharacterMoveToFolderModal from "../modals/CharacterMoveToFolderModal.svelte"
 	import EmptyState from "../EmptyState.svelte"
+	import ListGroupLabel from "$lib/client/components/panels/ListGroupLabel.svelte"
+	import LoadingState from "../LoadingState.svelte"
 	import ImportConflictModal from "../modals/ImportConflictModal.svelte"
 	import { describeOverwriteLosses } from "$lib/client/lorebooks/overwriteLosses"
 	import { lorebookImportedToast } from "$lib/client/lorebooks/lorebookImportedToast"
 	import CharacterExportModal from "../modals/CharacterExportModal.svelte"
+	import DeleteCharacterConfirm from "../modals/DeleteCharacterConfirm.svelte"
 	import { downloadBlob } from "$lib/client/utils/downloadBlob"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 	import { JUMP_CONTEXT, type JumpCtx } from "$lib/client/shell/jump.svelte"
@@ -84,6 +87,12 @@
 	let showCharacterCreator = $state(false)
 	let showDeleteModal = $state(false)
 	let characterToDelete: number | undefined = $state(undefined)
+	/** The name the delete dialog says (plan F2). */
+	let characterToDeleteName = $derived(
+		characterToDelete === undefined
+			? undefined
+			: characterList.find((c) => c.id === characterToDelete)?.name
+	)
 	let showUnsavedChangesModal = $state(false)
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 	let showImportModal = $state(false)
@@ -256,6 +265,9 @@
 	 * filter has emptied it.
 	 */
 	let listIsNarrowed = $derived(!!search || activeChip !== "all")
+	/** The Personas filter with none to show and no search: the empty state
+	 *  offers to write one (plan F3). */
+	let personaEmpty = $derived(!search && activeChip === "persona")
 
 	// Filtered list
 	let filteredCharacters: any[] = $derived.by(() => {
@@ -371,7 +383,14 @@
 		const known = new Set(folders.map((f) => f.id))
 		const byFolder = new Map<number, any[]>()
 		const ungrouped: any[] = []
+		// Characters other people shared with the reader: their own group at
+		// the end, under Shared with you (PLAN-private-messages §6.7).
+		const shared: any[] = []
 		for (const c of filteredCharacters) {
+			if (c.isSharedWithMe) {
+				shared.push(c)
+				continue
+			}
 			const folderId = (c as any).folderId
 			if (folderId == null || !known.has(folderId)) {
 				ungrouped.push(c)
@@ -383,6 +402,7 @@
 		}
 		return {
 			ungrouped,
+			shared,
 			groups: folders
 				.map((folder) => ({
 					folder,
@@ -510,7 +530,6 @@
 	$effect(() =>
 		jumpCtx?.registerScope("characters", {
 			label: "Characters",
-			placeholder: "Filter characters",
 			getQuery: () => search,
 			setQuery: (next) => (search = next),
 			getHits: () =>
@@ -930,7 +949,12 @@
 	function handleCharactersList(
 		msg: SocketEventMap["characters:list"]["response"]
 	) {
-		characterList = msg.characterList
+		// A shared row carries its OWNER's favourite flag, which means nothing
+		// in this library (PLAN-private-messages §6.7): drop it here so the
+		// star, the favourites-first sort and the Favorites chip never read it.
+		characterList = msg.characterList.map((c) =>
+			c.isSharedWithMe ? { ...c, isFavorite: false } : c
+		)
 		isLoading = false
 	}
 
@@ -1024,7 +1048,10 @@
 			return
 		}
 		const toast = lorebookImportedToast(msg.warnings)
-		toaster[toast.kind]({ title: toast.title, description: toast.description })
+		toaster[toast.kind]({
+			title: toast.title,
+			description: toast.description
+		})
 	}
 
 	function handleLorebooksImportError(msg: Sockets.ErrorResponse) {
@@ -1039,7 +1066,10 @@
 		if (!lorebookImportPending) return
 		lorebookImportPending = false
 		const toast = lorebookImportedToast(msg.warnings)
-		toaster[toast.kind]({ title: toast.title, description: toast.description })
+		toaster[toast.kind]({
+			title: toast.title,
+			description: toast.description
+		})
 	}
 
 	function handleLorebooksImportResolveError(msg: Sockets.ErrorResponse) {
@@ -1173,7 +1203,7 @@
      list, and four copies of it is four places for a row's props to drift.
      `label` names the group for a screen reader, so several lists on one pane
      are several NAMED lists rather than several called "Characters list". -->
-{#snippet characterRows(items: any[], label: string)}
+{#snippet characterRows(items: any[], label: string, shared = false)}
 	{#if viewMode.value === "list"}
 		<div class="flex flex-col gap-2" role="list" aria-label={label}>
 			{#each items as c (c.id)}
@@ -1185,12 +1215,16 @@
 					<CharacterListItem
 						character={c}
 						onclick={handleCharacterClick}
-						onEdit={handleEditClick}
-						onDelete={handleDeleteClick}
+						onEdit={shared ? undefined : handleEditClick}
+						onDelete={shared ? undefined : handleDeleteClick}
 						onExport={handleExportCharacter}
-						onTogglePersona={handleTogglePersona}
-						onSetDefaultPersona={handleSetDefaultPersona}
-						onMoveToFolder={openMoveToFolder}
+						onTogglePersona={shared
+							? undefined
+							: handleTogglePersona}
+						onSetDefaultPersona={shared
+							? undefined
+							: handleSetDefaultPersona}
+						onMoveToFolder={shared ? undefined : openMoveToFolder}
 						contentTitle="Go to character sessions"
 						active={vm.mode === "desk" &&
 							selectedCharacterId === c.id}
@@ -1225,12 +1259,16 @@
 					<CharacterCardItem
 						character={c}
 						onclick={handleCharacterClick}
-						onEdit={handleEditClick}
-						onDelete={handleDeleteClick}
+						onEdit={shared ? undefined : handleEditClick}
+						onDelete={shared ? undefined : handleDeleteClick}
 						onExport={handleExportCharacter}
-						onTogglePersona={handleTogglePersona}
-						onSetDefaultPersona={handleSetDefaultPersona}
-						onMoveToFolder={openMoveToFolder}
+						onTogglePersona={shared
+							? undefined
+							: handleTogglePersona}
+						onSetDefaultPersona={shared
+							? undefined
+							: handleSetDefaultPersona}
+						onMoveToFolder={shared ? undefined : openMoveToFolder}
 						contentTitle="Go to character sessions"
 						active={vm.mode === "desk" &&
 							selectedCharacterId === c.id}
@@ -1241,12 +1279,7 @@
 	{/if}
 {/snippet}
 
-<div
-	use:vm.observe
-	class="text-foreground flex h-full min-h-0 flex-col"
-	role="region"
-	aria-label="Characters management"
->
+<div class="flex h-full min-h-0 flex-col" use:vm.observe>
 	<PanelSplit
 		mode={vm.mode}
 		hasDetail={isCreating || characterId != null || viewingId != null}
@@ -1294,30 +1327,27 @@
 							onEdit={handleEditFromView}
 							onSession={handleSessionFromView}
 							onExport={handleExportCharacter}
+							onCopied={(id) => (viewingId = id)}
 						/>
 					</section>
 				{/key}
 			{/if}
 		{/snippet}
 
-		{#snippet list()}
-			<!-- The whole pane is the drop target: a card is dropped at the
-			     list, not at a strip of it, and a zone only a footer accepted
-			     would miss every drop aimed at the rows. `relative` is what
-			     the dragging overlay at the end of this pane hangs on. -->
+		{#snippet toolbar()}
+			<!-- The view toolbar (STYLE-GUIDE §6.3), pinned by the split. The
+			     three ways a character gets in are behind New — write one,
+			     browse the library, or hand over a file; the pane is a drop
+			     target as well, which is a fourth way and not a menu item. The
+			     toolbar takes a drop too, so a card let go over the filter
+			     imports rather than sending the browser to the file. -->
 			<div
-				class="relative flex min-h-0 min-w-0 flex-1 flex-col rounded-lg"
 				ondragover={handleCardDragOver}
 				ondragleave={handleCardDragLeave}
 				ondrop={handleCardDrop}
-				role="region"
-				aria-label="Characters list and card drop zone"
+				role="presentation"
 			>
-				<!-- The view toolbar (STYLE-GUIDE §6.3). The three ways a
-				     character gets in are behind New — write one, browse the
-				     library, or hand over a file; the pane is a drop target as
-				     well, which is a fourth way and not a menu item. -->
-				<ViewToolbar label="Characters" class="mb-2">
+				<ViewToolbar label="Characters">
 					{#snippet primary()}
 						<Popover
 							open={newOpen}
@@ -1440,7 +1470,9 @@
 														? 'sidebar-row-active'
 														: 'hover:bg-surface-200-800'}"
 													onclick={() =>
-														pickFilter(option.value)}
+														pickFilter(
+															option.value
+														)}
 												>
 													{#if option.value.startsWith("tag:")}
 														<span
@@ -1450,7 +1482,9 @@
 															aria-hidden="true"
 														></span>
 													{/if}
-													<span class="min-w-0 truncate">
+													<span
+														class="min-w-0 truncate"
+													>
 														{option.label}
 													</span>
 												</button>
@@ -1466,14 +1500,14 @@
 						<!-- The one narrowing in force, said once. -->
 						{#if activeFilterLabel}
 							<span
-								class="bg-surface-200-800 text-surface-800-200 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
+								class="bg-surface-200-800 text-surface-700-300 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
 							>
 								<span class="min-w-0 truncate">
 									{activeFilterLabel}
 								</span>
 								<button
 									type="button"
-									class="hover:text-foreground shrink-0"
+									class="hover:text-surface-950-50 shrink-0"
 									onclick={() => pickFilter("all")}
 									title="Clear filter"
 									aria-label="Clear filter: {activeFilterLabel}"
@@ -1484,93 +1518,126 @@
 						{/if}
 					{/snippet}
 				</ViewToolbar>
-				<div class="min-h-0 flex-1 overflow-y-auto">
-					{#if isLoading}
-						<div class="flex items-center justify-center py-8">
-							<Icons.Loader2
-								size={20}
-								class="text-surface-600-400 animate-spin"
-							/>
-						</div>
-					{:else if filteredCharacters.length === 0}
-						<EmptyState
-							icon={Icons.Users}
-							message={search
-								? `No characters found matching "${search}".`
-								: activeChip === "favorite"
-									? "No favourite characters yet."
-									: activeChip === "persona"
-										? "No personas yet — mark a character as one from its ⋯ menu."
-										: activeChip !== "all"
-											? "No characters carry this tag."
-											: "No characters yet — create one, or browse ready-made ones from the community."}
-							ctaLabel={listIsNarrowed
+			</div>
+		{/snippet}
+
+		{#snippet list()}
+			<!-- The whole list is the drop target: a card is dropped at the
+			     list, not at a strip of it, and a zone only a footer accepted
+			     would miss every drop aimed at the rows. `min-h-full` stretches
+			     it down the split's scroller when the rows are few, and
+			     `relative` is what the dragging overlay at its end hangs on. -->
+			<div
+				class="relative flex min-h-full min-w-0 flex-col"
+				ondragover={handleCardDragOver}
+				ondragleave={handleCardDragLeave}
+				ondrop={handleCardDrop}
+				role="region"
+				aria-label="Characters list and card drop zone"
+			>
+				{#if isLoading}
+					<LoadingState message="Loading characters…" />
+				{:else if filteredCharacters.length === 0}
+					<EmptyState
+						icon={personaEmpty ? Icons.UserRound : Icons.Users}
+						message={search
+							? `No characters found matching "${search}".`
+							: activeChip === "favorite"
+								? "No favorite characters yet."
+								: activeChip === "persona"
+									? "No personas yet. Write one, or choose Use as persona in a character's ⋮ menu."
+									: activeChip !== "all"
+										? "No characters carry this tag."
+										: "No characters yet — create one, or browse ready-made ones from the community."}
+						ctaLabel={personaEmpty
+							? "Write a persona"
+							: listIsNarrowed
 								? undefined
 								: "New character"}
-							onCta={listIsNarrowed
+						onCta={personaEmpty
+							? handleCreatePersonaClick
+							: listIsNarrowed
 								? undefined
 								: handleCreateClick}
-							secondaryLabel={listIsNarrowed
-								? undefined
-								: "Browse Characters"}
-							onSecondary={listIsNarrowed
-								? undefined
-								: handleBrowseClick}
-						/>
-					{:else}
-						<!-- Top level first, under no header: the folders are
-						     an optional shelf, not a filing system a character
-						     has to be inside to be listed. -->
-						<div class="flex flex-col gap-2">
-							{#if folderGroups.ungrouped.length > 0}
+						secondaryLabel={listIsNarrowed
+							? undefined
+							: "Browse characters"}
+						onSecondary={listIsNarrowed
+							? undefined
+							: handleBrowseClick}
+					/>
+				{:else}
+					<!-- Top level first, under no header: the folders are
+					     an optional shelf, not a filing system a character
+					     has to be inside to be listed. -->
+					<div class="flex flex-col gap-2">
+						{#if folderGroups.ungrouped.length > 0}
+							{@render characterRows(
+								folderGroups.ungrouped,
+								"Characters"
+							)}
+						{/if}
+						{#each folderGroups.groups as group (group.folder.id)}
+							{@const expanded = !collapsedFolderIds.has(
+								group.folder.id
+							)}
+							<div class="flex min-w-0 flex-col">
+								<CharacterFolderHeader
+									name={group.folder.name}
+									count={group.characters.length}
+									{expanded}
+									onToggle={() =>
+										toggleFolder(group.folder.id)}
+									onRename={() =>
+										openRenameFolder(group.folder)}
+									onDelete={() =>
+										(folderToDelete = group.folder)}
+								/>
+								{#if expanded}
+									<!-- Indented by the header glyph's
+									     width and nothing else (§6.4) —
+									     the indent is what says these rows
+									     belong to the folder above. -->
+									<div class="min-w-0 pl-4">
+										{@render characterRows(
+											group.characters,
+											group.folder.name
+										)}
+									</div>
+								{/if}
+							</div>
+						{/each}
+						{#if folderGroups.shared.length > 0}
+							<!-- Read and copy only (ruled Q3): last, after
+							     the reader's own rows and folders. -->
+							<div class="flex min-w-0 flex-col">
+								<ListGroupLabel label="Shared with you" />
 								{@render characterRows(
-									folderGroups.ungrouped,
-									"Characters"
+									folderGroups.shared,
+									"Shared with you",
+									true
 								)}
-							{/if}
-							{#each folderGroups.groups as group (group.folder.id)}
-								{@const expanded = !collapsedFolderIds.has(
-									group.folder.id
-								)}
-								<div class="flex min-w-0 flex-col">
-									<CharacterFolderHeader
-										name={group.folder.name}
-										count={group.characters.length}
-										{expanded}
-										onToggle={() =>
-											toggleFolder(group.folder.id)}
-										onRename={() =>
-											openRenameFolder(group.folder)}
-										onDelete={() =>
-											(folderToDelete = group.folder)}
-									/>
-									{#if expanded}
-										<!-- Indented by the header glyph's
-										     width and nothing else (§6.4) —
-										     the indent is what says these rows
-										     belong to the folder above. -->
-										<div class="min-w-0 pl-4">
-											{@render characterRows(
-												group.characters,
-												group.folder.name
-											)}
-										</div>
-									{/if}
-								</div>
-							{/each}
-						</div>
-					{/if}
-				</div>
-				<!-- The pane says it is a drop target only while a card is
+							</div>
+						{/if}
+					</div>
+				{/if}
+				<!-- The list says it is a drop target only while a card is
 				     over it. It is always one, and a standing strip saying so
 				     costs a line of the list to repeat it at every moment the
 				     answer is not needed. `pointer-events-none` keeps the
-				     overlay out of the drag the pane is tracking. -->
+				     overlay out of the drag the list is tracking. The overlay
+				     spans every row, scrolled or not; its words are sticky at
+				     the middle of the scroller's visible height, so a long list
+				     still shows them wherever it is scrolled to. -->
 				{#if isCardDragOver}
 					<div
-						class="border-primary-500/70 bg-surface-50-950/80 text-surface-800-200 pointer-events-none absolute inset-2 flex items-center justify-center rounded-[12px] border-2 border-dashed text-sm"
+						class="border-primary-500/70 bg-surface-50-950/80 text-surface-800-200 pointer-events-none absolute inset-0 rounded-[12px] border-2 border-dashed text-sm"
 					>
-						Drop to import this card
+						<p
+							class="sticky top-1/2 -translate-y-1/2 py-8 text-center"
+						>
+							Drop to import this card
+						</p>
 					</div>
 				{/if}
 			</div>
@@ -1578,63 +1645,12 @@
 	</PanelSplit>
 </div>
 
-{#if showDeleteModal}
-	<Dialog
-		open={showDeleteModal}
-		onOpenChange={(e) => (showDeleteModal = e.open)}
-	>
-		<Portal>
-			<Dialog.Backdrop
-				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
-			/>
-			<Dialog.Positioner
-				class="fixed inset-0 z-50 flex items-center justify-center p-4"
-			>
-				<Dialog.Content
-					class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
-					role="alertdialog"
-					aria-labelledby="delete-modal-title"
-					aria-describedby="delete-modal-description"
-				>
-					<div class="p-6">
-						<h2
-							id="delete-modal-title"
-							class="mb-2 text-lg font-bold"
-						>
-							Delete character?
-						</h2>
-						<p id="delete-modal-description" class="mb-4">
-							Are you sure you want to delete this character? This
-							action cannot be undone.
-						</p>
-						<div
-							class="flex justify-end gap-2"
-							role="group"
-							aria-label="Delete confirmation actions"
-						>
-							<button
-								class="btn preset-filled-surface-500"
-								onclick={cancelDelete}
-								type="button"
-								aria-label="Cancel deletion"
-							>
-								Cancel
-							</button>
-							<button
-								class="btn preset-filled-error-500"
-								onclick={confirmDelete}
-								type="button"
-								aria-label="Confirm deletion"
-							>
-								Delete
-							</button>
-						</div>
-					</div>
-				</Dialog.Content>
-			</Dialog.Positioner>
-		</Portal>
-	</Dialog>
-{/if}
+<DeleteCharacterConfirm
+	open={showDeleteModal}
+	name={characterToDeleteName}
+	onConfirm={confirmDelete}
+	onCancel={cancelDelete}
+/>
 
 {#if showImportModal}
 	<Dialog
@@ -1652,7 +1668,9 @@
 					class="card bg-surface-100-900 w-[min(95vw,560px)] space-y-4 p-4 shadow-xl"
 				>
 					<div class="p-6">
-						<h2 class="mb-2 text-lg font-bold">Import a character</h2>
+						<h2 class="mb-2 text-lg font-bold">
+							Import a character
+						</h2>
 						<div class="space-y-2">
 							<div>
 								<p
@@ -1670,7 +1688,7 @@
 						</div>
 						<div class="mt-4 flex gap-2">
 							<button
-								class="btn preset-filled-surface-500"
+								class="btn preset-tonal-surface"
 								onclick={() => (showImportModal = false)}
 							>
 								Cancel
@@ -1703,7 +1721,9 @@
 					class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
 				>
 					<div class="p-6">
-						<h2 class="mb-2 text-lg font-bold">Import the lorebook?</h2>
+						<h2 class="mb-2 text-lg font-bold">
+							Import the lorebook?
+						</h2>
 						<p class="mb-4">
 							A lorebook is associated with this character card.
 							Would you like to import it?
@@ -1723,7 +1743,7 @@
 						/>
 						<div class="flex justify-end gap-2">
 							<button
-								class="btn preset-filled-surface-500"
+								class="btn preset-tonal-surface"
 								onclick={cancelLorebookImport}
 							>
 								Cancel
@@ -1865,7 +1885,7 @@
 					</p>
 					<div class="flex justify-end gap-2">
 						<button
-							class="btn preset-filled-surface-500"
+							class="btn preset-tonal-surface"
 							type="button"
 							onclick={() => (folderToDelete = null)}
 						>

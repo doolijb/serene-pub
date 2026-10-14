@@ -71,7 +71,7 @@
      bar would sit under the cover. -->
 <div
 	class="group bg-surface-100-900 panel-edge relative flex h-full flex-col overflow-hidden rounded-[12px] border transition-shadow hover:shadow-lg {active
-		? 'ring-primary-500 ring-offset-surface-950 ring-2 ring-offset-2'
+		? 'ring-primary-500 ring-offset-surface-50-950 ring-2 ring-offset-2'
 		: ''}"
 	role="listitem"
 	aria-current={active ? "true" : undefined}

@@ -101,6 +101,11 @@
 	 * can write to it, and re-read whenever the workspace's moves.
 	 */
 	const book = getBookData()
+	/**
+	 * A shared book is read-only (PLAN-private-messages §6.7): no New
+	 * entry, no dating by drop or press — the timeline reads.
+	 */
+	let readOnly = $derived(book.readOnly)
 	let bindings = $state<BindingWithRelations[]>([])
 	$effect(() => {
 		bindings = [...book.cast]
@@ -418,7 +423,7 @@
 			toaster.error({
 				title: "Nothing is dated yet",
 				description:
-					"Date an entry first, and the line has somewhere to drop onto."
+					"Date an entry first, and the timeline has somewhere to drop onto."
 			})
 			return
 		}
@@ -593,19 +598,21 @@
 			</h2>
 			<span
 				class="chip preset-tonal-surface shrink-0 text-xs"
-				title="The line is always in story order"
+				title="The timeline is always in story order"
 			>
 				Story order
 			</span>
-			<button
-				type="button"
-				class="btn btn-sm preset-filled-primary-500 shrink-0"
-				title="A new entry on the line carries a date"
-				onclick={() => startCreate()}
-			>
-				<Icons.Plus size={14} aria-hidden="true" />
-				New entry
-			</button>
+			{#if !readOnly}
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-primary-500 shrink-0"
+					title="A new entry on the timeline carries a date"
+					onclick={() => startCreate()}
+				>
+					<Icons.Plus size={14} aria-hidden="true" />
+					New entry
+				</button>
+			{/if}
 		</div>
 		<p class="text-surface-700-300 text-xs" data-lore-time-summary>
 			{headerLine}
@@ -613,7 +620,7 @@
 
 		{#if ticks.length === 0}
 			<p class="text-surface-700-300 p-6 text-center text-sm italic">
-				{lensEmptyMessage("time")}
+				{readOnly ? "Nothing is dated yet." : lensEmptyMessage("time")}
 			</p>
 		{:else}
 			<!-- The axis, which is also where a drop lands. -->
@@ -622,15 +629,19 @@
 					class="text-surface-700-300 w-20 shrink-0 text-xs"
 					id="loreTimeAxisLabel"
 				>
-					Story line
+					Timeline
 				</span>
 				<div
 					class="bg-surface-200-800 relative h-8 min-w-0 flex-1 rounded-lg"
 					role="group"
 					aria-labelledby="loreTimeAxisLabel"
 					data-lore-time-axis
-					ondragover={(e) => e.preventDefault()}
-					ondrop={dropOnLine}
+					ondragover={(e) => {
+						if (!readOnly) e.preventDefault()
+					}}
+					ondrop={(e) => {
+						if (!readOnly) dropOnLine(e)
+					}}
 				>
 					<div
 						class="bg-surface-400-600 absolute top-1/2 right-2 left-2 h-px"
@@ -733,9 +744,9 @@
 			</ul>
 		{/if}
 
-		{#if undated.length > 0}
+		{#if undated.length > 0 && !readOnly}
 			<div class="panel-inset flex flex-col gap-2">
-				<span class="text-sm font-semibold">Not on the line</span>
+				<span class="text-sm font-semibold">Not on the timeline</span>
 				<p class="text-surface-700-300 text-xs">
 					{undatedLine(undated.length)}
 				</p>
@@ -744,8 +755,8 @@
 						{@const label = row.name || "Untitled"}
 						{@const offer =
 							dropOffer(row) === "date"
-								? `Drag ${label} onto the line, or press to date it at the end of it`
-								: `Drag ${label} onto the line, or press to add a dated history entry about this`}
+								? `Drag ${label} onto the timeline, or press to date it at the end of it`
+								: `Drag ${label} onto the timeline, or press to add a dated history entry about this`}
 						<li>
 							<!-- The chip is the control and the handle at once: a
 							     drag is the gesture, and pressing it does the same
@@ -829,7 +840,9 @@
 		<p
 			class="text-surface-700-300 flex flex-1 items-center justify-center p-6 text-center text-sm italic"
 		>
-			Pick a dated entry to edit it, or press New entry.
+			{readOnly
+				? "Pick a dated entry to read it."
+				: "Pick a dated entry to edit it, or press New entry."}
 		</p>
 	{/if}
 {/snippet}

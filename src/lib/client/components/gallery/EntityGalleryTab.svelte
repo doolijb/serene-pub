@@ -8,6 +8,12 @@
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
 	import EntityGalleryViewModal from "$lib/client/components/gallery/EntityGalleryViewModal.svelte"
+	import GeneratePortraitDialog from "$lib/client/components/gallery/GeneratePortraitDialog.svelte"
+	import { getContext } from "svelte"
+	import { SvelteSet } from "svelte/reactivity"
+	import { v4 as uuidv4 } from "uuid"
+	import { statusText as statusTextOf } from "$lib/client/i18n/state.svelte"
+	import type { StatusText } from "@serene-pub/sdk"
 
 	interface Props {
 		/**
@@ -36,7 +42,7 @@
 	let images = $state<Sockets.Media[]>([])
 	let isLoading = $state(true)
 	let isUploading = $state(false)
-	let fileInputEl: HTMLInputElement
+	let fileInputEl = $state<HTMLInputElement>()
 	let brokenIds = $state(new Set<number>())
 
 	let pendingDeleteId = $state<number | null>(null)
@@ -137,6 +143,114 @@
 		})
 	}
 
+	// ── Generate portrait (DESIGN-image-generation §6.2; I8) ─────────────
+	/**
+	 * The card's owner or an admin may draw its portrait (the server checks
+	 * again). The pictures land as gallery tiles; *Set as avatar* and *Use as
+	 * likeness image* on a tile are the owner's, like every edit of the card.
+	 */
+	const userCtx = (() => {
+		try {
+			return getContext<{ user?: { isAdmin?: boolean } } | undefined>("userCtx")
+		} catch {
+			return undefined
+		}
+	})()
+	let canGenerate = $derived(isOwner || !!userCtx?.user?.isAdmin)
+
+	let portraitOpen = $state(false)
+	let portraitPreview = $state<Sockets.Characters.PreviewPortrait.Response | null>(null)
+	let portraitPreviewing = $state(false)
+	interface PortraitRun {
+		runId: string
+		count: number
+		phase: Sockets.Characters.Portrait.Progress["phase"] | "starting"
+		status: string
+		percent: number | null
+		error: string | null
+		offered: number
+	}
+	let portraitRun = $state<PortraitRun | null>(null)
+	let portraitRunning = $derived(
+		!!portraitRun && portraitRun.phase !== "done" && portraitRun.phase !== "failed"
+	)
+	/** The pictures the last portrait run added — marked *New* on their tiles. */
+	const newIds = new SvelteSet<number>()
+
+	function requestPortraitPreview(count: number, style: "tags" | "prose") {
+		portraitPreviewing = true
+		socket.emit("characters:previewPortrait", { characterId: entityId, count, style })
+	}
+	function handlePortraitPreview(msg: Sockets.Characters.PreviewPortrait.Response) {
+		if (!matchesEntity(msg)) return
+		portraitPreviewing = false
+		portraitPreview = msg
+	}
+	function handlePortraitPreviewError(msg: { error?: string; characterId?: number }) {
+		if (!matchesEntity(msg)) return
+		portraitPreviewing = false
+		portraitPreview = portraitPreview
+			? { ...portraitPreview, refusal: msg.error ?? "Could not prepare the portrait." }
+			: null
+	}
+	function generatePortrait(count: number, style: "tags" | "prose") {
+		portraitOpen = false
+		const runId = uuidv4()
+		newIds.clear()
+		portraitRun = {
+			runId,
+			count,
+			phase: "starting",
+			status: "",
+			percent: null,
+			error: null,
+			offered: 0
+		}
+		socket.emit("characters:generatePortrait", {
+			characterId: entityId,
+			count,
+			style,
+			runId
+		})
+	}
+	function handlePortraitProgress(msg: Sockets.Characters.Portrait.Progress) {
+		if (!matchesEntity(msg) || !portraitRun || msg.runId !== portraitRun.runId) return
+		portraitRun.phase = msg.phase
+		if (msg.status) portraitRun.status = statusTextOf(msg.status as StatusText)
+		else if (msg.phase === "offering") portraitRun.status = "Adding them to the gallery…"
+		if (msg.percent != null) portraitRun.percent = msg.percent
+		if (msg.phase === "done") {
+			for (const o of msg.offered ?? []) newIds.add(o.mediaId)
+			portraitRun.offered = msg.offered?.length ?? 0
+			portraitRun.percent = null
+		}
+		if (msg.phase === "failed") {
+			portraitRun.error = msg.error ?? "The portrait stopped."
+			portraitRun.status = ""
+		}
+	}
+	function handlePortraitError(msg: { error?: string; characterId?: number }) {
+		if (!matchesEntity(msg) || !portraitRun) return
+		portraitRun.phase = "failed"
+		portraitRun.error = msg.error ?? "The portrait did not start."
+	}
+	function stopPortrait() {
+		if (portraitRun) socket.emit("pipelines:cancelRun", { runId: portraitRun.runId })
+	}
+
+	function useAsLikeness(mediaId: number) {
+		menuOpenFor = null
+		socket.emit("characters:setLikenessImage", { characterId: entityId, mediaId })
+	}
+	function handleLikenessOk(msg: { characterId?: number }) {
+		if (!matchesEntity(msg)) return
+		toaster.success({ title: "Likeness image updated" })
+	}
+	function handleLikenessErr(msg: { error?: string; characterId?: number }) {
+		if (!matchesEntity(msg)) return
+		toaster.error({ title: msg.error ?? "Could not set the likeness image." })
+	}
+
 	function matchesEntity(msg: { characterId?: number }) {
 		return msg.characterId === entityId
 	}
@@ -211,7 +325,28 @@
 			declareInterest<"characters:setAvatar">(
 				"characters:setAvatar",
 				handleSetAvatarOk
-			)
+			),
+			// 🚧 Generate portrait (I8): the preview, the run's pushes and the
+			// likeness pick are SCOPED on characterId; the `:error` twins are
+			// bare and filtered by `matchesEntity`.
+			declareInterest<any>(
+				interestKey("characters:previewPortrait", id),
+				handlePortraitPreview
+			),
+			declareInterest<any>(
+				interestKey("characters:portrait", id),
+				handlePortraitProgress
+			),
+			declareInterest<any>(
+				interestKey("characters:setLikenessImage", id),
+				handleLikenessOk
+			),
+			declareInterest<any>(
+				"characters:previewPortrait:error",
+				handlePortraitPreviewError
+			),
+			declareInterest<any>("characters:generatePortrait:error", handlePortraitError),
+			declareInterest<any>("characters:setLikenessImage:error", handleLikenessErr)
 		]
 		socket.emit("characters:listGallery", { characterId: id })
 		return () => {
@@ -221,18 +356,33 @@
 </script>
 
 <div class="space-y-3">
-	{#if isOwner}
-		<input
-			bind:this={fileInputEl}
-			type="file"
-			accept="image/*"
-			class="hidden"
-			onchange={handleFileChange}
-		/>
-		<div class="flex items-center justify-end">
+	{#if isOwner || canGenerate}
+		{#if isOwner}
+			<input
+				bind:this={fileInputEl}
+				type="file"
+				accept="image/*"
+				class="hidden"
+				onchange={handleFileChange}
+			/>
+		{/if}
+		<div class="flex flex-wrap items-center justify-end gap-2">
+			{#if canGenerate}
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					onclick={() => (portraitOpen = true)}
+					disabled={portraitRunning}
+					title="Draw a few pictures of this character to choose from"
+				>
+					<Icons.WandSparkles class="h-3 w-3" aria-hidden="true" />
+					Generate portrait
+				</button>
+			{/if}
+			{#if isOwner}
 			<button
 				type="button"
-				class="btn btn-sm preset-filled-surface-500"
+				class="btn btn-sm preset-tonal-surface"
 				onclick={triggerUpload}
 				disabled={isUploading}
 				title="Upload an image"
@@ -244,6 +394,57 @@
 				{/if}
 				Upload
 			</button>
+			{/if}
+		</div>
+	{/if}
+
+	{#if portraitRun}
+		<div
+			class="bg-surface-200-800 flex items-start gap-2 rounded-lg p-2 text-sm"
+			aria-live="polite"
+			data-testid="portrait-run"
+		>
+			{#if portraitRunning}
+				<Icons.Loader2 class="mt-0.5 h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
+				<div class="min-w-0 flex-1">
+					<p>
+						Drawing {portraitRun.count}
+						{portraitRun.count === 1 ? "picture" : "pictures"}{portraitRun.percent != null
+							? ` · ${Math.round(portraitRun.percent)}%`
+							: ""}
+					</p>
+					{#if portraitRun.status}
+						<p class="text-surface-600-400 text-xs">{portraitRun.status}</p>
+					{/if}
+				</div>
+				<button type="button" class="btn btn-sm preset-tonal-surface" onclick={stopPortrait}>
+					Stop
+				</button>
+			{:else if portraitRun.phase === "failed"}
+				<Icons.CircleAlert class="text-error-600-400 mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+				<p class="text-error-600-400 min-w-0 flex-1" role="alert">{portraitRun.error}</p>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					onclick={() => (portraitRun = null)}
+				>
+					Dismiss
+				</button>
+			{:else}
+				<Icons.Check class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+				<p class="min-w-0 flex-1">
+					{portraitRun.offered}
+					{portraitRun.offered === 1 ? "new picture" : "new pictures"} below.
+					{#if isOwner}Open a picture's menu to use it as the avatar.{/if}
+				</p>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					onclick={() => (portraitRun = null)}
+				>
+					Dismiss
+				</button>
+			{/if}
 		</div>
 	{/if}
 
@@ -335,6 +536,11 @@
 										onSelect: () => setAsAvatar(tile.id)
 									},
 									{
+										label: "Use as likeness image",
+										icon: Icons.ScanFace,
+										onSelect: () => useAsLikeness(tile.id)
+									},
+									{
 										label: "Delete",
 										icon: Icons.Trash2,
 										destructive: true,
@@ -350,6 +556,15 @@
 								{/snippet}
 							</RowMenu>
 						</div>
+					{/if}
+
+					{#if newIds.has(tile.id)}
+						<span
+							class="bg-surface-950/70 pointer-events-none absolute bottom-1 left-1 rounded-full px-1.5 text-[10px] font-semibold text-white"
+							data-testid="gallery-new-badge"
+						>
+							New
+						</span>
 					{/if}
 
 					{#if currentAvatarMediaId === tile.id}
@@ -401,7 +616,7 @@
 				</p>
 				<footer class="flex justify-end gap-2">
 					<button
-						class="btn preset-filled-surface-400-600"
+						class="btn preset-tonal-surface"
 						onclick={cancelDelete}
 					>
 						Cancel
@@ -418,6 +633,16 @@
 		</Dialog.Positioner>
 	</Portal>
 </Dialog>
+
+<GeneratePortraitDialog
+	bind:open={portraitOpen}
+	characterName={entityName}
+	preview={portraitPreview}
+	previewing={portraitPreviewing}
+	running={portraitRunning}
+	onPreview={requestPortraitPreview}
+	onGenerate={generatePortrait}
+/>
 
 <EntityGalleryViewModal
 	bind:open={lightboxOpen}

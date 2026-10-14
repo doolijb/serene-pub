@@ -22,6 +22,7 @@ import * as schema from "$lib/server/db/schema"
 import { isFailedQuery } from "$lib/server/db/errors"
 import { and, asc, desc, eq, inArray, or, sql, type SQL } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
+import { loadDocument } from "$lib/server/pipelines/boot/store"
 import {
 	clearOption,
 	listNamespaces,
@@ -32,6 +33,7 @@ import {
 	namespaceView,
 	resetConfig,
 	selectNamedConfig,
+	optionId as optionHandle,
 	stepKeyFor,
 	writeOption,
 	OptionNotFoundError,
@@ -48,6 +50,8 @@ import { participantRowId } from "$lib/server/pipelines/runtime/portrayals"
 // handler in scope, so it consults the interest gate itself — see
 // `registerPipelineHandlers` at the foot of this file.
 import { pushToUser } from "./utils/userPush"
+import { emitToInterested } from "./utils/broadcastHelpers"
+import { socketWants } from "./interest"
 // Owner-OR-guest, in the one place that decides it. A local
 // `eq(sessions.userId, userId)` here would be a fourth copy of a rule whose
 // previous copies locked guests out of features they were entitled to — see
@@ -72,6 +76,19 @@ import { entrySourceHash } from "$lib/server/annotations"
 import type { EntryTypeId } from "$lib/shared/entries/types"
 import { CORE_TEMPLATE_ENGINE } from "$lib/shared/pipelines/templateEngines"
 import { askerOf } from "./refusable"
+import {
+	pipelinesCatalogue,
+	pipelinesDraftDiscard,
+	pipelinesDraftGet,
+	pipelinesDraftPreview,
+	pipelinesDraftPublish,
+	pipelinesDraftPut,
+	pipelinesFork
+} from "./pipelineDrafts"
+import {
+	pipelinesCompositeDelete,
+	pipelinesCompositeSave
+} from "./pipelineComposites"
 
 /**
  * The instance secret that keys option handles.
@@ -264,6 +281,84 @@ export const pipelinesGet: Handler<
 		)
 }
 
+/**
+ * 🚧 One prompt's wording, for the prompt dialog (owner ask 2026-10-13: "so
+ * prompts can be previewed, i.e. in a popout").
+ *
+ * The permission is the view's own: the server rebuilds the `pipelines:get`
+ * view for this viewer and session, finds the option, and answers only for a
+ * prompt that option offers (one of its choices, or its current value). So a
+ * member reads exactly the prompts their session settings let them pick, and a
+ * prompt id from anywhere else is refused rather than read. Only the fields
+ * the step declares are sent — the editor's rule, and the graph builder's
+ * shared rows are why.
+ */
+export const pipelinesPromptWording: Handler<
+	Sockets.Pipelines.PromptWording.Params,
+	Sockets.Pipelines.PromptWording.Response
+> = {
+	event: "pipelines:promptWording",
+	handler: async (socket, params, emitToUser) => {
+		const echo = {
+			slug: params.slug,
+			optionId: params.optionId,
+			promptId: params.promptId
+		}
+		const refuse = (error: string) => {
+			const res = { ...echo, error }
+			emitToUser("pipelines:promptWording:error", res)
+			return res
+		}
+		try {
+			const view = await buildView(socket, params.slug, params.sessionId)
+			if (!view.pipeline) return refuse(view.error ?? "That pipeline is not available.")
+			const { groupOptions } = await import(
+				"$lib/server/pipelines/config/panel/groups"
+			)
+			const option: any = groupOptions((view.pipeline as any).groups ?? []).find(
+				(o) => o.id === params.optionId
+			)
+			if (!option || option.control !== "prompts-ref")
+				return refuse("That setting does not choose a prompt.")
+			const offered =
+				option.value === params.promptId ||
+				((option.choices ?? []) as Array<{ id: number }>).some(
+					(c) => c.id === params.promptId
+				)
+			if (!offered)
+				return refuse("That prompt is not one this step offers here.")
+			const [row] = await db
+				.select()
+				.from(schema.pipelinePrompts)
+				.where(eq(schema.pipelinePrompts.id, params.promptId))
+				.limit(1)
+			if (!row) return refuse("That prompt no longer exists.")
+			const all = (row.fields ?? {}) as Record<string, string>
+			const declared = ((option.promptFields ?? []) as string[]).length
+				? (option.promptFields as string[])
+				: Object.keys(all)
+			const res: Sockets.Pipelines.PromptWording.Response = {
+				...echo,
+				name: row.name,
+				fields: Object.fromEntries(declared.map((f) => [f, all[f] ?? ""])),
+				declared,
+				shipped: !!row.isImmutable
+			}
+			emitToUser("pipelines:promptWording", res)
+			return res
+		} catch (err) {
+			// `refusal` speaks for a write ("could not be saved"); this is a
+			// read, so only its sentences meant for a person pass through.
+			if (err instanceof OptionNotWritableError || err instanceof OptionNotFoundError)
+				return refuse(err.message)
+			console.error("[pipelines] promptWording failed:", err)
+			return refuse(
+				"That prompt could not be read. The server log has the details."
+			)
+		}
+	}
+}
+
 export const pipelinesSetOption: Handler<
 	Sockets.Pipelines.SetOption.Params,
 	Sockets.Pipelines.SetOption.Response
@@ -292,6 +387,7 @@ export const pipelinesSetOption: Handler<
 			params.slug,
 			params.sessionId
 		)
+		await pushScriptsIfChain(socket, params.slug, [params.optionId])
 		return {}
 	}
 }
@@ -323,6 +419,7 @@ export const pipelinesClearOption: Handler<
 			params.slug,
 			params.sessionId
 		)
+		await pushScriptsIfChain(socket, params.slug, [params.optionId])
 		return {}
 	}
 }
@@ -361,6 +458,8 @@ export const pipelinesResetConfig: Handler<
 			params.slug,
 			params.sessionId
 		)
+		// A reset may have cleared chains: the scripts list's use moves.
+		if (cleared) await pushScriptsAfter(socket)
 		return { cleared }
 	}
 }
@@ -382,6 +481,11 @@ export const pipelinesSetOptions: Handler<
 		const secret = await pubSecret()
 		const viewer = await viewerFor(socket, params.sessionId, params.slug)
 		let applied = 0
+		/** The handles this batch named — for the scripts list's re-send. */
+		const touched = [
+			...(params.set ?? []).map((e) => e.optionId),
+			...(params.clear ?? [])
+		]
 		try {
 			for (const entry of params.set ?? []) {
 				await writeOption(
@@ -409,6 +513,7 @@ export const pipelinesSetOptions: Handler<
 		} catch (err) {
 			const res = { error: await optionRefusal(err), applied }
 			emitToUser("pipelines:setOptions:error", res)
+			await pushScriptsIfChain(socket, params.slug, touched)
 			// The view refreshes even on a partial apply — what landed is
 			// real, and a stale panel over fresh rows is the worse outcome.
 			await emitView(
@@ -427,6 +532,7 @@ export const pipelinesSetOptions: Handler<
 			params.slug,
 			params.sessionId
 		)
+		await pushScriptsIfChain(socket, params.slug, touched)
 		// The batch's own answer, after the refreshed view: a form that
 		// waits for its Save (the admin workspace) settles on this, never
 		// on a `pipelines:get` that any other write could have sent.
@@ -2502,12 +2608,92 @@ async function scriptsAnswer(
 	const { scriptsView } = await import(
 		"$lib/server/pipelines/entities/scripts"
 	)
-	const scripts = (await scriptsView(
-		db
-	)) as Sockets.Pipelines.Scripts.Response
+	const scripts = (await scriptsView(db, {
+		secret: await pubSecret()
+	})) as Sockets.Pipelines.Scripts.Response
 	const res = { scripts }
 	emitToUser(event, res)
 	return res
+}
+
+/** The half of the Socket.IO server `pushScriptsList` reads. */
+type ScriptsPushIo = Parameters<typeof emitToInterested>[0]
+
+/**
+ * `pipelines:scripts` to EVERY admin socket that declared it.
+ *
+ * For the writes that move what the list says without being a script write
+ * (PLAN-script-placement D5): a chain set on a step, a stop guard attached to
+ * or detached from a connection, a plugin installed, switched or uninstalled
+ * (its pipelines' seams and its script kinds come and go, R67). Admin
+ * › Scripts is often another tab than the one that made the change, so the
+ * caller's `emitToUser` would leave it stale. Admin-only, like the handler
+ * (`libraryGate`): `pipelines:` is a mixed family, so the interest registry
+ * alone does not keep a member's socket out. Built once, and not at all when
+ * no admin socket declared the event. Resolves to the number of sockets sent to.
+ */
+export async function pushScriptsList(io: ScriptsPushIo): Promise<number> {
+	const all = io?.sockets?.sockets
+	if (!all || typeof all.values !== "function") return 0
+	const isAdmin = (s: any) => !!s?.user?.isAdmin
+	let wanted = false
+	for (const s of all.values())
+		if (s && isAdmin(s) && socketWants(s, "pipelines:scripts")) wanted = true
+	if (!wanted) return 0
+	const { scriptsView } = await import(
+		"$lib/server/pipelines/entities/scripts"
+	)
+	const payload = await scriptsView(db, { secret: await pubSecret() })
+	return emitToInterested(io, "pipelines:scripts", payload, isAdmin)
+}
+
+/**
+ * `pushScriptsList` for a write that has already happened: a failed re-send
+ * is logged, never the write's failure.
+ */
+export async function pushScriptsAfter(socket: { io?: unknown }): Promise<void> {
+	if (!socket?.io) return
+	try {
+		await pushScriptsList(socket.io as ScriptsPushIo)
+	} catch (err) {
+		console.warn("[pipelines] pipelines:scripts not re-sent:", err)
+	}
+}
+
+/**
+ * Whether any of these option handles names a script chain on this
+ * pipeline's published version — so an option write re-sends the scripts
+ * list only when it moved a chain. Resolved the way `writeOption` resolves a
+ * handle (a search over the declarations); a miss is "no".
+ */
+async function namesChain(slug: string, ids: readonly string[]): Promise<boolean> {
+	if (!ids.length) return false
+	const [spec] = await db
+		.select({ activeVersionId: schema.pipelineSpecs.activeVersionId })
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.slug, slug))
+		.limit(1)
+	if (!spec?.activeVersionId) return false
+	const secret = await pubSecret()
+	const wanted = new Set(ids)
+	return (await declarations(db, spec.activeVersionId)).some(
+		(d) =>
+			d.control === "scripts-chain" &&
+			wanted.has(optionHandle(secret, d.nodeKey, d.slot, d.path))
+	)
+}
+
+/** After an option write landed: re-send the scripts list if it moved a chain. */
+async function pushScriptsIfChain(
+	socket: { io?: unknown },
+	slug: string,
+	ids: readonly string[]
+): Promise<void> {
+	try {
+		if (await namesChain(slug, ids)) await pushScriptsAfter(socket)
+	} catch (err) {
+		console.warn("[pipelines] pipelines:scripts not re-sent:", err)
+	}
 }
 
 export const pipelinesScripts: Handler<
@@ -2524,9 +2710,9 @@ export const pipelinesScripts: Handler<
 		const { scriptsView } = await import(
 			"$lib/server/pipelines/entities/scripts"
 		)
-		const res = (await scriptsView(
-			db
-		)) as Sockets.Pipelines.Scripts.Response
+		const res = (await scriptsView(db, {
+			secret: await pubSecret()
+		})) as Sockets.Pipelines.Scripts.Response
 		emitToUser("pipelines:scripts", res)
 		return res
 	}
@@ -2707,9 +2893,9 @@ export const pipelinesImportScripts: Handler<
 				artifact,
 				params.accept
 			)
-			const scripts = (await scriptsView(
-				db
-			)) as Sockets.Pipelines.Scripts.Response
+			const scripts = (await scriptsView(db, {
+				secret: await pubSecret()
+			})) as Sockets.Pipelines.Scripts.Response
 			const res = { report, scripts }
 			emitToUser("pipelines:importScripts", res)
 			return res
@@ -3359,6 +3545,71 @@ export const pipelinesRuns: Handler<
  * reasons. Gated the same way the list is: administrators, any user's run
  * (R55).
  */
+/**
+ * One version as the document it is — the canvas tab's read
+ * (PLAN-pipeline-canvas-and-genre-authoring P1). The active version unless a
+ * `versionId` of this spec is named; a version of another spec is "not found"
+ * rather than served, so a slug cannot be used to read across specs.
+ */
+export const pipelinesDocument: Handler<
+	Sockets.Pipelines.Document.Params,
+	Sockets.Pipelines.Document.Response
+> = {
+	event: "pipelines:document",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const res = {
+				error: "Access denied. Only admin users can manage pipelines."
+			}
+			emitToUser("pipelines:document:error", res)
+			return res
+		}
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, params.slug))
+			.limit(1)
+		if (!spec) {
+			const res = { error: `There is no pipeline called '${params.slug}'.` }
+			emitToUser("pipelines:document:error", res)
+			return res
+		}
+		const versionId = params.versionId ?? spec.activeVersionId
+		const [version] = versionId
+			? await db
+					.select()
+					.from(schema.pipelineSpecVersions)
+					.where(
+						and(
+							eq(schema.pipelineSpecVersions.id, versionId),
+							eq(schema.pipelineSpecVersions.specId, spec.id)
+						)
+					)
+					.limit(1)
+			: []
+		if (!version) {
+			const res = {
+				error: `'${params.slug}' has no version ${params.versionId ?? "(active)"}.`
+			}
+			emitToUser("pipelines:document:error", res)
+			return res
+		}
+		const document = await loadDocument(db, version.id)
+		const res: Sockets.Pipelines.Document.Response = {
+			document,
+			version: {
+				id: version.id,
+				semver: version.semver,
+				status: version.status,
+				canonicalHash: version.canonicalHash,
+				isActive: version.id === spec.activeVersionId
+			}
+		}
+		emitToUser("pipelines:document", res)
+		return res
+	}
+}
+
 export const pipelinesRun: Handler<
 	Sockets.Pipelines.Run.Params,
 	Sockets.Pipelines.Run.Response
@@ -5487,7 +5738,7 @@ export const pipelinesArtifactRuns: Handler<
 		if (kind === "file") {
 			const { getMedia } = await import("$lib/server/media")
 			const file = await getMedia(db, entityId)
-			// The `media:*` by-id handlers' own check, and deliberately not the
+			// The `media:*` by-id handlers' own check, and not the
 			// wider `canViewMedia`: this answers for the media manager, which
 			// lists nothing but the caller's own blobs.
 			if (!file || file.userId !== userId) return refuse("No such image.")
@@ -6093,11 +6344,22 @@ export function registerPipelineHandlers(
 	register(socket, pipelinesList, emitToUser)
 	register(socket, pipelinesConfigsIndex, emitToUser)
 	register(socket, pipelinesGet, emitToUser)
+	register(socket, pipelinesPromptWording, emitToUser)
 	register(socket, pipelinesSetOption, emitToUser)
 	register(socket, pipelinesClearOption, emitToUser)
 	register(socket, pipelinesResetConfig, emitToUser)
 	register(socket, pipelinesSetOptions, emitToUser)
 	register(socket, pipelinesRun, emitToUser)
+	register(socket, pipelinesDocument, emitToUser)
+	register(socket, pipelinesDraftGet, emitToUser)
+	register(socket, pipelinesDraftPut, emitToUser)
+	register(socket, pipelinesDraftDiscard, emitToUser)
+	register(socket, pipelinesDraftPreview, emitToUser)
+	register(socket, pipelinesDraftPublish, emitToUser)
+	register(socket, pipelinesCatalogue, emitToUser)
+	register(socket, pipelinesFork, emitToUser)
+	register(socket, pipelinesCompositeSave, emitToUser)
+	register(socket, pipelinesCompositeDelete, emitToUser)
 	register(socket, pipelinesRunExplain, emitToUser)
 	register(socket, pipelinesPreviewRetrieval, emitToUser)
 	register(socket, pipelinesMessageExplain, emitToUser)

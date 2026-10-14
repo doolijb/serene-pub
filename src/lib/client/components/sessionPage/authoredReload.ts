@@ -24,6 +24,8 @@ import { parseAuthoredArtifactSrc, parseAuthoredOwnerId } from "$lib/shared/widg
 export interface RetargetablePanel {
 	surface: { kind: string; owner?: string }
 	src?: string
+	/** The scopes the widget holds, bare — re-posted to the mount when they change. */
+	grants?: readonly string[]
 }
 
 /** Every authored owner among these panels, sorted, once each. */
@@ -65,6 +67,30 @@ export function retargetAuthoredSrc(
 		if (!p || p.surface?.kind !== "remote" || p.surface.owner !== change.ownerId) continue
 		if (p.src === next) continue
 		p.src = next
+		changed++
+	}
+	return changed
+}
+
+/**
+ * Give every remote panel of `ownerId` the grants an admin's review left it
+ * (`components:changed.grants`, bare scopes): the mount re-posts them and
+ * withdraws a revoked section, so an open widget says "not granted" without
+ * a reload. Returns how many panels changed. Refused — nothing changes —
+ * when the owner is not an authored owner or the push carries no list.
+ */
+export function retargetAuthoredGrants(
+	panels: Iterable<RetargetablePanel | null | undefined>,
+	change: { ownerId: string; grants?: readonly string[] }
+): number {
+	if (!parseAuthoredOwnerId(change.ownerId) || !Array.isArray(change.grants)) return 0
+	const next = change.grants.filter((g): g is string => typeof g === "string")
+	let changed = 0
+	for (const p of panels) {
+		if (!p || p.surface?.kind !== "remote" || p.surface.owner !== change.ownerId) continue
+		const now = p.grants ?? []
+		if (now.length === next.length && now.every((g, i) => g === next[i])) continue
+		p.grants = [...next]
 		changed++
 	}
 	return changed

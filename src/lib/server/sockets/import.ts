@@ -38,6 +38,10 @@ import {
 } from "$lib/shared/utils/sillyTavernPaths"
 import { characterFieldsFromParsedData } from "./characters"
 import {
+	likenessFromCardExtensions,
+	withLikeness
+} from "$lib/server/characters/likeness"
+import {
 	ENTRY_INSERT_BATCH,
 	assertBookWithinImportLimits,
 	assertEntryWithinImportLimits,
@@ -976,7 +980,12 @@ export const importExecuteSillyTavern: Handler<
 							...characterFieldsFromParsedData(d),
 							userId,
 							isFavorite: false,
-							extensions: d.extensions ?? {}
+							// 🚧 SillyTavern's `sd_character_prompt`, when
+							// the card has one, read into our likeness (R5).
+							extensions: withLikeness(
+								d.extensions ?? {},
+								likenessFromCardExtensions(d.extensions)
+							)
 						})
 						.returning()
 

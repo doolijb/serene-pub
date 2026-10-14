@@ -106,7 +106,7 @@ const HEADINGS = [
 	"## Database and backups",
 	"## Counts",
 	"## Connections",
-	"## Capability defaults",
+	"## Default loadouts",
 	"## Plugins",
 	"## Plugin failures (last 7 days)",
 	"## Pipelines",

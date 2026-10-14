@@ -18,11 +18,14 @@ import * as schema from "$lib/server/db/schema"
 import { db as appDb } from "$lib/server/db"
 import { sessionsReferencingFile } from "$lib/server/attachments/references"
 import { sessionAccessFor } from "$lib/server/messages/permissions"
+import { isConversationMember } from "$lib/server/conversations/membership"
 import {
 	checkSessionAccess,
 	canViewCharacter
 } from "$lib/server/utils/sessionAccess"
 import { MediaVisibility } from "$lib/shared/constants/MediaVisibility"
+import { canViewLorebook } from "$lib/server/utils/ownedBook"
+import { eq, inArray } from "drizzle-orm"
 
 type FileRow = typeof schema.files.$inferSelect
 
@@ -40,6 +43,14 @@ export async function canViewMedia(
 	// The owner always sees their own.
 	if (file.userId === userId) return true
 
+	// A file uploaded into a private conversation: every member reads it
+	// (PLAN-private-messages §4). Membership is the only authority there —
+	// no admin bypass.
+	if (file.conversationId) {
+		if (await isConversationMember(db, file.conversationId, userId))
+			return true
+	}
+
 	// Layer 1 — derived from the parent, most specific first.
 	if (file.sessionId) {
 		const access = await checkSessionAccess(file.sessionId, userId)
@@ -50,6 +61,30 @@ export async function canViewMedia(
 	// too — one branch answers for the cast and the voices alike.
 	if (file.characterId) {
 		if (await canViewCharacter(file.characterId, userId)) return true
+	}
+
+	// A cast member's face (PLAN-cast-retold-fields): whoever may read a book
+	// whose member WEARS this file, or is in a session reading that book —
+	// that is where the face is drawn. Judged by the members that wear it, not
+	// by `files.lorebook_id` alone: files are one row per (user, bytes), so the
+	// same picture can be worn in a second book, or be a gallery image of a
+	// card the session no longer seats (review 2026-10-13). The stamp still
+	// counts, for a book's own upload no member wears yet.
+	const wornIn = await db
+		.selectDistinct({ lorebookId: schema.lorebookBindings.lorebookId })
+		.from(schema.lorebookBindings)
+		.where(eq(schema.lorebookBindings.faceMediaId, file.id))
+	const books = new Set(wornIn.map((r) => r.lorebookId))
+	if (file.lorebookId) books.add(file.lorebookId)
+	if (books.size) {
+		for (const bookId of books)
+			if (await canViewLorebook(bookId, userId, { db })) return true
+		const sessions = await db
+			.select({ id: schema.sessions.id })
+			.from(schema.sessions)
+			.where(inArray(schema.sessions.lorebookId, [...books]))
+		for (const s of sessions)
+			if ((await checkSessionAccess(s.id, userId)).hasAccess) return true
 	}
 
 	// Shown by an attachment (PLAN-composer-attachments §6.3): a file a

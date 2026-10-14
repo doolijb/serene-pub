@@ -31,6 +31,7 @@ import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
+import { defaultLoadoutRow } from "$lib/server/loadouts/testing"
 
 let testDb: TestDb
 let dataDir: string
@@ -155,7 +156,7 @@ async function star(
 	connectionId: number | null,
 	connectionModelId?: number | null
 ) {
-	await testDb.delete(schema.connectionDefaults)
+	await testDb.delete(schema.loadouts)
 	let mid: number | null | undefined = connectionModelId
 	if (connectionId != null && mid === undefined) {
 		const [m] = await testDb
@@ -165,12 +166,12 @@ async function star(
 			.limit(1)
 		mid = m?.id ?? null
 	}
-	await testDb.insert(schema.connectionDefaults).values({
+	await testDb.insert(schema.loadouts).values(defaultLoadoutRow({
 		input: "text",
 		output: "entities",
 		connectionId,
 		connectionModelId: mid ?? null
-	})
+	}))
 }
 
 const annotationsOf = async (entryId: number) =>

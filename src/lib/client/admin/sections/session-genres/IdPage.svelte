@@ -15,13 +15,24 @@
 	 * - **Plugin swaps** — the admin's switch per contribution
 	 *   (`plugins.disabled_swaps`, Q-B4c).
 	 *
+	 * A genre made on this pub (`editable`, PLAN-pipeline-canvas-and-genre-
+	 * authoring §6.2) adds, above all of that, a **Readiness** checklist
+	 * (`genreReadiness.ts`), an editable **About**, its **Session fields**
+	 * (a `SettingsSchema` definition editor with a live preview) and an
+	 * **Events** card that writes the default preset's bindings (ruling 5);
+	 * with plugins on, **Export as plugin…** packages it. Shipped genres keep
+	 * the read-only surface and shape.
+	 *
+	 * **Pipelines** opens Admin › Pipelines (the Pipelines rail view that
+	 * opened at this genre was retired 2026-10-12).
+	 *
 	 * Every switch, tick and new row is an unsaved edit until **Save** (owner
 	 * ruling 2026-10-02: "levers wait for Save"; STYLE-GUIDE §6.14). The
 	 * server takes these one setting at a time, so Save sends the difference
 	 * as single writes in order (`saveInSequence`), waits for each answer, and
 	 * says which landed — never "saved" before the last one has.
 	 */
-	import { getContext, onMount, untrack } from "svelte"
+	import { getContext, onMount, tick, untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import {
 		adminGoto as goto,
@@ -29,8 +40,13 @@
 		adminUnsavedEdits
 	} from "$lib/client/admin/adminRouter.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
+	import {
+		getAdminInterestContext,
+		requestWithInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { awaitReply } from "$lib/client/utils/awaitReply"
+	import { downloadBlob } from "$lib/client/utils/downloadBlob"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
 	import AdminList, { type AdminColumn } from "$lib/client/components/admin/AdminList.svelte"
@@ -54,6 +70,16 @@
 		type SaveStep
 	} from "$lib/client/admin/sequentialSave"
 	import Select from "$lib/client/components/inputs/Select.svelte"
+	import PresetBindingsRows, {
+		type PresetBindings
+	} from "$lib/client/components/admin/PresetBindingsRows.svelte"
+	import SettingsSchemaEditor, {
+		rowProblems,
+		rowsToSchema,
+		schemaToRows,
+		type FieldRow
+	} from "./SettingsSchemaEditor.svelte"
+	import { genreReadiness, type ReadinessAction } from "./genreReadiness"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const socket = useTypedSocket()
@@ -80,21 +106,44 @@
 		presets: InlineRow<PresetValues>[]
 		/** Swap contribution key → switched on. */
 		swaps: Record<string, boolean>
+		/** Name, description, family — editable on a genre made on this pub. */
+		about: { name: string; description: string; family: string }
+		/** The new-session form's fields, as the editor holds them. */
+		fields: FieldRow[]
+		/** The SAVED default preset's bindings — the Events card writes them. */
+		bindings: PresetBindings
 	}
 
 	const swapKeyOf = (r: SwapRow) => `${r.pluginId}|${r.spec}|${r.node}|${r.definition}`
 	const presetKey = (id: number) => `id-${id}`
 
-	function draftOf(d: Detail): Draft {
+	function draftOf(live: Detail): Draft {
+		const d = $state.snapshot(live) as Detail
+		const def = d.presets.find((p) => p.id === d.genre?.defaultPresetId)
 		return {
 			enabled: !!d.genre?.enabled,
 			defaultKey: d.genre?.defaultPresetId != null ? presetKey(d.genre.defaultPresetId) : "",
 			presets: d.presets.map((p) => savedInlineRow(p.id, { name: p.name, enabled: p.enabled })),
-			swaps: Object.fromEntries((d.swaps ?? []).map((r) => [swapKeyOf(r), r.enabled]))
+			swaps: Object.fromEntries((d.swaps ?? []).map((r) => [swapKeyOf(r), r.enabled])),
+			about: {
+				name: d.genre?.name ?? "",
+				description: d.genre?.description ?? "",
+				family: d.genre?.family ?? ""
+			},
+			fields: schemaToRows(d.genre?.fields),
+			bindings: { ...(def?.bindings ?? {}) }
 		}
 	}
 
-	let draft = $state<Draft>({ enabled: true, defaultKey: "", presets: [], swaps: {} })
+	let draft = $state<Draft>({
+		enabled: true,
+		defaultKey: "",
+		presets: [],
+		swaps: {},
+		about: { name: "", description: "", family: "" },
+		fields: [],
+		bindings: {}
+	})
 	/**
 	 * Presets are a set (the server's order is not the form's), and a row's
 	 * key is the form's own bookkeeping — a row created by this Save keeps
@@ -102,7 +151,8 @@
 	 */
 	const edits = new UnsavedEdits(() => draft, {
 		unordered: ["presets"],
-		ignore: ["presets.key"]
+		// A field row's uid is the editor's bookkeeping, minted afresh per read.
+		ignore: ["presets.key", "fields.uid"]
 	})
 	const dirty = $derived(edits.dirty)
 	adminUnsavedEdits(() => edits.dirty)
@@ -141,6 +191,100 @@
 				"sessionGenres:detail",
 				{ genreId: untrack(() => genreId) },
 				onDetail
+			)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
+	})
+
+	/* ── authoring: a genre made on this pub ────────────────────────── */
+
+	const editable = $derived(detail?.genre?.editable === true)
+	/** The SAVED default preset — the one the Events card binds. */
+	const defaultPreset = $derived(
+		detail?.genre?.defaultPresetId != null
+			? detail.presets.find((p) => p.id === detail!.genre!.defaultPresetId)
+			: undefined
+	)
+	const eventsEditable = $derived(editable && !!defaultPreset && !defaultPreset.isImmutable)
+	const readiness = $derived(detail?.genre && editable ? genreReadiness(detail) : null)
+	const fieldProblems = $derived(rowProblems(draft.fields))
+
+	type ConfigRow = Sockets.Pipelines.ConfigsIndex.Row
+	let configs = $state<ConfigRow[]>([])
+	/**
+	 * The configurations a binding may name. The app-wide registry, not the
+	 * admin context: `pipelines:` is a MIXED family (see the preset page).
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin || !eventsEditable) return
+		return requestWithInterest("pipelines:configsIndex", {}, (res) => (configs = res.configs))
+	})
+
+	/** Scroll to one of this form's cards and put focus in it. */
+	async function goToSection(section: string) {
+		await tick()
+		const el = document.getElementById(section)
+		if (!el) return
+		if (el instanceof HTMLDetailsElement) el.open = true
+		el.scrollIntoView({ behavior: "smooth", block: "start" })
+		el.querySelector<HTMLElement>("input:not([disabled]), textarea, button:not([disabled])")?.focus({
+			preventScroll: true
+		})
+	}
+	function runAction(a: ReadinessAction) {
+		if (a.kind === "section") void goToSection(a.section)
+		else if (a.kind === "href") void goto(a.href)
+		else openExport()
+	}
+
+	/* ── export as plugin ───────────────────────────────────────────── */
+
+	const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
+	let exportOpen = $state(false)
+	let exportVersion = $state("1.0.0")
+	/** With source: the package plus what builds it (`exportScaffold.ts`). */
+	let exportSource = $state(false)
+	let exporting = $state(false)
+	let exportError = $state<string | null>(null)
+	const canExport = $derived(editable && detail?.genre?.pluginsEnabled === true)
+
+	function openExport() {
+		exportError = null
+		exportOpen = true
+	}
+	function confirmExport() {
+		const version = exportVersion.trim()
+		if (!SEMVER.test(version)) {
+			exportError = "A version is three numbers with dots, like 1.0.0."
+			return
+		}
+		exportError = null
+		exporting = true
+		socket.emit("plugins:exportPackage", {
+			genreId,
+			version,
+			...(exportSource ? { scaffold: true } : {})
+		})
+	}
+
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const releases = [
+			interest.declareInterest<"plugins:exportPackage">("plugins:exportPackage", (res) => {
+				if (!untrack(() => exporting)) return
+				exporting = false
+				exportOpen = false
+				downloadBlob(res)
+			}),
+			interest.declareInterest<"plugins:exportPackage:error">(
+				"plugins:exportPackage:error",
+				(res) => {
+					if (!untrack(() => exporting)) return
+					exporting = false
+					exportError = res.error ?? "The genre was not exported."
+				}
 			)
 		]
 		return () => {
@@ -209,6 +353,15 @@
 			return
 		}
 
+		if (editable && !draft.about.name.trim()) {
+			formErrors = ["A genre needs a name — fill in About's Name."]
+			return
+		}
+		if (editable && fieldProblems.size) {
+			formErrors = ["A session field needs fixing before it can be saved — see Session fields."]
+			return
+		}
+
 		const slug = genreId
 		const saved = draftOf(detail)
 		const work = $state.snapshot(draft) as Draft
@@ -235,6 +388,59 @@
 						match: (r) => r.slug === slug
 					})
 			})
+
+		// A genre made on this pub: its create document's `genre` block, as one
+		// write (each is a new published version of the create pipeline).
+		if (editable) {
+			const params: Sockets.SessionAdmin.UpdateGenre.Params = { slug }
+			const about = {
+				name: work.about.name.trim(),
+				description: work.about.description.trim(),
+				family: work.about.family.trim()
+			}
+			const aboutChanged =
+				about.name !== saved.about.name ||
+				about.description !== saved.about.description ||
+				about.family !== saved.about.family
+			if (aboutChanged) Object.assign(params, about)
+			const fields = rowsToSchema(work.fields)
+			const fieldsChanged = JSON.stringify(fields) !== JSON.stringify(rowsToSchema(saved.fields))
+			if (fieldsChanged) params.fields = fields
+			if (aboutChanged || fieldsChanged)
+				steps.push({
+					label:
+						aboutChanged && fieldsChanged
+							? "About and session fields"
+							: aboutChanged
+								? "About"
+								: "Session fields",
+					run: () =>
+						awaitReply({
+							socket,
+							event: "sessionGenres:update",
+							errorEvent: "sessionGenres:update:error",
+							params,
+							match: (r) => r.slug === slug
+						})
+				})
+		}
+
+		// The Events card: the saved default preset's bindings (ruling 5).
+		if (eventsEditable && defaultPreset && !sameBindings(work.bindings, saved.bindings)) {
+			const id = defaultPreset.id
+			const bindings = work.bindings
+			steps.push({
+				label: `Events of ${defaultPreset.name}`,
+				run: () =>
+					awaitReply({
+						socket,
+						event: "sessionPresets:update",
+						errorEvent: "sessionPresets:update:error",
+						params: { id, bindings },
+						match: (r) => r.preset?.id === id
+					})
+			})
+		}
 
 		for (const row of changes.deleted) {
 			const id = Number(row.id)
@@ -380,6 +586,16 @@
 		land(intent)
 	}
 
+	function sameBindings(a: PresetBindings, b: PresetBindings): boolean {
+		const flat = (x: PresetBindings) =>
+			JSON.stringify(
+				Object.keys(x)
+					.sort()
+					.map((k) => [k, x[k]!.spec, x[k]!.config ?? null])
+			)
+		return flat(a) === flat(b)
+	}
+
 	/* ── the inline's columns ───────────────────────────────────────── */
 
 	const presetColumns: AdminChangelistColumn<InlineRow<PresetValues>>[] = [
@@ -498,6 +714,9 @@
 		onSave={save}
 	>
 		{#snippet headerActions()}
+			<a class="btn btn-sm preset-tonal-surface" href="/admin/pipelines">
+				<Icons.Workflow size={14} aria-hidden="true" /> Pipelines
+			</a>
 			<a
 				class="btn btn-sm preset-tonal-surface"
 				href="/admin/pipelines/events?genre={encodeURIComponent(genreId)}"
@@ -515,6 +734,11 @@
 			<a class="btn btn-sm preset-tonal-surface" href="/admin/plugins">
 				<Icons.Puzzle size={14} aria-hidden="true" /> Plugins
 			</a>
+			{#if canExport}
+				<button type="button" class="btn btn-sm preset-tonal-surface" onclick={openExport}>
+					<Icons.PackageOpen size={14} aria-hidden="true" /> Export as plugin…
+				</button>
+			{/if}
 		{/snippet}
 		{#snippet headerExtra()}
 			<div class="flex flex-wrap items-center gap-1.5 text-xs">
@@ -527,7 +751,97 @@
 			</div>
 		{/snippet}
 
-		<AdminFieldset title="Availability">
+		{#if readiness}
+			<section class="panel-card flex flex-col gap-3" aria-labelledby="genre-readiness-heading" id="readiness">
+				<div class="flex items-center gap-2">
+					<h2 id="genre-readiness-heading" class="text-sm font-medium">Readiness</h2>
+					<span class="text-surface-600-400 text-[11px]">
+						{readiness.lines.filter((l) => l.done).length} of {readiness.lines.length}
+					</span>
+				</div>
+				<ul class="flex flex-col gap-3">
+					{#each readiness.lines as line (line.id)}
+						<li class="flex flex-wrap items-start gap-3" data-readiness={line.id} data-done={line.done}>
+							<span
+								class="mt-1.5 size-2 shrink-0 rounded-full {line.done
+									? 'bg-success-500'
+									: 'bg-primary-500'}"
+								aria-hidden="true"
+							></span>
+							<div class="min-w-0 flex-1">
+								<p class="text-sm font-medium">
+									<span class="sr-only">{line.done ? "Done:" : "To do:"}</span>
+									{line.label}
+									{#if line.optional}
+										<span class="text-surface-600-400 text-xs font-normal">· optional</span>
+									{/if}
+								</p>
+								<p class="text-surface-600-400 text-xs">{line.detail}</p>
+							</div>
+							{#if line.action}
+								<button
+									type="button"
+									class="btn btn-sm preset-tonal-primary shrink-0"
+									onclick={() => runAction(line.action!)}
+								>
+									{line.action.label}
+								</button>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			</section>
+		{/if}
+
+		{#if editable}
+			<AdminFieldset
+				id="about"
+				title="About"
+				description="What people see when they pick the genre. Saving publishes a new version of its create pipeline."
+			>
+				<div class="grid gap-4 @min-[36rem]/content:grid-cols-2">
+					<AdminField id="genre-about-name" label="Name" required>
+						<input
+							id="genre-about-name"
+							class="input"
+							type="text"
+							bind:value={draft.about.name}
+						/>
+					</AdminField>
+					<AdminField id="genre-about-family" label="Family" help="Groups genres in the picker.">
+						<input
+							id="genre-about-family"
+							class="input"
+							type="text"
+							bind:value={draft.about.family}
+							aria-describedby="genre-about-family-help"
+						/>
+					</AdminField>
+					<AdminField
+						id="genre-about-description"
+						label="Description"
+						class="@min-[36rem]/content:col-span-2"
+					>
+						<textarea
+							id="genre-about-description"
+							class="textarea"
+							rows={2}
+							bind:value={draft.about.description}
+						></textarea>
+					</AdminField>
+				</div>
+			</AdminFieldset>
+
+			<AdminFieldset
+				id="session-fields"
+				title="Session fields"
+				description="What the new-session form asks for. Each answer is stored with the session, where its pipelines read it."
+			>
+				<SettingsSchemaEditor bind:rows={draft.fields} idPrefix="genre-field" />
+			</AdminFieldset>
+		{/if}
+
+		<AdminFieldset id="availability" title="Availability">
 			<label class="flex min-h-10 items-center gap-2 text-sm">
 				<input type="checkbox" class="checkbox" bind:checked={draft.enabled} />
 				People can start {genre.name} sessions
@@ -628,7 +942,22 @@
 			{/snippet}
 		</AdminInline>
 
+		{#if eventsEditable && defaultPreset}
+			<AdminFieldset
+				id="events"
+				title="Events"
+				description="Which pipeline answers each event in {defaultPreset.name}, the default preset. Only pipelines whose lock names this genre are offered; open events take any number and are not bound here."
+			>
+				<PresetBindingsRows
+					slots={detail.slots}
+					bind:bindings={draft.bindings}
+					{configs}
+					stale={defaultPreset.staleBindings ?? []}
+				/>
+			</AdminFieldset>
+		{:else}
 		<AdminFieldset
+			id="events"
 			title="Event surface"
 			description="What this genre declares, and which published pipelines answer each event. A preset binds the events that are not open; required ones must be bound for a preset to be offered."
 		>
@@ -674,6 +1003,7 @@
 				{/snippet}
 			</AdminList>
 		</AdminFieldset>
+		{/if}
 
 		{#if matrixSlots.length && detail.presets.length}
 			<AdminFieldset
@@ -779,13 +1109,70 @@
 			{/if}
 		</AdminFieldset>
 
-		<AdminFieldset title="Shape" description="The genre's declared shape, as the server reads it." collapsible>
-			<pre
-				class="bg-surface-50-950 overflow-x-auto rounded-[10px] p-2 font-mono text-[11px]">{JSON.stringify(
-					genre.shape,
-					null,
-					2
-				)}</pre>
-		</AdminFieldset>
+		{#if !editable}
+			<AdminFieldset title="Shape" description="The genre's declared shape, as the server reads it." collapsible>
+				<pre
+					class="bg-surface-50-950 overflow-x-auto rounded-[10px] p-2 font-mono text-[11px]">{JSON.stringify(
+						genre.shape,
+						null,
+						2
+					)}</pre>
+			</AdminFieldset>
+		{/if}
 	</AdminChangeForm>
+
+	<!-- ── export as plugin ─────────────────────────────────────────── -->
+	<Dialog open={exportOpen} onOpenChange={(e) => (exportOpen = e.open)}>
+		<Portal>
+			<Dialog.Backdrop class="bg-surface-950/60 fixed inset-0 z-50" />
+			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+				<Dialog.Content
+					class="bg-surface-100-900 border-surface-200-800 flex w-[30rem] max-w-full flex-col gap-3 rounded-[12px] border p-4"
+				>
+					<Dialog.Title class="text-base font-semibold">Export {genre.name} as a plugin</Dialog.Title>
+					<Dialog.Description class="text-surface-600-400 text-sm">
+						A zip of its pipelines, preset, configurations and layout, under its owner slug — installable on another pub from Admin › Plugins.
+					</Dialog.Description>
+					<label class="flex flex-col gap-1 text-sm">
+						<span class="font-medium">Version</span>
+						<input
+							class="input font-mono"
+							placeholder="1.0.0"
+							bind:value={exportVersion}
+							aria-describedby="genre-export-hint"
+							onkeydown={(e) => e.key === "Enter" && confirmExport()}
+						/>
+						<span id="genre-export-hint" class="text-surface-600-400 text-xs">
+							Three numbers with dots. Raise it each time you share a changed copy.
+						</span>
+					</label>
+					<label class="flex min-h-10 items-center gap-2 text-sm">
+						<input
+							type="checkbox"
+							class="checkbox"
+							bind:checked={exportSource}
+							aria-describedby="genre-export-source-hint"
+						/>
+						Include the source
+					</label>
+					<p id="genre-export-source-hint" class="text-surface-600-400 -mt-2 text-xs">
+						Adds the files a developer edits and rebuilds it from with the Serene Pub SDK. Its README lists what is left to write.
+					</p>
+					{#if exportError}<p class="text-error-600-400 text-sm" role="alert">{exportError}</p>{/if}
+					<button
+						type="button"
+						class="btn btn-sm preset-filled-primary-500"
+						disabled={exporting}
+						onclick={confirmExport}
+					>
+						<Icons.Download size={14} aria-hidden="true" />
+						{exporting ? "Exporting…" : "Export"}
+					</button>
+					<button type="button" class="btn btn-sm preset-tonal-surface" onclick={() => (exportOpen = false)}>
+						Cancel
+					</button>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
 {/if}

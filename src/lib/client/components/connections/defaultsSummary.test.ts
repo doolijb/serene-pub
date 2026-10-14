@@ -151,6 +151,70 @@ describe("defaultsSummary with an unreachable host", () => {
 	})
 })
 
+describe("defaultsSummary with a pair that can no longer do its job", () => {
+	// A sync restated the model's modality after it was registered for chat:
+	// the server now judges it able to embed only.
+	const restated: SummaryConnection[] = [
+		{
+			id: 1,
+			name: "Ollama (local)",
+			models: [
+				model({
+					name: "nomic-embed-text",
+					satisfiableCapabilities: ["text->embedding"]
+				})
+			]
+		}
+	]
+	const chat = (rows: SummaryConnection[]) =>
+		defaultsSummary(rows, {
+			"text->text": { connectionId: 1, connectionModelId: 11 }
+		}).entries.find((e) => e.capability === "text->text")
+
+	test("is registered and broken, saying why", () => {
+		expect(chat(restated)).toMatchObject({
+			set: true,
+			state: "warning",
+			stateWord: "can't do this loadout's work"
+		})
+	})
+
+	test("the same model registered for a job it can do is ready", () => {
+		const entry = defaultsSummary(restated, {
+			"text->embedding": { connectionId: 1, connectionModelId: 11 }
+		}).entries.find((e) => e.capability === "text->embedding")
+		expect(entry).toMatchObject({ state: "ok", stateWord: "ready" })
+	})
+
+	test("an unanswered judgement is never read as a refusal", () => {
+		const silent: SummaryConnection[] = [
+			{
+				...restated[0],
+				models: [model({ satisfiableCapabilities: undefined })]
+			}
+		]
+		expect(chat(silent)).toMatchObject({ state: "ok", stateWord: "ready" })
+	})
+
+	test("not listed keeps its own word, though it satisfies nothing", () => {
+		const gone: SummaryConnection[] = [
+			{
+				...restated[0],
+				models: [
+					model({
+						missingSince: "2026-10-01T00:00:00Z",
+						satisfiableCapabilities: []
+					})
+				]
+			}
+		]
+		expect(chat(gone)).toMatchObject({
+			state: "warning",
+			stateWord: "not listed"
+		})
+	})
+})
+
 describe("defaultsSummary", () => {
 	const total = Object.keys(TRANSFORMS).length
 

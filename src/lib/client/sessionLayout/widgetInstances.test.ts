@@ -49,17 +49,15 @@ const STATS: ModePanel = {
 	role: "secondary",
 	surface: { kind: "remote", owner: "core", component: "stats" },
 	src: "/core-ui/stats",
-	settings: { compact: { type: "boolean", default: false } },
-	defaultActive: false
+	settings: { compact: { type: "boolean", default: false } }
 }
-const WORLD: ModePanel = {
-	id: "world-state",
-	title: "World state",
-	icon: "Globe",
+const LORE: ModePanel = {
+	id: "lore-entries",
+	title: "Lore entries",
+	icon: "BookOpen",
 	role: "secondary",
-	surface: { kind: "remote", owner: "core", component: "world-state" },
-	src: "/core-ui/world-state",
-	defaultActive: false
+	surface: { kind: "remote", owner: "core", component: "lore-entries" },
+	src: "/core-ui/lore-entries"
 }
 
 describe("minting a widget instance id", () => {
@@ -166,12 +164,12 @@ describe("the Add menu offers every widget kind every time", () => {
 	})
 })
 
-describe("two Stats and two World State copies both draw, with separate settings", () => {
+describe("two Stats and two Lore entries copies both draw, with separate settings", () => {
 	test("every placed copy is an instance the zone draws, under its own id and title", () => {
 		const m = new SurfaceManager()
 		m.init(
 			1,
-			[STATS, WORLD],
+			[STATS, LORE],
 			{
 				zoneLayout: {
 					version: 1,
@@ -179,7 +177,7 @@ describe("two Stats and two World State copies both draw, with separate settings
 						right: {
 							kind: "side",
 							side: "right",
-							widgets: ["stats", "stats#2", "world-state", "world-state#2"]
+							widgets: ["stats", "stats#2", "lore-entries", "lore-entries#2"]
 						}
 					}
 				}
@@ -187,7 +185,7 @@ describe("two Stats and two World State copies both draw, with separate settings
 			() => {}
 		)
 		const drawn = zoneEntries(
-			["stats", "stats#2", "world-state", "world-state#2"],
+			["stats", "stats#2", "lore-entries", "lore-entries#2"],
 			m.instances,
 			() => false,
 			(id) => id
@@ -195,8 +193,8 @@ describe("two Stats and two World State copies both draw, with separate settings
 		expect(drawn.map((e) => [e.id, e.title, e.panel?.src])).toEqual([
 			["stats", "Stats", "/core-ui/stats"],
 			["stats#2", "Stats · 2", "/core-ui/stats"],
-			["world-state", "World state", "/core-ui/world-state"],
-			["world-state#2", "World state · 2", "/core-ui/world-state"]
+			["lore-entries", "Lore entries", "/core-ui/lore-entries"],
+			["lore-entries#2", "Lore entries · 2", "/core-ui/lore-entries"]
 		])
 		// Each is its own object: collapsing one copy leaves the other alone.
 		m.toggleCollapse("stats#2")
@@ -261,10 +259,55 @@ describe("Duplicate (QD — the plan's recommended default, provisional)", () =>
 	})
 })
 
+// ⏳ W7: `world-state` is an alias of Stats. Offered no declaration of its
+// own (core's side widgets leave it out), a placed one — and its copies —
+// are copies of Stats, under the ids placed, read as Stats' `world` copies.
+describe("a placed world-state is a copy of Stats (W7 alias)", () => {
+	test("drawn with Stats' module and title, under the id it was placed by", () => {
+		const m = new SurfaceManager()
+		m.init(
+			1,
+			[STATS],
+			{ zoneLayout: { version: 1, zones: { right: { kind: "side", side: "right", widgets: ["stats", "world-state", "world-state#2"] } } } },
+			() => {}
+		)
+		const drawn = zoneEntries(["stats", "world-state", "world-state#2"], m.instances, () => false, (id) => id)
+		expect(drawn.map((e) => [e.id, e.title, e.panel?.src, e.panel?.widgetId])).toEqual([
+			["stats", "Stats", "/core-ui/stats", "stats"],
+			["world-state", "Stats · world", "/core-ui/stats", "stats"],
+			["world-state#2", "Stats · world-2", "/core-ui/stats", "stats"]
+		])
+		// One instance per id: the alias is never a second declaration.
+		expect(m.instances.filter((p) => p.id === "world-state")).toHaveLength(1)
+		expect(trayWidgets([{ id: "stats", title: "Stats" }], ["stats", "world-state"]).map(trayChipLabel)).toEqual([
+			"Stats · 2 placed"
+		])
+	})
+
+	test("Duplicate on it copies the settings it implies, under its own", () => {
+		expect(duplicateValues("world-state", { "world-state": { slots: "bars" } }, {}).settings).toEqual({
+			owners: "world",
+			arrangement: "strip",
+			title: "World State",
+			slots: "bars"
+		})
+		expect(duplicateValues("world-state", {}, {}).settings).toEqual({
+			owners: "world",
+			arrangement: "strip",
+			title: "World State"
+		})
+		// A stored title is its own, over the one the alias implies.
+		expect(duplicateValues("world-state", { "world-state": { title: "Weather" } }, {}).settings).toMatchObject({
+			title: "Weather"
+		})
+		expect(duplicateValues("stats", {}, {}).settings).toBeNull()
+	})
+})
+
 describe("a copy's title", () => {
 	test("is its widget's, then · and its instance name; the bare id is the widget's own", () => {
-		expect(instanceTitle("World state", "world-state#2")).toBe("World state · 2")
-		expect(instanceTitle("World state", "world-state")).toBe("World state")
+		expect(instanceTitle("Lore entries", "lore-entries#2")).toBe("Lore entries · 2")
+		expect(instanceTitle("Lore entries", "lore-entries")).toBe("Lore entries")
 		expect(instanceTitle("Messages", "messages#sanctum")).toBe("Messages · sanctum")
 	})
 })

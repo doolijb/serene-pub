@@ -18,14 +18,14 @@ A persona isn't a separate kind of thing: **a persona is a [character](./charact
 3. Save it.
 
 :::tip You should see
-Your persona in the Characters list with a small person badge after its name. The filter menu's **Personas** pick shows just your personas.
+Your persona in the Characters list with a small person icon after its name, and a **Persona** chip under the name on its page. The filter menu's **Personas** pick shows just your personas; with none yet, it offers **Write a persona**.
 :::
 
 **Write a persona** opens the same guided creator (or full form) as **Write a character**, with the Persona flag already on. Fields you won't need for yourself, such as personality, first message and example dialogues, can stay empty.
 
 ### Use it in a session
 
-When you start a session, **Who you play as** offers your personas, with your default persona already picked. See [Sessions](./sessions.md#start-a-session).
+When you start a session, **Who you play as** shows your default persona, already chosen; **Change** picks another of your personas, or any character with **Show all characters**. See [Sessions](./sessions.md#start-a-session).
 
 ## Everyday use
 
@@ -37,7 +37,7 @@ The flag is also set for you when:
 
 - you play a character in a session (pick it as your persona),
 - the [SillyTavern importer](./importing-from-sillytavern.md) brings in a SillyTavern persona,
-- the setup wizard's **Just call me "You"** makes a starter persona named "You".
+- the setup wizard's **Just call me "…"** makes a starter persona with the name you gave on its first screen (or your display name), or "You" when you gave none.
 
 The flag only decides where a character shows up: under the **Personas** filter, and first when a session asks who you are. Turning it off doesn't take it out of sessions where you already play it. It's never turned off for you.
 
@@ -45,7 +45,9 @@ A card from the [Library](./characters.md#browsing-the-character-library), or on
 
 ### Your default persona
 
-Your **default persona** is the one every new session starts with. Change it with **Set as default persona** in a character's **⋮** menu, or the **Default persona** switch on its form. There is one per account, so choosing a new one replaces the old, and the default is always a persona.
+Your **default persona** is the one every new session starts with. Change it with **Set as default persona** in a character's **⋮** menu, or the **Default persona** switch on its form. There is one per account, so choosing a new one replaces the old.
+
+A default persona is always a persona: setting one turns on **Persona** for it too. In the list its person icon is filled in, and the chip on its page reads **Default persona** instead of **Persona**.
 
 ### Several personas in one session
 

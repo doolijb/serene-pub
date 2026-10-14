@@ -13,30 +13,52 @@ const PANELS: ModePanel[] = [
 		title: "Tasks",
 		role: "secondary",
 		surface: { kind: "remote", owner: "core", component: "sample-notes" },
-		channels: ["tasks"],
-		defaultActive: false
+		channels: ["tasks"]
 	},
 	{
 		id: "portraits",
 		title: "Portraits",
 		role: "secondary",
-		surface: { kind: "remote", owner: "core", component: "scene-portraits" },
-		defaultActive: true
+		surface: { kind: "remote", owner: "core", component: "scene-portraits" }
 	}
 ]
 
+/** A layout that draws Portraits in the right rail, and Tasks nowhere. */
+const DRAWS_PORTRAITS = {
+	zoneLayout: { version: 1, zones: { right: { kind: "side", side: "right", widgets: ["portraits"] } } }
+}
+
 function make(save = () => {}) {
 	const m = new SurfaceManager()
-	m.init(1, PANELS, {}, save)
+	m.init(1, PANELS, DRAWS_PORTRAITS, save)
 	return m
 }
 
 describe("SurfaceManager — activation", () => {
-	it("seeds a synthetic primary and honors defaultActive", () => {
+	// C2: whether a widget starts on is the layout's, never its declaration's.
+	it("seeds a synthetic primary; a widget is on exactly when the layout draws it", () => {
 		const m = make()
 		expect(m.instances.find((p) => p.role === "primary")).toBeTruthy()
 		expect(m.instances.find((p) => p.id === "portraits")!.active).toBe(true)
 		expect(m.instances.find((p) => p.id === "tasks")!.active).toBe(false)
+	})
+
+	it("an empty layout draws no side widget, so none starts on", () => {
+		const m = new SurfaceManager()
+		m.init(1, PANELS, {}, () => {})
+		expect(m.instances.filter((p) => p.role !== "primary" && p.active)).toEqual([])
+	})
+
+	it("a widget's saved state wins over what the layout draws", () => {
+		const m = new SurfaceManager()
+		m.init(
+			1,
+			PANELS,
+			{ ...DRAWS_PORTRAITS, active: [{ id: "portraits", on: false }, { id: "tasks", on: true }] },
+			() => {}
+		)
+		expect(m.instances.find((p) => p.id === "portraits")!.active).toBe(false)
+		expect(m.instances.find((p) => p.id === "tasks")!.active).toBe(true)
 	})
 
 	it("addable lists inactive, non-primary panels", () => {
@@ -202,7 +224,7 @@ describe("SurfaceManager — the Layout menu operations", () => {
 		m.toggleDrawer("portraits")
 		m.resizeColumn(0, 0.5)
 		m.resetLayout()
-		// tasks back off (defaultActive false), portraits back on & on-grid
+		// tasks back off (the layout does not draw it), portraits back on & on-grid
 		expect(m.instances.find((p) => p.id === "tasks")!.active).toBe(false)
 		expect(m.instances.find((p) => p.id === "portraits")!.active).toBe(true)
 		expect(m.instances.find((p) => p.id === "portraits")!.drawered).toBe(
@@ -436,8 +458,7 @@ describe("a genre that withholds the conversation (R71)", () => {
 			id: "acme.game:board",
 			title: "Board",
 			role: "primary",
-			surface: { kind: "remote", owner: "acme.game", component: "board" },
-			defaultActive: true
+			surface: { kind: "remote", owner: "acme.game", component: "board" }
 		}
 		const m = new SurfaceManager()
 		m.init(1, [board, ...PANELS], {}, () => {}, new Set(["messages"]))

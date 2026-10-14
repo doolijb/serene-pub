@@ -1,11 +1,13 @@
 <script lang="ts">
+	import { withoutShared } from "$lib/shared/utils/sharedRows"
 	import { avatarSrc } from "$lib/client/utils/media"
-	import { Switch, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
+	import { Switch, Popover, Portal, Dialog } from "@skeletonlabs/skeleton-svelte"
 	import RowMenu from "$lib/client/components/menus/RowMenu.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
 		declareInterest,
+		requestWithInterest,
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
@@ -14,6 +16,7 @@
 	import CharacterUnsavedChangesModal from "../modals/CharacterUnsavedChangesModal.svelte"
 	import AvatarCropEditor from "../media/AvatarCropEditor.svelte"
 	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
+	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import {
 		avatarFrameCommit,
 		type PendingAvatarFrame
@@ -21,6 +24,25 @@
 	import type { MediaFrame } from "$lib/shared/media/frame"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { stableStringify } from "$lib/shared/utils/connectionDefaults"
+	import { validateStrokes, type Stroke } from "@serene-pub/sdk"
+	import StrokeField from "./StrokeField.svelte"
+	import { STROKES_ENABLED } from "$lib/shared/characters/strokesFlag"
+	import CardStatsTab from "./CardStatsTab.svelte"
+	import LikenessTab, { type LikenessDraft } from "./LikenessTab.svelte"
+	import { likenessOfExtensions } from "$lib/shared/characters/likeness"
+	import { socketCardStatsApi } from "./cardStatsApi"
+	import {
+		castBannerWords,
+		retoldFieldList,
+		type CastBannerMember
+	} from "./castBannerWords"
+	import {
+		backToOneText,
+		findingsByStroke,
+		offStrokeCount,
+		strokesForSave,
+		characterForSave
+	} from "./strokes"
 
 	interface EditCharacterData {
 		id?: number
@@ -51,13 +73,23 @@
 		creator: string
 		category: string
 		tags: string[]
+		/**
+		 * 🚧 The card's strokes (DESIGN-card-strokes §A.3): empty is the
+		 * legacy shape, where `description` / `personality` are the truth.
+		 */
+		strokes: Stroke[]
+		/**
+		 * 🚧 The card's likeness (DESIGN-image-generation §5) — not a column:
+		 * sent beside the character and stored in its extensions.
+		 */
+		likeness: LikenessDraft
 	}
 
 	// Zod validation schema
 	const characterSchema = z.object({
 		name: z.string().min(1, "Name is required").trim(),
 		nickname: z.string().optional(),
-		description: z.string().min(1, "Description is required").trim(),
+		description: z.string().trim(),
 		personality: z.string().optional(),
 		scenario: z.string().optional(),
 		firstMessage: z.string().optional(),
@@ -74,7 +106,17 @@
 		isPersona: z.boolean().optional(),
 		isDefaultPersona: z.boolean().optional(),
 		lorebookId: z.number().nullable().optional(),
-		tags: z.array(z.string()).optional()
+		tags: z.array(z.string()).optional(),
+		strokes: z.array(z.any()).optional()
+	}).superRefine((v, ctx) => {
+		// With strokes, the description is compiled from them: required
+		// only while the card is one text.
+		if (!v.strokes?.length && !v.description)
+			ctx.addIssue({
+				code: "custom",
+				path: ["description"],
+				message: "Description is required"
+			})
 	})
 
 	type ValidationErrors = Record<string, string>
@@ -122,6 +164,53 @@
 	)
 	let userSettingsCtx: UserSettingsCtx = $state(getContext("userSettingsCtx"))
 
+	/**
+	 * The cast banner (plans/PLAN-cast-retold-fields-2026-10-13.md): which
+	 * cast members this card represents, and which of them retell parts of
+	 * it. Absent outside the shell (no panels to open), and then the banner
+	 * is plain text.
+	 */
+	const panelsCtx = getContext<PanelsCtx | undefined>("panelsCtx")
+	let castMembers: CastBannerMember[] = $state([])
+	const castBanner = $derived(castBannerWords(castMembers))
+
+	function handleCastBindings(
+		message: Sockets.Lorebooks.BindingsForCharacter.Response
+	) {
+		if (message.characterId !== characterId) return
+		// `members` arrives with the cast retold-fields server lane; an older
+		// reply without it is "no members", which renders nothing.
+		castMembers =
+			(message as { members?: CastBannerMember[] }).members ?? []
+	}
+
+	/**
+	 * Asked once per card, BARE — `lorebooks:bindingsForCharacter` has no
+	 * `SCOPED_EVENTS` entry, so the handler's `characterId` check is the
+	 * filter (as in CharacterExportModal). Errors are not watched: the banner
+	 * is a note, and a failed ask just leaves it out.
+	 */
+	$effect(() => {
+		castMembers = []
+		if (mode !== "edit" || !characterId) return
+		return requestWithInterest(
+			"lorebooks:bindingsForCharacter",
+			{ characterId },
+			handleCastBindings
+		)
+	})
+
+	/** Address first, then open (shell/openJumpHit.ts). */
+	function openCastMember(member: CastBannerMember) {
+		if (!panelsCtx) return
+		panelsCtx.digest.lore = {
+			lorebookId: member.lorebookId,
+			scope: "cast",
+			castId: member.castId
+		}
+		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+	}
+
 	let isInitialized = $state(false)
 
 	let editCharacterData: EditCharacterData = $state({
@@ -150,7 +239,9 @@
 		_avatarFile: undefined,
 		_avatar: "",
 		lorebookId: null,
-		tags: []
+		tags: [],
+		strokes: [],
+		likeness: { prompt: "", negative: "" }
 	})
 	let originalCharacterData: EditCharacterData = $state({
 		id: undefined,
@@ -178,14 +269,16 @@
 		_avatarFile: undefined,
 		_avatar: "",
 		lorebookId: null,
-		tags: []
+		tags: [],
+		strokes: [],
+		likeness: { prompt: "", negative: "" }
 	})
 	/**
 	 * The three groups this form's fields belong to. A field is always open
 	 * inside its group: folding one away hides whether it is filled, which is
 	 * the question a character sheet answers at a glance.
 	 */
-	type FormTab = "profile" | "voice" | "notes"
+	type FormTab = "profile" | "voice" | "notes" | "likeness" | "stats"
 	const FORM_TABS: Array<{
 		value: FormTab
 		label: string
@@ -193,7 +286,9 @@
 	}> = [
 		{ value: "profile", label: "Profile", icon: Icons.UserRound },
 		{ value: "voice", label: "Voice", icon: Icons.MessageSquareQuote },
-		{ value: "notes", label: "Notes", icon: Icons.NotebookPen }
+		{ value: "notes", label: "Notes", icon: Icons.NotebookPen },
+		{ value: "likeness", label: "Likeness", icon: Icons.ScanFace },
+		{ value: "stats", label: "Stats", icon: Icons.HeartPulse }
 	]
 	let activeFormTab: FormTab = $state("profile")
 
@@ -213,7 +308,8 @@
 			"isDefaultPersona",
 			"characterVersion",
 			"creator",
-			"category"
+			"category",
+			"strokesDescription"
 		],
 		voice: [
 			"personality",
@@ -222,9 +318,12 @@
 			"alternateGreetings",
 			"exampleDialogues",
 			"groupOnlyGreetings",
-			"postHistoryInstructions"
+			"postHistoryInstructions",
+			"strokesPersonality"
 		],
-		notes: ["creatorNotes", "creatorNotesMultilingual"]
+		notes: ["creatorNotes", "creatorNotesMultilingual"],
+		likeness: [],
+		stats: []
 	}
 
 	function tabHasError(tab: FormTab): boolean {
@@ -517,6 +616,7 @@
 			// Validation failed, errors are already set in validationErrors
 			return
 		}
+		if (!strokesValid()) return
 
 		if (mode === "create") {
 			// Create new character
@@ -527,12 +627,64 @@
 		}
 	}
 
+	/** The strokes this save sends: the draft's, with a never-split field folded in. */
+	function savedStrokes(): Stroke[] {
+		return strokesForSave($state.snapshot(editCharacterData.strokes) as Stroke[], {
+			description: editCharacterData.description,
+			personality: editCharacterData.personality
+		})
+	}
+
+	/**
+	 * The strokes against the SDK's shape and limits before anything is sent:
+	 * each finding is said under its stroke (every one, empty text included,
+	 * from now on), and the tab holding the first is marked.
+	 */
+	function strokesValid(): boolean {
+		if (!STROKES_ENABLED) return true
+		const findings = findingsByStroke(validateStrokes(savedStrokes()))
+		const errors = { ...validationErrors }
+		delete errors.strokesDescription
+		delete errors.strokesPersonality
+		for (const [index, list] of findings) {
+			const kind = editCharacterData.strokes[index]?.kind ?? "description"
+			const key = kind === "personality" ? "strokesPersonality" : "strokesDescription"
+			errors[key] ??= list[0].message
+		}
+		validationErrors = errors
+		if (!findings.size) return true
+		revealStrokeFindings = true
+		activeFormTab = errors.strokesDescription ? "profile" : "voice"
+		return false
+	}
+
+	/** The draft as a save sends it — no `strokes` while strokes are paused. */
+	function savedCharacter() {
+		return characterForSave({
+			...editCharacterData,
+			strokes: $state.snapshot(editCharacterData.strokes) as Stroke[]
+		})
+	}
+
+	/** The likeness as a save sends it, beside the character, not on it. */
+	function savedLikeness() {
+		const l = $state.snapshot(editCharacterData.likeness)
+		return {
+			...(l.imageMediaId !== undefined
+				? { imageMediaId: l.imageMediaId }
+				: {}),
+			prompt: l.prompt,
+			negative: l.negative
+		}
+	}
+
 	function handleCreate() {
-		const newCharacter = { ...editCharacterData }
+		const { likeness: _likeness, ...newCharacter } = savedCharacter()
 		const avatarFile = newCharacter._avatarFile
 		delete newCharacter._avatarFile
 		isSaving = true
 		socket.emit("characters:create", {
+			likeness: savedLikeness(),
 			character: newCharacter,
 			// Socket.IO transparently marshals a browser File (a Blob
 			// subclass) to a Node Buffer on the server; the wire shape
@@ -542,12 +694,13 @@
 	}
 
 	function handleUpdate() {
-		const updatedCharacter = { ...editCharacterData }
+		const { likeness: _likeness, ...updatedCharacter } = savedCharacter()
 		if (!updatedCharacter.id) return
 		const avatarFile = updatedCharacter._avatarFile
 		delete updatedCharacter._avatarFile
 		isSaving = true
 		socket.emit("characters:update", {
+			likeness: savedLikeness(),
 			character: { ...updatedCharacter, id: updatedCharacter.id },
 			// See handleCreate() above re: File → Buffer wire conversion.
 			avatarFile: avatarFile as unknown as Buffer | undefined
@@ -632,7 +785,7 @@
 	$effect(() => {
 		hasChanges =
 			stableStringify(editCharacterData) !==
-			stableStringify(originalCharacterData)
+				stableStringify(originalCharacterData) || statsDirty
 	})
 
 	function handleCharactersCreate(res: any) {
@@ -745,6 +898,22 @@
 			creator: characterData.creator ?? "",
 			category: characterData.category ?? "",
 			tags: characterData.tags ?? [],
+			// Strokes paused: none in the draft, so the textareas hold the
+			// stored prose and description stays required.
+			strokes:
+				STROKES_ENABLED && Array.isArray(characterData.strokes)
+					? (characterData.strokes as Stroke[])
+					: [],
+			likeness: (() => {
+				const l = likenessOfExtensions(characterData.extensions)
+				return {
+					...(l.imageMediaId !== undefined
+						? { imageMediaId: l.imageMediaId }
+						: {}),
+					prompt: l.prompt ?? "",
+					negative: l.negative ?? ""
+				}
+			})(),
 			_avatar: "",
 			_avatarFile: undefined
 		}
@@ -752,8 +921,9 @@
 	}
 
 	function handleLorebooksList(message: Sockets.Lorebooks.List.Response) {
-		lorebookList =
-			message.lorebookList.sort((a, b) => (a.id ?? 0) - (b.id ?? 0)) || []
+		lorebookList = withoutShared(message.lorebookList).sort(
+			(a, b) => (a.id ?? 0) - (b.id ?? 0)
+		)
 	}
 
 	function handleTagsList(message: any) {
@@ -797,6 +967,110 @@
 		handleCharactersUpdateError
 	)
 	useInterest<"tags:list">("tags:list", handleTagsList)
+
+	// ── Strokes: token counts, Back to one text ───────────────────────────
+
+	/** Every stroke finding said, empty text included — set once a Save was tried. */
+	let revealStrokeFindings = $state(false)
+	let strokeTokens =
+		$state<Sockets.Characters.CountStrokeTokens.Response | null>(null)
+	let tokenTimer: ReturnType<typeof setTimeout> | undefined
+	let tokenGiveUp: ReturnType<typeof setTimeout> | undefined
+	/** The one count in flight, by its request id; another edit waits for it. */
+	let tokenInFlight: string | null = null
+	let tokenQueued = false
+	let tokenAsks = 0
+
+	function askStrokeTokens() {
+		if (!STROKES_ENABLED) return
+		const strokes = savedStrokes()
+		if (!strokes.length) {
+			strokeTokens = null
+			return
+		}
+		if (tokenInFlight) {
+			tokenQueued = true
+			return
+		}
+		const requestId = `stroke-tokens-${Date.now().toString(36)}-${++tokenAsks}`
+		tokenInFlight = requestId
+		socket.emit("characters:countStrokeTokens", { strokes, requestId })
+		// A count that never comes back must not hold every later one.
+		clearTimeout(tokenGiveUp)
+		tokenGiveUp = setTimeout(() => settleStrokeTokens(requestId), 15_000)
+	}
+
+	function settleStrokeTokens(requestId: string) {
+		if (tokenInFlight !== requestId) return
+		tokenInFlight = null
+		clearTimeout(tokenGiveUp)
+		if (tokenQueued) {
+			tokenQueued = false
+			askStrokeTokens()
+		}
+	}
+
+	/**
+	 * The count replies — BARE and standing, ungated: the reply goes to the
+	 * asking socket only, and the request id says which ask it answers. A
+	 * failed count says nothing; the rows just keep their last count.
+	 */
+	useInterest<"characters:countStrokeTokens">(
+		"characters:countStrokeTokens",
+		(res) => {
+			if (!res.requestId || res.requestId !== tokenInFlight) return
+			strokeTokens = res
+			settleStrokeTokens(res.requestId)
+		}
+	)
+	useInterest<"characters:countStrokeTokens:error">(
+		"characters:countStrokeTokens:error",
+		(res) => {
+			const id = (res as { requestId?: string }).requestId ?? tokenInFlight
+			if (id) settleStrokeTokens(id)
+		}
+	)
+
+	// 400 ms after the last stroke edit (or an edit of a field still one
+	// text beside them, which travels as a stroke too).
+	$effect(() => {
+		const has = STROKES_ENABLED && editCharacterData.strokes.length > 0
+		void JSON.stringify(editCharacterData.strokes)
+		void editCharacterData.description
+		void editCharacterData.personality
+		clearTimeout(tokenTimer)
+		if (!has) {
+			strokeTokens = null
+			return
+		}
+		tokenTimer = setTimeout(askStrokeTokens, 400)
+	})
+
+	let backToOneOpen = $state(false)
+	let offStrokes = $derived(offStrokeCount(editCharacterData.strokes))
+
+	/** Both fields compiled from their strokes, and the strokes cleared — the card is one text again. */
+	function confirmBackToOneText() {
+		const out = backToOneText(
+			$state.snapshot(editCharacterData.strokes) as Stroke[],
+			{
+				description: editCharacterData.description,
+				personality: editCharacterData.personality
+			}
+		)
+		editCharacterData.description = out.description
+		editCharacterData.personality = out.personality
+		editCharacterData.strokes = []
+		strokeTokens = null
+		revealStrokeFindings = false
+		const { strokesDescription, strokesPersonality, ...rest } =
+			validationErrors
+		validationErrors = rest
+		backToOneOpen = false
+	}
+
+	const cardStatsApi = socketCardStatsApi(socket)
+	let statsDirty = $state(false)
 
 	/**
 	 * The lorebook picker's list — BARE, and standing rather than one-shot:
@@ -873,6 +1147,8 @@
 	})
 
 	onDestroy(() => {
+		clearTimeout(tokenTimer)
+		clearTimeout(tokenGiveUp)
 		// The `characters:*`, `tags:list`, `lorebooks:list` and
 		// `userSettings:*` listeners are not here: the interest registry
 		// releases this form's subscribers as its effects are destroyed.
@@ -945,73 +1221,103 @@
 	</button>
 {/snippet}
 
+<!-- Save, labelled. Filled primary only while there is something to save: a
+     permanently lit call to action stops being one. -->
+{#snippet saveButton()}
+	<button
+		type="button"
+		class="btn btn-sm shrink-0"
+		class:preset-filled-primary-500={hasChanges}
+		class:preset-tonal-surface={!hasChanges}
+		onclick={onSave}
+		disabled={isSaving}
+		aria-label={`Save character${hasChanges ? " (has unsaved changes)" : ""}`}
+	>
+		{#if isSaving}
+			<Icons.Loader2 size={16} class="animate-spin" aria-hidden="true" />
+		{:else}
+			<Icons.Save size={16} aria-hidden="true" />
+		{/if}
+		Save
+	</button>
+{/snippet}
+
+{#snippet unsavedLine()}
+	<p class="text-surface-600-400 text-xs">Unsaved changes</p>
+{/snippet}
+
+<!-- A flex column whose 12px gap is the only space under the header
+     (STYLE-GUIDE §6.3). -->
 <div
-	class="animate-fade-in min-h-full max-w-[760px]"
+	class="animate-fade-in flex min-h-full max-w-[760px] flex-col gap-3"
 	bind:this={formContainer}
 	role="dialog"
-	aria-labelledby="form-title"
+	aria-label={formTitle}
 	aria-modal="false"
 >
-	{#if !hideTitle || !hideActionButtons}
-		<div
-			class="mb-4 flex items-center gap-2"
-			role="group"
-			aria-label="Form actions"
-		>
-			{#if !hideActionButtons && showBack}
-				<button
-					type="button"
-					class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
-					onclick={handleCancel}
-					title="Back to list"
-					aria-label="Back to list"
-				>
-					<Icons.ChevronLeft size={16} aria-hidden="true" />
-				</button>
+	{#if !hideTitle}
+		<!-- The one title row (STYLE-GUIDE §6.3): back only when the list is
+		     off screen — it runs the same cancel path as Escape, so the
+		     unsaved-changes gate holds — then who is being edited, then Save. -->
+		<PanelNavHeader
+			title={formTitle}
+			onBack={!hideActionButtons && showBack ? handleCancel : undefined}
+			backLabel="Back to list"
+			primaryAction={hideActionButtons ? undefined : saveButton}
+			subtitle={!hideActionButtons && hasChanges
+				? unsavedLine
+				: undefined}
+		/>
+	{:else if !hideActionButtons}
+		<div class="flex items-center justify-end gap-2">
+			{#if hasChanges}
+				{@render unsavedLine()}
 			{/if}
-			{#if !hideTitle}
-				<h1
-					class="min-w-0 flex-1 truncate text-lg font-semibold"
-					id="form-title"
-				>
-					{formTitle}
-				</h1>
-			{:else}
-				<span class="flex-1"></span>
-			{/if}
-			{#if !hideActionButtons}
-				{#if hasChanges}
-					<span class="text-surface-600-400 shrink-0 text-xs">
-						Unsaved changes
-					</span>
-				{/if}
-				<!-- Filled primary only while there is something to save: a
-				     permanently lit call to action stops being one. -->
-				<button
-					type="button"
-					class="btn btn-sm shrink-0"
-					class:preset-filled-primary-500={hasChanges}
-					class:preset-tonal-surface={!hasChanges}
-					onclick={onSave}
-					disabled={isSaving}
-					aria-describedby="form-title"
-					aria-label={`Save character${hasChanges ? " (has unsaved changes)" : ""}`}
-				>
-					{#if isSaving}
-						<Icons.Loader2
-							size={16}
-							class="animate-spin"
-							aria-hidden="true"
-						/>
-					{:else}
-						<Icons.Save size={16} aria-hidden="true" />
-					{/if}
-					Save
-				</button>
-			{/if}
+			{@render saveButton()}
 		</div>
 	{/if}
-	<div class="flex flex-col gap-4" role="form" aria-labelledby="form-title">
+	{#if castBanner}
+		<!-- The cast banner: a note, not a warning. A card is a starter; what
+		     a story changes about the character is kept on its cast members. -->
+		<section
+			class="border-surface-200-800 flex flex-col gap-1.5 rounded-[12px] border px-3 py-2 text-sm"
+			aria-label="Cast members"
+		>
+			<p class="text-surface-800-200">
+				{castBanner.represents}
+				{#if castBanner.retells}
+					{castBanner.retells}
+				{/if}
+			</p>
+			<ul class="flex flex-wrap gap-x-3 gap-y-1">
+				{#each castMembers as member (member.castId)}
+					{@const retold = retoldFieldList(member.retold)}
+					<li>
+						{#if panelsCtx}
+							<button
+								type="button"
+								class="text-primary-600-400 underline-offset-2 hover:underline"
+								aria-label="Open this card's cast member in {member.lorebookName}"
+								onclick={() => openCastMember(member)}
+							>
+								{member.lorebookName}
+							</button>
+						{:else}
+							<span>{member.lorebookName}</span>
+						{/if}
+						{#if retold}
+							<span class="text-surface-600-400">· retells {retold}</span>
+						{/if}
+					</li>
+				{/each}
+			</ul>
+			<p class="text-surface-600-400 text-xs">
+				A card is where a character starts. What a story changes about them
+				is kept on their cast member.
+			</p>
+		</section>
+	{/if}
+	<div class="flex flex-col gap-4" role="form" aria-label={formTitle}>
 		{#if !hideAvatar}
 			<!-- The avatar IS the upload control: it takes a click, it takes a
 			     drop, and the camera badge says so. Anything the picture itself
@@ -1146,16 +1452,31 @@
 							class={FIELD_CLASS}
 							placeholder="One or two sentences describing who this character is…"
 							maxlength="200"
+							aria-describedby="charSummaryHint"
 						></textarea>
 						<p class="text-surface-600-400 mt-1 text-right text-xs">
 							{editCharacterData.summary.length} / 200
 						</p>
-						<p class="text-surface-600-400 text-xs">
-							Used as a concise graph node description. Not
-							injected into session context.
+						<p class="text-surface-600-400 text-xs" id="charSummaryHint">
+							A one-line blurb for character lists and the
+							lorebook Graph. Not part of the prompt.
 						</p>
 					</div>
-					<div class="flex flex-col">
+					<StrokeField
+						kind="description"
+						label="Description"
+						bind:strokes={editCharacterData.strokes}
+						prose={editCharacterData.description}
+						tokens={strokeTokens ?? undefined}
+						revealAll={revealStrokeFindings}
+						onBackToOneText={() => (backToOneOpen = true)}
+					>
+						{#snippet labelExtra()}
+							{@render promptBadge(
+								"This field will be visible in prompts"
+							)}
+						{/snippet}
+						{#snippet textarea()}
 						<label
 							class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
 							for="charDescription"
@@ -1198,7 +1519,13 @@
 								{validationErrors.description}
 							</p>
 						{/if}
-					</div>
+						{/snippet}
+					</StrokeField>
+					{#if validationErrors.strokesDescription && editCharacterData.strokes.length}
+						<p class="text-error-500 -mt-2 text-sm" role="alert">
+							{validationErrors.strokesDescription}
+						</p>
+					{/if}
 					<div class="flex flex-col">
 						<span
 							class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
@@ -1219,6 +1546,7 @@
 										class="{FIELD_CLASS} flex-1"
 										placeholder="Alias..."
 										aria-label={`Alias ${idx + 1}`}
+										aria-describedby="charAliasesHint"
 									/>
 									{@render removeRowButton(
 										`Delete alias ${idx + 1}`,
@@ -1234,6 +1562,13 @@
 								addToArray(editCharacterData.aliases)
 							)}
 						</div>
+						<p
+							class="text-surface-600-400 mt-1 text-xs"
+							id="charAliasesHint"
+						>
+							Other names they go by. When lore is looked up, a
+							mention of one counts as a mention of them.
+						</p>
 					</div>
 				</div>
 			</section>
@@ -1532,24 +1867,44 @@
 			<section class="panel-card">
 				<h2 class="mb-3 text-sm font-medium">Voice</h2>
 				<div class="flex flex-col gap-4">
-					<div class="flex flex-col">
-						<label
-							class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
-							for="charPersonality"
-						>
-							Personality
+					<StrokeField
+						kind="personality"
+						label="Personality"
+						bind:strokes={editCharacterData.strokes}
+						prose={editCharacterData.personality}
+						tokens={strokeTokens ?? undefined}
+						revealAll={revealStrokeFindings}
+						onBackToOneText={() => (backToOneOpen = true)}
+					>
+						{#snippet labelExtra()}
 							{@render promptBadge(
 								"This field will be visible in prompts"
 							)}
-						</label>
-						<textarea
-							id="charPersonality"
-							rows="8"
-							bind:value={editCharacterData.personality}
-							class={FIELD_CLASS}
-							placeholder="Personality..."
-						></textarea>
-					</div>
+						{/snippet}
+						{#snippet textarea()}
+							<label
+								class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
+								for="charPersonality"
+							>
+								Personality
+								{@render promptBadge(
+									"This field will be visible in prompts"
+								)}
+							</label>
+							<textarea
+								id="charPersonality"
+								rows="8"
+								bind:value={editCharacterData.personality}
+								class={FIELD_CLASS}
+								placeholder="Personality..."
+							></textarea>
+						{/snippet}
+					</StrokeField>
+					{#if validationErrors.strokesPersonality && editCharacterData.strokes.length}
+						<p class="text-error-500 -mt-2 text-sm" role="alert">
+							{validationErrors.strokesPersonality}
+						</p>
+					{/if}
 					{#if userSettingsCtx.settings?.showAllCharacterFields}
 						<div class="flex flex-col">
 							<label
@@ -1732,8 +2087,16 @@
 								editCharacterData.postHistoryInstructions
 							}
 							class={FIELD_CLASS}
-							placeholder="Instructions for post-history processing..."
+							placeholder="Stay in character and keep replies short…"
+							aria-describedby="charPostHistoryHint"
 						></textarea>
+						<p
+							class="text-surface-600-400 mt-1 text-xs"
+							id="charPostHistoryHint"
+						>
+							Placed after the conversation, just before the
+							reply. Good for style reminders.
+						</p>
 					</div>
 				</section>
 			{/if}
@@ -1846,9 +2209,42 @@
 			</section>
 		</div>
 
+		<div
+			id="character-panel-likeness"
+			role="tabpanel"
+			aria-labelledby="character-panel-likeness-tab"
+			hidden={activeFormTab !== "likeness"}
+			class="space-y-3"
+		>
+			<LikenessTab
+				characterId={mode === "edit" ? characterId : undefined}
+				active={activeFormTab === "likeness"}
+				avatarUrl={avatarSrc(editCharacterData, { full: true })}
+				bind:likeness={editCharacterData.likeness}
+			/>
+		</div>
+
+		<div
+			id="character-panel-stats"
+			role="tabpanel"
+			aria-labelledby="character-panel-stats-tab"
+			hidden={activeFormTab !== "stats"}
+			class="space-y-3"
+		>
+			<CardStatsTab
+				characterId={mode === "edit" ? characterId : undefined}
+				active={activeFormTab === "stats"}
+				api={cardStatsApi}
+				bind:dirty={statsDirty}
+			/>
+		</div>
+
 		<!-- Its own quiet row, outside the cards: this switch changes what the
 		     cards contain, so it is not one of the things they hold. -->
-		<div class="flex flex-col gap-1 pt-2">
+		<div
+			class="flex flex-col gap-1 pt-2"
+			hidden={activeFormTab === "stats" || activeFormTab === "likeness"}
+		>
 			<Switch
 				name="show-all-character-fields"
 				checked={userSettingsCtx.settings?.showAllCharacterFields ??
@@ -1924,7 +2320,11 @@
 			type="text"
 			bind:value={editCharacterData.nickname}
 			class={FIELD_CLASS}
+			aria-describedby="charNicknameHint"
 		/>
+		<p class="text-surface-600-400 mt-1 text-xs" id="charNicknameHint">
+			What others call them in replies.
+		</p>
 	</div>
 {/snippet}
 
@@ -1934,6 +2334,66 @@
 	onConfirm={handleCancelModalDiscard}
 	onCancel={handleCancelModalCancel}
 />
+
+<Dialog
+	open={backToOneOpen}
+	role="alertdialog"
+	closeOnInteractOutside={false}
+	onOpenChange={(e) => (backToOneOpen = e.open)}
+>
+	<Portal>
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 w-full max-w-md space-y-4 p-6 shadow-xl"
+				data-back-to-one-text
+			>
+				<Dialog.Title class="text-lg font-semibold">
+					Back to one text?
+				</Dialog.Title>
+				<Dialog.Description class="space-y-2 text-sm">
+					<p>
+						Description and Personality each become one text, joined
+						from their strokes as the model reads them now. Labels
+						stay as “Label: text”; keywords, slugs and the order
+						handles go.
+					</p>
+					{#if offStrokes}
+						<p class="text-surface-600-400">
+							{offStrokes}
+							{offStrokes === 1 ? "stroke is" : "strokes are"} off and
+							will not be kept.
+						</p>
+					{/if}
+					<p class="text-surface-600-400">
+						Nothing is saved until you save the character.
+					</p>
+				</Dialog.Description>
+				<footer class="flex justify-end gap-2">
+					<button
+						type="button"
+						class="btn preset-tonal"
+						onclick={() => (backToOneOpen = false)}
+					>
+						Cancel
+					</button>
+					<button
+						type="button"
+						class="btn preset-filled-primary-500"
+						onclick={confirmBackToOneText}
+						data-back-confirm
+					>
+						Back to one text
+					</button>
+				</footer>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
 
 <!-- Mounted whether or not it is open: a dialog torn down mid-close leaves its
      machine reading state that went with it. The source outlives the close

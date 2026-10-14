@@ -120,7 +120,8 @@ export function isExternalDocLink(href: string, origin: string): boolean {
 /** Mark every external link in a rendered docs body to open in a new window. */
 export function openExternalLinksInNewWindow(root: ParentNode, origin: string) {
 	for (const link of root.querySelectorAll<HTMLAnchorElement>("a[href]")) {
-		if (!isExternalDocLink(link.getAttribute("href") ?? "", origin)) continue
+		if (!isExternalDocLink(link.getAttribute("href") ?? "", origin))
+			continue
 		link.setAttribute("target", "_blank")
 		link.setAttribute("rel", "noopener noreferrer")
 	}

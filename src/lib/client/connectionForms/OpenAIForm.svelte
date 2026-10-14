@@ -4,11 +4,14 @@
 	import { usesCompletionTemplate } from "$lib/shared/connectionAdapters/wireMode"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
-	import Select from "$lib/client/components/inputs/Select.svelte"
-	import { onMount } from "svelte"
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import ConnectionFieldSelect from "./ConnectionFieldSelect.svelte"
+	import { PROMPT_FORMAT, TOKEN_COUNTER } from "./connectionFieldWords"
+	import { useExtraJsonSync } from "./extraJsonSync.svelte"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
-	import { z } from "zod"
+	import SchemaForm from "$lib/client/components/pipelines/SchemaForm.svelte"
+	import { PRESET_CAPABILITIES } from "$lib/shared/connectionAdapters/manifest"
+	import type { ImageProfileSchemaResponse } from "$lib/shared/sockets/imageGen"
 
 	interface ExtraFieldData {
 		stream: boolean
@@ -19,17 +22,6 @@
 		stream?: boolean
 		apiKey?: string
 	}
-
-	// Zod validation schema
-	const openAIConnectionSchema = z.object({
-		baseUrl: z
-			.string()
-			.url("Invalid URL format")
-			.min(1, "Base URL is required"),
-		apiKey: z.string().min(1, "API key is required")
-	})
-
-	type ValidationErrors = Record<string, string>
 
 	interface Props {
 		connection: SelectConnection
@@ -52,7 +44,6 @@
 	const wireMode = connectionWireMode()
 	const showFormat = $derived(usesCompletionTemplate(wireMode.of(connection)))
 
-	const socket = useTypedSocket()
 	/**
 	 * The format picker's options, read from `completion_templates` instead of
 	 * the eight-entry constant that used to sit beside the table — so a template
@@ -66,58 +57,9 @@
 	}
 
 	let openAIFields: ExtraFieldData | undefined = $state()
-	let validationErrors: ValidationErrors = $state({})
 
-	// Standing interest in the test result, held by the registry for as long as
-	// this form is mounted and released with it. The registry keeps ONE raw
-	// listener for the event and fans it out, so the parent sidebar's own
-	// interest is untouched by this form coming and going.
-	const onConnectionsTest = (msg: Sockets.Connections.Test.Response) => {
-		testResult = {
-			ok: msg.ok,
-			error: msg.error ?? undefined,
-			models: msg.models
-		}
-	}
-	useInterest<"connections:test">("connections:test", onConnectionsTest)
-
-	let testResult: { ok: boolean; error?: string; models?: any[] } | null =
-		$state(null)
-
-	function handleTestConnection() {
-		if (!validateConnection()) return
-		testResult = null
-		socket.emit("connections:test", {
-			connection
-		})
-	}
-
-	function validateConnection(): boolean {
-		const data = {
-			baseUrl: connection.baseUrl || "",
-			apiKey: openAIFields?.apiKey || ""
-		}
-
-		const result = openAIConnectionSchema.safeParse(data)
-
-		if (result.success) {
-			validationErrors = {}
-			return true
-		} else {
-			const errors: ValidationErrors = {}
-			result.error.errors.forEach((error) => {
-				if (error.path.length > 0) {
-					errors[error.path[0] as string] = error.message
-				}
-			})
-			validationErrors = errors
-			return false
-		}
-	}
-
-	// let isValid = $derived.by(() => {
-	//     return connection && connection.type === "openai" && connection.baseUrl && connection.model
-	// })
+	// No Test and no test listener here: the connection view's status card
+	// owns Test and says what it found.
 
 	function extraJsonToExtraFields(extraJson: ExtraJson): ExtraFieldData {
 		return {
@@ -133,44 +75,58 @@
 		}
 	}
 
-	// Skips the FIRST write-back, which is the defaults normalization done in
-	// onMount, not a user edit.
-	//
-	// onMount builds the field state from `{...defaults, ...connection.extraJson}`,
-	// so it legitimately gains every default key the stored row lacked. Writing
-	// that straight back into `connection` made the form differ from the
-	// parent's `originalConnection` the instant it opened — the panel reported
-	// unsaved changes with nothing touched, and then blocked closing behind a
-	// destructive-sounding confirm. Real edits still write through, and a save
-	// still persists the full normalized set.
-	let extraJsonInitialized = false
-	$effect(() => {
-		const _openAIFields = openAIFields
-		if (!_openAIFields) return
-		// Computed on EVERY run, before the skip check, and deliberately so:
-		// an effect only subscribes to the state it actually reads, and the
-		// individual field values are read inside this call. Returning before
-		// it — as a first attempt did — meant the effect never subscribed to
-		// them, so later toggles re-triggered nothing and the form never went
-		// dirty. Skip the WRITE, never the read.
-		const nextExtraJson = extraFieldsToExtraJson(_openAIFields)
-		// The first populated run is onMount's defaults normalization, not a
-		// user edit — writing it back made the panel report unsaved changes the
-		// instant it opened, then block closing behind a destructive confirm.
-		if (!extraJsonInitialized) {
-			extraJsonInitialized = true
-			return
-		}
-		connection.extraJson = nextExtraJson
+	// Seeds the fields from `{...defaults, ...connection.extraJson}` on mount
+	// and whenever the draft is replaced from outside (an external save, Reset),
+	// and writes back only on a real edit — merged over `extraJson`, so keys
+	// this form doesn't own survive. See `useExtraJsonSync` for why the seed's
+	// own write-back is skipped.
+	useExtraJsonSync<ExtraFieldData>({
+		connection: () => connection,
+		fields: () => openAIFields,
+		seed: (extraJson) => {
+			openAIFields = extraJsonToExtraFields({
+				...defaultExtraJson,
+				...(extraJson ?? {})
+			} as ExtraJson)
+		},
+		project: (fields) =>
+			extraFieldsToExtraJson(fields)
 	})
 
-	onMount(() => {
-		if (connection.extraJson) {
-			const extraJson = { ...defaultExtraJson, ...connection.extraJson }
-			openAIFields = extraJsonToExtraFields(extraJson)
-		} else {
-			openAIFields = extraJsonToExtraFields(defaultExtraJson)
-		}
+	// ── Image settings (the OPENAI type's image module's own profile) ─────
+	// The same generated section `ImageConnectionForm` draws for an image
+	// type — quality, moderation, compression; Gemini's size and safety —
+	// shown only where the preset's manifest row claims `text->image`.
+	const socket = useTypedSocket()
+	const draws = $derived(
+		PRESET_CAPABILITIES[connection?.preset ?? ""]?.["text->image"] === true
+	)
+	let profileSchema = $state<Record<string, any> | null>(null)
+	let profileDefaults = $state<Record<string, unknown>>({})
+	/** A local view over the declared defaults; only an edit is written. */
+	let profileView = $state<Record<string, unknown>>({})
+	const profileSync = useExtraJsonSync<Record<string, unknown>>({
+		connection: () => connection,
+		fields: () => profileView,
+		seed: (extraJson) => {
+			profileView = {
+				...profileDefaults,
+				...((extraJson?.profile as Record<string, unknown>) ?? {})
+			}
+		},
+		project: (view) => ({ profile: JSON.parse(JSON.stringify(view)) })
+	})
+	const onProfileSchema = (msg: ImageProfileSchemaResponse) => {
+		if (msg.type !== connection?.type) return
+		profileSchema = (msg.schema as Record<string, any>) ?? null
+		profileDefaults = (msg.defaults as Record<string, unknown>) ?? {}
+		profileSync.reseed()
+	}
+	useInterest<"images:profileSchema">("images:profileSchema", onProfileSchema)
+	// After every declaration above: an emit flushes the pending interest sync.
+	$effect(() => {
+		if (draws && connection?.type)
+			socket.emit("images:profileSchema", { type: connection.type })
 	})
 </script>
 
@@ -189,29 +145,8 @@
 				type="password"
 				bind:value={openAIFields.apiKey}
 				placeholder="sk-..."
-				class="input {validationErrors.apiKey
-					? 'border-error-500'
-					: ''}"
-				aria-invalid={validationErrors.apiKey ? "true" : "false"}
-				aria-describedby={validationErrors.apiKey
-					? "apiKey-error"
-					: undefined}
-				oninput={() => {
-					if (validationErrors.apiKey) {
-						const { apiKey, ...rest } = validationErrors
-						validationErrors = rest
-					}
-				}}
+				class="input"
 			/>
-			{#if validationErrors.apiKey}
-				<p
-					id="apiKey-error"
-					class="text-error-500 mt-1 text-sm"
-					role="alert"
-				>
-					{validationErrors.apiKey}
-				</p>
-			{/if}
 		</div>
 		<!-- Model picker removed: models live in the Models section below. -->
 		<!-- The Test button lives on the connection view's status card, not
@@ -225,29 +160,8 @@
 				bind:value={connection.baseUrl}
 				placeholder="https://api.openai.com/v1/"
 				required
-				class="input {validationErrors.baseUrl
-					? 'border-error-500'
-					: ''}"
-				aria-invalid={validationErrors.baseUrl ? "true" : "false"}
-				aria-describedby={validationErrors.baseUrl
-					? "baseUrl-error"
-					: undefined}
-				oninput={() => {
-					if (validationErrors.baseUrl) {
-						const { baseUrl, ...rest } = validationErrors
-						validationErrors = rest
-					}
-				}}
+				class="input"
 			/>
-			{#if validationErrors.baseUrl}
-				<p
-					id="baseUrl-error"
-					class="text-error-500 mt-1 text-sm"
-					role="alert"
-				>
-					{validationErrors.baseUrl}
-				</p>
-			{/if}
 		</div>
 		<details class="mt-4">
 			<summary
@@ -257,16 +171,16 @@
 			</summary>
 			<section class="w-full space-y-4 pt-2">
 				{#if showFormat}
-					<Select
+					<ConnectionFieldSelect
 						class="mt-2"
-						label="Prompt Format"
+						words={PROMPT_FORMAT}
 						options={formatOptions.value}
 						bind:value={connection.promptFormat}
 					/>
 				{/if}
-				<Select
+				<ConnectionFieldSelect
 					class="mt-2"
-					label="Token Counter"
+					words={TOKEN_COUNTER}
 					options={TokenCounterOptions.options}
 					bind:value={connection.tokenCounter}
 				/>
@@ -292,5 +206,21 @@
 				     role-tagged turns. -->
 			</section>
 		</details>
+		{#if draws && profileSchema && Object.keys(profileSchema).length}
+			<details class="mt-2">
+				<summary
+					class="hover:preset-tonal-primary flex cursor-pointer items-center gap-2 rounded-[10px] px-2 py-2 text-[13px] font-medium"
+				>
+					Image settings
+				</summary>
+				<section class="w-full space-y-2 pt-2">
+					<p class="text-surface-600-400 text-xs">
+						Used when this connection draws pictures. Steps, size and
+						seed live in Sampling.
+					</p>
+					<SchemaForm schema={profileSchema} bind:values={profileView} />
+				</section>
+			</details>
+		{/if}
 	{/if}
 {/if}

@@ -367,7 +367,7 @@ describe("the build decides the mode, never the modal", () => {
 			status: "active"
 		})
 		const activityId = atReview(b, "replace")
-		// The modal was opened as Extend (SessionWorkflowTab's `mode="extend"`);
+		// The modal was opened as Extend (the session page's `mode="extend"`, which Chronicle opens);
 		// what it sends has no mode in it at all.
 		const params = await modalParams(b, activityId)
 		expect("mode" in params).toBe(false)

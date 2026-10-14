@@ -8,7 +8,7 @@
  * session presets → a user picks a preset and starts a session, with optional
  * overrides.
  */
-import { sessionEvents } from "@serene-pub/sdk"
+import { sessionEvents, type SettingsSchema } from "@serene-pub/sdk"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { answersEvent } from "$lib/server/pipelines/entities/presetBindings"
@@ -224,6 +224,44 @@ export const sessionGenresList: Handler<
 	}
 }
 
+/**
+ * An **in-app genre** (PLAN-pipeline-canvas-and-genre-authoring §6.1): a
+ * listed genre copied under the admin's own owner name — its documents, one
+ * default preset, its default layout and its registry entry. The work is
+ * `entities/pubGenres.ts`'s; a refusal comes back as its sentence.
+ */
+export const sessionGenresCreate: Handler<
+	Sockets.SessionAdmin.CreateGenre.Params,
+	Sockets.SessionAdmin.CreateGenre.Response
+> = {
+	event: "sessionGenres:create",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user?.isAdmin) {
+			const res = { error: "Only an administrator can make a genre." }
+			emitToUser("sessionGenres:create:error", res)
+			return res
+		}
+		const { createPubGenre } = await import(
+			"$lib/server/pipelines/entities/pubGenres"
+		)
+		let genreId: string
+		try {
+			;({ genreId } = await createPubGenre(db as any, params))
+		} catch (e) {
+			const res = { error: e instanceof Error ? e.message : String(e) }
+			emitToUser("sessionGenres:create:error", res)
+			return res
+		}
+		const res = { genreId }
+		emitToUser("sessionGenres:create", res)
+		await emitToUser("sessionGenres:list", () => buildSessionGenres())
+		await emitToUser("sessionPresets:list", () =>
+			buildSessionPresets(!!socket.user?.isAdmin)
+		)
+		return res
+	}
+}
+
 export const sessionGenresUpdate: Handler<
 	Sockets.SessionAdmin.UpdateGenre.Params,
 	Sockets.SessionAdmin.UpdateGenre.Response
@@ -231,17 +269,46 @@ export const sessionGenresUpdate: Handler<
 	event: "sessionGenres:update",
 	handler: async (socket, params, emitToUser) => {
 		adminOnly(socket)
+		// The declaration's parts (§6.1) — an in-app genre's only. Done
+		// before the switch so a refusal changes nothing.
+		if (
+			params.name !== undefined ||
+			params.description !== undefined ||
+			params.family !== undefined ||
+			params.fields !== undefined
+		) {
+			const { updatePubGenre } = await import(
+				"$lib/server/pipelines/entities/pubGenres"
+			)
+			try {
+				await updatePubGenre(db as any, params.slug, {
+					name: params.name,
+					description: params.description,
+					family: params.family,
+					fields: params.fields
+				})
+			} catch (e) {
+				const res = {
+					slug: params.slug,
+					ok: false,
+					error: e instanceof Error ? e.message : String(e)
+				}
+				emitToUser("sessionGenres:update:error", res)
+				return res
+			}
+		}
 		const patch: Record<string, unknown> = {}
 		if (params.enabled !== undefined) patch.enabled = params.enabled
 		// A genre's default preset is not set here (note 27, 2026-10-02): it
 		// is the preset row's `is_default`, set by `sessionPresets:update`.
-		await db
-			.insert(schema.sessionGenreSettings)
-			.values({ genreId: params.slug, ...patch })
-			.onConflictDoUpdate({
-				target: schema.sessionGenreSettings.genreId,
-				set: { ...patch, updatedAt: new Date() }
-			})
+		if (Object.keys(patch).length)
+			await db
+				.insert(schema.sessionGenreSettings)
+				.values({ genreId: params.slug, ...patch })
+				.onConflictDoUpdate({
+					target: schema.sessionGenreSettings.genreId,
+					set: { ...patch, updatedAt: new Date() }
+				})
 		const res = { slug: params.slug, ok: true }
 		emitToUser("sessionGenres:update", res)
 		// LAZY (socket-interest plan, ruling 4): a re-list nobody asked for,
@@ -416,6 +483,16 @@ async function buildGenreDetail(
 		.where(eq(schema.sessionGenreSettings.genreId, genreId))
 		.limit(1)
 
+	// Who brought it, and what the hub may offer for it (§6.1).
+	const { genreOrigin } = await import("$lib/server/pipelines/entities/pubGenres")
+	const origin = await genreOrigin(db as any, genreId)
+	const { genreDefaultLayoutRow } = await import("$lib/server/db/layoutPresets")
+	const layoutRow = await genreDefaultLayoutRow(genreId)
+	const { getGenre } = await import("@serene-pub/sdk")
+	const declared = getGenre(genreId)
+	const { pluginsEnabled } = await import("$lib/server/plugins/flag")
+	const shapeFields = (genre.shape as { fields?: unknown } | undefined)?.fields
+
 	const res: Sockets.SessionAdmin.GenreDetail.Response = {
 		genre: {
 			genreId: genre.genreId,
@@ -427,7 +504,18 @@ async function buildGenreDetail(
 			enabled: setting ? !!setting.enabled : true,
 			// The preset row marked default (note 27) — see `buildSessionGenres`.
 			defaultPresetId:
-				(presetRows as any[]).find((p) => p.isDefault)?.id ?? null
+				(presetRows as any[]).find((p) => p.isDefault)?.id ?? null,
+			origin,
+			editable: origin === "pub",
+			fields:
+				shapeFields && typeof shapeFields === "object" && !Array.isArray(shapeFields)
+					? (shapeFields as SettingsSchema)
+					: {},
+			hasState: !!(declared?.slots?.length || declared?.sheets?.length),
+			layout: layoutRow
+				? { id: layoutRow.id, slug: layoutRow.slug, name: layoutRow.name }
+				: null,
+			pluginsEnabled: pluginsEnabled()
 		},
 		swaps: await genreSwapContributions(
 			new Map(active.map((r) => [r.slug as string, (r.name ?? r.slug) as string]))
@@ -1085,6 +1173,7 @@ export function registerSessionAdminHandlers(
 	) => void
 ) {
 	register(socket, sessionGenresList, emitToUser)
+	register(socket, sessionGenresCreate, emitToUser)
 	register(socket, sessionGenresUpdate, emitToUser)
 	register(socket, sessionGenresDetail, emitToUser)
 	register(socket, sessionGenresSetPresetsEnabled, emitToUser)

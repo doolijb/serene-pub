@@ -8,6 +8,7 @@
 	import * as Icons from "@lucide/svelte"
 	import type { LibraryCatalogItem } from "$lib/shared/library/types"
 	import RetryableImage from "./RetryableImage.svelte"
+	import { characterSummary } from "$lib/shared/characters/characterSummary"
 
 	interface Props {
 		item: LibraryCatalogItem
@@ -21,6 +22,11 @@
 
 	let { item, imageUrl, active = false, imported = false, onclick }: Props =
 		$props()
+
+	/** What the card is, not its raw sheet (plan F1). */
+	const excerpt = $derived(
+		characterSummary({ name: item.name, description: item.description })
+	)
 </script>
 
 <button
@@ -76,11 +82,11 @@
 				by {item.author}
 			</span>
 		{/if}
-		{#if item.description}
+		{#if excerpt}
 			<span
 				class="text-surface-600-400 line-clamp-2 text-xs leading-snug"
 			>
-				{item.description}
+				{excerpt}
 			</span>
 		{/if}
 	</span>

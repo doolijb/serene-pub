@@ -32,6 +32,16 @@ const sessionStateV1 = {
 	owners: []
 }
 
+const persona = { ref: "character:9", characterId: 9, isPersona: true, mine: true, name: "Cy" }
+const charactersV1 = {
+	members: [
+		{ ref: "character:1", characterId: 1, isPersona: false, mine: false, name: "Ada" },
+		{ ref: "character:7", characterId: 7, isPersona: true, mine: false, name: "Bo" },
+		persona
+	],
+	sceneImages: { left: null, right: null }
+}
+
 const instance = (over: Partial<PanelInstance>): PanelInstance => ({
 	id: "probe",
 	title: "Probe",
@@ -53,7 +63,12 @@ function open(inst: PanelInstance, requests?: unknown) {
 	document.body.appendChild(target)
 	const app = mount(Fixture, {
 		target,
-		props: { instance: inst, session, supplies: { state: sessionStateV1, dossier: { dossier: 1 } }, requests }
+		props: {
+			instance: inst,
+			session,
+			supplies: { state: sessionStateV1, dossier: { dossier: 1 }, characters: charactersV1 },
+			requests
+		}
 	})
 	flushSync()
 	return {
@@ -94,6 +109,21 @@ describe("a remote widget", () => {
 			section: "session_state",
 			value: sessionStateV1
 		})
+		r.port.close()
+		r.close()
+	})
+
+	test("is posted persona cut from the cast, and lore as its grant marker — and neither ungranted", async () => {
+		const r = await remote({ grants: ["persona", "lore"], reads: ["settings"] })
+		const scoped = r.got.filter((m) => m.t === "scoped")
+		expect(scoped).toEqual(
+			expect.arrayContaining([
+				{ t: "scoped", section: "persona", value: [persona] },
+				{ t: "scoped", section: "lore", value: { granted: true } }
+			])
+		)
+		// The cast itself was not granted: only the viewer's own persona went.
+		expect(scoped.map((m) => m.section).sort()).toEqual(["lore", "persona"])
 		r.port.close()
 		r.close()
 	})

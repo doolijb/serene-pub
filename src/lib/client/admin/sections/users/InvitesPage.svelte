@@ -1,7 +1,7 @@
 <script lang="ts">
 	/**
 	 * Admin › Users › Invites: issue and revoke invites. A page of the Users
-	 * section (breadcrumb Admin › People › Users › Invites), not an object
+	 * section (breadcrumb Admin › Pub › Users › Invites), not an object
 	 * kind of its own, so it is `InvitePanel` under the section's header.
 	 */
 	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"

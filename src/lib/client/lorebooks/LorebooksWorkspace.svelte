@@ -11,9 +11,17 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { warnBeforeUnload } from "$lib/client/forms/unsavedEdits.svelte"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
+	import LoadingState from "$lib/client/components/LoadingState.svelte"
 	import LorebookListItem from "$lib/client/components/listItems/LorebookListItem.svelte"
+	import ListGroupLabel from "$lib/client/components/panels/ListGroupLabel.svelte"
+	import SharePeopleModal from "$lib/client/components/sharing/SharePeopleModal.svelte"
+	import SharedWithLine from "$lib/client/components/sharing/SharedWithLine.svelte"
+	import { splitSharedRows } from "$lib/shared/utils/sharedRows"
+	import type { ConversationPerson } from "$lib/shared/sockets/conversations"
 	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
 	import ViewToolbar from "$lib/client/components/panels/ViewToolbar.svelte"
+	import PanelSplit from "$lib/client/components/panels/PanelSplit.svelte"
+	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import { toolbarButtonClass } from "$lib/client/components/panels/toolbarButton"
 	import LorebookUnsavedChangesModal from "$lib/client/components/modals/LorebookUnsavedChangesModal.svelte"
 	import {
@@ -21,25 +29,24 @@
 		HISTORY_TYPE_ID
 	} from "$lib/shared/entries/types"
 	import { attachLorebookToSession } from "$lib/client/utils/attachLorebookToSession"
-	import RowMenu from "$lib/client/components/menus/RowMenu.svelte"
+	import type { RowMenuEntries } from "$lib/client/components/menus/RowMenu.svelte"
 	import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
-	import DetailHero from "$lib/client/components/panels/DetailHero.svelte"
 	import BookSettings from "./BookSettings.svelte"
 	import DayOne from "./DayOne.svelte"
-	import LensRow from "./LensRow.svelte"
+	import LensTrack from "./LensTrack.svelte"
 	import LorebookActions from "./LorebookActions.svelte"
 	import LoreRail from "./LoreRail.svelte"
-	import ReadingInto from "./ReadingInto.svelte"
 	import ReplaceReadingModal from "./ReplaceReadingModal.svelte"
-	import MomentBanner from "./time/MomentBanner.svelte"
+	import ScopePopout from "./ScopePopout.svelte"
 	import MomentBar from "./time/MomentBar.svelte"
 	import CompareLines from "./time/CompareLines.svelte"
-	import WorldBar from "./time/WorldBar.svelte"
+	import RosterPopover from "./time/RosterPopover.svelte"
 	import { worldRoster } from "./time/worldRoster"
+	import { formatDate } from "./sections/historyDates"
 	import { appearancesOf } from "$lib/shared/lorebooks/presence"
 	import { refLinksFrom, type RefLink } from "./editor/refs"
 	import { whenBookOpens } from "./bookOpens.svelte"
-	import { setBookData } from "./bookData.svelte"
+	import { setBookData, type BookAccess } from "./bookData.svelte"
 	import {
 		castSignature,
 		dropDeletedEntry,
@@ -60,7 +67,7 @@
 		type ChoreField,
 		type LooseEnd
 	} from "./looseEnds"
-	import { layoutModeFor } from "./layoutMode"
+	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
 	import { loreRoute } from "./loreRoute.svelte"
 	import {
 		BookRelationships,
@@ -86,23 +93,24 @@
 		BOOK_ENTRY_TYPES,
 		bookIsEmpty,
 		CAST_KIND,
-		entryTotal,
 		matchSessionRoute,
 		mergeCastCount,
 		railScopes,
 		READ_INTO_SESSION,
 		SAVED_SCOPES,
-		savedScopeCount,
+		savedScopeCounts,
 		savedScopeFilters,
-		savedScopePool,
 		savedScopeRoute,
+		scopeChipLabel,
 		scopeRoute,
+		sessionMomentKey,
 		STOP_READING,
 		type SavedScopeId
 	} from "./scopes"
 	import { bookPoolItems, descriptorForKind } from "./sections"
 	import { castPoolItem } from "./castPool"
 	import { avatarSrc } from "$lib/client/utils/media"
+	import { memberFaceSrc } from "./cast/memberFace"
 	import type { EntryDecisions } from "./markers"
 	import type { PoolSource } from "./sections/types"
 	import { timelineCursor } from "./timelineCursor.svelte"
@@ -157,15 +165,20 @@
 	 */
 	const panelsCtx: PanelsCtx = getContext("panelsCtx")
 	const openSessionCtx: OpenSessionCtx = getContext("openSessionCtx")
+	const systemSettingsCtx: SystemSettingsCtx | undefined =
+		getContext("systemSettingsCtx")
 
 	let lorebookList: any[] = $state([])
 	let isLoading: boolean = $state(true)
 	/** The search over the list of books, which is a different list. */
 	let bookSearch: string = $state("")
-	let widthPx: number = $state(0)
+	/**
+	 * Measures the view, as every sidebar view does (STYLE-GUIDE §5.2): desk
+	 * at 900px and up (`layoutMode`'s floor, stated once in `viewMode`).
+	 */
+	const vm = new ViewModeTracker()
 	/** The workspace's own element: a lens shortcut is heard only inside it. */
 	let workspaceEl: HTMLDivElement | undefined = $state()
-	let menuOpen: boolean = $state(false)
 	let tabHasUnsavedChanges: boolean = $state(false)
 
 	let creating: boolean = $state(false)
@@ -175,8 +188,6 @@
 	let deletingId: number | null = $state(null)
 	/** The book being copied, and what it is called, for the naming prompt. */
 	let duplicating: { id: number; name: string } | null = $state(null)
-	/** The book's own readout, which is a screen rather than a scope. */
-	let settingsOpen: boolean = $state(false)
 
 	/** The book's figures, counted by the server. Null while on their way. */
 	let counts = $state<Record<string, number> | null>(null)
@@ -219,8 +230,60 @@
 	 * not.
 	 */
 	let openBookId = $derived(route.lorebookId)
-	let mode = $derived(layoutModeFor(widthPx))
+	let mode = $derived(vm.mode)
 	let book = $derived(lorebookList.find((l) => l.id === route.lorebookId))
+	/**
+	 * A book another person shared with the reader opens **read-only**
+	 * (PLAN-private-messages §6.7, ruled Q4): every lens renders, every
+	 * write verb is hidden or disabled. The list row's `bookAccess` (lane
+	 * A3) when the wire carries it, else its `isSharedWithMe` mark; the
+	 * server refuses a non-owner's write regardless.
+	 */
+	let bookAccess = $derived<BookAccess>(
+		(book?.bookAccess as BookAccess | undefined) ??
+			(book?.isSharedWithMe ? "shared" : "owner")
+	)
+	let readOnly = $derived(bookAccess !== "owner")
+
+	/**
+	 * Sharing (PLAN-private-messages §6.7): the owner's **Share…** while
+	 * accounts are on, and the **Shared with** faces under the header. Who it
+	 * is shared with is on `lorebooks:get` only (owner), held for the open
+	 * book while the owner could share it.
+	 */
+	let canShare = $derived(
+		!!book && !readOnly && !!systemSettingsCtx?.settings?.isAccountsEnabled
+	)
+	let sharing = $state(false)
+	let sharedWith = $state<ConversationPerson[]>([])
+	$effect(() => {
+		const id = canShare ? (book?.id ?? null) : null
+		sharedWith = []
+		if (id === null) return
+		const release = declareInterest<"lorebooks:get">(
+			interestKey("lorebooks:get", id),
+			(msg) => {
+				if (msg.lorebookId === id)
+					sharedWith = msg.lorebook?.sharedWith ?? []
+			}
+		)
+		const releaseShare = declareInterest<"lorebooks:share">(
+			"lorebooks:share",
+			(msg) => {
+				if (msg.lorebookId === id) sharedWith = msg.sharedWith
+			}
+		)
+		socket.emit("lorebooks:get", { id })
+		return () => {
+			release()
+			releaseShare()
+		}
+	})
+
+	function handleShareConfirm(userIds: number[]) {
+		if (!book) return
+		socket.emit("lorebooks:share", { lorebookId: book.id, userIds })
+	}
 	let lens = $derived<LoreLens>(route.lens ?? DEFAULT_LENS)
 	/** The lens's descriptor — what draws it, and how it treats day one. */
 	let activeLens = $derived(lensDescriptor(lens))
@@ -602,6 +665,12 @@
 		get lorebookId() {
 			return openBookId
 		},
+		get bookAccess() {
+			return bookAccess
+		},
+		get readOnly() {
+			return readOnly
+		},
 		get rows() {
 			return resolvedRows
 		},
@@ -631,7 +700,8 @@
 		},
 		refreshScenes() {
 			const id = route.lorebookId
-			if (id !== null) socket.emit("scenes:listByLorebook", { lorebookId: id })
+			if (id !== null)
+				socket.emit("scenes:listByLorebook", { lorebookId: id })
 		},
 		refreshCast() {
 			const id = route.lorebookId
@@ -643,7 +713,10 @@
 		refreshRows(typeId) {
 			const id = route.lorebookId
 			if (id !== null)
-				socket.emit("entries:list", { lorebookId: id, typeId: typeId as any })
+				socket.emit("entries:list", {
+					lorebookId: id,
+					typeId: typeId as any
+				})
 		}
 	})
 
@@ -659,9 +732,12 @@
 				r.characterId != null
 					? cardNames.get(r.characterId)
 					: undefined,
-				r.character && r.character.id === r.characterId
-					? avatarSrc(r.character)
-					: undefined
+				// Their face when retold (it belongs to the member, whichever
+				// card they read as), else the joined card's avatar.
+				memberFaceSrc(r, { full: false }) ??
+					(r.character && r.character.id === r.characterId
+						? avatarSrc(r.character)
+						: undefined)
 			)
 		)
 	)
@@ -702,16 +778,12 @@
 		)
 	)
 
-	let pinnedItems = $derived(
-		bookPool.filter((item) => item.pinned && !item.archived)
-	)
-
 	/** Every entry the book holds, whatever kind, as the line reads them. */
 	let lineEntries = $derived(
 		Object.values(resolvedRows).flat() as TimeEntryRow[]
 	)
 	/**
-	 * The session reading this book, for the rail's block.
+	 * The session reading this book, for the header's reading line.
 	 *
 	 * Gated on `lorebookId` as well as `sessionId`: a session is open in the
 	 * shell whatever book is on screen, and a session reading a DIFFERENT book
@@ -741,7 +813,6 @@
 	 */
 	function matchSession() {
 		if (!railSession) return
-		settingsOpen = false
 		void loreRoute.navigateTo(
 			matchSessionRoute(route, {
 				branchId: railSession.branchId,
@@ -749,6 +820,47 @@
 			})
 		)
 	}
+
+	/**
+	 * Whether the reader is somewhere the session reading this book is not:
+	 * another line, or another moment than its story clock (now when it
+	 * follows the line's present — owner ruling 3, 2026-09-28). The Moment
+	 * bar is the author's tool, not the session's, so this is when the
+	 * reading line offers **Read what it reads**.
+	 */
+	let readingParted = $derived(
+		!!railSession &&
+			((route.moment ?? undefined) !==
+				sessionMomentKey(railSession.clock) ||
+				(route.branch ?? null) !== railSession.branchId)
+	)
+
+	/**
+	 * Where the session reads this book, said only when it is not the plain
+	 * case: " on marrow-stays", " as of Year 3, Mo. 2", or nothing on main
+	 * at now. Retrieval reads the session's line at its clock, never the
+	 * moment the author has dragged to, so an author standing at Y2 is told
+	 * where the model stands.
+	 */
+	let readingWhere = $derived.by(() => {
+		if (!railSession) return ""
+		let where = ""
+		if (railSession.branchId !== null)
+			where += ` on ${
+				branches.find((b) => b.id === railSession.branchId)?.name ??
+				"a deleted line"
+			}`
+		if (railSession.clock)
+			where += ` as of ${formatDate(railSession.clock)}`
+		return where
+	})
+
+	/** What the newest run read in, said: "12 entries reached the last turn". */
+	let readingReached = $derived.by(() => {
+		const n = readInKeys?.size ?? 0
+		if (n === 0) return "nothing reached the last turn"
+		return `${n} ${n === 1 ? "entry" : "entries"} reached the last turn`
+	})
 
 	/** The session reading this book, which stands at now on the line. */
 	let timeSession = $derived(
@@ -806,32 +918,20 @@
 	})
 
 	/**
-	 * Each saved scope's figure over the list choosing it opens — the scope
-	 * being read, or the whole book from All and Cast — so badge = list
-	 * length (note 6). The whole book while the list showed one kind was the
-	 * figure that never matched.
+	 * Each saved scope's figure over the whole book, which is the list
+	 * choosing it opens (`savedScopeRoute`), so badge = list length (note 6).
 	 */
-	let savedCounts = $derived.by(() => {
-		const pool = savedScopePool(bookPool, route.scope)
-		return Object.fromEntries(
-			SAVED_SCOPES.map((s) => [s.id, savedScopeCount(s.id, pool)])
-		) as Record<SavedScopeId, number>
-	})
+	let savedCounts = $derived(savedScopeCounts(bookPool))
 
 	/**
-	 * Turns a saved scope on or off. On the Cast board or a lens that draws
-	 * no list, it opens Everything / List first: a saved scope narrows a
-	 * list and there was none to narrow.
+	 * Turns a saved scope on or off. Choosing one opens Everything, in a lens
+	 * that lists the pool, with Book settings left (`savedScopeRoute`).
 	 */
 	function chooseSaved(next: SavedScopeId | null) {
 		if (next) leaveQueue()
 		if (next) {
 			const target = savedScopeRoute(route)
-			if (target !== route) {
-				menuOpen = false
-				settingsOpen = false
-				void loreRoute.navigateTo(target)
-			}
+			if (target !== route) void loreRoute.navigateTo(target)
 		}
 		saved = next
 	}
@@ -922,8 +1022,6 @@
 	/** Opens the queue at Everything, on the lens its rows are drawn on. */
 	function openQueue() {
 		saved = null
-		menuOpen = false
-		settingsOpen = false
 		queueSnapshot = [...liveLooseEnds]
 		queueCurrent = null
 		let target = reduce(route, { type: "openScope", scope: "all" })
@@ -1023,6 +1121,24 @@
 	let scopes = $derived(railScopes(counts))
 
 	/**
+	 * What the line over the lens names: the scope in force and its figure
+	 * ("World lore · 41"; Everything is the book's total), or the saved scope
+	 * that stands instead of one ("Pinned · 5").
+	 */
+	let lensLineScope = $derived.by(() => {
+		if (saved)
+			return {
+				label: SAVED_SCOPES.find((s) => s.id === saved)?.label ?? "",
+				count: savedCounts[saved] as number | undefined
+			}
+		const facet = scopes.find((f) => f.id === route.scope)
+		return { label: facet?.label ?? "", count: facet?.count }
+	})
+
+	/** The one chip under the compact find row; null draws none. */
+	let scopeChip = $derived(scopeChipLabel(route.scope, saved))
+
+	/**
 	 * A book with nothing in it at all, which is the one book day one is for.
 	 *
 	 * The question is the rail's arithmetic rather than this screen's, so it is
@@ -1052,33 +1168,100 @@
 			: { ...poolFacets, search }
 	)
 
-	/**
-	 * One book's figure for the menu: the server's count of every entry type,
-	 * archived rows out (`lorebooks:list`'s `entryCount`).
-	 *
-	 * ⚠ The OPEN book reads the line-aware figures the rail keeps current
-	 * (`entries:counts`, refreshed on every write), so the menu and the hero
-	 * do not go stale after a write the list payload never heard about (#85).
-	 */
-	function bookCount(l: any): number {
-		if (l.id === route.lorebookId) {
-			const live = entryTotal(counts)
-			if (live !== undefined) return live
-		}
-		return l.entryCount ?? 0
-	}
-
-	/** The hero's meta line: how much the book holds, and the line if not main. */
-	let bookMeta = $derived.by(() => {
-		if (!book) return undefined
-		const n = bookCount(book)
-		const parts = [`${n} ${n === 1 ? "entry" : "entries"}`]
-		if (route.branch != null) {
-			const line = branches.find((b) => b.id === route.branch)?.name
-			if (line) parts.push(`on ${line}`)
-		}
-		return parts.join(" · ")
+	/** The book the open session reads, when it is not this one. */
+	let otherReadBook = $derived.by(() => {
+		const id = openSessionCtx.lorebookId
+		if (id === null || id === book?.id) return null
+		return lorebookList.find((l) => l.id === id)?.name ?? "another lorebook"
 	})
+
+	/** What reading this book into the open session, or stopping, does. */
+	let readingVerbTitle = $derived(
+		readingInto
+			? `Stop reading this book into ${readingInto}`
+			: otherReadBook
+				? `This session reads ${otherReadBook}; reading this book replaces it`
+				: "Read this book into the open session"
+	)
+
+	/**
+	 * Everything about the book that is not its reading verb: the nav
+	 * header's `⋯` (STYLE-GUIDE §6.3). The verb is the header's primary at
+	 * desk; compact, where the name needs the row, it heads this menu.
+	 */
+	let bookMenu = $derived<RowMenuEntries>(
+		readOnly
+			? [
+					// Shared with the reader: read and copy only (ruled Q3/Q4).
+					{
+						label: "Duplicate",
+						icon: Icons.Copy,
+						title: "Make your own copy of this book, entries, cast and all",
+						onSelect: () => {
+							duplicating = book ? { id: book.id, name: book.name } : null
+						}
+					}
+				]
+			: [
+		mode === "compact" &&
+			hasOpenSession && {
+				label: readingInto ? STOP_READING : READ_INTO_SESSION,
+				icon: readingInto ? Icons.BookX : Icons.BookOpen,
+				title: readingVerbTitle,
+				onSelect: changeReading
+			},
+		{
+			label: "Settings",
+			icon: Icons.SlidersHorizontal,
+			title: "What this book holds, its calendar and its clock",
+			onSelect: () => void loreRoute.navigate({ type: "openSettings" })
+		},
+		{
+			label: "Duplicate",
+			icon: Icons.Copy,
+			title: "Copy this book, entries, cast and all",
+			onSelect: () => {
+				duplicating = book ? { id: book.id, name: book.name } : null
+			}
+		},
+		canShare && {
+			label: "Share…",
+			icon: Icons.Share2,
+			title: "Let people on this pub read this book and make their own copy",
+			onSelect: () => (sharing = true)
+		},
+		{
+			label: "Export… (paused)",
+			icon: Icons.Download,
+			disabled: true,
+			title: LOREBOOK_EXPORT_PAUSED
+		},
+		!hasOpenSession && {
+			label: READ_INTO_SESSION,
+			icon: Icons.BookOpen,
+			disabled: true,
+			title: "Open a session you own to read this book into it"
+		},
+		{ separator: true },
+		{
+			label: "Delete this lorebook",
+			icon: Icons.Trash2,
+			destructive: true,
+			onSelect: () => {
+				deletingId = book?.id ?? null
+			}
+		}
+			]
+	)
+
+	/**
+	 * The way back to every book, where New and Import live (note 10). At
+	 * both widths: the book level replaces the list, so the list is never
+	 * on screen beside it (STYLE-GUIDE §6.3).
+	 */
+	function backToList() {
+		void loreRoute.navigate({ type: "openBook", lorebookId: null })
+	}
 
 	let filteredLorebooks = $derived.by(() => {
 		let list = [...lorebookList]
@@ -1091,6 +1274,9 @@
 				(l.description && l.description.toLowerCase().includes(needle))
 		)
 	})
+
+	/** The reader's own books, then the ones shared with them. */
+	let shelf = $derived(splitSharedRows(filteredLorebooks))
 
 	/**
 	 * A section is drawn unless the book is gone, and only a drawn section can
@@ -1110,44 +1296,36 @@
 	let guardedChanges = $state(false)
 
 	function openBook(lorebookId: number | null, scope?: LoreScope) {
-		settingsOpen = false
 		void loreRoute.navigate({ type: "openBook", lorebookId, scope })
 	}
 
+	/**
+	 * Opens a scope, which a saved scope stands instead of, so choosing one
+	 * leaves the saved scope. Book settings is left by the route (`reduce`).
+	 */
 	function openScope(scope: LoreScope) {
-		menuOpen = false
-		settingsOpen = false
+		saved = null
 		leaveQueue()
-		// The kind chips narrow one scope's pool; carrying them into another
-		// one would empty a list the reader had not narrowed.
-		poolFacets = { ...poolFacets, kinds: [] }
 		// Under a lens that draws its own set whatever the scope (Places,
 		// Lives), the scope opens in the default lens (`scopeRoute`).
 		void loreRoute.navigateTo(scopeRoute(route, scope))
 	}
 
 	function openLens(next: LoreLens) {
-		menuOpen = false
-		settingsOpen = false
 		leaveQueue()
 		void loreRoute.navigate({ type: "setLens", lens: next })
 	}
 
 	/**
-	 * Opens an entry, leaving Book settings (#86). A helper rather than an
-	 * effect on the route, because a blanket effect would skip the settings
-	 * page's unsaved-changes guard and close it on a line switch too.
+	 * Opens an entry; the route leaves Book settings with it (#86), through
+	 * the settings page's unsaved-changes guard.
 	 */
 	function openEntry(entryId: number) {
-		menuOpen = false
-		settingsOpen = false
 		void loreRoute.navigate({ type: "openEntry", entryId })
 	}
 
 	/** Opens a cast member on the Cast board, leaving Book settings (#86). */
 	function openMember(castId: number) {
-		menuOpen = false
-		settingsOpen = false
 		void loreRoute.navigate({
 			type: "openCastMember",
 			scope: "cast",
@@ -1156,9 +1334,8 @@
 	}
 
 	/**
-	 * Reads the book as of a date — from the moment bar AND the World bar
-	 * (plan B7: one path, so the same move never asks in one place and not
-	 * the other).
+	 * Reads the book as of a date — the moment bar's one path (plan B7: one
+	 * path, so the same move never asks in one place and not the other).
 	 *
 	 * Set rather than navigated: a moment is a way of reading the screen that
 	 * is open rather than a screen being left, so there is no draft to ask
@@ -1280,6 +1457,33 @@
 	}
 
 	/**
+	 * Escape over Book settings is Back: Settings is a route, so it pops
+	 * first and alone, through the unsaved-changes guard. Heard on the
+	 * workspace's own element, so it is claimed before the shell's Escape
+	 * (which steps the view's width down) and only while focus is inside the
+	 * book. Outside a text box, as the shell's is; a popover or menu is
+	 * portaled outside the workspace and answers its own Escape.
+	 */
+	function onSettingsEscape(event: KeyboardEvent) {
+		if (event.key !== "Escape" || event.defaultPrevented) return
+		if (!route.settings) return
+		const el = event.target as HTMLElement | null
+		if (
+			el?.isContentEditable ||
+			el?.closest?.("input, textarea, select, [contenteditable='true']")
+		)
+			return
+		event.preventDefault()
+		void loreRoute.navigate({ type: "back" })
+	}
+	$effect(() => {
+		const el = workspaceEl
+		if (!el) return
+		el.addEventListener("keydown", onSettingsEscape)
+		return () => el.removeEventListener("keydown", onSettingsEscape)
+	})
+
+	/**
 	 * A book waiting on the reader's word before it replaces the one the open
 	 * session reads. A session reads one book at a time, so reading another
 	 * stops reading this one — which is worth a question, not a surprise.
@@ -1289,13 +1493,6 @@
 		bookName: string
 		currentName: string
 	} | null>(null)
-
-	/** The book the open session reads, when it is not this one. */
-	let otherReadBook = $derived.by(() => {
-		const id = openSessionCtx.lorebookId
-		if (id === null || id === book?.id) return null
-		return lorebookList.find((l) => l.id === id)?.name ?? "another lorebook"
-	})
 
 	function readIntoSession(lorebookId: number) {
 		if (openSessionCtx.sessionId === null) return
@@ -1328,7 +1525,6 @@
 
 	/** Reads this book into the open session, or stops reading it into one. */
 	function changeReading() {
-		menuOpen = false
 		if (!book || openSessionCtx.sessionId === null) return
 		if (openSessionCtx.lorebookId === book.id) handleDetachFromSession()
 		else handleAttachToSession(book.id)
@@ -1383,9 +1579,6 @@
 			get label() {
 				return book ? book.name : "Lorebooks"
 			},
-			get placeholder() {
-				return book ? "Search this book" : "Filter lorebooks"
-			},
 			getQuery: () => (book ? search : bookSearch),
 			setQuery: (next) => {
 				if (book) search = next
@@ -1429,7 +1622,7 @@
 		socket.emit("amendments:list", { lorebookId: id })
 		openBookTime.open(id)
 		socket.emit("lorebooks:storyTime", { lorebookId: id })
-		// ⚠ The cast is REQUESTED on open, for the World bar's roster. As a
+		// ⚠ The cast is REQUESTED on open, for the roster popover. As a
 		// cascade of somebody else's write it would not arrive at all until
 		// something touched a binding, and the world would read as empty.
 		socket.emit("lorebooks:bindingList", {
@@ -1634,8 +1827,6 @@
 		// re-carded or re-stated is a change the graph's names follow.
 		if (castSignature(castRows) !== before) relationships.load()
 	}
-
-
 
 	function handleRecentDecisions(
 		msg: Sockets.Entries.RecentDecisions.Response
@@ -1972,8 +2163,10 @@
 	 * book its reply names.
 	 */
 	useInterest<"scenes:update">("scenes:update", handleSceneUpdated)
-	useInterest<"narrativeGraph:deleteNode">("narrativeGraph:deleteNode", (msg) =>
-		handleCastRemoved(msg.lorebookId, (msg.deletedLoreCount ?? 0) > 0)
+	useInterest<"narrativeGraph:deleteNode">(
+		"narrativeGraph:deleteNode",
+		(msg) =>
+			handleCastRemoved(msg.lorebookId, (msg.deletedLoreCount ?? 0) > 0)
 	)
 	useInterest<"narrativeGraph:mergeNode">("narrativeGraph:mergeNode", (msg) =>
 		handleCastRemoved(msg.survivorNode?.lorebookId)
@@ -2011,161 +2204,200 @@
 	})
 </script>
 
-{#snippet bookChip()}
-	<!-- Everything about the book, in the open (note 10): Settings and
-	     reading are labelled buttons, the rest one ⋯ away. Opening another
-	     book, New and Import live on the Lorebooks list, one press back. -->
-	<div
-		class="flex shrink-0 flex-wrap items-center gap-1"
-		data-lore-book-actions
-	>
+{#snippet readingVerb()}
+	<!-- The book's one verb toward the open session, labelled (STYLE-GUIDE
+	     §6.3): offered only for a session the reader owns. -->
+	{#if hasOpenSession}
 		<button
 			type="button"
-			class="btn btn-sm preset-tonal-surface gap-1"
-			title="What this book holds, its calendar and its clock"
-			data-lore-book-settings
-			onclick={() => {
-				menuOpen = false
-				settingsOpen = true
-			}}
+			class="btn btn-sm preset-tonal-surface shrink-0 gap-1"
+			title={readingVerbTitle}
+			data-lore-book-reading
+			onclick={changeReading}
 		>
-			<Icons.SlidersHorizontal size={14} aria-hidden="true" />
-			<span>Settings</span>
+			{#if readingInto}
+				<Icons.BookX size={14} aria-hidden="true" />
+				<span>{STOP_READING}</span>
+			{:else}
+				<Icons.BookOpen size={14} aria-hidden="true" />
+				<span>{READ_INTO_SESSION}</span>
+			{/if}
 		</button>
-		{#if hasOpenSession}
-			<button
-				type="button"
-				class="btn btn-sm preset-tonal-surface gap-1"
-				title={readingInto
-					? `Stop reading this book into ${readingInto}`
-					: otherReadBook
-						? `This session reads ${otherReadBook}; reading this book replaces it`
-						: "Read this book into the open session"}
-				data-lore-book-reading
-				onclick={changeReading}
-			>
-				{#if readingInto}
-					<Icons.BookX size={14} aria-hidden="true" />
-					<span>{STOP_READING}</span>
-				{:else}
-					<Icons.BookOpen size={14} aria-hidden="true" />
-					<span>{READ_INTO_SESSION}</span>
-				{/if}
-			</button>
-		{/if}
-		<RowMenu
-			label="More for {book?.name ?? 'this lorebook'}"
-			triggerLabel="More for this lorebook"
-			triggerTitle="More"
-			triggerClass="btn btn-sm preset-tonal-surface px-2"
-			open={menuOpen}
-			onOpenChange={(open) => (menuOpen = open)}
-			items={[
-				{
-					label: "Duplicate",
-					icon: Icons.Copy,
-					title: "Copy this book, entries, cast and all",
-					onSelect: () => {
-						menuOpen = false
-						duplicating = book
-							? { id: book.id, name: book.name }
-							: null
-					}
-				},
-				{
-					label: "Export… (paused)",
-					icon: Icons.Download,
-					disabled: true,
-					title: LOREBOOK_EXPORT_PAUSED
-				},
-				!hasOpenSession && {
-					label: READ_INTO_SESSION,
-					icon: Icons.BookOpen,
-					disabled: true,
-					title: "Open a session you own to read this book into it"
-				},
-				{ separator: true },
-				{
-					label: "Delete this lorebook",
-					icon: Icons.Trash2,
-					destructive: true,
-					onSelect: () => {
-						menuOpen = false
-						deletingId = book?.id ?? null
-					}
-				}
-			]}
-		/>
-	</div>
+	{/if}
 {/snippet}
 
-{#snippet bookHero()}
-	<!-- The book's own header (STYLE-GUIDE §6.4): what it is, how much it
-	     holds, which line is being read, and everything about the book. -->
-	<DetailHero
-		class="min-w-0 flex-1"
+{#snippet readingSubtitle()}
+	<!-- The reading line: which session reads this book, where it stands
+	     when that is not main at now, and what reached its last turn. When
+	     the reader stands somewhere else, one link puts them where the
+	     session is. -->
+	<p class="text-surface-600-400 min-w-0 text-xs" data-lore-reading>
+		{#if railSession}
+			Read by <a
+				href="/sessions/{railSession.id}"
+				class="text-primary-700-300 font-medium underline-offset-2 hover:underline"
+				title="Open {railSession.name}"
+			>
+				{railSession.name}
+			</a>
+			{readingWhere} · {readingReached}{#if readingParted}
+				· <button
+					type="button"
+					class="text-primary-700-300 font-medium underline-offset-2 hover:underline"
+					title="Go to the line and moment the session reads"
+					data-lore-match-session
+					onclick={matchSession}
+				>
+					Read what it reads
+				</button>{/if}
+		{:else}
+			Not read by a session
+		{/if}
+	</p>
+{/snippet}
+
+{#snippet bookHeader()}
+	<!-- One nav header at both widths (STYLE-GUIDE §6.3): the book's name is
+	     the title, the reading line its subtitle, and the back always shows
+	     — the book list is off screen at desk too. -->
+	<PanelNavHeader
 		title={book?.name ?? "Lorebook"}
-		icon={Icons.BookMarked}
-		meta={bookMeta}
-		actions={bookChip}
+		onBack={backToList}
+		backLabel="Lorebooks"
+		primaryAction={mode === "desk" && !readOnly ? readingVerb : undefined}
+		menuItems={bookMenu}
+		actionsLabel={book?.name ?? "this lorebook"}
+		subtitle={readOnly ? sharedSubtitle : readingSubtitle}
+	/>
+	{#if canShare}
+		<SharedWithLine people={sharedWith} class="-mt-2" />
+	{/if}
+{/snippet}
+
+{#snippet sharedSubtitle()}
+	<!-- A book shared with the reader: whose it is, and that it only reads.
+	     It is never read into the reader's session (ruled Q3). -->
+	<p class="text-surface-600-400 min-w-0 text-xs" data-lore-shared>
+		{book?.ownerName ? `Shared by ${book.ownerName}` : "Shared with you"} · read
+		only
+	</p>
+{/snippet}
+
+{#snippet roster()}
+	<!-- Who is in the world at the moment being read: a cast fact, so it
+	     stands beside the Cast scope's name. -->
+	<RosterPopover
+		{branches}
+		branchId={route.branch ?? null}
+		moment={route.moment}
+		{inhabitants}
+		onOpenMember={openMember}
+		placement="bottom-start"
 	/>
 {/snippet}
 
-{#snippet scopeChips()}
-	<div class="flex flex-wrap gap-1" role="group" aria-label="Views">
-		{#each scopes as facet (facet.id)}
-			<button
-				type="button"
-				class="chip gap-1 {route.scope === facet.id
-					? 'preset-tonal-primary'
-					: 'preset-tonal-surface'}"
-				class:opacity-60={facet.empty && route.scope !== facet.id}
-				aria-pressed={route.scope === facet.id}
-				data-lore-scope={facet.id}
-				onclick={() => openScope(facet.id)}
-			>
-				<span>{facet.label}</span>
-				{#if facet.count !== undefined}
-					<span class="text-xs opacity-80">{facet.count}</span>
-				{/if}
-			</button>
-		{/each}
-		<!-- The Loose ends queue, which the desk opens from the rail. -->
-		<button
-			type="button"
-			class="chip gap-1 {queueSnapshot
-				? 'preset-tonal-primary'
-				: 'preset-tonal-surface'}"
-			class:opacity-60={liveLooseEnds.length === 0 && !queueSnapshot}
-			aria-pressed={queueSnapshot !== null}
-			data-lore-loose-ends
-			onclick={() => (queueSnapshot ? leaveQueue() : openQueue())}
+{#snippet lensLine()}
+	<!-- The line over every lens: WHAT on the left (the scope and its
+	     figure, and on Cast who is in the world now), HOW on the right.
+	     Book settings sets the lenses aside, so the line goes with them. -->
+	{#if !route.settings}
+		<div
+			class="flex min-w-0 shrink-0 items-center gap-2"
+			data-lore-lens-line
 		>
-			<span>Loose ends</span>
-			<span class="text-xs opacity-80">{liveLooseEnds.length}</span>
-		</button>
-	</div>
+			<p class="min-w-0 truncate text-sm" data-lore-lens-line-scope>
+				<span class="font-semibold">{lensLineScope.label}</span>
+				{#if lensLineScope.count !== undefined}
+					<span class="text-surface-600-400">
+						· {lensLineScope.count}
+					</span>
+				{/if}
+			</p>
+			{#if route.scope === "cast" && !saved}
+				{@render roster()}
+			{/if}
+			<span class="flex-1"></span>
+			<LensTrack value={lens} onselect={openLens} />
+		</div>
+	{/if}
 {/snippet}
 
-{#snippet worldBar()}
-	<!-- Where you are in this story, as one control. Line and moment were two
-	     corners of the screen before; they are one question. -->
-	{#if book}
-		<WorldBar
-			lorebookId={book.id}
-			{branches}
-			branchId={route.branch ?? null}
-			moment={route.moment}
-			{inhabitants}
-			comparing={!!route.compare}
-			onBranch={(next) =>
-				loreRoute.navigate({ type: "setBranch", branch: next })}
-			onMoment={setMoment}
-			onCompare={() =>
-				loreRoute.navigate({ type: "setCompare", compare: true })}
-			onOpenMember={openMember}
-		/>
+{#snippet findRow()}
+	<!-- Compact's find row (STYLE-GUIDE §6.3): the filter box, the scope
+	     popout, the lens popout; the scope in force as one chip under it,
+	     whose × returns to Everything. -->
+	{#if !route.settings}
+		<div class="flex shrink-0 flex-col gap-2" data-lore-find-row>
+			<div class="flex min-w-0 items-center gap-2">
+				<div class="min-w-0 flex-1">
+					<PanelFilterInput
+						bind:value={search}
+						data-lore-search
+						placeholder="Search this book"
+					/>
+				</div>
+				<ScopePopout
+					{scopes}
+					scope={route.scope}
+					{savedCounts}
+					{saved}
+					onScope={openScope}
+					onSaved={chooseSaved}
+					looseEndsCount={readOnly ? 0 : liveLooseEnds.length}
+					onOpenLooseEnds={openQueue}
+				/>
+				<LensTrack compact value={lens} onselect={openLens} />
+			</div>
+			{#if scopeChip}
+				<div class="flex min-w-0 items-center gap-2">
+					<span
+						class="bg-surface-200-800 text-surface-700-300 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
+						data-lore-scope-chip
+					>
+						<span class="min-w-0 truncate">{scopeChip}</span>
+						<button
+							type="button"
+							class="hover:text-foreground shrink-0"
+							onclick={() => {
+								saved = null
+								openScope("all")
+							}}
+							title="Show everything"
+							aria-label="Clear {scopeChip}, show everything"
+						>
+							<Icons.X size={12} aria-hidden="true" />
+						</button>
+					</span>
+					{#if route.scope === "cast" && !saved}
+						{@render roster()}
+					{/if}
+				</div>
+			{/if}
+		</div>
 	{/if}
+{/snippet}
+
+{#snippet momentBar(compact: boolean)}
+	<!-- WHEN, in one place (design A.1): the line, the moment in words, the
+	     axis, and the one Return to now. Compact folds it to one line. -->
+	<MomentBar
+		{moment}
+		present={storyPresent}
+		onSetPresent={readOnly ? undefined : setStoryClock}
+		castNotYet={castAsOfCounts}
+		asOfCount={poolAsOf}
+		onMoment={setMoment}
+		onOpenTimeline={lens === "time" ? undefined : () => openLens("time")}
+		lorebookId={book?.id}
+		{branches}
+		branchId={route.branch ?? null}
+		comparing={!!route.compare}
+		onBranch={(next) =>
+			loreRoute.navigate({ type: "setBranch", branch: next })}
+		onCompare={() =>
+			loreRoute.navigate({ type: "setCompare", compare: true })}
+		{compact}
+	/>
 {/snippet}
 
 {#snippet queueBar()}
@@ -2176,7 +2408,9 @@
 		data-loose-ends-bar
 	>
 		<span class="text-sm font-semibold">Loose ends</span>
-		<span class="text-surface-600-400 text-xs">{queueRows.length} left</span>
+		<span class="text-surface-600-400 text-xs">
+			{queueRows.length} left
+		</span>
 		<span class="flex-1"></span>
 		<button
 			type="button"
@@ -2202,12 +2436,7 @@
 		{@render queueBar()}
 	{/if}
 	{#if !book}
-		<div class="flex items-center justify-center py-8">
-			<Icons.Loader2
-				size={20}
-				class="text-surface-600-400 animate-spin"
-			/>
-		</div>
+		<LoadingState message="Opening the lorebook…" />
 	{:else if route.compare && route.branch != null}
 		<!-- Drawn in place of the pool, not beside it: comparing is a different
 		     question from reading, and a split screen would answer neither. -->
@@ -2237,7 +2466,13 @@
 			onClose={() =>
 				loreRoute.navigate({ type: "setCompare", compare: false })}
 		/>
-	{:else if settingsOpen}
+	{:else if route.settings && readOnly}
+		<!-- A shared book has no settings to change. -->
+		<EmptyState
+			icon={Icons.Lock}
+			message="This book is shared with you to read. Duplicate it to change its settings."
+		/>
+	{:else if route.settings}
 		{#key book.id}
 			<BookSettings
 				lorebookId={book.id}
@@ -2257,7 +2492,7 @@
 				{readingInto}
 				canChangeReading={hasOpenSession}
 				bind:hasUnsavedChanges={tabHasUnsavedChanges}
-				onClose={() => (settingsOpen = false)}
+				onClose={() => loreRoute.navigate({ type: "closeSettings" })}
 				onChangeReading={changeReading}
 				onImport={() => (importing = true)}
 				onDuplicate={() =>
@@ -2265,6 +2500,8 @@
 				onDelete={() => (deletingId = book.id)}
 			/>
 		{/key}
+	{:else if bookEmpty && !explicitlyElsewhere && readOnly}
+		<EmptyState icon={Icons.Book} message="This book is empty." />
 	{:else if bookEmpty && !explicitlyElsewhere}
 		{#key book.id}
 			<DayOne lorebookId={book.id} onImport={() => (importing = true)} />
@@ -2286,225 +2523,168 @@
 	{/if}
 {/snippet}
 
-<!-- `bind:clientWidth` is a ResizeObserver on this element, so the layout
-     follows the container it is actually given rather than the viewport. -->
 <svelte:window onkeydown={onWorkspaceKey} />
 
+<!-- A view's root (STYLE-GUIDE §5.2): measured by `vm` — a ResizeObserver,
+     so the layout follows the container it is given rather than the
+     viewport — and no padding; the panes own the 16px. -->
 <div
-	class="flex h-full min-h-0 flex-col p-4"
-	bind:clientWidth={widthPx}
+	class="flex h-full min-h-0 flex-col"
+	use:vm.observe
 	bind:this={workspaceEl}
 	data-lore-layout={mode}
 >
 	{#if route.lorebookId === null}
-		<!-- The view toolbar (STYLE-GUIDE §6.3): New is the primary, Import
-		     a secondary icon button, the filter box on its own row. -->
-		<ViewToolbar label="Lorebooks" class="mb-4">
-			{#snippet primary()}
-				<button
-					type="button"
-					class="btn btn-sm preset-filled-primary-500 shrink-0"
-					onclick={() => (creating = true)}
-					title="Create new lorebook"
-				>
-					<Icons.Plus size={16} aria-hidden="true" />
-					New
-				</button>
+		<!-- The list of books is a list column like every other view's, and
+		     it fills the view: nothing opens beside it (a book replaces it). -->
+		<PanelSplit mode={vm.mode} hasDetail={false} listFills>
+			{#snippet toolbar()}
+				<!-- The view toolbar (STYLE-GUIDE §6.3): New is the primary,
+				     Import a secondary icon button, the filter box on its own
+				     row. -->
+				<ViewToolbar label="Lorebooks">
+					{#snippet primary()}
+						<button
+							type="button"
+							class="btn btn-sm preset-filled-primary-500 shrink-0"
+							onclick={() => (creating = true)}
+							title="Create new lorebook"
+						>
+							<Icons.Plus size={16} aria-hidden="true" />
+							New
+						</button>
+					{/snippet}
+					{#snippet actions()}
+						<button
+							type="button"
+							class={toolbarButtonClass()}
+							title="Import a lorebook"
+							aria-label="Import a lorebook"
+							onclick={() => (importing = true)}
+						>
+							<Icons.Upload size={16} aria-hidden="true" />
+						</button>
+					{/snippet}
+					{#snippet filter()}
+						<PanelFilterInput
+							bind:value={bookSearch}
+							placeholder="lorebooks"
+							count={lorebookList.length}
+							aria-label="Search lorebooks"
+						/>
+					{/snippet}
+				</ViewToolbar>
 			{/snippet}
-			{#snippet actions()}
-				<button
-					type="button"
-					class={toolbarButtonClass()}
-					title="Import a lorebook"
-					aria-label="Import a lorebook"
-					onclick={() => (importing = true)}
-				>
-					<Icons.Upload size={16} aria-hidden="true" />
-				</button>
-			{/snippet}
-			{#snippet filter()}
-				<PanelFilterInput
-					bind:value={bookSearch}
-					placeholder="lorebooks"
-					count={lorebookList.length}
-					aria-label="Search lorebooks"
-				/>
-			{/snippet}
-		</ViewToolbar>
-		<div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-			{#if isLoading}
-				<div class="flex items-center justify-center py-8">
-					<Icons.Loader2
-						size={20}
-						class="text-surface-600-400 animate-spin"
+			{#snippet list()}
+				{#if isLoading}
+					<LoadingState message="Loading lorebooks…" />
+				{:else if filteredLorebooks.length === 0}
+					<EmptyState
+						icon={Icons.Book}
+						message={bookSearch
+							? `No lorebooks found matching "${bookSearch}".`
+							: "No lorebooks yet. A lorebook holds the world, the cast and the history a session can read from. Create one to get started."}
+						ctaLabel={bookSearch ? undefined : "New lorebook"}
+						onCta={bookSearch ? undefined : () => (creating = true)}
 					/>
-				</div>
-			{:else if filteredLorebooks.length === 0}
-				<EmptyState
-					icon={Icons.Book}
-					message={bookSearch
-						? `No lorebooks found matching "${bookSearch}".`
-						: "No lorebooks yet. Create one to get started."}
-					ctaLabel={bookSearch ? undefined : "New lorebook"}
-					onCta={bookSearch ? undefined : () => (creating = true)}
-				/>
-			{:else}
-				{#each filteredLorebooks as l (l.id)}
-					<LorebookListItem
-						lorebook={l}
-						onclick={(lorebook) => openBook(lorebook.id)}
-						onDelete={(id) => (deletingId = id)}
-						bindingsCount={l.lorebookBindings?.length || 0}
-						entryCounts={l.entryCounts}
-						{hasOpenSession}
-						{openSessionHasLorebook}
-						isOpenSessionLorebook={openSessionCtx.lorebookId ===
-							l.id}
-						onAttachToSession={handleAttachToSession}
-						onDetachFromSession={handleDetachFromSession}
-					/>
-				{/each}
-			{/if}
-		</div>
+				{:else}
+					{#if shelf.own.length}
+					<div
+						class="flex flex-col gap-2"
+						role="list"
+						aria-label="Lorebooks"
+					>
+						{#each shelf.own as l (l.id)}
+							<LorebookListItem
+								lorebook={l}
+								onclick={(lorebook) => openBook(lorebook.id)}
+								onDelete={(id) => (deletingId = id)}
+								bindingsCount={l.lorebookBindings?.length || 0}
+								entryCounts={l.entryCounts}
+								{hasOpenSession}
+								{openSessionHasLorebook}
+								isOpenSessionLorebook={openSessionCtx.lorebookId ===
+									l.id}
+								onAttachToSession={handleAttachToSession}
+								onDetachFromSession={handleDetachFromSession}
+							/>
+						{/each}
+					</div>
+					{/if}
+					{#if shelf.shared.length}
+						<!-- Read and Duplicate only (ruled Q3/Q4): never
+						     deleted or read into a session from here. -->
+						<ListGroupLabel
+							label="Shared with you"
+							id="loreSharedWithYou"
+						/>
+						<div
+							class="flex flex-col gap-2"
+							role="list"
+							aria-labelledby="loreSharedWithYou"
+						>
+							{#each shelf.shared as l (l.id)}
+								<LorebookListItem
+									lorebook={l}
+									onclick={(lorebook) => openBook(lorebook.id)}
+									entryCounts={l.entryCounts}
+									hasOpenSession={false}
+									openSessionHasLorebook={false}
+									isOpenSessionLorebook={false}
+								/>
+							{/each}
+						</div>
+					{/if}
+				{/if}
+			{/snippet}
+			{#snippet detail()}{/snippet}
+		</PanelSplit>
 	{:else if mode === "desk"}
-		<div class="mb-3 flex min-w-0 items-start gap-2">
-			<!-- The way back to every book, where New and Import live
-			     (note 10) — the desk had none but the old Manage menu. -->
-			<button
-				type="button"
-				class="btn btn-sm preset-tonal-surface shrink-0 gap-1"
-				title="All lorebooks"
-				data-lore-all-books
-				onclick={() =>
-					loreRoute.navigate({ type: "openBook", lorebookId: null })}
-			>
-				<Icons.ChevronLeft size={14} aria-hidden="true" />
-				<span>Lorebooks</span>
-			</button>
-			{@render bookHero()}
-		</div>
-		<div class="mb-3">
-			{@render worldBar()}
-		</div>
-		<div class="flex min-h-0 flex-1 gap-4">
+		<!-- Three columns (STYLE-GUIDE §5.2): the book's section list, flush
+		     at the view's edge with its own hairline, then the book pane,
+		     whose lens draws its own `ResizableSplit`. The pane is four
+		     bands: the header, the lens line, the lens, the moment bar. -->
+		<div class="flex min-h-0 flex-1">
 			<LoreRail
-				{branches}
-				branchId={route.branch ?? null}
-				moment={route.moment}
-				session={railSession}
-				onMatchSession={matchSession}
 				{scopes}
-				scope={route.scope}
+				scope={route.settings ? null : route.scope}
 				{lens}
 				{search}
 				{savedCounts}
 				{saved}
-				looseEndsCount={liveLooseEnds.length}
+				looseEndsCount={readOnly ? 0 : liveLooseEnds.length}
 				looseEndsOpen={queueSnapshot !== null}
-				onLooseEnds={() =>
-					queueSnapshot ? leaveQueue() : openQueue()}
-				pinned={pinnedItems}
-				{readingInto}
-				reached={readInKeys ? readInKeys.size : null}
+				onOpenLooseEnds={openQueue}
 				onScope={openScope}
-				onLens={openLens}
 				onSaved={chooseSaved}
 				onSearch={(next) => (search = next)}
-				onOpenEntry={(item) => openEntry(item.id)}
 			/>
-			<div class="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-				{#if moment}
-					<MomentBanner
-						{moment}
-						pool={poolAsOf}
-						onReturnToNow={() => setMoment(undefined)}
-					/>
-				{/if}
+			<div class="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-4">
+				{@render bookHeader()}
+				{@render lensLine()}
 				<div class="flex min-h-0 min-w-0 flex-1 flex-col">
 					{@render workspace()}
 				</div>
-				<!-- One line under every lens: the story axis, and the moment
-				     being read. Never inside a lens, because moving between
-				     them must not move the moment. -->
-				<MomentBar
-					{moment}
-					present={storyPresent}
-					onSetPresent={setStoryClock}
-					castNotYet={castAsOfCounts}
-					onMoment={setMoment}
-					onOpenTimeline={lens === "time"
-						? undefined
-						: () => openLens("time")}
-				/>
+				<!-- One line under every lens: the line, the moment being
+				     read, the story axis. Never inside a lens, because moving
+				     between them must not move the moment. -->
+				<div class="shrink-0">
+					{@render momentBar(false)}
+				</div>
 			</div>
 		</div>
 	{:else}
-		<div class="mb-2 flex min-w-0 items-start gap-2">
-			<button
-				type="button"
-				class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
-				onclick={() => loreRoute.navigate({ type: "back" })}
-				title="Back"
-				aria-label="Back"
-			>
-				<Icons.ChevronLeft size={16} aria-hidden="true" />
-			</button>
-			{@render bookHero()}
-		</div>
-		<div class="mb-2">
-			{@render worldBar()}
-		</div>
-		{#if railSession}
-			<!-- The rail is a desk thing; the session reading this book is not,
-			     so the block is mounted in both layouts rather than living
-			     inside `LoreRail`. -->
-			<div class="mb-2">
-				<ReadingInto
-					sessionId={railSession.id}
-					sessionName={railSession.name}
-					reached={readInKeys ? readInKeys.size : null}
-					sessionBranchId={railSession.branchId}
-					sessionStoryClock={railSession.clock}
-					branchId={route.branch ?? null}
-					{moment}
-					{branches}
-					onMatch={matchSession}
-				/>
+		<!-- Compact: the header, the find row, the lens, and the moment bar
+		     folded to one line. -->
+		<div class="flex min-h-0 flex-1 flex-col gap-3 p-4">
+			{@render bookHeader()}
+			{@render findRow()}
+			<div class="flex min-h-0 flex-1 flex-col">
+				{@render workspace()}
 			</div>
-		{/if}
-		<div class="mb-2 flex flex-col gap-2">
-			<PanelFilterInput
-				bind:value={search}
-				data-lore-search
-				placeholder="Search this book"
-			/>
-			{@render scopeChips()}
-		</div>
-		{#if moment}
-			<MomentBanner
-				{moment}
-				pool={poolAsOf}
-				onReturnToNow={() => setMoment(undefined)}
-			/>
-		{/if}
-		<div class="mt-2 flex min-h-0 flex-1 flex-col">
-			{@render workspace()}
-		</div>
-		<div class="mt-2">
-			<MomentBar
-				{moment}
-				present={storyPresent}
-				onSetPresent={setStoryClock}
-				castNotYet={castAsOfCounts}
-				onMoment={setMoment}
-				onOpenTimeline={lens === "time"
-					? undefined
-					: () => openLens("time")}
-			/>
-		</div>
-		<!-- The lens row moves to the bottom, where a thumb reaches it. -->
-		<div class="mt-2">
-			<LensRow {lens} compact onLens={openLens} />
+			<div class="shrink-0">
+				{@render momentBar(true)}
+			</div>
 		</div>
 	{/if}
 </div>
@@ -2515,6 +2695,9 @@
 	bind:exportingId
 	bind:deletingId
 	bind:duplicating
+	deletingBook={deletingId === null
+		? null
+		: (lorebookList.find((l) => l.id === deletingId) ?? null)}
 	{canOfferAttachToSession}
 	onDeleted={(id) => {
 		if (route.lorebookId === id) loreRoute.set(emptyRoute())
@@ -2523,6 +2706,16 @@
 	onCreated={(id) => openBook(id)}
 	onImported={(id) => openBook(id)}
 />
+
+{#if book && canShare}
+	<SharePeopleModal
+		open={sharing}
+		title="Share {book.name}"
+		initialUserIds={sharedWith.map((p) => p.id)}
+		onConfirm={handleShareConfirm}
+		onclose={() => (sharing = false)}
+	/>
+{/if}
 
 <ReplaceReadingModal
 	open={replacing !== null}

@@ -4,6 +4,12 @@ import { and, eq } from "drizzle-orm"
 import { isValidUuid } from "$lib/server/utils/uuid"
 import { handleCharacterAvatarUpload } from "$lib/server/utils"
 import type { ImportWarning } from "$lib/server/sockets/characters"
+import {
+	likenessFromCardExtensions,
+	readLikeness,
+	withLikeness,
+	type CharacterLikeness
+} from "$lib/server/characters/likeness"
 
 /**
  * The PERSONA CARD — a wire format, not a table.
@@ -19,6 +25,11 @@ import type { ImportWarning } from "$lib/server/sockets/characters"
  * block; widening it would change what an export of an unchanged lorebook
  * produces, and the importer hashes exactly that to tell "unchanged" from
  * "conflict" — so every existing book would come back conflicted.
+ *
+ * 🚧 The one addition is the **likeness** (DESIGN-image-generation §5), as
+ * `serenepub.likeness` — the same key a character card carries it under
+ * (`cardIO.exportedExtensions`). It is outside the dedup hash
+ * (`canonicalPersonaContent`), so an unchanged book still reads unchanged.
  */
 export function buildPersonaExportCard(persona: {
 	name: string
@@ -28,7 +39,10 @@ export function buildPersonaExportCard(persona: {
 	aliases: string[] | null
 	summary: string | null
 	uuid: string
+	/** The row's stored extensions — read for the likeness only. */
+	extensions?: unknown
 }) {
+	const likeness = readLikeness(persona.extensions)
 	return {
 		name: persona.name,
 		description: persona.description,
@@ -40,7 +54,8 @@ export function buildPersonaExportCard(persona: {
 				...(persona.aliases && persona.aliases.length > 0
 					? { aliases: persona.aliases }
 					: {}),
-				...(persona.summary ? { summary: persona.summary } : {})
+				...(persona.summary ? { summary: persona.summary } : {}),
+				...(likeness ? { likeness } : {})
 			}
 		}
 	}
@@ -102,6 +117,40 @@ export function personaFieldsFromParsedData(
 		category: data.extensions?.serenepub?.category ?? null,
 		isPersona: true
 	}
+}
+
+/**
+ * 🚧 The likeness a persona card brings — ours (`serenepub.likeness`), else
+ * SillyTavern's `sd_character_prompt` — exactly as a character card's import
+ * reads it (`cardIO.planCardImport`). Null when the card carries neither.
+ *
+ * Kept apart from `personaFieldsFromParsedData`: that is the card's four
+ * hashed fields, and the likeness lives in `extensions`, which an overwrite
+ * MERGES into rather than replaces.
+ */
+export function personaLikenessFromParsedData(data: any) {
+	return likenessFromCardExtensions(data?.extensions)
+}
+
+/**
+ * The likeness with its image kept only when the file is `userId`'s own —
+ * the rule a character card's import keeps (`importedLikenessChecked`): an
+ * id another install wrote names some other file here, or none, and the
+ * likeness then falls back to the avatar.
+ */
+async function likenessOwnedBy(
+	likeness: CharacterLikeness | null,
+	userId: number,
+	dbOrTx: Db
+): Promise<CharacterLikeness | null> {
+	if (!likeness?.imageMediaId) return likeness
+	const file = await dbOrTx.query.files.findFirst({
+		where: eq(schema.files.id, likeness.imageMediaId),
+		columns: { userId: true }
+	})
+	if (file?.userId === userId) return likeness
+	const { imageMediaId: _drop, ...rest } = likeness
+	return Object.keys(rest).length ? rest : null
 }
 
 /**
@@ -173,10 +222,16 @@ export async function createPersonaFromParsedData(
 		userId,
 		dbOrTx
 	)
+	const likeness = await likenessOwnedBy(
+		personaLikenessFromParsedData(data),
+		userId,
+		dbOrTx
+	)
 	const [persona] = await dbOrTx
 		.insert(schema.characters)
 		.values({
 			...personaFieldsFromParsedData(data),
+			...(likeness ? { extensions: withLikeness({}, likeness) as any } : {}),
 			...(uuidToStamp ? { uuid: uuidToStamp } : {}),
 			userId
 		})
@@ -193,9 +248,26 @@ export async function overwritePersonaFromParsedData(
 	dbOrTx: Db = db,
 	warnings?: ImportWarning[]
 ) {
+	// The likeness merges into the row's extensions (every other key kept);
+	// a card that carries none leaves the stored one alone.
+	const incoming = personaLikenessFromParsedData(data)
+	let extensions: Record<string, unknown> | undefined
+	if (incoming) {
+		const row = await dbOrTx.query.characters.findFirst({
+			where: eq(schema.characters.id, existingId),
+			columns: { extensions: true, userId: true }
+		})
+		const likeness = row
+			? await likenessOwnedBy(incoming, row.userId, dbOrTx)
+			: null
+		if (likeness) extensions = withLikeness(row?.extensions, likeness)
+	}
 	await dbOrTx
 		.update(schema.characters)
-		.set(personaFieldsFromParsedData(data))
+		.set({
+			...personaFieldsFromParsedData(data),
+			...(extensions ? { extensions: extensions as any } : {})
+		})
 		.where(eq(schema.characters.id, existingId))
 	const persona = await dbOrTx.query.characters.findFirst({
 		where: eq(schema.characters.id, existingId)

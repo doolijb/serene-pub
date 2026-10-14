@@ -27,12 +27,22 @@ A lorebook you're happy for the Lair to add rooms to. Your **Lorebook writes fro
 ### Your first turn
 
 1. Start a session, pick the **Lair** genre, choose your party and a lorebook, and press **Start**.
-2. Read the Castellan's greeting in the **Sanctum** panel on the right. The Castellan is the dungeon's steward and your assistant.
+2. Read the Castellan's greeting in the **Sanctum** panel at the foot of the right-hand column. The Castellan is the dungeon's steward and your assistant.
 3. In the story, write where the party stand and what they notice, and send it.
 
 :::tip You should see
 The Castellan's plan for the turn appears in the Sanctum as a short list. Then each delver it named speaks in the story, one message each.
 :::
+
+### What's on the screen
+
+The party's stats run down the left: you watch them rather than play them. The story is in the middle. Down the right:
+
+- **Places**: the dungeon's rooms from your lorebook, as a list. The room the party stand in is marked **Here**, and each room's ways out are listed under it. Click a room to open it in the lorebook, or press **Show the map** to see the rooms joined by their ways. See [Places and maps](./lorebook-places.md).
+- **Castellan's scratchpad**: the Castellan's running notes (see [below](#the-castellans-scratchpad)).
+- **The Sanctum**: your talk with the Castellan (see [below](#the-sanctum-and-the-castellan)).
+
+The world's floor and gold have no panel of their own here. To keep them on screen, add **Stats** from the tray and set **Whose stats** to *World*. On a phone, each of these is one of the side views in the **Session panels** menu. See [Session layout](./session-layout.md).
 
 ## What your lines are called
 
@@ -65,6 +75,8 @@ Whichever you choose, three things always reach the story: a **Nudge**, a room y
 The Castellan keeps running notes from the Sanctum: rooms you planned together, what you want to happen, corrections you gave it. It rewrites them after each of its Sanctum replies (one short extra request to the model) and reads them when it talks with you and, while Sanctum talk steers the story, when it plans a turn. The party never read them.
 
 To read or correct the notes, open **Edit session › Settings › Session data** and find **Castellan's scratchpad**. Its **Edit** button saves your version, which the Castellan then works from. See [Session data](./sessions.md#session-data).
+
+The notes also sit beside the story, on the right under **Places**: an **Annex** widget titled *Castellan's scratchpad*, with the same **Edit** button once there are notes (before the Castellan's first Sanctum reply it reads *Nothing written yet*). It shows them to you, the session's owner, and to no other member. A layout without it can have it back: add an **Annex** from the tray and set its **Key** to `core.castellan-scratchpad` (see [the widgets](./session-layout.md#the-widgets)).
 
 ## How a turn runs
 
@@ -123,7 +135,7 @@ The question has one button, **Describe *the room*…**, which opens a small win
 - **Write the room.** What you write is saved to the lorebook exactly as you wrote it, with no review: they're your own words. You don't need to write the way back. Other ways out can go in an *Exits:* line, such as *Exits: north → the Old Well*, until you link them.
 - **Leave it empty.** The Castellan drafts the room, and the draft waits for your review: rename it and edit the text before it's saved.
 
-The room is named after the door the party knocked at. Once saved, it's **linked to the room the party stand in**, both ways (*leads to*), so the next turn's planner sees the way through. If the party's **Location** doesn't name a room yet, the room the planner named as it knocked is used; if neither does, the room is saved without a link and you can link it yourself on the lorebook's Places lens. Then a line of yours, *The party go on into …*, is added and the story carries on by itself.
+The room is named after the door the party knocked at. Once saved, it's **linked to the room the party stand in**, both ways (*leads to*), so the next turn's planner sees the way through. If the party's **Location** doesn't name a room yet, the room the planner named as it knocked is used; if neither does, the room is saved without a link and you can link it yourself on the lorebook's **Show as › Map**. Then a line of yours, *The party go on into …*, is added and the story carries on by itself.
 
 If you reject the Castellan's draft, nothing is saved and the knock opens again.
 
@@ -148,7 +160,7 @@ Rooms are the lorebook's place entries, and they're yours to approve, never the 
 - **File as a room**, in a message's **⋮** menu, turns a message into a room (below).
 - The party's current room is the world's **Location**, which the Castellan moves as the party walk. It finds a room by the same name rules as the knock. A name two rooms answer to alike is refused rather than guessed, and so is a room the session can't see (switched off or archived).
 
-The ways between rooms are **links**: one per way, with its words from each end (*leads north to* / *leads south to*), drawn on the lorebook's Places lens or in a room's own links. The planner, the party and the Castellan read the room they stand in with its ways out listed under it:
+The ways between rooms are **links**: one per way, with its words from each end (*leads north to* / *leads south to*), drawn on the lorebook's **Show as › Map** or in a room's own links. The planner, the party and the Castellan read the room they stand in with its ways out listed under it:
 
 ```
 The Guardroom
@@ -217,9 +229,12 @@ Under **Edit session › Settings**:
 
 Changes proposed after a turn wait under the turn for you to **Accept** or **Reject**, unless **Apply the Castellan's stat changes without asking** is on. A world change can be accepted while its turn is still the newest. The Lair checks an item's supply: a one-of-a-kind relic someone already holds, or more of a limited item than is left, is refused rather than offered to you. See [Stats and states](./stats-and-states.md).
 
+## Scenes
+
+A Lair reading its lorebook keeps [scenes](./sessions.md#when-a-new-scene-begins) like any session, with two moments of its own. **The place changes** follows the party's **Location**: when the Castellan moves them into another room (or you change it yourself), a new scene is suggested at the next line, named after the room, such as *Scene 4 · the Crypt*. **The party reached a new floor** follows the world's **Floor** the same way: a new floor is a new chapter of the dungeon. Both are on by default, and each can be switched off under **Scenes** in the session's settings. Talk in the Sanctum never suggests a scene.
+
 ## What it doesn't do yet
 
-- There's no map of the rooms you've built; the right-hand column shows the world's state.
 - An *Exits:* line in a room's text isn't turned into links when the room is saved. Only answering a knock links a room by itself. For the rest, use **Read links from the Exits line** or link them yourself.
 - A link the Lair writes isn't dated at the session's story clock: it stands at every moment of the lorebook's line.
 - A room described in prose isn't filed for you. Use **File as a room**.

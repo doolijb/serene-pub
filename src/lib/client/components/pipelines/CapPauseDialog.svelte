@@ -21,6 +21,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { queueAfterThis } from "./reviewQueue"
+	import { capPauseLine } from "./reviewWording"
 
 	const socket = useTypedSocket()
 
@@ -99,43 +100,48 @@
 				{#if current}
 					<header class="space-y-1">
 						<h2 id="cap-pause-title" class="h2">Keep going?</h2>
+						<!-- Plain words first (D3): how many requests wait and
+						     what each button does. Nothing runs until you
+						     choose. Which pipelines set each other off is under
+						     Details. -->
 						<p
 							id="cap-pause-description"
 							class="text-surface-600-400 text-sm"
 						>
-							These pipelines keep setting each other off.
-							{current.waiting > 1
-								? `${current.waiting} runs wait`
-								: "The next one waits"} for you, and waiting costs
-							nothing.
+							{capPauseLine(current.waiting)}
 							{#if queueAfterThis(queue.length)}
 								{queueAfterThis(queue.length)}.
 							{/if}
 						</p>
 					</header>
-					<ol class="flex flex-wrap items-center gap-1 text-sm">
-						{#each current.chain as step, i (i)}
-							<li class="flex items-center gap-1">
-								{#if i > 0}
-									<Icons.ArrowRight
-										size={14}
-										aria-hidden="true"
-										class="text-surface-600-400"
-									/>
-								{/if}
-								<span
-									class={i === current.chain.length - 1
-										? "font-semibold"
-										: ""}
-								>
-									{step}
-								</span>
-								{#if i === current.chain.length - 1}
-									<span class="sr-only">(waiting)</span>
-								{/if}
-							</li>
-						{/each}
-					</ol>
+					<details class="text-sm">
+						<summary class="text-surface-600-400 cursor-pointer text-xs">
+							Details
+						</summary>
+						<ol class="mt-1 flex flex-wrap items-center gap-1">
+							{#each current.chain as step, i (i)}
+								<li class="flex items-center gap-1">
+									{#if i > 0}
+										<Icons.ArrowRight
+											size={14}
+											aria-hidden="true"
+											class="text-surface-600-400"
+										/>
+									{/if}
+									<span
+										class={i === current.chain.length - 1
+											? "font-semibold"
+											: ""}
+									>
+										{step}
+									</span>
+									{#if i === current.chain.length - 1}
+										<span class="sr-only">(waiting)</span>
+									{/if}
+								</li>
+							{/each}
+						</ol>
+					</details>
 					<footer class="flex justify-end gap-4">
 						<button
 							class="btn preset-tonal"

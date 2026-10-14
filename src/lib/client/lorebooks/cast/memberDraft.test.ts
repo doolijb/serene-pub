@@ -116,3 +116,91 @@ describe("the diff is against the draft as BUILT, not the row as it reads now", 
 		)
 	})
 })
+
+describe("retold fields — the member's own words for the card's (PLAN cast-retold-fields)", () => {
+	const carded: CastRow = {
+		...atY10,
+		characterId: 9,
+		description: "A tired innkeeper.",
+		alternateGreetings: ["Rooms are two silver."],
+		retold: { description: true }
+	}
+
+	test("the draft reads the member's columns and flags", () => {
+		const draft = memberDraftOf(carded)
+		expect(draft.description).toBe("A tired innkeeper.")
+		expect(draft.personality).toBe("")
+		expect(draft.alternateGreetings).toEqual(["Rooms are two silver."])
+		expect(draft.faceMediaId).toBeNull()
+		expect(draft.retold).toEqual({ description: true })
+	})
+
+	test("a background member's patch carries no retold fields", () => {
+		const patch = memberPatch(memberDraftOf(carded), false)
+		expect(patch).not.toHaveProperty("description")
+		expect(patch).not.toHaveProperty("retold")
+	})
+
+	test("a carded member's patch carries every retold field, empty text as null", () => {
+		const patch = memberPatch(memberDraftOf(carded), true)
+		expect(patch).toMatchObject({
+			description: "A tired innkeeper.",
+			personality: null,
+			scenario: null,
+			firstMessage: null,
+			alternateGreetings: ["Rooms are two silver."],
+			exampleDialogues: null,
+			faceMediaId: null,
+			retold: { description: true }
+		})
+	})
+
+	test("switching a field off keeps the member's text in the patch", () => {
+		const pristine = memberDraftOf(carded)
+		const draft = { ...pristine, retold: { description: false } }
+		const fields = changedFields(
+			memberPatch(draft, true),
+			memberPatch(pristine, true)
+		)
+		expect(fields).toEqual({ retold: {} })
+	})
+
+	test("false and absent flags are one shape", () => {
+		const a = memberDraftOf({ ...carded, retold: { face: false } })
+		const b = memberDraftOf({ ...carded, retold: {} })
+		expect(sameMemberDraft(a, b, true)).toBe(true)
+	})
+
+	test("a greeting added and never written does not make the draft dirty", () => {
+		const pristine = memberDraftOf(carded)
+		const draft = {
+			...pristine,
+			alternateGreetings: [...pristine.alternateGreetings, "  "]
+		}
+		expect(sameMemberDraft(draft, pristine, true)).toBe(true)
+	})
+
+	test("a clean draft follows a row whose retold text moved", () => {
+		const pristine = memberDraftOf(carded)
+		expect(
+			draftFollowsRow({
+				draft: { ...pristine },
+				pristine,
+				row: { ...carded, description: "Older now." },
+				linked: true
+			})
+		).toBe(true)
+	})
+
+	test("a face picked makes the draft dirty and writes the face and the flag", () => {
+		const pristine = memberDraftOf(carded)
+		const draft = {
+			...pristine,
+			faceMediaId: 41,
+			retold: { ...pristine.retold, face: true }
+		}
+		expect(
+			changedFields(memberPatch(draft, true), memberPatch(pristine, true))
+		).toEqual({ faceMediaId: 41, retold: { description: true, face: true } })
+	})
+})

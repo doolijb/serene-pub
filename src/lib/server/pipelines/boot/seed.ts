@@ -40,6 +40,7 @@ import * as schema from "$lib/server/db/schema"
 import { CORE_SPECS } from "$lib/server/pipelines/specs"
 import { reconcileConfigs } from "$lib/server/pipelines/config/named"
 import { seedPipelinePrompts } from "$lib/server/pipelines/boot/seedPrompts"
+import { unshipPrompts } from "$lib/server/pipelines/boot/unshipPrompts"
 import { reconcilePromptFields } from "$lib/server/pipelines/boot/reconcilePromptFields"
 import { parseActionIdentity } from "$lib/shared/actions/identity"
 
@@ -227,6 +228,8 @@ export interface SpecSeedReport {
 		name: string
 		culled: number
 		backfilled: number
+		/** Script chains kept but unplaced (PLAN-script-placement D4). */
+		unplaced?: number
 	}>
 }
 
@@ -358,6 +361,11 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 
 	// 2 — the prompts each pool ships
 	await seedPipelinePrompts(db)
+	// 2b — and the ones it stopped shipping, kept as ordinary rows (owner
+	// ruling 2026-10-13). After the seed so the catalog's own rows are
+	// matched first; before the configs so no back-fill picks a demoted row
+	// as a default.
+	await unshipPrompts(db)
 
 	// 3 — the archive sweep, between the seed and the configs on purpose.
 	//
@@ -425,7 +433,8 @@ export async function reconcilePublishedConfigs(
 				reports.map((r) => ({
 					name: r.name,
 					culled: r.culled.length,
-					backfilled: r.backfilled.length
+					backfilled: r.backfilled.length,
+					...(r.unplaced.length ? { unplaced: r.unplaced.length } : {})
 				}))
 			)
 		} catch (err) {

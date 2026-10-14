@@ -4,8 +4,9 @@
 	import { usesCompletionTemplate } from "$lib/shared/connectionAdapters/wireMode"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-	import Select from "$lib/client/components/inputs/Select.svelte"
-	import { onMount } from "svelte"
+	import ConnectionFieldSelect from "./ConnectionFieldSelect.svelte"
+	import { PROMPT_FORMAT, TOKEN_COUNTER } from "./connectionFieldWords"
+	import { useExtraJsonSync } from "./extraJsonSync.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { z } from "zod"
@@ -71,6 +72,10 @@
 	// listener for the event and fans it out, so the parent sidebar's own
 	// interest is untouched by this form coming and going.
 	const onConnectionsTest = (msg: Sockets.Connections.Test.Response) => {
+		// The event fans out to every open form: another connection's result
+		// is not this one's.
+		if (msg.connectionId != null && msg.connectionId !== connection.id)
+			return
 		testResult = {
 			ok: msg.ok,
 			error: msg.error ?? undefined,
@@ -132,44 +137,22 @@
 		}
 	}
 
-	// Skips the FIRST write-back, which is the defaults normalization done in
-	// onMount, not a user edit.
-	//
-	// onMount builds the field state from `{...defaults, ...connection.extraJson}`,
-	// so it legitimately gains every default key the stored row lacked. Writing
-	// that straight back into `connection` made the form differ from the
-	// parent's `originalConnection` the instant it opened — the panel reported
-	// unsaved changes with nothing touched, and then blocked closing behind a
-	// destructive-sounding confirm. Real edits still write through, and a save
-	// still persists the full normalized set.
-	let extraJsonInitialized = false
-	$effect(() => {
-		const _llamaCppFields = llamaCppFields
-		if (!_llamaCppFields) return
-		// Computed on EVERY run, before the skip check, and deliberately so:
-		// an effect only subscribes to the state it actually reads, and the
-		// individual field values are read inside this call. Returning before
-		// it — as a first attempt did — meant the effect never subscribed to
-		// them, so later toggles re-triggered nothing and the form never went
-		// dirty. Skip the WRITE, never the read.
-		const nextExtraJson = extraFieldsToExtraJson(_llamaCppFields)
-		// The first populated run is onMount's defaults normalization, not a
-		// user edit — writing it back made the panel report unsaved changes the
-		// instant it opened, then block closing behind a destructive confirm.
-		if (!extraJsonInitialized) {
-			extraJsonInitialized = true
-			return
-		}
-		connection.extraJson = nextExtraJson
-	})
-
-	onMount(() => {
-		if (connection.extraJson) {
-			const extraJson = { ...defaultExtraJson, ...connection.extraJson }
-			llamaCppFields = extraJsonToExtraFields(extraJson)
-		} else {
-			llamaCppFields = extraJsonToExtraFields(defaultExtraJson)
-		}
+	// Seeds the fields from `{...defaults, ...connection.extraJson}` on mount
+	// and whenever the draft is replaced from outside (an external save, Reset),
+	// and writes back only on a real edit — merged over `extraJson`, so keys
+	// this form doesn't own survive. See `useExtraJsonSync` for why the seed's
+	// own write-back is skipped.
+	useExtraJsonSync<ExtraFieldData>({
+		connection: () => connection,
+		fields: () => llamaCppFields,
+		seed: (extraJson) => {
+			llamaCppFields = extraJsonToExtraFields({
+				...defaultExtraJson,
+				...(extraJson ?? {})
+			} as ExtraJson)
+		},
+		project: (fields) =>
+			extraFieldsToExtraJson(fields)
 	})
 </script>
 
@@ -180,16 +163,16 @@
 	     here. Two Test buttons on one screen, styled differently and
 	     reporting into different places, was the shipped state. -->
 	{#if showFormat}
-		<Select
+		<ConnectionFieldSelect
 			class="mt-2"
-			label="Prompt Format"
+			words={PROMPT_FORMAT}
 			options={formatOptions.value}
 			bind:value={connection.promptFormat}
 		/>
 	{/if}
-	<Select
+	<ConnectionFieldSelect
 		class="mt-2"
-		label="Token Counter"
+		words={TOKEN_COUNTER}
 		options={TokenCounterOptions.options}
 		bind:value={connection.tokenCounter}
 	/>

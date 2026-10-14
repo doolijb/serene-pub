@@ -7,7 +7,7 @@
  * install so a missing dependency is a refusal with names, not a runtime
  * surprise. Author-side types are advisory; this is the check that counts.
  */
-import { sessionEvents } from "@serene-pub/sdk"
+import { eventById, sessionEvents } from "@serene-pub/sdk"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { isRegisteredPackageEvent } from "./pluginEvents"
@@ -49,6 +49,10 @@ export async function missingRequirements(
 	for (const id of requires) {
 		if (id.includes(":genre/")) {
 			if (!publishedGenres.has(id)) missing.push(id)
+		} else if (isCoreEventId(id)) {
+			// Core's own event: this build declares it, or it is from a newer
+			// Serene Pub — the SDK's registry is the authority, not a package.
+			if (!eventById(id)) missing.push(id)
 		} else if (id.includes(":event/")) {
 			// Another package's event: declared by one installed here.
 			if (!isRegisteredPackageEvent(id)) missing.push(id)
@@ -68,4 +72,34 @@ export async function missingRequirements(
 export function requirementsOf(manifest: unknown): string[] {
 	const r = (manifest as any)?.requires
 	return Array.isArray(r) ? r.filter((x) => typeof x === "string") : []
+}
+
+/** Whether a required id is one of core's events (`core:event/<slug>@<n>`). */
+export const isCoreEventId = (id: string): boolean => id.startsWith("core:event/")
+
+/**
+ * The refusal for a non-empty `missingRequirements` answer, in one place so
+ * both install doors say the same thing. A core event this build lacks is not
+ * something the admin can install first — it means the package was made on a
+ * newer Serene Pub — so it gets its own sentence; everything else keeps the
+ * install-what-it-builds-on-first wording. `subject` opens the latter
+ * (`'acme.lab'`, or `This package`).
+ */
+export function missingRequirementsMessage(
+	subject: string,
+	missing: readonly string[]
+): string {
+	const core = missing.filter(isCoreEventId)
+	const rest = missing.filter((id) => !isCoreEventId(id))
+	const sentences = core.map(
+		(id) =>
+			`'${id}' is an event this version of Serene Pub does not have; the ` +
+			`package needs a newer Serene Pub.`
+	)
+	if (rest.length)
+		sentences.push(
+			`${subject} requires ${rest.join(", ")} — not installed on this pub. ` +
+				`Install what it builds on first.`
+		)
+	return sentences.join(" ")
 }

@@ -13,6 +13,7 @@ import {
 	firstSlot,
 	fits,
 	frameCovers,
+	isRailFrame,
 	itemPinned,
 	loadArranged,
 	makeRoom,
@@ -25,7 +26,13 @@ import {
 	withGeometry,
 	withPins
 } from "./arrangedGeometry"
-import type { ArrangedGridV1, ArrangedItem, ArrangedZone } from "@serene-pub/sdk"
+import {
+	pinnedOf,
+	resolveDrawn,
+	type ArrangedGridV1,
+	type ArrangedItem,
+	type ArrangedZone
+} from "@serene-pub/sdk"
 import type { GsItem } from "./gsItem"
 
 const pos = (
@@ -392,6 +399,11 @@ describe("the persisted per-group pin", () => {
 	/** Through the wire the blob actually takes: a json column. */
 	const roundTrip = (a: unknown) =>
 		loadArranged(JSON.parse(JSON.stringify(a)))
+	/** The same blob, as the SDK's one layout reader draws its left (C5). */
+	const drawnPins = (a: unknown) =>
+		resolveDrawn({ arrangedGrid: JSON.parse(JSON.stringify(a)) }, { inline: 1300 }).left.instances.map(
+			(i) => i.pinned
+		)
 
 	it("reads a LEGACY arrangement — no pin field anywhere — as all pinned", () => {
 		const saved = {
@@ -404,6 +416,7 @@ describe("the persisted per-group pin", () => {
 		const out = roundTrip(saved)
 		expect(out.left!.items.every(itemPinned)).toBe(true)
 		expect(unitPinned(out.left!.items.slice(1))).toBe(true)
+		expect(drawnPins(saved)).toEqual([true, true, true])
 	})
 
 	it("carries one group's unpin through save → load", () => {
@@ -413,6 +426,7 @@ describe("the persisted per-group pin", () => {
 		}
 		const out = roundTrip(after)
 		expect(out.left!.items.map(itemPinned)).toEqual([true, false])
+		expect(drawnPins(after)).toEqual([true, false])
 	})
 
 	it("writes every member of a tab group, so the group reads as one", () => {
@@ -430,6 +444,8 @@ describe("the persisted per-group pin", () => {
 		expect(JSON.stringify(off)).toContain('"pinned":false')
 		expect(JSON.stringify(on)).not.toContain("pinned")
 		expect(unitPinned(roundTrip({ left: on }).left!.items)).toBe(true)
+		expect(drawnPins({ left: on })).toEqual([true])
+		expect(drawnPins({ left: off })).toEqual([false])
 	})
 
 	it("leaves the items it was not asked about alone", () => {
@@ -437,6 +453,11 @@ describe("the persisted per-group pin", () => {
 		const out = withPins(z, ["map"], false)
 		expect(out.items[1]).toBe(z.items[1])
 		expect(z.items[0].pinned).toBeUndefined()
+	})
+
+	it("is the SDK's one pin rule, whatever the field holds", () => {
+		for (const p of [{}, { pinned: true }, { pinned: false }, { pinned: "no" as never }])
+			expect(itemPinned(p)).toBe(pinnedOf(p))
 	})
 
 	it("reads a group as pinned unless EVERY member says otherwise", () => {
@@ -465,6 +486,26 @@ describe("the persisted per-group pin", () => {
 		)
 		const out = withGeometry(items, saved)
 		expect(out.map(itemPinned)).toEqual([true, false])
+	})
+
+	it("the FRAME's pin wins over the item's default, both ways (lane E1)", () => {
+		// An un-arranged unpinned side's cards carry its `pinned: false`
+		// (./editorSeed `sideSeedPin`); a group the rail preview then PINS is
+		// written onto the frame, and a re-seed must not hand it back.
+		const items: GsItem[] = [
+			{ id: "map", title: "Map", h: 3, pinned: false },
+			{ id: "notes", title: "Notes", h: 3, pinned: false },
+			{ id: "new", title: "New", h: 3, pinned: false }
+		]
+		const saved = withPins(
+			zone([pos("map", 0, 0, 9, 4), pos("notes", 0, 4, 9, 4)]),
+			["notes"],
+			false
+		)
+		const out = withGeometry(items, saved)
+		// map: pinned by the frame · notes: unpinned by the frame · new: not
+		// in the frame, so its default stands.
+		expect(out.map(itemPinned)).toEqual([true, false, false])
 	})
 })
 
@@ -893,11 +934,66 @@ describe("seatCard — room made, the newcomer written, or null when there is no
 		expect(out.items).toEqual([pos("x", 0, 0, 4, 3)])
 	})
 
+	it("a newcomer in a RAIL (every card unpinned) is a rail icon too — one add never docks the side (lane E1)", () => {
+		const rail = frame(1, 12, [{ ...pos("chronicle", 0, 0, 1, 3), pinned: false }])
+		const out = seatCard(rail, "turn-order", [{ w: 1, h: 3 }])!
+		expect(out.items.find((i) => i.id === "turn-order")?.pinned).toBe(false)
+		expect(isRailFrame(out)).toBe(true)
+	})
+
+	it("a newcomer beside a docked card, or in an empty frame, docks", () => {
+		const docked = frame(1, 12, [pos("stats", 0, 0, 1, 3), { ...pos("notes", 0, 3, 1, 3), pinned: false }])
+		expect(pinnedOf(seatCard(docked, "x", [{ w: 1, h: 3 }])!.items[2])).toBe(true)
+		expect(pinnedOf(seatCard(frame(1, 12, []), "x", [{ w: 1, h: 3 }])!.items[0])).toBe(true)
+	})
+
 	it("NO ROOM: every card at the floor and no slot left answers null — the add must be refused", () => {
 		// A side zone 14 rows tall of 2-row cards: seven of them, and no eighth.
 		const packed = frame(4, 14, Array.from({ length: 7 }, (_, n) => pos(`w${n}`, 0, n * 2, 4, MIN_CARD_ROWS)))
 		expect(seatCard(packed, "w7", [{ w: 4, h: 3 }])).toBeNull()
 		// …the source's size and the fallback alike.
 		expect(seatCard(packed, "w0#2", [{ w: 4, h: 2 }, { w: 4, h: 3 }])).toBeNull()
+	})
+})
+
+describe("isRailFrame — an arrangement that docks nothing (lane E1)", () => {
+	const z = (items: ArrangedItem[]): ArrangedZone => ({ cols: 1, rows: 12, items })
+	it("every card unpinned: a rail", () => {
+		expect(isRailFrame(z([{ ...pos("a", 0, 0, 1, 6), pinned: false }, { ...pos("b", 0, 6, 1, 6), pinned: false }]))).toBe(true)
+	})
+	it("one card pinned (absent means pinned): a column", () => {
+		expect(isRailFrame(z([{ ...pos("a", 0, 0, 1, 6), pinned: false }, pos("b", 0, 6, 1, 6)]))).toBe(false)
+	})
+	it("nothing placed, or no frame: not a rail", () => {
+		expect(isRailFrame(z([]))).toBe(false)
+		expect(isRailFrame(undefined)).toBe(false)
+	})
+	it("reads a drawn zone's instances, whose pin is already resolved", () => {
+		const drawn = resolveDrawn(
+			{ arrangedGrid: { left: z([{ ...pos("chronicle", 0, 0, 1, 6), pinned: false }]) } },
+			{ inline: 1216 }
+		)
+		expect(isRailFrame({ items: drawn.left.instances })).toBe(true)
+	})
+})
+
+describe("the preview of a cross-zone drag shows the card where it was DROPPED (lane E1)", () => {
+	// Both zones can report the card for a moment; the drawn layout admits an
+	// id once, in reading order (middle, left, right), so a left→right drag
+	// drew in its SOURCE. The editor dedupes its preview with the last drop.
+	const both: ArrangedGridV1 = {
+		left: { cols: 1, rows: 12, items: [pos("stats", 0, 0, 1, 6), pos("chronicle", 0, 6, 1, 6)] },
+		right: { cols: 1, rows: 12, items: [pos("scene-portraits", 0, 0, 1, 6), pos("stats", 0, 6, 1, 6)] }
+	}
+	const sideOf = (a: ArrangedGridV1, id: string) => {
+		const d = resolveDrawn({ arrangedGrid: a }, { inline: 1600 })
+		return (["left", "right"] as const).find((s) => d[s].instances.some((i) => i.instanceId === id))
+	}
+	it("undeduplicated, reading order puts it in the left whichever way it went", () => {
+		expect(sideOf(both, "stats")).toBe("left")
+	})
+	it("deduplicated by the drop, it is drawn in the destination", () => {
+		expect(sideOf(dedupeArranged(both, { id: "stats", zone: "right" }).arranged, "stats")).toBe("right")
+		expect(sideOf(dedupeArranged(both, { id: "stats", zone: "left" }).arranged, "stats")).toBe("left")
 	})
 })

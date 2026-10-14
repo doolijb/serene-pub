@@ -11,7 +11,7 @@
 	 * one's rows. The workspace keys every mount on the book.
 	 */
 	import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
-	import { reduce, SCOPE_LABELS } from "$lib/shared/lorebooks/loreRoute"
+	import { reduce } from "$lib/shared/lorebooks/loreRoute"
 	import CastWorkspace from "../CastWorkspace.svelte"
 	import EntryWorkspace from "../EntryWorkspace.svelte"
 	import { getBookData } from "../bookData.svelte"
@@ -80,7 +80,6 @@
 			filters={bench.filters}
 			readInKeys={bench.readInKeys}
 			decisions={bench.decisions}
-			scopeTitle={SCOPE_LABELS[scope]}
 			bind:hasUnsavedChanges
 			onFilters={bench.applyFilters}
 			onNavigateToGraph={() => bench.openLens("graph")}

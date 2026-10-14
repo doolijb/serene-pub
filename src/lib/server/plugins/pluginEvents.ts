@@ -16,11 +16,21 @@
  *
  * Uninstall withdraws both the scope and the declaration, so a recording of
  * a withdrawn event is refused and a reinstall may declare it afresh.
+ *
+ * The package's own **shapes** (`manifest.shapes`, `<slug>:shape/…`) are
+ * registered first, from the same manifest: an event's payload may be one of
+ * them, and `defineSessionEvent` refuses a payload shape this process does
+ * not hold. They are withdrawn with the events.
  */
 
 import {
 	_withdrawSessionEvent,
+	_withdrawShape,
 	defineSessionEvent,
+	defineShape,
+	getShape,
+	refuseUnlessIdentical,
+	type ShapeDef,
 	type StoredEventDeclaration
 } from "@serene-pub/sdk"
 
@@ -42,6 +52,88 @@ const scopes = ((globalThis as Record<symbol, unknown>)[SCOPES_KEY] ??= new Map<
 const keyOf = (event: string, genre: string) => `${event}\u0000${genre}`
 
 const SUBJECT = /^[^#\s]+(#[^#\s]+)?$/
+
+/**
+ * Shape id → the plugin that registered it here. On `globalThis` for the
+ * same reason as the scopes: a Vite SSR reload re-evaluates this module, and
+ * a fresh map would forget which shapes an uninstall must withdraw.
+ */
+const SHAPE_OWNERS_KEY = Symbol.for("serene-pub.pluginShapeOwners")
+const shapeOwners = ((globalThis as Record<symbol, unknown>)[
+	SHAPE_OWNERS_KEY
+] ??= new Map<string, string>()) as Map<string, string>
+
+/** The comparable form of a shape — what travels in a manifest. */
+const shapeData = (d: ShapeDef): ShapeDef => ({
+	id: d.id,
+	...(d.assignableTo?.length ? { assignableTo: [...d.assignableTo] } : {}),
+	...(d.streaming === true ? { streaming: true } : {})
+})
+
+/**
+ * Register a plugin's own shapes from its manifest; returns a sentence per
+ * entry refused. Idempotent: what this plugin registered before is withdrawn
+ * first, and a shape this process already holds identically (registered by
+ * a module evaluated twice) is accepted — one held differently is refused.
+ */
+export function registerPluginShapes(
+	manifest: unknown,
+	pluginId: string
+): string[] {
+	withdrawPluginShapes(pluginId)
+	const refused: string[] = []
+	const shapes = (manifest as { shapes?: unknown } | null)?.shapes
+	if (shapes === undefined) return refused
+	if (!Array.isArray(shapes))
+		return [`'shapes' is not a list — the manifest's shapes were not registered`]
+	const own = `${pluginId}:shape/`
+	for (const raw of shapes as Array<Partial<ShapeDef> | null>) {
+		const id = typeof raw?.id === "string" ? raw.id : "?"
+		if (!id.startsWith(own)) {
+			refused.push(
+				`shape '${id}' is not under '${own}' — a package carries only its own shapes`
+			)
+			continue
+		}
+		const to = raw!.assignableTo
+		if (
+			(to !== undefined &&
+				!(Array.isArray(to) && to.every((x) => typeof x === "string"))) ||
+			(raw!.streaming !== undefined && typeof raw!.streaming !== "boolean")
+		) {
+			refused.push(
+				`shape '${id}' is malformed — 'assignableTo' is a list of shape ids and 'streaming' a boolean`
+			)
+			continue
+		}
+		const def = shapeData(raw as ShapeDef)
+		const held = getShape(id)
+		if (held) {
+			try {
+				refuseUnlessIdentical(
+					shapeData(held),
+					def,
+					`shape '${id}' is declared twice, differently`
+				)
+			} catch (e) {
+				refused.push((e as Error).message)
+			}
+			continue
+		}
+		defineShape(def)
+		shapeOwners.set(id, pluginId)
+	}
+	return refused
+}
+
+/** Drop the shapes this plugin registered (uninstall, reinstall). */
+export function withdrawPluginShapes(pluginId: string): void {
+	for (const [id, owner] of shapeOwners)
+		if (owner === pluginId) {
+			_withdrawShape(id)
+			shapeOwners.delete(id)
+		}
+}
 
 /** Why a manifest's event entry is malformed, or undefined. */
 function malformed(raw: unknown): string | undefined {
@@ -76,7 +168,8 @@ export function registerPluginEvents(
 	pluginId: string
 ): string[] {
 	withdrawPluginEvents(pluginId)
-	const refused: string[] = []
+	// Its shapes before its events: a payload may be one of them.
+	const refused: string[] = registerPluginShapes(manifest, pluginId)
 	const events = (manifest as { events?: unknown } | null)?.events
 	if (events === undefined) return refused
 	if (!Array.isArray(events))
@@ -121,7 +214,7 @@ export function registerPluginEvents(
 /**
  * Drop a plugin's events (uninstall, reinstall): their scopes go, so a
  * recording is refused, and the declarations go, so an upgrade may declare
- * them again differently.
+ * them again differently. Its shapes go with them.
  */
 export function withdrawPluginEvents(pluginId: string): void {
 	const ids = new Set<string>()
@@ -131,6 +224,8 @@ export function withdrawPluginEvents(pluginId: string): void {
 			ids.add(s.event)
 		}
 	for (const id of ids) _withdrawSessionEvent(id)
+	// The shapes after the events that name them.
+	withdrawPluginShapes(pluginId)
 }
 
 /** Whether an installed package declares this event, in any genre. */

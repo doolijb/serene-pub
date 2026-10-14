@@ -88,7 +88,14 @@ const stored: SelectSessionMessage = {
 	kind: "core:reply",
 	speakerLabel: "Bell",
 	extras: {},
-	version: null
+	version: null,
+	// 🚧 The story clock stamp (live scenes §6, §8): the session's story now
+	// when the row was written — what the conversation's day marks read.
+	storyClockYear: 412,
+	storyClockMonth: 3,
+	storyClockDay: 5,
+	storyClockHour: 22,
+	storyClockMinute: 30
 }
 
 describe("messages.v1 is the host's own rows", () => {
@@ -115,6 +122,19 @@ describe("messages.v1 is the host's own rows", () => {
 		for (const field of MESSAGE_HOST_FIELDS) expect(posted, field).not.toHaveProperty(field)
 		const m: MessageV1 = posted
 		expect(m.content).toBe(stored.content)
+	})
+
+	test("🚧 the story clock stamp rides the posted row: a widget's day marks read it", () => {
+		const m: MessageV1 = projectMessageRow(
+			JSON.parse(JSON.stringify(stored)) as OverTheWire<SelectSessionMessage>
+		)
+		expect([
+			m.storyClockYear,
+			m.storyClockMonth,
+			m.storyClockDay,
+			m.storyClockHour,
+			m.storyClockMinute
+		]).toEqual([412, 3, 5, 22, 30])
 	})
 })
 

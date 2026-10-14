@@ -2,8 +2,8 @@
  * Scope, saved scope and facet — the rail's arithmetic, over one pool.
  *
  * A scope is what is in the set, drawn through whichever lens is chosen. Every
- * scope is offered in every book: one with nothing in it goes dim and sorts
- * last rather than disappearing, because a facet that vanishes teaches the
+ * scope is offered in every book: one with nothing in it sorts last and shows
+ * its 0 rather than disappearing, because a facet that vanishes teaches the
  * reader the capability does not exist.
  */
 
@@ -41,7 +41,7 @@ import { lensDrawsScope, lensListsPool } from "./lenses/registry"
 export { CAST_KIND }
 
 /**
- * The kinds the pool draws, in the order the chips read them.
+ * The kinds the pool draws.
  *
  * Places are a pool kind (places plan B5): a place is a pool entry with its
  * own door, so All lists it, search finds it, and the canvas is never the
@@ -114,7 +114,7 @@ export interface ScopeFacet {
 	label: string
 	/** Undefined while the server's figures are still on their way. */
 	count: number | undefined
-	/** Known to hold nothing, which is dim and last rather than hidden. */
+	/** Known to hold nothing, which is last rather than hidden. */
 	empty: boolean
 }
 
@@ -152,8 +152,8 @@ function countOf(scope: LoreScope, counts: Record<string, number>): number {
 /**
  * The rail's scopes, with their figures, empty ones last.
  *
- * A count that has not arrived is not a count of none: nothing dims and
- * nothing moves until the server has answered.
+ * A count that has not arrived is not a count of none: nothing moves until
+ * the server has answered.
  */
 export function railScopes(
 	counts: Record<string, number> | null
@@ -207,45 +207,6 @@ export function poolSummary(count: number, reached: number | null): string {
 	return `${entries} · ${reached} reached the last turn`
 }
 
-/** Which session this book is read into, and what reached it last turn. */
-export function readingLine(
-	sessionName: string | null,
-	reached: number | null
-): string {
-	if (!sessionName) return "No session is reading this book"
-	if (reached === null || reached === 0)
-		return `Reading into ${sessionName} · nothing reached the last turn`
-	return `Reading into ${sessionName} · ${plural(
-		reached,
-		"entry",
-		"entries"
-	)} reached the last turn`
-}
-
-/**
- * What the session reading this book is doing with it.
- *
- * ⚠ **Where the session stands is not decoration.** Retrieval reads the book
- * on the session's line AT its story clock when the session has one, and at
- * the head of the line ("now") when it does not (owner ruling 3,
- * 2026-09-28) — never at the moment the author has dragged to. The sentence
- * names that date because an author standing at Y2 needs to know whether the
- * model is standing there with them. `at` is the session's clock, spelled,
- * or null when it follows the line's present.
- */
-export function readingIntoSentence(
-	lineName: string,
-	reached: number | null,
-	at: string | null = null
-): string {
-	const read =
-		reached === null || reached === 0
-			? "nothing reached the last turn"
-			: `${plural(reached, "entry", "entries")} reached the last turn`
-	const when = at ? `as of ${at}, the session's clock` : "as of now"
-	return `Reading this book on ${lineName}, ${when} · ${read}`
-}
-
 /**
  * The moment address a session reads its book at: its story clock, or
  * undefined (now, the head of the line) when it follows the line's present.
@@ -267,12 +228,17 @@ export function matchSessionRoute(
 	route: LoreRoute,
 	session: { branchId: number | null; clock: StoryDate | null }
 ): LoreRoute {
+	// Standing where the session stands is a reading, so Book settings,
+	// which is not one, is left for the route beneath it.
 	return reduce(
-		reduce(route, {
-			type: "setMoment",
-			moment: sessionMomentKey(session.clock)
-		}),
-		{ type: "setBranch", branch: session.branchId ?? undefined }
+		reduce(
+			reduce(route, {
+				type: "setMoment",
+				moment: sessionMomentKey(session.clock)
+			}),
+			{ type: "setBranch", branch: session.branchId ?? undefined }
+		),
+		{ type: "closeSettings" }
 	)
 }
 
@@ -301,10 +267,9 @@ export function replaceReadingSentence(
 }
 
 /**
- * The saved scopes. "Needs keywords" and "Loose ends" were saved scopes
- * until the Loose ends queue replaced both (note 5, 2026-10-02 —
- * `looseEnds.ts`); the keyword chore survives as the pool's Needs keywords
- * chip.
+ * The saved scopes — the rail's Saved group, each a row like a scope's.
+ * The book's chores are the Loose ends queue (note 5, `looseEnds.ts`), never
+ * a saved scope; the keyword chore is also the pool's Needs keywords chip.
  */
 export type SavedScopeId = "pinned"
 
@@ -327,35 +292,55 @@ export function matchesSaved(id: SavedScopeId, item: PoolItem): boolean {
 }
 
 /**
- * The rows a saved scope is asked of from where the reader stands: the
- * scope's own kind, or the whole book from All and from Cast (the Cast board
- * lists people, so a saved scope chosen there opens All — see
- * `savedScopeRoute`). So the rail's figure counts the list the click opens,
- * never the whole book while the list shows one kind (note 6).
- */
-export function savedScopePool(
-	items: readonly PoolItem[],
-	scope: LoreScope
-): PoolItem[] {
-	if (scope === "all" || scope === "cast") return [...items]
-	const kinds = scopeKinds(scope)
-	return items.filter((item) => kinds.includes(item.kind))
-}
-
-/**
- * Where choosing a saved scope takes the reader: the same scope and lens
- * when they draw the pool, else Everything / the default lens — a saved
- * scope narrows a list, and on the Cast board or the Time lens it had
- * nothing to narrow. Which lenses list the pool is the lens registry's
- * (`listsPool`).
+ * Where choosing a saved scope takes the reader: Everything, in the same
+ * lens when it lists the pool and the default lens when it does not, with
+ * Book settings left. A saved scope is a row of the rail like a scope's and
+ * is current INSTEAD of one, so the list it opens is the whole book: a
+ * narrowing to the scope underneath would be a filter nobody can see. Which
+ * lenses list the pool is the lens registry's (`listsPool`).
+ *
+ * Returns the route itself when nothing moves (an entry open in Everything
+ * stays open), so a caller can tell a move from a stay by identity.
  */
 export function savedScopeRoute(route: LoreRoute): LoreRoute {
 	let next = route
-	if (route.scope === "cast")
+	if (next.scope !== "all")
 		next = reduce(next, { type: "openScope", scope: "all" })
-	if (route.lens && !lensListsPool(route.lens))
+	if (next.lens && !lensListsPool(next.lens))
 		next = reduce(next, { type: "setLens", lens: DEFAULT_LENS })
+	if (next.settings) next = reduce(next, { type: "closeSettings" })
 	return next
+}
+
+/**
+ * Each saved scope's figure — over the whole book, which is the list choosing
+ * it opens (`savedScopeRoute`), so badge = list length (note 6).
+ */
+export function savedScopeCounts(
+	items: readonly PoolItem[]
+): Record<SavedScopeId, number> {
+	return Object.fromEntries(
+		SAVED_SCOPES.map((s) => [s.id, savedScopeCount(s.id, items)])
+	) as Record<SavedScopeId, number>
+}
+
+/**
+ * The words of the one chip that says which scope is chosen, under the
+ * compact find row (STYLE-GUIDE §6.3: an active choice is one dismissible
+ * chip). Null at Everything with no saved scope, which is no narrowing and
+ * draws no chip; its × returns to Everything.
+ */
+export function scopeChipLabel(
+	scope: LoreScope,
+	saved: SavedScopeId | null
+): string | null {
+	if (saved) return SAVED_SCOPES.find((s) => s.id === saved)?.label ?? null
+	return scope === "all" ? null : SCOPE_LABELS[scope]
+}
+
+/** "3 loose ends", the rail foot's line and the scope popout's. */
+export function looseEndsLabel(count: number): string {
+	return plural(count, "loose end", "loose ends")
 }
 
 /**
@@ -402,8 +387,6 @@ export function savedScopeFilters(
 }
 
 export interface FacetCounts {
-	/** Only the kinds the pool actually holds, in the declared order. */
-	kinds: { kind: string; count: number }[]
 	readIn: number
 	pinned: number
 	off: number
@@ -424,9 +407,7 @@ export function facetCounts(
 	items: readonly PoolItem[],
 	readInKeys: ReadonlySet<string>
 ): FacetCounts {
-	const byKind = new Map<string, number>()
 	const out: FacetCounts = {
-		kinds: [],
 		readIn: 0,
 		pinned: 0,
 		off: 0,
@@ -436,7 +417,6 @@ export function facetCounts(
 		total: items.length
 	}
 	for (const item of items) {
-		byKind.set(item.kind, (byKind.get(item.kind) ?? 0) + 1)
 		if (readInKeys.has(item.key)) out.readIn++
 		if (item.pinned) out.pinned++
 		if (item.off) out.off++
@@ -446,14 +426,6 @@ export function facetCounts(
 		// chip and the queue never disagree about how many there are.
 		if (!item.archived && needsKeywords(item)) out.needsKeywords++
 	}
-	const declared = POOL_KINDS.filter((kind) => byKind.has(kind))
-	const others = [...byKind.keys()].filter(
-		(kind) => !(POOL_KINDS as readonly string[]).includes(kind)
-	)
-	out.kinds = [...declared, ...others].map((kind) => ({
-		kind,
-		count: byKind.get(kind) ?? 0
-	}))
 	return out
 }
 

@@ -9,16 +9,25 @@
 import { afterEach, describe, expect, test } from "vitest"
 import { flushSync, mount, unmount } from "svelte"
 import ConnectionServicePicker from "./ConnectionServicePicker.svelte"
+import type { ConnectionServiceCategory } from "$lib/shared/utils/connectionServiceItems"
 
 let target: HTMLElement
 let view: ReturnType<typeof mount> | null = null
 /** What the picker's `bind:selectedItem` would hand its parent. */
 let selected = $state<any>()
 
-function render(localOnnxAvailability?: {
-	available: boolean
-	reason: string | null
-}) {
+function render(
+	localOnnxAvailability?: {
+		available: boolean
+		reason: string | null
+	},
+	opts: {
+		initialModality?: string
+		initialCategory?: ConnectionServiceCategory
+	} = {
+		initialModality: "embeddings"
+	}
+) {
 	selected = undefined
 	target = document.createElement("div")
 	document.body.appendChild(target)
@@ -32,7 +41,7 @@ function render(localOnnxAvailability?: {
 				selected = v
 			},
 			label: "Service",
-			initialModality: "embeddings"
+			...opts
 		},
 		context: new Map<string, unknown>([
 			["systemSettingsCtx", { settings: { localOnnxAvailability } }]
@@ -67,8 +76,9 @@ describe("local ONNX in the service picker", () => {
 		expect(onnx.textContent).toContain(
 			"Not available on this machine: the Android app can't run the ONNX runtime"
 		)
-		// The difficulty line gives way to the reason, so it is not said twice.
-		expect(onnx.textContent).not.toContain("One download")
+		// The setup-need chip gives way to the reason, so the card says one
+		// thing on its second line.
+		expect(onnx.textContent).not.toContain("Runs locally")
 		// Everything else in the section is untouched.
 		expect(card("Ollama").disabled).toBe(false)
 	})
@@ -118,5 +128,124 @@ describe("OpenAI-compatible services under Embeddings", () => {
 			modality: "embeddings"
 		})
 		expect(card("OpenRouter").getAttribute("aria-checked")).toBe("true")
+	})
+})
+
+/** Type into the search box the way a person does. */
+function typeSearch(q: string) {
+	const input = target.querySelector<HTMLInputElement>("input[type=search]")!
+	input.value = q
+	input.dispatchEvent(new Event("input", { bubbles: true }))
+	flushSync()
+}
+
+/** The no-results line, if it is showing. */
+function noMatchLine(): HTMLParagraphElement | undefined {
+	return [...target.querySelectorAll("p")].find((p) =>
+		p.textContent?.trim().startsWith("No service")
+	)
+}
+
+/**
+ * A control in the no-results line, by its words. Scoped to that line: the
+ * "Showing … only" line above the search has a Show all of its own.
+ */
+function lineButton(text: string): HTMLButtonElement | undefined {
+	return [...(noMatchLine()?.querySelectorAll("button") ?? [])].find(
+		(b) => b.textContent?.trim() === text
+	)
+}
+
+/** The microtask `tick()` resolves on, then the DOM. */
+async function settle() {
+	await Promise.resolve()
+	await Promise.resolve()
+	flushSync()
+}
+
+/**
+ * Each card says what the service asks of the person (plan 2026-10-06 §D),
+ * where a "Beginner - Nothing to install" difficulty sat on every preset.
+ */
+describe("the chip on each card", () => {
+	test("keyed, local and address-only services each say so", () => {
+		render(undefined, {})
+		expect(card("OpenRouter").textContent).toContain("Needs an API key")
+		expect(card("Anthropic (Claude)").textContent).toContain(
+			"Needs an API key"
+		)
+		expect(card("Ollama").textContent).toContain("Runs locally")
+		expect(card("vLLM (Experimental)").textContent).toContain(
+			"Runs locally"
+		)
+		expect(card("Custom (OpenAI-Compatible)").textContent).toContain(
+			"Address only"
+		)
+		expect(target.textContent).not.toContain("Beginner")
+		expect(target.textContent).not.toContain("Difficulty")
+	})
+})
+
+describe("when nothing matches the search", () => {
+	test("the line names the search and two ways out", () => {
+		render(undefined, {})
+		typeSearch("nonesuch")
+		expect(target.querySelector("[role=radiogroup]")).toBeNull()
+		// No stray space before the comma or the stop.
+		expect(noMatchLine()!.textContent).toBe(
+			"No service called “nonesuch”. Try Show all, or pick Custom (OpenAI-Compatible)."
+		)
+	})
+
+	test("pick Custom selects it, clears the search and puts focus on its card", async () => {
+		render(undefined, {})
+		typeSearch("nonesuch")
+		lineButton("Custom (OpenAI-Compatible)")!.click()
+		await settle()
+		expect(selected).toMatchObject({
+			key: "preset:0",
+			type: "openai",
+			setupNeed: "address"
+		})
+		expect(
+			target.querySelector<HTMLInputElement>("input[type=search]")!.value
+		).toBe("")
+		const custom = card("Custom (OpenAI-Compatible)")
+		expect(custom.getAttribute("aria-checked")).toBe("true")
+		expect(document.activeElement).toBe(custom)
+	})
+
+	test("Show all drops the seeded category and keeps a search that matches outside it", async () => {
+		// The "Something I already run" door opens on Local / Self-hosted.
+		render(undefined, { initialCategory: "local" })
+		typeSearch("groq")
+		lineButton("Show all")!.click()
+		await settle()
+		expect(card("Groq")).toBeDefined()
+		const search =
+			target.querySelector<HTMLInputElement>("input[type=search]")!
+		expect(search.value).toBe("groq")
+		expect(document.activeElement).toBe(search)
+	})
+
+	test("Show all clears a search that matches nothing anywhere", async () => {
+		render(undefined, {})
+		typeSearch("nonesuch")
+		lineButton("Show all")!.click()
+		await settle()
+		expect(
+			target.querySelector<HTMLInputElement>("input[type=search]")!.value
+		).toBe("")
+		expect(card("OpenRouter")).toBeDefined()
+	})
+
+	test("a section with no custom entry offers Show all alone", () => {
+		render()
+		typeSearch("nonesuch")
+		expect(lineButton("Custom (OpenAI-Compatible)")).toBeUndefined()
+		expect(lineButton("Show all")).toBeDefined()
+		expect(noMatchLine()!.textContent).toBe(
+			"No service called “nonesuch”. Try Show all."
+		)
 	})
 })

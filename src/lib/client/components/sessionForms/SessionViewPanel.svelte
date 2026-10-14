@@ -4,6 +4,8 @@
 	import * as Icons from "@lucide/svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import DetailHero from "$lib/client/components/panels/DetailHero.svelte"
+	import EmptyState from "$lib/client/components/EmptyState.svelte"
+	import LoadingState from "$lib/client/components/LoadingState.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
@@ -150,46 +152,42 @@
 	})
 </script>
 
-<div class="flex h-full flex-col gap-0 overflow-hidden">
+<!-- One flex column with the pane's 12px gap: the space under the header is
+     that gap, never a margin or a wrapper (STYLE-GUIDE §6.3). -->
+<div class="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
 	<!-- Header. Every action this panel offers lives here: a detail screen
 	     that repeats its buttons at the foot makes the reader check both. -->
-	<div class="shrink-0 pb-3">
-		<PanelNavHeader
-			title="Session"
-			{onBack}
-			backLabel="Back to sessions"
-			actionsLabel="Session"
-			menuItems={[
-				lorebookId != null &&
-					onViewLorebook && {
-						label: "View lorebook",
-						icon: Icons.BookMarked,
-						onSelect: () => onViewLorebook?.(lorebookId)
-					},
-				isOwner &&
-					onToggleFavorite && {
-						label: isFavorite ? "Unstar" : "Star",
-						icon: isFavorite ? Icons.StarOff : Icons.Star,
-						onSelect: () =>
-							onToggleFavorite?.(sessionId, !isFavorite)
-					},
-				isOwner && onDelete && { separator: true },
-				isOwner &&
-					onDelete && {
-						label: "Delete session",
-						icon: Icons.Trash2,
-						destructive: true,
-						onSelect: () => onDelete?.(sessionId)
-					}
-			]}
-		>
-		</PanelNavHeader>
-	</div>
+	<PanelNavHeader
+		title="Session"
+		{onBack}
+		backLabel="Back to sessions"
+		actionsLabel="Session"
+		menuItems={[
+			lorebookId != null &&
+				onViewLorebook && {
+					label: "View lorebook",
+					icon: Icons.BookMarked,
+					onSelect: () => onViewLorebook?.(lorebookId)
+				},
+			isOwner &&
+				onToggleFavorite && {
+					label: isFavorite ? "Unstar" : "Star",
+					icon: isFavorite ? Icons.StarOff : Icons.Star,
+					onSelect: () => onToggleFavorite?.(sessionId, !isFavorite)
+				},
+			isOwner && onDelete && { separator: true },
+			isOwner &&
+				onDelete && {
+					label: "Delete session",
+					icon: Icons.Trash2,
+					destructive: true,
+					onSelect: () => onDelete?.(sessionId)
+				}
+		]}
+	/>
 
 	{#if isLoading}
-		<div class="flex flex-1 items-center justify-center">
-			<Icons.Loader2 size={24} class="text-surface-600-400 animate-spin" />
-		</div>
+		<LoadingState message="Loading session…" />
 	{:else if session}
 		<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
 			<!-- Hero: the one place this panel says which session it is
@@ -252,7 +250,9 @@
 
 				{#if lastMessage}
 					<section class="panel-card">
-						<p class="text-surface-600-400 mb-1.5 text-xs">Last line</p>
+						<p class="text-surface-600-400 mb-1.5 text-xs">
+							Last line
+						</p>
 						<p class="text-sm leading-relaxed">
 							{#if lastMessage.speakerName}
 								<span class="text-surface-700-300">
@@ -268,7 +268,9 @@
 
 				{#if session.scenario}
 					<section class="panel-card">
-						<p class="text-surface-600-400 mb-1.5 text-xs">Scenario</p>
+						<p class="text-surface-600-400 mb-1.5 text-xs">
+							Scenario
+						</p>
 						<p class="text-sm leading-relaxed whitespace-pre-wrap">
 							{session.scenario}
 						</p>
@@ -277,7 +279,9 @@
 
 				{#if lorebookId != null}
 					<section class="panel-card">
-						<p class="text-surface-600-400 mb-1.5 text-xs">Lorebook</p>
+						<p class="text-surface-600-400 mb-1.5 text-xs">
+							Lorebook
+						</p>
 						<div class="flex min-w-0 items-center gap-2">
 							<Icons.BookMarked
 								size={16}
@@ -326,9 +330,10 @@
 			</div>
 		</div>
 	{:else}
-		<p class="text-surface-700-300 py-8 text-center text-sm">
-			Session not found.
-		</p>
+		<EmptyState
+			icon={Icons.MessageSquareOff}
+			message="Session not found."
+		/>
 	{/if}
 </div>
 

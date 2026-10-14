@@ -195,7 +195,7 @@
 	{#if !isStarred}
 		<p class="text-surface-600-400 text-xs">
 			There is one embedding queue and it runs on whichever connection is
-			in use. Press "Use for embeddings" above to see its progress here.
+			in use. Press "Use in Embeddings" above to see its progress here.
 		</p>
 	{:else}
 		<!-- Backend health. The one thing a person cannot see from the form
@@ -218,7 +218,7 @@
 								: "Retrieval falls back to keyword search until this loads.")}
 					</p>
 					<button
-						class="btn btn-sm preset-tonal-warning text-xs"
+						class="btn btn-sm preset-tonal-primary text-xs"
 						onclick={loadModel}
 						disabled={loadingModel}
 					>
@@ -362,9 +362,7 @@
 
 		<!-- Queue list -->
 		<section>
-			<h3
-				class="text-surface-600-400 mb-2 text-xs font-semibold"
-			>
+			<h3 class="text-surface-600-400 mb-2 text-xs font-semibold">
 				Queue ({vectorizationCtx.priorityQueue.length})
 			</h3>
 
@@ -454,9 +452,7 @@
 
 		{#if vectorizationCtx.history.length > 0}
 			<section>
-				<h3
-					class="text-surface-600-400 mb-2 text-xs font-semibold"
-				>
+				<h3 class="text-surface-600-400 mb-2 text-xs font-semibold">
 					Recent ({vectorizationCtx.history.length})
 				</h3>
 				<ol

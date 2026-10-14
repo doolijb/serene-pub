@@ -9,6 +9,7 @@
  */
 
 import { isTransformId } from "@serene-pub/sdk"
+import { defaultLoadoutName } from "$lib/shared/loadouts/defaultLoadoutName"
 import { capabilityForSamplingShape } from "$lib/shared/capabilities/samplingShape"
 import {
 	slotConnectionId,
@@ -100,6 +101,18 @@ function pubDefaultNameOf(
 const MISSING = "(no longer exists)"
 
 /**
+ * What a model call's loadout supplies to one of its slots (I12): the
+ * loadout's name, the value it projects (what `world.ts applyLoadoutLayer`
+ * writes at `defaults`), and — when it was unfilled — the default it fell
+ * back to. Built by `loadouts.ts slotLoadoutOf`.
+ */
+export interface SlotLoadout {
+	name: string
+	supplies: unknown
+	fallbackName?: string
+}
+
+/**
  * `inherits`, `provenance` and `valueLabel` for one option. Only a
  * `connection-ref` or `sampling-ref` gets the first two; every `*-ref` gets
  * `valueLabel` when its value names a row.
@@ -114,14 +127,31 @@ export function readingOf(args: {
 	configName: string | undefined
 	defaults: Record<string, CapabilityDefault>
 	sets: NameSets
+	/**
+	 * The node's loadout, for a model call that has a Loadout row (I12):
+	 * `undefined` — no loadout slot, the words above stand; `null` — a slot
+	 * naming nothing (or nothing for this slot), so an unset value reads
+	 * *From the default*; a `SlotLoadout` — an unset value reads *From the
+	 * Extraction loadout*. In the admin's own view an explicit pick reads
+	 * *Set here*.
+	 */
+	loadout?: SlotLoadout | null
 }): { inherits?: OptionInherits; provenance?: OptionProvenance; valueLabel?: string } {
-	const { d, value, source, configured, scope, configName, defaults, sets } = args
+	const { d, value, source, configured, scope, configName, defaults, sets, loadout } = args
 	const named = valueNameOf(d, value, sets)
 	if (d.control !== "connection-ref" && d.control !== "sampling-ref")
 		return named ? { valueLabel: named } : {}
 
 	const nothing = d.control === "connection-ref" ? "No model set" : "No sampling config set"
 	const pubDefault = pubDefaultNameOf(d, defaults, sets)
+	// The transform's default, named by its loadout for an admin (owner
+	// 2026-10-12: loadouts, never nicknames); a session's settings keep
+	// *Pub default*, because members never see loadouts.
+	const capability = capabilityOfSlot(d)
+	const fromDefault =
+		scope === "session" || !capability
+			? "Pub default"
+			: `From the ${defaultLoadoutName(capability)} loadout`
 	const nameOr = (v: unknown) => valueNameOf(d, v, sets) ?? MISSING
 
 	// What removing this scope's row would leave in force.
@@ -131,14 +161,14 @@ export function readingOf(args: {
 			: d.authorDefault != null
 				? { from: "pipeline", label: `Pipeline default — ${nameOr(d.authorDefault)}` }
 				: pubDefault
-					? { from: "pub", label: `Pub default — ${pubDefault}` }
+					? { from: "pub", label: `${fromDefault} — ${pubDefault}` }
 					: { from: "none", label: nothing }
 
 	// Where the value in force came from.
 	const provenance: OptionProvenance =
 		value == null
 			? pubDefault
-				? { source: "pub", label: "Pub default" }
+				? { source: "pub", label: fromDefault }
 				: { source: "none", label: nothing }
 			: source === "session"
 				? { source: "session", label: "Set for this session" }
@@ -154,5 +184,55 @@ export function readingOf(args: {
 					: { source: "author", label: "Pipeline default" }
 
 	const valueLabel = value == null ? pubDefault : (named ?? MISSING)
-	return { inherits, provenance, ...(valueLabel ? { valueLabel } : {}) }
+	if (loadout === undefined)
+		return { inherits, provenance, ...(valueLabel ? { valueLabel } : {}) }
+
+	// A model call with a Loadout row (I12, §14 item 4): the Sampling
+	// view's words. The loadout projects at `defaults` — under an explicit
+	// pick (config or session), over the author's default.
+	const picked = source === "config" || source === "session"
+	if (loadout && !picked) {
+		const from = loadout.fallbackName
+			? `From the ${loadout.fallbackName} loadout (unfilled fallback)`
+			: `From the ${loadout.name} loadout`
+		const supplied = nameOr(loadout.supplies)
+		return {
+			inherits: { from: "loadout", label: `${from} — ${supplied}` },
+			provenance: { source: "loadout", label: from },
+			valueLabel: supplied
+		}
+	}
+	const reset: OptionInherits = loadout
+		? {
+				from: "loadout",
+				label: `${
+					loadout.fallbackName
+						? `From the ${loadout.fallbackName} loadout (unfilled fallback)`
+						: `From the ${loadout.name} loadout`
+				} — ${nameOr(loadout.supplies)}`
+			}
+		: scope === "config" && pubDefault
+			? { from: "pub", label: `${capability ? fromDefault : "From the default"} — ${pubDefault}` }
+			: inherits
+	if (picked)
+		return {
+			inherits: scope === "session" ? inherits : reset,
+			provenance:
+				source === "config" && scope === "config"
+					? { source: "config", label: "Set here" }
+					: provenance,
+			...(valueLabel ? { valueLabel } : {})
+		}
+	return {
+		inherits: reset,
+		provenance:
+			value == null && pubDefault
+				? {
+						source: "pub",
+						label:
+							scope === "session" || !capability ? "From the default" : fromDefault
+					}
+				: provenance,
+		...(valueLabel ? { valueLabel } : {})
+	}
 }

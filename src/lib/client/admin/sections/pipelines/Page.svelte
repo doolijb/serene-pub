@@ -230,7 +230,7 @@
 			<button
 				type="button"
 				class="chip min-h-8 shrink-0 px-3 text-xs {failedOnly
-					? 'preset-tonal-warning'
+					? 'preset-tonal-primary'
 					: 'preset-tonal-surface'}"
 				aria-pressed={failedOnly}
 				onclick={() => setFailedOnly(!failedOnly)}

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Select from "$lib/client/components/inputs/Select.svelte"
-	import type { Snippet } from "svelte"
+	import { getContext, type Snippet } from "svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { Priorities } from "$lib/shared/constants/Priorities"
 	import EntryConditionField from "$lib/client/components/lorebookForms/EntryConditionField.svelte"
@@ -8,7 +8,9 @@
 
 	/**
 	 * Level two of the editor's two levels of disclosure, shared by every
-	 * entry door: one fold, named for what is in it.
+	 * entry door: one fold, named for what is in it — the matching settings.
+	 * The entry's state (Pinned, Off, Archive) is the editor header's ⋯,
+	 * never this fold.
 	 *
 	 * ⚠ **One fold, in the same place, whatever is set.** A disclosure that
 	 * moves or disappears with its contents teaches the reader the controls
@@ -60,19 +62,28 @@
 		if (draft.matchMode != null) draft.matchMode = null
 	}
 
+	/**
+	 * Admins get a way to the cap. The cap itself is a pipeline setting
+	 * resolved per session (pipeline, then config, then the session), so an
+	 * entry has no one cap to read here; the note says what it does instead,
+	 * and the link goes to the pipelines where it is set.
+	 */
+	const userCtx = getContext<UserCtx | undefined>("userCtx")
+	const isAdmin = $derived(!!userCtx?.user?.isAdmin)
+
 	const switchClass =
 		"preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 </script>
 
 <details>
 	<summary class="cursor-pointer text-sm font-semibold">
-		Regex, case, recursion, priority, conditions
+		Regex, case, keyword chains, priority, conditions
 	</summary>
 	<div class="mt-2 flex flex-col gap-3 text-sm">
 		{#if vectorizationEnabled}
 			<p class="text-surface-600-400 text-xs">
 				Use regex and Case sensitive apply to keyword matching, which
-				still runs beside embeddings.
+				still runs beside Search by meaning.
 			</p>
 		{/if}
 		<Switch
@@ -90,7 +101,9 @@
 		{#if draft.matchMode === "word"}
 			<!-- The one mode the editor has no switch for: an imported file's
 			     whole-word flag. Said, and undoable, rather than silent. -->
-			<p class="text-surface-600-400 flex flex-wrap items-baseline gap-x-2 text-xs">
+			<p
+				class="text-surface-600-400 flex flex-wrap items-baseline gap-x-2 text-xs"
+			>
 				Keys match whole words only, as the imported file set.
 				<button
 					type="button"
@@ -116,14 +129,17 @@
 		<div class="flex w-full items-center justify-between gap-2">
 			<!-- The visible text is the row's caption; Select carries the real
 			     (sr-only) label so the row keeps its side-by-side layout. -->
-			<span aria-hidden="true">Recursion depth</span>
+			<!-- "Pull this one in", not "pull in": the depth is how deep in a
+			     keyword chain THIS entry may still be found (`keywordQuery`:
+			     "about being found, not about finding"). -->
+			<span aria-hidden="true">Let other entries pull this one in</span>
 			<Select
-				label="Recursion depth"
+				label="Let other entries pull this one in"
 				labelHidden
 				class="w-48 max-w-xs text-sm"
 				options={[
 					{ value: "", label: "Use pipeline default" },
-					{ value: "0", label: "Session only" },
+					{ value: "0", label: "No, the conversation only" },
 					{ value: "1", label: "1 level deep" },
 					{ value: "2", label: "2 levels deep" },
 					{ value: "3", label: "3 levels deep" }
@@ -139,11 +155,16 @@
 		</div>
 		<!-- The entry's depth can only LOWER the pipeline's ceiling
 		     (`keywordQuery`: level > entry depth ?? ceiling), and the ceiling
-		     is 0 until someone raises it — so 1–3 levels read as dead unless
-		     this says why. -->
+		     is 0 until someone raises it, so every choice here reads as dead
+		     unless this says why. The options stay enabled: the ceiling is a
+		     per-session pipeline setting no entry can read (less-confusing
+		     G7). -->
 		<p class="text-surface-600-400 -mt-2 text-xs">
-			Capped by the pipeline's “Follow keyword chains this deep”, which is
-			0 by default. Levels past the cap are never reached.
+			These do nothing until an admin raises “Follow keyword chains this
+			deep” in the pipeline's settings. It is 0 by default.
+			{#if isAdmin}
+				<a class="anchor" href="/admin/pipelines">Open Admin › Pipelines</a>
+			{/if}
 		</p>
 		<EntryConditionField
 			bind:selectiveLogic={draft.selectiveLogic}
@@ -151,34 +172,9 @@
 			regex={regexOn}
 			{idPrefix}
 		/>
-		<Switch
-			name="{idPrefix}Pinned"
-			checked={draft.constant || false}
-			onCheckedChange={(e) => (draft.constant = e.checked)}
-			class="flex w-full items-center justify-between gap-2"
-		>
-			<Switch.Label>Pinned</Switch.Label>
-			<Switch.Control class={switchClass}>
-				<Switch.Thumb />
-			</Switch.Control>
-			<Switch.HiddenInput />
-		</Switch>
-		<!-- One word for one state, and it is the word the list's own chip
-		     uses: off is a switch on a row kept in front of the author, and
-		     archived is a row put out of the way. The editor's overflow menu
-		     is where the second one is written. -->
-		<Switch
-			name="{idPrefix}Off"
-			checked={draft.enabled === false}
-			onCheckedChange={(e) => (draft.enabled = !e.checked)}
-			class="flex w-full items-center justify-between gap-2"
-		>
-			<Switch.Label>Off</Switch.Label>
-			<Switch.Control class={switchClass}>
-				<Switch.Thumb />
-			</Switch.Control>
-			<Switch.HiddenInput />
-		</Switch>
+		<!-- Pinned and Off are not here: they are the entry's state, not
+		     expert settings, and live in the editor header's ⋯ beside
+		     Archive (DESIGN-ux-simplification A.6). -->
 		{#if showPriority}
 			<div class="flex w-full items-center justify-between gap-2">
 				<span aria-hidden="true" class:opacity-50={draft.constant}>
@@ -200,6 +196,14 @@
 					}}
 				/>
 			</div>
+			{#if draft.constant}
+				<!-- The switch that disables Priority is in the ⋯, out of
+				     sight from here, so the fold says why. -->
+				<p class="text-surface-600-400 -mt-2 text-xs">
+					Pinned, in the ⋯ menu: always read in, so priority does not
+					apply.
+				</p>
+			{/if}
 		{/if}
 		{@render extra?.()}
 	</div>

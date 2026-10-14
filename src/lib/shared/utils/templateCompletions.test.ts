@@ -349,7 +349,16 @@ describe("the helper list stays whole", () => {
 		const { CONTEXT_HANDLEBARS_HELPERS } = await import("./templateCheckOptions")
 		const { HANDLEBARS_HELPER_DOCS, LIQUID_FILTER_DOCS } = await import("./templateAssist")
 		const { CONTEXT_LIQUID_FILTERS } = await import("./templateCheckOptions")
-		for (const h of CONTEXT_HANDLEBARS_HELPERS) expect(HANDLEBARS_HELPER_DOCS[h], h).toBeTruthy()
-		for (const f of CONTEXT_LIQUID_FILTERS) expect(LIQUID_FILTER_DOCS[f], f).toBeTruthy()
+		const { STROKES_ENABLED } = await import("$lib/shared/characters/strokesFlag")
+		// Strokes paused: `strokeList` stays registered but is not offered.
+		const paused = (n: string) => !STROKES_ENABLED && n === "strokeList"
+		for (const h of CONTEXT_HANDLEBARS_HELPERS)
+			if (!paused(h)) expect(HANDLEBARS_HELPER_DOCS[h], h).toBeTruthy()
+		for (const f of CONTEXT_LIQUID_FILTERS)
+			if (!paused(f)) expect(LIQUID_FILTER_DOCS[f], f).toBeTruthy()
+		if (!STROKES_ENABLED) {
+			expect(HANDLEBARS_HELPER_DOCS.strokeList).toBeUndefined()
+			expect(LIQUID_FILTER_DOCS.strokeList).toBeUndefined()
+		}
 	})
 })

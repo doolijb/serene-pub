@@ -1,23 +1,16 @@
 <script lang="ts">
 	/**
 	 * The sampling parameter editor, driven entirely by the shape's declared
-	 * vocabulary (SDK `SAMPLING_SCHEMAS`).
+	 * vocabulary (SDK `SAMPLING_SCHEMAS`): a parameter that exists is a
+	 * parameter you can set, and adding one is one declaration in one file.
 	 *
-	 * There used to be a `fieldMeta` literal in the sidebar naming nine samplers
-	 * with hand-written labels and ranges. Everything outside it — mirostat, DRY,
-	 * XTC, min-P, typical-P, dynamic temperature — had a database column, an
-	 * adapter mapping, and no way for anyone to reach it. Reading the schema means
-	 * a parameter that exists is a parameter you can set, and adding one is one
-	 * declaration in one file rather than a column, a flag, a `fieldMeta` entry
-	 * and a form branch.
-	 *
-	 * This screen shows the ENABLED parameters and nothing else. Which ones those
-	 * are is decided next door in `SamplingEnabledForm`, so `enabled` is read
-	 * here and never written: a row of switches beside every field turned the
-	 * editor into a checklist you had to read past to reach the value you came
-	 * for. Two screens is how this panel worked before the schema-driven rewrite
-	 * and it is what it went back to; only the storage changed, from a
-	 * `<key>Enabled` column per sampler to one `enabled` array.
+	 * Two modes. By default it draws the SENT parameters and nothing else,
+	 * because the form is read while tuning a number and a checkbox in front
+	 * of every label is a checklist to scroll past. With `choose` on it draws
+	 * EVERY parameter of the shape, each with a checkbox; one switched off is
+	 * dimmed and reads "not sent" in place of its value. Switching one on
+	 * materialises its declared default (`defaultOnEnable`). Either way the
+	 * edits are the caller's draft: nothing is saved here.
 	 *
 	 * It is a sibling of `pipelines/SchemaForm.svelte`, not a use of it: same
 	 * declaration language, different controls. A sampler wants a slider you can
@@ -31,19 +24,31 @@
 	import type { SettingsSchema, FieldDecl } from "@serene-pub/sdk"
 	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 	import { getSupportedSamplers } from "$lib/shared/utils/samplerMappings"
-	import { groupSamplingFields } from "./samplingFields"
+	import {
+		countEnabledByGroup,
+		defaultOnEnable,
+		groupSamplingFields,
+		nextEnabled
+	} from "./samplingFields"
 	import Select from "$lib/client/components/inputs/Select.svelte"
+	import LogitBiasField from "./LogitBiasField.svelte"
 	import { enumOptions } from "$lib/shared/i18n/enumOptions"
+	import ListGroupLabel from "$lib/client/components/panels/ListGroupLabel.svelte"
 
 	interface Props {
 		schema: SettingsSchema
 		/** The row's `values`. Bound: edits land here directly. */
 		values: Record<string, unknown>
 		/**
-		 * The row's `enabled`. Read-only here — it selects which fields are
-		 * drawn, and is edited on the enable/disable screen.
+		 * The row's `enabled`: which fields are drawn, and, while `choose` is
+		 * on, what the checkboxes edit. Bind it where `choose` can be on.
 		 */
-		enabled: readonly string[]
+		enabled: string[]
+		/**
+		 * Draw every parameter of the shape with a checkbox that decides
+		 * whether it is sent (the Sampling view's Choose parameters).
+		 */
+		choose?: boolean
 		/** Immutable rows are readable but not editable. */
 		disabled?: boolean
 		/**
@@ -53,6 +58,12 @@
 		 * parameter is worth saying and never worth blocking.
 		 */
 		connectionType?: string | null
+		/**
+		 * Keys the pair this config runs against drops — an image pair's
+		 * drawing sheet (`samplingKeysSheetDrops`). Greyed and marked, never
+		 * disabled, for the same reason as `connectionType`.
+		 */
+		unhonoured?: readonly string[] | null
 		/**
 		 * Draw each group's small heading. Off where the caller already
 		 * frames every group itself (Admin → Sampling's one fieldset per
@@ -64,11 +75,15 @@
 	let {
 		schema,
 		values = $bindable(),
-		enabled,
+		enabled = $bindable(),
+		choose = false,
 		disabled = false,
 		connectionType = null,
+		unhonoured = null,
 		groupHeadings = true
 	}: Props = $props()
+
+	const dropped = $derived(new Set(unhonoured ?? []))
 
 	/**
 	 * How wide the slider goes before "unlock max".
@@ -95,14 +110,28 @@
 	}
 
 	/**
-	 * Only the enabled fields, and only the groups that still have one.
-	 * `groupSamplingFields` drops the empties: the seeded "Disabled" config
-	 * enables nothing, and filtering per-field instead would leave seven group
-	 * headers stacked over no controls at all.
+	 * Choosing: every field. Otherwise only the enabled fields, and only the
+	 * groups that still have one — `groupSamplingFields` drops the empties, so
+	 * the seeded "Disabled" config draws no bare headers.
 	 */
 	const groups = $derived(
-		groupSamplingFields(schema, (key) => enabled.includes(key))
+		choose
+			? groupSamplingFields(schema)
+			: groupSamplingFields(schema, (key) => enabled.includes(key))
 	)
+	/** "4 of 6 sent" per group, for its label, in both modes. */
+	const groupCounts = $derived(countEnabledByGroup(schema, enabled))
+
+	function toggle(key: string, on: boolean) {
+		if (disabled) return
+		// Reassigned, never mutated: an in-place push/splice on the bound
+		// array would not re-run the `$derived` that filters the fields.
+		enabled = nextEnabled(enabled, key, on)
+		if (on) {
+			const seed = defaultOnEnable(schema, values, key)
+			if (seed !== undefined) values[key] = seed
+		}
+	}
 
 	/** The slider's ceiling: the soft range, or the hard bound once unlocked. */
 	function maxFor(key: string, decl: FieldDecl): number {
@@ -137,197 +166,262 @@
 
 <div class="flex flex-col gap-4">
 	{#if !groups.length}
-		<!-- Not an error state. "Disabled" is a shipped config whose whole point
-		     is that it sends nothing, so every request goes out with the
+		<!-- Not an error state. "Disabled" is a shipped config whose point is
+		     that it sends nothing, so every request goes out with the
 		     backend's own defaults. -->
 		<p class="text-surface-600-400 py-6 text-center text-sm">
-			No parameters enabled — requests go out with whatever the backend
-			itself defaults to.
+			{choose
+				? "This configuration’s shape declares no parameters."
+				: "No parameters are sent, so requests go out with the backend’s own defaults."}
 		</p>
 	{/if}
 
 	{#each groups as g (g.group)}
+		{@const count = groupCounts.get(g.group)}
 		<section class="flex flex-col gap-2">
 			{#if groupHeadings}
-				<p
-					class="text-surface-600-400 panel-edge border-b pb-1 text-xs"
-				>
-					{g.group}
-				</p>
+				<!-- The shared group label (STYLE-GUIDE §6.4), no rule, with
+				     how many of the group's parameters are sent. Its row inset
+				     is dropped: the fields under it are flush. -->
+				<ListGroupLabel
+					label={g.group}
+					trailing={count
+						? `· ${count.on} of ${count.total} sent`
+						: undefined}
+					class="px-0!"
+				/>
 			{/if}
 
 			{#each g.fields as { key, decl } (key)}
-				{@const ignored = supported && !supported.has(key)}
-				<div class="flex flex-col gap-1">
-					<!-- The "not sent" note sits on the LABEL because it is a
-					     statement about the value being sent, not about the
-					     control: the field is on and edited normally, the chosen
-					     backend simply has no mapping for it. -->
-					<!-- No `for` on an enum: the Select labels its own input. -->
-					<label
-						class="min-w-0 text-sm font-semibold"
-						for={decl.type === "enum" ? undefined : `sv-${key}`}
-					>
-						{label(decl, key)}
-						{#if ignored}
-							<span
-								class="text-warning-600 dark:text-warning-400 ml-1 inline-flex items-center gap-1 text-xs font-normal"
-								title="This connection type has no mapping for this parameter, so it will be left out of the request."
-							>
-								<Icons.TriangleAlert size={11} />
-								not sent to this backend
-							</span>
-						{/if}
-					</label>
-
-					<div>
-						{#if decl.type === "number" || decl.type === "integer"}
-							{@const max = maxFor(key, decl)}
-							{@const min = decl.min ?? 0}
-							<div class="flex flex-col gap-1">
-								<input
-									type="range"
-									id="sv-{key}"
-									{min}
-									{max}
-									step={step(decl)}
-									{disabled}
-									value={num(values[key], decl)}
-									oninput={(e) =>
-										(values[key] = parseFloat(
-											e.currentTarget.value
-										))}
-									class="accent-primary w-full"
-								/>
-								<div
-									class="text-surface-600-400 flex w-full items-center justify-between gap-1 text-xs"
-								>
-									<span class="select-none">{min}</span>
-									{#if editingField === key}
-										<input
-											id="sv-{key}-manual"
-											type="number"
-											{min}
-											{max}
-											step={step(decl)}
-											{disabled}
-											value={num(values[key], decl)}
-											oninput={(e) =>
-												(values[key] = parseFloat(
-													e.currentTarget.value
-												))}
-											class="border-primary input w-24 rounded border py-0.5 text-center"
-											onblur={() => (editingField = null)}
-											onkeydown={(e) => {
-												if (
-													e.key === "Enter" ||
-													e.key === "Escape"
-												)
-													editingField = null
-											}}
-										/>
-									{:else}
-										<button
-											type="button"
-											class="hover:bg-muted cursor-pointer rounded px-1.5 py-0.5 font-medium"
-											title="Click to type a value"
-											onclick={() => editValue(key)}
-										>
-											{values[key] ?? decl.default}
-										</button>
-									{/if}
-									<span class="select-none">{max}</span>
-								</div>
-
-								{#if unlockable(key)}
-									<label
-										class="text-surface-600-400 mt-1 flex items-center gap-2 text-xs"
-									>
-										<input
-											type="checkbox"
-											class="accent-primary"
-											{disabled}
-											checked={!!values[key + "Unlocked"]}
-											onchange={(e) =>
-												(values[key + "Unlocked"] =
-													e.currentTarget.checked)}
-										/>
-										Unlock max ({decl.max})
-									</label>
-								{/if}
-							</div>
-						{:else if decl.type === "boolean"}
-							<label class="flex items-center gap-2 text-sm">
-								<input
-									id="sv-{key}"
-									type="checkbox"
-									class="accent-primary"
-									{disabled}
-									checked={!!values[key]}
-									onchange={(e) =>
-										(values[key] = e.currentTarget.checked)}
-								/>
-								<span class="text-surface-600-400">
-									{values[key] ? "On" : "Off"}
-								</span>
-							</label>
-						{:else if decl.type === "string[]"}
-							<textarea
-								id="sv-{key}"
-								class="textarea w-full text-sm"
-								rows="3"
-								placeholder="One per line"
-								{disabled}
-								value={asLines(values[key] ?? decl.default)}
-								onchange={(e) =>
-									(values[key] = e.currentTarget.value
-										.split("\n")
-										.map((l) => l.trim())
-										.filter(Boolean))}
-							></textarea>
-						{:else if decl.type === "text" && decl.format === "json"}
-							<textarea
-								id="sv-{key}"
-								class="textarea w-full font-mono text-xs"
-								rows="4"
-								{disabled}
-								value={asJson(values[key] ?? decl.default)}
-								onchange={(e) =>
-									(values[key] = e.currentTarget.value)}
-							></textarea>
-						{:else if decl.type === "enum"}
-							<!-- The visible label above names this field; the
-							     combobox carries its own, visually hidden. -->
-							<Select
-								label={label(decl, key)}
-								labelHidden
-								class="w-full"
-								{disabled}
-								options={enumOptions(decl)}
-								value={String(values[key] ?? "")}
-								onValueChange={(v) => (values[key] = v)}
-							/>
-						{:else}
+				{@const ignored =
+					(supported && !supported.has(key)) || dropped.has(key)}
+				{@const on = enabled.includes(key)}
+				{@const offered = choose && !on}
+				<div
+					class={[
+						"flex flex-col gap-1",
+						(offered || (on && dropped.has(key))) && "opacity-60"
+					]}
+					data-sampling-param={key}
+				>
+					<div class="flex min-w-0 items-center gap-2">
+						{#if choose}
+							<!-- Its own name, because the label below names the
+							     value's control once the parameter is sent. -->
 							<input
-								id="sv-{key}"
-								type="text"
-								class="input w-full"
+								id="sv-{key}-on"
+								type="checkbox"
+								class="accent-primary shrink-0"
+								checked={on}
 								{disabled}
-								placeholder={decl.default === undefined
-									? "Leave blank for the backend’s own default"
-									: String(decl.default)}
-								value={String(values[key] ?? "")}
+								aria-label="Send {label(decl, key)}"
 								onchange={(e) =>
-									(values[key] = e.currentTarget.value)}
+									toggle(key, e.currentTarget.checked)}
 							/>
 						{/if}
+						<!-- The "not sent to this backend" note sits on the
+						     LABEL because it is a statement about the value
+						     being sent, not about the control: the field is on
+						     and edited normally, the chosen backend simply has
+						     no mapping for it. -->
+						<!-- No `for` on an enum: the Select labels its own
+						     input. None on a logit bias list either: it is a
+						     group of rows, named by this label's id. A parameter
+						     that is not sent has no control, so its label is
+						     its checkbox's. -->
+						<label
+							id="sv-{key}-label"
+							class="min-w-0 text-sm font-semibold"
+							for={offered
+								? `sv-${key}-on`
+								: decl.type === "enum" ||
+									  decl.format === "logit-bias"
+									? undefined
+									: `sv-${key}`}
+						>
+							{label(decl, key)}
+							{#if ignored && !offered}
+								<span
+									class="text-warning-600 dark:text-warning-400 ml-1 inline-flex items-center gap-1 text-xs font-normal"
+									title={dropped.has(key)
+										? "The model set for images ignores this parameter, so it will be left out of the request."
+										: "This connection type has no mapping for this parameter, so it will be left out of the request."}
+								>
+									<Icons.TriangleAlert size={11} />
+									not sent to this backend
+								</span>
+							{/if}
+						</label>
+					</div>
 
+					{#if offered}
+						<p class="text-surface-600-400 text-xs">not sent</p>
 						{#if describe(decl)}
-							<p class="text-surface-600-400 mt-1 text-xs">
+							<p class="text-surface-600-400 text-xs">
 								{describe(decl)}
 							</p>
 						{/if}
-					</div>
+					{:else}
+						<div>
+							{#if decl.type === "number" || decl.type === "integer"}
+								{@const max = maxFor(key, decl)}
+								{@const min = decl.min ?? 0}
+								<div class="flex flex-col gap-1">
+									<input
+										type="range"
+										id="sv-{key}"
+										{min}
+										{max}
+										step={step(decl)}
+										{disabled}
+										value={num(values[key], decl)}
+										oninput={(e) =>
+											(values[key] = parseFloat(
+												e.currentTarget.value
+											))}
+										class="accent-primary w-full"
+									/>
+									<div
+										class="text-surface-600-400 flex w-full items-center justify-between gap-1 text-xs"
+									>
+										<span class="select-none">{min}</span>
+										{#if editingField === key}
+											<input
+												id="sv-{key}-manual"
+												type="number"
+												{min}
+												{max}
+												step={step(decl)}
+												{disabled}
+												value={num(values[key], decl)}
+												oninput={(e) =>
+													(values[key] = parseFloat(
+														e.currentTarget.value
+													))}
+												class="border-primary input w-24 rounded border py-0.5 text-center"
+												onblur={() =>
+													(editingField = null)}
+												onkeydown={(e) => {
+													if (
+														e.key === "Enter" ||
+														e.key === "Escape"
+													)
+														editingField = null
+												}}
+											/>
+										{:else}
+											<button
+												type="button"
+												class="hover:bg-muted cursor-pointer rounded px-1.5 py-0.5 font-medium"
+												title="Click to type a value"
+												onclick={() => editValue(key)}
+											>
+												{values[key] ?? decl.default}
+											</button>
+										{/if}
+										<span class="select-none">{max}</span>
+									</div>
+
+									{#if unlockable(key)}
+										<label
+											class="text-surface-600-400 mt-1 flex items-center gap-2 text-xs"
+										>
+											<input
+												type="checkbox"
+												class="accent-primary"
+												{disabled}
+												checked={!!values[
+													key + "Unlocked"
+												]}
+												onchange={(e) =>
+													(values[key + "Unlocked"] =
+														e.currentTarget.checked)}
+											/>
+											Unlock max ({decl.max})
+										</label>
+									{/if}
+								</div>
+							{:else if decl.type === "boolean"}
+								<label class="flex items-center gap-2 text-sm">
+									<input
+										id="sv-{key}"
+										type="checkbox"
+										class="accent-primary"
+										{disabled}
+										checked={!!values[key]}
+										onchange={(e) =>
+											(values[key] =
+												e.currentTarget.checked)}
+									/>
+									<span class="text-surface-600-400">
+										{values[key] ? "On" : "Off"}
+									</span>
+								</label>
+							{:else if decl.type === "string[]"}
+								<textarea
+									id="sv-{key}"
+									class="textarea w-full text-sm"
+									rows="3"
+									placeholder="One per line"
+									{disabled}
+									value={asLines(values[key] ?? decl.default)}
+									onchange={(e) =>
+										(values[key] = e.currentTarget.value
+											.split("\n")
+											.map((l) => l.trim())
+											.filter(Boolean))}
+								></textarea>
+							{:else if decl.format === "logit-bias"}
+								<LogitBiasField
+									bind:value={values[key]}
+									declaredDefault={decl.default}
+									labelledby="sv-{key}-label"
+									{disabled}
+								/>
+							{:else if decl.type === "text" && decl.format === "json"}
+								<textarea
+									id="sv-{key}"
+									class="textarea w-full font-mono text-xs"
+									rows="4"
+									{disabled}
+									value={asJson(values[key] ?? decl.default)}
+									onchange={(e) =>
+										(values[key] = e.currentTarget.value)}
+								></textarea>
+							{:else if decl.type === "enum"}
+								<!-- The visible label above names this field; the
+							     combobox carries its own, visually hidden. -->
+								<Select
+									label={label(decl, key)}
+									labelHidden
+									class="w-full"
+									{disabled}
+									options={enumOptions(decl)}
+									value={String(values[key] ?? "")}
+									onValueChange={(v) => (values[key] = v)}
+								/>
+							{:else}
+								<input
+									id="sv-{key}"
+									type="text"
+									class="input w-full"
+									{disabled}
+									placeholder={decl.default === undefined
+										? "Leave blank for the backend’s own default"
+										: String(decl.default)}
+									value={String(values[key] ?? "")}
+									onchange={(e) =>
+										(values[key] = e.currentTarget.value)}
+								/>
+							{/if}
+
+							{#if describe(decl)}
+								<p class="text-surface-600-400 mt-1 text-xs">
+									{describe(decl)}
+								</p>
+							{/if}
+						</div>
+					{/if}
 				</div>
 			{/each}
 		</section>

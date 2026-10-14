@@ -10,44 +10,83 @@ Sessions work well on the shipped configurations. Come here when you want to cha
 
 What the settings show depends on your role. You only see settings your role can change somewhere.
 
-- **Everyone** can change the **prompts** a session uses, from that session's settings. That is all a non-administrator sees: no model, no sampling, no switches.
-- **Administrators** change everything else, in the **Pipelines** view: the model each call uses, sampling, switches and the Advanced settings. Their changes to a configuration reach everyone who uses it. Sampling for one session alone is also an administrator's choice.
-- **Nobody picks a connection for a session.** A session's replies use the model its configuration names, else the pub default. To change it, an administrator changes the configuration in Pipelines (see [Sessions → Which connection a session uses](./sessions.md#which-connection-a-session-uses)).
+- **Everyone** can choose which **prompt** each step of their own sessions uses, from that session's settings, among the prompts there are. That is all a non-administrator sees: no model, no sampling, no switches, and no writing or editing prompts.
+- **Administrators** change everything else, in **Admin › Pipelines**, which only administrators have: the model each call uses, sampling, switches, the Advanced settings, and writing, editing and deleting prompts. Their changes to a configuration or a prompt reach everyone who uses it. Sampling for one session alone is also an administrator's choice.
+- **Nobody picks a connection for a session.** A session's replies use the model its configuration names, else the pub default. To change it, an administrator changes the configuration in Admin › Pipelines (see [Sessions → Which connection a session uses](./sessions.md#which-connection-a-session-uses)).
 
 A setting your role normally changes but which is locked right now stays visible, read-only, with the reason. The usual case is the pipeline that created a session: its settings only matter while the session is being created, so afterwards its card is read-only and says _This session has been created; these settings only applied while creating it._
 
 ## Finding a preset's configuration
 
-The **Pipelines** view opens on the **genres**: Chat, Adventure, Lair and the rest, plus any from plugins you have switched on. Pick a genre to see its **session presets**; the default is marked _Default_, a shipped one _Built-in_, and the one the current session started on _This session_. Pick a preset to see the pipelines it runs: one for each event it answers (a reply, the session being created, a form being answered), then, under **Actions**, one for each action its sessions offer, such as Chat's _Narrate_ or the Lair's _Nudge_. Open a pipeline to see its settings, grouped by [agent](#agents). If the preset uses a different configuration from the one shown, a line above the settings says so.
+Pipelines live in the admin area; there is no Pipelines icon on the rail. **Admin › Pipelines** lists every pipeline on the pub, including ones no preset uses, with filters for genre, role, source and status, and each row shows the pipeline's genre beside its name. Open one to see its page: its settings grouped by [agent](#agents), **Scripts**, **Changes**, **Runs**, **Versions** and **Used by**.
 
-**All pipelines**, under the genres, lists every pipeline on the pub, including ones no preset uses, with a box to filter them by name or genre. Each row shows the pipeline's genre beside its version, since every genre has its own _Reply_ and _Turn order_. Administrators also get a **Manage in Admin** button (the gear) at the top of the view, of a preset and of a pipeline: on a pipeline it opens the pipeline's page in Admin (its settings, **Changes**, **Runs**, versions, and what uses it), and on a preset that preset's page (which pipeline answers each event, and whether it is offered). An open pipeline card on a preset has its own **Manage pipeline** link too.
+To start from a preset instead, open its genre in **Admin › Genres**: the genre's page lists its presets, its default and whether it is offered. A preset's page shows which pipeline answers each event (a reply, the session being created, a form being answered) and which actions its sessions offer, such as Chat's _Narrate_ or the Lair's _Nudge_, each with a link to that pipeline's page. Both pages have a **Pipelines** button that opens the list.
 
-A pipeline is named for what it does, so each genre has its own **Reply**, **Create session**, **Answer a form** and **Turn order**. Under a genre you see only that genre's, and **Admin › Pipelines** shows each pipeline's genre beside its name.
+A pipeline is named for what it does, so each genre has its own **Reply**, **Create session**, **Answer a form** and **Turn order**. **Admin › Pipelines** shows each pipeline's genre beside its name; filter by **Genre** to see one genre's.
+
+## The canvas
+
+The pipeline's page has a **Canvas** tab that draws the pipeline as the line it runs along. On the left, a **minimap** shows every step as a dot and every clause as a square with a row per branch, so even the Lair's reply fits beside the page; click anything on it to go there. In the middle, the **line**: one card per step, showing its name and nothing else, with a clause (a gather, a for-each, a loop, a junction) as a container you open in place to see its branches side by side. Selecting a step inside a closed clause opens the way to it.
+
+Everything about the selected step is in the **drawer** along the bottom, in tabs:
+
+- **Node** or **Clause**: the step's type, its kind, where it sits, and for a clause its rule and each branch's condition.
+- **In ports**: what the step receives and where each value comes from — another step's output, a slot the configuration fills, or a value written into the pipeline.
+- **Out ports**: what it sends on, and which steps read it.
+- **Settings**: the same editor as **Configure**, for the selected configuration. A change here goes into the same save row; the canvas names the addresses, a configuration fills them.
+- **Last run**: that step's rows from a receipt, when **Last run** is on above.
+
+The bar above the line colours it one of three ways. **Structure** colours by kind. **Last run** colours by a receipt — green ran, amber halted, red failed, gold a dry write, grey not reached — with a picker for the last ten runs. **Changes** marks what moved since the version before: added, changed, removed.
+
+### Editing on the canvas
+
+**Edit** starts a draft: your own working copy of the published version, kept on the server until you publish or discard it. A pipeline Serene Pub or a plugin ships cannot be edited in place; **Copy and edit…** asks for an owner slug of your own (`acme.lab`), a name and a label, publishes the copy as its first version and opens it. Every id you make afterwards lives under that slug, and it never changes. The copy keeps the original's inlet lock but not its contributed actions, whose slash names belong to the original.
+
+In a draft the drawer is the editor. Select a step and the actions row offers **Add after…**, which turns the drawer into the catalogue of every step this pub has (search, filter by kind; a tile shows its type id, because the type is what you are choosing), **Add clause after…**, **Move up / down**, **Rename…** and **Remove…**, which says first what would lose a source. A clause adds **Add node in branch…** and **Add branch…**, and its branches can be renamed or removed from the Clause tab. **In ports** becomes a picker per port: another step's output, a slot the configuration fills, or a literal. Every edit is checked by the server at once; the **Notices** tab lists what is wrong, with the fix, and the bar says _valid_ or _N notices · publish blocked_. **Changes** colours the draft against the published version.
+
+### Composite steps and script steps
+
+Two kinds of custom step need no plugin.
+
+A **composite step** is a run of steps saved to the library as one. Select the first step of the run, choose **Save as step…**, pick where the run ends, give it a name and a label, and it is saved under your owner slug (`acme.lab:composite/retrieval`). The catalogue lists it under **composite**; inserting it lays its steps out under one key (`retrieval.lore`, `retrieval.rank`, …) with the wiring between them kept and the wiring to the outside listed for you to connect. It is inlined, so a published pipeline never depends on the library row; changing the saved step changes nothing already published.
+
+A **script step** is the catalogue's **Run a script** (`core:task/run-script@1`): it passes its input through, and the scripts attached after its `main` port transform it. Those are ordinary scripts of the **Transform data** kind — the script is handed `value` and whatever it returns is the new value, any JSON — written in Admin › Scripts and attached on the step's **Advanced** fold like any seam, so the script a configuration runs is a configuration's choice. They run in the same sandbox as every other script: QuickJS, no storage, no network, a time limit. The step's **Script time limit (ms)** sets that limit for each of its scripts (250 ms unless changed, up to 1000); a script that runs longer is stopped, the run's receipt says so, and the value it was handed goes on to the next.
+
+Anything that reads storage, calls out, or writes is a plugin node, and the catalogue only offers what this pub has installed.
+
+**Publish…** proposes the next patch version and shows, before anything is written, which configurations would lose a value at an address that no longer exists and which would gain a default. Publishing writes the new version, makes it active, reconciles every configuration (culled values become notices on Configure), and ends the draft. The version it replaces stays for its receipts. Settings belong to a published version's configurations, so the drawer's Settings tab waits until the draft is published.
 
 ## A genre's default preset
 
-A genre lists every one of its presets, its default first. The **default** is the preset new sessions of that genre start from; a genre has one. An administrator changes it with **Make default for _genre_** on any other preset in the list, or with **Default preset** on the genre's page in **Admin › Genres** (saved with the rest of that page). Both change the same setting, so the mark moves everywhere at once.
+The **default** is the preset new sessions of that genre start from; a genre has one. An administrator changes it with **Default preset** on the genre's page in **Admin › Genres** (saved with the rest of that page).
 
-A preset marked _Hidden_ is not offered when someone starts a session; only administrators see it in this list.
+A preset marked _Hidden_ is not offered when someone starts a session; only administrators see it.
 
 ### Where a plugin's pipelines appear
 
-A pipeline that is not Serene Pub's own comes from a plugin, and it always arrives with a preset: a plugin that adds a genre must include at least one preset for it, and a plugin missing one is refused at install with a sentence saying so. Its first preset becomes the genre's default unless the genre already has one. So a plugin's pipelines appear here the same way core's do: under the plugin's genre, under its preset, and in **All pipelines**. A plugin that only adds actions to another genre (Chat's, say) needs no preset of its own; an administrator includes its actions in a preset from that preset's page in Admin.
-
-Opened from inside a session, the view changes that session's settings, but only for pipelines the session runs. Any other pipeline shows its configuration: read-only for non-administrators, and shared with everyone for administrators. The line above the settings says which. **Back**, top left, goes up a level, and the view reopens where you left it.
+A pipeline that is not Serene Pub's own comes from a plugin, and it always arrives with a preset: a plugin that adds a genre must include at least one preset for it, and a plugin missing one is refused at install with a sentence saying so. Its first preset becomes the genre's default unless the genre already has one. So a plugin's pipelines appear the same way core's do: under the plugin's genre, under its preset, and in **Admin › Pipelines**. A plugin that only adds actions to another genre (Chat's, say) needs no preset of its own; an administrator includes its actions in a preset from that preset's page in Admin.
 
 ## Agents
 
-A pipeline can call a model more than once. Adventure plans the turn, narrates it, voices each character and keeps the record: four calls a turn. Each call is an **agent**, with its own prompt, model and sampling, so you could give the planner a small fast model and the narrator a large one. You rarely need to: anything you leave alone follows the configuration, then the pub default.
+A pipeline can call a model more than once. Adventure plans the turn, narrates it, voices each character and keeps the record: four calls a turn. Each call is an **agent**, with its own prompt, model and sampling, so you could give the planner a small fast model and the narrator a large one. You rarely need to: anything you leave alone follows the configuration, then the call's [loadout](./connections.md#loadouts).
 
 The settings show one block per agent, in the order they run, then **Whole pipeline** for what serves the whole turn (which lore sources it reads, the context budget). A pipeline with a single model call shows one block with no heading. Each block has:
 
 - its name, such as _Planner_, _Narrator_ or _Voices_, and one sentence on what it does;
 - an **On/Off** switch beside the name when that call can be skipped (Adventure's planner and state keeper can; the narrator can't). A block that is off says _Off: this part does not run._;
-- its main choices: **Prompt**, **Model** and **Sampling** (in **Whole pipeline**, a switch for each lore source);
+- its main choices: **Loadout** first, then **Prompt**, **Model** and **Sampling** (in **Whole pipeline**, a switch for each lore source);
 - one **Advanced** fold with the rest.
+- on the administrator's pipeline page, a **Receives** card and a **Carries out** card for the agent, or for the step you select: what comes in (_the conversation_, _world lore, a share of the context_, _the cast_, _plan_ from the Planner), what goes on to the next step, and what it writes to the session (_writes the reply_, _sets the turn order_, _records an event_). An agent's cards leave out what passes between its own steps.
 
 ## Model and sampling
+
+**Loadout** comes first in each agent's block. A [loadout](./connections.md#loadouts) is a named choice of model and sampling that many steps can share: Serene Pub's summaries all name _Extraction_, every reply names _Reply_. The picker shows the loadout's name and where it really resolves, such as _Extraction → Reply (unfilled)_ when Extraction has no model yet and so runs on the chat default. Each row in its list says what a run on it would do differently, in the same words a receipt uses: _JSON by instruction (no schema door)_, _tools by instruction (no native tool calls)_, _references dropped_. It never grades a loadout. **Change…** opens that loadout's sheet in the Loadouts view, where its model is chosen; changing it there changes every step that names it.
+
+Under the picker, one line says what this step **Needs**, worked out from how it is wired (_Chat · a structured answer_, _Image generation · reference pictures_), and what it is **Best with**, as its author suggested (_Extraction sampling · fast_). The line is left out when there is nothing to say.
+
+**Model** and **Sampling** below it are overrides for this one step. Each says where its value comes from: _set here_, _from the Extraction loadout_, or _from the default_. **Use loadout's** on a value set here clears it, so the step follows its loadout again. "The Reply loadout, but temperature 0.3 here" is one override, not a second loadout.
+
+A session never picks a loadout; only an administrator's configuration does.
 
 **Model** is one choice: the list is grouped by connection, and each row is one of that connection's models, so picking a row picks both. A model that can't do what this call needs is still listed, greyed, with the reason (_Can't do image output._), and so is one that is switched off or no longer offered by its service.
 
@@ -59,22 +98,26 @@ When nothing is chosen, the first entry in either list says what you get instead
 | --- | --- |
 | In a session, when the configuration sets a value | _As configured — Nemo 12B · KoboldCPP_ |
 | In a configuration, when the pipeline ships a value | _Pipeline default — Background_ |
-| Anywhere, when nothing else names one | _Pub default — Nemo 12B · KoboldCPP_ (from **Admin › Defaults**) |
+| Anywhere, when nothing else names one | _From the Reply loadout — Nemo 12B · KoboldCPP_ in a configuration (the default [loadout](./connections.md#loadouts), from **Admin › Models › Loadouts**); _Pub default — …_ in a session |
 | When not even the pub has one | _No model set_ |
 
-**A muted line under each setting** says where its value comes from: _Set for this session_ or _Set in this configuration_ (with **Reset**, and a dot marking the change), _From the “Adventure” configuration_, _Pipeline default_ or _Instance default_. A value you can't change here shows its name with _Set by an administrator_ under it. An administrator inside a session sees **Model** that way, because a session never names a model.
+**A muted line under each setting** says where its value comes from: _Set for this session_ or _Set in this configuration_ (with **Reset**, and a dot marking the change), _From the “Adventure” configuration_, _Pipeline default_, _From the Reply loadout_ (in a configuration) or _Pub default_ (in a session). A value you can't change here shows its name with _Set by an administrator_ under it. An administrator inside a session sees **Model** that way, because a session never names a model.
 
 ## Advanced settings
 
-**Advanced** is everything in an agent, or in **Whole pipeline**, that isn't one of its main choices: the context template and how each value is laid out, tuning numbers, lore shares, review switches, scripts. Each block has its own fold, summarised as, for example, _Advanced · 19 settings · 2 changed_, so a change is never hidden. Inside, each step has its own box. Session settings show no Advanced; administrators reach it in the Pipelines view.
+**Advanced** is everything in an agent, or in **Whole pipeline**, that isn't one of its main choices: the context template and how each value is laid out, tuning numbers, lore shares, review switches, scripts. Each block has its own fold, summarised as, for example, _Advanced · 19 settings · 2 changed_, so a change is never hidden. Inside, each step has its own box. Session settings show no Advanced; administrators reach it in **Admin › Pipelines**.
+
+**Scripts.** A step's script lists are in its Advanced box, one list for each **seam**, the place in the step where scripts may run. Each list's label says where: _Scripts · before text_, _Scripts · after text_, _Scripts · at each draft_. The box lists them in the order the step runs them, and the **Scripts** tab on the pipeline's Admin page shows every seam in the pipeline in one map. See [Scripts](./scripts.md).
 
 ## Prompts
 
 A **prompt** is the written instructions a step sends: a name plus a few text fields, such as a **System prompt** and **Post-history instructions** on a reply step, and a **Narrator name** too on a narrator step. A summary's drafting, merging and naming steps each have their own. A prompt belongs to a kind of step, not to one pipeline, so a narrator prompt you write is offered in every pipeline with a narrator step.
 
-Chat's reply starts on **Roleplay - Living Scene**, which carries the scene on from where it stands rather than answering each message as a request. **Roleplay - Simple**, 0.5's default, and the other shipped reply prompts are one pick away, and a configuration that already picked one keeps it.
+Chat's reply starts on **Roleplay - Living Scene**, which carries the scene on from where it stands rather than answering each message as a request. Three more ship beside it: **Roleplay - Plain**, two sentences for small models and for cards that carry their own instructions; **Roleplay - Brief**, short dialogue-led turns; and **Writer**, which continues the story as an author rather than as one character. A configuration that already picked a prompt keeps it, including a prompt an earlier version shipped and this one doesn't: that prompt stays on your pub as an ordinary prompt you can edit or delete.
 
-Which prompt a step uses is chosen on the step, where you can also write a new one. Shipped prompts are read-only; clone one to make a version you can edit. **Admin › Prompts** lists every prompt with the step it serves. Filter it by **Genre**, **Pipeline** or **Step** to see exactly the prompts one of them can use: a prompt fits a pipeline when one of the pipeline's steps can pick it, and a genre through the pipelines its presets run. The **Use** filter shows which prompts a pipeline picks today. **Add prompt** starts a new one as a copy of an existing prompt for the same step.
+Which prompt a step uses is chosen on the step. In **Admin › Pipelines** an administrator can also write a new one there; shipped prompts are read-only, so clone one to make a version you can edit. Everyone else picks among the prompts there are, in their session's settings. **Admin › Prompts** lists every prompt with the step it serves. Filter it by **Genre**, **Pipeline** or **Step** to see exactly the prompts one of them can use: a prompt fits a pipeline when one of the pipeline's steps can pick it, and a genre through the pipelines its presets run. The **Use** filter shows which prompts a pipeline picks today. **Add prompt** starts a new one as a copy of an existing prompt for the same step.
+
+**A name you already used.** If you named a prompt or template the same as one an update ships, yours keeps its name and the shipped one appears as _‹name› (Built-in)_. Once you rename or delete yours, it takes its plain name back.
 
 The fields are plain text with a few names filled in before sending: `{{char}}` is the character whose turn it is, `{{characterNames}}` and `{{personaNames}}` list every character and persona in the session, and `{{narratorName}}` is the narrator prompt's own name. Where the post-history instructions go, and how long a session must be before they are added, are numbers on the assembly step (**Post-history depth** and **Post-history token trigger**), not part of the prompt. See [Context templates → The postHistory object](./context-templates.md#the-posthistory-object).
 
@@ -122,6 +165,7 @@ Each source's entries arrive in the prompt as a **band** with a name a context t
 
 - **A template renders only the bands it names.** If you pick a different context template for a plugin's pipeline, place its bands yourself. If a band's entries were chosen but the template never places them, the run's report says so.
 - **How a band looks is a setting.** Each band appears in the prompt-building step's settings beside world lore and history, where you can pick its layout, such as prose instead of JSON.
+- **A name means one thing in one prompt.** Two plugins may each have a band called `clue`, or a plugin may use a name core uses, as long as the two never meet in the same pipeline. A pipeline where they do is refused, with both sources named. A pipeline that feeds the prompt-building step its own data under a core name says so, and that name's layout setting then offers the plugin's layouts.
 - **A template must fit the step.** Choosing a template that uses a name the step doesn't supply is refused, with the name it probably meant. A choice made earlier that no longer fits is kept and shows a notice under the configuration picker until it is fixed. See [Context templates → Templates are checked when you save them](./context-templates.md#templates-are-checked-when-you-save-them).
 
 ## An envoy's prompts are configuration
@@ -138,7 +182,7 @@ A worked example of a tool loop ships with the SDK for plugin authors (see [For 
 
 ## When a preset's pipeline is missing
 
-If a pipeline a preset uses stops being available (a plugin that shipped it was removed, or an import brought the preset without it), sessions on that preset keep working: each turn runs the genre's default pipeline for that event instead, and says so. The preset is flagged in **Admin › Presets** (_1 binding unavailable_), its page names the missing pipeline with **Rebind**, the session shows a banner, and the run's report names the substitution. The check runs at every start, so reinstalling the pipeline clears the flag by itself.
+If a pipeline a preset uses stops being available (a plugin that shipped it was removed, or an import brought the preset without it), sessions on that preset keep working: each turn runs the genre's default pipeline for that event instead, and says so. The preset is flagged in **Admin › Play › Presets** (_Binding unavailable_), its page names the missing pipeline with **Rebind**, the session's header shows a one-line notice, and the run's report names the substitution. The check runs at every start, so reinstalling the pipeline clears the flag by itself.
 
 ## Every reply is one run
 
@@ -152,9 +196,9 @@ Each reply is one **run** of its pipeline, from start to finish. The run makes t
 
 **Folded sections.** Some replies carry working a reader might want to see, such as the model's **Reasoning** or the Lair planner's beats, folded above the text. Folds are never sent back to the model: the next turn reads only the reply itself.
 
-**Review is off unless you turn it on.** An administrator can switch on **Review** for a step that saves or reaches outside, in the Pipelines view. A reviewed reply pauses at the save, after the model has answered, so the reviewer sees the text. Approving saves it; rejecting ends the run and marks the message with the reason.
+**Review is off unless you turn it on** (except **Portrait**, which shows its prompt first). An administrator can switch on **Review** for a step that saves or reaches outside, in **Admin › Pipelines**. A reviewed reply pauses at the save, after the model has answered, so the reviewer sees the text. Approving saves it; rejecting ends the run and marks the message with the reason. The **Image** action no longer asks for its prompt twice: the prompt typed in its form goes straight to the render, and on an upgraded pub its **Default** configuration follows this new setting unless an administrator changed it.
 
-Review on the reply's **placeholder** step instead (the empty message made before the model writes) pauses before anything is generated: the card says so, and approving it starts the reply. To read a reply's words before they are saved, review the step that saves the finished message. The review card names the pipeline and step it is about, and when more than one is waiting it shows where you are (_1 of 3_, _2 more after this one_).
+Review on the reply's **placeholder** step instead (the empty message made before the model writes) pauses before anything is generated: the card says so, and approving it starts the reply. To read a reply's words before they are saved, review the step that saves the finished message. The review card opens in plain words: what is about to happen and what **Approve** does (_The AI wants to generate an image. Approve to make it, or change the prompt first._). **Details** under it names the pipeline and the step. When more than one is waiting it shows where you are (_1 of 3_, _2 more after this one_).
 
 **A preview saves nothing, and never asks for review.** The token estimate under the composer runs the pipeline up to the model call and stops, so it measures exactly what the next turn will send without leaving anything behind. A step set to review that the preview passes is approved for the preview alone; nothing is written, and no card appears.
 
@@ -172,7 +216,7 @@ Each change reaches one reply only. A reply that fails before saving leaves the 
 
 A message can carry a **form**: a question with options, addressed to one participant, such as Adventure's **Ask**. If a person plays that participant, the form waits for their click. If the AI does, Serene Pub runs an **answer** pipeline that reads the participant's card and the conversation, picks an option, and presses it exactly as a click would. A form is answered once, and every screen greys it afterwards.
 
-Pipelines can set each other off this way, so there are limits. A chain of pipelines answering one another may go four deep and sixteen runs wide; a pipeline that writes a message each time a message completes pauses after four in a row. When a chain reaches a limit, it pauses and the session owner sees **Keep going?**, naming the pipelines so far. **Continue** allows one more round of the same size; **Stop here** ends it. With nobody there it simply waits, and a restart ends it.
+Pipelines can set each other off this way, so there are limits. A chain of pipelines answering one another may go four deep and sixteen runs wide; a pipeline that writes a message each time a message completes pauses after four in a row. When a chain reaches a limit, it pauses and the session owner sees **Keep going?**, which says how many more requests the chain is about to make (_The AI is about to make 3 more requests in a chain._); **Details** names the pipelines so far. **Continue** allows one more round of the same size; **Stop here** ends it and keeps what is done. With nobody there it simply waits, and a restart ends it.
 
 While any run in the chain is waiting for review, the rest of the session is not held up.
 
@@ -183,6 +227,21 @@ A pipeline sees every member of the session's cast, including characters switche
 ## Attachments in a prompt
 
 A pipeline sends the files on its messages only if it has a **Place attachments** step, between the transcript and the prompt. The shipped replies (Chat, Guide, Adventure's narrator and voices, every Lair voice) have one, and so do the actions that write with a model (Chat's Narrate and Side character; Adventure's Look, Ask, Rest and Time passes; the Lair's Build room, Trigger trap, Reveal and drafted rooms) and the form answers. A pipeline without one sends no files; when nothing in the session places a kind, the composer says it can't be attached. The summarize pipelines name each file in their batches instead (`[image: cat.png]`), through the **Batch messages** step's attachments. The step is judged on the model of the step it writes for, so in Adventure the Narrator may see an image while the Planner does not. Its two settings are **Media lookback** (how many recent messages send their images and PDFs; older ones are sent as names, 10 by default) and **Text file budget** (how much of each text file goes in, 4,000 tokens by default). What a model sees is in [Sessions → What the model sees](./sessions.md#what-the-model-sees).
+
+## The image step
+
+The step that draws a picture (**Generate image**) sends its prompt to the model its loadout names (**Images**, unless the step names another) and saves what comes back. When that model is on ComfyUI, the loadout also names the [ComfyUI workflow](./connections.md#comfyui) it draws with, and the step's **Workflow** setting, shown only then, can name a different one. A few of its settings decide what it asks for:
+
+- **Orientation**: **As set** keeps the width and height from the sampling configuration; **Portrait**, **Landscape** and **Square** turn that size the way you pick.
+- **Transparent background**: **Off** keeps the background the model draws. **Transparent when possible** asks a model that can draw one for it, and otherwise marks the picture so its background is cut out afterwards. **Transparent from the model** only runs on a model that draws transparency itself.
+- **Reference images**: a pipeline can hand the step pictures the result should look like, such as a character's likeness. With **Preferred** (the default), a model that can't take a reference image still draws, from the prompt alone, and the action's form says so before you start. With **Required**, the step refuses that model and names what it needs.
+- **Seed**: **As set** (the default) uses the sampling configuration's seed, so a random seed stays random for every picture. **Same for every picture** picks one seed per run, so a set of pictures looks alike.
+
+One step can ask for several pictures at once, such as one per sprite label. Serene Pub decides how many requests that takes from what the model can do: one request for several identical pictures when the model can return them together, one request per picture otherwise. Each picture is labelled with what it was drawn for, a picture that didn't come back is reported by name, and **Inspecting a run** shows the requests that were made and what each one could not honour.
+
+The picture pipelines are **Generate image** (the composer's **Image** action), **Illustrate scene** (the composer's **Scene** action and the Backdrop widget's **Illustrate**: a short description written from the last messages and everyone's likeness, then a wide picture; its **Placement** step decides whether the picture is posted, set as the backdrop or both; see [Sessions → Scene](./sessions.md#scene)), **Fill sprites** (a character's **Fill empty sprites**, which runs on the card with no session; see [Characters → Fill empty sprites](./characters.md#fill-empty-sprites)) and **Portrait** (a character's **Generate portrait**, also on the card with no session; see [Characters → Generate a portrait](./characters.md#generate-a-portrait)). Portrait shows its prompt for review before drawing unless an administrator switches **Review** off on its picture step in **Admin › Pipelines**, and its two prompts, **Portrait, tags** and **Portrait, prose**, are the dialog's **Style** choice. Illustrate scene writes on the **Scene prompt** loadout and draws on **Scene**; the others draw on **Images**. How a person gets pictures working, without any of this, is in [Images](./images.md).
+
+Some models ignore some sampling parameters. In **Sampling**, an image configuration greys the parameters that the model set for images ignores, and leaves them out of the count of what is sent.
 
 ## The story clock
 
@@ -208,7 +267,7 @@ Plugin authors declare annex values as described in the SDK's [Storage](./sdk/gu
 
 ## Inspecting a run
 
-Every run leaves a report, and the **run inspector** reads it. **Only administrators see run reports**, because a report records everything the run touched, including what a pipeline keeps hidden from the people in a session. Open it with **Inspect run** in a reply's **⋮** menu, **Inspect** on the progress card once a run finishes, or the pipeline's **Runs** tab in Admin.
+Every run leaves a report, and the **run inspector** reads it. **Only administrators see run reports**, because a report records everything the run touched, including what a pipeline keeps hidden from the people in a session. Open it with **Inspect run** in a reply's **⋮** menu or on the turn line above the composer, **Inspect** on the progress card once a run finishes, or the pipeline's **Runs** tab in Admin.
 
 It opens on one sentence: _Ran all 27 nodes_, _Stopped at generate on request while Jasmine is typing_, or _Halted at keeperWrite_ with the pipeline's reason. Beside it are the pipeline and its version (marked _superseded_ when the pipeline has changed since), the time, the token count, what started the run and what it left behind. On a session turn, **Portrayed by** lists who played each participant for that turn (_Tom · AI_, _Elara · you_); see [Who portrays a participant this turn](./session-actions.md#who-portrays-a-participant-this-turn).
 
@@ -216,10 +275,12 @@ Each step has a time limit. A step that runs out of time is marked _timed out_, 
 
 On the left is every step in the order it ran, with how long it took and a marker on the ones that called a model. Select one to see:
 
-- **Prompt**: what the step sent. Lore and history are a table showing each item's source, token cost, whether it made it in, and why. The messages follow as readable text. A prompt-building step also says what happened to the post-history reminder: _included at message 12_, or _suppressed, 278 tokens is below the 3000 trigger_.
+- **Prompt**: what the step sent. Lore and history are a table showing each item's source, token cost, whether it made it in, and why. The messages follow as readable text. A prompt-building step also says what happened to the post-history reminder: _included at message 12_, or _suppressed, 278 tokens is below the 3000 trigger_. Under it, **Variable layouts** lists each value the template placed, the layout it rendered through (_Titled JSON block (Serene Pub's)_, or _built-in default_ when none was picked), and which variable it held, such as `core:var/world-lore@1` for core's own world lore.
 - **Output**: what the step produced.
 - **Wire**, on a step that called a model: the address, the exact request (with **Copy request**) and the raw response, plus every stop sequence and whether it was sent. This is where you see which sampling settings a service actually received.
 - **Notes**: anything the step recorded about itself.
+
+A step that ran scripts also has a **Scripts** block: each script, the seam it ran at, whether it came from the configuration or the connection, what it did, and, for stop scripts, which one cut the reply. See [Scripts → Seeing what ran](./scripts.md#seeing-what-ran).
 
 ## What a ranker decided is recorded
 
@@ -233,11 +294,30 @@ A step a pipeline uses can also become unavailable, for example when the plugin 
 
 ## A plugin's settings
 
-A plugin's settings are filled in under **Admin › Plugins**, with **Settings** on its row. A setting the plugin marks as personal can also be changed by each person for themselves, on the **Extension settings** card in **Settings › User**. Their own value wins, then the administrator's, then the plugin's default. Nobody sees another person's values, and uninstalling the plugin removes them.
+A plugin's settings are on its own page: open the plugin from **Admin › Extensions › Plugins** and fill in its **Settings** card, which is saved with the rest of the page by **Save** in the save row at the bottom. Only the fields you change are sent. A setting the plugin marks as personal can also be changed by each person for themselves, on the **Extension settings** card in **Settings › User**. Their own value wins, then the administrator's, then the plugin's default. Nobody sees another person's values, and uninstalling the plugin removes them.
 
 ## Turning a plugin off
 
 Switching a plugin off in **Admin › Plugins** removes everything it provides from every list and picker: its genres, pipelines, presets, actions, prompts, templates, scripts, widgets and styles. Nobody can start a new session in its genre. Nothing is deleted, and switching it back on restores it all. A session already running on something it provided keeps running, but the plugin's actions aren't offered while it is off.
+
+## Every configuration in one list
+
+**Admin › Pipelines › Configurations** lists every named configuration on the pub, across every pipeline, with what depends on it: its pipeline, how many presets and sessions use it, and whether it is _Shipped_ or _Custom_. A pipeline's default has _(default)_ after its name. Filter by pipeline, by origin, by whether it is a default, or by whether anything uses it.
+
+Open a configuration to edit it on its pipeline's page in Admin, which is also where a new one is added. **Delete selected configurations…** deletes custom configurations nothing uses. It keeps shipped ones (updates replace them), each pipeline's default, and any a preset or session still uses, and the confirmation says why for each one it keeps.
+
+## The pipeline library
+
+**Library**, at the top of **Admin › Pipelines**, opens the pipeline library: everything the pipelines are built from, and what uses each piece. Its tabs are **Pipelines**, **Prompts**, **Context templates** and **Variable layouts**.
+
+- **Pipelines** lists every pipeline with its version and number of steps; each opens its page in Admin.
+- **Prompts**, **Context templates** and **Variable layouts** are grouped by the step or variable that uses them, not by pipeline, because a step and its prompts are shared by every pipeline that reuses it. Each can be edited, duplicated or deleted here, and each group of templates or layouts has **New** to write another. A group with nothing written yet uses its step's built-in default.
+
+Every row says what uses it (_Used by …_) or _Not used by any pipeline_, so you know before deleting whether anything depends on it. Deleting something still in use names what holds it, and is refused until those point somewhere else.
+
+## Recent runs
+
+Under the list in **Admin › Pipelines**, **Recent runs** shows the newest runs across every pipeline: a green dot for a run that ended _ok_ and an amber one for any other outcome, the pipeline and its genre, the outcome when it wasn't _ok_, and when it ran. The count beside the title says how many of the recent runs ended _ok_ (_281 of 300 ok_). **Failed only** narrows the list to failures, and the **Needs you** item about failed runs opens it that way. Select a run to open its pipeline's page, whose **Runs** tab has the full report (see [Inspecting a run](#inspecting-a-run)). The list's **Last runs** column shows each pipeline's last five outcomes the same way.
 
 ## The events page
 

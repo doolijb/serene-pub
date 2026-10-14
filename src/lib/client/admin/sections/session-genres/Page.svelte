@@ -4,8 +4,11 @@
 	 * kinds of session people can start. Filters by family and availability;
 	 * bulk Make available / Hide. A row opens the genre's change page
 	 * (`/admin/session-genres/<id>`), where availability, the default preset
-	 * and plugin swaps are set and its presets are listed inline. No Add and
-	 * no Delete: genres arrive and leave with the code that declares them.
+	 * and plugin swaps are set and its presets are listed inline. **Add
+	 * genre** (PLAN-pipeline-canvas-and-genre-authoring §6) makes one on this
+	 * pub as a copy of a listed genre, under an owner slug of the admin's own
+	 * (`/admin/session-genres/new`). No Delete: shipped genres arrive and leave
+	 * with the code that declares them.
 	 */
 	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
@@ -92,7 +95,9 @@
 
 <AdminChangelist
 	title="Genres"
-	purpose="What kinds of session people can start. A genre declares its shape and events; new genres arrive with the code that declares them."
+	purpose="What kinds of session people can start. A genre declares its shape and events; add one by copying a genre you have, then make it your own."
+	addHref="/admin/session-genres/new"
+	addLabel="Add genre"
 	{rows}
 	rowKey={(r) => r.slug}
 	{columns}

@@ -16,7 +16,10 @@ import {
 	reviewMark,
 	type Permission,
 	MAX_ADMIN_STORAGE_QUOTA,
-	WIDGET_SCOPE_LABELS
+	WIDGET_SCOPE_LABELS,
+	WIDGET_WRITE_LABELS,
+	widgetGrantLabel,
+	widgetScopePermissions
 } from "./permissions"
 import { WIDGET_SCOPED_SECTIONS } from "@serene-pub/sdk"
 
@@ -597,6 +600,67 @@ describe("widget scope labels follow the SDK's one table of scoped sections", ()
 		expect(declared?.label).toBe("Its widgets see the session's stats and states")
 		expect(panelGrants(["session:state"], statsy, [])).toEqual([])
 		expect(panelGrants(["session:state"], statsy, reviewMarks(declaredPermissions(statsy)))).toEqual(["session:state"])
+	})
+})
+
+describe("🚧 widget write grants (D4, Q2): a write is its own permission, reviewed apart from the read", () => {
+	const dice = {
+		permissions: ["widget:channel:dice:write"],
+		widgets: [
+			{
+				id: "dice",
+				component: "dice",
+				channels: ["dice"],
+				scopes: ["session:state", "session:state:write", "channel:dice:write", "channel:dice", "made-up:write", "lore:write"]
+			}
+		]
+	}
+
+	it("each recognised write is a permission `widget:<grant>`, account-affecting, with its own sentence", () => {
+		expect(declaredWidgetScopes(dice)).toEqual(["channel:dice:write", "session:state", "session:state:write"])
+		const declared = declaredPermissions(dice)
+		const write = declared.find((p) => p.key === "widget:session:state:write")!
+		expect(write).toMatchObject({ kind: "resource", accountAffecting: true, label: WIDGET_WRITE_LABELS["session:state:write"] })
+		expect(write.label).not.toBe(WIDGET_SCOPE_LABELS["session:state"])
+		const channel = declared.find((p) => p.key === "widget:channel:dice:write")!
+		expect(channel).toMatchObject({ kind: "resource", accountAffecting: true })
+		expect(channel.label).toMatch(/'dice' channel/)
+		// The CLI's compiled echo is the same permission, not a second, unknown one.
+		expect(declared.filter((p) => p.key === "widget:channel:dice:write")).toHaveLength(1)
+		// An unknown write — a scope with no write, a made-up one, a bare channel read — grants nothing.
+		for (const key of ["widget:made-up:write", "widget:lore:write", "widget:channel:dice"])
+			expect(declared.map((p) => p.key)).not.toContain(key)
+	})
+
+	it("a granted read is not a granted write, nor the write the read", () => {
+		const declared = declaredPermissions(dice)
+		const reviewed = reviewMarks(declared)
+		// All reviewed, the write denied: the read alone.
+		const readOnly = [...reviewed, "widget:session:state:write", "widget:channel:dice:write"]
+		expect(grantedWidgetScopes(dice, readOnly)).toEqual(["session:state"])
+		expect(panelGrants(["session:state", "session:state:write"], dice, readOnly)).toEqual(["session:state"])
+		// The read denied, the write granted: the write alone.
+		const writeOnly = [...reviewed, "widget:session:state"]
+		expect(panelGrants(["session:state", "session:state:write"], dice, writeOnly)).toEqual(["session:state:write"])
+		// Nothing reviewed: neither.
+		expect(panelGrants(["session:state", "session:state:write", "channel:dice:write"], dice, [])).toEqual([])
+		// All granted: each, as its bare grant.
+		expect(panelGrants(["session:state:write", "channel:dice:write"], dice, reviewed)).toEqual([
+			"session:state:write",
+			"channel:dice:write"
+		])
+	})
+
+	it("an unknown write key grants nothing, reviewed or not", () => {
+		const odd = { widgets: [{ id: "w", component: "w", scopes: ["persona:write", "channel:a b:write", "channel::write", "session:state:writes"] }] }
+		expect(declaredWidgetScopes(odd)).toEqual([])
+		expect(widgetScopePermissions(["persona:write", "session:state:write:write", "channel:x:y:write"])).toEqual([])
+		const declared = declaredPermissions({ permissions: ["widget:persona:write"] })
+		// Surfaced so an admin sees it — and approving it supplies nothing.
+		expect(declared.map((p) => p.key)).toEqual(["widget:persona:write"])
+		expect(grantedWidgetScopes({ permissions: ["widget:persona:write"] }, reviewMarks(declared))).toEqual([])
+		expect(widgetGrantLabel("persona:write")).toBeNull()
+		expect(widgetGrantLabel(42)).toBeNull()
 	})
 })
 

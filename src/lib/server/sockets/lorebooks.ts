@@ -7,6 +7,10 @@ import {
 } from "$lib/server/utils/characterBindingSync"
 import { canViewCharacter } from "$lib/server/utils/sessionAccess"
 import { cardTakenBy } from "$lib/server/utils/castMemberCards"
+import { retoldFieldList } from "$lib/shared/lorebooks/retold"
+import { retoldUpdateProblem } from "$lib/server/lorebooks/retold"
+import { createMedia, sniffMedia } from "$lib/server/media"
+import { MediaKind, MediaVisibility } from "$lib/shared/constants/MediaVisibility"
 import {
 	mapImportedEntry,
 	entryTypeIdOf,
@@ -28,6 +32,7 @@ import { withImportLimit } from "$lib/server/imports/importLimit"
 import { assertImportJsonShape } from "$lib/server/imports/jsonShape"
 import { buildLorebookExportData } from "$lib/server/utils/lorebookExportBuilder"
 import { duplicateLorebookRows } from "$lib/server/utils/lorebookDuplicate"
+import { relayToBookReaders } from "$lib/server/sockets/utils/bookReaders"
 import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
 import {
@@ -100,7 +105,23 @@ import {
 	ITEM_TYPE_ID,
 	LOCATION_TYPE_ID
 } from "$lib/shared/entries/types"
-import { assertOwnedBook, findOwnedBook } from "$lib/server/utils/ownedBook"
+import {
+	LOREBOOK_NOT_FOUND,
+	assertOwnedBook,
+	assertReadableBook,
+	findOwnedBook,
+	lorebookAccessFor
+} from "$lib/server/utils/ownedBook"
+import {
+	listSharedWith,
+	replaceShares,
+	sharedLorebookIdsFor
+} from "$lib/server/utils/shares"
+import { pushToUser } from "./utils/userPush"
+import type {
+	LorebooksShareParams,
+	LorebooksShareResponse
+} from "$lib/shared/sockets/conversations"
 // SelectTag/SelectLorebookTag/InsertHistoryEntry are declared globally in
 // $lib/server/db/types.d.ts (ambient `export global {}` block, same pattern
 // as the Sockets namespace) — no import needed/available for them.
@@ -213,10 +234,17 @@ async function buildLorebooksList(
 	userId: number
 ): Promise<Sockets.Lorebooks.List.Response> {
 	if (!userId) return { lorebookList: [] }
+	// Books other people **shared** with the asker (PLAN-private-messages
+	// §6.7) ride the same read, each marked and named by its owner.
+	const sharedIds = await sharedLorebookIdsFor(db as unknown as Db, userId)
 	const books = await db.query.lorebooks.findMany({
-		where: (l, { eq }) => eq(l.userId, userId),
+		where: (l, { eq, inArray, or }) =>
+			sharedIds.length
+				? or(eq(l.userId, userId), inArray(l.id, sharedIds))
+				: eq(l.userId, userId),
 		orderBy: (l, { desc }) => desc(l.name),
 		with: {
+			user: { columns: { username: true, displayName: true } },
 			lorebookEntries: {
 				columns: {
 					id: true,
@@ -241,7 +269,17 @@ async function buildLorebooksList(
 	// entry lists are id-only and exist for the card's counts, so they are
 	// split back out of the one relation rather than fetched three times.
 	const booksWithTags = books.map((book) => {
-		const { lorebookEntries: allEntries, ...rest } = book
+		const { lorebookEntries: allEntries, user, ...rest } = book
+		// The list holds the asker's own books and the ones shared with them
+		// — never an admin's view of another's — so a row is one or the other.
+		const shared =
+			book.userId !== userId
+				? {
+						isSharedWithMe: true,
+						ownerName: user?.displayName || user?.username || null,
+						bookAccess: "shared" as const
+					}
+				: { bookAccess: "owner" as const }
 		// Counts exclude archived rows, matching the default entry list — a
 		// book reads as holding what the reader will see when they open it.
 		const lorebookEntries = allEntries.filter((e) => !e.archived)
@@ -264,7 +302,8 @@ async function buildLorebooksList(
 			tags:
 				book.lorebookTags?.map(
 					(lt: SelectLorebookTag & { tag: SelectTag }) => lt.tag.name
-				) || []
+				) || [],
+			...shared
 		}
 	})
 
@@ -335,6 +374,82 @@ export const lorebooksCreateHandler: Handler<
 	askerOf
 )
 
+/**
+ * One book as `lorebooks:get` answers it, for `userId`: the request and the
+ * share pushes read it through here, so the two can never differ.
+ */
+async function buildLorebookGet(
+	userId: number,
+	lorebookId: number
+): Promise<Sockets.Lorebooks.Get.Response> {
+	// The book's own row and its tags — what Book settings edits. Its
+	// entries and cast have their own reads (`entries:list`,
+	// `lorebooks:bindingList`); this reply carried both whole for a
+	// form that reads neither (Phase D).
+	// Owner, or a person it is **shared** with (PLAN-private-messages
+	// §4): `lorebookAccessFor`. The administrator exception the entry
+	// reads make is NOT extended here — this reply drives the book's
+	// workspace, and an admin's read-only view has no presentation yet.
+	const access = await lorebookAccessFor(lorebookId, userId, {
+		isAdmin: false
+	})
+	const book = access
+		? await db.query.lorebooks.findFirst({
+				where: (l, { eq }) => eq(l.id, lorebookId),
+				with: {
+					lorebookTags: {
+						with: {
+							tag: true
+						}
+					},
+					user: { columns: { username: true, displayName: true } }
+				}
+			})
+		: undefined
+
+	if (!book) {
+		// ⚠ `lorebookId` beside the null, the same treatment as
+		// `sessions:get`'s not-found reply: there is no lorebook for the
+		// scope extractor to read an id off, so without it this reply has
+		// no **interest scope** and only a BARE `lorebooks:get` key could
+		// receive it — a key that matches every OTHER book's reply too.
+		const res: Sockets.Lorebooks.Get.Response = {
+			lorebook: null,
+			lorebookId: lorebookId
+		}
+		return res
+	}
+
+	// Transform lorebook tags to include tags as string array
+	const { lorebookTags, user, ...bookFields } = book
+	const bookWithTags = {
+		...bookFields,
+		tags: lorebookTags?.map((lt) => lt.tag.name) || [],
+		// The one fact the client derives read-only from (lane A3).
+		bookAccess: access!,
+		// The owner reads who it is shared with; a recipient reads
+		// that it is theirs to read, and nothing about other people.
+		...(access === "owner"
+			? {
+					sharedWith: await listSharedWith(
+						db as unknown as Db,
+						"lorebook",
+						book.id
+					)
+				}
+			: {
+					isSharedWithMe: true,
+					ownerName: user?.displayName || user?.username || null
+				})
+	}
+
+	const res: Sockets.Lorebooks.Get.Response = {
+		lorebook: bookWithTags,
+		lorebookId: lorebookId
+	}
+	return res
+}
+
 export const lorebooksGetHandler: Handler<
 	Sockets.Lorebooks.Get.Params,
 	Sockets.Lorebooks.Get.Response
@@ -342,49 +457,7 @@ export const lorebooksGetHandler: Handler<
 	"lorebooks:get",
 	async (socket, params: Sockets.Lorebooks.Get.Params, emitToUser) => {
 		try {
-			const userId = socket.user!.id
-
-			// The book's own row and its tags — what Book settings edits. Its
-			// entries and cast have their own reads (`entries:list`,
-			// `lorebooks:bindingList`); this reply carried both whole for a
-			// form that reads neither (Phase D).
-			const book = await db.query.lorebooks.findFirst({
-				where: (l, { and, eq }) =>
-					and(eq(l.id, params.id), eq(l.userId, userId)),
-				with: {
-					lorebookTags: {
-						with: {
-							tag: true
-						}
-					}
-				}
-			})
-
-			if (!book) {
-				// ⚠ `lorebookId` beside the null, the same treatment as
-				// `sessions:get`'s not-found reply: there is no lorebook for the
-				// scope extractor to read an id off, so without it this reply has
-				// no **interest scope** and only a BARE `lorebooks:get` key could
-				// receive it — a key that matches every OTHER book's reply too.
-				const res: Sockets.Lorebooks.Get.Response = {
-					lorebook: null,
-					lorebookId: params.id
-				}
-				emitToUser("lorebooks:get", res)
-				return res
-			}
-
-			// Transform lorebook tags to include tags as string array
-			const { lorebookTags, ...bookFields } = book
-			const bookWithTags = {
-				...bookFields,
-				tags: lorebookTags?.map((lt) => lt.tag.name) || []
-			}
-
-			const res: Sockets.Lorebooks.Get.Response = {
-				lorebook: bookWithTags,
-				lorebookId: params.id
-			}
+			const res = await buildLorebookGet(socket.user!.id, params.id)
 			emitToUser("lorebooks:get", res)
 			return res
 		} catch (error: any) {
@@ -393,6 +466,64 @@ export const lorebooksGetHandler: Handler<
 		}
 	},
 	"The lorebook could not be opened."
+)
+
+/**
+ * `lorebooks:share` — replace who a book is **shared** with
+ * (PLAN-private-messages §4 "Shares"). Owner only (`assertOwnedBook`); a
+ * replace-set in one transaction; every recipient a live account. The reply
+ * reaches every tab of the owner; each person added or removed gets a fresh
+ * `lorebooks:list` and `lorebooks:get` (gated: only a tab showing one pays).
+ */
+export const lorebooksShareHandler: Handler<
+	LorebooksShareParams,
+	LorebooksShareResponse
+> = refusable(
+	"lorebooks:share",
+	async (socket, params: LorebooksShareParams, emitToUser) => {
+		const userId = socket.user!.id
+		const changed = await db.transaction(async (tx) => {
+			const book = await assertOwnedBook(
+				tx as unknown as Db,
+				userId,
+				params?.lorebookId
+			)
+			return {
+				lorebookId: book.id,
+				...(await replaceShares(
+					tx as unknown as Db,
+					"lorebook",
+					book.id,
+					userId,
+					params.userIds
+				))
+			}
+		})
+		const lorebookId = changed.lorebookId
+		const res: LorebooksShareResponse = {
+			lorebookId,
+			sharedWith: await listSharedWith(
+				db as unknown as Db,
+				"lorebook",
+				lorebookId
+			)
+		}
+		emitToUser("lorebooks:share", res)
+		for (const recipient of [...changed.added, ...changed.removed]) {
+			pushToUser(recipient, "lorebooks:list", () =>
+				buildLorebooksList(recipient)
+			)
+			// A revoked recipient reads the not-found reply; an added one
+			// reads the book.
+			pushToUser(recipient, "lorebooks:get", () =>
+				buildLorebookGet(recipient, lorebookId)
+			)
+		}
+		return res
+	},
+	"Couldn't change who this lorebook is shared with.",
+	undefined,
+	(raw) => ({ lorebookId: (raw as { lorebookId?: unknown })?.lorebookId })
 )
 
 export const lorebooksUpdateHandler: Handler<
@@ -640,18 +771,18 @@ export async function syncLorebookBindings({
  * and every one of them is a push. As a thunk the three-way join is paid only
  * when a socket is actually showing the cast.
  *
- * Ownership is re-checked here rather than trusted from the caller — the read
- * is scoped by `userId` in the same statement that fetches the rows, so a
- * book belonging to somebody else is "not found" rather than "found but
- * refused".
+ * Access is re-checked here rather than trusted from the caller —
+ * `assertReadableBook` (owner, share recipient or admin), so a book the asker
+ * may not read is "not found" rather than "found but refused".
  */
 export async function buildLorebookBindingList(
 	userId: number,
 	lorebookId: number
 ): Promise<Sockets.Lorebooks.BindingList.Response> {
+	// A read: owner, share recipient or admin (lane A3). Same refusal.
+	await assertReadableBook(db, userId, lorebookId)
 	const book = await db.query.lorebooks.findFirst({
-		where: (l, { and, eq }) =>
-			and(eq(l.id, lorebookId), eq(l.userId, userId)),
+		where: (l, { eq }) => eq(l.id, lorebookId),
 		columns: {
 			id: true
 		},
@@ -664,7 +795,7 @@ export async function buildLorebookBindingList(
 		}
 	})
 
-	if (!book) throw new Error("Lorebook not found.")
+	if (!book) throw new Error(LOREBOOK_NOT_FOUND)
 
 	return {
 		lorebookId: book.id,
@@ -682,14 +813,19 @@ export async function buildLorebookBindingList(
  * ⚠ A build that THROWS is logged by `emitToUser` and emits nothing, which
  * is right for a push the caller's own reply does not depend on.
  */
-export function relistBindings(
+export async function relistBindings(
 	socket: any,
 	lorebookId: number,
 	emitToUser: (event: string, data: any) => void
 ) {
-	return emitToUser("lorebooks:bindingList", () =>
+	const own = await emitToUser("lorebooks:bindingList", () =>
 		buildLorebookBindingList(socket.user!.id, lorebookId)
 	)
+	// The people the book is shared with, each list built as them (lane A3).
+	await relayToBookReaders(socket, lorebookId, "lorebooks:bindingList", (readerId) =>
+		buildLorebookBindingList(readerId, lorebookId)
+	)
+	return own
 }
 
 export const lorebookBindingListHandler: Handler<
@@ -767,9 +903,23 @@ export const lorebookBindingsForCharacterHandler: Handler<
 				)
 				.map((lb) => ({ id: lb.id, name: lb.name }))
 
+			// The cast members this card is, in the asker's own books, and
+			// which of the card's fields each retells (PLAN-cast-retold-fields)
+			// — the card editor's "Represents N cast members" banner. The
+			// stored flags, not a dated reading: the banner is about the book.
+			const members = bindings
+				.filter((b) => !!b.lorebook && b.lorebook.userId === userId)
+				.map((b) => ({
+					lorebookId: b.lorebook!.id,
+					lorebookName: b.lorebook!.name,
+					castId: b.id,
+					retold: retoldFieldList(b.retold)
+				}))
+
 			const res: Sockets.Lorebooks.BindingsForCharacter.Response = {
 				characterId: params.characterId,
-				lorebooks
+				lorebooks,
+				members
 			}
 			emitToUser("lorebooks:bindingsForCharacter", res)
 			return res
@@ -1074,6 +1224,25 @@ export const updateLorebookBindingHandler: Handler<
 			existingBinding.id
 		)
 
+		// The retold columns (PLAN-cast-retold-fields): checked as themselves,
+		// and a new face must be a picture this member may wear — the asker's
+		// upload to this book, or a gallery image of the member's card.
+		const retoldProblem = await retoldUpdateProblem(
+			db,
+			safeUpdate as Record<string, unknown>,
+			{
+				id: existingBinding.id,
+				lorebookId: existingBinding.lorebookId,
+				characterId:
+					params.lorebookBinding.characterId !== undefined
+						? (params.lorebookBinding.characterId ?? null)
+						: existingBinding.characterId,
+				faceMediaId: existingBinding.faceMediaId
+			},
+			userId
+		)
+		if (retoldProblem) throw new Error(retoldProblem)
+
 		// Linking a card to a background member: the member's own name and
 		// aliases are about to be overwritten by the card's (the entity sync
 		// below), and they are MEMBER-owned — what the story has called this
@@ -1192,6 +1361,145 @@ export const updateLorebookBindingHandler: Handler<
 		isUniqueViolation(e)
 			? "That character is already in this lorebook."
 			: undefined
+)
+
+/**
+ * Upload a picture as a cast member's **face** (PLAN-cast-retold-fields):
+ * lorebook-owned media (`files.lorebook_id`), set as the member's
+ * `faceMediaId` with `retold.face` turned on. The book must be the asker's,
+ * as for every member edit. Replies under its own name with the member's
+ * row, and refreshes the cast as `lorebooks:updateBinding` does.
+ *
+ * Bytes the asker already uploaded come back as that file (`createMedia`
+ * dedupes per user); one with no book yet is stamped this book's, so it
+ * stays a picture this member may wear on the next edit.
+ */
+export const uploadMemberFaceHandler: Handler<
+	Sockets.Lorebooks.UploadMemberFace.Params,
+	Sockets.Lorebooks.UploadMemberFace.Response
+> = refusable(
+	"lorebooks:uploadMemberFace",
+	async (
+		socket,
+		params: Sockets.Lorebooks.UploadMemberFace.Params,
+		emitToUser
+	) => {
+		const userId = socket.user!.id
+		const castId = Number(params?.castId)
+		const member = Number.isInteger(castId)
+			? await db.query.lorebookBindings.findFirst({
+					where: (lb, { eq }) => eq(lb.id, castId),
+					columns: { id: true, lorebookId: true }
+				})
+			: undefined
+		if (!member) throw new Error("That cast member is not in this lorebook.")
+		if (!(await findOwnedBook(db, userId, member.lorebookId)))
+			throw new Error("Access denied.")
+		const raw = params.imageFile as unknown
+		if (
+			!raw ||
+			!(
+				Buffer.isBuffer(raw) ||
+				raw instanceof Uint8Array ||
+				raw instanceof ArrayBuffer
+			)
+		)
+			throw new Error("No picture came with that upload.")
+		const bytes = Buffer.isBuffer(raw)
+			? raw
+			: raw instanceof ArrayBuffer
+				? Buffer.from(new Uint8Array(raw))
+				: Buffer.from(raw)
+
+		// Judge the bytes BEFORE writing them, so a refused upload leaves no
+		// orphan file behind (review 2026-10-13).
+		const sniffed = await sniffMedia(bytes)
+		if (sniffed.kind !== MediaKind.IMAGE)
+			throw new Error("A cast member's face must be a picture.")
+		const created = await createMedia(db, {
+			userId,
+			lorebookId: member.lorebookId,
+			bytes
+		})
+		// Files are one row per (user, bytes): the same picture uploaded
+		// again REUSES the row it already has — another book's face, or one of
+		// the person's own files. Never re-stamp it (that moved a personal
+		// file out of its owner's media list). Who may see a face follows the
+		// members that wear it (`canViewMedia`), not the stamp. A private
+		// file stays private, so it cannot be a face others are shown.
+		if (!created.created && created.file.visibility === MediaVisibility.PRIVATE)
+			throw new Error(
+				"That picture is one of your private files, so nobody else could see it as a face. Choose another picture."
+			)
+
+		// The picture only. Which face the member wears is a member change,
+		// so it goes through the form's draft and its two saves like every
+		// other field — dated when the author reads as of a date. Writing the
+		// base here hid the new face behind any dated `retold` (review
+		// 2026-10-13, owner: "that works, go").
+		const res: Sockets.Lorebooks.UploadMemberFace.Response = {
+			castId: member.id,
+			lorebookId: member.lorebookId,
+			mediaId: created.file.id
+		}
+		if (emitToUser) emitToUser("lorebooks:uploadMemberFace", res)
+		return res
+	},
+	"That face could not be uploaded."
+)
+
+/**
+ * `lorebooks:listMemberFaces` — the face picker's **This book's pictures**:
+ * images uploaded to the book, plus faces its members wear that are not a
+ * card's gallery picture (a re-used upload keeps its first stamp, since files
+ * are one row per user and bytes). Newest first. Owner only, like uploading.
+ */
+export const listMemberFacesHandler: Handler<
+	Sockets.Lorebooks.ListMemberFaces.Params,
+	Sockets.Lorebooks.ListMemberFaces.Response
+> = refusable(
+	"lorebooks:listMemberFaces",
+	async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const lorebookId = Number(params?.lorebookId)
+		if (
+			!Number.isInteger(lorebookId) ||
+			!(await findOwnedBook(db, userId, lorebookId))
+		)
+			throw new Error("Access denied.")
+		const worn = db
+			.select({ id: schema.lorebookBindings.faceMediaId })
+			.from(schema.lorebookBindings)
+			.where(
+				and(
+					eq(schema.lorebookBindings.lorebookId, lorebookId),
+					isNotNull(schema.lorebookBindings.faceMediaId)
+				)
+			)
+		const rows = await db
+			.select({ id: schema.files.id })
+			.from(schema.files)
+			.where(
+				and(
+					eq(schema.files.kind, MediaKind.IMAGE),
+					or(
+						eq(schema.files.lorebookId, lorebookId),
+						and(
+							inArray(schema.files.id, worn),
+							isNull(schema.files.characterId)
+						)
+					)
+				)
+			)
+			.orderBy(sql`${schema.files.id} desc`)
+		const res: Sockets.Lorebooks.ListMemberFaces.Response = {
+			lorebookId,
+			mediaIds: rows.map((r) => r.id)
+		}
+		if (emitToUser) emitToUser("lorebooks:listMemberFaces", res)
+		return res
+	},
+	"The book's pictures could not be listed."
 )
 
 /** Names a member answers to, de-duplicated case-insensitively, order kept. */
@@ -3557,8 +3865,11 @@ async function relistAfterImport(
  * made through it silently lost all of those. `duplicateLorebookRows` says
  * what travels and the few things that deliberately do not.
  *
- * Owner only, the same rule as delete: the read is scoped by `userId` and a
- * book this caller does not own is "not found". The copy takes a fresh uuid.
+ * Anyone who may READ the book (`assertReadableBook`): its owner, or a person
+ * it is **shared** with (PLAN-private-messages §6.7: read plus Duplicate) — a
+ * book the caller may not read is "not found". The copy is always the
+ * CALLER's (`user_id` = asker), takes a fresh uuid and carries no share rows.
+ * An administrator's read does not stretch to copying another person's book.
  */
 export const lorebooksDuplicateHandler: Handler<
 	Sockets.Lorebooks.Duplicate.Params,
@@ -3569,7 +3880,11 @@ export const lorebooksDuplicateHandler: Handler<
 		try {
 			const userId = socket.user!.id
 
-			const source = await assertOwnedBook(db, userId, params.lorebookId)
+			// Owner or share recipient; never an admin's read of a stranger's
+			// book (lane A3) — same refusal either way.
+			const source = await assertReadableBook(db, userId, params.lorebookId, {
+				isAdmin: false
+			})
 
 			const { id } = await db.transaction((tx) =>
 				duplicateLorebookRows(
@@ -3677,6 +3992,7 @@ export function registerLorebookHandlers(
 	register(socket, lorebooksListHandler, emitToUser)
 	register(socket, lorebooksCreateHandler, emitToUser)
 	register(socket, lorebooksGetHandler, emitToUser)
+	register(socket, lorebooksShareHandler, emitToUser)
 	register(socket, lorebooksUpdateHandler, emitToUser)
 	register(socket, lorebooksDeleteHandler, emitToUser)
 	register(socket, lorebooksDuplicateHandler, emitToUser)
@@ -3686,6 +4002,8 @@ export function registerLorebookHandlers(
 	register(socket, lorebookBindingsForCharacterHandler, emitToUser)
 	register(socket, createLorebookBindingHandler, emitToUser)
 	register(socket, updateLorebookBindingHandler, emitToUser)
+	register(socket, uploadMemberFaceHandler, emitToUser)
+	register(socket, listMemberFacesHandler, emitToUser)
 	register(socket, resolveOrCreateBindingByNameHandler, emitToUser)
 
 	// Lorebook export / import handlers

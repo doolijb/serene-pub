@@ -50,10 +50,12 @@ const at = (base: string) => (id: string | null) =>
 export const LOGBOOK_OBJECT_TYPES = {
 	pub: { label: "pub settings", href: () => "/admin/general" },
 	"capability-default": {
-		label: "capability default",
+		label: "default loadout",
 		href: () => "/admin/defaults"
 	},
 	connection: { label: "connection", href: at("/admin/connections") },
+	// I12: a loadout — the pair, sampling and workflow a kind of work runs on.
+	loadout: { label: "loadout", href: () => "/admin/defaults" },
 	"sampling-config": { label: "sampling config", href: at("/admin/sampling") },
 	user: { label: "user", href: at("/admin/users") },
 	invite: { label: "invite", href: () => "/admin/users/invites" },

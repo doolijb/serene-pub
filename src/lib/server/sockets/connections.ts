@@ -5,7 +5,15 @@ import { buildUsersCurrent, user } from "./users"
 import { userSettingsGet } from "./userSettings"
 import { buildSystemSettingsGet } from "./systemSettings"
 import { buildConnectionDefaultsList } from "./connectionDefaults"
-import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import {
+	CONNECTION_TYPE,
+	modalityLabel
+} from "$lib/shared/constants/ConnectionTypes"
+import {
+	sectionForCapability,
+	sectionForModality
+} from "$lib/shared/constants/connectionSections"
+import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 import {
 	withConnectionDefaults,
 	stableStringify
@@ -27,15 +35,22 @@ import type {
 	CapabilitySet
 } from "@serene-pub/sdk"
 import { adapterCapabilities } from "$lib/shared/connectionAdapters/manifest"
+import { modelModalityChoices } from "$lib/shared/connections/modelModality"
 import { normalizeConnectionPreset } from "$lib/shared/connectionAdapters/presetSlug"
-import { capabilityRefusal } from "$lib/server/pipelines/runtime/capabilityGuard"
+import {
+	capabilityRefusal,
+	modelModalityAllows
+} from "$lib/server/pipelines/runtime/capabilityGuard"
 import {
 	capabilityColumn,
 	persistCapabilities,
 	probedCapabilities,
 	resolveConnectionCapabilities
 } from "$lib/server/connections/resolve"
-import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults"
+import {
+	capabilityDefaults,
+	setCapabilityDefault
+} from "$lib/server/connections/capabilityDefaults"
 import {
 	parseVisionProjector,
 	takesVisionProjector,
@@ -44,6 +59,12 @@ import {
 import { visionProjectorOf } from "$lib/shared/connections/hostCapabilities"
 import { withStarConsequences } from "$lib/server/connections/starConsequences"
 import { starRefusal } from "$lib/server/connections/starRefusal"
+import {
+	configValuesNamingModel,
+	type ConfigValueNamingModel
+} from "$lib/server/connections/configValuesNamingModel"
+import { pipelineLabelsById } from "$lib/server/pipelines/entities/pipelineLabels"
+import { pruneLogitBiasTokens } from "$lib/server/connections/logitBiasTokens"
 import {
 	localModelStates,
 	onnxModalityOf
@@ -58,7 +79,11 @@ import {
 	mergeEndpointModel
 } from "$lib/server/connections/models"
 import { loginRateLimit } from "$lib/server/services/loginRateLimit"
+import { redactConnections } from "$lib/server/connections/visibility"
+import { isGatedEvent } from "$lib/shared/sockets/interest"
+import { socketWants } from "./interest"
 import { readStoredFacts } from "$lib/shared/connections/modelFacts"
+import { defaultLoadoutName } from "$lib/shared/loadouts/defaultLoadoutName"
 import { hostKey, sameHost } from "$lib/shared/connections/hostKey"
 import { discoverLocalProviders } from "$lib/server/connections/discoverLocal"
 import {
@@ -85,6 +110,60 @@ function withEncryptedApiKey<T extends { extraJson?: Record<string, any> }>(
 			apiKey: encryptApiKeyField(data.extraJson.apiKey)
 		}
 	}
+}
+
+/**
+ * Reply to the socket that asked, and to no other tab of the user.
+ *
+ * `sockets/index.ts` keeps its own `answerAsker` private to the wrapper (it is
+ * for refusals); this is the same projection for a SUCCESS ack — redacted for
+ * the recipient, and still honouring the interest gate, since an output (unlike
+ * a refusal) is only sent to a socket that declared it wants the event. A socket
+ * that has gone has no tab left to answer; the list broadcast covers the rest.
+ */
+function replyToAsker(socket: any, event: string, data: unknown): void {
+	if (socket.disconnected) return
+	if (isGatedEvent(event) && !socketWants(socket, event)) return
+	socket.emit?.(event, redactConnections(data, socket.user))
+}
+
+/**
+ * Whether a tested form draft describes the same endpoint as its saved row.
+ *
+ * The fields compared are the ones that decide WHICH host answers and what it
+ * will list: type, preset, address and credential. Anything else on the form
+ * (name, sampling, timeouts) does not change the listing, so an otherwise
+ * unsaved draft still counts as a test of the row.
+ *
+ * An empty or absent draft key means "keep the stored one" — the forms send
+ * the row they were handed, and a blank key field is not a new credential.
+ */
+function draftMatchesStored(
+	draft: Record<string, any>,
+	stored: Record<string, any>
+): boolean {
+	if ("type" in draft && draft.type !== stored.type) return false
+	if ("preset" in draft && (draft.preset ?? null) !== (stored.preset ?? null))
+		return false
+	// Trailing slashes and surrounding blanks are spelling, not a host.
+	const url = (v: unknown) =>
+		String(v ?? "")
+			.trim()
+			.replace(/\/+$/, "")
+	if ("baseUrl" in draft && url(draft.baseUrl) !== url(stored.baseUrl))
+		return false
+	const draftKey = draft.extraJson?.apiKey
+	if (typeof draftKey === "string" && draftKey !== "") {
+		let storedKey: string | undefined
+		try {
+			storedKey = decryptApiKeyField(stored.extraJson?.apiKey)
+		} catch {
+			// An undecryptable stored key cannot be shown equal to anything.
+			return false
+		}
+		if (draftKey !== (storedKey ?? "")) return false
+	}
+	return true
 }
 
 // --- CONNECTIONS SOCKET HANDLERS ---
@@ -456,8 +535,21 @@ export const connectionsCreate: Handler<
 		// Resolved at write time and cached on the row: the picker reads every
 		// connection against every slot, and resolving there would mean loading
 		// an adapter module per row (see connections/resolve.ts).
+		//
+		// `capabilities` is server-owned here exactly as in `connectionsUpdate`:
+		// a client copy (a duplicated row, a pasted payload) would otherwise
+		// carry its probe and overrides onto a row that never earned them, and
+		// `resolveConnectionCapabilities` reads those layers. Stripped BEFORE
+		// resolving, so the cache is computed from adapter + preset alone. The
+		// model-sync pair is the sync's to write, never the payload's.
+		delete (data as any).capabilities
+		delete (data as any).modelsSyncedAt
+		delete (data as any).modelsSyncError
+		// ComfyUI's server facts are the server's to write (a duplicated
+		// row would carry another server's checks): `imageGen/comfy/serverCheck`.
+		if ((data as any).extraJson && typeof (data as any).extraJson === "object")
+			delete (data as any).extraJson.comfy
 		data.capabilities = {
-			...(data.capabilities ?? {}),
 			resolved: resolveConnectionCapabilities(data)
 		}
 		// The `model` field a form may still send names a MODEL, not a column:
@@ -489,7 +581,12 @@ export const connectionsCreate: Handler<
 		// (`koboldcpp:connectModel`, `ollama:connectModel`).
 		await emitToUser("connections:list", () => buildConnectionsList())
 		const res: Sockets.Connections.Create.Response = { connection: conn }
-		emitToUser("connections:create", res)
+		// The ack answers the tab that pressed Save and no other: every tab of
+		// the user listens on `connections:create` to select the row it just
+		// made, so a room-wide ack made a second open sidebar jump to (and
+		// adopt as its draft) a connection somebody else created. The other
+		// tabs learn of the row from the `connections:list` broadcast above.
+		replyToAsker(socket, "connections:create", res)
 		return res
 	}
 }
@@ -561,7 +658,12 @@ export const connectionsUpdate: Handler<
 		// bare type change is about to strand.
 		const stored = await db.query.connections.findFirst({
 			where: (c, { eq }) => eq(c.id, id),
-			columns: { type: true, preset: true, baseUrl: true }
+			columns: {
+				type: true,
+				preset: true,
+				baseUrl: true,
+				tokenCounter: true
+			}
 		})
 		const nextType =
 			typeof editable.type === "string" ? editable.type : stored?.type
@@ -603,6 +705,20 @@ export const connectionsUpdate: Handler<
 		else delete editable.preset
 
 		const updateData = withEncryptedApiKey(editable as any)
+		// Server-owned facts under `extraJson.comfy` (`serverCheck.ts`) survive
+		// a save from a client's stale copy: the stored row's, never the form's.
+		if (updateData.extraJson && typeof updateData.extraJson === "object") {
+			const { comfy: _clientCopy, ...rest } = updateData.extraJson as Record<string, unknown>
+			const storedComfy = (
+				(
+					await db.query.connections.findFirst({
+						where: (c, { eq }) => eq(c.id, id),
+						columns: { extraJson: true }
+					})
+				)?.extraJson as Record<string, unknown> | undefined
+			)?.comfy
+			updateData.extraJson = storedComfy ? { ...rest, comfy: storedComfy } : rest
+		}
 		// The endpoint row carries no model — strip a legacy `model` field off
 		// the payload before the write, then promote it to a real model row.
 		// A partial update that says nothing about the model touches nothing.
@@ -635,6 +751,16 @@ export const connectionsUpdate: Handler<
 				})
 			return row
 		})
+		// Cached logit bias token ids answer for one tokenizer: another
+		// server or tokenizer setting makes them another vocabulary's. (They
+		// are keyed by model, and a model's own edit prunes in `updateModel`.)
+		const changed = (key: "type" | "baseUrl" | "tokenCounter") =>
+			key in editable && editable[key] !== stored?.[key]
+		if (
+			updated &&
+			(changed("type") || changed("baseUrl") || changed("tokenCounter"))
+		)
+			await pruneLogitBiasTokens(db, id)
 		// connectionsGet.handler already builds the fully-processed record
 		// (CONNECTION_DEFAULTS backfill + decrypted apiKey) and broadcasts its
 		// own "connections:get" — reuse its return value here instead of the
@@ -668,6 +794,11 @@ export const connectionsUpdate: Handler<
 		emitToUser("connections:update", res)
 		await user(socket, {}, emitToUser)
 		await emitToUser("connections:list", () => buildConnectionsList())
+		// A type or preset edit re-resolves the capability cache above, which
+		// can strand a default this row is registered for; see setCapability.
+		await emitToUser("connectionDefaults:list", () =>
+			buildConnectionDefaultsList()
+		)
 		return res
 	}
 }
@@ -821,6 +952,13 @@ export const connectionsSetCapability: Handler<
 		// `connection` and `originalConnection` — silently discarding the
 		// in-progress name/URL/model edits of the very form this panel sits in.
 		emitToUser("connections:setCapability", res)
+		// A toggled capability can leave a registered default unable to do
+		// its job, and Admin → Defaults marks that from its own list — the
+		// same push `connections:syncModels` makes. Lazy, so it is built only
+		// while that page holds the key.
+		await emitToUser("connectionDefaults:list", () =>
+			buildConnectionDefaultsList()
+		)
 		return res
 	}
 }
@@ -1005,7 +1143,7 @@ export const connectionsSetDefault: Handler<
 			)
 		)
 		// Admin → Defaults renders from its own list, and a star pressed here
-		// (or by a manager's "Use for chat") is the same registration that page
+		// (or by a manager's "Use in Reply") is the same registration that page
 		// makes — so it is told too, at the price of one query only while the
 		// page is open.
 		await tell("connectionDefaults:list", async () =>
@@ -1036,16 +1174,20 @@ export const connectionsTest: Handler<
 			)
 		}
 
-		// Instance-wide budget (not per-user) — every call here can reach an
-		// external host via the connection's own configured base URL, with
-		// no throttling otherwise, unlike the GitHub card source's own
-		// rate limiter for the same class of concern.
-		const rateLimitKey = "connections:test"
+		// Every call here can reach an external host via the connection's own
+		// configured base URL, with no throttling otherwise. Keyed per user:
+		// an instance-wide budget let one admin's testing lock every other
+		// admin out of the button.
+		const rateLimitKey = `${socket.user!.id}:connections:test`
 		if (loginRateLimit.isRateLimited(rateLimitKey)) {
+			// `connectionId` rides on the refusal too: the forms clear their
+			// "testing" state off the reply for THEIR row, and a refusal that
+			// named no row left the spinner running forever.
 			const res: Sockets.Connections.Test.Response = {
 				ok: false,
 				error: "Rate limited. Please wait a moment and try again.",
-				models: []
+				models: [],
+				connectionId: params.connection?.id
 			}
 			emitToUser("connections:test", res)
 			return res
@@ -1067,12 +1209,10 @@ export const connectionsTest: Handler<
 			let capabilities: CapabilitySet | undefined
 			if (result.ok) {
 				const modelsRes = await listModels(params.connection)
-				if (modelsRes.error) {
-					emitToUser("error", {
-						error: modelsRes.error
-					})
-					throw new Error(modelsRes.error)
-				}
+				// Thrown into the catch below, whose `connections:test` ok:false
+				// reply IS the report. A bare `error` emit here as well made the
+				// one failure toast twice.
+				if (modelsRes.error) throw new Error(modelsRes.error)
 				models = modelsRes.models || []
 				error = modelsRes.error || null
 				// A reachable backend is the only thing that can answer the
@@ -1093,6 +1233,15 @@ export const connectionsTest: Handler<
 								eq(c.id, params.connection.id!)
 						})
 					: undefined
+				// Whether what was tested IS the saved row. Only then may the
+				// result be written to it: a test of an unsaved edit (another
+				// address, key, type or preset) listed a DIFFERENT host, and
+				// syncing that listing onto the saved row marked its real models
+				// missing and stamped it fresh — so the next open skipped the
+				// re-list that would have repaired it. A draft test answers in
+				// the reply alone.
+				const testedIsSaved =
+					!!stored && draftMatchesStored(params.connection, stored)
 				capabilities = resolveConnectionCapabilities(
 					// The form's type/preset, since testing an unsaved EDIT of
 					// either has to resolve against what is on screen; the
@@ -1105,8 +1254,10 @@ export const connectionsTest: Handler<
 					probe
 				)
 				// params.connection is form state: a connection being tested
-				// before its first save has nowhere to keep any of this yet.
-				if (params.connection?.id) {
+				// before its first save has nowhere to keep any of this yet,
+				// and one whose endpoint differs from the saved row's is not
+				// a test of that row (see `testedIsSaved`).
+				if (params.connection?.id && testedIsSaved) {
 					await persistCapabilities(db, params.connection.id, {
 						resolved: capabilities,
 						probe
@@ -1114,10 +1265,16 @@ export const connectionsTest: Handler<
 					// A passing test just listed the host, so the listing is
 					// persisted here rather than fetched a second time by a
 					// sync: the rows follow the test, and the refresh budget
-					// is untouched. Listed off the FORM's state — an unsaved
-					// base URL is what a person is testing — so a test of an
-					// edit that is then discarded has synced against that
-					// edit; the next open re-lists the saved row.
+					// is untouched. Only reached when the form's endpoint is
+					// the saved one, so the listing is the saved row's own.
+					// ComfyUI: cache the `/object_info` the test read and
+					// re-check the workflows recorded against it (§4.9 drift).
+					if (params.connection.type === CONNECTION_TYPE.COMFYUI) {
+						const { recordComfyTest } = await import(
+							"$lib/server/imageGen/comfy/serverCheck"
+						)
+						await recordComfyTest(db, params.connection.id, (result as any).extra)
+					}
 					await syncConnectionModels(db, params.connection.id, {
 						models,
 						error: modelsRes.error ?? null
@@ -1132,6 +1289,8 @@ export const connectionsTest: Handler<
 			} else {
 				error = result.error || "Connection failed."
 			}
+			// The `/object_info` summary is the row's cache, never the reply's.
+			if ((result as any).extra?.comfy) delete (result as any).extra.comfy.objectInfo
 			const res: Sockets.Connections.Test.Response = {
 				ok: result.ok,
 				error: error || null,
@@ -1177,11 +1336,13 @@ export const connectionsRefreshModels: Handler<
 			)
 		}
 
-		const rateLimitKey = "connections:refreshModels"
+		// Per user — see `connections:test`.
+		const rateLimitKey = `${socket.user!.id}:connections:refreshModels`
 		if (loginRateLimit.isRateLimited(rateLimitKey)) {
 			const res: Sockets.Connections.RefreshModels.Response = {
 				error: "Rate limited. Please wait a moment and try again.",
-				models: []
+				models: [],
+				connectionId: params.connection?.id
 			}
 			emitToUser("connections:refreshModels", res)
 			return res
@@ -1301,6 +1462,15 @@ export const connectionsScripts: Handler<
 	}
 }
 
+/**
+ * Re-send Admin › Scripts' list to every admin socket that declared it: an
+ * attachment is a use, and the list's Use column and *Where used* name it.
+ */
+async function pushScripts(socket: { io?: unknown }): Promise<void> {
+	const { pushScriptsAfter } = await import("./pipelines")
+	await pushScriptsAfter(socket)
+}
+
 export const connectionsAttachScript: Handler<
 	Sockets.Connections.ScriptWrite.Params,
 	Sockets.Connections.ScriptWrite.Response
@@ -1324,6 +1494,7 @@ export const connectionsAttachScript: Handler<
 		}
 		const res = await connectionScriptsView(params.id)
 		emitToUser("connections:attachScript", res)
+		await pushScripts(socket)
 		return res
 	}
 }
@@ -1345,6 +1516,7 @@ export const connectionsDetachScript: Handler<
 		await detachConnectionScript(db, params.id, params.scriptId)
 		const res = await connectionScriptsView(params.id)
 		emitToUser("connections:detachScript", res)
+		await pushScripts(socket)
 		return res
 	}
 }
@@ -1427,10 +1599,14 @@ function modelRowView(
 function modelsSyncView(endpoint: {
 	modelsSyncedAt: Date | null
 	modelsSyncError: string | null
+	extraJson?: unknown
 }): Sockets.Connections.ModelsSync {
+	// A ComfyUI's workflow check (§4.9): waiting on the person, not broken.
+	const problem = (endpoint.extraJson as any)?.comfy?.problem
 	return {
 		at: endpoint.modelsSyncedAt?.toISOString() ?? null,
-		error: endpoint.modelsSyncError ?? null
+		error: endpoint.modelsSyncError ?? null,
+		...(typeof problem === "string" && problem ? { problem } : {})
 	}
 }
 
@@ -1518,7 +1694,146 @@ function modelPayload(input: unknown): {
 				: null
 	if (typeof raw.sortOrder === "number" && Number.isFinite(raw.sortOrder))
 		values.sortOrder = Math.floor(raw.sortOrder)
+	// The shape only. Which modalities fit is a question about the
+	// connection's TYPE, which this function never sees — the update handler
+	// judges it (`modelModalityChoices`). Blank is "Not sure": NULL, which
+	// gates nothing.
+	if ("modality" in raw) {
+		if (raw.modality == null) values.modality = null
+		else if (typeof raw.modality === "string")
+			values.modality = raw.modality.trim() || null
+		else
+			return {
+				error: "Choose what this model is for from the list, or Not sure."
+			}
+	}
 	return { values }
+}
+
+
+/** A modality as a sentence names it: "chat", "embeddings". */
+const modalityWord = (modality: string): string =>
+	sectionForModality(modality)?.starVerb ?? modalityLabel(modality)
+
+/** A job as a sentence names it: "chat", "vision". */
+function jobWord(capability: string): string {
+	const verb = sectionForCapability(capability)?.starVerb
+	if (verb) return verb
+	try {
+		return capabilityLabel(capability as CapabilityId).toLowerCase()
+	} catch {
+		return capability
+	}
+}
+
+/**
+ * The defaults naming this model that a NEW modality would refuse.
+ *
+ * Asked before the write rather than discovered at the next run: the star
+ * judges the same pair (`starRefusal`), so a modality that leaves a default
+ * on this model is a registration the star would have refused and every run
+ * it names fails. Null never refuses anything (`modelModalityAllows`).
+ */
+async function defaultsRefusedByModality(
+	connectionId: number,
+	modelId: number,
+	modality: string
+): Promise<string[]> {
+	const defaults = await capabilityDefaults(db)
+	return Object.entries(defaults)
+		.filter(
+			([capability, d]) =>
+				d.connectionId === connectionId &&
+				d.connectionModelId === modelId &&
+				!modelModalityAllows(modality, capability as CapabilityId)
+		)
+		.map(([capability]) => capability)
+}
+
+/**
+ * The pipeline config values naming this model whose step a NEW modality
+ * would refuse — the defaults' judgement, asked of each step a config points
+ * at this model. Every run of that config would fail the same way.
+ */
+async function configValuesRefusedByModality(
+	connectionId: number,
+	modelId: number,
+	modality: string
+): Promise<ConfigValueNamingModel[]> {
+	return (await configValuesNamingModel(db, connectionId, modelId)).filter(
+		(v) => !modelModalityAllows(modality, v.capability as CapabilityId)
+	)
+}
+
+/** How many configurations a refusal names per job before it counts the rest. */
+const NAMED_CONFIGS_PER_JOB = 3
+
+/**
+ * Why this model cannot become `modality`, or null when nothing it is chosen
+ * for would be stranded. Names every default and configuration in one
+ * sentence, so one refusal is the whole list of what to move first.
+ */
+async function modalityChangeRefusal(
+	connectionId: number,
+	modelId: number,
+	modality: string
+): Promise<string | null> {
+	const defaults = (
+		await defaultsRefusedByModality(connectionId, modelId, modality)
+	).map(defaultLoadoutName)
+	const values = await configValuesRefusedByModality(
+		connectionId,
+		modelId,
+		modality
+	)
+	if (!defaults.length && !values.length) return null
+
+	const sentences: string[] = []
+	if (defaults.length)
+		sentences.push(
+			`This model is in the ${joinWithAnd(defaults)} ${defaults.length > 1 ? "loadouts" : "loadout"}.`
+		)
+	if (!values.length)
+		return (
+			`${sentences[0]} ` +
+			`Put another model in ${defaults.length > 1 ? "those loadouts" : `the ${defaults[0]} loadout`} first, then change what this one is for.`
+		)
+
+	// One name per configuration and job: two steps of one configuration on
+	// this model for chat are one place to change.
+	const labels = await pipelineLabelsById(db)
+	const byJob = new Map<string, Set<string>>()
+	for (const v of values) {
+		const job = jobWord(v.capability)
+		const names = byJob.get(job) ?? new Set<string>()
+		names.add(
+			`the “${v.configName}” configuration of ${labels.get(v.specId) ?? "a pipeline"}`
+		)
+		byJob.set(job, names)
+	}
+	for (const [job, set] of byJob) {
+		const names = [...set]
+		const shown =
+			names.length > NAMED_CONFIGS_PER_JOB
+				? [
+						...names.slice(0, NAMED_CONFIGS_PER_JOB - 1),
+						`${names.length - NAMED_CONFIGS_PER_JOB + 1} other configurations`
+					]
+				: names
+		const subject = joinWithAnd(shown)
+		sentences.push(
+			`${subject[0].toUpperCase()}${subject.slice(1)} ` +
+				`${names.length > 1 ? "use" : "uses"} ${sentences.length ? "it" : "this model"} for ${job}.`
+		)
+	}
+	const where =
+		new Set(values.map((v) => v.configId)).size > 1
+			? "those configurations"
+			: "that configuration"
+	sentences.push(
+		`Choose another model ${defaults.length ? `in Loadouts and in ${where}` : `in ${where}`} first, then change what this one is for.`
+	)
+	return sentences.join(" ")
 }
 
 /** The admin gate and the endpoint lookup, spelled once for all five. */
@@ -1677,6 +1992,37 @@ export const connectionsUpdateModel: Handler<
 				parsed.value
 			)
 		}
+		// What the model is FOR, judged against what its connection's type
+		// can serve. A service that says what a model is for replaces this on
+		// its next listing; silence keeps it (`modelSync.ts`).
+		if (values!.modality != null) {
+			const next = values!.modality as string
+			const endpoint = await db.query.connections.findFirst({
+				where: (c, { eq }) => eq(c.id, params.id),
+				columns: { type: true }
+			})
+			const choices = endpoint ? modelModalityChoices(endpoint.type) : []
+			if (!choices.includes(next)) {
+				const words = choices.map(modalityWord)
+				const list =
+					words.length > 1
+						? `${words.slice(0, -1).join(", ")} or ${words.at(-1)}`
+						: (words[0] ?? "")
+				return fail(
+					list
+						? `A model on this connection can only be for ${list}. Choose one of those, or Not sure.`
+						: "This connection's models have nothing to choose here. Leave it as Not sure."
+				)
+			}
+			if (next !== row.modality) {
+				const refusal = await modalityChangeRefusal(
+					params.id,
+					row.id,
+					next
+				)
+				if (refusal) return fail(refusal)
+			}
+		}
 		if (values!.model !== undefined && !values!.model)
 			return fail(
 				"A model needs the identifier the service knows it by — the text this connection will send."
@@ -1713,6 +2059,14 @@ export const connectionsUpdateModel: Handler<
 				.set(values as any)
 				.where(eq(schema.connectionModels.id, params.modelId))
 		)
+		// A new identifier or tokenizer override makes the cached logit bias
+		// token ids another vocabulary's.
+		if (
+			(values!.model !== undefined && values!.model !== row.model) ||
+			(values!.tokenCounter !== undefined &&
+				values!.tokenCounter !== row.tokenCounter)
+		)
+			await pruneLogitBiasTokens(db, params.id)
 
 		const res = await connectionModelsView(params.id)
 		emitToUser("connections:updateModel", res)
@@ -1815,8 +2169,8 @@ export const connectionsImportModels: Handler<
  *
  * An automatic sync (no `force`) is what the sidebar fires on open and on
  * navigation; it skips fresh listings, so browsing costs no network. A forced
- * sync is the Refresh button, and shares the refresh budget so a held key
- * cannot hammer a cloud API.
+ * sync is the Refresh button (and the follow-up to a save), and has its own
+ * per-user budget so a held key cannot hammer a cloud API.
  */
 export const connectionsSyncModels: Handler<
 	Sockets.Connections.SyncModels.Params,
@@ -1824,14 +2178,25 @@ export const connectionsSyncModels: Handler<
 > = {
 	event: "connections:syncModels",
 	handler: async (socket, params, emitToUser) => {
+		// The refusal names the row it was about, so a view that marked that
+		// row "syncing" can clear it; a sweep (no id) names none.
+		const connectionId =
+			typeof params?.id === "number" ? params.id : undefined
 		const fail = (error: string) => {
-			emitToUser("connections:syncModels:error", { error })
-			return { results: [], error }
+			emitToUser("connections:syncModels:error", {
+				error,
+				...(connectionId != null ? { connectionId } : {})
+			})
+			return { results: [], error, connectionId }
 		}
 		if (!socket.user!.isAdmin) return fail(MODEL_DENIED)
 		const force = !!params?.force
 		if (force) {
-			const rateLimitKey = "connections:refreshModels"
+			// Its own budget, apart from `connections:refreshModels`: the
+			// sidebar forces a sync after every save, and sharing the refresh
+			// budget let a few saves in a row lock the Refresh button (and the
+			// other way about). Per user, so one admin cannot spend another's.
+			const rateLimitKey = `${socket.user!.id}:connections:syncModels`
 			if (loginRateLimit.isRateLimited(rateLimitKey))
 				return fail("Rate limited. Please wait a moment and try again.")
 			loginRateLimit.recordFailedAttempt(rateLimitKey)
@@ -1850,8 +2215,15 @@ export const connectionsSyncModels: Handler<
 			await emitToUser("connections:models", () =>
 				connectionModelsView(r.connectionId)
 			)
-		if (results.length)
+		if (results.length) {
 			await emitToUser("connections:list", () => buildConnectionsList())
+			// A restated modality can leave a default unable to do its job, and
+			// an open Admin → Defaults marks it from its own list; built only
+			// while that page holds the key.
+			await emitToUser("connectionDefaults:list", () =>
+				buildConnectionDefaultsList()
+			)
+		}
 		const res: Sockets.Connections.SyncModels.Response = { results }
 		emitToUser("connections:syncModels", res)
 		return res

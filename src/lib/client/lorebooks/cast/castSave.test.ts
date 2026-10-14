@@ -164,6 +164,16 @@ describe("castMaskedWarning — a base save an amendment still overrides (#113)"
 	test("nothing masked is no warning", () => {
 		expect(castMaskedWarning([])).toBeNull()
 	})
+	test("names retold fields and the face in words", () => {
+		const w = castMaskedWarning([
+			{ field: "retold", amendment: { year: 20, month: null, day: null } },
+			{ field: "faceMediaId", amendment: { year: 20, month: null, day: null } },
+			{ field: "firstMessage", amendment: { year: 20, month: null, day: null } }
+		])
+		expect(w?.description).toMatch(
+			/what is retold here, the face and the first message/
+		)
+	})
 })
 
 describe("deleteMemberCopy — ruling 4: the dialog asks", () => {

@@ -64,11 +64,13 @@ describe("defaultsForConnection", () => {
 			"text->embedding": "Embeddings",
 			"text->entities": "Entities"
 		})[c] ?? c
+	/** Connection 7, holding models 1 to 4. */
+	const row = { id: 7, models: [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }] }
 
 	test("names the capabilities this connection serves", () => {
 		expect(
 			defaultsForConnection(
-				7,
+				row,
 				{
 					"text->text": { connectionId: 7, connectionModelId: 1 },
 					"text->image": { connectionId: 9, connectionModelId: 2 }
@@ -81,10 +83,10 @@ describe("defaultsForConnection", () => {
 	test("sorts them, so two rows never disagree about order", () => {
 		expect(
 			defaultsForConnection(
-				7,
+				row,
 				{
-					"text->image": { connectionId: 7 },
-					"text->text": { connectionId: 7 }
+					"text->image": { connectionId: 7, connectionModelId: 2 },
+					"text->text": { connectionId: 7, connectionModelId: 1 }
 				},
 				label,
 				2
@@ -98,12 +100,15 @@ describe("defaultsForConnection", () => {
 		// 400px row entirely.
 		expect(
 			defaultsForConnection(
-				7,
+				row,
 				{
-					"text->text": { connectionId: 7 },
-					"text->image": { connectionId: 7 },
-					"text->embedding": { connectionId: 7 },
-					"text->entities": { connectionId: 7 }
+					"text->text": { connectionId: 7, connectionModelId: 1 },
+					"text->image": { connectionId: 7, connectionModelId: 2 },
+					"text->embedding": {
+						connectionId: 7,
+						connectionModelId: 3
+					},
+					"text->entities": { connectionId: 7, connectionModelId: 4 }
 				},
 				label
 			)
@@ -111,26 +116,34 @@ describe("defaultsForConnection", () => {
 	})
 
 	test("is empty for a connection nothing points at, and for no defaults", () => {
-		expect(defaultsForConnection(7, {}, label)).toEqual([])
-		expect(defaultsForConnection(7, undefined, label)).toEqual([])
+		expect(defaultsForConnection(row, {}, label)).toEqual([])
+		expect(defaultsForConnection(row, undefined, label)).toEqual([])
 		expect(
 			defaultsForConnection(
-				7,
-				{ "text->text": { connectionId: 8 } },
+				row,
+				{ "text->text": { connectionId: 8, connectionModelId: 1 } },
 				label
 			)
 		).toEqual([])
 	})
 
-	test("a default naming only the endpoint still marks the row", () => {
-		// The pair is incomplete and resolves as unconfigured elsewhere; the
-		// question this mark answers is "is this one in use", and it is.
+	test("marks a resolved pair only, as the status strip reads it", () => {
+		// 🚧 Ruling choice (plan 2026-10-11 C9): an endpoint-only registration,
+		// or one naming a model this row no longer has, is unconfigured —
+		// the strip says "not set", so the row must not wear the mark.
 		expect(
 			defaultsForConnection(
-				7,
+				row,
 				{ "text->text": { connectionId: 7, connectionModelId: null } },
 				label
 			)
-		).toEqual(["Chat"])
+		).toEqual([])
+		expect(
+			defaultsForConnection(
+				row,
+				{ "text->text": { connectionId: 7, connectionModelId: 99 } },
+				label
+			)
+		).toEqual([])
 	})
 })

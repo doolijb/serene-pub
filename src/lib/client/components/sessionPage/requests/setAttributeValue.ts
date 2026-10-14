@@ -2,7 +2,10 @@
  * 🚧 `set-attribute-value` (R21): a core state widget sets one owner's value
  * for one slot, at the session layer — the viewer's own edit, applied at once
  * through the page's state store (`state:set`), exactly as the page's own
- * edits write. Core's widgets only (the askers table, `./askers.ts`).
+ * edits write. Core's widgets, or 🚧 a plugin's widget holding the write
+ * grant `session:state:write` (D4, ruled Q2) — a permission apart from the
+ * `session:state` read (the askers table, `./askers.ts`, and asked again
+ * here).
  *
  * What this answer adds over the store's own write:
  *  - an owner outside the session layers is refused here: a widget writes
@@ -17,6 +20,8 @@
  * never in the reply.
  */
 import { isSlotLoreRef, type WidgetRequests } from "@serene-pub/sdk"
+import type { WidgetRequestHandler } from "$lib/shared/widgets/context"
+import { holdsWidgetGrant } from "./askers"
 
 type Params = WidgetRequests["set-attribute-value"]["params"]
 type Value = Params["value"]
@@ -48,15 +53,24 @@ const isValue = (v: unknown): v is Value =>
 	isScalar(v) ||
 	(Array.isArray(v) && v.every((item) => isScalar(item) || isSlotLoreRef(item)))
 
+/** The bare write grant a plugin's widget holds to ask `set-attribute-value`. */
+export const SET_ATTRIBUTE_VALUE_GRANT = "session:state:write"
+
 /**
- * Answer one `set-attribute-value` for the page's session `sessionId`.
- * Rejects, in words, with anything a widget could have got wrong.
+ * Answer one `set-attribute-value` for the page's session `sessionId`, from
+ * `from` (absent: core's own widget). Rejects, in words, with anything a
+ * widget could have got wrong.
  */
 export async function answerSetAttributeValue(
 	params: unknown,
 	store: AttributeWriter,
-	sessionId: number | null
+	sessionId: number | null,
+	from?: Parameters<WidgetRequestHandler>[2]
 ): Promise<void> {
+	if (!holdsWidgetGrant(from, SET_ATTRIBUTE_VALUE_GRANT))
+		throw new Error(
+			`'set-attribute-value' changes what the 'session:state' scope covers, and this widget was not granted the write grant '${SET_ATTRIBUTE_VALUE_GRANT}'`
+		)
 	const p = (params ?? {}) as Partial<Record<keyof Params, unknown>>
 	const owner = p.owner as { kind?: unknown; id?: unknown } | undefined
 	if (!owner || typeof owner !== "object" || typeof owner.kind !== "string")

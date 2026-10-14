@@ -2,7 +2,7 @@
  * The widget-grid model (PLAN 25 MVP): the normal chat falls out of the
  * widget model, and each widget's constraints map to the expected CSS Grid.
  */
-import type { GridWidget } from "@serene-pub/sdk"
+import { resolveDrawn, type GridWidget } from "@serene-pub/sdk"
 import { describe, expect, it } from "vitest"
 import {
 	DEFAULT_CELL,
@@ -21,7 +21,7 @@ import {
 	zoneGridStyle
 } from "./widgetGrid"
 import { ADVENTURE_LAYOUT } from "@serene-pub/core-catalog"
-import { loadArranged, unitPinned } from "./arrangedGeometry"
+import { unitPinned } from "./arrangedGeometry"
 import { resolveRailColumn } from "./sideRail"
 import { unitsOf } from "./tabGroups"
 
@@ -141,11 +141,11 @@ describe("cellsFromPx — a measured size as whole cells", () => {
 describe("updateWidget — immutable edit", () => {
 	it("patches one widget by id and leaves the rest (and the input) untouched", () => {
 		const l = loadChatLayout(ADVENTURE_LAYOUT.widgetGrid)
-		const next = updateWidget(l, "world-state", {
+		const next = updateWidget(l, "stats#world", {
 			size: { w: "grow", h: { minCells: 4 } }
 		})
 		const strip = widgetsInZone(next, "middle").find(
-			(w) => w.id === "world-state"
+			(w) => w.id === "stats#world"
 		)!
 		const messages = widgetsInZone(next, "middle").find(
 			(w) => w.id === "messages"
@@ -154,7 +154,7 @@ describe("updateWidget — immutable edit", () => {
 		expect(messages.size.h).toBe("grow") // untouched
 		// input not mutated
 		expect(
-			widgetsInZone(l, "middle").find((w) => w.id === "world-state")!.size
+			widgetsInZone(l, "middle").find((w) => w.id === "stats#world")!.size
 				.h
 		).toBe("fixed")
 		expect(next).not.toBe(l)
@@ -273,14 +273,21 @@ describe("loadChatLayout — defensive rehydrate", () => {
  * tray still offered it as unplaced.
  */
 describe("preset → effective middle zone", () => {
-	it("keeps the Adventure preset's world-state strip above the messages", () => {
+	it("keeps the Adventure preset's world strip (stats#world) above the messages", () => {
 		const loaded = loadChatLayout(ADVENTURE_LAYOUT.widgetGrid)
 		expect(widgetsInZone(loaded, "middle").map((w) => w.id)).toEqual([
-			"world-state",
+			"stats#world",
 			"messages"
 		])
 		const strip = widgetsInZone(loaded, "middle")[0]
 		expect(strip.size).toEqual({ w: "grow", h: "fixed" })
+		// And what the page draws there — the SDK's one reader — agrees.
+		const middle = resolveDrawn(ADVENTURE_LAYOUT, { inline: 1300 }).middle
+		expect(middle.drawnFrom).toBe("grid")
+		expect(middle.instances.map((i) => [i.instanceId, i.size?.h])).toEqual([
+			["stats#world", "fixed"],
+			["messages", "grow"]
+		])
 	})
 
 	it("admits an unknown widget into the zone the blob names", () => {
@@ -523,7 +530,7 @@ describe("stackPlacements — the MVP zone stack", () => {
 		const ws = widgetsInZone(
 			updateWidget(
 				loadChatLayout(ADVENTURE_LAYOUT.widgetGrid),
-				"world-state",
+				"stats#world",
 				{ size: { w: "grow", h: { minCells: 3 } } }
 			),
 			"middle"
@@ -547,31 +554,33 @@ describe("stackPlacements — the MVP zone stack", () => {
  * docked or collapsed depended on what the session box happened to measure.
  */
 describe("preset → the right column opens docked", () => {
-	const arranged = () => loadArranged(ADVENTURE_LAYOUT.arrangedGrid)
+	// What the page draws of it: the SDK's one reader (C5), never the slot.
+	const right = () => resolveDrawn(ADVENTURE_LAYOUT, { inline: 1300 }).right
 
 	it("ships an arrangement for the side it docks", () => {
-		const right = arranged().right
+		const zone = right()
+		expect(zone.drawnFrom).toBe("arrangement")
 		// Two, not three: R79 removed the Inventory widget for now.
-		expect(right?.items.map((i) => i.id)).toEqual([
+		expect(zone.instances.map((i) => i.instanceId)).toEqual([
 			"scene-portraits",
 			"stats"
 		])
-		expect(right?.cols).toBe(1)
+		expect(zone.arrangement?.cols).toBe(1)
 	})
 
 	it("pins every group, which is what open-by-default means", () => {
 		// Absent means pinned, and `true` is never written — so an arrangement
 		// saved before the field existed reads as all groups pinned.
-		for (const unit of unitsOf(arranged().right!.items))
+		for (const unit of unitsOf(right()))
 			expect(unitPinned(unit.members), unit.key).toBe(true)
 	})
 
 	it("expands both in a column tall enough to hold them", () => {
-		const right = arranged().right!
-		const units = unitsOf(right.items)
+		const zone = right()
+		const units = unitsOf(zone)
 		const placed = resolveRailColumn({
 			columnPx: 900,
-			totalRows: right.rows,
+			totalRows: zone.arrangement!.rows,
 			groups: units.map((u) => ({
 				key: u.key,
 				rows: u.box.h,

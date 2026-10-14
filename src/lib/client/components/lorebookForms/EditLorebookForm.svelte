@@ -341,7 +341,7 @@
 		<div class="flex flex-col gap-6">
 			<div class="flex gap-2">
 				<button
-					class="btn btn-sm preset-filled-surface-400-600 w-full"
+					class="btn btn-sm preset-tonal-surface w-full"
 					onclick={handleCancel}
 				>
 					Cancel

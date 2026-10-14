@@ -8,14 +8,14 @@ import {
 	POOL_KINDS,
 	poolSummary,
 	railScopes,
-	readingLine,
+	looseEndsLabel,
 	SAVED_SCOPES,
 	savedScopeCount,
+	savedScopeCounts,
 	savedScopeFilters,
-	savedScopePool,
+	scopeChipLabel,
 	savedScopeRoute,
 	scopeRoute,
-	readingIntoSentence,
 	scopeKinds,
 	BOOK_ENTRY_TYPES,
 	entryTotal,
@@ -221,24 +221,6 @@ describe("poolSummary — the pool header's sentence", () => {
 	})
 })
 
-describe("readingLine — which session the book is read into", () => {
-	it("names the session and what reached it", () => {
-		expect(readingLine("The Open Door", 4)).toBe(
-			"Reading into The Open Door · 4 entries reached the last turn"
-		)
-	})
-
-	it("names the session that has read nothing yet", () => {
-		expect(readingLine("The Open Door", 0)).toBe(
-			"Reading into The Open Door · nothing reached the last turn"
-		)
-	})
-
-	it("says so when no session reads this book", () => {
-		expect(readingLine(null, null)).toBe("No session is reading this book")
-	})
-})
-
 /**
  * A saved scope is a question about the pool, so it is a predicate and not a
  * stored list. Archived rows answer none of them: they are out of the book's
@@ -284,24 +266,15 @@ describe("saved scopes", () => {
 			{ ...emptyFilters(), needsKeywords: true },
 			readIn
 		)
-		expect(keywordless.length).toBe(facetCounts(mixed, readIn).needsKeywords)
+		expect(keywordless.length).toBe(
+			facetCounts(mixed, readIn).needsKeywords
+		)
 		const pinned = filterPool(
 			mixed,
 			{ ...emptyFilters(), ...savedScopeFilters("pinned") },
 			readIn
 		)
 		expect(pinned.length).toBe(savedScopeCount("pinned", mixed))
-	})
-
-	it("counts over the scope being read, the whole book from All and Cast", () => {
-		const book = [
-			item({ id: 1, kind: WORLD, keys: [] }),
-			item({ id: 2, kind: HISTORY, keys: [] })
-		]
-		expect(savedScopePool(book, "all").length).toBe(2)
-		expect(savedScopePool(book, "cast").length).toBe(2)
-		expect(savedScopePool(book, "world").map((i) => i.id)).toEqual([1])
-		expect(savedScopePool(book, "history").map((i) => i.id)).toEqual([2])
 	})
 
 	it("takes the reader to a list when the lens or board has none", () => {
@@ -314,13 +287,57 @@ describe("saved scopes", () => {
 		const next = savedScopeRoute(onCast)
 		expect(next.scope).toBe("all")
 		expect(next.lens).toBe("list")
+	})
+
+	/**
+	 * Design A.3: Pinned is a row of the rail, current INSTEAD of a scope, so
+	 * the list it opens is the whole book — a narrowing to the scope
+	 * underneath would be a filter nobody can see.
+	 */
+	it("opens Everything from any scope, keeping a lens that lists", () => {
 		const onWorld: LoreRoute = {
 			...emptyRoute(),
 			lorebookId: 1,
 			scope: "world",
 			lens: "cards"
 		}
-		expect(savedScopeRoute(onWorld)).toBe(onWorld)
+		expect(savedScopeRoute(onWorld)).toEqual({
+			lorebookId: 1,
+			scope: "all",
+			lens: "cards"
+		})
+	})
+
+	it("stays put in Everything, an open entry included", () => {
+		const inAll: LoreRoute = {
+			...emptyRoute(),
+			lorebookId: 1,
+			scope: "all",
+			lens: "tree",
+			entryId: 340
+		}
+		expect(savedScopeRoute(inAll)).toBe(inAll)
+	})
+
+	it("leaves Book settings for the list", () => {
+		const settings: LoreRoute = {
+			lorebookId: 1,
+			scope: "all",
+			settings: true
+		}
+		expect(savedScopeRoute(settings)).toEqual({
+			lorebookId: 1,
+			scope: "all"
+		})
+	})
+
+	it("counts each saved scope over the whole book, the list it opens", () => {
+		const book = [
+			item({ id: 1, kind: WORLD, pinned: true }),
+			item({ id: 2, kind: HISTORY, pinned: true }),
+			item({ id: 3, kind: HISTORY, pinned: true, archived: true })
+		]
+		expect(savedScopeCounts(book)).toEqual({ pinned: 2 })
 	})
 
 	it("counts what is pinned", () => {
@@ -350,7 +367,13 @@ describe("scopeRoute — a scope chosen is a scope shown (design §2, Cast × Pl
 	})
 
 	it("keeps the lens when it draws the scope", () => {
-		for (const lens of ["list", "cards", "tree", "graph", "time"] as const) {
+		for (const lens of [
+			"list",
+			"cards",
+			"tree",
+			"graph",
+			"time"
+		] as const) {
 			const next = scopeRoute(at(lens), "history")
 			expect(next.scope).toBe("history")
 			expect(next.lens, lens).toBe(lens)
@@ -369,6 +392,12 @@ describe("scopeRoute — a scope chosen is a scope shown (design §2, Cast × Pl
 		expect(scopeRoute(at("list"), "history").entryId).toBeUndefined()
 	})
 
+	it("leaves Book settings, the scope it sat over included", () => {
+		const settings = { ...at("list"), settings: true }
+		expect(scopeRoute(settings, "history").settings).toBeUndefined()
+		expect(scopeRoute(settings, "world").settings).toBeUndefined()
+	})
+
 	it("reads an absent lens as the default, which draws every scope", () => {
 		expect(scopeRoute(at(), "places").lens).toBeUndefined()
 	})
@@ -383,14 +412,6 @@ describe("facetCounts — what the chips under the pool header say", () => {
 		item({ id: 5, kind: SCENE_KIND, key: "scene#5", machineWritten: true })
 	]
 	const readIn = new Set(["entry#1", "entry#2"])
-
-	it("counts each kind in the order the pool declares them", () => {
-		expect(facetCounts(pool, readIn).kinds).toEqual([
-			{ kind: WORLD, count: 2 },
-			{ kind: HISTORY, count: 2 },
-			{ kind: SCENE_KIND, count: 1 }
-		])
-	})
 
 	it("counts each state a chip narrows to", () => {
 		const counts = facetCounts(pool, readIn)
@@ -407,46 +428,6 @@ describe("facetCounts — what the chips under the pool header say", () => {
 		// Only 1 needs keywords: 2 is pinned, 3 off, 4 archived, 5 a scene.
 		expect(counts.needsKeywords).toBe(1)
 	})
-
-	it("counts a kind the pool does not hold as absent rather than as zero", () => {
-		expect(
-			facetCounts([item({ id: 1 })], new Set()).kinds.map((k) => k.kind)
-		).toEqual([WORLD])
-	})
-})
-
-describe("readingIntoSentence", () => {
-	it("names the line and what reached, in one line", () => {
-		expect(readingIntoSentence("marrow-stays", 4)).toBe(
-			"Reading this book on marrow-stays, as of now · 4 entries reached the last turn"
-		)
-	})
-
-	it("says nothing reached rather than zero", () => {
-		expect(readingIntoSentence("main", 0)).toBe(
-			"Reading this book on main, as of now · nothing reached the last turn"
-		)
-	})
-
-	it("a run that has not happened reads the same as one that reached nothing", () => {
-		// Both are "the model has not been given anything from this book yet",
-		// and a reader does not need the two told apart here.
-		expect(readingIntoSentence("main", null)).toBe(
-			readingIntoSentence("main", 0)
-		)
-	})
-
-	it("one entry is singular", () => {
-		expect(readingIntoSentence("main", 1)).toContain("1 entry reached")
-	})
-})
-
-describe("readingIntoSentence — the session's clock (ruling 3, #145)", () => {
-	it("names the session's clock when it keeps one", () => {
-		expect(readingIntoSentence("main", 2, "Year 3, Mo. 2")).toBe(
-			"Reading this book on main, as of Year 3, Mo. 2, the session's clock · 2 entries reached the last turn"
-		)
-	})
 })
 
 describe("sessionMomentKey / matchSessionRoute — stand where the session stands", () => {
@@ -460,6 +441,15 @@ describe("sessionMomentKey / matchSessionRoute — stand where the session stand
 	it("a session with no clock reads at now", () => {
 		expect(sessionMomentKey(null)).toBeUndefined()
 		expect(sessionMomentKey({ year: 3, month: 2, day: null })).toBe("Y3-2")
+	})
+
+	it("leaves Book settings, which is not a reading", () => {
+		expect(
+			matchSessionRoute(
+				{ ...base, settings: true },
+				{ branchId: null, clock: null }
+			).settings
+		).toBeUndefined()
 	})
 
 	it("moves line AND moment in one route, so one guarded transition does both (#81)", () => {
@@ -566,5 +556,27 @@ describe("nothingMatchesLine", () => {
 
 	it("speaks of the filters alone when nothing is typed", () => {
 		expect(nothingMatchesLine("")).toBe("Nothing matches these filters.")
+	})
+})
+
+describe("scopeChipLabel — the compact find row's one chip", () => {
+	it("draws none at Everything, which narrows nothing", () => {
+		expect(scopeChipLabel("all", null)).toBeNull()
+	})
+
+	it("names the scope chosen", () => {
+		expect(scopeChipLabel("world", null)).toBe("World lore")
+		expect(scopeChipLabel("cast", null)).toBe("Cast")
+	})
+
+	it("names the saved scope, which is current instead of a scope", () => {
+		expect(scopeChipLabel("all", "pinned")).toBe("Pinned")
+	})
+})
+
+describe("looseEndsLabel — the rail foot's line", () => {
+	it("counts the loose ends, singular at one", () => {
+		expect(looseEndsLabel(3)).toBe("3 loose ends")
+		expect(looseEndsLabel(1)).toBe("1 loose end")
 	})
 })

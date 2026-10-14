@@ -15,6 +15,12 @@
 		removedName: string
 		characters: Partial<SelectCharacter>[]
 		/**
+		 * Characters already in this session's cast — hidden from the
+		 * character picker, which tells "all of them are chosen" from "none
+		 * exist" by them.
+		 */
+		excludeCharacterIds?: number[]
+		/**
 		 * Characters already voiced as a persona in this session — hidden from
 		 * the persona picker, which reads `characters:list` itself.
 		 */
@@ -28,6 +34,7 @@
 		type,
 		removedName,
 		characters,
+		excludeCharacterIds = [],
 		excludePersonaIds = [],
 		onOpenChange,
 		onSelect
@@ -38,6 +45,7 @@
 	<CharacterSelectModal
 		{open}
 		{characters}
+		excludeIds={excludeCharacterIds}
 		{onOpenChange}
 		onSelect={(c) => onSelect(c.id)}
 	/>

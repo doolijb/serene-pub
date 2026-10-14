@@ -148,14 +148,17 @@ export function deleteWarning(
 	opts: { everyLine?: boolean } = {}
 ): string {
 	const parts: string[] = []
+	// What goes with any entry: its relationships and amendments cascade
+	// (`narrative_relationships`, `entry_amendments`, both `on delete
+	// cascade`), so the sentence says so before the question (G5).
 	if (contains > 0)
 		parts.push(
 			`Contains ${contains} ${contains === 1 ? "entry" : "entries"}. ` +
-				`Deleting this deletes them too, and that cannot be undone.`
+				`Deleting this deletes them too, with every relationship and amendment they have. This cannot be undone.`
 		)
 	else
 		parts.push(
-			"Are you sure you want to delete this lorebook entry? This action cannot be undone."
+			"Its relationships and amendments are deleted with it. This cannot be undone."
 		)
 	if (opts.everyLine)
 		parts.push(

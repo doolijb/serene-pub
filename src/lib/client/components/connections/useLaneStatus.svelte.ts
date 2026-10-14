@@ -37,6 +37,12 @@ export interface LaneSnapshot {
 	starred: boolean
 	/** The identity the lane works under, or null. */
 	modelId: string | null
+	/**
+	 * The connection that identity belongs to, or null when nothing is
+	 * starred. The lane is app-wide; a view compares this to its own id
+	 * before claiming the lane's residency or queue as its own.
+	 */
+	connectionId: number | null
 	loaded: boolean
 	loadError: string | null
 	lastUsedAt: string | null
@@ -67,6 +73,7 @@ function fromVectorization(
 	return {
 		starred: msg.starred,
 		modelId: msg.modelId,
+		connectionId: msg.connectionId ?? null,
 		loaded: msg.loaded,
 		loadError: msg.loadError,
 		lastUsedAt: msg.lastUsedAt,
@@ -80,6 +87,7 @@ function fromNer(msg: Sockets.Ner.Status.Response): LaneSnapshot {
 	return {
 		starred: msg.starred,
 		modelId: msg.modelId,
+		connectionId: msg.connectionId ?? null,
 		// `modelReady` is the lane's own word for "loaded and usable"; `loaded`
 		// arrived later and is the one both families now speak.
 		loaded: msg.loaded ?? msg.modelReady,

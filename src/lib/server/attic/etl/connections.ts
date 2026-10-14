@@ -135,11 +135,24 @@ export function samplingValuesOf(row: typeof attic.samplingConfigs.$inferSelect)
 	for (const key of SAMPLERS)
 		if (
 			key in values &&
-			JSON.stringify(values[key]) !== JSON.stringify(normalized.values[key])
+			JSON.stringify(values[key]) !== JSON.stringify(normalized.values[key]) &&
+			!(key === "logitBias" && sameBiases(values[key], normalized.values[key]))
 		)
 			clamped.push({ field: key, before: values[key], after: normalized.values[key] })
 	return { values: normalized.values, enabled: normalized.enabled, clamped }
 }
+
+/**
+ * 0.5.3's `{ id: bias }` read as 0.6's `[id]` entries is the same list in the
+ * editor's shape, not a value brought into range. Only a moved bias is.
+ */
+const sameBiases = (before: unknown, after: unknown): boolean =>
+	before !== null &&
+	typeof before === "object" &&
+	!Array.isArray(before) &&
+	Array.isArray(after) &&
+	JSON.stringify(Object.values(before)) ===
+		JSON.stringify(after.map((e: { value?: unknown }) => e?.value))
 
 const clampText = (c: SamplingClamp) =>
 	c.after === undefined

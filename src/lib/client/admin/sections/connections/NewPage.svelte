@@ -3,7 +3,7 @@
 	 * Admin → Connections → Add connection: the add form. A name and a
 	 * service, the two things `connections:create` needs; everything else is
 	 * set on the change form the create lands on, with the service's own
-	 * defaults already filled in (the same seed the Connections view's New
+	 * defaults already filled in (the same seed the Models view's New
 	 * dialog uses).
 	 *
 	 * Save goes back to the changelist, Save and continue editing opens the
@@ -157,7 +157,7 @@
 			label="Name"
 			required
 			error={nameError}
-			help="What pickers and the Connections view call it. Unique across this pub."
+			help="What pickers and the Models view call it. Unique across this pub."
 		>
 			<input
 				id="new-connection-name"

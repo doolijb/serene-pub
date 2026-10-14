@@ -319,7 +319,7 @@ describe("classifying a GGUF by its header", () => {
 describe("telling an embedding model apart", () => {
 	// B1 (2026-10-05). koboldcpp loads an embedding GGUF into a slot of its
 	// own, beside the chat model; filed as `text`, it was offered for chat and
-	// "Use for chat" pointed `--model` at it.
+	// "Use in Reply" pointed `--model` at it.
 
 	test("a real embedding GGUF's pooling key makes it embeddings", () => {
 		const verdict = classifyGgufHeader(NOMIC_EMBED)

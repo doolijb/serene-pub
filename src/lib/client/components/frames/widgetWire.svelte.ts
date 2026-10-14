@@ -20,11 +20,13 @@
 import { getContext } from "svelte"
 import { SvelteSet } from "svelte/reactivity"
 import {
+	WIDGET_REQUEST_ASKERS,
 	WIDGET_REQUEST_KINDS,
 	projectMessageRow,
 	widgetEventHeard,
 	widgetReads,
 	widgetRequestRefusal,
+	type AttendanceV1,
 	type HostFrameMessage,
 	type MessageV1,
 	type SessionV1,
@@ -45,6 +47,7 @@ import {
 	scopeMessages,
 	SESSION_VIEWER_KEY,
 	SESSION_TURN_ORDER_KEY,
+	SESSION_ATTENDANCE_KEY,
 	WIDGET_REQUESTS_KEY,
 	WidgetMessageFeed,
 	type WidgetRequestHandler,
@@ -133,7 +136,11 @@ export interface WidgetWireOptions {
 	gate: (action: { specSlug: string; key: string }) => FrameInvokeVerdict
 	/** The widget gave up (`fatal`); the host shows its own sentence. */
 	onFatal?: (message: string) => void
-	/** Is a person pressing inside this document right now? Read for a relayed (`onInvoke`) press. */
+	/**
+	 * Is a person pressing inside this document right now? Read for a relayed
+	 * (`onInvoke`) press, and for a plugin's write request (D4) — absent, no
+	 * person is behind it and such a write is declined.
+	 */
 	personBehind?: () => boolean
 	/**
 	 * The mount runs core's own code (`ComponentMount` decides, never a
@@ -232,6 +239,8 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 	const viewerCtx = getContext<{ current: ViewerV1 } | undefined>(SESSION_VIEWER_KEY)
 	/** The session's turn order (`turnOrder.v1`, C5), from the same page. */
 	const turnOrderCtx = getContext<{ current: TurnOrderV1 } | undefined>(SESSION_TURN_ORDER_KEY)
+	/** Who of the session's people has it open (`attendance.v1`, W10), from the same page. */
+	const attendanceCtx = getContext<{ current: AttendanceV1 } | undefined>(SESSION_ATTENDANCE_KEY)
 	const requests = getContext<WidgetRequestHandler | undefined>(WIDGET_REQUESTS_KEY)
 	/** English strings the widget asked to have translated (`translate`). */
 	const wanted = new SvelteSet<string>()
@@ -298,6 +307,8 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 			postChanged("viewer", { t: "viewer", viewer: { ...viewerCtx.current } })
 		if (reads.has("turnOrder") && turnOrderCtx && !nested)
 			postChanged("turn-order", { t: "turn-order", turnOrder: JSON.parse(JSON.stringify(turnOrderCtx.current)) })
+		if (reads.has("attendance") && attendanceCtx && !nested)
+			postChanged("attendance", { t: "attendance", attendance: JSON.parse(JSON.stringify(attendanceCtx.current)) })
 		// Scoped sections: posted when they change, and withdrawn (`null`)
 		// when a grant goes away — a worker keeps nothing it may not see.
 		// Only a name the SDK's table carries is a section at all.
@@ -327,13 +338,29 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 		// by the same, and a kind this widget may not ask is declined here
 		// before any page code runs — core's writes to core's widgets, a
 		// scoped read to a widget holding its scope.
+		// `channels` rides beside `from` (D4): a channel write is held to the
+		// widget's declared channels, here and at the page's door.
 		const from = {
 			widgetId: i.widgetId ?? opts.label(),
 			owner: i.owner ?? "unknown",
-			grants: [...(i.grants ?? [])]
+			grants: [...(i.grants ?? [])] as string[],
+			channels: [...(i.channels ?? [])]
 		}
-		const refused = widgetRequestRefusal(what, from)
+		const refused = widgetRequestRefusal(what, from, what === "messages" ? undefined : m.params)
 		if (refused) return decline(refused)
+		// 🚧 A write a plugin's widget may ask (D4: `send`, `draft`,
+		// `set-attribute-value`) goes in as the viewer, so a person's press
+		// stands behind it — the gate an invoke of a message-changing verb
+		// passes. Core's own component is as trusted as its native copy.
+		const askers = (WIDGET_REQUEST_ASKERS as Record<string, unknown>)[what]
+		if (
+			from.owner !== "core" &&
+			!opts.trusted?.() &&
+			typeof askers === "object" &&
+			(askers as { write?: unknown } | null)?.write === true &&
+			!(opts.personBehind?.() ?? false)
+		)
+			return decline(`'${what}' changes something as the viewer and needs a person's press behind it, never on its own`)
 		if (what === "messages") {
 			const params = {
 				channel: typeof m.channel === "string" ? m.channel : undefined,

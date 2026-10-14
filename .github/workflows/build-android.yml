@@ -94,7 +94,7 @@ jobs:
             - name: Build SvelteKit app
               run: npm run build
               env:
-                  NODE_OPTIONS: "--max-old-space-size=4096"
+                  NODE_OPTIONS: "--max-old-space-size=8192"
 
             - name: Prepare production dependencies
               run: |

@@ -3,10 +3,12 @@
 	 * The **Jump pill** — the always-there way in, for people who do not know
 	 * there is a keystroke.
 	 *
-	 * It names the scope rather than the feature, so the one thing on screen
-	 * saying "Search Characters" is the thing that will search characters. It
-	 * hides while the overlay is up: the overlay's own input is the same
-	 * control, and two of them on screen at once is one too many.
+	 * It always says "Jump to anything" (less-confusing B4, 2026-10-11), never
+	 * the scope ("Search Characters", "Search Library"): one control, one
+	 * label on every view. The scope chip inside the overlay says where it is
+	 * looking. It hides while the overlay
+	 * is up: the overlay's own input is the same control, and two of them on
+	 * screen at once is one too many.
 	 *
 	 * z-44 — above the shell (z-10) and the mobile sheets (z-40), strictly
 	 * below the sidebar / full-page view (z-45, see Layout.svelte) and the
@@ -15,7 +17,10 @@
 	 * one is open.
 	 */
 	import * as Icons from "@lucide/svelte"
-	import type { JumpCtx } from "$lib/client/shell/jump.svelte"
+	import {
+		JUMP_PLACEHOLDER,
+		type JumpCtx
+	} from "$lib/client/shell/jump.svelte"
 
 	interface Props {
 		jumpCtx: JumpCtx
@@ -33,11 +38,7 @@
 		/mac|iphone|ipad|ipod/i.test(navigator.platform || "")
 
 	const hint = isMac ? "⌘K" : "Ctrl K"
-	const label = $derived(
-		jumpCtx.scope.key === null
-			? "Jump to anything"
-			: `Search ${jumpCtx.scope.label}`
-	)
+	const label = JUMP_PLACEHOLDER
 
 	/**
 	 * How wide the pill is drawing itself, published to the document as
@@ -45,9 +46,8 @@
 	 * keep clear of it — today that is a sidebar view in full page, whose 56px
 	 * header row IS the band the pill sits in (STYLE-GUIDE §4.2, §6.8).
 	 *
-	 * Measured and not a constant: the label names the scope, so the same pill
-	 * is 190px over Admin and 247px over Documentation, and the base face it is
-	 * set in is the theme's — which a custom theme may change. `offsetWidth`
+	 * Measured and not a constant: the label is fixed, but the base face it is
+	 * set in is the theme's, which a custom theme may change. `offsetWidth`
 	 * rather than `clientWidth` because the 1px border is part of what has to
 	 * be cleared.
 	 */

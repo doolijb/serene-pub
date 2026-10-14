@@ -2,12 +2,13 @@
 	/**
 	 * A template field that knows what is in scope.
 	 *
-	 * The textarea is still a textarea — a code-editor dependency would be a
-	 * second editing surface with its own keyboard and a11y story, and the
-	 * valuable half of one fits here: completions that know the block context,
-	 * hover that answers "what is this and who supplies it", lint drawn under
-	 * the text it is about, with a did-you-mean fix a click (or Ctrl+.)
-	 * applies, and "Variables available here" — the scope as a tree.
+	 * The text sits in a code field (`CodeField`, CodeMirror): line numbers,
+	 * undo, search, bracket matching, and the valuable half of an IDE drawn from
+	 * what the app already computes locally — completions that know the block
+	 * context, hover that answers "what is this and who supplies it", lint drawn
+	 * as a wave under the text it is about with a did-you-mean fix a click (or
+	 * Ctrl+.) applies, and "Variables available here" — the scope as a tree.
+	 * The language (Handlebars or Liquid) is highlighted by `templateLanguage`.
 	 *
 	 * Typed templates P7: opened from a spec step, `scope` is that step's typed
 	 * scope (SDK `templateScopeAt`, carried on the panel option) and
@@ -24,7 +25,6 @@
 		completionsAt,
 		describeAt,
 		scopeTreeNodes,
-		type Completion,
 		type ScopeDeclarer,
 		type ScopeTreeNode
 	} from "$lib/shared/utils/templateAssist"
@@ -48,6 +48,17 @@
 	import DocPeek from "$lib/client/components/docs/DocPeek.svelte"
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	import ScopeTree from "./ScopeTree.svelte"
+	import CodeField from "$lib/client/components/codeField/CodeField.svelte"
+	import { templateLanguageFor } from "$lib/client/components/codeField/templateLanguage"
+	import {
+		toCmDiagnostics,
+		toCompletionResult,
+		visibleDiagnostics
+	} from "$lib/client/components/codeField/templateAssistBridge"
+	import { keymap } from "@codemirror/view"
+	import { Prec, type Extension } from "@codemirror/state"
+	import { linter } from "@codemirror/lint"
+	import { startCompletion, type CompletionContext } from "@codemirror/autocomplete"
 
 	interface Props {
 		value: string
@@ -102,45 +113,29 @@
 
 	const uid = `tpl-${Math.random().toString(36).slice(2, 8)}`
 
-	let el = $state<HTMLTextAreaElement | null>(null)
-	let mirror = $state<HTMLDivElement | null>(null)
-	let overlay = $state<HTMLDivElement | null>(null)
+	let field = $state<CodeField | null>(null)
 	let caret = $state(0)
-	let scrollTop = $state(0)
-	let dismissedAt = $state<number | null>(null)
-	let selected = $state(0)
 	let blurred = $state(true)
-	let pos = $state({ top: 0, left: 0 })
 	let treeOpen = $state(true)
 
 	const options = $derived({ engine, declarers })
-
-	const items = $derived.by<Completion[]>(() => {
-		if (!scope || readonly || !assisted || dismissedAt === caret) return []
-		return completionsAt(value, caret, scope, options).slice(0, 50)
-	})
 
 	const hover = $derived(
 		scope && assisted ? describeAt(value, caret, scope, options) : null
 	)
 
-	/**
-	 * Lint, but not a parse error while the source is mid-word.
-	 *
-	 * A template being typed is usually not parseable, and reporting that as an
-	 * error on every keystroke trains people to ignore the panel. The parse
-	 * error is real and worth showing — once they have stopped typing.
-	 */
-	const diagnostics = $derived.by<TemplateDiagnostic[]>(() => {
+	/** Every finding, before the mid-word rule. */
+	const allDiagnostics = $derived.by<TemplateDiagnostic[]>(() => {
 		if (!scope || readonly || !assisted) return []
-		const { diagnostics } = templateDiagnostics(engine, value, scope, {
-			untyped,
-			lenient
-		})
-		return blurred
-			? diagnostics
-			: diagnostics.filter((d) => d.kind !== "syntax")
+		return templateDiagnostics(engine, value, scope, { untyped, lenient }).diagnostics
 	})
+
+	/**
+	 * Lint, but not a parse error while the source is mid-word (see
+	 * `visibleDiagnostics`). The same rule drives the wave in the field and
+	 * the list under it, so the two never disagree.
+	 */
+	const diagnostics = $derived(visibleDiagnostics(allDiagnostics, !blurred))
 
 	const errorCount = $derived(
 		diagnostics.filter((d) => d.severity === "error").length
@@ -170,176 +165,83 @@
 	)
 	const filtered = $derived(filterShelvedTree(shelved, filter))
 
-	const open = $derived(items.length > 0)
-	const active = $derived(items[Math.min(selected, items.length - 1)])
-
-	$effect(() => {
-		if (open) place()
-	})
-
-	/** The overlay tracks the field's box, font and scroll. */
-	$effect(() => {
-		void diagnostics
-		void value
-		if (!el || !overlay) return
-		copyStyle(el, overlay)
-		overlay.style.width = `${el.clientWidth + parseFloat(getComputedStyle(el).borderLeftWidth || "0")}px`
-		// A few pixels past the field's bottom, so the last line's squiggle is
-		// not clipped by the overlay's own edge.
-		overlay.style.height = `${el.clientHeight + parseFloat(getComputedStyle(el).borderTopWidth || "0") + 4}px`
-	})
-
-	const STYLE_PROPS = [
-		"fontFamily",
-		"fontSize",
-		"fontWeight",
-		"letterSpacing",
-		"lineHeight",
-		"paddingTop",
-		"paddingRight",
-		"paddingBottom",
-		"paddingLeft",
-		"borderTopWidth",
-		"borderLeftWidth",
-		"whiteSpace",
-		"wordBreak",
-		"overflowWrap",
-		"tabSize"
-	] as const
-
-	function copyStyle(from: HTMLElement, to: HTMLElement) {
-		const cs = getComputedStyle(from)
-		for (const prop of STYLE_PROPS) to.style[prop] = cs[prop]
-	}
-
-	/**
-	 * Where the caret is, in pixels.
-	 *
-	 * Measured with a mirror element rather than guessed from character widths,
-	 * because the field wraps and the font is not monospace everywhere it is
-	 * used. The mirror copies the textarea's own computed style so the two
-	 * agree about wrapping.
-	 */
-	function place() {
-		if (!el || !mirror) return
-		const cs = getComputedStyle(el)
-		copyStyle(el, mirror)
-		mirror.style.width = `${el.clientWidth}px`
-
-		mirror.textContent = value.slice(0, caret)
-		const marker = document.createElement("span")
-		marker.textContent = "​"
-		mirror.appendChild(marker)
-
-		pos = {
-			top:
-				marker.offsetTop -
-				el.scrollTop +
-				parseFloat(cs.lineHeight || "16"),
-			left: Math.min(marker.offsetLeft, Math.max(0, el.clientWidth - 288))
-		}
-	}
-
-	/** The source cut into plain runs and the runs a finding covers. */
-	const runs = $derived.by(() => {
-		const out: { text: string; severity?: "error" | "warning" }[] = []
-		const marks = [...diagnostics]
-			.filter((d) => d.end > d.start)
-			.sort((a, b) => a.start - b.start)
-		let at = 0
-		for (const d of marks) {
-			const start = Math.max(d.start, at)
-			const end = Math.min(d.end, value.length)
-			if (end <= start) continue
-			if (start > at) out.push({ text: value.slice(at, start) })
-			out.push({ text: value.slice(start, end), severity: d.severity })
-			at = end
-		}
-		out.push({ text: value.slice(at) + "\n" })
-		return out
-	})
-
-	function sync(e: Event) {
-		const t = e.currentTarget as HTMLTextAreaElement
-		caret = t.selectionStart ?? 0
-	}
-
-	function onInput(e: Event) {
-		const t = e.currentTarget as HTMLTextAreaElement
-		caret = t.selectionStart ?? 0
-		dismissedAt = null
-		selected = 0
-		oninput(t.value)
-	}
-
-	/** Replace `[start, end)` and put the caret (or a selection) after. */
-	function replace(
-		start: number,
-		end: number,
-		insert: string,
-		select?: { start: number; end: number }
-	) {
-		const next = value.slice(0, start) + insert + value.slice(end)
-		const a = start + (select ? select.start : insert.length)
-		const b = start + (select ? select.end : insert.length)
-		oninput(next)
-		dismissedAt = b
-		queueMicrotask(() => {
-			if (!el) return
-			el.focus()
-			el.setSelectionRange(a, b)
-			caret = b
-		})
-	}
-
-	function accept(c: Completion) {
-		replace(c.start, c.end, c.insert, c.select)
-		// A placeholder or a snippet's argument slot wants the list back.
-		if (c.select) dismissedAt = null
-	}
-
-	function applyFix(fix: TemplateQuickFix) {
-		replace(fix.start, fix.end, fix.text)
-	}
-
 	/** The finding the caret sits in, with a fix — what Ctrl+. applies. */
 	const fixAtCaret = $derived(
 		diagnostics.find((d) => d.fix && caret >= d.start && caret <= d.end)
 	)
 
-	function onKeydown(e: KeyboardEvent) {
-		if ((e.ctrlKey || e.metaKey) && e.key === "." && fixAtCaret?.fix) {
-			e.preventDefault()
-			applyFix(fixAtCaret.fix)
-			return
+	/**
+	 * The field's language, completion and lint. Rebuilt only when what they
+	 * read changes — the scope, the engine, read-only — never on a keystroke:
+	 * the closures read the source from the view when CodeMirror asks.
+	 */
+	const extensions = $derived.by<Extension>(() => {
+		const language = templateLanguageFor(engine)
+		const out: Extension[] = []
+		if (language) out.push(language)
+		if (!scope || !assisted) return out
+		const assist = { scope, options: { engine, declarers }, untyped, lenient, readonly }
+		if (language && !readonly) {
+			out.push(
+				language.data.of({
+					autocomplete: (ctx: CompletionContext) => {
+						const items = completionsAt(
+							ctx.state.doc.toString(),
+							ctx.pos,
+							assist.scope,
+							assist.options
+						).slice(0, 50)
+						return toCompletionResult(items, {
+							// A placeholder or a snippet's argument slot wants the list back.
+							onslot: (view) => queueMicrotask(() => startCompletion(view))
+						})
+					}
+				})
+			)
 		}
-		if ((e.ctrlKey || e.metaKey) && e.key === " ") {
-			e.preventDefault()
-			dismissedAt = null
-			return
-		}
-		if (!open) return
-		if (e.key === "ArrowDown") {
-			e.preventDefault()
-			selected = (selected + 1) % items.length
-		} else if (e.key === "ArrowUp") {
-			e.preventDefault()
-			selected = (selected - 1 + items.length) % items.length
-		} else if (e.key === "Enter" || e.key === "Tab") {
-			e.preventDefault()
-			accept(active!)
-		} else if (e.key === "Escape") {
-			e.preventDefault()
-			dismissedAt = caret
-		}
+		out.push(
+			linter(
+				(view) => {
+					const { diagnostics } = templateDiagnostics(
+						assist.options.engine ?? CORE_TEMPLATE_ENGINE,
+						view.state.doc.toString(),
+						assist.scope,
+						{ untyped: assist.untyped, lenient: assist.lenient }
+					)
+					return toCmDiagnostics(
+						visibleDiagnostics(diagnostics, view.hasFocus),
+						view.state.doc.length,
+						assist.readonly
+					)
+				},
+				{ delay: 250, needsRefresh: (u) => u.focusChanged }
+			)
+		)
+		out.push(
+			Prec.high(
+				keymap.of([
+					{
+						key: "Mod-.",
+						run: () => {
+							const fix = fixAtCaret?.fix
+							if (!fix) return false
+							applyFix(fix)
+							return true
+						}
+					}
+				])
+			)
+		)
+		return out
+	})
+
+	function applyFix(fix: TemplateQuickFix) {
+		field?.replace(fix.start, fix.end, fix.text)
 	}
 
 	/** Put the caret on the issue, which is the only reason to list an offset. */
 	function jumpTo(start: number) {
-		if (!el) return
-		el.focus()
-		el.setSelectionRange(start, start)
-		caret = start
+		field?.focusAt(start)
 	}
 
 	/** Is the caret inside an open tag (so a bare path is right)? */
@@ -357,13 +259,12 @@
 	 * one outside — a list as its loop, anything else as its output.
 	 */
 	function insertNode(node: ScopeTreeNode) {
-		if (readonly) return
-		const at = el?.selectionStart ?? caret
-		const to = el?.selectionEnd ?? at
-		if (insideTag(at)) return replace(at, to, node.path)
+		if (readonly || !field) return
+		const { from, to } = field.selection()
+		if (insideTag(from)) return field.replace(from, to, node.path)
 		const { text, caret: inside } = insertionFor(node, engine)
-		replace(
-			at,
+		field.replace(
+			from,
 			to,
 			text,
 			inside === undefined ? undefined : { start: inside, end: inside }
@@ -378,112 +279,19 @@
 			: ''}"
 	>
 		<div class="relative min-w-0">
-			<textarea
-				bind:this={el}
-				id="{uid}-field"
-				class="textarea w-full font-mono text-xs"
-				{rows}
-				{readonly}
-				spellcheck="false"
-				aria-label={label}
-				aria-autocomplete={scope && assisted ? "list" : undefined}
-				aria-controls={open ? `${uid}-list` : undefined}
-				aria-activedescendant={open ? `${uid}-opt-${selected}` : undefined}
-				aria-describedby={diagnostics.length ? `${uid}-issues` : undefined}
-				aria-invalid={errorCount > 0 ? true : undefined}
+			<CodeField
+				bind:this={field}
 				{value}
-				oninput={onInput}
-				onkeydown={onKeydown}
-				onkeyup={sync}
-				onclick={sync}
-				onscroll={(e) => (scrollTop = e.currentTarget.scrollTop)}
-				onfocus={() => (blurred = false)}
-				onblur={() => {
-					blurred = true
-					dismissedAt = caret
-				}}
-			></textarea>
-
-			<!-- The squiggles: the same text, transparent, over the field, with
-			     the finding's range underlined. Never read out — the issue list
-			     below is the accessible surface. -->
-			{#if diagnostics.length}
-				<div
-					bind:this={overlay}
-					aria-hidden="true"
-					class="pointer-events-none absolute top-0 left-0 overflow-hidden border-transparent"
-					style="border-style: solid; border-right-width: 0; border-bottom-width: 0; box-sizing: border-box;"
-				>
-					<div
-						class="break-words whitespace-pre-wrap text-transparent"
-						style="transform: translateY(-{scrollTop}px)"
-					>{#each runs as run, i (i)}{#if run.severity}<span
-								class="underline decoration-wavy underline-offset-2 {run.severity ===
-								'error'
-									? 'decoration-error-500'
-									: 'decoration-warning-500'}">{run.text}</span
-							>{:else}{run.text}{/if}{/each}</div>
-				</div>
-			{/if}
-
-			<!-- Measures the caret. Never shown, never read out. -->
-			<div
-				bind:this={mirror}
-				aria-hidden="true"
-				class="pointer-events-none invisible absolute top-0 left-0 -z-10"
-			></div>
-
-			{#if open}
-				<div
-					class="border-surface-200-800 bg-surface-50-950 absolute z-50 w-72 rounded border shadow-lg"
-					style="top:{pos.top}px; left:{pos.left}px"
-				>
-					<ul
-						id="{uid}-list"
-						role="listbox"
-						aria-label="Completions"
-						class="max-h-56 overflow-auto py-0.5"
-					>
-						{#each items as c, i (c.kind + c.label + i)}
-							<li
-								id="{uid}-opt-{i}"
-								role="option"
-								tabindex="-1"
-								aria-selected={i === selected}
-								class="flex w-full cursor-pointer items-baseline gap-2 px-2 py-1 text-left text-xs {i ===
-								selected
-									? 'sidebar-row-active'
-									: 'hover:bg-surface-200-800'}"
-								onmousedown={(e) => {
-									e.preventDefault()
-									accept(c)
-								}}
-							>
-								<span class="font-mono">{c.label}</span>
-								{#if c.detail}
-									<span class="text-surface-600-400 truncate font-mono">
-										{c.detail}
-									</span>
-								{:else if c.type}
-									<span class="text-surface-600-400">
-										{c.type}{c.optional ? "?" : ""}
-									</span>
-								{/if}
-							</li>
-						{/each}
-					</ul>
-					{#if active && (active.description || active.declarer)}
-						<p
-							class="border-surface-200-800 text-surface-600-400 border-t px-2 py-1 text-xs"
-						>
-							{#if active.description}{active.description}{/if}
-							{#if active.declarer}
-								<span class="block">From {active.declarer}</span>
-							{/if}
-						</p>
-					{/if}
-				</div>
-			{/if}
+				{readonly}
+				{rows}
+				{label}
+				{extensions}
+				describedBy={diagnostics.length ? `${uid}-issues` : undefined}
+				invalid={errorCount > 0}
+				oninput={(v) => oninput(v)}
+				oncursor={(pos) => (caret = pos)}
+				onfocuschange={(focused) => (blurred = !focused)}
+			/>
 		</div>
 
 		{#if wantsTree}

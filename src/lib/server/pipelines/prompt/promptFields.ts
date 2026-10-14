@@ -30,8 +30,15 @@
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 import * as F from "$lib/server/pipelines/prompt/contextFields"
+import {
+	compileStrokes,
+	type ResolvedStroke,
+	type StrokeKind
+} from "@serene-pub/sdk"
+import { STROKES_ENABLED } from "$lib/shared/characters/strokesFlag"
 import { resolveSeedLine } from "$lib/server/pipelines/prompt/seedLine"
 import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
+import { likenessOf } from "$lib/server/characters/likeness"
 import type { ChannelVoice } from "$lib/server/messages/channels"
 import type { BuildContextInput } from "$lib/server/pipelines/prompt/templateContext"
 
@@ -150,8 +157,85 @@ export interface ResolveInput {
 	characterDetail?: unknown
 }
 
+/**
+ * Whether a card's strokes were resolved — `core:task/card-strokes@1` ran and
+ * stamped `fired` on every one. A raw row's strokes carry no `fired`.
+ */
+const strokesResolved = (strokes: readonly unknown[]): boolean =>
+	strokes.length > 0 &&
+	strokes.every(
+		(s) => typeof (s as Partial<ResolvedStroke> | null)?.fired === "boolean"
+	)
+
+/**
+ * The card's strokes as the prompt reads them — none while strokes are paused
+ * (`STROKES_ENABLED` off): the prose columns are then the whole card.
+ */
+const strokesOf = (character: F.CharacterFields) =>
+	STROKES_ENABLED ? F.characterStrokes(character) : []
+
+/**
+ * One card field, from its strokes when the card is painted in strokes OF
+ * THAT KIND, else from its column.
+ *
+ * Per kind, not per card: a card whose author split only the personality
+ * keeps its description column as the truth, rather than losing it to an
+ * empty stroke list. Resolved strokes compile `always` + fired only; raw ones
+ * compile every enabled stroke — the fallback when no step ran, which loses
+ * nothing, only budget (DESIGN-card-strokes A.4).
+ */
+function strokeField(
+	character: F.CharacterFields,
+	kind: StrokeKind,
+	resolved: boolean
+): string | null | undefined {
+	const strokes = strokesOf(character)
+	if (!strokes.some((s) => s?.kind === kind))
+		return kind === "description"
+			? F.characterDescription(character)
+			: F.characterPersonality(character)
+	return compileStrokes(strokes, kind, { firedOnly: resolved })
+}
+
+/**
+ * The resolved strokes a card carries for a template to address: the fired
+ * ones of the kinds this detail level shows, in order — `off` and unfired
+ * keyword strokes never, and `brief` drops personality strokes as it drops
+ * the field. Empty text is dropped, as `compileStrokes` drops it.
+ */
+function cardStrokesOf(
+	strokes: readonly ResolvedStroke[],
+	kinds: readonly StrokeKind[]
+): CardStroke[] {
+	const out: CardStroke[] = []
+	for (const s of strokes) {
+		if (!s || s.fired !== true || !kinds.includes(s.kind)) continue
+		const text = typeof s.text === "string" ? s.text.trim() : ""
+		if (!text) continue
+		const label = typeof s.label === "string" ? s.label.trim() : ""
+		// Keys in the order `core:var/characters@1` declares them.
+		out.push({
+			kind: s.kind,
+			...(s.slug ? { slug: s.slug } : {}),
+			...(label ? { label } : {}),
+			text,
+			fired: true
+		})
+	}
+	return out
+}
+
+/** One stroke as the card carries it — `CHARACTER_CARD.strokes`' item. */
+export interface CardStroke {
+	kind: StrokeKind
+	slug?: string
+	label?: string
+	text: string
+	fired: boolean
+}
+
 /** Card data for one character, at the detail they are shown at. */
-function compileCharacter(
+export function compileCharacter(
 	character: F.CharacterFields,
 	detail: CharacterDetail
 ): Record<string, unknown> | null {
@@ -161,10 +245,21 @@ function compileCharacter(
 		name: F.characterName(character),
 		nickname: F.characterNickname(character)
 	}
+	const strokes = strokesOf(character)
+	const resolved = strokesResolved(strokes)
 	// BRIEF shows who they are and nothing about how they behave.
-	card.description = F.characterDescription(character)
+	card.description = strokeField(character, "description", resolved)
 	if (detail !== CHARACTER_DETAIL.BRIEF)
-		card.personality = F.characterPersonality(character)
+		card.personality = strokeField(character, "personality", resolved)
+	// The pieces, for a template that iterates or picks by slug — only once a
+	// step resolved them, so a raw card's object is the four fields it was.
+	if (resolved)
+		card.strokes = cardStrokesOf(
+			strokes as ResolvedStroke[],
+			detail === CHARACTER_DETAIL.BRIEF
+				? ["description"]
+				: ["description", "personality"]
+		)
 
 	// Dropped rather than left null, because these cards are stringified into
 	// the prompt: a `"personality": null` is a line the model reads.
@@ -256,6 +351,28 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 
 	const personaNames = sessionPersonas.map((cp) => F.personaName(cp.persona))
 
+	// 🚧 Likeness (DESIGN-image-generation §5): the speaker's, for
+	// `{{likeness}}` / `{{likenessNegative}}` — the side character's when
+	// one speaks — and everyone on stage's tag lines for
+	// `core:var/likenesses@1`: the switched-on cast, then the personas.
+	// Personas are characters (0132), so their rows carry it too.
+	const speakerRow = (current ?? input.speakerCharacter ?? null) as
+		| Parameters<typeof likenessOf>[0]
+		| null
+	const speakerLikeness = speakerRow ? likenessOf(speakerRow) : null
+	const likenesses = [
+		...sessionCharacters
+			.filter((cc) => cc.enabled !== false)
+			.map((cc) => ({
+				name: resolveCharacterName(cc.character as any),
+				prompt: likenessOf(cc.character as any).prompt
+			})),
+		...sessionPersonas.map((cp) => ({
+			name: F.personaName(cp.persona),
+			prompt: likenessOf(cp.persona as any).prompt
+		}))
+	]
+
 	// The example dialogue is picked once and reported, so the same run
 	// replayed produces the same prompt.
 	let exampleDialogueIndex: number | null = null
@@ -277,6 +394,11 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 		})),
 		characterNames,
 		personaNames,
+		likeness: {
+			prompt: speakerLikeness?.prompt ?? "",
+			negative: speakerLikeness?.negative ?? ""
+		},
+		likenesses,
 		// No single speaker in narrator mode: `{{char}}` becomes the cast list,
 		// the same convention `{{characterNames}}` follows (index.ts:623-625).
 		// The speaker's name, then the side character's, then the cast list.

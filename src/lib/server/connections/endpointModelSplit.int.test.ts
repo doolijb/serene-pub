@@ -29,6 +29,7 @@ import {
 	TEXT_CAPABILITY
 } from "$lib/server/connections/capabilityTarget"
 import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults"
+import { defaultLoadoutRow } from "$lib/server/loadouts/testing"
 
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
@@ -163,12 +164,12 @@ describe("explicit model rows", () => {
 			e.id,
 			"llama3.1:70b"
 		))!
-		await db.insert(schema.connectionDefaults).values({
+		await db.insert(schema.loadouts).values(defaultLoadoutRow({
 			input: "text",
 			output: "text",
 			connectionId: e.id,
 			connectionModelId: null
-		})
+		}))
 		const bare = await resolveCapabilityTarget(db, {
 			capability: TEXT_CAPABILITY
 		})

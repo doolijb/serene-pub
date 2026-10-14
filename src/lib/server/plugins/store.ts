@@ -365,6 +365,9 @@ export async function removePlugin(db: Db, pluginId: string): Promise<void> {
 	// …and its annex declaration (ruling 2026-09-26).
 	const { withdrawPluginAnnex } = await import("./pluginAnnex")
 	withdrawPluginAnnex(pluginId)
+	// …and the hook points it declared (R54).
+	const { withdrawPluginHookPoints } = await import("./pluginHookPoints")
+	withdrawPluginHookPoints(pluginId)
 	// …and its context variables (typed templates, 2026-09-27).
 	const { withdrawPluginVariables } = await import("./pluginVariables")
 	withdrawPluginVariables(pluginId)

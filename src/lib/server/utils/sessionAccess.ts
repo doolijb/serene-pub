@@ -1,6 +1,7 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
+import { isSharedWith } from "$lib/server/utils/shares"
 
 // Shared by any socket handler file that gates access to a session-scoped
 // resource — duplicating this check per-file is how session guests previously
@@ -43,11 +44,17 @@ export async function checkSessionAccess(
  * (`session_personas`), and either is a reason to be allowed to look at it.
  * Checking only the first makes a guest's own persona invisible to the
  * session's owner.
+ *
+ * A **share** (`character_shares`, PLAN-private-messages §4) is the other
+ * reason: the owner granted this person read and copy. It is asked first —
+ * one indexed probe, cheaper than walking sessions.
  */
 export async function canViewCharacter(
 	characterId: number,
 	userId: number
 ): Promise<boolean> {
+	if (await isSharedWith(db as unknown as Db, "character", characterId, userId))
+		return true
 	const [asCast, asVoice] = await Promise.all([
 		db.query.sessionCharacters.findMany({
 			where: eq(schema.sessionCharacters.characterId, characterId),

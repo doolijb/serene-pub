@@ -1,0 +1,1121 @@
+/**
+ * The session page's data: what the replies in its inbox write
+ * (`sessionPageInbox.svelte.ts`) — the session and its pages of lines, who
+ * else is typing, the viewer's annex view, the session view
+ * (`sessions:view`) and the genre list, the preset verdict, the narrator's
+ * name — and what the page derives from them once for every reader: the
+ * newest line, whether a reply is generating, the genre's shape, who the
+ * viewer is and speaks as.
+ */
+import { onDestroy, onMount, untrack } from "svelte"
+import { runProgress } from "$lib/client/stores/runProgress.svelte"
+import type { RunProgress } from "$lib/shared/sockets/progress"
+import { page } from "$app/state"
+import { replaceState } from "$app/navigation"
+import {
+	LANDING_SEEK_FRAMES,
+	landingTarget,
+	nextLandingStep,
+	readMessageLanding,
+	withoutLanding
+} from "$lib/client/sessions/messageLanding"
+import { landOn } from "$lib/client/utils/landOn"
+import type { TypedSocket } from "$lib/client/sockets/typedSocket"
+import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
+import type { ChannelLaneV1 } from "@serene-pub/sdk"
+import type { StoryClock as StoryClockParts } from "$lib/shared/lorebooks/storyDate"
+import { readStoryCalendar, type StoryCalendar } from "$lib/shared/lorebooks/storyDate"
+import { withRevisedAvatar } from "$lib/client/utils/media"
+import { lastAuthorLine } from "$lib/client/components/sessionPage/swipeControls"
+import {
+	canControlMessageAs,
+	characterForRefIn,
+	messageCharacterOf,
+	personLineOf
+} from "$lib/client/components/sessionPage/sessionPageProjections"
+import type { SessionPageInbox } from "$lib/client/components/sessionPage/sessionPageInbox.svelte"
+import type { MessageV1 } from "@serene-pub/sdk"
+import { DEFAULT_CHANNEL } from "@serene-pub/sdk"
+import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
+import {
+	resolvePlayerLabel,
+	storedPlayerLabel
+} from "$lib/shared/sessions/playerLabel"
+import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
+
+export interface SessionPageDataDeps {
+	socket: TypedSocket
+	inbox: SessionPageInbox
+	/** The session in the route. */
+	sessionId(): number
+	/** The loaded session's id (the page's primitive) — what the typing ping and the persona pick key on. */
+	loadedSessionId(): number | null
+	userCtx: UserCtx
+	/** The widgets beside the conversation, told of every line that lands, moves or goes. */
+	widgets: SurfaceManager
+	/** The composer's draft, as the page holds it. */
+	draft(): string
+	/** The page's one way to change the draft — the kept draft, on the session's first load. */
+	writeDraft(content: string): void
+}
+
+/**
+ * The loaded session and what the page derives from it. Registers its
+ * listeners on the inbox at once; call during the page's init, after the
+ * inbox.
+ */
+export function createSessionPageData(d: SessionPageDataDeps) {
+	const socket = d.socket
+	const userCtx = d.userCtx
+	const surfaceManager = d.widgets
+	const sessionId = $derived(d.sessionId())
+	const loadedSessionId = $derived(d.loadedSessionId())
+	const newMessage = $derived(d.draft())
+	const writeDraft = (content: string) => d.writeDraft(content)
+
+	let session: Sockets.Sessions.Get.Response["session"] | undefined = $state()
+	let pagination: Sockets.Sessions.Get.Response["pagination"] | undefined =
+		$state()
+	let sessionNotFound = $state(false)
+	let loadingOlderMessages = $state(false)
+
+	// ── Typing indicator ──────────────────────────────────────────────────────
+	// Other participants' personas currently typing, keyed by personaId. Purely
+	// client-expired — there's no "stopped typing" event, entries just drop
+	// off 10s after the last ping (matches how the composer's own throttled
+	// ping below only re-fires every ~2.5s while text keeps changing).
+	let typingPersonas: Map<number, { name: string; lastTypingAt: number }> =
+		$state(new Map())
+	let lastTypingEmitAt = 0
+	let typingPruneInterval: ReturnType<typeof setInterval> | null = null
+	/**
+	 * Who of the session's people has it open (W10): the server's last
+	 * `sessions:attendance` push for this session — `attendance.v1` is built
+	 * over it (`projections/attendance.ts`).
+	 */
+	let attendance = $state.raw<Sockets.Sessions.Attendance.Response | null>(
+		null
+	)
+
+	$effect(() => {
+		const content = newMessage
+		if (!sessionId || loadedSessionId === null || !content.trim()) return
+		const now = Date.now()
+		if (now - lastTypingEmitAt < 2500) return
+		lastTypingEmitAt = now
+		// Untracked: the ping answers the draft changing, never a streamed
+		// chunk replacing `session` — which would tell the room this person
+		// is typing for as long as a reply streams with text in the box.
+		const personaId = untrack(
+			() =>
+				currentUserPersona?.personaId ||
+				session?.sessionPersonas?.[0]?.personaId
+		)
+		if (personaId) socket.emit("sessions:typing", { sessionId, personaId })
+	})
+	onMount(() => {
+		// "sessions:userTyping" is a scoped interest, held by the inbox.
+		typingPruneInterval = setInterval(() => {
+			const cutoff = Date.now() - 10_000
+			let changed = false
+			for (const [id, info] of typingPersonas) {
+				if (info.lastTypingAt < cutoff) {
+					typingPersonas.delete(id)
+					changed = true
+				}
+			}
+			if (changed) typingPersonas = new Map(typingPersonas)
+		}, 1000)
+		return () => {
+			if (typingPruneInterval) clearInterval(typingPruneInterval)
+		}
+	})
+
+	// Resolved display name for Narrator responses (session override -> user active
+	// -> system default -> "Narrator"); labels the trigger button/
+	// modal/character-picker option before any message exists.
+	let narratorName = $state("Narrator")
+	// Asked once per session. On the id, not `session`: reading through the
+	// object would re-ask per token.
+	$effect(() => {
+		if (sessionId) {
+			socket.emit("sessions:getNarratorName", { sessionId })
+		}
+	})
+
+	// The session's frame surfaces (20 §12): a mode-declared session-view
+	// replaces core's log wholesale (the total-conversion lane); panels are
+	// every enabled plugin's declared side frames. Presence is data — a
+	// disabled plugin takes its frames with it, and a missing view-plugin
+	// falls back to core's log with no error.
+	let sessionFrames = $state<Sockets.Sessions.View.Response | null>(null)
+	const sessionViewFrame = $derived(sessionFrames?.sessionView ?? null)
+	/**
+	 * 🚧 The story calendar of the book this session reads, as the server
+	 * last said it (`sessions:storyClock`'s `calendar`; PROPOSAL-live-scenes
+	 * §15 G9) — what the conversation spells its dates through. Null: free-
+	 * form, or not read yet. Which session it is for rides beside it, so a
+	 * switch never spells one session's dates by another's book.
+	 */
+	let storyCalendar = $state<{ sessionId: number; calendar: StoryCalendar | null } | null>(null)
+	/**
+	 * What the pipeline's own voice is called (lair re-plan R5): the null
+	 * turn entry and every line nobody claims — the genre's fallback envoy
+	 * (declared, seated or not: the Lair's Castellan), else the narrator
+	 * name above, else `UNCLAIMED_LINE_NAME`. The one rule
+	 * (`ownVoiceName`) the ready line, the pickers' narrator row and the
+	 * message names read; the server's seed line and progress card read it
+	 * too. Chat's narrate *function* keeps `narratorName`.
+	 */
+	let ownVoice = $derived(
+		ownVoiceName(
+			{ envoys: sessionFrames?.envoys, narratorName },
+			sessionFrames?.language ?? "en"
+		)
+	)
+	/**
+	 * Why Extend is unavailable on this session's messages, when it is.
+	 *
+	 * Off `sessions:view`, which the page already fetches once when a session
+	 * opens and which already reads the genre — half the answer (`messageVerbs`)
+	 * was there anyway, and the other half is the connection the replies resolve
+	 * to. Session-level, so the button is disabled with the same sentence on
+	 * every message rather than asking per row.
+	 *
+	 * ⚠ An affordance, not the enforcement. `sessionMessagesExtendHandler`
+	 * refuses with this same sentence from the same resolution, so a stale value
+	 * (an admin repointing the instance default while this page is open) costs a
+	 * refusal message and never a wrong generation.
+	 */
+	const extendRefusal = $derived(sessionFrames?.extendRefusal)
+	/**
+	 * Which forbiddable message verbs this session's genre offers (R-15) —
+	 * off the action list's message venue (U5c), the ONE list every verb
+	 * control renders from: a forbidden opt-in built-in (`delete`, `hide`,
+	 * `swipe`) or a forbidden `retry` is simply not listed, and the floors
+	 * always are. Until the list has arrived, `sessions:view`'s
+	 * `messageVerbs` answers, so the controls do not flash off and on while
+	 * the page loads. An affordance, like `extendRefusal`: the handler
+	 * refuses the verb regardless.
+	 */
+	const messageVerbs = $derived(sessionFrames?.messageVerbs)
+	/**
+	 * What this session may write beyond messages (R-B) — off `sessions:view`,
+	 * resolved from the same declaration the write sites refuse with.
+	 *
+	 * An affordance, like `messageVerbs`: an absent answer (an older server, or
+	 * the view not back yet) reads as on, and the summarize handler, the scene
+	 * create handler and the lore-entry outlet each refuse independently. So a
+	 * stale value costs a refusal message, never a write the genre forbade.
+	 */
+	const writes = $derived(sessionFrames?.writes)
+	const offersWrite = (write: "lore" | "scenes") => writes?.[write] !== false
+
+	/**
+	 * The session's channels (20 §7; R-C) — off `sessions:view`, `main` first,
+	 * and `[main]` for every session whose genre declares none.
+	 */
+	const sessionChannels = $derived(
+		sessionFrames?.channels ?? [DEFAULT_CHANNEL]
+	)
+	/**
+	 * Which of them the composer is writing on, and the log is showing.
+	 *
+	 * Held here rather than in the composer because BOTH halves answer to it:
+	 * the send carries it to the server, where the row is stored on it and the
+	 * reply is asked for on it, and the log hides what is not on it. One
+	 * answer, in the one place that can hand it to both.
+	 */
+	let composerChannel = $state(DEFAULT_CHANNEL)
+	$effect(() => {
+		// A session whose genre lacks the chosen channel — a preset
+		// changed under an open page, or the view arrived after a guess —
+		// falls back to `main`, which every session has.
+		if (!sessionChannels.includes(composerChannel))
+			composerChannel = DEFAULT_CHANNEL
+	})
+
+	// The mode's shape (19 §1–§2): what capabilities exist for this session at
+	// all. Null — an unknown mode, or a registry that never synced — means
+	// today's behaviour exactly, the F29 posture the creation form shares.
+	let modesList: Sockets.Sessions.Genres.Response["genres"] = $state([])
+	let modeShape = $derived(
+		modesList.find((m) => m.genreId === ((session as any)?.genreId ?? ""))
+			?.shape ?? null
+	)
+	// `composer: 'none'` — a purely trigger-driven mode: the tabs (triggers,
+	// lore, stats) stay; the text input and send affordance go.
+	let composerHidden = $derived(modeShape?.composer === "none")
+	// Read-only (19 §6, ruled): a non-standard mode this build does not
+	// register means the session's history stays readable and nothing starts a
+	// new turn. Requires the modes list to have actually arrived — an
+	// in-flight fetch must not flash the banner over a healthy session.
+	let modeMissing = $derived(
+		modesList.length > 0 &&
+			!!(session as any)?.genreId &&
+			(session as any).genreId !== "core:genre/chat" &&
+			!modesList.some((m) => m.genreId === (session as any).genreId)
+	)
+	// A capability the shape omits (or caps at zero) does not exist for the
+	// session: no persona requirement on send, no character-response mechanics.
+	let personasInMode = $derived(
+		!modeShape ||
+			(!!modeShape.personas && (modeShape.personas.max ?? 1) !== 0)
+	)
+	/**
+	 * Whether a send needs a persona. The persona system existing is not
+	 * the same as one being required: a genre declaring `personas: { min:
+	 * 0 }` — the Guide, where a person asks as themselves — takes bare
+	 * prose (19 §1), which the server has always stored. The standard
+	 * chat keeps its historical requirement whatever its shape says, on
+	 * the same parity footing as the creation form's floor.
+	 */
+	let personaRequiredOnSend = $derived(
+		personasInMode &&
+			(!modeShape ||
+				(session as any)?.genreId == null ||
+				(session as any).genreId === "core:genre/chat" ||
+				(modeShape.personas?.min ?? 0) >= 1)
+	)
+	let charactersInMode = $derived(
+		!modeShape ||
+			(!!modeShape.characters && (modeShape.characters.max ?? 1) !== 0)
+	)
+	/**
+	 * Whether this session runs what its preset says (ruled 2026-09-10).
+	 *
+	 * A binding whose pipeline has gone never stops the turn — the genre's
+	 * default runs — so the only thing standing between that and silence is
+	 * this banner. Sourced from the same verdict the run resolves against, by
+	 * way of `sessions:presetStatus`, so the sentence and the substitution
+	 * cannot disagree.
+	 */
+	let presetStatus: Sockets.Sessions.PresetStatus.Response | undefined =
+		$state()
+	/**
+	 * Dismissed for this view only, deliberately.
+	 *
+	 * Nothing is written down: the condition is still true tomorrow, and a
+	 * dismissal that outlived the tab would let a person hide a session
+	 * running a pipeline nobody chose. Cleared on every session change below,
+	 * because a dismissal is about the banner you just read.
+	 */
+	let presetBannerDismissed = $state(false)
+	let presetStale = $derived(presetStatus?.stale ?? [])
+
+	const handlePresetStatus = (
+		res: Sockets.Sessions.PresetStatus.Response
+	) => {
+		if (res.sessionId !== sessionId) return
+		presetStatus = res
+	}
+
+	/**
+	 * What this viewer may see of the session annex (R57): the server's
+	 * merged view, never the annex — every widget's `annex.v1`, read by the
+	 * page's `sessionAnnex` context.
+	 */
+	let annexView = $state<Record<string, Record<string, unknown>>>({})
+	const handleAnnex = (res: Sockets.Sessions.Annex.Response) => {
+		if (res.sessionId !== sessionId) return
+		const next = res.annex ?? {}
+		// The same view again re-posts nothing to a frame and rebuilds no
+		// widget context.
+		if (JSON.stringify(next) === JSON.stringify(annexView)) return
+		annexView = next
+	}
+	// The viewer's annex view (R57): asked for each session, its key held by
+	// the inbox; the reply and the push every annex write makes land above.
+	$effect(() => {
+		if (!Number.isFinite(sessionId)) return
+		annexView = {}
+		socket.emit("sessions:annex", { sessionId })
+	})
+
+	let lastMessage: SelectSessionMessage | undefined = $derived.by(() => {
+		if (session && session.sessionMessages.length > 0) {
+			return session.sessionMessages[session.sessionMessages.length - 1]
+		}
+		return undefined
+	})
+
+	// The author's newest line — keyed on role, never on a persona (F1): a
+	// persona-less genre's user line has no personaId (`swipeControls.ts`).
+	/**
+	 * The newest line once it has finished — its id and text — or null while
+	 * it streams. A string, so what reads it re-runs when a line lands or is
+	 * edited, never per streamed chunk (`lastMessage` is new on every one).
+	 */
+	const lastSettledMessageKey: string | null = $derived(
+		lastMessage && !lastMessage.isGenerating
+			? `${lastMessage.id}:${lastMessage.content}`
+			: null
+	)
+
+	let lastAuthorMessage: SelectSessionMessage | undefined = $derived(
+		lastAuthorLine(session?.sessionMessages)
+	)
+
+	// Check if any message is currently generating
+	let hasGeneratingMessage: boolean = $derived.by(() => {
+		return (
+			session?.sessionMessages?.some((msg) => msg.isGenerating) || false
+		)
+	})
+
+	/** What the header calls this session's genre; null while the list loads. */
+	let genreName: string | null = $derived(
+		modesList.find((m) => m.genreId === ((session as any)?.genreId ?? ""))
+			?.name ?? null
+	)
+
+	// Check if current user is a guest (not the session owner)
+	let isGuest: boolean = $derived.by(() => {
+		if (!session || !userCtx.user?.id) return false
+		const isGuest = session.userId !== userCtx.user.id
+		console.log("Guest check:", {
+			sessionUserId: session.userId,
+			currentUserId: userCtx.user.id,
+			isGuest
+		})
+		return isGuest
+	})
+
+	// Check if current user has a persona in this session
+	let userHasPersonaInSession: boolean = $derived.by(() => {
+		if (!session?.sessionPersonas || !userCtx.user?.id) return false
+		return session.sessionPersonas.some(
+			(cp) => cp.persona?.userId === userCtx.user?.id
+		)
+	})
+
+	// Determine if we should show the add persona CTA. A mode with no persona
+	// system has nothing to add — the CTA would ask for a thing the shape
+	// says does not exist here.
+	let showAddPersonaCTA: boolean = $derived.by(() => {
+		return isGuest && !userHasPersonaInSession && personasInMode
+	})
+
+	// All of the current user's personas in this session
+	let userPersonasInSession = $derived.by(() => {
+		if (!session?.sessionPersonas || !userCtx.user?.id) return []
+		return session.sessionPersonas.filter(
+			(cp) => cp.persona?.userId === userCtx.user?.id
+		)
+	})
+
+	// Manually selected persona ID — null means auto-select (first in list)
+	let selectedPersonaId = $state<number | null>(null)
+
+	// Reset selection when navigating to a different session — keyed on the
+	// id, not `session`, which a streamed chunk replaces: reading through it
+	// would reset the person's pick on every token of a reply.
+	$effect(() => {
+		const _watchSessionId = loadedSessionId
+		selectedPersonaId = null
+	})
+
+	// Get the current user's active persona in this session
+	let currentUserPersona = $derived.by(() => {
+		if (!userPersonasInSession.length) return undefined
+		if (selectedPersonaId) {
+			const found = userPersonasInSession.find(
+				(cp) => cp.personaId === selectedPersonaId
+			)
+			if (found) return found
+		}
+		return userPersonasInSession[0]
+	})
+
+	function switchPersona(personaId: number) {
+		selectedPersonaId = personaId
+	}
+
+	/** No session yet, or a persona genre with nobody seated as one: a turn needs a persona first. */
+	const needsPersona = $derived.by(
+		() =>
+			!session ||
+			(personasInMode && !session.sessionPersonas?.[0]?.personaId)
+	)
+
+	/**
+	 * What a person's own lines are called (lair re-plan R4): the session's
+	 * override on its row, else the genre's `playerLabel` off the view —
+	 * resolved at render, never stamped, so a rename relabels history.
+	 */
+	let sessionPlayerLabel = $derived(
+		resolvePlayerLabel({
+			declared: sessionFrames?.genrePlayerLabel,
+			stored: storedPlayerLabel(session?.metadata)
+		})
+	)
+
+	/**
+	 * May the viewer edit or control this line — `canActOnMessage`'s rule
+	 * (`server/messages/permissions.ts`), branch for branch; an affordance
+	 * only, the server refuses regardless (`canControlMessageAs`).
+	 */
+	const canControlMessage = (msg: SelectSessionMessage): boolean =>
+		canControlMessageAs(userCtx, isGuest, session, msg)
+
+	/** A person speaking as themselves — named by `personLineOf`. */
+	const personLine = (msg: SelectSessionMessage) =>
+		personLineOf(userCtx, session, sessionPlayerLabel, msg)
+
+	/** Who spoke a line (`messageCharacterOf`): the envoys ride the view payload (U5g). */
+	const getMessageCharacter = (
+		msg: SelectSessionMessage
+	): SelectCharacter | undefined =>
+		messageCharacterOf(session, sessionFrames, msg, personLine)
+
+	/** A face for a turn ref, from the loaded cast (`character:<id>`). */
+	const characterForRef = (
+		ref: string | null | undefined
+	): SelectCharacter | undefined => characterForRefIn(session, ref)
+
+	/** The session's genre id, when it has one. */
+	function sessionGenreId(): string | undefined {
+		const g = (session as any)?.genreId
+		return typeof g === "string" ? g : undefined
+	}
+
+	/** Resolves once an older page has landed (or nothing more is coming). */
+	async function olderPage(): Promise<{
+		rows: MessageV1[]
+		nextCursor?: string
+	}> {
+		if (!session || !pagination?.hasMore) return { rows: [] }
+		const before = new Set(session.sessionMessages.map((m) => m.id))
+		await loadOlderMessages()
+		for (
+			let waited = 0;
+			loadingOlderMessages && waited < 15_000;
+			waited += 100
+		)
+			await new Promise((r) => setTimeout(r, 100))
+		const rows = (session?.sessionMessages ?? []).filter(
+			(m) => !before.has(m.id)
+		)
+		const oldest = session?.sessionMessages.length
+			? Math.min(...session.sessionMessages.map((m) => m.id))
+			: undefined
+		return {
+			rows: rows as unknown as MessageV1[],
+			nextCursor:
+				pagination?.hasMore && oldest != null
+					? String(oldest)
+					: undefined
+		}
+	}
+
+	/**
+	 * One page of this session's lines for ONE widget (`messages` request, D7
+	 * ruling A): asked of the server (`sessions:messagesPage`), matched to its
+	 * reply by `requestId`, and never merged into the page's own window.
+	 */
+	function messagesPage(ask: { beforeId?: number; limit?: number; channel?: string }): Promise<{
+		rows: readonly Record<string, unknown>[]
+		nextCursor?: string
+		error?: string
+	}> {
+		const id = sessionId
+		if (!Number.isFinite(id)) return Promise.resolve({ rows: [], error: "the session is not loaded" })
+		const requestId = `mp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+		return new Promise((resolve) => {
+			let release = () => {}
+			const timer = setTimeout(() => {
+				release()
+				resolve({ rows: [], error: "the page did not arrive in time" })
+			}, 15_000)
+			release = requestWithInterest(
+				"sessions:messagesPage",
+				{ sessionId: id, requestId, ...ask },
+				(res) => {
+					if (res.sessionId !== id || res.requestId !== requestId) return
+					clearTimeout(timer)
+					release()
+					resolve({ rows: res.rows as unknown as Record<string, unknown>[], nextCursor: res.nextCursor, error: res.error })
+				}
+			)
+		})
+	}
+
+	/** The channel lanes under one channel, for one widget (`channel-lanes`), matched to its reply by `requestId`. */
+	function channelLanes(ask: { channel: string }): Promise<{ lanes: ChannelLaneV1[]; error?: string }> {
+		const id = sessionId
+		if (!Number.isFinite(id)) return Promise.resolve({ lanes: [], error: "the session is not loaded" })
+		const requestId = `cl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+		return new Promise((resolve) => {
+			let release = () => {}
+			const timer = setTimeout(() => {
+				release()
+				resolve({ lanes: [], error: "the lanes did not arrive in time" })
+			}, 15_000)
+			release = requestWithInterest("sessions:channelLanes", { sessionId: id, requestId, channel: ask.channel }, (res) => {
+				if (res.sessionId !== id || res.requestId !== requestId) return
+				clearTimeout(timer)
+				release()
+				resolve({ lanes: res.lanes, error: res.error })
+			})
+		})
+	}
+
+	async function loadOlderMessages() {
+		if (
+			loadingOlderMessages ||
+			!pagination?.hasMore ||
+			!session ||
+			session.sessionMessages.length === 0
+		)
+			return
+
+		loadingOlderMessages = true
+
+		const beforeId = Math.min(...session.sessionMessages.map((m) => m.id))
+		socket.emit("sessions:get", { id: sessionId, limit: 25, beforeId })
+
+		// loadingOlderMessages will be set to false in the socket response handler
+	}
+
+	/**
+	 * Landing on the message a link named (`?message=<id>[&block=<blockId>]`,
+	 * `sessionHref` — a notification's link): older pages load until the
+	 * message is in the window, then its row (or the named form in it) is
+	 * centred, ringed once and focused, and the params leave the address so a
+	 * reload or Back does not land again. The log's own pin to its end
+	 * (`sp-scroll`) hears the landing and lets go (`landOn`); scrolling back
+	 * to the end pins it again. A message that is not there (deleted, never
+	 * drawn) leaves the log at its end.
+	 */
+	const messageLanding = $derived(readMessageLanding(page.url.searchParams))
+	const messageLandingStep = $derived.by(() => {
+		if (!messageLanding || !session || session.id !== sessionId) return null
+		return nextLandingStep(
+			messageLanding,
+			session.sessionMessages.map((m) => m.id),
+			{
+				hasOlder: !!pagination?.hasMore,
+				loadingOlder: loadingOlderMessages
+			}
+		)
+	})
+	function dropMessageLanding() {
+		try {
+			replaceState(withoutLanding(page.url), page.state)
+		} catch {
+			// Router not started (cannot happen after a load reply) — the
+			// params stay, and the next load lands again; nothing breaks.
+		}
+	}
+	$effect(() => {
+		const landing = messageLanding
+		const step = messageLandingStep
+		if (!landing || !step || step === "wait") return
+		if (step === "load-older")
+			return void untrack(() => loadOlderMessages())
+		if (step === "give-up") return void untrack(dropMessageLanding)
+		// `seek`: the row is in the window; its element follows a few frames
+		// on (the conversation is drawn by a worker).
+		let frames = 0
+		let raf = requestAnimationFrame(function seek() {
+			const hit = landingTarget(document, landing)
+			if (hit) landOn(hit.el, { focus: hit.focus })
+			if (hit || ++frames >= LANDING_SEEK_FRAMES)
+				untrack(dropMessageLanding)
+			else raf = requestAnimationFrame(seek)
+		})
+		return () => cancelAnimationFrame(raf)
+	})
+
+	function handleSessionsUserTyping(
+		msg: Sockets.Sessions.UserTyping.Response
+	) {
+		if (msg.sessionId !== sessionId) return
+		const myPersonaId =
+			currentUserPersona?.personaId ||
+			session?.sessionPersonas?.[0]?.personaId
+		if (msg.personaId === myPersonaId) return
+		typingPersonas.set(msg.personaId, {
+			name: msg.personaName,
+			lastTypingAt: Date.now()
+		})
+		typingPersonas = new Map(typingPersonas)
+	}
+
+	function handleSessionsAttendance(
+		msg: Sockets.Sessions.Attendance.Response
+	) {
+		if (msg.sessionId !== sessionId) return
+		attendance = msg
+	}
+
+	function handleSessionsGet(msg: Sockets.Sessions.Get.Response) {
+		if (msg.session === null && !loadingOlderMessages) {
+			sessionNotFound = true
+			return
+		}
+		if (msg.session?.id === sessionId) {
+			if (session && loadingOlderMessages && msg.beforeId != null) {
+				// Load-more: prepend older messages (server already deduped via cursor)
+				const existingIds = new Set(
+					session.sessionMessages.map((m) => m.id)
+				)
+				const olderMessages = msg.session.sessionMessages.filter(
+					(m) => !existingIds.has(m.id)
+				)
+				const allMessages = [
+					...olderMessages,
+					...session.sessionMessages
+				]
+				session.sessionMessages = allMessages.sort(
+					(a, b) => a.id - b.id
+				)
+
+				// The log's `sp-scroll` holds the reader's place as the rows land.
+				loadingOlderMessages = false
+			} else {
+				// Initial load or session switch — restore draft only on first load
+				const isFirstLoad = !session
+				session = {
+					...msg.session,
+					sessionMessages: msg.session.sessionMessages.sort(
+						(a, b) => a.id - b.id
+					)
+				}
+				if (isFirstLoad && msg.userDraft) writeDraft(msg.userDraft)
+				loadingOlderMessages = false
+				// Autopopulate panels for any channel already present in the
+				// loaded history (21 §9) — a session reopened with `tasks`
+				// messages shows its Tasks panel without waiting for a new one.
+				for (const m of session.sessionMessages)
+					surfaceManager.activateForChannel((m as any).channel)
+			}
+			pagination = msg.pagination
+			// Auto-scroll is handled by the $effect
+		}
+	}
+
+	function handleSessionMessage(msg: Sockets.SessionMessage.Response) {
+		const currentSession = session
+		if (
+			currentSession != null &&
+			msg.sessionMessage &&
+			msg.sessionMessage.sessionId === sessionId
+		) {
+			const sessionMessage = msg.sessionMessage
+			const existingIndex = currentSession.sessionMessages.findIndex(
+				(m: SelectSessionMessage) => m.id === sessionMessage.id
+			)
+			if (existingIndex !== -1) {
+				// Held before the array is rewritten: the row it REPLACES is
+				// the only thing that says whether this push is a streamed
+				// chunk, an edit or a run ending (`witnessMessage`).
+				const previous = currentSession.sessionMessages[existingIndex]
+				const updatedMessages = [...currentSession.sessionMessages]
+				updatedMessages[existingIndex] = sessionMessage
+				session = {
+					...currentSession,
+					sessionMessages: updatedMessages
+				}
+				// Announced AFTER the state is written, so a widget woken by
+				// the event reads the row the event describes.
+				surfaceManager.witnessMessage(sessionMessage, previous)
+			} else {
+				// Add new message and maintain chronological order
+				const updatedMessages = [
+					...currentSession.sessionMessages,
+					sessionMessage
+				]
+				session = {
+					...currentSession,
+					sessionMessages: updatedMessages.sort((a, b) => a.id - b.id)
+				}
+				// Channel-driven autopopulation (21 §9): a message on a
+				// non-main channel flows in the panel that views that channel.
+				surfaceManager.activateForChannel(
+					(sessionMessage as any).channel
+				)
+				// No previous row: the arrival itself is `message:created`,
+				// which every widget's own feed announces. What this adds is
+				// `generation:start` for a reply that arrives already filling.
+				surfaceManager.witnessMessage(sessionMessage)
+			}
+			// Auto-scroll is handled by the $effect
+		}
+	}
+
+	function handleCharactersUpdate(msg: Sockets.Characters.Update.Response) {
+		const charId = msg.character?.id
+		if (!charId || !session) return
+
+		// Update session characters if the character is in the session
+		const sessionCharacterIndex = session.sessionCharacters.findIndex(
+			(c: SelectSessionCharacter) => c.characterId === charId
+		)
+		if (sessionCharacterIndex !== -1) {
+			const updatedSessionCharacters = [...session.sessionCharacters]
+			updatedSessionCharacters[sessionCharacterIndex] = {
+				...updatedSessionCharacters[sessionCharacterIndex],
+				character: msg.character
+			}
+			session = {
+				...session,
+				sessionCharacters: updatedSessionCharacters
+			}
+		}
+
+		// …and the persona links, which name the same table. The SAME row can
+		// be in the cast and be somebody's persona, so this is a second check
+		// rather than an else.
+		const sessionPersonaIndex = session.sessionPersonas.findIndex(
+			(p: SelectSessionPersona) => p.personaId === charId
+		)
+		if (sessionPersonaIndex !== -1) {
+			const updatedSessionPersonas = [...session.sessionPersonas]
+			updatedSessionPersonas[sessionPersonaIndex] = {
+				...updatedSessionPersonas[sessionPersonaIndex],
+				persona: msg.character
+			}
+			session = { ...session, sessionPersonas: updatedSessionPersonas }
+		}
+	}
+
+	/**
+	 * A media row whose bytes changed while keeping its id — a re-cut
+	 * thumbnail, or a display pointer moved by a cull.
+	 *
+	 * Nothing was written to the character or persona wearing that file, so no
+	 * `characters:update` fires and every avatar on screen keeps the `<img src>`
+	 * it already has. Re-addressing the link's entity is what makes the URL
+	 * differ, which is the only thing a browser's image cache answers to.
+	 */
+	function handleMediaChanged(msg: Sockets.Media.Changed.Response) {
+		if (!session) return
+		let touched = false
+		const sessionCharacters = session.sessionCharacters.map((cc) => {
+			if (!cc.character) return cc
+			const character = withRevisedAvatar(cc.character, msg)
+			if (character === cc.character) return cc
+			touched = true
+			return { ...cc, character }
+		})
+		const sessionPersonas = session.sessionPersonas.map((cp) => {
+			if (!cp.persona) return cp
+			const persona = withRevisedAvatar(cp.persona, msg)
+			if (persona === cp.persona) return cp
+			touched = true
+			return { ...cp, persona }
+		})
+		if (!touched) return
+		session = { ...session, sessionCharacters, sessionPersonas }
+	}
+
+	function handleSessionMessagesDelete(
+		msg: Sockets.SessionMessages.Delete.Response
+	) {
+		if (session) {
+			// The row itself, while the page still holds it: the announcement
+			// below names the channel it was on so a widget that declared
+			// another is not told about it (`witnessMessageDeleted`).
+			const deleted = session.sessionMessages.find(
+				(m: SelectSessionMessage) => m.id === msg.id
+			)
+
+			// Remove the deleted message from the session messages array
+			const filteredMessages = session.sessionMessages.filter(
+				(m: SelectSessionMessage) => m.id !== msg.id
+			)
+
+			// Ensure messages remain sorted chronologically
+			session = {
+				...session,
+				sessionMessages: filteredMessages.sort((a, b) => a.id - b.id)
+			}
+
+			surfaceManager.witnessMessageDeleted(deleted ?? { id: msg.id })
+		}
+	}
+
+	function handleSpriteSetChanged(
+		msg: Sockets.Sessions.SetSpriteSet.Response
+	) {
+		if (msg.sessionId !== sessionId || !session || msg.error) return
+		const next = { ...((session as any).spriteSetOverrides ?? {}) }
+		if (msg.set) next[msg.characterId] = msg.set
+		else delete next[msg.characterId]
+		;(session as any).spriteSetOverrides = next
+	}
+
+	/**
+	 * 🚧 The session's backdrop moved (a pipeline's `set-backdrop`, or a
+	 * person's Change or Clear): fold it into the page's session, which
+	 * every widget's `session` section is narrowed from.
+	 */
+	function handleBackdropChanged(
+		msg: Sockets.Sessions.BackdropChanged.Response
+	) {
+		if (msg.sessionId !== sessionId || !session) return
+		;(session as any).backdropMediaId = msg.backdropMediaId ?? null
+	}
+
+	function handleSessionsGetNarratorName(
+		msg: Sockets.Sessions.GetNarratorName.Response
+	) {
+		if (msg.sessionId !== sessionId) return
+		narratorName = msg.narratorName
+	}
+
+	function handleSessionsModesPage(msg: Sockets.Sessions.Genres.Response) {
+		modesList = msg.genres || []
+	}
+
+	/**
+	 * A long run reporting itself.
+	 *
+	 * Both events land in the store: `runStarted` is the same shape as a
+	 * progress tick, and recording it as one means the card appears the
+	 * instant the run does rather than after the backend's first report —
+	 * which for an image render can be several seconds of a button that looks
+	 * like it did nothing. A start goes through `started`, so what last ended
+	 * in the session yields to the new run whether or not a progress card is
+	 * mounted to say so.
+	 */
+	function handleRunProgress(msg: RunProgress) {
+		if (msg.sessionId != null && msg.sessionId !== sessionId) return
+		runProgress.apply(msg)
+	}
+	function handleRunStarted(msg: RunProgress) {
+		if (msg.sessionId != null && msg.sessionId !== sessionId) return
+		runProgress.started(msg)
+	}
+
+	/** The session view (20 §12) for this session: its frames, envoys, channels and verbs. */
+	function handleSessionsView(res: Sockets.Sessions.View.Response) {
+		if (res.sessionId !== sessionId) return
+		sessionFrames = res
+	}
+
+	/** The session's book, as Summarize just set it. */
+	/**
+	 * The session's own story clock as the server last said it (Chronicle,
+	 * W3): its row's five clock columns, written only when they moved, so a
+	 * read that changed nothing re-derives nothing. What the page's
+	 * Summarize dates by.
+	 */
+	function setStoryClock(own: StoryClockParts | null) {
+		if (!session) return
+		const next = {
+			storyClockYear: own?.year ?? null,
+			storyClockMonth: own?.month ?? null,
+			storyClockDay: own?.month != null ? (own?.day ?? null) : null,
+			storyClockHour: own?.hour ?? null,
+			storyClockMinute: own?.hour != null ? (own?.minute ?? 0) : null
+		}
+		const row = session as unknown as Record<string, unknown>
+		if (
+			(Object.keys(next) as (keyof typeof next)[]).every(
+				(k) => (row[k] ?? null) === next[k]
+			)
+		)
+			return
+		session = { ...session, ...next } as typeof session
+	}
+
+	/** 🚧 The session's book's calendar, as a story clock reading carried it (§15 G9). */
+	function setStoryCalendar(forSessionId: number, calendar: unknown) {
+		const next = readStoryCalendar(calendar ?? null)
+		if (
+			storyCalendar?.sessionId === forSessionId &&
+			JSON.stringify(storyCalendar.calendar) === JSON.stringify(next)
+		)
+			return
+		storyCalendar = { sessionId: forSessionId, calendar: next }
+	}
+
+	function setLorebook(newLorebookId: number) {
+		if (session) {
+			session = {
+				...session,
+				lorebookId: newLorebookId
+			} as typeof session
+		}
+	}
+
+	d.inbox.on("sessions:get", handleSessionsGet)
+	d.inbox.on("sessionMessage", handleSessionMessage)
+	d.inbox.on("sessions:userTyping", handleSessionsUserTyping)
+	d.inbox.on("sessions:attendance", handleSessionsAttendance)
+	d.inbox.on("characters:update", handleCharactersUpdate)
+	d.inbox.on("media:changed", handleMediaChanged)
+	d.inbox.on("sessionMessages:delete", handleSessionMessagesDelete)
+	// A session's sprite-set switch (DESIGN-sprites §2.3): pushed to every
+	// member, so faces redraw in the new set before the character's next line
+	// records it.
+	d.inbox.on("sessions:spriteSetChanged", handleSpriteSetChanged)
+	d.inbox.on("sessions:backdropChanged", handleBackdropChanged)
+	d.inbox.on("sessions:annex", handleAnnex)
+	d.inbox.on("sessions:view", handleSessionsView)
+	d.inbox.on("sessions:genres", handleSessionsModesPage)
+	d.inbox.on("sessions:presetStatus", handlePresetStatus)
+	d.inbox.on("sessions:getNarratorName", handleSessionsGetNarratorName)
+	// The run-progress pushes, SCOPED to this session: every emitter puts
+	// `sessionId` on the payload, so a tab on another session is not sent this
+	// one's ticks — and an image run emits one preview frame per tick. The
+	// handlers' own id check stays as belt and braces.
+	d.inbox.on("pipelines:runStarted", handleRunStarted)
+	d.inbox.on("pipelines:progress", handleRunProgress)
+	// Runs belonging to a session nobody is looking at any more. The server
+	// keeps running them; the card is what goes away.
+	onDestroy(() => runProgress.clearAll())
+
+	return {
+		/** The loaded session; undefined while it loads or after a switch. */
+		get session() {
+			return session
+		},
+		get pagination() {
+			return pagination
+		},
+		get sessionNotFound() {
+			return sessionNotFound
+		},
+		get loadingOlderMessages() {
+			return loadingOlderMessages
+		},
+		/** Other participants' personas typing now, by persona id (client-expired after 10s). */
+		get typingPersonas() {
+			return typingPersonas
+		},
+		/** The server's last word on who of the session's people has it open (W10). */
+		get attendance() {
+			return attendance
+		},
+		get narratorName() {
+			return narratorName
+		},
+		get sessionFrames() {
+			return sessionFrames
+		},
+		get sessionViewFrame() {
+			return sessionViewFrame
+		},
+		get ownVoice() {
+			return ownVoice
+		},
+		get extendRefusal() {
+			return extendRefusal
+		},
+		get messageVerbs() {
+			return messageVerbs
+		},
+		offersWrite,
+		get sessionChannels() {
+			return sessionChannels
+		},
+		get composerChannel() {
+			return composerChannel
+		},
+		set composerChannel(channel: string) {
+			composerChannel = channel
+		},
+		get modesList() {
+			return modesList
+		},
+		get composerHidden() {
+			return composerHidden
+		},
+		get modeMissing() {
+			return modeMissing
+		},
+		get personasInMode() {
+			return personasInMode
+		},
+		get personaRequiredOnSend() {
+			return personaRequiredOnSend
+		},
+		get charactersInMode() {
+			return charactersInMode
+		},
+		get presetStatus() {
+			return presetStatus
+		},
+		get presetStale() {
+			return presetStale
+		},
+		get presetBannerDismissed() {
+			return presetBannerDismissed
+		},
+		set presetBannerDismissed(dismissed: boolean) {
+			presetBannerDismissed = dismissed
+		},
+		get annex() {
+			return annexView
+		},
+		get lastMessage() {
+			return lastMessage
+		},
+		get lastSettledMessageKey() {
+			return lastSettledMessageKey
+		},
+		get lastAuthorMessage() {
+			return lastAuthorMessage
+		},
+		get hasGeneratingMessage() {
+			return hasGeneratingMessage
+		},
+		get genreName() {
+			return genreName
+		},
+		get isGuest() {
+			return isGuest
+		},
+		get showAddPersonaCTA() {
+			return showAddPersonaCTA
+		},
+		get userPersonasInSession() {
+			return userPersonasInSession
+		},
+		get currentUserPersona() {
+			return currentUserPersona
+		},
+		switchPersona,
+		get needsPersona() {
+			return needsPersona
+		},
+		get sessionPlayerLabel() {
+			return sessionPlayerLabel
+		},
+		canControlMessage,
+		personLine,
+		getMessageCharacter,
+		characterForRef,
+		sessionGenreId,
+		olderPage,
+		messagesPage,
+		channelLanes,
+		loadOlderMessages,
+		setLorebook,
+		setStoryClock,
+		setStoryCalendar,
+		/** 🚧 The session's book's calendar (§15 G9); null when free-form or not read yet. */
+		get storyCalendar(): StoryCalendar | null {
+			return storyCalendar?.sessionId === sessionId ? storyCalendar.calendar : null
+		},
+		/** A scene read was refused: the session is not this viewer's to see. */
+		markNotFound() {
+			sessionNotFound = true
+		},
+		/** Another session opened in the page: what the last one loaded goes. */
+		reset() {
+			session = undefined // Clear current session data
+			sessionNotFound = false
+			pagination = undefined
+			loadingOlderMessages = false
+			presetStatus = undefined
+			presetBannerDismissed = false
+		}
+	}
+}
+
+/** The session page's data store (`createSessionPageData`). */
+export type SessionPageData = ReturnType<typeof createSessionPageData>

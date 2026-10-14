@@ -1,5 +1,7 @@
 /**
- * Core's shipped context template, as a row.
+ * Core's shipped context templates, as rows: the story string assemble
+ * renders, and the two transcript templates `render-transcript@1` lays a
+ * scene out with.
  *
  * Insert-only, by seed key — like `seedPipelinePrompts` and
  * `seedVariableTemplates`, and for the same reason: a row a user edited is
@@ -13,9 +15,17 @@
  */
 
 import { and, asc, eq, isNull } from "drizzle-orm"
+import {
+	DEFAULT_TRANSCRIPT_TEMPLATE,
+	LAIR_TRANSCRIPT_TEMPLATE
+} from "@serene-pub/core-catalog"
 import * as schema from "$lib/server/db/schema"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { coreTemplateIdFor } from "$lib/server/pipelines/entities/templateIds"
+import {
+	namesTakenBesides,
+	shippedNameFor
+} from "$lib/server/pipelines/boot/shippedName"
 import {
 	CONTEXT_TEMPLATE_NODE_TYPE,
 	CONTEXT_TEMPLATE_SEED_KEY,
@@ -23,6 +33,66 @@ import {
 	SHIPPED_CONTEXT_TEMPLATE_NAME,
 	poolKeyFor
 } from "$lib/server/pipelines/entities/contextTemplateDefaults"
+
+/** 🚧 The node type a transcript template lays out (live scenes §12.1). Unversioned. */
+export const TRANSCRIPT_TEMPLATE_NODE_TYPE = "core:task/render-transcript"
+
+/** 🚧 Stable identity for core's Default transcript row. */
+export const DEFAULT_TRANSCRIPT_SEED_KEY =
+	"pipeline-context-template:core:transcript-default"
+
+/** 🚧 Stable identity for core's Lair transcript row. */
+export const LAIR_TRANSCRIPT_SEED_KEY =
+	"pipeline-context-template:core:transcript-lair"
+
+/** One row core ships into `pipeline_context_templates`. */
+interface ShippedContextTemplate {
+	seedKey: string
+	/** The node type whose context it renders, unversioned (the pool). */
+	nodeDefinitionId: string
+	name: string
+	source: string
+}
+
+/**
+ * Every row core ships, the story string first.
+ *
+ * The transcript templates are the same strings the summarize-scene specs'
+ * Default presets carry inline (core-catalog `summarizeScene.ts`, the
+ * Lair's `genres/lair/summarizeScene.ts`): a spec's shipped config keeps the
+ * inline value, and these rows are what its picker offers — the Default for
+ * every genre, the Lair's to choose.
+ */
+export const SHIPPED_CONTEXT_TEMPLATES: readonly ShippedContextTemplate[] = [
+	{
+		seedKey: CONTEXT_TEMPLATE_SEED_KEY,
+		nodeDefinitionId: CONTEXT_TEMPLATE_NODE_TYPE,
+		name: SHIPPED_CONTEXT_TEMPLATE_NAME,
+		source: SHIPPED_CONTEXT_TEMPLATE
+	},
+	{
+		seedKey: DEFAULT_TRANSCRIPT_SEED_KEY,
+		nodeDefinitionId: TRANSCRIPT_TEMPLATE_NODE_TYPE,
+		name: "Default transcript",
+		source: DEFAULT_TRANSCRIPT_TEMPLATE
+	},
+	{
+		seedKey: LAIR_TRANSCRIPT_SEED_KEY,
+		nodeDefinitionId: TRANSCRIPT_TEMPLATE_NODE_TYPE,
+		name: "Lair transcript",
+		source: LAIR_TRANSCRIPT_TEMPLATE
+	}
+]
+
+/**
+ * The pool's default row, by seed key, for each pool core ships into. A pool
+ * named here never falls to "oldest immutable row", so the default does not
+ * hang on which row happened to be inserted first.
+ */
+const POOL_DEFAULT_SEED_KEYS: ReadonlyMap<string, string> = new Map([
+	[poolKeyFor(CONTEXT_TEMPLATE_NODE_TYPE), CONTEXT_TEMPLATE_SEED_KEY],
+	[poolKeyFor(TRANSCRIPT_TEMPLATE_NODE_TYPE), DEFAULT_TRANSCRIPT_SEED_KEY]
+])
 
 export interface ContextTemplateSeedResult {
 	created: string[]
@@ -32,7 +102,7 @@ export interface ContextTemplateSeedResult {
 }
 
 /**
- * Write the shipped template, once.
+ * Write the shipped templates, once each.
  *
  * Must run **before** `seedCoreSpecs`: `ensureDefaultConfig` points the
  * assemble node's template slot at a row, and a shipped config pointing at
@@ -47,17 +117,45 @@ export async function seedContextTemplates(
 		present: [],
 		refreshed: []
 	}
+	for (const t of SHIPPED_CONTEXT_TEMPLATES)
+		result[await seedOne(db, t)].push(t.seedKey)
+	return result
+}
 
+async function seedOne(
+	db: Db,
+	t: ShippedContextTemplate
+): Promise<keyof ContextTemplateSeedResult> {
 	const [existing] = await db
 		.select()
 		.from(schema.pipelineContextTemplates)
-		.where(
-			eq(
-				schema.pipelineContextTemplates.seedKey,
-				CONTEXT_TEMPLATE_SEED_KEY
-			)
-		)
+		.where(eq(schema.pipelineContextTemplates.seedKey, t.seedKey))
 		.limit(1)
+
+	// The pool's names (node definition + engine, as the unique index has
+	// them): a person's row may hold the catalog's name, and then the shipped
+	// row yields with "(Built-in)" rather than stopping the boot
+	// (`shippedName.ts`). Asked every boot, so the suffix drops once the name
+	// is free.
+	const poolNames = (await db
+		.select({
+			id: schema.pipelineContextTemplates.id,
+			name: schema.pipelineContextTemplates.name
+		})
+		.from(schema.pipelineContextTemplates)
+		.where(
+			and(
+				eq(
+					schema.pipelineContextTemplates.nodeDefinitionId,
+					poolKeyFor(t.nodeDefinitionId)
+				),
+				eq(schema.pipelineContextTemplates.engine, CORE_TEMPLATE_ENGINE)
+			)
+		)) as Array<{ id: number; name: string }>
+	const name = shippedNameFor(
+		t.name,
+		namesTakenBesides(poolNames, existing?.id ?? null)
+	)
 
 	if (existing) {
 		// Refreshed rather than left alone, for the reason spelled out in
@@ -68,33 +166,33 @@ export async function seedContextTemplates(
 		// Derived from the seed key (R19), and part of the drift check for the
 		// same reason the source is: migration 0143 names the rows that existed
 		// before this column, and this names the ones seeded after it.
-		const templateId = coreTemplateIdFor(CONTEXT_TEMPLATE_SEED_KEY)
+		const templateId = coreTemplateIdFor(t.seedKey)
 		if (
-			existing.source !== SHIPPED_CONTEXT_TEMPLATE ||
-			existing.templateId !== templateId
+			existing.source !== t.source ||
+			existing.templateId !== templateId ||
+			existing.name !== name
 		) {
 			await db
 				.update(schema.pipelineContextTemplates)
 				.set({
-					source: SHIPPED_CONTEXT_TEMPLATE,
+					name,
+					source: t.source,
 					templateId,
 					engine: CORE_TEMPLATE_ENGINE,
 					updatedAt: new Date()
 				})
 				.where(eq(schema.pipelineContextTemplates.id, existing.id))
-			result.refreshed.push(CONTEXT_TEMPLATE_SEED_KEY)
-			return result
+			return "refreshed"
 		}
-		result.present.push(CONTEXT_TEMPLATE_SEED_KEY)
-		return result
+		return "present"
 	}
 
 	await db.insert(schema.pipelineContextTemplates).values({
-		nodeDefinitionId: poolKeyFor(CONTEXT_TEMPLATE_NODE_TYPE),
-		seedKey: CONTEXT_TEMPLATE_SEED_KEY,
-		templateId: coreTemplateIdFor(CONTEXT_TEMPLATE_SEED_KEY),
-		name: SHIPPED_CONTEXT_TEMPLATE_NAME,
-		source: SHIPPED_CONTEXT_TEMPLATE,
+		nodeDefinitionId: poolKeyFor(t.nodeDefinitionId),
+		seedKey: t.seedKey,
+		templateId: coreTemplateIdFor(t.seedKey),
+		name,
+		source: t.source,
 		// Explicit rather than NULL: a template carries its engine on the value
 		// (12 §2a), so a stored row keeps what it was authored in even if
 		// core's default moves later.
@@ -104,9 +202,7 @@ export async function seedContextTemplates(
 		// "shipped" group rather than under whichever panel happened to boot.
 		createdForSpecId: null
 	})
-	result.created.push(CONTEXT_TEMPLATE_SEED_KEY)
-
-	return result
+	return "created"
 }
 
 /**
@@ -140,19 +236,12 @@ export async function defaultContextTemplateFor(
 ): Promise<number | null> {
 	const pool = poolKeyFor(nodeDefinitionId)
 
-	if (
-		pool === poolKeyFor(CONTEXT_TEMPLATE_NODE_TYPE) &&
-		engine === CORE_TEMPLATE_ENGINE
-	) {
+	const seedKey = POOL_DEFAULT_SEED_KEYS.get(pool)
+	if (seedKey && engine === CORE_TEMPLATE_ENGINE) {
 		const [row] = await db
 			.select()
 			.from(schema.pipelineContextTemplates)
-			.where(
-				eq(
-					schema.pipelineContextTemplates.seedKey,
-					CONTEXT_TEMPLATE_SEED_KEY
-				)
-			)
+			.where(eq(schema.pipelineContextTemplates.seedKey, seedKey))
 			.limit(1)
 		if (row) return row.id
 	}

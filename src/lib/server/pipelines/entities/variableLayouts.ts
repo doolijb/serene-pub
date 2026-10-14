@@ -15,6 +15,31 @@
  * and `codeDefault` produce identical output, so the two cannot drift apart in
  * a way that only shows up in someone's prompt.
  *
+ * ## The constant is the output; the source is laid out to be read
+ *
+ * Until 2026-10-13 these were one-liners. They are now one tag or one JSON key
+ * per line, indented by nesting, and Handlebars' own whitespace rules keep that
+ * layout out of the prompt:
+ *
+ * - A block tag alone on its line (`{{#each …}}`, `{{/if}}`) takes the whole
+ *   line with it, line break included — Handlebars' *standalone* rule. It is
+ *   what lets the indented JSON layouts read like the JSON they produce.
+ * - Where the output has no line break at all — minified JSON, the date — a
+ *   `~` faces every line break in the source: `{{~#each x~}}` eats the
+ *   whitespace on both sides, `{{~else}}` the break before it, `}~}}` the one
+ *   after a value. A line that begins with `{{~` continues the previous one.
+ * - A tag that shares its line with content keeps its neighbours' whitespace,
+ *   which is how `{{#unless @last}},{{/unless}}` stays glued to its brace.
+ *
+ * Two traps the layouts are written around. A standalone *open* tag also eats
+ * the line break that starts its body, so a body that must begin with one
+ * (` "key": …` under a `{`) puts the break at the END of the previous line
+ * instead. And a standalone *close* tag eats the line break after it — the
+ * wrapper's `\n` before its closing fence included — so no source ends with a
+ * close tag alone on its last line: the last line is content (`]`, `}`) or the
+ * one-line `{{~else}}[]{{/if}}`. The parity test is what proves each of these
+ * holds; the layout convention is why they hold.
+ *
  * ## Why JSON is the default and stays the default
  *
  * The obvious reading of "characters are stringified JSON in a prompt" is that
@@ -43,6 +68,9 @@ import {
 	renderTemplate,
 	type RenderRun
 } from "$lib/server/pipelines/prompt/renderers"
+import { strokeList } from "$lib/shared/utils/strokeList"
+import { getVariable } from "@serene-pub/sdk"
+import { STROKES_ENABLED } from "$lib/shared/characters/strokesFlag"
 
 /**
  * A heading and delimiters, applied to a body.
@@ -145,6 +173,28 @@ const asIndentedJson = (v: unknown): string => {
 }
 
 /**
+ * The characters floor: `asIndentedJson` of the cards, with a stroked card's
+ * `description` / `personality` as the list of its strokes and its `strokes`
+ * array left out — what the shipped "JSON" row renders, through the same
+ * `strokeList`. A card with no `strokes` key is passed through untouched, so
+ * every prompt written before strokes is byte for byte what it was.
+ */
+const asCharacterCards = (v: unknown): string => {
+	if (!Array.isArray(v)) return asIndentedJson(v)
+	return asIndentedJson(
+		v.map((card) => {
+			if (!card || typeof card !== "object" || !("strokes" in card))
+				return card
+			const { strokes, ...rest } = card as Record<string, unknown>
+			for (const kind of ["description", "personality"] as const)
+				if (rest[kind] !== undefined)
+					rest[kind] = strokeList(strokes, kind) ?? rest[kind]
+			return rest
+		})
+	)
+}
+
+/**
  * `JSON.stringify(x)` — no indent, which is what Assemble's two produced.
  *
  * Empty becomes `""` rather than `undefined`, and the difference is worth being
@@ -199,6 +249,29 @@ const asRecalledLines = (v: unknown): string => {
  * comma *after* each field needs to know whether anything follows it, which
  * Handlebars cannot answer without listing the combinations.
  *
+ * ## The shape on the page
+ *
+ * ```
+ * {{#if characters.length}}
+ * [
+ * {{#each characters}}
+ *   {
+ *     "name": {{{jsonValue name}}}
+ *     {{~#if (ne nickname undefined)}},
+ *     "nickname": {{{jsonValue nickname}}}{{/if}}
+ *   }{{#unless @last}},{{/unless}}
+ * {{/each}}
+ * ]
+ * {{~else}}[]{{/if}}
+ * ```
+ *
+ * Each optional key is a two-line unit: the guard opens with `{{~#if`, which
+ * joins it to the line before, writes the comma, and the key sits on the next
+ * line exactly as it will in the output. The structural tags stand alone on
+ * their lines and vanish with them. `{{~else}}[]{{/if}}` is one line on
+ * purpose: a close tag alone on the last line would also eat the line break
+ * the wrapper puts before its closing fence (see the module header).
+ *
  * ## What this does not do
  *
  * It renders the keys the variable *declares* and no others. A node that puts
@@ -208,20 +281,37 @@ const asRecalledLines = (v: unknown): string => {
  * parity test rather than left to be discovered. `{{{json characters 2}}}` is
  * still a valid layout for anyone who wants the old passthrough.
  */
-const objectList = (key: string, fields: readonly string[]): string => {
+const objectList = (
+	key: string,
+	fields: readonly string[],
+	/**
+	 * A field's value expression in place of its bare path — what the
+	 * characters layout uses to render a stroke list where the card has one.
+	 * The presence guard stays on the field itself.
+	 */
+	valueOf: Readonly<Record<string, string>> = {}
+): string => {
 	const [first, ...rest] = fields
-	const optional = rest
-		.map(
-			(f) =>
-				`{{#if (ne ${path(f)} undefined)}},\n    ${json(f)}: {{{jsonValue ${path(f)}${f.includes(" ") ? " 4" : ""}}}}{{/if}}`
-		)
-		.join("")
-	return (
-		`{{#if ${key}.length}}[\n` +
-		`{{#each ${key}}}  {\n    ${json(first!)}: {{{jsonValue ${path(first!)}}}}${optional}\n` +
-		`  }{{#unless @last}},{{/unless}}\n` +
-		`{{/each}}]{{else}}[]{{/if}}`
-	)
+	// A value that can be nested (a stroke list, a keyed field) renders its own
+	// lines at the depth of a key two levels in — indent 4. A bare path to a
+	// string never needs one.
+	const value = (f: string): string =>
+		`{{{jsonValue ${valueOf[f] ?? path(f)}${valueOf[f] || f.includes(" ") ? " 4" : ""}}}}`
+	return [
+		`{{#if ${key}.length}}`,
+		`[`,
+		`{{#each ${key}}}`,
+		`  {`,
+		`    ${json(first!)}: {{{jsonValue ${path(first!)}}}}`,
+		...rest.flatMap((f) => [
+			`    {{~#if (ne ${path(f)} undefined)}},`,
+			`    ${json(f)}: ${value(f)}{{/if}}`
+		]),
+		`  }{{#unless @last}},{{/unless}}`,
+		`{{/each}}`,
+		`]`,
+		`{{~else}}[]{{/if}}`
+	].join("\n")
 }
 
 /** A key with a space is not a bare Handlebars path; `this.[a key]` is. */
@@ -242,33 +332,72 @@ const json = (field: string): string => JSON.stringify(field)
  * prose, change the separator, or drop the fences, none of which was reachable
  * while the whole object went to one stringify call.
  *
- * ## The literal brace, and why the template looks like that
+ * ## The shape on the page
  *
- * `{` immediately followed by `{{#each` is a parse error — Handlebars reads the
- * three braces as a triple-stash. Minified JSON has no whitespace to separate
- * them, so the template writes a space and then removes it with Handlebars'
- * own whitespace control (`{{~#each`). That is a real feature doing exactly
- * what it is for, rather than a helper invented to dodge the lexer.
+ * ```
+ * {
+ *   {{~#each worldLore~}}
+ *     {{{jsonValue @key indent=0}}}:{{{jsonValue this indent=0}}}{{#unless @last}},{{/unless}}
+ *   {{~/each~}}
+ * }
+ * ```
+ *
+ * The output is minified, so a `~` eats every line break here and the
+ * indentation reaches nothing. The break after the opening brace also does a
+ * second job: `{` directly followed by `{{#each` is a parse error, because
+ * Handlebars reads the three braces as a triple-stash. (The one-line form kept
+ * them apart with a space and a `~`.)
+ *
+ * No `{{#if}}` around it: `{{#each}}` over nothing renders nothing, so an
+ * absent, null or empty record all come out as `{}` — exactly what the guarded
+ * form produced, with one less thing to read.
  */
 const recordEntries = (key: string): string =>
-	`{{#if ${key}}}{ {{~#each ${key}}}{{{jsonValue @key indent=0}}}:` +
-	`{{{jsonValue this indent=0}}}{{#unless @last}},{{/unless}}{{/each~}} }` +
-	`{{else}}{}{{/if}}`
+	[
+		`{`,
+		`  {{~#each ${key}~}}`,
+		`    {{{jsonValue @key indent=0}}}:{{{jsonValue this indent=0}}}{{#unless @last}},{{/unless}}`,
+		`  {{~/each~}}`,
+		`}`
+	].join("\n")
 
 /**
  * A list of `{ title, castMember?, content }`, entry by entry — minified JSON,
  * byte for byte `JSON.stringify` of the list.
  *
- * The object's closing brace follows the `content` value, and a triple-stash
- * followed by a brace reads to the lexer as a raw-block close; the tilde form
- * (`{{~{…}~}} }`) strips the space that keeps the two apart, as
- * `recordEntries` does for its own brace.
+ * ```
+ * [
+ *   {{~#each characterLore~}}
+ *     {"title":{{{jsonValue title indent=0}}}
+ *     {{~#if (ne castMember undefined)~}}
+ *       ,"castMember":{{{jsonValue castMember indent=0}}}
+ *     {{~/if~}}
+ *     ,"content":{{{jsonValue content indent=0}~}}
+ *     }{{#unless @last}},{{/unless}}
+ *   {{~/each~}}
+ * ]
+ * ```
+ *
+ * Minified like `recordEntries`, so a `~` faces every line break. The object's
+ * closing brace has a line of its own for the lexer's sake: a triple-stash
+ * directly followed by a brace (`}}}}`) reads as a raw-block close, so the
+ * value's tag closes with `}~}}` and the tilde eats the break that keeps the
+ * two apart. No `{{#if}}`, for the reason `recordEntries` gives: an empty,
+ * absent or null list is `[]` either way.
  */
 const anchoredEntries = (key: string): string =>
-	`{{#if ${key}.length}}[{{#each ${key}}}{"title":{{{jsonValue title indent=0}}}` +
-	`{{#if (ne castMember undefined)}},"castMember":{{{jsonValue castMember indent=0}}}{{/if}}` +
-	`,"content":{{~{jsonValue content indent=0}~}} }{{#unless @last}},{{/unless}}{{/each}}]` +
-	`{{else}}[]{{/if}}`
+	[
+		`[`,
+		`  {{~#each ${key}~}}`,
+		`    {"title":{{{jsonValue title indent=0}}}`,
+		`    {{~#if (ne castMember undefined)~}}`,
+		`      ,"castMember":{{{jsonValue castMember indent=0}}}`,
+		`    {{~/if~}}`,
+		`    ,"content":{{{jsonValue content indent=0}~}}`,
+		`    }{{#unless @last}},{{/unless}}`,
+		`  {{~/each~}}`,
+		`]`
+	].join("\n")
 
 /**
  * `JSON.stringify(x, null, 1)`, which is what the narrative graph produced.
@@ -286,46 +415,65 @@ const asGraphJson = (v: unknown): string => {
 /**
  * An object with a known, fixed set of optional sections.
  *
- * The narrative graph's three sections are each conditional, and none of them
- * is guaranteed present — so the "first key always exists" trick that makes
+ * The narrative graph's sections are each conditional, and none of them is
+ * guaranteed present — so the "first key always exists" trick that makes
  * `objectList` readable does not apply here. Instead each section emits a
  * trailing comma when *something after it* is present, which is knowable
  * because the section list is fixed and short. That is the whole reason this is
  * a different function rather than a parameter on the other one.
+ *
+ * ## The shape on the page
+ *
+ * ```
+ * {{#if (or relationshipsKnown.howOthersRegardYou relationshipsKnown.legendaryFigures)}}
+ * {
+ * {{#with relationshipsKnown}}
+ * {{#if howOthersRegardYou}}
+ *  "howOthersRegardYou": {{{jsonValue howOthersRegardYou indent=1 offset=1}}}{{#if legendaryFigures}},{{/if}}
+ * {{/if}}
+ * {{#if legendaryFigures}}
+ *  "legendaryFigures": {{{jsonValue legendaryFigures indent=1 offset=1}}}
+ * {{/if}}
+ * {{/with}}
+ * }
+ * {{~else}}{}{{/if}}
+ * ```
+ *
+ * Every tag stands alone on its line, so the only whitespace that reaches the
+ * prompt is the one-space indent in front of each key and the line break that
+ * ENDS its line. The break is at the end rather than the start because a
+ * standalone open tag eats the first break of its body: a section written as
+ * "`{{#if}}`, newline, key" would lose the newline that separates it from the
+ * brace above. The `(or …)` at the top spells out full paths because it sits
+ * outside the `{{#with}}` — and it has to, so that the `{}` for an empty object
+ * can share the last line with the close tag (see the module header).
  */
 const optionalSections = (key: string, sections: readonly string[]): string => {
 	// `(or a (or b c))` — the helper takes two, so more than two nests.
-	const any = sections
-		.slice(0, -1)
-		.reduceRight((acc, name) => `(or ${name} ${acc})`, sections.at(-1)!)
+	const anyOf = (names: readonly string[]): string =>
+		names
+			.slice(0, -1)
+			.reduceRight((acc, name) => `(or ${name} ${acc})`, names.at(-1)!)
 
-	const body = sections
-		.map((name, i) => {
-			const after = sections.slice(i + 1)
-			const follows = after.length
-				? after
-						.slice(0, -1)
-						.reduceRight(
-							(acc, n) => `(or ${n} ${acc})`,
-							after.at(-1)!
-						)
-				: null
-			const comma = follows ? `{{#if ${follows}}},{{/if}}` : ""
-			// The first section's `{{~#if` eats the space that separates the
-			// opening brace from it — see `recordEntries` for why the space has
-			// to be there at all.
-			const open = i === 0 ? "{{~#if " : "{{#if "
-			return (
-				`${open}${name}}}\n ${json(name)}: ` +
-				`{{{jsonValue ${name} indent=1 offset=1}}}${comma}{{/if}}`
-			)
-		})
-		.join("")
+	const lines = sections.flatMap((name, i) => {
+		const after = sections.slice(i + 1)
+		const comma = after.length ? `{{#if ${anyOf(after)}}},{{/if}}` : ""
+		return [
+			`{{#if ${name}}}`,
+			` ${json(name)}: {{{jsonValue ${name} indent=1 offset=1}}}${comma}`,
+			`{{/if}}`
+		]
+	})
 
-	return (
-		`{{#if ${key}}}{{#with ${key}}}{{#if ${any}}}{ ${body}\n` +
-		`}{{else}}{}{{/if}}{{/with}}{{/if}}`
-	)
+	return [
+		`{{#if ${anyOf(sections.map((s) => `${key}.${s}`))}}}`,
+		`{`,
+		`{{#with ${key}}}`,
+		...lines,
+		`{{/with}}`,
+		`}`,
+		`{{~else}}{}{{/if}}`
+	].join("\n")
 }
 
 /** `Title:` above a ` ```json ` fence — what the cast and lore blobs sat in. */
@@ -402,13 +550,30 @@ const VARIABLES: VariableDefinition[] = [
 			// declares, in the order `compileCharacter` builds the card —
 			// `JSON.stringify` writes keys in insertion order, so the order
 			// here is a parity constant and not a preference.
-			source: objectList("characters", [
-				"name",
-				"nickname",
-				"description",
-				"personality"
-			]),
-			render: asIndentedJson,
+			//
+			// A card painted in strokes (DESIGN-card-strokes A.4) renders
+			// `description` / `personality` as the LIST of its strokes —
+			// `"Eyes": "green"` items for labelled ones — rather than the
+			// joined string: facts kept apart, which is why the card is JSON.
+			// Same keys, same order; a card with no strokes of a kind renders
+			// that field's string exactly as before. The card's `strokes`
+			// array itself is not rendered here — a template may address it.
+			//
+			// Strokes paused (`STROKES_ENABLED` off): the pre-strokes layout
+			// and floor, byte for byte — `{{{jsonValue description}}}`.
+			source: objectList(
+				"characters",
+				["name", "nickname", "description", "personality"],
+				STROKES_ENABLED
+					? {
+							description:
+								'(or (strokeList strokes "description") description)',
+							personality:
+								'(or (strokeList strokes "personality") personality)'
+						}
+					: {}
+			),
+			render: STROKES_ENABLED ? asCharacterCards : asIndentedJson,
 			explicit: true
 		},
 		wrapper: {
@@ -490,9 +655,10 @@ const VARIABLES: VariableDefinition[] = [
 	// ── Assemble's own ──────────────────────────────────────────────────
 	//
 	// Minified, unlike the cast blobs — `JSON.stringify(obj)` with no indent
-	// argument, which is what these two were. Do not "tidy" them to match the
-	// others: the whitespace is prompt content, and the legacy engines produced
-	// exactly this.
+	// argument, which is what these two were. Do not "tidy" the OUTPUT to match
+	// the others: its whitespace is prompt content, and the legacy engines
+	// produced exactly this. The source is one entry per line with a `~` at
+	// every line break, so the reader gets the lines and the prompt does not.
 	{
 		variableId: "core:var/world-lore@1",
 		key: "worldLore",
@@ -564,9 +730,16 @@ const VARIABLES: VariableDefinition[] = [
 		band: true,
 		content: {
 			name: "Lines",
+			// One line per recalled line, with a line break between them and
+			// none after the last. The `{{#unless @last}}` holds the break: it
+			// opens at the end of the text, so the break inside it is content.
+			// (`{{#unless @first}}` with the break on its own line would render
+			// nothing — a tag alone on a line takes that line break with it.)
 			source:
-				"{{#each recalledLines}}{{#unless @first}}\n{{/unless}}" +
-				"Earlier (turn {{{turn}}}) — {{{speaker}}}: {{{text}}}{{/each}}",
+				"{{#each recalledLines}}\n" +
+				"Earlier (turn {{{turn}}}) — {{{speaker}}}: {{{text}}}{{#unless @last}}\n" +
+				"{{/unless}}\n" +
+				"{{/each}}",
 			render: asRecalledLines,
 			explicit: true
 		}
@@ -655,13 +828,20 @@ const VARIABLES: VariableDefinition[] = [
 			// wins when present, and a stored clock's time of day follows the
 			// date; a free-form book with no clock sets neither, so its output
 			// is byte-identical to what it always was.
+			//
+			// One part per line; the output has no line breaks, so a `~` faces
+			// each one. Triple stashes throughout: a declared calendar's label
+			// is free text, and the double stash this started with turned an
+			// apostrophe in it into `&#x27;` — the floor never escaped.
 			source:
-				"{{#if currentDate.label}}{{currentDate.label}}{{else}}" +
-				"{{currentDate.year}}" +
-				"{{#if (isSet currentDate.month)}}-{{pad currentDate.month 2}}{{/if}}" +
-				"{{#if (isSet currentDate.day)}}-{{pad currentDate.day 2}}{{/if}}" +
-				"{{#if (isSet currentDate.hour)}} {{pad currentDate.hour 2}}:{{pad currentDate.minute 2}}{{/if}}" +
-				"{{/if}}",
+				"{{#if currentDate.label~}}\n" +
+				"  {{{currentDate.label}}}\n" +
+				"{{~else~}}\n" +
+				"  {{{currentDate.year}}}\n" +
+				"  {{~#if (isSet currentDate.month)}}-{{{pad currentDate.month 2}}}{{/if}}\n" +
+				"  {{~#if (isSet currentDate.day)}}-{{{pad currentDate.day 2}}}{{/if}}\n" +
+				"  {{~#if (isSet currentDate.hour)}} {{{pad currentDate.hour 2}}}:{{{pad currentDate.minute 2}}}{{/if}}\n" +
+				"{{~/if}}",
 			render: asCurrentDate,
 			// Explicit: this source names the fields it renders, so the parity
 			// test has to feed it dates rather than strings. Without the flag
@@ -681,6 +861,18 @@ const VARIABLES: VariableDefinition[] = [
 ]
 
 const definitionByKey = new Map(VARIABLES.map((v) => [v.key, v]))
+
+/**
+ * The same definitions, by **what they render** (owner ruling 2026-10-13).
+ *
+ * A key is a local name; a variable id is what the value is. A plugin node
+ * may render `characterLore` as a variable of its own, and a spec may say
+ * that Assemble's `characterLore` means one (`renders` on the node), so the
+ * absence rule and the floor are looked up by the variable the key resolved
+ * to — never by the key string, which would hand core's character-lore rules
+ * to a value of some other shape.
+ */
+const definitionByVariable = new Map(VARIABLES.map((v) => [v.variableId, v]))
 
 /** Every row core seeds, default first within each variable. */
 export const SHIPPED_VARIABLE_TEMPLATES: ShippedVariableTemplate[] =
@@ -720,6 +912,18 @@ export const SHIPPED_VARIABLE_TEMPLATES: ShippedVariableTemplate[] =
 export const shippedByKey = new Map(
 	SHIPPED_VARIABLE_TEMPLATES.filter((t) => t.isDefault).map((t) => [t.key, t])
 )
+
+/** The row a fresh install selects for a variable, and the floor for it. */
+export const shippedByVariable = new Map(
+	SHIPPED_VARIABLE_TEMPLATES.filter((t) => t.isDefault).map((t) => [
+		t.variableId,
+		t
+	])
+)
+
+/** Whether core ships the hand-written layouts for this variable. */
+export const isShippedVariable = (variableId: string | undefined): boolean =>
+	variableId !== undefined && definitionByVariable.has(variableId)
 
 /**
  * The keys core ships a layout for that are **declared bands** — exposed by
@@ -774,13 +978,90 @@ export const seedKeyFor = (t: {
  * is NOT NULL now, so every path that builds one of these has a real engine to
  * hand; requiring it here is what makes a path that *doesn't* fail to compile
  * rather than fail silently at render time.
+ *
+ * `variableId` is **what the key renders** (owner ruling 2026-10-13): the
+ * variable the slot declares for the key, or the one the spec's `renders`
+ * names for it. The pipeline layer always sets it (`applyPipelineLayer`), even
+ * when no row resolved, so the render can take the floor and the absence rule
+ * from the right variable. Absent only where a caller builds layouts by hand —
+ * a test, a fixture — and then the key is read as core's variable of that
+ * name, which is what it has always meant.
  */
 export type ResolvedLayouts = Record<
 	string,
-	{ engine: string; source?: string } | undefined
+	| {
+			variableId?: string
+			engine: string
+			source?: string
+			/** The row's display name, for the receipt. Absent with no row. */
+			name?: string
+			/** Whose row it is, for the receipt (`LayoutOrigin`). */
+			origin?: LayoutOrigin
+	  }
+	| undefined
 >
 
+/**
+ * Whose layout row rendered a key: one Serene Pub ships, one a package ships
+ * (for its own variable or, ★4, for someone else's), or one somebody on this
+ * instance wrote.
+ */
+export type LayoutOrigin = "shipped" | "package" | "own"
+
+/**
+ * What one key rendered through, as the receipt says it (owner ruling
+ * 2026-10-13, P5): the variable the key meant, and the row — or `null` when
+ * no row's source arrived and the variable's floor rendered it.
+ */
+export interface LayoutUse {
+	key: string
+	variableId: string | null
+	layout: string | null
+	origin: LayoutOrigin | null
+}
+
+/** The receipt line for one key. */
+export function layoutUseOf(
+	layouts: ResolvedLayouts | undefined,
+	key: string
+): LayoutUse {
+	const chosen = layouts?.[key]
+	const row = chosen?.source ? chosen : undefined
+	return {
+		key,
+		variableId: variableOfKey(layouts, key) ?? null,
+		// A row with no name is still a row, never the floor.
+		layout: row ? (row.name ?? "unnamed layout") : null,
+		origin: row ? (row.origin ?? null) : null
+	}
+}
+
+/**
+ * The variable a key renders as, in this render: the one the slot resolved,
+ * else core's variable of that key, else nothing known.
+ */
+export const variableOfKey = (
+	layouts: ResolvedLayouts | undefined,
+	key: string
+): string | undefined =>
+	layouts?.[key]?.variableId ?? definitionByKey.get(key)?.variableId
+
 export class VariableLayoutError extends Error {}
+
+/**
+ * The name a layout reads its value under: the key, when the variable's scope
+ * has it — every core variable, and every declaration the SDK accepts — else
+ * the variable's one root. A layout is written against the variable's scope
+ * (that is what its lint and its automatic `{{{json <root>}}}` source use), so
+ * a single-root variable bound under some other key still finds its value.
+ */
+function scopeRootFor(variableId: string | undefined, key: string): string {
+	if (!variableId) return key
+	const scope = getVariable(variableId)?.scope
+	if (!scope || Object.prototype.hasOwnProperty.call(scope, key)) return key
+	const roots = Object.keys(scope)
+	return roots.length === 1 ? roots[0]! : key
+}
 
 /**
  * Render one variable through whichever layout resolved for it.
@@ -809,7 +1090,11 @@ export async function renderVariable(
 	 */
 	run?: RenderRun
 ): Promise<string> {
-	const def = definitionByKey.get(key)
+	// What the key IS in this render — the slot's variable, or the spec's
+	// `renders` for it — never the key string's core meaning. A plugin
+	// variable under a core key gets its own floor and no core absence rule.
+	const variableId = variableOfKey(layouts, key)
+	const def = variableId ? definitionByVariable.get(variableId) : undefined
 
 	// Absence, decided in code and before any layout runs. Through 0.5 the
 	// heading and fence sat inside the context template's `{{#if}}`, so a
@@ -820,8 +1105,13 @@ export async function renderVariable(
 	// always rendered — and a user editing their own layout could delete the
 	// guard and get a heading above nothing without ever meaning to.
 	if (def && def.content.render(value) === "") return ""
+	// A variable core ships nothing for has no hand-written absence rule, and
+	// gets the one the docs promise for every value: nothing in it renders
+	// nothing, heading included — so a plugin's titled layout never writes its
+	// heading above an absent band.
+	if (!def && value == null) return ""
 
-	const shipped = shippedByKey.get(key)
+	const shipped = variableId ? shippedByVariable.get(variableId) : undefined
 	// A key core ships nothing for is a plugin's band or a variable with an
 	// automatic layout (`objectVariableLayouts.ts`). An object there floors to
 	// that automatic layout's own output — minified JSON — and never to
@@ -839,7 +1129,7 @@ export async function renderVariable(
 	try {
 		return await renderTemplate(chosen.engine, {
 			template: chosen.source,
-			variables: { [key]: value },
+			variables: { [scopeRootFor(variableId, key)]: value },
 			runId: run?.runId,
 			user: run?.user
 		})

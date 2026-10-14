@@ -4,7 +4,7 @@
  *
  * The HOST resolves the line: a session's line is its own presences plus each
  * ancestor's that begin at or before the fork cut (`presencesOnLine`, the one
- * filter the member page, the World bar and the Lives lens read through), so
+ * filter the member page, the roster popover and the Lives lens read through), so
  * no node ever sees another line's spans. What it hands back is the rows and
  * the moment the session reads at; judging a moment is the reader's
  * (`core:task/eligibility@1`, through `holdsAt`).

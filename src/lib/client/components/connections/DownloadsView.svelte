@@ -2,6 +2,10 @@
 	/**
 	 * Everything this pub is fetching, in ONE list.
 	 *
+	 * Never a place of its own (design 2026-10-09 C.1): it is what the index's
+	 * downloads tray expands into, and a managed or local ONNX connection's
+	 * Arriving tab.
+	 *
 	 * Concept ruling R4 (2026-09-17). Before it, a download was only visible on
 	 * the screen that started it: a GGUF pulled from the KoboldCPP manager left
 	 * no trace on the Connections index, an Ollama pull left none on either,
@@ -36,8 +40,9 @@
 	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
+	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { useConnections } from "$lib/client/contexts/connections.svelte"
 	import {
 		downloads,
 		type DownloadItem,
@@ -48,8 +53,12 @@
 	import type { CapabilityDefaultRef } from "./modelSystemDefaults"
 
 	interface Props {
-		onBack: () => void
-		/** Inside another view that owns the header: no nav header here. */
+		/** Where Back goes when the list stands alone under its own header. */
+		onBack?: () => void
+		/**
+		 * Inside something that owns the header — the index's downloads tray,
+		 * a managed connection's Arriving tab: no nav header here.
+		 */
 		embedded?: boolean
 	}
 	let { onBack, embedded = false }: Props = $props()
@@ -79,25 +88,18 @@
 	 * The connections, for ONE question: is a finished KoboldCPP file a TEXT
 	 * model, and is it already the chat default?
 	 *
-	 * The feeds carry no kind, so "Use for chat" is offered only once the
-	 * finished file has appeared as a model on the managed TEXT connection —
-	 * which is the sync saying what the file is. A button that has not
+	 * The feeds carry no kind, so "Use in Reply" is offered only once the
+	 * finished file has appeared as a model on the managed connection AND
+	 * that model says `text-gen` — the sync plus the model's modality saying
+	 * what the file is. A button that has not
 	 * appeared yet is the safe failure direction; one offered over an image
 	 * checkpoint is not.
 	 */
-	let connectionsList = $state<Sockets.Connections.List.Row[]>([])
-	function handleConnectionsList(msg: Sockets.Connections.List.Response) {
-		connectionsList = msg.connectionsList ?? []
-		downloads.setOnnx(connectionsList)
-	}
-	$effect(() =>
-		declareInterest<"connections:list">(
-			"connections:list",
-			handleConnectionsList
-		)
-	)
+	const conns = useConnections()
+	const connectionsList = $derived(conns.list)
+	$effect(() => downloads.setOnnx(connectionsList))
 	$effect(() => {
-		socket.emit("connections:list", {})
+		conns.requestList()
 	})
 
 	const items = $derived(downloads.items)
@@ -106,13 +108,15 @@
 	)
 	const finished = $derived(downloads.finished)
 	const failed = $derived(downloads.failed)
+	const cancelled = $derived(downloads.cancelled)
 	const empty = $derived(!items.length)
 
 	const TILE: Record<DownloadSource, string> = {
 		koboldcpp: "Cpu",
 		"koboldcpp-binary": "Box",
 		ollama: "Server",
-		onnx: "HardDrive"
+		onnx: "HardDrive",
+		matting: "HardDrive"
 	}
 	function tileIcon(source: DownloadSource) {
 		return ((Icons as any)[TILE[source]] as any) ?? Icons.Download
@@ -145,8 +149,11 @@
 		const filename = item.id.slice("koboldcpp:".length)
 		for (const connection of connectionsList) {
 			if (connection.type !== CONNECTION_TYPE.KOBOLDCPP_MANAGED) continue
+			// The ONE managed row holds text, image and embeddings models
+			// alike, so "it synced" does not say "it is a text model" — the
+			// model's own modality does. Unset ("Not sure") offers nothing.
 			const model = (connection.models ?? []).find(
-				(m) => m.model === filename
+				(m) => m.model === filename && m.modality === "text-gen"
 			)
 			if (model && connection.id != null)
 				return { connectionId: connection.id, model, filename }
@@ -167,7 +174,7 @@
 	}
 </script>
 
-<div class="flex h-full min-h-0 flex-col gap-3 p-1">
+<div class="flex h-full min-h-0 flex-col gap-3">
 	{#if !embedded}
 		<PanelNavHeader
 			title="Downloads"
@@ -178,7 +185,8 @@
 				{
 					label: "Clear finished",
 					icon: Icons.Eraser,
-					disabled: !finished.length && !failed.length,
+					disabled:
+						!finished.length && !failed.length && !cancelled.length,
 					onSelect: () => downloads.clearFinished()
 				}
 			]}
@@ -187,8 +195,8 @@
 
 	{#if empty}
 		<!-- One sentence. Nothing is arriving, which is not a problem to
-		     solve, so there is no icon and no button (STYLE-GUIDE §6.7). -->
-		<p class="text-surface-600-400 text-sm">Nothing is downloading.</p>
+		     solve, so there is no button (STYLE-GUIDE §6.7). -->
+		<EmptyState icon={Icons.Download} message="Nothing is downloading." />
 	{:else}
 		<div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pb-2">
 			{#if inFlight.length}
@@ -236,6 +244,8 @@
 									</span>
 								</span>
 							</span>
+							<!-- The background remover's cancel stops the run
+							     waiting on it too: that run's cut-out fails. -->
 							<button
 								type="button"
 								class="btn btn-sm hover:preset-tonal-surface text-surface-600-400 shrink-0 text-xs"
@@ -291,9 +301,9 @@
 									type="button"
 									class="btn btn-sm preset-tonal-surface shrink-0 text-xs"
 									onclick={() => useForChat(chat.filename)}
-									aria-label={`Use ${item.name} for chat`}
+									aria-label={`Use ${item.name} in Reply`}
 								>
-									Use for chat
+									Use in Reply
 								</button>
 							{/if}
 						</div>
@@ -335,6 +345,46 @@
 				</section>
 			{/if}
 
+			{#if cancelled.length}
+				<!-- Stopped on purpose: neutral, not the failure colour, and no
+				     action — the file never arrived. -->
+				<section class="flex flex-col gap-1.5">
+					<span class="text-surface-600-400 text-xs">
+						Cancelled · {cancelled.length}
+					</span>
+					{#each cancelled as item (item.id)}
+						{@const Tile = tileIcon(item.source)}
+						<div class="flex min-h-11 items-center gap-2">
+							<span
+								class="preset-tonal-surface grid size-8 shrink-0 place-items-center rounded-lg"
+								aria-hidden="true"
+							>
+								<Tile size={16} />
+							</span>
+							<span class="min-w-0 flex-1">
+								<span class="flex min-w-0 items-center gap-1.5">
+									<span
+										class="min-w-0 truncate text-[15px] font-medium"
+									>
+										{item.name}
+									</span>
+									<span
+										class="preset-tonal-surface shrink-0 rounded-full px-1.5 py-0.5 text-[11px]"
+									>
+										Cancelled
+									</span>
+								</span>
+								<span
+									class="text-surface-600-400 block truncate text-xs"
+								>
+									{item.destinationLabel}
+								</span>
+							</span>
+						</div>
+					{/each}
+				</section>
+			{/if}
+
 			<p class="text-surface-600-400 shrink-0 text-xs">
 				One list for every destination. Cancel stops after the current
 				file; nothing is deleted for you.
@@ -342,4 +392,3 @@
 		</div>
 	{/if}
 </div>
-

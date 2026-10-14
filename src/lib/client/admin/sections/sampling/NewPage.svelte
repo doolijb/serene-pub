@@ -192,7 +192,7 @@
 			label="Name"
 			required
 			error={nameError}
-			help="What the Sampling view, Defaults and pipeline settings call it. Unique within its modality."
+			help="What the Models view, Defaults and pipeline settings call it. Unique within its modality."
 		>
 			<input
 				id="new-sampling-name"

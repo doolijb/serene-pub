@@ -30,7 +30,7 @@ import {
 import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
 import HistoryListActions from "./sections/HistoryListActions.svelte"
 import CastDuplicatesPanel from "./cast/CastDuplicatesPanel.svelte"
-import SessionWorkflowTab from "$lib/client/components/sessionPage/SessionWorkflowTab.svelte"
+import { createPageAsks } from "$lib/client/components/sessionPage/pageAsks"
 import SessionRetrievalPreview from "$lib/client/components/pipelines/workspace/SessionRetrievalPreview.svelte"
 
 type Listener = (payload: any) => void
@@ -161,74 +161,66 @@ describe("the lorebook's Next date", () => {
 	})
 })
 
-describe("the session page's Start new history entry", () => {
-	function place(onOpenEntry: (book: number, id: number) => void) {
-		render(SessionWorkflowTab, {
-			lorebookId: BOOK,
-			branchId: null,
-			sceneList: [],
-			onOpenEntry
+describe("Chronicle's Start new history entry (the session page's ask, W3)", () => {
+	/** The page's asks, as the session page builds them — its socket, an inbox it does not need here. */
+	const pageAsks = () =>
+		createPageAsks({
+			socket: client as never,
+			inbox: { on: () => () => {} } as never,
+			sessionId: () => 1
 		})
-		client.dispatch("entries:list", {
-			lorebookId: BOOK,
-			typeId: HISTORY_TYPE_ID,
-			entryList: [historyRow(1, 3)]
-		})
-		flushSync()
-	}
 
-	test("the lorebook's Next date (here or in another tab) never navigates this page", async () => {
-		const onOpenEntry = vi.fn()
-		place(onOpenEntry)
+	test("the lorebook's Next date (here or in another tab) settles nothing here; its own reply does, once", async () => {
+		const asks = pageAsks()
+		let made: number | null = null
+		const press = asks.startNextEntry({ lorebookId: BOOK, id: 1, branchId: null })
+		void press.then((id) => (made = id))
+		await settle()
+		const ask = sent("entries:iterateNext")[0]!.payload
+		expect(ask).toMatchObject({ id: 1, typeId: HISTORY_TYPE_ID, branchId: null })
 
 		client.dispatch("entries:iterateNext", {
 			entry: historyRow(2, 4),
 			requestId: "the-lorebook-pool"
 		})
 		await settle()
-		expect(onOpenEntry).not.toHaveBeenCalled()
-		// …but the row joins the list: it is now the latest.
-		expect(document.body.textContent).toContain("4")
-	})
+		expect(made).toBeNull()
 
-	test("its own press opens the entry it made, once", async () => {
-		const onOpenEntry = vi.fn()
-		place(onOpenEntry)
-		const press = document.querySelector<HTMLButtonElement>(
-			'button[title="Start new history entry"]'
-		)!
-		press.click()
-		await settle()
-		const ask = sent("entries:iterateNext")[0]!.payload
 		client.dispatch("entries:iterateNext", {
 			entry: historyRow(5, 4),
 			requestId: ask.requestId
 		})
 		await settle()
-		expect(onOpenEntry).toHaveBeenCalledTimes(1)
-		expect(onOpenEntry).toHaveBeenCalledWith(BOOK, 5)
+		expect(made).toBe(5)
+		asks.drop("done")
 	})
 
-	test("a refusal stops the spinner (it spun forever before)", async () => {
-		place(vi.fn())
-		const press = () =>
-			document.querySelector<HTMLButtonElement>(
-				'button[title="Start new history entry"]'
-			)!
-		press().click()
+	test("a refusal answers its own press only, in the server's words", async () => {
+		const asks = pageAsks()
+		let refused: string | null = null
+		void asks
+			.startNextEntry({ lorebookId: BOOK, id: 1, branchId: 9 })
+			.catch((e: Error) => (refused = e.message))
 		await settle()
-		expect(press().disabled).toBe(true)
 		const ask = sent("entries:iterateNext")[0]!.payload
+		expect(ask.branchId).toBe(9)
+		client.dispatch("entries:iterateNext:error", {
+			error: "Not this one.",
+			requestId: "someone-else"
+		})
+		await settle()
+		expect(refused).toBeNull()
 		client.dispatch("entries:iterateNext:error", {
 			error: "The next entry could not be made.",
 			requestId: ask.requestId
 		})
 		await settle()
-		expect(press().disabled).toBe(false)
+		expect(refused).toBe("The next entry could not be made.")
+		asks.drop("done")
 	})
 })
 
-describe("What would fire now", () => {
+describe("Preview lore for my draft", () => {
 	test("an answer to another panel's press (the entry's Test) is not shown here", async () => {
 		render(SessionRetrievalPreview, {
 			sessionId: 9,
@@ -237,7 +229,7 @@ describe("What would fire now", () => {
 			disabledReason: null
 		})
 		const ask = [...document.querySelectorAll("button")].find((b) =>
-			b.textContent?.includes("What would fire now")
+			b.textContent?.includes("Preview lore for my draft")
 		)!
 		ask.click()
 		await settle()

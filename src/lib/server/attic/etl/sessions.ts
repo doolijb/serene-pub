@@ -9,6 +9,8 @@
  *     the attic and selects the migrated configuration for the session;
  *   · its reply strategy as a column — the wiring rebinds the turn-order
  *     strategy for the session when it was not the default (D8);
+ *   · its sampling config as a column — the wiring writes it as the session's
+ *     sampling pick, its pipeline panel row on each text `generate` step;
  *   · each character's visibility — one **character detail** setting for the
  *     whole cast now, the most verbose of the chat's seats (D7).
  *
@@ -100,7 +102,6 @@ export async function restoreSessions(ctx: RestoreContext): Promise<void> {
 				annex: {},
 				lorebookId: c.lorebookId,
 				lorebookBranchId: null,
-				samplingConfigId: mapped(ctx, "sampling_configs", c.samplingConfigId),
 				drafts: c.drafts
 			}
 		}),

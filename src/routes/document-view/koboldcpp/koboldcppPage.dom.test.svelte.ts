@@ -138,14 +138,14 @@ describe("Document View › KoboldCPP › embedding models", () => {
 			"mystery.gguf"
 		])
 		const embeddings = listUnder("Embedding models")
-		expect(button(embeddings, "Use for chat")).toBeUndefined()
+		expect(button(embeddings, "Use in Reply")).toBeUndefined()
 		expect(button(embeddings, "Load")).toBeUndefined()
-		expect(button(embeddings, "Use for embeddings")).toBeDefined()
+		expect(button(embeddings, "Use in Embeddings")).toBeDefined()
 	})
 
-	test("Use for embeddings asks for the pair, prices the move, then stars it", async () => {
+	test("Use in Embeddings asks for the pair, prices the move, then stars it", async () => {
 		render()
-		button(listUnder("Embedding models"), "Use for embeddings")!.click()
+		button(listUnder("Embedding models"), "Use in Embeddings")!.click()
 		expect(emitted).toContainEqual([
 			"koboldcpp:connectEmbeddingModel",
 			{ filename: "nomic.gguf" }
@@ -181,7 +181,7 @@ describe("Document View › KoboldCPP › embedding models", () => {
 
 	test("a refusal is said on the page", async () => {
 		render()
-		button(listUnder("Embedding models"), "Use for embeddings")!.click()
+		button(listUnder("Embedding models"), "Use in Embeddings")!.click()
 		listeners.get("koboldcpp:connectEmbeddingModel:error")!({
 			error: "That model file is no longer on disk"
 		})
@@ -209,7 +209,7 @@ describe("Document View › KoboldCPP › embedding models", () => {
 		flushSync()
 		const inUse = button(
 			listUnder("Embedding models"),
-			"In use for embeddings"
+			"In the Embeddings loadout"
 		)
 		expect(inUse?.disabled).toBe(true)
 	})
@@ -229,6 +229,80 @@ describe("Document View › KoboldCPP › embedding models", () => {
 					{ filename: "llama.gguf", kind: "embeddings" }
 				]
 			]
+		)
+	})
+})
+
+/**
+ * Off is not a dead end (less-confusing J1): the page turns its own manager
+ * on with the Add menu's press (`enableManager`), the flag and, when there is
+ * none, the connection, instead of sending the person to Pub settings first.
+ */
+describe("Document View › KoboldCPP › while it is off", () => {
+	function renderOff(settings: Record<string, unknown> = {}) {
+		const host = document.createElement("div")
+		document.body.append(host)
+		app = mount(Page, {
+			target: host,
+			context: new Map<string, unknown>([
+				["userCtx", { user: { id: 1, isAdmin: true } }],
+				[
+					"koboldCppSettingsCtx",
+					{ settings: { koboldCppManagerEnabled: false } }
+				],
+				["systemSettingsCtx", { settings, capabilityDefaults: {} }]
+			])
+		})
+		flushSync()
+	}
+	const turnOn = () =>
+		button(document.body, "Turn on KoboldCPP, run by Serene Pub")
+
+	test("never sends the person to settings", () => {
+		renderOff()
+		expect(document.body.textContent).not.toContain("System settings")
+		expect(document.body.textContent).not.toContain("Pub settings")
+	})
+
+	test("waits for the connection list, then switches on and adds the connection", () => {
+		renderOff()
+		expect(turnOn()?.disabled).toBe(true)
+		listeners.get("connections:list")!({ connectionsList: [] })
+		flushSync()
+		turnOn()!.click()
+		flushSync()
+		expect(
+			emitted.find(
+				([e]) => e === "systemSettings:updateKoboldCppManagerEnabled"
+			)?.[1]
+		).toEqual({ enabled: true })
+		const create = emitted.find(([e]) => e === "connections:create")
+		expect(create?.[1].connection.type).toBe("koboldcpp_managed")
+	})
+
+	test("adds no second connection when one is there", () => {
+		renderOff()
+		listeners.get("connections:list")!({
+			connectionsList: [
+				{ id: 4, name: "KoboldCPP", type: "koboldcpp_managed" }
+			]
+		})
+		flushSync()
+		turnOn()!.click()
+		flushSync()
+		expect(emitted.some(([e]) => e === "connections:create")).toBe(false)
+		expect(
+			emitted.some(
+				([e]) => e === "systemSettings:updateKoboldCppManagerEnabled"
+			)
+		).toBe(true)
+	})
+
+	test("offers no switch in the Android app", () => {
+		renderOff({ isAndroidWrapper: true })
+		expect(turnOn()).toBeUndefined()
+		expect(document.body.textContent).toContain(
+			"not available in the Android app"
 		)
 	})
 })

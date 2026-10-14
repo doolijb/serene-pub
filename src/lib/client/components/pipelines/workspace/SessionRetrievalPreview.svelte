@@ -149,7 +149,7 @@
 	}
 </script>
 
-<section class="flex flex-col gap-2" aria-label="What would fire now">
+<section class="flex flex-col gap-2" aria-label="Preview lore for my draft">
 	<div class="flex flex-wrap items-center gap-2">
 		<button
 			type="button"
@@ -159,7 +159,7 @@
 			title={disabledReason ?? "Compile the next turn and show what lore it pulls in"}
 		>
 			<Icons.Sparkles size={14} aria-hidden="true" />
-			{loading ? "Checking…" : "What would fire now"}
+			{loading ? "Checking…" : "Preview lore for my draft"}
 		</button>
 		{#if disabledReason}
 			<span class="text-surface-600-400 text-xs">{disabledReason}</span>
@@ -181,7 +181,7 @@
 	<RetrievalExplanation
 		{explanation}
 		{loading}
-		title="What would fire now"
+		title="Lore for my draft"
 		caption="The lore this message would pull in if you sent it, and what you can do about it."
 	/>
 </section>

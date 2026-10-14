@@ -19,7 +19,9 @@ import {
 	REMOTE_FACE_PX
 } from "./remoteFace"
 
-const PAGE = resolve(__dirname, "../../../../routes/sessions/[id]/+page.svelte")
+/** The session page's dossier: built in its projections, its faces made in its envelope sections. */
+const PROJECTIONS = resolve(__dirname, "sessionPageProjections.ts")
+const ENVELOPE = resolve(__dirname, "envelopeSections.svelte.ts")
 /** Where the core message skins size their avatar box (`--sp-av`, `--sp-portrait`). */
 const SKINS = [
 	resolve(__dirname, "../../../shared/widgets/corePresets.ts"),
@@ -253,16 +255,20 @@ describe("how a refused face is drawn", () => {
 
 describe("the session page", () => {
 	test("hands the conversation only faces its box takes: every dossier face and sprite, keyed on `landed`", () => {
-		const src = readFileSync(PAGE, "utf8")
-		expect(src).toMatch(
+		expect(readFileSync(ENVELOPE, "utf8")).toMatch(
 			/import\s*\{[^}]*\bcreateRemoteFaces\b[^}]*\}\s*from\s*"\$lib\/client\/components\/sessionPage\/remoteFace"/
 		)
-		const start = src.indexOf("let conversationDossier")
-		const end = src.indexOf("setContext(SESSION_DOSSIER_KEY", start)
+		const src = readFileSync(PROJECTIONS, "utf8")
+		const start = src.indexOf("export function projectConversationDossier")
+		const end = src.length
 		expect(start).toBeGreaterThan(-1)
 		expect(end).toBeGreaterThan(start)
 		const builder = src.slice(start, end)
-		expect(builder).toMatch(/\bface:\s*remoteFaces\.face\(\s*avatarSrc\(/)
+		// The face is the cast's retold one over the card's avatar (plan
+		// cast-retold-fields), both inside the one wrapper.
+		expect(builder).toMatch(
+			/\bface:\s*remoteFaces\.face\(\s*\(m\.characterId[\s\S]*?castFaceOf\([\s\S]*?\?\?\s*avatarSrc\(who\)\s*\)/
+		)
 		expect(builder).toMatch(/\bsprite:\s*remoteFaces\.face\(\s*spriteSrc\(/)
 		// Every face-shaped key of the dossier goes through it — none raw.
 		expect(builder).not.toMatch(/\b(face|sprite):\s*(avatarSrc|spriteSrc)\(/)
@@ -271,7 +277,7 @@ describe("the session page", () => {
 	})
 
 	test("the line cache's key moves when the view's envoys do: an envoy line never keeps a stale name or face", () => {
-		const src = readFileSync(PAGE, "utf8")
+		const src = readFileSync(PROJECTIONS, "utf8")
 		const start = src.indexOf("const castKey = [")
 		const end = src.indexOf('].join("|")', start)
 		expect(start).toBeGreaterThan(-1)

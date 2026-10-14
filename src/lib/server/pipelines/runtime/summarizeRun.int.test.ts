@@ -57,7 +57,8 @@ class FakeStepAdapter implements FakeTextAdapter {
 	private system: string
 	private user: string
 	constructor(p: any) {
-		this.system = p?.promptConfig?.systemPrompt ?? ""
+		// `dispatchStep` hands the system prompt over as `systemPrompt`.
+		this.system = p?.systemPrompt ?? p?.promptConfig?.systemPrompt ?? ""
 		this.user = p?.session?.sessionMessages?.[0]?.content ?? ""
 	}
 	abort() {}
@@ -405,5 +406,90 @@ describe("a summarize run names a message's files", () => {
 		expect(calls[0]!.userPrompt).toContain(
 			"[image: gate.png — a rusted iron gate]"
 		)
+	}, 60_000)
+
+	/**
+	 * 🚧 A genre's own summarize-scene (live scenes §13–§14), end to end: the
+	 * range read (`summarize-source@2`), the story rows' files
+	 * (`history-attachments@1`), the transcript template with the request's
+	 * `scene` in its preamble (`render-transcript@1`), batches of text
+	 * (`batch-messages@2`), and the drafting row placing each with
+	 * `{{batch}}` (`summarize-batch@1`'s text path).
+	 */
+	it("a genre's summarize-scene drafts from its transcript, files named after their line", async () => {
+		const { PNG } = await import("pngjs")
+		const img = new PNG({ width: 4, height: 4 })
+		for (let i = 0; i < img.data.length; i++) img.data[i] = (i * 11) % 256
+		const { insertLegacy, appendParts } = await import(
+			"$lib/server/messages/store"
+		)
+		const { createMedia } = await import("$lib/server/media")
+		const { mediaPartFor } = await import(
+			"$lib/server/attachments/partData"
+		)
+		const row: any = await insertLegacy(
+			db as any,
+			{
+				sessionId,
+				role: "user",
+				content: "Look at this.",
+				isGenerating: false
+			} as any
+		)
+		const created = await createMedia(db as any, {
+			userId,
+			sessionId,
+			bytes: PNG.sync.write(img),
+			filename: "map.png"
+		})
+		await appendParts(db as any, row.id, [
+			mediaPartFor(created.file, { alt: "a map of the tunnels" })
+		])
+		const ids = (
+			await db
+				.select({ id: schema.sessionMessages.id })
+				.from(schema.sessionMessages)
+		)
+			.map((r) => r.id)
+			.sort((x, y) => x - y)
+
+		const { runSpec } = await import(
+			"$lib/server/pipelines/runtime/runTurn"
+		)
+		const { CHAT_SUMMARIZE_SCENE_SPEC_ID } = await import(
+			"@serene-pub/core-catalog"
+		)
+		calls.length = 0
+		const receipt = await runSpec({
+			db,
+			sessionId,
+			userId,
+			specId: CHAT_SUMMARIZE_SCENE_SPEC_ID,
+			input: {
+				scope: { sessionId },
+				request: {
+					channel: "main",
+					openedAt: ids[0],
+					closedAt: row.id,
+					scene: { name: "Under the Gate" }
+				}
+			},
+			preview: { atNode: "save" },
+			skipReceipt: true
+		})
+		expect(receipt.haltNodeKey, receipt.haltReason).toBe("save")
+		// No cast extraction on a genre spec (on ice, 2026-09-08): the
+		// scenes socket reads `cast` and finds nothing, which it tolerates.
+		expect(receipt.nodes.some((n: any) => n.nodeKey === "cast")).toBe(false)
+
+		const draft = calls[0]!.systemPrompt
+		// The drafting row's `{{batch}}` is the transcript, verbatim.
+		expect(draft).not.toContain("{{batch}}")
+		expect(draft).toContain("Scene: Under the Gate")
+		expect(draft).toContain("Mira: The gate was sealed with old iron.")
+		expect(draft).toContain(
+			"Look at this.\n[image: map.png — a map of the tunnels]"
+		)
+		expect(calls[0]!.userPrompt).toContain("<content>")
 	}, 60_000)
 })

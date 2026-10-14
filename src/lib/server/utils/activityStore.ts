@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid"
 import { messageWithoutQueryText, withoutQueryText } from "$lib/server/db/errors"
 import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
+import type { SceneSummaryStatus } from "$lib/server/db/schema"
 import { sameLineAndMoment } from "$lib/shared/lorebooks/loreRoute"
 import {
 	ComposedError,
@@ -157,6 +158,14 @@ export type SceneSummarizeActivity = {
 	 * survives minimize, Activity-panel cancel, and reconnect.
 	 */
 	ephemeralOnCancel?: boolean
+	/**
+	 * 🚧 The scene's `summary_status` from before this run (PROPOSAL-live-
+	 * scenes §15 G8) — what a review discarded unapplied puts back, as a
+	 * cancel does. A re-run from the review window inherits it from the run
+	 * it supersedes, so a discard after a regenerate restores the status
+	 * from before the FIRST run, never the `review` the first run left.
+	 */
+	summaryStatusBefore?: SceneSummaryStatus
 	status: "running" | "review" | "error"
 	phase?: "drafting" | "synthesizing" | "naming" | "extracting"
 	batch?: number
@@ -416,6 +425,7 @@ class ActivityStore {
 			lorebookLabel?: string
 			historyEntryId?: number
 			ephemeralOnCancel?: boolean
+			summaryStatusBefore?: SceneSummaryStatus
 		},
 		abortController?: AbortController
 	): string {
@@ -663,6 +673,25 @@ class ActivityStore {
 	}
 
 	/**
+	 * 🚧 Set once at wiring time, like the cleanup above (PROPOSAL-live-scenes
+	 * §15 G8): invoked when a scene review goes away UNAPPLIED — discarded in
+	 * the Scene summary window, dismissed from the Activity panel, or lapsed
+	 * — with the scene's status from before the run, which the callee puts
+	 * back while the scene still reads `review`. Never on `acted` (the save
+	 * already set `done`) nor on `superseded` (a re-run took the review over).
+	 */
+	private sceneReviewDiscarded?: (
+		sceneId: number,
+		statusBefore: SceneSummaryStatus
+	) => void | Promise<void>
+
+	setSceneReviewDiscarded(
+		fn: (sceneId: number, statusBefore: SceneSummaryStatus) => void | Promise<void>
+	) {
+		this.sceneReviewDiscarded = fn
+	}
+
+	/**
 	 * Take an activity away, and clear the notification it raised with `how`.
 	 * Defaults to `dismissed` — the card going away unapplied, which is what
 	 * every caller but a save, a supersede or a lapse means.
@@ -684,6 +713,20 @@ class ActivityStore {
 		) {
 			void Promise.resolve(
 				this.ephemeralSceneCleanup(existing.sceneId, existing.userId)
+			).catch(() => {})
+		}
+		if (
+			existing.kind === "scene_summarize" &&
+			existing.status === "review" &&
+			how !== "acted" &&
+			how !== "superseded" &&
+			this.sceneReviewDiscarded
+		) {
+			void Promise.resolve(
+				this.sceneReviewDiscarded(
+					existing.sceneId,
+					existing.summaryStatusBefore ?? "none"
+				)
 			).catch(() => {})
 		}
 		for (const [fn, { userId, isAdmin }] of this.emitters) {

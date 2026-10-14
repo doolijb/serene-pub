@@ -15,8 +15,12 @@
 		/** `attachToSession` is meaningless unless the switch was offered. */
 		onConfirm: (details: { name: string; attachToSession: boolean }) => void
 		onCancel: () => void
-		/** Closes this and opens the import flow instead. */
-		onImportInstead: () => void
+		/**
+		 * Closes this and opens the import flow instead. Absent where no
+		 * import flow stands behind the dialog (the start screen's lorebook
+		 * step): the offer is not drawn.
+		 */
+		onImportInstead?: () => void
 		/** Hidden rather than disabled when the switch would do nothing. */
 		canOfferAttachToSession?: boolean
 		/** What the session the book would be read into is called. */
@@ -176,17 +180,19 @@
 						</Switch>
 					{/if}
 
-					<button
-						class="btn btn-sm preset-tonal-surface"
-						type="button"
-						onclick={onImportInstead}
-					>
-						Start from an import instead
-					</button>
+					{#if onImportInstead}
+						<button
+							class="btn btn-sm preset-tonal-surface"
+							type="button"
+							onclick={onImportInstead}
+						>
+							Start from an import instead
+						</button>
+					{/if}
 				</article>
 				<footer class="flex justify-end gap-4">
 					<button
-						class="btn preset-filled-surface-500"
+						class="btn preset-tonal-surface"
 						onclick={onCancel}
 						type="button"
 					>

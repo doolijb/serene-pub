@@ -88,7 +88,7 @@
 			{lineName} beside main
 		</h3>
 		<button
-			class="btn btn-sm preset-filled-surface-400-600 shrink-0"
+			class="btn btn-sm preset-tonal-surface shrink-0"
 			type="button"
 			onclick={onClose}
 		>

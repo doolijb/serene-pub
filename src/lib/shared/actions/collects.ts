@@ -6,7 +6,12 @@
  * declaration itself.
  */
 
-import { i18nText, type ActionDecl, type I18n } from "@serene-pub/sdk"
+import {
+	i18nText,
+	type ActionDecl,
+	type I18n,
+	type StoryTimeUnit
+} from "@serene-pub/sdk"
 
 export interface ListedCollects {
 	text?: {
@@ -29,6 +34,14 @@ export interface ListedCollects {
 		 */
 		overwrites?: string
 	}
+	/**
+	 * 🚧 The clock step's stepper (live scenes §6): its label, and what it
+	 * opens at — `by` above 0, the unit (default one hour forward).
+	 */
+	clockStep?: {
+		label: string
+		default: { by: number; unit: StoryTimeUnit }
+	}
 }
 
 const text = (v: I18n | undefined): string | undefined => i18nText(v)
@@ -37,7 +50,8 @@ const text = (v: I18n | undefined): string | undefined => i18nText(v)
 export function listedCollects(
 	collects: ActionDecl["collects"] | undefined
 ): ListedCollects | undefined {
-	if (!collects || (!collects.text && !collects.recipients)) return undefined
+	if (!collects || (!collects.text && !collects.recipients && !collects.clockStep))
+		return undefined
 	const out: ListedCollects = {}
 	if (collects.text) {
 		const placeholder = text(collects.text.placeholder)
@@ -47,6 +61,13 @@ export function listedCollects(
 			label: text(collects.text.label) ?? "",
 			...(placeholder ? { placeholder } : {}),
 			...(ifEmpty ? { ifEmpty } : {})
+		}
+	}
+	if (collects.clockStep) {
+		const d = collects.clockStep.default
+		out.clockStep = {
+			label: text(collects.clockStep.label) ?? "",
+			default: d && d.by > 0 ? { by: d.by, unit: d.unit } : { by: 1, unit: "hours" }
 		}
 	}
 	if (collects.recipients) {

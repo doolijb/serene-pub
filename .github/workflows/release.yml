@@ -158,7 +158,7 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 45
         env:
-            NODE_OPTIONS: "--max-old-space-size=4096"
+            NODE_OPTIONS: "--max-old-space-size=8192"
         steps:
             - name: Checkout repository
               uses: actions/checkout@v4

@@ -25,6 +25,7 @@
 	} from "$lib/shared/validation/passphrase"
 	import * as Icons from "@lucide/svelte"
 	import LanguagePicker from "$lib/client/components/inputs/LanguagePicker.svelte"
+	import { docsHref } from "$lib/shared/utils/docsHref"
 	import { languageDefinition } from "$lib/shared/i18n/languages"
 	import LoreWriteModePicker from "$lib/client/components/inputs/LoreWriteModePicker.svelte"
 	import {
@@ -450,8 +451,18 @@
 		/>
 		<p id="user-language-note" class="text-surface-700-300 mt-3 text-sm">
 			{t(
-				"Translations are produced automatically and are only as good as the translation service; text a translation has not reached yet stays in English. Your language also decides which retrieval features apply — see the Languages documentation page."
+				"Translations are produced automatically and are only as good as the translation service; text a translation has not reached yet stays in English."
 			)}
+			{t("Some search features depend on your language.")}
+			<a
+				class="anchor"
+				href={docsHref(
+					"languages",
+					"for-power-users-language-and-lore-search"
+				)}
+			>
+				{t("How your language affects search")}
+			</a>
 		</p>
 	</div>
 
@@ -547,7 +558,7 @@
 			{#if accessibilityModeStore.persisted}
 				<button
 					type="button"
-					class="btn preset-tonal-error w-fit max-w-full whitespace-normal"
+					class="btn preset-tonal-surface w-fit max-w-full whitespace-normal"
 					onclick={exitDocumentView}
 				>
 					<Icons.X size={16} />

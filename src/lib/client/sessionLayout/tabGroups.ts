@@ -10,8 +10,36 @@
  * to its top-left member's own cell — always a real, non-overlapping slot — at
  * the cost of not reclaiming the members' scattered space. Adjacent groups (the
  * common case) keep their tight bounding box.
+ *
+ * Its input is an arrangement's items, or a zone as the SDK's one layout
+ * reader draws it (`resolveDrawn` → `DrawnZone`): the drawn instances' cells
+ * are read back into arranged items here (`arrangedItemsOf`), the one seam
+ * between the two vocabularies, so a renderer groups what is DRAWN rather
+ * than re-reading the stored slots.
  */
-import type { ArrangedItem } from "@serene-pub/sdk"
+import type { ArrangedItem, DrawnZone } from "@serene-pub/sdk"
+
+/**
+ * A drawn zone's instances as arranged items — the ones it draws from cells
+ * (an arrangement), in its reading order. A zone drawn from a list has no
+ * cells and so no items. Each item carries its one drawn `pinned` only when it
+ * is `false`, as the arrangement writes it: absent means pinned.
+ */
+export function arrangedItemsOf(zone: DrawnZone): ArrangedItem[] {
+	return zone.instances.flatMap((i) =>
+		i.cells
+			? [
+					{
+						id: i.instanceId,
+						...i.cells,
+						...(i.anchor ? { anchor: i.anchor } : {}),
+						...(i.group ? { group: i.group } : {}),
+						...(i.pinned ? {} : { pinned: false })
+					}
+				]
+			: []
+	)
+}
 
 export type RenderUnit = {
 	key: string
@@ -30,7 +58,8 @@ function boxesOverlap(a: Box, b: Box): boolean {
 	)
 }
 
-export function unitsOf(items: ArrangedItem[]): RenderUnit[] {
+export function unitsOf(input: readonly ArrangedItem[] | DrawnZone): RenderUnit[] {
+	const items = "instances" in input ? arrangedItemsOf(input) : input
 	const groups = new Map<string, ArrangedItem[]>()
 	const units: RenderUnit[] = []
 	for (const it of items) {

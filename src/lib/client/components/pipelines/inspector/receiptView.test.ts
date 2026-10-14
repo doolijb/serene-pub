@@ -17,9 +17,11 @@ import {
 	outputView,
 	postHistoryView,
 	authorsNoteView,
+	layoutsView,
 	promptView,
 	refusedCount,
 	refusedOf,
+	scriptKindLabel,
 	verdict,
 	lastStatusOf,
 	portrayalsLine,
@@ -1055,5 +1057,157 @@ describe("steps that ran out of time", () => {
 
 	it("says nothing when every step finished in time", () => {
 		expect(timedOutNotice(nodeRows({ nodes: [node({})] }))).toBeNull()
+	})
+})
+
+/**
+ * The scripts a step ran (`NodeReceipt.scripts`), read onto the row for the
+ * detail pane's *Scripts that ran* fold (plan 2026-10-10 D3).
+ */
+describe("scripts that ran at a step", () => {
+	const node = (scripts: unknown) => ({
+		seq: 1,
+		nodeKey: "generate",
+		definitionId: "core:oracle/generate@1",
+		kind: "oracle",
+		result: "ok",
+		scripts
+	})
+
+	it("reads each record: seam, origin, result, reason, won, changed, duration", () => {
+		const [row] = nodeRows({
+			nodes: [
+				node([
+					{
+						scriptId: 1,
+						name: "Trim narration",
+						scriptKind: "core:script:text/transform@1",
+						phase: "after",
+						appliedBy: "substrate",
+						at: "out:text",
+						result: "ok",
+						changed: true,
+						durationMs: 3
+					},
+					{
+						scriptId: 2,
+						name: "ChatML guard",
+						scriptKind: "core:script:text/stop@1",
+						phase: "after",
+						port: "text",
+						appliedBy: "substrate",
+						via: "connection",
+						connectionName: "KoboldCpp",
+						result: "skip",
+						reason: "no stop sequence in this text"
+					},
+					{
+						scriptId: 3,
+						name: "Old cutter",
+						typeId: "core:script:text/stop@1",
+						phase: "after",
+						appliedBy: "binding",
+						result: "err",
+						reason: "TypeError: x is undefined",
+						won: false
+					}
+				])
+			]
+		})
+		expect(row!.scripts).toEqual([
+			{
+				name: "Trim narration",
+				kind: "core:script:text/transform@1",
+				kindLabel: "text / transform",
+				at: "out:text",
+				via: "pipeline",
+				result: "ok",
+				changed: true,
+				durationMs: 3
+			},
+			{
+				name: "ChatML guard",
+				kind: "core:script:text/stop@1",
+				kindLabel: "text / stop",
+				at: "out:text",
+				via: "connection",
+				result: "skip",
+				reason: "no stop sequence in this text"
+			},
+			{
+				name: "Old cutter",
+				kind: "core:script:text/stop@1",
+				kindLabel: "text / stop",
+				at: "binding",
+				via: "binding",
+				result: "err",
+				reason: "TypeError: x is undefined",
+				won: false
+			}
+		])
+	})
+
+	it("marks the stop that won, and reads the older connection:<name> spelling of via", () => {
+		const [row] = nodeRows({
+			nodes: [
+				node([
+					{
+						name: "Guard",
+						scriptKind: "core:script:text/stop@1",
+						phase: "after",
+						appliedBy: "substrate",
+						via: "connection:KoboldCpp",
+						result: "ok",
+						verdict: 412,
+						won: true
+					}
+				])
+			]
+		})
+		expect(row!.scripts[0]).toMatchObject({
+			via: "connection",
+			won: true,
+			at: "substrate"
+		})
+	})
+
+	it("is empty on a step no script touched, and on a list that is not one", () => {
+		expect(nodeRows({ nodes: [node(undefined)] })[0]!.scripts).toEqual([])
+		expect(nodeRows({ nodes: [node("nope")] })[0]!.scripts).toEqual([])
+		expect(nodeRows(adventure.receipt).every((r) => Array.isArray(r.scripts))).toBe(true)
+	})
+
+	it("labels a kind id by its content / operation, and leaves an unknown id as written", () => {
+		expect(scriptKindLabel("core:script:text/stop@1")).toBe("text / stop")
+		expect(scriptKindLabel("acme:script:cast/filter")).toBe("cast / filter")
+		expect(scriptKindLabel("weird")).toBe("weird")
+	})
+})
+
+describe("layoutsView (2026-10-13)", () => {
+	const node = (output: unknown) => ({ nodeKey: "prompt", output }) as never
+
+	it("names each placed key's variable and the row that laid it out, or the default", () => {
+		const lines = layoutsView(
+			node({
+				context: {
+					layouts: [
+						{ key: "worldLore", variableId: "core:var/world-lore@1", layout: "Titled JSON block", origin: "shipped" },
+						{ key: "characterLore", variableId: "acme:var/ranked-lore@1", layout: null, origin: null },
+						{ key: "history", variableId: "core:var/history@1", layout: "Dated prose", origin: "own" }
+					]
+				}
+			})
+		)
+		expect(lines).toEqual([
+			{ key: "worldLore", variableId: "core:var/world-lore@1", line: "Titled JSON block (Serene Pub's)", floor: false },
+			{ key: "characterLore", variableId: "acme:var/ranked-lore@1", line: "built-in default", floor: true },
+			{ key: "history", variableId: "core:var/history@1", line: "Dated prose (made here)", floor: false }
+		])
+	})
+
+	it("is empty for a receipt that recorded none", () => {
+		expect(layoutsView(node({ main: { rendered: "x" } }))).toEqual([])
+		expect(layoutsView(null)).toEqual([])
 	})
 })

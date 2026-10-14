@@ -41,6 +41,8 @@ import {
 	// Lair pass B5: the Plan section's reading and the write's own checks.
 	sectionItemsOf,
 	checkFoldedSections,
+	// 🚧 A collected clock step's door (§15 G6), the host's own check.
+	clockStepRefusal,
 	type BandIntent,
 	type FormBlock,
 	type MessageBlock,
@@ -77,6 +79,7 @@ const STATUS = {
 	buildingGraph: { i18n: { en: "building the graph: {step}" } }
 } satisfies Record<string, StatusText>
 import { i18nTextIn } from "$lib/shared/i18n/i18nText"
+import { clockSpanWords } from "$lib/shared/lorebooks/storyDate"
 import { participantRowId } from "$lib/server/pipelines/runtime/portrayals"
 import { pickSpriteBySimilarity } from "$lib/shared/sprites/pick"
 import type { SpriteChoicesV1 } from "$lib/server/sprites/choices"
@@ -132,6 +135,12 @@ import { relationshipSearchBindings } from "./bindings.relationships"
 // Stats and states, in their own module for the same reason — see its header
 // for why the write does not go through a host seam.
 import { stateBindings } from "./bindings.state"
+import { cutOutBindings } from "./cutOut"
+import { spriteFillBindings } from "./spriteFill"
+import { portraitBindings } from "./portrait"
+import { illustrateSceneBindings } from "./illustrateScene"
+import { clockStepBindings } from "./clockStep"
+import { describeImageBindings } from "./describeImage"
 // Is a room name already described (lair pass R7) — its own module, same reason.
 import { undescribedNameBindings } from "./undescribedName"
 import { buildScanWindow } from "$lib/server/pipelines/ranking/signals"
@@ -163,9 +172,19 @@ import {
 import { allocate, render } from "$lib/server/pipelines/prompt/assemble"
 import {
 	CORE_TEMPLATE_ENGINE,
+	renderTemplate,
 	type RenderRun
 } from "$lib/server/pipelines/prompt/renderers"
+import {
+	batchUnits,
+	renderTranscript as renderTranscriptUnits,
+	type TranscriptRow
+} from "$lib/server/pipelines/runtime/transcript"
 import { resolveContextInput } from "$lib/server/pipelines/prompt/promptFields"
+import {
+	CARD_STROKES_SCAN_DEPTH,
+	resolveCastStrokes
+} from "$lib/server/pipelines/prompt/cardStrokes"
 import { processMessages } from "$lib/server/pipelines/prompt/messages"
 import {
 	DEFAULT_CHANNEL,
@@ -207,6 +226,7 @@ import {
 import { castRelationshipsSection } from "$lib/server/pipelines/prompt/rankedRelationships"
 import {
 	buildBatchPrompt,
+	buildTranscriptBatchPrompt,
 	buildCharacterExtractionPrompt,
 	buildNamePrompt,
 	buildSynthesisPrompt,
@@ -3839,6 +3859,20 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		// one changes them.
 		...stateBindings(run),
 
+		// Each picture with its background removed (image generation I4).
+		...cutOutBindings(),
+
+		// 🚧 The Sprite set fill's card inlet and its series (I5).
+		...spriteFillBindings(),
+		// 🚧 Portrait's candidates and its gallery offer (I8).
+		...portraitBindings(),
+		// 🚧 The Scene action's likeness images, clean step and placement (I9).
+		...illustrateSceneBindings(),
+		// 🚧 Time passes… and the reply tick (live scenes §6).
+		...clockStepBindings(),
+		// 🚧 Describe image — a picture read by the job that reads pictures (D1).
+		...describeImageBindings(),
+
 		// Is a room name already described, by an entry or by recent prose.
 		...undescribedNameBindings(),
 
@@ -4385,6 +4419,19 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			{ ports: ["candidates", "exclusions", "speaker", "presences", "at"] }
 		),
 
+		/**
+		 * A script step (PLAN-pipeline-canvas-and-genre-authoring P3): the step
+		 * itself passes its input through unchanged, and the chain on its
+		 * `out:main` seam — `core:script:data/transform@1` scripts, QuickJS, JSON
+		 * in and out — is what transforms it. No host code runs a script here;
+		 * the seam applier does, the same way it does for every other seam, so a
+		 * script step is a task by construction: no storage, no network.
+		 */
+		"core:task/run-script@1": reads<typeof C.runScript>(
+			async (input: NodeInput<typeof C.runScript>) =>
+				ok({ main: input?.input ?? null }),
+			{ ports: ["input"] }
+		),
 		"core:task/concat-candidates@1": reads<typeof C.concatCandidates>(
 			async (input: NodeInput<typeof C.concatCandidates>) => {
 				const orderings: any[][] = (input?.sources ?? []).filter(
@@ -4775,6 +4822,29 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					"scoreLedAllocation"
 				]
 			}
+		),
+
+		/**
+		 * Card strokes (DESIGN-card-strokes A.4): every stroked card in the
+		 * cast gets its keyword strokes marked fired or not against the last
+		 * `scanDepth` messages, through the lore keyword matcher
+		 * (`prompt/cardStrokes.ts`). The builder after it then compiles the
+		 * `always` + fired strokes only. Pure, and it never ranks or budgets.
+		 *
+		 * No diagnostics line: the definition declares `main` and `cast` and
+		 * nothing else, and the resolved strokes on the cast ARE the receipt —
+		 * each one carries its own `fired`.
+		 */
+		"core:task/card-strokes@1": reads<typeof C.cardStrokes>(
+			async (input: NodeInput<typeof C.cardStrokes>) => {
+				const cast = resolveCastStrokes(
+					input?.cast ?? null,
+					Array.isArray(input?.messages) ? input.messages : [],
+					input?.params?.scanDepth ?? CARD_STROKES_SCAN_DEPTH
+				)
+				return ok({ main: cast, cast })
+			},
+			{ ports: ["cast", "messages"], params: ["scanDepth"] }
 		),
 
 		/**
@@ -5802,7 +5872,28 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					prompts: input?.prompts,
 					connection: input?.connection,
 					sampling: input?.sampling,
+					// The `workflow` slot (§4.10), which `host.ts` reads as
+					// `p.workflow`. ⚠ Dropped here until §16 follow-up D3
+					// (2026-10-12): the spec named it, the panel stored it,
+					// the loadout layer filled it, and no render ever saw it.
+					workflow: input?.workflow,
 					init: input?.init,
+					// The widened ports and params (DESIGN-image-generation
+					// §4.1), forwarded as the host's binding reads them:
+					// `references` and `series` as ports, the picture's
+					// params (`orientation`, `cutOut`, the `references`
+					// policy, `seed`) under `params`. Until I5 none of them
+					// reached the host — it read four keys this payload
+					// never carried.
+					mask: input?.mask,
+					references: input?.references,
+					series: input?.series,
+					params: {
+						orientation: input?.params?.orientation,
+						cutOut: input?.params?.cutOut,
+						references: input?.params?.references,
+						seed: input?.params?.seed
+					},
 					// `off` here means a render with no progress poll and no
 					// previews — the image node's whole use for the parameter.
 					streaming: streamingModeFrom(input?.params?.streaming)
@@ -5838,11 +5929,15 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					"prompt",
 					"negative",
 					"init",
+					"mask",
+					"references",
+					"series",
 					"prompts",
 					"connection",
-					"sampling"
+					"sampling",
+					"workflow"
 				],
-				params: ["streaming"]
+				params: ["streaming", "orientation", "cutOut", "references", "seed"]
 			}
 		),
 
@@ -5875,6 +5970,151 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				return ok({ main: messages, messages })
 			},
 			{ ports: ["scope", "request"] }
+		),
+
+		/**
+		 * 🚧 A scene's span (PROPOSAL-live-scenes §12.2, §14 B): the story
+		 * rows of one lane between the scene's boundaries, and the aside rows
+		 * of the named aside channels over the same ids, each attached to the
+		 * story line it follows (`afterMessageId`). The host owns both reads
+		 * (`summarize_span`) so no binding can get the hidden-row rule or the
+		 * lane order wrong.
+		 */
+		"core:query/summarize-source@2": reads<typeof C.summarizeSource.v2>(
+			async (
+				input: NodeInput<typeof C.summarizeSource.v2>,
+				ctx: CoreQueryCtx
+			) => {
+				// The range is the request's; which channel is the story and
+				// which are asides is the spec's (its params, §13).
+				const r = (input?.request ?? {}) as Record<string, any>
+				const span = (await ctx.read("summarize_span", {
+					sessionId: input?.scope?.sessionId,
+					sceneId: r.sceneId,
+					messageIds: r.messageIds,
+					openedAt: r.openedAt,
+					closedAt: r.closedAt,
+					channel: input?.params?.channel ?? "main",
+					asides: input?.params?.asides ?? [],
+					limit: r.limit ?? 5000
+				})) as { messages?: unknown[]; asides?: unknown[] } | null
+				const messages = span?.messages ?? []
+				const asides = span?.asides ?? []
+				return ok({ main: messages, messages, asides })
+			},
+			{ ports: ["scope", "request"], params: ["channel", "asides"] }
+		),
+
+		/**
+		 * 🚧 The transcript as units (§12.2): one `preamble`, then a unit per
+		 * story line, each followed by a unit per aside attached to it — so
+		 * the cut that follows never splits a unit. The template is the
+		 * `template` slot's three inline partials, rendered through core's
+		 * engine seam (`renderTemplate`); a section it does not define, or no
+		 * template at all, renders the shipped Default's
+		 * (`runtime/transcript.ts`). The `scene` port is wired to the request;
+		 * its `scene` field is read. A line's files arrive on `attachments`
+		 * and render as the line section's `{{{attachments}}}`.
+		 */
+		"core:task/render-transcript@1": reads<typeof C.renderTranscript>(
+			async (input: NodeInput<typeof C.renderTranscript>, ctx: TaskCtx) => {
+				const slot = input?.template as
+					| string
+					| { source?: unknown; engine?: unknown }
+					| null
+					| undefined
+				const source =
+					typeof slot === "string"
+						? slot
+						: typeof slot?.source === "string"
+							? slot.source
+							: ""
+				const engine =
+					typeof slot === "object" && slot !== null && typeof slot.engine === "string"
+						? slot.engine
+						: CORE_TEMPLATE_ENGINE
+				if (source && engine !== CORE_TEMPLATE_ENGINE)
+					return halt(
+						`render-transcript renders Handlebars partials, and its template is written for '${engine}'.`
+					)
+				const run = ctx as unknown as RenderRun
+				const rendered = await renderTranscriptUnits(
+					{
+						messages: (Array.isArray(input?.messages)
+							? input.messages
+							: []) as TranscriptRow[],
+						asides: (Array.isArray(input?.asides)
+							? input.asides
+							: []) as TranscriptRow[],
+						// The story rows' files (`history-attachments@1`),
+						// named after each line's text as `batch-messages@1`
+						// names them. Unwired: none.
+						attachments: input?.attachments,
+						// 🚧 The aside rows' files, the same way (lane E).
+						asideAttachments: (input as { asideAttachments?: unknown })
+							?.asideAttachments,
+						cast: input?.cast,
+						scene: input?.scene
+					},
+					source || null,
+					(template, variables) =>
+						renderTemplate(CORE_TEMPLATE_ENGINE, {
+							template,
+							variables,
+							runId: run?.runId,
+							user: run?.user
+						}),
+					roughTokens
+				)
+				return ok({
+					main: rendered.units,
+					preamble: rendered.preamble,
+					units: rendered.units
+				})
+			},
+			{
+				ports: [
+					"messages",
+					"asides",
+					"attachments",
+					"asideAttachments",
+					"cast",
+					"scene",
+					"template"
+				]
+			}
+		),
+
+		/**
+		 * 🚧 The cut, over rendered units (§12.2): `@1`'s budget and
+		 * `minBatchMessages` rule, never inside a unit, the preamble opening
+		 * every batch and counted in its budget. A unit larger than the
+		 * budget ships alone. Out: one string per batch; no units, none.
+		 */
+		"core:task/batch-messages@2": reads<typeof C.batchMessages.v2>(
+			async (input: NodeInput<typeof C.batchMessages.v2>) => {
+				const resolved = resolveBatchBudget({
+					batchTokens: input?.params?.batchTokens,
+					sampling: input?.sampling
+				})
+				if (!resolved.fits) return halt(resolved.reason)
+				const minBatch = Math.max(
+					1,
+					Math.floor(Number(input?.params?.minBatchMessages) || 1)
+				)
+				const batches = batchUnits(
+					typeof input?.preamble === "string" ? input.preamble : "",
+					Array.isArray(input?.units) ? (input.units as any[]) : [],
+					resolved.tokens,
+					minBatch,
+					roughTokens
+				)
+				return ok({ main: batches, batches })
+			},
+			{
+				ports: ["preamble", "units", "sampling"],
+				params: ["batchTokens", "minBatchMessages"]
+			}
 		),
 
 		/**
@@ -6773,22 +7013,39 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 							total: ctx.iteration.count ?? ctx.iteration.index + 1
 						}
 					})
-				const { systemPrompt, userPrompt } = buildBatchPrompt({
-					jsonMessages: formatMessagesAsJson(
-						Array.isArray(input?.batch) ? input.batch : []
-					),
-					loreType: input?.loreType ?? "world",
-					// From the wired `request` port. The flat `input.topic` that used
-					// to sit behind it had no supplier (R-12).
-					topic: input?.request?.topic,
-					// The prompts slot, resolved through the scope chain. Blank falls
-					// back to the template's own default, which is what the legacy
-					// columns do — they default to "" and an unconfigured step must
-					// fall back rather than send an empty system prompt.
-					systemPromptOverride: input?.prompts?.batch?.trim()
-						? input.prompts.batch
-						: null
-				})
+				/**
+				 * 🚧 A batch that is TEXT (live scenes §13–§14): the
+				 * genre-owned summarize-scene specs lay the transcript out
+				 * with the genre's template and cut it into strings
+				 * (`batch-messages@2`); their drafting rows place each with
+				 * `{{batch}}`. A batch of message rows — world, character,
+				 * history and the shared scene spec — takes the JSON path
+				 * below, unchanged.
+				 */
+				const { systemPrompt, userPrompt } =
+					typeof input?.batch === "string"
+						? buildTranscriptBatchPrompt({
+								transcript: input.batch,
+								loreType: input?.loreType ?? "world",
+								topic: input?.request?.topic,
+								prompt: input?.prompts?.batch
+							})
+						: buildBatchPrompt({
+								jsonMessages: formatMessagesAsJson(
+									Array.isArray(input?.batch) ? input.batch : []
+								),
+								loreType: input?.loreType ?? "world",
+								// From the wired `request` port. The flat `input.topic` that used
+								// to sit behind it had no supplier (R-12).
+								topic: input?.request?.topic,
+								// The prompts slot, resolved through the scope chain. Blank falls
+								// back to the template's own default, which is what the legacy
+								// columns do — they default to "" and an unconfigured step must
+								// fall back rather than send an empty system prompt.
+								systemPromptOverride: input?.prompts?.batch?.trim()
+									? input.prompts.batch
+									: null
+							})
 
 				const result: any = await ctx.call({
 					systemPrompt,
@@ -7446,15 +7703,24 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 */
 		"core:outlet/advance-story-clock@1": reads<typeof C.advanceStoryClock>(
 			async (input: NodeInput<typeof C.advanceStoryClock>, ctx: OutletCtx) => {
-				const { clock, label, ...ids } = (await ctx.commit(input)) as {
+				// 🚧 `skipped` (live scenes §15 G7): the sentence a skipped
+				// move left in the ledger — on the receipt with the result.
+				const { clock, label, skipped, ...ids } = (await ctx.commit(input)) as {
 					id: unknown
 					sessionId?: unknown
 					clock?: unknown
 					label?: unknown
+					skipped?: unknown
 				}
-				return ok({ status: "committed", ids, clock: clock ?? null, label: label ?? "" })
+				return ok({
+					status: "committed",
+					ids,
+					clock: clock ?? null,
+					label: label ?? "",
+					skipped: typeof skipped === "string" ? skipped : ""
+				})
 			},
-			{ ports: ["by", "unit"], params: ["by", "unit"] }
+			{ ports: ["by", "unit", "cause", "onRefusal"], params: ["by", "unit"] }
 		),
 		"core:outlet/show-sprite@1": reads<typeof C.showSprite>(
 			async (input: NodeInput<typeof C.showSprite>, ctx: OutletCtx) => {
@@ -7476,6 +7742,61 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				})
 			},
 			{ ports: ["target", "pick", "source"] }
+		),
+		/**
+		 * 🚧 The session's backdrop (DESIGN-image-generation §6.4): the host
+		 * points `sessions.backdropMediaId` at the first image of `media` —
+		 * checked as `create-message`'s media is — and publishes the file id
+		 * on `mediaId` (null when it wrote nothing).
+		 */
+		"core:outlet/set-backdrop@1": reads<typeof C.setBackdrop>(
+			async (input: NodeInput<typeof C.setBackdrop>, ctx: OutletCtx) => {
+				// `written` is the executor's (no write, no event), not a row id.
+				const { mediaId, written: _, notes: __, ...ids } = (await ctx.commit(
+					input
+				)) as {
+					id?: unknown
+					sessionId?: unknown
+					mediaId?: unknown
+					written?: unknown
+					notes?: unknown
+				}
+				return ok({
+					status: "committed",
+					ids,
+					mediaId: typeof mediaId === "number" ? mediaId : null
+				})
+			},
+			{ ports: ["media"] }
+		),
+		/**
+		 * 🚧 A card's sprites from a run's pictures (DESIGN-image-generation
+		 * §6.3; I5): the host files each keyed picture under its sprite label
+		 * (`sprites/attach.ts`) and publishes what it wrote on `attached`
+		 * and the labels that came back empty on `missing`.
+		 */
+		"core:outlet/attach-sprite@1": reads<typeof C.attachSprite>(
+			async (input: NodeInput<typeof C.attachSprite>, ctx: OutletCtx) => {
+				// `written` is the executor's (no write, no event), not a row id.
+				const {
+					attached,
+					missing,
+					written: _,
+					...ids
+				} = (await ctx.commit(input)) as {
+					id?: unknown
+					attached?: unknown
+					missing?: unknown
+					written?: unknown
+				}
+				return ok({
+					status: "committed",
+					ids,
+					attached: Array.isArray(attached) ? attached : [],
+					missing: Array.isArray(missing) ? missing : []
+				})
+			},
+			{ ports: ["media", "characterId", "setName", "series"] }
 		),
 
 		// ── The built-in writes (R-15, 2026-09-16) ──────────────────────────
@@ -7848,6 +8169,17 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		return lines.length ? { partySpeakers: lines.join("\n") } : {}
 	}
 
+	/**
+	 * 🚧 A collected clock step as the keeper reads it (§15 G6): `3 hours`,
+	 * `2 hours back` — `{{clockStep}}`. Nothing for anything that is not a
+	 * well-formed step, so a prompt's `{{#if clockStep}}` reads it absent.
+	 */
+	const clockStepOf = (raw: unknown): { clockStep?: string } => {
+		if (clockStepRefusal(raw) !== null) return {}
+		const { by, unit } = raw as { by: number; unit: string }
+		return { clockStep: `${clockSpanWords(by, unit)}${by < 0 ? " back" : ""}` }
+	}
+
 	bindings["core:task/build-planner-context@1"] = reads<
 		typeof C.buildPlannerContext
 	>(
@@ -8000,7 +8332,12 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					reply:
 						typeof input?.reply === "string"
 							? input.reply
-							: undefined
+							: undefined,
+					// 🚧 The span the player chose on *Time passes…* (live
+					// scenes §15 G6), spelled — `{{clockStep}}`. Absent when
+					// unwired, so Rest's and the reply keeper's render as
+					// they did.
+					...clockStepOf(input?.clockStep)
 					// ⚠ `afterWrite` stays off the template context AND off the
 					// read declaration. It is an ordering edge — the reply's
 					// write result, taken on a port so this node runs after the
@@ -8011,7 +8348,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				}),
 				ctx
 			),
-		{ ports: ["cast", "state", "reply", "fields", "prompts", "variables"] }
+		{ ports: ["cast", "state", "reply", "fields", "clockStep", "prompts", "variables"] }
 	)
 
 	/**

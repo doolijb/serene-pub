@@ -1347,6 +1347,11 @@ describe("every reference control has something to reference", () => {
 			//   mocked db module). Asserting on them here would report
 			//   empty pickers the fixture caused, and a guard that cries
 			//   wolf is a guard someone switches off.
+			// · `workflow-ref` — the starter workflows are written by
+			//   `defaults.sync()` too (`seedWorkflows`), for the same reason.
+			// · `loadout-ref` — core's loadouts are seeded by
+			//   `seedCoreLoadouts` at boot, not by `bootstrapPipelines`;
+			//   its own picker is proven in `loadoutRow.int.test.ts`.
 			//
 			// What is left is what core seeds through `bootstrapPipelines`
 			// alone — the context templates and variable layouts — which
@@ -1357,7 +1362,9 @@ describe("every reference control has something to reference", () => {
 						![
 							"connection-ref",
 							"sampling-ref",
-							"prompts-ref"
+							"prompts-ref",
+							"workflow-ref",
+							"loadout-ref"
 						].includes(o.control) &&
 						!(o.choices ?? []).length
 					)
@@ -1788,7 +1795,10 @@ describe("the substrate's settings render from the row, like any slot", () => {
 			nodeKey: "drafting.item.draft",
 			control: "scripts-chain",
 			facet: "scripts",
-			label: "Each draft",
+			// Labelled by the seam since PLAN-script-placement D3.
+			label: "Scripts · at each draft",
+			at: "each-draft",
+			seamKind: "point",
 			accepts: ["core:script:text/transform@1"]
 		})
 		// The registry row is where it came from, in the full shape.
@@ -1884,8 +1894,9 @@ describe("options arrive in the order they were declared", () => {
 			"How shares divide the window",
 			"Let the best entries lead",
 			// The hook's chain, which `declarations()` appends after the
-			// node's own slots.
-			"Scripts"
+			// node's own slots — labelled by its seam since
+			// PLAN-script-placement D3 (`in:candidates`).
+			"Scripts · before candidates"
 		])
 	})
 

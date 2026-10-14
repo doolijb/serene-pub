@@ -1,142 +1,117 @@
 <script lang="ts">
+	/**
+	 * The Sampling view: a list of every sampling config, grouped by what it
+	 * samples, beside the editor of the one picked (STYLE-GUIDE §5.2, a list
+	 * column). A row says whether the config is built in, whether it holds a
+	 * default for ANY job (★, its title naming the jobs), how many settings it
+	 * turns on and what uses it. The editor is the config's name, its
+	 * parameters (Choose parameters shows every one with a checkbox, in
+	 * place) and a Used by card; Save is the one primary, and ⋯ holds Set as
+	 * default…, Duplicate, Reset and Delete (whose dialog says which jobs and
+	 * pipelines lose it).
+	 *
+	 * Admin › Sampling manages the same rows with its own changelist and
+	 * change form (`admin/sections/sampling/`).
+	 */
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
-	import { getContext, onMount } from "svelte"
+	import { getContext, onMount, untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import ViewToolbar from "$lib/client/components/panels/ViewToolbar.svelte"
-	import { toolbarButtonClass } from "$lib/client/components/panels/toolbarButton"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
+	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
+	import PanelSplit from "$lib/client/components/panels/PanelSplit.svelte"
+	import ListGroupLabel from "$lib/client/components/panels/ListGroupLabel.svelte"
+	import type { RowMenuEntries } from "$lib/client/components/menus/RowMenu.svelte"
+	import SidebarListItem from "$lib/client/components/SidebarListItem.svelte"
+	import EmptyState from "$lib/client/components/EmptyState.svelte"
+	import LoadingState from "$lib/client/components/LoadingState.svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import SamplingConfigUnsavedChangesModal from "../modals/PromptConfigUnsavedChangesModal.svelte"
-	import NewNameModal from "../modals/NewNameModal.svelte"
 	import SamplingValuesForm from "./SamplingValuesForm.svelte"
-	import SamplingEnabledForm from "./SamplingEnabledForm.svelte"
-	import Select from "$lib/client/components/inputs/Select.svelte"
+	import SamplingNewDialog from "./SamplingNewDialog.svelte"
+	import SamplingDefaultsDialog from "./SamplingDefaultsDialog.svelte"
 	import { countEnabled } from "./samplingFields"
+	import {
+		BUILT_IN_GLYPH_WORDS,
+		groupSamplingConfigs,
+		initialSamplingId,
+		jobLabel,
+		jobsWithLiveDefaults,
+		samplingDeleteWarnings,
+		samplingRowLine,
+		schemaOfShape,
+		samplingSidebarMemory,
+		samplingStarWords,
+		samplingUseOf,
+		shapeOf,
+		sortJobs,
+		uniqueCopyName,
+		type SamplingJob,
+		type SamplingListRow,
+		type SamplingNewSeed,
+		type SamplingPipelineUse
+	} from "./samplingList"
+	import { openInLoadouts, openInPipelines } from "$lib/client/admin/railDoors"
 	import { sameFormValue } from "$lib/client/forms/sameFormValue"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { z } from "zod"
-	import { S, SAMPLING_SCHEMAS, samplingSchemaFor } from "@serene-pub/sdk"
-	import { capabilityForSamplingShape } from "$lib/shared/capabilities/samplingShape"
+	import { S } from "@serene-pub/sdk"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
-	import PanelSplit from "$lib/client/components/panels/PanelSplit.svelte"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
 	}
 
-	// No deep-link props any more: Admin → Sampling stopped embedding this
-	// view (2026-09-27) and manages configs with its own changelist and
-	// change form (`admin/sections/sampling/`).
 	let { onclose = $bindable() }: Props = $props()
 
-	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
+	const systemSettingsCtx: SystemSettingsCtx | undefined =
+		getContext("systemSettingsCtx")
+	const panelsCtx: PanelsCtx | undefined = getContext("panelsCtx")
 
 	const socket = useTypedSocket()
+	const uid = $props.id()
+	const vm = new ViewModeTracker()
 
-	// ── Categories ───────────────────────────────────────────────────────────
-	//
-	// Sampling configs are split by modality for the same reason connections are:
-	// the two vocabularies share nothing, and a list mixing them makes the reader
-	// check every row's shape before trusting its name.
-	let shape = $state<string>(S.textGen)
-	// Three screens, one variable — the same pattern index→list already proves.
-	// "enabled" is the enable/disable screen: which parameters this config is in
-	// charge of, edited apart from their values rather than as a checkbox in
-	// front of every one of them.
-	let view = $state<"index" | "list" | "enabled">("index")
+	// ── The list ─────────────────────────────────────────────────────────────
+	let samplingConfigsList: Sockets.SamplingConfigs.List.Response["samplingConfigsList"] =
+		$state([])
+	/** Whether `samplingConfigs:list` has answered: until then empty is "not yet". */
+	let listLoaded = $state(false)
+	let filterText = $state("")
+	const groups = $derived(groupSamplingConfigs(samplingConfigsList, filterText))
+
+	// ── What picks each config ───────────────────────────────────────────────
+	let usedBy = $state<Sockets.SamplingConfigs.UsedBy.Response | null>(null)
 	/**
-	 * Desk turns those three screens into two panes: the categories stand on
-	 * the left whatever `view` says, and `view` decides only what — if
-	 * anything — is open to their right.
+	 * Every job, holding what the live `capabilityDefaults` says it holds:
+	 * that map moves with every default write, from this view or any other,
+	 * so the ★ never waits on a re-read.
 	 */
-	const viewMode = new ViewModeTracker()
+	const jobs = $derived(
+		jobsWithLiveDefaults(
+			usedBy?.jobs ?? [],
+			systemSettingsCtx?.capabilityDefaults
+		)
+	)
+	const useOf = (id: number) => samplingUseOf(id, jobs, usedBy?.pipelines)
 
-	const CATEGORIES = [
-		{
-			shape: S.textGen,
-			icon: Icons.Type,
-			title: "Large language models",
-			blurb: "Temperature, penalties, context and response budgets — the parameters behind every generated reply."
-		},
-		{
-			shape: S.imageGen,
-			icon: Icons.Image,
-			// The second sentence draws a real boundary, and this card is where
-			// a person first meets the family presets. Steps, CFG, samplers and
-			// seeds are the vocabulary of LOCAL diffusion; a hosted service has
-			// no such knobs to preset (gpt-image-1 takes a size ENUM, a quality
-			// word and nothing else), so what one backend alone offers —
-			// quality, background, output format — lives on its CONNECTION,
-			// declared by its adapter. Hence five model families here and no
-			// sixth "hosted" preset.
-			title: "Image generation",
-			blurb: "Steps, CFG, size, seed — shared by every image backend, whichever one a connection points at. These are the parameters of local diffusion; a hosted service's own options (quality, background, output format) live on its connection instead."
-		}
-	]
-
-	const categoryTitle = $derived(
-		CATEGORIES.find((c) => c.shape === shape)?.title ?? "Sampling"
+	// ── The selection ────────────────────────────────────────────────────────
+	/** Seeded from the view's memory, so a reopened view lands where it was. */
+	let selectedId = $state<number | null>(samplingSidebarMemory.selectedId)
+	$effect(() => {
+		samplingSidebarMemory.selectedId = selectedId
+	})
+	/** Compact only: the editor has replaced the list. Desk shows both. */
+	let compactOpen = $state(false)
+	const hasDetail = $derived(
+		selectedId != null && (vm.mode === "desk" || compactOpen)
+	)
+	const selectedRow = $derived(
+		samplingConfigsList.find((c) => c.id === selectedId) ?? null
 	)
 
-	function openCategory(s: string) {
-		shape = s
-		const next = defaultIdFor(s) ?? firstOfShape(s)
-		// Re-ask when the id does not move: the effect that fetches on a change
-		// of `selectedSamplingId` has nothing to react to, and a row that never
-		// arrived (or belongs to the other category) would stay missing.
-		if (next != null && next === selectedSamplingId && sampling?.id !== next) {
-			socket.emit("samplingConfigs:get", { id: next })
-		}
-		selectedSamplingId = next
-		view = "list"
-	}
-
-	function backToIndex() {
-		view = "index"
-	}
-
-	/**
-	 * The instance default for a shape.
-	 *
-	 * One default per modality, not one shared by all of them (0172): a default
-	 * that could not say which modality it was for would hand a text config to an
-	 * image provider the moment a spec left the slot unset.
-	 */
-	function defaultIdFor(s: string): number | null {
-		// Keyed by CAPABILITY now (0175), not by a column per modality — the
-		// capability space is open, so a column pair each would not scale and
-		// every new modality would be a migration.
-		const byCapability = systemSettingsCtx.capabilityDefaults
-		// The shared mapping, not a second copy of it: a local
-		// `s === S.imageGen ? … : "text->text"` reads a TTS config's default out
-		// of the CHAT capability, because everything that is not image falls into
-		// the else. Whatever registered it used this function; so does this.
-		const capability = capabilityForSamplingShape(s)
-		const registered = capability
-			? byCapability?.[capability]?.samplingConfigId
-			: null
-		// No fallback to a settings column: since 0181 there is no second place
-		// a default lives, and there was never a second answer — the column and
-		// the table were dual-written, so the fallback only ever fired for a row
-		// that was ABSENT, never one that was merely stale. `null` here is a
-		// real answer, and it means the backend uses its own defaults.
-		return registered ?? null
-	}
-
-	const firstOfShape = (s: string) =>
-		samplingConfigsList.find((c) => c.shape === s)?.id ?? null
-
-	let activeSamplingConfigId = $derived(defaultIdFor(shape))
-
-	// Sampling config has no per-user override — it's the instance default for
-	// this category's capability, the same value every admin sees. Seed the
-	// initial selection from it; the samplingConfigs:get effect below fetches
-	// the full editable config once this is set. Through `defaultIdFor` rather
-	// than a second read of the map: this is the one place the two could
-	// disagree about which capability the current category means.
-	let selectedSamplingId: number | null = $state(defaultIdFor(S.textGen))
-
+	// ── The draft ────────────────────────────────────────────────────────────
 	let sampling: SelectSamplingConfig | undefined = $state()
 	let originalSamplingConfig: SelectSamplingConfig | undefined = $state()
 	/**
@@ -152,259 +127,353 @@
 			$state.snapshot(originalSamplingConfig)
 		)
 	})
-	let showUnsavedChangesModal = $state(false)
-	let showNewNameModal = $state(false)
-	/** A server refusal shown under the new-name input, not as a toast. */
-	let newNameError: string | undefined = $state()
-	let showDeleteModal = $state(false)
-	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
+	const builtIn = $derived(!!sampling?.isImmutable)
+	/** The ROW's vocabulary, so a config renders its own parameters. */
+	const activeSchema = $derived(schemaOfShape(sampling?.shape))
+	/**
+	 * The image sampling keys the Image default's pair drops, by its drawing
+	 * sheet (`images:drawingSheet`) — greyed in the form and left out of the
+	 * "N of M sent" count. Only for an image config; a text config greys
+	 * nothing from it.
+	 */
+	let imageSheetDrops = $state<string[]>([])
+	const isImageConfig = $derived(sampling?.shape === S.imageGen)
+	const unhonoured = $derived(isImageConfig ? imageSheetDrops : [])
+	const sentSummary = $derived(
+		countEnabled(activeSchema, sampling?.enabled, unhonoured)
+	)
+	/** Choose parameters: every parameter with its checkbox, in place. */
+	let chooseParams = $state(false)
+	const detailTitle = $derived(
+		sampling?.name?.trim() ||
+			originalSamplingConfig?.name ||
+			selectedRow?.name ||
+			"Sampling config"
+	)
+	const detailUse = $derived(
+		sampling?.id != null ? useOf(sampling.id) : { jobs: [], pipelines: [] }
+	)
 
-	// Zod validation schema
 	const samplingConfigSchema = z.object({
 		name: z.string().min(1, "Name is required").trim()
 	})
-
-	type ValidationErrors = Record<string, string>
-	let validationErrors: ValidationErrors = $state({})
-
-	/**
-	 * The vocabulary for the row being edited — read from the ROW's shape, not the
-	 * category, so a config reached by deep link renders its own parameters even
-	 * if the sidebar happens to have opened on the other category.
-	 */
-	const activeSchema = $derived(samplingSchemaFor(sampling?.shape))
-
-	/**
-	 * "N of M" for the enable/disable nav button — the one thing the inline
-	 * checkboxes carried that the values screen no longer shows, now that it
-	 * draws only the parameters that are on.
-	 */
-	const enabledSummary = $derived(
-		countEnabled(activeSchema, sampling?.enabled)
-	)
-
-	let samplingConfigsList: Sockets.SamplingConfigs.List.Response["samplingConfigsList"] =
-		$state([])
-
-	/** Only the configs belonging to the category on screen. */
-	const viewConfigs = $derived(
-		samplingConfigsList.filter((c) => (c.shape ?? S.textGen) === shape)
-	)
-
-	// Drives the select's value via bind: rather than per-option `selected`
-	// attributes — the list of options gets regenerated on every save (the
-	// server re-emits samplingConfigs:list as part of the update flow), and
-	// `selected` attributes on <option> don't reliably survive that; the
-	// browser falls back to the first option, which looked like "the
-	// selection reverts to the default config" after saving.
-	function handleSetDefault() {
-		if (!selectedSamplingId) return
-		socket.emit("samplingConfigs:setUserActive", { id: selectedSamplingId })
-	}
-
-	function handleNew() {
-		newNameError = undefined
-		showNewNameModal = true
-	}
-	function handleNewNameConfirm(name: string) {
-		if (!socket) return
-		// A clone carries the whole configuration — shape included, or the copy
-		// would silently become a text config and lose every value with it.
-		const newSamplingConfig = { ...sampling }
-		delete newSamplingConfig.id
-		delete newSamplingConfig.seedKey
-		delete newSamplingConfig.isImmutable
-		newSamplingConfig.name = name.trim()
-		newSamplingConfig.shape = sampling?.shape ?? shape
-		newNameError = undefined
-		socket.emit("samplingConfigs:create", {
-			sampling: newSamplingConfig as any
-		})
-		// Deliberately NOT closed here. Names are unique per modality, so the
-		// server can refuse this one, and a modal that had already closed would
-		// have thrown away the name the person typed along with the clone they
-		// were halfway through making. `handleSamplingConfigsCreate` closes it
-		// once the row actually exists.
-	}
-	function handleNewNameCancel() {
-		newNameError = undefined
-		showNewNameModal = false
-	}
+	let validationErrors: Record<string, string> = $state({})
 
 	function validateForm(): boolean {
 		if (!sampling) return false
-
-		const result = samplingConfigSchema.safeParse({
-			name: sampling.name
-		})
-
+		const result = samplingConfigSchema.safeParse({ name: sampling.name })
 		if (result.success) {
 			validationErrors = {}
 			return true
-		} else {
-			const errors: ValidationErrors = {}
-			result.error.errors.forEach((error) => {
-				if (error.path.length > 0) {
-					errors[error.path[0] as string] = error.message
-				}
-			})
-			validationErrors = errors
-			return false
 		}
+		const errors: Record<string, string> = {}
+		for (const error of result.error.errors)
+			if (error.path.length > 0)
+				errors[error.path[0] as string] = error.message
+		validationErrors = errors
+		return false
 	}
 
-	function handleUpdate() {
-		if (!socket || !sampling) return
-		if (sampling.isImmutable) {
-			toaster.error({
-				title: "Cannot save",
-				description: "Cannot save immutable sampling configuration."
-			})
+	// ── Leaving a draft ──────────────────────────────────────────────────────
+	let showUnsavedChangesModal = $state(false)
+	let discardResolve: ((discard: boolean) => void) | null = null
+
+	/** Ask, then answer: true when the person chose to discard. */
+	function confirmDiscard(): Promise<boolean> {
+		showUnsavedChangesModal = true
+		return new Promise<boolean>((resolve) => {
+			discardResolve = resolve
+		})
+	}
+	function answerDiscard(discard: boolean) {
+		showUnsavedChangesModal = false
+		const resolve = discardResolve
+		discardResolve = null
+		resolve?.(discard)
+	}
+
+	async function handleOnClose() {
+		if (!unsavedChanges) return true
+		return confirmDiscard()
+	}
+
+	/** Open a config's editor, dropping whatever draft was open. */
+	function openConfig(id: number) {
+		if (id !== selectedId) {
+			sampling = undefined
+			originalSamplingConfig = undefined
+			validationErrors = {}
+		}
+		selectedId = id
+		compactOpen = true
+	}
+
+	/** A row's click: the open config stays as it is; another asks first. */
+	async function selectRow(id: number) {
+		if (id === selectedId) {
+			compactOpen = true
 			return
 		}
+		if (unsavedChanges && !(await confirmDiscard())) return
+		openConfig(id)
+	}
+
+	// ── Save, reset, delete ──────────────────────────────────────────────────
+	let saving = false
+	function handleSave() {
+		if (!sampling || sampling.isImmutable) return
 		if (!validateForm()) return
+		saving = true
 		socket.emit("samplingConfigs:update", { sampling })
 	}
 
 	function handleReset() {
 		if (originalSamplingConfig) {
-			// Deep copy: `values` and `enabled` are nested, and a shallow one would
-			// hand the edited objects straight back and reset nothing.
+			// Deep copy: `values` and `enabled` are nested, and a shallow one
+			// would hand the edited objects straight back and reset nothing.
 			sampling = structuredClone($state.snapshot(originalSamplingConfig))
+			validationErrors = {}
 		}
 	}
 
+	let showDeleteModal = $state(false)
+	/** What deleting the open config changes: the jobs and pipelines it leaves. */
+	const deleteWarnings = $derived(
+		sampling?.id != null ? samplingDeleteWarnings(useOf(sampling.id)) : []
+	)
+	let deleting = false
 	function handleDelete() {
-		if (!socket || !sampling) return
-		if (sampling.isImmutable) {
-			toaster.error({
-				title: "Cannot delete",
-				description: "Cannot delete immutable sampling configuration."
-			})
-			return
-		}
+		if (!sampling || sampling.isImmutable) return
 		showDeleteModal = true
 	}
-
 	function confirmDelete() {
-		socket.emit("samplingConfigs:delete", {
-			id: sampling!.id!
+		if (!sampling?.id) return
+		deleting = true
+		socket.emit("samplingConfigs:delete", { id: sampling.id })
+		showDeleteModal = false
+	}
+
+	// ── New and Duplicate ────────────────────────────────────────────────────
+	let newOpen = $state(false)
+	let newSeed = $state<SamplingNewSeed>({
+		name: "",
+		shape: S.textGen,
+		fromId: null
+	})
+	/** A refusal from the server, under the dialog's name. */
+	let newError: string | undefined = $state()
+	/** The create in flight: only its own answer moves the view. */
+	let creating = $state<SamplingNewSeed | null>(null)
+	/** Duplicate copies the editor as it stands, unsaved edits included. */
+	let duplicating = false
+
+	/**
+	 * Where a modality's copy-from starts: the open config when it is of that
+	 * modality, else one holding a default there, else the first built-in,
+	 * else the first, else nothing.
+	 */
+	function defaultFromFor(shape: string): number | null {
+		const pool = samplingConfigsList.filter((r) => shapeOf(r) === shape)
+		if (sampling?.id != null && pool.some((r) => r.id === sampling!.id))
+			return sampling.id
+		const held = new Set(
+			jobs.filter((j) => j.shape === shape).map((j) => j.samplingConfigId)
+		)
+		return (
+			(
+				pool.find((r) => held.has(r.id)) ??
+				pool.find((r) => r.isImmutable) ??
+				pool[0]
+			)?.id ?? null
+		)
+	}
+
+	/**
+	 * New copies saved values only, and the config it makes opens in the
+	 * editor, replacing the draft there: so a draft with edits asks first.
+	 */
+	async function openNew() {
+		if (unsavedChanges && !(await confirmDiscard())) return
+		const shape = sampling ? shapeOf(sampling) : S.textGen
+		newSeed = { name: "", shape, fromId: defaultFromFor(shape) }
+		newError = undefined
+		duplicating = false
+		newOpen = true
+	}
+
+	/** The copy carries the draft's edits, so nothing is asked. */
+	function openDuplicate() {
+		if (!sampling?.id) return
+		const shape = shapeOf(sampling)
+		newSeed = {
+			name: uniqueCopyName(sampling.name, shape, samplingConfigsList),
+			shape,
+			fromId: sampling.id
+		}
+		newError = undefined
+		duplicating = true
+		newOpen = true
+	}
+
+	function handleCreate(choice: SamplingNewSeed) {
+		const source: Pick<SamplingListRow, "values" | "enabled"> | undefined =
+			choice.fromId == null
+				? undefined
+				: duplicating && choice.fromId === sampling?.id
+					? $state.snapshot(sampling)
+					: samplingConfigsList.find((r) => r.id === choice.fromId)
+		newError = undefined
+		creating = choice
+		socket.emit("samplingConfigs:create", {
+			sampling: {
+				name: choice.name,
+				shape: choice.shape,
+				values: structuredClone($state.snapshot(source?.values ?? {})),
+				enabled: [...(source?.enabled ?? [])]
+			} as any
 		})
-		showDeleteModal = false
 	}
 
-	function cancelDelete() {
-		showDeleteModal = false
+	// ── Set as default… ──────────────────────────────────────────────────────
+	let defaultsOpen = $state(false)
+	let settingDefault = false
+	const shapeJobs = $derived(
+		sampling
+			? sortJobs(jobs.filter((j) => j.shape === shapeOf(sampling!)))
+			: []
+	)
+	const configName = (id: number) =>
+		samplingConfigsList.find((c) => c.id === id)?.name ?? null
+
+	function applyDefault(transforms: string[]) {
+		if (!sampling?.id || !transforms.length) return
+		settingDefault = true
+		socket.emit("samplingConfigs:setDefaultFor", {
+			id: sampling.id,
+			transforms
+		})
 	}
 
-	async function handleOnClose() {
-		if (unsavedChanges) {
-			showUnsavedChangesModal = true
-			return new Promise<boolean>((resolve) => {
-				confirmCloseSidebarResolve = resolve
-			})
-		} else {
-			return true
-		}
+	// ── Used by: links out ───────────────────────────────────────────────────
+	/** A job opens its default loadout's sheet in the Loadouts view (I12). */
+	function openJob(job: SamplingJob) {
+		openInLoadouts(panelsCtx, { job: job.capability })
+	}
+	function openPipeline(p: SamplingPipelineUse) {
+		openInPipelines(panelsCtx, { slug: p.slug })
 	}
 
-	function handleUnsavedChangesModalConfirm() {
-		showUnsavedChangesModal = false
-		if (confirmCloseSidebarResolve) confirmCloseSidebarResolve(true)
-	}
-	function handleUnsavedChangesModalCancel() {
-		showUnsavedChangesModal = false
-		if (confirmCloseSidebarResolve) confirmCloseSidebarResolve(false)
-	}
-	function handleUnsavedChangesModalOpenChange(e: OpenChangeDetails) {
-		if (!e.open) {
-			showUnsavedChangesModal = false
-			if (confirmCloseSidebarResolve) confirmCloseSidebarResolve(false)
-		}
+	function requestUsedBy() {
+		socket.emit("samplingConfigs:usedBy", {})
 	}
 
+	// ── Socket answers ───────────────────────────────────────────────────────
 	function handleSamplingConfigsList(
 		message: Sockets.SamplingConfigs.List.Response
 	) {
 		samplingConfigsList = message.samplingConfigsList
-		// A selection that belongs to the other category (or to a row that has
-		// just been deleted) would render an empty panel under this heading.
-		// `!== "index"` rather than `=== "list"`: the enable/disable screen
-		// edits the same selection, so a row deleted while it is open needs the
-		// same repair.
+		listLoaded = true
+		// The open config went (deleted here or anywhere): the desk opens its
+		// usual pick, compact goes back to the list.
 		if (
-			view !== "index" &&
-			selectedSamplingId != null &&
-			!viewConfigs.some((c) => c.id === selectedSamplingId)
+			selectedId != null &&
+			!samplingConfigsList.some((c) => c.id === selectedId)
 		) {
-			selectedSamplingId = defaultIdFor(shape) ?? firstOfShape(shape)
+			sampling = undefined
+			originalSamplingConfig = undefined
+			compactOpen = false
+			selectedId =
+				vm.mode === "desk"
+					? initialSamplingId(samplingConfigsList, jobs, null)
+					: null
 		}
-	}
-	function handleSamplingConfigsDelete(
-		_message: Sockets.SamplingConfigs.Delete.Response
-	) {
-		toaster.success({ title: "Sampling config deleted" })
-	}
-	function handleSamplingConfigsUpdate(
-		_message: Sockets.SamplingConfigs.Update.Response
-	) {
-		toaster.success({ title: "Sampling config updated" })
-	}
-	function handleSamplingConfigsCreate(
-		message: Sockets.SamplingConfigs.Create.Response
-	) {
-		selectedSamplingId = message.sampling.id
-		// The modal is closed HERE rather than on confirm — the row exists now,
-		// so there is nothing left to correct in it.
-		newNameError = undefined
-		showNewNameModal = false
-		toaster.success({ title: "Sampling config created" })
-	}
-	/**
-	 * A refused clone — a name already taken within this modality is the one a
-	 * person actually hits, and the answer is to type a different one. So the
-	 * message goes under the input that has to change, and the modal stays up.
-	 * Both `:error` events are listed in Layout's HANDLED_ERROR_EVENTS, or this
-	 * would arrive twice: once here, once as a generated toast.
-	 */
-	function handleSamplingConfigsCreateError(message: Sockets.ErrorResponse) {
-		newNameError = message.error
-	}
-	/**
-	 * The same refusal on a rename. Filed under `name` rather than toasted for
-	 * the same reason: it is a statement about that field, and the field is on
-	 * screen. The other update errors the server can raise (immutable row,
-	 * unknown shape) are unreachable from this form — Update is disabled on
-	 * immutable rows and the shape is never edited here.
-	 */
-	function handleSamplingConfigsUpdateError(message: Sockets.ErrorResponse) {
-		validationErrors = { ...validationErrors, name: message.error }
 	}
 	function handleSamplingConfigsGet(
 		message: Sockets.SamplingConfigs.Get.Response
 	) {
+		// Every view's `:get` answers here; only the open config's is ours.
+		if (message.sampling?.id !== selectedId) return
 		// Cloned so the form edits a copy and `originalSamplingConfig` stays a
-		// clean baseline for the unsaved-changes comparison. Deep, because the two
-		// halves that actually get edited are nested objects.
+		// clean baseline for the unsaved-changes comparison.
 		sampling = structuredClone(message.sampling)
 		originalSamplingConfig = structuredClone(message.sampling)
 	}
-	function handleSamplingConfigsSetUserActive() {
-		toaster.success({ title: "Default sampling config updated" })
+	function handleSamplingConfigsUpdate(
+		message: Sockets.SamplingConfigs.Update.Response
+	) {
+		if (!saving || message.sampling?.id !== selectedId) return
+		saving = false
+		toaster.success({ title: `Saved ${message.sampling.name}` })
+	}
+	/**
+	 * A refused rename: filed under `name`, where the field is, rather than
+	 * toasted. Layout lists this event in HANDLED_ERROR_EVENTS, so it
+	 * arrives once.
+	 */
+	function handleSamplingConfigsUpdateError(message: Sockets.ErrorResponse) {
+		if (!saving) return
+		saving = false
+		validationErrors = { ...validationErrors, name: message.error }
+	}
+	function handleSamplingConfigsCreate(
+		message: Sockets.SamplingConfigs.Create.Response
+	) {
+		const mine = creating
+		if (!mine || (message.sampling?.name ?? "").trim() !== mine.name) return
+		creating = null
+		newOpen = false
+		newError = undefined
+		openConfig(message.sampling.id)
+		toaster.success({ title: "Sampling config created" })
+	}
+	/**
+	 * A refused create — a name already taken within this modality is the one
+	 * a person hits, and the answer is to type a different one. So it goes
+	 * under the name in the dialog, which stays open. Layout lists this event
+	 * in HANDLED_ERROR_EVENTS, so it arrives once.
+	 */
+	function handleSamplingConfigsCreateError(message: Sockets.ErrorResponse) {
+		if (!creating) return
+		creating = null
+		newError = message.error
+	}
+	function handleSamplingConfigsDelete() {
+		if (!deleting) return
+		deleting = false
+		toaster.success({ title: "Sampling config deleted" })
+		requestUsedBy()
+	}
+	function handleSamplingConfigsSetDefaultFor(
+		message: Sockets.SamplingConfigs.SetDefaultFor.Response
+	) {
+		if (!settingDefault) return
+		settingDefault = false
+		defaultsOpen = false
+		const name = configName(message.id) ?? "The config"
+		const names = sortJobs(
+			message.transforms.map((capability) => ({ capability }))
+		).map((j) => jobLabel(j.capability))
+		const list =
+			names.length <= 1
+				? names.join("")
+				: `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
+		toaster.success({
+			title: "Loadout sampling updated",
+			description: `The ${list} ${names.length === 1 ? "loadout uses" : "loadouts use"} ${name} now.`
+		})
+	}
+	function handleSamplingConfigsUsedBy(
+		message: Sockets.SamplingConfigs.UsedBy.Response
+	) {
+		usedBy = message
 	}
 
 	/**
-	 * All eight BARE — no `samplingConfigs:` event is in `SCOPED_EVENTS`, so
-	 * `:get` is matched on its event name and the handler takes whatever row
-	 * came back, as before. All STANDING: the list is a cascade target (every
-	 * create, update and delete re-sends it), and a sidebar that writes has to
-	 * hold the keys its own writes answer on.
-	 *
-	 * The two `:error` keys are what the old code called out as registered and
-	 * torn down BY NAMED REFERENCE — a bare
-	 * `socket.off("samplingConfigs:create:error")` removed Layout's listener
-	 * along with this one, twice, for real. The registry now owns the single
-	 * raw listener per event and releases only this sidebar's subscriber.
+	 * Every `samplingConfigs:` answer is held through the interest registry,
+	 * standing: the list is a cascade target (every create, update and delete
+	 * re-sends it), and a view that writes holds the keys its writes answer
+	 * on. The two `:error` keys release only this view's subscriber; a bare
+	 * `socket.off` would take Layout's listener with it.
 	 */
 	useInterest<"samplingConfigs:list">(
 		"samplingConfigs:list",
@@ -434,359 +503,450 @@
 		"samplingConfigs:get",
 		handleSamplingConfigsGet
 	)
-	useInterest<"samplingConfigs:setUserActive">(
-		"samplingConfigs:setUserActive",
-		handleSamplingConfigsSetUserActive
+	useInterest<"samplingConfigs:setDefaultFor">(
+		"samplingConfigs:setDefaultFor",
+		handleSamplingConfigsSetDefaultFor
 	)
+	useInterest<"samplingConfigs:usedBy">(
+		"samplingConfigs:usedBy",
+		handleSamplingConfigsUsedBy
+	)
+	useInterest<"images:drawingSheet">("images:drawingSheet", (res) => {
+		// A workflow's sheet (the Workflows tab asked) is not the Image
+		// default's: it greys nothing here.
+		if (res?.workflowId != null) return
+		// Nor is a card's Sprites-tab question about its own pair.
+		if (res?.characterId != null) return
+		imageSheetDrops = res?.drops ?? []
+	})
 
 	// ⚠ AFTER the `useInterest` declarations above, never before them. Effects
-	// run in declaration order, and every `samplingConfigs:` reply is GATED: a
-	// `:get` emitted by an effect declared earlier reached the server before
-	// the interest sync naming its key, so the server dropped the reply and the
-	// first open of a category drew an empty pane (owner note 26, 2026-10-02).
-	// Nothing re-asked, because opening the category set the SAME id the mount
-	// had already (unanswered) asked for. `requestConfig` below is the repair
-	// for that second half.
+	// run in declaration order, and the `samplingConfigs:` replies are GATED:
+	// a `:get` emitted by an effect declared earlier reaches the server before
+	// the interest sync naming its key, and the server drops the reply.
 	$effect(() => {
-		if (selectedSamplingId) {
-			socket.emit("samplingConfigs:get", { id: selectedSamplingId })
-		}
+		const id = selectedId
+		if (id == null) return
+		untrack(() => {
+			if (sampling?.id !== id) socket.emit("samplingConfigs:get", { id })
+		})
+	})
+
+	// The Image default's drawing sheet, asked again whenever an image config
+	// opens or that default moves.
+	$effect(() => {
+		if (!isImageConfig) return
+		void systemSettingsCtx?.capabilityDefaults?.["text->image"]
+		untrack(() => socket.emit("images:drawingSheet", {}))
+	})
+
+	// The desk never shows the list with nothing open beside it: once the list
+	// is here, open the config last open, else the one Chat's default names.
+	// Compact leaves the list standing until a pick.
+	$effect(() => {
+		if (vm.mode !== "desk" || !listLoaded || selectedId != null) return
+		untrack(() => {
+			const id = initialSamplingId(
+				samplingConfigsList,
+				jobs,
+				samplingSidebarMemory.selectedId
+			)
+			if (id != null) openConfig(id)
+		})
 	})
 
 	onMount(() => {
 		onclose = handleOnClose
 		socket.emit("samplingConfigs:list", {})
+		requestUsedBy()
 	})
+
+	const menuItems: RowMenuEntries = $derived([
+		{
+			label: "Use in loadouts…",
+			icon: Icons.Star,
+			onSelect: () => (defaultsOpen = true)
+		},
+		{ label: "Duplicate", icon: Icons.CopyPlus, onSelect: openDuplicate },
+		{
+			label: "Reset unsaved changes",
+			icon: Icons.RefreshCcw,
+			disabled: !unsavedChanges,
+			onSelect: handleReset
+		},
+		{ separator: true },
+		{
+			label: "Delete",
+			icon: Icons.Trash2,
+			destructive: true,
+			disabled: builtIn,
+			title: builtIn ? "A built-in config cannot be deleted" : undefined,
+			onSelect: handleDelete
+		}
+	])
+
+	/** The row's accessible name carries what its glyphs show. */
+	const rowTitle = (row: SamplingListRow, star: string | null) =>
+		[
+			row.name,
+			row.isImmutable && "built in",
+			star && star[0].toLowerCase() + star.slice(1)
+		]
+			.filter(Boolean)
+			.join(", ")
 </script>
 
-<div class="flex min-h-0 flex-1 flex-col" use:viewMode.observe>
+<div class="flex h-full min-h-0 flex-col" use:vm.observe>
 	<PanelSplit
-		mode={viewMode.mode}
-		hasDetail={view !== "index"}
-		listWidth="300px"
-		emptyMessage="Pick a category to see the configs in it."
-		list={categoryPane}
-		detail={configPane}
+		mode={vm.mode}
+		listWidth="340px"
+		{hasDetail}
+		emptyMessage="Pick a sampling config, or make a new one."
+		toolbar={listToolbar}
+		list={listPane}
+		detail={detailPane}
 	/>
 </div>
 
-{#snippet configPane()}
-	{#if view === "enabled"}
-		{@render enabledPane()}
-	{:else}
-		{@render listPane()}
-	{/if}
-{/snippet}
-
-{#snippet categoryPane()}
-	<div class="text-foreground flex h-full flex-col gap-3">
-		<p class="text-surface-600-400 text-sm">
-			Select a category to view and edit its sampling configurations.
-		</p>
-
-		{#each CATEGORIES as cat (cat.shape)}
-			{@const count = samplingConfigsList.filter(
-				(c) => (c.shape ?? S.textGen) === cat.shape
-			).length}
-			{@const defaultName = samplingConfigsList.find(
-				(c) => c.id === defaultIdFor(cat.shape)
-			)?.name}
-			{@const isOpen =
-				viewMode.mode === "desk" &&
-				view !== "index" &&
-				shape === cat.shape}
-			<!-- Standing list, so it has to say which row the right pane belongs
-		     to. Tonal + the inset bar, never a filled primary. -->
+{#snippet listToolbar()}
+	<ViewToolbar label="Sampling configs">
+		{#snippet primary()}
 			<button
-				class="card group w-full cursor-pointer rounded-xl p-4 text-left transition-all {isOpen
-					? 'sidebar-row-active'
-					: 'preset-filled-surface-100-900 hover:preset-tonal-primary'}"
-				aria-current={isOpen ? "true" : undefined}
-				onclick={() => openCategory(cat.shape)}
+				type="button"
+				class="btn btn-sm preset-filled-primary-500 shrink-0"
+				onclick={openNew}
 			>
-				<div class="flex items-start gap-3">
-					<div
-						class="bg-primary-500/10 text-primary-500 mt-0.5 shrink-0 rounded-lg p-2"
-					>
-						<cat.icon size={20} />
-					</div>
-					<div class="min-w-0 flex-1">
-						<div class="flex items-center justify-between gap-2">
-							<span class="font-semibold">{cat.title}</span>
-							<Icons.ChevronRight
-								size={16}
-								class="text-surface-600-400 shrink-0 transition-transform group-hover:translate-x-0.5"
-							/>
-						</div>
-						<p class="text-surface-600-400 mt-0.5 text-sm">
-							{cat.blurb}
-						</p>
-						<div
-							class="text-surface-600-400 mt-2 flex items-center gap-3 text-xs"
-						>
-							<span>
-								{count}
-								{count === 1 ? "config" : "configs"}
-							</span>
-							{#if defaultName}
-								<span
-									class="text-success-600 dark:text-success-400 flex items-center gap-1 font-medium"
-								>
-									<Icons.CheckCircle size={12} />
-									{defaultName}
-								</span>
-							{/if}
-						</div>
-					</div>
-				</div>
+				<Icons.Plus size={16} aria-hidden="true" /> New
 			</button>
-		{/each}
-	</div>
-{/snippet}
-
-{#snippet enabledPane()}
-	<!-- ── ENABLE / DISABLE ────────────────────────────────────────────────
-     Back neither saves nor discards: a switch flipped here is pending in
-     exactly the way a slider drag is, and the same `unsavedChanges` compare,
-     Reset and close-guard already cover `enabled` for free. -->
-	<div class="text-foreground min-h-100">
-		<div class="mb-3">
-			<PanelNavHeader
-				title="Enabled parameters"
-				onBack={() => (view = "list")}
-				backLabel={categoryTitle}
+		{/snippet}
+		{#snippet filter()}
+			<PanelFilterInput
+				bind:value={filterText}
+				placeholder="sampling configs"
+				singular="sampling config"
+				count={samplingConfigsList.length}
 			/>
-		</div>
-		{#if sampling}
-			<p class="text-surface-600-400 mb-4 text-sm">
-				Only the parameters switched on are sent — the rest are left to
-				the backend's own defaults. Their values are edited on the
-				previous screen, and nothing is saved until you press Update
-				there.
-			</p>
-			{#if sampling.isImmutable}
-				<!-- Repeated from the list screen: without it the switches read
-			     as broken rather than as read-only. -->
-				<div
-					class="preset-tonal-warning mb-4 flex items-center gap-2 rounded-xl p-2 text-sm"
-				>
-					<Icons.Info size={16} class="shrink-0" />
-					This is a built-in config — clone it to make changes.
-				</div>
-			{/if}
-			<SamplingEnabledForm
-				schema={activeSchema}
-				bind:values={sampling.values}
-				bind:enabled={sampling.enabled}
-				disabled={sampling.isImmutable}
-			/>
-		{/if}
-	</div>
+		{/snippet}
+	</ViewToolbar>
 {/snippet}
 
 {#snippet listPane()}
-	<div class="text-foreground min-h-100">
-		<div class="mb-3">
-			<PanelNavHeader
-				title={categoryTitle}
-				onBack={backToIndex}
-				backLabel="Categories"
-			/>
-		</div>
-
-		{#if !viewConfigs.length}
-			<p class="text-surface-600-400 py-8 text-center text-sm">
-				No sampling configurations in this category yet.
-			</p>
-		{:else if !!sampling}
-			<!-- The view toolbar (STYLE-GUIDE §6.3), on an editor: saving is
-			     the primary, Reset and Clone the secondary icon buttons, and
-			     Set default and Delete one ⋯ away. -->
-			<ViewToolbar
-				label="Sampling config"
-				class="mt-2 mb-3 @lg/view:mt-0"
-				menuItems={[
-					{
-						label:
-							selectedSamplingId === activeSamplingConfigId
-								? "Already the default"
-								: "Set as default",
-						icon: Icons.Star,
-						disabled:
-							!selectedSamplingId ||
-							selectedSamplingId === activeSamplingConfigId,
-						onSelect: handleSetDefault
-					},
-					{ separator: true },
-					{
-						label: "Delete",
-						icon: Icons.Trash2,
-						destructive: true,
-						disabled: !!sampling && sampling.isImmutable,
-						title:
-							!!sampling && sampling.isImmutable
-								? "A built-in config cannot be deleted"
-								: undefined,
-						onSelect: handleDelete
-					}
-				]}
-			>
-				{#snippet primary()}
-					<button
-						type="button"
-						class="btn btn-sm preset-filled-primary-500 shrink-0"
-						onclick={handleUpdate}
-						disabled={(!!sampling && sampling.isImmutable) ||
-							!unsavedChanges}
-					>
-						<Icons.Save size={16} aria-hidden="true" /> Update
-					</button>
-				{/snippet}
-				{#snippet actions()}
-					<button
-						type="button"
-						class={toolbarButtonClass()}
-						onclick={handleReset}
-						disabled={!unsavedChanges}
-						title="Reset unsaved changes"
-						aria-label="Reset unsaved changes"
-					>
-						<Icons.RefreshCcw size={16} aria-hidden="true" />
-					</button>
-					<button
-						type="button"
-						class={toolbarButtonClass()}
-						onclick={handleNew}
-						title="Clone to a new config"
-						aria-label="Clone to a new config"
-					>
-						<Icons.CopyPlus size={16} aria-hidden="true" />
-					</button>
-				{/snippet}
-			</ViewToolbar>
-			<div class="mb-4">
-				<Select
-					label="Sampling config"
-					labelHidden
-					disabled={unsavedChanges}
-					options={[
-						...viewConfigs.filter((c) => c.isImmutable),
-						...viewConfigs.filter((c) => !c.isImmutable)
-					].map((c) => ({
-						value: String(c.id),
-						label: `${c.id === activeSamplingConfigId ? "★ " : ""}${c.name}${c.isImmutable ? "*" : ""}`
-					}))}
-					bind:value={
-						() => (selectedSamplingId == null ? "" : String(selectedSamplingId)),
-						(v) => (selectedSamplingId = v ? Number(v) : null)
-					}
-				/>
-			</div>
-			{#if sampling && sampling.isImmutable}
-				<div
-					class="preset-tonal-warning mb-4 flex items-center gap-2 rounded-xl p-2 text-sm"
-				>
-					<Icons.Info size={16} class="shrink-0" />
-					This is a built-in config (marked with a trailing *) — clone
-					it to make changes.
-				</div>
-			{/if}
-
-			<form class="space-y-4">
-				<div class="flex flex-col gap-1">
-					<label class="font-semibold" for="samplingName">Name</label>
-					<input
-						id="samplingName"
-						type="text"
-						bind:value={sampling.name}
-						class="input {validationErrors.name
-							? 'border-error-500'
-							: ''}"
-						disabled={!!sampling && sampling.isImmutable}
-						oninput={() => {
-							if (validationErrors.name) {
-								const { name, ...rest } = validationErrors
-								validationErrors = rest
-							}
-						}}
+	{#if !listLoaded}
+		<LoadingState message="Loading sampling configs…" />
+	{:else if !samplingConfigsList.length}
+		<EmptyState
+			icon={Icons.SlidersHorizontal}
+			message="No sampling configs yet."
+			ctaLabel="New sampling config"
+			onCta={openNew}
+		/>
+	{:else if !groups.length}
+		<EmptyState
+			icon={Icons.SearchX}
+			message="No sampling configs match “{filterText.trim()}”."
+		/>
+	{:else}
+		<div class="flex flex-col">
+			{#each groups as g, i (g.shape)}
+				{@const labelId = `${uid}-group-${i}`}
+				<section class="flex flex-col">
+					<ListGroupLabel
+						label={g.label}
+						id={labelId}
+						trailing={String(g.rows.length)}
 					/>
-					{#if validationErrors.name}
-						<p class="text-error-500 mt-1 text-sm" role="alert">
-							{validationErrors.name}
-						</p>
-					{/if}
-				</div>
-
-				<!-- The count is the only thing the inline checkboxes carried
-			     that this screen no longer shows: it now draws just the
-			     parameters that are on, so "N of M" is how you learn there
-			     are others. -->
-				<button
-					type="button"
-					class="card preset-filled-surface-100-900 hover:preset-tonal-primary group flex w-full cursor-pointer items-center justify-between gap-2 rounded-xl p-3 text-left transition-all"
-					onclick={() => (view = "enabled")}
-					aria-label="Enabled parameters — {enabledSummary.on} of {enabledSummary.total}"
-				>
-					<span class="flex min-w-0 items-center gap-2">
-						<Icons.ListChecks
-							size={16}
-							class="text-primary-500 shrink-0"
-						/>
-						<span class="truncate font-semibold">
-							Enabled parameters
-						</span>
-					</span>
-					<span
-						class="text-surface-600-400 flex shrink-0 items-center gap-1 text-sm"
+					<div
+						role="list"
+						class="flex flex-col gap-1"
+						aria-labelledby={labelId}
 					>
-						{enabledSummary.on} of {enabledSummary.total}
-						<Icons.ChevronRight
-							size={16}
-							class="transition-transform group-hover:translate-x-0.5"
-						/>
-					</span>
-				</button>
+						{#each g.rows as row (row.id)}
+							{@const use = useOf(row.id)}
+							{@const star = samplingStarWords(use)}
+							<SidebarListItem
+								itemType="Sampling config"
+								contentTitle={rowTitle(row, star)}
+								showIndex={false}
+								active={row.id === selectedId}
+								onclick={() => selectRow(row.id)}
+							>
+								{#snippet content()}
+									<span
+										class="flex min-w-0 flex-1 flex-col text-left"
+									>
+										<span
+											class="flex min-w-0 items-center gap-1.5"
+										>
+											<span
+												class="truncate text-[15px] font-medium"
+											>
+												{row.name}
+											</span>
+											<!-- Each glyph's own `title` is its
+											     tooltip: it is inside the row's
+											     button, so it cannot be a
+											     focusable trigger of its own, and
+											     its title wins over the row's
+											     while the pointer is on it. The
+											     row's name carries the same
+											     words for a screen reader. -->
+											{#if row.isImmutable}
+												<span
+													class="inline-flex shrink-0"
+													role="img"
+													aria-label={BUILT_IN_GLYPH_WORDS}
+													title={BUILT_IN_GLYPH_WORDS}
+												>
+													<Icons.Lock
+														size={14}
+														class="text-surface-600-400"
+														aria-hidden="true"
+													/>
+												</span>
+											{/if}
+											{#if star}
+												<span
+													class="inline-flex shrink-0"
+													role="img"
+													aria-label={star}
+													title={star}
+												>
+													<Icons.Star
+														size={14}
+														class="text-primary-500 fill-current"
+														aria-hidden="true"
+													/>
+												</span>
+											{/if}
+										</span>
+										<span
+											class="text-surface-600-400 truncate text-xs"
+										>
+											{samplingRowLine(row, use)}
+										</span>
+									</span>
+								{/snippet}
+							</SidebarListItem>
+						{/each}
+					</div>
+				</section>
+			{/each}
+		</div>
+	{/if}
+{/snippet}
 
-				<!-- Every ENABLED parameter the shape declares. The switches are
-			     next door; the old form listed nine hand-picked samplers and
-			     the rest of the table was unreachable from anywhere. -->
-				<SamplingValuesForm
-					schema={activeSchema}
-					bind:values={sampling.values}
-					enabled={sampling.enabled}
-					disabled={sampling.isImmutable}
-				/>
-			</form>
-		{:else}
-			<!-- Asked, not yet answered — said, never a blank pane. -->
-			<p
-				class="text-surface-600-400 py-8 text-center text-sm"
-				role="status"
+{#snippet saveButton()}
+	<button
+		type="button"
+		class="btn btn-sm preset-filled-primary-500 shrink-0"
+		onclick={handleSave}
+		disabled={builtIn || !unsavedChanges}
+	>
+		<Icons.Save size={16} aria-hidden="true" /> Save
+	</button>
+{/snippet}
+
+{#snippet builtInLine()}
+	{#if builtIn}
+		<p class="text-surface-600-400 text-sm">
+			Built in · read-only. Duplicate it to change values.
+		</p>
+	{/if}
+{/snippet}
+
+{#snippet detailPane()}
+	<!-- Back only at compact, where the list has given way to the editor;
+	     at desk the list stands beside it (STYLE-GUIDE §6.3). -->
+	<div class="flex flex-col gap-3">
+		{#if sampling && sampling.id === selectedId}
+			<PanelNavHeader
+				title={detailTitle}
+				onBack={vm.mode === "compact"
+					? () => (compactOpen = false)
+					: undefined}
+				backLabel="Sampling configs"
+				primaryAction={saveButton}
+				{menuItems}
+				actionsLabel="Sampling config"
+				subtitle={builtInLine}
+			/>
+
+			<form
+				class="flex flex-col gap-4"
+				onsubmit={(e) => e.preventDefault()}
 			>
-				Loading sampling config…
-			</p>
+				{#if !builtIn}
+					<div class="flex flex-col gap-1">
+						<label class="text-sm font-semibold" for="samplingName">
+							Name
+						</label>
+						<input
+							id="samplingName"
+							type="text"
+							bind:value={sampling.name}
+							class="input {validationErrors.name
+								? 'border-error-500'
+								: ''}"
+							aria-invalid={!!validationErrors.name}
+							aria-describedby={validationErrors.name
+								? "samplingName-error"
+								: undefined}
+							oninput={() => {
+								if (validationErrors.name) {
+									const { name, ...rest } = validationErrors
+									validationErrors = rest
+								}
+							}}
+						/>
+						{#if validationErrors.name}
+							<p
+								id="samplingName-error"
+								class="text-error-600-400 text-sm"
+								role="alert"
+							>
+								{validationErrors.name}
+							</p>
+						{/if}
+					</div>
+				{/if}
+
+				<section
+					class="flex flex-col gap-2"
+					aria-labelledby="{uid}-params"
+				>
+					<div class="flex min-w-0 items-center gap-2">
+						<h3 id="{uid}-params" class="text-sm font-semibold">
+							Parameters
+						</h3>
+						<span class="text-surface-600-400 truncate text-xs">
+							{sentSummary.on} of {sentSummary.total} sent
+						</span>
+						<div class="min-w-0 flex-1"></div>
+						<button
+							type="button"
+							class="btn btn-sm shrink-0 {chooseParams
+								? 'preset-tonal-primary'
+								: 'preset-tonal-surface'}"
+							aria-pressed={chooseParams}
+							onclick={() => (chooseParams = !chooseParams)}
+						>
+							<Icons.ListChecks size={16} aria-hidden="true" />
+							Choose parameters
+						</button>
+					</div>
+					<SamplingValuesForm
+						schema={activeSchema}
+						bind:values={sampling.values}
+						bind:enabled={sampling.enabled}
+						choose={chooseParams}
+						disabled={builtIn}
+						{unhonoured}
+					/>
+				</section>
+			</form>
+
+			<!-- What picks this config: the jobs whose default names it and the
+			     pipelines whose sampling slot does, each opening where it is
+			     changed. -->
+			<section
+				class="panel-card flex flex-col gap-2"
+				aria-labelledby="{uid}-usedby"
+			>
+				<h3 id="{uid}-usedby" class="text-surface-600-400 text-xs">
+					Used by
+				</h3>
+				{#if detailUse.jobs.length || detailUse.pipelines.length}
+					<ul class="flex flex-col gap-1.5 text-sm">
+						{#each detailUse.jobs as j (j.capability)}
+							<li class="flex flex-wrap items-baseline gap-x-2">
+								<button
+									type="button"
+									class="anchor text-left"
+									onclick={() => openJob(j)}
+								>
+									{jobLabel(j.capability)}
+								</button>
+								<span class="text-surface-600-400 text-xs">
+									loadout
+								</span>
+							</li>
+						{/each}
+						{#each detailUse.pipelines as p (p.label)}
+							<li class="flex flex-wrap items-baseline gap-x-2">
+								<button
+									type="button"
+									class="anchor text-left"
+									onclick={() => openPipeline(p)}
+								>
+									{p.label}
+								</button>
+								<span class="text-surface-600-400 text-xs">
+									pipeline
+								</span>
+							</li>
+						{/each}
+					</ul>
+				{:else if !usedBy}
+					<LoadingState message="Finding what uses it…" />
+				{:else}
+					<p class="text-surface-600-400 text-sm">
+						Nothing uses it yet. Set it as a default from ⋯, or pick
+						it in a pipeline's settings.
+					</p>
+				{/if}
+			</section>
+		{:else}
+			<PanelNavHeader
+				title={selectedRow?.name ?? "Sampling config"}
+				onBack={vm.mode === "compact"
+					? () => (compactOpen = false)
+					: undefined}
+				backLabel="Sampling configs"
+			/>
+			<!-- Asked, not yet answered — said, never a blank pane. -->
+			<LoadingState message="Loading sampling config…" />
 		{/if}
 	</div>
 {/snippet}
 
 <SamplingConfigUnsavedChangesModal
 	open={showUnsavedChangesModal}
-	onOpenChange={handleUnsavedChangesModalOpenChange}
-	onConfirm={handleUnsavedChangesModalConfirm}
-	onCancel={handleUnsavedChangesModalCancel}
-/>
-<NewNameModal
-	open={showNewNameModal}
 	onOpenChange={(e) => {
-		showNewNameModal = e.open
-		// Dismissed by backdrop or Escape — the refusal went with it.
-		if (!e.open) newNameError = undefined
+		if (!e.open && showUnsavedChangesModal) answerDiscard(false)
 	}}
-	onConfirm={handleNewNameConfirm}
-	onCancel={handleNewNameCancel}
-	title="New sampling config"
-	description="Your current settings will be copied."
-	error={newNameError}
+	onConfirm={() => answerDiscard(true)}
+	onCancel={() => answerDiscard(false)}
+	subject="sampling config"
+/>
+
+<SamplingNewDialog
+	open={newOpen}
+	rows={samplingConfigsList}
+	seed={newSeed}
+	{defaultFromFor}
+	error={newError}
+	busy={!!creating}
+	onCreate={handleCreate}
+	onClose={() => {
+		newOpen = false
+		newError = undefined
+		creating = null
+	}}
+/>
+
+<SamplingDefaultsDialog
+	open={defaultsOpen}
+	config={sampling?.id != null
+		? {
+				id: sampling.id,
+				name: originalSamplingConfig?.name ?? sampling.name
+			}
+		: null}
+	jobs={shapeJobs}
+	loaded={!!usedBy}
+	{configName}
+	onApply={applyDefault}
+	onClose={() => (defaultsOpen = false)}
 />
 
 <Dialog open={showDeleteModal} onOpenChange={(e) => (showDeleteModal = e.open)}>
@@ -798,22 +958,36 @@
 			class="fixed inset-0 z-50 flex items-center justify-center p-4"
 		>
 			<Dialog.Content
-				class="card bg-surface-100-900 max-w-[95vw] space-y-4 p-4 shadow-xl"
+				class="card bg-surface-100-900 w-full max-w-md space-y-4 p-4 shadow-xl"
 			>
 				<header class="flex justify-between">
-					<h2 class="h2">Delete sampling configuration</h2>
+					<Dialog.Title class="h2">
+						Delete sampling config
+					</Dialog.Title>
 				</header>
-				<article>
-					<p class="opacity-60">
-						Are you sure you want to delete the sampling
-						configuration "{sampling?.name}"? This action cannot be
-						undone.
-					</p>
+				<article class="space-y-2">
+					<Dialog.Description class="opacity-60">
+						Delete "{sampling?.name}"? This cannot be undone.
+					</Dialog.Description>
+					<!-- A config some job or pipeline uses says what goes with
+					     it, before the press rather than after. -->
+					{#each deleteWarnings as line (line)}
+						<p
+							class="text-warning-700-300 flex items-start gap-2 text-sm"
+						>
+							<Icons.TriangleAlert
+								size={16}
+								class="mt-0.5 shrink-0"
+								aria-hidden="true"
+							/>
+							<span>{line}</span>
+						</p>
+					{/each}
 				</article>
 				<footer class="flex justify-end gap-4">
 					<button
-						class="btn preset-filled-surface-500"
-						onclick={cancelDelete}
+						class="btn preset-tonal-surface"
+						onclick={() => (showDeleteModal = false)}
 					>
 						Cancel
 					</button>

@@ -23,6 +23,8 @@
 	import { createViewMode } from "$lib/client/utils/viewMode.svelte"
 	import SessionsUnsavedChangesModal from "../modals/SessionsUnsavedChangesModal.svelte"
 	import EmptyState from "../EmptyState.svelte"
+	import LoadingState from "../LoadingState.svelte"
+	import ListGroupLabel from "../panels/ListGroupLabel.svelte"
 	import PanelFilterInput from "../panels/PanelFilterInput.svelte"
 	import PanelSplit from "../panels/PanelSplit.svelte"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
@@ -396,7 +398,6 @@
 	$effect(() =>
 		jumpCtx?.registerScope("sessions", {
 			label: "Sessions",
-			placeholder: "Filter sessions",
 			getQuery: () => search,
 			setQuery: (next) => (search = next),
 			getHits: () =>
@@ -479,11 +480,14 @@
 		handleViewClick(session.id)
 	}
 
-	/** Marked as selected: the open session, or the detail beside the list. */
+	/** Marked as selected: the open session, or the detail or edit form
+	    beside the list. */
 	function isRowActive(session: SessionRow): boolean {
 		return (
 			session.id === sessionId ||
-			(vm.mode === "desk" && session.id === viewingId)
+			(vm.mode === "desk" &&
+				(session.id === viewingId ||
+					(isEditing && session.id === editSessionId)))
 		)
 	}
 
@@ -912,7 +916,7 @@
 	</span>
 {/snippet}
 
-<div use:vm.observe class="text-foreground flex h-full min-h-0 flex-col">
+<div class="flex h-full min-h-0 flex-col" use:vm.observe>
 	<PanelSplit
 		mode={vm.mode}
 		hasDetail={isStarting || isEditing || viewingId != null}
@@ -929,22 +933,25 @@
 					bind:hasChanges={sessionFormHasChanges}
 					onCreated={handleSessionCreated}
 					onCancel={closeStartForm}
-					showBack={vm.mode !== "desk"}
+					showBack={vm.mode === "compact"}
 				/>
 			{:else if isEditing}
+				<!-- Back only at compact (ruling Q3): at desk the list it
+				     would return to is beside it, and a row click leaves. -->
 				<EditSessionForm
 					bind:showEditSessionForm
 					bind:editSessionId
 					bind:hasChanges={sessionFormHasChanges}
 					onClose={closeEditForm}
+					showBack={vm.mode === "compact"}
 				/>
 			{:else if viewingId}
 				{#key viewingId}
 					<SessionViewPanel
 						sessionId={viewingId}
-						onBack={vm.mode === "desk"
-							? undefined
-							: () => (viewingId = null)}
+						onBack={vm.mode === "compact"
+							? () => (viewingId = null)
+							: undefined}
 						onEdit={handleEditFromView}
 						onOpen={() => handleOpenSession(viewingId!)}
 						onViewLorebook={handleViewLorebook}
@@ -961,12 +968,13 @@
 			{/if}
 		{/snippet}
 
-		{#snippet list()}
+		{#snippet toolbar()}
 			<!-- The view toolbar (STYLE-GUIDE §6.3): New on the action row;
 			     the filter box, the filter popout and the list/card pair on
 			     the find row; the standing picks and every narrowing in force
-			     under them. -->
-			<ViewToolbar label="Sessions" class="mb-2">
+			     under them. The split pins it over the list and owns the 12px
+			     between them. -->
+			<ViewToolbar label="Sessions">
 				{#snippet primary()}
 					<button
 						type="button"
@@ -1006,7 +1014,10 @@
 							aria-label="Filter sessions"
 							aria-expanded={filterOpen}
 						>
-							<Icons.SlidersHorizontal size={16} aria-hidden="true" />
+							<Icons.SlidersHorizontal
+								size={16}
+								aria-hidden="true"
+							/>
 						</Popover.Trigger>
 						<Portal>
 							<Popover.Positioner class="z-[1000]!">
@@ -1081,7 +1092,9 @@
 							onclick={() => pickFilter("waiting")}
 						>
 							Your turn
-							<span class="tabular-nums opacity-80">{yourTurnCount}</span>
+							<span class="tabular-nums opacity-80">
+								{yourTurnCount}
+							</span>
 						</button>
 						<button
 							type="button"
@@ -1121,54 +1134,44 @@
 					{/if}
 				{/snippet}
 			</ViewToolbar>
-			<div class="min-h-0 flex-1 overflow-y-auto">
-				{#if isLoading}
-					<div class="flex items-center justify-center py-8">
-						<Icons.Loader2
-							size={20}
-							class="text-surface-600-400 animate-spin"
+		{/snippet}
+
+		{#snippet list()}
+			{#if isLoading}
+				<LoadingState message="Loading sessions…" />
+			{:else if filteredSessions.length === 0}
+				<EmptyState
+					icon={Icons.MessageSquare}
+					message={listIsNarrowed
+						? "No sessions found matching your filters."
+						: "No sessions yet — start one to get roleplaying."}
+					ctaLabel={listIsNarrowed ? undefined : "New session"}
+					onCta={listIsNarrowed ? undefined : handleCreateClick}
+				/>
+			{:else}
+				<div class="flex min-w-0 flex-col">
+					<!-- The open session, under no header: it is pinned
+					     because it is open, which is a different fact from
+					     whose turn it is or when it last moved, and filing
+					     it under a group would put it back in the scroll. -->
+					{#if pinnedSession}
+						{@render sessionItems([pinnedSession], {
+							label: "Open session"
+						})}
+					{/if}
+					{#each sessionGroups as group (group.key)}
+						<!-- The shared group label (§6.4); the list it heads
+						     points back at it through `aria-labelledby`. -->
+						<ListGroupLabel
+							id="sessions-group-{group.key}"
+							label={group.label}
 						/>
-					</div>
-				{:else if filteredSessions.length === 0}
-					<EmptyState
-						icon={Icons.MessageSquare}
-						message={listIsNarrowed
-							? "No sessions found matching your filters."
-							: "No sessions yet — start one to get roleplaying."}
-						ctaLabel={listIsNarrowed ? undefined : "New session"}
-						onCta={listIsNarrowed ? undefined : handleCreateClick}
-					/>
-				{:else}
-					<div class="flex min-w-0 flex-col">
-						<!-- The open session, under no header: it is pinned
-						     because it is open, which is a different fact from
-						     whose turn it is or when it last moved, and filing
-						     it under a group would put it back in the scroll. -->
-						{#if pinnedSession}
-							{@render sessionItems([pinnedSession], {
-								label: "Open session"
-							})}
-						{/if}
-						{#each sessionGroups as group (group.key)}
-							<!-- A <p> and not an <h3>: this pane carries no
-							     heading of its own, so a level-3 heading would
-							     open the outline at the wrong depth. The list
-							     it labels points back at it instead. -->
-							<!-- 12px muted, not quiet: a label is text the
-							     reader uses (§6.4). -->
-							<p
-								id="sessions-group-{group.key}"
-								class="text-surface-600-400 px-3 pt-4 pb-1 text-xs"
-							>
-								{group.label}
-							</p>
-							{@render sessionItems(group.rows, {
-								labelledBy: `sessions-group-${group.key}`
-							})}
-						{/each}
-					</div>
-				{/if}
-			</div>
+						{@render sessionItems(group.rows, {
+							labelledBy: `sessions-group-${group.key}`
+						})}
+					{/each}
+				</div>
+			{/if}
 		{/snippet}
 	</PanelSplit>
 </div>
@@ -1201,7 +1204,7 @@
 				<footer class="flex justify-end gap-4">
 					<button
 						type="button"
-						class="btn preset-filled-surface-500"
+						class="btn preset-tonal-surface"
 						onclick={cancelDelete}
 						disabled={isDeleting}
 					>

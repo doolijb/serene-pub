@@ -1,12 +1,17 @@
 <script lang="ts">
 	/**
 	 * Test fixture: a `Panel` under the page contexts that supply scoped
-	 * sections (the dossier, the session's state) and, when given, the
+	 * sections (the dossier, the session's state, the cast) and, when given, the
 	 * page's request handler — with a stub manager.
 	 * Never mounted by the app.
 	 */
 	import { setContext } from "svelte"
-	import { SESSION_DOSSIER_KEY, SESSION_STATE_KEY, WIDGET_REQUESTS_KEY } from "$lib/shared/widgets/context"
+	import {
+		SESSION_CHARACTERS_KEY,
+		SESSION_DOSSIER_KEY,
+		SESSION_STATE_KEY,
+		WIDGET_REQUESTS_KEY
+	} from "$lib/shared/widgets/context"
 	import type { PanelInstance } from "$lib/client/surfaces/types"
 	import Panel from "./Panel.svelte"
 
@@ -18,7 +23,7 @@
 	}: {
 		instance: PanelInstance
 		session: { id: number; name?: string | null; sessionMessages: unknown[] }
-		supplies: { state?: unknown; dossier?: unknown }
+		supplies: { state?: unknown; dossier?: unknown; characters?: unknown }
 		/** The page's answer to a widget's request (`WIDGET_REQUESTS_KEY`), when a test gives one. */
 		requests?: unknown
 	} = $props()
@@ -34,6 +39,11 @@
 	setContext(SESSION_DOSSIER_KEY, {
 		get current() {
 			return supplies.dossier
+		}
+	})
+	setContext(SESSION_CHARACTERS_KEY, {
+		get current() {
+			return supplies.characters
 		}
 	})
 	const manager = {

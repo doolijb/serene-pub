@@ -19,6 +19,15 @@
  * VIEWER's (native took the first listed), and the sprite-set menu is offered
  * only where the viewer may switch (native offered it to everyone, and the
  * server refused).
+ *
+ * W6 (2026-10-11) retired the pinned source the native panel drew: who ×
+ * picture × arrangement replace it, and a 0.6 instance on the pinned source
+ * is a stage of chosen images, seeded once from this browser's pins
+ * (`scenePinsSeed.ts`). The last block holds the remote to that.
+ *
+ * F2 (2026-10-11): a chooser tile WRITES — `set-chosen-image`, answered by
+ * the page's own request table into the asking instance's settings — and the
+ * face follows when the settings come back.
  */
 import { describe, expect, test } from "vitest"
 import { createRequire } from "node:module"
@@ -30,6 +39,17 @@ import {
 	type CharactersSourceSession
 } from "./projections/characters"
 import { projectSessionState } from "./projections/sessionState"
+import { seedFromPins, seedPatch, takesPins } from "./scenePinsSeed"
+import { effectiveWidgetSettings, type WidgetSettingsDecl } from "$lib/shared/widgets/settings"
+import { CORE_WIDGETS } from "$lib/shared/widgets/types"
+import { buildWidgetRequestAnswerer, type WidgetRequestDeps } from "./requests"
+import { guardWidgetRequests } from "./requests/askers"
+import {
+	setWidgetSettingDecls,
+	setWidgetSettingsWriter,
+	setWidgetSettingValues,
+	widgetSettingValues
+} from "$lib/client/stores/widgetSettings.svelte"
 
 /* ── one session, as the page holds it ─────────────────────────────────── */
 
@@ -145,6 +165,8 @@ interface Case {
 	pins?: { left: string | null; right: string | null }
 	viewerUserId?: number
 	hp?: number
+	/** What the page answers the widget's requests with (W6: `character-images`). */
+	requests?: (kind: string, params: Record<string, unknown>) => unknown
 }
 
 /** The remote, as the page mounts it: the built module in core's box, posted the page's projections. */
@@ -167,7 +189,7 @@ async function remote(k: Case) {
 			viewer: { userId: k.viewerUserId ?? 10, isAdmin: false, isGuest: false },
 			scoped: { characters, session_state: stateSection(k.hp ?? 14) }
 		},
-		requests: () => undefined
+		requests: k.requests ?? (() => undefined)
 	})
 }
 
@@ -226,18 +248,6 @@ const NATIVE_DREW = {
 		...NO_FACES,
 		empty: "Nobody is in this scene yet. Add a character to the session and they show up here."
 	},
-	pinned: {
-		faces: [],
-		pins: [
-			{ img: F(1), alt: "left scene portrait", clear: "Clear left portrait", bars: ["HP 14/20"], text: null },
-			{ img: null, alt: null, clear: null, bars: [], text: "Empty" }
-		],
-		empty: null
-	},
-	pinnedEmpty: {
-		...NO_FACES,
-		empty: "No scene portraits set. Click a character's avatar in the chat to pin one here."
-	},
 	/** A guest (user 30): the switch for everyone, and the first persona listed — not theirs. */
 	guest: {
 		faces: [
@@ -293,24 +303,6 @@ describe("core's remote Scene Portraits draws what the native one drew", () => {
 		}
 	})
 
-	test("pinned: the pins, a pinned member's bars, the clear buttons and the empty side", { timeout: 120_000 }, async () => {
-		const view = await remote({ settings: { bars: true }, pins: { left: F(1), right: null } })
-		try {
-			expect(drawn(view.root)).toEqual(NATIVE_DREW.pinned)
-		} finally {
-			await view.unmount()
-		}
-	})
-
-	test("pinned, empty: nothing pinned", { timeout: 120_000 }, async () => {
-		const view = await remote({ settings: {} })
-		try {
-			expect(drawn(view.root)).toEqual(NATIVE_DREW.pinnedEmpty)
-		} finally {
-			await view.unmount()
-		}
-	})
-
 	test("R77, deliberate: a guest sees no switch it cannot use, and its OWN persona", { timeout: 120_000 }, async () => {
 		const view = await remote({ settings: { source: "scene", persona: true }, viewerUserId: 30 })
 		try {
@@ -331,6 +323,223 @@ describe("core's remote Scene Portraits draws what the native one drew", () => {
 			expect(drew.faces.slice(0, 2)).toEqual(NATIVE_DREW.guest.faces.slice(0, 2).map((f) => ({ ...f, switch: null })))
 		} finally {
 			await view.unmount()
+		}
+	})
+})
+
+/* ── W6: who × picture × arrangement ─────────────────────────────────────── */
+
+const at = (iso: string) => `2026-10-01T${iso}:00.000Z`
+/** The session with lines: Bo spoke last, then Kit (the owner's persona), then Ada. */
+const spoken = () =>
+	payload({
+		sessionMessages: [
+			{ id: 10, characterId: 3, createdAt: at("10:00"), metadata: { sprite: { set: "Casual", label: "happy" } } },
+			{ id: 11, personaId: 8, createdAt: at("10:01") },
+			{ id: 12, characterId: 4, createdAt: at("10:02") }
+		] as CharactersSourceSession["sessionMessages"]
+	})
+const members = (root: Element) => drawn(root).faces.map((f) => f.member)
+const portraitsDecl = CORE_WIDGETS.find((w) => w.id === "scene-portraits")!
+const decl: WidgetSettingsDecl = { id: "scene-portraits", title: portraitsDecl.title, settings: portraitsDecl.settings }
+/** What the page posts: the instance's effective settings over its stored row. */
+const effective = (stored: Record<string, unknown>) => effectiveWidgetSettings({ decl, stored })
+
+describe("W6: who, which picture, and how they stand", () => {
+	test("who: recent — whoever spoke last first, up to N, each ranked; the persona only when asked", { timeout: 120_000 }, async () => {
+		const view = await remote({ settings: effective({ who: "recent", recentTurns: 2 }), session: spoken() })
+		try {
+			expect(members(view.root)).toEqual(["character:4", "character:3"])
+			expect(view.queryAll(part("recent-rank")).map(text)).toEqual(["1", "2"])
+		} finally {
+			await view.unmount()
+		}
+		const withPersona = await remote({ settings: effective({ who: "recent", recentTurns: 2, persona: true }), session: spoken() })
+		try {
+			expect(members(withPersona.root)).toEqual(["character:4", "persona:8"])
+		} finally {
+			await withPersona.unmount()
+		}
+	})
+
+	test("who: pick — the members named, in the order named; a stage draws the first two large", { timeout: 120_000 }, async () => {
+		const view = await remote({ settings: effective({ who: "pick", pickMembers: ["Wee", "ada", "Bo"], arrangement: "stage" }) })
+		try {
+			expect(view.root.querySelector(part("root"))?.getAttribute("data-arrangement")).toBe("stage")
+			expect(view.root.querySelector(part("stage"))).not.toBeNull()
+			expect(members(view.root)).toEqual(["persona:9", "character:3"])
+			// The picture is the sprite (the default), as everywhere else.
+			expect(drawn(view.root).faces.map((f) => f.img)).toEqual([F(6), F(3)])
+		} finally {
+			await view.unmount()
+		}
+	})
+
+	test("face: chosen — the chosen image found in the member's gallery; the avatar where none is chosen", { timeout: 120_000 }, async () => {
+		const asked: unknown[] = []
+		const view = await remote({
+			settings: effective({ face: "chosen", chosenImages: [`character:3=${U(7)}`] }),
+			requests: (kind, params) => {
+				if (kind !== "character-images") return undefined
+				asked.push(params)
+				return { images: [{ ref: U(1), src: F(1) }, { ref: U(7), src: F(7) }] }
+			}
+		})
+		try {
+			await view.settle()
+			const faces = drawn(view.root).faces
+			expect(faces.map((f) => [f.member, f.img])).toEqual([
+				["character:3", F(7)],
+				["character:4", null]
+			])
+			expect(asked).toEqual([{ characterId: 3 }])
+			// No sprite-set switch on a chosen face; ⋯ in its place.
+			expect(faces.every((f) => f.switch === null)).toBe(true)
+			expect(view.queryAll(part("choose")).map((b) => b.getAttribute("aria-label"))).toEqual([
+				"Choose an image for Ada",
+				"Choose an image for Bo"
+			])
+		} finally {
+			await view.unmount()
+		}
+	})
+
+	test("a benched character is not in the scene: never a face, whoever is shown", { timeout: 120_000 }, async () => {
+		const benched = payload({
+			sessionCharacters: [
+				{ isActive: false, removedAt: null, position: 0, character: ada },
+				{ isActive: true, removedAt: null, position: 1, character: bo }
+			]
+		})
+		for (const settings of [{}, { who: "pick", pickMembers: ["Ada", "Bo"] }]) {
+			const view = await remote({ settings: effective(settings), session: benched })
+			try {
+				expect(members(view.root)).toEqual(["character:4"])
+			} finally {
+				await view.unmount()
+			}
+		}
+	})
+
+	test("⏳ a 0.6 instance on the pinned source, with this browser's pins: a stage of the pinned members' chosen images", { timeout: 120_000 }, async () => {
+		// The stored row and the pins, as 0.6 left them: Ada's avatar on the left, Bo's gallery image on the right.
+		const stored = { source: "pinned", bars: true }
+		const pins = { left: F(1), right: F(8) }
+		expect(takesPins(stored)).toBe(true)
+		const cast = projectCharacters({ session: payload(), viewerUserId: 10, voicedPersonaId: null, sceneImages: { left: null, right: null } })
+		const seed = await seedFromPins(pins, cast.members, async (id) => (id === 4 ? [{ uuid: U(8) }] : [{ uuid: U(1) }]))
+		const row = { ...stored, ...seedPatch(stored, seed) }
+		const gallery: Record<number, { ref: string; src: string }[]> = {
+			3: [{ ref: U(1), src: F(1) }],
+			4: [{ ref: U(8), src: F(8) }]
+		}
+		const view = await remote({
+			settings: effective(row),
+			requests: (kind, params) => (kind === "character-images" ? { images: gallery[params.characterId as number] ?? [] } : undefined)
+		})
+		try {
+			await view.settle()
+			expect(view.root.querySelector(part("root"))?.getAttribute("data-arrangement")).toBe("stage")
+			const faces = drawn(view.root).faces
+			expect(faces.map((f) => [f.member, f.img])).toEqual([
+				["character:3", F(1)],
+				["character:4", F(8)]
+			])
+			// Ada's bars ride under her face, as they did under her pin.
+			expect(faces[0]!.bars).toEqual(["HP 14/20"])
+		} finally {
+			await view.unmount()
+		}
+	})
+})
+
+describe("F2: the chooser writes the instance's chosen image", () => {
+	test("a tile asks the page, which writes the ASKING instance's settings; the face follows; Use the avatar takes it away", { timeout: 120_000 }, async () => {
+		const id = "scene-portraits#2"
+		/** The stored row as the page holds it — a plain copy, as it is posted (the store's is reactive). */
+		const stored = () => JSON.parse(JSON.stringify(widgetSettingValues(id))) as Record<string, unknown>
+		const cast = projectCharacters({ session: payload(), viewerUserId: 10, voicedPersonaId: null, sceneImages: { left: null, right: null } })
+		setWidgetSettingDecls({ [id]: { ...decl, id }, stats: { id: "stats", title: "Stats", settings: {} } })
+		setWidgetSettingValues({ [id]: { face: "chosen" } })
+		setWidgetSettingsWriter((next) => setWidgetSettingValues(next))
+		// The page's own answerer, behind its askers guard, over the store.
+		const answer = guardWidgetRequests(
+			buildWidgetRequestAnswerer({
+				characters: () => cast,
+				readCharacterGallery: async () => [
+					{ uuid: U(1), url: F(1), kind: "image" },
+					{ uuid: U(7), url: F(7), kind: "image" }
+				]
+			} as unknown as WidgetRequestDeps)
+		)
+		const view = await remote({
+			settings: effective(stored()),
+			requests: (kind, params) => answer(kind as never, params as never, { widgetId: id, owner: "core" })
+		})
+		try {
+			await view.settle()
+			expect(drawn(view.root).faces[0]!.img).toBe(F(1))
+			await view.click(view.queryAll(part("choose"))[0]!)
+			await view.settle()
+			const tiles = view.queryAll(part("chooser-tile"))
+			expect(tiles.map((t) => t.getAttribute("aria-label"))).toEqual(["Show image 1 for Ada", "Show image 2 for Ada"])
+			await view.click(tiles[1]!)
+			await view.settle()
+			// Written into THIS instance's own settings, and the chooser closed.
+			expect(widgetSettingValues(id)).toEqual({ face: "chosen", chosenImages: [`character:3=${U(7)}`] })
+			expect(view.query(part("chooser"))).toBeNull()
+			// The page posts the instance's settings again: the face shows the choice.
+			await view.push("settings", effective(stored()))
+			await view.settle()
+			expect(drawn(view.root).faces[0]!.img).toBe(F(7))
+			// Use the avatar: the choice taken away, and the avatar back.
+			await view.click(view.queryAll(part("choose"))[0]!)
+			await view.settle()
+			await view.click(part("chooser-clear"))
+			await view.settle()
+			expect(widgetSettingValues(id)).toEqual({ face: "chosen" })
+			await view.push("settings", effective(stored()))
+			await view.settle()
+			expect(drawn(view.root).faces[0]!.img).toBe(F(1))
+		} finally {
+			await view.unmount()
+			setWidgetSettingsWriter(null)
+			setWidgetSettingDecls({})
+			setWidgetSettingValues({})
+		}
+	})
+
+	test("a refusal (a member not in the session) is the widget's own line; nothing is written", { timeout: 120_000 }, async () => {
+		const id = "scene-portraits"
+		const writes: unknown[] = []
+		setWidgetSettingDecls({ [id]: decl })
+		setWidgetSettingValues({ [id]: { face: "chosen" } })
+		setWidgetSettingsWriter((next) => writes.push(next))
+		// The page projects a cast without Ada: the widget offers her, the page refuses.
+		const answer = buildWidgetRequestAnswerer({
+			characters: () => ({ members: [], sceneImages: { left: null, right: null } }),
+			readCharacterGallery: async () => []
+		} as unknown as WidgetRequestDeps)
+		const view = await remote({
+			settings: effective({ face: "chosen" }),
+			requests: (kind, params) =>
+				kind === "character-images"
+					? { images: [{ ref: U(7), src: F(7) }] }
+					: answer(kind as never, params as never, { widgetId: id, owner: "core" })
+		})
+		try {
+			await view.click(view.queryAll(part("choose"))[0]!)
+			await view.settle()
+			await view.click(view.queryAll(part("chooser-tile"))[0]!)
+			await view.settle()
+			expect(text(view.query(part("alert-text")))).toBe("that character is not in this session")
+			expect(view.query(part("chooser"))).not.toBeNull()
+			expect(writes).toEqual([])
+		} finally {
+			await view.unmount()
+			setWidgetSettingsWriter(null)
+			setWidgetSettingDecls({})
+			setWidgetSettingValues({})
 		}
 	})
 })

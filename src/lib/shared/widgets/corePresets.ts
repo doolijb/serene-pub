@@ -68,6 +68,35 @@
 import { systemStyleSlug, type WidgetDecl, type WidgetStylePreset, type WidgetStyleRef } from "./types"
 import type { ResolvableStyle } from "./resolve"
 
+/* ── Folio's guard ───────────────────────────────────────────────────── */
+
+/**
+ * A Messages copy drawn as **Folio** (PLAN-core-widgets §3.7) reads its lines
+ * as one block of prose: its stage carries `messages.folio`, and each line is
+ * a paragraph — the content cell alone, no avatar, name row or controls cell.
+ * A pack's look for a ROW (a card, a bubble, a mirrored turn, a centred aside,
+ * a scene edge) would misdraw that paragraph, and the default sheet cannot
+ * undo it: a pack is unlayered (`WidgetHost` injects it scoped, after the
+ * `sp-widgets` layer), so it wins every property it sets.
+ *
+ * So the pack steps aside itself. Every selector naming the line
+ * (`[data-widget-part~="messages.message"]`) is guarded off a Folio stage
+ * (`folioGuarded`, applied below), which reaches every rule keyed on the line
+ * and on any cell under it; the few bare cell rules that draw a row's look
+ * (Bubbles' bubble, Compact's dense body) carry the guard written in. A bare
+ * rule that only sets the prose face or a palette token stays unguarded:
+ * Folio reads in the pack's own face and tones. The guard is in the stored
+ * CSS, so a clone of a pack keeps it.
+ */
+export const OFF_FOLIO = ':not([data-widget-part~="messages.folio"] *)'
+
+const LINE_SELECTOR = '[data-widget-part~="messages.message"]'
+
+/** A pack's CSS with every line selector guarded off a Folio stage. */
+export function folioGuarded(css: string): string {
+	return css.split(LINE_SELECTOR).join(LINE_SELECTOR + OFF_FOLIO)
+}
+
 /* ── the message packs ───────────────────────────────────────────────── */
 
 /**
@@ -216,7 +245,7 @@ const BUBBLES_CSS = `/* Bubbles — portrait beside a speech bubble, the persona
 [data-widget-part~="messages.message-content"] {
 	width: 100%;
 }
-[data-widget-part~="messages.message-body"] {
+[data-widget-part~="messages.message-body"]${OFF_FOLIO} {
 	font-family: inherit;
 	font-size: calc(15px * var(--sp-prose-scale, 1));
 	line-height: 1.55;
@@ -361,12 +390,12 @@ const COMPACT_CSS = `/* Compact — one dense line per message. The name is its 
 [data-widget-part~="messages.message"][data-msg-author="persona"] [data-widget-part~="messages.message-name"] {
 	color: var(--sp-speaker-persona);
 }
-[data-widget-part~="messages.message-body"] {
+[data-widget-part~="messages.message-body"]${OFF_FOLIO} {
 	font-family: inherit;
 	font-size: calc(15px * var(--sp-prose-scale, 1));
 	line-height: 1.5;
 }
-[data-widget-part~="messages.message-body"] :where(p) {
+[data-widget-part~="messages.message-body"]${OFF_FOLIO} :where(p) {
 	margin-block: 0.15em;
 }
 [data-widget-part~="messages.message-time"] {
@@ -637,13 +666,16 @@ const CAMEO_CSS = `/* Dreamlit Cameo — after Moonlit Echoes' "Echo" message st
 
 /* ── the decls ───────────────────────────────────────────────────────── */
 
-/** The five message packs, `default` (Stage) first. */
+/**
+ * The five message packs, `default` (Stage) first — each guarded off a
+ * Folio stage (`folioGuarded`, above).
+ */
 export const MESSAGE_STYLE_PRESETS: WidgetStylePreset[] = [
-	{ slug: "default", title: "Stage", css: STAGE_CSS },
-	{ slug: "bubbles", title: "Bubbles", css: BUBBLES_CSS },
-	{ slug: "novel", title: "Novel", css: NOVEL_CSS },
-	{ slug: "compact", title: "Compact", css: COMPACT_CSS },
-	{ slug: "cameo", title: "Dreamlit Cameo", css: CAMEO_CSS }
+	{ slug: "default", title: "Stage", css: folioGuarded(STAGE_CSS) },
+	{ slug: "bubbles", title: "Bubbles", css: folioGuarded(BUBBLES_CSS) },
+	{ slug: "novel", title: "Novel", css: folioGuarded(NOVEL_CSS) },
+	{ slug: "compact", title: "Compact", css: folioGuarded(COMPACT_CSS) },
+	{ slug: "cameo", title: "Dreamlit Cameo", css: folioGuarded(CAMEO_CSS) }
 ]
 
 /** The app's preset contribution, by widget id. */

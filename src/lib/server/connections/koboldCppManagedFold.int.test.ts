@@ -13,6 +13,7 @@ import * as schema from "$lib/server/db/schema"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { mergeEndpointModel } from "./models"
 import { capabilityRefusal } from "$lib/server/pipelines/runtime/capabilityGuard"
+import { defaultLoadoutRow } from "$lib/server/loadouts/testing"
 
 let db: TestDb
 
@@ -60,8 +61,8 @@ const imageDefault = async () =>
 	(
 		await db
 			.select()
-			.from(schema.connectionDefaults)
-			.where(eq(schema.connectionDefaults.output, "image"))
+			.from(schema.loadouts)
+			.where(eq(schema.loadouts.defaultForOutput, "image"))
 	)[0]
 
 async function fold() {
@@ -73,12 +74,12 @@ describe("folding managed image connections into the managed endpoint", () => {
 	it("with no managed endpoint yet, the image row BECOMES it, in place", async () => {
 		const s = await image()
 		const sd = await model(s.id, "sdxl.gguf")
-		await db.insert(schema.connectionDefaults).values({
+		await db.insert(schema.loadouts).values(defaultLoadoutRow({
 			input: "text",
 			output: "image",
 			connectionId: s.id,
 			connectionModelId: sd.id
-		})
+		}))
 
 		expect(await fold()).toEqual({ folded: 0, renamed: 1 })
 
@@ -106,12 +107,12 @@ describe("folding managed image connections into the managed endpoint", () => {
 			.where(eq(schema.connections.id, s.id))
 
 		// The image default names the image row's own model.
-		await db.insert(schema.connectionDefaults).values({
+		await db.insert(schema.loadouts).values(defaultLoadoutRow({
 			input: "text",
 			output: "image",
 			connectionId: s.id,
 			connectionModelId: sd.id
-		})
+		}))
 		// A pipeline slot naming the image row and the DUPLICATE model.
 		const [spec] = await db
 			.insert(schema.pipelineSpecs)
@@ -193,12 +194,12 @@ describe("folding managed image connections into the managed endpoint", () => {
 			.update(schema.connectionModels)
 			.set({ modality: "text-gen" })
 			.where(eq(schema.connectionModels.id, chat.id))
-		await db.insert(schema.connectionDefaults).values({
+		await db.insert(schema.loadouts).values(defaultLoadoutRow({
 			input: "text",
 			output: "text",
 			connectionId: u.id,
 			connectionModelId: chat.id
-		})
+		}))
 
 		expect(await fold()).toEqual({ folded: 1, renamed: 0 })
 
@@ -208,8 +209,8 @@ describe("folding managed image connections into the managed endpoint", () => {
 		expect([moved.id, moved.modality]).toEqual([chat.id, "text-gen"])
 		const [textDefault] = await db
 			.select()
-			.from(schema.connectionDefaults)
-			.where(eq(schema.connectionDefaults.output, "text"))
+			.from(schema.loadouts)
+			.where(eq(schema.loadouts.defaultForOutput, "text"))
 		expect(textDefault).toMatchObject({ connectionId: t.id, connectionModelId: chat.id })
 	})
 

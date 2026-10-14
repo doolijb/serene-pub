@@ -498,6 +498,43 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 		id: (p) => p?.capability,
 		snapshot: capabilityDefaultSnap
 	},
+	// Loadouts (I12). A pair, sampling or merge change is a change to the row.
+	"loadouts:create": {
+		objectType: "loadout",
+		action: "add",
+		idFromResult: true,
+		label: (p) => p?.name
+	},
+	"loadouts:update": {
+		objectType: "loadout",
+		action: "change",
+		id: (p) => p?.id,
+		snapshot: rowById(schema.loadouts)
+	},
+	"loadouts:delete": {
+		objectType: "loadout",
+		action: "delete",
+		id: (p) => p?.id,
+		snapshot: rowById(schema.loadouts)
+	},
+	"loadouts:setDefault": {
+		objectType: "loadout",
+		action: "change",
+		id: (p) => p?.id,
+		snapshot: rowById(schema.loadouts)
+	},
+	"loadouts:merge": {
+		objectType: "loadout",
+		action: "change",
+		id: (p) => p?.id,
+		snapshot: rowById(schema.loadouts)
+	},
+	"loadouts:makeIt": {
+		objectType: "loadout",
+		action: "change",
+		id: (p) => p?.id,
+		snapshot: rowById(schema.loadouts)
+	},
 	"connectionDefaults:set": {
 		objectType: "capability-default",
 		action: "change",
@@ -590,6 +627,13 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 	},
 
 	/* Play */
+	"sessionGenres:create": {
+		objectType: "session-genre",
+		action: "add",
+		idFromResult: "genreId",
+		fields: ["ownerSlug", "name", "label", "from", "scope"],
+		label: (p) => p?.label
+	},
 	"sessionGenres:update": {
 		objectType: "session-genre",
 		action: "change",
@@ -918,6 +962,13 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 		idFromResult: "pluginId",
 		snapshot: pluginSnap,
 		fields: ["dir"]
+	},
+	"plugins:installPackage": {
+		objectType: "plugin",
+		action: "add",
+		idFromResult: "pluginId",
+		snapshot: pluginSnap,
+		fields: ["filename"]
 	},
 	"plugins:uninstall": {
 		objectType: "plugin",

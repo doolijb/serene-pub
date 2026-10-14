@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { bookReadOnly } from "$lib/client/lorebooks/bookData.svelte"
 	import { Editor } from "@tiptap/core"
 	import StarterKit from "@tiptap/starter-kit"
 	import { onMount } from "svelte"
@@ -36,6 +37,11 @@
 		labelledBy,
 		label = "Content"
 	}: Props = $props()
+
+	/** Inside a shared (read-only) lorebook the text reads, never writes
+	 *  (PLAN-private-messages §6.7). False outside the workspace. */
+	const readOnlyBook = bookReadOnly()
+	let readOnly = $derived(readOnlyBook.value)
 
 	let editor: Editor
 	let editorEl: HTMLDivElement
@@ -176,6 +182,7 @@
 		lastEmitted = content ?? ""
 		editor = new Editor({
 			element: editorEl,
+			editable: !readOnlyBook.value,
 			content: parseCharTagsToTiptapDoc(content ?? ""),
 			editorProps: {
 				attributes: {
@@ -219,7 +226,7 @@
 </script>
 
 <div class="">
-	<div class="tiptap-toolbar mb-1">
+	<div class="tiptap-toolbar mb-1" hidden={readOnly}>
 		<Popover
 			open={addBindingOpenState}
 			onOpenChange={(e) => (addBindingOpenState = e.open)}
@@ -229,7 +236,7 @@
 			     in: a reader is inserting a cast member, and `{{char:N}}` is
 			     how that is spelled. -->
 			<Popover.Trigger
-				class="btn btn-sm preset-filled-surface-500 gap-1"
+				class="btn btn-sm preset-tonal-surface gap-1"
 				title="Insert a cast member"
 				aria-label="Insert a cast member"
 			>
@@ -278,7 +285,7 @@
 			positioning={{ placement: "bottom" }}
 		>
 			<Popover.Trigger
-				class="btn btn-sm preset-filled-surface-500 gap-1"
+				class="btn btn-sm preset-tonal-surface gap-1"
 				title="Insert a macro"
 				aria-label="Insert a macro"
 			>
@@ -296,7 +303,7 @@
 							</div>
 							{#each INSERTABLE_MACRO_OPTIONS as macro}
 								<button
-									class="btn preset-filled-surface-500"
+									class="btn preset-tonal-surface"
 									onclick={() => {
 										editor.commands.insertContent(
 											macro.snippet
@@ -315,7 +322,7 @@
 		</Popover>
 		<button
 			aria-label="Undo"
-			class="btn btn-sm preset-filled-surface-500"
+			class="btn btn-sm preset-tonal-surface"
 			title="Undo"
 			onclick={() => editor && editor.chain().focus().undo().run()}
 			disabled={!canUndo}
@@ -324,7 +331,7 @@
 		</button>
 		<button
 			aria-label="Redo"
-			class="btn btn-sm preset-filled-surface-500"
+			class="btn btn-sm preset-tonal-surface"
 			title="Redo"
 			onclick={() => editor && editor.chain().focus().redo().run()}
 			disabled={!canRedo}

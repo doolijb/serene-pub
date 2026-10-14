@@ -86,7 +86,8 @@ const db = {
 						const row = samplingConfigs[lastWhereValue as number]
 						return row ? [row] : []
 					}
-					if (name === "connection_defaults") {
+					// The default LOADOUT since I12 (`loadouts.default_for_*`).
+					if (name === "connection_defaults" || name === "loadouts") {
 						const [input, output] = lastWherePair as [
 							string,
 							string
@@ -165,6 +166,10 @@ const samplingB = { id: 11, name: "Precise", shape: "core:shape/text-gen@1" }
 
 const load = async () => await import("./capabilityTarget")
 
+/** Chat's refusal when nothing is set to reply, exactly (plan §E, 2026-10-06). */
+const CHAT_UNSET =
+	"No model is set for Reply, and one is never picked automatically. An admin chooses it with Use in Reply beside a model in Connections."
+
 beforeEach(() => {
 	vi.resetModules()
 	lastWhereValue = undefined
@@ -228,8 +233,8 @@ describe("the chain and the executor's scopes agree about order", () => {
 		const { PAIR_TIERS } = await load()
 		// The 2026-09-15 ruling, pinned as data: "the session-level connection
 		// override is retired. Overrides are always by model, never by
-		// connection." Three tiers still walk SAMPLING — `sessions
-		// .sampling_config_id` stays — so the length of the list above is not
+		// connection." Three tiers walk SAMPLING — the session's own pick is
+		// its pipeline panel row — so the length of the list above is not
 		// what says this, and pinning it there would go green the moment
 		// somebody re-added an endpoint to the session tier.
 		expect([...PAIR_TIERS]).toEqual(["capabilityDefault", "pipelineConfig"])
@@ -261,8 +266,9 @@ describe("nothing is chosen because it merely exists", () => {
 		expect(res.problem.kind).toBe("unset")
 		// The compensation, asserted: deleting the auto-star turns "quietly uses
 		// the connection you have" into "fails on first Send", and a refusal
-		// that does not say where to go reads as a regression.
-		expect(res.problem.message).toContain("Admin → Defaults")
+		// that does not say where to go reads as a regression. Chat's names
+		// the control that fixes it (plan §E, 2026-10-06).
+		expect(res.problem.message).toBe(CHAT_UNSET)
 	})
 
 	it("refuses even when there is exactly ONE connection on the instance", async () => {
@@ -422,7 +428,7 @@ describe("the model half of the pair", () => {
 		if (res.ok) return
 		expect(res.problem.kind).toBe("model")
 		expect(res.problem.via).toBe("capabilityDefault")
-		expect(res.problem.message).toMatch(/Pick a model on that connection/)
+		expect(res.problem.message).toMatch(/Pick a model for that loadout/)
 	})
 
 	it("keeps the model when a higher tier re-states the SAME endpoint", async () => {
@@ -535,11 +541,11 @@ describe("the five refusals", () => {
 		expect(res.ok).toBe(false)
 		if (!res.ok) {
 			expect(res.problem.kind).toBe("cleared")
-			expect(res.problem.message).toContain("Admin → Defaults")
+			expect(res.problem.message).toBe(CHAT_UNSET)
 		}
 	})
 
-	it("cleared says 'Chat' by default, and for a standard-genre session, but 'text generation' for any other genre — wording only", async () => {
+	it("chat's refusal is one sentence for every genre; other capabilities keep theirs", async () => {
 		const { resolveCapabilityTarget } = await load()
 		connectionDefaults["text->text"] = {
 			capability: "text->text",
@@ -547,46 +553,27 @@ describe("the five refusals", () => {
 			samplingConfigId: 10
 		}
 
-		// No genre given at all (an admin-facing caller, e.g. Defaults itself):
-		// unaffected, still "Chat" — the transform's own label.
-		const noGenre = await resolveCapabilityTarget(db, { capability: "text->text" })
-		if (noGenre.ok) throw new Error("expected a refusal")
-		expect(noGenre.problem.message).toContain("No connection is set for Chat.")
-
-		// A session actually on the standard chat genre: "Chat" is the truth,
-		// not a misnomer, so it stays.
-		const standard = await resolveCapabilityTarget(db, {
-			capability: "text->text",
-			genreId: "core:genre/chat"
+		// The sentence names no capability, so it cannot misname an adventure
+		// or a guide session as "Chat".
+		const res = await resolveCapabilityTarget(db, {
+			capability: "text->text"
 		})
-		if (standard.ok) throw new Error("expected a refusal")
-		expect(standard.problem.message).toContain("No connection is set for Chat.")
+		if (res.ok) throw new Error("expected a refusal")
+		expect(res.problem.message).toBe(CHAT_UNSET)
 
-		// A session on any other genre: "Chat" would read as if it named the
-		// session's own genre, so the wording steps around it.
-		const other = await resolveCapabilityTarget(db, {
-			capability: "text->text",
-			genreId: "acme:genre/lodge"
-		})
-		if (other.ok) throw new Error("expected a refusal")
-		expect(other.problem.message).toContain(
-			"No connection is set for text generation."
-		)
-		expect(other.problem.message).not.toContain("Chat")
-		// Nothing else about the sentence moves.
-		expect(other.problem.message).toContain(
-			"Choose one in Admin → Defaults — a connection is never picked " +
-				"automatically, and deleting one releases every capability it held."
-		)
-
-		// A non-text capability's label already names what it does — no genre
-		// can make "Image generation" ambiguous, so it is left alone.
+		// Every other capability keeps its own sentence and its own fix: Use
+		// for chat is not how an image model is chosen.
 		const image = await resolveCapabilityTarget(db, {
-			capability: "text->image",
-			genreId: "acme:genre/lodge"
+			capability: "text->image"
 		})
 		if (image.ok) throw new Error("expected a refusal")
-		expect(image.problem.message).toContain("Image generation")
+		expect(image.problem.message).toContain("No model is set for Images,")
+		// Spelled as the admin rail names it: the run card links this phrase
+		// for an administrator (PLAN-less-confusing D1).
+		expect(image.problem.message).toContain("Admin › Models › Loadouts")
+		expect(image.problem.message).not.toContain("Use in Reply")
+		// The FK's behaviour is the code's business, not the person's.
+		expect(image.problem.message).not.toMatch(/releases every capability/)
 	})
 
 	it("cleared does not DIAGNOSE a deletion, because a fresh install lands here", async () => {
@@ -616,7 +603,21 @@ describe("the five refusals", () => {
 
 		if (res.ok) throw new Error("expected a refusal")
 		expect(res.problem.message).not.toMatch(/was cleared|was deleted/)
-		expect(res.problem.message).toMatch(/never picked automatically/)
+		expect(res.problem.message).toBe(CHAT_UNSET)
+
+		// `text->image` is seeded the same way, and keeps its own sentence.
+		connectionDefaults["text->image"] = {
+			capability: "text->image",
+			connectionId: null,
+			samplingConfigId: 11
+		}
+		const image = await resolveCapabilityTarget(db, {
+			capability: "text->image"
+		})
+		if (image.ok) throw new Error("expected a refusal")
+		expect(image.problem.kind).toBe("cleared")
+		expect(image.problem.message).not.toMatch(/was cleared|was deleted/)
+		expect(image.problem.message).toMatch(/never picked automatically/)
 	})
 
 	it("missing — the id names no row, and the sentence says which tier set it", async () => {
@@ -659,7 +660,7 @@ describe("the five refusals", () => {
 			// The guard's own wording, which names the capability the way the
 			// connection screen labelled it — never its id.
 			expect(res.problem.message).toContain("Chat")
-			expect(res.problem.message).toContain("Admin → Defaults")
+			expect(res.problem.message).toContain("Admin › Models › Loadouts")
 			// ...and never the CONNECTION. This sentence ends up in
 			// `Error.message` and in `Receipt.haltReason`, both plain strings
 			// that no projection can reach into, and both of which a non-admin

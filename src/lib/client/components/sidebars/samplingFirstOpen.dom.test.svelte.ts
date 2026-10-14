@@ -8,10 +8,12 @@
  * ahead of the interest sync naming `samplingConfigs:get`, and its reply was
  * dropped. Opening the category then set the SAME id, so nothing asked again.
  *
- * The stand-in server below models exactly that gate: a request whose reply key
- * had no subscriber at the moment it was emitted gets no answer. `useInterest`
- * is stood in for by an `$effect`, as the real one is, so declaration order
- * means here what it means in the app.
+ * The view is a list column now (design 2026-10-09 D, built 10-10): the
+ * category level is gone and a row IS the config. The rule it guards is the
+ * same — the first click on a row renders that config — and so is the gate
+ * below: a request whose reply key had no subscriber at the moment it was
+ * emitted gets no answer. `useInterest` is stood in for by an `$effect`, as
+ * the real one is, so declaration order means here what it means in the app.
  */
 import { afterEach, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
@@ -52,15 +54,12 @@ vi.mock("$lib/client/sockets/interest.svelte", () => ({
 vi.mock("$lib/client/utils/toaster", () => ({
 	toaster: { error: () => {}, info: () => {}, success: () => {} }
 }))
-vi.mock("$lib/client/components/inputs/Select.svelte", () => ({
-	default: () => {}
-}))
 vi.mock("./SamplingValuesForm.svelte", () => ({ default: () => {} }))
-vi.mock("./SamplingEnabledForm.svelte", () => ({ default: () => {} }))
 
 import { S } from "@serene-pub/sdk"
 import { capabilityForSamplingShape } from "$lib/shared/capabilities/samplingShape"
 import SamplingSidebar from "./SamplingSidebar.svelte"
+import { samplingSidebarMemory } from "./samplingList"
 
 const ROW = {
 	id: 7,
@@ -78,6 +77,8 @@ function serve() {
 		const reply = listeners.get(req.event)
 		if (req.event === "samplingConfigs:list")
 			reply?.({ samplingConfigsList: [ROW] })
+		if (req.event === "samplingConfigs:usedBy")
+			reply?.({ jobs: [], pipelines: [] })
 		if (req.event === "samplingConfigs:get" && req.payload.id === ROW.id)
 			reply?.({ sampling: ROW })
 	}
@@ -90,12 +91,14 @@ afterEach(() => {
 	app = null
 	emitted.length = 0
 	listeners.clear()
+	samplingSidebarMemory.selectedId = null
 	document.body.innerHTML = ""
 })
 
-describe("Sampling — first open of a category", () => {
-	test("Large language models shows its config on the FIRST click", async () => {
+describe("Sampling — first open of a config", () => {
+	test("a row shows its config on the FIRST click", async () => {
 		const capability = capabilityForSamplingShape(S.textGen)!
+		samplingSidebarMemory.selectedId = null
 		app = mount(SamplingSidebar, {
 			target: document.body,
 			props: {},
@@ -114,15 +117,16 @@ describe("Sampling — first open of a category", () => {
 		await tick()
 		serve()
 
-		const category = [...document.querySelectorAll("button")].find((b) =>
-			b.textContent?.includes("Large language models")
+		const row = [...document.querySelectorAll("button")].find((b) =>
+			b.textContent?.includes("Balanced")
 		)
-		expect(category).toBeTruthy()
-		category!.click()
+		expect(row, "the list rendered the config's row").toBeTruthy()
+		row!.click()
 		flushSync()
 		await tick()
 		serve()
 		await tick()
+		serve()
 
 		const name = document.querySelector<HTMLInputElement>("#samplingName")
 		expect(name, "the config form rendered on the first open").toBeTruthy()

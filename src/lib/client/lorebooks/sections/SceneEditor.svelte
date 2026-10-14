@@ -65,7 +65,7 @@
 		</button>
 	{:else if hasMessages}
 		<button
-			class="btn btn-sm preset-filled-surface-400-600"
+			class="btn btn-sm preset-tonal-surface"
 			type="button"
 			disabled={isProcessing}
 			onclick={process}
@@ -81,7 +81,7 @@
 	{/if}
 	{#if source && pool.onNavigateToGraph && !source.graphed && source.summary}
 		<button
-			class="btn btn-sm preset-tonal-secondary"
+			class="btn btn-sm preset-tonal-primary"
 			type="button"
 			onclick={pool.onNavigateToGraph}
 		>

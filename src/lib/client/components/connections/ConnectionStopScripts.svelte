@@ -12,7 +12,6 @@
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 
 	interface Props {
@@ -39,11 +38,9 @@
 	 * ours.
 	 */
 	function handleScripts(res: Sockets.Connections.Scripts.Response) {
-		if (res.connectionId != null && res.connectionId !== connectionId) return
+		if (res.connectionId != null && res.connectionId !== connectionId)
+			return
 		scripts = res
-	}
-	function handleError(res: { error?: string }) {
-		if (res.error) toaster.error({ title: res.error })
 	}
 	useInterest<"connections:scripts">("connections:scripts", handleScripts)
 	useInterest<"connections:attachScript">(
@@ -54,18 +51,9 @@
 		"connections:detachScript",
 		handleScripts
 	)
-	useInterest<"connections:scripts:error">(
-		"connections:scripts:error",
-		handleError
-	)
-	useInterest<"connections:attachScript:error">(
-		"connections:attachScript:error",
-		handleError
-	)
-	useInterest<"connections:detachScript:error">(
-		"connections:detachScript:error",
-		handleError
-	)
+	// No `:error` interests: a refused scripts ask, attach or detach goes to
+	// the asking tab alone, and Layout's catch-all toasts it there. A second
+	// toast here said the same failure twice.
 
 	$effect(() => {
 		scripts = null
@@ -150,7 +138,8 @@
 		{:else}
 			<p class="text-surface-600-400 text-xs">
 				Write stop scripts on the
-				<a class="underline" href={scriptsHref}>scripts page</a>.
+				<a class="underline" href={scriptsHref}>scripts page</a>
+				.
 			</p>
 		{/if}
 	{/if}

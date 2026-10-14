@@ -24,6 +24,12 @@
 		ring?: string
 		/** Reserve the width of a full stack, so names beside rows line up. */
 		fixedWidth?: boolean
+		/**
+		 * What a face with no picture shows: the kind's glyph (characters,
+		 * the default) or the name's initial (people, who have no picture —
+		 * the Messages view's faces).
+		 */
+		fallback?: "glyph" | "initial"
 	}
 
 	let {
@@ -31,7 +37,8 @@
 		size = "md",
 		max = 3,
 		ring = "ring-surface-50-950",
-		fixedWidth = false
+		fixedWidth = false,
+		fallback = "glyph"
 	}: Props = $props()
 
 	const shown = $derived(members.filter(Boolean).slice(0, max))
@@ -71,6 +78,7 @@
 					char={member}
 					{size}
 					shape="round"
+					{fallback}
 					decorative
 					class="ring-2 {ring}"
 				/>

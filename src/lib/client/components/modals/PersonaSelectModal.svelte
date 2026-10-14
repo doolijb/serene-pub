@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { withoutShared } from "$lib/shared/utils/sharedRows"
 	/**
 	 * Pick the character a user speaks as — their persona in this session.
 	 *
@@ -13,14 +14,20 @@
 	 * persona (`markCharacterAsPersona`, every `session_personas` insert), so
 	 * this component must NOT emit an update of its own — doing so would flag
 	 * the character even when the caller's insert is later abandoned.
+	 *
+	 * It looks like `CharacterSelectModal`: the same width, one column of
+	 * `CharacterPickRow` rows, the search box focused on open.
 	 */
 	import { Dialog, Portal, Switch } from "@skeletonlabs/skeleton-svelte"
-	import Avatar from "../Avatar.svelte"
+	import CharacterPickRow, {
+		pickRowMatches
+	} from "../sessionForms/CharacterPickRow.svelte"
 	import EmptyState from "../EmptyState.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
 
 	type PersonaRow = Sockets.Characters.List.Response["characterList"][number]
+	type Row = PersonaRow & { id: number }
 
 	interface Props {
 		open: boolean
@@ -60,11 +67,12 @@
 
 	let characterList: PersonaRow[] = $state([])
 	let search = $state("")
+	let searchInput = $state<HTMLInputElement | null>(null)
 	/** Widen the list past the flagged personas to the whole library. */
 	let showAll = $state(false)
 
 	const handleCharactersList = (msg: Sockets.Characters.List.Response) => {
-		characterList = msg.characterList || []
+		characterList = withoutShared(msg.characterList) // shared rows are read and copy only (PLAN-private-messages §6.7, Q3)
 	}
 
 	// Bare key — `characters:list` is the whole library, not one session's
@@ -78,7 +86,7 @@
 		const excluded = new Set(excludeIds)
 		return characterList
 			.filter(
-				(c) =>
+				(c): c is Row =>
 					c.id != null &&
 					!excluded.has(c.id) &&
 					(showAll || !!c.isPersona)
@@ -92,16 +100,8 @@
 			})
 	})
 
-	let filtered = $derived.by(() => {
-		const term = search.trim().toLowerCase()
-		if (!term) return available
-		return available.filter(
-			(p) =>
-				(p.name || "").toLowerCase().includes(term) ||
-				(p.nickname || "").toLowerCase().includes(term) ||
-				(p.description || "").toLowerCase().includes(term)
-		)
-	})
+	/** Search matches only what a row shows (`pickRowMatches`). */
+	let filtered = $derived(available.filter((p) => pickRowMatches(p, search)))
 
 	function close() {
 		if (onOpenChange) {
@@ -111,15 +111,14 @@
 		}
 	}
 
-	function choose(p: PersonaRow) {
-		if (p.id == null) return
+	function choose(p: Row) {
 		if (returnFullPersona) {
 			// For EditSessionForm — return the full character row.
 			;(
 				onSelect as (
 					persona: Partial<SelectCharacter> & { id: number }
 				) => void
-			)(p as Partial<SelectCharacter> & { id: number })
+			)(p)
 		} else {
 			// For the session page — return just the id.
 			;(onSelect as (personaId: number) => void)(p.id)
@@ -127,12 +126,20 @@
 		close()
 	}
 
+	/** Rows the switch would offer before `excludeIds`: "none exist" vs "all chosen". */
+	let inScope = $derived(
+		characterList.filter((c) => c.id != null && (showAll || !!c.isPersona))
+			.length
+	)
+
 	let emptyMessage = $derived(
 		search.trim()
 			? `No ${showAll ? "characters" : "personas"} found matching "${search}".`
-			: showAll
-				? "No characters yet — create one to get started."
-				: "No personas yet — turn on Show all characters, or flag a character as a persona in the Characters view."
+			: inScope > 0
+				? "Everyone here is already chosen."
+				: showAll
+					? "No characters yet — create one to get started."
+					: "No personas yet — turn on Show all characters, or flag a character as a persona in the Characters view."
 	)
 </script>
 
@@ -145,6 +152,7 @@
 			onclose()
 		}
 	}}
+	initialFocusEl={() => searchInput}
 >
 	<Portal>
 		<Dialog.Backdrop
@@ -154,25 +162,44 @@
 			class="fixed inset-0 z-50 flex items-center justify-center p-4"
 		>
 			<Dialog.Content
-				class="card bg-surface-100-900 relative max-h-[95dvh] w-[min(95vw,800px)] space-y-6 overflow-hidden p-6 shadow-xl"
+				class="card bg-surface-100-900 relative flex max-h-[95dvh] w-[min(95vw,640px)] flex-col gap-4 overflow-hidden p-6 shadow-xl"
 			>
 				<header class="flex items-center justify-between">
-					<h2 class="h2">{title}</h2>
-					<button class="btn btn-sm" aria-label="Close" onclick={close}>
+					<Dialog.Title>
+						{#snippet element(attributes)}
+							<h2
+								{...attributes as Record<string, unknown>}
+								class="h2"
+							>
+								{title}
+							</h2>
+						{/snippet}
+					</Dialog.Title>
+					<button
+						type="button"
+						aria-label="Close"
+						class="btn btn-sm"
+						onclick={close}
+					>
 						<Icons.X size={20} aria-hidden="true" />
 					</button>
 				</header>
 				{#if description}
-					<p class="text-surface-600-400">{description}</p>
+					<Dialog.Description class="text-surface-600-400">
+						{description}
+					</Dialog.Description>
 				{/if}
 				<div class="flex flex-wrap items-center gap-3">
 					<input
+						bind:this={searchInput}
 						class="input min-w-48 flex-1"
 						type="text"
 						placeholder={showAll
 							? "Search characters…"
 							: "Search personas…"}
-						aria-label={showAll ? "Search characters" : "Search personas"}
+						aria-label={showAll
+							? "Search characters"
+							: "Search personas"}
 						bind:value={search}
 					/>
 					<Switch
@@ -202,72 +229,28 @@
 						onCta={search.trim() ? undefined : onCreateNew}
 					/>
 				{:else}
-					<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
-						<div
-							class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap"
-						>
-							{#each filtered as p (p.id)}
-								<div class="flex p-1 lg:basis-1/2">
-									<button
-										class="group preset-outlined-surface-400-600 hover:bg-surface-200-800 relative flex w-full gap-3 overflow-hidden rounded p-2"
-										onclick={() => choose(p)}
-									>
-										<div class="w-fit shrink-0">
-											<Avatar
-												char={p}
-												size="lg"
-												decorative
-											/>
-										</div>
-										<div
-											class="relative flex w-0 min-w-0 flex-1 flex-col"
-										>
-											<div
-												class="flex w-full items-center gap-1 text-left font-semibold"
-											>
-												<span class="truncate">
-													{p.name}
-												</span>
-												{#if p.isPersona}
-													<span
-														class="shrink-0"
-														title={p.isDefaultPersona
-															? "Default persona"
-															: "Persona"}
-													>
-														<Icons.UserRound
-															size={14}
-															class="text-primary-600-400 shrink-0"
-															aria-hidden="true"
-														/>
-														<span class="sr-only"
-															>{p.isDefaultPersona
-																? "Default persona"
-																: "Persona"}</span
-														>
-													</span>
-												{/if}
-											</div>
-											<div
-												class="text-surface-700-300 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
-											>
-												{p.description ||
-													"No description"}
-											</div>
-										</div>
-									</button>
-								</div>
-							{/each}
-						</div>
-					</div>
+					<ul
+						class="flex min-h-0 flex-col gap-1 overflow-y-auto pr-2"
+						aria-label={showAll ? "Characters" : "Personas"}
+					>
+						{#each filtered as p (p.id)}
+							<li>
+								<CharacterPickRow
+									character={p}
+									kind="button"
+									onchange={() => choose(p)}
+								/>
+							</li>
+						{/each}
+					</ul>
 					{#if onCreateNew}
-						<div class="border-surface-300-700 border-t pt-4">
+						<div class="panel-edge border-t pt-4">
 							<button
 								type="button"
 								class="btn btn-sm preset-tonal-primary flex items-center gap-1"
 								onclick={onCreateNew}
 							>
-								<Icons.Plus size={16} /> New persona
+								<Icons.Plus size={16} aria-hidden="true" /> New persona
 							</button>
 						</div>
 					{/if}

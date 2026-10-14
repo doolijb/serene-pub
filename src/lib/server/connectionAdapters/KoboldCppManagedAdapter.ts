@@ -129,7 +129,14 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 	async preflight(signal?: AbortSignal): Promise<void> {
 		const managedConfig = {
 			...DEFAULT_MANAGED_CONFIG,
-			...(this.connection.extraJson?.managedConfig ?? {})
+			// A null (an emptied number input saved by an older form) means
+			// "unset": dropped here so the default applies rather than a null
+			// reaching the launch flags.
+			...Object.fromEntries(
+				Object.entries(
+					this.connection.extraJson?.managedConfig ?? {}
+				).filter(([, value]) => value != null)
+			)
 		}
 		const mmproj = visionProjectorOf(this.connection.extraJson)
 		const { baseUrl } = await ensureManagedReady(
@@ -220,7 +227,7 @@ async function testConnection(
  * as unlisted by its host before preflight ever ran, so the
  * process auto-started for the earlier stage and the model was never loaded.
  * Seen live 2026-09-19 on a file that was sitting in `models/llm` the whole
- * time, and that the Models tab listed as _In use for chat_.
+ * time, and that the Models tab listed as _In the Reply loadout_.
  *
  * The directory is the same source the managed KoboldCPP's own listing scans, so the
  * two cannot disagree about what exists. `local_models` is consulted only for

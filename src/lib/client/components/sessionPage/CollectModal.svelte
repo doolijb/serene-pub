@@ -17,9 +17,19 @@
 	 * the pipeline's own voice (`ownVoice` — the Lair's Castellan), which is
 	 * never a recipient. Each member shows what the action's overwritten slot
 	 * holds for them now (`holds`), so a replace is visible before it happens.
+	 *
+	 * 🚧 **The clock step** (live scenes §6): an action declaring
+	 * `collects.clockStep` (*Time passes…*) asks how much time passes — a
+	 * whole number, a unit (minutes … years) and *Forward* or *Back* — the
+	 * same stepper the session settings' story clock steps with. It opens at
+	 * the declaration's default, going forward.
 	 */
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import {
+		CLOCK_STEP_LIMIT,
+		CLOCK_STEP_UNITS,
+		clockStepProblem,
 		collectReady,
 		reachSentence,
 		type Collected,
@@ -49,24 +59,54 @@
 	let text = $state("")
 	let picked = $state<string[]>([])
 	let field: HTMLTextAreaElement | null = $state(null)
+	/** The stepper: how many (a number input's value; null while empty), of what, which way. */
+	let stepBy = $state<number | null>(1)
+	let stepUnit = $state<string>("hours")
+	let stepBack = $state(false)
+	let amountField: HTMLInputElement | null = $state(null)
 
-	// A fresh ask starts from the argument, or empty, with nobody picked.
+	// A fresh ask starts from the argument, or empty, with nobody picked —
+	// and the stepper at the action's default, going forward.
 	$effect(() => {
 		if (open) {
 			text = initialText
 			picked = []
+			const d = action?.collects?.clockStep?.default
+			stepBy = d?.by ?? 1
+			stepUnit = d?.unit ?? "hours"
+			stepBack = false
 		}
 	})
 
 	const collects = $derived(action?.collects)
-	const got = $derived<Collected>({ text, recipients: picked })
+	const clockStep = $derived(
+		collects?.clockStep && typeof stepBy === "number" && Number.isFinite(stepBy)
+			? { by: stepBack ? -stepBy : stepBy, unit: stepUnit }
+			: undefined
+	)
+	const stepNote = $derived(
+		collects?.clockStep
+			? clockStep && stepBy !== null && stepBy > 0
+				? clockStepProblem(clockStep)
+				: "Pass a whole number of units, at least one."
+			: null
+	)
+	const got = $derived<Collected>({
+		text,
+		recipients: picked,
+		...(clockStep && stepBy !== null && stepBy > 0 ? { clockStep } : {})
+	})
 	const ready = $derived(!!collects && collectReady(collects, got))
 	const reach = $derived(reachSentence(cast, picked, ownVoice))
 	const uid = $props.id()
 
 	function submit() {
 		if (!ready) return
-		onSubmit({ text, recipients: [...picked] })
+		onSubmit({
+			text,
+			recipients: [...picked],
+			...(got.clockStep ? { clockStep: { ...got.clockStep } } : {})
+		})
 	}
 
 	function toggle(ref: string, on: boolean) {
@@ -79,7 +119,7 @@
 	onOpenChange={(e: OpenChangeDetails) => {
 		if (!e.open) onCancel()
 	}}
-	initialFocusEl={() => field}
+	initialFocusEl={() => field ?? amountField}
 >
 	<Portal>
 		<Dialog.Backdrop class="bg-surface-50-950/50 fixed inset-0 z-50" />
@@ -134,6 +174,72 @@
 										{#each reach as run, i (i)}{#if run.name}<strong>{run.text}</strong>{:else}{run.text}{/if}{/each}
 									</p>
 								{/if}
+							</fieldset>
+						{/if}
+						{#if collects.clockStep}
+							<fieldset class="space-y-2" data-collect-clock-step>
+								<legend class="text-sm font-medium">{collects.clockStep.label}</legend>
+								<div class="flex flex-wrap items-end gap-2">
+									<label class="flex flex-col gap-1 text-xs">
+										<span class="text-surface-600-400">How many</span>
+										<input
+											bind:this={amountField}
+											class="input w-24 rounded-[10px]"
+											type="number"
+											min="1"
+											max={CLOCK_STEP_LIMIT}
+											step="1"
+											bind:value={stepBy}
+											aria-describedby="{uid}-step-note"
+											data-collect-step-by
+											onkeydown={(e) => {
+												if (e.key === "Enter" && !e.isComposing) {
+													e.preventDefault()
+													submit()
+												}
+											}}
+										/>
+									</label>
+									<Select
+										label="Unit"
+										class="w-32"
+										options={CLOCK_STEP_UNITS.map((u) => ({ value: u.unit, label: u.label }))}
+										value={stepUnit}
+										onValueChange={(v) => {
+											if (v) stepUnit = v
+										}}
+									/>
+									<div
+										class="flex gap-1"
+										role="group"
+										aria-label="Which way"
+										data-collect-step-direction
+									>
+										<button
+											type="button"
+											class="btn btn-sm {stepBack ? 'preset-tonal-surface' : 'preset-tonal-primary'}"
+											aria-pressed={!stepBack}
+											onclick={() => (stepBack = false)}
+										>
+											Forward
+										</button>
+										<button
+											type="button"
+											class="btn btn-sm {stepBack ? 'preset-tonal-primary' : 'preset-tonal-surface'}"
+											aria-pressed={stepBack}
+											onclick={() => (stepBack = true)}
+										>
+											Back
+										</button>
+									</div>
+								</div>
+								<p
+									id="{uid}-step-note"
+									class="text-xs {stepNote ? 'text-error-700-300' : 'text-surface-600-400'}"
+									aria-live="polite"
+								>
+									{stepNote ?? "Moves this session's story clock, never the lorebook's."}
+								</p>
 							</fieldset>
 						{/if}
 						{#if collects.text}

@@ -6,7 +6,8 @@
 import { describe, expect, it } from "vitest"
 import type { PanelInstance } from "../surfaces/types"
 import { widgetsFromSideZones, zoneEntries } from "./panelWidgets"
-import { isInstanceOf, type LayoutZoneDef } from "@serene-pub/sdk"
+import { isInstanceOf, resolveDrawn, type LayoutZoneDef, type SessionLayoutV1 } from "@serene-pub/sdk"
+import { LAIR_LAYOUT } from "@serene-pub/core-catalog"
 import type { ResolvedZone } from "./schema"
 
 function panel(id: string, over: Partial<PanelInstance> = {}): PanelInstance {
@@ -208,6 +209,38 @@ describe("a Messages widget in a side draws, counts and is listed", () => {
 		expect(entries.map((e) => [e.id, e.panel?.id ?? null])).toEqual([
 			["messages", null],
 			["tasks", "tasks"]
+		])
+	})
+})
+
+describe("zoneEntries — over what a side DRAWS (C5, resolveDrawn)", () => {
+	const isConversation = (id: string) => isInstanceOf(id, "messages")
+	const drawnIds = (layout: SessionLayoutV1, side: "left" | "right") =>
+		resolveDrawn(layout, { inline: 1300 })[side].instances.map((i) => i.instanceId)
+
+	it("keeps the drawn order, and skips an id that names nothing", () => {
+		const ids = drawnIds(
+			{ zoneLayout: { version: 1, zones: { right: { kind: "side", side: "right", widgets: ["ghost", "messages", "tasks"] } } } },
+			"right"
+		)
+		const entries = zoneEntries(ids, [panel("tasks")], isConversation, () => "Messages")
+		expect(entries.map((e) => [e.id, e.panel?.id ?? null])).toEqual([
+			["messages", null],
+			["tasks", "tasks"]
+		])
+	})
+
+	it("an arranged side lists what its arrangement draws — the Lair's Sanctum included", () => {
+		const entries = zoneEntries(
+			drawnIds(LAIR_LAYOUT, "right"),
+			[panel("places"), panel("annex#castellan")],
+			isConversation,
+			() => "Sanctum"
+		)
+		expect(entries.map((e) => [e.id, e.panel ? "panel" : "conversation"])).toEqual([
+			["places", "panel"],
+			["annex#castellan", "panel"],
+			["messages#sanctum", "conversation"]
 		])
 	})
 })

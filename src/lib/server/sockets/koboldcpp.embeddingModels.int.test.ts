@@ -1,7 +1,7 @@
 /**
  * Embedding models on the managed KoboldCPP — the three server doors.
  *
- *   · **"Use for embeddings"** (`koboldcpp:connectEmbeddingModel`) ensures the
+ *   · **"Use in Embeddings"** (`koboldcpp:connectEmbeddingModel`) ensures the
  *     file as an `embeddings` model row on THE managed endpoint and answers the
  *     pair. It never writes the star: moving the embedding star re-indexes, so
  *     it goes through `connections:setDefault` behind its confirmation.
@@ -33,6 +33,7 @@ import { byCapability } from "$lib/server/connections/capabilityDefaults"
 import * as schema from "$lib/server/db/schema"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import type { TestDb } from "$lib/server/utils/testDb"
+import {  } from "$lib/server/loadouts/testing"
 
 vi.mock("https", () => ({ get: () => ({ on: () => {} }) }))
 vi.mock("http", () => ({ get: () => ({ on: () => {} }) }))
@@ -112,7 +113,7 @@ beforeEach(async () => {
 		"$lib/server/koboldcpp/rereadDetectedKinds"
 	)
 	forgetRereadDetectedTextModels()
-	await testDb.delete(schema.connectionDefaults)
+	await testDb.delete(schema.loadouts)
 	await testDb.delete(schema.connections)
 	await testDb.delete(schema.localModels)
 	for (const f of await fs.readdir(modelsDir))
@@ -229,7 +230,7 @@ describe("koboldcpp:connectEmbeddingModel — the pair, never the star", () => {
 		// ⚠ No star: that is `connections:setDefault`'s, behind the re-index
 		// confirmation.
 		expect(
-			await testDb.query.connectionDefaults.findFirst({
+			await testDb.query.loadouts.findFirst({
 				where: byCapability("text->embedding")
 			})
 		).toBeUndefined()

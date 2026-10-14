@@ -111,15 +111,39 @@
  * whichever direction the mode runs.
  */
 :root {
-	--sp-glass-bg: color-mix(in oklab, var(--color-surface-50) 78%, transparent);
-	--sp-glass-bd: color-mix(in oklab, var(--color-surface-300) 70%, transparent);
-	--sp-glass-glow: color-mix(in oklab, var(--color-surface-50) 30%, transparent);
+	--sp-glass-bg: color-mix(
+		in oklab,
+		var(--color-surface-50) 78%,
+		transparent
+	);
+	--sp-glass-bd: color-mix(
+		in oklab,
+		var(--color-surface-300) 70%,
+		transparent
+	);
+	--sp-glass-glow: color-mix(
+		in oklab,
+		var(--color-surface-50) 30%,
+		transparent
+	);
 	--sp-glass-blur: 14px;
 }
 :root[data-mode="dark"] {
-	--sp-glass-bg: color-mix(in oklab, var(--color-surface-950) 78%, transparent);
-	--sp-glass-bd: color-mix(in oklab, var(--color-surface-800) 70%, transparent);
-	--sp-glass-glow: color-mix(in oklab, var(--color-surface-950) 30%, transparent);
+	--sp-glass-bg: color-mix(
+		in oklab,
+		var(--color-surface-950) 78%,
+		transparent
+	);
+	--sp-glass-bd: color-mix(
+		in oklab,
+		var(--color-surface-800) 70%,
+		transparent
+	);
+	--sp-glass-glow: color-mix(
+		in oklab,
+		var(--color-surface-950) 30%,
+		transparent
+	);
 }
 @utility preset-glass-surface {
 	background: var(--sp-glass-bg);
@@ -272,11 +296,13 @@
 	@apply border-surface-300 bg-surface-50 dark:border-surface-800 dark:bg-surface-950 rounded-[10px] border p-3;
 }
 
-/* The action row that sits under a panel's back/title row — see
-   components/panels/PanelToolbar.svelte, which is the normal way to get this.
-   Exposed as a bare utility as well so the handful of places that build a
-   nested action group by hand (eg. GraphManager's view-mode pair) can share
-   the recipe instead of re-inventing it.
+/* The action row that sits under a panel's back/title row. Write it as
+   `<div class="panel-actions" role="group" aria-label="…">` — the label is
+   required (an unlabelled group is worse than none), and the role is
+   "group", not "toolbar": role="toolbar" promises roving arrow-key focus
+   this app has never implemented. (A sidebar view's own top-of-list row is
+   `ViewToolbar`, not this. The `PanelToolbar` wrapper was retired
+   2026-10-09.)
 
    Declared with @utility rather than as a plain `.panel-actions { @apply … }`
    like .sidebar-list-item above: a plain rule here is UNLAYERED, so it would
@@ -456,4 +482,15 @@
 		transition-duration: 0.01ms !important;
 		scroll-behavior: auto !important;
 	}
+}
+
+/* Scrollbars inside the shell's views (2026-10-11). The browser's default bar
+   is a heavy grey strip that runs over the rounded corner of the docked
+   sidebar and the right edge of every card. Thin, in the border stop on a
+   transparent track, so it reads as part of the panel. Role stops only, so
+   the theme answers; `scrollbar-color` is a no-op where unsupported. */
+[data-shell-sidebar],
+[data-shell-sidebar] * {
+	scrollbar-width: thin;
+	scrollbar-color: var(--color-surface-300-700) transparent;
 }

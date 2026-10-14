@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest"
+import { eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
@@ -26,6 +27,11 @@ import {
 	ScriptNotFoundError,
 	ScriptNotUsableError
 } from "$lib/server/pipelines/entities/scripts"
+import {
+	libraryView,
+	pipelineScriptSeams
+} from "$lib/server/pipelines/config/library"
+import { optionId, stepKeyFor } from "$lib/server/pipelines/config/panel/ids"
 
 let db: TestDb
 
@@ -391,4 +397,163 @@ describe("connection attachment (18 §4b)", () => {
 		await detachConnectionScript(db, connectionId, guard.id)
 		await expect(deleteScript(db, guard.id)).resolves.toBeUndefined()
 	})
+})
+
+describe("placement and fits (PLAN-script-placement D5)", () => {
+	const SECRET = "placement-test-secret"
+
+	// No shipped pipeline runs extract-cast, the one core step with a
+	// `castScripts` slot, so one is given a node of it — the shape a
+	// modder's pipeline would have.
+	beforeAll(async () => {
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/summarize-world"))
+			.limit(1)
+		await db.insert(schema.pipelineNodes).values({
+			specVersionId: spec.activeVersionId!,
+			nodeKey: "castProbe",
+			kind: "oracle",
+			definitionId: "core:oracle/extract-cast",
+			definitionVersion: 1,
+			config: {},
+			position: 9_999
+		})
+	}, 60_000)
+
+	/** A step whose definition declares the `castScripts` slot, and its pipeline. */
+	async function castStep() {
+		for (const p of await pipelineScriptSeams(db))
+			for (const [nodeKey, node] of p.nodes)
+				if ((node.row?.slots as any)?.castScripts?.kind === "scripts")
+					return { pipeline: p, nodeKey, row: node.row! }
+		throw new Error("no step declares castScripts")
+	}
+
+	it("a chain at a castScripts slot counts as use and blocks delete", async () => {
+		const { pipeline, nodeKey, row } = await castStep()
+		const accepts = ((row.slots as any).castScripts.accepts ?? []) as string[]
+		expect(accepts.length).toBeGreaterThan(0)
+		const script = await createScript(db, {
+			typeId: accepts[0],
+			name: "Cast only"
+		})
+		await db.insert(schema.pipelineNodeOverrides).values({
+			specId: pipeline.specId,
+			scopeKind: "session",
+			nodeKey,
+			slot: "castScripts",
+			path: "",
+			value: [script.id]
+		})
+
+		await expect(deleteScript(db, script.id)).rejects.toThrow(
+			/still in a chain/
+		)
+		const view = await scriptsView(db, { secret: SECRET })
+		const held = view.scripts.find((s) => s.id === script.id)!
+		expect(held.usedBy).toEqual([pipeline.label])
+		expect(held.use).toEqual([
+			{
+				kind: "pipeline",
+				pipelineSlug: pipeline.slug,
+				pipelineLabel: pipeline.label,
+				nodeKey,
+				stepLabel: pipeline.nodes.get(nodeKey)!.stepLabel,
+				at: "out:cast",
+				stepKey: stepKeyFor(SECRET, nodeKey),
+				optionId: optionId(SECRET, nodeKey, "castScripts", ""),
+				unplaced: false
+			}
+		])
+	}, 60_000)
+
+	it("a chain whose seam is gone is still a use, marked unplaced", async () => {
+		const { pipeline, nodeKey } = await castStep()
+		const script = await createScript(db, {
+			typeId: TRANSFORM,
+			name: "Stranded"
+		})
+		await db.insert(schema.pipelineNodeOverrides).values({
+			specId: pipeline.specId,
+			scopeKind: "session",
+			nodeKey,
+			slot: "scripts",
+			path: "a-point-nobody-declares",
+			value: [script.id]
+		})
+		await expect(deleteScript(db, script.id)).rejects.toThrow(
+			ScriptNotUsableError
+		)
+		const view = await scriptsView(db, { secret: SECRET })
+		const held = view.scripts.find((s) => s.id === script.id)!
+		expect(held.use).toHaveLength(1)
+		expect(held.use[0]).toMatchObject({
+			kind: "pipeline",
+			at: "a-point-nobody-declares",
+			unplaced: true
+		})
+	}, 60_000)
+
+	it("an address that is not a chain's is not a use", async () => {
+		const { pipeline, nodeKey } = await castStep()
+		const script = await createScript(db, {
+			typeId: TRANSFORM,
+			name: "Not in a chain"
+		})
+		// A number at a non-chain slot is some other setting's value.
+		await db.insert(schema.pipelineNodeOverrides).values({
+			specId: pipeline.specId,
+			scopeKind: "session",
+			nodeKey,
+			slot: "sampling",
+			path: "",
+			value: script.id
+		})
+		const view = await scriptsView(db, { secret: SECRET })
+		expect(view.scripts.find((s) => s.id === script.id)!.use).toEqual([])
+	}, 60_000)
+
+	it("fits counts every seam whose accepts names the kind", async () => {
+		const pipelines = (await pipelineScriptSeams(db)).filter((p) => !p.disabled)
+		const expected = pipelines.flatMap((p) =>
+			p.seams.filter((s) => s.accepts.includes(TRANSFORM)).map((s) => ({ p, s }))
+		)
+		expect(expected.length).toBeGreaterThan(0)
+
+		const mine = await createScript(db, { typeId: TRANSFORM, name: "Fits probe" })
+		const view = await scriptsView(db)
+		const transform = view.scripts.find((s) => s.id === mine.id)!
+		expect(transform.fits.seams).toBe(expected.length)
+		expect(new Set(transform.fits.pipelines)).toEqual(
+			new Set(expected.map((e) => e.p.slug))
+		)
+		expect(new Set(transform.fits.at)).toEqual(new Set(expected.map((e) => e.s.at)))
+		expect(new Set(transform.fits.steps)).toEqual(
+			new Set(expected.map((e) => e.s.stepLabel))
+		)
+		for (const slug of transform.fits.pipelines)
+			expect(view.pipelineLabels[slug]).toBeTruthy()
+
+		// A kind no seam accepts fits nowhere.
+		const unfit = view.types.find(
+			(t) => !pipelines.some((p) => p.seams.some((s) => s.accepts.includes(t.typeId)))
+		)
+		if (unfit) {
+			const row = await createScript(db, { typeId: unfit.typeId })
+			const again = await scriptsView(db)
+			expect(again.scripts.find((s) => s.id === row.id)!.fits.seams).toBe(0)
+		}
+	}, 60_000)
+
+	it("the library lists each pipeline's seams, castScripts as out:cast", async () => {
+		const { pipeline, nodeKey } = await castStep()
+		const view = await libraryView(db)
+		const p = view.pipelines.find((x) => x.slug === pipeline.slug)!
+		const cast = p.scriptSeams.find((s) => s.nodeKey === nodeKey && s.at === "out:cast")
+		expect(cast).toBeTruthy()
+		expect(cast!.accepts.length).toBeGreaterThan(0)
+		expect(cast!.stepLabel.length).toBeGreaterThan(0)
+	}, 60_000)
 })

@@ -15,7 +15,8 @@ export function downloadBlob(payload: {
 	const blob = new Blob([new Uint8Array(bufferData)], {
 		type: payload.filename.endsWith(".json")
 			? "application/json"
-			: payload.filename.endsWith(".charx")
+			: payload.filename.endsWith(".charx") ||
+				  payload.filename.endsWith(".zip")
 				? "application/zip"
 				: "image/png"
 	})

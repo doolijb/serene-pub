@@ -1,13 +1,15 @@
 <script lang="ts">
 	/**
 	 * Admin → Sampling: the changelist (owner ruling 2026-09-27 — admin
-	 * manages its objects Django-style instead of nesting the Sampling view).
+	 * manages its objects Django-style instead of nesting a sidebar view).
 	 * Every sampling config on the instance with its modality, the values it
 	 * is recognised by, how many parameters it sends, and what uses it — the
 	 * capability defaults (`capabilityDefaults[*].samplingConfigId`) and the
 	 * pipelines whose sampling slots pick it (`pipelines:library`'s
 	 * `samplingUsedBy`). Filters, search, bulk delete. A row opens its change
-	 * form at `/admin/sampling/<id>`.
+	 * form at `/admin/sampling/<id>`; its **Open in Sampling** opens the
+	 * Sampling view on the config (owner 2026-10-11: the view stays and owns
+	 * editing).
 	 *
 	 * Sampling configs belong to the instance, not to a user, so there is no
 	 * owner column. Built-in configs cannot be deleted; a bulk delete names
@@ -37,6 +39,9 @@
 		type SamplingRow
 	} from "./samplingAdmin"
 	import { modalityWord } from "../connections/connectionsAdmin"
+	import { samplingSettingsOn } from "$lib/client/components/sidebars/samplingList"
+	import { openInSampling } from "$lib/client/admin/railDoors"
+	import { samplingSidebarMemory } from "$lib/client/components/sidebars/samplingList"
 
 	type Row = SamplingRow
 
@@ -98,12 +103,10 @@
 		},
 		{
 			key: "sent",
-			label: "Parameters",
+			label: "Settings",
 			numeric: true,
-			text: (r) => {
-				const { on, total } = samplingEnabledCount(r)
-				return `${on} of ${total} sent`
-			},
+			// The job sheet's row words (`samplingSettingsOn`): "3 settings on".
+			text: (r) => samplingSettingsOn(r),
 			sortValue: (r) => samplingEnabledCount(r).on
 		},
 		{
@@ -117,6 +120,12 @@
 			label: "Origin",
 			text: (r) => (r.isImmutable ? "Built-in" : "Custom"),
 			sortValue: (r) => (r.isImmutable ? 0 : 1)
+		},
+		{
+			key: "open",
+			label: "Open",
+			custom: true,
+			class: "w-0 text-right"
 		}
 	]
 
@@ -170,7 +179,10 @@
 	]
 
 	function openView() {
-		panelsCtx?.openPanel({ key: "sampling" })
+		openInSampling(panelsCtx, samplingSidebarMemory, null)
+	}
+	function openRow(row: Row) {
+		openInSampling(panelsCtx, samplingSidebarMemory, row.id)
 	}
 </script>
 
@@ -202,7 +214,20 @@
 		</button>
 	{/snippet}
 	{#snippet cell(row, col)}
-		{#if col.key === "usedBy"}
+		{#if col.key === "open"}
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface whitespace-nowrap"
+				aria-label="Open in Sampling: {row.name}"
+				onclick={(e) => {
+					e.stopPropagation()
+					openRow(row)
+				}}
+			>
+				<Icons.SlidersHorizontal size={14} aria-hidden="true" />
+				Open in Sampling
+			</button>
+		{:else if col.key === "usedBy"}
 			{@const held = samplingDefaultsFor(row.id, defaults)}
 			{@const pipelines = usedBy[row.id] ?? []}
 			{#if held.length || pipelines.length}
@@ -210,9 +235,9 @@
 					{#each held as h (h.capability)}
 						<span
 							class="preset-tonal-primary rounded-full px-2 py-0.5 text-[11px]"
-							title="The default for {h.label}"
+							title="Used by the {h.label} loadout"
 						>
-							Default · {h.label}
+							Loadout · {h.label}
 						</span>
 					{/each}
 					{#if pipelines.length}

@@ -1,5 +1,8 @@
 <script lang="ts">
 	import { provideCharacterImports } from "$lib/client/contexts/characterImports.svelte"
+	import { provideConnections } from "$lib/client/contexts/connections.svelte"
+	import { provideConversations } from "$lib/client/contexts/conversations.svelte"
+	import ConnectionsDialogs from "$lib/client/components/connections/ConnectionsDialogs.svelte"
 	/**
 	 * The Document View (accessible) shell — a self-contained layout that
 	 * intentionally does NOT reuse Layout.svelte or panelsCtx (sidebar-
@@ -72,6 +75,14 @@
 	// The one subscriber to the card-import events; views take the outcome
 	// from this context (contexts/characterImports.svelte.ts).
 	provideCharacterImports()
+	// The connections list and the one way to choose a model
+	// (contexts/connections.svelte.ts); its dialogs are mounted below.
+	provideConnections({ systemSettings: systemSettingsCtx })
+	// The one subscriber to the `conversations:` family
+	// (contexts/conversations.svelte.ts). Document View has no Messages view
+	// yet; the context is here so anything mounted under this shell that
+	// reads it finds it, as under the main shell.
+	provideConversations({ systemSettings: systemSettingsCtx, userCtx })
 	setContext("systemSettingsCtx", systemSettingsCtx)
 	setContext("ollamaSettingsCtx", ollamaSettingsCtx)
 	setContext("koboldCppSettingsCtx", koboldCppSettingsCtx)
@@ -250,22 +261,19 @@
 			{
 				href: "/document-view/ollama",
 				label: "Ollama, managed",
-				show:
-					isAdmin &&
-					!isAndroidWrapper &&
-					!!ollamaSettingsCtx.settings?.ollamaManagerEnabled
+				// Listed whether or not the manager is on: the page itself is
+				// where it is turned on (2026-10-11), so hiding it was the
+				// "find the switch first" dead end.
+				show: isAdmin && !isAndroidWrapper
 			},
 			{
 				href: "/document-view/koboldcpp",
 				label: "KoboldCPP, run by Serene Pub",
-				show:
-					isAdmin &&
-					!isAndroidWrapper &&
-					!!koboldCppSettingsCtx.settings?.koboldCppManagerEnabled
+				show: isAdmin && !isAndroidWrapper
 			},
 			{
 				href: "/document-view/settings/system",
-				label: "System Settings",
+				label: "Pub settings",
 				show: isAdmin
 			},
 			{
@@ -423,4 +431,6 @@
 			interface.
 		</p>
 	</footer>
+	<!-- The costed confirmations of choosing a model (re-embed, re-scan). -->
+	<ConnectionsDialogs />
 </div>

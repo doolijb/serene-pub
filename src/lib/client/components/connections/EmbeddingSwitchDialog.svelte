@@ -67,8 +67,8 @@
 						</h2>
 						<p class="text-surface-600-400 mt-1 text-sm">
 							{#if currentName}
-								Replaces {currentName} as the one embedding model for
-								this pub.
+								Replaces {currentName} as the one embedding model
+								for this pub.
 							{:else if nextName}
 								Sets {nextName} as the embedding model for this pub.
 							{:else}
@@ -95,7 +95,9 @@
 								{:else}
 									<strong class="font-semibold">
 										{rows.toLocaleString()}
-										stored {rows === 1 ? "vector is" : "vectors are"} re-embedded
+										stored {rows === 1
+											? "vector is"
+											: "vectors are"} re-embedded
 									</strong>
 									{#if cost?.lorebooks || cost?.sessions}
 										<span>
@@ -104,7 +106,8 @@
 											).toLocaleString()}
 											{(cost.lorebooks ?? 0) === 1
 												? "lorebook"
-												: "lorebooks"} and the history of {(
+												: "lorebooks"} and the history of
+											{(
 												cost.sessions ?? 0
 											).toLocaleString()}
 											{(cost.sessions ?? 0) === 1
@@ -113,26 +116,27 @@
 										</span>
 									{/if}
 									<span>
-										Vectors from the old model don't match the new
-										one.
+										Vectors from the old model don't match
+										the new one.
 									</span>
 								{/if}
 							</span>
 						</p>
 						<p class="text-surface-600-400">
-							Until it finishes, retrieval answers from keywords only.
+							Until it finishes, retrieval answers from keywords
+							only.
 						</p>
 						{#if currentIsLocal && currentName}
 							<p class="text-surface-600-400">
-								{currentName} stays on disk. Switching back later re-embeds
-								again.
+								{currentName} stays on disk. Switching back later
+								re-embeds again.
 							</p>
 						{/if}
 					</article>
 					<footer class="mt-5 flex justify-end gap-2">
 						<button
 							type="button"
-							class="btn preset-filled-surface-500"
+							class="btn preset-tonal-surface"
 							onclick={onCancel}
 						>
 							{currentName ? `Keep ${currentName}` : "Cancel"}

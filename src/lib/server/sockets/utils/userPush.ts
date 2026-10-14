@@ -78,6 +78,31 @@ export function installUserPush(io: PushIo): void {
 			})
 	}
 	;(globalThis as Record<symbol, unknown>)[PUSH_KEY] = push
+	;(globalThis as Record<symbol, unknown>)[ADMINS_KEY] = (): number[] => {
+		const ids = new Set<number>()
+		for (const socket of io.sockets.sockets.values())
+			if (socket.user?.isAdmin && typeof socket.user.id === "number")
+				ids.add(socket.user.id)
+		return [...ids]
+	}
+}
+
+const ADMINS_KEY = Symbol.for("serene-pub.connectedAdmins")
+
+/**
+ * Push to every CONNECTED admin — for a server-side job no connection owns
+ * whose progress only an admin surface shows (the background remover's
+ * first-use download → the Downloads tray). Admins are found by walking the
+ * sockets, as `admin/overviewStale.ts` does: only a connected admin can hear
+ * it. Nothing installed (a unit test) → nothing sent.
+ */
+export function pushToConnectedAdmins(event: string, data: unknown): void {
+	const admins = (
+		(globalThis as Record<symbol, unknown>)[ADMINS_KEY] as
+			| (() => number[])
+			| undefined
+	)?.()
+	for (const id of admins ?? []) pushToUser(id, event, data)
 }
 
 /** Push to every socket of `userId` (gated events: only the interested ones). */

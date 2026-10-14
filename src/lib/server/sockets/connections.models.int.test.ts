@@ -282,7 +282,7 @@ describe("connections:deleteModel", () => {
 		// rather than stranded — and nothing is promoted in its place.
 		const [reg] = await db
 			.select()
-			.from(schema.connectionDefaults)
+			.from(schema.loadouts)
 			.where(byCapability("text->text"))
 		expect(reg.connectionId).toBe(conn.id)
 		expect(reg.connectionModelId).toBeNull()
@@ -532,5 +532,311 @@ describe("a managed KoboldCPP model's vision projector", () => {
 			noop
 		)
 		expect("visionProjector" in listed.models![0]).toBe(false)
+	}, 60_000)
+})
+
+describe("a model's What it's for (`modality`)", () => {
+	async function pair(type: string, model = "a-model") {
+		const [conn] = await db
+			.insert(schema.connections)
+			.values({
+				name: `modality ${Math.random()}`,
+				type,
+				baseUrl: `http://modality-${++fixtureHost}.test/v1`,
+				modality: CONNECTION_TYPE.modalityOf(type),
+				capabilities: {
+					resolved: { "text->text": 2, "text->embedding": 2 }
+				}
+			} as any)
+			.returning()
+		const [row] = await db
+			.insert(schema.connectionModels)
+			.values({
+				connectionId: conn.id,
+				model,
+				name: model,
+				enabled: true
+			})
+			.returning()
+		return { conn, row }
+	}
+
+	const setModality = async (
+		connectionId: number,
+		modelId: number,
+		modality: unknown,
+		sent: Array<[string, any]> = []
+	) => {
+		const { connectionsUpdateModel } = await import("./connections")
+		return connectionsUpdateModel.handler(
+			admin(),
+			{ id: connectionId, modelId, model: { modality } as any },
+			((event: string, data: unknown) => sent.push([event, data])) as any
+		)
+	}
+
+	test("an OpenAI-compatible model takes chat, embeddings or Not sure, and the list moves with it", async () => {
+		const { conn, row } = await pair(CONNECTION_TYPE.OPENAI)
+
+		const sent: Array<[string, any]> = []
+		const res = await setModality(conn.id, row.id, "embeddings", sent)
+		expect(res.error).toBeUndefined()
+		expect(res.models![0].modality).toBe("embeddings")
+		// An embedding model on this pair can no longer be offered for chat.
+		expect(res.models![0].satisfiableCapabilities).not.toContain(
+			"text->text"
+		)
+		expect(sent.map(([event]) => event)).toEqual(
+			expect.arrayContaining([
+				"connections:updateModel",
+				"connections:list"
+			])
+		)
+
+		expect(
+			(await setModality(conn.id, row.id, "text-gen")).models![0].modality
+		).toBe("text-gen")
+		// Blank and null are both "Not sure".
+		expect(
+			(await setModality(conn.id, row.id, "")).models![0].modality
+		).toBeNull()
+		await setModality(conn.id, row.id, "embeddings")
+		expect(
+			(await setModality(conn.id, row.id, null)).models![0].modality
+		).toBeNull()
+	}, 60_000)
+
+	test("refuses what this connection's type cannot serve, and a value that is not a choice", async () => {
+		const { conn, row } = await pair(CONNECTION_TYPE.OPENAI)
+		// `image-gen` left this list 2026-10-12: the OPENAI type carries an image module now (I6).
+		for (const bad of ["ner", "tts"]) {
+			const res = await setModality(conn.id, row.id, bad)
+			expect(res.error).toMatch(/can only be for chat, image generation or embeddings/i)
+		}
+		const junk = await setModality(conn.id, row.id, 7)
+		expect(junk.error).toMatch(/Not sure/)
+		const [after] = await modelsOf(conn.id)
+		expect(after.modality).toBeNull()
+
+		// The choices are the type's: a managed KoboldCPP model may draw.
+		const managed = await pair(CONNECTION_TYPE.KOBOLDCPP_MANAGED, "sd.gguf")
+		const drew = await setModality(
+			managed.conn.id,
+			managed.row.id,
+			"image-gen"
+		)
+		expect(drew.error).toBeUndefined()
+		expect(drew.models![0].modality).toBe("image-gen")
+	}, 60_000)
+
+	test("refuses a modality that would strand a default on this model", async () => {
+		const { connectionsSetDefault } = await import("./connections")
+		const { conn, row } = await pair(CONNECTION_TYPE.OPENAI, "starred")
+		await connectionsSetDefault.handler(
+			admin(),
+			{ capability: "text->text", id: conn.id, modelId: row.id } as any,
+			noop
+		)
+
+		const refused = await setModality(conn.id, row.id, "embeddings")
+		expect(refused.error).toMatch(/in the Reply loadout/i)
+		const [kept] = await modelsOf(conn.id)
+		expect(kept.modality).toBeNull()
+
+		// What keeps the default servable is accepted, and so is Not sure.
+		expect(
+			(await setModality(conn.id, row.id, "text-gen")).error
+		).toBeUndefined()
+		expect((await setModality(conn.id, row.id, null)).error).toBeUndefined()
+	}, 60_000)
+
+	/**
+	 * A published pipeline whose steps each declare one connection slot, and
+	 * one named config holding `values` at those slots.
+	 */
+	async function pipelineConfig(
+		name: string,
+		configName: string,
+		steps: Array<{ nodeKey: string; requires: string[]; value?: unknown }>
+	) {
+		const n = ++fixtureHost
+		const [spec] = await db
+			.insert(schema.pipelineSpecs)
+			.values({ slug: `test:spec/modality-${n}`, name })
+			.returning()
+		const [version] = await db
+			.insert(schema.pipelineSpecVersions)
+			.values({
+				specId: spec.id,
+				semver: "1.0.0",
+				canonicalHash: `h${n}`
+			})
+			.returning()
+		await db
+			.update(schema.pipelineSpecs)
+			.set({ activeVersionId: version.id })
+			.where(eq(schema.pipelineSpecs.id, spec.id))
+		for (const [position, step] of steps.entries()) {
+			const definitionId = `test:oracle/modality-${n}-${step.nodeKey}`
+			await db.insert(schema.pipelineDefinitionRegistry).values({
+				definitionId,
+				version: 1,
+				kind: "node",
+				slots: {
+					connection: { kind: "connection", requires: step.requires }
+				}
+			})
+			await db.insert(schema.pipelineNodes).values({
+				specVersionId: version.id,
+				nodeKey: step.nodeKey,
+				kind: "oracle",
+				definitionId,
+				position
+			})
+		}
+		const [config] = await db
+			.insert(schema.pipelineConfigs)
+			.values({ specId: spec.id, name: configName })
+			.returning()
+		const values = steps.filter((s) => s.value !== undefined)
+		if (values.length)
+			await db.insert(schema.pipelineConfigValues).values(
+				values.map((s) => ({
+					configId: config.id,
+					nodeKey: s.nodeKey,
+					slot: "connection",
+					path: "",
+					value: s.value
+				}))
+			)
+		return { spec, config }
+	}
+
+	test("refuses a modality that would strand a pipeline configuration's step on this model", async () => {
+		const { conn, row } = await pair(CONNECTION_TYPE.OPENAI, "configured")
+		await pipelineConfig("Summarize", "Mine", [
+			{
+				nodeKey: "generate",
+				requires: ["text->text"],
+				value: { ref: conn.id, modelId: row.id }
+			},
+			// A held slot: the run drops a pick there, so it strands nothing.
+			{
+				nodeKey: "windows",
+				requires: ["text->embedding"],
+				value: { ref: conn.id, modelId: row.id }
+			}
+		])
+
+		const refused = await setModality(conn.id, row.id, "embeddings")
+		expect(refused.error).toBe(
+			"The “Mine” configuration of Summarize uses this model for chat. " +
+				"Choose another model in that configuration first, then change what this one is for."
+		)
+		const [kept] = await modelsOf(conn.id)
+		expect(kept.modality).toBeNull()
+
+		expect(
+			(await setModality(conn.id, row.id, "text-gen")).error
+		).toBeUndefined()
+		expect((await setModality(conn.id, row.id, null)).error).toBeUndefined()
+	}, 60_000)
+
+	test("a switched-off plugin's configuration holds nothing back; switched on, it does", async () => {
+		const { conn, row } = await pair(CONNECTION_TYPE.OPENAI, "plugin-held")
+		const { spec } = await pipelineConfig("Plugin pipeline", "Theirs", [
+			{
+				nodeKey: "generate",
+				requires: ["text->text"],
+				value: { ref: conn.id, modelId: row.id }
+			}
+		])
+		const [plugin] = await db
+			.insert(schema.plugins)
+			.values({
+				pluginId: `acme.modality-${++fixtureHost}`,
+				name: "Acme",
+				bundleSource: "// x",
+				bundleHash: "deadbeef",
+				enabled: false,
+				manifest: {}
+			})
+			.returning()
+		await db
+			.update(schema.pipelineSpecs)
+			.set({ sourcePluginId: plugin.id })
+			.where(eq(schema.pipelineSpecs.id, spec.id))
+
+		expect(
+			(await setModality(conn.id, row.id, "embeddings")).error
+		).toBeUndefined()
+		expect((await setModality(conn.id, row.id, null)).error).toBeUndefined()
+
+		await db
+			.update(schema.plugins)
+			.set({ enabled: true })
+			.where(eq(schema.plugins.id, plugin.id))
+		expect((await setModality(conn.id, row.id, "embeddings")).error).toMatch(
+			/configuration of Plugin pipeline uses this model for chat/
+		)
+	}, 60_000)
+
+	test("a configuration naming only the endpoint, or an address the pipeline no longer declares, strands nothing", async () => {
+		const { conn, row } = await pair(CONNECTION_TYPE.OPENAI, "loose")
+		const { config } = await pipelineConfig("Narrate", "Loose", [
+			{ nodeKey: "generate", requires: ["text->text"], value: conn.id }
+		])
+		await db.insert(schema.pipelineConfigValues).values({
+			configId: config.id,
+			nodeKey: "retired-step",
+			slot: "connection",
+			path: "",
+			value: { ref: conn.id, modelId: row.id }
+		})
+
+		expect(
+			(await setModality(conn.id, row.id, "embeddings")).error
+		).toBeUndefined()
+	}, 60_000)
+
+	test("names the defaults and every configuration in one refusal", async () => {
+		const { connectionsSetDefault } = await import("./connections")
+		const { conn, row } = await pair(CONNECTION_TYPE.OPENAI, "everywhere")
+		await connectionsSetDefault.handler(
+			admin(),
+			{ capability: "text->text", id: conn.id, modelId: row.id } as any,
+			noop
+		)
+		const value = { ref: conn.id, modelId: row.id }
+		await pipelineConfig("Reply", "Fast", [
+			{ nodeKey: "plan", requires: ["text->text"], value },
+			{ nodeKey: "narrate", requires: ["text->text"], value }
+		])
+		await pipelineConfig("Recap", "Slow", [
+			{ nodeKey: "generate", requires: ["text->text"], value }
+		])
+
+		const refused = await setModality(conn.id, row.id, "embeddings")
+		expect(refused.error).toBe(
+			"This model is in the Reply loadout. " +
+				"The “Fast” configuration of Reply and the “Slow” configuration of Recap use it for chat. " +
+				"Choose another model in Loadouts and in those configurations first, then change what this one is for."
+		)
+	}, 60_000)
+
+	test("counts the configurations past the third rather than naming them", async () => {
+		const { conn, row } = await pair(CONNECTION_TYPE.OPENAI, "popular")
+		const value = { ref: conn.id, modelId: row.id }
+		for (const name of ["One", "Two", "Three", "Four"])
+			await pipelineConfig(`Pipeline ${name}`, name, [
+				{ nodeKey: "generate", requires: ["text->text"], value }
+			])
+
+		const refused = await setModality(conn.id, row.id, "embeddings")
+		expect(refused.error).toBe(
+			"The “One” configuration of Pipeline One, the “Two” configuration of Pipeline Two, " +
+				"and 2 other configurations use this model for chat. " +
+				"Choose another model in those configurations first, then change what this one is for."
+		)
 	}, 60_000)
 })

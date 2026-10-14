@@ -15,10 +15,7 @@ import os from "os"
 import path from "path"
 import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import {
-	HISTORY_TYPE_ID,
-	WORLD_LORE_TYPE_ID
-} from "$lib/shared/entries/types"
+import { HISTORY_TYPE_ID, WORLD_LORE_TYPE_ID } from "$lib/shared/entries/types"
 import {
 	amendmentsOnLine,
 	lineOf,
@@ -44,7 +41,9 @@ vi.mock("$lib/server/db", async () => {
 })
 
 beforeAll(async () => {
-	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-linesql-int-test-"))
+	dataDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "serene-pub-linesql-int-test-")
+	)
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	const dbModule = await import("$lib/server/db")
 	testDb = dbModule.db as unknown as TestDb
@@ -57,7 +56,10 @@ afterAll(async () => {
 /** Build the case book; answer the local → real id maps. */
 async function buildBook() {
 	const { createTestUser } = await import("$lib/server/utils/testDb")
-	const user = await createTestUser(testDb, `linesql-${Math.random().toString(36).slice(2, 8)}`)
+	const user = await createTestUser(
+		testDb,
+		`linesql-${Math.random().toString(36).slice(2, 8)}`
+	)
 	const [book] = await testDb
 		.insert(schema.lorebooks)
 		.values({ name: "Lines", userId: user.id })
@@ -72,7 +74,9 @@ async function buildBook() {
 				lorebookId: book.id,
 				name: b.name,
 				forkedFromBranchId:
-					b.forkedFromBranchId == null ? null : branchIds.get(b.forkedFromBranchId)!,
+					b.forkedFromBranchId == null
+						? null
+						: branchIds.get(b.forkedFromBranchId)!,
 				forkYear: b.forkYear,
 				forkMonth: b.forkMonth,
 				forkDay: b.forkDay
@@ -104,7 +108,11 @@ async function buildBook() {
 				position: r.id,
 				branchId: real(r.branchId),
 				fields: r.date
-					? { year: r.date.year, month: r.date.month ?? null, day: r.date.day ?? null }
+					? {
+							year: r.date.year,
+							month: r.date.month ?? null,
+							day: r.date.day ?? null
+						}
 					: {}
 			} as any)
 			.returning()
@@ -148,8 +156,11 @@ const back = (m: Map<number, number>) =>
 describe("the line rule: pure and SQL agree", () => {
 	test("on every line, at every moment, for entries and for amendments", async () => {
 		const { lineOfBook } = await import("./reading")
-		const { historyDateColumns, onLineAtSql, onLineSql } = await import("./lineSql")
-		const { book, real, realBranches, entryIds, amendmentIds, anchor } = await buildBook()
+		const { historyDateColumns, onLineAtSql, onLineSql } = await import(
+			"./lineSql"
+		)
+		const { book, real, realBranches, entryIds, amendmentIds, anchor } =
+			await buildBook()
 		const entryLocal = back(entryIds)
 		const amendLocal = back(amendmentIds)
 		const e = schema.lorebookEntries
@@ -157,7 +168,11 @@ describe("the line rule: pure and SQL agree", () => {
 
 		for (const localLine of CASE_LINES) {
 			// The server's loader builds the same chain the client builds.
-			const line = await lineOfBook(testDb as any, book.id, real(localLine))
+			const line = await lineOfBook(
+				testDb as any,
+				book.id,
+				real(localLine)
+			)
 			expect(line).toEqual(lineOf(real(localLine), realBranches))
 
 			// Membership only.
@@ -174,9 +189,9 @@ describe("the line rule: pure and SQL agree", () => {
 			const pureMembers = CASE_ROWS.filter((r) =>
 				rowReadsOnLine({ branchId: real(r.branchId) }, line)
 			).map((r) => r.id)
-			expect(members.map((m) => entryLocal.get(m.id)!).sort((x, y) => x - y)).toEqual(
-				pureMembers.sort((x, y) => x - y)
-			)
+			expect(
+				members.map((m) => entryLocal.get(m.id)!).sort((x, y) => x - y)
+			).toEqual(pureMembers.sort((x, y) => x - y))
 
 			for (const moment of CASE_MOMENTS) {
 				const label = `line ${localLine ?? "main"} @ ${JSON.stringify(moment)}`
@@ -189,14 +204,26 @@ describe("the line rule: pure and SQL agree", () => {
 						and(
 							eq(e.lorebookId, book.id),
 							inArray(e.id, [...entryIds.values()]),
-							onLineAtSql(e.branchId, historyDateColumns(e.fields), line, moment)
+							onLineAtSql(
+								e.branchId,
+								historyDateColumns(e.fields),
+								line,
+								moment
+							)
 						)
 					)
 				const pure = CASE_ROWS.filter((r) =>
-					rowReadsOnLine({ branchId: real(r.branchId) }, line, r.date, moment)
+					rowReadsOnLine(
+						{ branchId: real(r.branchId) },
+						line,
+						r.date,
+						moment
+					)
 				).map((r) => r.id)
 				expect(
-					rows.map((r) => entryLocal.get(r.id)!).sort((x, y) => x - y),
+					rows
+						.map((r) => entryLocal.get(r.id)!)
+						.sort((x, y) => x - y),
 					label
 				).toEqual(pure.sort((x, y) => x - y))
 
@@ -207,19 +234,33 @@ describe("the line rule: pure and SQL agree", () => {
 					.where(
 						and(
 							eq(am.entryId, anchor.id),
-							onLineAtSql(am.branchId, { year: am.year, month: am.month, day: am.day }, line, moment)
+							onLineAtSql(
+								am.branchId,
+								{ year: am.year, month: am.month, day: am.day },
+								line,
+								moment
+							)
 						)
 					)
-				const all = await testDb.select().from(am).where(eq(am.entryId, anchor.id))
+				const all = await testDb
+					.select()
+					.from(am)
+					.where(eq(am.entryId, anchor.id))
 				const pureOverlays = amendmentsOnLine(
 					all.map((a) => ({ ...a, branchId: a.branchId ?? null })),
 					line,
 					moment
 				)
 				expect(
-					overlays.map((a) => amendLocal.get(a.id)!).sort((x, y) => x - y),
+					overlays
+						.map((a) => amendLocal.get(a.id)!)
+						.sort((x, y) => x - y),
 					label
-				).toEqual(pureOverlays.map((a) => amendLocal.get(a.id)!).sort((x, y) => x - y))
+				).toEqual(
+					pureOverlays
+						.map((a) => amendLocal.get(a.id)!)
+						.sort((x, y) => x - y)
+				)
 			}
 		}
 	}, 60_000)
@@ -236,13 +277,28 @@ describe("the line rule: pure and SQL agree", () => {
 	test("readingOf carries the chain; datedOnReading reads through it", async () => {
 		const { readingOf, datedOnReading } = await import("./reading")
 		const { book, real } = await buildBook()
-		const reading = await readingOf(testDb as any, book.id, { branch: real(3) })
-		expect(reading.line?.steps.map((s) => s.branchId)).toEqual([real(3), real(1), null])
+		const reading = await readingOf(testDb as any, book.id, {
+			branch: real(3)
+		})
+		expect(reading.line?.steps.map((s) => s.branchId)).toEqual([
+			real(3),
+			real(1),
+			null
+		])
 		// A's Y6 row reads on C (forked from A at Y7); main's Y6 does not (cut at Y5).
-		expect(datedOnReading({ branchId: real(1) }, { year: 6 }, reading)).toBe(true)
-		expect(datedOnReading({ branchId: null }, { year: 6 }, reading)).toBe(false)
-		const whole = await readingOf(testDb as any, book.id, { branch: real(3), forkCut: false })
-		expect(datedOnReading({ branchId: null }, { year: 6 }, whole)).toBe(true)
+		expect(
+			datedOnReading({ branchId: real(1) }, { year: 6 }, reading)
+		).toBe(true)
+		expect(datedOnReading({ branchId: null }, { year: 6 }, reading)).toBe(
+			false
+		)
+		const whole = await readingOf(testDb as any, book.id, {
+			branch: real(3),
+			forkCut: false
+		})
+		expect(datedOnReading({ branchId: null }, { year: 6 }, whole)).toBe(
+			true
+		)
 	}, 60_000)
 })
 
@@ -255,13 +311,22 @@ describe("server readers of a line read by the rule", () => {
 		rows = CASE_ROWS
 	) =>
 		rows
-			.filter((r) => rowReadsOnLine({ branchId: real(r.branchId) }, line, r.date, moment))
+			.filter((r) =>
+				rowReadsOnLine(
+					{ branchId: real(r.branchId) },
+					line,
+					r.date,
+					moment
+				)
+			)
 			.map((r) => r.id)
 			.sort((x, y) => x - y)
 	const sorted = (ids: number[]) => [...ids].sort((x, y) => x - y)
 
 	test("links: `rowsOnReading` dates each by its history entry; `onLineSql` keeps the chain", async () => {
-		const { lineOfBook, readingOf, rowsOnReading } = await import("./reading")
+		const { lineOfBook, readingOf, rowsOnReading } = await import(
+			"./reading"
+		)
 		const { onLineSql } = await import("./lineSql")
 		const { book, real, entryIds, anchor } = await buildBook()
 		const [far] = await testDb
@@ -294,19 +359,31 @@ describe("server readers of a line read by the rule", () => {
 			linkIds.set(row.id, link.id)
 		}
 		const local = back(linkIds)
-		const all = await testDb.select().from(r).where(eq(r.lorebookId, book.id))
+		const all = await testDb
+			.select()
+			.from(r)
+			.where(eq(r.lorebookId, book.id))
 
 		for (const localLine of CASE_LINES) {
-			const line = await lineOfBook(testDb as any, book.id, real(localLine))
+			const line = await lineOfBook(
+				testDb as any,
+				book.id,
+				real(localLine)
+			)
 			const members = await testDb
 				.select({ id: r.id })
 				.from(r)
-				.where(and(eq(r.lorebookId, book.id), onLineSql(r.branchId, line)))
-			expect(sorted(members.map((m) => local.get(m.id)!)), `line ${localLine ?? "main"}`).toEqual(
+				.where(
+					and(eq(r.lorebookId, book.id), onLineSql(r.branchId, line))
+				)
+			expect(
+				sorted(members.map((m) => local.get(m.id)!)),
+				`line ${localLine ?? "main"}`
+			).toEqual(
 				sorted(
-					CASE_ROWS.filter((c) => rowReadsOnLine({ branchId: real(c.branchId) }, line)).map(
-						(c) => c.id
-					)
+					CASE_ROWS.filter((c) =>
+						rowReadsOnLine({ branchId: real(c.branchId) }, line)
+					).map((c) => c.id)
 				)
 			)
 			for (const moment of CASE_MOMENTS) {
@@ -325,7 +402,9 @@ describe("server readers of a line read by the rule", () => {
 
 	test("scenes: what `entries:counts` counts is what the pool keeps", async () => {
 		const { lineOfBook } = await import("./reading")
-		const { entryCountsHandler } = await import("$lib/server/sockets/entries")
+		const { entryCountsHandler } = await import(
+			"$lib/server/sockets/entries"
+		)
 		const { book, real, entryIds } = await buildBook()
 		const s = schema.scenes
 		for (const row of CASE_ROWS)
@@ -335,9 +414,16 @@ describe("server readers of a line read by the rule", () => {
 				name: `scene ${row.id}`,
 				branchId: real(row.branchId)
 			} as any)
-		const all = await testDb.select().from(s).where(eq(s.lorebookId, book.id))
+		const all = await testDb
+			.select()
+			.from(s)
+			.where(eq(s.lorebookId, book.id))
 		for (const localLine of CASE_LINES) {
-			const line = await lineOfBook(testDb as any, book.id, real(localLine))
+			const line = await lineOfBook(
+				testDb as any,
+				book.id,
+				real(localLine)
+			)
 			const res = await entryCountsHandler.handler(
 				{ user: { id: book.userId } } as any,
 				{ lorebookId: book.id, branchId: real(localLine) },
@@ -348,16 +434,21 @@ describe("server readers of a line read by the rule", () => {
 				all.map((a) => ({ ...a, branchId: a.branchId ?? null })),
 				line
 			)
-			expect(res.counts.scene, `line ${localLine ?? "main"}`).toBe(pool.length)
+			expect(res.counts.scene, `line ${localLine ?? "main"}`).toBe(
+				pool.length
+			)
 		}
 	}, 60_000)
 
-	test("presences: `cardMemberAt` stands the member where the World bar does", async () => {
+	test("presences: `cardMemberAt` stands the member where the roster popover does", async () => {
 		const { lineOfBook } = await import("./reading")
 		const { cardMemberAt } = await import("$lib/server/sockets/amendments")
 		const { createTestUser } = await import("$lib/server/utils/testDb")
 		const { book, real } = await buildBook()
-		const user = await createTestUser(testDb, `linesql-cast-${Math.random().toString(36).slice(2, 8)}`)
+		const user = await createTestUser(
+			testDb,
+			`linesql-cast-${Math.random().toString(36).slice(2, 8)}`
+		)
 		const [card] = await testDb
 			.insert(schema.characters)
 			.values({ userId: user.id, name: "Verity", description: "" } as any)
@@ -385,7 +476,11 @@ describe("server readers of a line read by the rule", () => {
 				fromDay: row.date!.day ?? null
 			})
 		for (const localLine of CASE_LINES) {
-			const line = await lineOfBook(testDb as any, book.id, real(localLine))
+			const line = await lineOfBook(
+				testDb as any,
+				book.id,
+				real(localLine)
+			)
 			for (const moment of CASE_MOMENTS) {
 				const read = await cardMemberAt(testDb as any, {
 					lorebookId: book.id,
@@ -406,9 +501,13 @@ describe("server readers of a line read by the rule", () => {
 		const one = await buildBook()
 		const two = await buildBook()
 		// C forked A at Y7, A main at Y5: its newest history is its own Y10.
-		expect((await storyNowOf(testDb as any, one.book.id, one.real(3)))?.year).toBe(10)
+		expect(
+			(await storyNowOf(testDb as any, one.book.id, one.real(3)))?.year
+		).toBe(10)
 		// E forked C at Y3: C's Y2 is the newest it can see.
-		expect((await storyNowOf(testDb as any, one.book.id, one.real(5)))?.year).toBe(2)
+		expect(
+			(await storyNowOf(testDb as any, one.book.id, one.real(5)))?.year
+		).toBe(2)
 		// Another book's line is not read as a one-level fork of this main.
 		await expect(
 			storyNowOf(testDb as any, one.book.id, two.real(5))

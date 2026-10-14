@@ -20,7 +20,13 @@ describe("answerOpenLore", () => {
 		expect(did).toEqual([{ lorebookId: 3, scope: "scenes", entryId: undefined, sceneId: 8 }, "open"])
 	})
 
-	test("refuses nothing: fields of the wrong shape are dropped, and any scope but scenes is history", () => {
+	test("a place (W4): the Places scope at its entry", () => {
+		const { did, deps } = page()
+		answerOpenLore({ lorebookId: 3, scope: "places", entryId: 12 }, deps)
+		expect(did).toEqual([{ lorebookId: 3, scope: "places", entryId: 12, sceneId: undefined }, "open"])
+	})
+
+	test("refuses nothing: fields of the wrong shape are dropped, and any scope but scenes or places is history", () => {
 		const { did, deps } = page()
 		answerOpenLore({ lorebookId: "3", scope: "nowhere", entryId: "x", sceneId: null }, deps)
 		expect(did).toEqual([

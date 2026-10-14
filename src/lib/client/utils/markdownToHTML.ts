@@ -1,5 +1,6 @@
 import { marked } from "marked"
 import DOMPurify from "dompurify"
+import { hostAttributeValueFinding } from "@serene-pub/sdk"
 
 // Fix italic formatting to handle trailing spaces before closing asterisk
 function fixItalicSpaces(text: string): string {
@@ -32,4 +33,67 @@ export function renderMarkdownWithQuotedText(md: string): string {
 	html = DOMPurify.sanitize(html)
 	html = replaceQuotedTextMarkers(html)
 	return html
+}
+
+/**
+ * The STRICT profile — the host-element rules for HTML that someone other
+ * than the app wrote (C2 review H1): no `<style>` (it would restyle the whole
+ * page), no forms or controls, no ids or names, links opened in a new tab
+ * without an opener, and images only from the app's own media or a plugin's
+ * own files. Shared by `sp-message-body` (a plugin component's text) and a
+ * conversation message (another person's text, PLAN-private-messages §6.3).
+ */
+const STRICT = {
+	FORBID_TAGS: [
+		"style", "form", "input", "button", "textarea", "select", "option", "iframe", "frame",
+		"object", "embed", "link", "meta", "base", "svg", "math", "template", "video", "audio", "source"
+	],
+	FORBID_ATTR: ["id", "name", "style", "target", "rel", "srcset", "formaction", "action"]
+}
+
+/** Hold already-rendered HTML to the STRICT profile. Browser only (DOM). */
+export function strictSanitize(html: string): string {
+	const frag = DOMPurify.sanitize(html, {
+		...STRICT,
+		RETURN_DOM_FRAGMENT: true
+	}) as DocumentFragment
+	// The profile again, by hand, over what DOMPurify returned. In a browser
+	// this finds nothing (DOMPurify already removed it); it is here so the
+	// profile does not rest on one library's configuration alone — and so it
+	// holds under happy-dom, where DOMPurify is inert (the DOM tests).
+	for (const el of Array.from(
+		frag.querySelectorAll([...STRICT.FORBID_TAGS, "script"].join(","))
+	))
+		el.remove()
+	for (const el of Array.from(frag.querySelectorAll("*")))
+		for (const attr of Array.from(el.attributes))
+			if (
+				STRICT.FORBID_ATTR.includes(attr.name.toLowerCase()) ||
+				attr.name.toLowerCase().startsWith("on")
+			)
+				el.removeAttribute(attr.name)
+	for (const a of Array.from(frag.querySelectorAll("a"))) {
+		const href = a.getAttribute("href") ?? ""
+		if (hostAttributeValueFinding("a", "href", href)) a.removeAttribute("href")
+		else if (!href.startsWith("#")) {
+			a.setAttribute("target", "_blank")
+			a.setAttribute("rel", "noopener noreferrer")
+		}
+	}
+	for (const img of Array.from(frag.querySelectorAll("img")))
+		if (hostAttributeValueFinding("img", "src", img.getAttribute("src") ?? ""))
+			img.remove()
+	const box = document.createElement("div")
+	box.appendChild(frag)
+	return box.innerHTML
+}
+
+/**
+ * A person's markdown as HTML under the STRICT profile — plain markdown with
+ * line breaks kept (a message is typed, not authored), no quoted-text
+ * colouring (that is a story's dialogue, not a person's quote).
+ */
+export function renderStrictMarkdown(md: string): string {
+	const html = marked.parse(md ?? "", { breaks: true, async: false }) as string
+	return strictSanitize(html)
 }

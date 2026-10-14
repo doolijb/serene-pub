@@ -5,6 +5,7 @@
 	import { editBounds, formatDate } from "../sections/historyDates"
 	import type { PoolSource } from "../sections/types"
 	import { readInLine, type TimeSceneRow } from "./storyTime"
+	import { bookReadOnly } from "../bookData.svelte"
 
 	/**
 	 * One dated entry, as the line's own editor.
@@ -61,6 +62,10 @@
 		onOpenScene
 	}: Props = $props()
 
+	/** A shared book: the entry reads; no save, no recompile, no fields. */
+	const readOnlyBook = bookReadOnly()
+	let readOnly = $derived(readOnlyBook.value)
+
 	let bounds = $derived(
 		isNew
 			? { min: null, max: null }
@@ -74,7 +79,7 @@
 >
 	<div class="flex flex-wrap items-center gap-2">
 		<button
-			class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
+			class="btn btn-sm preset-tonal-surface shrink-0 p-2"
 			type="button"
 			onclick={onClose}
 			title="Close"
@@ -91,20 +96,28 @@
 			{isNew ? "New dated entry" : title}
 		</h3>
 		<span class="text-surface-700-300 shrink-0 text-xs">
-			{isNew ? "Not saved yet" : dirty ? "Unsaved changes" : "Saved"}
+			{readOnly
+				? "Read only"
+				: isNew
+					? "Not saved yet"
+					: dirty
+						? "Unsaved changes"
+						: "Saved"}
 		</span>
-		<button
-			class="btn btn-sm preset-filled-primary-500 shrink-0"
-			type="button"
-			disabled={!canSave}
-			onclick={onSave}
-		>
-			<Icons.Save size={16} aria-hidden="true" />
-			<span>{isNew ? "Create" : "Save"}</span>
-		</button>
+		{#if !readOnly}
+			<button
+				class="btn btn-sm preset-filled-primary-500 shrink-0"
+				type="button"
+				disabled={!canSave}
+				onclick={onSave}
+			>
+				<Icons.Save size={16} aria-hidden="true" />
+				<span>{isNew ? "Create" : "Save"}</span>
+			</button>
+		{/if}
 	</div>
 
-	<div class="flex flex-col gap-1">
+	<fieldset class="flex min-w-0 flex-col gap-1" disabled={readOnly}>
 		<span class="text-sm font-semibold">When</span>
 		<div class="flex gap-2">
 			<div class="flex flex-col gap-1">
@@ -162,7 +175,7 @@
 		<p class="text-surface-700-300 text-xs">
 			Months and days are numbers until a book can name its own calendar.
 		</p>
-	</div>
+	</fieldset>
 
 	<div class="flex flex-col gap-1">
 		<span class="text-sm font-semibold" id="dteContentLabel">Content</span>
@@ -180,8 +193,9 @@
 					Compiled from {scenes.length}
 					{scenes.length === 1 ? "scene" : "scenes"}
 				</span>
+{#if !readOnly}
 				<button
-					class="btn btn-sm preset-tonal-secondary shrink-0"
+					class="btn btn-sm preset-tonal-primary shrink-0"
 					type="button"
 					disabled={scenes.length === 0}
 					title={scenes.length === 0
@@ -191,6 +205,7 @@
 				>
 					<Icons.Wand size={13} aria-hidden="true" /> Recompile
 				</button>
+				{/if}
 			</div>
 			{#if scenes.length === 0}
 				<p class="text-surface-700-300 text-xs italic">

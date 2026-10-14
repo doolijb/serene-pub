@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { withoutShared } from "$lib/shared/utils/sharedRows"
 	import {
 		CHARACTER_LORE_TYPE_ID,
 		HISTORY_TYPE_ID,
@@ -533,7 +534,7 @@
 	}
 
 	function handleLorebooksList(data: Sockets.Lorebooks.List.Response) {
-		availableLorebooks = data.lorebookList
+		availableLorebooks = withoutShared(data.lorebookList) // only owned books: a shared one is read and copy only (PLAN-private-messages §6.7)
 	}
 
 	/**
@@ -1096,7 +1097,10 @@
 {#snippet confirmBlock()}
 	<div class="space-y-5">
 		{#if loreWrites.off}
-			<LoreWritesOffNotice />
+			<!-- Nothing has started: stepping aside for Settings loses nothing. -->
+			<LoreWritesOffNotice
+				onOpenSettings={() => onOpenChange({ open: false })}
+			/>
 		{/if}
 		<!-- Lorebook status -->
 		<div class="border-surface-300-700 rounded-lg border p-3">
@@ -1147,7 +1151,7 @@
 								{READ_INTO_SESSION}
 							</button>
 							<button
-								class="btn btn-sm preset-filled-surface-400-600"
+								class="btn btn-sm preset-tonal-surface"
 								onclick={() => (isCreatingLorebook = true)}
 							>
 								<Icons.Plus size={14} /> New
@@ -1174,7 +1178,7 @@
 							</button>
 							<button
 								aria-label="Cancel new lorebook"
-								class="btn btn-sm preset-filled-surface-400-600"
+								class="btn btn-sm preset-tonal-surface"
 								onclick={() => (isCreatingLorebook = false)}
 							>
 								<Icons.X size={14} />
@@ -1267,7 +1271,7 @@
 							bind:value={selectedHistoryEntryId}
 						/>
 						<button
-							class="btn btn-sm preset-filled-surface-400-600"
+							class="btn btn-sm preset-tonal-surface"
 							disabled={isCreatingHistoryEntry || !hasLorebook}
 							onclick={createBlankHistoryEntry}
 							title={!hasLorebook
@@ -1358,14 +1362,15 @@
 			</div>
 		{/if}
 
-		<!-- Binding (character lore only) -->
+		<!-- Which character the lore is about (character lore only). The UI
+		     verb is Link (less-confusing G8); the row is still a binding. -->
 		{#if loreType === "character"}
 			<div class="space-y-1">
 				<Select
-					label="Bind to character (optional)"
+					label="Link to character (optional)"
 					class="text-sm"
 					options={[
-						{ value: "", label: "— None (unbound) —" },
+						{ value: "", label: "Not linked" },
 						...bindableEntities.map((e) => ({
 							value: String(e.id),
 							label: e.isPersona ? `${e.name} · persona` : e.name
@@ -1409,8 +1414,16 @@
 {#snippet reviewBlock()}
 	<div class="space-y-4">
 		{#if loreWrites.off}
-			<!-- A review reopened after the setting moved: it cannot save. -->
-			<LoreWritesOffNotice />
+			<!-- A review reopened after the setting moved: it cannot save.
+			     Opening Settings steps aside as Minimize does (the run and
+			     its activity stay, so the review can be reopened), never as
+			     Cancel. -->
+			<LoreWritesOffNotice
+				onOpenSettings={() => {
+					activeCleanup?.()
+					onOpenChange({ open: false })
+				}}
+			/>
 		{/if}
 		{#if saveError}
 			<p

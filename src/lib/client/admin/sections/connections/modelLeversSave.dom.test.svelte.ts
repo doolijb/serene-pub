@@ -169,12 +169,12 @@ describe("the model levers wait for Save", () => {
 		expect(sentOf("connections:setDefault")).toHaveLength(0)
 		expect(text(target)).toContain("Waiting for Save:")
 		expect(text(target)).toContain("Show Qwen")
-		expect(text(target)).toContain("Use Qwen for chat")
+		expect(text(target)).toContain("Use Qwen in Reply")
 		expect(text(target)).toContain("Unsaved changes")
 		// The table draws the draft: Qwen shown, and the chat mark moved to it.
 		const drawn = table()
 		expect(drawn.models.find((m: any) => m.id === 2).enabled).toBe(true)
-		expect(drawn.defaultsByModel).toEqual({ 2: ["Chat"] })
+		expect(drawn.defaultsByModel).toEqual({ 2: ["Reply"] })
 	})
 
 	test("Save sends visibility, waits for it, then the default, then leaves", async () => {
@@ -314,10 +314,10 @@ describe("a local ONNX endpoint where the runtime didn't load", () => {
 		expect(text(target)).toContain(`Not available on this machine: ${REASON}`)
 		expect(button("Download")).toBeNull()
 		expect(button("Retry")).toBeNull()
-		// Every row is still listed; an on-disk model's Make active stays,
+		// Every row is still listed; an on-disk model's Use in Embeddings stays,
 		// disabled and saying why — the server refuses the star with it.
 		for (const name of ["MiniLM", "BGE", "Gemma"]) expect(text(target)).toContain(name)
-		const makeActive = button(`Make active — Not available on this machine: ${REASON}`)
+		const makeActive = button(`Use in Embeddings — Not available on this machine: ${REASON}`)
 		expect(makeActive?.disabled).toBe(true)
 		makeActive!.click()
 		flushSync()
@@ -330,7 +330,7 @@ describe("a local ONNX endpoint where the runtime didn't load", () => {
 		expect(text(target)).not.toContain("Not available on this machine")
 		expect(button("Download")).not.toBeNull()
 		expect(button("Retry")).not.toBeNull()
-		expect(button("Make active")?.disabled).toBe(false)
+		expect(button("Use in Embeddings")?.disabled).toBe(false)
 		emitted.length = 0
 		button("Download")!.click()
 		expect(sentOf("connections:downloadModel")).toEqual([

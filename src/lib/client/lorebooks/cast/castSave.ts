@@ -115,7 +115,17 @@ const CAST_FIELD_WORDS: Record<string, string> = {
 	nodeState: "the state",
 	nodeVisibility: "the visibility",
 	spriteSet: "the sprite set",
-	characterId: "the card"
+	characterId: "the card",
+	// Retold fields (PLAN-cast-retold-fields-2026-10-13): the member's own
+	// words for the card's fields, and which of them are read.
+	description: "the description",
+	personality: "the personality",
+	scenario: "the scenario",
+	firstMessage: "the first message",
+	alternateGreetings: "the alternate greetings",
+	exampleDialogues: "the example dialogues",
+	faceMediaId: "the face",
+	retold: "what is retold here"
 }
 
 export function castFieldWord(field: string): string {

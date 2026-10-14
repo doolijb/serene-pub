@@ -21,7 +21,8 @@
  * and a person adding an embedding model is not thinking "embeddings", they are
  * thinking "on my machine". Modality is what the capability tiles answer.
  *
- * ⚠ Pure. No Svelte, no socket, no icons — the view maps these to components.
+ * ⚠ Pure. No Svelte, no socket, no icons: a group is its label and its trade
+ * (`ListGroupLabel`).
  */
 import {
 	connectionGroupOf,
@@ -39,22 +40,18 @@ export interface ConnectionGroup {
 	 * group; whether a given model is free is the model table's business.
 	 */
 	trade: string
-	/** A `@lucide/svelte` export name, resolved by the component. */
-	icon: string
 }
 
 export const CONNECTION_GROUPS: readonly ConnectionGroup[] = [
 	{
 		id: "local",
 		label: "On this machine",
-		trade: "private · free",
-		icon: "MonitorSmartphone"
+		trade: "private · free"
 	},
 	{
 		id: "service",
 		label: "Services",
-		trade: "billed per message",
-		icon: "Cloud"
+		trade: "billed per message"
 	}
 ]
 
@@ -91,7 +88,9 @@ export function groupConnections<C extends GroupedConnection>(
 ): GroupedRows<C>[] {
 	const out: GroupedRows<C>[] = []
 	for (const group of CONNECTION_GROUPS) {
-		const inGroup = rows.filter((r) => connectionGroupOf(r.type) === group.id)
+		const inGroup = rows.filter(
+			(r) => connectionGroupOf(r.type) === group.id
+		)
 		if (inGroup.length) out.push({ group, rows: inGroup })
 	}
 	return out
@@ -112,11 +111,13 @@ export interface DefaultRef {
  * could not answer "which of these four is the one my sessions use". One gold
  * mark beside the name answers it without opening anything.
  *
- * ⚠ It matches on the CONNECTION half of the pair, not the model half, because
- * the row stands for the connection. The model view is where a pair is shown
- * whole. A default naming only an endpoint is incomplete and resolves as
- * unconfigured elsewhere (§10 *(endpoint, model) pair*) — it still earns the
- * mark here, because the person's question is "is this one in use".
+ * ⚠ It marks a RESOLVED pair only — the registration's model half must name
+ * a model on this row, the same reading `resolvePair` makes for the status
+ * strip. A default naming only the endpoint, or a model since removed from
+ * it, is unconfigured (§10 *(endpoint, model) pair*): a gold mark on the row
+ * beside a strip saying "not set" was one screen giving two answers
+ * (plan 2026-10-11 C9). 🚧 Ruling choice — the other reading, a mark for
+ * "is this endpoint in use at all", is one the owner may rule back to.
  *
  * ⚠ Capped at ONE, plus a count. An Anthropic connection is the registered
  * default for chat, vision and document reading the moment it is created, and
@@ -125,7 +126,7 @@ export interface DefaultRef {
  * whose marks were not. The name is what the row is FOR; it always wins.
  */
 export function defaultsForConnection(
-	connectionId: number,
+	connection: { id: number; models: readonly { id: number }[] },
 	defaults: Record<string, DefaultRef | undefined> | undefined,
 	labelOf: (capability: string) => string,
 	limit = 1
@@ -133,7 +134,12 @@ export function defaultsForConnection(
 	if (!defaults) return []
 	const labels: string[] = []
 	for (const [capability, ref] of Object.entries(defaults)) {
-		if (!ref || ref.connectionId !== connectionId) continue
+		if (!ref || ref.connectionId !== connection.id) continue
+		if (
+			ref.connectionModelId == null ||
+			!connection.models.some((m) => m.id === ref.connectionModelId)
+		)
+			continue
 		labels.push(labelOf(capability))
 	}
 	labels.sort((a, b) => a.localeCompare(b))

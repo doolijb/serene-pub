@@ -34,6 +34,7 @@ import {
 	embeddingsEnabled,
 	resolveEmbeddingTarget
 } from "./target"
+import { defaultLoadoutRow } from "$lib/server/loadouts/testing"
 
 let db: TestDb
 
@@ -73,7 +74,7 @@ async function star(
 	connectionId: number | null,
 	connectionModelId?: number | null
 ) {
-	await db.delete(schema.connectionDefaults)
+	await db.delete(schema.loadouts)
 	let mid: number | null | undefined = connectionModelId
 	if (connectionId != null && mid === undefined) {
 		const [m] = await db
@@ -84,13 +85,13 @@ async function star(
 		mid = m?.id ?? null
 	}
 	await db
-		.insert(schema.connectionDefaults)
-		.values({
+		.insert(schema.loadouts)
+		.values(defaultLoadoutRow({
 			input: "text",
 			output: "embedding",
 			connectionId,
 			connectionModelId: mid ?? null
-		})
+		}))
 }
 
 describe("no star", () => {
@@ -243,13 +244,13 @@ describe("a starred API connection", () => {
 				name: "large"
 			})
 			.returning()
-		await db.delete(schema.connectionDefaults)
-		await db.insert(schema.connectionDefaults).values({
+		await db.delete(schema.loadouts)
+		await db.insert(schema.loadouts).values(defaultLoadoutRow({
 			input: "text",
 			output: "embedding",
 			connectionId: conn.id,
 			connectionModelId: other.id
-		})
+		}))
 
 		const target = (await resolveEmbeddingTarget(db))!
 		expect(target.apiModel).toBe("text-embedding-3-large")

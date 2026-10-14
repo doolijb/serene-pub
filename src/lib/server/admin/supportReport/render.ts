@@ -261,7 +261,7 @@ function renderOnce(f: SupportReportFacts): string {
 	)
 
 	out.push(
-		"## Capability defaults\n\n" +
+		"## Default loadouts\n\n" +
 			table(
 				["Capability", "Connection", "Model row", "Sampling config", "Required by"],
 				f.capabilityDefaults.map((c) => [

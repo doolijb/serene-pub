@@ -331,9 +331,9 @@ describe("A1111Adapter — test and discovery", () => {
 	})
 
 	test("declares free sizing, unlike the fixed-list backends", async () => {
-		expect(a1111.capabilities.freeSize).toBe(true)
-		expect(a1111.capabilities.progress).toBe(true)
-		expect(a1111.capabilities.cancel).toBe(true)
+		expect(a1111.sheet.size.kind).toBe("free")
+		expect(a1111.sheet.progress).toBe(true)
+		expect(a1111.sheet.cancel).toBe(true)
 	})
 })
 

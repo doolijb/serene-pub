@@ -411,7 +411,7 @@
 					</button>
 				{:else}
 					<button
-						class="btn btn-sm preset-tonal-surface text-xs"
+						class="btn btn-sm preset-tonal-error text-xs"
 						onclick={() => (confirmDelete = true)}
 						aria-label="Delete theme"
 						title="Delete theme"

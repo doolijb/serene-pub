@@ -3,9 +3,8 @@
  *
  * Nothing fetches an ONNX model on use: the embeddings and entity lanes load
  * whatever is in the cache directory, so registering a model that is not
- * downloaded points every embed or scan at nothing. The capability view once
- * offered **Use** on every catalogue row, downloaded or not, and the handler
- * accepted it — this pins the server half of that fix, so no client (and no raw
+ * downloaded points every embed or scan at nothing. The handler refuses one
+ * whatever offered it — this pins the server half, so no client (and no raw
  * socket call) can make the choice. On a machine whose ONNX runtime didn't
  * load, none can be made active at all.
  */
@@ -26,6 +25,7 @@ import path from "path"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import {  } from "$lib/server/loadouts/testing"
 
 let testDb: TestDb
 let dataDir: string
@@ -100,14 +100,14 @@ async function setDefault(id: number, modelId: number) {
 }
 
 async function registered() {
-	return testDb.query.connectionDefaults.findFirst({
+	return testDb.query.loadouts.findFirst({
 		where: (d, { and, eq }) =>
-			and(eq(d.input, "text"), eq(d.output, "embedding"))
+			and(eq(d.defaultForInput, "text"), eq(d.defaultForOutput, "embedding"))
 	})
 }
 
 beforeEach(async () => {
-	await testDb.delete(schema.connectionDefaults)
+	await testDb.delete(schema.loadouts)
 	await testDb.delete(schema.connectionModels)
 	await testDb.delete(schema.connections)
 	const { clearCachedScans, clearDownloads } = await import(
@@ -192,7 +192,11 @@ describe("making a local ONNX model active where the runtime didn't load", () =>
 		await expect(
 			connectionsSetDefault.handler(
 				socket,
-				{ capability: "text->embedding", id: connectionId, modelId } as any,
+				{
+					capability: "text->embedding",
+					id: connectionId,
+					modelId
+				} as any,
 				(event: string, data: any) => emitted.push([event, data])
 			)
 		).rejects.toThrow(

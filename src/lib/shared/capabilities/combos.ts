@@ -71,6 +71,13 @@ export interface ComboRow {
 }
 
 /**
+ * How many days a step's failure for want of a job keeps that job NEEDED
+ * (`server/admin/jobUse.ts`). Here, beside the row it qualifies, because the
+ * Defaults row and the Needs you item both say the number to a person.
+ */
+export const NEEDED_WINDOW_DAYS = 7
+
+/**
  * One `pipeline_definition_registry` row, reduced to what the aggregation reads.
  *
  * Typed structurally rather than as the Drizzle select type so this file stays

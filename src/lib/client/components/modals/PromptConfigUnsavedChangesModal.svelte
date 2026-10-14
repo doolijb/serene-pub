@@ -6,13 +6,16 @@
 		onOpenChange: (e: OpenChangeDetails) => void
 		onConfirm: () => void
 		onCancel: () => void
+		/** What has the unsaved changes, as the sentence names it. */
+		subject?: string
 	}
 
 	let {
 		open = $bindable(),
 		onOpenChange,
 		onConfirm,
-		onCancel
+		onCancel,
+		subject = "prompt configuration"
 	}: Props = $props()
 </script>
 
@@ -32,13 +35,13 @@
 				</header>
 				<article>
 					<p class="opacity-60">
-						Your prompt configuration has unsaved changes. Are you
-						sure you want to discard them?
+						Your {subject} has unsaved changes. Are you sure you want
+						to discard them?
 					</p>
 				</article>
 				<footer class="flex justify-end gap-4">
 					<button
-						class="btn preset-filled-surface-500"
+						class="btn preset-tonal-surface"
 						onclick={onCancel}
 					>
 						Cancel

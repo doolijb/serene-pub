@@ -30,7 +30,12 @@
  * Pure, so the loop that once lived between these and the page is tested away
  * from it (./editorSeed.test.ts).
  */
-import { ZONE_IDS, type ArrangedGridV1, type ZoneId } from "@serene-pub/sdk"
+import {
+	pinnedOf,
+	ZONE_IDS,
+	type ArrangedGridV1,
+	type ZoneId
+} from "@serene-pub/sdk"
 
 /** A working frame's cell, as far as the seed reads it. */
 interface Cell {
@@ -86,4 +91,40 @@ export function editorSeedKey(
 	capped: readonly string[] = []
 ): string {
 	return `${committed.join(",")}|${floorKept ?? ""}|${capped.join(",")}`
+}
+
+/**
+ * The pin a SIDE's cards are seeded with: the zone's own (lane E1). A side
+ * drawn from its zone list is docked or an icon strip AS A WHOLE — the zone's
+ * `pinned` — while a side drawn from an arrangement pins each card
+ * (`pinnedOf` on the item). Seeded with no pin, every card of an unpinned
+ * side read as pinned, so the first frame Done wrote for it turned the icon
+ * strip into a docked column. A card the working frame holds takes the
+ * frame's pin over this one (./arrangedGeometry `withGeometry`).
+ */
+export function sideSeedPin(zone: { pinned?: unknown } | null | undefined): {
+	pinned?: false
+} {
+	return pinnedOf(zone) ? {} : { pinned: false }
+}
+
+/**
+ * Where a MIDDLE card sits in its zone's seed when no frame places it: a
+ * grow-height widget FILLS what is left; a fixed one docks three cells deep
+ * against the edge it anchors to (the bottom when it says so, else the top).
+ * Both full-width. `entry` is its grid entry, if the grid has one; without
+ * one (a card the working arrangement brought in) it fills when it is a log
+ * — the floor's shape — and is a strip otherwise.
+ *
+ * The seed is only the editor's picture of the grid: Done never writes it
+ * (./donePlacement `arrangementAtDone`), so the grid keeps drawing a `fixed`
+ * strip at its own height until a hand arranges the middle.
+ */
+export function middleSeedPlace(
+	entry: { size: { h: unknown }; anchor: { bottom?: boolean } } | undefined,
+	isLog: boolean
+): { place: "fill" } | { place: "top" | "bottom"; h: number } {
+	const grows = entry ? entry.size.h === "grow" : isLog
+	if (grows) return { place: "fill" }
+	return { place: entry?.anchor.bottom ? "bottom" : "top", h: 3 }
 }

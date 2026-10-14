@@ -169,3 +169,63 @@ describe("connections:update — ack payload shape (bugfix, PGlite integration)"
 		})
 	})
 })
+
+/**
+ * Plan A3 (connections bug-fix 2026-10-11): the create ack went to every tab
+ * of the user, and each open sidebar selected (and adopted as its draft) the
+ * row another tab had just made. The ack now answers the asking socket; the
+ * list broadcast still reaches the whole room.
+ */
+describe("connections:create — the ack answers the asker", () => {
+	test("the ack is emitted on the asking socket, never through the room", async () => {
+		const { connectionsCreate } = await import("./connections")
+		const admin = await makeAdmin("connections-create-asker-user")
+		const direct: string[] = []
+		const room: string[] = []
+		const socket = {
+			...fakeSocket(admin.id),
+			interest: new Set(["connections:create"]),
+			emit: (event: string) => direct.push(event)
+		}
+
+		await connectionsCreate.handler(
+			socket,
+			{
+				connection: {
+					name: "Asker-only ack",
+					type: "koboldcpp",
+					extraJson: {}
+				} as any
+			},
+			(event: string) => room.push(event)
+		)
+
+		expect(direct).toEqual(["connections:create"])
+		expect(room).toContain("connections:list")
+		expect(room).not.toContain("connections:create")
+	})
+
+	test("client-sent capabilities are dropped; only the resolved cache is kept", async () => {
+		const { connectionsCreate } = await import("./connections")
+		const admin = await makeAdmin("connections-create-capabilities-user")
+		const created = await connectionsCreate.handler(
+			fakeSocket(admin.id),
+			{
+				connection: {
+					name: "Pasted capabilities",
+					type: "koboldcpp",
+					extraJson: {},
+					capabilities: {
+						probe: { found: { "text->image": "native" } },
+						overrides: { "text->image": "native" }
+					}
+				} as any
+			},
+			noopEmit
+		)
+		const row = await testDb.query.connections.findFirst({
+			where: (c, { eq }) => eq(c.id, created.connection.id)
+		})
+		expect(Object.keys((row as any).capabilities)).toEqual(["resolved"])
+	})
+})

@@ -217,6 +217,31 @@ export async function emitSessionEvent(
 		}
 	}
 
+	// (b5) 🚧 A line landed, so a scene boundary may belong at it (live
+	// scenes §4): the boundary watcher reads the session's scene settings and
+	// the line's stamp against the line before it, and records a scene cue
+	// (Suggested) or places the boundary (Automatic). One read when the
+	// session is Manual or places no scene; never throws.
+	if (opts.event === sdkSessionEvents.messageCompleted) {
+		const messageId = (payload as { messageId?: unknown }).messageId
+		if (typeof messageId === "number") {
+			const { watchSceneBoundaries } = await import(
+				"$lib/server/scenes/boundaryWatcher"
+			)
+			// The run that wrote the line, and its tree's root: what a genre's
+			// declared trigger's `actionKey` reads (live scenes §15 G1).
+			const lineage = (payload as { lineage?: { rootRunId?: unknown } }).lineage
+			await watchSceneBoundaries(db, {
+				sessionId: opts.sessionId,
+				messageId,
+				io: opts.io,
+				runIds: [cause?.runId, lineage?.rootRunId].filter(
+					(id): id is string => typeof id === "string" && id !== ""
+				)
+			})
+		}
+	}
+
 	// (c) and (d) run after the writer returns, on the session's queue —
 	// unless the caller asked to wait (see `wait` above).
 	const rest = () => settleRest(db, opts, payload, cause, at)

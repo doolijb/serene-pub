@@ -55,7 +55,15 @@ async function ollamaHost(
 			where: (c, { eq }) => eq(c.id, connectionId),
 			columns: { id: true, type: true, baseUrl: true }
 		})
-		if (!row || row.type !== CONNECTION_TYPE.OLLAMA)
+		// An Ollama-embeddings connection is the same Ollama host serving
+		// another modality: status, pulls and residency are the host's, so it
+		// is answered like any Ollama row rather than refused (the index asks
+		// status for both).
+		if (
+			!row ||
+			(row.type !== CONNECTION_TYPE.OLLAMA &&
+				row.type !== CONNECTION_TYPE.OLLAMA_EMBEDDINGS)
+		)
 			throw new Error("That is not an Ollama connection.")
 		if (!row.baseUrl?.trim())
 			throw new Error("That Ollama connection has no address.")

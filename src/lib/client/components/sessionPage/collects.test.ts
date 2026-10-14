@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+	clockStepProblem,
 	collectedFire,
 	collectReady,
 	collectsNote,
@@ -374,5 +375,41 @@ describe("C2 · createNarrations — the page's presses and answers", () => {
 			"A response is already generating in this session.",
 			"Failed to fire the Narrator response."
 		])
+	})
+})
+
+describe("🚧 live scenes §6 · the clock step a press collects", () => {
+	const TIME_PASSES: ListedCollects = {
+		clockStep: { label: "How much time passes?", default: { by: 1, unit: "hours" } }
+	}
+
+	it("a stepper routes to the modal, never fires bare, and refuses a typed argument", () => {
+		expect(routePress({ name: "Time passes…", collects: TIME_PASSES })).toEqual({
+			route: "modal",
+			initialText: ""
+		})
+		expect(routePress({ slash: "advance-time", collects: TIME_PASSES }, { text: "3 hours" }).route).toBe(
+			"refuse"
+		)
+	})
+
+	it("ready only with a whole number of units, other than zero, in a unit", () => {
+		expect(collectReady(TIME_PASSES, { clockStep: { by: 2, unit: "days" } })).toBe(true)
+		expect(collectReady(TIME_PASSES, { clockStep: { by: -2, unit: "days" } })).toBe(true)
+		expect(collectReady(TIME_PASSES, {})).toBe(false)
+		expect(collectReady(TIME_PASSES, { clockStep: { by: 0, unit: "days" } })).toBe(false)
+		expect(collectReady(TIME_PASSES, { clockStep: { by: 1, unit: "weeks" } })).toBe(false)
+		expect(clockStepProblem({ by: 1.5, unit: "days" })).toBe("Pass a whole number of units, at least one.")
+		expect(clockStepProblem({ by: 20_000, unit: "days" })).toBe("At most 10000 at a time.")
+	})
+
+	it("the fire carries the step, and only for an action that collects one", () => {
+		expect(collectedFire(TIME_PASSES, { clockStep: { by: 3, unit: "hours" } })).toEqual({
+			clockStep: { by: 3, unit: "hours" }
+		})
+		expect(collectedFire(NUDGE, { text: "go", clockStep: { by: 3, unit: "hours" } })).toEqual({
+			text: "go"
+		})
+		expect(collectsNote(TIME_PASSES)).toBe("Asks how much time passes")
 	})
 })

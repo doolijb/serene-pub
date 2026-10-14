@@ -32,14 +32,16 @@
  * reconciler runs the same function to drop values for fields a descriptor has
  * stopped declaring, and reports them through `dropped`.
  *
- * `effectiveWidgetSettings` is the other direction: defaults with the stored
- * deviations over them, which is the complete object the widget reads off its
- * ctx. A widget therefore never has to know its own defaults at runtime.
+ * `effectiveWidgetSettings` is the other direction: the complete object the
+ * widget reads off its ctx, and the one reader of every store a widget's
+ * settings live in (its comment has the order). A widget therefore never has
+ * to know its own defaults at runtime.
  */
 import {
 	DEFAULT_LANE,
 	formatChannel,
 	parseChannel,
+	resolveWidgetAlias,
 	type FieldDecl,
 	type SettingsSchema
 } from "@serene-pub/sdk"
@@ -62,6 +64,11 @@ export const BEHAVIOUR_GROUP = "behaviour"
 
 /** The half of a widget declaration this module reads. */
 export interface WidgetSettingsDecl {
+	/**
+	 * The widget's id, or the placed instance's this schema is for (a copy,
+	 * `messages#sanctum`; an alias, `world-state`). An aliased id's implied
+	 * settings are its defaults (`widgetSettingsSchema`).
+	 */
 	id: string
 	title: string
 	channels?: string[]
@@ -150,7 +157,18 @@ export function coreSettingsSchema(decl: WidgetSettingsDecl): SettingsSchema {
 	return schema
 }
 
-/** The full schema for a widget: the core fields, then its declared ones. */
+/**
+ * The full schema for a widget: the core fields, then its declared ones.
+ *
+ * ⏳ When `decl.id` is an aliased instance id (`world-state`, the SDK's
+ * `WIDGET_ID_ALIASES`), the settings the alias implies are its DEFAULTS
+ * (`owners: world`, `arrangement: strip` over Stats' schema, and core's own
+ * `title: World State`): so they sit
+ * under a preset's and a person's values in `effectiveWidgetSettings`, a
+ * stored value equal to one is a non-deviation like any default, and
+ * putting a field back to the widget's own default (Stats' `cards`) is a
+ * deviation that sticks. REMOVE with the alias in 0.7.0.
+ */
 export function widgetSettingsSchema(decl: WidgetSettingsDecl): SettingsSchema {
 	const schema = coreSettingsSchema(decl)
 	for (const [key, field] of Object.entries(decl.settings ?? {})) {
@@ -158,6 +176,10 @@ export function widgetSettingsSchema(decl: WidgetSettingsDecl): SettingsSchema {
 		if (!field || typeof field !== "object") continue
 		schema[key] = field
 	}
+	for (const [key, value] of Object.entries(
+		resolveWidgetAlias(decl.id).impliedSettings
+	))
+		if (schema[key]) schema[key] = { ...schema[key], default: value }
 	return schema
 }
 
@@ -296,6 +318,87 @@ function isDefault(decl: FieldDecl, value: unknown): boolean {
 }
 
 /**
+ * ⏳ Stats' and World State's stored keys from before the Stats uplift (W7,
+ * 2026-10-11), read as today's, so the boot reconcile rewrites a row rather
+ * than dropping it: Stats' `members: scene | all` is `castScope`, its
+ * `members: pick` is `owners: pick` and its `pickMembers` is `pickOwners`;
+ * World State's `layout: strip | list` (its row is read against Stats'
+ * schema through the alias) is `arrangement`. A key already written the new
+ * way wins (the old one then drops as undeclared, and is reported). Gated
+ * on the schema's shape, as `withLegacyBackingMode` is: only a schema that
+ * declares the new key and not the old one reads it. The
+ * remote's own fallback for a raw settings object is core-catalog's
+ * `statsSettingsOf`. REMOVE in 0.7.0.
+ */
+function withLegacyStatsSettings(
+	schema: SettingsSchema,
+	raw: Record<string, unknown>
+): Record<string, unknown> {
+	const out: Record<string, unknown> = { ...raw }
+	/** Move `from` to `to` (with `value`), unless `to` is already written. */
+	const move = (from: string, to: string, value: unknown) => {
+		if (to in raw) return
+		out[to] = value
+		delete out[from]
+	}
+	if (schema.castScope && !schema.members) {
+		if (raw.members === "scene" || raw.members === "all")
+			move("members", "castScope", raw.members)
+		else if (raw.members === "pick") move("members", "owners", "pick")
+	}
+	if (
+		schema.pickOwners &&
+		!schema.pickMembers &&
+		raw.pickMembers !== undefined
+	)
+		move("pickMembers", "pickOwners", raw.pickMembers)
+	if (
+		schema.arrangement &&
+		!schema.layout &&
+		(raw.layout === "strip" || raw.layout === "list")
+	)
+		move("layout", "arrangement", raw.layout)
+	return out
+}
+
+/**
+ * ⏳ Scene Portraits' stored keys from before its uplift (W6, 2026-10-11),
+ * read as the three axes they meant, so the boot reconcile rewrites a row:
+ * `source: 'pinned'` is `who: 'pick'` · `face: 'chosen'` · `arrangement:
+ * 'stage'`, and `sprites: false` is `face: 'avatar'` — each only where the
+ * new key is not written, and both old keys go (they must: a `pinned` left
+ * beside a `who` put back to its default would read as `pick` again).
+ * `source: 'scene'` stays as it is stored: it says the instance never drew
+ * pins, which keeps the page's one-time seed of chosen images off it
+ * (`scenePins.svelte.ts`). Gated on the schema's shape, as
+ * `withLegacyStatsSettings` is. The remote's own fallback for a raw
+ * settings object is core-catalog's `readScenePortraitsSettings`. REMOVE in
+ * 0.7.0.
+ */
+function withLegacyScenePortraitsSettings(
+	schema: SettingsSchema,
+	raw: Record<string, unknown>
+): Record<string, unknown> {
+	if (!schema.who || !schema.face || !schema.arrangement) return raw
+	if (raw.source !== "pinned" && !("sprites" in raw)) return raw
+	const out: Record<string, unknown> = { ...raw }
+	const unless = (key: string, value: unknown) => {
+		if (!(key in raw)) out[key] = value
+	}
+	if (raw.source === "pinned") {
+		delete out.source
+		unless("who", "pick")
+		unless("face", "chosen")
+		unless("arrangement", "stage")
+	}
+	if ("sprites" in raw) {
+		delete out.sprites
+		if (raw.sprites === false && raw.source !== "pinned") unless("face", "avatar")
+	}
+	return out
+}
+
+/**
  * Reduce stored settings to the deviations a schema still admits.
  *
  * Everything the schema does not declare is dropped as `undeclared`; everything
@@ -311,10 +414,15 @@ export function pruneWidgetSettings(
 	if (!isPlainObject(raw)) return out
 	// A backed widget's Card was a boolean before it was a mode: read it as
 	// one, so the next write (or the boot reconcile) stores the mode.
-	const read =
-		schema[BACKING_MODE_KEY] && !schema.hostCard
-			? (withLegacyBackingMode(raw) as Record<string, unknown>)
-			: raw
+	const read = withLegacyScenePortraitsSettings(
+		schema,
+		withLegacyStatsSettings(
+			schema,
+			schema[BACKING_MODE_KEY] && !schema.hostCard
+				? (withLegacyBackingMode(raw) as Record<string, unknown>)
+				: raw
+		)
+	)
 	for (const [key, value] of Object.entries(read)) {
 		const decl = schema[key]
 		if (!decl) {
@@ -333,24 +441,80 @@ export function pruneWidgetSettings(
 }
 
 /**
- * The complete settings object a widget reads: every declared default, with the
- * stored deviations over it. A field with no declared default is absent rather
- * than `undefined`, so `in` still answers honestly.
+ * What one widget instance's settings are read from — each input that
+ * instance's own entry, never a map of every instance.
+ */
+export interface WidgetSettingsInputs {
+	/** The widget's declaration (read through `widgetOfInstance`). */
+	decl: WidgetSettingsDecl
+	/**
+	 * A session layout preset's `widgetSettings[instanceId]`. A session's own
+	 * read leaves it out: copying a layout in already wrote these values into
+	 * the person's row (`copyLayoutIntoSession`). Only a row from before the
+	 * copy model is read with its preset as well (the backfill).
+	 */
+	preset?: unknown
+	/** This person's `widget_settings` row for the instance: its `values`. */
+	stored?: unknown
+}
+
+/**
+ * The complete settings object a widget instance reads, and the ONE place the
+ * order its stores meet in is decided. Lowest first, each merged under the
+ * next:
+ *
+ *   1. `decl` — the declared defaults. Never stored, so a changed default
+ *      reaches every instance that has not overridden it. An aliased
+ *      instance (`world-state`) reads the settings its alias implies as its
+ *      defaults (`widgetSettingsSchema`), so they too sit under 2 and 3.
+ *   2. `preset` — what a session layout preset brings for this instance.
+ *   3. `stored` — this person's row (`widget_settings.widget_instance_id`).
+ *      Last because it is the only one of the three that is theirs: a layout
+ *      is shared and a declaration is the author's.
+ *
+ * The two stored layers are laid raw and pruned ONCE against the schema, so
+ * a key outside the declaration drops out whichever layer held it.
+ *
+ * A style pin (`session_panel_layouts.layout_settings.widgetStyles`) is not an
+ * input: it names a style row, which `resolveStyle` reads, and it stays in
+ * the layout's settings by ruling (2026-09-28). A field with no declared
+ * default is absent rather than `undefined`, so `in` still answers honestly.
  */
 export function effectiveWidgetSettings(
-	decl: WidgetSettingsDecl,
-	stored: unknown
+	inputs: WidgetSettingsInputs
 ): Record<string, unknown> {
-	const schema = widgetSettingsSchema(decl)
+	const schema = widgetSettingsSchema(inputs.decl)
 	const out: Record<string, unknown> = {}
 	for (const [key, field] of Object.entries(schema))
 		if (field.default !== undefined) out[key] = field.default
-	return { ...out, ...pruneWidgetSettings(schema, stored).values }
+	const deviations = widgetSettingDeviations(inputs)
+	return { ...out, ...pruneWidgetSettings(schema, deviations).values }
 }
 
-/** What this widget is called on screen: the stored override, else its label. */
-export function widgetTitle(decl: WidgetSettingsDecl, stored: unknown): string {
-	const value = effectiveWidgetSettings(decl, stored).title
+/**
+ * `effectiveWidgetSettings` below its declared floor: the two stored layers
+ * laid in its order, unpruned. For a writer that stores deviations and has no
+ * declaration to prune against (the pre-copy backfill); the boot reconcile
+ * prunes what it writes.
+ */
+export function widgetSettingDeviations(
+	inputs: Pick<WidgetSettingsInputs, "preset" | "stored">
+): Record<string, unknown> {
+	return {
+		...(isPlainObject(inputs.preset) ? inputs.preset : {}),
+		...(isPlainObject(inputs.stored) ? inputs.stored : {})
+	}
+}
+
+/**
+ * What this widget is called on screen: the title its effective settings
+ * carry (`effectiveWidgetSettings`), else its label.
+ */
+export function widgetTitle(
+	decl: WidgetSettingsDecl,
+	settings: Record<string, unknown>
+): string {
+	const value = settings.title
 	const text = typeof value === "string" ? value.trim() : ""
 	return text || decl.title
 }
@@ -401,9 +565,9 @@ export function resolveWidgetInstance(
 	decl: WidgetSettingsDecl,
 	stored: unknown
 ): ResolvedWidgetInstance {
-	const settings = effectiveWidgetSettings(decl, stored)
+	const settings = effectiveWidgetSettings({ decl, stored })
 	return {
-		title: widgetTitle(decl, stored),
+		title: widgetTitle(decl, settings),
 		channels: widgetLaneChannels(decl.channels, settings.lane),
 		settings
 	}

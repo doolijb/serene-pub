@@ -28,6 +28,8 @@ export type { ListedCollects }
 export interface Collected {
 	text?: string
 	recipients?: string[]
+	/** 🚧 The clock step the stepper picked (live scenes §6): `by` signed, back is negative. */
+	clockStep?: { by: number; unit: string }
 }
 
 /**
@@ -42,8 +44,9 @@ export function opensModal(
 	argument?: string
 ): boolean {
 	const c = action.collects
-	if (!c || (!c.text && !c.recipients)) return false
-	if (c.recipients) return true
+	if (!c || (!c.text && !c.recipients && !c.clockStep)) return false
+	// An argument cannot carry who, nor how much time: the stepper asks.
+	if (c.recipients || c.clockStep) return true
 	return !argument?.trim()
 }
 
@@ -82,7 +85,8 @@ export function routePress(
 				: `'${action?.name ?? pressedAs ?? "This action"}' takes no text`
 		}
 	const collects = action?.collects
-	if (!collects || (!collects.text && !collects.recipients)) return { route: "plain" }
+	if (!collects || (!collects.text && !collects.recipients && !collects.clockStep))
+		return { route: "plain" }
 	if (opensModal({ collects }, text ?? undefined)) return { route: "modal", initialText: text ?? "" }
 	return { route: "fire", collected: collectedFire(collects, { ...supplied, ...(text ? { text } : {}) }) }
 }
@@ -261,7 +265,35 @@ export function collectReady(collects: ListedCollects, got: Collected): boolean 
 		if (n < collects.recipients.min) return false
 		if (collects.recipients.max !== undefined && n > collects.recipients.max) return false
 	}
+	if (collects.clockStep && clockStepProblem(got.clockStep)) return false
 	return true
+}
+
+/** The clock-step stepper's units, in the order it lists them, with their words. */
+export const CLOCK_STEP_UNITS = [
+	{ unit: "minutes", label: "Minutes" },
+	{ unit: "hours", label: "Hours" },
+	{ unit: "days", label: "Days" },
+	{ unit: "months", label: "Months" },
+	{ unit: "years", label: "Years" }
+] as const
+
+/** The most a stepper takes either way — the host's own bound (`CLOCK_STEP_MAX`). */
+export const CLOCK_STEP_LIMIT = 10_000
+
+/**
+ * Why a stepper's value cannot be sent, as a sentence — or null when it can:
+ * a whole number of units other than zero, within the host's bound, in one
+ * of the units. The host asks the same (`clockStepRefusal`).
+ */
+export function clockStepProblem(step: Collected["clockStep"]): string | null {
+	if (!step) return "Say how much time passes."
+	if (!Number.isInteger(step.by) || step.by === 0)
+		return "Pass a whole number of units, at least one."
+	if (Math.abs(step.by) > CLOCK_STEP_LIMIT)
+		return `At most ${CLOCK_STEP_LIMIT} at a time.`
+	if (!CLOCK_STEP_UNITS.some((u) => u.unit === step.unit)) return "Choose a unit."
+	return null
 }
 
 /** What the fire sends for what was collected: trimmed text when there is any, recipients when collected. */
@@ -269,7 +301,10 @@ export function collectedFire(collects: ListedCollects, got: Collected): Collect
 	const text = collects.text ? (got.text ?? "").trim() : ""
 	return {
 		...(text ? { text } : {}),
-		...(collects.recipients ? { recipients: [...(got.recipients ?? [])] } : {})
+		...(collects.recipients ? { recipients: [...(got.recipients ?? [])] } : {}),
+		...(collects.clockStep && got.clockStep
+			? { clockStep: { by: got.clockStep.by, unit: got.clockStep.unit } }
+			: {})
 	}
 }
 
@@ -348,6 +383,7 @@ export function collectsNote(collects: ListedCollects | undefined): string | und
 	if (!collects) return undefined
 	const parts: string[] = []
 	if (collects.recipients) parts.push("Asks who hears it")
+	if (collects.clockStep) parts.push("Asks how much time passes")
 	if (collects.text?.need === "required") parts.push("Asks for text")
 	if (collects.text?.need === "optional") parts.push("Asks for text, if you have any")
 	return parts.length ? parts.join(" · ") : undefined

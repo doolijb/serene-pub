@@ -27,6 +27,8 @@ class ConnectionTimeoutService {
 
 	private readonly TIMEOUT_MS = 60 * 60 * 1000 // 1 hour
 	private readonly RECONNECT_DELAY_MS = 30 * 1000 // 30 seconds
+	/** The 30 s wait `handleTimeout` starts; `reset` clears it. */
+	private reconnectTimerId: ReturnType<typeof setTimeout> | null = null
 	private callbacks: {
 		onTimeout: (() => void) | null
 		onReconnectAvailable: (() => void) | null
@@ -85,7 +87,9 @@ class ConnectionTimeoutService {
 		}
 
 		// Schedule reconnect availability
-		setTimeout(() => {
+		if (this.reconnectTimerId) clearTimeout(this.reconnectTimerId)
+		this.reconnectTimerId = setTimeout(() => {
+			this.reconnectTimerId = null
 			this.state.canReconnect = true
 			if (this.callbacks.onReconnectAvailable) {
 				this.callbacks.onReconnectAvailable()
@@ -109,6 +113,12 @@ class ConnectionTimeoutService {
 	 */
 	reset(): void {
 		this.stopTimeout()
+		// A reset inside the 30 s wait must not let the old wait fire later
+		// and announce a reconnect on a connection that is already back.
+		if (this.reconnectTimerId) {
+			clearTimeout(this.reconnectTimerId)
+			this.reconnectTimerId = null
+		}
 		this.state.isTimedOut = false
 		this.state.canReconnect = false
 		this.state.reconnectAvailableAt = 0

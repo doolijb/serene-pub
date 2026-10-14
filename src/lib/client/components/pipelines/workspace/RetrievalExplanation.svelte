@@ -38,6 +38,7 @@
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { entryTypeScope } from "$lib/client/lorebooks/entrySections"
+	import { eventDisplayName } from "$lib/client/utils/eventName"
 
 	type Explanation = NonNullable<
 		Sockets.Pipelines.RunExplain.Response["explanation"]
@@ -177,7 +178,7 @@
 
 	/** Why an entry was held back. One rule, so one sentence per wire. */
 	const DROP_REASON: Record<string, string> = {
-		chat: "chat wire — the roles carry the structure, so these would only override the model's own stop tokens",
+		chat: "sent as chat messages: the roles carry the structure, so these would only override the model's own stop tokens",
 		completion: "held back"
 	}
 
@@ -190,7 +191,7 @@
 	 */
 	const dropReason = (wire: string | undefined) =>
 		(wire && DROP_REASON[wire]) ||
-		"held back by this connection's wire rule"
+		"held back by how this connection sends the prompt"
 
 	/**
 	 * Whether this row can be followed back to the entry it is about.
@@ -267,11 +268,11 @@
 				<span>
 					Ran the default pipeline: preset
 					<strong>{fb.preset}</strong>
-					binds
-					<code class="font-mono">{fb.event}</code>
-					to
+					picks
 					<code class="font-mono">{fb.bound}</code>
-					— which is not available.
+					for
+					<strong title={fb.event}>{eventDisplayName(fb.event)}</strong>,
+					which is not available.
 					{#if fb.reason}
 						<span class="opacity-80">{fb.reason}</span>
 					{/if}
@@ -423,7 +424,7 @@
 		{#if !explanation.ranked}
 			<p class="text-surface-600-400 text-xs">
 				This run recorded no ranking, so there is nothing to explain
-				beyond what the arms reported above.
+				beyond what the search methods reported above.
 			</p>
 		{/if}
 

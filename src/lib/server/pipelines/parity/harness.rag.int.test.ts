@@ -62,6 +62,7 @@ import {
 	type SelectLorebookEntry
 } from "$lib/server/utils/lorebookEntries"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import { defaultLoadoutRow } from "$lib/server/loadouts/testing"
 
 /**
  * A toy embedding: one axis per subject, so similarity is readable by eye.
@@ -207,12 +208,12 @@ beforeAll(async () => {
 			name: "Xenova/all-MiniLM-L6-v2"
 		})
 		.returning()
-	await db.insert(schema.connectionDefaults).values({
+	await db.insert(schema.loadouts).values(defaultLoadoutRow({
 		input: "text",
 		output: "embedding",
 		connectionId: embeddingConn.id,
 		connectionModelId: embeddingModel.id
-	})
+	}))
 
 	configs = {
 		connection: { id: 1, promptFormat: "vicuna", extraJson: {} },

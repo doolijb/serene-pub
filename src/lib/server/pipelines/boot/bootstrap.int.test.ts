@@ -17,6 +17,13 @@ import {
 	CHAT_RESPOND_SPEC_ID
 } from "$lib/server/pipelines/boot/bootstrap"
 import { CORE_SPECS } from "$lib/server/pipelines/specs"
+import {
+	DEFAULT_TRANSCRIPT_SEED_KEY,
+	LAIR_TRANSCRIPT_SEED_KEY,
+	SHIPPED_CONTEXT_TEMPLATES,
+	defaultContextTemplateFor
+} from "$lib/server/pipelines/boot/seedContextTemplates"
+import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 
@@ -40,6 +47,11 @@ describe("bootstrapping the pipeline tables", () => {
 			expect(s.reconciled).toEqual([])
 		}
 		expect(report.specs.map((s) => s.id)).toContain(CHAT_RESPOND_SPEC_ID)
+		// The story string and the two transcript templates, each written once.
+		expect(report.contextTemplates).toEqual({
+			created: SHIPPED_CONTEXT_TEMPLATES.length,
+			present: 0
+		})
 	}, 60_000)
 
 	it("changes nothing on the next boot", async () => {
@@ -53,6 +65,43 @@ describe("bootstrapping the pipeline tables", () => {
 		expect(report.types.inserted).toBe(0)
 		expect(report.specs[0]!.action).toBe("present")
 		expect(after).toHaveLength(before.length)
+		expect(report.contextTemplates).toEqual({
+			created: 0,
+			present: SHIPPED_CONTEXT_TEMPLATES.length
+		})
+	})
+
+	it("ships the transcript templates as immutable rows of render-transcript's pool, the Default its default", async () => {
+		const rows = await db
+			.select()
+			.from(schema.pipelineContextTemplates)
+			.where(
+				eq(
+					schema.pipelineContextTemplates.nodeDefinitionId,
+					"core:task/render-transcript"
+				)
+			)
+		const bySeed = new Map(rows.map((r) => [r.seedKey, r]))
+		expect(bySeed.get(DEFAULT_TRANSCRIPT_SEED_KEY)).toMatchObject({
+			name: "Default transcript",
+			isImmutable: true,
+			createdForSpecId: null,
+			engine: CORE_TEMPLATE_ENGINE,
+			templateId: "core:template/pipeline-context-template-core-transcript-default@1"
+		})
+		expect(bySeed.get(LAIR_TRANSCRIPT_SEED_KEY)).toMatchObject({
+			name: "Lair transcript",
+			isImmutable: true,
+			createdForSpecId: null
+		})
+		expect(bySeed.get(LAIR_TRANSCRIPT_SEED_KEY)!.source).toMatch(/\[Sanctum\]/)
+		expect(
+			await defaultContextTemplateFor(
+				db,
+				"core:task/render-transcript@1",
+				CORE_TEMPLATE_ENGINE
+			)
+		).toBe(bySeed.get(DEFAULT_TRANSCRIPT_SEED_KEY)!.id)
 	})
 
 	it("publishes a document that loads back and runs", async () => {

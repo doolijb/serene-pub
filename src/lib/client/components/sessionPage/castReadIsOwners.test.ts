@@ -18,9 +18,17 @@ const script = source.slice(
 	source.indexOf("<script"),
 	source.indexOf("</script>")
 )
+/** The page's inbox holds the interest; its scenes store sends the ask. */
+const STORES = ["sessionPageInbox.svelte.ts", "scenesFlow.svelte.ts"].map((name) =>
+	readFileSync(resolve(process.cwd(), "src/lib/client/components/sessionPage", name), "utf8")
+)
 
-/** Each `$effect(() => { … })` body in the script that names `needle`. */
+/** Each `$effect(() => { … })` body in the page's script and its stores that names `needle`. */
 function effectsNaming(needle: string): string[] {
+	return [script, ...STORES].flatMap((code) => effectsIn(code, needle))
+}
+
+function effectsIn(script: string, needle: string): string[] {
 	const bodies: string[] = []
 	let at = script.indexOf("$effect(")
 	while (at >= 0) {

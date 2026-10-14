@@ -608,7 +608,7 @@
 
 {#snippet confirmBlock()}
 	{#if loreWrites.off}
-		<LoreWritesOffNotice />
+		<LoreWritesOffNotice onOpenSettings={() => onOpenChange({ open: false })} />
 	{/if}
 	<p class="text-surface-700-300 mt-1 text-sm">
 		{mode === "extend"
@@ -798,7 +798,7 @@
 {#snippet reviewBlock()}
 	{#if loreWrites.off}
 		<!-- A review reopened after the setting moved: it cannot apply. -->
-		<div class="mb-4"><LoreWritesOffNotice /></div>
+		<div class="mb-4"><LoreWritesOffNotice onOpenSettings={() => onOpenChange({ open: false })} /></div>
 	{/if}
 	<p class="text-surface-700-300 -mt-1 mb-4 text-sm">
 		{activeNodes.length} new · {activeNodeUpdates.length} updated · {activeRels.length}
@@ -1244,7 +1244,7 @@
 
 {#snippet reviewExtraBlock()}
 	<button
-		class="btn preset-filled-surface-400-600"
+		class="btn preset-tonal-surface"
 		onclick={() => onOpenChange({ open: false })}
 	>
 		Close

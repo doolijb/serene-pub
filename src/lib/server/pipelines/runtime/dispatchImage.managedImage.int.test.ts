@@ -53,8 +53,29 @@ class FakeAdapter {
 	}
 }
 
+/** The drawing sheet the fake adapter declares — A1111's shape. */
+const TEST_SHEET = {
+	negative: true,
+	seed: true,
+	steps: true,
+	cfg: true,
+	sampler: true,
+	clipSkip: false,
+	size: { kind: "free", step: 8, min: 64, max: 2048 },
+	references: null,
+	init: true,
+	mask: true,
+	transparent: "none",
+	perCall: 8,
+	outputs: { perRun: 1, keyed: false },
+	progress: true,
+	preview: true,
+	cancel: true,
+	video: false
+}
+
 vi.mock("$lib/server/utils/getImageAdapter", () => ({
-	getImageAdapter: async () => ({ Adapter: FakeAdapter })
+	getImageAdapter: async () => ({ Adapter: FakeAdapter, sheet: TEST_SHEET })
 }))
 
 vi.mock("$lib/server/media", () => ({
@@ -402,6 +423,7 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 		// into two queues and let two renders overlap on it.
 		let sawBaseUrl: string | undefined
 		const spy = {
+			sheet: TEST_SHEET,
 			Adapter: class extends FakeAdapter {
 				constructor(connection: any) {
 					super(connection)
@@ -445,7 +467,7 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 		// The endpoint alone, at BOTH tiers — a pipeline option naming a pair
 		// would simply win and resolve.
 		await expect(dispatch({ connectionId: 5 })).rejects.toThrow(
-			/No model is chosen for Image generation/i
+			/No model is chosen for Images/i
 		)
 		expect(log).toEqual([])
 	})

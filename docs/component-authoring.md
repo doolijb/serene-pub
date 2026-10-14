@@ -54,8 +54,9 @@ On the right are four tabs:
 
 - **Preview** — the component running against a made-up session, so you can see it before any
   real session does.
-- **Problems** — what went wrong compiling or running it. A problem with a place in a file is a
-  button: press it to jump to that line.
+- **Problems** — what went wrong compiling or running it, then warnings: what compiles but will
+  not do what it looks like (a dropped `<style>`, a class the app does not have). A problem or
+  warning with a place in a file is a button: press it to jump to that line.
 - **Widget** — the name in your list, the title on the widget, its icon (a
   [Lucide](https://lucide.dev/icons) icon name), and what it may read from a session.
 - **Core** — only on a clone: the comparison described above.
@@ -74,13 +75,16 @@ draws. So:
   other import is a compile problem that lists what is allowed.
 - It has no network, no storage and no `fetch`. What it shows arrives from the session.
 - A `<style>` block is dropped. Style it with the app's utility classes, or with a widget style
-  (see [Session layout](./session-layout.md#style)).
+  (see [Session layout](./session-layout.md#style)). **Problems** reports a dropped `<style>` as
+  a warning at its line.
 
 :::warning Utility classes the app does not already use
 The app's utility classes are generated when Serene Pub is built, from the classes its own code
-uses. A class nothing in the app uses — an unusual colour stop, an odd size — simply does
-nothing in your component: there is no error, it is just unstyled. If a class seems to be
-ignored, pick one core's widgets use, or give the widget a style instead.
+uses. A class nothing in the app uses — an unusual colour stop, an odd size — does nothing in
+your component: it still compiles, the element is just unstyled. **Problems** reports such a
+class as a warning, at the line that uses it; pick one core's widgets use, or give the widget a
+style instead. The check reads plain `class="…"` text and `class:name` directives; a class
+built from an expression (`class={…}`) is not checked, and Problems says so once per file.
 :::
 
 A component is limited to 64 files, 256 KB per file and 1 MB of source in all.
@@ -137,6 +141,13 @@ Beyond the basics every widget gets, a component asks for what it wants to read,
 | **Lore**                   | It may ask for pages of the session's lorebook entries.      |
 | **The whole conversation** | Provisional: its shape is not settled yet.                   |
 | **The viewer's persona**   | Declared, but nothing supplies it yet.                       |
+
+Reading is not changing. A widget that changes something as the viewer asks for a **write
+grant** as well, reviewed on its own line: `session:state:write` lets it set a stat or state, and
+`channel:<slug>:write` lets it send or draft a line on that channel (one it also lists in its
+channels). Granting the read never grants the write. Each write happens only while someone is
+pressing in the widget, and with that person's own permissions. The editor does not offer write
+grants yet; a plugin's widget, or an imported share file, can ask for them.
 
 Asking is not having. Every scope it asks for waits under **Scope review** as _Waiting for
 review_, and is refused until you tick or untick it and press **Save** (the review is saved

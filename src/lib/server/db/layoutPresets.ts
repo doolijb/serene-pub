@@ -234,6 +234,9 @@ export async function syncLayoutPresets(
 		}
 	}
 
+	// Neither prune below touches a `pub` row (an in-app genre's copied
+	// default, plan P4 §6.1): both are scoped to `origin = 'core'`.
+	//
 	// Prune a core genre's seeded rows whose key core no longer ships (a
 	// layout it dropped, a row left by an older key scheme). Scoped to
 	// author-less, seed-keyed, `origin = 'core'` rows AND to the core genres
@@ -288,6 +291,16 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /**
+ * The origins that may own a genre's `default` layout: core for a `core:`
+ * genre; for any other, the declaring plugin's row or — for an in-app genre
+ * (`sessionGenres:create`, plan P4 §6.1) — the `pub` row its creation copied
+ * in. Only one of the two can exist for a given genre: `pub` rows are written
+ * only for a genre no plugin owns.
+ */
+const GENRE_OWNER_ORIGINS = (genreId: string): readonly string[] =>
+	isCoreGenre(genreId) ? ["core"] : ["plugin", "pub"]
+
+/**
  * Is this row a candidate for its genre's **genre default layout**? The
  * `default` slug, shipped by the genre's OWNER (core for a `core:` genre, a
  * plugin for a plugin genre — `./pluginLayouts` refuses `default` from any
@@ -298,7 +311,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 function isGenreDefaultCandidate(row: PresetRow): boolean {
 	return (
 		row.slug === DEFAULT_LAYOUT_SLUG &&
-		row.origin === (isCoreGenre(row.genreId) ? "core" : "plugin") &&
+		GENRE_OWNER_ORIGINS(row.genreId).includes(row.origin) &&
 		row.authorUserId === null &&
 		!row.withdrawnAt
 	)
@@ -456,7 +469,7 @@ function visibleTo(genreId: string, userId: number): SQL | undefined {
  */
 function listGroup(row: PresetRow, ctx: WireContext): number {
 	if (ctx.genreDefaultIds.has(row.id)) return 0
-	if (row.origin === "core") return 1
+	if (row.origin === "core" || row.origin === "pub") return 1
 	if (row.origin === "plugin") return 2
 	return row.authorUserId === ctx.userId ? 3 : 4
 }
@@ -559,9 +572,9 @@ export async function genreDefaultLayoutRow(
 			and(
 				eq(schema.sessionLayoutPresets.genreId, genreId),
 				eq(schema.sessionLayoutPresets.slug, DEFAULT_LAYOUT_SLUG),
-				eq(
+				inArray(
 					schema.sessionLayoutPresets.origin,
-					isCoreGenre(genreId) ? "core" : "plugin"
+					GENRE_OWNER_ORIGINS(genreId) as string[]
 				),
 				isNull(schema.sessionLayoutPresets.authorUserId),
 				isNull(schema.sessionLayoutPresets.withdrawnAt)
@@ -803,7 +816,7 @@ export async function copyLayoutIntoSession(
 					and(
 						eq(schema.widgetSettings.sessionId, args.sessionId),
 						eq(schema.widgetSettings.userId, args.userId),
-						eq(schema.widgetSettings.widgetSlug, key)
+						eq(schema.widgetSettings.widgetInstanceId, key)
 					)
 				)
 			continue
@@ -813,14 +826,14 @@ export async function copyLayoutIntoSession(
 			.values({
 				sessionId: args.sessionId,
 				userId: args.userId,
-				widgetSlug: key,
+				widgetInstanceId: key,
 				values
 			})
 			.onConflictDoUpdate({
 				target: [
 					schema.widgetSettings.userId,
 					schema.widgetSettings.sessionId,
-					schema.widgetSettings.widgetSlug
+					schema.widgetSettings.widgetInstanceId
 				],
 				set: { values, updatedAt: new Date() }
 			})
@@ -855,8 +868,8 @@ async function resetToDefaults(
  * widget the session can SEAT (core's, the genre's declared panels, an
  * enabled plugin's, an offered authored component's — `seatableWidgetIds`),
  * or one this person already has a row for here. The rule `:set` holds a
- * client's keys to, because a key becomes a `widget_slug` verbatim. A key in
- * neither is dropped with a warning, never the whole copy.
+ * client's keys to, because a key becomes a `widget_instance_id` verbatim. A
+ * key in neither is dropped with a warning, never the whole copy.
  */
 async function seatedKeys(
 	tx: Db,
@@ -871,7 +884,7 @@ async function seatedKeys(
 	const stored = new Set(
 		(
 			await tx
-				.select({ widgetSlug: schema.widgetSettings.widgetSlug })
+				.select({ widgetInstanceId: schema.widgetSettings.widgetInstanceId })
 				.from(schema.widgetSettings)
 				.where(
 					and(
@@ -879,7 +892,7 @@ async function seatedKeys(
 						eq(schema.widgetSettings.userId, userId)
 					)
 				)
-		).map((r) => r.widgetSlug)
+		).map((r) => r.widgetInstanceId)
 	)
 	return keys.filter((key) => {
 		if (seatable.has(widgetOfInstance(key)) || stored.has(key)) return true
@@ -1157,7 +1170,7 @@ async function packSessionLayout(
 	const settings: Record<string, Record<string, unknown>> = {}
 	for (const r of await tx
 		.select({
-			widgetSlug: schema.widgetSettings.widgetSlug,
+			widgetInstanceId: schema.widgetSettings.widgetInstanceId,
 			values: schema.widgetSettings.values
 		})
 		.from(schema.widgetSettings)
@@ -1168,11 +1181,11 @@ async function packSessionLayout(
 			)
 		))
 		if (
-			placed.has(r.widgetSlug) &&
+			placed.has(r.widgetInstanceId) &&
 			isPlainObject(r.values) &&
 			Object.keys(r.values).length
 		)
-			settings[r.widgetSlug] = r.values
+			settings[r.widgetInstanceId] = r.values
 	const [own] = await tx
 		.select({ layoutSettings: schema.sessionPanelLayouts.layoutSettings })
 		.from(schema.sessionPanelLayouts)

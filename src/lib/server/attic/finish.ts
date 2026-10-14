@@ -11,6 +11,10 @@
  *     of its session's turn-order strategy node (D8): `manual` →
  *     `core:task/turn-manual@1`, `userSplit` → `core:task/turn-user-split@1`;
  *     `ordered` and none are the spec's own round robin and write nothing;
+ *   · a chat's own sampling config becomes its session's sampling pick: the
+ *     session-scope pipeline panel row on the `sampling` slot of every
+ *     pipeline whose `generate` step writes text, the config's live id read
+ *     through the restore's id map;
  *   · a chat that ignored retrieval (`metadata.ragIgnored`, which switched
  *     0.5.3's RAG off for that chat) gets search-by-meaning **off** as a session
  *     override on every pipeline that has the switch; the flag stays, since
@@ -50,6 +54,8 @@ const TABLES = {
 
 export interface AtticWiringReport {
 	rebinds: number
+	/** Sessions given their chat's sampling config as their sampling pick. */
+	sampling: number
 	/** Sessions whose search by meaning was switched off (`ragIgnored`). */
 	searchOff: number
 	notes: number
@@ -66,6 +72,7 @@ export async function finishAtticUpgrade(
 
 	const notes = new UpgradeNotes()
 	const rebinds = await rebindStrategies(db, notes)
+	const sampling = await carryChatSampling(db, notes)
 	const searchOff = await switchOffIgnoredRetrieval(db, notes)
 	await noteChatPromptOverrides(db, notes)
 	await assertWiring(db, notes)
@@ -82,7 +89,7 @@ export async function finishAtticUpgrade(
 	])
 	await dropAttic(db)
 	await announce(db, total)
-	return { rebinds, searchOff, notes: written + 1 }
+	return { rebinds, sampling, searchOff, notes: written + 1 }
 }
 
 /** One notification to every admin, after the commit. */
@@ -157,6 +164,124 @@ async function rebindStrategies(db: Db, notes: UpgradeNotes): Promise<number> {
 		else written++
 	}
 	return written
+}
+
+/**
+ * A chat's sampling config, as its session's sampling pick: a session-scope
+ * `pipeline_node_overrides` row on each text `generate` step's `sampling`
+ * slot (`textSamplingSlots`), the one session layer the Pipelines card shows
+ * and the run reads. A row already at that address stays.
+ */
+async function carryChatSampling(
+	db: Db,
+	notes: UpgradeNotes
+): Promise<number> {
+	const chats = await db
+		.select({
+			id: attic.chats.id,
+			name: attic.chats.name,
+			samplingConfigId: attic.chats.samplingConfigId
+		})
+		.from(attic.chats)
+		.where(isNotNull(attic.chats.samplingConfigId))
+	if (!chats.length) return 0
+
+	// The live id: the restore's id map where the config moved, else its own.
+	const moved = new Map(
+		(
+			await db
+				.select({ oldId: attic.idmap.oldId, newId: attic.idmap.newId })
+				.from(attic.idmap)
+				.where(eq(attic.idmap.tableName, "sampling_configs"))
+		).map((r) => [r.oldId, r.newId])
+	)
+	const live = new Set(
+		(
+			await db
+				.select({ id: schema.samplingConfigs.id })
+				.from(schema.samplingConfigs)
+		).map((r) => r.id)
+	)
+	const slots = await textSamplingSlots(db)
+
+	let sessions = 0
+	for (const c of chats) {
+		const label = c.name ?? `chat ${c.id}`
+		const samplingId = moved.get(c.samplingConfigId!) ?? c.samplingConfigId!
+		const [session] = await db
+			.select({ id: schema.sessions.id, userId: schema.sessions.userId })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, c.id))
+			.limit(1)
+		if (!session) continue
+		if (!live.has(samplingId) || !slots.length) {
+			notes.add({
+				topic: "wiring",
+				objectLabel: label,
+				summary: `The chat "${label}" had its own sampling config in 0.5.3, and its session could not be given it; its replies use the default sampling until one is chosen in its Pipelines settings.`
+			})
+			continue
+		}
+		for (const s of slots)
+			await db
+				.insert(schema.pipelineNodeOverrides)
+				.values({
+					specId: s.specId,
+					scopeKind: "session",
+					scopeId: session.id,
+					nodeKey: s.nodeKey,
+					slot: s.slot,
+					path: "",
+					value: samplingId,
+					updatedBy: session.userId,
+					updatedAt: new Date()
+				})
+				.onConflictDoNothing()
+		sessions++
+	}
+	return sessions
+}
+
+/**
+ * Every pipeline's `generate` sampling slot whose step writes text: its
+ * connection slot requires `text->text`, or names no transform and a text
+ * shape or none — the same reading `world.ts` gives the oracle's capability.
+ */
+async function textSamplingSlots(
+	db: Db
+): Promise<Array<{ specId: number; nodeKey: string; slot: string }>> {
+	const [
+		{ declarations },
+		{ ORACLE_NODE_KEY },
+		{ TEXT_CAPABILITY },
+		{ capabilityForSamplingShape },
+		{ isTransformId }
+	] = await Promise.all([
+		import("$lib/server/pipelines/config/panel"),
+		import("$lib/server/pipelines/config/world"),
+		import("$lib/server/connections/capabilityTarget"),
+		import("$lib/shared/capabilities/samplingShape"),
+		import("@serene-pub/sdk")
+	])
+	const specs = await db.select().from(schema.pipelineSpecs)
+	const out: Array<{ specId: number; nodeKey: string; slot: string }> = []
+	for (const spec of specs) {
+		if (spec.activeVersionId == null) continue
+		const decls = (await declarations(db, spec.activeVersionId)).filter(
+			(d) => d.nodeKey === ORACLE_NODE_KEY
+		)
+		const sampling = decls.find(
+			(d) => d.control === "sampling-ref" && d.slot === "sampling" && !d.path
+		)
+		if (!sampling) continue
+		const connection = decls.find((d) => d.control === "connection-ref")
+		const capability =
+			connection?.requires?.find(isTransformId) ??
+			capabilityForSamplingShape(connection?.shape)
+		if (capability !== TEXT_CAPABILITY) continue
+		out.push({ specId: spec.id, nodeKey: ORACLE_NODE_KEY, slot: sampling.slot })
+	}
+	return out
 }
 
 /** The value of `searchByMeaning` that never searches. */

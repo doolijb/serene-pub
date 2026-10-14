@@ -50,6 +50,7 @@ import {
 import {
 	renderVariable,
 	shippedRowsByKey,
+	variableOfKey,
 	type ResolvedLayouts
 } from "$lib/server/pipelines/entities/variableLayouts"
 
@@ -119,8 +120,23 @@ export async function sampleContext(
 	const out: Record<string, unknown> = structuralContext()
 	for (const decl of allVariables()) {
 		const values = sampleValues(decl)
-		for (const key of Object.keys(decl.scope))
-			out[key] = await renderVariable(layouts, key, values[key])
+		for (const key of Object.keys(decl.scope)) {
+			// A name means one variable within a template's scope, but two
+			// variables may share it across the instance (owner ruling
+			// 2026-10-13). The one the layouts say the key renders wins, else
+			// core's — never whichever registered last.
+			// A variable this build does not have (its plugin is off) owns
+			// nothing; the registered one fills the key as it always did.
+			const owner = variableOfKey(layouts, key)
+			if (owner && owner !== decl.id && getVariable(owner)) continue
+			const forKey: ResolvedLayouts = layouts?.[key]
+				? layouts
+				: {
+						...layouts,
+						[key]: { variableId: decl.id, engine: CORE_TEMPLATE_ENGINE }
+					}
+			out[key] = await renderVariable(forKey, key, values[key])
+		}
 	}
 	return out
 }
@@ -142,7 +158,11 @@ export function bareLayouts(): ResolvedLayouts {
 				// These are core's own shipped sources, held in code rather than
 				// read from a row — so the engine is core's by construction, and
 				// naming it is what lets `ResolvedLayouts.engine` be required.
-				out[key] = { engine: CORE_TEMPLATE_ENGINE, source: row.source }
+				out[key] = {
+					variableId: row.variableId,
+					engine: CORE_TEMPLATE_ENGINE,
+					source: row.source
+				}
 	return out
 }
 

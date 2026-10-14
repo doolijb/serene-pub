@@ -34,9 +34,18 @@ import { asc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	declarations,
-	humanizeTypeId
+	humanizeTypeId,
+	type Decl
 } from "$lib/server/pipelines/config/panel"
-import { getGenre, getVariable, i18nText, type TemplateScope } from "@serene-pub/sdk"
+import {
+	getGenre,
+	getVariable,
+	i18nText,
+	seamsOf,
+	type ScriptPointDecl,
+	type TemplateScope
+} from "@serene-pub/sdk"
+import type { ChainRow } from "$lib/server/pipelines/config/chainAddresses"
 import {
 	contextPoolKeyFor,
 	poolKeyFor
@@ -82,10 +91,170 @@ export interface LibraryPipeline {
 	 */
 	promptPools: string[]
 	/**
+	 * The seams this pipeline's active version declares — every place a
+	 * script chain may run, in run order per step (`seamsOf`), with the
+	 * script kinds each accepts. Admin › Scripts' fits filters read this the
+	 * way Admin › Prompts reads `promptPools`: a script fits a seam when its
+	 * kind is in `accepts` (PLAN-script-placement D5).
+	 */
+	scriptSeams: LibraryScriptSeam[]
+	/**
 	 * The genres whose presets bind this pipeline to an event, by id and
 	 * name. Admin › Prompts' genre filter is pipeline → genre through here.
 	 */
 	genres: { id: string; name: string }[]
+}
+
+/** One seam of one step of a pipeline (PLAN-script-placement D1). */
+export interface LibraryScriptSeam {
+	nodeKey: string
+	/** The step's heading, as the settings panel names it. */
+	stepLabel: string
+	/** The seam address: `in:<port>` · `out:<port>` · `<pointKey>`. */
+	at: string
+	/** Pinned script kind ids the seam accepts. */
+	accepts: string[]
+}
+
+/** A step's registry row and heading, keyed by node key. */
+export interface StepSeams {
+	/** Node key → the registry row its definition pins, and its heading. */
+	nodes: Map<string, { row: ChainRow | null; stepLabel: string }>
+	/** Every declared seam of the version, step by step, in run order. */
+	seams: LibraryScriptSeam[]
+}
+
+/**
+ * The seams a spec version declares, read off its nodes' registry rows with
+ * `seamsOf` — the one reader of placement (D1) — plus each step's heading.
+ *
+ * `decls` are the version's declarations when the caller already has them
+ * (`libraryView` does), for the headings; `byPin` the registry rows keyed
+ * `<definitionId>@<version>`, so a walk over every pipeline reads the
+ * registry once.
+ */
+export async function stepSeamsOf(
+	db: Db,
+	specVersionId: number,
+	opts: { decls?: Decl[]; byPin?: Map<string, any> } = {}
+): Promise<StepSeams> {
+	const decls = opts.decls ?? (await declarations(db, specVersionId))
+	const byPin =
+		opts.byPin ??
+		new Map<string, any>(
+			((await db.select().from(schema.pipelineDefinitionRegistry)) as any[]).map(
+				(r) => [`${r.definitionId}@${r.version}`, r]
+			)
+		)
+	const headingOf = new Map<string, string>()
+	for (const d of decls)
+		if (!headingOf.has(d.nodeKey))
+			headingOf.set(d.nodeKey, d.stepHeading ?? d.typeLabel)
+	const nodes = (await db
+		.select()
+		.from(schema.pipelineNodes)
+		.where(eq(schema.pipelineNodes.specVersionId, specVersionId))
+		.orderBy(asc(schema.pipelineNodes.position))) as any[]
+	const out: StepSeams = { nodes: new Map(), seams: [] }
+	for (const node of nodes) {
+		const row = byPin.get(`${node.definitionId}@${node.definitionVersion}`) ?? null
+		const stepLabel =
+			headingOf.get(node.nodeKey) ??
+			(row ? i18nText(row.i18n?.name) : undefined) ??
+			humanizeTypeId(node.definitionId)
+		out.nodes.set(node.nodeKey, { row, stepLabel })
+		if (!row) continue
+		for (const seam of seamsOf({
+			slots: (row.slots ?? {}) as Record<string, unknown>,
+			scriptPoints: (row.scriptPoints ?? []) as ScriptPointDecl[]
+		}))
+			out.seams.push({
+				nodeKey: node.nodeKey,
+				stepLabel,
+				at: seam.at,
+				accepts: [...seam.accepts]
+			})
+	}
+	return out
+}
+
+/**
+ * Pipeline → genre, through the presets that bind it (a withdrawn preset's
+ * genre still counts: its rows are still on the instance). Keyed by spec
+ * slug; each value is genre id → name. Admin › Prompts and Admin › Scripts
+ * both filter by genre through here.
+ */
+export async function pipelineGenresBySlug(
+	db: Db
+): Promise<Map<string, Map<string, string>>> {
+	const genresBySlug = new Map<string, Map<string, string>>()
+	for (const preset of (await db.select().from(schema.sessionPresets)) as any[]) {
+		const genreId = preset.genreId as string
+		const name = (() => {
+			const g = getGenre(genreId)
+			return (g && i18nText(g.name)) || genreId
+		})()
+		for (const b of Object.values(
+			(preset.bindings ?? {}) as Record<string, { spec?: string } | null>
+		)) {
+			if (!b?.spec) continue
+			const m = genresBySlug.get(b.spec) ?? new Map<string, string>()
+			m.set(genreId, name)
+			genresBySlug.set(b.spec, m)
+		}
+	}
+	return genresBySlug
+}
+
+/** One pipeline's seams and genres — what Admin › Scripts' fits read. */
+export interface PipelineScriptSeams {
+	specId: number
+	slug: string
+	label: string
+	/** Owned by a switched-off plugin (R67): not offered as a fit. */
+	disabled: boolean
+	nodes: StepSeams["nodes"]
+	seams: LibraryScriptSeam[]
+	genres: { id: string; name: string }[]
+}
+
+/**
+ * Every pipeline's seams, active version, with its genres — one walk shared
+ * by the script usage index (which steps a stored chain sits on) and the
+ * fits (which seams a script's kind is accepted at).
+ */
+export async function pipelineScriptSeams(db: Db): Promise<PipelineScriptSeams[]> {
+	const specs = (await db
+		.select()
+		.from(schema.pipelineSpecs)
+		.orderBy(asc(schema.pipelineSpecs.id))) as any[]
+	const labels = await pipelineLabelsById(db)
+	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+	const off = await disabledPlugins(db)
+	const genresBySlug = await pipelineGenresBySlug(db)
+	const byPin = new Map<string, any>(
+		((await db.select().from(schema.pipelineDefinitionRegistry)) as any[]).map(
+			(r) => [`${r.definitionId}@${r.version}`, r]
+		)
+	)
+	const out: PipelineScriptSeams[] = []
+	for (const spec of specs) {
+		const steps: StepSeams = spec.activeVersionId
+			? await stepSeamsOf(db, spec.activeVersionId, { byPin })
+			: { nodes: new Map(), seams: [] }
+		out.push({
+			specId: spec.id,
+			slug: spec.slug,
+			label: labels.get(spec.id) ?? spec.name,
+			disabled: off.owns(spec.sourcePluginId),
+			nodes: steps.nodes,
+			seams: steps.seams,
+			genres: [...(genresBySlug.get(spec.slug) ?? new Map())]
+				.map(([id, name]) => ({ id, name }))
+				.sort((a, b) => a.name.localeCompare(b.name))
+		})
+	}
+	return out
 }
 
 export interface LibraryPrompt {
@@ -284,6 +453,12 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 	// an uninstalled plugin left behind has no owner and is still listed.
 	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
 	const off = await disabledPlugins(db)
+	// The registry once, for every pipeline's seams.
+	const byPin = new Map<string, any>(
+		((await db.select().from(schema.pipelineDefinitionRegistry)) as any[]).map(
+			(r) => [`${r.definitionId}@${r.version}`, r]
+		)
+	)
 
 	for (const spec of specs as any[]) {
 		if (off.owns(spec.sourcePluginId)) continue
@@ -299,6 +474,7 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 
 		let nodeCount = 0
 		const pools = new Set<string>()
+		let scriptSeams: LibraryScriptSeam[] = []
 		if (version) {
 			nodeCount = (
 				await db
@@ -307,7 +483,10 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 					.where(eq(schema.pipelineNodes.specVersionId, version.id))
 			).length
 
-			for (const d of await declarations(db, version.id)) {
+			const decls = await declarations(db, version.id)
+			scriptSeams = (await stepSeamsOf(db, version.id, { decls, byPin }))
+				.seams
+			for (const d of decls) {
 				// Every language the slot accepts, so a slot declaring two gets
 				// a heading per pool and the empty one is somewhere to write
 				// the first row. A slot that declares nothing renders in
@@ -361,28 +540,13 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			status: version?.status ?? null,
 			nodeCount,
 			promptPools: [...pools].sort(),
+			scriptSeams,
 			genres: []
 		})
 	}
 
-	// Pipeline → genre, through the presets that bind it (a withdrawn
-	// preset's genre still counts: its rows are still on the instance).
-	const genresBySlug = new Map<string, Map<string, string>>()
-	for (const preset of (await db.select().from(schema.sessionPresets)) as any[]) {
-		const genreId = preset.genreId as string
-		const name = (() => {
-			const g = getGenre(genreId)
-			return (g && i18nText(g.name)) || genreId
-		})()
-		for (const b of Object.values(
-			(preset.bindings ?? {}) as Record<string, { spec?: string } | null>
-		)) {
-			if (!b?.spec) continue
-			const m = genresBySlug.get(b.spec) ?? new Map<string, string>()
-			m.set(genreId, name)
-			genresBySlug.set(b.spec, m)
-		}
-	}
+	// Pipeline → genre, through the presets that bind it.
+	const genresBySlug = await pipelineGenresBySlug(db)
 	for (const p of pipelines)
 		p.genres = [...(genresBySlug.get(p.slug) ?? new Map())]
 			.map(([id, name]) => ({ id, name }))

@@ -32,7 +32,6 @@ import {
 	and,
 	desc,
 	eq,
-	gt,
 	inArray,
 	lt,
 	ne,
@@ -86,15 +85,34 @@ export async function retakeTurn(
 	// then both message worlds, and the cascade.
 	const ids = rows.map((r) => r.messageId)
 	const { deleteLegacyWhere } = await import("$lib/server/messages/store")
-	const deleted = await db.transaction(async (tx) => {
-		const t = tx as unknown as Db
-		await keepLaterState(t, {
-			sessionId: opts.sessionId,
-			yieldIds: ids,
-			runs
+	const { revertClockMovesAnchoredTo, StoryClockRefusal } = await import(
+		"$lib/server/state/clockMoves"
+	)
+	let deleted: Awaited<ReturnType<typeof deleteLegacyWhere>>
+	let clockMoved = false
+	try {
+		deleted = await db.transaction(async (tx) => {
+			const t = tx as unknown as Db
+			await keepLaterState(t, {
+				sessionId: opts.sessionId,
+				yieldIds: ids,
+				runs
+			})
+			// 🚧 The turn's own clock moves go with it, tick included — the
+			// turn is taken again and ticks again (live scenes §15 G5). Taken
+			// back by their steps before the cascade drops their rows; what
+			// `keepLaterState` re-anchored above stands.
+			clockMoved = (await revertClockMovesAnchoredTo(t, ids)).sessionIds.length > 0
+			return deleteLegacyWhere(t, inArray(schema.sessionMessages.id, ids))
 		})
-		return deleteLegacyWhere(t, inArray(schema.sessionMessages.id, ids))
-	})
+	} catch (e) {
+		if (e instanceof StoryClockRefusal) return { ok: false, error: e.message }
+		throw e
+	}
+	if (clockMoved && opts.io) {
+		const { broadcastSessionRow } = await import("$lib/server/sessions/rowPush")
+		broadcastSessionRow(opts.io, opts.sessionId)
+	}
 
 	// 2. One `message-deleted` per row, with what it held — the event every
 	// delete emits (`core:outlet/delete-message@1`), so the next reply's
@@ -199,16 +217,13 @@ async function keepLaterState(
 ): Promise<void> {
 	if (!opts.yieldIds.length) return
 	/** Not any of the turn's runs' own work: for each, another writer, or landed after it ended. */
-	const notTheRuns = (by: AnyPgColumn, at: AnyPgColumn): SQL =>
+	const notTheRuns = (by: AnyPgColumn, at: AnyPgColumn | SQL): SQL =>
 		and(
 			...opts.runs.map(
 				(r) =>
 					or(
 						ne(by, `run:${r.runUuid}`),
-						gt(
-							at,
-							sql`(SELECT ${schema.pipelineRuns.createdAt} FROM ${schema.pipelineRuns} WHERE ${schema.pipelineRuns.id} = ${r.runId})`
-						)
+						sql`${at} > (SELECT ${schema.pipelineRuns.createdAt} FROM ${schema.pipelineRuns} WHERE ${schema.pipelineRuns.id} = ${r.runId})`
 					)!
 			)
 		)!
@@ -260,7 +275,11 @@ async function keepLaterState(
 				inArray(schema.stateProposals.messageId, opts.yieldIds),
 				notTheRuns(
 					schema.stateProposals.proposedBy,
-					schema.stateProposals.createdAt
+					// 🚧 An accepted CLOCK proposal landed when it was decided
+					// (live scenes §15 G5): the row is its own move, with no
+					// value row beside it, so one accepted after the turn's
+					// run is kept the way that run's accepted value is.
+					sql`(CASE WHEN ${schema.stateProposals.kind} = 'clock' AND ${schema.stateProposals.status} = 'accepted' THEN coalesce(${schema.stateProposals.decidedAt}, ${schema.stateProposals.createdAt}) ELSE ${schema.stateProposals.createdAt} END)`
 				)
 			)
 		)

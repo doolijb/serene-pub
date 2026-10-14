@@ -82,7 +82,7 @@ import { UNREAD_ALLOW_LIST } from "$lib/server/pipelines/boot/unreadAllowList"
 /**
  * Slot kinds the **host** supplies, so a spec that never names one is correct.
  *
- * Both are read by the executor straight out of the scope chain at
+ * The first two are read by the executor straight out of the scope chain at
  * `config[node.key][slotName]`, never through `resolveInput` — which is exactly
  * why they are exempt and every other kind is not.
  *
@@ -95,9 +95,16 @@ import { UNREAD_ALLOW_LIST } from "$lib/server/pipelines/boot/unreadAllowList"
  *     then to the declaration's own `format`. No shipped type declares one
  *     today; classified here so the day one does, it does not land in the
  *     enforced set by accident.
+ *   · `loadout` — `applyLoadoutLayer` (`config/world.ts`) reads the scope
+ *     chain's `loadout` rows by node key and projects the loadout's pair,
+ *     sampling and workflow onto the node's `connection`/`sampling`/`workflow`
+ *     slots at `defaults`; the binding never reads `input.loadout`. A spec
+ *     names its loadout through a Default config (lane B1, I12) — a loadout is
+ *     configuration, not a wire — so an unnamed `loadout` key is correct.
+ *     The slots it projects onto stay enforced.
  *
  * Every other kind (`connection`, `sampling`, `prompts`, `template`,
- * `parameters`, `variables`) reaches its binding only as a resolved config key,
+ * `parameters`, `variables`, `workflow`) reaches its binding only as a resolved config key,
  * so it must be named. `connection` and `sampling` have host-side *fallbacks*
  * — `capabilityTarget.ts`'s `capabilityDefault` tier and `resolveSlot`'s
  * `world.activeConnection` — but a fallback is not a supply: the tier the
@@ -105,7 +112,7 @@ import { UNREAD_ALLOW_LIST } from "$lib/server/pipelines/boot/unreadAllowList"
  * `host.ts`, and `p` is `resolveInput`'s output. An unnamed connection slot
  * means the run still happens and the panel's picker for that node does not.
  */
-const HOST_SUPPLIED = new Set(["scripts", "wire"])
+const HOST_SUPPLIED = new Set(["scripts", "wire", "loadout"])
 
 interface Finding {
 	/** Version-free, so an unrelated semver bump does not churn the ledger. */
@@ -371,7 +378,8 @@ describe("the walk is capable of the measurement it is used for", () => {
 			"prompts",
 			"sampling",
 			"template",
-			"variables"
+			"variables",
+			"workflow"
 		])
 		// `parameters` by name, so renaming the kind value out from under this
 		// file fails here rather than quietly emptying the enforced set.

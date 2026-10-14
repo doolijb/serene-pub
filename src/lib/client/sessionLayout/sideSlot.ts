@@ -116,6 +116,13 @@ export interface SideFlowInput {
 	 * which — like every icon strip — are not counted.
 	 */
 	tucked?: boolean
+	/**
+	 * This side is arranged and pins NONE of its groups (./arrangedGeometry
+	 * `isRailFrame`): nothing in it is docked, so it is its icon rail, not a
+	 * column — whatever the width. It counts the rail, never the ladder
+	 * footprint, toward the tuck threshold as well as in the flow (lane E1).
+	 */
+	railOnly?: boolean
 }
 
 /**
@@ -129,6 +136,12 @@ export interface SideFlowInput {
  * `emptyColumnsPx`, below — so it never raises the tuck threshold, which is
  * read off this function.
  *
+ * The flow counts only what is DOCKED: an arranged side whose groups are all
+ * unpinned (`railOnly`) is a rail of icons whose panels fly out over the
+ * session, so it takes `RAIL_PX`, exactly as a tucked arranged side does —
+ * never the ladder's column it does not draw (lane E1; before, Adventure's
+ * unpinned left rail tucked the party's column at 1280px).
+ *
  * Two deliberate omissions. An icon strip is not counted: it is a fixed
  * 2.25rem that the ladder does not size and the clamp does not touch. And a
  * side with more than one rail reports its WIDEST rather than their sum,
@@ -139,7 +152,7 @@ export interface SideFlowInput {
 export function sideFlowPx(o: SideFlowInput): number {
 	if (o.slot !== "inline") return 0
 	if (o.tucked) return o.arranged ? RAIL_PX : 0
-	if (o.arranged) return o.arrangedPx
+	if (o.arranged) return o.railOnly ? RAIL_PX : o.arrangedPx
 	return o.railPx.length ? Math.max(...o.railPx) : 0
 }
 

@@ -12,7 +12,10 @@
 	 *   the audit surface — a person checking a chain reads these, not the
 	 *   source. A verdict type has no outs: its return is consumed by the hook.
 	 * - **Source**.
-	 * - **Chains** (inline) — the pipelines whose chains include it.
+	 * - **Where used** (inline, read-and-link) — every chain holding it, by
+	 *   pipeline, step and seam, each opening that step in the pipeline
+	 *   workspace scrolled to the chain; a chain whose seam is gone reads
+	 *   the unplaced marker; a connection's stop list links to that connection.
 	 *
 	 * Built-in scripts are read-only; Duplicate clones one. Delete asks on the
 	 * confirmation page; a chained script is kept (the server refuses).
@@ -37,7 +40,9 @@
 	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
 	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
 	import AdminInline from "$lib/client/components/admin/AdminInline.svelte"
-	import { scriptDeletion } from "./scriptsAdmin"
+	import type { AdminChangelistColumn } from "$lib/client/components/admin/changelist"
+	import { scriptDeletion, useHref } from "./scriptsAdmin"
+	import ScriptField from "$lib/client/components/codeField/ScriptField.svelte"
 
 	type Script = Sockets.Pipelines.Scripts.Script
 	type ScriptKind = Sockets.Pipelines.Scripts.ScriptKind
@@ -192,6 +197,35 @@
 	}
 
 	const title = $derived(draft?.name.trim() || row?.name || "Script")
+
+	type UseRow = Sockets.Pipelines.Scripts.UseRow
+	const useKey = (u: UseRow) =>
+		u.kind === "connection"
+			? `connection:${u.connectionId}`
+			: `${u.pipelineSlug}\u0000${u.nodeKey}\u0000${u.optionId || u.at}`
+	const useColumns: AdminChangelistColumn<UseRow>[] = [
+		{
+			key: "where",
+			label: "Where",
+			primary: true,
+			text: (u) => (u.kind === "connection" ? u.connectionName : u.pipelineLabel)
+		},
+		{
+			key: "step",
+			label: "Step",
+			text: (u) => (u.kind === "connection" ? "Stop scripts" : u.stepLabel)
+		},
+		{
+			key: "seam",
+			label: "Seam",
+			text: (u) =>
+				u.kind === "connection"
+					? "Connection"
+					: u.unplaced
+						? `${u.at} · No longer here`
+						: u.at
+		}
+	]
 </script>
 
 {#if loading}
@@ -347,26 +381,32 @@
 			</AdminFieldset>
 		{/if}
 
-		<AdminFieldset title="Source">
+		<AdminFieldset
+			title="Source"
+			description="A JavaScript function body. The reads ticked above arrive as locals; return an object with the rewrites. ctx.random() and ctx.log() are the only host functions."
+		>
 			<AdminField id="script-admin-source" label="Source">
-				<textarea
+				<ScriptField
 					id="script-admin-source"
-					class="textarea w-full font-mono text-xs"
+					label="Source"
 					rows={16}
 					readonly={readOnly}
-					spellcheck="false"
-					bind:value={draft.source}
-				></textarea>
+					value={draft.source}
+					declared={draft.varsIn}
+					offered={readChoices}
+					oninput={(v) => (draft!.source = v)}
+				/>
 			</AdminField>
 		</AdminFieldset>
 
 		<AdminInline
-			title="Chains"
-			description="The pipelines whose chains include this script."
-			rows={row.usedBy}
-			rowKey={(name) => name}
-			columns={[{ key: "name", label: "Pipeline", primary: true, text: (name) => name }]}
-			emptyMessage="No chain uses this script yet."
+			title="Where used"
+			description="The chains that run this script and the connections it guards. Each opens where it is set."
+			rows={row.use ?? []}
+			rowKey={useKey}
+			columns={useColumns}
+			rowHref={useHref}
+			emptyMessage="No chain or connection uses this script yet."
 		/>
 	</AdminChangeForm>
 {/if}

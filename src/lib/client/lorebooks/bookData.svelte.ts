@@ -28,9 +28,22 @@ import { getContext, setContext } from "svelte"
 import type { BindingWithRelations } from "$lib/client/components/lorebookForms/entryManager"
 import type { PoolSource } from "./sections/types"
 
+/**
+ * 🚧 **book access** (NOMENCLATURE §25, lane A3's wire word): how the reader
+ * holds the open book — `owner` writes; `shared` (a share) and `admin` read
+ * only, so every lens renders and every write verb is hidden or disabled
+ * (PLAN-private-messages §6.7). Presentation only: the server refuses a
+ * non-owner's write regardless (`assertOwnedBook`).
+ */
+export type BookAccess = "owner" | "shared" | "admin"
+
 export interface BookData {
 	/** The book open, or null on the list of books. */
 	readonly lorebookId: number | null
+	/** Whose book this is to the reader. */
+	readonly bookAccess: BookAccess
+	/** `bookAccess !== "owner"`: hide or disable every write verb. */
+	readonly readOnly: boolean
 	/**
 	 * The book's entries by entry type, on the line being read and as of the
 	 * moment — the shell's one resolver's rows (amended names, dated
@@ -84,6 +97,21 @@ export function getBookData(): BookData {
 }
 
 /**
+ * Whether the open book is read-only to this reader — false outside the
+ * workspace (a fixture or a component mounted alone), so a component that
+ * can be either reads this rather than `getBookData()`. Call during init;
+ * the answer is a getter, so read it inside a `$derived`.
+ */
+export function bookReadOnly(): { readonly value: boolean } {
+	const data = getContext<BookData | undefined>(KEY)
+	return {
+		get value() {
+			return !!data?.readOnly
+		}
+	}
+}
+
+/**
  * The context map that provides `data`, for `mount(Lens, { context })` — a
  * test mounting one lens without the workspace.
  */
@@ -106,12 +134,19 @@ export function staticBookData(
 		allScenes: PoolSource[]
 		suggestions: Sockets.BindingSuggestions.Suggestion[]
 		duplicates: Sockets.NarrativeGraph.DuplicateCandidates.Candidate[]
+		bookAccess: BookAccess
 	}>,
 	verbs: Partial<Pick<BookData, "refreshScenes" | "refreshCast" | "refreshRows">> = {}
 ): BookData {
 	return {
 		get lorebookId() {
 			return values().lorebookId ?? null
+		},
+		get bookAccess() {
+			return values().bookAccess ?? "owner"
+		},
+		get readOnly() {
+			return (values().bookAccess ?? "owner") !== "owner"
 		},
 		get rows() {
 			return values().rows ?? values().rawRows ?? {}

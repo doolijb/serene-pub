@@ -28,6 +28,7 @@ import {
 } from "$lib/server/pipelines/entities/scripts"
 import * as schema from "$lib/server/db/schema"
 import { groupOptions } from "$lib/server/pipelines/config/panel/groups"
+import { seamDecls } from "$lib/server/pipelines/config/panel/declarations"
 
 const SECRET = "test-instance-secret"
 
@@ -251,4 +252,180 @@ describe("the hook in the panel", () => {
 			)
 		).rejects.toThrow(OptionNotWritableError)
 	})
+})
+
+describe("where a chain runs (PLAN-script-placement D3)", () => {
+	it("labels each chain by its seam, carries the address, and names what can go there", async () => {
+		const view = await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, admin())
+		const chains = groupOptions(view!.groups).filter(
+			(o) => o.control === "scripts-chain"
+		)
+		expect(chains.length).toBeGreaterThan(0)
+		for (const o of chains) {
+			expect(o.label).toMatch(/^Scripts · (before|after|at) \S/)
+			expect(typeof o.at).toBe("string")
+			expect(o.seamKind).toMatch(/^(in|out|point)$/)
+			// Names, never kind ids: the ids stay server-side.
+			expect(o.acceptsLabels?.length).toBeGreaterThan(0)
+			for (const k of o.acceptsLabels!) expect(k).not.toMatch(/^core:script:/)
+			// A port seam says what flows there; a point has no port.
+			if (o.seamKind === "point") expect(o.flows).toBeUndefined()
+		}
+		// The write consumer's hook: before its text port.
+		const write = await writeHookOption()
+		expect(write.label).toBe("Scripts · before text")
+		expect(write.at).toBe("in:text")
+		expect(write.flows).toBe("What flows here: text")
+		expect(write.acceptsLabels!.length).toBe(2)
+	}, 60_000)
+
+	it("emits a definition's seams in run order: in, then points, then out", () => {
+		const decls = seamDecls(
+			"step",
+			{
+				kind: "task",
+				// Declared out-first on purpose: the order is run order, not
+				// declaration order across phases.
+				slots: {
+					afterScripts: {
+						kind: "scripts",
+						accepts: ["core:script:cast/transform@1"],
+						port: "cast",
+						phase: "after",
+						description: "Over the extracted cast."
+					},
+					scripts: {
+						kind: "scripts",
+						accepts: ["core:script:text/transform@1"],
+						port: "content",
+						phase: "before"
+					}
+				},
+				scriptPoints: [
+					{
+						key: "each-draft",
+						accepts: ["core:script:text/transform@1"],
+						description: "Each draft."
+					}
+				] as any,
+				ports: {
+					in: { content: "core:shape/text@1" },
+					out: { cast: "core:shape/cast-list@1" }
+				}
+			},
+			"Step",
+			"core:task/fixture@1"
+		)
+		expect(decls.map((d) => [d.at, d.slot, d.path, d.label])).toEqual([
+			["in:content", "scripts", "", "Scripts · before content"],
+			["each-draft", "scripts", "each-draft", "Scripts · at each draft"],
+			["out:cast", "afterScripts", "", "Scripts · after cast"]
+		])
+		expect(decls.map((d) => d.flows)).toEqual([
+			"What flows here: text",
+			undefined,
+			"What flows here: cast list"
+		])
+		expect(decls[2]!.description).toBe("Over the extracted cast.")
+		expect(decls[1]!.description).toBe("Each draft.")
+	})
+
+	it("keeps that order in the step's Advanced list", async () => {
+		const view = await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, admin())
+		const rank = { in: 0, point: 1, out: 2 } as const
+		for (const g of view!.groups)
+			for (const step of g.advanced) {
+				const kinds = step.options
+					.filter((o) => o.control === "scripts-chain" && o.seamKind)
+					.map((o) => rank[o.seamKind!])
+				expect(kinds).toEqual([...kinds].sort((a, b) => a - b))
+			}
+	}, 60_000)
+})
+
+describe("an unplaced chain in the panel (PLAN-script-placement D4)", () => {
+	let configId: number
+	let nodeKey: string
+	let a: { id: number }
+	let b: { id: number }
+
+	const unplacedOption = async () => {
+		const view = await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, admin())
+		return groupOptions(view!.groups).find(
+			(o) => o.control === "scripts-chain" && o.unplaced
+		)
+	}
+
+	beforeAll(async () => {
+		const { resolveSelectedConfig } = await import(
+			"$lib/server/pipelines/config/named"
+		)
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
+		configId = (await resolveSelectedConfig(db, spec.id, CHAT_RESPOND_SPEC_ID, {}))!
+			.configId
+		const nodes = await db
+			.select()
+			.from(schema.pipelineNodes)
+			.where(eq(schema.pipelineNodes.specVersionId, spec.activeVersionId!))
+		nodeKey = (nodes as any[]).find(
+			(n) => n.definitionId === "core:outlet/update-message"
+		)!.nodeKey
+		a = await createScript(db, {
+			typeId: "core:script:text/stop@1",
+			name: "Stranded A"
+		})
+		b = await createScript(db, {
+			typeId: "core:script:text/transform@1",
+			name: "Stranded B"
+		})
+		await db.insert(schema.pipelineConfigValues).values({
+			configId,
+			nodeKey,
+			slot: "scripts",
+			path: "a-point-that-is-gone",
+			value: [a.id, b.id]
+		})
+	}, 60_000)
+
+	it("still shows, marked, with its entries and nothing to add", async () => {
+		const o = (await unplacedOption())!
+		expect(o).toBeTruthy()
+		expect(o.label).toBe("Scripts · no longer here (a point that is gone)")
+		expect(o.acceptsLabels).toEqual([])
+		expect((o.scripts ?? []).map((s) => s.id)).toEqual([a.id, b.id])
+		expect(o.choices ?? []).toEqual([])
+	}, 60_000)
+
+	it("refuses adding to it", async () => {
+		const o = (await unplacedOption())!
+		const c = await createScript(db, {
+			typeId: "core:script:text/transform@1",
+			name: "Never placed"
+		})
+		await expect(
+			writeOption(db, SECRET, CHAT_RESPOND_SPEC_ID, admin(), o.id, [
+				a.id,
+				b.id,
+				c.id
+			])
+		).rejects.toThrow(OptionNotWritableError)
+	}, 60_000)
+
+	it("allows removing entries, and clearing it removes the row", async () => {
+		const o = (await unplacedOption())!
+		await writeOption(db, SECRET, CHAT_RESPOND_SPEC_ID, admin(), o.id, [b.id])
+		expect(((await unplacedOption())!.scripts ?? []).map((s) => s.id)).toEqual([
+			b.id
+		])
+		await writeOption(db, SECRET, CHAT_RESPOND_SPEC_ID, admin(), o.id, [])
+		expect(await unplacedOption()).toBeUndefined()
+		const left = await db
+			.select()
+			.from(schema.pipelineConfigValues)
+			.where(eq(schema.pipelineConfigValues.path, "a-point-that-is-gone"))
+		expect(left).toEqual([])
+	}, 60_000)
 })

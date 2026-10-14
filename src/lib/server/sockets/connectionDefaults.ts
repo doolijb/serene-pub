@@ -56,8 +56,10 @@ import {
 } from "$lib/server/connections/capabilityDefaults"
 import { withStarConsequences } from "$lib/server/connections/starConsequences"
 import { starRefusal } from "$lib/server/connections/starRefusal"
+import { refusedDefaults } from "$lib/server/connections/refusedDefaults"
+import { readJobUse, readNeededJobs } from "$lib/server/admin/jobUse"
 
-const DENIED = "Access denied. Only admin users can manage capability defaults."
+const DENIED = "Access denied. Only admin users can manage loadouts."
 
 function requireAdmin(
 	socket: any,
@@ -266,11 +268,31 @@ export async function buildConnectionDefaultsList(): Promise<Sockets.ConnectionD
 			: []
 	}
 
+	// The registered pairs that cannot do their job, from the rows
+	// already read — the Overview's Needs you asks the same function.
+	const refused: Record<string, Sockets.ConnectionDefaults.List.RefusedPair> =
+		{}
+	for (const r of refusedDefaults(
+		defaults,
+		connectionRows as SelectConnection[],
+		modelRows
+	))
+		refused[r.capability] = {
+			connectionId: r.connectionId,
+			connectionModelId: r.connectionModelId,
+			refusal: r.refusal
+		}
+
 	return {
 		combos,
 		defaults,
 		connectionOptions,
-		samplingOptions
+		samplingOptions,
+		refused,
+		// "Needed" versus "Off", from the same read the Overview's Needs you
+		// counts (`admin/jobUse.ts`), and where each job's steps sit.
+		needed: await readNeededJobs(db, combos),
+		usedBy: await readJobUse(db, combos)
 	}
 }
 
@@ -285,6 +307,27 @@ export const connectionDefaultsList: Handler<
 		emitToUser("connectionDefaults:list", res)
 		return res
 	}
+}
+
+/**
+ * Why `samplingConfigId` cannot be the sampling default for `capability`, or
+ * null when it can. Same filter as `samplingOptions`, including its rule that
+ * an untyped row (written before the shape column) reads as text generation.
+ */
+async function samplingRefusal(
+	capability: string,
+	samplingConfigId: number
+): Promise<string | null> {
+	const shape = samplingShapeForCapability(capability)
+	if (!shape) return `"${capability}" takes no sampling config.`
+	const row = await db.query.samplingConfigs.findFirst({
+		where: (s, { eq }) => eq(s.id, samplingConfigId),
+		columns: { id: true, shape: true }
+	})
+	if (!row) return "That sampling config no longer exists."
+	if ((row.shape ?? S.textGen) !== shape)
+		return `That sampling config is not for "${capability}".`
+	return null
 }
 
 export const connectionDefaultsSet: Handler<
@@ -331,6 +374,20 @@ export const connectionDefaultsSet: Handler<
 				connectionId: params.id,
 				connectionModelId: params.modelId
 			})
+			if (refusal) {
+				emitToUser("connectionDefaults:set:error", { error: refusal })
+				throw new Error(refusal)
+			}
+		}
+
+		// The sampling half is judged by the same correspondence the picker is
+		// built from (`samplingOptions` above): a config whose shape is not the
+		// capability's vocabulary would hand image samplers to a chat backend,
+		// and a capability with no vocabulary (`text->embedding`) takes none.
+		// The picker only offers matching configs; this is the refusal behind
+		// it for a stale tab or a raw call. Clearing is never judged.
+		if (params.half === "sampling" && params.id != null) {
+			const refusal = await samplingRefusal(params.capability, params.id)
 			if (refusal) {
 				emitToUser("connectionDefaults:set:error", { error: refusal })
 				throw new Error(refusal)

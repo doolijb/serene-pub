@@ -44,6 +44,7 @@ import { typedSocketOrNull } from "$lib/client/sockets/typedSocket"
 import {
 	groupLinesByOwner,
 	ledgerLines,
+	ledgerHeadLines,
 	linesByMessage,
 	type LedgerLine
 } from "$lib/shared/state/ledgerLines"
@@ -133,6 +134,8 @@ const slots = new SvelteMap<string, Descriptor>()
 const owners = new SvelteMap<string, OwnerRow>()
 const proposals = new SvelteMap<number, Proposal>()
 const messageLines = new SvelteMap<number, LedgerLine[]>()
+/** 🚧 The ledger head (§15 G13): clock moves anchored to no message. */
+let headLines = $state<LedgerLine[]>([])
 
 let started = false
 
@@ -167,12 +170,12 @@ function onProposals(res: Sockets.State.Proposals.Response) {
 
 function onLedger(res: Sockets.State.Ledger.Response) {
 	if (!mine(res?.sessionId)) return
-	const byMessage = linesByMessage(
-		ledgerLines(res.rows ?? [], res.baselines ?? [])
-	)
+	const lines = ledgerLines(res.rows ?? [], res.baselines ?? [])
+	const byMessage = linesByMessage(lines)
 	messageLines.clear()
-	for (const [messageId, lines] of byMessage)
-		messageLines.set(messageId, lines)
+	for (const [messageId, anchored] of byMessage)
+		messageLines.set(messageId, anchored)
+	headLines = ledgerHeadLines(lines)
 }
 
 /**
@@ -406,6 +409,7 @@ export function openSessionState(sessionId: number | null): void {
 	owners.clear()
 	proposals.clear()
 	messageLines.clear()
+	headLines = []
 	if (sessionId != null) refresh()
 }
 
@@ -477,6 +481,13 @@ export function sessionState() {
 		/** The ledger lines anchored to one message, owner by owner. */
 		ledgerFor(messageId: number) {
 			return groupLinesByOwner(messageLines.get(messageId) ?? [])
+		},
+		/**
+		 * 🚧 The conversation's ledger head (§15 G13): clock moves made
+		 * before the session had any line, owner by owner.
+		 */
+		ledgerHead() {
+			return groupLinesByOwner(headLines)
 		},
 		/**
 		 * The held changes anchored to one message — and the superseded ones

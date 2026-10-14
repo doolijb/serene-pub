@@ -1,6 +1,23 @@
+<script lang="ts" module>
+	import { withoutShared } from "$lib/shared/utils/sharedRows"
+	/**
+	 * The member page's tab, kept for the life of the page rather than the
+	 * board: moving between members keeps it, and so does leaving Cast and
+	 * coming back. Not the route's `inspector`, which is the entry editor's
+	 * compact step and is cleared by every `openCastMember`.
+	 */
+	let lastMemberTab = "member"
+</script>
+
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import ResizableSplit from "$lib/client/components/panels/ResizableSplit.svelte"
+	import PanelTabStrip, {
+		type PanelTab
+	} from "$lib/client/components/panels/PanelTabStrip.svelte"
+	import MemberTimeline from "./cast/MemberTimeline.svelte"
+	import { memberScenes, type MemberScene } from "./cast/memberScenes"
+	import type { TimeSceneRow } from "./time/storyTime"
 	import { LORE_SPLIT_KEY } from "./layoutMode"
 	import { onDestroy, onMount } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
@@ -28,7 +45,6 @@
 		type CastRow
 	} from "./castPool"
 	import CastAvatar from "./cast/CastAvatar.svelte"
-	import { avatarSrc } from "$lib/client/utils/media"
 	import CastDuplicatesPanel from "./cast/CastDuplicatesPanel.svelte"
 	import DeleteCastMemberModal from "./cast/DeleteCastMemberModal.svelte"
 	import {
@@ -46,6 +62,7 @@
 	import { v4 as uuid } from "uuid"
 	import { toastUnsaved } from "$lib/client/utils/toastUnsaved"
 	import CastMemberForm from "./cast/CastMemberForm.svelte"
+	import { castFaceSrc } from "./cast/memberFace"
 	import PresencesPanel from "./cast/PresencesPanel.svelte"
 	import CastRelationships from "./cast/CastRelationships.svelte"
 	import {
@@ -90,9 +107,11 @@
 	/**
 	 * Cast: everyone the book's world holds, and the lore private to each.
 	 *
-	 * The list column is the cast; the editor column is one member's page —
-	 * their identity and standing, then the lore anchored to them, with the
-	 * Character Lore editor opening in place when one is picked. The inspector
+	 * The list column is the cast; the editor column is one member's page,
+	 * in four tabs: Member (their identity, standing, presences and dated
+	 * changes), Lore (what is anchored to them, with the Character Lore
+	 * editor opening in place when one is picked), Relationships, and
+	 * Timeline (the scenes they are in). The inspector
 	 * carries the two review surfaces that act on the cast as a whole:
 	 * suggestions the story has earned, and pairs that may be one person.
 	 */
@@ -125,7 +144,7 @@
 		 * Every placement in the book, for the member page's own panel.
 		 *
 		 * ⚠ The whole book's, not this member's: the panel filters, and the
-		 * hub already holds one copy that the World bar and the Lives lens
+		 * hub already holds one copy that the roster popover and the Lives lens
 		 * read from. A second, narrower copy is a second source of truth.
 		 */
 		presences?: readonly Sockets.Amendments.Presence[]
@@ -180,6 +199,12 @@
 	 * hears every cascade (a member deleted or absorbed included).
 	 */
 	const book = getBookData()
+	/**
+	 * A shared book is read-only (PLAN-private-messages §6.7): no New, no
+	 * suggestions to accept, no lore or member writes — every member page
+	 * still reads.
+	 */
+	let readOnly = $derived(book.readOnly)
 	let castRows = $derived(book.cast as unknown as CastRow[])
 	/**
 	 * The book's relationships and cast rows: the workspace's ONE copy (plan
@@ -253,6 +278,14 @@
 	let lorePristine = $state<Record<string, any> | null>(null)
 	let creatingLore = $state(false)
 	let awaitingSave = $state<string | null>(null)
+	/** The lore editor's ⋯: the entry's marks, Pinned and Off. */
+	let loreMenuOpen = $state(false)
+
+	/** The member page's tab; see `lastMemberTab`. */
+	let memberTab = $state<string>(lastMemberTab)
+	$effect(() => {
+		lastMemberTab = memberTab
+	})
 
 	let inspectorTab = $state<"suggestions" | "duplicates">("suggestions")
 	/**
@@ -322,6 +355,12 @@
 			: null
 	)
 	let editorOpen = $derived(!!selectedMember || creatingLore)
+	/**
+	 * Lore open with no member page to hold it — an entry addressed with no
+	 * member — fills the editor column by itself; otherwise it opens in the
+	 * member page's Lore tab.
+	 */
+	let loreAlone = $derived(!!loreDraft && !(selectedMember && selectedRow))
 
 	let bindingsForEditor = $derived(resolvedCast as BindingWithRelations[])
 
@@ -362,8 +401,8 @@
 	let edgeCounts = $derived(edgeCountsOf(relationships))
 
 	/**
-	 * Each member's face as they read at the moment — name, kind and the
-	 * linked card's avatar — by id and by graph key, for the list's rows and
+	 * Each member's face as they read at the moment — name, kind and their
+	 * own face when retold, else the linked card's avatar — by id and by graph key, for the list's rows and
 	 * cards (note 7, 11) and the far end of a relationship (note 9).
 	 */
 	let faces = $derived(
@@ -376,7 +415,8 @@
 						id: row.id,
 						name: member.name,
 						kind: member.kind,
-						src: avatarSrc(row.character as any)
+						// Their face when retold, else the card's avatar.
+						src: castFaceSrc(row, row.character as any)
 					}
 				]
 			})
@@ -468,6 +508,8 @@
 				: null
 		if (key === loreDraftKey) return
 		loreDraftKey = key
+		// Lore opens where it is listed: the member page's Lore tab.
+		if (key) memberTab = "lore"
 		if (creatingLore) return
 		loreDraft = selectedLore
 			? CHARACTER_LORE_DOOR.toDraft(selectedLore)
@@ -520,6 +562,7 @@
 		discardLoreDraft()
 		creatingLore = true
 		loreDraftKey = "new"
+		memberTab = "lore"
 		loreDraft = {
 			...CHARACTER_LORE_DOOR.newDraft(lorebookId),
 			lorebookBindingId: selectedMember.id
@@ -647,6 +690,52 @@
 	 * applies, so "from now on" and "change the member" are one sentence.
 	 */
 	let momentDate = $derived(parseMoment(moment))
+
+	/**
+	 * The Timeline tab: the scenes the member is in, on the line being read
+	 * (the workspace's scenes, already scoped to it), dated by the history
+	 * entries they were compiled into.
+	 */
+	let timelineRows = $derived(
+		selectedMember
+			? memberScenes({
+					castId: selectedMember.id,
+					scenes: book.scenes as unknown as TimeSceneRow[],
+					entries: historyEntries,
+					at: momentDate
+				})
+			: []
+	)
+
+	let memberTabs = $derived<PanelTab[]>([
+		{ value: "member", label: "Member", icon: Icons.IdCard },
+		{
+			value: "lore",
+			label: "Lore",
+			icon: Icons.ScrollText,
+			count: anchoredLore.length
+		},
+		{
+			value: "relationships",
+			label: "Relationships",
+			icon: Icons.HeartHandshake,
+			count: selectedEdges.length
+		},
+		{ value: "timeline", label: "Timeline", icon: Icons.History }
+	])
+
+	/** A scene opens under Scenes, addressed under its history entry. */
+	async function openScene(row: MemberScene) {
+		if (!(await loreRoute.confirmLeave())) return
+		discardLoreDraft()
+		void loreRoute.navigate({
+			type: "openEntry",
+			scope: "scenes",
+			entryId: row.historyEntryId,
+			sceneId: row.id,
+			castId: null
+		})
+	}
 
 	/**
 	 * The moment the member's form is being typed at, which is where its
@@ -798,7 +887,12 @@
 		if (!selectedMember || !memberMoment) return false
 		const fields = memberDiff(patch, pristine)
 		if (!fields) return false
-		return writeAmendment(selectedMember.id, fields, "Amended", memberMoment)
+		return writeAmendment(
+			selectedMember.id,
+			fields,
+			"Amended",
+			memberMoment
+		)
 	}
 
 	/**
@@ -901,6 +995,20 @@
 		})
 	}
 
+	/** Add a member from a character card: the picker, linked to nothing. */
+	function startAddCharacter() {
+		newMenuOpen = false
+		linkTargetId = null
+		characterPickerOpen = true
+	}
+
+	/** Add a background character: the name form, empty. */
+	function startAddBackground() {
+		newMenuOpen = false
+		backgroundName = ""
+		addingBackground = true
+	}
+
 	function addBackground() {
 		const name = backgroundName.trim()
 		if (!name) return
@@ -961,23 +1069,30 @@
 	}
 
 	/**
-	 * Cards the picker offers: none another member has, linked or dated (a
-	 * card draws one member, plan A25), and none a member already READS as at
-	 * this moment, so the member's own current card is not offered back.
+	 * Cards the picker leaves out, as its `excludeIds`: every card another
+	 * member has, linked or dated (a card draws one member, plan A25), and
+	 * every card a member already READS as at this moment, so the member's own
+	 * current card is not offered back (`offeredCards`). The picker gets the
+	 * whole library beside them, so it can tell "all taken" from "none exist".
 	 */
-	let unlinkedCharacters = $derived(
-		offeredCards({
-			characters: characterList,
-			members: castRows,
-			resolved: resolvedCast,
-			amendmentsOf: (id) => castAmendmentsFor?.(id) ?? [],
-			target: linkTargetId
-		})
-	)
+	let takenCardIds = $derived.by(() => {
+		const offered = new Set(
+			offeredCards({
+				characters: characterList,
+				members: castRows,
+				resolved: resolvedCast,
+				amendmentsOf: (id) => castAmendmentsFor?.(id) ?? [],
+				target: linkTargetId
+			}).map((c) => c.id)
+		)
+		return characterList.flatMap((c) =>
+			c.id != null && !offered.has(c.id) ? [c.id] : []
+		)
+	})
 	let channel: ReturnType<typeof entryChannel> | null = null
 
 	function handleCharactersList(msg: Sockets.Characters.List.Response) {
-		characterList = msg.characterList || []
+		characterList = withoutShared(msg.characterList) // shared rows are read and copy only (PLAN-private-messages §6.7, Q3)
 	}
 
 	/**
@@ -1039,6 +1154,7 @@
 </script>
 
 {#snippet newMenu()}
+	{#if !readOnly}
 	<Popover
 		open={newMenuOpen}
 		onOpenChange={(e) => (newMenuOpen = e.open)}
@@ -1058,25 +1174,17 @@
 					class="card bg-surface-100-900 flex min-w-52 flex-col gap-1 p-2 shadow-xl"
 				>
 					<button
-						class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+						class="btn btn-sm preset-tonal-surface w-full justify-start"
 						type="button"
-						onclick={() => {
-							newMenuOpen = false
-							linkTargetId = null
-							characterPickerOpen = true
-						}}
+						onclick={startAddCharacter}
 					>
 						<Icons.User size={14} aria-hidden="true" /> From a character
 					</button>
 					<button
-						class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+						class="btn btn-sm preset-tonal-surface w-full justify-start"
 						type="button"
 						title="Someone with no card of their own: an innkeeper, a rival nobody has met yet"
-						onclick={() => {
-							newMenuOpen = false
-							backgroundName = ""
-							addingBackground = true
-						}}
+						onclick={startAddBackground}
 					>
 						<Icons.UserRound size={14} aria-hidden="true" /> Background
 						character
@@ -1085,6 +1193,7 @@
 			</Popover.Positioner>
 		</Portal>
 	</Popover>
+	{/if}
 {/snippet}
 
 {#snippet castList()}
@@ -1100,6 +1209,7 @@
 				aria-label="Search the cast"
 				bind:value={search}
 			/>
+			{#if !readOnly}
 			<button
 				type="button"
 				class="btn btn-sm shrink-0 gap-1 {reviewOpen
@@ -1119,10 +1229,11 @@
 					</span>
 				{/if}
 			</button>
+			{/if}
 			{@render newMenu()}
 		</div>
 
-		{#if reviewOpen}
+		{#if reviewOpen && !readOnly}
 			<div class="flex max-h-[50%] shrink-0 flex-col overflow-y-auto">
 				{@render inspector()}
 			</div>
@@ -1146,7 +1257,7 @@
 				/>
 				<div class="flex justify-end gap-2">
 					<button
-						class="btn btn-sm preset-filled-surface-400-600"
+						class="btn btn-sm preset-tonal-surface"
 						type="button"
 						onclick={() => (addingBackground = false)}
 					>
@@ -1177,7 +1288,15 @@
 					icon={Icons.Users}
 					message={search
 						? `Nobody in the cast matches "${search}".`
-						: "Nobody is in the cast yet. Add a character or a background character, and the lore about them lives on their page."}
+						: readOnly
+							? "Nobody is in the cast yet."
+							: "Nobody is in the cast yet. Add a character or a background character, and the lore about them lives on their page."}
+					ctaLabel={search || readOnly ? undefined : "Add a character"}
+					onCta={search || readOnly ? undefined : startAddCharacter}
+					secondaryLabel={search || readOnly
+						? undefined
+						: "Add a background character"}
+					onSecondary={search || readOnly ? undefined : startAddBackground}
 				/>
 			{:else if lens === "cards"}
 				<!-- The card view (note 11): portrait-first, the character
@@ -1358,9 +1477,9 @@
 							: "entries are"} anchored to nobody
 					</p>
 					<p class="text-surface-700-300 mt-1">
-						Lore with no member is private to nobody and reaches no
-						prompt. Open it from Everything and pick who it belongs
-						to.
+						Lore with no member is the world's: only the narrator
+						reads it, never a character. Open it from Everything and
+						pick who it belongs to.
 					</p>
 				</div>
 			{/if}
@@ -1368,17 +1487,97 @@
 	</div>
 {/snippet}
 
+{#snippet markToggle(
+	on: boolean,
+	Icon: typeof Icons.Pin,
+	label: string,
+	hint: string,
+	mark: string,
+	toggle: () => void
+)}
+	<!-- An entry mark as a toggle, as the entry editor's ⋯ draws it: tonal
+	     primary with `aria-pressed` while ON, the check saying it without
+	     colour. -->
+	<button
+		class="btn btn-sm w-full justify-start {on
+			? 'preset-tonal-primary'
+			: 'preset-tonal-surface'}"
+		type="button"
+		aria-pressed={on}
+		data-lore-mark={mark}
+		onclick={toggle}
+	>
+		<Icon size={14} aria-hidden="true" />
+		<span>{label}</span>
+		<span class="ml-auto text-[11px] font-normal opacity-75">{hint}</span>
+		<Icons.Check
+			size={14}
+			class="shrink-0 {on ? '' : 'invisible'}"
+			aria-hidden="true"
+		/>
+	</button>
+{/snippet}
+
+{#snippet loreMenu()}
+	<!-- The lore's state, not its fields: Pinned and Off are marks on the
+	     draft, saved with it, as in the entry editor's ⋯. -->
+	<Popover
+		open={loreMenuOpen}
+		onOpenChange={(e) => (loreMenuOpen = e.open)}
+		positioning={{ placement: "bottom-end" }}
+	>
+		<Popover.Trigger
+			class="btn btn-sm preset-tonal-surface shrink-0 p-2"
+			title="More options"
+			aria-label="More options for this lore"
+		>
+			<Icons.Ellipsis size={16} aria-hidden="true" />
+		</Popover.Trigger>
+		<Portal>
+			<Popover.Positioner class="z-[1000]!">
+				<Popover.Content
+					class="card bg-surface-100-900 flex w-[min(90vw,300px)] flex-col gap-2 p-3 shadow-xl"
+				>
+					{#if loreDraft}
+						{@render markToggle(
+							!!loreDraft.constant,
+							Icons.Pin,
+							"Pinned",
+							"Always in the prompt",
+							"pinned",
+							() => (loreDraft!.constant = !loreDraft!.constant)
+						)}
+						{@render markToggle(
+							loreDraft.enabled === false,
+							Icons.Ghost,
+							"Off",
+							"Out of every prompt",
+							"off",
+							() =>
+								(loreDraft!.enabled =
+									loreDraft!.enabled === false)
+						)}
+					{/if}
+				</Popover.Content>
+			</Popover.Positioner>
+		</Portal>
+	</Popover>
+{/snippet}
+
 {#snippet loreEditor()}
 	{#if loreDraft}
 		{@const Editor = CHARACTER_LORE_DOOR.editor}
+		{@const backLabel = selectedMember
+			? `Back to ${selectedMember.name}'s lore`
+			: "Back to the cast"}
 		<div class="flex flex-col gap-4">
 			<div class="flex flex-wrap items-center gap-2">
 				<button
-					class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
+					class="btn btn-sm preset-tonal-surface shrink-0 p-2"
 					type="button"
 					onclick={closeLore}
-					title="Back to the cast member"
-					aria-label="Back to the cast member"
+					title={backLabel}
+					aria-label={backLabel}
 				>
 					<Icons.ChevronLeft size={16} aria-hidden="true" />
 				</button>
@@ -1389,18 +1588,25 @@
 							? CHARACTER_LORE_DOOR.title(selectedLore)
 							: ""}
 				</h3>
-				<button
-					class="btn btn-sm preset-filled-primary-500 shrink-0"
-					type="button"
-					onclick={saveLore}
-					disabled={loreSaving ||
-						!CHARACTER_LORE_DOOR.validate(loreDraft, loreEntries)}
-				>
-					<Icons.Save size={16} aria-hidden="true" />
-					<span>{creatingLore ? "Create" : "Save"}</span>
-				</button>
+				{#if readOnly}
+					<span class="text-surface-600-400 shrink-0 text-xs">
+						Read only
+					</span>
+				{:else}
+					<button
+						class="btn btn-sm preset-filled-primary-500 shrink-0"
+						type="button"
+						onclick={saveLore}
+						disabled={loreSaving ||
+							!CHARACTER_LORE_DOOR.validate(loreDraft, loreEntries)}
+					>
+						<Icons.Save size={16} aria-hidden="true" />
+						<span>{creatingLore ? "Create" : "Save"}</span>
+					</button>
+					{@render loreMenu()}
+				{/if}
 			</div>
-			<div class="flex flex-col gap-4">
+			<fieldset class="flex min-w-0 flex-col gap-4" disabled={readOnly}>
 				<Editor
 					bind:draft={loreDraft}
 					source={selectedLore}
@@ -1410,17 +1616,22 @@
 					{lorebookId}
 					siblings={loreEntries}
 				/>
-			</div>
+			</fieldset>
 		</div>
 	{/if}
 {/snippet}
 
 {#snippet memberPage()}
 	{#if selectedMember && selectedRow}
-		<div class="flex flex-col gap-4">
-			<div class="flex items-center gap-2">
+		<!-- One member, in four tabs. Every panel stays mounted and the others
+		     are `hidden`, so a form typed into on one tab keeps its draft (and
+		     its unsaved-changes guard) while another is on show. A panel sets
+		     no `display` of its own, so `hidden` stands; the strip stays put
+		     and the panels scroll under it. -->
+		<div class="flex min-h-0 flex-1 flex-col gap-3" data-cast-member-page>
+			<div class="flex shrink-0 items-center gap-2">
 				<button
-					class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
+					class="btn btn-sm preset-tonal-surface shrink-0 p-2"
 					type="button"
 					onclick={closeMember}
 					title="Close"
@@ -1433,104 +1644,177 @@
 				</h3>
 			</div>
 
-			<CastMemberForm
-				member={selectedMember}
-				row={selectedRow}
-				bind:hasUnsavedChanges={memberDirty}
-				onSave={saveMember}
-				onAmend={memberMoment ? amendMember : undefined}
-				momentLabel={memberMoment ? formatDate(memberMoment) : null}
-				onDelete={() => void requestDelete(selectedMember!)}
-				onUnlink={(how) => void unlink(selectedMember!.id, how)}
-				onLinkCharacter={(how) => {
-					linkTargetId = selectedMember!.id
-					linkHow = how
-					characterPickerOpen = true
-				}}
+			<PanelTabStrip
+				bind:value={memberTab}
+				tabs={memberTabs}
+				ariaLabel="{selectedMember.name}'s page"
+				panelIdPrefix="cast-member"
 			/>
 
-			<PresencesPanel
-				{lorebookId}
-				castId={selectedMember.id}
-				memberName={selectedMember.name}
-				{presences}
-				{line}
-				{branchName}
-				{moment}
-			/>
-
-			{#if castAmendmentsFor}
-				<AmendmentList
-					{lorebookId}
-					amendments={castAmendmentsFor(selectedMember.id)}
-					{moment}
-					subject="cast"
-				/>
-			{/if}
-
-			<CastRelationships
-				rows={selectedEdges}
-				inStory={selectedInStory}
-				laterLabel={laterFor}
-				isNew={(edge) => newEdgeIds.has(edge.id)}
-				onKeep={(edge) => newEdgeIds.delete(edge.id)}
-				onSeeInGraph={() => onViewRelationships?.(selectedMember!.id)}
-				faceOf={faceOfKey}
-				onOpenMember={selectMember}
-			/>
-
-			<div class="panel-inset flex flex-col gap-2">
-				<div class="flex items-center gap-2">
-					<h4 class="flex-1 text-sm font-semibold">
-						Lore about {selectedMember.name}
-						{anchoredLore.length}
-					</h4>
-					<button
-						class="btn btn-sm preset-filled-primary-500 shrink-0"
-						type="button"
-						onclick={startLore}
+			<div class="min-h-0 flex-1 overflow-y-auto">
+				<div
+					id="cast-member-member"
+					role="tabpanel"
+					aria-labelledby="cast-member-member-tab"
+					hidden={memberTab !== "member"}
+				>
+					<!-- A shared book: the member reads, every control of the
+					     form and of their placings is disabled. -->
+					<fieldset
+						class="flex min-w-0 flex-col gap-4"
+						disabled={readOnly}
+						data-lore-read-only={readOnly ? "" : undefined}
 					>
-						<Icons.Plus size={14} aria-hidden="true" /> Add lore
-					</button>
+						<CastMemberForm
+							member={selectedMember}
+							row={selectedRow}
+							{lorebookId}
+							bind:hasUnsavedChanges={memberDirty}
+							onSave={saveMember}
+							onAmend={memberMoment ? amendMember : undefined}
+							momentLabel={memberMoment
+								? formatDate(memberMoment)
+								: null}
+							onDelete={() => void requestDelete(selectedMember!)}
+							onUnlink={(how) =>
+								void unlink(selectedMember!.id, how)}
+							onLinkCharacter={(how) => {
+								linkTargetId = selectedMember!.id
+								linkHow = how
+								characterPickerOpen = true
+							}}
+						/>
+
+						<PresencesPanel
+							{lorebookId}
+							castId={selectedMember.id}
+							memberName={selectedMember.name}
+							{presences}
+							{line}
+							{branchName}
+							{moment}
+						/>
+
+						{#if castAmendmentsFor}
+							<AmendmentList
+								{lorebookId}
+								amendments={castAmendmentsFor(
+									selectedMember.id
+								)}
+								{moment}
+								subject="cast"
+							/>
+						{/if}
+					</fieldset>
 				</div>
-				{#if readInFor(selectedMember.id)}
-					<p class="text-surface-600-400 text-xs" data-cast-read-in>
-						{castReadInLine({ fired: true })}
-					</p>
-				{/if}
-				{#if anchoredLore.length === 0}
-					<p class="text-surface-700-300 text-xs italic">
-						Nothing private to them yet. Character lore is what only
-						this member would know: secrets, backstory, abilities.
-					</p>
-				{:else}
-					<ul class="flex flex-col gap-2">
-						{#each anchoredLore as entry (entry.id)}
-							<li>
-								<button
-									type="button"
-									data-cast-lore-row
-									data-entry-key="entry#{entry.id}"
-									class="preset-filled-surface-100-900 hover:bg-surface-200-800 flex w-full flex-col gap-0.5 rounded-lg p-2 text-left transition-colors"
-									class:opacity-60={entry.enabled === false}
-									onclick={() => selectLore(entry)}
+
+				<div
+					id="cast-member-lore"
+					role="tabpanel"
+					aria-labelledby="cast-member-lore-tab"
+					hidden={memberTab !== "lore"}
+				>
+					<!-- The Character Lore editor opens here, in place of the
+					     list, and its back returns to the list. -->
+					{#if loreDraft}
+						{@render loreEditor()}
+					{:else}
+						<div class="panel-inset flex flex-col gap-2">
+							<div class="flex items-center gap-2">
+								<h4 class="flex-1 text-sm font-semibold">
+									Lore about {selectedMember.name}
+									{anchoredLore.length}
+								</h4>
+								{#if !readOnly}
+									<button
+										class="btn btn-sm preset-filled-primary-500 shrink-0"
+										type="button"
+										onclick={startLore}
+									>
+										<Icons.Plus size={14} aria-hidden="true" /> Add
+										lore
+									</button>
+								{/if}
+							</div>
+							{#if readInFor(selectedMember.id)}
+								<p
+									class="text-surface-600-400 text-xs"
+									data-cast-read-in
 								>
-									<span
-										class="truncate text-sm font-semibold"
-									>
-										{entry.name || "Untitled"}
-									</span>
-									<span
-										class="text-surface-600-400 line-clamp-2 text-xs"
-									>
-										{entry.content?.trim() ||
-											"No content yet."}
-									</span>
-								</button>
-							</li>
-						{/each}
-					</ul>
-				{/if}
+									{castReadInLine({ fired: true })}
+								</p>
+							{/if}
+							{#if anchoredLore.length === 0}
+								<p class="text-surface-700-300 text-xs italic">
+									Nothing private to them yet. Character lore
+									is what only this member would know:
+									secrets, backstory, abilities.
+								</p>
+							{:else}
+								<ul class="flex flex-col gap-2">
+									{#each anchoredLore as entry (entry.id)}
+										<li>
+											<button
+												type="button"
+												data-cast-lore-row
+												data-entry-key="entry#{entry.id}"
+												class="preset-filled-surface-100-900 hover:bg-surface-200-800 flex w-full flex-col gap-0.5 rounded-lg p-2 text-left transition-colors"
+												class:opacity-60={entry.enabled ===
+													false}
+												onclick={() =>
+													selectLore(entry)}
+											>
+												<span
+													class="truncate text-sm font-semibold"
+												>
+													{entry.name || "Untitled"}
+												</span>
+												<span
+													class="text-surface-600-400 line-clamp-2 text-xs"
+												>
+													{entry.content?.trim() ||
+														"No content yet."}
+												</span>
+											</button>
+										</li>
+									{/each}
+								</ul>
+							{/if}
+						</div>
+					{/if}
+				</div>
+
+				<div
+					id="cast-member-relationships"
+					role="tabpanel"
+					aria-labelledby="cast-member-relationships-tab"
+					hidden={memberTab !== "relationships"}
+				>
+					<CastRelationships
+						rows={selectedEdges}
+						inStory={selectedInStory}
+						laterLabel={laterFor}
+						isNew={(edge) => newEdgeIds.has(edge.id)}
+						onKeep={(edge) => newEdgeIds.delete(edge.id)}
+						onSeeInGraph={() =>
+							onViewRelationships?.(selectedMember!.id)}
+						faceOf={faceOfKey}
+						onOpenMember={selectMember}
+					/>
+				</div>
+
+				<div
+					id="cast-member-timeline"
+					role="tabpanel"
+					aria-labelledby="cast-member-timeline-tab"
+					hidden={memberTab !== "timeline"}
+				>
+					<MemberTimeline
+						rows={timelineRows}
+						memberName={selectedMember.name}
+						onOpenScene={(row) => void openScene(row)}
+					/>
+				</div>
 			</div>
 		</div>
 	{:else}
@@ -1606,7 +1890,7 @@
 					class="panel-card flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-3"
 					data-cast-editor
 				>
-					{#if loreDraft}
+					{#if loreAlone}
 						{@render loreEditor()}
 					{:else}
 						{@render memberPage()}
@@ -1621,7 +1905,7 @@
 		>
 			<!-- No review panel here: it acts on the cast as a whole, not
 			     on the member open (#112). It sits under the roster. -->
-			{#if loreDraft}
+			{#if loreAlone}
 				{@render loreEditor()}
 			{:else}
 				{@render memberPage()}
@@ -1656,5 +1940,6 @@
 		linkTargetId = null
 		linkHow = "base"
 	}}
-	characters={unlinkedCharacters}
+	characters={characterList}
+	excludeIds={takenCardIds}
 />

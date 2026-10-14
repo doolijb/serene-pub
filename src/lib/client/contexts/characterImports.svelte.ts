@@ -91,7 +91,8 @@ export function createCharacterImports(): CharacterImportsCtx {
 		(msg) => {
 			const toast = cardImportedToast({
 				character: msg.character,
-				warnings: msg.warnings
+				warnings: msg.warnings,
+				summary: msg.summary
 			})
 			if (toast)
 				toaster[toast.kind]({

@@ -12,6 +12,7 @@
  *              openForm: { action: string | null } | null },
  *   state:   <ResolvedState — world · cast · slots · version, from stateFor>,
  *   sprites: { byId: { <characterId>: { set, label } }, <castKey>: { set, label } },
+ *   backdrop: { set: boolean, mediaId: number | null },
  *   item?:   { id, isNewest, hidden, generating, role, mine, hasSwipes, greeting }
  * }
  * ```
@@ -27,6 +28,11 @@
  * them into if it does. Derived here, never stored — so `sprites.verity.label
  * equals 'armoured'` gates an action on a face, keyed exactly as
  * `state.cast` is.
+ *
+ * `backdrop` is the session's **backdrop** (`sessions.backdropMediaId`,
+ * DESIGN-image-generation §6.4): whether one is set and its file id — so
+ * `backdrop.set equals false` offers an *Illustrate* action only until a
+ * picture is there.
  *
  * `state` is the resolver's answer (`state/resolve.ts`), keyed as a template
  * reads it — `state.world.location`, `state.cast.verity.hp`, and
@@ -56,6 +62,7 @@ import * as runRegistry from "$lib/server/pipelines/runtime/runRegistry"
 import { canActOnMessage } from "$lib/server/messages/permissions"
 import { MAX_RUN_DEPTH, type RunLineage } from "$lib/server/pipelines/runtime/lineage"
 import { itemValuesOf, type ItemValues } from "$lib/shared/actions/itemValues"
+import { publishedBackdrop, type PublishedBackdrop } from "$lib/server/sessions/backdrop"
 
 export {
 	itemValuesOf,
@@ -73,6 +80,8 @@ export interface PublishedValues {
 	state: ResolvedState
 	/** Each cast member's current sprite — see the module comment. */
 	sprites: PublishedSprites
+	/** The session's backdrop — see the module comment. */
+	backdrop: PublishedBackdrop
 	item?: ItemValues
 }
 
@@ -200,15 +209,16 @@ export async function publishedValues(
 	sessionId: number,
 	opts: { lineage?: RunLineage } = {}
 ): Promise<PublishedValues> {
-	const [generating, fields, state, open] = await Promise.all([
+	const [generating, fields, state, open, backdrop] = await Promise.all([
 		sessionGenerating(db, sessionId, opts),
 		genreFieldsFor(db, sessionId),
 		stateFor(db, sessionId),
-		openFormOf(db, sessionId)
+		openFormOf(db, sessionId),
+		publishedBackdrop(db, sessionId)
 	])
 	const sprites = await publishedSprites(db, sessionId, state)
 	const openForm = open ? { action: open.action } : null
-	return { session: { generating, fields, openForm }, state, sprites }
+	return { session: { generating, fields, openForm }, state, sprites, backdrop }
 }
 
 /**

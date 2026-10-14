@@ -5,8 +5,22 @@
  * the tests need no database; `panel/groups.int.test.ts` pins the real one.
  */
 
+import type { PortLine, StepEffect } from "./settingsGroups"
+
 type Option = Sockets.Pipelines.Option
 type Group = Sockets.Pipelines.SettingsGroup
+
+/**
+ * What a step and its agent receive and carry out (the server's `panel/`
+ * lane, 2026-10-12). Merged in with `Object.assign` so the fixture compiles
+ * before and after `Sockets.Pipelines` carries the fields.
+ */
+interface FixturePorts {
+	group?: { receives?: PortLine[]; carriesOut?: PortLine[] }
+	step?: { receives?: PortLine[]; carriesOut?: PortLine[]; effect?: StepEffect }
+}
+
+export const PLAN_LINE: PortLine = { port: "plan", shape: "Plan", label: "The turn's plan" }
 
 let seq = 0
 export function option(over: Partial<Option> & Pick<Option, "label" | "control">): Option {
@@ -51,7 +65,20 @@ function callGroup(
 	heading: string,
 	purpose: string,
 	step: string,
-	opts: { enabled?: boolean; samplingSetHere?: boolean } = {}
+	opts: { enabled?: boolean; samplingSetHere?: boolean; ports?: FixturePorts } = {}
+): Group {
+	const group = callGroupRows(key, heading, purpose, step, opts)
+	if (opts.ports?.group) Object.assign(group, opts.ports.group)
+	if (opts.ports?.step) Object.assign(group.advanced[0]!, opts.ports.step)
+	return group
+}
+
+function callGroupRows(
+	key: string,
+	heading: string,
+	purpose: string,
+	step: string,
+	opts: { enabled?: boolean; samplingSetHere?: boolean }
 ): Group {
 	const own = { key: `${key}-call`, heading: step }
 	const context = { key: `${key}-context`, heading: "Build context" }
@@ -143,9 +170,25 @@ export function adventureGroups(): Group[] {
 	return [
 		callGroup("g0", "Planner", "Decides what happens next and who speaks.", "Plan the turn", {
 			enabled: true,
-			samplingSetHere: true
+			samplingSetHere: true,
+			ports: {
+				group: { receives: [], carriesOut: [PLAN_LINE] },
+				step: { receives: [], carriesOut: [PLAN_LINE], effect: "none" }
+			}
 		}),
-		callGroup("g1", "Narrator", "Writes the scene from the plan.", "Narrate the scene"),
+		callGroup("g1", "Narrator", "Writes the scene from the plan.", "Narrate the scene", {
+			ports: {
+				group: {
+					receives: [{ ...PLAN_LINE, from: "g0-call" }],
+					carriesOut: [{ port: "reply", shape: "Message", label: "The scene" }]
+				},
+				step: {
+					receives: [{ ...PLAN_LINE, from: "g0-call" }],
+					carriesOut: [],
+					effect: "write"
+				}
+			}
+		}),
 		callGroup("g2", "Voices", "Each cast member speaks their own line.", "Voice a line"),
 		callGroup("g3", "State keeper", "Keeps the record of what changed.", "Keep the record", {
 			enabled: true

@@ -4,7 +4,7 @@
  * filter use, which capability defaults a connection holds, and what a
  * delete takes with it.
  */
-import { capabilityLabel } from "@serene-pub/sdk"
+import { defaultLoadoutName } from "$lib/shared/loadouts/defaultLoadoutName"
 import type { AdminDeletion } from "$lib/client/components/admin/changelist"
 
 type ListRow = Pick<Sockets.Connections.List.Row, "id" | "name" | "type"> & {
@@ -16,7 +16,7 @@ type Defaults = Record<
 	{ connectionId?: number | null; connectionModelId?: number | null } | undefined
 >
 
-/** A column's word for a modality; the Connections view's section names are headings. */
+/** A column's word for a modality; the Models view's section names are headings. */
 const MODALITY_WORD: Record<string, string> = {
 	"text-gen": "Text",
 	"image-gen": "Image",
@@ -30,12 +30,9 @@ export function modalityWord(modality: string | null | undefined): string {
 	return MODALITY_WORD[modality] ?? modality
 }
 
+/** A transform's default, named by its loadout: "Reply", "Embeddings". */
 export function capabilityWord(capability: string): string {
-	try {
-		return capabilityLabel(capability as any)
-	} catch {
-		return capability
-	}
+	return defaultLoadoutName(capability)
 }
 
 export interface HeldDefault {
@@ -78,7 +75,7 @@ export function connectionDeletion(
 		title: n === 1 ? `Delete ${rows[0].name ?? "this connection"}?` : `Delete ${n} ${noun}?`,
 		summary:
 			(released.length
-				? `Anything set to use ${n === 1 ? "it" : "them"} will need another choice: ${released.length === 1 ? "one default goes" : `${released.length} defaults go`} unset. `
+				? `Anything set to use ${n === 1 ? "it" : "them"} will need another choice: ${released.length === 1 ? "one loadout is" : `${released.length} loadouts are`} emptied. `
 				: "") + "This cannot be undone.",
 		objects: rows.map((r) => {
 			const held = defaultsHeldBy(r, defaults)
@@ -95,7 +92,7 @@ export function connectionDeletion(
 			}
 			if (held.length)
 				related.push({
-					label: "Default released for",
+					label: "Loadouts emptied",
 					items: held.map((h) => h.label)
 				})
 			return { label: r.name ?? `Connection ${r.id}`, related }
@@ -106,9 +103,18 @@ export function connectionDeletion(
 
 /**
  * The manager switches a delete also turns off, so no half-removed install
- * is left: KoboldCPP whenever its managed row goes, Ollama only with the last
- * Ollama connection (every Ollama is managed against its own host). The
- * same rule `ConnectionsSidebar.removeManager` applies to one row.
+ * is left: each manager only with the LAST of its rows — KoboldCPP with the
+ * last managed KoboldCPP row, Ollama with the last Ollama connection (every
+ * Ollama is managed against its own host).
+ *
+ * ⚠ The last one, not any one: a pub can hold more than one managed KoboldCPP
+ * row (an image row not yet folded, an import); switching the manager off
+ * on any one of them leaves the row still in use with a manager that will
+ * not spawn.
+ *
+ * Computed when the delete is ASKED (the list broadcast that follows drops
+ * the row), and emitted by the caller only once the delete is acknowledged —
+ * a refused delete must not leave a live connection with its manager off.
  */
 export function managerFlagsReleased(
 	deletingIds: readonly number[],
@@ -122,10 +128,12 @@ export function managerFlagsReleased(
 		| "systemSettings:updateKoboldCppManagerEnabled"
 		| "systemSettings:updateOllamaManagerEnabled"
 	)[] = []
-	if (rows.some((r) => r.id != null && going.has(r.id) && r.type === "koboldcpp_managed"))
+	const lastOfType = (type: string) => {
+		const of = rows.filter((r) => r.id != null && r.type === type)
+		return of.length > 0 && of.every((r) => going.has(r.id!))
+	}
+	if (lastOfType("koboldcpp_managed"))
 		out.push("systemSettings:updateKoboldCppManagerEnabled")
-	const ollama = rows.filter((r) => r.id != null && r.type === "ollama")
-	if (ollama.length && ollama.some((r) => going.has(r.id!)) && ollama.every((r) => going.has(r.id!)))
-		out.push("systemSettings:updateOllamaManagerEnabled")
+	if (lastOfType("ollama")) out.push("systemSettings:updateOllamaManagerEnabled")
 	return out
 }

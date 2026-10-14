@@ -1,17 +1,20 @@
 <script lang="ts">
 	/**
 	 * Admin → Connections: the changelist (owner ruling 2026-09-27 — admin
-	 * manages its objects Django-style instead of nesting the Connections
+	 * manages its objects Django-style instead of nesting the Models
 	 * view). Every connection on the instance with its service, modality,
 	 * models, the defaults it holds and its state; filters, search, bulk
-	 * delete. A row opens its change form at `/admin/connections/<id>`.
+	 * delete. A row opens its change form at `/admin/connections/<id>`; its
+	 * **Open in Connections** opens the Connections view on that connection
+	 * (`digest.connectionId`).
 	 *
-	 * The rows are `connections:list`, the same list the Connections view
-	 * reads; deleting is `connections:delete`, one per row, plus the manager
+	 * The rows are `connections:list`, the same list the Connections and
+	 * Models views read; deleting is `connections:delete`, one per row, plus the manager
 	 * switch a managed runtime's last row takes with it (`managerFlagsReleased`).
 	 */
 	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
+	import { openInConnections } from "$lib/client/admin/railDoors"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
@@ -25,9 +28,11 @@
 	import { serviceLabel } from "$lib/client/components/connections/connectionIndexFilter"
 	import {
 		connectionRowStatus,
+		rowDefaults,
 		stateTone,
 		type RowStatus
 	} from "$lib/client/components/connections/connectionRowStatus"
+	import { defaultsSummary } from "$lib/client/components/connections/defaultsSummary"
 	import { endpointKind } from "$lib/client/components/connections/modelManagement"
 	import {
 		MODALITY_ORDER,
@@ -57,10 +62,18 @@
 
 	/** Ids this page asked to delete, so its toast counts only its own. */
 	let deleting = $state<number[]>([])
+	/**
+	 * The manager switches this page's deletes release, sent only once every
+	 * one of them is acknowledged (`managerFlagsReleased`).
+	 */
+	let releasing: ReturnType<typeof managerFlagsReleased> = []
 	function handleDelete(msg: Sockets.Connections.Delete.Response) {
 		if (!deleting.includes(msg.id)) return
 		deleting = deleting.filter((id) => id !== msg.id)
-		if (!deleting.length) toaster.success({ title: "Deleted" })
+		if (deleting.length) return
+		for (const event of releasing) socket.emit(event, { enabled: false })
+		releasing = []
+		toaster.success({ title: "Deleted" })
 	}
 	useInterest<"connections:delete">("connections:delete", handleDelete)
 
@@ -69,8 +82,15 @@
 	})
 
 	const defaults = $derived(systemSettingsCtx?.capabilityDefaults ?? {})
+	// The index view's reading, so a row here and the same row there carry
+	// one label.
+	const rowFacts = $derived(rowDefaults(defaultsSummary(rows, defaults).entries))
 	const statusOf = (r: Row): RowStatus =>
-		connectionRowStatus(r as any, { kind: endpointKind(r.type), timeAgo })
+		connectionRowStatus(r as any, {
+			kind: endpointKind(r.type),
+			timeAgo,
+			defaults: rowFacts
+		})
 	const STATE_ORDER = ["broken", "unfinished", "busy", "ready", "idle"]
 	const DOT: Record<string, string> = {
 		ok: "bg-success-500",
@@ -110,7 +130,7 @@
 		},
 		{
 			key: "defaults",
-			label: "Default for",
+			label: "Fills loadouts",
 			custom: true,
 			sortValue: (r) => defaultsHeldBy(r, defaults).length || null
 		},
@@ -119,6 +139,12 @@
 			label: "Status",
 			custom: true,
 			sortValue: (r) => STATE_ORDER.indexOf(statusOf(r).state)
+		},
+		{
+			key: "open",
+			label: "Open",
+			custom: true,
+			class: "w-0 text-right"
 		}
 	]
 
@@ -164,8 +190,12 @@
 			confirm: (selected) => connectionDeletion(selected, defaults),
 			run: (selected) => {
 				const ids = selected.map((r) => r.id)
-				for (const event of managerFlagsReleased(ids, rows))
-					socket.emit(event, { enabled: false })
+				releasing = [
+					...new Set([
+						...releasing,
+						...managerFlagsReleased([...deleting, ...ids], rows)
+					])
+				]
 				deleting = [...deleting, ...ids]
 				for (const id of ids) socket.emit("connections:delete", { id })
 			}
@@ -173,13 +203,13 @@
 	]
 
 	function openView() {
-		panelsCtx?.openPanel({ key: "connections" })
+		openInConnections(panelsCtx)
 	}
 </script>
 
 <AdminChangelist
 	title="Connections"
-	purpose="The backends and services Serene Pub talks to, and the models each one serves. A connection does nothing until Defaults gives it a job."
+	purpose="The backends and services Serene Pub talks to, and the models each one serves. A connection does nothing until a loadout names it."
 	{rows}
 	rowKey={(r) => r.id}
 	{columns}
@@ -202,7 +232,21 @@
 		</button>
 	{/snippet}
 	{#snippet cell(row, col)}
-		{#if col.key === "defaults"}
+		{#if col.key === "open"}
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface whitespace-nowrap"
+				aria-label="Open in Connections: {row.name ??
+					`Connection ${row.id}`}"
+				onclick={(e) => {
+					e.stopPropagation()
+					openInConnections(panelsCtx, { connectionId: row.id })
+				}}
+			>
+				<Icons.Cable size={14} aria-hidden="true" />
+				Open in Connections
+			</button>
+		{:else if col.key === "defaults"}
 			{@const held = defaultsHeldBy(row, defaults)}
 			{#if held.length}
 				<span class="flex flex-wrap gap-1">

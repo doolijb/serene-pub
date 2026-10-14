@@ -146,7 +146,17 @@ describe("image sampling presets", () => {
 			.map((r) => r.seedKey)
 			.filter((k): k is string => !!k && k.startsWith("sampling-image"))
 		expect(new Set(imageKeys).size).toBe(imageKeys.length)
-		expect(imageKeys).toHaveLength(5)
+		// The five families plus Hosted.
+		expect(imageKeys).toHaveLength(6)
+	}, 60_000)
+
+	test("Hosted sends only a size and a count", async () => {
+		await sync()
+		const row = await bySeedKey("sampling-image-hosted")
+		expect(row).toBeDefined()
+		expect(row.name).toBe("Hosted (OpenAI, Gemini)")
+		expect(row.values).toEqual({ width: 1024, height: 1024, batch: 1 })
+		expect(row.enabled).toEqual(["width", "height", "batch"])
 	}, 60_000)
 
 	test("'Default (Image)' is RETARGETED in place, not replaced", async () => {
@@ -191,7 +201,7 @@ describe("image sampling presets", () => {
 		const sd15 = await bySeedKey("sampling-image-default")
 		const [registered] = await testDb
 			.select()
-			.from(schema.connectionDefaults)
+			.from(schema.loadouts)
 			.where(byCapability("text->image"))
 		expect(registered).toBeDefined()
 		expect(registered.samplingConfigId).toBe(sd15.id)

@@ -514,3 +514,98 @@ export function saveChangesConfirm(p: LayoutPreset, updated: boolean): LayoutCon
 		alternative: "Start again instead"
 	}
 }
+
+/**
+ * The Start from pane's half of the session layout's props — the starting
+ * points this person may copy in and the verbs that manage them, as the page
+ * hands them down (`SessionLayout`) and the editor reads them
+ * (`SessionLayoutEditor`). The page owns every round trip.
+ */
+export interface StartFromProps {
+	/**
+	 * The session layout presets this person may start from in the
+	 * session's genre, grouped as the server orders them (the genre
+	 * default layout first). Read-only here — the page owns the socket
+	 * round trips.
+	 */
+	presets?: Sockets.Sessions.LayoutPreset[]
+	/**
+	 * The preset this session's layout **started from** (provenance: a
+	 * label and "Start again from", never a base), or null after Start
+	 * from scratch.
+	 */
+	startedFromLayoutPresetId?: number | null
+	/** That preset changed since the copy (the **Updated** mark). */
+	startedFromUpdated?: boolean
+	/**
+	 * Replace this session's layout by copying one in: a preset's id, or
+	 * `null` for Start from scratch. The page re-seeds the manager from
+	 * the server's answer, and the editor follows (`manager.seedCount`).
+	 * Resolves `false` when the copy was refused, so the editor stops
+	 * waiting for it.
+	 */
+	onStartFrom?: (layoutPresetId: number | null) => Promise<boolean>
+	/**
+	 * Save as new layout: the page sends the committed arrangement, and
+	 * `drawn` — every widget instance this session draws, the floor's
+	 * included — so the server packs those instances' settings and pins —
+	 * with the name and the optional description the person gave it.
+	 */
+	onSavePreset?: (name: string, drawn: string[], description?: string) => void
+	/**
+	 * Managing a preset you saved. Only ever asked for a card this user
+	 * may manage (`mine`) — the shipped ones are offered no
+	 * actions at all, so the server's "built-in layouts can't be renamed"
+	 * refusal is a backstop rather than something a person can walk into.
+	 * The page owns the round trips and pushes the refreshed list back down
+	 * through `presets`, so nothing here holds an edited copy.
+	 */
+	onRenamePreset?: (presetId: number, name: string) => void
+	onDeletePreset?: (presetId: number) => void
+	/**
+	 * Ask what deleting a preset touches. No session's layout changes
+	 * (each holds its own copy), but a person using it for new sessions
+	 * gets the genre default layout instead, so the counts are fetched
+	 * BEFORE the confirmation rather than reported after it — the answer
+	 * arrives back as `presetUsage`.
+	 */
+	onPresetUsage?: (presetId: number) => void
+	/**
+	 * The answer to the last `onPresetUsage` ask. `null` while nothing has
+	 * been asked or an ask is still in flight, which is what the pending
+	 * confirmation renders as "Checking…" — an unknown count must never be
+	 * drawn as zero. A failed ask comes back `unknown`, so the question
+	 * never waits for good.
+	 */
+	presetUsage?: LayoutPresetUsage | null
+	/**
+	 * **Save changes to "*Name*"** (brief 6b): the page sends the
+	 * committed arrangement into the layout of this person's that the
+	 * session started from, with `drawn` as Save as new sends it;
+	 * `overwriteUpdated` once the person was told it changed since the
+	 * copy and said to save over it.
+	 */
+	onSaveChanges?: (
+		presetId: number,
+		drawn: string[],
+		overwriteUpdated: boolean
+	) => void
+	/**
+	 * The card menu's verbs (brief 6b): share or stop sharing a layout
+	 * this person manages, make a copy of any, and choose (or with
+	 * `null`, stop using) their new-session layout for the genre. None
+	 * touches this session's layout; the page owns the round trips.
+	 */
+	onShareLayout?: (presetId: number, visibility: "shared" | "private") => void
+	onCloneLayout?: (presetId: number) => void
+	onSetNewSessionLayout?: (presetId: number | null) => void
+	/** The genre's name, for _Use for new *Genre* sessions_. */
+	genreName?: string | null
+	/**
+	 * The viewer is a guest in THIS session: no share control is drawn
+	 * (a guest is a guest on a session, and publishing is not theirs).
+	 */
+	isGuest?: boolean
+	/** The viewer is an admin: they manage someone else's shared layout too. */
+	isAdmin?: boolean
+}

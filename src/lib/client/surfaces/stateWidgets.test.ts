@@ -61,25 +61,29 @@ describe("scene portraits", () => {
 		})
 	})
 
-	test("draws the pins or the scene, and the pins unless asked", () => {
+	test("W6: who, which picture and how — the scene, its sprites, a grid unless asked; ⏳ source has no default", () => {
 		const decl = declOf("scene-portraits")!
-		expect(decl.settings?.source).toMatchObject({
+		expect(decl.settings?.who).toMatchObject({ type: "enum", of: ["scene", "recent", "pick"], default: "scene" })
+		expect(decl.settings?.face).toMatchObject({ type: "enum", of: ["avatar", "sprite", "chosen"], default: "sprite" })
+		expect(decl.settings?.arrangement).toMatchObject({
 			type: "enum",
-			of: ["pinned", "scene"],
-			default: "pinned"
+			of: ["row", "grid", "column", "stage"],
+			default: "grid"
 		})
+		expect(decl.settings?.source).toMatchObject({ type: "enum", of: ["pinned", "scene"] })
+		expect(decl.settings?.source?.default).toBeUndefined()
 	})
 
-	test("offers the persona only once the scene is the source", () => {
+	test("offers the persona beside the cast always — Scene and Recent read it (W6)", () => {
 		const decl = declOf("scene-portraits")!
-		expect(decl.settings?.persona).toMatchObject({
-			type: "boolean",
-			default: false,
-			showIf: { field: "source", equals: "scene" }
-		})
+		expect(decl.settings?.persona).toMatchObject({ type: "boolean", default: false })
+		expect(decl.settings?.persona?.showIf).toBeUndefined()
 	})
 
-	test("the Adventure layout docks it on the scene, with bars", () => {
+	test("the Adventure layout docks it on the scene, as sprites, with bars", () => {
+		// `who` is written though it is the default: an instance with nothing
+		// stored about who it shows reads as a 0.6 pinned one to the page's
+		// one-time pin seed (`scenePinsSeed.takesPins`).
 		expect(
 			(
 				ADVENTURE_LAYOUT.widgetSettings as Record<
@@ -87,6 +91,11 @@ describe("scene portraits", () => {
 					Record<string, unknown>
 				>
 			)["scene-portraits"]
-		).toMatchObject({ source: "scene", bars: true })
+		).toEqual({
+			who: "scene",
+			face: "sprite",
+			arrangement: "grid",
+			bars: true
+		})
 	})
 })

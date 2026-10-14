@@ -8,10 +8,12 @@ import { describe, expect, test } from "vitest"
 import { type ArrangedGridV1, primaryPlaced, type ZoneLayoutV1 } from "@serene-pub/sdk"
 import {
 	drawnIdsOf,
+	drawnOf,
 	floorKeeps,
 	floorKeptId,
 	floorNote,
 	floorRefusal,
+	readStoredLayout,
 	sessionLayoutOf,
 	withPrimaryFloor,
 	type SessionPlacement
@@ -189,6 +191,61 @@ describe("drawnIdsOf — placed means drawn, never merely named", () => {
 		})
 		expect(drawnIdsOf(p)).toEqual([])
 		expect(primaryPlaced(sessionLayoutOf(p), "messages")).toBe(false)
+	})
+})
+
+describe("drawnOf / readStoredLayout — the SDK's one reader over the three places (C5)", () => {
+	test("drawnOf is resolveDrawn of the placement: zones, sources and one pin each", () => {
+		const p = placement({
+			zones: zones(["stats"], []),
+			grid: loadChatLayout({
+				version: 1,
+				widgets: [{ id: "messages", zone: "middle", order: 0, size: { w: "grow", h: "grow" } }]
+			}),
+			arranged: { right: { cols: 1, rows: 4, items: [{ id: "notes", x: 0, y: 0, w: 1, h: 4, pinned: false }] } }
+		})
+		const d = drawnOf(p, { inline: 1300 })
+		expect([d.middle.drawnFrom, d.left.drawnFrom, d.right.drawnFrom]).toEqual(["grid", "ladder", "arrangement"])
+		expect(d.right.instances.map((i) => [i.instanceId, i.pinned])).toEqual([["notes", false]])
+		expect(d.left.instances.map((i) => [i.instanceId, i.pinned])).toEqual([["stats", true]])
+		expect(drawnIdsOf(p)).toEqual(["messages", "stats", "notes"])
+	})
+
+	test("a stored blob is repaired the page's way and floored", () => {
+		// Nothing readable: the floor's conversation, filling the middle.
+		for (const junk of [undefined, null, 7, "x", []]) {
+			const p = readStoredLayout(junk)
+			expect(drawnIdsOf(p)).toEqual(["messages"])
+		}
+		// A retired card, a cell outside its frame, and no primary anywhere.
+		const p = readStoredLayout({
+			arrangedGrid: {
+				middle: {
+					cols: 2,
+					rows: 6,
+					items: [
+						{ id: "map", x: 0, y: 0, w: 9, h: 2 },
+						{ id: "composer", x: 0, y: 2, w: 2, h: 2 }
+					]
+				}
+			}
+		})
+		expect(p.arranged.middle!.items[0]).toMatchObject({ id: "map", w: 2 })
+		expect(drawnIdsOf(p)).toEqual(["map", "messages"])
+	})
+
+	test("a genre that withholds a widget (R71) never draws it, and its own primary is floored", () => {
+		const p = readStoredLayout(
+			{
+				widgetGrid: {
+					version: 1,
+					widgets: [{ id: "messages", zone: "middle", order: 0, size: { w: "grow", h: "grow" } }]
+				}
+			},
+			"acme.battleship:board",
+			new Set(["messages"])
+		)
+		expect(drawnIdsOf(p)).toEqual(["acme.battleship:board"])
 	})
 })
 

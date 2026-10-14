@@ -1,4 +1,10 @@
-import type { LayoutZoneRule } from "@serene-pub/sdk"
+import {
+	resolveDrawn,
+	type DrawnZone,
+	type LayoutZoneDef,
+	type LayoutZoneRule,
+	type SessionLayoutV1
+} from "@serene-pub/sdk"
 import { describe, it, expect } from "vitest"
 import {
 	sideSlot,
@@ -209,6 +215,24 @@ describe("sideFlowPx — what a side occupies in the body's row", () => {
 				tucked: true
 			})
 		).toBe(36)
+	})
+
+	it("a RAIL-ONLY arranged side — every group unpinned — is its icon rail, never the ladder's column (lane E1)", () => {
+		// Nothing in it is docked: its groups are rail icons that fly out over
+		// the session. Counting the column it does not draw tucked Adventure's
+		// party column at 1280px (lane L's finding).
+		expect(
+			sideFlowPx({
+				...inline,
+				arranged: true,
+				arrangedPx: 264,
+				railOnly: true
+			})
+		).toBe(36)
+	})
+
+	it("railOnly says nothing about an UN-arranged side — its zone pin already made it an icon strip", () => {
+		expect(sideFlowPx({ ...inline, railPx: [264], railOnly: true })).toBe(264)
 	})
 
 	it("a TUCKED un-arranged side reserves nothing (its rails are icon strips)", () => {
@@ -424,14 +448,17 @@ describe("emptyColumnPx — an empty side asks for the width its first widget wi
 	it("an empty docked left keeps its ladder width, pinned or not", () => {
 		// "The columns shouldn't disappear if the pane is empty": every
 		// declared side that docks, pinned (a rail) or shipped unpinned (the
-		// default Left, an icon strip). 264 below the 1900 step, 300 above it,
-		// 344 × 2 from 2400.
+		// default Left, an icon strip). 248 on the 1200–1440 rung, 264 to the
+		// 1900 step, 300 above it, 344 × 2 from 2400.
 		for (const pinned of [true, false]) {
-			expect(askOf("left", 1376, { pinned })).toBe(264)
+			expect(askOf("left", 1216, { pinned })).toBe(248)
+			expect(askOf("left", 1376, { pinned })).toBe(248)
+			expect(askOf("left", 1440, { pinned })).toBe(264)
 			expect(askOf("left", 1920, { pinned })).toBe(300)
 			expect(askOf("left", 2496, { pinned })).toBe(688)
 		}
 		expect(askOf("right", 800)).toBe(264)
+		expect(askOf("right", 1216)).toBe(248)
 	})
 
 	it("is the arranged footprint the first widget gets, so adding it does not move anything", () => {
@@ -478,17 +505,17 @@ describe("emptyColumnPx — an empty side asks for the width its first widget wi
 })
 
 describe("emptyColumnsPx — the middle does not grow into an empty side", () => {
-	it("1440 (a 1376 body): the empty left keeps 264 and the middle is what it was with widgets there", () => {
+	it("1440 (a 1376 body): the empty left keeps 248 and the middle is what it was with widgets there", () => {
 		const w = drawnWidths({
 			hardLeft: 0,
-			hardRight: 264,
-			emptyLeft: 264,
+			hardRight: 248,
+			emptyLeft: 248,
 			emptyRight: 0,
 			bodyPx: 1376
 		})
-		expect(w).toEqual({ left: 264, right: 264, middle: 1376 - 2 * 264 - 2 * GAP })
+		expect(w).toEqual({ left: 248, right: 248, middle: 1376 - 2 * 248 - 2 * GAP })
 		expect(w).toEqual(
-			dockedZoneWidths({ left: 264, right: 264, bodyPx: 1376, gapPx: GAP })
+			dockedZoneWidths({ left: 248, right: 248, bodyPx: 1376, gapPx: GAP })
 		)
 	})
 
@@ -515,18 +542,18 @@ describe("emptyColumnsPx — the middle does not grow into an empty side", () =>
 	})
 
 	it("gives way before any populated side tucks", () => {
-		// 1200 holds the right (264 + 8) and the stage (696), not an empty
-		// 264 + 8 as well: the empty column goes to 0 and the right stays docked.
+		// 1200 holds the right (248 + 8) and the stage (696), not an empty
+		// 248 + 8 as well (1208): the empty column goes to 0 and the right stays docked.
 		const w = drawnWidths({
 			hardLeft: 0,
-			hardRight: 264,
-			emptyLeft: 264,
+			hardRight: 248,
+			emptyLeft: 248,
 			emptyRight: 0,
 			bodyPx: 1200
 		})
 		expect(w.left).toBe(0)
-		expect(w.right).toBe(264)
-		expect(sidesTucked({ leftPx: 0, rightPx: 264, gapPx: GAP, bodyPx: 1200 })).toBe(
+		expect(w.right).toBe(248)
+		expect(sidesTucked({ leftPx: 0, rightPx: 248, gapPx: GAP, bodyPx: 1200 })).toBe(
 			false
 		)
 	})
@@ -547,13 +574,13 @@ describe("emptyColumnsPx — the middle does not grow into an empty side", () =>
 	})
 
 	it("two empty sides are kept together or not at all, so the stage stays centred", () => {
-		// 1200 has room for one (264 + 8 + 696 = 968) but not both (1240).
+		// 1200 has room for one (248 + 8 + 696 = 952) but not both (1208).
 		expect(
 			emptyColumnsPx({
 				hardLeftPx: 0,
 				hardRightPx: 0,
-				emptyLeftPx: 264,
-				emptyRightPx: 264,
+				emptyLeftPx: 248,
+				emptyRightPx: 248,
 				bodyPx: 1200,
 				gapPx: GAP
 			})
@@ -609,7 +636,7 @@ describe("emptyColumnsPx — the middle does not grow into an empty side", () =>
 			emptyRight: askOf("right", 1376),
 			bodyPx: 1376
 		})
-		expect(w).toEqual({ left: 0, right: 264, middle: 1376 - 264 - GAP })
+		expect(w).toEqual({ left: 0, right: 248, middle: 1376 - 248 - GAP })
 	})
 })
 
@@ -671,5 +698,54 @@ describe("sidePopulated — one test, on the desktop and in the phone's panels m
 		expect(
 			sidePopulated({ arranged: true, zones: [{ mode: "rail", entries: 0 }] })
 		).toBe(true)
+	})
+})
+
+describe("sidePopulated — the same cases, read off the drawn layout (C5)", () => {
+	/** A side as the SDK's one reader draws it, in the shape `sidePopulated` asks. */
+	const sideOf = (layout: SessionLayoutV1, side: "left" | "right", inline = 1376) => {
+		const z: DrawnZone = resolveDrawn(layout, { inline })[side]
+		return {
+			arranged: z.drawnFrom === "arrangement",
+			zones: z.zoneKey === null ? [] : [{ mode: z.rung!.mode, entries: z.instances.length }]
+		}
+	}
+	const zoned = (widgets: string[], over: Partial<LayoutZoneDef> = {}): SessionLayoutV1 => ({
+		zoneLayout: { version: 1, zones: { right: { kind: "side", side: "right", widgets, ...over } } }
+	})
+
+	it("a zone with nothing in it, or a hidden one, is not populated", () => {
+		expect(sidePopulated(sideOf({}, "right"))).toBe(false)
+		expect(sidePopulated(sideOf(zoned([]), "right"))).toBe(false)
+		expect(
+			sidePopulated(sideOf(zoned(["a", "b", "c"], { rules: [{ min: 0, mode: "hidden" }] }), "right"))
+		).toBe(false)
+	})
+
+	it("a side holding only a conversation copy is populated — never an empty column", () => {
+		const side = sideOf(zoned(["messages#sanctum"], { pinned: true }), "right")
+		expect(side.zones).toEqual([{ mode: "rail", entries: 1 }])
+		expect(sidePopulated(side)).toBe(true)
+	})
+
+	it("an arrangement that places something is populated whatever the zones hold", () => {
+		const side = sideOf(
+			{
+				...zoned([]),
+				arrangedGrid: { right: { cols: 1, rows: 12, items: [{ id: "stats", x: 0, y: 0, w: 1, h: 12 }] } }
+			},
+			"right"
+		)
+		expect(side.arranged).toBe(true)
+		expect(sidePopulated(side)).toBe(true)
+		// One that places only a retired widget places nothing: the zone decides.
+		const leftover = sideOf(
+			{
+				...zoned([]),
+				arrangedGrid: { right: { cols: 1, rows: 12, items: [{ id: "inventory", x: 0, y: 0, w: 1, h: 12 }] } }
+			},
+			"right"
+		)
+		expect(sidePopulated(leftover)).toBe(false)
 	})
 })

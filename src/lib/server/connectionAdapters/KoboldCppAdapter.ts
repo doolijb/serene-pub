@@ -130,6 +130,13 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				// nested `chat_template_kwargs` on one of the two routes. See
 				// `enableThinkingFor`.
 				if (isReasoningKey(key)) continue
+				// `{ "<id>": bias }` on both routes, from the resolved ids
+				// (`resolveLogitBias`); nothing resolved, nothing sent.
+				if (key === "logitBias") {
+					const ids = this.logitBiasObject()
+					if (ids) result.logit_bias = ids
+					continue
+				}
 				result[koboldCppSamplingKeyMap[key]] = value
 			}
 		}
@@ -269,7 +276,9 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		// Compile prompt using PromptBuilder
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
 
-		// Map sampling config
+		// Map sampling config — the logit bias entries become token ids first,
+		// which the synchronous key map then reads.
+		await this.resolveLogitBias()
 		const samplingParams = this.mapSamplingConfig()
 
 		// Response-shape contract, translated to KoboldCPP's native mechanism.

@@ -26,10 +26,11 @@
  *     `PAIR_TIERS`: the capability default, then the pipeline configuration's
  *     connection slot. There is no third. The one connection override left in the
  *     product is that slot, and it stores both halves.
- *   - **sampling** is still walked over all three of `RESOLUTION_TIERS`, because
- *     `sessions.sampling_config_id` stays. A sampling profile is not a
- *     connection: choosing one says nothing about where the request goes, so it
- *     is the one thing a session may still say on its own.
+ *   - **sampling** is walked over all three of `RESOLUTION_TIERS`: the third is
+ *     the session's own pick, the session-scope pipeline panel row on the
+ *     oracle's `sampling` slot (`resolveTaskConfig` reads it). A sampling
+ *     profile is not a connection: choosing one says nothing about where the
+ *     request goes, so it is the one thing a session may say on its own.
  *
  * Which is why `WHERE_SET` below has two entries where `SCOPE_FOR_TIER` has
  * three. `WHERE_SET` answers "where was this PAIR set", and a session is not one
@@ -54,6 +55,14 @@
  * So: the chain is data (`RESOLUTION_TIERS`), the walk is one loop, and the five
  * refusals are five strings in one place. A caller supplies what its OWN tiers
  * said and gets back a row or a sentence.
+ *
+ * ## Loadouts (I12)
+ *
+ * A node's named loadout reaches here already collapsed: `buildWorld` projects
+ * it onto the node's connection and sampling slots at the `defaults` scope
+ * (`applyLoadoutLayer`), under any explicit pick, so it arrives as the
+ * `pipelineConfig` tier. An unfilled loadout projects nothing and the
+ * capability default below answers — the transform's default loadout.
  *
  * ## It returns a problem; it does not throw
  *
@@ -95,6 +104,8 @@
  */
 
 import { eq } from "drizzle-orm"
+import { CORE_LOADOUTS } from "@serene-pub/core-catalog"
+import { defaultLoadoutName } from "$lib/shared/loadouts/defaultLoadoutName"
 import * as schema from "$lib/server/db/schema"
 import {
 	SCOPE_ORDER,
@@ -129,14 +140,16 @@ export const TEXT_CAPABILITY = "text->text"
  * something to walk.
  *
  * ⚠ This is the SAMPLING chain, and the full one. Only `PAIR_TIERS` may name an
- * endpoint and a model — see the header. `sessionOverride` is still a tier here
- * because a session may still choose a sampling profile; it is the tier the
+ * endpoint and a model — see the header. `sessionOverride` is a tier here
+ * because a session may choose a sampling profile (its pipeline panel row on
+ * the oracle's `sampling` slot); it is the tier the
  * `session` scope belongs to, and dropping it would leave `samplingVia` with no
  * name for the answer it gives most often.
  *
  * ⚠ `capabilityDefault` is first and is read from the database by this module,
  * never passed in. That is the whole point of piece 1: the instance default has
- * ONE store (`connection_defaults`), so a caller cannot supply a different
+ * ONE store (the transform's default LOADOUT since I12 — `loadouts`, read
+ * through `capabilityDefaults.ts`), so a caller cannot supply a different
  * reading of it, and the day somebody adds a second column there is no seam to
  * put it in.
  */
@@ -175,9 +188,8 @@ export const PAIR_TIERS = RESOLUTION_TIERS.filter(
  * sources for one slot.
  *
  * `sessionOverride` maps to `session` because that is the scope
- * `sessions.sampling_config_id` is projected at, and the scope the pipeline
- * panel writes a person's own overrides at — even though a session cannot name
- * a pair.
+ * the pipeline panel writes a person's own overrides at, the session's
+ * sampling pick among them — even though a session cannot name a pair.
  *
  * `user` is deliberately unmapped: a user cannot write a connection slot (F20),
  * and `config` rather than `instance` for the pipeline config because that is
@@ -199,7 +211,7 @@ export const SCOPE_FOR_TIER: Record<ResolutionTier, ScopeKind> = {
  * place in the product still claiming a session could choose compute.
  */
 const WHERE_SET: Record<PairTier, string> = {
-	capabilityDefault: "Admin → Defaults",
+	capabilityDefault: "Admin › Models › Loadouts",
 	pipelineConfig: "the pipeline's configuration"
 }
 
@@ -312,7 +324,9 @@ export interface CapabilityTargetRequest {
 	/** Tier 2: what the pipeline's configuration selected for this node. */
 	pipelineConfig?: CapabilityCandidate | null
 	/**
-	 * Tier 3, and SAMPLING ONLY — a `sampling_configs` id, or null.
+	 * Tier 3, and SAMPLING ONLY — a `sampling_configs` id, or null: the
+	 * session's pipeline panel row on the oracle's `sampling` slot, the one
+	 * session layer.
 	 *
 	 * An id rather than a `CapabilityCandidate`, and that is the retirement
 	 * (0130) written into the type: there is no field here for an endpoint or a
@@ -321,46 +335,56 @@ export interface CapabilityTargetRequest {
 	 * `sessions:update` handed it whatever the client sent.
 	 */
 	sessionSampling?: number | null
-	/**
-	 * The session's genre, when this request is for one turn of a session —
-	 * wording only. `text->text`'s display name is "Chat" (the transform's
-	 * generic label, `TRANSFORMS` in the SDK), which reads as if it named the
-	 * session's own genre when the session is not `core:genre/chat` — an
-	 * adventure or a guide session with no connection set would be told
-	 * nothing is set "for Chat". Given here rather than resolved from a
-	 * `sessionId`, because this module reads connections and sampling, never
-	 * sessions or genres — the caller who already has the row hands over the
-	 * one fact its wording needs.
-	 */
-	genreId?: string | null
 }
 
 /**
- * `core:genre/chat` (24 §3) — the one genre whose sessions this file may call
- * "Chat" without confusing it for the transform label above. A literal
- * rather than an import of `STANDARD_GENRE_ID`: that constant lives in
- * `pipelines/entities`, which imports connection resolution, not the other
- * way around.
+ * The refusal when nothing is set to reply in a session: `text->text` with no
+ * connection, whether no row was ever written (`unset`) or one was written
+ * with only its sampling half (`cleared`, which is every fresh install).
+ *
+ * One sentence for both, because to the person they are one state with one
+ * fix, and it names that fix by the control that makes it — **Use in Reply**
+ * beside a model in Connections (plan §E, 2026-10-06; it said "Choose one in
+ * Admin → Defaults", which a member cannot open and an admin reaches faster
+ * through Connections). "An admin", because the member who reads it in a
+ * session cannot set it. It names no genre, so an adventure or a guide
+ * session reads it as truly as a chat one.
+ *
+ * ⚠ Chat only. Every other capability keeps its own sentence below: its fix
+ * is not **Use in Reply**.
  */
-const STANDARD_CHAT_GENRE_ID = "core:genre/chat"
+const CHAT_UNSET_MESSAGE =
+	"No model is set for Reply, and one is never picked automatically. An admin chooses it with Use in Reply beside a model in Connections."
 
 /**
- * The capability's display name for one refusal sentence — "Chat" (the
- * transform's own label), unless this request names a session whose genre is
- * not the standard one, in which case that would misname the session's own
- * genre and "text generation" says the same thing without the confusion.
- * Only `text->text` is ever "Chat"; every other capability's label already
- * names what it does (`Image generation`, `Vision`, …) and is left alone.
+ * The refusal when nothing is set for any OTHER capability (Image generation,
+ * say), `cleared` and `unset` alike: the state, that it is never guessed, and
+ * the one screen that fixes it, named the way the admin rail names it.
+ *
+ * "Admin › Models › Loadouts" is spelled exactly so on purpose: the session's
+ * progress card turns that phrase into a link for an administrator and leaves it as
+ * text for a member (`client/components/pipelines/adminScreenLink.ts`).
+ * "An admin", for the same reason as chat's sentence: the member reading it
+ * cannot set it.
+ *
+ * `unset` (no row at all) also names the pipeline's configuration, the other
+ * tier that may choose a pair; `cleared` has a row and its fix is that row.
  */
-const wordingLabelFor = (
-	capability: string,
-	req: Pick<CapabilityTargetRequest, "genreId">
-): string =>
-	capability === TEXT_CAPABILITY &&
-	req.genreId != null &&
-	req.genreId !== STANDARD_CHAT_GENRE_ID
-		? "text generation"
-		: capabilityLabel(capability as CapabilityId)
+export function unsetCapabilityMessage(
+	capability: CapabilityId,
+	opts: { orPipelineConfig?: boolean } = {}
+): string {
+	// Named as the admin sees it on the Loadouts view: the core loadout that
+	// is this transform's default (*Images*), else the capability's label.
+	const name =
+		CORE_LOADOUTS.find((d) => d.defaultFor && d.transform === capability)
+			?.name ?? capabilityLabel(capability)
+	return (
+		`No model is set for ${name}, and one is never ` +
+		`picked automatically. An admin chooses it in Admin › Models › Loadouts` +
+		(opts.orPipelineConfig ? ` or in the pipeline's configuration.` : `.`)
+	)
+}
 
 /**
  * The reads this resolver makes, spelled per table rather than through one
@@ -528,9 +552,12 @@ export async function resolveCapabilityTarget(
 						// (see the delete paths in sockets/connections.ts and
 						// sockets/koboldcpp.ts, which rely on exactly this).
 						//
-						// ⚠ It is NOT the only way, which is why this sentence
-						// says "deleting one releases..." rather than diagnosing
-						// a deletion. `db/defaults.ts` seeds the shipped SAMPLING
+						// ⚠ It is NOT the only way, which is why neither sentence
+						// diagnoses a deletion: each names only the state and
+						// its fix. (The other one said "deleting one releases
+						// every capability it held" until 2026-10-11, which is
+						// this comment's business, not the person's:
+						// PLAN-less-confusing D1.) `db/defaults.ts` seeds the shipped SAMPLING
 						// default for `text->text` and `text->image` on every
 						// boot while unset, and `setCapabilityDefault` inserts
 						// the row when there is none — so both of those
@@ -540,18 +567,19 @@ export async function resolveCapabilityTarget(
 						// at was deleted" here, which would have been a confident
 						// lie on first run.
 						message:
-							`No connection is set for ${wordingLabelFor(capability, req)}. ` +
-							`Choose one in Admin → Defaults — a connection is never picked ` +
-							`automatically, and deleting one releases every capability it held.`
+							capability === TEXT_CAPABILITY
+								? CHAT_UNSET_MESSAGE
+								: unsetCapabilityMessage(capability as CapabilityId)
 					}
 				: {
 						kind: "unset",
 						capability,
 						message:
-							`Nothing is set to handle ${capabilityLabel(capability as CapabilityId)}. ` +
-							`A connection is never chosen just because it exists, even if it is the only ` +
-							`one — register the default in Admin → Defaults, or select one in the ` +
-							`pipeline's configuration.`
+							capability === TEXT_CAPABILITY
+								? CHAT_UNSET_MESSAGE
+								: unsetCapabilityMessage(capability as CapabilityId, {
+										orPipelineConfig: true
+									})
 					}
 		}
 
@@ -565,8 +593,8 @@ export async function resolveCapabilityTarget(
 				via: connectionVia,
 				connectionId,
 				message:
-					`The connection set for ${capabilityLabel(capability as CapabilityId)} in ` +
-					`${WHERE_SET[connectionVia]} no longer exists. Choose another in Admin → Defaults.`
+					`The connection set for ${defaultLoadoutName(capability)} in ` +
+					`${WHERE_SET[connectionVia]} no longer exists. Choose another in Admin › Models › Loadouts.`
 			}
 		}
 
@@ -597,9 +625,9 @@ export async function resolveCapabilityTarget(
 				via: connectionVia,
 				connectionId,
 				message:
-					`No model is chosen for ${capabilityLabel(capability as CapabilityId)} in ` +
-					`${WHERE_SET[connectionVia]}. Pick a model on that ` +
-					`connection.`,
+					`No model is chosen for ${defaultLoadoutName(capability)} in ` +
+					`${WHERE_SET[connectionVia]}. Pick a model for that ` +
+					`loadout.`,
 				connection: connectionIdentity(connection)
 			}
 		}
@@ -630,7 +658,7 @@ export async function resolveCapabilityTarget(
 					via: connectionVia,
 					connectionId,
 					message:
-						`The model chosen for ${capabilityLabel(capability as CapabilityId)} in ` +
+						`The model chosen for ${defaultLoadoutName(capability)} in ` +
 						`${WHERE_SET[connectionVia]} ${wrong}. ` +
 						(model?.missingSince
 							? `Refresh that connection's models once the host serves it again, pick another model, or clear the choice.`

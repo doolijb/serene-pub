@@ -1,21 +1,28 @@
 <script lang="ts">
 	/**
-	 * **Set up chat** — Runtime → Model → Done, on one screen.
+	 * **Set up chat** — Runtime → Model → Done, as a stepper dialog.
 	 *
-	 * Concept ruling, U5 (2026-09-17). The one capability that blocks play is
-	 * chat, and the first-run card's "On this machine" door and the Chat
-	 * readiness row's gold **Set up** both land here. Before this, the same
+	 * Concept ruling, U5 (2026-09-17). The one job that blocks play is chat,
+	 * and the first-run card's "KoboldCPP, run by Serene Pub" door and the
+	 * status strip's gold **Set up chat** both open this. Before it, the same
 	 * intention was four screens: switch a manager on in Settings, create its
 	 * connection, find the binary picker, find a model somewhere else, then go
 	 * to Admin → Defaults and say which one answers.
+	 *
+	 * A wizard with no address, so a dialog and never a place (design
+	 * 2026-10-09 C.1): it opens over the index and closing it leaves the index
+	 * where it was. "Point Serene Pub at it instead" and **Open KoboldCPP**
+	 * close it and open that connection; **Start a session** closes it and
+	 * opens Sessions.
 	 *
 	 * ## Nothing here is new
 	 *
 	 * The Runtime step IS the managed view's binary picker; the Model step IS
 	 * the model finder, scoped to chat and to this KoboldCPP; the default is
-	 * registered through the same `onSelectDefault` every other surface uses.
-	 * This component owns the header, the step dots and the decision of which
-	 * step shows — and that decision is `setupChatFlow.ts`, pure and tested.
+	 * chosen through the sidebar's one `chooseJobModel` every other surface
+	 * uses (C.3). This component owns the title, the step dots and the
+	 * decision of which step shows — and that decision is `setupChatFlow.ts`,
+	 * pure and tested.
 	 *
 	 * ## Derived, never stored
 	 *
@@ -29,9 +36,14 @@
 	 * ## The one side effect
 	 *
 	 * When the first model lands and no chat default is registered, that pair
-	 * becomes the default — once, and only while nothing is set. A pub that
-	 * already answers with something is never silently re-pointed; the Done
-	 * card says what happened either way.
+	 * becomes the model for Chat replies — once per opening, and only while
+	 * nothing is set. A pub that already answers with something is never
+	 * re-pointed; the Done step says out loud what happened ("Gemma 3 is now
+	 * the model for Chat replies.").
+	 *
+	 * ⚠ Every side effect waits for `open`: the dialog's root stays mounted
+	 * while it is closed, and a flow that installed KoboldCPP because the
+	 * sidebar mounted would be a flow nobody opened.
 	 *
 	 * ⚠ The flow chooses managed mode on entry when none is chosen: the door
 	 * that opens it says "installed and run by Serene Pub". "Manage it myself"
@@ -39,11 +51,12 @@
 	 */
 	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
+	import LoadingState from "$lib/client/components/LoadingState.svelte"
 	import KoboldCppBinaryVariantPicker from "$lib/client/components/koboldcppManager/KoboldCppBinaryVariantPicker.svelte"
 	import ModelFinderView from "./ModelFinderView.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import type { PairDefaultSelection } from "./modelSystemDefaults"
+	import type { JobPair } from "./jobPicker"
 	import {
 		SETUP_CHAT_STEPS,
 		doneSentence,
@@ -56,6 +69,8 @@
 	const CHAT = "text->text"
 
 	interface Props {
+		/** The stepper is on screen. */
+		open: boolean
 		connections: readonly {
 			/** The wire row's id is optional in type only; a listed row has one. */
 			id?: number
@@ -72,24 +87,24 @@
 		/** Switch the KoboldCPP manager on and create its connection when
 		 * none exists (the same `enableManager` the Add menu uses). */
 		onEnsureRuntime: () => void
-		/** The same registration every other surface makes. */
-		onSelectDefault: (
-			connectionId: number,
-			model: { id: number; name: string },
-			selection: PairDefaultSelection
-		) => void
-		/** Open the managed view for the person who wants External mode. */
+		/** The sidebar's one `chooseJobModel`. */
+		onChooseJobModel: (job: string, pair: JobPair) => void
+		/**
+		 * Close the stepper and open this connection — the managed view, for
+		 * the person who wants External mode, and Done's Open KoboldCPP.
+		 */
 		onOpenConnection: (connectionId: number) => void
-		onBack: () => void
-		/** Leave for Sessions, when the shell offers it. */
+		onClose: () => void
+		/** Close the stepper and leave for Sessions, when the shell offers it. */
 		onOpenSessions?: () => void
 	}
 	let {
+		open,
 		connections,
 		onEnsureRuntime,
-		onSelectDefault,
+		onChooseJobModel,
 		onOpenConnection,
-		onBack,
+		onClose,
 		onOpenSessions
 	}: Props = $props()
 
@@ -140,56 +155,88 @@
 	// ── Entry: the runtime exists and has a mode ────────────────────────────
 
 	/**
-	 * Asked ONCE per mount, not per list push: `enableManager` is idempotent
+	 * Asked ONCE per opening, not per list push: `enableManager` is idempotent
 	 * on the flag but a create is not, and the list answers a beat later.
 	 */
 	let ensured = false
+	let modeAsked = false
+	let registerAsked = false
+	let registeredName = $state<string | null>(null)
 	$effect(() => {
-		if (ensured) return
-		if (connection) {
-			ensured = true
-			return
-		}
+		if (open) return
+		// Closed: the next opening asks again from the facts it finds.
+		ensured = false
+		modeAsked = false
+		registerAsked = false
+		registeredName = null
+	})
+	$effect(() => {
+		if (!open || ensured) return
 		ensured = true
-		onEnsureRuntime()
+		if (!connection) onEnsureRuntime()
 	})
 	/**
 	 * The door said "run by Serene Pub", so managed mode is chosen for the
 	 * person — once the connection exists, and only while nothing is chosen.
 	 */
-	let modeAsked = false
 	$effect(() => {
-		if (modeAsked || !connection || managedMode !== null) return
+		if (!open || modeAsked || !connection || managedMode !== null) return
 		modeAsked = true
 		socket.emit("koboldcpp:setManagedMode", { mode: "managed" })
 	})
 
-	// ── The one side effect: the first model becomes the default ────────────
+	// ── The one side effect: the first model becomes the chat model ─────────
 
-	let registeredName = $state<string | null>(null)
-	let registerAsked = false
 	$effect(() => {
-		if (registerAsked) return
+		if (!open || registerAsked) return
 		const pair = firstModelToRegister(facts)
 		if (!pair) return
 		registerAsked = true
 		registeredName = pair.model.name
-		onSelectDefault(pair.connectionId, pair.model, {
-			kind: "one",
-			capability: CHAT
-		})
+		onChooseJobModel(CHAT, pair)
 	})
 
 	const sentence = $derived(doneSentence(facts, registeredName))
 </script>
 
-<div class="flex h-full min-h-0 flex-col gap-3 p-1">
-	<PanelNavHeader
-		title="Set up chat"
-		{onBack}
-		backLabel="Back to connections"
-	/>
+<Dialog
+	{open}
+	onOpenChange={(e) => {
+		if (!e.open) onClose()
+	}}
+>
+	<Portal>
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 flex h-[min(90vh,720px)] w-full max-w-2xl flex-col gap-3 p-6 shadow-xl"
+			>
+				{#if open}
+					<header class="flex shrink-0 items-center gap-2">
+						<Dialog.Title
+							class="min-w-0 flex-1 [font-family:var(--typo-heading--font-family)] text-lg font-semibold"
+						>
+							Set up chat
+						</Dialog.Title>
+						<Dialog.CloseTrigger
+							class="btn-icon btn-icon-sm hover:preset-tonal shrink-0"
+							aria-label="Close"
+						>
+							<Icons.X size={16} aria-hidden="true" />
+						</Dialog.CloseTrigger>
+					</header>
+					{@render steps()}
+				{/if}
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
 
+{#snippet steps()}
 	<!-- The three dots. `aria-current` on the live one; the others are
 	     labels, not doors — a step is reached by finishing the one before. -->
 	<ol
@@ -233,7 +280,7 @@
 	<div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pb-2">
 		{#if step === "runtime"}
 			{#if !connection}
-				<p class="text-surface-600-400 text-sm">Adding KoboldCPP…</p>
+				<LoadingState message="Adding KoboldCPP…" showMessage />
 			{:else}
 				<p class="text-surface-600-400 text-sm">
 					KoboldCPP runs models on this machine. Pick the build for
@@ -253,15 +300,14 @@
 			{/if}
 		{:else if step === "model" && connection}
 			<p class="text-surface-600-400 shrink-0 text-sm">
-				KoboldCPP is installed. Now get one chat model — the first to
-				land becomes what sessions reply with.
+				KoboldCPP is installed. Now get one model that can chat — the
+				first to land fills the Reply loadout.
 			</p>
 			<div class="flex min-h-0 flex-1 flex-col">
 				<ModelFinderView
 					embedded
 					capability={CHAT}
 					connectionId={connection.id}
-					{onBack}
 				/>
 			</div>
 		{:else if step === "done" && connection}
@@ -279,7 +325,9 @@
 				>
 					Chat is set up
 				</h3>
-				<p class="text-surface-600-400 text-sm">{sentence}</p>
+				<p class="text-surface-600-400 text-sm" role="status">
+					{sentence}
+				</p>
 				<div class="flex flex-wrap justify-center gap-2 pt-1">
 					{#if onOpenSessions}
 						<button
@@ -301,9 +349,9 @@
 				</div>
 			</section>
 			<p class="text-surface-600-400 px-0.5 text-xs">
-				Images, embeddings and named entities can be set up later from
-				the readiness card.
+				The Images, Embeddings and Entities loadouts can be filled later
+				in the Loadouts view.
 			</p>
 		{/if}
 	</div>
-</div>
+{/snippet}

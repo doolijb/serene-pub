@@ -77,8 +77,6 @@ export type KeywordFilter = "any" | "has" | "none"
 
 export interface PoolFilters {
 	search: string
-	/** Empty is every kind, never no kinds. */
-	kinds: string[]
 	pinned: boolean
 	off: boolean
 	archived: boolean
@@ -97,7 +95,6 @@ export interface PoolFilters {
 export function emptyFilters(): PoolFilters {
 	return {
 		search: "",
-		kinds: [],
 		pinned: false,
 		off: false,
 		archived: false,
@@ -111,7 +108,6 @@ export function emptyFilters(): PoolFilters {
 /** What the compact layout's Filter badge counts: the narrowings in force. */
 export function activeFilterCount(filters: PoolFilters): number {
 	let n = 0
-	if (filters.kinds.length) n++
 	if (filters.pinned) n++
 	if (filters.off) n++
 	if (filters.archived) n++
@@ -157,9 +153,7 @@ export function filterPool(
 	readInKeys: ReadonlySet<string> = new Set()
 ): PoolItem[] {
 	const needle = filters.search.trim().toLowerCase()
-	const kinds = filters.kinds.length ? new Set(filters.kinds) : null
 	return items.filter((item) => {
-		if (kinds && !kinds.has(item.kind)) return false
 		if (item.archived !== filters.archived) return false
 		if (filters.pinned && !item.pinned) return false
 		if (filters.off && !item.off) return false

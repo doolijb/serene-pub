@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { withoutShared } from "$lib/shared/utils/sharedRows"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
 		requestWithInterest,
@@ -16,7 +17,7 @@
 	}
 
 	function handleCharactersList(msg: Sockets.Characters.List.Response) {
-		characters = msg.characterList || []
+		characters = withoutShared(msg.characterList) // shared rows are read and copy only (PLAN-private-messages §6.7, Q3)
 		loaded = true
 	}
 	function handleCharactersDelete() {

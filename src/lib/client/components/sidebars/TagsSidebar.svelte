@@ -10,6 +10,7 @@
 	import SessionListItem from "../listItems/SessionListItem.svelte"
 	import LorebookListItem from "../listItems/LorebookListItem.svelte"
 	import EmptyState from "../EmptyState.svelte"
+	import LoadingState from "../LoadingState.svelte"
 	import PanelNavHeader from "../panels/PanelNavHeader.svelte"
 	import DetailHero from "../panels/DetailHero.svelte"
 	import Select from "../inputs/Select.svelte"
@@ -89,7 +90,6 @@
 	$effect(() =>
 		jumpCtx?.registerScope("tags", {
 			label: "Tags",
-			placeholder: "Filter tags",
 			getQuery: () => search,
 			setQuery: (next) => (search = next),
 			getHits: () =>
@@ -272,6 +272,12 @@
 	}
 
 	function handleTagClick(tag: SelectTag) {
+		// At desk the cloud stays beside an open form, so a click there must
+		// close it: an edit left open would otherwise write its draft onto
+		// the tag just clicked (`updateTag` spreads `selectedTag`), and a
+		// create would stay on top of the tag the reader asked to see.
+		if (isEditing) cancelEdit()
+		if (isCreating) cancelCreate()
 		selectedTag = tag
 		// Load related data for the selected tag
 		socket.emit("tags:getRelatedData", { tagId: tag.id })
@@ -491,63 +497,272 @@
 	})
 </script>
 
-<div use:vm.observe class="text-foreground flex h-full min-h-0 flex-col">
+<div class="flex h-full min-h-0 flex-col" use:vm.observe>
 	<PanelSplit
 		mode={vm.mode}
 		hasDetail={isCreating || isEditing || selectedTag != null}
 		emptyMessage="Pick a tag to see what it is on."
 	>
 		{#snippet detail()}
-			{#if selectedTag && !isEditing}
-				<!-- Selected tag view -->
-				<div class="mb-4">
-					<div class="mb-4">
-						<PanelNavHeader
-							title="Tag"
-							onBack={vm.mode === "desk"
-								? undefined
-								: () => {
-										selectedTag = null
-									}}
-							backLabel="Back to tags"
-							actionsLabel="Tag"
-							menuItems={[
-								{
-									label: "Delete",
-									icon: Icons.Trash2,
-									destructive: true,
-									onSelect: handleDeleteClick
-								}
-							]}
-						>
-							{#snippet primaryAction()}
+			<!-- The forms come first: at desk the list stays beside them, so
+				 New can be pressed with a tag already open, and the form it
+				 opens must win over that tag's detail. -->
+			{#if isCreating}
+				<!-- Create tag form. Back (compact) and Cancel (desk) do what
+					 Cancel always did: drop the draft and show what was there. -->
+				<div class="flex flex-col gap-3">
+					<PanelNavHeader
+						title="New tag"
+						onBack={vm.mode === "compact"
+							? cancelCreate
+							: undefined}
+						backLabel="Back to tags"
+					>
+						{#snippet primaryAction()}
+							{#if vm.mode === "desk"}
 								<button
-									class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
-									onclick={handleEditClick}
-									title="Edit tag"
-									aria-label="Edit tag"
 									type="button"
+									class="btn btn-sm preset-tonal-surface shrink-0"
+									onclick={cancelCreate}
 								>
-									<Icons.Pencil
-										size={16}
-										aria-hidden="true"
-									/>
+									Cancel
 								</button>
-							{/snippet}
-						</PanelNavHeader>
+							{/if}
+							<button
+								type="button"
+								class="btn btn-sm preset-filled-primary-500 shrink-0"
+								onclick={createTag}
+								disabled={Object.keys(validationErrors).length >
+									0 || !newTagName.trim()}
+							>
+								<Icons.Plus size={16} aria-hidden="true" />
+								Create
+							</button>
+						{/snippet}
+					</PanelNavHeader>
+					<!-- Two columns once the detail has the room (notes 14):
+						 the name beside its colour, the description under both. -->
+					<div class="grid max-w-3xl gap-4 @xl/detail:grid-cols-2">
+						<div>
+							<label
+								class="mb-1 block font-semibold"
+								for="tagName"
+							>
+								Name
+							</label>
+							<input
+								id="tagName"
+								name="tagName"
+								type="text"
+								class="input w-full {validationErrors.name
+									? 'border-error-500'
+									: ''}"
+								bind:value={newTagName}
+								placeholder="Enter tag name"
+								aria-invalid={validationErrors.name
+									? "true"
+									: "false"}
+								aria-describedby={validationErrors.name
+									? "name-error"
+									: undefined}
+								oninput={() => {
+									if (validationErrors.name) {
+										const { name, ...rest } =
+											validationErrors
+										validationErrors = rest
+									}
+								}}
+							/>
+							{#if validationErrors.name}
+								<p
+									id="name-error"
+									class="text-error-500 mt-1 text-sm"
+									role="alert"
+								>
+									{validationErrors.name}
+								</p>
+							{/if}
+						</div>
+						<div>
+							<Select
+								label="Color preset"
+								options={colorPresetOptions}
+								bind:value={newTagColorPreset}
+							/>
+							<div class="mt-2">
+								<span class="text-surface-600-400 text-sm">
+									Preview:
+								</span>
+								<button
+									type="button"
+									class="chip {newTagColorPreset} ml-2"
+								>
+									{newTagName.trim() || "Tag preview"}
+								</button>
+							</div>
+						</div>
+						<div class="@xl/detail:col-span-2">
+							<label
+								class="mb-1 block font-semibold"
+								for="tagDescription"
+							>
+								Description (optional)
+							</label>
+							<textarea
+								id="tagDescription"
+								name="tagDescription"
+								class="input w-full"
+								bind:value={newTagDescription}
+								placeholder="Enter tag description"
+								rows="3"
+							></textarea>
+						</div>
 					</div>
+				</div>
+			{:else if isEditing}
+				<!-- Edit tag form. Back (compact) and Cancel (desk) return to
+					 the tag's detail, as Cancel always did. -->
+				<div class="flex flex-col gap-3">
+					<PanelNavHeader
+						title="Edit tag"
+						onBack={vm.mode === "compact" ? cancelEdit : undefined}
+						backLabel="Back to tag"
+					>
+						{#snippet primaryAction()}
+							{#if vm.mode === "desk"}
+								<button
+									type="button"
+									class="btn btn-sm preset-tonal-surface shrink-0"
+									onclick={cancelEdit}
+								>
+									Cancel
+								</button>
+							{/if}
+							<button
+								type="button"
+								class="btn btn-sm preset-filled-primary-500 shrink-0"
+								onclick={updateTag}
+								disabled={Object.keys(editValidationErrors)
+									.length > 0 || !editTagName.trim()}
+							>
+								<Icons.Save size={16} aria-hidden="true" />
+								Save
+							</button>
+						{/snippet}
+					</PanelNavHeader>
+					<!-- Two columns once the detail has the room (notes 14):
+						 the name beside its colour, the description under both. -->
+					<div class="grid max-w-3xl gap-4 @xl/detail:grid-cols-2">
+						<div>
+							<label
+								class="mb-1 block font-semibold"
+								for="editTagName"
+							>
+								Name
+							</label>
+							<input
+								id="editTagName"
+								name="editTagName"
+								type="text"
+								class="input w-full {editValidationErrors.name
+									? 'border-error-500'
+									: ''}"
+								bind:value={editTagName}
+								placeholder="Enter tag name"
+								aria-invalid={editValidationErrors.name
+									? "true"
+									: "false"}
+								aria-describedby={editValidationErrors.name
+									? "edit-name-error"
+									: undefined}
+								oninput={() => {
+									if (editValidationErrors.name) {
+										const { name, ...rest } =
+											editValidationErrors
+										editValidationErrors = rest
+									}
+								}}
+							/>
+							{#if editValidationErrors.name}
+								<p
+									id="edit-name-error"
+									class="text-error-500 mt-1 text-sm"
+									role="alert"
+								>
+									{editValidationErrors.name}
+								</p>
+							{/if}
+						</div>
+						<div>
+							<Select
+								label="Color preset"
+								options={colorPresetOptions}
+								bind:value={editTagColorPreset}
+							/>
+							<div class="mt-2">
+								<span class="text-surface-600-400 text-sm">
+									Preview:
+								</span>
+								<button
+									type="button"
+									class="chip {editTagColorPreset} ml-2"
+								>
+									{editTagName.trim() || "Tag preview"}
+								</button>
+							</div>
+						</div>
+						<div class="@xl/detail:col-span-2">
+							<label
+								class="mb-1 block font-semibold"
+								for="editTagDescription"
+							>
+								Description (optional)
+							</label>
+							<textarea
+								id="editTagDescription"
+								name="editTagDescription"
+								class="input w-full"
+								bind:value={editTagDescription}
+								placeholder="Enter tag description"
+								rows="3"
+							></textarea>
+						</div>
+					</div>
+				</div>
+			{:else if selectedTag}
+				<!-- Selected tag view: the kind in the header, the name in the
+					 hero, Edit under it, Delete in the ⋯. -->
+				<div class="flex flex-col gap-3">
+					<PanelNavHeader
+						title="Tag"
+						onBack={vm.mode === "compact"
+							? () => {
+									selectedTag = null
+								}
+							: undefined}
+						backLabel="Back to tags"
+						actionsLabel="Tag"
+						menuItems={[
+							{
+								label: "Delete",
+								icon: Icons.Trash2,
+								destructive: true,
+								onSelect: handleDeleteClick
+							}
+						]}
+					/>
 
 					<DetailHero
-						class="mb-4"
 						title={selectedTag.name}
 						icon={Icons.Tag}
 						subtitle={tagUsage || undefined}
 						chips={tagChip}
+						actions={tagActions}
 					/>
 
 					{#if selectedTag.description}
 						<div
-							class="border-primary-500 bg-surface-50-950 mb-4 rounded-lg border p-4"
+							class="border-primary-500 bg-surface-50-950 rounded-lg border p-4"
 						>
 							<p class="text-surface-600-400 text-sm">
 								{selectedTag.description}
@@ -556,7 +771,7 @@
 					{/if}
 
 					<!-- Related sections: side by side once the detail has the
-					     room (notes 14), as the session detail's cards are. -->
+						 room (notes 14), as the session detail's cards are. -->
 					<div
 						class="grid items-start gap-x-6 @2xl/detail:grid-cols-2"
 					>
@@ -632,218 +847,12 @@
 						{/if}
 					</div>
 				</div>
-			{:else if isCreating}
-				<!-- Create tag form -->
-				<div>
-					<h1 class="mb-4 text-lg font-bold">Create a tag</h1>
-					<div
-						class="mt-4 mb-4 flex max-w-3xl gap-2 @xl/detail:justify-end"
-						role="group"
-						aria-label="Form actions"
-					>
-						<button
-							class="btn btn-sm preset-filled-surface-500 w-full @xl/detail:w-auto"
-							onclick={cancelCreate}
-						>
-							Cancel
-						</button>
-						<button
-							class="btn btn-sm preset-filled-primary-500 w-full @xl/detail:w-auto"
-							onclick={createTag}
-							disabled={Object.keys(validationErrors).length >
-								0 || !newTagName.trim()}
-						>
-							Create tag
-						</button>
-					</div>
-					<!-- Two columns once the detail has the room (notes 14):
-					     the name beside its colour, the description under both. -->
-					<div class="grid max-w-3xl gap-4 @xl/detail:grid-cols-2">
-						<div>
-							<label
-								class="mb-1 block font-semibold"
-								for="tagName"
-							>
-								Name
-							</label>
-							<input
-								id="tagName"
-								name="tagName"
-								type="text"
-								class="input w-full {validationErrors.name
-									? 'border-error-500'
-									: ''}"
-								bind:value={newTagName}
-								placeholder="Enter tag name"
-								aria-invalid={validationErrors.name
-									? "true"
-									: "false"}
-								aria-describedby={validationErrors.name
-									? "name-error"
-									: undefined}
-								oninput={() => {
-									if (validationErrors.name) {
-										const { name, ...rest } =
-											validationErrors
-										validationErrors = rest
-									}
-								}}
-							/>
-							{#if validationErrors.name}
-								<p
-									id="name-error"
-									class="text-error-500 mt-1 text-sm"
-									role="alert"
-								>
-									{validationErrors.name}
-								</p>
-							{/if}
-						</div>
-						<div>
-							<Select
-								label="Color preset"
-								options={colorPresetOptions}
-								bind:value={newTagColorPreset}
-							/>
-							<div class="mt-2">
-								<span class="text-surface-600-400 text-sm">
-									Preview:
-								</span>
-								<button
-									type="button"
-									class="chip {newTagColorPreset} ml-2"
-								>
-									{newTagName.trim() || "Tag preview"}
-								</button>
-							</div>
-							<div class="@xl/detail:col-span-2">
-								<label
-									class="mb-1 block font-semibold"
-									for="tagDescription"
-								>
-									Description (optional)
-								</label>
-								<textarea
-									id="tagDescription"
-									name="tagDescription"
-									class="input w-full"
-									bind:value={newTagDescription}
-									placeholder="Enter tag description"
-									rows="3"
-								></textarea>
-							</div>
-						</div>
-					</div>
-				</div>
-			{:else if isEditing}
-				<!-- Edit tag form -->
-				<div>
-					<h1 class="mb-4 text-lg font-bold">Edit tag</h1>
-					<div
-						class="mt-4 mb-4 flex max-w-3xl gap-2 @xl/detail:justify-end"
-						role="group"
-						aria-label="Form actions"
-					>
-						<button
-							class="btn btn-sm preset-filled-surface-500 w-full @xl/detail:w-auto"
-							onclick={cancelEdit}
-						>
-							Cancel
-						</button>
-						<button
-							class="btn btn-sm preset-filled-primary-500 w-full @xl/detail:w-auto"
-							onclick={updateTag}
-							disabled={Object.keys(editValidationErrors).length >
-								0 || !editTagName.trim()}
-						>
-							Update tag
-						</button>
-					</div>
-					<!-- Two columns once the detail has the room (notes 14):
-					     the name beside its colour, the description under both. -->
-					<div class="grid max-w-3xl gap-4 @xl/detail:grid-cols-2">
-						<div>
-							<label
-								class="mb-1 block font-semibold"
-								for="editTagName"
-							>
-								Name
-							</label>
-							<input
-								id="editTagName"
-								name="editTagName"
-								type="text"
-								class="input w-full {editValidationErrors.name
-									? 'border-error-500'
-									: ''}"
-								bind:value={editTagName}
-								placeholder="Enter tag name"
-								aria-invalid={editValidationErrors.name
-									? "true"
-									: "false"}
-								aria-describedby={editValidationErrors.name
-									? "edit-name-error"
-									: undefined}
-								oninput={() => {
-									if (editValidationErrors.name) {
-										const { name, ...rest } =
-											editValidationErrors
-										editValidationErrors = rest
-									}
-								}}
-							/>
-							{#if editValidationErrors.name}
-								<p
-									id="edit-name-error"
-									class="text-error-500 mt-1 text-sm"
-									role="alert"
-								>
-									{editValidationErrors.name}
-								</p>
-							{/if}
-						</div>
-						<div>
-							<Select
-								label="Color preset"
-								options={colorPresetOptions}
-								bind:value={editTagColorPreset}
-							/>
-							<div class="mt-2">
-								<span class="text-surface-600-400 text-sm">
-									Preview:
-								</span>
-								<button
-									type="button"
-									class="chip {editTagColorPreset} ml-2"
-								>
-									{editTagName.trim() || "Tag preview"}
-								</button>
-							</div>
-							<div class="@xl/detail:col-span-2">
-								<label
-									class="mb-1 block font-semibold"
-									for="editTagDescription"
-								>
-									Description (optional)
-								</label>
-								<textarea
-									id="editTagDescription"
-									name="editTagDescription"
-									class="input w-full"
-									bind:value={editTagDescription}
-									placeholder="Enter tag description"
-									rows="3"
-								></textarea>
-							</div>
-						</div>
-					</div>
-				</div>
 			{/if}
 		{/snippet}
 
-		{#snippet list()}
-			<!-- The view toolbar (STYLE-GUIDE §6.3). -->
-			<ViewToolbar label="Tags" class="mb-4">
+		{#snippet toolbar()}
+			<!-- The view toolbar (STYLE-GUIDE §6.3), pinned by the split. -->
+			<ViewToolbar label="Tags">
 				{#snippet primary()}
 					<button
 						type="button"
@@ -865,14 +874,11 @@
 					/>
 				{/snippet}
 			</ViewToolbar>
+		{/snippet}
 
+		{#snippet list()}
 			{#if isLoading}
-				<div class="flex items-center justify-center py-8">
-					<Icons.Loader2
-						size={20}
-						class="text-surface-600-400 animate-spin"
-					/>
-				</div>
+				<LoadingState message="Loading tags…" />
 			{:else if filteredTags.length === 0}
 				<EmptyState
 					icon={Icons.Tag}
@@ -880,24 +886,30 @@
 						? `No tags found matching "${search}".`
 						: "No tags yet — create one to get started."}
 					ctaLabel={search ? undefined : "New tag"}
-					onCta={search ? undefined : () => (isCreating = true)}
+					onCta={search ? undefined : handleCreateClick}
 				/>
 			{:else}
-				<!-- Beautiful multi-row flex layout using Skeleton chips -->
-				<div class="flex flex-wrap gap-2">
+				<!-- The tag cloud. `p-1` is the selected ring's room: the
+					 list is the split's scroller, which clips, and the ring
+					 plus its offset stand 4px outside the chip. -->
+				<div class="flex flex-wrap gap-2 p-1">
 					{#each filteredTags as tag}
 						{@const isSelected =
-							vm.mode === "desk" && selectedTag?.id === tag.id}
-						<!-- Selection is an OUTLINE, not `.sidebar-row-active`: a
-					     tag's background is the tag's own colour preset (its
-					     data), so the app's usual selected-row surface would
-					     paint over the one thing this chip is for. The outline
-					     sits outside it and reads on every preset. -->
+							vm.mode === "desk" &&
+							!isCreating &&
+							selectedTag?.id === tag.id}
+						<!-- Selection is the selected-card RING (STYLE-GUIDE
+							 §2.4), not `.sidebar-row-active`: a tag's
+							 background is the tag's own colour preset (its
+							 data), so the app's usual selected-row surface
+							 would paint over the one thing this chip is for.
+							 The ring sits outside it, offset by the sidebar's
+							 own ground, and reads on every preset. -->
 						<button
 							type="button"
 							class="chip {tag.colorPreset ||
 								'preset-filled-primary-500'} text-sm transition-all duration-200 {isSelected
-								? 'outline-primary-500 outline-2 outline-offset-2'
+								? 'ring-primary-500 ring-offset-surface-50-950 ring-2 ring-offset-2'
 								: ''}"
 							onclick={() => handleTagClick(tag)}
 							title={tag.description || tag.name}
@@ -937,7 +949,7 @@
 						</p>
 						<div class="flex justify-end gap-2">
 							<button
-								class="btn preset-filled-surface-500"
+								class="btn preset-tonal-surface"
 								onclick={cancelDelete}
 							>
 								Cancel
@@ -955,6 +967,17 @@
 		</Portal>
 	</Dialog>
 {/if}
+
+{#snippet tagActions()}
+	<button
+		type="button"
+		class="btn btn-sm preset-filled-primary-500"
+		onclick={handleEditClick}
+	>
+		<Icons.Pencil size={16} aria-hidden="true" />
+		Edit
+	</button>
+{/snippet}
 
 {#snippet tagChip()}
 	{#if selectedTag}

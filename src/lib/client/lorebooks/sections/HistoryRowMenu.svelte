@@ -26,7 +26,7 @@
 </script>
 
 <button
-	class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+	class="btn btn-sm preset-tonal-surface w-full justify-start"
 	disabled={scenes.length === 0}
 	title={scenes.length === 0 ? "Capture scenes first" : undefined}
 	onclick={(e) => {

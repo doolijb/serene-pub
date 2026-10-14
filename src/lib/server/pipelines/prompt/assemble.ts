@@ -47,9 +47,12 @@ import {
 	type RenderRun
 } from "$lib/server/pipelines/prompt/renderers"
 import {
+	isShippedVariable,
+	layoutUseOf,
 	renderVariable,
-	shippedByKey,
 	SHIPPED_BAND_KEYS,
+	variableOfKey,
+	type LayoutUse,
 	type ResolvedLayouts
 } from "$lib/server/pipelines/entities/variableLayouts"
 import type { Decision } from "$lib/server/pipelines/ranking/select"
@@ -449,6 +452,8 @@ function anchoredEntriesOf(
  * turn, for the layout's `Earlier (turn 12)`.
  */
 const RECALLED_LINES_BAND = "recalledLines"
+/** Core's variable for that band — the one its recalled-lines shape belongs to. */
+const RECALLED_LINES_VARIABLE = "core:var/recalled-lines@1"
 
 const recalledLineMeta = (
 	payload: Record<string, unknown>
@@ -672,6 +677,13 @@ export interface RenderedContext {
 	/** What the template actually referenced, for the variable-awareness panel. */
 	usedVariables: string[]
 	/**
+	 * What each of Assemble's own keys that the template places rendered
+	 * through — the variable it meant and the row, or `null` for the floor.
+	 * For the run inspector (owner ruling 2026-10-13, P5); absent when the
+	 * template places none of them.
+	 */
+	layouts?: LayoutUse[]
+	/**
 	 * What this render had to do to something, said out loud — for the receipt.
 	 *
 	 * ⚠ Only ever present when there is something to say. On the ordinary path
@@ -759,9 +771,15 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 	const laidOut: Record<string, unknown> = {}
 	for (const key of [...CORE_RENDERED_BANDS, ...declared])
 		laidOut[key] = await bandValue(key, allocationsFrom(key), layout, {
-			selected: !!input.variables?.[key]?.source
+			selected: !!input.variables?.[key]?.source,
+			core: meansCoreBand(input.variables, key),
+			variableId: variableOfKey(input.variables, key)
 		})
-	const historyRoles = rolesOfSource("history")
+	// Core's history roles carry the dates; a `history` the spec re-pointed at
+	// a variable of its own carries none of core's (2026-10-13).
+	const historyRoles = meansCoreBand(input.variables, "history")
+		? rolesOfSource("history")
+		: undefined
 	const historyAllocations = allocationsFrom("history")
 	const currentDateLaidOut = await layout(
 		"currentDate",
@@ -1053,6 +1071,15 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		// once a pack has dropped a block: the variable-awareness panel lists
 		// what the prompt contains, never what the story string offered.
 		usedVariables: referencedVariables(packed.template),
+		// What each of this step's own keys the template places rendered
+		// through (2026-10-13, P5): its variable, and the row or the floor.
+		...(() => {
+			const placed = new Set(referencedVariables(packed.template))
+			const layouts = [...CORE_RENDERED_BANDS, ...declared, "currentDate"]
+				.filter((key) => placed.has(key))
+				.map((key) => layoutUseOf(input.variables, key))
+			return layouts.length ? { layouts } : {}
+		})(),
 		// Absent, not empty, on the ordinary path — see `RenderedContext.notes`.
 		...(notes.length ? { notes } : {})
 	}
@@ -1105,13 +1132,40 @@ const OWN_RENDERS: ReadonlySet<string> = new Set(
  */
 export function declaredBandKeys(variables: ResolvedLayouts | undefined): string[] {
 	if (!variables) return []
-	return Object.keys(variables).filter(
-		(key) =>
-			!OWN_RENDERS.has(key) &&
-			!CORE_BANDS.has(key) &&
-			(!shippedByKey.has(key) || SHIPPED_BAND_KEYS.has(key)) &&
-			isBandKey(key)
-	)
+	return Object.keys(variables).filter((key) => {
+		if (OWN_RENDERS.has(key) || CORE_BANDS.has(key) || !isBandKey(key))
+			return false
+		// By what the key renders, not by its spelling (2026-10-13): a plugin's
+		// band may share a name with a core variable in a pipeline that never
+		// meets it, and is still a band. Only a key resolved to one of core's
+		// own non-band variables — `characters` in a preview's `bareLayouts` —
+		// is not.
+		const variableId = variableOfKey(variables, key)
+		return (
+			!isShippedVariable(variableId) || SHIPPED_BAND_KEYS.has(key)
+		)
+	})
+}
+
+/**
+ * Whether a core band key **means core's band** in this render — its key
+ * resolved to core's variable, not re-pointed by the spec's `renders` at a
+ * variable of somebody else's (owner rulings 2026-10-13).
+ *
+ * The three core keys are still placed where they always were; what changes
+ * is what they hold. Core's meaning gets core's shapes (the anchored list,
+ * the role-shaped object) and core's layouts. Any other meaning is laid out
+ * like a declared band: the title-keyed object, through the selected row of
+ * the variable the key now means, with that variable's floor — never core's
+ * character-lore shape poured into somebody else's layout.
+ */
+export function meansCoreBand(
+	variables: ResolvedLayouts | undefined,
+	key: string
+): boolean {
+	if (!CORE_BANDS.has(key)) return false
+	const variableId = variableOfKey(variables, key)
+	return variableId === undefined || variableId.startsWith("core:")
 }
 
 /**
@@ -1134,26 +1188,39 @@ async function bandValue(
 	key: string,
 	allocations: readonly Allocation[],
 	layout: (key: string, value: unknown) => Promise<string>,
-	opts: { selected: boolean }
+	opts: { selected: boolean; core: boolean; variableId?: string }
 ): Promise<unknown> {
-	if (rolesOfSource(key)?.anchor)
+	// Core's entry roles are looked up by source kind, and a core key's kind is
+	// core's — so a key the spec re-pointed reads no roles at all rather than
+	// core's (`meansCoreBand`).
+	const roles =
+		CORE_BANDS.has(key) && !opts.core ? undefined : rolesOfSource(key)
+	if (roles?.anchor)
 		return await layout(key, anchoredEntriesOf(allocations))
-	if (key === RECALLED_LINES_BAND) {
+	// Core's recalled-lines shape for core's variable only: a plugin band of
+	// its own under that name is a declared band like any other.
+	if (key === RECALLED_LINES_BAND && opts.variableId === RECALLED_LINES_VARIABLE) {
 		const lines = recalledLinesOf(allocations)
 		return lines === undefined ? undefined : await layout(key, lines)
 	}
-	const value = bandObjectOf(key, allocations)
-	if (CORE_BANDS.has(key) || opts.selected) return await layout(key, value)
+	const value = bandObjectOf(allocations, roles, opts.core)
+	if (opts.core || opts.selected) return await layout(key, value)
+	// A key no layout is selected for still has a floor of its own variable's
+	// (the automatic JSON row's output); a core key re-pointed elsewhere goes
+	// through it so the variable — not the key — decides.
+	if (CORE_BANDS.has(key))
+		return value === undefined ? undefined : await layout(key, value)
 	return value === undefined ? undefined : JSON.stringify(value)
 }
 
 /** The title-keyed object for a band, else its contents as a list, else `undefined`. */
 function bandObjectOf(
-	key: string,
-	allocations: readonly Allocation[]
+	allocations: readonly Allocation[],
+	roles: ReturnType<typeof rolesOfSource>,
+	core: boolean
 ): Record<string, string> | string[] | undefined {
-	const obj = objectByRole(allocations, rolesOfSource(key))
-	if (obj || CORE_BANDS.has(key)) return obj
+	const obj = objectByRole(allocations, roles)
+	if (obj || core) return obj
 	const contents = allocations.map((a) => a.content).filter(Boolean)
 	return contents.length ? contents : undefined
 }

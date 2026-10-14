@@ -7,6 +7,8 @@
 	 * The welcome screen's "What should we call you?" field. It shows only to
 	 * someone with no display name yet and is never required; the wizard
 	 * saves it with `saveWelcomeName` as it moves on, and skips an empty one.
+	 * The wizard's quick persona (**Just call me …**) is created with the same
+	 * name (`quickPersonaName`), so the note promises both.
 	 */
 	interface Props {
 		value?: string
@@ -35,7 +37,7 @@
 		/>
 		<p id="wizard-display-name-note" class="text-surface-600-400 text-sm">
 			{t(
-				"This is the name the characters will see. You can change it later in Settings."
+				"This is the name the characters will see, and the name of the character you play."
 			)}
 		</p>
 	</div>

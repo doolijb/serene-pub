@@ -620,7 +620,23 @@
 				// is intentionally not a gesture — pinning a rail must not make a
 				// previewed width's clamp count as an arrangement the user made.
 				if (a === "pin") {
-					onTogglePin?.()
+					if (!onTogglePin) return
+					// The zone's pin is every card's in it (an un-arranged
+					// side), and the editor writes it onto the working frame
+					// too — so this zone's own record of each card's pin
+					// follows, or the next emit would put the old one back.
+					const next = !pinned
+					for (const m of meta.values())
+						m.pinned = next ? undefined : false
+					// …and the stamp a card carries into another zone.
+					hostEl
+						.querySelectorAll<HTMLElement>(".gsc")
+						.forEach((g) =>
+							next
+								? delete g.dataset.pinned
+								: (g.dataset.pinned = "false")
+						)
+					onTogglePin()
 					return
 				}
 				// fit / dock / anchor are all deliberate edits, same as a drag —

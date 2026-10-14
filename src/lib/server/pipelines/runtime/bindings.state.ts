@@ -36,13 +36,22 @@ import { getAttributeSlot, halt, ok, reads } from "@serene-pub/sdk"
 import type * as C from "@serene-pub/contracts"
 import type { CoreQueryCtx, NodeInput } from "./bindingTypes"
 import type { RenderRun } from "$lib/server/pipelines/prompt/renderers"
-import type { StateChange } from "$lib/server/state/write"
+import type { ClockChange, StateChange } from "$lib/server/state/write"
 
-/** A change the node was handed, sanity-checked before anything is written. */
-function readChanges(raw: unknown): StateChange[] {
+/**
+ * A change the node was handed, sanity-checked before anything is written.
+ * 🚧 A clock line (`{ kind: 'clock', by, unit }`, live scenes ★3) is kept as
+ * it is: `propose` holds it as a clock proposal, `apply` passes it over.
+ */
+function readChanges(raw: unknown): Array<StateChange | ClockChange> {
 	if (!Array.isArray(raw)) return []
-	return raw.filter((c): c is StateChange => {
+	return raw.filter((c): c is StateChange | ClockChange => {
 		if (!c || typeof c !== "object") return false
+		if ((c as { kind?: unknown }).kind === "clock")
+			return (
+				typeof (c as { by?: unknown }).by === "number" &&
+				typeof (c as { unit?: unknown }).unit === "string"
+			)
 		const owner = (c as { owner?: { kind?: unknown; id?: unknown } }).owner
 		if (typeof owner?.kind !== "string" || typeof owner?.id !== "number")
 			return false
@@ -51,6 +60,10 @@ function readChanges(raw: unknown): StateChange[] {
 		return typeof (c as { slotId?: unknown }).slotId === "string"
 	})
 }
+
+/** Whether a read change is a clock line rather than a value change. */
+const isClockLine = (c: StateChange | ClockChange): c is ClockChange =>
+	(c as { kind?: unknown }).kind === "clock"
 
 /**
  * `resolve-state-changes`' `owners` (lair re-plan R10): participant
@@ -748,13 +761,68 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 					}
 				}
 
+				/**
+				 * 🚧 **The keeper's clock move** (live scenes §6, ★3): the
+				 * first entry of its answer's `clock` list, on `changes` as a
+				 * clock line for `propose` to hold and on `clock` for a spec
+				 * that applies it through *Advance story clock*. Forward
+				 * only, the collected step's own bounds, and only a step this
+				 * session's clock could take now — anything else is a
+				 * sentence, never a button nobody could press. A step of
+				 * nothing (`by` 0) is no move at all, and says nothing.
+				 *
+				 * 🚧 A well-formed ask the story cannot take — no clock yet,
+				 * a date the calendar cannot place — still rides `changes`,
+				 * marked `skipped` with why (live scenes §15 G16): `set-state`
+				 * writes it to the ledger as a skipped clock row, as a
+				 * skipped *Advance story clock* does, so the person reads it
+				 * under the reply and not on the receipt alone. Never on
+				 * `clock`: nothing moves. A malformed or backward ask is the
+				 * keeper's mistake and stays a sentence on `refused`.
+				 */
+				let clock: { by: number; unit: string } | null = null
+				const { clockAsksOf, clockAskRefusal, clockMoveProblem } = await import(
+					"$lib/server/state/clockProposal"
+				)
+				const asked = clockAsksOf((input as { clock?: unknown })?.clock).filter(
+					(a) => !(a && typeof a === "object" && (a as { by?: unknown }).by === 0)
+				)
+				if (asked.length) {
+					const refusal = clockAskRefusal(asked[0])
+					const { by, unit } = asked[0] as {
+						by: number
+						unit: import("$lib/shared/lorebooks/storyDate").StoryTimeUnit
+					}
+					const problem = refusal ?? (await clockMoveProblem(db, sessionId, by, unit))
+					if (problem) {
+						refused.push(problem)
+						if (refusal === null) {
+							const { clockSkipReason } = await import("$lib/server/state/clockMoves")
+							changes.push({
+								kind: "clock",
+								by,
+								unit,
+								skipped: await clockSkipReason(db, sessionId, problem)
+							} satisfies ClockChange)
+						}
+					} else {
+						clock = { by, unit }
+						changes.push({ kind: "clock", by, unit } satisfies ClockChange)
+					}
+					if (asked.length > 1)
+						refused.push(
+							`The keeper asked to move the clock ${asked.length} times in one answer; only the first was taken.`
+						)
+				}
+
 				const main = {
 					changes,
-					...(refused.length ? { refused } : {})
+					...(refused.length ? { refused } : {}),
+					...(clock ? { clock } : {})
 				}
-				return ok({ main, changes, refused })
+				return ok({ main, changes, refused, clock })
 			},
-			{ ports: ["changes", "owners", "keeps", "scope", "plan", "base", "supply"] }
+			{ ports: ["changes", "owners", "keeps", "scope", "plan", "clock", "base", "supply"] }
 		),
 
 		"core:task/set-state@1": reads<typeof C.setState>(
@@ -833,7 +901,62 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 				const applied: number[] = []
 				const proposed: number[] = []
 				const refused: string[] = []
+				/** 🚧 Skipped clock rows written (§15 G16) — on `main`, for the announcement. */
+				const skipped: number[] = []
 				for (const raw of changes) {
+					/**
+					 * 🚧 A clock line (★3): held as a **clock proposal** in
+					 * `propose` mode, filed where the world's changes are.
+					 * Passed over in `apply` — neither applied nor refused —
+					 * because a moved clock is announced through a host seam
+					 * a task does not have: the trusted arm that applies the
+					 * keeper's clock wires *Advance story clock* from
+					 * `resolve-state-changes`' `clock` port instead.
+					 */
+					if (isClockLine(raw)) {
+						/**
+						 * 🚧 A skipped clock line (live scenes §15 G16): the
+						 * keeper asked for time the story has no clock for.
+						 * Written to the ledger in either mode — never held as
+						 * a proposal nobody could accept, never moved — where
+						 * the world's changes file; once per anchor, so an
+						 * extend re-running the keeper over the same reply
+						 * does not say it twice.
+						 */
+						if (typeof raw.skipped === "string" && raw.skipped) {
+							const { recordClockMove } = await import("$lib/server/state/clockMoves")
+							skipped.push(await recordClockMove(db, {
+								sessionId,
+								by: raw.by,
+								unit: raw.unit,
+								cause: "keeper",
+								updatedBy: ctxWrite.updatedBy,
+								skipped: raw.skipped,
+								once: true,
+								...(worldRow !== undefined ? { messageId: worldRow } : {})
+							}))
+							continue
+						}
+						if (mode === "apply") continue
+						try {
+							const { proposeClockChange } = await import(
+								"$lib/server/state/clockProposal"
+							)
+							proposed.push(
+								await proposeClockChange(
+									db,
+									worldRow !== undefined
+										? { ...ctxWrite, messageId: worldRow, ownAnchor: true }
+										: ctxWrite,
+									raw
+								)
+							)
+						} catch (e) {
+							if (e instanceof StateRefusal) refused.push(e.message)
+							else throw e
+						}
+						continue
+					}
 					const change =
 						raw.base == null && nodeBase !== null
 							? { ...raw, base: nodeBase }
@@ -859,6 +982,7 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 				const main = {
 					applied,
 					proposed,
+					...(skipped.length ? { skipped } : {}),
 					...(refused.length ? { refused } : {})
 				}
 				return ok({ main, applied, proposed, refused })

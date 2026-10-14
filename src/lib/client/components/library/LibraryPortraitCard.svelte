@@ -2,6 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import type { LibraryCatalogItem } from "$lib/shared/library/types"
 	import RetryableImage from "./RetryableImage.svelte"
+	import { characterSummary } from "$lib/shared/characters/characterSummary"
 
 	interface Props {
 		item: LibraryCatalogItem
@@ -21,13 +22,14 @@
 		onclick
 	}: Props = $props()
 
-	function getExcerpt(text: string, maxLength: number = 90): string {
-		// Iterate by code point (not UTF-16 code unit) so truncation can't
-		// split a surrogate pair (eg. an emoji) in half.
-		const chars = Array.from(text)
-		if (chars.length <= maxLength) return text
-		return chars.slice(0, maxLength).join("").trim() + "…"
-	}
+	/** What the card is, not its raw sheet (plan F1): the description's
+	 *  first sentence, clipped by code point so an emoji is never split. */
+	const excerpt = $derived(
+		characterSummary(
+			{ name: item.name, description: item.description },
+			{ maxLength: 90 }
+		)
+	)
 </script>
 
 <button
@@ -66,9 +68,11 @@
 		<span class="truncate text-sm font-bold text-white drop-shadow-sm">
 			{item.name}
 		</span>
-		<span class="line-clamp-2 text-xs leading-snug text-white/80">
-			{getExcerpt(item.description)}
-		</span>
+		{#if excerpt}
+			<span class="line-clamp-2 text-xs leading-snug text-white/80">
+				{excerpt}
+			</span>
+		{/if}
 	</div>
 
 	<div class="absolute top-2 right-2 flex items-center gap-1">

@@ -171,7 +171,7 @@
 											>
 												{#if onCancel && !isDone(progress)}
 													<button
-														class="btn btn-sm preset-filled-error-500"
+														class="btn btn-sm preset-tonal-error"
 														onclick={() =>
 															onCancel?.(
 																progress.modelName

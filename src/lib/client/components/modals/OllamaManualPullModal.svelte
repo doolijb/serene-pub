@@ -135,7 +135,7 @@
 
 				<div class="flex gap-4">
 					<button
-						class="btn preset-filled-surface-500 flex-1"
+						class="btn preset-tonal-surface flex-1"
 						onclick={onclose}
 						disabled={isLoading}
 					>

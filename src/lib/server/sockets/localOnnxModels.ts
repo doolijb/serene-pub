@@ -769,7 +769,7 @@ export const connectionsRemoveModelFiles: Handler<
 
 		if ((await activeModelIdFor(modality)) === row.model)
 			return fail(
-				"The active model can't be removed from disk. Make another model active first.",
+				`The model in the ${modality === "embeddings" ? "Embeddings" : "Entities"} loadout can't be removed from disk. Put another model in that loadout first.`,
 				endpoint,
 				row
 			)

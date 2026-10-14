@@ -1,6 +1,11 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import Select from "$lib/client/components/inputs/Select.svelte"
+	import ConnectionFieldSelect from "./ConnectionFieldSelect.svelte"
+	import {
+		KOBOLDCPP_REQUEST_SWITCHES,
+		PROMPT_FORMAT,
+		TOKEN_COUNTER
+	} from "./connectionFieldWords"
 	import { completionTemplateOptions } from "$lib/client/stores/completionTemplateOptions.svelte"
 	import { connectionWireMode } from "$lib/client/stores/connectionWireMode.svelte"
 	import { usesCompletionTemplate } from "$lib/shared/connectionAdapters/wireMode"
@@ -8,7 +13,8 @@
 	import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
-	import { onMount, getContext } from "svelte"
+	import { getContext } from "svelte"
+	import { useExtraJsonSync } from "./extraJsonSync.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { z } from "zod"
@@ -102,6 +108,10 @@
 	// listener for the event and fans it out, so the parent sidebar's own
 	// interest is untouched by this form coming and going.
 	const onConnectionsTest = (msg: Sockets.Connections.Test.Response) => {
+		// The event fans out to every open form: another connection's result
+		// is not this one's.
+		if (msg.connectionId != null && msg.connectionId !== connection.id)
+			return
 		testResult = {
 			ok: msg.ok,
 			error: msg.error ?? undefined,
@@ -167,44 +177,22 @@
 		}
 	}
 
-	// Skips the FIRST write-back, which is the defaults normalization done in
-	// onMount, not a user edit.
-	//
-	// onMount builds the field state from `{...defaults, ...connection.extraJson}`,
-	// so it legitimately gains every default key the stored row lacked. Writing
-	// that straight back into `connection` made the form differ from the
-	// parent's `originalConnection` the instant it opened — the panel reported
-	// unsaved changes with nothing touched, and then blocked closing behind a
-	// destructive-sounding confirm. Real edits still write through, and a save
-	// still persists the full normalized set.
-	let extraJsonInitialized = false
-	$effect(() => {
-		const _koboldCppFields = koboldCppFields
-		if (!_koboldCppFields) return
-		// Computed on EVERY run, before the skip check, and deliberately so:
-		// an effect only subscribes to the state it actually reads, and the
-		// individual field values are read inside this call. Returning before
-		// it — as a first attempt did — meant the effect never subscribed to
-		// them, so later toggles re-triggered nothing and the form never went
-		// dirty. Skip the WRITE, never the read.
-		const nextExtraJson = extraFieldsToExtraJson(_koboldCppFields)
-		// The first populated run is onMount's defaults normalization, not a
-		// user edit — writing it back made the panel report unsaved changes the
-		// instant it opened, then block closing behind a destructive confirm.
-		if (!extraJsonInitialized) {
-			extraJsonInitialized = true
-			return
-		}
-		connection.extraJson = nextExtraJson
-	})
-
-	onMount(() => {
-		if (connection.extraJson) {
-			const extraJson = { ...defaultExtraJson, ...connection.extraJson }
-			koboldCppFields = extraJsonToExtraFields(extraJson)
-		} else {
-			koboldCppFields = extraJsonToExtraFields(defaultExtraJson)
-		}
+	// Seeds the fields from `{...defaults, ...connection.extraJson}` on mount
+	// and whenever the draft is replaced from outside (an external save, Reset),
+	// and writes back only on a real edit — merged over `extraJson`, so keys
+	// this form doesn't own survive. See `useExtraJsonSync` for why the seed's
+	// own write-back is skipped.
+	useExtraJsonSync<ExtraFieldData>({
+		connection: () => connection,
+		fields: () => koboldCppFields,
+		seed: (extraJson) => {
+			koboldCppFields = extraJsonToExtraFields({
+				...defaultExtraJson,
+				...(extraJson ?? {})
+			} as ExtraJson)
+		},
+		project: (fields) =>
+			extraFieldsToExtraJson(fields)
 	})
 </script>
 
@@ -233,29 +221,25 @@
 		<p class="text-error-500 mt-2 text-sm">{testResult.error}</p>
 	{/if}
 	{#if showFormat}
-		<div class="mt-2 flex flex-col gap-1">
-			<Select
-				label="Prompt format"
-				class="w-full"
-				options={formatOptions.value.map((o) => ({
-					value: String(o.value),
-					label: o.label
-				}))}
-				bind:value={connection.promptFormat}
-			/>
-		</div>
-	{/if}
-	<div class="mt-2 flex flex-col gap-1">
-		<Select
-			label="Token counter"
-			class="w-full"
-			options={TokenCounterOptions.options.map((t) => ({
-				value: String(t.value),
-				label: t.label
+		<ConnectionFieldSelect
+			class="mt-2"
+			words={PROMPT_FORMAT}
+			options={formatOptions.value.map((o) => ({
+				value: String(o.value),
+				label: o.label
 			}))}
-			bind:value={connection.tokenCounter}
+			bind:value={connection.promptFormat}
 		/>
-	</div>
+	{/if}
+	<ConnectionFieldSelect
+		class="mt-2"
+		words={TOKEN_COUNTER}
+		options={TokenCounterOptions.options.map((t) => ({
+			value: String(t.value),
+			label: t.label
+		}))}
+		bind:value={connection.tokenCounter}
+	/>
 	<details class="mt-4">
 		<summary
 			class="hover:preset-tonal-primary flex cursor-pointer items-center gap-2 rounded-[10px] px-2 py-2 text-[13px] font-medium"
@@ -287,141 +271,46 @@
 				     Left as two controls for one fact, the switch and the
 				     capability could disagree, and only one of them decided
 				     what went on the wire. -->
-				<Switch
-					name="stream"
-					checked={koboldCppFields.stream}
-					onCheckedChange={(e) =>
-						(koboldCppFields!.stream = e.checked)}
-					class="flex items-center justify-between gap-4"
-				>
-					<Switch.Label class="font-semibold">Stream</Switch.Label>
-					<Switch.Control
-						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-					>
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-				</Switch>
-				<Switch
-					name="useMemory"
-					checked={koboldCppFields.useMemory}
-					onCheckedChange={(e) =>
-						(koboldCppFields!.useMemory = e.checked)}
-					class="flex items-center justify-between gap-4"
-				>
-					<Switch.Label class="font-semibold">
-						Use Memory
-					</Switch.Label>
-					<Switch.Control
-						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-					>
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-				</Switch>
-				{#if koboldCppFields.useMemory}
+				<!-- Each switch's label and help line come from
+				     `connectionFieldWords`, shared by both KoboldCPP forms so
+				     the two cannot say different things. -->
+				{#each KOBOLDCPP_REQUEST_SWITCHES as s (s.key)}
 					<div class="flex flex-col gap-1">
-						<label class="font-semibold" for="memory">
-							Memory Text
-						</label>
-						<textarea
-							id="memory"
-							bind:value={koboldCppFields.memory}
-							placeholder="Text to forcefully append to the beginning of prompts"
-							class="textarea h-20"
-						></textarea>
-						<p class="text-surface-600-400 text-xs">
-							This text is forcefully appended to the beginning of
-							any prompt
-						</p>
+						<Switch
+							name={s.key}
+							checked={koboldCppFields[s.key]}
+							onCheckedChange={(e) =>
+								(koboldCppFields![s.key] = e.checked)}
+							class="flex items-center justify-between gap-4"
+						>
+							<Switch.Label class="font-semibold">
+								{s.label}
+							</Switch.Label>
+							<Switch.Control
+								class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+							>
+								<Switch.Thumb />
+							</Switch.Control>
+							<Switch.HiddenInput />
+						</Switch>
+						<p class="text-surface-600-400 text-xs">{s.help}</p>
 					</div>
-				{/if}
-				<Switch
-					name="trimStop"
-					checked={koboldCppFields.trimStop}
-					onCheckedChange={(e) =>
-						(koboldCppFields!.trimStop = e.checked)}
-					class="flex items-center justify-between gap-4"
-				>
-					<Switch.Label class="font-semibold">
-						Trim Stop Sequences
-					</Switch.Label>
-					<Switch.Control
-						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-					>
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-				</Switch>
-				<Switch
-					name="renderSpecial"
-					checked={koboldCppFields.renderSpecial}
-					onCheckedChange={(e) =>
-						(koboldCppFields!.renderSpecial = e.checked)}
-					class="flex items-center justify-between gap-4"
-				>
-					<Switch.Label class="font-semibold">
-						Render Special Tokens
-					</Switch.Label>
-					<Switch.Control
-						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-					>
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-				</Switch>
-				<Switch
-					name="bypassEos"
-					checked={koboldCppFields.bypassEos}
-					onCheckedChange={(e) =>
-						(koboldCppFields!.bypassEos = e.checked)}
-					class="flex items-center justify-between gap-4"
-				>
-					<Switch.Label class="font-semibold">
-						Bypass EOS Token
-					</Switch.Label>
-					<Switch.Control
-						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-					>
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-				</Switch>
-				<Switch
-					name="grammarRetainState"
-					checked={koboldCppFields.grammarRetainState}
-					onCheckedChange={(e) =>
-						(koboldCppFields!.grammarRetainState = e.checked)}
-					class="flex items-center justify-between gap-4"
-				>
-					<Switch.Label class="font-semibold">
-						Retain Grammar State
-					</Switch.Label>
-					<Switch.Control
-						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-					>
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-				</Switch>
-				<Switch
-					name="replaceInstructPlaceholders"
-					checked={koboldCppFields.replaceInstructPlaceholders}
-					onCheckedChange={(e) =>
-						(koboldCppFields!.replaceInstructPlaceholders =
-							e.checked)}
-					class="flex items-center justify-between gap-4"
-				>
-					<Switch.Label class="font-semibold">
-						Replace Instruct Placeholders
-					</Switch.Label>
-					<Switch.Control
-						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-					>
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-				</Switch>
+					{#if s.key === "useMemory" && koboldCppFields.useMemory}
+						<div class="flex flex-col gap-1">
+							<label class="font-semibold" for="memory">
+								Memory text
+							</label>
+							<!-- What it does is the Use memory line just
+							     above; no second sentence for it here. -->
+							<textarea
+								id="memory"
+								bind:value={koboldCppFields.memory}
+								placeholder="Notes the model should always see"
+								class="textarea h-20"
+							></textarea>
+						</div>
+					{/if}
+				{/each}
 			</section>
 		{/if}
 	</details>

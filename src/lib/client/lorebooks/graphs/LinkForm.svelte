@@ -155,7 +155,7 @@
 
 	<div class="flex justify-end gap-2">
 		<button
-			class="btn btn-sm preset-filled-surface-400-600"
+			class="btn btn-sm preset-tonal-surface"
 			type="button"
 			onclick={onCancel}
 		>

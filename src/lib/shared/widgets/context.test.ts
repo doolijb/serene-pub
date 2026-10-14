@@ -1,12 +1,22 @@
 import { describe, expect, it, test } from "vitest"
-import { parseChannel, WIDGET_SCOPED_SECTIONS } from "@serene-pub/sdk"
+import {
+	parseChannel,
+	WIDGET_SCOPED_SECTIONS,
+	type SessionCharacterV1,
+	type SessionCharactersV1,
+	type WidgetSectionScope
+} from "@serene-pub/sdk"
 import {
 	deriveChrome,
 	eventInScope,
 	findAction,
+	LORE_GRANTED,
 	makeInvoke,
+	personaSection,
 	projectActions,
+	projectScopedSections,
 	SCOPED_SECTION_CONTEXT_KEYS,
+	SESSION_CHARACTERS_KEY,
 	scopeMessages,
 	WidgetMessageFeed,
 	type ActionsV1,
@@ -376,9 +386,78 @@ describe("actions.v1 and invoke", () => {
 })
 
 describe("scoped sections come off the SDK's one table", () => {
-	test("every scope in the table but lore and persona has a page context to supply it", () => {
-		expect(Object.keys(SCOPED_SECTION_CONTEXT_KEYS).sort()).toEqual(["characters", "session:full", "session:state"])
+	test("every scope in the table but lore has a page context to supply it; persona reads the cast's", () => {
+		expect(Object.keys(SCOPED_SECTION_CONTEXT_KEYS).sort()).toEqual([
+			"characters",
+			"persona",
+			"session:full",
+			"session:state"
+		])
 		for (const scope of Object.keys(SCOPED_SECTION_CONTEXT_KEYS))
 			expect(Object.hasOwn(WIDGET_SCOPED_SECTIONS, scope)).toBe(true)
+		expect(SCOPED_SECTION_CONTEXT_KEYS.persona).toBe(SESSION_CHARACTERS_KEY)
+	})
+
+	const member = (over: Partial<SessionCharacterV1>): SessionCharacterV1 => ({
+		ref: "character:1",
+		characterId: 1,
+		isPersona: false,
+		mine: false,
+		name: "Ada",
+		face: null,
+		sprite: null,
+		spriteSets: [],
+		spriteSet: null,
+		canChangeSpriteSet: false,
+		...over
+	})
+	const cast: SessionCharactersV1 = {
+		members: [
+			member({ ref: "character:1", characterId: 1, name: "Ada" }),
+			// Someone else's persona, and one of the viewer's they are not voicing.
+			member({ ref: "character:7", characterId: 7, name: "Bo", isPersona: true }),
+			member({ ref: "character:9", characterId: 9, name: "Cy", isPersona: true, mine: true })
+		],
+		sceneImages: { left: null, right: null }
+	}
+	/** The page's handles, as `SCOPED_SECTION_CONTEXT_KEYS` names them. */
+	const handles = (over: Record<string, unknown> = {}) => {
+		const byKey: Record<string, unknown> = { [SESSION_CHARACTERS_KEY]: cast, ...over }
+		return (scope: WidgetSectionScope) => {
+			const key = SCOPED_SECTION_CONTEXT_KEYS[scope]
+			return key ? byKey[key] : undefined
+		}
+	}
+
+	test("persona is the viewer's own personas, cut from the cast: the same members, empty (never absent) when they voice none", () => {
+		const persona = personaSection(cast)
+		expect(persona?.map((m) => m.name)).toEqual(["Cy"])
+		expect(persona?.[0]).toBe(cast.members[2])
+		expect(personaSection({ ...cast, members: cast.members.slice(0, 2) })).toEqual([])
+		expect(personaSection(undefined)).toBeNull()
+	})
+
+	test("persona is posted under its OWN grant — holding characters is not holding persona, nor the reverse", () => {
+		expect(projectScopedSections(["persona"], handles())).toEqual({ persona: [cast.members[2]] })
+		expect(projectScopedSections(["characters"], handles())).toEqual({ characters: cast })
+		expect(projectScopedSections([], handles())).toBeUndefined()
+		expect(projectScopedSections(undefined, handles())).toBeUndefined()
+		// No cast yet: not yet, never an empty list.
+		expect(projectScopedSections(["persona"], handles({ [SESSION_CHARACTERS_KEY]: undefined }))).toBeUndefined()
+	})
+
+	test("lore is the grant marker: { granted: true } when granted, absent otherwise, whatever the page holds", () => {
+		const read: WidgetSectionScope[] = []
+		const handleOf = (scope: WidgetSectionScope) => {
+			read.push(scope)
+			return undefined
+		}
+		expect(projectScopedSections(["lore"], handleOf)).toEqual({ lore: { granted: true } })
+		expect(projectScopedSections(["lore"], handleOf)?.lore).toBe(LORE_GRANTED)
+		expect(projectScopedSections(["session:state"], handleOf)).toBeUndefined()
+		expect(Object.isFrozen(LORE_GRANTED)).toBe(true)
+		// Only granted scopes are read; a scope no table names is skipped.
+		expect(read).toEqual(["lore", "lore", "session:state"])
+		expect(projectScopedSections(["channel:x" as WidgetSectionScope], handleOf)).toBeUndefined()
 	})
 })

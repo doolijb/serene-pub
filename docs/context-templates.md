@@ -16,7 +16,7 @@ Templates are written in **Handlebars** (everything Serene Pub ships, and every 
 
 ## Where they live
 
-A context template is chosen per pipeline, in the **Pipelines** view, on the step that builds the prompt. The choice is part of the pipeline's **configuration** (see [Pipelines and configurations](./pipelines.md)).
+A context template is chosen per pipeline, in **Admin › Pipelines**, on the step that builds the prompt. The choice is part of the pipeline's **configuration** (see [Pipelines and configurations](./pipelines.md)).
 
 Templates are **shared, not owned by one pipeline**. A template fits the _kind of step_ that renders it, so one written for session replies is just as selectable for the narrator. The picker groups templates by where they came from (this pipeline's, then the shipped ones, then everything else that fits), and hides nothing.
 
@@ -34,12 +34,14 @@ A template can't be deleted while any pipeline or session still uses it. Because
 
 ### The editor
 
-Opened from a pipeline step, the editor knows exactly what that step supplies, and helps in both languages:
+The template sits in a code editor: line numbers, undo and redo, **Ctrl+F** to search and replace, bracket matching, and the tags of your language — Handlebars or Liquid — coloured apart from the prose around them. The field starts a few lines tall and grows with the text. Opened from a pipeline step, the editor also knows exactly what that step supplies, and helps in both languages:
 
-- **Completion.** Type `{{` (or `{{{`) for the names available, each with its type and a description. After a `.` it offers that value's fields; inside `{{#each}}` it offers the item's fields plus `@index`, `@first` and `@last`. `{{#` offers the blocks and writes the closing tag too. In Liquid, `{% ` offers the tags and `|` the filters. **Ctrl+Space** reopens the list.
-- **Hover.** Rest the caret on a name to see its type, description and which step supplies it, or the name you probably meant.
-- **Lint.** A name nothing supplies is underlined: a red wave for an error, an ember one for a warning. The list below says what is wrong and on which line, and offers a fix such as **Use "message"** where there is an obvious near miss (**Ctrl+.** applies it). These are the same checks as saving and selecting, so the editor and the save never disagree.
+- **Completion.** Type `{{` (or `{{{`) for the names available, each with its type and a description. After a `.` it offers that value's fields; inside `{{#each}}` it offers the item's fields plus `@index`, `@first` and `@last`. `{{#` offers the blocks and writes the closing tag too. In Liquid, `{% ` offers the tags and `|` the filters. **Ctrl+Space** reopens the list; **↑**/**↓** move through it and **Enter** or **Tab** accepts.
+- **Hover.** Rest the caret on a name to see, under the field, its type, description and which step supplies it, or the name you probably meant.
+- **Lint.** A name nothing supplies is underlined: a red wave for an error, an ember one for a warning. Rest the pointer on the wave to read the finding, or read the list below the field, which says what is wrong and on which line and offers a fix such as **Use "message"** where there is an obvious near miss (**Ctrl+.** at the caret applies it). A template that doesn't parse is underlined once you stop typing, not on every keystroke. These are the same checks as saving and selecting, so the editor and the save never disagree.
 - **Variables available here.** Beside the text (below it when narrow): see the next section.
+
+The same editor edits a **variable layout** and, in **Admin › Scripts**, a script's source — there in JavaScript, offering the reads the script declares and marking a read it uses but hasn't declared.
 
 ### Finding the variables a template can use
 
@@ -195,7 +197,7 @@ Three blocks mark who is speaking: `systemBlock` for instructions and context, `
 
 ### Variable layouts: where the headings and fences come from
 
-The template above has no `Assistant Characters (AI-controlled):` heading and no ` ```json ` fence, just `{{{characters}}}`. Those come from a **variable layout**: a small template that writes out one value, chosen per pipeline in the **Pipelines** view.
+The template above has no `Assistant Characters (AI-controlled):` heading and no ` ```json ` fence, just `{{{characters}}}`. Those come from a **variable layout**: a small template that writes out one value, chosen per pipeline in **Admin › Pipelines**.
 
 The template owns the _structure_ (blocks, order, `{{#if}}`, `{{#each}}`); a layout owns the _presentation_ (the heading, the fence, JSON or prose). So to write characters as prose, you don't rewrite the whole template: duplicate the **Titled JSON block** layout for `characters`, write prose instead, and select it. Layouts belong to the value they render, so the same one is offered to every pipeline that renders characters.
 
@@ -207,6 +209,10 @@ Two layouts ship for each wrapped value:
 If your template writes its own headings and fences, select the bare **JSON** / **As written** layouts so nothing is written twice. A value with nothing in it renders nothing, heading included.
 
 Every value that holds an object or a list of them gets a layout. When nothing ships one (for example a plugin's own value), Serene Pub adds a plain **JSON** layout for it. Shipped layouts can't be edited; duplicate one to write your own.
+
+**When a pipeline means something else by a name.** A plugin's pipeline can put its own data under a name core uses, such as a ranked list of lore under `characterLore`. The pipeline says so, and the setting then offers that data's layouts instead of core's: its plain **JSON** layout when the data is an object, or the built-in default when it is plain text. A layout you picked for core's version stops applying, and the configuration shows a notice that it was removed. The run inspector lists which layout each value used (see [Pipelines → Inspecting a run](./pipelines.md#inspecting-a-run)).
+
+**Reading a shipped layout.** Each one is written one tag or one JSON key per line, indented the way the value nests. Two Handlebars rules keep that layout out of the prompt. A tag alone on its line (`{{#each …}}`, `{{/if}}`) leaves nothing behind, not even its line break. Where the prompt has no line breaks at all, such as the minified world lore and history, a `~` inside a tag swallows the whitespace beside it: `{{~#each x~}}` on both sides, `{{~else}}` before it. So a line that starts with `{{~` continues the one above, and the indentation is for you, not the model. A duplicate keeps the same shape, and the same rules apply to anything you write in it.
 
 ### The postHistory object
 
@@ -220,7 +226,7 @@ The **post-history reminder** is a block of reminders placed near the end of the
 
 **The trigger.** The step's **Post-history token trigger** holds the whole block back until the conversation is that long, since a reminder two messages after the instructions is noise. Reply pipelines ship with it at **3000** tokens, and so do the actions that write prose from the conversation (a side character's line, Adventure's **Look**, the Lair's **Trigger trap** and **Reveal**). **Narrate** and short structured calls (answering a form, Adventure's **Ask**, **Rest** and **Time passes**, the Lair's room drafting, the tool loop) use 0, so their reminder is always there: for them it carries the direction or the answer format, not a nudge back into character.
 
-The depth and trigger apply to every prompt-building step in a pipeline. Adventure has four such steps, and each can be set separately in the Pipelines view. The three reminders always travel together: below the trigger none is sent, above it all are.
+The depth and trigger apply to every prompt-building step in a pipeline. Adventure has four such steps, and each can be set separately in **Admin › Pipelines**. The three reminders always travel together: below the trigger none is sent, above it all are.
 
 **Checking what happened.** A held-back reminder leaves nothing in the prompt, so the run inspector's **Prompt** tab says so for the step that decided: _Post-history reminder: suppressed, 278 tokens is below the 3000 trigger_, or _included at message 12_ (see [Pipelines → Inspecting a run](./pipelines.md#inspecting-a-run)).
 
@@ -298,7 +304,7 @@ An entry's **Priority** (see [Lorebooks](./lorebooks.md)) adds a bonus. Entries 
 - `{{{worldLore}}}` and `{{{characterLore}}}` are in order of relevance, not lorebook order, so the first entry can change from turn to turn. `{{{history}}}` is newest first, each headed by its date (`412-03-05`, `412-03`, or `Year 412`).
 - When the model's context window is full, nothing more is added that turn. **Context Tokens** in the [sampling config](./connections.md#sampling-configs) sets the window.
 - When the conversation itself no longer fits, its oldest messages are left out: enough to free about a quarter of the budget at once, starting at a message kept for the next turns, so the start of the prompt stays the same until the conversation outgrows it again. The run inspector's **Prompt** tab says how many were left out.
-- How much of the conversation is read in the first place follows the context window too, not a count of messages: a reply reads about twice what the window could hold (up to 2,000 messages), so a long session never loses a message off its start on every turn just because it passed a fixed number. Steps that ask the model a question rather than continue the story (answering a form, Adventure's **Ask**, the Lair's room drafting) still read the newest **100**, set by the history read's **Limit** in the [Pipelines view](./pipelines.md).
+- How much of the conversation is read in the first place follows the context window too, not a count of messages: a reply reads about twice what the window could hold (up to 2,000 messages), so a long session never loses a message off its start on every turn just because it passed a fixed number. Steps that ask the model a question rather than continue the story (answering a form, Adventure's **Ask**, the Lair's room drafting) still read the newest **100**, set by the history read's **Limit** in [Admin › Pipelines](./pipelines.md).
 
 ## Why character, persona, and lore data is JSON, not prose
 

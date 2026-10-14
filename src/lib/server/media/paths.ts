@@ -19,6 +19,10 @@ export interface MediaProvenance {
 	characterId?: number | null
 	sessionId?: number | null
 	messageId?: number | null
+	/** A private conversation's upload (PLAN-private-messages §4 Uploads). */
+	conversationId?: number | null
+	/** A lorebook-owned upload — a cast member's face (PLAN-cast-retold-fields). */
+	lorebookId?: number | null
 }
 
 /** Absolute root that every media path is resolved against and jailed inside. */
@@ -28,7 +32,8 @@ export function mediaRoot(): string {
 
 /**
  * Rule 1 — **deepest known parent wins**, in one fixed precedence applied
- * everywhere: message → session, character, else a user-level bucket.
+ * everywhere: message → session, character, conversation, else a user-level
+ * bucket.
  *
  * Rule 6 — **import sources do not get their own tree.** A character card, an
  * ST folder import and a manual upload all land under the entity they produced.
@@ -44,6 +49,13 @@ function relDir(p: MediaProvenance, bucket?: string): string {
 	}
 	if (p.characterId)
 		return path.join(user, "characters", String(p.characterId))
+	// A file uploaded into a private conversation: its own bucket, so a
+	// conversation's bytes never sit in a session or character directory.
+	if (p.conversationId)
+		return path.join(user, "conversations", String(p.conversationId))
+	// A cast member's face, uploaded to the lorebook rather than to a card.
+	if (p.lorebookId)
+		return path.join(user, "lorebooks", String(p.lorebookId))
 	// A persona is a character, so its files land beside every other
 	// character's. ⚠ A file whose stored path is under `personas/<id>/` STAYS
 	// THERE: `variants.path` is authoritative and re-parenting never moves a

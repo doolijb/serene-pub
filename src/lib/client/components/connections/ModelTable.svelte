@@ -40,6 +40,8 @@
 		formatPrice
 	} from "$lib/shared/connections/modelFacts"
 	import { formatSize, modelDisplay } from "./modelDisplay"
+	import { modelMatchesQuery } from "./connectionViewChrome"
+	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
 
 	type ModelOf = Sockets.Connections.Models.ModelRow
 
@@ -49,6 +51,11 @@
 		defaultsByModel: Record<number, string[]>
 		/** Show the disk column instead of the price columns. */
 		local?: boolean
+		/**
+		 * Use's word on a row — **Use in Reply** where that is the press the
+		 * status card names (`ModelRow`'s `useLabel`, per row here). "Use".
+		 */
+		useLabelOf?: (model: ModelOf) => string
 		onOpen: (modelId: number) => void
 		onUse: (modelId: number) => void
 		onToggleEnabled: (modelId: number, enabled: boolean) => void
@@ -57,6 +64,7 @@
 		models,
 		defaultsByModel,
 		local = false,
+		useLabelOf = () => "Use",
 		onOpen,
 		onUse,
 		onToggleEnabled
@@ -65,17 +73,13 @@
 	let query = $state("")
 	let showHidden = $state(false)
 
-	const rows = $derived.by(() => {
-		const q = query.trim().toLowerCase()
-		return models.filter((m) => {
-			if (!showHidden && m.enabled === false) return false
-			if (!q) return true
-			return (
-				m.model.toLowerCase().includes(q) ||
-				(m.name ?? "").toLowerCase().includes(q)
-			)
-		})
-	})
+	const rows = $derived(
+		models.filter(
+			(m) =>
+				(showHidden || m.enabled !== false) &&
+				modelMatchesQuery(m, query)
+		)
+	)
 	const hiddenCount = $derived(
 		models.filter((m) => m.enabled === false).length
 	)
@@ -94,18 +98,15 @@
 
 <div class="flex flex-col gap-3">
 	<div class="flex flex-wrap items-center gap-2">
+		<!-- The one filter box (§6.2), as the index's and the dock list's. -->
 		<div class="w-[280px] max-w-full">
-			<label class="sr-only" for="model-table-filter">
-				Filter models
-			</label>
-			<input
+			<PanelFilterInput
 				id="model-table-filter"
-				class="input"
-				type="text"
 				bind:value={query}
-				placeholder={models.length === 1
-					? "1 model"
-					: `${models.length} models`}
+				placeholder="models"
+				singular="model"
+				count={models.length}
+				aria-label="Filter models by name or identifier"
 			/>
 		</div>
 		<div class="flex-1"></div>
@@ -241,7 +242,13 @@
 					</span>
 				{/if}
 
-				<span role="cell" class="flex min-w-0 items-center gap-1.5">
+				<!-- Wraps rather than overflows: "Use in Reply" beside two
+				     chips is wider than 150px, and it drops to its own line
+				     on those rows only, for only as long as chat is unset. -->
+				<span
+					role="cell"
+					class="flex min-w-0 flex-wrap items-center gap-1.5"
+				>
 					{#if model.facts?.inputModalities?.includes("image")}
 						<span
 							class="preset-tonal-surface text-surface-700-300 shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold"
@@ -258,12 +265,17 @@
 					{/if}
 					<span class="flex-1"></span>
 					{#if !defaults.length && !missing && !hidden}
+						{@const useLabel = useLabelOf(model)}
+						<!-- Named with its visible words first, then whose: a
+						     column of identical "Use" buttons is one name said
+						     five hundred times to a screen reader. -->
 						<button
 							type="button"
-							class="btn btn-sm preset-tonal-surface shrink-0 text-[11px] font-semibold"
+							class="btn btn-sm preset-tonal-surface ml-auto shrink-0 text-[11px] font-semibold"
+							aria-label={`${useLabel} — ${display.name}`}
 							onclick={() => onUse(model.id)}
 						>
-							Use
+							{useLabel}
 						</button>
 					{/if}
 				</span>

@@ -151,7 +151,7 @@
 									entry.connection as Row,
 									entry.model as ModelOf
 								)}
-							aria-label={`Open ${entry.model.name}, the default for ${entry.label}`}
+							aria-label={`Open ${entry.model.name}, in the ${entry.label} loadout`}
 						>
 							{@render body()}
 							<Icons.ChevronRight
@@ -173,12 +173,8 @@
 	{/each}
 
 	<p class="text-surface-600-400 px-0.5 text-[11px] leading-relaxed">
-		A default is an endpoint and a model together, one per transform. Change
-		them in <a class="anchor" href="/admin/defaults">Admin → Defaults</a>
-		, or from any model's
-		<strong class="font-medium">Set as default…</strong>
-		. For embeddings and entities that is what
-		<strong class="font-medium">Make active</strong>
-		does.
+		Each default loadout holds an endpoint and a model together. Fill
+		them in the <a class="anchor" href="/loadouts">Loadouts view</a>, or
+		from any model's <strong class="font-medium">Use in…</strong>.
 	</p>
 </div>

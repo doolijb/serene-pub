@@ -4,6 +4,7 @@ import {
 	CORE_SETTING_KEYS,
 	effectiveWidgetSettings,
 	pruneWidgetSettings,
+	widgetSettingDeviations,
 	coerceSettingValue,
 	settingsSections,
 	resolveWidgetInstance,
@@ -134,22 +135,78 @@ describe("pruneWidgetSettings — deviations only, and only what is declared", (
 	})
 })
 
-describe("effectiveWidgetSettings — the complete object a widget reads", () => {
-	it("fills every declared default under the stored deviations", () => {
-		expect(effectiveWidgetSettings(phone, { lane: 2 })).toEqual({
-			title: "Cell Phone",
-			lane: 2,
-			hostCard: false,
-			density: "cosy",
-			autoscroll: true
-		})
+describe("effectiveWidgetSettings — the one reader of every store", () => {
+	const defaults = {
+		title: "Cell Phone",
+		lane: 1,
+		hostCard: false,
+		density: "cosy",
+		autoscroll: true
+	}
+
+	it("is the declared defaults when nothing is stored", () => {
+		expect(effectiveWidgetSettings({ decl: phone })).toEqual(defaults)
+		expect(
+			effectiveWidgetSettings({ decl: phone, preset: {}, stored: {} })
+		).toEqual(defaults)
 	})
 
-	it("ignores a stored value the descriptor stopped declaring", () => {
-		expect(effectiveWidgetSettings(plain, { gone: 1 })).toEqual({
-			title: "Notes",
-			hostCard: false
-		})
+	it("lays what a layout brings over the defaults", () => {
+		expect(
+			effectiveWidgetSettings({
+				decl: phone,
+				preset: { density: "compact", title: "Burner" }
+			})
+		).toEqual({ ...defaults, density: "compact", title: "Burner" })
+	})
+
+	it("lays the person's own row over what the layout brings", () => {
+		expect(
+			effectiveWidgetSettings({
+				decl: phone,
+				preset: { density: "compact", title: "Burner" },
+				stored: { title: "Mine", lane: 2 }
+			})
+		).toEqual({ ...defaults, density: "compact", title: "Mine", lane: 2 })
+	})
+
+	it("drops a key the declaration does not admit, whichever layer held it", () => {
+		expect(
+			effectiveWidgetSettings({
+				decl: phone,
+				preset: { retired: "gone", density: "huge" },
+				stored: { gone: 1, autoscroll: "yes" }
+			})
+		).toEqual(defaults)
+		expect(
+			effectiveWidgetSettings({ decl: plain, stored: { gone: 1 } })
+		).toEqual({ title: "Notes", hostCard: false })
+	})
+
+	it("reads a non-object layer as nothing", () => {
+		expect(
+			effectiveWidgetSettings({ decl: phone, preset: "x", stored: [1] })
+		).toEqual(defaults)
+	})
+})
+
+describe("widgetSettingDeviations — the reader's two stored layers, unpruned", () => {
+	it("lays the person's row over the layout's, key by key", () => {
+		expect(
+			widgetSettingDeviations({
+				preset: { density: "compact", title: "Burner" },
+				stored: { title: "Mine" }
+			})
+		).toEqual({ density: "compact", title: "Mine" })
+	})
+
+	it("keeps what it cannot judge without a declaration", () => {
+		expect(
+			widgetSettingDeviations({
+				preset: { retired: 1 },
+				stored: undefined
+			})
+		).toEqual({ retired: 1 })
 	})
 })
 
@@ -159,7 +216,7 @@ describe("widgetTitle — the header's override", () => {
 		expect(widgetTitle(phone, { title: "   " })).toBe("Cell Phone")
 	})
 
-	it("uses the stored override when there is one", () => {
+	it("uses the settings' title when there is one", () => {
 		expect(widgetTitle(phone, { title: "Burner" })).toBe("Burner")
 	})
 })
@@ -284,5 +341,125 @@ describe("pruneWidgetSettings — the nesting field types", () => {
 		expect(
 			pruneWidgetSettings(listed, { frame: { pad: -1 } }).dropped
 		).toEqual([{ key: "frame", reason: "invalid" }])
+	})
+})
+
+// The Stats uplift (W7, 2026-10-11): `world-state` is an alias of `stats`,
+// read with `{ owners: world, arrangement: strip }` under the instance's own
+// settings; the keys both widgets stored before it read as today's.
+describe("⏳ an aliased instance and the settings before the Stats uplift", async () => {
+	const { CORE_WIDGETS } = await import("$lib/shared/widgets/types")
+	const stats = CORE_WIDGETS.find((w) => w.id === "stats")!
+	/** The decl a host hands the reader for one placed instance: Stats', under the placed id. */
+	const as = (id: string): WidgetSettingsDecl => ({
+		id,
+		title: stats.title,
+		settings: stats.settings
+	})
+
+	it("an aliased instance reads the implied settings as its defaults", () => {
+		const out = effectiveWidgetSettings({ decl: as("world-state") })
+		expect(out.owners).toBe("world")
+		expect(out.arrangement).toBe("strip")
+		expect(out.castScope).toBe("scene")
+		// Core's own title is implied too: a placed World State keeps its name.
+		expect(out.title).toBe("World State")
+		expect(effectiveWidgetSettings({ decl: as("stats") }).title).toBe("Stats")
+		expect(effectiveWidgetSettings({ decl: as("world-state#2") }).owners).toBe("world")
+		// Plain Stats, and Stats placed as `stats#world` by name, imply nothing.
+		expect(effectiveWidgetSettings({ decl: as("stats") }).owners).toBe("cast")
+		expect(effectiveWidgetSettings({ decl: as("stats#world") }).arrangement).toBe("cards")
+	})
+
+	it("merges them UNDER the preset, and the preset under the person's row", () => {
+		const out = effectiveWidgetSettings({
+			decl: as("world-state"),
+			preset: { arrangement: "list", density: "compact" },
+			stored: { density: "full", slots: "bars" }
+		})
+		expect(out).toMatchObject({ owners: "world", arrangement: "list", density: "full", slots: "bars" })
+		expect(effectiveWidgetSettings({ decl: as("world-state"), stored: { owners: "all" } }).owners).toBe("all")
+	})
+
+	it("storage holds deviations from the implied values: back to Cards sticks, Strip is not stored", () => {
+		const schema = widgetSettingsSchema(as("world-state"))
+		expect(pruneWidgetSettings(schema, { arrangement: "strip", owners: "world" }).values).toEqual({})
+		expect(pruneWidgetSettings(schema, { arrangement: "cards" }).values).toEqual({ arrangement: "cards" })
+		expect(effectiveWidgetSettings({ decl: as("world-state"), stored: { arrangement: "cards" } }).arrangement).toBe("cards")
+	})
+
+	it("World State's stored layout reads as the arrangement; a row written the new way wins", () => {
+		expect(effectiveWidgetSettings({ decl: as("world-state"), stored: { layout: "list" } }).arrangement).toBe("list")
+		const pruned = pruneWidgetSettings(widgetSettingsSchema(as("world-state")), { layout: "list", slots: "pick", pickSlots: ["omen"] })
+		expect(pruned).toEqual({ values: { arrangement: "list", slots: "pick", pickSlots: ["omen"] }, dropped: [] })
+		expect(
+			pruneWidgetSettings(widgetSettingsSchema(as("world-state")), { layout: "list", arrangement: "cards" })
+		).toEqual({ values: { arrangement: "cards" }, dropped: [{ key: "layout", reason: "undeclared" }] })
+	})
+
+	it("Stats' stored members reads as castScope (scene | all) or owners: pick, its pickMembers as pickOwners", () => {
+		expect(effectiveWidgetSettings({ decl: as("stats"), stored: { members: "all" } }).castScope).toBe("all")
+		expect(pruneWidgetSettings(widgetSettingsSchema(as("stats")), { members: "all" })).toEqual({
+			values: { castScope: "all" },
+			dropped: []
+		})
+		const picked = effectiveWidgetSettings({ decl: as("stats"), stored: { members: "pick", pickMembers: ["Bram"] } })
+		expect(picked).toMatchObject({ owners: "pick", pickOwners: ["Bram"], castScope: "scene" })
+		// A widget that still declares the old key keeps it as it is.
+		const old: WidgetSettingsDecl = {
+			id: "acme:roster",
+			title: "Roster",
+			settings: { members: { type: "enum", label: "Members", of: ["scene", "all"], default: "scene" } }
+		}
+		expect(pruneWidgetSettings(widgetSettingsSchema(old), { members: "all" }).values).toEqual({ members: "all" })
+	})
+})
+
+describe("⏳ Scene Portraits' settings before its uplift (W6)", async () => {
+	const { CORE_WIDGETS } = await import("$lib/shared/widgets/types")
+	const portraits = CORE_WIDGETS.find((w) => w.id === "scene-portraits")!
+	const decl: WidgetSettingsDecl = { id: "scene-portraits", title: portraits.title, settings: portraits.settings }
+	const schema = widgetSettingsSchema(decl)
+
+	it("a stored source: pinned reads as pick · chosen · stage, and the old key goes", () => {
+		expect(effectiveWidgetSettings({ decl, stored: { source: "pinned", bars: true } })).toMatchObject({
+			who: "pick",
+			face: "chosen",
+			arrangement: "stage",
+			bars: true
+		})
+		expect(pruneWidgetSettings(schema, { source: "pinned" })).toEqual({
+			values: { who: "pick", face: "chosen", arrangement: "stage" },
+			dropped: []
+		})
+		// A key written the new way wins; the old one still goes.
+		expect(pruneWidgetSettings(schema, { source: "pinned", who: "recent" }).values).toEqual({
+			who: "recent",
+			face: "chosen",
+			arrangement: "stage"
+		})
+	})
+
+	it("source: scene stays stored (the mark of an instance that never drew pins) and reads as the scene", () => {
+		expect(pruneWidgetSettings(schema, { source: "scene", bars: true }).values).toEqual({ source: "scene", bars: true })
+		expect(effectiveWidgetSettings({ decl, preset: { source: "scene", bars: true } })).toMatchObject({
+			who: "scene",
+			face: "sprite",
+			arrangement: "grid",
+			bars: true
+		})
+	})
+
+	it("sprites: false reads as the avatar; sprites goes either way", () => {
+		expect(pruneWidgetSettings(schema, { sprites: false }).values).toEqual({ face: "avatar" })
+		expect(pruneWidgetSettings(schema, { sprites: true }).values).toEqual({})
+		expect(pruneWidgetSettings(schema, { sprites: false, face: "chosen" }).values).toEqual({ face: "chosen" })
+	})
+
+	it("once moved, who put back to the scene sticks — no old key is left to read as pick again", () => {
+		const moved = pruneWidgetSettings(schema, { source: "pinned" }).values
+		const back = pruneWidgetSettings(schema, { ...moved, who: "scene" }).values
+		expect(back).toEqual({ face: "chosen", arrangement: "stage" })
+		expect(effectiveWidgetSettings({ decl, stored: back }).who).toBe("scene")
 	})
 })

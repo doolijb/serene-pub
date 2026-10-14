@@ -8,7 +8,7 @@ You will have a few places joined by ways, see them on the map, and know how a s
 
 ## Making a place
 
-Choose the **Places** lens (the map), then **New place** in its toolbar. You can also find places in the **Places** scope of the book's rail. A place has the same **Name**, **Content** and **Keywords** as any entry, plus:
+Choose **Map** under **Show as**, then **New place** in its toolbar. You can also find places in the **Places** view of the book's list (under **Views**). A place has the same **Name**, **Content** and **Keywords** as any entry, plus:
 
 - **Category**: free text that groups places, such as a floor, a district or a wing. It shows beside the place's name in the list, and colours it on the map.
 - **Links**: the place's ways to other places, and anything else linked to it (see below).
@@ -38,7 +38,7 @@ There are three ways to link places, and they all make the same link:
 
 - In a place's editor, **Link a place** picks another place, or **New place…** creates one by name and links it.
 - On the map, hold **Alt** (**⌥** on a Mac) and drag from one place to another.
-- On the map or the Graph lens, select a place and use **Link to…**.
+- On the map or in **Show as › Graph**, select a place and use **Link to…**.
 
 Links save on their own, as soon as you save the link; they're never part of the entry's **Save**. Select a link anywhere to edit it, or **Unlink** to remove it (it asks first).
 
@@ -55,7 +55,7 @@ Write each way with an arrow (→, ->, =>), or with a colon on a line without ar
 
 ## The map
 
-The **Places** lens draws every place on the line you're reading as a square, named and tinted by its category, with every way between them drawn as an arrow (an arrowhead at each end when it reads both ways). Cast members and other lore linked to a place, such as its keeper, are drawn beside it.
+**Show as › Map** draws every place on the line you're reading as a square, named and tinted by its category, with every way between them drawn as an arrow (an arrowhead at each end when it reads both ways). Cast members and other lore linked to a place, such as its keeper, are drawn beside it.
 
 - The line above the map counts the places, the ways, and the places with no ways yet. Category chips beside it narrow the map to one category.
 - Click a place, or **Tab** to it and press **Enter**, to see its ways, each said from the place. **Open entry** opens its editor.
@@ -65,7 +65,7 @@ The **Places** lens draws every place on the line you're reading as a square, na
 
 On a phone, the map fills the screen until you pick something.
 
-The **Graph** lens is the same canvas for everything else: cast members, relationships and links between other lore. See [Cast and relationships](./lorebook-cast.md#the-graph).
+**Show as › Graph** is the same canvas for everything else: cast members, relationships and links between other lore. See [Cast and relationships](./lorebook-cast.md#the-graph).
 
 ## What a place holds
 
@@ -89,6 +89,10 @@ The current place is written there once. In Adventure and the Lair it isn't also
 A character's own voice is only told about the place the scene is in, never what's waiting in rooms nobody has reached. The planner and narrator see every place. See [Stats and states](./stats-and-states.md#in-a-prompt).
 
 Other genres, such as **Chat**, don't write a place's ways into the prompt. There, the model knows a room's exits only from what its content says, so describe the important ones in the text too.
+
+### In a session
+
+The **Places** widget puts these places beside a session: the places the session sees, with the ways it reads between them, as a list or as a map drawn like this one. The place the scene is in is marked **Here**, and each cast member's face sits on the place their **Location** points at. Click a place in the list, or **Open entry** on the map, to open it here. A Lair has it on the right from the start, as the list of the dungeon's rooms (see [The Lair](./genre-lair.md#whats-on-the-screen)); in any other session that reads a lorebook, add it from the tray. See [Session layout](./session-layout.md#the-widgets).
 
 ### A place that is off
 

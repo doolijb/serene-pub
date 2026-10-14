@@ -9,16 +9,16 @@
  * Before the copy model a `session_panel_layouts` row held only the slots its
  * person had set, and the page drew every missing slot from a BASE: the preset
  * the row pinned (`layout_preset_id`) if it still resolved for that person,
- * else the genre default layout, else nothing. The base's `widgetSettings` sat
- * UNDER the person's own values, widget by widget and field by field. The copy
- * model reads the row alone, so each such row is made whole ONCE, with exactly
- * what the screen drew:
+ * else the genre default layout, else nothing. The base's `widgetSettings` were
+ * the `preset` input of the one settings reader (`effectiveWidgetSettings`).
+ * The copy model reads the row alone, so each such row is made whole ONCE,
+ * with exactly what the screen drew:
  *
  * - `layout`, slot by slot: the row's own slot if set, else the base's (the
  *   old `slot ?? base slot`, applied once). `active`, `tierSizeOverrides` and
  *   anything else the row holds are kept as they are.
  * - the base's `widgetSettings` fold into this person's `widget_settings` rows
- *   UNDER their own values (fill only).
+ *   as `widgetSettingDeviations` lays them, so the reader's order is kept.
  * - `started from` = the pin where it still resolved, else the genre default
  *   layout's row; `layout_copied_at` = now.
  *
@@ -39,6 +39,7 @@ import { and, asc, eq, isNull } from "drizzle-orm"
 import { db } from "."
 import * as schema from "./schema"
 import { canApplyLayoutPreset, genreDefaultLayoutRow } from "./layoutPresets"
+import { widgetSettingDeviations } from "$lib/shared/widgets/settings"
 
 type Blob = Record<string, unknown>
 
@@ -144,7 +145,8 @@ async function completeRow(tx: Db, id: number): Promise<boolean> {
 		else layout[slot] = v
 	}
 
-	// The base's widget settings, UNDER this person's own, field by field.
+	// The base's widget settings and this person's own, laid as the one
+	// reader lays them (`widgetSettingDeviations`), then stored.
 	if (isObj(base.widgetSettings)) {
 		const mine = new Map(
 			(
@@ -157,12 +159,14 @@ async function completeRow(tx: Db, id: number): Promise<boolean> {
 							eq(schema.widgetSettings.userId, row.userId)
 						)
 					)
-			).map((r) => [r.widgetSlug, isObj(r.values) ? r.values : {}])
+			).map((r) => [r.widgetInstanceId, isObj(r.values) ? r.values : {}])
 		)
-		for (const [widgetSlug, pinned] of Object.entries(base.widgetSettings)) {
-			if (!isObj(pinned)) continue
-			const had = mine.get(widgetSlug) ?? {}
-			const values = { ...pinned, ...had }
+		for (const [widgetInstanceId, preset] of Object.entries(
+			base.widgetSettings
+		)) {
+			if (!isObj(preset)) continue
+			const had = mine.get(widgetInstanceId) ?? {}
+			const values = widgetSettingDeviations({ preset, stored: had })
 			if (!Object.keys(values).length) continue
 			if (JSON.stringify(values) === JSON.stringify(had)) continue
 			await tx
@@ -170,14 +174,14 @@ async function completeRow(tx: Db, id: number): Promise<boolean> {
 				.values({
 					sessionId: row.sessionId,
 					userId: row.userId,
-					widgetSlug,
+					widgetInstanceId,
 					values
 				})
 				.onConflictDoUpdate({
 					target: [
 						schema.widgetSettings.userId,
 						schema.widgetSettings.sessionId,
-						schema.widgetSettings.widgetSlug
+						schema.widgetSettings.widgetInstanceId
 					],
 					set: { values, updatedAt: new Date() }
 				})

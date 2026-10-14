@@ -101,6 +101,18 @@ export interface BuildContextInput extends RenderRun {
 	characterNames: readonly string[]
 	/** Display names for `{{personaNames}}`, resolved upstream. */
 	personaNames: readonly string[]
+	/**
+	 * 🚧 The speaker's likeness (DESIGN-image-generation §5) — `{{likeness}}`
+	 * and `{{likenessNegative}}`, macros beside `{{char}}`. Empty strings when
+	 * the speaker has none, or there is no speaker.
+	 */
+	likeness?: { prompt: string; negative: string }
+	/**
+	 * 🚧 Everyone on stage's likeness prompt, `[{ name, prompt }]` —
+	 * `core:var/likenesses@1`, resolved upstream (the switched-on cast, then
+	 * the personas).
+	 */
+	likenesses?: ReadonlyArray<{ name: string; prompt: string }>
 	/** Whose turn it is — `{{char}}` and `{{character}}`. */
 	charName: string
 	/** Who they are speaking to — `{{user}}` and `{{persona}}`. */
@@ -219,7 +231,18 @@ export async function buildTemplateContext(
 			...genreFields(input.fields),
 			characterNames: joinWithAnd([...input.characterNames]),
 			personaNames: joinWithAnd([...input.personaNames]),
-			narratorName: input.narratorName
+			narratorName: input.narratorName,
+			// 🚧 The speaker's likeness, as macros (`{{likeness}}`).
+			likeness: input.likeness?.prompt ?? "",
+			likenessNegative: input.likeness?.negative ?? "",
+			// 🚧 Everyone on stage's look, one `Name: tags` line each (the
+			// Scene action's scene prompt, I9); people with no likeness
+			// prompt are left out. The context template's `{{{likenesses}}}`
+			// is the laid-out variable (below), not this line list.
+			likenesses: (input.likenesses ?? [])
+				.filter((l) => l.prompt.trim())
+				.map((l) => `${l.name}: ${l.prompt.trim()}`)
+				.join("\n")
 		}
 	})
 
@@ -318,6 +341,8 @@ export async function buildTemplateContext(
 			"personaNames",
 			interpolationContext.personaNames
 		),
+		// 🚧 Through its automatic JSON layout (`objectVariableLayouts.ts`).
+		likenesses: await layout("likenesses", [...(input.likenesses ?? [])]),
 		scenario: await layout("scenario", interpolate(input.scenario)),
 		// Empty string rather than undefined. The legacy path leaves these
 		// `undefined` when the config has no text; both render as nothing and

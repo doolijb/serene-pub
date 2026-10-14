@@ -41,7 +41,7 @@
  */
 
 import * as schema from "$lib/server/db/schema"
-import { and, eq, sql } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 import { copyLorebookTables, type IdMap } from "$lib/server/lorebooks/tableRegistry"
 
 export interface DuplicatedLorebook {
@@ -56,9 +56,15 @@ export interface DuplicatedLorebook {
 }
 
 /**
- * Copies `sourceId` (which the caller has already confirmed `userId` owns)
- * into a new book named `name`, owned by `userId`. Must be called with a
- * transaction handle.
+ * Copies `sourceId` (which the caller has already confirmed `userId` may READ:
+ * its owner, or a person it is **shared** with — lane A3) into a new book
+ * named `name`, owned by `userId`. Must be called with a transaction handle.
+ *
+ * ⚠ **A copy for someone else is theirs, cleanly.** It carries no share rows
+ * (`lorebook_shares` is not a registered table, so nothing copies it), and the
+ * book's tags — the source owner's own library labels (`tags.user_id`) — are
+ * re-filed under the asker's tags of the same name, made if missing, rather
+ * than linking the copy to another person's tag rows.
  */
 export async function duplicateLorebookRows(
 	tx: Db,
@@ -69,12 +75,7 @@ export async function duplicateLorebookRows(
 	const [source] = await tx
 		.select()
 		.from(schema.lorebooks)
-		.where(
-			and(
-				eq(schema.lorebooks.id, sourceId),
-				eq(schema.lorebooks.userId, userId)
-			)
-		)
+		.where(eq(schema.lorebooks.id, sourceId))
 	if (!source) throw new Error("Lorebook not found.")
 
 	const {
@@ -96,6 +97,8 @@ export async function duplicateLorebookRows(
 		newId
 	)
 
+	if (source.userId !== userId) await refileTagsFor(tx, newId, userId)
+
 	// Keep the counter past every token the copy holds, whatever the source's
 	// column said (a hand-edited or legacy book may be behind its own tokens).
 	const tokens = await tx
@@ -116,4 +119,65 @@ export async function duplicateLorebookRows(
 			.where(eq(schema.lorebooks.id, newId))
 
 	return { id: newId, maps: { branches, bindings, entries, scenes } }
+}
+
+/**
+ * The copy's tag links, moved from the source owner's tags onto `userId`'s
+ * tags of the same name (case-insensitive, the `tags` unique rule), each made
+ * if the asker has none. Runs on `tx` only.
+ */
+async function refileTagsFor(tx: Db, bookId: number, userId: number) {
+	const links = await tx
+		.select({
+			tagId: schema.tags.id,
+			name: schema.tags.name,
+			ownerId: schema.tags.userId,
+			colorPreset: schema.tags.colorPreset
+		})
+		.from(schema.lorebookTags)
+		.innerJoin(schema.tags, eq(schema.tags.id, schema.lorebookTags.tagId))
+		.where(eq(schema.lorebookTags.lorebookId, bookId))
+	const foreign = links.filter((l) => l.ownerId !== userId)
+	if (!foreign.length) return
+	await tx
+		.delete(schema.lorebookTags)
+		.where(
+			and(
+				eq(schema.lorebookTags.lorebookId, bookId),
+				inArray(
+					schema.lorebookTags.tagId,
+					foreign.map((l) => l.tagId)
+				)
+			)
+		)
+	const mine = new Set<number>()
+	for (const tag of foreign) {
+		const [existing] = await tx
+			.select({ id: schema.tags.id })
+			.from(schema.tags)
+			.where(
+				and(
+					eq(schema.tags.userId, userId),
+					sql`lower(${schema.tags.name}) = lower(${tag.name})`
+				)
+			)
+			.limit(1)
+		const id =
+			existing?.id ??
+			(
+				await tx
+					.insert(schema.tags)
+					.values({ userId, name: tag.name, colorPreset: tag.colorPreset })
+					.returning({ id: schema.tags.id })
+			)[0].id
+		mine.add(id)
+	}
+	const already = new Set(
+		links.filter((l) => l.ownerId === userId).map((l) => l.tagId)
+	)
+	const add = [...mine].filter((id) => !already.has(id))
+	if (add.length)
+		await tx
+			.insert(schema.lorebookTags)
+			.values(add.map((tagId) => ({ lorebookId: bookId, tagId })))
 }

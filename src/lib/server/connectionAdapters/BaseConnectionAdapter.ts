@@ -32,6 +32,7 @@ import {
 import { continueWireRefusal } from "$lib/shared/connectionAdapters/continueReply"
 import type { ComposedStops } from "$lib/server/connections/stops"
 import type { StreamingMode } from "$lib/server/connections/streaming"
+import * as logitBiasTokens from "$lib/server/connections/logitBiasTokens"
 
 export interface BasePromptSession extends SelectSession {
 	sessionCharacters?: (SelectSessionCharacter & {
@@ -988,6 +989,60 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 			if (supported.has(key) && !this.samplersIgnored.has(key))
 				applied[key] = value
 		return { applied, ignored: this.ignoredSamplers }
+	}
+
+	// ── Logit bias (plan logit-bias L4) ─────────────────────────────────────
+
+	/**
+	 * This request's `logitBias` as token id → bias, set by
+	 * {@link resolveLogitBias}. Undefined until then, and an adapter sends
+	 * no `logit_bias` without it — never the entries themselves.
+	 */
+	private logitBiasIds?: Map<number, number>
+
+	/**
+	 * Turn the config's logit bias entries into token ids for THIS
+	 * connection — awaited in `generateText()` before the synchronous
+	 * `mapSamplingConfig()` reads {@link logitBiasObject} or
+	 * {@link logitBiasPairs}.
+	 *
+	 * Only when the switch is on (the key is present) and the type's key map
+	 * carries `logit_bias`. A list that asked for something and resolved to
+	 * nothing — unreadable, or no tokenizer for its words — is noted as an
+	 * ignored sampler; an entry left out of a list that still sent something
+	 * is logged by its text.
+	 */
+	protected async resolveLogitBias(): Promise<void> {
+		this.logitBiasIds = undefined
+		if (!("logitBias" in this.sampling)) return
+		if (!getSupportedSamplers(this.connection.type).has("logitBias")) return
+		const resolution = await logitBiasTokens.resolveLogitBias(
+			this.connection,
+			this.sampling.logitBias
+		)
+		this.logitBiasIds = resolution.biases
+		if (resolution.ignored) this.noteIgnoredSampler("logitBias")
+		if (resolution.skipped.length)
+			console.warn(
+				`[logit bias] ${this.connection.name ?? this.connection.type}: left out ` +
+					resolution.skipped
+						.map((s) => `${JSON.stringify(s.text)} (${s.reason})`)
+						.join(", ")
+			)
+	}
+
+	/** `{ "<id>": bias }` for the request, or undefined to leave the key out. */
+	protected logitBiasObject(): Record<string, number> | undefined {
+		return this.logitBiasIds?.size
+			? logitBiasTokens.logitBiasObject(this.logitBiasIds)
+			: undefined
+	}
+
+	/** `[[id, bias], …]` for the request, or undefined to leave the key out. */
+	protected logitBiasPairs(): [number, number][] | undefined {
+		return this.logitBiasIds?.size
+			? logitBiasTokens.logitBiasPairs(this.logitBiasIds)
+			: undefined
 	}
 
 	// ── The wire (not an action either) ─────────────────────────────────────

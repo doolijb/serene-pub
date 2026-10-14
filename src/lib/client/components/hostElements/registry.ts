@@ -20,6 +20,7 @@ import SpCombobox from "./SpCombobox.svelte"
 import SpComposerField from "./SpComposerField.svelte"
 import SpData from "./SpData.svelte"
 import SpDialog from "./SpDialog.svelte"
+import SpDragHandle from "./SpDragHandle.svelte"
 import SpDropZone from "./SpDropZone.svelte"
 import SpFilePicker from "./SpFilePicker.svelte"
 import SpFrame from "./SpFrame.svelte"
@@ -61,6 +62,7 @@ export const SP_ELEMENTS: Record<string, SpElementDef> = {
 	"sp-scroll": { component: SpScroll },
 	"sp-file-picker": { component: SpFilePicker },
 	"sp-drop-zone": { component: SpDropZone },
+	"sp-drag-handle": { component: SpDragHandle },
 	"sp-frame": { component: SpFrame }
 }
 

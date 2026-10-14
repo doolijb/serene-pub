@@ -123,6 +123,31 @@ export const startupTasks: StartupTask[] = [
 	},
 	{
 		/**
+		 * 🚧 A scene summary left `running` or `review` when the server
+		 * stopped has no run and no review behind it (both live in the
+		 * activity store, in memory): it would read *Summarizing…* or *Ready
+		 * to review* forever, and *Summarize all* would skip it. Settled to
+		 * `none` (PROPOSAL-live-scenes §15 G8). Scenes this process is
+		 * summarizing are never taken, so a re-run on a live instance is safe.
+		 */
+		name: "scene-summaries",
+		run: async () => {
+			const { reconcileDerelictSceneSummaries } = await import(
+				"$lib/server/scenes/summaryStatus"
+			)
+			const { activityStore } = await import("$lib/server/utils/activityStore")
+			const live = activityStore
+				.getFor(0, true)
+				.flatMap((a) => (a.kind === "scene_summarize" ? [a.sceneId] : []))
+			const settled = await reconcileDerelictSceneSummaries(db, live)
+			if (settled)
+				console.log(
+					`[scenes] settled ${settled} scene summary(s) left running or in review when the server stopped`
+				)
+		}
+	},
+	{
+		/**
 		 * The half of migration 0127 that SQL cannot do.
 		 *
 		 * 0127 projects the old embedding singleton into a connection and stars

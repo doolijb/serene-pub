@@ -86,6 +86,14 @@ export function useStarConfirm(opts: StarConfirmOptions) {
 		modelId: number | null
 	) => (connectionId != null ? opts.modelOf(connectionId, modelId) : null)
 
+	// ⚠ A screen unmounted with the entity dialog open (a route change, a
+	// panel closed under it) never reaches `close()`; without this its
+	// `ner:status` interest would outlive it for the rest of the page.
+	$effect(() => () => {
+		releaseEntityCount?.()
+		releaseEntityCount = null
+	})
+
 	function close() {
 		ticket++
 		staged = null
@@ -173,6 +181,7 @@ export function useStarConfirm(opts: StarConfirmOptions) {
 		const mine = ++ticket
 		entityRows = null
 		entityOpen = true
+		releaseEntityCount?.()
 		releaseEntityCount = declareInterest<"ner:status">(
 			"ner:status",
 			(msg) => {

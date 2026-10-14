@@ -394,6 +394,39 @@ export const systemSettingsUpdateLoreWriteModeDefault: Handler<
 )
 
 /**
+ * **Messages between people** (PLAN-private-messages Q7): on by default. Off
+ * hides the Messages rail item everywhere and makes every `conversations:*`
+ * handler refuse; the data stays. Every open tab showing settings hears it.
+ */
+export const systemSettingsUpdateMessagingEnabled: Handler<
+	Sockets.SystemSettings.UpdateMessagingEnabled.Params,
+	Sockets.SystemSettings.UpdateMessagingEnabled.Response
+> = refusable(
+	"systemSettings:updateMessagingEnabled",
+	async (socket, params, emitToUser) => {
+		if (!socket.user?.isAdmin)
+			throw new Error("Only an administrator can turn messages between people on or off.")
+		if (typeof params?.enabled !== "boolean")
+			throw new Error("Messages between people are either on or off.")
+		await db
+			.update(schema.systemSettings)
+			.set({ messagingEnabled: params.enabled })
+			.where(eq(schema.systemSettings.id, 1))
+		const res: Sockets.SystemSettings.UpdateMessagingEnabled.Response = {
+			success: true,
+			enabled: params.enabled
+		}
+		emitToUser("systemSettings:updateMessagingEnabled", res)
+		const io = socket.io
+		const open = io?.sockets?.sockets
+		if (open && [...open.values()].some((s: any) => socketWants(s, "systemSettings:get")))
+			emitToInterested(io, "systemSettings:get", await buildSystemSettingsGet())
+		return res
+	},
+	"Messages between people could not be changed."
+)
+
+/**
  * Whether the server may call an outside service to fill in UI strings it has
  * no translation for, and which service (R5).
  *
@@ -555,6 +588,7 @@ export function registerSystemSettingsHandlers(
 	register(socket, systemSettingsUpdateRequireTwoFactor, emitToUser)
 	register(socket, systemSettingsUpdateDefaultLanguage, emitToUser)
 	register(socket, systemSettingsUpdateLoreWriteModeDefault, emitToUser)
+	register(socket, systemSettingsUpdateMessagingEnabled, emitToUser)
 	register(socket, systemSettingsUpdateAutoTranslate, emitToUser)
 	register(socket, systemSettingsUpdateBackupSettings, emitToUser)
 }

@@ -1,14 +1,14 @@
 /**
  * Per-instance widget settings ride the per-user layout round trip (PLAN 25).
  *
- * Pinned here: settings come back keyed by widget id; an absent key leaves the
- * stored rows alone (the property that stops the surface manager's debounced
- * blob save from clearing them); a widget whose deviations are empty gets no
- * row at all; and one user's settings are invisible to another.
+ * Pinned here: settings come back keyed by widget instance id; an absent key
+ * leaves the stored rows alone (the property that stops the surface manager's
+ * debounced blob save from clearing them); a widget whose deviations are empty
+ * gets no row at all; and one user's settings are invisible to another.
  *
  * And, since the seating gate (2026-09-17), the key half: a key becomes a
- * `widget_slug` verbatim, so it is held to the widgets THIS session can seat —
- * core's, its genre's, an enabled plugin's. Anything else is dropped with a
+ * `widget_instance_id` verbatim, so it is held to the widgets THIS session can
+ * seat — core's, its genre's, an enabled plugin's. Anything else is dropped with a
  * warning rather than refused, because a stale layout naming a disabled
  * plugin's widget must not cost the user the edit they were making.
  */
@@ -116,7 +116,7 @@ describe("sessions:panelLayout — widget settings", () => {
 			} as any,
 			noopEmit
 		)
-		expect((await rows(s.session.id)).map((r) => r.widgetSlug)).toEqual([
+		expect((await rows(s.session.id)).map((r) => r.widgetInstanceId)).toEqual([
 			"stats"
 		])
 	})
@@ -276,29 +276,29 @@ async function save(
 	}
 }
 
-const storedSlugs = async (sessionId: number) =>
-	(await rows(sessionId)).map((r) => r.widgetSlug).sort()
+const storedIds = async (sessionId: number) =>
+	(await rows(sessionId)).map((r) => r.widgetInstanceId).sort()
 
 describe("sessions:panelLayout — the widget seating gate", () => {
 	test("a core widget's id is accepted", async () => {
 		const s = await gateScenario()
 		const { warnings } = await save(s, { messages: { composer: "writer" } })
 		expect(warnings).toEqual([])
-		expect(await storedSlugs(s.session.id)).toEqual(["messages"])
+		expect(await storedIds(s.session.id)).toEqual(["messages"])
 	})
 
 	test("a widget the session's genre declares is accepted", async () => {
 		const s = await gateScenario()
 		const { warnings } = await save(s, { casefile: { open: true } })
 		expect(warnings).toEqual([])
-		expect(await storedSlugs(s.session.id)).toEqual(["casefile"])
+		expect(await storedIds(s.session.id)).toEqual(["casefile"])
 	})
 
 	test("an enabled plugin's namespaced id is accepted", async () => {
 		const s = await gateScenario()
 		const { warnings } = await save(s, { [s.live]: { faces: 20 } })
 		expect(warnings).toEqual([])
-		expect(await storedSlugs(s.session.id)).toEqual([s.live])
+		expect(await storedIds(s.session.id)).toEqual([s.live])
 	})
 
 	test("a disabled plugin's id is dropped, with a warning", async () => {
@@ -310,7 +310,7 @@ describe("sessions:panelLayout — the widget seating gate", () => {
 		expect(warnings).toHaveLength(1)
 		expect(warnings[0]).toContain(s.dead)
 		expect(warnings[0]).toContain(String(s.session.id))
-		expect(await storedSlugs(s.session.id)).toEqual([])
+		expect(await storedIds(s.session.id)).toEqual([])
 	})
 
 	test("an id nothing declares is dropped", async () => {
@@ -319,7 +319,7 @@ describe("sessions:panelLayout — the widget seating gate", () => {
 		expect(res.ok).toBe(true)
 		expect(warnings).toHaveLength(1)
 		expect(warnings[0]).toContain("foo")
-		expect(await storedSlugs(s.session.id)).toEqual([])
+		expect(await storedIds(s.session.id)).toEqual([])
 	})
 
 	/**
@@ -333,13 +333,13 @@ describe("sessions:panelLayout — the widget seating gate", () => {
 		await testDb.insert(schema.widgetSettings).values({
 			sessionId: s.session.id,
 			userId: s.owner.id,
-			widgetSlug: s.dead,
+			widgetInstanceId: s.dead,
 			values: { spooky: true }
 		})
 		const { warnings } = await save(s, { [s.dead]: { spooky: true } })
 		expect(warnings).toEqual([])
 		const [row] = await rows(s.session.id)
-		expect(row.widgetSlug).toBe(s.dead)
+		expect(row.widgetInstanceId).toBe(s.dead)
 		expect(row.values).toEqual({ spooky: true })
 	})
 
@@ -354,10 +354,10 @@ describe("sessions:panelLayout — the widget seating gate", () => {
 			messages: { composer: "minimal" },
 			stats: { compact: true }
 		})
-		expect(await storedSlugs(s.session.id)).toEqual(["messages", "stats"])
+		expect(await storedIds(s.session.id)).toEqual(["messages", "stats"])
 		const { warnings } = await save(s, { messages: { composer: "minimal" } })
 		expect(warnings).toEqual([])
-		expect(await storedSlugs(s.session.id)).toEqual(["messages"])
+		expect(await storedIds(s.session.id)).toEqual(["messages"])
 	})
 
 	test("the accepted keys still land beside a dropped one", async () => {
@@ -370,7 +370,7 @@ describe("sessions:panelLayout — the widget seating gate", () => {
 			foo: { anything: 1 }
 		})
 		expect(warnings).toHaveLength(2)
-		expect(await storedSlugs(s.session.id)).toEqual(
+		expect(await storedIds(s.session.id)).toEqual(
 			["messages", "casefile", s.live].sort()
 		)
 	})

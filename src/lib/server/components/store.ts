@@ -48,6 +48,7 @@ import { newAuthoredId } from "$lib/shared/widgets/authoredOwner"
 import {
 	permissionStates,
 	reviewMarks,
+	widgetGrantLabel,
 	widgetScopePermissions,
 	type PermissionState
 } from "$lib/server/plugins/permissions"
@@ -185,16 +186,19 @@ export function authoredComponentFindings(content: Partial<AuthoredComponentCont
 	else {
 		out.push(...i18nFindings(widget.title, "widget.title", { required: true }))
 		if (widget.icon !== undefined && typeof widget.icon !== "string") out.push("widget.icon must be a string")
-		for (const [key, known] of [
-			["scopes", Object.keys(WIDGET_SCOPED_SECTIONS)],
-			["reads", WIDGET_BASE_SECTIONS as readonly string[]]
+		// A scope is a read in the SDK's table or a write grant this build knows
+		// (D4: `session:state:write`, `channel:<slug>:write`) — the one recogniser.
+		const knownScopes = [...Object.keys(WIDGET_SCOPED_SECTIONS), "session:state:write", "channel:<slug>:write"]
+		for (const [key, known, isKnown] of [
+			["scopes", knownScopes, (s: string) => widgetGrantLabel(s) !== null],
+			["reads", WIDGET_BASE_SECTIONS as readonly string[], (s: string) => (WIDGET_BASE_SECTIONS as readonly string[]).includes(s)]
 		] as const) {
 			const v = widget[key]
 			if (v === undefined) continue
 			if (!Array.isArray(v)) out.push(`widget.${key} must be a list`)
 			else
 				for (const s of v)
-					if (typeof s !== "string" || !known.includes(s))
+					if (typeof s !== "string" || !isKnown(s))
 						out.push(`widget.${key} names ${JSON.stringify(s)}, which is not one of ${known.join(", ")}`)
 		}
 		if (widget.channels !== undefined && !(Array.isArray(widget.channels) && widget.channels.every((c) => typeof c === "string")))

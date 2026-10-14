@@ -14,9 +14,16 @@ export function cardImportedToast(msg: {
 	status?: string
 	character?: { name?: string | null; nickname?: string | null } | null
 	warnings?: string[]
+	/**
+	 * What the import decided along the way (S4, DESIGN-card-strokes-and-dowry):
+	 * a plain embedded book turned into keyword strokes, a dowry re-owned, stats
+	 * left off. Informational — they never turn a success into a warning.
+	 */
+	summary?: string[]
 }): { kind: "success" | "warning"; title: string; description: string } | null {
 	if (msg.status === "conflict" || !msg.character) return null
 	const name = msg.character.nickname || msg.character.name || "The character"
+	const summary = msg.summary?.length ? ` ${msg.summary.join(" ")}` : ""
 	if (msg.status === "unchanged")
 		return {
 			kind: "success",
@@ -27,11 +34,11 @@ export function cardImportedToast(msg: {
 		return {
 			kind: "warning",
 			title: "Character imported with warnings",
-			description: `${name} was imported. ${msg.warnings.join(" ")}`
+			description: `${name} was imported. ${msg.warnings.join(" ")}${summary}`
 		}
 	return {
 		kind: "success",
 		title: "Character imported",
-		description: `Character ${name} imported successfully.`
+		description: `Character ${name} imported successfully.${summary}`
 	}
 }

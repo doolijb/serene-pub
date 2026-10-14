@@ -180,8 +180,9 @@ export function pluginWidgetDecls(
  * Every widget an ENABLED plugin declares, by the id it is seated under.
  *
  * The one answer to "is this namespaced widget id real?", for the writes that
- * have to refuse an id no widget would ever ask for — a widget style, and
- * anything else keyed on `widget_slug`. Read from the stored manifests through
+ * have to refuse an id no widget would ever ask for — a widget style
+ * (`widget_styles.widget_slug`), a widget's settings (`widget_instance_id`,
+ * through `widgetOfInstance`). Read from the stored manifests through
  * `pluginWidgetDecls` — component and frame widgets alike — so a validator
  * never refuses an id the session view seats.
  *
@@ -206,7 +207,8 @@ export async function enabledPluginWidgetIds(db: Db): Promise<Set<string>> {
 
 /**
  * Every widget id that may be SEATED in ONE session — the allow-list a
- * per-session write keyed on `widget_slug` is held to.
+ * per-session write keyed on a widget instance id (`widget_instance_id`) is
+ * held to, through `widgetOfInstance`.
  *
  * Three declarers, because a widget has three, and they are the same three
  * `sessions:view` seats: core's `CORE_WIDGETS`, the session genre's own

@@ -20,6 +20,7 @@
 import {
 	RETIRED_WIDGET_IDS,
 	ZONE_IDS,
+	widgetOfInstance,
 	type GridSizeSpec,
 	type GridWidget,
 	type WidgetAnchor,
@@ -65,10 +66,11 @@ export function cellsFromPx(px: number, cell: number): number {
  * two lists would let them disagree with this page about what a stored layout
  * holds. It says why each id is there — `composer` (the conversation is one
  * widget) and `inventory` (R79 removed that widget for now). Admitting either
- * would put an empty card where it used to be.
+ * would put an empty card where it used to be. Asked of the widget a placed
+ * id is a copy of, as `resolveDrawn` asks it: `inventory#2` is retired too.
  */
 export function isRetiredWidget(id: string): boolean {
-	return RETIRED_WIDGET_IDS.has(id)
+	return RETIRED_WIDGET_IDS.has(widgetOfInstance(id))
 }
 
 /**

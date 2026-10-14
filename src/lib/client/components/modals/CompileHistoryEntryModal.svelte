@@ -449,7 +449,7 @@
 	<div class="space-y-4">
 		{#if loreWrites.off}
 			<!-- A review reopened after the setting moved: it cannot save. -->
-			<LoreWritesOffNotice />
+			<LoreWritesOffNotice onOpenSettings={() => onOpenChange({ open: false })} />
 		{/if}
 		{#if hasExistingContent && hasDiff}
 			<div class="space-y-1">

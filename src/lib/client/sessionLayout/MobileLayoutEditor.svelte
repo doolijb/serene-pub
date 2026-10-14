@@ -182,6 +182,11 @@
 		onCancel: () => void
 		onDone: () => void
 		/**
+		 * A row was moved in this zone: its frame is the user's now, so Done
+		 * writes it (./donePlacement `arrangementAtDone`).
+		 */
+		onZoneAuthored?: (zone: ZoneId) => void
+		/**
 		 * A preset's picture. Defined in SessionLayout because the desktop
 		 * Layouts tab draws it too, and passed down so both draw the one.
 		 */
@@ -190,6 +195,7 @@
 
 	let {
 		editArranged = $bindable(),
+		onZoneAuthored,
 		leftPreview,
 		rightPreview,
 		middlePreview,
@@ -429,6 +435,7 @@
 	function writeZone(zone: ZoneId, next: ArrangedZone) {
 		if (next === editFrame(zone)) return
 		editArranged[zone] = next
+		onZoneAuthored?.(zone)
 		if (simTier !== null && simSnapshot) simSnapshot[zone] = next
 	}
 	function moveRowIn(zone: ZoneId, key: string, delta: number) {

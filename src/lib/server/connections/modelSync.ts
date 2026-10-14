@@ -32,12 +32,13 @@
  * nobody renamed it), its facts and its modality, by one rule each. The
  * modality's rule is the one to know: a NON-NULL modality is a fact and
  * replaces the row's; a null one means "not reported" and leaves the row's
- * alone. Most services say nothing about what a model is for (OpenAI,
- * Together, Mistral, Gemini, LocalAI), and silence must not erase what is
- * already known — the `openai-embeddings` merge (`openAIMultiModality.ts`)
- * and "Use for embeddings" (`ensureConnectionModel`, which keeps the same
- * rule) both write `embeddings` onto a row such a service then re-lists, and
- * clearing it offered the embedding model for chat again. A NEW row takes
+ * alone. Many services say nothing about what a model is for (OpenAI
+ * itself, LocalAI), and silence must not erase what is already known — the
+ * `openai-embeddings` merge (`openAIMultiModality.ts`), "Use in Embeddings"
+ * (`ensureConnectionModel`, which keeps the same rule) and a person's own
+ * **What it's for** (`connections:updateModel`) all write onto a row such a
+ * service then re-lists, and clearing it offered the embedding model for chat
+ * again. A service that DOES say wins over all three. A NEW row takes
  * whatever the listing says, null included.
  *
  * A listing that FAILED does none of the three. It records the error on the
@@ -391,6 +392,7 @@ export async function syncConnectionModels(
 	// nobody stands behind. Nothing a person set lives in here — that is
 	// `context_window`, two columns away, and this write never touches it.
 	const byId = new Map(listed.map((m) => [m.model, m]))
+	let modalityRestated = false
 	for (const r of rows) {
 		const offered = byId.get(r.model)
 		if (!offered) continue
@@ -408,6 +410,7 @@ export async function syncConnectionModels(
 		const modalityChanged =
 			nextModality != null && nextModality !== (r.modality ?? null)
 		if (!renaming && !factsChanged && !modalityChanged) continue
+		if (modalityChanged) modalityRestated = true
 		await db
 			.update(schema.connectionModels)
 			.set({
@@ -431,7 +434,10 @@ export async function syncConnectionModels(
 		.update(schema.connections)
 		.set({ modelsSyncedAt: now, modelsSyncError: null })
 		.where(eq(schema.connections.id, connectionId))
-	if (hadError) markAdminOverviewStale()
+	// A restated modality can leave a default on that model unable to do its
+	// job; the Overview's Needs you says so (`refusedDefaults.ts`). The default
+	// itself is left where it is.
+	if (hadError || modalityRestated) markAdminOverviewStale()
 
 	const stillMissing = rows.filter(
 		(r) => !listedIds.has(r.model) && r.missingSince != null

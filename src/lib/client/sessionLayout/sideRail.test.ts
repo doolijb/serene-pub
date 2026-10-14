@@ -15,16 +15,49 @@ import {
 	rovingStop,
 	type RailGroup
 } from "./sideRail"
+import { resolveDrawn } from "@serene-pub/sdk"
+import { unitPinned } from "./arrangedGeometry"
+import { unitsOf } from "./tabGroups"
+
+/**
+ * The column as a STORED arrangement, read the way the page reads it (C5):
+ * each group an arranged item stacked down a right frame, its pin written
+ * the way the arrangement writes one (`pinned: false`, or no field at all),
+ * then drawn by `resolveDrawn`, grouped (`unitsOf`) and pinned by the one rule
+ * (`unitPinned`). So every case below runs the pin from the stored field to
+ * the rail; `open` is transient and rides beside it, by key.
+ */
+function throughDrawn(column: RailGroup[]): RailGroup[] {
+	let y = 0
+	const items = column.map((g) => {
+		const item = { id: g.key, x: 0, y, w: 1, h: g.rows, ...(g.pinned ? {} : { pinned: false }) }
+		y += g.rows
+		return item
+	})
+	const zone = resolveDrawn(
+		{ arrangedGrid: { right: { cols: 1, rows: Math.max(1, y), items } } },
+		{ inline: 1300 }
+	).right
+	const open = new Map(column.map((g) => [g.key, g.open]))
+	return unitsOf(zone).map((u) => ({
+		key: u.key,
+		rows: u.box.h,
+		pinned: unitPinned(u.members),
+		open: open.get(u.key) ?? false
+	}))
+}
 
 /** A column of three equal groups in a 12-row arrangement. */
 function groups(...over: Partial<RailGroup>[]): RailGroup[] {
-	return over.map((o, i) => ({
-		key: `g${i}`,
-		rows: 4,
-		pinned: false,
-		open: false,
-		...o
-	}))
+	return throughDrawn(
+		over.map((o, i) => ({
+			key: `g${i}`,
+			rows: 4,
+			pinned: false,
+			open: false,
+			...o
+		}))
+	)
 }
 
 describe("railFit — expand beside the pinned ones, or fly out", () => {
@@ -124,10 +157,10 @@ describe("resolveRailColumn — (b) a pinned group keeps its height", () => {
 		const r = resolveRailColumn({
 			columnPx: 400,
 			totalRows: 12,
-			groups: [
+			groups: throughDrawn([
 				{ key: "loose", rows: 12, pinned: false, open: true },
 				{ key: "docked", rows: 6, pinned: true, open: true }
-			],
+			]),
 			focusKey: "loose"
 		})
 		const docked = r.find((p) => p.key === "docked")!
@@ -141,10 +174,10 @@ describe("resolveRailColumn — (c) no room beside the pinned ones is a flyout",
 		const r = resolveRailColumn({
 			columnPx: 300,
 			totalRows: 12,
-			groups: [
+			groups: throughDrawn([
 				{ key: "big", rows: 11, pinned: true, open: true },
 				{ key: "late", rows: 4, pinned: false, open: true }
-			],
+			]),
 			focusKey: "late"
 		})
 		expect(r.find((p) => p.key === "big")!.state).toBe("expanded")
@@ -157,11 +190,11 @@ describe("resolveRailColumn — (c) no room beside the pinned ones is a flyout",
 		const r = resolveRailColumn({
 			columnPx: 300,
 			totalRows: 12,
-			groups: [
+			groups: throughDrawn([
 				{ key: "big", rows: 11, pinned: true, open: true },
 				{ key: "a", rows: 4, pinned: false, open: true },
 				{ key: "b", rows: 4, pinned: false, open: true }
-			]
+			])
 		})
 		expect(r.map((p) => p.state)).toEqual([
 			"expanded",
@@ -174,11 +207,11 @@ describe("resolveRailColumn — (c) no room beside the pinned ones is a flyout",
 		const r = resolveRailColumn({
 			columnPx: 200,
 			totalRows: 12,
-			groups: [
+			groups: throughDrawn([
 				{ key: "big", rows: 12, pinned: true, open: true },
 				{ key: "a", rows: 4, pinned: false, open: true },
 				{ key: "b", rows: 4, pinned: false, open: true }
-			],
+			]),
 			focusKey: "b"
 		})
 		expect(r.filter((p) => p.state === "flyout").map((p) => p.key)).toEqual(
@@ -190,11 +223,11 @@ describe("resolveRailColumn — (c) no room beside the pinned ones is a flyout",
 		const open3 = {
 			columnPx: 300,
 			totalRows: 12,
-			groups: [
+			groups: throughDrawn([
 				{ key: "a", rows: 6, pinned: true, open: true },
 				{ key: "b", rows: 6, pinned: true, open: true },
 				{ key: "c", rows: 4, pinned: false, open: true }
-			],
+			]),
 			focusKey: "c"
 		}
 		expect(resolveRailColumn(open3).find((p) => p.key === "c")!.state).toBe(
@@ -216,7 +249,7 @@ describe("resolveRailColumn — the edges", () => {
 		const r = resolveRailColumn({
 			columnPx: 600,
 			totalRows: 60,
-			groups: [{ key: "sliver", rows: 1, pinned: true, open: true }]
+			groups: throughDrawn([{ key: "sliver", rows: 1, pinned: true, open: true }])
 		})
 		// One row of sixty is 10px, which is not a panel. Shares alone could
 		// never overflow the column either — they are proportions OF it — so a
@@ -317,6 +350,36 @@ describe("resolveRailColumn — below the breakpoint the rail is the header's bu
 			groups: groups({ pinned: true, open: true })
 		})
 		expect(r[0].state).toBe("collapsed")
+	})
+})
+
+describe("a RAIL-ONLY side — an arrangement that pins no group (lane E1)", () => {
+	it("as a column it would draw nothing: every group collapsed, its whole width empty", () => {
+		// Why the model draws such a side tucked and counts a rail for it
+		// (./sideSlot `sideFlowPx` `railOnly`): docked, it is a blank column.
+		const r = resolveRailColumn({
+			columnPx: 700,
+			totalRows: 12,
+			groups: groups(
+				{ pinned: false, open: false },
+				{ pinned: false, open: false }
+			)
+		})
+		expect(r.map((p) => p.state)).toEqual(["collapsed", "collapsed"])
+	})
+
+	it("drawn as its rail (the tucked decision), the group asked for comes out over the session", () => {
+		const r = resolveRailColumn({
+			columnPx: 700,
+			totalRows: 12,
+			narrow: true,
+			groups: groups(
+				{ pinned: false, open: false },
+				{ pinned: false, open: true }
+			),
+			focusKey: "g1"
+		})
+		expect(r.map((p) => p.state)).toEqual(["collapsed", "flyout"])
 	})
 })
 

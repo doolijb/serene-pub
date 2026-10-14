@@ -1,79 +1,86 @@
-<script lang="ts">
+<script lang="ts" module>
 	import * as Icons from "@lucide/svelte"
-	import LensRow from "./LensRow.svelte"
-	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
-	import ReadingInto from "./ReadingInto.svelte"
-	import { readingLine, type ScopeFacet, type SavedScopeId } from "./scopes"
-	import { SAVED_SCOPES } from "./scopes"
+	import type { Component } from "svelte"
 	import type { LoreLens, LoreScope } from "$lib/shared/lorebooks/loreRoute"
-	import type { PoolItem } from "./poolFilter"
-	import { kindLabel } from "./sections/kinds"
+	import type { SavedScopeId } from "./scopes"
+	import { descriptorFor } from "./sections"
 
 	/**
-	 * The desk: the book, the search, the lens, the scopes, what is saved, what
-	 * is pinned, and which session is reading.
+	 * A scope's icon is its door's (`sections/index.ts`); Cast has no door of
+	 * its own — it is the board — so it takes the board's people. The rail
+	 * and the compact scope popout draw the same icon for the same scope.
+	 */
+	export function scopeIcon(id: LoreScope): Component<any> | undefined {
+		return id === "cast" ? Icons.Users : descriptorFor(id)?.icon
+	}
+
+	/** A saved scope's icon, in the rail and the scope popout alike. */
+	export const SAVED_SCOPE_ICONS: Record<SavedScopeId, Component<any>> = {
+		pinned: Icons.Pin
+	}
+
+	/** A saved scope's row key, beside the scopes' own keys. */
+	export function savedKey(id: SavedScopeId): string {
+		return `saved:${id}`
+	}
+</script>
+
+<script lang="ts">
+	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
+	import SectionList from "$lib/client/components/panels/SectionList.svelte"
+	import type { SectionGroup } from "$lib/client/components/panels/sectionList"
+	import { DEFAULT_LENS } from "$lib/shared/lorebooks/loreRoute"
+	import { lensDescriptor, lensDrawsScope } from "./lenses/registry"
+	import { looseEndsLabel, SAVED_SCOPES, type ScopeFacet } from "./scopes"
+
+	/**
+	 * The book's section list: the scopes, and only the scopes (design A.3).
+	 *
+	 * - Head: the filter box. Nothing else.
+	 * - **Views**: the seven scopes with their figures.
+	 * - **Saved**: the saved scopes — Pinned — each a row like a scope's,
+	 *   current INSTEAD of one (`aria-current`), because a saved scope is a
+	 *   scope (`scopes.ts`), and choosing one opens Everything
+	 *   (`savedScopeRoute`). Future saved scopes land here.
+	 * - Foot: one quiet line, "3 loose ends ›", which opens the Loose ends
+	 *   queue. The queue is a chore list, never a place, so it is not a row.
 	 *
 	 * Nothing here is a mode. The scopes are facets over one pool and every one
-	 * of them is offered in every book: an empty facet goes dim and sorts last
-	 * rather than disappearing, because a facet that vanishes teaches the
-	 * reader the capability does not exist.
+	 * of them is offered in every book: an empty facet sorts last and shows its
+	 * 0 rather than disappearing, because a facet that vanishes teaches the
+	 * reader the capability does not exist. It stays a row that opens: an empty
+	 * scope is where its lens offers to add the first one.
+	 *
+	 * Under a lens that draws its own set whatever the scope (Lives, Places:
+	 * `drawsScope` "ignores"), the Views rows are dimmed, which is the lens ×
+	 * scope rule said on screen; choosing one still opens that scope, in the
+	 * default lens (`scopeRoute`).
 	 */
 	interface Props {
-		/**
-		 * The lines and where the reader stands — for the session block alone.
-		 *
-		 * ⚠ The rail does not SWITCH lines — the World bar above the workspace
-		 * is the one control that does. These are read so the session block can
-		 * say whether the reader has parted from the session, which is a question
-		 * about the session and belongs beside it.
-		 */
-		branches: readonly Sockets.Amendments.Branch[]
-		branchId: number | null
-		moment?: string
-		/** The session reading this book, when one is. */
-		session: {
-			id: number
-			name: string
-			branchId: number | null
-			/** Its story clock; null follows the line's present (now). */
-			clock: {
-				year: number
-				month?: number | null
-				day?: number | null
-			} | null
-		} | null
-		/** Put the reader on the session's line, at its clock. */
-		onMatchSession: () => void
 		scopes: ScopeFacet[]
-		scope: LoreScope
+		/**
+		 * The scope in force; null when no row is current, the saved scope's
+		 * included (Book settings is open).
+		 */
+		scope: LoreScope | null
+		/** The lens in force, which says whether the scope rows draw anything. */
 		lens: LoreLens
 		search: string
 		savedCounts: Record<SavedScopeId, number>
+		/** The saved scope in force, which is current instead of a scope. */
 		saved: SavedScopeId | null
 		/** How many loose ends the book has now (note 5). */
 		looseEndsCount: number
-		/** Whether the Loose ends queue is open. */
-		looseEndsOpen: boolean
-		/** Opens the queue, or leaves it when it is open. */
-		onLooseEnds: () => void
-		pinned: PoolItem[]
-		/** What the open session is called, when one reads this book. */
-		readingInto: string | null
-		/** How many entries the newest run read in; null when none reads it. */
-		reached: number | null
+		/** Whether the Loose ends queue is open, which hides the foot's line. */
+		looseEndsOpen?: boolean
+		/** Opens the Loose ends queue. */
+		onOpenLooseEnds: () => void
 		onScope: (scope: LoreScope) => void
-		onLens: (lens: LoreLens) => void
 		onSaved: (saved: SavedScopeId | null) => void
 		onSearch: (search: string) => void
-		onOpenEntry: (item: PoolItem) => void
 	}
 
 	let {
-		branches,
-		branchId,
-		moment,
-		session,
-		onMatchSession,
 		scopes,
 		scope,
 		lens,
@@ -81,44 +88,63 @@
 		savedCounts,
 		saved,
 		looseEndsCount,
-		looseEndsOpen,
-		onLooseEnds,
-		pinned,
-		readingInto,
-		reached,
+		looseEndsOpen = false,
+		onOpenLooseEnds,
 		onScope,
-		onLens,
 		onSaved,
-		onSearch,
-		onOpenEntry
+		onSearch
 	}: Props = $props()
+
+	const groups = $derived<SectionGroup[]>([
+		{
+			label: "Views",
+			items: scopes.map((facet) => ({
+				key: facet.id,
+				label: facet.label,
+				icon: scopeIcon(facet.id),
+				count: facet.count
+			}))
+		},
+		{
+			label: "Saved",
+			items: SAVED_SCOPES.map((s) => ({
+				key: savedKey(s.id),
+				label: s.label,
+				icon: SAVED_SCOPE_ICONS[s.id],
+				count: savedCounts[s.id]
+			}))
+		}
+	])
+
+	/** One row is current: the saved scope in force, else the scope. */
+	const value = $derived(
+		scope === null ? null : saved ? savedKey(saved) : scope
+	)
+
+	const showLooseEnds = $derived(looseEndsCount > 0 && !looseEndsOpen)
+
+	/** Every scope row is ignored by the lens in force (Lives, Places). */
+	const scopesIgnored = $derived(
+		scopes.length > 0 &&
+			scopes.every(
+				(facet) => lensDrawsScope(lens, facet.id) === "ignores"
+			)
+	)
+
+	function select(key: string) {
+		const savedScope = SAVED_SCOPES.find((s) => savedKey(s.id) === key)
+		if (savedScope) {
+			onSaved(savedScope.id)
+			return
+		}
+		// A scope chosen is current instead of the saved scope, so the
+		// saved scope's narrowing goes with it.
+		if (saved) onSaved(null)
+		onScope(key as LoreScope)
+	}
 </script>
 
-<nav
-	class="flex w-64 shrink-0 flex-col gap-3 overflow-y-auto pr-1"
-	aria-label="Lorebook"
-	data-lore-rail
->
-	<!-- The line moved to the World bar above the workspace (2026-09-24):
-	     line and moment are one question and were answered in two corners.
-	     The book's name and menu moved to its header (2026-09-27). -->
-
-	<!-- The session first, because the book is only half the picture and the
-	     other half can now disagree with what is on screen. -->
-	{#if session}
-		<ReadingInto
-			sessionId={session.id}
-			sessionName={session.name}
-			{reached}
-			sessionBranchId={session.branchId}
-			sessionStoryClock={session.clock}
-			{branchId}
-			{moment}
-			{branches}
-			onMatch={onMatchSession}
-		/>
-	{/if}
-
+{#snippet head()}
 	<!-- The app's one filter box (note 13): the same component and words
 	     as every other view's, and no shortcut of its own — Jump (Ctrl K /
 	     ⌘K, the pill at the top right) is scoped to this view and fills
@@ -129,118 +155,36 @@
 		placeholder="Search this book"
 		aria-label="Search this book"
 	/>
-
-	<LensRow {lens} onLens={(next) => onLens(next)} />
-
-	<div class="flex flex-col gap-1">
-		<span class="text-surface-600-400 text-xs">Views</span>
-		<ul class="flex flex-col gap-1">
-			{#each scopes as facet (facet.id)}
-				<li>
-					<button
-						type="button"
-						class="btn btn-sm w-full justify-start gap-2 {scope ===
-						facet.id
-							? 'sidebar-row-active'
-							: 'hover:preset-tonal-surface'}"
-						class:opacity-60={facet.empty && scope !== facet.id}
-						aria-current={scope === facet.id ? "page" : undefined}
-						data-lore-scope={facet.id}
-						onclick={() => onScope(facet.id)}
-					>
-						<span class="flex-1 truncate text-left">
-							{facet.label}
-						</span>
-						{#if facet.count !== undefined}
-							<span class="badge preset-tonal-surface shrink-0">
-								{facet.count}
-							</span>
-						{/if}
-					</button>
-				</li>
-			{/each}
-		</ul>
-	</div>
-
-	<div class="flex flex-col gap-1">
-		<span class="text-surface-600-400 text-xs">Saved</span>
-		<ul class="flex flex-col gap-1">
-			<!-- Not a saved scope: a queue of the book's chores (note 5),
-			     which replaced Needs keywords and the old Loose ends. -->
-			<li>
-				<button
-					type="button"
-					class="btn btn-sm w-full justify-start gap-2 {looseEndsOpen
-						? 'sidebar-row-active'
-						: 'hover:preset-tonal-surface'}"
-					class:opacity-60={looseEndsCount === 0 && !looseEndsOpen}
-					title="What is left to finish in this book, one fix at a time"
-					aria-pressed={looseEndsOpen}
-					data-lore-loose-ends
-					onclick={onLooseEnds}
-				>
-					<span class="flex-1 truncate text-left">Loose ends</span>
-					<span class="badge preset-tonal-surface shrink-0">
-						{looseEndsCount}
-					</span>
-				</button>
-			</li>
-			{#each SAVED_SCOPES as s (s.id)}
-				{@const count = savedCounts[s.id]}
-				<li>
-					<button
-						type="button"
-						class="btn btn-sm w-full justify-start gap-2 {saved ===
-						s.id
-							? 'sidebar-row-active'
-							: 'hover:preset-tonal-surface'}"
-						class:opacity-60={count === 0 && saved !== s.id}
-						title={s.title}
-						aria-pressed={saved === s.id}
-						data-lore-saved={s.id}
-						onclick={() => onSaved(saved === s.id ? null : s.id)}
-					>
-						<span class="flex-1 truncate text-left">{s.label}</span>
-						<span class="badge preset-tonal-surface shrink-0">
-							{count}
-						</span>
-					</button>
-				</li>
-			{/each}
-		</ul>
-	</div>
-
-	{#if pinned.length}
-		<ul class="flex flex-col gap-1" aria-label="Pinned entries">
-			{#each pinned as item (item.key)}
-				<li>
-					<button
-						type="button"
-						class="btn btn-sm hover:preset-tonal-surface w-full justify-start gap-2"
-						onclick={() => onOpenEntry(item)}
-					>
-						<Icons.Pin
-							size={12}
-							class="text-warning-500 shrink-0"
-							aria-hidden="true"
-						/>
-						<span class="text-surface-600-400 shrink-0 text-xs">
-							{kindLabel(item.kind)}
-						</span>
-						<span class="min-w-0 flex-1 truncate text-left">
-							{item.name}
-						</span>
-					</button>
-				</li>
-			{/each}
-		</ul>
-	{/if}
-
-	<!-- With a session, the block at the top says all of this and more; this
-	     line is what an UNREAD book has to say, which is worth saying once. -->
-	{#if !session}
-		<p class="text-surface-700-300 mt-auto text-xs" data-lore-reading>
-			{readingLine(readingInto, reached)}
+	{#if scopesIgnored}
+		<p class="sr-only">
+			{lensDescriptor(lens).label} draws the same whatever the view; choosing
+			a view opens it in {lensDescriptor(DEFAULT_LENS).label}.
 		</p>
 	{/if}
-</nav>
+{/snippet}
+
+{#snippet foot()}
+	<button
+		type="button"
+		class="btn btn-sm hover:preset-tonal-surface text-surface-600-400 self-start"
+		title="What is left to finish in this book, one fix at a time"
+		data-lore-loose-ends
+		onclick={onOpenLooseEnds}
+	>
+		<span>{looseEndsLabel(looseEndsCount)}</span>
+		<Icons.ChevronRight size={14} aria-hidden="true" />
+	</button>
+{/snippet}
+
+<!-- The Views rows dim as a group while the lens ignores them: the nav's
+     first list is the Views group (`groups` above). -->
+<SectionList
+	ariaLabel="Lorebook"
+	flush={true}
+	class={scopesIgnored ? "[&>ul:first-of-type]:opacity-60" : ""}
+	{groups}
+	{value}
+	onselect={select}
+	{head}
+	foot={showLooseEnds ? foot : undefined}
+/>

@@ -1,4 +1,5 @@
 import { CAST_KIND, type PoolItem } from "./poolFilter"
+import type { RetoldFlags } from "$lib/shared/lorebooks/retold"
 
 /**
  * The cast, as arithmetic.
@@ -43,11 +44,35 @@ export interface CastRow {
 	 * to that card's default and is kept as written.
 	 */
 	spriteSet?: string | null
+	/**
+	 * The member's own words for the card's fields (retold fields, PLAN
+	 * cast-retold-fields). Kept whether or not `retold` says they are read:
+	 * switching a field back to the card hides the text, never discards it.
+	 */
+	description?: string | null
+	personality?: string | null
+	scenario?: string | null
+	firstMessage?: string | null
+	alternateGreetings?: string[] | null
+	exampleDialogues?: string | null
+	/** The member's face (`files.id`), drawn while `retold.face`. */
+	faceMediaId?: number | null
+	/** Which card fields the member tells in their own words. */
+	retold?: RetoldFlags | null
 	characterId?: number | null
 	character?: {
+		id?: number | null
 		nickname?: string | null
 		name?: string | null
 		isPersona?: boolean | null
+		avatarMediaId?: number | null
+		description?: string | null
+		personality?: string | null
+		scenario?: string | null
+		firstMessage?: string | null
+		alternateGreetings?: string[] | null
+		/** An array on the card (one dialogue each); old cards hold a string. */
+		exampleDialogues?: string[] | string | null
 	} | null
 }
 
@@ -217,9 +242,9 @@ export function loreByMember<T extends AnchoredLore>(
 /**
  * Lore anchored to nobody.
  *
- * Visible to nobody, so it is surfaced rather than dropped: an unanchored row
- * is a row the writer has to repair, and the Cast page is where the anchor is
- * set.
+ * The narrator reads it and no character does, so it is surfaced rather than
+ * dropped: the Cast page is where an author gives it an anchor, or leaves it
+ * as the narrator's.
  */
 export function unanchoredLore<T extends AnchoredLore>(
 	entries: readonly T[]

@@ -351,6 +351,8 @@ export async function createMedia(
 			characterId: input.characterId ?? null,
 			sessionId: input.sessionId ?? null,
 			messageId: input.messageId ?? null,
+			conversationId: input.conversationId ?? null,
+			lorebookId: input.lorebookId ?? null,
 			visibility: input.visibility ?? MediaVisibility.SCOPED,
 			kind: sniffed.kind,
 			hash,
@@ -472,7 +474,9 @@ function parentWhere(parent: MediaParent): SQL {
 	return and(
 		eq(schema.files.userId, parent.userId),
 		isNull(schema.files.characterId),
-		isNull(schema.files.sessionId)
+		isNull(schema.files.sessionId),
+		// A cast member's face is the lorebook's, not a personal blob.
+		isNull(schema.files.lorebookId)
 	)!
 }
 

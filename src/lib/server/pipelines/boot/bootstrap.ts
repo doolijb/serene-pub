@@ -422,6 +422,11 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		"$lib/server/pipelines/boot/embedTextConnectionDrop"
 	)
 	report.embedTextConnectionDropped = await dropEmbedTextConnectionValues(db)
+	// ⏳ And a sampling config's legacy `{ id: bias }` logit bias becomes
+	// entries the editor can show (plan logit-bias L2).
+	await (
+		await import("$lib/server/pipelines/boot/logitBiasCarryOver")
+	).carryOverLogitBiasEntries(db)
 
 	report.specs = await seedCoreSpecs(db)
 

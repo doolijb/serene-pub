@@ -159,20 +159,18 @@ describe("tiny 0.5.3 fixture, dev-mode meta", () => {
 		expect(preview.halt, preview.reason ?? "").toBe("generate")
 	})
 
-	test("on a single-user install the person's picks are the instance's — a shipped pick by its renamed seed (B1, M1)", async () => {
-		const sel = await rows<{ seed_key: string; name: string; config_id: number }>(sql`
-			SELECT c.seed_key, c.name, c.id AS config_id FROM pipeline_config_selections s
+	test("a pick of a prompt 0.6 no longer ships is not carried: the session starts on the shipped default (B1, M1)", async () => {
+		// The fixture's person picked 0.5.3's "Neutral - Chat". 0.6 shipped it
+		// as "Neutral" until the owner cut the reply prompts to four
+		// (2026-10-13), so nothing under its seed key exists to point at and
+		// `configForSeed` answers null: no pub selection, the default stands.
+		const sel = await rows<{ seed_key: string }>(sql`
+			SELECT c.seed_key FROM pipeline_config_selections s
 			JOIN pipeline_configs c ON c.id = s.config_id JOIN pipeline_specs p ON p.id = s.spec_id
 			WHERE p.slug = 'core:spec/chat-respond' AND s.scope_kind = 'pub'`)
-		expect(sel).toHaveLength(1)
-		expect(sel[0].name).toBe("Neutral - Session")
-		const prompts = await rows<{ seed_key: string }>(sql`
-			SELECT p.seed_key FROM pipeline_config_values v JOIN pipeline_prompts p ON p.id = (v.value::text)::int
-			WHERE v.config_id = ${sel[0].config_id} AND v.slot = 'prompts'`)
-		expect(prompts.map((p) => p.seed_key)).toContain(
-			"pipeline-prompt:core:task/build-template-context:prompts:prompt-neutral-session"
-		)
-		expect(preview.text).toContain("next reply in a fictional session between")
+		expect(sel).toHaveLength(0)
+		// Living Scene, the shipped default's own words.
+		expect(preview.text).toContain("You are writing interactive fiction with")
 		const session = await rows<{ n: number }>(sql`
 			SELECT count(*)::int AS n FROM pipeline_config_selections WHERE scope_kind = 'session'`)
 		expect(session[0].n).toBe(0)
@@ -248,9 +246,9 @@ describe("tiny 0.5.3 fixture, dev-mode meta", () => {
 
 	test("the default connection is the pair its model became; a differing option rides on the model", async () => {
 		const [d] = await rows<{ connection_id: number; model: string }>(sql`
-			SELECT d.connection_id, m.model FROM connection_defaults d
+			SELECT d.connection_id, m.model FROM loadouts d
 			JOIN connection_models m ON m.id = d.connection_model_id
-			WHERE d.input = 'text' AND d.output = 'text'`)
+			WHERE d.default_for_input = 'text' AND d.default_for_output = 'text'`)
 		expect(d).toEqual({ connection_id: 1, model: "gate-model-2" })
 		const [thinking] = await rows<{ extra_json: Record<string, unknown> }>(sql`
 			SELECT extra_json FROM connection_models WHERE model = 'hf.co/x/M1-12B-GGUF:Q4_K_M'`)

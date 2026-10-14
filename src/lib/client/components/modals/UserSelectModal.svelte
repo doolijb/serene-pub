@@ -3,7 +3,8 @@
 	import * as Icons from "@lucide/svelte"
 	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
 	import { onMount } from "svelte"
-	import { getContext } from "svelte"
+	import { getContext, untrack } from "svelte"
+	import { SvelteSet } from "svelte/reactivity"
 	import { resolveUserHandle } from "$lib/shared/utils/resolveCharacterName"
 
 	interface Props {
@@ -16,7 +17,27 @@
 		multiSelect?: boolean
 		/** The picked ids, and their rows — a caller holding the pick as a
 		 *  pending change needs the names before the server has them. */
-		onMultiSelect?: (userIds: number[], users: SelectUser[]) => void
+		onMultiSelect?: (
+			userIds: number[],
+			users: SelectUser[],
+			name?: string
+		) => void
+		/**
+		 * Where the roster comes from. `users:list` (default) is the admin
+		 * roster; `conversations:people` is every other account as a member
+		 * sees it (PLAN-private-messages §6.5) — the one a non-admin may
+		 * read. Its rows carry only `id`, `username`, `displayName` and
+		 * `isAdmin`.
+		 */
+		source?: "users:list" | "conversations:people"
+		/** The multi-select confirm's words for `count` picked. */
+		confirmLabel?: (count: number) => string
+		/**
+		 * Multi-select: once more than one person is picked, offer an
+		 * optional **Name** (a group conversation's), passed to
+		 * `onMultiSelect` as its third argument.
+		 */
+		askName?: boolean
 	}
 
 	let {
@@ -27,13 +48,18 @@
 		onMultiSelect,
 		title = "Select user",
 		description,
-		multiSelect = false
+		multiSelect = false,
+		source = "users:list",
+		confirmLabel = (count: number) =>
+			`Add ${count} guest${count !== 1 ? "s" : ""}`,
+		askName = false
 	}: Props = $props()
 
 	let userCtx: UserCtx = getContext("userCtx")
 	let users: SelectUser[] = $state([])
 	let search = $state("")
-	let selectedUserIds: Set<number> = $state(new Set())
+	const selectedUserIds = new SvelteSet<number>()
+	let groupName = $state("")
 
 	let availableUsers = $derived.by(() => {
 		// Exclude current user and any other excluded users
@@ -70,7 +96,6 @@
 			} else {
 				selectedUserIds.add(userId)
 			}
-			selectedUserIds = new Set(selectedUserIds)
 		} else {
 			onSelect(userId)
 			onclose()
@@ -80,9 +105,14 @@
 	function handleConfirmMultiSelect() {
 		if (onMultiSelect) {
 			const ids = Array.from(selectedUserIds)
+			const name =
+				askName && ids.length > 1 && groupName.trim()
+					? groupName.trim()
+					: undefined
 			onMultiSelect(
 				ids,
-				users.filter((u) => u.id != null && selectedUserIds.has(u.id))
+				users.filter((u) => u.id != null && selectedUserIds.has(u.id)),
+				name
 			)
 		}
 		onclose()
@@ -96,19 +126,35 @@
 		users = msg.users || []
 	}
 
+	/** The member-facing roster: the same rows, fewer columns. */
+	function handlePeople(msg: { people: SelectUser[] | unknown[] }) {
+		users = (msg.people as SelectUser[]) || []
+	}
+
 	onMount(() => {
 		// BARE — `users:list` has no entry in `SCOPED_EVENTS`; this is the
 		// whole roster and the picker wants all of it. Declared and asked for
 		// in one call so the key is on the wire before the request, and held
 		// while the modal is open: the roster is a cascade target, so a user
 		// added elsewhere shows up here without reopening.
+		if (source === "conversations:people")
+			return requestWithInterest(
+				"conversations:people",
+				{},
+				handlePeople
+			)
 		return requestWithInterest("users:list", {}, handleUsersList)
 	})
 
 	// Reset selection when modal opens
 	$effect(() => {
 		if (open) {
-			selectedUserIds = new Set()
+			// Untracked: `clear()` reads the set, and an effect that read it
+			// would clear every pick the moment it was made.
+			untrack(() => {
+				selectedUserIds.clear()
+				groupName = ""
+			})
 		}
 	})
 </script>
@@ -191,10 +237,22 @@
 						{/each}
 					</div>
 				</div>
+				{#if multiSelect && askName && selectedUserIds.size > 1}
+					<label class="block space-y-1">
+						<span class="text-sm font-medium">Name</span>
+						<input
+							class="input w-full"
+							type="text"
+							maxlength="80"
+							placeholder="Optional — the names joined if left empty"
+							bind:value={groupName}
+						/>
+					</label>
+				{/if}
 				{#if multiSelect}
 					<footer class="flex justify-end gap-2">
 						<button
-							class="btn preset-filled-surface-500"
+							class="btn preset-tonal-surface"
 							onclick={onclose}
 						>
 							Cancel
@@ -204,10 +262,7 @@
 							onclick={handleConfirmMultiSelect}
 							disabled={selectedUserIds.size === 0}
 						>
-							Add {selectedUserIds.size} guest{selectedUserIds.size !==
-							1
-								? "s"
-								: ""}
+							{confirmLabel(selectedUserIds.size)}
 						</button>
 					</footer>
 				{/if}

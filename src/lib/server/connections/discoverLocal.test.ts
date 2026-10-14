@@ -1,4 +1,16 @@
 import { describe, expect, it, vi } from "vitest"
+
+const showMock = vi.fn(
+	async (_request: { model: string }): Promise<unknown> => ({})
+)
+const listMock = vi.fn(async (): Promise<unknown> => ({ models: [] }))
+vi.mock("ollama", () => ({
+	Ollama: class {
+		list = () => listMock()
+		show = (request: { model: string }) => showMock(request)
+	}
+}))
+
 import {
 	chatModelsOf,
 	discoverLocalProviders,
@@ -68,6 +80,43 @@ describe("discoverLocalProviders", () => {
 			models: [],
 			error: "busy"
 		})
+	})
+
+	it("counts an Ollama's chat models from what its adapter reads off /api/show", async () => {
+		// `/api/tags` carries no capabilities; the adapter asks each model.
+		listMock.mockResolvedValueOnce({
+			models: [
+				{ name: "llama3:8b", model: "llama3:8b" },
+				{ name: "nomic-embed-text", model: "nomic-embed-text" },
+				{ name: "older:7b", model: "older:7b" }
+			]
+		})
+		showMock.mockImplementation(async ({ model }) =>
+			model === "llama3:8b"
+				? { capabilities: ["completion", "tools"] }
+				: model === "nomic-embed-text"
+					? { capabilities: ["embedding"] }
+					: {}
+		)
+		const providers = await discoverLocalProviders({
+			fetchImpl: fakeFetch({
+				"http://localhost:11434/api/version": { version: "0.12.0" }
+			})
+		})
+		// The model Ollama said nothing about is offered, as the chat star
+		// would accept it.
+		expect(providers).toEqual([
+			{
+				type: "ollama",
+				label: "Ollama",
+				baseUrl: "http://localhost:11434",
+				models: [
+					{ model: "llama3:8b", name: "llama3:8b" },
+					{ model: "older:7b", name: "older:7b" }
+				],
+				error: null
+			}
+		])
 	})
 
 	it("lists each candidate's own type and default address", () => {

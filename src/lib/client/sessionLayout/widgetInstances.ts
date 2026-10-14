@@ -33,7 +33,11 @@
  * {@link duplicateOffered}, and the Settings overlay is never handed a
  * duplicator.
  */
-import { instanceNameOf, widgetOfInstance } from "@serene-pub/sdk"
+import {
+	instanceNameOf,
+	resolveWidgetAlias,
+	widgetOfInstance
+} from "@serene-pub/sdk"
 import type { PanelInstance } from "../surfaces/types"
 
 /** QD's three answers (plan M.7): (1) `tray-only`, (2) `copy-settings`, (3) `copy-size`. */
@@ -185,12 +189,20 @@ export function duplicateValues(
 	rule: DuplicateRule = DUPLICATE_RULE
 ): DuplicateValues {
 	if (rule !== "copy-settings") return { settings: null, pin: null }
-	const own = settings[sourceId]
+	// ⏳ An aliased source (`world-state`) reads the settings its alias
+	// implies as defaults it never stored; its copy is a plain `stats#n`,
+	// so they are written into the copy, under the source's own.
+	const own = {
+		...resolveWidgetAlias(sourceId).impliedSettings,
+		...settings[sourceId]
+	}
 	const pin = pins[sourceId]
 	return {
 		// A JSON copy: stored settings are JSON, and the store's are reactive
 		// proxies a structured clone would refuse.
-		settings: own && Object.keys(own).length ? JSON.parse(JSON.stringify(own)) : null,
+		settings: Object.keys(own).length
+			? JSON.parse(JSON.stringify(own))
+			: null,
 		pin: pin ? { ...pin } : null
 	}
 }

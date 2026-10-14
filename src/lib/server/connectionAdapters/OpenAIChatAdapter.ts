@@ -21,6 +21,8 @@ import {
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
+import { openAIImageModelInfo } from "$lib/server/imageAdapters/OpenAIImagesAdapter"
+import { credentialPolicy } from "$lib/shared/connections/credentials"
 import { ToolCallDeltaAccumulator } from "./streamingToolCalls"
 import { modelServerFetchOptions } from "./modelServerFetch"
 
@@ -108,6 +110,39 @@ function reasoningTextFrom(source: any): string | undefined {
 	if (typeof source.reasoning === "string" && source.reasoning)
 		return source.reasoning
 	return undefined
+}
+
+
+/** What a keyless server is sent: the OpenAI client sends no request without a key. */
+const KEYLESS_API_KEY = "none"
+
+/** Where the client sends a request with no `baseURL`: OpenAI's own API. */
+const OPENAI_API_URL = "https://api.openai.com/v1"
+
+/**
+ * The key the OpenAI client is built with.
+ *
+ * The client refuses to send a request with no key (it falls back to the
+ * `OPENAI_API_KEY` variable and throws "Missing credentials"), yet a server on
+ * your own machine usually needs none. A connection that may go without one
+ * sends a placeholder, which such a server ignores; one whose service needs a
+ * key is refused here, in a sentence, before anything is sent. The address
+ * judged is the one the client will call, so no address is OpenAI's own.
+ */
+function clientApiKey(
+	connection: SelectConnection,
+	stored: string | null | undefined,
+	baseURL: string | null | undefined
+): string {
+	if (stored?.trim()) return stored
+	if (
+		credentialPolicy({ ...connection, baseUrl: baseURL || OPENAI_API_URL }) ===
+		"required"
+	)
+		throw new Error(
+			"This service needs an API key. Paste it under Settings, then press Save."
+		)
+	return KEYLESS_API_KEY
 }
 
 export class OpenAIChatAdapter extends BaseConnectionAdapter {
@@ -233,6 +268,9 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 			]
 		}
 
+		// Before the synchronous key map below reads the ids it resolves.
+		await this.resolveLogitBias()
+
 		const params: ChatCompletionCreateParamsBase = {
 			model,
 			messages,
@@ -317,7 +355,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 			)
 
 		const openaiClient = new OpenAI({
-			apiKey,
+			apiKey: clientApiKey(this.connection, apiKey, baseURL),
 			baseURL: baseURL || undefined,
 			defaultHeaders: {
 				"User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)"
@@ -464,6 +502,13 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 				// takes this format's own word for "none", and a budget has no
 				// field here at all.
 				if (isReasoningKey(key)) continue
+				// The entries become token ids first (`resolveLogitBias`);
+				// nothing resolved, nothing sent.
+				if (key === "logitBias") {
+					const ids = this.logitBiasObject()
+					if (ids) result.logit_bias = ids
+					continue
+				}
 				result[openAISamplingKeyMap[key]] = value
 			}
 		}
@@ -504,27 +549,77 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 }
 
 /**
- * What one listed model is FOR, in the app's modality words, from the
- * `architecture.output_modalities` OpenRouter puts on every entry (and any
- * OpenAI-compatible host that copies its shape).
+ * The services whose listing says what each model is for in a field of its
+ * own, beyond OpenRouter's shape — see `openAIModelModality`.
+ */
+type ModalityService = "together" | "mistral" | "gemini"
+
+/** Together's `type`, in the app's modality words; any other type says nothing. */
+const TOGETHER_TYPE_MODALITY: ReadonlyMap<string, string> = new Map([
+	["chat", "text-gen"],
+	["language", "text-gen"],
+	["code", "text-gen"],
+	["embedding", "embeddings"],
+	["image", "image-gen"]
+])
+
+/**
+ * What one listed model is FOR, in the app's modality words.
+ *
+ * From any host: the `architecture.output_modalities` OpenRouter puts on every
+ * entry (and any OpenAI-compatible host that copies its shape). Then, for the
+ * service the listing came from, that service's own field:
+ *
+ * - **Together** — the entry's `type`: `chat`, `language` and `code` write
+ *   text, `embedding` embeds, `image` draws. `rerank`, `moderation`, `audio`,
+ *   `transcribe` and `video` have no modality word here and say nothing.
+ * - **Mistral** — `capabilities.completion_chat`: true is a text model. False
+ *   says nothing, because nothing else in the entry names embeddings
+ *   (`mistral-embed` reads false).
+ * - **Gemini** — the native listing's `supportedGenerationMethods`, which
+ *   `withGeminiGenerationMethods` copies onto the entry: `embedContent`
+ *   without `generateContent` embeds, the reverse writes text.
  *
  * Only a one-sided answer is an answer, as for Ollama's `capabilities`
  * (`ollamaModelModality`): `embeddings` without `text` is an embedding model,
  * `text` without `embeddings` a text model — an image or audio model that also
- * writes text included, since it can chat. Both, neither, or no list at all is
+ * writes text included, since it can chat. Both, neither, or no field at all is
  * undefined, which the sync stores as NULL and `capabilityRefusal` leaves
- * ungated. Most services' `/models` say nothing here, and nothing guesses from
- * a model's id.
+ * ungated. OpenAI's own `/models` and LocalAI's say nothing here, and nothing
+ * here guesses from a model's id — the one exception is `listModels`, which
+ * marks the ids the OpenAI-images module draws with (`openAIImageModelInfo`)
+ * as `image-gen` when the host said nothing.
  */
-export function openAIModelModality(entry: unknown): string | undefined {
-	const out = (
-		entry as { architecture?: { output_modalities?: unknown } } | null
-	)?.architecture?.output_modalities
-	if (!Array.isArray(out)) return undefined
-	const embeds = out.includes("embeddings")
-	const writes = out.includes("text")
-	if (embeds === writes) return undefined
-	return embeds ? "embeddings" : "text-gen"
+export function openAIModelModality(
+	entry: unknown,
+	service?: ModalityService
+): string | undefined {
+	const e = entry as Record<string, any> | null
+	const out = e?.architecture?.output_modalities
+	if (Array.isArray(out)) {
+		const embeds = out.includes("embeddings")
+		const writes = out.includes("text")
+		if (embeds !== writes) return embeds ? "embeddings" : "text-gen"
+	}
+	if (service === "together") {
+		return typeof e?.type === "string"
+			? TOGETHER_TYPE_MODALITY.get(e.type.toLowerCase())
+			: undefined
+	}
+	if (service === "mistral") {
+		return e?.capabilities?.completion_chat === true
+			? "text-gen"
+			: undefined
+	}
+	if (service === "gemini") {
+		const methods = e?.supportedGenerationMethods
+		if (!Array.isArray(methods)) return undefined
+		const embeds = methods.includes("embedContent")
+		const generates = methods.includes("generateContent")
+		if (embeds === generates) return undefined
+		return embeds ? "embeddings" : "text-gen"
+	}
+	return undefined
 }
 
 /**
@@ -538,6 +633,137 @@ function isOpenRouter(connection: SelectConnection, baseURL: string): boolean {
 	} catch {
 		return false
 	}
+}
+
+/**
+ * Which service's own per-model field this connection's listing is read for:
+ * its preset says so, or its address is that service's whatever the preset.
+ */
+function modalityServiceOf(
+	connection: SelectConnection,
+	baseURL: string
+): ModalityService | undefined {
+	if (connection.preset === "together-ai") return "together"
+	if (connection.preset === "mistral-ai") return "mistral"
+	if (connection.preset === "google-gemini") return "gemini"
+	let host: string
+	try {
+		host = new URL(baseURL).hostname.toLowerCase()
+	} catch {
+		return undefined
+	}
+	const under = (domain: string) =>
+		host === domain || host.endsWith(`.${domain}`)
+	if (under("together.xyz") || under("together.ai")) return "together"
+	if (under("mistral.ai")) return "mistral"
+	if (host === "generativelanguage.googleapis.com") return "gemini"
+	return undefined
+}
+
+/** The most the listing spends on Gemini's native `models.list`, every page together. */
+const GEMINI_NATIVE_BUDGET_MS = 8_000
+/** Pages read at most, so a `nextPageToken` that never ends cannot hold the sync. */
+const GEMINI_NATIVE_MAX_PAGES = 10
+
+/**
+ * A Gemini model's name without the native `models/` prefix, which the
+ * OpenAI-compatible listing may or may not carry.
+ */
+function bareGeminiName(name: unknown): string | undefined {
+	return typeof name === "string" && name
+		? name.replace(/^models\//, "")
+		: undefined
+}
+
+/**
+ * Gemini's native `models.list` address, from the OpenAI-compatible base
+ * (`…/v1beta/openai` → `…/v1beta/models`). Undefined for a base that does not
+ * end in `/openai`, whose native path cannot be known.
+ */
+function geminiNativeModelsUrl(baseURL: string): string | undefined {
+	try {
+		const url = new URL(baseURL)
+		const path = url.pathname.replace(/\/+$/, "")
+		if (!path.endsWith("/openai")) return undefined
+		url.pathname = `${path.slice(0, -"/openai".length)}/models`
+		url.search = ""
+		return url.toString()
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * Each listed Gemini model's `supportedGenerationMethods`, from the NATIVE
+ * `models.list`, copied onto its entry.
+ *
+ * The OpenAI-compatible `/models` is `{id, object, owned_by}` and nothing more;
+ * the native list, at the same host with the same key, is the one place Gemini
+ * says which models embed (`embedContent`) and which generate
+ * (`generateContent`). Names match with the `models/` prefix removed from both
+ * sides.
+ *
+ * ⚠ It never fails the listing. A failed or timed-out native call is one log
+ * line and the entries exactly as the compatible list gave them — silence,
+ * which `openAIModelModality` answers as unknown. Bounded by one budget across
+ * every page so the whole listing fits the sync's own timeout
+ * (`MODEL_SYNC_TIMEOUT_MS`). The key goes in the `x-goog-api-key` header, so no
+ * address that reaches a log carries it.
+ */
+export async function withGeminiGenerationMethods(
+	models: readonly any[],
+	baseURL: string,
+	apiKey: string | undefined
+): Promise<any[]> {
+	const url = geminiNativeModelsUrl(baseURL)
+	if (!url || !apiKey) {
+		if (!url)
+			console.warn(
+				"Gemini native models list skipped: no native address for this base URL; model modalities left unknown"
+			)
+		return models.slice()
+	}
+	const methods = new Map<string, unknown[]>()
+	try {
+		const signal = AbortSignal.timeout(GEMINI_NATIVE_BUDGET_MS)
+		let pageToken: string | undefined
+		for (let page = 0; page < GEMINI_NATIVE_MAX_PAGES; page++) {
+			const pageUrl = new URL(url)
+			pageUrl.searchParams.set("pageSize", "1000")
+			if (pageToken) pageUrl.searchParams.set("pageToken", pageToken)
+			const res = await fetch(pageUrl, {
+				headers: { "x-goog-api-key": apiKey },
+				signal
+			})
+			if (!res.ok) throw new Error(`HTTP ${res.status}`)
+			const body = (await res.json()) as {
+				models?: unknown
+				nextPageToken?: unknown
+			}
+			if (Array.isArray(body?.models)) {
+				for (const m of body.models) {
+					const name = bareGeminiName(m?.name)
+					if (name && Array.isArray(m.supportedGenerationMethods))
+						methods.set(name, m.supportedGenerationMethods)
+				}
+			}
+			pageToken =
+				typeof body?.nextPageToken === "string" && body.nextPageToken
+					? body.nextPageToken
+					: undefined
+			if (!pageToken) break
+		}
+	} catch (e: any) {
+		console.warn(
+			"Gemini native models list failed; model modalities left unknown:",
+			e?.message || String(e)
+		)
+		return models.slice()
+	}
+	return models.map((m) => {
+		const found = methods.get(bareGeminiName(m?.id) ?? "")
+		return found ? { ...m, supportedGenerationMethods: found } : m
+	})
 }
 
 /**
@@ -560,7 +786,7 @@ async function listModels(
 				CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI].baseUrl
 			)
 		const openai = new OpenAI({
-			apiKey,
+			apiKey: clientApiKey(connection, apiKey, baseURL),
 			baseURL: baseURL || undefined,
 			defaultHeaders: {
 				"User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)"
@@ -572,13 +798,29 @@ async function listModels(
 				: undefined
 		)
 		if (res && Array.isArray(res.data)) {
+			const service = modalityServiceOf(connection, baseURL)
+			const listed =
+				service === "gemini"
+					? await withGeminiGenerationMethods(
+							res.data,
+							baseURL,
+							apiKey
+						)
+					: res.data
 			// The entries ride along whole, so `readModelFacts` reads the
 			// context window, price and input modalities they carry; what each
 			// model is FOR is added where the host said (`openAIModelModality`).
 			return {
-				models: res.data.map((m) => {
-					const modality = openAIModelModality(m)
-					return modality ? { ...m, modality } : m
+				models: listed.map((m) => {
+					const modality = openAIModelModality(m, service)
+					if (modality) return { ...m, modality }
+					// The host said nothing (OpenAI's own `/models` never
+					// does): an id the OpenAI-images module draws with is an
+					// image model, with its per-image price where one is
+					// known — so the Images job can pick it and a chat slot
+					// cannot.
+					const image = openAIImageModelInfo(m?.id)
+					return image ? { ...m, ...image } : m
 				})
 			}
 		} else {
@@ -604,7 +846,7 @@ async function testConnection(
 				CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI].baseUrl
 			)
 		const openai = new OpenAI({
-			apiKey,
+			apiKey: clientApiKey(connection, apiKey, baseURL),
 			baseURL: baseURL || undefined,
 			defaultHeaders: {
 				"User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)"

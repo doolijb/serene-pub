@@ -69,6 +69,8 @@ let seen: {
 	 */
 	progressCallback?: unknown
 } = {}
+/** Every request the adapter was handed, in order — one per call of a plan. */
+let allReqs: any[] = []
 /** Renders currently inside `generateImage`, to prove they do not overlap. */
 let concurrent = 0
 let maxConcurrent = 0
@@ -87,6 +89,7 @@ class FakeAdapter {
 	// end if the fakes move with it.
 	async generateImage(req: any, opts: any = {}) {
 		seen.req = req
+		allReqs.push(req)
 		seen.progressCallback = opts.onProgress
 		preflightLog.push("render")
 		concurrent++
@@ -125,8 +128,29 @@ class FakeAdapter {
 const PNG_1x1 =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
+/** The drawing sheet the fake adapter declares — A1111's shape. */
+const TEST_SHEET = {
+	negative: true,
+	seed: true,
+	steps: true,
+	cfg: true,
+	sampler: true,
+	clipSkip: false,
+	size: { kind: "free", step: 8, min: 64, max: 2048 },
+	references: null,
+	init: true,
+	mask: true,
+	transparent: "none",
+	perCall: 8,
+	outputs: { perRun: 1, keyed: false },
+	progress: true,
+	preview: true,
+	cancel: true,
+	video: false
+}
+
 vi.mock("$lib/server/utils/getImageAdapter", () => ({
-	getImageAdapter: async () => ({ Adapter: FakeAdapter })
+	getImageAdapter: async () => ({ Adapter: FakeAdapter, sheet: TEST_SHEET })
 }))
 
 /** File rows written by `createMedia`, so the test can read provenance back. */
@@ -303,7 +327,9 @@ const fakeDb = {
 					// Keyed by the transform's two SIDES since 0183, so this
 					// lookup builds TWO equalities where every other read here
 					// builds one. The fixture map is still keyed by the id.
-					if (name === "connection_defaults") {
+					// Since I12 the store is the transform's default LOADOUT
+					// (`loadouts`, the same two sides as `default_for_*`).
+					if (name === "connection_defaults" || name === "loadouts") {
 						const [input, output] = lastWherePair as [
 							string,
 							string
@@ -356,6 +382,7 @@ async function dispatch(call: any = {}) {
 beforeEach(() => {
 	vi.resetModules()
 	seen = {}
+	allReqs = []
 	created = []
 	nextDurationMs = null
 	concurrent = 0
@@ -588,7 +615,7 @@ describe("dispatchImage — resolving the target", () => {
 			}
 		}
 		await expect(dispatch()).rejects.toThrow(
-			/Nothing is set to handle .*Admin → Defaults/s
+			/No model is set for .*Admin › Models › Loadouts/s
 		)
 	})
 
@@ -954,5 +981,113 @@ describe("dispatchImage — reached through the host", () => {
 			user: "7",
 			template: "{{prompt}}, cinematic lighting"
 		})
+	})
+})
+
+describe("dispatchImage — a series, packed by the sheet (DESIGN-image-generation §4.7)", () => {
+	it("renders the prompt rows once per item with its vars, one call each", async () => {
+		const plans: any[] = []
+		const out = await dispatch({
+			prompts: { positive: "{{prompt}}, {{labelPhrase}}" },
+			series: [
+				{ key: "Joy", vars: { labelPhrase: "smiling" } },
+				{ key: "Anger", vars: { labelPhrase: "scowling" } }
+			],
+			onPlan: (p: any) => plans.push(JSON.parse(JSON.stringify(p)))
+		})
+		expect(allReqs.map((r) => r.prompt)).toEqual([
+			"a knight at dusk, smiling",
+			"a knight at dusk, scowling"
+		])
+		// Keys sanitised; each picture carries the key it was drawn for.
+		expect(out.media.map((m: any) => m.key)).toEqual(["joy", "anger"])
+		expect(created.map((c) => c.meta.seriesKey)).toEqual(["joy", "anger"])
+		expect(created[0].meta.seriesLabel).toBe("Joy")
+		// The plan was handed over BEFORE any call, and filled in after.
+		expect(plans).toHaveLength(1)
+		expect(plans[0]).toMatchObject({ packing: "loop", pictures: 2 })
+		expect(plans[0].calls[0].returned).toBeUndefined()
+		expect(out.plan.calls.map((c: any) => c.returned)).toEqual([1, 1])
+		expect(out.plan.calls[0].applied).toEqual(["steps", "cfg"])
+	})
+
+	it("batches identical items into one call keyed by order", async () => {
+		const out = await dispatch({
+			series: [{ key: "1" }, { key: "2" }]
+		})
+		mode = "ok"
+		expect(out.plan.packing).toBe("batch")
+		expect(allReqs).toHaveLength(1)
+		expect(allReqs[0].batch).toBe(2)
+		// The fake returned one: the second key is reported missing.
+		expect(out.media.map((m: any) => m.key)).toEqual(["1"])
+		expect(out.plan.missing).toEqual([{ key: "2", wanted: 1, got: 0 }])
+	})
+
+	it("surplus in a one-key call becomes variants of that key", async () => {
+		mode = "batch"
+		const out = await dispatch({ series: [{ key: "joy" }] })
+		expect(out.media.map((m: any) => m.key)).toEqual(["joy", "joy"])
+		expect(out.plan.missing).toBeUndefined()
+	})
+
+	it("refuses required references on a pair that takes none, before any call", async () => {
+		await expect(
+			dispatch({
+				references: [{ uuid: "u", kind: "image", mime: "image/png", bytes: 1 }],
+				referencesPolicy: "required"
+			})
+		).rejects.toThrow(/takes reference images/)
+		expect(allReqs).toHaveLength(0)
+	})
+
+	it("runs preferred references anyway and reports the notice", async () => {
+		const out = await dispatch({
+			references: [{ uuid: "u", kind: "image", mime: "image/png", bytes: 1 }]
+		})
+		expect(out.preRunNotices).toHaveLength(1)
+		expect(allReqs[0].references).toHaveLength(1)
+	})
+
+	it("flags the pictures for the cut-out task when the pair draws no alpha", async () => {
+		await dispatch({ cutOut: "native-or-task" })
+		expect(allReqs[0].transparent).toBeUndefined()
+		expect(created[0].meta.needsCutOut).toBe(true)
+	})
+
+	it("turns the size by orientation before the call", async () => {
+		samplingById[10] = {
+			...imageSampling,
+			values: { ...(imageSampling as any).values, width: 832, height: 1216 },
+			enabled: [...((imageSampling as any).enabled ?? []), "width", "height"]
+		}
+		await dispatch({ orientation: "landscape" })
+		expect(allReqs[0]).toMatchObject({ width: 1216, height: 832 })
+	})
+})
+
+describe("previewImageRun — what the form says before the run", () => {
+	it("returns the notice and the packing, and calls nothing", async () => {
+		const { previewImageRun } = await import("./dispatchImage")
+		const out = await previewImageRun(fakeDb as any, {
+			prompt: "p",
+			userId: 7,
+			series: [{ key: "a" }, { key: "b" }, { key: "c" }],
+			references: [{ uuid: "u", kind: "image", mime: "image/png", bytes: 1 }]
+		})
+		expect(out).toMatchObject({ ok: true, plan: { pictures: 3 } })
+		expect((out as any).preRunNotices).toHaveLength(1)
+		expect(allReqs).toHaveLength(0)
+	})
+
+	it("returns the refusal instead of throwing", async () => {
+		const { previewImageRun } = await import("./dispatchImage")
+		const out = await previewImageRun(fakeDb as any, {
+			prompt: "p",
+			userId: 7,
+			cutOut: "native-only"
+		})
+		expect(out).toMatchObject({ ok: false })
+		expect((out as any).refusal).toMatch(/transparent background/)
 	})
 })

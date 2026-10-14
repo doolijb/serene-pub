@@ -34,10 +34,12 @@ export const ADMIN_USERS_HREF = "/admin/users"
 export const ADMIN_UPDATES_HREF = "/admin/updates"
 
 /**
- * Grouped by the job a person came to do (ruled 2026-09-27, the admin
- * overhaul), not by the table behind it. An empty `group` draws no label:
- * Overview stands alone at the top. Instance is what Settings and Servers
- * were, split by topic; `/admin/settings` and `/admin/servers` redirect.
+ * Grouped by the job a person came to do (the admin overhaul, 2026-09-27),
+ * not by the table behind it. An empty `group` draws no label: Overview
+ * stands alone at the top. Pub comes next: the switches for the whole pub,
+ * who may sign in to it, and its upkeep. Then the groups run from what a new
+ * admin needs first (models, play) to the advanced (pipelines, extensions).
+ * `/admin/settings` and `/admin/servers` redirect into Pub.
  */
 export const ADMIN_NAV: AdminNavGroup[] = [
 	{
@@ -45,11 +47,38 @@ export const ADMIN_NAV: AdminNavGroup[] = [
 		items: [{ href: "/admin", label: "Overview", icon: "Gauge" }]
 	},
 	{
+		group: "Pub",
+		items: [
+			{ href: "/admin/general", label: "General", icon: "Settings" },
+			// Beside General, whose User accounts card turns sign-in on: the
+			// roster is who that lets in. Hidden while accounts are off.
+			{ href: ADMIN_USERS_HREF, label: "Users", icon: "Users" },
+			{ href: "/admin/network", label: "Network", icon: "Globe" },
+			{
+				href: "/admin/data",
+				label: "Data and backups",
+				icon: "Database"
+			},
+			{
+				href: "/admin/diagnostics",
+				label: "Diagnostics",
+				icon: "Activity"
+			},
+			// Who changed what, and when — every section's changes in one
+			// list (the admin logbook). A change form links here with
+			// `?type=…&id=…` for one object's history.
+			{ href: "/admin/history", label: "History", icon: "History" },
+			// Hidden on a pre-release build, which never updates itself.
+			{ href: ADMIN_UPDATES_HREF, label: "Updates", icon: "CircleArrowUp" }
+		]
+	},
+	{
 		group: "Models",
 		items: [
 			// Defaults first: it is the question the other two answer —
 			// which connection, with which sampling, does each job.
-			{ href: "/admin/defaults", label: "Defaults", icon: "Target" },
+			// The loadouts ledger; the URL keeps its pre-2026-10-12 name.
+			{ href: "/admin/defaults", label: "Loadouts", icon: "Target" },
 			{ href: "/admin/connections", label: "Connections", icon: "Cable" },
 			{
 				href: "/admin/sampling",
@@ -59,34 +88,17 @@ export const ADMIN_NAV: AdminNavGroup[] = [
 		]
 	},
 	{
-		group: "People",
+		group: "Play",
 		items: [
-			{ href: ADMIN_USERS_HREF, label: "Users", icon: "Users" },
+			// Sessions first: genres and presets are what a session is made
+			// from.
 			{
 				href: "/admin/sessions",
 				label: "Sessions",
 				icon: "MessagesSquare"
-			}
-		]
-	},
-	{
-		group: "Play",
-		items: [
+			},
 			{ href: "/admin/session-genres", label: "Genres", icon: "Shapes" },
 			{ href: "/admin/session-presets", label: "Presets", icon: "Ticket" }
-		]
-	},
-	{
-		group: "Pipelines",
-		items: [
-			{ href: "/admin/pipelines", label: "Pipelines", icon: "Workflow" },
-			{ href: "/admin/pipelines/events", label: "Events", icon: "Zap" },
-			{
-				href: "/admin/configurations",
-				label: "Configurations",
-				icon: "SlidersVertical"
-			},
-			{ href: "/admin/scripts", label: "Scripts", icon: "SquareCode" }
 		]
 	},
 	{
@@ -118,35 +130,25 @@ export const ADMIN_NAV: AdminNavGroup[] = [
 		]
 	},
 	{
+		group: "Pipelines",
+		items: [
+			{ href: "/admin/pipelines", label: "Pipelines", icon: "Workflow" },
+			{
+				href: "/admin/configurations",
+				label: "Configurations",
+				icon: "SlidersVertical"
+			},
+			{ href: "/admin/pipelines/events", label: "Events", icon: "Zap" },
+			{ href: "/admin/scripts", label: "Scripts", icon: "SquareCode" }
+		]
+	},
+	{
 		group: "Extensions",
 		items: [
 			{ href: "/admin/plugins", label: "Plugins", icon: "Puzzle" },
 			// Beside Plugins because both put widgets on a session page: a
 			// plugin's arrive packaged, an authored component is written here.
 			{ href: "/admin/components", label: "Components", icon: "Blocks" }
-		]
-	},
-	{
-		group: "Pub",
-		items: [
-			{ href: "/admin/general", label: "General", icon: "Settings" },
-			{ href: "/admin/network", label: "Network", icon: "Globe" },
-			{
-				href: "/admin/data",
-				label: "Data and backups",
-				icon: "Database"
-			},
-			{
-				href: "/admin/diagnostics",
-				label: "Diagnostics",
-				icon: "Activity"
-			},
-			// Who changed what, and when — every section's changes in one
-			// list (the admin logbook). A change form links here with
-			// `?type=…&id=…` for one object's history.
-			{ href: "/admin/history", label: "History", icon: "History" },
-			// Hidden on a pre-release build, which never updates itself.
-			{ href: ADMIN_UPDATES_HREF, label: "Updates", icon: "CircleArrowUp" }
 		]
 	}
 ]

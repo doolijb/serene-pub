@@ -153,6 +153,8 @@ export type TemplateContext = {
 	characterNames: string
 	/** "A, B, and C" — every persona's display name. */
 	personaNames: string
+	/** 🚧 `core:var/likenesses@1`, laid out — everyone on stage's likeness prompt. */
+	likenesses?: string
 	worldLore?: string
 	/** Lore bound to a cast member that fit the budget, laid out (`core:var/character-lore@1`). */
 	characterLore?: string

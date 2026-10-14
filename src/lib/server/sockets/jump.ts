@@ -234,8 +234,8 @@ async function searchSessions(
 }
 
 /**
- * Visibility borrowed from `buildCharactersList` (`sockets/characters.ts:152`):
- * owner, and never a soft-deleted row.
+ * Visibility borrowed from `buildCharactersList` (`sockets/characters.ts`):
+ * owner or share recipient, and never a soft-deleted row.
  *
  * Fields are the sidebar's first two (`CharactersSidebar.svelte:130-140`). Its
  * third — tag names — stays out: `tag` is its own jump kind, and folding tag
@@ -257,7 +257,17 @@ async function searchCharacters(
 		.from(schema.characters)
 		.where(
 			and(
-				eq(schema.characters.userId, userId),
+				// Owned, or **shared** with the asker (PLAN-private-messages §4).
+				or(
+					eq(schema.characters.userId, userId),
+					inArray(
+						schema.characters.id,
+						db
+							.select({ id: schema.characterShares.characterId })
+							.from(schema.characterShares)
+							.where(eq(schema.characterShares.userId, userId))
+					)
+				),
 				eq(schema.characters.isDeleted, false),
 				everyTermMatches(patterns, (pattern) => [
 					ilike(schema.characters.name, pattern),
@@ -285,8 +295,8 @@ async function searchCharacters(
 // carries the `persona` hint instead.
 
 /**
- * Visibility borrowed from `buildLorebooksList` (`sockets/lorebooks.ts:157`):
- * owner. Lorebooks carry no soft-delete column.
+ * Visibility borrowed from `buildLorebooksList` (`sockets/lorebooks.ts`):
+ * owner or share recipient. Lorebooks carry no soft-delete column.
  */
 async function searchLorebooks(
 	userId: number,
@@ -302,7 +312,17 @@ async function searchLorebooks(
 		.from(schema.lorebooks)
 		.where(
 			and(
-				eq(schema.lorebooks.userId, userId),
+				// Owned, or **shared** with the asker (PLAN-private-messages §4).
+				or(
+					eq(schema.lorebooks.userId, userId),
+					inArray(
+						schema.lorebooks.id,
+						db
+							.select({ id: schema.lorebookShares.lorebookId })
+							.from(schema.lorebookShares)
+							.where(eq(schema.lorebookShares.userId, userId))
+					)
+				),
 				everyTermMatches(patterns, (pattern) => [
 					ilike(schema.lorebooks.name, pattern)
 				])
@@ -321,10 +341,12 @@ async function searchLorebooks(
 
 /**
  * An entry is visible through its book, which is how `entries:list` reads it
- * too — `findOwnedBook` (`sockets/entries.ts:196`) proves the book's owner
- * before a single row is read. Here that is the same predicate as an inner join
- * onto `lorebooks` with the book's own where-clause on it, which also supplies
- * the subtitle, so an entry is never read except through a book this user owns.
+ * too — `assertReadableBook` proves the asker may read the book (owner or
+ * share recipient) before a single row is read. Here that is the same
+ * predicate as an inner join onto `lorebooks` with the book's own where-clause
+ * on it, which also supplies the subtitle, so an entry is never read except
+ * through a book this user owns or was shared. (Admins are not widened here: a
+ * jump searches the asker's own library, not every book on the instance.)
  *
  * `keys` is a `text[]` (28's escape-free keywords), so it is flattened for the
  * match the way the client's own pool filter flattens it
@@ -358,7 +380,18 @@ async function searchEntries(
 		)
 		.where(
 			and(
-				eq(schema.lorebooks.userId, userId),
+				// Owned, or **shared** with the asker — the same rule as
+				// `searchLorebooks` above (lane A3).
+				or(
+					eq(schema.lorebooks.userId, userId),
+					inArray(
+						schema.lorebooks.id,
+						db
+							.select({ id: schema.lorebookShares.lorebookId })
+							.from(schema.lorebookShares)
+							.where(eq(schema.lorebookShares.userId, userId))
+					)
+				),
 				eq(schema.lorebookEntries.archived, false),
 				// Main's line: shared rows only (`onLineSql(…, MAIN_LINE)`).
 				onLineSql(schema.lorebookEntries.branchId, MAIN_LINE),

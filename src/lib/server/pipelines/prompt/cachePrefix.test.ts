@@ -45,7 +45,7 @@ function qwenChatTemplate(messages: Array<{ role: string; content: string }>): s
 }
 
 const templateContext = {
-	instructions: "You're Aria in this fictional never-ending roleplay with Jody.",
+	instructions: "You are Aria, in an ongoing story with Jody.",
 	characters: '[{"name":"Aria","description":"An innkeeper."}]',
 	personas: '[{"name":"Jody","description":"A bard."}]'
 }

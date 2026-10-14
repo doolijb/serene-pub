@@ -37,8 +37,16 @@
 
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { S, type TransformId } from "@serene-pub/sdk"
-import { sidesOf, transformIdOf } from "$lib/shared/capabilities/sides"
+import { S, capabilityLabel, type TransformId } from "@serene-pub/sdk"
+import { sidesOf } from "$lib/shared/capabilities/sides"
+import {
+	defaultLoadoutFor,
+	defaultLoadouts,
+	freePubSlug,
+	mergeChain,
+	type LoadoutRow
+} from "$lib/server/loadouts"
+import { coreDefaultSeedFor } from "$lib/server/loadouts/seed"
 
 export interface CapabilityDefault {
 	connectionId: number | null
@@ -56,24 +64,45 @@ export interface CapabilityDefault {
 }
 
 /**
- * The `WHERE` that addresses one capability's row.
+ * ## Since I12 the store is `loadouts` (0103)
  *
- * Exported because the int tests need it too, and the alternative is each of
- * them hand-spelling `and(eq(input, …), eq(output, …))` — six copies of the
- * storage layout in files whose subject is not the storage layout. Built from
- * `sidesOf` like every write is, so a test cannot assert against a row shape
- * this file does not actually produce.
+ * A transform's default is the **default loadout** — the `loadouts` row whose
+ * `(default_for_input, default_for_output)` names it. `connection_defaults` is
+ * unread: the boot one-shot (`loadouts/fromConnectionDefaults.ts`)
+ * moves its rows here. Everything above this file still speaks
+ * `CapabilityDefault` — the boundary moved, the shape did not.
+ *
+ * A default loadout that is MERGED into another reads as its root's values:
+ * merging is a run-time redirect, and the default is a run-time read.
+ */
+
+/**
+ * The `WHERE` that addresses one capability's default loadout. Exported for
+ * the int tests, built from `sidesOf` like every write.
  */
 export const byCapability = (capability: string) => {
 	const { input, output } = sidesOf(capability as TransformId)
 	return and(
-		eq(schema.connectionDefaults.input, input),
-		eq(schema.connectionDefaults.output, output)
+		eq(schema.loadouts.defaultForInput, input),
+		eq(schema.loadouts.defaultForOutput, output)
 	)
 }
 
+const valuesOf = (row: LoadoutRow): CapabilityDefault => ({
+	connectionId: row.connectionId ?? null,
+	connectionModelId: row.connectionModelId ?? null,
+	samplingConfigId: row.samplingConfigId ?? null
+})
+
+/** The default loadout's values, through its merges. */
+async function effectiveValues(db: Db, row: LoadoutRow): Promise<CapabilityDefault> {
+	if (row.mergedInto == null) return valuesOf(row)
+	const chain = await mergeChain(db, row)
+	return valuesOf(chain[chain.length - 1]!)
+}
+
 /**
- * Every registered default, as a map.
+ * Every registered default, as a map keyed by transform id.
  *
  * One query rather than one per capability: the config world needs all of them
  * to build `activeConnection`, and the picker needs them to mark which entry is
@@ -82,18 +111,9 @@ export const byCapability = (capability: string) => {
 export async function capabilityDefaults(
 	db: Db
 ): Promise<Record<string, CapabilityDefault>> {
-	const rows = await db.select().from(schema.connectionDefaults)
 	const out: Record<string, CapabilityDefault> = {}
-	// Keyed by the transform id, still — the columns are the storage form and
-	// this map is the in-memory one. `transformIdOf` never throws, so one junk
-	// row lands as a junk key nothing matches rather than taking every good
-	// default in this same query down with it.
-	for (const r of rows)
-		out[transformIdOf(r)] = {
-			connectionId: r.connectionId ?? null,
-			connectionModelId: r.connectionModelId ?? null,
-			samplingConfigId: r.samplingConfigId ?? null
-		}
+	for (const [transform, row] of await defaultLoadouts(db))
+		out[transform] = await effectiveValues(db, row)
 	return out
 }
 
@@ -101,18 +121,59 @@ export async function capabilityDefault(
 	db: Db,
 	capability: string
 ): Promise<CapabilityDefault | undefined> {
-	const [row] = await db
-		.select()
-		.from(schema.connectionDefaults)
-		.where(byCapability(capability))
-		.limit(1)
-	return row
-		? {
-				connectionId: row.connectionId ?? null,
-				connectionModelId: row.connectionModelId ?? null,
-				samplingConfigId: row.samplingConfigId ?? null
-			}
-		: undefined
+	const row = await defaultLoadoutFor(db, capability)
+	return row ? effectiveValues(db, row) : undefined
+}
+
+/**
+ * The loadout that becomes a transform's default the first time one is set:
+ * core's declared default for it (Reply for `text->text`) while that row is
+ * not already some other transform's default, else a new `pub` loadout named
+ * after the transform. Never a row id from a list — by seed key.
+ */
+async function claimDefaultLoadout(db: Db, capability: string): Promise<LoadoutRow> {
+	const { input, output } = sidesOf(capability as TransformId)
+	const seedKey = await coreDefaultSeedFor(capability)
+	if (seedKey) {
+		const coreRow = async () =>
+			(
+				await db
+					.select()
+					.from(schema.loadouts)
+					.where(eq(schema.loadouts.seedKey, seedKey))
+					.limit(1)
+			)[0]
+		// A writer that runs before boot's seed pass (the 0.5.3 attic) still
+		// claims core's row rather than minting a pub one beside it.
+		let core = await coreRow()
+		if (!core) {
+			const { seedCoreLoadouts } = await import("$lib/server/loadouts/seed")
+			await seedCoreLoadouts(db)
+			core = await coreRow()
+		}
+		if (core && core.defaultForInput == null) {
+			const [claimed] = await db
+				.update(schema.loadouts)
+				.set({ defaultForInput: input, defaultForOutput: output, updatedAt: new Date() })
+				.where(eq(schema.loadouts.id, core.id))
+				.returning()
+			return claimed!
+		}
+	}
+	const name = capabilityLabel(capability as TransformId)
+	const [made] = await db
+		.insert(schema.loadouts)
+		.values({
+			owner: "pub",
+			slug: await freePubSlug(db, name),
+			name,
+			description: null,
+			transform: capability,
+			defaultForInput: input,
+			defaultForOutput: output
+		})
+		.returning()
+	return made!
 }
 
 /**
@@ -121,27 +182,36 @@ export async function capabilityDefault(
  * Half at a time because the two are chosen from different screens — a
  * connection in Connections, a sampling config in Sampling — and a writer that
  * insisted on both would have each screen clobbering the other's choice.
+ *
+ * Writes the default LOADOUT's own row (never its merge parent's: a merged
+ * default keeps its own values, ignored while merged, readable on unmerge).
  */
 export async function setCapabilityDefault(
 	db: Db,
 	capability: string,
 	patch: Partial<CapabilityDefault>
 ): Promise<void> {
-	const existing = await capabilityDefault(db, capability)
+	const existing = await defaultLoadoutFor(db, capability)
 	if (!existing) {
-		await db.insert(schema.connectionDefaults).values({
-			// The pair, not the id. `sidesOf` refuses anything that is not a
-			// transform, which is the guard `connections:setDefault` does not
-			// have on the clearing path — see the header of `sides.ts`.
-			...sidesOf(capability as TransformId),
-			connectionId: patch.connectionId ?? null,
-			connectionModelId: patch.connectionModelId ?? null,
-			samplingConfigId: patch.samplingConfigId ?? null
-		})
+		// `sidesOf` (inside the claim) refuses anything that is not a
+		// transform, which is the guard `connections:setDefault` does not have
+		// on the clearing path — see the header of `sides.ts`.
+		const row = await claimDefaultLoadout(db, capability)
+		// "No row" became "a row": the first write states all three halves,
+		// exactly as the insert into `connection_defaults` did.
+		await db
+			.update(schema.loadouts)
+			.set({
+				connectionId: patch.connectionId ?? null,
+				connectionModelId: patch.connectionModelId ?? null,
+				samplingConfigId: patch.samplingConfigId ?? null,
+				updatedAt: new Date()
+			})
+			.where(eq(schema.loadouts.id, row.id))
 		return
 	}
 	await db
-		.update(schema.connectionDefaults)
+		.update(schema.loadouts)
 		.set({
 			// ⚠ The model rides with the CONNECTION and not on its own. A caller
 			// that named an endpoint and said nothing about a model means "its
@@ -160,9 +230,10 @@ export async function setCapabilityDefault(
 					: {}),
 			...(patch.samplingConfigId !== undefined
 				? { samplingConfigId: patch.samplingConfigId }
-				: {})
+				: {}),
+			updatedAt: new Date()
 		})
-		.where(byCapability(capability))
+		.where(eq(schema.loadouts.id, existing.id))
 }
 
 /**

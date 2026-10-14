@@ -40,6 +40,13 @@ export interface RunHandle {
 	specId?: string
 	kind: RunKind
 	/**
+	 * 🚧 The action identity (`<spec>#<key>`) an `action` run was fired for
+	 * — what a genre's declared boundary trigger's `actionKey` reads at
+	 * `message-completed`, while the run that wrote the line is still here
+	 * (live scenes §15 G1).
+	 */
+	action?: string
+	/**
 	 * The message row this run is filling, once it has one — a verb's row
 	 * from the start, a fresh turn's from the moment its placeholder commits
 	 * (`setLiveRow`). What `cancelSession` matches the released rows against.
@@ -153,6 +160,7 @@ export function start(args: {
 	specId?: string
 	kind: RunKind
 	liveRow?: number
+	action?: string
 }): RunHandle {
 	// A repeated id means a client re-sent; the older run is the stale one.
 	// Its own reason, not the user-cancel one: nobody pressed anything, and a
@@ -300,6 +308,11 @@ export function finish(runId: string): void {
 	} catch (e) {
 		console.error("[runs] a run-stop observer threw:", e)
 	}
+}
+
+/** 🚧 The action identity a running run was fired for, or undefined (`RunHandle.action`). */
+export function actionOf(runId: string): string | undefined {
+	return runs.get(runId)?.action
 }
 
 /** What is running right now, for diagnostics. */

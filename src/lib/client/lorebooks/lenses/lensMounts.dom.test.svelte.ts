@@ -3,7 +3,7 @@
  * workspace mounts it (`LensMountFixture`), and reads only the book lists its
  * descriptor declares (`reads`). Lenses that share a mount keep the screen
  * when switched between — the list keeps its scroll and its split, the
- * canvas its layout — and the lens row is drawn from the registry.
+ * canvas its layout. The lens track's own test is in `loreRail.dom.test.ts`.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
@@ -14,7 +14,12 @@ vi.mock("$app/environment", () => ({
 	browser: true
 }))
 vi.mock("$lib/client/utils/toaster", () => ({
-	toaster: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() }
+	toaster: {
+		success: vi.fn(),
+		error: vi.fn(),
+		info: vi.fn(),
+		warning: vi.fn()
+	}
 }))
 // Heavy editors and the canvas renderer: what is under test is which screen
 // a lens mounts, not what the screen's widgets draw.
@@ -44,9 +49,8 @@ import { BookRelationships } from "../relationships.svelte"
 import { staticBookData, type BookData } from "../bookData.svelte"
 import { emptyFilters } from "../poolFilter"
 import { BOOK_ENTRY_TYPES } from "../scopes"
-import LensRow from "../LensRow.svelte"
 import LensMountFixture from "./LensMountFixture.svelte"
-import { lensDescriptor, LORE_LENS_REGISTRY } from "./registry"
+import { lensDescriptor } from "./registry"
 import type { LensBench, LensReads } from "./types"
 
 const BOOK = 9
@@ -97,7 +101,10 @@ function recordingBook(): { data: BookData; reads: Set<string> } {
 	}))
 	const data = new Proxy(base, {
 		get(target, key, receiver) {
-			if (typeof key === "string" && (LISTS as readonly string[]).includes(key))
+			if (
+				typeof key === "string" &&
+				(LISTS as readonly string[]).includes(key)
+			)
 				reads.add(key)
 			return Reflect.get(target, key, receiver)
 		}
@@ -242,7 +249,10 @@ describe("every lens in the registry renders through its mount", () => {
 				const undeclared = [...reads].filter(
 					(r) => !declared.has(r as LensReads)
 				)
-				expect(undeclared, `${lens} reads lists it does not declare`).toEqual([])
+				expect(
+					undeclared,
+					`${lens} reads lists it does not declare`
+				).toEqual([])
 			})
 })
 
@@ -277,28 +287,5 @@ describe("lenses that share a mount keep the screen", () => {
 		await settle()
 		expect(document.querySelector("[data-lore-scope='world']")).toBeNull()
 		expect(document.querySelector('[data-lore-lens="time"]')).not.toBeNull()
-	})
-})
-
-describe("LensRow — drawn from the registry", () => {
-	test("one button per lens, in order, named, with its shortcut; the lens in force pressed", async () => {
-		const onLens = vi.fn()
-		const target = document.createElement("div")
-		document.body.append(target)
-		app = mount(LensRow, { target, props: { lens: "graph", onLens } })
-		await settle()
-		const buttons = [
-			...document.querySelectorAll<HTMLButtonElement>("[data-lore-lens]")
-		]
-		expect(buttons.map((b) => b.dataset.loreLens)).toEqual([...LORE_LENSES])
-		for (const [i, b] of buttons.entries()) {
-			const d = LORE_LENS_REGISTRY[i]
-			expect(b.textContent?.trim()).toBe(d.label)
-			expect(b.getAttribute("aria-keyshortcuts")).toBe(d.shortcut)
-			expect(b.title).toContain(d.label)
-			expect(b.getAttribute("aria-pressed")).toBe(String(d.id === "graph"))
-		}
-		buttons[6].click()
-		expect(onLens).toHaveBeenCalledWith("places")
 	})
 })

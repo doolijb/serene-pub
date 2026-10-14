@@ -55,7 +55,7 @@ export interface SummaryModel {
 	/**
 	 * What the host said about this model, where it said anything.
 	 *
-	 * Carried so the capability view — which is a CHOOSER — can put context,
+	 * Carried so the job picker — which is a CHOOSER — can put context,
 	 * price and size on its rows. Without it every row read
 	 * `Anthropic (Claude) · listed`, which is true of all eight of them and so
 	 * distinguishes none. Nothing in this module reads it; it passes through.
@@ -63,6 +63,12 @@ export interface SummaryModel {
 	facts?: ModelFacts | null
 	/** The admin's context override, which wins over `facts.contextWindow`. */
 	contextWindow?: number | null
+	/**
+	 * The transforms the server judges this pair able to serve
+	 * (`capabilityRefusal` over the merged pair). Absent means not answered,
+	 * and nothing is judged from it.
+	 */
+	satisfiableCapabilities?: readonly string[] | null
 }
 
 export interface SummaryConnection {
@@ -79,7 +85,8 @@ export interface SummaryConnection {
  * - `ok` — enabled, still listed, and (a local row) on disk or resident.
  * - `pending` — the files are on their way. Neither healthy nor a problem.
  * - `warning` — needs a person: gone from the host, switched off, never
- *   downloaded, or a download that failed.
+ *   downloaded, a download that failed, or a pair that cannot do the job it
+ *   is registered for.
  * - `unset` — no pair registered at all. Not a fault; a blank.
  */
 export type DefaultState = "ok" | "pending" | "warning" | "unset"
@@ -149,17 +156,28 @@ export function pairState(model: SummaryModel): {
 }
 
 /**
- * A resolved pair's final state: `pairState` on the model, downgraded to
- * `warning` when the endpoint's last model listing failed — a host that
- * cannot be reached is a warning even when the row itself reads as ready,
- * while a row already `warning` or `pending` (a download in flight) is
- * unaffected.
+ * A resolved pair's final state for the job it is registered for:
+ * `pairState` on the model, then two downgrades to `warning`.
+ *
+ * - The server does not judge the pair able to do the job — a sync restated
+ *   the model's modality, or the job was switched off on the connection. The
+ *   registration stays, and every run it names is refused.
+ * - The endpoint's last model listing failed — a host that cannot be reached
+ *   is a warning even when the row itself reads as ready, while a row already
+ *   `warning` or `pending` is unaffected.
  */
 function entryState(
 	connection: SummaryConnection | undefined,
-	model: SummaryModel
+	model: SummaryModel,
+	capability: string
 ): { state: DefaultState; stateWord: string } {
 	const status = pairState(model)
+	if (
+		status.state !== "warning" &&
+		model.satisfiableCapabilities &&
+		!model.satisfiableCapabilities.includes(capability)
+	)
+		return { state: "warning", stateWord: "can't do this loadout's work" }
 	if (status.state === "ok" && connection?.modelsSync?.error != null)
 		return { state: "warning", stateWord: "host unreachable" }
 	return status
@@ -191,7 +209,7 @@ export function defaultsSummary(
 		const { connection, model } = resolvePair(rows, defaults?.[capability])
 		const resolved = !!(connection && model)
 		const status = model
-			? entryState(connection, model)
+			? entryState(connection, model, capability)
 			: { state: "unset" as DefaultState, stateWord: "not set" }
 		entries.push({
 			capability,

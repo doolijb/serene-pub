@@ -183,7 +183,7 @@
 	addHref="/admin/session-presets/new"
 	defaultSort="status"
 	emptyIcon={Icons.Ticket}
-	emptyMessage="No presets — the Chat floor seeds at startup, so an empty list means the bootstrap failed."
+	emptyMessage="No presets yet. Restart the pub to restore the built-in ones."
 >
 	{#snippet cell(row, col)}
 		{#if col.key === "status"}

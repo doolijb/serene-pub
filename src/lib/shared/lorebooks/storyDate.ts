@@ -58,6 +58,17 @@ export interface StoryClock extends StoryDate {
  */
 export { advanceStoryTime }
 
+/**
+ * 🚧 A clock step's span in words — `3 hours`, `1 day` — the size alone,
+ * whichever way it goes (live scenes §15 G5/G6, 2026-10-13). What a clock
+ * line in the state ledger, the keeper's `{{clockStep}}` and a refusal to
+ * take a move back all say, so the three never spell one step two ways.
+ */
+export function clockSpanWords(by: number, unit: string): string {
+	const size = Math.abs(by)
+	return `${size} ${size === 1 ? unit.replace(/s$/, "") : unit}`
+}
+
 /** A month or day the author did not give. Sorts before one they did. */
 const part = (value: number | null | undefined) => value ?? 0
 

@@ -18,12 +18,20 @@
  * guests (D8: guests may attach, as they may send). Checked at `begin`, at
  * `list`, and again at `finish`, so a guest removed mid-upload stores
  * nothing. A tray item is its uploader's alone (`tray_items.user_id`).
+ *
+ * **Two scopes** (PLAN-private-messages §4 "Uploads"). `begin` and `list`
+ * carry `{sessionId}` or `{conversationId}`; a conversation's access is a
+ * `conversation_members` row (no admin bypass), and its refusal is the one
+ * conversation wording, so it never confirms a conversation exists. A
+ * conversation's tray has no reading rule — no model reads it; caps only.
  */
 import { db } from "$lib/server/db"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { Handler } from "$lib/shared/events"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
+import { isConversationMember } from "$lib/server/conversations/membership"
+import { CONVERSATION_NOT_FOUND } from "$lib/shared/sockets/conversations"
 import {
 	TRAY_ITEM_GONE,
 	TrayRefusal,
@@ -50,7 +58,8 @@ import type {
 	AttachmentsRemoveFromMessageParams,
 	AttachmentsRemoveFromMessageResponse,
 	AttachmentsRemoveParams,
-	AttachmentsRemoveResponse
+	AttachmentsRemoveResponse,
+	AttachmentsTrayScope
 } from "$lib/shared/sockets/attachments"
 
 const NO_ACCESS = "Session not found or no permission to access."
@@ -78,8 +87,59 @@ async function requireSession(sessionId: unknown, userId: number) {
 	if (!access.hasAccess) throw new TrayRefusal(NO_ACCESS)
 }
 
-/** The session a tray item of `userId` belongs to, or the gone sentence. */
-async function sessionOfItem(userId: number, trayItemId: unknown) {
+type Scope = { sessionId: number } | { conversationId: number }
+
+async function requireConversation(conversationId: unknown, userId: number) {
+	if (
+		!Number.isSafeInteger(conversationId) ||
+		!(await isConversationMember(
+			db as unknown as Db,
+			conversationId as number,
+			userId
+		))
+	)
+		throw new TrayRefusal(CONVERSATION_NOT_FOUND)
+}
+
+/**
+ * The tray scope a request names — exactly one of `sessionId` /
+ * `conversationId` — once the asker's access to it is proved.
+ */
+async function requireScope(
+	params: AttachmentsTrayScope | undefined,
+	userId: number
+): Promise<Scope> {
+	const hasConversation = params?.conversationId != null
+	if (hasConversation && params?.sessionId != null)
+		throw new TrayRefusal(NO_ACCESS)
+	if (hasConversation) {
+		await requireConversation(params!.conversationId, userId)
+		return { conversationId: params!.conversationId! }
+	}
+	await requireSession(params?.sessionId, userId)
+	return { sessionId: params!.sessionId! }
+}
+
+/** A row's scope as a reply carries it: only the key that is set. */
+function scopeKey(row: {
+	sessionId?: number | null
+	conversationId?: number | null
+}): AttachmentsTrayScope {
+	return row.conversationId != null
+		? { conversationId: row.conversationId }
+		: { sessionId: row.sessionId ?? undefined }
+}
+
+/** The scope echo for a refusal, from params as they came off the wire. */
+function askedScope(params: unknown): AttachmentsTrayScope {
+	const p = params as AttachmentsTrayScope | undefined
+	return p?.conversationId != null
+		? { conversationId: p.conversationId }
+		: { sessionId: p?.sessionId }
+}
+
+/** The scope a tray item of `userId` belongs to, or the gone sentence. */
+async function scopeOfItem(userId: number, trayItemId: unknown) {
 	if (typeof trayItemId !== "string") throw new TrayRefusal(TRAY_ITEM_GONE)
 	const row = await db.query.trayItems
 		.findFirst({
@@ -87,13 +147,13 @@ async function sessionOfItem(userId: number, trayItemId: unknown) {
 				eq(schema.trayItems.id, trayItemId),
 				eq(schema.trayItems.userId, userId)
 			),
-			columns: { sessionId: true }
+			columns: { sessionId: true, conversationId: true }
 		})
 		// A malformed uuid is a driver error, and the same answer as a
 		// stranger's id.
 		.catch(() => undefined)
 	if (!row) throw new TrayRefusal(TRAY_ITEM_GONE)
-	return row.sessionId
+	return row
 }
 
 export const attachmentsBegin: Handler<
@@ -104,24 +164,28 @@ export const attachmentsBegin: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		try {
-			await requireSession(params?.sessionId, userId)
+			const scope = await requireScope(params, userId)
 			// The reading rule (§3.2): a kind nothing in this session's reply
 			// reads is refused before its body is sent. Outside any
-			// transaction — it reads pipelines and connections.
-			const readers = await attachmentReaders(db, {
-				sessionId: params.sessionId,
-				userId
-			})
+			// transaction — it reads pipelines and connections. A
+			// conversation has no reply to read it: caps only.
+			const readers =
+				"sessionId" in scope
+					? await attachmentReaders(db, {
+							sessionId: scope.sessionId,
+							userId
+						})
+					: undefined
 			const opened = await beginTrayUpload(db, {
 				userId,
-				sessionId: params.sessionId,
+				...scope,
 				filename: params.filename,
 				bytes: params.bytes,
 				head: params.head,
 				readers
 			})
 			const res: AttachmentsBeginResponse = {
-				sessionId: params.sessionId,
+				...scope,
 				...opened
 			}
 			replyToAsker(socket, "attachments:begin", res)
@@ -129,7 +193,7 @@ export const attachmentsBegin: Handler<
 		} catch (error) {
 			const err: AttachmentsError = {
 				error: sentence(error, "Couldn't start the upload."),
-				sessionId: params?.sessionId
+				...askedScope(params)
 			}
 			emitToUser("attachments:begin:error", err)
 			// A refusal is an answer, not a fault: only a fault reaches the
@@ -154,7 +218,7 @@ export const attachmentsChunk: Handler<
 				data: params?.data
 			})
 			const res: AttachmentsChunkResponse = {
-				sessionId: progress.sessionId,
+				...scopeKey(progress),
 				trayItemId: params.trayItemId,
 				index: params.index,
 				received: progress.received,
@@ -183,11 +247,11 @@ export const attachmentsFinish: Handler<
 	event: "attachments:finish",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		let sessionId: number | undefined
+		let scope: AttachmentsTrayScope | undefined
 		try {
-			sessionId = await sessionOfItem(userId, params?.trayItemId)
+			scope = scopeKey(await scopeOfItem(userId, params?.trayItemId))
 			try {
-				await requireSession(sessionId, userId)
+				await requireScope(scope, userId)
 			} catch (error) {
 				// Access gone mid-upload: nothing is stored, and the item goes.
 				await removeTrayItem(db, userId, params.trayItemId).catch(
@@ -196,13 +260,13 @@ export const attachmentsFinish: Handler<
 				throw error
 			}
 			const trayItem = await finishTrayUpload(db, userId, params.trayItemId)
-			const res: AttachmentsFinishResponse = { sessionId, trayItem }
+			const res: AttachmentsFinishResponse = { ...scope, trayItem }
 			emitToUser("attachments:finish", res)
 			return res
 		} catch (error) {
 			const err: AttachmentsError = {
 				error: sentence(error, "Couldn't store the file."),
-				sessionId,
+				...scope,
 				trayItemId: params?.trayItemId
 			}
 			emitToUser("attachments:finish:error", err)
@@ -224,14 +288,10 @@ export const attachmentsRemove: Handler<
 		try {
 			// Own items only, and no session check: taking your own file back
 			// out of a session you have since lost access to is allowed.
-			await sessionOfItem(userId, params?.trayItemId)
-			const { sessionId } = await removeTrayItem(
-				db,
-				userId,
-				params.trayItemId
-			)
+			await scopeOfItem(userId, params?.trayItemId)
+			const removed = await removeTrayItem(db, userId, params.trayItemId)
 			const res: AttachmentsRemoveResponse = {
-				sessionId,
+				...scopeKey(removed),
 				trayItemId: params.trayItemId
 			}
 			emitToUser("attachments:remove", res)
@@ -258,17 +318,17 @@ export const attachmentsList: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		try {
-			await requireSession(params?.sessionId, userId)
+			const scope = await requireScope(params, userId)
 			const res: AttachmentsListResponse = {
-				sessionId: params.sessionId,
-				tray: await listTray(db, userId, params.sessionId)
+				...scope,
+				tray: await listTray(db, userId, scope)
 			}
 			emitToUser("attachments:list", res)
 			return res
 		} catch (error) {
 			const err: AttachmentsError = {
 				error: sentence(error, "Couldn't read the attachments."),
-				sessionId: params?.sessionId
+				...askedScope(params)
 			}
 			emitToUser("attachments:list:error", err)
 			// A refusal is an answer, not a fault: only a fault reaches the

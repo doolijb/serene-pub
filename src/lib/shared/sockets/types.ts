@@ -20,10 +20,14 @@ import type { ModelFacts } from "$lib/shared/connections/modelFacts"
 import type {
 	I18n as SdkI18n,
 	StoryCalendar as SdkStoryCalendar,
+	Stroke as SdkStroke,
 	TemplateScope as SdkTemplateScope
 } from "@serene-pub/sdk"
 import type { SpriteSetView } from "$lib/shared/sprites"
+import type { CharacterLikenessInput } from "$lib/shared/characters/likeness"
 import type { LoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
+import type { RetoldField } from "$lib/shared/lorebooks/retold"
+import type { ConversationPerson } from "$lib/shared/sockets/conversations"
 
 declare global {
 	namespace Sockets {
@@ -163,7 +167,16 @@ declare global {
 					 * row: the persona picker and the folder-grouped library
 					 * are both reads of THIS list, not of a second family.
 					 */
-					characterList: WithAvatarMedia<Partial<SelectCharacter>>[]
+					characterList: (WithAvatarMedia<Partial<SelectCharacter>> & {
+						/**
+						 * A character another person **shared** with the asker
+						 * (PLAN-private-messages §6.7): read and copy only. Absent
+						 * on the asker's own rows.
+						 */
+						isSharedWithMe?: boolean
+						/** The sharer's display name (else username). Shared rows only. */
+						ownerName?: string | null
+					})[]
 				}
 			}
 			namespace Get {
@@ -189,6 +202,10 @@ declare global {
 								isOwner: boolean
 								ownerName: string | null
 								tags: string[]
+								/** The people the owner shared it with. Owner only. */
+								sharedWith?: ConversationPerson[]
+								/** True when the asker reads it through a share. */
+								isSharedWithMe?: boolean
 						  })
 						| null
 					/**
@@ -212,6 +229,12 @@ declare global {
 					// characters.ts) — the client never supplies it.
 					character: Omit<InsertCharacter, "userId">
 					avatarFile?: Buffer
+					/**
+					 * 🚧 The card's likeness (DESIGN-image-generation §5), stored
+					 * in `extensions.serenepub.likeness`. Absent: untouched;
+					 * `null`: removed.
+					 */
+					likeness?: CharacterLikenessInput | null
 				}
 				interface Response {
 					character: WithAvatarMedia<SelectCharacter>
@@ -221,6 +244,8 @@ declare global {
 				interface Params {
 					character: UpdateCharacter
 					avatarFile?: Buffer | null
+					/** 🚧 As on `Create.Params`. Absent: untouched; `null`: removed. */
+					likeness?: CharacterLikenessInput | null
 				}
 				interface Response {
 					character: WithAvatarMedia<SelectCharacter>
@@ -236,6 +261,8 @@ declare global {
 				 * session it shows.
 				 */
 				interface Response {
+					/** The `requestId` the delete was sent with, when it had one. */
+					requestId?: string
 					success?: string
 					error?: string
 					/** The scene that went. */
@@ -244,6 +271,29 @@ declare global {
 					lorebookId?: number
 					/** The session it captured, if any. */
 					sessionId?: number | null
+				}
+			}
+			/**
+			 * Token counts for a card's strokes, as the form shows them
+			 * (DESIGN-card-strokes §A.5) — counted against the default text
+			 * connection's tokenizer, stored nowhere. `model` is `null` when the
+			 * rough estimate counted; to a non-admin it names the tokenizer,
+			 * never a connection.
+			 */
+			namespace CountStrokeTokens {
+				interface Params {
+					/** At most `STROKE_LIMITS.maxStrokes`. */
+					strokes: SdkStroke[]
+					/** Echoed, so the form that asked can claim its reply. */
+					requestId?: string
+				}
+				interface Response {
+					/** One per stroke, in order — the stroke as it compiles (`Label: text`). */
+					perStroke: number[]
+					/** Each kind's whole compile, separators included. */
+					perKind: { description: number; personality: number }
+					model: string | null
+					requestId?: string
 				}
 			}
 			/**
@@ -286,6 +336,15 @@ declare global {
 					 * actually exists is what made this flow confusing.
 					 */
 					warnings?: string[]
+					/**
+					 * What the import decided, one line each — not problems:
+					 * whether the card's book became keyword strokes or is
+					 * offered as a lorebook, what became of its stats (the
+					 * card dowry: added, re-owned, renamed, left out), extension
+					 * data too large to keep (DESIGN-card-strokes §A.6, §B.6).
+					 * Absent when there is nothing to say.
+					 */
+					summary?: string[]
 				}
 			}
 			namespace ImportResolve {
@@ -300,6 +359,8 @@ declare global {
 					book: HeldCardBook | null
 					/** See ImportCard.Response.warnings. */
 					warnings?: string[]
+					/** See ImportCard.Response.summary. */
+					summary?: string[]
 				}
 			}
 			namespace ExportCard {
@@ -363,6 +424,8 @@ declare global {
 				interface Response {
 					character: SelectCharacter
 					book: HeldCardBook | null
+					/** See ImportCard.Response.summary. */
+					summary?: string[]
 				}
 			}
 			namespace ListGallery {
@@ -513,6 +576,185 @@ declare global {
 						runnerUp?: { label: string; score: number }
 					} | null
 					reason?: string
+				}
+			}
+			/*
+			 * 🚧 Fill empty sprites (DESIGN-image-generation §6.3; I5). The
+			 * card's owner or an admin. `previewSpriteFill` answers the form:
+			 * the labels it would draw (empty sprites by default), the cost
+			 * line and the notices the picture step raises before a run.
+			 * `fillSprites` starts the run and acks at once; the run reports
+			 * on `characters:spriteFill` until a `done` or `failed` phase.
+			 */
+			namespace PreviewSpriteFill {
+				interface Params {
+					characterId: number
+					setId?: number
+					/** Omitted or empty = every empty sprite in the set. */
+					labels?: string[]
+				}
+				interface Response {
+					characterId: number
+					setId: number | null
+					setName: string
+					labels: string[]
+					emptyLabels: string[]
+					allLabels: string[]
+					pictures: number
+					calls: number | null
+					/** *28 pictures · 3 calls* — the pair and price for an admin only. */
+					line: string
+					notices: string[]
+					refusal?: string
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 **Re-express from neutral** (DESIGN-image-generation §6.3):
+			 * redraw the set's neutral sprite as `label` with the Sprites
+			 * loadout's pair — only when its sheet says `expressions`. The
+			 * card's owner or an admin. Answers with the whole sprite list,
+			 * like every sprite write.
+			 */
+			namespace ExpressSprite {
+				interface Params {
+					characterId: number
+					/** Omitted = the default set. */
+					setId?: number
+					label: string
+				}
+				interface Response extends ListSprites.Response {
+					/** The sprite the new picture landed in. */
+					spriteId?: number
+					label?: string
+					error?: string
+				}
+			}
+			namespace FillSprites {
+				interface Params {
+					characterId: number
+					setId?: number
+					/** Omitted or empty = every empty sprite in the set. */
+					labels?: string[]
+					/** The client's id for the run — what Stop sends back. */
+					runId?: string
+				}
+				interface Response {
+					characterId: number
+					runId: string
+					error?: string
+				}
+			}
+			namespace SpriteFill {
+				interface Progress {
+					characterId: number
+					runId: string
+					phase: "drawing" | "cutting" | "attaching" | "done" | "failed"
+					labels: string[]
+					setId: number | null
+					status?: unknown
+					percent?: number
+					drawn?: Array<{ label: string; uuid: string }>
+					attached?: Array<{ label: string; spriteId: number }>
+					missing?: string[]
+					error?: string
+				}
+			}
+			/*
+			 * 🚧 Generate portrait (DESIGN-image-generation §6.2; I8). The
+			 * card's owner or an admin. `previewPortrait` answers the dialog:
+			 * the cost line and the notices the picture step raises before a
+			 * run. `generatePortrait` starts the run and acks at once; the run
+			 * reports on `characters:portrait` until `done` or `failed`, and
+			 * its pictures land in the card's gallery. `setLikenessImage`
+			 * (owner only) makes a gallery picture the likeness image.
+			 */
+			namespace PreviewPortrait {
+				interface Params {
+					characterId: number
+					/** 1–4; default 2. */
+					count?: number
+					/** Which prompt row: tag line or sentence. Default tags. */
+					style?: "tags" | "prose"
+				}
+				interface Response {
+					characterId: number
+					count: number
+					style: "tags" | "prose"
+					pictures: number
+					calls: number | null
+					/** *2 pictures · 1 call* — the pair and price for an admin only. */
+					line: string
+					notices: string[]
+					refusal?: string
+					/** Whether the run stops to show the prompt first. */
+					review: boolean
+					error?: string
+				}
+			}
+			namespace GeneratePortrait {
+				interface Params {
+					characterId: number
+					count?: number
+					style?: "tags" | "prose"
+					/** The client's id for the run — what Stop sends back. */
+					runId?: string
+				}
+				interface Response {
+					characterId: number
+					runId: string
+					error?: string
+				}
+			}
+			namespace Portrait {
+				interface Progress {
+					characterId: number
+					runId: string
+					phase: "drawing" | "offering" | "done" | "failed"
+					count: number
+					status?: unknown
+					percent?: number
+					/** Pictures placed in the gallery, with the key each was drawn for. */
+					offered?: Array<{ mediaId: number; key: string | null }>
+					missing?: string[]
+					error?: string
+				}
+			}
+			namespace SetLikenessImage {
+				interface Params {
+					characterId: number
+					mediaId: number
+				}
+				interface Response {
+					characterId: number
+					imageMediaId: number
+					error?: string
+				}
+			}
+			/*
+			 * 🚧 Describe from image (DESIGN-image-generation §5; D1). The
+			 * card's owner or an admin. `probe` asks only whether a model
+			 * that reads pictures is set up; otherwise the likeness image is
+			 * described and the tag line returned — nothing is saved.
+			 */
+			namespace DescribeLikeness {
+				interface Params {
+					characterId: number
+					/** Answer `available` only; run nothing. */
+					probe?: boolean
+					/** The form's unsaved likeness image; `null` = the avatar. */
+					imageMediaId?: number | null
+					/** The client's id for the run — what Stop sends back. */
+					runId?: string
+				}
+				interface Response {
+					characterId: number
+					/** A model that reads pictures is set up. */
+					available: boolean
+					/** The cleaned tag line, on a run. */
+					prompt?: string
+					runId?: string
+					error?: string
 				}
 			}
 			namespace ReorderSprites {
@@ -994,6 +1236,49 @@ declare global {
 					plugins: PluginRow[]
 				}
 			}
+			/**
+			 * Export a genre authored or installed on this pub as a
+			 * content-only plugin package — a zip in the folder layout
+			 * `installLocal` reads. Admin, `SP_PLUGINS_ENABLED`.
+			 */
+			namespace ExportPackage {
+				interface Params {
+					/** The genre id, `<owner>:genre/<name>`; the owner is the package slug. */
+					genreId: string
+					/** The package semver; defaults to the create spec's version. */
+					version?: string
+					/** The package display name; defaults to the genre's label. */
+					name?: string
+					/**
+					 * With source: also write the authoring half (`src/`,
+					 * `package.json`, …) so the zip unpacks into a package
+					 * `serene-pub build` rebuilds (`exportScaffold.ts`).
+					 */
+					scaffold?: boolean
+				}
+				interface Response {
+					/** The zip bytes. */
+					blob: Uint8Array
+					/** `<slug>-<version>.zip`. */
+					filename: string
+					/** What the package could not carry, one sentence each. */
+					warnings: string[]
+				}
+			}
+			/**
+			 * The upload half of `installLocal`: a package zip, unzipped into
+			 * a temp folder under the data dir and installed from there.
+			 * Answers exactly what `installLocal` answers.
+			 */
+			namespace InstallPackage {
+				interface Params {
+					/** The uploaded file's name, for messages only. */
+					filename: string
+					/** The zip, base64; at most 8 MiB decoded. */
+					bytes: string
+				}
+				type Response = InstallLocal.Response
+			}
 			namespace SetEnabled {
 				interface Params {
 					pluginId: string
@@ -1221,6 +1506,8 @@ declare global {
 			interface CompileOutcome {
 				errors: CompileError[]
 				warnings: string[]
+				/** The same warnings, each placed as an error is (line 0 when it has no place) — what Problems lists. */
+				warningsAt: CompileError[]
 				/** The artifact hash when it compiled cleanly, else null. */
 				artifactHash: string | null
 				fingerprint: string
@@ -1501,6 +1788,13 @@ declare global {
 					id: string
 					ownerId: string
 					src: string | null
+					/**
+					 * The scopes its widget holds now, bare (`session:state`,
+					 * `session:state:write`), after an admin's review — so a page
+					 * drawing it re-posts them and withdraws a revoked section
+					 * without a reload. Absent when the component is gone.
+					 */
+					grants?: string[]
 				}
 			}
 		}
@@ -1547,6 +1841,12 @@ declare global {
 				at: string | null
 				/** The last attempt's failure, or null after a successful one. */
 				error: string | null
+				/**
+				 * 🚧 Something the person must fix on the server, said in its own
+				 * words — a ComfyUI workflow naming nodes or a checkpoint the
+				 * server lacks (*Missing nodes: …*). The row reads `unfinished`.
+				 */
+				problem?: string | null
 			}
 			namespace Get {
 				interface Params {
@@ -1884,9 +2184,11 @@ declare global {
 					facts?: ModelFacts
 					/**
 					 * What the model is FOR (`text-gen`, `embeddings`,
-					 * `image-gen`), as the host said, or null when it said
-					 * nothing. Decides which lane a managed runtime lists it
-					 * under; `satisfiableCapabilities` already honours it.
+					 * `image-gen`): as the host said, else as a person set it
+					 * (**What it's for**), else null ("Not sure", offered for
+					 * every job). `satisfiableCapabilities` honours it, and a
+					 * managed runtime's Models tab lists the model under every
+					 * job that answer names.
 					 */
 					modality: string | null
 					/** NULL means "the endpoint's". A `completion_templates.key`. */
@@ -1968,6 +2270,8 @@ declare global {
 					/** One entry per endpoint that was actually synced. */
 					results: Result[]
 					error?: string
+					/** The endpoint a refusal was about (absent for a sweep). */
+					connectionId?: number
 				}
 			}
 			/**
@@ -2028,6 +2332,13 @@ declare global {
 						 * any other endpoint.
 						 */
 						visionProjector?: string | null
+						/**
+						 * What the model is FOR (**What it's for**): one of
+						 * `modelModalityChoices(type)`, or null / blank for "Not
+						 * sure". A listing that reports a modality replaces it on
+						 * the next sync.
+						 */
+						modality?: string | null
 					}
 				}
 				type Response = Models.Response
@@ -2203,10 +2514,14 @@ declare global {
 						jobsTotal: number
 						/** Of those, how many have a connection registered. */
 						jobsSet: number
-						/** Demanded by a pipeline and registered to nothing. */
+						/**
+						 * Needed on this pub (`admin/jobUse.ts`) and registered
+						 * to nothing. One Needs you item each.
+						 */
 						missing: Array<{
 							capability: string
 							requiredBy: string[]
+							neededBecause: Sockets.ConnectionDefaults.List.NeededBecause
 						}>
 						/**
 						 * Connections whose last model sync failed
@@ -2221,6 +2536,20 @@ declare global {
 							error: string
 							/** The capabilities it is the default for; empty for none. */
 							capabilities: string[]
+						}>
+						/**
+						 * Capability defaults whose registered pair cannot
+						 * do its job (`readRefusedDefaults`): the model's
+						 * modality or the connection's capabilities changed
+						 * after it was chosen, and every run it names is refused.
+						 */
+						refusedDefaults: Array<{
+							capability: string
+							connectionId: number
+							connectionName: string
+							connectionModelId: number
+							modelName: string
+							refusal: string
 						}>
 					}
 					network: {
@@ -2247,7 +2576,10 @@ declare global {
 						 * backup has been taken since. In memory: a restart
 						 * forgets it, and the next attempt decides again.
 						 */
-						lastBackupFailure: { at: string; message: string } | null
+						lastBackupFailure: {
+							at: string
+							message: string
+						} | null
 					}
 					pipelines: {
 						published: number
@@ -2381,6 +2713,44 @@ declare global {
 					 */
 					connectionOptions: Record<string, ConnectionOption[]>
 					samplingOptions: Record<string, SamplingOption[]>
+					/**
+					 * The registered pairs that cannot do their job,
+					 * keyed by capability (`readRefusedDefaults`). Each names
+					 * the pair it judged, so a row whose default has since
+					 * moved is not marked by a verdict about the old one.
+					 */
+					refused: Record<string, RefusedPair>
+					/**
+					 * The jobs this pub needs a model for, and why
+					 * (`admin/jobUse.ts`). A job absent here and not set is
+					 * Off: nothing on this pub has asked for it. Never
+					 * `demanded` alone, which is true of image generation on
+					 * every pub because the Chat genre ships an Image action.
+					 */
+					needed: Record<string, NeededBecause>
+					/** Where the pipeline library places each job's steps (`readJobUse`). */
+					usedBy: Record<string, JobUse>
+				}
+				/**
+				 * Why a job is needed: `replies`, chat, which every session
+				 * reply runs on; `failedRun`, a step requiring it failed in a
+				 * real run in the last seven days.
+				 */
+				type NeededBecause = "replies" | "failedRun"
+				/** A job's place in the pipeline library. */
+				interface JobUse {
+					/** Steps asking for it (required or preferred), across active pipelines. */
+					steps: number
+					/** The pipelines placing those steps, by name. */
+					pipelines: string[]
+					/** The actions those pipelines offer, by label (`Image`). */
+					actions: string[]
+				}
+				interface RefusedPair {
+					connectionId: number
+					connectionModelId: number
+					/** `capabilityRefusal`'s sentence for the pair. */
+					refusal: string
 				}
 				interface ConnectionOption {
 					id: number
@@ -2474,6 +2844,201 @@ declare global {
 			}
 		}
 
+		/**
+		 * **Loadouts** (I12): what each kind of work runs on — the pair, a
+		 * sampling config by reference, and (template-payload image pairs) a
+		 * workflow. Admin-only, every handler; members never see a loadout.
+		 */
+		namespace Loadouts {
+			/** One loadout as the Loadouts view, the sheet and the pickers show it. */
+			interface Summary {
+				id: number
+				/** `core:loadout/reply@1`, `acme.rp:loadout/x@1`, `pub:loadout/<slug>`. */
+				loadoutId: string
+				slug: string
+				name: string
+				description: string | null
+				/** `core`, a plugin id, or `pub`. */
+				owner: string
+				/** The transform this loadout does (`text->text`). */
+				transform: string
+				connectionId: number | null
+				connectionModelId: number | null
+				connectionName: string | null
+				modelName: string | null
+				connectionType: string | null
+				samplingConfigId: number | null
+				samplingName: string | null
+				workflowId: number | null
+				/**
+				 * The workflow's dials as this loadout sets them (variable name
+				 * → value); a name absent here runs at the workflow's default.
+				 * Null: every dial at its default.
+				 */
+				workflowValues: Record<string, unknown> | null
+				tier: string | null
+				/** The transform this is the default for, or null. */
+				defaultFor: string | null
+				mergedInto: number | null
+				mergedIntoName: string | null
+				/** The pair is set. An unfilled loadout falls back to its transform's default. */
+				filled: boolean
+				/** The default loadout an unfilled one falls back to, by name. */
+				fallbackName: string | null
+				/** The one consequence line (`consequenceLine`), or null. */
+				consequence: string | null
+				/** Stored configs naming this loadout. */
+				usedBy: { steps: number; pipelines: string[] }
+				/** The pair's stored capability grades, for picker consequences. */
+				grades: Record<string, number>
+				/**
+				 * 🚧 The pair's per-picture price from its model facts
+				 * (`ModelPricing.perImage`), when they carry one. Admin-only
+				 * view, like the rest of a loadout.
+				 */
+				perImagePrice?: { each: number; currency: string } | null
+				/**
+				 * 🚧 A plugin's loadout whose plugin is switched off or gone
+				 * (§16 follow-up D3): kept — a person may have filled it — and
+				 * chipped *plugin off*. Absent for core's and the pub's.
+				 */
+				pluginOff?: boolean
+			}
+			namespace List {
+				interface Params {}
+				interface Response {
+					loadouts: Summary[]
+					/** Every transform with a default loadout or a loadout of its own, labelled. */
+					transforms: {
+						id: string
+						label: string
+						output: string
+						defaultLoadoutId: number | null
+					}[]
+					/** *Sessions can reply* = the Reply default is filled. */
+					canReply: boolean
+					/** Sampling configs offerable per transform (`samplingShapeForCapability`). */
+					samplingOptions: Record<
+						string,
+						{ id: number; name: string; shape: string; seedKey: string | null }[]
+					>
+					/**
+					 * ⏳ Retired 2026-10-12 (ruling 13 reversed): never sent —
+					 * workflows have no sampling configs. Kept only until lane E2
+					 * drops the loadout sheet's step-3 workflow wiring.
+					 */
+					workflowSamplingOptions?: Record<
+						string,
+						{ id: number; name: string; shape: string; seedKey: string | null }[]
+					>
+				}
+			}
+			namespace Create {
+				interface Params {
+					name: string
+					transform: string
+					description?: string | null
+					slug?: string
+				}
+				interface Response {
+					loadout: Summary
+				}
+			}
+			namespace Update {
+				interface Params {
+					id: number
+					name?: string
+					description?: string | null
+					slug?: string
+					/** The pair, together: a model id means nothing without its endpoint. */
+					connectionId?: number | null
+					connectionModelId?: number | null
+					samplingConfigId?: number | null
+					workflowId?: number | null
+					/**
+					 * The workflow's dials this loadout overrides; the whole map
+					 * replaces the stored one (null or `{}` = all at defaults).
+					 */
+					workflowValues?: Record<string, unknown> | null
+				}
+				interface Response {
+					loadout: Summary
+					/** Said when a pair change swapped a mismatched sampling config. */
+					notice?: string
+				}
+			}
+			namespace Delete {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					id: number
+				}
+			}
+			namespace SetDefault {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					loadout: Summary
+				}
+			}
+			namespace Merge {
+				interface Params {
+					id: number
+					/** null unmerges. */
+					parentId: number | null
+				}
+				interface Response {
+					loadout: Summary
+				}
+			}
+			namespace MakeIt {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					loadout: Summary
+					/** What was chosen and why, in a sentence. */
+					explanation: string
+				}
+			}
+		}
+
+		/** The matting model (`local_models`, modality `matting`) — the Models view's row. */
+		namespace LocalModels {
+			namespace Matting {
+				interface Params {}
+				interface Response {
+					name: string
+					state: "not_downloaded" | "downloading" | "on_disk" | "error"
+					percent?: number | null
+					/** A cancel was asked for; the file in flight is ending. */
+					cancelling?: boolean
+					sizeBytes?: number
+					error?: string
+				}
+			}
+			/**
+			 * Stop the background remover's download (admin). Like the
+			 * connection lanes' cancel, the file in flight runs to its own
+			 * end; then the partial files and the row are removed.
+			 */
+			namespace CancelMatting {
+				interface Params {}
+				interface Response {
+					/** False when nothing was downloading. */
+					cancelled: boolean
+				}
+			}
+			namespace MattingRemove {
+				interface Params {}
+				interface Response {
+					removed: boolean
+				}
+			}
+		}
+
 		// Personas namespace
 		/**
 		 * The library's folders. Owner-scoped, flat, characters only.
@@ -2547,10 +3112,45 @@ declare global {
 					genres: GenreRow[]
 				}
 			}
+			/**
+			 * `sessionGenres:create` (PLAN-pipeline-canvas-and-genre-authoring
+			 * §6.1): an **in-app genre**, copied from a listed one under
+			 * `<ownerSlug>:genre/<name>`. Its origin is `pub`.
+			 */
+			namespace CreateGenre {
+				interface Params {
+					/** The owner segment; not `core`, not an installed plugin's id. */
+					ownerSlug: string
+					/** The genre's own name: lowercase words joined by hyphens. */
+					name: string
+					/** The display name people see. */
+					label: string
+					description?: string
+					family?: string
+					/** The listed genre to copy. */
+					from: string
+					/** `all`: every pipeline locked to `from`; `create`: the create pipeline only. */
+					scope: "all" | "create"
+				}
+				interface Response {
+					genreId?: string
+					error?: string
+				}
+			}
 			namespace UpdateGenre {
 				interface Params {
 					slug: string
 					enabled?: boolean
+					/**
+					 * The declaration's parts — an in-app (`pub`) genre only; a
+					 * shipped genre refuses them. Saved as a new published
+					 * version of its create pipeline.
+					 */
+					name?: string
+					description?: string
+					family?: string
+					/** The session form (`shape.fields`), checked by the SDK at publish. */
+					fields?: import("@serene-pub/sdk").SettingsSchema
 				}
 				interface Response {
 					slug: string
@@ -2580,6 +3180,18 @@ declare global {
 						/** The app-wide switch (R66): off stops new sessions only. */
 						enabled: boolean
 						defaultPresetId: number | null
+						/** Who brought it: core, a plugin, or made on this pub (§6.1). */
+						origin: "core" | "plugin" | "pub"
+						/** May `sessionGenres:update` change its name, description, family and fields? (`pub` only.) */
+						editable: boolean
+						/** The session form, `shape.fields` — `{}` when it declares none. */
+						fields: import("@serene-pub/sdk").SettingsSchema
+						/** Does the genre carry attribute slots or sheets (state)? */
+						hasState: boolean
+						/** Its genre default layout row, or null when none exists. */
+						layout: { id: number; slug: string; name: string } | null
+						/** `SP_PLUGINS_ENABLED` — whether exporting it as a plugin is offered. */
+						pluginsEnabled: boolean
 					}
 					slots: Slot[]
 					presets: PresetRow[]
@@ -2841,6 +3453,134 @@ declare global {
 				type Response = AuthorsNote.Response
 			}
 			/**
+			 * 🚧 Set or clear the session's **backdrop**
+			 * (`sessions.backdropMediaId`, DESIGN-image-generation §6.4) — the
+			 * Backdrop widget's Change and Clear. `mediaRef` is a file's uuid
+			 * (what `character-images` answers as `ref`), or null to clear. The
+			 * session's owner or an admin; the file must be one the session may
+			 * show (its own, the asker's, one shown in it, or a cast member's).
+			 * The reply (and the `:error` refusal) echoes the ask's `request`
+			 * token; every member hears `sessions:backdropChanged`.
+			 */
+			namespace SetBackdrop {
+				interface Params {
+					sessionId: number
+					mediaRef: string | null
+					request?: string
+				}
+				interface Response {
+					sessionId: number
+					request?: string
+					backdropMediaId?: number | null
+					error?: string
+				}
+			}
+			/** 🚧 Pushed to the session's members: its backdrop now, null when cleared. */
+			namespace BackdropChanged {
+				interface Response {
+					sessionId: number
+					backdropMediaId: number | null
+				}
+			}
+			/**
+			 * 🚧 The session's story clock (PLAN-core-widgets W3, 2026-10-11),
+			 * for core's Chronicle widget: read by anyone in the session (the
+			 * settings show guests the clock too), moved by its owner alone.
+			 * Each ask carries a `request` token the reply (and the `:error`
+			 * refusal) echoes, since the reply reaches every tab of the person.
+			 * Clocks are the session row's own parts; `present` is its own clock,
+			 * else its line's present (`sessionStoryNowOf`).
+			 */
+			namespace StoryClock {
+				interface Params {
+					sessionId: number
+					request?: string
+				}
+				interface Reading {
+					/** The session's book; null when it reads none (everything else is then null). */
+					lorebookId: number | null
+					/** The line it reads; null is main. */
+					branchId: number | null
+					/** The session's own clock; null when it follows its line's present. */
+					own: Lorebooks.StoryClock | null
+					/** Where it stands: `own`, else the line's present; null when neither exists. */
+					present: Lorebooks.StoryClock | null
+					/** The line's present — its clock, else its newest history entry on the line. */
+					linePresent: Lorebooks.StoryClock | null
+					/** The book's calendar (null = free-form), to spell the dates with. */
+					calendar: SdkStoryCalendar | null
+					/** The asker is the session's owner — who may move the clock. */
+					isOwner: boolean
+				}
+				interface Response extends Partial<Reading> {
+					sessionId: number
+					request?: string
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 Move the session's story clock (W3): exactly one of `follow`
+			 * (clear it: follow the line's present), `to` (set it) or `by` +
+			 * `unit` (step it through the book's calendar, from the line's
+			 * present when it follows the line). Answered as `StoryClock`.
+			 */
+			namespace SetStoryClock {
+				interface Params {
+					sessionId: number
+					request?: string
+					follow?: true
+					to?: Lorebooks.StoryClock
+					by?: number
+					unit?: import("@serene-pub/sdk").StoryTimeUnit
+				}
+				type Response = StoryClock.Response
+			}
+			/**
+			 * 🚧 The session's places and the ways between them
+			 * (PLAN-core-widgets W4, 2026-10-11), for core's Places widget:
+			 * read by anyone in the session, as the session reads its book —
+			 * its line, its story clock, place sight `"session"`. Each ask
+			 * carries a `request` token the reply (and the `:error` refusal)
+			 * echoes, since the reply reaches every tab of the person.
+			 */
+			namespace Places {
+				interface Params {
+					sessionId: number
+					request?: string
+				}
+				interface Response {
+					sessionId: number
+					request?: string
+					places?: import("@serene-pub/sdk").SessionPlacesV1
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 One owner's **stat trail** for one slot in the session
+			 * (PLAN-core-widgets §3.10, F2, 2026-10-11), for core's Stats
+			 * widget: the changes this session made to it, oldest first,
+			 * from the ledger the Stat trail pipeline query reads. Read by
+			 * anyone in the session. Tokened like `Places`.
+			 */
+			namespace StatTrail {
+				interface Params {
+					sessionId: number
+					request?: string
+					owner: {
+						kind: "session" | "session_cast" | "session_location"
+						id: number
+					}
+					slotId: string
+					limit?: number
+				}
+				interface Response {
+					sessionId: number
+					request?: string
+					trail?: { changes: import("@serene-pub/sdk").StatTrailChangeV1[] }
+					error?: string
+				}
+			}
+			/**
 			 * Pushed to the session owner's tabs whenever a write moved the
 			 * session's stored genre fields (`sessions:update`,
 			 * `sessions:setAuthorsNote`; 2026-10-03), so an open Edit Session
@@ -2985,6 +3725,37 @@ declare global {
 			 * the same projection (`server/sessions/rowProjection.ts`), so a
 			 * patched row and a freshly listed one say the same thing.
 			 */
+			/**
+			 * Server → client (W10): who of this session's people has it open
+			 * now — its **attendance**. Pushed to the session's users whenever
+			 * a tab opens or leaves the session (its page holds
+			 * `sessions:attendance#<id>`, which IS what "has it open" means
+			 * here), debounced per session (`server/sessions/attendance.ts`).
+			 * The page adds who writes as whom and who is typing, and hands
+			 * the result to its widgets as `attendance.v1`.
+			 */
+			namespace Attendance {
+				interface Params {}
+				interface Person {
+					userId: number
+					/** The account's display name, else its username. */
+					name: string
+					role: "owner" | "guest"
+					/** Some tab of theirs holds this session open now. */
+					here: boolean
+					/**
+					 * When they last had it open (ms since the epoch): the push's
+					 * own time while they do; null when the server has not seen
+					 * them since it started.
+					 */
+					lastSeenAt: number | null
+				}
+				interface Response {
+					sessionId: number
+					/** The owner first, then the guests in the order they were added. */
+					people: Person[]
+				}
+			}
 			namespace RowChanged {
 				interface Params {}
 				interface Response {
@@ -3035,6 +3806,15 @@ declare global {
 									user: SelectUser
 								}[]
 								tags?: string[]
+								/**
+								 * The faces the session's cast members are drawn
+								 * with (PLAN-cast-retold-fields): seated card id →
+								 * `files.id`, for each seat whose card is a member
+								 * of the session's lorebook that retells its face
+								 * (`retold.face` with a `faceMediaId`). Absent
+								 * key = the card's own avatar.
+								 */
+								castFaces?: Record<number, number>
 						  })
 						| null
 					messages?: SelectSessionMessage[] | null // Legacy field
@@ -3259,6 +4039,77 @@ declare global {
 						error?: string
 					}
 				}
+				/**
+				 * 🚧 The session's **step settings** (PROPOSAL-live-scenes §15
+				 * G11): the parameters of every step the pipelines this session
+				 * runs put in session settings (`expose.session`) that are story
+				 * settings — the reply tick's amount and unit, the sprite
+				 * picker's choices. Never a step that runs on a model, and never
+				 * a connection, model, sampling, loadout, prompt, template or
+				 * script field (`server/sessions/stepSettings.ts`). The owner's
+				 * alone: anyone else is answered with none.
+				 */
+				namespace StepSettings {
+					interface Params {
+						sessionId: number
+					}
+					interface Field {
+						/** The parameter's name on its step (`by`, `unit`, `enabled`). */
+						path: string
+						label: string
+						description?: string
+						control: "integer" | "number" | "boolean" | "enum" | "string"
+						min?: number
+						max?: number
+						/** An enum's choices, in order. */
+						members?: { key: string; label: string; description?: string }[]
+						/** What the session runs with now. */
+						value: unknown
+						/** What it runs with when the session sets nothing: its configuration's, else the step's own. */
+						inherited: unknown
+						/** Where `value` came from. */
+						source: "session" | "config" | "author"
+					}
+					interface Step {
+						spec: string
+						specName: string
+						nodeKey: string
+						/** The step's definition (`core:task/clock-step@1`): where the form draws it. */
+						definitionId: string
+						/** The step's label (`expose.label`), else its definition's name. */
+						heading: string
+						fields: Field[]
+					}
+					interface Response {
+						sessionId: number
+						steps: Step[]
+					}
+				}
+				/**
+				 * 🚧 Set one step setting at session scope (§15 G11); `value:
+				 * null` — or the value it inherits — clears it back. Applies at
+				 * once. Answered with the session's step settings, as read after.
+				 */
+				namespace SetStepSetting {
+					interface Params {
+						sessionId: number
+						spec: string
+						nodeKey: string
+						path: string
+						value: unknown
+						/** Echoed on the reply, so the asker settles its own. */
+						requestId?: string
+					}
+					interface Response {
+						sessionId: number
+						requestId?: string
+						spec: string
+						nodeKey: string
+						path: string
+						steps?: StepSettings.Step[]
+						error?: string
+					}
+				}
 			}
 			/**
 			 * The account-visibility view (design §4): from one participant's
@@ -3383,6 +4234,16 @@ declare global {
 					 */
 					recipients?: string[]
 					/**
+					 * 🚧 The clock step the press collected (live scenes §6):
+					 * `{ by, unit }` from the collect modal's stepper — `by` a
+					 * whole number other than zero (back is negative), `unit`
+					 * one of the story-time units — for an action declaring
+					 * `collects.clockStep`; the run receives it as
+					 * `input.clockStep`. Ignored for an action that collects
+					 * none.
+					 */
+					clockStep?: { by: number; unit: string }
+					/**
 					 * Names the run, so it can be cancelled and its progress
 					 * keyed.
 					 *
@@ -3399,6 +4260,16 @@ declare global {
 					action: string
 					success?: boolean
 					error?: string
+					/**
+					 * Beside `error`: the run that failed, when one ran. Its
+					 * terminal `pipelines:progress` frame carried the same
+					 * sentence, so the session's progress card has already said it
+					 * (with Inspect for an administrator), and the page toasts
+					 * only an `error` no card is showing: a press refused
+					 * before any run started has no `runId` (PLAN-less-confusing
+					 * D4, 2026-10-11).
+					 */
+					runId?: string
 					/**
 					 * The run was stopped on request rather than failing.
 					 *
@@ -3528,17 +4399,32 @@ declare global {
 					title?: string
 				}
 				/**
-				 * A mode-declared panel (21) as it crosses the wire — mirrors the
-				 * SDK `WidgetDecl`, plus the resolved `src` of its component's
-				 * module (absent → the component is missing and the client shows
-				 * a placeholder, never an error).
+				 * A mode-declared panel (21) as it crosses the wire: the SDK
+				 * `WidgetDecl`'s own fields, PICKED rather than retyped (C2), so
+				 * a field added to the declaration flows here without a second
+				 * edit — plus what only the transport carries: the title
+				 * resolved to text, the resolved surface and `src` of its
+				 * component's module (absent → the component is missing and the
+				 * client shows a placeholder, never an error), its grants, and
+				 * its settings schema as JSON.
+				 *
+				 * Picked: `id`, `icon`, `role` (`primary` | `secondary`),
+				 * `channels`, `reads` (the base sections it reads, R75; absent =
+				 * all of them), `layout` (the packing hints) and `maxInstances`
+				 * (how many instances one layout may place; absent = no cap —
+				 * the Add menu turns the widget away at the cap, and a layout
+				 * placing more draws the first ones, brief 7b). Not
+				 * `defaultActive`: whether a widget starts on is the layout's
+				 * (it is on when the session's layout draws it).
 				 */
-				interface ModePanel {
-					id: string
+				interface ModePanel
+					extends Pick<
+						import("@serene-pub/sdk").WidgetDecl,
+						"id" | "icon" | "role" | "channels" | "reads" | "layout" | "maxInstances"
+					> {
+					/** The declared title (a string or a locale map, R-20), resolved for the viewer. */
 					title: string
-					icon?: string
-					role?: "primary" | "secondary"
-					surface: { kind: "remote"; owner: string; component: string }
+					surface: import("@serene-pub/sdk").WidgetSurface
 					/**
 					 * Resolved URL: the remote component's module
 					 * (`/plugin-ui/<owner>/<entry>`, run in the UI worker).
@@ -3553,33 +4439,10 @@ declare global {
 					 */
 					grants?: import("@serene-pub/sdk").WidgetSectionScope[]
 					/**
-					 * The base sections it reads (`WidgetDecl.reads`, R75):
-					 * only those are sent to it. Absent = all of them.
-					 */
-					reads?: import("@serene-pub/sdk").WidgetBaseSection[]
-					channels?: string[]
-					layout?: {
-						span?: { ideal?: number; min?: number; max?: number }
-						minInline?: number
-						minBlock?: number
-						collapsible?: boolean
-						closable?: boolean
-						prefer?: "grid" | "drawer"
-					}
-					defaultActive?: boolean
-					/**
-					 * How many instances of this widget one layout may place
-					 * (`WidgetDecl.maxInstances`, a positive integer); absent =
-					 * no cap. The layout editor's Add menu turns the widget
-					 * away at the cap, and a layout placing more draws the
-					 * first ones (brief 7b).
-					 */
-					maxInstances?: number
-					/**
 					 * Per-instance settings this panel offers, in the SDK's
-					 * `FieldDecl` language (`WidgetDecl.settings`). The settings
-					 * panel renders exactly what is declared here; core adds
-					 * `title` and `lane` to every widget.
+					 * `FieldDecl` language (`WidgetDecl.settings`), as JSON. The
+					 * settings panel renders exactly what is declared here; core
+					 * adds `title` and `lane` to every widget.
 					 */
 					settings?: Record<string, unknown>
 				}
@@ -3622,6 +4485,14 @@ declare global {
 					 * declare a label; absent when none does.
 					 */
 					channelLabels?: Record<string, string>
+					/**
+					 * What the channels ARE, by slug (`ChannelDecl.role`,
+					 * PLAN-core-widgets §3.7): `{ manuscript: 'folio' }` for
+					 * the Writing Room. Only channels that declare a role;
+					 * absent when none does. The conversation dossier's
+					 * `composer.channelRoles`.
+					 */
+					channelRoles?: Record<string, "conversation" | "folio">
 					/**
 					 * Why `extend` is unavailable on this session's messages,
 					 * or absent when it is available.
@@ -3779,8 +4650,8 @@ declare global {
 				id: number
 				name: string
 				genreId: string
-				/** Who brought the row: `core` · `plugin` · `user`. */
-				origin: "core" | "plugin" | "user"
+				/** Who brought the row: `core` · `plugin` · `pub` (an in-app genre's) · `user`. */
+				origin: "core" | "plugin" | "pub" | "user"
 				/** The stable key within its owner (`default`, `wide-table`). */
 				slug: string
 				description: string | null
@@ -3814,6 +4685,54 @@ declare global {
 				 * **Updated** since the copy.
 				 */
 				layoutUpdatedAt: string
+			}
+			/**
+			 * 🚧 One page of a session's lines for ONE widget (`messages` request,
+			 * D7 ruling A, 2026-10-11): newest-first before `beforeId`, optionally
+			 * one channel (a bare slug is the whole channel, `slug:n` one lane).
+			 * Every widget pages its own window; the conversation's is untouched.
+			 */
+			/**
+			 * 🚧 The channel lanes under one channel (`channel-lanes` request,
+			 * ruled 2026-10-12): one entry per lane that holds a line, with its
+			 * count and newest line. A lane string asks for that one lane.
+			 */
+			namespace ChannelLanes {
+				interface Params {
+					sessionId: number
+					requestId?: string
+					/** A channel slug, or a lane string for one lane. */
+					channel: string
+				}
+				interface Response {
+					sessionId: number
+					requestId?: string
+					lanes: import("@serene-pub/sdk").ChannelLaneV1[]
+					error?: string
+				}
+			}
+			namespace MessagesPage {
+				interface Params {
+					sessionId: number
+					/** Echoed on the reply, so several widgets' pages tell apart. */
+					requestId?: string
+					/** Lines with id < beforeId; absent: the newest. */
+					beforeId?: number
+					/** 1–100; absent: 25. */
+					limit?: number
+					/** A channel string; absent: every channel. */
+					channel?: string
+				}
+				interface Response {
+					sessionId: number
+					requestId?: string
+					/** Oldest first, as a log reads. Host-only fields are stripped by the page. */
+					rows: SelectSessionMessage[]
+					/** The cursor for the next older page; absent when this was the last. */
+					nextCursor?: string
+					/** Refused (no access, a bad cursor): the sentence, and `rows` is empty. */
+					error?: string
+				}
 			}
 			namespace PanelLayout {
 				namespace Get {
@@ -4359,6 +5278,8 @@ declare global {
 						slash: string
 						icon?: string
 						name: string
+						/** What the action does, as its declaration says it (English). */
+						description?: string
 						specSlug: string
 						/** Namespace-decided: the mode owner's, or someone else's. */
 						origin: "companion" | "foreign"
@@ -4410,6 +5331,13 @@ declare global {
 						 * offers the rename only when it is present.
 						 */
 						playerLabel?: string
+						/**
+						 * 🚧 The genre's own **declared boundary triggers**
+						 * (live scenes ★9): its summarize-scene spec's, each a
+						 * switch under session settings › Scenes, on by
+						 * default. Absent when it declares none.
+						 */
+						sceneBoundaryTriggers?: { key: string; label: string }[]
 						// Structurally mirrors SessionShape from @serene-pub/sdk,
 						// stated inline so the shared socket contract does not
 						// couple to the SDK package.
@@ -4440,6 +5368,15 @@ declare global {
 					 * Stored on `metadata.playerLabel`, never a column.
 					 */
 					playerLabel?: string | null
+					/**
+					 * 🚧 The session's **scene settings** override (live
+					 * scenes §4–§5): its Scenes mode, boundary triggers and
+					 * Summaries. A declaration stores it (refused when it does
+					 * not read), null clears it (the genre's settings apply
+					 * again), absent leaves it alone. Owner only. Stored on
+					 * `metadata.scenes`, never a column.
+					 */
+					sceneSettings?: import("@serene-pub/sdk").SceneSettingsDecl | null
 				}
 				interface Response {
 					session: SelectSession
@@ -5266,6 +6203,20 @@ declare global {
 						entryCount?: number
 						/** Non-archived entries, keyed by entry type id. */
 						entryCounts?: Record<string, number>
+						/**
+						 * A book another person **shared** with the asker
+						 * (PLAN-private-messages §6.7): read-only workspace and
+						 * Duplicate. Absent on the asker's own books.
+						 */
+						isSharedWithMe?: boolean
+						/** The sharer's display name (else username). Shared rows only. */
+						ownerName?: string | null
+						/**
+						 * 🚧 How the asker reads this book (lane A3): `owner` writes,
+						 * `shared` reads and duplicates only. The ONE field the
+						 * client derives read-only from. Every row carries it.
+						 */
+						bookAccess?: "owner" | "shared" | "admin"
 					})[]
 				}
 			}
@@ -5279,7 +6230,24 @@ declare global {
 				 * their own reads (`entries:list`, `lorebooks:bindingList`).
 				 */
 				interface Response {
-					lorebook: (WireLorebook & { tags: string[] }) | null
+					lorebook:
+						| (WireLorebook & {
+								tags: string[]
+								/** The people the owner shared it with. Owner only. */
+								sharedWith?: ConversationPerson[]
+								/** True when the asker reads it through a share. */
+								isSharedWithMe?: boolean
+								/** The sharer's display name. Shared reads only. */
+								ownerName?: string | null
+								/**
+								 * 🚧 How the asker reads this book (lane A3): `owner`
+								 * writes; `shared` (and `admin`) read only — every
+								 * write refuses them. The ONE field the client derives
+								 * read-only from. Always present on a found book.
+								 */
+								bookAccess?: "owner" | "shared" | "admin"
+						  })
+						| null
 					/**
 					 * The id that was asked for — the interest scope, on EVERY
 					 * reply (`scopedReplies.test.ts` requires it).
@@ -5531,6 +6499,18 @@ declare global {
 					// character — the candidate list for charactersExportCard's
 					// optional lorebookId, NOT the same as character.lorebookId.
 					lorebooks: { id: number; name: string }[]
+					/**
+					 * The cast members this card is, in the asker's own books,
+					 * with the card fields each retells (PLAN-cast-retold-fields)
+					 * — the card editor's banner. Stored flags, not a dated
+					 * reading.
+					 */
+					members: {
+						lorebookId: number
+						lorebookName: string
+						castId: number
+						retold: RetoldField[]
+					}[]
 				}
 			}
 			namespace CreateBinding {
@@ -5562,6 +6542,45 @@ declare global {
 				}
 				interface Response {
 					lorebookBinding: SelectLorebookBinding
+				}
+			}
+			/**
+			 * Upload a picture as a cast member's **face** (PLAN-cast-retold-
+			 * fields): stored as lorebook-owned media (`files.lorebook_id`),
+			 * set as the member's `faceMediaId`, and `retold.face` turned on.
+			 * Replies with the member's row; `lorebooks:updateBinding` is
+			 * broadcast as for any member edit.
+			 */
+			namespace UploadMemberFace {
+				interface Params {
+					/** The cast member (`lorebook_bindings.id`). */
+					castId: number
+					imageFile: Buffer | Uint8Array | ArrayBuffer
+					mimeType?: string
+				}
+				/**
+				 * The stored picture, NOT a member change: the form picks it
+				 * into its draft like a gallery picture, and Save (or Save as
+				 * of a date) writes the face (review 2026-10-13).
+				 */
+				interface Response {
+					castId: number
+					lorebookId: number
+					mediaId: number
+				}
+			}
+			/**
+			 * The pictures a book's cast may wear that belong to the book: its
+			 * uploads, and any face its members wear that is not a card's
+			 * gallery picture. Newest first. The book's owner only.
+			 */
+			namespace ListMemberFaces {
+				interface Params {
+					lorebookId: number
+				}
+				interface Response {
+					lorebookId: number
+					mediaIds: number[]
 				}
 			}
 			namespace ResolveOrCreateBindingByName {
@@ -6030,7 +7049,11 @@ declare global {
 					 */
 					heldBy?: {
 						field: "enabled" | "constant"
-						date: { year: number; month: number | null; day: number | null }
+						date: {
+							year: number
+							month: number | null
+							day: number | null
+						}
 						/** `date` spelled through the book's calendar. */
 						label: string
 						amendmentId: number
@@ -6335,6 +7358,8 @@ declare global {
 				 * session it shows.
 				 */
 				interface Response {
+					/** The `requestId` the delete was sent with, when it had one. */
+					requestId?: string
 					success?: string
 					error?: string
 					/** The scene that went. */
@@ -6367,6 +7392,223 @@ declare global {
 				interface Params {}
 				interface Response {
 					options: { value: string; label: string }[]
+				}
+			}
+		}
+
+		/**
+		 * 🚧 Workflows (DESIGN-image-generation §4.10, §4.12) — provider
+		 * documents one dialect consumes; ComfyUI graphs with holes today.
+		 * Every handler is admin-only.
+		 */
+		namespace Workflows {
+			interface Summary {
+				id: number
+				name: string
+				description: string | null
+				dialect: string
+				/** A shipped starter: read-only, refreshed on boot. */
+				isStarter: boolean
+				seedKey: string | null
+				outputNode: string | null
+				variableCount: number
+				updatedAt: string
+			}
+			interface Row {
+				id: number
+				seedKey: string | null
+				name: string
+				description: string | null
+				dialect: string
+				/** The graph with its holes, as text. */
+				document: string
+				variables: import("$lib/shared/imageGen/types").WorkflowVariable[]
+				outputNode: string | null
+				createdAt: string | Date
+				updatedAt: string | Date
+			}
+			interface Input {
+				name: string
+				description?: string | null
+				dialect?: string
+				document: string
+				variables?: import("$lib/shared/imageGen/types").WorkflowVariable[]
+				outputNode?: string | null
+			}
+			/** The fitting walk's proposal (`imageGen/comfy/fit.ts`). */
+			interface Proposal {
+				holes: Array<{
+					nodeId: string
+					inputKey: string
+					variable: string
+					literal: unknown
+					standard: boolean
+					suggested: boolean
+					reason: string
+					enumSource?: string
+					label?: string
+					min?: number
+					max?: number
+					step?: number
+					group?: string
+				}>
+				outputs: Array<{
+					nodeId: string
+					classType: string
+					role: "output" | "extra" | "preview"
+				}>
+				warnings: string[]
+			}
+			namespace List {
+				interface Params {
+					dialect?: string
+				}
+				interface Response {
+					workflows: Summary[]
+				}
+			}
+			namespace Get {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					workflow: Row | null
+				}
+			}
+			namespace Create {
+				interface Params {
+					workflow: Input
+				}
+				interface Response {
+					workflow: Row
+				}
+			}
+			namespace Update {
+				interface Params {
+					id: number
+					workflow: Partial<Input>
+				}
+				interface Response {
+					workflow: Row
+				}
+			}
+			namespace Delete {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					ok: true
+					id: number
+				}
+			}
+			namespace Duplicate {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					workflow: Row
+				}
+			}
+			namespace Export {
+				interface Params {
+					id: number
+					/** A runnable plain-ComfyUI API file, every hole at its default. */
+					withDefaults?: boolean
+				}
+				interface Response {
+					filename: string
+					content: string
+				}
+			}
+			namespace Import {
+				interface Params {
+					/** The file's text: our export, or a ComfyUI API export. */
+					content: string
+					name?: string
+					/** A ComfyUI connection whose cached `/object_info` types the variables. */
+					connectionId?: number
+				}
+				interface Response {
+					workflow: Row
+					/** Present when the file was a raw graph and the walk ran. */
+					proposal?: Proposal
+				}
+			}
+			namespace Fit {
+				interface Params {
+					/** A ComfyUI API export, as text. */
+					content: string
+					connectionId?: number
+					/** `"<nodeId>.<inputKey>"` holes to apply; absent = the suggested ones. */
+					chosen?: string[]
+					/**
+					 * 🚧 The proposal as the fitting form edited it — a hole moved
+					 * to another input, a promoted literal renamed or given another
+					 * default, the output mark moved. Applied instead of a fresh
+					 * walk's; absent = the walk's own.
+					 */
+					proposal?: Proposal
+				}
+				interface Response {
+					proposal: Proposal
+					/**
+					 * 🚧 The named connection's lists for the inputs the proposal
+					 * marks as enums (`"<class>.<input>"` → names), so the fitting
+					 * form's selects offer what that server has. Absent without a
+					 * tested ComfyUI.
+					 */
+					enums?: Record<string, string[]>
+					/** The document `chosen` would save. Absent when the file is not a graph. */
+					applied?: {
+						document: string
+						variables: import("$lib/shared/imageGen/types").WorkflowVariable[]
+						outputNode: string | null
+					}
+				}
+			}
+			/**
+			 * 🚧 Every workflow checked against ONE ComfyUI's cached
+			 * `/object_info` (the Workflows tab's validity chips). Read-only:
+			 * nothing is recorded, and nothing reaches the server.
+			 */
+			namespace OnServer {
+				interface Params {
+					connectionId: number
+				}
+				interface Response {
+					connectionId: number
+					/** False until a test has read the server's `/object_info`. */
+					checked: boolean
+					checkedAt: string | null
+					results: Array<{
+						workflowId: number
+						/** Null when it fits; else the §4.9 sentence. */
+						problem: string | null
+						missingNodes: string[]
+						missingNames: string[]
+					}>
+				}
+			}
+			namespace Validate {
+				interface Params {
+					connectionId: number
+					/** A saved workflow — its result is recorded on the connection. */
+					workflowId?: number
+					/** Or a draft, checked without recording. */
+					document?: string
+					variables?: import("$lib/shared/imageGen/types").WorkflowVariable[]
+				}
+				interface Response {
+					ok: boolean
+					/** The row's sentence (*Missing nodes: …*), or null. */
+					problem: string | null
+					missingNodes: string[]
+					missingNames: Array<{
+						nodeId: string
+						classType: string
+						input: string
+						value: string
+					}>
 				}
 			}
 		}
@@ -6429,6 +7671,8 @@ declare global {
 				 * session it shows.
 				 */
 				interface Response {
+					/** The `requestId` the delete was sent with, when it had one. */
+					requestId?: string
 					success?: string
 					error?: string
 					/** The scene that went. */
@@ -6439,12 +7683,51 @@ declare global {
 					sessionId?: number | null
 				}
 			}
-			namespace SetUserActive {
-				interface Params {
-					id: number
+			/**
+			 * What picks each sampling config: the jobs whose default names it
+			 * and the pipelines whose `sampling` slot does. Read-only facts.
+			 */
+			namespace UsedBy {
+				interface Params {}
+				/**
+				 * One job a sampling config can be the default for: a transform
+				 * the registry demands, or one with a `connection_defaults` row
+				 * naming a config, whose output kind has a sampling vocabulary.
+				 */
+				interface Job {
+					/** The transform id, eg. `text->text`. */
+					capability: string
+					/** The sampling shape its configs speak. */
+					shape: string
+					/** The config its default names, or null when none does. */
+					samplingConfigId: number | null
+				}
+				interface Pipeline {
+					/** "Reply · Adventure" — the name with its genre beside it. */
+					label: string
+					/** Null when the pipeline is not listed (its plugin is off). */
+					slug: string | null
 				}
 				interface Response {
-					user: SelectUser
+					jobs: Job[]
+					/** Sampling config id → the pipelines that pick it. */
+					pipelines: Record<number, Pipeline[]>
+				}
+			}
+			/**
+			 * Name one sampling config as the default for the given jobs. Every
+			 * transform must speak the config's shape; the server refuses the
+			 * request otherwise. Omitted, every job of the shape.
+			 */
+			namespace SetDefaultFor {
+				interface Params {
+					id: number
+					transforms?: string[]
+				}
+				interface Response {
+					id: number
+					/** The transforms written. */
+					transforms: string[]
 				}
 			}
 		}
@@ -6552,6 +7835,14 @@ declare global {
 					 */
 					reason?: string
 					/**
+					 * 🚧 For a `connection-ref` choice: `template` when the
+					 * connection draws with a workflow (ComfyUI, §4.10) — what a
+					 * sibling `workflow-ref` control shows itself by.
+					 */
+					payload?: "flat" | "template"
+					/** 🚧 For a `workflow-ref` choice: the workflow's dialect. */
+					dialect?: string
+					/**
 					 * For a `connection-ref` choice: the MODELS on that endpoint
 					 * (0114) — the second half of the pair the slot stores.
 					 *
@@ -6578,6 +7869,8 @@ declare global {
 						 */
 						missingSince: string | null
 					}>
+					/** For a `loadout-ref` choice: the id the slot stores (`{ id }`); `id` is the row's. */
+					loadoutId?: string
 				}>
 				/**
 				 * For a `prompts-ref` option: the field names the SLOT declares,
@@ -6701,6 +7994,16 @@ declare global {
 						enabled: boolean
 					}>
 				}
+				/** `scripts-chain`: the seam address (`in:text`, `out:cast`, `each-draft`). */
+				at?: string
+				/** `scripts-chain`: `in` · `out` · `point`. */
+				seamKind?: "in" | "out" | "point"
+				/** `scripts-chain` on a port seam: what flows there, in words. */
+				flows?: string
+				/** `scripts-chain`: the accepted script kinds' display names. */
+				acceptsLabels?: string[]
+				/** `scripts-chain`: the chain's seam is not declared (unplaced) — clear only. */
+				unplaced?: boolean
 				authorDefault?: unknown
 				value: unknown
 				/**
@@ -6744,7 +8047,7 @@ declare global {
 				 * *Instance default — …*, *No model set*).
 				 */
 				inherits?: {
-					from: "config" | "pipeline" | "pub" | "none"
+					from: "config" | "pipeline" | "pub" | "loadout" | "none"
 					label: string
 				}
 				/**
@@ -6754,7 +8057,7 @@ declare global {
 				 * configuration*, *Pipeline default*, *Instance default*).
 				 */
 				provenance?: {
-					source: "session" | "config" | "author" | "pub" | "none"
+					source: "session" | "config" | "author" | "pub" | "loadout" | "none"
 					label: string
 				}
 				/**
@@ -6762,6 +8065,22 @@ declare global {
 				 * read-only row shows, never an id.
 				 */
 				valueLabel?: string
+				/**
+				 * For a `loadout-ref` (I12, admin's Pipelines only): the
+				 * selected loadout — row id, title, resolved chain — and the
+				 * step's *Needs* / *Best with* words.
+				 */
+				loadout?: {
+					selected?: { id: number; name: string; chain: string }
+					needs?: string[]
+					bestWith?: string[]
+				}
+				/**
+				 * For a `connection-ref` / `sampling-ref` set here on a model
+				 * call naming a loadout: its name — the row offers *Use
+				 * loadout's*.
+				 */
+				useLoadout?: string
 			}
 			/**
 			 * One step's rows inside a settings group's Advanced: the
@@ -6773,6 +8092,30 @@ declare global {
 				key: string
 				heading: string
 				options: Option[]
+				/** What the step receives — its wired in-ports, in words. Admin view only. */
+				receives?: PortLine[]
+				/** What the step carries out — its wired out-ports, and an outlet's write, in words. Admin view only. */
+				carriesOut?: PortLine[]
+				/** Its definition's declared **effect**. */
+				effect?: "none" | "external" | "write" | "emit"
+			}
+			/**
+			 * One line of what a step receives or carries out: a **port**, in
+			 * words — the *Receives* / *Carries out* cards (owner ruling
+			 * 2026-10-12; server `config/panel/flows.ts`). For an outlet's
+			 * write (*writes the reply*), `port` is `session` and `shape` the
+			 * outlet's definition id. ⚠ Not an **action**, and not a **session
+			 * write** policy.
+			 */
+			interface PortLine {
+				/** The port name on the node. */
+				port: string
+				/** Its shape id (`core:shape/text@1`, …), for a tooltip. */
+				shape: string
+				/** What a reader sees: the value in plain words (*the conversation*, *world lore, a share of the context*, *the cast*). */
+				label: string
+				/** For a received line fed by another step: that step's heading. Absent when it comes from the session or the event. */
+				from?: string
 			}
 			/**
 			 * A settings group (owner rulings 2026-09-30): one model call
@@ -6794,6 +8137,10 @@ declare global {
 				front: Option[]
 				advanced: SettingsGroupStep[]
 				changedInAdvanced: number
+				/** What the group receives from outside itself — its steps' lines, the flows between them left out. Admin view only. */
+				receives?: PortLine[]
+				/** What the group carries out of itself, and its outlets' writes. Admin view only. */
+				carriesOut?: PortLine[]
 			}
 			/**
 			 * A named configuration for this pipeline — the shipped immutable
@@ -8007,6 +9354,37 @@ declare global {
 				}
 			}
 			/**
+			 * 🚧 The wording of one prompt a prompts-ref offers, for reading
+			 * before (or after) choosing it — the session settings' prompt
+			 * dialog. Open to anyone who may see that option: the server
+			 * rebuilds the same view `pipelines:get` answers for this viewer
+			 * and refuses a prompt the option does not offer, so a member reads
+			 * exactly the prompts they may pick and no other. Answers only the
+			 * fields the step declares. Not a **preview** (that is a dry run).
+			 */
+			namespace PromptWording {
+				interface Params {
+					slug: string
+					optionId: string
+					promptId: number
+					sessionId?: number
+				}
+				interface Response {
+					/** Echoed, so a reader with two dialogs open matches the answer. */
+					slug?: string
+					optionId?: string
+					promptId?: number
+					name?: string
+					/** Declared field name → text. */
+					fields?: Record<string, string>
+					/** The step's declared field names, in order. */
+					declared?: string[]
+					/** One of the prompts Serene Pub ships (read-only in the editor). */
+					shipped?: boolean
+					error?: string
+				}
+			}
+			/**
 			 * A prompt written from scratch rather than cloned.
 			 *
 			 * Exists for the reason `CreateContextTemplate` does: a pool can be
@@ -8214,6 +9592,17 @@ declare global {
 					nodeCount: number
 					/** Prompt pools (`<node type>#<slot>`) its steps declare. */
 					promptPools: string[]
+					/**
+					 * Its seams — every place a script chain may run — in run
+					 * order per step, with the script kinds each accepts.
+					 */
+					scriptSeams: {
+						nodeKey: string
+						stepLabel: string
+						/** Seam address: `in:<port>` · `out:<port>` · `<pointKey>`. */
+						at: string
+						accepts: string[]
+					}[]
 					/** Genres whose presets bind it, by id and name. */
 					genres: { id: string; name: string }[]
 				}
@@ -8443,12 +9832,55 @@ declare global {
 					/** Declared variable I/O (18 §6a). In-but-not-out is read-only. */
 					varsIn: string[]
 					varsOut: string[]
-					/** Pipelines whose chains currently include it. */
+					/**
+					 * What holds it, as words: pipeline labels and
+					 * `connection: <name>`. The projection of `use`.
+					 */
 					usedBy: string[]
+					/** Where it is attached, one row per chain or connection. */
+					use: UseRow[]
+					/** Where it could go: the seams accepting its kind. */
+					fits: ScriptFits
+				}
+				/**
+				 * One place a script is attached. A pipeline row is a chain
+				 * on a step; `unplaced` when the step does not declare the
+				 * seam the chain is stored at (kept and marked, never culled).
+				 */
+				type UseRow =
+					| {
+							kind: "pipeline"
+							pipelineSlug: string
+							pipelineLabel: string
+							nodeKey: string
+							stepLabel: string
+							/** Seam address, or the stored address when unplaced. */
+							at: string
+							/** The step's opaque handle — `?step=` on the workspace. */
+							stepKey: string
+							/** The chain option's handle (`data-option-id`). */
+							optionId: string
+							unplaced: boolean
+					  }
+					| { kind: "connection"; connectionId: number; connectionName: string }
+				/** The seams across installed pipelines whose `accepts` names its kind. */
+				interface ScriptFits {
+					/** How many seams. */
+					seams: number
+					/** Pipeline slugs with at least one such seam. */
+					pipelines: string[]
+					/** Step labels with at least one such seam. */
+					steps: string[]
+					/** Seam addresses that accept it. */
+					at: string[]
+					/** Genre names served by those pipelines. */
+					genres: string[]
 				}
 				interface Response {
 					types?: ScriptKind[]
 					scripts?: Script[]
+					/** Pipeline slug → label, for the fits filters' words. */
+					pipelineLabels?: Record<string, string>
 					error?: string
 				}
 			}
@@ -8668,6 +10100,182 @@ declare global {
 				}
 			}
 			/** Recent runs, for the simplified inspector (05 §0a, §6). */
+			/**
+			 * One version of a pipeline as the document it is (the canvas tab,
+			 * PLAN-pipeline-canvas-and-genre-authoring P1). Admin only, like
+			 * `detail`: a document is topology and then some — node config, every
+			 * edge's ports, the clauses' rules — and 05 §0a keeps all of that off
+			 * the sidebar's event. `versionId` absent means the active version.
+			 */
+			namespace Document {
+				interface Params {
+					slug: string
+					versionId?: number
+				}
+				interface Response {
+					document?: import("@serene-pub/sdk").SpecDocument
+					version?: {
+						id: number
+						semver: string
+						status: string
+						canonicalHash: string
+						isActive: boolean
+					}
+					error?: string
+				}
+			}
+			/**
+			 * The pipeline editor's server half (PLAN-pipeline-canvas-and-genre-
+			 * authoring §4.2). All admin-only. A draft is per admin per spec, may
+			 * be invalid, and is never a version row until it is published.
+			 */
+			namespace Draft {
+				interface Draft {
+					document: import("@serene-pub/sdk").SpecDocument
+					findings: import("@serene-pub/sdk").Finding[]
+					basedOnVersionId: number | null
+					basedOnSemver: string | null
+					updatedAt: string
+				}
+				interface Affected {
+					configId: number
+					configName: string
+					/** `nodeKey.slot` (`.path` when the value is a field of the slot). */
+					culled: string[]
+					backfilled: string[]
+				}
+			}
+			namespace DraftGet {
+				interface Params {
+					slug: string
+				}
+				interface Response {
+					slug?: string
+					draft?: Draft.Draft | null
+					/** Core's or a plugin's: editing it must fork first. */
+					shipped?: boolean
+					error?: string
+				}
+			}
+			namespace DraftPut {
+				interface Params {
+					slug: string
+					document: import("@serene-pub/sdk").SpecDocument
+				}
+				interface Response {
+					slug?: string
+					draft?: Draft.Draft
+					error?: string
+				}
+			}
+			namespace DraftDiscard {
+				interface Params {
+					slug: string
+				}
+				interface Response {
+					slug?: string
+					discarded?: true
+					error?: string
+				}
+			}
+			namespace DraftPreview {
+				interface Params {
+					slug: string
+					semver: string
+				}
+				interface Response {
+					slug?: string
+					findings?: import("@serene-pub/sdk").Finding[]
+					/**
+					 * A version of this spec already carries the semver under a
+					 * different hash. Information, not a refusal: publishing
+					 * inserts a new row and retires the old (ruling 2026-09-10).
+					 */
+					semverTaken?: boolean
+					affected?: Draft.Affected[]
+					error?: string
+				}
+			}
+			namespace DraftPublish {
+				interface Params {
+					slug: string
+					semver: string
+				}
+				interface Response {
+					slug?: string
+					version?: { id: number; semver: string; canonicalHash: string }
+					reconcile?: { culled: number; backfilled: number }
+					error?: string
+				}
+			}
+			namespace Composite {
+				/**
+				 * A composite step's stored document: a run of steps lifted
+				 * out of a spec, keys relative (canvas `extractComposite`).
+				 */
+				interface Document {
+					nodes: import("@serene-pub/sdk").DocNode[]
+					clauses: import("@serene-pub/sdk").BuiltClause[]
+					/** Refs that reach outside the composite: what an insertion re-wires. */
+					reads: Array<{ key: string; path: string; node: string; port?: string }>
+				}
+				interface Summary {
+					/** `<owner>:composite/<name>` */
+					slug: string
+					label: string
+					nodeCount: number
+					reads: Document["reads"]
+					updatedAt: string
+				}
+				interface Listed extends Summary {
+					document: Document
+				}
+			}
+			namespace Catalogue {
+				interface Params {}
+				interface Response {
+					definitions?: import("@serene-pub/sdk").RegistryEntry[]
+					/** The pipeline library's composite steps, ordered by label. */
+					composites?: Composite.Listed[]
+					error?: string
+				}
+			}
+			namespace CompositeSave {
+				interface Params {
+					/** `<owner>:composite/<name>` — plugin slug grammar for the owner, never `core`. */
+					slug: string
+					label: string
+					document: Composite.Document
+				}
+				interface Response {
+					slug?: string
+					composite?: Composite.Summary
+					error?: string
+				}
+			}
+			namespace CompositeDelete {
+				interface Params {
+					slug: string
+				}
+				interface Response {
+					slug?: string
+					deleted?: true
+					error?: string
+				}
+			}
+			namespace Fork {
+				interface Params {
+					slug: string
+					/** The owner segment the admin picks — plugin slug grammar, never `core`. */
+					ownerSlug: string
+					name: string
+					label: string
+				}
+				interface Response {
+					slug?: string
+					error?: string
+				}
+			}
 			namespace Runs {
 				interface Params {
 					sessionId?: number
@@ -9619,6 +11227,8 @@ declare global {
 				 * session it shows.
 				 */
 				interface Response {
+					/** The `requestId` the delete was sent with, when it had one. */
+					requestId?: string
 					success?: string
 					error?: string
 					/** The scene that went. */
@@ -9882,6 +11492,16 @@ declare global {
 					mode: LoreWriteMode
 				}
 			}
+			/** Messages between people (PLAN-private-messages Q7): admin only. */
+			namespace UpdateMessagingEnabled {
+				interface Params {
+					enabled: boolean
+				}
+				interface Response {
+					success: boolean
+					enabled: boolean
+				}
+			}
 			/**
 			 * Whether the server may call an outside service to fill in UI
 			 * strings, and which one. Off until an admin says otherwise — see
@@ -10116,7 +11736,10 @@ declare global {
 			 * A scene as a list reply carries it: the row without its latent
 			 * vector columns (`SCENE_REPLY_COLUMNS`, sockets/scenes.ts).
 			 */
-			type SceneListRow = Omit<SelectScene, "embedding" | "embeddingModel">
+			type SceneListRow = Omit<
+				SelectScene,
+				"embedding" | "embeddingModel"
+			>
 			/** Scene with resolved session name for sidebar display */
 			interface SceneWithMeta extends SceneListRow, SceneCast {
 				sessionName: string | null
@@ -10208,14 +11831,28 @@ declare global {
 					 * ephemeral-scene cleanup could delete the scene first.
 					 */
 					activityId?: string
+					/**
+					 * 🚧 The asker's id, echoed on the reply and on
+					 * `scenes:update:error`, so the surface that asked (a
+					 * scene divider's rename) claims its refusal and says it
+					 * in place (lane E).
+					 */
+					requestId?: string
 				}
 				interface Response {
+					/** The `requestId` the update was sent with, when it had one. */
+					requestId?: string
 					scene: SelectScene & SceneCast
 				}
 			}
 			namespace Delete {
 				interface Params {
 					id: number
+					/**
+					 * 🚧 The asker's id, echoed on the reply and on
+					 * `scenes:delete:error` (lane E), as on `Update`.
+					 */
+					requestId?: string
 				}
 				/**
 				 * Emitted to every view of the person's (bare — not in
@@ -10223,6 +11860,8 @@ declare global {
 				 * session it shows.
 				 */
 				interface Response {
+					/** The `requestId` the delete was sent with, when it had one. */
+					requestId?: string
 					success?: string
 					error?: string
 					/** The scene that went. */
@@ -10268,7 +11907,9 @@ declare global {
 					 * amendment on the line dated at the entry's own date, so the
 					 * line's scenes never reach the lines it came from.
 					 */
-					moment: import("$lib/shared/lorebooks/storyDate").StoryDate | null
+					moment:
+						| import("$lib/shared/lorebooks/storyDate").StoryDate
+						| null
 				}
 				interface Progress {
 					/**
@@ -10288,7 +11929,9 @@ declare global {
 					 * the one it asked for.
 					 */
 					branchId: number | null
-					moment: import("$lib/shared/lorebooks/storyDate").StoryDate | null
+					moment:
+						| import("$lib/shared/lorebooks/storyDate").StoryDate
+						| null
 					phase: "drafting" | "synthesizing"
 					batch: number
 					totalBatches: number
@@ -10299,13 +11942,224 @@ declare global {
 					historyEntryId: number
 					/** The reading it was asked at, as on `Progress`. */
 					branchId: number | null
-					moment: import("$lib/shared/lorebooks/storyDate").StoryDate | null
+					moment:
+						| import("$lib/shared/lorebooks/storyDate").StoryDate
+						| null
 					activityId: string
 				}
 				interface ErrorResponse {
 					error: string
 					/** The entry the refused compile was about, when the request named one. */
 					historyEntryId?: number
+				}
+			}
+			/**
+			 * 🚧 Live scenes (PROPOSAL-live-scenes §3, §14 B): a scene is
+			 * the run of one channel's messages between two boundaries. It
+			 * opens at a message and stays the **open scene** until closed;
+			 * one open scene per session and channel.
+			 *
+			 * Every reply carries the scene as stored (cast projected) and
+			 * the scene's `sessionId`, and is followed by the `scenes:list`
+			 * and `scenes:scenedMessageIds` cascades. `requestId` is echoed
+			 * when sent, on the reply and on the `:error` refusal.
+			 */
+			interface LiveSceneReply {
+				requestId?: string
+				sessionId: number
+				scene: SceneListRow & SceneCast
+				/**
+				 * A scene the open closed first — opening a scene while one
+				 * is open on the channel closes that one at the last story
+				 * line before the new boundary.
+				 */
+				closedScene?: SceneListRow & SceneCast
+				/** True when the boundary created the history entry it was filed under. */
+				createdHistoryEntry?: boolean
+				/**
+				 * The cast `sceneCastProposal` proposed (no model), with its
+				 * evidence for the review. Members that resolve to a card
+				 * were written to the scene's cast (`bindingId`); open-tier
+				 * names (`bindingId: null`) were not — a person accepts them.
+				 */
+				castProposal?: Array<{
+					key: string
+					name: string
+					evidenceLabel: string
+					bindingId: number | null
+				}>
+				/**
+				 * 🚧 The scene *End scene here* opened after the one it
+				 * closed, in Automatic scene mode (lane E): the lane's
+				 * following line begins it.
+				 */
+				openedScene?: SceneListRow & SceneCast
+			}
+			namespace Open {
+				interface Params {
+					sessionId: number
+					/** The channel lane, canonical (`main`, `sanctum:2`). Default `main`. */
+					channel?: string
+					/** The first message of the scene — a message of this session on `channel`. */
+					atMessageId: number
+					/**
+					 * 🚧 The last message of the scene: it opens and closes in
+					 * one write, a closed scene over the run (*Mark as scene*,
+					 * lane E). Any run that overlaps no range scene on the lane;
+					 * one wholly before the lane's open scene leaves it open.
+					 */
+					closeAt?: number
+					requestId?: string
+				}
+				type Response = LiveSceneReply
+			}
+			namespace Close {
+				interface Params {
+					sceneId: number
+					/**
+					 * The last message of the scene. Absent: the newest story
+					 * line on the scene's channel.
+					 */
+					atMessageId?: number
+					requestId?: string
+				}
+				type Response = LiveSceneReply
+			}
+			namespace MoveBoundary {
+				interface Params {
+					sceneId: number
+					/** Move the opening boundary to this message. */
+					openedAt?: number
+					/**
+					 * Move the closing boundary (a closed scene only). 🚧
+					 * `null` **reopens** a closed scene (lane E): it runs on to
+					 * its lane's newest line again — refused while a later
+					 * range scene stands on its lane. Every move resets the
+					 * scene's `summaryStatus` to `none`.
+					 */
+					closedAt?: number | null
+					requestId?: string
+				}
+				type Response = LiveSceneReply
+			}
+			/**
+			 * 🚧 `scenes:merge` (lane E) — a live scene joins the one before
+			 * it on its lane: that scene's range runs on to this one's end,
+			 * this row is removed with its summary, and the survivor's
+			 * `summaryStatus` is reset to `none`. A scene divider's *Remove
+			 * boundary* when a scene precedes it. Followed by the
+			 * `scenes:list` and `scenes:scenedMessageIds` cascades;
+			 * `requestId` is echoed, on the reply and the refusal.
+			 */
+			namespace Merge {
+				interface Params {
+					sceneId: number
+					requestId?: string
+				}
+				interface Response extends LiveSceneReply {
+					/** The scene that went (its lines are the survivor's now). */
+					removedSceneId: number
+				}
+			}
+			/**
+			 * 🚧 A **scene cue** at one line (live scenes §4, lane D):
+			 * Suggested mode's *New scene?* chip. One per line and lane, the
+			 * triggers that fired there together. The SDK's
+			 * `ConversationSceneCueV1`, field for field.
+			 */
+			interface SceneCue {
+				id: number
+				channel: string
+				messageId: number
+				triggers: string[]
+				reason: string
+			}
+			/**
+			 * 🚧 `scenes:cues` — the scene cues a session offers now, and its
+			 * scene settings resolved (the genre's, overridden by the
+			 * session's). Answered to a page's ask, and pushed when either
+			 * moves: a line raised a cue, one was decided, a boundary moved,
+			 * the settings were saved. Scoped by `sessionId`.
+			 */
+			namespace Cues {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					cues: SceneCue[]
+					settings: import("@serene-pub/sdk").SceneSettings
+					/** The session may place a scene at all (a lorebook, a genre that writes scenes, lore writes not Off). */
+					mayPlace: boolean
+				}
+			}
+			/**
+			 * 🚧 `scenes:decideCue` — the owner's **Yes** (open a scene at the
+			 * cue's line) or **Not here** (dismiss every cue at that line).
+			 * Followed by the `scenes:list`, `scenes:scenedMessageIds` and
+			 * `scenes:cues` cascades. `requestId` is echoed, on the reply and
+			 * the `:error` refusal.
+			 */
+			namespace DecideCue {
+				interface Params {
+					cueId: number
+					accept: boolean
+					requestId?: string
+				}
+				interface Response {
+					requestId?: string
+					sessionId: number
+					/** The scene it opened; null for *Not here*. */
+					sceneId: number | null
+				}
+			}
+			/**
+			 * 🚧 `scenes:processAll` — summarize scenes of a session in the
+			 * background, one after another, through `scenes:process`:
+			 * `sceneIds`, or every closed scene whose summary has not run or
+			 * failed (Chronicle's *Summarize all (N)*). The owner only;
+			 * refused when the session's summaries are `never`.
+			 */
+			namespace ProcessAll {
+				interface Params {
+					sessionId: number
+					sceneIds?: number[]
+					requestId?: string
+				}
+				interface Response {
+					requestId?: string
+					sessionId: number
+					/** The scenes queued, in the order they run. */
+					sceneIds: number[]
+				}
+			}
+			/**
+			 * 🚧 `scenes:openScenes` — the session's open scenes as
+			 * Chronicle's *Open scene* card reads them: each one's lines so
+			 * far, when it opened, and its cast as `sceneCastProposal`
+			 * proposes it now (no model, nothing written). Anyone in the
+			 * session reads it. `request` is echoed.
+			 */
+			namespace OpenScenes {
+				interface Params {
+					sessionId: number
+					request?: string
+				}
+				interface Response {
+					request?: string
+					sessionId: number
+					scenes: Array<{
+						id: number
+						name: string | null
+						channel: string
+						openedAtMessageId: number
+						/** The opening stamp, spelled through the book's calendar; empty with none. */
+						since: string
+						lineCount: number
+						cast: Array<{ name: string; evidence: string }>
+					}>
+					/** The session's scene settings, resolved. */
+					settings: import("@serene-pub/sdk").SceneSettings
 				}
 			}
 			namespace Process {
@@ -10338,6 +12192,10 @@ declare global {
 					/** Extracted names not yet backed by a binding — suggested, referenced but absent */
 					suggestedMentionedCharacters?: string[]
 					raw: string
+					/** 🚧 The summarize-scene spec that ran (session → genre → `summarize.scene`). */
+					specId?: string
+					/** 🚧 Said in the review when the genre's spec fell back to core's default. */
+					note?: string
 				}
 				interface ErrorResponse {
 					sceneId: number
@@ -10393,6 +12251,12 @@ declare global {
 					starred: boolean
 					/** The identity the lane would annotate under, or null. */
 					modelId: string | null
+					/**
+					 * The connection the lane's target resolved to, or null when
+					 * nothing is starred. The lane is app-wide; a row compares
+					 * this to its own id before claiming `modelId` as its own.
+					 */
+					connectionId: number | null
 					/** True once the model is loaded and the lane can use it. */
 					modelReady: boolean
 					/** The last load failure, or null. The lane keeps going without it. */
@@ -10555,6 +12419,12 @@ declare global {
 					starred: boolean
 					/** The identity vectors are stamped with, or null. */
 					modelId: string | null
+					/**
+					 * The connection the lane's target resolved to, or null when
+					 * nothing is starred. The lane is app-wide; a row compares
+					 * this to its own id before claiming `modelId` as its own.
+					 */
+					connectionId: number | null
 					loaded: boolean
 					loadError: string | null
 					lastUsedAt: string | null
@@ -11578,7 +13448,11 @@ declare global {
 						 * — `stoppedBecause`) · `nothing` (no item landed). Absent
 						 * with `success: false`.
 						 */
-						conclusion?: "complete" | "partial" | "stopped" | "nothing"
+						conclusion?:
+							| "complete"
+							| "partial"
+							| "stopped"
+							| "nothing"
 						message?: string
 						error?: string
 						/**
@@ -12320,11 +14194,14 @@ declare global {
 				sessionId: number
 				messageId: number | null
 				/**
-				 * Always `value` since phase 3b: an item moving is a list
-				 * change on the `inventory` stat, and the boot move turned
-				 * every held `possession` proposal into one.
+				 * `value` — a stat change; an item moving is a list change on
+				 * the `inventory` stat since phase 3b, and the boot move turned
+				 * every held `possession` proposal into one. 🚧 `clock` — a
+				 * **clock proposal** (live scenes ★3): the state-keeper asking
+				 * to move the session's story clock forward, payload `{ kind:
+				 * 'clock', by, unit }`; no owner, no slot, never superseded.
 				 */
-				kind: "value"
+				kind: "value" | "clock"
 				payload: Record<string, unknown>
 				status: "pending" | "accepted" | "rejected" | "superseded"
 				proposedBy: string
@@ -12422,8 +14299,12 @@ declare global {
 			 */
 			interface LedgerRow {
 				id: number
-				/** Always `value` since phase 3b (items are the `inventory` stat's rows). */
-				kind: "value"
+				/**
+				 * `value` since phase 3b (items are the `inventory` stat's
+				 * rows). 🚧 `clock` — a move of the session's story clock
+				 * (live scenes §15 G5): `clock` carries it, on the world.
+				 */
+				kind: "value" | "clock"
 				messageId: number | null
 				ownerKey: string
 				ownerLabel: string
@@ -12439,6 +14320,24 @@ declare global {
 				 * checked against.
 				 */
 				value?: import("@serene-pub/sdk").SlotValue
+				/**
+				 * 🚧 Clock rows: the step, why it moved, where the clock
+				 * stood and now stands (spelled through the book's calendar
+				 * as it reads now), or why it did not move (`skipped`).
+				 */
+				clock?: LedgerClockMove
+			}
+
+			/** 🚧 One clock move, as a ledger row carries it (live scenes §15 G5). */
+			interface LedgerClockMove {
+				by: number
+				unit: string
+				/** `action` · `keeper` · `tick`; null when the row predates the word. */
+				cause: "action" | "keeper" | "tick" | null
+				fromLabel: string | null
+				toLabel: string | null
+				/** The sentence a skipped move left; null when the clock moved. */
+				skipped: string | null
 			}
 
 			/** What one slot read before this session first touched it. */
@@ -12836,7 +14735,10 @@ declare global {
 					 * read, which dates every change made here; null at now, or
 					 * when nothing is dated then.
 					 */
-					writeDatedBy: { historyEntryId: number; date: Moment } | null
+					writeDatedBy: {
+						historyEntryId: number
+						date: Moment
+					} | null
 					requestId?: string
 				}
 				interface ErrorResponse {
@@ -12863,6 +14765,177 @@ declare global {
 				/** The place's stats after the write, read as `get` reads them. */
 				type Response = Get.Response
 				type ErrorResponse = Get.ErrorResponse
+			}
+		}
+
+		/**
+		 * 🚧 `cardState:*` — a character card's own stats (the **dowry**: its
+		 * sheets, starting values and limits), read and written with no
+		 * session (plans/DESIGN-card-strokes-and-dowry-2026-10-11 §B.4, the
+		 * character form's **Stats** tab), and the authoring of a stored slot
+		 * or sheet from there. The card's owner only — anyone else reads the
+		 * card as missing. `get`/`set`/`setSheets`/`changed` are scoped by
+		 * `characterId`; the four declaration verbs are bare.
+		 */
+		namespace CardState {
+			/** Where a declaration came from: authored here, core's code, or an extension's. */
+			type Origin = "stored" | "code" | "plugin"
+
+			/** A sheet the Stats tab may pick: one with a slot a character carries. */
+			interface AvailableSheet {
+				id: string
+				label: string
+				description?: string
+				origin: Origin
+				/** Retired: shown greyed where it is already picked, offered nowhere new. */
+				retired: boolean
+				/** Its slots, in order — only those that land on a character. */
+				slotIds: string[]
+				/** The caller authored it (or is an administrator), so `updateSheet` will take it. */
+				editable: boolean
+			}
+
+			/** A slot the Stats tab may add loose, or a sheet may gather. */
+			interface AvailableSlot {
+				id: string
+				label: string
+				description?: string
+				type: State.SlotDescriptor["type"]
+				origin: Origin
+				retired: boolean
+				appliesTo: ("cast" | "world" | "location")[]
+				/** The caller authored it (or is an administrator), so `updateSlot` will take it. */
+				editable: boolean
+			}
+
+			namespace Get {
+				interface Params {
+					characterId: number
+					/** Echoed on the reply and the refusal, so a tab settles its own read. */
+					requestId?: string
+				}
+				interface Response {
+					characterId: number
+					/** The card's sheets (`owner_sheets`), in order. */
+					sheets: string[]
+					/**
+					 * What the card carries: its sheets' character slots in
+					 * order, then every loose slot it holds a value or limits
+					 * for. `sheetId` names the sheet that first named a slot;
+					 * absent, the slot is loose.
+					 */
+					vocabulary: State.SlotDescriptor[]
+					/** The card's own value per slot id, present only when set. */
+					values: Record<string, import("@serene-pub/sdk").SlotValue>
+					/** The limits in force on the card, per vocabulary slot: the declaration's with the card's over them. */
+					configs: Record<string, Record<string, unknown>>
+					/** The card's own deviations, per slot id, present only when it has some. */
+					ownConfigs: Record<string, Record<string, unknown>>
+					/**
+					 * What a read falls back to per vocabulary slot when the
+					 * card holds no value: the naming sheet entry's default,
+					 * else the declaration's. Present only when there is one.
+					 */
+					defaults: Record<string, import("@serene-pub/sdk").SlotValue>
+					/** The registry a character may carry, retired entries flagged rather than hidden. */
+					available: {
+						sheets: AvailableSheet[]
+						slots: AvailableSlot[]
+					}
+					requestId?: string
+				}
+				interface ErrorResponse {
+					error: string
+					characterId?: number
+					requestId?: string
+				}
+			}
+
+			/**
+			 * One change to the card's layer. `value` and `config` may come
+			 * together (the limits land first, so the value is judged against
+			 * them); at least one must. `value: null` clears the card's value,
+			 * `config: null` clears the card's limits.
+			 */
+			interface Change {
+				slotId: string
+				value?: import("@serene-pub/sdk").SlotValue
+				config?: Record<string, unknown> | null
+			}
+
+			namespace Set {
+				interface Params {
+					characterId: number
+					/** Applied all together, or not at all. */
+					changes: Change[]
+					requestId?: string
+				}
+				/** The card's stats after the write, read as `get` reads them. */
+				type Response = Get.Response
+				type ErrorResponse = Get.ErrorResponse
+			}
+
+			namespace SetSheets {
+				interface Params {
+					characterId: number
+					/** The card's whole set of sheets, in order; `[]` removes them all. */
+					sheetIds: string[]
+					requestId?: string
+				}
+				type Response = Get.Response
+				type ErrorResponse = Get.ErrorResponse
+			}
+
+			/** Pushed to the owner's tabs after the card's layer moved; re-read with `get`. */
+			namespace Changed {
+				interface Response {
+					characterId: number
+				}
+			}
+
+			namespace DeclareSlot {
+				interface Params {
+					/** The name the id is made from (`<username>:slot/<name>@1`), frozen at creation. */
+					name: string
+					props: import("@serene-pub/sdk").AttributeSlotProps
+					requestId?: string
+				}
+				type Response = AvailableSlot & { requestId?: string }
+				interface ErrorResponse {
+					error: string
+					requestId?: string
+				}
+			}
+
+			namespace UpdateSlot {
+				interface Params {
+					id: string
+					props: import("@serene-pub/sdk").AttributeSlotProps
+					requestId?: string
+				}
+				type Response = AvailableSlot & { requestId?: string }
+				type ErrorResponse = DeclareSlot.ErrorResponse
+			}
+
+			namespace DeclareSheet {
+				interface Params {
+					/** The name the id is made from (`<username>:sheet/<name>@1`), frozen at creation. */
+					name: string
+					props: import("@serene-pub/sdk").AttributeSheetProps
+					requestId?: string
+				}
+				type Response = AvailableSheet & { requestId?: string }
+				type ErrorResponse = DeclareSlot.ErrorResponse
+			}
+
+			namespace UpdateSheet {
+				interface Params {
+					id: string
+					props: import("@serene-pub/sdk").AttributeSheetProps
+					requestId?: string
+				}
+				type Response = AvailableSheet & { requestId?: string }
+				type ErrorResponse = DeclareSlot.ErrorResponse
 			}
 		}
 

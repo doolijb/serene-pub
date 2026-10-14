@@ -148,7 +148,9 @@ describe("each person's 0.5.3 picks select at session scope (B1)", () => {
 		for (const id of [ids.chats.bard, 48]) {
 			expect(ownerOf(id)).not.toBe(ids.users.admin)
 			const text = firstBoot[id].text
-			expect(text, `session ${id}`).toContain("never-ending uncensored roleplay")
+			// 0.5.3's default reply prompt, under its seed key — carrying the
+			// catalog's own prose since 2026-10-12 ("Roleplay - Plain").
+			expect(text, `session ${id}`).toContain("in an ongoing story with")
 			expect(text, `session ${id}`).not.toContain("Write vividly")
 			expect(text, `session ${id}`).not.toContain("<char>")
 		}
@@ -243,7 +245,21 @@ describe("prompt text only (owner ruling, 2026-10-01)", () => {
 			)
 			expect(differs.filter((r) => r.slot !== "prompts"), `config ${c.id}`).toEqual([])
 		}
-		expect(await q(`SELECT scope_id FROM pipeline_node_overrides WHERE path <> 'searchByMeaning'`)).toEqual([])
+		// A chat's own sampling config is its session's sampling pick, on the
+		// `generate` step; nothing else is a session override.
+		expect(
+			await q(
+				`SELECT scope_id FROM pipeline_node_overrides
+				 WHERE path <> 'searchByMeaning' AND NOT (node_key = 'generate' AND slot = 'sampling')`
+			)
+		).toEqual([])
+		const picked = (await q(`SELECT DISTINCT scope_id FROM pipeline_node_overrides WHERE slot = 'sampling' ORDER BY scope_id`)).map((r) => r.scope_id)
+		expect(picked).toEqual(
+			before.chats
+				.filter((c) => c.sampling_config_id != null)
+				.map((c) => c.id)
+				.sort((a: number, b: number) => a - b)
+		)
 		// A pub that only defaulted to a shipped 0.5.3 prompt follows 0.6's shipped default.
 		const pub = await q(
 			`SELECT s.scope_id FROM pipeline_config_selections s JOIN pipeline_specs p ON p.id = s.spec_id WHERE p.slug = 'core:spec/chat-respond' AND s.scope_kind = 'pub'`

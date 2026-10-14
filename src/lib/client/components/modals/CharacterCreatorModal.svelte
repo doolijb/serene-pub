@@ -399,7 +399,7 @@
 					<header class="flex items-center justify-between">
 						<h2 class="h2">Discard unsaved changes?</h2>
 						<button
-							class="btn btn-sm preset-filled-surface-400-600"
+							class="btn btn-sm preset-tonal-surface"
 							onclick={handleCancelCancel}
 							aria-label="Go back to editing"
 						>
@@ -428,7 +428,7 @@
 
 					<footer class="flex justify-end gap-4">
 						<button
-							class="btn preset-filled-surface-500"
+							class="btn preset-tonal-surface"
 							onclick={handleCancelCancel}
 						>
 							<Icons.ArrowLeft size={16} />
@@ -454,7 +454,7 @@
 							</p>
 						</div>
 						<button
-							class="btn btn-sm preset-filled-surface-400-600"
+							class="btn btn-sm preset-tonal-surface"
 							onclick={handleCancel}
 							aria-label="Close character creator"
 						>
@@ -1014,7 +1014,7 @@
 					<!-- Navigation -->
 					<footer class="flex justify-between gap-4">
 						<button
-							class="btn preset-filled-surface-500"
+							class="btn preset-tonal-surface"
 							onclick={handlePrevious}
 							disabled={isFirstStep}
 						>
@@ -1025,7 +1025,7 @@
 						<div class="flex gap-2">
 							{#if steps[currentStep].canSkip && !isLastStep}
 								<button
-									class="btn preset-filled-surface-400-600"
+									class="btn preset-tonal-surface"
 									onclick={handleNext}
 								>
 									Skip

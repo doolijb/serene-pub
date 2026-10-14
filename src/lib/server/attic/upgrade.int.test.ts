@@ -591,7 +591,7 @@ describe("connections and sampling (0096/0097/0105/0114/0127)", () => {
 	})
 
 	test("the embedding singleton is a starred OpenAI-compatible connection that embeds, its key re-encrypted (0127)", async () => {
-		const star = await one(`SELECT * FROM connection_defaults WHERE input = 'text' AND output = 'embedding'`)
+		const star = await one(`SELECT * FROM loadouts WHERE default_for_input = 'text' AND default_for_output = 'embedding'`)
 		const emb = await one(`SELECT * FROM connections WHERE id = $1`, star.connection_id)
 		// Restored as `openai-embeddings`, renamed onto `openai` in the same
 		// restore (connections/openAIMultiModality.ts), embeddings switched on.
@@ -609,7 +609,7 @@ describe("connections and sampling (0096/0097/0105/0114/0127)", () => {
 	})
 
 	test("the instance's default connection and sampling config are the text default", async () => {
-		const d = await one(`SELECT * FROM connection_defaults WHERE input = 'text' AND output = 'text'`)
+		const d = await one(`SELECT * FROM loadouts WHERE default_for_input = 'text' AND default_for_output = 'text'`)
 		expect(d.connection_id).toBe(manifest.detail.systemSettings.default_connection_id)
 		const s = await one(`SELECT name FROM sampling_configs WHERE id = $1`, d.sampling_config_id)
 		expect(s.name).toBe("Mirostat")
@@ -624,14 +624,39 @@ describe("connections and sampling (0096/0097/0105/0114/0127)", () => {
 		const flat = before.sampling_configs.find((r) => r.name === "Everything enabled")!
 		expect(all.values.temperature).toBeCloseTo(flat.temperature)
 		expect(all.values.stop).toEqual(flat.stop)
-		expect(all.values.logitBias).toEqual(flat.logit_bias)
+		// 0.5.3 stored token id → bias; 0.6 stores logit bias entries, one
+		// `[id]` entry per id, in key order.
+		expect(all.values.logitBias).toEqual(
+			Object.entries(flat.logit_bias).map(([id, value]) => ({ text: `[${id}]`, value }))
+		)
 		expect(all.values.drySequenceBreakers).toEqual(flat.dry_sequence_breakers)
 		expect(all.enabled).toEqual(expect.arrayContaining(["temperature", "topP", "topK", "stop", "logitBias", "drySequenceBreakers"]))
 		const none = live.find((r) => r.name === "Nothing enabled")
 		expect(none.enabled).toEqual([])
 		expect(none.values.topP).toBeUndefined()
-		const mixed = await one(`SELECT sampling_config_id FROM sessions WHERE id = $1`, ids.chats.visibility)
-		expect((await one(`SELECT name FROM sampling_configs WHERE id = $1`, mixed.sampling_config_id)).name).toBe("creative (2)")
+	})
+
+	test("a chat's own sampling config is its session's sampling pick, the panel row on each text generate step", async () => {
+		// Named by its live row, so a config whose id moved in the restore is
+		// read through the id map.
+		const picks = await q(
+			`SELECT p.slug, o.value, o.path FROM pipeline_node_overrides o JOIN pipeline_specs p ON p.id = o.spec_id
+			 WHERE o.scope_kind = 'session' AND o.scope_id = $1 AND o.node_key = 'generate' AND o.slot = 'sampling'`,
+			ids.chats.visibility
+		)
+		expect(picks.map((p) => p.slug)).toEqual(
+			expect.arrayContaining(["core:spec/chat-respond", "core:spec/chat-narrate"])
+		)
+		for (const p of picks) {
+			expect(p.path).toBe("")
+			expect((await one(`SELECT name FROM sampling_configs WHERE id = $1`, p.value)).name).toBe("creative (2)")
+		}
+		expect(run.wiring?.sampling).toBeGreaterThanOrEqual(1)
+		const column = await one(
+			`SELECT count(*)::int AS n FROM information_schema.columns
+			 WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = 'sampling_config_id'`
+		)
+		expect(column.n).toBe(0)
 	})
 
 	test("KoboldCPP's model list and manager settings carry over", async () => {

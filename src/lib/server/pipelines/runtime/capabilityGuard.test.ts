@@ -10,8 +10,9 @@
  * That is not hypothetical. OPENAI declared `text->image` as `probed` and
  * the `openai-official` preset asserted it `true`, so every OpenAI connection
  * anyone tested resolved `text->image: 1` and wrote it to the row. Both
- * declarations are now gone — nothing implements `generateImage` for that type,
- * so the manifest cannot declare the key — but the cached `native` is still
+ * declarations were withdrawn then — nothing implemented `generateImage` for
+ * that type (it does since 2026-10-12; the tests below use ANTHROPIC, which
+ * still has no image code) — but the cached `native` was still
  * sitting in the column. Read straight, it clears this guard, an image slot
  * accepts the connection, and `getImageAdapter` throws `No image adapter for
  * connection type` minutes later, in a stack that names none of this.
@@ -48,7 +49,11 @@ describe("a withdrawn capability cannot be revived by a stale cache", () => {
 		// The exact live bug, in the state a real upgraded install is in: the row
 		// was tested under the old declaration and the column still carries the
 		// key at full grade.
-		const stale = row(CONNECTION_TYPE.OPENAI, {
+		//
+		// OPENAI was the live case; since the OpenAI-images module exists it
+		// declares the key again (DESIGN-image-generation §9.6), so the same
+		// stale shape is pinned on a type that still has no image code.
+		const stale = row(CONNECTION_TYPE.ANTHROPIC, {
 			"text->text": 1,
 			"text->image": 1
 		})
@@ -64,7 +69,7 @@ describe("a withdrawn capability cannot be revived by a stale cache", () => {
 		// Somebody who switched "Image generation" off has no way to connect
 		// `text->image` back to the toggle they touched.
 		const message = capabilityRefusal(
-			row(CONNECTION_TYPE.OPENAI, { "text->image": 1 }),
+			row(CONNECTION_TYPE.ANTHROPIC, { "text->image": 1 }),
 			"text->image"
 		)
 		expect(message).toContain("Image generation")
@@ -259,7 +264,8 @@ describe("the refusal names the capability and never the connection", () => {
 		id: 7,
 		name: "Studio",
 		model: "sd-1.5",
-		type: CONNECTION_TYPE.OPENAI,
+		// A type with no image code: OPENAI draws since the OpenAI-images module.
+		type: CONNECTION_TYPE.ANTHROPIC,
 		capabilities: { resolved: { "text->image": 1 } }
 	}
 

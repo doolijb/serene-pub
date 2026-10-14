@@ -209,7 +209,9 @@ export async function bookStatOwners(
 /**
  * The changes still waiting in a session's review — `pending`
  * `state_proposals` — that name one of these owners. The owner rides the
- * change's payload (`{ owner: { kind, id }, … }`), not a column.
+ * change's payload (`{ owner: { kind, id }, … }`), not a column. 🚧 A clock
+ * proposal (kind `clock`, live scenes ★3) names no owner, so it is never one
+ * of them: it moves the session's clock, never the book's.
  */
 export function pendingChangesFor(kinds: readonly string[], ids: readonly number[]): SQL {
 	const p = schema.stateProposals

@@ -80,6 +80,25 @@ sp-drop-zone {
 	pointer-events: none;
 }
 
+/* 🚧 A drag handle (vocabulary 1.4) is its grip; while dragged, a line marks
+   the gap it would land in — the primary colour, the behaviour's only look. */
+sp-drag-handle {
+	display: inline-flex;
+}
+.sp-drag-handle-grip {
+	display: inline-flex;
+	touch-action: none;
+	user-select: none;
+}
+.sp-drag-handle-line {
+	position: fixed;
+	z-index: 50;
+	height: 2px;
+	border-radius: 9999px;
+	background-color: var(--color-primary-500);
+	pointer-events: none;
+}
+
 .sp-dialog-backdrop {
 	@apply bg-surface-50-950/50 backdrop-blur-sm;
 }

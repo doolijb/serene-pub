@@ -233,8 +233,12 @@ describe("connections:setCapability — what it must not touch", () => {
 			rec.emit
 		)
 
+		// Plus the lazy `connectionDefaults:list` push (plan A11): a toggled
+		// capability can strand a registered default, and that list carries
+		// no connection for the form to adopt.
 		expect(rec.events.map((e) => e.event)).toEqual([
-			"connections:setCapability"
+			"connections:setCapability",
+			"connectionDefaults:list"
 		])
 	})
 })

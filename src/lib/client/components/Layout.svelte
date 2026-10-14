@@ -1,5 +1,8 @@
 <script lang="ts">
 	import { provideCharacterImports } from "$lib/client/contexts/characterImports.svelte"
+	import { provideConnections } from "$lib/client/contexts/connections.svelte"
+	import { provideConversations } from "$lib/client/contexts/conversations.svelte"
+	import ConnectionsDialogs from "$lib/client/components/connections/ConnectionsDialogs.svelte"
 	import Header from "./Header.svelte"
 	import PanelHeader from "./panels/PanelHeader.svelte"
 	import Avatar from "./Avatar.svelte"
@@ -11,17 +14,24 @@
 	import AdminView from "$lib/client/admin/AdminView.svelte"
 	import { adminRouter } from "$lib/client/admin/adminRouter.svelte"
 	import { helpRouter } from "$lib/client/shell/helpRouter.svelte"
-	import { isPlainClick, viewLinkFor } from "$lib/client/shell/viewLinks"
+	import {
+		isPlainClick,
+		messagesAddressOf,
+		viewLinkFor
+	} from "$lib/client/shell/viewLinks"
+	import { applyMessagesDigest } from "$lib/client/shell/openHref"
 	import { getDocMeta } from "$lib/shared/utils/docsIndex"
-	import SamplingSidebar from "./sidebars/SamplingSidebar.svelte"
 	import ConnectionsSidebar from "./sidebars/ConnectionsSidebar.svelte"
+	import ModelsSidebar from "./sidebars/ModelsSidebar.svelte"
+	import LoadoutsSidebar from "./sidebars/LoadoutsSidebar.svelte"
+	import SamplingSidebar from "./sidebars/SamplingSidebar.svelte"
 	import LorebooksSidebar from "./sidebars/LorebooksSidebar.svelte"
 	import CharactersSidebar from "./sidebars/CharactersSidebar.svelte"
 	import SessionsSidebar from "./sidebars/SessionsSidebar.svelte"
-	import PipelinesSidebar from "./sidebars/PipelinesSidebar.svelte"
 	import TagsSidebar from "./sidebars/TagsSidebar.svelte"
 	import UsersSidebar from "./sidebars/UsersSidebar.svelte"
 	import HelpSidebar from "./sidebars/HelpSidebar.svelte"
+	import ConversationsSidebar from "$lib/client/components/sidebars/ConversationsSidebar.svelte"
 	import LibraryView from "./library/LibraryView.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getSocket } from "$lib/client/sockets/socketInstance"
@@ -66,6 +76,16 @@
 	import { layoutEditor } from "$lib/client/sessionLayout/layoutEditor.svelte"
 	import JumpPill from "$lib/client/components/shell/JumpPill.svelte"
 	import JumpOverlay from "$lib/client/components/shell/JumpOverlay.svelte"
+	import ShellLoading from "$lib/client/components/shell/ShellLoading.svelte"
+	import {
+		ADMIN_DOT_WORDS,
+		railLabel,
+		railShowsMessagesDot,
+		railShowsOpenDot,
+		railTitle,
+		unreadMessagesWords,
+		type RailDotFacts
+	} from "$lib/client/shell/railDots"
 	// The one `lg` answer. Anything that needs `window.innerWidth < 1024`
 	// asks this instead of computing it locally, so the state and the
 	// stylesheet cannot disagree about where mobile ends.
@@ -88,6 +108,23 @@
 	// double-toast (or override an intentional suppression) - see the
 	// wildcard error handling note near `handleAnyEvent`.
 	const HANDLED_ERROR_EVENTS = new Set<string>([
+		// Messages (PLAN-private-messages-2026-10-12): the conversations
+		// context rejects the caller's promise and the Messages view says the
+		// refusal INLINE where it was asked — under the composer, in the
+		// picker, on the person screen. A list or read refusal says nothing
+		// (the switch went off; a reconnect asks again). rename, addMembers,
+		// removeMember, leave and mute are menu actions with nowhere inline to
+		// say it, so their refusals keep the catch-all toast.
+		"conversations:list:error",
+		"conversations:open:error",
+		"conversations:create:error",
+		"conversations:send:error",
+		"conversations:edit:error",
+		"conversations:remove:error",
+		"conversations:read:error",
+		"conversations:people:error",
+		"conversations:person:error",
+		"conversations:attachable:error",
 		// The characters-import context toasts a refused import itself
 		// (contexts/characterImports.svelte.ts), once for every view.
 		"characters:importCard:error",
@@ -111,6 +148,14 @@
 		// The session page toasts it under the action's name (_Narrate_),
 		// and only on the session it was pressed on (C2 follow-up).
 		"sessions:fireNarratorResponse:error",
+		// Chronicle (W3) says a refused clock read or move in the widget
+		// itself (R77), where the person pressed.
+		"sessions:storyClock:error",
+		"sessions:setStoryClock:error",
+		// Places (W4) says a refused read in the widget itself (R77).
+		"sessions:places:error",
+		// Stats (F2) says a refused stat trail in its popover (R77).
+		"sessions:statTrail:error",
 		"connections:list:error",
 		// Toasted once already, as the bare `error` event with the server's
 		// own sentence; this sibling only stops the wrapper's generic
@@ -195,14 +240,30 @@
 		// would fire now" — say its refusal in place, each only its own press
 		// (`requestId`, plan B8).
 		"pipelines:previewRetrieval:error",
-		// The sampling sidebar puts both of these under the field that has to
-		// change — the clone modal's name input, or the config's Name — because
+		// The Sampling view (and Admin › Sampling) put both of these under
+		// the field that has to change — the New dialog's name
+		// input, or the config's Name — because
 		// a name is unique per modality now and "that one is taken" is answered
 		// by typing a different one. A toast as well would say the same thing
 		// twice, once next to the fix and once in a corner.
 		"samplingConfigs:create:error",
 		"samplingConfigs:update:error",
 		"scenes:compile:error",
+		// 🚧 Live scenes: a scene boundary's refusal is said by the
+		// conversation that asked it — under the line, in the scene's
+		// divider or in the selection bar — each only its own press
+		// (`requestId`, `sessionPage/pageAsks.ts`).
+		"scenes:open:error",
+		"scenes:close:error",
+		"scenes:moveBoundary:error",
+		// 🚧 Lane E: *Remove boundary* into the scene before, said by the divider.
+		"scenes:merge:error",
+		// 🚧 Live scenes, lane D: a cue's Yes / Not here, Chronicle's
+		// Summarize and its open-scene read — each said by the widget that
+		// asked (`requestId` / `request`).
+		"scenes:decideCue:error",
+		"scenes:processAll:error",
+		"scenes:openScenes:error",
 		// Said once: by the Process scene window showing the run, or else by
 		// this component's own `sayUnshownSceneRunFailure`, with a title.
 		"scenes:process:error",
@@ -233,6 +294,19 @@
 		"components:import:error"
 	])
 
+	/**
+	 * 🚧 `:error` events said in place WHEN the refusal names its asker
+	 * (`requestId`), and toasted here otherwise. A scene divider's rename and
+	 * *Remove boundary* (lane E, `sessionPage/pageAsks.ts`) send a request id
+	 * and say their refusal under the divider; the lorebook's own scene edit
+	 * and delete send none and rely on this catch-all, so the events cannot
+	 * join `HANDLED_ERROR_EVENTS` whole.
+	 */
+	const HANDLED_WHEN_ASKED_ERROR_EVENTS = new Set<string>([
+		"scenes:update:error",
+		"scenes:delete:error"
+	])
+
 	// Turns "characters:update:error" into "Characters update failed", etc.
 	// Used only as a fallback title when no specific listener has already
 	// produced a nicer one for a given event.
@@ -259,6 +333,11 @@
 	function handleAnyEvent(event: string, payload: any) {
 		if (event === "error" || !event.endsWith(":error")) return
 		if (HANDLED_ERROR_EVENTS.has(event)) return
+		if (
+			HANDLED_WHEN_ASKED_ERROR_EVENTS.has(event) &&
+			typeof payload?.requestId === "string"
+		)
+			return
 		const description =
 			typeof payload?.error === "string"
 				? payload.error
@@ -365,7 +444,8 @@
 			event.preventDefault()
 			const keepFocus = fullPageView !== null
 			if (link.view === "admin") adminRouter.go(link.href)
-			else helpRouter.go(link.slug, link.anchor)
+			else if (link.view === "help") helpRouter.go(link.slug, link.anchor)
+			else applyMessagesDigest(panelsCtx, link)
 			void openView(link.view, { toggle: false, fullPage: keepFocus })
 		}
 		document.addEventListener("click", onClick, true)
@@ -535,9 +615,10 @@
 		// through getOrderedEntries) lists things in the same sequence the rail
 		// does rather than in its own.
 		leftNavOrder: [
+			"models",
+			"loadouts",
 			"connections",
 			"sampling",
-			"pipelines",
 			"settings",
 			"users"
 		],
@@ -545,6 +626,7 @@
 			"sessions",
 			"characters",
 			"lorebooks",
+			"conversations",
 			"tags",
 			"activity"
 		],
@@ -661,6 +743,47 @@
 	let hasUser = $derived(!!userCtx.user)
 	let shouldShowApp = $derived(isSettingsLoaded && hasUser)
 	let isAdmin = $derived(!!userCtx.user?.isAdmin)
+
+	// The one subscriber to the `conversations:` family: the Messages list,
+	// open pages and the unread count the rail's Messages dot reads
+	// (contexts/conversations.svelte.ts). It toasts nothing.
+	const conversationsCtx = provideConversations({
+		systemSettings: systemSettingsCtx,
+		userCtx
+	})
+	// The Messages view's address is the conversation (or person) on screen,
+	// which the view tells the context (`setViewing`).
+	registerViewAddress("conversations", () => conversationsCtx.address)
+	// …and, while it is the view in Focus on a desk, the bar follows the
+	// conversation it moves to. Replaced, never pushed: Back steps out of
+	// Focus, as it does for every view without its own router. Only a MOVE
+	// writes: entering Focus already wrote the address (the Focus → address
+	// effect), and on a reload the view has not yet said where it is — the
+	// bar's `/messages/12` must not be overwritten by the context's first
+	// `/messages` before the view reads its digest.
+	let seenMessagesAddress: string | null = null
+	$effect(() => {
+		const address = conversationsCtx.address
+		const focused = fullPageView === "conversations" && desktop.matches
+		untrack(() => {
+			if (address === seenMessagesAddress) return
+			const moved = seenMessagesAddress !== null
+			seenMessagesAddress = address
+			if (!moved || !focused || location.pathname === address) return
+			const state = page.state as App.PageState
+			if (state.focus === "conversations") {
+				replaceState(address, state)
+			} else if (viewForPath(page.url.pathname) === "conversations") {
+				// Landed on the address itself (a reload): a real entry.
+				void goto(address, {
+					replaceState: true,
+					keepFocus: true,
+					noScroll: true
+				})
+			}
+		})
+	})
+
 	/**
 	 * 🚧 Whether `<main>`'s scroll column takes the interim reading width. See
 	 * the comment on that element for why it exists and when it goes.
@@ -695,6 +818,23 @@
 			delete panelsCtx.leftNav.users
 		}
 
+		// Messages (PLAN-private-messages-2026-10-12 §6.2): private messages
+		// between people, so only where there are people — accounts on, the
+		// pub's switch on (Admin › General › Messages between people) — and
+		// never in the single-user Android app. In Play, after Lorebooks.
+		if (
+			isAccountsEnabled &&
+			systemSettingsCtx.settings?.messagingEnabled !== false &&
+			!systemSettingsCtx.settings?.isAndroidWrapper
+		) {
+			panelsCtx.rightNav.conversations = {
+				icon: Icons.Mail,
+				title: "Messages"
+			}
+		} else {
+			delete panelsCtx.rightNav.conversations
+		}
+
 		// Administration is a view like any other (S3) — a registry entry, so
 		// `openPanel({ key: "admin" })`, the tab cap, the close button and the
 		// restore-from-localStorage pass all treat it as what it is. The rail
@@ -723,6 +863,14 @@
 				icon: Icons.SlidersHorizontal,
 				title: "Sampling"
 			}
+			panelsCtx.leftNav.models = {
+				icon: Icons.Boxes,
+				title: "Models"
+			}
+			panelsCtx.leftNav.loadouts = {
+				icon: Icons.Combine,
+				title: "Loadouts"
+			}
 			panelsCtx.leftNav.connections = {
 				icon: Icons.Cable,
 				title: "Connections"
@@ -731,17 +879,12 @@
 			delete panelsCtx.leftNav.prompts
 		}
 
-		// Outside the admin block, unlike every panel above it. 05 §0 is explicit
-		// that the pipeline view is "what everyone gets out of the box" — it is
-		// the surface where a normal user edits their own prompts, and the panels
-		// above are admin screens it is meant to replace for them. Access is
-		// enforced server-side per slot and per scope (12 §4), so the panel shows
-		// each person exactly what they may write rather than being all-or-nothing
-		// on a role.
-		panelsCtx.leftNav.pipelines = {
-			icon: Icons.Workflow,
-			title: "Pipelines"
-		}
+		// No Pipelines rail view (retired 2026-10-12, plan image-generation
+		// §15): pipelines live in Admin › Pipelines, prompts stay behind
+		// Admin. A member picks among the prompts there are in their own
+		// session's settings (Edit session › Settings › Pipelines) and writes
+		// none; the server refuses a member's prompt write either way
+		// (`promptOptionGate`).
 	})
 
 	/* ── views: the tab model behind the rail ──────────────────────────── */
@@ -1062,6 +1205,12 @@
 					adminRouter.adopt(location.pathname + location.search)
 				if (routeView === "help")
 					helpRouter.adopt(location.pathname + location.hash)
+				// Messages' address names a conversation or a person; the view
+				// reads it from the digest (`viewConversationId`, `viewPersonId`).
+				if (routeView === "conversations") {
+					const place = messagesAddressOf(location.pathname)
+					if (place) applyMessagesDigest(panelsCtx, place)
+				}
 				openedFromRoute = true
 				syncedFocus = isDesktop ? routeView : null
 				void openView(routeView, { toggle: false, fullPage: isDesktop })
@@ -1351,8 +1500,20 @@
 	]
 
 	/** Activity lives at the foot of the rail, not among the content views. */
-	const CONTENT_ORDER = ["sessions", "characters", "lorebooks", "tags"]
-	const SYSTEM_ORDER = ["connections", "sampling", "pipelines", "settings"]
+	const CONTENT_ORDER = [
+		"sessions",
+		"characters",
+		"lorebooks",
+		"conversations",
+		"tags"
+	]
+	const SYSTEM_ORDER = [
+		"connections",
+		"models",
+		"loadouts",
+		"sampling",
+		"settings"
+	]
 	/** The four the mobile bottom bar shows by name; the rest live under More. */
 	const BOTTOM_BAR_VIEWS = ["sessions", "characters", "lorebooks"]
 
@@ -1697,31 +1858,48 @@
 	/** Unread notifications. */
 	let activityWaitingCount = $derived(notifications.unread.length)
 	let activityDot = $derived(worseDot(null, notifications.worst))
-	/** The phone Views button's one dot: Activity's, or Admin's if worse. */
+	/** Unread messages: the Messages item's gold dot. */
+	let unreadMessages = $derived(conversationsCtx.unreadTotal)
+	/**
+	 * The phone Views button's one dot: Activity's, Admin's or Messages'
+	 * (attention), the worst of them.
+	 */
 	let viewsDot = $derived(
-		worseDot(activityDot, isAdmin ? adminHealth.worst : null)
+		worseDot(
+			worseDot(activityDot, isAdmin ? adminHealth.worst : null),
+			unreadMessages > 0 ? "attention" : null
+		)
 	)
-	const ADMIN_DOT_WORDS: Record<DotLevel, string> = {
-		error: "something is broken",
-		attention: "something needs you"
-	}
 	/** The phone Views button's name: what is open, then what its dot says. */
 	function viewsLabel(entry: RailEntry): string {
 		const parts = [entry.title]
 		if (openViews.length > 0) parts.push(`${openViews.length} open`)
 		if (activityWaitingCount > 0)
 			parts.push(`${activityWaitingCount} waiting on you`)
+		const unreadWords = unreadMessagesWords(unreadMessages)
+		if (unreadWords) parts.push(unreadWords)
 		if (isAdmin && adminHealth.worst)
 			parts.push(`Admin: ${ADMIN_DOT_WORDS[adminHealth.worst]}`)
 		return parts.join(", ")
 	}
-	/** An item's accessible name with what its dot says, in words. */
-	function railLabel(entry: RailEntry): string {
-		if (entry.key === "activity" && activityWaitingCount > 0)
-			return `${entry.title}, ${activityWaitingCount} waiting on you`
-		if (entry.key === "admin" && adminHealth.worst)
-			return `${entry.title}, ${ADMIN_DOT_WORDS[adminHealth.worst]}`
-		return entry.title
+	/**
+	 * What the rail knows about one item when it draws its dots. The words
+	 * those dots say, and which ones the wide rail alone draws, live in
+	 * `shell/railDots.ts` (less-confusing B1, B2).
+	 */
+	function railDotFacts(entry: RailEntry): RailDotFacts {
+		return {
+			key: entry.key,
+			wide: railWide,
+			openNotShowing:
+				entry.kind === "view" &&
+				!isRailActive(entry) &&
+				openViews.includes(entry.key),
+			writing: openSessionCtx.isGenerating && fullPageView !== null,
+			waiting: activityWaitingCount,
+			adminWorst: adminHealth.worst,
+			unreadMessages
+		}
 	}
 
 	/* ── persistence ───────────────────────────────────────────────────── */
@@ -1936,7 +2114,9 @@
 	// The one subscriber to the card-import events; views take the outcome
 	// from this context (contexts/characterImports.svelte.ts).
 	provideCharacterImports()
-
+	// The connections list, model sync and the one way to choose a model, for
+	// every view that shows connections (contexts/connections.svelte.ts).
+	provideConnections({ systemSettings: systemSettingsCtx })
 	/**
 	 * **Jump** — the shell owns the overlay; the views own their search boxes.
 	 *
@@ -2387,6 +2567,9 @@
 			other half, but this makes the shell structurally unable to move
 			regardless of what a panel's content does.
 		-->
+		<!-- No fill of its own: the wrapper above paints the page's ground and
+		     the person's background image is drawn between the two, so a fill
+		     here hides the image (STYLE-GUIDE §5.1, Grounds in the shell). -->
 		<div
 			class="relative z-10 flex h-svh max-w-full min-w-full flex-1 flex-col overflow-clip lg:flex-row"
 		>
@@ -2455,10 +2638,8 @@
 					{/if}
 
 					{@const isActive = isRailActive(entry)}
-					{@const isOpenTab =
-						entry.kind === "view" &&
-						!isActive &&
-						openViews.includes(entry.key)}
+					{@const dotFacts = railDotFacts(entry)}
+					{@const isOpenTab = railShowsOpenDot(dotFacts)}
 
 					{#if entry.kind === "user"}
 						<!-- The account row, and with it the one rail item that
@@ -2520,8 +2701,8 @@
 							type="button"
 							data-rail-item
 							tabindex={i === railFocusIndex ? 0 : -1}
-							title={railWide ? undefined : railLabel(entry)}
-							aria-label={railLabel(entry)}
+							title={railTitle(entry.title, dotFacts)}
+							aria-label={railLabel(entry.title, dotFacts)}
 							aria-current={isActive ? "true" : undefined}
 							class="focus-visible:outline-primary-500 relative flex shrink-0 items-center rounded-[10px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 {railWide
 								? 'h-10 w-full gap-3 px-3'
@@ -2568,17 +2749,17 @@
 
 							{#if isOpenTab}
 								<!-- This view has a tab but is not the one on
-								     screen. -->
+								     screen. Wide rail only, at the row's end
+								     (`railShowsOpenDot`); the row's title says
+								     "still open". -->
 								<span
-									class="bg-surface-500 size-1.5 rounded-full {railWide
-										? 'shrink-0'
-										: 'absolute right-[7px] bottom-[7px]'}"
+									class="bg-surface-500 size-1.5 shrink-0 rounded-full"
 									aria-hidden="true"
 								></span>
 							{/if}
 							{#if entry.key === "admin" && adminHealth.worst}
-								<!-- Something in the admin area needs you: red for
-								     broken or needed-and-missing, gold for act on it. -->
+								<!-- Something in the admin area: red for broken, gold
+								     for needs you (a chat model not yet chosen is gold). -->
 								<span
 									class="{adminHealth.worst === 'error'
 										? 'bg-error-500'
@@ -2589,10 +2770,22 @@
 									aria-hidden="true"
 								></span>
 							{/if}
-							{#if entry.key === "sessions" && openSessionCtx.isGenerating && fullPageView !== null}
+							{#if entry.key === "sessions" && dotFacts.writing}
 								<!-- The session under a focused view is writing. -->
 								<span
 									class="bg-warning-500 absolute size-2 animate-pulse rounded-full motion-reduce:animate-none {railWide
+										? 'top-[7px] left-[27px]'
+										: 'top-[9px] right-[9px]'}"
+									style="box-shadow: 0 0 0 2px {RAIL_BG};"
+									aria-hidden="true"
+								></span>
+							{/if}
+							{#if railShowsMessagesDot(dotFacts)}
+								<!-- An unread message: gold, the attention colour —
+								     the same moment its notification lights the
+								     Activity dot. The count is in the name. -->
+								<span
+									class="bg-primary-500 absolute size-2 rounded-full {railWide
 										? 'top-[7px] left-[27px]'
 										: 'top-[9px] right-[9px]'}"
 									style="box-shadow: 0 0 0 2px {RAIL_BG};"
@@ -2680,7 +2873,7 @@
 			<div
 				bind:this={sidebarRef}
 				data-shell-sidebar
-				class="bg-surface-50-950 panel-edge fixed inset-0 z-[45] flex flex-col overflow-hidden lg:static lg:z-auto lg:border-r {dragWidth !==
+				class="bg-surface-50-950 panel-edge fixed inset-0 z-[45] flex flex-col overflow-hidden lg:static lg:z-auto lg:rounded-r-container lg:border-r {dragWidth !==
 				null
 					? 'lg:flex-none'
 					: fullPageView || halfWidth
@@ -2853,7 +3046,7 @@
 				     Skeleton modal, not in the view's own tree. -->
 				{#each openViews as key (key)}
 					<div
-						class="@container/view flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto"
+						class="@container/view text-foreground flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto"
 						hidden={key !== activeView}
 						data-sidebar-view={key}
 					>
@@ -3259,15 +3452,14 @@
 			<AdminView bind:onclose={viewCloseGates[key]} />
 		{:else if key === "sampling"}
 			<SamplingSidebar bind:onclose={viewCloseGates[key]} />
+		{:else if key === "models"}
+			<ModelsSidebar bind:onclose={viewCloseGates[key]} />
+		{:else if key === "loadouts"}
+			<LoadoutsSidebar bind:onclose={viewCloseGates[key]} />
 		{:else if key === "connections"}
 			<ConnectionsSidebar bind:onclose={viewCloseGates[key]} />
 		{:else if key === "users"}
 			<UsersSidebar bind:onclose={viewCloseGates[key]} />
-		{:else if key === "pipelines"}
-			<PipelinesSidebar
-				bind:onclose={viewCloseGates[key]}
-				sessionId={sessionIdInView}
-			/>
 		{:else if key === "help"}
 			<!-- No `bind:onclose`: the documentation holds no unsaved work, so
 			     there is no gate for it to register. -->
@@ -3290,8 +3482,15 @@
 			<LorebooksSidebar bind:onclose={viewCloseGates[key]} />
 		{:else if key === "tags"}
 			<TagsSidebar bind:onclose={viewCloseGates[key]} />
+		{:else if key === "conversations"}
+			<ConversationsSidebar bind:onclose={viewCloseGates[key]} />
 		{/if}
 	{/snippet}
+{:else}
+	<!-- Settings or the user not here yet. The gate above stays (pages must
+	     not mount before `setInterestUser`); this is only what to look at
+	     meanwhile, instead of an empty page (less-confusing B3). -->
+	<ShellLoading {railWide} />
 {/if}
 
 <!-- Connection Timeout Modal -->
@@ -3303,6 +3502,9 @@
      whichever screen they are on. -->
 <PipelineReviewModal />
 <CapPauseDialog />
+<!-- The costed confirmations of choosing a model (re-embed, re-scan), once
+     for every view that can choose one (contexts/connections.svelte.ts). -->
+<ConnectionsDialogs />
 
 <!-- The run inspector (handover §4.8): what a run did, anchored to whatever
      produced it. Mounted globally for the same reason as the card above — a

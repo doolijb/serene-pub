@@ -133,7 +133,11 @@ import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
 import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
 import { bookLoreWriteMode } from "$lib/server/state/loreWriteMode"
 import { LORE_WRITES_OFF } from "$lib/shared/lorebooks/loreWriteMode"
-import { assertOwnedBook, findOwnedBook } from "$lib/server/utils/ownedBook"
+import {
+	assertOwnedBook,
+	assertReadableBook,
+	findOwnedBook
+} from "$lib/server/utils/ownedBook"
 
 // Resume states saved before each scene — keyed by "userId:lorebookId"
 const buildResumeStates = new Map<string, GraphBuilderResumeState>()
@@ -685,7 +689,10 @@ export const narrativeGraphListHandler: Handler<
 	async (socket, params: Sockets.NarrativeGraph.List.Params, emitToUser) => {
 		const userId = socket.user!.id
 
-		await assertOwnedBook(db, userId, params.lorebookId)
+		// A read: owner, share recipient or admin (lane A3).
+		await assertReadableBook(db, userId, params.lorebookId, {
+			isAdmin: !!socket.user?.isAdmin
+		})
 
 		const res = await buildGraphList(params.lorebookId)
 		emitToUser("narrativeGraph:list", res)
@@ -923,8 +930,8 @@ async function buildGraph(
 	// builder as a null.
 	if (!graphSampling) {
 		throw new Error(
-			"No sampling config is set for chat, and building the graph needs one. " +
-				"Choose one in Admin → Defaults."
+			"The Reply loadout has no sampling config, and building the graph needs one. " +
+				"Choose one in Admin › Models › Loadouts."
 		)
 	}
 
@@ -5532,7 +5539,10 @@ export const narrativeGraphListMergeLogsHandler: Handler<
 		const userId = socket.user!.id
 		const { lorebookId } = params
 
-		await assertOwnedBook(db, userId, lorebookId)
+		// A read: owner, share recipient or admin (lane A3).
+		await assertReadableBook(db, userId, lorebookId, {
+			isAdmin: !!socket.user?.isAdmin
+		})
 
 		const logs = await db.query.bindingMergeLogs.findMany({
 			where: eq(schema.bindingMergeLogs.lorebookId, lorebookId),
@@ -5569,7 +5579,10 @@ export const narrativeGraphDuplicateCandidatesHandler: Handler<
 		const userId = socket.user!.id
 		const { lorebookId } = params
 
-		await assertOwnedBook(db, userId, lorebookId)
+		// A read: owner, share recipient or admin (lane A3).
+		await assertReadableBook(db, userId, lorebookId, {
+			isAdmin: !!socket.user?.isAdmin
+		})
 
 		const res = await buildDuplicateCandidates(lorebookId)
 		emitToUser("narrativeGraph:duplicateCandidates", res)

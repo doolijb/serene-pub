@@ -249,6 +249,16 @@ async function pushPresets(socket: any): Promise<void> {
 	await pushSessionPresetsAfter(socket)
 }
 
+/**
+ * Re-send Admin › Scripts' list to every admin socket that declared it: a
+ * plugin's install, switch or uninstall brings its script kinds and its
+ * pipelines' seams in or out (R67), which moves the list and every fit.
+ */
+async function pushScripts(socket: any): Promise<void> {
+	const { pushScriptsAfter } = await import("./pipelines")
+	await pushScriptsAfter(socket)
+}
+
 /** Best-effort: keep the live manager in step with the DB (only when on). */
 async function syncManager(pluginId: string): Promise<void> {
 	if (!pluginsEnabled()) return
@@ -383,6 +393,8 @@ async function syncDeclarations(): Promise<void> {
 	} catch (e) {
 		console.warn("[plugins] template sync failed:", e)
 	}
+	// …and the loadouts it declares (I12; §16 follow-up D3).
+	await seedPluginLoadoutsQuietly()
 	try {
 		// …and the layouts a package ships for a genre (session layout v2
 		// §4.1). Disabling marks them withdrawn rather than deleting, since a
@@ -402,6 +414,24 @@ async function syncDeclarations(): Promise<void> {
 		console.warn("[plugins] session-layout sync failed:", e)
 	}
 	await syncWidgetStylesQuietly()
+}
+
+/**
+ * Every enabled plugin's manifest `loadouts[]` (I12; §16 follow-up D3):
+ * seeded on enable and install as well as at boot, idempotent by declared
+ * id, unfilled and unmerged. A plugin switched off keeps its rows — a person
+ * may have filled them — and the Loadouts grid chips them *plugin off*. Like
+ * the widget styles below, a loadout row is data, so this runs whether or not
+ * the sandbox is on.
+ */
+async function seedPluginLoadoutsQuietly(): Promise<void> {
+	try {
+		const { seedPluginLoadouts } = await import("$lib/server/loadouts/seed")
+		const r = await seedPluginLoadouts(db)
+		for (const line of r.refused) console.warn(`[plugins] loadout refused: ${line}`)
+	} catch (e) {
+		console.warn("[plugins] loadout seed failed:", e)
+	}
 }
 
 /**
@@ -483,17 +513,17 @@ export const pluginsInstall: Handler<
 		// a missing dependency found now is a sentence; found at runtime it
 		// is a broken session.
 		{
-			const { missingRequirements, requirementsOf } = await import(
-				"$lib/server/plugins/requirements"
-			)
+			const {
+				missingRequirements,
+				missingRequirementsMessage,
+				requirementsOf
+			} = await import("$lib/server/plugins/requirements")
 			const missing = await missingRequirements(
 				db,
 				requirementsOf(params.manifest)
 			)
 			if (missing.length) {
-				const msg =
-					`This package requires ${missing.join(", ")} — not installed ` +
-					`on this pub. Install what it builds on first.`
+				const msg = missingRequirementsMessage("This package", missing)
 				emitToUser("error", { error: msg })
 				throw new Error(msg)
 			}
@@ -563,6 +593,11 @@ export const pluginsInstall: Handler<
 			const annexRefused = registerPluginAnnex(params.manifest, params.pluginId)
 			if (annexRefused.length)
 				console.warn(`[plugins] '${params.pluginId}' annex fields refused: ${annexRefused.join("; ")}`)
+			// And the hook points it declares (R54; `pluginHookPoints.ts`).
+			const { registerPluginHookPoints } = await import("$lib/server/plugins/pluginHookPoints")
+			const hooksRefused = registerPluginHookPoints(params.manifest, params.pluginId)
+			if (hooksRefused.length)
+				console.warn(`[plugins] '${params.pluginId}' hook points refused: ${hooksRefused.join("; ")}`)
 		}
 		// The frame surfaces' documents (20 §12), replaced wholesale like the
 		// bundle. Refused paths are logged, not fatal — a plugin with one bad
@@ -583,6 +618,7 @@ export const pluginsInstall: Handler<
 		// plugin it replaced hears `disable` on the way out.
 		await afterReinstall(params.pluginId, wasOn)
 		await pushPresets(socket)
+		await pushScripts(socket)
 		return { plugins: await emitList(emitToUser) }
 	}
 }
@@ -601,10 +637,13 @@ export const pluginsSetEnabled: Handler<
 			await fireLifecycle(getManager(), params.pluginId, "disable")
 		await setEnabled(db, params.pluginId, params.enabled)
 		await syncManager(params.pluginId)
+		// Its loadouts, sandbox on or off (`syncManager` reconciles only when on).
+		if (params.enabled) await seedPluginLoadoutsQuietly()
 		// `update` (if a replaced bundle owes one) then `enable`, AFTER.
 		if (pluginsEnabled() && !wasOn && params.enabled)
 			await afterEnable(db, getManager(), params.pluginId)
 		await pushPresets(socket)
+		await pushScripts(socket)
 		return { plugins: await emitList(emitToUser) }
 	}
 }
@@ -680,6 +719,7 @@ export const pluginsUninstall: Handler<
 		// Its shipped widget styles go with it, sandbox on or off.
 		else await syncWidgetStylesQuietly()
 		await pushPresets(socket)
+		await pushScripts(socket)
 		return { plugins: await emitList(emitToUser) }
 	}
 }
@@ -715,16 +755,7 @@ export const pluginsInstallLocal: Handler<
 > = {
 	event: "plugins:installLocal",
 	handler: async (socket, params, emitToUser) => {
-		requireAdmin(socket, emitToUser)
-		if (!pluginsEnabled()) {
-			const msg =
-				"The plugin subsystem is off. A dev install projects a genre and its " +
-				"pipelines into rows the session surface reads, so it asks for " +
-				"SP_PLUGINS_ENABLED rather than landing them on a pub that has " +
-				"the subsystem switched off."
-			emitToUser("error", { error: msg })
-			throw new Error(msg)
-		}
+		requirePackageInstall(socket, emitToUser)
 		const dir = typeof params.dir === "string" ? params.dir.trim() : ""
 		if (!dir || /^[a-z][a-z0-9+.-]*:\/\//i.test(dir)) {
 			const msg =
@@ -735,27 +766,58 @@ export const pluginsInstallLocal: Handler<
 			throw new Error(msg)
 		}
 
-		const { installPluginPackage } = await import(
-			"$lib/server/plugins/install"
-		)
-		const report = await installPluginPackage(db, dir)
-		for (const line of [...report.warnings, ...report.refused])
-			console.warn(`[plugins] installLocal '${report.pluginId}': ${line}`)
-		await afterReinstall(report.pluginId, report.wasEnabled)
-		// The manifest's own declarations — presets, prompts, engines, event
-		// subscriptions, layouts — are reconciled from the plugin rows, so they
-		// land the moment the row exists (and again on enable).
-		await syncDeclarations()
-		await pushPresets(socket)
-		return {
-			pluginId: report.pluginId,
-			specs: report.specs,
-			configs: report.configs,
-			genres: report.genresDeclared,
-			files: report.files.stored,
-			warnings: [...report.warnings, ...report.refused],
-			plugins: await emitList(emitToUser)
-		}
+		return installPackageFromDir(socket, dir, emitToUser, "installLocal")
+	}
+}
+
+/**
+ * The two refusals every package install shares — `plugins:installLocal` and
+ * `plugins:installPackage` (the upload half) both ask for an admin and for
+ * `SP_PLUGINS_ENABLED`, with this wording.
+ */
+export function requirePackageInstall(socket: any, emitToUser: Emit): void {
+	requireAdmin(socket, emitToUser)
+	if (!pluginsEnabled()) {
+		const msg =
+			"The plugin subsystem is off. A dev install projects a genre and its " +
+			"pipelines into rows the session surface reads, so it asks for " +
+			"SP_PLUGINS_ENABLED rather than landing them on a pub that has " +
+			"the subsystem switched off."
+		emitToUser("error", { error: msg })
+		throw new Error(msg)
+	}
+}
+
+/**
+ * Install the package folder at `dir` and bring the pub in step — the shared
+ * tail of `plugins:installLocal` and `plugins:installPackage`. The caller has
+ * already passed {@link requirePackageInstall}.
+ */
+export async function installPackageFromDir(
+	socket: any,
+	dir: string,
+	emitToUser: Emit,
+	via: string
+): Promise<Sockets.Plugins.InstallLocal.Response> {
+	const { installPluginPackage } = await import("$lib/server/plugins/install")
+	const report = await installPluginPackage(db, dir)
+	for (const line of [...report.warnings, ...report.refused])
+		console.warn(`[plugins] ${via} '${report.pluginId}': ${line}`)
+	await afterReinstall(report.pluginId, report.wasEnabled)
+	// The manifest's own declarations — presets, prompts, engines, event
+	// subscriptions, layouts — are reconciled from the plugin rows, so they
+	// land the moment the row exists (and again on enable).
+	await syncDeclarations()
+	await pushPresets(socket)
+	await pushScripts(socket)
+	return {
+		pluginId: report.pluginId,
+		specs: report.specs,
+		configs: report.configs,
+		genres: report.genresDeclared,
+		files: report.files.stored,
+		warnings: [...report.warnings, ...report.refused],
+		plugins: await emitList(emitToUser)
 	}
 }
 

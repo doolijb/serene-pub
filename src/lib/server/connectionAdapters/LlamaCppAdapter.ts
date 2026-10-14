@@ -355,6 +355,14 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 				// can be copied: the level has to become a token count first,
 				// and a budget beside it has to win. See `reasoningParams`.
 				if (isReasoningKey(key)) continue
+				// `[[id, bias], …]`, the typed form both routes read, from the
+				// resolved ids (`resolveLogitBias`); nothing resolved, nothing
+				// sent.
+				if (key === "logitBias") {
+					const pairs = this.logitBiasPairs()
+					if (pairs) result.logit_bias = pairs
+					continue
+				}
 				result[llamaCppSamplingKeyMap[key]] = value
 			}
 		}
@@ -442,6 +450,9 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 		const endpoint = useChat
 			? `${baseUrl}/v1/chat/completions`
 			: `${baseUrl}/completion`
+
+		// Before either branch's synchronous key map reads the ids.
+		await this.resolveLogitBias()
 
 		let req: Record<string, any>
 

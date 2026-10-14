@@ -50,6 +50,7 @@ async function scriptRow(
 const site = (accepts: string[]) =>
 	({
 		nodeKey: "rank",
+		at: "in:candidates",
 		slot: "scripts",
 		phase: "before",
 		port: "candidates",
@@ -128,7 +129,7 @@ describe("band intents through a script chain", () => {
 		// recorded as such; the chain-level verdict is a note.
 		expect(r.applications).toMatchObject([{ scriptId: id, result: "ok" }])
 		expect(r.notes).toEqual([
-			"scripts: the scripts chain on candidates returned a non-list where candidates were expected — value kept, band intents kept"
+			"scripts at in:candidates (scripts on candidates) returned a non-list where candidates were expected — value kept, band intents kept"
 		])
 	})
 

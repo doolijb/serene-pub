@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "fs"
 import path from "path"
+import { writeComponentClasses } from "./component-classes.js"
 
 const buildFile = "build/index.js"
 
@@ -273,3 +274,13 @@ export { server, host, path, port }
 )
 console.log("✅ Server build output customized successfully!")
 console.log("✅ Wrote build/index.js wrapper (Socket.IO shares the app server)")
+
+// ── The class list authored components are checked against (D5) ────────────
+//
+// A class nothing in the app uses is not in the built CSS and does nothing in
+// a component; the compile service warns about one, in the editor's Problems,
+// from this list (src/lib/server/components/compile.ts loads it).
+{
+	const r = writeComponentClasses("build")
+	console.log(`✅ Wrote ${r.outFile} (${r.classes} classes from ${r.stylesheets} stylesheets)`)
+}

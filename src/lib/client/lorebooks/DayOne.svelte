@@ -178,8 +178,9 @@
 	<p class="text-surface-700-300 text-sm">
 		Nesting, dating, relationships, branches and the retrieval controls
 		all work in this book; they have nothing to show until it has
-		entries. Cast, Time, Lives and Graph open from the views and lenses,
-		so you can add a cast member by hand before writing anything.
+		entries. Cast, Time, Lives and Graph open from the views and the
+		Show-as track, so you can add a cast member by hand before writing
+		anything.
 	</p>
 
 	<p class="text-surface-700-300 pt-2 text-xs">

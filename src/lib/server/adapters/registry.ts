@@ -84,14 +84,32 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 		// its preset's claim or the person's switch, not this map's.
 		embedding: async () =>
 			(await import("../embeddingAdapters/OpenAIEmbeddingAdapter"))
-				.default
-		// No `image`, and the manifest no longer claims `text->image` for this
-		// type either. It used to: the `openai-official` preset asserted it, the
-		// declaration was `probed`, so it resolved to `native`, the bind guard
-		// passed — and then `getImageAdapter` threw `No image adapter for
-		// connection type` minutes into a session. An image slot binding a
-		// connection with no image code at all is exactly the disagreement this
-		// registry now makes unmergeable.
+				.default,
+		// The OpenAI-images dialect: `/images/generations` and `/images/edits`
+		// on the same service — OpenAI, and the xAI and Together presets, and
+		// any compatible server that answers the route.
+		//
+		// This used to be a deliberate absence: the manifest once claimed
+		// `text->image` for this type with NO image module behind it, so an
+		// image slot bound an OpenAI connection and `getImageAdapter` threw
+		// `No image adapter for connection type` minutes into a session. It is
+		// safe now for two reasons: the module exists (the conformance test
+		// pins the manifest's keys to its methods), and which MODEL draws is
+		// the per-model modality gate (0172, `capabilityRefusal`) — a chat
+		// model listed as `text-gen` is refused for the Images job before
+		// anything is sent (DESIGN-image-generation §9.6, ruled: lift).
+		//
+		// The Gemini image dialect is folded in (`withGeminiImages`): a
+		// connection with the `google-gemini` preset or Google's address draws
+		// through Gemini's native `generateContent`, every other one through
+		// the OpenAI-images module above, unchanged.
+		image: async () => {
+			const [openai, gemini] = await Promise.all([
+				import("../imageAdapters/OpenAIImagesAdapter"),
+				import("../imageAdapters/GeminiImageAdapter")
+			])
+			return gemini.withGeminiImages(openai.default)
+		}
 	},
 
 	[CONNECTION_TYPE.LLAMACPP]: {
@@ -175,6 +193,27 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 		image: async () =>
 			(await import("../imageAdapters/KoboldCppManagedImageAdapter"))
 				.default
+	},
+
+	// 🚧 ComfyUI: image only, and a host this pub talks to — reads plus
+	// `/upload/image`, `/prompt` and `/interrupt`, never Manager routes (§4.9).
+	[CONNECTION_TYPE.COMFYUI]: {
+		image: async () =>
+			(await import("../imageAdapters/ComfyAdapter")).default
+	},
+
+	// 🚧 The hosted image dialects with a type of their own: image only.
+	[CONNECTION_TYPE.HORDE]: {
+		image: async () =>
+			(await import("../imageAdapters/HordeAdapter")).default
+	},
+	[CONNECTION_TYPE.NOVELAI]: {
+		image: async () =>
+			(await import("../imageAdapters/NovelAIImageAdapter")).default
+	},
+	[CONNECTION_TYPE.BFL]: {
+		image: async () =>
+			(await import("../imageAdapters/BflAdapter")).default
 	},
 
 	// ── Embeddings ──────────────────────────────────────────────────────────

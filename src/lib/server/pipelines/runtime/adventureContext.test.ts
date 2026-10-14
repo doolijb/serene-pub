@@ -267,6 +267,23 @@ describe("the keeper is given its vocabulary", () => {
 		)
 	})
 
+	it("tells Time passes the span the player chose, and no notch of its own (§15 G6)", async () => {
+		const pressed = (clockStep: unknown) =>
+			instructionsOf(
+				"core:task/build-keeper-context@1",
+				shipped("core:task/build-keeper-context", "adventure-clock"),
+				{ state: STATE, fields: FIELDS, clockStep }
+			)
+		const text = await pressed({ by: 3, unit: "hours" })
+		expect(text).toContain("Time passes: 3 hours. Say what the world is like once that time has gone by.")
+		expect(text).toContain("Move it on by as much as the span the player chose carries it")
+		expect(text).not.toContain("one step")
+		expect(await pressed({ by: -1, unit: "days" })).toContain("Time passes: 1 day back.")
+		// Unwired (or not a step), the prompt still reads: it names no amount.
+		for (const none of [undefined, { by: 0, unit: "hours" }, { by: 2, unit: "weeks" }])
+			expect(await pressed(none)).toContain("Time passes. Say what the world is like")
+	})
+
 	it("gives Rest and Time passes the same list", async () => {
 		for (const seed of ["adventure-rest", "adventure-clock"]) {
 			const text = await keeper(seed)

@@ -57,12 +57,21 @@ beforeEach(() => {
 	setInterestUser({ id: 1, isAdmin: false })
 	target = document.createElement("div")
 	document.body.append(target)
+	mountNotice(false)
+})
+
+/** Mounts the notice as an administrator or a member (`userCtx`). */
+function mountNotice(isAdmin: boolean) {
+	if (app) unmount(app)
+	target.innerHTML = ""
+	client.emits.length = 0
 	app = mount(RagNotice, {
 		target,
-		props: { sessionId: 7, totalMessages: 40 }
+		props: { sessionId: 7, totalMessages: 40 },
+		context: new Map([["userCtx", { user: { id: 1, isAdmin } }]])
 	})
 	flushSync()
-})
+}
 
 afterEach(() => {
 	if (app) unmount(app)
@@ -149,14 +158,14 @@ describe("the RAG notice", () => {
 		expect(text()).not.toMatch(/paused/i)
 		expect(text()).not.toContain("Indexing 12 of 40")
 		expect(text()).toContain(
-			"12 of 40 lorebook entries are indexed. The rest are waiting in the embedding queue."
+			"12 of 40 lorebook entries are indexed. The rest are waiting to be indexed."
 		)
 	})
 
-	test("names the model when the entries were embedded with another", () => {
+	test("names the model when the entries were indexed with another", () => {
 		reply(counts(5, 0, 5))
 		expect(text()).toContain(
-			"Lorebook entries were embedded with a different model and need re-indexing with test-model."
+			"Lorebook entries were indexed with a different model and need re-indexing with test-model."
 		)
 	})
 
@@ -239,5 +248,46 @@ describe("a guest's notice", () => {
 		})
 		flushSync()
 		expect(buttonNamed(/hide/i)!.disabled).toBe(false)
+	})
+})
+
+/**
+ * The notice offers the press its sentence names (less-confusing H2), and
+ * only to an administrator: the server refuses `vectorization:addToQueue` to
+ * anyone else, and Admin is theirs alone.
+ */
+describe("what the notice offers", () => {
+	const pressNamed = (pattern: RegExp) =>
+		[...target.querySelectorAll("button, a")].find((el) =>
+			pattern.test(el.textContent ?? "")
+		) as HTMLElement | undefined
+
+	test("Re-index now queues the session when its entries need re-indexing", () => {
+		mountNotice(true)
+		reply(counts(5, 0, 5))
+		const reindex = pressNamed(/re-index now/i)
+		expect(reindex, "a Re-index now press").toBeTruthy()
+		expect(pressNamed(/prioritize/i)).toBeUndefined()
+		reindex!.click()
+		flushSync()
+		expect(
+			client.emits.find((e) => e.event === "vectorization:addToQueue")
+				?.payload
+		).toEqual({ sessionId: 7 })
+	})
+
+	test("links an administrator to set up search by meaning when nothing is indexed", () => {
+		mountNotice(true)
+		reply(counts(4, 4))
+		const setup = pressNamed(/set up search by meaning/i)
+		expect(setup?.tagName).toBe("A")
+		expect(setup?.getAttribute("href")).toBe("/admin/defaults")
+		expect(pressNamed(/prioritize in queue/i)).toBeTruthy()
+	})
+
+	test("a member gets the sentence and nothing to queue or set up", () => {
+		reply(counts(5, 0, 5))
+		expect(text()).toContain("need re-indexing")
+		expect(pressNamed(/re-index|prioritize|set up/i)).toBeUndefined()
 	})
 })

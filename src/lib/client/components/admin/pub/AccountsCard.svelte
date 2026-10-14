@@ -197,7 +197,7 @@
 	/>
 	<p class="text-surface-600-400 text-sm">
 		{accountsOn
-			? "User accounts are on. This setting cannot be reversed. Add and manage people in People › Users."
+			? "User accounts are on. This setting cannot be reversed. Add and manage people in Pub › Users."
 			: "Turns on sign-in and multi-user support. This is a permanent change, and it is required before a tunnel can make this pub public."}
 	</p>
 </section>
@@ -231,7 +231,7 @@
 					</p>
 					<p class="text-surface-600-400 text-sm">
 						After this, every new person needs an account, which you
-						create in People › Users.
+						create in Pub › Users.
 					</p>
 
 					{#if !hasPassphrase}

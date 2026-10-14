@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { withoutShared } from "$lib/shared/utils/sharedRows"
 	import { refusedSwapsSentence } from "$lib/client/components/sessionForms/refusedSwaps"
 	import { getContext } from "svelte"
 	import { page } from "$app/state"
@@ -111,9 +112,8 @@
 			session: {
 				name: name.trim(),
 				scenario: scenario.trim(),
-				lorebookId: null,
-				samplingConfigId: null
-			} as any,
+				lorebookId: null
+			},
 			characterIds: selectedCharacters.map((c) => c.id),
 			personaIds: selectedPersonas.map((p) => p.id),
 			characterPositions: Object.fromEntries(
@@ -124,7 +124,7 @@
 	}
 
 	function handleCharactersList(msg: Sockets.Characters.List.Response) {
-		characters = msg.characterList || []
+		characters = withoutShared(msg.characterList) // shared rows are read and copy only (PLAN-private-messages §6.7, Q3)
 		const preselectId = Number(page.url.searchParams.get("characterId"))
 		if (preselectId) {
 			const found = characters.find((c) => c.id === preselectId)
@@ -181,10 +181,10 @@
 </script>
 
 <svelte:head>
-	<title>New session — Document View — Serene Pub</title>
+	<title>Start a session — Document View — Serene Pub</title>
 </svelte:head>
 
-<h1>New session</h1>
+<h1>Start a session</h1>
 <p><a href="/document-view/sessions">Back to Sessions</a></p>
 
 {#if error}
@@ -329,7 +329,6 @@
 		{/if}
 	</div>
 
-
 	<div class="a11y-field">
 		<label for="a11y-session-scenario">Scenario</label>
 		<p class="a11y-hint">
@@ -385,6 +384,6 @@
 	</div>
 
 	<button type="submit" class="a11y-btn" disabled={saving}>
-		{saving ? "Creating…" : "Create session"}
+		{saving ? "Starting…" : "Start"}
 	</button>
 </form>

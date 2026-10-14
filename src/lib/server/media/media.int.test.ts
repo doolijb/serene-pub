@@ -241,6 +241,11 @@ describe("mediaRelPath — deepest known parent wins", () => {
 		expect(mediaRelPath({ ...base, characterId: 2 }, "h", "png")).toBe(
 			path.join("data/users/7/characters/2", "h.png")
 		)
+		// A private conversation's upload has its own bucket
+		// (PLAN-private-messages §4 "Uploads").
+		expect(mediaRelPath({ ...base, conversationId: 4 }, "h", "png")).toBe(
+			path.join("data/users/7/conversations/4", "h.png")
+		)
 		expect(mediaRelPath(base, "h", "png")).toBe(
 			path.join("data/users/7/uploads", "h.png")
 		)
@@ -353,6 +358,68 @@ describe("canViewMedia — two layers", () => {
 		})
 		expect(await canViewMedia(created.file, owner.id)).toBe(true)
 		expect(await canViewMedia(created.file, other.id)).toBe(false)
+	})
+
+	test("a conversation's file is every member's to view, and no one else's", async () => {
+		const { createMedia, canViewMedia } = await import("./index")
+		const owner = await createTestUser(db, "media-conv-owner")
+		const member = await createTestUser(db, "media-conv-member")
+		const stranger = await createTestUser(db, "media-conv-stranger")
+		const admin = await createTestUser(db, "media-conv-admin")
+		await db
+			.update(schema.users)
+			.set({ isAdmin: true })
+			.where(eq(schema.users.id, admin.id))
+		const [conversation] = await db
+			.insert(schema.conversations)
+			.values({ kind: "group", name: "G", hostUserId: owner.id })
+			.returning()
+		await db.insert(schema.conversationMembers).values([
+			{ conversationId: conversation.id, userId: owner.id },
+			{ conversationId: conversation.id, userId: member.id }
+		])
+		const created = await createMedia(db, {
+			userId: owner.id,
+			conversationId: conversation.id,
+			bytes: png(14)
+		})
+		expect(created.file.conversationId).toBe(conversation.id)
+		const [original] = await variantsOf(created.file.id)
+		expect(original.path).toBe(
+			path.join(
+				`data/users/${owner.id}/conversations/${conversation.id}`,
+				`${created.file.hash}.png`
+			)
+		)
+
+		expect(await canViewMedia(created.file, owner.id)).toBe(true)
+		expect(await canViewMedia(created.file, member.id)).toBe(true)
+		expect(await canViewMedia(created.file, stranger.id)).toBe(false)
+		// Membership is the only authority: an administrator gets no bypass.
+		expect(await canViewMedia(created.file, admin.id)).toBe(false)
+
+		// Leaving the conversation ends the view.
+		await db
+			.delete(schema.conversationMembers)
+			.where(eq(schema.conversationMembers.userId, member.id))
+		expect(await canViewMedia(created.file, member.id)).toBe(false)
+	})
+
+	test("a character's file follows a share of the character", async () => {
+		const { createMedia, canViewMedia } = await import("./index")
+		const owner = await createTestUser(db, "media-share-owner")
+		const recipient = await createTestUser(db, "media-share-recipient")
+		const c = await character(owner.id, "Shared by share")
+		const created = await createMedia(db, {
+			userId: owner.id,
+			characterId: c.id,
+			bytes: png(15)
+		})
+		expect(await canViewMedia(created.file, recipient.id)).toBe(false)
+		await db
+			.insert(schema.characterShares)
+			.values({ characterId: c.id, userId: recipient.id })
+		expect(await canViewMedia(created.file, recipient.id)).toBe(true)
 	})
 
 	// A fourth test used to sit here: that a thumbnail was judged by its

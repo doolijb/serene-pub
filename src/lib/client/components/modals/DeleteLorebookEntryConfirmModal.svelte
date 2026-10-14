@@ -15,8 +15,8 @@
 		onOpenChange,
 		onConfirm,
 		onCancel,
-		title = "Delete entry?",
-		message = "Are you sure you want to delete this lorebook entry? This action cannot be undone."
+		title = "Delete this entry?",
+		message = "Its relationships and amendments are deleted with it. This cannot be undone."
 	}: Props = $props()
 </script>
 
@@ -41,7 +41,7 @@
 				</article>
 				<footer class="flex justify-end gap-4">
 					<button
-						class="btn preset-filled-surface-500"
+						class="btn preset-tonal-surface"
 						onclick={onCancel}
 					>
 						Cancel

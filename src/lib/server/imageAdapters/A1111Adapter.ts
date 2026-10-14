@@ -2,6 +2,7 @@
  * The A1111-compatible image API — one adapter, four backends.
  *
  *   POST /sdapi/v1/txt2img   — render
+ *   POST /sdapi/v1/img2img   — render from a starting canvas (`init`, `mask`)
  *   GET  /sdapi/v1/progress  — how far along, with a partial frame
  *   POST /sdapi/v1/interrupt — stop the running render
  *   GET  /sdapi/v1/sd-models — the checkpoints installed
@@ -34,8 +35,8 @@ import {
 	BaseImageAdapter,
 	Translation,
 	type GeneratedMediaItem,
+	type DrawingSheet,
 	type ImageAdapterExports,
-	type ImageCapabilities,
 	type ImageGenOptions,
 	type ImageGenRequest,
 	type ImageGenResult
@@ -63,32 +64,105 @@ const PROFILE_SCHEMA: SettingsSchema = {
 		description:
 			"A1111 `override_settings`, as JSON — applied for this request only. For anything the shared parameters have no name for.",
 		default: {}
+	},
+	alwaysonScripts: {
+		type: "text",
+		format: "json",
+		label: "Always-on scripts",
+		description:
+			"A1111 `alwayson_scripts`, as JSON — ControlNet, IP-Adapter and the like, sent with every render from this connection.",
+		default: {}
 	}
 }
 
 const PROFILE_DEFAULTS = {
 	restoreFaces: false,
-	overrideSettings: {} as Record<string, unknown>
+	overrideSettings: {} as Record<string, unknown>,
+	alwaysonScripts: {} as Record<string, unknown>
 }
 
-const CAPABILITIES: ImageCapabilities = {
+/**
+ * The drawing sheet of an A1111-compatible server (AUTOMATIC1111, Forge,
+ * SD.Next).
+ *
+ * `clipSkip: false` because this adapter does not send it: it lives in
+ * `override_settings` on the builds that have it at all, which is profile.
+ * `references: null` because the flat API has no reference input of its own —
+ * an IP-Adapter is an always-on script, which is profile too. `perCall` is
+ * what `n_iter` will render in one request without a memory spike.
+ */
+export const A1111_SHEET: DrawingSheet = {
+	negative: true,
+	seed: true,
+	steps: true,
+	cfg: true,
+	sampler: true,
+	clipSkip: false,
+	// Free pixels on an 8-pixel grid, unlike the fixed-list backends.
+	size: { kind: "free", step: 8, min: 64, max: 2048 },
+	references: null,
+	init: true,
+	mask: true,
+	transparent: "none",
+	perCall: 8,
+	outputs: { perRun: 1, keyed: false },
 	progress: true,
 	preview: true,
 	cancel: true,
-	// Asked for; whether it arrives depends on the backend, and the result says
-	// which happened rather than this claiming to know in advance.
-	batch: true,
-	// No `img2img` key any more, and its absence is not an oversight: this class
-	// implements `generateImage` and NOT `editImage`, and that is now the single
-	// statement of "txt2img-only". The flag used to say it a second time and the
-	// manifest a third — where it said the opposite (`text+image->image: native`)
-	// for a release, because nothing checks a boolean against a table.
-	video: false,
-	// Free pixels, unlike the fixed-list backends — so the size fields in the
-	// sampling config mean what they say.
-	freeSize: true,
-	samplers: [],
-	schedulers: []
+	video: false
+}
+
+/**
+ * KoboldCPP on the same wire: ONE picture per request whatever `n_iter`
+ * says, and reference images (`extra_images`) only when the loaded model is
+ * an edit model — `KOBOLDCPP_EDIT_SHEET`, picked by `a1111SheetFor`.
+ */
+export const KOBOLDCPP_SHEET: DrawingSheet = {
+	...A1111_SHEET,
+	size: { ...A1111_SHEET.size } as DrawingSheet["size"],
+	perCall: 1,
+	references: null,
+	transparent: "none"
+}
+
+export const KOBOLDCPP_EDIT_SHEET: DrawingSheet = {
+	...KOBOLDCPP_SHEET,
+	references: { max: 4 }
+}
+
+const KOBOLDCPP_TYPES: ReadonlySet<string> = new Set([
+	CONNECTION_TYPE.KOBOLDCPP,
+	CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+	CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
+])
+
+/**
+ * Does this model name look like an image EDIT model — one that draws from
+ * reference images (FLUX Kontext, Qwen-Image-Edit, anything named "edit")?
+ *
+ * Read off the name because that is all a loaded-model listing tells us; a
+ * wrong guess costs a reference the backend then ignores, which the receipt
+ * reports, never a failed render.
+ */
+export function looksLikeEditModel(model: string | null | undefined): boolean {
+	if (!model) return false
+	const name = model.toLowerCase()
+	return (
+		name.includes("kontext") ||
+		/qwen[-_ .]?image[-_ .]?edit/.test(name) ||
+		/(^|[^a-z])edit([^a-z]|$)/.test(name)
+	)
+}
+
+/** The sheet for one A1111-wire connection: KoboldCPP differs, by model. */
+export function a1111SheetFor(connection: {
+	type: string
+	model?: string | null
+}): DrawingSheet {
+	if (!KOBOLDCPP_TYPES.has(connection.type)) return A1111_SHEET
+	return looksLikeEditModel(connection.model)
+		? KOBOLDCPP_EDIT_SHEET
+		: KOBOLDCPP_SHEET
 }
 
 function authHeaders(connection: SelectConnection): Record<string, string> {
@@ -129,11 +203,15 @@ interface ProgressResponse {
  *
  * The set of methods here IS this backend's declared in-and-out: the manifest's
  * `text->image` key for every type routed at this module is derived from the one
- * below, and the absence of `editImage` is what makes "txt2img-only" a checkable
- * fact rather than a sentence in a comment. Adding img2img means adding
- * `editImage` — a different route (`/sdapi/v1/img2img`) with a different request
- * — not widening this one, and the capability key follows from the method rather
- * than being declared alongside it.
+ * below, and there is still no `editImage`, so no type here derives
+ * `text+image->image`.
+ *
+ * A starting canvas (`init`, `mask`) is nonetheless honoured, on the img2img
+ * route, since 2026-10-12 (DESIGN-image-generation §4.2–4.3): whether a pair
+ * takes one is now the drawing sheet's `init`, read by the host BEFORE the run,
+ * which is the checkable fact the missing method used to stand in for. The
+ * `editImage` action — an edit with no prompt, a list of canvases — stays its
+ * own seam for when something needs it.
  */
 class A1111Adapter extends BaseImageAdapter {
 	/** Whether THIS adapter has a render in flight, so interrupt only stops ours. */
@@ -168,6 +246,7 @@ class A1111Adapter extends BaseImageAdapter {
 			t
 		)
 
+		const sheet = a1111SheetFor(this.connection)
 		const overrides: Record<string, unknown> = {
 			...(profile.overrideSettings ?? {})
 		}
@@ -203,6 +282,41 @@ class A1111Adapter extends BaseImageAdapter {
 			if (model) overrides.sd_model_checkpoint = t.apply("model", model)
 		}
 
+		// The starting canvas and its mask: their presence picks the route.
+		const [init] = req.init
+			? await this.base64Of([req.init], "init", t, opts)
+			: []
+		const [mask] =
+			init && req.mask
+				? await this.base64Of([req.mask], "mask", t, opts)
+				: []
+		// A mask with no canvas to paint on has nothing to mean.
+		if (req.mask && !init) t.ignore("mask")
+		const route = init ? "img2img" : "txt2img"
+
+		// Reference images: KoboldCPP's `extra_images`, and only when the
+		// loaded model is an edit model (the sheet says so). Anything over the
+		// sheet's max is dropped and reported, never sent to be refused.
+		let references: string[] = []
+		if (req.references?.length) {
+			if (!sheet.references) t.ignore("references")
+			else {
+				const take = req.references.slice(0, sheet.references.max)
+				references = await this.base64Of(take, "references", t, opts)
+				if (take.length < req.references.length) t.ignore("references")
+			}
+		}
+
+		// `alwayson_scripts` comes from the PROFILE only, never the request:
+		// what a script is called and what it takes is this backend's own
+		// vocabulary, which is exactly what the profile is for.
+		const alwayson =
+			profile.alwaysonScripts &&
+			typeof profile.alwaysonScripts === "object" &&
+			Object.keys(profile.alwaysonScripts).length
+				? profile.alwaysonScripts
+				: null
+
 		const body: Record<string, unknown> = {
 			prompt: t.apply("prompt", req.prompt),
 			negative_prompt: req.negativePrompt
@@ -234,25 +348,33 @@ class A1111Adapter extends BaseImageAdapter {
 			...(Object.keys(overrides).length
 				? { override_settings: overrides }
 				: {}),
+			...(alwayson ? { alwayson_scripts: alwayson } : {}),
+			...(init ? { init_images: [init] } : {}),
+			...(mask ? { mask } : {}),
+			...(init && req.denoise !== undefined
+				? { denoising_strength: t.take("denoise", req.denoise) }
+				: {}),
+			...(references.length ? { extra_images: references } : {}),
 			save_images: false
 		}
 
-		// Declared unsupported rather than silently absorbed: this endpoint is
-		// txt2img, and clipSkip belongs to `override_settings` on the builds that
-		// have it at all. `denoise` still arrives because the image sampling config
-		// carries it for whichever action ends up running — here there is nothing
-		// to denoise from, so it is reported rather than sent.
-		//
-		// There is no `init` line any more. It was `t.take("init", req.init, false)`
-		// — declining, at the HTTP call, a field this request can no longer carry:
-		// an init belongs to `ImageEditRequest`, which is `editImage`'s input, and
-		// this class has no `editImage`. Declining per render was the only answer
-		// available while one request type served both actions, and it could only
-		// ever be given after someone had already asked. The same answer now comes
-		// from the shape of the request, before anything is sent.
+		// Declared unsupported rather than silently absorbed: clipSkip belongs to
+		// `override_settings` on the builds that have it at all. `denoise` still
+		// arrives on a txt2img because the image sampling config carries it for
+		// whichever route ends up running — with no canvas there is nothing to
+		// denoise from, so it is reported rather than sent.
 		t.take("clipSkip", req.clipSkip, false)
-		t.take("denoise", req.denoise, false)
+		if (!init) t.take("denoise", req.denoise, false)
 		t.take("video", req.video, false)
+		// No transparent background on this wire (`transparent: "none"`): the
+		// host routes a cut-out to the cut-out task instead.
+		if (req.transparent) t.ignore("transparent")
+		// PNG is what comes back; any other format asked for is not.
+		if (req.outputFormat)
+			t.take("outputFormat", req.outputFormat, req.outputFormat === "png")
+		// An aspect is the host's derivation for aspect-only providers. Here the
+		// width and height carry the size; with neither, it is dropped.
+		if (req.aspect && !width && !height) t.ignore("aspect")
 
 		const root = base(this.connection)
 		const headers = {
@@ -273,7 +395,7 @@ class A1111Adapter extends BaseImageAdapter {
 
 		let data: TxtToImgResponse
 		try {
-			const res = await fetch(`${root}/sdapi/v1/txt2img`, {
+			const res = await fetch(`${root}/sdapi/v1/${route}`, {
 				method: "POST",
 				headers,
 				body: JSON.stringify(body),
@@ -535,7 +657,8 @@ const exports: ImageAdapterExports = {
 	Adapter: A1111Adapter,
 	listModels,
 	testConnection,
-	capabilities: CAPABILITIES,
+	sheet: A1111_SHEET,
+	sheetFor: a1111SheetFor,
 	profileSchema: PROFILE_SCHEMA,
 	profileDefaults: PROFILE_DEFAULTS
 }

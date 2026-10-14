@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest"
 import {
 	MESSAGE_STYLE_PRESETS,
+	OFF_FOLIO,
+	folioGuarded,
 	legacyLayoutAttr,
 	legacyPackPin,
 	withCorePresets,
@@ -119,6 +121,14 @@ describe("withCorePresets", () => {
 		}
 	})
 
+	test("no pack draws the turn line — it is the same row under every pack (§3.16)", () => {
+		for (const p of MESSAGE_STYLE_PRESETS) {
+			// The row and its halves, and the ⏳ next-up aliases on its inner parts.
+			expect(p.css).not.toContain("messages.turn-line")
+			expect(p.css).not.toContain("messages.next-up")
+		}
+	})
+
 	test("no pack restyles a shared message state — those are one treatment", () => {
 		// A pack may GUARD a look on the normal state (Stage's hover does), but
 		// selected / dim / editing / hidden belong to messageLayouts.css so they
@@ -129,6 +139,29 @@ describe("withCorePresets", () => {
 			}
 			expect(p.css).not.toContain("data-msg-hidden")
 		}
+	})
+
+	test("every pack steps aside on a Folio stage — a line there is a paragraph, not a row", () => {
+		// PLAN-core-widgets §3.7: a pack is unlayered, so the default sheet's
+		// Folio rules cannot undo a card, a bubble or a centred aside; every
+		// rule naming the line carries the guard, and so does any bare body
+		// rule that draws a look rather than a face.
+		for (const p of MESSAGE_STYLE_PRESETS) {
+			const afterLine = p.css
+				.split('[data-widget-part~="messages.message"]')
+				.slice(1)
+			expect(afterLine.length).toBeGreaterThan(0)
+			for (const rest of afterLine)
+				expect(rest.startsWith(OFF_FOLIO)).toBe(true)
+			const bareBody =
+				/^\[data-widget-part~="messages\.message-body"\]([^{]*)\{([^}]*)\}/gm
+			for (const [, tail, body] of p.css.matchAll(bareBody))
+				if (/background|border|padding|margin/.test(body))
+					expect(tail.startsWith(OFF_FOLIO)).toBe(true)
+		}
+		expect(
+			folioGuarded('[data-widget-part~="messages.message"] { a: b }')
+		).toBe(`[data-widget-part~="messages.message"]${OFF_FOLIO} { a: b }`)
 	})
 
 	test("story prose is set in two tones, in the face the guide names", () => {

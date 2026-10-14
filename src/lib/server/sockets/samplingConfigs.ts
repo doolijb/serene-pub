@@ -6,7 +6,10 @@ import { user } from "./users"
 import { buildSystemSettingsGet } from "./systemSettings"
 import type { Handler } from "$lib/shared/events"
 import { normalizeSamplingRow, SAMPLING_SCHEMAS, S } from "@serene-pub/sdk"
-import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults"
+import {
+	capabilityDefaults as readCapabilityDefaults,
+	setCapabilityDefault
+} from "$lib/server/connections/capabilityDefaults"
 import {
 	modalityLabel,
 	modalityOfShape
@@ -19,23 +22,8 @@ import { samplingShapeForCapability } from "$lib/shared/capabilities/samplingSha
 
 // --- WEIGHTS SOCKET HANDLERS ---
 
-/**
- * Every capability whose sampling vocabulary is this shape.
- *
- * Asked of the AGGREGATION rather than of a literal list, so a plugin's
- * `text->video` provider gets its default registered by the same star press
- * that registers core's — the whole reason the combo list is derived. Runs the
- * mapping forwards (capability → shape) rather than backwards, because
- * backwards is the direction that cannot be derived: `S.imageGen` does not say
- * which of the three image transforms was meant, and the hand-written inverse
- * exists to name one representative for the pickers, not to enumerate a group.
- *
- * An empty result is returned as empty. There is no `text->image` consolation
- * prize: a shape with no capabilities is a real state (the registry has no node
- * demanding it and no adapter serving it), and inventing one row would put a
- * default on a screen that lists no such capability.
- */
-async function capabilitiesForShape(shape: string): Promise<string[]> {
+/** Every capability the registry aggregates, once, for every shape to filter. */
+async function demandedCapabilities(): Promise<string[]> {
 	// The same rows `combosFor` reads (connectionDefaults.ts), minus the same
 	// two statuses and for its reason: a capability only a `provisional` or
 	// `removed` node demands is one no pipeline can run (plans/29 R-2).
@@ -52,9 +40,7 @@ async function capabilitiesForShape(shape: string): Promise<string[]> {
 				"removed"
 			])
 		)) as RegistryDefinitionRow[]
-	return aggregateCombos(rows)
-		.filter((c) => samplingShapeForCapability(c.id) === shape)
-		.map((c) => c.id)
+	return aggregateCombos(rows).map((c) => c.id)
 }
 
 /**
@@ -148,18 +134,6 @@ export async function samplingConfigsList(
 	await samplingConfigsListHandler.handler(socket, {}, emitToUser)
 }
 
-export async function setUserActiveSamplingConfig(
-	socket: any,
-	message: { id: number },
-	emitToUser: (event: string, data: any) => void
-) {
-	await samplingConfigsSetUserActive.handler(
-		socket,
-		{ id: message.id },
-		emitToUser
-	)
-}
-
 export async function createSamplingConfig(
 	socket: any,
 	message: { sampling: any },
@@ -212,13 +186,12 @@ async function buildSamplingConfigsGet(
 	return { sampling }
 }
 
-async function buildSamplingConfigsList(): Promise<Sockets.SamplingConfigs.List.Response> {
+export async function buildSamplingConfigsList(): Promise<Sockets.SamplingConfigs.List.Response> {
 	// Built-in presets first, then the user's own, each alphabetical.
 	//
 	// `desc` on a boolean puts true first. Ordered here rather than in each
 	// consumer because this one response feeds several: SamplingSidebar
-	// (which groups with its own immutable/mutable filters — those preserve
-	// input order, so this is what sorts within each group) and
+	// (which groups by modality and keeps this order within each group) and
 	// EditSessionForm. Without it the list came back in whatever order
 	// Postgres happened to return, so the flat consumer interleaved presets
 	// with user configs.
@@ -241,6 +214,149 @@ async function buildSamplingConfigsList(): Promise<Sockets.SamplingConfigs.List.
 	return { samplingConfigsList }
 }
 
+/**
+ * Every job a sampling config can be the default for, with the config each
+ * one's default names today.
+ *
+ * Two sources, one list: the transforms the registry demands whose output
+ * kind has a sampling vocabulary, and every `connection_defaults` row that
+ * names a config. The ★ in the Sampling view reads every row, so the list
+ * that explains it reads every row too, including a transform no node
+ * demands any more.
+ */
+async function samplingJobs(): Promise<Sockets.SamplingConfigs.UsedBy.Job[]> {
+	const defaults = await readCapabilityDefaults(db)
+	const jobs = new Map<string, Sockets.SamplingConfigs.UsedBy.Job>()
+	const add = (capability: string) => {
+		if (jobs.has(capability)) return
+		const shape = samplingShapeForCapability(capability)
+		if (!shape || !isKnownSamplingShape(shape)) return
+		jobs.set(capability, {
+			capability,
+			shape,
+			samplingConfigId: defaults[capability]?.samplingConfigId ?? null
+		})
+	}
+	for (const capability of await demandedCapabilities()) add(capability)
+	for (const [capability, d] of Object.entries(defaults))
+		if (d.samplingConfigId != null) add(capability)
+	return [...jobs.values()]
+}
+
+/**
+ * The jobs and pipelines that pick each sampling config.
+ *
+ * The pipeline half is the library's own walk (`libraryView`'s
+ * `samplingUsedBy`, the answer Admin › Sampling's "Used by" column reads), so
+ * there is one definition of "a pipeline picks this config": a value or an
+ * override in a `sampling-ref` slot. The library names a pipeline by its
+ * label; the slug beside it is what a link opens.
+ */
+async function buildSamplingConfigsUsedBy(): Promise<Sockets.SamplingConfigs.UsedBy.Response> {
+	const { libraryView } = await import("$lib/server/pipelines/config/library")
+	const library = await libraryView(db)
+	const slugByLabel = new Map<string, string>()
+	for (const p of library.pipelines)
+		if (!slugByLabel.has(p.label)) slugByLabel.set(p.label, p.slug)
+	const pipelines: Record<number, Sockets.SamplingConfigs.UsedBy.Pipeline[]> =
+		{}
+	for (const [id, labels] of Object.entries(library.samplingUsedBy))
+		pipelines[Number(id)] = labels.map((label) => ({
+			label,
+			slug: slugByLabel.get(label) ?? null
+		}))
+	return { jobs: await samplingJobs(), pipelines }
+}
+
+/**
+ * Name `id` as the sampling default of each transform, in one transaction.
+ *
+ * Each transform must speak the config's shape and be one of the jobs
+ * `samplingJobs` lists: a client that could name any capability could make
+ * an image config the chat default, and the shape exists so that it cannot.
+ * `undefined` means every job of the shape. Returns what was written.
+ */
+async function setSamplingDefaultFor(
+	id: number,
+	shape: string,
+	transforms: readonly string[] | undefined
+): Promise<string[]> {
+	const ofShape = (await samplingJobs())
+		.filter((j) => j.shape === shape)
+		.map((j) => j.capability)
+	const wanted = transforms ? [...new Set(transforms)] : ofShape
+	const refused = wanted.filter((t) => !ofShape.includes(t))
+	if (refused.length)
+		throw new Error(
+			`${refused.join(", ")} cannot take a ${modalityLabel(modalityOfShape(shape))} sampling config.`
+		)
+	await db.transaction(async (tx) => {
+		for (const capability of wanted)
+			await setCapabilityDefault(tx as unknown as typeof db, capability, {
+				samplingConfigId: id
+			})
+	})
+	return wanted
+}
+
+export const samplingConfigsUsedBy: Handler<
+	Sockets.SamplingConfigs.UsedBy.Params,
+	Sockets.SamplingConfigs.UsedBy.Response
+> = {
+	event: "samplingConfigs:usedBy",
+	// No admin check: which jobs and pipelines pick a config are read-only
+	// facts, the same names the pickers already show.
+	handler: async (_socket, _params, emitToUser) => {
+		const res = await buildSamplingConfigsUsedBy()
+		emitToUser("samplingConfigs:usedBy", res)
+		return res
+	}
+}
+
+export const samplingConfigsSetDefaultFor: Handler<
+	Sockets.SamplingConfigs.SetDefaultFor.Params,
+	Sockets.SamplingConfigs.SetDefaultFor.Response
+> = {
+	event: "samplingConfigs:setDefaultFor",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const error =
+				"Access denied. Only admin users can set default sampling configs."
+			emitToUser("samplingConfigs:setDefaultFor:error", { error })
+			throw new Error(error)
+		}
+		const target = await db.query.samplingConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, params.id)
+		})
+		if (!target) {
+			const error = "That sampling config no longer exists."
+			emitToUser("samplingConfigs:setDefaultFor:error", { error })
+			throw new Error(error)
+		}
+		let transforms: string[]
+		try {
+			transforms = await setSamplingDefaultFor(
+				target.id,
+				target.shape ?? S.textGen,
+				params.transforms
+			)
+		} catch (e) {
+			const error = e instanceof Error ? e.message : String(e)
+			emitToUser("samplingConfigs:setDefaultFor:error", { error })
+			throw e
+		}
+		// Every client's `capabilityDefaults` moves with the write, which is
+		// what the ★ and every default picker read.
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
+		const res: Sockets.SamplingConfigs.SetDefaultFor.Response = {
+			id: target.id,
+			transforms
+		}
+		emitToUser("samplingConfigs:setDefaultFor", res)
+		return res
+	}
+}
+
 export const samplingConfigsGet: Handler<
 	Sockets.SamplingConfigs.Get.Params,
 	Sockets.SamplingConfigs.Get.Response
@@ -249,11 +365,11 @@ export const samplingConfigsGet: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) {
 			const res = {
-				error: "Access denied. Only admin users can manage sampling configurations."
+				error: "Access denied. Only admin users can manage sampling configs."
 			}
 			emitToUser("error", res)
 			throw new Error(
-				"Access denied. Only admin users can manage sampling configurations."
+				"Access denied. Only admin users can manage sampling configs."
 			)
 		}
 
@@ -279,97 +395,16 @@ export const samplingConfigsListHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) {
 			const res = {
-				error: "Access denied. Only admin users can manage sampling configurations."
+				error: "Access denied. Only admin users can manage sampling configs."
 			}
 			emitToUser("error", res)
 			throw new Error(
-				"Access denied. Only admin users can manage sampling configurations."
+				"Access denied. Only admin users can manage sampling configs."
 			)
 		}
 
 		const res = await buildSamplingConfigsList()
 		emitToUser("samplingConfigs:list", res)
-		return res
-	}
-}
-
-export const samplingConfigsSetUserActive: Handler<
-	Sockets.SamplingConfigs.SetUserActive.Params,
-	Sockets.SamplingConfigs.SetUserActive.Response
-> = {
-	event: "samplingConfigs:setUserActive",
-	handler: async (socket, params, emitToUser) => {
-		if (!socket.user!.isAdmin) {
-			const res = {
-				error: "Access denied. Only admin users can set active sampling configurations."
-			}
-			emitToUser("error", res)
-			throw new Error(
-				"Access denied. Only admin users can set active sampling configurations."
-			)
-		}
-
-		// Update system-wide default sampling config (replaces the old per-user
-		// active sampling). Which capabilities it lands against is the ROW's own
-		// shape, never a parameter the caller passes: a client that could name
-		// the capability could set the chat default to an image config, and the
-		// whole point of the shape is that it cannot.
-		const target = await db.query.samplingConfigs.findFirst({
-			where: (c, { eq }) => eq(c.id, params.id)
-		})
-		if (!target) {
-			const res = {
-				error: "That sampling configuration no longer exists."
-			}
-			emitToUser("error", res)
-			throw new Error("Sampling config not found.")
-		}
-
-		// Registered against EVERY capability whose output kind this shape
-		// speaks — not against the one canonical representative.
-		//
-		// `TRANSFORMS` names `text->image`, `text+image->image` and
-		// `image->image`, and all three take the same steps/CFG/sampler
-		// vocabulary. Writing only `text->image` would leave a screen whose one
-		// control says "the image default" while one of three rows moved: an
-		// img2img node would go on reading whatever was registered against
-		// `text+image->image` — usually nothing — and the star would look like
-		// it had done its job. The fan-out is what makes the control's label
-		// true.
-		//
-		// A shape whose capabilities the aggregation does not name registers
-		// NOTHING rather than falling back to text: starring a config of some
-		// future shape must not quietly become "this is now the default for
-		// chat". And there is deliberately no `text->image`-only fallback for
-		// an empty aggregation — that fallback is precisely the silent gap this
-		// replaces, and it would hide an aggregation that had stopped working.
-		const shape = target.shape ?? S.textGen
-		const capabilities = await capabilitiesForShape(shape)
-		for (const capability of capabilities)
-			await setCapabilityDefault(db, capability, {
-				samplingConfigId: params.id
-			})
-
-		await user(socket, {}, emitToUser)
-		if (params.id) {
-			// Lazy — see `buildSamplingConfigsGet`.
-			await emitToUser("samplingConfigs:get", () =>
-				buildSamplingConfigsGet(params.id!)
-			)
-		}
-
-		// Push updated system settings so clients reflect the new default
-		// sampling config immediately (this is a system-wide default, not a
-		// per-user setting — see the comment above).
-		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
-
-		const updatedUser = await db.query.users.findFirst({
-			where: (u, { eq }) => eq(u.id, socket.user!.id)
-		})
-		const res: Sockets.SamplingConfigs.SetUserActive.Response = {
-			user: updatedUser!
-		}
-		emitToUser("samplingConfigs:setUserActive", res)
 		return res
 	}
 }
@@ -382,11 +417,11 @@ export const samplingConfigsCreate: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) {
 			const res = {
-				error: "Access denied. Only admin users can create sampling configurations."
+				error: "Access denied. Only admin users can create sampling configs."
 			}
 			emitToUser("error", res)
 			throw new Error(
-				"Access denied. Only admin users can create sampling configurations."
+				"Access denied. Only admin users can create sampling configs."
 			)
 		}
 
@@ -459,21 +494,18 @@ export const samplingConfigsCreate: Handler<
 			throw new Error(error)
 		}
 
-		// Unlike every sibling *ConfigsCreate handler, this used to also call
-		// samplingConfigsSetUserActive — which writes
-		// systemSettings.defaultSamplingConfigId, an instance-wide setting,
-		// not per-user — silently making every newly created sampling config
-		// the default for all users. The client already has a separate,
-		// deliberate "Set as Default" action for that
-		// (SamplingSidebar.svelte's handleSetDefault); create doing it too
-		// was a bug, not a UX dependency. samplingConfigsGet still pushes the
-		// new row so the client can show it for editing.
+		// Create never names a default. That is the deliberate "Set as
+		// default…" action (`samplingConfigs:setDefaultFor`); a create that
+		// did it too would make every new config the default for every job.
+		// The new row is pushed so the client can show it for editing.
 		// Lazy — see `buildSamplingConfigsGet`.
 		await emitToUser("samplingConfigs:get", () =>
 			buildSamplingConfigsGet(sampling.id)
 		)
 		// Lazy — see `buildSamplingConfigsList`.
-		await emitToUser("samplingConfigs:list", () => buildSamplingConfigsList())
+		await emitToUser("samplingConfigs:list", () =>
+			buildSamplingConfigsList()
+		)
 
 		const res: Sockets.SamplingConfigs.Create.Response = { sampling }
 		emitToUser("samplingConfigs:create", res)
@@ -489,11 +521,11 @@ export const samplingConfigsDelete: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) {
 			const res = {
-				error: "Access denied. Only admin users can delete sampling configurations."
+				error: "Access denied. Only admin users can delete sampling configs."
 			}
 			emitToUser("error", res)
 			throw new Error(
-				"Access denied. Only admin users can delete sampling configurations."
+				"Access denied. Only admin users can delete sampling configs."
 			)
 		}
 
@@ -525,27 +557,24 @@ export const samplingConfigsDelete: Handler<
 		// an instance with no settings row, and "delete an id that isn't there"
 		// must stay the clean no-op it is (samplingConfigs.notFoundHandling).
 		// Nothing registered means nothing to refresh.
+		// Since I12 the defaults are default-flagged LOADOUTS; any loadout
+		// naming this config is cleared by the same `ON DELETE SET NULL`.
 		const registeredAgainst = await db
-			.select({
-				// The key, which since 0183 is the transform's two sides rather
-				// than its id. Only the COUNT is read below — nothing here needs
-				// the capability named, so nothing here converts it back.
-				input: schema.connectionDefaults.input,
-				output: schema.connectionDefaults.output
-			})
-			.from(schema.connectionDefaults)
-			.where(eq(schema.connectionDefaults.samplingConfigId, params.id))
+			.select({ id: schema.loadouts.id })
+			.from(schema.loadouts)
+			.where(eq(schema.loadouts.samplingConfigId, params.id))
 
 		await db
 			.delete(schema.samplingConfigs)
 			.where(eq(schema.samplingConfigs.id, params.id))
 		// Lazy — see `buildSamplingConfigsList`.
-		await emitToUser("samplingConfigs:list", () => buildSamplingConfigsList())
+		await emitToUser("samplingConfigs:list", () =>
+			buildSamplingConfigsList()
+		)
 		// `ON DELETE SET NULL` just cleared those registrations, so every
 		// client's copy of `capabilityDefaults` still points at a row that no
 		// longer exists and the sampling sidebar would keep drawing the star on
-		// nothing. This is the push that used to ride along on the fallback
-		// setUserActive call the deletion above removed — minus the fallback.
+		// nothing, so the settings that carry them are pushed again.
 		if (registeredAgainst.length)
 			await emitToUser("systemSettings:get", () =>
 				buildSystemSettingsGet()
@@ -567,11 +596,11 @@ export const samplingConfigsUpdate: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) {
 			const res = {
-				error: "Access denied. Only admin users can update sampling configurations."
+				error: "Access denied. Only admin users can update sampling configs."
 			}
 			emitToUser("error", res)
 			throw new Error(
-				"Access denied. Only admin users can update sampling configurations."
+				"Access denied. Only admin users can update sampling configs."
 			)
 		}
 
@@ -620,11 +649,12 @@ export const samplingConfigsUpdate: Handler<
 				emitToUser("samplingConfigs:update:error", { error })
 				throw new Error(error)
 			}
-			const normalized = normalizeSamplingRow({
+			const row = {
 				shape,
 				values: updateData.values ?? currentSamplingConfig?.values,
 				enabled: updateData.enabled ?? currentSamplingConfig?.enabled
-			})
+			}
+			const normalized = normalizeSamplingRow(row)
 			updateData.shape = normalized.shape
 			updateData.values = normalized.values
 			updateData.enabled = normalized.enabled
@@ -678,7 +708,9 @@ export const samplingConfigsUpdate: Handler<
 		}
 
 		// Lazy — see `buildSamplingConfigsList`.
-		await emitToUser("samplingConfigs:list", () => buildSamplingConfigsList())
+		await emitToUser("samplingConfigs:list", () =>
+			buildSamplingConfigsList()
+		)
 		// ⚠ Stated here, rather than left to the `samplingConfigs:get` cascade
 		// below, which states it only by accident: for an id that does not
 		// exist, that push's builder throws "Sampling config not found" on its
@@ -688,10 +720,11 @@ export const samplingConfigsUpdate: Handler<
 		// never runs at all, so a refusal riding on one is not a refusal.
 		// Placed exactly where the cascade sits, so the list above still goes
 		// out first.
-		if (!currentSamplingConfig)
-			throw new Error("Sampling config not found")
+		if (!currentSamplingConfig) throw new Error("Sampling config not found")
 		// Lazy — see `buildSamplingConfigsGet`.
-		await emitToUser("samplingConfigs:get", () => buildSamplingConfigsGet(id))
+		await emitToUser("samplingConfigs:get", () =>
+			buildSamplingConfigsGet(id)
+		)
 		await user(socket, {}, emitToUser)
 
 		const res: Sockets.SamplingConfigs.Update.Response = {
@@ -714,7 +747,8 @@ export function registerSamplingConfigHandlers(
 ) {
 	register(socket, samplingConfigsListHandler, emitToUser)
 	register(socket, samplingConfigsGet, emitToUser)
-	register(socket, samplingConfigsSetUserActive, emitToUser)
+	register(socket, samplingConfigsSetDefaultFor, emitToUser)
+	register(socket, samplingConfigsUsedBy, emitToUser)
 	register(socket, samplingConfigsCreate, emitToUser)
 	register(socket, samplingConfigsUpdate, emitToUser)
 	register(socket, samplingConfigsDelete, emitToUser)

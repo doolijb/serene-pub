@@ -19,6 +19,7 @@
 import type { SlotValue } from "@serene-pub/sdk"
 // Moved to core (R21): the state widgets and this ledger read one formatter.
 import { formatSlotValue } from "@serene-pub/core-catalog/session-state"
+import { clockSpanWords } from "$lib/shared/lorebooks/storyDate"
 
 /**
  * What a value row carries, which is the SDK's `SlotValue` and not a copy of
@@ -30,7 +31,8 @@ export type LedgerValue = SlotValue
 /** One anchored row. The wire shape (`Sockets.State.LedgerRow`), structurally. */
 export interface LedgerRow {
 	id: number
-	kind: "value"
+	/** 🚧 `clock`: a move of the session's story clock (live scenes §15 G5). */
+	kind: "value" | "clock"
 	messageId: number | null
 	ownerKey: string
 	ownerLabel: string
@@ -38,6 +40,17 @@ export interface LedgerRow {
 	slotId?: string
 	slotLabel?: string
 	value?: LedgerValue
+	clock?: LedgerClockMove
+}
+
+/** 🚧 A clock row's move: the step, and where the clock went — or why it did not. */
+export interface LedgerClockMove {
+	by: number
+	unit: string
+	cause?: "action" | "keeper" | "tick" | null
+	fromLabel?: string | null
+	toLabel?: string | null
+	skipped?: string | null
 }
 
 /** What one slot read for one owner before the session touched it. */
@@ -53,18 +66,28 @@ export interface LedgerLine {
 	messageId: number | null
 	ownerKey: string
 	ownerLabel: string
-	kind: "value"
-	/** The change without the owner's name: `hp 20 → 14`, `Inventory → Rusty key ×2`. */
+	kind: "value" | "clock"
+	/**
+	 * The change without the owner's name: `hp 20 → 14`, `Inventory → Rusty key ×2`,
+	 * 🚧 `Time passes: 3 hours (Day 4, 14:00 → Day 4, 17:00)`.
+	 */
 	text: string
 	before?: LedgerValue
 	after?: LedgerValue
 	updatedBy: string
 }
 
-/** Rows in the order they landed: by anchor, then by the row's own id. */
+/**
+ * Rows in the order they landed: by anchor, then by the row's own id — a
+ * message's clock moves after its values, since the two count their ids in
+ * different tables.
+ */
 const inOrder = (rows: LedgerRow[]): LedgerRow[] =>
 	[...rows].sort(
-		(a, b) => (a.messageId ?? -1) - (b.messageId ?? -1) || a.id - b.id
+		(a, b) =>
+			(a.messageId ?? -1) - (b.messageId ?? -1) ||
+			Number(a.kind === "clock") - Number(b.kind === "clock") ||
+			a.id - b.id
 	)
 
 const valueText = (
@@ -91,6 +114,19 @@ export function ledgerLines(
 
 	const out: LedgerLine[] = []
 	for (const row of inOrder(rows)) {
+		if (row.kind === "clock") {
+			if (!row.clock) continue
+			out.push({
+				key: `c${row.id}`,
+				messageId: row.messageId,
+				ownerKey: row.ownerKey,
+				ownerLabel: row.ownerLabel,
+				kind: "clock",
+				text: clockMoveText(row.clock),
+				updatedBy: row.updatedBy
+			})
+			continue
+		}
 		const trail = `v:${row.ownerKey}:${row.slotId ?? ""}`
 		const before = seen.get(trail)
 		const after = (row.value ?? null) as LedgerValue
@@ -111,11 +147,26 @@ export function ledgerLines(
 }
 
 /**
+ * 🚧 A clock move's line (live scenes §15 G5): "Time passes: 3 hours (Day 4,
+ * 14:00 → Day 4, 17:00)", "Time goes back: 1 day (…)", or — a move the
+ * story had no clock for (G7) — the step and why it did not happen.
+ */
+export function clockMoveText(move: LedgerClockMove): string {
+	const span = clockSpanWords(move.by, move.unit)
+	const head = move.by < 0 ? `Time goes back: ${span}` : `Time passes: ${span}`
+	if (move.skipped) return `${head}, not on the clock. ${move.skipped}`
+	return move.fromLabel && move.toLabel
+		? `${head} (${move.fromLabel} → ${move.toLabel})`
+		: head
+}
+
+/**
  * Lines indexed by the message they are anchored to.
  *
  * A line anchored to no message is in no message's ledger: it is state that was
  * true before anything was said, and the transcript has nowhere honest to hang
- * it.
+ * it. 🚧 Except a clock move (`ledgerHeadLines`): time a person moved before
+ * anything was said is the conversation's **ledger head**.
  */
 export function linesByMessage(lines: LedgerLine[]): Map<number, LedgerLine[]> {
 	const out = new Map<number, LedgerLine[]>()
@@ -124,6 +175,20 @@ export function linesByMessage(lines: LedgerLine[]): Map<number, LedgerLine[]> {
 		out.set(line.messageId, [...(out.get(line.messageId) ?? []), line])
 	}
 	return out
+}
+
+/**
+ * 🚧 The conversation's **ledger head** (live scenes §15 G13): the clock moves
+ * anchored to no message — a *Time passes…* pressed, or a reply's tick skipped,
+ * before the session had a single line (once it has one, even a greeting, a
+ * move files under its newest). Drawn above the first message: they happened
+ * before anything was said, and `inOrder` already sorts them first. Values
+ * anchored to no message stay out — a never-spoken character's change waits
+ * for their first line, and a world value set before anything was said is the
+ * session's starting state, not an event.
+ */
+export function ledgerHeadLines(lines: LedgerLine[]): LedgerLine[] {
+	return lines.filter((line) => line.messageId == null && line.kind === "clock")
 }
 
 export interface LedgerOwnerGroup {
@@ -148,10 +213,25 @@ export function groupLinesByOwner(lines: LedgerLine[]): LedgerOwnerGroup[] {
 	return out
 }
 
-/** A held change, as `state:proposals` publishes it. */
+/** A held change, as `state:proposals` publishes it. 🚧 `clock`: a clock proposal (live scenes ★3). */
 export interface ProposalLike {
-	kind: "value"
+	kind: "value" | "clock"
 	payload: Record<string, unknown>
+}
+
+/**
+ * 🚧 A **clock proposal**'s line (live scenes §6, ★3): what accepting it
+ * would do to the session's story clock — "Time passes: 3 hours". Null when
+ * the payload is not one.
+ */
+export function describeClockProposal(proposal: ProposalLike): string | null {
+	const payload = proposal.payload ?? {}
+	if (proposal.kind !== "clock" && payload.kind !== "clock") return null
+	const by = payload.by
+	const unit = typeof payload.unit === "string" ? payload.unit : ""
+	if (typeof by !== "number" || !Number.isInteger(by) || by <= 0 || !unit)
+		return "a clock move this session cannot describe"
+	return `Time passes: ${clockSpanWords(by, unit)}`
 }
 
 /** How a surface names the parts of a payload; each may decline to know. */
@@ -173,6 +253,8 @@ export function describeProposal(
 	proposal: ProposalLike,
 	names: ProposalNames
 ): string {
+	const clock = describeClockProposal(proposal)
+	if (clock !== null) return clock
 	const payload = proposal.payload ?? {}
 	const owner = payload.owner as { kind: string; id: number } | undefined
 	// A change to the book comes named by the server (`ownerLabel`, plan A22):

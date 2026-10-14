@@ -30,7 +30,7 @@ RUN npm install --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=
 # runtime stage.
 COPY . .
 RUN if [ -d .serene-pub-sdk ]; then export SERENE_PUB_SDK_DIR=/app/.serene-pub-sdk; fi \
-    && NODE_OPTIONS=--max-old-space-size=4096 npm run build
+    && NODE_OPTIONS=--max-old-space-size=8192 npm run build
 
 # Prune to production-only node_modules
 RUN npm prune --omit=dev

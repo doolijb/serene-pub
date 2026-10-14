@@ -1,7 +1,7 @@
 /**
  * THE lens registry — every lens the lorebook workspace offers, declared once.
  *
- * The lens row draws it, the workspace mounts from it (`mounts.ts`), day one
+ * The lens track draws it, the workspace mounts from it (`mounts.ts`), day one
  * steps aside by it, a scope or saved scope or the Loose ends queue picks its
  * lens by it, and the graph workspace asks it which canvas a lens is. Adding
  * a lens is: its id in `LORE_LENSES` (the route's vocabulary, shared with the
@@ -31,7 +31,7 @@ const ignores = (): "ignores" => "ignores"
 /**
  * Keyed by id so the compiler refuses a lens the route knows and the registry
  * does not (`satisfies Record<LoreLens, …>`); ordered by `LORE_LENSES` below,
- * which is the lens row's order.
+ * which is the lens track's order.
  */
 const BY_ID = {
 	list: {
@@ -90,14 +90,14 @@ const BY_ID = {
 		label: "Time",
 		icon: Icons.History,
 		mount: "time",
-		// The line is the scope's (#88): `timeLensEntries`.
+		// The timeline is the scope's (#88): `timeLensEntries`.
 		drawsScope: draws,
 		listsPool: false,
 		bypassesDayOne: true,
 		reads: ["rows", "scenes", "cast"],
 		empty: {
 			message:
-				"Nothing is dated yet. Add a dated entry and it becomes a point on this line."
+				"Nothing is dated yet. Add a dated entry and it becomes a point on this timeline."
 		},
 		shortcut: "Alt+Shift+5"
 	},
@@ -113,13 +113,15 @@ const BY_ID = {
 		reads: ["rows"],
 		empty: {
 			message:
-				"Nobody has been placed on the line yet. Say when a cast member is in the world — and at what point of their own life — and their run appears here."
+				"Nobody has been placed on the timeline yet. Say when a cast member is in the world, and at what point of their own life, and their run appears here."
 		},
 		shortcut: "Alt+Shift+6"
 	},
 	places: {
 		id: "places",
-		label: "Places",
+		// "Map", not "Places": Places is already a view (a scope) in the
+		// rail, and one word must not name two controls (less-confusing G2).
+		label: "Map",
 		icon: Icons.Map,
 		mount: "drawing",
 		// Every place on the line, whatever the scope (places plan B4).
@@ -136,7 +138,7 @@ const BY_ID = {
 	}
 } as const satisfies Record<LoreLens, LensDescriptor>
 
-/** Every lens, in the lens row's order. */
+/** Every lens, in the lens track's order. */
 export const LORE_LENS_REGISTRY: readonly LensDescriptor[] = LORE_LENSES.map(
 	(id) => BY_ID[id]
 )
@@ -205,7 +207,10 @@ function parseShortcut(shortcut: string) {
  * code (`Digit4`, `KeyG`), because Option on a Mac rewrites `event.key` into
  * another character (⌥⇧4 types `›`).
  */
-export function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
+export function matchesShortcut(
+	event: KeyboardEvent,
+	shortcut: string
+): boolean {
 	const { mods, key } = parseShortcut(shortcut)
 	const held = {
 		Alt: event.altKey,
@@ -237,8 +242,8 @@ export function lensForKey(event: KeyboardEvent): LoreLens | null {
 	if (event.defaultPrevented || event.repeat) return null
 	if (typingTarget(event.target)) return null
 	return (
-		LORE_LENS_REGISTRY.find((d) => matchesShortcut(event, d.shortcut))?.id ??
-		null
+		LORE_LENS_REGISTRY.find((d) => matchesShortcut(event, d.shortcut))
+			?.id ?? null
 	)
 }
 
@@ -257,4 +262,3 @@ export function shortcutLabel(shortcut: string, mac: boolean): string {
 		.map((m) => MAC_GLYPHS[m])
 		.join("")}${key}`
 }
-

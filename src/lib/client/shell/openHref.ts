@@ -8,6 +8,8 @@
  *   reader of `digest.lore`.
  * - `/admin/...` → the Admin view at that section (`openAdminAddress`).
  * - `/docs/<slug>#anchor` → the Help view at that page (`helpRouter`).
+ * - `/messages/<id>` / `/messages/people/<id>` → `digest.viewConversationId`
+ *   / `digest.viewPersonId`, then the Messages view (its only reader).
  * - Anything else (`/sessions/42?message=9`) is a page → `goto`.
  *
  * The same rules as `openJumpHit` and the shell's view-link capture handler
@@ -26,6 +28,7 @@ export type HrefTarget =
 	| { kind: "lore"; route: LoreRoute }
 	| { kind: "admin"; href: string }
 	| { kind: "help"; slug: string | null; anchor: string }
+	| { kind: "messages"; conversationId: number | null; personId: number | null }
 	| { kind: "page"; href: string }
 
 /** Pure: which reader an href belongs to. */
@@ -39,6 +42,12 @@ export function classifyHref(href: string): HrefTarget {
 	if (link?.view === "admin") return { kind: "admin", href: link.href }
 	if (link?.view === "help")
 		return { kind: "help", slug: link.slug, anchor: link.anchor }
+	if (link?.view === "conversations")
+		return {
+			kind: "messages",
+			conversationId: link.conversationId,
+			personId: link.personId
+		}
 	return { kind: "page", href }
 }
 
@@ -71,8 +80,29 @@ export async function openHref(
 			helpRouter.go(target.slug, target.anchor)
 			openView("help")
 			return
+		case "messages":
+			applyMessagesDigest(panelsCtx, target)
+			openView("conversations")
+			return
 		case "page":
 			await goto(target.href)
 			return
 	}
+}
+
+/**
+ * Hand a Messages address to the Messages view through the digest: one
+ * conversation, one person, or (both null) the list — the stale half is
+ * cleared so the view lands on exactly what the address names. Shared with
+ * the shell's link capture and its cold-load path (Layout.svelte).
+ */
+export function applyMessagesDigest(
+	panelsCtx: Pick<PanelsCtx, "digest">,
+	place: { conversationId: number | null; personId: number | null }
+): void {
+	if (place.conversationId !== null)
+		panelsCtx.digest.viewConversationId = place.conversationId
+	else delete panelsCtx.digest.viewConversationId
+	if (place.personId !== null) panelsCtx.digest.viewPersonId = place.personId
+	else delete panelsCtx.digest.viewPersonId
 }

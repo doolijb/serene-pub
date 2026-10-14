@@ -52,7 +52,13 @@
 		 */
 		src: string | null | undefined
 		/** The page's session — narrowed here to what every widget may see (`SessionV1`). */
-		session?: { id: number; name?: string | null; sessionMessages?: unknown[] } | null
+		session?: {
+			id: number
+			name?: string | null
+			sessionMessages?: unknown[]
+			/** 🚧 The session's backdrop (`sessions.backdropMediaId`). */
+			backdropMediaId?: number | null
+		} | null
 		channels?: string[]
 		props?: Record<string, unknown>
 		settings?: Record<string, unknown>
@@ -126,7 +132,22 @@
 		if (placeholder) return whenFirstShown(placeholder, () => (shown = true))
 	})
 
-	const sessionV1 = $derived(session ? { id: session.id, name: session.name ?? null } : undefined)
+	const sessionV1 = $derived(
+		session
+			? {
+					id: session.id,
+					name: session.name ?? null,
+					// 🚧 The backdrop's `fitted` address (DESIGN-image-generation
+					// §6.4): the by-id form, which redirects to the uuid one.
+					backdrop: session.backdropMediaId
+						? {
+								mediaId: session.backdropMediaId,
+								src: `/media/${session.backdropMediaId}?v=fitted`
+							}
+						: null
+				}
+			: undefined
+	)
 	/**
 	 * The log, only to a widget that reads it (R75): one that does not never
 	 * touches the array, so a token does not so much as wake it. A snapshot,

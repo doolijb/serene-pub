@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { sharedFromLine } from "$lib/shared/utils/sharedRows"
 	import * as Icons from "@lucide/svelte"
 	import SidebarListItem from "../SidebarListItem.svelte"
 	import RowMenu from "../menus/RowMenu.svelte"
@@ -95,7 +96,13 @@
 					<div class="truncate text-left font-semibold">
 						{lorebook.name}
 					</div>
-					{#if lorebook.description}
+					{#if lorebook.isSharedWithMe}
+						<!-- Shared with the reader (PLAN-private-messages §6.7):
+						     whose it is, in place of the owner's blurb. -->
+						<div class="text-surface-600-400 truncate text-left text-xs">
+							{sharedFromLine(lorebook)}
+						</div>
+					{:else if lorebook.description}
 						<div
 							class="text-surface-600-400 line-clamp-2 text-left text-xs"
 						>
@@ -154,7 +161,7 @@
 						},
 					// Paused (owner ruling 2026-09-28): shown, disabled, with
 					// the reason on the row.
-					{
+					!lorebook.isSharedWithMe && {
 						label: "Export (paused)",
 						icon: Icons.Download,
 						disabled: true,

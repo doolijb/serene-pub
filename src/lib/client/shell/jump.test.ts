@@ -261,7 +261,6 @@ describe("createJumpCtx", () => {
 		})
 		const release = ctx.registerScope("characters", {
 			label: "Characters",
-			placeholder: "Filter characters",
 			getQuery: () => view.search,
 			setQuery: (q) => (view.search = q),
 			getHits: () => []
@@ -289,11 +288,14 @@ describe("createJumpCtx", () => {
 		expect(ctx.query).toBe("ana")
 	})
 
-	test("the placeholder comes from the registration while it is in scope", () => {
+	// less-confusing B4 (2026-10-11): one wording in every scope; the scope
+	// chip says where it is looking.
+	test("the placeholder is Jump to anything in every scope", () => {
 		const { shell, ctx } = harness()
 		expect(ctx.placeholder).toBe("Jump to anything")
 		shell.activeView = "characters"
-		expect(ctx.placeholder).toBe("Filter characters")
+		expect(ctx.scope.label).toBe("Characters")
+		expect(ctx.placeholder).toBe("Jump to anything")
 	})
 
 	test("a manual scope sticks until close, then the view answers again", () => {

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { bookReadOnly } from "../bookData.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -41,6 +42,10 @@
 		onCompare?: () => void
 		/** Whether the comparison is already open. */
 		comparing?: boolean
+		/** A narrower name, for the moment bar's one-line compact form. */
+		short?: boolean
+		/** Where the menu opens: above the chip when it sits at the foot. */
+		placement?: "bottom-end" | "top-start"
 	}
 
 	let {
@@ -50,7 +55,9 @@
 		moment,
 		onSwitch,
 		onCompare,
-		comparing = false
+		comparing = false,
+		short = false,
+		placement = "bottom-end"
 	}: Props = $props()
 
 	const socket = useTypedSocket()
@@ -61,6 +68,9 @@
 	let renaming = $state<number | null>(null)
 	let renameTo = $state("")
 	let confirmingDelete = $state<number | null>(null)
+	/** A shared book: lines are read and switched, never forked, renamed or deleted. */
+	const readOnlyBook = bookReadOnly()
+	let readOnly = $derived(readOnlyBook.value)
 
 	let current = $derived(branches.find((b) => b.id === branchId) ?? null)
 	let label = $derived(current?.name ?? "main")
@@ -171,7 +181,7 @@
 		open = e.open
 		if (!e.open) reset()
 	}}
-	positioning={{ placement: "bottom-end" }}
+	positioning={{ placement }}
 >
 	<Popover.Trigger
 		class="chip shrink-0 gap-1 text-xs {branchId === null
@@ -181,7 +191,7 @@
 		data-lore-branch={label}
 	>
 		<Icons.GitBranch size={12} aria-hidden="true" />
-		<span class="max-w-28 truncate">{label}</span>
+		<span class="truncate {short ? 'max-w-20' : 'max-w-28'}">{label}</span>
 	</Popover.Trigger>
 	<Portal>
 		<Popover.Positioner class="z-[1000]!">
@@ -208,7 +218,7 @@
 							class="btn btn-sm w-full justify-start {branchId ===
 							null
 								? 'preset-tonal-primary'
-								: 'preset-filled-surface-400-600'}"
+								: 'preset-tonal-surface'}"
 							type="button"
 							role="menuitem"
 							onclick={() => {
@@ -275,7 +285,7 @@
 											Delete {b.name}
 										</button>
 										<button
-											class="btn btn-sm preset-filled-surface-400-600"
+											class="btn btn-sm preset-tonal-surface"
 											type="button"
 											onclick={() =>
 												(confirmingDelete = null)}
@@ -290,7 +300,7 @@
 										class="btn btn-sm min-w-0 flex-1 justify-start {branchId ===
 										b.id
 											? 'preset-tonal-primary'
-											: 'preset-filled-surface-400-600'}"
+											: 'preset-tonal-surface'}"
 										type="button"
 										role="menuitem"
 										onclick={() => {
@@ -314,8 +324,9 @@
 											/>
 										{/if}
 									</button>
+									{#if !readOnly}
 									<button
-										class="btn btn-sm preset-filled-surface-400-600 p-2"
+										class="btn btn-sm preset-tonal-surface p-2"
 										type="button"
 										onclick={() => {
 											renaming = b.id
@@ -327,7 +338,7 @@
 										<Icons.PenLine size={14} />
 									</button>
 									<button
-										class="btn btn-sm preset-filled-surface-400-600 p-2"
+										class="btn btn-sm preset-tonal-error p-2"
 										type="button"
 										onclick={() =>
 											(confirmingDelete = b.id)}
@@ -336,6 +347,7 @@
 									>
 										<Icons.Trash2 size={14} />
 									</button>
+									{/if}
 								</div>
 								<span
 									class="text-surface-600-400 pl-2 text-[11px]"
@@ -363,7 +375,9 @@
 					</button>
 				{/if}
 
-				{#if forking}
+				{#if readOnly}
+					<!-- A shared book: no new line. -->
+				{:else if forking}
 					<div class="flex flex-col gap-2">
 						<label class="text-xs font-semibold" for="fork-name">
 							Name the new line
@@ -398,7 +412,7 @@
 								Fork it
 							</button>
 							<button
-								class="btn btn-sm preset-filled-surface-400-600"
+								class="btn btn-sm preset-tonal-surface"
 								type="button"
 								onclick={reset}
 							>

@@ -683,3 +683,54 @@ describe("the ranker's allocation precedence reaches the selection", () => {
 			).toEqual(["m_idle1", "m_idle2"])
 	})
 })
+
+/**
+ * §16 follow-up D3 (2026-10-12): A1 suspected `host.ts` read `p.streaming` at
+ * the top level while the executor puts a node's parameters under
+ * `input.params`. Both are true and neither is a bug: the host reads the CALL
+ * payload, which the binding forms — and the binding lifts
+ * `input.params.streaming` to the payload's top level. These pin that seam,
+ * for the text and the image oracle alike (the executor half — that a spec's
+ * `params: slot.params()` reaches `input.params` — is `paramsSlotWiring`'s).
+ */
+describe("the generate oracles lift their parameters into the call payload", () => {
+	const callWith = async (definition: string, input: Record<string, unknown>) => {
+		const payloads: any[] = []
+		const ctx = {
+			status: () => {},
+			reportSampling: () => {},
+			reportUsage: () => {},
+			call: async (payload: unknown) => {
+				payloads.push(payload)
+				return { text: "ok", media: [{ uuid: "u" }] }
+			}
+		}
+		try {
+			await (coreBindings() as any)[definition](input, ctx)
+		} catch {
+			// What follows the call is not under test.
+		}
+		expect(payloads).toHaveLength(1)
+		return payloads[0]
+	}
+
+	it("generate-text: a configured streaming and stop list reach the host's payload", async () => {
+		const p = await callWith("core:oracle/generate-text@1", {
+			context: { messages: [] },
+			params: { streaming: "off", stopSequences: ["<<END>>"] }
+		})
+		expect(p.streaming).toBe("off")
+		expect(p.stopSequences).toEqual(["<<END>>"])
+	})
+
+	it("generate-image: streaming at the top level, the picture's params under params, the workflow slot forwarded", async () => {
+		const p = await callWith("core:oracle/generate-image@1", {
+			prompt: "a harbor",
+			workflow: { id: 7 },
+			params: { streaming: "off", orientation: "landscape", seed: 3 }
+		})
+		expect(p.streaming).toBe("off")
+		expect(p.params).toMatchObject({ orientation: "landscape", seed: 3 })
+		expect(p.workflow).toEqual({ id: 7 })
+	})
+})

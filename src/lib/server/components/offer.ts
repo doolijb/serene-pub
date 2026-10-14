@@ -87,8 +87,7 @@ export async function offeredAuthoredWidgets(db: Db, language = "en"): Promise<M
 			...(Array.isArray(w.channels) ? { channels: w.channels } : {}),
 			...(w.settings ? { settings: w.settings } : {}),
 			...(Array.isArray(w.reads) ? { reads: declaredWidgetReads(w.reads) } : {}),
-			...(grants.length ? { grants } : {}),
-			defaultActive: !!w.defaultActive
+			...(grants.length ? { grants } : {})
 		})
 	}
 	return out

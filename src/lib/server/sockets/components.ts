@@ -67,7 +67,7 @@ import {
 } from "$lib/server/components/compile"
 import { readArtifact, removeArtifacts, writeArtifact } from "$lib/server/components/cache"
 import { componentSourceHash } from "@serene-pub/cli/component-source"
-import { authoredWidgetId, offeredAuthoredSrc } from "$lib/server/components/offer"
+import { authoredWidgetId, offeredAuthoredSrc, authoredGrants } from "$lib/server/components/offer"
 import { authoredComponentRefusal } from "$lib/server/components/compat"
 import { mintComponentPreview } from "$lib/server/components/preview"
 import { coreComponentList, coreComponentSource, coreWidgetShape, isCloneableCoreComponent } from "$lib/server/components/core"
@@ -202,18 +202,26 @@ async function fresh(id: string): Promise<Sockets.Components.Detail> {
 const outcome = (o: ComponentCompileOutcome): Sockets.Components.CompileOutcome => ({
 	errors: o.errors,
 	warnings: o.warnings,
+	warningsAt: o.warningsAt ?? o.warnings.map((text) => ({ file: "", line: 0, column: 0, text })),
 	artifactHash: o.errors.length || !o.hash ? null : o.hash,
 	fingerprint: o.fingerprint
 })
 
 /** `components:changed` to every socket that declared it. Never the source. */
-function announce(socket: any, row: Pick<AuthoredComponentRow, "id" | "enabled" | "artifactHash" | "lastError" | "fingerprint"> | { id: string; gone: true }): void {
+function announce(
+	socket: any,
+	row:
+		| Pick<AuthoredComponentRow, "id" | "enabled" | "artifactHash" | "lastError" | "fingerprint" | "widget" | "adminDenied">
+		| { id: string; gone: true }
+): void {
 	const io = socket?.io
 	if (!io?.sockets?.sockets) return
 	const payload: Sockets.Components.Changed.Response = {
 		id: row.id,
 		ownerId: authoredOwnerId(row.id),
-		src: "gone" in row ? null : offeredAuthoredSrc(row)
+		src: "gone" in row ? null : offeredAuthoredSrc(row),
+		// The grants as reviewed now, so an open widget hears a revoke at once.
+		...("gone" in row ? {} : { grants: authoredGrants(row.widget, row.adminDenied) })
 	}
 	try {
 		emitToInterested(io, "components:changed", payload)

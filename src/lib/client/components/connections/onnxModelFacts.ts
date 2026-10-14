@@ -84,28 +84,28 @@ export function onnxModelHeadline(
 	if (isActive) {
 		if (state === "downloading")
 			return {
-				text: `Active · downloading ${downloadPercent(local!)}%`,
+				text: `In use · downloading ${downloadPercent(local!)}%`,
 				tone: "warning",
 				percent: downloadPercent(local!)
 			}
 		if (state === "error")
 			return {
-				text: "Active · download failed",
+				text: "In use · download failed",
 				tone: "warning",
 				percent: null
 			}
 		if (state === "on_disk")
 			return local?.loaded
-				? { text: "Active · loaded", tone: "success", percent: null }
+				? { text: "In use · loaded", tone: "success", percent: null }
 				: {
-						text: "Active · on disk, not loaded",
+						text: "In use · on disk, not loaded",
 						tone: "muted",
 						percent: null
 					}
 		// `not_downloaded`, and the same for a row the server has not answered
 		// for: nothing is on disk, so nothing can run.
 		return {
-			text: "Active · not downloaded",
+			text: "In use · not downloaded",
 			tone: "warning",
 			percent: null
 		}

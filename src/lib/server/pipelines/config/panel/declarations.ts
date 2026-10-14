@@ -24,7 +24,7 @@ import {
 	ENVOY_CONFIG_PREFIX,
 	isEnvoyConfigKey,
 	fieldLabel,
-	scriptPointsOf,
+	seamsOf,
 	rendersAt,
 	templateScopeAt,
 	templateScopeReport,
@@ -38,6 +38,10 @@ import {
 import { type Decl } from "$lib/server/pipelines/config/panel/types"
 import { isUnreadSlot } from "$lib/server/pipelines/boot/unreadAllowList"
 import { isHeldConnectionSlot } from "$lib/server/pipelines/config/heldSlots"
+import {
+	isUnplacedChain,
+	type ChainNode
+} from "$lib/server/pipelines/config/chainAddresses"
 
 const KIND_TO_MATRIX_SLOT: Record<string, string> = {
 	connection: "connection",
@@ -53,7 +57,10 @@ const KIND_TO_MATRIX_SLOT: Record<string, string> = {
 	// The substrate's own (R-9): an optional node's switch, a gated node's
 	// review position, a gather clause's mode. Read from the row's `slots`
 	// like every other kind — never synthesised here.
-	settings: "settings"
+	settings: "settings",
+	// The engine a model call runs on (I12): config scope only, like the
+	// connection it carries (`WRITE_MATRIX.loadout`).
+	loadout: "loadout"
 }
 
 const PARAM_CONTROL: Record<string, string> = {
@@ -181,6 +188,154 @@ export function humanizeTypeId(definitionId: string): string {
  */
 export const i18nText = (v: unknown, language?: string): string | undefined =>
 	i18nTextIn(v, language)
+
+/**
+ * A shape id's last segment, in words: `core:shape/template-context@1` →
+ * `template context`. Shapes carry no display name (`defineShape` takes only
+ * an id), so this is the whole of what a seam can say about what flows
+ * through it beyond its own description.
+ */
+export function humanizeShapeId(shapeId: string): string {
+	const tail = shapeId.replace(/@\d+$/, "").split(/[/:]/).pop() ?? shapeId
+	return tail.replace(/[-_]+/g, " ").trim()
+}
+
+/** `each-draft` → `each draft`, `castScripts` → `cast scripts`: a seam's name inside a label. */
+function seamWords(key: string): string {
+	return humanizeCamel(key).toLowerCase()
+}
+
+/**
+ * One `scripts-chain` option per seam of a definition, in run order
+ * (PLAN-script-placement D3) — the panel's only chain emitter.
+ *
+ * Labelled by where the seam runs, not by its slot name: two steps' *Scripts*
+ * boxes read identically otherwise while one runs before the model and one after.
+ * `flows` names the port's shape (absent for a point, which has no port);
+ * the description is the seam's own, as declared.
+ */
+export function seamDecls(
+	nodeKey: string,
+	row: {
+		slots?: Record<string, unknown> | null
+		scriptPoints?: unknown
+		ports?: { in?: Record<string, unknown>; out?: Record<string, unknown> } | null
+		kind?: unknown
+	},
+	typeLabel: string,
+	pin: string
+): Decl[] {
+	const slots = (row.slots ?? {}) as Record<string, SlotDecl>
+	const ports = row.ports ?? {}
+	const out: Decl[] = []
+	for (const seam of seamsOf({
+		slots,
+		scriptPoints: (row.scriptPoints ?? []) as ScriptPointDecl[]
+	})) {
+		const description = i18nText(seam.description)
+		const common = {
+			nodeKey,
+			control: "scripts-chain",
+			accepts: [...seam.accepts],
+			at: seam.at,
+			seamKind: seam.kind,
+			typeLabel,
+			nodeKind: String(row.kind ?? ""),
+			...(description ? { description } : {})
+		}
+		if (seam.kind === "point") {
+			out.push({
+				...common,
+				slot: "scripts",
+				matrixSlot: "scripts",
+				path: seam.at,
+				facet: "scripts",
+				label:
+					i18nText(`Scripts · at ${seamWords(seam.at)}`) ??
+					`Scripts · at ${seamWords(seam.at)}`
+			})
+			continue
+		}
+		const slotName = seam.slot!
+		// The same skip the slot loop makes: a slot no handler reads takes
+		// no pick (none of kind `scripts` today).
+		if (isUnreadSlot(pin, slotName)) continue
+		const decl = slots[slotName]!
+		const port = seam.port ?? "main"
+		// The side the phase implies first, then the other — a `before`
+		// hook usually names an input port and an `after` an output, but a
+		// definition may hook either (an inlet's `after` on its `text` out).
+		const sides =
+			seam.kind === "in" ? [ports.in, ports.out] : [ports.out, ports.in]
+		// A port's shape is its id — a string on a row, a `{ id }` on a
+		// descriptor; a port declaring inline fields has none to name.
+		const shape = sides
+			.map((side) => {
+				const v = (side ?? {})[port]
+				return typeof v === "string"
+					? v
+					: typeof (v as { id?: unknown } | undefined)?.id === "string"
+						? (v as { id: string }).id
+						: undefined
+			})
+			.find((v): v is string => !!v)
+		const label = `Scripts · ${seam.kind === "in" ? "before" : "after"} ${seamWords(port)}`
+		out.push({
+			...common,
+			slot: slotName,
+			matrixSlot: WRITE_MATRIX[slotName] ? slotName : "scripts",
+			path: "",
+			facet: decl.facet ?? slotName,
+			label: i18nText(label) ?? label,
+			...(shape ? { flows: `What flows here: ${humanizeShapeId(shape)}` } : {}),
+			...(decl.quick ? { quick: true } : {})
+		})
+	}
+	return out
+}
+
+/**
+ * A synthetic `scripts-chain` option for each stored chain whose seam this
+ * version does not declare, on a node it still has (D4, *unplaced*).
+ *
+ * Never part of `declarations()`: that list is what the reconcile back-fills
+ * and culls by, and an unplaced address is precisely one nothing declares.
+ * The panel adds these beside the declared options so the row can be seen
+ * and cleared; `accepts` is empty, so nothing can be added to it.
+ */
+export function unplacedChainDecls(
+	nodes: Map<string, ChainNode>,
+	stored: Iterable<{ nodeKey: string; slot: string; path: string }>
+): Decl[] {
+	const out: Decl[] = []
+	const seen = new Set<string>()
+	for (const a of stored) {
+		const key = `${a.nodeKey}\u0000${a.slot}\u0000${a.path}`
+		if (seen.has(key)) continue
+		seen.add(key)
+		if (!isUnplacedChain(nodes, a.nodeKey, a.slot, a.path)) continue
+		const node = nodes.get(a.nodeKey)!
+		const typeLabel =
+			i18nText(node.row?.i18n?.name) ?? humanizeTypeId(node.definitionId)
+		const where = seamWords(a.slot === "scripts" && a.path ? a.path : a.slot)
+		const label = `Scripts · no longer here (${where})`
+		out.push({
+			nodeKey: a.nodeKey,
+			slot: a.slot,
+			matrixSlot: WRITE_MATRIX[a.slot] ? a.slot : "scripts",
+			path: a.path,
+			facet: a.slot,
+			label: i18nText(label) ?? label,
+			control: "scripts-chain",
+			accepts: [],
+			unplaced: true,
+			typeLabel,
+			nodeKind: String(node.row?.kind ?? ""),
+			stepHeading: i18nText(node.expose?.label) ?? typeLabel
+		})
+	}
+	return out
+}
 
 /**
  * Expand one slot declaration into its addressable settings.
@@ -342,23 +497,11 @@ function declsForSlot(
 			}
 		})
 
-	// A scripts slot is one option: the chain, addressed whole. The links are
-	// an *ordered list* — splitting them into per-path settings would make the
-	// order a fact spread across rows, and reordering a chain a multi-write.
-	// The accepted types are the attachment rule (18 §4a): the picker offers
-	// rows of these types and the write refuses everything else.
-	if (decl.kind === "scripts")
-		return [
-			{
-				...base,
-				path: "",
-				label: humanizeCamel(slotName),
-				...(slotDescription ? { description: slotDescription } : {}),
-				control: "scripts-chain",
-				accepts: ((decl as { accepts?: string[] }).accepts ??
-					[]) as string[]
-			}
-		]
+	// A scripts slot is a seam, and every seam — slot or interior point —
+	// is emitted by the ONE loop over `seamsOf` in `declarations()`, in run
+	// order (PLAN-script-placement D3). Nothing here, so a chain is never
+	// listed twice.
+	if (decl.kind === "scripts") return []
 
 	// A template slot holds a **reference**, the same way prompts and layouts
 	// do. It used to hold the literal source, projected out of
@@ -395,7 +538,12 @@ function declsForSlot(
 			? "connection-ref"
 			: decl.kind === "sampling"
 				? "sampling-ref"
-				: "string"
+				: decl.kind === "loadout"
+					? "loadout-ref"
+					: // 🚧 A `workflows` row, `{ id }` (DESIGN-image-generation §4.10).
+						decl.kind === "workflow"
+						? "workflow-ref"
+						: "string"
 
 	return [
 		{
@@ -772,7 +920,11 @@ export async function declarations(
 				...declsForSlot(
 					node.nodeKey,
 					slotName,
-					forThisNode.kind === "variables" && forThisNode.rendersBands
+					// Opened when bands reach it, and when the spec says what one
+					// of its keys means here (`renders` on the node, 2026-10-13):
+					// either way the declaration's own `renders` is not the answer.
+					forThisNode.kind === "variables" &&
+					(forThisNode.rendersBands || node.renders)
 						? await openRenders(docOf, node.nodeKey, forThisNode, byPin)
 						: forThisNode.kind === "template"
 							? {
@@ -796,30 +948,25 @@ export async function declarations(
 			)
 		}
 
-		// Interior script points (18 §4e): one chain option per declared point,
-		// addressed as slot `scripts` at the point's own path — which is where
-		// the executor's `ctx.scripts.applyText` reads it, so what the panel
-		// writes is what the broker runs. Read from the row like everything
-		// else (F6). What the point accepts is the point's own declaration
-		// (R-11) — read through the SDK's one reader.
-		for (const point of scriptPointsOf({
-			scriptPoints: (row.scriptPoints ?? []) as ScriptPointDecl[]
-		})) {
-			const description = i18nText(point.description)
-			out.push({
-				nodeKey: node.nodeKey,
-				slot: "scripts",
-				matrixSlot: "scripts",
-				path: point.key,
-				facet: "scripts",
-				label: i18nText(point.label) ?? humanizeCamel(point.key),
-				...(description ? { description } : {}),
-				control: "scripts-chain",
-				accepts: [...point.accepts],
+		// Every seam of the definition (PLAN-script-placement D1/D3): one
+		// chain option each, in RUN order — `in:` seams, interior points,
+		// `out:` seams — because `seamsOf` is the one place that order is
+		// computed. Read off the row, which carries slot and point
+		// declarations verbatim (F6). Storage addresses are unchanged: a
+		// slot seam is its slot's whole value (`path: ""`), a point is the
+		// `scripts` facet at the point's own key — which is where the
+		// executor reads each. The chain is an *ordered list* addressed
+		// whole: splitting it would make the order a fact spread across
+		// rows. What a seam accepts is the attachment rule (18 §4a, R-11):
+		// the picker offers those kinds and the write refuses the rest.
+		out.push(
+			...seamDecls(
+				node.nodeKey,
+				row,
 				typeLabel,
-				nodeKind: String(row.kind ?? "")
-			})
-		}
+				`${node.definitionId}@${node.definitionVersion}`
+			)
+		)
 	}
 
 	/**

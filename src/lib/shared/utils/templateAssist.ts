@@ -55,6 +55,7 @@ import {
 	CONTEXT_LIQUID_BLOCK_TAGS,
 	CONTEXT_LIQUID_REFUSED_TAGS
 } from "$lib/shared/utils/templateCheckOptions"
+import { STROKES_ENABLED } from "$lib/shared/characters/strokesFlag"
 
 const LIQUID_ENGINE = "core:template/liquid@1"
 
@@ -93,7 +94,11 @@ export const HANDLEBARS_HELPER_DOCS: Readonly<
 	pad: { signature: "pad n width", description: "A number as a zero-padded string." },
 	isSet: { signature: "isSet value", description: "Present, as distinct from falsy — for `{{#if (isSet x)}}`." },
 	json: { signature: "json value [indent]", description: "The value as JSON." },
-	jsonValue: { signature: "jsonValue value [offset] indent= offset=", description: "One value as JSON, indented as if nested." }
+	jsonValue: { signature: "jsonValue value [offset] indent= offset=", description: "One value as JSON, indented as if nested." },
+	// Strokes paused (`STROKES_ENABLED` off): still registered, not offered.
+	...(STROKES_ENABLED
+		? { strokeList: { signature: "strokeList strokes kind", description: "A card's strokes of one kind as a list — labelled ones as { Label: text }; nothing when there are none." } }
+		: {})
 }
 
 /** Inline helpers: every documented helper that is not a block. */
@@ -873,6 +878,10 @@ export const LIQUID_FILTER_DOCS: Readonly<Record<string, string>> = {
 	pad: "pad: width — a number, zero-padded",
 	json: "json: indent — the value as JSON",
 	jsonValue: "jsonValue: offset — one value as JSON, indented as if nested",
+	// Strokes paused (`STROKES_ENABLED` off): still registered, not offered.
+	...(STROKES_ENABLED
+		? { strokeList: "strokeList: kind — a card's strokes of one kind as a list" }
+		: {}),
 	abs: "abs",
 	append: "append: text",
 	capitalize: "capitalize",

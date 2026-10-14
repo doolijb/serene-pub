@@ -21,7 +21,10 @@ function page(over: { opensScenes?: boolean; gap?: boolean } = {}) {
 				did.push(`open ${kind}`)
 				open = !over.gap
 			},
-			summarizeOpen: () => open
+			summarizeOpen: () => open,
+			startSelection: () => did.push("start selection"),
+			hasScene: (id: number) => id === 11,
+			processScene: (id: number) => did.push(`process ${id}`)
 		}
 	}
 }
@@ -39,8 +42,17 @@ describe("answerSummarize", () => {
 	test("refuses an empty selection (or one wholly scened), in words, selecting nothing", () => {
 		const { did, deps } = page()
 		expect(() => answerSummarize({ kind: "world", messageIds: [3] }, deps)).toThrow("select at least one message")
-		expect(() => answerSummarize({}, deps)).toThrow("select at least one message")
+		expect(() => answerSummarize({ kind: "world", messageIds: [] }, deps)).toThrow("select at least one message")
 		expect(did).toEqual([])
+	})
+
+	test("with no lines named at all, the conversation's own selection starts (Chronicle's Summarize scene, W3)", () => {
+		const { did, deps } = page()
+		answerSummarize({ kind: "scene" }, deps)
+		expect(did).toEqual(["start selection"])
+		const closed = page({ opensScenes: false })
+		expect(() => answerSummarize({ kind: "scene" }, closed.deps)).toThrow("this session does not open scenes")
+		expect(closed.did).toEqual([])
 	})
 
 	test("refuses a scene where the session opens none, in words, selecting nothing", () => {
@@ -68,5 +80,25 @@ describe("answerSummarize", () => {
 		expect(did).toEqual([])
 		await ask("summarize", { kind: "world", messageIds: [1] }, { widgetId: "messages", owner: "core" })
 		expect(did).toEqual(["select 1", "open world"])
+	})
+})
+
+describe("summarize an existing scene (a scene divider's Summarize, live scenes §7)", () => {
+	test("runs that scene in the Process scene window, selecting nothing", () => {
+		const { did, deps } = page()
+		answerSummarize({ kind: "scene", sceneId: 11, messageIds: [1, 2] }, deps)
+		expect(did).toEqual(["process 11"])
+	})
+
+	test("refuses a scene that is not this session's, and a session that opens none", () => {
+		const { did, deps } = page()
+		expect(() => answerSummarize({ kind: "scene", sceneId: 12 }, deps)).toThrow(
+			"that scene is not one of this session's"
+		)
+		const closed = page({ opensScenes: false })
+		expect(() => answerSummarize({ kind: "scene", sceneId: 11 }, closed.deps)).toThrow(
+			"this session does not open scenes"
+		)
+		expect([...did, ...closed.did]).toEqual([])
 	})
 })

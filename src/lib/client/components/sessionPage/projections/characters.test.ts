@@ -90,7 +90,9 @@ describe("projectCharacters", () => {
 			spriteSets: ["Casual", "Armor"],
 			spriteSet: "Casual",
 			spriteSetOverride: null,
-			canChangeSpriteSet: true
+			canChangeSpriteSet: true,
+			lastSpokeAt: null,
+			benched: false
 		})
 		expect(member(out, 4)).toMatchObject({ name: "Bo", face: null, sprite: null, spriteSets: [], spriteSet: null })
 		expect(member(out, 9)).toMatchObject({ isPersona: true, name: "Wee", face: full(6) })
@@ -162,7 +164,54 @@ describe("projectCharacters", () => {
 		expect(out.sceneImages).toEqual({ left: { src: "/media/77", ref: null }, right: null })
 	})
 
-	test("leaves out who has left: inactive or removed characters, removed personas, empty seats; each member once", () => {
+	test("W6: lastSpokeAt is the newest visible line's time — a character's by characterId, a persona's by personaId", () => {
+		const at = (iso: string) => Date.parse(iso)
+		const out = projectCharacters(
+			source({
+				session: session({
+					sessionMessages: [
+						{ id: 10, characterId: 3, createdAt: "2026-10-01T10:00:00.000Z" },
+						{ id: 11, personaId: 8, createdAt: "2026-10-01T10:01:00.000Z" },
+						{ id: 12, characterId: 3, createdAt: "2026-10-01T10:02:00.000Z" },
+						// A hidden line is not speaking; neither is one with no time.
+						{ id: 13, characterId: 3, isHidden: true, createdAt: "2026-10-01T10:09:00.000Z" },
+						{ id: 14, characterId: 4, createdAt: null },
+						{ id: 15, personaId: 9, createdAt: at("2026-10-01T10:03:00.000Z") }
+					]
+				})
+			})
+		)
+		expect(out.members.map((m) => [m.characterId, m.lastSpokeAt])).toEqual([
+			[3, at("2026-10-01T10:02:00.000Z")],
+			[4, null],
+			[8, at("2026-10-01T10:01:00.000Z")],
+			[9, at("2026-10-01T10:03:00.000Z")],
+			[11, null]
+		])
+		// No count rides the payload: galleryCount is left out (absent = not known).
+		expect(out.members.every((m) => !("galleryCount" in m))).toBe(true)
+	})
+
+	test("W6: a benched character is listed, marked benched — a removed one still is not", () => {
+		const out = projectCharacters(
+			source({
+				session: session({
+					sessionCharacters: [
+						{ isActive: false, removedAt: null, position: 0, character: ada },
+						{ isActive: true, removedAt: null, position: 1, character: bo }
+					]
+				})
+			})
+		)
+		expect(out.members.filter((m) => !m.isPersona).map((m) => [m.characterId, m.benched])).toEqual([
+			[3, true],
+			[4, false]
+		])
+		// A persona is never benched.
+		expect(out.members.filter((m) => m.isPersona).every((m) => m.benched === false)).toBe(true)
+	})
+
+	test("leaves out who has left: removed characters, removed personas, empty seats; each member once (a benched one stays)", () => {
 		const out = projectCharacters(
 			source({
 				session: session({
@@ -179,7 +228,10 @@ describe("projectCharacters", () => {
 				})
 			})
 		)
-		expect(out.members.map((m) => [m.characterId, m.isPersona])).toEqual([[8, false]])
+		expect(out.members.map((m) => [m.characterId, m.isPersona, m.benched])).toEqual([
+			[3, false, true],
+			[8, false, false]
+		])
 	})
 
 	test("missing data: no session is nobody, with the page's pins still shown", () => {
@@ -200,9 +252,53 @@ describe("projectCharacters", () => {
 				spriteSets: [],
 				spriteSet: null,
 				spriteSetOverride: null,
-				canChangeSpriteSet: false
+				canChangeSpriteSet: false,
+				lastSpokeAt: null,
+				benched: false
 			}
 		])
+	})
+
+	test("without castFaces every face is the card's", () => {
+		const bare = projectCharacters(source({ session: session({ castFaces: undefined }) }))
+		const none = projectCharacters(source({ session: session({ castFaces: null }) }))
+		const empty = projectCharacters(source({ session: session({ castFaces: {} }) }))
+		expect(member(bare, 3).face).toBe(full(1))
+		expect(member(bare, 4).face).toBeNull()
+		expect(none).toEqual(bare)
+		expect(empty).toEqual(bare)
+	})
+
+	test("a castFaces entry makes the member's retold face the face", () => {
+		const out = projectCharacters(
+			source({ session: session({ castFaces: { 3: 501, 4: 502, 9: 503 } }) })
+		)
+		expect(member(out, 3).face).toBe("/media/501")
+		// A card with no avatar of its own gains the cast's face.
+		expect(member(out, 4).face).toBe("/media/502")
+		// A persona is voiced, not cast: its face stays the card's.
+		expect(member(out, 9).face).toBe(full(6))
+		// The sprite is untouched by a retold face.
+		expect(member(out, 3).sprite).toBe(full(3))
+	})
+
+	test("a pin matches the retold face, full or thumbnail, and still the card's", () => {
+		const retold = session({ castFaces: { 3: 501 } })
+		expect(
+			projectCharacters(
+				source({ session: retold, sceneImages: { left: "/media/501", right: "/media/501?v=thumb" } })
+			).sceneImages
+		).toEqual({
+			left: { src: "/media/501", ref: "character:3" },
+			right: { src: "/media/501?v=thumb", ref: "character:3" }
+		})
+		expect(
+			projectCharacters(source({ session: retold, sceneImages: { left: full(1), right: thumb(1) } }))
+				.sceneImages
+		).toEqual({
+			left: { src: full(1), ref: "character:3" },
+			right: { src: thumb(1), ref: "character:3" }
+		})
 	})
 
 	test("is detached: a widget cannot reach into the payload", () => {

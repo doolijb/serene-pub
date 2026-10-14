@@ -14,6 +14,8 @@
 	import { copyName } from "./bookCopy"
 	import { describeOverwriteLosses } from "./overwriteLosses"
 	import { lorebookImportedToast } from "./lorebookImportedToast"
+	import { deleteBookCopy, type DeletingBook } from "./deleteCopy"
+	import { LOCATION_TYPE_ID } from "$lib/shared/entries/types"
 
 	/**
 	 * Everything that happens to a lorebook as a whole — create, import,
@@ -44,6 +46,13 @@
 		 * to look one up in.
 		 */
 		duplicating: { id: number; name: string } | null
+		/**
+		 * The book being deleted as the list knows it (its name and figures),
+		 * so the confirmation names it and what goes with it. Null when the
+		 * list has not got it; the confirmation then names what goes without
+		 * figures.
+		 */
+		deletingBook?: DeletingBook | null
 		/** Hidden rather than disabled when the checkbox would do nothing. */
 		canOfferAttachToSession: boolean
 		/** So a book that is open can be left when it stops existing. */
@@ -65,6 +74,7 @@
 		exportingId = $bindable(null),
 		deletingId = $bindable(null),
 		duplicating = $bindable(null),
+		deletingBook = null,
 		canOfferAttachToSession,
 		onDeleted,
 		onDuplicated,
@@ -105,6 +115,17 @@
 	let importPending: boolean = $state(false)
 	/** The book this tab asked to delete, until the server answers. */
 	let pendingDeleteId: number | null = $state(null)
+
+	/** What the delete confirmation says: the book by name, and what goes. */
+	const deleteCopy = $derived(
+		deleteBookCopy(deletingBook, {
+			placeTypeId: LOCATION_TYPE_ID,
+			openSessionName:
+				deletingId !== null && openSessionCtx?.lorebookId === deletingId
+					? openSessionCtx.sessionName
+					: null
+		})
+	)
 
 	/** What the copy will be called, as the reader may still edit it. */
 	let duplicateName: string = $state("")
@@ -490,7 +511,7 @@
 						{/if}
 						<div class="mt-4 flex items-end gap-2">
 							<button
-								class="btn preset-filled-surface-500"
+								class="btn preset-tonal-surface"
 								onclick={() => {
 									importing = false
 									importingBook = undefined
@@ -555,7 +576,7 @@
 						/>
 						<div class="mt-4 flex items-end gap-2">
 							<button
-								class="btn preset-filled-surface-500"
+								class="btn preset-tonal-surface"
 								type="button"
 								onclick={() => (duplicating = null)}
 							>
@@ -596,15 +617,16 @@
 				>
 					<div class="p-6">
 						<h2 class="text-error-500 mb-2 text-lg font-bold">
-							Delete lorebook?
+							{deleteCopy.title}
 						</h2>
-						<p class="mb-4">
-							Are you sure you want to delete this lorebook? This
-							action cannot be undone.
-						</p>
+						<div class="mb-4 flex max-w-prose flex-col gap-2">
+							{#each deleteCopy.lines as line, i (i)}
+								<p>{line}</p>
+							{/each}
+						</div>
 						<div class="mt-4 flex items-end gap-2">
 							<button
-								class="btn preset-filled-surface-500"
+								class="btn preset-tonal-surface"
 								onclick={() => (deletingId = null)}
 							>
 								Cancel

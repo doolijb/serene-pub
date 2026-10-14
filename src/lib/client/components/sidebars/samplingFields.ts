@@ -1,11 +1,11 @@
 /**
- * The bookkeeping shared by the two sampling screens.
+ * The bookkeeping shared by the sampling forms.
  *
- * The values screen and the enable/disable screen read the same schema and edit
- * the same `enabled` array from opposite ends — one shows only the keys that are
- * on, the other decides which those are. Keeping the grouping, the counting and
- * the switch-on rule here means the two screens cannot disagree about what "on"
- * means, and means the rules are reachable by a test: vitest runs in `node`
+ * The values form (sent parameters, or every parameter while choosing) and the
+ * enabled form (Admin › Sampling's Advanced fieldset) read the same schema and
+ * edit the same `enabled` array. Keeping the grouping, the counting and the
+ * switch-on rule here means the forms cannot disagree about what "on" means,
+ * and means the rules are reachable by a test: vitest runs in `node`
  * (vitest.config.ts), so nothing that lives inside a `.svelte` file is.
  *
  * Everything here is pure and returns NEW arrays. `enabled` is a plain array on
@@ -46,8 +46,10 @@ export function groupSamplingFields(
 }
 
 /**
- * The "N of M" on the nav button — the information the inline checkboxes used
- * to carry, now that the values screen no longer shows the switched-off keys.
+ * The "N of M sent" a config's Parameters heading shows (its list row says
+ * only "N settings on"): the values form draws only the sent parameters until
+ * Choose parameters is on, so the count is how a reader learns there are
+ * others.
  *
  * Counted against the SCHEMA, not against `enabled.length`: a row written by a
  * newer build may name keys this build's vocabulary has never heard of, and
@@ -56,14 +58,39 @@ export function groupSamplingFields(
  */
 export function countEnabled(
 	schema: SettingsSchema,
-	enabled: readonly string[] | null | undefined
+	enabled: readonly string[] | null | undefined,
+	/**
+	 * Keys the pair this config runs against drops (an image pair's drawing
+	 * sheet): switched on, but not sent, so not counted as sent.
+	 */
+	unhonoured: readonly string[] = []
 ): { on: number; total: number } {
 	const keys = Object.keys(schema ?? {})
 	const set = new Set(enabled ?? [])
+	const dropped = new Set(unhonoured)
 	return {
-		on: keys.filter((k) => set.has(k)).length,
+		on: keys.filter((k) => set.has(k) && !dropped.has(k)).length,
 		total: keys.length
 	}
+}
+
+/**
+ * "N of M sent" per group, keyed by the group's name — what the values form's
+ * group labels say. Counted against the whole schema, so a group whose
+ * parameters are all off still reads "0 of 6" where it is drawn.
+ */
+export function countEnabledByGroup(
+	schema: SettingsSchema,
+	enabled: readonly string[] | null | undefined
+): Map<string, { on: number; total: number }> {
+	const set = new Set(enabled ?? [])
+	const out = new Map<string, { on: number; total: number }>()
+	for (const g of groupSamplingFields(schema))
+		out.set(g.group, {
+			on: g.fields.filter((f) => set.has(f.key)).length,
+			total: g.fields.length
+		})
+	return out
 }
 
 /**

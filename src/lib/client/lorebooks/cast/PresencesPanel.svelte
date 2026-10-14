@@ -39,7 +39,7 @@
 	 *
 	 * ⚠ A presence belongs to the LINE it was made on, like an amendment. The
 	 * panel shows the ones the line being read can see — `presencesOnLine`,
-	 * the World bar's own filter — says which line a new one will be written
+	 * the roster popover's own filter — says which line a new one will be written
 	 * to, and, before a removal, every line it comes off.
 	 */
 	interface Props {
@@ -101,11 +101,11 @@
 
 	/**
 	 * Which of them are standing here at the moment being read:
-	 * `appearancesOf`, the World bar's answer, word for word.
+	 * `appearancesOf`, the roster popover's answer, word for word.
 	 *
 	 * ⚠ By personal position, NOT by arrival date — the order `appearancesOf`
 	 * puts appearances in. The list below is chronological because that is how
-	 * a life reads; this sentence is the same fact the World bar and the Lives
+	 * a life reads; this sentence is the same fact the roster popover and the Lives
 	 * lens state, and one screen must not give it in two orders.
 	 */
 	let hereNow = $derived(
@@ -214,10 +214,7 @@
 	}
 </script>
 
-<div
-	class="panel-inset flex flex-col gap-3"
-	data-lore-presences={castId}
->
+<div class="panel-inset flex flex-col gap-3" data-lore-presences={castId}>
 	<div class="flex items-start gap-2">
 		<div class="min-w-0 flex-1">
 			<p class="text-sm font-semibold">When they are here</p>
@@ -234,7 +231,10 @@
 				{:else if hereNow.length === 1}
 					Here at {hereNow[0].personalPosition}.
 				{:else}
-					<strong>{COUNT_WORDS[hereNow.length - 2] ?? hereNow.length} of them are here</strong>
+					<strong>
+						{COUNT_WORDS[hereNow.length - 2] ?? hereNow.length} of them
+						are here
+					</strong>
 					at once, at {hereTogether()}.
 				{/if}
 			</p>
@@ -286,7 +286,7 @@
 								Remove
 							</button>
 							<button
-								class="btn btn-sm preset-filled-surface-400-600 shrink-0 py-0.5 text-xs"
+								class="btn btn-sm preset-tonal-surface shrink-0 py-0.5 text-xs"
 								type="button"
 								onclick={() => (confirmingRemove = null)}
 							>
@@ -294,7 +294,7 @@
 							</button>
 						{:else}
 							<button
-								class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-1"
+								class="btn btn-sm preset-tonal-surface shrink-0 p-1"
 								type="button"
 								title="Remove this presence"
 								aria-label="Remove the presence at {p.personalPosition}"
@@ -305,7 +305,10 @@
 						{/if}
 					</div>
 					{#if confirmingRemove === p.id}
-						<p class="text-surface-700-300 text-xs" data-presence-removal>
+						<p
+							class="text-surface-700-300 text-xs"
+							data-presence-removal
+						>
 							{removalQuestion(p)}
 						</p>
 					{/if}
@@ -336,16 +339,14 @@
 					bind:value={draft.personalPosition}
 				/>
 				<p class="text-surface-700-300 text-xs">
-					An age, a chapter, an ordinal — whatever you count in. It needs
-					no calendar; it only has to increase as they grow.
+					An age, a chapter, an ordinal — whatever you count in. It
+					needs no calendar; it only has to increase as they grow.
 				</p>
 			</div>
 
 			<div class="grid grid-cols-2 gap-3">
 				<fieldset class="flex flex-col gap-1">
-					<legend
-						class="text-surface-600-400 text-xs font-semibold"
-					>
+					<legend class="text-surface-600-400 text-xs font-semibold">
 						They arrive
 					</legend>
 					<div class="flex gap-1">
@@ -373,9 +374,7 @@
 					</div>
 				</fieldset>
 				<fieldset class="flex flex-col gap-1">
-					<legend
-						class="text-surface-600-400 text-xs font-semibold"
-					>
+					<legend class="text-surface-600-400 text-xs font-semibold">
 						They leave
 					</legend>
 					<div class="flex gap-1">
@@ -409,7 +408,10 @@
 			</p>
 
 			<div class="flex flex-col gap-1">
-				<label class="text-xs font-semibold" for="presenceNote-{castId}">
+				<label
+					class="text-xs font-semibold"
+					for="presenceNote-{castId}"
+				>
 					Why this one
 				</label>
 				<input
@@ -429,7 +431,9 @@
 				>
 					This is their first presence. Until now {memberName} was in the
 					world at every moment; from here on they are here during their
-					presences and <strong>nowhere else</strong>.
+					presences and
+					<strong>nowhere else</strong>
+					.
 				</p>
 			{/if}
 
@@ -457,8 +461,8 @@
 
 			<div class="flex items-center gap-2">
 				<p class="text-surface-600-400 min-w-0 flex-1 text-[11px]">
-					Written to <strong>{lineName}</strong>{#if branchId != null}, so
-						it is not a presence on main.{/if}
+					Written to <strong>{lineName}</strong>
+					{#if branchId != null}, so it is not a presence on main.{/if}
 				</p>
 				<button
 					class="btn btn-sm preset-filled-primary-500"
@@ -469,7 +473,7 @@
 					<Icons.MapPin size={14} aria-hidden="true" /> Place them
 				</button>
 				<button
-					class="btn btn-sm preset-filled-surface-400-600"
+					class="btn btn-sm preset-tonal-surface"
 					type="button"
 					onclick={reset}
 				>

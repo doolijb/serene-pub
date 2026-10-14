@@ -54,6 +54,12 @@ export interface ModelPricing {
 	/** Per million OUTPUT tokens. */
 	outPerMTok?: number
 	/**
+	 * Per picture, by quality level (`low`/`medium`/`high`), at 1024×1024 —
+	 * for an image model billed per image (gpt-image-2). Absent where a
+	 * service bills an image model by tokens.
+	 */
+	perImage?: Record<string, number>
+	/**
 	 * ISO 4217. Always spelled, never assumed: a service that bills in credits
 	 * and one that bills in dollars print the same number otherwise.
 	 */
@@ -276,6 +282,17 @@ export function readStoredFacts(value: unknown): ModelFacts | null {
 	return facts && !factsAreEmpty(facts) ? facts : null
 }
 
+/** A `{level: price}` map, numbers only, or nothing. */
+function perImageOf(v: unknown): Record<string, number> | undefined {
+	if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
+	const out: Record<string, number> = {}
+	for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+		const n = num(x)
+		if (n !== undefined && n >= 0) out[k] = n
+	}
+	return Object.keys(out).length ? out : undefined
+}
+
 function readFactsObject(value: unknown): ModelFacts | null {
 	if (!value || typeof value !== "object") return null
 	const f = value as Record<string, unknown>
@@ -287,6 +304,7 @@ function readFactsObject(value: unknown): ModelFacts | null {
 			? {
 					inPerMTok: num(pricing.inPerMTok),
 					outPerMTok: num(pricing.outPerMTok),
+					perImage: perImageOf(pricing.perImage),
 					currency: str(pricing.currency) ?? "USD"
 				}
 			: undefined,

@@ -86,9 +86,7 @@
 	 * (NOMENCLATURE §22: embeddings `Zap`, entities `ScanText`) — those two
 	 * rows are the only ones in the list whose whole identity is the modality.
 	 */
-	const KindIcon = $derived(
-		connectionTypeIcon(type, kindIconComponent(kind))
-	)
+	const KindIcon = $derived(connectionTypeIcon(type, kindIconComponent(kind)))
 	const ActionIcon = $derived(
 		status.action
 			? (((Icons as any)[status.action.icon] as any) ?? Icons.Play)

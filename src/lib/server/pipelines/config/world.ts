@@ -2,9 +2,9 @@
  * SP's configuration, projected into the pipeline config model.
  *
  * The rows a person tunes outside the pipeline panel — `connections`,
- * `connection_defaults`, `sampling_configs`, a session's own sampling pick —
- * are read here and presented as the executor's five-layer scope chain, under
- * the configuration the pipeline panel writes:
+ * `connection_defaults`, `sampling_configs` — are read here and presented as
+ * the executor's five-layer scope chain, under the configuration the pipeline
+ * panel writes:
  *
  * | SP row | pipeline slot | on which node |
  * |---|---|---|
@@ -26,6 +26,7 @@ import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	S,
+	SCOPE_ORDER,
 	SLOT_VALUE,
 	isTransformId,
 	type ConfigWorld,
@@ -51,6 +52,14 @@ import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
 import { unreadSlotsOf } from "$lib/server/pipelines/boot/unreadAllowList"
 import { isHeldConnectionSlot } from "$lib/server/pipelines/config/heldSlots"
 
+/**
+ * The node key of a spec's model call when the caller names none — the
+ * `generate` oracle every shipped text pipeline declares. A session's own
+ * sampling pick is the session-scope `pipeline_node_overrides` row on this
+ * node's `sampling` slot (`resolveTaskConfig`, the 0.5.3 upgrade's wiring).
+ */
+export const ORACLE_NODE_KEY = "generate"
+
 export interface WorldScope {
 	sessionId?: number
 	/** Which node key carries the connection slot in the spec being run. */
@@ -67,11 +76,11 @@ export interface WorldScope {
  * | today | scope layer |
  * |---|---|
  * | `connection_defaults` (per capability) | `defaults` |
- * | `sessions.samplingConfigId` | `session` |
  * | the pipeline panel's rows | `preset` / `session` (`applyPipelineLayer`) |
  *
  * There is no user layer (ruled 2026-08-24): a person's levers are the
- * session's — its config selection and its overrides.
+ * session's — its config selection and its overrides. The panel's
+ * session-scope rows are the one session layer, sampling included.
  *
  * **Reads only.** Building a world never writes — it is a projection of what is
  * configured, and a write here would mean resolving somebody's config had a
@@ -87,19 +96,9 @@ export async function buildWorld(
 	db: Db,
 	scope: WorldScope = {}
 ): Promise<ConfigWorld> {
-	const oracle = scope.oracleNodeKey ?? "generate"
+	const oracle = scope.oracleNodeKey ?? ORACLE_NODE_KEY
 
 	const [system] = await db.select().from(schema.systemSettings).limit(1)
-
-	const session = scope.sessionId
-		? (
-				await db
-					.select()
-					.from(schema.sessions)
-					.where(eq(schema.sessions.id, scope.sessionId))
-					.limit(1)
-			)[0]
-		: undefined
 
 	const connectionRows = await db.select().from(schema.connections)
 	/**
@@ -149,11 +148,9 @@ export async function buildWorld(
 	//
 	// The instance layer is keyed by CAPABILITY (`connection_defaults`), so the
 	// oracle gets the default for the thing it actually needs to do rather
-	// than the default for whatever family it was filed under. The session layer
-	// is written further down — after the pipeline layer, deliberately; its
-	// block says why — and is still text-only, because layering
-	// `sessions.connection_id` onto an image oracle would hand a session's
-	// chat connection to a backend that has never heard of a temperature.
+	// than the default for whatever family it was filed under. The session's
+	// own picks arrive with the pipeline layer below, as session-scope panel
+	// rows at the address a person set them.
 	const defaultsByCapability = await capabilityDefaults(db)
 	// The shape is the fallback and `??` is what keeps it one: a slot that named
 	// a capability never reads its declarations a second time, and a slot
@@ -161,7 +158,6 @@ export async function buildWorld(
 	const oracleCapability =
 		requiredTransform(await connectionSlotRequires(db, scope, oracle)) ??
 		capabilityForSamplingShape(await connectionSlotShape(db, scope, oracle))
-	const oracleIsText = oracleCapability === TEXT_CAPABILITY
 	// `undefined` means the slot's shape names no capability — an embeddings or
 	// MCP connection slot. Those layer NO default: the instance's "default
 	// connection" is a text connection, and handing it to a slot that wanted an
@@ -213,41 +209,14 @@ export async function buildWorld(
 	// the model would not.
 	if (scope.specId) await applyPipelineLayer(db, overrides, scope)
 
-	// ── the session's own column, BELOW the panel's session-scope rows ───
+	// ── loadouts (I12), after the pipeline layer that names them ─────────
 	//
-	// ⚠ The order of these two blocks is load-bearing. `resolveConfigSources`
-	// takes the FIRST candidate it finds at each scope, and both
-	// `sessions.sampling_config_id` and a session-scope `pipeline_node_overrides`
-	// row live at `session` — so whichever is pushed first wins. There is no
-	// comparison, no tie-break and no warning; swapping these two blocks is a
-	// silent flip, which is why `world.sessionScopeOrder.int.test.ts` pins which
-	// one comes back.
-	//
-	// Below, so among two session-scope values the one a person set in the panel
-	// wins. The column is the older, blunter statement of the same wish and the
-	// panel's row is the more specific one.
-	//
-	// ⚠ There is no `connection` twin here any more (0130). The session's
-	// `connection_id` was the other half of this block and it outranked the
-	// panel's pick for as long as this sat above `applyPipelineLayer`; overrides
-	// are by model now, never by connection, so the only connection override
-	// left is the pipeline configuration's connection slot — which is a
-	// `pipeline_node_overrides` row like any other and arrives through
-	// `applyPipelineLayer` above.
-	//
-	// Still text-only, and that is a fact about the column rather than a policy:
-	// `sampling_config_id` predates there being anything but text and cannot say
-	// which capability it means.
-	if (oracleIsText) {
-		layer(
-			"session",
-			scope.sessionId,
-			oracle,
-			"sampling",
-			SLOT_VALUE,
-			idOrNull(session?.samplingConfigId)
-		)
-	}
+	// A node's `loadout` slot is projected onto its connection and sampling
+	// slots at the `defaults` scope — the layer the instance default already
+	// sits at, under every explicit pick. So per value: the node's own slot
+	// (config scope) → its loadout (merges followed) → the transform's
+	// default loadout when that one is unfilled.
+	const loadoutChains = await applyLoadoutLayer(db, overrides)
 
 	/**
 	 * The instance default a node falls back to when its connection slot names
@@ -351,7 +320,7 @@ export async function buildWorld(
 		defaultsByCapability[TEXT_CAPABILITY]
 	)
 
-	return {
+	const world: ConfigWorld = {
 		overrides,
 		samplingConfigs: samplingRows.map((s: any) => ({
 			id: String(s.id),
@@ -462,6 +431,95 @@ export async function buildWorld(
 		activeConnection,
 		activeSampling
 	}
+	LOADOUT_CHAINS.set(world, loadoutChains)
+	return world
+}
+
+/**
+ * Each node's loadout chain in receipt words (*Extraction (merged) → Reply
+ * (unfilled fallback)*), for the runs a world was built for. Kept beside the
+ * world rather than on it: `ConfigWorld` is the SDK's type, and the executor
+ * has no use for prose.
+ */
+const LOADOUT_CHAINS = new WeakMap<object, Record<string, string>>()
+
+/** The chains `buildWorld` resolved, keyed by node key; `{}` for none. */
+export function loadoutChainsOf(world: object): Record<string, string> {
+	return LOADOUT_CHAINS.get(world) ?? {}
+}
+
+/**
+ * Project every node's named loadout (I12) onto its connection and sampling
+ * slots at the `defaults` scope, replacing the instance default there.
+ *
+ * Explicit picks are untouched — they sit at `config`, above `defaults` — so
+ * a loadout never overrides a slot somebody set on the step. A loadout that
+ * resolves to nothing (unfilled, and no filled default under it) projects
+ * nothing: the run resolves exactly as it did before loadouts, and refuses
+ * by name where nothing is set.
+ *
+ * Returns each node's chain, for the receipt.
+ */
+export async function applyLoadoutLayer(
+	db: Db,
+	overrides: OverrideRow[]
+): Promise<Record<string, string>> {
+	const named = new Map<string, OverrideRow>()
+	for (const scopeKind of SCOPE_ORDER)
+		for (const row of overrides)
+			if (
+				row.slot === "loadout" &&
+				row.scopeKind === scopeKind &&
+				row.value != null &&
+				!named.has(row.nodeKey)
+			)
+				named.set(row.nodeKey, row)
+	if (!named.size) return {}
+
+	const { findLoadout, resolveLoadout, describeLoadoutChain } = await import(
+		"$lib/server/loadouts"
+	)
+	const chains: Record<string, string> = {}
+	for (const [nodeKey, row] of named) {
+		const loadout = await findLoadout(db, row.value)
+		if (!loadout) continue
+		const resolution = await resolveLoadout(db, loadout)
+		chains[nodeKey] = describeLoadoutChain(resolution)
+		const effective = resolution.effective
+		if (!effective) continue
+		const replace = (slot: string, value: unknown) => {
+			for (let i = overrides.length - 1; i >= 0; i--) {
+				const o = overrides[i]!
+				if (o.nodeKey === nodeKey && o.slot === slot && o.scopeKind === "defaults")
+					overrides.splice(i, 1)
+			}
+			overrides.push({
+				nodeKey,
+				slot,
+				path: SLOT_VALUE,
+				value,
+				scopeKind: "defaults",
+				scopeId: undefined
+			})
+		}
+		replace("connection", {
+			id: String(effective.connectionId),
+			modelId: idOrNull(effective.connectionModelId) ?? null
+		})
+		// Per value: a loadout naming no sampling leaves the default's.
+		if (effective.samplingConfigId != null)
+			replace("sampling", idOrNull(effective.samplingConfigId))
+		// The loadout's dials ride with its workflow (lane E2): the image
+		// call layers them over the workflow's defaults (`dispatchImage`).
+		if (effective.workflowId != null)
+			replace("workflow", {
+				id: effective.workflowId,
+				...(effective.workflowValues
+					? { values: effective.workflowValues }
+					: {})
+			})
+	}
+	return chains
 }
 
 /**
@@ -680,13 +738,35 @@ async function applyPipelineLayer(
 	 * path falls through to its in-code default and still emits today's bytes.
 	 * A customization is the right thing to lose here; a prompt is not.
 	 */
-	const derefLayout = async (value: unknown) => {
+	const derefLayout = async (value: unknown, variableId?: string) => {
 		if (typeof value !== "number") return undefined
 		const { resolveVariableTemplate } = await import(
 			"$lib/server/pipelines/entities/variableTemplates"
 		)
-		return (await resolveVariableTemplate(db, value)) ?? undefined
+		const row = await resolveVariableTemplate(db, value)
+		if (!row) return undefined
+		// A row written for a different variable than the key renders is a
+		// stale pick — the spec's `renders` moved the key to another variable
+		// since it was chosen (owner ruling 2026-10-13). Dropped like a dangle:
+		// the key's own floor renders, never a layout for some other shape.
+		if (variableId && row.variableId !== variableId) return undefined
+		return row
 	}
+
+	/**
+	 * What each variables-slot key renders, by address and key — the slot's
+	 * declared variable, or the one the spec's `renders` names for it (both
+	 * already folded into the declaration). Every layout this layer pushes
+	 * carries it, so the render takes the floor and the absence rule from the
+	 * variable rather than from the key string.
+	 */
+	const variableAt = new Map<string, string>(
+		varDecls
+			.filter((d) => d.variableId)
+			.map((d) => [`${addressOf(d.nodeKey, d.slot)}\u0000${d.path}`, d.variableId!])
+	)
+	const variableOf = (nodeKey: string, slot: string, path: string) =>
+		variableAt.get(`${addressOf(nodeKey, slot)}\u0000${path}`)
 
 	/**
 	 * A template reference becomes the template itself — source **and** engine.
@@ -810,7 +890,10 @@ async function applyPipelineLayer(
 					v.nodeKey,
 					v.slot,
 					v.path ?? "",
-					await derefLayout(v.value)
+					await derefLayout(
+						v.value,
+						variableOf(v.nodeKey, v.slot, v.path ?? "")
+					)
 				)
 				continue
 			}
@@ -858,7 +941,10 @@ async function applyPipelineLayer(
 				o.nodeKey,
 				o.slot,
 				o.path ?? "",
-				await derefLayout(o.value)
+				await derefLayout(
+					o.value,
+					variableOf(o.nodeKey, o.slot, o.path ?? "")
+				)
 			)
 			continue
 		}
@@ -998,7 +1084,8 @@ async function applyPipelineLayer(
 				shipped.set(
 					d.variableId,
 					await derefLayout(
-						await defaultVariableTemplateFor(db, d.variableId)
+						await defaultVariableTemplateFor(db, d.variableId),
+						d.variableId
 					)
 				)
 			push(
@@ -1008,11 +1095,13 @@ async function applyPipelineLayer(
 				d.slot,
 				d.path,
 				shipped.get(d.variableId) ??
-					// A band declared upstream (typed templates P2) resolves even
-					// with no layout anywhere: the resolved keys are how Assemble
-					// learns which bands to render at the top level. No `source`,
-					// so it renders through the in-code floor.
-					(d.band ? { engine: CORE_TEMPLATE_ENGINE } : undefined)
+					// Every key resolves, row or no row (owner ruling 2026-10-13):
+					// the variable it carries is how the render picks the right
+					// floor, and — for a band declared upstream (typed templates
+					// P2) — the resolved keys are how Assemble learns which bands
+					// to render at the top level. No `source`, so it renders
+					// through the floor.
+					{ variableId: d.variableId, engine: CORE_TEMPLATE_ENGINE }
 			)
 		}
 	}

@@ -6,21 +6,21 @@
  * which fact is an error, which is merely something to act on, and which
  * section's button fixes it. Nothing here reads the database or the clock.
  *
- * Levels follow the status vocabulary (STYLE-GUIDE §6.11): `error` is broken
- * or needed-and-missing, `attention` is something to act on that has not
- * failed yet.
+ * Levels follow the status vocabulary (STYLE-GUIDE §6.11): `error` is broken,
+ * `attention` is something to act on that has not failed yet. Unfinished is
+ * never broken: a chat model nobody has chosen yet is `attention` (gold) on
+ * every fresh pub, and red is kept for a chosen one that stopped answering
+ * (owner ruling 2026-10-06, "Gold until set").
  */
 
-import { capabilityLabel, type CapabilityId } from "@serene-pub/sdk"
+import { defaultLoadoutName } from "$lib/shared/loadouts/defaultLoadoutName"
 import { TunnelStatuses } from "$lib/shared/constants/Tunnels"
+import { NEEDED_WINDOW_DAYS } from "$lib/shared/capabilities/combos"
 
 type Overview = Sockets.Admin.Overview.Response
 type AttentionItem = Sockets.Admin.Overview.AttentionItem
 
 export type OverviewFacts = Omit<Overview, "attention">
-
-/** The one model job whose absence stops every session replying. */
-const CHAT_CAPABILITY = "text->text"
 
 /** A backup older than this, with daily backups on, means the schedule is not running. */
 export const STALE_BACKUP_MS = 48 * 60 * 60 * 1000
@@ -35,26 +35,34 @@ const firstTwo = (names: readonly string[]) =>
 export function attentionFor(facts: OverviewFacts, now: number): AttentionItem[] {
 	const out: AttentionItem[] = []
 
-	// Chat with nothing registered: no session can reply. Only chat, because
-	// "demanded" means some node in the catalog can use a capability, not that
-	// anything on this pub will — image generation and embeddings are demanded
-	// on every fresh pub, embeddings fall back to keyword search, and a
-	// permanent red row nobody can act on teaches people to ignore this list.
-	// A run that does fail for want of one shows under failed runs, and
-	// Defaults marks every unset demanded job either way.
+	// A job this pub needs with nothing registered: one item per job, so this
+	// list, the Overview's Models card (which counts the same `missing`) and
+	// the rail's dot agree (plan less-confusing C1). `missing` is already
+	// only the NEEDED jobs (`admin/jobUse.ts`): chat, which every reply runs
+	// on, and any job a real run failed for want of in the last week. A job
+	// a catalog node merely could use (image generation on every pub) is Off,
+	// not missing, and never a row here: a permanent row nobody asked for
+	// teaches people to ignore this list.
+	//
+	// `attention`, not `error`: never set is unfinished, not broken, and it is
+	// the state every fresh pub starts in — red here made the rail read
+	// "Admin, something is broken" before anything had run. A chosen default
+	// whose host stopped answering is the red row below.
 	for (const m of facts.models.missing) {
-		if (m.capability !== CHAT_CAPABILITY) continue
 		out.push({
 			id: `models:missing:${m.capability}`,
-			level: "error",
-			title: `${capabilityLabel(m.capability as CapabilityId)} has no model`,
-			detail: m.requiredBy.length
-				? `Needed by ${m.requiredBy.slice(0, 2).join(", ")}${m.requiredBy.length > 2 ? ` and ${m.requiredBy.length - 2} more` : ""}. Runs that need it will fail.`
-				: "A pipeline needs it. Runs that need it will fail.",
+			level: "attention",
+			title: `The ${defaultLoadoutName(m.capability)} loadout needs a model`,
+			detail:
+				m.neededBecause === "failedRun"
+					? `A run needed it in the last ${NEEDED_WINDOW_DAYS} days and failed without it.`
+					: m.requiredBy.length
+						? `Needed by ${firstTwo(m.requiredBy)}. Runs that need it will fail.`
+						: "A pipeline needs it. Runs that need it will fail.",
 			section: "/admin/defaults",
 			// Lands on that job's row (defaults/Page.svelte, `data-field`).
 			action: {
-				label: "Choose a model",
+				label: "Fill the loadout",
 				href: `/admin/defaults#default:${m.capability}`
 			}
 		})
@@ -67,17 +75,37 @@ export function attentionFor(facts: OverviewFacts, now: number): AttentionItem[]
 	// sync error either way.
 	for (const c of facts.models.syncErrors) {
 		if (!c.capabilities.length) continue
-		const jobs = c.capabilities.map((id) => capabilityLabel(id as CapabilityId))
+		const loadouts = c.capabilities.map((id) => defaultLoadoutName(id))
 		out.push({
 			id: `connections:syncError:${c.connectionId}`,
 			level: "error",
 			title: `${c.name} is not answering`,
-			detail: `It is the default for ${firstTwo(jobs)}, and its last model sync failed: ${c.error}`,
+			detail: `It fills the ${firstTwo(loadouts)} ${loadouts.length === 1 ? "loadout" : "loadouts"}, and its last model sync failed: ${c.error}`,
 			section: "/admin/connections",
 			// Lands on that connection's Models card, beside its Refresh.
 			action: {
 				label: "Open connection",
 				href: `/admin/connections/${c.connectionId}#models`
+			}
+		})
+	}
+
+	// A chosen default whose pair cannot do its job: a sync replaced
+	// the model's modality with what the service now says, or the job was
+	// switched off on the connection. The default stays where it was, so
+	// every run it names is refused until somebody picks another. Broken, not
+	// unfinished: it was chosen, and it fails.
+	for (const r of facts.models.refusedDefaults) {
+		const loadout = defaultLoadoutName(r.capability)
+		out.push({
+			id: `defaults:refused:${r.capability}`,
+			level: "error",
+			title: `The ${loadout} loadout can't use its model`,
+			detail: `It holds ${r.modelName} on ${r.connectionName}, which can no longer do this work. Runs that need it will fail until you choose a model that can.`,
+			section: "/admin/defaults",
+			action: {
+				label: "Choose a model",
+				href: `/admin/defaults#default:${r.capability}`
 			}
 		})
 	}

@@ -7,7 +7,6 @@ import {
 	castHeaderLine,
 	castReadInLine,
 	castRowSentence,
-	moreLine,
 	relationshipsAtMomentLine,
 	reviewLine
 } from "./castRelationships"
@@ -133,17 +132,6 @@ describe("relationshipsAtMomentLine — how much has happened by now", () => {
 
 	it("says nothing at now, where every edge has happened", () => {
 		expect(relationshipsAtMomentLine(5, 5)).toBe("")
-	})
-})
-
-describe("moreLine — the rest of a long list", () => {
-	it("offers the rest", () => {
-		expect(moreLine(1)).toBe("1 more · show all")
-		expect(moreLine(3)).toBe("3 more · show all")
-	})
-
-	it("offers nothing when the list is all there", () => {
-		expect(moreLine(0)).toBe("")
 	})
 })
 

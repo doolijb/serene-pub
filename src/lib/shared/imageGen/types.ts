@@ -17,6 +17,7 @@
  */
 
 import type { ConnectionIdentity } from "$lib/shared/connections/identity"
+import type { MediaRef } from "@serene-pub/sdk"
 
 /**
  * One render, in backend-neutral terms.
@@ -52,21 +53,45 @@ export interface ImageGenRequest {
 	denoise?: number
 	/** Checkpoint override; falls back to the connection's own `model`. */
 	model?: string
-	// img2img / inpainting inputs USED to live here as `init: { bytes, mime, mask }`,
-	// declared unsupported by the only adapter that ever received one. They now
-	// belong to `ImageEditRequest` in `$lib/server/adapters/actions`, as MediaRefs
-	// rather than bytes:
-	//   - `generateImage` and `editImage` are different wire routes (txt2img vs
-	//     img2img), so they are different actions with different requests, and a
-	//     field only one of them can honour does not belong to both.
-	//   - a request that CANNOT carry an init is what makes "this backend is
-	//     txt2img-only" checkable rather than reported at the HTTP call.
+	/**
+	 * Images the picture should RESEMBLE — a likeness (the oracle's
+	 * `references` port). Not `init` and not `mask`: the three are different
+	 * wire fields on every backend that has them (KoboldCPP: `extra_images`
+	 * vs `init_images` vs `mask`). References, never bytes; the adapter loads
+	 * them through `ImageGenOptions.loadMedia`.
+	 */
+	references?: MediaRef[]
+	/**
+	 * The starting canvas (img2img). On the request since 2026-10-12
+	 * (DESIGN-image-generation §4.2): the drawing sheet's `init` is now the
+	 * statement of whether a backend takes one, read before the run, so the
+	 * request no longer has to be a different type to make it checkable.
+	 */
+	init?: MediaRef
+	/** Where to paint, for inpainting. Absent edits the whole frame. */
+	mask?: MediaRef
+	/** A transparent background, drawn by the model itself. */
+	transparent?: boolean
+	/**
+	 * `"W:H"`, derived from width/height by the HOST (`fitRequestToSheet`) for
+	 * aspect-only providers. Adapters never compute it a second time.
+	 */
+	aspect?: string
+	outputFormat?: "png" | "webp" | "jpeg"
 	/**
 	 * Animation. Present for the same reason as `init`: KoboldCPP already renders
 	 * frames, and a `video` that arrives later would mean revisiting every
 	 * signature between here and the media table.
 	 */
 	video?: { frames?: number; fps?: number }
+	/**
+	 * 🚧 A workflow's dial values (§7.1, as reversed 2026-10-12), by variable
+	 * name: the workflow's own defaults, with a loadout's overrides merged
+	 * over them. The request's own fields (steps, size, …), when set, win
+	 * over a same-named value here. Only a template-payload adapter reads
+	 * them.
+	 */
+	workflowValues?: Record<string, unknown>
 }
 
 /**
@@ -131,6 +156,14 @@ export interface GeneratedMediaItem {
 	durationMs?: number
 	/** Backend-specific provenance, stored on the media row rather than interpreted. */
 	meta?: Record<string, unknown>
+	/**
+	 * The series key the BACKEND says this picture belongs to — a keyed
+	 * graph's marked output node, by its id prefix (DESIGN-image-generation
+	 * §4.11). `null` is an extra the backend drew outside any key (another
+	 * SaveImage in the branch); absent means "keyed by the call", which is
+	 * what every flat dialect answers.
+	 */
+	key?: string | null
 }
 
 export interface ImageGenResult {
@@ -147,63 +180,231 @@ export interface ImageGenResult {
 	ignored: string[]
 	/** Whatever the backend returned, for the receipt. Never interpreted. */
 	raw?: unknown
+	/**
+	 * The service declined to draw this prompt (a moderation block), as
+	 * distinct from failing to: `media` is empty and this says why, in the
+	 * provider's own words. `noRetry` means asking again with the same prompt
+	 * gets the same answer and costs money, so the host stops the series
+	 * rather than spending the remaining calls on it.
+	 */
+	refusal?: {
+		message: string
+		/** The provider's own code (`moderation_blocked`). */
+		code?: string
+		/** The provider's own detail, verbatim, for the receipt. */
+		details?: unknown
+		noRetry: boolean
+	}
 }
 
 /**
- * The `generateImage` ACTION PROFILE — the ergonomics of one render.
+ * The **drawing sheet**: what an image adapter declares it can draw with
+ * (DESIGN-image-generation §4.3) — which request knobs it honours, its size
+ * rules, how many reference images it takes, whether it draws transparency
+ * itself, and how many pictures one call returns. Replaces the ad-hoc
+ * `ImageCapabilities` that preceded it.
  *
  * ## Not a `CapabilitySet`, and the two must never be merged
  *
- * A `CapabilitySet` answers "what kind of data does this turn into what other
- * kind" — the transform question, gated by the manifest and resolved through
- * four layers onto the connection row. Every field below answers something else
- * entirely: whether a render reports progress, whether it can be stopped,
- * whether the sizes are a free pair or a fixed list. Those are properties of HOW
- * one call behaves, not of what it accepts and returns, and folding them into
- * the capability set would put "Can be cancelled" in the same column as "Chat"
- * on the connection screen.
+ * A `CapabilitySet` answers "what kind of data turns into what other kind" —
+ * the transform question, gated by the manifest and resolved through four
+ * layers onto the connection row. Every field here answers something else: how
+ * ONE call behaves. Folding them together would put "Can be cancelled" in the
+ * same column as "Chat" on the connection screen.
  *
- * Reported rather than assumed so a form can grey out a control instead of
- * offering one that quietly does nothing.
+ * ## Who reads it
  *
- * ## What is no longer here
+ *  - the **host** packs a series into calls from `perCall` and `outputs`, fits
+ *    the size from `size`, and refuses at bind what a spec marks required and
+ *    the sheet cannot do (`references`, `transparent`);
+ *  - the **sampling form** greys the knobs a `false` here would drop;
+ *  - adapters still report `applied`/`ignored` per call, so the receipt and the
+ *    Info pane stay honest even where the sheet is coarser than the backend.
  *
- * `img2img` was a boolean beside a transform that said the same thing, and the
- * two disagreed: `A1111Adapter` reported `img2img: false` while the manifest
- * declared `text+image->image: "native"` for the very same type, and nothing
- * noticed for a release. The fact now has one spelling — the presence of an
- * `editImage` method — from which the capability key is derived. Do not
- * reintroduce it.
+ * Declared per adapter and refined per model where the model name tells
+ * (`ImageAdapterExports.sheetFor`) — KoboldCPP takes reference images only
+ * with an edit model loaded.
+ *
+ * `img2img` is not here and must not come back as a flag: whether a backend
+ * takes a starting canvas is `init`, and the `text+image->image` transform is
+ * a manifest fact with its own spelling.
  */
-export interface ImageCapabilities {
+export interface DrawingSheet {
+	/** A negative prompt is sent. */
+	negative: boolean
+	seed: boolean
+	steps: boolean
+	cfg: boolean
+	sampler: boolean
+	clipSkip: boolean
+	/**
+	 * How a size is asked for:
+	 *  - `free` — any width × height on a `step` grid, within `min`..`max`;
+	 *  - `enum` — one of a fixed list of `"WxH"` strings;
+	 *  - `aspect` — an aspect ratio (`"W:H"`), optionally a resolution tier.
+	 * The host fits the request to it (`fitRequestToSheet`); adapters never
+	 * compute it twice.
+	 */
+	size:
+		| {
+				kind: "free"
+				step: 8 | 16 | 64
+				/** Per side, in pixels. */
+				min: number
+				max: number
+				/**
+				 * Bounds on the AREA (width × height), for a provider that
+				 * limits total pixels rather than each side (gpt-image-2:
+				 * 655,360–8,294,400). Absent means only the per-side bounds.
+				 */
+				minPixels?: number
+				maxPixels?: number
+				/** Longest side over shortest side, at most (gpt-image-2: 3). */
+				maxRatio?: number
+		  }
+		| { kind: "enum"; sizes: string[] }
+		| { kind: "aspect"; aspects: string[]; tiers?: string[] }
+	/** Reference images (a likeness) it takes. `null` = no reference input at all. */
+	references: { max: number } | null
+	/** Takes a starting canvas (img2img). */
+	init: boolean
+	/** Takes an inpainting mask. */
+	mask: boolean
+	/** `none` ⇒ a cut-out falls to `core:task/cut-out@1`. */
+	transparent: "native" | "none"
+	/** Pictures one call can return; the host loops above it. */
+	perCall: number
+	/**
+	 * What one call returns per item: `perRun` pictures, and whether the
+	 * outputs come back keyed (a Comfy graph's marked output nodes) or only
+	 * in order.
+	 */
+	outputs: { perRun: number; keyed: boolean }
 	/** Emits progress events mid-render. */
 	progress: boolean
 	/** Progress carries partially-denoised frames. */
 	preview: boolean
 	/** A render in flight can be stopped. */
 	cancel: boolean
-	/** More than one image per request. */
-	batch: boolean
-	/**
-	 * Renders frames rather than a still.
-	 *
-	 * Stays in the profile rather than becoming a `text->video` transform because
-	 * the SDK's `TRANSFORMS` does not name that id: it has no label, no tagline
-	 * and nothing renders it. Adding the id is small; deciding whether the action
-	 * would then be `generateMedia` is not, and neither should be settled while
-	 * nothing produces video.
-	 */
+	/** Renders frames rather than a still. */
 	video: boolean
-	/** Arbitrary width/height, as opposed to a fixed list. */
-	freeSize: boolean
-	/** When `freeSize` is false, the sizes that ARE available. */
-	sizePresets?: Array<{ width: number; height: number }>
-	/** Known-good names, when the backend can tell us. Empty means "we cannot say". */
-	samplers?: string[]
-	schedulers?: string[]
+	/**
+	 * 🚧 What one call ships: `flat` (absent) — a request of named knobs;
+	 * `template` — a provider document with holes the host renders (a ComfyUI
+	 * workflow, §4.10). A `template` pair needs the oracle's `workflow` slot,
+	 * and the bind guard refuses one without it.
+	 */
+	payload?: "flat" | "template"
+	/**
+	 * 🚧 **expressions** — the backend can redraw a finished picture with a
+	 * different facial expression, keeping everything else (NovelAI's
+	 * `augment-image` `emotion` tool). Absent means no. The adapter's
+	 * `expressImage(ref, label)` is the call; nothing reads the flag yet — the
+	 * sprite row's second action (DESIGN-image-generation §6.3) will.
+	 */
+	expressions?: boolean
+}
+
+/**
+ * The image sampling keys a sheet can say it drops, and the sheet field that
+ * decides each. What the sampling form greys; one table so the form and any
+ * later reader cannot disagree about which flag governs which knob.
+ */
+export const SHEET_GATED_SAMPLING_KEYS: Readonly<
+	Record<string, (sheet: DrawingSheet) => boolean>
+> = {
+	seed: (s) => s.seed,
+	steps: (s) => s.steps,
+	cfg: (s) => s.cfg,
+	sampler: (s) => s.sampler,
+	scheduler: (s) => s.sampler,
+	clipSkip: (s) => s.clipSkip,
+	// `denoise` only means something with a starting canvas.
+	denoise: (s) => s.init
+}
+
+/** The sampling keys this sheet would drop — what a form greys. */
+export function samplingKeysSheetDrops(
+	sheet: DrawingSheet | null | undefined
+): string[] {
+	if (!sheet) return []
+	return Object.entries(SHEET_GATED_SAMPLING_KEYS)
+		.filter(([, honours]) => !honours(sheet))
+		.map(([key]) => key)
 }
 
 export interface ImageGenOptions {
 	signal?: AbortSignal
 	onProgress?: (p: ImageGenProgress) => void
+	/**
+	 * Read the bytes of a referenced file — `references`, `init`, `mask`.
+	 *
+	 * Handed in by the host rather than imported by the adapter: loading a
+	 * file needs the media module, which needs the database, and the image
+	 * adapters stay free of that graph (the same line `AttachmentInput` draws
+	 * for the text family). Absent means the caller can load nothing, and an
+	 * adapter reports every file it was handed as ignored.
+	 */
+	loadMedia?: (ref: MediaRef) => Promise<{ bytes: Uint8Array; mime: string }>
+	/**
+	 * 🚧 The provider document a `payload: "template"` adapter draws with — the
+	 * oracle's `workflow` slot, resolved by the host to its `workflows` row.
+	 * Flat adapters never read it.
+	 */
+	workflow?: ImageWorkflowDocument
+	/**
+	 * 🚧 A keyed-graph call (§4.7 rule 1): every series item this ONE call
+	 * draws, each with its rendered prompt rows and its `vars`. Present only
+	 * when the host packed the series as a keyed graph; the request's own
+	 * `prompt` is then the first item's.
+	 */
+	series?: ImageSeriesCallItem[]
+	/** The run this call belongs to, for a document that writes it (`{{runId}}`). */
+	runId?: string
+}
+
+/** One series item inside a keyed-graph call. */
+export interface ImageSeriesCallItem {
+	/** Sanitised (§4.11): `[a-z0-9._-]`, never a `:`. */
+	key: string
+	prompt: string
+	negative?: string
+	vars?: Record<string, unknown>
+}
+
+/**
+ * A `workflows` row as an adapter receives it: the document with its holes,
+ * the variable declarations, and the output mark.
+ */
+export interface ImageWorkflowDocument {
+	id: number
+	name: string
+	dialect: string
+	/** The graph with its Handlebars holes, as text (not JSON until rendered). */
+	document: string
+	variables: WorkflowVariable[]
+	/** The marked output node's id, or null when none was marked. */
+	outputNode: string | null
+}
+
+/**
+ * One declared workflow variable (DESIGN-image-generation §4.8 step 3, §7.1).
+ *
+ * `name` is the hole's path as the document writes it (`prompt`,
+ * `references.[0].filename`, `lora_strength`). `enumSource` names where a
+ * select's options come from: `objectInfo:<class>.<input>` — the connection's
+ * cached `/object_info` enum.
+ */
+export interface WorkflowVariable {
+	name: string
+	type: "string" | "number" | "integer" | "boolean" | "enum"
+	default?: unknown
+	min?: number
+	max?: number
+	step?: number
+	enumSource?: string
+	/** Display grouping in the variables panel. */
+	group?: string
+	/** A person-facing label, from a marker node's title when there was one. */
+	label?: string
 }

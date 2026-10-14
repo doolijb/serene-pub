@@ -3,6 +3,7 @@
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import type { GraphEdge, GraphNode, PanelEdge } from "./graphModel"
 	import { NEW_PLACE_OPTION, otherEndOptions } from "./linkDraft"
+	import { bookReadOnly } from "../bookData.svelte"
 
 	/**
 	 * One node, and everything the graph knows about it.
@@ -83,6 +84,10 @@
 		onClose
 	}: Props = $props()
 
+	/** A shared book: links read, never made, kept or deleted. */
+	const readOnlyBook = bookReadOnly()
+	let readOnly = $derived(readOnlyBook.value)
+
 	/**
 	 * The edge whose delete is waiting on a second press. A delete is
 	 * permanent, so the first press only asks; opening another node lets go.
@@ -128,7 +133,7 @@
 			{openLabel}
 		</button>
 		<button
-			class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-1.5"
+			class="btn btn-sm preset-tonal-surface shrink-0 p-1.5"
 			type="button"
 			title="Close"
 			aria-label="Close"
@@ -140,7 +145,7 @@
 
 	<div class="panel-inset flex flex-col gap-2">
 		<p class="text-xs font-semibold">Relationships {edges.length}</p>
-		<div data-node-link-to>
+		<div data-node-link-to hidden={readOnly}>
 			<Select
 				label="Link to"
 				labelHidden
@@ -166,8 +171,12 @@
 
 	{#if edges.length === 0}
 		<p class="text-surface-600-400 text-xs italic">
-			Nothing joins this to anything yet. Alt-drag (⌥ on a Mac) from it on
-			the canvas, or pick something under Link to….
+			{#if readOnly}
+				Nothing joins this to anything yet.
+			{:else}
+				Nothing joins this to anything yet. Alt-drag (⌥ on a Mac) from it on
+				the canvas, or pick something under Link to….
+			{/if}
 		</p>
 	{/if}
 
@@ -215,7 +224,7 @@
 					{:else}
 						<span class="flex-1"></span>
 					{/if}
-					{#if isNew(row.edge)}
+					{#if isNew(row.edge) && !readOnly}
 						<button
 							class="btn btn-sm preset-tonal-success shrink-0 text-xs"
 							type="button"
@@ -247,7 +256,7 @@
 						>
 							Cancel
 						</button>
-					{:else}
+					{:else if !readOnly}
 						<button
 							class="btn btn-sm preset-tonal-error shrink-0 p-1"
 							type="button"

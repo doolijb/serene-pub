@@ -13,7 +13,10 @@
 		type FolderPickResult
 	} from "$lib/client/utils/sillyTavernFolderImport"
 	import { SILLYTAVERN_DIRS } from "$lib/shared/utils/sillyTavernPaths"
-	import { importCompletionOf, type ImportCompletion } from "./importCompletion"
+	import {
+		importCompletionOf,
+		type ImportCompletion
+	} from "./importCompletion"
 
 	const userCtx: UserCtx = getContext("userCtx")
 	const socket = useTypedSocket()
@@ -390,7 +393,9 @@
 		}
 
 		if (message.success) {
-			const completion = importCompletionOf(message.conclusion ?? "complete")
+			const completion = importCompletionOf(
+				message.conclusion ?? "complete"
+			)
 			const toast = {
 				title: completion.toast,
 				description: message.message || "Data imported successfully"
@@ -424,13 +429,13 @@
 
 {#if userCtx.user?.isAdmin}
 	<div class="flex flex-col gap-4">
-		<!-- The section's name is PanelSectionTitle's ("Import"); this says
-		     what it imports from. -->
+		<!-- The section's name is the Settings nav header's ("Import"); this
+		     says what it imports from. -->
 		<div>
 			<h3 class="text-sm font-medium">From SillyTavern</h3>
 			<p class="text-surface-600-400 mt-1 text-sm">
-				Import your characters, personas, sessions, and lorebooks
-				from SillyTavern.
+				Import your characters, personas, sessions, and lorebooks from
+				SillyTavern.
 			</p>
 		</div>
 
@@ -449,7 +454,7 @@
 							class="text-warning-500 mx-auto mb-4"
 						/>
 					{/if}
-					<h3 class="mb-2 text-lg font-semibold">
+					<h3 class="mb-2 text-sm font-medium">
 						{importComplete.completion.heading}
 					</h3>
 					<p class="text-surface-700-300 mb-4 text-sm">
@@ -460,7 +465,9 @@
 							class="bg-warning-200-800 border-warning-500 mb-4 rounded border-l-4 p-3 text-left"
 						>
 							<p class="text-sm">
-								<span class="font-semibold">It stopped before it finished:</span>
+								<span class="font-semibold">
+									It stopped before it finished:
+								</span>
 								{importComplete.stoppedBecause}
 							</p>
 						</div>
@@ -519,7 +526,9 @@
 				<div
 					class="bg-warning-200-800 border-warning-500 rounded border-l-4 p-4"
 				>
-					<h3 class="mb-2 flex items-center gap-2 font-semibold">
+					<h3
+						class="mb-2 flex items-center gap-2 text-sm font-medium"
+					>
 						<Icons.AlertTriangle
 							size={20}
 							class="text-warning-500"
@@ -532,8 +541,8 @@
 						<li>
 							<strong>What's imported:</strong>
 							Characters and their expression sprites, personas and
-							their avatars, chats (including group chats), and
-							lorebooks (SillyTavern's World Info)
+							their avatars, chats (including group chats), and lorebooks
+							(SillyTavern's World Info)
 						</li>
 						<li>
 							<strong>What's NOT imported:</strong>
@@ -544,8 +553,8 @@
 						</li>
 						<li>
 							<strong>Chats become sessions:</strong>
-							Both individual and group chats are imported into
-							Serene Pub's unified session system
+							Both individual and group chats are imported into Serene
+							Pub's unified session system
 						</li>
 						<li>
 							<strong>Swipes:</strong>
@@ -622,7 +631,7 @@
 				<div>
 					<button
 						type="button"
-						class="btn preset-filled-secondary-500"
+						class="btn preset-filled-primary-500"
 						onclick={scanFolder}
 						disabled={!pickedFolder || isScanning || isImporting}
 					>
@@ -639,12 +648,12 @@
 				<!-- Scan results -->
 				{#if scanResults}
 					<div class="bg-surface-200-800 rounded p-4">
-						<h3 class="mb-4 text-lg font-semibold">Scan results</h3>
+						<h3 class="mb-4 text-sm font-medium">Scan results</h3>
 
 						<!-- Characters -->
 						<div class="mb-6">
 							<div class="mb-2 flex items-center justify-between">
-								<h4 class="font-semibold">
+								<h4 class="text-sm font-medium">
 									Characters ({scanResults.characters.filter(
 										(c) => c.selected
 									).length}/{scanResults.characters.length})
@@ -689,7 +698,7 @@
 						<!-- Personas -->
 						<div class="mb-6">
 							<div class="mb-2 flex items-center justify-between">
-								<h4 class="font-semibold">
+								<h4 class="text-sm font-medium">
 									Personas ({scanResults.personas.filter(
 										(p) => p.selected
 									).length}/{scanResults.personas.length})
@@ -729,7 +738,7 @@
 						<!-- Individual sessions -->
 						<div class="mb-6">
 							<div class="mb-2 flex items-center justify-between">
-								<h4 class="font-semibold">
+								<h4 class="text-sm font-medium">
 									Individual sessions ({scanResults.sessions.filter(
 										(c) => c.selected
 									).length}/{scanResults.sessions.length})
@@ -788,7 +797,7 @@
 						<!-- Group sessions -->
 						<div class="mb-6">
 							<div class="mb-2 flex items-center justify-between">
-								<h4 class="font-semibold">
+								<h4 class="text-sm font-medium">
 									Group sessions ({scanResults.groupSessions.filter(
 										(g) => g.selected
 									).length}/{scanResults.groupSessions
@@ -848,7 +857,7 @@
 						<!-- Lorebooks -->
 						<div class="mb-6">
 							<div class="mb-2 flex items-center justify-between">
-								<h4 class="font-semibold">
+								<h4 class="text-sm font-medium">
 									Lorebooks ({scanResults.lorebooks.filter(
 										(l) => l.selected
 									).length}/{scanResults.lorebooks.length})

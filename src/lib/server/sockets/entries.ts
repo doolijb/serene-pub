@@ -123,9 +123,11 @@ import {
 	type LorebookEntry
 } from "$lib/server/utils/lorebookEntries"
 import { deletePlaceStats } from "$lib/server/state/lorebookState"
+import { relayToBookReaders } from "$lib/server/sockets/utils/bookReaders"
 import {
 	LOREBOOK_NOT_FOUND,
 	assertOwnedBook,
+	assertReadableBook,
 	findOwnedBook
 } from "$lib/server/utils/ownedBook"
 
@@ -391,7 +393,8 @@ async function buildEntriesList(
 	lorebookId: number,
 	typeId: EntryTypeId
 ): Promise<Sockets.Entries.List.Response> {
-	const book = await assertOwnedBook(db, userId, lorebookId)
+	// A read: owner, share recipient or admin (lane A3).
+	const book = await assertReadableBook(db, userId, lorebookId)
 
 	return {
 		lorebookId,
@@ -411,15 +414,20 @@ async function buildEntriesList(
  * for a push the caller's own reply does not depend on, and reachable here
  * only if the book vanished between the write and this refresh.
  */
-export function relistEntries(
+export async function relistEntries(
 	socket: any,
 	lorebookId: number,
 	typeId: EntryTypeId,
 	emitToUser: (event: string, data: any) => void
 ) {
-	return emitToUser("entries:list", () =>
+	const own = await emitToUser("entries:list", () =>
 		buildEntriesList(socket.user!.id, lorebookId, typeId)
 	)
+	// The people the book is shared with, each list built as them (lane A3).
+	await relayToBookReaders(socket, lorebookId, "entries:list", (readerId) =>
+		buildEntriesList(readerId, lorebookId, typeId)
+	)
+	return own
 }
 
 export const entryListHandler: Handler<
@@ -1543,7 +1551,10 @@ export const entryCountsHandler: Handler<
 	"entries:counts",
 	async (socket, params: Sockets.Entries.Counts.Params, emitToUser) => {
 		const userId = socket.user!.id
-		const book = await assertOwnedBook(db, userId, params.lorebookId)
+		// A read: owner, share recipient or admin (lane A3).
+		const book = await assertReadableBook(db, userId, params.lorebookId, {
+			isAdmin: !!socket.user?.isAdmin
+		})
 
 		// The line being read, with its ancestor chain and fork cuts (ruling
 		// 5). A branch of another book is refused, never counted as main.

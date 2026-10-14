@@ -687,6 +687,27 @@
       "when": 1791227874069,
       "tag": "0097_ner_entity_label",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1791954857918,
+      "tag": "0098_retire_session_sampling_column",
+      "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1791954891503,
+      "tag": "0099_rename_widget_settings_instance_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1791954907389,
+      "tag": "0100_schema_0_6_0_pr_5",
+      "breakpoints": true
     }
   ]
 }

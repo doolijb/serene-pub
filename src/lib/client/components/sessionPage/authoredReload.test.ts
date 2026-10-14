@@ -4,7 +4,7 @@
  * the server's interest gate sends a push only to a socket that declared it.
  */
 import { describe, expect, test } from "vitest"
-import { authoredOwnersOf, authoredReloadKeys, retargetAuthoredSrc, type RetargetablePanel } from "./authoredReload"
+import { authoredOwnersOf, authoredReloadKeys, retargetAuthoredGrants, retargetAuthoredSrc, type RetargetablePanel } from "./authoredReload"
 import { componentRuntimeError } from "$lib/client/components/host/runtimeError"
 import { scopeOfPayload } from "$lib/shared/sockets/interest"
 import { socketWants } from "$lib/server/sockets/interest"
@@ -20,6 +20,32 @@ const panels = (): RetargetablePanel[] => [
 	{ surface: { kind: "remote", owner: A }, src: art(A, "1") },
 	{ surface: { kind: "remote", owner: B }, src: art(B, "1") }
 ]
+
+describe("a review's push retargets that owner's grants", () => {
+	test("that owner's panels take the list as pushed; a revoke withdraws a scope without a reload", () => {
+		const ps = panels()
+		ps[2]!.grants = ["session:state", "session:state:write"]
+		ps[3]!.grants = ["session:state", "session:state:write"]
+		expect(retargetAuthoredGrants(ps, { ownerId: A, grants: ["session:state:write"] })).toBe(2)
+		expect(ps[2]!.grants).toEqual(["session:state:write"])
+		expect(ps[3]!.grants).toEqual(["session:state:write"])
+		expect(ps[4]!.grants).toBeUndefined()
+		// The same list again changes nothing.
+		expect(retargetAuthoredGrants(ps, { ownerId: A, grants: ["session:state:write"] })).toBe(0)
+		// Granted back.
+		expect(retargetAuthoredGrants(ps, { ownerId: A, grants: ["session:state"] })).toBe(2)
+		expect(ps[2]!.grants).toEqual(["session:state"])
+	})
+
+	test("never core, a plugin, or a push without a list", () => {
+		const ps = panels()
+		expect(retargetAuthoredGrants(ps, { ownerId: "core", grants: ["lore"] })).toBe(0)
+		expect(retargetAuthoredGrants(ps, { ownerId: "acme", grants: ["lore"] })).toBe(0)
+		expect(retargetAuthoredGrants(ps, { ownerId: A })).toBe(0)
+		expect(retargetAuthoredGrants(ps, { ownerId: A, grants: "lore" as unknown as string[] })).toBe(0)
+		expect(ps.every((p) => p.grants === undefined)).toBe(true)
+	})
+})
 
 describe("which keys a page declares", () => {
 	test("one scoped key per authored owner it draws — never core's, a plugin's, or the bare key", () => {

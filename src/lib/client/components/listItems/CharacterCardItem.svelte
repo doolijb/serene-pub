@@ -3,6 +3,8 @@
 	import * as Icons from "@lucide/svelte"
 	import EmbeddingStatusIcon from "../EmbeddingStatusIcon.svelte"
 	import RowMenu from "../menus/RowMenu.svelte"
+	import { characterSummary } from "$lib/shared/characters/characterSummary"
+	import { sharedFromLine } from "$lib/shared/utils/sharedRows"
 
 	interface Props {
 		character: Sockets.Characters.List.Response["characterList"][0]
@@ -46,6 +48,16 @@
 	function handleClick() {
 		onclick?.(character)
 	}
+
+	/** The caption's line: Summary, then creator notes, then the
+	 *  description's first sentence, never the raw sheet (plan F1). */
+	// A character shared with the reader says whose it is instead
+	// (PLAN-private-messages §6.7).
+	const summaryLine = $derived(
+		character.isSharedWithMe
+			? sharedFromLine(character)
+			: characterSummary(character)
+	)
 </script>
 
 <!-- Selection is a RING on a tile, where the shared `.sidebar-row-active`
@@ -54,7 +66,7 @@
      ring clear of the artwork so it reads as a frame around the tile. -->
 <div
 	class="group relative aspect-[3/4] w-full overflow-hidden rounded-xl shadow-md transition-shadow hover:shadow-xl {active
-		? 'ring-primary-500 ring-offset-surface-950 ring-2 ring-offset-2'
+		? 'ring-primary-500 ring-offset-surface-50-950 ring-2 ring-offset-2'
 		: ''}"
 	aria-current={active ? "true" : undefined}
 >
@@ -121,9 +133,9 @@
 					embeddingModel={character.embeddingModel}
 				/>
 			</span>
-			{#if character.description}
+			{#if summaryLine}
 				<span class="line-clamp-2 text-xs leading-snug text-white/80">
-					{character.description}
+					{summaryLine}
 				</span>
 			{/if}
 		</div>

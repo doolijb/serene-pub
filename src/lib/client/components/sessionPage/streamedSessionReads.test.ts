@@ -22,6 +22,12 @@
  * The page reads `$derived` primitives instead (`loadedSessionId`,
  * `sessionLorebookId`, …), which notify only when the value moves.
  *
+ * The page's stores (`sessionPage/*.svelte.ts`) are read the same way: each
+ * holds the session as an alias (`const session = $derived(d.data.session)`)
+ * or, in the data store, as its own `$state`, and a read through the data
+ * store of a getter that is new per chunk (`d.data.lastMessage`) is a read of
+ * the session too.
+ *
  * Shape 1 is followed INDIRECTLY too: an effect reading a `$derived` that
  * builds an object from `session` (the header's cast, a new array per
  * chunk), or calling a function that reads it, re-runs per token just the
@@ -34,6 +40,21 @@ import { describe, expect, test } from "vitest"
 
 const PAGE = resolve(process.cwd(), "src/routes/sessions/[id]/+page.svelte")
 const source = readFileSync(PAGE, "utf8")
+const STORE_DIR = resolve(process.cwd(), "src/lib/client/components/sessionPage")
+/** The page's stores — every effect the page runs through them is read here too. */
+const STORES = [
+	"sessionPageData.svelte.ts",
+	"sessionPageInbox.svelte.ts",
+	"actionList.svelte.ts",
+	"turnFlow.svelte.ts",
+	"messageControls.svelte.ts",
+	"pressRouting.svelte.ts",
+	"composerFlow.svelte.ts",
+	"scenesFlow.svelte.ts",
+	"sessionLayoutData.svelte.ts",
+	"envelopeSections.svelte.ts"
+]
+const storeSource = (name: string) => readFileSync(resolve(STORE_DIR, name), "utf8")
 const scriptOpen = source.indexOf(">", source.indexOf("<script")) + 1
 const scriptClose = source.indexOf("</script>")
 const script = source.slice(scriptOpen, scriptClose)
@@ -105,10 +126,20 @@ function isPrimitiveType(t: ts.TypeNode | undefined): boolean {
 	return PRIMITIVE_TYPES.has(t.kind)
 }
 
-/** The script's top-level `$derived`s and functions, by name. */
-function declarationsOf(file: ts.SourceFile): Map<string, Decl> {
+/**
+ * The script's top-level `$derived`s and functions, by name — or, `deep`,
+ * those declared at any depth (a store's, inside its factory).
+ */
+function declarationsOf(file: ts.SourceFile, deep = false): Map<string, Decl> {
 	const decls = new Map<string, Decl>()
-	for (const st of file.statements) {
+	const statements: ts.Statement[] = []
+	const collect = (n: ts.Node) => {
+		if (ts.isFunctionDeclaration(n) || ts.isVariableStatement(n)) statements.push(n)
+		ts.forEachChild(n, collect)
+	}
+	if (deep) collect(file)
+	else statements.push(...file.statements)
+	for (const st of statements) {
 		if (ts.isFunctionDeclaration(st) && st.name && st.body)
 			decls.set(st.name.text, { kind: "function", body: st.body, primitive: false })
 		if (!ts.isVariableStatement(st)) continue
@@ -153,6 +184,10 @@ function sessionChain(
 	let chain: string[] | null = null
 	const walk = (n: ts.Node) => {
 		if (chain || ts.isFunctionLike(n)) return
+		if (isStreamedStoreRead(n)) {
+			chain = []
+			return
+		}
 		if (ts.isIdentifier(n) && isTrackedRead(n)) {
 			if (n.text === "session") {
 				chain = []
@@ -180,10 +215,25 @@ function sessionChain(
 	return chain
 }
 
+/**
+ * The data store's getters that are new per streamed chunk: the session
+ * itself, and every derived of the store's that reads it and holds no
+ * primitive (`lastMessage`, `userPersonasInSession`, …).
+ */
+let streamedDataGetters = new Set<string>(["session"])
+function isStreamedStoreRead(n: ts.Node): boolean {
+	if (!ts.isPropertyAccessExpression(n) || !streamedDataGetters.has(n.name.text)) return false
+	const owner = n.expression
+	return (
+		(ts.isIdentifier(owner) && owner.text === "data") ||
+		(ts.isPropertyAccessExpression(owner) && owner.name.text === "data")
+	)
+}
+
 /** Every `$effect` in `code` that re-runs per streamed chunk, with how. */
-function streamingEffectsIn(code: string, lineOffset = 0): string[] {
+function streamingEffectsIn(code: string, lineOffset = 0, deep = false, name = "+page.svelte"): string[] {
 	const file = ts.createSourceFile("page.ts", code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
-	const decls = declarationsOf(file)
+	const decls = declarationsOf(file, deep)
 	const hits: string[] = []
 	const visit = (node: ts.Node) => {
 		if (ts.isCallExpression(node) && isEffectCallee(node.expression)) {
@@ -193,7 +243,7 @@ function streamingEffectsIn(code: string, lineOffset = 0): string[] {
 				if (chain) {
 					const { line } = file.getLineAndCharacterOfPosition(node.getStart())
 					hits.push(
-						`+page.svelte:${lineOffset + line + 1} reads ${[...chain, "session"].join(" -> ")}`
+						`${name}:${lineOffset + line + 1} reads ${[...chain, "session"].join(" -> ")}`
 					)
 				}
 			}
@@ -207,10 +257,11 @@ function streamingEffectsIn(code: string, lineOffset = 0): string[] {
 /**
  * An `$effect` that writes an OBJECT into `openSessionCtx` (a `$state`
  * proxy) re-proxies it on every run, so whatever reads that field — the
- * lorebooks rail reads `storyClock`, the header `cast` — re-runs with it.
+ * lorebooks rail reads `storyClock`, the header `cast` and `headerNotice` —
+ * re-runs with it.
  * Each such write gets an effect of its own that reads nothing else.
  */
-const OBJECT_FIELDS = ["cast", "storyClock"]
+const OBJECT_FIELDS = ["cast", "storyClock", "headerNotice"]
 function objectWritesSharingAnEffect(code: string): string[] {
 	const file = ts.createSourceFile("page.ts", code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
 	const hits: string[] = []
@@ -253,6 +304,16 @@ function objectWritesSharingAnEffect(code: string): string[] {
 
 const firstLine = source.slice(0, scriptOpen).split("\n").length - 1
 
+// Read off the data store's own source, before any store is checked.
+{
+	const file = ts.createSourceFile("data.ts", storeSource(STORES[0]), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+	const decls = declarationsOf(file, true)
+	const streamed = [...decls].filter(
+		([, d]) => d.kind === "derived" && !d.primitive && sessionChain(d.body, decls)
+	)
+	streamedDataGetters = new Set(["session", ...streamed.map(([name]) => name)])
+}
+
 describe("the session page tracks ids, not the streamed session object", () => {
 	test("the reader finds a tracked read, and skips one in a handed-off callback", () => {
 		expect(
@@ -291,10 +352,40 @@ describe("the session page tracks ids, not the streamed session object", () => {
 		expect(streamingEffectsIn(script, firstLine)).toEqual([])
 	})
 
-	test("every listed primitive derived is still one of the page's deriveds", () => {
-		const file = ts.createSourceFile("page.ts", script, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
-		const decls = declarationsOf(file)
-		const stale = [...PRIMITIVE_DERIVEDS].filter((n) => decls.get(n)?.kind !== "derived")
+	test("the reader finds a store's alias of the session and a streamed read through its data store", () => {
+		expect(
+			streamingEffectsIn(
+				"const session = $derived(d.data.session)\n$effect(() => { const n = session?.name })",
+				0,
+				true
+			)
+		).toHaveLength(1)
+		expect(streamingEffectsIn("$effect(() => { const m = d.data.session })", 0, true)).toHaveLength(1)
+		expect(streamingEffectsIn("$effect(() => { const id = d.data.sessionId })", 0, true)).toEqual([])
+	})
+
+	test("the data store's streamed getters are the ones its own session reads reach", () => {
+		expect(streamedDataGetters.has("lastMessage")).toBe(true)
+		expect(streamedDataGetters.has("userPersonasInSession")).toBe(true)
+		expect(streamedDataGetters.has("hasGeneratingMessage")).toBe(false)
+	})
+
+	test("no store's $effect reads `session`, directly or through what it reads and calls", () => {
+		const hits = STORES.flatMap((name) => streamingEffectsIn(storeSource(name), 0, true, name))
+		expect(hits).toEqual([])
+	})
+
+	test("every listed primitive derived is still one of the page's (or its data store's) deriveds", () => {
+		const page = declarationsOf(
+			ts.createSourceFile("page.ts", script, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+		)
+		const data = declarationsOf(
+			ts.createSourceFile("data.ts", storeSource(STORES[0]), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS),
+			true
+		)
+		const stale = [...PRIMITIVE_DERIVEDS].filter(
+			(n) => page.get(n)?.kind !== "derived" && data.get(n)?.kind !== "derived"
+		)
 		expect(stale).toEqual([])
 	})
 

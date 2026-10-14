@@ -1,19 +1,38 @@
 <script lang="ts">
+	import { withoutShared } from "$lib/shared/utils/sharedRows"
 	import {
 		onCardImported,
-		onCardImportFailed
+		onCardImportFailed,
+		onLibraryImported
 	} from "$lib/client/contexts/characterImports.svelte"
+	import {
+		serviceRoadChecklist,
+		type ServiceRoadAction
+	} from "$lib/client/wizard/serviceRoadChecklist"
+	import { wizardStart } from "$lib/client/wizard/wizardStart"
+	import {
+		characterPickOptions,
+		personaPickExcludes,
+		pickedRow
+	} from "$lib/client/wizard/wizardPicks"
+	import {
+		quickPersonaCharacter,
+		quickPersonaName
+	} from "$lib/client/wizard/quickPersona"
+	import { wizardCharacterStep } from "$lib/client/wizard/wizardCharacterStep.svelte"
 	import { isAwaitingUser } from "$lib/client/sessions/sessionGroups"
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import AvatarStack from "$lib/client/components/AvatarStack.svelte"
 	import CharacterCreator from "$lib/client/components/modals/CharacterCreatorModal.svelte"
+	import CharacterSelectModal from "$lib/client/components/modals/CharacterSelectModal.svelte"
+	import PersonaSelectModal from "$lib/client/components/modals/PersonaSelectModal.svelte"
 	import BindingLinkerModal from "$lib/client/components/modals/BindingLinkerModal.svelte"
 	import OllamaIcon from "$lib/client/components/icons/OllamaIcon.svelte"
 	import KoboldCppIcon from "$lib/client/components/icons/KoboldCppIcon.svelte"
 	import { connectionTypeIcon } from "$lib/client/components/connections/connectionTypeIcon"
 	import FileDropzone from "$lib/client/components/FileDropzone.svelte"
 	import * as Icons from "@lucide/svelte"
-	import { getContext, onMount } from "svelte"
+	import { getContext, onMount, untrack } from "svelte"
 	import { goto } from "$app/navigation"
 	import { fade } from "svelte/transition"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
@@ -23,6 +42,7 @@
 	import { cardFileForUpload } from "$lib/client/utils/cardUpload"
 	import { refusedSwapsSentence } from "$lib/client/components/sessionForms/refusedSwaps"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+	import { modalityOfTransform } from "$lib/shared/constants/connectionSections"
 	import { enableManager } from "$lib/client/components/connections/managers"
 	import { enableAccessibility } from "$lib/client/accessibility/state.svelte"
 	import { avatarSrc } from "$lib/client/utils/media"
@@ -54,6 +74,7 @@
 	// sweep starts, because it is the first thing anybody reads and it is where
 	// the language is chosen.
 	import { t } from "$lib/client/i18n/state.svelte"
+	import { characterSummary } from "$lib/shared/characters/characterSummary"
 
 	let userCtx: UserCtx = $state(getContext("userCtx"))
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
@@ -95,6 +116,10 @@
 	let _wizardInitialized = $state(false)
 	let showCharacterCreator = $state(false)
 	let showPersonaCreator = $state(false)
+	/** The Character step's picker (Choose a character / Change). */
+	let showCharacterPicker = $state(false)
+	/** Who you are's picker (Choose a persona / Change). */
+	let showPersonaPicker = $state(false)
 
 	// Binding linker modal (Flow 1) — Flow 2 (node linking) is gone, binding
 	// IS the graph row now, see the lorebookBindings/narrativeNodes merge plan.
@@ -104,10 +129,10 @@
 	)
 
 	/**
-	 * Which road the Choose an LLM step is on. `null` is the doors — the
+	 * Which road the Choose an AI step is on. `null` is the doors — the
 	 * model servers found running on this computer first, then the ways to
 	 * set one up. `machine` and `service` wait while the Connections panel
-	 * does the work (the Set up chat flow, the managed Ollama view, or the
+	 * does the work (the Set up chat stepper, the managed Ollama view, or the
 	 * Add picker); `detected` picks a model from a found server inside the
 	 * wizard.
 	 *
@@ -141,7 +166,7 @@
 	let selectedPersonaId: number | null = $state(null)
 	/** A `sessions:create` sent by the wizard is waiting on its answer. */
 	let startingSession = $state(false)
-	/** "Just call me You" was pressed; its create reply selects the row. */
+	/** "Just call me …" was pressed; its create reply selects the row. */
 	let awaitingQuickPersona = false
 
 	// Card import state
@@ -195,6 +220,40 @@
 	} | null = null
 	/** "Use this model" was pressed and the chat default has not landed yet. */
 	let connectingDetected = $state(false)
+	/**
+	 * "Use this model" waited `DETECTED_CONNECT_WAIT_MS` without a chat
+	 * default landing. The button is pressable again and the road says where
+	 * to look; the pick itself stays pending, so a late listing still lands.
+	 */
+	let detectedSlow = $state(false)
+	/** How long "Connecting…" holds the button before it gives it back. */
+	const DETECTED_CONNECT_WAIT_MS = 20_000
+
+	/**
+	 * Which door the `service` road came in by — the Add picker narrowed to
+	 * online services, or to servers somebody already runs — so the
+	 * checklist's **Add a connection** reopens the same one.
+	 */
+	let serviceDoor: "service" | "local" = $state("service")
+	/**
+	 * The connection created while the `service` road was open: the one its
+	 * checklist is about, over any older row. Null on a resume, when the
+	 * checklist picks the row furthest along instead.
+	 */
+	let serviceRoadConnectionId: number | null = $state(null)
+
+	/**
+	 * The `service` road's three lines — **Connection added**, **Key saved**,
+	 * **Model chosen** — read from the list this page already holds, and the
+	 * one that is next (`serviceRoadChecklist`).
+	 */
+	let serviceRoad = $derived(
+		serviceRoadChecklist({
+			connections,
+			chatConnectionId,
+			focusId: serviceRoadConnectionId
+		})
+	)
 
 	/** The chat capability — the one default the wizard waits for. */
 	const CHAT_CAPABILITY = "text->text"
@@ -220,6 +279,31 @@
 			| { satisfiableCapabilities?: readonly string[] | null }
 			| undefined
 		return !!model?.satisfiableCapabilities?.includes(capability)
+	}
+
+	/**
+	 * Whether a model is KNOWN to fit a job, for an automatic registration.
+	 *
+	 * Stricter than `modelServes`: a model whose modality is blank is offered
+	 * for every job (`satisfiableCapabilities` leaves it ungated, so a person
+	 * can still choose it), but a write nobody chose needs the model's own
+	 * modality to name the job. Blank is the case right after a connection is
+	 * created, before its first sync records what each model is for.
+	 */
+	function modelKnownFor(
+		connectionId: number,
+		modelId: number,
+		capability: string
+	): boolean {
+		if (!modelServes(connectionId, modelId, capability)) return false
+		const need = modalityOfTransform(capability)
+		if (need == null) return true
+		const model = connections
+			.find((c) => c.id === connectionId)
+			?.models?.find((m: { id: number }) => m.id === modelId) as
+			| { modality?: string | null }
+			| undefined
+		return model?.modality === need
 	}
 
 	/**
@@ -286,15 +370,15 @@
 			// When neither exists the capability is left unregistered, so
 			// Admin → Defaults shows it as *Not set* rather than a refusal
 			// toast landing on the wizard.
-			// And the model must be able to do it: the first enabled model
-			// on a chat endpoint is a chat model, and the server refuses it
-			// for vision or embeddings.
+			// And the model must be KNOWN to do it (`modelKnownFor`): the first
+			// enabled model on a chat endpoint is a chat model, and the server
+			// refuses it for vision or embeddings once the sync has said so.
 			const listed = option.models ?? []
 			const chosen = listed.find(
 				(m) =>
 					m.enabled &&
 					!m.missingSince &&
-					modelServes(id, m.id, combo.id)
+					modelKnownFor(id, m.id, combo.id)
 			)
 			if (!chosen) continue
 			socket.emit("connectionDefaults:set", {
@@ -313,7 +397,7 @@
 	// it.
 	//
 	// The creator modals select their own new rows (`onCreated`); this
-	// standing key only answers the "Just call me You" persona, which is
+	// standing key only answers the "Just call me …" persona, which is
 	// created straight from this page with no modal in between.
 	function handleCharacterCreated(res: Sockets.Characters.Create.Response) {
 		if (!awaitingQuickPersona || !res.character?.id) return
@@ -435,16 +519,13 @@
 	}
 
 	/**
-	 * A character card's one-line tagline under its portrait.
-	 *
-	 * The list row carries no short description, so this is the first line of
-	 * the description, collapsed; the card truncates it to one line. Empty
-	 * stays empty rather than inventing copy.
+	 * A character card's one-line tagline under its portrait: the shared
+	 * `characterSummary` (summary, then creator notes, then the first prose
+	 * sentence with sheet lines such as "Gender:" skipped), so the wizard
+	 * agrees with the list row and the Library. Empty stays empty.
 	 */
 	function characterTagline(character: Partial<SelectCharacter>): string {
-		const text = character.description ?? ""
-		const first = text.split(/\n+/).find((l) => l.trim()) ?? ""
-		return first.replace(/\s+/g, " ").trim()
+		return characterSummary(character)
 	}
 
 	/**
@@ -538,7 +619,7 @@
 
 	// ══ the wizard ═══════════════════════════════════════════════════════
 	//
-	// Get started → Choose an LLM (admins only) → What to do, and — only
+	// Get started → Choose an AI (admins only) → What to do, and — only
 	// when the answer is "Play with characters" — Character → Who you are.
 	// The Guide answer starts its session straight from What to do.
 	//
@@ -565,7 +646,7 @@
 	/** The progress indicator's labels, sentence case. */
 	const WIZARD_STEP_LABELS: Record<WizardStepType, string> = {
 		welcome: "Get started",
-		llm: "Choose an LLM",
+		llm: "Choose an AI",
 		purpose: "What to do",
 		character: "Character",
 		persona: "Who you are"
@@ -602,8 +683,10 @@
 	)
 
 	// Open on the first step that still needs an answer, once, when the data
-	// has arrived. An admin whose pub already replies skips straight to What
-	// to do; everyone else starts at Get started, where the language is.
+	// has arrived (`wizardStart` has the table). An admin whose pub already
+	// replies skips straight to What to do; an admin with a connection and no
+	// chat default resumes on the service road, its checklist saying what is
+	// left; everyone else starts at Get started, where the language is.
 	//
 	// No config pointer or sampling default is written here: what a new
 	// install needs is seeded by `bootstrapPipelines`, and a hardcoded seed
@@ -611,15 +694,43 @@
 	$effect(() => {
 		if (dataReady && !setupComplete && !_wizardInitialized) {
 			_wizardInitialized = true
-			if (userCtx.user?.isAdmin && hasConnection)
-				wizardStep = wizardSteps.indexOf("purpose")
+			const start = wizardStart({
+				isAdmin: !!userCtx.user?.isAdmin,
+				hasChatDefault: hasConnection,
+				connections
+			})
+			wizardStep = Math.max(0, wizardSteps.indexOf(start.step))
+			connectionChoice = start.road
+			// A view left open last visit (the shell restores its tabs) would
+			// sit over the first question.
+			closeDock()
 		}
 	})
 
-	// The Choose an LLM step moves on by itself the moment the pub can reply,
-	// whichever road got it there — the Set up chat flow, a service added in
+	/**
+	 * Put the sidebar away (less-confusing plan A2, owner ruling
+	 * 2026-10-11): the wizard keeps the dock closed until its Character
+	 * step, where **Browse the library** opens the Library beside it, and
+	 * puts it away again as **Start the session** fires. A press that opens a
+	 * view (the Choose an AI step's roads open Connections) still opens it.
+	 *
+	 * Collapsing, never closing: every tab and what is half-typed in it stay
+	 * (`leftPanel = null` is the shell's collapse at every width). Untracked,
+	 * because the setter reads the shell's active view and a caller inside an
+	 * effect must not come to depend on it.
+	 */
+	function closeDock() {
+		untrack(() => {
+			panelsCtx.leftPanel = null
+		})
+	}
+
+	// The Choose an AI step moves on by itself the moment the pub can reply,
+	// whichever road got it there — the Set up chat stepper, a service added in
 	// the Connections panel, or the Ollama found below. Only while a road is
 	// open, so going Back to a finished step shows it rather than bouncing.
+	// The road's Connections view is put away with it: What to do is asked
+	// with the dock closed (A2).
 	$effect(() => {
 		if (
 			currentWizardStep === "llm" &&
@@ -628,12 +739,39 @@
 		) {
 			connectionChoice = null
 			nextWizardStep()
+			closeDock()
 		}
+	})
+
+	// The Library beside the Character step says Pick, not Import (A3):
+	// `wizardCharacterStep` is what it reads, and this page its only writer.
+	// Cleared on the way out, so the Library never says Pick to a page that
+	// is gone.
+	$effect(() => {
+		wizardCharacterStep.active =
+			dataReady && !setupComplete && currentWizardStep === "character"
+		wizardCharacterStep.pickedCharacterId = selectedCharacterId
+		return () => {
+			wizardCharacterStep.active = false
+		}
+	})
+
+	// "Connecting…" never holds the button for good. A model the listing never
+	// names, or a sync that stalls, would leave it spinning with nothing to
+	// press; after `DETECTED_CONNECT_WAIT_MS` it is given back with a pointer
+	// to Connections, where the row's own status says what happened.
+	$effect(() => {
+		if (!connectingDetected) return
+		const timer = setTimeout(() => {
+			connectingDetected = false
+			detectedSlow = true
+		}, DETECTED_CONNECT_WAIT_MS)
+		return () => clearTimeout(timer)
 	})
 
 	/**
 	 * What model servers run here? Asked once, when an admin reaches the
-	 * Choose an LLM step with nothing connected, so each one found is a card
+	 * Choose an AI step with nothing connected, so each one found is a card
 	 * before any door is pressed. Not on Android, where no local server is
 	 * offered.
 	 */
@@ -687,21 +825,32 @@
 		}
 	}
 
-	// Navigation
-	function openPanel(key: string) {
-		panelsCtx.openPanel({ key })
+	// Navigation. `toggle: false` for a button that says Open: pressed while
+	// that view is already showing, it must not shut it.
+	function openPanel(key: string, toggle = true) {
+		panelsCtx.openPanel({ key, toggle })
 	}
 
 	/**
-	 * Open the Connections panel through one of its first-run doors — the
-	 * same doors its own empty index offers (`connectionsDoor` in the
-	 * digest). `toggle: false`, so a second press never closes it.
+	 * Open a first-run door (`connectionsDoor` in the digest) in the view
+	 * that owns it (plan 2026-10-11): Set up chat is the Models view's, the chat
+	 * job the Loadouts view's (Reply's sheet, I12), the Add picker's two narrowings the Connections
+	 * view's. `toggle: false`, so a second press never closes it.
 	 */
 	function openConnectionsDoor(
 		door: NonNullable<PanelsCtx["digest"]["connectionsDoor"]>
 	) {
+		// The chat job is a loadout question now (I12): Reply's sheet.
+		if (door === "chat") {
+			panelsCtx.digest.connectionsJob = "text->text"
+			panelsCtx.openPanel({ key: "loadouts", toggle: false })
+			return
+		}
 		panelsCtx.digest.connectionsDoor = door
-		panelsCtx.openPanel({ key: "connections", toggle: false })
+		panelsCtx.openPanel({
+			key: door === "setup-chat" ? "models" : "connections",
+			toggle: false
+		})
 	}
 
 	/**
@@ -721,6 +870,22 @@
 		openPanel("connections")
 	}
 
+	/**
+	 * The Ollama the scan found running, if any. One Ollama is offered, not
+	 * two (A4): its found card carries the managed road as a one-line link,
+	 * and Or set one up drops its own Ollama card while this is set.
+	 */
+	let foundOllama = $derived.by(
+		() => localProviders?.find((p) => p.type === CONNECTION_TYPE.OLLAMA) ?? null
+	)
+
+	/** The managed Ollama road: Serene Pub downloads models into it. */
+	function chooseManagedOllama() {
+		machineKind = "ollama"
+		connectionChoice = "machine"
+		openManagedConnection("ollama")
+	}
+
 	function switchToDocumentView() {
 		enableAccessibility()
 		goto("/document-view")
@@ -736,14 +901,59 @@
 	/** Saves the welcome name, and toasts a refusal that lands after the wizard moved on. */
 	const welcomeName = welcomeNameSaver(socket, (t) => toaster.error(t))
 
+	/**
+	 * The name given at Get started, kept after the field is cleared: the
+	 * quick persona on Who you are is created with it (A1). Only a non-empty
+	 * answer replaces it, because a second pass through Get started finds
+	 * the field emptied (or hidden, once the display name has landed).
+	 */
+	let welcomeAnswer = $state("")
+
+	/**
+	 * What the quick persona is called: the welcome answer, else the display
+	 * name already saved, else "You" (`quickPersonaName`).
+	 */
+	let quickPersonaLabel = $derived(
+		quickPersonaName(welcomeAnswer, userCtx.user?.displayName)
+	)
+
 	/** Get started: save a name if one was given (never waited on), move on. */
 	function leaveWelcomeStep() {
+		if (wizardName.trim()) welcomeAnswer = wizardName
 		if (welcomeName.save(wizardName)) wizardName = ""
 		nextWizardStep()
 	}
 
 	function prevWizardStep() {
 		if (wizardStep > 0) wizardStep--
+	}
+
+	/**
+	 * Back out of a Choose an AI road to its doors. A "Use this model" still
+	 * waiting is dropped with it: the person left that road, and a pick that
+	 * landed behind them on another one would be a choice they took back.
+	 */
+	function leaveLlmRoad() {
+		connectionChoice = null
+		connectingDetected = false
+		detectedSlow = false
+		pendingChatPick = null
+	}
+
+	/**
+	 * Open one connection in the Connections view, whether or not that view
+	 * is already open (it consumes `digest.connectionId` either way).
+	 */
+	function openConnectionById(id: number) {
+		panelsCtx.digest.connectionId = id
+		panelsCtx.openPanel({ key: "connections", toggle: false })
+	}
+
+	/** The service road's next line, pressed. */
+	function runServiceRoadAction(action: ServiceRoadAction) {
+		if (action.kind === "add") openConnectionsDoor(serviceDoor)
+		else if (action.kind === "choose") openConnectionsDoor("chat")
+		else openConnectionById(action.connectionId)
 	}
 
 	/** Leave the wizard for another page; it resumes where the data says. */
@@ -777,10 +987,23 @@
 	let defaultPersonaId = $derived(
 		personas.find((p) => p.isDefaultPersona)?.id ?? personas[0]?.id ?? null
 	)
-	/** The characters the Character step offers: everyone but the personas. */
+	/**
+	 * The characters the Character step's picker offers: everyone but the
+	 * personas and the one played as (`characterPickOptions`), uncapped.
+	 */
 	let wizardCharacters = $derived(
-		sortedCharacters.filter((c) => !c.isPersona)
+		characterPickOptions(sortedCharacters, selectedPersonaId)
 	)
+	/** The Character step's row once chosen; null shows Choose a character. */
+	let chosenCharacter = $derived(
+		pickedRow(wizardCharacters, selectedCharacterId)
+	)
+	/**
+	 * Who you are's row once chosen. Read from every character, not only the
+	 * personas: the picker's Show all characters can choose an unflagged one,
+	 * which the server flags when the session is created.
+	 */
+	let chosenPersona = $derived(pickedRow(characters, selectedPersonaId))
 
 	/**
 	 * Send the wizard's one `sessions:create` and open what it makes.
@@ -839,10 +1062,14 @@
 	 * persona, the Chat genre. A Chat preset that requires a lorebook cannot
 	 * be answered here, so that one case hands over to the start screen with
 	 * everything prefilled instead of being refused.
+	 *
+	 * The Library the Character step opened is put away as it fires (A2):
+	 * the session opens on its own, not under a browsing pane.
 	 */
 	function startChatSession() {
-		const character = characters.find((c) => c.id === selectedCharacterId)
-		if (!character?.id || selectedPersonaId == null) return
+		const character = chosenCharacter
+		if (!character || !chosenPersona || selectedPersonaId == null) return
+		closeDock()
 		const pick = chatPick
 		const genreId = pick?.genre.genreId ?? STANDARD_GENRE_ID
 		if (pick && !lorebookSatisfied(pick.genre.shape, null)) {
@@ -903,10 +1130,18 @@
 		const model = selectedDetectedModel
 		if (!provider || !model || connectingDetected) return
 		connectingDetected = true
-		if (provider.connectionId != null) {
+		detectedSlow = false
+		// A press after the wait gave the button back reuses the connection
+		// the first press created: the scan's card predates it.
+		const existingId =
+			provider.connectionId ??
+			(pendingChatPick?.type === provider.type
+				? pendingChatPick.connectionId
+				: null)
+		if (existingId != null) {
 			// Reuse, never duplicate: a second Ollama to one host is refused.
 			pendingChatPick = {
-				connectionId: provider.connectionId,
+				connectionId: existingId,
 				type: provider.type,
 				model
 			}
@@ -914,7 +1149,7 @@
 			// skips a listing it thinks is fresh — which would leave a model
 			// pulled since then without a row, and this pick waiting on it.
 			socket.emit("connections:syncModels", {
-				id: provider.connectionId,
+				id: existingId,
 				force: true
 			})
 			socket.emit("connectionDefaults:list", {})
@@ -942,16 +1177,11 @@
 	function createSamplePersona() {
 		// A persona is a character: one create, with the two flags on the row.
 		// The server applies the default in its own transaction; the reply
-		// selects it (`handleCharacterCreated`).
+		// selects it (`handleCharacterCreated`). Named what Get started was
+		// told to call the person, the name its card shows (A1).
 		awaitingQuickPersona = true
 		socket.emit("characters:create", {
-			character: {
-				name: "You",
-				description:
-					"This represents you in sessions. You can edit it later to add more about yourself, or create other personas for different kinds of stories.",
-				isPersona: true,
-				isDefaultPersona: true
-			} as any
+			character: quickPersonaCharacter(quickPersonaLabel) as any
 		})
 	}
 
@@ -989,7 +1219,7 @@
 	function handleCharactersList(
 		msg: SocketEventMap["characters:list"]["response"]
 	) {
-		characters = msg.characterList || []
+		characters = withoutShared(msg.characterList) // shared rows are read and copy only (PLAN-private-messages §6.7, Q3)
 		_charsLoaded = true
 	}
 
@@ -1110,6 +1340,18 @@
 		connectingDetected = false
 	}
 
+	/**
+	 * A default registration was refused. While "Use this model" waits, that
+	 * refusal is its answer: the button is given back, so it can be pressed
+	 * again. The toast is the central listener's.
+	 */
+	function handleDefaultsSetError() {
+		if (!connectingDetected && !detectedSlow) return
+		pendingChatPick = null
+		connectingDetected = false
+		detectedSlow = false
+	}
+
 	function handleConnectionsCreate(
 		res: SocketEventMap["connections:create"]["response"]
 	) {
@@ -1130,6 +1372,10 @@
 			// that gate is what keeps "the second backend you add" from
 			// quietly taking over chat.
 			pendingDefaultConnectionId = res.connection.id!
+			// Made while the service road waits: its checklist is about
+			// this row from now on, whatever else is listed.
+			if (connectionChoice === "service")
+				serviceRoadConnectionId = res.connection.id!
 			if (
 				pendingChatPick?.connectionId === null &&
 				res.connection.type === pendingChatPick.type
@@ -1146,7 +1392,7 @@
 				title: "Connection created",
 				description: `Connected to ${res.connection.name}`
 			})
-			// The wizard's Choose an LLM step moves on when the chat default
+			// The wizard's Choose an AI step moves on when the chat default
 			// lands (the `hasConnection` effect), not here: a row can exist
 			// long before any model on it can answer.
 		}
@@ -1208,6 +1454,24 @@
 		wizardImportingPersonaCard = false
 	}
 
+	/**
+	 * A card taken from the Library, which the Character step opens beside
+	 * the wizard: the new row is selected there, as a dropped card is.
+	 *
+	 * The Library's import also answers on `characters:importCard`, but that
+	 * reply is sent before a persona-shelf card is flagged as a persona; this
+	 * one carries the flag, so a persona is never left as the character.
+	 */
+	function handleLibraryImported(
+		msg: Sockets.Characters.ImportFromLibrary.Response
+	) {
+		const id = msg.character?.id
+		if (setupComplete || id == null || currentWizardStep !== "character")
+			return
+		if (!msg.character.isPersona) selectedCharacterId = id
+		else if (selectedCharacterId === id) selectedCharacterId = null
+	}
+
 	// Binding linker modal
 	function handleBindingCheckResult(
 		data: SocketEventMap["bindingCheck:result"]["response"]
@@ -1222,7 +1486,7 @@
 	 * The cast PUSH and the card-import reply, both BARE.
 	 *
 	 * `characters:create` is a standing key: the creator modals send their
-	 * own creates, and this page's only one is the "Just call me You"
+	 * own creates, and this page's only one is the "Just call me …"
 	 * persona, whose reply selects it on the wizard's persona step.
 	 * `characters:importCard` IS a reply, to the dropzone emits in
 	 * `handleCharacterCardImport` / `handlePersonaCardImport` (one family: a
@@ -1248,6 +1512,7 @@
 	// the outcome for the wizard's selection.
 	onCardImported(handleCharactersImportCard)
 	onCardImportFailed(handleCharactersImportCardError)
+	onLibraryImported(handleLibraryImported)
 
 	/**
 	 * The orphaned-binding sweep's answer, BARE. It is a push rather than a
@@ -1289,7 +1554,7 @@
 	)
 
 	/**
-	 * The local scan behind the Choose an LLM step's found-server cards.
+	 * The local scan behind the Choose an AI step's found-server cards.
 	 *
 	 * Admin-only handlers, on the home screen every user lands on: declared
 	 * only for an admin, so a non-admin's registry holds no key it could never
@@ -1309,6 +1574,10 @@
 			interest.declareInterest<"connections:create:error">(
 				"connections:create:error",
 				handleConnectionsCreateError
+			),
+			interest.declareInterest<"connectionDefaults:set:error">(
+				"connectionDefaults:set:error",
+				handleDefaultsSetError
 			)
 		]
 		return () => {
@@ -1706,9 +1975,31 @@
 		</div>
 	{/if}
 
+	<!-- A wizard pick once chosen (Character, Who you are): the session
+	     forms' row — avatar, name, the description's first line — inside
+	     the step's one button, which opens the picker again. -->
+	{#snippet wizardPickedFace(row: Partial<SelectCharacter>)}
+		<Avatar char={row} size="md" decorative />
+		<span class="min-w-0 flex-1">
+			<span class="block truncate text-[15px] font-medium">
+				{row.nickname || row.name || "Unnamed"}
+			</span>
+			{#if characterTagline(row)}
+				<span class="text-surface-600-400 block truncate text-xs">
+					{characterTagline(row)}
+				</span>
+			{/if}
+		</span>
+		<span
+			class="preset-tonal-surface shrink-0 rounded-md px-3 py-1.5 text-sm font-medium"
+		>
+			{t("Change")}
+		</span>
+	{/snippet}
+
 	<!-- ══ the wizard ══════════════════════════════════════════════════
 	     Shown until setup is complete (see `setupComplete`): Get started →
-	     Choose an LLM (admins) → What to do → Character → Who you are (the
+	     Choose an AI (admins) → What to do → Character → Who you are (the
 	     last two only for "Play with characters"). One decision per
 	     screen; the footer carries Back and the screen's one primary. -->
 	{#if dataReady && !setupComplete}
@@ -1879,7 +2170,7 @@
 										id="wizard-heading"
 										class="mb-3 [font-family:var(--typo-heading--font-family)] text-2xl font-semibold"
 									>
-										{t("Choose an LLM")}
+										{t("Choose an AI")}
 									</h2>
 									<p
 										class="text-surface-600-400 mx-auto max-w-md"
@@ -2045,6 +2336,22 @@
 														</span>
 													</span>
 												</button>
+												{#if foundOllama && provider.type === foundOllama.type && provider.baseUrl === foundOllama.baseUrl}
+													<!-- One Ollama card (A4): the managed
+													     road is this card's second way in,
+													     not a second card under Or set one up. -->
+													<p class="px-4 text-sm">
+														<button
+															type="button"
+															class="anchor"
+															onclick={chooseManagedOllama}
+														>
+															{t(
+																"Let Serene Pub download models into it instead"
+															)}
+														</button>
+													</p>
+												{/if}
 											{/each}
 										{/if}
 									</section>
@@ -2117,55 +2424,60 @@
 												</span>
 											</span>
 										</button>
-										<button
-											type="button"
-											class={CHOICE_CARD}
-											onclick={() => {
-												machineKind = "ollama"
-												connectionChoice = "machine"
-												openManagedConnection("ollama")
-											}}
-										>
-											<span
-												class="preset-tonal-surface flex size-10 shrink-0 items-center justify-center rounded-xl"
-												aria-hidden="true"
+										<!-- The managed Ollama road, while no running
+										     Ollama was found (found, it is a link under
+										     that card). Titled as the Add menu titles
+										     it: Serene Pub does not run Ollama, so
+										     "run by", the one verb these cards use,
+										     would not be true of it (A4). -->
+										{#if !foundOllama}
+											<button
+												type="button"
+												class={CHOICE_CARD}
+												onclick={chooseManagedOllama}
 											>
-												<OllamaIcon class="h-5 w-5" />
-											</span>
-											<span
-												class="flex min-w-0 flex-col gap-1.5"
-											>
-												<span class="font-semibold">
-													{t(
-														"Ollama, managed by Serene Pub"
-													)}
+												<span
+													class="preset-tonal-surface flex size-10 shrink-0 items-center justify-center rounded-xl"
+													aria-hidden="true"
+												>
+													<OllamaIcon
+														class="h-5 w-5"
+													/>
 												</span>
 												<span
-													class="text-surface-600-400 text-sm"
+													class="flex min-w-0 flex-col gap-1.5"
 												>
-													{t(
-														"Serene Pub connects to Ollama on this computer and downloads models into it for you. Ollama must be installed."
-													)}
+													<span class="font-semibold">
+														{t("Ollama")}
+													</span>
+													<span
+														class="text-surface-600-400 text-sm"
+													>
+														{t(
+															"Serene Pub connects to Ollama on this computer and downloads models into it for you. Ollama must be installed."
+														)}
+													</span>
+													<span
+														class="flex flex-wrap gap-1.5"
+													>
+														{#each [t("Private"), t("Free")] as chip}
+															<span
+																class="chip preset-tonal-surface rounded-full text-xs"
+															>
+																{chip}
+															</span>
+														{/each}
+													</span>
 												</span>
-												<span
-													class="flex flex-wrap gap-1.5"
-												>
-													{#each [t("Private"), t("Free")] as chip}
-														<span
-															class="chip preset-tonal-surface rounded-full text-xs"
-														>
-															{chip}
-														</span>
-													{/each}
-												</span>
-											</span>
-										</button>
+											</button>
+										{/if}
 									{/if}
 									<button
 										type="button"
 										class={CHOICE_CARD}
 										onclick={() => {
 											connectionChoice = "service"
+											serviceDoor = "service"
 											openConnectionsDoor("service")
 										}}
 									>
@@ -2206,6 +2518,7 @@
 										class={CHOICE_CARD}
 										onclick={() => {
 											connectionChoice = "service"
+											serviceDoor = "local"
 											openConnectionsDoor("local")
 										}}
 									>
@@ -2259,7 +2572,7 @@
 									>
 										{machineKind === "ollama"
 											? t(
-													"The Connections view shows Ollama's models: get one, then choose it for chat. Downloads can take a while."
+													"The Connections view shows Ollama's models: get one, then press Use in Reply. Downloads can take a while."
 												)
 											: t(
 													"The Connections view walks you through it: choose the download that suits your computer, then a model. Downloads can take a while."
@@ -2300,32 +2613,81 @@
 										)}
 									</p>
 								</div>
-								<p
-									class="text-surface-600-400 flex items-center justify-center gap-2 text-sm"
+								<!-- The wait, made legible: what is done, and the one
+								     thing to do next, read from the same facts the
+								     Connections view shows. The step still moves on by
+								     itself when the chat default lands. A status
+								     region, so a line ticking is announced. -->
+								<div
+									class="mx-auto w-full max-w-md"
 									role="status"
 								>
-									<Icons.LoaderCircle
-										size={16}
-										class="animate-spin"
-										aria-hidden="true"
-									/>
-									{t(
-										"This page moves on by itself once a model can reply."
-									)}
-								</p>
-								<p
-									class="text-surface-600-400 text-center text-sm"
-								>
-									{t("Added it and still waiting?")}
-									<button
-										type="button"
-										class="anchor"
-										onclick={() =>
-											openConnectionsDoor("chat")}
+									<ul
+										class="flex flex-col gap-2"
+										aria-labelledby="wizard-heading"
 									>
-										{t("Choose which model replies")}
-									</button>
-								</p>
+										{#each serviceRoad.lines as line (line.id)}
+											<li
+												class="bg-surface-50-950 border-surface-200-800 flex flex-wrap items-center gap-3 rounded-[14px] border p-3"
+											>
+												{#if line.done}
+													<Icons.CircleCheck
+														size={20}
+														class="text-success-500 shrink-0"
+														aria-hidden="true"
+													/>
+												{:else}
+													<Icons.Circle
+														size={20}
+														class="text-surface-600-400 shrink-0"
+														aria-hidden="true"
+													/>
+												{/if}
+												<span
+													class="flex min-w-0 flex-1 flex-col"
+												>
+													<span class="font-semibold">
+														<span class="sr-only">
+															{line.done
+																? t("Done:")
+																: t("To do:")}
+														</span>
+														{t(line.label)}
+													</span>
+													{#if line.detail}
+														<span
+															class="text-surface-600-400 text-sm break-words"
+														>
+															{line.detail}
+														</span>
+													{/if}
+												</span>
+												{#if line.action}
+													{@const action =
+														line.action}
+													<!-- Only the next line has one. Choosing the
+													     model is the step's one filled primary;
+													     opening a connection is secondary. -->
+													<button
+														type="button"
+														class="btn btn-sm {action.kind ===
+														'choose'
+															? 'preset-filled-primary-500'
+															: 'preset-tonal-surface'}"
+														onclick={() =>
+															runServiceRoadAction(
+																action
+															)}
+													>
+														{action.kind === "open"
+															? action.label
+															: t(action.label)}
+													</button>
+												{/if}
+											</li>
+										{/each}
+									</ul>
+								</div>
 							{:else if connectionChoice === "detected" && detectedProvider}
 								{@const provider = detectedProvider}
 								{@const DetectedIcon = connectionTypeIcon(
@@ -2395,6 +2757,27 @@
 											)}
 										</p>
 									</fieldset>
+									{#if detectedSlow}
+										<p
+											class="text-surface-600-400 text-center text-sm"
+											role="status"
+										>
+											{t(
+												"Still connecting… open Connections to check."
+											)}
+											<button
+												type="button"
+												class="anchor"
+												onclick={() =>
+													openPanel(
+														"connections",
+														false
+													)}
+											>
+												{t("Open Connections")}
+											</button>
+										</p>
+									{/if}
 								{:else}
 									<div
 										class="bg-surface-50-950 border-surface-200-800 mx-auto flex max-w-md flex-col items-center gap-3 rounded-[14px] border p-4 text-center"
@@ -2562,57 +2945,46 @@
 								</p>
 							</div>
 							{#if wizardCharacters.length > 0}
-								<div
-									class="grid gap-2 sm:grid-cols-2"
-									role="group"
-									aria-label={t("Your characters")}
+								<!-- One button, chosen or not, so the picker hands
+								     focus back to it after a pick. -->
+								<button
+									type="button"
+									class="{CHOICE_CARD} items-center gap-3 p-3"
+									aria-haspopup="dialog"
+									onclick={() => (showCharacterPicker = true)}
 								>
-									{#each wizardCharacters.slice(0, 12) as character (character.id)}
-										<button
-											type="button"
-											class="{CHOICE_CARD} items-center gap-3 p-3 {selectedCharacterId ===
-											character.id
-												? 'ring-primary-500 ring-2'
-												: ''}"
-											aria-pressed={selectedCharacterId ===
-												character.id}
-											onclick={() =>
-												(selectedCharacterId =
-													character.id ?? null)}
+									{#if chosenCharacter}
+										{@render wizardPickedFace(
+											chosenCharacter
+										)}
+									{:else}
+										<span
+											class="preset-tonal-primary flex size-10 shrink-0 items-center justify-center rounded-xl"
+											aria-hidden="true"
 										>
-											<Avatar
-												char={character}
-												size="md"
-												decorative
-											/>
-											<span class="min-w-0 flex-1">
-												<span
-													class="block truncate font-semibold"
-												>
-													{character.nickname ||
-														character.name ||
-														"Unnamed"}
-												</span>
-												{#if characterTagline(character)}
-													<span
-														class="text-surface-600-400 block truncate text-sm"
-													>
-														{characterTagline(
-															character
-														)}
-													</span>
-												{/if}
+											<Icons.UsersRound size={20} />
+										</span>
+										<span
+											class="flex min-w-0 flex-1 flex-col gap-0.5"
+										>
+											<span class="font-semibold">
+												{t("Choose a character")}
 											</span>
-											{#if selectedCharacterId === character.id}
-												<Icons.Check
-													size={18}
-													class="text-primary-500 shrink-0"
-													aria-hidden="true"
-												/>
-											{/if}
-										</button>
-									{/each}
-								</div>
+											<span
+												class="text-surface-600-400 text-sm"
+											>
+												{t(
+													"From the characters you already have."
+												)}
+											</span>
+										</span>
+										<Icons.ChevronRight
+											size={18}
+											class="text-surface-600-400 shrink-0"
+											aria-hidden="true"
+										/>
+									{/if}
+								</button>
 							{/if}
 							<div class="flex flex-col gap-2">
 								{#if wizardCharacters.length > 0}
@@ -2648,7 +3020,7 @@
 										class="{CHOICE_CARD} flex-col gap-1.5 p-3"
 										onclick={() =>
 											// The Library opens beside the wizard, which
-											// stays: an import lands in the list above.
+											// stays: an import is chosen above.
 											panelsCtx.openView("library", {
 												toggle: false
 											})}
@@ -2714,8 +3086,12 @@
 												closeWizard()
 												// Settings › Import, the old /import page's home
 												// since owner note 23 (2026-10-02).
-												panelsCtx.digest.settingsSection = "import"
-												panelsCtx.openPanel({ key: "settings", toggle: false })
+												panelsCtx.digest.settingsSection =
+													"import"
+												panelsCtx.openPanel({
+													key: "settings",
+													toggle: false
+												})
 											}}
 										>
 											{t(
@@ -2743,61 +3119,50 @@
 									)}
 								</p>
 							</div>
-							{#if personas.length > 0}
-								<div
-									class="grid gap-2 sm:grid-cols-2"
-									role="group"
-									aria-label={t("Your personas")}
+							{#if chosenPersona || personas.length > 0}
+								<!-- One button, chosen or not, so the picker hands
+								     focus back to it after a pick. -->
+								<button
+									type="button"
+									class="{CHOICE_CARD} items-center gap-3 p-3"
+									aria-haspopup="dialog"
+									onclick={() => (showPersonaPicker = true)}
 								>
-									{#each personas.slice(0, 12) as persona (persona.id)}
-										<button
-											type="button"
-											class="{CHOICE_CARD} items-center gap-3 p-3 {selectedPersonaId ===
-											persona.id
-												? 'ring-primary-500 ring-2'
-												: ''}"
-											aria-pressed={selectedPersonaId ===
-												persona.id}
-											onclick={() =>
-												(selectedPersonaId =
-													persona.id ?? null)}
+									{#if chosenPersona}
+										{@render wizardPickedFace(
+											chosenPersona
+										)}
+									{:else}
+										<span
+											class="preset-tonal-primary flex size-10 shrink-0 items-center justify-center rounded-xl"
+											aria-hidden="true"
 										>
-											<Avatar
-												char={persona}
-												size="md"
-												decorative
-											/>
-											<span class="min-w-0 flex-1">
-												<span
-													class="block truncate font-semibold"
-												>
-													{persona.nickname ||
-														persona.name ||
-														"Unnamed"}
-												</span>
-												{#if characterTagline(persona)}
-													<span
-														class="text-surface-600-400 block truncate text-sm"
-													>
-														{characterTagline(
-															persona
-														)}
-													</span>
-												{/if}
+											<Icons.UserRound size={20} />
+										</span>
+										<span
+											class="flex min-w-0 flex-1 flex-col gap-0.5"
+										>
+											<span class="font-semibold">
+												{t("Choose a persona")}
 											</span>
-											{#if selectedPersonaId === persona.id}
-												<Icons.Check
-													size={18}
-													class="text-primary-500 shrink-0"
-													aria-hidden="true"
-												/>
-											{/if}
-										</button>
-									{/each}
-								</div>
+											<span
+												class="text-surface-600-400 text-sm"
+											>
+												{t(
+													"From the personas you already have."
+												)}
+											</span>
+										</span>
+										<Icons.ChevronRight
+											size={18}
+											class="text-surface-600-400 shrink-0"
+											aria-hidden="true"
+										/>
+									{/if}
+								</button>
 							{/if}
 							<div class="flex flex-col gap-2">
-								{#if personas.length > 0}
+								{#if chosenPersona || personas.length > 0}
 									<h3 class="text-surface-600-400 text-sm">
 										{t("Or add one")}
 									</h3>
@@ -2813,8 +3178,15 @@
 											class="text-primary-500"
 											aria-hidden="true"
 										/>
+										<!-- The name given at Get started, the one
+										     the persona is created with (A1).
+										     The template goes through t() with
+										     its placeholder, the name after. -->
 										<span class="font-semibold">
-											{t("Just call me “You”")}
+											{t("Just call me “{name}”").replace(
+												"{name}",
+												() => quickPersonaLabel
+											)}
 										</span>
 										<span
 											class="text-surface-600-400 text-xs"
@@ -2902,7 +3274,7 @@
 									currentWizardStep === "llm" &&
 									connectionChoice !== null
 								) {
-									connectionChoice = null
+									leaveLlmRoad()
 								} else {
 									prevWizardStep()
 								}
@@ -2972,31 +3344,48 @@
 							<button
 								type="button"
 								class="btn preset-tonal-surface"
-								onclick={() => openPanel("connections")}
+								onclick={() => openPanel("connections", false)}
 							>
 								{t("Open Connections")}
 							</button>
 						{/if}
 					{:else if currentWizardStep === "character"}
-						<button
-							type="button"
-							class="btn preset-filled-primary-500"
-							disabled={selectedCharacterId == null}
-							onclick={() => {
-								if (selectedPersonaId == null)
-									selectedPersonaId = defaultPersonaId
-								nextWizardStep()
-							}}
-						>
-							{t("Continue")}
-							<Icons.ChevronRight size={16} aria-hidden="true" />
-						</button>
+						<!-- A disabled Continue says why, under itself. -->
+						<div class="flex flex-col items-end gap-1">
+							<button
+								type="button"
+								class="btn preset-filled-primary-500"
+								disabled={chosenCharacter == null}
+								aria-describedby={chosenCharacter == null
+									? "wizard-character-hint"
+									: undefined}
+								onclick={() => {
+									if (selectedPersonaId == null)
+										selectedPersonaId = defaultPersonaId
+									nextWizardStep()
+								}}
+							>
+								{t("Continue")}
+								<Icons.ChevronRight
+									size={16}
+									aria-hidden="true"
+								/>
+							</button>
+							{#if chosenCharacter == null}
+								<p
+									id="wizard-character-hint"
+									class="text-surface-600-400 text-xs"
+								>
+									{t("Pick a character to continue")}
+								</p>
+							{/if}
+						</div>
 					{:else if currentWizardStep === "persona"}
 						<button
 							type="button"
 							class="btn preset-filled-primary-500"
-							disabled={selectedCharacterId == null ||
-								selectedPersonaId == null ||
+							disabled={chosenCharacter == null ||
+								chosenPersona == null ||
 								startingSession}
 							onclick={startChatSession}
 						>
@@ -3054,6 +3443,36 @@
 		selectedPersonaId = character.id
 	}}
 />
+
+<!-- The wizard's two pickers, behind Choose a character / Choose a persona
+	and Change. Each hides what the other holds (`wizardPicks`). The persona
+	picker holds a standing `characters:list` interest, so it is mounted only
+	on the Who you are step. -->
+<CharacterSelectModal
+	open={showCharacterPicker}
+	characters={wizardCharacters}
+	onOpenChange={(e) => (showCharacterPicker = e.open)}
+	onSelect={(character) => {
+		selectedCharacterId = character.id
+		showCharacterPicker = false
+	}}
+	onCreateNew={() => {
+		showCharacterPicker = false
+		showCharacterCreator = true
+	}}
+/>
+{#if dataReady && !setupComplete && currentWizardStep === "persona"}
+	<PersonaSelectModal
+		open={showPersonaPicker}
+		excludeIds={personaPickExcludes(selectedCharacterId)}
+		onOpenChange={(e) => (showPersonaPicker = e.open)}
+		onSelect={(personaId: number) => (selectedPersonaId = personaId)}
+		onCreateNew={() => {
+			showPersonaPicker = false
+			showPersonaCreator = true
+		}}
+	/>
+{/if}
 
 {#if bindingLinkerData}
 	<BindingLinkerModal

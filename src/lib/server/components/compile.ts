@@ -53,6 +53,8 @@ export interface ComponentCompileOutcome {
 	errors: ComponentCompileError[]
 	/** Said, not fatal. */
 	warnings: string[]
+	/** The same warnings, each placed as an error is (`line` 0 when it has no place) — what Problems lists. */
+	warningsAt: ComponentCompileError[]
 	/** The toolchain fingerprint of what built it. */
 	fingerprint: string
 }
@@ -183,8 +185,47 @@ function detect(): CompilerAvailability {
  */
 export function __setComponentCompilerForTests(next: CompilerAvailability | undefined): void {
 	override = next
+	knownClassesCache = undefined
 	resolved = undefined
 	fingerprintCache = undefined
+}
+
+/* ── the classes the app was built with (D5) ─────────────────────────────── */
+
+/**
+ * The class list the build writes beside the server (`build/component-classes.json`,
+ * `scripts/component-classes.js`): every class the app's built CSS names. The
+ * compiler warns about a component class outside it — a class nothing in the
+ * app uses was never generated and does nothing. Best-effort by design.
+ */
+export const COMPONENT_CLASSES_FILE = "component-classes.json"
+
+/**
+ * The app's built class list under `root` (`<root>/build/component-classes.json`),
+ * or null when there is none — a dev server never built, or a file that is not
+ * a list of strings. With null, classes are not checked.
+ */
+export function loadKnownClasses(root: string): string[] | null {
+	try {
+		const list: unknown = JSON.parse(readFileSync(join(root, "build", COMPONENT_CLASSES_FILE), "utf8"))
+		if (!Array.isArray(list) || !list.every((c) => typeof c === "string")) return null
+		return list as string[]
+	} catch {
+		return null
+	}
+}
+
+let knownClassesCache: { root: string; list: string[] | null } | undefined
+/** {@link loadKnownClasses}, read once per root: the build does not change under a running server. */
+function knownClassesFor(root: string): string[] | null {
+	if (knownClassesCache?.root !== root) knownClassesCache = { root, list: loadKnownClasses(root) }
+	return knownClassesCache.list
+}
+
+/** An outcome from a compiler that predates placed warnings: each warning, placeless. */
+function withPlacedWarnings(o: ComponentCompileOutcome): ComponentCompileOutcome {
+	if (Array.isArray(o.warningsAt)) return o
+	return { ...o, warningsAt: (o.warnings ?? []).map((text) => ({ file: "", line: 0, column: 0, text })) }
 }
 
 /* ── the worker ──────────────────────────────────────────────────────────── */
@@ -224,7 +265,8 @@ const pick = (m, key) => (m && m[key] ? m : m && m.default && m.default[key] ? m
 				mode: "in-app",
 				esbuild,
 				svelte,
-				resolveFrom: workerData.resolveFrom
+				resolveFrom: workerData.resolveFrom,
+				knownClasses: workerData.knownClasses || undefined
 			})
 			parentPort.postMessage({ kind: "result", result })
 		}
@@ -280,7 +322,12 @@ function runWorker(
 				runs++
 				const worker = new Worker(WORKER_SOURCE, {
 					eval: true,
-					workerData: { ...job, urls: toolchain.urls, resolveFrom: toolchain.resolveFrom },
+					workerData: {
+						...job,
+						urls: toolchain.urls,
+						resolveFrom: toolchain.resolveFrom,
+						knownClasses: job.op === "compile" ? knownClassesFor(toolchain.resolveFrom) : null
+					},
 					resourceLimits: { maxOldGenerationSizeMb: heapMb, maxYoungGenerationSizeMb: Math.min(64, Math.max(8, heapMb >> 3)) },
 					// The worker gets no environment of the server's (keys, tokens).
 					env: {}
@@ -366,7 +413,7 @@ export async function compileComponent(input: ComponentCompileInput, opts: RunOp
 		if (!(e instanceof CompileStopped)) throw e
 		return stopped(input, e.message, await currentToolchainFingerprint().catch(() => ""))
 	}
-	if (answer.kind === "result") return answer.result
+	if (answer.kind === "result") return withPlacedWarnings(answer.result)
 	if (answer.kind === "unavailable") throw new ComponentCompilerUnavailable(answer.message)
 	return stopped(
 		input,
@@ -380,6 +427,7 @@ const stopped = (input: ComponentCompileInput, text: string, fingerprint: string
 	hash: "",
 	errors: [{ file: input.entry, line: 0, column: 0, text }],
 	warnings: [],
+	warningsAt: [],
 	fingerprint
 })
 

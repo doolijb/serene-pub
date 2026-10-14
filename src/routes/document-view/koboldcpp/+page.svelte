@@ -10,6 +10,8 @@
 	import { isLocalOnnxType } from "$lib/client/components/connections/modelManagement"
 	import EmbeddingSwitchDialog from "$lib/client/components/connections/EmbeddingSwitchDialog.svelte"
 	import { useStarConfirm } from "$lib/client/components/connections/useStarConfirm.svelte"
+	import { enableManager } from "$lib/client/components/connections/managers"
+	import { canRunLocalRuntimes } from "$lib/client/components/connections/addMenuItems"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
@@ -141,7 +143,7 @@
 	}
 
 	/**
-	 * "Use for embeddings", as the Connections view's Models tab does it: the
+	 * "Use in Embeddings", as the Connections view's Models tab does it: the
 	 * server checks the file and ensures its row as an embedding model
 	 * (`koboldcpp:connectEmbeddingModel`), answering the pair without starring
 	 * it; the star then moves through `connections:setDefault` behind the same
@@ -282,7 +284,7 @@
 		currentModel = msg.currentModel
 		// Text models only. The listing now carries image models too (the scan
 		// picks up `.safetensors`, and the curated SD models are `.gguf`), and
-		// every action on this page — Load, Use for chat — treats
+		// every action on this page — Load, Use in Reply — treats
 		// what it is given as a TEXT model. Offering an SD checkpoint here would
 		// star a connection whose model cannot answer a chat, failing later with
 		// an error naming the connection rather than the model.
@@ -333,7 +335,7 @@
 		refresh()
 	}
 	function handleConnectModel() {
-		status = "Now using this model for chat."
+		status = "This model now fills the Reply loadout."
 		announce(status)
 		// Re-requests `connections:list` so `inUseForChat` picks up the new
 		// pair and the marker moves to this model.
@@ -497,8 +499,36 @@
 	// `connections:list` names the (endpoint, model) pair a capability
 	// default points at; held here only to compute the "in use for chat"
 	// marker below.
+	/**
+	 * Off is not a dead end (less-confusing J1). The press is the Add menu's
+	 * own (`enableManager`): it switches the manager on and adds the
+	 * KoboldCPP connection when there is none, so nobody is sent to Pub
+	 * settings first. It waits for `connections:list`, which is how it knows
+	 * whether a row already exists, and the lists load again once the flag
+	 * lands.
+	 */
+	let connectionsLoaded = $state(false)
+	let turningOn = $state(false)
+	function turnOn() {
+		turningOn = true
+		enableManager("koboldcpp", socket, connectionsList)
+		announce("Turning on KoboldCPP, run by Serene Pub.")
+	}
+	let wasOn: boolean | undefined
+	$effect(() => {
+		const settings = koboldCppSettingsCtx.settings
+		if (!settings) return
+		const on = !!settings.koboldCppManagerEnabled
+		if (wasOn === false && on) {
+			turningOn = false
+			refresh()
+		}
+		wasOn = on
+	})
+
 	useInterest<"connections:list">("connections:list", (msg) => {
 		connectionsList = msg.connectionsList ?? []
+		connectionsLoaded = true
 	})
 
 	onMount(() => {
@@ -516,11 +546,31 @@
 {#if !userCtx.user?.isAdmin}
 	<p>Admin access required.</p>
 {:else if !koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
-	<p>
-		KoboldCPP, run by Serene Pub, is turned off. Enable it from System settings
-		first.
-	</p>
-	<p><a href="/document-view/settings/system">Go to System settings</a></p>
+	{#if canRunLocalRuntimes(systemSettingsCtx.settings)}
+		<p>
+			KoboldCPP, run by Serene Pub, is off on this pub. Turning it on lets
+			Serene Pub download and run KoboldCPP and its models on this
+			computer, and adds a KoboldCPP connection if you don't have one.
+			Files you downloaded before are kept.
+		</p>
+		<p>
+			<button
+				type="button"
+				class="a11y-btn"
+				disabled={!connectionsLoaded || turningOn}
+				onclick={turnOn}
+			>
+				{turningOn
+					? "Turning on…"
+					: "Turn on KoboldCPP, run by Serene Pub"}
+			</button>
+		</p>
+	{:else}
+		<p>
+			KoboldCPP, run by Serene Pub, is not available in the Android app.
+		</p>
+	{/if}
+	<p><a href="/document-view/connections">Back to Connections</a></p>
 {:else}
 	{#if status}
 		<div class="a11y-status" role="status">
@@ -788,7 +838,7 @@
 							disabled={inUse}
 							aria-pressed={inUse}
 						>
-							{inUse ? "In use for chat" : "Use for chat"}
+							{inUse ? "In the Reply loadout" : "Use in Reply"}
 						</button>
 						<button
 							type="button"
@@ -830,8 +880,8 @@
 							aria-pressed={inUse}
 						>
 							{inUse
-								? "In use for embeddings"
-								: "Use for embeddings"}
+								? "In the Embeddings loadout"
+								: "Use in Embeddings"}
 						</button>
 						<button
 							type="button"

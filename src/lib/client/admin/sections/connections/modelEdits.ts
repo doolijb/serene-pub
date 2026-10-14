@@ -23,6 +23,7 @@
  *   not sent if it was refused.
  */
 import { modelDisplay } from "$lib/client/components/connections/modelDisplay"
+import type { SaveOutcome } from "$lib/client/admin/sequentialSave"
 
 export interface ModelEdits {
 	/** Model id → the visibility asked for. */
@@ -178,7 +179,7 @@ export type ModelEditStep =
 			label: string
 			capability: string
 			modelId: number
-			/** Labels of the writes this one needs to have landed first. */
+			/** KEYS of the writes this one needs to have landed first. */
 			after?: string[]
 	  }
 
@@ -194,19 +195,19 @@ export function modelEditPlan(
 ): ModelEditStep[] {
 	const byId = new Map(models.map((m) => [m.id, m]))
 	const steps: ModelEditStep[] = []
-	const showLabel = new Map<number, string>()
+	const showKey = new Map<number, string>()
 	for (const [key, enabled] of Object.entries(edits.enabled)) {
 		const modelId = Number(key)
 		const label = `${enabled ? "Show" : "Hide"} ${nameOf(byId.get(modelId), modelId)}`
-		if (enabled) showLabel.set(modelId, label)
+		if (enabled) showKey.set(modelId, `enabled:${modelId}`)
 		steps.push({ kind: "enabled", key: `enabled:${modelId}`, label, modelId, enabled })
 	}
 	for (const [capability, modelId] of Object.entries(edits.defaults)) {
-		const needs = showLabel.get(modelId)
+		const needs = showKey.get(modelId)
 		steps.push({
 			kind: "default",
 			key: `default:${capability}`,
-			label: `Use ${nameOf(byId.get(modelId), modelId)} for ${word(capability).toLowerCase()}`,
+			label: `Use ${nameOf(byId.get(modelId), modelId)} in ${word(capability)}`,
 			capability,
 			modelId,
 			...(needs ? { after: [needs] } : {})
@@ -215,19 +216,45 @@ export function modelEditPlan(
 	return steps
 }
 
-/** The draft without the steps whose labels landed (or that were dropped by hand). */
+/**
+ * The draft without the steps whose KEYS landed (or that were dropped by
+ * hand).
+ *
+ * ⚠ Keys, never labels: a label is a display name, and two models can show
+ * the same one (the same GGUF at two quants once `modelDisplay` lifts the
+ * quant out). Keyed by label, saving or undoing one dropped both, and a Use
+ * waited on — or was skipped for — the other model's Show.
+ */
 export function withoutSteps(
 	edits: ModelEdits,
 	steps: readonly ModelEditStep[],
-	labels: readonly string[]
+	keys: readonly string[]
 ): ModelEdits {
-	const gone = new Set(labels)
+	const gone = new Set(keys)
 	const enabled = { ...edits.enabled }
 	const defaults = { ...edits.defaults }
 	for (const step of steps) {
-		if (!gone.has(step.label)) continue
+		if (!gone.has(step.key)) continue
 		if (step.kind === "enabled") delete enabled[step.modelId]
 		else delete defaults[step.capability]
 	}
 	return { enabled, defaults }
+}
+
+/**
+ * An outcome saved under step KEYS (`saveInSequence` names steps by what it
+ * is handed), read back in the reader's words for the error summary and the
+ * toast.
+ */
+export function outcomeInLabels(
+	outcome: SaveOutcome,
+	steps: readonly ModelEditStep[]
+): SaveOutcome {
+	const labelOf = new Map(steps.map((s) => [s.key, s.label]))
+	const say = (key: string) => labelOf.get(key) ?? key
+	return {
+		landed: outcome.landed.map(say),
+		refused: outcome.refused.map((r) => ({ ...r, label: say(r.label) })),
+		skipped: outcome.skipped.map(say)
+	}
 }

@@ -422,12 +422,26 @@ describe("the pipeline owns its row", () => {
 		expect(keys).not.toContain("speaker")
 		expect(keys[1]).toBe("placeholder")
 		expect(keys.indexOf("placeholder")).toBeLessThan(keys.indexOf("generate"))
-		// The save fills the row; only the sprite step (DESIGN-sprites §5,
+		// The save fills the row; the sprite step (DESIGN-sprites §5,
 		// written into the spec since 2026-10-05) follows it — the picker,
-		// then the outlet, which writes nothing for a card with no sprites.
-		expect(keys.slice(-3)).toEqual(["save", "spritePick", "spriteShow"])
+		// then the outlet, which writes nothing for a card with no sprites —
+		// and last the reply tick (live scenes §6, 2026-10-13).
+		expect(keys.slice(-4)).toEqual(["save", "spritePick", "spriteShow", "tick"])
 		const spriteShow = receipt.nodes.find((n) => n.nodeKey === "spriteShow")!
 		expect((spriteShow.output as any).kept).toBe(true)
+		// The tick ran and decided nothing — By 0, the shipped default, is
+		// off — so the clock junction and its *Advance story clock* outlet
+		// never ran and wrote nothing.
+		const tick = receipt.nodes.find((n) => n.nodeKey === "tick")!
+		expect(tick.definitionId).toBe("core:task/clock-step@1")
+		expect(tick.result).toBe("ok")
+		expect(tick.output).toMatchObject({ moves: false, by: 0 })
+		expect(keys.filter((k) => /^clock(\.|$)/.test(k))).toEqual([])
+		expect(
+			receipt.nodes.some(
+				(n) => n.definitionId === "core:outlet/advance-story-clock@1"
+			)
+		).toBe(false)
 		const generate = receipt.nodes.find((n) => n.nodeKey === "generate")!
 		expect(generate.result).toBe("ok")
 		expect((generate.output as any).text).toBe(CHUNKS.join(""))
@@ -1329,11 +1343,8 @@ describe("one resolution per run (R-8)", () => {
 
 	it("the session's sampling pick and the panel's connection pick reach budget and wire as one answer", async () => {
 		const sessionId = await makeSession("r8")
-		// The session's own choice (tier 3, sampling only) …
-		await db
-			.update(schema.sessions)
-			.set({ samplingConfigId: pickedSamplingId })
-			.where(eq(schema.sessions.id, sessionId))
+		// The session's own choice (tier 3, sampling only: its panel row) …
+		await sessionOverride(sessionId, "generate", "sampling", "", pickedSamplingId)
 		// … and the panel's pick on the generate node (tier 2, the pair).
 		await pick(
 			"generate",
@@ -1372,10 +1383,7 @@ describe("one resolution per run (R-8)", () => {
 
 	it("the model's own context window caps budget, wire and panel through the one function", async () => {
 		const sessionId = await makeSession("r8-model")
-		await db
-			.update(schema.sessions)
-			.set({ samplingConfigId: pickedSamplingId })
-			.where(eq(schema.sessions.id, sessionId))
+		await sessionOverride(sessionId, "generate", "sampling", "", pickedSamplingId)
 		await pick(
 			"generate",
 			"connection",

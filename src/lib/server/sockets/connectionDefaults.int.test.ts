@@ -20,8 +20,10 @@ import {
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { eq } from "drizzle-orm"
 import { byCapability } from "$lib/server/connections/capabilityDefaults"
 import * as schema from "$lib/server/db/schema"
+import { S } from "@serene-pub/sdk"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
@@ -212,6 +214,61 @@ describe("connectionDefaults:list", () => {
 			expect(res.samplingOptions["text->embedding"]).toEqual([])
 	})
 
+	test("a registered pair that can no longer do its job is listed as refused, and stays registered", async () => {
+		// What Admin → Defaults marks broken: the model's modality changed
+		// after the default was chosen (a sync restated it), so every run the
+		// default names is refused by the same judgement the star asks.
+		const { connectionDefaultsList } = await import("./connectionDefaults")
+		const { setCapabilityDefault } = await import(
+			"$lib/server/connections/capabilityDefaults"
+		)
+		const admin = await makeAdmin("conn-defaults-refused-user")
+		const host = await makeConnection(
+			"Chats and embeds",
+			CONNECTION_TYPE.OLLAMA,
+			{ "text->text": 1, "text->embedding": 1 }
+		)
+		const modelId = await modelOn(host.id)
+		await setCapabilityDefault(testDb as any, "text->text", {
+			connectionId: host.id,
+			connectionModelId: modelId
+		})
+		await setCapabilityDefault(testDb as any, "text->embedding", {
+			connectionId: host.id,
+			connectionModelId: modelId
+		})
+		await testDb
+			.update(schema.connectionModels)
+			.set({ modality: "embeddings" })
+			.where(eq(schema.connectionModels.id, modelId))
+
+		try {
+			const res = await connectionDefaultsList.handler(
+				socketFor(admin.id),
+				{},
+				noopEmit
+			)
+			expect(res.defaults["text->text"]).toMatchObject({
+				connectionId: host.id,
+				connectionModelId: modelId
+			})
+			expect(res.refused["text->text"]).toEqual({
+				connectionId: host.id,
+				connectionModelId: modelId,
+				refusal: expect.stringContaining("Chat")
+			})
+			// The job it can still do is not marked.
+			expect(res.refused["text->embedding"]).toBeUndefined()
+		} finally {
+			await setCapabilityDefault(testDb as any, "text->text", {
+				connectionId: null
+			})
+			await setCapabilityDefault(testDb as any, "text->embedding", {
+				connectionId: null
+			})
+		}
+	}, 60_000)
+
 	test("each option carries its connection's type", async () => {
 		// What lets the screen grey a local ONNX row where the runtime didn't
 		// load, without asking for the connections list as well.
@@ -287,7 +344,7 @@ describe("connectionDefaults:set", () => {
 
 		const [row] = await testDb
 			.select()
-			.from(schema.connectionDefaults)
+			.from(schema.loadouts)
 			.where(byCapability("text->text"))
 		expect(row.connectionId).toBe(conn.id)
 		expect(row.connectionModelId).toBe(modelId)
@@ -307,6 +364,42 @@ describe("connectionDefaults:set", () => {
 			connectionModelId: modelId,
 			samplingConfigId: null
 		})
+	})
+
+	test("a sampling config of another vocabulary is refused, not registered", async () => {
+		// Plan A10: the picker offers only matching configs, but the write
+		// trusted the id — a stale tab or a raw call could hand image samplers
+		// to the chat default, or a temperature to an embedding endpoint.
+		const { connectionDefaultsSet } = await import("./connectionDefaults")
+		const admin = await makeAdmin("conn-defaults-sampling-shape-user")
+		const [imageConfig] = await testDb
+			.insert(schema.samplingConfigs)
+			.values({ name: "Shape-check image sampling", shape: S.imageGen })
+			.returning()
+		const errors: string[] = []
+		const emit = (event: string, data: any) => {
+			if (event === "connectionDefaults:set:error")
+				errors.push(data.error)
+		}
+
+		await expect(
+			connectionDefaultsSet.handler(
+				socketFor(admin.id),
+				{
+					capability: "text->text",
+					half: "sampling",
+					id: imageConfig.id
+				},
+				emit
+			)
+		).rejects.toThrow(/not for "text->text"/)
+		expect(errors).toHaveLength(1)
+
+		const [row] = await testDb
+			.select()
+			.from(schema.loadouts)
+			.where(byCapability("text->text"))
+		expect(row?.samplingConfigId ?? null).not.toBe(imageConfig.id)
 	})
 
 	test("a connection that cannot do it is refused, not registered", async () => {
@@ -341,7 +434,7 @@ describe("connectionDefaults:set", () => {
 
 		const [row] = await testDb
 			.select()
-			.from(schema.connectionDefaults)
+			.from(schema.loadouts)
 			.where(byCapability("text->text"))
 		expect(row?.connectionId).not.toBe(image.id)
 	})
@@ -377,7 +470,7 @@ describe("connectionDefaults:set", () => {
 
 		const rows = await testDb
 			.select()
-			.from(schema.connectionDefaults)
+			.from(schema.loadouts)
 			.where(byCapability("image+text->text"))
 		expect(rows).toEqual([])
 	})
@@ -447,7 +540,7 @@ describe("connectionDefaults:set where local ONNX can't run", () => {
 		])
 		const [row] = await testDb
 			.select()
-			.from(schema.connectionDefaults)
+			.from(schema.loadouts)
 			.where(byCapability(EMBED))
 		expect(row?.connectionId ?? null).not.toBe(id)
 	}, 60_000)

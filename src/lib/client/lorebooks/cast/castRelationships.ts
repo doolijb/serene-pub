@@ -103,11 +103,6 @@ export function relationshipsAtMomentLine(
 	return `Relationships at this point ${inStory} of ${total}`
 }
 
-/** The rest of a list the board only shows the head of. */
-export function moreLine(hidden: number): string {
-	return hidden > 0 ? `${hidden} more · show all` : ""
-}
-
 export interface CastReadInFacts {
 	fired: boolean
 	/** Where the run ranked them, when it recorded one. */

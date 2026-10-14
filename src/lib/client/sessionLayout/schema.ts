@@ -22,10 +22,10 @@
  * Strips are horizontal (top/bottom of the core) and scroll sideways when
  * tight.
  */
-import type {
-	LayoutZoneDef,
-	LayoutZoneRule,
-	ZoneLayoutV1
+import {
+	type LayoutZoneDef,
+	type ZoneLayoutV1,
+	zoneRungAt
 } from "@serene-pub/sdk"
 import { isRetiredWidget } from "./widgetGrid"
 
@@ -33,9 +33,11 @@ import { isRetiredWidget } from "./widgetGrid"
  * The `zoneLayout` slot's types are the SDK's (`ZoneLayoutV1`, its zones
  * `LayoutZoneDef`, their width ladders `LayoutZoneRule`), imported from
  * `@serene-pub/sdk` wherever they are used: the session layout is one format
- * a genre ships and this page draws. What stays here is the page's reading of
- * it — the modes a zone resolves to at a width, and the normalizer that
- * repairs a stored blob.
+ * a genre ships and this page draws. So is the ladder walk and its default
+ * ladders (`zoneRungAt`, `DEFAULT_SIDE_RULES`, `DEFAULT_STRIP_RULES`): what a
+ * zone is at a width is part of what a layout draws (`resolveDrawn`). What
+ * stays here is the page's handle on a resolved zone, and the normalizer that
+ * repairs a stored blob for the editor.
  */
 
 /** What a side zone is drawn as at a width. */
@@ -53,24 +55,6 @@ export interface ResolvedZone {
 }
 
 /* ── defaults ───────────────────────────────────────────────────────── */
-
-/** The default ladders, mirroring the reference mockup's breakpoints. */
-export const DEFAULT_SIDE_RULES: Record<"left" | "right", LayoutZoneRule[]> = {
-	right: [
-		{ min: 0, mode: "drawer", width: 320 },
-		{ min: 760, mode: "rail", width: 264 },
-		{ min: 1900, width: 300 },
-		{ min: 2400, width: 344, columns: 2 }
-	],
-	left: [
-		{ min: 0, mode: "drawer", width: 320 },
-		{ min: 1200, mode: "rail", width: 264 },
-		{ min: 1900, width: 300 },
-		{ min: 2400, width: 344, columns: 2 }
-	]
-}
-
-export const DEFAULT_STRIP_RULES: LayoutZoneRule[] = [{ min: 0, mode: "row" }]
 
 /**
  * A fresh layout: exactly the three zones (PLAN 25) — Left, Middle, Right.
@@ -124,35 +108,19 @@ export function pinsOnFirstDrop(o: {
 
 /* ── resolution ─────────────────────────────────────────────────────── */
 
-/** Ascending cumulative merge — each rule inherits what came before it. */
-function walkRules(rules: LayoutZoneRule[], width: number): Required<Omit<LayoutZoneRule, "min">> {
-	const out = { mode: "row" as SideMode | StripMode, width: 264, columns: 1 }
-	for (const rule of [...rules].sort((a, b) => a.min - b.min)) {
-		if (width < rule.min) break
-		if (rule.mode !== undefined) out.mode = rule.mode
-		if (rule.width !== undefined) out.width = rule.width
-		if (rule.columns !== undefined) out.columns = rule.columns
-	}
-	return out
-}
-
+/**
+ * One zone at the measured container width: the SDK's ladder walk
+ * (`zoneRungAt` — the rules ascending and cumulative, the default ladder for
+ * its side when it states none, an unpinned rail refined to icons), with the
+ * zone it was read from beside it.
+ */
 export function resolveZone(
 	id: string,
 	def: LayoutZoneDef,
 	containerWidth: number
 ): ResolvedZone {
-	const rules =
-		def.rules ??
-		(def.kind === "side"
-			? DEFAULT_SIDE_RULES[def.side ?? "right"]
-			: DEFAULT_STRIP_RULES)
-	const r = walkRules(rules, containerWidth)
-	let mode = r.mode
-	if (def.kind === "strip" && mode !== "hidden") mode = "row"
-	// The pin refinement: an unpinned rail is an icon strip until popped.
-	if (def.kind === "side" && mode === "rail" && def.pinned === false)
-		mode = "icons"
-	return { id, def, mode, width: r.width, columns: r.columns }
+	const { mode, width, columns } = zoneRungAt(def, containerWidth)
+	return { id, def, mode, width, columns }
 }
 
 /* ── normalization ──────────────────────────────────────────────────── */

@@ -9,14 +9,22 @@
  * dropped.
  *
  * Scope is the widget ids handed in, so core boot prunes core widgets and a
- * plugin prunes its own on install/update. A row for a widget outside that set
- * is untouched — an unread value is harmless, and an absent declaration is not
- * evidence the widget is gone.
+ * plugin prunes its own on install/update. A row is keyed by a widget instance
+ * id, so its widget — and the declaration it is pruned against — is
+ * `widgetOfInstance` of that id: a placed copy (`messages#sanctum`) is pruned
+ * with its widget, and an aliased one (`world-state`, the SDK's
+ * `WIDGET_ID_ALIASES`) with the widget it became, the settings the alias
+ * implies as its defaults (`widgetSettingsSchema`) — so a World State row's
+ * `layout` is rewritten as Stats' `arrangement`, not dropped. A row for a
+ * widget outside that set is untouched — an
+ * unread value is harmless, and an absent declaration is not evidence the
+ * widget is gone.
  *
  * The write is conditional on the prune actually changing something, so a boot
  * with nothing to fix issues no statements and bumps no `updatedAt`.
  */
-import { and, eq, inArray, notInArray } from "drizzle-orm"
+import { and, eq, inArray, like, notInArray, or } from "drizzle-orm"
+import { resolveWidgetAlias, widgetOfInstance } from "@serene-pub/sdk"
 import { db } from "."
 import * as schema from "./schema"
 import {
@@ -28,7 +36,7 @@ import type { WidgetDecl } from "$lib/shared/widgets/types"
 
 /** One stored value the prune removed, and where it was. */
 export interface DroppedWidgetSetting {
-	widgetSlug: string
+	widgetInstanceId: string
 	sessionId: number
 	userId: number
 	key: string
@@ -45,24 +53,38 @@ export async function syncWidgetSettings(
 	const widgetIds = decls.map((d) => d.id)
 	if (!widgetIds.length) return []
 
+	// The widgets themselves, and every placed copy (`<widget id>#<name>`):
+	// which copies are in scope is `widgetOfInstance`'s answer below.
 	const rows = await db
 		.select()
 		.from(schema.widgetSettings)
-		.where(inArray(schema.widgetSettings.widgetSlug, widgetIds))
+		.where(
+			or(
+				inArray(schema.widgetSettings.widgetInstanceId, widgetIds),
+				like(schema.widgetSettings.widgetInstanceId, "%#%")
+			)
+		)
 	if (!rows.length) return []
 
 	const schemas = new Map(
 		decls.map((d) => [d.id, widgetSettingsSchema(d)] as const)
 	)
+	const declsById = new Map(decls.map((d) => [d.id, d] as const))
 	const dropped: DroppedWidgetSetting[] = []
 
 	for (const row of rows) {
-		const fields = schemas.get(row.widgetSlug)
+		const widget = widgetOfInstance(row.widgetInstanceId)
+		const decl = declsById.get(widget)
+		// An aliased row's schema is its own: the alias's settings are its defaults.
+		const fields =
+			decl && resolveWidgetAlias(row.widgetInstanceId).aliasedFrom
+				? widgetSettingsSchema({ ...decl, id: row.widgetInstanceId })
+				: schemas.get(widget)
 		if (!fields) continue
 		const result = pruneWidgetSettings(fields, row.values)
 		for (const d of result.dropped)
 			dropped.push({
-				widgetSlug: row.widgetSlug,
+				widgetInstanceId: row.widgetInstanceId,
 				sessionId: row.sessionId,
 				userId: row.userId,
 				key: d.key,
@@ -90,7 +112,7 @@ export async function syncWidgetSettings(
 				dropped
 					.map(
 						(d) =>
-							`${d.widgetSlug}.${d.key} (${d.reason}, session ` +
+							`${d.widgetInstanceId}.${d.key} (${d.reason}, session ` +
 							`${d.sessionId}, user ${d.userId})`
 					)
 					.join(", ")
@@ -98,14 +120,14 @@ export async function syncWidgetSettings(
 	return dropped
 }
 
-/** This user's stored deviations for one session, keyed by widget id. */
+/** This user's stored deviations for one session, keyed by widget instance id. */
 export async function readWidgetSettings(
 	sessionId: number,
 	userId: number
 ): Promise<Record<string, Record<string, unknown>>> {
 	const rows = await db
 		.select({
-			widgetSlug: schema.widgetSettings.widgetSlug,
+			widgetInstanceId: schema.widgetSettings.widgetInstanceId,
 			values: schema.widgetSettings.values
 		})
 		.from(schema.widgetSettings)
@@ -118,12 +140,12 @@ export async function readWidgetSettings(
 	const out: Record<string, Record<string, unknown>> = {}
 	for (const r of rows)
 		if (r.values && Object.keys(r.values).length)
-			out[r.widgetSlug] = r.values
+			out[r.widgetInstanceId] = r.values
 	return out
 }
 
 /**
- * The widget ids this user ALREADY has a row for in one session.
+ * The widget instance ids this user ALREADY has a row for in one session.
  *
  * The exemption the seating gate is held to (ruled 2026-09-17): a disable
  * deletes nothing, so a key that is already stored is written back whatever the
@@ -131,16 +153,16 @@ export async function readWidgetSettings(
  * arrangement a person made under it waits for the re-enable, exactly as
  * `announcedWidgetIds` leaves a style already made alone.
  *
- * Slugs rather than values, because the gate asks only whether a row exists —
+ * Ids rather than values, because the gate asks only whether a row exists —
  * `readWidgetSettings` next door is for the reader that wants what is in them,
  * and it drops an empty row this one would still report.
  */
-export async function storedWidgetSlugs(
+export async function storedWidgetInstanceIds(
 	sessionId: number,
 	userId: number
 ): Promise<Set<string>> {
 	const rows = await db
-		.select({ widgetSlug: schema.widgetSettings.widgetSlug })
+		.select({ widgetInstanceId: schema.widgetSettings.widgetInstanceId })
 		.from(schema.widgetSettings)
 		.where(
 			and(
@@ -148,7 +170,7 @@ export async function storedWidgetSlugs(
 				eq(schema.widgetSettings.userId, userId)
 			)
 		)
-	return new Set(rows.map((r) => r.widgetSlug))
+	return new Set(rows.map((r) => r.widgetInstanceId))
 }
 
 /**
@@ -177,21 +199,21 @@ export async function writeWidgetSettings(
 			? and(
 					mine,
 					notInArray(
-						schema.widgetSettings.widgetSlug,
-						keep.map(([slug]) => slug)
+						schema.widgetSettings.widgetInstanceId,
+						keep.map(([instanceId]) => instanceId)
 					)
 				)
 			: mine
 	)
-	for (const [widgetSlug, values] of keep)
+	for (const [widgetInstanceId, values] of keep)
 		await db
 			.insert(schema.widgetSettings)
-			.values({ sessionId, userId, widgetSlug, values })
+			.values({ sessionId, userId, widgetInstanceId, values })
 			.onConflictDoUpdate({
 				target: [
 					schema.widgetSettings.userId,
 					schema.widgetSettings.sessionId,
-					schema.widgetSettings.widgetSlug
+					schema.widgetSettings.widgetInstanceId
 				],
 				set: { values, updatedAt: new Date() }
 			})

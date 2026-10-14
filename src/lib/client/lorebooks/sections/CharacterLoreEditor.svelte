@@ -12,7 +12,8 @@
 	 *
 	 * The helper text under the picker is recomputed as the picker changes, so
 	 * it always states what saving right now would do rather than what the
-	 * saved row does.
+	 * saved row does. No cast member is the narrator's (the server's rule), a
+	 * muted note; only a binding that points at nothing wears the warning.
 	 */
 	let {
 		draft = $bindable(),
@@ -23,9 +24,7 @@
 	let visibility = $derived(
 		getCharacterLoreVisibility(draft.lorebookBindingId, bindings)
 	)
-	let needsAttention = $derived(
-		visibility.kind === "orphaned" || visibility.kind === "unbound"
-	)
+	let needsAttention = $derived(visibility.kind === "orphaned")
 
 	function bindingLabel(binding: (typeof bindings)[number]): string {
 		if (binding.characterId)
@@ -53,14 +52,17 @@
 		aria-hidden="true"
 	>
 		Cast member
-		<Icons.Link2 size={13} class="text-surface-600-400 relative top-[1px]" />
+		<Icons.Link2
+			size={13}
+			class="text-surface-600-400 relative top-[1px]"
+		/>
 	</span>
 	<Select
 		label="Cast member"
 		labelHidden
 		class="w-full"
 		options={[
-			{ value: "", label: "None (Unbound)" },
+			{ value: "", label: "None (narrator only)" },
 			...bindings.map((binding) => ({
 				value: String(binding.id),
 				label: bindingLabel(binding)
@@ -75,12 +77,14 @@
 	<p
 		class="text-xs"
 		class:text-warning-500={needsAttention}
-		class:text-surface-700-300={!needsAttention}
+		class:text-surface-600-400={visibility.kind === "unbound"}
+		class:text-surface-700-300={!needsAttention &&
+			visibility.kind !== "unbound"}
 	>
 		{#if visibility.kind === "orphaned"}
 			<Icons.AlertTriangle size={12} class="inline" />
-		{:else if visibility.kind === "unbound"}
-			<Icons.LockOpen size={12} class="inline" />
+		{:else if visibility.kind === "unbound" || visibility.kind === "narrator"}
+			<Icons.Drama size={12} class="inline" />
 		{:else}
 			<Icons.Lock size={12} class="inline" />
 		{/if}

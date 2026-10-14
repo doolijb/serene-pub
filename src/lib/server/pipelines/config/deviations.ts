@@ -47,8 +47,7 @@ import type { Decl } from "$lib/server/pipelines/config/panel/types"
  * in key order are the same stored value, and a key-order difference is
  * precisely what a round-trip through Postgres `json` can introduce.
  *
- * `undefined` is deliberately not equal to anything, including itself, at the
- * top level — see `isDeviation`, which handles "the declaration offers no
+ * `undefined` equals nothing, not even itself, at the top level — see `isDeviation`, which handles "the declaration offers no
  * default" as its own case rather than letting it fall through to a comparison.
  */
 export function sameConfiguredValue(a: unknown, b: unknown): boolean {
@@ -126,4 +125,52 @@ export function holdsRow(
 ): boolean {
 	if (isDeviation(decl, value)) return true
 	return inherited !== undefined && isDeviation(decl, inherited)
+}
+
+/** One value at one address: an author preset's, or a config row's. */
+export interface AddressedValue {
+	nodeKey: string
+	slot: string
+	/** `''` or absent for a whole-slot value. */
+	path?: string | null
+	value: unknown
+}
+
+/**
+ * Which rows of a pipeline's **shipped Default** config stop holding when its
+ * default author preset changes across a version (owner ruling 2026-10-11).
+ *
+ * A row is dropped when it still holds exactly what the OLD default preset set
+ * at its address, and the NEW default preset does not set that same value
+ * there: it either sets something else or nothing at all. Such a row is the
+ * old preset speaking, not a decision anybody made, so it follows the new one.
+ * Every other row is kept: one that differs from the old preset is somebody's
+ * change, one at an address the old preset never set was never the preset's,
+ * and one the new preset still sets to the same value is still right.
+ *
+ * `core:spec/chat-generate-image` 1.0.0 → 1.1.0 is the case it was written
+ * for: 1.0.0's default preset set `render|settings|review` to `on`; 1.1.0
+ * ships no default preset, so the shipped row is dropped and the step inherits
+ * its declared `off`.
+ *
+ * Pure, over plain arrays: the caller reads the rows and acts on the answer.
+ * Equality is `sameConfiguredValue`'s, so key order inside an object never
+ * reads as a change. An address listed twice in one preset takes its last
+ * value, the way a `Map` built from the same rows would.
+ */
+export function rowsToDropOnPresetChange<R extends AddressedValue>(
+	oldPresetValues: readonly AddressedValue[],
+	newPresetValues: readonly AddressedValue[],
+	configRows: readonly R[]
+): R[] {
+	const key = (v: AddressedValue) =>
+		`${v.nodeKey}\u0000${v.slot}\u0000${v.path ?? ""}`
+	const before = new Map(oldPresetValues.map((v) => [key(v), v.value]))
+	const after = new Map(newPresetValues.map((v) => [key(v), v.value]))
+	return configRows.filter((row) => {
+		const at = key(row)
+		if (!before.has(at)) return false
+		if (!sameConfiguredValue(row.value, before.get(at))) return false
+		return !(after.has(at) && sameConfiguredValue(row.value, after.get(at)))
+	})
 }

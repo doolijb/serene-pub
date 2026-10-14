@@ -348,7 +348,16 @@ export async function buildKoboldCppListModels(): Promise<Sockets.KoboldCPP.List
 	if (scannedEverything) {
 		const staleFilenames = dbModels
 			.filter(
-				(m) => m.status === "complete" && !discovered.has(m.filename)
+				(m) =>
+					m.status === "complete" &&
+					// Only rows this scan could have found: a GGUF/safetensors
+					// filename (the same `isModelFilename` gate as above). ONNX
+					// embedding/NER and matting rows live under <data>/models,
+					// never in these directories, so "not seen here" is not
+					// evidence they are gone.
+					(m.format === "gguf" || m.format === "safetensors") &&
+					isModelFilename(m.filename) &&
+					!discovered.has(m.filename)
 			)
 			.map((m) => m.filename)
 		if (staleFilenames.length > 0) {
@@ -604,7 +613,7 @@ export const koboldCppConnectModelHandler: Handler<
 
 		// Explicitly `text->text`, with the model named outright, and
 		// explicitly here rather than as a side effect of the insert above:
-		// "Use for chat" IS somebody choosing, which is exactly what the
+		// "Use in Reply" IS somebody choosing, which is exactly what the
 		// ruling requires and what the deleted auto-star in
 		// `connections:create` was not. The capability is named because the
 		// handler cannot derive it — this same managed endpoint also serves
@@ -624,7 +633,7 @@ export const koboldCppConnectModelHandler: Handler<
 		// setting a connection as default should not eagerly load/swap the koboldcpp model.
 
 		const res: Sockets.KoboldCPP.ConnectModel.Response = {
-			success: "Model set as default"
+			success: "Model put in the Reply loadout"
 		}
 		emitToUser("koboldcpp:connectModel", res)
 		return res
@@ -697,7 +706,7 @@ export const koboldCppConnectImageModelHandler: Handler<
 			return fail("That model file is no longer on disk")
 		}
 
-		// THE managed endpoint — the same row "Use for chat" lands on, because
+		// THE managed endpoint — the same row "Use in Reply" lands on, because
 		// it is the same process. The model row is ensured with its modality,
 		// so the default registered next is judged as an image model now
 		// rather than after the next sync.
@@ -727,7 +736,7 @@ export const koboldCppConnectImageModelHandler: Handler<
 		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 
 		const res: Sockets.KoboldCPP.ConnectImageModel.Response = {
-			success: "Image model set as default"
+			success: "Model put in the Images loadout"
 		}
 		emitToUser("koboldcpp:connectImageModel", res)
 		return res
@@ -735,7 +744,7 @@ export const koboldCppConnectImageModelHandler: Handler<
 }
 
 /**
- * "Use for embeddings": the same managed endpoint, an embedding model on it —
+ * "Use in Embeddings": the same managed endpoint, an embedding model on it —
  * and the pair, NOT the star.
  *
  * The third Use-for handler, and the one that stops short. Chat and image
@@ -1715,49 +1724,11 @@ export const koboldCppDownloadModelHandler: Handler<
 			return { success: false }
 		}
 
-		// Last, so a rejected request never leaves an empty models folder behind
-		// — and per KIND, since the image directory may not exist yet on an
-		// install that has only ever downloaded LLMs.
-		await fsPromises.mkdir(modelsDir, { recursive: true })
-
-		// Upsert DB record before starting so the file is excluded from the available list immediately
-		await db
-			.insert(schema.localModels)
-			.values({
-				filename,
-				modelName,
-				modelUrl,
-				description,
-				quantization,
-				sizeBytes: sizeBytes ?? null,
-				downloadUrl,
-				status: "downloading",
-				// `extensionAllowedForKind` rejected anything else above, so
-				// both branches are a known container rather than the column's
-				// "gguf" default standing in for one.
-				format: formatForFilename(filename) ?? undefined,
-				kind,
-				kindSource: "declared",
-				modality: modalityForKind(kind)
-			})
-			.onConflictDoUpdate({
-				target: schema.localModels.filename,
-				set: {
-					modelName,
-					modelUrl,
-					description,
-					quantization,
-					sizeBytes: sizeBytes ?? null,
-					downloadUrl,
-					status: "downloading",
-					errorMessage: null,
-					format: formatForFilename(filename) ?? undefined,
-					kind,
-					kindSource: "declared",
-					modality: modalityForKind(kind)
-				}
-			})
-
+		// Claimed HERE, in the same synchronous run as the two checks above:
+		// they read `activeDownloads`, and the mkdir and upsert below yield.
+		// Claiming after them let two presses of one Download both pass the
+		// "already downloading" check and start two writers on one file, and
+		// let a burst of distinct files all pass the concurrency cap.
 		activeDownloads[filename] = {
 			filename,
 			modelName,
@@ -1766,6 +1737,62 @@ export const koboldCppDownloadModelHandler: Handler<
 			total: 0,
 			isDone: false
 		}
+		// Anything that fails before the task owns the entry gives the claim
+		// back, so the file (and the slot) is not held by a download that
+		// never started.
+		const releaseClaim = () => {
+			delete activeDownloads[filename]
+			emitDownloadProgress()
+		}
+
+		try {
+			// Last, so a rejected request never leaves an empty models folder behind
+			// — and per KIND, since the image directory may not exist yet on an
+			// install that has only ever downloaded LLMs.
+			await fsPromises.mkdir(modelsDir, { recursive: true })
+
+			// Upsert DB record before starting so the file is excluded from the available list immediately
+			await db
+				.insert(schema.localModels)
+				.values({
+					filename,
+					modelName,
+					modelUrl,
+					description,
+					quantization,
+					sizeBytes: sizeBytes ?? null,
+					downloadUrl,
+					status: "downloading",
+					// `extensionAllowedForKind` rejected anything else above, so
+					// both branches are a known container rather than the column's
+					// "gguf" default standing in for one.
+					format: formatForFilename(filename) ?? undefined,
+					kind,
+					kindSource: "declared",
+					modality: modalityForKind(kind)
+				})
+				.onConflictDoUpdate({
+					target: schema.localModels.filename,
+					set: {
+						modelName,
+						modelUrl,
+						description,
+						quantization,
+						sizeBytes: sizeBytes ?? null,
+						downloadUrl,
+						status: "downloading",
+						errorMessage: null,
+						format: formatForFilename(filename) ?? undefined,
+						kind,
+						kindSource: "declared",
+						modality: modalityForKind(kind)
+					}
+				})
+		} catch (err) {
+			releaseClaim()
+			throw err
+		}
+
 		emitDownloadProgress()
 
 		// The admin who pressed Download, carried into the detached task below:
@@ -2288,9 +2315,10 @@ export const koboldCppDownloadBinary: Handler<
 						koboldCppManagedReleaseTag: params.releaseTag
 					})
 					.where(eq(schema.koboldCppSettings.id, 1))
-				// Auto-start subprocess after successful download
-				await subprocessManager.start()
-				// Update baseUrl to match managed port
+				// Update baseUrl to match managed port. Before the auto-start,
+				// not after it: a start that failed skipped this and the
+				// broadcast, so the screens never heard the binary was
+				// installed, and the Start they offer next never sets baseUrl.
 				const settings = (await db.query.koboldCppSettings.findFirst())!
 				const port = settings.koboldCppManagedPort ?? 5001
 				await db
@@ -2304,6 +2332,19 @@ export const koboldCppDownloadBinary: Handler<
 				)
 			} catch (err: any) {
 				console.error("[KoboldCPP binary download]", err.message)
+				return
+			}
+			// Auto-start subprocess after successful download. A failure
+			// reaches the status card on its own — the subprocess manager
+			// emits "crashed" with lastError (eg. "spawn ETXTBSY"), which
+			// offers Start — so this only names the step in the server log.
+			try {
+				await subprocessManager.start()
+			} catch (err: any) {
+				console.error(
+					"[KoboldCPP binary download] auto-start failed:",
+					err.message
+				)
 			}
 		})()
 

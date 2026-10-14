@@ -194,6 +194,15 @@ describe("the store", () => {
 			expect(text).toContain(fault)
 	}, 60_000)
 
+	test("🚧 a widget may ask a write grant in its scopes (D4); an unknown write is refused", async () => {
+		const store = await import("./store")
+		const findings = (scopes: string[]) =>
+			store.authoredComponentFindings(content({ widget: { title: "Dice", scopes } }) as never).join("\n")
+		expect(findings(["session:state", "session:state:write", "channel:dice:write"])).not.toContain("widget.scopes")
+		expect(findings(["lore:write"])).toContain('widget.scopes names "lore:write"')
+		expect(findings(["channel:dice"])).toContain('widget.scopes names "channel:dice"')
+	})
+
 	test("new source clears the compile, and a compile of the old source never lands", async () => {
 		const store = await import("./store")
 		const row = await offerable()
@@ -282,8 +291,7 @@ describe("the offer", () => {
 			surface: { kind: "remote", owner, component: row.slug },
 			src: `/authored-ui/${owner}/${HASH}.js`,
 			reads: ["settings"],
-			grants: ["characters"],
-			defaultActive: false
+			grants: ["characters"]
 		})
 		expect(panel!.surface.kind === "remote" && panel!.surface.owner).not.toBe("core")
 		// Seatable: a layout / settings write keyed on its id is accepted.

@@ -61,9 +61,7 @@
 	}: Props = $props()
 
 	/** The kind tile's glyph — `ConnectionRow`'s, so a row and a card agree. */
-	const KindIcon = $derived(
-		connectionTypeIcon(type, kindIconComponent(kind))
-	)
+	const KindIcon = $derived(connectionTypeIcon(type, kindIconComponent(kind)))
 	const ActionIcon = $derived(
 		status.action
 			? (((Icons as any)[status.action.icon] as any) ?? Icons.Play)
@@ -128,7 +126,9 @@
 				<KindIcon size={16} />
 			</span>
 			<span class="min-w-0 flex-1">
-				<span class="block truncate text-[15px] font-medium">{title}</span>
+				<span class="block truncate text-[15px] font-medium">
+					{title}
+				</span>
 				{#if showChip}
 					<span
 						class="mt-0.5 inline-block max-w-full truncate rounded-full px-1.5 py-0.5 align-middle text-[11px] {managed
@@ -143,7 +143,9 @@
 
 		<span class="flex min-w-0 items-center gap-2">
 			<span
-				class="flex min-w-0 items-center gap-1.5 text-xs font-medium {TEXT[tone]}"
+				class="flex min-w-0 items-center gap-1.5 text-xs font-medium {TEXT[
+					tone
+				]}"
 			>
 				<span
 					class="size-1.5 shrink-0 rounded-full {DOT[tone]}"
@@ -153,14 +155,19 @@
 			</span>
 			<span class="flex-1"></span>
 			<!-- Muted, not quiet: the count is a fact the reader came for. -->
-			<span class="text-surface-600-400 flex shrink-0 items-center gap-1 text-xs">
+			<span
+				class="text-surface-600-400 flex shrink-0 items-center gap-1 text-xs"
+			>
 				<Icons.Boxes size={12} aria-hidden="true" />
 				{countLabel}
 			</span>
 		</span>
 
 		{#if detailLine}
-			<span class="text-surface-600-400 block truncate text-xs" title={detailLine}>
+			<span
+				class="text-surface-600-400 block truncate text-xs"
+				title={detailLine}
+			>
 				{detailLine}
 			</span>
 		{/if}
@@ -171,7 +178,11 @@
 					<span
 						class="preset-tonal-primary text-primary-900 dark:text-primary-300 flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[11px] font-bold"
 					>
-						<Icons.Star size={8} fill="currentColor" aria-hidden="true" />
+						<Icons.Star
+							size={8}
+							fill="currentColor"
+							aria-hidden="true"
+						/>
 						{capability}
 					</span>
 				{/each}

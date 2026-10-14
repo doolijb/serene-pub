@@ -37,7 +37,7 @@ const summary = (over: Partial<Summary> = {}): Summary => ({
 	singleFile: false,
 	artifact: { carried: false, verifies: false, fingerprint: null },
 	runs: "recompiled",
-	compile: { errors: [], warnings: [], artifactHash: "a".repeat(64), fingerprint: "fp" },
+	compile: { errors: [], warnings: [], warningsAt: [], artifactHash: "a".repeat(64), fingerprint: "fp" },
 	...over
 })
 
@@ -188,6 +188,7 @@ describe("the preview summary", () => {
 						{ file: "Stats.svelte", line: 0, column: 0, text: "imports fs, which is not allowed" }
 					],
 					warnings: [],
+					warningsAt: [],
 					artifactHash: null,
 					fingerprint: "fp"
 				}

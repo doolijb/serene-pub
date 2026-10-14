@@ -17,8 +17,12 @@ import { CONNECTION_REFUSAL } from "$lib/server/connections/visibility"
 import type { RunProgress } from "$lib/shared/sockets/progress"
 import type { ImageGenProgress } from "$lib/shared/imageGen/types"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import type { ImageWorkflowDocument } from "$lib/shared/imageGen/types"
+import { workflowDialDefaults } from "$lib/shared/imageGen/workflowShape"
 import type {
 	GeneratedMedia,
+	ImageDrawingSheetParams,
+	ImageDrawingSheetResponse,
 	ImageProfileSchemaParams,
 	ImageProfileSchemaResponse,
 	ImagesCancelParams,
@@ -78,7 +82,7 @@ async function readyManagedTarget(
 
 	if (!connection.model)
 		throw new Error(
-			`"${connection.name}" has no image model selected. Pick one in its connection settings, or use "Use for images" in the Models tab of KoboldCPP, run by Serene Pub.`
+			`"${connection.name}" has no image model selected. Pick one in its connection settings, or use "Use in Images" in the Models tab of KoboldCPP, run by Serene Pub.`
 		)
 
 	const [{ ensureManagedReady }, { sdQuantToInt }] = await Promise.all([
@@ -175,13 +179,19 @@ export const imagesGenerate: Handler<
 			candidate.enabled
 				? candidate
 				: undefined
-		if (!usable)
+		// 🚧 A template-payload endpoint (ComfyUI) can draw a test without a
+		// registered model: its checkpoint is a hole in the workflow, and an
+		// unset hole renders at the workflow's own literal (§4.10).
+		const templatePayload = await getImageAdapter(endpoint.type)
+			.then((e) => (e.sheetFor?.(endpoint as any) ?? e.sheet)?.payload === "template")
+			.catch(() => false)
+		if (!usable && !templatePayload)
 			return fail(
-				"Choose which image model this connection sends — open its Models and set one as the default for image generation."
+				"Choose which image model this connection sends — open its Models and press Use in Images on one."
 			)
 		const connection = mergeEndpointModel(
 			endpoint as SelectConnection,
-			usable
+			usable ?? null
 		)
 		// The same guard the three dispatchers use, for the same reason: this is
 		// the fourth way into image generation, and it was the last one still
@@ -204,12 +214,34 @@ export const imagesGenerate: Handler<
 				return fail("You do not have access to that session.")
 		}
 
+		// 🚧 A template-payload connection (ComfyUI) draws with a workflow
+		// (§4.8 step 5): the test names one, and it is checked here the way
+		// the pipeline's `resolveWorkflow` checks a slot's.
+		const exportsForSheet = await getImageAdapter(connection.type)
+		const flatSheet =
+			exportsForSheet.sheetFor?.(connection) ?? exportsForSheet.sheet
+		let workflow: ImageWorkflowDocument | null = null
+		if (flatSheet?.payload === "template") {
+			if (params.workflowId == null)
+				return fail("Choose a workflow to draw the test with.")
+			const { getWorkflowDocument } = await import(
+				"$lib/server/imageGen/comfy/workflows"
+			)
+			workflow = await getWorkflowDocument(db, params.workflowId)
+			if (!workflow) return fail("That workflow no longer exists.")
+			if (workflow.dialect !== "comfyui")
+				return fail(`"${workflow.name}" is not a ComfyUI workflow.`)
+		}
+
 		// The chosen config, or the instance's image default. Never the text
 		// default: an image node handed a text config would have every parameter
 		// dropped by the resolver and would silently render at backend defaults.
+		// A workflow test with no config named draws at the workflow's own
+		// dials — its variables' defaults — never the SD presets.
 		const imageDefault = await capabilityDefault(db, "text->image")
 		const samplingId =
-			params.samplingConfigId ?? imageDefault?.samplingConfigId
+			params.samplingConfigId ??
+			(workflow ? null : imageDefault?.samplingConfigId)
 		const sampling = samplingId
 			? await db.query.samplingConfigs.findFirst({
 					where: (c, { eq }) => eq(c.id, samplingId)
@@ -217,7 +249,7 @@ export const imagesGenerate: Handler<
 			: undefined
 		if (sampling && sampling.shape !== S.imageGen)
 			return fail(
-				`"${sampling.name}" is a ${sampling.shape} config and cannot drive an image connection.`
+				`"${sampling.name}" is a ${sampling.shape} config and cannot drive this image connection.`
 			)
 
 		// The stored apiKey is encrypted at rest (tokenCrypto.ts) — decrypt it
@@ -245,6 +277,12 @@ export const imagesGenerate: Handler<
 			connection,
 			overrides: params.overrides
 		})
+		// A workflow draws at its own dials' defaults unless something sets them.
+		if (workflow) {
+			const defaults = workflowDialDefaults(workflow.variables)
+			if (Object.keys(defaults).length)
+				req.workflowValues = { ...defaults, ...(req.workflowValues ?? {}) }
+		}
 
 		const controller = new AbortController()
 		inFlight.set(runId, { controller, userId })
@@ -294,7 +332,8 @@ export const imagesGenerate: Handler<
 			const adapter = new Adapter(target as any)
 			result = await adapter.generateImage(req, {
 				signal: controller.signal,
-				onProgress
+				onProgress,
+				...(workflow ? { workflow, runId } : {})
 			})
 		} catch (e) {
 			emitToUser("images:progress", {
@@ -454,12 +493,134 @@ export const imagesProfileSchema: Handler<
 				| Record<string, unknown>
 				| undefined,
 			defaults: adapter.profileDefaults,
-			capabilities: adapter.capabilities as unknown as Record<
+			// The drawing sheet, under the key the form already reads.
+			capabilities: adapter.sheet as unknown as Record<
 				string,
 				unknown
 			>
 		}
 		emitToUser("images:profileSchema", res)
+		return res
+	}
+}
+
+/**
+ * The drawing sheet of the image pair a sampling config is likely to run
+ * against (the Image default, or a named pair), so the sampling form can grey
+ * the knobs that pair drops (DESIGN-image-generation §4.3).
+ *
+ * A NOTE, never an error: no pair set, or one that does not resolve, answers
+ * `sheet: null` and the form greys nothing — a config outlives the connection
+ * it happens to be paired with.
+ */
+export const imagesDrawingSheet: Handler<
+	ImageDrawingSheetParams,
+	ImageDrawingSheetResponse
+> = {
+	event: "images:drawingSheet",
+	handler: async (socket, params, emitToUser) => {
+		// 🚧 A card's Sprites tab asks whether its pair re-expresses
+		// (§6.3). The owner may ask; only an admin sees the sheet.
+		if (params?.characterId != null && socket.user) {
+			const characterId = params.characterId
+			const isAdmin = !!socket.user.isAdmin
+			let res: ImageDrawingSheetResponse = {
+				sheet: null,
+				drops: [],
+				characterId,
+				expressions: false
+			}
+			try {
+				const { mayFillSprites } = await import("$lib/server/sprites/attach")
+				if (await mayFillSprites(db, socket.user.id, characterId)) {
+					const { spriteExpressionPair } = await import(
+						"$lib/server/sprites/reexpress"
+					)
+					const { samplingKeysSheetDrops } = await import(
+						"$lib/shared/imageGen/types"
+					)
+					const pair = await spriteExpressionPair(db)
+					if (pair.ok)
+						res = {
+							...res,
+							expressions: pair.sheet.expressions === true,
+							...(isAdmin
+								? { sheet: pair.sheet, drops: samplingKeysSheetDrops(pair.sheet) }
+								: {})
+						}
+				}
+			} catch {
+				// No sheet is an answer: nothing is offered.
+			}
+			emitToUser("images:drawingSheet", res)
+			return res
+		}
+		if (!socket.user?.isAdmin) {
+			const res = { error: "Only an admin can read this." }
+			emitToUser("images:drawingSheet", res)
+			return res
+		}
+		const { resolveCapabilityTarget } = await import(
+			"$lib/server/connections/capabilityTarget"
+		)
+		const { samplingKeysSheetDrops } = await import(
+			"$lib/shared/imageGen/types"
+		)
+		let res: ImageDrawingSheetResponse = { sheet: null, drops: [] }
+		// 🚧 A workflow's sheet on a named connection (§4.8 step 4): derived
+		// from what the document reads, without needing a model pair — a
+		// ComfyUI's checkpoint is a hole in the workflow, not a precondition
+		// for describing it.
+		if (params?.workflowId != null) {
+			try {
+				const conn =
+					params.connectionId != null
+						? await db.query.connections.findFirst({
+								where: (c, { eq }) => eq(c.id, params.connectionId!)
+							})
+						: undefined
+				const { getWorkflowDocument } = await import(
+					"$lib/server/imageGen/comfy/workflows"
+				)
+				const workflow = await getWorkflowDocument(db, params.workflowId)
+				if (workflow) {
+					const exports = await getImageAdapter(
+						conn?.type ?? CONNECTION_TYPE.COMFYUI
+					)
+					if (exports.sheetForWorkflow) {
+						const sheet = await exports.sheetForWorkflow(
+							conn ?? { type: CONNECTION_TYPE.COMFYUI },
+							workflow
+						)
+						res = { sheet, drops: samplingKeysSheetDrops(sheet) }
+					}
+				}
+			} catch {
+				// No sheet is an answer.
+			}
+			res = { ...res, workflowId: params.workflowId }
+			emitToUser("images:drawingSheet", res)
+			return res
+		}
+		try {
+			const resolved = await resolveCapabilityTarget(db, {
+				capability: "text->image",
+				pipelineConfig: {
+					connectionId: params?.connectionId ?? null,
+					connectionModelId: params?.connectionModelId ?? null,
+					samplingConfigId: null
+				}
+			})
+			if (resolved.ok) {
+				const exports = await getImageAdapter(resolved.connection.type)
+				const sheet =
+					exports.sheetFor?.(resolved.connection) ?? exports.sheet
+				res = { sheet, drops: samplingKeysSheetDrops(sheet) }
+			}
+		} catch {
+			// No sheet is an answer: the form greys nothing.
+		}
+		emitToUser("images:drawingSheet", res)
 		return res
 	}
 }
@@ -518,4 +679,5 @@ export function registerImageHandlers(
 	register(socket, imagesGenerate, emitToUser)
 	register(socket, imagesCancel, emitToUser)
 	register(socket, imagesProfileSchema, emitToUser)
+	register(socket, imagesDrawingSheet, emitToUser)
 }

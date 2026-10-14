@@ -410,7 +410,6 @@
 	$effect(() =>
 		jumpCtx?.registerScope("library", {
 			label: "Library",
-			placeholder: "Search the library…",
 			getQuery: () => searchString,
 			setQuery: (next) => (searchString = next),
 			getHits: () => libraryCharacters.map(toHit),

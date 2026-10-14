@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { withoutShared } from "$lib/shared/utils/sharedRows"
 	/**
 	 * Document View home — an accessible analogue of the main onboarding
 	 * wizard (src/routes/+page.svelte). Rather than a bespoke step-by-step
@@ -11,6 +12,7 @@
 	import { getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
+	import { embeddingsStarred } from "$lib/shared/constants/embeddings"
 
 	const socket = useTypedSocket()
 	const interest = getInterestContext()
@@ -63,7 +65,7 @@
 				id: "connection",
 				label: "Connect to an AI service",
 				description:
-					"Add a connection (Ollama, KoboldCPP, or an API) and set it as your default.",
+					'Add a connection (Ollama, KoboldCPP, or an API), then press "Use in Reply" beside the model you want.',
 				done: hasConnection,
 				href: "/document-view/connections"
 			})
@@ -81,7 +83,7 @@
 			id: "character",
 			label: "Create a character",
 			description:
-				"Characters are the AI personalities you'll session with.",
+				"The characters the AI plays in your sessions.",
 			done: hasCharacter,
 			href: "/document-view/characters/new",
 			doneHref: "/document-view/characters"
@@ -95,12 +97,17 @@
 			doneHref: "/document-view/sessions"
 		})
 		if (isAdmin) {
+			// Done when skipped, or once a model is in use for embeddings:
+			// the Connections page this links to is where that is chosen.
 			list.push({
 				id: "rag",
-				label: "Retrieval-augmented context / embeddings (optional)",
+				label: "Search by meaning (optional)",
 				description:
-					"Powers smarter recall of lore and history. Can be configured later in System settings.",
-				done: setupData?.ragStepComplete ?? false,
+					'Finds lorebook entries by what they mean, not only by their words. It needs the Embeddings loadout filled: on the Connections page, press "Use in Embeddings" beside a model.',
+				done:
+					(setupData?.ragStepComplete ?? false) ||
+					embeddingsStarred(systemSettingsCtx.capabilityDefaults),
+				href: "/document-view/connections",
 				skippable: "rag"
 			})
 		}
@@ -113,7 +120,7 @@
 	}
 
 	function handleCharactersList(msg: Sockets.Characters.List.Response) {
-		characters = msg.characterList || []
+		characters = withoutShared(msg.characterList) // shared rows are read and copy only (PLAN-private-messages §6.7, Q3)
 	}
 	function handleSessionsList(msg: Sockets.Sessions.List.Response) {
 		sessions = msg.sessionList || []
@@ -211,7 +218,7 @@
 	{#if sessions.length === 0}
 		<p>
 			No sessions yet. <a href="/document-view/sessions/new">
-				Start a new session
+				Start a session
 			</a>
 			.
 		</p>
@@ -236,7 +243,7 @@
 			<a href="/document-view/characters">Characters</a>
 		</li>
 		<li class="a11y-list-item">
-			<a href="/document-view/sessions/new">Start a new session</a>
+			<a href="/document-view/sessions/new">Start a session</a>
 		</li>
 	</ul>
 {/if}

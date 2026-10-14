@@ -118,6 +118,12 @@ export interface ConfigOption {
 			/** Set while the host has stopped listing it — offered greyed, with the reason. */
 			missingSince: string | null
 		}>
+		/**
+		 * For a `loadout-ref` choice: the id the slot stores (`{ id }`) —
+		 * `core:loadout/extraction@1`, `pub:loadout/<slug>`. The choice's
+		 * `id` is the row's, for the picker and the sheet door.
+		 */
+		loadoutId?: string
 	}>
 	/**
 	 * For a `prompts-ref` option: the row the resolved value points at, in
@@ -299,6 +305,31 @@ export interface ConfigOption {
 		connectionName: string
 		entries: Array<{ id: number; name: string; enabled: boolean }>
 	}
+	/**
+	 * For a `scripts-chain` option: its **seam address** (PLAN-script-placement
+	 * D1) — `in:<port>`, `out:<port>` or an interior point's key. The same
+	 * spelling a receipt's script record carries, so a run and the panel name
+	 * a place alike. Port and point names are the definition's public
+	 * vocabulary, never node keys.
+	 */
+	at?: string
+	/** For a `scripts-chain` option: `in` · `out` · `point`. */
+	seamKind?: "in" | "out" | "point"
+	/** For a `scripts-chain` option on a port seam: what flows there, in words. */
+	flows?: string
+	/**
+	 * For a `scripts-chain` option: the display names of the script kinds the
+	 * seam accepts, so an empty chain still says what could go there. Names,
+	 * never kind ids — those stay server-side (see `Decl.accepts`).
+	 */
+	acceptsLabels?: string[]
+	/**
+	 * For a `scripts-chain` option: the stored chain's seam is not declared
+	 * on this step's definition (D4, *unplaced*). Shown so it can be cleared;
+	 * nothing can be added to it, and the run skips it — or halts, for a stop
+	 * guard.
+	 */
+	unplaced?: boolean
 	authorDefault?: unknown
 	value: unknown
 	source: OptionSource
@@ -343,17 +374,34 @@ export interface ConfigOption {
 	 * pub default that runs in its place.
 	 */
 	valueLabel?: string
+	/**
+	 * For a `loadout-ref` option (I12, admin's Pipelines only): the selected
+	 * loadout — row id, title and the resolved chain in receipt words
+	 * (*Extraction → Reply (unfilled fallback)*) — and the step's *Needs* /
+	 * *Best with* words. Empty parts are omitted.
+	 */
+	loadout?: {
+		selected?: { id: number; name: string; chain: string }
+		needs?: string[]
+		bestWith?: string[]
+	}
+	/**
+	 * For a `connection-ref` or `sampling-ref` set here on a model call that
+	 * names a loadout: that loadout's name — the row offers *Use loadout's*
+	 * (clear the explicit value).
+	 */
+	useLoadout?: string
 }
 
 /** See `ConfigOption.inherits`. */
 export interface OptionInherits {
-	from: "config" | "pipeline" | "pub" | "none"
+	from: "config" | "pipeline" | "pub" | "loadout" | "none"
 	label: string
 }
 
 /** See `ConfigOption.provenance`. */
 export interface OptionProvenance {
-	source: "session" | "config" | "author" | "pub" | "none"
+	source: "session" | "config" | "author" | "pub" | "loadout" | "none"
 	label: string
 }
 
@@ -367,6 +415,34 @@ export interface SettingsGroupStep {
 	key: string
 	heading: string
 	options: ConfigOption[]
+	/** What the step receives: its wired in-ports, in words (`flows.ts`). Admin view only. */
+	receives?: PortLine[]
+	/** What the step carries out: its out-ports, and an outlet's writes, in words. Admin view only. */
+	carriesOut?: PortLine[]
+	/** The step's definition's declared **effect** (`effects` on the registry row). */
+	effect?: "none" | "external" | "write" | "emit"
+}
+
+/**
+ * One line of what a step or a settings group receives or carries out: a
+ * **port**, in words (owner ruling 2026-10-12, the *Receives* / *Carries out*
+ * cards). Derived from the stored graph and the registry rows (`flows.ts`).
+ *
+ * For an outlet's write (*writes the reply*), `port` is `session` and `shape`
+ * is the outlet's definition id, unversioned — a line the definition's
+ * ports do not spell. ⚠ Not an **action** and not a **session write**
+ * policy: it says what a step hands on, never what a person may trigger or
+ * what a genre allows.
+ */
+export interface PortLine {
+	/** The port name on the node (`session` for an outlet's write). */
+	port: string
+	/** Its shape id (`core:shape/text@1`), or an outlet's definition id — a tooltip. */
+	shape: string
+	/** What a reader sees: the value in plain words (*the conversation*, *world lore, a share of the context*). */
+	label: string
+	/** On a received line fed by another step: that step's heading. Absent when it comes from the session or the event. */
+	from?: string
 }
 
 /**
@@ -376,7 +452,7 @@ export interface SettingsGroupStep {
  * this is the payload's. `kind: "pipeline"` is the *Whole pipeline* group —
  * everything no model call claims.
  *
- * `front` is the group's face, in a fixed order: its prompt (a prompts-ref,
+ * `front` is the group's face, in a fixed order: its Loadout row (admin only, I12), its prompt (a prompts-ref,
  * or an envoy's texts), its connection, its sampling, then each source's
  * switch (a query step's `enabled`, labelled by its step heading); `enabled`
  * is the model call's own on/off switch when it has one. Everything else is
@@ -395,6 +471,10 @@ export interface SettingsGroup {
 	advanced: SettingsGroupStep[]
 	/** How many Advanced options the configuration changed — the fold's "2 changed". */
 	changedInAdvanced: number
+	/** What the group receives from outside itself (its steps' lines, internal flows left out). Admin view only. */
+	receives?: PortLine[]
+	/** What the group carries out of itself, and its outlets' writes. Admin view only. */
+	carriesOut?: PortLine[]
 }
 
 /**
@@ -684,6 +764,14 @@ export interface Decl {
 	 * not carry, and the client never needs them — choices arrive resolved.
 	 */
 	accepts?: string[]
+	/** For a `scripts-chain` option: its seam address (`in:text`, `each-draft`) — see `ConfigOption.at`. */
+	at?: string
+	/** For a `scripts-chain` option: which kind of seam it is. */
+	seamKind?: "in" | "out" | "point"
+	/** For a `scripts-chain` option on a port seam: what flows there, in words. */
+	flows?: string
+	/** For a `scripts-chain` option: the seam does not resolve (D4). */
+	unplaced?: boolean
 	/** The type this came from — used only to disambiguate a repeated label. */
 	typeLabel: string
 	/**

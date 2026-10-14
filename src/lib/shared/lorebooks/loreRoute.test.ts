@@ -575,3 +575,104 @@ describe("comparing a line with main", () => {
 		expect(onEight).toMatchObject({ branch: 8, compare: true })
 	})
 })
+
+/**
+ * Book settings is a route (design A.2, A-Q2): a flag over the route beneath
+ * it, so Back and Escape return to exactly what was open, and every move that
+ * picks something to look at leaves it.
+ */
+describe("Book settings — a flag over the route beneath it", () => {
+	const open = (over: Partial<LoreRoute> = {}) =>
+		reduce(at(over), { type: "openSettings" })
+
+	it("opens over the route, keeping the scope, the lens and the selection", () => {
+		expect(open({ lens: "cards", entryId: 340, moment: "Y2" })).toEqual({
+			lorebookId: 12,
+			scope: "world",
+			lens: "cards",
+			entryId: 340,
+			moment: "Y2",
+			settings: true
+		})
+	})
+
+	it("is popped first and alone by Back, returning to the route beneath", () => {
+		const beneath = at({ lens: "cards", entryId: 340, castId: 9 })
+		const settings = reduce(beneath, { type: "openSettings" })
+		expect(reduce(settings, { type: "back" })).toEqual(beneath)
+	})
+
+	it("is left by closeSettings, and closing it twice changes nothing", () => {
+		const beneath = at({ entryId: 340 })
+		const closed = reduce(reduce(beneath, { type: "openSettings" }), {
+			type: "closeSettings"
+		})
+		expect(closed).toEqual(beneath)
+		expect(reduce(closed, { type: "closeSettings" })).toEqual(beneath)
+	})
+
+	it("is left by choosing a scope, a lens, an entry, a member or a book", () => {
+		expect(reduce(open(), { type: "openScope", scope: "history" })).toEqual(
+			{
+				lorebookId: 12,
+				scope: "history"
+			}
+		)
+		expect(reduce(open(), { type: "setLens", lens: "graph" })).toEqual(
+			at({ lens: "graph" })
+		)
+		expect(reduce(open(), { type: "openEntry", entryId: 7 })).toEqual(
+			at({ entryId: 7 })
+		)
+		expect(
+			reduce(open({ scope: "cast" }), {
+				type: "openCastMember",
+				castId: 9
+			})
+		).toEqual(at({ scope: "cast", castId: 9 }))
+		expect(
+			reduce(open(), { type: "openBook", lorebookId: 12 }).settings
+		).toBeUndefined()
+	})
+
+	it("stays open while the moment or the line changes under it", () => {
+		expect(reduce(open(), { type: "setMoment", moment: "Y3" })).toEqual(
+			at({ moment: "Y3", settings: true })
+		)
+		expect(reduce(open(), { type: "setBranch", branch: 4 })).toEqual(
+			at({ branch: 4, settings: true })
+		)
+	})
+
+	it("rides in the hash as settings=1 and comes back", () => {
+		const route = open({ lens: "cards", entryId: 340 })
+		expect(toHash(route)).toBe("#lore=12/world/340?lens=cards&settings=1")
+		expect(fromHash(toHash(route))).toEqual(route)
+	})
+
+	it("reads #lore=12/settings as Settings over Everything", () => {
+		expect(fromHash("#lore=12/settings")).toEqual({
+			lorebookId: 12,
+			scope: "all",
+			settings: true
+		})
+	})
+
+	it("is not an address on the list of books", () => {
+		expect(
+			reduce(emptyRoute(), { type: "openSettings" }).settings
+		).toBeUndefined()
+	})
+
+	it("is a different address from the route beneath it", () => {
+		expect(sameRoute(at(), open())).toBe(false)
+		expect(sameRoute(open(), { ...at(), settings: true })).toBe(true)
+	})
+
+	it("names Settings in the breadcrumb", () => {
+		expect(describeRoute(open(), { book: "Archive of Verity" })).toEqual([
+			"Archive of Verity",
+			"Settings"
+		])
+	})
+})

@@ -63,7 +63,7 @@
 <div class="flex flex-col gap-2">
 	{#if readyToGraph.length > 0 && pool.onNavigateToGraph}
 		<button
-			class="btn btn-sm preset-tonal-secondary w-full"
+			class="btn btn-sm preset-tonal-primary w-full"
 			type="button"
 			onclick={pool.onNavigateToGraph}
 		>
@@ -132,7 +132,7 @@
 							positioning={{ placement: "bottom-end" }}
 						>
 							<Popover.Trigger
-								class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-1"
+								class="btn btn-sm preset-tonal-surface shrink-0 p-1"
 								title="More options"
 								aria-label="More options for {scene.name ??
 									'Unnamed scene'}"
@@ -160,7 +160,7 @@
 											</button>
 										{:else if hasMessages}
 											<button
-												class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+												class="btn btn-sm preset-tonal-surface w-full justify-start"
 												type="button"
 												disabled={isProcessing}
 												onclick={() => {
@@ -179,7 +179,7 @@
 											</button>
 										{/if}
 										<button
-											class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+											class="btn btn-sm preset-tonal-surface w-full justify-start"
 											type="button"
 											onclick={() => {
 												openMenuSceneId = null
@@ -220,7 +220,7 @@
 			</div>
 		{/each}
 		<button
-			class="btn btn-sm preset-filled-secondary-500 w-full"
+			class="btn btn-sm preset-filled-primary-500 w-full"
 			type="button"
 			onclick={() => pool.openCompile(entry)}
 		>

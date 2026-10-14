@@ -54,6 +54,7 @@
 		signalsResult
 	} from "$lib/client/lorebooks/editor/signals"
 	import type { RunExplanation } from "$lib/client/lorebooks/editor/readIn"
+	import { bookReadOnly } from "$lib/client/lorebooks/bookData.svelte"
 	import {
 		marksAsRead,
 		teachButtons,
@@ -197,6 +198,8 @@
 
 	/** A Teach it in flight, and what the last one said: its refusal, or the amendment that still decides the mark. */
 	let teaching = $state(false)
+	const readOnlyBook = bookReadOnly()
+	let readOnly = $derived(readOnlyBook.value)
 	let taught = $state<{ held: string | null; error: string | null } | null>(null)
 
 	/**
@@ -401,6 +404,8 @@
 		{/if}
 	{/if}
 
+	<!-- Teaching writes the entry's marks: not in a shared (read-only) book. -->
+	{#if !readOnly}
 	<div class="border-surface-300-700 flex flex-col gap-1 border-t pt-2">
 		<span class="text-xs">
 			<span class="font-semibold">Teach it</span>
@@ -448,4 +453,5 @@
 			Feedback is not collected yet.
 		</p>
 	</div>
+	{/if}
 </section>

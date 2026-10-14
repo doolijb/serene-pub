@@ -52,7 +52,7 @@
 <h1>Sessions</h1>
 <p>
 	<a href="/document-view/sessions/new" class="a11y-btn">
-		Start a new session
+		Start a session
 	</a>
 </p>
 

@@ -167,7 +167,7 @@ const connectionsServing = async (model: string) => {
 }
 
 const imageDefault = () =>
-	testDb.query.connectionDefaults.findFirst({
+	testDb.query.loadouts.findFirst({
 		where: byCapability("text->image")
 	})
 
@@ -581,7 +581,7 @@ describe("koboldcpp:connectImageModel — the managed endpoint, an image model o
 		// derives a capability from a connection, precisely because this managed
 		// KoboldCPP can serve both.
 		const [conn] = await managedConnections()
-		const textDefault = await testDb.query.connectionDefaults.findFirst({
+		const textDefault = await testDb.query.loadouts.findFirst({
 			where: byCapability("text->text")
 		})
 

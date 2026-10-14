@@ -9,10 +9,13 @@
  */
 
 import { valueDeclOf } from "@serene-pub/sdk"
-import { and, asc, eq } from "drizzle-orm"
+import { and, asc, eq, inArray } from "drizzle-orm"
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
 import { contextBudgetFrom } from "$lib/server/pipelines/runtime/contextWindow"
-import { slotModelId } from "$lib/shared/connections/slotRef"
+import {
+	slotConnectionId,
+	slotModelId
+} from "$lib/shared/connections/slotRef"
 import { i18nText } from "$lib/server/pipelines/config/panel/declarations"
 import * as schema from "$lib/server/db/schema"
 import { mayWrite } from "@serene-pub/sdk"
@@ -24,13 +27,24 @@ import {
 	type Published,
 	declarations,
 	published,
-	subscription
+	subscription,
+	unplacedChainDecls
 } from "$lib/server/pipelines/config/panel/declarations"
+import { chainNodesFor } from "$lib/server/pipelines/config/chainAddresses"
 import {
 	settingsGroupsOf,
 	type PlacedOption
 } from "$lib/server/pipelines/config/panel/groups"
 import { readingOf } from "$lib/server/pipelines/config/panel/provenance"
+import {
+	bestWithWords,
+	loadoutPanel,
+	needsWords,
+	slotLoadoutOf,
+	stepNeedsOf,
+	transformOfNode,
+	type NodeLoadout
+} from "$lib/server/pipelines/config/panel/loadouts"
 import { optionId, stepKeyFor } from "$lib/server/pipelines/config/panel/ids"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 import {
@@ -188,6 +202,41 @@ async function budgetPairNodes(
 	return { sampling: ofNode("sampling"), connection: ofNode("connection") }
 }
 
+/**
+ * `decls` plus one synthetic `scripts-chain` option per stored address that
+ * is an unplaced chain (D4), each spliced in after its step's last declared
+ * option — the Advanced fold lists a step's options in push order.
+ */
+export async function withUnplacedChains(
+	db: Db,
+	specVersionId: number,
+	decls: Decl[],
+	storedKeys: Iterable<string>
+): Promise<Decl[]> {
+	const declaredKeys = new Set(decls.map((d) => addr(d.nodeKey, d.slot, d.path)))
+	const candidates: Array<{ nodeKey: string; slot: string; path: string }> = []
+	for (const key of storedKeys) {
+		if (declaredKeys.has(key)) continue
+		const [nodeKey, slot, path] = key.split("\u0000") as [string, string, string]
+		candidates.push({ nodeKey, slot, path: path ?? "" })
+	}
+	if (!candidates.length) return decls
+	const extra = unplacedChainDecls(
+		await chainNodesFor(db, specVersionId),
+		candidates
+	)
+	if (!extra.length) return decls
+	const out = [...decls]
+	for (const u of extra) {
+		let at = -1
+		for (let i = 0; i < out.length; i++)
+			if (out[i]!.nodeKey === u.nodeKey) at = i
+		if (at === -1) out.push(u)
+		else out.splice(at + 1, 0, u)
+	}
+	return out
+}
+
 export async function namespaceView(
 	db: Db,
 	secret: string,
@@ -197,9 +246,17 @@ export async function namespaceView(
 	const at = await published(db, slug)
 	if (!at) return null
 
-	const decls = await declarations(db, at.specVersionId)
+	const declared = await declarations(db, at.specVersionId)
 	const chain = await layers(db, at, viewer)
 	const sets = await choiceSets(db, at.specId)
+	// A stored chain whose seam is gone stays visible (D4, *unplaced*): one
+	// synthetic option per such address, placed after its step's declared
+	// options, so the row can be seen and cleared rather than run silently
+	// skipped. Only addresses that hold a value can be unplaced.
+	const decls = await withUnplacedChains(db, at.specVersionId, declared, [
+		...chain.preset.keys(),
+		...(chain.session?.keys() ?? [])
+	])
 	// The connection's stop guards, for the effective-chain view (18 §4c):
 	// resolved by the same rule the runtime uses, so what the step card shows
 	// beside the chain is what the run actually evaluates. Read-only here —
@@ -207,7 +264,46 @@ export async function namespaceView(
 	const { connectionStopsFor } = await import(
 		"$lib/server/pipelines/scripts/chains"
 	)
-	const connStops = await connectionStopsFor(db)
+	// Per step, through the step's configured connection (tier 2) — the one
+	// dispatch runs that step on — and the instance default where the
+	// configuration names none. A guard listed beside a chain from a
+	// connection the step does not use would be the wrong answer to "why did
+	// my reply cut off".
+	const stopsMemo = new Map<
+		string,
+		ReturnType<typeof connectionStopsFor>
+	>()
+	// A step with no model of its own (an outlet's `in:text` seam — where
+	// core's stop seams sit) is guarded by the connection of the run's text
+	// provider: the node the budget pairs its connection with, else the first
+	// step that has a Model row.
+	const provider =
+		(await budgetPairNodes(db, at.specVersionId)).connection ??
+		decls.find((x) => x.matrixSlot === "connection")?.nodeKey
+	const connStopsFor = (nodeKey: string) => {
+		const own =
+			decls.find(
+				(x) => x.nodeKey === nodeKey && x.matrixSlot === "connection"
+			) ??
+			decls.find(
+				(x) => x.nodeKey === provider && x.matrixSlot === "connection"
+			)
+		const stored = own
+			? (chain.preset.get(addr(own.nodeKey, own.slot, own.path)) ??
+				own.authorDefault)
+			: undefined
+		const candidate =
+			stored == null
+				? null
+				: {
+						connectionId: slotConnectionId(stored),
+						connectionModelId: slotModelId(stored)
+					}
+		const key = JSON.stringify(candidate)
+		if (!stopsMemo.has(key))
+			stopsMemo.set(key, connectionStopsFor(db, candidate))
+		return stopsMemo.get(key)!
+	}
 	const scope = writeScopeFor(viewer)
 
 	// Each node's options, for the budget's window figure below; the
@@ -226,8 +322,65 @@ export async function namespaceView(
 		"$lib/server/connections/capabilityDefaults"
 	)
 	const pubByCapability = await loadCapabilityDefaults(db)
+	// The settings, grouped by model call — derived from the stored graph
+	// (`groups.ts`).
+	const { loadDocument } = await import("$lib/server/pipelines/boot/store")
+	const doc = await loadDocument(db, at.specVersionId)
+	// What each step and agent receives and carries out (`flows.ts`): read
+	// off the registry rows of the definitions this document places. The
+	// admin's view only — a member's payload carries no wiring (05 §0a).
+	let definitionOf: ((n: { definitionId?: string; definitionVersion?: number }) => any) | undefined
+	if (viewer.isAdmin) {
+		const ids = [...new Set(doc.nodes.map((n) => n.definitionId))]
+		const rows = ids.length
+			? await db
+					.select({
+						definitionId: schema.pipelineDefinitionRegistry.definitionId,
+						version: schema.pipelineDefinitionRegistry.version,
+						kind: schema.pipelineDefinitionRegistry.kind,
+						ports: schema.pipelineDefinitionRegistry.ports,
+						effects: schema.pipelineDefinitionRegistry.effects,
+						i18n: schema.pipelineDefinitionRegistry.i18n,
+						policy: schema.pipelineDefinitionRegistry.policy
+					})
+					.from(schema.pipelineDefinitionRegistry)
+					.where(inArray(schema.pipelineDefinitionRegistry.definitionId, ids))
+			: []
+		const byPin = new Map(
+			rows.map((r) => [
+				`${r.definitionId}@${r.version}`,
+				{
+					kind: r.kind,
+					ports: r.ports,
+					effects: r.effects,
+					policy: r.policy,
+					name: i18nText(r.i18n?.name)
+				}
+			])
+		)
+		definitionOf = (n) => byPin.get(`${n.definitionId}@${n.definitionVersion}`)
+	}
+
+	// The Loadout row (I12, §14 item 4) — the admin's own view only: each
+	// model call's loadout, resolved as the run resolves it, so the chain
+	// and the slots' provenance say what will run. A session never picks a
+	// loadout (`WRITE_MATRIX.loadout = ['config']`), so a session's view
+	// carries no Loadout row at all — not even read-only.
+	const lp = viewer.isAdmin ? await loadoutPanel(db) : null
+	const nodeLoadouts = new Map<string, NodeLoadout | null>()
+	if (lp)
+		for (const d of decls)
+			if (d.control === "loadout-ref") {
+				const key = addr(d.nodeKey, d.slot, d.path)
+				nodeLoadouts.set(
+					d.nodeKey,
+					await lp.nodeLoadout(chain.preset.has(key) ? chain.preset.get(key) : d.authorDefault)
+				)
+			}
+	const docNode = new Map(doc.nodes.map((n) => [n.key, n]))
 	for (const d of decls) {
 		if (!visibleTo(d.matrixSlot, viewer)) continue
+		if (d.control === "loadout-ref" && (scope === "session" || !lp)) continue
 
 		const key = addr(d.nodeKey, d.slot, d.path)
 		// The same order the runtime resolves in: the session's override beats
@@ -355,10 +508,23 @@ export async function namespaceView(
 				choicesFor(d, sets, [value, d.authorDefault])
 			),
 			...(chainEntries ? { scripts: chainEntries } : {}),
-			...(d.control === "scripts-chain" &&
-			connStops &&
-			(d.accepts ?? []).includes("core:script:text/stop@1")
+			// Where the chain runs and what can go there (D3): the seam
+			// address, what flows through it, and the accepted kinds by
+			// NAME — the ids stay server-side (`Decl.accepts`).
+			...(d.control === "scripts-chain"
 				? {
+						...(d.at ? { at: d.at } : {}),
+						...(d.seamKind ? { seamKind: d.seamKind } : {}),
+						...(d.flows ? { flows: d.flows } : {}),
+						acceptsLabels: (d.accepts ?? []).map(
+							(k) => sets.scriptTypeMeta.get(k)?.name ?? k
+						),
+						...(d.unplaced ? { unplaced: true } : {})
+					}
+				: {}),
+			...((connStops) =>
+				connStops
+					? {
 						connectionScripts: {
 							connectionName: connStops.connectionName,
 							entries: connStops.rows.map((r) => ({
@@ -368,7 +534,12 @@ export async function namespaceView(
 							}))
 						}
 					}
-				: {}),
+					: {})(
+				d.control === "scripts-chain" &&
+					(d.accepts ?? []).includes("core:script:text/stop@1")
+					? await connStopsFor(d.nodeKey)
+					: undefined
+			),
 			...(variableTemplateRow
 				? {
 						variableTemplate: {
@@ -546,9 +717,50 @@ export async function namespaceView(
 				scope,
 				configName: chain.selectedConfig?.name,
 				defaults: pubByCapability,
-				sets
+				sets,
+				...((d.control === "connection-ref" || d.control === "sampling-ref") &&
+				nodeLoadouts.has(d.nodeKey)
+					? {
+							loadout: slotLoadoutOf(
+								nodeLoadouts.get(d.nodeKey) ?? null,
+								d.control === "connection-ref" ? "connection" : "sampling"
+							)
+						}
+					: {})
 			})
 		)
+		// *Use loadout's* — a value set here over a named loadout.
+		if (
+			(d.control === "connection-ref" || d.control === "sampling-ref") &&
+			source === "config" &&
+			scope === "config" &&
+			nodeLoadouts.get(d.nodeKey)
+		)
+			option.useLoadout = nodeLoadouts.get(d.nodeKey)!.row.name
+		if (d.control === "loadout-ref" && lp) {
+			const nl = nodeLoadouts.get(d.nodeKey) ?? null
+			const node = docNode.get(d.nodeKey)
+			const def = node ? definitionOf?.(node) : undefined
+			const needs = node ? stepNeedsOf(node, doc.edges, def) : {}
+			const transform = transformOfNode(decls, d.nodeKey)
+			option.choices = await lp.choices(transform, needs, (cid) =>
+				(sets.connections.find((c) => c.id === cid) as any)?.capabilities
+			)
+			const needsLine = needsWords(transform, needs)
+			const bestWith = bestWithWords(
+				((node as any)?.prefers ?? (def?.policy as any)?.prefers) as
+					| { sampling?: string; tier?: string }
+					| undefined,
+				lp.samplingNameBySeed
+			)
+			option.loadout = {
+				...(nl ? { selected: { id: nl.row.id, name: nl.row.name, chain: nl.chain } } : {}),
+				...(needsLine.length ? { needs: needsLine } : {}),
+				...(bestWith.length ? { bestWith } : {})
+			}
+			if (nl) option.valueLabel = nl.row.name
+			else if (value != null) option.valueLabel = "(no longer exists)"
+		}
 		placed.push({ d, option })
 
 		byNode.set(d.nodeKey, [...(byNode.get(d.nodeKey) ?? []), option])
@@ -657,15 +869,12 @@ export async function namespaceView(
 		}
 	}
 
-	// The settings, grouped by model call — derived from the stored graph
-	// (`groups.ts`).
-	const { loadDocument } = await import("$lib/server/pipelines/boot/store")
-	const doc = await loadDocument(db, at.specVersionId)
 	const groups = settingsGroupsOf({
 		placed,
 		decls,
 		nodes: doc.nodes,
-		edges: doc.edges
+		edges: doc.edges,
+		definitionOf
 	})
 
 	/**

@@ -28,6 +28,7 @@
 	import { getContext } from "svelte"
 	import { statusText } from "$lib/client/i18n/state.svelte"
 	import { outcomeOf, outcomeIcon, outcomeStatusText } from "./runOutcome"
+	import { adminScreenSegments } from "./adminScreenLink"
 	import type { RunProgress } from "$lib/shared/sockets/progress"
 
 	interface Props {
@@ -170,9 +171,14 @@
 			<!-- The reason, when the outcome carries one — never on `cancelled`,
 			     whose frame carries none. Already redacted server-side
 			     (`redactConnections`, applied at every `emitToUser`) — shown as
-			     it arrived. -->
+			     it arrived, and said here only: the page toasts a failure no
+			     card is showing (D4). The screen it names (Admin › Models ›
+			     Defaults, for a job with no model) is a link for an
+			     administrator and text for a member (D1). One line, so no
+			     whitespace lands between a segment and its link. -->
 			<p class="text-surface-600-400 mt-1 pl-6 text-xs">
-				{ended.error}
+				<!-- prettier-ignore -->
+				{#each adminScreenSegments(ended.error, { linked: isAdmin }) as seg, i (i)}{#if seg.href}<a class="anchor" href={seg.href}>{seg.text}</a>{:else}{seg.text}{/if}{/each}
 			</p>
 		{/if}
 	</div>

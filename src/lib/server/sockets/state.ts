@@ -83,6 +83,7 @@ import {
 	type TrackedSlot
 } from "$lib/server/state/resolve"
 import { locationOwnerKey } from "$lib/server/state/keys"
+import { clockLedgerRows } from "$lib/server/state/clockMoves"
 import { MAIN_HEAD, placesOnReading } from "$lib/server/state/entriesOnReading"
 import {
 	earshotSlots,
@@ -624,7 +625,26 @@ async function ledgerFor(
 					: slotKey(row.slotId),
 				value: (row.value?.v ?? null) as SlotValue
 			}
-		})
+		}),
+		// 🚧 The clock's moves (live scenes §15 G5): the world's lines, heard
+		// by everyone — the clock is the session's own, never a holder's.
+		...(await clockLedgerRows(db, sessionId, links.lorebookId ?? null)).map((move) => ({
+			id: move.id,
+			kind: "clock" as const,
+			messageId: move.messageId,
+			ownerKey: "world",
+			ownerLabel: worldLabel,
+			updatedBy: move.updatedBy,
+			createdAt: move.createdAt,
+			clock: {
+				by: move.by,
+				unit: move.unit,
+				cause: move.cause,
+				fromLabel: move.fromLabel,
+				toLabel: move.toLabel,
+				skipped: move.skipped
+			}
+		}))
 	]
 		.map((row) => ({ row, at: new Date(row.createdAt).getTime() }))
 		.sort((a, b) =>
@@ -1007,7 +1027,38 @@ export const stateDecide: Handler<
 		await broadcastToSessionUsers(socket.io, sessionId, "state:changed", {
 			sessionId
 		} satisfies Sockets.State.Changed.Response)
+		if (outcome.clock) await announceClockAccepted(socket, sessionId, socket.user!.id)
 		return res
+	}
+}
+
+/**
+ * 🚧 An accepted **clock proposal** moved the session's story clock (live
+ * scenes ★3): said the way *Advance story clock* says a move — the session's
+ * row to every tab, and `session-updated` naming the clock, under the
+ * person's `edit` cause, which never fires a turn — and noted as a **time
+ * action** for the boundary watcher, since a person pressed Accept (live
+ * scenes §4). Best-effort: the clock moved either way. `state:changed` has
+ * already gone out with the decision.
+ */
+async function announceClockAccepted(socket: any, sessionId: number, userId: number) {
+	try {
+		const { broadcastSessionRow } = await import("$lib/server/sessions/rowPush")
+		broadcastSessionRow(socket.io, sessionId)
+		const { noteTimeAction } = await import("$lib/server/scenes/boundaryWatcher")
+		// The keeper's move, accepted (live scenes §15 G4).
+		await noteTimeAction(db, { sessionId, cause: "keeper" })
+		const { emitSessionEvent } = await import("$lib/server/pipelines/runtime/sessionEvents")
+		const { sessionEvents } = await import("@serene-pub/sdk")
+		await emitSessionEvent(db, {
+			sessionId,
+			userId,
+			event: sessionEvents.sessionUpdated,
+			payload: { sessionId, changed: ["storyClock"], cause: { kind: "edit", userId } },
+			io: socket.io
+		})
+	} catch (err) {
+		console.warn("[state] an accepted clock move was not announced:", err)
 	}
 }
 

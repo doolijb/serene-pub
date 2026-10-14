@@ -1,14 +1,23 @@
 /**
- * The member page's presences read the line the way the World bar does (plan
+ * The member page's presences read the line the way the roster popover does (plan
  * A5): the line's own, each ancestor line's up to its fork cut, never a
  * sibling's — `presencesOnLine` / `appearancesOf`, not a filter of its own.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
 
-vi.mock("$app/environment", () => ({ dev: true, building: false, browser: true }))
+vi.mock("$app/environment", () => ({
+	dev: true,
+	building: false,
+	browser: true
+}))
 vi.mock("$lib/client/utils/toaster", () => ({
-	toaster: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() }
+	toaster: {
+		success: vi.fn(),
+		error: vi.fn(),
+		info: vi.fn(),
+		warning: vi.fn()
+	}
 }))
 
 import { setSocket } from "$lib/client/sockets/socketInstance"
@@ -21,9 +30,33 @@ const MEMBER = 9
 
 /** A off main at Y5; B off main at now; C off A at Y7. */
 const BRANCHES = [
-	{ id: 1, name: "Exile", lorebookId: BOOK, forkedFromBranchId: null, forkYear: 5, forkMonth: null, forkDay: null },
-	{ id: 2, name: "Sibling", lorebookId: BOOK, forkedFromBranchId: null, forkYear: null, forkMonth: null, forkDay: null },
-	{ id: 3, name: "Return", lorebookId: BOOK, forkedFromBranchId: 1, forkYear: 7, forkMonth: null, forkDay: null }
+	{
+		id: 1,
+		name: "Exile",
+		lorebookId: BOOK,
+		forkedFromBranchId: null,
+		forkYear: 5,
+		forkMonth: null,
+		forkDay: null
+	},
+	{
+		id: 2,
+		name: "Sibling",
+		lorebookId: BOOK,
+		forkedFromBranchId: null,
+		forkYear: null,
+		forkMonth: null,
+		forkDay: null
+	},
+	{
+		id: 3,
+		name: "Return",
+		lorebookId: BOOK,
+		forkedFromBranchId: 1,
+		forkYear: 7,
+		forkMonth: null,
+		forkDay: null
+	}
 ] as any[]
 
 const presence = (id: number, branchId: number | null, fromYear: number) => ({
@@ -52,7 +85,13 @@ const PRESENCES = [
 let app: ReturnType<typeof mount> | null = null
 
 beforeEach(() => {
-	setSocket({ connected: true, id: "tab", on() {}, off() {}, emit() {} } as never)
+	setSocket({
+		connected: true,
+		id: "tab",
+		on() {},
+		off() {},
+		emit() {}
+	} as never)
 	openBookTime.open(BOOK)
 	openBookTime.setBranches(BOOK, BRANCHES)
 })
@@ -99,19 +138,30 @@ describe("PresencesPanel reads the line's chain", () => {
 	test("a fork of a fork lists its parent's presences before the fork, and none main made after the earlier cut", async () => {
 		await show(3)
 		const rows = listed()
-		expect(rows.map((r) => r?.match(/at (\d+)/)?.[1])).toEqual(["10", "30", "50"])
+		expect(rows.map((r) => r?.match(/at (\d+)/)?.[1])).toEqual([
+			"10",
+			"30",
+			"50"
+		])
 		// Whose line each one is, said the way the amendments list says it.
-		expect(badges()).toEqual([["at 10"], ["at 30", "from Exile"], ["at 50", "Return only"]])
+		expect(badges()).toEqual([
+			["at 10"],
+			["at 30", "from Exile"],
+			["at 50", "Return only"]
+		])
 	})
 
-	test("who is here now is the World bar's answer", async () => {
+	test("who is here now is the roster popover's answer", async () => {
 		await show(3)
 		expect(text()).toContain("at 10, 30 and 50")
 	})
 
 	test("main reads main's own only", async () => {
 		await show(null)
-		expect(listed().map((r) => r?.match(/at (\d+)/)?.[1])).toEqual(["10", "20"])
+		expect(listed().map((r) => r?.match(/at (\d+)/)?.[1])).toEqual([
+			"10",
+			"20"
+		])
 	})
 
 	test("at a moment, a presence that has not begun is listed but not here", async () => {

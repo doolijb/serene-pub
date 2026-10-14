@@ -122,7 +122,9 @@ test("findKcppTextConnection ignores the image twin and hosts", () => {
 })
 
 test("doneSentence names what was registered", () => {
-	expect(doneSentence(facts(), "Nemo")).toBe("Sessions reply with Nemo.")
+	expect(doneSentence(facts(), "Nemo")).toBe(
+		"Nemo is now in the Reply loadout."
+	)
 	expect(
 		doneSentence(
 			facts({
@@ -131,5 +133,5 @@ test("doneSentence names what was registered", () => {
 			}),
 			null
 		)
-	).toBe("A chat model is set — sessions can reply.")
+	).toBe("The Reply loadout is filled — sessions can reply.")
 })

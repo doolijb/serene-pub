@@ -134,8 +134,25 @@ export interface DispatchRequest {
 	 * else" matters — a dry run, a replay, a second instance.
 	 */
 	db: Db
-	sessionId: number
+	/**
+	 * The session the request is made in. 🚧 Absent for a **card action**
+	 * (`runtime/cardAction.ts`) — a request with no session: no cast, no
+	 * transcript, and files judged by `userId` and `characterId` alone.
+	 */
+	sessionId?: number
 	userId?: number
+	/**
+	 * 🚧 The card a sessionless request is made for (a card action). A file
+	 * that is that card's own may travel with it — the caller already
+	 * checked the person may act on the card. Ignored with a session.
+	 */
+	characterId?: number
+	/**
+	 * 🚧 The job this request resolves its default pair from when the run
+	 * resolved none — `text->text` unless the node requires another
+	 * (`core:oracle/describe-image@1`: `text+image->text`).
+	 */
+	capability?: string
 	/** Null in narrator mode, matching the legacy adapter's own convention. */
 	currentCharacterId?: number | null
 	/** Forwarded verbatim; carries `isNarratorResponse` among other things. */
@@ -362,7 +379,21 @@ export interface DispatchResult {
  * receipt and in every downstream node's input — the prompt text is what the
  * pipeline is carrying, not the rows it came from.
  */
-async function loadAdapterSession(db: Db, sessionId: number) {
+/**
+ * 🚧 The adapter's session for a request made in none (a card action): no
+ * cast, no transcript, so no speaker labels and no cast stops.
+ */
+const SESSIONLESS = Object.freeze({
+	id: 0,
+	sessionType: "session",
+	sessionCharacters: [],
+	sessionPersonas: [],
+	sessionMessages: [],
+	lorebook: null
+})
+
+async function loadAdapterSession(db: Db, sessionId: number | undefined) {
+	if (sessionId === undefined) return { ...SESSIONLESS } as any
 	const session = await db.query.sessions.findFirst({
 		where: (c: any, { eq }: any) => eq(c.id, sessionId),
 		with: {
@@ -646,7 +677,7 @@ export function withJsonInstruction(compiled: any, instruction: string): any {
 export async function resolveAttachments(
 	db: Db,
 	refs: readonly unknown[],
-	scope: { sessionId: number; userId?: number },
+	scope: { sessionId?: number; userId?: number; characterId?: number },
 	/**
 	 * 🚧 `fitted`: read an IMAGE's fitted variant (≤1568 px, the size a
 	 * vision model is sent anyway) rather than its original — the history
@@ -697,12 +728,21 @@ export async function resolveAttachments(
 		// §6.3): a part of one of its messages refers to the file. Dedupe is per
 		// (user, hash), so a guest's re-attached avatar names its character,
 		// not this session, and a group reply would otherwise refuse it.
+		//
+		// 🚧 With no session (a card action), the card's own file stands in
+		// for "this session's": the caller checked the person may act on it.
 		const ownedHere =
-			(file.sessionId != null && file.sessionId === scope.sessionId) ||
+			(scope.sessionId !== undefined &&
+				file.sessionId != null &&
+				file.sessionId === scope.sessionId) ||
 			(scope.userId != null && file.userId === scope.userId) ||
-			(await (
-				await import("$lib/server/attachments/references")
-			).isFileReferencedInSession(db, file.id, scope.sessionId))
+			(scope.sessionId === undefined &&
+				scope.characterId != null &&
+				file.characterId === scope.characterId) ||
+			(scope.sessionId !== undefined &&
+				(await (
+					await import("$lib/server/attachments/references")
+				).isFileReferencedInSession(db, file.id, scope.sessionId)))
 		if (!ownedHere)
 			throw new DispatchError(
 				`${at} names media ${uuid}, which belongs to neither this session nor the user this run is ` +
@@ -850,7 +890,7 @@ export async function dispatchGeneration(
 	 * the request go to a connection the budget never saw.
 	 */
 	const target = await resolveCapabilityTarget(request.db, {
-		capability: TEXT_CAPABILITY,
+		capability: request.capability ?? TEXT_CAPABILITY,
 		pipelineConfig:
 			request.connectionId != null || request.samplingId != null
 				? {
@@ -858,11 +898,7 @@ export async function dispatchGeneration(
 						connectionModelId: request.connectionModelId ?? null,
 						samplingConfigId: request.samplingId ?? null
 					}
-				: null,
-		// Wording only (08 wording pass): "Chat" is `text->text`'s generic
-		// label, which misnames this session's own genre when it is not the
-		// standard one — see `CapabilityTargetRequest.genreId`.
-		genreId: session.genreId
+				: null
 	})
 	// The sentence comes from the resolver, which knows which tier failed and
 	// what to do about it: nothing registered, a default cleared by a deleted
@@ -991,7 +1027,11 @@ export async function dispatchGeneration(
 	const attachments = await resolveAttachments(
 		request.db,
 		request.attachments ?? [],
-		{ sessionId: request.sessionId, userId: request.userId }
+		{
+			sessionId: request.sessionId,
+			userId: request.userId,
+			characterId: request.characterId
+		}
 	)
 	// Per message, with the same ownership rule, reading images' fitted form.
 	// Sequential: the first bad reference is the one worth reporting.
@@ -1001,7 +1041,11 @@ export async function dispatchGeneration(
 			await resolveAttachments(
 				request.db,
 				refs,
-				{ sessionId: request.sessionId, userId: request.userId },
+				{
+					sessionId: request.sessionId,
+					userId: request.userId,
+					characterId: request.characterId
+				},
 				{ fitted: true }
 			)
 		)

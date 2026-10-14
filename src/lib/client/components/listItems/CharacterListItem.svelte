@@ -4,6 +4,8 @@
 	import Avatar from "../Avatar.svelte"
 	import EmbeddingStatusIcon from "../EmbeddingStatusIcon.svelte"
 	import RowMenu from "../menus/RowMenu.svelte"
+	import { characterSummary } from "$lib/shared/characters/characterSummary"
+	import { sharedFromLine } from "$lib/shared/utils/sharedRows"
 
 	interface Props {
 		character: Sockets.Characters.List.Response["characterList"][0]
@@ -49,6 +51,16 @@
 	function handleClick() {
 		onclick?.(character)
 	}
+
+	/** The line under the name: Summary, then creator notes, then the
+	 *  description's first sentence, never the raw sheet (plan F1). */
+	// A character shared with the reader says whose it is instead
+	// (PLAN-private-messages §6.7).
+	const summaryLine = $derived(
+		character.isSharedWithMe
+			? sharedFromLine(character)
+			: characterSummary(character)
+	)
 
 	/**
 	 * The row's tags, in the order the server joined them. `characters:list`
@@ -134,12 +146,12 @@
 						embeddingModel={character.embeddingModel}
 					/>
 				</div>
-				{#if character.description}
+				{#if summaryLine}
 					<div
 						class="text-surface-600-400 truncate text-left text-xs"
 						id="character-desc-{character.id}"
 					>
-						{character.description}
+						{summaryLine}
 					</div>
 				{/if}
 			</div>

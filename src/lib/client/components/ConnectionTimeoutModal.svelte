@@ -22,27 +22,25 @@
 	let isReconnecting = $state(false)
 	let updateInterval: number | null = null
 
+	function onTimedOut() {
+		showModal = true
+		toaster.warning({
+			title: "Connection timed out",
+			description:
+				"The connection closed after a period of inactivity. You can reconnect in 30 seconds."
+		})
+	}
+	function onReconnectAvailable() {
+		canReconnect = true
+		toaster.info({
+			title: "Reconnection available",
+			description: "You can now reconnect to the application."
+		})
+	}
+
 	// Initialize connection timeout service
 	onMount(() => {
-		connectionTimeout.startTimeout(
-			// On timeout callback
-			() => {
-				showModal = true
-				toaster.warning({
-					title: "Connection timed out",
-					description:
-						"The connection closed after a period of inactivity. You can reconnect in 30 seconds."
-				})
-			},
-			// On reconnect available callback
-			() => {
-				canReconnect = true
-				toaster.info({
-					title: "Reconnection available",
-					description: "You can now reconnect to the application."
-				})
-			}
-		)
+		connectionTimeout.startTimeout(onTimedOut, onReconnectAvailable)
 
 		// Update countdown every second
 		updateInterval = setInterval(() => {
@@ -77,9 +75,11 @@
 				await refreshAuthAfterLogin()
 			}
 
-			// Reset timeout state
+			// Reset timeout state. ⚠ The callbacks are handed in again:
+			// `startTimeout()` bare replaced them with null, so the SECOND
+			// timeout of a page's life showed no modal at all.
 			connectionTimeout.reset()
-			connectionTimeout.startTimeout()
+			connectionTimeout.startTimeout(onTimedOut, onReconnectAvailable)
 
 			showModal = false
 			canReconnect = false

@@ -48,6 +48,13 @@ describe("the welcome name field", () => {
 	test("hides once the person has a display name", () => {
 		expect(renderField({ displayName: "Morgan" })).not.toContain(LABEL)
 	})
+
+	// Less-confusing plan A1: the quick persona takes this name too.
+	test("says the name is also the character you play", () => {
+		expect(renderField({ displayName: null })).toContain(
+			"This is the name the characters will see, and the name of the character you play."
+		)
+	})
 })
 
 describe("saveWelcomeName", () => {
@@ -101,7 +108,8 @@ describe("a welcome name the server refuses", () => {
 		expect(h.toasts).toEqual([
 			{
 				title: "Your name wasn't saved",
-				description: "That name is too long. You can set it in Settings › User."
+				description:
+					"That name is too long. You can set it in Settings › User."
 			}
 		])
 	})

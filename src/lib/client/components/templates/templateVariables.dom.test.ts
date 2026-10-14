@@ -12,6 +12,7 @@ import { afterEach, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
 import { assemble, buildTemplateContext } from "@serene-pub/contracts"
 import { templateScopeReport, type SpecDocument } from "@serene-pub/sdk"
+import { EditorView } from "@codemirror/view"
 import TemplateEditor from "./TemplateEditor.svelte"
 
 const node = (key: string, definitionId: string, config = {}) => ({
@@ -125,8 +126,8 @@ describe("the variables a template can use", () => {
 
 	test("choosing a variable writes its syntax at the caret", async () => {
 		const { host, oninput } = open("Before\nAfter")
-		const field = host.querySelector<HTMLTextAreaElement>("textarea")!
-		field.setSelectionRange(7, 7)
+		const view = EditorView.findFromDOM(host.querySelector<HTMLElement>(".cm-editor")!)!
+		view.dispatch({ selection: { anchor: 7 } })
 		row(host, "characterLore")!.click()
 		await tick()
 		expect(oninput).toHaveBeenLastCalledWith(

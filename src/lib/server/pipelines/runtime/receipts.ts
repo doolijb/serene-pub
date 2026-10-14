@@ -57,6 +57,8 @@ export interface RunArtifact {
 		| "lore_entry"
 		| "lore_link"
 		| "session"
+		/** 🚧 A `sprites` row `core:outlet/attach-sprite@1` wrote (I5). */
+		| "sprite"
 	/**
 	 * The row's id in that table.
 	 *

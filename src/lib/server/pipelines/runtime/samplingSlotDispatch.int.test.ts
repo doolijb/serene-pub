@@ -120,9 +120,11 @@ class FakeImageAdapter {
 vi.mock("$lib/server/utils/getConnectionAdapter", () => ({
 	getConnectionAdapter: async () => ({ Adapter: FakeTextAdapter })
 }))
-vi.mock("$lib/server/utils/getImageAdapter", () => ({
-	getImageAdapter: async () => ({ Adapter: FakeImageAdapter })
-}))
+vi.mock("$lib/server/utils/getImageAdapter", async () => {
+	// The fake declares A1111's drawing sheet (2026-10-12, I1): the prepare step reads `sheet.payload` and the knob gates.
+	const { A1111_SHEET } = await import("$lib/server/imageAdapters/A1111Adapter")
+	return { getImageAdapter: async () => ({ Adapter: FakeImageAdapter, sheet: A1111_SHEET }) }
+})
 vi.mock("$lib/server/media", () => ({
 	createMedia: async (_db: any, input: any) => ({
 		file: {
@@ -161,7 +163,7 @@ vi.mock("$lib/server/embedding", () => ({
  * global `db` otherwise, which in an int test is the app's own.
  *
  * ⚠ The session tier is not modelled, and does not need to be: it is in the
- * WORLD now (`sessions.sampling_config_id` at session scope), and no test in
+ * WORLD (the session's pipeline panel row, at session scope), and no test in
  * this file sets it.
  */
 let resolveArgs: any = null
@@ -456,12 +458,14 @@ beforeAll(async () => {
 		samplingConfigId: defaultImageSamplingId
 	})
 
-	// The image spec ships review ON — "Ask for the prompt" — so the run parks
-	// before the render and there is no request to assert about. Turning it off
-	// is the ordinary configuration a person makes to render immediately.
-	// Per FIELD, which is how a settings slot is declared and stored
-	// (`render|settings|review`); a whole-slot write at `''` is a different
-	// address and would leave the shipped `on` standing.
+	// Review off, so the run renders instead of parking before the render
+	// with no request to assert about. The image spec's `review-on` preset
+	// ships OFF since 1.1.0 (2026-10-11), so this write matches what the
+	// shipped Default already says; it stays so the test holds either way,
+	// whatever a later release ships. 1.0.0 shipped that preset as the
+	// default, and the run parked. Per FIELD, which is how a settings slot is
+	// declared and stored (`render|settings|review`); a whole-slot write at
+	// `''` is a different address and would leave a shipped `on` standing.
 	await setSlot(IMAGE, "render", "settings", "off", "review")
 })
 

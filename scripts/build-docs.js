@@ -204,6 +204,7 @@ export const GUIDE_ORDER = [
 			"sessions",
 			"group-sessions",
 			"session-layout",
+			"images",
 			"genres",
 			"genre-adventure",
 			"genre-lair",
@@ -219,6 +220,7 @@ export const GUIDE_ORDER = [
 			"languages",
 			"connections",
 			"users-and-accounts",
+			"messages",
 			"document-view",
 			"android"
 		]
@@ -233,6 +235,7 @@ export const GUIDE_ORDER = [
 			"pipelines",
 			"session-actions",
 			"context-templates",
+			"scripts",
 			"system-settings",
 			"component-authoring",
 			"data-model-notes"
@@ -252,7 +255,7 @@ export const GUIDE_ORDER = [
  * A guide missing from this list is appended alphabetically and reported as a
  * warning — the compiler's rule, not a special case for this source.
  */
-const SDK_GUIDE_ORDER = ["extending", "vocabulary", "your-first-plugin", "widgets", "frames", "channels", "events", "storage", "forms-and-effects", "plugin-permissions", "where-values-come-from"]
+const SDK_GUIDE_ORDER = ["extending", "vocabulary", "your-first-plugin", "widgets", "widget-examples", "frames", "channels", "events", "storage", "forms-and-effects", "plugin-permissions", "where-values-come-from"]
 
 /**
  * Reading order for the catalog-and-laws source, derived from its own pages.

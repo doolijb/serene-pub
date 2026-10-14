@@ -42,7 +42,10 @@ import {
 	readBookStoryTime,
 	storyNowOf
 } from "$lib/server/state/storyTime"
-import { assertOwnedBook } from "$lib/server/utils/ownedBook"
+import {
+	assertOwnedBook,
+	assertReadableBook
+} from "$lib/server/utils/ownedBook"
 
 /**
  * The family's reply: the stored story time plus each line's present as
@@ -75,7 +78,10 @@ export const lorebookStoryTimeHandler: Handler<
 > = refusable(
 	"lorebooks:storyTime",
 	async (socket, params: Sockets.Lorebooks.StoryTime.Params, emitToUser) => {
-		await assertOwnedBook(db, socket.user!.id, params.lorebookId)
+		// A read: owner, share recipient or admin (lane A3).
+		await assertReadableBook(db, socket.user!.id, params.lorebookId, {
+			isAdmin: !!socket.user?.isAdmin
+		})
 		const res = await storyTimeReply(params.lorebookId)
 		emitToUser("lorebooks:storyTime", res)
 		return res
@@ -131,7 +137,10 @@ export const lorebookLinesHandler: Handler<
 > = refusable(
 	"lorebooks:lines",
 	async (socket, params: Sockets.Lorebooks.Lines.Params, emitToUser) => {
-		await assertOwnedBook(db, socket.user!.id, params.lorebookId)
+		// A read: owner, share recipient or admin (lane A3).
+		await assertReadableBook(db, socket.user!.id, params.lorebookId, {
+			isAdmin: !!socket.user?.isAdmin
+		})
 		const res = await bookLinesReply(params.lorebookId)
 		emitToUser("lorebooks:lines", res)
 		return res

@@ -23,7 +23,6 @@
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
-	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import RowMenu from "$lib/client/components/menus/RowMenu.svelte"
 	import EntityGalleryViewModal from "$lib/client/components/gallery/EntityGalleryViewModal.svelte"
@@ -545,27 +544,27 @@
 		{/snippet}
 		{#snippet header()}
 			<div class="space-y-1">
-			<div class="flex items-center gap-2">
-				<Icons.Image size={16} aria-hidden="true" />
-				<p class="truncate text-sm font-semibold">
-					{displayName(item)}
+				<div class="flex items-center gap-2">
+					<Icons.Image size={16} aria-hidden="true" />
+					<p class="truncate text-sm font-semibold">
+						{displayName(item)}
+					</p>
+				</div>
+				<p class="text-surface-600-400 text-xs">
+					{fullDate(item.createdAt)}
+					{#if item.width && item.height}
+						· {item.width}×{item.height}
+					{/if}
 				</p>
-			</div>
-			<p class="text-surface-600-400 text-xs">
-				{fullDate(item.createdAt)}
-				{#if item.width && item.height}
-					· {item.width}×{item.height}
-				{/if}
-			</p>
-			<!-- What is held right now, not what is missing. Under
+				<!-- What is held right now, not what is missing. Under
 			     lazy derivation a fresh upload has exactly one
 			     entry here and that is the healthy state. -->
-			<p class="text-surface-600-400 text-xs">
-				{formatBytes(item.storedBytes)} on disk ·
-				{item.variants.map((v) => v.variant).join(", ") ||
-					"nothing stored"}
-			</p>
-			<!-- Where it came from. `pipeline_run_artifacts` has
+				<p class="text-surface-600-400 text-xs">
+					{formatBytes(item.storedBytes)} on disk ·
+					{item.variants.map((v) => v.variant).join(", ") ||
+						"nothing stored"}
+				</p>
+				<!-- Where it came from. `pipeline_run_artifacts` has
 			     recorded this since the relation replaced the
 			     nullable column, and nothing ever read it back
 			     here — a generated picture and an uploaded one
@@ -573,37 +572,37 @@
 			     "no run" is the ordinary case and a line saying
 			     so every time is what teaches people to stop
 			     reading this block. -->
-			{#if runsFor(item).length}
-				<p class="text-surface-600-400 text-xs">
-					{runsFor(item).length === 1
-						? "Made by a run"
-						: `Made by ${runsFor(item).length} runs`}
-					{#each runsFor(item).slice(0, 3) as r (r.runId)}
-						<br />
-						{#if isAdmin}
-							<a
-								class="anchor"
-								href={runHref(r)}
-								title="Open this run's receipt ({r.runId})"
-							>
-								{r.specSlug}{r.isPreview
-									? " (preview)"
-									: ""}
-							</a>
-						{:else}
-							{r.specSlug}{r.isPreview ? " (preview)" : ""}
-						{/if}
-						· {shortDate(String(r.startedAt))}
-					{/each}
-				</p>
-			{/if}
+				{#if runsFor(item).length}
+					<p class="text-surface-600-400 text-xs">
+						{runsFor(item).length === 1
+							? "Made by a run"
+							: `Made by ${runsFor(item).length} runs`}
+						{#each runsFor(item).slice(0, 3) as r (r.runId)}
+							<br />
+							{#if isAdmin}
+								<a
+									class="anchor"
+									href={runHref(r)}
+									title="Open this run's receipt ({r.runId})"
+								>
+									{r.specSlug}{r.isPreview
+										? " (preview)"
+										: ""}
+								</a>
+							{:else}
+								{r.specSlug}{r.isPreview ? " (preview)" : ""}
+							{/if}
+							· {shortDate(String(r.startedAt))}
+						{/each}
+					</p>
+				{/if}
 			</div>
 		{/snippet}
 	</RowMenu>
 {/snippet}
 
 <div class="flex flex-col gap-3">
-	<PanelToolbar label="Media filters">
+	<div class="panel-actions" role="group" aria-label="Media filters">
 		<label for="media-search" class="sr-only">Search media</label>
 		<input
 			id="media-search"
@@ -639,7 +638,7 @@
 				<Icons.List size={16} aria-hidden="true" />
 			</button>
 		</div>
-	</PanelToolbar>
+	</div>
 
 	<!-- max-w caps only bind once there is room to spare, asked of the VIEW's
 	     own container rather than the window: on a phone the controls still
@@ -936,7 +935,7 @@
 					</div>
 				{:else}
 					<section class="flex flex-col gap-2">
-						<h3 class="text-sm font-semibold">Derived forms</h3>
+						<h3 class="text-sm font-medium">Derived forms</h3>
 						<p class="text-surface-600-400 text-xs">
 							Thumbnails and other copies that can be re-made from
 							what is kept. Removing them frees space now and
@@ -954,7 +953,7 @@
 						</p>
 						<button
 							type="button"
-							class="btn btn-sm preset-filled-primary-500 self-start"
+							class="btn btn-sm preset-tonal-error self-start"
 							onclick={cullDerived}
 							disabled={cleanupBusy ||
 								cleanup.derived.variants === 0}
@@ -968,7 +967,7 @@
 						class="border-error-500/50 bg-error-500/5 flex flex-col gap-2 rounded-lg border p-3"
 					>
 						<h3
-							class="text-error-600-400 flex items-center gap-2 text-sm font-semibold"
+							class="text-error-600-400 flex items-center gap-2 text-sm font-medium"
 						>
 							<Icons.AlertTriangle size={16} aria-hidden="true" />
 							<span>Uploaded originals — irreversible</span>
@@ -1007,7 +1006,7 @@
 
 					{#if cleanup.skipped.length}
 						<section class="flex flex-col gap-1">
-							<h3 class="text-sm font-semibold">
+							<h3 class="text-sm font-medium">
 								Originals that will be kept
 							</h3>
 							<!-- With the reason, because "why did it skip 400
@@ -1150,7 +1149,7 @@
 				{/if}
 				<footer class="flex justify-end gap-2">
 					<button
-						class="btn preset-filled-surface-400-600"
+						class="btn preset-tonal-surface"
 						onclick={() => (pendingDeleteId = null)}
 					>
 						Cancel
@@ -1229,7 +1228,7 @@
 				</label>
 				<footer class="flex justify-end gap-2">
 					<button
-						class="btn preset-filled-surface-400-600"
+						class="btn preset-tonal-surface"
 						onclick={() => {
 							cullOriginalsOpen = false
 							cullConfirm = ""

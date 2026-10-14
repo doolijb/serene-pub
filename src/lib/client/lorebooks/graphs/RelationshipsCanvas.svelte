@@ -26,7 +26,8 @@
 		selectedKey: string | null
 		onNodeClick: (node: GraphNode) => void
 		onEdgeClick: (edge: GraphEdge) => void
-		onLinkDraw: (from: GraphNode, to: GraphNode) => void
+		/** Absent in a shared (read-only) book: nothing is linked by drawing. */
+		onLinkDraw?: (from: GraphNode, to: GraphNode) => void
 		/** The lens's own actions, beside the layout switcher (New place). */
 		toolbar?: Snippet
 		/** Drawn in place of the canvas while it has no nodes. */
@@ -71,7 +72,11 @@
 	 * way is said too: Tab reaches the nodes, and Link to… joins two.
 	 */
 	let hint = $derived(
-		drawing === "places"
+		!onLinkDraw
+			? drawing === "places"
+				? "drag to move · click a place (or Tab to it and press Enter) to see its links"
+				: "drag to move · click a node (or Tab to it and press Enter) to open it"
+			: drawing === "places"
 			? "drag to move · click a place (or Tab to it and press Enter) to see its links · click a link to edit it · Alt-drag (⌥ on a Mac) between two places, or pick one and use Link to…, to link them"
 			: "drag to move · click a node (or Tab to it and press Enter) to open it · Alt-drag (⌥ on a Mac) between two nodes, or use Link to…, to name a relationship"
 	)

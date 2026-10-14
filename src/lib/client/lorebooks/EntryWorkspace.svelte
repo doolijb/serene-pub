@@ -33,6 +33,7 @@
 		deleteWarning,
 		descendantCount
 	} from "./editor/partOf"
+	import { deleteEntryTitle } from "./deleteCopy"
 	import {
 		amendmentDateToast,
 		fileEntryAmendments,
@@ -157,8 +158,6 @@
 		hasUnsavedChanges: boolean
 		/** Which of the three reading lenses draws the list. */
 		lens: LoreLens
-		/** What the scope this list is of is called. */
-		scopeTitle: string
 		/** The facets in force, held by the frame so the rail can set them. */
 		filters: PoolFilters
 		/**
@@ -206,7 +205,6 @@
 		mode,
 		hasUnsavedChanges = $bindable(false),
 		lens,
-		scopeTitle,
 		filters,
 		readInKeys,
 		decisions,
@@ -532,12 +530,21 @@
 		!isNew && !!selectedKey && !selectedSource && poolReady
 	)
 
+	/**
+	 * A shared book is read-only (PLAN-private-messages §6.7): nothing is
+	 * created, saved, archived, amended, filed or deleted; a row opens to
+	 * read, its fields disabled.
+	 */
+	let readOnly = $derived(book.readOnly)
+
 	let creatableDoors = $derived(
-		descriptor.kind
-			? descriptor.creatable
-				? [descriptor]
-				: []
-			: doors.filter((d) => d.creatable && d.kind)
+		readOnly
+			? []
+			: descriptor.kind
+				? descriptor.creatable
+					? [descriptor]
+					: []
+				: doors.filter((d) => d.creatable && d.kind)
 	)
 
 	/**
@@ -1303,7 +1310,7 @@
 	})
 
 	$effect(() => {
-		hasUnsavedChanges = dirty
+		hasUnsavedChanges = dirty && !readOnly
 	})
 
 	// The activity sidebar asks for a review by naming the compile, not the
@@ -1516,7 +1523,7 @@
 						{#each creatableDoors as door (door.id)}
 							{@const Icon = door.icon}
 							<button
-								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+								class="btn btn-sm preset-tonal-surface w-full justify-start"
 								type="button"
 								onclick={() => startCreate(door)}
 							>
@@ -1555,7 +1562,6 @@
 			{lens}
 			{filters}
 			{facets}
-			{scopeTitle}
 			{summary}
 			{orderBy}
 			{mode}
@@ -1576,9 +1582,11 @@
 				{@render newButton()}
 			{/snippet}
 			{#snippet toolbarExtra()}
-				{#if descriptor.listActions}
+				{#if descriptor.listActions && !readOnly}
 					{@const Actions = descriptor.listActions}
-					<Actions sources={rowsByKind[descriptor.kind ?? ""] ?? []} />
+					<Actions
+						sources={rowsByKind[descriptor.kind ?? ""] ?? []}
+					/>
 				{/if}
 			{/snippet}
 		</EntryPool>
@@ -1590,7 +1598,7 @@
 	     list; at desk the list never left, so it closes the editor column. -->
 	{@const label = mode === "compact" ? "Back to the list" : "Close"}
 	<button
-		class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
+		class="btn btn-sm preset-tonal-surface shrink-0 p-2"
 		type="button"
 		onclick={closeEditor}
 		title={label}
@@ -1663,7 +1671,7 @@
 			Switch it off
 		</button>
 		<button
-			class="btn btn-sm preset-filled-surface-400-600"
+			class="btn btn-sm preset-tonal-surface"
 			type="button"
 			onclick={resetOffWindow}
 		>
@@ -1672,16 +1680,49 @@
 	</div>
 {/snippet}
 
+{#snippet markToggle(
+	on: boolean,
+	Icon: typeof Icons.Pin,
+	label: string,
+	hint: string,
+	mark: string,
+	toggle: () => void
+)}
+	<!-- An entry mark as a toggle: tonal primary with `aria-pressed` while
+	     ON (STYLE-GUIDE §6.3), the check saying it without colour. -->
+	<button
+		class="btn btn-sm w-full justify-start {on
+			? 'preset-tonal-primary'
+			: 'preset-tonal-surface'}"
+		type="button"
+		aria-pressed={on}
+		data-lore-mark={mark}
+		onclick={toggle}
+	>
+		<Icon size={14} aria-hidden="true" />
+		<span>{label}</span>
+		<span class="ml-auto text-[11px] font-normal opacity-75">{hint}</span>
+		<Icons.Check
+			size={14}
+			class="shrink-0 {on ? '' : 'invisible'}"
+			aria-hidden="true"
+		/>
+	</button>
+{/snippet}
+
 {#snippet editorMenu()}
-	<!-- What is not a field: archiving is a state the row is put into rather
-	     than a value the editor holds, and it is written straight through. -->
+	<!-- The entry's state, not its fields. Pinned and Off are marks on the
+	     draft, saved with it (and dated with it when reading at a moment);
+	     archiving is written straight through; Off for a while files dated
+	     changes. A row being created has only the marks: the rest act on a
+	     stored row. -->
 	<Popover
 		open={editorMenuOpen}
 		onOpenChange={(e) => (editorMenuOpen = e.open)}
 		positioning={{ placement: "bottom-end" }}
 	>
 		<Popover.Trigger
-			class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
+			class="btn btn-sm preset-tonal-surface shrink-0 p-2"
 			title="More options"
 			aria-label="More options for this entry"
 		>
@@ -1695,30 +1736,51 @@
 					{#if offWindowOpen}
 						{@render offWindowForm()}
 					{:else}
-						{#if selectedSource?.archived}
+						{#if draft}
+							{@render markToggle(
+								!!draft.constant,
+								Icons.Pin,
+								"Pinned",
+								"Always in the prompt",
+								"pinned",
+								() => (draft!.constant = !draft!.constant)
+							)}
+							{@render markToggle(
+								draft.enabled === false,
+								Icons.Ghost,
+								"Off",
+								"Out of every prompt",
+								"off",
+								() =>
+									(draft!.enabled = draft!.enabled === false)
+							)}
+						{/if}
+						{#if !isNew && selectedSource}
+							{#if selectedSource.archived}
+								<button
+									class="btn btn-sm preset-tonal-surface w-full justify-start"
+									type="button"
+									onclick={() => setArchived(false)}
+								>
+									<Icons.ArchiveRestore size={14} /> Unarchive
+								</button>
+							{:else}
+								<button
+									class="btn btn-sm preset-tonal-surface w-full justify-start"
+									type="button"
+									onclick={() => setArchived(true)}
+								>
+									<Icons.Archive size={14} /> Archive
+								</button>
+							{/if}
 							<button
-								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+								class="btn btn-sm preset-tonal-surface w-full justify-start"
 								type="button"
-								onclick={() => setArchived(false)}
+								onclick={() => (offWindowOpen = true)}
 							>
-								<Icons.ArchiveRestore size={14} /> Unarchive
-							</button>
-						{:else}
-							<button
-								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-								type="button"
-								onclick={() => setArchived(true)}
-							>
-								<Icons.Archive size={14} /> Archive
+								<Icons.CalendarOff size={14} /> Off for a while…
 							</button>
 						{/if}
-						<button
-							class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-							type="button"
-							onclick={() => (offWindowOpen = true)}
-						>
-							<Icons.CalendarOff size={14} /> Off for a while…
-						</button>
 					{/if}
 				</Popover.Content>
 			</Popover.Positioner>
@@ -1828,13 +1890,17 @@
 					class="text-surface-600-400 shrink-0 text-xs"
 					data-lore-save-state
 				>
-					{isNew
-						? "Not saved yet"
-						: dirty
-							? "Unsaved changes"
-							: "Saved"}
+					{readOnly
+						? "Read only"
+						: isNew
+							? "Not saved yet"
+							: dirty
+								? "Unsaved changes"
+								: "Saved"}
 				</span>
-				{#if canAmend}
+				{#if readOnly}
+					<!-- Shared with the reader: no save, no marks. -->
+				{:else if canAmend}
 					{@render amendSave()}
 				{:else}
 					<button
@@ -1845,16 +1911,12 @@
 							!activeDoor.validate(draft, siblings)}
 					>
 						<Icons.Save size={16} aria-hidden="true" />
-						<span
-							>{isNew
-								? "Create"
-								: queue
-									? "Save & next"
-									: "Save"}</span
-						>
+						<span>
+							{isNew ? "Create" : queue ? "Save & next" : "Save"}
+						</span>
 					</button>
 				{/if}
-				{#if !isNew && selectedSource && activeDoor.store === "entries"}
+				{#if !readOnly && activeDoor.store === "entries" && (isNew || selectedSource)}
 					{@render editorMenu()}
 				{/if}
 				{#if queue && !isNew && mode === "compact"}
@@ -1871,7 +1933,13 @@
 					</button>
 				{/if}
 			</div>
-			<div class="flex flex-col gap-4">
+			<!-- A shared book's fields read, never write: one `disabled`
+			     fieldset stills every control the editor draws. -->
+			<fieldset
+				class="flex min-w-0 flex-col gap-4"
+				disabled={readOnly}
+				data-lore-read-only={readOnly ? "" : undefined}
+			>
 				<Editor
 					bind:draft
 					source={selectedSource ?? null}
@@ -1882,7 +1950,7 @@
 					{siblings}
 					{onNavigateToGraph}
 				/>
-			</div>
+			</fieldset>
 			<!-- What the newest run did with this row, under the fields and
 			     above the account of why. A row nothing has saved has no run to
 			     report on. -->
@@ -1937,11 +2005,13 @@
 				{:else}
 					<!-- Empty copy is about an empty book, so a pool with rows
 					     in it is told what to do instead. -->
-					{editorPlaceholder({
-						descriptor,
-						poolEmpty: poolItems.length === 0,
-						canCreate: creatableDoors.length > 0
-					})}
+					{readOnly && poolItems.length > 0
+						? "Pick an entry to read it."
+						: editorPlaceholder({
+								descriptor,
+								poolEmpty: poolItems.length === 0,
+								canCreate: creatableDoors.length > 0
+							})}
 				{/if}
 			</div>
 		</div>
@@ -1954,7 +2024,7 @@
 		     the list has answered with. -->
 		<div class="flex flex-wrap items-center gap-2">
 			<button
-				class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
+				class="btn btn-sm preset-tonal-surface shrink-0 p-2"
 				type="button"
 				onclick={() => loreRoute.openInspector(undefined)}
 				title="Back to the entry"
@@ -2036,6 +2106,7 @@
      warning that leaves either out promises the wrong thing. -->
 <DeleteLorebookEntryConfirmModal
 	open={deleteTarget !== null}
+	title={deleteEntryTitle(deleteTarget?.name)}
 	message={deleteWarning(
 		deleteTarget ? descendantCount(deleteTarget.key, bookPool) : 0,
 		{ everyLine: deleteIsEveryLine }

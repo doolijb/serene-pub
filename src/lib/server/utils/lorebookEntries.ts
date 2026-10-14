@@ -76,9 +76,9 @@ export const DEFAULT_VECTOR_NAME = "core:vec/default@1"
  * The anchor policy core implements.
  *
  * A type declaring it is saying *ask this question before showing one of my
- * rows to anybody* — four branches (the bound character may see it, personas in
- * the binding may see it, an unbound binding is the narrator's alone, an
- * unanchored row is visible to nobody), implemented once in
+ * rows to anybody* — four branches (the bound character may see it, a persona
+ * someone plays is seen all session, a background member's binding is the
+ * narrator's alone, and so is an unanchored row), implemented once in
  * `prompt/characterLore.ts`. Types select policies; they never author them,
  * which is what keeps a declaration from being code.
  */
@@ -456,7 +456,8 @@ export function assertDeclaredFields(
 					: kind === "integer"
 						? typeof value === "number" && Number.isInteger(value)
 						: kind === "number"
-							? typeof value === "number" && Number.isFinite(value)
+							? typeof value === "number" &&
+								Number.isFinite(value)
 							: true
 		if (!ok)
 			throw new Error(
@@ -490,13 +491,27 @@ function patternReach(layers: readonly PatternColumns[]): Set<string> | null {
 	if (!row) return null
 	const has = (layer: PatternColumns, k: keyof PatternColumns) =>
 		Object.prototype.hasOwnProperty.call(layer, k)
-	const modes = [row.matchMode, ...overlays.filter((o) => has(o, "matchMode")).map((o) => o.matchMode)]
-	const regexFlags = [row.useRegex, ...overlays.filter((o) => has(o, "useRegex")).map((o) => o.useRegex)]
-	if (!modes.some((matchMode) => regexFlags.some((useRegex) => readsAsRegex({ matchMode, useRegex }))))
+	const modes = [
+		row.matchMode,
+		...overlays.filter((o) => has(o, "matchMode")).map((o) => o.matchMode)
+	]
+	const regexFlags = [
+		row.useRegex,
+		...overlays.filter((o) => has(o, "useRegex")).map((o) => o.useRegex)
+	]
+	if (
+		!modes.some((matchMode) =>
+			regexFlags.some((useRegex) => readsAsRegex({ matchMode, useRegex }))
+		)
+	)
 		return null
 	const keys = new Set<string>()
 	for (const layer of layers)
-		for (const key of [...splitKeys(layer.keys), ...splitKeys(layer.secondaryKeys)]) keys.add(key)
+		for (const key of [
+			...splitKeys(layer.keys),
+			...splitKeys(layer.secondaryKeys)
+		])
+			keys.add(key)
 	return keys
 }
 
@@ -534,14 +549,24 @@ export function assertNoRunawayPatterns(
 ): void {
 	const overlays = layers.overlays ?? []
 	const before = stored
-		? [stored, ...overlays, ...(layers.overlay?.replaces ? [layers.overlay.replaces] : [])]
+		? [
+				stored,
+				...overlays,
+				...(layers.overlay?.replaces ? [layers.overlay.replaces] : [])
+			]
 		: []
 	let after: PatternColumns[]
 	if (layers.overlay) after = [stored ?? {}, ...overlays, data]
 	else {
 		const row: PatternColumns = { ...stored }
-		for (const k of ["keys", "secondaryKeys", "matchMode", "useRegex"] as const)
-			if (Object.prototype.hasOwnProperty.call(data, k)) (row as Record<string, unknown>)[k] = data[k]
+		for (const k of [
+			"keys",
+			"secondaryKeys",
+			"matchMode",
+			"useRegex"
+		] as const)
+			if (Object.prototype.hasOwnProperty.call(data, k))
+				(row as Record<string, unknown>)[k] = data[k]
 		after = [row, ...overlays]
 	}
 	const reach = patternReach(after)
@@ -564,7 +589,10 @@ export async function amendmentPatternLayers(
 	entryId: number
 ): Promise<Map<number, PatternColumns>> {
 	const rows = await handle
-		.select({ id: schema.entryAmendments.id, fields: schema.entryAmendments.fields })
+		.select({
+			id: schema.entryAmendments.id,
+			fields: schema.entryAmendments.fields
+		})
 		.from(schema.entryAmendments)
 		.where(eq(schema.entryAmendments.entryId, entryId))
 	const out = new Map<number, PatternColumns>()
@@ -572,7 +600,8 @@ export async function amendmentPatternLayers(
 		const fields = (row.fields ?? {}) as Record<string, unknown>
 		const layer: Record<string, unknown> = {}
 		for (const k of ["keys", "secondaryKeys", "matchMode", "useRegex"])
-			if (Object.prototype.hasOwnProperty.call(fields, k)) layer[k] = fields[k]
+			if (Object.prototype.hasOwnProperty.call(fields, k))
+				layer[k] = fields[k]
 		out.set(row.id, layer as PatternColumns)
 	}
 	return out

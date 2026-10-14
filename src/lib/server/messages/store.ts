@@ -80,14 +80,40 @@ export function committedContent(text: string): string {
 	return text.trim()
 }
 
+/**
+ * 🚧 The story-clock stamp a new row carries (PROPOSAL-live-scenes §6/§8):
+ * the session's story now as it stands at write (`sessionStoryNowOf` — its
+ * own clock, else its line's present), as the five columns. A caller that
+ * already says (a copy keeps its original's) is left alone; a session with
+ * no book or no present stamps nothing. A failure to read the clock never
+ * fails the write: a message without a stamp is a message, one lost is not.
+ */
+async function withStoryClockStamp<
+	T extends Omit<typeof schema.sessionMessages.$inferInsert, "id">
+>(db: Db, values: T): Promise<T> {
+	if (values.storyClockYear !== undefined) return values
+	try {
+		const { sessionStoryNowOf, clockOfNow, clockColumns } = await import(
+			"$lib/server/state/storyTime"
+		)
+		const now = await sessionStoryNowOf(db, values.sessionId)
+		if (!now) return values
+		return { ...values, ...clockColumns(clockOfNow(now)) }
+	} catch (err) {
+		console.warn("[messages] story-clock stamp skipped:", err)
+		return values
+	}
+}
+
 /** Insert one legacy-shaped message; mirrors to the new model. */
 export async function insertLegacy(
 	db: Db,
 	values: Omit<typeof schema.sessionMessages.$inferInsert, "id">
 ): Promise<typeof schema.sessionMessages.$inferSelect> {
+	const stamped = await withStoryClockStamp(db, values)
 	const [row] = await db
 		.insert(schema.sessionMessages)
-		.values(trimCommittedContent(values))
+		.values(trimCommittedContent(stamped))
 		.returning()
 	await mirrorRow(db, row)
 	return row

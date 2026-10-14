@@ -48,6 +48,12 @@ export interface OllamaStatus {
 export interface LaneStatus {
 	/** The identity the lane would work under, or null when nothing is active. */
 	modelId: string | null
+	/**
+	 * The connection `modelId` belongs to. The lane is app-wide, so a row
+	 * whose id differs is not the one holding it. Absent where the server
+	 * did not say (read as "not known", never as a match).
+	 */
+	connectionId?: number | null
 	loaded: boolean
 	lastUsedAt: string | null
 	/**

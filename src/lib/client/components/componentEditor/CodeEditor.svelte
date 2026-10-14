@@ -266,7 +266,7 @@
 			<button type="button" class="btn-icon btn-icon-sm preset-tonal-surface" aria-label="Rename {active}" title="Rename {active}" onclick={startRename}>
 				<Icons.PencilLine size={14} />
 			</button>
-			<button type="button" class="btn-icon btn-icon-sm preset-tonal-surface" aria-label="Delete {active}" title="Delete {active}" onclick={removeActive}>
+			<button type="button" class="btn-icon btn-icon-sm preset-tonal-error" aria-label="Delete {active}" title="Delete {active}" onclick={removeActive}>
 				<Icons.Trash2 size={14} />
 			</button>
 		{/if}

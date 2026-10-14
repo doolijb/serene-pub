@@ -1,7 +1,7 @@
 <script lang="ts">
 	/**
 	 * Admin → Sampling → one sampling config: the change form (owner ruling
-	 * 2026-09-27 — Django-style management, not the Sampling view nested in
+	 * 2026-09-27 — Django-style management, not a sidebar view nested in
 	 * admin). In fieldsets:
 	 *
 	 * - **Identity** — name; modality and origin readonly.
@@ -16,7 +16,8 @@
 	 * as the Sampling view. The draft is only what the form edits (name,
 	 * values, enabled); the shape never changes after a config is made.
 	 * Built-in configs are read-only here as there: Duplicate makes an
-	 * editable copy (`/admin/sampling/new?from=<id>`).
+	 * editable copy (`/admin/sampling/new?from=<id>`). **Open in Sampling**
+	 * opens the Sampling view on this config.
 	 */
 	import { getContext, onMount, untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
@@ -47,11 +48,14 @@
 		samplingValuesToSave,
 		type SamplingRow
 	} from "./samplingAdmin"
+	import { openInSampling } from "$lib/client/admin/railDoors"
+	import { samplingSidebarMemory } from "$lib/client/components/sidebars/samplingList"
 
 	type Draft = { name: string; values: Record<string, unknown>; enabled: string[] }
 
 	const socket = useTypedSocket()
 	const systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
+	const panelsCtx: PanelsCtx | undefined = getContext("panelsCtx")
 
 	/**
 	 * Derived, not read once: AdminView keys the section on its path, but the
@@ -256,6 +260,14 @@
 		onSave={save}
 	>
 		{#snippet headerActions()}
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface"
+				onclick={() => openInSampling(panelsCtx, samplingSidebarMemory, id)}
+			>
+				<Icons.SlidersHorizontal size={16} aria-hidden="true" />
+				Open in Sampling
+			</button>
 			<button type="button" class="btn btn-sm preset-tonal-surface" onclick={duplicate}>
 				<Icons.Copy size={16} aria-hidden="true" />
 				Duplicate
@@ -278,7 +290,7 @@
 				{/if}
 				{#each held as h (h.capability)}
 					<span class="preset-tonal-primary rounded-full px-2 py-0.5">
-						Default for {h.label}
+						{h.label} loadout
 					</span>
 				{/each}
 			</div>
@@ -358,7 +370,7 @@
 				<ul class="flex flex-col gap-1.5 text-sm">
 					{#each held as h (h.capability)}
 						<li class="flex flex-wrap items-baseline gap-x-2">
-							<span class="font-medium">Default for {h.label}</span>
+							<span class="font-medium">The {h.label} loadout</span>
 						</li>
 					{/each}
 					{#each pipelines as p (p)}

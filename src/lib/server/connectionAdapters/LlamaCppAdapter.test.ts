@@ -14,6 +14,14 @@ vi.mock("$lib/server/embedding", () => ({
 	embed: vi.fn(),
 	getLoadedModelId: () => null
 }))
+// The entries → ids resolution is the resolver's (its own int test); here
+// only what the adapter does with the answer.
+vi.mock("$lib/server/connections/logitBiasTokens", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("$lib/server/connections/logitBiasTokens")
+	>()),
+	resolveLogitBias: vi.fn()
+}))
 vi.mock("axios", () => ({
 	default: {
 		get: vi.fn(),
@@ -749,5 +757,74 @@ describe("LlamaCppAdapter — images on the chat wire", () => {
 				]
 			}
 		])
+	})
+})
+
+describe("LlamaCppAdapter — logit bias", () => {
+	const ENTRIES = [
+		{ text: "hmm", value: -2 },
+		{ text: "[42]", value: 5 }
+	]
+
+	test("resolved before the request and sent as [[id, bias], …] on both routes", async () => {
+		const { resolveLogitBias } = await import(
+			"$lib/server/connections/logitBiasTokens"
+		)
+		vi.mocked(resolveLogitBias).mockResolvedValue({
+			biases: new Map([
+				[298, -2],
+				[4317, -2],
+				[42, 5]
+			]),
+			skipped: [],
+			ignored: false
+		})
+		for (const wireMode of ["completion", "chat"]) {
+			vi.mocked(axios.post).mockResolvedValueOnce({
+				data:
+					wireMode === "chat"
+						? { choices: [{ message: { content: "ok" } }] }
+						: { content: "ok" }
+			})
+			const adapter = makeAdapter(
+				{ wireMode, extraJson: { stream: false } },
+				{ logitBias: ENTRIES }
+			)
+			await adapter.generateText()
+			const [, body] = vi.mocked(axios.post).mock.calls.at(-1)! as any[]
+			expect(body.logit_bias).toEqual([
+				[298, -2],
+				[4317, -2],
+				[42, 5]
+			])
+			expect(adapter.ignoredSamplers).toEqual([])
+		}
+		expect(vi.mocked(resolveLogitBias).mock.lastCall?.[1]).toEqual(ENTRIES)
+	})
+
+	test("nothing resolved: no logit_bias key, and the receipt says it was left out", async () => {
+		const { resolveLogitBias } = await import(
+			"$lib/server/connections/logitBiasTokens"
+		)
+		vi.mocked(resolveLogitBias).mockResolvedValue({
+			biases: new Map(),
+			skipped: [{ text: "hmm", reason: "no tokenizer" }],
+			ignored: true
+		})
+		vi.mocked(axios.post).mockResolvedValueOnce({ data: { content: "ok" } })
+		const adapter = makeAdapter(
+			{ extraJson: { stream: false } },
+			{ logitBias: ENTRIES }
+		)
+		await adapter.generateText()
+		const [, body] = vi.mocked(axios.post).mock.calls.at(-1)! as any[]
+		expect(body).not.toHaveProperty("logit_bias")
+		expect(adapter.ignoredSamplers).toEqual(["logitBias"])
+		expect(adapter.samplingReport.ignored).toEqual(["logitBias"])
+	})
+
+	test("mapSamplingConfig never sends the entries themselves", () => {
+		const adapter = makeAdapter({}, { logitBias: ENTRIES })
+		expect(adapter.mapSamplingConfig()).not.toHaveProperty("logit_bias")
 	})
 })

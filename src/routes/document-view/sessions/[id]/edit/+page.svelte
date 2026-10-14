@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { withoutShared } from "$lib/shared/utils/sharedRows"
 	import { onMount, getContext } from "svelte"
 	import PipelineCards from "$lib/client/components/sessionForms/PipelineCards.svelte"
 	import { page } from "$app/state"
@@ -293,7 +294,7 @@
 		load()
 	}
 	function handleCharactersList(msg: Sockets.Characters.List.Response) {
-		characters = msg.characterList || []
+		characters = withoutShared(msg.characterList) // shared rows are read and copy only (PLAN-private-messages §6.7, Q3)
 	}
 	function handleUsersList(msg: any) {
 		allUsers = msg.users || []

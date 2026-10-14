@@ -44,7 +44,7 @@ Every page has the same header:
 - **A−** and **A+** with the text size between them, from 100% to 200% in six steps;
 - **Browse Standard Site** (see [Leaving Document View](#leaving-document-view)).
 
-Then the main navigation, a plain list of links: **Home**, **Sessions**, **Characters**, **Documentation**, **Settings**, **Help** and **About** for everyone. Admins also see **Connections** and **System Settings**, **Users** once accounts are on, and **Ollama, managed** and **KoboldCPP, run by Serene Pub** when those are switched on (never in the Android app).
+Then the main navigation, a plain list of links: **Home**, **Sessions**, **Characters**, **Documentation**, **Settings**, **Help** and **About** for everyone. Admins also see **Connections** and **Pub settings**, **Users** once accounts are on, and **Ollama, managed** and **KoboldCPP, run by Serene Pub** when those are switched on (never in the Android app). While one is off, **Pub settings** and **Help** link to its page, which turns it on.
 
 Every control is an ordinary link, button or form field, so Tab, Shift+Tab, Enter, Space and the browser's find-in-page all work as usual. Each page change moves focus to the top of the new page. Saves, errors and status changes (like KoboldCPP starting) are read out by your screen reader.
 
@@ -52,11 +52,11 @@ The text size and light or dark mode are Document View's own, separate from the 
 
 ### Home
 
-Until setup is finished, Home is a checklist of the setup steps (connection, character, persona, first session), each with a link to the page that does it and, where allowed, **Skip for now**. After that it shows your recent sessions and quick links.
+Until setup is finished, Home is a checklist of the setup steps (connection, persona, character, first session and, for admins, an optional **Search by meaning** step), each with a link to the page that does it and, where allowed, **Skip for now**. After that it shows your recent sessions and quick links.
 
 ### Sessions
 
-The session list, a new-session form, and each session's page and edit page.
+The session list, a **Start a session** form, and each session's page and edit page.
 
 On a session's page:
 
@@ -82,8 +82,8 @@ These docs, with a search that matches both pages and headings. Links between pa
 
 ### Admin pages
 
-- **Connections**: list, create, edit, and set the default AI connection. **Ollama, managed** and **KoboldCPP, run by Serene Pub** have the same download and connect steps as the usual interface. See [Connections](./connections.md).
-- **System Settings**: switch managed Ollama and KoboldCPP on or off (with KoboldCPP's server address), context debugging, the CharaVault account, and user accounts. Embeddings can't be set up here; a line says whether they're on. See [Pub settings](./system-settings.md).
+- **Connections**: list, create and edit connections, and choose which model each job uses with **Use … for chat**, **Use … for embeddings** and the like. **Ollama, managed** and **KoboldCPP, run by Serene Pub** have the same download and connect steps as the usual interface. While one is off, its page has one button that turns it on and adds its connection if you don't have one. See [Connections](./connections.md).
+- **Pub settings**: whether Ollama, managed, and KoboldCPP, run by Serene Pub, are on, with a link to each one's page and a button to turn it off; context debugging, the CharaVault account, and user accounts. A line says whether embeddings are in use; they are chosen on **Connections**. See [Pub settings](./system-settings.md).
 - **Users** (once accounts are on): list, create, edit and delete accounts.
 
 **Turning user accounts on** can't be undone, here or anywhere: once it's on, everyone, you included, must log in. Before it lets you, the page asks you to set a passphrase and shows your username so you can note both down. See [Users and accounts](./users-and-accounts.md).
@@ -114,8 +114,8 @@ Document View covers less, on purpose: one simple, reliable page per task. Use t
 - Lorebooks, tags, sampling, pipelines and context templates.
 - Reading a lorebook into a session, benching characters, and a session's preset and actions.
 - Character pictures, galleries, sprites and the extra card fields.
-- Setting up embeddings.
-- Themes, background images, and browsing CharaVault (connecting the account works in System Settings).
+- Downloading embedding and entity models that run on this machine.
+- Themes, background images, and browsing CharaVault (connecting the account works in Pub settings).
 
 ## For power users
 

@@ -2,10 +2,13 @@
 	/**
 	 * A character folder's header row (STYLE-GUIDE §6.4).
 	 *
-	 * The header IS the collapse control — a `<button aria-expanded>` across the
-	 * row rather than a chevron the pointer has to hit — and it sits on the same
-	 * ground as the rows below it, separated only by its own `py-1`. No card, no
-	 * rule: the indent of the rows underneath is what says they belong to it.
+	 * It wears the group label's look (`ListGroupLabel`: 12px muted words, the
+	 * text 16px under the group above, no rule) because it IS the label of the
+	 * rows below it — but it is also the collapse control, so it is a
+	 * `<button aria-expanded>` across the row rather than a chevron the pointer
+	 * has to hit. The 32px hit area comes from the button's padding, not a fixed
+	 * height. No card, no rule: the indent of the rows underneath is what says
+	 * they belong to it.
 	 *
 	 * The ⋯ menu is a sibling of that button, never inside it: a button inside a
 	 * button is invalid, and the two actions it holds (rename, delete) are the
@@ -28,28 +31,27 @@
 		$props()
 </script>
 
-<div class="flex min-w-0 items-center gap-1 py-1">
+<!-- `pt-2` + the button's `py-2` put the words where `ListGroupLabel`'s
+     `pt-4` does. -->
+<div class="flex min-w-0 items-center gap-1 pt-2">
 	<button
 		type="button"
-		class="hover:text-foreground text-surface-800-200 flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg px-1 text-left"
+		class="text-surface-600-400 hover:text-surface-950-50 flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-3 py-2 text-left text-xs"
 		aria-expanded={expanded}
 		onclick={onToggle}
 	>
+		<Icons.ChevronRight
+			size={14}
+			class="shrink-0 transition-transform {expanded ? 'rotate-90' : ''}"
+			aria-hidden="true"
+		/>
 		{#if expanded}
-			<Icons.FolderOpen
-				size={16}
-				class="text-surface-600-400 shrink-0"
-				aria-hidden="true"
-			/>
+			<Icons.FolderOpen size={14} class="shrink-0" aria-hidden="true" />
 		{:else}
-			<Icons.Folder
-				size={16}
-				class="text-surface-600-400 shrink-0"
-				aria-hidden="true"
-			/>
+			<Icons.Folder size={14} class="shrink-0" aria-hidden="true" />
 		{/if}
-		<span class="min-w-0 truncate text-[13px] font-medium">{name}</span>
-		<span class="text-surface-600-400 shrink-0 text-xs">{count}</span>
+		<span class="min-w-0 truncate">{name}</span>
+		<span class="shrink-0 tabular-nums">{count}</span>
 	</button>
 	<RowMenu
 		label="Folder"

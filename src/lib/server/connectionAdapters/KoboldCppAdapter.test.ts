@@ -17,6 +17,15 @@ vi.mock("$lib/server/embedding", () => ({
 	getLoadedModelId: () => null
 }))
 
+// The entries → ids resolution is the resolver's (its own int test); here
+// only what the adapter does with the answer.
+vi.mock("$lib/server/connections/logitBiasTokens", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("$lib/server/connections/logitBiasTokens")
+	>()),
+	resolveLogitBias: vi.fn()
+}))
+
 const { KoboldCppAdapter, testConnection } = await import("./KoboldCppAdapter")
 const { buildPerspectiveSchema } = await import("$lib/server/utils/graphSchema")
 const { JSON_OBJECT_GBNF } = await import("./jsonGrammar")
@@ -1114,5 +1123,88 @@ describe("KoboldCppAdapter — images on the chat wire", () => {
 		})
 		expect(body.messages[0]).toEqual({ role: "system", content: "Narrate." })
 		expect(body.messages[2]).toEqual({ role: "assistant", content: "Mara:" })
+	})
+})
+
+describe("KoboldCppAdapter — logit bias", () => {
+	const ENTRIES = [
+		{ text: "hmm", value: -2 },
+		{ text: "[42]", value: 5 }
+	]
+	let fetchMock: ReturnType<typeof vi.fn>
+
+	beforeEach(() => {
+		fetchMock = vi.fn(async (url: string) => ({
+			ok: true,
+			json: async () =>
+				url.includes("/v1/chat/completions")
+					? { choices: [{ message: { content: "hi" } }] }
+					: { results: [{ text: "hi" }], value: 4096 }
+		}))
+		vi.stubGlobal("fetch", fetchMock)
+	})
+	afterEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	function bodyOfGenerate(): any {
+		const call = fetchMock.mock.calls.find((args: any[]) =>
+			/\/v1\/chat\/completions|\/api\/v1\/generate/.test(args[0])
+		)
+		expect(call).toBeDefined()
+		return JSON.parse(call![1].body)
+	}
+
+	test("resolved before the request and sent as { id: bias } on both routes", async () => {
+		const { resolveLogitBias } = await import(
+			"$lib/server/connections/logitBiasTokens"
+		)
+		vi.mocked(resolveLogitBias).mockResolvedValue({
+			biases: new Map([
+				[12, -2],
+				[42, 5]
+			]),
+			skipped: [],
+			ignored: false
+		})
+		for (const wireMode of ["chat", "completion"]) {
+			fetchMock.mockClear()
+			const adapter = makeAdapter(
+				{ wireMode, extraJson: { stream: false } },
+				{ logitBias: ENTRIES }
+			)
+			adapter.withCompiledPrompt({
+				prompt: "hi",
+				messages: [{ role: "user", content: "hi" }],
+				meta: {} as any
+			} as any)
+			await adapter.generateText()
+			expect(bodyOfGenerate().logit_bias).toEqual({ "12": -2, "42": 5 })
+			expect(adapter.ignoredSamplers).toEqual([])
+		}
+		expect(vi.mocked(resolveLogitBias).mock.lastCall?.[1]).toEqual(ENTRIES)
+	})
+
+	test("nothing resolved: no logit_bias key, and the receipt says it was left out", async () => {
+		const { resolveLogitBias } = await import(
+			"$lib/server/connections/logitBiasTokens"
+		)
+		vi.mocked(resolveLogitBias).mockResolvedValue({
+			biases: new Map(),
+			skipped: [{ text: "hmm", reason: "the server did not answer" }],
+			ignored: true
+		})
+		const adapter = makeAdapter(
+			{ extraJson: { stream: false } },
+			{ logitBias: ENTRIES }
+		)
+		adapter.withCompiledPrompt({
+			prompt: "hi",
+			messages: [{ role: "user", content: "hi" }],
+			meta: {} as any
+		} as any)
+		await adapter.generateText()
+		expect(bodyOfGenerate()).not.toHaveProperty("logit_bias")
+		expect(adapter.ignoredSamplers).toEqual(["logitBias"])
 	})
 })

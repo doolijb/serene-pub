@@ -16,6 +16,10 @@ import { insertLegacy } from "$lib/server/messages/store"
 import { canonicalChannel } from "$lib/server/messages/channels"
 import { InterpolationEngine } from "$lib/server/utils/interpolation/InterpolationEngine"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
+import {
+	applyRetold,
+	retoldMembersForSession
+} from "$lib/server/lorebooks/retold"
 
 // db is the global Db — see db/types.d.ts
 
@@ -84,7 +88,10 @@ export async function collectSessionGreetings(
 	sessionId: number
 ): Promise<{ isGroup: boolean; entries: SessionGreetingEntry[] }> {
 	const [session] = await db
-		.select({ isGroup: schema.sessions.isGroup })
+		.select({
+			isGroup: schema.sessions.isGroup,
+			lorebookId: schema.sessions.lorebookId
+		})
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
@@ -107,11 +114,25 @@ export async function collectSessionGreetings(
 		orderBy: (cp, { asc }) => asc(cp.position)
 	})
 
+	// A seat whose card is a member of the session's book greets in the
+	// member's words when the member retells the first message or the other
+	// greetings (PLAN-cast-retold-fields). Empty when nobody retells.
+	const retold = session
+		? await retoldMembersForSession(
+				db,
+				{ id: sessionId, lorebookId: session.lorebookId },
+				sessionCharacters.flatMap((cc) =>
+					cc.character ? [cc.character.id] : []
+				)
+			)
+		: new Map()
+
 	const entries: SessionGreetingEntry[] = []
 	for (const cc of sessionCharacters) {
 		if (!cc.character) continue
+		const member = retold.get(cc.character.id)
 		const texts = buildCharacterFirstSessionMessage({
-			character: cc.character,
+			character: member ? applyRetold(cc.character, member) : cc.character,
 			persona: sessionPersona?.persona,
 			isGroup
 		})

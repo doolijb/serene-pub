@@ -39,3 +39,18 @@ describe("Layout's catch-all leaves these refusals to the surface that asked", (
 		)
 	})
 })
+
+describe("the catch-all is the loadouts' one toast (10-05: toasts are central)", () => {
+	/**
+	 * The Loadouts sheet and the Models view's *Use in…* only reset their own
+	 * state on a refusal (the sheet drops its pending pick; *Use in…* speaks
+	 * it to a screen reader) — neither shows it. So the central listener must
+	 * toast every `loadouts:` refusal, and none may be listed as handled.
+	 */
+	test("no loadouts refusal is left to a view", () => {
+		const handled = handledErrorEvents()
+		for (const verb of ["create", "update", "delete", "setDefault", "merge", "makeIt"])
+			expect(handled.has(`loadouts:${verb}:error`), verb).toBe(false)
+		expect(handled.has("localModels:mattingRemove:error")).toBe(false)
+	})
+})

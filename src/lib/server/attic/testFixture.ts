@@ -158,7 +158,10 @@ export async function configurationState(db: Db) {
 		connections: await rows(
 			`SELECT id, name, type, base_url, preset, extra_json::text AS extra, capabilities::text AS caps FROM connections ORDER BY id`
 		),
-		connectionDefaults: await rows(`SELECT * FROM connection_defaults ORDER BY 1`),
+		// The transform defaults are default-flagged loadouts since I12.
+		connectionDefaults: await rows(
+			`SELECT default_for_input AS input, default_for_output AS output, connection_id, connection_model_id, sampling_config_id FROM loadouts WHERE default_for_input IS NOT NULL ORDER BY 1, 2`
+		),
 		sampling: await rows(
 			`SELECT id, name, seed_key, values::text AS v, enabled::text AS e FROM sampling_configs ORDER BY id`
 		),

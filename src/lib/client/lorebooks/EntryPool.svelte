@@ -26,14 +26,17 @@
 	import { nothingMatchesLine, POOL_SORTS } from "./scopes"
 	import { kindLabel } from "./sections/kinds"
 	import { getLorePoolCtx } from "./sections/poolContext"
+	import { bookReadOnly } from "./bookData.svelte"
 	import type { PoolSource, SectionDescriptor } from "./sections/types"
 
 	/**
 	 * The one list, under its header.
 	 *
 	 * Every scope draws this: a scope is a facet over the pool, not a list of
-	 * its own, so the search, the kind chips, the state chips and the sort
-	 * compose rather than each belonging to somebody. The three reading lenses
+	 * its own, so the search, the state chips and the sort compose rather
+	 * than each belonging to somebody. Which kinds are listed is the scope's
+	 * alone — the rail at desk, the scope popout at compact (09-30 Q1) — so
+	 * the pool draws no kind chips of its own. The three reading lenses
 	 * are ways of drawing the same rows — List is the row frame with the row's
 	 * own kind inside it, Cards is the pool's own shape, and Tree nests by each
 	 * row's anchor and falls back to List when nothing in the pool is nested.
@@ -53,8 +56,6 @@
 		filters: PoolFilters
 		/** What each chip says, counted over the whole scope. */
 		facets: FacetCounts
-		/** The scope this list is of, as its heading. */
-		scopeTitle: string
 		/** "30 entries · 4 reached the last turn". */
 		summary: string
 		orderBy: string
@@ -99,7 +100,6 @@
 		lens,
 		filters,
 		facets,
-		scopeTitle,
 		summary,
 		orderBy,
 		mode,
@@ -125,11 +125,17 @@
 	 * is asked of the whole pool rather than of the rows on screen: a
 	 * descendant a facet is hiding is still a descendant.
 	 */
+	/** A shared book is read-only (PLAN-private-messages §6.7): no filing,
+	 *  reordering, deleting or row extras — only opening a row. */
+	const readOnlyBook = bookReadOnly()
+	let readOnly = $derived(readOnlyBook.value)
+
 	const dragOptions = (item: PoolItem) => ({
 		key: item.key,
 		// A cast member lists in All (note 12) but is never filed or filed
 		// under: the people are not lore's parents.
-		draggable: item.kind !== SCENE_KIND && item.kind !== CAST_KIND,
+		draggable:
+			!readOnly && item.kind !== SCENE_KIND && item.kind !== CAST_KIND,
 		canDrop: (from: string) =>
 			item.kind !== CAST_KIND &&
 			canFileUnder(from, item.key, poolCtx.pool, poolCtx.newRowBranchId),
@@ -166,13 +172,6 @@
 	let reorderable = $derived(
 		narrowed && effectiveLens === "list" && !filtering
 	)
-
-	function toggleKind(kind: string) {
-		const next = filters.kinds.includes(kind)
-			? filters.kinds.filter((k) => k !== kind)
-			: [...filters.kinds, kind]
-		onFilters({ ...filters, kinds: next })
-	}
 
 	function toggleCollapsed(key: string) {
 		if (collapsed.has(key)) collapsed.delete(key)
@@ -237,18 +236,6 @@
 {/snippet}
 
 {#snippet filterChips()}
-	{#if facets.kinds.length > 1}
-		<div class="flex flex-wrap gap-1" role="group" aria-label="Kinds">
-			{#each facets.kinds as facet (facet.kind)}
-				{@render chip(
-					kindLabel(facet.kind),
-					facet.count,
-					filters.kinds.includes(facet.kind),
-					() => toggleKind(facet.kind)
-				)}
-			{/each}
-		</div>
-	{/if}
 	<div class="flex flex-wrap gap-1" role="group" aria-label="States">
 		{@render chip("Read in last turn", facets.readIn, filters.readIn, () =>
 			onFilters({ ...filters, readIn: !filters.readIn })
@@ -273,10 +260,9 @@
 				})
 		)}
 	</div>
-	<!-- Needs keywords stays a filter (note 5, 2026-10-02): the same rule as
-	     the Loose ends queue's keyword chore, as a narrowing of this list.
-	     The queue itself opens from the rail, or the chip beside the scopes
-	     in compact. -->
+	<!-- Needs keywords is a filter (note 5): the same rule as the Loose
+	     ends queue's keyword chore, as a narrowing of this list. The queue
+	     itself opens from the rail's foot, or the scope popout in compact. -->
 	<div class="flex flex-wrap gap-1" role="group" aria-label="Chores">
 		{@render chip(
 			"Needs keywords",
@@ -337,7 +323,7 @@
 			positioning={{ placement: "bottom-end" }}
 		>
 			<Popover.Trigger
-				class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-1"
+				class="btn btn-sm preset-tonal-surface shrink-0 p-1"
 				title="More options"
 				aria-label="More options for {item.name}"
 			>
@@ -349,7 +335,7 @@
 						class="card bg-surface-100-900 flex min-w-36 flex-col gap-1 p-2 shadow-xl"
 					>
 						<button
-							class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+							class="btn btn-sm preset-tonal-surface w-full justify-start"
 							type="button"
 							onclick={() => {
 								openMenuKey = null
@@ -358,11 +344,13 @@
 						>
 							{#if item.kind === CAST_KIND}
 								<Icons.Users size={14} /> Open in Cast
+							{:else if readOnly}
+								<Icons.Eye size={14} /> Open
 							{:else}
 								<Icons.Pencil size={14} /> Edit
 							{/if}
 						</button>
-						{#if item.kind !== CAST_KIND}
+						{#if item.kind !== CAST_KIND && !readOnly}
 							{#if Extra}
 								<Extra
 									{source}
@@ -431,7 +419,10 @@
 						{/if}
 					</button>
 				{:else}
-					<span class="mt-3 ml-3 w-6 shrink-0" aria-hidden="true"></span>
+					<span
+						class="mt-3 ml-3 w-6 shrink-0"
+						aria-hidden="true"
+					></span>
 				{/if}
 			{/if}
 			<div
@@ -507,10 +498,9 @@
 
 <div class="flex min-h-0 flex-1 flex-col gap-3" data-lore-pool={effectiveLens}>
 	<div class="flex flex-col gap-2">
+		<!-- The scope is named once, on the lens line (the scope chip at
+		     compact); this line is the pool's own: its summary and New. -->
 		<div class="flex min-w-0 items-baseline gap-2">
-			<h2 class="min-w-0 shrink-0 text-sm font-semibold">
-				{scopeTitle}
-			</h2>
 			<span
 				class="text-surface-700-300 min-w-0 flex-1 truncate text-xs"
 				data-lore-pool-summary
@@ -523,9 +513,9 @@
 			<div class="flex flex-wrap items-center gap-2">
 				{@render sortControl()}
 				{@render toolbarExtra?.()}
-				{#if narrowed && effectiveLens === "list"}
+				{#if narrowed && effectiveLens === "list" && !readOnly}
 					<button
-						class="btn btn-sm preset-filled-surface-400-600 shrink-0"
+						class="btn btn-sm preset-tonal-surface shrink-0"
 						type="button"
 						onclick={startReorder}
 						disabled={items.length === 0 || !reorderable}
@@ -570,9 +560,9 @@
 					</Portal>
 				</Popover>
 				{@render toolbarExtra?.()}
-				{#if narrowed && effectiveLens === "list"}
+				{#if narrowed && effectiveLens === "list" && !readOnly}
 					<button
-						class="btn btn-sm preset-filled-surface-400-600 shrink-0"
+						class="btn btn-sm preset-tonal-surface shrink-0"
 						type="button"
 						onclick={startReorder}
 						disabled={items.length === 0 || !reorderable}
@@ -658,8 +648,10 @@
 			<EmptyState
 				icon={descriptor.icon}
 				message={descriptor.emptyCopy.body}
-				ctaLabel={onNew ? descriptor.emptyCopy.action : undefined}
-				onCta={onNew}
+				ctaLabel={onNew && !readOnly
+					? descriptor.emptyCopy.action
+					: undefined}
+				onCta={readOnly ? undefined : onNew}
 			/>
 		{:else if effectiveLens === "cards"}
 			<div

@@ -7,7 +7,8 @@
  *
  * Three layers stay separate, exactly as the plan insists:
  *   available   — every declared panel (this.decls, active or not)
- *   active      — instance.active (seeded from decl + layout row + intents)
+ *   active      — instance.active (seeded from what the layout draws + the
+ *                 layout row's saved state + intents)
  *   placed      — pack(tier, active) — derived, never stored
  *
  * **Declarations and instances** (brief 7b, layout plan §M.3.7). `decls` is
@@ -69,21 +70,41 @@ const DEFAULT_PRIMARY: ModePanel = {
 	id: "conversation",
 	title: "Conversation",
 	role: "primary",
-	surface: { kind: "remote", owner: "core", component: "messages" },
-	defaultActive: true
+	surface: { kind: "remote", owner: "core", component: "messages" }
 }
 
-function toInstance(p: ModePanel, layout?: LayoutBlob): PanelInstance {
+/**
+ * The ids a layout DRAWS (the SDK's `drawnWidgetIds`: middle, left, right,
+ * strips). Whether a widget starts on is this, never a field of its
+ * declaration (C2): a genre that wants a widget on places it in its layout,
+ * and a session's layout is a copy of one.
+ */
+function drawnIn(layout?: LayoutBlob): ReadonlySet<string> {
+	if (!layout) return new Set()
+	return new Set(
+		drawnWidgetIds({
+			zoneLayout: layout.zoneLayout,
+			widgetGrid: layout.widgetGrid,
+			arrangedGrid: layout.arrangedGrid
+		} as SessionLayoutV1)
+	)
+}
+
+function toInstance(
+	p: ModePanel,
+	layout?: LayoutBlob,
+	drawn: ReadonlySet<string> = drawnIn(layout)
+): PanelInstance {
 	const role = p.role === "primary" ? "primary" : "secondary"
 	const saved = layout?.active?.find((a) => a.id === p.id)
 	const norm = normalizeLayout(p.layout, role)
-	// Active if: primary always; else saved.on wins; else the decl default.
+	// Active if: primary always; else saved.on wins; else the layout draws it.
 	const active =
 		role === "primary"
 			? true
 			: saved?.on !== undefined
 				? saved.on
-				: !!p.defaultActive
+				: drawn.has(p.id)
 	return {
 		id: p.id,
 		widgetId: p.id,
@@ -236,7 +257,8 @@ export class SurfaceManager implements WidgetEventSource {
 			? modePanels
 			: [DEFAULT_PRIMARY, ...modePanels]
 		this.#declared = decls
-		this.decls = decls.map((p) => toInstance(p, layout))
+		const drawn = drawnIn(layout)
+		this.decls = decls.map((p) => toInstance(p, layout, drawn))
 		this.copies = []
 		this.colFr = layout?.tierSizeOverrides
 			? { ...layout.tierSizeOverrides }
@@ -279,6 +301,10 @@ export class SurfaceManager implements WidgetEventSource {
 		const counts = new Map<string, number>()
 		const next: PanelInstance[] = []
 		for (const id of named) {
+			// ⏳ An id a declaration holds itself is that declaration's own
+			// instance, never a copy: an aliased id (`world-state`) reads as a
+			// copy of Stats only while nothing declares it (core offers none).
+			if (this.#declared.some((d) => d.id === id)) continue
 			const widget = widgetOfInstance(id)
 			const decl = this.#declared.find((d) => d.id === widget)
 			if (!decl) continue
@@ -328,9 +354,17 @@ export class SurfaceManager implements WidgetEventSource {
 		this.#save(this.toBlob())
 	}
 
-	/** Restore the mode's default layout — activation, order, sizes, all of it. */
+	/**
+	 * Restore the defaults — activation, order, sizes, all of it: every widget
+	 * on exactly when the layout draws it (C2), nothing else remembered.
+	 */
 	resetLayout() {
-		this.decls = this.#declared.map((p) => toInstance(p, {}))
+		const drawn = drawnIn({
+			zoneLayout: this.zoneLayout,
+			widgetGrid: this.widgetGrid,
+			arrangedGrid: this.arrangedGrid
+		})
+		this.decls = this.#declared.map((p) => toInstance(p, {}, drawn))
 		this.copies = []
 		this.#syncCopies()
 		this.colFr = {}
@@ -552,6 +586,16 @@ export class SurfaceManager implements WidgetEventSource {
 	 */
 	announceGenreFieldsChanged() {
 		this.#emit({ kind: "genreFields:changed" })
+	}
+
+	/**
+	 * 🚧 The session's story moved (Chronicle, W3): its story clock or line
+	 * (`state:changed`), a scene (`scenes:list`), or a history entry of its
+	 * book (`storyMoved.ts`). Every subscriber hears `story:moved`, scoped as
+	 * `lore:ranked` is, and the Chronicle asks again. Carries nothing.
+	 */
+	announceStoryMoved() {
+		this.#emit({ kind: "story:moved" })
 	}
 
 	/* ── the session-level widget event source (PLAN 25) ──────────────────

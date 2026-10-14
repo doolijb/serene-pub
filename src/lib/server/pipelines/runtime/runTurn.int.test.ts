@@ -835,6 +835,14 @@ describe("script chains on a turn", () => {
 		expect(apps[1].changed).toBe(true)
 		expect(apps[1].logs).toEqual(["shouting"])
 		expect(apps[1].appliedBy).toBe("substrate")
+		// Where it ran, as the seam address (PLAN-script-placement D1), with
+		// the older fields kept beside it for one release.
+		expect(apps[1]).toMatchObject({
+			at: "in:text",
+			slot: "scripts",
+			port: "text",
+			phase: "before"
+		})
 	})
 
 	it("a stop verdict truncates at the earliest index and marks the winner (S4)", async () => {
@@ -872,6 +880,86 @@ describe("script chains on a turn", () => {
 		expect(winner?.verdict).toBe(
 			"The Ashguard ride at dawn.".indexOf("ride")
 		)
+	})
+
+	/**
+	 * A chain stored at an address the step no longer declares — an interior
+	 * point this definition never had stands in for one a newer version
+	 * dropped (PLAN-script-placement D4). The executor reads declared seams
+	 * only, so the run settles it before the first node.
+	 */
+	async function placeUnplaced(ids: number[]): Promise<() => Promise<void>> {
+		await attachChain([])
+		const { nodeKey } = await hookNodeKey()
+		const [row] = await db
+			.select()
+			.from(schema.pipelineConfigValues)
+			.where(eq(schema.pipelineConfigValues.slot, "scripts"))
+			.limit(1)
+		const [inserted] = await db
+			.insert(schema.pipelineConfigValues)
+			.values({
+				configId: row!.configId,
+				nodeKey,
+				slot: "scripts",
+				path: "a-point-that-is-gone",
+				value: ids
+			})
+			.returning()
+		return async () => {
+			await db
+				.delete(schema.pipelineConfigValues)
+				.where(eq(schema.pipelineConfigValues.id, inserted!.id))
+		}
+	}
+
+	it("a stop guard whose seam is gone halts the run before it proceeds, naming guard and step (D4)", async () => {
+		const { createScript } = await import(
+			"$lib/server/pipelines/entities/scripts"
+		)
+		const guard = await createScript(db, {
+			typeId: "core:script:text/stop@1",
+			name: "Stranded guard"
+		})
+		const cleanup = await placeUnplaced([guard.id])
+		try {
+			const receipt: any = await turn({ seed: "turn:scripts-lost-guard" })
+			expect(receipt.outcome).toBe("halt")
+			expect(receipt.haltReason).toMatch(
+				/^stop guard "Stranded guard" has no place to run on step .+$/
+			)
+			expect(receipt.haltNodeKey).toBe((await hookNodeKey()).nodeKey)
+			// Before it proceeds: no node ran, so no model was asked.
+			expect(receipt.nodes).toEqual([])
+		} finally {
+			await cleanup()
+		}
+	})
+
+	it("an unplaced chain of transforms is skipped with one receipt note (D4)", async () => {
+		const { createScript } = await import(
+			"$lib/server/pipelines/entities/scripts"
+		)
+		const t = await createScript(db, {
+			typeId: "core:script:text/transform@1",
+			name: "Stranded transform"
+		})
+		const cleanup = await placeUnplaced([t.id])
+		try {
+			const { generatedText } = await import(
+				"$lib/server/pipelines/runtime/runTurn"
+			)
+			const receipt: any = await turn({ seed: "turn:scripts-lost-transform" })
+			expect(receipt.outcome).toBe("ok")
+			expect(generatedText(receipt)).toBe("The Ashguard ride at dawn.")
+			expect(
+				(receipt.notes ?? []).filter((n: string) =>
+					/^scripts at scripts\/a-point-that-is-gone on .+: no longer here, skipped$/.test(n)
+				)
+			).toHaveLength(1)
+		} finally {
+			await cleanup()
+		}
 	})
 
 	it("a disabled link keeps its place and does nothing", async () => {

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import * as Icons from "@lucide/svelte"
-	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
+	import { Popover, Portal, Switch } from "@skeletonlabs/skeleton-svelte"
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -15,6 +15,15 @@
 		sameMemberDraft,
 		type MemberDraft
 	} from "./memberDraft"
+	import {
+		retoldRows,
+		setRetold,
+		takeFromCard,
+		type RetoldProseField
+	} from "./retoldRows"
+	import { memberFaceSrc } from "./memberFace"
+	import { mediaThumbUrl } from "$lib/client/utils/media"
+	import { awaitReply } from "$lib/client/utils/awaitReply"
 	import RowMenu from "$lib/client/components/menus/RowMenu.svelte"
 	import {
 		CAST_STATES,
@@ -41,6 +50,8 @@
 	interface Props {
 		member: CastMember
 		row: CastRow
+		/** The book the member is in — the face picker lists its pictures. */
+		lorebookId: number
 		hasUnsavedChanges: boolean
 		/**
 		 * Write the change to the member. Handed the draft's patch and the patch
@@ -74,6 +85,7 @@
 	let {
 		member,
 		row,
+		lorebookId,
 		hasUnsavedChanges = $bindable(false),
 		onSave,
 		onAmend,
@@ -294,6 +306,166 @@
 		member.aliases.filter((a) => !draft.aliases.includes(a))
 	)
 
+	// ── From the card: the member's own words (retold fields) ──────────────
+	//
+	// A card is a starter. Each prose field may be RETOLD here — the member's
+	// text is read instead of the card's. Switching back to the card keeps
+	// the member's text (hidden, never discarded). Everything goes through
+	// the draft, so a retold change saves — or files as a dated change — with
+	// the rest of the form.
+
+	const switchClass =
+		"preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+
+	let retold = $derived(
+		member.linked && card ? retoldRows(draft, card) : []
+	)
+
+	type ProseTextField = Exclude<RetoldProseField, "alternateGreetings">
+
+	function snapshot(): MemberDraft {
+		return $state.snapshot(draft) as MemberDraft
+	}
+
+	function toggleRetold(field: RetoldProseField, on: boolean) {
+		draft = setRetold(
+			snapshot(),
+			field,
+			on,
+			card,
+			$state.snapshot(pristine) as MemberDraft
+		)
+	}
+
+	function takeCardValue(field: RetoldProseField) {
+		draft = takeFromCard(snapshot(), field, card)
+	}
+
+	function setText(field: ProseTextField, value: string) {
+		draft[field] = value
+	}
+
+	function setGreeting(index: number, value: string) {
+		draft.alternateGreetings = draft.alternateGreetings.map((g, i) =>
+			i === index ? value : g
+		)
+	}
+
+	// ── The member's face ──────────────────────────────────────────────────
+	//
+	// Drawn while `retold.face` and a `faceMediaId` say so — a picture from
+	// the card's gallery or one uploaded to this lorebook — else the card's
+	// own avatar. ⚠ A face, not a portrait (the picture pipeline) and not an
+	// avatar (the card's own picture).
+
+	let faceSrc = $derived(memberFaceSrc(draft))
+	let facePickerOpen = $state(false)
+	let gallery = $state<number[]>([])
+	/** The card whose gallery has ARRIVED (an empty list is also an answer). */
+	let galleryFor = $state<number | null>(null)
+	let faceUploading = $state(false)
+	let faceError = $state<string | null>(null)
+	/** This book's pictures (uploads), newest first; null until listed. */
+	let bookPictures = $state<number[] | null>(null)
+	let bookPicturesFor = $state<number | null>(null)
+
+	$effect(() => {
+		if (!facePickerOpen) return
+		const bookId = lorebookId
+		const release = declareInterest<"lorebooks:listMemberFaces">(
+			"lorebooks:listMemberFaces",
+			(msg) => {
+				if (msg.lorebookId !== bookId) return
+				bookPictures = msg.mediaIds
+				bookPicturesFor = bookId
+			}
+		)
+		socket.emit("lorebooks:listMemberFaces", { lorebookId: bookId })
+		return release
+	})
+
+	$effect(() => {
+		if (!facePickerOpen) return
+		const cardId = cardIdForSprites
+		if (cardId == null) return
+		const release = declareInterest<"characters:listGallery">(
+			interestKey("characters:listGallery", cardId),
+			(msg) => {
+				if (msg.characterId !== cardId) return
+				gallery = msg.images.map((m) => m.id)
+				galleryFor = cardId
+			}
+		)
+		socket.emit("characters:listGallery", { characterId: cardId })
+		return release
+	})
+
+	function pickFace(mediaId: number) {
+		const next = snapshot()
+		draft = {
+			...next,
+			faceMediaId: mediaId,
+			retold: { ...next.retold, face: true }
+		}
+		facePickerOpen = false
+	}
+
+	function useCardPicture() {
+		// The face is kept — switching back is one click away.
+		draft = setRetold(snapshot(), "face", false, card)
+		facePickerOpen = false
+	}
+
+	/**
+	 * Upload a picture to this lorebook and pick it, like a gallery picture:
+	 * the server only STORES it, and the draft takes it as the face, so Save
+	 * (or Save as of a date) writes it like every other field (review
+	 * 2026-10-13). It joins **This book's pictures** at the front.
+	 */
+	async function uploadFace(e: Event) {
+		const input = e.currentTarget as HTMLInputElement
+		const file = input.files?.[0]
+		input.value = ""
+		if (!file) return
+		if (!file.type.startsWith("image/")) {
+			faceError = "Choose an image file."
+			return
+		}
+		const castId = member.id
+		faceUploading = true
+		faceError = null
+		try {
+			const buffer = await file.arrayBuffer()
+			const reply = await awaitReply({
+				socket,
+				event: "lorebooks:uploadMemberFace",
+				params: {
+					castId,
+					imageFile: new Uint8Array(buffer),
+					mimeType: file.type
+				},
+				errorEvent: "lorebooks:uploadMemberFace:error",
+				fallbackError: "The picture could not be uploaded.",
+				match: (data) => data?.castId === castId
+			})
+			const mediaId = reply?.mediaId
+			if (typeof mediaId !== "number") return
+			bookPictures = [
+				mediaId,
+				...(bookPictures ?? []).filter((id) => id !== mediaId)
+			]
+			// The member may have changed while the picture travelled.
+			if (draftFor === castId) pickFace(mediaId)
+		} catch (err) {
+			faceError =
+				err instanceof Error && err.message
+					? err.message
+					: "The picture could not be uploaded."
+		} finally {
+			faceUploading = false
+		}
+	}
+
 	function addAlias() {
 		const value = aliasDraft.trim()
 		aliasDraft = ""
@@ -315,6 +487,7 @@
 		>
 			<Avatar
 				char={card as any}
+				src={faceSrc}
 				name={member.name}
 				size="lg"
 				kind={member.kind === "persona" ? "persona" : "character"}
@@ -349,6 +522,159 @@
 					</span>
 				{/if}
 			</div>
+			{#if member.linked && card}
+				<!-- The member's face: a picture from the card's gallery or one
+				     uploaded to this lorebook. A popover, not a dialog: it picks
+				     into the draft, and Save writes it like everything else. -->
+				<Popover
+					open={facePickerOpen}
+					onOpenChange={(e) => {
+						facePickerOpen = e.open
+						if (e.open) faceError = null
+					}}
+					positioning={{ placement: "bottom-start" }}
+				>
+					<Popover.Trigger
+						class="btn btn-sm preset-tonal-surface mt-2"
+						title="Draw this member with a picture of their own"
+						data-cast-change-face
+					>
+						<Icons.ImageUp size={14} aria-hidden="true" />
+						Change face
+					</Popover.Trigger>
+					<Portal>
+						<Popover.Positioner class="z-[1000]!">
+							<Popover.Content
+								class="card bg-surface-50-950 border-surface-200-800 flex w-[min(90vw,360px)] flex-col gap-3 border p-4 shadow-xl"
+							>
+								<div class="flex flex-col gap-1">
+									<p class="text-sm font-semibold">
+										Card gallery
+									</p>
+									{#if galleryFor !== cardIdForSprites}
+										<p class="text-surface-600-400 text-xs">
+											Loading the card's gallery…
+										</p>
+									{:else if gallery.length === 0}
+										<p class="text-surface-600-400 text-xs">
+											The card's gallery is empty.
+										</p>
+									{:else}
+										<div
+											class="grid max-h-56 grid-cols-4 gap-2 overflow-y-auto"
+										>
+											{#each gallery as mediaId (mediaId)}
+												{@const current =
+													draft.retold.face === true &&
+													draft.faceMediaId === mediaId}
+												<button
+													type="button"
+													class="aspect-square overflow-hidden rounded-md ring-2 {current
+														? 'ring-primary-500'
+														: 'ring-transparent hover:ring-surface-400-600'}"
+													aria-pressed={current}
+													title="Use this picture as their face"
+													aria-label="Use gallery picture {mediaId} as their face"
+													onclick={() => pickFace(mediaId)}
+												>
+													<img
+														src={mediaThumbUrl(mediaId)}
+														alt=""
+														class="h-full w-full object-cover"
+														loading="lazy"
+													/>
+												</button>
+											{/each}
+										</div>
+									{/if}
+								</div>
+								<hr class="border-surface-300-700" />
+								<div class="flex flex-col gap-1">
+									<p class="text-sm font-semibold">
+										This book's pictures
+									</p>
+									{#if bookPicturesFor !== lorebookId}
+										<p class="text-surface-600-400 text-xs">
+											Loading this book's pictures…
+										</p>
+									{:else if !bookPictures?.length}
+										<p class="text-surface-600-400 text-xs">
+											None yet. Upload one below.
+										</p>
+									{:else}
+										<div
+											class="grid max-h-56 grid-cols-4 gap-2 overflow-y-auto"
+											data-cast-book-pictures
+										>
+											{#each bookPictures as mediaId (mediaId)}
+												{@const current =
+													draft.retold.face === true &&
+													draft.faceMediaId === mediaId}
+												<button
+													type="button"
+													class="aspect-square overflow-hidden rounded-md ring-2 {current
+														? 'ring-primary-500'
+														: 'ring-transparent hover:ring-surface-400-600'}"
+													aria-pressed={current}
+													title="Use this picture as their face"
+													aria-label="Use book picture {mediaId} as their face"
+													onclick={() => pickFace(mediaId)}
+												>
+													<img
+														src={mediaThumbUrl(mediaId)}
+														alt=""
+														class="h-full w-full object-cover"
+														loading="lazy"
+													/>
+												</button>
+											{/each}
+										</div>
+									{/if}
+									<label
+										class="btn btn-sm preset-tonal-surface mt-1 w-full justify-start {faceUploading
+											? 'pointer-events-none opacity-60'
+											: ''}"
+									>
+										<Icons.Upload size={14} aria-hidden="true" />
+										{faceUploading
+											? "Uploading…"
+											: "Upload a picture"}
+										<input
+											class="sr-only"
+											type="file"
+											accept="image/*"
+											disabled={faceUploading}
+											onchange={uploadFace}
+										/>
+									</label>
+									<p class="text-surface-700-300 text-xs">
+										Kept with this lorebook, not added to
+										the card, and picked as their face. Save
+										to keep it, or Save as of a date to date
+										it.
+									</p>
+									{#if faceError}
+										<p class="text-error-600-400 text-xs" role="alert">
+											{faceError}
+										</p>
+									{/if}
+								</div>
+								<hr class="border-surface-300-700" />
+								<button
+									class="btn btn-sm preset-tonal-surface w-full justify-start"
+									type="button"
+									disabled={draft.retold.face !== true}
+									onclick={useCardPicture}
+									title="Draw them with the card's own picture again; their face is kept"
+								>
+									<Icons.Undo2 size={14} aria-hidden="true" />
+									Use the card's picture
+								</button>
+							</Popover.Content>
+						</Popover.Positioner>
+					</Portal>
+				</Popover>
+			{/if}
 		</div>
 		<button
 			class="btn btn-sm preset-tonal-error shrink-0 p-1.5"
@@ -448,6 +774,141 @@
 			{draft.summary.length} / 200
 		</p>
 	</div>
+
+	{#if retold.length > 0}
+		<!-- From the card (retold fields): the card is a starter; each field
+		     may be told in this member's own words for this story. Off, the
+		     card's text reads through, shown dimmed; the member's own text is
+		     kept, hidden. -->
+		<div class="panel-inset flex flex-col gap-3" data-cast-retold>
+			<div class="flex flex-col gap-1">
+				<p class="text-sm font-semibold">From the card</p>
+				<p class="text-surface-700-300 text-xs leading-relaxed">
+					The card is a starter. Switch a field to <strong
+						>Retold here</strong
+					> to tell it in this member's own words for this story; the card
+					itself is not changed. Switching back to the card keeps what you
+					wrote here, hidden, until you switch it on again.
+				</p>
+			</div>
+			{#each retold as r (r.field)}
+				{@const fieldId = `castRetold-${r.field}-${member.id}`}
+				<div class="flex flex-col gap-1" data-retold-field={r.field}>
+					<!-- The label on its own line: the panel is narrow (240–320px),
+					     and label + switch + button on one row left the label
+					     clipped under the switch (walk 2026-10-13). -->
+					<label class="text-sm font-semibold" for={fieldId}>
+						{r.label}
+					</label>
+					<div class="flex flex-wrap items-center justify-between gap-2">
+						<Switch
+							name="{fieldId}-retold"
+							checked={r.retold}
+							onCheckedChange={(e) => toggleRetold(r.field, e.checked)}
+							class="flex items-center gap-2 text-xs"
+						>
+							<Switch.Control class={switchClass}>
+								<Switch.Thumb />
+							</Switch.Control>
+							<Switch.Label class="w-24">
+								<span class="sr-only">{r.label}:</span>
+								{r.retold ? "Retold here" : "From the card"}
+							</Switch.Label>
+							<Switch.HiddenInput />
+						</Switch>
+						<button
+							class="btn btn-sm preset-tonal-surface"
+							type="button"
+							disabled={!r.retold || !r.cardHasText}
+							title="Copy the card's current {r.label.toLowerCase()} into this member's"
+							onclick={() => takeCardValue(r.field)}
+						>
+							<Icons.Copy size={14} aria-hidden="true" />
+							Take from card
+						</button>
+					</div>
+					{#if r.field === "alternateGreetings"}
+						{#if r.retold}
+							<div class="flex flex-col gap-2" id={fieldId}>
+								{#each draft.alternateGreetings as greeting, i (i)}
+									<div class="flex items-start gap-2">
+										<textarea
+											class="textarea min-h-12 flex-1 text-sm"
+											aria-label="Alternate greeting {i + 1}"
+											value={greeting}
+											oninput={(e) =>
+												setGreeting(i, e.currentTarget.value)}
+										></textarea>
+										<button
+											class="btn btn-sm preset-tonal-surface shrink-0 p-1.5"
+											type="button"
+											title="Remove greeting {i + 1}"
+											aria-label="Remove greeting {i + 1}"
+											onclick={() =>
+												(draft.alternateGreetings =
+													draft.alternateGreetings.filter(
+														(_, j) => j !== i
+													))}
+										>
+											<Icons.X size={14} aria-hidden="true" />
+										</button>
+									</div>
+								{/each}
+								<button
+									class="btn btn-sm preset-tonal-surface self-start"
+									type="button"
+									onclick={() =>
+										(draft.alternateGreetings = [
+											...draft.alternateGreetings,
+											""
+										])}
+								>
+									<Icons.Plus size={14} aria-hidden="true" /> Add
+									greeting
+								</button>
+							</div>
+						{:else if r.cardHasText}
+							<ul
+								class="flex flex-col gap-2 opacity-60"
+								id={fieldId}
+								aria-label="The card's alternate greetings"
+							>
+								{#each r.cardValue as string[] as greeting, i (i)}
+									<li
+										class="textarea min-h-12 whitespace-pre-wrap text-sm"
+									>
+										{greeting}
+									</li>
+								{/each}
+							</ul>
+						{:else}
+							<p class="text-surface-600-400 text-xs" id={fieldId}>
+								The card has none.
+							</p>
+						{/if}
+					{:else}
+						{@const field = r.field as ProseTextField}
+						<textarea
+							id={fieldId}
+							class="textarea text-sm {field === 'exampleDialogues'
+								? 'min-h-32 font-mono'
+								: 'min-h-20'} {r.retold ? '' : 'opacity-60'}"
+							disabled={!r.retold}
+							placeholder={r.retold ? "" : "The card has none."}
+							value={r.retold ? draft[field] : (r.cardValue as string)}
+							oninput={(e) => setText(field, e.currentTarget.value)}
+						></textarea>
+					{/if}
+					{#if r.kept}
+						<p class="text-surface-700-300 text-xs">
+							Their own {r.label.toLowerCase()} is kept, hidden. Switch
+							to Retold here to read it again.
+						</p>
+					{/if}
+				</div>
+			{/each}
+		</div>
+	{/if}
 
 	<div class="panel-inset flex flex-col gap-3">
 		<p class="text-sm font-semibold">Status in world</p>

@@ -6,7 +6,7 @@
  * any types, so this stands on its own.
  */
 
-import type { ImageGenRequest } from "$lib/shared/imageGen/types"
+import type { DrawingSheet, ImageGenRequest } from "$lib/shared/imageGen/types"
 
 export interface ImagesGenerateParams {
 	connectionId: number
@@ -31,6 +31,13 @@ export interface ImagesGenerateParams {
 	 * absent.
 	 */
 	runId?: string
+	/**
+	 * 🚧 The workflow a template-payload connection (ComfyUI) draws with —
+	 * required for one, ignored by a flat one (DESIGN-image-generation §4.8
+	 * step 5, *Draw a test*). With no `samplingConfigId`, the workflow's own
+	 * *Default* config supplies the dials.
+	 */
+	workflowId?: number
 }
 
 /**
@@ -94,6 +101,46 @@ export interface ImageProfileSchemaResponse {
 	schema?: Record<string, unknown>
 	defaults?: Record<string, unknown>
 	capabilities?: Record<string, unknown>
+	error?: string
+}
+
+/**
+ * The drawing sheet of an image PAIR — what the sampling form greys by.
+ *
+ * Both halves absent asks for the instance's Image default, which is the pair
+ * a sampling config is most likely to run against. Admin only: the answer is a
+ * fact about a connection.
+ */
+export interface ImageDrawingSheetParams {
+	connectionId?: number | null
+	connectionModelId?: number | null
+	/**
+	 * 🚧 For a template-payload connection: the workflow whose sheet to derive
+	 * (`deriveComfySheet`). The sheet is then the workflow's, on this server.
+	 */
+	workflowId?: number | null
+	/**
+	 * 🚧 Ask about the pair this card's sprites are drawn with (the Sprites
+	 * loadout's): the card's owner or an admin. A member hears only
+	 * `expressions`; the sheet itself is an admin's.
+	 */
+	characterId?: number | null
+}
+
+export interface ImageDrawingSheetResponse {
+	/** Null when no image pair is set; the form then greys nothing. */
+	sheet?: DrawingSheet | null
+	/** The image sampling keys this sheet drops (`samplingKeysSheetDrops`). */
+	drops?: string[]
+	/** 🚧 Echoed when the sheet was asked of a workflow, so a reply finds its asker. */
+	workflowId?: number
+	/** 🚧 Echoed when the sheet was asked for a card's sprites. */
+	characterId?: number
+	/**
+	 * 🚧 The sheet's `expressions` flag — whether **Re-express from
+	 * neutral** can run on this pair. Answered to a member too.
+	 */
+	expressions?: boolean
 	error?: string
 }
 

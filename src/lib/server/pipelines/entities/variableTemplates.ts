@@ -138,7 +138,13 @@ export async function assertSelectable(
 export async function resolveVariableTemplate(
 	db: Db,
 	templateId: number
-): Promise<{ engine: string; source: string } | null> {
+): Promise<{
+	variableId: string
+	engine: string
+	source: string
+	name: string
+	origin: "shipped" | "package" | "own"
+} | null> {
 	const [row] = await db
 		.select()
 		.from(schema.pipelineVariableTemplates)
@@ -146,8 +152,19 @@ export async function resolveVariableTemplate(
 		.limit(1)
 	if (!row) return null
 	return {
+		// What the row was written against — the caller compares it with what
+		// the key renders, and drops a row written for some other variable.
+		variableId: row.variableId,
 		engine: row.engine ?? CORE_TEMPLATE_ENGINE,
-		source: row.source ?? ""
+		source: row.source ?? "",
+		// For the receipt's per-key line (2026-10-13): which row, and whose.
+		name: row.name,
+		origin:
+			row.ownerPluginId != null
+				? "package"
+				: row.seedKey != null || row.isImmutable
+					? "shipped"
+					: "own"
 	}
 }
 

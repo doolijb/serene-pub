@@ -162,7 +162,23 @@ const PUBLISHED: Record<string, string> = {
 	// (`slot.connection()`). Edited in place under the freeze. Measured with other lanes'
 	// in-flight core-catalog edits in the tree. (was "6b320446a5eb1")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/respond`; nothing else changed. (was "520aa324cf15f")
-	"core:spec/chat-respond@1.21.0": "1f99b0cdffb35d",
+	// I12 (2026-10-12): the Default config names its loadouts. (was "1f99b0cdffb35d")
+	// Moved 2026-10-13 (live scenes lane D, §6): the reply tick after
+	// `spriteShow` — a `tick` step (`core:task/clock-step@1`, exposed to the
+	// session as *Each reply advances the clock by …*, By 0 = off) and a
+	// `clock` junction holding *Advance story clock*. Off by default: every
+	// reply is what it was. Edited in place under the freeze. Measured with
+	// other lanes' in-flight core-catalog edits in the tree. (was "82d96ae3629ac")
+	// Moved 2026-10-13 (live scenes §15 G4–G7, lane H): the reply tick's
+	// *Advance story clock* says `cause: 'tick'` — never a time action, kept by a
+	// swipe. Edited in
+	// place under the freeze. Measured with other lanes' in-flight core-catalog
+	// edits in the tree. (was "1306e64e696429")
+	// Moved 2026-10-13 (live scenes §15 G12, lane J): the tick's *Advance
+	// story clock* says `onRefusal: 'skip'` — a story with no clock skips
+	// the tick with a ledger line instead of halting after the reply. Edited
+	// in place under the freeze. (was "1384332893aea")
+	"core:spec/chat-respond@1.21.0": "1ce32d3e6de41a",
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
 	// two keys stripped, the document hashes back to the old pin. (was 'b0c3e32a16d1d')
@@ -199,7 +215,8 @@ const PUBLISHED: Record<string, string> = {
 	// handed the reply's text and speaker) and `spriteShow` (`source:
 	// 'picker'`). Edited in place under the freeze. Measured with other lanes'
 	// in-flight core-catalog edits in the tree. (was "abff4d2cceef8")
-	"core:spec/guide-respond@1.2.0": "100e883f026237",
+	// I12 (2026-10-12): the Default config names its loadouts. (was "100e883f026237")
+	"core:spec/guide-respond@1.2.0": "14bc517e7b7e62",
 	// Moved 2026-09-27 (characterDetail genre field): Chat and Adventure
 	// declare `fields.characterDetail` (CHARACTER_DETAIL_FIELD: full / brief /
 	// speaker-only). Proven: a copy of core-catalog/src with just those two
@@ -271,7 +288,9 @@ const PUBLISHED: Record<string, string> = {
 	// speaker-only). Proven: a copy of core-catalog/src with just those two
 	// field lines removed from genres.ts hashes back to the old pin. (was '4e1033c247420')
 	// Moved 2026-09-28 (enum option labels on Adventure's tone/difficulty); was e611ef3a97923.
-	"core:spec/adventure-create@1.0.0": "17f29013f5ffc6",
+	// Moved 2026-10-13 (live scenes §15 G2): the embedded shape names
+	// Adventure's place, `scenes: { place: { stateKey: "location" } }`. (was "17f29013f5ffc6")
+	"core:spec/adventure-create@1.0.0": "2b63bc55e3597",
 	// ⚠ MOVED, in place, while the genre is still unreleased: the planner and
 	// the keeper now pin `core:oracle/generate-json@1` instead of
 	// `generate-text` + `parse-json`, their transcript comes from
@@ -369,7 +388,25 @@ const PUBLISHED: Record<string, string> = {
 	// `connection` slot, and `semantic.arm.queries` wires its own
 	// (`slot.connection()`). Edited in place under the freeze. Measured with other lanes'
 	// in-flight core-catalog edits in the tree. (was "70163343495a2")
-	"core:spec/adventure-respond@1.0.0": "1b99741eb2c332",
+	// I12 (2026-10-12): the Default config names its loadouts. (was "1b99741eb2c332")
+	// Moved 2026-10-13 (live scenes lane F, ★3 — the keeper's clock proposal):
+	// the keeper schema gains a `clock` list (`[{ by, unit }]`, required, empty
+	// on the ordinary turn); `keeperResolve` wires `clock: keeperWrite.json`,
+	// the new `keeperStep` (`core:task/clock-step@1`) decides it, and the
+	// trusted arm moves the clock through Advance story clock
+	// (`commit.trusted.keeperClock`) — the reviewed arm proposes the clock line;
+	// `keeperStep` wires `unless: input.messageId`, so a re-driven reply never
+	// moves the clock twice. Edited in place under the freeze. Measured with
+	// other lanes' in-flight core-catalog edits in the tree. (was
+	// "1a9cc622606e38")
+	// Moved 2026-10-13 (live scenes §15 G4–G7, lane H): the keeper's trusted
+	// clock outlet says `cause: 'keeper'` and `onRefusal: 'skip'`; `keeperStep`'s
+	// `unless` is `input.continuationPrefill` — an extend never moves the clock
+	// twice, a regenerate or a swipe moves it anew (the old move went back with
+	// the old reply). Edited in
+	// place under the freeze. Measured with other lanes' in-flight core-catalog
+	// edits in the tree. (was "1185045ca49580")
+	"core:spec/adventure-respond@1.0.0": "18695a640a1593",
 	// ⚠ MOVED, unreleased-genre terms (R-8, 2026-09-15): the three actions'
 	// `contextBudget` shares the writing step's connection for the model's
 	// own window, like every other budget node.
@@ -451,7 +488,18 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): `attachments` (history-attachments) + `attached` (place-attachments on `write`'s pair) before `prompt`, which reads `attached.messages`.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "1e969901b72f1")
-	"core:spec/adventure-rest@1.0.0": "202a8aa9f3791",
+	// Moved 2026-10-13 (live scenes lane F, ★3 — the keeper's clock proposal):
+	// the keeper schema gains a `clock` list (`[{ by, unit }]`, required, empty
+	// on the ordinary turn); `resolve` wires `clock: write.json`, `keeperStep`
+	// decides it, and the trusted arm moves the clock through Advance story
+	// clock (`commit.trusted.keeperClock`). Edited in place under the freeze.
+	// Measured with other lanes' in-flight core-catalog edits in the tree. (was
+	// "202a8aa9f3791")
+	// Moved 2026-10-13 (live scenes §15 G4–G7, lane H): Rest's trusted clock
+	// outlet says `cause: 'keeper'` and `onRefusal: 'skip'`. Edited in
+	// place under the freeze. Measured with other lanes' in-flight core-catalog
+	// edits in the tree. (was "1466f141e5dc14")
+	"core:spec/adventure-rest@1.0.0": "1f64e83107b6f4",
 	// (was "135459cfe7c4c0" — R-8, see `adventure-look`)
 	// Hash moved (R-12, 2026-09-16): the generating step no longer wires
 	// `prompts: slot.prompts({ node: … })` — `core:oracle/generate-*@1`
@@ -480,7 +528,25 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): `attachments` (history-attachments) + `attached` (place-attachments on `write`'s pair) before `prompt`, which reads `attached.messages`.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "59b690f0cd3ef")
-	"core:spec/adventure-advance-time@1.0.0": "9c0d7fb075d72",
+	// Moved 2026-10-13 (live scenes lane D, §6): *Time passes…* collects the
+	// clock step on the stepper (the amount is the player's), and after the
+	// keeper's commit the session's story clock moves by it — `step`
+	// (`core:task/clock-step@1`) and Advance story clock behind a junction on
+	// `moves`. Rest is unchanged. Edited in place under the freeze.
+	// (was "9c0d7fb075d72")
+	// Moved 2026-10-13 (live scenes lane F, ★3 — the keeper's clock proposal):
+	// the keeper schema gains a `clock` list (`[{ by, unit }]`, required, empty
+	// on the ordinary turn) — the shared schema only: the keeper's clock is
+	// never wired here, the amount being the player's. Edited in place under the
+	// freeze. Measured with other lanes' in-flight core-catalog edits in the
+	// tree. (was "164e82a5d8d184")
+	// Moved 2026-10-13 (live scenes §15 G4–G7, lane H): the keeper context
+	// takes the press's `clockStep` (`{{clockStep}}`), and *Advance story clock*
+	// says `cause: 'action'` and `onRefusal: 'skip'` — a story with no clock yet
+	// skips the move with a ledger line instead of halting. Edited in
+	// place under the freeze. Measured with other lanes' in-flight core-catalog
+	// edits in the tree. (was "1b7157728a8132")
+	"core:spec/adventure-advance-time@1.0.0": "2a3ba89fbc8ae",
 	/**
 	 * Forms (plans/29 R-15 *Forms*; 30 §U5d, 2026-09-17) — five new slugs,
 	 * and the three create specs above move with their genre surface. The
@@ -531,7 +597,8 @@ const PUBLISHED: Record<string, string> = {
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "ef5be600b6ed7")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/answer-form-chat`; nothing else changed. (was "1a1744b015b27a")
-	"core:spec/chat-answer-form@1.0.0": "a10f3d0d9292d",
+	// I12 (2026-10-12): the Default config names its loadouts. (was "a10f3d0d9292d")
+	"core:spec/chat-answer-form@1.0.0": "ce214eedc20d3",
 	// (was "b89f3d6c0484b") — W9 shape pins, see the note above adventure-ask.
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
@@ -540,7 +607,8 @@ const PUBLISHED: Record<string, string> = {
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "d38acc496a3c1")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/answer-form-adventure`; nothing else changed. (was "8175a60b3bfc4")
-	"core:spec/adventure-answer-form@1.0.0": "9a0a93d0fce6f",
+	// I12 (2026-10-12): the Default config names its loadouts. (was "9a0a93d0fce6f")
+	"core:spec/adventure-answer-form@1.0.0": "83db35548ba3a",
 	// (was "1ddc286846b82d") — W9 shape pins, see the note above adventure-ask.
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
@@ -549,7 +617,8 @@ const PUBLISHED: Record<string, string> = {
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "811b474234fb8")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/answer-form-guide`; nothing else changed. (was "4cc69e9d12db0")
-	"core:spec/guide-answer-form@1.0.0": "ee8145c98c894",
+	// I12 (2026-10-12): the Default config names its loadouts. (was "ee8145c98c894")
+	"core:spec/guide-answer-form@1.0.0": "110dc3facd34ba",
 	"core:spec/create-chat@2.1.0": "ea80f2679383c",
 	"core:spec/create-chat@2.0.0": "a6281141b21ea",
 	// 1.16.0 / 1.10.0: the three lore gather branches and the narrator's trigger query
@@ -801,7 +870,8 @@ const PUBLISHED: Record<string, string> = {
 	// (`slot.connection()`). Edited in place under the freeze. Measured with other lanes'
 	// in-flight core-catalog edits in the tree. (was "1fa23cc37eaad0")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/narrate-character`; nothing else changed. (was "8bfbf7d9b46e9")
-	"core:spec/chat-side-character@1.0.0": "15899aae9ed73d",
+	// I12 (2026-10-12): the Default config names its loadouts. (was "15899aae9ed73d")
+	"core:spec/chat-side-character@1.0.0": "13b7abd61e7851",
 	// (was "b6ba835e86244", then "431aa4254af1", then "12971669b900fd",
 	//  then "bc304a8a52b71")
 	// ⚠ MOVED on the same terms as `narrate-character` above (09-B B4):
@@ -876,7 +946,8 @@ const PUBLISHED: Record<string, string> = {
 	// (`slot.connection()`). Edited in place under the freeze. Measured with other lanes'
 	// in-flight core-catalog edits in the tree. (was "a98a294e26041")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/narrate`; nothing else changed. (was "cdba24cd29eaf")
-	"core:spec/chat-narrate@1.11.0": "1890d6de7d7cfc",
+	// I12 (2026-10-12): the Default config names its loadouts. (was "1890d6de7d7cfc")
+	"core:spec/chat-narrate@1.11.0": "1aec28beb3be77",
 	// ⚠ `core:spec/respond@1.20.0`'s hash MOVED for the SECOND time without a
 	// bump, on the same terms as the two paragraphs above and paired with
 	// `drizzle/0106_continuation_prefill_reprojection`, which deletes its
@@ -1038,7 +1109,8 @@ const PUBLISHED: Record<string, string> = {
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "1b308b18a35d96")
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "17b311b14fdba7")
-	"core:spec/summarize-world@1.3.0": "8bc929819eff7",
+	// I12 (2026-10-12): the Default config names its loadouts. (was "8bc929819eff7")
+	"core:spec/summarize-world@1.3.0": "16b18ff001d740",
 	// Moved 2026-09-30 (config grouping, catalog lane): `expose.label` (and, on
 	// a model call of a multi-call spec, `expose.purpose`) names the step in
 	// settings. Display text only; the run is unchanged. Proven: a copy of
@@ -1048,7 +1120,8 @@ const PUBLISHED: Record<string, string> = {
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "1bad3c7575bf71")
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "1832ba27d42a06")
-	"core:spec/summarize-character@1.3.0": "28cbabf6ea61b",
+	// I12 (2026-10-12): the Default config names its loadouts. (was "28cbabf6ea61b")
+	"core:spec/summarize-character@1.3.0": "a1ba26c4e2971",
 	// ⚠ `summarize-scene@1.3.0`'s hash MOVED a SECOND time, again under an
 	// unchanged version, and again paired with a migration —
 	// `drizzle/0104_ice_scene_cast_extraction.sql` deletes its published
@@ -1072,7 +1145,8 @@ const PUBLISHED: Record<string, string> = {
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "1ba1f48dae9bdb")
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "7469e93c1c11c")
-	"core:spec/summarize-scene@1.3.0": "e0c98ab5632b4",
+	// I12 (2026-10-12): the Default config names its loadouts. (was "e0c98ab5632b4")
+	"core:spec/summarize-scene@1.3.0": "d99dc8578d801",
 	// Moved 2026-09-30 (config grouping, catalog lane): `expose.label` (and, on
 	// a model call of a multi-call spec, `expose.purpose`) names the step in
 	// settings. Display text only; the run is unchanged. Proven: a copy of
@@ -1082,7 +1156,32 @@ const PUBLISHED: Record<string, string> = {
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "6a6de8aef8046")
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "1f93de35465e8c")
-	"core:spec/summarize-history@1.3.0": "49cbc8b7ae8dc",
+	// I12 (2026-10-12): the Default config names its loadouts. (was "49cbc8b7ae8dc")
+	"core:spec/summarize-history@1.3.0": "1a30e9b006458",
+	// 🚧 New 2026-10-13 (live scenes §13–§14): each core genre's own
+	// summarize-scene, built by `summarizeScene()` — the scene's range
+	// (`summarize-source@2`), its story rows' files (`history-attachments`),
+	// the genre's transcript template (`render-transcript@1`), batches of
+	// text (`batch-messages@2`), then the shared drafting, synth and naming.
+	// Lane A measured "4b6c20c3e215f" / "1c78cf7589fb4f" / "fa5a8af464429" /
+	// "668a24f84a6fb" before the reconcile restored the attachment names.
+	// Moved 2026-10-13 (live scenes lane E): the aside rows' files are read
+	// too (`asideAttachments`, a second history-attachments@1, wired to
+	// render's new `asideAttachments` port) and each template's `aside`
+	// section names them after its text. (were "655ef144e49ad" /
+	// "13274d70ec4b86" / "d0c7ff2c75ec2" / "159e471ba7353a")
+	// Moved 2026-10-13 (live scenes fix-ups): the aside read is headed
+	// *Transcript aside attachments* (`expose.label`), so a Combining group
+	// never shows two steps headed "History attachments". (were
+	// "d6d9936a441b" / "150185e62c94a9" / "69c16d2df4303" / "d410ef541cb80")
+	"core:spec/chat-summarize-scene@1.0.0": "5d20235baeafd",
+	"core:spec/adventure-summarize-scene@1.0.0": "1f6c4b2f5ee94d",
+	"core:spec/guide-summarize-scene@1.0.0": "9c19042ad22a0",
+	// The Lair's reads the Sanctum as asides, through its own template.
+	// Moved 2026-10-13 (live scenes §15 G1, ★9): it carries the Lair's own
+	// boundary trigger, `contributes.boundaryTriggers` (a new floor on main).
+	// (was "14ef483fc1f337")
+	"core:spec/lair-summarize-scene@1.0.0": "69777beaaf6a6",
 	// Moved 2026-09-30 (config grouping, catalog lane): `expose.label` (and, on
 	// a model call of a multi-call spec, `expose.purpose`) names the step in
 	// settings. Display text only; the run is unchanged. Proven: a copy of
@@ -1148,7 +1247,49 @@ const PUBLISHED: Record<string, string> = {
 	// description says _Describe an image_. Proven: the built document with `collects` deleted and
 	// the old description hashes back to the old pin. (was "98d860e73c870")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/generate-image`; nothing else changed. (was "13c2fc5dd571ad")
-	"core:spec/chat-generate-image@1.0.0": "136d2be67a5584",
+	// 1.1.0 (2026-10-11, PLAN-less-confusing D2): the `review-on` preset is no
+	// longer the default and is relabelled "Review the prompt before
+	// rendering", so the action's own form is the one prompt entry. A bump,
+	// not a move: 1.0.0 stays what it was. (1.0.0 was "136d2be67a5584")
+	// I12 (2026-10-12): the Default config names its loadouts; measured with
+	// lane A4's (I7a) `workflow: slot.workflow()` wiring on the render node in
+	// the tree. (was "1f4f95d38c8c86")
+	"core:spec/chat-generate-image@1.1.0": "7869765949f7c",
+	// 🚧 1.0.0 (image generation I5, 2026-10-12): the Sprite set fill — a card
+	// action from the Sprites tab, no session: build-sprite-series → generate-
+	// image (series, likeness references, one seed per run) → cut-out →
+	// attach-sprite. A new spec: no migration.
+	"core:spec/sprite-set-fill@1.0.0": "1a4b358b7d51d3", // 2026-10-12 sweep: Default preset names core:loadout/sprites@1
+	// Image generation I8 (2026-10-12): Portrait — a card action from the
+	// Gallery tab. New spec.
+	"core:spec/character-portrait@1.0.0": "438207384f24e", // 2026-10-12 sweep: both presets name core:loadout/portrait@1
+	"core:spec/describe-likeness@1.0.0": "bb28ace5bf811", // D1 2026-10-12: Describe from image — a card action, no loadout
+	// Image generation I9 (lane C3, 2026-10-12): the Scene action — a quiet
+	// scene prompt off the last lines, the picture with the likeness images
+	// as references, posted and/or set as the backdrop. A new slug.
+	"core:spec/chat-illustrate-scene@1.0.0": "ea0dbc3998d55", // 2026-10-12 sweep: purposes on the two calls
+	// §16 follow-up D3 (2026-10-12): the same Scene graph with Adventure's
+	// inlet (`shared/illustrateScene.ts`; an inlet is one genre's). A new slug.
+	// Chat's hash above did not move when its graph was lifted into the shared
+	// builder.
+	"core:spec/adventure-illustrate-scene@1.0.0": "61ec0ac5e15fb",
+	// New 2026-10-13 (live scenes lane D, §6): *Time passes…* for Chat and
+	// the Lair — the clock step a press collects, and Advance story clock
+	// behind a junction on whether it moves. No model, no message.
+	// Moved 2026-10-13 (live scenes §15 G4–G7, lane H): *Advance story clock*
+	// says `cause: 'action'`. Edited in
+	// place under the freeze. Measured with other lanes' in-flight core-catalog
+	// edits in the tree. (was "146016a3e78051")
+	// Moved 2026-10-13 (live scenes §15 G12, lane J): `onRefusal: 'skip'`.
+	// Edited in place under the freeze. (was "1c8435302b630f")
+	"core:spec/chat-advance-time@1.0.0": "1397c71709d413",
+	// Moved 2026-10-13 (live scenes §15 G4–G7, lane H): *Advance story clock*
+	// says `cause: 'action'`. Edited in
+	// place under the freeze. Measured with other lanes' in-flight core-catalog
+	// edits in the tree. (was "5dc482ba17d89")
+	// Moved 2026-10-13 (live scenes §15 G12, lane J): `onRefusal: 'skip'`.
+	// Edited in place under the freeze. (was "12cff8a420c99a")
+	"core:spec/lair-advance-time@1.0.0": "7e1eaa16ea91a",
 	// 1.0.0: the tool-loop reference (20 §9, 01 §4a) — a bounded agentic turn
 	// written out, bound to no genre so it is never offered in a composer. New
 	// slug, not a bump: the 0.6 freeze forbids moving an existing semver and
@@ -1253,7 +1394,9 @@ const PUBLISHED: Record<string, string> = {
 	// their own. Proven (SDK and app pins alike): a copy of core-catalog/src with only this
 	// lane's edits reverted (lair.ts, turnOrder.ts, genres.ts) hashes back to
 	// every old Lair pin. (was "17398a61457451")
-	"core:spec/lair-create@1.0.0": "b41ea5ad6054d",
+	// Moved 2026-10-13 (live scenes §15 G2): the embedded shape names the
+	// Lair's place, `scenes: { place: { stateKey: "location" } }`. (was "b41ea5ad6054d")
+	"core:spec/lair-create@1.0.0": "1dff70c6bd68c1",
 	// Moved (W1, 2026-09-17): the same per-voice lore lane Adventure's
 	// respond gained, inside the `cast` branch's `each`.
 	// (was "7557cc5126f8e")
@@ -1396,7 +1539,8 @@ const PUBLISHED: Record<string, string> = {
 	// `connection` slot, and `semantic.arm.queries` wires its own
 	// (`slot.connection()`). Edited in place under the freeze. Measured with other lanes'
 	// in-flight core-catalog edits in the tree. (was "13506ae2e7456")
-	"core:spec/lair-respond@1.0.0": "198869a81e17d5",
+	// I12 (2026-10-12): the Default config names its loadouts. (was "198869a81e17d5")
+	"core:spec/lair-respond@1.0.0": "3919232d21aac",
 	// Moved twice on 2026-09-17. First (L3, contracts batch 2): `params:
 	// slot.params()` on the `create-lore-entry` node. That outlet now declares
 	// an `entryType` parameters slot, and a slot the spec never NAMES is not a
@@ -1606,7 +1750,8 @@ const PUBLISHED: Record<string, string> = {
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "1c32eb6a456349")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/answer-form-lair`; nothing else changed. (was "d5cd2911aa349")
-	"core:spec/lair-answer-form@1.0.0": "1e04feae5374a",
+	// I12 (2026-10-12): the Default config names its loadouts. (was "1e04feae5374a")
+	"core:spec/lair-answer-form@1.0.0": "1c86e1cc01c1b7",
 }
 
 describe("published spec hashes", () => {

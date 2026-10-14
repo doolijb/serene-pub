@@ -27,8 +27,23 @@
 import { AMBIENT_SCRIPT_EXTRAS } from "@serene-pub/sdk"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { pipelineLabelsById } from "$lib/server/pipelines/entities/pipelineLabels"
-import { i18nText, parseScriptKindId, type I18n } from "@serene-pub/sdk"
+import {
+	i18nText,
+	parseScriptKindId,
+	seamsOf,
+	type I18n,
+	type ScriptPointDecl
+} from "@serene-pub/sdk"
+import {
+	chainKey,
+	declaredChainAddresses,
+	isChainAddress
+} from "$lib/server/pipelines/config/chainAddresses"
+import {
+	pipelineScriptSeams,
+	type PipelineScriptSeams
+} from "$lib/server/pipelines/config/library"
+import { optionId, stepKeyFor } from "$lib/server/pipelines/config/panel/ids"
 
 /** The script named nothing here. */
 export class ScriptNotFoundError extends Error {}
@@ -88,14 +103,23 @@ export interface ScriptRecord {
 	source: string
 	varsIn: string[]
 	varsOut: string[]
-	/** Pipelines whose chains currently include it, by label (name · genre). */
+	/**
+	 * What holds it, as words: pipeline labels (name · genre) and
+	 * `connection: <name>` — the projection of `use`.
+	 */
 	usedBy: string[]
+	/** Where it is attached, one row per chain or connection. */
+	use: ScriptUseRow[]
+	/** Where it could go: the seams accepting its kind. */
+	fits: ScriptFits
 }
 
 export interface ScriptsView {
 	/** Every registered script type, including the ones with no rows yet. */
 	types: ScriptTypeInfo[]
 	scripts: ScriptRecord[]
+	/** Pipeline slug → label, for the fits filters' words. */
+	pipelineLabels: Record<string, string>
 }
 
 /** Display text in `en` through the SDK's one resolver (R-20); blank for a value publish never let in. */
@@ -188,54 +212,138 @@ export async function scriptType(
 }
 
 /**
- * Which pipelines' chains include a given script.
- *
- * Chains are ordered ref lists stored at the `scripts` slot path in the two
- * config tables (18 §2) — so a reference is an *array containing* the id, not
- * an equal value, and this scans in code the way `deletePrompt` does, for the
- * same reason: the values are arbitrary json and the tables are small. Nothing
- * writes such rows until the hooks land (U-S3); until then every set is empty,
- * and the page and the delete refusal are already wired for the day one isn't.
+ * Where a script is attached — a chain on a pipeline's step, or a
+ * connection's stop list. `usedBy` is the words this projects to.
  */
-async function scriptUsageIndex(db: Db): Promise<Map<number, Set<string>>> {
-	const out = new Map<number, Set<string>>()
+export type ScriptUseRow =
+	| {
+			kind: "pipeline"
+			pipelineSlug: string
+			pipelineLabel: string
+			nodeKey: string
+			stepLabel: string
+			/**
+			 * The seam address (`in:<port>` · `out:<port>` · `<pointKey>`).
+			 * For an unplaced chain, the address it is stored at: the point
+			 * key, or the slot name for a slot the step does not declare.
+			 */
+			at: string
+			/** The step's opaque handle (`stepKeyFor`) — `?step=` on the workspace. */
+			stepKey: string
+			/** The chain option's handle (`optionId`) — the panel's `data-option-id`. */
+			optionId: string
+			/** The step declares no seam at this address (D4). */
+			unplaced: boolean
+	  }
+	| { kind: "connection"; connectionId: number; connectionName: string }
 
-	// By label — the name with its genre beside it — so four genres'
-	// "Reply" stay four pipelines in the set.
-	const nameById = await pipelineLabelsById(db)
+/** The seams across installed pipelines whose `accepts` names a script's kind. */
+export interface ScriptFits {
+	seams: number
+	/** Pipeline slugs. */
+	pipelines: string[]
+	/** Step labels. */
+	steps: string[]
+	/** Seam addresses. */
+	at: string[]
+	/** Genre names, through the presets that bind those pipelines. */
+	genres: string[]
+}
+
+/** The words a use row reads as in the `usedBy` column. */
+const useWords = (u: ScriptUseRow): string =>
+	u.kind === "pipeline" ? u.pipelineLabel : `connection: ${u.connectionName}`
+
+/**
+ * Where every script is attached.
+ *
+ * Chains are ordered ref lists stored at a **chain address** in the two config
+ * tables (18 §2): a `scripts`-kind slot's whole value, or an interior point
+ * under the `scripts` facet (`chainAddresses.ts`). Every such address counts —
+ * not only the slot named `scripts`, which missed extract-cast's
+ * `castScripts` and let a script attached only there be deleted
+ * (PLAN-script-placement D5). Whether an address is a chain's is a question
+ * for the node's own definition, so each row is joined config → spec →
+ * active version → node → registry row. A reference is an *array containing*
+ * the id, scanned in code the way `deletePrompt` does: the values are
+ * arbitrary json and the tables are small.
+ *
+ * A chain at an address its step does not declare is still a use, marked
+ * `unplaced` (D4): it is kept, so deleting its script would strand it.
+ *
+ * `secret` keys the step and option handles; without one (the delete
+ * guard, which needs only the holders) they are empty.
+ */
+async function scriptUsageIndex(
+	db: Db,
+	secret: string | null = null,
+	pipelines?: PipelineScriptSeams[]
+): Promise<Map<number, ScriptUseRow[]>> {
+	const out = new Map<number, ScriptUseRow[]>()
+	const seen = new Set<string>()
+	const add = (scriptId: number, row: ScriptUseRow, key: string) => {
+		if (seen.has(`${scriptId}\u0000${key}`)) return
+		seen.add(`${scriptId}\u0000${key}`)
+		const list = out.get(scriptId) ?? []
+		list.push(row)
+		out.set(scriptId, list)
+	}
+
+	const bySpec = new Map<number, PipelineScriptSeams>(
+		(pipelines ?? (await pipelineScriptSeams(db))).map((p) => [p.specId, p])
+	)
 	const configs = await db.select().from(schema.pipelineConfigs)
 	const specOfConfig = new Map<number, number>(
 		(configs as any[]).map((c) => [c.id, c.specId])
 	)
 
-	const note = (value: unknown, specId: number | null | undefined) => {
-		const ids = Array.isArray(value)
-			? value
-			: typeof value === "number"
-				? [value]
+	const note = (
+		v: { nodeKey: string; slot: string; path: string; value: unknown },
+		specId: number | null | undefined
+	) => {
+		const ids = Array.isArray(v.value)
+			? v.value
+			: typeof v.value === "number"
+				? [v.value]
 				: []
-		if (!ids.length) return
-		const label = specId != null ? nameById.get(specId) : undefined
-		if (!label) return
-		for (const id of ids) {
-			if (typeof id !== "number") continue
-			const set = out.get(id) ?? new Set<string>()
-			set.add(label)
-			out.set(id, set)
+		if (!ids.length || specId == null) return
+		const pipeline = bySpec.get(specId)
+		if (!pipeline) return
+		const node = pipeline.nodes.get(v.nodeKey)
+		const row = node?.row ?? null
+		if (!isChainAddress(row, v.slot, v.path ?? "")) return
+		const path = v.path ?? ""
+		const declared = declaredChainAddresses(row)
+		const seam = row
+			? seamsOf({
+					slots: (row.slots ?? {}) as Record<string, unknown>,
+					scriptPoints: (row.scriptPoints ?? []) as ScriptPointDecl[]
+				}).find((s) =>
+					v.slot === "scripts" && s.kind === "point"
+						? s.at === path
+						: s.kind !== "point" && s.slot === v.slot && path === ""
+				)
+			: undefined
+		const use: ScriptUseRow = {
+			kind: "pipeline",
+			pipelineSlug: pipeline.slug,
+			pipelineLabel: pipeline.label,
+			nodeKey: v.nodeKey,
+			stepLabel: node?.stepLabel ?? v.nodeKey,
+			at: seam?.at ?? (v.slot === "scripts" ? path : v.slot),
+			stepKey: secret ? stepKeyFor(secret, v.nodeKey) : "",
+			optionId: secret ? optionId(secret, v.nodeKey, v.slot, path) : "",
+			unplaced: !declared.has(chainKey(v.slot, path))
 		}
+		for (const id of ids)
+			if (typeof id === "number")
+				add(id, use, `${pipeline.slug}\u0000${v.nodeKey}\u0000${v.slot}\u0000${path}`)
 	}
 
-	for (const v of (await db
-		.select()
-		.from(schema.pipelineConfigValues)
-		.where(eq(schema.pipelineConfigValues.slot, "scripts"))) as any[])
-		note(v.value, specOfConfig.get(v.configId))
-
-	for (const o of (await db
-		.select()
-		.from(schema.pipelineNodeOverrides)
-		.where(eq(schema.pipelineNodeOverrides.slot, "scripts"))) as any[])
-		note(o.value, o.specId)
+	for (const v of (await db.select().from(schema.pipelineConfigValues)) as any[])
+		note(v, specOfConfig.get(v.configId))
+	for (const o of (await db.select().from(schema.pipelineNodeOverrides)) as any[])
+		note(o, o.specId)
 
 	// Connection attachments count too (18 §4b): a stop guard riding a
 	// connection is a reference like any chain's, and a delete that stranded
@@ -243,6 +351,7 @@ async function scriptUsageIndex(db: Db): Promise<Map<number, Set<string>>> {
 	const attachments = await db
 		.select({
 			scriptId: schema.connectionScripts.scriptId,
+			connectionId: schema.connections.id,
 			connectionName: schema.connections.name
 		})
 		.from(schema.connectionScripts)
@@ -250,16 +359,58 @@ async function scriptUsageIndex(db: Db): Promise<Map<number, Set<string>>> {
 			schema.connections,
 			eq(schema.connectionScripts.connectionId, schema.connections.id)
 		)
-	for (const a of attachments as any[]) {
-		const set = out.get(a.scriptId) ?? new Set<string>()
-		set.add(`connection: ${a.connectionName}`)
-		out.set(a.scriptId, set)
-	}
+	for (const a of attachments as any[])
+		add(
+			a.scriptId,
+			{
+				kind: "connection",
+				connectionId: a.connectionId,
+				connectionName: a.connectionName
+			},
+			`connection\u0000${a.connectionId}`
+		)
 
 	return out
 }
 
-const record = (r: any, usedBy: Set<string> | undefined): ScriptRecord => ({
+/** The seams a script of `typeId` fits, across enabled pipelines. */
+function fitsOf(typeId: string, pipelines: PipelineScriptSeams[]): ScriptFits {
+	let seams = 0
+	const slugs = new Set<string>()
+	const steps = new Set<string>()
+	const at = new Set<string>()
+	const genres = new Set<string>()
+	for (const p of pipelines) {
+		if (p.disabled) continue
+		let fits = false
+		for (const seam of p.seams) {
+			if (!seam.accepts.includes(typeId)) continue
+			seams++
+			fits = true
+			steps.add(seam.stepLabel)
+			at.add(seam.at)
+		}
+		if (!fits) continue
+		slugs.add(p.slug)
+		for (const g of p.genres) genres.add(g.name)
+	}
+	const sorted = (s: Set<string>) => [...s].sort((a, b) => a.localeCompare(b))
+	return {
+		seams,
+		pipelines: [...slugs],
+		steps: sorted(steps),
+		at: sorted(at),
+		genres: sorted(genres)
+	}
+}
+
+const NO_FITS: ScriptFits = { seams: 0, pipelines: [], steps: [], at: [], genres: [] }
+
+const record = (
+	r: any,
+	use: ScriptUseRow[] | undefined,
+	fits: ScriptFits = NO_FITS
+): ScriptRecord => ({
 	id: r.id,
 	typeId: r.typeId,
 	name: r.name,
@@ -268,17 +419,33 @@ const record = (r: any, usedBy: Set<string> | undefined): ScriptRecord => ({
 	source: r.source ?? "",
 	varsIn: (r.varsIn ?? []) as string[],
 	varsOut: (r.varsOut ?? []) as string[],
-	usedBy: [...(usedBy ?? [])].sort()
+	usedBy: [...new Set((use ?? []).map(useWords))].sort(),
+	use: use ?? [],
+	fits
 })
 
-/** The management page's one read: every type, every row, and what holds it. */
-export async function scriptsView(db: Db): Promise<ScriptsView> {
+/**
+ * The management page's one read: every type, every row, what holds it and
+ * where it could go. `secret` keys the step and option handles the
+ * *Where used* links carry; without it they are empty.
+ */
+export async function scriptsView(
+	db: Db,
+	opts: { secret?: string } = {}
+): Promise<ScriptsView> {
 	// A disabled plugin's script types, and the scripts written for them, are
 	// not listed (R67); they come back when it is turned on.
 	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
 	const off = await disabledPlugins(db)
 	const types = (await scriptTypeInfos(db)).filter((t) => !off.ownsId(t.typeId))
-	const use = await scriptUsageIndex(db)
+	const pipelines = await pipelineScriptSeams(db)
+	const use = await scriptUsageIndex(db, opts.secret ?? null, pipelines)
+	const fitsByType = new Map<string, ScriptFits>()
+	const fitsFor = (typeId: string) => {
+		let f = fitsByType.get(typeId)
+		if (!f) fitsByType.set(typeId, (f = fitsOf(typeId, pipelines)))
+		return f
+	}
 	const scripts = (
 		(await db
 			.select()
@@ -286,8 +453,10 @@ export async function scriptsView(db: Db): Promise<ScriptsView> {
 			.orderBy(asc(schema.pipelineScripts.id))) as any[]
 	)
 		.filter((r) => !off.ownsId(r.typeId))
-		.map((r) => record(r, use.get(r.id)))
-	return { types, scripts }
+		.map((r) => record(r, use.get(r.id), fitsFor(r.typeId)))
+	const pipelineLabels: Record<string, string> = {}
+	for (const p of pipelines) pipelineLabels[p.slug] = p.label
+	return { types, scripts, pipelineLabels }
 }
 
 /** Normalize a declared variable list: strings, trimmed, deduped, empties dropped. */
@@ -537,8 +706,8 @@ export async function deleteScript(db: Db, scriptId: number): Promise<void> {
 		)
 
 	const use = await scriptUsageIndex(db)
-	const holders = use.get(scriptId)
-	if (holders?.size)
+	const holders = new Set((use.get(scriptId) ?? []).map(useWords))
+	if (holders.size)
 		throw new ScriptNotUsableError(
 			`'${row.name}' is still in a chain — ${[...holders]
 				.sort()

@@ -147,6 +147,83 @@ defineTokenizer({
 })
 
 /**
+ * The token ids a local encoder gives a text — what logit bias needs, where a
+ * budget needs only the count (plan logit-bias L5).
+ *
+ * The same packages the counters above load, and the real encoders only. Each
+ * is asked for the text's own tokens: no BOS or EOS, and no leading space
+ * added, because a logit bias entry's text already carries the space it means
+ * (`readLogitBiasText`). The ratio counters (`estimate`, `anthropic-claude`,
+ * `gemini`, `gemma`, `rough`) measure a length and have no ids to give, so
+ * they are absent here. So is `cohere`: it counts with Gemma's vocabulary,
+ * close enough for a length and wrong for an id.
+ */
+const TOKEN_ID_ENCODERS: Record<
+	string,
+	() => Promise<(text: string) => number[]>
+> = {
+	[TokenCounterOptions.OPENAI_GPT2]: async () =>
+		(await import("gpt-tokenizer/encoding/r50k_base")).encode,
+	[TokenCounterOptions.OPENAI_GPT35]: async () =>
+		(await import("gpt-tokenizer/encoding/cl100k_base")).encode,
+	[TokenCounterOptions.OPENAI_GPT4]: async () =>
+		(await import("gpt-tokenizer/encoding/cl100k_base")).encode,
+	[TokenCounterOptions.OPENAI_GPT4O]: async () =>
+		(await import("gpt-tokenizer/encoding/o200k_base")).encode,
+	[TokenCounterOptions.LLAMA]: async () => {
+		const { default: llamaTokenizer } = await import("llama-tokenizer-js")
+		return (s) => llamaTokenizer.encode(s, false, false)
+	},
+	[TokenCounterOptions.LLAMA3]: async () => {
+		const { default: llama3Tokenizer } = await import("llama3-tokenizer-js")
+		return (s) => llama3Tokenizer.encode(s, { bos: false, eos: false })
+	},
+	[TokenCounterOptions.MISTRAL]: async () => {
+		const { default: mistralTokenizer } = await import(
+			"mistral-tokenizer-js"
+		)
+		// Its declaration (`utils/mistral-tokenizer-js.d.ts`) names only the
+		// text; the package takes llama-tokenizer-js's two flags after it.
+		const encode = mistralTokenizer.encode as (
+			text: string,
+			addBos?: boolean,
+			addPrecedingSpace?: boolean
+		) => number[]
+		return (s) => encode(s, false, false)
+	}
+}
+
+const loadedTokenIdEncoders = new Map<
+	string,
+	Promise<(text: string) => number[]>
+>()
+
+/**
+ * The local encoder a tokenizer id names, loaded once per process — or null
+ * for a ratio tokenizer, an unknown id, or one whose package failed to load.
+ */
+export async function loadTokenIdEncoder(
+	id: string | null | undefined
+): Promise<((text: string) => number[]) | null> {
+	if (!id) return null
+	const load = TOKEN_ID_ENCODERS[id]
+	if (!load) return null
+	let loading = loadedTokenIdEncoders.get(id)
+	if (!loading) {
+		loading = load()
+		loadedTokenIdEncoders.set(id, loading)
+	}
+	try {
+		return await loading
+	} catch (err) {
+		// Left out of the map so the next request tries again.
+		loadedTokenIdEncoders.delete(id)
+		console.warn(`[tokenizers] Could not load the ${id} encoder:`, err)
+		return null
+	}
+}
+
+/**
  * Which tokenizer THIS run budgets with.
  *
  * Resolved off the RUN's connection — the one the executor will resolve for

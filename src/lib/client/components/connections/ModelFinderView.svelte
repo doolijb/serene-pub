@@ -17,6 +17,13 @@
 	 * top: what are you looking for, what is it FOR, where should it go, and
 	 * then — and only then — the results.
 	 *
+	 * It is never a place of its own (design 2026-10-09 C.1): it opens as the
+	 * **Get a model** dialog from the index (Add › A model, the toolbar's
+	 * download button) and from the job picker, scoped to that job; it is the
+	 * Get tab of a managed or local ONNX connection; and it is the Set up chat
+	 * stepper's Model step. Getting a model closes nothing — the downloads tray
+	 * shows the progress.
+	 *
 	 * ## What decides the press is whether it will run
 	 *
 	 * Every catalogue quotes a size and none of them says what a size means on
@@ -50,12 +57,13 @@
 	import * as Icons from "@lucide/svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
+	import LoadingState from "$lib/client/components/LoadingState.svelte"
 	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
 	import QuantPicker from "./QuantPicker.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
-	import { enableManager } from "./managers"
+	import { useConnections } from "$lib/client/contexts/connections.svelte"
 	import { downloads, type DownloadItem } from "./downloads.svelte"
 	import { formatProgress } from "./modelManagement"
 	import { downloadParams } from "$lib/client/components/koboldcppManager/availableTab"
@@ -102,11 +110,17 @@
 		capability?: string
 		/** Scope it to one destination. */
 		connectionId?: number
-		onBack: () => void
+		/**
+		 * Where Back goes when the finder stands alone. Only then does it draw
+		 * a nav header of its own: in the **Get a model** dialog the dialog's
+		 * title is its header, and inside a tab or the Set up chat stepper the
+		 * host's is.
+		 */
+		onBack?: () => void
 		/**
 		 * Rendered inside another view that owns the header (the Set up chat
-		 * flow): no nav header of its own, and the scope row is hidden because
-		 * the host already decided what the model is for.
+		 * stepper): no nav header of its own, and the scope row is hidden
+		 * because the host already decided what the model is for.
 		 */
 		embedded?: boolean
 		/**
@@ -180,10 +194,9 @@
 
 	// ── The list, and the destinations derived from it ──────────────────────
 
-	let connectionsList = $state<Sockets.Connections.List.Row[]>([])
-	function handleConnectionsList(msg: Sockets.Connections.List.Response) {
-		connectionsList = msg.connectionsList ?? []
-	}
+	/** The list is the connections context's (contexts/connections.svelte.ts). */
+	const conns = useConnections()
+	const connectionsList = $derived(conns.list)
 
 	const destinations = $derived(
 		destinationsFor(scope, connectionsList, { localOnnx })
@@ -198,9 +211,7 @@
 			? FINDER_SCOPES.filter((option) =>
 					destinationsFor(option.value, connectionsList, {
 						localOnnx
-					}).some(
-						(d) => d.connectionId === connectionId
-					)
+					}).some((d) => d.connectionId === connectionId)
 				)
 			: FINDER_SCOPES
 	)
@@ -356,12 +367,6 @@
 	 * `koboldcpp:` and `ollama:` are restricted (admin-only) interest, so a
 	 * non-admin declares neither rather than collecting a refusal per key.
 	 */
-	$effect(() =>
-		declareInterest<"connections:list">(
-			"connections:list",
-			handleConnectionsList
-		)
-	)
 	$effect(() => {
 		const releases = [
 			declareInterest<"connections:addHubModel">(
@@ -434,7 +439,7 @@
 	// and a list push must not re-ask Hugging Face for a search nobody retyped
 	// — the Hub searches are rate-limited instance-wide.
 	$effect(() => {
-		socket.emit("connections:list", {})
+		conns.requestList()
 	})
 
 	const HUB_PAGE = 10
@@ -567,16 +572,28 @@
 	 * A row that is arriving right now, from whichever feed owns it.
 	 *
 	 * The ONNX rows carry their own state off `connections:list`; the two
-	 * manager feeds are matched through the downloads store — by pull tag for
-	 * Ollama, whose map is keyed by exactly that, and by model name for
-	 * KoboldCPP, whose entries carry the repo name `downloadParams` sent.
+	 * manager feeds are matched through the downloads store — by pull key for
+	 * Ollama, and by model name for KoboldCPP, whose entries carry the repo
+	 * name `downloadParams` sent.
+	 *
+	 * ⚠ The server keys a pull by `<connectionId>:<tag>` whenever the pull
+	 * names a connection (it always does from here), so the store's id is
+	 * `ollama:<connectionId>:<tag>` while the row's key is `ollama:<tag>`.
+	 * Comparing the two bare never matched: no bar, and Get offered again
+	 * mid-pull.
 	 */
 	function liveDownload(row: FinderRow): DownloadItem | null {
-		const kind = destination?.kind
-		if (!kind || kind === "onnx") return null
+		const dest = destination
+		const kind = dest?.kind
+		if (!dest || !kind || kind === "onnx") return null
 		const items = downloads.items
-		if (kind === "ollama")
-			return items.find((i) => i.id === row.key) ?? null
+		if (kind === "ollama") {
+			const id =
+				dest.connectionId != null
+					? `ollama:${dest.connectionId}:${row.key.slice("ollama:".length)}`
+					: row.key
+			return items.find((i) => i.id === id) ?? null
+		}
 		return (
 			items.find(
 				(i) =>
@@ -713,7 +730,9 @@
 	// ── When there is nowhere to put it ─────────────────────────────────────
 
 	function addKoboldCpp() {
-		const { plan } = enableManager("koboldcpp", socket, connectionsList)
+		// Through the context, so the create it may ask for is this tab's own
+		// and the Connections view opens the new row.
+		const { plan } = conns.enableManagerHere("koboldcpp")
 		toaster.success({ title: `${plan.label} is on` })
 	}
 
@@ -746,10 +765,8 @@
 	const onnxHubVisible = $derived(destination?.kind === "onnx")
 </script>
 
-<div
-	class="flex h-full min-h-0 flex-col gap-3 {embedded || inTab ? '' : 'p-1'}"
->
-	{#if !embedded && !inTab}
+<div class="flex h-full min-h-0 flex-col gap-3">
+	{#if onBack && !embedded && !inTab}
 		<PanelNavHeader
 			title="Get a model"
 			{onBack}
@@ -863,8 +880,10 @@
 				<span
 					class="min-w-0 {destination?.disabledReason
 						? 'break-words'
-						: 'truncate'}">{note}</span
+						: 'truncate'}"
 				>
+					{note}
+				</span>
 				{#if destination?.kind !== "onnx"}
 					<span aria-hidden="true">·</span>
 				{/if}
@@ -892,7 +911,9 @@
 							<Popover.Content
 								class="card bg-surface-50-950 border-surface-200-800 w-[min(90vw,240px)] border p-2 shadow-xl"
 							>
-								<p class="text-surface-600-400 px-1.5 pb-1 text-xs">
+								<p
+									class="text-surface-600-400 px-1.5 pb-1 text-xs"
+								>
 									How much memory does this machine have?
 								</p>
 								<div
@@ -937,9 +958,10 @@
 					{recommendedRows.length === 1 ? "match" : "matches"}
 				</span>
 				{#if loadingRecommended && !recommendedRows.length}
-					<p class="text-surface-600-400 text-sm">
-						Loading the recommended list…
-					</p>
+					<LoadingState
+						message="Loading the recommended list…"
+						showMessage
+					/>
 				{:else if kcppRecommendedFailed && !recommendedRows.length}
 					<p class="text-surface-600-400 text-sm">
 						The recommended list is fetched from Hugging Face and it
@@ -979,7 +1001,9 @@
 				     for them in the same shape, so the Hub group here is one
 				     row: the id form the ONNX views already use. -->
 				<section class="flex flex-col gap-3">
-					<span class="text-surface-600-400 text-xs">Hugging Face</span>
+					<span class="text-surface-600-400 text-xs">
+						Hugging Face
+					</span>
 					{#if hubOpen}
 						<form
 							class="panel-card flex flex-col gap-2"
@@ -1101,7 +1125,6 @@
 	/>
 {/if}
 
-
 <!-- One card anatomy, whichever catalogue the row came from: a tile, a name
      with its tier chip, a facts line, the repo's own sentence and its tags,
      and at most one button.
@@ -1117,11 +1140,15 @@
 	<!-- The ONNX feed reports a percent; the KoboldCPP one reports only
 	     bytes, so a bare `live.percent` would pin every managed download at
 	     0% forever. -->
-	{@const percent =
+	<!-- Clamped 0–100: a feed's byte count can overrun the total it
+	     reported, and a bar past 100% spills out of its track. -->
+	{@const rawPercent =
 		row.percent ??
 		(live?.totalBytes
 			? ((live.downloadedBytes ?? 0) / live.totalBytes) * 100
 			: (live?.percent ?? null))}
+	{@const percent =
+		rawPercent == null ? null : Math.min(100, Math.max(0, rawPercent))}
 	<div class="panel-card flex flex-col gap-2">
 		<div class="flex items-start gap-2.5">
 			<span
@@ -1187,7 +1214,9 @@
 		{#if row.description}
 			<!-- Clamped, not truncated: two lines of a sentence is a sentence,
 			     one line of it cut mid-word is a tease. -->
-			<p class="text-surface-700-300 line-clamp-2 text-xs leading-relaxed">
+			<p
+				class="text-surface-700-300 line-clamp-2 text-xs leading-relaxed"
+			>
 				{row.description}
 			</p>
 		{/if}
@@ -1231,10 +1260,7 @@
 				<Icons.Globe size={18} />
 			</span>
 			<div class="flex min-w-0 flex-1 flex-col gap-0.5">
-				<span
-					class="truncate text-[15px] font-medium"
-					title={row.name}
-				>
+				<span class="truncate text-[15px] font-medium" title={row.name}>
 					{repoTitle(row.name)}
 				</span>
 				<span class="text-surface-600-400 truncate text-xs">
@@ -1252,7 +1278,9 @@
 		</div>
 
 		{#if row.description}
-			<p class="text-surface-700-300 line-clamp-2 text-xs leading-relaxed">
+			<p
+				class="text-surface-700-300 line-clamp-2 text-xs leading-relaxed"
+			>
 				{row.description}
 			</p>
 		{/if}

@@ -104,7 +104,7 @@
 			{/if}
 			<button
 				type="button"
-				class="btn preset-filled-surface-400-600 w-fit text-xs"
+				class="btn preset-tonal-surface w-fit text-xs"
 				onclick={() => socket.emit("ner:status", {})}
 			>
 				<Icons.RefreshCw size={14} aria-hidden="true" />

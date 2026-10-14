@@ -361,19 +361,38 @@ export async function addSprite(
 		filename: input.filename ?? null
 	})
 
-	// The same image already under this label in this set: nothing to add.
+	return placeSpriteFile(db, set.id, label, file.id, input.source)
+}
+
+/**
+ * Put a stored file under a sprite label in a set — the one placement rule
+ * every way in shares (an upload, a generated picture):
+ *
+ *  1. the same file already under this label: nothing to add;
+ *  2. an **empty sprite** waiting under the label: filled;
+ *  3. otherwise a **variant** beside what is there — never a replacement.
+ *
+ * `label` must already be normalised (`normalizeSpriteName`).
+ */
+export async function placeSpriteFile(
+	db: Db,
+	setId: number,
+	label: string,
+	fileId: number,
+	source: SpriteOrigin
+): Promise<SpriteRow> {
 	const same = await db.query.sprites.findFirst({
 		where: and(
-			eq(schema.sprites.spriteSetId, set.id),
+			eq(schema.sprites.spriteSetId, setId),
 			eq(schema.sprites.label, label),
-			eq(schema.sprites.fileId, file.id)
+			eq(schema.sprites.fileId, fileId)
 		)
 	})
 	if (same) return same
 
 	const empty = await db.query.sprites.findFirst({
 		where: and(
-			eq(schema.sprites.spriteSetId, set.id),
+			eq(schema.sprites.spriteSetId, setId),
 			eq(schema.sprites.label, label),
 			sql`${schema.sprites.fileId} IS NULL`
 		),
@@ -382,7 +401,7 @@ export async function addSprite(
 	if (empty) {
 		const [row] = await db
 			.update(schema.sprites)
-			.set({ fileId: file.id, source: input.source })
+			.set({ fileId, source })
 			.where(eq(schema.sprites.id, empty.id))
 			.returning()
 		return row
@@ -391,11 +410,11 @@ export async function addSprite(
 	const [row] = await db
 		.insert(schema.sprites)
 		.values({
-			spriteSetId: set.id,
+			spriteSetId: setId,
 			label,
-			position: await nextPosition(db, set.id, label),
-			fileId: file.id,
-			source: input.source
+			position: await nextPosition(db, setId, label),
+			fileId,
+			source
 		})
 		.returning()
 	return row

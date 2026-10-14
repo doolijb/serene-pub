@@ -409,6 +409,14 @@ const unfilledInPorts = (): string[] => {
  */
 const UNFILLED_IN_PORTS: Deliberate[] = [
 	{
+		subject: "core:oracle/generate-image@1.mask",
+		reason:
+			"Inpainting's mask (DESIGN-image-generation §4.1, 2026-10-12). Declared " +
+			"with `init` and `references` so the adapters' sheets (`mask: true` on " +
+			"A1111, KoboldCpp, OpenAI-images, NovelAI) have a port to answer for; no " +
+			"core spec paints over a region yet. Closes when an inpaint action ships."
+	},
+	{
 		subject: "core:outlet/update-message@1.sections",
 		reason:
 			"Folded sections on a finished placeholder (lair pass B4). The " +
@@ -453,14 +461,6 @@ const UNFILLED_IN_PORTS: Deliberate[] = [
 			"img2img. Declared for backends that report it, read by the " +
 			"binding (`init: input?.init`), and no shipped spec offers an " +
 			"input image — the generate-image spec renders from text only."
-	},
-	{
-		subject: "core:oracle/generate-image@1.negative",
-		reason:
-			"Supplied through the node's `prompts` slot (`negative` field), " +
-			"which is where a person writes it, rather than through the port. " +
-			"The port stays for a spec that wants to COMPUTE a negative prompt " +
-			"upstream; the binding reads whichever arrives."
 	},
 	{
 		subject: "core:oracle/embed-text@1.text",

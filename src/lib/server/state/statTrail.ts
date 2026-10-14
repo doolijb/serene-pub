@@ -35,8 +35,15 @@ import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { SlotValue } from "@serene-pub/sdk"
 import { compareDates, type StoryDate } from "$lib/shared/lorebooks/storyDate"
-import { isOnLine } from "$lib/shared/lorebooks/lineReading"
-import { loadEntryDates, mainCutOf, readingOf, rowsOnReading, type LineReading } from "$lib/server/state/reading"
+import { isOnLine, MAIN_LINE, type Line } from "$lib/shared/lorebooks/lineReading"
+import {
+	loadEntryDates,
+	mainCutOf,
+	readingOf,
+	rowsOnReading,
+	sessionReadingOf,
+	type LineReading
+} from "$lib/server/state/reading"
 import type { StateOwner } from "$lib/server/state/owners"
 import { nameLoreRefs, vocabularyFor } from "$lib/server/state/resolve"
 import {
@@ -134,6 +141,58 @@ const durableOwnerOf = (owner: LorebookOwnerFilter, links: LorebookLinks): State
 		? { kind: "lorebook", id: links.lorebookId }
 		: { kind: owner.kind, id: owner.id! }
 
+/**
+ * The **messages** clock on its own: the scope session's rows for one
+ * session-layer owner and one slot (its full id), on `line`, in anchor
+ * order — `valid_from_message_id`, then the row id, as `inForce` orders
+ * them. A swiped reply's rows are already gone (see the header). Values as
+ * stored: a lore reference is not named here.
+ */
+export async function sessionLayerPoints(
+	db: Db,
+	q: {
+		sessionId: number
+		owner: StateOwner
+		slotId: string
+		line: Line
+		/** Only points after this message (exclusive). */
+		sinceMessageId?: number
+	}
+): Promise<StatPoint[]> {
+	const rows = await db
+		.select()
+		.from(schema.attributeValues)
+		.where(
+			and(
+				eq(schema.attributeValues.sessionId, q.sessionId),
+				eq(schema.attributeValues.ownerKind, q.owner.kind),
+				eq(schema.attributeValues.ownerId, q.owner.id),
+				eq(schema.attributeValues.slotId, q.slotId)
+			)
+		)
+	return rows
+		.filter((r) => isOnLine(r, q.line))
+		.filter(
+			(r) =>
+				typeof q.sinceMessageId !== "number" ||
+				(r.validFromMessageId !== null && r.validFromMessageId > q.sinceMessageId)
+		)
+		.sort((a, b) => (a.validFromMessageId ?? -1) - (b.validFromMessageId ?? -1) || a.id - b.id)
+		.map((r) => ({
+			value: (r.value?.v ?? null) as SlotValue,
+			layer: "session" as const,
+			anchor: { messageId: r.validFromMessageId ?? null },
+			provenance: {
+				updatedBy: r.updatedBy,
+				sessionId: q.sessionId,
+				messageId: r.validFromMessageId ?? null,
+				sceneId: r.sceneId ?? null,
+				note: r.note ?? null,
+				createdAt: new Date(r.createdAt).toISOString()
+			}
+		}))
+}
+
 /** One stat's values over time. See the header. */
 export async function statTrailFor(db: Db, query: StatTrailQuery): Promise<StatTrail> {
 	const mode: StatTrailMode =
@@ -218,43 +277,14 @@ export async function statTrailFor(db: Db, query: StatTrailQuery): Promise<StatT
 
 	let messages: StatPoint[] = []
 	const played = sessionId !== null ? sessionOwnerOf(query.owner, links, sessionId) : null
-	if (mode !== "timeline" && sessionId !== null && played) {
-		const rows = await db
-			.select()
-			.from(schema.attributeValues)
-			.where(
-				and(
-					eq(schema.attributeValues.sessionId, sessionId),
-					eq(schema.attributeValues.ownerKind, played.kind),
-					eq(schema.attributeValues.ownerId, played.id),
-					eq(schema.attributeValues.slotId, decl.id)
-				)
-			)
-		messages = rows
-			.filter((r) => isOnLine(r, reading.line))
-			.filter(
-				(r) =>
-					typeof query.sinceMessageId !== "number" ||
-					(r.validFromMessageId !== null && r.validFromMessageId > query.sinceMessageId)
-			)
-			.sort(
-				(a, b) =>
-					(a.validFromMessageId ?? -1) - (b.validFromMessageId ?? -1) || a.id - b.id
-			)
-			.map((r) => ({
-				value: (r.value?.v ?? null) as SlotValue,
-				layer: "session" as const,
-				anchor: { messageId: r.validFromMessageId ?? null },
-				provenance: {
-					updatedBy: r.updatedBy,
-					sessionId,
-					messageId: r.validFromMessageId ?? null,
-					sceneId: r.sceneId ?? null,
-					note: r.note ?? null,
-					createdAt: new Date(r.createdAt).toISOString()
-				}
-			}))
-	}
+	if (mode !== "timeline" && sessionId !== null && played)
+		messages = await sessionLayerPoints(db, {
+			sessionId,
+			owner: played,
+			slotId: decl.id,
+			line: reading.line,
+			sinceMessageId: query.sinceMessageId
+		})
 
 	let points = [...timeline, ...messages]
 	if (typeof query.last === "number" && query.last > 0) points = points.slice(-Math.trunc(query.last))
@@ -264,4 +294,144 @@ export async function statTrailFor(db: Db, query: StatTrailQuery): Promise<StatT
 	points.forEach((p, i) => (p.value = bags[i].value as SlotValue))
 	answer.points = points
 	return answer
+}
+
+// ── The session's own trail, for a widget (F2) ──────────────────────────────
+
+/**
+ * 🚧 One change on a session's stat trail, as core's Stats widget lists it
+ * (`stat-trail`, PLAN-core-widgets §3.10, F2 2026-10-11) — the SDK's
+ * `StatTrailChangeV1`, made here.
+ */
+export interface SessionStatChange {
+	messageId: number | null
+	/** When the row was written, in ms since the epoch. */
+	at: number
+	/** What the slot read before; null for the first with nothing recorded before it. */
+	from: SlotValue | null
+	/** What it read after; null is a clear (the read inherits again). */
+	to: SlotValue | null
+	by: "user" | "model" | "pipeline"
+}
+
+export interface SessionStatTrailQuery {
+	sessionId: number
+	/** A session-layer owner: `session` (its id the session's), `session_cast`, `session_location`. */
+	owner: StateOwner
+	/** Full slot id or local name. */
+	slotId: string
+	/** Keep the newest this many (default 20, at most 100). */
+	limit?: number
+}
+
+export interface SessionStatTrail {
+	/** False when the session does not track the slot (or it is derived): no changes. */
+	tracked: boolean
+	/** Oldest first. */
+	changes: SessionStatChange[]
+}
+
+export const SESSION_STAT_TRAIL_LIMIT = 20
+export const SESSION_STAT_TRAIL_MOST = 100
+
+/**
+ * Who wrote a row, in the widget's three words, from its `updated_by`
+ * (`StateWriter`): `user` a person's own edit; `run:<id>` a turn's run — what
+ * the reply said, or a proposal from it someone accepted — `model`; any
+ * other writer (`script:<id>`, a write-back) `pipeline`.
+ */
+export function statChangeBy(updatedBy: string): SessionStatChange["by"] {
+	if (updatedBy === "user") return "user"
+	return updatedBy.startsWith("run:") ? "model" : "pipeline"
+}
+
+/** The book's durable owner a session-layer owner is played as, or null. */
+function durableOwnerFor(
+	owner: StateOwner,
+	links: LorebookLinks,
+	sessionId: number
+): LorebookOwnerFilter | null {
+	if (owner.kind === "session")
+		return owner.id === sessionId ? { kind: "lorebook", id: links.lorebookId } : null
+	if (owner.kind === "session_location")
+		return links.locations.some((l) => l.entryId === owner.id) ? { kind: "location", id: owner.id } : null
+	if (owner.kind === "session_cast") {
+		const member = links.cast.find((c) => c.characterId === owner.id)
+		return member ? { kind: "cast_member", id: member.castMemberId } : null
+	}
+	return null
+}
+
+/**
+ * 🚧 One session-layer owner's stat trail as a widget reads it (F2): the
+ * session's own changes to one slot, oldest first, each with what it read
+ * before. The same ledger and the same reader as `core:query/stat-trail@1`
+ * — `statTrailFor` in `both` when the session reads a book that holds the
+ * owner (so the first change's `from` is what the book's timeline last
+ * recorded, at the session's reading), else the messages clock alone
+ * (`sessionLayerPoints`) on the session's line. Timeline points are never
+ * changes here: they are the book's, not this session's. The caller judges
+ * who may ask; nothing here reads beyond the session and its book.
+ */
+export async function sessionStatTrail(
+	db: Db,
+	query: SessionStatTrailQuery
+): Promise<SessionStatTrail> {
+	const { sessionId, owner } = query
+	if (owner.kind === "session" && owner.id !== sessionId) return { tracked: false, changes: [] }
+	const limit =
+		typeof query.limit === "number" && Number.isInteger(query.limit) && query.limit > 0
+			? Math.min(query.limit, SESSION_STAT_TRAIL_MOST)
+			: SESSION_STAT_TRAIL_LIMIT
+	const reading = await sessionReadingOf(db, sessionId)
+	const links = reading ? await lorebookLinks(db, reading.lorebookId, reading) : null
+	const durable = links ? durableOwnerFor(owner, links, sessionId) : null
+
+	let tracked: boolean
+	let points: StatPoint[]
+	if (reading && durable) {
+		const trail = await statTrailFor(db, {
+			lorebookId: reading.lorebookId,
+			sessionId,
+			reading,
+			owner: durable,
+			slotId: query.slotId,
+			mode: "both"
+		})
+		tracked = trail.tracked
+		points = trail.points
+	} else {
+		const decls = (await vocabularyFor(db, sessionId)).entries.map((e) => e.decl)
+		const decl = trackedSlotNamed(decls, query.slotId)
+		tracked = !!decl && decl.type !== "derived"
+		points = tracked
+			? await sessionLayerPoints(db, {
+					sessionId,
+					owner,
+					slotId: decl!.id,
+					line: reading?.line ?? MAIN_LINE
+				})
+			: []
+		// A lore reference reads by its title, as the session's own state names it.
+		const bags = points.map((p) => ({ value: p.value }) as Record<string, unknown>)
+		await nameLoreRefs(db, bags, reading, "session")
+		points.forEach((p, i) => (p.value = bags[i].value as SlotValue))
+	}
+
+	const changes: SessionStatChange[] = []
+	let before: SlotValue | null = null
+	for (const point of points) {
+		if (point.layer === "session") {
+			const at = Date.parse(point.provenance.createdAt)
+			changes.push({
+				messageId: point.provenance.messageId,
+				at: Number.isFinite(at) ? at : 0,
+				from: before,
+				to: point.value ?? null,
+				by: statChangeBy(point.provenance.updatedBy)
+			})
+		}
+		before = point.value ?? null
+	}
+	return { tracked, changes: changes.slice(-limit) }
 }

@@ -145,7 +145,47 @@ export const CONNECTION_DEFAULTS = {
 		extraJson: {
 			apiKey: ""
 		}
+	},	/**
+	 * ComfyUI's own port. No key: a ComfyUI behind a proxy that asks for one
+	 * takes it in the same encrypted `apiKey` every connection has, sent in
+	 * the profile's `authHeader`.
+	 */
+	[CONNECTION_TYPE.COMFYUI]: {
+		type: CONNECTION_TYPE.COMFYUI,
+		baseUrl: "http://localhost:8188",
+		modality: "image-gen",
+		extraJson: {
+			apiKey: ""
+		}
 	},
+	/** 🚧 The hosted image dialects: their public address, a key field. */
+	[CONNECTION_TYPE.HORDE]: {
+		type: CONNECTION_TYPE.HORDE,
+		baseUrl: "https://aihorde.net/api",
+		modality: "image-gen",
+		extraJson: {
+			apiKey: ""
+		}
+	},
+	[CONNECTION_TYPE.NOVELAI]: {
+		type: CONNECTION_TYPE.NOVELAI,
+		baseUrl: "https://image.novelai.net",
+		modality: "image-gen",
+		model: "nai-diffusion-5-full",
+		extraJson: {
+			apiKey: ""
+		}
+	},
+	[CONNECTION_TYPE.BFL]: {
+		type: CONNECTION_TYPE.BFL,
+		baseUrl: "https://api.bfl.ai",
+		modality: "image-gen",
+		model: "flux-2-pro",
+		extraJson: {
+			apiKey: ""
+		}
+	},
+
 	/**
 	 * The three embedding types.
 	 *
@@ -298,6 +338,7 @@ export const OPENAI_COMPATIBLE_PRESETS = [
 	},
 	{
 		name: "AnyScale",
+		slug: "anyscale",
 		value: 6,
 		category: "cloud",
 		connectionDefaults: {
@@ -339,6 +380,7 @@ export const OPENAI_COMPATIBLE_PRESETS = [
 	},
 	{
 		name: "DeepInfra",
+		slug: "deepinfra",
 		value: 9,
 		category: "cloud",
 		connectionDefaults: {
@@ -352,6 +394,7 @@ export const OPENAI_COMPATIBLE_PRESETS = [
 	},
 	{
 		name: "Fireworks AI",
+		slug: "fireworks-ai",
 		value: 10,
 		category: "cloud",
 		connectionDefaults: {
@@ -365,6 +408,7 @@ export const OPENAI_COMPATIBLE_PRESETS = [
 	},
 	{
 		name: "Perplexity AI",
+		slug: "perplexity-ai",
 		value: 11,
 		category: "cloud",
 		connectionDefaults: {
@@ -411,6 +455,7 @@ export const OPENAI_COMPATIBLE_PRESETS = [
 	},
 	{
 		name: "xAI Grok (Experimental)",
+		slug: "xai-grok",
 		value: 14,
 		category: "cloud",
 		connectionDefaults: {
@@ -452,6 +497,7 @@ export const OPENAI_COMPATIBLE_PRESETS = [
 	},
 	{
 		name: "Cohere (Experimental)",
+		slug: "cohere",
 		value: 17,
 		category: "cloud",
 		connectionDefaults: {
@@ -465,6 +511,7 @@ export const OPENAI_COMPATIBLE_PRESETS = [
 	},
 	{
 		name: "Novita AI (Experimental)",
+		slug: "novita-ai",
 		value: 18,
 		category: "cloud",
 		connectionDefaults: {
@@ -478,6 +525,7 @@ export const OPENAI_COMPATIBLE_PRESETS = [
 	},
 	{
 		name: "Featherless AI (Experimental)",
+		slug: "featherless-ai",
 		value: 19,
 		category: "cloud",
 		connectionDefaults: {

@@ -32,7 +32,9 @@
 	} from "$lib/shared/utils/docsIndex"
 	import DocPageOutline from "$lib/client/components/docs/DocPageOutline.svelte"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
+	import LoadingState from "$lib/client/components/LoadingState.svelte"
 	import SidebarListItem from "$lib/client/components/SidebarListItem.svelte"
+	import ListGroupLabel from "$lib/client/components/panels/ListGroupLabel.svelte"
 	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import PanelSplit from "$lib/client/components/panels/PanelSplit.svelte"
@@ -65,7 +67,10 @@
 	 * The dock/desk switch every list-with-detail view shares: one pane at
 	 * 400px, the index beside the page once the view is shown full page.
 	 */
-	const viewMode = new ViewModeTracker()
+	const vm = new ViewModeTracker()
+
+	/** Ties each index group's list to its label (`aria-labelledby`). */
+	const uid = $props.id()
 
 	/** The page being read, or null for the index. */
 	let slug = $derived(helpRouter.slug)
@@ -295,9 +300,15 @@
 	 * the first result goes back to the box.
 	 */
 	let resultsEl = $state<HTMLElement | null>(null)
+	/**
+	 * The results' focusable rows: each `SidebarListItem` here draws one
+	 * button (no id column, no row menu), and that button is the row.
+	 */
 	function rows(): HTMLElement[] {
 		return [
-			...(resultsEl?.querySelectorAll<HTMLElement>("[data-result]") ?? [])
+			...(resultsEl?.querySelectorAll<HTMLElement>(
+				'[role="listitem"] button'
+			) ?? [])
 		]
 	}
 	function onSearchKeydown(event: KeyboardEvent) {
@@ -330,7 +341,6 @@
 	$effect(() =>
 		jumpCtx?.registerScope("help", {
 			label: KIND_SCOPE_LABELS.doc,
-			placeholder: "Search the documentation…",
 			getQuery: () => searchQuery,
 			setQuery: (next) => (searchQuery = next),
 			getHits: () => (matches ?? []).map((m) => m.hit),
@@ -379,20 +389,35 @@
 	}
 </script>
 
-<div
-	class="text-foreground flex min-h-0 flex-1 flex-col"
-	data-view-links
-	use:viewMode.observe
->
+<div class="flex h-full min-h-0 flex-col" data-view-links use:vm.observe>
+	<!-- No toolbar without pages: there is nothing to search, and the empty
+	     state says why on its own. -->
 	<PanelSplit
-		mode={viewMode.mode}
+		mode={vm.mode}
 		hasDetail={slug !== null}
-		listWidth="320px"
 		emptyMessage="Pick a page to read it."
+		toolbar={groups.length > 0 ? indexToolbar : undefined}
 		list={indexPane}
 		detail={pagePane}
 	/>
 </div>
+
+<!-- The view toolbar (STYLE-GUIDE §6.3; notes 25): reading makes nothing, so
+     Help has no action row — only the find row, whose box searches the pages'
+     text rather than filtering a list. Pinned by the split, so it stays put
+     while the index scrolls. -->
+{#snippet indexToolbar()}
+	<ViewToolbar label="Help">
+		{#snippet filter()}
+			<PanelFilterInput
+				bind:value={searchQuery}
+				placeholder="Search the documentation"
+				data-help-search
+				onkeydown={onSearchKeydown}
+			/>
+		{/snippet}
+	</ViewToolbar>
+{/snippet}
 
 {#snippet indexPane()}
 	{#if groups.length === 0}
@@ -402,25 +427,10 @@
 			icon={Icons.BookOpen}
 			message="The documentation has not been built for this copy of Serene Pub."
 		/>
+	{:else if searching}
+		{@render resultsList()}
 	{:else}
-		<!-- The view toolbar (STYLE-GUIDE §6.3; notes 25): reading makes
-		     nothing, so Help has no action row — only the find row, whose box
-		     searches the pages' text rather than filtering a list. -->
-		<ViewToolbar label="Help" class="mb-4">
-			{#snippet filter()}
-				<PanelFilterInput
-					bind:value={searchQuery}
-					placeholder="Search the documentation"
-					data-help-search
-					onkeydown={onSearchKeydown}
-				/>
-			{/snippet}
-		</ViewToolbar>
-		{#if searching}
-			{@render resultsList()}
-		{:else}
-			{@render pageIndex()}
-		{/if}
+		{@render pageIndex()}
 	{/if}
 {/snippet}
 
@@ -428,9 +438,7 @@
      it, the page it is on, and opening it lands on that heading. -->
 {#snippet resultsList()}
 	{#if matches === null}
-		<div class="text-surface-600-400 flex justify-center py-8">
-			<Icons.Loader2 class="animate-spin" size={20} />
-		</div>
+		<LoadingState message="Searching the documentation…" />
 	{:else if matches.length === 0}
 		<EmptyState
 			icon={Icons.SearchX}
@@ -439,7 +447,7 @@
 	{:else}
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div
-			class="flex flex-col gap-5"
+			class="flex flex-col"
 			bind:this={resultsEl}
 			onkeydown={onResultsKeydown}
 		>
@@ -464,81 +472,91 @@
 <!-- A result is a heading, not a page: the row names the section, the page
      it is on and why it matched, and opening it lands on that heading. -->
 {#snippet resultGroup(label: string, group: DocMatch[])}
-	<section class="flex flex-col gap-1" aria-label={label}>
-		<h3 class="text-surface-600-400 mb-1 text-xs font-semibold">
-			{label} · {group.length}
-		</h3>
-		{#each group as { hit, snippet } (`${hit.id}#${hit.anchor ?? ""}`)}
-			{@const pageLevel = !hit.anchor || hit.subtitle === hit.title}
-			<button
-				type="button"
-				data-result
-				class="hover:bg-surface-200-800 focus-visible:ring-primary-500 flex w-full flex-col gap-0.5 rounded-lg px-3 py-2 text-left focus-visible:ring-2 focus-visible:outline-none {hit.id ===
-					slug && (hit.anchor ?? '') === helpRouter.anchor.anchor
-					? 'sidebar-row-active'
-					: ''}"
-				onclick={() => show(String(hit.id), hit.anchor ?? "")}
-			>
-				<span
-					class="flex min-w-0 items-center gap-1.5 text-[15px] font-medium"
+	<section class="flex flex-col" aria-label={label}>
+		<ListGroupLabel {label} trailing={String(group.length)} />
+		<div role="list" class="flex flex-col gap-1">
+			{#each group as { hit, snippet } (`${hit.id}#${hit.anchor ?? ""}`)}
+				{@const pageLevel = !hit.anchor || hit.subtitle === hit.title}
+				<!-- The index's row, so a result and the page it lands on look
+				     like one thing: the tile says page or heading, the second
+				     line the page it is on, then why it matched. -->
+				<SidebarListItem
+					itemType={pageLevel
+						? "Documentation page"
+						: "Documentation section"}
+					contentTitle={pageLevel
+						? hit.title
+						: `${hit.title}, in ${hit.subtitle}`}
+					showIndex={false}
+					active={hit.id === slug &&
+						(hit.anchor ?? "") === helpRouter.anchor.anchor}
+					onclick={() => show(String(hit.id), hit.anchor ?? "")}
 				>
-					{#if pageLevel}
-						<Icons.FileText
-							size={14}
-							class="text-surface-600-400 shrink-0"
-							aria-hidden="true"
-						/>
-					{:else}
-						<Icons.Hash
-							size={14}
-							class="text-surface-600-400 shrink-0"
-							aria-hidden="true"
-						/>
-					{/if}
-					<span class="truncate">{@render marked(hit.title)}</span>
-				</span>
-				{#if !pageLevel}
-					<span class="text-surface-600-400 truncate text-xs">
-						{hit.subtitle}
-					</span>
-				{/if}
-				{#if snippet}
-					<span class="text-surface-700-300 line-clamp-2 text-xs">
-						{@render marked(snippet)}
-					</span>
-				{/if}
-			</button>
-		{/each}
+					{#snippet content()}
+						<span
+							class="bg-surface-200-800 text-surface-600-400 grid size-10 shrink-0 place-items-center rounded-[9px]"
+						>
+							{#if pageLevel}
+								<Icons.FileText size={18} aria-hidden="true" />
+							{:else}
+								<Icons.Hash size={18} aria-hidden="true" />
+							{/if}
+						</span>
+						<span class="flex min-w-0 flex-1 flex-col text-left">
+							<span class="truncate text-[15px] font-medium">
+								{@render marked(hit.title)}
+							</span>
+							{#if !pageLevel}
+								<span
+									class="text-surface-600-400 truncate text-xs"
+								>
+									{hit.subtitle}
+								</span>
+							{/if}
+							{#if snippet}
+								<span
+									class="text-surface-600-400 line-clamp-2 text-xs"
+								>
+									{@render marked(snippet)}
+								</span>
+							{/if}
+						</span>
+					{/snippet}
+				</SidebarListItem>
+			{/each}
+		</div>
 	</section>
 {/snippet}
 
 {#snippet pageIndex()}
-	<div class="flex flex-col gap-5">
+	<div class="flex flex-col">
 		<!-- Keyed by source AND group: the guides are one source that fills
-			     several groups (Start here, Guides, How-to, …), so a source
-			     alone repeats. The headings stay the §3.3 section heading —
-			     no eyebrow, no numbering (STYLE-GUIDE §1.8). -->
-		{#each groups as group (group.source + ":" + group.group)}
-			<section class="flex flex-col gap-2">
-				<div class="flex items-center gap-2">
-					<h3 class="text-sm font-semibold">{group.group}</h3>
-					{#if group.source !== "app"}
-						<!-- Reference pages are rendered from the SDK's own
-							     declarations rather than written by anyone.
-							     Marking the group says so before a reader opens
-							     one and wonders why it reads like a spec. -->
-						<span class="badge preset-tonal-tertiary text-[11px]">
-							Reference
-						</span>
-					{/if}
-				</div>
+		     several groups (Start here, Guides, How-to, …), so a source alone
+		     repeats. The heading is the shared group label (§6.4), the same
+		     as every other sidebar list's. -->
+		{#each groups as group, g (group.source + ":" + group.group)}
+			{@const labelId = `${uid}-group-${g}`}
+			<section class="flex flex-col">
+				<!-- Reference pages are rendered from the SDK's own
+				     declarations rather than written by anyone. Marking the
+				     group says so before a reader opens one and wonders why it
+				     reads like a spec. -->
+				<ListGroupLabel
+					label={group.group}
+					id={labelId}
+					trailing={group.source !== "app" ? "Reference" : undefined}
+				/>
 				{#if group.meta?.banner}
 					<!-- Once, above the group. The compiler also prepends it
 						     to every page of the source, so a reader meets it
 						     whichever way in they come. -->
 					<p class="doc-banner">{group.meta.banner}</p>
 				{/if}
-				<div role="list" class="flex flex-col gap-1">
+				<div
+					role="list"
+					class="flex flex-col gap-1"
+					aria-labelledby={labelId}
+				>
 					{#each group.pages as doc (doc.slug)}
 						<SidebarListItem
 							itemType="Documentation page"
@@ -587,100 +605,107 @@
 	     view has the page to itself (STYLE-GUIDE §5.3 — the column, never the
 	     window). -->
 	<!-- pb-16: room below the last line and the Previous/Next row, so the
-	     page never ends flush against the bottom of the view. -->
-	<div class="@container/docs flex min-h-0 flex-col pb-16">
-		<div class="mb-3">
-			<PanelNavHeader
-				title={meta?.title ?? "Documentation"}
-				onBack={() => show(null)}
-				backLabel="Documentation"
-			/>
-		</div>
+	     page never ends flush against the bottom of the view. gap-3 is the
+	     space under the header (STYLE-GUIDE §6.3: the pane's gap, never a
+	     margin on the header). -->
+	<div class="@container/docs flex min-h-0 flex-col gap-3 pb-16">
+		<!-- Back only at compact, where the index has given way to the page;
+		     at desk the index stands beside it (ruling Q3). -->
+		<PanelNavHeader
+			title={meta?.title ?? "Documentation"}
+			onBack={vm.mode === "compact" ? () => show(null) : undefined}
+			backLabel="Documentation"
+		/>
 		{#if loading}
-			<div class="text-surface-600-400 flex justify-center py-12">
-				<Icons.Loader2 class="animate-spin" size={24} />
-			</div>
+			<LoadingState message="Loading the page…" />
 		{:else if html}
-			<!-- The click handler sits on the wrapper rather than the article so
-			     the outline's rows go through the same rule; every target of it
-			     is a real <a>, which is keyboard-operable on its own and fires
-			     this same click event from Enter. -->
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<!-- svelte-ignore a11y_click_events_have_key_events -->
-			<div
-				class="grid grid-cols-1 items-start gap-0 @min-[48rem]/docs:grid-cols-[minmax(0,1fr)_14rem] @min-[48rem]/docs:gap-8"
-				onclick={handleDocClick}
-			>
-				<!-- The compiler emits the article body only, already
-				     link-rewritten and anchored; `prose` styles the ordinary
-				     markdown and `docs.css` the dialect on top of it, which is
-				     what `.docs-article` switches on. In the dock the column is
-				     narrower than any measure, so `prose-sm` and prose's own
-				     cap cost nothing; given the page (from 40rem of column, a step before
-				     the outline appears at 48rem) it reads like a page: regular size,
-				     no cap — the outline column is what bounds the line, and a
-                     65ch column beside a 360px list and a 14rem outline is the
-                     "too narrow" the owner reported (2026-09-17). -->
-				<!-- Playground blocks get their button here too, from the same
-				     action Document View uses — one upgrade, so the two readings
-				     of a page can never offer different controls. It re-scans on its
-				     own when this view navigates and swaps the body. -->
-				<article
-					bind:this={articleRef}
-					class="docs-article prose prose-sm dark:prose-invert @min-[40rem]/docs:prose-base @min-[40rem]/docs:max-w-none"
-					use:docsPlayground={{ theme: documentTheme }}
+			<!-- One block, so the column's gap sits under the header only and
+			     the Previous/Next row keeps its own spacing. -->
+			<div>
+				<!-- The click handler sits on the wrapper rather than the article so
+				     the outline's rows go through the same rule; every target of it
+				     is a real <a>, which is keyboard-operable on its own and fires
+				     this same click event from Enter. -->
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<!-- svelte-ignore a11y_click_events_have_key_events -->
+				<div
+					class="grid grid-cols-1 items-start gap-0 @min-[48rem]/docs:grid-cols-[minmax(0,1fr)_14rem] @min-[48rem]/docs:gap-8"
+					onclick={handleDocClick}
 				>
-					{@html html}
-				</article>
-				<DocPageOutline headings={meta?.headings ?? []} />
+					<!-- The compiler emits the article body only, already
+					     link-rewritten and anchored; `prose` styles the ordinary
+					     markdown and `docs.css` the dialect on top of it, which is
+					     what `.docs-article` switches on. In the dock the column is
+					     narrower than any measure, so `prose-sm` and prose's own
+					     cap cost nothing; given the page (from 40rem of column, a step before
+					     the outline appears at 48rem) it reads like a page: regular size,
+					     no cap — the outline column is what bounds the line, and a
+	                     65ch column beside a 360px list and a 14rem outline is the
+	                     "too narrow" the owner reported (2026-09-17). -->
+					<!-- Playground blocks get their button here too, from the same
+					     action Document View uses — one upgrade, so the two readings
+					     of a page can never offer different controls. It re-scans on its
+					     own when this view navigates and swaps the body. -->
+					<article
+						bind:this={articleRef}
+						class="docs-article prose prose-sm dark:prose-invert @min-[40rem]/docs:prose-base @min-[40rem]/docs:max-w-none"
+						use:docsPlayground={{ theme: documentTheme }}
+					>
+						{@html html}
+					</article>
+					<DocPageOutline headings={meta?.headings ?? []} />
+				</div>
+				{#if neighbours.prev || neighbours.next}
+					<nav
+						class="border-surface-200-800 mt-8 grid grid-cols-2 gap-3 border-t pt-4"
+						aria-label="More pages"
+					>
+						{#if neighbours.prev}
+							{@const prev = neighbours.prev}
+							<button
+								type="button"
+								class="hover:bg-surface-200-800 flex flex-col items-start gap-0.5 rounded-lg p-3 text-left"
+								onclick={() => show(prev.slug)}
+							>
+								<span
+									class="text-surface-600-400 flex items-center gap-1 text-xs"
+								>
+									<Icons.ArrowLeft
+										size={12}
+										aria-hidden="true"
+									/>
+									Previous
+								</span>
+								<span class="text-sm font-medium">
+									{prev.title}
+								</span>
+							</button>
+						{:else}
+							<span></span>
+						{/if}
+						{#if neighbours.next}
+							{@const next = neighbours.next}
+							<button
+								type="button"
+								class="hover:bg-surface-200-800 flex flex-col items-end gap-0.5 rounded-lg p-3 text-right"
+								onclick={() => show(next.slug)}
+							>
+								<span
+									class="text-surface-600-400 flex items-center gap-1 text-xs"
+								>
+									Next <Icons.ArrowRight
+										size={12}
+										aria-hidden="true"
+									/>
+								</span>
+								<span class="text-sm font-medium">
+									{next.title}
+								</span>
+							</button>
+						{/if}
+					</nav>
+				{/if}
 			</div>
-			{#if neighbours.prev || neighbours.next}
-				<nav
-					class="border-surface-200-800 mt-8 grid grid-cols-2 gap-3 border-t pt-4"
-					aria-label="More pages"
-				>
-					{#if neighbours.prev}
-						{@const prev = neighbours.prev}
-						<button
-							type="button"
-							class="hover:bg-surface-200-800 flex flex-col items-start gap-0.5 rounded-lg p-3 text-left"
-							onclick={() => show(prev.slug)}
-						>
-							<span
-								class="text-surface-600-400 flex items-center gap-1 text-xs"
-							>
-								<Icons.ArrowLeft size={12} aria-hidden="true" />
-								Previous
-							</span>
-							<span class="text-sm font-medium">
-								{prev.title}
-							</span>
-						</button>
-					{:else}
-						<span></span>
-					{/if}
-					{#if neighbours.next}
-						{@const next = neighbours.next}
-						<button
-							type="button"
-							class="hover:bg-surface-200-800 flex flex-col items-end gap-0.5 rounded-lg p-3 text-right"
-							onclick={() => show(next.slug)}
-						>
-							<span
-								class="text-surface-600-400 flex items-center gap-1 text-xs"
-							>
-								Next <Icons.ArrowRight
-									size={12}
-									aria-hidden="true"
-								/>
-							</span>
-							<span class="text-sm font-medium">
-								{next.title}
-							</span>
-						</button>
-					{/if}
-				</nav>
-			{/if}
 		{:else}
 			<EmptyState
 				icon={Icons.FileText}

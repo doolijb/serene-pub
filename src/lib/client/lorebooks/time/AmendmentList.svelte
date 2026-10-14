@@ -10,6 +10,7 @@
 	import { loreRoute } from "../loreRoute.svelte"
 	import { openBookTime } from "./bookTime.svelte"
 	import { amendmentsAheadSentence, parseMoment } from "./moment"
+	import { bookReadOnly } from "../bookData.svelte"
 
 	/**
 	 * What this entry says differently, and from when.
@@ -52,6 +53,9 @@
 	let { lorebookId, amendments, moment, subject = "entry" }: Props = $props()
 
 	const socket = useTypedSocket()
+	/** A shared book: amendments read, never re-dated or deleted. */
+	const readOnlyBook = bookReadOnly()
+	let readOnly = $derived(readOnlyBook.value)
 
 	/** The moment being read, or null at now — where nothing is still ahead. */
 	let cut = $derived(parseMoment(moment))
@@ -241,7 +245,7 @@
 				<Icons.Check size={14} aria-hidden="true" />
 			</button>
 			<button
-				class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-1.5"
+				class="btn btn-sm preset-tonal-surface shrink-0 p-1.5"
 				type="button"
 				onclick={() => (editing = null)}
 				aria-label="Keep the date it has"
@@ -261,7 +265,7 @@
 				Delete
 			</button>
 			<button
-				class="btn btn-sm preset-filled-surface-400-600 shrink-0"
+				class="btn btn-sm preset-tonal-surface shrink-0"
 				type="button"
 				onclick={() => (confirming = null)}
 			>
@@ -273,14 +277,20 @@
 				aria-hidden="true"
 				class="text-surface-600-400 shrink-0"
 			/>
-			<button
-				class="hover:preset-tonal-surface shrink-0 rounded-[6px] px-1 text-xs font-semibold"
-				type="button"
-				onclick={() => startEdit(row)}
-				title="Change the date this begins at"
-			>
-				{formatDate(row)}
-			</button>
+			{#if readOnly}
+				<span class="shrink-0 px-1 text-xs font-semibold">
+					{formatDate(row)}
+				</span>
+			{:else}
+				<button
+					class="hover:preset-tonal-surface shrink-0 rounded-[6px] px-1 text-xs font-semibold"
+					type="button"
+					onclick={() => startEdit(row)}
+					title="Change the date this begins at"
+				>
+					{formatDate(row)}
+				</button>
+			{/if}
 			<span class="text-surface-700-300 min-w-0 flex-1 truncate text-xs">
 				changes {saysWhat(row.fields)}
 			</span>
@@ -297,15 +307,17 @@
 					not yet
 				</span>
 			{/if}
-			<button
-				class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-1.5"
-				type="button"
-				onclick={() => (confirming = row.id)}
-				title="Delete this amendment"
-				aria-label="Delete the amendment dated {formatDate(row)}"
-			>
-				<Icons.Trash2 size={14} aria-hidden="true" />
-			</button>
+			{#if !readOnly}
+				<button
+					class="btn btn-sm preset-tonal-error shrink-0 p-1.5"
+					type="button"
+					onclick={() => (confirming = row.id)}
+					title="Delete this amendment"
+					aria-label="Delete the amendment dated {formatDate(row)}"
+				>
+					<Icons.Trash2 size={14} aria-hidden="true" />
+				</button>
+			{/if}
 		{/if}
 	</li>
 {/snippet}

@@ -2,10 +2,11 @@
  * The first-run doors on an empty Connections index, rendered.
  *
  * `render` from `svelte/server`, like `indexRows.ssr.test.ts`. What is pinned
- * is the gating: the "On this machine" door installs and runs KoboldCPP, which
- * the Android app cannot do (the server refuses to switch either manager on),
- * so it hides there on `canRunLocalRuntimes` — the same predicate the Add menu
- * and the setup wizard hide their local-runtime items on.
+ * is the gating: the "KoboldCPP, run by Serene Pub" door installs and runs
+ * KoboldCPP, which the Android app cannot do (the server refuses to switch
+ * either manager on), so it hides there on `canRunLocalRuntimes` — the same
+ * predicate the Add menu and the setup wizard hide their local-runtime items
+ * on.
  *
  * ⚠ Not a design assertion. It checks the doors' sentences, never layout.
  */
@@ -39,13 +40,7 @@ function renderEmptyIndex(settings: {
 			onAddNew: noop,
 			onEnableManager: noop,
 			onOpenConnection: noop,
-			onOpenModel: noop,
-			onOpenCapability: noop,
-			onSetUpChat: noop,
-			onGetModel: noop,
-			onOpenDownloads: noop,
-			onRefresh: noop,
-			onAddModel: noop
+			onRefresh: noop
 		},
 		context: new Map<string, unknown>([
 			["systemSettingsCtx", { settings }],
@@ -54,67 +49,52 @@ function renderEmptyIndex(settings: {
 	}).body
 }
 
-const LOCAL_DOOR = "KoboldCPP, installed and run by Serene Pub."
+/**
+ * The doors carry the setup wizard's road names and sentences (plan §E, one
+ * vocabulary for the roads), so the two screens never name a road twice.
+ */
+const LOCAL_DOOR =
+	"Serene Pub downloads KoboldCPP and a model that suits your computer, then runs it for you."
+const SERVICE_DOOR = "An online service"
+const CUSTOM_DOOR = "A custom connection"
 
 describe("the first-run doors", () => {
 	test("offer running KoboldCPP on this machine where it can run", () => {
 		const html = renderEmptyIndex({ isAndroidWrapper: false })
 		expect(html).toContain("Where should the writing happen?")
+		expect(html).toContain("KoboldCPP, run by Serene Pub")
 		expect(html).toContain(LOCAL_DOOR)
-		expect(html).toContain("A service")
-		expect(html).toContain("Something I already run")
+		expect(html).toContain(SERVICE_DOOR)
+		expect(html).toContain(CUSTOM_DOOR)
 	})
 
 	test("hide the on-this-machine door in the Android app", () => {
 		const html = renderEmptyIndex({ isAndroidWrapper: true })
 		expect(html).toContain("Where should the writing happen?")
 		expect(html).not.toContain(LOCAL_DOOR)
-		// The other two doors stay — a service, or a server run elsewhere.
-		expect(html).toContain("A service")
-		expect(html).toContain("Something I already run")
+		expect(html).not.toContain("KoboldCPP, run by Serene Pub")
+		// The other two doors stay — an online service, or a custom connection.
+		expect(html).toContain(SERVICE_DOOR)
+		expect(html).toContain(CUSTOM_DOOR)
 	})
 })
 
 /**
- * The "Later, optionally" doors where local ONNX can't run. Named entities
- * come from local ONNX alone, so that door is disabled and says why rather
- * than opening a view whose every way to a model is disabled. Embeddings
- * still come from a service, so that door stays and only stops promising a
- * local download.
+ * The "Later, optionally" doors (Images, Embeddings, Named entities) were job
+ * doors; jobs live in the Models view since the split (plan 2026-10-11), so
+ * the empty Connections index offers only the three ways to connect.
  */
-describe("the later doors where local ONNX can't run", () => {
-	const CLAUSE = "the ONNX runtime didn't load (no binary for darwin/x64)"
-	/** The `<button>` whose body names this door, as [attributes, body]. */
-	const door = (html: string, title: string) =>
-		[...html.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)].find(
-			([, , body]) => body.includes(title)
-		)!
-	const isDisabled = (attrs: string) => /\sdisabled(?=[\s=>]|$)/.test(attrs)
-
-	test("unavailable: Named entities is disabled with the reason; Embeddings stays", () => {
+describe("no job doors on an empty Connections index", () => {
+	test("Later, optionally is gone; the three connect doors stay", () => {
 		const html = renderEmptyIndex({
-			localOnnxAvailability: { available: false, reason: CLAUSE }
+			localOnnxAvailability: { available: false, reason: "no binary" }
 		})
-		const [, entityAttrs, entityBody] = door(html, "Named entities")
-		expect(isDisabled(entityAttrs)).toBe(true)
-		expect(entityBody).toContain(`Not available on this machine: ${CLAUSE}`)
-		expect(entityBody).not.toContain("Find people and places")
-		const [, embedAttrs, embedBody] = door(html, "Embeddings")
-		expect(isDisabled(embedAttrs)).toBe(false)
-		expect(embedBody).toContain("Smarter lore retrieval")
-		expect(embedBody).not.toContain("local download")
-	})
-
-	test("available: both doors open, as written", () => {
-		const html = renderEmptyIndex({
-			localOnnxAvailability: { available: true, reason: null }
-		})
-		const [, entityAttrs, entityBody] = door(html, "Named entities")
-		expect(isDisabled(entityAttrs)).toBe(false)
-		expect(entityBody).toContain("Find people and places in text · local")
-		expect(door(html, "Embeddings")[2]).toContain(
-			"Smarter lore retrieval · local download"
-		)
+		expect(html).not.toContain("Later, optionally")
+		expect(html).not.toContain("Named entities")
+		expect(html).not.toContain("Powers Search by meaning")
+		expect(html).toContain("KoboldCPP, run by Serene Pub")
+		expect(html).toContain(SERVICE_DOOR)
+		expect(html).toContain(CUSTOM_DOOR)
 	})
 })
 
@@ -159,13 +139,7 @@ describe("a local ONNX row where the runtime didn't load", () => {
 				onAddNew: noop,
 				onEnableManager: noop,
 				onOpenConnection: noop,
-				onOpenModel: noop,
-				onOpenCapability: noop,
-				onSetUpChat: noop,
-				onGetModel: noop,
-				onOpenDownloads: noop,
-				onRefresh: noop,
-				onAddModel: noop
+				onRefresh: noop
 			},
 			context: new Map<string, unknown>([
 				["systemSettingsCtx", { settings: { localOnnxAvailability } }],

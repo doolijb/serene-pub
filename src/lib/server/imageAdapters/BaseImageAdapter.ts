@@ -44,7 +44,10 @@
  */
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import type { SettingsSchema } from "@serene-pub/sdk"
-import type { AdapterActions } from "$lib/server/adapters/actions"
+import type {
+	AdapterActions,
+	ImageEditRequest
+} from "$lib/server/adapters/actions"
 import {
 	capOutputCount,
 	prepareAttachments,
@@ -57,15 +60,18 @@ import { adapterIo } from "$lib/shared/connectionAdapters/manifest"
 import type { AdapterIo } from "$lib/shared/connectionAdapters/io"
 import type { MediaKind } from "$lib/shared/media/formats"
 import type {
-	ImageCapabilities,
+	DrawingSheet,
 	ImageGenOptions,
 	ImageGenRequest,
 	ImageGenResult
 } from "$lib/shared/imageGen/types"
+import type { MediaRef } from "@serene-pub/sdk"
+import type { PackKeyedGraph } from "$lib/server/imageGen/packing"
+import type { ObjectInfoSummary } from "$lib/server/imageGen/comfy/objectInfo"
 
 export { CONNECTION_TYPE }
 export type {
-	ImageCapabilities,
+	DrawingSheet,
 	ImageGenOptions,
 	ImageGenProgress,
 	ImageGenRequest,
@@ -89,13 +95,38 @@ export type {
  * omitted because the class declares it `abstract`.
  */
 export interface BaseImageAdapter
-	extends Partial<Omit<AdapterActions, "generateImage">> {}
+	extends Partial<Omit<AdapterActions, "generateImage" | "editImage">> {
+	/**
+	 * Spelled as a METHOD signature rather than left to the `Partial<…>`
+	 * above: a mapped type turns every member into a property, and a
+	 * subclass implementing a property as a method is TS2425. `editImage` is
+	 * the one action an image subclass implements beside `generateImage`
+	 * (`OpenAIImagesAdapter`), so it is the one that needs saying.
+	 */
+	editImage?(
+		req: ImageEditRequest,
+		opts?: ImageGenOptions
+	): Promise<ImageGenResult>
+}
+
+/** One listed model with what the listing knows about it. */
+export interface ListedImageModel {
+	id: string
+	name?: string
+	modality?: string
+	facts?: unknown
+}
 
 export interface ImageAdapterExports {
 	Adapter: new (connection: AdapterConnection) => BaseImageAdapter
+	/**
+	 * Identifiers, or entries carrying what the listing knows about each
+	 * (`normalizeProbedModels` reads both): a display name, `modality`, and
+	 * `facts` such as a per-image price.
+	 */
 	listModels: (
 		connection: SelectConnection
-	) => Promise<{ models: string[]; error?: string }>
+	) => Promise<{ models: Array<string | ListedImageModel>; error?: string }>
 	testConnection: (connection: SelectConnection) => Promise<{
 		ok: boolean
 		error?: string
@@ -103,24 +134,59 @@ export interface ImageAdapterExports {
 		extra?: Record<string, unknown>
 	}>
 	/**
-	 * The `generateImage` ACTION PROFILE — how one render behaves here, so a form
-	 * can stop offering a control that would quietly do nothing.
+	 * The **drawing sheet** — how one render behaves here, and what it can be
+	 * handed (`$lib/shared/imageGen/types`, DESIGN-image-generation §4.3). The
+	 * module's default; `sheetFor` refines it per connection and model.
 	 *
-	 * ⚠ NOT a `CapabilitySet`, and the two must never be merged. `progress`,
-	 * `preview`, `cancel`, `freeSize`, `sizePresets` and `samplers` describe the
-	 * ergonomics of a single call; a capability set describes what kind of data
-	 * turns into what other kind. Folding these in would put "Can be cancelled"
-	 * beside "Chat" on the connection screen, and would give the four-layer
-	 * resolution a set of keys no preset, probe or person has any opinion about.
-	 *
-	 * The one field that DID belong on the other side has moved: `img2img` is now
-	 * the presence of an `editImage` method, from which the `text+image->image`
-	 * capability key is derived. It had been a boolean saying the same thing as a
-	 * manifest entry, and the two disagreed — `A1111Adapter` reported
-	 * `img2img: false` while the manifest declared the transform `native` for the
-	 * same type.
+	 * ⚠ NOT a `CapabilitySet`, and the two must never be merged: a capability
+	 * set says what kind of data turns into what other kind; a sheet says how
+	 * one call of the `generateImage` action behaves.
 	 */
-	capabilities: ImageCapabilities
+	sheet: DrawingSheet
+	/**
+	 * The sheet for ONE connection, when its type or its model changes the
+	 * answer — one module serving A1111 and KoboldCPP, or a KoboldCPP whose
+	 * loaded model is an edit model and so takes reference images. Absent
+	 * means `sheet` is the answer for every row.
+	 *
+	 * The one place a connection TYPE is read for drawing purposes, besides
+	 * the registry that routes the type here (§4.6).
+	 */
+	sheetFor?: (connection: {
+		type: string
+		model?: string | null
+		/**
+		 * The service preset and address, for a type that is many services
+		 * behind one wire (OPENAI: OpenAI, xAI, Together) — the sheet differs
+		 * by which one answers.
+		 */
+		preset?: string | null
+		baseUrl?: string | null
+		/** Profile values a sheet reads (ComfyUI's `seriesMax`). */
+		extraJson?: unknown
+	}) => DrawingSheet
+	/**
+	 * 🚧 The sheet a WORKFLOW implies, for a `payload: "template"` module
+	 * (ComfyUI, DESIGN-image-generation §4.5 "derived"): a knob is honoured
+	 * iff the workflow reads it. Async because finding the baked size renders
+	 * the document. The host calls it once the oracle's `workflow` slot has
+	 * resolved; absent on every flat module.
+	 */
+	sheetForWorkflow?: (
+		connection: { type: string; extraJson?: unknown },
+		workflow: Pick<
+			import("$lib/shared/imageGen/types").ImageWorkflowDocument,
+			"document" | "variables" | "outputNode"
+		>
+	) => Promise<DrawingSheet>
+	/**
+	 * 🚧 The keyed-graph packing seam (DESIGN-image-generation §4.7 rule 1):
+	 * a backend that can draw a whole series in ONE call (a ComfyUI graph with
+	 * one branch per item) returns the calls it would make; `null` means "not
+	 * this way", and the host falls back to batch or loop packing. No adapter
+	 * implements it yet — the ComfyUI adapter will.
+	 */
+	packKeyedGraph?: PackKeyedGraph
 	/**
 	 * The backend-specific settings this adapter understands, in the SDK's field
 	 * language — so the connection form is generated rather than written, and a
@@ -128,6 +194,17 @@ export interface ImageAdapterExports {
 	 */
 	profileSchema?: SettingsSchema
 	profileDefaults?: Record<string, unknown>
+	/**
+	 * 🚧 The server's node catalogue (`/object_info`), summarised — for a
+	 * `payload: "template"` module whose workflows are checked against what
+	 * the server has installed (ComfyUI, DESIGN-image-generation §4.9).
+	 * Absent on every flat module. Read through `getImageAdapter`, like the
+	 * rest of this object (`comfy/serverCheck.ts`).
+	 */
+	fetchObjectInfo?: (connection: {
+		baseUrl?: string | null
+		extraJson?: unknown
+	}) => Promise<ObjectInfoSummary>
 }
 
 export abstract class BaseImageAdapter implements AdapterActions {
@@ -250,6 +327,39 @@ export abstract class BaseImageAdapter implements AdapterActions {
 		report: IgnoreReporter
 	): number {
 		return capOutputCount(this.io, kind, requested, key, report)
+	}
+
+	/**
+	 * The base64 of each referenced file, through the host's loader, in order.
+	 *
+	 * Reports `key` as ignored — and returns nothing — when the host handed no
+	 * loader or a file cannot be read, rather than failing the render: an
+	 * unread reference changes how closely the picture matches, never whether
+	 * there is one, which is the Vercel rule the drawing sheet keeps.
+	 */
+	protected async base64Of(
+		refs: readonly MediaRef[],
+		key: string,
+		t: Translation,
+		opts: ImageGenOptions
+	): Promise<string[]> {
+		if (!refs.length) return []
+		if (!opts.loadMedia) {
+			t.ignore(key)
+			return []
+		}
+		const out: string[] = []
+		for (const ref of refs) {
+			try {
+				const { bytes } = await opts.loadMedia(ref)
+				out.push(Buffer.from(bytes).toString("base64"))
+			} catch {
+				t.ignore(key)
+				return []
+			}
+		}
+		t.apply(key, true)
+		return out
 	}
 
 	/** Trim a trailing slash so `${base}/v1/...` never doubles up. */

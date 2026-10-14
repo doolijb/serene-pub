@@ -89,6 +89,11 @@ export function outputKindOf(capability: string): IoKind | undefined {
  * config has to register the same choice against every image transform, and a
  * control that says "the image default" while writing one of three rows is a
  * lie on screen.
+ *
+ * A ComfyUI pair is no exception: it is offered the image configs like any
+ * image pair, and the knobs its workflow does not read are ignored and
+ * reported. A workflow's own dials are its variables, set in the workflow
+ * editor (the per-workflow shape, ruling 13, was reversed 2026-10-12).
  */
 export function samplingShapeForCapability(
 	capability: string

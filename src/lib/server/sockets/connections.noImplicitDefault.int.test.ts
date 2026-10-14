@@ -75,7 +75,7 @@ const fakeSocket = (userId: number) =>
 const noopEmit = () => {}
 
 const defaultFor = (capability: string) =>
-	testDb.query.connectionDefaults.findFirst({
+	testDb.query.loadouts.findFirst({
 		where: byCapability(capability)
 	})
 

@@ -143,8 +143,15 @@ export async function saveDocument(
 		if (stored) {
 			// Publishing an already-stored document is a pointer move and
 			// nothing else — the rows below it are the same rows.
-			if (opts.publish && spec.activeVersionId !== stored.id)
+			if (opts.publish && spec.activeVersionId !== stored.id) {
 				await publishVersion(tx, spec.id, stored.id, opts.batch)
+				await followPresetOnMove(
+					tx,
+					doc.id,
+					spec.activeVersionId,
+					stored.id
+				)
+			}
 			return {
 				specId: spec.id,
 				specVersionId: stored.id,
@@ -220,7 +227,9 @@ export async function saveDocument(
 					position: n.position,
 					// The session-settings mark (R28): stored so every reader
 					// reads it off the published spec, a plugin's as well as core's.
-					expose: n.expose ?? null
+					expose: n.expose ?? null,
+					// What the spec says this placement's keys mean (2026-10-13).
+					renders: n.renders ?? null
 				}))
 			)
 			.returning()
@@ -310,8 +319,15 @@ export async function saveDocument(
 				)
 		}
 
-		if (opts.publish)
+		if (opts.publish) {
 			await publishVersion(tx, spec.id, version.id, opts.batch)
+			await followPresetOnMove(
+				tx,
+				doc.id,
+				spec.activeVersionId,
+				version.id
+			)
+		}
 
 		return {
 			specId: spec.id,
@@ -325,6 +341,30 @@ export async function saveDocument(
 	// cached the rows as they stood before it.
 	if (opts.publish) invalidateDeclaredEnvoys()
 	return saved
+}
+
+/**
+ * The pointer moved off `fromVersionId`: the shipped Default config follows the
+ * new version's default preset wherever it still holds the old one's value
+ * (owner ruling 2026-10-11, `followDefaultPreset`). Runs inside the publish's
+ * transaction, so the move and the follow land together or not at all. A first
+ * publish has nothing to move off, and a spec whose Default is not yet written
+ * gets it from the new preset when the reconcile creates it.
+ *
+ * Imported when called, which keeps `config/named` (it reaches this module back
+ * through the panel) out of this module's static graph.
+ */
+async function followPresetOnMove(
+	tx: Db,
+	specSlug: string,
+	fromVersionId: number | null | undefined,
+	toVersionId: number
+): Promise<void> {
+	if (!fromVersionId || fromVersionId === toVersionId) return
+	const { followDefaultPreset } = await import(
+		"$lib/server/pipelines/config/named"
+	)
+	await followDefaultPreset(tx, specSlug, fromVersionId, toVersionId)
 }
 
 /**
@@ -985,7 +1025,8 @@ export async function loadDocument(
 			...(n.clauseChain ? { clauseChain: n.clauseChain } : {}),
 			position: n.position,
 			// Only when stored, so a document read back hashes as it was written.
-			...(n.expose ? { expose: n.expose } : {})
+			...(n.expose ? { expose: n.expose } : {}),
+			...(n.renders ? { renders: n.renders } : {})
 		})),
 		edges: edgeRows.map((e: any) => ({
 			from: e.fromClauseId ?? keyOf.get(e.fromNodeId)!,

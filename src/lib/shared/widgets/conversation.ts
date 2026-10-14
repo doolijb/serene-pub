@@ -1,7 +1,11 @@
 /**
- * 🚧 The conversation **dossier** — declared with core's conversation (C7),
- * `@serene-pub/core-catalog/conversation`, and re-exported where the page has
- * always imported it.
+ * 🚧 The conversation **dossier** — `session_full.v1`. Its shape is the
+ * SDK's `SessionDossierV1` (`@serene-pub/sdk`, beside the other section
+ * shapes since C4, 2026-10-10); core's conversation re-exports it with its
+ * parts and `NO_LINE` from `@serene-pub/core-catalog/conversation`, and this
+ * module re-exports them where the page has always imported them.
+ * `ConversationDossierV1` is `SessionDossierV1` under its old name
+ * (⏳ REMOVE in 0.7.0).
  */
 export {
 	NO_LINE,
@@ -13,5 +17,6 @@ export {
 	type ConversationSceneV1,
 	type ConversationSpeakerV1,
 	type ConversationStateV1,
-	type ConversationTabV1
+	type ConversationTabV1,
+	type SessionDossierV1
 } from "@serene-pub/core-catalog/conversation"

@@ -11,6 +11,7 @@
 
 import { TRANSFORMS, capabilityLabel, type CapabilityId } from "@serene-pub/sdk"
 import { ADMIN_USERS_HREF } from "./adminNav"
+import { defaultLoadoutName } from "$lib/shared/loadouts/defaultLoadoutName"
 
 export interface AdminSetting {
 	/** What the row says, in the words on the field. */
@@ -28,6 +29,7 @@ const STATIC: AdminSetting[] = [
 	{ label: "Default language", href: "/admin/general#language-heading", page: "General", keywords: "locale translation interface" },
 	{ label: "Automatic translation", href: "/admin/general#enable-auto-translate", page: "General", keywords: "libretranslate translate service url" },
 	{ label: "User accounts", href: "/admin/general#accounts", page: "General", keywords: "login sign in password multi-user" },
+	{ label: "Messages between people", href: "/admin/general#messaging", page: "General", keywords: "messages conversations private direct group" },
 	{ label: "Community library: CharaVault", href: "/admin/general#charavault-heading", page: "General", keywords: "characters import cards" },
 	{ label: "Run scripts", href: "/admin/general#scripts-enabled", page: "General", keywords: "scripting pipeline scripts" },
 	// Network
@@ -54,10 +56,10 @@ const STATIC: AdminSetting[] = [
 /** One row per model job on Defaults, named as that page names it. */
 function defaultsRows(): AdminSetting[] {
 	return (Object.keys(TRANSFORMS) as CapabilityId[]).map((id) => ({
-		label: `Default model for ${capabilityLabel(id)}`,
+		label: `The ${defaultLoadoutName(id)} loadout`,
 		href: `/admin/defaults#default:${id}`,
-		page: "Defaults",
-		keywords: `${id} connection sampling job`
+		page: "Loadouts",
+		keywords: `${id} ${capabilityLabel(id)} connection model sampling default`
 	}))
 }
 

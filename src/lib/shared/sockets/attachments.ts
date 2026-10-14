@@ -21,6 +21,12 @@
  * events must carry their scope key), and every refusal carries the
  * `trayItemId` it is about when there is one.
  *
+ * **Two scopes.** A tray belongs to one session's composer or to one private
+ * **conversation**'s (PLAN-private-messages §4 "Uploads"): `begin` and
+ * `list` carry exactly one of `sessionId` / `conversationId`, and every reply
+ * carries the one it is about. A conversation's tray has no reading rule (no
+ * model reads it) — caps only.
+ *
  * Kept here, not in the `Sockets` namespace — the placement `jump.ts` and
  * `imageGen.ts` use.
  */
@@ -32,7 +38,9 @@ export type TrayItemStatus = "uploading" | "ready" | "refused"
 /** One tray item as a client sees it. Never carries a path. */
 export interface TrayItemView {
 	id: string
-	sessionId: number
+	/** Exactly one of the two is set (`conversationId` absent = a session's). */
+	sessionId: number | null
+	conversationId?: number | null
 	status: TrayItemStatus
 	/** The sentence a refused item shows. */
 	refusal: string | null
@@ -56,16 +64,20 @@ export interface TrayItemView {
 	createdAt: string
 }
 
-export interface AttachmentsBeginParams {
-	sessionId: number
+/** Exactly one of `sessionId` / `conversationId`. */
+export interface AttachmentsTrayScope {
+	sessionId?: number
+	conversationId?: number
+}
+
+export interface AttachmentsBeginParams extends AttachmentsTrayScope {
 	filename: string
 	/** The whole file's size, declared. Checked again as chunks arrive. */
 	bytes: number
 	/** The file's first `min(bytes, headBytes)` bytes. */
 	head: Uint8Array
 }
-export interface AttachmentsBeginResponse {
-	sessionId: number
+export interface AttachmentsBeginResponse extends AttachmentsTrayScope {
 	trayItemId: string
 	/** Every chunk but the last must be exactly this long. */
 	chunkBytes: number
@@ -79,8 +91,7 @@ export interface AttachmentsChunkParams {
 	index: number
 	data: Uint8Array
 }
-export interface AttachmentsChunkResponse {
-	sessionId: number
+export interface AttachmentsChunkResponse extends AttachmentsTrayScope {
 	trayItemId: string
 	index: number
 	/** Bytes received so far — progress. */
@@ -91,8 +102,7 @@ export interface AttachmentsChunkResponse {
 export interface AttachmentsFinishParams {
 	trayItemId: string
 }
-export interface AttachmentsFinishResponse {
-	sessionId: number
+export interface AttachmentsFinishResponse extends AttachmentsTrayScope {
 	/** `ready`, or `refused` with its sentence — a refused item stays in the
 	 *  tray so the person sees why, until they remove it. */
 	trayItem: TrayItemView
@@ -101,16 +111,12 @@ export interface AttachmentsFinishResponse {
 export interface AttachmentsRemoveParams {
 	trayItemId: string
 }
-export interface AttachmentsRemoveResponse {
-	sessionId: number
+export interface AttachmentsRemoveResponse extends AttachmentsTrayScope {
 	trayItemId: string
 }
 
-export interface AttachmentsListParams {
-	sessionId: number
-}
-export interface AttachmentsListResponse {
-	sessionId: number
+export interface AttachmentsListParams extends AttachmentsTrayScope {}
+export interface AttachmentsListResponse extends AttachmentsTrayScope {
 	tray: TrayItemView[]
 }
 
@@ -135,6 +141,7 @@ export interface AttachmentsRemoveFromMessageResponse {
 export interface AttachmentsError {
 	error: string
 	sessionId?: number
+	conversationId?: number
 	trayItemId?: string
 	/** `removeFromMessage` refusals: the message and part asked about. */
 	messageId?: number

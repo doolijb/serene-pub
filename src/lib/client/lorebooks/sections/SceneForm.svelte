@@ -102,7 +102,7 @@
 			onValueChange={(v) => (newParticipantId = v === "" ? "" : Number(v))}
 		/>
 		<button
-			class="btn btn-sm preset-filled-surface-400-600 p-1"
+			class="btn btn-sm preset-tonal-surface p-1"
 			type="button"
 			onclick={addParticipant}
 			disabled={newParticipantId === ""}
@@ -153,7 +153,7 @@
 			onValueChange={(v) => (newMentionedId = v === "" ? "" : Number(v))}
 		/>
 		<button
-			class="btn btn-sm preset-filled-surface-400-600 p-1"
+			class="btn btn-sm preset-tonal-surface p-1"
 			type="button"
 			onclick={addMentioned}
 			disabled={newMentionedId === ""}

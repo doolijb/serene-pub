@@ -199,7 +199,7 @@ export function getLoadedSignature(): LoadedSignature | null {
  * writes carries it, because `reload_config` resets every key a file leaves out
  * (see {@link buildConfigContent}).
  *
- * The API, for the managed embedding adapter and the "Use for embeddings"
+ * The API, for the managed embedding adapter and the "Use in Embeddings"
  * handler:
  *
  *   - **Load (and keep) one**: `ensureManagedReady({ kind: "embeddings", file,
@@ -1106,6 +1106,23 @@ export function clearTtl(baseUrl: string) {
 		clearTimeout(ttlTimers[baseUrl])
 		delete ttlTimers[baseUrl]
 	}
+}
+
+/**
+ * Forget what this process believes koboldcpp has loaded — called by
+ * `subprocessManager` whenever the process it describes is gone or replaced:
+ * a stop, a crash, a failed start and every fresh spawn.
+ *
+ * A signature that outlived its process told the next request its model was
+ * already resident, so the preflight skipped the load a brand-new `--nomodel`
+ * process very much needs, and the status views kept naming a model nothing
+ * held. Idle timers go with it: they would unload a process that is not there.
+ * The STANDING embedding model is kept — it is what is wanted, not what is
+ * resident, and the next load brings it back (see "The embeddings slot").
+ */
+export function forgetResidency(): void {
+	shared.loadedSignature = null
+	clearAllTtls()
 }
 
 export function clearAllTtls() {

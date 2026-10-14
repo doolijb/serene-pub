@@ -1,8 +1,7 @@
 /**
  * The CodeMirror setup the component editor and its core diff share (C6, P6):
- * one language per file kind, the host-element completions, and a theme drawn
- * from the app's colour roles rather than hex (STYLE-GUIDE §1), with the
- * highlight style following the app's light/dark switch (`data-mode`).
+ * one language per file kind and the host-element completions, over the
+ * theme and keymap every code field shares (`codeField/cmBase.ts`).
  *
  * The Svelte language is `@replit/codemirror-lang-svelte` — its peer ranges
  * are the `@codemirror/*` 6.x the app already has, and on core's own `.svelte`
@@ -11,36 +10,16 @@
  * `lang-html` is installed as its peer and nothing else.
  */
 import { Compartment, EditorState, type Extension } from "@codemirror/state"
-import {
-	EditorView,
-	drawSelection,
-	highlightActiveLine,
-	highlightActiveLineGutter,
-	keymap,
-	lineNumbers
-} from "@codemirror/view"
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands"
-import {
-	bracketMatching,
-	defaultHighlightStyle,
-	foldGutter,
-	indentOnInput,
-	syntaxHighlighting
-} from "@codemirror/language"
-import { highlightSelectionMatches, searchKeymap } from "@codemirror/search"
-import {
-	autocompletion,
-	closeBrackets,
-	closeBracketsKeymap,
-	completionKeymap,
-	type CompletionContext,
-	type CompletionResult
-} from "@codemirror/autocomplete"
+import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete"
 import { javascript } from "@codemirror/lang-javascript"
 import { svelte } from "@replit/codemirror-lang-svelte"
-import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark"
 import { hostCompletions } from "./spCompletions"
 import { languageFor, type FileLanguage } from "./componentFiles"
+// The ground both editors share lives in `codeField/cmBase.ts`; re-exported so
+// the source pane keeps its imports.
+import { appIsDark, baseExtensions, editorTheme, highlightFor } from "../codeField/cmBase"
+
+export { appIsDark, baseExtensions, editorTheme, highlightFor }
 
 export function languageExtension(lang: FileLanguage): Extension {
 	if (lang === "svelte") return svelte()
@@ -64,86 +43,6 @@ const HOST_SOURCES: Record<FileLanguage, { autocomplete: ReturnType<typeof hostC
 	svelte: { autocomplete: hostCompletionSource("svelte") },
 	ts: { autocomplete: hostCompletionSource("ts") },
 	js: { autocomplete: hostCompletionSource("js") }
-}
-
-/** Is the app in dark mode now? */
-export const appIsDark = () =>
-	typeof document !== "undefined" && document.documentElement.getAttribute("data-mode") !== "light"
-
-export const highlightFor = (dark: boolean): Extension =>
-	syntaxHighlighting(dark ? oneDarkHighlightStyle : defaultHighlightStyle, { fallback: true })
-
-/** Colours by role: the page's ground, its ink and the gold focus. */
-export const editorTheme = EditorView.theme({
-	"&": {
-		height: "100%",
-		fontSize: "13px",
-		backgroundColor: "var(--color-surface-50-950, var(--color-surface-950))",
-		color: "var(--color-surface-950-50, var(--color-surface-50))"
-	},
-	"&.cm-focused": { outline: "2px solid var(--color-primary-500)", outlineOffset: "-2px" },
-	".cm-scroller": {
-		overflow: "auto",
-		fontFamily: "'Fira Mono', 'Cascadia Code', 'JetBrains Mono', ui-monospace, monospace"
-	},
-	".cm-content": { padding: "8px 0", caretColor: "var(--color-primary-500)" },
-	".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--color-primary-500)" },
-	".cm-gutters": {
-		backgroundColor: "transparent",
-		color: "var(--color-surface-500)",
-		borderRight: "1px solid var(--color-surface-200-800, var(--color-surface-800))"
-	},
-	".cm-activeLine, .cm-activeLineGutter": {
-		backgroundColor: "color-mix(in oklab, var(--color-surface-500) 10%, transparent)"
-	},
-	"&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": {
-		backgroundColor: "color-mix(in oklab, var(--color-primary-500) 28%, transparent)"
-	},
-	".cm-tooltip": {
-		backgroundColor: "var(--color-surface-100-900, var(--color-surface-900))",
-		border: "1px solid var(--color-surface-200-800, var(--color-surface-800))",
-		borderRadius: "8px"
-	},
-	// The diff's folded stretches (`@codemirror/merge`), in the page's tones
-	// rather than its light-only default.
-	".cm-collapsedLines": {
-		backgroundColor: "var(--color-surface-100-900, var(--color-surface-900))",
-		backgroundImage: "none",
-		color: "var(--color-surface-600-400, var(--color-surface-400))"
-	},
-	".cm-tooltip-autocomplete ul li[aria-selected]": {
-		backgroundColor: "color-mix(in oklab, var(--color-primary-500) 22%, transparent)",
-		color: "inherit"
-	}
-})
-
-/** Everything but the language, the theme compartment and the per-file listener. */
-export function baseExtensions(readOnly: boolean): Extension[] {
-	return [
-		lineNumbers(),
-		highlightActiveLineGutter(),
-		foldGutter(),
-		drawSelection(),
-		history(),
-		indentOnInput(),
-		bracketMatching(),
-		closeBrackets(),
-		highlightActiveLine(),
-		highlightSelectionMatches(),
-		autocompletion(),
-		keymap.of([
-			...closeBracketsKeymap,
-			...defaultKeymap,
-			...searchKeymap,
-			...historyKeymap,
-			...completionKeymap,
-			indentWithTab
-		]),
-		EditorState.tabSize.of(4),
-		EditorState.readOnly.of(readOnly),
-		EditorView.editable.of(!readOnly),
-		editorTheme
-	]
 }
 
 /** One file's extensions: its language, its completions and the shared base. */

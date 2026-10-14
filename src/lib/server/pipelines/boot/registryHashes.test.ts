@@ -297,7 +297,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved 2026-09-28 (lair re-plan R8): an additive `via` out-port — how
 	// the fired turn was reached (`narrate` on the `core#narrate` press); the
 	// Lair routes Narrate on it ahead of the channel. Proven: the snapshot entry with that port deleted hashes back to the old pin. (was "ed6b0ebef63cb")
-	"core:inlet/user-message@1": "11b79532336221",
+	// Moved 2026-10-13 (live scenes lane D, §6): an additive `clockStep`
+	// out-port — the clock step a press collected on the stepper
+	// (`collects.clockStep`, checked by the host). (was "11b79532336221")
+	"core:inlet/user-message@1": "a8419562a1a98",
 	/**
 	 * Forms (U5d, R-15 *Forms*, 2026-09-17). NEW types — a line each: the
 	 * inlet `core:event/form-addressed@1` lands on; the task that turns the
@@ -329,6 +332,46 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// `undefined`, but `null === null`, so nulls would fire a verdict on a
 	// turn where nobody decided anything.
 	"core:task/pair@1": "1a78c74711949b",
+	// Image generation I4 (2026-10-12): each picture with its background
+	// removed — a cut-out, through the local BiRefNet-lite matting model. A new
+	// type: no migration.
+	"core:task/cut-out@1": "dc2b6b6162c22",
+	// Image generation I5 (2026-10-12): the Sprite set fill's three new types —
+	// a card action's inlet (no session), one image series item per sprite
+	// label, and the write filing each keyed picture as a card's sprite. New
+	// types: no migration.
+	"core:inlet/card-action@1": "147a570827e0e6",
+	"core:task/build-sprite-series@1": "111d91580ffc0c",
+	// The script step (PLAN-pipeline-canvas-and-genre-authoring P3, 2026-10-12): a
+	// pass-through task whose out:main seam takes data/transform scripts. A new
+	// type — inserts a row, needs no migration.
+	// Moved 2026-10-13 (plan P3 follow-up): a `params.budgetMs` field, the
+	// per-step script time limit the host's applier reads. (was "16e1daeebed1dd")
+	"core:task/run-script@1": "110834dc0466d1",
+	"core:outlet/attach-sprite@1": "fa3d49201dd",
+	// Image generation I8 (2026-10-12): Portrait. `card-action` widened in
+	// place with an optional `count` port (was "1b912b0e337acc"); n identical
+	// series items (proofs); the write putting pictures in a card's
+	// gallery. New types: no migration.
+	"core:task/build-proofs@1": "ec288fbdedbe1",
+	"core:outlet/offer-media@1": "1f5cc8fd1217a2",
+	// Image generation I9 (lane C3, 2026-10-12): the Scene action — every
+	// likeness image on stage, a model's reply cleaned into a picture prompt,
+	// and where the picture goes (message, backdrop or both). New types: no
+	// migration.
+	"core:query/likeness-images@1": "1064f6994e2939",
+	"core:task/clean-image-prompt@1": "a04282b97014f",
+	"core:task/picture-placement@1": "d52c696eade4",
+	// Live scenes lane D (2026-10-13, §6): how far the story clock moves —
+	// a press's collected step, else its own By (0 = off) and Unit; `moves`
+	// gates Advance story clock. New type: no migration.
+	"core:task/clock-step@1": "1e071d5ed99418",
+	// Follow-up D1 (2026-10-12): Describe from image — a picture read by the
+	// `text+image->text` job, one instruction. A new type: no migration.
+	"core:oracle/describe-image@1": "15050f27499120",
+	// Image generation I9 state half (lane A6, 2026-10-12): the session's
+	// backdrop. Recorded by lane B3, which found it unrecorded. A new type.
+	"core:outlet/set-backdrop@1": "1f30352b5f0b1b",
 	// (was "118beb40f685e4") — a write's timeout (5 s, was 600 s) and two out-ports, `firedAction` · `firedRunId` — the commit collects the fire, the host dispatches it (U5d review, W2).
 	"core:outlet/answer-form@1": "19c67e930a44d2",
 	/**
@@ -373,7 +416,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// changed: ['storyClock'] }`, so the event is no longer a declared root
 	// (lorebooks Wave 7 close-out). Edited in place; no migration (the slug's
 	// pointer moves at boot). (was "ddc156d7a0cec")
-	"core:outlet/advance-story-clock@1": "cdff1f3a47f7c",
+	// Moved 2026-10-13 (live scenes §15 G4–G7, lane H): in-ports `cause` (why the clock moves:
+	// `action` · `keeper` · `tick`) and `onRefusal` (`halt` · `skip`), out-port
+	// `skipped`.
+	// (was "cdff1f3a47f7c")
+	"core:outlet/advance-story-clock@1": "7918829884527",
 	"core:inlet/session-created@1": "1bac3a1f2d1149",
 	// The side-character turn (ruling 2026-09-07). A NEW type — no migration,
 	// just a line: it inserts a row and conflicts with nothing.
@@ -439,7 +486,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// the transcript into it and the handler never read it; the extractor
 	// works from `content`. No shipped spec runs this node (the extraction is
 	// on ice), so no document moves with it. (was "972921f6b6931")
-	"core:oracle/extract-cast@1": "7831ea64c5b34",
+	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "7831ea64c5b34")
+	"core:oracle/extract-cast@1": "1df2006c47c4a5",
 	// Gained `currentCharacterId` in 0.6-preview (migration 0134): the §27l
 	// stop-string exclusion follows the next-speaker node's output through
 	// the host's payload-wins seam (19 §5).
@@ -466,12 +514,18 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "1b38509034c053")
 	// Moved 2026-10-03 (owner note 39): the `thinking` out-port is `reasoning`
 	// — one concept, one name (NOMENCLATURE §23). (was "1ae8e1f7b8300e")
-	"core:oracle/generate-text@1": "160d9dc57f992a",
-	"core:oracle/graph-node-description@1": "338643a12d7a",
-	"core:oracle/graph-node-resolution@1": "144ed35a261c23",
-	"core:oracle/graph-perspective@1": "1507fd50fbe616",
-	"core:oracle/graph-pre-filter@1": "1850789a82c4f9",
-	"core:oracle/graph-state-detection@1": "bf3ae8fbd53f5",
+	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "160d9dc57f992a")
+	"core:oracle/generate-text@1": "440496fad192c",
+	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "338643a12d7a")
+	"core:oracle/graph-node-description@1": "20a8efcfbb22c",
+	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "144ed35a261c23")
+	"core:oracle/graph-node-resolution@1": "ff0b3297971d2",
+	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "1507fd50fbe616")
+	"core:oracle/graph-perspective@1": "be21e63ae1045",
+	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "1850789a82c4f9")
+	"core:oracle/graph-pre-filter@1": "180ce9d35928c3",
+	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "bf3ae8fbd53f5")
+	"core:oracle/graph-state-detection@1": "1e543aba2900ed",
 	// Re-pinned when 14 was built out (the draft stub's hash never reached an
 	// install — 0141's core wipe re-projects every row at boot).
 	// `provisional: true` (U6, R-2, 2026-09-17): declared, not bound, plans/28
@@ -487,10 +541,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// port is what it is. Declared rather than made a parameter, which would
 	// have put "which kind of entry this pipeline writes" in the panel as
 	// something a user could tune their scene summarizer into a world one with.
-	"core:oracle/name-entry@1": "721f6c62e54a1",
+	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "721f6c62e54a1")
+	"core:oracle/name-entry@1": "1c9eb0bf0b78e3",
 	// `provisional: true` (U6, R-2, 2026-09-17): declared, not bound, plans/14
 	// owns the handler. Policy since V6 — binding it moves nothing here.
-	"core:oracle/speak@1": "15b834f7e24c86",
+	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "15b834f7e24c86")
+	"core:oracle/speak@1": "d72aee8a96401",
 	// Re-projected by **0113** — `loreType`, on the same terms as `name-entry`
 	// above.
 	// Moved (R-11, 2026-09-16 — U4): its `each-draft` interior point declares
@@ -508,8 +564,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// none of their pins moved — `definitionContentMaterial` hashes
 	// `authoredSlots()` only. See `registrySync.ts` for why.
 	// (was "1f87aae843e9b8")
-	"core:oracle/summarize-batch@1": "104ff874953d6b",
-	"core:oracle/summarize-synth@1": "3f410f2816392",
+	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "104ff874953d6b")
+	"core:oracle/summarize-batch@1": "d2ee98d7942c6",
+	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "3f410f2816392")
+	"core:oracle/summarize-synth@1": "1c98ff8afc1b67",
 	"core:query/session-cast@1": "ab1fe8baf6775",
 	/**
 	 * The settings document re-read (PLAN-turn-order §4.12, way 2; A3,
@@ -887,6 +945,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// follow it. See `ranking/keyProposal.ts` for what it binds to.
 	"core:query/entry-keys@1": "112e2978d9c9a8",
 	"core:query/summarize-source@1": "1b53afc623e3fc",
+	// 🚧 New 2026-10-13 (live scenes §13–§14): a scene's range on one lane,
+	// story rows and aside rows apart — the source a genre's summarize-scene
+	// reads. Exported on `C.summarizeSource.v2`.
+	"core:query/summarize-source@2": "a5c52e3fa5d0c",
 	// Re-projected by **0201** (policy answer 3), retrieval plan phase 2: this
 	// mechanism is wired into the shipped reply spec at last, and it gains the switch
 	// that lets it be. `maxEntries` defaults to **0 — off** — on the
@@ -1186,7 +1248,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (enum member labels, 2026-09-29): `streaming` gained `members` — a label
 	// and hint per option, so the Pipelines panel stops showing raw values. Display
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "1d291657ad5c20")
-	"core:oracle/generate-with-tools@1": "86a789d13c163",
+	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "86a789d13c163")
+	"core:oracle/generate-with-tools@1": "1af8d7dc484691",
 	// The structured door, on the same terms as the tools one above and for the
 	// same reason: `generate-text@1` is published and frozen, and this node does
 	// not make the same request anyway. It asks a question rather than taking a
@@ -1198,7 +1261,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (enum member labels, 2026-09-29): `streaming` gained `members` — a label
 	// and hint per option, so the Pipelines panel stops showing raw values. Display
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "170f772cd314a4")
-	"core:oracle/generate-json@1": "122a7ddc81dfeb",
+	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "122a7ddc81dfeb")
+	"core:oracle/generate-json@1": "146c833da5b381",
 	// Re-projected by **0102** (policy answer 3): a `sampling` slot, so the cut
 	// can be clamped to the window the batch is actually sent against — the
 	// binding read no sampling config at all, and there is no truncation on
@@ -1212,6 +1276,18 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// named after its message's text and counted in the cut. Unwired, or a
 	// message with no files, batches exactly as before. (was "3a1bef51d6d9a")
 	"core:task/batch-messages@1": "1e1437002c1acc",
+	// 🚧 New 2026-10-13 (live scenes §13–§14): the cut over rendered
+	// transcript units, each batch headed by the preamble. Exported on
+	// `C.batchMessages.v2`.
+	"core:task/batch-messages@2": "1b16e989964823",
+	// 🚧 New 2026-10-13 (live scenes §13–§14): the genre's transcript
+	// template, one unit per story line and aside; with the reconcile's
+	// `attachments` in-port, a line's files are named after its text.
+	// Moved 2026-10-13 (live scenes lane E): the optional `asideAttachments`
+	// in-port — an aside's files, named after its text in the `aside`
+	// section. Grew only: a spec that leaves it unwired renders as before.
+	// (was "1621a2bb08d5d5")
+	"core:task/render-transcript@1": "b55f743862a8b",
 	// The narrator's half of the split (migration 0114). It shares this one's
 	// implementation and ports; what makes it a separate type is that it
 	// declares a different configurable surface — `narratorName`, and no
@@ -1228,7 +1304,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// port deleted hashes back to the old pin. (was "79532f3db7018")
 	// Moved 2026-10-02 (author's note AN1): `TEMPLATE_CONTEXT_SCHEMA` (its
 	// hashed `portSchemas`) declares the optional `authorsNote`. (was "a5f7ffcdaf881")
-	"core:task/build-narrator-context@1": "2d7e9cd66420c",
+	"core:task/build-narrator-context@1": "ad5d3b867fad7",
 	// The third context surface (ruling 2026-09-07), and a NEW type for the
 	// same reason the narrator's was one: it declares a different configurable
 	// surface. What separates it from the narrator's is a `speaker` IN-PORT —
@@ -1270,7 +1346,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// (S.text) — the narrator modal's text on a side character's turn, wired by
 	// `narrate-character` alone. Proven: the registered declaration with only
 	// that port deleted hashes back to the old pin. (was "10d63d20f9448a")
-	"core:task/build-side-character-context@1": "66f7e3d3276d3",
+	"core:task/build-side-character-context@1": "175cdc62874544",
 	// Gained the `variables` slot in 0.6-preview (migration 0107), a
 	// `speakerRelationships` layout when the graph query was wired in
 	// (migration 0111), and lost `narratorName` from its `prompts` slot when
@@ -1321,7 +1397,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved 2026-10-02 (author's note AN1): `TEMPLATE_CONTEXT_SCHEMA` (its
 	// hashed `portSchemas`) declares the optional `authorsNote` the builder
 	// carries to Assemble. (was "a684804f023dc")
-	"core:task/build-template-context@1": "1211721006a38a",
+	// Moved 2026-10-12 (likeness, DESIGN-image-generation §5): `sharedRenders`
+	// renders `likenesses` (`core:var/likenesses@1`) and the template context
+	// declares it — moves all six context builders. (was "1211721006a38a")
+	"core:task/build-template-context@1": "1fb2398151e6da",
 	/**
 	 * The Adventure genre's three agent surfaces onto that same builder.
 	 *
@@ -1353,7 +1432,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// `{{castRelationships}}` — how the cast stand with each other, for the game
 	// master's two agents only. Proven: each descriptor with only that port
 	// deleted hashes to its old pin. (was "3ada6d27fc92f" and "b8a0eaecd7649")
-	"core:task/build-planner-context@1": "17ad9c92aaac9a",
+	"core:task/build-planner-context@1": "38d8bafc9abb0",
 	// Moved 2026-09-30 (Lair party speech, owner ruling): an additive
 	// `partySpeakers` in-port (`S.json`, side-character facts read flat)
 	// rendered as `{{partySpeakers}}` — whose lines the Castellan's party call
@@ -1363,8 +1442,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// `'reach'`, the place the scene is at and the places one way from it,
 	// read by the Lair's Castellan speaking for the party. Additive. Proven
 	// with create-message's. (was "bc25ffbd21a10")
-	"core:task/build-scene-context@1": "18bfc96d9426b0",
-	"core:task/build-keeper-context@1": "17dab50617992b",
+	"core:task/build-scene-context@1": "47b0595e3ff95",
+	// Moved 2026-10-13 (live scenes §15 G4–G7, lane H): in-port `clockStep` — the span a
+	// *Time passes…* press collected, spelled as `{{clockStep}}`.
+	// (was "17d85ae9c40a10")
+	"core:task/build-keeper-context@1": "38d4211f3055e",
 	/**
 	 * A model's JSON answer, read back as data — the other half of asking for
 	 * structure. `optional`, so a reply nobody can read subtracts the structure
@@ -1408,7 +1490,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// whose stats this keeper keeps (`'world'`, or one participant
 	// reference); a change to any other owner is refused. Additive. Proven
 	// with create-message's. (was "8e48a372c8f42")
-	"core:query/resolve-state-changes@1": "1f628fee792deb",
+	// Moved 2026-10-13 (live scenes lane F, ★3 — the keeper's clock
+	// proposal): a `clock` in-port (the keeper's answer, whose `clock` list
+	// is the one clock move it may ask for) and a `clock` out-port (`{ by,
+	// unit }`, what `clock-step@1`'s `step` takes); the move also rides
+	// `changes` as `{ kind: 'clock', by, unit }`. Additive. (was "1f628fee792deb")
+	"core:query/resolve-state-changes@1": "a842049002c95",
 	// Moved (R-8, 2026-09-15): a `connection` slot, shared with the generating
 	// step in every shipped spec, so the ONE window computation reads the
 	// model's own window (0114) off the same pair the request goes out on.
@@ -1435,6 +1522,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// and the ranker — exclusions, secrecy, presence — marking
 	// `Candidate.ineligible`, never deleting. A new type: no re-projection.
 	"core:task/eligibility@1": "85ca266c8f6c5",
+	// New 2026-10-11 (card strokes S1/S3, DESIGN-card-strokes A.4): a card's
+	// keyword strokes marked fired against the recent transcript, between the
+	// cast read and the context builders. A new type: no re-projection.
+	"core:task/card-strokes@1": "1c9c09d64cdc1f",
 	// Re-projected by **0106** (policy answer 3). It gained a
 	// `continuationPrefill` IN-port — and the seam it feeds is older than the
 	// port: `prompt/messages.ts` has put `input.continuationPrefill` on the seed
@@ -1601,7 +1692,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:task/turn-scripted@1": "74526c62974cd",
 	"core:task/turn-manual@1": "125603eaa6f9a8",
 	// The turn-order model path (R41, M4).
-	"core:oracle/turn-advise@1": "ce040959fde78",
+	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "ce040959fde78")
+	"core:oracle/turn-advise@1": "19423193cca73a",
 	"core:task/turn-narrator@1": "166b99ce8c8dcf",
 	/**
 	 * The pool and the first orderer (§4.4): who may be seated at all, and
@@ -1655,6 +1747,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// A new type — inserts a row, conflicts with nothing, needs no migration.
 	"core:script:cast/transform@1": "9abc9e28e8c41",
 	"core:script:turn/select@1": "1eb4afff5c269d",
+	// The data scope (2026-10-12): JSON in, JSON out, the script step's kind.
+	// A new type — inserts a row, conflicts with nothing, needs no migration.
+	"core:script:data/transform@1": "be44ed70e3d72",
 	// Local image generation: the modality twin of generate-text, same node kind,
 	// its shape naming which one. A new type — inserts a row, needs no migration.
 	// Gained a `params` slot, holding `streaming` alone — the node had none, so
@@ -1663,7 +1758,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (enum member labels, 2026-09-29): `streaming` gained `members` — a label
 	// and hint per option, so the Pipelines panel stops showing raw values. Display
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "1ec57f509dd81f")
-	"core:oracle/generate-image@1": "101bafcc9f5eab",
+	// Moved (widened in place, 2026-10-12, DESIGN-image-generation §4.1): in-ports
+	// `references`, `mask`, `series`; params `orientation`, `cutOut`, `references`.
+	// All optional with defaults that reproduce the old render. (was "101bafcc9f5eab")
+	// I12 (2026-10-12): the additive `loadout` slot every model call declares (and lane A4's in-flight `workflow` slot). (was "602a39e3c15f8")
+	// I5 (2026-10-12): the additive `seed` param (`as-set` | `per-run`, default `as-set`) — one seed for a whole series. Already inside the hash recorded above.
+	"core:oracle/generate-image@1": "d5b89359700ab",
 	// ── Entry types (Part 1) ────────────────────────────────────────────
 	//
 	// A lorebook row's kind, declared and versioned instead of being the table
@@ -1971,7 +2071,9 @@ describe("published type content hashes", () => {
 			public: !generate.public,
 			timeoutMs: 1,
 			timeoutKind: generate.timeoutKind === "idle" ? "wall" : "idle",
-			usage: "somewhere.else"
+			usage: "somewhere.else",
+			// I12: what a model call runs best on — a suggestion, never hashed.
+			prefers: { sampling: "sampling-extraction", tier: "fast" }
 		}
 		for (const key of DESCRIPTOR_POLICY_KEYS)
 			expect(hashOf({ ...generate, [key]: moved[key] }), key).toBe(before)

@@ -16,9 +16,11 @@
  *    with like: an empty summary is `null` on both sides, a missing state is
  *    `"active"` on both.
  */
+import { RETOLD_FIELDS, type RetoldFlags } from "$lib/shared/lorebooks/retold"
 import type { CastRow } from "../castPool"
+import type { RetoldDraft } from "./retoldRows"
 
-export interface MemberDraft {
+export interface MemberDraft extends RetoldDraft {
 	name: string
 	aliases: string[]
 	summary: string
@@ -36,7 +38,53 @@ export function memberDraftOf(row: CastRow): MemberDraft {
 		summary: row.summary ?? "",
 		nodeState: row.nodeState || "active",
 		nodeVisibility: row.nodeVisibility || "normal",
-		spriteSet: row.spriteSet ?? ""
+		spriteSet: row.spriteSet ?? "",
+		description: row.description ?? "",
+		personality: row.personality ?? "",
+		scenario: row.scenario ?? "",
+		firstMessage: row.firstMessage ?? "",
+		alternateGreetings: [...(row.alternateGreetings ?? [])],
+		exampleDialogues: row.exampleDialogues ?? "",
+		faceMediaId: row.faceMediaId ?? null,
+		retold: { ...(row.retold ?? {}) }
+	}
+}
+
+/**
+ * The flags as one canonical shape: only the fields that ARE retold, in
+ * canonical order. `false` and absent both mean "the card's", so a row that
+ * says `{ face: false }` and a draft that says `{}` write the same thing.
+ */
+export function canonicalRetold(flags: RetoldFlags | null | undefined) {
+	const out: RetoldFlags = {}
+	for (const field of RETOLD_FIELDS) if (flags?.[field] === true) out[field] = true
+	return out
+}
+
+/** Empty text is NULL on the row, as the summary is. */
+function textOrNull(value: string): string | null {
+	return value.trim() ? value : null
+}
+
+/**
+ * The retold half of a patch — a carded member's own words for the card's
+ * fields, their face, and which of them are read.
+ *
+ * ⚠ Every field is written whether or not it is retold: switching a field
+ * back to the card keeps the member's text (hidden, never discarded), so the
+ * text must survive a save made while the toggle is off.
+ */
+export function retoldPatch(draft: RetoldDraft): Record<string, unknown> {
+	return {
+		description: textOrNull(draft.description),
+		personality: textOrNull(draft.personality),
+		scenario: textOrNull(draft.scenario),
+		firstMessage: textOrNull(draft.firstMessage),
+		// A greeting added and never written is nothing yet.
+		alternateGreetings: draft.alternateGreetings.filter((g) => g.trim()),
+		exampleDialogues: textOrNull(draft.exampleDialogues),
+		faceMediaId: draft.faceMediaId ?? null,
+		retold: canonicalRetold(draft.retold)
 	}
 }
 
@@ -47,6 +95,9 @@ export function memberDraftOf(row: CastRow): MemberDraft {
  * it is not in the patch. Their aliases are the MEMBER's (#114, cast-first):
  * editable for every member, and a card sync merges the card's names in
  * rather than writing over them.
+ *
+ * Only a carded member has retold fields: there is no card to retell for a
+ * background member, so their patch carries none (`retoldPatch`).
  */
 export function memberPatch(
 	draft: MemberDraft,
@@ -60,7 +111,7 @@ export function memberPatch(
 		// not the empty string, which would be a set nothing is named.
 		spriteSet: draft.spriteSet || null,
 		aliases: [...draft.aliases],
-		...(linked ? {} : { name: draft.name.trim() })
+		...(linked ? retoldPatch(draft) : { name: draft.name.trim() })
 	}
 }
 

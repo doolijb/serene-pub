@@ -2,9 +2,16 @@
  * The widget-settings reconciler drops stored values for fields a descriptor
  * has stopped declaring, and says which. Pinned here: a still-declared value
  * survives, a row emptied by the prune is deleted rather than left holding
- * `{}`, and a widget outside the synced set is untouched.
+ * `{}`, a placed copy is pruned against its widget's declaration, and a widget
+ * outside the synced set is untouched.
+ *
+ * And the column a row is keyed by: `widget_instance_id`, renamed from
+ * `widget_slug` by `0099_rename_widget_settings_instance_id`, which must keep
+ * every row a 0.6 install already holds.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
+import fs from "fs/promises"
+import path from "path"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { WidgetDecl } from "$lib/shared/widgets/types"
@@ -52,22 +59,22 @@ const widget = (
 async function store(
 	sessionId: number,
 	userId: number,
-	widgetSlug: string,
+	widgetInstanceId: string,
 	values: Record<string, unknown>
 ) {
 	await testDb
 		.insert(schema.widgetSettings)
-		.values({ sessionId, userId, widgetSlug, values })
+		.values({ sessionId, userId, widgetInstanceId, values })
 }
 
-const rowsFor = (sessionId: number, widgetSlug: string) =>
+const rowsFor = (sessionId: number, widgetInstanceId: string) =>
 	testDb
 		.select()
 		.from(schema.widgetSettings)
 		.where(
 			and(
 				eq(schema.widgetSettings.sessionId, sessionId),
-				eq(schema.widgetSettings.widgetSlug, widgetSlug)
+				eq(schema.widgetSettings.widgetInstanceId, widgetInstanceId)
 			)
 		)
 
@@ -95,7 +102,7 @@ describe("syncWidgetSettings", () => {
 		const [row] = await rowsFor(s.session.id, "phone")
 		expect(row.values).toEqual({ density: "compact" })
 		expect(dropped).toContainEqual({
-			widgetSlug: "phone",
+			widgetInstanceId: "phone",
 			sessionId: s.session.id,
 			userId: s.user.id,
 			key: "retired",
@@ -125,6 +132,44 @@ describe("syncWidgetSettings", () => {
 		expect(row.values).toEqual({ title: "Burner", lane: 3 })
 	})
 
+	test("prunes a placed copy against its widget's declaration", async () => {
+		const s = await scenario()
+		await store(s.session.id, s.user.id, "phone#burner", {
+			density: "compact",
+			retired: "gone"
+		})
+
+		const dropped = await sync([
+			widget("phone", {
+				density: {
+					type: "enum",
+					of: ["cosy", "compact"],
+					default: "cosy"
+				}
+			})
+		])
+
+		const [row] = await rowsFor(s.session.id, "phone#burner")
+		expect(row.values).toEqual({ density: "compact" })
+		expect(dropped).toContainEqual({
+			widgetInstanceId: "phone#burner",
+			sessionId: s.session.id,
+			userId: s.user.id,
+			key: "retired",
+			reason: "undeclared"
+		})
+	})
+
+	test("leaves a copy of a widget outside the synced set alone", async () => {
+		const s = await scenario()
+		await store(s.session.id, s.user.id, "other#2", { anything: 1 })
+
+		await sync([widget("phone", {})])
+
+		const [row] = await rowsFor(s.session.id, "other#2")
+		expect(row.values).toEqual({ anything: 1 })
+	})
+
 	test("leaves a widget outside the synced set alone", async () => {
 		const s = await scenario()
 		await store(s.session.id, s.user.id, "other", { anything: 1 })
@@ -145,5 +190,63 @@ describe("syncWidgetSettings", () => {
 		const [after] = await rowsFor(s.session.id, "phone")
 		expect(dropped).toEqual([])
 		expect(after.updatedAt).toEqual(before.updatedAt)
+	})
+})
+
+/**
+ * Last, because it takes the table back to its 0.6 shape and lets the
+ * migration bring it forward again — the state every later test would see.
+ */
+describe("0099_rename_widget_settings_instance_id", () => {
+	const MIGRATION = "0099_rename_widget_settings_instance_id"
+	const client = () => (testDb as any).$client
+
+	test("renames the column and keeps every row under its instance id", async () => {
+		const s = await scenario()
+		// The table as a 0.6 install holds it before the migration.
+		await client().exec(`
+			ALTER TABLE "widget_settings" RENAME COLUMN "widget_instance_id" TO "widget_slug";
+			DROP INDEX "widget_settings_user_session_widget_idx";
+			DROP INDEX "widget_settings_widget_idx";
+			CREATE UNIQUE INDEX "widget_settings_user_session_widget_idx" ON "widget_settings" USING btree ("user_id","session_id","widget_slug");
+			CREATE INDEX "widget_settings_widget_idx" ON "widget_settings" USING btree ("widget_slug");
+		`)
+		await client().query(
+			`INSERT INTO "widget_settings" ("session_id", "user_id", "widget_slug", "values")
+			 VALUES ($1, $2, 'messages#sanctum', '{"title":"Sanctum"}'),
+			        ($1, $2, 'stats', '{"title":"Party"}')`,
+			[s.session.id, s.user.id]
+		)
+
+		const file = await fs.readFile(
+			path.resolve(process.cwd(), "drizzle", `${MIGRATION}.sql`),
+			"utf8"
+		)
+		for (const statement of file.split("--> statement-breakpoint"))
+			if (statement.trim()) await client().exec(statement)
+
+		const columns = (
+			await client().query(
+				`SELECT column_name FROM information_schema.columns
+				 WHERE table_name = 'widget_settings'`
+			)
+		).rows.map((r: { column_name: string }) => r.column_name)
+		expect(columns).toContain("widget_instance_id")
+		expect(columns).not.toContain("widget_slug")
+
+		const { readWidgetSettings } = await import("./widgetSettings")
+		expect(await readWidgetSettings(s.session.id, s.user.id)).toEqual({
+			"messages#sanctum": { title: "Sanctum" },
+			stats: { title: "Party" }
+		})
+		// The unique index came back on the renamed column: the writer's
+		// upsert (its conflict target) still lands on the one row.
+		const { writeWidgetSettings } = await import("./widgetSettings")
+		await writeWidgetSettings(s.session.id, s.user.id, {
+			"messages#sanctum": { title: "Inner sanctum" }
+		})
+		expect(await readWidgetSettings(s.session.id, s.user.id)).toEqual({
+			"messages#sanctum": { title: "Inner sanctum" }
+		})
 	})
 })

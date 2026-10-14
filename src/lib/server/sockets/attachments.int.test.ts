@@ -572,3 +572,145 @@ describe("attachments:* (PGlite integration)", () => {
 		T
 	)
 })
+
+describe("attachments:* into a conversation (PLAN-private-messages §4)", () => {
+	async function makeConversation(memberIds: number[]) {
+		const [conversation] = await db
+			.insert(schema.conversations)
+			.values({ kind: "group", name: "G", hostUserId: memberIds[0] })
+			.returning()
+		await db.insert(schema.conversationMembers).values(
+			memberIds.map((userId) => ({ conversationId: conversation.id, userId }))
+		)
+		return conversation
+	}
+
+	test(
+		"a member stages into the conversation's tray; the file is stamped and bucketed; a stranger is refused",
+		async () => {
+			const {
+				attachmentsBegin,
+				attachmentsChunk,
+				attachmentsFinish,
+				attachmentsList,
+				attachmentsRemove
+			} = await handlers()
+			const { canViewMedia, getMedia } = await import("$lib/server/media")
+			const user = await makeUser()
+			const other = await makeUser()
+			const stranger = await makeUser()
+			const conversation = await makeConversation([user.id, other.id])
+			// Refused by the session reading rule — which a conversation does
+			// not have: caps only.
+			verdict.image = { allowed: false, reason: "No images here." }
+			try {
+				const bytes = png(41)
+				const socket = fakeSocket(user.id)
+				const tabs = recorder()
+				const opened = await attachmentsBegin.handler(
+					socket,
+					{
+						conversationId: conversation.id,
+						filename: "a.png",
+						bytes: bytes.length,
+						head: bytes
+					},
+					tabs.emit
+				)
+				expect(opened).toMatchObject({ conversationId: conversation.id })
+				expect(opened).not.toHaveProperty("sessionId")
+				await attachmentsChunk.handler(
+					socket,
+					{ trayItemId: opened.trayItemId, index: 0, data: bytes },
+					tabs.emit
+				)
+				const ack = socket.asked.find((a: any) => a.event === "attachments:chunk")
+				expect(ack.data.conversationId).toBe(conversation.id)
+				const done = await attachmentsFinish.handler(
+					socket,
+					{ trayItemId: opened.trayItemId },
+					tabs.emit
+				)
+				expect(done.conversationId).toBe(conversation.id)
+				expect(done.trayItem).toMatchObject({
+					status: "ready",
+					sessionId: null,
+					conversationId: conversation.id
+				})
+				const file = await getMedia(db as any, done.trayItem.file!.id)
+				expect(file!.conversationId).toBe(conversation.id)
+				const [original] = await db
+					.select()
+					.from(schema.variants)
+					.where(eq(schema.variants.fileId, file!.id))
+				expect(original.path).toContain(
+					path.join("users", String(user.id), "conversations", String(conversation.id))
+				)
+				expect(await canViewMedia(file!, other.id)).toBe(true)
+				expect(await canViewMedia(file!, stranger.id)).toBe(false)
+
+				const listed = await attachmentsList.handler(
+					socket,
+					{ conversationId: conversation.id },
+					tabs.emit
+				)
+				expect(listed.conversationId).toBe(conversation.id)
+				expect(listed.tray.map((t) => t.id)).toEqual([opened.trayItemId])
+
+				// A stranger can neither list nor stage.
+				const strangerTabs = recorder()
+				await attachmentsList.handler(
+					fakeSocket(stranger.id),
+					{ conversationId: conversation.id },
+					strangerTabs.emit
+				)
+				await attachmentsBegin.handler(
+					fakeSocket(stranger.id),
+					{
+						conversationId: conversation.id,
+						filename: "b.png",
+						bytes: bytes.length,
+						head: bytes
+					},
+					strangerTabs.emit
+				)
+				expect(strangerTabs.sent.map((e) => [e.event, e.data.error, e.data.conversationId])).toEqual([
+					["attachments:list:error", "That conversation isn't available.", conversation.id],
+					["attachments:begin:error", "That conversation isn't available.", conversation.id]
+				])
+
+				const removed = await attachmentsRemove.handler(
+					socket,
+					{ trayItemId: opened.trayItemId },
+					tabs.emit
+				)
+				expect(removed).toEqual({
+					conversationId: conversation.id,
+					trayItemId: opened.trayItemId
+				})
+			} finally {
+				verdict.image = { allowed: true }
+			}
+		},
+		T
+	)
+
+	test(
+		"both scopes at once is refused",
+		async () => {
+			const { attachmentsList } = await handlers()
+			const user = await makeUser()
+			const session = await makeSession(user.id)
+			const conversation = await makeConversation([user.id])
+			const tabs = recorder()
+			await attachmentsList.handler(
+				fakeSocket(user.id),
+				{ sessionId: session.id, conversationId: conversation.id },
+				tabs.emit
+			)
+			expect(tabs.sent.map((e) => e.event)).toEqual(["attachments:list:error"])
+		},
+		T
+	)
+})
+

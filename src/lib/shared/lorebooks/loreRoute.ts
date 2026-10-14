@@ -38,7 +38,7 @@ export type LoreScope = (typeof LORE_SCOPES)[number]
 
 /**
  * How the set is drawn — the route's spelling of each lens (`?lens=`), in the
- * lens row's order. Everything else a lens is (its label, icon, mount, what
+ * lens track's order. Everything else a lens is (its label, icon, mount, what
  * it does with a scope) is its descriptor in the client's lens registry
  * (`client/lorebooks/lenses/registry.ts`), which the compiler holds to this
  * list: a lens added here and not there does not build.
@@ -107,6 +107,15 @@ export interface LoreRoute {
 	 * itself, so leaving a branch drops it (see `setBranch`).
 	 */
 	compare?: boolean
+	/**
+	 * Book settings, drawn in the lens slot over the route beneath it.
+	 *
+	 * A flag over the route rather than a place of its own: the scope, the
+	 * lens and the selection underneath are what Back returns to, so they
+	 * stay in the address while Settings is open. Choosing a scope, a lens,
+	 * an entry or a member leaves it; so does Back (`reduce`).
+	 */
+	settings?: boolean
 }
 
 export const SCOPE_LABELS: Record<LoreScope, string> = {
@@ -150,6 +159,10 @@ export type LoreAction =
 	 */
 	| { type: "setBranch"; branch?: number }
 	| { type: "setCompare"; compare: boolean }
+	/** Opens Book settings over whatever is open. */
+	| { type: "openSettings" }
+	/** Leaves Book settings for the route beneath it; nothing else moves. */
+	| { type: "closeSettings" }
 
 export function emptyRoute(): LoreRoute {
 	return { lorebookId: null, scope: DEFAULT_SCOPE }
@@ -182,6 +195,8 @@ function normalize(route: LoreRoute): LoreRoute {
 	if (route.branch != null) next.branch = route.branch
 	// Only ever set alongside a branch: comparing main with main is nothing.
 	if (route.compare && route.branch != null) next.compare = true
+	// A book's settings: the list of books has none.
+	if (route.settings && route.lorebookId !== null) next.settings = true
 	return next
 }
 
@@ -198,7 +213,8 @@ export function sameRoute(a: LoreRoute, b: LoreRoute): boolean {
 		x.lens === y.lens &&
 		x.moment === y.moment &&
 		x.branch === y.branch &&
-		x.compare === y.compare
+		x.compare === y.compare &&
+		x.settings === y.settings
 	)
 }
 
@@ -206,7 +222,10 @@ export function sameRoute(a: LoreRoute, b: LoreRoute): boolean {
  * Every transition, in one place. What survives a move is the rule worth
  * stating: the lens is a way of reading and outlives both the scope and the
  * book; the moment and the branch belong to one story, so they are left behind
- * with it; a selection belongs to the scope it was made in.
+ * with it; a selection belongs to the scope it was made in. Book settings is
+ * left by every move that picks something to look at (a scope, a lens, an
+ * entry, a member, a book) and by Back; the moment and the line can change
+ * under it, because Settings reads the line being read.
  */
 export function reduce(route: LoreRoute, action: LoreAction): LoreRoute {
 	switch (action.type) {
@@ -240,7 +259,8 @@ export function reduce(route: LoreRoute, action: LoreAction): LoreRoute {
 					action.castId === null
 						? undefined
 						: (action.castId ?? base.castId),
-				inspector: action.inspector
+				inspector: action.inspector,
+				settings: false
 			})
 		}
 		case "openCastMember": {
@@ -258,10 +278,13 @@ export function reduce(route: LoreRoute, action: LoreAction): LoreRoute {
 				castId: action.castId ?? undefined,
 				entryId: undefined,
 				sceneId: undefined,
-				inspector: undefined
+				inspector: undefined,
+				settings: false
 			})
 		}
 		case "back":
+			// Settings sits over the route, so it pops first and alone.
+			if (route.settings) return normalize({ ...route, settings: false })
 			// The anchored entry hangs off the member, so it pops first.
 			if (route.entryId != null)
 				return normalize({
@@ -279,7 +302,7 @@ export function reduce(route: LoreRoute, action: LoreAction): LoreRoute {
 			if (route.lorebookId === null) return normalize(route)
 			return reduce(route, { type: "openBook", lorebookId: null })
 		case "setLens":
-			return normalize({ ...route, lens: action.lens })
+			return normalize({ ...route, lens: action.lens, settings: false })
 		case "setMoment":
 			return normalize({ ...route, moment: action.moment })
 		case "setBranch":
@@ -292,6 +315,10 @@ export function reduce(route: LoreRoute, action: LoreAction): LoreRoute {
 			})
 		case "setCompare":
 			return normalize({ ...route, compare: action.compare })
+		case "openSettings":
+			return normalize({ ...route, settings: true })
+		case "closeSettings":
+			return normalize({ ...route, settings: false })
 	}
 }
 
@@ -345,6 +372,7 @@ export function sameLineAndMoment(
 /**
  * `#lore=12/world?lens=graph&as=Y2-harvest`. The list of books has no address —
  * it is the workspace with nothing open — so it writes an empty fragment.
+ * Book settings rides as `&settings=1` over the route beneath it.
  */
 export function toHash(route: LoreRoute): string {
 	if (route.lorebookId === null) return ""
@@ -360,6 +388,7 @@ export function toHash(route: LoreRoute): string {
 	if (r.inspector) query.set("inspector", r.inspector)
 	if (r.castId != null) query.set("cast", String(r.castId))
 	if (r.sceneId != null) query.set("scene", String(r.sceneId))
+	if (r.settings) query.set("settings", "1")
 	const q = query.toString()
 	return `#lore=${path}${q ? `?${q}` : ""}`
 }
@@ -384,6 +413,13 @@ function legacyScope(segment: string): LoreScope | null {
 }
 
 /**
+ * `#lore=12/settings`, the design's spelling of Book settings, read as
+ * Settings over Everything. Written as `?settings=1` (`toHash`), which keeps
+ * the scope beneath it.
+ */
+const SETTINGS_SEGMENT = "settings"
+
+/**
  * Reads a fragment that is not ours, or is not an address at all, as "no
  * route" rather than as a default one: the panel's own state is a better
  * answer than a guess.
@@ -396,7 +432,8 @@ export function fromHash(hash: string): LoreRoute | null {
 	const lorebookId = Number(bookPart)
 	if (!bookPart || !Number.isFinite(lorebookId)) return null
 	if (!scopePart) return null
-	const legacy = legacyScope(scopePart)
+	const settingsPath = scopePart === SETTINGS_SEGMENT
+	const legacy = settingsPath ? DEFAULT_SCOPE : legacyScope(scopePart)
 	if (!legacy && !isScope(scopePart)) return null
 	const query = new URLSearchParams(search ?? "")
 	const branch = query.get("branch")
@@ -419,7 +456,8 @@ export function fromHash(hash: string): LoreRoute | null {
 		lens: lensFromQuery(scopePart, query),
 		moment: query.get("as") ?? undefined,
 		compare: query.get("compare") === "1",
-		branch: branch ? Number(branch) : undefined
+		branch: branch ? Number(branch) : undefined,
+		settings: settingsPath || query.get("settings") === "1"
 	})
 }
 
@@ -465,6 +503,7 @@ export function describeRoute(
 	names?: { book?: string; entry?: string }
 ): string[] {
 	if (route.lorebookId === null) return ["Lorebooks"]
+	if (route.settings) return [names?.book || "Lorebook", "Settings"]
 	const crumbs = [names?.book || "Lorebook", SCOPE_LABELS[route.scope]]
 	if (route.entryId != null && names?.entry) crumbs.push(names.entry)
 	return crumbs

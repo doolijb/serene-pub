@@ -90,10 +90,10 @@
 	}
 </script>
 
-{#each cards as c (keyOf(c))}
-	{@const id = `pipeline-card-${keyOf(c).replace(/[^a-z0-9]+/gi, "-")}`}
-	{#if variant === "document"}
-		<!-- Document View keeps its plain native controls on purpose. -->
+<!-- Document View keeps its plain native controls on purpose. -->
+{#if variant === "document"}
+	{#each cards as c (keyOf(c))}
+		{@const id = `pipeline-card-${keyOf(c).replace(/[^a-z0-9]+/gi, "-")}`}
 		<div class="a11y-field">
 			<label for={id}>{c.specName}: {nodeLabel(c.nodeKey)}</label>
 			<div class="a11y-inline-add">
@@ -110,40 +110,57 @@
 						disabled={!changed(c)}
 						onclick={() => apply(c)}
 					>
-						Apply
+						Apply now
 					</button>
 				{/if}
 			</div>
 		</div>
-	{:else}
-		<section class={cardClass}>
-			<!-- Visual only: the Select names itself with the same words. -->
-			<p class="text-surface-600-400 mb-1.5 block text-xs" aria-hidden="true">
-				{c.specName} · {nodeLabel(c.nodeKey)}
-			</p>
-			<div class="flex items-center gap-2">
-				<Select
-					label="{c.specName} · {nodeLabel(c.nodeKey)}"
-					labelHidden
-					class="min-w-0 flex-1"
-					options={[
-						{ value: DEFAULT, label: `Pipeline default (${defaultName(c)})` },
-						...choices(c).map((o) => ({ value: o.definitionId, label: o.name }))
-					]}
-					bind:value={draft[keyOf(c)]}
-					disabled={!canEdit}
-				/>
-				{#if canEdit}
-					<button
-						type="button"
-						class="btn btn-sm preset-tonal shrink-0"
-						disabled={!changed(c)}
-						onclick={() => apply(c)}
-					>
-						Apply
-					</button>
-				{/if}
-			</div>
-		</section>
-	{/if}
-{/each}
+	{/each}
+{:else if cards.length}
+	<!-- One card under one heading (less-confusing E9): what the choices
+	     are about, and that each applies on its own press, unlike the rest
+	     of the form, which waits for Save. -->
+	<section class={cardClass} aria-labelledby="pipeline-cards-heading">
+		<h3 id="pipeline-cards-heading" class="mb-1 text-sm font-medium">
+			How replies are made
+		</h3>
+		<p class="text-surface-600-400 mb-3 text-xs">
+			{canEdit
+				? "Each choice applies at once when you press Apply now, unlike the rest of this form, which waits for Save."
+				: "Only the session's owner can change these."}
+		</p>
+		<div class="flex flex-col gap-3">
+			{#each cards as c (keyOf(c))}
+				<div>
+					<!-- Visual only: the Select names itself with the same words. -->
+					<p class="text-surface-600-400 mb-1.5 block text-xs" aria-hidden="true">
+						{c.specName} · {nodeLabel(c.nodeKey)}
+					</p>
+					<div class="flex items-center gap-2">
+						<Select
+							label="{c.specName} · {nodeLabel(c.nodeKey)}"
+							labelHidden
+							class="min-w-0 flex-1"
+							options={[
+								{ value: DEFAULT, label: `Pipeline default (${defaultName(c)})` },
+								...choices(c).map((o) => ({ value: o.definitionId, label: o.name }))
+							]}
+							bind:value={draft[keyOf(c)]}
+							disabled={!canEdit}
+						/>
+						{#if canEdit}
+							<button
+								type="button"
+								class="btn btn-sm preset-tonal shrink-0"
+								disabled={!changed(c)}
+								onclick={() => apply(c)}
+							>
+								Apply now
+							</button>
+						{/if}
+					</div>
+				</div>
+			{/each}
+		</div>
+	</section>
+{/if}

@@ -9,6 +9,7 @@ import { describe, expect, test } from "vitest"
 import {
 	describeProposal,
 	groupLinesByOwner,
+	ledgerHeadLines,
 	ledgerLines,
 	linesByMessage,
 	type LedgerRow
@@ -207,5 +208,72 @@ describe("a held change", () => {
 		expect(describeProposal({ kind: "value", payload: {} }, {})).toBe(
 			"a change this session cannot describe"
 		)
+	})
+})
+
+describe("a held clock move (live scenes ★3)", () => {
+	const clock = (by: unknown, unit: unknown) =>
+		describeProposal({ kind: "clock", payload: { kind: "clock", by, unit } }, {})
+
+	test("reads as the time that would pass, in the unit the keeper named", () => {
+		expect(clock(3, "hours")).toBe("Time passes: 3 hours")
+		expect(clock(1, "days")).toBe("Time passes: 1 day")
+		expect(clock(1, "minutes")).toBe("Time passes: 1 minute")
+	})
+
+	test("a payload that is not a forward step says so rather than drawing a blank", () => {
+		expect(clock(-2, "hours")).toBe("a clock move this session cannot describe")
+		expect(clock(2, undefined)).toBe("a clock move this session cannot describe")
+	})
+})
+
+describe("a clock move in the ledger (live scenes §15 G5)", () => {
+	const move = (over: Partial<LedgerRow> = {}): LedgerRow => ({
+		id: 3,
+		kind: "clock",
+		messageId: 10,
+		ownerKey: "world",
+		ownerLabel: "The run",
+		updatedBy: "run:abc",
+		clock: { by: 3, unit: "hours", cause: "action", fromLabel: "Day 4, 14:00", toLabel: "Day 4, 17:00" },
+		...over
+	})
+
+	test("says how much time passed, and where the clock went", () => {
+		const [line] = ledgerLines([move()])
+		expect(line).toMatchObject({ key: "c3", kind: "clock", messageId: 10, ownerKey: "world" })
+		expect(line.text).toBe("Time passes: 3 hours (Day 4, 14:00 → Day 4, 17:00)")
+		expect(
+			ledgerLines([move({ clock: { by: -1, unit: "days", fromLabel: "Day 4", toLabel: "Day 3" } })])[0].text
+		).toBe("Time goes back: 1 day (Day 4 → Day 3)")
+	})
+
+	test("a skipped move says it is not on the clock, and why", () => {
+		const [line] = ledgerLines([move({ clock: { by: 3, unit: "hours", skipped: "This story has no clock yet." } })])
+		expect(line.text).toBe("Time passes: 3 hours, not on the clock. This story has no clock yet.")
+	})
+
+	test("sits after the message's values, whatever its id, and never feeds a value's trail", () => {
+		const lines = ledgerLines([
+			move({ id: 1 }),
+			value({ id: 9, messageId: 10, ownerKey: "world", slotLabel: "Weather", value: "rain" })
+		])
+		expect(lines.map((l) => l.kind)).toEqual(["value", "clock"])
+		expect(lines[0].text).toBe("Weather → rain")
+		expect(groupLinesByOwner(lines)).toHaveLength(1)
+	})
+
+	test("🚧 a move made before any line is the ledger head (§15 G13): first, under no message; a value with no anchor is not", () => {
+		const lines = ledgerLines([
+			move({ id: 5, messageId: 10 }),
+			move({ id: 6, messageId: null, clock: { by: 2, unit: "hours", skipped: "No clock." } }),
+			value({ id: 9, messageId: null })
+		])
+		// Sorted before every anchored line: before anything was said.
+		expect(lines.map((l) => l.key)).toEqual(["v9", "c6", "c5"])
+		expect(ledgerHeadLines(lines).map((l) => l.text)).toEqual([
+			"Time passes: 2 hours, not on the clock. No clock."
+		])
+		expect([...linesByMessage(lines).keys()]).toEqual([10])
 	})
 })

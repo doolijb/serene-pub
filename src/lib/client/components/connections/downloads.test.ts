@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest"
 import {
+	mattingItem,
 	aggregate,
+	downloads,
 	kcppBinaryItem,
 	kcppItems,
 	ollamaItems,
@@ -175,5 +177,109 @@ describe("aggregate — bytes, and a refusal to guess", () => {
 				item({ state: "cancelling", downloadedBytes: 1, totalBytes: 2 })
 			])
 		).toEqual({ inFlight: 1, percent: 50, finished: 1, failed: 1 })
+	})
+})
+
+describe("a cancel is its own ending (D3)", () => {
+	test("every manager's `cancelled` maps to cancelled, never done", () => {
+		expect(
+			kcppItems({
+				a: {
+					filename: "a.gguf",
+					status: "cancelled",
+					downloaded: 1,
+					total: 2,
+					isDone: true
+				}
+			})[0].state
+		).toBe("cancelled")
+		expect(
+			kcppBinaryItem({
+				assetName: "koboldcpp",
+				status: "cancelled",
+				downloaded: 1,
+				total: 2,
+				isDone: true
+			})?.state
+		).toBe("cancelled")
+		expect(
+			ollamaItems({
+				"3:llama3": {
+					modelName: "llama3",
+					connectionId: 3,
+					status: "cancelled",
+					isDone: true
+				}
+			})[0].state
+		).toBe("cancelled")
+		expect(
+			ollamaItems({
+				llama3: { status: "success", isDone: true }
+			})[0].state
+		).toBe("done")
+	})
+})
+
+describe("a cleared id comes back when it is arriving again (D2)", () => {
+	const row = (state: "downloading" | "error") => [
+		{
+			id: 9,
+			name: "Here",
+			models: [{ id: 91, name: "m", local: { state } }]
+		}
+	]
+
+	test("clear hides the failure; a fresh download under the id shows", () => {
+		downloads.setOnnx(row("error"))
+		expect(downloads.items.map((i) => i.id)).toContain("onnx:9:91")
+		downloads.clearFinished()
+		expect(downloads.items.map((i) => i.id)).not.toContain("onnx:9:91")
+		downloads.setOnnx(row("downloading"))
+		expect(
+			downloads.items.find((i) => i.id === "onnx:9:91")?.state
+		).toBe("in_flight")
+		// …and a later failure is NOT pre-cleared by the old dismissal.
+		downloads.setOnnx(row("error"))
+		expect(
+			downloads.items.find((i) => i.id === "onnx:9:91")?.state
+		).toBe("failed")
+		downloads.setOnnx([])
+	})
+})
+
+describe("the background remover is a fifth feed", () => {
+	const msg = (state: any, extra: Record<string, unknown> = {}) => ({
+		name: "Background remover (BiRefNet-lite)",
+		state,
+		...extra
+	})
+	test("in flight with its percent; a failure keeps its sentence", () => {
+		expect(mattingItem(msg("downloading", { percent: 40 }))).toMatchObject({
+			id: "matting",
+			source: "matting",
+			state: "in_flight",
+			percent: 40
+		})
+		expect(mattingItem(msg("error", { error: "offline" }))).toMatchObject({
+			state: "failed",
+			error: "offline"
+		})
+	})
+	test("on disk is Finished only after the tray saw it download", () => {
+		expect(mattingItem(msg("on_disk"))).toBeNull()
+		expect(mattingItem(msg("not_downloaded"))).toBeNull()
+		expect(mattingItem(msg("on_disk", { sizeBytes: 10 }), true)).toMatchObject({
+			state: "done",
+			totalBytes: 10
+		})
+	})
+	test("a cancel reads as cancelling, then cancelled once the files are gone", () => {
+		expect(mattingItem(msg("downloading", { cancelling: true }))).toMatchObject({
+			state: "cancelling"
+		})
+		expect(mattingItem(msg("not_downloaded"), true)).toMatchObject({
+			id: "matting",
+			state: "cancelled"
+		})
 	})
 })

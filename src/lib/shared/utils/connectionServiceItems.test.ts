@@ -6,12 +6,17 @@ import {
 	isKoboldCppManagedType,
 	connectionTypeDisabledReason,
 	localOnnxDisabledReason,
+	presetKeyUrl,
+	serviceSetupNeed,
 	CATEGORY_ORDER,
-	KOBOLDCPP_MANAGED_TYPES
+	CUSTOM_SERVICE_LABEL,
+	KOBOLDCPP_MANAGED_TYPES,
+	SETUP_NEED_LABELS
 } from "./connectionServiceItems"
 import { CONNECTION_TYPE, CONNECTION_TYPES } from "../constants/ConnectionTypes"
 import { OPENAI_COMPATIBLE_PRESETS } from "./connectionDefaults"
 import { PRESET_CAPABILITIES } from "$lib/shared/connectionAdapters/manifest"
+import { credentialPolicy } from "../connections/credentials"
 
 /** The presets whose service the manifest says embeds. */
 const EMBEDDING_PRESETS = OPENAI_COMPATIBLE_PRESETS.filter(
@@ -20,11 +25,18 @@ const EMBEDDING_PRESETS = OPENAI_COMPATIBLE_PRESETS.filter(
 			"text->embedding"
 		] === true
 )
+/** The presets whose service draws — listed again under Images. */
+const IMAGE_PRESETS = OPENAI_COMPATIBLE_PRESETS.filter(
+	(p) =>
+		PRESET_CAPABILITIES[(p as { slug?: string }).slug ?? ""]?.[
+			"text->image"
+		] === true
+)
 
 describe("buildConnectionServiceItems", () => {
 	const items = buildConnectionServiceItems()
 
-	test("has one item per native type (except OPENAI, the managed types and the two merged embedding types) plus one per preset, plus Ollama and the embedding presets under Embeddings", () => {
+	test("has one item per native type (except OPENAI, the managed types and the two merged embedding types) plus one per preset, plus Ollama and the embedding presets under Embeddings, plus the drawing presets under Images", () => {
 		const expectedCount =
 			CONNECTION_TYPES.length -
 			1 -
@@ -32,7 +44,8 @@ describe("buildConnectionServiceItems", () => {
 			2 +
 			OPENAI_COMPATIBLE_PRESETS.length +
 			1 +
-			EMBEDDING_PRESETS.length
+			EMBEDDING_PRESETS.length +
+			IMAGE_PRESETS.length
 		expect(items.length).toBe(expectedCount)
 	})
 
@@ -71,7 +84,9 @@ describe("buildConnectionServiceItems", () => {
 		for (const item of items) {
 			const bucket = `${item.category}::${item.modality}`
 			const labels = seen.get(bucket) ?? new Set<string>()
-			expect(labels.has(item.label), `${item.label} in ${bucket}`).toBe(false)
+			expect(labels.has(item.label), `${item.label} in ${bucket}`).toBe(
+				false
+			)
 			labels.add(item.label)
 			seen.set(bucket, labels)
 		}
@@ -82,7 +97,8 @@ describe("buildConnectionServiceItems", () => {
 		// type that used to answer under Embeddings is gone — and without this
 		// entry that section would have no Ollama at all.
 		const embed = items.find(
-			(i) => i.type === CONNECTION_TYPE.OLLAMA && i.modality === "embeddings"
+			(i) =>
+				i.type === CONNECTION_TYPE.OLLAMA && i.modality === "embeddings"
 		)
 		expect(embed).toBeDefined()
 		expect(embed!.presetValue).toBeUndefined()
@@ -375,5 +391,180 @@ describe("local ONNX types on a machine that can't run them", () => {
 			).toBe(null)
 			expect(connectionTypeDisabledReason(type, undefined)).toBe(null)
 		}
+	})
+})
+
+/**
+ * The New connection dialog describes the service you picked (plan
+ * 2026-10-06 §D). Every OpenAI-compatible preset used to inherit OpenAI
+ * Chat's description, so OpenRouter sent people to OpenAI's website for a key.
+ */
+describe("what each service asks of the person", () => {
+	const items = buildConnectionServiceItems()
+	const byKey = (key: string) => items.find((i) => i.key === key)!
+	const presetItem = (name: string) => {
+		const preset = OPENAI_COMPATIBLE_PRESETS.find((p) => p.name === name)!
+		return { preset, item: byKey(`preset:${preset.value}`) }
+	}
+	const openaiDescription = CONNECTION_TYPES.find(
+		(t) => t.value === CONNECTION_TYPE.OPENAI
+	)!.description
+
+	test("no preset inherits OpenAI Chat's description", () => {
+		for (const item of items.filter((i) => i.presetValue !== undefined)) {
+			expect(item.description, item.label).not.toBe(openaiDescription)
+			expect(item.description, item.label).not.toContain(
+				"OpenAI's website"
+			)
+		}
+	})
+
+	test("a keyed preset says who hands out the key, and links there", () => {
+		const { item } = presetItem("OpenRouter")
+		expect(item.setupNeed).toBe("key")
+		expect(item.description).toBe(
+			'<p>OpenRouter — needs an API key from <a class="anchor" ' +
+				'href="https://openrouter.ai/keys" target="_blank" ' +
+				'rel="noopener noreferrer">openrouter.ai</a></p>'
+		)
+	})
+
+	test("every keyed preset in the list has a key page — a slug added later can't lose its link quietly", () => {
+		for (const preset of OPENAI_COMPATIBLE_PRESETS) {
+			const item = byKey(`preset:${preset.value}`)
+			if (item.setupNeed !== "key") continue
+			const url = presetKeyUrl(preset)
+			expect(url, preset.name).toMatch(/^https:\/\//)
+			expect(item.description, preset.name).toContain(`href="${url}"`)
+			expect(
+				item.description.startsWith(
+					`<p>${item.label} — needs an API key from <a `
+				),
+				preset.name
+			).toBe(true)
+		}
+	})
+
+	test("every keyed preset carries a slug that finds its key page", () => {
+		for (const preset of OPENAI_COMPATIBLE_PRESETS) {
+			if (presetItem(preset.name).item.setupNeed !== "key") continue
+			expect((preset as { slug?: string }).slug, preset.name).toBeTruthy()
+			expect(presetKeyUrl(preset), preset.name).toMatch(/^https:\/\//)
+		}
+		for (const [name, url] of [
+			["DeepInfra", "https://deepinfra.com/dash/api_keys"],
+			["Perplexity AI", "https://console.perplexity.ai/"],
+			["xAI Grok (Experimental)", "https://console.x.ai/"],
+			["Cohere (Experimental)", "https://dashboard.cohere.com/api-keys"],
+			["AnyScale", "https://www.anyscale.com/"]
+		] as const)
+			expect(presetKeyUrl(presetItem(name).preset), name).toBe(url)
+		// The link names the page it opens, without the www.
+		expect(presetItem("AnyScale").item.description).toContain(
+			">anyscale.com</a>"
+		)
+	})
+
+	test("a local preset runs on the person's machine and needs no key", () => {
+		for (const name of ["vLLM (Experimental)", "LocalAI", "Ollama"]) {
+			const { item } = presetItem(name)
+			expect(item.setupNeed, name).toBe("local")
+			expect(item.description, name).toBe(
+				"<p>Runs on your own machine · no key</p>"
+			)
+		}
+	})
+
+	test("the custom entry asks for an address only", () => {
+		const custom = byKey("preset:0")
+		expect(custom.label).toBe(CUSTOM_SERVICE_LABEL)
+		expect(custom.setupNeed).toBe("address")
+		expect(custom.description).toBe(
+			"<p>Any OpenAI-compatible server · paste its address, and a key only if it asks for one</p>"
+		)
+	})
+
+	test("an embeddings entry opens with the same line as its text entry", () => {
+		for (const item of items.filter(
+			(i) => i.presetValue !== undefined && i.modality === "embeddings"
+		)) {
+			const text = byKey(`preset:${item.presetValue}`)
+			expect(item.setupNeed).toBe(text.setupNeed)
+			expect(
+				item.description.startsWith(text.description),
+				item.label
+			).toBe(true)
+		}
+	})
+
+	test("native types: keyed, local, from credentialPolicy and the category", () => {
+		expect(byKey(`type:${CONNECTION_TYPE.ANTHROPIC}`).setupNeed).toBe("key")
+		for (const type of [
+			CONNECTION_TYPE.OLLAMA,
+			CONNECTION_TYPE.LM_STUDIO,
+			CONNECTION_TYPE.LLAMACPP,
+			CONNECTION_TYPE.KOBOLDCPP,
+			CONNECTION_TYPE.A1111,
+			CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
+			CONNECTION_TYPE.LOCAL_ONNX_NER
+		])
+			expect(byKey(`type:${type}`).setupNeed, type).toBe("local")
+		// A native type keeps its own prose.
+		expect(byKey(`type:${CONNECTION_TYPE.OLLAMA}`).description).toBe(
+			CONNECTION_TYPES.find((t) => t.value === CONNECTION_TYPE.OLLAMA)!
+				.description
+		)
+	})
+
+	test("the chip and the index agree: Needs an API key exactly when a key is required", () => {
+		for (const item of items) {
+			const preset = OPENAI_COMPATIBLE_PRESETS.find(
+				(p) => p.value === item.presetValue
+			)
+			const required =
+				credentialPolicy({
+					type: item.type,
+					preset: item.presetSlug,
+					baseUrl: preset?.connectionDefaults.baseUrl
+				}) === "required"
+			expect(item.setupNeed === "key", item.key).toBe(required)
+		}
+	})
+
+	test("a cloud service that may take a key but needn't is address only", () => {
+		expect(
+			serviceSetupNeed({
+				type: CONNECTION_TYPE.OPENAI,
+				baseUrl: "http://192.168.1.20:8000/v1",
+				category: "cloud"
+			})
+		).toBe("address")
+	})
+
+	test("the chips read as the plan names them", () => {
+		expect(SETUP_NEED_LABELS).toEqual({
+			key: "Needs an API key",
+			local: "Runs locally",
+			address: "Address only",
+			free: "Free · queued"
+		})
+	})
+
+	test("AI Horde is free and queued; NovelAI and BFL need a key", () => {
+		const need = (type: string) => items.find((i) => i.type === type)?.setupNeed
+		expect(need(CONNECTION_TYPE.HORDE)).toBe("free")
+		expect(need(CONNECTION_TYPE.NOVELAI)).toBe("key")
+		expect(need(CONNECTION_TYPE.BFL)).toBe("key")
+	})
+
+	test("the presets that draw are listed under Images too", () => {
+		const gemini = items.find(
+			(i) => i.presetSlug === "google-gemini" && i.modality === "image-gen"
+		)
+		expect(gemini?.type).toBe(CONNECTION_TYPE.OPENAI)
+	})
+
+	test("no item carries a difficulty any more", () => {
+		for (const item of items) expect(item).not.toHaveProperty("difficulty")
 	})
 })

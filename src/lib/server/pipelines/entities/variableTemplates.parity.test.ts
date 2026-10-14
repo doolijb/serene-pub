@@ -4,6 +4,7 @@ import {
 	renderVariable,
 	shippedByKey,
 	SHIPPED_BAND_KEYS,
+	shippedRowsByKey,
 	wrapFor
 } from "$lib/server/pipelines/entities/variableLayouts"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
@@ -214,6 +215,13 @@ const OBJECT_CASES: Record<string, () => Array<[string, unknown]>> = {
 		["a zeroth day", { year: 412, month: 3, day: 0 }],
 		["a year of zero", { year: 0 }],
 		["a negative year", { year: -50, month: 1 }],
+		["a declared calendar's label", { year: 412, month: 3, label: "3 Thaw, Year 412" }],
+		[
+			// The layout read `label` through a double stash until 2026-10-13,
+			// which HTML-escaped it; the floor never did.
+			"a label with an apostrophe and an ampersand",
+			{ year: 412, label: "Rain's Fall & Harvest" }
+		],
 		["undefined", undefined],
 		["null", null]
 	]
@@ -452,11 +460,17 @@ describe("the shipped set", () => {
 					renders[key] = variableId
 				}
 
+		// Automatic object layouts (`coreObjectLayouts`, 2026-09-27) ship a row too: `likenesses` (2026-10-12) is the first.
+		const { coreObjectLayouts } = await import("$lib/server/pipelines/entities/objectVariableLayouts")
+		const automaticKeys = coreObjectLayouts().flatMap((l) => Object.keys(getVariable(l.variableId as any)?.scope ?? {}))
 		expect(Object.keys(renders).sort()).toEqual(
-			[...new Set(SHIPPED_VARIABLE_TEMPLATES.map((t) => t.key))].sort()
+			[...new Set([...SHIPPED_VARIABLE_TEMPLATES.map((t) => t.key), ...automaticKeys])].sort()
 		)
+		const byKey = new Map<string, { variableId: string }>(shippedByKey)
+		for (const l of coreObjectLayouts())
+			for (const k of Object.keys(getVariable(l.variableId as any)?.scope ?? {})) byKey.set(k, l)
 		for (const [key, variableId] of Object.entries(renders))
-			expect(shippedByKey.get(key)?.variableId).toBe(variableId)
+			expect(byKey.get(key)?.variableId).toBe(variableId)
 	})
 
 	it("declares every variable it ships a layout for", async () => {
@@ -763,5 +777,22 @@ describe("the shipped layouts agree with the floor on each variable's own sample
 				`${t.key} (${t.name})`
 			).toBe(t.codeDefault(value))
 		}
+	})
+})
+
+/**
+ * Strokes paused (`STROKES_ENABLED` off, owner 2026-10-11): the characters
+ * rows are the pre-strokes layout byte for byte — no `strokeList`. The
+ * stroke cases live in
+ * `variableTemplates.strokes.parity.test.ts`, under the flag.
+ */
+describe("characters while strokes are paused", () => {
+	it("the shipped rows are the pre-strokes layout", () => {
+		const row = shippedRowsByKey
+			.get("characters")!
+			.find((t) => t.variant === "content")!
+		expect(row.source).not.toContain("strokeList")
+		expect(row.source).toContain('"description": {{{jsonValue description}}}')
+		expect(row.source).toContain('"personality": {{{jsonValue personality}}}')
 	})
 })

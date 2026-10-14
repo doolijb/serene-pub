@@ -27,6 +27,7 @@
  */
 import {
 	ZONE_IDS,
+	pinnedOf,
 	type ArrangedGridV1,
 	type ArrangedItem,
 	type ArrangedZone,
@@ -240,9 +241,14 @@ export function dedupeArranged(
  * Merge captured x/y/w/h from a persisted zone layout onto the editor's
  * id-keyed GsItems, so re-opening the editor restores the arrangement instead
  * of re-laying-out from defaults. An item with no saved geometry keeps its
- * default `place`/`h`. The editor keys its zones by id alone, so laying
- * geometry over them never re-instantiates a grid — the cells are read once,
- * when the zone is seeded.
+ * default `place`/`h` — and its default pin, which is the zone's (an
+ * un-arranged side's cards carry their zone's `pinned: false`). The editor
+ * keys its zones by id alone, so laying geometry over them never
+ * re-instantiates a grid — the cells are read once, when the zone is seeded.
+ *
+ * An item the frame holds takes the FRAME's pin, either way: the frame is
+ * where a group's pin is written (the Move tab's rail toggle, `withPins`), so
+ * a default carried on the item must not outvote it when the zone re-seeds.
  */
 export function withGeometry(
 	items: GsItem[],
@@ -252,18 +258,18 @@ export function withGeometry(
 	const pos = new Map(zone.items.map((i) => [i.id, i]))
 	return items.map((it) => {
 		const p = pos.get(it.id)
-		return p
-			? {
-					...it,
-					x: p.x,
-					y: p.y,
-					w: p.w,
-					h: p.h,
-					...(p.anchor ? { anchor: p.anchor } : {}),
-					...(p.group ? { group: p.group } : {}),
-					...(p.pinned === false ? { pinned: false } : {})
-				}
-			: it
+		if (!p) return it
+		const { pinned: _default, ...rest } = it
+		return {
+			...rest,
+			x: p.x,
+			y: p.y,
+			w: p.w,
+			h: p.h,
+			...(p.anchor ? { anchor: p.anchor } : {}),
+			...(p.group ? { group: p.group } : {}),
+			...(pinnedOf(p) ? {} : { pinned: false })
+		}
 	})
 }
 
@@ -286,12 +292,14 @@ export function withGeometry(
  * ABSENT MEANS PINNED, and `true` is never written. That is the whole
  * compatibility guarantee: every arrangement saved before the field existed
  * reads as all groups pinned, which is exactly what it rendered as, so nothing
- * changes for a saved layout until someone toggles a pin.
+ * changes for a saved layout until someone toggles a pin. The rule is the
+ * SDK's (`pinnedOf`) — the one the session layout reads every pin by, an
+ * arranged item's, a grid entry's and a zone's — so it is stated nowhere else.
  */
 
-/** Is this arranged item pinned? Absent means pinned — see above. */
+/** Is this arranged item pinned? The SDK's one pin rule (`pinnedOf`): absent means pinned. */
 export function itemPinned(p: { pinned?: boolean }): boolean {
-	return p.pinned !== false
+	return pinnedOf(p)
 }
 
 /**
@@ -338,9 +346,11 @@ export function withPins(
  * zone's pin at all. Showing the button there would be a control with no
  * visible effect, so it hides instead of being left to do nothing.
  *
- * `frame` is the same per-side slice of `ArrangedGridV1` the live view keys its own
- * arranged/unarranged branch on, so this mirrors that branch rather than
- * inventing a second definition of "arranged".
+ * `frame` is the STORED per-side slice of `ArrangedGridV1` — the one the live
+ * view keys its own arranged/unarranged branch on — so this mirrors that
+ * branch rather than inventing a second definition of "arranged". Never the
+ * editor's working frame: every zone reports one the moment it is seeded, and
+ * read off that the button went dead on every un-arranged side (lane E1).
  */
 export function showZonePin(frame: ArrangedZone | undefined): boolean {
 	return !frame
@@ -668,21 +678,40 @@ export function seatCard(
 	id: string,
 	sizes: readonly { w: number; h: number }[]
 ): ArrangedZone | null {
+	// A newcomer in a RAIL — a frame whose every card is unpinned, so nothing
+	// in it is docked — is a rail icon like the rest. Seated pinned, one tray
+	// add would turn an icon rail into a docked column and take its width out
+	// of the session. An empty frame has nothing to follow: the card docks.
+	const rail = isRailFrame(frame)
 	for (const size of sizes) {
 		const need = { w: Math.min(size.w, frame.cols), h: size.h }
 		const roomy = makeRoom(frame, need)
 		const slot = firstSlot(roomy, need)
 		if (!slot) continue
+		const cell = clampPos(
+			{ id, x: slot.x, y: slot.y, ...need },
+			roomy.cols,
+			roomy.rows
+		)
 		return {
 			...roomy,
 			// `clampPos` rather than the raw size: it is the clamp `firstSlot`
 			// measured the slot with and the one `seedPositions` ends on, so
 			// the card written here is the card the zone draws.
-			items: [
-				...roomy.items,
-				clampPos({ id, x: slot.x, y: slot.y, ...need }, roomy.cols, roomy.rows)
-			]
+			items: [...roomy.items, rail ? { ...cell, pinned: false } : cell]
 		}
 	}
 	return null
+}
+
+/**
+ * Is this frame a RAIL: it places at least one card and pins none? Such a side
+ * has nothing docked, so it is drawn as its icon rail (./sessionLayoutModel
+ * `railOnly`) and takes a rail's width in the flow, not a column's
+ * (./sideSlot `sideFlowPx`). The SDK's one pin rule decides each card.
+ */
+export function isRailFrame(
+	frame: { items: readonly { pinned?: boolean }[] } | undefined
+): boolean {
+	return !!frame && frame.items.length > 0 && !frame.items.some(pinnedOf)
 }

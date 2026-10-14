@@ -737,3 +737,128 @@ describe("a retired slot", () => {
 		expect(state.slots.find((s) => s.id === mine)?.retired).toBe(true)
 	})
 })
+
+// ── A card brings its sheets (reversed 2026-10-11) ──────────────────────────
+
+describe("a seat's card joins the vocabulary", () => {
+	const OPEN = "test:genre/open"
+	const CLOSED = "test:genre/closed"
+
+	/** The slots, plus one genre that allows custom attributes and one that denies them. */
+	function declareGenres() {
+		declareSlots()
+		genre(OPEN, {
+			name: { en: "Open" },
+			family: "test",
+			slots: [],
+			events: {},
+			customAttributes: "allow"
+		})
+		genre(CLOSED, { name: { en: "Closed" }, family: "test", slots: [], events: {} })
+	}
+
+	/** A stored sheet over the given slots, with a name no other test has. */
+	async function sheet(userId: number, name: string, slots: string[]) {
+		const { declareSheet } = await import("$lib/server/state/declarations")
+		const id = `cards${++n}:sheet/${name}@1` as `${string}:sheet/${string}@${number}`
+		await declareSheet(db, userId, id, {
+			label: { en: name },
+			slots: slots.map((s) => ({ id: s }))
+		})
+		return id
+	}
+
+	const own = (ownerKind: string, ownerId: number, sheetId: string) =>
+		db.insert(schema.ownerSheets).values({ ownerKind, ownerId, sheetId, sessionId: null })
+
+	const useGenre = (sessionId: number, genreId: string) =>
+		db.update(schema.sessions).set({ genreId }).where(eq(schema.sessions.id, sessionId))
+
+	test("a card's sheet reaches the session, after the world's", async () => {
+		declareGenres()
+		const w = await world()
+		await useGenre(w.session.id, OPEN)
+		const worldSheet = await sheet(w.user.id, "world", [WEATHER, MOOD])
+		const cardSheet = await sheet(w.user.id, "card", [HP, MOOD])
+		await own("card", w.character.id, cardSheet)
+		await own("lorebook", w.lorebook.id, worldSheet)
+		const { vocabularyFor } = await import("$lib/server/state/resolve")
+		const vocab = await vocabularyFor(db, w.session.id)
+		// First mention fixes the position: the world names mood first.
+		expect(vocab.slots.map((s) => s.id)).toEqual([WEATHER, MOOD, HP])
+		expect(vocab.entryFor(MOOD)?.sheetId).toBe(worldSheet)
+		expect(vocab.entryFor(HP)?.sheetId).toBe(cardSheet)
+	}, 60_000)
+
+	test("a card brings its sheet with no world, and a persona's card does too", async () => {
+		declareGenres()
+		const w = await world()
+		await useGenre(w.session.id, OPEN)
+		await db.update(schema.sessions).set({ lorebookId: null }).where(eq(schema.sessions.id, w.session.id))
+		const [persona] = await db
+			.insert(schema.characters)
+			.values({ userId: w.user.id, name: `Me ${n}`, description: "Me.", isPersona: true })
+			.returning()
+		await db.insert(schema.sessionPersonas).values({ sessionId: w.session.id, personaId: persona.id })
+		const cardSheet = await sheet(w.user.id, "rider", [HP])
+		const personaSheet = await sheet(w.user.id, "me", [MOOD])
+		await own("card", w.character.id, cardSheet)
+		await own("card", persona.id, personaSheet)
+		const { vocabularyFor } = await import("$lib/server/state/resolve")
+		const vocab = await vocabularyFor(db, w.session.id)
+		expect(vocab.slots.map((s) => s.id)).toEqual([HP, MOOD])
+		expect(vocab.entryFor(MOOD)?.sheetId).toBe(personaSheet)
+	}, 60_000)
+
+	test("a lorebook read with no session gets no card sheets", async () => {
+		declareGenres()
+		const w = await world()
+		const worldSheet = await sheet(w.user.id, "world", [WEATHER])
+		const cardSheet = await sheet(w.user.id, "card", [HP])
+		await own("lorebook", w.lorebook.id, worldSheet)
+		await own("card", w.character.id, cardSheet)
+		await putValue("card", w.character.id, MOOD, "wary")
+		const { sessionLinks, worldAttributesFor } = await import("$lib/server/state/resolve")
+		const links = await sessionLinks(db, w.session.id)
+		const book = await worldAttributesFor(db, links, undefined, true)
+		expect(book.sheets.map((s) => s.id)).toEqual([worldSheet])
+		expect(book.recorded).not.toContain(MOOD)
+		const run = await worldAttributesFor(db, links, w.session.id, true)
+		expect(run.sheets.map((s) => s.id)).toEqual([worldSheet, cardSheet])
+		// A card's recorded value counts the way a cast member's does.
+		expect(run.recorded).toContain(MOOD)
+	}, 60_000)
+
+	test("a genre that denies custom attributes gets none", async () => {
+		declareGenres()
+		const w = await world()
+		await useGenre(w.session.id, CLOSED)
+		const cardSheet = await sheet(w.user.id, "card", [HP])
+		await own("card", w.character.id, cardSheet)
+		const { sessionLinks, vocabularyFor, worldAttributesFor } = await import(
+			"$lib/server/state/resolve"
+		)
+		expect((await vocabularyFor(db, w.session.id)).slots).toEqual([])
+		const links = await sessionLinks(db, w.session.id)
+		expect(await worldAttributesFor(db, links, w.session.id, false)).toEqual({
+			sheets: [],
+			recorded: []
+		})
+	}, 60_000)
+
+	test("a card value resolves under the card's sheet when nothing nearer touched it", async () => {
+		declareGenres()
+		const w = await world()
+		await useGenre(w.session.id, OPEN)
+		const cardSheet = await sheet(w.user.id, "card", [MOOD])
+		await own("card", w.character.id, cardSheet)
+		await putValue("card", w.character.id, MOOD, "furious")
+		const { stateFor, vocabularyFor } = await import("$lib/server/state/resolve")
+		expect((await vocabularyFor(db, w.session.id)).entryFor(MOOD)?.sheetId).toBe(cardSheet)
+		const state = await stateFor(db, w.session.id)
+		expect(state.cast.byId[w.character.id]?.mood).toBe("furious")
+		// The cast member still overrides the card inside a world.
+		await putValue("cast_member", w.binding.id, MOOD, "calm")
+		expect((await stateFor(db, w.session.id)).cast.byId[w.character.id]?.mood).toBe("calm")
+	}, 60_000)
+})

@@ -10,13 +10,16 @@
  * "Focus").
  *
  * A view missing from this table can still be focused; it just keeps the
- * address of the page it was focused over. Pipelines (`/pipelines/*` are real
- * pages), Users and Legacy are left out on purpose.
+ * address of the page it was focused over. Users and Legacy are left out on
+ * purpose.
  *
  * Admin and Help own whole trees (`/admin/prompts/12`, `/docs/sessions`): the
  * address is the section or page on screen, which each view's router supplies
  * (`registerViewAddress`). Help's is `/docs` because that is where every
- * compiled documentation link already points.
+ * compiled documentation link already points. Messages owns `/messages`,
+ * `/messages/<conversation id>` and `/messages/people/<user id>`
+ * (`viewLinks.ts`, `messagesAddressOf`); its address is the conversation or
+ * person on screen.
  */
 export const VIEW_ROUTES: Readonly<Record<string, string>> = {
 	sessions: "/sessions",
@@ -24,16 +27,19 @@ export const VIEW_ROUTES: Readonly<Record<string, string>> = {
 	library: "/library",
 	lorebooks: "/lorebooks",
 	tags: "/tags",
+	models: "/models",
+	loadouts: "/loadouts",
 	connections: "/connections",
 	sampling: "/sampling",
 	settings: "/settings",
 	activity: "/activity",
+	conversations: "/messages",
 	help: "/docs",
 	admin: "/admin"
 }
 
 /** Views whose address is a tree under their root, not one path. */
-const TREE_VIEWS = new Set(["admin", "help"])
+const TREE_VIEWS = new Set(["admin", "help", "conversations"])
 
 /** A view's current address when it is more than its root (Admin's section, Help's page). */
 const addressProviders = new Map<string, () => string>()

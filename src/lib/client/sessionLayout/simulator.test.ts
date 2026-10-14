@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest"
 import { TIER_MIN_PX } from "../surfaces/types"
-import { DEFAULT_SIDE_RULES } from "./schema"
+import { DEFAULT_SIDE_RULES } from "@serene-pub/sdk"
 import {
 	EDIT_SIDE_FRACTION,
 	EDIT_ZONE_CHROME_PX,

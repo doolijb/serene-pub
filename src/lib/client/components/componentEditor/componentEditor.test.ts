@@ -145,6 +145,18 @@ describe("compile errors map to places in the files", () => {
 		])
 		expect(rows[1]!.stack).toContain("y.js")
 	})
+
+	it("lists compile warnings last, placed like errors: a jump when they have a place", () => {
+		const rows = errorRows([], [{ message: "boom" }], files, [
+			{ file: "Stats.svelte", line: 2, column: 0, text: "A <style> block is dropped here." },
+			{ file: "", line: 0, column: 0, text: "the module bundles x" }
+		])
+		expect(rows.map((r) => [r.kind, r.place, !!r.location])).toEqual([
+			["runtime", "", false],
+			["warning", "Stats.svelte:2:1", true],
+			["warning", "", false]
+		])
+	})
 })
 
 describe("the core-changed banner", () => {

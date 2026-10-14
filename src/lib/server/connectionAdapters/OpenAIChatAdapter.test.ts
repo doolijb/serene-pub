@@ -14,6 +14,15 @@ vi.mock("$lib/server/embedding", () => ({
 	getLoadedModelId: () => null
 }))
 
+// The entries → ids resolution is the resolver's (its own int test); here
+// only what the adapter does with the answer.
+vi.mock("$lib/server/connections/logitBiasTokens", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("$lib/server/connections/logitBiasTokens")
+	>()),
+	resolveLogitBias: vi.fn()
+}))
+
 const openAIConstructorMock = vi.fn()
 const createMock = vi.fn()
 const modelsListMock = vi.fn()
@@ -120,6 +129,37 @@ describe("OpenAIChatAdapter — base URL trailing-slash normalization", () => {
 		)
 	})
 
+	test("a server on this machine with no key is sent a placeholder key", async () => {
+		openAIConstructorMock.mockClear()
+		modelsListMock.mockResolvedValue({ data: [] })
+		const res = await exportsDefault.listModels(
+			makeConnection({
+				baseUrl: "http://localhost:11434/v1",
+				extraJson: {}
+			})
+		)
+		expect(res.error).toBeUndefined()
+		expect(openAIConstructorMock).toHaveBeenLastCalledWith(
+			expect.objectContaining({ apiKey: "none" })
+		)
+	})
+
+	test("a service that needs a key, with none, is refused before anything is sent", async () => {
+		for (const baseUrl of ["https://api.example.com/v1", ""]) {
+			openAIConstructorMock.mockClear()
+			const res = await exportsDefault.listModels(
+				makeConnection({ baseUrl, extraJson: {} })
+			)
+			expect(res.error).toMatch(/needs an API key/)
+			expect(openAIConstructorMock).not.toHaveBeenCalled()
+			const test = await exportsDefault.testConnection(
+				makeConnection({ baseUrl, extraJson: {} })
+			)
+			expect(test.ok).toBe(false)
+			expect(test.error).toMatch(/needs an API key/)
+		}
+	})
+
 	test("falls back to the connection-type default (normalized) when baseUrl is unset", async () => {
 		openAIConstructorMock.mockClear()
 		modelsListMock.mockResolvedValue({ data: [] })
@@ -223,6 +263,318 @@ describe("OpenAIChatAdapter — what each listed model is for", () => {
 		expect(res.models).toEqual([
 			{ id: "gpt-4o", object: "model", owned_by: "openai" }
 		])
+	})
+
+	// Together's `GET /v1/models`: `type` on every entry.
+	const TOGETHER_DATA = [
+		{
+			id: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+			object: "model",
+			created: 1733461163,
+			type: "chat",
+			display_name: "Meta Llama 3.3 70B Instruct Turbo",
+			organization: "Meta",
+			context_length: 131072,
+			pricing: { input: 0.88, output: 0.88 }
+		},
+		{
+			id: "meta-llama/Meta-Llama-3-70B",
+			object: "model",
+			type: "language"
+		},
+		{
+			id: "Qwen/Qwen2.5-Coder-32B-Instruct",
+			object: "model",
+			type: "code"
+		},
+		{ id: "BAAI/bge-large-en-v1.5", object: "model", type: "embedding" },
+		{
+			id: "black-forest-labs/FLUX.1-schnell",
+			object: "model",
+			type: "image"
+		},
+		{ id: "Salesforce/Llama-Rank-V1", object: "model", type: "rerank" },
+		{
+			id: "meta-llama/Llama-Guard-3-11B-Vision-Turbo",
+			object: "model",
+			type: "moderation"
+		},
+		{ id: "cartesia/sonic", object: "model", type: "audio" },
+		{ id: "no-type", object: "model" }
+	]
+
+	test.each([
+		["its preset", { preset: "together-ai" }],
+		[
+			"its address",
+			{ preset: null, baseUrl: "https://api.together.xyz/v1/" }
+		]
+	])(
+		"Together, known by %s: each entry's `type` says what it is for, where the app has a word",
+		async (_, overrides) => {
+			modelsListMock.mockReset()
+			modelsListMock.mockResolvedValue({ data: TOGETHER_DATA })
+			const res = await exportsDefault.listModels(
+				makeConnection(overrides)
+			)
+			expect(modelsListMock).toHaveBeenCalledWith(undefined)
+			expect(res.models.map((m: any) => [m.id, m.modality])).toEqual([
+				["meta-llama/Llama-3.3-70B-Instruct-Turbo", "text-gen"],
+				["meta-llama/Meta-Llama-3-70B", "text-gen"],
+				["Qwen/Qwen2.5-Coder-32B-Instruct", "text-gen"],
+				["BAAI/bge-large-en-v1.5", "embeddings"],
+				["black-forest-labs/FLUX.1-schnell", "image-gen"],
+				["Salesforce/Llama-Rank-V1", undefined],
+				["meta-llama/Llama-Guard-3-11B-Vision-Turbo", undefined],
+				["cartesia/sonic", undefined],
+				["no-type", undefined]
+			])
+			expect(res.models[0].context_length).toBe(131072)
+		}
+	)
+
+	test("a `type` is read only from Together: another service's `type` says nothing", () => {
+		const { openAIModelModality } = adapterModule
+		expect(openAIModelModality({ id: "m", type: "chat" })).toBe(undefined)
+		expect(
+			openAIModelModality({ id: "m", type: "constructor" }, "together")
+		).toBe(undefined)
+	})
+
+	// Mistral's `GET /v1/models`: `capabilities` on every entry, and no field
+	// naming embeddings.
+	const mistralEntry = (id: string, completion_chat: boolean) => ({
+		id,
+		object: "model",
+		created: 1733400000,
+		owned_by: "mistralai",
+		capabilities: {
+			completion_chat,
+			completion_fim: false,
+			function_calling: completion_chat,
+			fine_tuning: false,
+			vision: false,
+			classification: false
+		},
+		name: id,
+		description: `Official ${id} Mistral AI model`,
+		max_context_length: completion_chat ? 131072 : 8192,
+		aliases: [],
+		deprecation: null,
+		default_model_temperature: null,
+		type: "base"
+	})
+
+	test.each([
+		["its preset", { preset: "mistral-ai" }],
+		["its address", { preset: null, baseUrl: "https://api.mistral.ai/v1" }]
+	])(
+		"Mistral, known by %s: completion_chat true is a text model; false says nothing",
+		async (_, overrides) => {
+			modelsListMock.mockReset()
+			modelsListMock.mockResolvedValue({
+				data: [
+					mistralEntry("mistral-large-latest", true),
+					mistralEntry("mistral-embed", false),
+					{ id: "no-capabilities", object: "model" }
+				]
+			})
+			const res = await exportsDefault.listModels(
+				makeConnection(overrides)
+			)
+			expect(res.models.map((m: any) => [m.id, m.modality])).toEqual([
+				["mistral-large-latest", "text-gen"],
+				// Not guessed from the id.
+				["mistral-embed", undefined],
+				["no-capabilities", undefined]
+			])
+		}
+	)
+
+	// Gemini's OpenAI-compatible `/models` carries nothing but the id; the
+	// native `models.list` carries `supportedGenerationMethods`.
+	const GEMINI_BASE =
+		"https://generativelanguage.googleapis.com/v1beta/openai/"
+	const GEMINI_COMPAT_DATA = [
+		{ id: "models/gemini-2.5-flash", object: "model", owned_by: "google" },
+		{
+			id: "models/gemini-embedding-001",
+			object: "model",
+			owned_by: "google"
+		},
+		// Matched with or without the `models/` prefix.
+		{ id: "gemini-2.0-flash", object: "model", owned_by: "google" },
+		{ id: "models/aqa", object: "model", owned_by: "google" },
+		{
+			id: "models/imagen-4.0-generate-001",
+			object: "model",
+			owned_by: "google"
+		},
+		{ id: "models/both-ways", object: "model", owned_by: "google" },
+		{ id: "models/not-native", object: "model", owned_by: "google" }
+	]
+	const GEMINI_NATIVE_PAGES = [
+		{
+			models: [
+				{
+					name: "models/gemini-2.5-flash",
+					version: "001",
+					displayName: "Gemini 2.5 Flash",
+					inputTokenLimit: 1048576,
+					outputTokenLimit: 65536,
+					supportedGenerationMethods: [
+						"generateContent",
+						"countTokens",
+						"createCachedContent",
+						"batchGenerateContent"
+					]
+				},
+				{
+					name: "models/gemini-embedding-001",
+					version: "001",
+					displayName: "Gemini Embedding 001",
+					inputTokenLimit: 2048,
+					outputTokenLimit: 1,
+					supportedGenerationMethods: [
+						"embedContent",
+						"countTextTokens",
+						"countTokens",
+						"asyncBatchEmbedContent"
+					]
+				}
+			],
+			nextPageToken: "page-2"
+		},
+		{
+			models: [
+				{
+					name: "models/gemini-2.0-flash",
+					supportedGenerationMethods: [
+						"generateContent",
+						"countTokens"
+					]
+				},
+				{
+					name: "models/aqa",
+					supportedGenerationMethods: ["generateAnswer"]
+				},
+				{
+					name: "models/imagen-4.0-generate-001",
+					supportedGenerationMethods: ["predict"]
+				},
+				{
+					name: "models/both-ways",
+					supportedGenerationMethods: [
+						"generateContent",
+						"embedContent"
+					]
+				}
+			]
+		}
+	]
+	const jsonResponse = (body: unknown, status = 200) =>
+		new Response(JSON.stringify(body), {
+			status,
+			headers: { "content-type": "application/json" }
+		})
+
+	test.each([
+		["its preset", { preset: "google-gemini", baseUrl: GEMINI_BASE }],
+		["its address", { preset: null, baseUrl: GEMINI_BASE }]
+	])(
+		"Gemini, known by %s: the native list, every page, says which models embed and which generate",
+		async (_, overrides) => {
+			modelsListMock.mockReset()
+			modelsListMock.mockResolvedValue({ data: GEMINI_COMPAT_DATA })
+			const fetchMock = vi
+				.fn()
+				.mockResolvedValueOnce(jsonResponse(GEMINI_NATIVE_PAGES[0]))
+				.mockResolvedValueOnce(jsonResponse(GEMINI_NATIVE_PAGES[1]))
+			vi.stubGlobal("fetch", fetchMock)
+			try {
+				const res = await exportsDefault.listModels(
+					makeConnection(overrides)
+				)
+				expect(res.error).toBeUndefined()
+				expect(fetchMock).toHaveBeenCalledTimes(2)
+				const [firstUrl, firstInit] = fetchMock.mock.calls[0]
+				expect(String(firstUrl)).toBe(
+					"https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"
+				)
+				// The same key, in a header rather than the address.
+				expect(firstInit.headers).toEqual({
+					"x-goog-api-key": "sk-test"
+				})
+				expect(String(fetchMock.mock.calls[1][0])).toBe(
+					"https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&pageToken=page-2"
+				)
+				expect(res.models.map((m: any) => [m.id, m.modality])).toEqual([
+					["models/gemini-2.5-flash", "text-gen"],
+					["models/gemini-embedding-001", "embeddings"],
+					["gemini-2.0-flash", "text-gen"],
+					["models/aqa", undefined],
+					["models/imagen-4.0-generate-001", undefined],
+					["models/both-ways", undefined],
+					["models/not-native", undefined]
+				])
+			} finally {
+				vi.unstubAllGlobals()
+			}
+		}
+	)
+
+	test.each([
+		["refused", () => Promise.resolve(jsonResponse({ error: {} }, 403))],
+		["unreachable", () => Promise.reject(new TypeError("fetch failed"))]
+	])(
+		"Gemini's native list %s: the listing still succeeds, with no modality claimed and one log line",
+		async (_, answer) => {
+			modelsListMock.mockReset()
+			modelsListMock.mockResolvedValue({ data: GEMINI_COMPAT_DATA })
+			const fetchMock = vi.fn(answer)
+			vi.stubGlobal("fetch", fetchMock)
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+			try {
+				const res = await exportsDefault.listModels(
+					makeConnection({
+						preset: "google-gemini",
+						baseUrl: GEMINI_BASE
+					})
+				)
+				expect(res.error).toBeUndefined()
+				expect(res.models).toEqual(GEMINI_COMPAT_DATA)
+				expect(warn).toHaveBeenCalledTimes(1)
+				expect(String(warn.mock.calls[0])).toContain(
+					"Gemini native models list failed"
+				)
+				expect(String(warn.mock.calls[0])).not.toContain("sk-test")
+			} finally {
+				warn.mockRestore()
+				vi.unstubAllGlobals()
+			}
+		}
+	)
+
+	test("a Gemini base with no native address is listed without asking", async () => {
+		modelsListMock.mockReset()
+		modelsListMock.mockResolvedValue({ data: GEMINI_COMPAT_DATA })
+		const fetchMock = vi.fn()
+		vi.stubGlobal("fetch", fetchMock)
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		try {
+			const res = await exportsDefault.listModels(
+				makeConnection({
+					preset: "google-gemini",
+					baseUrl: "https://gemini-proxy.test/v1"
+				})
+			)
+			expect(fetchMock).not.toHaveBeenCalled()
+			expect(res.models).toEqual(GEMINI_COMPAT_DATA)
+			expect(warn).toHaveBeenCalledTimes(1)
+		} finally {
+			warn.mockRestore()
+			vi.unstubAllGlobals()
+		}
 	})
 })
 
@@ -1027,6 +1379,88 @@ describe("OpenAIChatAdapter — reasoning on the wire", () => {
 		expect(req).not.toHaveProperty("reasoningBudget")
 		expect(req).not.toHaveProperty("thinking")
 		expect(adapter.ignoredSamplers).toEqual(["reasoningBudget"])
+	})
+})
+
+describe("OpenAIChatAdapter — logit bias", () => {
+	const ENTRIES = [
+		{ text: "hmm", value: -2 },
+		{ text: "[42]", value: 5 }
+	]
+
+	async function requestWith(resolution: {
+		biases: Map<number, number>
+		skipped: { text: string; reason: string }[]
+		ignored: boolean
+	}) {
+		const { resolveLogitBias } = await import(
+			"$lib/server/connections/logitBiasTokens"
+		)
+		vi.mocked(resolveLogitBias).mockResolvedValue(resolution)
+		createMock.mockClear()
+		createMock.mockResolvedValue({
+			choices: [{ message: { content: "ok" } }]
+		})
+		const adapter = makeAdapter({}, { logitBias: ENTRIES })
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [{ role: "user", content: "hello" }],
+			meta: {} as any
+		} as any)
+		await adapter.generateText()
+		return {
+			req: createMock.mock.calls[0][0],
+			adapter,
+			resolveLogitBias: vi.mocked(resolveLogitBias)
+		}
+	}
+
+	test("the entries are resolved for this connection and sent as { id: bias }", async () => {
+		const { req, adapter, resolveLogitBias } = await requestWith({
+			biases: new Map([
+				[186402, -2],
+				[42, 5]
+			]),
+			skipped: [],
+			ignored: false
+		})
+		expect(req.logit_bias).toEqual({ "186402": -2, "42": 5 })
+		expect(resolveLogitBias.mock.lastCall?.[0]).toMatchObject({
+			id: 1,
+			type: "openai",
+			model: "gpt-4o"
+		})
+		expect(resolveLogitBias.mock.lastCall?.[1]).toEqual(ENTRIES)
+		expect(adapter.ignoredSamplers).toEqual([])
+	})
+
+	test("no tokenizer for its words: no logit_bias key, and logitBias is reported ignored", async () => {
+		const { req, adapter } = await requestWith({
+			biases: new Map(),
+			skipped: [{ text: "hmm", reason: "no tokenizer" }],
+			ignored: true
+		})
+		expect(req).not.toHaveProperty("logit_bias")
+		expect(adapter.samplingReport.ignored).toEqual(["logitBias"])
+		expect(adapter.samplingReport.applied).not.toHaveProperty("logitBias")
+	})
+
+	test("a switched-off field is never resolved", async () => {
+		const { resolveLogitBias } = await import(
+			"$lib/server/connections/logitBiasTokens"
+		)
+		vi.mocked(resolveLogitBias).mockClear()
+		createMock.mockResolvedValue({
+			choices: [{ message: { content: "ok" } }]
+		})
+		const adapter = makeAdapter({}, { temperature: 0.5 })
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [{ role: "user", content: "hello" }],
+			meta: {} as any
+		} as any)
+		await adapter.generateText()
+		expect(resolveLogitBias).not.toHaveBeenCalled()
 	})
 })
 

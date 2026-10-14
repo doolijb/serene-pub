@@ -161,7 +161,16 @@
 	// ── what the compiler and the widget said ───────────────────────────
 	let compile = $state<CompileOutcome | null>(null)
 	let runtime = $state<{ message: string; stack?: string }[]>([])
-	let rows = $derived<ErrorRow[]>(errorRows(compile?.errors ?? [], runtime, files))
+	let rows = $derived<ErrorRow[]>(
+		errorRows(
+			compile?.errors ?? [],
+			runtime,
+			files,
+			compile ? (compile.warningsAt ?? compile.warnings.map((text) => ({ file: "", line: 0, column: 0, text }))) : []
+		)
+	)
+	/** Errors and runtime errors — what turns the tab red; a warning still compiles. */
+	let failing = $derived(rows.filter((r) => r.kind !== "warning").length)
 
 	// ── preview ─────────────────────────────────────────────────────────
 	let previewUrl = $state<string | null>(null)
@@ -196,7 +205,7 @@
 	let side = $state(["preview", "problems", "widget", "saved", "core"].includes(initialTab ?? "") ? initialTab! : "preview")
 	let tabs = $derived<PanelTab[]>([
 		{ value: "preview", label: "Preview", icon: Icons.Eye },
-		{ value: "problems", label: "Problems", icon: Icons.CircleAlert, hasError: rows.length > 0 },
+		{ value: "problems", label: "Problems", icon: Icons.CircleAlert, hasError: failing > 0 },
 		{ value: "widget", label: "Widget", icon: Icons.Settings2, hasError: !!component?.needsReview },
 		...(component?.componentDraft ? [{ value: "saved", label: "Last save", icon: Icons.History }] : []),
 		...(component?.basedOn ? [{ value: "core", label: "Core", icon: Icons.GitCompare }] : [])
@@ -693,7 +702,7 @@
 			<div id="component-side-problems" role="tabpanel" aria-labelledby="component-side-problems-tab" hidden={side !== "problems"} class="min-h-0 flex-1 overflow-auto">
 				{#if !compile && !runtime.length}
 					<p class="text-surface-600-400 text-sm">Preview or save to compile your edits; what goes wrong shows here.</p>
-				{:else if !rows.length}
+				{:else if !failing}
 					<p class="text-sm"><Icons.CircleCheck size={14} class="text-success-500 inline" /> It compiles{runtime.length ? "" : ", and the preview has reported nothing"}.</p>
 				{/if}
 				{#if rows.length}
@@ -702,12 +711,14 @@
 							<li>
 								{#if row.location}
 									<button type="button" class="problem-row w-full text-left" onclick={() => jump(row)}>
-										<span class="text-error-700-300 font-mono text-xs">{row.place}</span>
+										<span class="{row.kind === 'warning' ? 'text-warning-700-300' : 'text-error-700-300'} font-mono text-xs">{row.kind === "warning" ? "Warning · " : ""}{row.place}</span>
 										<span class="block text-sm whitespace-pre-wrap">{row.text}</span>
 									</button>
 								{:else}
 									<div class="problem-row">
-										<span class="text-error-700-300 font-mono text-xs">{row.kind === "runtime" ? "While running" : row.place || "Compile"}</span>
+										<span class="{row.kind === 'warning' ? 'text-warning-700-300' : 'text-error-700-300'} font-mono text-xs"
+											>{row.kind === "runtime" ? "While running" : row.kind === "warning" ? `Warning${row.place ? ` · ${row.place}` : ""}` : row.place || "Compile"}</span
+										>
 										<span class="block text-sm whitespace-pre-wrap">{row.text}</span>
 										{#if row.stack}
 											<details class="mt-1">
@@ -720,14 +731,6 @@
 							</li>
 						{/each}
 					</ul>
-				{/if}
-				{#if compile?.warnings.length}
-					<details class="mt-3 text-xs">
-						<summary class="text-surface-600-400 cursor-pointer">{compile.warnings.length} warning{compile.warnings.length === 1 ? "" : "s"}</summary>
-						<ul class="mt-1 space-y-1">
-							{#each compile.warnings as w, i (i)}<li class="whitespace-pre-wrap">{w}</li>{/each}
-						</ul>
-					</details>
 				{/if}
 			</div>
 

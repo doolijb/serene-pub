@@ -33,6 +33,7 @@ import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
+import {  } from "$lib/server/loadouts/testing"
 
 vi.mock("$lib/server/db", async (orig) => {
 	// `...actual` and not `{ db }` alone: `connections.ts` reaches
@@ -189,7 +190,7 @@ beforeEach(async () => {
 	resetRecommendedLists()
 	clearCachedScans()
 	clearDownloads()
-	await testDb.delete(schema.connectionDefaults)
+	await testDb.delete(schema.loadouts)
 	await testDb.delete(schema.localModels)
 	await testDb.delete(schema.connectionModels)
 	await testDb.delete(schema.connections)
@@ -317,7 +318,7 @@ describe("removing a model's files", () => {
 			emit
 		)
 		expect(res.error).toBe(
-			"The active model can't be removed from disk. Make another model active first."
+			"The model in the Embeddings loadout can't be removed from disk. Put another model in that loadout first."
 		)
 		expect(emitted[0].event).toBe("connections:removeModelFiles:error")
 	}, 60_000)

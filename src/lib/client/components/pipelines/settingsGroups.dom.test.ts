@@ -217,8 +217,8 @@ describe("inside a session's settings", () => {
 		expect(model.querySelector('input[role="combobox"]')).toBeNull()
 		expect(model.textContent).toContain("KoboldCpp · Nemo 12B")
 		expect(model.textContent).toContain("From the “Adventure” configuration")
-		expect(model.textContent).toContain("Change in Pipelines")
-		expect(host.textContent).toContain("More settings in Pipelines")
+		expect(model.textContent).toContain("Change in Admin › Pipelines")
+		expect(host.textContent).toContain("More settings in Admin › Pipelines")
 	})
 
 	test("shows a non-admin a prompt-bearing card: their prompts, no model, no admin links", async () => {
@@ -230,8 +230,8 @@ describe("inside a session's settings", () => {
 		expect(card.querySelectorAll('[data-option-row="prompts-ref"]')).toHaveLength(4)
 		expect(card.querySelector('[data-option-row="connection-ref"]')).toBeNull()
 		expect(labelsIn(card)).not.toContain("Model")
-		expect(host.textContent).not.toContain("Change in Pipelines")
-		expect(host.textContent).not.toContain("More settings in Pipelines")
+		expect(host.textContent).not.toContain("Change in Admin › Pipelines")
+		expect(host.textContent).not.toContain("More settings in Admin › Pipelines")
 		expect(host.textContent).not.toContain("Set by an administrator")
 	})
 
@@ -271,7 +271,7 @@ describe("a session's creation pipeline (owner ruling 2026-09-30)", () => {
 		expect(card.querySelectorAll('[data-option-row]').length).toBeGreaterThan(0)
 		// The note says why; no row sends anyone elsewhere to change it.
 		expect(card.textContent).not.toContain("Set by an administrator")
-		expect(card.textContent).not.toContain("Change in Pipelines")
+		expect(card.textContent).not.toContain("Change in Admin › Pipelines")
 	})
 
 	test("while creating, it is an ordinary card: open and editable, with no note", async () => {

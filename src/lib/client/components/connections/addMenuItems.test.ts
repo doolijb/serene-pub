@@ -3,25 +3,24 @@ import { addMenuItemKeys, canRunLocalRuntimes } from "./addMenuItems"
 
 describe("the Add menu's items", () => {
 	test("offer both local runtimes where this instance can run them", () => {
-		expect(
-			addMenuItemKeys({ canAddByName: true, canRunLocalRuntimes: true })
-		).toEqual(["connection", "koboldcpp", "ollama", "model", "by-name"])
+		expect(addMenuItemKeys({ canRunLocalRuntimes: true })).toEqual([
+			"connection",
+			"koboldcpp",
+			"ollama"
+		])
 	})
 
 	test("hide KoboldCPP and Ollama in the Android app, as the wizard does", () => {
 		const keys = addMenuItemKeys({
-			canAddByName: true,
 			canRunLocalRuntimes: canRunLocalRuntimes({ isAndroidWrapper: true })
 		})
-		expect(keys).not.toContain("koboldcpp")
-		expect(keys).not.toContain("ollama")
-		expect(keys).toEqual(["connection", "model", "by-name"])
+		expect(keys).toEqual(["connection"])
 	})
 
-	test("drop A model by name when no connection accepts one", () => {
-		expect(
-			addMenuItemKeys({ canAddByName: false, canRunLocalRuntimes: true })
-		).not.toContain("by-name")
+	test("add connections only — models are got in the Models view", () => {
+		const keys: string[] = addMenuItemKeys({ canRunLocalRuntimes: true })
+		expect(keys).not.toContain("model")
+		expect(keys).not.toContain("by-name")
 	})
 })
 

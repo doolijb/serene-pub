@@ -51,15 +51,46 @@ import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { createMedia } from "$lib/server/media"
 import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
-import { buildImageRequest } from "$lib/server/imageGen/buildRequest"
+import {
+	applyOrientation,
+	buildImageRequest,
+	fitRequestToSheet,
+	type ImageOrientation
+} from "$lib/server/imageGen/buildRequest"
+import {
+	STANDARD_DIALS,
+	workflowDialDefaults
+} from "$lib/shared/imageGen/workflowShape"
+import {
+	mergeWorkflowValues,
+	workflowValuesOf
+} from "$lib/shared/loadouts/workflowValues"
+import {
+	assignCallMedia,
+	missingKeys,
+	planImageCalls,
+	sanitiseSeriesKeys,
+	type ImageCallPlan,
+	type RenderedSeriesItem
+} from "$lib/server/imageGen/packing"
+import {
+	judgeSheet,
+	type CutOutMode,
+	type ReferencesPolicy
+} from "$lib/server/imageGen/sheetGuard"
 import {
 	CORE_TEMPLATE_ENGINE,
 	renderTemplate,
 	type RenderRun
 } from "$lib/server/pipelines/prompt/renderers"
-import type { ImageGenProgress } from "$lib/shared/imageGen/types"
+import type {
+	GeneratedMediaItem,
+	ImageGenProgress,
+	ImageGenRequest,
+	ImageWorkflowDocument
+} from "$lib/shared/imageGen/types"
 import type { StreamingMode } from "$lib/server/connections/streaming"
-import type { MediaRef } from "@serene-pub/sdk"
+import type { ImageSeriesItemV1, MediaRef } from "@serene-pub/sdk"
 import type { RunArtifact } from "$lib/server/pipelines/runtime/receipts"
 
 export interface ImageCall {
@@ -82,6 +113,18 @@ export interface ImageCall {
 	connectionModelId?: number | null
 	/** The `sampling` slot's resolved value — a `sampling_configs` row id. */
 	samplingId?: number | null
+	/**
+	 * 🚧 The `workflow` slot's resolved value — a `workflows` row id
+	 * (DESIGN-image-generation §4.10). Required only when the pair's drawing
+	 * sheet says `payload: "template"` (ComfyUI); flat dialects ignore it.
+	 */
+	workflowId?: number | null
+	/**
+	 * The loadout's dials for that workflow (lane E2) — `workflow_values`,
+	 * carried on the slot as `{ id, values }`. Layered over the workflow's
+	 * defaults; ignored when the pair draws without a workflow.
+	 */
+	workflowValues?: Record<string, unknown> | null
 	sessionId?: number | null
 	userId?: number | null
 	/**
@@ -119,16 +162,56 @@ export interface ImageCall {
 	 * Absent and `auto` are the same render.
 	 */
 	streaming?: StreamingMode | null
+	/**
+	 * The `series` port: the pictures wanted, each `{ key, vars }`. Absent or
+	 * empty = one item, key `"1"` — with the sampling's `batch` pictures of it,
+	 * as before the series existed (DESIGN-image-generation §4.7).
+	 */
+	series?: ImageSeriesItemV1[] | null
+	/** The `references` port: images the output should resemble. */
+	references?: MediaRef[] | null
+	/** The `init` port: the starting canvas. */
+	init?: MediaRef | null
+	/** The `mask` port: where to paint. */
+	mask?: MediaRef | null
+	/** The `orientation` param. Absent = `free`. */
+	orientation?: ImageOrientation | null
+	/** The `cutOut` param. Absent = `off`. */
+	cutOut?: CutOutMode | null
+	/** The `references` param. Absent = `preferred`. */
+	referencesPolicy?: ReferencesPolicy | null
+	/**
+	 * 🚧 The `seed` param (I5): `per-run` sends one seed with every call of
+	 * the step when the sampling's is random. Absent = `as-set`.
+	 */
+	seedPolicy?: "as-set" | "per-run" | null
+	/**
+	 * Told the call plan BEFORE the first adapter call, so the receipt holds
+	 * it even when a call fails. The object is then filled in place — each
+	 * call's `applied`/`ignored`/`returned`, and the shortfall — so a holder
+	 * of the reference sees the outcome without being told twice.
+	 */
+	onPlan?: (plan: ImageCallPlan) => void
 }
 
+/** A media reference carrying the series key it was drawn for. */
+export type KeyedMediaRef = MediaRef & { key?: string }
+
 export interface ImageCallResult {
-	media: MediaRef[]
-	image: MediaRef | null
-	/** The rendered positive prompt — what a message posting this usually says. */
+	/** Every picture drawn, keyed; surplus with no key context has no `key`. */
+	media: KeyedMediaRef[]
+	/** The first keyed picture. */
+	image: KeyedMediaRef | null
+	/** The first item's rendered positive prompt — what a message posting this usually says. */
 	caption: string
+	/** Union over the calls; each call's own is on `plan.calls`. */
 	applied: string[]
 	ignored: string[]
 	isAborted: boolean
+	/** How the series was packed, with each call's outcome. */
+	plan: ImageCallPlan
+	/** What the action's form should have said before the run. */
+	preRunNotices: string[]
 }
 
 /**
@@ -213,8 +296,8 @@ async function ensureManagedInstanceReady(
 	// pointing at nothing is not worth a spawn and two retries.
 	if (!connection.model)
 		throw new ImageDispatchError(
-			`The connection set for image generation has no image model selected. ` +
-				`Pick one in its connection settings, or use "Use for images" ` +
+			`The connection in the Images loadout has no image model selected. ` +
+				`Pick one in its connection settings, or use "Use in Images" ` +
 				`in the Models tab of KoboldCPP, run by Serene Pub.`,
 			connectionIdentity(connection)
 		)
@@ -338,13 +421,66 @@ function serialize<T>(key: string, work: () => Promise<T>): Promise<T> {
 	return next
 }
 
-/** Render one image request. Throws with a sentence a person can act on. */
-export async function dispatchImage(
+/**
+ * The workflow a template-payload pair draws with (DESIGN-image-generation
+ * §4.10), refused at bind with a sentence when it is missing, gone, of
+ * another dialect, or names what this server lacks (§4.9 — the check is
+ * recorded on the connection, so its row goes `unfinished` too).
+ */
+async function resolveWorkflow(
 	db: Db,
-	call: ImageCall
-): Promise<ImageCallResult> {
-	call.signal?.throwIfAborted()
+	connection: SelectConnection,
+	workflowId: number | null | undefined
+): Promise<ImageWorkflowDocument> {
+	if (workflowId == null)
+		throw new ImageDispatchError(
+			"Choose a workflow for this step — its image server draws with a ComfyUI workflow.",
+			connectionIdentity(connection)
+		)
+	const { getWorkflowDocument } = await import(
+		"$lib/server/imageGen/comfy/workflows"
+	)
+	const workflow = await getWorkflowDocument(db, workflowId)
+	if (!workflow)
+		throw new ImageDispatchError(
+			"The workflow this step names no longer exists. Choose another.",
+			connectionIdentity(connection)
+		)
+	if (connection.type === CONNECTION_TYPE.COMFYUI) {
+		if (workflow.dialect !== "comfyui")
+			throw new ImageDispatchError(
+				`"${workflow.name}" is not a ComfyUI workflow.`,
+				connectionIdentity(connection)
+			)
+		const { checkWorkflowOnConnection } = await import(
+			"$lib/server/imageGen/comfy/serverCheck"
+		)
+		// An unreachable server is the run's failure to report, not the
+		// check's: only a definite miss refuses here.
+		const checked = await checkWorkflowOnConnection(
+			db,
+			connection,
+			workflow
+		).catch(() => null)
+		if (checked?.problem)
+			throw new ImageDispatchError(
+				checked.problem,
+				connectionIdentity(connection)
+			)
+	}
+	return workflow
+}
 
+/**
+ * Everything a render decides before it sends anything — shared by the run
+ * (`dispatchImage`) and the action form's preview (`previewImageRun`), so the
+ * notice a form shows and the run that follows cannot disagree.
+ *
+ * Resolves the pair, reads its drawing sheet, judges the step's needs against
+ * it (refusing a hard need the pair lacks), renders the prompt rows once per
+ * series item, builds and fits the request, and packs the series into calls.
+ */
+async function prepareImageRun(db: Db, call: ImageCall) {
 	// The capability is `text->image` and nothing else, which is what keeps the
 	// text default out of here: a text connection would be handed to
 	// `getImageAdapter`, and a text sampling config would have every key dropped
@@ -370,42 +506,263 @@ export async function dispatchImage(
 		)
 	const { connection, sampling } = resolved
 
-	// The prompts slot is a pair of templates over the incoming text. An
-	// unconfigured node passes the text straight through — rendering nothing at
-	// all would be a blank prompt, which is the failure that looks like the
-	// backend misbehaving.
-	const vars = { prompt: call.prompt ?? "", negative: call.negative ?? "" }
-	// The run the two templates render under, in the shape `renderTemplate`
+	// The drawing sheet of THIS pair — the module's, refined by type and model.
+	const exports = await getImageAdapter(connection.type)
+	let sheet = exports.sheetFor?.(connection) ?? exports.sheet
+
+	// A template-payload pair draws with a workflow (§4.10): the slot is
+	// required for it, the sheet is derived from it, and it is checked
+	// against this server before anything is sent (§4.9).
+	const workflow =
+		sheet.payload === "template"
+			? await resolveWorkflow(db, connection, call.workflowId)
+			: null
+	if (workflow && exports.sheetForWorkflow)
+		sheet = await exports.sheetForWorkflow(connection, workflow)
+
+	// The bind guard for sheet facts (§4.6): a hard need the pair lacks is
+	// refused here, before anything renders or is sent.
+	const references = (call.references ?? []).filter(isMediaRef)
+	const verdict = judgeSheet(sheet, {
+		references: references.length,
+		init: isMediaRef(call.init),
+		mask: isMediaRef(call.mask),
+		referencesPolicy: call.referencesPolicy,
+		cutOut: call.cutOut
+	})
+	if (verdict.refusal)
+		throw new ImageDispatchError(
+			verdict.refusal,
+			connectionIdentity(connection)
+		)
+
+	// The run the templates render under, in the shape `renderTemplate`
 	// takes. `user` comes off the call rather than being asked for twice: it is
 	// the same person the media rows are written for.
 	const run: RenderRun = {
 		runId: call.runId,
 		user: call.userId != null ? String(call.userId) : undefined
 	}
-	const positive = await render(
+
+	// The base request, from the sampling config — sizes turned and fitted to
+	// the sheet by the HOST, once, so no adapter computes them twice.
+	const sampled = buildImageRequest({
+		prompt: call.prompt ?? "",
+		sampling,
+		connection
+	})
+	// A workflow's dials start at its own variables' defaults (§7.1, as
+	// reversed 2026-10-12), so it runs as written with nothing overriding
+	// them; a loadout's overrides merge over these.
+	if (workflow) {
+		const defaults = workflowDialDefaults(workflow.variables)
+		if (Object.keys(defaults).length)
+			sampled.workflowValues = { ...defaults, ...(sampled.workflowValues ?? {}) }
+	}
+	// The loadout's own dials over them (lane E2): its `workflow_values`,
+	// projected onto the slot by `applyLoadoutLayer`. A standard dial set
+	// there (steps, cfg, size…) also fills the request's own field — the
+	// field is what the adapter feeds the workflow — so "set here" on the
+	// loadout beats the sampling config's value. A step-level override of the
+	// dials, when one exists, layers over these the same way.
+	const loadoutDials = workflow ? workflowValuesOf(call.workflowValues) : null
+	if (loadoutDials) {
+		sampled.workflowValues = mergeWorkflowValues(
+			sampled.workflowValues,
+			loadoutDials
+		)
+		const fields = sampled as unknown as Record<string, unknown>
+		for (const [name, key] of Object.entries(STANDARD_DIALS))
+			if (loadoutDials[name] !== undefined) fields[key] = loadoutDials[name]
+	}
+	const oriented = applyOrientation(sampled, call.orientation)
+	const base = fitRequestToSheet(oriented, sheet, call.orientation)
+	// 🚧 The `seed` param (I5, additive): `per-run` draws ONE seed when the
+	// sampling leaves it random, so every call of this step sends the same
+	// one and a series coheres. A sampling that fixes its own seed keeps it.
+	if (
+		call.seedPolicy === "per-run" &&
+		!(typeof base.seed === "number" && base.seed >= 0)
+	)
+		base.seed = Math.floor(Math.random() * 2 ** 31)
+
+	// The series: what pictures are wanted. Absent = ONE item, key "1" — and,
+	// as before the series existed, the sampling's `batch` pictures of it.
+	const series = (call.series ?? []).filter(
+		(i): i is ImageSeriesItemV1 =>
+			!!i && typeof i === "object" && i.key !== undefined
+	)
+	const items: RenderedSeriesItem[] = []
+	if (series.length) {
+		const keys = sanitiseSeriesKeys(series.map((i) => String(i.key)))
+		for (const [n, item] of series.entries()) {
+			const vars = {
+				...(item.vars ?? {}),
+				prompt: call.prompt ?? "",
+				negative: call.negative ?? "",
+				key: keys[n]!
+			}
+			items.push(await renderItem(call, vars, keys[n]!, String(item.key), run))
+		}
+	} else {
+		const vars = {
+			prompt: call.prompt ?? "",
+			negative: call.negative ?? "",
+			key: "1"
+		}
+		const one = await renderItem(call, vars, "1", "1", run)
+		const n = Math.max(1, Math.floor(base.batch ?? 1))
+		for (let i = 0; i < n; i++) items.push(one)
+	}
+
+	const plan = planImageCalls(items, sheet, exports)
+	if (
+		sampled.width !== base.width ||
+		sampled.height !== base.height ||
+		base.aspect
+	)
+		plan.size = {
+			asked: { width: sampled.width, height: sampled.height },
+			sent: {
+				width: base.width,
+				height: base.height,
+				...(base.aspect ? { aspect: base.aspect } : {})
+			}
+		}
+
+	return {
+		connection,
+		sampling,
+		exports,
+		sheet,
+		workflow,
+		verdict,
+		references,
+		items,
+		base,
+		plan,
+		// The sampling's `batch` is the count of ONE prompt's pictures; with a
+		// series the series is the count, so a batch set there is not honoured.
+		batchOverridden: series.length > 0 && (sampled.batch ?? 1) > 1
+	}
+}
+
+/** Render one series item's prompt rows; refuses an empty positive. */
+async function renderItem(
+	call: ImageCall,
+	vars: Record<string, unknown>,
+	key: string,
+	label: string,
+	run: RenderRun
+): Promise<RenderedSeriesItem> {
+	// The prompts slot is a pair of templates over the incoming text. An
+	// unconfigured node passes the text straight through — rendering nothing at
+	// all would be a blank prompt, which is the failure that looks like the
+	// backend misbehaving.
+	const prompt = await render(
 		call.prompts?.positive,
 		vars,
-		vars.prompt,
+		String(vars.prompt ?? ""),
 		run
 	)
 	const negative = await render(
 		call.prompts?.negative,
 		vars,
-		vars.negative,
+		String(vars.negative ?? ""),
 		run
 	)
-
-	if (!positive.trim())
+	if (!prompt.trim())
 		throw new ImageDispatchError(
 			"the prompt came out empty — there is nothing to render."
 		)
+	return {
+		key,
+		label,
+		prompt,
+		...(negative ? { negative } : {}),
+		vars
+	}
+}
 
-	const req = buildImageRequest({
-		prompt: positive,
-		negativePrompt: negative || undefined,
-		sampling,
-		connection
-	})
+const isMediaRef = (v: unknown): v is MediaRef =>
+	!!v &&
+	typeof v === "object" &&
+	typeof (v as MediaRef).uuid === "string" &&
+	!!(v as MediaRef).uuid
+
+/**
+ * What a picture step WOULD do, without doing it — for the action's form
+ * (DESIGN-image-generation §4.6, §4.7): the refusal it would meet, the
+ * pre-run notices it should show (*This model can't take a reference
+ * image…*), and the packing (*12 pictures · 3 calls*). Server side only; the
+ * form lane reads it.
+ */
+export async function previewImageRun(
+	db: Db,
+	call: ImageCall
+): Promise<
+	| {
+			ok: true
+			preRunNotices: string[]
+			plan: ImageCallPlan
+			/**
+			 * 🚧 Which pair would draw (I5, additive) — for a form's cost
+			 * line (*28 pictures · 3 calls on …*) and the per-image price
+			 * read off the model's facts. Server side only: a member's form
+			 * is never shown a connection or a model.
+			 */
+			pair: {
+				connectionId: number
+				connectionName: string
+				connectionModelId: number | null
+				modelName: string | null
+			}
+	  }
+	| { ok: false; refusal: string }
+> {
+	try {
+		const prepared = await prepareImageRun(db, call)
+		const c = prepared.connection as {
+			id: number
+			name: string
+			connectionModelId?: number | null
+			connectionModelName?: string | null
+			model?: string | null
+		}
+		return {
+			ok: true,
+			preRunNotices: prepared.verdict.preRunNotices,
+			plan: prepared.plan,
+			pair: {
+				connectionId: c.id,
+				connectionName: c.name,
+				connectionModelId: c.connectionModelId ?? null,
+				modelName: c.connectionModelName ?? c.model ?? null
+			}
+		}
+	} catch (e) {
+		if (e instanceof ImageDispatchError)
+			return { ok: false, refusal: e.message }
+		throw e
+	}
+}
+
+/** Render one image step — a series, packed into calls. Throws with a sentence a person can act on. */
+export async function dispatchImage(
+	db: Db,
+	call: ImageCall
+): Promise<ImageCallResult> {
+	call.signal?.throwIfAborted()
+
+	const prepared = await prepareImageRun(db, call)
+	const { connection, sampling, exports, verdict, references, items, base, plan } =
+		prepared
+	const { workflow } = prepared
+	const caption = items[0]?.prompt ?? ""
+
+	// The plan goes on the receipt BEFORE the first call, so a render that
+	// fails or is cancelled still says what it was going to do.
+	call.onPlan?.(plan)
 
 	// The stored apiKey is encrypted at rest (tokenCrypto.ts) — decrypted into
 	// the adapter's copy only, never persisted and never returned.
@@ -430,7 +787,27 @@ export async function dispatchImage(
 	const baseUrl = await resolveBaseUrl(db, connection)
 	const target = { ...conn, baseUrl }
 
-	const result = await serialize(serverKey(target), async () => {
+	// Bytes for the referenced files, read here so the adapters never import
+	// the media store (`ImageGenOptions.loadMedia`).
+	const loadMedia = async (ref: MediaRef) => {
+		const { getMediaByUuid, readMedia } = await import("$lib/server/media")
+		const file = await getMediaByUuid(db, ref.uuid)
+		const read = file ? await readMedia(db, file.id) : null
+		if (!read) throw new Error(`media ${ref.uuid} is gone`)
+		return { bytes: read.bytes, mime: read.mime }
+	}
+
+	const byKey = new Map(items.map((i) => [i.key, i]))
+	const applied = new Set<string>()
+	const ignored = new Set<string>(prepared.batchOverridden ? ["batch"] : [])
+	const drawn: Array<{ item: GeneratedMediaItem; key: string | null; prompt: string; negative?: string; call: number }> = []
+	let isAborted = false
+	let refusal: string | null = null
+
+	// The whole plan is ONE queue slot: a series is one step, and another
+	// render interleaving its calls would interleave the progress and the
+	// interrupts this queue exists to keep apart.
+	await serialize(serverKey(target), async () => {
 		call.signal?.throwIfAborted()
 		// Inside the queue, deliberately: this can START a subprocess and load a
 		// model, which is the slowest thing that happens here, and pairing it
@@ -444,25 +821,91 @@ export async function dispatchImage(
 		// a chat message sent during a render can still swap the model out from
 		// under it. Closing that properly means one critical section per backend
 		// shared by both paths, which is a change to the loader and not to this
-		// file — recorded here rather than papered over, because the comment that
-		// used to sit here claimed the window was closed and it never was.
+		// file — recorded here rather than papered over.
 		await ensureManagedInstanceReady(connection, {
 			signal: call.signal,
 			onProgress: call.onProgress
 		})
-		const { Adapter } = await getImageAdapter(connection.type)
-		const adapter = new Adapter(target as any)
+		const adapter = new exports.Adapter(target as any)
 		try {
-			return await adapter.generateImage(req, {
-				signal: call.signal,
-				// ⚠ Withheld rather than ignored, and the difference is the
-				// cost. An adapter that is handed no callback runs no progress
-				// poll and decodes no preview frame, which is what `off` is
-				// asking for; one handed a callback it must not call would pay
-				// for both and throw the answers away.
-				onProgress:
-					call.streaming === "off" ? undefined : call.onProgress
-			})
+			for (const planned of plan.calls) {
+				const item = byKey.get(planned.keys[0]!)!
+				const { batch: _sampledBatch, ...rest } = base
+				const req: ImageGenRequest = {
+					...rest,
+					prompt: item.prompt,
+					...(item.negative ? { negativePrompt: item.negative } : {}),
+					...(planned.count > 1 ? { batch: planned.count } : {}),
+					...(references.length ? { references } : {}),
+					...(isMediaRef(call.init) ? { init: call.init } : {}),
+					...(isMediaRef(call.mask) ? { mask: call.mask } : {}),
+					...(verdict.transparent ? { transparent: true } : {})
+				}
+				const result = await adapter.generateImage(req, {
+					signal: call.signal,
+					loadMedia,
+					// The workflow a template-payload pair draws with, and —
+					// for a keyed-graph call — every item it draws (§4.7).
+					...(workflow ? { workflow } : {}),
+					...(call.runId ? { runId: call.runId } : {}),
+					...(plan.packing === "keyed-graph"
+						? {
+								series: planned.keys.map((k) => {
+									const it = byKey.get(k)!
+									return {
+										key: k,
+										prompt: it.prompt,
+										...(it.negative ? { negative: it.negative } : {}),
+										...(it.vars ? { vars: it.vars } : {})
+									}
+								})
+							}
+						: {}),
+					// ⚠ Withheld rather than ignored, and the difference is the
+					// cost. An adapter that is handed no callback runs no progress
+					// poll and decodes no preview frame, which is what `off` is
+					// asking for; one handed a callback it must not call would pay
+					// for both and throw the answers away.
+					onProgress:
+						call.streaming === "off" ? undefined : call.onProgress
+				})
+				// Per call, onto the plan the receipt already holds.
+				planned.applied = result.applied
+				planned.ignored = result.ignored
+				planned.returned = result.media.length
+				for (const k of result.applied) applied.add(k)
+				for (const k of result.ignored) ignored.add(k)
+				const keys = assignCallMedia(planned, result.media.length)
+				result.media.forEach((m, i) => {
+					// A keyed backend says which item drew each picture (its
+					// marked output node's prefix, §4.11); `null` is an extra
+					// it drew outside any key. Absent = keyed by the call.
+					const key =
+						m.key === undefined
+							? (keys[i] ?? null)
+							: m.key !== null && planned.keys.includes(m.key)
+								? m.key
+								: null
+					const source = key ? (byKey.get(key) ?? item) : item
+					drawn.push({
+						item: m,
+						key,
+						prompt: source.prompt,
+						negative: source.negative,
+						call: planned.index
+					})
+				})
+				if (result.isAborted) {
+					isAborted = true
+					break
+				}
+				// A refusal (moderation) the service will repeat: stop the
+				// series rather than pay for the same answer per call.
+				if (result.refusal) {
+					refusal = result.refusal.message
+					if (result.refusal.noRetry) break
+				}
+			}
 		} finally {
 			// Push the unload timer back, exactly as the TEXT path does after a
 			// generation (KoboldCppManagedAdapter.generateText).
@@ -480,24 +923,36 @@ export async function dispatchImage(
 		}
 	})
 
-	if (result.isAborted)
+	// Shortfall, per key; surplus with no key context, counted.
+	const got = new Map<string, number>()
+	for (const d of drawn) if (d.key) got.set(d.key, (got.get(d.key) ?? 0) + 1)
+	const missing = missingKeys(items, got)
+	if (missing.length) plan.missing = missing
+	const unkeyed = drawn.filter((d) => !d.key).length
+	if (unkeyed) plan.unkeyed = unkeyed
+
+	if (isAborted && !drawn.length)
 		return {
 			media: [],
 			image: null,
-			caption: positive,
-			applied: result.applied,
-			ignored: result.ignored,
-			isAborted: true
+			caption,
+			applied: [...applied],
+			ignored: [...ignored],
+			isAborted: true,
+			plan,
+			preRunNotices: verdict.preRunNotices
 		}
 
-	if (!result.media.length)
+	if (!drawn.length)
 		throw new ImageDispatchError(
-			"The image connection completed without returning an image.",
+			refusal ?? "The image connection completed without returning an image.",
 			connectionIdentity(connection)
 		)
 
-	const refs: MediaRef[] = []
-	for (const item of result.media) {
+	const refs: KeyedMediaRef[] = []
+	for (const d of drawn) {
+		const { item } = d
+		const label = d.key ? byKey.get(d.key)?.label : undefined
 		const bytes = Buffer.from(item.base64, "base64")
 		const { file, original } = await createMedia(db, {
 			userId: call.userId ?? 0,
@@ -509,16 +964,28 @@ export async function dispatchImage(
 			// Written once at generation, never interpreted — the answer to "how
 			// do I get another one like this".
 			meta: {
-				prompt: positive,
-				...(negative ? { negativePrompt: negative } : {}),
+				prompt: d.prompt,
+				...(d.negative ? { negativePrompt: d.negative } : {}),
 				...(item.seed !== undefined ? { seed: item.seed } : {}),
-				...(req.model ? { model: req.model } : {}),
+				...(base.model ? { model: base.model } : {}),
 				backend: connection.type,
 				connectionName: connection.name,
 				...(sampling ? { samplingConfig: sampling.name } : {}),
-				request: req,
-				applied: result.applied,
-				ignored: result.ignored,
+				request: base,
+				applied: [...applied],
+				ignored: [...ignored],
+				// Which series item this picture was drawn for — null for
+				// surplus kept with no key — and the label the key came from.
+				seriesKey: d.key,
+				...(label !== undefined && label !== d.key
+					? { seriesLabel: label }
+					: {}),
+				// A transparent background was asked for and this pair cannot
+				// draw one: the cut-out task picks these up.
+				...(verdict.needsCutOut ? { needsCutOut: true } : {}),
+				// The pair was asked for, and draws, alpha itself: the cut-out
+				// task's `auto` mode reads this and leaves the picture alone.
+				...(verdict.transparent ? { transparent: "native" } : {}),
 				...(item.meta ?? {})
 			}
 		})
@@ -549,7 +1016,10 @@ export async function dispatchImage(
 			// Alt text, so a downgrade to a text-only consumer has something to
 			// say instead of nothing (media.ts) — and so the posted message's
 			// image is described rather than announced as an untitled attachment.
-			text: positive
+			text: d.prompt,
+			// The series item this was drawn for. Absent on surplus kept with
+			// no key context — a consumer keyed by label ignores those.
+			...(d.key ? { key: d.key } : {})
 		})
 		// What the run MADE, as row ids — the refs above are what the graph
 		// carries and deliberately name no row. `created` even on a dedupe hit
@@ -574,11 +1044,13 @@ export async function dispatchImage(
 
 	return {
 		media: refs,
-		image: refs[0] ?? null,
-		caption: positive,
-		applied: result.applied,
-		ignored: result.ignored,
-		isAborted: false
+		image: refs.find((r) => r.key) ?? refs[0] ?? null,
+		caption,
+		applied: [...applied],
+		ignored: [...ignored],
+		isAborted,
+		plan,
+		preRunNotices: verdict.preRunNotices
 	}
 }
 

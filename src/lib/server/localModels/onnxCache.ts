@@ -48,6 +48,14 @@ import type { OnnxCatalogView, OnnxModality } from "./onnxList"
 
 export type { OnnxCatalogView, OnnxModality }
 
+/**
+ * A cache directory under `<app data>/models/`: the two connection lanes, plus
+ * `matting` — the background remover `core:task/cut-out@1` runs, which no
+ * connection owns (image generation I4). Only the DISK functions below take
+ * it; the catalogue, download and state derivation stay the two lanes'.
+ */
+export type OnnxCacheLane = OnnxModality | "matting"
+
 /** Is this endpoint one of the two that keeps its weights on this machine? */
 export function onnxModalityOf(type: string): OnnxModality | null {
 	if (type === CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS) return "embeddings"
@@ -63,7 +71,7 @@ export function onnxModalityOf(type: string): OnnxModality | null {
  * elsewhere, and honouring it in one lane but not the other would split a
  * machine's models across two roots.
  */
-export function cacheDirFor(modality: OnnxModality): string {
+export function cacheDirFor(modality: OnnxCacheLane): string {
 	return (
 		process.env.TRANSFORMERS_CACHE ??
 		path.join(getAppDataDir(), "models", modality)
@@ -81,7 +89,7 @@ export function cacheDirFor(modality: OnnxModality): string {
  */
 export function modelDirFor(
 	modelId: string,
-	modality: OnnxModality
+	modality: OnnxCacheLane
 ): string | null {
 	const root = cacheDirFor(modality)
 	const segments = (modelId ?? "").split("/")
@@ -112,7 +120,7 @@ interface DirScan {
 }
 
 const scans = new Map<string, DirScan>()
-const scanKey = (modelId: string, modality: OnnxModality) =>
+const scanKey = (modelId: string, modality: OnnxCacheLane) =>
 	`${modality}:${modelId}`
 
 async function walk(dir: string, depth = 0): Promise<DirScan> {
@@ -152,7 +160,7 @@ async function walk(dir: string, depth = 0): Promise<DirScan> {
 	return out
 }
 
-async function scan(modelId: string, modality: OnnxModality): Promise<DirScan> {
+async function scan(modelId: string, modality: OnnxCacheLane): Promise<DirScan> {
 	const key = scanKey(modelId, modality)
 	const cached = scans.get(key)
 	if (cached) return cached
@@ -172,7 +180,7 @@ async function scan(modelId: string, modality: OnnxModality): Promise<DirScan> {
  * forgetting too little shows a stale size beside a model somebody just
  * downloaded.
  */
-export function invalidateCachedScan(modelId: string, modality: OnnxModality) {
+export function invalidateCachedScan(modelId: string, modality: OnnxCacheLane) {
 	scans.delete(scanKey(modelId, modality))
 }
 
@@ -189,7 +197,7 @@ export function clearCachedScans() {
  */
 export async function isCached(
 	modelId: string,
-	modality: OnnxModality
+	modality: OnnxCacheLane
 ): Promise<boolean> {
 	return (await scan(modelId, modality)).weights
 }
@@ -197,7 +205,7 @@ export async function isCached(
 /** Bytes this model occupies, or 0 when nothing of it is there. */
 export async function dirSizeBytes(
 	modelId: string,
-	modality: OnnxModality
+	modality: OnnxCacheLane
 ): Promise<number> {
 	return (await scan(modelId, modality)).bytes
 }
@@ -211,7 +219,7 @@ export async function dirSizeBytes(
  */
 export async function removeCached(
 	modelId: string,
-	modality: OnnxModality
+	modality: OnnxCacheLane
 ): Promise<boolean> {
 	const dir = modelDirFor(modelId, modality)
 	invalidateCachedScan(modelId, modality)

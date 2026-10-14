@@ -1,13 +1,13 @@
 <script lang="ts">
 	/**
-	 * ONE model, as one row — in a managed connection, a capability view, or a
-	 * connection's Models tab.
+	 * ONE model, as one row — in a managed runtime's Models tab, the job picker,
+	 * or a connection's Models tab.
 	 *
 	 * ## What it replaces
 	 *
 	 * The managed views listed models as CARDS: the raw identifier wrapped over
 	 * two lines as the title, a `Size: / Modified: / Parameters:` key-value table
-	 * under it, then a green filled **Use for chat**, a gear, an **Edit** and a
+	 * under it, then a green filled **Use in Reply**, a gear, an **Edit** and a
 	 * red filled **Delete** wrapping onto two rows. About 200px per model in a
 	 * 400px column, so two of four models were on screen at once.
 	 *
@@ -52,6 +52,7 @@
 		type ModelFacts
 	} from "$lib/shared/connections/modelFacts"
 	import { formatSize, modelDisplay } from "./modelDisplay"
+	import type { Snippet } from "svelte"
 
 	export interface ModelRowAction {
 		/** What the caller does with it. */
@@ -94,7 +95,18 @@
 		 */
 		useDisabledReason?: string | null
 		selected?: boolean
+		/**
+		 * The connection this model lives on, as a small chip on the second
+		 * line — the Models view's flat list, where rows from every
+		 * connection sit together. Absent inside one connection's own list.
+		 */
+		chip?: { label: string; title?: string } | null
 		actions?: readonly ModelRowAction[]
+		/**
+		 * Drawn in place of the Use button where `canUse` holds — the Models
+		 * view's *Use in…* menu (`UseInMenu`), which names the loadout.
+		 */
+		useMenu?: Snippet
 		onOpen?: () => void
 		onUse?: () => void
 		onAction?: (id: string) => void
@@ -108,7 +120,9 @@
 		useShortLabel = "Use",
 		useDisabledReason = null,
 		selected = false,
+		chip = null,
 		actions = [],
+		useMenu,
 		onOpen,
 		onUse,
 		onAction
@@ -184,7 +198,21 @@
 					</span>
 				{/if}
 			</span>
-			{#if factLine || note}
+			{#if chip}
+				<span class="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs">
+					<span
+						class="bg-surface-200-800 text-surface-700-300 max-w-[50%] shrink-0 truncate rounded px-1.5 py-0.5 text-[11px] font-medium"
+						title={chip.title ?? chip.label}
+					>
+						{chip.label}
+					</span>
+					{#if factLine || note}
+						<span class="text-surface-600-400 min-w-0 truncate">
+							{note ?? factLine}
+						</span>
+					{/if}
+				</span>
+			{:else if factLine || note}
 				<span
 					class="text-surface-600-400 mt-0.5 block truncate text-xs"
 				>
@@ -194,7 +222,9 @@
 		</span>
 	</button>
 
-	{#if canUse && !missing}
+	{#if canUse && !missing && useMenu}
+		{@render useMenu()}
+	{:else if canUse && !missing}
 		<!-- Outlined, not filled, and it appears on hover or focus at desk
 		     width so a settled list is a settled list. -->
 		<button

@@ -7,11 +7,16 @@
  *     a real, shipped row **in that step's own pool**. A step with no prompt
  *     runs its provider with no instructions, which reads as the model failing
  *     rather than as a missing selection — the worst possible first impression.
- *  2. **Faithful.** The prose is byte-identical to what 0.5.3 shipped — the
- *     catalog (`CORE_PROMPTS`) was extracted from it byte-exact and is the
- *     record now. An upgrade that silently improved somebody's system prompt
- *     would be the most alarming thing this migration could do, and it would
- *     be invisible until their character started behaving differently.
+ *  2. **Faithful.** The narrator's, the summarizers' and the graph build's
+ *     prose is byte-identical to what 0.5.3 shipped — the catalog
+ *     (`CORE_PROMPTS`) was extracted from it byte-exact and is the record
+ *     now. An upgrade that silently improved somebody's system prompt would
+ *     be the most alarming thing this migration could do, and it would be
+ *     invisible until their character started behaving differently. The one
+ *     deliberate exception: the twelve alternative reply prompts, which 0.5.3
+ *     had copied from SillyTavern, were rewritten as Serene Pub's own on
+ *     2026-10-12 (owner ruling) under their seed keys, so a pick survives
+ *     and the text changes.
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
@@ -396,6 +401,85 @@ describe("the wording is the wording", () => {
 		}
 		expect(new Set(starts.values()).size).toBe(3)
 	})
+})
+
+describe("a row the catalog stopped shipping", () => {
+	it("stays, as an ordinary row: editable, never a default, its identity kept", async () => {
+		// Owner ruling 2026-10-13: a row the catalog stops shipping is kept and
+		// treated as one a person created.
+		const { unshipPrompts } = await import(
+			"$lib/server/pipelines/boot/unshipPrompts"
+		)
+		const { createPrompt } = await import(
+			"$lib/server/pipelines/entities/prompts"
+		)
+		const decl = (await promptDeclsOf(CHAT_RESPOND_SPEC_ID))[0]!
+		const key =
+			"pipeline-prompt:core:task/build-template-context:prompts:prompt-lightning-1-1"
+		const old = await createPrompt(db, {
+			nodeDefinitionId: decl.nodeDefinitionId!,
+			slot: decl.slot,
+			name: "Roleplay - Stage",
+			fields: { systemPrompt: "an earlier build's prose" },
+			seedKey: key,
+			isImmutable: true,
+			defaultForSpecs: ["core:spec/chat-respond"]
+		})
+		const first = await unshipPrompts(db)
+		expect(first.demoted).toEqual(["Roleplay - Stage"])
+		const [after] = await db
+			.select()
+			.from(schema.pipelinePrompts)
+			.where(eq(schema.pipelinePrompts.id, old.id))
+		expect(after.isImmutable).toBe(false)
+		expect(after.defaultForSpecs).toEqual([])
+		// Kept: the seed pass adopts it by key if a catalog ships it again.
+		expect(after.seedKey).toBe(key)
+		expect(after.name).toBe("Roleplay - Stage")
+		expect(after.fields).toEqual({ systemPrompt: "an earlier build's prose" })
+		// Idempotent, and the catalog's own rows are never touched.
+		expect((await unshipPrompts(db)).demoted).toEqual([])
+		const { CORE_PROMPTS } = await import("@serene-pub/core-catalog")
+		const locked = await db
+			.select()
+			.from(schema.pipelinePrompts)
+			.where(eq(schema.pipelinePrompts.isImmutable, true))
+		expect(
+			locked.filter((r) => r.seedKey?.startsWith("pipeline-prompt:core:")).length
+		).toBe(CORE_PROMPTS.length)
+	}, 60_000)
+
+	it("is adopted back, not inserted twice, when a catalog ships it again", async () => {
+		// The case that failed before: an older build demotes a row a newer
+		// catalog ships (a downgrade, or a stale SDK build on a newer data
+		// dir); the newer build then boots. The pool's names are unique, so a
+		// second insert of the same name would stop the boot.
+		const { unshipPrompts } = await import(
+			"$lib/server/pipelines/boot/unshipPrompts"
+		)
+		const { CORE_PROMPTS } = await import("@serene-pub/core-catalog")
+		const plain = CORE_PROMPTS.find((p) => p.name === "Roleplay - Plain")!
+		const [before] = await db
+			.select()
+			.from(schema.pipelinePrompts)
+			.where(eq(schema.pipelinePrompts.seedKey, plain.seedKey))
+		const olderCatalog = CORE_PROMPTS.map((p) => p.seedKey).filter(
+			(k) => k !== plain.seedKey
+		)
+		expect((await unshipPrompts(db, olderCatalog)).demoted).toEqual([
+			"Roleplay - Plain"
+		])
+
+		const res = await seedPipelinePrompts(db)
+		expect(res.some((r) => r.refreshed.includes(plain.seedKey))).toBe(true)
+		const rows = await db
+			.select()
+			.from(schema.pipelinePrompts)
+			.where(eq(schema.pipelinePrompts.name, "Roleplay - Plain"))
+		expect(rows).toHaveLength(1)
+		expect(rows[0]!.id).toBe(before!.id)
+		expect(rows[0]!.isImmutable).toBe(true)
+	}, 60_000)
 })
 
 describe("re-seeding", () => {

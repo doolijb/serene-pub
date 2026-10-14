@@ -33,6 +33,12 @@ import {
 	megabytes
 } from "$lib/shared/imports/fileCaps"
 import { assertImportJsonShape } from "$lib/server/imports/jsonShape"
+import type { CardDowry, Stroke } from "@serene-pub/sdk"
+import {
+	exportedExtensions,
+	mergeStrokeBook,
+	serenepubStrokesAndDowry
+} from "$lib/server/characters/cardIO"
 
 /**
  * `png-chunks-extract`'s `extractChunks` reads each chunk's 32-bit declared
@@ -1133,6 +1139,15 @@ export interface CharacterCardV3Input {
 	uuid: string
 	/** The character's whole shared lorebook, embedded when the exporting user opts in — see charactersExportCard. */
 	lorebook?: SpecV3.Lorebook
+	/**
+	 * The stored `characters.extensions` — the starting point, so another
+	 * tool's keys leave as they came (A.6). Serene Pub's own keys are laid over.
+	 */
+	extensions?: Record<string, unknown> | null
+	/** The card's strokes: verbatim under `serenepub.strokes`, keyword ones also as book entries. */
+	strokes?: Stroke[] | null
+	/** The card dowry (`buildCardDowry`), under `serenepub.dowry`. */
+	dowry?: CardDowry | null
 }
 
 /**
@@ -1143,11 +1158,45 @@ export interface CharacterCardV3Input {
  * maintain.
  */
 export function buildCharacterCardV3(character: CharacterCardV3Input) {
+	const characterBook = mergeStrokeBook(
+		character.lorebook as Record<string, any> | undefined,
+		character.strokes,
+		character.name
+	)
+	const extensions = exportedExtensions(
+		character.extensions,
+		{
+			depth_prompt: {
+				prompt: character.depthPrompt || "",
+				depth: character.depthPromptDepth || 4,
+				role: character.depthPromptRole || "system"
+			},
+			...(character.source && character.source.length > 0
+				? { source: character.source }
+				: {}),
+			...(character.groupOnlyGreetings &&
+			character.groupOnlyGreetings.length > 0
+				? { group_only_greetings: character.groupOnlyGreetings }
+				: {}),
+			serenepub: {
+				uuid: character.uuid,
+				...(character.aliases && character.aliases.length > 0
+					? { aliases: character.aliases }
+					: {}),
+				...(character.summary ? { summary: character.summary } : {}),
+				...(character.category ? { category: character.category } : {}),
+				...serenepubStrokesAndDowry(character.strokes, character.dowry)
+			}
+		},
+		character.depthPrompt != null
+	)
 	return {
 		spec: "chara_card_v3",
 		spec_version: "3.0",
 		data: {
 			name: character.name,
+			// The compiled cache when the card has strokes (A.3) — every
+			// enabled stroke, keyword ones included — else the prose as written.
 			description: character.description || "",
 			personality: character.personality || "",
 			scenario: character.scenario || "",
@@ -1163,35 +1212,8 @@ export function buildCharacterCardV3(character: CharacterCardV3Input) {
 			tags: character.tags || [],
 			creator: character.creator || "",
 			character_version: character.characterVersion || "",
-			...(character.lorebook
-				? { character_book: character.lorebook }
-				: {}),
-			extensions: {
-				depth_prompt: {
-					prompt: character.depthPrompt || "",
-					depth: character.depthPromptDepth || 4,
-					role: character.depthPromptRole || "system"
-				},
-				...(character.source && character.source.length > 0
-					? { source: character.source }
-					: {}),
-				...(character.groupOnlyGreetings &&
-				character.groupOnlyGreetings.length > 0
-					? { group_only_greetings: character.groupOnlyGreetings }
-					: {}),
-				serenepub: {
-					uuid: character.uuid,
-					...(character.aliases && character.aliases.length > 0
-						? { aliases: character.aliases }
-						: {}),
-					...(character.summary
-						? { summary: character.summary }
-						: {}),
-					...(character.category
-						? { category: character.category }
-						: {})
-				}
-			}
+			...(characterBook ? { character_book: characterBook } : {}),
+			extensions
 		}
 	}
 }

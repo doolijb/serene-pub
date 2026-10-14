@@ -29,6 +29,7 @@ export type {
 	ConfigOption,
 	SettingsGroup,
 	SettingsGroupStep,
+	PortLine,
 	OptionInherits,
 	OptionProvenance,
 	NamedConfigSummary,

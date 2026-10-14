@@ -151,7 +151,7 @@ export function samplingDeletion(
 	const consequences: string[] = []
 	if (released.length)
 		consequences.push(
-			`${released.length === 1 ? "one default goes" : `${released.length} defaults go`} unset, and the backend's own settings apply there`
+			`${released.length === 1 ? "one loadout loses its" : `${released.length} loadouts lose their`} sampling, and the backend's own settings apply there`
 		)
 	if (pipelines.size)
 		consequences.push(
@@ -170,7 +170,7 @@ export function samplingDeletion(
 			const held = samplingDefaultsFor(r.id, defaults)
 			if (held.length)
 				related.push({
-					label: "Default released for",
+					label: "Loadouts losing it",
 					items: held.map((h) => h.label)
 				})
 			const used = usedBy?.[r.id] ?? []

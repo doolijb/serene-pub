@@ -326,12 +326,71 @@ function acceptedKeys(
 	return kept
 }
 
+/**
+ * Told when a socket's interest set changes — replaced by a sync, or emptied
+ * by its disconnect — with the keys it held before and holds now.
+ *
+ * Called synchronously, AFTER the assignment the file header protects, so an
+ * observer never opens the window it describes; one that has work to do
+ * schedules it. The attendance push is the one observer today
+ * (`sessions/attendance.ts`): a page holding `sessions:attendance#<id>` is
+ * what "has the session open" means, so this is its join and its leave.
+ */
+export type InterestChangeObserver = (
+	socket: InterestSocket,
+	before: ReadonlySet<InterestKey>,
+	after: ReadonlySet<InterestKey>
+) => void
+
+/**
+ * The observers, by name, on `globalThis` — so a Vite SSR reload of this
+ * module or of an observer's re-installs one rather than doubling it.
+ */
+const OBSERVERS_KEY = Symbol.for("serene-pub.interestChangeObservers")
+
+function interestObservers(): Map<string, InterestChangeObserver> {
+	const g = globalThis as Record<symbol, unknown>
+	let observers = g[OBSERVERS_KEY] as
+		| Map<string, InterestChangeObserver>
+		| undefined
+	if (!observers) g[OBSERVERS_KEY] = observers = new Map()
+	return observers
+}
+
+/** Install (or, with `null`, remove) the observer filed under `name`. */
+export function observeInterestChanges(
+	name: string,
+	observer: InterestChangeObserver | null
+): void {
+	if (observer) interestObservers().set(name, observer)
+	else interestObservers().delete(name)
+}
+
+const NO_KEYS: ReadonlySet<InterestKey> = new Set()
+
+/** Tell every observer; one that throws is its own problem, never the sync's. */
+function interestChanged(
+	socket: InterestSocket,
+	before: ReadonlySet<InterestKey>,
+	after: ReadonlySet<InterestKey>
+): void {
+	for (const observer of interestObservers().values()) {
+		try {
+			observer(socket, before, after)
+		} catch (e) {
+			console.warn("interest observer failed:", e)
+		}
+	}
+}
+
 /** Replace this socket's interest set. Synchronous — see the file header. */
 function syncInterest(
 	socket: InterestSocket,
 	params: InterestSyncParams | undefined
 ): void {
+	const before = socket.interest ?? NO_KEYS
 	socket.interest = new Set(acceptedKeys(socket, params))
+	interestChanged(socket, before, socket.interest)
 }
 
 /**
@@ -367,6 +426,8 @@ export function registerInterestHandlers(
 	// Set so the field a concurrent walk is already holding empties with it,
 	// and so it is never momentarily undefined.
 	socket.on("disconnect", () => {
+		const before: ReadonlySet<InterestKey> = new Set(socket.interest ?? [])
 		socket.interest?.clear()
+		if (before.size) interestChanged(socket, before, NO_KEYS)
 	})
 }

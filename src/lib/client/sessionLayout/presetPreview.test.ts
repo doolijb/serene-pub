@@ -133,7 +133,10 @@ describe("previewOf — arrangedGrid wins", () => {
 		expect(p.right.cells.map((c) => c.id)).toEqual(["notes"])
 	})
 
-	it("grows the frame so nothing is clipped by the schematic's defaults", () => {
+	it("draws a cell outside its frame where the page does — back inside it", () => {
+		// The live session clamps every saved cell into its own frame
+		// (`loadArranged`), so the picture of that preset is the same 1 × 1
+		// column the session would draw, not a 6 × 9 frame it never has.
 		const p = previewOf({
 			arrangedGrid: {
 				right: {
@@ -143,8 +146,9 @@ describe("previewOf — arrangedGrid wins", () => {
 				}
 			}
 		})
-		expect(p.right.cols).toBe(6)
-		expect(p.right.rows).toBe(9)
+		expect(p.right.cols).toBe(1)
+		expect(p.right.rows).toBe(1)
+		expect(p.right.cells).toMatchObject([{ id: "wide", x: 0, y: 0, w: 1, h: 1 }])
 	})
 
 	it("falls back per zone — an arranged middle leaves the sides to zoneLayout", () => {
@@ -188,5 +192,50 @@ describe("previewOf — labels", () => {
 		)
 		expect(p.right.cells[0].label).toBe("Scene Portraits")
 		expect(p.middle.cells[0].label).toBe("messages")
+	})
+})
+
+describe("previewOf — the page's own reading (resolveDrawn)", () => {
+	it("draws the middle's grid: a content-sized strip over the conversation", async () => {
+		const { ADVENTURE_LAYOUT } = await import("@serene-pub/core-catalog")
+		const p = previewOf(ADVENTURE_LAYOUT)
+		expect(p.middle.cells.map((c) => [c.id, c.y, c.h])).toEqual([
+			["stats#world", 0, 1],
+			["messages", 1, 5]
+		])
+		// The right is ARRANGED: its cells, in its grid.
+		expect(p.right).toMatchObject({ cols: 1, rows: 12 })
+		expect(p.right.cells.map((c) => [c.id, c.y, c.h])).toEqual([
+			["scene-portraits", 0, 6],
+			["stats", 6, 6]
+		])
+		// The unpinned left rail is not arranged: its list, the Chronicle first.
+		expect(p.left.cells.map((c) => c.id)).toEqual([
+			"chronicle",
+			"lore-entries"
+		])
+	})
+
+	it("puts the conversation back where the page's floor does", () => {
+		const p = previewOf({
+			arrangedGrid: {
+				middle: { cols: 4, rows: 8, items: [{ id: "world-state", x: 0, y: 0, w: 4, h: 2 }] }
+			}
+		})
+		expect(p.middle.cells.map((c) => c.id)).toEqual(["world-state", "messages"])
+		expect(p.middle.cells[1]).toMatchObject({ x: 0, y: 2, w: 4, h: 6 })
+	})
+
+	it("a side the arrangement emptied of live widgets draws its list", () => {
+		const p = previewOf({
+			arrangedGrid: { right: { cols: 1, rows: 4, items: [{ id: "inventory", x: 0, y: 0, w: 1, h: 4 }] } },
+			zoneLayout: { version: 1, zones: { right: { kind: "side", side: "right", widgets: ["notes"] } } }
+		})
+		expect(p.right.cells.map((c) => c.id)).toEqual(["notes"])
+	})
+
+	it("a genre's own primary is the one the floor keeps", () => {
+		const p = previewOf({}, (id) => id, "acme.battleship:board")
+		expect(p.middle.cells.map((c) => c.id)).toEqual(["acme.battleship:board"])
 	})
 })

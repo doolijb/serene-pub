@@ -1,16 +1,20 @@
 /**
- * A character lore entry's binding isn't just a display label — it's the
- * actual gate that decides whether this entry can ever reach a generated
- * prompt at all (see isCharacterLoreEntryVisible() in
- * src/lib/server/utils/promptBuilder/LorebookBindingUtils.ts, shared by both
- * the 0.5 keyword and RAG paths): unbound entries are excluded
- * unconditionally, and a character binding makes the entry that character's own
- * private self-knowledge (invisible to every other character, even ones in
- * the same session) — INCLUDING when that character is the one a user voices,
- * because a persona IS a character and a persona binding IS a character
- * binding. This mirrors that rule in plain language for display purposes —
- * the Character Lore row and editor — so it's not a
- * surprise the first time an entry silently never shows up.
+ * A character lore entry's cast member isn't just a display label — it's the
+ * gate that decides which prompts read the entry (the server's rule is
+ * `isCharacterLoreEntryVisible`, `server/pipelines/prompt/characterLore.ts`):
+ *
+ * - **No cast member**: the world's knowledge, so the narrator's — read in a
+ *   reply generated from no character's perspective, never by a speaker.
+ * - **A member missing from the book's cast**: read by nobody.
+ * - **A background member** (no card): the narrator's only.
+ * - **A member with a card**: that character's private self-knowledge, read
+ *   on their own turns and hidden from every other character — except that a
+ *   card someone in the session plays as their persona has its lore read for
+ *   the WHOLE session, since a persona is never the perspective a turn is
+ *   generated from.
+ *
+ * This says that rule in plain language for the Character Lore row and
+ * editor, so an entry is never left out of a prompt with nothing saying why.
  */
 
 export type CharacterLoreVisibilityKind =
@@ -38,9 +42,9 @@ export function getCharacterLoreVisibility(
 	if (!lorebookBindingId) {
 		return {
 			kind: "unbound",
-			label: "Unbound",
+			label: "Narrator only",
 			description:
-				"No character or persona binding — this entry will never be included in a generated prompt."
+				"No cast member — only the narrator reads this entry, in replies written from no character's perspective. No character ever sees it."
 		}
 	}
 	const binding = bindings.find((b) => b.id === lorebookBindingId)
@@ -64,10 +68,12 @@ export function getCharacterLoreVisibility(
 		}
 	}
 	const name =
-		binding.character?.nickname || binding.character?.name || "this character"
+		binding.character?.nickname ||
+		binding.character?.name ||
+		"this character"
 	return {
 		kind: "character",
 		label: `Private to ${name}`,
-		description: `Only included in prompts generated from ${name}'s perspective — hidden from every other character, even ones in the same session.`
+		description: `Included in prompts generated from ${name}'s perspective, and hidden from every other character — unless someone in the session plays ${name} as their persona, when every prompt in that session includes it.`
 	}
 }

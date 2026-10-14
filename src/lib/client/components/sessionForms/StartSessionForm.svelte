@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { withoutShared } from "$lib/shared/utils/sharedRows"
 	/**
 	 * Start a session: the first screen, a few answers down one column.
 	 *
@@ -15,7 +16,8 @@
 	 * both when one arrives, and hands the new id to `onCreated`, which is
 	 * where navigation lives.
 	 */
-	import { onDestroy } from "svelte"
+	import { getContext, onDestroy, tick } from "svelte"
+	import { v4 as uuid } from "uuid"
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
 	import * as Icons from "@lucide/svelte"
 	import {
@@ -25,14 +27,15 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { refusedSwapsSentence } from "./refusedSwaps"
 	import CharacterPickRow from "./CharacterPickRow.svelte"
-	import PanelFilterInput from "../panels/PanelFilterInput.svelte"
+	import CharacterSelectModal from "../modals/CharacterSelectModal.svelte"
+	import PersonaSelectModal from "../modals/PersonaSelectModal.svelte"
+	import NewLorebookDialog from "../lorebookForms/NewLorebookDialog.svelte"
 	import PanelNavHeader from "../panels/PanelNavHeader.svelte"
 	import {
 		autoSessionName,
 		castCountHint,
 		castOptions,
 		defaultGenreId,
-		filterPickRows,
 		finalSessionName,
 		genreFacts,
 		playAsOptions,
@@ -53,7 +56,10 @@
 		onCancel: () => void
 		/** The view's close gate reads this. Bindable. */
 		hasChanges?: boolean
-		/** Show the back chevron — a list is behind this screen. */
+		/**
+		 * Show the back chevron — the list is behind this screen, off screen
+		 * (compact). At desk the list stands beside it, so no back (Q3).
+		 */
 		showBack?: boolean
 	}
 
@@ -67,8 +73,16 @@
 
 	const flow = new StartSessionFlow()
 
+	/** An administrator is offered the way to the presets (E3). Absent in a
+	 *  test that mounts the form alone. */
+	const userCtx = getContext<UserCtx | undefined>("userCtx")
+	const isAdmin = $derived(!!userCtx?.user?.isAdmin)
+
 	/** The card a section sits in — the shared `@utility panel-card` in app.css. */
 	const CARD_CLASS = "panel-card"
+	/** A cast row's ↑ ↓ × — 32px, 44px on a coarse pointer (STYLE-GUIDE §9). */
+	const ICON_BUTTON =
+		"text-surface-600-400 hover:bg-surface-200-800 hover:text-surface-950-50 inline-flex size-8 shrink-0 items-center justify-center rounded-md transition-colors disabled:pointer-events-none disabled:opacity-30 pointer-coarse:size-11"
 
 	type Step = "genre" | "preset" | "cast" | "name"
 
@@ -85,8 +99,10 @@
 	 * cast before the genre can say so.
 	 */
 	let openStep = $state<Step | null>(null)
-	let characterFilter = $state("")
-	let personaFilter = $state("")
+	/** The two pickers the cast step opens: Add characters, and Change. */
+	let castPickerOpen = $state(false)
+	let playAsPickerOpen = $state(false)
+	let addCharactersButton = $state<HTMLButtonElement | null>(null)
 	let touched = $state(false)
 	/** The person has answered this step themselves, so it may collapse. */
 	let genreConfirmed = $state(false)
@@ -97,10 +113,10 @@
 	let releaseCreateInterest: (() => void) | null = null
 
 	const handleCharactersList = (msg: Sockets.Characters.List.Response) => {
-		characters = msg.characterList || []
+		characters = withoutShared(msg.characterList) // shared rows are read and copy only (PLAN-private-messages §6.7, Q3)
 	}
 	const handleLorebooksList = (msg: Sockets.Lorebooks.List.Response) => {
-		lorebookList = msg.lorebookList || []
+		lorebookList = withoutShared(msg.lorebookList) // only owned books: a shared one is read and copy only (PLAN-private-messages §6.7)
 	}
 	const handleGenres = (msg: Sockets.Sessions.Genres.Response) => {
 		flow.rawGenres = msg.genres || []
@@ -208,7 +224,8 @@
 	 * above filled in the genre, preset and prefilled cast for them. So
 	 * nothing the form chose by itself is an edit, and a name typed and
 	 * deleted, or a character picked and un-picked, is none either. The cast
-	 * is compared as sets — un-picking and re-picking only reorders it.
+	 * is compared in order, because its order is the turn order the person
+	 * set with ↑ ↓.
 	 */
 	const edits = new UnsavedEdits(
 		() => ({
@@ -220,7 +237,7 @@
 			name: flow.fields.name.trim(),
 			scenario: flow.fields.scenario
 		}),
-		{ unordered: ["characterIds", "personaIds"] }
+		{ unordered: ["personaIds"] }
 	)
 	/** Call BEFORE the person's change lands (hence `onbeforeinput` below). */
 	function touch() {
@@ -281,8 +298,13 @@
 	})
 	const activeStep = $derived(openStep ?? firstUnsettled)
 
-	/** A step is on screen once everything above it has an answer. */
-	const showPreset = $derived(genreAnswered)
+	/**
+	 * A step is on screen once everything above it has an answer. The preset
+	 * step shows only when there is something to choose, or nothing to start
+	 * from (less-confusing E4): one preset is answered silently, and a card
+	 * holding a heading and the one name read as a question with no question.
+	 */
+	const showPreset = $derived(genreAnswered && presetIsAChoice)
 	const showCast = $derived(
 		genreAnswered && presetAnswered && castStepApplies
 	)
@@ -309,9 +331,6 @@
 	 */
 	const personaOptions = $derived(
 		playAsOptions(characterOptions, flow.characterIds)
-	)
-	const filteredPersonas = $derived(
-		filterPickRows(personaOptions, personaFilter)
 	)
 
 	/**
@@ -340,6 +359,70 @@
 		if (lorebookOptions.length !== 1) return
 		flow.fields.lorebookId = lorebookOptions[0].id
 	})
+
+	/**
+	 * **Create a lorebook** from the lorebook step itself (less-confusing E2):
+	 * the same dialog the Lorebooks view opens, and the new book is chosen
+	 * here once the server answers. The create is claimed by its `requestId`,
+	 * so a book made in another tab is never taken for this one. A refusal is
+	 * toasted by the shell's catch-all; this only stops waiting.
+	 */
+	let newLorebookOpen = $state(false)
+	let pendingLorebookRequestId: string | null = null
+	let releaseLorebookCreate: (() => void) | null = null
+
+	const handleLorebookCreated = (res: Sockets.Lorebooks.Create.Response) => {
+		if (
+			pendingLorebookRequestId === null ||
+			res?.requestId !== pendingLorebookRequestId
+		)
+			return
+		pendingLorebookRequestId = null
+		releaseLorebookCreate?.()
+		releaseLorebookCreate = null
+		const book = res.lorebook
+		if (book?.id == null) return
+		// The list's own re-send may land after this answer: hold the row so
+		// the picker shows it selected at once.
+		if (!lorebookList.some((l) => l.id === book.id))
+			lorebookList = [...lorebookList, book]
+		chooseLorebook(book.id)
+	}
+
+	const handleLorebookCreateError = (res: { requestId?: string }) => {
+		if (
+			pendingLorebookRequestId === null ||
+			res?.requestId !== pendingLorebookRequestId
+		)
+			return
+		pendingLorebookRequestId = null
+		releaseLorebookCreate?.()
+		releaseLorebookCreate = null
+	}
+
+	function createLorebook(details: { name: string }) {
+		const name = details.name.trim()
+		if (!name) return
+		newLorebookOpen = false
+		touch()
+		releaseLorebookCreate?.()
+		const requestId = uuid()
+		pendingLorebookRequestId = requestId
+		// The error key first, so the one interest sync carries both halves.
+		const releaseError = declareInterest<"lorebooks:create:error">(
+			"lorebooks:create:error",
+			handleLorebookCreateError
+		)
+		const releaseOk = requestWithInterest(
+			"lorebooks:create",
+			{ name, requestId },
+			handleLorebookCreated
+		)
+		releaseLorebookCreate = () => {
+			releaseOk()
+			releaseError()
+		}
+	}
 
 	const selectedCharacters = $derived(
 		flow.characterIds
@@ -379,9 +462,41 @@
 	const castPickOptions = $derived(
 		castOptions(characterOptions, flow.personaIds)
 	)
-	const filteredCharacters = $derived(
-		filterPickRows(castPickOptions, characterFilter)
+
+	/** The genre's cap on the cast, when it has one. */
+	const castMax = $derived(flow.shape?.characters?.max ?? null)
+	/** How many more the cast takes; null when the genre sets no cap. */
+	const castRoom = $derived(
+		castMax == null ? null : Math.max(0, castMax - flow.characterIds.length)
 	)
+
+	/**
+	 * Why **Add characters** cannot open, or null when it can. The picker
+	 * offers `castPickOptions` less the chosen, so each reason is one way
+	 * that comes to nobody.
+	 */
+	const addCharactersBlocked = $derived.by((): string | null => {
+		if (castRoom === 0)
+			return castMax === 1
+				? "The cast is full — this genre takes one character."
+				: `The cast is full — this genre takes at most ${castMax} characters.`
+		if (characterOptions.length === 0)
+			return "You have no characters yet. Write one in the Characters view, then come back."
+		if (castPickOptions.length === 0)
+			return "The only character you have is the one you play as. Pick someone else to play as, or write another character."
+		if (castPickOptions.every((c) => flow.characterIds.includes(c.id)))
+			return "Everyone you have is in the cast."
+		return null
+	})
+
+	/** Why **Choose who you play as** cannot open, or null when it can. */
+	const playAsBlocked = $derived.by((): string | null => {
+		if (characterOptions.length === 0)
+			return "You have no characters yet. Write one in the Characters view, then come back."
+		if (personaOptions.length === 0)
+			return "Everyone you have is in the cast. Take one out to play as them, or write another character."
+		return null
+	})
 
 	/**
 	 * The Scenario box, revealed rather than standing.
@@ -398,6 +513,9 @@
 	const showScenario = $derived(scenarioOpen || !!flow.fields.scenario)
 
 	const canStart = $derived(flow.canStart && !creating)
+	/** Why Start is grey, said under it (less-confusing E1); none while the
+	 *  create is on its way. */
+	const startReason = $derived(creating ? null : flow.startBlocker)
 
 	function reopen(step: Step) {
 		openStep = step
@@ -427,10 +545,38 @@
 		)
 	)
 
-	function toggleCharacter(id: number) {
+	/** The removed row takes its × with it, so focus lands on Add. */
+	async function removeCharacter(id: number) {
 		touch()
 		castTouched = true
-		flow.toggleCharacter(id)
+		if (flow.characterIds.includes(id)) flow.toggleCharacter(id)
+		await tick()
+		if (!addCharactersButton?.disabled) addCharactersButton?.focus()
+	}
+
+	function addCharacters(ids: number[]) {
+		touch()
+		castTouched = true
+		flow.addCharacters(ids)
+	}
+
+	/**
+	 * Focus stays on the arrow pressed, which a moved row can drop. At an end
+	 * that arrow is disabled, so focus crosses to the row's other arrow
+	 * rather than falling to the page.
+	 */
+	async function moveCharacter(id: number, by: -1 | 1) {
+		touch()
+		castTouched = true
+		flow.moveCharacter(id, by)
+		await tick()
+		const arrow = (dir: "up" | "down") =>
+			document.querySelector<HTMLButtonElement>(
+				`[data-cast-move="${id}:${dir}"]`
+			)
+		const pressed = arrow(by === -1 ? "up" : "down")
+		const other = arrow(by === -1 ? "down" : "up")
+		;(pressed && !pressed.disabled ? pressed : other)?.focus()
 	}
 
 	function choosePersona(id: number) {
@@ -454,7 +600,11 @@
 			description: res.session.name || placeholderName
 		})
 		const refused = refusedSwapsSentence(res)
-		if (refused) toaster.warning({ title: "Some settings were not applied", description: refused })
+		if (refused)
+			toaster.warning({
+				title: "Some settings were not applied",
+				description: refused
+			})
 		edits.forget()
 		hasChanges = false
 		onCreated(res.session.id)
@@ -500,6 +650,8 @@
 	onDestroy(() => {
 		releaseCreateInterest?.()
 		releaseCreateInterest = null
+		releaseLorebookCreate?.()
+		releaseLorebookCreate = null
 	})
 </script>
 
@@ -508,7 +660,7 @@
      this form and not the view behind it. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-	class="flex min-h-full w-full max-w-[760px] flex-col gap-4"
+	class="flex min-h-full w-full max-w-[760px] flex-col gap-3"
 	onkeydown={handleKeydown}
 >
 	<PanelNavHeader
@@ -521,6 +673,7 @@
 				type="button"
 				class="btn btn-sm preset-filled-primary-500 shrink-0"
 				disabled={!canStart}
+				aria-describedby={startReason ? "start-session-reason" : undefined}
 				onclick={start}
 			>
 				{#if creating}
@@ -535,15 +688,23 @@
 				Start
 			</button>
 		{/snippet}
+		{#snippet subtitle()}
+			{#if startReason}
+				<p
+					id="start-session-reason"
+					class="text-surface-600-400 text-right text-xs"
+					role="status"
+				>
+					{startReason}
+				</p>
+			{/if}
+		{/snippet}
 	</PanelNavHeader>
 
 	<div class="flex flex-col gap-3">
 		<!-- ── 0. Name ──────────────────────────────────────────────────── -->
 		<section class="{CARD_CLASS} flex flex-col">
-			<label
-				class="text-sm font-medium"
-				for="start-session-name"
-			>
+			<label class="text-sm font-medium" for="start-session-name">
 				Name
 			</label>
 			<input
@@ -577,9 +738,10 @@
 			</div>
 			{#if expandedGenre}
 				<p class="text-surface-600 dark:text-surface-400 mt-1 text-xs">
-					What kind of session this is. The genre decides which
-					systems exist — characters, personas, lorebooks, the
-					composer — and stays with the session for its life.
+					What kind of session this is. The genre decides what the
+					session has: characters, a character you play, a
+					lorebook, whether you type messages. It stays with the
+					session for its life.
 				</p>
 				<div
 					class="mt-3 grid grid-cols-1 gap-2 @lg/view:grid-cols-2"
@@ -649,13 +811,21 @@
 					>
 						No preset is available for this genre. An administrator
 						decides which presets a session may start from.
+						{#if isAdmin}
+							<a
+								class="anchor mt-1 block"
+								href="/admin/session-presets"
+							>
+								Open Admin › Play › Presets
+							</a>
+						{/if}
 					</p>
 				{:else if expandedPreset}
 					<p
 						class="text-surface-600 dark:text-surface-400 mt-1 text-xs"
 					>
-						What answers this session's events, and what it starts
-						filled in with.
+						A starting recipe for this genre: the settings and
+						actions the session begins with. The default is fine.
 					</p>
 					<div
 						class="mt-3 grid grid-cols-1 gap-2 @lg/view:grid-cols-2"
@@ -684,7 +854,9 @@
 									</span>
 								{/if}
 								{#if p.isDefault}
-									<span class="text-surface-600-400 text-[11px]">
+									<span
+										class="text-surface-600-400 text-[11px]"
+									>
 										Default for this genre
 									</span>
 								{/if}
@@ -727,44 +899,107 @@
 									? ` — ${characterCountHint}`
 									: ""}
 							</p>
-							{#if castPickOptions.length > 8}
-								<PanelFilterInput
-									bind:value={characterFilter}
-									placeholder="characters"
-									count={castPickOptions.length}
-								/>
-							{/if}
-							{#if characterOptions.length === 0}
-								<p class="text-surface-600-400 text-[13px]">
-									You have no characters yet. Write one in the
-									Characters view, then come back.
-								</p>
-							{:else if castPickOptions.length === 0}
-								<p class="text-surface-600-400 text-[13px]">
-									The only character you have is the one you
-									play as. Pick someone else to play as, or
-									write another character.
-								</p>
-							{:else}
+							{#if selectedCharacters.length > 0}
 								<ul
 									class="flex flex-col gap-1"
 									aria-label="Characters"
 								>
-									{#each filteredCharacters as c (c.id)}
+									{#each selectedCharacters as c, i (c.id)}
+										{@const label = characterName(c)}
 										<li>
 											<CharacterPickRow
 												character={c}
-												kind="checkbox"
-												checked={flow.characterIds.includes(
-													c.id
-												)}
-												onchange={() =>
-													toggleCharacter(c.id)}
-											/>
+												kind="chosen"
+											>
+												{#snippet actions()}
+													{#if selectedCharacters.length > 1}
+														<button
+															type="button"
+															class={ICON_BUTTON}
+															data-cast-move="{c.id}:up"
+															aria-label="Move {label} up"
+															disabled={i === 0}
+															onclick={() =>
+																moveCharacter(
+																	c.id,
+																	-1
+																)}
+														>
+															<Icons.ChevronUp
+																size={16}
+																aria-hidden="true"
+															/>
+														</button>
+														<button
+															type="button"
+															class={ICON_BUTTON}
+															data-cast-move="{c.id}:down"
+															aria-label="Move {label} down"
+															disabled={i ===
+																selectedCharacters.length -
+																	1}
+															onclick={() =>
+																moveCharacter(
+																	c.id,
+																	1
+																)}
+														>
+															<Icons.ChevronDown
+																size={16}
+																aria-hidden="true"
+															/>
+														</button>
+													{/if}
+													<button
+														type="button"
+														class="{ICON_BUTTON} hover:text-error-600-400"
+														aria-label="Remove {label}"
+														onclick={() =>
+															removeCharacter(
+																c.id
+															)}
+													>
+														<Icons.X
+															size={16}
+															aria-hidden="true"
+														/>
+													</button>
+												{/snippet}
+											</CharacterPickRow>
 										</li>
 									{/each}
 								</ul>
+							{:else if !addCharactersBlocked}
+								<p class="text-surface-600-400 text-[13px]">
+									No one yet. Add the characters you'll talk
+									to.
+								</p>
 							{/if}
+							<div
+								class="flex flex-wrap items-center gap-x-3 gap-y-1"
+							>
+								<button
+									bind:this={addCharactersButton}
+									type="button"
+									class="btn btn-sm preset-tonal-surface"
+									disabled={!!addCharactersBlocked}
+									aria-describedby={addCharactersBlocked
+										? "start-cast-add-blocked"
+										: undefined}
+									onclick={() => (castPickerOpen = true)}
+								>
+									<Icons.Plus size={16} aria-hidden="true" />
+									Add characters
+								</button>
+								{#if addCharactersBlocked}
+									<p
+										id="start-cast-add-blocked"
+										class="text-surface-600-400 text-xs"
+									>
+										{addCharactersBlocked}
+									</p>
+								{/if}
+							</div>
 						</div>
 					{/if}
 
@@ -775,45 +1010,61 @@
 									? " — pick one"
 									: ""}
 							</p>
-							{#if personaOptions.length > 8}
-								<PanelFilterInput
-									bind:value={personaFilter}
-									placeholder="characters to play as"
-									count={personaOptions.length}
-								/>
-							{/if}
-							{#if characterOptions.length === 0}
-								<p class="text-surface-600-400 text-[13px]">
-									You have no characters yet. Write one in the
-									Characters view, then come back.
-								</p>
-							{:else if personaOptions.length === 0}
-								<p class="text-surface-600-400 text-[13px]">
-									Everyone you have is in the cast. Take one
-									out to play as them, or write another
-									character.
-								</p>
-							{:else}
+							{#if selectedPersonas.length > 0}
 								<ul
 									class="flex flex-col gap-1"
-									role="radiogroup"
 									aria-label="Who you play as"
 								>
-									{#each filteredPersonas as p (p.id)}
+									{#each selectedPersonas as p (p.id)}
 										<li>
 											<CharacterPickRow
 												character={p}
-												kind="radio"
-												group="start-play-as"
-												checked={flow.personaIds.includes(
-													p.id
-												)}
-												onchange={() =>
-													choosePersona(p.id)}
-											/>
+												kind="chosen"
+											>
+												{#snippet actions()}
+													<button
+														type="button"
+														class="btn btn-sm preset-tonal-surface"
+														aria-label="Change who you play as"
+														onclick={() =>
+															(playAsPickerOpen = true)}
+													>
+														Change
+													</button>
+												{/snippet}
+											</CharacterPickRow>
 										</li>
 									{/each}
 								</ul>
+							{:else}
+								<div
+									class="flex flex-wrap items-center gap-x-3 gap-y-1"
+								>
+									<button
+										type="button"
+										class="btn btn-sm preset-tonal-surface"
+										disabled={!!playAsBlocked}
+										aria-describedby={playAsBlocked
+											? "start-play-as-blocked"
+											: undefined}
+										onclick={() =>
+											(playAsPickerOpen = true)}
+									>
+										<Icons.UserRound
+											size={16}
+											aria-hidden="true"
+										/>
+										Choose who you play as
+									</button>
+									{#if playAsBlocked}
+										<p
+											id="start-play-as-blocked"
+											class="text-surface-600-400 text-xs"
+										>
+											{playAsBlocked}
+										</p>
+									{/if}
+								</div>
 							{/if}
 						</div>
 					{/if}
@@ -844,13 +1095,20 @@
 						role="status"
 					>
 						{#if lorebookRequired}
-							This genre needs a lorebook — create one in
-							Lorebooks first.
+							This genre needs a lorebook, and you have none yet.
 						{:else}
-							You have no lorebooks yet — this genre can start
+							You have no lorebooks yet. This genre can start
 							without one.
 						{/if}
 					</p>
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal-surface mt-2"
+						onclick={() => (newLorebookOpen = true)}
+					>
+						<Icons.Plus size={16} aria-hidden="true" />
+						Create a lorebook
+					</button>
 				{:else}
 					<ul
 						class="mt-3 flex flex-col gap-1"
@@ -960,3 +1218,28 @@
 		{/if}
 	</div>
 </div>
+
+<CharacterSelectModal
+	open={castPickerOpen}
+	multiSelect
+	characters={castPickOptions}
+	excludeIds={flow.characterIds}
+	selectedLimit={castRoom ?? undefined}
+	onOpenChange={(e) => (castPickerOpen = e.open)}
+	onMultiSelect={addCharacters}
+/>
+
+<NewLorebookDialog
+	bind:open={newLorebookOpen}
+	onOpenChange={(e) => (newLorebookOpen = e.open)}
+	onConfirm={createLorebook}
+	onCancel={() => (newLorebookOpen = false)}
+/>
+
+<PersonaSelectModal
+	open={playAsPickerOpen}
+	title="Choose who you play as"
+	excludeIds={flow.characterIds}
+	onOpenChange={(e) => (playAsPickerOpen = e.open)}
+	onSelect={(id: number) => choosePersona(id)}
+/>

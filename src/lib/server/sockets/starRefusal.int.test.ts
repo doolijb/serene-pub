@@ -30,6 +30,7 @@ import path from "path"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import {  } from "$lib/server/loadouts/testing"
 
 let testDb: TestDb
 let dataDir: string
@@ -75,7 +76,7 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-	await testDb.delete(schema.connectionDefaults)
+	await testDb.delete(schema.loadouts)
 	await testDb.delete(schema.connectionModels)
 	await testDb.delete(schema.connections)
 	const { clearCachedScans, clearDownloads } = await import(
@@ -169,8 +170,8 @@ async function putOnDisk(model: string) {
 
 async function registered(capability: string) {
 	const [input, output] = capability.split("->")
-	return testDb.query.connectionDefaults.findFirst({
-		where: (d, { and, eq }) => and(eq(d.input, input), eq(d.output, output))
+	return testDb.query.loadouts.findFirst({
+		where: (d, { and, eq }) => and(eq(d.defaultForInput, input), eq(d.defaultForOutput, output))
 	})
 }
 

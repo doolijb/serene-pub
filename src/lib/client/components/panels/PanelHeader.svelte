@@ -23,13 +23,7 @@
 		actions?: Snippet
 	}
 
-	let {
-		title,
-		titleId,
-		onClose,
-		closeLabel,
-		actions
-	}: Props = $props()
+	let { title, titleId, onClose, closeLabel, actions }: Props = $props()
 
 	// `btn` (not `btn-icon`) because app.css's global :disabled / :active /
 	// :focus-visible patches all key off `.btn` — these buttons previously

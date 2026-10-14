@@ -30,7 +30,11 @@ import {
 	published
 } from "$lib/server/pipelines/config/panel/declarations"
 import { optionId } from "$lib/server/pipelines/config/panel/ids"
-import { layers, namespaceView } from "$lib/server/pipelines/config/panel/read"
+import {
+	layers,
+	namespaceView,
+	withUnplacedChains
+} from "$lib/server/pipelines/config/panel/read"
 import { resolveWriteScope } from "$lib/server/pipelines/config/panel/scopes"
 import {
 	type Decl,
@@ -59,9 +63,21 @@ async function locate(
 			`There is no published pipeline called '${slug}'.`
 		)
 	const decls = await declarations(db, at.specVersionId)
-	const decl = decls.find(
-		(d) => optionId(secret, d.nodeKey, d.slot, d.path) === id
-	)
+	const decl =
+		decls.find((d) => optionId(secret, d.nodeKey, d.slot, d.path) === id) ??
+		// An unplaced chain (D4) is no declaration, but its row is shown so it
+		// can be cleared — so its handle resolves too, over the addresses this
+		// spec actually stores.
+		(
+			await withUnplacedChains(
+				db,
+				at.specVersionId,
+				decls,
+				await storedAddressKeys(db, at.specId)
+			)
+		).find(
+			(d) => d.unplaced && optionId(secret, d.nodeKey, d.slot, d.path) === id
+		)
 	if (!decl)
 		throw new OptionNotFoundError(
 			"That setting is not part of this pipeline. A newer version may have " +
@@ -212,20 +228,18 @@ export async function promptOptionGate(
 			"That setting does not choose a prompt, so there is nothing here to " +
 				"edit."
 		)
-	// Same refusal the write path uses, rather than a second copy of the rule,
-	// and it tightens what `promptInSpec` allowed: that gate checked ownership
-	// and never asked whether the caller could write at all, so any signed-in
-	// person could reword a row from outside every session. That was already
-	// generous when a prompt served one pipeline's configs; pooled, an edit
-	// reaches every pipeline reusing the node, which makes it structural. A
-	// non-admin editing inside their own session still passes — `prompts` is
-	// the one slot the write matrix opens at session scope — and outside one
-	// they are told to open the session they meant.
-	resolveWriteScope(
-		viewer,
-		viewer.isAdmin ? "config" : undefined,
-		decl.matrixSlot
-	)
+	// Writing a prompt is an administrator's (owner ruling 2026-10-09: "Non
+	// admins shouldn't have a pipelines sidebar"; they pick, never write). A
+	// prompt row is pooled by the node that consumes it and has no owner, so an
+	// edit reaches every pipeline, session and person using it. Picking one for
+	// your own session is `writeOption`, not this gate.
+	if (!viewer.isAdmin)
+		throw new OptionNotWritableError(
+			"Only an administrator writes or edits prompts, because everyone " +
+				"using a prompt gets the change. Nothing was saved. You can " +
+				"choose among the prompts there are in your session's settings."
+		)
+	resolveWriteScope(viewer, "config", decl.matrixSlot)
 	return {
 		nodeDefinitionId: decl.nodeDefinitionId,
 		slot: decl.slot,
@@ -322,6 +336,95 @@ async function checkChain(
 }
 
 /**
+ * Every address this spec stores a value at — its configs' rows and its
+ * scoped overrides — as `nodeKey\u0000slot\u0000path` keys. What an
+ * unplaced chain's handle is resolved over.
+ */
+async function storedAddressKeys(db: Db, specId: number): Promise<string[]> {
+	const values = await db
+		.select({
+			nodeKey: schema.pipelineConfigValues.nodeKey,
+			slot: schema.pipelineConfigValues.slot,
+			path: schema.pipelineConfigValues.path
+		})
+		.from(schema.pipelineConfigValues)
+		.innerJoin(
+			schema.pipelineConfigs,
+			eq(schema.pipelineConfigs.id, schema.pipelineConfigValues.configId)
+		)
+		.where(eq(schema.pipelineConfigs.specId, specId))
+	const overrides = await db
+		.select({
+			nodeKey: schema.pipelineNodeOverrides.nodeKey,
+			slot: schema.pipelineNodeOverrides.slot,
+			path: schema.pipelineNodeOverrides.path
+		})
+		.from(schema.pipelineNodeOverrides)
+		.where(eq(schema.pipelineNodeOverrides.specId, specId))
+	return [...(values as any[]), ...(overrides as any[])].map(
+		(r) => `${r.nodeKey}\u0000${r.slot}\u0000${r.path ?? ""}`
+	)
+}
+
+/**
+ * An unplaced chain (D4) may only shrink. Its seam is gone, so nothing can be
+ * added — there is no `accepts` to check a script against and no place it
+ * would run — but removing entries, down to clearing it, is how an admin
+ * acts on the unplaced row. Every id must already be stored at this
+ * address somewhere in this spec.
+ */
+async function checkUnplacedChain(
+	db: Db,
+	specId: number,
+	decl: Decl,
+	value: unknown
+): Promise<number[]> {
+	if (!Array.isArray(value) || value.some((v) => typeof v !== "number"))
+		throw new OptionNotWritableError(
+			"A script chain is an ordered list of scripts and nothing else."
+		)
+	const ids = [...new Set(value as number[])]
+	if (!ids.length) return ids
+	const stored = new Set<number>()
+	const values = await db
+		.select({ value: schema.pipelineConfigValues.value })
+		.from(schema.pipelineConfigValues)
+		.innerJoin(
+			schema.pipelineConfigs,
+			eq(schema.pipelineConfigs.id, schema.pipelineConfigValues.configId)
+		)
+		.where(
+			and(
+				eq(schema.pipelineConfigs.specId, specId),
+				eq(schema.pipelineConfigValues.nodeKey, decl.nodeKey),
+				eq(schema.pipelineConfigValues.slot, decl.slot),
+				eq(schema.pipelineConfigValues.path, decl.path)
+			)
+		)
+	const overrides = await db
+		.select({ value: schema.pipelineNodeOverrides.value })
+		.from(schema.pipelineNodeOverrides)
+		.where(
+			and(
+				eq(schema.pipelineNodeOverrides.specId, specId),
+				eq(schema.pipelineNodeOverrides.nodeKey, decl.nodeKey),
+				eq(schema.pipelineNodeOverrides.slot, decl.slot),
+				eq(schema.pipelineNodeOverrides.path, decl.path)
+			)
+		)
+	for (const r of [...(values as any[]), ...(overrides as any[])])
+		if (Array.isArray(r.value))
+			for (const v of r.value) if (typeof v === "number") stored.add(v)
+	if (ids.some((v) => !stored.has(v)))
+		throw new OptionNotWritableError(
+			"This chain's place in the step no longer exists, so nothing can be " +
+				"added to it. Remove its scripts, or attach them where the step " +
+				"still takes scripts."
+		)
+	return ids
+}
+
+/**
  * The named config a global edit lands in: the pub's selection, resolved
  * by the runtime's own resolver, then gated exactly as an explicit `configId`
  * would be — same immutability refusal, same spec check. Shipped defaults
@@ -354,7 +457,13 @@ export async function writeOption(
 	const now = new Date()
 
 	if (decl.control === "scripts-chain")
-		value = await checkChain(db, decl, value)
+		value = decl.unplaced
+			? await checkUnplacedChain(db, at.specId, decl, value)
+			: await checkChain(db, decl, value)
+	// Emptying an unplaced chain removes it: an empty list at an address no
+	// seam declares is a row with nothing left to say.
+	if (decl.unplaced && Array.isArray(value) && !value.length)
+		return await clearOption(db, secret, slug, viewer, id, configId)
 
 	// A prompt reference is checked against the slot's pool before it is
 	// stored, the same way a chain is checked against its hook's accepted

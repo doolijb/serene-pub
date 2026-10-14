@@ -34,6 +34,7 @@ import { DEFAULT_VECTOR_NAME } from "$lib/server/utils/lorebookEntries"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
+import { defaultLoadoutRow } from "$lib/server/loadouts/testing"
 
 let testDb: TestDb
 let dataDir: string
@@ -104,12 +105,12 @@ beforeAll(async () => {
 			name: MODEL
 		})
 		.returning()
-	await testDb.insert(schema.connectionDefaults).values({
+	await testDb.insert(schema.loadouts).values(defaultLoadoutRow({
 		input: "text",
 		output: "embedding",
 		connectionId: embeddingConn.id,
 		connectionModelId: embeddingModel.id
-	})
+	}))
 }, 60_000)
 
 afterAll(async () => {

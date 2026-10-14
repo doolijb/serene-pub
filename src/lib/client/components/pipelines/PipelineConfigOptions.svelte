@@ -62,6 +62,9 @@
 	} from "$lib/client/components/pipelines/settingsGroups"
 	import { SvelteSet } from "svelte/reactivity"
 	import DocPeek from "$lib/client/components/docs/DocPeek.svelte"
+	import WorkflowRefControl from "$lib/client/components/pipelines/WorkflowRefControl.svelte"
+	import PromptWordingDialog from "$lib/client/components/pipelines/PromptWordingDialog.svelte"
+	import { openInLoadouts } from "$lib/client/admin/railDoors"
 	import { docsHref } from "$lib/shared/utils/docsHref"
 
 	interface Props {
@@ -145,6 +148,8 @@
 
 	let detail = $state<Sockets.Pipelines.NamespaceDetail | null>(null)
 	const userCtx: UserCtx | undefined = getContext("userCtx")
+	/** For the Loadout row's *Change…* door (I12) — absent outside the shell. */
+	const panelsCtx: PanelsCtx | undefined = getContext("panelsCtx")
 	const isAdmin = $derived(!!userCtx?.user?.isAdmin)
 	/**
 	 * The inline editors (prompt, template and layout wording, create and
@@ -1106,8 +1111,19 @@
 		return String(o.value)
 	}
 
+	/** 🚧 Every option of the same step — what `workflow-ref` reads its pair from. */
+	const stepSiblings = (o: Sockets.Pipelines.Option) =>
+		groups
+			.flatMap((g) => [...g.front, ...g.advanced.flatMap((st) => st.options)])
+			.filter((x) => x.step.key === o.step.key && x.id !== o.id)
+
 	/** The model-call choices every group fronts under fixed labels. */
-	const FRONT_CHOICES = new Set(["prompts-ref", "connection-ref", "sampling-ref"])
+	const FRONT_CHOICES = new Set([
+		"loadout-ref",
+		"prompts-ref",
+		"connection-ref",
+		"sampling-ref"
+	])
 
 	/** A session card's summary line: its first model's name. */
 	const cardSummary = $derived.by(() => {
@@ -1136,6 +1152,29 @@
 		}
 		return runs
 	}
+
+	/**
+	 * The prompt dialog's row: every prompt this step offers, with the
+	 * wording of each (`PromptWordingDialog`). Members see only names in the
+	 * picker, so this is where they read a prompt before choosing it.
+	 */
+	let wordingRow = $state<{
+		option: Sockets.Pipelines.Option
+		label: string
+	} | null>(null)
+
+	/**
+	 * What the prompt dialog is titled for: the model call, not the row. The
+	 * row is only ever "Prompt"; the card's title names the pipeline, and a
+	 * card with several model calls heads each one.
+	 */
+	function wordingTitleOf(option: Sockets.Pipelines.Option, fallback: string) {
+		const group = groups.find((g) => g.front.some((o) => o.id === option.id))
+		const parts = [title, group?.heading].filter(
+			(x): x is string => !!x && x.trim() !== ""
+		)
+		return parts.length ? parts.join(" › ") : fallback
+	}
 </script>
 
 {#snippet optionRow(
@@ -1146,8 +1185,10 @@
 	{@const label = labelOverride ?? rowLabelOf(option)}
 	<!-- The wrapper carries the option's address so a host's search or diff
 	     view can scroll to it (22 §2.3/§2.6). -->
+	<!-- `has-[[data-self-hidden]]:hidden`: a control may hide its own row
+	     (🚧 `workflow-ref`, shown only for a template-payload pair). -->
 	<div
-		class="flex min-w-0 flex-col gap-1"
+		class="flex min-w-0 flex-col gap-1 has-[[data-self-hidden]]:hidden"
 		data-option-id={option.id}
 		data-option-row={option.control}
 	>
@@ -1195,6 +1236,19 @@
 			     administrator's Model row is this; nobody else is sent one. -->
 			<div class="flex flex-col gap-0.5" id="opt-{option.id}">
 				<p class="text-sm break-words">{readonlyValue(option)}</p>
+				{#if option.control === "prompts-ref" && option.value != null}
+					<button
+						type="button"
+						class="text-primary-700-300 w-fit text-xs underline"
+						onclick={() =>
+							(wordingRow = {
+								option,
+								label: wordingTitleOf(option, labelOverride ?? rowLabelOf(option))
+							})}
+					>
+						Read the wording
+					</button>
+				{/if}
 				<p
 					class="text-surface-600-400 flex flex-wrap gap-x-2 text-xs"
 				>
@@ -1208,7 +1262,7 @@
 							class="underline"
 							href="/admin/pipelines/{encodeURIComponent(slug)}"
 						>
-							Change in Pipelines
+							Change in Admin › Pipelines
 						</a>
 					{:else}
 						<span>Set by an administrator</span>
@@ -1385,6 +1439,19 @@
 						set(option, Number(raw))
 					}}
 				/>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface shrink-0"
+					title="Read the prompts this step offers"
+					aria-label="Read the prompts for {wordingTitleOf(option, labelOverride ?? rowLabelOf(option))}"
+					onclick={() =>
+						(wordingRow = {
+							option,
+							label: wordingTitleOf(option, labelOverride ?? rowLabelOf(option))
+						})}
+				>
+					<Icons.Eye size={14} />
+				</button>
 				{#if editors}
 					<button
 						type="button"
@@ -1884,7 +1951,43 @@
 			     something the panel hid. -->
 			{@const chain = option.scripts ?? []}
 			{@const inChain = new Set(chain.map((s) => s.id))}
-			<div class="flex flex-col gap-1">
+			<div
+				class="flex flex-col gap-1"
+				data-seam={option.at}
+				data-unplaced={option.unplaced ? "" : undefined}
+			>
+				<!-- Where it runs (PLAN-script-placement D3): what flows through
+				     the seam, and the kinds that can go here — so an empty chain
+				     still says what could. -->
+				{#if option.flows}
+					<p class="text-surface-600-400 text-[11px] leading-snug">
+						{option.flows}
+					</p>
+				{/if}
+				{#if option.acceptsLabels?.length}
+					<div class="flex flex-wrap gap-1" aria-label="Script kinds accepted here">
+						{#each option.acceptsLabels as kind (kind)}
+							<span
+								class="preset-tonal-surface rounded-full px-1.5 py-0.5 text-[11px]"
+							>
+								{kind}
+							</span>
+						{/each}
+					</div>
+				{/if}
+				{#if option.unplaced}
+					<!-- Unplaced (D4): the step declares no seam at this address. The
+					     same treatment as an archived prompt field — kept,
+					     marked, removable; nothing can be added, and the run
+					     skips it (or halts, for a stop guard). -->
+					<p class="text-surface-600-400 text-xs" data-unplaced-note>
+						<Icons.Archive size={11} class="inline" />
+						No longer here — this step no longer has this place for
+						scripts. They are skipped; a stop script here stops the
+						reply from running. Remove them, or attach them where the
+						step still takes scripts.
+					</p>
+				{/if}
 				{#if !chain.length}
 					<p class="text-surface-600-400 text-xs italic">
 						No scripts attached.
@@ -1934,6 +2037,7 @@
 								</span>
 							{/if}
 						{/if}
+						{#if !option.unplaced}
 						<button
 							type="button"
 							class="btn btn-icon btn-icon-sm preset-tonal-surface shrink-0"
@@ -1954,6 +2058,7 @@
 						>
 							<Icons.ChevronDown size={12} />
 						</button>
+						{/if}
 						<button
 							type="button"
 							class="btn btn-icon btn-icon-sm preset-tonal-surface shrink-0"
@@ -1965,7 +2070,9 @@
 						</button>
 					</div>
 				{/each}
-				{#if option.choices?.some((c) => !inChain.has(c.id))}
+				{#if option.unplaced}
+					<!-- No picker: there is no place left for a new script to run. -->
+				{:else if option.choices?.some((c) => !inChain.has(c.id))}
 					<Select
 						label="Add a script to {labelOverride ?? option.label}"
 						labelHidden
@@ -2043,6 +2150,68 @@
 					</a>
 				{/if}
 			</div>
+		{:else if option.control === "loadout-ref"}
+			<!-- The Loadout (I12, DESIGN-image-generation §14 item 4): what
+			     this model call runs on, leading its group. Each row says its
+			     consequences for this step — never a grade; the selected one
+			     says its resolved chain, and *Change…* opens its sheet. The
+			     slots beneath stay overrides, each saying where its value came
+			     from. Admin's Pipelines only: a session never picks one. -->
+			{@const selected = option.loadout?.selected}
+			{@const needs = option.loadout?.needs ?? []}
+			{@const bestWith = option.loadout?.bestWith ?? []}
+			<Select
+				label={labelOverride ?? rowLabelOf(option)}
+				labelHidden
+				class="w-full"
+				options={[
+					{ value: "", label: "None (the default loadout)" },
+					...(option.choices ?? []).map((c) => ({
+						value: String(c.id),
+						label: c.label,
+						hint: c.description || undefined
+					}))
+				]}
+				value={selected ? String(selected.id) : ""}
+				onValueChange={(raw) => {
+					if (raw === "") return set(option, null)
+					const choice = option.choices?.find((c) => String(c.id) === raw)
+					if (choice?.loadoutId) set(option, { id: choice.loadoutId })
+				}}
+			/>
+			{#if selected}
+				<p
+					class="text-surface-600-400 flex flex-wrap items-center gap-x-2 text-xs"
+					data-loadout-chain
+				>
+					<span>{selected.chain}</span>
+					{#if panelsCtx}
+						<button
+							type="button"
+							class="min-h-11 underline pointer-fine:min-h-0"
+							onclick={() => openInLoadouts(panelsCtx, { loadoutId: selected.id })}
+						>
+							Change…
+						</button>
+					{/if}
+				</p>
+			{/if}
+			{#if needs.length || bestWith.length}
+				<p
+					class="text-surface-600-400 flex flex-wrap gap-x-3 text-xs"
+					data-loadout-needs
+				>
+					{#if needs.length}
+						<span><span class="font-medium">Needs</span> {needs.join(" · ")}</span>
+					{/if}
+					{#if bestWith.length}
+						<span
+							><span class="font-medium">Best with</span>
+							{bestWith.join(" · ")}</span
+						>
+					{/if}
+				</p>
+			{/if}
 		{:else if option.control === "connection-ref" && option.choices}
 			<!-- The Model: ONE grouped list (owner rulings 2026-09-30) —
 			     connections are the groups, their models the rows, and one
@@ -2129,6 +2298,14 @@
 					This model is switched off, so this call will refuse to run.
 				</p>
 			{/if}
+		{:else if option.control === "workflow-ref"}
+			<WorkflowRefControl
+				{option}
+				siblings={stepSiblings(option)}
+				label={labelOverride ?? rowLabelOf(option)}
+				onSet={(v) => set(option, v)}
+				onClear={() => clear(option)}
+			/>
 		{:else if option.choices}
 			<!-- A reference: sampling configs and the like. The server sends
 			     what this option may point at, already narrowed to the
@@ -2383,7 +2560,19 @@
 			{#if line}
 				<span>{line}</span>
 			{/if}
-			{#if option.overriddenHere}
+			{#if option.overriddenHere && option.useLoadout}
+				<!-- Set here over a named loadout: clearing it hands the slot
+				     back to the loadout (I12). -->
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface min-h-11 text-xs pointer-fine:min-h-0"
+					onclick={() => clear(option)}
+					title="Remove the value set here and use the {option.useLoadout} loadout's"
+					data-use-loadout
+				>
+					<Icons.RotateCcw size={12} aria-hidden="true" /> Use loadout's
+				</button>
+			{:else if option.overriddenHere}
 				<button
 					type="button"
 					class="btn btn-sm preset-tonal-surface min-h-11 text-xs pointer-fine:min-h-0"
@@ -2657,11 +2846,34 @@
 			class="text-primary-700-300 inline-flex min-h-11 items-center gap-1 self-start text-xs underline pointer-fine:min-h-0"
 			href="/admin/pipelines/{encodeURIComponent(slug)}"
 		>
-			More settings in Pipelines
+			More settings in Admin › Pipelines
 			<Icons.ArrowRight size={12} aria-hidden="true" />
 		</a>
 	{/if}
 {/snippet}
+
+{#if wordingRow}
+	<!-- Read the latest copy of the row out of the view, so a pick made in
+	     the dialog shows as In use without reopening it. -->
+	{@const live =
+		groups
+			.flatMap((g) => [
+				...(g.enabled ? [g.enabled] : []),
+				...g.front,
+				...g.advanced.flatMap((st) => st.options)
+			])
+			.find((o) => o.id === wordingRow!.option.id) ?? wordingRow.option}
+	<PromptWordingDialog
+		{slug}
+		{sessionId}
+		option={live}
+		rowLabel={wordingRow.label}
+		fieldLabel={humanize}
+		canPick={live.writable && !readOnlyBecause}
+		onPick={(id) => set(live, id)}
+		onClose={() => (wordingRow = null)}
+	/>
+{/if}
 
 <style>
 	.inspector-pane {

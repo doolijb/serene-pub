@@ -23,6 +23,7 @@ import {
 } from "$lib/server/utils/testDb"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults"
+import {  } from "$lib/server/loadouts/testing"
 
 // The consequence stops the queue and unloads the lane; neither is under test.
 vi.mock("./vectorizationQueue", () => ({
@@ -61,7 +62,7 @@ beforeAll(async () => {
 }, 120_000)
 
 beforeEach(async () => {
-	await db.delete(schema.connectionDefaults)
+	await db.delete(schema.loadouts)
 	await db.delete(schema.characters)
 	await db.delete(schema.connections)
 	standing.cleared = 0
@@ -122,7 +123,7 @@ async function star(
 	connectionId: number | null,
 	connectionModelId: number | null
 ) {
-	await db.delete(schema.connectionDefaults)
+	await db.delete(schema.loadouts)
 	if (connectionId == null) return
 	await setCapabilityDefault(db as any, EMBEDDING_CAPABILITY, {
 		connectionId,

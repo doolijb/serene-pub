@@ -39,6 +39,7 @@ export type PanelMode = "config" | "session" | "builder"
  * choices read the same in every group, whatever their slot is called.
  */
 const FRONT_LABELS: Record<string, string> = {
+	"loadout-ref": "Loadout",
 	"prompts-ref": "Prompt",
 	"connection-ref": "Model",
 	"sampling-ref": "Sampling"
@@ -47,8 +48,12 @@ const FRONT_LABELS: Record<string, string> = {
 export const rowLabelOf = (o: Pick<Option, "control" | "label">): string =>
 	FRONT_LABELS[o.control] ?? o.label
 
-/** A front row a session draws: the prompt, the model, the sampling — never a source's switch. */
-const sessionDraws = (o: Option) => o.control !== "boolean"
+/**
+ * A front row a session draws: the prompt, the model, the sampling — never a
+ * source's switch, and never a Loadout (a session never picks one, I12; the
+ * server sends none — this is the second lock).
+ */
+const sessionDraws = (o: Option) => o.control !== "boolean" && o.control !== "loadout-ref"
 
 /**
  * The groups a surface draws, shaped for it. A session keeps each group's
@@ -87,12 +92,50 @@ export function advancedSummary(g: Pick<Group, "advanced" | "changedInAdvanced">
 }
 
 /**
+ * One line of what a step or an agent receives or carries out (the server's
+ * `panel/` lane, 2026-10-12): the port's name, its shape (drawn as a
+ * tooltip), the words to show, and for a received line the step key it
+ * comes from.
+ *
+ * Declared here structurally until `Sockets.Pipelines` carries the fields;
+ * every read goes through `PortsOf` / `StepPortsOf`, so an older server that
+ * sends none simply draws no cards.
+ */
+export interface PortLine {
+	port: string
+	shape: string
+	label: string
+	from?: string
+}
+
+/** What a step does beyond handing its result on. */
+export type StepEffect = "none" | "external" | "write" | "emit"
+
+interface PortsOf {
+	receives?: PortLine[]
+	carriesOut?: PortLine[]
+}
+interface StepPortsOf extends PortsOf {
+	effect?: StepEffect
+}
+
+const portsOf = (x: object): PortsOf => {
+	const { receives, carriesOut } = x as PortsOf
+	return {
+		...(Array.isArray(receives) ? { receives } : {}),
+		...(Array.isArray(carriesOut) ? { carriesOut } : {})
+	}
+}
+
+/**
  * One step as the builder lists it: every row the step owns, front and
  * Advanced alike, filed under the group (agent) it belongs to.
  */
-export interface BuilderStep {
+export interface BuilderStep extends StepPortsOf {
 	key: string
 	heading: string
+	/** The group's key — the agent it is filed under. */
+	group: string
 	/** The group's heading — absent for the one unheaded group. */
 	agent?: string
 	/** `Agent · Step`, or the step alone. */
@@ -100,8 +143,30 @@ export interface BuilderStep {
 	options: Option[]
 }
 
+/** One agent (settings group) as the builder selects it. */
+export interface BuilderGroup extends PortsOf {
+	key: string
+	/** Absent for the one unheaded group. */
+	heading?: string
+	purpose?: string
+	/** Its steps' keys, in builder order. */
+	steps: string[]
+}
+
 /** The builder's step list, in group order, each step once. */
 export function builderStepsOf(groups: readonly Group[]): BuilderStep[] {
+	// A step's ports and effect, from the first group row that has them.
+	const portsByStep = new Map<string, StepPortsOf>()
+	for (const g of groups)
+		for (const s of g.advanced) {
+			const have = portsByStep.get(s.key) ?? {}
+			const { effect } = s as StepPortsOf
+			portsByStep.set(s.key, {
+				...portsOf(s),
+				...(effect ? { effect } : {}),
+				...have
+			})
+		}
 	const out: BuilderStep[] = []
 	const byKey = new Map<string, BuilderStep>()
 	for (const g of groups) {
@@ -116,8 +181,10 @@ export function builderStepsOf(groups: readonly Group[]): BuilderStep[] {
 				step = {
 					key: o.step.key,
 					heading: o.step.heading,
+					group: g.key,
 					...(g.heading ? { agent: g.heading } : {}),
 					label: g.heading ? `${g.heading} · ${o.step.heading}` : o.step.heading,
+					...portsByStep.get(o.step.key),
 					options: []
 				}
 				byKey.set(o.step.key, step)
@@ -127,6 +194,66 @@ export function builderStepsOf(groups: readonly Group[]): BuilderStep[] {
 		}
 	}
 	return out
+}
+
+/** The builder's agents, in group order, each with the steps filed under it. */
+export function builderGroupsOf(groups: readonly Group[]): BuilderGroup[] {
+	const steps = builderStepsOf(groups)
+	return groups.map((g) => ({
+		key: g.key,
+		...(g.heading ? { heading: g.heading } : {}),
+		...(g.purpose ? { purpose: g.purpose } : {}),
+		...portsOf(g),
+		steps: steps.filter((s) => s.group === g.key).map((s) => s.key)
+	}))
+}
+
+/** One drawn line of a Receives or Carries out card. */
+export interface PortCardLine {
+	key: string
+	label: string
+	/** The step it comes from, by heading — received lines only. */
+	from?: string
+	/** The port's shape, for the tooltip. */
+	shape: string
+}
+
+/** The two inspector cards, or `null` when the server sent neither list. */
+export interface PortCards {
+	receives: PortCardLine[]
+	carriesOut: PortCardLine[]
+	/** The effect chip's words — absent for `none` or no effect. */
+	effect?: string
+}
+
+const EFFECT_WORDS: Partial<Record<StepEffect, string>> = {
+	write: "Writes the session",
+	emit: "Raises an event",
+	external: "Reaches outside"
+}
+
+/**
+ * What the inspector's Receives and Carries out cards draw for a step or an
+ * agent. A `from` names its step by heading where the builder knows it, else
+ * as sent. Nothing at all (an older server) is `null`: no cards.
+ */
+export function portCardsOf(
+	subject: StepPortsOf,
+	headingOf: (stepKey: string) => string | undefined
+): PortCards | null {
+	if (!subject.receives && !subject.carriesOut) return null
+	const line = (p: PortLine, i: number, withFrom: boolean): PortCardLine => ({
+		key: `${p.port}:${p.from ?? ""}:${i}`,
+		label: p.label,
+		shape: p.shape,
+		...(withFrom && p.from ? { from: headingOf(p.from) ?? p.from } : {})
+	})
+	const effect = subject.effect ? EFFECT_WORDS[subject.effect] : undefined
+	return {
+		receives: (subject.receives ?? []).map((p, i) => line(p, i, true)),
+		carriesOut: (subject.carriesOut ?? []).map((p, i) => line(p, i, false)),
+		...(effect ? { effect } : {})
+	}
 }
 
 /** Every option in a view, once — for search and the Changes list. */

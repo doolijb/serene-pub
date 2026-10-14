@@ -19,7 +19,7 @@ Session to lore is up to four steps. Each one stops for your review before anyth
 
 ## Summarize to Lorebook
 
-1. In the session, open a message's options and choose **Select for summary**. (The session's **Lore** tab has **Summarize Scene**, which does the same.) The composer becomes a selection bar.
+1. In the session, open a message's options and choose **Select for summary**. (The **Chronicle** widget's **Summarize scene** does the same.) The composer becomes a selection bar.
 2. Select the messages. **Select all above** and **Select all below**, on each message, fill the gap up to the nearest selected one.
 3. In the bar, choose what to make: **Scene**, **World lore** or **Character lore**. The **Summarize to Lorebook** window opens.
 4. Fill in the details and press **Generate summary**. The window shows its progress: drafting each part, then combining the drafts into one entry, then naming it.
@@ -29,11 +29,11 @@ The details depend on the kind:
 
 - **World lore** takes an optional **Focus topic**, such as *the smugglers' code*, to steer what the summary is about.
 - **Character lore** needs a **Focus topic**, such as *her debts* or *relationship with Kira*, and can be **bound to a character** (your personas included) so the lore is private to them. Binding adds that character to the book's cast when you save.
-- **Scene** needs a **History entry** to file the scene under. Pick one, or press **New** to make a blank one dated where the session's story stands. The messages must be one unbroken run: a gap in the selection is refused, and messages already in a scene can't be selected again. After saving, the scene is processed (below) and its review opens in the **Scene summary** window.
+- **Scene** needs a **History entry** to file the scene under. Pick one, or press **New** to make a blank one dated where the session's story stands. The messages must be one unbroken run: a gap in the selection is refused, and messages already in a scene can't be selected again, including every line of a scene started in the conversation (the open one's too). After saving, the scene is processed (below) and its review opens in the **Scene summary** window.
 
 If the session doesn't read a lorebook yet, the window offers to pick one or make a new one first.
 
-Images and files on the selected messages are read as their names: each file is written after its message's text, such as `[image: cat.png — a grey cat]` (with the description you gave it) or `[file: notes.txt]`. A message that is only a picture is summarized as that picture rather than skipped. The names count toward how much chat each drafting part holds. No summary step sends the files themselves to the model, and a text file's contents are not read into it.
+Images and files on the selected messages are read as their names: each file is written after its message's text, such as `[image: cat.png — a grey cat]` (with the description you gave it) or `[file: notes.txt]`. In a scene that reads side talk as asides (the Lair's Sanctum), an aside's files are named after its text the same way. A message that is only a picture is summarized as that picture rather than skipped. The names count toward how much chat each drafting part holds. No summary step sends the files themselves to the model, and a text file's contents are not read into it.
 
 A session on a [branch](./lorebook-time.md#branches) saves to that branch, and the review says so. Only history entries on the session's line, up to where its story stands, are offered.
 
@@ -41,7 +41,15 @@ A session on a [branch](./lorebook-time.md#branches) saves to that branch, and t
 
 **Process** on a scene, in the lorebook's History or Scenes, has the model write the scene's summary from its messages (their images and files read as names, as above) and lists who was there: **Participants** (who spoke) and **Mentioned** (who was talked about). Once a scene has a summary the action reads **Reprocess**, which writes it again from scratch; useful when the messages changed or the first summary came out wrong. Review the result in the **Scene summary** window and press **Apply**.
 
+The model is told the scene's name, the day it began and who was present, and, in a genre that keeps a place (Adventure and the Lair keep the party's **Location**), where the scene began, even after the scene has been renamed.
+
 A scene keeps its summary and cast even if its messages, or the whole session, are later deleted.
+
+A scene started and ended in the conversation can also be summarized from the session: **Summarize** on its divider or its row in the [Chronicle](./session-layout.md#the-widgets), **Close and summarize** on the Chronicle's open scene, and **Summarize all (N)** for every finished scene of the session with no summary yet, one after another. When the session's **Summaries** is **On close**, each scene is summarized in the background as it ends (a scene made with **Mark as scene** included); with **Never**, none of these is offered (see [When a new scene begins](./sessions.md#when-a-new-scene-begins)). Each run lands in the activity list for review, as above.
+
+A finished run waits for you. Until you decide, the scene's divider and its Chronicle row say **Ready to review**; click it to open the review in the **Scene summary** window. The summary is written only when you press **Apply**. **Discard** (or dismissing its card in the Activity view) leaves the scene as it was before the run: summarized, not summarized or out of date. Stopping a run does the same. **Summarize all (N)** skips a scene that's waiting for review, so it never replaces a result you haven't looked at.
+
+When a scene's boundaries move afterwards (its start nudged or dragged, its end moved, the scene reopened, or another scene joined to it with **Remove boundary**), its summary no longer matches its lines. The summary is kept, and its divider says **Summary out of date** until you **Summarize** it again (**Summarize all (N)** counts only scenes with no summary at all). A scene that joins the one before it takes its own summary with it.
 
 ## Compiling scenes into a history entry
 
@@ -57,7 +65,7 @@ A compile remembers the line and date it started from, so reopening its review l
 
 ## Changing the prompts
 
-Each kind of summary is a pipeline in the **Pipelines** view: **Summarize world lore**, **Summarize character lore**, **Summarize scene** and **Summarize history entry**, plus **Build the story graph**. A summary runs in three steps, **Drafting**, **Combining** and **Naming**, each with its own prompt, model and sampling. So drafting can run on a smaller, cheaper model than combining.
+Each kind of summary is a pipeline in **Admin › Pipelines**: **Summarize world lore**, **Summarize character lore**, **Summarize scene** and **Summarize history entry**, plus **Build the story graph**. A summary runs in three steps, **Drafting**, **Combining** and **Naming**, each with its own prompt, model and sampling. So drafting can run on a smaller, cheaper model than combining.
 
 To change the wording, clone a built-in prompt and pick your clone on the step. See [Pipelines](./pipelines.md#prompts).
 
@@ -74,7 +82,9 @@ Each job has a card under **In progress** that moves from running to **Ready to 
 | **Compile** | *Compiling…*; a compile can't be stopped | **Review and apply**, or **Go to Entry** |
 | **Build graph** / **Extend graph** | The phase and *scene X/Y*, with **Stop** and **View progress** | **Review and apply**, or **View error** |
 
-Dismiss a finished card with its **X**. While you have a failed job or one waiting for review, the Activity icon on the rail shows a dot.
+Dismiss a finished card with its **X**. Dismissing a scene's review discards it: the scene goes back to how it was before the run. While you have a failed job or one waiting for review, the Activity icon on the rail shows a dot.
+
+A review lives only while the server runs. If it restarts while a scene is being summarized or waits for review, that result is lost: the scene reads as not summarized (a summary it had is kept, marked out of date), ready to summarize again.
 
 ### The LLM queue tab (admins)
 

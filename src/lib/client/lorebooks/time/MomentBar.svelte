@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { bookReadOnly } from "../bookData.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { formatDate } from "../sections/historyDates"
 	import { timelineCursor } from "../timelineCursor.svelte"
@@ -11,28 +12,41 @@
 		trackInsetPx,
 		type TimelineTick
 	} from "../timelineStrip"
+	import BranchChip from "./BranchChip.svelte"
 	import {
 		againstPresent,
+		asOfCountSentence,
 		castMomentSentence,
 		goToDate,
 		MOMENT_DRAG_HINT,
 		MOMENT_EMPTY_LINE,
-		momentChipLabel,
+		MOMENT_SAVE_SENTENCE,
+		momentLabel,
 		momentValue,
+		momentWords,
 		parseMoment
 	} from "./moment"
 
 	/**
-	 * The moment: when the book is being read from, along the bottom of every
-	 * lens.
+	 * The moment bar: where in the story the book is being read from, along
+	 * the bottom of every lens. It is the book's one time surface (ruled
+	 * 2026-09-30, "one timeline everywhere"): the line being read (the branch
+	 * chip), the moment in words, what a save does there, the scrubber, and
+	 * the one Return to now.
 	 *
 	 * The ticks are the dates the book holds, so a drag lands on a date
 	 * something happened rather than on a pixel. Dragging moves the cursor
 	 * every frame and writes the address once, on release: the pool has to
 	 * follow the thumb, and the URL must not collect a step per frame.
 	 *
+	 * Away from now the whole bar takes the warning tint, so the reader can
+	 * tell from anywhere in the pane that the book is not being read as it
+	 * stands. `compact` folds it to one line (line · moment · Return to now)
+	 * that opens the rest in place; whether it is open is this mount's alone.
+	 *
 	 * ⚠ A reader. Reading as of a date narrows what the pool shows and what
-	 * the graph draws; it changes nothing about what a save writes.
+	 * the graph draws; it changes nothing about what a save writes. The
+	 * sentence beside the moment says the choice a save presents there.
 	 */
 	interface Props {
 		/** The moment the route is reading from. Absent is now. */
@@ -52,6 +66,23 @@
 		} | null
 		/** Stores the clock on this line; offered while reading as of a date. */
 		onSetPresent?: (clock: Sockets.Lorebooks.StoryClock) => void
+		/**
+		 * The book whose lines the branch chip lists. The chip is drawn when
+		 * this and `onBranch` are both given.
+		 */
+		lorebookId?: number
+		/** The book's lines. `main` is never among them. */
+		branches?: readonly Sockets.Amendments.Branch[]
+		/** The line being read. NULL = main. */
+		branchId?: number | null
+		/** Whether Compare is already open. */
+		comparing?: boolean
+		onBranch?: (branchId: number | undefined) => void
+		onCompare?: () => void
+		/** The pool at this moment, said beside the moment while away from now. */
+		asOfCount?: { total: number; notYet: number } | null
+		/** One line that opens the whole bar in place, for the compact layout. */
+		compact?: boolean
 	}
 
 	let {
@@ -60,8 +91,49 @@
 		onOpenTimeline,
 		onMoment,
 		present = null,
-		onSetPresent
+		onSetPresent,
+		lorebookId,
+		branches = [],
+		branchId = null,
+		comparing = false,
+		onBranch,
+		onCompare,
+		asOfCount = null,
+		compact = false
 	}: Props = $props()
+
+	const uid = $props.id()
+
+	/** Whether the compact line is open. Held for this mount only. */
+	let expanded = $state(false)
+
+	/**
+	 * The bar's ground: the warning tint away from now, the card's ground
+	 * with its hairline at now.
+	 */
+	let ground = $derived(
+		moment
+			? "bg-warning-500/10 border-warning-500/40 border"
+			: "panel-edge bg-surface-100-900 border"
+	)
+
+	const readOnlyBook = bookReadOnly()
+
+	/** What a save does here, and what the pool and cast are, in one line. */
+	let momentSentence = $derived.by(() => {
+		if (!moment) return ""
+		// A shared (read-only) book saves nothing: no save sentence.
+		const parts: string[] = readOnlyBook.value ? [] : [MOMENT_SAVE_SENTENCE]
+		if (asOfCount)
+			parts.push(
+				`${asOfCountSentence(asOfCount.total, asOfCount.notYet)}.`
+			)
+		if (castNotYet && castNotYet.notYet > 0)
+			parts.push(
+				`${castMomentSentence(castNotYet.notYet, castNotYet.total)}.`
+			)
+		return parts.join(" ")
+	})
 
 	/** The date being read, when it is not now. */
 	let momentDate = $derived(parseMoment(moment))
@@ -210,131 +282,47 @@
 	}
 </script>
 
-{#snippet goToDateControl()}
-	{#if goOpen}
-		<form
-			class="flex w-full flex-wrap items-end gap-2"
-			data-lore-moment-go
-			onsubmit={(e) => {
-				e.preventDefault()
-				go()
-			}}
-		>
-			<label class="flex flex-col gap-1">
-				<span class="text-surface-600-400">Year</span>
-				<input
-					class="input input-sm w-20"
-					type="number"
-					step="1"
-					value={goYear}
-					oninput={(e) => (goYear = numberOf(e))}
-					aria-describedby="lore-moment-go-hint"
-				/>
-			</label>
-			<label class="flex flex-col gap-1">
-				<span class="text-surface-600-400">Month</span>
-				<input
-					class="input input-sm w-16"
-					type="number"
-					min="1"
-					step="1"
-					value={goMonth}
-					oninput={(e) => (goMonth = numberOf(e))}
-					aria-describedby="lore-moment-go-hint"
-				/>
-			</label>
-			<label class="flex flex-col gap-1">
-				<span class="text-surface-600-400">Day</span>
-				<input
-					class="input input-sm w-16"
-					type="number"
-					min="1"
-					step="1"
-					value={goDay}
-					oninput={(e) => (goDay = numberOf(e))}
-					aria-describedby="lore-moment-go-hint"
-				/>
-			</label>
-			<button type="submit" class="btn btn-sm preset-filled-primary-500">
-				Go
-			</button>
-			<button
-				type="button"
-				class="btn btn-sm preset-tonal-surface"
-				onclick={() => (goOpen = false)}
-			>
-				Cancel
-			</button>
-			<p
-				id="lore-moment-go-hint"
-				class="text-surface-700-300 w-full"
-				aria-live="polite"
-			>
-				{#if goProblem}
-					<span class="text-error-700-300" role="alert">{goProblem}</span>
-				{:else if "date" in goTyped}
-					Reads the book as of {formatDate(goTyped.date)}{goNote
-						? `, ${goNote}`
-						: ""}.
-				{:else}
-					Any date, whether or not something happened on it.
-				{/if}
-			</p>
-		</form>
-	{:else}
-		<button
-			type="button"
-			class="btn btn-sm preset-tonal-surface shrink-0"
-			onclick={openGoTo}
-			data-lore-moment-go-open
-		>
-			<Icons.CalendarSearch size={13} aria-hidden="true" />
-			Go to date…
-		</button>
+{#snippet branchChip(short: boolean)}
+	{#if lorebookId != null && onBranch}
+		<BranchChip
+			{lorebookId}
+			{branches}
+			{branchId}
+			{moment}
+			onSwitch={onBranch}
+			{onCompare}
+			{comparing}
+			{short}
+			placement="top-start"
+		/>
 	{/if}
 {/snippet}
 
-<div
-	class="panel-edge bg-surface-50-950 flex flex-wrap items-center gap-2 rounded-[10px] border px-3 py-2 text-xs"
-	data-lore-moment-bar
->
+{#snippet sentence(inRow: boolean)}
+	<!-- In the row it gives way to the scrubber and keeps one line; the whole
+	     sentence is its title. Opened from the compact line, it wraps. -->
+	{#if moment}
+		<span
+			class="text-surface-600-400 min-w-0 text-xs {inRow
+				? 'flex-[1_1_12rem] truncate'
+				: 'basis-full'}"
+			title={inRow ? momentSentence : undefined}
+			data-lore-moment-sentence
+		>
+			{#if inRow}<span aria-hidden="true">·</span>{/if}
+			{momentSentence}
+		</span>
+	{/if}
+{/snippet}
+
+{#snippet track()}
 	{#if ticks.length === 0}
-		<Icons.History
-			size={14}
-			class="text-surface-600-400 shrink-0"
-			aria-hidden="true"
-		/>
-		{#if moment}
-			<!-- A moment with no dated row on this line yet (Go to date): the
-			     reader still needs to see where they stand, and the way back. -->
-			<span class="chip preset-tonal-surface shrink-0" data-lore-moment-chip>
-				{momentChipLabel(moment)}
-			</span>
-		{:else}
+		{#if !moment}
 			<span class="text-surface-700-300 min-w-0 flex-1">
 				{MOMENT_EMPTY_LINE}
 			</span>
 		{/if}
-		{#if present}
-			<span class="text-surface-700-300 shrink-0" data-lore-moment-present>
-				{nowLabel}
-			</span>
-		{/if}
-		{#if moment}
-			<button
-				type="button"
-				class="btn btn-sm preset-tonal-surface shrink-0"
-				onclick={returnToNow}
-			>
-				Return to now
-			</button>
-		{/if}
-		{@render goToDateControl()}
 	{:else}
-		<span class="chip preset-tonal-surface shrink-0" data-lore-moment-chip>
-			{momentChipLabel(moment)}
-		</span>
-
 		<!-- The track is the control: a slider role over the tick values, so a
 		     reader on a keyboard moves by story date and not by pixels. -->
 		<div
@@ -345,14 +333,15 @@
 			aria-valuemin={ticks[0].value}
 			aria-valuemax={ticks[ticks.length - 1].value}
 			aria-valuenow={position ?? ticks[ticks.length - 1].value}
-			aria-valuetext={momentChipLabel(moment)}
+			aria-valuetext={momentLabel(moment)}
 			title={MOMENT_DRAG_HINT}
-			class="bg-surface-200-800 relative h-7 min-w-[8rem] flex-1 cursor-pointer rounded-full"
+			class="bg-surface-200-800 relative h-7 min-w-[8rem] flex-[2_1_8rem] cursor-pointer rounded-full"
 			onpointerdown={onPointerDown}
 			onpointermove={onPointerMove}
 			onpointerup={onPointerUp}
 			onpointercancel={onPointerUp}
 			onkeydown={onKeyDown}
+			data-lore-moment-track
 		>
 			<div
 				class="bg-surface-400-600 absolute top-1/2 right-2 left-2 h-px"
@@ -380,7 +369,8 @@
 				aria-hidden="true"
 			></span>
 		</div>
-
+	{/if}
+	{#if ticks.length > 0 || present}
 		<span
 			class="text-surface-700-300 shrink-0"
 			title={nowTitle}
@@ -391,51 +381,213 @@
 			{/if}
 			{nowLabel}
 		</span>
+	{/if}
+{/snippet}
 
-		{#if castNotYet && castNotYet.notYet > 0}
-			<span class="text-surface-700-300 shrink-0">
-				{castMomentSentence(castNotYet.notYet, castNotYet.total)}
-			</span>
-		{/if}
+{#snippet actions()}
+	{#if !goOpen}
+		<button
+			type="button"
+			class="btn btn-sm preset-tonal-surface shrink-0"
+			onclick={openGoTo}
+			data-lore-moment-go-open
+		>
+			<Icons.CalendarSearch size={13} aria-hidden="true" />
+			Go to date…
+		</button>
+	{/if}
+	{#if onOpenTimeline}
+		<button
+			type="button"
+			class="btn btn-sm hover:preset-tonal-surface text-surface-600-400 shrink-0"
+			onclick={onOpenTimeline}
+			data-lore-moment-open-timeline
+		>
+			<Icons.History size={13} aria-hidden="true" />
+			Open timeline
+		</button>
+	{/if}
+	{#if momentDate && onSetPresent}
+		<!-- Reading as of a date is looking; this stores it as where the
+		     story stands, on this line. -->
+		<button
+			type="button"
+			class="btn btn-sm hover:preset-tonal-surface text-surface-600-400 shrink-0"
+			title="Set the story's clock to {formatDate(momentDate)}"
+			onclick={() =>
+				onSetPresent({
+					year: momentDate.year,
+					month: momentDate.month ?? null,
+					day: momentDate.day ?? null
+				})}
+			data-lore-moment-set-present
+		>
+			<Icons.Clock size={13} aria-hidden="true" />
+			Make this the present
+		</button>
+	{/if}
+{/snippet}
 
-		{#if moment}
-			{#if momentDate && onSetPresent}
-				<!-- Reading as of a date is looking; this stores it as where
-				     the story stands, on this line. -->
-				<button
-					type="button"
-					class="btn btn-sm preset-tonal-surface shrink-0"
-					title="Set the story's clock to {formatDate(momentDate)}"
-					onclick={() =>
-						onSetPresent({
-							year: momentDate.year,
-							month: momentDate.month ?? null,
-							day: momentDate.day ?? null
-						})}
-				>
-					<Icons.Clock size={13} aria-hidden="true" />
-					Make this the present
-				</button>
-			{/if}
+{#snippet goToDateForm()}
+	{#if goOpen}
+		<form
+			class="flex basis-full flex-wrap items-end gap-2 pb-1.5"
+			data-lore-moment-go
+			onsubmit={(e) => {
+				e.preventDefault()
+				go()
+			}}
+		>
+			<label class="flex flex-col gap-1">
+				<span class="text-surface-600-400">Year</span>
+				<input
+					class="input input-sm w-20"
+					type="number"
+					step="1"
+					value={goYear}
+					oninput={(e) => (goYear = numberOf(e))}
+					aria-describedby="{uid}-go-hint"
+				/>
+			</label>
+			<label class="flex flex-col gap-1">
+				<span class="text-surface-600-400">Month</span>
+				<input
+					class="input input-sm w-16"
+					type="number"
+					min="1"
+					step="1"
+					value={goMonth}
+					oninput={(e) => (goMonth = numberOf(e))}
+					aria-describedby="{uid}-go-hint"
+				/>
+			</label>
+			<label class="flex flex-col gap-1">
+				<span class="text-surface-600-400">Day</span>
+				<input
+					class="input input-sm w-16"
+					type="number"
+					min="1"
+					step="1"
+					value={goDay}
+					oninput={(e) => (goDay = numberOf(e))}
+					aria-describedby="{uid}-go-hint"
+				/>
+			</label>
+			<button type="submit" class="btn btn-sm preset-filled-primary-500">
+				Go
+			</button>
 			<button
 				type="button"
-				class="btn btn-sm preset-tonal-surface shrink-0"
+				class="btn btn-sm preset-tonal-surface"
+				onclick={() => (goOpen = false)}
+			>
+				Cancel
+			</button>
+			<p
+				id="{uid}-go-hint"
+				class="text-surface-700-300 w-full"
+				aria-live="polite"
+			>
+				{#if goProblem}
+					<span class="text-error-700-300" role="alert">{goProblem}</span>
+				{:else if "date" in goTyped}
+					Reads the book as of {formatDate(goTyped.date)}{goNote
+						? `, ${goNote}`
+						: ""}.
+				{:else}
+					Any date, whether or not something happened on it.
+				{/if}
+			</p>
+		</form>
+	{/if}
+{/snippet}
+
+{#if compact}
+	<!-- One line — the line, the moment, the way back — that opens the rest
+	     in place. The toggle is its own button beside the branch chip, which
+	     is a button too and cannot sit inside it. -->
+	<div
+		class="{ground} flex flex-col rounded-[10px] px-3 text-xs"
+		role="group"
+		aria-label="Moment"
+		data-lore-moment-bar
+		data-lore-moment-at={moment ? "moment" : "now"}
+		data-compact
+	>
+		<div class="flex min-h-10 items-center gap-2">
+			{@render branchChip(true)}
+			<button
+				type="button"
+				class="flex min-h-10 min-w-0 flex-1 items-center gap-2 text-left"
+				aria-expanded={expanded}
+				aria-controls="{uid}-more"
+				onclick={() => (expanded = !expanded)}
+				data-lore-moment-toggle
+			>
+				<span
+					class="min-w-0 flex-1 truncate text-[13px] font-medium"
+					data-lore-moment-words
+				>
+					{momentWords(moment)}
+				</span>
+				<Icons.ChevronDown
+					size={14}
+					class="text-surface-600-400 shrink-0 transition-transform {expanded
+						? 'rotate-180'
+						: ''}"
+					aria-hidden="true"
+				/>
+			</button>
+			{#if moment}
+				<button
+					type="button"
+					class="text-primary-700-300 shrink-0 text-xs font-medium hover:underline"
+					onclick={returnToNow}
+					data-lore-moment-return
+				>
+					Return to now
+				</button>
+			{/if}
+		</div>
+		<div
+			id="{uid}-more"
+			class="{expanded
+				? 'flex'
+				: 'hidden'} flex-wrap items-center gap-x-3 gap-y-2 pb-2"
+		>
+			{@render sentence(false)}
+			{@render track()}
+			{@render actions()}
+			{@render goToDateForm()}
+		</div>
+	</div>
+{:else}
+	<div
+		class="{ground} flex min-h-11 flex-wrap items-center gap-x-3 gap-y-2 rounded-[10px] px-3 py-1.5 text-xs"
+		role="group"
+		aria-label="Moment"
+		data-lore-moment-bar
+		data-lore-moment-at={moment ? "moment" : "now"}
+	>
+		{@render branchChip(false)}
+		<span class="shrink-0 text-[13px] font-medium" data-lore-moment-words>
+			{momentWords(moment)}
+		</span>
+		{@render sentence(true)}
+		{@render track()}
+		{@render actions()}
+		{#if moment}
+			<!-- The one way back. Filled while away from now: it is the act
+			     this bar exists to offer then. -->
+			<button
+				type="button"
+				class="btn btn-sm preset-filled-primary-500 shrink-0"
 				onclick={returnToNow}
+				data-lore-moment-return
 			>
 				Return to now
 			</button>
 		{/if}
-
-		{#if onOpenTimeline}
-			<button
-				type="button"
-				class="btn btn-sm preset-tonal-surface shrink-0"
-				onclick={onOpenTimeline}
-			>
-				<Icons.History size={13} aria-hidden="true" />
-				Open timeline
-			</button>
-		{/if}
-		{@render goToDateControl()}
-	{/if}
-</div>
+		{@render goToDateForm()}
+	</div>
+{/if}

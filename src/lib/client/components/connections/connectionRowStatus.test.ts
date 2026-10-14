@@ -1,7 +1,14 @@
 import { describe, expect, test } from "vitest"
 import {
+	CONNECTION_STATE_DOT,
+	CONNECTION_STATE_LABEL,
+	CONNECTION_STATE_TEXT,
+	CONNECTION_STATE_TONE,
+	CONNECTION_STATES,
 	connectionRowStatus,
 	hostOf,
+	needsAttention,
+	rowDefaults,
 	stateTone,
 	type RowConnection
 } from "./connectionRowStatus"
@@ -118,6 +125,101 @@ describe("an API host", () => {
 })
 
 /**
+ * Plan §A (walk 2026-10-06): OpenRouter read green **Ready · 503 models**
+ * beside the strip's "Sessions can't reply yet". A row that serves chat while
+ * chat has no model anywhere is waiting on the person's pick.
+ */
+describe("a listed host while chat is unset", () => {
+	const listed: RowConnection = {
+		...base,
+		id: 7,
+		type: "openai",
+		preset: "openrouter",
+		models: [
+			model({ satisfiableCapabilities: ["text->text"] }),
+			model({ name: "claude", satisfiableCapabilities: ["text->text"] })
+		],
+		modelsSync: { at: "2026-10-06T10:00:00Z", error: null }
+	}
+
+	test("is gold Pick a model, with Choose, and keeps its count", () => {
+		const status = connectionRowStatus(listed, {
+			kind: "api",
+			timeAgo,
+			defaults: { chatSet: false }
+		})
+		expect(status).toEqual({
+			state: "unfinished",
+			label: "Pick a model",
+			detail: "openrouter.ai/api/v1",
+			metric: "2 models",
+			action: {
+				verb: "choose",
+				label: "Choose",
+				icon: "ArrowRight",
+				emphasis: "tonal"
+			}
+		})
+		expect(CONNECTION_STATE_TONE[status.state]).toBe("primary")
+		expect(needsAttention(status.state)).toBe(true)
+	})
+
+	test("is Ready once chat is set, here or elsewhere", () => {
+		expect(
+			connectionRowStatus(listed, {
+				kind: "api",
+				defaults: { chatSet: true }
+			}).label
+		).toBe("Ready")
+	})
+
+	test("a host whose models can't chat is plainly Ready", () => {
+		const images = {
+			...listed,
+			models: [model({ satisfiableCapabilities: ["text->image"] })]
+		}
+		expect(
+			connectionRowStatus(images, {
+				kind: "api",
+				defaults: { chatSet: false }
+			}).label
+		).toBe("Ready")
+	})
+
+	test("an unanswered defaults fact claims nothing", () => {
+		expect(connectionRowStatus(listed, { kind: "api" }).label).toBe("Ready")
+	})
+
+	test("an earlier unfinished state still wins — the key comes first", () => {
+		const status = connectionRowStatus(
+			{ ...listed, hasCredential: false },
+			{ kind: "api", defaults: { chatSet: false } }
+		)
+		expect(status.label).toBe("Needs a key")
+	})
+})
+
+describe("rowDefaults", () => {
+	const entries = [
+		{ capability: "text->text", set: false, connection: undefined },
+		{ capability: "text->embedding", set: true, connection: { id: 7 } },
+		// An endpoint-only registration resolves as unset (§10).
+		{ capability: "text->image", set: false, connection: undefined }
+	]
+
+	test("reads resolved pairs only: another job's default doesn't answer chat", () => {
+		expect(rowDefaults(entries)).toEqual({ chatSet: false })
+	})
+
+	test("chat set on any connection answers chat", () => {
+		const set = [
+			{ capability: "text->text", set: true, connection: { id: 1 } }
+		]
+		expect(rowDefaults(set)).toEqual({ chatSet: true })
+	})
+})
+
+/**
  * The regression this whole split exists for: on a fresh install two of four
  * rows were red with Fix buttons because two connections had no API key yet.
  */
@@ -133,7 +235,8 @@ describe("a cloud connection with no key yet", () => {
 	test("is unfinished and gold, never broken and never red", () => {
 		const status = connectionRowStatus(keyless, { kind: "api", timeAgo })
 		expect(status.state).toBe("unfinished")
-		expect(stateTone(status.state)).toBe("primary")
+		expect(CONNECTION_STATE_TONE[status.state]).toBe("primary")
+		expect(needsAttention(status.state)).toBe(true)
 		expect(status.label).toBe("Needs a key")
 	})
 
@@ -246,7 +349,8 @@ describe("a managed KoboldCPP", () => {
 			kcpp: { run: "stopped" } as any
 		})
 		expect(status.state).toBe("idle")
-		expect(stateTone(status.state)).toBe("quiet")
+		expect(CONNECTION_STATE_TONE[status.state]).toBe("surface")
+		expect(needsAttention(status.state)).toBe(false)
 		expect(status.action?.verb).toBe("start")
 	})
 
@@ -306,6 +410,47 @@ describe("an Ollama", () => {
 			"idle"
 		)
 	})
+
+	test("a failed listing is broken, as an API row's is", () => {
+		const status = connectionRowStatus(
+			{
+				...ollama,
+				models: [model()],
+				modelsSync: { at: null, error: "connect ECONNREFUSED" }
+			},
+			{ kind: "ollama", ollama: { reachable: true } as any }
+		)
+		expect(status.state).toBe("broken")
+		expect(status.label).toBe("Not working")
+		expect(status.detail).toBe("connect ECONNREFUSED")
+		expect(status.action?.verb).toBe("fix")
+	})
+
+	test("serving chat while chat is unset anywhere asks for a pick", () => {
+		const chat = model({ satisfiableCapabilities: ["text->text"] })
+		const status = connectionRowStatus(
+			{ ...ollama, models: [chat] },
+			{
+				kind: "ollama",
+				ollama: { reachable: true } as any,
+				defaults: { chatSet: false }
+			}
+		)
+		expect(status.state).toBe("unfinished")
+		expect(status.label).toBe("Pick a model")
+		expect(status.action?.verb).toBe("choose")
+		// Once chat is answered somewhere, it is Running again.
+		expect(
+			connectionRowStatus(
+				{ ...ollama, models: [chat] },
+				{
+					kind: "ollama",
+					ollama: { reachable: true } as any,
+					defaults: { chatSet: true }
+				}
+			).label
+		).toBe("Running")
+	})
 })
 
 describe("a local ONNX lane", () => {
@@ -321,7 +466,7 @@ describe("a local ONNX lane", () => {
 			{ kind: "onnx-embeddings", lane: {} as any }
 		)
 		expect(status.state).toBe("unfinished")
-		expect(status.label).toBe("Nothing active")
+		expect(status.label).toBe("Loadout unfilled")
 	})
 
 	test("loaded reads its idle time in the metric slot", () => {
@@ -353,6 +498,58 @@ describe("a local ONNX lane", () => {
 		expect(status.metric).toBe("42%")
 	})
 
+	test("a lane held by ANOTHER connection is not this row's", () => {
+		// Same model identity on both endpoints: without the connection check
+		// this row read the other's star as its own "Active".
+		const status = connectionRowStatus(
+			{ ...onnx, id: 1, models: [local("on_disk")] },
+			{
+				kind: "onnx-embeddings",
+				lane: {
+					modelId: "bge-small",
+					connectionId: 2,
+					loaded: true,
+					lastUsedAt: null
+				} as any
+			}
+		)
+		expect(status.state).toBe("idle")
+		expect(status.label).toBe("Not in use")
+		expect(status.action).toBeNull()
+	})
+
+	test("another connection's star never says Not downloaded here", () => {
+		const status = connectionRowStatus(
+			{ ...onnx, id: 1, models: [local("not_downloaded")] },
+			{
+				kind: "onnx-embeddings",
+				lane: {
+					modelId: "bge-small",
+					connectionId: 2,
+					loaded: false
+				} as any
+			}
+		)
+		expect(status.label).not.toBe("Not downloaded")
+		expect(status.state).toBe("idle")
+	})
+
+	test("a lane held by THIS connection reads as before", () => {
+		const status = connectionRowStatus(
+			{ ...onnx, id: 1, models: [local("on_disk")] },
+			{
+				kind: "onnx-embeddings",
+				lane: {
+					modelId: "bge-small",
+					connectionId: 1,
+					loaded: false
+				} as any
+			}
+		)
+		expect(status.state).toBe("ready")
+		expect(status.label).toBe("In use")
+	})
+
 	test("an active model whose files are gone is unfinished", () => {
 		const status = connectionRowStatus(
 			{ ...onnx, models: [local("not_downloaded")] },
@@ -375,8 +572,51 @@ describe("a sync in flight", () => {
 	})
 })
 
-describe("stateTone", () => {
-	test("maps each state to exactly one role, and only broken is error", () => {
+describe("the connection state scale", () => {
+	test("five states, each in exactly one role, and only broken is error", () => {
+		expect(CONNECTION_STATES).toEqual([
+			"ready",
+			"idle",
+			"unfinished",
+			"busy",
+			"broken"
+		])
+		expect(CONNECTION_STATE_TONE).toEqual({
+			ready: "success",
+			idle: "surface",
+			unfinished: "primary",
+			busy: "warning",
+			broken: "error"
+		})
+		const errors = CONNECTION_STATES.filter(
+			(s) => CONNECTION_STATE_TONE[s] === "error"
+		)
+		expect(errors).toEqual(["broken"])
+	})
+
+	test("every state has a word, a dot and a text tone in its own role", () => {
+		for (const s of CONNECTION_STATES) {
+			expect(CONNECTION_STATE_LABEL[s]).toMatch(/^[A-Z]/)
+			const role = CONNECTION_STATE_TONE[s]
+			expect(CONNECTION_STATE_DOT[s]).toContain(`bg-${role}-`)
+			expect(CONNECTION_STATE_TEXT[s]).toContain(`text-${role}-`)
+		}
+		// Something in flight moves; nothing else does.
+		expect(
+			CONNECTION_STATES.filter((s) =>
+				CONNECTION_STATE_DOT[s].includes("animate-pulse")
+			)
+		).toEqual(["busy"])
+	})
+
+	test("needs attention is red and gold, and nothing else", () => {
+		expect(CONNECTION_STATES.filter(needsAttention)).toEqual([
+			"unfinished",
+			"broken"
+		])
+	})
+
+	test("⏳ stateTone says the same roles in its transitional words", () => {
 		expect(stateTone("ready")).toBe("ok")
 		expect(stateTone("idle")).toBe("quiet")
 		expect(stateTone("unfinished")).toBe("primary")

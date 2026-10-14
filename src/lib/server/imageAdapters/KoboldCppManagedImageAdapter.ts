@@ -31,7 +31,7 @@
  * time". Nothing here asserts anything about that, which is why a test can pass
  * against a process currently holding an LLM.
  */
-import a1111 from "./A1111Adapter"
+import a1111, { KOBOLDCPP_SHEET } from "./A1111Adapter"
 import type { ImageAdapterExports } from "./BaseImageAdapter"
 import type { SettingsSchema } from "@serene-pub/sdk"
 import { db } from "$lib/server/db"
@@ -259,7 +259,10 @@ const exports: ImageAdapterExports = {
 	Adapter: a1111.Adapter,
 	listModels,
 	testConnection,
-	capabilities: a1111.capabilities,
+	// KoboldCPP's sheet: one picture per call, and reference images only with
+	// an edit model loaded — read off this row's model by the shared rule.
+	sheet: KOBOLDCPP_SHEET,
+	sheetFor: a1111.sheetFor,
 	profileSchema: PROFILE_SCHEMA,
 	profileDefaults: PROFILE_DEFAULTS
 }

@@ -64,7 +64,8 @@ export function errorPlace(error: CompileErrorLike): string {
 
 /** One line of the errors pane. */
 export interface ErrorRow {
-	kind: "compile" | "runtime"
+	/** A compile error, a runtime error, or a compile warning (said, not fatal: it still compiles). */
+	kind: "compile" | "runtime" | "warning"
 	/** `Stats.svelte:12:5`, or empty for a runtime error. */
 	place: string
 	text: string
@@ -73,11 +74,16 @@ export interface ErrorRow {
 	stack?: string
 }
 
-/** Every error the pane lists: compile errors first, in the compiler's order, then runtime errors. */
+/**
+ * Every row the pane lists: compile errors first, in the compiler's order,
+ * then runtime errors, then compile warnings — placed like errors, so one
+ * with a place in a file is a jump too.
+ */
 export function errorRows(
 	compile: readonly CompileErrorLike[],
 	runtime: readonly { message: string; stack?: string }[],
-	files: Readonly<Record<string, string>>
+	files: Readonly<Record<string, string>>,
+	warnings: readonly CompileErrorLike[] = []
 ): ErrorRow[] {
 	return [
 		...compile.map((e) => ({
@@ -86,6 +92,12 @@ export function errorRows(
 			text: e.text,
 			location: errorLocation(e, files)
 		})),
-		...runtime.map((e) => ({ kind: "runtime" as const, place: "", text: e.message, location: null, stack: e.stack }))
+		...runtime.map((e) => ({ kind: "runtime" as const, place: "", text: e.message, location: null, stack: e.stack })),
+		...warnings.map((e) => ({
+			kind: "warning" as const,
+			place: errorPlace(e),
+			text: e.text,
+			location: errorLocation(e, files)
+		}))
 	]
 }

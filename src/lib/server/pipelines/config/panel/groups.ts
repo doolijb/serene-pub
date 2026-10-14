@@ -30,12 +30,20 @@
 
 import { type I18n } from "@serene-pub/sdk"
 import { i18nTextIn } from "$lib/shared/i18n/i18nText"
+import { humanizeCamel, humanizeTypeId } from "$lib/server/pipelines/config/panel/declarations"
 import type {
 	ConfigOption,
 	Decl,
 	SettingsGroup,
 	SettingsGroupStep
 } from "$lib/server/pipelines/config/panel/types"
+import {
+	flowLinesOf,
+	stepFlowsOf,
+	type FlowDefinition,
+	type FlowEdge,
+	type FlowGraph
+} from "$lib/server/pipelines/config/panel/flows"
 
 /** The slice of a stored document node the grouping reads. */
 export interface GroupingNode {
@@ -46,6 +54,9 @@ export interface GroupingNode {
 	clauseId?: string | null
 	/** The node kind — an `oracle` that borrows a call's model joins that call. */
 	kind?: string
+	/** The node definition it places — what the *Receives* / *Carries out* lines read ports from. */
+	definitionId?: string
+	definitionVersion?: number
 	expose?: { status?: I18n; label?: I18n; purpose?: I18n } | null
 }
 
@@ -271,10 +282,17 @@ export function settingsGroupsOf(args: {
 	placed: readonly PlacedOption[]
 	decls: readonly Pick<Decl, "nodeKey" | "nodeKind" | "control" | "typeLabel">[]
 	nodes: readonly GroupingNode[]
-	edges: readonly { from: string; to: string }[]
+	edges: readonly FlowEdge[]
 	language?: string
+	/**
+	 * Each node's registry row, by node — given, the groups and their steps
+	 * carry `receives` / `carriesOut` (and a step its `effect`), `flows.ts`.
+	 * The admin view passes it; a member's view does not, so it carries no
+	 * wiring.
+	 */
+	definitionOf?: (node: GroupingNode) => FlowDefinition | undefined
 }): SettingsGroup[] {
-	const { placed, decls, nodes, edges, language } = args
+	const { placed, decls, nodes, edges, language, definitionOf } = args
 	const modelCalls = modelCallsOf(decls)
 	const plan = planGroups({ nodes, edges, modelCalls })
 	const byKey = new Map(nodes.map((n) => [n.key, n]))
@@ -310,19 +328,30 @@ export function settingsGroupsOf(args: {
 				advanced: []
 			}
 
+	const loadouts = new Map<Draft, ConfigOption[]>()
 	const prompts = new Map<Draft, ConfigOption[]>()
 	const models = new Map<Draft, ConfigOption[]>()
 	const sources = new Map<Draft, ConfigOption[]>()
 	const push = (m: Map<Draft, ConfigOption[]>, g: Draft, o: ConfigOption) =>
 		m.set(g, [...(m.get(g) ?? []), o])
 	const steps = new Map<Draft, Map<string, SettingsGroupStep>>()
+	/** Each Advanced step's address (a node key or a clause id), by step key. */
+	const addressOf = new Map<string, string>()
+	/** Each address's heading, as its options carry it. */
+	const headingByAddress = new Map<string, string>()
 
 	for (const { d, option } of placed) {
+		if (!headingByAddress.has(d.nodeKey)) headingByAddress.set(d.nodeKey, option.step.heading)
 		const at = plan.ownerOf(d.nodeKey)
 		const g = at >= 0 ? drafts[at]! : pipeline
 		const isSwitch = d.slot === "settings" && d.path === "enabled"
 		if (isSwitch && d.nodeKey === g.modelCall) g.enabled = option
-		else if (d.control === "prompts-ref" || d.nodeKind === "envoy") push(prompts, g, option)
+		// The Loadout row leads its model call's group (I12, §14 item 4) —
+		// only a model call's own: a step running on another call's model
+		// takes that call's loadout, so a second picker would change nothing.
+		else if (d.control === "loadout-ref") {
+			if (modelCalls.includes(d.nodeKey)) push(loadouts, g, option)
+		} else if (d.control === "prompts-ref" || d.nodeKind === "envoy") push(prompts, g, option)
 		else if (MODEL_CONTROLS.has(d.control)) push(models, g, option)
 		else if (isSwitch && d.nodeKind === "query")
 			// A source's switch reads by the step it turns off (*World lore*),
@@ -339,17 +368,64 @@ export function settingsGroupsOf(args: {
 			}
 			step.options.push(option)
 			bySteps.set(key, step)
+			addressOf.set(key, d.nodeKey)
 		}
+	}
+
+	const graph: FlowGraph | undefined = definitionOf
+		? {
+				nodes,
+				edges,
+				definitionOf: (n) => {
+					const node = byKey.get(n.key)
+					return node ? definitionOf(node) : undefined
+				},
+				headingOf: (address) => {
+					const known = headingByAddress.get(address)
+					if (known) return known
+					const node = byKey.get(address)
+					if (!node) return humanizeCamel(address)
+					const label = i18nTextIn(node.expose?.label, language)
+					return label || definitionOf(node)?.name || humanizeTypeId(node.definitionId ?? address)
+				}
+			}
+		: undefined
+	/** A group's members: the node keys and clause ids the plan placed in it. */
+	const membersOf = (g: Draft): Set<string> => {
+		const at = g.kind === "pipeline" || !plan.calls.length ? -1 : drafts.indexOf(g)
+		return new Set(
+			[...nodes.map((n) => n.key), ...plan.clauseMembers.keys()].filter(
+				(a) => plan.ownerOf(a) === at
+			)
+		)
 	}
 
 	const out: SettingsGroup[] = []
 	for (const g of [...drafts, pipeline]) {
-		const front = [...(prompts.get(g) ?? []), ...(models.get(g) ?? []), ...(sources.get(g) ?? [])]
-		const advanced = [...(steps.get(g)?.values() ?? [])]
+		const front = [
+			...(loadouts.get(g) ?? []),
+			...(prompts.get(g) ?? []),
+			...(models.get(g) ?? []),
+			...(sources.get(g) ?? [])
+		]
+		const advanced = [...(steps.get(g)?.values() ?? [])].map((s) => {
+			const address = addressOf.get(s.key)
+			if (!graph || !address) return s
+			const lines = stepFlowsOf(graph, address)
+			return {
+				...s,
+				...(lines.receives.length ? { receives: lines.receives } : {}),
+				...(lines.carriesOut.length ? { carriesOut: lines.carriesOut } : {}),
+				...(lines.effect ? { effect: lines.effect } : {})
+			}
+		})
 		if (!front.length && !advanced.length && !g.enabled) continue
 		const { modelCall: _modelCall, ...rest } = g
+		const lines = graph ? flowLinesOf(graph, membersOf(g)) : undefined
 		out.push({
 			...rest,
+			...(lines?.receives.length ? { receives: lines.receives } : {}),
+			...(lines?.carriesOut.length ? { carriesOut: lines.carriesOut } : {}),
 			front,
 			advanced,
 			changedInAdvanced: advanced.reduce(

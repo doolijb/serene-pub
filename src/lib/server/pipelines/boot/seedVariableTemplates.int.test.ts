@@ -27,6 +27,7 @@ import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import { seedVariableTemplates } from "$lib/server/pipelines/boot/seedVariableTemplates"
+import { coreObjectLayouts } from "$lib/server/pipelines/entities/objectVariableLayouts"
 import {
 	SHIPPED_VARIABLE_TEMPLATES,
 	seedKeyFor
@@ -93,10 +94,12 @@ describe("a renamed shipped layout is an update, not a second row", () => {
 			.select()
 			.from(schema.pipelineVariableTemplates)
 			.where(isNotNull(schema.pipelineVariableTemplates.seedKey))
-		expect(seeded.length).toBe(SHIPPED_VARIABLE_TEMPLATES.length)
+		// The hand-written rows, plus core's automatic object layouts
+		// (`core:var/likenesses@1` is the first, 2026-10-12).
+		const expected =
+			SHIPPED_VARIABLE_TEMPLATES.length + coreObjectLayouts().length
+		expect(seeded.length).toBe(expected)
 		// One row per (variableId, variant), which is what the key now asserts.
-		expect(new Set(seeded.map((r: any) => r.seedKey)).size).toBe(
-			SHIPPED_VARIABLE_TEMPLATES.length
-		)
+		expect(new Set(seeded.map((r: any) => r.seedKey)).size).toBe(expected)
 	})
 })

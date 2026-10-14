@@ -9,7 +9,9 @@
  * `$derived` — so an effect in the child that reads the prop tracks the whole
  * object and re-runs per token, though the id never moved. SessionWorkflowTab
  * re-declared its interest keys and re-asked `lorebooks:storyTime` and
- * `entries:list` (a DB query per token); RunProgressCard re-declared its two;
+ * `entries:list` (a DB query per token) — it is gone since the Chronicle
+ * widget (W3), which asks the page on request and holds no effect on the
+ * session; RunProgressCard re-declared its two;
  * RagNotice re-asked `vectorization:checkRagStatus`; SessionRetrievalPreview
  * cleared the answer on screen.
  *
@@ -40,7 +42,6 @@ vi.mock("$lib/client/sockets/interest.svelte", async (importOriginal) => {
 
 import { setSocket } from "$lib/client/sockets/socketInstance"
 import { _resetInterestForTests, setInterestUser } from "$lib/client/sockets/interest.svelte"
-import SessionWorkflowTab from "./SessionWorkflowTab.svelte"
 import RagNotice from "./RagNotice.svelte"
 import RunProgressCard from "../pipelines/RunProgressCard.svelte"
 import SessionRetrievalPreview from "../pipelines/workspace/SessionRetrievalPreview.svelte"
@@ -144,69 +145,6 @@ const sent = (event: string) => client.emits.filter((e) => e.event === event).le
 const frames = () => client.emits.length
 
 describe("a streamed reply asks the server nothing the ids did not change", () => {
-	test("SessionWorkflowTab: storyTime / entries:list / lorebooks:lines and its eight keys, once", () => {
-		place(SessionWorkflowTab, {
-			// The page's `lorebookId={session.lorebookId}`, as compiled.
-			get lorebookId() {
-				return session.lorebookId
-			},
-			get branchId() {
-				return session.lorebookBranchId
-			},
-			sceneList: [],
-			onOpenEntry: () => {}
-		})
-		const before = {
-			storyTime: sent("lorebooks:storyTime"),
-			entriesList: sent("entries:list"),
-			lines: sent("lorebooks:lines"),
-			declares: declared.length,
-			frames: frames()
-		}
-		expect(before.storyTime).toBe(1)
-		expect(before.entriesList).toBe(1)
-		// The lines alone (plan B6), never the whole amendments list.
-		expect(before.lines).toBe(1)
-		expect(sent("amendments:list")).toBe(0)
-		// The story time family's three and the lines (`BookTime.listen`),
-		// and the four entry keys.
-		expect(before.declares).toBe(8)
-
-		streamReply()
-
-		expect({
-			storyTime: sent("lorebooks:storyTime") - before.storyTime,
-			entriesList: sent("entries:list") - before.entriesList,
-			lines: sent("lorebooks:lines") - before.lines,
-			redeclares: declared.length - before.declares,
-			frames: frames() - before.frames
-		}).toEqual({ storyTime: 0, entriesList: 0, lines: 0, redeclares: 0, frames: 0 })
-	})
-
-	test("SessionWorkflowTab: a real book change still re-keys and re-asks, once", () => {
-		place(SessionWorkflowTab, {
-			get lorebookId() {
-				return session.lorebookId
-			},
-			get branchId() {
-				return session.lorebookBranchId
-			},
-			sceneList: [],
-			onOpenEntry: () => {}
-		})
-		streamReply()
-		const storyTime = sent("lorebooks:storyTime")
-		const entriesList = sent("entries:list")
-
-		session = { ...session, lorebookId: 4 }
-		flushSync()
-
-		expect(sent("lorebooks:storyTime") - storyTime).toBe(1)
-		expect(sent("entries:list") - entriesList).toBe(1)
-		expect(client.emits.at(-1)).toMatchObject({ event: "entries:list", payload: { lorebookId: 4 } })
-		expect(declared).toContain("entries:list#4")
-	})
-
 	test("RunProgressCard: its two scoped keys are declared once", () => {
 		place(RunProgressCard, {
 			get sessionId() {
@@ -251,7 +189,7 @@ describe("a streamed reply asks the server nothing the ids did not change", () =
 			disabledReason: null
 		})
 		const ask = [...document.querySelectorAll("button")].find((b) =>
-			b.textContent?.includes("What would fire now")
+			b.textContent?.includes("Preview lore for my draft")
 		)!
 		ask.click()
 		flushSync()

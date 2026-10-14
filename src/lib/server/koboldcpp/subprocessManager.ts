@@ -8,6 +8,7 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { pingKoboldCPP } from "./kcppHttp"
 import { pollUntilReady } from "./pollUntilReady"
+import { forgetResidency } from "./modelManager"
 
 export type SubprocessStatus =
 	| "stopped"
@@ -76,8 +77,18 @@ interface ManagerState {
 	subprocessTimeoutSecs: number
 	lastBinaryDir: string | null
 	healthCheckFailures: number
-	healthCheckSuspended: boolean
+	// A count, not a flag: concurrent preflights each suspend around their own
+	// model load, and the first to finish must not resume it under the others.
+	healthCheckSuspends: number
 	startingPromise: Promise<void> | null
+	/**
+	 * A person pressed Stop. Set by `stop()`, cleared when the next start
+	 * begins. While it is set, the process ending is the stop's doing: an
+	 * in-flight start that sees its child die ends as `stopped` with no
+	 * error, rather than reporting the kill it asked for as a crash.
+	 * Optional because a bag made by an older evaluation (dev HMR) lacks it.
+	 */
+	stopRequested?: boolean
 }
 
 const globalScope = globalThis as unknown as {
@@ -100,8 +111,9 @@ const shared: ManagerState = (globalScope.__SERENE_PUB_KCPP_SUBPROCESS__ ??= {
 	subprocessTimeoutSecs: 1800,
 	lastBinaryDir: null,
 	healthCheckFailures: 0,
-	healthCheckSuspended: false,
-	startingPromise: null
+	healthCheckSuspends: 0,
+	startingPromise: null,
+	stopRequested: false
 })
 
 const state = shared.state
@@ -409,7 +421,10 @@ export function setSubprocessTimeout(secs: number) {
 	if (state.status === "running") pingActivity()
 }
 
-async function waitForReady(port: number, proc: ChildProcess): Promise<void> {
+async function waitForReady(
+	port: number,
+	isAlive: () => boolean
+): Promise<void> {
 	await pollUntilReady(
 		async () =>
 			(await pingKoboldCPP(`http://localhost:${port}`, 2000))
@@ -418,10 +433,11 @@ async function waitForReady(port: number, proc: ChildProcess): Promise<void> {
 		{
 			// The bare --nomodel bootstrap has no model to load, so it should
 			// come up quickly on any machine — but as long as the process we
-			// just spawned hasn't actually exited, keep waiting rather than
-			// guessing a fixed timeout for how slow "quickly" can be on a
-			// loaded/slow disk system.
-			isAlive: () => proc.exitCode === null && !proc.killed,
+			// just spawned hasn't actually exited (or failed to spawn at all —
+			// see doStart's spawnError), keep waiting rather than guessing a
+			// fixed timeout for how slow "quickly" can be on a loaded/slow disk
+			// system.
+			isAlive,
 			hardTimeoutMs: 10 * 60_000,
 			label: "KoboldCPP startup",
 			onTick: (elapsed) =>
@@ -447,20 +463,25 @@ const HEALTH_CHECK_FAILURE_THRESHOLD = 3
  * (a model load). Unlike the failure-threshold tolerance above, this has no
  * time limit — a model that takes several minutes to load on slow hardware
  * still won't get its process torn out from under it. Always pair with
- * resumeHealthCheck() in a finally block. */
+ * resumeHealthCheck() in a finally block. Counted: checking resumes when the
+ * LAST suspender resumes, not the first. */
 export function suspendHealthCheck() {
-	shared.healthCheckSuspended = true
+	// `?? 0`: a bag made by an older evaluation (dev HMR) has no counter yet.
+	shared.healthCheckSuspends = (shared.healthCheckSuspends ?? 0) + 1
 }
 
 export function resumeHealthCheck() {
-	shared.healthCheckSuspended = false
-	shared.healthCheckFailures = 0
+	shared.healthCheckSuspends = Math.max(
+		0,
+		(shared.healthCheckSuspends ?? 0) - 1
+	)
+	if (shared.healthCheckSuspends === 0) shared.healthCheckFailures = 0
 }
 
 function startHealthCheck(port: number) {
 	stopHealthCheck()
 	shared.healthInterval = setInterval(async () => {
-		if (state.status !== "running" || shared.healthCheckSuspended) return
+		if (state.status !== "running" || shared.healthCheckSuspends > 0) return
 		const ok = await pingKoboldCPP(`http://localhost:${port}`, 5000)
 		if (ok) {
 			shared.healthCheckFailures = 0
@@ -476,6 +497,7 @@ function startHealthCheck(port: number) {
 			state.lastError = "Health check failed — process may have crashed"
 			state.process = null
 			state.pid = null
+			forgetResidency()
 			emitStatus()
 		}
 	}, 30_000)
@@ -500,6 +522,7 @@ function failStart(message: string): never {
 	state.lastError = message
 	state.process = null
 	state.pid = null
+	forgetResidency()
 	emitStatus()
 	throw new Error(message)
 }
@@ -524,8 +547,27 @@ export async function start(): Promise<void> {
 	}
 }
 
+// ETXTBSY is "the file is still open for writing": a binary exec'ed the moment
+// its download finished. The download now waits for its file to close, so this
+// is a backstop for whatever else holds the file a moment longer (a virus
+// scanner, a slow filesystem) — a few short tries, never a long wait.
+const SPAWN_TEXT_BUSY_RETRIES = 3
+const SPAWN_RETRY_DELAY_MS = 250
+
 async function doStart(): Promise<void> {
-	if (state.status === "starting") return
+	// A new attempt: any earlier Stop has been honoured. Cleared here, on the
+	// synchronous entry, so a Stop pressed during the awaits below is seen.
+	shared.stopRequested = false
+	if (state.status === "starting") {
+		// start() has already handed any in-flight attempt to its caller, so a
+		// "starting" that reaches here is in flight only if it holds a process.
+		// Without one it is a leftover from an attempt that died between
+		// setting it and spawning — returning on it made every later start() a
+		// silent no-op, and preflight then "started" a process that did not
+		// exist. Respawn instead.
+		if (state.process) return
+		state.status = "stopped"
+	}
 	if (state.status === "running") {
 		// Only a process we spawned ourselves (a live state.process handle) is
 		// trustworthy without re-pinging — a real crash gets caught by its
@@ -604,9 +646,17 @@ async function doStart(): Promise<void> {
 		return
 	}
 
+	// Stopped during the awaits above (settings, binary check, adoption
+	// probe): stop() found nothing to kill and settled "stopped" — spawning
+	// now would start the process it was asked to stop.
+	if (shared.stopRequested) throw new Error("KoboldCPP start was cancelled")
+
 	state.status = "starting"
 	state.lastError = null
 	state.isExternal = false
+	// A fresh process is spawned with --nomodel: whatever the last one held,
+	// this one holds nothing until a load says otherwise.
+	forgetResidency()
 	emitStatus()
 
 	// --admindir must be explicit: koboldcpp's admin reload/list-options endpoints jail
@@ -647,20 +697,50 @@ async function doStart(): Promise<void> {
 		// generate anyway.
 	]
 
-	// detached: true makes koboldcpp the leader of its own process group (setsid),
-	// so we can reliably kill it AND any children it spawns (its PyInstaller
-	// bootstrap process forks a real worker process) with a single group-kill
-	// via a negative PID, instead of leaving pieces behind.
-	const proc = spawn(binaryPath, args, {
-		stdio: ["ignore", "pipe", "pipe"],
-		detached: true
-	})
+	// Node THROWS most spawn failures synchronously; only EACCES, EAGAIN,
+	// EMFILE, ENFILE and ENOENT arrive as the child's async "error" event
+	// instead. Uncaught, a throw here (ETXTBSY, seen live 2026-10-05) left the
+	// status at "starting" with no process and no lastError — for good, see
+	// the stale-"starting" check above. Every way out of this loop is a child,
+	// failStart(), or a Stop pressed during a retry.
+	let spawned: ChildProcess | null = null
+	for (let retry = 0; spawned === null; retry++) {
+		try {
+			// detached: true makes koboldcpp the leader of its own process group
+			// (setsid), so we can reliably kill it AND any children it spawns
+			// (its PyInstaller bootstrap process forks a real worker process)
+			// with a single group-kill via a negative PID, instead of leaving
+			// pieces behind.
+			spawned = spawn(binaryPath, args, {
+				stdio: ["ignore", "pipe", "pipe"],
+				detached: true
+			})
+		} catch (err: any) {
+			if (err?.code !== "ETXTBSY" || retry >= SPAWN_TEXT_BUSY_RETRIES) {
+				failStart(err?.message || String(err))
+			}
+			console.warn(
+				`[KoboldCPP] spawn ETXTBSY — the binary is still open for writing; retrying in ${SPAWN_RETRY_DELAY_MS}ms (${retry + 1}/${SPAWN_TEXT_BUSY_RETRIES})`
+			)
+			await new Promise((r) => setTimeout(r, SPAWN_RETRY_DELAY_MS))
+			// Stopped while waiting: stop() has already settled the status.
+			if (state.status !== "starting") {
+				throw new Error("KoboldCPP start was cancelled")
+			}
+		}
+	}
+	const proc = spawned
 
 	state.process = proc
 	state.pid = proc.pid ?? null
 	state.startedAt = new Date()
 	state.restartCount++
-	if (proc.pid) await writePidFile(binaryDir, proc.pid)
+
+	// Set by the async "error" event, which is how Node reports the spawn
+	// failures it doesn't throw (ENOENT, EACCES, …). Such a child never gets an
+	// exitCode, so without this the wait below took it for alive for its whole
+	// ten-minute timeout.
+	let spawnError = null as Error | null
 
 	proc.stdout?.on("data", (chunk: Buffer) => {
 		console.log("[KoboldCPP]", chunk.toString().trimEnd())
@@ -670,11 +750,19 @@ async function doStart(): Promise<void> {
 	})
 
 	proc.on("error", (err) => {
+		spawnError = err
 		clearIdleTimer()
-		state.status = "crashed"
-		state.lastError = err.message
+		// A late error from a child a Stop already took down is not news.
+		if (shared.stopRequested) {
+			state.status = "stopped"
+			state.lastError = null
+		} else {
+			state.status = "crashed"
+			state.lastError = err.message
+		}
 		state.process = null
 		state.pid = null
+		forgetResidency()
 		stopHealthCheck()
 		clearPidFile(binaryDir).catch(() => {})
 		emitStatus()
@@ -683,20 +771,32 @@ async function doStart(): Promise<void> {
 	proc.on("exit", (code, signal) => {
 		clearIdleTimer()
 		stopHealthCheck()
-		if (state.status !== "stopping") {
+		// `stopRequested`, not only "stopping": stop()'s force-kill timeout
+		// settles "stopped" before the child's exit lands, and that exit read
+		// as a crash — a Stop that "failed" with an exit-code error.
+		if (state.status !== "stopping" && !shared.stopRequested) {
 			state.status = "crashed"
 			state.lastError = `Exited — code ${code ?? "?"} signal ${signal ?? "none"}`
 		} else {
 			state.status = "stopped"
+			state.lastError = null
 		}
 		state.process = null
 		state.pid = null
+		forgetResidency()
 		clearPidFile(binaryDir).catch(() => {})
 		emitStatus()
 	})
 
+	// After the listeners, not before: this await is a window in which the
+	// child's "error"/"exit" could otherwise fire with nobody listening.
+	if (proc.pid) await writePidFile(binaryDir, proc.pid)
+
 	try {
-		await waitForReady(port, proc)
+		await waitForReady(
+			port,
+			() => spawnError === null && proc.exitCode === null && !proc.killed
+		)
 	} catch (err: any) {
 		// Process may still be starting — kill the whole group and propagate
 		if (proc.pid) {
@@ -706,14 +806,29 @@ async function doStart(): Promise<void> {
 				proc.kill("SIGKILL")
 			}
 		}
-		state.status = "crashed"
-		state.lastError = err.message
 		state.process = null
 		state.pid = null
+		forgetResidency()
+		// Stopped mid-start: the wait failed BECAUSE stop() killed the child.
+		// That is the outcome somebody asked for, so it ends as "stopped" with
+		// no lastError — stop() itself settles and emits the status; this only
+		// must not overwrite it with a crash. The caller still hears that its
+		// start did not produce a process.
+		if (shared.stopRequested) {
+			throw new Error("KoboldCPP start was cancelled")
+		}
+		// The child's own error says why ("spawn … EACCES"); the wait's only
+		// says that it stopped.
+		const failure = spawnError ?? err
+		state.status = "crashed"
+		state.lastError = failure.message
 		await clearPidFile(binaryDir)
 		emitStatus()
-		throw err
+		throw failure
 	}
+
+	// Ready just as a Stop landed: stop() owns the status from here.
+	if (shared.stopRequested) throw new Error("KoboldCPP start was cancelled")
 
 	state.status = "running"
 	emitStatus()
@@ -723,12 +838,17 @@ async function doStart(): Promise<void> {
 
 export async function stop(): Promise<void> {
 	clearIdleTimer()
+	// Before any await: an in-flight start reads it to tell this stop's kill
+	// from a crash.
+	shared.stopRequested = true
 
 	// Nothing we're tracking as running at all — plain no-op.
 	if (!state.process && state.status !== "running") {
 		state.status = "stopped"
+		state.lastError = null
 		state.pid = null
 		state.isExternal = false
+		forgetResidency()
 		emitStatus()
 		return
 	}
@@ -742,6 +862,8 @@ export async function stop(): Promise<void> {
 	// process, which is precisely what generation preflight then fails
 	// against.
 	if (!state.process && state.isExternal) {
+		// Refused, so nothing is being stopped after all.
+		shared.stopRequested = false
 		throw new Error(
 			"This KoboldCPP instance is running externally and wasn't started by Serene Pub, so it can't be stopped from here. Stop it manually, or point Serene Pub's KoboldCPP at a different port."
 		)
@@ -819,8 +941,10 @@ export async function stop(): Promise<void> {
 	}
 
 	state.status = "stopped"
+	state.lastError = null
 	state.pid = null
 	state.isExternal = false
+	forgetResidency()
 	emitStatus()
 
 	if (shared.lastBinaryDir) await clearPidFile(shared.lastBinaryDir)

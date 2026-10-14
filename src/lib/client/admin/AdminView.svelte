@@ -3,8 +3,15 @@
 	 * The **Admin** view: the whole administration area, as one sidebar view
 	 * (ruled 2026-09-27 — admin is purely the sidebar and Focus, never a
 	 * page). It is two things side by side at desk width, the section list
-	 * and the section, and one at a time below it: the 400px dock and a
-	 * phone's sheet show the list, and a picked section with a way back.
+	 * (`SectionList`) and the section, and one at a time below it: the 400px
+	 * dock and a phone's sheet show the list, and a picked section under a
+	 * `PanelNavHeader` whose back returns to it.
+	 *
+	 * Not `PanelSplit kind="sections"`: the section pane's `px-5 py-6`
+	 * scroller is a contract the sections lean on (`AdminChangeForm`'s
+	 * sticky save row bleeds `-mx-5 -bottom-6` into it, `AdminDeleteConfirm`
+	 * scrolls `.admin-content`), which the split's `p-4` pane and 1120px cap
+	 * would break, so the view lays out its own two columns.
 	 *
 	 * Sections are addressed like pages (`/admin/prompts/12`) but routed
 	 * here, by `adminRouter`; the address reaches the bar only while this
@@ -23,6 +30,9 @@
 		interestContextValue
 	} from "$lib/client/sockets/interest.svelte"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
+	import SectionList from "$lib/client/components/panels/SectionList.svelte"
+	import type { SectionGroup } from "$lib/client/components/panels/sectionList"
+	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import { warnBeforeUnload } from "$lib/client/forms/unsavedEdits.svelte"
 	import AdminUnsavedChangesModal from "$lib/client/components/modals/AdminUnsavedChangesModal.svelte"
 
@@ -79,6 +89,30 @@
 		nav.flatMap((g) => g.items).find((i) => i.href === activeHref)?.label ??
 			"Admin"
 	)
+	/**
+	 * The nav as section-list rows, keyed and linked by address (so a
+	 * middle click still opens the section in a tab), each carrying its
+	 * Needs you dot: red for a problem, gold for something waiting.
+	 */
+	let sectionGroups = $derived<SectionGroup[]>(
+		nav.map((g) => ({
+			label: g.group || undefined,
+			items: g.items.map((i) => {
+				const level = adminHealth.levelFor(i.href)
+				return {
+					key: i.href,
+					label: i.label,
+					icon: Icons[i.icon] as Component<any>,
+					href: i.href,
+					dot: level
+						? level === "error"
+							? "error"
+							: "primary"
+						: undefined
+				}
+			})
+		}))
+	)
 
 	const vm = new ViewModeTracker()
 	/**
@@ -120,7 +154,7 @@
 	})
 	warnBeforeUnload(() => adminRouter.hasUnsavedEdits)
 
-	async function showSectionList() {
+	async function backToList() {
 		if (await adminRouter.confirmDiscard()) showList = true
 	}
 
@@ -146,7 +180,9 @@
 		const seek = () => {
 			const root = contentEl
 			const found =
-				root?.querySelector<HTMLElement>(`[data-field="${CSS.escape(target)}"]`) ??
+				root?.querySelector<HTMLElement>(
+					`[data-field="${CSS.escape(target)}"]`
+				) ??
 				root?.querySelector<HTMLElement>(`#${CSS.escape(target)}`) ??
 				null
 			// A card's heading id names the card: ring the card, not the words.
@@ -202,102 +238,64 @@
 	})
 </script>
 
-{#snippet sectionList()}
-	<nav class="flex flex-col pb-3" aria-label="Admin sections">
-		{#if attention.length}
-			<!-- The Overview's Needs you list, counted; hidden when empty. -->
-			<section
-				class="panel-card mx-2 mt-2 mb-1 flex flex-col gap-2"
-				aria-labelledby="admin-needs-you"
-			>
-				<div class="flex items-center gap-2">
-					<span
-						class="size-2 shrink-0 rounded-full {adminHealth.worst ===
-						'error'
-							? 'bg-error-500'
-							: 'bg-primary-500'}"
-						aria-hidden="true"
-					></span>
-					<h3 id="admin-needs-you" class="text-sm font-medium">
-						Needs you
-					</h3>
-					<span class="text-surface-600-400 text-xs">
-						{attention.length}
-					</span>
-				</div>
-				<ul class="flex flex-col gap-1">
-					{#each attention.slice(0, 3) as item (item.id)}
-						<li>
-							<a
-								href={item.action.href}
-								class="text-surface-800-200 hover:text-primary-600-400 block truncate text-[13px] underline-offset-2 hover:underline"
-								onclick={() => (showList = false)}
-							>
-								{item.title}
-							</a>
-						</li>
-					{/each}
-				</ul>
-				{#if attention.length > 3}
+{#snippet needsYou()}
+	<!-- The Overview's Needs you list, counted; passed only when it has
+	     something in it. Its links are admin addresses, moved by
+	     `interceptAdminLink` on the root. -->
+	<section
+		class="panel-card mb-1 flex flex-col gap-2"
+		aria-labelledby="admin-needs-you"
+	>
+		<div class="flex items-center gap-2">
+			<span
+				class="size-2 shrink-0 rounded-full {adminHealth.worst ===
+				'error'
+					? 'bg-error-500'
+					: 'bg-primary-500'}"
+				aria-hidden="true"
+			></span>
+			<h3 id="admin-needs-you" class="text-sm font-medium">Needs you</h3>
+			<span class="text-surface-600-400 text-xs">
+				{attention.length}
+			</span>
+		</div>
+		<ul class="flex flex-col gap-1">
+			{#each attention.slice(0, 3) as item (item.id)}
+				<li>
 					<a
-						href="/admin"
-						class="text-surface-600-400 text-xs hover:underline"
+						href={item.action.href}
+						class="text-surface-800-200 hover:text-primary-600-400 block truncate text-[13px] underline-offset-2 hover:underline"
 						onclick={() => (showList = false)}
 					>
-						{attention.length - 3} more on the Overview
+						{item.title}
 					</a>
-				{/if}
-			</section>
+				</li>
+			{/each}
+		</ul>
+		{#if attention.length > 3}
+			<a
+				href="/admin"
+				class="text-surface-600-400 text-xs hover:underline"
+				onclick={() => (showList = false)}
+			>
+				{attention.length - 3} more on the Overview
+			</a>
 		{/if}
-		{#each nav as group (group.group)}
-			{#if group.group}
-				<h3 class="text-surface-600-400 px-3 pt-4 pb-1 text-xs">
-					{group.group}
-				</h3>
-			{/if}
-			<ul class={group.group ? "" : "pt-2"}>
-				{#each group.items as item (item.href)}
-					{@const IconCmp = Icons[item.icon] as any}
-					{@const selected = item.href === activeHref}
-					{@const level = adminHealth.levelFor(item.href)}
-					<li>
-						<a
-							href={item.href}
-							aria-current={selected ? "page" : undefined}
-							class="focus-visible:outline-primary-500 mx-2 flex min-h-10 items-center gap-3 rounded-[10px] px-3 transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 {selected
-								? 'sidebar-row-active'
-								: 'hover:bg-surface-200-800'}"
-							onclick={(e) => {
-								e.preventDefault()
-								open(item.href)
-							}}
-						>
-							<IconCmp
-								size={17}
-								class="text-surface-600-400 shrink-0"
-								aria-hidden="true"
-							/>
-							<span class="min-w-0 flex-1 truncate text-sm font-medium">
-								{item.label}
-							</span>
-							{#if level}
-								<span
-									class="size-2 shrink-0 rounded-full {level ===
-									'error'
-										? 'bg-error-500'
-										: 'bg-primary-500'}"
-									aria-hidden="true"
-								></span>
-								<span class="sr-only">
-									{level === "error" ? "(has a problem)" : "(needs you)"}
-								</span>
-							{/if}
-						</a>
-					</li>
-				{/each}
-			</ul>
-		{/each}
-	</nav>
+	</section>
+{/snippet}
+
+<!-- Flush at desk (240px, its own edge and scroller, stretched by the row
+     it sits in); below desk it fills the view and scrolls itself. -->
+{#snippet sectionList()}
+	<SectionList
+		ariaLabel="Admin sections"
+		groups={sectionGroups}
+		value={activeHref}
+		onselect={open}
+		head={attention.length ? needsYou : undefined}
+		flush={vm.mode === "desk"}
+		class={vm.mode === "desk" ? "" : "min-h-0 flex-1 overflow-y-auto"}
+	/>
 {/snippet}
 
 {#snippet pageSnippet()}
@@ -310,25 +308,38 @@
 
 {#snippet section()}
 	<!-- The container the sections measure themselves against (their
-	     `@container content` rules), and the reading width they sit in. -->
+	     `@container content` rules), and the reading width they sit in.
+	     Below desk the nav header sits above it, so the top is the 12px
+	     under a header (STYLE-GUIDE §6.3) rather than the desk's 24px. -->
 	<div
 		bind:this={contentEl}
-		class="admin-content flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-6"
+		class="admin-content flex min-h-0 flex-1 flex-col overflow-y-auto"
 	>
-		{#if notFound}
-			<div class="m-auto flex flex-col items-center gap-3 text-center">
-				<p class="text-surface-600-400 text-sm">
-					There is no admin page at {adminRouter.path}.
-				</p>
-				<a href="/admin" class="btn btn-sm preset-tonal-surface">
-					Open the Overview
-				</a>
-			</div>
-		{:else if LayoutCmp}
-			<LayoutCmp children={pageSnippet} />
-		{:else}
-			{@render pageSnippet()}
-		{/if}
+		<!-- The inset is a margin on this wrapper, never padding on the
+		     scroller above it (owner ruling 2026-10-11, PanelSplit says why). -->
+		<div
+			class={[
+				"mx-5 mb-6 flex flex-1 flex-col",
+				vm.mode === "desk" ? "mt-6" : "mt-3"
+			]}
+		>
+			{#if notFound}
+				<div
+					class="m-auto flex flex-col items-center gap-3 text-center"
+				>
+					<p class="text-surface-600-400 text-sm">
+						There is no admin page at {adminRouter.path}.
+					</p>
+					<a href="/admin" class="btn btn-sm preset-tonal-surface">
+						Open the Overview
+					</a>
+				</div>
+			{:else if LayoutCmp}
+				<LayoutCmp children={pageSnippet} />
+			{:else}
+				{@render pageSnippet()}
+			{/if}
+		</div>
 	</div>
 {/snippet}
 
@@ -337,34 +348,28 @@
 <div
 	use:vm.observe
 	data-view-links
-	class="text-foreground flex h-full min-h-0 flex-1"
+	class="flex h-full min-h-0 flex-col"
 	onclickcapture={interceptAdminLink}
 >
 	{#if vm.mode === "desk"}
-		<div
-			class="panel-edge w-60 shrink-0 overflow-y-auto border-r"
-		>
+		<!-- A row, so the flush section list runs the view's full height. -->
+		<div class="flex min-h-0 flex-1">
 			{@render sectionList()}
+			{@render section()}
 		</div>
-		{@render section()}
 	{:else if showList}
-		<div class="min-h-0 flex-1 overflow-y-auto">
-			{@render sectionList()}
-		</div>
+		{@render sectionList()}
 	{:else}
+		<!-- The section's own header (breadcrumbs, title) is in the
+		     scroller; this one stays put so the way back is always there. -->
 		<div class="flex min-h-0 flex-1 flex-col">
-			<button
-				type="button"
-				class="text-surface-600-400 hover:text-surface-950-50 focus-visible:outline-primary-500 panel-edge flex min-h-11 shrink-0 items-center gap-1.5 border-b px-3 text-sm focus-visible:outline-2"
-				onclick={showSectionList}
-			>
-				<Icons.ChevronLeft size={16} aria-hidden="true" />
-				All sections
-				<span class="text-surface-500 mx-1">·</span>
-				<span class="text-surface-950-50 truncate font-medium"
-					>{activeLabel}</span
-				>
-			</button>
+			<div class="shrink-0 px-5 pt-4">
+				<PanelNavHeader
+					title={activeLabel}
+					onBack={backToList}
+					backLabel="All sections"
+				/>
+			</div>
 			{@render section()}
 		</div>
 	{/if}

@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest"
 import {
+	addToCast,
 	applyPresetFill,
 	autoSessionName,
 	buildCreatePayload,
@@ -14,10 +15,13 @@ import {
 	enabledPresetsFor,
 	filterPickRows,
 	finalSessionName,
+	firstUnmetStartRule,
 	genreFacts,
 	genreVersion,
+	genreVersionLabel,
 	latestGenres,
 	lorebookSatisfied,
+	moveInCast,
 	oneClickStart,
 	participantFloors,
 	playAsOptions,
@@ -144,6 +148,11 @@ describe("latestGenres", () => {
 			"core:genre/chat",
 			"core:genre/adventure@3"
 		])
+	})
+
+	it("says a genre's version in words, from the id's @N", () => {
+		expect(genreVersionLabel("core:genre/chat@2")).toBe("version 2")
+		expect(genreVersionLabel("core:genre/chat")).toBe("version 1")
 	})
 
 	it("reads a version-less id as version 1", () => {
@@ -336,6 +345,21 @@ describe("StartSessionFlow.canStart", () => {
 		expect(flow.payload("x").session.lorebookId).toBeNull()
 	})
 
+	it("names the first unmet rule while Start is refused, and none once it is not", () => {
+		const flow = flowOn(ADVENTURE, {
+			characters: { min: 1 },
+			personas: { min: 1 },
+			lorebook: "required"
+		})
+		flow.characterIds = []
+		expect(flow.startBlocker).toBe("Add at least one character.")
+		flow.characterIds = [4]
+		expect(flow.startBlocker).toBe("This genre needs a lorebook.")
+		flow.fields.lorebookId = 7
+		expect(flow.startBlocker).toBeNull()
+		expect(flow.canStart).toBe(true)
+	})
+
 	it("detaches a held lorebook when the chosen genre has no such capability", () => {
 		const flow = flowOn(ADVENTURE, {
 			characters: { min: 1 },
@@ -481,14 +505,23 @@ describe("genreFacts", () => {
 				voice: "narrator"
 			})
 		).toBe(
-			"characters 1–4 · personas 1+ · lorebook optional · narrator voice"
+			"characters 1–4 · 1+ characters you play · lorebook optional · a narrator tells the story"
 		)
 	})
 
 	it("says what it forbids", () => {
 		expect(
 			genreFacts({ characters: { min: 0, max: 0 }, composer: "none" })
-		).toBe("no characters · no personas · no composer")
+		).toBe("no characters · no character you play · you don't type messages")
+	})
+
+	it("says one seat as the character you play", () => {
+		expect(
+			genreFacts({
+				characters: { min: 1 },
+				personas: { min: 1, max: 1 }
+			})
+		).toBe("characters 1+ · a character you play")
 	})
 
 	it("says nothing for an unknown shape", () => {
@@ -517,7 +550,7 @@ describe("castCountHint", () => {
 describe("genreFacts, equal bounds", () => {
 	it("says exactly rather than a 1–1 range", () => {
 		expect(genreFacts({ characters: { min: 1, max: 1 } })).toBe(
-			"characters exactly 1 · no personas"
+			"characters exactly 1 · no character you play"
 		)
 	})
 })
@@ -629,6 +662,78 @@ describe("castOptions — the cast picker (note 33)", () => {
 	})
 })
 
+describe("addToCast / moveInCast — the cast's order", () => {
+	it("appends picks in the order picked, skipping anyone already in", () => {
+		expect(addToCast([4], [7, 4, 2])).toEqual([4, 7, 2])
+	})
+
+	it("stops at the genre's cap", () => {
+		expect(addToCast([4], [7, 2], 2)).toEqual([4, 7])
+		expect(addToCast([4, 7], [2], 2)).toEqual([4, 7])
+	})
+
+	it("moves one member a place up or down", () => {
+		expect(moveInCast([1, 2, 3], 2, -1)).toEqual([2, 1, 3])
+		expect(moveInCast([1, 2, 3], 2, 1)).toEqual([1, 3, 2])
+	})
+
+	it("leaves the ends and unknown ids where they are", () => {
+		const cast = [1, 2, 3]
+		expect(moveInCast(cast, 1, -1)).toEqual([1, 2, 3])
+		expect(moveInCast(cast, 3, 1)).toEqual([1, 2, 3])
+		expect(moveInCast(cast, 9, 1)).toEqual([1, 2, 3])
+	})
+})
+
+describe("StartSessionFlow — adding and ordering the cast", () => {
+	function flowOn(shape: GenreRow["shape"]) {
+		const flow = new StartSessionFlow()
+		flow.rawGenres = [genre("core:genre/troupe", { shape })]
+		flow.chooseGenre("core:genre/troupe")
+		return flow
+	}
+
+	it("adds several in the order picked, and the payload keeps that order", () => {
+		const flow = flowOn({ characters: { min: 1 } })
+		flow.addCharacters([5, 3])
+		flow.addCharacters([8])
+		expect(flow.characterIds).toEqual([5, 3, 8])
+		expect(flow.payload("x").characterPositions).toEqual({
+			5: 0,
+			3: 1,
+			8: 2
+		})
+	})
+
+	it("holds the cast to the genre's cap", () => {
+		const flow = flowOn({ characters: { min: 1, max: 2 } })
+		flow.addCharacters([5, 3, 8])
+		expect(flow.characterIds).toEqual([5, 3])
+	})
+
+	it("takes an added character out of the player seat", () => {
+		const flow = flowOn({ characters: { min: 1 }, personas: { min: 1 } })
+		flow.playAs(3)
+		flow.addCharacters([3, 5])
+		expect(flow.characterIds).toEqual([3, 5])
+		expect(flow.personaIds).toEqual([])
+	})
+
+	it("reorders, and the turn order follows", () => {
+		const flow = flowOn({ characters: { min: 1 } })
+		flow.addCharacters([5, 3, 8])
+		flow.moveCharacter(8, -1)
+		expect(flow.characterIds).toEqual([5, 8, 3])
+		flow.moveCharacter(5, 1)
+		expect(flow.characterIds).toEqual([8, 5, 3])
+		expect(flow.payload("x").characterPositions).toEqual({
+			8: 0,
+			5: 1,
+			3: 2
+		})
+	})
+})
+
 describe("filterPickRows — both pickers' filter", () => {
 	const rows = [
 		{ id: 1, name: "Mara", nickname: "The Fox", characterTags: [{ tag: { name: "noir" } }] },
@@ -696,5 +801,65 @@ describe("the wizard's first Guide session", () => {
 			null
 		)
 		expect(buildCreatePayload(input).personaIds).toEqual([])
+	})
+})
+
+describe("firstUnmetStartRule", () => {
+	const ready = {
+		genreId: "core:genre/adventure",
+		noPresetsForGenre: false,
+		characterCount: 1,
+		personaCount: 1,
+		floors: { characters: 1, personas: 1 },
+		shape: { lorebook: "required" } as GenreRow["shape"],
+		lorebookId: 3
+	}
+
+	it("is null when every rule is met", () => {
+		expect(firstUnmetStartRule(ready)).toBeNull()
+	})
+
+	it("asks for a genre before anything else", () => {
+		expect(
+			firstUnmetStartRule({ ...ready, genreId: null, characterCount: 0 })
+		).toBe("Choose a genre.")
+	})
+
+	it("says when the genre has no preset to start from", () => {
+		expect(
+			firstUnmetStartRule({ ...ready, noPresetsForGenre: true })
+		).toBe("No preset is available for this genre.")
+	})
+
+	it("asks for the cast the floor needs, counted", () => {
+		expect(firstUnmetStartRule({ ...ready, characterCount: 0 })).toBe(
+			"Add at least one character."
+		)
+		expect(
+			firstUnmetStartRule({
+				...ready,
+				characterCount: 1,
+				floors: { characters: 2, personas: 1 }
+			})
+		).toBe("Add at least 2 characters.")
+	})
+
+	it("asks who you play as after the cast", () => {
+		expect(firstUnmetStartRule({ ...ready, personaCount: 0 })).toBe(
+			"Choose who you play as."
+		)
+	})
+
+	it("asks for the lorebook a genre requires, last", () => {
+		expect(firstUnmetStartRule({ ...ready, lorebookId: null })).toBe(
+			"This genre needs a lorebook."
+		)
+		expect(
+			firstUnmetStartRule({
+				...ready,
+				lorebookId: null,
+				shape: { lorebook: "optional" } as GenreRow["shape"]
+			})
+		).toBeNull()
 	})
 })

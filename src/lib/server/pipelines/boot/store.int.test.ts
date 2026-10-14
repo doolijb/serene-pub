@@ -564,6 +564,21 @@ describe("saveDocument runs validate() (U5d review, W9)", () => {
 		)
 	})
 
+	it("🚧 a hand-written document's boundary triggers are re-checked at saveDocument, in the builder's sentences (live scenes §15 G18)", async () => {
+		const doc = sessionTurn()
+		const forged: SpecDocument = {
+			...doc,
+			id: "core:spec/test-forged-boundary-triggers",
+			contributes: {
+				...((doc.contributes as Record<string, unknown> | undefined) ?? {}),
+				boundaryTriggers: [{ key: "dayCrossed", label: "x", when: { narration: true } }]
+			}
+		}
+		await expect(saveDocument(db, forged, { publish: true })).rejects.toThrow(
+			/does not validate — \[boundary triggers\] contributes\.boundaryTriggers\[dayCrossed\]\.key: 'dayCrossed' is core's own trigger/
+		)
+	})
+
 	it("a shape forgery — text wired into a port that takes an assembled context — is refused at saveDocument; a warning is not", async () => {
 		const doc = compile(
 			spec("core:spec/test-forged-shape", { version: "1.0.0" })

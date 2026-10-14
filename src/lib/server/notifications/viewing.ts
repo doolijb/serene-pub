@@ -59,7 +59,8 @@ export function parseViewing(raw: unknown): ViewingSnapshot | null {
 		!strOrNull(r.activeView) ||
 		!strOrNull(r.adminHref) ||
 		!strOrNull(r.helpSlug) ||
-		!strOrNull(r.loreHash)
+		!strOrNull(r.loreHash) ||
+		(r.messagesHref !== undefined && !strOrNull(r.messagesHref))
 	)
 		return null
 	return {
@@ -69,7 +70,8 @@ export function parseViewing(raw: unknown): ViewingSnapshot | null {
 		activeView: r.activeView,
 		adminHref: r.adminHref,
 		helpSlug: r.helpSlug,
-		loreHash: r.loreHash
+		loreHash: r.loreHash,
+		...(r.messagesHref !== undefined ? { messagesHref: r.messagesHref } : {})
 	}
 }
 

@@ -23,9 +23,20 @@ import { eq } from "drizzle-orm"
 import { PNG } from "pngjs"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
+import type { Stroke } from "@serene-pub/sdk"
 
 let testDb: TestDb
 let dataDir: string
+
+// Strokes are paused (`strokesFlag.ts`, owner 2026-10-11): OFF by default
+// here, as shipped; the strokes block below turns it ON for its own tests.
+// A getter, so each handler call reads the value of the moment.
+const strokesFlag = vi.hoisted(() => ({ on: false }))
+vi.mock("$lib/shared/characters/strokesFlag", () => ({
+	get STROKES_ENABLED() {
+		return strokesFlag.on
+	}
+}))
 
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
@@ -473,4 +484,375 @@ describe("characters:update — the avatar on the wire", () => {
 			frame: media.frame
 		})
 	})
+})
+
+describe("characters — strokes are the source, prose the compiled cache (DESIGN-card-strokes §A.3)", () => {
+	beforeAll(() => {
+		strokesFlag.on = true
+	})
+	afterAll(() => {
+		strokesFlag.on = false
+	})
+	const always = { mode: "always" } as const
+	const strokes = [
+		{ kind: "description", slug: "body", text: "A tall woman.", when: always },
+		{ kind: "description", label: "Eyes", text: "grey", when: always },
+		{ kind: "personality", label: "Mood", text: "wry", when: always },
+		{
+			kind: "personality",
+			label: "Fear",
+			text: "the sea",
+			when: { mode: "keywords", keys: ["ship"] }
+		}
+	]
+
+	test("create with strokes stores them and caches their compile", async () => {
+		const { charactersCreate } = await import("./characters")
+		const user = await makeUser("strokes-create")
+		const res = await charactersCreate.handler(
+			fakeSocket(user.id),
+			{
+				character: {
+					name: "Ada",
+					description: "client prose, ignored",
+					strokes
+				}
+			} as any,
+			noopEmit
+		)
+		const [row] = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, res.character.id))
+		expect(row.strokes).toEqual(strokes)
+		expect(row.description).toBe("A tall woman.\n\nEyes: grey")
+		expect(row.personality).toBe("Mood: wry; Fear: the sea")
+		expect(res.character.strokes).toEqual(strokes)
+	}, 60_000)
+
+	test("prose sent without strokes is recompiled from the stored ones", async () => {
+		const { charactersCreate, charactersUpdate } = await import("./characters")
+		const user = await makeUser("strokes-prose-only")
+		const created = await charactersCreate.handler(
+			fakeSocket(user.id),
+			{ character: { name: "Bo", description: "", strokes } } as any,
+			noopEmit
+		)
+		await charactersUpdate.handler(
+			fakeSocket(user.id),
+			{
+				character: {
+					id: created.character.id,
+					description: "hand edit over the cache"
+				}
+			} as any,
+			noopEmit
+		)
+		const [row] = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, created.character.id))
+		expect(row.description).toBe("A tall woman.\n\nEyes: grey")
+		expect(row.strokes).toEqual(strokes)
+	}, 60_000)
+
+	test("update with strokes [] returns the card to the legacy shape, keeping its prose", async () => {
+		const { charactersCreate, charactersUpdate } = await import("./characters")
+		const user = await makeUser("strokes-clear")
+		const created = await charactersCreate.handler(
+			fakeSocket(user.id),
+			{ character: { name: "Cy", description: "", strokes } } as any,
+			noopEmit
+		)
+		await charactersUpdate.handler(
+			fakeSocket(user.id),
+			{ character: { id: created.character.id, strokes: [] } } as any,
+			noopEmit
+		)
+		const [row] = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, created.character.id))
+		expect(row.strokes).toEqual([])
+		expect(row.description).toBe("A tall woman.\n\nEyes: grey")
+		expect(row.personality).toBe("Mood: wry; Fear: the sea")
+	}, 60_000)
+
+	test("a duplicate slug is refused and nothing is written", async () => {
+		const { charactersCreate, charactersUpdate } = await import("./characters")
+		const user = await makeUser("strokes-refused")
+		const dup = [
+			{ kind: "description", slug: "eyes", text: "a", when: always },
+			{ kind: "description", slug: "eyes", text: "b", when: always }
+		]
+		const errors: any[] = []
+		const emit = (event: string, data: any) => {
+			if (event.endsWith(":error")) errors.push(data)
+		}
+		await expect(
+			charactersCreate.handler(
+				fakeSocket(user.id),
+				{ character: { name: "Dup", description: "", strokes: dup } } as any,
+				emit
+			)
+		).rejects.toThrow(/slug 'eyes' is already used/)
+		expect(errors[0].error).toMatch(/^Stroke 2: /)
+		const none = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.userId, user.id))
+		expect(none).toHaveLength(0)
+
+		const ok = await makeCharacter(user.id, "Plain")
+		await expect(
+			charactersUpdate.handler(
+				fakeSocket(user.id),
+				{ character: { id: ok.id, strokes: dup } } as any,
+				emit
+			)
+		).rejects.toThrow(/slug 'eyes' is already used/)
+		const [row] = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, ok.id))
+		expect(row.strokes).toEqual([])
+	}, 60_000)
+
+	test("characters:countStrokeTokens answers one count per stroke", async () => {
+		const { charactersCountStrokeTokens } = await import("./characters")
+		const user = await makeUser("strokes-count")
+		const res = await charactersCountStrokeTokens.handler(
+			fakeSocket(user.id),
+			{ strokes, requestId: "r1" } as any,
+			noopEmit
+		)
+		expect(res.perStroke).toHaveLength(strokes.length)
+		expect(res.perStroke.every((n: number) => n > 0)).toBe(true)
+		expect(res.perKind.description).toBeGreaterThan(0)
+		expect(res.perKind.personality).toBeGreaterThan(0)
+		// No default text connection on a fresh instance → the estimate.
+		expect(res.model).toBeNull()
+		expect(res.requestId).toBe("r1")
+	}, 60_000)
+
+	test("characters:countStrokeTokens refuses more than the stroke cap", async () => {
+		const { charactersCountStrokeTokens } = await import("./characters")
+		const { STROKE_LIMITS } = await import("@serene-pub/sdk")
+		const user = await makeUser("strokes-count-cap")
+		const many = Array.from({ length: STROKE_LIMITS.maxStrokes + 1 }, () => ({
+			kind: "description",
+			text: "x",
+			when: always
+		}))
+		await expect(
+			charactersCountStrokeTokens.handler(
+				fakeSocket(user.id),
+				{ strokes: many } as any,
+				noopEmit
+			)
+		).rejects.toThrow(/at most/)
+	}, 60_000)
+})
+
+describe("characters — strokes paused (STROKES_ENABLED off)", () => {
+	const always = { mode: "always" } as const
+	const strokes: Stroke[] = [
+		{ kind: "description", text: "A tall woman.", when: always },
+		{ kind: "personality", label: "Mood", text: "wry", when: always }
+	]
+
+	test("create stores the prose sent and no strokes, even when strokes are sent", async () => {
+		const { charactersCreate } = await import("./characters")
+		const user = await makeUser("paused-create")
+		const res = await charactersCreate.handler(
+			fakeSocket(user.id),
+			{ character: { name: "Ada", description: "As typed.", strokes } } as any,
+			noopEmit
+		)
+		const [row] = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, res.character.id))
+		expect(row.strokes).toEqual([])
+		expect(row.description).toBe("As typed.")
+	}, 60_000)
+
+	test("update with prose wins over stored strokes and clears them", async () => {
+		const { charactersUpdate } = await import("./characters")
+		const user = await makeUser("paused-update")
+		const [card] = await testDb
+			.insert(schema.characters)
+			.values({
+				userId: user.id,
+				name: "Bo",
+				description: "A tall woman.",
+				personality: "Mood: wry",
+				strokes
+			})
+			.returning()
+		await charactersUpdate.handler(
+			fakeSocket(user.id),
+			{ character: { id: card.id, description: "hand edit wins" } } as any,
+			noopEmit
+		)
+		const [row] = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, card.id))
+		expect(row.description).toBe("hand edit wins")
+		expect(row.personality).toBe("Mood: wry")
+		expect(row.strokes).toEqual([])
+	}, 60_000)
+
+	test("an update that writes no prose leaves stored strokes alone and ignores sent ones", async () => {
+		const { charactersUpdate } = await import("./characters")
+		const user = await makeUser("paused-update-noprose")
+		const [card] = await testDb
+			.insert(schema.characters)
+			.values({ userId: user.id, name: "Cy", description: "x", strokes })
+			.returning()
+		await charactersUpdate.handler(
+			fakeSocket(user.id),
+			{ character: { id: card.id, name: "Cyd", strokes: [] } } as any,
+			noopEmit
+		)
+		const [row] = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, card.id))
+		expect(row.name).toBe("Cyd")
+		expect(row.strokes).toEqual(strokes)
+	}, 60_000)
+
+	test("characters:countStrokeTokens refuses", async () => {
+		const { charactersCountStrokeTokens } = await import("./characters")
+		const user = await makeUser("paused-count")
+		const errors: any[] = []
+		await expect(
+			charactersCountStrokeTokens.handler(
+				fakeSocket(user.id),
+				{ strokes, requestId: "r1" } as any,
+				(event: string, data: any) => {
+					if (event.endsWith(":error")) errors.push(data)
+				}
+			)
+		).rejects.toThrow("Strokes are switched off in this build.")
+		expect(errors[0]).toMatchObject({
+			error: "Strokes are switched off in this build.",
+			requestId: "r1"
+		})
+	}, 60_000)
+})
+
+/**
+ * 🚧 Likeness (DESIGN-image-generation §5): `likeness` rides beside the
+ * character on create and update, merged into the STORED extensions — so
+ * another tool's keys survive — and its image kept only when the file is the
+ * saver's own. A persona is a character (0132): the same handler, the same rule.
+ */
+describe("likeness on characters:create / characters:update", () => {
+	test("update merges into the stored extensions and keeps foreign keys", async () => {
+		const { charactersUpdate } = await import("./characters")
+		const user = await makeUser("likeness-merge")
+		const [card] = await testDb
+			.insert(schema.characters)
+			.values({
+				userId: user.id,
+				name: "Ash",
+				description: "",
+				extensions: { foreign: { keep: true } }
+			})
+			.returning()
+		const media = await makeMedia(user.id, { characterId: card.id })
+		await charactersUpdate.handler(
+			fakeSocket(user.id),
+			{
+				character: { id: card.id, name: "Ash" },
+				likeness: {
+					imageMediaId: media.id,
+					prompt: " red braid ",
+					negative: "hat"
+				}
+			} as any,
+			noopEmit
+		)
+		let [row] = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, card.id))
+		expect(row.extensions).toEqual({
+			foreign: { keep: true },
+			serenepub: {
+				likeness: { imageMediaId: media.id, prompt: "red braid", negative: "hat" }
+			}
+		})
+
+		// Absent: untouched.
+		await charactersUpdate.handler(
+			fakeSocket(user.id),
+			{ character: { id: card.id, name: "Ash 2" } } as any,
+			noopEmit
+		)
+		;[row] = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, card.id))
+		expect((row.extensions as any).serenepub.likeness.prompt).toBe("red braid")
+
+		// Null: removed, foreign keys kept.
+		await charactersUpdate.handler(
+			fakeSocket(user.id),
+			{ character: { id: card.id }, likeness: null } as any,
+			noopEmit
+		)
+		;[row] = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, card.id))
+		expect(row.extensions).toEqual({ foreign: { keep: true } })
+	}, 60_000)
+
+	test("an image that is someone else's file is dropped; the text is kept", async () => {
+		const { charactersUpdate } = await import("./characters")
+		const owner = await makeUser("likeness-owner")
+		const other = await makeUser("likeness-other")
+		const theirs = await makeCharacter(other.id, "Theirs")
+		const theirMedia = await makeMedia(other.id, { characterId: theirs.id })
+		const persona = await makePersona(owner.id, "Me")
+		await charactersUpdate.handler(
+			fakeSocket(owner.id),
+			{
+				character: { id: persona.id },
+				likeness: { imageMediaId: theirMedia.id, prompt: "tall" }
+			} as any,
+			noopEmit
+		)
+		const [row] = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, persona.id))
+		expect((row.extensions as any).serenepub.likeness).toEqual({
+			prompt: "tall"
+		})
+	}, 60_000)
+
+	test("create stores the likeness", async () => {
+		const { charactersCreate } = await import("./characters")
+		const user = await makeUser("likeness-create")
+		const res = await charactersCreate.handler(
+			fakeSocket(user.id),
+			{
+				character: { name: "New", description: "d" },
+				likeness: { prompt: "green cloak", negative: "" }
+			} as any,
+			noopEmit
+		)
+		const [row] = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, (res as any).character.id))
+		expect((row.extensions as any).serenepub.likeness).toEqual({
+			prompt: "green cloak"
+		})
+	}, 60_000)
 })

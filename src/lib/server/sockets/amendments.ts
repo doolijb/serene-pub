@@ -54,6 +54,8 @@ import {
 import type { KeyList } from "$lib/server/pipelines/ranking/signals"
 import { verifyBindingTargetAccess } from "./lorebooks"
 import { cardTakenBy, memberOfCard } from "$lib/server/utils/castMemberCards"
+import { parseRetoldFlags } from "$lib/shared/lorebooks/retold"
+import { faceMediaProblem } from "$lib/server/lorebooks/retold"
 import type { NodeState, NodeVisibility } from "$lib/server/db/schema"
 import { assertAnchorEntry, assertAnchorInBook } from "$lib/server/utils/anchorEntry"
 import { foldRelationshipsUndatedBy } from "$lib/server/utils/relationshipGuards"
@@ -84,7 +86,10 @@ import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
 import { sessionEvents } from "@serene-pub/sdk"
 import { broadcastToSessionUsers } from "./utils/broadcastHelpers"
 import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
-import { assertOwnedBook } from "$lib/server/utils/ownedBook"
+import {
+	assertOwnedBook,
+	assertReadableBook
+} from "$lib/server/utils/ownedBook"
 import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
 import { bookLinesReply } from "./lorebookStoryTime"
 
@@ -104,7 +109,8 @@ export async function buildAmendmentsList(
 	userId: number,
 	lorebookId: number
 ): Promise<Sockets.Amendments.List.Response> {
-	const book = await assertOwnedBook(db, userId, lorebookId)
+	// A read: owner, share recipient or admin (lane A3).
+	const book = await assertReadableBook(db, userId, lorebookId)
 
 	const [entries, cast, presences, branches] = await Promise.all([
 		db
@@ -362,7 +368,8 @@ interface CastSubject {
 /**
  * What a cast amendment may set (plan A25): what a member has to say at a
  * date — name, other names, summary, state, visibility, the card that draws
- * them and its sprite set. The rest of the row is identity (`binding`), the
+ * them and its sprite set, and the card fields they retell (with the flags
+ * saying which, and their face). The rest of the row is identity (`binding`), the
  * graph's bookkeeping (`parentNodeId`, `sceneId`, `historyEntryId`), a
  * merge's record (`absorbedAliases`) or the vector's, and none of it can read
  * one way at Y10 and another at Y20. Dropped like `NEVER_AMENDED`: the member
@@ -375,7 +382,20 @@ export const CAST_AMENDABLE: ReadonlySet<string> = new Set([
 	"nodeState",
 	"nodeVisibility",
 	"characterId",
-	"spriteSet"
+	"spriteSet",
+	// Retold fields (PLAN-cast-retold-fields-2026-10-13): what the member tells
+	// in their own words, and which of the card's fields they tell — both
+	// amendable, so "from Y20 she is described like this" is one overlay.
+	// ⚠ `retold` is overlaid WHOLE (`applyAmendments` is shallow), so an
+	// overlay carries every flag it means, not just the one it flips.
+	"description",
+	"personality",
+	"scenario",
+	"firstMessage",
+	"alternateGreetings",
+	"exampleDialogues",
+	"faceMediaId",
+	"retold"
 ])
 
 const CAST_STATES = {
@@ -392,6 +412,15 @@ const CAST_VISIBILITIES = {
 } satisfies Record<NodeVisibility, true>
 
 const isTextOrNull = (v: unknown) => v === null || typeof v === "string"
+
+/** How a refusal names each retold prose field. */
+const RETOLD_FIELD_WORDS = {
+	description: "description",
+	personality: "personality",
+	scenario: "scenario",
+	firstMessage: "first message",
+	exampleDialogues: "example dialogues"
+} as const
 
 /** A card id as a client may send it — a whole number above zero, or its digits. */
 function cardIdOf(value: unknown): number | null {
@@ -417,6 +446,7 @@ function cardIdOf(value: unknown): number | null {
  */
 async function cleanCastFields(
 	fields: Record<string, unknown>,
+	subject: CastSubject,
 	userId: number
 ): Promise<Record<string, unknown>> {
 	for (const [key, value] of Object.entries(fields))
@@ -451,6 +481,47 @@ async function cleanCastFields(
 		throw new Error("That is not a visibility a cast member can have.")
 	if ("spriteSet" in fields && !isTextOrNull(fields.spriteSet))
 		throw new Error("A sprite set is named in text.")
+	for (const key of [
+		"description",
+		"personality",
+		"scenario",
+		"firstMessage",
+		"exampleDialogues"
+	] as const)
+		if (key in fields && !isTextOrNull(fields[key]))
+			throw new Error(`A cast member's ${RETOLD_FIELD_WORDS[key]} is text.`)
+	if (
+		"alternateGreetings" in fields &&
+		!(
+			Array.isArray(fields.alternateGreetings) &&
+			fields.alternateGreetings.every((g) => typeof g === "string")
+		)
+	)
+		throw new Error("A cast member's other greetings are a list of greetings.")
+	if ("retold" in fields) {
+		const parsed = parseRetoldFlags(fields.retold)
+		if (!parsed.ok) throw new Error(parsed.error)
+		fields.retold = parsed.retold
+	}
+	if ("faceMediaId" in fields && fields.faceMediaId !== null) {
+		const fileId = cardIdOf(fields.faceMediaId)
+		// A gallery image of a card this overlay links, or of any card the
+		// member is drawn with on any line at any date, may be worn
+		// (`faceMediaProblem`'s `memberId`).
+		const characterId = cardIdOf(fields.characterId)
+		const problem =
+			fileId == null
+				? "That picture is not one this cast member can wear."
+				: await faceMediaProblem(db, {
+						fileId,
+						lorebookId: subject.lorebookId,
+						characterId,
+						memberId: subject.memberId,
+						userId
+					})
+		if (problem) throw new Error(problem)
+		fields.faceMediaId = fileId
+	}
 	if ("characterId" in fields && fields.characterId !== null) {
 		const characterId = cardIdOf(fields.characterId)
 		if (
@@ -462,7 +533,7 @@ async function cleanCastFields(
 	}
 	if (!Object.keys(fields).length)
 		throw new Error(
-			"That change sets nothing a cast member can have at a date: their name, other names, summary, state, visibility, card or sprite set."
+			"That change sets nothing a cast member can have at a date: their name, other names, summary, state, visibility, card, sprite set, face, the card fields they retell (description, personality, scenario, first message, other greetings, example dialogues) or which of those they retell."
 		)
 	return fields
 }
@@ -576,7 +647,7 @@ async function cleanFields(
 			await assertAnchorInBook(bindingId, subject.lorebookId)
 			fields.lorebookBindingId = bindingId
 		}
-	} else return cleanCastFields(fields, userId)
+	} else return cleanCastFields(fields, subject, userId)
 	return fields
 }
 

@@ -1,6 +1,9 @@
 /**
- * 🚧 `clear-scene-image` (R21): core's scene portraits take down the portrait
- * pinned on one side. Core's widgets only (the askers table, `./askers.ts`).
+ * ⏳ `clear-scene-image` (R21): take down the portrait pinned on one side.
+ * Core's widgets only (the askers table, `./askers.ts`). Core's Scene
+ * Portraits does not ask it: a chosen image is the widget's own setting, and
+ * the page seeds the old pins into it once. Still answered this release.
+ * REMOVE in 0.7.0 with `sceneImages`.
  *
  * It clears the PAGE's own pin — the one state the page persists, mirrors into
  * the `sceneImages` store and projects into `characters.v1` — never a copy of

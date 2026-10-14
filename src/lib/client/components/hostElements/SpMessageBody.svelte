@@ -13,9 +13,10 @@
 	 * the component was shown. Core's own messages keep the app's renderer
 	 * as it is.
 	 */
-	import DOMPurify from "dompurify"
-	import { hostAttributeValueFinding } from "@serene-pub/sdk"
-	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
+	import {
+		renderMarkdownWithQuotedText,
+		strictSanitize
+	} from "$lib/client/utils/markdownToHTML"
 	import { ownerOf } from "./context.svelte"
 	import { flag, type SpElementProps } from "./spElement.svelte"
 
@@ -23,34 +24,9 @@
 	const streaming = $derived(flag(attrs.streaming))
 	const owner = $derived(ownerOf(host))
 
-	const STRICT = {
-		FORBID_TAGS: [
-			"style", "form", "input", "button", "textarea", "select", "option", "iframe", "frame",
-			"object", "embed", "link", "meta", "base", "svg", "math", "template", "video", "audio", "source"
-		],
-		FORBID_ATTR: ["id", "name", "style", "target", "rel", "srcset", "formaction", "action"]
-	}
-
-	function strict(html: string): string {
-		const frag = DOMPurify.sanitize(html, { ...STRICT, RETURN_DOM_FRAGMENT: true }) as DocumentFragment
-		for (const a of Array.from(frag.querySelectorAll("a"))) {
-			const href = a.getAttribute("href") ?? ""
-			if (hostAttributeValueFinding("a", "href", href)) a.removeAttribute("href")
-			else if (!href.startsWith("#")) {
-				a.setAttribute("target", "_blank")
-				a.setAttribute("rel", "noopener noreferrer")
-			}
-		}
-		for (const img of Array.from(frag.querySelectorAll("img")))
-			if (hostAttributeValueFinding("img", "src", img.getAttribute("src") ?? "")) img.remove()
-		const box = document.createElement("div")
-		box.appendChild(frag)
-		return box.innerHTML
-	}
-
 	const html = $derived.by(() => {
 		const rendered = renderMarkdownWithQuotedText(attrs.text ?? "")
-		return owner && owner !== "core" ? strict(rendered) : rendered
+		return owner && owner !== "core" ? strictSanitize(rendered) : rendered
 	})
 </script>
 

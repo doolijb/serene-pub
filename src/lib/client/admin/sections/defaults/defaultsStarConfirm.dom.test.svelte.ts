@@ -1,6 +1,6 @@
 /**
  * Admin → Defaults moves the embedding and entity stars with the same
- * confirmation as the Connections view (the W1-embed review): the embedding
+ * confirmation as the Models view (the W1-embed review): the embedding
  * row is priced by the server and asks before re-embedding; the entity row
  * asks before re-scanning. Nothing is written until the answer is yes, and a
  * "Keep" puts the picker back.
@@ -67,7 +67,7 @@ vi.mock("$lib/client/components/admin/AdminPageHeader.svelte", () => ({
 	default: () => {}
 }))
 
-import { capabilityLabel } from "@serene-pub/sdk"
+import { defaultLoadoutName } from "$lib/shared/loadouts/defaultLoadoutName"
 import Page from "./Page.svelte"
 
 const EMBED = "text->embedding"
@@ -180,7 +180,7 @@ const setDefaults = () =>
 
 describe("Admin → Defaults moves a star only after the confirmation", () => {
 	test("choosing another embedding connection asks the price first and writes nothing yet", async () => {
-		picker(`Connection for ${capabilityLabel(EMBED as any)}`).onValueChange(
+		picker(`Connection for ${defaultLoadoutName(EMBED)}`).onValueChange(
 			"2"
 		)
 		expect(setDefaults()).toEqual([])
@@ -191,7 +191,7 @@ describe("Admin → Defaults moves a star only after the confirmation", () => {
 	})
 
 	test("a price above zero opens the dialog; Switch and re-embed writes the star", async () => {
-		picker(`Connection for ${capabilityLabel(EMBED as any)}`).onValueChange(
+		picker(`Connection for ${defaultLoadoutName(EMBED)}`).onValueChange(
 			"2"
 		)
 		listeners.get("vectorization:reindexCost")!({
@@ -214,7 +214,7 @@ describe("Admin → Defaults moves a star only after the confirmation", () => {
 	})
 
 	test("Keep writes nothing and puts the picker back", async () => {
-		picker(`Connection for ${capabilityLabel(EMBED as any)}`).onValueChange(
+		picker(`Connection for ${defaultLoadoutName(EMBED)}`).onValueChange(
 			"2"
 		)
 		listeners.get("vectorization:reindexCost")!({
@@ -229,17 +229,17 @@ describe("Admin → Defaults moves a star only after the confirmation", () => {
 		// A fresh picker, showing the connection that is still starred.
 		expect(pickers.length).toBeGreaterThan(before)
 		expect(
-			picker(`Connection for ${capabilityLabel(EMBED as any)}`).value
+			picker(`Connection for ${defaultLoadoutName(EMBED)}`).value
 		).toBe("1")
 	})
 
 	test("a price of zero writes straight away", async () => {
-		picker(`Model for ${capabilityLabel(EMBED as any)}`).onValueChange("11")
+		picker(`Model for ${defaultLoadoutName(EMBED)}`).onValueChange("11")
 		// Unchanged: nothing to ask and nothing to write.
 		expect(
 			emitted.filter(([e]) => e === "vectorization:reindexCost")
 		).toEqual([])
-		picker(`Connection for ${capabilityLabel(EMBED as any)}`).onValueChange(
+		picker(`Connection for ${defaultLoadoutName(EMBED)}`).onValueChange(
 			"2"
 		)
 		listeners.get("vectorization:reindexCost")!({
@@ -251,7 +251,7 @@ describe("Admin → Defaults moves a star only after the confirmation", () => {
 	})
 
 	test("moving the entity star to another model asks before it re-scans", async () => {
-		picker(`Connection for ${capabilityLabel(NER as any)}`).onValueChange(
+		picker(`Connection for ${defaultLoadoutName(NER)}`).onValueChange(
 			"4"
 		)
 		expect(setDefaults()).toEqual([])
@@ -268,10 +268,10 @@ describe("Admin → Defaults moves a star only after the confirmation", () => {
 	})
 
 	test("turning either off asks nothing: what is stored stays", async () => {
-		picker(`Connection for ${capabilityLabel(EMBED as any)}`).onValueChange(
+		picker(`Connection for ${defaultLoadoutName(EMBED)}`).onValueChange(
 			""
 		)
-		picker(`Connection for ${capabilityLabel(NER as any)}`).onValueChange(
+		picker(`Connection for ${defaultLoadoutName(NER)}`).onValueChange(
 			""
 		)
 		expect(setDefaults()).toEqual([
@@ -350,17 +350,17 @@ describe("Admin → Defaults where local ONNX can't run", () => {
 	test("greys every local ONNX connection with the machine's reason", () => {
 		// The list says each option's type; nothing else is asked for.
 		expect(emitted.map(([e]) => e)).not.toContain("connections:list")
-		const embed = `Connection for ${capabilityLabel(EMBED as any)}`
+		const embed = `Connection for ${defaultLoadoutName(EMBED)}`
 		expect(option(embed, "1")).toMatchObject({ disabled: false })
 		expect(option(embed, "2")).toMatchObject({
 			disabled: true,
 			hint: `Not available on this machine: ${REASON}`
 		})
-		const ner = `Connection for ${capabilityLabel(NER as any)}`
+		const ner = `Connection for ${defaultLoadoutName(NER)}`
 		expect(option(ner, "4")).toMatchObject({ disabled: true })
 		// The registered entity model can't be swapped on that connection either.
 		expect(
-			picker(`Model for ${capabilityLabel(NER as any)}`).options[0]
+			picker(`Model for ${defaultLoadoutName(NER)}`).options[0]
 		).toMatchObject({
 			disabled: true,
 			hint: `Not available on this machine: ${REASON}`
@@ -368,14 +368,14 @@ describe("Admin → Defaults where local ONNX can't run", () => {
 	})
 
 	test("choosing one writes and asks nothing; clearing still writes", () => {
-		picker(`Connection for ${capabilityLabel(EMBED as any)}`).onValueChange(
+		picker(`Connection for ${defaultLoadoutName(EMBED)}`).onValueChange(
 			"2"
 		)
 		expect(
 			emitted.filter(([e]) => e === "vectorization:reindexCost")
 		).toEqual([])
 		expect(setDefaults()).toEqual([])
-		picker(`Connection for ${capabilityLabel(NER as any)}`).onValueChange(
+		picker(`Connection for ${defaultLoadoutName(NER)}`).onValueChange(
 			""
 		)
 		expect(setDefaults()).toEqual([
@@ -414,7 +414,7 @@ describe("Admin → Defaults where local ONNX can't run", () => {
 		flushSync()
 		listeners.get("connectionDefaults:list")!(typedList())
 		flushSync()
-		const embed = `Connection for ${capabilityLabel(EMBED as any)}`
+		const embed = `Connection for ${defaultLoadoutName(EMBED)}`
 		expect(option(embed, "2")).toMatchObject({ disabled: false })
 		expect(option(embed, "2")?.hint).toBeUndefined()
 	})

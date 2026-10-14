@@ -18,10 +18,21 @@
  * data, so it is not re-projected on every token. Scoped sections
  * (session_full/session_state/persona/characters/lore — the SDK's one table,
  * `WIDGET_SCOPED_SECTIONS`) appear ONLY when the widget declared the scope AND
- * it was granted — deny by default. Absence means "not granted", never a
- * silent empty.
+ * it was granted — deny by default (`projectScopedSections`). Absence means
+ * "not granted", never a silent empty.
  */
-import { formatChannel, parseChannel, type WidgetSectionScope } from "@serene-pub/sdk"
+import {
+	formatChannel,
+	parseChannel,
+	WIDGET_SCOPED_SECTIONS,
+	type SessionCharactersV1,
+	type SessionDossierV1,
+	type SessionPersonaV1,
+	type SessionStateV1,
+	type WidgetScopedSections,
+	type WidgetScopedSectionValues,
+	type WidgetSectionScope
+} from "@serene-pub/sdk"
 import { actionIdentity, parseActionIdentity } from "$lib/shared/actions/identity"
 import { dispatchAction, type ActionDispatch } from "./invokeAction"
 
@@ -34,8 +45,6 @@ import { dispatchAction, type ActionDispatch } from "./invokeAction"
 export type {
 	ActionsV1,
 	LayoutV1,
-	MenuResult,
-	MenuSpec,
 	MessageV1,
 	SessionV1,
 	WidgetAction,
@@ -49,6 +58,7 @@ export type {
 	WidgetVerbs,
 	ViewerV1,
 	SessionCharactersV1,
+	SessionPersonaV1,
 	SessionStateV1
 } from "@serene-pub/sdk"
 
@@ -430,18 +440,22 @@ export type WidgetRequestHandler = <K extends WidgetRequestKind>(
 	params: WidgetRequests[K]["params"],
 	/**
 	 * Which widget asks, whose it is — `core`, or the plugin's id — and the
-	 * scopes it was granted (F9), BARE (`lore`, `session:state`), never the
-	 * permission keys they are reviewed as (`widget:lore`): what the SDK's
-	 * `widgetRequestRefusal` judges a request by. Core's widgets hold every
-	 * scope, so theirs may be absent.
+	 * scopes and write grants it was granted (F9), BARE (`lore`,
+	 * `session:state`, `channel:dice:write`), never the permission keys they
+	 * are reviewed as (`widget:lore`), and the channels it declares (D4: a
+	 * channel write is held to them): what the SDK's `widgetRequestRefusal`
+	 * judges a request by. Core's widgets hold every scope, so theirs may be
+	 * absent.
 	 */
-	from: { widgetId: string; owner: string; grants?: readonly string[] }
+	from: { widgetId: string; owner: string; grants?: readonly string[]; channels?: readonly string[] }
 ) => Promise<WidgetRequests[K]["result"]>
 
 /** The Svelte context keys a session page provides beside the annex. */
 export const WIDGET_REQUESTS_KEY = "widgetRequests"
 export const SESSION_VIEWER_KEY = "sessionViewer"
 export const SESSION_TURN_ORDER_KEY = "sessionTurnOrder"
+/** The session's attendance (`attendance.v1`, W10): who of its people has it open, as whom each writes, who is typing. */
+export const SESSION_ATTENDANCE_KEY = "sessionAttendance"
 /** The conversation dossier (`session_full.v1`), for a widget granted `session:full`. */
 export const SESSION_DOSSIER_KEY = "sessionDossier"
 /**
@@ -458,17 +472,80 @@ export const SESSION_STATE_KEY = "sessionStateSection"
 export const SESSION_CHARACTERS_KEY = "sessionCharactersSection"
 
 /**
- * 🚧 Which page context supplies each scoped section — scope → the key its
- * `{ current }` handle is set under. A host reads a granted scope's section
- * off that handle and nowhere else. A scope with no entry has no page
- * context: its section is never projected, which a widget reads as "not
- * granted". `lore` is absent on purpose: the lore is paged by request
- * (`session-entries`), and the scope is the grant to ask; `persona` has no
- * supplier yet.
+ * 🚧 Which page context each scoped section is read off — scope → the key
+ * its `{ current }` handle is set under. A host reads a granted scope's
+ * section off that handle and nowhere else ({@link projectScopedSections}).
+ * `persona` shares the cast's handle: its section is cut from
+ * `characters.v1` ({@link personaSection}). `lore` has no entry because it
+ * carries no page data: the lore is paged by request (`session-entries`),
+ * the scope is the grant to ask, and its section is the grant marker
+ * ({@link LORE_GRANTED}).
  */
 export const SCOPED_SECTION_CONTEXT_KEYS: Readonly<Partial<Record<WidgetSectionScope, string>>> = Object.freeze({
 	"session:full": SESSION_DOSSIER_KEY,
 	"session:state": SESSION_STATE_KEY,
-	characters: SESSION_CHARACTERS_KEY
+	characters: SESSION_CHARACTERS_KEY,
+	persona: SESSION_CHARACTERS_KEY
 })
+
+/**
+ * 🚧 The `lore` section (`lore.v1`, C4): the **lore grant marker**. Posted
+ * whenever the scope is granted and never otherwise, so its presence means
+ * granted and its absence means not, with no "not yet" between.
+ */
+export const LORE_GRANTED: Readonly<WidgetScopedSections["lore"]["v1"]> = Object.freeze({ granted: true })
+
+/**
+ * 🚧 `persona.v1`, cut from `characters.v1`: the viewer's own personas in
+ * this session, the members that are `isPersona && mine` — the same
+ * objects, so a widget granted both reads one projection. Empty (never
+ * null) once the cast is known and the viewer writes as no persona; null
+ * only while there is no cast to cut it from.
+ */
+export function personaSection(
+	characters: SessionCharactersV1 | null | undefined
+): SessionPersonaV1[] | null {
+	if (!characters) return null
+	return characters.members.filter(
+		(m): m is SessionPersonaV1 => m.isPersona && m.mine
+	)
+}
+
+/**
+ * How each scoped section is made from what its page handle holds — typed
+ * off the SDK's table, so a scope the SDK adds with no supplier here does
+ * not compile, rather than reaching a widget as a section that never comes.
+ */
+const SCOPED_SECTION_SUPPLIERS: {
+	readonly [S in WidgetSectionScope]: (handle: unknown) => WidgetScopedSections[S]["v1"] | null
+} = Object.freeze({
+	"session:full": (h: unknown) => (h ?? null) as SessionDossierV1 | null,
+	"session:state": (h: unknown) => (h ?? null) as SessionStateV1 | null,
+	characters: (h: unknown) => (h ?? null) as SessionCharactersV1 | null,
+	persona: (h: unknown) => personaSection(h as SessionCharactersV1 | null | undefined),
+	lore: () => LORE_GRANTED
+})
+
+/**
+ * 🚧 The scoped sections a widget holding `grants` is posted, filed under
+ * the name the SDK's table posts each as — the ONE grant check: a scope
+ * not in `grants` is never read, and a granted one whose handle holds
+ * nothing yet is absent ("not yet", which `grants` lets a widget tell from
+ * "not granted"). `handleOf(scope)` is what that scope's page handle holds
+ * now (`SCOPED_SECTION_CONTEXT_KEYS`). Undefined when nothing is posted.
+ */
+export function projectScopedSections(
+	grants: readonly WidgetSectionScope[] | undefined,
+	handleOf: (scope: WidgetSectionScope) => unknown
+): Partial<WidgetScopedSectionValues> | undefined {
+	const out: Record<string, unknown> = {}
+	for (const scope of grants ?? []) {
+		if (!Object.hasOwn(SCOPED_SECTION_SUPPLIERS, scope)) continue
+		const value = SCOPED_SECTION_SUPPLIERS[scope](handleOf(scope))
+		if (value != null) out[WIDGET_SCOPED_SECTIONS[scope]] = value
+	}
+	return Object.keys(out).length
+		? (out as Partial<WidgetScopedSectionValues>)
+		: undefined
+}
 

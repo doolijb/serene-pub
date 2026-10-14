@@ -10,6 +10,11 @@
 	import ViewToolbar from "../panels/ViewToolbar.svelte"
 	import { toolbarButtonClass } from "../panels/toolbarButton"
 	import PanelSplit from "../panels/PanelSplit.svelte"
+	import SidebarListItem from "../SidebarListItem.svelte"
+	import RowMenu from "../menus/RowMenu.svelte"
+	import Avatar from "../Avatar.svelte"
+	import EmptyState from "../EmptyState.svelte"
+	import LoadingState from "../LoadingState.svelte"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
@@ -90,6 +95,15 @@
 		selectedUser = viewingUser
 		viewingUser = undefined
 		isEditing = true
+	}
+
+	/**
+	 * Whether this admin may edit or delete `user` from a row or the detail's
+	 * menu. Never their own account: the server refuses deleting it, and
+	 * their own edit is the detail's Edit.
+	 */
+	function canManage(user: SelectUser): boolean {
+		return isCurrentUserAdmin && user.id !== userCtx.user?.id
 	}
 
 	function confirmDelete(user: SelectUser) {
@@ -191,7 +205,7 @@
 	})
 </script>
 
-<div use:vm.observe class="flex h-full min-h-0 flex-col">
+<div class="flex h-full min-h-0 flex-col" use:vm.observe>
 	<PanelSplit
 		mode={vm.mode}
 		hasDetail={isCreating || isEditing || viewingUser != null}
@@ -203,28 +217,32 @@
 					user={selectedUser}
 					onSave={resetForm}
 					onCancel={resetForm}
+					showBack={vm.mode === "compact"}
 				/>
 			{:else if viewingUser}
-				{#key viewingUser.id}
+				{@const shown = viewingUser}
+				{#key shown.id}
 					<UserViewPanel
-						user={viewingUser}
+						user={shown}
 						{isCurrentUserAdmin}
-						onBack={vm.mode === "desk"
-							? undefined
-							: () => (viewingUser = undefined)}
+						onBack={vm.mode === "compact"
+							? () => (viewingUser = undefined)
+							: undefined}
 						onEdit={handleEditFromView}
+						onDelete={canManage(shown)
+							? () => confirmDelete(shown)
+							: undefined}
 					/>
 				{/key}
 			{/if}
 		{/snippet}
 
-		{#snippet list()}
+		{#snippet toolbar()}
 			<!-- The view toolbar (STYLE-GUIDE §6.3): New is the primary;
 			     Invite is a secondary toggle, tonal primary while its panel
 			     is open — pressed is tonal, never filled. -->
 			<ViewToolbar
 				label="Users"
-				class="mb-4"
 				primary={isCurrentUserAdmin ? newUserButton : undefined}
 				actions={isCurrentUserAdmin ? inviteToggle : undefined}
 			>
@@ -240,109 +258,106 @@
 					/>
 				{/snippet}
 			</ViewToolbar>
+		{/snippet}
 
+		{#snippet list()}
 			{#if isCurrentUserAdmin && showInvites}
 				<!-- Same component the Users admin page renders, so the two
 				     cannot drift; `compact` only trims it for this width. -->
-				<div class="panel-card mb-4">
+				<div class="panel-card mb-3">
 					<InvitePanel compact />
 				</div>
 			{/if}
 
-			<!-- User List -->
-			<div class="min-h-0 flex-1 overflow-y-auto">
-				{#if isLoading}
-					<div class="flex items-center justify-center py-8">
-						<Icons.Loader2
-							size={20}
-							class="text-surface-600-400 animate-spin"
-						/>
-					</div>
-				{:else if filteredUsers.length === 0}
-					<div class="text-surface-700-300 py-8 text-center text-sm">
-						{search
-							? `No users matching "${search}".`
-							: "No users found."}
-					</div>
-				{:else}
-					<div class="space-y-2">
-						{#each filteredUsers as user}
-							{@const isSelected =
-								vm.mode === "desk" &&
+			{#if isLoading}
+				<LoadingState message="Loading users…" />
+			{:else if filteredUsers.length === 0}
+				<EmptyState
+					icon={Icons.Users}
+					message={search
+						? `No users match "${search}".`
+						: "No users yet."}
+					ctaLabel={isCurrentUserAdmin && !search
+						? "New user"
+						: undefined}
+					onCta={isCurrentUserAdmin && !search
+						? startCreate
+						: undefined}
+				/>
+			{:else}
+				<div class="flex flex-col gap-1" role="list" aria-label="Users">
+					{#each filteredUsers as user (user.id)}
+						{@const name = user.displayName || user.username}
+						<SidebarListItem
+							onclick={() => handleViewClick(user)}
+							contentTitle={name}
+							itemType={user.isAdmin ? "Administrator" : "User"}
+							showIndex={false}
+							active={vm.mode === "desk" &&
 								selectedUserId === user.id}
-							<div
-								class="card {isSelected
-									? 'sidebar-row-active'
-									: 'preset-filled-surface-100-900 hover:preset-tonal-primary'} flex w-full items-center justify-between p-3 transition-colors"
-								role="listitem"
-								aria-current={isSelected ? "true" : undefined}
-							>
-								<button
-									class="flex min-w-0 flex-1 items-center gap-2 text-left"
-									onclick={() => handleViewClick(user)}
-									type="button"
+						>
+							{#snippet content()}
+								<!-- The row's 40px face (§6.4); an account has no
+								     picture, so it is the name's initial. -->
+								<Avatar
+									{name}
+									fallback="initial"
+									size="md"
+									decorative
+								/>
+								<div
+									class="flex min-w-0 flex-1 items-center gap-2"
 								>
-									<span class="truncate font-medium">
-										{user.displayName || user.username}
-									</span>
-									{#if user.displayName}
-										<span
-											class="text-surface-700-300 shrink-0 text-xs"
+									<div class="min-w-0 flex-1 text-left">
+										<div
+											class="truncate text-[15px] font-medium"
+										>
+											{name}
+										</div>
+										<div
+											class="text-surface-600-400 truncate text-xs"
 										>
 											@{user.username}
-										</span>
-									{/if}
+										</div>
+									</div>
 									{#if user.isAdmin}
-										<!-- Tonal, not filled: this is a
-										     3.6:1 pill of body text when
-										     filled, and it is a fact about the
-										     row rather than an action. -->
+										<!-- A fact about the row, not an action:
+										     the neutral chip, never filled. -->
 										<span
-											class="preset-tonal-primary shrink-0 rounded px-1.5 py-0.5 text-xs"
+											class="preset-tonal-surface text-surface-700-300 shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium"
 										>
 											Admin
 										</span>
 									{/if}
-								</button>
-
-								{#if isCurrentUserAdmin && user.id !== userCtx.user?.id}
-									<div
-										class="ml-2 flex shrink-0 gap-1"
-										role="group"
-										aria-label="Actions for {user.displayName ||
-											user.username}"
-									>
-										<button
-											class="btn btn-sm preset-filled-surface-400-600"
-											onclick={(e) => {
-												e.stopPropagation()
-												startEdit(user)
-											}}
-											title="Edit user"
-											type="button"
-										>
-											<Icons.Pencil size={14} />
-											Edit
-										</button>
-										<button
-											class="btn btn-sm preset-tonal-error"
-											onclick={(e) => {
-												e.stopPropagation()
-												confirmDelete(user)
-											}}
-											title="Delete user"
-											type="button"
-										>
-											<Icons.Trash2 size={14} />
-											Delete
-										</button>
-									</div>
+								</div>
+							{/snippet}
+							{#snippet controls()}
+								{#if canManage(user)}
+									<RowMenu
+										label="User"
+										triggerClass="btn btn-sm hover:bg-surface-200-800 data-[state=open]:bg-surface-200-800 shrink-0 p-3"
+										items={[
+											{
+												label: "Edit",
+												icon: Icons.Pencil,
+												onSelect: () => startEdit(user)
+											},
+											{ separator: true },
+											{
+												label: "Delete",
+												icon: Icons.Trash2,
+												destructive: true,
+												onSelect: () =>
+													confirmDelete(user)
+											}
+										]}
+									/>
 								{/if}
-							</div>
-						{/each}
-					</div>
-				{/if}
-			</div>
+							{/snippet}
+						</SidebarListItem>
+					{/each}
+				</div>
+			{/if}
 		{/snippet}
 	</PanelSplit>
 </div>
@@ -376,7 +391,7 @@
 					</p>
 					<div class="flex justify-end gap-2">
 						<button
-							class="btn btn-sm preset-filled-surface-500"
+							class="btn btn-sm preset-tonal-surface"
 							onclick={() => {
 								showDeleteModal = false
 								userToDelete = undefined

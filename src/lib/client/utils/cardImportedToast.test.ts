@@ -42,4 +42,15 @@ describe("cardImportedToast", () => {
 				?.description
 		).toBe("Character Ari imported successfully.")
 	})
+
+	test("import summary lines follow the sentence, and keep a success a success", () => {
+		const t = cardImportedToast({
+			character: { name: "Aria" },
+			summary: ["The card's lorebook was small and plain, so its 3 entries became keyword strokes on the card instead of a separate lorebook."]
+		})
+		expect(t?.kind).toBe("success")
+		expect(t?.description).toBe(
+			"Character Aria imported successfully. The card's lorebook was small and plain, so its 3 entries became keyword strokes on the card instead of a separate lorebook."
+		)
+	})
 })

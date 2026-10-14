@@ -155,12 +155,9 @@ describe("provenance — the answer to 'why is my LLM offering image generation'
 		expect(find(view, "streaming").decidedBy).toBe("default")
 	})
 
-	// `json_schema` rather than `text->image`, which this used to assert: the
-	// OPENAI entry no longer declares image generation for anyone (nothing
-	// implements `generateImage` for that type, so the key cannot be derived) and
-	// the `openai-official` preset no longer asserts it. `json_schema` is the
-	// same shape of fact — declared `{unproven:true}` by the adapter, asserted
-	// `true` by this preset — so the row is still decided by the preset layer.
+	// `json_schema`: declared `{unproven:true}` by the adapter, asserted `true`
+	// by this preset — so the row is decided by the preset layer. (`text->image`
+	// is the same shape again since the OpenAI-images module, 2026-10-12.)
 	test("a preset is named by its display name, not its slug", () => {
 		const view = buildCapabilityRows({
 			type: CONNECTION_TYPE.OPENAI,

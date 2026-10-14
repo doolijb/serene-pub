@@ -81,15 +81,15 @@ describe("the messages widget's Card setting is a backing mode", () => {
 		const basic = settingsSections(messages).basic
 		expect(basic.map((f) => f.key)).toEqual(["title", "backingMode"])
 		expect(basic[1].decl).toMatchObject({ type: "enum", label: "Card", default: "auto" })
-		expect(effectiveWidgetSettings(messages, {}).backingMode).toBe("auto")
+		expect(effectiveWidgetSettings({ decl: messages, stored: {} }).backingMode).toBe("auto")
 	})
 	it("other widgets keep the boolean host card", () => {
 		expect(widgetSettingsSchema({ id: "stats", title: "Stats" }).backingMode).toBeUndefined()
 	})
 	it("a stored hostCard boolean reads as On / Off", () => {
-		expect(effectiveWidgetSettings(messages, { hostCard: true }).backingMode).toBe("on")
-		expect(effectiveWidgetSettings(messages, { hostCard: false }).backingMode).toBe("off")
-		expect(effectiveWidgetSettings(messages, { hostCard: true }).hostCard).toBeUndefined()
+		expect(effectiveWidgetSettings({ decl: messages, stored: { hostCard: true } }).backingMode).toBe("on")
+		expect(effectiveWidgetSettings({ decl: messages, stored: { hostCard: false } }).backingMode).toBe("off")
+		expect(effectiveWidgetSettings({ decl: messages, stored: { hostCard: true } }).hostCard).toBeUndefined()
 	})
 	it("the prune stores the mapped mode (so the reconcile migrates it) and drops nothing", () => {
 		const out = pruneWidgetSettings(widgetSettingsSchema(messages), { hostCard: true })

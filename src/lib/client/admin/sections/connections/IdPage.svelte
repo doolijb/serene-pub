@@ -1,14 +1,14 @@
 <script lang="ts">
 	/**
 	 * Admin → Connections → one connection: the change form (owner ruling
-	 * 2026-09-27 — Django-style management, not the Connections view nested
+	 * 2026-09-27 — Django-style management, not the Models view nested
 	 * in admin). Everything an admin sets on a connection, in fieldsets:
 	 *
-	 * - **Status** — does it answer (the same line the Connections view
+	 * - **Status** — does it answer (the same line the Models view
 	 *   shows), and Test.
 	 * - **Identity** — name and notes; service, type and modality readonly.
 	 * - **Endpoint and credentials** — the service's own form
-	 *   (`ConnectionTypeForm`, shared with the Connections view).
+	 *   (`ConnectionTypeForm`, shared with the Models view).
 	 * - **KoboldCPP runtime** — for the managed KoboldCPP: the manager's own
 	 *   settings, binary and server address (`KoboldCppSettingsTab`).
 	 * - **Models** — what the host lists, with Refresh, Add by name, enable
@@ -23,7 +23,7 @@
 	 *   and the lane panels.
 	 *
 	 * The draft is saved with `connections:update` — the same event, the
-	 * same server rules as the Connections view — and then the model levers,
+	 * same server rules as the Models view — and then the model levers,
 	 * one write at a time (`saveInSequence`), each waiting for its answer.
 	 * What writes on its own (capabilities, stop scripts, the runtime's
 	 * settings, a model sync or download) is never part of the draft, so it
@@ -35,6 +35,7 @@
 	 */
 	import { getContext, onMount, untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
+	import { openInConnections } from "$lib/client/admin/railDoors"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import {
@@ -88,6 +89,7 @@
 		statusLine,
 		type LastTest
 	} from "$lib/client/components/connections/connectionViewChrome"
+	import { CONNECTION_STATE_DOT } from "$lib/client/components/connections/connectionRowStatus"
 	import {
 		capabilityWord,
 		connectionDeletion,
@@ -101,6 +103,7 @@
 		modelEditCount,
 		modelEditPlan,
 		modelsWithEdits,
+		outcomeInLabels,
 		noModelEdits,
 		withDefaultEdit,
 		withEnabledEdit,
@@ -270,9 +273,12 @@
 		const plan = modelEditPlan(liveEdits, row.models, capabilityWord)
 		if (!plan.length) return land(intent)
 		const steps: SaveStep[] = plan.map((step) =>
+			// Steps go to `saveInSequence` under their KEYS (`enabled:<id>`,
+			// `default:<capability>`): two models can read alike, and a label
+			// is only what the summary says (`outcomeInLabels`).
 			step.kind === "enabled"
 				? {
-						label: step.label,
+						label: step.key,
 						run: () =>
 							awaitReply({
 								socket,
@@ -287,7 +293,7 @@
 							})
 					}
 				: {
-						label: step.label,
+						label: step.key,
 						after: step.after,
 						run: () =>
 							awaitReply({
@@ -308,9 +314,10 @@
 		)
 		saving = true
 		formErrors = []
-		const outcome = await saveInSequence(steps)
+		const keyed = await saveInSequence(steps)
 		saving = false
-		modelEdits = withoutSteps(modelEdits, plan, outcome.landed)
+		modelEdits = withoutSteps(modelEdits, plan, keyed.landed)
+		const outcome = outcomeInLabels(keyed, plan)
 		if (outcome.refused.length || outcome.skipped.length) {
 			formErrors = saveErrors(outcome)
 			toaster.warning({ title: saveSummary(outcome, title) })
@@ -330,15 +337,19 @@
 
 	// ── delete ──────────────────────────────────────────────────────────
 	let deleting = false
+	/** Read when the delete is asked, sent once it is acknowledged. */
+	let releasing: ReturnType<typeof managerFlagsReleased> = []
 	function remove() {
 		if (!row) return
-		for (const event of managerFlagsReleased([id], rows))
-			socket.emit(event, { enabled: false })
+		releasing = managerFlagsReleased([id], rows)
 		deleting = true
 		socket.emit("connections:delete", { id })
 	}
 	useInterest<"connections:delete">("connections:delete", (msg) => {
 		if (msg.id !== id) return
+		if (deleting)
+			for (const event of releasing) socket.emit(event, { enabled: false })
+		releasing = []
 		edits.forget()
 		if (deleting) toaster.success({ title: "Connection deleted" })
 		void adminGoto("/admin/connections", { replaceState: true })
@@ -440,13 +451,6 @@
 			})
 	)
 	const keyUrl = $derived(row ? keyUrlFor({ type: row.type, preset: row.preset }) : null)
-	const DOT: Record<string, string> = {
-		ok: "bg-success-500",
-		pending: "bg-warning-500 animate-pulse",
-		warning: "bg-warning-500",
-		error: "bg-error-500",
-		quiet: "bg-surface-400-600"
-	}
 	/** The models fieldset's own width decides table or rows. */
 	let modelsWidth = $state(0)
 
@@ -491,7 +495,7 @@
 		if (costly) {
 			toaster.info({
 				title: `Switching ${capabilityWord(capability)} rebuilds stored work`,
-				description: "Admin → Defaults shows the cost before it switches."
+				description: "Admin › Models › Loadouts shows the cost before it switches."
 			})
 			void adminGoto("/admin/defaults")
 			return
@@ -504,8 +508,8 @@
 		if (m) modelEdits = withEnabledEdit(modelEdits, m, enabled)
 	}
 	/** One "Waiting for Save" chip's ×: that lever goes back to what is saved. */
-	function dropPending(label: string) {
-		modelEdits = withoutSteps(modelEdits, pendingSteps, [label])
+	function dropPending(key: string) {
+		modelEdits = withoutSteps(modelEdits, pendingSteps, [key])
 	}
 	/**
 	 * A model row's one press: `rowAction`, less Download and Retry where
@@ -552,10 +556,8 @@
 	}
 
 	/** Out of admin, into the Connections view on this connection. */
-	function openInConnections() {
-		if (!panelsCtx) return
-		panelsCtx.digest.connectionId = id
-		panelsCtx.openPanel({ key: "connections" })
+	function openConnectionView() {
+		openInConnections(panelsCtx, { connectionId: id })
 	}
 </script>
 
@@ -596,7 +598,10 @@
 			<button
 				type="button"
 				class="btn btn-sm preset-tonal-surface"
-				onclick={openInConnections}
+				onclick={openConnectionView}
+				aria-label="Open in Connections: {row?.name ??
+					connection?.name ??
+					`Connection ${id}`}"
 			>
 				<Icons.Cable size={16} aria-hidden="true" />
 				Open in Connections
@@ -616,7 +621,7 @@
 				</span>
 				{#each held as h (h.capability)}
 					<span class="preset-tonal-primary rounded-full px-2 py-0.5">
-						Default for {h.label}
+						{h.label} loadout
 					</span>
 				{/each}
 			</div>
@@ -658,7 +663,7 @@
 					</p>
 				{:else}
 					<p class="flex min-w-0 items-center gap-2 text-sm" aria-live="polite">
-						<span class="size-2 shrink-0 rounded-full {DOT[line.dot]}" aria-hidden="true"></span>
+						<span class="size-2 shrink-0 rounded-full {CONNECTION_STATE_DOT[line.dot]}" aria-hidden="true"></span>
 						<span class="font-medium">{line.word}</span>
 						<span class="text-surface-600-400 min-w-0 truncate text-xs" title={line.sentence}>
 							· {line.sentence}
@@ -740,7 +745,7 @@
 			>
 				<KoboldCppSettingsTab
 					isManaged={koboldCppSettingsCtx?.settings?.koboldCppManagedMode === "managed"}
-					onUpdateBinary={openInConnections}
+					onUpdateBinary={openConnectionView}
 				/>
 			</AdminFieldset>
 		{/if}
@@ -792,7 +797,7 @@
 								until it can run local models.
 							{:else if isOnnx || kind === "koboldcpp-managed" || kind === "ollama"}
 								No models on this machine yet. Find and download them in
-								the Connections view.
+								the Models view.
 							{:else}
 								The host has listed no models. Refresh, or add one by name.
 							{/if}
@@ -814,7 +819,7 @@
 									: m.local?.state === "on_disk"
 										? "On this machine"
 										: null}
-								onOpen={openInConnections}
+								onOpen={openConnectionView}
 								onUse={() => modelAction(m)}
 							/>
 						{/each}
@@ -823,7 +828,7 @@
 							models={shownModels}
 							{defaultsByModel}
 							local={kind !== "api"}
-							onOpen={openInConnections}
+							onOpen={openConnectionView}
 							onUse={useModel}
 							onToggleEnabled={toggleModel}
 						/>
@@ -835,7 +840,7 @@
 								canUse={!!(m.satisfiableCapabilities ?? []).length &&
 									m.enabled !== false &&
 									!defaultsByModel[m.id]?.length}
-								onOpen={openInConnections}
+								onOpen={openConnectionView}
 								onUse={() => useModel(m.id)}
 							/>
 						{/each}
@@ -860,7 +865,7 @@
 									<button
 										type="button"
 										class="hover:text-surface-950-50 shrink-0"
-										onclick={() => dropPending(step.label)}
+										onclick={() => dropPending(step.key)}
 										title="Put it back"
 										aria-label={`Undo: ${step.label}`}
 									>
@@ -931,13 +936,13 @@
 
 		<!-- ── Defaults ───────────────────────────────────────────── -->
 		<AdminFieldset
-			title="Defaults"
-			description="The capability defaults that point at this connection. A connection does nothing until one does."
+			title="Loadouts"
+			description="The default loadouts this connection fills. A connection does nothing until one does."
 		>
 			{#snippet aside()}
 				<a href="/admin/defaults" class="btn btn-sm preset-tonal-surface shrink-0">
 					<Icons.Target size={14} aria-hidden="true" />
-					Change defaults
+					Change loadouts
 				</a>
 			{/snippet}
 			{#if held.length}
@@ -953,13 +958,14 @@
 				</ul>
 			{:else}
 				<p class="text-surface-600-400 text-sm">
-					None. Use a model above, or pick this connection in Defaults.
+					None. Use a model above, or pick this connection in Loadouts.
 				</p>
 			{/if}
 		</AdminFieldset>
 
 		<!-- ── Stop scripts ───────────────────────────────────────── -->
 		<AdminFieldset
+			id="stop-scripts"
 			title="Stop scripts"
 			description="Guards that end a streamed reply early. Every pipeline using this connection inherits them. They attach and detach on their own."
 		>

@@ -2,7 +2,7 @@
  * **Local discovery** — which model servers are already running on THIS
  * machine, and what chat models each one can answer with.
  *
- * The setup wizard's Choose an LLM step asks this once on arrival, so a person
+ * The setup wizard's Choose an AI step asks this once on arrival, so a person
  * who already runs Ollama, LM Studio, llama.cpp or KoboldCPP sees it as a card
  * and picks a model in one press, instead of being sent to a form that asks
  * for an address they never had to know.
@@ -30,6 +30,7 @@
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { normalizeProbedModels } from "$lib/shared/connections/probedModels"
+import { modelModalityAllows } from "$lib/server/pipelines/runtime/capabilityGuard"
 import { adapterIO } from "./modelSync"
 
 /** A fingerprint must answer within this, or the service counts as absent. */
@@ -131,9 +132,17 @@ async function fingerprint(
 }
 
 /**
- * The models worth offering for chat: text generation, or a listing that says
- * nothing about modality (llama.cpp, LM Studio's LLM entries). Embedding and
- * image models are left out — registering one for chat is refused.
+ * The models worth offering for chat: the ones whose modality the chat star
+ * would accept (`modelModalityAllows`), so the card counts what registering
+ * one would allow. Embedding and image models are left out — registering one
+ * for chat is refused. A model the listing says nothing about (llama.cpp, LM
+ * Studio's LLM entries, a "Not sure" Ollama model) is offered, as the server
+ * offers it for every job.
+ *
+ * Ollama's modality is read where a sync reads it: its adapter's `listModels`
+ * asks `/api/show` for each model's `capabilities` (`/api/tags` carries none)
+ * and writes `modality` from them. An older Ollama, or a model claiming both
+ * completion and embedding, stays unlabelled.
  */
 export function chatModelsOf(listed: unknown): DiscoveredModel[] {
 	// LM Studio's SDK marks embedding entries by `type`, which the shared
@@ -149,7 +158,7 @@ export function chatModelsOf(listed: unknown): DiscoveredModel[] {
 			)
 		: []
 	return normalizeProbedModels(entries)
-		.filter((m) => m.modality == null || m.modality === "text-gen")
+		.filter((m) => modelModalityAllows(m.modality, "text->text"))
 		.map((m) => ({ model: m.model, name: m.name || m.model }))
 }
 

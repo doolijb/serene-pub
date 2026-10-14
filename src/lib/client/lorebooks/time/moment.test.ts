@@ -14,13 +14,12 @@ import {
 	amendmentsAheadSentence,
 	castArrivalDates,
 	momentDate,
-	momentBannerSentence,
-	momentChipLabel,
+	momentWords,
 	momentKey,
 	momentValue,
 	notYetKeys,
 	parseMoment,
-	poolAsOfSentence,
+	asOfCountSentence,
 	goToDate,
 	againstPresent
 } from "./moment"
@@ -94,12 +93,23 @@ describe("as of — what is in the story at this moment", () => {
 	// `compareDates` does not.
 	it("orders by compareDates, never the packed value", () => {
 		expect(
-			isInStoryAsOf({ year: 3, month: 1, day: 150 }, { year: 3, month: 2, day: 1 })
+			isInStoryAsOf(
+				{ year: 3, month: 1, day: 150 },
+				{ year: 3, month: 2, day: 1 }
+			)
 		).toBe(true)
 		expect(
-			isInStoryAsOf({ year: 3, month: 2, day: 1 }, { year: 3, month: 1, day: 150 })
+			isInStoryAsOf(
+				{ year: 3, month: 2, day: 1 },
+				{ year: 3, month: 1, day: 150 }
+			)
 		).toBe(false)
-		expect(isInStoryAsOf({ year: 3, month: 12, day: 250 }, { year: 5, month: 1, day: 50 })).toBe(true)
+		expect(
+			isInStoryAsOf(
+				{ year: 3, month: 12, day: 250 },
+				{ year: 5, month: 1, day: 50 }
+			)
+		).toBe(true)
 		expect(momentDate("Y3-1-150")).toEqual({ year: 3, month: 1, day: 150 })
 	})
 })
@@ -139,19 +149,17 @@ describe("castArrivalDates — the first dated thing naming each member", () => 
 })
 
 describe("the moment, said out loud", () => {
-	it("counts the pool and what is not in the story yet", () => {
-		expect(poolAsOfSentence(30, 3)).toBe(
-			"30 entries · 3 not in the story yet at this moment"
+	it("says the moment in words at the head of the bar", () => {
+		expect(momentWords(undefined)).toBe("Reading now")
+		expect(momentWords("Y2-8")).toBe("Reading as of Year 2, Mo. 8")
+	})
+
+	it("counts the pool as of the moment for the bar", () => {
+		expect(asOfCountSentence(41, 0)).toBe("41 entries as of this moment")
+		expect(asOfCountSentence(1, 0)).toBe("1 entry as of this moment")
+		expect(asOfCountSentence(41, 3)).toBe(
+			"41 entries as of this moment, 3 not in the story yet"
 		)
-	})
-
-	it("says nothing about arrivals when everything has arrived", () => {
-		expect(poolAsOfSentence(30, 0)).toBe("30 entries")
-	})
-
-	it("names the moment on the bar's chip", () => {
-		expect(momentChipLabel(undefined)).toBe("Moment · now")
-		expect(momentChipLabel("Y2-8")).toBe("Moment · Year 2, Mo. 8")
 	})
 
 	it("counts the cast still to arrive", () => {
@@ -166,12 +174,6 @@ describe("the moment, said out loud", () => {
 		)
 		expect(amendmentsAheadSentence(4, 4)).toBe(
 			"4 of 4 have not happened yet at this moment"
-		)
-	})
-
-	it("names the choice a save here presents", () => {
-		expect(momentBannerSentence("Y2-8")).toBe(
-			"Reading as of Year 2, Mo. 8. A change saved here can begin at this date, or change it everywhere."
 		)
 	})
 })
@@ -233,8 +235,12 @@ describe("goToDate — a moment can land on a date with no row (#164)", () => {
 	})
 
 	it("refuses what the calendar does not have, never clamping it", () => {
-		expect("problem" in goToDate({ year: 7, month: 4, day: 1 }, THREE_MONTHS)).toBe(true)
-		expect("problem" in goToDate({ year: 7, month: 3, day: 29 }, THREE_MONTHS)).toBe(true)
+		expect(
+			"problem" in goToDate({ year: 7, month: 4, day: 1 }, THREE_MONTHS)
+		).toBe(true)
+		expect(
+			"problem" in goToDate({ year: 7, month: 3, day: 29 }, THREE_MONTHS)
+		).toBe(true)
 	})
 
 	it("a date needs a year, and a day needs a month", () => {

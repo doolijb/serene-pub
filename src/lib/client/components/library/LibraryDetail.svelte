@@ -12,11 +12,17 @@
 	 * in, the primary becomes **Open in Characters**, which is what a person
 	 * who just imported something does next — and the view stays where it was,
 	 * so browsing carries on.
+	 *
+	 * **Inside the home wizard** (its Character step on screen,
+	 * `wizardCharacterStep`) the same button reads **Pick this character** and
+	 * the chip **Picked**: there the person is choosing who the AI plays, and
+	 * the card taken is chosen on the step. It is the same import underneath.
 	 */
 	import * as Icons from "@lucide/svelte"
 	import type { LibraryCatalogItem } from "$lib/shared/library/types"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import DetailHero from "$lib/client/components/panels/DetailHero.svelte"
+	import { wizardCharacterStep } from "$lib/client/wizard/wizardCharacterStep.svelte"
 	import RetryableImage from "./RetryableImage.svelte"
 
 	interface Props {
@@ -56,6 +62,15 @@
 		]
 			.filter(Boolean)
 			.join(" · ")
+	)
+
+	/** The wizard's Character step is beside this: say Pick, not Import. */
+	let picking = $derived(wizardCharacterStep.active)
+	/** This result is the character chosen on that step. */
+	let picked = $derived(
+		picking &&
+			importedCharacterId != null &&
+			importedCharacterId === wizardCharacterStep.pickedCharacterId
 	)
 </script>
 
@@ -115,7 +130,7 @@
 							class="badge preset-tonal-success inline-flex items-center gap-1 text-xs"
 						>
 							<Icons.Check size={12} aria-hidden="true" />
-							In your characters
+							{picked ? "Picked" : "In your characters"}
 						</span>
 					{/if}
 				</div>
@@ -145,10 +160,10 @@
 								class="animate-spin"
 								aria-hidden="true"
 							/>
-							Importing…
+							{picking ? "Picking…" : "Importing…"}
 						{:else}
 							<Icons.Download size={16} aria-hidden="true" />
-							Import
+							{picking ? "Pick this character" : "Import"}
 						{/if}
 					</button>
 				{/if}

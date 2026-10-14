@@ -2,10 +2,15 @@ import { describe, expect, test } from "vitest"
 import {
 	modelsHeadline,
 	statusLine,
+	nextStep,
+	chatDefaultFirst,
+	modelMatchesQuery,
+	showsModelsFilter,
 	activeApiTab,
 	apiConnectionTabs,
 	showsTabStrip,
-	type ChromeFacts
+	type ChromeFacts,
+	type NextStepFacts
 } from "./connectionViewChrome"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
@@ -22,9 +27,9 @@ const facts = (over: Partial<ChromeFacts> = {}): ChromeFacts => ({
 })
 
 describe("statusLine — the whether, before the how", () => {
-	test("nothing has asked: not checked, and what to do", () => {
+	test("nothing has asked: idle, not checked, and what to do", () => {
 		expect(statusLine(facts())).toEqual({
-			dot: "quiet",
+			dot: "idle",
 			word: "Not checked yet",
 			sentence: "Test it, or ask for its models"
 		})
@@ -33,7 +38,7 @@ describe("statusLine — the whether, before the how", () => {
 		expect(
 			statusLine(facts({ modelsSync: { at: "2026-09-18", error: null } }))
 		).toEqual({
-			dot: "ok",
+			dot: "ready",
 			word: "Listed",
 			sentence: "Models checked 3 minutes ago"
 		})
@@ -44,7 +49,7 @@ describe("statusLine — the whether, before the how", () => {
 				})
 			)
 		).toEqual({
-			dot: "warning",
+			dot: "broken",
 			word: "Couldn't list models",
 			sentence: "401 Unauthorized"
 		})
@@ -58,7 +63,7 @@ describe("statusLine — the whether, before the how", () => {
 				})
 			)
 		).toEqual({
-			dot: "ok",
+			dot: "ready",
 			word: "Reachable",
 			sentence: "Answered just now"
 		})
@@ -74,16 +79,145 @@ describe("statusLine — the whether, before the how", () => {
 				})
 			)
 		).toEqual({
-			dot: "error",
+			dot: "broken",
 			word: "Not reachable",
 			sentence: "ECONNREFUSED"
 		})
 	})
-	test("in flight says so, and testing outranks a sync", () => {
-		expect(statusLine(facts({ syncing: true })).word).toBe("Checking")
-		expect(statusLine(facts({ syncing: true, testing: true })).word).toBe(
-			"Testing"
-		)
+	test("in flight is busy, and testing outranks a sync", () => {
+		expect(statusLine(facts({ syncing: true }))).toMatchObject({
+			dot: "busy",
+			word: "Checking"
+		})
+		expect(
+			statusLine(facts({ syncing: true, testing: true }))
+		).toMatchObject({ dot: "busy", word: "Testing" })
+	})
+})
+
+describe("nextStep — the one thing to do next, by the word on its control", () => {
+	const step = (over: Partial<NextStepFacts> = {}) =>
+		nextStep({
+			...facts(),
+			keyMissing: false,
+			hasCredential: true,
+			unsaved: false,
+			servesChat: false,
+			chat: null,
+			...over
+		})
+	const LISTED = { modelsSync: { at: "2026-10-06", error: null }, modelCount: 503 }
+	const FAILED = { modelsSync: { at: "2026-10-06", error: "401 Unauthorized" } }
+
+	test("1 · a key is wanted: paste it, then Save — not Test, which clears nothing", () => {
+		const s = step({ keyMissing: true, hasCredential: false, ...FAILED })
+		expect(s).toMatchObject({
+			state: "unfinished",
+			action: "save",
+			text: "Paste your API key below, then press Save."
+		})
+		expect(s!.parts).toContainEqual({ strong: "Save" })
+	})
+
+	test("2 · a dirty draft names the Save bar, whatever else is true", () => {
+		for (const over of [
+			{ keyMissing: true, hasCredential: false },
+			{ ...FAILED },
+			{ ...LISTED, servesChat: true },
+			{ chat: { onThisConnection: true, modelName: "Nemo" } }
+		])
+			expect(step({ unsaved: true, ...over })).toMatchObject({
+				state: "unfinished",
+				action: "save",
+				text: "Press Save to keep these changes."
+			})
+	})
+
+	test("3 · a failure says what failed, then Test again; red only with a saved key", () => {
+		expect(step({ ...FAILED, servesChat: true })).toMatchObject({
+			state: "broken",
+			action: "test",
+			text: "401 Unauthorized. Check the key and press Test again."
+		})
+		expect(step({ ...FAILED, hasCredential: false })?.state).toBe("unfinished")
+		// A failed test this visit is the newer failure, and keeps its own stop.
+		expect(
+			step({ lastTest: { ok: false, error: "ECONNREFUSED.", at: 1 } })?.text
+		).toBe("ECONNREFUSED. Check the key and press Test again.")
+	})
+
+	test("3 · read off the status line: a passed test or a check in flight is no failure", () => {
+		expect(
+			step({ ...FAILED, lastTest: { ok: true, error: null, at: 999_000 } })
+		).toBeNull()
+		expect(step({ ...FAILED, syncing: true })).toBeNull()
+		expect(step({ ...FAILED, testing: true })).toBeNull()
+	})
+
+	test("4 · it lists a chat model and chat is unset: Models, then Use in Reply", () => {
+		const s = step({ ...LISTED, servesChat: true })
+		expect(s).toMatchObject({
+			state: "unfinished",
+			action: "models",
+			text: "Pick a model under Models and press Use in Reply."
+		})
+		expect(s!.parts).toEqual([
+			"Pick a model under ",
+			{ strong: "Models" },
+			" and press ",
+			{ strong: "Use in Reply" },
+			"."
+		])
+	})
+
+	test("5 · the chat default: which model replies, and Start a session", () => {
+		expect(
+			step({
+				...LISTED,
+				servesChat: true,
+				chat: { onThisConnection: true, modelName: "Nemo" }
+			})
+		).toMatchObject({
+			state: "ready",
+			action: "session",
+			text: "Replies come from Nemo."
+		})
+	})
+
+	test("6 · otherwise nothing: chat set elsewhere, or nothing here chats", () => {
+		expect(
+			step({
+				...LISTED,
+				servesChat: true,
+				chat: { onThisConnection: false, modelName: "Elsewhere" }
+			})
+		).toBeNull()
+		expect(step({ ...LISTED })).toBeNull()
+		expect(step()).toBeNull()
+	})
+})
+
+describe("the Models tab's list", () => {
+	test("the filter box appears past twelve models", () => {
+		expect(showsModelsFilter(12)).toBe(false)
+		expect(showsModelsFilter(13)).toBe(true)
+	})
+
+	test("the filter matches the identifier or the name", () => {
+		const m = { model: "anthropic/claude-sonnet", name: "Claude Sonnet" }
+		expect(modelMatchesQuery(m, "")).toBe(true)
+		expect(modelMatchesQuery(m, "ANTHROPIC/")).toBe(true)
+		expect(modelMatchesQuery(m, " sonnet ")).toBe(true)
+		expect(modelMatchesQuery(m, "gpt")).toBe(false)
+		expect(modelMatchesQuery({ model: "x", name: null }, "x")).toBe(true)
+	})
+
+	test("the chat default goes first; the rest keep the host's order", () => {
+		const list = [{ id: 1 }, { id: 2 }, { id: 3 }]
+		expect(chatDefaultFirst(list, 3).map((m) => m.id)).toEqual([3, 1, 2])
+		expect(chatDefaultFirst(list, 1).map((m) => m.id)).toEqual([1, 2, 3])
+		expect(chatDefaultFirst(list, null).map((m) => m.id)).toEqual([1, 2, 3])
+		expect(chatDefaultFirst(list, 9).map((m) => m.id)).toEqual([1, 2, 3])
 	})
 })
 

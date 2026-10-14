@@ -19,6 +19,7 @@ Every button a session offers is an **action**: a genre's chip in the **Actions*
 
 - **Up front and in the overflow.** Each venue shows its quick actions up front (the chips, a message's hover icons) and lists *every* action in its overflow: the **More** menu beside the chips, the **⋮** menu on a message. Nothing is reachable only by being prominent. A message style may move the up-front set around, but it can't take an action away.
 - **New.** An action you haven't met yet, such as one a newly installed plugin contributed, wears a small **New** mark in the overflow, and **More** carries a dot. Opening that menu, or the `/` palette, clears the mark for you.
+- **The Actions widget.** The [Actions widget](./session-layout.md#the-widgets) draws the composer's actions and the turn controls as buttons that stay open, grouped turn controls first, then the genre's own, then those switched on from another plugin, and showing a newcomer there clears its **New** mark; a message's actions stay on the message.
 - **Conversations.** An action declared for one conversation (the Lair's Sanctum, say) appears on that conversation's composer and messages only; one declared for none appears everywhere. This decides where it's *listed*, never who may use it.
 - **The legend.** **What do these do?** at the end of the Actions row opens **What these do**: every action the session offers you right now, grouped **In the composer**, **Turn controls** and **On a message**, each with its icon, name, description, slash command and what it asks for before it runs (*Asks for text*, *Asks for text, if you have any*, *Asks who hears it*). An action hidden in the session's current state, such as the Lair's *Answer the door* with nobody knocking, isn't listed.
 
@@ -63,6 +64,12 @@ The reasons you'll meet most:
 - *a greeting is swiped, not regenerated*.
 - *nothing to swipe to*, *finish the edit first*, *unhide it first*, *not yours to change*, *nobody is seated to pick*.
 
+## When an action fails
+
+A press that ran and failed says why once, on the card above the composer, where administrators also get **Inspect** (see [Inspecting a run](./pipelines.md#inspecting-a-run)). The reason is the sentence alone; which step it stopped at is in the inspector. A press refused before anything ran (not yours to use, say) has no card, so it's said in a notice instead.
+
+The one you're most likely to meet is **Image** while the **Images** [loadout](./connections.md#loadouts) (what pictures run on: a model on a connection and its settings) is empty: the button stays, and the run it starts ends with *No model is set for Images, and one is never picked automatically. An admin chooses it in Admin › Models › Loadouts.* For an administrator, **Admin › Models › Loadouts** in that sentence is a link to the page that fixes it; a member reads it as text. Filling the **Images** loadout there, or in the **Loadouts** view, fixes it (see [Images](./images.md#when-it-says-no-model-is-set)).
+
 ## Slash names
 
 A slash name belongs to one action. Two pipelines claiming the same name for the same genre is refused when the second is published. Serene Pub's own actions have bare names (`/narrate`, `/advance`, `/retry`); a plugin's are `/<plugin>.<action>` (`/acme.roll`), so a plugin can never shadow a built-in one, and the palette completes the long form so nobody has to type it. Slash names are never translated; the label beside them is.
@@ -88,7 +95,7 @@ Runs that start further runs (an answer that asks another question, say) are cut
 
 ## Floors, built-ins and what each action emits
 
-Every action that changes a message is a **built-in**: Serene Pub performs the write itself, as its own small pipeline run, and records an event saying what changed and what was lost. The write appears in the run inspector like a reply. An administrator may put a review on it in the Pipelines view (a delete that asks first, say), and the event reaches the next reply's pipeline, so it knows the history it reads has moved (see [What changed since the last reply](./pipelines.md#what-changed-since-the-last-reply)).
+Every action that changes a message is a **built-in**: Serene Pub performs the write itself, as its own small pipeline run, and records an event saying what changed and what was lost. The write appears in the run inspector like a reply. An administrator may put a review on it in **Admin › Pipelines** (a delete that asks first, say), and the event reaches the next reply's pipeline, so it knows the history it reads has moved (see [What changed since the last reply](./pipelines.md#what-changed-since-the-last-reply)).
 
 | Group | Actions | A genre may… | What the write records |
 | --- | --- | --- | --- |
@@ -108,8 +115,8 @@ A genre that switches an action off removes it from the menu, and the server ref
 | --- | --- |
 | the messages up to and including the fork, each on its own conversation | the session's own pipeline choices and setting changes |
 | the active cast, envoys, personas, guests and tags | the layout: the branch opens like a [new session](./session-layout.md#new-sessions) |
-| the genre, preset and genre settings; the scenario; the lorebook, line and story clock | pipelines' own session data |
-| stats and their changes recorded up to the fork | the record of edits, deletes and swipes: the branch's first change is the fork itself |
+| the genre, preset and genre settings; the scenario; the lorebook, line and story clock, as it stood at the fork (moves made after it are taken off) | pipelines' own session data |
+| stats and their changes recorded up to the fork, and the story clock's moves up to it | the record of edits, deletes and swipes: the branch's first change is the fork itself |
 
 Characters removed from the source aren't copied.
 

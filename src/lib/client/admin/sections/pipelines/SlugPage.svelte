@@ -44,10 +44,14 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import PipelineConfigOptions from "$lib/client/components/pipelines/PipelineConfigOptions.svelte"
+	import CanvasPanel from "$lib/client/components/pipelines/workspace/canvas/CanvasPanel.svelte"
 	import {
+		builderGroupsOf,
 		builderStepsOf,
-		optionsOf
+		optionsOf,
+		portCardsOf
 	} from "$lib/client/components/pipelines/settingsGroups"
+	import PortCards from "$lib/client/components/pipelines/PortCards.svelte"
 	import ConfigNotices from "$lib/client/components/pipelines/ConfigNotices.svelte"
 	import PipelineMap from "$lib/client/components/pipelines/workspace/PipelineMap.svelte"
 	import StepList from "$lib/client/components/pipelines/workspace/StepList.svelte"
@@ -57,6 +61,7 @@
 		type ChangeRow
 	} from "$lib/client/components/pipelines/workspace/ChangesPanel.svelte"
 	import PresetPanel from "$lib/client/components/pipelines/workspace/PresetPanel.svelte"
+	import ScriptMap from "./ScriptMap.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import PanelTabStrip, {
 		type PanelTab as PanelTabDef
@@ -72,6 +77,11 @@
 	let detail = $state<Sockets.Pipelines.NamespaceDetail | null>(null)
 	let loading = $state(true)
 	let selectedStep = $state<string | null>(null)
+	/**
+	 * An agent (settings group) picked instead of a step: the inspector shows
+	 * its Receives and Carries out cards. Picking a step clears it.
+	 */
+	let selectedGroup = $state<string | null>(null)
 
 	/** Type names, so "mode: core:spec/create-chat" reads as "type: Chat". */
 	let genreNames = $state<Map<string, string>>(new Map())
@@ -103,6 +113,22 @@
 	const active = $derived(
 		steps.find((s) => s.key === selectedStep) ?? steps[0] ?? null
 	)
+	const agents = $derived(detail ? builderGroupsOf(detail.groups) : [])
+	const activeGroup = $derived(
+		selectedGroup
+			? (agents.find((g) => g.key === selectedGroup) ?? null)
+			: null
+	)
+	const stepHeadingOf = (key: string) =>
+		steps.find((s) => s.key === key)?.heading
+	/** The inspector's two cards — the agent's when one is picked, else the step's. */
+	const portCards = $derived(
+		activeGroup
+			? portCardsOf(activeGroup, stepHeadingOf)
+			: active
+				? portCardsOf(active, stepHeadingOf)
+				: null
+	)
 	const graph = $derived.by(() => (spec ? (spec.graph ?? null) : null))
 	const activeVersion = $derived.by(() => {
 		const versions = spec ? spec.versions : []
@@ -111,6 +137,11 @@
 
 	function selectStep(key: string) {
 		selectedStep = key
+		selectedGroup = null
+	}
+
+	function selectGroup(key: string) {
+		selectedGroup = key
 	}
 
 	/**
@@ -315,9 +346,18 @@
 
 	/* ── the workspace tabs + URL state (22) ────────────────────────── */
 
-	type Tab = "configure" | "changes" | "runs" | "versions" | "preset"
+	type Tab =
+		| "configure"
+		| "canvas"
+		| "scripts"
+		| "changes"
+		| "runs"
+		| "versions"
+		| "preset"
 	const TAB_IDS: Tab[] = [
 		"configure",
+		"canvas",
+		"scripts",
 		"changes",
 		"runs",
 		"versions",
@@ -334,8 +374,14 @@
 	// ?step= wins over "first step" — onLoaded only fills selectedStep when it
 	// is still empty, so seeding it here is enough for deep links.
 	if (initialParams.get("step")) selectedStep = initialParams.get("step")
+	if (initialParams.get("group")) selectedGroup = initialParams.get("group")
 	/** ?config= applied once, after the first view arrives. */
 	let urlConfigId: number | null = Number(initialParams.get("config")) || null
+	/**
+	 * ?option= (with ?step=): land on that option once the first view
+	 * arrives — Admin › Scripts' *Where used* opens a chain this way.
+	 */
+	let urlOptionId: string | null = initialParams.get("option")
 
 	/**
 	 * The address bar mirrors the seat — tab, step, configuration — without
@@ -349,6 +395,10 @@
 		else p.set("tab", tab)
 		if (selectedStep) p.set("step", selectedStep)
 		else p.delete("step")
+		if (selectedGroup) p.set("group", selectedGroup)
+		else p.delete("group")
+		// A landing, not a seat: once read it leaves the address.
+		p.delete("option")
 		if (detail?.selectedConfig)
 			p.set("config", String(detail.selectedConfig.id))
 		const q = p.toString()
@@ -654,6 +704,44 @@
 		return out.slice(0, 30)
 	})
 
+	/**
+	 * A configuration view arrived — from the Configure panel or the Scripts
+	 * tab, which read the same `pipelines:get` view. The page keeps it, and
+	 * the deep links (`?option=`, `?config=`) are applied once, then forgotten.
+	 */
+	function onConfigView(d: Sockets.Pipelines.NamespaceDetail) {
+		detail = d
+		const first = builderStepsOf(d.groups)[0]
+		if (!selectedStep && first) selectedStep = first.key
+		if (urlOptionId && selectedStep) {
+			const optionId = urlOptionId
+			urlOptionId = null
+			void jumpToOption(selectedStep, optionId)
+		}
+		if (
+			urlConfigId != null &&
+			d.selectedConfig?.id !== urlConfigId &&
+			d.configs.some((c) => c.id === urlConfigId)
+		) {
+			const id = urlConfigId
+			urlConfigId = null
+			socket.emit("pipelines:selectConfig", { slug, configId: id })
+		} else {
+			urlConfigId = null
+		}
+	}
+
+	/**
+	 * From the Scripts tab: Configure mounts its own panel, which asks for the
+	 * view afresh, so the landing waits for that view (`onConfigView`) rather
+	 * than looking for a row that is not drawn yet.
+	 */
+	function openSeam(stepKey: string, optionId: string) {
+		selectStep(stepKey)
+		urlOptionId = optionId
+		tab = "configure"
+	}
+
 	/** Land on the exact option: right tab, right step, scrolled and lit. */
 	async function jumpToOption(stepKey: string, optionId: string) {
 		tab = "configure"
@@ -709,6 +797,8 @@
 
 	const TABS: { id: Tab; label: string; icon: keyof typeof Icons }[] = [
 		{ id: "configure", label: "Configure", icon: "SlidersHorizontal" },
+		{ id: "canvas", label: "Canvas", icon: "Workflow" },
+		{ id: "scripts", label: "Scripts", icon: "ScrollText" },
 		{ id: "changes", label: "Changes", icon: "Diff" },
 		{ id: "runs", label: "Runs", icon: "History" },
 		{ id: "versions", label: "Versions", icon: "GitCommitHorizontal" },
@@ -980,7 +1070,7 @@
 		{/if}
 
 		<!-- ── the workspace tabs (22) ───────────────────────────────── -->
-		<!-- Five labelled tabs share the row. Below ~560px of `content` (the
+		<!-- Six labelled tabs share the row. Below ~560px of `content` (the
 		     400px dock) the icons drop so every label reads in full. -->
 		<PanelTabStrip
 			bind:value={tab}
@@ -1105,9 +1195,11 @@
 						</div>
 						<StepList
 							{steps}
-							activeKey={active?.key ?? null}
+							activeKey={activeGroup ? null : (active?.key ?? null)}
+							activeGroup={activeGroup?.key ?? null}
 							pendingFor={stepPendingByKey}
 							onSelect={selectStep}
+							onSelectGroup={selectGroup}
 						/>
 					{/if}
 				</section>
@@ -1125,13 +1217,37 @@
 					<div
 						class="border-surface-300-700 mb-2 flex items-baseline gap-2 border-b pb-1"
 					>
-						<span class={LEGEND}>Step configuration</span>
+						<span class={LEGEND}>
+							{activeGroup ? "Agent" : "Step configuration"}
+						</span>
 					</div>
 
-					{#if active}
+					{#if activeGroup}
+						<div class="mb-2 flex flex-col gap-0.5">
+							<h2 class="text-lg font-semibold">
+								{activeGroup.heading ?? "This pipeline"}
+							</h2>
+							{#if activeGroup.purpose}
+								<p class="text-surface-600-400 text-sm">
+									{activeGroup.purpose}
+								</p>
+							{/if}
+						</div>
+					{:else if active}
 						<div class="mb-2 flex items-baseline gap-2">
 							<h2 class="text-lg font-semibold">
-								{active.label}
+								{#if active.agent}
+									<button
+										type="button"
+										class="hover:underline"
+										title="Show what {active.agent} receives and carries out"
+										onclick={() => selectGroup(active.group)}
+									>
+										{active.agent}</button
+									> · {active.heading}
+								{:else}
+									{active.label}
+								{/if}
 							</h2>
 						</div>
 					{:else}
@@ -1151,6 +1267,17 @@
 						</div>
 					{/if}
 
+					<PortCards cards={portCards} />
+
+					{#if activeGroup}
+						<p class="text-surface-600-400 text-sm">
+							Pick a step for its settings.
+						</p>
+					{/if}
+
+					<!-- Stays mounted while an agent is picked: it is what
+					     loads the page's view (`onLoaded`). -->
+					<div class:hidden={!!activeGroup}>
 					{#if selected?.readOnly}
 						<p
 							class="text-surface-600-400 mb-2 flex items-center gap-1.5 text-xs"
@@ -1174,27 +1301,9 @@
 						{pendingClears}
 						onDraftSet={draftSet}
 						onDraftClear={draftClear}
-						onLoaded={(d) => {
-							detail = d
-							const first = builderStepsOf(d.groups)[0]
-							if (!selectedStep && first) selectedStep = first.key
-							// ?config= deep link: applied once, then forgotten.
-							if (
-								urlConfigId != null &&
-								d.selectedConfig?.id !== urlConfigId &&
-								d.configs.some((c) => c.id === urlConfigId)
-							) {
-								const id = urlConfigId
-								urlConfigId = null
-								socket.emit("pipelines:selectConfig", {
-									slug,
-									configId: id
-								})
-							} else {
-								urlConfigId = null
-							}
-						}}
+						onLoaded={onConfigView}
 					/>
+					</div>
 				</section>
 			</div>
 
@@ -1207,6 +1316,32 @@
 					published backbone.
 				</span>
 			</p>
+		{:else if tab === "canvas"}
+			<!-- The pipeline canvas (PLAN-pipeline-canvas-and-genre-authoring P1):
+			     the line, the minimap and the drawer. Its Settings tab is this
+			     page's draft, so a value changed there lands in the same save row. -->
+			<CanvasPanel
+				{slug}
+				versions={spec?.versions ?? []}
+				{graph}
+				runs={pipelineRuns}
+				editsConfigId={selected && !selected.readOnly
+					? selected.id
+					: undefined}
+				readOnlyName={selected?.readOnly ? selected.name : null}
+				{pending}
+				{pendingClears}
+				onDraftSet={draftSet}
+				onDraftClear={draftClear}
+				onLoaded={onConfigView}
+			/>
+		{:else if tab === "scripts"}
+			<ScriptMap
+				{slug}
+				{detail}
+				onLoaded={onConfigView}
+				onJump={openSeam}
+			/>
 		{:else if tab === "changes"}
 			<ChangesPanel
 				rows={changeRows}

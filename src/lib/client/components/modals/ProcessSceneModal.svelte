@@ -569,7 +569,7 @@
 						/>
 						<button
 							aria-label="Add participant"
-							class="btn btn-sm preset-filled-surface-400-600"
+							class="btn btn-sm preset-tonal-surface"
 							onclick={addParticipant}
 							disabled={newParticipantId === ""}
 						>
@@ -620,7 +620,7 @@
 					/>
 					<button
 						aria-label="Add participant by name"
-						class="btn btn-sm preset-filled-surface-400-600"
+						class="btn btn-sm preset-tonal-surface"
 						onclick={addManualParticipant}
 						disabled={!newParticipantName.trim()}
 					>
@@ -671,7 +671,7 @@
 						/>
 						<button
 							aria-label="Add mentioned character"
-							class="btn btn-sm preset-filled-surface-400-600"
+							class="btn btn-sm preset-tonal-surface"
 							onclick={addMentioned}
 							disabled={newMentionedId === ""}
 						>
@@ -722,7 +722,7 @@
 					/>
 					<button
 						aria-label="Add mentioned character by name"
-						class="btn btn-sm preset-filled-surface-400-600"
+						class="btn btn-sm preset-tonal-surface"
 						onclick={addManualMentioned}
 						disabled={!newMentionedName.trim()}
 					>

@@ -341,8 +341,8 @@ export function undatedEntries(
 /** The undated list said out loud, with what can be done about it. */
 export function undatedLine(count: number): string {
 	if (count === 1)
-		return "1 entry carries no date, drag it onto the line, or leave it timeless"
-	return `${count} entries carry no date, drag one onto the line, or leave it timeless`
+		return "1 entry carries no date, drag it onto the timeline, or leave it timeless"
+	return `${count} entries carry no date, drag one onto the timeline, or leave it timeless`
 }
 
 const plural = (n: number, one: string, many: string) =>

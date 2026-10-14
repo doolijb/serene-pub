@@ -465,3 +465,323 @@ describe("subprocessManager.start — admin password fallback (Round-7 audit fix
 		expect(spawnArgs).toContain("--jinja")
 	})
 })
+
+/**
+ * The first "Download & Start" that never started (owner report 2026-10-05):
+ * the auto-start exec'ed a binary whose download stream was not yet closed,
+ * and Node THREW `spawn ETXTBSY` synchronously — after status had been set to
+ * "starting" and with nothing to catch it. Status stayed "starting" with no
+ * process and no lastError, every later start() returned early on it, and only
+ * a manual Stop (which resets a process-less state) recovered.
+ */
+describe("subprocessManager.start — a spawn that fails", () => {
+	const textBusy = () =>
+		Object.assign(new Error("spawn ETXTBSY"), {
+			code: "ETXTBSY",
+			errno: -26,
+			syscall: "spawn"
+		})
+
+	beforeEach(() => {
+		findFirstMock.mockReset().mockResolvedValue({ ...REAL_SETTINGS_BASE })
+		pingKoboldCPPMock.mockReset().mockResolvedValue(false)
+		vi.mocked(fsPromises.readFile).mockReset()
+		vi.mocked(fsPromises.readFile).mockRejectedValue(
+			new Error("no pidfile")
+		)
+		vi.mocked(spawn).mockReset()
+		// Every failure path below signals a process GROUP by pid. These pids
+		// are fake; the real process.kill must never see them.
+		vi.spyOn(process, "kill").mockImplementation(() => true as any)
+		vi.spyOn(console, "warn").mockImplementation(() => {})
+	})
+
+	afterEach(() => {
+		vi.useRealTimers()
+		vi.mocked(spawn).mockReset()
+	})
+
+	test("an ETXTBSY that never clears ends crashed with lastError set, and the next start() spawns", async () => {
+		const sm = await freshImport()
+		vi.mocked(spawn).mockImplementation(() => {
+			throw textBusy()
+		})
+
+		await expect(sm.start()).rejects.toThrow("spawn ETXTBSY")
+
+		// The first try plus three retries, then failStart — not "starting".
+		expect(spawn).toHaveBeenCalledTimes(4)
+		expect(sm.getStatus()).toMatchObject({
+			status: "crashed",
+			lastError: "spawn ETXTBSY",
+			pid: null
+		})
+
+		const child = makeFakeChild(54330)
+		vi.mocked(spawn)
+			.mockReset()
+			.mockReturnValue(child as any)
+		pingKoboldCPPMock
+			.mockReset()
+			.mockResolvedValueOnce(false) // adopt check: nothing there
+			.mockResolvedValueOnce(true) // waitForReady: came up
+
+		await sm.start()
+
+		expect(spawn).toHaveBeenCalledTimes(1)
+		expect(sm.isRunning()).toBe(true)
+		expect(sm.getStatus().lastError).toBeNull()
+	})
+
+	test("an ETXTBSY that clears on the retry starts normally", async () => {
+		const sm = await freshImport()
+		const child = makeFakeChild(54331)
+		vi.mocked(spawn)
+			.mockImplementationOnce(() => {
+				throw textBusy()
+			})
+			.mockReturnValueOnce(child as any)
+		pingKoboldCPPMock
+			.mockResolvedValueOnce(false) // adopt check
+			.mockResolvedValueOnce(true) // waitForReady
+
+		await sm.start()
+
+		expect(spawn).toHaveBeenCalledTimes(2)
+		expect(sm.isRunning()).toBe(true)
+		expect(sm.getStatus().pid).toBe(54331)
+	})
+
+	test("any other synchronous spawn error fails at once, without a retry", async () => {
+		const sm = await freshImport()
+		vi.mocked(spawn).mockImplementation(() => {
+			throw Object.assign(new Error("spawn ENOEXEC"), { code: "ENOEXEC" })
+		})
+
+		await expect(sm.start()).rejects.toThrow("spawn ENOEXEC")
+
+		expect(spawn).toHaveBeenCalledTimes(1)
+		expect(sm.getStatus()).toMatchObject({
+			status: "crashed",
+			lastError: "spawn ENOEXEC"
+		})
+	})
+
+	test("Stop pressed during an ETXTBSY retry wins: nothing is spawned after it", async () => {
+		const sm = await freshImport()
+		vi.mocked(spawn).mockImplementation(() => {
+			throw textBusy()
+		})
+
+		const starting = sm.start()
+		starting.catch(() => {})
+		// Let doStart reach its first retry wait.
+		await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1))
+		await sm.stop()
+
+		await expect(starting).rejects.toThrow(/cancelled/)
+		expect(spawn).toHaveBeenCalledTimes(1)
+		expect(sm.getStatus().status).toBe("stopped")
+	})
+
+	test('a stale "starting" with no process and nothing in flight respawns instead of returning', async () => {
+		const sm = await freshImport()
+		// What the uncaught throw left behind: "starting", no handle, no pid.
+		const bag = (globalThis as any).__SERENE_PUB_KCPP_SUBPROCESS__
+		bag.state.status = "starting"
+		const child = makeFakeChild(54332)
+		vi.mocked(spawn).mockReturnValue(child as any)
+		pingKoboldCPPMock
+			.mockResolvedValueOnce(false) // adopt check
+			.mockResolvedValueOnce(true) // waitForReady
+
+		await sm.start()
+
+		expect(spawn).toHaveBeenCalledTimes(1)
+		expect(sm.isRunning()).toBe(true)
+	})
+
+	test("an async spawn error (EACCES) fails the wait promptly, not at the ten-minute timeout", async () => {
+		const sm = await freshImport()
+		vi.useFakeTimers()
+		// Node's shape for EACCES/ENOENT: spawn returns a child with no pid and
+		// emits "error" on the next tick. The child never gets an exitCode.
+		const child = makeFakeChild()
+		child.pid = undefined
+		vi.mocked(spawn).mockImplementation(() => {
+			process.nextTick(() =>
+				child.emit(
+					"error",
+					Object.assign(
+						new Error(
+							"spawn /opt/koboldcpp/koboldcpp-linux EACCES"
+						),
+						{ code: "EACCES" }
+					)
+				)
+			)
+			return child as any
+		})
+
+		let settled = false
+		const starting = sm.start()
+		starting.catch(() => {}).finally(() => (settled = true))
+		// One poll interval — the old liveness check kept waiting for 10 min.
+		await vi.advanceTimersByTimeAsync(2_500)
+
+		expect(settled).toBe(true)
+		await expect(starting).rejects.toThrow(/EACCES/)
+		expect(sm.getStatus()).toMatchObject({
+			status: "crashed",
+			lastError: "spawn /opt/koboldcpp/koboldcpp-linux EACCES"
+		})
+	})
+})
+
+describe("subprocessManager.suspendHealthCheck — counted, not a flag", () => {
+	beforeEach(() => {
+		findFirstMock.mockReset().mockResolvedValue({ ...REAL_SETTINGS_BASE })
+		pingKoboldCPPMock.mockReset()
+		vi.mocked(fsPromises.readFile).mockReset()
+		vi.mocked(fsPromises.readFile).mockRejectedValue(
+			new Error("no pidfile")
+		)
+		vi.mocked(spawn).mockReset()
+		vi.spyOn(process, "kill").mockImplementation(() => true as any)
+	})
+
+	afterEach(() => {
+		vi.useRealTimers()
+	})
+
+	test("one of two concurrent loads finishing does not resume the health check under the other", async () => {
+		const sm = await freshImport()
+		vi.useFakeTimers()
+		vi.mocked(spawn).mockReturnValue(makeFakeChild(54333) as any)
+		pingKoboldCPPMock
+			.mockResolvedValueOnce(false) // adopt check
+			.mockResolvedValueOnce(true) // waitForReady
+		await sm.start()
+		expect(sm.isRunning()).toBe(true)
+		// Every health-check ping from here on fails, as during a long load.
+		pingKoboldCPPMock.mockResolvedValue(false)
+
+		sm.suspendHealthCheck() // preflight A
+		sm.suspendHealthCheck() // preflight B
+		sm.resumeHealthCheck() // A's load is done; B's is not
+		await vi.advanceTimersByTimeAsync(4 * 30_000)
+		expect(sm.isRunning()).toBe(true)
+
+		sm.resumeHealthCheck() // B's load is done
+		await vi.advanceTimersByTimeAsync(3 * 30_000)
+		expect(sm.getStatus().status).toBe("crashed")
+	})
+})
+
+describe("subprocessManager — a Stop is a stop, and residency goes with the process", () => {
+	beforeEach(() => {
+		findFirstMock.mockReset().mockResolvedValue({ ...REAL_SETTINGS_BASE })
+		pingKoboldCPPMock.mockReset().mockResolvedValue(false)
+		vi.mocked(fsPromises.readFile).mockReset()
+		vi.mocked(fsPromises.readFile).mockRejectedValue(
+			new Error("no pidfile")
+		)
+		vi.mocked(spawn).mockReset()
+	})
+
+	afterEach(() => {
+		vi.useRealTimers()
+	})
+
+	/** A child that dies promptly when its process group is signalled. */
+	function killableChild(pid: number) {
+		const child = makeFakeChild(pid)
+		vi.spyOn(process, "kill").mockImplementation(
+			(target: any, signal?: any) => {
+				if (Math.abs(target) === pid && child.exitCode === null) {
+					child.exitCode = 0
+					queueMicrotask(() => child.emit("exit", null, signal))
+				}
+				return true
+			}
+		)
+		return child
+	}
+
+	/** Pretend a model was loaded, the way modelManager records one. */
+	function seedSignature() {
+		;(globalThis as any).__SERENE_PUB_KCPP_MODELS__.loadedSignature = {
+			resident: { text: { file: "/m/a.gguf" } },
+			rawConfigJson: "{}"
+		}
+	}
+
+	test("Stop while the start is still waiting for the port ends as stopped, with no error", async () => {
+		const sm = await freshImport()
+		vi.useFakeTimers()
+		const child = killableChild(54401)
+		vi.mocked(spawn).mockReturnValue(child as any)
+
+		const starting = sm.start()
+		starting.catch(() => {})
+		// Spawned and polling a port that never answers.
+		await vi.advanceTimersByTimeAsync(100)
+		expect(sm.getStatus().status).toBe("starting")
+
+		const stopping = sm.stop()
+		await vi.advanceTimersByTimeAsync(5_000)
+		await stopping
+		await expect(starting).rejects.toThrow(/cancelled/)
+
+		expect(sm.getStatus()).toMatchObject({
+			status: "stopped",
+			lastError: null
+		})
+	})
+
+	test("a stop forgets what was loaded", async () => {
+		const sm = await freshImport()
+		const { getLoadedSignature } = await import("./modelManager")
+		const child = killableChild(54402)
+		vi.mocked(spawn).mockReturnValue(child as any)
+		pingKoboldCPPMock
+			.mockResolvedValueOnce(false) // adopt check
+			.mockResolvedValueOnce(true) // waitForReady
+		await sm.start()
+		seedSignature()
+		expect(getLoadedSignature()).not.toBeNull()
+
+		await sm.stop()
+		expect(getLoadedSignature()).toBeNull()
+	})
+
+	test("a crash forgets what was loaded", async () => {
+		const sm = await freshImport()
+		const { getLoadedSignature } = await import("./modelManager")
+		const child = makeFakeChild(54403)
+		vi.mocked(spawn).mockReturnValue(child as any)
+		pingKoboldCPPMock
+			.mockResolvedValueOnce(false) // adopt check
+			.mockResolvedValueOnce(true) // waitForReady
+		await sm.start()
+		seedSignature()
+
+		child.exitCode = 1
+		child.emit("exit", 1, null)
+		expect(sm.getStatus().status).toBe("crashed")
+		expect(getLoadedSignature()).toBeNull()
+	})
+
+	test("a fresh start forgets what the previous process held", async () => {
+		const sm = await freshImport()
+		const { getLoadedSignature } = await import("./modelManager")
+		seedSignature()
+		vi.spyOn(process, "kill").mockImplementation(() => true as any)
+		vi.mocked(spawn).mockReturnValue(makeFakeChild(54404) as any)
+		pingKoboldCPPMock
+			.mockResolvedValueOnce(false) // adopt check
+			.mockResolvedValueOnce(true) // waitForReady
+		await sm.start()
+		expect(getLoadedSignature()).toBeNull()
+	})
+})

@@ -226,14 +226,17 @@
 		</span>
 	</p>
 	<p class="text-surface-600-400 text-xs">
-		The session owner chooses which line and story clock this session reads.
+		The line is which version of the lorebook this session reads; Main is the original. The
+		story clock is the in-story date. The session owner chooses both.
 	</p>
 </div>
 {:else}
 <div class="flex flex-col gap-3" data-testid="session-lorebook-reading">
 	<p class="text-surface-600-400 text-xs">
-		Where this session reads its lorebook. Stats it inherits and the story's current date come
-		from this line, at this session's clock. A branch reads main only up to where it forked.
+		<span class="font-medium">Line</span>: which version of the lorebook this session reads.
+		Main is the original; a branch reads Main only up to where it forked.
+		<span class="font-medium">Story clock</span>: the in-story date. The stats this session
+		inherits and the story's current date come from this line, at this clock.
 	</p>
 	<Select
 		label="Line"
@@ -255,7 +258,7 @@
 	{#if !clock}
 		<p class="text-surface-600-400 text-xs" data-testid="session-story-clock-followed">
 			{#if followed}
-				Stands at {spell(followed)} — the line's present. It moves as the lorebook does.
+				Stands at {spell(followed)}, the line's present. It moves as the lorebook does.
 			{:else}
 				Nothing on this line is dated yet, and no clock is set on it.
 			{/if}

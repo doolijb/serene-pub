@@ -1,18 +1,19 @@
 <script lang="ts">
 	/**
-	 * The five ways something gets into this pub, behind one button.
+	 * The three ways a connection gets into this pub, behind one button.
 	 *
 	 * Same shape as the Characters view's New menu, deliberately: one tonal
 	 * button on its own row above the filter, a `role="menu"` popout of items
 	 * with a title and a one-line description, arrow keys between them. A
 	 * second popout style for the same idea would be a second thing to learn.
 	 *
-	 * ## Why five items and not a wizard
+	 * ## Why three items and not a wizard
 	 *
-	 * The five are genuinely different destinations — a service, a runtime this
-	 * pub installs, a runtime somebody else installed, a model from a list, and
-	 * a model whose host will not list it — and each of them is one press away
-	 * from here. A wizard would ask the same question in three screens.
+	 * The three are genuinely different destinations — a service, a runtime
+	 * this pub installs, a runtime somebody else installed — and each of them
+	 * is one press away from here. A wizard would ask the same question in
+	 * three screens. Models are not added here: Get a model and Add a model by
+	 * name live in the Models view since the split (plan 2026-10-11).
 	 *
 	 * ⚠ Every item CLOSES the menu before it runs: each opens a dialog or
 	 * changes the view, and a menu still standing over either is a menu the
@@ -31,12 +32,6 @@
 		onAddKoboldCpp: () => void
 		/** Switch the Ollama manager on and open its connection. */
 		onAddOllama: () => void
-		/** The model finder. */
-		onGetModel: () => void
-		/** The small "name a model yourself" dialog. */
-		onAddByName: () => void
-		/** Hidden when no connection accepts a hand-typed model. */
-		canAddByName?: boolean
 		/**
 		 * Hides the KoboldCPP and Ollama items — false in the Android app, where
 		 * the server refuses both (`canRunLocalRuntimes`).
@@ -47,9 +42,6 @@
 		onAddConnection,
 		onAddKoboldCpp,
 		onAddOllama,
-		onGetModel,
-		onAddByName,
-		canAddByName = true,
 		canRunLocalRuntimes = true
 	}: Props = $props()
 
@@ -80,29 +72,11 @@
 			title: "Ollama",
 			blurb: "Point at a running Ollama",
 			run: onAddOllama
-		},
-		{
-			key: "model",
-			icon: Icons.Boxes,
-			title: "A model",
-			blurb: "Recommended lists and Hugging Face",
-			run: onGetModel
-		},
-		// `Keyboard` because the distinguishing fact IS the typing: this is
-		// the item for a host that serves no list, so the model's id comes
-		// off the person's fingers rather than off a catalogue.
-		{
-			key: "by-name",
-			icon: Icons.Keyboard,
-			title: "A model by name",
-			blurb: "When a host doesn't list its models",
-			run: onAddByName
 		}
 	] as const)
 
 	const items = $derived.by(() => {
 		const keys: readonly string[] = addMenuItemKeys({
-			canAddByName,
 			canRunLocalRuntimes
 		})
 		return allItems.filter((item) => keys.includes(item.key))
@@ -152,7 +126,7 @@
 	     labelled, first on the action row. -->
 	<Popover.Trigger
 		class="btn btn-sm preset-filled-primary-500 shrink-0"
-		title="Add a connection or a model"
+		title="Add a connection"
 		aria-haspopup="menu"
 		aria-expanded={open}
 	>

@@ -216,7 +216,10 @@ export interface TextGenResult {
  * integration tests all spell it — and inheriting it from `ImageGenRequest` is
  * what keeps one number under one name.
  */
-export type ImageEditRequest = Omit<ImageGenRequest, "prompt"> & {
+// `init`/`mask` are omitted from the inherited half because `ImageGenRequest`
+// carries a single canvas since 2026-10-12 (DESIGN-image-generation §4.2) and
+// this action keeps its own list-shaped ones.
+export type ImageEditRequest = Omit<ImageGenRequest, "prompt" | "init" | "mask"> & {
 	/** Absent means `image->image`: transform this, with nothing said about how. */
 	prompt?: string
 	/** What to work from. A list because inpainting backends take reference sets. */

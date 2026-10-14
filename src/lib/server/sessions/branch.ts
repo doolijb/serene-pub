@@ -80,6 +80,8 @@ export async function branchSession(
 				// The same line of the book, its clock where the parent's
 				// stands (ruling 15, story-time P3): a branched session plays
 				// on from where its parent read — then keeps its own clock.
+				// 🚧 Stepped back below to the fork (live scenes §15 G15):
+				// the parent's clock NOW less every move made after the fork.
 				lorebookBranchId: original.lorebookBranchId,
 				storyClockYear: original.storyClockYear,
 				storyClockMonth: original.storyClockMonth,
@@ -192,6 +194,13 @@ export async function branchSession(
 							vectorizedAt: message.vectorizedAt,
 							isHidden: message.isHidden,
 							isNarratorResponse: message.isNarratorResponse,
+							// The copy was said when the original was: its
+							// story-clock stamp is the original's.
+							storyClockYear: (message as any).storyClockYear ?? null,
+							storyClockMonth: (message as any).storyClockMonth ?? null,
+							storyClockDay: (message as any).storyClockDay ?? null,
+							storyClockHour: (message as any).storyClockHour ?? null,
+							storyClockMinute: (message as any).storyClockMinute ?? null,
 							// Always settled: a copy is never being written.
 							isGenerating: false,
 							// The copy names the message it copies — the
@@ -229,7 +238,31 @@ export async function branchSession(
 			remap
 		})
 
-		return created
+		// 🚧 The clock as of the fork message (live scenes §15 G15): its
+		// recorded moves come across under their copied lines, and every move
+		// made after the fork comes off the clock the branch was given — a
+		// parent that follows its line's present gave it none to step.
+		const { copyClockMovesToBranch, stepBranchClockToFork, StoryClockRefusal } =
+			await import("$lib/server/state/clockMoves")
+		const clockInput = {
+			parentSessionId: sessionId,
+			branchSessionId: created.id,
+			forkMessageId: fromMessageId
+		}
+		await copyClockMovesToBranch(tx, { ...clockInput, remap })
+		try {
+			await stepBranchClockToFork(tx, clockInput)
+		} catch (e) {
+			if (e instanceof StoryClockRefusal)
+				throw new BranchError(`The branch's story clock can't be set to the fork: ${e.message}`)
+			throw e
+		}
+
+		const [settled] = await tx
+			.select()
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, created.id))
+		return settled ?? created
 	})
 }
 
@@ -292,7 +325,9 @@ async function copyAttachmentParts(
  * ⚠ **Proposals are never copied, on purpose.** A pending decision belongs to
  * the person who was asked, in the session they were asked in; two sessions
  * each holding the same undecided line is two chances to answer one question,
- * and no way to say which answer was meant.
+ * and no way to say which answer was meant. 🚧 A decided **clock move** row
+ * (applied, accepted, skipped — live scenes §15 G15) is a record, not a
+ * decision: `copyClockMovesToBranch` carries those, beside this.
  */
 async function copyStateRows(
 	tx: Db,

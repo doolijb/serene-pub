@@ -41,12 +41,14 @@ The importer is offered to administrators only, and not in the [Android app](./a
 | In SillyTavern | In Serene Pub |
 | --- | --- |
 | Chat | [Session](./sessions.md) |
-| Group chat | A session with several characters, plus a [turn order](./group-sessions.md#choose-how-the-turn-order-works) |
+| Group chat | A session with several characters, plus a [turn order](./group-sessions.md#choose-how-the-turn-order-works). The **Turn order** widget keeps who is due next on screen, and **Who's here** shows which people have the session open (see [the widgets](./session-layout.md#the-widgets)) |
 | Muting a group member | [Benching](./group-sessions.md#bench-a-character) them |
 | Persona | [Persona](./personas.md): a character you play |
-| API connection, connection profile | A [connection](./connections.md) and one of its models. Each job has a default model, and an administrator can give a pipeline a different one. A session never picks its own. |
+| API connection | A [connection](./connections.md) and one of its models |
+| Connection profile | A [loadout](./connections.md#loadouts): a model on a connection plus a sampling config, named for a kind of work (_Reply_, _Extraction_, _Images_). Each kind of work has a default loadout (_the Reply loadout_ for replies), and an administrator can give a pipeline step a different one. A session never picks its own. |
 | Text completion or chat completion | [Chat messages or text completion](./connections.md#chat-messages-or-text-completion), which the connection works out for itself unless you set it |
 | Sampler presets | [Sampling configs](./connections.md#sampling-configs) |
+| Logit bias, bias presets | A sampling config's [**Logit Bias**](./connections.md#logit-bias) list, read with the same rules. **Import SillyTavern list** under it brings a bias preset across |
 | Instruct template | A connection's [prompt format](./connections.md#prompt-formats-and-token-counters), used for text completion |
 | Context template, story string | [Context template](./context-templates.md) |
 | System prompt | The **System prompt** of a pipeline's [prompt](./pipelines.md#prompts) |
@@ -58,7 +60,10 @@ The importer is offered to administrators only, and not in the [Android app](./a
 | Hide message | **Hide** |
 | Branch, checkpoint | [Branch from here](./sessions.md#branch-from-here) |
 | Quick Replies, STscript | [Actions](./sessions.md#actions), [slash commands](./sessions.md#slash-commands) and scripts an administrator attaches to a pipeline |
-| Character Expressions | [Sprites](./characters.md#sprites) |
+| Character Expressions | [Sprites](./characters.md#sprites), shown beside the conversation by the **Scene Portraits** widget with **Picture** set to **Current sprite** (its default; see [Scene Portraits](./session-layout.md#scene-portraits)) |
+| Image Generation extension | The **Image** and **Scene** actions in a session, **Generate portrait** and **Fill empty sprites** on a character, drawn by the image services in [Images](./images.md) |
+| A character's image prompt (Image Generation's per-character prompt) | The character's [**Likeness**](./characters.md#likeness). Importing a SillyTavern card reads that prompt into it |
+| Gallery (the chat's images) | The **Album** widget: every picture shown in the session, newest first (see [the widgets](./session-layout.md#the-widgets)) |
 | Vector Storage | [Search by meaning](./embeddings-and-rag.md) |
 | Summarize extension | [Summaries saved to a lorebook](./summarization.md) |
 | Prompt itemization | [Prompt details](./sessions.md#statistics) and the [run inspector](./pipelines.md#inspecting-a-run) |
@@ -68,7 +73,7 @@ The importer is offered to administrators only, and not in the [Android app](./a
 
 ### Prompts
 
-In SillyTavern you build the prompt: you choose the order of its pieces and fill in each field. In Serene Pub the **genre's pipeline** owns that order. A **context template** lays out where each piece goes (instructions, cards, scenario, lore, conversation), and the **prompt** is just the words. Most of the time you only touch the words: anyone can change the prompts of a session they own, from **Edit session › Settings**, under **Pipelines**. Administrators can reorder the pieces with **Prompt blocks**, or write their own context template, in the Pipelines view. See [Pipelines](./pipelines.md) and [Context templates](./context-templates.md).
+In SillyTavern you build the prompt: you choose the order of its pieces and fill in each field. In Serene Pub the **genre's pipeline** owns that order. A **context template** lays out where each piece goes (instructions, cards, scenario, lore, conversation), and the **prompt** is just the words. Most of the time you only touch the words: anyone can change the prompts of a session they own, from **Edit session › Settings**, under **Pipelines**. Administrators can reorder the pieces with **Prompt blocks**, or write their own context template, in **Admin › Pipelines**. See [Pipelines](./pipelines.md) and [Context templates](./context-templates.md).
 
 **What you'll notice:** fewer prompt fields to fill in, and a list of every value a template can use, with what each one is, so you never have to guess a macro's name.
 
@@ -82,7 +87,7 @@ Entries still fire on keywords, with regex, case sensitivity and priority. With 
 
 A group session is a Chat session with more than one character. A turn order decides who speaks: **Round robin**, **Round robin by user**, **Random**, **Scripted**, **Manual** or **Narrator replies**, or let the model pick. **Auto-advance** decides whether one character answers or the whole round plays out, and **Character detail** sets how much the model is told about everyone who isn't speaking. See [Group sessions](./group-sessions.md).
 
-**What you'll notice:** a line beside the composer says who is due next, with **Continue** and **Pick who speaks** in the Actions row.
+**What you'll notice:** the turn line above the composer says who is due next, with **Continue** and **Pick who speaks** in the Actions row.
 
 ### Stats and state
 
@@ -94,14 +99,14 @@ A group session is a Chat session with more than one character. A turn order dec
 
 A pub starts as just you. Turn on accounts in **Admin › General** and everyone signs in to their own characters, personas, sessions and lorebooks. A session's owner can add **guests**, who write as their own personas and take their turns. Members can change the prompts of their own sessions; models, sampling and connections are the administrator's. See [Users and accounts](./users-and-accounts.md) and [Sessions › Guests](./sessions.md#guests).
 
-**What you'll notice:** the Connections and Sampling icons are only on an administrator's rail.
+**What you'll notice:** the Connections, Models, Loadouts, Sampling and Admin icons are only on an administrator's rail; pipelines are in **Admin › Pipelines**. Sampler presets are edited in **Sampling**; each loadout's sheet in **Loadouts** picks which one that loadout uses.
 
 ### Settings live in fewer places
 
 Instead of a stack of drawers, settings sit in a few places:
 
 - **Edit session › Settings**: everything about one session, including its genre settings and its prompts.
-- **The Pipelines view**: what each model call runs on, for administrators. See [Who can change what](./pipelines.md#who-can-change-what).
+- **Admin › Pipelines**: what each model call runs on, for administrators. See [Who can change what](./pipelines.md#who-can-change-what).
 - **Admin**: connections, defaults, users, backups and the rest of the pub. See [The admin area](./getting-around.md#the-admin-area).
 - **Settings**: your own language, theme and preferences.
 
@@ -162,10 +167,10 @@ See [Cards that won't import](./characters.md#cards-that-wont-import), or the ch
 
 ### 2. Connect the API you already use
 
-Add the service you used in SillyTavern, from the setup wizard's **Choose an LLM** screen or the **Connections** view on the rail. KoboldCPP, Ollama, LM Studio or llama.cpp already running on this computer is listed for you in the wizard under **Found on this computer** (in Connections, choose **Something I already run**). OpenRouter, OpenAI, Anthropic and other OpenAI-compatible services take your API key. Pick a model. [Connect a model](./connect-a-model.md) has the details.
+Add the service you used in SillyTavern, from the setup wizard's **Choose an AI** screen or the **Connections** view on the rail. KoboldCPP, Ollama, LM Studio or llama.cpp already running on this computer is listed for you in the wizard under **Found on this computer** (in **Connections**, choose **Add › A connection**, then pick the program). OpenRouter, OpenAI, Anthropic and other OpenAI-compatible services take your API key. Then press **Use in Reply** beside the model you want on the connection's **Models** tab, or **Use in…** in the **Models** view, to fill the **Reply** loadout. [Connect a model](./connect-a-model.md) has the details.
 
 :::tip You should see
-The status line at the top of the Connections view reads **Sessions can reply**, naming the model and connection.
+The status line at the top of the **Models** view reads **Replies:**, naming the model and its connection.
 :::
 
 :::warning If this didn't work
@@ -175,7 +180,7 @@ The status line at the top of the Connections view reads **Sessions can reply**,
 
 ### 3. Start a Chat session
 
-Open **Sessions** on the rail and press **New**. Leave **Genre** on **Chat**, pick your character under **Who is in it** and your persona under **Who you play as**, then press **Start**. Send a message.
+Open **Sessions** on the rail and press **New**. Leave **Genre** on **Chat**, press **Add characters** under **Who is in it** and tick your character, check that **Who you play as** shows your persona (**Change** picks another), then press **Start**. Send a message.
 
 :::tip You should see
 The character's greeting from their card, then their reply streaming in under your message.

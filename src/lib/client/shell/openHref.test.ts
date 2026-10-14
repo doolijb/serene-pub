@@ -98,6 +98,29 @@ describe("openHref", () => {
 		expect(helpRouter.slug).toBe("tags")
 	})
 
+	test("messages: digest first, then the Messages view", async () => {
+		const { panelsCtx, openPanel, openView } = fakeCtx()
+		await openHref(panelsCtx, "/messages/12")
+		expect(panelsCtx.digest.viewConversationId).toBe(12)
+		expect(panelsCtx.digest.viewPersonId).toBeUndefined()
+		expect(openPanel).toHaveBeenCalledWith({
+			key: "conversations",
+			toggle: false
+		})
+		await openHref(panelsCtx, "/messages/people/4", { focus: true })
+		expect(panelsCtx.digest.viewConversationId).toBeUndefined()
+		expect(panelsCtx.digest.viewPersonId).toBe(4)
+		expect(openView).toHaveBeenCalledWith("conversations", {
+			toggle: false,
+			fullPage: true
+		})
+		expect(classifyHref("/messages")).toEqual({
+			kind: "messages",
+			conversationId: null,
+			personId: null
+		})
+	})
+
 	test("a page navigates", async () => {
 		goto.mockClear()
 		const { panelsCtx } = fakeCtx()

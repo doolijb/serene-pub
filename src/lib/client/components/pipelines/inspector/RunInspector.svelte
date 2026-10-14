@@ -28,6 +28,7 @@
 		outputView,
 		postHistoryView,
 		authorsNoteView,
+		layoutsView,
 		promptView,
 		verdict,
 		lastStatusOf,
@@ -140,6 +141,8 @@
 	const postHistory = $derived(
 		selected ? postHistoryView(selected.raw) : null
 	)
+	/** What each placed key rendered through — its variable and its layout. */
+	const layoutLines = $derived(selected ? layoutsView(selected.raw) : [])
 
 	const tabs = $derived([
 		...(prompt ? ["prompt"] : []),
@@ -419,6 +422,16 @@
 											timed out
 										</span>
 									{/if}
+									{#if row.scripts.length}
+										<span
+											class="chip preset-tonal-surface shrink-0 rounded-full px-1.5 py-0 text-[11px]"
+											data-run-script-count={row.scripts.length}
+											title="Scripts ran at this step. Open it to see which."
+										>
+											{row.scripts.length}
+											{row.scripts.length === 1 ? "script" : "scripts"}
+										</span>
+									{/if}
 								</span>
 								<span
 									class="text-surface-600-400 flex items-center gap-2 pl-7 text-[11px]"
@@ -546,6 +559,54 @@
 								</ul>
 							</details>
 						{/if}
+						{#if selected.scripts.length}
+							<details class="mb-2 text-xs" data-run-scripts>
+								<summary
+									class="text-surface-600-400 cursor-pointer"
+								>
+									Scripts that ran ({selected.scripts.length})
+								</summary>
+								<ul class="mt-1 space-y-0.5 pl-4">
+									{#each selected.scripts as script, i (i)}
+										<li class="flex flex-wrap gap-x-2">
+											<span class="font-medium">{script.name}</span>
+											<span class="text-surface-600-400">
+												{script.kindLabel}
+											</span>
+											<span class="font-mono">{script.at}</span>
+											<span class="text-surface-600-400">
+												from: {script.via}
+											</span>
+											<span
+												class={badgeClass[
+													script.result === "err" ? "error" : script.result
+												]}
+											>
+												{script.result}
+											</span>
+											{#if script.reason}
+												<span class="text-surface-600-400">
+													{script.reason}
+												</span>
+											{/if}
+											{#if script.won}
+												<span>stopped the text here</span>
+											{/if}
+											{#if script.changed}
+												<span class="text-surface-600-400">
+													changed the value
+												</span>
+											{/if}
+											{#if script.durationMs != null}
+												<span class="text-surface-600-400">
+													{ms(script.durationMs)}
+												</span>
+											{/if}
+										</li>
+									{/each}
+								</ul>
+							</details>
+						{/if}
 
 						<Tabs
 							value={tab}
@@ -625,6 +686,28 @@
 												· {note}
 											{/each}
 										</p>
+									{/if}
+									{#if layoutLines.length}
+										<details class="mb-2 text-xs" data-run-layouts>
+											<summary class="text-surface-600-400 cursor-pointer">
+												Variable layouts ({layoutLines.length})
+											</summary>
+											<ul class="mt-1 space-y-0.5 pl-4">
+												{#each layoutLines as l (l.key)}
+													<li class="flex flex-wrap gap-x-2">
+														<span class="font-mono">{l.key}</span>
+														<span class={l.floor ? "text-surface-600-400" : ""}>
+															{l.line}
+														</span>
+														{#if l.variableId}
+															<span class="text-surface-600-400 font-mono">
+																{l.variableId}
+															</span>
+														{/if}
+													</li>
+												{/each}
+											</ul>
+										</details>
 									{/if}
 
 									{#if prompt.blocks.length}

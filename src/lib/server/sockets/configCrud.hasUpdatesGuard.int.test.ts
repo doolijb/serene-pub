@@ -2,10 +2,9 @@
  * Round-10 audit fix (MEDIUM): samplingConfigsUpdate went straight to
  * db.update(...).set(updateData) with no check that updateData was
  * non-empty — an {id}-only payload on a mutable row hit Drizzle's empty
- * .set() and threw. Also: samplingConfigsCreate used
- * to call samplingConfigsSetUserActive after insert, silently making every
- * newly created sampling config the instance-wide default — unlike every
- * sibling *ConfigsCreate handler.
+ * .set() and threw. Also: samplingConfigsCreate must never name a default
+ * after insert, which would silently make every newly created sampling config
+ * the instance-wide default — unlike every sibling *ConfigsCreate handler.
  *
  * That default used to be `systemSettings.defaultSamplingConfigId`. The column
  * is gone (0181) and `connection_defaults` is the only store, so the assertions
@@ -20,6 +19,7 @@ import { byCapability } from "$lib/server/connections/capabilityDefaults"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
+import { isDefaultLoadout } from "$lib/server/loadouts/testing"
 
 let testDb: TestDb
 let dataDir: string
@@ -133,7 +133,7 @@ describe("samplingConfigsCreate — no longer sets the instance-wide default", (
 		const { samplingConfigsCreate } = await import("./samplingConfigs")
 		const admin = await makeAdmin("config-crud-sampling-create-user")
 
-		const before = await testDb.select().from(schema.connectionDefaults)
+		const before = await testDb.select().from(schema.loadouts).where(isDefaultLoadout)
 
 		const res = await samplingConfigsCreate.handler(
 			fakeSocket(admin.id),
@@ -141,24 +141,24 @@ describe("samplingConfigsCreate — no longer sets the instance-wide default", (
 			noopEmit
 		)
 
-		const after = await testDb.select().from(schema.connectionDefaults)
+		const after = await testDb.select().from(schema.loadouts).where(isDefaultLoadout)
 		expect(after).toEqual(before)
 		expect(
 			after.some((r) => r.samplingConfigId === res.sampling.id),
-			"the created config was registered as a default — samplingConfigsCreate is calling the star path again"
+			"the created config was registered as a default — samplingConfigsCreate is naming a default again"
 		).toBe(false)
 	})
 
-	test("starring one DOES register it, against every capability sharing its shape", async () => {
+	test("Use in loadouts… DOES register it, against every default loadout sharing its shape", async () => {
 		// The other half, and the reason the assertion above is not vacuous: if
-		// setUserActive had stopped writing anything, "create writes nothing"
+		// setDefaultFor wrote nothing, "create writes nothing"
 		// would pass for the wrong reason. Text-gen is the shape a row with no
 		// `shape` column takes, and `text->text` is the capability it speaks.
-		const { samplingConfigsCreate, samplingConfigsSetUserActive } =
+		const { samplingConfigsCreate, samplingConfigsSetDefaultFor } =
 			await import("./samplingConfigs")
 		const admin = await makeAdmin("config-crud-sampling-star-user")
 
-		// The star path finishes by pushing `systemSettings:get`, which is how
+		// Use in loadouts… finishes by pushing `systemSettings:get`, which is how
 		// every client's copy of `capabilityDefaults` refreshes — and that
 		// handler throws on an instance with no settings row. A test DB is
 		// migrated but not seeded, so the row has to exist here for the same
@@ -173,7 +173,7 @@ describe("samplingConfigsCreate — no longer sets the instance-wide default", (
 			{ sampling: { name: "Starred Sampling Config" } as any },
 			noopEmit
 		)
-		await samplingConfigsSetUserActive.handler(
+		await samplingConfigsSetDefaultFor.handler(
 			fakeSocket(admin.id),
 			{ id: res.sampling.id },
 			noopEmit
@@ -181,7 +181,7 @@ describe("samplingConfigsCreate — no longer sets the instance-wide default", (
 
 		const rows = await testDb
 			.select()
-			.from(schema.connectionDefaults)
+			.from(schema.loadouts)
 			.where(byCapability("text->text"))
 		expect(rows[0]?.samplingConfigId).toBe(res.sampling.id)
 	})

@@ -517,7 +517,7 @@
 	<footer class="mt-4 flex justify-end gap-2">
 		<button
 			type="button"
-			class="btn btn-sm preset-filled-surface-500"
+			class="btn btn-sm preset-tonal-surface"
 			onclick={cancel}
 			aria-label="Cancel cropping"
 		>

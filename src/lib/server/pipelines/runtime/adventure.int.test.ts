@@ -29,7 +29,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { and, eq } from "drizzle-orm"
+import { and, desc, eq } from "drizzle-orm"
 import { ok, run } from "@serene-pub/sdk"
 import {
 	ADVENTURE_ADVANCE_TIME_SPEC_ID,
@@ -108,12 +108,12 @@ const ANSWER = JSON.stringify({
 	changes: [{ owner: "world", slot: "time-of-day", value: "dusk" }]
 })
 
-const stubbed = () => {
-	const parsed = JSON.parse(ANSWER) as Record<string, unknown>
+const stubbed = (answer: string = ANSWER) => {
+	const parsed = JSON.parse(answer) as Record<string, unknown>
 	return {
 		...coreBindings(),
 		"core:oracle/generate-text@1": async () =>
-			ok({ main: ANSWER, text: ANSWER, connection: { type: "stub" } }),
+			ok({ main: answer, text: answer, connection: { type: "stub" } }),
 		/**
 		 * The structured door, stubbed at the BINDING.
 		 *
@@ -147,7 +147,7 @@ const stubbed = () => {
 				json: parsed,
 				value: items,
 				items,
-				text: ANSWER,
+				text: answer,
 				connection: { type: "stub" },
 				structured: { mode: "schema", capability: "json_schema" }
 			})
@@ -870,5 +870,166 @@ describe("an action", () => {
 			)
 		expect(messages).toHaveLength(1)
 		expect(messages[0]!.id).toBe(w.previous.id)
+	}, 60_000)
+
+	it("Time passes in a story with no clock yet: the keeper's changes stand, the clock is skipped with a line (§15 G7)", async () => {
+		const w = await adventure()
+		const doc = await published(ADVENTURE_ADVANCE_TIME_SPEC_ID)
+		const receipt = await run(doc, {
+			input: {
+				text: "",
+				sessionScope: { sessionId: w.session.id },
+				fields: { trustNarrator: false },
+				clockStep: { by: 3, unit: "hours" }
+			},
+			seed: "seed:adventure-clock-no-clock",
+			triggerSource: "ui",
+			compactHaltReceipts: false,
+			world: WORLD,
+			bindings: stubbed(),
+			host: createHost(db, { sessionId: w.session.id, userId: w.user.id })
+		})
+		expect(`${receipt.outcome} ${receipt.haltReason ?? ""}`.trim()).toBe("ok")
+		const { NO_STORY_CLOCK_YET } = await import("$lib/server/state/clockMoves")
+		expect((nodeOf(receipt, "clock.moves.advance")?.output as any)?.skipped).toBe(NO_STORY_CLOCK_YET)
+		const rows = await db
+			.select()
+			.from(schema.stateProposals)
+			.where(eq(schema.stateProposals.sessionId, w.session.id))
+		// The keeper's own changes wait as they always did …
+		expect(rows.filter((r) => r.kind === "value" && r.status === "pending").length).toBeGreaterThan(0)
+		// … and the clock's line says why it did not move, filed where the
+		// world's changes are: the session's newest line.
+		const [newest] = await db
+			.select({ id: schema.sessionMessages.id })
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.sessionId, w.session.id))
+			.orderBy(desc(schema.sessionMessages.id))
+			.limit(1)
+		const skipped = rows.filter((r) => r.kind === "clock")
+		expect(skipped.map((r) => [r.status, r.messageId, (r.payload as any).skipped])).toEqual([
+			["skipped", newest!.id, NO_STORY_CLOCK_YET]
+		])
+	}, 60_000)
+})
+
+/**
+ * 🚧 The keeper's clock proposal (live scenes §6, ★3; lane F, 2026-10-13).
+ * The keeper answers a `clock` list; reviewed, the move is a proposal like
+ * its other changes and the clock stands still; trusted, the trusted arm's
+ * *Advance story clock* moves it — the outlet *Time passes…* uses.
+ */
+describe("the keeper's clock move", () => {
+	const CLOCKED = JSON.stringify({ ...JSON.parse(ANSWER), clock: [{ by: 3, unit: "hours" }] })
+
+	/** An Adventure session whose clock stands at Year 412, month 3, day 5, 09:00. */
+	const clocked = async (trustNarrator: boolean) => {
+		const w = await adventure({ trustNarrator })
+		await db
+			.update(schema.sessions)
+			.set({
+				storyClockYear: 412,
+				storyClockMonth: 3,
+				storyClockDay: 5,
+				storyClockHour: 9,
+				storyClockMinute: 0
+			})
+			.where(eq(schema.sessions.id, w.session.id))
+		return w
+	}
+	const turn = async (w: Awaited<ReturnType<typeof clocked>>, trustNarrator: boolean) => {
+		const doc = await published(ADVENTURE_RESPOND_SPEC_ID)
+		return await run(doc, {
+			input: {
+				text: "We walk to the far crossing.",
+				sessionScope: { sessionId: w.session.id },
+				fields: { trustNarrator }
+			},
+			seed: "seed:adventure-keeper-clock",
+			triggerSource: "event",
+			compactHaltReceipts: false,
+			world: WORLD,
+			bindings: stubbed(CLOCKED),
+			host: createHost(db, { sessionId: w.session.id, userId: w.user.id })
+		})
+	}
+	const hourOf = async (sessionId: number) =>
+		(
+			await db
+				.select({ hour: schema.sessions.storyClockHour })
+				.from(schema.sessions)
+				.where(eq(schema.sessions.id, sessionId))
+		)[0]!.hour
+
+	it("reviewed: the move is a clock proposal under the reply, and the clock stands still", async () => {
+		const w = await clocked(false)
+		const receipt = await turn(w, false)
+		expect(`${receipt.outcome} ${receipt.haltReason ?? ""}`.trim()).toBe("ok")
+		expect((nodeOf(receipt, "keeperResolve")?.output as any)?.clock).toEqual({ by: 3, unit: "hours" })
+		expect(nodeOf(receipt, "commit.trusted.keeperClock.moves.advance")).toBeUndefined()
+		const clockRows = await db
+			.select()
+			.from(schema.stateProposals)
+			.where(
+				and(
+					eq(schema.stateProposals.sessionId, w.session.id),
+					eq(schema.stateProposals.kind, "clock")
+				)
+			)
+		expect(clockRows).toHaveLength(1)
+		expect(clockRows[0]!.payload).toEqual({ kind: "clock", by: 3, unit: "hours" })
+		expect(clockRows[0]!.status).toBe("pending")
+		// Under the reply the turn wrote — the newest message.
+		const [reply] = await db
+			.select({ id: schema.sessionMessages.id })
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.sessionId, w.session.id))
+			.orderBy(schema.sessionMessages.id)
+			.then((rows) => rows.slice(-1))
+		expect(clockRows[0]!.messageId).toBe(reply!.id)
+		expect(await hourOf(w.session.id)).toBe(9)
+	}, 60_000)
+
+	it("trusted: Advance story clock moves the clock, and nothing is proposed", async () => {
+		const w = await clocked(true)
+		const receipt = await turn(w, true)
+		expect(`${receipt.outcome} ${receipt.haltReason ?? ""}`.trim()).toBe("ok")
+		const advanced = nodeOf(receipt, "commit.trusted.keeperClock.moves.advance")
+		expect(advanced?.output).toMatchObject({ clock: { year: 412, month: 3, day: 5, hour: 12, minute: 0 } })
+		// `apply` passed the clock line over: the outlet is its one writer.
+		expect((nodeOf(receipt, "commit.trusted.apply")?.output as any)?.refused ?? []).toEqual([])
+		expect(await hourOf(w.session.id)).toBe(12)
+		const proposals = await db
+			.select()
+			.from(schema.stateProposals)
+			.where(eq(schema.stateProposals.sessionId, w.session.id))
+		// Nothing waits at the gate: the one row is the move's ledger line
+		// (live scenes §15 G5), the keeper's cause on it.
+		expect(proposals.filter((p) => p.status === "pending")).toHaveLength(0)
+		expect(proposals.map((p) => [p.kind, p.status, (p.payload as any).cause])).toEqual([
+			["clock", "applied", "keeper"]
+		])
+	}, 60_000)
+
+	it("a keeper that names no clock move moves nothing either way", async () => {
+		const w = await clocked(true)
+		const doc = await published(ADVENTURE_RESPOND_SPEC_ID)
+		const receipt = await run(doc, {
+			input: {
+				text: "We talk by the fire.",
+				sessionScope: { sessionId: w.session.id },
+				fields: { trustNarrator: true }
+			},
+			seed: "seed:adventure-keeper-no-clock",
+			triggerSource: "event",
+			compactHaltReceipts: false,
+			world: WORLD,
+			bindings: stubbed(JSON.stringify({ ...JSON.parse(ANSWER), clock: [] })),
+			host: createHost(db, { sessionId: w.session.id, userId: w.user.id })
+		})
+		expect(receipt.outcome).toBe("ok")
+		expect((nodeOf(receipt, "keeperStep")?.output as any)?.moves).toBe(false)
+		expect(nodeOf(receipt, "commit.trusted.keeperClock.moves.advance")).toBeUndefined()
+		expect(await hourOf(w.session.id)).toBe(9)
 	}, 60_000)
 })

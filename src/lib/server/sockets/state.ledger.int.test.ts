@@ -312,6 +312,41 @@ describe("state:ledger", () => {
 		expect(res.rows).toEqual([])
 		expect(res.baselines).toEqual([])
 	})
+
+	test("🚧 a clock move is the world's line under its message, spelled through the book's calendar (§15 G5)", async () => {
+		declareSlots()
+		const w = await world()
+		const anchor = await w.message()
+		await testDb
+			.update(schema.sessions)
+			.set({ storyClockYear: 412, storyClockMonth: 3, storyClockDay: 5, storyClockHour: 9, storyClockMinute: 0 })
+			.where(eq(schema.sessions.id, w.session.id))
+		const { createHost } = await import("$lib/server/pipelines/runtime/host")
+		await createHost(testDb as unknown as Db, {
+			sessionId: w.session.id,
+			userId: w.user.id,
+			specId: "test:spec/clock",
+			runId: "run-ledger-clock"
+		} as any).commit!(
+			{ by: 3, unit: "hours", cause: "action" },
+			{ key: "advance", definitionId: "core:outlet/advance-story-clock", definitionVersion: 1 } as any
+		)
+		const { stateLedger } = await import("./state")
+		const res = await stateLedger.handler(fakeSocket(w.user.id), { sessionId: w.session.id }, () => {})
+		expect(res.rows).toHaveLength(1)
+		expect(res.rows[0]).toMatchObject({
+			kind: "clock",
+			messageId: anchor.id,
+			ownerKey: "world",
+			ownerLabel: w.session.name,
+			updatedBy: "run:run-ledger-clock",
+			clock: { by: 3, unit: "hours", cause: "action", skipped: null }
+		})
+		expect(res.rows[0]!.clock!.fromLabel).toMatch(/09:00/)
+		expect(res.rows[0]!.clock!.toLabel).toMatch(/12:00/)
+		// A clock row asks for no baseline: it is no slot's trail.
+		expect(res.baselines).toEqual([])
+	})
 })
 
 describe("what state:get carries beside the values", () => {

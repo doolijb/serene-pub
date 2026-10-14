@@ -30,6 +30,7 @@ import { adminRouter } from "$lib/client/admin/adminRouter.svelte"
 import { toHash } from "$lib/shared/lorebooks/loreRoute"
 import { loreRoute } from "$lib/client/lorebooks/loreRoute.svelte"
 import { helpRouter } from "$lib/client/shell/helpRouter.svelte"
+import { viewAddress } from "$lib/client/shell/viewRoutes"
 import {
 	dwellStep,
 	idsToRead,
@@ -60,7 +61,11 @@ export function viewingSnapshot(shell: ShellViewing): ViewingSnapshot {
 		activeView: shell.activeView,
 		adminHref: adminRouter.href,
 		helpSlug: helpRouter.slug,
-		loreHash: toHash(loreRoute.route)
+		loreHash: toHash(loreRoute.route),
+		// The Messages view's conversation, from the address provider the
+		// shell registers (`registerViewAddress("conversations", …)`), which
+		// reads the conversations context's state, so this stays reactive.
+		messagesHref: viewAddress("conversations")
 	}
 }
 

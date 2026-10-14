@@ -48,6 +48,14 @@ export function genreVersion(genreId: string): {
 }
 
 /**
+ * A genre's version as a person reads it: "version 2" for `…@2`. The id's
+ * `@N` suffix is the only record of it; an id without one is version 1.
+ */
+export function genreVersionLabel(genreId: string): string {
+	return `version ${genreVersion(genreId).version}`
+}
+
+/**
  * Each genre once, at its newest registered version. Starting a session on a
  * superseded version is a support question waiting to happen, and an existing
  * session reaches a newer one through the upgrade instead.
@@ -137,6 +145,37 @@ export function lorebookSatisfied(
 	return shape?.lorebook !== "required" || lorebookId != null
 }
 
+/** What `firstUnmetStartRule` reads: the start screen's answers, as values. */
+export interface StartReadiness {
+	genreId: string | null
+	noPresetsForGenre: boolean
+	characterCount: number
+	personaCount: number
+	floors: { characters: number; personas: number }
+	shape: GenreShape | null | undefined
+	lorebookId: number | null | undefined
+}
+
+/**
+ * Why Start cannot be pressed yet: the first rule the answers do not meet,
+ * in the order the screen asks them, as one sentence the person can act on;
+ * null when the session can start. The start screen says it under its greyed
+ * Start, so the button never stands disabled without a reason, and the flow's
+ * `canStart` is exactly "this is null".
+ */
+export function firstUnmetStartRule(r: StartReadiness): string | null {
+	if (!r.genreId) return "Choose a genre."
+	if (r.noPresetsForGenre) return "No preset is available for this genre."
+	if (r.characterCount < r.floors.characters)
+		return r.floors.characters === 1
+			? "Add at least one character."
+			: `Add at least ${r.floors.characters} characters.`
+	if (r.personaCount < r.floors.personas) return "Choose who you play as."
+	if (!lorebookSatisfied(r.shape, r.lorebookId))
+		return "This genre needs a lorebook."
+	return null
+}
+
 /**
  * What a one-click start — the wizard's character card, a character's own
  * Start — can do on its own: the genre and preset the instance is set up to
@@ -179,31 +218,43 @@ export function castCountHint(floor: number, max: number | undefined): string {
 	return ""
 }
 
-/** One line of shape facts for a genre card — presentation over the same
- * shape the server validates against. */
+/**
+ * One line of shape facts for a genre card — presentation over the same
+ * shape the server validates against, in plain words (less-confusing E5,
+ * 2026-10-11): a persona is "a character you play", the absent composer is
+ * "you don't type messages", the narrator voice is "a narrator tells the
+ * story".
+ */
 export function genreFacts(shape: GenreShape | null | undefined): string {
 	if (!shape) return ""
 	const parts: string[] = []
-	const cap = (label: string, b?: { min: number; max?: number }) => {
-		if (!b || b.max === 0) return void parts.push(`no ${label}`)
-		const bounds =
-			b.min > 0
-				? b.max != null
-					? b.max === b.min
-						? `exactly ${b.min}`
-						: `${b.min}–${b.max}`
-					: `${b.min}+`
-				: b.max != null
-					? `up to ${b.max}`
-					: ""
-		parts.push(bounds ? `${label} ${bounds}` : label)
+	const bounds = (b: { min: number; max?: number }) =>
+		b.min > 0
+			? b.max != null
+				? b.max === b.min
+					? `exactly ${b.min}`
+					: `${b.min}–${b.max}`
+				: `${b.min}+`
+			: b.max != null
+				? `up to ${b.max}`
+				: ""
+	const cast = shape.characters
+	if (!cast || cast.max === 0) parts.push("no characters")
+	else {
+		const n = bounds(cast)
+		parts.push(n ? `characters ${n}` : "characters")
 	}
-	cap("characters", shape.characters)
-	cap("personas", shape.personas)
+	const seat = shape.personas
+	if (!seat || seat.max === 0) parts.push("no character you play")
+	else if (seat.max === 1) parts.push("a character you play")
+	else {
+		const n = bounds(seat)
+		parts.push(n ? `${n} characters you play` : "characters you play")
+	}
 	if (shape.lorebook === "required") parts.push("lorebook required")
 	else if (shape.lorebook) parts.push("lorebook optional")
-	if (shape.composer === "none") parts.push("no composer")
-	if (shape.voice === "narrator") parts.push("narrator voice")
+	if (shape.composer === "none") parts.push("you don't type messages")
+	if (shape.voice === "narrator") parts.push("a narrator tells the story")
 	return parts.join(" · ")
 }
 
@@ -277,6 +328,38 @@ export function castOptions<T extends { id: number }>(
 ): T[] {
 	const seat = new Set(personaIds)
 	return characters.filter((c) => !seat.has(c.id))
+}
+
+/**
+ * The cast with several picks added at its end, in the order they were picked
+ * — the cast's order is its turn order (`characterPositions`). Anyone already
+ * in it is skipped, and the cast stops at the genre's cap.
+ */
+export function addToCast(
+	cast: number[],
+	picks: number[],
+	max: number = Infinity
+): number[] {
+	const next = [...cast]
+	for (const id of picks) {
+		if (next.length >= max) break
+		if (!next.includes(id)) next.push(id)
+	}
+	return next
+}
+
+/**
+ * The cast with one member moved a place earlier (`-1`) or later (`1`). The
+ * first cannot go up nor the last down; an id not in the cast changes nothing.
+ */
+export function moveInCast(cast: number[], id: number, by: -1 | 1): number[] {
+	const from = cast.indexOf(id)
+	const to = from + by
+	if (from < 0 || to < 0 || to >= cast.length) return cast
+	const next = [...cast]
+	next[from] = next[to]
+	next[to] = id
+	return next
 }
 
 /** A picker row's searchable shape — the `characters:list` columns it reads. */
@@ -486,15 +569,24 @@ export class StartSessionFlow {
 	)
 	floors = $derived(participantFloors(this.shape, this.genreId))
 
-	/** True once both answers are settled, the cast meets the floors, and a
-	 *  genre that requires a lorebook has one. */
-	canStart = $derived(
-		!!this.genreId &&
-			!this.noPresetsForGenre &&
-			this.characterIds.length >= this.floors.characters &&
-			this.personaIds.length >= this.floors.personas &&
-			lorebookSatisfied(this.shape, this.fields.lorebookId)
+	/**
+	 * Why Start is not offered yet, as one sentence, or null when it is: a
+	 * genre and a preset, a cast that meets the floors, and the lorebook a
+	 * genre that requires one needs (`firstUnmetStartRule`).
+	 */
+	startBlocker = $derived(
+		firstUnmetStartRule({
+			genreId: this.genreId,
+			noPresetsForGenre: this.noPresetsForGenre,
+			characterCount: this.characterIds.length,
+			personaCount: this.personaIds.length,
+			floors: this.floors,
+			shape: this.shape,
+			lorebookId: this.fields.lorebookId
+		})
 	)
+	/** True once nothing stands in Start's way (`startBlocker` is null). */
+	canStart = $derived(this.startBlocker === null)
 
 	chooseGenre(id: string) {
 		if (this.genreId === id) return
@@ -552,6 +644,24 @@ export class StartSessionFlow {
 		this.characterIds = [...this.characterIds, id]
 		if (this.personaIds.includes(id))
 			this.personaIds = this.personaIds.filter((p) => p !== id)
+	}
+
+	/**
+	 * Add several to the cast at once, in the order picked, up to the genre's
+	 * cap. As with `toggleCharacter`, a character the person was playing
+	 * leaves the player seat as it joins the cast.
+	 */
+	addCharacters(ids: number[]) {
+		const max = this.shape?.characters?.max ?? Infinity
+		this.characterIds = addToCast(this.characterIds, ids, max)
+		const cast = new Set(this.characterIds)
+		if (this.personaIds.some((p) => cast.has(p)))
+			this.personaIds = this.personaIds.filter((p) => !cast.has(p))
+	}
+
+	/** Move a cast member one place earlier (`-1`) or later (`1`). */
+	moveCharacter(id: number, by: -1 | 1) {
+		this.characterIds = moveInCast(this.characterIds, id, by)
 	}
 
 	/** Seat the person as this character — any character, flagged or not. */

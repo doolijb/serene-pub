@@ -12,6 +12,16 @@
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import DetailHero from "$lib/client/components/panels/DetailHero.svelte"
 	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
+	import EmptyState from "$lib/client/components/EmptyState.svelte"
+	import LoadingState from "$lib/client/components/LoadingState.svelte"
+	import type { Stroke, StrokeKind } from "@serene-pub/sdk"
+	import { strokesOfKind, whenChipText } from "./strokes"
+	import { STROKES_ENABLED } from "$lib/shared/characters/strokesFlag"
+	import { socketCardStatsApi } from "./cardStatsApi"
+	import { cardStatGroups, valueText } from "./cardStats"
+	import { getContext } from "svelte"
+	import SharePeopleModal from "$lib/client/components/sharing/SharePeopleModal.svelte"
+	import SharedWithLine from "$lib/client/components/sharing/SharedWithLine.svelte"
 
 	// embedding/embeddingModel/vectorizedAt are deliberately excluded from
 	// the "characters:get" response (see charactersGet's `columns`
@@ -32,11 +42,16 @@
 		onEdit: () => void
 		onSession: () => void
 		onExport?: (character: ViewedCharacter) => void
+		/** **Copy to my characters** landed: open the copy. */
+		onCopied?: (id: number) => void
 	}
 
-	let { characterId, onBack, onEdit, onSession, onExport }: Props = $props()
+	let { characterId, onBack, onEdit, onSession, onExport, onCopied }: Props =
+		$props()
 
 	const socket = useTypedSocket()
+	const systemSettingsCtx: SystemSettingsCtx | undefined =
+		getContext("systemSettingsCtx")
 
 	let character = $state<ViewedCharacter | null>(null)
 	let isLoading = $state(true)
@@ -71,6 +86,82 @@
 			id
 		} satisfies Sockets.Characters.Get.Params)
 		return release
+	})
+
+	/**
+	 * Sharing (PLAN-private-messages §6.7). An owner may **Share…** while
+	 * accounts are on; a character read through a share is read-only — no
+	 * Edit, no gallery or sprite writes (both already follow `isOwner`) — and
+	 * offers **Copy to my characters** and **Export card** instead.
+	 */
+	let isShared = $derived(!!character?.isSharedWithMe && !character?.isOwner)
+	let canShare = $derived(
+		!!character?.isOwner && !!systemSettingsCtx?.settings?.isAccountsEnabled
+	)
+	let sharing = $state(false)
+	let copyPending = $state(false)
+
+	function handleShareConfirm(userIds: number[]) {
+		if (!character) return
+		// The reply re-sends `characters:get`, which redraws Shared with.
+		socket.emit("characters:share", { characterId: character.id, userIds })
+	}
+
+	function handleCopy() {
+		if (!character || copyPending) return
+		copyPending = true
+		socket.emit("characters:duplicate", { characterId: character.id })
+	}
+
+	// Only the copy THIS panel asked for opens; a refusal is said by Layout's
+	// catch-all and only re-arms the verb here.
+	$effect(() =>
+		declareInterest<"characters:duplicate">(
+			"characters:duplicate",
+			(msg) => {
+				if (!copyPending) return
+				copyPending = false
+				if (msg.character?.id) onCopied?.(msg.character.id)
+			}
+		)
+	)
+	$effect(() =>
+		declareInterest<"characters:duplicate:error">(
+			"characters:duplicate:error",
+			() => (copyPending = false)
+		)
+	)
+
+	/**
+	 * The card's strokes of one kind, when it is painted in them. Strokes
+	 * paused (`STROKES_ENABLED` off): none — the fields show their prose.
+	 */
+	const strokesFor = (kind: StrokeKind) =>
+		STROKES_ENABLED
+			? strokesOfKind(((character as any)?.strokes ?? []) as Stroke[], kind)
+			: []
+
+	/**
+	 * 🚧 The card's stats (§B.4), read for its owner only — a card's stats
+	 * are its owner's to see. Shown when the card carries any.
+	 */
+	const cardStatsApi = socketCardStatsApi(socket)
+	let cardStats = $state<Sockets.CardState.Get.Response | null>(null)
+	let statGroups = $derived(cardStats ? cardStatGroups(cardStats) : [])
+	$effect(() => {
+		const id = character?.isOwner ? character.id : null
+		cardStats = null
+		if (!id) return
+		let live = true
+		cardStatsApi.read(id).then(
+			(res) => {
+				if (live) cardStats = res
+			},
+			() => {}
+		)
+		return () => {
+			live = false
+		}
 	})
 
 	/**
@@ -147,7 +238,9 @@
 				? `v${character.characterVersion}`
 				: undefined,
 			!character?.isOwner && character?.ownerName
-				? `Owned by ${character.ownerName}`
+				? character.isSharedWithMe
+					? `Shared by ${character.ownerName} · read only`
+					: `Owned by ${character.ownerName}`
 				: undefined
 		].filter(Boolean) as string[]
 	)
@@ -168,55 +261,59 @@
 	]
 </script>
 
-<div class="flex h-full flex-col gap-0 overflow-hidden">
-	<!-- Header -->
-	<div class="shrink-0 pb-3">
-		<PanelNavHeader
-			title={character?.isPersona ? "Persona" : "Character"}
-			{onBack}
-			backLabel="Back to list"
-			actionsLabel="Character"
-			menuItems={[
-				{
-					label: "View sessions",
-					icon: Icons.MessageSquare,
-					onSelect: onSession
-				},
-				character?.isOwner &&
+<!-- One column, its 12px gap the only space between header, hero and tabs
+     (STYLE-GUIDE §6.3: no margin or padding wrapper under the header). -->
+<div class="flex h-full flex-col gap-3 overflow-hidden">
+	<!-- The title is the KIND; the hero below carries the name. Edit is the
+	     hero's primary, the rarer actions are this header's ⋯. -->
+	<PanelNavHeader
+		title={character?.isPersona ? "Persona" : "Character"}
+		{onBack}
+		backLabel="Back to list"
+		actionsLabel="Character"
+		menuItems={isShared
+			? [
+					{
+						label: "Copy to my characters",
+						icon: Icons.Copy,
+						disabled: copyPending,
+						onSelect: handleCopy
+					},
 					onExport && {
-						label: "Export character",
+						label: "Export card",
 						icon: Icons.Download,
 						onSelect: () => onExport?.(character!)
 					}
-			]}
-		>
-			{#snippet primaryAction()}
-				{#if character?.isOwner}
-					<button
-						class="btn btn-sm preset-filled-primary-500 shrink-0 p-2"
-						onclick={onEdit}
-						title="Edit character"
-						aria-label="Edit character"
-						type="button"
-					>
-						<Icons.Pencil size={16} aria-hidden="true" />
-					</button>
-				{/if}
-			{/snippet}
-		</PanelNavHeader>
-	</div>
+				]
+			: [
+					{
+						label: "View sessions",
+						icon: Icons.MessageSquare,
+						onSelect: onSession
+					},
+					canShare && {
+						label: "Share…",
+						icon: Icons.Share2,
+						onSelect: () => (sharing = true)
+					},
+					character?.isOwner &&
+						onExport && {
+							label: "Export character",
+							icon: Icons.Download,
+							onSelect: () => onExport?.(character!)
+						}
+				]}
+	/>
 
 	{#if isLoading}
-		<div class="flex flex-1 items-center justify-center">
-			<Icons.Loader2 size={24} class="text-surface-600-400 animate-spin" />
-		</div>
+		<LoadingState message="Loading character…" />
 	{:else if character}
 		<!-- Hero: the one place this panel says who it is showing, above the
 		     tabs so it holds for the gallery as well as the details. -->
 		<DetailHero
-			class="pb-4"
 			title={character.nickname || character.name}
-			subtitle={character.nickname && character.name !== character.nickname
+			subtitle={character.nickname &&
+			character.name !== character.nickname
 				? character.name
 				: undefined}
 			meta={heroMeta.length ? heroMeta.join(" · ") : undefined}
@@ -225,7 +322,11 @@
 			chips={libraryChips.length || tags.length > 0
 				? heroChips
 				: undefined}
+			actions={character.isOwner ? heroActions : undefined}
 		/>
+		{#if character.isOwner}
+			<SharedWithLine people={character.sharedWith} class="-mt-1 px-1" />
+		{/if}
 		<div class="flex min-h-0 flex-1 flex-col">
 			<!-- The same strip the character EDIT screen wears, so the two are
 			     one idiom rather than two that resemble each other. -->
@@ -256,17 +357,48 @@
 				     character simply has none. -->
 				<!-- Two columns once the detail has the room (notes 14); each card
 				     keeps a readable measure. -->
-				<div class="grid items-start gap-3 pt-3 @3xl/detail:grid-cols-2">
+				<div
+					class="grid items-start gap-3 pt-3 @3xl/detail:grid-cols-2"
+				>
 					{#if character.description}
 						<section class="panel-card">
 							<p class="text-surface-600-400 mb-1.5 text-xs">
 								Description
 							</p>
-							<p
-								class="text-surface-800-200 text-sm leading-relaxed whitespace-pre-wrap"
-							>
-								{character.description}
-							</p>
+							{#if strokesFor("description").length}
+								<ul class="flex flex-col gap-1.5" data-view-strokes="description">
+									{#each strokesFor("description") as { stroke }, i (i)}
+										<li
+											class="flex items-start gap-2 text-sm {stroke.when
+												?.mode === 'off'
+												? 'opacity-60'
+												: ''}"
+										>
+											<span
+												class="chip shrink-0 text-[11px] {stroke.when
+													?.mode === 'keywords'
+													? 'preset-tonal-primary'
+													: 'preset-tonal-surface'}"
+												>{whenChipText(stroke.when)}</span
+											>
+											<span
+												class="text-surface-800-200 min-w-0 leading-relaxed whitespace-pre-wrap"
+											>
+												{#if stroke.label}<span class="font-medium"
+														>{stroke.label}:</span
+													>{/if}
+												{stroke.text}
+											</span>
+										</li>
+									{/each}
+								</ul>
+							{:else}
+								<p
+									class="text-surface-800-200 text-sm leading-relaxed whitespace-pre-wrap"
+								>
+									{character.description}
+								</p>
+							{/if}
 						</section>
 					{/if}
 
@@ -275,11 +407,68 @@
 							<p class="text-surface-600-400 mb-1.5 text-xs">
 								Personality
 							</p>
-							<p
-								class="text-surface-800-200 text-sm leading-relaxed whitespace-pre-wrap"
-							>
-								{character.personality}
-							</p>
+							{#if strokesFor("personality").length}
+								<ul class="flex flex-col gap-1.5" data-view-strokes="personality">
+									{#each strokesFor("personality") as { stroke }, i (i)}
+										<li
+											class="flex items-start gap-2 text-sm {stroke.when
+												?.mode === 'off'
+												? 'opacity-60'
+												: ''}"
+										>
+											<span
+												class="chip shrink-0 text-[11px] {stroke.when
+													?.mode === 'keywords'
+													? 'preset-tonal-primary'
+													: 'preset-tonal-surface'}"
+												>{whenChipText(stroke.when)}</span
+											>
+											<span
+												class="text-surface-800-200 min-w-0 leading-relaxed whitespace-pre-wrap"
+											>
+												{#if stroke.label}<span class="font-medium"
+														>{stroke.label}:</span
+													>{/if}
+												{stroke.text}
+											</span>
+										</li>
+									{/each}
+								</ul>
+							{:else}
+								<p
+									class="text-surface-800-200 text-sm leading-relaxed whitespace-pre-wrap"
+								>
+									{character.personality}
+								</p>
+							{/if}
+						</section>
+					{/if}
+
+					{#if statGroups.length}
+						<section class="panel-card" data-view-stats>
+							<p class="text-surface-600-400 mb-1.5 text-xs">Stats</p>
+							<div class="flex flex-col gap-2">
+								{#each statGroups as group (group.sheetId ?? "loose")}
+									<div>
+										<p class="text-surface-600-400 text-[11px]">
+											{group.label}
+										</p>
+										<dl
+											class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sm"
+										>
+											{#each group.rows as row (row.slot.slotId)}
+												<dt class="text-surface-600-400">
+													{row.slot.label}
+												</dt>
+												<dd class="text-surface-800-200">
+													{valueText(row.slot, row.value ?? row.fallback) ||
+														"—"}
+												</dd>
+											{/each}
+										</dl>
+									</div>
+								{/each}
+							</div>
 						</section>
 					{/if}
 
@@ -383,16 +572,25 @@
 			</div>
 		</div>
 	{:else}
-		<p class="text-surface-700-300 py-8 text-center text-sm">
-			Character not found.
-		</p>
+		<EmptyState icon={Icons.UserX} message="Character not found." />
 	{/if}
 </div>
+
+{#snippet heroActions()}
+	<button
+		type="button"
+		class="btn btn-sm preset-filled-primary-500"
+		onclick={onEdit}
+	>
+		<Icons.Pencil size={16} aria-hidden="true" />
+		Edit
+	</button>
+{/snippet}
 
 {#snippet heroChips()}
 	{#each libraryChips as chip (chip.label)}
 		<span
-			class="bg-surface-200-800 text-surface-800-200 flex max-w-full items-center gap-1 rounded px-2 py-0.5 text-xs"
+			class="bg-surface-200-800 text-surface-700-300 flex max-w-full items-center gap-1 rounded px-2 py-0.5 text-xs"
 		>
 			<chip.icon size={12} class="shrink-0" aria-hidden="true" />
 			<span class="truncate">{chip.label}</span>
@@ -404,3 +602,13 @@
 		</span>
 	{/each}
 {/snippet}
+
+{#if character && canShare}
+	<SharePeopleModal
+		open={sharing}
+		title="Share {character.nickname || character.name}"
+		initialUserIds={(character.sharedWith ?? []).map((p) => p.id)}
+		onConfirm={handleShareConfirm}
+		onclose={() => (sharing = false)}
+	/>
+{/if}

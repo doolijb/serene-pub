@@ -99,16 +99,18 @@
 				icon: "Target",
 				// Deliberately no fraction and no bar (docs/connections.md):
 				// most jobs are optional and off is a fine answer, so only a
-				// job a pipeline needs is counted.
+				// job this pub needs is counted. The same `missing` the Needs
+				// you list makes one gold item each from (`attention.ts`), so
+				// the card, the list and the rail's dot say one thing.
 				lines: [
 					m.missing.length
 						? {
-								tone: "error",
-								text: `${m.missing.length} needed by a pipeline and not set`
+								tone: "primary",
+								text: `${plural(m.missing.length, "loadout")} need${m.missing.length === 1 ? "s" : ""} a model`
 							}
 						: {
 								tone: "success",
-								text: "Everything a pipeline needs is set"
+								text: "Every loadout this pub needs is filled"
 							}
 				]
 			},

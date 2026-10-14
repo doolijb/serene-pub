@@ -20,6 +20,8 @@
  * - `/admin/data#backup-now` — an Admin section; the fragment is a landing
  *   request (`adminRouter.land`), not part of the address.
  * - `/docs/sessions#turn-order` — a Help page; same for the anchor.
+ * - `/messages/12` — one conversation in the Messages view, matched as a
+ *   path against the view's own address, never the page's.
  * - `/lorebooks#lore=12/history/340` — a lore address, on any path, compared
  *   as a `LoreRoute` (`sameRoute`), never as a string: two spellings of one
  *   route are one place.
@@ -52,6 +54,12 @@ export interface ViewingSnapshot {
 	helpSlug: string | null
 	/** `toHash(loreRoute.route)`: `#lore=…`, or empty for the list of books. */
 	loreHash: string | null
+	/**
+	 * The Messages view's address (`/messages/12`, `/messages`), or null.
+	 * Optional so a snapshot from a client that predates it still parses;
+	 * absent reads as "no conversation on screen".
+	 */
+	messagesHref?: string | null
 }
 
 /** How long the covering state must hold before a row counts as seen. */
@@ -86,6 +94,7 @@ function normalSearch(search: string): string {
 }
 
 const SESSION_PATH = /^\/sessions\/(\d+)$/
+const CONVERSATION_PATH = /^\/messages\/(\d+)$/
 const DOCUMENT_VIEW_SESSION_PATH = /^\/document-view\/sessions\/(\d+)$/
 
 function sessionIdOf(path: string): string | null {
@@ -124,6 +133,14 @@ export function covers(viewing: ViewingSnapshot, href: string): boolean {
 		const raw = target.path.slice("/docs".length).replace(/^\/+/, "")
 		const slug = raw ? safeDecode(raw) : null
 		return viewing.helpSlug === slug
+	}
+
+	const conversationId = CONVERSATION_PATH.exec(target.path)?.[1]
+	if (conversationId !== undefined) {
+		if (viewing.activeView !== "conversations" || !viewing.messagesHref)
+			return false
+		const current = split(viewing.messagesHref)
+		return CONVERSATION_PATH.exec(current.path)?.[1] === conversationId
 	}
 
 	const sessionId = sessionIdOf(target.path)

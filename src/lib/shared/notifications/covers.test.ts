@@ -172,6 +172,44 @@ describe("covers — lore", () => {
 	})
 })
 
+describe("covers — messages", () => {
+	it("covers the conversation the Messages view has on screen", () => {
+		const v = viewing({
+			activeView: "conversations",
+			messagesHref: "/messages/12"
+		})
+		expect(covers(v, "/messages/12")).toBe(true)
+		expect(covers(v, "/messages/12/")).toBe(true)
+		expect(covers(v, "/messages/13")).toBe(false)
+	})
+
+	it("needs the Messages view on screen, not the page's address", () => {
+		expect(
+			covers(
+				viewing({ activeView: "sessions", messagesHref: "/messages/12" }),
+				"/messages/12"
+			)
+		).toBe(false)
+		expect(
+			covers(
+				viewing({ pathname: "/messages/12", activeView: null }),
+				"/messages/12"
+			)
+		).toBe(false)
+	})
+
+	it("the list, a person, or an older snapshot covers no conversation", () => {
+		const list = viewing({ activeView: "conversations", messagesHref: "/messages" })
+		expect(covers(list, "/messages/12")).toBe(false)
+		const person = viewing({
+			activeView: "conversations",
+			messagesHref: "/messages/people/12"
+		})
+		expect(covers(person, "/messages/12")).toBe(false)
+		expect(covers(viewing({ activeView: "conversations" }), "/messages/12")).toBe(false)
+	})
+})
+
 describe("covers — everything else", () => {
 	it("an unknown or foreign href is never covered", () => {
 		const v = viewing({ pathname: "/characters", activeView: "admin", adminHref: "/admin" })

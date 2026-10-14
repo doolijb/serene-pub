@@ -51,7 +51,12 @@
 			: { basic: [], declared: [], behaviour: [] }
 	)
 	let effective = $derived(
-		decl ? effectiveWidgetSettings(decl, widgetSettingValues(widgetId)) : {}
+		decl
+			? effectiveWidgetSettings({
+					decl,
+					stored: widgetSettingValues(widgetId)
+				})
+			: {}
 	)
 	let overridden = $derived(hasWidgetSettings(widgetId))
 

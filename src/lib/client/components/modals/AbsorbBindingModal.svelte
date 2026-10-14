@@ -277,7 +277,7 @@
 
 						<div class="flex justify-end gap-2">
 							<button
-								class="btn preset-filled-surface-400-600"
+								class="btn preset-tonal-surface"
 								onclick={() => {
 									selectedTarget = null
 								}}

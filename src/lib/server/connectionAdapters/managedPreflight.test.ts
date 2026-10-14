@@ -48,8 +48,14 @@ const settings: Record<string, any> = {
 	koboldCppManagedAdminPassword: ""
 }
 
+// A copy per read, as a real row read is: a test that changes `settings`
+// mid-call is a write the code only sees if it reads again.
 vi.mock("$lib/server/db", () => ({
-	db: { query: { koboldCppSettings: { findFirst: async () => settings } } }
+	db: {
+		query: {
+			koboldCppSettings: { findFirst: async () => ({ ...settings }) }
+		}
+	}
 }))
 
 vi.mock("$lib/server/embedding", () => ({
@@ -80,14 +86,32 @@ vi.mock("$lib/server/koboldcpp/modelManager", () => ({
 	}
 }))
 
+/** Whether the instance answers before preflight starts anything. */
+let responding = true
+/** What the subprocess manager reports; `start` may change it. */
+const subprocess = {
+	running: true,
+	status: "running",
+	lastError: null as string | null,
+	start: vi.fn(async () => {})
+}
+
 vi.mock("$lib/server/koboldcpp/kcppHttp", () => ({
-	pingKoboldCPP: async () => true,
+	pingKoboldCPP: async () => responding,
 	fetchCurrentModelName: async () => "llama-3.gguf"
 }))
 
 vi.mock("$lib/server/koboldcpp/subprocessManager", () => ({
-	start: async () => {},
-	isRunning: () => true,
+	start: () => subprocess.start(),
+	isRunning: () => subprocess.running,
+	getStatus: () => ({
+		status: subprocess.status,
+		lastError: subprocess.lastError,
+		pid: null,
+		startedAt: null,
+		restartCount: 0,
+		isExternal: false
+	}),
 	isExternal: () => false,
 	suspendHealthCheck: () => {},
 	resumeHealthCheck: () => {},
@@ -103,7 +127,10 @@ beforeAll(async () => {
 	await fsPromises.mkdir(textDir)
 	await fsPromises.mkdir(imageDir)
 	await fsPromises.writeFile(path.join(textDir, "llama-3.gguf"), "x")
-	await fsPromises.writeFile(path.join(textDir, "mmproj-llama-3-f16.gguf"), "x")
+	await fsPromises.writeFile(
+		path.join(textDir, "mmproj-llama-3-f16.gguf"),
+		"x"
+	)
 	await fsPromises.writeFile(path.join(imageDir, "sdxl.safetensors"), "x")
 	// An image model downloaded before there were two directories.
 	await fsPromises.writeFile(path.join(textDir, "legacy-sd.gguf"), "x")
@@ -121,6 +148,12 @@ beforeEach(() => {
 	settings.koboldCppManagedMode = "managed"
 	settings.koboldCppManagerModelsDir = textDir
 	settings.koboldCppImageModelsDir = imageDir
+	settings.koboldCppManagedAdminPassword = ""
+	responding = true
+	subprocess.running = true
+	subprocess.status = "running"
+	subprocess.lastError = null
+	subprocess.start.mockReset().mockResolvedValue(undefined)
 	vi.resetModules()
 })
 
@@ -280,9 +313,12 @@ describe("ensureManagedReady — the text path", () => {
 	it("resolves a vision projector against the TEXT directory, beside its model", async () => {
 		const ensureManagedReady = await loadReady()
 
-		await ensureManagedReady(textSpec({ mmproj: "mmproj-llama-3-f16.gguf" }), {
-			connectionId: 3
-		})
+		await ensureManagedReady(
+			textSpec({ mmproj: "mmproj-llama-3-f16.gguf" }),
+			{
+				connectionId: 3
+			}
+		)
 
 		expect(loadOpts.request.mmproj).toBe("mmproj-llama-3-f16.gguf")
 		expect(loadOpts.request.mmprojPath).toBe(
@@ -294,8 +330,12 @@ describe("ensureManagedReady — the text path", () => {
 		const ensureManagedReady = await loadReady()
 
 		await expect(
-			ensureManagedReady(textSpec({ mmproj: "gone.gguf" }), { connectionId: 3 })
-		).rejects.toThrow(/vision projector "gone.gguf".*clear Vision projector/)
+			ensureManagedReady(textSpec({ mmproj: "gone.gguf" }), {
+				connectionId: 3
+			})
+		).rejects.toThrow(
+			/vision projector "gone.gguf".*clear Vision projector/
+		)
 		expect(loadOpts).toBeNull()
 	})
 
@@ -357,6 +397,99 @@ describe("ensureManagedReady — what it logs", () => {
 			expect(lines[0]).toContain("llama-3.gguf")
 			expect(lines[0]).toContain(3)
 			expect(lines[0]).toContain("contextSize 8192")
+		} finally {
+			log.mockRestore()
+		}
+	})
+})
+
+/**
+ * The first "Download & Start" (owner report 2026-10-05): every preflight
+ * logged "subprocess not responding, starting…" and then "subprocess started",
+ * though start() had returned early on a stuck "starting" and no process
+ * existed. The load then failed three times with "process is no longer
+ * running", which named the symptom and not the cause.
+ */
+describe("ensureManagedReady — starting the instance", () => {
+	const startedLines = (spy: { mock: { calls: unknown[][] } }) =>
+		spy.mock.calls.filter((args) =>
+			String(args[0]).includes("subprocess started")
+		)
+
+	beforeEach(() => {
+		responding = false
+		// No models directory, so nothing in the retry window is waiting on
+		// real disk I/O that fake timers cannot advance.
+		settings.koboldCppManagerModelsDir = null
+		settings.koboldCppImageModelsDir = null
+	})
+
+	it("throws 'did not start' with the manager's lastError when start() resolves but nothing is running", async () => {
+		subprocess.running = false
+		subprocess.status = "crashed"
+		subprocess.lastError = "spawn ETXTBSY"
+		const log = vi.spyOn(console, "log").mockImplementation(() => {})
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		vi.useFakeTimers()
+		try {
+			const ensureManagedReady = await loadReady()
+			const promise = ensureManagedReady(textSpec(), { connectionId: 3 })
+			promise.catch(() => {})
+			await vi.advanceTimersByTimeAsync(2000)
+			await vi.advanceTimersByTimeAsync(4000)
+
+			await expect(promise).rejects.toThrow(
+				/^KoboldCPP did not start: spawn ETXTBSY$/
+			)
+			// Every attempt tried to start it; none went on to load a model.
+			expect(subprocess.start).toHaveBeenCalledTimes(3)
+			expect(loadOpts).toBeNull()
+			expect(startedLines(log)).toEqual([])
+		} finally {
+			vi.useRealTimers()
+			log.mockRestore()
+			warn.mockRestore()
+		}
+	})
+
+	it("names the status when the manager recorded no error", async () => {
+		subprocess.running = false
+		subprocess.status = "starting"
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		const log = vi.spyOn(console, "log").mockImplementation(() => {})
+		vi.useFakeTimers()
+		try {
+			const ensureManagedReady = await loadReady()
+			const promise = ensureManagedReady(textSpec(), { connectionId: 3 })
+			promise.catch(() => {})
+			await vi.advanceTimersByTimeAsync(2000)
+			await vi.advanceTimersByTimeAsync(4000)
+
+			await expect(promise).rejects.toThrow(
+				'KoboldCPP did not start: its status is "starting"'
+			)
+		} finally {
+			vi.useRealTimers()
+			log.mockRestore()
+			warn.mockRestore()
+		}
+	})
+
+	it("loads with the admin password start() just wrote, not the one read before it", async () => {
+		// doStart generates and persists a password when the row has none; the
+		// process is spawned with it, so the load must send it too.
+		subprocess.start.mockImplementation(async () => {
+			settings.koboldCppManagedAdminPassword = "generated-by-start"
+		})
+		const log = vi.spyOn(console, "log").mockImplementation(() => {})
+		try {
+			const ensureManagedReady = await loadReady()
+
+			await ensureManagedReady(textSpec(), { connectionId: 3 })
+
+			expect(subprocess.start).toHaveBeenCalledTimes(1)
+			expect(loadOpts.adminPassword).toBe("generated-by-start")
+			expect(startedLines(log)).toHaveLength(1)
 		} finally {
 			log.mockRestore()
 		}

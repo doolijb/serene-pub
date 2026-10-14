@@ -4,6 +4,7 @@ import * as fs from "fs"
 import * as fsPromises from "fs/promises"
 import * as path from "path"
 import * as crypto from "crypto"
+import { finished } from "stream/promises"
 
 export interface BinaryVariant {
 	name: string
@@ -243,6 +244,17 @@ export async function downloadVariant(opts: {
 	}
 
 	const destPath = path.join(destDir, assetName)
+	// Bytes land beside the final path and are renamed into it only once the
+	// file is complete, verified, executable and CLOSED. The auto-start after a
+	// download execs the final path straight away, and exec'ing a file that is
+	// still open for writing is ETXTBSY on Linux — the first "Download & Start"
+	// then never started (2026-10-05). It also means no half-written binary is
+	// ever at the path settings point at, and a re-download over a binary that
+	// is running replaces its directory entry instead of truncating it.
+	const partPath = `${destPath}.part`
+	// Asserted, not annotated: assigned inside the request callback, which
+	// control-flow narrowing cannot see, so a plain `= null` reads as never.
+	let writer = null as fs.WriteStream | null
 
 	currentDownload = {
 		assetName,
@@ -288,6 +300,19 @@ export async function downloadVariant(opts: {
 						request(res.headers.location, redirectsLeft - 1)
 						return
 					}
+					// An error page is not a binary. Saved, it "succeeded",
+					// was chmod'ed and exec'ed, and the start failed on a file
+					// that was never KoboldCPP.
+					if (
+						res.statusCode &&
+						(res.statusCode < 200 || res.statusCode >= 300)
+					) {
+						res.resume()
+						reject(
+							new Error(`Download failed: HTTP ${res.statusCode}`)
+						)
+						return
+					}
 
 					currentDownload!.total = parseInt(
 						res.headers["content-length"] ?? "0",
@@ -296,7 +321,8 @@ export async function downloadVariant(opts: {
 					currentDownload!.status = "downloading"
 					emitProgress()
 
-					const writer = fs.createWriteStream(destPath)
+					const out = fs.createWriteStream(partPath)
+					writer = out
 
 					res.on("data", (chunk: Buffer) => {
 						currentDownload!.downloaded += chunk.length
@@ -309,10 +335,15 @@ export async function downloadVariant(opts: {
 							emitProgress()
 						}
 					})
-					res.pipe(writer)
-					writer.on("finish", resolve)
-					writer.on("error", reject)
-					res.on("error", reject)
+					// `pipe` never hands a response error to its destination;
+					// destroying it does, which also releases the fd.
+					res.on("error", (err: Error) => out.destroy(err))
+					res.pipe(out)
+					// `finished`, not the "finish" event: on a file stream it
+					// settles on "close", once the fd is released. "finish"
+					// fires while the fd is still open — the window in which the
+					// auto-start's exec hit ETXTBSY.
+					finished(out).then(resolve, reject)
 				})
 
 				req.on("error", reject)
@@ -339,7 +370,7 @@ export async function downloadVariant(opts: {
 					.trim()
 					.split(/\s+/)[0]
 					?.toLowerCase()
-				const fileBuffer = await fsPromises.readFile(destPath)
+				const fileBuffer = await fsPromises.readFile(partPath)
 				const actualHex = crypto
 					.createHash("sha256")
 					.update(fileBuffer)
@@ -354,8 +385,10 @@ export async function downloadVariant(opts: {
 
 		// Make executable on Unix
 		if (process.platform !== "win32") {
-			await fsPromises.chmod(destPath, 0o755)
+			await fsPromises.chmod(partPath, 0o755)
 		}
+		// Atomic within one directory, and replaces an older copy in place.
+		await fsPromises.rename(partPath, destPath)
 
 		currentDownload!.status = "success"
 		currentDownload!.isDone = true
@@ -369,8 +402,14 @@ export async function downloadVariant(opts: {
 
 		// Clean up the partial file regardless of why the download stopped —
 		// a genuine error leaves the same half-written file behind as a
-		// cancellation does.
-		fsPromises.unlink(destPath).catch(() => {})
+		// cancellation does. Closed first: a cancel leaves the stream open, and
+		// an open file cannot be unlinked on Windows. The final path is never
+		// touched, so a failed re-download keeps the binary that was there.
+		if (writer && !writer.closed) {
+			writer.destroy()
+			await finished(writer).catch(() => {})
+		}
+		await fsPromises.unlink(partPath).catch(() => {})
 
 		if (!cancelled) throw err
 	}

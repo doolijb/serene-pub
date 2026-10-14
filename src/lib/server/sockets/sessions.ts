@@ -43,7 +43,7 @@ import {
 	channelDeclsOf,
 	channelsOf
 } from "$lib/server/messages/channels"
-import { isWidgetInstanceId, widgetOfInstance } from "@serene-pub/sdk"
+import { formatChannel, isWidgetInstanceId, parseChannel, widgetOfInstance, type ChannelLaneV1 } from "@serene-pub/sdk"
 import {
 	and,
 	asc,
@@ -52,7 +52,9 @@ import {
 	eq,
 	inArray,
 	isNull,
+	like,
 	lt,
+	max,
 	or
 } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
@@ -116,7 +118,7 @@ import {
 import { setUserLayoutDefault } from "$lib/server/db/userLayoutDefaults"
 import {
 	readWidgetSettings,
-	storedWidgetSlugs,
+	storedWidgetInstanceIds,
 	writeWidgetSettings
 } from "$lib/server/db/widgetSettings"
 import {
@@ -773,6 +775,10 @@ export const sessionsCreateHandler: Handler<
 			// Retired by R40 (2026-09-23): an old client's one-node strategy
 			// field, dropped in silence like the connection above.
 			speakerStrategy: _retiredSpeakerStrategy,
+			// Not a column: a session's sampling pick is its pipeline panel
+			// row (Pipelines card › Sampling), so an old client's field is
+			// dropped in silence like the two above.
+			samplingConfigId: _retiredSessionSampling,
 			// Not a column: the session's rebinds of swappable nodes (R40),
 			// written once the row exists (below).
 			swaps: requestedSwaps,
@@ -790,6 +796,7 @@ export const sessionsCreateHandler: Handler<
 		} = params.session as Omit<InsertSession, "userId" | "isGroup"> & {
 			connectionId?: number | null
 			speakerStrategy?: string
+			samplingConfigId?: number | null
 			swaps?: unknown
 		}
 		// Field values only under names the mode declares (19 §1) — the same
@@ -1396,8 +1403,29 @@ export const sessionsModesHandler: Handler<
 		const { listOfferedGenres } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
+		const { genreBoundaryTriggers } = await import(
+			"$lib/server/scenes/liveScenes"
+		)
+		const { i18nText } = await import("@serene-pub/sdk")
+		const genres = await listOfferedGenres(db)
 		const res: Sockets.Sessions.Genres.Response = {
-			genres: (await listOfferedGenres(db)) as any
+			// 🚧 Each genre's declared boundary triggers (live scenes ★9, §15
+			// G1) beside its shape: its summarize-scene spec's, which the
+			// session settings' Scenes list as switches. Absent when none.
+			genres: (await Promise.all(
+				genres.map(async (g) => {
+					const declared = await genreBoundaryTriggers(db, g.genreId).catch(() => [])
+					return declared.length
+						? {
+								...g,
+								sceneBoundaryTriggers: declared.map((t) => ({
+									key: t.key,
+									label: i18nText(t.label) ?? t.key
+								}))
+							}
+						: g
+				})
+			)) as any
 		}
 		emitToUser("sessions:genres", res)
 		return res
@@ -1862,12 +1890,15 @@ export const sessionsFireActionHandler: Handler<
 			/** The card's title — the action's key, the short word a person pressed. */
 			const label = named.includes("#") ? named.slice(named.lastIndexOf("#") + 1) : named
 			const fail = (
-				error: string
+				error: string,
+				/** The run whose terminal frame already said `error` (see `Response.runId`). */
+				runId?: string
 			): Sockets.Sessions.FireAction.Response => {
 				const res = {
 					sessionId: params.sessionId,
 					action: named,
-					error
+					error,
+					...(runId ? { runId } : {})
 				}
 				emitToUser("sessions:fireAction", res)
 				return res
@@ -1991,8 +2022,13 @@ export const sessionsFireActionHandler: Handler<
 					const { haltExplanation } = await import(
 						"$lib/server/pipelines/runtime/runTurn"
 					)
+					// The same sentence `finished` just put on the run's
+					// terminal frame, so the answer names that run: the
+					// session's progress card has already said it, and the page
+					// does not say it a second time (PLAN-less-confusing D4).
 					return fail(
-						haltExplanation(receipt) ?? "The run produced nothing."
+						haltExplanation(receipt) ?? "The run produced nothing.",
+						outcome.runId
 					)
 				}
 
@@ -2034,6 +2070,7 @@ export const sessionsFireActionHandler: Handler<
 					// hands each on only to an action declaring it collects it.
 					...(typeof params.text === "string" ? { text: params.text } : {}),
 					...(Array.isArray(params.recipients) ? { recipients: params.recipients } : {}),
+					...(params.clockStep !== undefined ? { clockStep: params.clockStep } : {}),
 					actor: { userId },
 					runId,
 					// So the status relay pushes `sessions:runStatus` and,
@@ -2327,6 +2364,10 @@ export const sessionsViewHandler: Handler<
 			// language — the Lair's `sanctum` is _Sanctum_. Only the channels
 			// that declare one; the rest are named by their slug.
 			const labels: Record<string, string> = {}
+			// And what each IS (PLAN-core-widgets §3.7): only the channels
+			// that declare a role, so a Messages copy claiming a `folio`
+			// channel can draw it as Folio when its Presentation is unset.
+			const roles: Record<string, "conversation" | "folio"> = {}
 			for (const decl of channelDeclsOf(mode?.shape)) {
 				// The mirror reads a stored row as it comes (a locale map
 				// that may lack `en`); `i18nText` falls back to it anyway.
@@ -2334,8 +2375,11 @@ export const sessionsViewHandler: Handler<
 					? i18nText(decl.label as Parameters<typeof i18nText>[0], res.language)
 					: undefined
 				if (label) labels[decl.slug] = label
+				if (decl.role === "folio" || decl.role === "conversation")
+					roles[decl.slug] = decl.role
 			}
 			if (Object.keys(labels).length) res.channelLabels = labels
+			if (Object.keys(roles).length) res.channelRoles = roles
 
 			// Whether Extend is offered at all, and why not when it is not.
 			//
@@ -2516,8 +2560,7 @@ export const sessionsViewHandler: Handler<
 								: undefined,
 						// The base sections it reads (R75): only those are sent.
 						...(Array.isArray(p.reads) ? { reads: declaredWidgetReads(p.reads) } : {}),
-						...widgetCap(p.maxInstances),
-						defaultActive: !!p.defaultActive
+						...widgetCap(p.maxInstances)
 					}
 					if (remoteSrc) panel.src = remoteSrc
 					if (grants?.length) panel.grants = grants as Sockets.Sessions.View.ModePanel["grants"]
@@ -2607,8 +2650,7 @@ export const sessionsViewHandler: Handler<
 						...(w.settings ? { settings: w.settings as Record<string, unknown> } : {}),
 						...(Array.isArray(w.reads) ? { reads: declaredWidgetReads(w.reads) } : {}),
 						...(grants.length ? { grants: grants as Sockets.Sessions.View.ModePanel["grants"] } : {}),
-						...widgetCap(w.maxInstances),
-						defaultActive: !!w.defaultActive
+						...widgetCap(w.maxInstances)
 					})
 				}
 			}
@@ -2874,6 +2916,153 @@ export const sessionsPanelLayoutGetHandler: Handler<
 	}
 }
 
+/** The page size a widget's `messages` ask is clamped into. */
+const MESSAGES_PAGE_LIMIT = { min: 1, max: 100, default: 25 } as const
+
+/**
+ * 🚧 One page of the session's lines for ONE widget (the `messages` widget
+ * request; D7 ruling A, 2026-10-11). Newest-first before `beforeId`, in one
+ * channel when asked (a bare slug is the whole channel, every lane; `slug:n`
+ * one lane), clamped to {@link MESSAGES_PAGE_LIMIT}. Each widget pages its
+ * own window; the conversation's window is never touched. One more row than
+ * asked is read to know whether an older page exists. Access as `sessions:get`.
+ */
+export const sessionsMessagesPageHandler: Handler<
+	Sockets.Sessions.MessagesPage.Params,
+	Sockets.Sessions.MessagesPage.Response
+> = {
+	event: "sessions:messagesPage",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const sessionId = Number(params?.sessionId)
+		const requestId = typeof params?.requestId === "string" ? params.requestId : undefined
+		const refuse = (error: string): Sockets.Sessions.MessagesPage.Response => {
+			const res = { sessionId, requestId, rows: [], error }
+			emitToUser("sessions:messagesPage", res)
+			return res
+		}
+		if (!Number.isInteger(sessionId)) return refuse("sessionId must be a session's id.")
+		const access = await checkSessionAccess(sessionId, userId)
+		if (!access.hasAccess) return refuse("This session is not yours to read.")
+		const beforeId = params.beforeId == null ? undefined : Number(params.beforeId)
+		if (beforeId !== undefined && !Number.isInteger(beforeId))
+			return refuse("beforeId must be a message id (the last page's nextCursor).")
+		const asked = params.limit == null ? MESSAGES_PAGE_LIMIT.default : Number(params.limit)
+		const limit = Number.isFinite(asked)
+			? Math.min(MESSAGES_PAGE_LIMIT.max, Math.max(MESSAGES_PAGE_LIMIT.min, Math.trunc(asked)))
+			: MESSAGES_PAGE_LIMIT.default
+		let channelWhere
+		if (typeof params.channel === "string" && params.channel.trim()) {
+			const ref = parseChannel(params.channel)
+			channelWhere = ref.explicit
+				? eq(schema.sessionMessages.channel, formatChannel(ref))
+				: or(eq(schema.sessionMessages.channel, ref.slug), like(schema.sessionMessages.channel, `${ref.slug}:%`))
+		}
+		const page = await db
+			.select()
+			.from(schema.sessionMessages)
+			.where(
+				and(
+					eq(schema.sessionMessages.sessionId, sessionId),
+					beforeId !== undefined ? lt(schema.sessionMessages.id, beforeId) : undefined,
+					channelWhere
+				)
+			)
+			.orderBy(desc(schema.sessionMessages.id))
+			.limit(limit + 1)
+		const more = page.length > limit
+		const rows = page.slice(0, limit).reverse()
+		const res: Sockets.Sessions.MessagesPage.Response = {
+			sessionId,
+			requestId,
+			rows,
+			...(more && rows.length ? { nextCursor: String(rows[0]!.id) } : {})
+		}
+		emitToUser("sessions:messagesPage", res)
+		return res
+	}
+}
+
+/**
+ * 🚧 The **channel lanes** under one channel (`channel-lanes` widget request;
+ * ruled 2026-10-12): one entry per lane that holds a line — the canonical
+ * channel string, its slug and number, its line count and its newest line.
+ * A bare slug lists every lane of the channel; a lane string (`phone:2`)
+ * answers that lane alone. Read from the log, never declared: a lane exists
+ * because a pipeline wrote to it. Who is in a lane is the genre's to keep.
+ * Access as `sessions:get`.
+ */
+export const sessionsChannelLanesHandler: Handler<
+	Sockets.Sessions.ChannelLanes.Params,
+	Sockets.Sessions.ChannelLanes.Response
+> = {
+	event: "sessions:channelLanes",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const sessionId = Number(params?.sessionId)
+		const requestId = typeof params?.requestId === "string" ? params.requestId : undefined
+		const refuse = (error: string): Sockets.Sessions.ChannelLanes.Response => {
+			const res = { sessionId, requestId, lanes: [], error }
+			emitToUser("sessions:channelLanes", res)
+			return res
+		}
+		if (!Number.isInteger(sessionId)) return refuse("sessionId must be a session's id.")
+		if (typeof params?.channel !== "string" || !params.channel.trim()) return refuse("channel must be a channel slug.")
+		const access = await checkSessionAccess(sessionId, userId)
+		if (!access.hasAccess) return refuse("This session is not yours to read.")
+		const ref = parseChannel(params.channel)
+		const m = schema.sessionMessages
+		const where = and(
+			eq(m.sessionId, sessionId),
+			ref.explicit ? eq(m.channel, formatChannel(ref)) : or(eq(m.channel, ref.slug), like(m.channel, `${ref.slug}:%`))
+		)
+		const grouped = await db
+			.select({ channel: m.channel, count: count(m.id), latestId: max(m.id) })
+			.from(m)
+			.where(where)
+			.groupBy(m.channel)
+		const latestIds = grouped.map((g) => Number(g.latestId)).filter((n) => Number.isInteger(n))
+		const latestRows = latestIds.length
+			? await db
+					.select({ id: m.id, createdAt: m.createdAt, role: m.role, characterId: m.characterId, personaId: m.personaId })
+					.from(m)
+					.where(inArray(m.id, latestIds))
+			: []
+		const latestById = new Map(latestRows.map((r) => [r.id, r]))
+		const lanes: ChannelLaneV1[] = []
+		for (const g of grouped) {
+			const latest = latestById.get(Number(g.latestId))
+			if (!latest) continue
+			const laneRef = parseChannel(g.channel)
+			// A row written as `slug:1` and one written bare are one lane: fold them.
+			const canonical = formatChannel(laneRef)
+			const seen = lanes.find((l) => l.channel === canonical)
+			const entry: ChannelLaneV1 = {
+				channel: canonical,
+				slug: laneRef.slug,
+				lane: laneRef.lane,
+				count: Number(g.count),
+				latest: {
+					messageId: latest.id,
+					at: new Date(latest.createdAt as unknown as string | number | Date).toISOString(),
+					role: latest.role,
+					characterId: latest.characterId,
+					personaId: latest.personaId
+				}
+			}
+			if (!seen) lanes.push(entry)
+			else {
+				seen.count += entry.count
+				if (entry.latest.messageId > seen.latest.messageId) seen.latest = entry.latest
+			}
+		}
+		lanes.sort((a, b) => a.lane - b.lane)
+		const res: Sockets.Sessions.ChannelLanes.Response = { sessionId, requestId, lanes }
+		emitToUser("sessions:channelLanes", res)
+		return res
+	}
+}
+
 /**
  * Replace the caller's session layout by COPYING one in: a session layout
  * preset (_Start from_ a card, _Start again from "X"_, _Reset to genre default
@@ -2950,12 +3139,12 @@ function isWidgetSettingsPayload(
  * The widget settings this session will actually store: every key held to the
  * widget ids that can be SEATED in it (`seatableWidgetIds` — core's, the
  * session genre's declared panels, an enabled plugin's) OR that this user
- * already has a row for here (`storedWidgetSlugs`).
+ * already has a row for here (`storedWidgetInstanceIds`).
  *
  * The guard above answers shape only, and a key is not a shape: it becomes a
- * `widget_slug` verbatim, so without this anyone who can reach a session could
- * mint rows there under any slug they liked — unreadable by any widget, and
- * unbounded in number.
+ * `widget_instance_id` verbatim, so without this anyone who can reach a
+ * session could mint rows there under any id they liked — unreadable by any
+ * widget, and unbounded in number.
  *
  * The second half of the set is why this closes that door without shutting a
  * user's own (ruled 2026-09-17): **a disable deletes nothing, so the gate must
@@ -2971,8 +3160,8 @@ function isWidgetSettingsPayload(
  *
  * A key in neither half is dropped rather than refused: failing the whole save
  * would cost the user the edit they were actually making. The warning names the
- * slug and the session, which is what a person reading a log needs to tell a
- * stale client from a probe.
+ * instance id and the session, which is what a person reading a log needs to
+ * tell a stale client from a probe.
  */
 async function seatedWidgetSettings(
 	sessionId: number,
@@ -2983,7 +3172,7 @@ async function seatedWidgetSettings(
 	if (!keys.length) return next
 	const { seatableWidgetIds } = await import("$lib/server/plugins/frameHost")
 	const seatable = await seatableWidgetIds(db, await genreOfSession(sessionId))
-	const stored = await storedWidgetSlugs(sessionId, userId)
+	const stored = await storedWidgetInstanceIds(sessionId, userId)
 	const out: Record<string, Record<string, unknown>> = {}
 	for (const key of keys) {
 		// A placed copy (`messages#sanctum`, S1) is seatable exactly when its
@@ -4015,6 +4204,33 @@ async function buildSessionGetResponse(
 		;(sessionData as any).spriteSetOverrides = {}
 	}
 
+	// The faces the session's cast members are drawn with
+	// (PLAN-cast-retold-fields): card id → file id, for each seat whose card
+	// is a member of the session's book that retells its face. `{}` when
+	// nobody does — the cards' own avatars stand.
+	try {
+		const { retoldMembersForSession } = await import(
+			"$lib/server/lorebooks/retold"
+		)
+		const castFaces: Record<number, number> = {}
+		const members = await retoldMembersForSession(
+			db,
+			{
+				id: sessionId,
+				lorebookId: (sessionData as any).lorebookId ?? null
+			},
+			((sessionData as any).sessionCharacters ?? [])
+				.map((sc: any) => sc.characterId)
+				.filter((id: unknown): id is number => typeof id === "number")
+		)
+		for (const [cardId, member] of members)
+			if (member.retold.face === true && member.faceMediaId != null)
+				castFaces[cardId] = member.faceMediaId
+		;(sessionData as any).castFaces = castFaces
+	} catch {
+		;(sessionData as any).castFaces = {}
+	}
+
 	return {
 		session: sessionData as any,
 		messages: (sessionData as any).sessionMessages || null,
@@ -4513,7 +4729,6 @@ export const sessionsUpdateHandler: Handler<
 					metadata,
 					drafts,
 					lorebookId,
-					samplingConfigId,
 					genreFields,
 					lorebookBranchId,
 					storyClockYear,
@@ -4565,20 +4780,6 @@ export const sessionsUpdateHandler: Handler<
 					.from(schema.sessions)
 					.where(eq(schema.sessions.id, params.session.id!))
 					.limit(1)
-				// The session's sampling override is an admin's to set: a
-				// sampling profile is instance configuration, chosen for
-				// everyone's hardware and budget. A non-admin owner's form may
-				// post the stored value back unchanged — that is not a write.
-				if (
-					samplingConfigId !== undefined &&
-					(samplingConfigId ?? null) !== (before?.samplingConfigId ?? null) &&
-					!socket.user?.isAdmin
-				) {
-					throw new Error(
-						"Only an admin can change a session's sampling. It was left as it was."
-					)
-				}
-
 				const tagsBefore = (
 					await db
 						.select({ tagId: schema.sessionTags.tagId })
@@ -4641,13 +4842,6 @@ export const sessionsUpdateHandler: Handler<
 							...(metadata !== undefined ? { metadata } : {}),
 							...(drafts !== undefined ? { drafts } : {}),
 							...(lorebookId !== undefined ? { lorebookId } : {}),
-							// The session's ONE remaining compute override, and it
-							// is not a connection: a sampling profile says how to
-							// sample, never where to send. Only an admin may
-							// change it (refused above for anyone else).
-							...(samplingConfigId !== undefined
-								? { samplingConfigId }
-								: {}),
 							...(mergedGenreFields !== undefined
 								? { genreFields: mergedGenreFields }
 								: {}),
@@ -4679,6 +4873,26 @@ export const sessionsUpdateHandler: Handler<
 							params.playerLabel
 						)
 					}
+				}
+
+				// 🚧 The scene settings override (live scenes §4–§5): on the
+				// row's metadata, as its own key, like the label above. A
+				// declaration that does not read is refused with its
+				// sentences; null clears it. The session's open pages hear
+				// the new settings (and the cues they now offer).
+				if (params.sceneSettings !== undefined) {
+					const { writeSceneSettings } = await import(
+						"$lib/server/sessions/sceneSettings"
+					)
+					await writeSceneSettings(
+						db,
+						params.session.id!,
+						params.sceneSettings ?? null
+					)
+					const { pushSceneCues } = await import(
+						"$lib/server/scenes/boundaryWatcher"
+					)
+					await pushSceneCues(socket.io, params.session.id!)
 				}
 
 				// Process tags after session update
@@ -4716,7 +4930,6 @@ export const sessionsUpdateHandler: Handler<
 							"metadata",
 							"drafts",
 							"lorebookId",
-							"samplingConfigId",
 							"genreFields",
 							"lorebookBranchId"
 						] as const)
@@ -6478,7 +6691,38 @@ export const sessionMessagesRegenerateHandler: Handler<
 					// values this message wrote would otherwise
 					// outlive the sentence that justified them; the new reply
 					// proposes its own.
-					await retractStateAnchoredTo(db, params.id)
+					//
+					// 🚧 The clock moves this reply carried go back with it
+					// (live scenes §15 G5) — refused in words, before anything
+					// is written, when the calendar cannot take one back.
+					let retracted: Awaited<ReturnType<typeof retractStateAnchoredTo>>
+					try {
+						retracted = await retractStateAnchoredTo(db, params.id)
+					} catch (e) {
+						const { StoryClockRefusal } = await import("$lib/server/state/storyTime")
+						if (!(e instanceof StoryClockRefusal)) throw e
+						const res: Sockets.SessionMessages.Regenerate.Response = {
+							sessionMessage: undefined,
+							error: e.message
+						}
+						emitToUser("sessionMessages:regenerate", res)
+						return res
+					}
+					if (retracted.clockMoved)
+						broadcastSessionRow(socket.io, messageToRegenerate.sessionId)
+					// 🚧 Announced once the retraction has committed (live
+					// scenes §15 G14), as an outlet's write announces: every
+					// tab re-reads its state and the ledger loses the old
+					// reply's lines now, not on the new reply's turn.
+					if (retracted.changed)
+						await broadcastToSessionUsers(
+							socket.io,
+							messageToRegenerate.sessionId,
+							"state:changed",
+							{
+								sessionId: messageToRegenerate.sessionId
+							} satisfies Sockets.State.Changed.Response
+						)
 
 					// Clear the content and set as generating. A stop's
 					// outcome from an earlier run does not survive the reopen.
@@ -7035,7 +7279,17 @@ export const sessionMessagesSwipeRightHandler: Handler<
 				 * road exactly as regenerate does (generating, queued), and
 				 * the genre's pipeline claims it and fills it, its finishing
 				 * write recording `message-updated` with `verb: swipe`.
+				 *
+				 * 🚧 Asked first: whether the clock moves the reply being
+				 * left behind carried can be taken back (live scenes §15
+				 * G5). The alternative is recorded before the retraction, so
+				 * a refusal there would leave an empty swipe showing.
 				 */
+				{
+					const { clockRetractProblem } = await import("$lib/server/state/clockMoves")
+					const problem = await clockRetractProblem(db, [message.id], { keepTicks: true })
+					if (problem) return respond(undefined, problem)
+				}
 				const recorded = await runBuiltIn(db, {
 					kind: "swipe",
 					sessionId: message.sessionId,
@@ -7047,8 +7301,15 @@ export const sessionMessagesSwipeRightHandler: Handler<
 
 				// Take back what the swipe being left behind changed about
 				// the world — this replaces the reply without deleting the
-				// row, so the anchor cascade cannot see it.
-				await retractStateAnchoredTo(db, message.id)
+				// row, so the anchor cascade cannot see it. Its clock moves
+				// too (asked above), all but a tick.
+				const retracted = await retractStateAnchoredTo(db, message.id)
+				if (retracted.clockMoved) broadcastSessionRow(socket.io, message.sessionId)
+				// 🚧 Committed: announced as the regenerate's is (§15 G14).
+				if (retracted.changed)
+					await broadcastToSessionUsers(socket.io, message.sessionId, "state:changed", {
+						sessionId: message.sessionId
+					} satisfies Sockets.State.Changed.Response)
 
 				const [updated] = await updateLegacyWhere(
 					db,
@@ -8776,6 +9037,8 @@ export function registerSessionHandlers(
 	register(socket, sessionsActionsSeenHandler, emitToUser)
 	register(socket, sessionsViewHandler, emitToUser)
 	register(socket, sessionsPanelLayoutGetHandler, emitToUser)
+	register(socket, sessionsMessagesPageHandler, emitToUser)
+	register(socket, sessionsChannelLanesHandler, emitToUser)
 	register(socket, sessionsPanelLayoutSetHandler, emitToUser)
 	register(socket, sessionsPanelLayoutStartFromHandler, emitToUser)
 	register(socket, sessionsPanelLayoutStartedFromUpdatedHandler, emitToUser)

@@ -49,7 +49,7 @@
 				<footer class="flex justify-end gap-4">
 					<button
 						type="button"
-						class="btn preset-filled-surface-500"
+						class="btn preset-tonal-surface"
 						onclick={onCancel}
 					>
 						Cancel

@@ -1,11 +1,12 @@
 /**
- * Starring a sampling config registers it against EVERY capability that speaks
- * its vocabulary — not against one canonical representative.
+ * Use in loadouts… with **All** ticked (`samplingConfigs:setDefaultFor` naming
+ * no transforms) registers a sampling config against EVERY capability that
+ * speaks its vocabulary — not against one canonical representative.
  *
  * The failure is silent and it is a lie on screen. `TRANSFORMS` names
  * `text->image`, `text+image->image` and `image->image`, and all three take the
- * same steps/CFG/sampler values. A star that wrote only `text->image` leaves the
- * sidebar's one control saying "the image default" while an img2img node goes on
+ * same steps/CFG/sampler values. A write that touched only `text->image` would
+ * leave the ★ saying "the image default" while an img2img node goes on
  * reading whatever is registered against `text+image->image` — usually nothing.
  * Nothing throws; the button just looks like it worked.
  *
@@ -20,11 +21,11 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import { byCapability } from "$lib/server/connections/capabilityDefaults"
-import { transformIdOf } from "$lib/shared/capabilities/sides"
 import { S } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
+import { isDefaultLoadout } from "$lib/server/loadouts/testing"
 
 let testDb: TestDb
 let dataDir: string
@@ -41,7 +42,7 @@ beforeAll(async () => {
 	)
 	const dbModule = await import("$lib/server/db")
 	testDb = dbModule.db as unknown as TestDb
-	// The star path finishes by pushing systemSettings:get, which throws on an
+	// setDefaultFor finishes by pushing systemSettings:get, which throws on an
 	// instance with no settings row. A test DB is migrated, not seeded.
 	await testDb
 		.insert(schema.systemSettings)
@@ -82,9 +83,9 @@ const socketFor = (userId: number) =>
 
 const noopEmit = () => {}
 
-describe("samplingConfigs:setUserActive — the fan-out", () => {
+describe("samplingConfigs:setDefaultFor with every job — the fan-out", () => {
 	test("an image config lands on every image capability, not just text->image", async () => {
-		const { samplingConfigsSetUserActive } = await import(
+		const { samplingConfigsSetDefaultFor } = await import(
 			"./samplingConfigs"
 		)
 		const admin = await makeAdmin("sampling-fanout-image-user")
@@ -93,7 +94,7 @@ describe("samplingConfigs:setUserActive — the fan-out", () => {
 			.values({ name: "Fan-out image", shape: S.imageGen })
 			.returning()
 
-		await samplingConfigsSetUserActive.handler(
+		await samplingConfigsSetDefaultFor.handler(
 			socketFor(admin.id),
 			{ id: config.id },
 			noopEmit
@@ -107,12 +108,12 @@ describe("samplingConfigs:setUserActive — the fan-out", () => {
 		// going unlooked-at.
 		const rows = await testDb
 			.select()
-			.from(schema.connectionDefaults)
-			.where(eq(schema.connectionDefaults.output, "image"))
+			.from(schema.loadouts)
+			.where(eq(schema.loadouts.defaultForOutput, "image"))
 		expect(
 			rows
 				.filter((r) => r.samplingConfigId === config.id)
-				.map((r) => transformIdOf(r))
+				.map((r) => r.transform)
 				.sort()
 		).toEqual(["image->image", "text+image->image", "text->image"])
 	})
@@ -121,7 +122,7 @@ describe("samplingConfigs:setUserActive — the fan-out", () => {
 		// The shape is what decides, never a parameter the caller passes: a
 		// client that could name the capability could make an image config the
 		// chat default, and the shape exists precisely so that it cannot.
-		const { samplingConfigsSetUserActive } = await import(
+		const { samplingConfigsSetDefaultFor } = await import(
 			"./samplingConfigs"
 		)
 		const admin = await makeAdmin("sampling-fanout-text-user")
@@ -130,7 +131,7 @@ describe("samplingConfigs:setUserActive — the fan-out", () => {
 			.values({ name: "Fan-out text", shape: S.textGen })
 			.returning()
 
-		await samplingConfigsSetUserActive.handler(
+		await samplingConfigsSetDefaultFor.handler(
 			socketFor(admin.id),
 			{ id: config.id },
 			noopEmit
@@ -138,23 +139,23 @@ describe("samplingConfigs:setUserActive — the fan-out", () => {
 
 		const [chat] = await testDb
 			.select()
-			.from(schema.connectionDefaults)
+			.from(schema.loadouts)
 			.where(byCapability("text->text"))
 		expect(chat.samplingConfigId).toBe(config.id)
 
 		const image = await testDb
 			.select()
-			.from(schema.connectionDefaults)
+			.from(schema.loadouts)
 			.where(byCapability("text->image"))
 		expect(image[0]?.samplingConfigId).not.toBe(config.id)
 	})
 
 	test("a config of an unrecognised shape registers nothing at all", async () => {
-		// NOT a fall back to text. Starring a config of some future shape must
+		// NOT a fall back to text. Naming a config of some future shape must
 		// not quietly become "this is now the default for chat" — and there is
 		// deliberately no text->image consolation prize when the aggregation
 		// names nothing, because that fallback is the silent gap this replaces.
-		const { samplingConfigsSetUserActive } = await import(
+		const { samplingConfigsSetDefaultFor } = await import(
 			"./samplingConfigs"
 		)
 		const admin = await makeAdmin("sampling-fanout-unknown-user")
@@ -163,25 +164,25 @@ describe("samplingConfigs:setUserActive — the fan-out", () => {
 			.values({ name: "Fan-out unknown", shape: "core:shape/future@1" })
 			.returning()
 
-		const before = await testDb.select().from(schema.connectionDefaults)
-		await samplingConfigsSetUserActive.handler(
+		const before = await testDb.select().from(schema.loadouts).where(isDefaultLoadout)
+		await samplingConfigsSetDefaultFor.handler(
 			socketFor(admin.id),
 			{ id: config.id },
 			noopEmit
 		)
-		const after = await testDb.select().from(schema.connectionDefaults)
+		const after = await testDb.select().from(schema.loadouts).where(isDefaultLoadout)
 
 		expect(after).toEqual(before)
 		expect(after.some((r) => r.samplingConfigId === config.id)).toBe(false)
 	})
 
-	test("deleting a starred config clears the registrations and leaves the rows", async () => {
+	test("deleting a default config clears the registrations and leaves the rows", async () => {
 		// `ON DELETE SET NULL`, not `ON DELETE CASCADE`, and the difference is
 		// the sentence a person reads: a row with a null sampling id says "the
 		// default was cleared", an absent row says "no default was ever set".
 		// Nothing picks a replacement — the old code searched for the first
 		// immutable config and then fell back to `id: 1`.
-		const { samplingConfigsSetUserActive, samplingConfigsDelete } =
+		const { samplingConfigsSetDefaultFor, samplingConfigsDelete } =
 			await import("./samplingConfigs")
 		const admin = await makeAdmin("sampling-fanout-delete-user")
 		const [config] = await testDb
@@ -189,7 +190,7 @@ describe("samplingConfigs:setUserActive — the fan-out", () => {
 			.values({ name: "Fan-out doomed", shape: S.imageGen })
 			.returning()
 
-		await samplingConfigsSetUserActive.handler(
+		await samplingConfigsSetDefaultFor.handler(
 			socketFor(admin.id),
 			{ id: config.id },
 			noopEmit
@@ -202,7 +203,7 @@ describe("samplingConfigs:setUserActive — the fan-out", () => {
 
 		const rows = await testDb
 			.select()
-			.from(schema.connectionDefaults)
+			.from(schema.loadouts)
 			.where(byCapability("text->image"))
 		expect(rows.length).toBe(1)
 		expect(rows[0].samplingConfigId).toBeNull()

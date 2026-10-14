@@ -55,7 +55,7 @@ export interface ConnectionSection {
 	 * moves when somebody was looking at a different list.
 	 */
 	starCapability: string
-	/** The verb on the star button: "Use for chat", "Already used for chat". */
+	/** The verb on the star button: "Use in Reply", "In the Reply loadout". */
 	starVerb: string
 	/** What the list says when this modality has no connections yet. */
 	emptyMessage: string

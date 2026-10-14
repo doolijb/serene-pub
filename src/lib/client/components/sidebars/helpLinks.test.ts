@@ -26,8 +26,13 @@ describe("resolveInViewLink", () => {
 
 	it("keeps a reference page, whose slug has slashes in it", () => {
 		expect(
-			resolveInViewLink("/docs/sdk/pipelines/core_spec_chat-respond#slots")
-		).toEqual({ slug: "sdk/pipelines/core_spec_chat-respond", anchor: "slots" })
+			resolveInViewLink(
+				"/docs/sdk/pipelines/core_spec_chat-respond#slots"
+			)
+		).toEqual({
+			slug: "sdk/pipelines/core_spec_chat-respond",
+			anchor: "slots"
+		})
 	})
 
 	it.each(["/docs", "/docs/", "/docs#top"])(
@@ -105,7 +110,9 @@ describe("isExternalDocLink", () => {
 	it("is true only for http(s) URLs on another origin", () => {
 		expect(isExternalDocLink("https://github.com/x", origin)).toBe(true)
 		expect(isExternalDocLink("HTTP://example.com", origin)).toBe(true)
-		expect(isExternalDocLink("http://localhost:5173/docs/sessions", origin)).toBe(false)
+		expect(
+			isExternalDocLink("http://localhost:5173/docs/sessions", origin)
+		).toBe(false)
 		expect(isExternalDocLink("/docs/sessions#a", origin)).toBe(false)
 		expect(isExternalDocLink("#top", origin)).toBe(false)
 		expect(isExternalDocLink("./install.md", origin)).toBe(false)

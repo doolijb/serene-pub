@@ -516,8 +516,8 @@ describe("components:changed", () => {
 		await call(h.componentsSetEnabled, { id: c.id, enabled: true }, admin)
 		const enabledSrc = `/authored-ui/${c.ownerId}/${c.artifactHash}.js`
 		expect(sent.bare!.map((e) => e.data)).toEqual([
-			{ id: c.id, ownerId: c.ownerId, src: null },
-			{ id: c.id, ownerId: c.ownerId, src: enabledSrc }
+			{ id: c.id, ownerId: c.ownerId, src: null, grants: [] },
+			{ id: c.id, ownerId: c.ownerId, src: enabledSrc, grants: [] }
 		])
 		expect(sent.scoped).toEqual(sent.bare)
 		expect(sent.otherScope).toEqual([])
@@ -530,17 +530,34 @@ describe("components:changed", () => {
 		await call(h.componentsDelete, { id: c.id, expectedUpdatedAt: after.updatedAt }, admin)
 		const all = sent.bare!.map((e) => e.data)
 		expect(all.slice(2)).toEqual([
-			{ id: c.id, ownerId: c.ownerId, src: `/authored-ui/${c.ownerId}/${after.artifactHash}.js` },
+			{ id: c.id, ownerId: c.ownerId, src: `/authored-ui/${c.ownerId}/${after.artifactHash}.js`, grants: [] },
 			{ id: c.id, ownerId: c.ownerId, src: null }
 		])
 		for (const e of sent.bare!) {
 			expect(e.event).toBe("components:changed")
-			expect(Object.keys(e.data).sort()).toEqual(["id", "ownerId", "src"])
+			// A live row carries its grants as reviewed; a gone one carries none.
+			expect(Object.keys(e.data).sort()).toEqual(e.data.src === null && e === sent.bare!.at(-1) ? ["id", "ownerId", "src"] : ["grants", "id", "ownerId", "src"])
 		}
 		expect(JSON.stringify(sent)).not.toContain("SECRET-SOURCE-MARK")
 		// Deleted: gone from the store and from the component cache.
 		expect((await call<any>(h.componentsGet, { id: c.id })).error).toMatch(/no authored component/)
 		expect(existsSync(join(cache.componentCacheDir(), c.ownerId))).toBe(false)
+	}, 60_000)
+
+	test("a scope review's push carries the grants as they now stand, so an open widget hears a revoke", async () => {
+		const made = await call<Sockets.Components.Create.Response>(h.componentsCreate, { framework: "svelte", slug: "reviewed-live" })
+		const c = made.component
+		await call(h.componentsSave, { id: c.id, expectedUpdatedAt: c.updatedAt, widget: { title: "Reviewed", scopes: ["session:state", "session:state:write"] } })
+		const { io, sent } = fakeIo({ scoped: [`components:changed#${c.ownerId}`] })
+		const admin = caller({ io })
+		await call(h.componentsReviewScopes, { id: c.id, denied: [] }, admin)
+		await call(h.componentsReviewScopes, { id: c.id, denied: ["session:state"] }, admin)
+		await call(h.componentsReviewScopes, { id: c.id, denied: [] }, admin)
+		expect(sent.scoped!.map((e) => e.data.grants)).toEqual([
+			["session:state", "session:state:write"],
+			["session:state:write"],
+			["session:state", "session:state:write"]
+		])
 	}, 60_000)
 
 	test("emitToInterested refuses an ungated event rather than sending it to nobody", async () => {

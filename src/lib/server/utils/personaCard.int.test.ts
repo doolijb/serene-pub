@@ -265,6 +265,100 @@ describe("persona cards (PGlite integration)", () => {
 	 * a system prompt or a greeting into the row, and widening the shape would
 	 * conflict every lorebook anybody had already exported.
 	 */
+	test("the likeness round-trips through the persona card, and an overwrite merges it", async () => {
+		const {
+			createPersonaFromParsedData,
+			overwritePersonaFromParsedData,
+			buildPersonaExportCard,
+			canonicalPersonaContent,
+			personaFieldsFromParsedData
+		} = await import("./personaCard")
+		const { readLikeness } = await import("$lib/server/characters/likeness")
+		const { hashCanonicalJson } = await import(
+			"$lib/server/utils/contentHash"
+		)
+		const user = await makeUser("persona-likeness-user")
+		const likeness = { prompt: "adult man, grey beard, blue coat", negative: "hat" }
+
+		const created = await createPersonaFromParsedData(
+			{ ...minimalPersonaCard, extensions: { serenepub: { likeness } } },
+			undefined,
+			user.id,
+			testDb as any
+		)
+		expect(readLikeness(created.extensions)).toEqual(likeness)
+
+		// Out: carried under the same key a character card uses.
+		const exported = buildPersonaExportCard(created)
+		expect(exported.extensions.serenepub.likeness).toEqual(likeness)
+		// …and outside the dedup hash, so the book still reads unchanged.
+		expect(hashCanonicalJson(canonicalPersonaContent(created))).toBe(
+			hashCanonicalJson(
+				canonicalPersonaContent(personaFieldsFromParsedData(exported) as any)
+			)
+		)
+
+		// In again, on another account: the likeness lands on the new row.
+		const other = await makeUser("persona-likeness-other")
+		const copy = await createPersonaFromParsedData(
+			exported,
+			undefined,
+			other.id,
+			testDb as any
+		)
+		expect(readLikeness(copy.extensions)).toEqual(likeness)
+
+		// A likeness image id from elsewhere names no file of theirs: dropped,
+		// so the likeness falls back to the avatar (the character-card rule).
+		const foreignId = await createPersonaFromParsedData(
+			{
+				...minimalPersonaCard,
+				extensions: { serenepub: { likeness: { ...likeness, imageMediaId: 999_999 } } }
+			},
+			undefined,
+			other.id,
+			testDb as any
+		)
+		expect(readLikeness(foreignId.extensions)).toEqual(likeness)
+
+		// SillyTavern's key is read when ours is absent (one direction).
+		const fromSt = await createPersonaFromParsedData(
+			{
+				...minimalPersonaCard,
+				extensions: { sd_character_prompt: { positive: "red scarf", negative: "glasses" } }
+			},
+			undefined,
+			other.id,
+			testDb as any
+		)
+		expect(readLikeness(fromSt.extensions)).toEqual({ prompt: "red scarf", negative: "glasses" })
+
+		// An overwrite merges: other stored keys survive, the likeness is replaced.
+		const { eq } = await import("drizzle-orm")
+		const schema = await import("$lib/server/db/schema")
+		await testDb
+			.update(schema.characters)
+			.set({ extensions: { other: { kept: true }, serenepub: { likeness } } as any })
+			.where(eq(schema.characters.id, copy.id))
+		const overwritten = await overwritePersonaFromParsedData(
+			copy.id,
+			{ ...exported, extensions: { serenepub: { likeness: { prompt: "clean-shaven" } } } },
+			undefined,
+			testDb as any
+		)
+		expect(readLikeness(overwritten.extensions)).toEqual({ prompt: "clean-shaven" })
+		expect((overwritten.extensions as any).other).toEqual({ kept: true })
+
+		// A card with no likeness leaves the stored one alone.
+		const untouched = await overwritePersonaFromParsedData(
+			copy.id,
+			minimalPersonaCard,
+			undefined,
+			testDb as any
+		)
+		expect(readLikeness(untouched.extensions)).toEqual({ prompt: "clean-shaven" })
+	})
+
 	test("character-only fields on a persona card are not written", async () => {
 		const { createPersonaFromParsedData } = await import("./personaCard")
 		const user = await makeUser("persona-narrow-card-user")

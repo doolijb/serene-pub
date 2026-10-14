@@ -1,11 +1,27 @@
 /**
  * "What this pub can do", as a pure function over the defaults summary.
  *
- * One row per transform: a dot, one sentence, and at most one button. The
- * button IS the fix — `Set up` where nothing serves the capability at all,
- * `Download` / `Start` / `Refresh` where something is registered but cannot
- * run, and `Change` for every other fault. Nothing here emits; the view turns
- * a verb into the socket call the sidebar already makes.
+ * One row per **job** — a transform the pub needs a default pair for: a dot,
+ * one sentence, and at most one button. The button IS the fix — `Set up`
+ * where no pair does the job at all, `Download` / `Start` / `Refresh` where
+ * one is registered but cannot run, and `Change` for every other fault.
+ * Nothing here emits; the view turns a verb into the socket call the sidebar
+ * already makes.
+ *
+ * ## The state is the connection state
+ *
+ * A row's `state` is a `ConnectionState` — the one scale
+ * (`connectionRowStatus.ts`), read from the defaults summary's own words at
+ * this seam (R5, `stateOfDefault`):
+ *
+ * | summary | row state | colour |
+ * |---|---|---|
+ * | registered, and it runs | `ready` | success |
+ * | downloading | `busy` | warning |
+ * | registered, and it cannot run | `broken` | error |
+ * | nothing registered | `unfinished` | primary (gold) |
+ *
+ * `idle` is never a row's state here: a job either has a pair or it does not.
  *
  * ## Why it is not just `defaultsSummary`
  *
@@ -17,14 +33,14 @@
  * gathered by the view from the live-status events it already holds, and are
  * reconciled with the summary HERE rather than in a template (R5).
  *
- * ## The consequence, not the capability
+ * ## The consequence, not the transform
  *
  * An unset row says what it COSTS — "sessions can't reply", not "no chat
  * model is registered". A person opening this panel for the first time is
  * deciding whether to care; the transform id has never answered that. The
- * four section capabilities have hand-written consequences because they are
- * the four that are worth a sentence of their own; the other six fall back to
- * the SDK's tagline, which is already written for a person.
+ * four section jobs have hand-written consequences because they are the four
+ * that are worth a sentence of their own; the other six fall back to the
+ * SDK's tagline, which is already written for a person.
  *
  * ⚠ Bytes and counts, never time estimates (concept ruling R7). A download
  * row says "0.4 of 1.2 GB"; nothing here says "about a minute left".
@@ -32,15 +48,30 @@
 import { capabilityTagline } from "@serene-pub/sdk"
 import { OUTPUT_KIND_ICONS } from "$lib/shared/constants/outputKinds"
 import { formatProgress } from "./modelManagement"
-import type { DefaultsSummaryEntry } from "./defaultsSummary"
+import type { ConnectionState } from "./connectionRowStatus"
+import type { DefaultState, DefaultsSummaryEntry } from "./defaultsSummary"
 
-/** The dot, and the tile's tone with it. */
-export type ReadinessState = "ok" | "pending" | "warning" | "unset"
+/**
+ * The defaults summary's word for a pair, on the one scale. The summary keeps
+ * its own words (it is the ledger's vocabulary); this is the seam.
+ */
+export function stateOfDefault(state: DefaultState): ConnectionState {
+	switch (state) {
+		case "ok":
+			return "ready"
+		case "pending":
+			return "busy"
+		case "warning":
+			return "broken"
+		case "unset":
+			return "unfinished"
+	}
+}
 
 /**
  * The one button a row may carry. `emphasis` is §6.1: gold only for chat's
- * `setup` (`text->text`) — the one unset capability that blocks play at all.
- * Every other row's `setup` is tonal, same as a repair fix.
+ * `setup` (`text->text`) — the one unset job that blocks play at all. Every
+ * other row's `setup` is tonal, same as a repair fix.
  */
 export interface ReadinessAction {
 	verb: "setup" | "download" | "start" | "refresh" | "change"
@@ -55,11 +86,12 @@ export interface ReadinessRow {
 	label: string
 	/** A `@lucide/svelte` export name, resolved by the component. */
 	icon: string
-	state: ReadinessState
+	/** On the one scale; see the table above. Never `idle`. */
+	state: ConnectionState
 	/** The row's second line, whole. Never assembled in the template. */
 	sentence: string
 	action: ReadinessAction | null
-	/** A pair is registered for this capability, whatever state it is in. */
+	/** A pair is registered for this job, whatever state it is in. */
 	set: boolean
 	/** The pair, when the registration resolves — for the fix's emit. */
 	connectionId?: number
@@ -157,14 +189,14 @@ export function readinessRow(
 	if (!entry.set)
 		return {
 			...base,
-			state: "unset",
+			state: "unfinished",
 			sentence: `Not set · ${CONSEQUENCES[entry.capability] ?? taglineOf(entry.capability)}`,
 			action: {
 				verb: "setup",
 				label: "Set up",
-				// Chat is the one capability whose absence blocks play; every
-				// other unset row is a repair like any other, so it gets the
-				// same tonal treatment as `fixFor`'s buttons (§6.1).
+				// Chat is the one job whose absence blocks play; every other
+				// unset row is a repair like any other, so it gets the same
+				// tonal treatment as `fixFor`'s buttons (§6.1).
 				emphasis:
 					entry.capability === "text->text" ? "primary" : "tonal"
 			}
@@ -176,7 +208,10 @@ export function readinessRow(
 	// A download in flight outranks every other sentence: nothing is wrong,
 	// and a row that said "not downloaded" beside a moving bar would be
 	// reporting the state the bar is already leaving.
-	if (entry.state === "pending" || facts.localState === "downloading") {
+	if (
+		stateOfDefault(entry.state) === "busy" ||
+		facts.localState === "downloading"
+	) {
 		const progress = formatProgress(
 			facts.downloadedBytes,
 			facts.totalBytes,
@@ -184,7 +219,7 @@ export function readinessRow(
 		)
 		return {
 			...base,
-			state: "pending",
+			state: "busy",
 			sentence: progress
 				? `Downloading ${name} · ${progress}`
 				: `Downloading ${name}`,
@@ -197,7 +232,7 @@ export function readinessRow(
 	if (facts.managerEnabled === false)
 		return {
 			...base,
-			state: "warning",
+			state: "broken",
 			sentence: `${facts.managerLabel ?? "Its manager"} is switched off · ${name} can't run`,
 			action: { verb: "change", label: "Change", emphasis: "tonal" }
 		}
@@ -205,22 +240,22 @@ export function readinessRow(
 	if (facts.kcppRun === "crashed")
 		return {
 			...base,
-			state: "warning",
+			state: "broken",
 			sentence: `${where} stopped unexpectedly · ${name} can't run`,
 			action: { verb: "start", label: "Start", emphasis: "tonal" }
 		}
 
-	if (entry.state === "warning")
+	if (stateOfDefault(entry.state) === "broken")
 		return {
 			...base,
-			state: "warning",
+			state: "broken",
 			sentence: `${name} · ${where} · ${entry.stateWord}`,
 			action: fixFor(entry, facts)
 		}
 
 	return {
 		...base,
-		state: "ok",
+		state: "ready",
 		sentence: [name, where, okClause(entry.stateWord)]
 			.filter(Boolean)
 			.join(" · "),
@@ -229,12 +264,12 @@ export function readinessRow(
 }
 
 /**
- * The ONE button a warning row offers.
+ * The ONE button a broken row offers.
  *
  * Ordered by how directly it undoes the fault: files that never arrived, a
  * process that is not up, a host that would not answer, and — for everything
  * else, including a model somebody switched off or one the host has stopped
- * listing — the capability view, where the pair can be changed.
+ * listing — the job's own view, where the pair can be changed.
  */
 function fixFor(
 	entry: DefaultsSummaryEntry,
@@ -254,4 +289,78 @@ export function readinessRows(
 	factsFor: (entry: DefaultsSummaryEntry) => EntryFacts = () => ({})
 ): ReadinessRow[] {
 	return entries.map((entry) => readinessRow(entry, factsFor(entry)))
+}
+
+// ── Chat, while nothing is registered for it ───────────────────────────────
+
+/**
+ * A connection as the chat decision reads it: the fields the chat capability
+ * view's candidate list reads (`candidateRows`), so the count said here is the
+ * count that view then offers with **Use**.
+ */
+export interface ChatSource {
+	name?: string | null
+	models: readonly {
+		enabled?: boolean
+		missingSince?: string | null
+		satisfiableCapabilities?: readonly string[] | null
+		local?: { state?: string } | null
+	}[]
+}
+
+/**
+ * Some model on it can serve chat at all — switched on or off, listed or not.
+ * The question `servesCapability` asks for the index's Chat filter, and the
+ * one "only when nothing serves chat" turns on.
+ */
+export function servesChat(connection: ChatSource): boolean {
+	return connection.models.some((m) =>
+		(m.satisfiableCapabilities ?? []).includes("text->text")
+	)
+}
+
+/** Its chat models the job picker would offer with **Use**. */
+export function chatModelCount(connection: ChatSource): number {
+	return connection.models.filter(
+		(m) =>
+			m.enabled !== false &&
+			m.missingSince == null &&
+			(m.satisfiableCapabilities ?? []).includes("text->text") &&
+			m.local?.state !== "not_downloaded"
+	).length
+}
+
+/**
+ * What an UNSET chat offers, and so where its one gold button goes.
+ *
+ * ⚠ The Set up chat stepper installs and runs KoboldCPP. It is the answer only
+ * while NOTHING here can serve chat: a person whose OpenRouter listed 503
+ * models pressed **Set up chat** and was handed a build picker, and left with
+ * a stray `KoboldCPP · Not set up` row (walk 2026-10-06). Once anything serves
+ * chat the button is **Choose a model** and opens the job picker for Chat
+ * replies, which lists every candidate with **Use** — the person picks; this only
+ * points (no auto-pick, the owner's no-magic rule).
+ */
+export interface ChatChoice {
+	/** Something here serves chat: choose among it rather than set up anew. */
+	choose: boolean
+	/** "OpenRouter lists 503 models · pick one"; null with nothing to pick. */
+	sentence: string | null
+}
+
+export function chatChoice(connections: readonly ChatSource[]): ChatChoice {
+	const listing = connections
+		.map((c) => ({ name: c.name, count: chatModelCount(c) }))
+		.filter((c) => c.count > 0)
+	const total = listing.reduce((sum, c) => sum + c.count, 0)
+	const models = `${total} ${total === 1 ? "model" : "models"}`
+	return {
+		choose: connections.some(servesChat),
+		sentence:
+			listing.length === 1
+				? `${listing[0].name || "Untitled connection"} lists ${models} · pick one`
+				: listing.length > 1
+					? `${listing.length} connections list ${models} · pick one`
+					: null
+	}
 }

@@ -1,20 +1,14 @@
 <script lang="ts">
 	/**
-	 * Which parameters this config is in charge of — the enable/disable screen.
+	 * Which parameters a config sends: one checkbox per parameter, grouped,
+	 * with its description visible. Admin › Sampling's Advanced fieldset
+	 * draws it; the Sampling view chooses in place instead
+	 * (`SamplingValuesForm`'s `choose` mode), on the same rules from
+	 * `samplingFields.ts`. `enabled` is one array of keys.
 	 *
-	 * This panel had one of these before the schema-driven rewrite and lost it
-	 * when the switches moved inline beside every field. Inline is where the
-	 * information belongs least: the values screen is read while tuning a
-	 * number, and a checkbox in front of every label turns it into a checklist
-	 * to scroll past. So the two screens are back, on the CURRENT storage —
-	 * `enabled` is one array of keys, not a `<key>Enabled` boolean column per
-	 * sampler, and this screen is the only writer of it.
-	 *
-	 * ⚠ NO type filter. The old screen listed number and boolean fields only,
-	 * which left image `sampler`/`scheduler` — and every string[] or JSON field
-	 * — permanently unreachable: switched off with no way to switch them on.
-	 * That is the regression the inline toggles were built to fix, and it must
-	 * not come back with them. Everything the shape declares is listed.
+	 * ⚠ NO type filter. Everything the shape declares is listed — image
+	 * `sampler`/`scheduler`, every string[] and JSON field — or a parameter
+	 * switched off would have no way to be switched on.
 	 *
 	 * Driven by the ROW's shape, so it works for text, image, TTS and anything a
 	 * plugin declares next.
@@ -22,6 +16,7 @@
 
 	import type { SettingsSchema, FieldDecl } from "@serene-pub/sdk"
 	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
+	import ListGroupLabel from "$lib/client/components/panels/ListGroupLabel.svelte"
 	import {
 		defaultOnEnable,
 		groupSamplingFields,
@@ -88,11 +83,9 @@
 
 	{#each groups as g (g.group)}
 		<section class="flex flex-col gap-2">
-			<p
-				class="text-surface-600-400 panel-edge border-b pb-1 text-xs"
-			>
-				{g.group}
-			</p>
+			<!-- The shared group label (STYLE-GUIDE §6.4), no rule; inset to
+			     the switches' own `p-2`. -->
+			<ListGroupLabel label={g.group} class="px-2!" />
 			<div class="grid grid-cols-1 gap-3 @lg/view:grid-cols-2">
 				{#each g.fields as { key, decl } (key)}
 					<!-- The description is VISIBLE text with `aria-describedby`,

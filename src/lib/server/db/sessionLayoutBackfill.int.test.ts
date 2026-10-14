@@ -85,11 +85,11 @@ async function preCopyRow(args: {
 			layoutSettings: args.layoutSettings ?? {}
 		})
 		.returning()
-	for (const [widgetSlug, values] of Object.entries(args.settings ?? {}))
+	for (const [widgetInstanceId, values] of Object.entries(args.settings ?? {}))
 		await testDb.insert(schema.widgetSettings).values({
 			sessionId: args.sessionId,
 			userId: args.userId,
-			widgetSlug,
+			widgetInstanceId,
 			values
 		})
 	return row

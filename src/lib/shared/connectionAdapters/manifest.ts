@@ -211,15 +211,16 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 	 * deliberately: the compatible zoo supports the loose mode far more widely
 	 * than the strict one, which is a difference presets exist to record.
 	 *
-	 * ⚠ No `text->image`, and its absence is structural. `OpenAIChatAdapter`
-	 * speaks `/v1/chat/completions` and nothing else; no image module is
-	 * registered for this type, so nothing implements `generateImage` and the key
-	 * cannot be declared without one. Declared and asserted by a preset, it would
-	 * resolve to `native` — the bind guard passes, an image slot accepts the
-	 * connection, and `getImageAdapter` throws `No image adapter for connection
-	 * type` minutes into the session. Image generation over an OpenAI-compatible
-	 * endpoint is `/v1/images/generations` — a different route, hence a
-	 * different adapter.
+	 * `text->image` and `text+image->image` are declared since the
+	 * OpenAI-images module exists (`OpenAIImagesAdapter`: `generateImage` and
+	 * `editImage`, on `/images/generations` and `/images/edits`). They were
+	 * once declared with NO image module registered, which resolved `native`,
+	 * passed the bind guard and then threw `No image adapter` minutes into a
+	 * session; the conformance test now pins these keys to the module's
+	 * methods. PROBED here, because of the twenty-four services behind this
+	 * format only some draw; the presets that do (`openai-official`,
+	 * `xai-grok`, `together-ai`) assert them, which is what makes OpenAI's own
+	 * `native`. Which MODEL draws is the per-model modality gate.
 	 */
 	[CONNECTION_TYPE.OPENAI]: {
 		id: CONNECTION_TYPE.OPENAI,
@@ -286,7 +287,11 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				 * of a service's models embeds is the person's pick: `/models`
 				 * does not say.
 				 */
-				"text->embedding": "native"
+				"text->embedding": "native",
+				// The OpenAI-images dialect — see the note above this entry.
+				// Not in `defaults`: a preset that draws asserts them.
+				"text->image": { unproven: true, until: "none" },
+				"text+image->image": { unproven: true, until: "none" }
 			},
 			defaults: [
 				"text->text",
@@ -996,6 +1001,62 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 			defaults: ["text->image"]
 		}
 	},
+	/**
+	 * 🚧 ComfyUI (DESIGN-image-generation §4.9). A graph backend: whatever the
+	 * workflow wires up, so both transforms are native — `generateImage` and
+	 * `editImage` on one `POST /prompt`, the starting canvas uploaded and named
+	 * in the graph. Whether a GIVEN workflow takes a canvas or references is
+	 * the drawing sheet derived from it, read at bind, not a transform here.
+	 */
+	[CONNECTION_TYPE.COMFYUI]: {
+		id: CONNECTION_TYPE.COMFYUI,
+		capabilities: {
+			supports: {
+				"text->image": "native",
+				"text+image->image": "native"
+			},
+			defaults: ["text->image", "text+image->image"]
+		}
+	},
+	/**
+	 * 🚧 AI Horde (the Horde dialect). Draws natively; a starting canvas is
+	 * the per-worker part — `img2img` is a worker's own switch, so the edit
+	 * transform is assumed native until the connection test reads the
+	 * workers and says otherwise.
+	 */
+	[CONNECTION_TYPE.HORDE]: {
+		id: CONNECTION_TYPE.HORDE,
+		capabilities: {
+			supports: {
+				"text->image": "native",
+				"text+image->image": { unproven: true, until: "native" }
+			},
+			defaults: ["text->image", "text+image->image"]
+		}
+	},
+	/** 🚧 NovelAI (the NovelAI dialect): generate, img2img and infill. */
+	[CONNECTION_TYPE.NOVELAI]: {
+		id: CONNECTION_TYPE.NOVELAI,
+		capabilities: {
+			supports: {
+				"text->image": "native",
+				"text+image->image": "native"
+			},
+			defaults: ["text->image", "text+image->image"]
+		}
+	},
+	/** 🚧 BFL FLUX (the BFL dialect): every model takes input pictures. */
+	[CONNECTION_TYPE.BFL]: {
+		id: CONNECTION_TYPE.BFL,
+		capabilities: {
+			supports: {
+				"text->image": "native",
+				"text+image->image": "native"
+			},
+			defaults: ["text->image", "text+image->image"]
+		}
+	},
+
 
 	/**
 	 * The three embedding formats, and the one key they each declare.
@@ -1089,10 +1150,9 @@ export const PRESET_CAPABILITIES: Record<
 	// Reaching Claude through an OpenAI-compatible endpoint: vision works, so the
 	// preset asserts it rather than leaving it probed.
 	//
-	// No `text->image` key: OPENAI declares none (see its entry), and a preset
-	// key the adapter does not declare is inert — `resolveCapabilities` iterates
-	// `supports`, so it would be a line that looks like it does something. The
-	// adapter-gate-versus-preset-default distinction lives in `json_schema`:
+	// No `text->image` key: Claude does not draw. (A preset key the adapter
+	// does not declare is inert — `resolveCapabilities` iterates `supports`.)
+	// The adapter-gate-versus-preset-default distinction lives in `json_schema`:
 	// OPENAI declares it probed and a preset may assert it, while the native
 	// ANTHROPIC entry does not declare it at all and no preset can.
 	anthropic: { "text+image->text": true },
@@ -1119,14 +1179,13 @@ export const PRESET_CAPABILITIES: Record<
 		 * `wire_completion` at all because the Messages API has no field for one.
 		 */
 		wire_completion: false,
-		// No `"text->image": true`. This was the LAYER that turned OPENAI's
-		// probed key into a resolved `native` — which cleared the bind guard and
-		// let an image slot accept a connection with no image adapter behind it.
-		// Removing the key from `supports` alone would have left this line inert
-		// but still readable as an intent somebody would later try to honour.
 		json_schema: true,
 		strict_schema: true,
-		"text->embedding": true
+		"text->embedding": true,
+		// The OpenAI-images dialect (`OpenAIImagesAdapter`): gpt-image draws
+		// and edits. Asserted here, so OpenAI's own resolves `native`.
+		"text->image": true,
+		"text+image->image": true
 	},
 	/**
 	 * `"text->embedding": true` only where the service's own API reference
@@ -1146,10 +1205,23 @@ export const PRESET_CAPABILITIES: Record<
 	"google-gemini": {
 		"text+image->text": true,
 		json_schema: true,
-		"text->embedding": true
+		"text->embedding": true,
+		// The Gemini image dialect (`GeminiImageAdapter`, folded into the
+		// OPENAI type's image module): native `generateContent` beside the
+		// OpenAI layer, pictures in and out.
+		"text->image": true,
+		"text+image->image": true
 	},
 	groq: { json_schema: true },
-	"together-ai": { json_schema: true, "text->embedding": true },
+	"together-ai": {
+		json_schema: true,
+		"text->embedding": true,
+		// `/v1/images/generations` (FLUX and friends) — generations only; the
+		// edits route is not wired for Together, so no `text+image->image`.
+		"text->image": true
+	},
+	// `/v1/images/generations` with `grok-imagine-image-*`: generations only.
+	"xai-grok": { "text->image": true },
 	"mistral-ai": { json_schema: true, "text->embedding": true },
 	deepseek: { json_object: true },
 	// The local OpenAI-compatible servers: schema support varies by build, so

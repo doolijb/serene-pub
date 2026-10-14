@@ -50,6 +50,14 @@
  * is stored and ordered on, so the rows are already shaped for it; what is
  * missing is the clock, not the column.
  *
+ * 🚧 One narrow exception (live scenes §15 G2): `ValueQuery.asOfMessageId`
+ * reads a value **as it stood when a line was written** — the rows whose
+ * `created_at` is at or before that message's. Every write is an append, so
+ * that is the ledger read at a moment of session time, not a temporal
+ * registry: the config is still today's, and a retracted row is gone from
+ * both views. The boundary watcher compares a place (or a declared trigger's
+ * state key) at two lines with it.
+ *
  * ## Derived slots are computed, never read
  *
  * A derived slot has no row by construction — storing age guarantees staleness.
@@ -70,7 +78,7 @@
  * so" rule for a stale binding.
  */
 
-import { and, asc, desc, eq, inArray, isNull, or } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	getAttributeSheet,
@@ -604,6 +612,12 @@ export interface ValueQuery {
 	 * its session's own reading and ignores this.
 	 */
 	reading?: LineReading | null
+	/**
+	 * 🚧 Read as of a line (live scenes §15 G2): only the rows written by
+	 * the time message `asOfMessageId` was (`created_at` at or before its
+	 * row's). Absent: now. See the module note.
+	 */
+	asOfMessageId?: number
 }
 
 /**
@@ -682,7 +696,14 @@ export async function valueOf(
 				: null
 	const chain = chainFor(query.owner, links)
 	const reading = await readingForQuery(db, query, links)
-	const rows = await valueRows(db, chain, [query.slotId], query.sessionId, reading)
+	const rows = await valueRows(
+		db,
+		chain,
+		[query.slotId],
+		query.sessionId,
+		reading,
+		query.asOfMessageId
+	)
 
 	if (decl?.type === "derived")
 		return deriveValue(decl, {
@@ -833,7 +854,9 @@ async function valueRows(
 	 * line, main's cut at the fork, and none dated after its moment
 	 * (`rowsOnReading`, rulings 15 and 16). Its own rows pass untouched.
 	 */
-	reading?: LineReading | null
+	reading?: LineReading | null,
+	/** 🚧 Only the rows written by the time this message was (`ValueQuery.asOfMessageId`). */
+	asOfMessageId?: number
 ) {
 	if (!owners.length || !slotIds.length) return []
 	const rows = await db
@@ -850,7 +873,10 @@ async function valueRows(
 					owners.map((o) => o.id)
 				),
 				inArray(schema.attributeValues.slotId, slotIds),
-				ownedBySession(schema.attributeValues.sessionId, sessionId)
+				ownedBySession(schema.attributeValues.sessionId, sessionId),
+				asOfMessageId != null
+					? sql`${schema.attributeValues.createdAt} <= (select ${schema.messages.createdAt} from ${schema.messages} where ${schema.messages.id} = ${asOfMessageId})`
+					: undefined
 			)
 		)
 	return reading ? await rowsOnReading(db, rows, reading) : rows
@@ -969,11 +995,22 @@ export async function sheetsForOwners(
 
 /**
  * 🚧 The session's **world attributes** (ruled 2026-09-25): what its world
- * brings — the sheets on its lorebook and on its cast members, and every slot
- * the world's timeline holds a value for ("historical sheets"). Empty when the
- * session reads none (its genre denies custom attributes, or it switched them
- * off) or has no world. Character cards bring nothing: a card is the same in
- * every story, and what one story tracks of a character is its cast member's.
+ * brings — the sheets on its lorebook, its cast members and its places, and
+ * every slot the world's timeline holds a value for ("historical sheets") —
+ * and then what each seat's **card** brings: its sheets and the slots it holds
+ * a value for, for every seated character and persona. Empty when the session
+ * reads none (its genre denies custom attributes, or it switched them off).
+ *
+ * Ruled 2026-09-25: "Character cards bring nothing: a card is the same in every
+ * story, and what one story tracks of a character is its cast member's";
+ * reversed 2026-10-11: the card is the source material, so its sheets travel
+ * with it; the cast member still overrides it inside a world. Only the
+ * vocabulary moved — values still resolve session → lorebook → card.
+ *
+ * Order is world first (lorebook, cast members, places), cards last — first
+ * mention fixes the position, so a world that names a card's sheet draws it
+ * where the world put it. A lorebook read with no session (`sessionId`
+ * undefined, `lorebookState.ts`) gets no cards: a card is not the world's.
  */
 export async function worldAttributesFor(
 	db: Db,
@@ -982,16 +1019,29 @@ export async function worldAttributesFor(
 	sessionId: number | undefined,
 	on: boolean
 ): Promise<{ sheets: AttributeSheetDecl[]; recorded: string[] }> {
-	if (!on || !links.lorebookId) return { sheets: [], recorded: [] }
-	const owners: StateOwner[] = [{ kind: "lorebook", id: links.lorebookId }]
-	for (const member of links.cast)
-		if (member.castMemberId) owners.push({ kind: "cast_member", id: member.castMemberId })
-	// Its places too (phase 4): a sheet on a location entry, and what the
-	// timeline recorded of one, are the world's as much as its cast's are.
-	for (const place of links.locations) owners.push({ kind: "location", id: place.entryId })
+	if (!on) return { sheets: [], recorded: [] }
+	const owners: StateOwner[] = []
+	if (links.lorebookId) {
+		owners.push({ kind: "lorebook", id: links.lorebookId })
+		for (const member of links.cast)
+			if (member.castMemberId) owners.push({ kind: "cast_member", id: member.castMemberId })
+		// Its places too (phase 4): a sheet on a location entry, and what the
+		// timeline recorded of one, are the world's as much as its cast's are.
+		for (const place of links.locations) owners.push({ kind: "location", id: place.entryId })
+	}
+	// The seats' cards (2026-10-11), after the world, and only for a session:
+	// `links.cast` holds seated characters and personas alike.
+	if (sessionId !== undefined)
+		for (const member of links.cast)
+			if (member.characterId > 0) owners.push({ kind: "card", id: member.characterId })
+	if (!owners.length) return { sheets: [], recorded: [] }
 	const sheets = await sheetsForOwners(db, owners, sessionId)
-	const castMemberIds = owners.filter((o) => o.kind === "cast_member").map((o) => o.id)
-	const locationIds = owners.filter((o) => o.kind === "location").map((o) => o.id)
+	const idsOf = (kind: OwnerKind) => [
+		...new Set(owners.filter((o) => o.kind === kind).map((o) => o.id))
+	]
+	const castMemberIds = idsOf("cast_member")
+	const locationIds = idsOf("location")
+	const cardIds = idsOf("card")
 	const rows = await db
 		.selectDistinct({ slotId: schema.attributeValues.slotId })
 		.from(schema.attributeValues)
@@ -999,10 +1049,18 @@ export async function worldAttributesFor(
 			and(
 				isNull(schema.attributeValues.sessionId),
 				or(
-					and(
-						eq(schema.attributeValues.ownerKind, "lorebook"),
-						eq(schema.attributeValues.ownerId, links.lorebookId)
-					),
+					links.lorebookId
+						? and(
+								eq(schema.attributeValues.ownerKind, "lorebook"),
+								eq(schema.attributeValues.ownerId, links.lorebookId)
+							)
+						: undefined,
+					cardIds.length
+						? and(
+								eq(schema.attributeValues.ownerKind, "card"),
+								inArray(schema.attributeValues.ownerId, cardIds)
+							)
+						: undefined,
 					castMemberIds.length
 						? and(
 								eq(schema.attributeValues.ownerKind, "cast_member"),

@@ -33,6 +33,9 @@ import {
 	selectConfig
 } from "$lib/server/pipelines/config/named"
 import { declarations } from "$lib/server/pipelines/config/panel"
+import { saveDocument } from "$lib/server/pipelines/boot/store"
+import { spec, compile } from "@serene-pub/sdk"
+import * as C from "@serene-pub/contracts"
 
 let db: TestDb
 let specId: number
@@ -525,13 +528,43 @@ describe("the narrator split, from an older configuration", () => {
  * for as long as it only matched the exact spelling, every author preset that
  * set `settings` was dropped in silence and the config took the author default.
  *
- * The visible cost of that: `core:spec/chat-generate-image` ships `review-on` as its
- * DEFAULT preset, labelled "Ask for the prompt". The shipped config was named
- * after it — so the panel said "Ask for the prompt" — and pressing Image
- * rendered immediately with whatever the prompts slot happened to hold, because
- * the one value the preset existed to set never arrived.
+ * The visible cost of that: `core:spec/chat-generate-image` 1.0.0 shipped
+ * `review-on` as its DEFAULT preset, labelled "Ask for the prompt". The shipped
+ * config was named after it, so the panel said "Ask for the prompt", and
+ * pressing Image rendered immediately with whatever the prompts slot happened
+ * to hold, because the one value the preset existed to set never arrived.
+ *
+ * Pinned on a synthetic spec since 2026-10-11, when the image action's 1.1.0
+ * stopped making that preset the default: the rule is about any slot a preset
+ * sets whole, and a fixture that owns its preset cannot be moved under the
+ * test by a catalogue release. Two session-history reads; the preset sets
+ * `history`'s whole `params` slot and says nothing about `other`.
  */
-describe("an author preset that sets a whole settings slot", () => {
+describe("an author preset that sets a whole slot", () => {
+	const SLUG = "acme.test:spec/whole-slot-preset"
+	beforeAll(async () => {
+		await saveDocument(
+			db,
+			compile(
+				spec(SLUG, { version: "1.0.0" })
+					.inlet("input", C.userMessage.v1())
+					.query("history", ($) =>
+						C.sessionHistory.v1({ scope: $.input.sessionScope })
+					)
+					.query("other", ($) =>
+						C.sessionHistory.v1({ scope: $.input.sessionScope })
+					)
+					.preset(
+						"short",
+						{ label: "Short history", default: true },
+						(p) => p.params("history", { limit: 50 })
+					)
+					.build()
+			),
+			{ publish: true }
+		)
+	}, 60_000)
+
 	const configFor = async (slug: string) => {
 		const [spec] = await db
 			.select()
@@ -553,34 +586,34 @@ describe("an author preset that sets a whole settings slot", () => {
 	}
 
 	it("reaches the field the declaration names", async () => {
-		const values = await configFor("core:spec/chat-generate-image")
-		expect(values.get("render|settings|review")).toBe("on")
+		const values = await configFor(SLUG)
+		expect(values.get("history|params|limit")).toBe(50)
 	})
 
 	it("leaves a node the preset never mentioned on its own default", async () => {
-		// `post` (create-message) is not in the preset. Exploding a whole-slot
-		// value must not spray it across sibling nodes.
+		// `other` is not in the preset. Exploding a whole-slot value must not
+		// spray it across sibling nodes.
 		//
 		// ⚠ Asserted as an ABSENCE since the deviation ruling (2026-09-10): a
-		// config stores only what departs from the declaration, and `post`'s
-		// review declaration already says `off`, so the correct state is no row
-		// rather than a row holding `off`. Both halves are named — not `on`,
-		// and not there at all — because "no row" alone would also be satisfied
-		// by a seeder that had stopped writing this slot entirely, and `not on`
+		// config stores only what departs from the declaration, and `other`'s
+		// `limit` declaration already says 100, so the correct state is no row
+		// rather than a row holding 100. Both halves are named (not 50, and not
+		// there at all) because "no row" alone would also be satisfied by a
+		// seeder that had stopped writing this slot entirely, and "not 50"
 		// alone would be satisfied by the materialized copy this ruling removes.
-		const values = await configFor("core:spec/chat-generate-image")
+		const values = await configFor(SLUG)
 		expect(
-			values.get("post|settings|review"),
+			values.get("other|params|limit"),
 			"the sibling node caught the preset's whole-slot value"
-		).not.toBe("on")
+		).not.toBe(50)
 		expect(
-			values.has("post|settings|review"),
-			"a row was written holding exactly the declared default — it " +
-				"resolves the same today and pins the node to `off` forever after"
+			values.has("other|params|limit"),
+			"a row was written holding exactly the declared default: it " +
+				"resolves the same today and pins the node to 100 forever after"
 		).toBe(false)
 		// And the one that IS a deviation is still there, so this is not a
-		// config that simply lost its settings slot.
-		expect(values.get("render|settings|review")).toBe("on")
+		// config that simply lost its params slot.
+		expect(values.get("history|params|limit")).toBe(50)
 	})
 
 	it("names the shipped default config \"Default\", whatever preset it applied", async () => {
@@ -589,12 +622,12 @@ describe("an author preset that sets a whole settings slot", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-generate-image"))
+			.where(eq(schema.pipelineSpecs.slug, SLUG))
 		const res = await ensureDefaultConfig(
 			db,
 			spec.id,
 			spec.activeVersionId!,
-			"core:spec/chat-generate-image"
+			SLUG
 		)
 		const [config] = await db
 			.select()
@@ -800,4 +833,246 @@ describe("dismissing a notice", () => {
 		expect(await acknowledgeNotices(db, configId)).toBe(1)
 		expect(await pendingNotices(db, configId)).toEqual([])
 	})
+})
+
+describe("a script chain whose seam is gone (PLAN-script-placement D4)", () => {
+	let drift: number
+
+	beforeAll(async () => {
+		const [config] = await db
+			.insert(schema.pipelineConfigs)
+			.values({ specId, name: "Script drift", isImmutable: false })
+			.returning()
+		drift = config.id
+		await db.insert(schema.pipelineConfigValues).values([
+			// The one exception: a chain-shaped address (the `scripts` facet)
+			// on a node the spec still has, whose seam nothing declares.
+			{
+				configId: drift,
+				nodeKey: "rank",
+				slot: "scripts",
+				path: "a-point-that-is-gone",
+				value: [41, 42]
+			},
+			// The node is gone: its chains go with it, as before.
+			{
+				configId: drift,
+				nodeKey: "a-step-this-version-does-not-have",
+				slot: "scripts",
+				path: "",
+				value: [41]
+			},
+			// Undeclared but not a chain address: culled, as before.
+			{
+				configId: drift,
+				nodeKey: "rank",
+				slot: "params",
+				path: "notAScriptAndNotDeclared",
+				value: 7
+			}
+		])
+	}, 60_000)
+
+	it("is reported unplaced and kept; a gone node and a non-script address are still culled", async () => {
+		const reports = await reconcileConfigs(
+			db,
+			specId,
+			specVersionId,
+			CHAT_RESPOND_SPEC_ID
+		)
+		const mine = reports.find((r) => r.configId === drift)!
+		expect(mine.unplaced).toEqual([
+			{
+				nodeKey: "rank",
+				slot: "scripts",
+				path: "a-point-that-is-gone",
+				label: expect.any(String)
+			}
+		])
+		expect(
+			mine.culled.map((c) => `${c.nodeKey}/${c.slot}/${c.path}`).sort()
+		).toEqual([
+			"a-step-this-version-does-not-have/scripts/",
+			"rank/params/notAScriptAndNotDeclared"
+		])
+
+		const rows = await valuesOf(drift)
+		const kept = rows.find(
+			(r: any) => r.slot === "scripts" && r.path === "a-point-that-is-gone"
+		)
+		expect(kept?.value).toEqual([41, 42])
+		expect(
+			rows.find((r: any) => r.nodeKey === "a-step-this-version-does-not-have")
+		).toBeUndefined()
+		expect(
+			rows.find((r: any) => r.path === "notAScriptAndNotDeclared")
+		).toBeUndefined()
+		// No cull notice for what was kept — it was not removed.
+		const notices = await pendingNotices(db, drift)
+		expect(
+			notices.filter((n: any) => n.path === "a-point-that-is-gone")
+		).toEqual([])
+	}, 60_000)
+
+	it("is still unplaced on the next boot — kept, never culled later", async () => {
+		const reports = await reconcileConfigs(
+			db,
+			specId,
+			specVersionId,
+			CHAT_RESPOND_SPEC_ID
+		)
+		const mine = reports.find((r) => r.configId === drift)!
+		expect(mine.unplaced).toHaveLength(1)
+		expect(mine.culled).toEqual([])
+	}, 60_000)
+})
+
+/**
+ * **The shipped Default follows its preset across a version change** (owner
+ * ruling 2026-10-11).
+ *
+ * `ensureDefaultConfig` projects the default preset once and returns early on
+ * every later boot, so a release that moved a preset value never reached an
+ * install that had booted the old one. The case that forced it:
+ * `core:spec/chat-generate-image` 1.0.0 shipped review ON as its default
+ * preset; 1.1.0 ships it off, and a 0.6 install's Default kept asking.
+ *
+ * Both specs here are synthetic so the claim does not move with the catalogue.
+ * The version bump goes through `saveDocument`, the same call boot makes.
+ */
+describe("the shipped Default follows its preset across a version change", () => {
+	const history = (slug: string, version: string, preset: (p: any) => any) =>
+		compile(
+			spec(slug, { version })
+				.inlet("input", C.userMessage.v1())
+				.query("history", ($) =>
+					C.sessionHistory.v1({ scope: $.input.sessionScope })
+				)
+				.preset("tuned", { label: "Tuned", default: true }, preset)
+				.build()
+		)
+	const noDefault = (
+		slug: string,
+		version: string,
+		preset: (p: any) => any
+	) =>
+		compile(
+			spec(slug, { version })
+				.inlet("input", C.userMessage.v1())
+				.query("history", ($) =>
+					C.sessionHistory.v1({ scope: $.input.sessionScope })
+				)
+				.preset("tuned", { label: "Tuned", default: false }, preset)
+				.build()
+		)
+
+	const publish = async (doc: ReturnType<typeof compile>) => {
+		const saved = await saveDocument(db, doc, { publish: true })
+		await reconcileConfigs(db, saved.specId, saved.specVersionId, doc.id)
+		return saved
+	}
+
+	const shippedRows = async (slug: string) => {
+		const [config] = await db
+			.select()
+			.from(schema.pipelineConfigs)
+			.where(
+				eq(schema.pipelineConfigs.seedKey, `pipeline-default:${slug}`)
+			)
+		return new Map(
+			((await valuesOf(config.id)) as any[]).map((r) => [
+				`${r.nodeKey}|${r.slot}|${r.path}`,
+				r.value
+			])
+		)
+	}
+
+	it("drops a row still holding the old preset's value and keeps one an admin changed", async () => {
+		const SLUG = "acme.test:spec/follow-preset-drop"
+		const v1 = await publish(
+			history(SLUG, "1.0.0", (p) =>
+				p.params("history", { limit: 50, channel: "notes" })
+			)
+		)
+		expect(await shippedRows(SLUG)).toEqual(
+			new Map<string, unknown>([
+				["history|params|limit", 50],
+				["history|params|channel", "notes"]
+			])
+		)
+
+		// The shipped config is immutable to the panel, so "an admin changed
+		// it" is a row that no longer equals the preset, however it got there.
+		const [config] = await db
+			.select()
+			.from(schema.pipelineConfigs)
+			.where(
+				eq(schema.pipelineConfigs.seedKey, `pipeline-default:${SLUG}`)
+			)
+		await db
+			.update(schema.pipelineConfigValues)
+			.set({ value: "lore" as any })
+			.where(
+				and(
+					eq(schema.pipelineConfigValues.configId, config.id),
+					eq(schema.pipelineConfigValues.path, "channel")
+				)
+			)
+		// And a person's copy holding the old preset's value: theirs, untouched.
+		const [copy] = await db
+			.insert(schema.pipelineConfigs)
+			.values({ specId: v1.specId, name: "My copy" })
+			.returning()
+		await db.insert(schema.pipelineConfigValues).values({
+			configId: copy.id,
+			nodeKey: "history",
+			slot: "params",
+			path: "limit",
+			value: 50 as any
+		})
+
+		// 1.1.0: the same preset, no longer the default.
+		const v2 = await publish(
+			noDefault(SLUG, "1.1.0", (p) =>
+				p.params("history", { limit: 50, channel: "notes" })
+			)
+		)
+		expect(v2.specVersionId).not.toBe(v1.specVersionId)
+
+		const rows = await shippedRows(SLUG)
+		expect(
+			rows.has("history|params|limit"),
+			"the old preset's value stayed in the shipped Default"
+		).toBe(false)
+		expect(
+			rows.get("history|params|channel"),
+			"the admin's change was lost"
+		).toBe("lore")
+		expect(
+			((await valuesOf(copy.id)) as any[]).find((r) => r.path === "limit")
+				?.value
+		).toBe(50)
+	}, 60_000)
+
+	it("writes the new preset's value where it sets another one", async () => {
+		const SLUG = "acme.test:spec/follow-preset-replace"
+		await publish(
+			history(SLUG, "1.0.0", (p) => p.params("history", { limit: 50 }))
+		)
+		await publish(
+			history(SLUG, "1.1.0", (p) => p.params("history", { limit: 75 }))
+		)
+		expect((await shippedRows(SLUG)).get("history|params|limit")).toBe(75)
+	}, 60_000)
+
+	it("touches nothing when the same document is published again", async () => {
+		const SLUG = "acme.test:spec/follow-preset-drop"
+		const before = await shippedRows(SLUG)
+		await publish(
+			noDefault(SLUG, "1.1.0", (p) =>
+				p.params("history", { limit: 50, channel: "notes" })
+			)
+		)
+		expect(await shippedRows(SLUG)).toEqual(before)
+	}, 60_000)
 })

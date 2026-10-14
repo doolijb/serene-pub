@@ -450,6 +450,173 @@ export const charactersTestSprite: Handler<
 	}
 }
 
+/**
+ * 🚧 **Fill empty sprites** — the form's preview (DESIGN-image-generation
+ * §6.3, §4.7; I5): which labels it would draw, the cost line, and what the
+ * picture step would say before the run. The card's owner or an admin; the
+ * pair and its price are named for an admin only.
+ */
+export const charactersPreviewSpriteFill: Handler<
+	Sockets.Characters.PreviewSpriteFill.Params,
+	Sockets.Characters.PreviewSpriteFill.Response
+> = {
+	event: "characters:previewSpriteFill",
+	handler: async (socket, params, emitToUser) => {
+		try {
+			const userId = socket.user!.id
+			const { mayFillSprites } = await import("$lib/server/sprites/attach")
+			if (!(await mayFillSprites(db, userId, params.characterId)))
+				throw new Error("Only the card's owner or an admin can fill its sprites.")
+			const { previewSpriteFill } = await import(
+				"$lib/server/sprites/fillAction"
+			)
+			const res = await previewSpriteFill(db, {
+				characterId: params.characterId,
+				setId: params.setId,
+				labels: params.labels,
+				userId,
+				isAdmin: !!socket.user!.isAdmin
+			})
+			emitToUser("characters:previewSpriteFill", res)
+			return res
+		} catch (error: any) {
+			emitToUser("characters:previewSpriteFill:error", {
+				error: error?.message || "Could not prepare the fill.",
+				characterId: params.characterId
+			})
+			throw error
+		}
+	}
+}
+
+/**
+ * 🚧 Start a fill: `core:spec/sprite-set-fill` as a card action, in the
+ * background. Acks at once with the run id; the run reports on
+ * `characters:spriteFill` and, when it ends, re-sends the card's sprite
+ * list so every open Sprites tab shows the new pictures. Stop is the
+ * ordinary `pipelines:cancelRun` with that id.
+ */
+export const charactersFillSprites: Handler<
+	Sockets.Characters.FillSprites.Params,
+	Sockets.Characters.FillSprites.Response
+> = {
+	event: "characters:fillSprites",
+	handler: async (socket, params, emitToUser) => {
+		const characterId = params.characterId
+		try {
+			const userId = socket.user!.id
+			const { mayFillSprites } = await import("$lib/server/sprites/attach")
+			if (!(await mayFillSprites(db, userId, characterId)))
+				throw new Error("Only the card's owner or an admin can fill its sprites.")
+			const { v4: uuidv4 } = await import("uuid")
+			const runId =
+				typeof params.runId === "string" && params.runId ? params.runId : uuidv4()
+			const runRegistry = await import("$lib/server/pipelines/runtime/runRegistry")
+			const { SPRITE_SET_FILL_SPEC_ID } = await import("@serene-pub/core-catalog")
+			const { runSpriteFill } = await import("$lib/server/sprites/fillAction")
+			const handle = runRegistry.start({
+				runId,
+				userId,
+				specId: SPRITE_SET_FILL_SPEC_ID,
+				kind: "action"
+			})
+			void runSpriteFill(db, {
+				characterId,
+				setId: params.setId,
+				labels: params.labels,
+				userId,
+				runId,
+				signal: handle.controller.signal,
+				cancelSignal: () => runRegistry.cancellation(handle),
+				report: (p) => emitToUser("characters:spriteFill", p)
+			}).finally(async () => {
+				runRegistry.finish(runId)
+				try {
+					emitToUser("characters:listSprites", await buildSpriteList(characterId))
+				} catch {
+					// The list is a courtesy refresh; the tab re-asks on open.
+				}
+			})
+			const res = { characterId, runId }
+			emitToUser("characters:fillSprites", res)
+			return res
+		} catch (error: any) {
+			emitToUser("characters:fillSprites:error", {
+				error: error?.message || "The fill did not start.",
+				characterId
+			})
+			throw error
+		}
+	}
+}
+
+/**
+ * 🚧 **Re-express from neutral** (DESIGN-image-generation §6.3): redraw the
+ * set's neutral sprite as another label with the Sprites loadout's pair,
+ * when that pair's sheet says `expressions` (NovelAI). The card's owner or
+ * an admin. The new picture is filed by `placeSpriteFile` (an empty sprite
+ * first, else a variant) and raises `core:event/sprites-attached@1` for
+ * plugin listeners, with the same payload the outlet's write carries.
+ */
+export const charactersExpressSprite: Handler<
+	Sockets.Characters.ExpressSprite.Params,
+	Sockets.Characters.ExpressSprite.Response
+> = {
+	event: "characters:expressSprite",
+	handler: async (socket, params, emitToUser) => {
+		const characterId = params.characterId
+		try {
+			const userId = socket.user!.id
+			const { reexpressSprite } = await import("$lib/server/sprites/reexpress")
+			const result = await reexpressSprite(db, {
+				characterId,
+				setId: params.setId,
+				label: params.label,
+				userId,
+				isAdmin: !!socket.user!.isAdmin
+			})
+			const added = result.attached[0]
+			if (added) {
+				try {
+					const { pluginEvents } = await import("$lib/server/plugins/eventHost")
+					const { getManager } = await import("$lib/server/plugins")
+					await pluginEvents().notify(
+						getManager(),
+						"core:event/sprites-attached@1",
+						{
+							event: "core:event/sprites-attached@1",
+							characterId,
+							setId: result.setId,
+							setName: result.setName,
+							attached: result.attached.map(({ label, spriteId }) => ({
+								label,
+								spriteId
+							})),
+							missing: result.missing,
+							at: Date.now()
+						},
+						{ user: String(userId) }
+					)
+				} catch (err) {
+					console.warn("[sprites] sprites-attached fan-out failed:", err)
+				}
+			}
+			const res: Sockets.Characters.ExpressSprite.Response = {
+				...(await buildSpriteList(characterId)),
+				...(added ? { spriteId: added.spriteId, label: added.label } : {})
+			}
+			emitToUser("characters:expressSprite", res)
+			return res
+		} catch (error: any) {
+			emitToUser("characters:expressSprite:error", {
+				error: error?.message || "The sprite was not redrawn.",
+				characterId
+			})
+			throw error
+		}
+	}
+}
+
 export function registerSpriteHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -471,4 +638,7 @@ export function registerSpriteHandlers(
 	register(socket, sessionMessagesSetSprite, emitToUser)
 	register(socket, sessionsSetSpriteSet, emitToUser)
 	register(socket, charactersTestSprite, emitToUser)
+	register(socket, charactersPreviewSpriteFill, emitToUser)
+	register(socket, charactersFillSprites, emitToUser)
+	register(socket, charactersExpressSprite, emitToUser)
 }

@@ -16,23 +16,25 @@ Add more than one character when you start a session, or later in **Edit session
 After you send a message, the characters answer in turn: by default each active character speaks once, in the order they're listed, and then it's your turn again. Drag the characters in **Participants** to change that order.
 
 :::tip You should see
-After the last character has spoken, the line beside the composer reads *Your turn*. If you'd rather have someone speak again, press **Continue** or **Pick who speaks**.
+After the last character has spoken, the turn line above the composer reads *Your turn*. If you'd rather have someone speak again, press **Continue** or **Pick who speaks**.
 :::
 
 ## Who is due next
 
-The line beside the composer shows whose turn it is, as the turn order worked it out:
+The right half of the **turn line**, just above the composer, shows whose turn it is, as the turn order worked it out:
 
 - *Wren is ready to continue*, with **Continue** to let them speak;
 - *Narrator is ready to continue* in a narrated genre (*Castellan* in the Lair), also with **Continue**;
 - *Your turn* when it's yours, or *Sable's turn* for someone else's persona. A person's turn is taken by writing, so there's no Continue;
 - *Waiting for a message — or pick who speaks next* when nobody is lined up, because the round is over or the strategy is **Manual**.
 
-The line hides while you have a draft, while you're editing a message, or while a reply is being written. **Someone else** (or **Pick**) beside it opens *Who speaks next?*, listing everyone who can speak, with the next one marked.
+It hides while you have a draft or while you're editing a message. While a reply is being written, **Stop** stands in its place, and **Try again** after a reply fails. **Someone else** (or **Pick**) beside it opens *Who speaks next?*, listing everyone who can speak, with the next one marked. Who else is typing shows beside it too.
 
 When it's your turn, you also get a notification in [Activity](./getting-around.md#activity), such as *Your turn in The Guard Room*, so you know even when the session isn't open. It clears once you take your turn.
 
-In the Messages widget's settings, **Who is due next** chooses how much the line shows: **Who speaks next** (the default), **Who speaks next and after them** (adds *Then Mira, Tobin*), or **Nothing**. See [Session layout](./session-layout.md).
+In the Messages widget's settings, **Who is due next** chooses how much the line shows: **Who speaks next** (the default), **Who speaks next and after them** (adds *Then Mira, Tobin*), or **Nothing**, which hides that half of the turn line. Who is typing still shows. See [Session layout](./session-layout.md).
+
+To see the whole order at once, add the **Turn order** widget from the layout tray: the same line, then everyone lined up after it, with **Continue** and **Pick who speaks**. Unlike the turn line, it stays up while you write. See [Session layout](./session-layout.md#the-widgets).
 
 ## Continue and Pick who speaks
 
@@ -45,16 +47,18 @@ Neither starts anything by itself: each press is one turn.
 
 ## Choose how the turn order works
 
-The turn order is set in **Edit session › Settings**, on the card for the Chat turn order's **Strategy**. **Pipeline default (Round robin)** is what you get if you change nothing. Choose another and press **Apply**:
+The turn order is set in **Edit session › Settings**, under **How replies are made**, on the Chat turn order's **Strategy**. **Pipeline default (Round robin)** is what you get if you change nothing. Choose another and press **Apply now** (it applies at once, not with **Save**):
 
 - **Round robin**: after each of your messages, every active character speaks once, in order. The default.
 - **Round robin by user**: the characters belonging to whoever sent the last message go first. Only useful with several people in one session; alone, it's the same as round robin.
 - **Random**: a random active character speaks.
-- **Scripted**: round robin, with scripts in charge. An administrator attaches scripts to the turn order's **Order the turns** step in the Pipelines view; the first script to name someone wins, and if none does, round robin decides.
+- **Scripted**: round robin, with scripts in charge. An administrator attaches [scripts](./scripts.md) at the seam on the turn order's **Order the turns** step, in that step's Advanced box in **Admin › Pipelines**; the first script to name someone wins, and if none does, round robin decides.
 - **Manual**: nobody replies by themselves. Use **Pick who speaks** or **Continue** each time.
 - **Narrator replies**: a narrator answers each of your messages instead of a character.
 
 A plugin can add strategies of its own to this list.
+
+Who may take a turn at all, and how far back a mention moves someone up, are the turn order's own settings, on the **Step settings** card in the same place: **Characters** (active ones, all, or none), **Personas**, **Envoys** and **Messages scanned**. Each applies at once (see [Step settings](./sessions.md#step-settings)).
 
 ### Let the model decide
 
@@ -83,6 +87,8 @@ Adventure and the Lair have no Auto-advance setting: each message you send gets 
 Each character in **Edit session › Participants** has a switch. Turn it off to **bench** the character: they stay in the session and keep their messages, but they stop speaking, drop out of the list of character names the model sees, and aren't offered as choices. Turn it on again to bring them back. A guest can bench and unbench their own characters.
 
 Benching is better than removing someone you'll want back, because nothing about them is lost.
+
+A benched character leaves the **Scene Portraits** widget too. The **Turn order** widget can list them under the order: turn on **Show benched characters** in its settings (see [Session layout](./session-layout.md#the-widgets)).
 
 ## Character detail
 

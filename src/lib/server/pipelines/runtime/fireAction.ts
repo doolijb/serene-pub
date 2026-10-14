@@ -163,6 +163,13 @@ export interface FireActionRequest {
 	 * to the run as `input.recipients`. Ignored for any other action.
 	 */
 	recipients?: unknown[]
+	/**
+	 * 🚧 The clock step the press collected (live scenes §6) — `{ by, unit }`
+	 * from the collect modal's stepper — for an action declaring
+	 * `collects.clockStep`, checked here (`clockStepRefusal`) and handed to
+	 * the run as `input.clockStep`. Ignored for any other action.
+	 */
+	clockStep?: unknown
 	actor: { userId: number; as?: ParticipantRef }
 	runId?: string
 	io?: SessionIo
@@ -754,6 +761,14 @@ export async function fireAction(
 		if (fault) return refused(`'${chosen.name}' ${fault}`)
 		recipients = req.recipients as string[]
 	}
+	let clockStep: { by: number; unit: string } | undefined
+	if (collects?.clockStep) {
+		const { clockStepRefusal } = await import("@serene-pub/sdk")
+		const fault = clockStepRefusal(req.clockStep)
+		if (fault) return refused(`'${chosen.name}' ${fault}`)
+		const step = req.clockStep as { by: number; unit: string }
+		clockStep = { by: step.by, unit: step.unit }
+	}
 
 	/**
 	 * An annex field (2026-09-26) is served by core's one pipeline, never by a
@@ -798,7 +813,9 @@ export async function fireAction(
 		userId: req.actor.userId,
 		sessionId: req.sessionId,
 		specId,
-		kind: "action"
+		kind: "action",
+		// 🚧 What a declared boundary trigger's `actionKey` reads (★9).
+		action: actionId
 	})
 	// A parent's stop is this run's stop: the fact crosses in the shape this
 	// boundary speaks — a stop on the child's own handle.
@@ -913,6 +930,7 @@ export async function fireAction(
 				input: {
 					text: typed,
 					...(recipients ? { recipients } : {}),
+					...(clockStep ? { clockStep } : {}),
 					sessionId: req.sessionId,
 					characterId: null,
 					// Who pressed — see `presser` above.

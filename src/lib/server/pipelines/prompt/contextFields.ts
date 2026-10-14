@@ -15,6 +15,8 @@
  * Field selection only.
  */
 
+import type { ResolvedStroke, Stroke } from "@serene-pub/sdk"
+
 /** The subset of a prompt config these rules read. */
 export interface PromptConfigFields {
 	systemPrompt?: string
@@ -31,6 +33,12 @@ export interface CharacterFields {
 	scenario?: string | null
 	postHistoryInstructions?: string | null
 	exampleDialogues?: unknown
+	/**
+	 * The card's strokes (DESIGN-card-strokes A.2): raw off the row, or
+	 * resolved — `fired` stamped — once `core:task/card-strokes@1` ran.
+	 * Absent or empty is the legacy shape: the prose columns are the truth.
+	 */
+	strokes?: Stroke[] | ResolvedStroke[] | null
 }
 
 export const characterDescription = (c: CharacterFields): string =>
@@ -38,6 +46,12 @@ export const characterDescription = (c: CharacterFields): string =>
 
 export const characterPersonality = (c: CharacterFields): string | undefined =>
 	c?.personality || undefined
+
+/** The card's strokes; absent, null or malformed is none. */
+export const characterStrokes = (
+	c: CharacterFields
+): Stroke[] | ResolvedStroke[] =>
+	Array.isArray(c?.strokes) ? c.strokes : []
 
 export const characterScenario = (
 	c: CharacterFields | null

@@ -3,10 +3,12 @@
 	import { connectionWireMode } from "$lib/client/stores/connectionWireMode.svelte"
 	import { usesCompletionTemplate } from "$lib/shared/connectionAdapters/wireMode"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
-	import Select from "$lib/client/components/inputs/Select.svelte"
+	import ConnectionFieldSelect from "./ConnectionFieldSelect.svelte"
+	import { PROMPT_FORMAT, TOKEN_COUNTER } from "./connectionFieldWords"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { z } from "zod"
+	import { untrack } from "svelte"
 
 	// Zod validation schema. No model field: connections have no default
 	// model — models live in the Models section below.
@@ -63,10 +65,21 @@
 	 * Studio adapter ever read `extraJson.think`, but a commented-out control
 	 * is still a thing somebody uncomments. Do not re-add it.
 	 */
-	let extraFields = $state({
-		stream: connection.extraJson?.stream ?? true,
-		ttl: connection.extraJson?.ttl ?? 60,
-		raw: connection.extraJson?.raw ?? true
+	function fieldsFrom(extraJson: any) {
+		return {
+			stream: extraJson?.stream ?? true,
+			ttl: extraJson?.ttl ?? 60,
+			raw: extraJson?.raw ?? true
+		}
+	}
+	let extraFields = $state(fieldsFrom(connection.extraJson))
+
+	// Re-read when `extraJson` changes identity — the draft replaced after an
+	// external save, or Reset — so the controls never show a stale value.
+	// Only the local fields are written; `connection` is never touched here.
+	$effect(() => {
+		const extraJson = connection?.extraJson
+		untrack(() => (extraFields = fieldsFrom(extraJson)))
 	})
 
 	function handleTestConnection() {
@@ -104,6 +117,10 @@
 	// listener for the event and fans it out, so the parent sidebar's own
 	// interest is untouched by this form coming and going.
 	const onConnectionsTest = (msg: Sockets.Connections.Test.Response) => {
+		// The event fans out to every open form: another connection's result
+		// is not this one's.
+		if (msg.connectionId != null && msg.connectionId !== connection.id)
+			return
 		testResult = msg
 	}
 	useInterest<"connections:test">("connections:test", onConnectionsTest)
@@ -117,16 +134,16 @@
 	     here. Two Test buttons on one screen, styled differently and
 	     reporting into different places, was the shipped state. -->
 		{#if showFormat}
-			<Select
+			<ConnectionFieldSelect
 				class="mt-2"
-				label="Prompt Format"
+				words={PROMPT_FORMAT}
 				options={formatOptions.value}
 				bind:value={connection.promptFormat}
 			/>
 		{/if}
-		<Select
+		<ConnectionFieldSelect
 			class="mt-2"
-			label="Token Counter"
+			words={TOKEN_COUNTER}
 			options={TokenCounterOptions.options}
 			bind:value={connection.tokenCounter}
 		/>

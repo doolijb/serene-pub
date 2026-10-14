@@ -181,13 +181,13 @@ describe("undated entries — what is not on the line", () => {
 
 	it("counts them out loud, with what can be done about them", () => {
 		expect(undatedLine(21)).toBe(
-			"21 entries carry no date, drag one onto the line, or leave it timeless"
+			"21 entries carry no date, drag one onto the timeline, or leave it timeless"
 		)
 	})
 
 	it("says it of one entry the way one entry reads", () => {
 		expect(undatedLine(1)).toBe(
-			"1 entry carries no date, drag it onto the line, or leave it timeless"
+			"1 entry carries no date, drag it onto the timeline, or leave it timeless"
 		)
 	})
 })

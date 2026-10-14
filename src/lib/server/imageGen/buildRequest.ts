@@ -10,7 +10,7 @@
  */
 
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
-import type { ImageGenRequest } from "$lib/shared/imageGen/types"
+import type { DrawingSheet, ImageGenRequest } from "$lib/shared/imageGen/types"
 
 export interface BuildImageRequestArgs {
 	prompt: string
@@ -77,3 +77,140 @@ const num = (key: string, value: unknown): Record<string, number> => {
 
 const str = (key: string, value: unknown): Record<string, string> =>
 	typeof value === "string" && value.trim() ? { [key]: value.trim() } : {}
+
+/** The oracle's `orientation` param. `free` takes the sampling's size as-is. */
+export type ImageOrientation = "free" | "square" | "portrait" | "landscape"
+
+/**
+ * Turn the size to the orientation asked for (DESIGN-image-generation §4.1):
+ * portrait puts the longer edge on the height, landscape on the width, square
+ * makes both the shorter edge. With only one edge set there is nothing to
+ * swap, so the request is returned as it came.
+ */
+export function applyOrientation(
+	req: ImageGenRequest,
+	orientation: ImageOrientation | null | undefined
+): ImageGenRequest {
+	if (!orientation || orientation === "free") return req
+	const { width, height } = req
+	if (!width || !height) return req
+	const long = Math.max(width, height)
+	const short = Math.min(width, height)
+	if (orientation === "square") return { ...req, width: short, height: short }
+	if (orientation === "portrait") return { ...req, width: short, height: long }
+	return { ...req, width: long, height: short }
+}
+
+/** The aspect a bare orientation means, for a request with no size at all. */
+const ORIENTATION_RATIO: Record<Exclude<ImageOrientation, "free">, number> = {
+	square: 1,
+	portrait: 2 / 3,
+	landscape: 3 / 2
+}
+
+const parseRatio = (s: string, sep: string): number | null => {
+	const [a, b] = s.split(sep).map((x) => Number(x.trim()))
+	return a && b && Number.isFinite(a) && Number.isFinite(b) ? a / b : null
+}
+
+/**
+ * Fit a request to the drawing sheet's size rule — the HOST's job, so no
+ * adapter computes it a second time (§4.2):
+ *
+ *  - `free`: width and height rounded to the sheet's step and clamped;
+ *  - `enum`: snapped to the listed size whose shape is nearest, then whose
+ *    area is nearest;
+ *  - `aspect`: `aspect` set to the listed ratio nearest the asked shape
+ *    (width/height kept, for the receipt and for a tiered provider).
+ *
+ * An orientation with no size still means a shape, so an `aspect` sheet gets
+ * the ratio it implies. Returns the request unchanged when there is nothing to
+ * fit.
+ */
+export function fitRequestToSheet(
+	req: ImageGenRequest,
+	sheet: DrawingSheet,
+	orientation?: ImageOrientation | null
+): ImageGenRequest {
+	const { width, height } = req
+	const size = sheet.size
+	const asked =
+		width && height
+			? width / height
+			: orientation && orientation !== "free"
+				? ORIENTATION_RATIO[orientation]
+				: null
+
+	if (size.kind === "free") {
+		const fit = (n: number | undefined) =>
+			n === undefined
+				? undefined
+				: Math.min(
+						size.max,
+						Math.max(size.min, Math.round(n / size.step) * size.step)
+					)
+		let w = fit(width)
+		let h = fit(height)
+		// Area and shape bounds (gpt-image-2): the shape first, then the area,
+		// each kept on the step grid — rounding toward the bound, so a fitted
+		// size is always inside it.
+		if (w && h && (size.maxRatio || size.minPixels || size.maxPixels)) {
+			const floorStep = (n: number) =>
+				Math.max(size.step, Math.floor(n / size.step) * size.step)
+			const ceilStep = (n: number) => Math.ceil(n / size.step) * size.step
+			if (size.maxRatio && Math.max(w, h) / Math.min(w, h) > size.maxRatio) {
+				if (w > h) w = floorStep(h * size.maxRatio)
+				else h = floorStep(w * size.maxRatio)
+			}
+			const area = w * h
+			if (size.maxPixels && area > size.maxPixels) {
+				const k = Math.sqrt(size.maxPixels / area)
+				w = floorStep(w * k)
+				h = floorStep(h * k)
+			} else if (size.minPixels && area < size.minPixels) {
+				const k = Math.sqrt(size.minPixels / area)
+				w = ceilStep(w * k)
+				h = ceilStep(h * k)
+			}
+		}
+		return {
+			...req,
+			...(width !== undefined ? { width: w } : {}),
+			...(height !== undefined ? { height: h } : {})
+		}
+	}
+
+	if (size.kind === "enum") {
+		if (asked === null || !size.sizes.length) return req
+		const area = width && height ? width * height : null
+		let best: { w: number; h: number; d: number; a: number } | null = null
+		for (const s of size.sizes) {
+			const [w, h] = s.toLowerCase().split("x").map(Number)
+			if (!w || !h) continue
+			const d = Math.abs(Math.log(w / h / asked))
+			const a = area ? Math.abs(Math.log((w * h) / area)) : 0
+			if (
+				!best ||
+				d < best.d - 1e-9 ||
+				(Math.abs(d - best.d) <= 1e-9 && a < best.a)
+			)
+				best = { w, h, d, a }
+		}
+		return best ? { ...req, width: best.w, height: best.h } : req
+	}
+
+	// aspect
+	if (asked === null || !size.aspects.length) return req
+	let bestAspect: string | null = null
+	let bestD = Infinity
+	for (const a of size.aspects) {
+		const r = parseRatio(a, ":")
+		if (!r) continue
+		const d = Math.abs(Math.log(r / asked))
+		if (d < bestD) {
+			bestD = d
+			bestAspect = a
+		}
+	}
+	return bestAspect ? { ...req, aspect: bestAspect } : req
+}

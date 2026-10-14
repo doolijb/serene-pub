@@ -14,6 +14,7 @@
  * them: below the trigger the whole block stays out, headings included.
  */
 
+import { layoutsView } from "$lib/client/components/pipelines/inspector/receiptView"
 import { describe, it, expect, beforeAll, vi } from "vitest"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { createHost } from "$lib/server/pipelines/runtime/host"
@@ -237,13 +238,23 @@ async function renderWith(postHistoryTokenTrigger: number) {
 		system: messages.map((m) => m.content).join("\n"),
 		lastUser: [...messages].reverse().find((m) => m.role === "user")?.content ?? "",
 		diagnostics: receipt.nodes?.find((n: any) => n.nodeKey === "prompt")
-			?.output?.postHistory
+			?.output?.postHistory,
+		// What the inspector's Prompt tab lists per placed key (2026-10-13).
+		layouts: layoutsView(receipt.nodes?.find((n: any) => n.nodeKey === "prompt"))
 	}
 }
 
 describe("the post-history block on the wire", () => {
 	it("carries all three parts once the history is at least the trigger", async () => {
-		const { system, lastUser, diagnostics } = await renderWith(1)
+		const { system, lastUser, diagnostics, layouts } = await renderWith(1)
+		// The receipt says what each placed key rendered through: here no
+		// pipeline layer resolved a row, so core's variable and its default.
+		expect(layouts.find((l) => l.key === "worldLore")).toEqual({
+			key: "worldLore",
+			variableId: "core:var/world-lore@1",
+			line: "built-in default",
+			floor: true
+		})
 		expect(lastUser).toMatch(/\[System note\]\nResponse reminder:/)
 		expect(system).toContain("Response reminder:")
 		expect(system).toContain(RESPONSE_REMINDER)

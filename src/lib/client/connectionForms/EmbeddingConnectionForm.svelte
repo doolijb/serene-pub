@@ -15,6 +15,7 @@
 	 */
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { DEFAULT_EMBEDDING_TTL_MINUTES } from "$lib/shared/constants/embeddings"
+	import { untrack } from "svelte"
 
 	interface Props {
 		connection: SelectConnection
@@ -47,6 +48,13 @@
 				DEFAULT_EMBEDDING_TTL_MINUTES
 		)
 	)
+	// Re-read when `extraJson` changes identity — the draft replaced after an
+	// external save, or Reset — so the box never shows a stale value. Only
+	// the local text is written; `connection` is never touched here.
+	$effect(() => {
+		const stored = (connection?.extraJson as any)?.embeddingModelTtlMinutes
+		untrack(() => (ttlInput = String(stored ?? DEFAULT_EMBEDDING_TTL_MINUTES)))
+	})
 	function commitTtl() {
 		const n = parseInt(ttlInput, 10)
 		if (Number.isNaN(n) || n < 0) {

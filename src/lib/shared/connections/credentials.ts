@@ -42,6 +42,9 @@ export type CredentialPolicy =
  * ⚠ Only ever rendered as a link a person clicks, never fetched. The one job it
  * has is to save somebody the search that stands between them and a working
  * install, which is the most common place a first setup dies.
+ *
+ * Keyed by preset slug (`OPENAI_COMPATIBLE_PRESETS`), the same key the New
+ * connection picker and the connection view read.
  */
 export const KEY_URLS: Readonly<Record<string, string>> = {
 	openrouter: "https://openrouter.ai/keys",
@@ -51,11 +54,37 @@ export const KEY_URLS: Readonly<Record<string, string>> = {
 	"mistral-ai": "https://console.mistral.ai/api-keys",
 	deepseek: "https://platform.deepseek.com/api_keys",
 	"google-gemini": "https://aistudio.google.com/app/apikey",
-	anthropic: "https://console.anthropic.com/settings/keys"
+	anthropic: "https://console.anthropic.com/settings/keys",
+	"perplexity-ai": "https://console.perplexity.ai/",
+	"fireworks-ai": "https://app.fireworks.ai/settings/users/api-keys",
+	deepinfra: "https://deepinfra.com/dash/api_keys",
+	"xai-grok": "https://console.x.ai/",
+	"novita-ai": "https://novita.ai/settings/key-management",
+	"featherless-ai": "https://featherless.ai/account/api-keys",
+	cohere: "https://dashboard.cohere.com/api-keys",
+	// Anyscale ended its shared endpoints in August 2024: its main site, not a
+	// key page that may be gone.
+	anyscale: "https://www.anyscale.com/",
+	// The hosted image types, keyed by type id (`keyUrlFor` reads them so).
+	horde: "https://aihorde.net/register",
+	// Account Settings → Get Persistent API Token, inside the app.
+	novelai: "https://novelai.net/",
+	bfl: "https://dashboard.bfl.ai/"
 }
 
 /** Types that are a key away from working, whatever preset they carry. */
-const KEYED_TYPES: ReadonlySet<string> = new Set([CONNECTION_TYPE.ANTHROPIC])
+const KEYED_TYPES: ReadonlySet<string> = new Set([
+	CONNECTION_TYPE.ANTHROPIC,
+	CONNECTION_TYPE.NOVELAI,
+	CONNECTION_TYPE.BFL
+])
+
+/** Types whose key is their own (looked up by type, not preset), keyed or not. */
+const KEY_URL_BY_TYPE: ReadonlySet<string> = new Set([
+	CONNECTION_TYPE.HORDE,
+	CONNECTION_TYPE.NOVELAI,
+	CONNECTION_TYPE.BFL
+])
 
 /**
  * Types with nothing to authenticate: a process this pub runs, or a model it
@@ -76,9 +105,8 @@ const KEYLESS_TYPES: ReadonlySet<string> = new Set([
  * `OPENAI_COMPATIBLE_PRESETS`, restated here because that table is a display
  * list with display-order integers and this is a policy.
  *
- * ⚠ A preset with no slug — "AnyScale", "DeepInfra", every unslugged cloud row
- * and every hand-typed URL — resolves through `baseUrl` below instead. That
- * fallback is the reason this set need not be exhaustive.
+ * A row with no preset — one made before its preset carried a slug, or a
+ * hand-typed URL — resolves through `baseUrl` below instead.
  */
 const CLOUD_SLUGS: ReadonlySet<string> = new Set([
 	"openrouter",
@@ -87,7 +115,15 @@ const CLOUD_SLUGS: ReadonlySet<string> = new Set([
 	"together-ai",
 	"mistral-ai",
 	"deepseek",
-	"google-gemini"
+	"google-gemini",
+	"anyscale",
+	"deepinfra",
+	"fireworks-ai",
+	"perplexity-ai",
+	"xai-grok",
+	"cohere",
+	"novita-ai",
+	"featherless-ai"
 ])
 
 /** Hosts nobody reaches without a key, for a row carrying no preset slug. */
@@ -111,7 +147,15 @@ function looksLikeCloud(baseUrl: string | null | undefined): boolean {
 		/^10\./.test(host) ||
 		/^192\.168\./.test(host) ||
 		/^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-		host === "[::1]"
+		// CGNAT, 100.64.0.0/10 — where Tailscale hands out its addresses.
+		/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+		// Link-local, 169.254.0.0/16.
+		/^169\.254\./.test(host) ||
+		host === "[::1]" ||
+		// A single-label name (`ollama`, `gpu-box`) is a LAN or Docker
+		// hostname; no public API is reached without a dot. IPv6 literals
+		// are bracketed, so they are not caught here.
+		(!host.includes(".") && !host.startsWith("["))
 	)
 		return false
 	return true
@@ -147,6 +191,8 @@ export function keyUrlFor(connection: {
 }): string | null {
 	if (connection.type === CONNECTION_TYPE.ANTHROPIC)
 		return KEY_URLS.anthropic ?? null
+	if (connection.type && KEY_URL_BY_TYPE.has(connection.type))
+		return KEY_URLS[connection.type] ?? null
 	const preset = connection.preset ?? ""
 	return (preset && KEY_URLS[preset]) || null
 }

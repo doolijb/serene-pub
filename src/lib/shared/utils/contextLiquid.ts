@@ -53,6 +53,7 @@ import type {
 } from "liquidjs"
 import type { CompletionTemplate } from "$lib/shared/constants/completionTemplates"
 import { PromptBlockFormatter, type BlockRole } from "./PromptBlockFormatter"
+import { strokeList } from "./strokeList"
 import {
 	CONTEXT_LIQUID_REFUSED_TAGS,
 	LIQUID_PARSE_LIMIT
@@ -274,6 +275,9 @@ export function createContextLiquid({
 	liquid.registerFilter("pad", padFilter)
 	liquid.registerFilter("json", jsonFilter)
 	liquid.registerFilter("jsonValue", jsonValueFilter)
+	// `{{ character.strokes | strokeList: "description" }}` — the Handlebars
+	// helper of the same name (`strokeList.ts`).
+	liquid.registerFilter("strokeList", strokeList)
 
 	return liquid
 }

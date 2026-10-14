@@ -20,15 +20,25 @@ import type { Handler } from "$lib/shared/events"
 import { registerConnectionHandlers } from "./connections"
 import { registerLocalOnnxModelHandlers } from "./localOnnxModels"
 import { registerConnectionDefaultsHandlers } from "./connectionDefaults"
+import { registerLoadoutHandlers } from "./loadouts"
 import { registerImageHandlers } from "./images"
 import { registerPluginHandlers } from "./plugins"
+import { registerPluginPackageHandlers } from "./pluginPackages"
 import { registerComponentHandlers } from "./components"
 import { registerSamplingConfigHandlers } from "./samplingConfigs"
+import { registerWorkflowHandlers } from "./workflows"
 import { registerCompletionTemplateHandlers } from "./completionTemplates"
 import { registerCharacterHandlers } from "./characters"
 import { registerCharacterFolderHandlers } from "./characterFolders"
 import { registerSpriteHandlers } from "./sprites"
+import { registerPortraitHandlers } from "./portrait"
+import { registerDescribeLikenessHandlers } from "./describeLikeness"
 import { registerAuthorsNoteHandlers } from "./authorsNote"
+import { registerBackdropHandlers } from "./backdrop"
+import { registerStoryClockHandlers } from "./storyClock"
+import { registerStepSettingsHandlers } from "./stepSettings"
+import { registerSessionPlacesHandlers } from "./sessionPlaces"
+import { registerStatTrailHandlers } from "./statTrail"
 import { registerSessionHandlers } from "./sessions"
 import { registerUserHandlers } from "./users"
 import { registerUserSettingsHandlers } from "./userSettings"
@@ -56,6 +66,7 @@ import { registerCustomThemeHandlers } from "./customThemes"
 import { registerWidgetStyleHandlers } from "./widgetStyles"
 import { registerStateHandlers } from "./state"
 import { registerLorebookStateHandlers } from "./lorebookState"
+import { registerCardStateHandlers } from "./cardState"
 import { registerCardSourceHandlers } from "./cardSources"
 import { registerPipelineHandlers } from "./pipelines"
 import { registerSessionAdminHandlers } from "./sessionAdmin"
@@ -76,10 +87,12 @@ import { registerInviteHandlers } from "./invites"
 import { registerJumpHandlers } from "./jump"
 import { registerAttachmentHandlers } from "./attachments"
 import { registerNotificationHandlers } from "./notifications"
+import { registerConversationHandlers } from "./conversations"
 import { installUserPush, pushToUser } from "./utils/userPush"
 import { installAdminOverviewStale } from "$lib/server/admin/overviewStale"
 import { installViewingIo } from "$lib/server/notifications/viewing"
 import { installStartedFromPush } from "$lib/server/sessions/startedFromPush"
+import { installAttendance } from "$lib/server/sessions/attendance"
 import { isBlockedDuringSetup } from "$lib/server/auth/setupGate"
 import { redactConnections } from "$lib/server/connections/visibility"
 import { isGatedEvent, scopeOfPayload } from "$lib/shared/sockets/interest"
@@ -109,6 +122,9 @@ export function connectSockets(io: {
 	// **Updated**, live: a reconcile that moves a layout tells the sessions
 	// that started from it (brief 6b; `sessions/startedFromPush.ts`).
 	installStartedFromPush(io)
+	// Who's here (W10): a page taking or dropping `sessions:attendance#<id>`
+	// is a person opening or leaving that session (`sessions/attendance.ts`).
+	installAttendance()
 
 	io.on("connect", (socket) => {
 		// authMiddleware (registered via io.use before connectSockets runs)
@@ -265,6 +281,7 @@ export function connectSockets(io: {
 		registerUserSettingsHandlers(socket, emitToUser, register)
 		registerLanguageHandlers(socket, emitToUser, register)
 		registerSamplingConfigHandlers(socket, emitToUser, register)
+		registerWorkflowHandlers(socket, emitToUser, register)
 		registerCompletionTemplateHandlers(socket, emitToUser, register)
 		registerConnectionHandlers(socket, emitToUser, register)
 		// The files behind the two local ONNX endpoints: download, cancel,
@@ -272,8 +289,10 @@ export function connectSockets(io: {
 		// about this machine's disk rather than about a connection row.
 		registerLocalOnnxModelHandlers(socket, emitToUser, register)
 		registerConnectionDefaultsHandlers(socket, emitToUser, register)
+		registerLoadoutHandlers(socket, emitToUser, register)
 		registerImageHandlers(socket, emitToUser, register)
 		registerPluginHandlers(socket, emitToUser, register)
+		registerPluginPackageHandlers(socket, emitToUser, register)
 		registerComponentHandlers(socket, emitToUser, register)
 		registerOllamaHandlers(socket, emitToUser, register)
 		registerKoboldCppHandlers(socket, emitToUser, register)
@@ -281,7 +300,17 @@ export function connectSockets(io: {
 		registerCharacterHandlers(socket, emitToUser, register)
 		registerCharacterFolderHandlers(socket, emitToUser, register)
 		registerSpriteHandlers(socket, emitToUser, register)
+		// 🚧 Generate portrait (I8) — the Gallery tab's card action.
+		registerPortraitHandlers(socket, emitToUser, register)
+		// 🚧 Describe from image (D1) — the Likeness tab's helper.
+		registerDescribeLikenessHandlers(socket, emitToUser, register)
 		registerAuthorsNoteHandlers(socket, emitToUser, register)
+		registerBackdropHandlers(socket, emitToUser, register)
+		registerStoryClockHandlers(socket, emitToUser, register)
+		// 🚧 Step settings (live scenes §15 G11): an exposed step's story settings.
+		registerStepSettingsHandlers(socket, emitToUser, register)
+		registerSessionPlacesHandlers(socket, emitToUser, register)
+		registerStatTrailHandlers(socket, emitToUser, register)
 		registerCardSourceHandlers(socket, emitToUser, register)
 		registerSessionHandlers(socket, emitToUser, register)
 		registerLorebookHandlers(socket, emitToUser, register)
@@ -304,6 +333,7 @@ export function connectSockets(io: {
 		registerWidgetStyleHandlers(socket, emitToUser, register)
 		registerStateHandlers(socket, emitToUser, register)
 		registerLorebookStateHandlers(socket, emitToUser, register)
+		registerCardStateHandlers(socket, emitToUser, register)
 		registerPipelineHandlers(socket, emitToUser, register)
 		registerSessionAdminHandlers(socket, emitToUser, register)
 		registerTunnelHandlers(socket, emitToUser, register)
@@ -318,6 +348,7 @@ export function connectSockets(io: {
 		registerJumpHandlers(socket, emitToUser, register)
 		registerAttachmentHandlers(socket, emitToUser, register)
 		registerNotificationHandlers(socket, emitToUser, register)
+		registerConversationHandlers(socket, emitToUser, register)
 		console.log(`Socket connected: ${socket.id} for user ${userId}`)
 	})
 }

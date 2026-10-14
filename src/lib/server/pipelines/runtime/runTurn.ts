@@ -50,7 +50,7 @@ import {
 	type HostScope,
 	type PendingFire
 } from "$lib/server/pipelines/runtime/host"
-import { buildWorld } from "$lib/server/pipelines/config/world"
+import { buildWorld, loadoutChainsOf } from "$lib/server/pipelines/config/world"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { pluginNodeBindings } from "$lib/server/pipelines/runtime/pluginBindings"
 import {
@@ -69,6 +69,11 @@ import {
 	scriptExtras,
 	scriptsEnabledFor
 } from "$lib/server/pipelines/scripts/chains"
+import {
+	stopGuardsByNode,
+	scriptBudgetsByNode,
+	unplacedAtStart
+} from "$lib/server/pipelines/scripts/runSeams"
 import { genreFieldsFor } from "$lib/server/pipelines/entities/sessionGenres"
 import { withTurnHold } from "$lib/server/indexing/turnHold"
 // Imported for `tokenizerFor`, and for the eight loaders that module registers
@@ -523,6 +528,79 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 	}
 }
 
+/**
+ * End a run before its first node, as a halt (PLAN-script-placement D4: a
+ * stop guard that has no place to run).
+ *
+ * The receipt is the one a halted run writes — `outcome: 'halt'`,
+ * `haltReason`, `haltNodeKey` naming the step whose guard was lost — so the
+ * runs panel, the inspector and the progress card's `haltExplanation` say
+ * why without learning a new shape. Nothing ran, so no node rows. A message
+ * row the caller handed in (a verb's) is failed with the reason, as the
+ * run-end hook would have done; the live row is fenced on still generating.
+ */
+async function haltBeforeRun(
+	request: SpecRunRequest,
+	at: {
+		runId: string
+		seed: string
+		version: string
+		live: ReturnType<typeof createLiveRow>
+		status: ReturnType<typeof createStatusRelay> | undefined
+		artifacts: RunArtifact[]
+		halt: { nodeKey: string; reason: string }
+		notes: string[]
+	}
+): Promise<Receipt> {
+	const now = Date.now()
+	const receipt: Receipt = {
+		runId: at.runId,
+		specId: request.specId,
+		specVersion: at.version,
+		schemaVersion: 1,
+		seed: at.seed,
+		triggerSource: request.preview ? "ui" : "event",
+		...(request.lineage
+			? {
+					parentRunId: request.lineage.parentRunId,
+					rootRunId: request.lineage.rootRunId
+				}
+			: {}),
+		depth: request.lineage?.depth ?? 0,
+		startedAt: now,
+		endedAt: now,
+		outcome: "halt",
+		haltNodeKey: at.halt.nodeKey,
+		haltReason: at.halt.reason,
+		...(at.notes.length ? { notes: [...at.notes] } : {}),
+		...(request.meta && Object.keys(request.meta).length
+			? { meta: request.meta }
+			: {}),
+		nodes: [],
+		emitted: [],
+		consumption: { tokens: 0, nodeExecutions: 0 }
+	}
+	try {
+		for (const a of at.artifacts)
+			if (a.kind === "message")
+				await at.live.finish({
+					kind: "halt",
+					liveRow: a.entityId,
+					reason: at.halt.reason
+				})
+	} finally {
+		await at.status?.end()
+	}
+	if (!request.skipReceipt)
+		await saveReceipt(request.db, receipt, {
+			sessionId: request.sessionId,
+			userId: request.userId,
+			artifacts: at.artifacts,
+			io: request.io
+		})
+	return receipt
+}
+
 async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 	const { specId } = request
 	const loaded = await loadPublished(request.db, specId)
@@ -786,6 +864,41 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 	// that supplies any. In memory, on this run's copy of the world — nothing
 	// is written and the next turn resolves exactly as it would have.
 	forceOverrides(world, request.overrides, request.sessionId)
+	// Each model call's loadout chain, for its receipt (I12).
+	scope.loadoutChains = loadoutChainsOf(world)
+
+	/**
+	 * Script seams, settled before the first node (PLAN-script-placement D4).
+	 *
+	 * The executor applies chains at declared seams only, so a chain whose
+	 * seam is gone would simply never run — and for a `text/stop` guard that
+	 * is the worst outcome: a reply the guard was meant to cut goes out
+	 * uncut, with nothing anywhere saying so. Such a run halts here, before
+	 * it proceeds, naming the guard and the step; any other unplaced chain is
+	 * skipped with a receipt note. A preview never halts on it: it sends
+	 * nothing, and it runs on every keystroke's debounce.
+	 *
+	 * Beside it, each guarded step's connection stop guards — through the
+	 * step's configured connection, as dispatch resolves it, never the bare
+	 * instance default.
+	 */
+	const seamsAtStart = scriptsOn
+		? await unplacedAtStart(request.db, doc, world)
+		: { notes: [] as string[] }
+	if (seamsAtStart.halt && request.preview !== true)
+		return await haltBeforeRun(request, {
+			runId,
+			seed,
+			version: doc.version,
+			live,
+			status,
+			artifacts,
+			halt: seamsAtStart.halt,
+			notes: seamsAtStart.notes
+		})
+	const stopsByNode = scriptsOn
+		? await stopGuardsByNode(request.db, doc, world)
+		: {}
 
 	/**
 	 * The settings document (PLAN-turn-order §4.12, R13), resolved **once
@@ -892,10 +1005,17 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 							session
 						}),
 						// The connection's own stop guards ride along (18 §4b):
-						// resolved by the same rule dispatch uses — the instance
-						// default — so every spec running against that endpoint
-						// inherits its model knowledge.
+						// resolved by the same rule dispatch uses, so every spec
+						// running against that endpoint inherits its model
+						// knowledge. The instance default's, for a seam on a
+						// step `stopsByNode` does not name.
 						connectionStops: await connectionStopsFor(request.db),
+						// …and per guarded step, the guards of the connection
+						// THAT step runs on (a configuration may name another).
+						connectionStopsByNode: stopsByNode,
+						// A script step's own time limit per link
+						// (`params.budgetMs`); the seam default elsewhere.
+						budgetMsByNode: scriptBudgetsByNode(doc, world),
 						// The extension-hook executor and the identity a plugin
 						// link's invocation record carries. Undefined here means
 						// the applier runs core scripts exactly as before.
@@ -994,6 +1114,9 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 	// function bypasses that, so the host says it instead.
 	if (serverCounts?.degraded)
 		receipt.notes = [...(receipt.notes ?? []), serverCounts.degraded]
+	// Unplaced chains this run skipped (D4) — one note each.
+	if (seamsAtStart.notes.length)
+		receipt.notes = [...(receipt.notes ?? []), ...seamsAtStart.notes]
 
 	// Recorded before returning, and never allowed to fail the turn. A run that
 	// produced a good reply and then could not write its own receipt has still
@@ -1504,15 +1627,9 @@ export function generatedText(receipt: Receipt): string | null {
 }
 
 /**
- * Why a turn produced nothing, in a sentence a user could be shown.
- *
- * A halt is not a failure — an aborted generation and an empty completion both
- * halt — so this reads the receipt rather than assuming an error. Returns null
- * when the run finished normally.
+ * Why a turn produced nothing, in a sentence a user could be shown: its own
+ * module (`./haltExplanation`), re-exported here for the callers that reach
+ * for it beside `runTurn`. It does not name the step (PLAN-less-confusing
+ * D4); the receipt keeps `haltNodeKey` for the run inspector.
  */
-export function haltExplanation(receipt: Receipt): string | null {
-	if (receipt.outcome === "ok") return null
-	const at = receipt.haltNodeKey
-	const why = receipt.haltReason ?? "the run stopped without saying why"
-	return at ? `${why} (at '${at}')` : why
-}
+export { haltExplanation } from "$lib/server/pipelines/runtime/haltExplanation"

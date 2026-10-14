@@ -233,6 +233,20 @@ export const DATA_UPGRADE_DONE = defineNotificationKind({
 })
 
 /**
+ * Someone wrote to you in a private **conversation** (PLAN-private-messages,
+ * 2026-10-12). One row per conversation (`regarding conversation:<id>`) that
+ * re-lights on each new message; opening the conversation clears it.
+ */
+export const CONVERSATION_MESSAGE = defineNotificationKind({
+	id: "core:notification/conversation-message@1",
+	level: "attention",
+	clearsOn: "view",
+	title: "{author} in {conversation}",
+	detail: "{excerpt}",
+	cta: "Open"
+})
+
+/**
  * The `regarding` keys, built in one place so a raise and its clear can never
  * spell the same thing two ways.
  */
@@ -249,7 +263,13 @@ export const regardingFor = {
 	/** The prefix every `form` key of one session starts with. */
 	formsIn: (sessionId: number) => `session:${sessionId}/form:`,
 	replyFailed: (sessionId: number, messageId: number) =>
-		`session:${sessionId}/failed:${messageId}`
+		`session:${sessionId}/failed:${messageId}`,
+	conversation: (conversationId: number) => `conversation:${conversationId}`
+}
+
+/** The Messages view landed on one conversation. */
+export function conversationHref(conversationId: number): string {
+	return `/messages/${conversationId}`
 }
 
 /** The session page, optionally landed on one message (and a block in it). */

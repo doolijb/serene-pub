@@ -13,6 +13,8 @@
  * importer, which is a duplicate run reported as extra passing tests.
  */
 
+import { STROKES_ENABLED } from "$lib/shared/characters/strokesFlag"
+
 /**
  * `SHIPPED_CONTEXT_TEMPLATE`, in Liquid.
  *
@@ -250,8 +252,12 @@ export const LIQUID_LAYOUTS: Record<string, string> = {
 	"characters/content":
 		'{% if characters.size %}[\n{% for character in characters %}  {\n    "name": {{ character.name | jsonValue }}' +
 		'{% if character.nickname != nil %},\n    "nickname": {{ character.nickname | jsonValue }}{% endif %}' +
-		'{% if character.description != nil %},\n    "description": {{ character.description | jsonValue }}{% endif %}' +
-		'{% if character.personality != nil %},\n    "personality": {{ character.personality | jsonValue }}{% endif %}' +
+		// Strokes paused (`STROKES_ENABLED` off): the pre-strokes port.
+		(STROKES_ENABLED
+			? '{% if character.description != nil %},\n    "description": {{ character.strokes | strokeList: "description" | default: character.description | jsonValue: 4 }}{% endif %}' +
+				'{% if character.personality != nil %},\n    "personality": {{ character.strokes | strokeList: "personality" | default: character.personality | jsonValue: 4 }}{% endif %}'
+			: '{% if character.description != nil %},\n    "description": {{ character.description | jsonValue }}{% endif %}' +
+				'{% if character.personality != nil %},\n    "personality": {{ character.personality | jsonValue }}{% endif %}') +
 		"\n  }{% unless forloop.last %},{% endunless %}\n{% endfor %}]{% else %}[]{% endif %}",
 
 	"personas/content":
@@ -286,16 +292,18 @@ export const LIQUID_LAYOUTS: Record<string, string> = {
 		"{{ relationshipsPerspectives | json: 1 }}",
 
 	// `optionalSections`: every section optional, each emitting a trailing
-	// comma when something after it is present.
+	// comma when something after it is present. No outer guard on the value
+	// itself (2026-10-13, with the Handlebars row): an absent object is `{}`
+	// here like a record's, and the render path's absence rule is what keeps
+	// a heading off nothing.
 	"relationshipsKnown/content":
-		"{% if relationshipsKnown %}" +
 		"{% if relationshipsKnown.howOthersRegardYou or relationshipsKnown.legendaryFigures %}" +
 		"{ {%- if relationshipsKnown.howOthersRegardYou %}\n " +
 		'"howOthersRegardYou": {{ relationshipsKnown.howOthersRegardYou | jsonValue: indent: 1, offset: 1 }}' +
 		"{% if relationshipsKnown.legendaryFigures %},{% endif %}{% endif %}" +
 		"{% if relationshipsKnown.legendaryFigures %}\n " +
 		'"legendaryFigures": {{ relationshipsKnown.legendaryFigures | jsonValue: indent: 1, offset: 1 }}{% endif %}' +
-		"\n}{% else %}{}{% endif %}{% endif %}",
+		"\n}{% else %}{}{% endif %}",
 
 	// `pad` and presence-not-truthiness: a story with a zeroth month is a thing
 	// somebody will build, so `!= nil` rather than a truth test.

@@ -22,14 +22,14 @@ describe("onnxModelHeadline — the active model", () => {
 	test("resident reads as loaded, with the success dot", () => {
 		expect(
 			onnxModelHeadline(local({ state: "on_disk", loaded: true }), true)
-		).toEqual({ text: "Active · loaded", tone: "success", percent: null })
+		).toEqual({ text: "In use · loaded", tone: "success", percent: null })
 	})
 
 	test("on disk but not resident is not an alarm", () => {
 		expect(
 			onnxModelHeadline(local({ state: "on_disk", loaded: false }), true)
 		).toEqual({
-			text: "Active · on disk, not loaded",
+			text: "In use · on disk, not loaded",
 			tone: "muted",
 			percent: null
 		})
@@ -37,7 +37,7 @@ describe("onnxModelHeadline — the active model", () => {
 
 	test("active with no files is a warning — the next job stalls", () => {
 		expect(onnxModelHeadline(local(), true)).toEqual({
-			text: "Active · not downloaded",
+			text: "In use · not downloaded",
 			tone: "warning",
 			percent: null
 		})
@@ -47,7 +47,7 @@ describe("onnxModelHeadline — the active model", () => {
 		expect(
 			onnxModelHeadline(local({ state: "error", error: "404" }), true)
 		).toEqual({
-			text: "Active · download failed",
+			text: "In use · download failed",
 			tone: "warning",
 			percent: null
 		})
@@ -60,7 +60,7 @@ describe("onnxModelHeadline — the active model", () => {
 				true
 			)
 		).toEqual({
-			text: "Active · downloading 42%",
+			text: "In use · downloading 42%",
 			tone: "warning",
 			percent: 42
 		})

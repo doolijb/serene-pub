@@ -25,6 +25,7 @@ export const CONTEXT_HANDLEBARS_HELPERS = [
 	"isSet",
 	"json",
 	"jsonValue",
+	"strokeList",
 	"systemBlock",
 	"assistantBlock",
 	"userBlock"
@@ -38,7 +39,12 @@ export const CONTEXT_LIQUID_BLOCK_TAGS = [
 ] as const
 
 /** Liquid filters core adds — the Handlebars inline helpers', as filters. */
-export const CONTEXT_LIQUID_FILTERS = ["pad", "json", "jsonValue"] as const
+export const CONTEXT_LIQUID_FILTERS = [
+	"pad",
+	"json",
+	"jsonValue",
+	"strokeList"
+] as const
 
 /**
  * Liquid tags refused at PARSE time, with the sentence that says why: a

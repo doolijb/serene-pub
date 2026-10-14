@@ -20,10 +20,9 @@ Nothing has to be filled in when a session starts: a fresh adventure already has
 
 ## In a session
 
-Two widgets show stats while you play. Neither is on by default: open the layout editor and add them (see [Session layout](./session-layout.md)). A genre that wants them from the first message ships a layout with them already placed.
+The **Stats** widget shows stats while you play. It isn't on by default: open the layout editor and add it (see [Session layout](./session-layout.md)). A genre that wants it from the first message ships a layout with it already placed. Each stat is drawn by its [shape](#stat-shapes): a number with limits as a bar (`14/20`), a choice as a chip, a list as its items, a date as a date line. Its settings choose **whose stats** it shows (the cast, the world, the [places](#places) that hold something, all three under a heading each, or the ones you name), **which cast members** (those with a stat in play, or everyone), **which stats** (all of them, only the bars, or the ones you name) and the **arrangement**: a card for each, a list down a side column, or a strip across the top of the messages. The world's stats are what the model is told. To show the world as a strip and the party as cards, place Stats twice. **World State** is now Stats showing the world as a strip: a layout that has it keeps drawing it the same way.
 
-- **Stats**: one card per cast member, each stat drawn by its [shape](#stat-shapes): a number with limits as a bar (`14/20`), a choice as a chip, a list as its items, a date as a date line. Its settings choose which members, how dense the cards are, and which stats to show.
-- **World State**: the world's own stats as a strip (or a list, down a side column), and under them each [place](#places) that holds something, by name. What you see here is what the model is told.
+The clock button beside a stat shows how it changed in this session, newest first: what it was, what it became, who changed it (you or another player, the story, or something automatic) and when. Anyone in the session can open it. To hide these buttons, turn off **Show changes** under **Behaviour** in the widget's settings.
 
 **Scene Portraits** can also draw small bars under each portrait: turn on **Show stat bars** in its settings. Only numbers with a floor and a ceiling become bars.
 
@@ -38,6 +37,8 @@ Your edits apply at once. Clearing a field doesn't set it to nothing: it goes ba
 A turn that changed something carries a compact line under its message:
 
 > **Verity** hp 20 → 14 · Inventory → rusty key · mood calm → wary
+
+A turn that moved the [story clock](./lorebook-time.md#the-story-clock) says so on the world's line, after its stats: *Time passes: 3 hours (…, 14:00 → …, 17:00)*.
 
 When the model *asks* for a change, the line shows it with **Accept** and **Reject** beside it, and nothing has happened yet. **Review N changes** opens every waiting change in the session, for the ones that have scrolled out of sight.
 
@@ -59,12 +60,14 @@ In a shared session, guests change the session's own values like anyone playing.
 
 Every change is tied to the message that made it. **Delete a message**, **regenerate** a reply or **swipe** to another, and what that message changed goes with it: the reply that wounded her is gone, so the wound is too, and the new reply proposes its own. A stat is only ever as durable as the line that justified it.
 
+The story clock follows the same rule: a move that came with the message steps back with it, all but a reply's fixed tick on a regenerate or a swipe. See [What moves a session's clock](./lorebook-time.md#the-story-clock).
+
 ## What a session tracks
 
 The genre sets the baseline, and decides whether a session may track anything more. **Chat** doesn't. **Adventure** and **Lair** do, and the session's settings have an **Attributes** section with three parts:
 
 - **From the genre**: the genre's own stats, always tracked.
-- **From the world**: the stats the session's lorebook brings, such as stat sheets on the lorebook or its cast, and stats an earlier session recorded onto the world. On by default; switch them all off, or untick any one.
+- **From the world**: the stats the session's lorebook brings, such as stat sheets on the lorebook or its cast, and stats an earlier session recorded onto the world, then the sheets on the cards of the characters in the session (in each card's order, after the world's). A card's sheets count even when the session reads no lorebook. On by default; switch them all off, or untick any one.
 - **This session's own**: any other stat installed on this pub, added for this session alone with **Add an attribute…**.
 
 A change applies from that moment on: values already recorded stay. Only the session's owner can change what it tracks. A stat the session doesn't track can't be changed in it, and the refusal says so.
@@ -110,7 +113,7 @@ A location that points at a place reads by the place's name, so a place renamed 
 
 A place in the session's lorebook can hold stats of its own, as the world and each character do. In **Adventure** and the **Lair**, every place can hold an **Inventory**: the key lying in the crypt, the nets on the harbour wall.
 
-**The places a session can see** are its lorebook's places on its line, at its point in the story, except any that are archived or switched off. Everything in the session uses this one rule: the prompt, the rooms the Lair lists, the World State widget, and what a change may name. A place that's switched off keeps its stats in the lorebook; the session just doesn't read them until it's back. If the party's **Location** points at it, the location reads as not set until then.
+**The places a session can see** are its lorebook's places on its line, at its point in the story, except any that are archived or switched off. Everything in the session uses this one rule: the prompt, the rooms the Lair lists, the Stats widget, and what a change may name. A place that's switched off keeps its stats in the lorebook; the session just doesn't read them until it's back. If the party's **Location** points at it, the location reads as not set until then.
 
 Moving an item between a place and a character is a removal from one and an addition to the other, both under the same message, so a swipe takes both back.
 
@@ -135,6 +138,14 @@ The same stat can be answered in several places, and a session reads the nearest
 5. **The stat's own default.**
 
 In short: **the card is the template, the lorebook is the world, the session is this run.**
+
+### The character card
+
+A character's card can carry stats of its own: open the character, press **Edit** and switch to the **Stats** tab (see [Stats on a card](./characters.md#stats-on-a-card)). There you pick the card's **sheets** and set where each stat starts, and its limits, for every session the character joins.
+
+- **The sheets join what a session tracks.** A card's sheets are added to the session's tracked stats for that character, after the world's, in the card's order, under the same switch as the world's (see [What a session tracks](#what-a-session-tracks)). A genre that tracks nothing more, such as **Chat**, still tracks nothing.
+- **The card is only the start.** A cast member in a lorebook, or the session itself, can change any value the card sets; the card is never changed by play.
+- **They travel with the card.** Exporting the character carries its sheets, values and limits, and any stat you declared yourself, so a Serene Pub import gets them back. See [Exporting a character](./characters.md#exporting-a-character).
 
 Each layer stores only what it changes. A session that never touched Verity's health reads the world's; a world that never touched it reads her card's. So a blank is never a zero, and a stat nobody answered anywhere is simply **absent**. Limits layer the same way: a card says maximum 20, a world may raise it to 40 for one character, a session may raise it again.
 
@@ -209,5 +220,5 @@ A **derived** stat is worked out every time it's read and never stored, because 
 - **Reading a session's stats as of an earlier message.** A pipeline can list a stat's changes with **Stat trail**, and read the lorebook as of a date, but nothing works out what a session's values were at message 47.
 - **Running a pipeline from a lorebook.** **Lorebook state** needs no session, but nothing yet runs a pipeline from a lorebook page.
 - **Modifiers** such as poisoned, resistance or proficiency.
-- **Editing stats away from a session.** A place's stats can be set in its lorebook, but there's no stats editor yet on a character card, a cast member's page, or the world in the lorebook.
+- **Editing stats away from a session.** A place's stats can be set in its lorebook and a character's on its card, but there's no stats editor yet on a cast member's page or the world in the lorebook.
 - **A dated value whose history entry is deleted** loses its date and counts as undated.

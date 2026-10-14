@@ -16,6 +16,10 @@ import * as schema from "$lib/server/db/schema"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { coreTemplateIdFor } from "$lib/server/pipelines/entities/templateIds"
 import {
+	namesTakenBesides,
+	shippedNameFor
+} from "$lib/server/pipelines/boot/shippedName"
+import {
 	SHIPPED_VARIABLE_TEMPLATES,
 	seedKeyFor
 } from "$lib/server/pipelines/entities/variableLayouts"
@@ -61,6 +65,28 @@ export async function seedVariableTemplates(
 			.where(eq(schema.pipelineVariableTemplates.seedKey, seedKey))
 			.limit(1)
 
+		// The pool's names (variable + engine, as the unique index has them):
+		// a person's row may hold the catalog's name, and then the shipped
+		// row yields with "(Built-in)" rather than stopping the boot
+		// (`shippedName.ts`). Asked every boot, so the suffix drops once the
+		// name is free.
+		const poolNames = (await db
+			.select({
+				id: schema.pipelineVariableTemplates.id,
+				name: schema.pipelineVariableTemplates.name
+			})
+			.from(schema.pipelineVariableTemplates)
+			.where(
+				and(
+					eq(schema.pipelineVariableTemplates.variableId, t.variableId),
+					eq(schema.pipelineVariableTemplates.engine, CORE_TEMPLATE_ENGINE)
+				)
+			)) as Array<{ id: number; name: string }>
+		const name = shippedNameFor(
+			t.name,
+			namesTakenBesides(poolNames, existing?.id ?? null)
+		)
+
 		if (existing) {
 			/**
 			 * Core's own rows are **refreshed**, not left alone.
@@ -91,13 +117,13 @@ export async function seedVariableTemplates(
 			const templateId = coreTemplateIdFor(seedKey)
 			if (
 				existing.source !== t.source ||
-				existing.name !== t.name ||
+				existing.name !== name ||
 				existing.templateId !== templateId
 			) {
 				await db
 					.update(schema.pipelineVariableTemplates)
 					.set({
-						name: t.name,
+						name,
 						templateId,
 						source: t.source,
 						engine: CORE_TEMPLATE_ENGINE,
@@ -115,7 +141,7 @@ export async function seedVariableTemplates(
 			variableId: t.variableId,
 			seedKey,
 			templateId: coreTemplateIdFor(seedKey),
-			name: t.name,
+			name,
 			source: t.source,
 			// Explicit rather than NULL: a template's engine travels on the
 			// value (12 §2a), so a stored row keeps what it was authored in even
@@ -168,7 +194,7 @@ export async function defaultVariableTemplateFor(
 		if (row) return row.id
 	}
 
-	const [first] = await db
+	const rows = await db
 		.select()
 		.from(schema.pipelineVariableTemplates)
 		.where(
@@ -183,8 +209,28 @@ export async function defaultVariableTemplateFor(
 			)
 		)
 		.orderBy(asc(schema.pipelineVariableTemplates.id))
-		.limit(1)
+	const first = rows.find((r) => !isForeignPackageRow(r, variableId))
 	return first?.id ?? null
+}
+
+/**
+ * A row a package shipped for a variable it does not own (owner ruling
+ * 2026-10-13, ★4): allowed — a "prose cast" plugin ships its layout for
+ * `core:var/characters@1` this way — and offered in the picker, but **never
+ * the default**. Without this, a core variable whose shipped row failed to
+ * seed would open on whichever package installed first.
+ *
+ * A user's own row (no owner) is never foreign; a package's row is foreign
+ * unless its template id is in the variable's own namespace.
+ */
+export function isForeignPackageRow(
+	row: { ownerPluginId: number | null; templateId: string | null },
+	variableId: string
+): boolean {
+	if (row.ownerPluginId == null) return false
+	const variableOwner = variableId.split(":")[0]
+	const rowOwner = row.templateId?.split(":")[0]
+	return variableOwner === "core" || rowOwner !== variableOwner
 }
 
 /**

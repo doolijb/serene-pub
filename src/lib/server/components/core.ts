@@ -30,7 +30,15 @@ const SOURCES: Readonly<Record<string, () => Promise<{ default: string }>>> = {
 	stats: () => import("@serene-pub/core-catalog/components/stats.source.json?raw"),
 	"lore-entries": () => import("@serene-pub/core-catalog/components/lore-entries.source.json?raw"),
 	"scene-portraits": () => import("@serene-pub/core-catalog/components/scene-portraits.source.json?raw"),
-	"authors-note": () => import("@serene-pub/core-catalog/components/authors-note.source.json?raw")
+	"authors-note": () => import("@serene-pub/core-catalog/components/authors-note.source.json?raw"),
+	"turn-order": () => import("@serene-pub/core-catalog/components/turn-order.source.json?raw"),
+	actions: () => import("@serene-pub/core-catalog/components/actions.source.json?raw"),
+	annex: () => import("@serene-pub/core-catalog/components/annex.source.json?raw"),
+	album: () => import("@serene-pub/core-catalog/components/album.source.json?raw"),
+	backdrop: () => import("@serene-pub/core-catalog/components/backdrop.source.json?raw"),
+	chronicle: () => import("@serene-pub/core-catalog/components/chronicle.source.json?raw"),
+	places: () => import("@serene-pub/core-catalog/components/places.source.json?raw"),
+	attendance: () => import("@serene-pub/core-catalog/components/attendance.source.json?raw")
 }
 
 /** The slugs this module can load a source for — for the test that pins it to `CORE_COMPONENTS`. */
