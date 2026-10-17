@@ -293,6 +293,7 @@ Many services accept requests in the same shape as OpenAI's API, so one kind of 
 | vLLM _(Experimental)_                  | `http://localhost:8000/v1/`                                |
 | SGLang _(Experimental)_                | `http://localhost:30000/v1/`                               |
 | Aphrodite Engine _(Experimental)_      | `http://localhost:2242/v1/`                                |
+| Demon Route _(Experimental)_           | `https://api.demonroute.com/v1/`                           |
 
 _Experimental_ services have had less testing with Serene Pub; check the address and the service's own notes. Everything a preset fills in can be changed afterwards.
 

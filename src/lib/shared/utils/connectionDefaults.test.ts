@@ -18,7 +18,8 @@ const NEW_EXPERIMENTAL_PRESET_NAMES = [
 	"text-generation-webui (Experimental)",
 	"vLLM (Experimental)",
 	"SGLang (Experimental)",
-	"Aphrodite Engine (Experimental)"
+	"Aphrodite Engine (Experimental)",
+	"Demon Route (Experimental)"
 ]
 
 describe("OPENAI_COMPATIBLE_PRESETS", () => {
@@ -54,7 +55,7 @@ describe("OPENAI_COMPATIBLE_PRESETS", () => {
 		}
 	})
 
-	test("all 11 new experimental presets are present, each with the (Experimental) suffix", () => {
+	test("all 12 new experimental presets are present, each with the (Experimental) suffix", () => {
 		const names = OPENAI_COMPATIBLE_PRESETS.map((p) => p.name)
 		for (const expected of NEW_EXPERIMENTAL_PRESET_NAMES) {
 			expect(names).toContain(expected)

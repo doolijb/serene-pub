@@ -61,6 +61,7 @@ export const KEY_URLS: Readonly<Record<string, string>> = {
 	"xai-grok": "https://console.x.ai/",
 	"novita-ai": "https://novita.ai/settings/key-management",
 	"featherless-ai": "https://featherless.ai/account/api-keys",
+	"demon-route": "https://demonroute.com/login",
 	cohere: "https://dashboard.cohere.com/api-keys",
 	// Anyscale ended its shared endpoints in August 2024: its main site, not a
 	// key page that may be gone.
@@ -123,7 +124,8 @@ const CLOUD_SLUGS: ReadonlySet<string> = new Set([
 	"xai-grok",
 	"cohere",
 	"novita-ai",
-	"featherless-ai"
+	"featherless-ai",
+	"demon-route"
 ])
 
 /** Hosts nobody reaches without a key, for a row carrying no preset slug. */
