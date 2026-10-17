@@ -592,6 +592,20 @@ export const OPENAI_COMPATIBLE_PRESETS = [
 				apiKey: ""
 			}
 		}
+	},
+	{
+		name: "Demon Route (Experimental)",
+		slug: "demon-route",
+		value: 24,
+		category: "cloud",
+		connectionDefaults: {
+			baseUrl: "https://api.demonroute.com/v1/",
+			promptFormat: PromptFormats.OPENAI,
+			tokenCounter: TokenCounterOptions.ESTIMATE,
+			extraJson: {
+				apiKey: ""
+			}
+		}
 	}
 ]
 
