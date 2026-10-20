@@ -1,5 +1,5 @@
 /**
- * The Move tab's screen-size simulator — pure geometry, so the whole feature's
+ * The Arrange tab's screen-size simulator — pure geometry, so the whole feature's
  * logic is covered without a component harness.
  */
 import { describe, expect, it } from "vitest"
@@ -7,7 +7,6 @@ import { TIER_MIN_PX } from "../surfaces/types"
 import { DEFAULT_SIDE_RULES } from "@serene-pub/sdk"
 import {
 	EDIT_SIDE_FRACTION,
-	EDIT_ZONE_CHROME_PX,
 	MOBILE_EDIT_PX,
 	SIM_HEIGHT_PX,
 	SIM_OPTIONS,
@@ -16,12 +15,8 @@ import {
 	mobileEditing,
 	narrowWidth,
 	railColumns,
-	simulatedGeometry,
-	simulationExit,
-	simulationRebase
+	simulatedGeometry
 } from "./simulator"
-
-const CELL = 48
 
 describe("SIM_WIDTH_PX — the tier table", () => {
 	it("previews each tier at the width where that tier BEGINS", () => {
@@ -82,7 +77,7 @@ describe("SIM_HEIGHT_PX — the height a tier previews at", () => {
 
 describe("simulatedGeometry — the editor's ¼ | ½ | ¼ split", () => {
 	it("splits a width into quarter / half / quarter", () => {
-		const g = simulatedGeometry(1280, CELL)
+		const g = simulatedGeometry(1280)
 		expect(g.left).toBe(320)
 		expect(g.right).toBe(320)
 		expect(g.centre).toBe(640)
@@ -90,7 +85,7 @@ describe("simulatedGeometry — the editor's ¼ | ½ | ¼ split", () => {
 
 	it("accounts for every pixel — the centre absorbs the rounding", () => {
 		for (const w of [1279, 1281, 999, 1023, 1440, 2561]) {
-			const g = simulatedGeometry(w, CELL)
+			const g = simulatedGeometry(w)
 			expect(g.left + g.centre + g.right).toBe(w)
 			expect(g.left).toBe(g.right)
 		}
@@ -99,14 +94,14 @@ describe("simulatedGeometry — the editor's ¼ | ½ | ¼ split", () => {
 	it("matches the editor's live math (round(w * 0.25)) at the real width", () => {
 		expect(EDIT_SIDE_FRACTION).toBe(0.25)
 		for (const w of [1024, 1365, 1920, 2560]) {
-			expect(simulatedGeometry(w, CELL).left).toBe(
+			expect(simulatedGeometry(w).left).toBe(
 				Math.round(w * EDIT_SIDE_FRACTION)
 			)
 		}
 	})
 
 	it("honours a custom side fraction", () => {
-		const g = simulatedGeometry(1000, CELL, { sideFraction: 0.2 })
+		const g = simulatedGeometry(1000, { sideFraction: 0.2 })
 		expect(g.left).toBe(200)
 		expect(g.right).toBe(200)
 		expect(g.centre).toBe(600)
@@ -114,7 +109,7 @@ describe("simulatedGeometry — the editor's ¼ | ½ | ¼ split", () => {
 
 	it("never produces negative geometry for a degenerate width", () => {
 		for (const w of [0, -10, Number.NaN]) {
-			const g = simulatedGeometry(w, CELL)
+			const g = simulatedGeometry(w)
 			expect(g.left).toBeGreaterThanOrEqual(0)
 			expect(g.centre).toBeGreaterThanOrEqual(0)
 			expect(g.right).toBeGreaterThanOrEqual(0)
@@ -122,149 +117,36 @@ describe("simulatedGeometry — the editor's ¼ | ½ | ¼ split", () => {
 	})
 })
 
-describe("simulatedGeometry — margins too narrow to hold a cell", () => {
-	it("culls a side that cannot fit one whole cell and gives it to the centre", () => {
-		// A quarter of 240px is 60px; minus the zone chrome that is under one
-		// 48px cell, so the rail can hold nothing at all.
-		expect(60 - EDIT_ZONE_CHROME_PX).toBeLessThan(CELL)
-		const g = simulatedGeometry(240, CELL)
-		expect(g.left).toBe(0)
-		expect(g.right).toBe(0)
-		expect(g.centre).toBe(240)
-	})
-
-	it("keeps a side that fits at least one cell", () => {
-		// The compact preview: a quarter is wide enough for a single column.
-		const g = simulatedGeometry(SIM_WIDTH_PX.compact, CELL)
-		expect(g.left).toBeGreaterThan(0)
-		expect(g.left - EDIT_ZONE_CHROME_PX).toBeGreaterThanOrEqual(CELL)
-	})
-
-	it("culls against a bigger cell too — the rule is cells, not pixels", () => {
-		const wide = simulatedGeometry(SIM_WIDTH_PX.compact, 96)
-		expect(wide.left).toBe(0)
-		expect(wide.centre).toBe(SIM_WIDTH_PX.compact)
-	})
-})
-
 describe("simulatedGeometry — the down-scale that keeps the frame on screen", () => {
 	it("does not scale when the simulated width already fits", () => {
-		expect(simulatedGeometry(1024, CELL, { available: 1600 }).scale).toBe(1)
-		expect(simulatedGeometry(1024, CELL, { available: 1024 }).scale).toBe(1)
+		expect(simulatedGeometry(1024, { available: 1600 }).scale).toBe(1)
+		expect(simulatedGeometry(1024, { available: 1024 }).scale).toBe(1)
 	})
 
 	it("does not scale when no available width was given", () => {
-		expect(simulatedGeometry(2560, CELL).scale).toBe(1)
+		expect(simulatedGeometry(2560).scale).toBe(1)
 	})
 
 	it("shrinks to exactly the available fraction when it does not fit", () => {
-		expect(simulatedGeometry(1600, CELL, { available: 800 }).scale).toBe(0.5)
-		expect(simulatedGeometry(2000, CELL, { available: 1200 }).scale).toBe(0.6)
+		expect(simulatedGeometry(1600, { available: 800 }).scale).toBe(0.5)
+		expect(simulatedGeometry(2000, { available: 1200 }).scale).toBe(0.6)
 	})
 
 	it("never scales up and never returns a non-positive scale", () => {
 		for (const available of [0, -5, Number.NaN, 4000]) {
-			const s = simulatedGeometry(1440, CELL, { available }).scale
+			const s = simulatedGeometry(1440, { available }).scale
 			expect(s).toBeGreaterThan(0)
 			expect(s).toBeLessThanOrEqual(1)
 		}
 	})
 
 	it("scales the frame only — the zone widths stay the simulated ones", () => {
-		const big = simulatedGeometry(1920, CELL, { available: 600 })
-		const same = simulatedGeometry(1920, CELL)
+		const big = simulatedGeometry(1920, { available: 600 })
+		const same = simulatedGeometry(1920)
 		expect(big.scale).toBeLessThan(1)
 		expect(big.left).toBe(same.left)
 		expect(big.centre).toBe(same.centre)
 		expect(big.right).toBe(same.right)
-	})
-})
-
-describe("simulationExit — the snapshot guard around a preview", () => {
-	/** A zone arrangement, shaped like the editor's captured ArrangedZone. */
-	const wide = {
-		middle: {
-			cols: 12,
-			rows: 8,
-			items: [{ id: "messages", x: 0, y: 0, w: 12, h: 5 }]
-		},
-		left: { cols: 5, rows: 8, items: [{ id: "cast", x: 0, y: 0, w: 5, h: 3 }] }
-	}
-	/** The same arrangement after a phone-width preview clamped it. */
-	const clamped = {
-		middle: {
-			cols: 1,
-			rows: 8,
-			items: [{ id: "messages", x: 0, y: 0, w: 1, h: 5 }]
-		},
-		left: { cols: 1, rows: 8, items: [{ id: "cast", x: 0, y: 0, w: 1, h: 3 }] }
-	}
-
-	it("puts the pre-preview arrangement back when the user only LOOKED", () => {
-		const r = simulationExit(wide, clamped, false)
-		expect(r.restored).toBe(true)
-		expect(r.arranged).toEqual(wide)
-		expect(r.arranged.middle.cols).toBe(12)
-	})
-
-	it("keeps what the user arranged while simulating", () => {
-		const r = simulationExit(wide, clamped, true)
-		expect(r.restored).toBe(false)
-		expect(r.arranged).toBe(clamped)
-	})
-
-	it("never invents an arrangement when there is no snapshot", () => {
-		for (const none of [null, undefined]) {
-			const r = simulationExit(none, clamped, false)
-			expect(r.restored).toBe(false)
-			expect(r.arranged).toBe(clamped)
-		}
-	})
-
-	it("is pure — neither input is mutated", () => {
-		const snap = structuredClone(wide)
-		const cur = structuredClone(clamped)
-		simulationExit(snap, cur, false)
-		simulationExit(snap, cur, true)
-		expect(snap).toEqual(wide)
-		expect(cur).toEqual(clamped)
-	})
-})
-
-describe("simulationRebase — a copy landing under an open preview", () => {
-	/** The arrangement the editor opened on, and the preview's clamp of it. */
-	const before = {
-		right: { cols: 5, rows: 8, items: [{ id: "stats", x: 0, y: 0, w: 5, h: 4 }] }
-	}
-	/** What Start from scratch put in its place, and the preview's clamp of that. */
-	const copied = {
-		middle: { cols: 12, rows: 8, items: [{ id: "messages", x: 0, y: 0, w: 12, h: 8 }] }
-	}
-	const copiedClamped = {
-		middle: { cols: 1, rows: 8, items: [{ id: "messages", x: 0, y: 0, w: 1, h: 8 }] }
-	}
-
-	it("makes the copy the arrangement Done keeps, not the one from before it", () => {
-		// Entered the preview on `before`, looked only; then the copy landed.
-		const guard = simulationRebase(true, copied)
-		const done = simulationExit(guard.snapshot, copiedClamped, guard.dirty)
-		expect(done.arranged).toEqual(copied)
-		expect(done.arranged).not.toEqual(before)
-		// Without the rebase the old snapshot came back — the reviewed defect.
-		expect(
-			simulationExit<Record<string, unknown>>(before, copiedClamped, false).arranged
-		).toBe(before)
-	})
-
-	it("forgets a gesture made on the arrangement the copy replaced", () => {
-		// A drag before the copy made the preview "earned"; the copy is new.
-		const guard = simulationRebase(true, copied)
-		expect(guard.dirty).toBe(false)
-		expect(simulationExit(guard.snapshot, copiedClamped, guard.dirty).restored).toBe(true)
-	})
-
-	it("holds no snapshot at Actual", () => {
-		expect(simulationRebase(false, copied)).toEqual({ snapshot: null, dirty: false })
 	})
 })
 
@@ -286,14 +168,14 @@ describe("Ultrawide — the rail ladder's multi-column branch", () => {
 	})
 
 	it("reports the rail column count the live ladder gives that width", () => {
-		expect(simulatedGeometry(SIM_WIDTH_PX.wide, CELL).sideColumns).toBe(1)
+		expect(simulatedGeometry(SIM_WIDTH_PX.wide).sideColumns).toBe(1)
 		expect(
-			simulatedGeometry(SIM_WIDTH_PX.ultrawide, CELL).sideColumns
+			simulatedGeometry(SIM_WIDTH_PX.ultrawide).sideColumns
 		).toBe(multiCol.columns)
 		// The BRANCH is what is previewed, not the preset's own width: one pixel
 		// below it the rails are still a single column.
-		expect(simulatedGeometry(multiCol.min - 1, CELL).sideColumns).toBe(1)
-		expect(simulatedGeometry(multiCol.min, CELL).sideColumns).toBe(2)
+		expect(simulatedGeometry(multiCol.min - 1).sideColumns).toBe(1)
+		expect(simulatedGeometry(multiCol.min).sideColumns).toBe(2)
 	})
 
 	it("reads the columns off the ladder rather than a copy of it", () => {
@@ -304,21 +186,9 @@ describe("Ultrawide — the rail ladder's multi-column branch", () => {
 		expect(railColumns(Number.NaN)).toBe(1)
 	})
 
-	it("culls a margin that cannot hold one cell PER rail column", () => {
-		// A quarter of 2400 is 600px. At a 300px cell that is one whole cell
-		// after the chrome but not two — enough for the 1-column rail this
-		// width used to be drawn as, not for the 2-column one it really shows.
-		const cell = 300
-		expect(600 - EDIT_ZONE_CHROME_PX).toBeGreaterThanOrEqual(cell)
-		expect(600 - EDIT_ZONE_CHROME_PX).toBeLessThan(2 * cell)
-		expect(simulatedGeometry(2400, cell).left).toBe(0)
-		// One pixel narrower is a one-column rail again, and it survives.
-		expect(simulatedGeometry(2399, cell).left).toBeGreaterThan(0)
-	})
-
 	it("still splits the frame ¼ | ½ | ¼ — the ladder governs columns, not the split", () => {
 		const w = SIM_WIDTH_PX.ultrawide
-		const g = simulatedGeometry(w, CELL)
+		const g = simulatedGeometry(w)
 		expect(g.left).toBe(Math.round(w * EDIT_SIDE_FRACTION))
 		expect(g.left + g.centre + g.right).toBe(w)
 	})
@@ -331,18 +201,13 @@ describe("mobileEditing — which editor a width gets", () => {
 		expect(narrowWidth(MOBILE_EDIT_PX)).toBe(false)
 	})
 
-	it("gives a real narrow window the row editor, with no way out of it", () => {
-		expect(mobileEditing({ narrow: true, simNarrow: true, grid: false })).toBe(true)
-		expect(mobileEditing({ narrow: true, simNarrow: true, grid: true })).toBe(true)
-		expect(mobileEditing({ narrow: true, simNarrow: false, grid: true })).toBe(true)
+	it("gives a real narrow window, and a previewed phone, the row editor", () => {
+		expect(mobileEditing({ narrow: true, simNarrow: true })).toBe(true)
+		expect(mobileEditing({ narrow: true, simNarrow: false })).toBe(true)
+		expect(mobileEditing({ narrow: false, simNarrow: true })).toBe(true)
 	})
 
-	it("gives a previewed phone the row editor a desktop can look at", () => {
-		expect(mobileEditing({ narrow: false, simNarrow: true, grid: false })).toBe(true)
-		expect(mobileEditing({ narrow: false, simNarrow: true, grid: true })).toBe(false)
-	})
-
-	it("leaves a wide window on the grid", () => {
-		expect(mobileEditing({ narrow: false, simNarrow: false, grid: false })).toBe(false)
+	it("leaves a wide window on the Arrange canvas", () => {
+		expect(mobileEditing({ narrow: false, simNarrow: false })).toBe(false)
 	})
 })

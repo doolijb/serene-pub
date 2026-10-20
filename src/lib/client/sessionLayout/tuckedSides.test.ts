@@ -13,8 +13,7 @@ import {
 	type TuckedFlyout
 } from "./tuckedSides"
 import { MIN_CENTER_PX, emptyColumnsPx, sideFlowPx } from "./sideSlot"
-import { isRailFrame } from "./arrangedGeometry"
-import { ADVENTURE_LAYOUT, LAIR_LAYOUT } from "@serene-pub/core-catalog"
+import { STORY_WORLD_LAYOUT, LAIR_LAYOUT } from "@serene-pub/core-catalog"
 
 describe("tuckThresholdPx — derived from the zones' own minimums", () => {
 	it("is the sides' footprints, their gaps and the stage's measure", () => {
@@ -291,14 +290,14 @@ describe("tuckedSidesOf — the side holding the log never tucks (brief 7a revie
 describe("tuckedSidesOf — the same cases, read off the drawn layout (C5)", () => {
 	/**
 	 * A layout's tuck inputs as the SDK's one reader draws them: a side's
-	 * docked footprint is its rung's `width × columns` when it docks anything
+	 * docked footprint is its rung's `width × columns` when it docks a panel
 	 * (0 when it does not), and the log's side is the side whose drawn
-	 * instances hold the conversation.
+	 * panels hold the conversation.
 	 */
 	const tuckOf = (layout: SessionLayoutV1, inline: number) => {
 		const d = resolveDrawn(layout, { inline })
 		const px = (z: DrawnZone) =>
-			z.instances.length && (z.drawnFrom === "arrangement" || z.rung?.mode === "rail")
+			z.panels.length && z.rung?.mode === "rail"
 				? z.rung!.width * z.rung!.columns
 				: 0
 		const holdsLog = (z: DrawnZone) => z.instances.some((i) => i.widgetId === "messages")
@@ -311,12 +310,11 @@ describe("tuckedSidesOf — the same cases, read off the drawn layout (C5)", () 
 		}
 	}
 	const sides = (left: string[], right: string[]): SessionLayoutV1 => ({
-		zoneLayout: {
+		panels: {
 			version: 1,
-			zones: {
-				left: { kind: "side", side: "left", widgets: left },
-				right: { kind: "side", side: "right", widgets: right }
-			}
+			left: left.map((id) => ({ key: `l-${id}`, tabs: [id] })),
+			right: right.map((id) => ({ key: `r-${id}`, tabs: [id] })),
+			middle: { above: [], primary: { key: "p0", tabs: ["stats#world"] }, below: [] }
 		}
 	})
 
@@ -341,19 +339,40 @@ describe("tuckedSidesOf — the same cases, read off the drawn layout (C5)", () 
 	})
 })
 
+describe("tuckedSidesOf — a layout holding no conversation (R-B, no lock)", () => {
+	const draw = (left: string[], right: string[], primary: string[]): SessionLayoutV1 => ({
+		panels: {
+			version: 1,
+			left: left.map((id) => ({ key: `l-${id}`, tabs: [id] })),
+			right: right.map((id) => ({ key: `r-${id}`, tabs: [id] })),
+			middle: { above: [], primary: { key: "p0", tabs: primary }, below: [] }
+		}
+	})
+
+	it("no side holds a log, so neither is kept from tucking: both tuck together, as with the log in the middle", () => {
+		const d = resolveDrawn(draw(["stats"], ["places"], ["map"]), { inline: 1280 })
+		expect(d.left.instances.concat(d.right.instances, d.middle.instances).some((i) => i.widgetId === "messages")).toBe(false)
+		const o = { leftPx: 248, rightPx: 248, gapPx: 8, logSide: null, middleMinPx: MIN_CENTER_PX }
+		const need = tuckThresholdPx(o)
+		expect(tuckedSidesOf({ ...o, bodyPx: need - 1 })).toEqual({ left: true, right: true })
+		expect(tuckedSidesOf({ ...o, bodyPx: need })).toEqual({ left: false, right: false })
+	})
+})
+
 describe("the shipped layouts at a 1280 window (body 1216) — the flow counts only what is docked (lane E1)", () => {
-	/** A side's flow footprint as the model computes it (./sideSlot `sideFlowPx`). */
-	const flowOf = (z: DrawnZone) => {
-		const arranged = z.drawnFrom === "arrangement"
-		const px = z.rung!.width * z.rung!.columns
-		return sideFlowPx({
+	/**
+	 * A side's flow footprint as the model computes it (./sideSlot
+	 * `sideFlowPx`): a side whose every panel is in the rail is RAIL ONLY and
+	 * takes the rail's width, never the column it does not draw.
+	 */
+	const flowOf = (z: DrawnZone) =>
+		sideFlowPx({
 			slot: "inline",
-			arranged,
-			arrangedPx: px,
-			railPx: !arranged && z.rung?.mode === "rail" && z.instances.length ? [px] : [],
-			railOnly: arranged && isRailFrame({ items: z.instances })
+			populated: z.panels.length > 0 && z.rung!.mode !== "hidden",
+			mode: z.rung!.mode,
+			widthPx: z.rung!.width * z.rung!.columns,
+			tucked: z.panels.every((p) => !p.pinned)
 		})
-	}
 	const tuckAt = (layout: SessionLayoutV1, bodyPx: number) => {
 		const d = resolveDrawn(layout, { inline: bodyPx })
 		return {
@@ -369,32 +388,25 @@ describe("the shipped layouts at a 1280 window (body 1216) — the flow counts o
 		}
 	}
 
-	it("Adventure as shipped: the unpinned left is an icon strip, the party's column docks", () => {
-		expect(tuckAt(ADVENTURE_LAYOUT, 1216)).toEqual({
-			px: [0, 248],
+	it("Adventure as shipped: the left is all rail, so it costs a rail, and the party's column docks", () => {
+		// Lane L's finding: a left of unpinned cards once counted its full
+		// 264px and tucked BOTH sides at 1280. It is a rail; it costs a rail.
+		expect(tuckAt(STORY_WORLD_LAYOUT, 1216)).toEqual({
+			px: [36, 248],
 			tucked: { left: false, right: false }
 		})
 	})
 
-	it("Adventure with its left ARRANGED but every card unpinned: a rail, so the party's column still docks", () => {
-		// Lane L's finding: this arrangement counted the left's full 264px and
-		// tucked BOTH sides at 1280. It is a rail; it costs a rail.
-		const railLeft: SessionLayoutV1 = {
-			...ADVENTURE_LAYOUT,
-			arrangedGrid: {
-				...ADVENTURE_LAYOUT.arrangedGrid,
-				left: {
-					cols: 1,
-					rows: 12,
-					items: [
-						{ id: "chronicle", x: 0, y: 0, w: 1, h: 6, pinned: false },
-						{ id: "lore-entries", x: 0, y: 6, w: 1, h: 6, pinned: false }
-					]
-				}
+	it("Adventure with its left docked instead: two columns, still beside the stage at 1216", () => {
+		const docked: SessionLayoutV1 = {
+			...STORY_WORLD_LAYOUT,
+			panels: {
+				...STORY_WORLD_LAYOUT.panels!,
+				left: STORY_WORLD_LAYOUT.panels!.left.map(({ pinned: _p, ...rest }) => rest)
 			}
 		}
-		expect(tuckAt(railLeft, 1216)).toEqual({
-			px: [36, 248],
+		expect(tuckAt(docked, 1216)).toEqual({
+			px: [248, 248],
 			tucked: { left: false, right: false }
 		})
 	})

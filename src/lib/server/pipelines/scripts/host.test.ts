@@ -165,3 +165,40 @@ describe("one evaluator, two hosts", () => {
 		}
 	})
 })
+
+describe("the queue (the 2026-10-19 walk)", () => {
+	it("a job waiting behind others is never killed for the wait: every one of a burst answers", async () => {
+		// Each job is real work for the engine, well inside its own clock
+		// (1 s); the burst together outlasts one job's backstop (its clock +
+		// 1 s). Counted from the post, the jobs at the back were killed unrun
+		// and the worker took the rest with it.
+		const busy = "var n = 0; for (var i = 0; i < 4000000; i++) n += i % 7; return n"
+		const t0 = Date.now()
+		const one = await run(busy, { seedLabel: "queue:one", timeoutMs: 1000 })
+		expect(one.ok).toBe(true)
+		const each = Math.max(5, Date.now() - t0)
+		const count = Math.min(200, Math.ceil(2600 / each) + 2)
+		const started = Date.now()
+		const burst = await Promise.all(
+			Array.from({ length: count }, (_, i) => run(busy, { seedLabel: `queue:${i}`, timeoutMs: 1000 }))
+		)
+		const failed = burst.filter((r) => !r.ok).map((r) => (r as { reason: string }).reason)
+		expect(failed).toEqual([])
+		// The burst really did outlast one job's backstop, or this proves nothing.
+		expect(Date.now() - started).toBeGreaterThan(2000)
+	})
+
+	it("a stuck job fails alone: the jobs queued behind it run on a fresh worker", async () => {
+		const [stuck, ...after] = await Promise.all([
+			run("while (true) {}", { seedLabel: "queue:stuck", timeoutMs: 50 }),
+			...Array.from({ length: 4 }, (_, i) => run("return text + " + i, { seedLabel: `queue:after:${i}` }))
+		])
+		expect(stuck.ok).toBe(false)
+		expect(after.map((r) => (r.ok ? r.value : (r as { reason: string }).reason))).toEqual([
+			"hello world0",
+			"hello world1",
+			"hello world2",
+			"hello world3"
+		])
+	})
+})

@@ -91,6 +91,7 @@ import {
 	requirementsOf
 } from "./requirements"
 import { upsertPlugin } from "./store"
+import { documentWithRenamedCoreIds, resolveRenamedCoreId } from "./renamedCoreIds"
 
 /** The event a genre's one required member answers (24 §3). */
 const SESSION_CREATED = "core:event/session-created@1"
@@ -424,7 +425,10 @@ export async function projectPluginPackage(
 	// between two of its own specs is not refused one spec at a time.
 	const batch = new Set(pkg.documents.map((d) => d.id))
 
-	for (const doc of pkg.documents) {
+	for (const shipped of pkg.documents) {
+		// A lock on a core genre core has since renamed locks on the one it
+		// ships now (`renamedCoreIds.ts`).
+		const doc = documentWithRenamedCoreIds(shipped)
 		const genreId = (doc as any).input?.genre
 		const isCreate = (doc as any).input?.event === SESSION_CREATED && !!genreId
 		let toSave: SpecDocument = doc
@@ -487,7 +491,9 @@ export async function projectPluginPackage(
 	// sync because a config's values address a spec's nodes, and a spec that
 	// failed to save has no nodes to address.
 	for (const decl of pkg.manifest.configs ?? []) {
-		const specSlug = typeof decl?.spec === "string" ? decl.spec : ""
+		// A config over a core spec core has since renamed is over the one it
+		// ships now (`renamedCoreIds.ts`).
+		const specSlug = typeof decl?.spec === "string" ? resolveRenamedCoreId(decl.spec) : ""
 		const slug = typeof decl?.slug === "string" ? decl.slug : ""
 		if (!specSlug || !slug) {
 			report.refused.push(`config: an entry names no spec or no slug.`)

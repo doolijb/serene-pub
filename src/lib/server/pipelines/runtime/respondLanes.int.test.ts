@@ -24,7 +24,7 @@ import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { run } from "@serene-pub/sdk"
-import { respondSpec } from "$lib/server/pipelines/specs/respond"
+import { storyRespondSpec } from "$lib/server/pipelines/specs/respond"
 import * as schema from "$lib/server/db/schema"
 import {
 	characterLoreValues,
@@ -131,7 +131,7 @@ beforeAll(async () => {
 }, 60_000)
 
 const rankedSources = async (): Promise<string[]> => {
-	const receipt = await run(respondSpec(), {
+	const receipt = await run(storyRespondSpec(), {
 		input: {
 			text: "tell me about the ashguard",
 			sessionId,

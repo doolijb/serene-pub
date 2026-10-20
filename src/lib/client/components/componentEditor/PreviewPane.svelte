@@ -17,11 +17,11 @@
 	import { setContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import {
-		WIDGET_SCOPED_SECTIONS,
-		type WidgetBaseSection,
-		type WidgetScopedSectionValues,
-		type WidgetSectionScope
-	} from "@serene-pub/sdk"
+	WIDGET_SCOPED_SECTIONS,
+	type WidgetBaseSection,
+	type WidgetScopedSectionValues,
+	type WidgetSectionScope
+} from "@serene-pub/sdk"
 	import ComponentMount from "$lib/client/components/host/ComponentMount.svelte"
 	import { UNPLACED, WIDGET_REQUESTS_KEY } from "$lib/shared/widgets/context"
 	import {

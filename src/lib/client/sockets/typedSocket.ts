@@ -160,6 +160,14 @@ export type SocketEventMap = {
 		params: Sockets.Users.UpdateDisplayName.Params
 		response: Sockets.Users.UpdateDisplayName.Response
 	}
+	"users:current:setTimeZone": {
+		params: Sockets.Users.SetTimeZone.Params
+		response: Sockets.Users.SetTimeZone.Response
+	}
+	"users:current:setTimeZone:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"users:current:changePassphrase": {
 		params: Sockets.Users.ChangePassphrase.Params
 		response: Sockets.Users.ChangePassphrase.Response
@@ -801,12 +809,17 @@ export type SocketEventMap = {
 		params: Sockets.Loadouts.MakeIt.Params
 		response: Sockets.Loadouts.MakeIt.Response
 	}
+	"loadouts:proposeFill": {
+		params: Sockets.Loadouts.ProposeFill.Params
+		response: Sockets.Loadouts.ProposeFill.Response
+	}
 	"loadouts:create:error": { params: Sockets.ErrorResponse; response: Sockets.ErrorResponse }
 	"loadouts:update:error": { params: Sockets.ErrorResponse; response: Sockets.ErrorResponse }
 	"loadouts:delete:error": { params: Sockets.ErrorResponse; response: Sockets.ErrorResponse }
 	"loadouts:setDefault:error": { params: Sockets.ErrorResponse; response: Sockets.ErrorResponse }
 	"loadouts:merge:error": { params: Sockets.ErrorResponse; response: Sockets.ErrorResponse }
 	"loadouts:makeIt:error": { params: Sockets.ErrorResponse; response: Sockets.ErrorResponse }
+	"loadouts:proposeFill:error": { params: Sockets.ErrorResponse; response: Sockets.ErrorResponse }
 	// The background remover's row in the Models view (local_models, modality matting).
 	"localModels:matting": {
 		params: Sockets.LocalModels.Matting.Params
@@ -1141,6 +1154,10 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.Pipelines.Params
 		response: Sockets.Sessions.Pipelines.Response
 	}
+	"sessions:setSessionPreset": {
+		params: Sockets.Sessions.SetSessionPreset.Params
+		response: Sockets.Sessions.SetSessionPreset.Response
+	}
 	"sessions:presetStatus": {
 		params: Sockets.Sessions.PresetStatus.Params
 		response: Sockets.Sessions.PresetStatus.Response
@@ -1159,6 +1176,14 @@ export type SocketEventMap = {
 	"sessions:annex": {
 		params: Sockets.Sessions.Annex.Params
 		response: Sockets.Sessions.Annex.Response
+	}
+	"sessions:setRulesetSettings": {
+		params: Sockets.Sessions.SetRulesetSettings.Params
+		response: Sockets.Sessions.SetRulesetSettings.Response
+	}
+	"sessions:setRulesetSettings:error": {
+		params: Sockets.Sessions.SetRulesetSettings.ErrorResponse
+		response: Sockets.Sessions.SetRulesetSettings.ErrorResponse
 	}
 	// The session data panel: the whole annex against its declarations,
 	// for the session's owner and administrators. Request-only.
@@ -1268,6 +1293,10 @@ export type SocketEventMap = {
 	"sessions:channelLanes": {
 		params: Sockets.Sessions.ChannelLanes.Params
 		response: Sockets.Sessions.ChannelLanes.Response
+	}
+	"sessions:laneRead": {
+		params: Sockets.Sessions.LaneRead.Params
+		response: Sockets.Sessions.LaneRead.Response
 	}
 	"sessions:surfaceIntent": {
 		params: Sockets.Sessions.SurfaceIntent.Push
@@ -1586,6 +1615,38 @@ export type SocketEventMap = {
 		response: Sockets.Sessions.Branch.Response
 	}
 	"sessions:branch:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"sessions:createLorebookFromPhantom": {
+		params: Sockets.Sessions.CreateLorebookFromPhantom.Params
+		response: Sockets.Sessions.CreateLorebookFromPhantom.Response
+	}
+	"sessions:createLorebookFromPhantom:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"sessions:revisionNotice": {
+		params: Sockets.Sessions.RevisionNotice.Params
+		response: Sockets.Sessions.RevisionNotice.Response
+	}
+	"sessions:revisionNotice:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"sessions:overlayItems": {
+		params: Sockets.Sessions.OverlayItems.Params
+		response: Sockets.Sessions.OverlayItems.Response
+	}
+	"sessions:overlayItems:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"sessions:applyOverlay": {
+		params: Sockets.Sessions.ApplyOverlay.Params
+		response: Sockets.Sessions.ApplyOverlay.Response
+	}
+	"sessions:applyOverlay:error": {
 		params: never
 		response: Sockets.ErrorResponse
 	}
@@ -3283,6 +3344,10 @@ export type SocketEventMap = {
 		params: Sockets.UserSettings.UpdateShowHomePageBanner.Params
 		response: Sockets.UserSettings.UpdateShowHomePageBanner.Response
 	}
+	"userSettings:updateStartFavourites": {
+		params: Sockets.UserSettings.UpdateStartFavourites.Params
+		response: Sockets.UserSettings.UpdateStartFavourites.Response
+	}
 	"userSettings:updateCharaVaultIncludeNsfw": {
 		params: Sockets.UserSettings.UpdateCharaVaultIncludeNsfw.Params
 		response: Sockets.UserSettings.UpdateCharaVaultIncludeNsfw.Response
@@ -4244,6 +4309,15 @@ export type SocketEventMap = {
 		params: Sockets.State.Set.ErrorResponse
 		response: Sockets.State.Set.ErrorResponse
 	}
+	// 🚧 A player seat's portrait (PLAN-sheet §12), the `set-owner-face` door.
+	"state:setOwnerFace": {
+		params: Sockets.State.SetOwnerFace.Params
+		response: Sockets.State.SetOwnerFace.Response
+	}
+	"state:setOwnerFace:error": {
+		params: never
+		response: Sockets.State.SetOwnerFace.Response
+	}
 	// 🚧 A lorebook's own stats, with no session (places-graph L4): a place's,
 	// set in the place editor before play. Both answer with the place's read.
 	"lorebookState:get": {
@@ -4364,6 +4438,15 @@ export type SocketEventMap = {
 	"state:proposals:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
+	}
+	// 🚧 Give to… (★4), the `give-piece` door.
+	"state:givePiece": {
+		params: Sockets.State.GivePiece.Params
+		response: Sockets.State.GivePiece.Response
+	}
+	"state:givePiece:error": {
+		params: never
+		response: Sockets.State.GivePiece.Response
 	}
 	"state:decide": {
 		params: Sockets.State.Decide.Params

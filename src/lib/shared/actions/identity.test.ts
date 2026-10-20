@@ -31,14 +31,14 @@ describe("actionIdentity", () => {
 	it("names core's verbs under `core`", () => {
 		expect(actionIdentity({ specSlug: "core", key: "edit" })).toBe("core#edit")
 		expect(isCoreActionIdentity("core#edit")).toBe(true)
-		expect(isCoreActionIdentity("core:spec/chat-narrate#narrate")).toBe(false)
+		expect(isCoreActionIdentity("core:spec/story-narrate#narrate")).toBe(false)
 	})
 })
 
 describe("parseActionIdentity", () => {
 	it("takes a well-formed identity apart at its last '#'", () => {
-		expect(parseActionIdentity("core:spec/chat-narrate#narrate")).toEqual({
-			specSlug: "core:spec/chat-narrate",
+		expect(parseActionIdentity("core:spec/story-narrate#narrate")).toEqual({
+			specSlug: "core:spec/story-narrate",
 			key: "narrate"
 		})
 		expect(parseActionIdentity("acme:spec/roll#roll-again")).toEqual({
@@ -53,11 +53,11 @@ describe("parseActionIdentity", () => {
 			"",
 			"narrate",
 			"#narrate",
-			"core:spec/chat-narrate#",
+			"core:spec/story-narrate#",
 			"Core:spec/narrate#narrate",
-			"core:spec/chat-narrate#Narrate",
-			"core:spec/chat-narrate#nar rate",
-			"core:spec/chat-narrate#nar#rate",
+			"core:spec/story-narrate#Narrate",
+			"core:spec/story-narrate#nar rate",
+			"core:spec/story-narrate#nar#rate",
 			"<script>#x",
 			`${"a".repeat(ACTION_IDENTITY_MAX_LENGTH)}#k`,
 			42,

@@ -529,7 +529,7 @@ describe("R2 · each refusal is a sentence", () => {
 	})
 
 	test("a genre that does not offer retake refuses it by name", async () => {
-		const w = await session({}, "core:genre/chat")
+		const w = await session({}, "core:genre/story")
 		const { res } = await retake(w, "chat")
 		expect(res.ok).toBe(false)
 		expect(res.error).toMatch(/does not offer Regenerate/)
@@ -684,6 +684,27 @@ describe("R2 · what somebody else wrote against the turn survives a retake", ()
 		expect(((await stateNow(w.session.id)).world as any).direction).toBe(
 			"Go north."
 		)
+	})
+
+	test("🚧 what the turn's run filed under the person's own line goes with it too (the 100-turn walk, B8)", async () => {
+		const w = await session({ trustNarrator: true })
+		await turn(w, "the turn that files under the line")
+		const turnIds = (await turnRows(w.session.id)).map((r) => r.id)
+		const schema = await import("$lib/server/db/schema")
+		const [run] = await testDb
+			.select({ runId: schema.pipelineRuns.runId })
+			.from(schema.pipelineRuns)
+			.where(and(eq(schema.pipelineRuns.sessionId, w.session.id), eq(schema.pipelineRuns.specSlug, "core:spec/lair-respond")))
+		const keeper = (await anchoredTo(turnIds)).values.filter((v) => v.updatedBy === `run:${run!.runId}`)
+		expect(keeper.length).toBeGreaterThan(0)
+		// A seated card's change keeps that member's own open anchor — the
+		// line its player sent, which is no row of the turn's.
+		await testDb
+			.update(schema.attributeValues)
+			.set({ validFromMessageId: w.line })
+			.where(eq(schema.attributeValues.id, keeper[0]!.id))
+		await retake(w, "the retake of the turn that filed under the line")
+		expect(await valueRows([keeper[0]!.id])).toEqual([])
 	})
 
 	test("a proposal the person applied after the turn: the value survives on a valid anchor, the proposal goes", async () => {

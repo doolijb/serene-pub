@@ -61,7 +61,11 @@ import {
 } from "$lib/server/utils/characterBindingSync"
 import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
 import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
-import { entryDeclaration } from "$lib/server/entries/declarations"
+import {
+	entryDeclaration,
+	entryDeclarations,
+	isDeclaredEntryType
+} from "$lib/server/entries/declarations"
 // Imported, never copied: session access is owner-OR-guest and every handler
 // that decided that for itself got it wrong in one direction or the other.
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
@@ -101,7 +105,6 @@ import {
 } from "$lib/server/state/lineSql"
 import {
 	DEFAULT_VECTOR_NAME,
-	ENTRY_TYPE_IDS,
 	HISTORY_TYPE_ID,
 	assertDeclaredFields,
 	amendmentPatternLayers,
@@ -109,7 +112,6 @@ import {
 	touchesPatterns,
 	entryInsert,
 	inBookOfType,
-	isEntryTypeId,
 	loadDefaultVectors,
 	mergeFields,
 	nextPosition,
@@ -141,10 +143,12 @@ import {
  * what was actually wrong.
  */
 function assertTypeId(typeId: unknown): EntryTypeId {
-	if (!isEntryTypeId(typeId))
+	// Declared, not merely well-formed: a derived entry type exists only
+	// while its ruleset is registered.
+	if (!isDeclaredEntryType(typeId))
 		throw new Error(
 			`Unknown entry type '${String(typeId)}'. The declared types are ` +
-				`${ENTRY_TYPE_IDS.join(", ")}.`
+				`${entryDeclarations().map((d) => d.typeId).join(", ")}.`
 		)
 	return typeId
 }
@@ -554,7 +558,7 @@ export const createEntryHandler: Handler<
 		)
 		// Declared fields are typed; a wrong-typed value is refused here,
 		// never stored in jsonb where no column type could refuse it.
-		assertDeclaredFields(typeId, data)
+		assertDeclaredFields(typeId, data, { whole: true })
 		// A regex key that could take unbounded time to match is refused
 		// before it can run on anyone's turn (plan S3).
 		assertNoRunawayPatterns(data as any, null)
@@ -1572,7 +1576,7 @@ export const entryCountsHandler: Handler<
 		// reader learns a count has not arrived, and it must not also be how
 		// they learn there is nothing there.
 		const counts: Record<string, number> = {}
-		for (const typeId of ENTRY_TYPE_IDS) counts[typeId] = 0
+		for (const { typeId } of entryDeclarations()) counts[typeId] = 0
 		counts[SCENE_KIND] = 0
 		counts[CAST_KIND] = 0
 

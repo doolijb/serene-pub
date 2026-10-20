@@ -122,10 +122,10 @@ describe("make-choices: who the addressee names", () => {
 	})
 
 	it("the options fire the function, keyed and labelled, with the named identity when one is wired", async () => {
-		const out = await blockFor("Tom", { action: "core:spec/adventure-answer#answer" })
+		const out = await blockFor("Tom", { action: "core:spec/story-answer#answer" })
 		expect(out.blocks[0].actions).toEqual([
-			{ fn: "answer", action: "core:spec/adventure-answer#answer", label: "Yes", choice: "yes" },
-			{ fn: "answer", action: "core:spec/adventure-answer#answer", label: "No", choice: "no" }
+			{ fn: "answer", action: "core:spec/story-answer#answer", label: "Yes", choice: "yes" },
+			{ fn: "answer", action: "core:spec/story-answer#answer", label: "No", choice: "no" }
 		])
 	})
 })

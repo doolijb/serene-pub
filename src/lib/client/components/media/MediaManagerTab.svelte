@@ -14,6 +14,7 @@
 	fullscreen panel.
 -->
 <script lang="ts">
+	import { realDate, realDateTime } from "$lib/client/utils/realTime.svelte"
 	import { getContext } from "svelte"
 	import { SvelteMap } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
@@ -163,7 +164,7 @@
 		const d = new Date(iso)
 		if (Number.isNaN(d.getTime())) return ""
 		const sameYear = d.getFullYear() === new Date().getFullYear()
-		return d.toLocaleDateString(undefined, {
+		return realDate(d, {
 			day: "numeric",
 			month: "short",
 			...(sameYear ? {} : { year: "numeric" })
@@ -174,7 +175,7 @@
 	function fullDate(iso: string): string {
 		const d = new Date(iso)
 		if (Number.isNaN(d.getTime())) return ""
-		return d.toLocaleString(undefined, {
+		return realDateTime(d, {
 			dateStyle: "medium",
 			timeStyle: "short"
 		})

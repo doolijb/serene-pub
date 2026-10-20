@@ -272,3 +272,59 @@ describe("a person's own line, in a genre that declares a playerLabel", () => {
 		expect(out.messages[1].name).not.toBe("Dungeon Master")
 	})
 })
+
+describe("🚧 a person's line with two seats (2026-10-16)", () => {
+	// Ann's seat is card-less; Bo's arrived later, also card-less.
+	const cast = {
+		sessionPersonas: [
+			{ persona: null, seatId: 11, seatName: "Ann", seatUserId: 1 },
+			{ persona: null, seatId: 12, seatName: "Bo", seatUserId: 2 }
+		]
+	}
+	const run = (messages: any[]) =>
+		processMessages({ ...base, personaName: "Ann and Bo", cast, seed: false, messages })
+
+	it("labels each line with its own seat, never the joined list", () => {
+		const out = run([
+			{ id: 1, role: "user", userId: 1, metadata: { speaker: "player-seat:11" }, content: "I look around. {{user}}" },
+			{ id: 2, role: "user", userId: 2, metadata: { speaker: "player-seat:12" }, content: "I cover Ann with my bow." }
+		])
+		expect(out.messages.map((m) => m.name)).toEqual(["Ann", "Bo"])
+		expect(out.messages[0].message).toBe("I look around. Ann")
+	})
+
+	it("names an unstamped line by its sender's one seat", () => {
+		const out = run([{ id: 1, role: "user", userId: 2, content: "Hi!" }])
+		expect(out.messages[0].name).toBe("Bo")
+	})
+
+	it("🚧 one seat: another person's line is never named by it — a guest before their seat (the 100-turn walk, B2)", () => {
+		const out = processMessages({
+			...base,
+			personaName: "Wren",
+			cast: {
+				sessionPersonas: [{ persona: { id: 4, name: "Wren", userId: 1 }, seatId: 11, seatName: null, seatUserId: 1 }],
+				memberNames: { 9: "Rook" }
+			},
+			seed: false,
+			messages: [
+				{ id: 1, role: "user", userId: 9, content: "Hi! How do I join in, {{user}}?" },
+				{ id: 2, role: "user", userId: 1, content: "Welcome." }
+			]
+		})
+		expect(out.messages.map((m) => m.name)).toEqual(["Rook", "Wren"])
+		expect(out.messages[0].message).toBe("Hi! How do I join in, Rook?")
+	})
+
+	it("falls to the member rule, not the join, when no seat is the sender's", () => {
+		const out = processMessages({
+			...base,
+			personaName: "Ann and Bo",
+			cast: { ...cast, memberNames: { 9: "Morgan" } },
+			seed: false,
+			messages: [{ id: 1, role: "user", userId: 9, content: "Hello {{user}}" }]
+		})
+		expect(out.messages[0].name).toBe("Morgan")
+		expect(out.messages[0].message).toBe("Hello Morgan")
+	})
+})

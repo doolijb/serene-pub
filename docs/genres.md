@@ -9,32 +9,36 @@ A genre is the kind of session you're playing: it decides who takes part, what h
 
 ## The basics
 
-You pick a genre on the start screen, and it stays with the session for its whole life. Serene Pub comes with four:
+You pick a genre on the start screen, and it stays with the session for its whole life. Each card says in two lines what the genre is; press **More** on a card to read who is in the room, who drives, what a turn costs and when to pick a sibling instead. Serene Pub comes with five:
 
 | Genre | What it is | Needs | Model calls per turn |
 | --- | --- | --- | --- |
-| **Chat** | Talk with one or more characters. The default. | A character to talk to. A lorebook if you like. | One per reply |
-| **[Adventure](./genre-adventure.md)** | A narrated world: a narrator describes each scene, your cast speak for themselves, and stats and items change as you play. | A lorebook, at least one character and a persona. | Several |
+| **[Chat](#chat)** | The model as itself: a plain assistant, no characters, no story. Give it tools to search the web, read your lorebooks and make images. | Nothing. | One, plus the tool calls it asks for |
+| **[Story](./genre-story.md)** | Your characters and personas in the room with you, from a quiet conversation to a living world. The everyday genre, and the default. | Nothing on **Minimal**. Characters, a lorebook and rules if you like. | One, two or two plus a sweep, by preset |
 | **[The Lair](./genre-lair.md)** | You are the dungeon. An AI party explores the rooms you build. | A lorebook and at least one character (the party). | Several |
-| **Guide** | Ask questions about Serene Pub itself. | Nothing. | One |
+| **[Dungeon Crawler](./genre-dungeon-crawler.md)** | The AI is the whole Dungeon Master. Make a character and play your part in a world it generates, alone or with friends. | Nothing. A persona and companions if you like. | Several |
+| **[Guide](#guide)** | Ask questions about Serene Pub itself. | Nothing. | One |
 
 More genres come from [plugins](#genres-from-plugins).
 
-Alongside a genre you pick a **preset**: a bundle an administrator has set up for that genre, which decides exactly what runs on each turn and which actions come along. Most installs have one preset per genre, picked for you.
+Alongside a genre you pick a **preset**: a starting recipe for that genre, which decides what runs on each turn and which actions come along. Only Story and Chat show a choice; the other genres have one preset, picked for you. Star a genre on its card to make it your usual start, and star a preset to have it chosen for you; see [Start a session](./sessions.md#start-a-session).
 
 ## Chat
 
-Chat is the genre a new install starts you in, and it's the frugal one: one call to the model per reply, no setup beyond a character and a persona, and a lorebook only if you want one. Nothing elaborate runs on its own. Anything multi-step is a button you press.
+Chat is the model as itself: a plain assistant with no characters, no persona and no story. You write, it answers. It has two presets:
 
-- **Who speaks.** With one character, they reply to every message you send. With several, the turn order decides; see [Group sessions](./group-sessions.md).
-- **Actions.** **Narrate** (have a narrator describe what happens next), **Side character** (someone you name speaks a line, whether or not they're in the cast) and **Image** (generate a picture, when an image model is set up). See [Narrator Response](./group-sessions.md#narrator-response).
-- **Settings.** **Auto-advance**, **Who speaks next is decided by** and **Character detail**, all explained in [Group sessions](./group-sessions.md), and the **Author's note**, explained in [Sessions](./sessions.md#authors-note).
+- **Basic**: the raw model, one call per turn, no tools. Works with any model.
+- **Agentic**: the model may call **tools** mid-reply: search the web and read a page, search and read your lorebooks, **write to a lorebook** (file an entry, keep or take back a note), **make a picture** (posted in the conversation, when an image model is set up), read the clock, do arithmetic, look back through this session. Each tool call is one more model call, up to a few per turn, and every call shows as a line in the session. Pick which tools are on under **Edit session › Settings › Tools**.
 
-The one way to make Chat spend more than one call a reply is to let **the model** decide who speaks next, which adds one call per turn.
+Attach a lorebook and Chat reads it (**Read the lorebook** under **What happens around a reply**; Off, nothing from it reaches the reply). Turn on **Remember things** and every few turns Chat notes what you told it, and on Agentic it can keep and take back notes when you ask. The notes go into the lorebook you attached when it is yours and its lorebook writes are **Full** (your living memory bank), otherwise into this session's own notes, made the first time. **Full** files them at once; **Review** holds each note for you (a tool's note waits in the session's own notes for you to add to your lorebook). Chat is yours alone: it can't be shared with guests.
+
+## Story
+
+Story is the genre for playing with characters, and the one a new install starts you in: see [Story](./genre-story.md). What used to be the **Chat** genre is Story's **Minimal** preset; sessions from earlier versions moved there by themselves.
 
 ## Guide
 
-Guide is a question-and-answer session about the app itself. There are no characters and no story: you ask, and **Serene**, Serene Pub's mascot, answers from this documentation. She is calm and warm, and she isn't a character: you won't find her in the Characters view, and she never roleplays. You may write as yourself or as one persona.
+Guide is a question-and-answer session about the app itself. There are no characters and no story: you ask, and **Serene**, Serene Pub's mascot, answers from this documentation. The Guide is yours alone: it has no guests, because its tools reach into the app. She is calm and warm, and she isn't a character: you won't find her in the Characters view, and she never roleplays. You may write as yourself or as one persona.
 
 Start one by picking the **Guide** genre on the start screen, or **Talk to an AI** in the setup wizard, which starts one called *Welcome to Serene Pub*. Every new Guide session opens with Serene's greeting: *Hi, I'm Serene, your guide to Serene Pub. What would you like to talk about? How can I help you?*
 
@@ -52,7 +56,7 @@ Every genre beyond the four above comes from a plugin. Once an administrator has
 
 ## Making a genre of your own
 
-**Admin › Session genres › Add genre** makes a genre in the app. You pick an owner slug once (`acme.lab`): every id the genre and its pipelines get lives under it, and it never changes. Then a name, a label, and what to start from: a copy of Chat, Adventure, Guide or the Lair, either everything that genre runs or just its create pipeline. The copy publishes the pipelines under your slug with the genre rewritten, makes a default preset that binds them, carries the genre's layout across, and the genre is playable at once.
+**Admin › Session genres › Add genre** makes a genre in the app. You pick an owner slug once (`acme.lab`): every id the genre and its pipelines get lives under it, and it never changes. Then a name, a label, and what to start from: a copy of Chat, Story, Guide or the Lair, either everything that genre runs or just its create pipeline. The copy publishes the pipelines under your slug with the genre rewritten, makes a default preset that binds them, carries the genre's layout across, and the genre is playable at once.
 
 The genre's page then shows a **readiness** list in the order that works: name, session fields, create pipeline, reply pipeline, default preset, state, layout, other events, export. Gold until set, green when done; only the next line carries a button. The same page edits the genre's name and family, its **session fields** (what a session asks for when it starts, with a live preview of the form), and **events**: which pipeline answers each, written to the default preset. Pipelines themselves are edited on their own pages' Canvas tab.
 
@@ -83,5 +87,5 @@ An envoy's words are its pipeline's settings: the **System prompt** and **Post-h
 
 - [Sessions](./sessions.md): starting and playing any session.
 - [Group sessions](./group-sessions.md): turn order in Chat.
-- [Adventure](./genre-adventure.md) and [The Lair](./genre-lair.md): the two narrated genres.
+- [Story](./genre-story.md), [The Lair](./genre-lair.md) and [Dungeon Crawler](./genre-dungeon-crawler.md): the genres with a world in them.
 - [Pipelines](./pipelines.md): what a preset binds, for administrators.

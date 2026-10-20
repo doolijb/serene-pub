@@ -1,7 +1,10 @@
 /**
- * Free placement's two OPEN owner questions (layout plan M.7, QE and QF),
- * answered with the plan's RECOMMENDED defaults and kept here, together, so
- * either flips in one line. Brief 7a, 2026-09-29.
+ * Free placement's OPEN owner question QE (layout plan M.7), answered with
+ * the plan's RECOMMENDED default and kept here so it flips in one line.
+ * Brief 7a, 2026-09-29. (QF, an empty middle, is settled: the middle is never
+ * empty — `arrangeOps.MIDDLE_EMPTY`. The primary is a place any panel can be
+ * moved into, and nothing locks the conversation in it — PLAN-session-panels
+ * 2026-10-14 §10.)
  *
  * ⚠ Provisional until the owner rules. Flip a constant below and the page
  * follows; the tests in ./placementRules.test.ts say which way each is set.
@@ -13,22 +16,13 @@
  * the panels menu ("Middle"), and the log's own side does not list it.
  * (2) *Literal:* both draw the middle, and a conversation placed in a side is
  * reached through the panels menu — Stage only hides it with the sides.
- *
- * **QF — may the middle be left empty?** Recommended (1): *no — Done refuses*
- * with {@link EMPTY_MIDDLE_REFUSAL}, on the phone editor too. (2) would draw
- * blank space between the rails; (3), a collapsing middle, is a larger change
- * than this plan and is not offered here.
  */
 import { primaryLogOf } from "./channelClaims"
 
 /** QE: `true` = (1) the conversation is the stage; `false` = (2) literal. */
 export const STAGE_FOLLOWS_CONVERSATION = true
 
-/** QF: `true` = (1) Done refuses an empty middle; `false` = (2) it may stay empty. */
-export const REFUSE_EMPTY_MIDDLE = true
 
-/** QF (1)'s refusal, word for word from the plan. */
-export const EMPTY_MIDDLE_REFUSAL = "Put a widget in the middle, or move one back."
 
 export type StageZone = "left" | "middle" | "right"
 
@@ -57,13 +51,27 @@ export interface StageInput {
  * unclaimed instance of the primary in reading order, else the first
  * instance), in whichever zone holds it. Under (2) it is that log only when
  * the middle holds it; a log in a side is not the stage.
+ *
+ * With NO conversation placed (R-B, owner review 2026-10-14 — a layout may
+ * hold none) the stage is the primary panel, whatever it holds (`middle` is
+ * its tabs); with nothing in the middle either, the first panel drawn in a
+ * side — so the phone and Stage only never draw an empty page.
  */
 export function stageOf(o: StageInput): StagePick | null {
-	if (!STAGE_FOLLOWS_CONVERSATION) {
-		const id = primaryLogOf(o.middle, o.claims, o.primaryId)
-		return id ? { id, zone: "middle" } : null
-	}
-	return primaryLogPick(o)
+	const log = STAGE_FOLLOWS_CONVERSATION
+		? primaryLogPick(o)
+		: (() => {
+				const id = primaryLogOf(o.middle, o.claims, o.primaryId)
+				return id ? { id, zone: "middle" as const } : null
+			})()
+	if (log) return log
+	// A conversation placed in a side is still the log under (2): it is not
+	// the stage, and the middle is drawn as it is.
+	if (!STAGE_FOLLOWS_CONVERSATION && primaryLogPick(o)) return null
+	if (o.middle[0]) return { id: o.middle[0], zone: "middle" }
+	if (o.left[0]) return { id: o.left[0], zone: "left" }
+	if (o.right[0]) return { id: o.right[0], zone: "right" }
+	return null
 }
 
 /**
@@ -83,12 +91,3 @@ export function primaryLogPick(o: StageInput): StagePick | null {
 	return { id, zone }
 }
 
-/**
- * QF: what Done says when the middle it would commit places nothing, or null
- * when Done may go ahead. `middle` is the middle's membership as Done would
- * commit it (the arrangement's middle frame, else the grid's middle).
- */
-export function emptyMiddleRefusal(middle: readonly string[]): string | null {
-	if (!REFUSE_EMPTY_MIDDLE) return null
-	return middle.length ? null : EMPTY_MIDDLE_REFUSAL
-}

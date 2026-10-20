@@ -12,6 +12,7 @@
  * proposal: it names both, and the preset wins. See `sessionsCreateHandler`.
  */
 import type { StoredSwapContribution } from "$lib/shared/swaps"
+import { howStrictChoices, rigourFor } from "$lib/shared/rulesets/rulesOffer"
 import {
 	INITIAL_PRESET_FILLABLE_FIELDS,
 	resolvePresetFill,
@@ -25,7 +26,8 @@ import {
  * returns nothing — a registry that never synced — the flow behaves as a
  * single-genre install, which is the standard genre alone.
  */
-export const STANDARD_GENRE_ID = "core:genre/chat"
+/** The genre a session with none is read as — **Story** since 2026-10-19 (was Chat, which is the assistant now). */
+export const STANDARD_GENRE_ID = "core:genre/story"
 
 /**
  * The Guide genre — one envoy answering about the app, no characters. Stated
@@ -33,6 +35,13 @@ export const STANDARD_GENRE_ID = "core:genre/chat"
  * catalogue. The home wizard's "Talk to an AI" starts one.
  */
 export const GUIDE_GENRE_ID = "core:genre/guide"
+
+/**
+ * 🚧 The game the home wizard's **Play a game** opens (2026-10-18, the
+ * 100-turn walk #31: nothing on the wizard named a game). Stated here as the
+ * Guide's is: the client reads no SDK catalogue.
+ */
+export const GAME_GENRE_ID = "core:genre/dungeon-crawler"
 
 export type GenreRow = Sockets.Sessions.Genres.Response["genres"][number]
 export type GenreShape = GenreRow["shape"]
@@ -122,12 +131,26 @@ export function participantFloors(
 	shape: GenreShape | null | undefined,
 	genreId: string | null
 ): { characters: number; personas: number } {
-	if (!shape || genreId === STANDARD_GENRE_ID || !genreId)
-		return { characters: 1, personas: 1 }
+	// No special case for the standard genre any more (2026-10-19): Story's
+	// Minimal preset starts with nobody, so the shape alone decides.
+	if (!shape || !genreId) return { characters: 1, personas: 1 }
 	return {
 		characters: shape.characters?.min ?? 0,
 		personas: shape.personas?.min ?? 0
 	}
+}
+
+/**
+ * Does the new-session form start with the person's default persona chosen?
+ * Ruled 2026-10-19: nothing inserts a default persona on create any more —
+ * a person is a seat with no card unless they pick one. Only a genre that
+ * says `preselectDefault: true` outright gets the old behaviour.
+ */
+export function preselectsDefaultPersona(
+	shape: GenreShape | null | undefined
+): boolean {
+	if (!shape?.personas || shape.personas.max === 0) return false
+	return shape.personas.preselectDefault === true
 }
 
 /**
@@ -438,6 +461,10 @@ export interface CreateSessionInput {
 	/** Swaps to seat the session with (R40); absent or empty inherits every pin. */
 	swaps?: StoredSwapContribution[]
 	lorebookId?: number | null
+	/** 🚧 Rules (PLAN-rulesets §4): absent or null, the server's default (W4-A). */
+	primaryRuleset?: string | null
+	/** 🚧 How strict (§21): absent or null, the genre's default. */
+	rigour?: string | null
 }
 
 /** The name of the Guide session the setup wizard starts. */
@@ -487,7 +514,9 @@ export function buildCreatePayload(
 			// disagrees with it loses, and a null here is the preset-less
 			// create the handler still tolerates for programmatic callers.
 			presetId: input.presetId,
-			genreFields: input.genreFields ?? {}
+			genreFields: input.genreFields ?? {},
+			...(input.primaryRuleset ? { primaryRuleset: input.primaryRuleset } : {}),
+			...(input.rigour ? { rigour: input.rigour } : {})
 		} as Sockets.Sessions.Create.Params["session"],
 		characterIds,
 		personaIds: [...input.personaIds],
@@ -552,11 +581,55 @@ export class StartSessionFlow {
 	characterIds = $state<number[]>([])
 	personaIds = $state<number[]>([])
 
+	/** 🚧 The person's Rules pick; null takes the genre's default. */
+	rulesPick = $state<string | null>(null)
+	/** 🚧 The person's How strict pick; null takes the genre's default. */
+	rigourPick = $state<string | null>(null)
+
 	genres = $derived(latestGenres(this.rawGenres))
 	genre = $derived(
 		this.genres.find((g) => g.genreId === this.genreId) ?? null
 	)
 	shape = $derived(this.genre?.shape ?? null)
+	/** 🚧 The genre's Rules / How strict offer; null when it offers no choice (Chat). */
+	rulesOffer = $derived(this.genre?.rules ?? null)
+	/**
+	 * 🚧 How strict as it stands: the person's pick among the options the
+	 * chosen rules play, else the genre's default — and with rules that roll
+	 * no dice (Story), Words only (`rigourFor`, 2026-10-18).
+	 */
+	/**
+	 * The How strict a preset pins (Story's Rule Based pins Rules and dice,
+	 * 2026-10-19), the default under the person's own pick.
+	 */
+	presetRigour = $derived.by(() => {
+		const r = (this.preset?.settings as Record<string, unknown> | null | undefined)?.rigour
+		return typeof r === "string" ? r : null
+	})
+	/**
+	 * The rules the form starts on: the genre's default — unless the preset
+	 * pins a How strict that ruleset cannot play (Rule Based over Freeform),
+	 * when the first choice that plays it, recommended first.
+	 */
+	rulesDefault = $derived.by(() => {
+		const offer = this.rulesOffer
+		if (!offer) return null
+		const want = this.presetRigour
+		const plays = (id: string) => howStrictChoices(offer, id).some((o) => o.id === want)
+		if (!want || plays(offer.defaultId)) return offer.defaultId
+		return offer.choices.find((c) => c.fit?.rating !== "incompatible" && plays(c.id))?.id ?? offer.defaultId
+	})
+	/** The rules as they stand: the person's pick, else `rulesDefault`. */
+	rulesNowId = $derived(
+		this.rulesOffer && this.rulesPick && this.rulesOffer.choices.some((c) => c.id === this.rulesPick)
+			? this.rulesPick
+			: this.rulesDefault
+	)
+	rigour = $derived(
+		this.rulesOffer
+			? rigourFor(this.rulesOffer, this.rulesNowId, this.rigourPick ?? this.presetRigour)
+			: null
+	)
 	presetsForGenre = $derived(enabledPresetsFor(this.rawPresets, this.genreId))
 	preset = $derived(
 		this.presetsForGenre.find((p) => p.id === this.presetId) ?? null
@@ -591,6 +664,10 @@ export class StartSessionFlow {
 	chooseGenre(id: string) {
 		if (this.genreId === id) return
 		this.genreId = id
+		// Rules and How strict are the genre's to offer: a new genre starts
+		// from its own defaults.
+		this.rulesPick = null
+		this.rigourPick = null
 		// A preset belongs to one genre, so the answer below it reopens.
 		this.presetId = null
 		this.appliedPresetId = null
@@ -702,7 +779,10 @@ export class StartSessionFlow {
 			tags: this.fields.tags,
 			genreFields: this.fields.genreFields,
 			swaps: this.fields.swaps,
-			lorebookId: this.fields.lorebookId
+			lorebookId: this.fields.lorebookId,
+			// A lorebook's rules are adopted server-side whatever is sent.
+			primaryRuleset: this.rulesOffer && this.fields.lorebookId == null ? this.rulesNowId : null,
+			rigour: this.rigour
 		})
 	}
 }

@@ -41,7 +41,7 @@ const stored: SelectSessionMessage = {
 	channel: "main",
 	isNarratorResponse: false,
 	content: "The door creaks open.",
-	createdAt: "2026-09-25",
+	createdAt: new Date("2026-09-25T18:04:11.201Z"),
 	updatedAt: new Date("2026-09-25T18:04:11.201Z"),
 	isEdited: false,
 	metadata: {

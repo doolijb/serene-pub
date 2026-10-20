@@ -116,6 +116,7 @@ import {
 import {
 	loadFormBlock,
 	markFormAnswered,
+	formAnswerText,
 	clearFormAnswered,
 	openFormOf,
 	recordFormSuperseded,
@@ -183,7 +184,12 @@ export interface FireActionRequest {
 	portrayals?: Portrayals
 	/** A parent's stop reaches this run through its own handle; see `runSpec`. */
 	parentSignal?: AbortSignal
-	onStarted?: (run: { runId: string; specId: string }) => void
+	/**
+	 * `channel`: what the run is about, where the press says it — the
+	 * subject row's channel, else the one channel every venue of the
+	 * declaration names; absent otherwise (the progress card's scope).
+	 */
+	onStarted?: (run: { runId: string; specId: string; channel?: string }) => void
 	onProgress?: (event: RunProgress & { runId: string; specId: string }) => void
 	onStatus?: (nodeKey: string, status: StatusText, run: { runId: string; specId: string }) => void
 	/**
@@ -826,7 +832,13 @@ export async function fireAction(
 		return { kind: "stopped", by: "system:parent-stopped", reason: PARENT_STOPPED, runId, specId }
 	}
 	req.parentSignal?.addEventListener("abort", onParentAbort, { once: true })
-	req.onStarted?.({ runId, specId })
+	const venueChannels = new Set(
+		(chosen.venues ?? []).map((v: { channel?: string }) => v.channel ?? null)
+	)
+	const runChannel =
+		subjectChannel ??
+		(venueChannels.size === 1 ? ([...venueChannels][0] ?? undefined) : undefined)
+	req.onStarted?.({ runId, specId, ...(runChannel ? { channel: runChannel } : {}) })
 
 	/**
 	 * The park signal (R-b): settled the moment THIS run's gate parks. A
@@ -939,7 +951,11 @@ export async function fireAction(
 					...(payload && typeof payload === "object" ? { payload } : {}),
 					...(form ? { form } : {}),
 					sessionScope: { sessionId: req.sessionId, currentCharacterId: null },
-					fields: await genreFieldsFor(db, req.sessionId)
+					fields: await genreFieldsFor(db, req.sessionId),
+					// 🚧 The ruleset the session plays (PLAN-sheet §15 C), as a
+					// turn supplies it — an action's run branches on it too (the
+					// Dungeon Crawler's sheet writes a kit by its casting rule).
+					ruleset: await (await import("$lib/server/pipelines/runtime/runTurn")).sessionRulesetInput(db, req.sessionId)
 				}
 			})
 		} catch (e) {
@@ -1003,10 +1019,14 @@ export async function fireAction(
 			// Answered once (W7): the stored block says so from here on — a
 			// second press is refused above, and the row goes out with its parts
 			// so every client greys the block without a reload.
-			const answered: FormAnswered = {
+			const value = form.kind === "form" ? formAnswerText(payload) : null
+			const answered: FormAnswered & { value?: string } = {
 				by: answeredBy,
 				at: new Date().toISOString(),
-				...(form.choice !== undefined ? { choice: form.choice } : {})
+				...(form.choice !== undefined ? { choice: form.choice } : {}),
+				// 🚧 A text form's answer, as words (round 2, 2026-10-15):
+				// "Answered · Ann", as a choice reads "Answered · Ranger".
+				...(value ? { value } : {})
 			}
 			await markFormAnswered(db, form.messageId, form.blockId, answered)
 			if (req.io) await announceAnswered(db, req.io, form.messageId)

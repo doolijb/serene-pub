@@ -36,7 +36,9 @@ beforeAll(async () => {
 
 afterAll(() => {})
 
-const ADVENTURE = "core:genre/adventure"
+// The Lair: its default layout brings widget settings, which the copy carries
+// (Adventure's did, until it was retired 2026-10-19).
+const LAIR = "core:genre/lair"
 
 function fakeSocket(userId: number) {
 	return { user: { id: userId }, io: { to: () => ({ emit: () => {} }) } } as any
@@ -46,7 +48,7 @@ const handlers = () => import("./sessions")
 
 let n = 0
 
-async function scenario(genreId = ADVENTURE) {
+async function scenario(genreId = LAIR) {
 	const k = n++
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	const owner = await createTestUser(testDb, `lc-owner-${k}`)
@@ -62,7 +64,7 @@ async function scenario(genreId = ADVENTURE) {
 }
 
 /** Seed a core genre's layouts exactly as boot does; the genre default row. */
-async function seed(genreId = ADVENTURE) {
+async function seed(genreId = LAIR) {
 	const { syncLayoutPresets } = await import("$lib/server/db/layoutPresets")
 	await syncLayoutPresets([genreId])
 	const [row] = await testDb
@@ -75,7 +77,7 @@ async function seed(genreId = ADVENTURE) {
 /** The arrangement half of a layout blob: what a session row holds. */
 function arrangementOf(layout: Record<string, unknown>) {
 	const out: Record<string, unknown> = {}
-	for (const k of ["zoneLayout", "widgetGrid", "arrangedGrid"])
+	for (const k of ["panels", "zoneLayout", "widgetGrid", "arrangedGrid"])
 		if (layout[k] !== undefined) out[k] = layout[k]
 	return out
 }
@@ -116,7 +118,7 @@ async function namedLayout(
 	userId: number,
 	name: string,
 	layout: Record<string, unknown>,
-	genreId = ADVENTURE
+	genreId = LAIR
 ) {
 	const { saveUserLayoutPreset } = await import("$lib/server/db/layoutPresets")
 	return saveUserLayoutPreset({ genreId, userId, name, layout })
@@ -141,7 +143,7 @@ const rowOf = async (sessionId: number, userId: number) => {
 	return row
 }
 
-/** A two-column arrangement that differs from Adventure's in every slot. */
+/** A two-column arrangement that differs from the Lair's in every slot. */
 const TWO_COLUMNS = {
 	zoneLayout: {
 		version: 1,
@@ -211,7 +213,7 @@ describe("the first open copies a starting point into the person's own row", () 
 			)
 			await setUserLayoutDefault({
 				userId: s.owner.id,
-				genreId: ADVENTURE,
+				genreId: LAIR,
 				presetId: mine.id
 			})
 			const res = await get(s.owner.id, s.session.id)
@@ -236,7 +238,7 @@ describe("the first open copies a starting point into the person's own row", () 
 			)
 			await setUserLayoutDefault({
 				userId: s.owner.id,
-				genreId: ADVENTURE,
+				genreId: LAIR,
 				presetId: mine.id
 			})
 			await testDb
@@ -422,7 +424,7 @@ describe("sessions:panelLayout:startFrom", () => {
 			})
 			const [elsewhere] = await testDb
 				.insert(schema.sessions)
-				.values({ userId: s.owner.id, isGroup: false, genreId: ADVENTURE })
+				.values({ userId: s.owner.id, isGroup: false, genreId: LAIR })
 				.returning()
 			await get(s.owner.id, elsewhere.id)
 			await set(s.owner.id, elsewhere.id, {
@@ -472,7 +474,7 @@ describe("sessions:panelLayout:startFrom", () => {
 		"a shared layout may be started from; a withdrawn, another genre's or a stranger's private one is refused and nothing moves",
 		async () => {
 			await seed()
-			await seed("core:genre/chat")
+			await seed("core:genre/story")
 			const s = await scenario()
 			await get(s.owner.id, s.session.id)
 			const before = await rowOf(s.session.id, s.owner.id)
@@ -492,14 +494,14 @@ describe("sessions:panelLayout:startFrom", () => {
 				.where(
 					eq(
 						schema.sessionLayoutPresets.seedKey,
-						layoutPresetSeedKey("core:genre/chat")
+						layoutPresetSeedKey("core:genre/story")
 					)
 				)
 			const [withdrawn] = await testDb
 				.insert(schema.sessionLayoutPresets)
 				.values({
-					seedKey: `layout:${ADVENTURE}:gone.plugin/wide`,
-					genreId: ADVENTURE,
+					seedKey: `layout:${LAIR}:gone.plugin/wide`,
+					genreId: LAIR,
 					origin: "plugin",
 					pluginId: "gone.plugin",
 					withdrawnAt: new Date(),
@@ -640,7 +642,7 @@ describe("Save as new layout", () => {
 			expect(theirs.ok).toBe(false)
 			const [second] = await testDb
 				.insert(schema.sessions)
-				.values({ userId: s.owner.id, isGroup: false, genreId: ADVENTURE })
+				.values({ userId: s.owner.id, isGroup: false, genreId: LAIR })
 				.returning()
 			await get(s.owner.id, second.id)
 			const copied = await startFrom(s.owner.id, second.id, preset.id)
@@ -738,7 +740,7 @@ describe("Save as new layout — placed copies of a widget", () => {
 			// with its own values.
 			const [second] = await testDb
 				.insert(schema.sessions)
-				.values({ userId: s.owner.id, isGroup: false, genreId: ADVENTURE })
+				.values({ userId: s.owner.id, isGroup: false, genreId: LAIR })
 				.returning()
 			await get(s.owner.id, second.id)
 			const copied = await startFrom(s.owner.id, second.id, saved.preset!.id)
@@ -795,7 +797,7 @@ describe("Save as new layout — what the page draws beyond the arrangement", ()
 					widgetStyles: { "scene-portraits": { id: 9, slug: "framed" } }
 				}
 			})
-			// An empty layout: the page draws the conversation and Adventure's
+			// An empty layout: the page draws the conversation and the Lair's
 			// default panels, none of which the arrangement names.
 			const saved = await saveAs(s.owner.id, s.session.id, {}, [
 				"messages",
@@ -927,7 +929,7 @@ describe("the list a session is offered", () => {
 			)
 			await setUserLayoutDefault({
 				userId: s.owner.id,
-				genreId: ADVENTURE,
+				genreId: LAIR,
 				presetId: mine.id
 			})
 			const res = await get(s.owner.id, s.session.id)

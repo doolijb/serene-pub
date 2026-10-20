@@ -34,8 +34,8 @@ import {
 	type TestDb
 } from "$lib/server/utils/testDb"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
-import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs/respond"
-import { CHAT_CREATE_SPEC_ID } from "@serene-pub/core-catalog"
+import { STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs/respond"
+import { STORY_CREATE_SPEC_ID } from "@serene-pub/core-catalog"
 import {
 	resolveSessionSettings,
 	widgetSessionProjection
@@ -50,7 +50,7 @@ async function chatGenreRow() {
 	const [spec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, CHAT_CREATE_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, STORY_CREATE_SPEC_ID))
 		.limit(1)
 	const [version] = await db
 		.select()
@@ -115,7 +115,7 @@ describe("the cascade (§4.13)", () => {
 		expect(doc).toBeTruthy()
 		expect(doc.v).toBe(1)
 		expect(doc.sessionId).toBe(session.id)
-		expect(doc.genreId).toBe("core:genre/chat")
+		expect(doc.genreId).toBe("core:genre/story")
 		expect(doc.fields.tone).toBe("warm")
 	})
 
@@ -173,7 +173,7 @@ describe("the pipelines block", () => {
 		// definition is a valid (degenerate) entry.
 		const rebound = await setNodeRebind(db, {
 			scope: { kind: "session", id: session.id },
-			specSlug: CHAT_RESPOND_SPEC_ID,
+			specSlug: STORY_RESPOND_SPEC_ID,
 			nodeKey: "context",
 			definitionId: "core:task/build-template-context@1",
 			userId
@@ -182,7 +182,7 @@ describe("the pipelines block", () => {
 		const [spec] = await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
 		await db.insert(schema.pipelineNodeOverrides).values({
 			specId: spec!.id,
 			scopeKind: "session",
@@ -194,7 +194,7 @@ describe("the pipelines block", () => {
 			updatedBy: userId
 		})
 		const doc = (await resolveSessionSettings(db, session.id))!
-		expect(doc.pipelines[CHAT_RESPOND_SPEC_ID]).toEqual({
+		expect(doc.pipelines[STORY_RESPOND_SPEC_ID]).toEqual({
 			rebinds: { context: "core:task/build-template-context@1" },
 			params: { generate: { streaming: "off" } }
 		})

@@ -1,312 +1,290 @@
 /**
- * The mobile layout editor's reorder model — pure, so the whole interaction is
- * covered without a phone, a gridstack or a viewport.
+ * The phone layout editor's model (./mobileEdit) — pure, so the whole
+ * interaction is covered without a phone or a viewport.
  */
 import { describe, expect, it } from "vitest"
-import type { ArrangedZone } from "@serene-pub/sdk"
-import { collapsedOrder } from "./sideRail"
-import { unitsOf } from "./tabGroups"
+import type { PanelLayoutV1, PanelV1 } from "@serene-pub/sdk"
+import { MIDDLE_EMPTY, samePanels, type ArrangeOutcome } from "./arrangeOps"
 import {
-	mobileRows,
-	moveMember,
+	NO_PANEL_ABOVE,
+	NO_PANEL_BELOW,
+	addAt,
+	canSplitOut,
+	duplicateTab,
+	makeMain,
+	mintFor,
 	moveRow,
 	moveRowTo,
-	restackZone,
-	setRowPinned
+	moveTabInto,
+	moveTabWithin,
+	phoneRows,
+	phoneSections,
+	removeTabFrom,
+	setRowHeight,
+	splitTab
 } from "./mobileEdit"
 
-/** A side column: three full-width groups stacked, the ordinary case. */
-const side = (): ArrangedZone => ({
-	cols: 1,
-	rows: 9,
-	items: [
-		{ id: "notes", x: 0, y: 0, w: 1, h: 3 },
-		{ id: "map", x: 0, y: 3, w: 1, h: 3 },
-		{ id: "cast", x: 0, y: 6, w: 1, h: 3 }
-	]
+const p = (key: string, tabs: string[], extra: Partial<PanelV1> = {}): PanelV1 => ({ key, tabs, ...extra })
+
+const base = (): PanelLayoutV1 => ({
+	version: 1,
+	left: [p("p3", ["chronicle", "lore-entries"]), p("p4", ["stats"])],
+	middle: { above: [p("p2", ["stats#world"], { height: "fit" })], primary: p("p1", ["messages"]), below: [] },
+	right: [p("p5", ["authors-note"], { pinned: false })]
 })
 
-/** The chat middle: one tall widget over a short one. */
-const middle = (): ArrangedZone => ({
-	cols: 4,
-	rows: 12,
-	items: [
-		{ id: "messages", x: 0, y: 0, w: 4, h: 9 },
-		{ id: "world-state", x: 0, y: 9, w: 4, h: 3 }
-	]
-})
-
-/** Two widgets side by side over a full-width one. */
-const twoD = (): ArrangedZone => ({
-	cols: 4,
-	rows: 8,
-	items: [
-		{ id: "a", x: 0, y: 0, w: 2, h: 4 },
-		{ id: "b", x: 2, y: 0, w: 2, h: 4 },
-		{ id: "c", x: 0, y: 4, w: 4, h: 4 }
-	]
-})
-
-/** A tab group of two, over a lone widget. */
-const grouped = (): ArrangedZone => ({
-	cols: 2,
-	rows: 8,
-	items: [
-		{ id: "one", x: 0, y: 0, w: 2, h: 2, group: "g1" },
-		{ id: "two", x: 0, y: 2, w: 2, h: 2, group: "g1" },
-		{ id: "solo", x: 0, y: 4, w: 2, h: 4 }
-	]
-})
-
-/** The order the collapsed (phone) render draws in, straight from the runtime. */
-function renderedOrder(z: ArrangedZone): string[] {
-	const units = unitsOf(z.items)
-	return collapsedOrder(
-		units.map((u) => ({
-			key: u.key,
-			box: u.box,
-			anchor: u.members[0]?.anchor
-		}))
-	)
+function ok(out: ArrangeOutcome): PanelLayoutV1 {
+	if (!out.layout) throw new Error(`refused: ${out.refused}`)
+	return out.layout
 }
 
-/** Do any two render units sit on the same cells? */
-function overlaps(z: ArrangedZone): number {
-	const boxes = unitsOf(z.items).map((u) => u.box)
-	let n = 0
-	for (let i = 0; i < boxes.length; i++)
-		for (let j = i + 1; j < boxes.length; j++) {
-			const a = boxes[i]
-			const b = boxes[j]
-			if (
-				a.x < b.x + b.w &&
-				a.x + a.w > b.x &&
-				a.y < b.y + b.h &&
-				a.y + a.h > b.y
-			)
-				n++
-		}
-	return n
-}
-
-/** Every box inside the grid the zone declares. */
-function inBounds(z: ArrangedZone): boolean {
-	return z.items.every(
-		(i) =>
-			i.x >= 0 && i.y >= 0 && i.x + i.w <= z.cols && i.y + i.h <= z.rows
-	)
-}
-
-function item(z: ArrangedZone, id: string): string {
-	return JSON.stringify(z.items.find((i) => i.id === id))
-}
-
-describe("mobileRows — the list the phone editor draws", () => {
-	it("lists a zone's groups in the order the collapsed render draws them", () => {
-		expect(mobileRows(side()).map((r) => r.key)).toEqual(
-			renderedOrder(side())
-		)
+describe("rows", () => {
+	it("list Above · Middle · Below · Left · Right, one row per panel", () => {
+		const sections = phoneSections(base())
+		expect(sections.map((s) => s.label)).toEqual(["Above", "Middle", "Below", "Left", "Right"])
+		expect(phoneRows(base()).map((r) => r.key)).toEqual(["p2", "p1", "p3", "p4", "p5"])
+		expect(sections[3].rows[0].tabs).toEqual(["chronicle", "lore-entries"])
 	})
-
-	it("reports a tab group as one row carrying its members in tab order", () => {
-		const rows = mobileRows(grouped())
-		expect(rows.map((r) => r.key)).toEqual(["g1", "solo"])
-		expect(rows[0].members).toEqual(["one", "two"])
-		expect(rows[1].members).toEqual(["solo"])
+	it("carry a group on side rows only", () => {
+		const rows = phoneRows(base())
+		const group = Object.fromEntries(rows.map((r) => [r.key, r.group]))
+		expect(group).toEqual({ p2: null, p1: null, p3: "docked", p4: "docked", p5: "rail" })
 	})
-
-	it("reads an absent pin as pinned and an explicit false as unpinned", () => {
-		const z = side()
-		z.items[1] = { ...z.items[1], pinned: false }
-		const rows = mobileRows(z)
-		expect(rows.map((r) => r.pinned)).toEqual([true, false, true])
-	})
-
-	it("shows a top/bottom anchor as the rank it means in one column", () => {
-		const z = side()
-		z.items[2] = { ...z.items[2], anchor: { top: true } }
-		const rows = mobileRows(z)
-		expect(rows.map((r) => r.key)).toEqual(["cast", "notes", "map"])
-		expect(rows.map((r) => r.rank)).toEqual([0, 1, 1])
-	})
-
-	it("has nothing to list without an arrangement", () => {
-		expect(mobileRows(undefined)).toEqual([])
-	})
-})
-
-describe("moveRow — one step up or down", () => {
-	it("swaps exactly the two groups in the rendered order", () => {
-		const next = moveRow(side(), "map", -1)
-		expect(mobileRows(next).map((r) => r.key)).toEqual([
-			"map",
-			"notes",
-			"cast"
+	it("split each side into Docked then In the rail, an empty group still listed", () => {
+		const sections = phoneSections(base())
+		expect(sections[0].groups).toBeNull()
+		expect(sections[1].groups).toBeNull()
+		const left = sections[3].groups!
+		expect(left.map((g) => [g.label, g.rows.map((r) => r.key)])).toEqual([
+			["Docked", ["p3", "p4"]],
+			["In the rail", []]
 		])
-		expect(renderedOrder(next)).toEqual(["map", "notes", "cast"])
-	})
-
-	it("leaves every group it did not move byte-identical", () => {
-		const before = side()
-		const next = moveRow(before, "map", -1)
-		expect(item(next, "cast")).toBe(item(before, "cast"))
-	})
-
-	it("keeps each group's own height when they differ", () => {
-		const next = moveRow(middle(), "world-state", -1)
-		expect(mobileRows(next).map((r) => r.key)).toEqual([
-			"world-state",
-			"messages"
-		])
-		expect(next.items.find((i) => i.id === "world-state")!.h).toBe(3)
-		expect(next.items.find((i) => i.id === "messages")!.h).toBe(9)
-	})
-
-	it("refuses to move off either end, returning the arrangement untouched", () => {
-		const before = side()
-		expect(moveRow(before, "notes", -1)).toBe(before)
-		expect(moveRow(before, "cast", 1)).toBe(before)
-		expect(moveRow(before, "map", 0)).toBe(before)
-		expect(moveRow(before, "nobody", 1)).toBe(before)
-	})
-
-	it("swaps side-by-side widgets across rather than down", () => {
-		const before = twoD()
-		const next = moveRow(before, "a", 1)
-		expect(renderedOrder(next)).toEqual(["b", "a", "c"])
-		expect(next.items.find((i) => i.id === "a")!.y).toBe(0)
-		expect(next.items.find((i) => i.id === "b")!.y).toBe(0)
-		expect(item(next, "c")).toBe(item(before, "c"))
-	})
-
-	it("takes a widget out of its row when it moves past that row", () => {
-		const next = moveRow(twoD(), "b", 1)
-		expect(renderedOrder(next)).toEqual(["a", "c", "b"])
-		expect(overlaps(next)).toBe(0)
-		expect(inBounds(next)).toBe(true)
-	})
-
-	it("moves a group into the rank its new neighbour holds", () => {
-		const z = side()
-		z.items[2] = { ...z.items[2], anchor: { bottom: true } }
-		const next = moveRow(z, "map", 1)
-		expect(renderedOrder(next)).toEqual(["notes", "cast", "map"])
-		expect(mobileRows(next).find((r) => r.key === "map")!.rank).toBe(2)
-	})
-
-	it("never produces cells the desktop grid could not draw", () => {
-		for (const make of [side, middle, twoD, grouped])
-			for (const row of mobileRows(make()))
-				for (const delta of [-1, 1]) {
-					const next = moveRow(make(), row.key, delta)
-					expect(overlaps(next)).toBe(0)
-					expect(inBounds(next)).toBe(true)
-				}
-	})
-})
-
-describe("round trip — byte-identical apart from the intended change", () => {
-	it("changes nothing at all when nothing is moved", () => {
-		const before = side()
-		const json = JSON.stringify(before)
-		mobileRows(before)
-		expect(JSON.stringify(before)).toBe(json)
-		expect(restackZone(before)).toBe(before)
-	})
-
-	it("restacks a zone to itself when the order is unchanged", () => {
-		for (const make of [side, middle, twoD, grouped])
-			expect(JSON.stringify(restackZone(make()))).toBe(
-				JSON.stringify(make())
-			)
-	})
-
-	it("returns the original bytes when a move is taken back", () => {
-		for (const [make, key, dir] of [
-			[side, "map", -1],
-			[side, "map", 1],
-			[middle, "world-state", -1],
-			[twoD, "a", 1],
-			[grouped, "solo", -1]
-		] as const) {
-			const before = make()
-			const there = moveRow(before, key, dir)
-			expect(JSON.stringify(there)).not.toBe(JSON.stringify(before))
-			expect(JSON.stringify(moveRow(there, key, -dir))).toBe(
-				JSON.stringify(before)
-			)
-		}
-	})
-
-	it("keeps a widget in its own row once a move has taken it out of one", () => {
-		const out = moveRow(twoD(), "b", 1)
-		const back = moveRow(out, "b", -1)
-		expect(renderedOrder(back)).toEqual(["a", "b", "c"])
-		expect(back.items.find((i) => i.id === "b")!.y).not.toBe(0)
-		expect(overlaps(back)).toBe(0)
-	})
-
-	it("returns the original bytes when a pin is taken back", () => {
-		const before = side()
-		const off = setRowPinned(before, "map", false)
-		expect(JSON.stringify(off)).not.toBe(JSON.stringify(before))
-		expect(JSON.stringify(setRowPinned(off, "map", true))).toBe(
-			JSON.stringify(before)
-		)
-	})
-
-	it("returns the original bytes when a member move is taken back", () => {
-		const before = grouped()
-		const there = moveMember(before, "g1", "two", -1)
-		expect(mobileRows(there)[0].members).toEqual(["two", "one"])
-		expect(JSON.stringify(moveMember(there, "g1", "two", 1))).toBe(
-			JSON.stringify(before)
-		)
-	})
-})
-
-describe("moveRowTo — the drag handle's destination", () => {
-	it("lands the group at the index asked for", () => {
-		const next = moveRowTo(side(), "notes", 2)
-		expect(mobileRows(next).map((r) => r.key)).toEqual([
-			"map",
-			"cast",
-			"notes"
+		const right = sections[4].groups!
+		expect(right.map((g) => [g.group, g.rows.map((r) => r.key)])).toEqual([
+			["docked", []],
+			["rail", ["p5"]]
 		])
 	})
-
-	it("is the arrangement itself when the group is already there", () => {
-		const before = side()
-		expect(moveRowTo(before, "map", 1)).toBe(before)
-		expect(moveRowTo(before, "map", 9)).toEqual(moveRowTo(before, "map", 2))
+	it("read docked before rail whatever the stack order", () => {
+		const b: PanelLayoutV1 = { ...base(), left: [p("r", ["x"], { pinned: false }), p("d", ["y"])] }
+		expect(phoneSections(b)[3].rows.map((r) => r.key)).toEqual(["d", "r"])
+		const rows = Object.fromEntries(phoneRows(b).map((r) => [r.key, r]))
+		expect([rows.d.belowKey, rows.r.aboveKey]).toEqual(["r", "d"])
+	})
+	it("offer Make main on every row but the primary", () => {
+		const main = Object.fromEntries(phoneRows(base()).map((r) => [r.key, r.canMakeMain]))
+		expect(main).toEqual({ p2: true, p1: false, p3: true, p4: true, p5: true })
+	})
+	it("carry a height everywhere but the primary", () => {
+		const h = Object.fromEntries(phoneRows(base()).map((r) => [r.key, r.height]))
+		expect(h).toEqual({ p2: "fit", p1: null, p3: "fill", p4: "fill", p5: "fill" })
+	})
+	it("know their neighbours within one column", () => {
+		const rows = Object.fromEntries(phoneRows(base()).map((r) => [r.key, r]))
+		expect([rows.p2.aboveKey, rows.p2.belowKey]).toEqual([null, "p1"])
+		expect([rows.p1.aboveKey, rows.p1.belowKey]).toEqual(["p2", null])
+		expect([rows.p3.aboveKey, rows.p3.belowKey]).toEqual([null, "p4"])
+		expect([rows.p5.aboveKey, rows.p5.belowKey]).toEqual([null, null])
+	})
+	it("each section's Add lands where it says", () => {
+		const adds = phoneSections(base()).map((s) => s.add)
+		expect(adds[1]).toEqual({ kind: "panel", panelKey: "p1" })
+		expect(adds[3]).toEqual({ kind: "stack", place: "left" })
 	})
 })
 
-describe("setRowPinned — the per-group pin", () => {
-	it("writes the pin onto every member of a tab group", () => {
-		const next = setRowPinned(grouped(), "g1", false)
-		expect(
-			next.items
-				.filter((i) => i.group === "g1")
-				.every((i) => i.pinned === false)
-		).toBe(true)
-		expect(mobileRows(next)[0].pinned).toBe(false)
+describe("moving rows", () => {
+	it("up and down within a side", () => {
+		const out = ok(moveRow(base(), "p4", -1))
+		expect(out.left.map((x) => x.key)).toEqual(["p4", "p3"])
+		const b = base()
+		expect(moveRow(b, "p3", -1).layout).toBe(b)
+	})
+	it("a strip crosses the primary", () => {
+		const down = ok(moveRow(base(), "p2", 1))
+		expect(down.middle.above).toEqual([])
+		expect(down.middle.below.map((x) => x.key)).toEqual(["p2"])
+		const back = ok(moveRow(down, "p2", -1))
+		expect(samePanels(back, base())).toBe(true)
+	})
+	it("the primary does not move", () => {
+		const b = base()
+		expect(moveRow(b, "p1", 1).layout).toBe(b)
+		expect(phoneRows(b).find((r) => r.key === "p1")).toMatchObject({ canMoveUp: false, canMoveDown: false })
+	})
+	it("a drag lands at an index, a step at a time", () => {
+		const b: PanelLayoutV1 = { ...base(), left: [p("a", ["x"]), p("b", ["y"]), p("c", ["z"])] }
+		expect(ok(moveRowTo(b, "a", 2)).left.map((x) => x.key)).toEqual(["b", "c", "a"])
 	})
 })
 
-describe("moveMember — order inside a tab group", () => {
-	it("refuses to move off either end", () => {
-		const before = grouped()
-		expect(moveMember(before, "g1", "one", -1)).toBe(before)
-		expect(moveMember(before, "g1", "two", 1)).toBe(before)
-		expect(moveMember(before, "solo", "solo", 1)).toBe(before)
+describe("the side groups", () => {
+	const two = (): PanelLayoutV1 => ({
+		...base(),
+		left: [p("d1", ["a"]), p("d2", ["b"]), p("r1", ["c"], { pinned: false }), p("r2", ["d"], { pinned: false })]
 	})
+	const keys = (l: PanelLayoutV1) =>
+		phoneSections(l)[3].groups!.map((g) => g.rows.map((r) => r.key))
+	it("up / down within a group reorder it", () => {
+		expect(keys(ok(moveRow(two(), "d2", -1)))).toEqual([["d2", "d1"], ["r1", "r2"]])
+		expect(keys(ok(moveRow(two(), "r1", 1)))).toEqual([["d1", "d2"], ["r2", "r1"]])
+	})
+	it("down from the last docked row goes first in the rail", () => {
+		const out = ok(moveRow(two(), "d2", 1))
+		expect(keys(out)).toEqual([["d1"], ["d2", "r1", "r2"]])
+		expect(out.left.find((x) => x.key === "d2")?.pinned).toBe(false)
+	})
+	it("up from the first rail row docks it last", () => {
+		const out = ok(moveRow(two(), "r1", -1))
+		expect(keys(out)).toEqual([["d1", "d2", "r1"], ["r2"]])
+		expect(out.left.find((x) => x.key === "r1")).not.toHaveProperty("pinned")
+	})
+	it("the ends do not move", () => {
+		const b = two()
+		expect(moveRow(b, "d1", -1).layout).toBe(b)
+		expect(moveRow(b, "r2", 1).layout).toBe(b)
+		const rows = Object.fromEntries(phoneRows(b).map((r) => [r.key, r]))
+		expect([rows.d2.canMoveDown, rows.r1.canMoveUp]).toEqual([true, true])
+	})
+	it("a drag crosses the boundary a step at a time", () => {
+		expect(keys(ok(moveRowTo(two(), "d1", 3)))).toEqual([["d2"], ["r1", "r2", "d1"]])
+		expect(keys(ok(moveRowTo(two(), "r2", 0)))).toEqual([["r2", "d1", "d2"], ["r1"]])
+	})
+	it("an all-rail side is an empty Docked group; up docks its first row", () => {
+		const b = base()
+		expect(keys({ ...b, left: [p("r", ["x"], { pinned: false })] })).toEqual([[], ["r"]])
+		const out = ok(moveRow(b, "p5", -1))
+		expect(out.right).toEqual([p("p5", ["authors-note"])])
+	})
+	it("the last docked row may go to the rail, leaving Docked empty", () => {
+		const one: PanelLayoutV1 = { ...base(), left: [p("d", ["x"])] }
+		const out = ok(moveRow(one, "d", 1))
+		expect(out.left).toEqual([p("d", ["x"], { pinned: false })])
+	})
+})
 
-	it("keeps the group's own footprint", () => {
-		const next = moveMember(grouped(), "g1", "two", -1)
-		const box = unitsOf(next.items).find((u) => u.key === "g1")!.box
-		expect(box).toEqual(
-			unitsOf(grouped().items).find((u) => u.key === "g1")!.box
-		)
+describe("Make main", () => {
+	it("a strip becomes the primary; the old primary goes to the end of Above", () => {
+		const out = ok(makeMain(base(), "p2"))
+		expect(out.middle.primary).toEqual(p("p2", ["stats#world"]))
+		expect(out.middle.above).toEqual([p("p1", ["messages"])])
+	})
+	it("a side row moves into the middle and loses its rail and height", () => {
+		const out = ok(makeMain(base(), "p5"))
+		expect(out.right).toEqual([])
+		expect(out.middle.primary).toEqual(p("p5", ["authors-note"]))
+		expect(out.middle.above.map((x) => x.key)).toEqual(["p2", "p1"])
+	})
+	it("the primary already is main", () => {
+		const b = base()
+		expect(makeMain(b, "p1").layout).toBe(b)
+	})
+})
+
+describe("Move into panel above / below", () => {
+	it("merges a one-tab panel into the one above", () => {
+		const out = ok(moveTabInto(base(), "stats", -1))
+		expect(out.left).toEqual([p("p3", ["chronicle", "lore-entries", "stats"])])
+	})
+	it("moves one tab into the panel below, at its start", () => {
+		const out = ok(moveTabInto(base(), "lore-entries", 1))
+		expect(out.left).toEqual([p("p3", ["chronicle"]), p("p4", ["lore-entries", "stats"])])
+	})
+	it("a strip moves into the primary", () => {
+		const out = ok(moveTabInto(base(), "stats#world", 1))
+		expect(out.middle.above).toEqual([])
+		expect(out.middle.primary.tabs).toEqual(["stats#world", "messages"])
+	})
+	it("says so when there is no neighbour", () => {
+		expect(moveTabInto(base(), "chronicle", -1).refused).toBe(NO_PANEL_ABOVE)
+		expect(moveTabInto(base(), "authors-note", 1).refused).toBe(NO_PANEL_BELOW)
+	})
+	it("the primary's last tab leaves by promotion", () => {
+		const out = ok(moveTabInto(base(), "messages", -1))
+		expect(out.middle.above).toEqual([])
+		expect(out.middle.primary).toEqual(p("p2", ["stats#world", "messages"]))
+	})
+	it("the primary's last tab moves into the panel below; the one above is promoted", () => {
+		const b: PanelLayoutV1 = { ...base(), middle: { ...base().middle, below: [p("p9", ["places"])] } }
+		const out = ok(moveTabInto(b, "messages", 1))
+		expect(out.middle.primary).toEqual(p("p2", ["stats#world"]))
+		expect(out.middle.below).toEqual([p("p9", ["messages", "places"])])
+	})
+})
+
+describe("Split out", () => {
+	it("gives a tab its own panel right after the one it leaves", () => {
+		const out = ok(splitTab(base(), "chronicle"))
+		expect(out.left).toEqual([p("p3", ["lore-entries"]), p("p6", ["chronicle"]), p("p4", ["stats"])])
+	})
+	it("a tab of the primary lands first below", () => {
+		const two = ok(addAt(base(), "places", { kind: "panel", panelKey: "p1" }))
+		const out = ok(splitTab(two, "places"))
+		expect(out.middle.primary.tabs).toEqual(["messages"])
+		expect(out.middle.below).toEqual([{ ...p("p6", ["places"]), height: "fit" }])
+	})
+	it("is a no-op on a one-tab panel", () => {
+		const b = base()
+		expect(canSplitOut(b, "stats")).toBe(false)
+		expect(canSplitOut(b, "chronicle")).toBe(true)
+		expect(splitTab(b, "stats").layout).toBe(b)
+	})
+	it("undoes Move into panel above", () => {
+		const merged = ok(moveTabInto(base(), "stats", -1))
+		const split = ok(splitTab(merged, "stats"))
+		expect(split.left.map((x) => x.tabs)).toEqual([["chronicle", "lore-entries"], ["stats"]])
+	})
+})
+
+describe("tabs inside a row", () => {
+	it("reorder a step at a time", () => {
+		const out = ok(moveTabWithin(base(), "lore-entries", -1))
+		expect(out.left[0].tabs).toEqual(["lore-entries", "chronicle"])
+		const b = base()
+		expect(moveTabWithin(b, "chronicle", -1).layout).toBe(b)
+	})
+})
+
+describe("no lock", () => {
+	it("Messages can be removed; the strip above is promoted", () => {
+		const out = ok(removeTabFrom(base(), "messages"))
+		expect(out.middle.primary).toEqual(p("p2", ["stats#world"]))
+		expect(out.middle.above).toEqual([])
+	})
+	it("the middle is never empty", () => {
+		const alone: PanelLayoutV1 = { ...base(), middle: { above: [], primary: p("p1", ["messages"]), below: [] } }
+		expect(removeTabFrom(alone, "messages").refused).toBe(MIDDLE_EMPTY)
+		expect(moveTabInto(alone, "messages", 1).refused).toBeTruthy()
+	})
+	it("a second Messages mints its own id", () => {
+		expect(mintFor(base(), "messages")).toBe("messages#2")
+	})
+})
+
+describe("Add, Duplicate, ×", () => {
+	it("Add lands a new panel at the end of a stack", () => {
+		const out = ok(addAt(base(), "places", { kind: "stack", place: "left" }))
+		expect(out.left.map((x) => x.key)).toEqual(["p3", "p4", "p6"])
+	})
+	it("Add lands a tab in a panel", () => {
+		const out = ok(addAt(base(), "places", { kind: "panel", panelKey: "p5" }))
+		expect(out.right[0].tabs).toEqual(["authors-note", "places"])
+	})
+	it("Duplicate mints fresh and lands beside the source", () => {
+		const copy = mintFor(base(), "chronicle", ["chronicle#2"], { fresh: true })
+		expect(copy).toBe("chronicle#3")
+		const out = ok(duplicateTab(base(), "chronicle", copy))
+		expect(out.left[0].tabs).toEqual(["chronicle", "chronicle#3", "lore-entries"])
+	})
+	it("× drops a panel it empties", () => {
+		const out = ok(removeTabFrom(base(), "authors-note"))
+		expect(out.right).toEqual([])
+	})
+})
+
+describe("height", () => {
+	it("Fit and Fill", () => {
+		expect(ok(setRowHeight(base(), "p4", "fit")).left[1].height).toBe("fit")
+		expect(ok(setRowHeight(base(), "p2", "fill")).middle.above[0]).not.toHaveProperty("height")
 	})
 })

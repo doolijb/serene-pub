@@ -311,3 +311,37 @@ describe("resolvePortrayals — the table", () => {
 		}
 	})
 })
+
+describe("🚧 player-seat:<id> — a card-less player seat (2026-10-14)", () => {
+	it("is its player's while they are a member and the seat is live; else nobody's; never the AI's", async () => {
+		const [mine, leavers, gone] = await db
+			.insert(schema.sessionPersonas)
+			.values([
+				{ sessionId, personaId: null, seatName: "Ash", userId: guestId },
+				{ sessionId, personaId: null, seatName: "Wren", userId: strangerId },
+				{ sessionId, personaId: null, seatName: "Gone", userId: guestId, removedAt: new Date() }
+			])
+			.returning({ id: schema.sessionPersonas.id })
+		try {
+			const v = await resolvePortrayals(db as any, {
+				sessionId,
+				runOwnerUserId: ownerId,
+				refs: [`player-seat:${mine!.id}`, `player-seat:${leavers!.id}`, `player-seat:${gone!.id}`, "player-seat:99999999"],
+				speaker: `player-seat:${mine!.id}`
+			})
+			expect(v[`player-seat:${mine!.id}`]).toEqual(person(guestId))
+			// Its player is no member here.
+			expect(v[`player-seat:${leavers!.id}`]).toEqual({ by: "none" })
+			expect(v[`player-seat:${gone!.id}`]).toEqual({ by: "none" })
+			expect(v["player-seat:99999999"]).toEqual({ by: "none" })
+			// A live card-less player seat is asked about as itself; a seat with a card as its card.
+			const refs = await turnRefs(db as any, sessionId, null)
+			expect(refs).toContain(`player-seat:${mine!.id}`)
+			expect(refs).not.toContain(`player-seat:${gone!.id}`)
+			expect(refs.filter((r) => r.startsWith("player-seat:"))).toHaveLength(2)
+		} finally {
+			for (const row of [mine, leavers, gone])
+				await db.delete(schema.sessionPersonas).where(eq(schema.sessionPersonas.id, row!.id))
+		}
+	}, 60_000)
+})

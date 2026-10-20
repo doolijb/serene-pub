@@ -86,6 +86,8 @@ import { answerCharacterImages, type CharacterGalleryRead } from "./characterIma
 import { answerStatTrail, type StatTrailRead } from "./statTrail"
 import { answerSetChosenImage, type InstanceSettings } from "./setChosenImage"
 import { answerSetBackdrop, type BackdropWrite } from "./setBackdrop"
+import { answerSetOwnerFace, type OwnerFaceWrite } from "./setOwnerFace"
+import { answerGivePiece, type GiveWrite } from "./givePiece"
 import {
 	patchWidgetSettings,
 	widgetSettingDecl,
@@ -110,6 +112,8 @@ export interface WidgetRequestDeps {
 	findMessage(messageId: number): SelectSessionMessage | undefined
 	/** One page of the session's lines for one widget (`messages`), from the server. */
 	messagesPage: MessagesDeps["messagesPage"]
+	/** 🚧 The log's next older page, per channel (`load-older`, ★7): merged into the page's own window. */
+	loadOlderIn(channels?: readonly string[]): Promise<void>
 	/** The channel lanes under one channel (`channel-lanes`), from the server. */
 	channelLanes: ChannelLanesDeps["channelLanes"]
 	/** The cast the page projects to widgets — what `set-sprite-set` is judged against. */
@@ -220,6 +224,10 @@ export interface WidgetRequestDeps {
 	readStatTrail: StatTrailRead
 	/** 🚧 Backdrop: set or clear the session's backdrop (`sessions:setBackdrop`). */
 	writeBackdrop: BackdropWrite
+	/** 🚧 Stats (PLAN-sheet §12): set or clear a player seat's portrait (`state:setOwnerFace`). */
+	writeOwnerFace: OwnerFaceWrite
+	/** 🚧 Stats (★4): Give to… — a piece given or offered (`state:givePiece`). */
+	writeGive: GiveWrite
 }
 
 /**
@@ -382,10 +390,20 @@ export const WIDGET_REQUEST_ANSWERS: {
 	"decide-proposal": (p, _from, d) => {
 		answerDecideProposal(p, d.stateStore())
 	},
+	// 🚧 The conversation's far end reached (★7): the next older page of the
+	// copy's own channels, into the page's log — never a page spent on others.
+	"load-older": (p, _from, d) => {
+		const asked = (p as { channels?: unknown } | undefined)?.channels
+		const channels = Array.isArray(asked) ? asked.filter((c): c is string => typeof c === "string" && !!c.trim()) : undefined
+		return d.loadOlderIn(channels?.length ? channels : undefined)
+	},
 	// Core's state widgets (R21): the viewer's own edit at the session
 	// layer; its refusal is the asking widget's (R77).
 	"set-attribute-value": (p, from, d) =>
 		answerSetAttributeValue(p, d.stateStore(), d.sessionId(), from),
+	// 🚧 Give to… (★4): ONE request; the host gives at once or files an
+	// offer, and its refusal is the asking widget's (R77).
+	"give-piece": (p, from, d) => answerGivePiece(p, d.sessionId(), d.writeGive, from),
 	// Core's scene portraits (R21): judged against the cast the widget was
 	// shown (R77 — offered only where allowed); the server's refusal is the
 	// asking widget's, not a toast.
@@ -455,6 +473,10 @@ export const WIDGET_REQUEST_ANSWERS: {
 	// or cleared; the server judges who may, and its refusal is the widget's.
 	"set-backdrop": (p, _from, d) =>
 		answerSetBackdrop(p, d.sessionId(), d.writeBackdrop),
+	// 🚧 Stats (PLAN-sheet §12): a player seat's portrait, set or cleared;
+	// the server judges who may, and its refusal is the widget's.
+	"set-owner-face": (p, _from, d) =>
+		answerSetOwnerFace(p, d.sessionId(), d.writeOwnerFace),
 	// 🚧 Backdrop (D3): the session's generated pictures, for the chooser's
 	// *From this session* — the Album's `generated` source over a `messages` page.
 	"session-images": (p, _from, d) => answerSessionImages(p, d)

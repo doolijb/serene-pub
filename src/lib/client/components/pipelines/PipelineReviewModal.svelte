@@ -65,7 +65,7 @@
 
 	/**
 	 * The pipeline the card belongs to: its name and genre, and until those
-	 * arrive the slug's tail (`core:spec/chat-respond` → "Chat respond").
+	 * arrive the slug's tail (`core:spec/story-respond` → "Chat respond").
 	 */
 	const specLabel = (specId: string) => {
 		const named = pipelineLabel(specId, pipelines, genres)

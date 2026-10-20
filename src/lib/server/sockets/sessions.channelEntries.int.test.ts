@@ -62,7 +62,7 @@ vi.mock("$lib/server/sessions/fireTurn", async (importOriginal) => {
 })
 
 const STEWARD = "test:genre/steward"
-const ADVENTURE = "core:genre/adventure"
+const ADVENTURE = "core:genre/story"
 
 /** Publish {@link STEWARD} as a create spec, the way a plugin genre arrives. */
 async function publishStewardGenre() {
@@ -369,35 +369,4 @@ describe("R5 · the entry's name", () => {
 	})
 })
 
-describe("R5 · the order, recomputed", () => {
-	test("Adventure's narrator entry carries no channel", async () => {
-		const schema = await import("$lib/server/db/schema")
-		const { owner, session: s } = await session("recompute", ADVENTURE, [])
-		const { runBuiltIn } = await import("$lib/server/pipelines/runtime/builtins")
-		const [reply] = await testDb
-			.insert(schema.sessionMessages)
-			.values({
-				sessionId: s.id,
-				role: "assistant",
-				isNarratorResponse: true,
-				content: "The lantern gutters.",
-				userId: owner.id
-			})
-			.returning()
-		// Hiding the reply is an event the turn order answers.
-		const hidden = await runBuiltIn(testDb as unknown as Db, {
-			kind: "hide",
-			sessionId: s.id,
-			actor: owner.id,
-			payload: { target: reply!.id, hidden: true }
-		} as any)
-		expect((hidden as any).ok).toBe(true)
-		await (await import("$lib/server/pipelines/runtime/sessionEvents")).settleSessionEvents()
-		const { readTurnOrder } = await import("@serene-pub/sdk")
-		const [row] = await testDb
-			.select({ metadata: schema.sessions.metadata })
-			.from(schema.sessions)
-			.where(eq(schema.sessions.id, s.id))
-		expect(readTurnOrder(row!.metadata).order).toEqual([MAIN])
-	})
-})
+// R5 (Adventure's narrator entry carries no channel) retired with Adventure, 2026-10-19.

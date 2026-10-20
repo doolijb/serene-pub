@@ -90,6 +90,19 @@ describe("answerSetAttributeValue", () => {
 		expect(writes).toHaveLength(1)
 	})
 
+	test("A1: a list of pieces — inline and compendium — reaches the store; the shape is the server's to judge", async () => {
+		const { store, writes } = writer()
+		const pieces = [
+			{ kind: "inline", name: "Envenomed", description: "Poison in the blood." },
+			{ kind: "compendium", compendiumId: "core:ruleset/vis-itineris@1", pieceId: "potion-of-healing", version: "1", count: 2 }
+		]
+		await answerSetAttributeValue({ owner: { kind: "session_cast", id: 3 }, slotId: "core:slot/hp@1", value: pieces }, store, 7)
+		expect(writes).toEqual([[{ kind: "session_cast", id: 3 }, "core:slot/hp@1", pieces, { ownError: true }]])
+		await expect(
+			answerSetAttributeValue({ owner: { kind: "session_cast", id: 3 }, slotId: "core:slot/hp@1", value: [{ kind: "spell", name: "Bolt" }] }, store, 7)
+		).rejects.toThrow(/a list of items/)
+	})
+
 	test("refuses while the store answers for another session, or has not loaded", async () => {
 		const params = { owner: { kind: "session", id: 7 }, slotId: "core:slot/weather@1", value: "rain" }
 		await expect(answerSetAttributeValue(params, writer({ sessionId: 9 }).store, 7)).rejects.toThrow(/not loaded yet/)

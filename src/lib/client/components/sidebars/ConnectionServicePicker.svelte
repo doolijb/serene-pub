@@ -98,8 +98,17 @@
 			search
 		)
 	)
+	// 🚧 The custom door's narrowing (Local / Self-hosted) keeps the
+	// **Custom (OpenAI-compatible)** entry beside the local servers
+	// (2026-10-18, the 100-turn walk #31: the very option the door promised
+	// sat behind Show all).
 	let visibleItems = $derived(
-		matchingItems.filter((i) => !category || i.category === category)
+		matchingItems.filter(
+			(i) =>
+				!category ||
+				i.category === category ||
+				(category === "local" && i.category === "custom")
+		)
 	)
 	let groups = $derived(groupConnectionServiceItems(visibleItems))
 

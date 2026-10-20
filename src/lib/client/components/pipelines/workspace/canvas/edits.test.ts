@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 import type { SpecDocument } from "@serene-pub/sdk"
-import { ADVENTURE_RESPOND_SPEC_ID, CORE_SPECS } from "@serene-pub/core-catalog"
+import { STORY_RESPOND_SPEC_ID, CORE_SPECS } from "@serene-pub/core-catalog"
 import {
 	addBranch,
 	addClause,
@@ -27,7 +27,12 @@ const build = (slug: string): SpecDocument => {
 	if (!entry) throw new Error(`no core spec ${slug}`)
 	return entry.build() as SpecDocument
 }
-const adventure = () => build(ADVENTURE_RESPOND_SPEC_ID)
+/**
+ * Story's reply — the real document these edits are walked over. (Adventure's
+ * reply was, until it retired 2026-10-19; Story's carries the same shapes: a
+ * gather of read chains, junctions, `rank` feeding the context, and maps.)
+ */
+const story = () => build(STORY_RESPOND_SPEC_ID)
 
 const ref = (node: string, port: string) => ({ __ref: "data", node, port })
 
@@ -138,7 +143,7 @@ const posOf = (doc: SpecDocument, key: string) =>
 
 describe("insertNode", () => {
 	test("after a spine node lands right after it and renumbers", () => {
-		const doc = adventure()
+		const doc = story()
 		const before = JSON.stringify(doc)
 		const next = insertNode(doc, {
 			after: "rank",
@@ -149,13 +154,13 @@ describe("insertNode", () => {
 		})
 		expect(JSON.stringify(doc)).toBe(before)
 		expect(posOf(next, "extra")).toBe(posOf(next, "rank") + 1)
-		expect(posOf(next, "planContext")).toBe(posOf(next, "extra") + 1)
+		expect(posOf(next, "sceneNow")).toBe(posOf(next, "extra") + 1)
 		expect(next.nodes.find((n) => n.key === "extra")!.clauseId).toBeUndefined()
 		expectInvariant(next)
 	})
 
 	test("inside a gather chain carries clauseId and clauseChain", () => {
-		const next = insertNode(adventure(), {
+		const next = insertNode(story(), {
 			after: "gather.history.read",
 			key: "gather.history.more",
 			definitionId: "core:x",
@@ -199,13 +204,14 @@ describe("insertNode", () => {
 })
 
 describe("removeNode", () => {
-	test("removing rank in Adventure severs planContext's ref", () => {
-		const doc = adventure()
+	test("removing rank in Story's reply severs the context's refs", () => {
+		const doc = story()
 		expect(allRefs(doc).some((r) => r.node === "rank")).toBe(true)
 		const { doc: next, severed } = removeNode(doc, "rank")
 		expect(next.nodes.some((n) => n.key === "rank")).toBe(false)
 		expect(allRefs(next).some((r) => r.__ref === "data" && r.node === "rank")).toBe(false)
-		expect(severed).toContainEqual({ key: "planContext", path: "castRelationships" })
+		expect(severed).toContainEqual({ key: "context", path: "relationshipsPerspectives.band" })
+		expect(severed).toContainEqual({ key: "context", path: "relationshipsKnown.band" })
 		expectInvariant(next)
 	})
 
@@ -232,9 +238,9 @@ describe("removeNode", () => {
 
 describe("moveNode", () => {
 	test("swaps with the neighbour; a no-op at the ends", () => {
-		const doc = adventure()
-		const next = moveNode(doc, "planContext", "up")
-		expect(posOf(next, "planContext")).toBeLessThan(posOf(next, "rank"))
+		const doc = story()
+		const next = moveNode(doc, "sceneNow", "up")
+		expect(posOf(next, "sceneNow")).toBeLessThan(posOf(next, "rank"))
 		expectInvariant(next)
 		const first = moveNode(doc, "input", "up")
 		expect(flatRows(lineOf(first).rows).map((r) => r.key)).toEqual(
@@ -262,7 +268,7 @@ describe("moveNode", () => {
 
 describe("renameKey", () => {
 	test("renaming the gather to reads rewrites every member and every ref", () => {
-		const doc = adventure()
+		const doc = story()
 		const next = renameKey(doc, "gather", "reads")
 		const keys = [...next.nodes.map((n) => n.key), ...next.clauses.map((c) => c.id)]
 		expect(keys.some((k) => k === "gather" || k.startsWith("gather."))).toBe(false)
@@ -272,8 +278,8 @@ describe("renameKey", () => {
 			expect(String(r.ofNode ?? "").startsWith("gather.")).toBe(false)
 		}
 		for (const n of next.nodes) expect(n.clauseId).not.toBe("gather")
-		const pc = next.nodes.find((n) => n.key === "planContext")!
-		expect(pc.config.cast).toEqual(ref("reads.cast.read", "cast"))
+		const context = next.nodes.find((n) => n.key === "context")!
+		expect(context.config.cast).toEqual(ref("reads.cast.read", "cast"))
 		expectInvariant(next)
 	})
 
@@ -371,7 +377,7 @@ describe("clauses", () => {
 		])
 		expectInvariant(doc)
 
-		const adv = removeClause(adventure(), "gather")
+		const adv = removeClause(story(), "gather")
 		expect(allRefs(adv.doc).some((r) => String(r.node).startsWith("gather."))).toBe(false)
 		expectInvariant(adv.doc)
 	})
@@ -438,18 +444,21 @@ describe("upstreamOf", () => {
 		expect(upstreamOf(doc, "a")).toEqual([])
 	})
 
-	test("in Adventure: a gather chain sees the spine before it, never another chain", () => {
-		const doc = adventure()
+	test("in Story's reply: a gather chain sees the spine before it, never another chain", () => {
+		const doc = story()
 		const up = upstreamOf(doc, "gather.history.attachments")
-		expect(up).toEqual(["input", "placeholder", "contextBudget", "gather", "gather.history.read"])
-		const pc = upstreamOf(doc, "planContext")
-		expect(pc).toContain("gather.cast.read")
-		expect(pc).toContain("rank")
-		expect(pc).not.toContain("lines")
-		const voice = upstreamOf(doc, "voices.item.lore")
-		expect(voice).toContain("voices")
-		expect(voice).toContain("voices.item.context")
-		expect(voice).not.toContain("voices.item.search")
+		expect(up).toEqual(["input", "placeholder", "contextBudget", "tasks", "gather", "gather.history.read"])
+		const context = upstreamOf(doc, "context")
+		expect(context).toContain("gather.cast.read")
+		expect(context).toContain("rank")
+		expect(context).not.toContain("lines")
+		// A map's item sees the map and the item's earlier members — never a
+		// later member, nor the other branch's map.
+		const item = upstreamOf(doc, "sweep.due.lore.full.entry.item.content")
+		expect(item).toContain("sweep.due.lore.full.entry")
+		expect(item).toContain("sweep.due.lore.full.entry.item.name")
+		expect(item).not.toContain("sweep.due.lore.full.entry.item.write")
+		expect(item).not.toContain("sweep.due.lore.review.entry.item.name")
 	})
 })
 
@@ -472,7 +481,7 @@ describe("nextKey", () => {
 
 describe("array order", () => {
 	test("after an insert the node array runs in position order, so compile's spine edges follow the line", () => {
-		const doc = build(ADVENTURE_RESPOND_SPEC_ID)
+		const doc = build(STORY_RESPOND_SPEC_ID)
 		const next = insertNode(doc, { after: "rank", container: null, key: "rerank", definitionId: "core:task/rank-hybrid", definitionVersion: 1, kind: "task", config: {} })
 		const positions = next.nodes.map((n) => n.position)
 		expect(positions).toEqual([...positions].sort((a, b) => a - b))
@@ -482,14 +491,16 @@ describe("array order", () => {
 })
 
 describe("composite steps", () => {
-	test("lifting lore…rank takes the names clause with it, lists outside reads, and keeps inner refs", () => {
-		const doc = build(ADVENTURE_RESPOND_SPEC_ID)
+	test("lifting lore…rank takes the names and retrieval clauses with it, lists outside reads, and keeps inner refs", () => {
+		const doc = build(STORY_RESPOND_SPEC_ID)
 		const comp = extractComposite(doc, { from: "lore", to: "rank" })
 		const keys = comp.nodes.map((n) => n.key)
 		expect(keys).toContain("lore")
 		expect(keys).toContain("rank")
 		expect(keys).toContain("names.arm.link")
-		expect(comp.clauses.map((c) => c.id)).toEqual(["names"])
+		expect(keys).toContain("retrieval.on.eligible")
+		// The retrieval junction (2026-10-19) sits between the names and rank.
+		expect(comp.clauses.map((c) => c.id)).toEqual(["names", "retrieval"])
 		// lore reads the gather's candidates: an outside read, listed.
 		expect(comp.reads.some((r) => r.node.startsWith("gather."))).toBe(true)
 		// loreLinked reads lore.main inside: kept as a ref to a member.
@@ -500,26 +511,32 @@ describe("composite steps", () => {
 	})
 
 	test("inserting the composite prefixes every member and rewrites the refs between them", () => {
-		const doc = build(ADVENTURE_RESPOND_SPEC_ID)
+		const doc = build(STORY_RESPOND_SPEC_ID)
 		const comp = extractComposite(doc, { from: "lore", to: "rank" })
-		const target = build(ADVENTURE_RESPOND_SPEC_ID)
-		const next = insertComposite(target, { after: "contextBudget", container: null, key: "retrieval", composite: comp, fragmentId: "acme.lab:composite/retrieval" })
+		const target = build(STORY_RESPOND_SPEC_ID)
+		// `retrieval` is a key Story's reply already uses (its junction), so
+		// the composite goes in under another.
+		expect(() =>
+			insertComposite(build(STORY_RESPOND_SPEC_ID), { after: "contextBudget", container: null, key: "retrieval", composite: comp })
+		).toThrow(/already in use/)
+		const next = insertComposite(target, { after: "contextBudget", container: null, key: "lifted", composite: comp, fragmentId: "acme.lab:composite/retrieval" })
 		const keys = next.nodes.map((n) => n.key)
-		expect(keys).toContain("retrieval.lore")
-		expect(keys).toContain("retrieval.rank")
-		expect(keys).toContain("retrieval.names.arm.link")
-		expect(next.clauses.some((c) => c.id === "retrieval.names")).toBe(true)
-		const linked = next.nodes.find((n) => n.key === "retrieval.loreLinked")!
-		expect(JSON.stringify(linked.config)).toMatch(/"node":"retrieval\.lore"/)
-		expect(JSON.stringify(linked.config)).toMatch(/"node":"retrieval\.names\.arm\.link"/)
+		expect(keys).toContain("lifted.lore")
+		expect(keys).toContain("lifted.rank")
+		expect(keys).toContain("lifted.names.arm.link")
+		expect(next.clauses.some((c) => c.id === "lifted.names")).toBe(true)
+		expect(next.clauses.some((c) => c.id === "lifted.retrieval")).toBe(true)
+		const linked = next.nodes.find((n) => n.key === "lifted.loreLinked")!
+		expect(JSON.stringify(linked.config)).toMatch(/"node":"lifted\.lore"/)
+		expect(JSON.stringify(linked.config)).toMatch(/"node":"lifted\.names\.arm\.link"/)
 		// Outside reads are untouched.
-		const lore = next.nodes.find((n) => n.key === "retrieval.lore")!
+		const lore = next.nodes.find((n) => n.key === "lifted.lore")!
 		expect(JSON.stringify(lore.config)).toMatch(/"node":"gather\./)
 		// Placement: right after contextBudget, in run order, before the original lore.
 		const flat = flatRows(lineOf(next).rows).map((r) => r.key)
-		expect(flat.indexOf("retrieval.lore")).toBe(flat.indexOf("contextBudget") + 1)
-		expect(flat.indexOf("retrieval.rank")).toBeLessThan(flat.indexOf("gather"))
-		expect(next.includes.at(-1)).toEqual({ key: "retrieval", fragmentId: "acme.lab:composite/retrieval" })
+		expect(flat.indexOf("lifted.lore")).toBe(flat.indexOf("contextBudget") + 1)
+		expect(flat.indexOf("lifted.rank")).toBeLessThan(flat.indexOf("gather"))
+		expect(next.includes.at(-1)).toEqual({ key: "lifted", fragmentId: "acme.lab:composite/retrieval" })
 		// Invariant: every node and clause once, positions 0..n-1.
 		const all = flatRows(lineOf(next).rows)
 		expect(all.length).toBe(next.nodes.length + next.clauses.length)
@@ -527,19 +544,21 @@ describe("composite steps", () => {
 	})
 
 	test("inserting into a clause branch carries the container's prefix and membership", () => {
-		const doc = build(ADVENTURE_RESPOND_SPEC_ID)
-		const comp = extractComposite(doc, { from: "place", to: "eligible" })
+		const doc = build(STORY_RESPOND_SPEC_ID)
+		// Two spine steps (the scene reads; `place`…`eligible` until
+		// 2026-10-19, when `eligible` moved into the retrieval junction).
+		const comp = extractComposite(doc, { from: "sceneNow", to: "scenePlaces" })
 		const next = insertComposite(doc, { after: null, container: { clauseId: "gather", chain: "history" }, key: "extra", composite: comp })
-		const n = next.nodes.find((x) => x.key === "gather.history.extra.place")!
+		const n = next.nodes.find((x) => x.key === "gather.history.extra.sceneNow")!
 		expect(n).toBeTruthy()
 		expect(n.clauseId).toBe("gather")
 		expect(n.clauseChain).toBe("history")
 		const flat = flatRows(lineOf(next).rows).map((r) => r.key)
-		expect(flat.indexOf("gather.history.extra.place")).toBeLessThan(flat.indexOf("gather.history.read"))
+		expect(flat.indexOf("gather.history.extra.sceneNow")).toBeLessThan(flat.indexOf("gather.history.read"))
 	})
 
 	test("a composite lifted from inside a container loses that container's prefix", () => {
-		const doc = build(ADVENTURE_RESPOND_SPEC_ID)
+		const doc = build(STORY_RESPOND_SPEC_ID)
 		const comp = extractComposite(doc, { from: "gather.history.read", to: "gather.history.attachments" })
 		expect(comp.nodes.map((n) => n.key)).toEqual(["read", "attachments"])
 		expect(comp.nodes[1].clauseId).toBeUndefined()

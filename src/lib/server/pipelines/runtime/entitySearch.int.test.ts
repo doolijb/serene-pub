@@ -41,7 +41,7 @@ import { createHost } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import { EXTRACTOR_VERSION } from "$lib/server/pipelines/ranking/entities"
-import { respondSpec, CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { storyRespondSpec, STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { SHIPPED_CONTEXT_TEMPLATE } from "$lib/server/pipelines/entities/contextTemplateDefaults"
 
@@ -194,14 +194,14 @@ beforeAll(async () => {
 		await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
 			.limit(1)
 	)[0]
 }, 120_000)
 
 /** Run the shipped reply spec the way a turn does, and report two nodes. */
 const turn = async () => {
-	const receipt = await run(respondSpec(), {
+	const receipt = await run(storyRespondSpec(), {
 		input: {
 			text: "Well met. And you. Have you seen the ashguard?",
 			sessionId,
@@ -212,7 +212,7 @@ const turn = async () => {
 		bindings: coreBindings(),
 		world: await buildWorld(db, {
 			sessionId,
-			specId: CHAT_RESPOND_SPEC_ID
+			specId: STORY_RESPOND_SPEC_ID
 		}),
 		host: createHost(db, { sessionId, userId }),
 		// Stops before the provider, which needs a connection this test has no
@@ -251,7 +251,7 @@ const selectedConfigId = async () => {
 	const selected = await resolveSelectedConfig(
 		db,
 		respondSpecRow.id,
-		CHAT_RESPOND_SPEC_ID,
+		STORY_RESPOND_SPEC_ID,
 		{ sessionId }
 	)
 	expect(selected, "the reply spec resolves to no configuration").toBeTruthy()
@@ -578,7 +578,7 @@ describe("the transcript half", () => {
 	 * template that writes `{{{recalledLines}}}`. Not shipped anywhere.
 	 */
 	const wiredTurn = async (template: string) => {
-		const base = respondSpec() as any
+		const base = storyRespondSpec() as any
 		const lore = base.nodes.find((n: any) => n.key === LORE_NODE)
 		const at = lore.config.sources.length
 		const doc = {
@@ -609,7 +609,7 @@ describe("the transcript half", () => {
 				}
 			]
 		}
-		const world = await buildWorld(db, { sessionId, specId: CHAT_RESPOND_SPEC_ID })
+		const world = await buildWorld(db, { sessionId, specId: STORY_RESPOND_SPEC_ID })
 		world.overrides.push(
 			{
 				nodeKey: "prompt",

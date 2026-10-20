@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { realDateTime } from "$lib/client/utils/realTime.svelte"
 	/**
 	 * Admin › Users: the add and change form for one account (Django admin's
 	 * user change form). Fieldsets:
@@ -231,7 +232,7 @@
 				{/if}
 				<span class="text-surface-600-400">
 					{user.lastLoginAt
-						? `Last signed in ${new Date(user.lastLoginAt).toLocaleString()}`
+						? `Last signed in ${realDateTime(user.lastLoginAt)}`
 						: "Never signed in"}
 				</span>
 			</div>

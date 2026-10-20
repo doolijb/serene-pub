@@ -147,7 +147,7 @@ export async function choiceSets(db: Db, specId: number) {
 			.orderBy(asc(schema.pipelineContextTemplates.id))
 	).filter((r) => !off.owns(r.ownerPluginId))
 
-	// The display name, not the slug: `from core:spec/chat-respond` is the id a
+	// The display name, not the slug: `from core:spec/story-respond` is the id a
 	// developer reads and `from Reply · Chat` is the thing a user recognises,
 	// and this string is a subtitle in a picker. The genre rides beside it
 	// (`pipelineLabelsById`): in the Lair's Reply, a row from Chat's would

@@ -2,18 +2,21 @@
  * Two shipped defaults that moved on 2026-10-03, re-projected by one
  * migration (`living_scene_look_reprojection`, squashed away; see `migrationSql`).
  *
- * - **Chat's reply prompt** (owner note 44): "Roleplay - Living Scene" claims
- *   `core:spec/chat-respond` in place of "Roleplay - Simple" (now "Roleplay - Plain"). The seed pass moves
+ * - **Chat's reply prompt** (owner note 44; Story's reply since 2026-10-19): "Roleplay - Living Scene" claims
+ *   `core:spec/story-respond` in place of "Roleplay - Simple" (now "Roleplay - Plain"). The seed pass moves
  *   the claim by itself, but the shipped respond config stores the row id
  *   `ensureDefaultConfig` resolved once, so an older install kept Simple.
  * - **Adventure's Look** moved onto the scene builder, with the places
  *   listing and the room rule as preset values on new nodes. Its prompt row
  *   moved pools, and the seed key spells the pool, so the migration re-keys
- *   the row in place (same id) before the seed pass looks for it.
+ *   the row in place (same id) before the seed pass looks for it. Look is
+ *   Story's now (`core:spec/story-look`, 2026-10-19): the 0107 data upgrade,
+ *   which runs after the splice and before boot, re-keys the row once more
+ *   (`…:adventure-look` → `…:story-look`), still in place.
  *
  * Replays the real migration file against a database whose shipped configs
- * and Look row look like an older install's, then boots again. A person's own
- * configuration keeps the prompt it names.
+ * and Look row look like an older install's, runs the chain's 0107 step, then
+ * boots again. A person's own configuration keeps the prompt it names.
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
@@ -37,26 +40,38 @@ vi.mock("$lib/server/db", async () => {
 	}
 })
 
-const RESPOND = "core:spec/chat-respond"
+const RESPOND = "core:spec/story-respond"
 /**
  * The same spec as the migration names it: it was written before the
  * 2026-10-05 spec id rename (`respond` → `chat-respond`), and the splice
  * replays it on a pre-squash database before boot renames anything.
  */
 const RESPOND_AT_MIGRATION = "core:spec/respond"
-const LOOK = "core:spec/adventure-look"
+const LOOK = "core:spec/story-look"
+/** Look as the migration names it: Adventure's, until 2026-10-19. */
+const LOOK_AT_MIGRATION = "core:spec/adventure-look"
 const SHIPPED = (slug: string) => `pipeline-default:${slug}`
 /** Not named by the migration: its shipped row must outlive the replay. */
-const UNLISTED = SHIPPED("core:spec/adventure-respond")
+const UNLISTED = SHIPPED("core:spec/lair-respond")
+/** Today's id for a spec the migration names by an older one. */
+const TODAY: Record<string, string> = {
+	[SHIPPED(RESPOND_AT_MIGRATION)]: SHIPPED(RESPOND),
+	[SHIPPED(LOOK_AT_MIGRATION)]: SHIPPED(LOOK)
+}
 
 const SIMPLE_KEY =
 	"pipeline-prompt:core:task/build-template-context:prompts:prompt-roleplay-simple"
 const LIVING_SCENE_KEY =
 	"pipeline-prompt:core:task/build-template-context:prompts:prompt-roleplay-living-scene"
+/** Look's row before the migration: the template pool, Adventure's key. */
 const LOOK_OLD_KEY =
 	"pipeline-prompt:core:task/build-template-context:prompts:adventure-look"
-const LOOK_KEY =
+/** Where the migration re-keys it: the scene pool, still Adventure's key. */
+const LOOK_MIGRATED_KEY =
 	"pipeline-prompt:core:task/build-scene-context:prompts:adventure-look"
+/** Where it is today: the scene pool, Story's key (0107). */
+const LOOK_KEY =
+	"pipeline-prompt:core:task/build-scene-context:prompts:story-look"
 
 const PLACE = { nodeKey: "place", slot: "params", path: "path" }
 const ROOM_TYPES = {
@@ -66,7 +81,7 @@ const ROOM_TYPES = {
 }
 type Address = { nodeKey: string; slot: string; path: string }
 
-const ADMIN_COPY_NAME = "Chat (living scene test copy)"
+const ADMIN_COPY_NAME = "Story (living scene test copy)"
 
 const boot = async () => {
 	const { bootstrapPipelines } = await import(
@@ -154,25 +169,33 @@ const migrationSql = async () => {
 /** The shipped-config seed keys the migration deletes, read from the file, by today's spec ids. */
 const listedSeedKeys = async () =>
 	[...(await migrationSql()).matchAll(/'(pipeline-default:[^']+)'/g)].map(
-		(m) => (m[1] === SHIPPED(RESPOND_AT_MIGRATION) ? SHIPPED(RESPOND) : m[1])
+		(m) => TODAY[m[1]!] ?? m[1]!
 	)
 
 const replayMigration = async () => {
-	// The shipped reply row as a pre-squash database holds it when the splice
-	// replays: under the spec id the migration names.
-	await db
-		.update(schema.pipelineConfigs)
-		.set({ seedKey: SHIPPED(RESPOND_AT_MIGRATION) })
-		.where(eq(schema.pipelineConfigs.seedKey, SHIPPED(RESPOND)))
+	// The shipped rows as a pre-squash database holds them when the splice
+	// replays: under the spec ids the migration names.
+	for (const [then, now] of Object.entries(TODAY))
+		await db
+			.update(schema.pipelineConfigs)
+			.set({ seedKey: then })
+			.where(eq(schema.pipelineConfigs.seedKey, now))
 	for (const statement of (await migrationSql())
 		.split("--> statement-breakpoint")
 		.map((s) => s.trim())
 		.filter(Boolean))
 		await db.execute(sql.raw(statement))
-	expect(
-		await configBySeed(SHIPPED(RESPOND_AT_MIGRATION)),
-		"the migration left the shipped reply row"
-	).toBeUndefined()
+	for (const then of Object.keys(TODAY))
+		expect(
+			await configBySeed(then),
+			`the migration left the shipped row ${then}`
+		).toBeUndefined()
+	// The chain's next step on that database, before boot: 0107 moves
+	// Adventure's Look onto Story's key, the row kept.
+	expect(await promptBySeed(LOOK_MIGRATED_KEY), "the migration did not re-key Look").toBeTruthy()
+	const { run } = await import("$lib/server/db/dataUpgrades/0107_story_genre")
+	await run(db as any, {} as any)
+	expect(await promptBySeed(LOOK_MIGRATED_KEY)).toBeUndefined()
 }
 
 const shippedIds = async () =>
@@ -218,7 +241,7 @@ describe("the Living Scene and Look re-projection", () => {
 	)
 
 	it(
-		"ships Chat on Living Scene and Look on the scene pool's row, with the places, on a fresh install",
+		"ships Story's reply on Living Scene and Look on the scene pool's row, with the places, on a fresh install",
 		async () => {
 			const living = await promptBySeed(LIVING_SCENE_KEY)
 			const reply = await promptAddress(RESPOND, "core:task/build-template-context")
@@ -227,6 +250,7 @@ describe("the Living Scene and Look re-projection", () => {
 			const look = await promptBySeed(LOOK_KEY)
 			expect(look?.nodeDefinitionId).toBe("core:task/build-scene-context")
 			expect(await promptBySeed(LOOK_OLD_KEY)).toBeUndefined()
+			expect(await promptBySeed(LOOK_MIGRATED_KEY)).toBeUndefined()
 			const lookAt = await promptAddress(LOOK, "core:task/build-scene-context")
 			expect(lookAt.nodeKey).toBe("context")
 			expect(await valueAt(SHIPPED(LOOK), lookAt)).toBe(look.id)
@@ -301,7 +325,7 @@ describe("the Living Scene and Look re-projection", () => {
 			await replayMigration()
 			await boot()
 
-			// Chat's shipped default is a new row, on Living Scene.
+			// The reply's shipped default is a new row, on Living Scene.
 			const respondAfter = await configBySeed(SHIPPED(RESPOND))
 			expect(respondAfter.id).not.toBe(shippedRespond.id)
 			expect(respondAfter.isImmutable).toBe(true)
@@ -312,8 +336,9 @@ describe("the Living Scene and Look re-projection", () => {
 			expect(copyRowAfter?.id).toBe(copyRow.id)
 			expect(copyRowAfter?.value).toBe(simple.id)
 
-			// Look's prompt row: the same id, re-keyed into the scene pool and
-			// refreshed from the catalog — no duplicate, no orphan.
+			// Look's prompt row: the same id, re-keyed into the scene pool (and
+			// onto Story's key) and refreshed from the catalog — no duplicate,
+			// no orphan.
 			const lookAfter = await promptBySeed(LOOK_KEY)
 			expect(lookAfter.id).toBe(look.id)
 			expect(lookAfter.nodeDefinitionId).toBe("core:task/build-scene-context")
@@ -323,7 +348,7 @@ describe("the Living Scene and Look re-projection", () => {
 			const named = await db
 				.select({ id: schema.pipelinePrompts.id })
 				.from(schema.pipelinePrompts)
-				.where(eq(schema.pipelinePrompts.name, "Adventure look"))
+				.where(eq(schema.pipelinePrompts.name, "Story look"))
 			expect(named).toHaveLength(1)
 
 			// Look's shipped default is a new row, with the places.

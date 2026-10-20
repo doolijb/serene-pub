@@ -280,7 +280,7 @@ describe("a clock move goes back with its message", () => {
 		const w = await world()
 		await (await host(w)).commit!({ by: 3, unit: "hours", cause: "keeper" }, advance)
 		const { retractStateAnchoredTo } = await import("./write")
-		expect(await retractStateAnchoredTo(db(), w.message.id)).toEqual({ clockMoved: true, changed: true })
+		expect(await retractStateAnchoredTo(db(), w.message.id)).toMatchObject({ clockMoved: true, changed: true })
 		expect(await clockOf(w.session.id)).toMatchObject({ day: 5, hour: 9, minute: 0 })
 		expect(await clockRows(w.session.id)).toEqual([])
 	})
@@ -290,7 +290,7 @@ describe("a clock move goes back with its message", () => {
 		await (await host(w)).commit!({ by: 5, unit: "minutes", cause: "tick" }, advance)
 		const { retractStateAnchoredTo } = await import("./write")
 		// Nothing taken back, so nothing to announce (§15 G14).
-		expect(await retractStateAnchoredTo(db(), w.message.id)).toEqual({ clockMoved: false, changed: false })
+		expect(await retractStateAnchoredTo(db(), w.message.id)).toMatchObject({ clockMoved: false, changed: false })
 		expect(await clockOf(w.session.id)).toMatchObject({ hour: 9, minute: 5 })
 		expect((await clockRows(w.session.id)).map((r) => r.status)).toEqual(["applied"])
 	})
@@ -361,7 +361,7 @@ describe("a clock move goes back with its message", () => {
 			.where(eq(schema.sessions.id, w.session.id))
 		const { retractStateAnchoredTo } = await import("./write")
 		// The clock stays; the move's line still goes, and that is a change (§15 G14).
-		expect(await retractStateAnchoredTo(db(), w.message.id)).toEqual({ clockMoved: false, changed: true })
+		expect(await retractStateAnchoredTo(db(), w.message.id)).toMatchObject({ clockMoved: false, changed: true })
 		expect((await clockOf(w.session.id)).year).toBeNull()
 	})
 })

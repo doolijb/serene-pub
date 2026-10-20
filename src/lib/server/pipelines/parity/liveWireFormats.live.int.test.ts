@@ -45,7 +45,7 @@ import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
-import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 
 const OLLAMA_HOST = "127.0.0.1"
 const OLLAMA_PORT = 11434
@@ -387,7 +387,7 @@ async function runAgainst(
 		userId,
 		currentCharacterId: characterId,
 		text: USER_LINE,
-		specId: CHAT_RESPOND_SPEC_ID,
+		specId: STORY_RESPOND_SPEC_ID,
 		seed
 	})
 	return {

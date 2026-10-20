@@ -65,32 +65,52 @@ function readChanges(raw: unknown): Array<StateChange | ClockChange> {
 const isClockLine = (c: StateChange | ClockChange): c is ClockChange =>
 	(c as { kind?: unknown }).kind === "clock"
 
+/** A cast owner a participant reference names — a seated card, or 🚧 a card-less player seat. */
+export type CastOwner = { kind: "session_cast" | "player_seat"; id: number }
+
+/**
+ * The cast owner a participant reference names: `character:<id>` a seated
+ * card's session layer, 🚧 `player-seat:<id>` a card-less player seat
+ * (2026-10-15 — Dungeon Crawler writes a player's sheet on their seat).
+ * Null for anything else. Whether the owner is this session's is
+ * `assertSessionOwner`'s to say.
+ */
+export function castOwnerOfRef(ref: unknown): CastOwner | null {
+	if (typeof ref !== "string") return null
+	const m = /^(character|player-seat):(\d+)$/.exec(ref.trim())
+	if (!m) return null
+	return {
+		kind: m[1] === "character" ? "session_cast" : "player_seat",
+		id: Number(m[2])
+	}
+}
+
 /**
  * `resolve-state-changes`' `owners` (lair re-plan R10): participant
  * references resolved to cast owners — `null` when unwired, so an owner-less
- * change stays the world's. A reference that is not `character:<id>`, or a
- * character the session does not seat (`seated` throws its sentence), is a
- * sentence on `refused` and no owner; a reference named twice counts once.
+ * change stays the world's. A reference that is neither `character:<id>` nor
+ * 🚧 `player-seat:<id>`, or an owner the session does not hold (`seated`
+ * throws its sentence), is a sentence on `refused` and no owner; a reference
+ * named twice counts once.
  */
 export async function ownersFrom(
 	raw: unknown,
 	sessionId: number,
-	seated: (owner: { kind: "session_cast"; id: number }) => Promise<void>,
+	seated: (owner: CastOwner) => Promise<void>,
 	refused: string[]
-): Promise<Array<{ kind: "session_cast"; id: number }> | null> {
+): Promise<Array<CastOwner> | null> {
 	if (raw === undefined || raw === null) return null
 	const refs = Array.isArray(raw) ? raw : [raw]
-	const out: Array<{ kind: "session_cast"; id: number }> = []
+	const out: Array<CastOwner> = []
 	for (const ref of refs) {
-		const m = typeof ref === "string" ? /^character:(\d+)$/.exec(ref.trim()) : null
-		if (!m) {
+		const owner = castOwnerOfRef(ref)
+		if (!owner) {
 			refused.push(
 				`${JSON.stringify(ref)} is not a cast member of session ${sessionId}, so nothing was set on it.`
 			)
 			continue
 		}
-		const owner = { kind: "session_cast" as const, id: Number(m[1]) }
-		if (out.some((o) => o.id === owner.id)) continue
+		if (out.some((o) => o.kind === owner.kind && o.id === owner.id)) continue
 		try {
 			await seated(owner)
 			out.push(owner)
@@ -218,6 +238,16 @@ function readBase(raw: unknown): number | null {
  * genuinely is one. Anything else is passed through untouched so the write's own
  * refusal still names the real problem.
  */
+/** A list of non-blank lines, or null — a list slot's value written whole. */
+function textLines(written: unknown): string[] | null {
+	if (!Array.isArray(written)) return null
+	const lines = written
+		.filter((v): v is string => typeof v === "string")
+		.map((v) => v.trim())
+		.filter(Boolean)
+	return lines.length === written.length && lines.length ? lines : null
+}
+
 function asSlotType(
 	slotId: string,
 	value: string | number | boolean
@@ -581,7 +611,10 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 
 				/** Coerce, validate, and take the change or leave a sentence. */
 				const take = async (
-					owner: { kind: "session" | "session_cast" | "session_location"; id: number },
+					owner: {
+						kind: "session" | "session_cast" | "session_location" | "player_seat"
+						id: number
+					},
 					slotId: string,
 					written: unknown
 				): Promise<void> => {
@@ -597,7 +630,10 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 							? // 🚧 A place the lorebook names, on a slot that
 								// may point at one, is that place (a location).
 								await loreRefNamed(db, sessionId, slotId, asSlotType(slotId, written))
-							: null
+							: // 🚧 A list of lines, for a list slot (2026-10-15): a
+								// sheet's abilities or gear written whole. Lines only —
+								// a lore entry rides the item arm above.
+								textLines(written)
 					// Throws a sentence naming the slot and what it accepts,
 					// which is the whole of why nothing invalid is proposed.
 					await validateValue(db, { sessionId, owner, slotId, value })
@@ -626,7 +662,7 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 				)
 				const lines: Array<{
 					line: Record<string, unknown>
-					owner?: { kind: "session_cast"; id: number }
+					owner?: CastOwner
 				}> = []
 				for (const raw of ordered) {
 					if (!raw || typeof raw !== "object") continue
@@ -639,8 +675,14 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 				for (const { line, owner: given } of lines) {
 					namedOwner = typeof line.owner === "string" ? line.owner : ""
 					try {
+						// 🚧 A change may name its owner by participant
+						// reference (`player-seat:<id>`, `character:<id>`) —
+						// a genre's script knows the seat, not a name.
+						const byRef = castOwnerOfRef(line.owner)
+						if (byRef) await assertSessionOwner(db, sessionId, byRef)
 						const owner =
 							given ??
+							byRef ??
 							(await ownerFor(
 								toolCtx,
 								typeof line.owner === "string" ? line.owner : ""

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { realTime } from "$lib/client/utils/realTime.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { onMount, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
@@ -328,7 +329,7 @@
 			{/if}
 			{#if subStatus?.startedAt}
 				<p class="text-surface-700-300 text-xs">
-					Started {new Date(subStatus.startedAt).toLocaleTimeString()}
+					Started {realTime(subStatus.startedAt)}
 				</p>
 			{/if}
 

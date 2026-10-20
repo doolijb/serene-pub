@@ -71,10 +71,11 @@ You don't need to press anything when you're done. As soon as your pub can reply
 
 ### 3. What would you like to do?
 
-Two choices. You can do both later; this is only where to start.
+Up to three choices. You can do any of them later; this is only where to start.
 
 - **Play with characters**: the AI plays a character and you play yourself (or someone you make up). Choose this for your first story. It adds the two screens below.
 - **Talk to an AI**: a calm conversation with **Serene**, Serene Pub's mascot and guide, who answers questions about the app from this documentation. Pressing it starts a session called *Welcome to Serene Pub* straight away, and Serene greets you. If it says *The Guide is switched off on this pub*, the person who runs the pub has turned it off.
+- **Start a session**: the start screen with its genre cards: a plain [Chat](./genres.md#chat) with the model, a [Story](./genre-story.md) with your characters, a [Dungeon Crawler](./genre-dungeon-crawler.md) the AI runs, or [the Lair](./genre-lair.md) you run yourself. Each card says what it is; **More** says the rest.
 
 ### 4. Pick a character
 

@@ -12,6 +12,7 @@ import type { TypedSocket } from "$lib/client/sockets/typedSocket"
 import type { SessionPageInbox } from "$lib/client/components/sessionPage/sessionPageInbox.svelte"
 import type { SessionPageData } from "$lib/client/components/sessionPage/sessionPageData.svelte"
 import type { TurnFlow } from "$lib/client/components/sessionPage/turnFlow.svelte"
+import { createPendingSend } from "$lib/client/components/sessionPage/pendingSend"
 
 export interface ComposerFlowDeps {
 	socket: TypedSocket
@@ -29,6 +30,13 @@ export interface ComposerFlowDeps {
 	draft(): string
 	/** Sets the page's draft without a composer write: the composer cleared it itself on Send. */
 	setNewMessage(content: string): void
+	/**
+	 * 🚧 Writes the composer's draft (the page's `writeDraft`): a refused send's
+	 * text going back in the box.
+	 */
+	restoreDraft(content: string): void
+	/** The viewer's user id — whose pushed row is their own send landing. */
+	userId(): number | null
 }
 
 /** The page's composer half. Registers its listeners on the inbox at once. */
@@ -42,6 +50,8 @@ export function createComposerFlow(d: ComposerFlowDeps) {
 	const session = $derived(d.data.session)
 	const lastSettledMessageKey = $derived(d.data.lastSettledMessageKey)
 	const currentUserPersona = $derived(d.data.currentUserPersona)
+	const ownCardlessSeat = $derived(d.data.ownCardlessSeat)
+	const isGuest = $derived(d.data.isGuest)
 	const personaRequiredOnSend = $derived(d.data.personaRequiredOnSend)
 	const composerChannel = $derived(d.data.composerChannel)
 	const markFireInFlight = () => d.turns.markFireInFlight()
@@ -103,6 +113,23 @@ export function createComposerFlow(d: ComposerFlowDeps) {
 		if (!d.turns.showAddPersonaModal) personaAskedBySend = false
 	})
 
+	/**
+	 * 🚧 The sent text, held until it is saved (owner ruling 2026-10-15): a
+	 * person's message is saved through the session's pipeline, which may
+	 * refuse it — then the text comes back. See `pendingSend.ts`.
+	 */
+	const pendingSend = createPendingSend({
+		restore: (content) => d.restoreDraft(content),
+		draft: () => untrack(() => newMessage),
+		landed: (id) => {
+			// The kept draft goes only once the message is saved — unless the
+			// person has started the next one meanwhile.
+			if (!untrack(() => newMessage).trim())
+				socket.emit("sessions:saveDraft", { sessionId: id, content: "" })
+		},
+		say: (sentence) => toaster.error({ title: "Not sent", description: sentence })
+	})
+
 	// ── Draft autosave ────────────────────────────────────────────────────────
 	// Debounce-save newMessage to the server as the user types.
 	// Only runs when the session is loaded (session !== undefined) to avoid
@@ -111,6 +138,9 @@ export function createComposerFlow(d: ComposerFlowDeps) {
 		const content = newMessage
 		const currentSessionId = sessionId
 		if (!currentSessionId || loadedSessionId === null) return
+		// The box emptied by a Send is not the person clearing their draft:
+		// the server keeps it until the message is saved (`pendingSend`).
+		if (!content.trim() && pendingSend.inFlight) return
 		const timer = setTimeout(() => {
 			socket.emit("sessions:saveDraft", {
 				sessionId: currentSessionId,
@@ -208,10 +238,15 @@ export function createComposerFlow(d: ComposerFlowDeps) {
 	function handleSend(trayItemIds: string[] = []): boolean {
 		if (!newMessage.trim() && !trayItemIds.length) return false
 
-		// Use the current user's persona if they have one, otherwise use the first persona (for session owner)
+		// The viewer's own persona; else their named card-less player seat
+		// (no persona — the server stamps the seat, `player-seat:<id>`);
+		// else, for the session's owner only, the first seated persona. A
+		// guest never borrows another person's card.
 		const personaId =
 			currentUserPersona?.personaId ||
-			session?.sessionPersonas?.[0]?.personaId
+			(ownCardlessSeat || isGuest
+				? undefined
+				: session?.sessionPersonas?.[0]?.personaId)
 
 		// A mode whose shape has no persona system submits bare prose (19 §1:
 		// "the user is simply prose") — the server already stores a
@@ -219,7 +254,7 @@ export function createComposerFlow(d: ComposerFlowDeps) {
 		// one. Under the standard mode the requirement stands, as ever.
 		// Refused, the answer opens rather than a toast (less-confusing E10):
 		// the picker of who you play as, saying why. The draft stays.
-		if (!personaId && personaRequiredOnSend) {
+		if (!personaId && !ownCardlessSeat && personaRequiredOnSend) {
 			personaAskedBySend = true
 			d.turns.showAddPersonaModal = true
 			return false
@@ -234,9 +269,21 @@ export function createComposerFlow(d: ComposerFlowDeps) {
 			channel: composerChannel,
 			...(trayItemIds.length ? { trayItemIds } : {})
 		}
+		return sendMessage(msg)
+	}
+
+	/**
+	 * 🚧 Send one message and hold its text until it is saved. The one place
+	 * a message leaves the composer, so a later composer option (another way
+	 * to send) shapes `msg` and calls this. False while an earlier send is
+	 * still unanswered.
+	 */
+	function sendMessage(msg: Sockets.SessionMessages.SendPersonaMessage.Params): boolean {
+		if (!pendingSend.start(msg.sessionId, msg.content, d.userId())) return false
 		socket.emit("sessionMessages:sendPersonaMessage", msg)
+		// The box is empty (the composer cleared it on Send); the server's
+		// copy of the draft stays until the message is saved.
 		d.setNewMessage("")
-		socket.emit("sessions:saveDraft", { sessionId, content: "" })
 
 		// Character response triggering (once every persona has taken their turn)
 		// is handled entirely server-side, in sessionMessagesSendPersonaMessageHandler —
@@ -255,12 +302,13 @@ export function createComposerFlow(d: ComposerFlowDeps) {
 		return true
 	}
 
-	// A Send the server refused (an attachment still uploading, one the reply
-	// stopped reading, a channel it lacks) says why; the tray stays.
-	d.inbox.on("sessionMessages:sendPersonaMessage", (res) => {
-		if (res?.sessionId === sessionId && res.error)
-			toaster.error({ title: "Not sent", description: res.error })
-	})
+	// The send's answer: saved, or refused with a sentence (an attachment
+	// still uploading, a channel the session lacks, the genre's save pipeline
+	// saying no) — then the text comes back and the sentence is said once.
+	// The tray stays on a refusal.
+	d.inbox.on("sessionMessages:sendPersonaMessage", (res) => pendingSend.answer(res))
+	// The saved row reaching the page: the message landed.
+	d.inbox.on("sessionMessage", (msg) => pendingSend.pushed(msg?.sessionMessage))
 	d.inbox.on("attachments:removeFromMessage:error", (res) => {
 		if (res?.sessionId == null || res.sessionId === sessionId)
 			toaster.error({
@@ -312,6 +360,7 @@ export function createComposerFlow(d: ComposerFlowDeps) {
 		/** Another session opened in the page: the last one's compiled draft goes. */
 		reset() {
 			draftCompiledPrompt = undefined
+			pendingSend.drop()
 		}
 	}
 }

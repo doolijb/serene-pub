@@ -30,6 +30,7 @@ export const statTrailReplyKey = (
 const OWNER_KINDS: ReadonlySet<string> = new Set([
 	"session",
 	"session_cast",
+	"player_seat",
 	"session_location"
 ])
 
@@ -56,7 +57,7 @@ export async function answerStatTrail(
 		!Number.isInteger(owner.id)
 	)
 		throw new Error(
-			"stat-trail names its owner as { kind: 'session' | 'session_cast' | 'session_location', id }"
+			"stat-trail names its owner as { kind: 'session' | 'session_cast' | 'player_seat' | 'session_location', id }"
 		)
 	const slotId = typeof p.slotId === "string" ? p.slotId.trim() : ""
 	if (!slotId)

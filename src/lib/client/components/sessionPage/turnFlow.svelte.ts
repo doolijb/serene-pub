@@ -5,7 +5,10 @@
  * persona — and the in-flight flag that keeps the next-speaker block from
  * flashing between a send and its reply's first row.
  */
+import { untrack } from "svelte"
+import { goto } from "$app/navigation"
 import { toaster } from "$lib/client/utils/toaster"
+import { sessionAddress } from "$lib/client/components/sessionPage/deleteReply"
 import {
 	EMPTY_TURN_ORDER,
 	readTurnOrder,
@@ -167,6 +170,24 @@ export function createTurnFlow(d: TurnFlowDeps) {
 		if (hasGeneratingMessage) clearFireInFlight()
 	})
 
+	/**
+	 * 🚧 The order a reply was played from (PLAN-dc-after-walk3 R1-3, the
+	 * walk's NEW-9: "Narrator is ready to continue" after every solo turn).
+	 * The stored order says who is due until the recompute that follows the
+	 * reply lands — seconds, on a busy table — so the head just played was
+	 * offered again. Recorded when a reply starts; while the order in hand is
+	 * still that one, its head is not offered: the next push says who is due.
+	 */
+	let playedFrom = $state<number | null>(null)
+	$effect(() => {
+		if (!hasGeneratingMessage) return
+		const at = untrack(() => turnOrderDoc.basedOnAt)
+		untrack(() => {
+			if (playedFrom !== at) playedFrom = at
+		})
+	})
+	let headPlayed = $derived(playedFrom !== null && turnOrderDoc.basedOnAt === playedFrom)
+
 	// Determine if we should show the next character block
 	let shouldShowNextCharacterBlock: boolean = $derived.by(() => {
 		const hasMessageDraft = newMessage.trim().length > 0
@@ -178,6 +199,7 @@ export function createTurnFlow(d: TurnFlowDeps) {
 		const shouldShow =
 			!fireInFlight &&
 			!hasGeneratingMessage &&
+			!headPlayed &&
 			!hasMessageDraft &&
 			hasNextCharacter &&
 			// No character system in the mode → nobody's turn to announce.
@@ -224,6 +246,7 @@ export function createTurnFlow(d: TurnFlowDeps) {
 	function handleRegenerateLastMessage(e: Event) {
 		e.stopPropagation()
 		if (lastMessage && canRegenerateLastMessage) {
+			d.data.rerunRefusals.asked("sessionMessages:regenerate", lastMessage.id)
 			socket.emit("sessionMessages:regenerate", { id: lastMessage.id })
 		}
 	}
@@ -236,11 +259,16 @@ export function createTurnFlow(d: TurnFlowDeps) {
 	 */
 	let showRetakeConfirm = $state(false)
 	let retakeRows = $state<RetakeRow[]>([])
+	/** 🚧 The preview's On revision sentence (PLAN-rulesets §28). */
+	let retakeRevision = $state<string | null>(null)
 	const retake = createRetake({
 		sessionId: () => sessionId,
 		quiet: () => retakeQuietly(annexView),
 		send: (p) => {
-			if (!p.preview) markFireInFlight()
+			if (!p.preview) {
+				markFireInFlight()
+				retakeSent = true
+			}
 			socket.emit("sessions:retakeTurn", p)
 		},
 		setQuiet: (value) =>
@@ -249,8 +277,9 @@ export function createTurnFlow(d: TurnFlowDeps) {
 				identity: RETAKE_QUIETLY,
 				payload: { value }
 			}),
-		ask: (rows) => {
+		ask: (rows, revision) => {
 			retakeRows = rows
+			retakeRevision = revision
 			showRetakeConfirm = true
 		}
 	})
@@ -258,14 +287,33 @@ export function createTurnFlow(d: TurnFlowDeps) {
 		e.stopPropagation()
 		retake.press()
 	}
+	/**
+	 * 🚧 This tab sent the retake itself (not a preview), until it answers:
+	 * the tab that pressed is the one that follows a branch (2026-10-18).
+	 */
+	let retakeSent = false
 	function handleRetakeTurn(msg: Sockets.Sessions.RetakeTurn.Response) {
 		if (msg.sessionId !== sessionId) return
 		if (retake.hear(msg)) return
 		if (!msg.ok) clearFireInFlight()
+		const mine = retakeSent
+		retakeSent = false
+		// 🚧 On revision `branch` (the 100-turn walk, B8): the turn was taken
+		// again in a new session — the page goes there, as a delete that
+		// branched does, rather than staying on the unchanged original.
+		if (mine && typeof msg.branchedTo === "number") {
+			clearFireInFlight()
+			toaster.info({
+				title: "Regenerated in a branch",
+				description: "The turn was taken again in a new branch; the old one stays where it was."
+			})
+			void goto(sessionAddress(msg.branchedTo))
+		}
 	}
 	function handleRetakeTurnError(msg: Sockets.Sessions.RetakeTurn.Response) {
 		if (msg.sessionId !== sessionId) return
 		if (retake.hear(msg)) return
+		retakeSent = false
 		clearFireInFlight()
 		if (msg.error) toaster.error({ title: msg.error })
 	}
@@ -486,6 +534,9 @@ export function createTurnFlow(d: TurnFlowDeps) {
 		get retakeRows() {
 			return retakeRows
 		},
+		get retakeRevision() {
+			return retakeRevision
+		},
 		retake,
 		get shouldShowNextCharacterBlock() {
 			return shouldShowNextCharacterBlock
@@ -526,6 +577,7 @@ export function createTurnFlow(d: TurnFlowDeps) {
 		reset() {
 			turnOrder = null
 			turnOrderDoc = EMPTY_TURN_ORDER
+			playedFrom = null
 			showTurnPicker = false
 		}
 	}

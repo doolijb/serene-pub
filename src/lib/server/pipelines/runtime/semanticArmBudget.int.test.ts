@@ -23,7 +23,7 @@ import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
-import { respondSpec } from "$lib/server/pipelines/specs/respond"
+import { storyRespondSpec } from "$lib/server/pipelines/specs/respond"
 import {
 	insertNarrativeNodeRow,
 	insertSessionCharacterRow,
@@ -185,7 +185,7 @@ const turn = async (
 			scopeKind: "defaults"
 		} as any)
 
-	return (await run(respondSpec(), {
+	return (await run(storyRespondSpec(), {
 		world,
 		input: {
 			text: "tell me about the ashguard",

@@ -92,7 +92,13 @@ export async function getSessionRagContext(
 	])
 
 	const lorebookId = session?.lorebookId ?? null
-	const allLorebookIds: number[] = lorebookId ? [lorebookId] : []
+	// 🚧 The union (PLAN-rulesets §26): the attached book, then the
+	// session's own notes — whose rows are all on their main line, so the
+	// attached book's reading reads them whole.
+	const { lorebooksReadBy } = await import("$lib/server/lorebooks/phantom")
+	const allLorebookIds: number[] = (
+		await lorebooksReadBy(db, { id: sessionId, lorebookId })
+	).ids
 
 	const characterIds = sessionCharsRows
 		.map((cc) => cc.characterId)

@@ -54,6 +54,17 @@ import type { PluginHookDispatch } from "$lib/server/pipelines/scripts/pluginDis
  */
 export const SCRIPT_BUDGET_PARAM = "budgetMs"
 
+/**
+ * 🚧 The **script step** (`core:task/run-script@1`): a node whose answer IS
+ * its script's. A link that fails there halts the step with its reason —
+ * never the hook rule of handing the value on unchanged, which for this
+ * step hands the step's own INPUT downstream as if the script had answered
+ * (the 2026-10-19 walk: an interview answer judged by nobody wrote nothing
+ * and was marked answered; a story turn whose books never opened told
+ * "the Planner is silent"). PLAN-dc-after-walk2 Q0-1/Q0-3.
+ */
+const SCRIPT_STEP_DEFINITION = "core:task/run-script@1"
+
 /** A connection's attached stop guards, as the applier evaluates them (18 §4b). */
 export interface ConnectionStops {
 	connectionId: number
@@ -75,6 +86,13 @@ export interface ScriptApplierOptions {
 	nowMs: number
 	/** Values for declared hook extras — speaker name, cast names. */
 	extras?: Record<string, unknown>
+	/**
+	 * 🚧 Extras read only when a link asks for them — the session's state
+	 * for a `select` script (`state`, the `session-state@1` document), which
+	 * is a whole resolution no other link should pay for. Read at the moment
+	 * of the application, so a link sees the state as it stands then.
+	 */
+	lazyExtras?: Record<string, () => Promise<unknown>>
 	/** The seam default: how long one link may run (250 ms when unset). */
 	timeoutMs?: number
 	/**
@@ -132,6 +150,33 @@ const sizeOf = (v: unknown): number => {
 		return Buffer.byteLength(JSON.stringify(v) ?? "", "utf8")
 	} catch {
 		return Number.MAX_SAFE_INTEGER
+	}
+}
+
+/** The script kind a turn-order `select` point accepts. */
+const TURN_SELECT_KIND = "core:script:turn/select@1"
+
+/**
+ * 🚧 The extras a site is handed: its own and the ambient set, as the
+ * executor names them — and, at a `select` point, the session's **state**
+ * (PLAN-sheet §17, audit A8: a round script reads fates off the state rows,
+ * not an annex copy). ⏳ Host-side until the SDK names `state` among the
+ * point's extras.
+ */
+export const siteExtrasOf = (site: { extras: readonly string[]; accepts: readonly string[] }): string[] =>
+	site.accepts.includes(TURN_SELECT_KIND) && !site.extras.includes("state") ? [...site.extras, "state"] : [...site.extras]
+
+/** One extra's value: the run's, else a lazy one read now, else null. */
+async function extraValue(opts: ScriptApplierOptions, name: string): Promise<unknown> {
+	const given = (opts.extras ?? {})[name]
+	if (given !== undefined && given !== null) return given
+	const lazy = opts.lazyExtras?.[name]
+	if (!lazy) return null
+	try {
+		return (await lazy()) ?? null
+	} catch (e) {
+		console.warn(`[scripts] the '${name}' extra could not be read:`, e)
+		return null
 	}
 }
 
@@ -304,9 +349,8 @@ export function makeScriptApplier(
 			const vars: Record<string, unknown> = {}
 			if (declaredIns.has(subject)) vars[subject] = current
 			const extras: Record<string, unknown> = {}
-			for (const name of site.extras)
-				if (declaredIns.has(name))
-					extras[name] = (opts.extras ?? {})[name] ?? null
+			for (const name of siteExtrasOf(site))
+				if (declaredIns.has(name)) extras[name] = await extraValue(opts, name)
 
 			// One address for the per-link stream, whichever executor runs it,
 			// so a chain replays the same whether a link is core's or a
@@ -636,6 +680,16 @@ export function makeScriptApplier(
 			current = current.slice(0, winner.index)
 		}
 
+		const broken =
+			site.definitionId === SCRIPT_STEP_DEFINITION
+				? applications.find((a) => a.result === "err")
+				: undefined
+		if (broken)
+			return {
+				value: current,
+				applications,
+				halt: { reason: `the script '${broken.name}' failed: ${broken.reason ?? "no reason given"}` }
+			}
 		return { value: current, applications }
 	}
 }

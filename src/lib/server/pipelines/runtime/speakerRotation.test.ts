@@ -26,7 +26,9 @@ import {
 	type RotationSeat,
 	type TurnCandidate,
 	spokenRefsSince,
-	roundRobinEntries
+	roundRobinEntries,
+	senderRefOf,
+	userSplitEntries
 } from "./speakerRotation"
 
 const seat = (
@@ -335,5 +337,30 @@ describe("an envoy's reply read off session-history (M3 fix)", () => {
 				history as any
 			)
 		).toEqual([])
+	})
+})
+
+describe("🚧 a card-less player seat's line (2026-10-14)", () => {
+	const seatLine: RotationMessage = { role: "user", personaId: null, metadata: { speaker: "player-seat:4" } }
+
+	it("senderRefOf names the persona, else the card-less player seat the line carries, else nobody", () => {
+		expect(senderRefOf({ personaId: 7 })).toBe("character:7")
+		expect(senderRefOf(seatLine)).toBe("player-seat:4")
+		expect(senderRefOf({ personaId: null })).toBeNull()
+		// Only a seat is read off a person's line: an envoy never sends one.
+		expect(senderRefOf({ metadata: { speaker: "envoy:mascot" } })).toBeNull()
+	})
+
+	it("its send consumes its turn, and user-split puts its player's other candidates first", () => {
+		const candidates: TurnCandidate[] = [
+			{ ref: "character:11", kind: "character", name: "Alice", position: 0, ownerUserId: 1 },
+			{ ref: "character:22", kind: "character", name: "Bram", position: 1, ownerUserId: 5 },
+			{ ref: "player-seat:4", kind: "persona", name: "Ash", position: 0, ownerUserId: 5 }
+		]
+		expect(roundRobinEntries(candidates, [seatLine]).map((e) => e.ref)).toEqual([
+			"character:11",
+			"character:22"
+		])
+		expect(userSplitEntries(candidates, [seatLine]).map((e) => e.ref)).toEqual(["character:22"])
 	})
 })

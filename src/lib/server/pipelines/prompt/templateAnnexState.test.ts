@@ -128,7 +128,7 @@ describe("P6 · the template view of the annex", () => {
 	})
 
 	it("a key declared for another genre is not in force here", () => {
-		expect(templateAnnexFrom(stored, declarations, "core:genre/chat")).toEqual({})
+		expect(templateAnnexFrom(stored, declarations, "core:genre/story")).toEqual({})
 	})
 })
 

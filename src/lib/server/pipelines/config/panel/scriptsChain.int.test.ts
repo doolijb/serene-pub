@@ -19,7 +19,7 @@ import {
 	OptionNotWritableError,
 	type ConfigOption
 } from "$lib/server/pipelines/config/panel"
-import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import {
 	createScript,
 	deleteScript,
@@ -42,15 +42,19 @@ async function writeHookOption(): Promise<ConfigOption> {
 	const view = await namespaceView(
 		db,
 		SECRET,
-		CHAT_RESPOND_SPEC_ID,
+		STORY_RESPOND_SPEC_ID,
 		admin()
 	)
 	const all = groupOptions(view!.groups)
 	const chains = all.filter((o) => o.control === "scripts-chain")
 	expect(chains.length).toBeGreaterThan(0)
 	// The respond spec declares hooks on several steps; the write consumer's is
-	// the one whose choices can include a text transform.
-	return chains[chains.length - 1]!
+	// the first before a text port — the step that saves the reply. (Story's
+	// reply runs more calls after it, 2026-10-19, each with chains of its own,
+	// so it is no longer the last.)
+	const write = chains.find((o) => o.at === "in:text")
+	expect(write, "no chain before the reply's text").toBeTruthy()
+	return write!
 }
 
 beforeAll(async () => {
@@ -74,11 +78,11 @@ beforeAll(async () => {
 	const [spec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
 	const shipped = await resolveSelectedConfig(
 		db,
 		spec.id,
-		CHAT_RESPOND_SPEC_ID,
+		STORY_RESPOND_SPEC_ID,
 		{}
 	)
 	const copy = await duplicateConfig(
@@ -95,7 +99,7 @@ describe("the hook in the panel", () => {
 		expect(option.writable).toBe(true)
 		expect(option.scripts ?? []).toEqual([])
 		// A non-admin sees prompts and nothing else (§26a) — no chain options.
-		const view = await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, {
+		const view = await namespaceView(db, SECRET, STORY_RESPOND_SPEC_ID, {
 			userId: adminId + 1,
 			isAdmin: false
 		})
@@ -132,7 +136,7 @@ describe("the hook in the panel", () => {
 		await writeOption(
 			db,
 			SECRET,
-			CHAT_RESPOND_SPEC_ID,
+			STORY_RESPOND_SPEC_ID,
 			admin(),
 			option.id,
 			[guard.id, slop.id]
@@ -164,7 +168,7 @@ describe("the hook in the panel", () => {
 			writeOption(
 				db,
 				SECRET,
-				CHAT_RESPOND_SPEC_ID,
+				STORY_RESPOND_SPEC_ID,
 				admin(),
 				option.id,
 				[wrongKind.id]
@@ -221,7 +225,7 @@ describe("the hook in the panel", () => {
 		const view = await namespaceView(
 			db,
 			SECRET,
-			CHAT_RESPOND_SPEC_ID,
+			STORY_RESPOND_SPEC_ID,
 			admin()
 		)
 		const rankChain = groupOptions(view!.groups)
@@ -235,7 +239,7 @@ describe("the hook in the panel", () => {
 			writeOption(
 				db,
 				SECRET,
-				CHAT_RESPOND_SPEC_ID,
+				STORY_RESPOND_SPEC_ID,
 				admin(),
 				option.id,
 				["not-an-id"]
@@ -245,7 +249,7 @@ describe("the hook in the panel", () => {
 			writeOption(
 				db,
 				SECRET,
-				CHAT_RESPOND_SPEC_ID,
+				STORY_RESPOND_SPEC_ID,
 				admin(),
 				option.id,
 				[999_999]
@@ -256,7 +260,7 @@ describe("the hook in the panel", () => {
 
 describe("where a chain runs (PLAN-script-placement D3)", () => {
 	it("labels each chain by its seam, carries the address, and names what can go there", async () => {
-		const view = await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, admin())
+		const view = await namespaceView(db, SECRET, STORY_RESPOND_SPEC_ID, admin())
 		const chains = groupOptions(view!.groups).filter(
 			(o) => o.control === "scripts-chain"
 		)
@@ -331,7 +335,7 @@ describe("where a chain runs (PLAN-script-placement D3)", () => {
 	})
 
 	it("keeps that order in the step's Advanced list", async () => {
-		const view = await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, admin())
+		const view = await namespaceView(db, SECRET, STORY_RESPOND_SPEC_ID, admin())
 		const rank = { in: 0, point: 1, out: 2 } as const
 		for (const g of view!.groups)
 			for (const step of g.advanced) {
@@ -350,7 +354,7 @@ describe("an unplaced chain in the panel (PLAN-script-placement D4)", () => {
 	let b: { id: number }
 
 	const unplacedOption = async () => {
-		const view = await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, admin())
+		const view = await namespaceView(db, SECRET, STORY_RESPOND_SPEC_ID, admin())
 		return groupOptions(view!.groups).find(
 			(o) => o.control === "scripts-chain" && o.unplaced
 		)
@@ -363,8 +367,8 @@ describe("an unplaced chain in the panel (PLAN-script-placement D4)", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
-		configId = (await resolveSelectedConfig(db, spec.id, CHAT_RESPOND_SPEC_ID, {}))!
+			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
+		configId = (await resolveSelectedConfig(db, spec.id, STORY_RESPOND_SPEC_ID, {}))!
 			.configId
 		const nodes = await db
 			.select()
@@ -406,7 +410,7 @@ describe("an unplaced chain in the panel (PLAN-script-placement D4)", () => {
 			name: "Never placed"
 		})
 		await expect(
-			writeOption(db, SECRET, CHAT_RESPOND_SPEC_ID, admin(), o.id, [
+			writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, admin(), o.id, [
 				a.id,
 				b.id,
 				c.id
@@ -416,11 +420,11 @@ describe("an unplaced chain in the panel (PLAN-script-placement D4)", () => {
 
 	it("allows removing entries, and clearing it removes the row", async () => {
 		const o = (await unplacedOption())!
-		await writeOption(db, SECRET, CHAT_RESPOND_SPEC_ID, admin(), o.id, [b.id])
+		await writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, admin(), o.id, [b.id])
 		expect(((await unplacedOption())!.scripts ?? []).map((s) => s.id)).toEqual([
 			b.id
 		])
-		await writeOption(db, SECRET, CHAT_RESPOND_SPEC_ID, admin(), o.id, [])
+		await writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, admin(), o.id, [])
 		expect(await unplacedOption()).toBeUndefined()
 		const left = await db
 			.select()

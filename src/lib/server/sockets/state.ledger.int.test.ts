@@ -338,12 +338,17 @@ describe("state:ledger", () => {
 			kind: "clock",
 			messageId: anchor.id,
 			ownerKey: "world",
-			ownerLabel: w.session.name,
+			// 🚧 The world's lines name no owner (PLAN-dc-after-walk2 Q3-2, N14:
+			// "P2 Solo VI points Time Day 1…" — the session title as an owner).
+			ownerLabel: "",
 			updatedBy: "run:run-ledger-clock",
 			clock: { by: 3, unit: "hours", cause: "action", skipped: null }
 		})
 		expect(res.rows[0]!.clock!.fromLabel).toMatch(/09:00/)
 		expect(res.rows[0]!.clock!.toLabel).toMatch(/12:00/)
+		// 🚧 The same readings as parts, beside the labels — what a copy's timeFormat spells.
+		expect(res.rows[0]!.clock!.from).toMatchObject({ year: 412, month: 3, day: 5, hour: 9, minute: 0 })
+		expect(res.rows[0]!.clock!.to).toMatchObject({ year: 412, month: 3, day: 5, hour: 12, minute: 0 })
 		// A clock row asks for no baseline: it is no slot's trail.
 		expect(res.baselines).toEqual([])
 	})
@@ -359,13 +364,19 @@ describe("what state:get carries beside the values", () => {
 			{ sessionId: w.session.id },
 			() => {}
 		)
-		expect(res.owners).toContainEqual({
-			key: "world",
-			kind: "session",
-			id: w.session.id,
-			label: w.session.name,
-			configs: expect.any(Object)
-		})
+		// `editable` and `face` ride every owner row since 2026-10-17: match the
+		// keys the state is keyed by, not the whole row.
+		expect(res.owners).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					key: "world",
+					kind: "session",
+					id: w.session.id,
+					label: w.session.name,
+					configs: expect.any(Object)
+				})
+			])
+		)
 		const verity = res.owners.find((o) => o.kind === "session_cast")
 		expect(verity).toMatchObject({ id: w.verity.id, label: w.verity.name })
 	})

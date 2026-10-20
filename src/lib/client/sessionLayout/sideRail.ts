@@ -21,15 +21,16 @@
  *       its own rail icon.
  *
  * Nothing here is persisted, and both inputs arrive as arguments. A group's
- * `pinned` comes from the arrangement — a field on the items the group is made
- * of, ruled 2026-09-10 (see `unitPinned` in ./arrangedGeometry) — and `open` is
- * transient UI state whose default is exactly `pinned`. This module holds no
- * state of its own, so the simulator and the live host can run the same
- * decision over different numbers and get the same behaviour.
+ * `pinned` is its PANEL's (PLAN-session-panels-2026-10-14: docked, or in the
+ * rail — `pinned: false`) and `open` is transient UI state whose default is
+ * exactly `pinned`. This module holds no state of its own, so the simulator
+ * and the live host can run the same decision over different numbers and get
+ * the same behaviour.
  *
- * A "group" is a live render unit (see ./tabGroups): a tab group of several
- * widgets, or a single widget, which is a group of one.
+ * A "group" is a panel: one or more widgets as tabs. Its height is the
+ * panel's (`fit` · `fill` · `{ share }`, below).
  */
+import type { PanelHeightV1 } from "@serene-pub/sdk"
 
 /** The slim icon rail at a column's outer edge. Matches `.zone-iconstrip`. */
 export const RAIL_PX = 36
@@ -51,22 +52,17 @@ export type RailState = "expanded" | "collapsed" | "flyout"
 export type CellState = RailState | "folded"
 
 /**
- * A whole side column, resolved: the answer SessionLayout's `columnLayout`
- * returns and that both the live view and the editor's rail preview are drawn
- * from. Here rather than in either component because it is the shape they hand
- * each other — SessionLayout resolves it, LayoutEditCanvas reads it.
+ * A whole side column, resolved: the answer the side rail model's
+ * `columnLayout` returns and the live side (./SideMount) draws.
  */
 export interface ColumnLayout {
-	/** Where each unit is drawn, by unit key. */
+	/** Where each panel is drawn, by panel key. */
 	state: Record<string, CellState>
-	/** Each unit's grid row (1-based) and its place in the collapsed order. */
+	/** Each drawn panel's grid row (1-based), in column order. */
 	row: Record<string, number>
-	order: Record<string, number>
 	/** `grid-template-rows` for the rows that are actually drawn. */
 	rows: string
-	/** One column: what shared a row is drawn one under the other. */
-	collapsed: boolean
-	/** The one unit currently OVER the session, if any. */
+	/** The one panel currently OVER the session, if any. */
 	flyout: string | null
 }
 
@@ -97,11 +93,15 @@ export function railFit(o: RailFitInput): "inline" | "flyout" {
 }
 
 export interface RailGroup {
-	/** The render unit's key (a group id, or a lone widget's id). */
+	/** The panel's key. */
 	key: string
-	/** Rows this group's box spans in the arrangement — its share of the column. */
-	rows: number
-	/** Docked by the arrangement: expanded by default, and keeps its height. */
+	/**
+	 * Its height (PLAN-session-panels §1.3): `fit` its content (at least the
+	 * floor), `fill` an equal share of what the others leave, `{ share }`
+	 * twelfths of the column's docked height.
+	 */
+	height: PanelHeightV1
+	/** Docked by the layout: expanded by default, and keeps its height. */
 	pinned: boolean
 	/** The user has this group open. Defaults to `pinned` at the call site. */
 	open: boolean
@@ -110,8 +110,6 @@ export interface RailGroup {
 export interface RailColumnInput {
 	/** Measured height of the column, px. 0 = not measured yet. */
 	columnPx: number
-	/** Rows the arrangement's grid has — the denominator for a group's share. */
-	totalRows: number
 	/** The groups, in COLUMN ORDER (top to bottom). */
 	groups: RailGroup[]
 	/**
@@ -131,20 +129,43 @@ export interface RailPlacement {
 	key: string
 	state: RailState
 	/**
-	 * The group's height in the column when `expanded`, px. 0 means either
-	 * "not expanded" or "the column has not been measured yet" — the renderer
-	 * sets no basis for a 0 and lets flex share the space out.
+	 * A `{ share }` group's height in the column when `expanded`, px. 0 means
+	 * "not expanded", "the column has not been measured yet", or a `fit` /
+	 * `fill` group, whose height is the grid's to share out (`track`).
 	 */
 	heightPx: number
+	/** Its `grid-template-rows` track when `expanded`; "" otherwise. */
+	track: string
+}
+
+/**
+ * A panel's grid track: `{ share }` its twelfths (px once the column is
+ * measured, else as `fr`), `fit` its content but never under the floor, and
+ * `fill` an equal share of whatever the others leave.
+ */
+export function panelTrack(
+	height: PanelHeightV1,
+	heightPx: number,
+	floorPx = MIN_GROUP_PX
+): string {
+	if (typeof height === "object")
+		return heightPx > 0 ? `${heightPx}px` : `minmax(0,${height.share}fr)`
+	if (height === "fit") return `minmax(${floorPx}px,auto)`
+	return "minmax(0,1fr)"
 }
 
 /**
  * Resolve a whole column: which groups are drawn where, and how tall.
  *
- * The pinned open groups are served first at their own share of the column and
- * are never revisited, which IS rule (b). Then the rest, in column order: each
- * expands into what is left if `railFit` says it fits, and otherwise becomes an
- * icon — or the one flyout, if it is the group the user just asked for.
+ * The pinned open groups are served first and are never revisited, which IS
+ * rule (b). Then the rest, in column order: each expands into what is left if
+ * `railFit` says it fits, and otherwise becomes an icon — or the one flyout,
+ * if it is the group the user just asked for.
+ *
+ * What a group costs the column is its `{ share }` (its twelfths of the
+ * column, less the gaps) or, for `fit` and `fill`, the floor: content and
+ * fills are the grid's to size (`panelTrack`), and the floor is what each
+ * must at least have to be worth expanding.
  *
  * Below the breakpoint (`narrow`) a side takes no layout space at all, so
  * there is no column to dock into: everything is an icon, and the group the
@@ -155,7 +176,6 @@ export function resolveRailColumn(o: RailColumnInput): RailPlacement[] {
 	const gap = o.gapPx ?? RAIL_GAP_PX
 	const floor = o.minGroupPx ?? MIN_GROUP_PX
 	const column = Math.max(0, o.columnPx)
-	const totalRows = Math.max(1, o.totalRows)
 
 	if (o.narrow) {
 		return o.groups.map((g) => ({
@@ -164,34 +184,31 @@ export function resolveRailColumn(o: RailColumnInput): RailPlacement[] {
 				g.open && g.key === o.focusKey
 					? ("flyout" as const)
 					: ("collapsed" as const),
-			heightPx: 0
+			heightPx: 0,
+			track: ""
 		}))
 	}
 
 	/**
-	 * The height the group boxes divide between them: the column, less the gap
-	 * that separates each pair of them. Counted over ALL the groups, not the
-	 * open ones — a share that moved as siblings opened and closed would be a
-	 * pinned group changing height, which is the one thing rule (b) forbids.
-	 * Without it the shares of a full arrangement add up to the whole column
-	 * and the LAST group is short by exactly the gaps: it would sit there
-	 * refusing to open, a few pixels from fitting.
+	 * The height the groups divide between them: the column, less the gap
+	 * that separates each pair. Counted over ALL the groups, not the open ones
+	 * — a share that moved as siblings opened and closed would be a pinned
+	 * group changing height, which is the one thing rule (b) forbids. Rounded
+	 * DOWN so twelve twelfths never add up to more than the column.
 	 */
 	const usable = Math.max(0, column - gap * Math.max(0, o.groups.length - 1))
-	/**
-	 * This group's share, from the rows it was arranged at. Rounded DOWN so a
-	 * full arrangement's shares can never add up to more than `usable` — the
-	 * same few pixels, arriving as a rounding error instead.
-	 */
 	const shareOf = (g: RailGroup) =>
-		column > 0
-			? Math.max(
-					0,
-					Math.floor((Math.max(0, g.rows) / totalRows) * usable)
-				)
+		column > 0 && typeof g.height === "object"
+			? Math.max(0, Math.floor((Math.max(0, g.height.share) / 12) * usable))
 			: 0
 
 	const out = new Map<string, RailPlacement>()
+	const closed = (key: string): RailPlacement => ({
+		key,
+		state: "collapsed",
+		heightPx: 0,
+		track: ""
+	})
 	let taken = 0
 	// Pinned first, wherever they sit in the column: rule (b) is that they are
 	// served before anything else can spend the space.
@@ -202,16 +219,14 @@ export function resolveRailColumn(o: RailColumnInput): RailPlacement[] {
 	let flew = false
 	for (const g of order) {
 		if (!g.open) {
-			out.set(g.key, { key: g.key, state: "collapsed", heightPx: 0 })
+			out.set(g.key, closed(g.key))
 			continue
 		}
-		// What the group asks for: its share of the column, but never less than
-		// the floor — a group's SHARE alone could never overflow the column
-		// (the shares are proportions OF it), so a rule that only ever asked
-		// for shares would make rule (c) unreachable. A short column is
-		// exactly where a stack of groups stops fitting, and this is where
-		// that shows up.
-		const wanted = Math.max(shareOf(g), floor)
+		const share = shareOf(g)
+		// A share alone could never overflow the column (the shares are
+		// proportions OF it), so the floor is what makes rule (c) reachable:
+		// a short column is exactly where a stack stops fitting.
+		const wanted = Math.max(share, floor)
 		if (
 			railFit({
 				columnPx: column,
@@ -221,112 +236,26 @@ export function resolveRailColumn(o: RailColumnInput): RailPlacement[] {
 			}) === "inline"
 		) {
 			const cost = taken > 0 ? gap : 0
-			const heightPx =
-				column > 0 ? Math.min(wanted, column - taken - cost) : 0
-			taken += cost + heightPx
-			out.set(g.key, { key: g.key, state: "expanded", heightPx })
+			const spent = column > 0 ? Math.min(wanted, column - taken - cost) : 0
+			// Only a share is a height of its own; fit and fill are the grid's.
+			const heightPx = typeof g.height === "object" ? spent : 0
+			taken += cost + spent
+			out.set(g.key, {
+				key: g.key,
+				state: "expanded",
+				heightPx,
+				track: panelTrack(g.height, heightPx, floor)
+			})
 		} else if (!flew && g.key === o.focusKey) {
 			flew = true
-			out.set(g.key, { key: g.key, state: "flyout", heightPx: 0 })
+			out.set(g.key, { key: g.key, state: "flyout", heightPx: 0, track: "" })
 		} else {
-			out.set(g.key, { key: g.key, state: "collapsed", heightPx: 0 })
+			out.set(g.key, closed(g.key))
 		}
 	}
 	// Reported in the order the caller gave them — the column's order, which is
 	// what it draws in — however they were served.
 	return o.groups.map((g) => out.get(g.key)!)
-}
-
-/* ── one column, or several? (ruled 2026-09-10) ──────────────────────────
- *
- * A layout made at 4K has to translate to a phone. The rule is not a second
- * layout for small screens: it is that side-by-side placements STOP being
- * side-by-side when there is not room for them, and become rows in grid order
- * instead. Widget authors own what happens inside a widget; the host owns only
- * this collapse.
- *
- * Below the app's 1024px breakpoint that is unconditional — there are no
- * side-by-side placements on mobile at all. On the desktop it is a question
- * about THIS column: whether the widgets that share a row still clear their own
- * minimum widths in it. A fixed breakpoint would answer for a window; a side
- * column is a quarter of one, and it is the column the widgets have to live in.
- */
-
-/**
- * The width a widget stops being usable below. A stated choice, not a measured
- * one, and the DEFAULT the caller passes per widget — a widget that declares
- * its own minimum should be asked, not overruled.
- */
-export const MIN_WIDGET_PX = 220
-
-export interface ColumnCollapseInput {
-	/** Measured width of the column, px. 0 = not laid out yet. */
-	columnPx: number
-	/** Minimum usable width of each widget that shares the widest row, px. */
-	minWidthPx: number[]
-	/** Gap between two side-by-side widgets. Default `RAIL_GAP_PX`. */
-	gapPx?: number
-	/** Below the app's 1024px breakpoint: never side by side. */
-	narrow?: boolean
-}
-
-/**
- * Does this column have to draw its widgets one under the other?
- *
- * An UNMEASURED column (0) is left as it was arranged, for the same reason
- * `railFit` does not fly everything out of one: read as "no room", every wide
- * layout would flip to a single column for its first frame and back on the
- * next.
- */
-export function collapseColumn(o: ColumnCollapseInput): boolean {
-	if (o.narrow) return true
-	if (o.minWidthPx.length < 2) return false
-	if (!(o.columnPx > 0)) return false
-	const gap = o.gapPx ?? RAIL_GAP_PX
-	const asked =
-		o.minWidthPx.reduce((n, w) => n + Math.max(0, w), 0) +
-		gap * (o.minWidthPx.length - 1)
-	return asked > o.columnPx
-}
-
-export interface OrderUnit {
-	key: string
-	/** The cells it was arranged at — grid order is `y` then `x`. */
-	box: { x: number; y: number }
-	/** Anchored edges. In a collapsed column these mean ORDER, and nothing else. */
-	anchor?: {
-		top?: boolean
-		bottom?: boolean
-		left?: boolean
-		right?: boolean
-	}
-}
-
-/**
- * The order a collapsed column draws its groups in: top-anchored first,
- * bottom-anchored last, everything else between, and grid order within each of
- * the three.
- *
- * An anchor pins a widget to an edge of its zone, which is a thing a 2D grid
- * can honour and a single column cannot: there is one column, so "left" and
- * "right" have nowhere to point, and "top"/"bottom" can only mean first and
- * last. Anchored to BOTH edges it cannot be in two places, so it is read as
- * top — the same reading `cellSelfAlign` gives it, which is "stretch", i.e. the
- * one it starts at.
- *
- * Returned as keys rather than applied to the DOM on purpose: the renderer
- * spends this on the CSS `order` property. A keyed `{#each}` that re-sorts
- * MOVES its nodes, and moving an iframe reloads it — the no-reload law again.
- */
-export function collapsedOrder(units: OrderUnit[]): string[] {
-	const rank = (u: OrderUnit) =>
-		u.anchor?.top ? 0 : u.anchor?.bottom ? 2 : 1
-	return [...units]
-		.sort(
-			(a, b) =>
-				rank(a) - rank(b) || a.box.y - b.box.y || a.box.x - b.box.x
-		)
-		.map((u) => u.key)
 }
 
 /**

@@ -135,6 +135,14 @@ function clientApiKey(
 	baseURL: string | null | undefined
 ): string {
 	if (stored?.trim()) return stored
+	// 🚧 No address and no key (2026-10-18, the 100-turn walk #31): the
+	// client would call OpenAI's own API, which wants a key — but a custom
+	// connection made without its address is missing the address, and the
+	// sentence names both ways out rather than blaming the key alone.
+	if (!baseURL?.trim() && !(connection as { preset?: string | null }).preset)
+		throw new Error(
+			"This connection has no address, so it would call OpenAI's own API, which needs an API key. For a server of your own, put its Base URL (often ending in /v1) under Settings; for OpenAI, paste the key there. Then press Save."
+		)
 	if (
 		credentialPolicy({ ...connection, baseUrl: baseURL || OPENAI_API_URL }) ===
 		"required"

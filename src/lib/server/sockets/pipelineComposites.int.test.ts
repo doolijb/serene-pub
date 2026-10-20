@@ -12,7 +12,7 @@ import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
-import { ADVENTURE_RESPOND_SPEC_ID, CORE_SPECS } from "@serene-pub/core-catalog"
+import { STORY_RESPOND_SPEC_ID, CORE_SPECS } from "@serene-pub/core-catalog"
 
 let testDb: TestDb
 let dataDir: string
@@ -73,7 +73,7 @@ const asAdmin = () => socketFor(admin.id, true)
 /** Two real spine steps of the adventure reply, with their configs, keys as-is. */
 async function fixture(): Promise<Sockets.Pipelines.Composite.Document> {
 	const { compile } = await import("@serene-pub/sdk")
-	const entry = CORE_SPECS.find((s) => s.slug === ADVENTURE_RESPOND_SPEC_ID)
+	const entry = CORE_SPECS.find((s) => s.slug === STORY_RESPOND_SPEC_ID)
 	if (!entry) throw new Error("no adventure reply spec")
 	const doc = JSON.parse(JSON.stringify(compile(entry.build())))
 	const nodes = doc.nodes.filter((n: any) =>

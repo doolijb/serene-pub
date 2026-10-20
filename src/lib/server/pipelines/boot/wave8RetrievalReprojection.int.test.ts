@@ -14,7 +14,7 @@
  * to show the rewrite takes the code's values whole.
  *
  * Replays the real migration file against a database whose shipped
- * adventure-respond config looks like an older install's, then boots again.
+ * lair-respond config looks like an older install's, then boots again.
  *
  * A value that equals its declaration is never stored (the 2026-09-10 rule,
  * swept on every boot), so on a fresh install `maxMessages` and `maxMentions`
@@ -44,7 +44,13 @@ vi.mock("$lib/server/db", async () => {
 })
 
 const SEED_PREFIX = "pipeline-default:"
-const ADVENTURE = `${SEED_PREFIX}core:spec/adventure-respond`
+/**
+ * The Lair's reply: the migration's other `place` step. Adventure's reply was
+ * the subject here until it retired with Adventure (2026-10-19); the
+ * migration still names it, and a fresh install no longer writes it.
+ */
+const LAIR = `${SEED_PREFIX}core:spec/lair-respond`
+const RETIRED_ADVENTURE = `${SEED_PREFIX}core:spec/adventure-respond`
 /** Not named by the migration: its shipped row must outlive the replay. */
 const UNLISTED = `${SEED_PREFIX}core:spec/guide-create`
 
@@ -61,7 +67,7 @@ const MENTION_SPANS = {
 }
 type Address = typeof PLACE
 
-const ADMIN_COPY_NAME = "Adventure (wave 8 test copy)"
+const ADMIN_COPY_NAME = "Lair (wave 8 test copy)"
 const ADMIN_COPY_VALUE = 7
 
 const boot = async () => {
@@ -180,30 +186,34 @@ describe("wave 8 retrieval re-projection", () => {
 		async () => {
 			const listed = await listedSeedKeys()
 			expect(listed).toHaveLength(5)
-			expect(listed).toContain(ADVENTURE)
+			expect(listed).toContain(LAIR)
 			expect(listed).not.toContain(UNLISTED)
 			const ids = await shippedIds()
-			for (const seedKey of listed)
+			// Retired with Adventure (2026-10-19): named by the frozen migration,
+			// written by no build since.
+			expect(listed).toContain(RETIRED_ADVENTURE)
+			expect(ids.has(RETIRED_ADVENTURE)).toBe(false)
+			for (const seedKey of listed.filter((k) => k !== RETIRED_ADVENTURE))
 				expect(ids.has(seedKey), `${seedKey} was never written`).toBe(true)
 		},
 		60_000
 	)
 
 	it(
-		"ships adventure-respond with the place path and retrieval on, on a fresh install",
+		"ships lair-respond with the place path and retrieval on, on a fresh install",
 		async () => {
-			expect(await effective(ADVENTURE, PLACE)).toBe("world.location")
-			expect(await effective(ADVENTURE, ENTITY_SEARCH)).toBe(20)
-			expect(await effective(ADVENTURE, MENTION_SPANS)).toBe(8)
+			expect(await effective(LAIR, PLACE)).toBe("world.location")
+			expect(await effective(LAIR, ENTITY_SEARCH)).toBe(20)
+			expect(await effective(LAIR, MENTION_SPANS)).toBe(8)
 		},
 		60_000
 	)
 
 	it(
-		"rewrites an older install's adventure-respond default from the code, leaving an admin copy and unlisted specs alone",
+		"rewrites an older install's lair-respond default from the code, leaving an admin copy and unlisted specs alone",
 		async () => {
-			const shipped = await configBySeed(ADVENTURE)
-			expect(shipped, "adventure-respond has no shipped config").toBeTruthy()
+			const shipped = await configBySeed(LAIR)
+			expect(shipped, "lair-respond has no shipped config").toBeTruthy()
 
 			// An install written before the wave: no `place` path (the preset
 			// value on a new node), and retrieval stored at the old zero.
@@ -252,8 +262,8 @@ describe("wave 8 retrieval re-projection", () => {
 			// A boot alone leaves the old rows as they are: this is the gap.
 			await boot()
 			expect(await rowAt(shipped.id, PLACE)).toBeUndefined()
-			expect(await effective(ADVENTURE, ENTITY_SEARCH)).toBe(0)
-			expect(await effective(ADVENTURE, MENTION_SPANS)).toBe(0)
+			expect(await effective(LAIR, ENTITY_SEARCH)).toBe(0)
+			expect(await effective(LAIR, MENTION_SPANS)).toBe(0)
 
 			const before = await shippedIds()
 			const listed = new Set(await listedSeedKeys())
@@ -262,12 +272,12 @@ describe("wave 8 retrieval re-projection", () => {
 			await boot()
 
 			// The shipped default is a new row, written from the code.
-			const after = await configBySeed(ADVENTURE)
+			const after = await configBySeed(LAIR)
 			expect(after.id).not.toBe(shipped.id)
 			expect(after.isImmutable).toBe(true)
-			expect(await effective(ADVENTURE, PLACE)).toBe("world.location")
-			expect(await effective(ADVENTURE, ENTITY_SEARCH)).toBe(20)
-			expect(await effective(ADVENTURE, MENTION_SPANS)).toBe(8)
+			expect(await effective(LAIR, PLACE)).toBe("world.location")
+			expect(await effective(LAIR, ENTITY_SEARCH)).toBe(20)
+			expect(await effective(LAIR, MENTION_SPANS)).toBe(8)
 
 			// The administrator's copy keeps the value it chose, in the same row.
 			const [copyAfter] = await db

@@ -1,6 +1,6 @@
 # Places and maps
 
-Places are the rooms, towns and roads of your world. In a lorebook, a place is an entry like any other, with a name, content and keywords, but it can also be joined to other places by **ways**, drawn on a **map**, and hold things, like the key lying in the crypt. Genres that move characters around, such as **Adventure** and the **Lair**, use places to know where the scene is and where it can go next.
+Places are the rooms, towns and roads of your world. In a lorebook, a place is an entry like any other, with a name, content and keywords, but it can also be joined to other places by **ways**, drawn on a **map**, and hold things, like the key lying in the crypt. Genres that move characters around, such as **Story** and the **Lair**, use places to know where the scene is and where it can go next.
 
 :::note By the end of this page
 You will have a few places joined by ways, see them on the map, and know how a session uses them.
@@ -74,7 +74,7 @@ A place's **Stats** section sets what it holds before play, in every session on 
 - Type an item and press **Enter**, or pick one under **Add from the lorebook** and say how many. Items show as *Rusty key ×2* with **−** and **+** beside them.
 - Every change is saved at once, separately from the entry's **Save**.
 - A session starts from what you set here and changes its own copy as it plays. Play never changes the book, unless the session is recorded onto the world (see [What a session may write](./lorebooks.md#what-a-session-may-write)).
-- **Adventure** and the **Lair** track a place's inventory. **Chat** tracks no stats, so it ignores them.
+- **Story** and the **Lair** track a place's inventory. **Story** on the **Minimal** preset tracks no stats, so it ignores them.
 
 Only the lorebook's owner can set a place's stats. For dated values, branches and what an inventory may hold, see [Stats and states](./stats-and-states.md#places).
 
@@ -84,11 +84,11 @@ A session that tracks **Location** knows which place the scene is in. When the m
 
 The prompt then carries the current place's content followed by **From here:** and its ways out, each said from the place: *"The rusted iron door leads north to the Drowned Hall."* Only ways that are standing, not secret, and lead somewhere the session can see are listed, and a one-way link into the room isn't a way out. So keep your ways accurate: they are what the model reads as the exits.
 
-The current place is written there once. In Adventure and the Lair it isn't also ranked in as lore, so it takes none of the room set aside for lore. Until the world records where the scene is, a place only the planner has named can still appear in both.
+The current place is written there once. In Story and the Lair it isn't also ranked in as lore, so it takes none of the room set aside for lore. Until the world records where the scene is, a place only the planner has named can still appear in both.
 
 A character's own voice is only told about the place the scene is in, never what's waiting in rooms nobody has reached. The planner and narrator see every place. See [Stats and states](./stats-and-states.md#in-a-prompt).
 
-Other genres, such as **Chat**, don't write a place's ways into the prompt. There, the model knows a room's exits only from what its content says, so describe the important ones in the text too.
+Other genres, such as **Chat** and a **Minimal** Story, don't write a place's ways into the prompt. There, the model knows a room's exits only from what its content says, so describe the important ones in the text too.
 
 ### In a session
 
@@ -96,6 +96,6 @@ The **Places** widget puts these places beside a session: the places the session
 
 ### A place that is off
 
-A place switched **Off**, or off for a while at a session's point in the story, or archived, isn't part of that session's world. The session doesn't list it, show it, read its stats or follow a way to it, and anything the model tries to move there is refused with the reason. A **Location** that points at it reads as not set until it's back.
+A place switched **Off**, or off for a while at a session's point in the story, or archived, isn't part of that session's world. The session doesn't list it, show it, read its stats or follow a way to it, and anything the model tries to move there is refused with the reason. A **Location** that points at it reads as _none_ until it's back.
 
 In the lorebook, nothing is lost: the map still draws it and you can still edit its ways and stats, ready for when it comes back.

@@ -25,7 +25,7 @@ Every button a session offers is an **action**: a genre's chip in the **Actions*
 
 ## Who may use it
 
-A genre's action is seen by everyone in the session and, unless it says otherwise, used by the session's owner alone. A guest sees the chip greyed with the reason, *'Roll' is not yours to use here — its audience is owner.*, which is also the sentence the server refuses a press with. An action may open itself to any participant.
+A genre's action is seen by everyone in the session and, unless it says otherwise, used by the session's owner alone. A guest is not offered it at all: an action whose audience leaves them out is hidden from the chips, **More**, the `/` list and the actions guide. The server still refuses a press with *'Roll' is not yours to use here — its audience is owner.* An action may open itself to any participant.
 
 Two actions that happen to share a key, such as Serene Pub's own and a plugin's, are two different actions: each has its own audience, runs its own pipeline, and is switched on or off on its own under **Actions** in the session's settings.
 
@@ -76,7 +76,7 @@ A slash name belongs to one action. Two pipelines claiming the same name for the
 
 ## Questions put to the cast: forms
 
-Some actions **ask** rather than finish. A pipeline can end a message with a question and a row of choices addressed to one participant: Adventure's **Ask** puts a question with two to four options to one member of the cast, such as *Will you come to the festival? — Yes · Maybe · No*. That block is a **form**: an action waiting for its answer, which only the person it's addressed to may give.
+Some actions **ask** rather than finish. A pipeline can end a message with a question and a row of choices addressed to one participant: Story's **Ask** puts a question with two to four options to one member of the cast, such as *Will you come to the festival? — Yes · Maybe · No*. That block is a **form**: an action waiting for its answer, which only the person it's addressed to may give.
 
 - **A person plays the addressee** (the character is your persona): the buttons are yours. Your answer runs like any action you fired, and the line it writes is yours, under your persona. Everyone else sees *Awaiting an answer* and no buttons. A press from anyone else is refused: *That question was put to Tom, and it is theirs to answer.* The owner is no exception.
 - **The AI plays the addressee**: the genre's answer pipeline answers for them as soon as the question lands. It puts the question to the model as that character, with the options spelled out, and presses the button just as a person would. The answer lands as the character's line, and the run is recorded as a child of the run that asked.
@@ -87,7 +87,7 @@ A question is answered **once**. After that, everyone sees who answered and what
 
 A question is **superseded** once the conversation on its channel moves past it unanswered: it collapses to *Superseded — the conversation moved on*, and a press is refused with *That question was overtaken — the conversation moved on before it was answered*. An answer doesn't count as moving on, so a message that puts three questions to three characters gets all three answered.
 
-A pipeline may point a question's buttons at another pipeline's action (Adventure's *Ask* points at *Answer*), and the press is then held to *that* action's audience. That's how a question the owner's narrator wrote can be answered by any participant.
+A pipeline may point a question's buttons at another pipeline's action (Story's *Ask* points at *Answer*), and the press is then held to *that* action's audience. That's how a question the owner's narrator wrote can be answered by any participant.
 
 **The line a question can't cross.** Only questions inside the story can be put to a character. An action whose result reaches outside it (a character card, lorebook data, settings, permissions, connections) is marked as a *world* action, and a world action can never ride a message as a question, never be opened past the owner or an administrator, and never be answered by a model. So a character asking a question is fine, and a character granting another character permission is impossible.
 
@@ -113,10 +113,13 @@ A genre that switches an action off removes it from the menu, and the server ref
 
 | Copied | Not copied |
 | --- | --- |
-| the messages up to and including the fork, each on its own conversation | the session's own pipeline choices and setting changes |
-| the active cast, envoys, personas, guests and tags | the layout: the branch opens like a [new session](./session-layout.md#new-sessions) |
-| the genre, preset and genre settings; the scenario; the lorebook, line and story clock, as it stood at the fork (moves made after it are taken off) | pipelines' own session data |
-| stats and their changes recorded up to the fork, and the story clock's moves up to it | the record of edits, deletes and swipes: the branch's first change is the fork itself |
+| the messages up to and including the fork, each on its own conversation, with its author and its time | the session's own pipeline choices and setting changes |
+| the active cast, envoys, personas, guests (players and watchers) and tags | the record of edits, deletes and swipes: the branch's first change is the fork itself |
+| the genre, preset and genre settings; the scenario; the lorebook, line and story clock, as it stood at the fork (moves made after it are taken off) | |
+| stats and their changes recorded up to the fork, and the story clock's moves up to it | |
+| each person's layout of the session and every panel's settings (tab names, which channel or lane a panel shows, a goal panel's key, the sheet's owners), and the tab they had open | |
+| each person's lane of a channel with lanes, so everyone's channel stays theirs | |
+| pipelines' own session data, as it stood at the fork | |
 
 Characters removed from the source aren't copied.
 

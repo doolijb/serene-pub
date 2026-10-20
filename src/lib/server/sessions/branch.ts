@@ -11,15 +11,24 @@
  * half-copied session visible in the list.
  */
 
-import { and, asc, eq, gte, inArray } from "drizzle-orm"
+import { and, asc, eq, gte, inArray, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	insertLegacyMany,
-	NATIVE_ORDINAL_BASE
+	NATIVE_ORDINAL_BASE,
+	updateLegacyWhere
 } from "$lib/server/messages/store"
 import { ATTACHMENT_PART_TYPES } from "$lib/server/attachments/references"
 import { canonicalChannel } from "$lib/server/messages/channels"
 import { markCharacterAsPersona } from "$lib/server/utils/markCharacterAsPersona"
+import { playerSeatIdOfSpeaker, playerSeatSpeaker } from "$lib/server/sessions/seatName"
+import {
+	annexWithoutPoints,
+	pointsOf,
+	REVISION_POINTS_OWNER,
+	revisedAnnex
+} from "$lib/server/sessions/annexRevisionPoints"
+import { withBranchOf } from "$lib/shared/sessions/branchOf"
 
 export class BranchError extends Error {}
 
@@ -65,7 +74,20 @@ export async function branchSession(
 		where: eq(schema.sessionMessages.sessionId, sessionId),
 		orderBy: asc(schema.sessionMessages.id)
 	})
-	const messagesToCopy = allMessages.filter((m) => m.id <= fromMessageId)
+	/**
+	 * Up to the fork — and 🚧 each table row anchored to a kept message
+	 * (PLAN-rulesets §30): it is written after its anchor, so its own id may
+	 * lie past the fork, but it belongs to the line that stays.
+	 */
+	const anchorOfRow = (m: { metadata?: unknown }): number | null => {
+		const v = (m.metadata as { anchorMessageId?: unknown } | null)?.anchorMessageId
+		return typeof v === "number" ? v : null
+	}
+	const messagesToCopy = allMessages.filter((m) => {
+		if (m.id <= fromMessageId) return true
+		const anchor = anchorOfRow(m)
+		return anchor !== null && anchor <= fromMessageId
+	})
 
 	return await db.transaction(async (tx) => {
 		const [created] = await tx
@@ -75,7 +97,13 @@ export async function branchSession(
 				scenario: original.scenario,
 				userId: original.userId,
 				isGroup: original.isGroup,
-				metadata: original.metadata,
+				// 🚧 Which session and line it was branched from: the marker
+				// the header and the session panel show (`branchOf`).
+				metadata: withBranchOf(original.metadata, {
+					sessionId: original.id,
+					name: original.name ?? null,
+					messageId: fromMessageId
+				}),
 				lorebookId: original.lorebookId,
 				// The same line of the book, its clock where the parent's
 				// stands (ruling 15, story-time P3): a branched session plays
@@ -99,11 +127,33 @@ export async function branchSession(
 				// Which world attributes it reads comes along with what it
 				// tracks (its picks, below): a branch tracks what its parent did.
 				worldAttributes: original.worldAttributes,
+				// The annex and who may see each key come along verbatim
+				// (deep-copied, so neither session's later write reaches the
+				// other): a branch of a Lair keeps its castellan's
+				// scratchpad, a genre's annex-held world stays its world.
+				// ⚠ Neither was copied before 2026-10-14.
+				// 🚧 …as it stood at the fork (`annexRevisionPoints.ts`): what
+				// the turns after it wrote stays with the parent. The points
+				// themselves follow once the copies have ids (below).
+				annex: annexWithoutPoints(
+					revisedAnnex(structuredClone(original.annex ?? {}), fromMessageId)
+				),
+				annexAudiences: structuredClone(original.annexAudiences ?? {}),
 				// The state version comes along (U5f): the copied value and
 				// possession rows keep the versions they landed at, and a
 				// branch that restarted at zero would read every one of them
 				// as "moved since" the first proposal made on it.
-				stateVersion: original.stateVersion
+				stateVersion: original.stateVersion,
+				// 🚧 The rules it plays by and how it revises come along
+				// (PLAN-rulesets §23: a branch keeps its session's pin).
+				primaryRuleset: original.primaryRuleset,
+				rulesetVersion: original.rulesetVersion,
+				compendiumMode: original.compendiumMode,
+				rigour: original.rigour,
+				onRevision: original.onRevision,
+				// 🚧 Whose composer the genre closed, and why, comes along with
+				// the lanes it closed them on (Q1-2).
+				composerStates: structuredClone(original.composerStates ?? {})
 			} satisfies InsertSession)
 			.returning()
 
@@ -132,19 +182,46 @@ export async function branchSession(
 				}))
 			)
 
+		/**
+		 * 🚧 A seat that retired (a new character after a death) comes across
+		 * STILL retired (PLAN-dc-after-walk2 Q1-2, the walk's N4): its lines
+		 * are in the copy, and with no seat to name them they were drawn as
+		 * the Narrator's. Retired it stays — nobody writes as it — so nothing
+		 * removed comes back to the table. A row left with neither a card nor
+		 * a name is a departed card's leftover, and nobody.
+		 */
 		const sessionPersonas = (original as any).sessionPersonas.filter(
-			(cp: any) => !cp.removedAt
+			(cp: any) => !cp.removedAt || cp.personaId != null || !!cp.seatName?.trim() || !!cp.removedName
 		)
+		// 🚧 Each seat's new id, by its old one: a `player_seat` stat owner names a
+		// `session_personas.id`, which — unlike a `session_cast` owner's
+		// character id — is new in the branch (`copyStateRows`). The seat
+		// keeps its name and its player, so a card-less player seat comes across
+		// as the same player character.
+		const seatRemap = new Map<number, number>()
 		if (sessionPersonas.length > 0) {
-			await tx.insert(schema.sessionPersonas).values(
-				sessionPersonas.map((sp: any) => ({
-					sessionId: created.id,
-					personaId: sp.personaId,
-					position: sp.position
-				}))
-			)
+			const seats = await tx
+				.insert(schema.sessionPersonas)
+				.values(
+					sessionPersonas.map((sp: any) => ({
+						sessionId: created.id,
+						personaId: sp.personaId,
+						position: sp.position,
+						seatName: sp.seatName ?? null,
+						userId: sp.userId ?? null,
+						// 🚧 Its portrait, and — retired — when and under what name.
+						portraitMediaId: sp.portraitMediaId ?? null,
+						removedAt: sp.removedAt ?? null,
+						removedName: sp.removedName ?? null
+					}))
+				)
+				.returning({ id: schema.sessionPersonas.id })
+			// One INSERT returns its rows in the order given.
+			sessionPersonas.forEach((sp: any, i: number) => {
+				if (seats[i]) seatRemap.set(sp.id, seats[i].id)
+			})
 			for (const sp of sessionPersonas)
-				await markCharacterAsPersona(sp.personaId, tx)
+				if (sp.personaId != null) await markCharacterAsPersona(sp.personaId, tx)
 		}
 
 		const sessionGuests = (original as any).sessionGuests
@@ -152,7 +229,69 @@ export async function branchSession(
 			await tx.insert(schema.sessionGuests).values(
 				sessionGuests.map((g: any) => ({
 					sessionId: created.id,
-					userId: g.userId
+					userId: g.userId,
+					// 🚧 Who plays and who watches comes along (Q1-2).
+					...(typeof g.isPlayer === "boolean" ? { isPlayer: g.isPlayer } : {})
+				}))
+			)
+
+		/**
+		 * 🚧 Each person's **lane** of a personal channel comes along
+		 * (PLAN-dc-after-walk2 Q1-2, owner ruling ★5): the copies keep their
+		 * lane strings (`parley:2`), and with no register naming whose lane is
+		 * whose, the branch's Planner lanes read empty and a guest added there
+		 * re-greeted the owner as if nobody had played.
+		 */
+		const lanes = await tx
+			.select({ slug: schema.channelLanes.slug, lane: schema.channelLanes.lane, userId: schema.channelLanes.userId })
+			.from(schema.channelLanes)
+			.where(eq(schema.channelLanes.sessionId, sessionId))
+		if (lanes.length)
+			await tx.insert(schema.channelLanes).values(lanes.map((l) => ({ sessionId: created.id, ...l })))
+
+		/**
+		 * 🚧 …and each person's own layout of it — which tab each panel shows
+		 * (Q1-2): the branch opens on the tab its maker was on, never the
+		 * layout's first.
+		 */
+		const layouts = await tx
+			.select()
+			.from(schema.sessionPanelLayouts)
+			.where(eq(schema.sessionPanelLayouts.sessionId, sessionId))
+		if (layouts.length)
+			await tx.insert(schema.sessionPanelLayouts).values(
+				layouts.map((l) => ({
+					sessionId: created.id,
+					userId: l.userId,
+					layout: structuredClone(l.layout ?? {}),
+					startedFromLayoutPresetId: l.startedFromLayoutPresetId,
+					layoutCopiedAt: l.layoutCopiedAt,
+					layoutSettings: structuredClone(l.layoutSettings ?? {})
+				}))
+			)
+		/**
+		 * 🚧 …and the widget settings each layout is drawn with
+		 * (PLAN-dc-after-walk3 R0-1, the walk's NEW-1): a layout row names its
+		 * widgets by instance id, and what each shows — a tab's title, the
+		 * Planner panel's `channelLane: 'mine'`, the goal panel's key, the
+		 * sheet's seats, the clock's format — is a `widget_settings` row per
+		 * person. With the layout copied and these left behind, the copy
+		 * stopped the first open from copying the genre's layout in, so a
+		 * branch drew every panel at its defaults: raw tab names, the Story
+		 * in every messages panel, "Pick a key". Nothing in them names a
+		 * session-scoped id (a lane is `mine`, kept by the register above).
+		 */
+		const widgetSettings = await tx
+			.select()
+			.from(schema.widgetSettings)
+			.where(eq(schema.widgetSettings.sessionId, sessionId))
+		if (widgetSettings.length)
+			await tx.insert(schema.widgetSettings).values(
+				widgetSettings.map((w) => ({
+					sessionId: created.id,
+					userId: w.userId,
+					widgetInstanceId: w.widgetInstanceId,
+					values: structuredClone(w.values ?? {})
 				}))
 			)
 
@@ -203,12 +342,19 @@ export async function branchSession(
 							storyClockMinute: (message as any).storyClockMinute ?? null,
 							// Always settled: a copy is never being written.
 							isGenerating: false,
+							// 🚧 Said when the original was (Q1-2, #47): a copy
+							// keeps its time — every copied row read 3:26 PM.
+							createdAt: message.createdAt,
+							updatedAt: message.updatedAt,
 							// The copy names the message it copies — the
 							// original, through any copy of a copy — so its
 							// place in play is the original's, not its own
 							// larger id (`inPlayOrder`).
+							// A card-less player seat's line names its seat; the
+							// branch has its own seats, so the name follows.
 							metadata: {
 								...(message.metadata ?? {}),
+								...remapPlayerSeatSpeaker(message.metadata, seatRemap),
 								copyOf: message.metadata?.copyOf ?? message.id
 							}
 						}) satisfies InsertSessionMessage
@@ -231,11 +377,56 @@ export async function branchSession(
 		})
 		await copyAttachmentParts(tx, remap)
 
+		// 🚧 The annex's revision points up to the fork, onto the copies.
+		const keptPoints = pointsOf(
+			revisedAnnex(original.annex ?? {}, fromMessageId, remap)
+		)
+		if (Object.keys(keptPoints).length)
+			await tx.execute(sql`
+				update ${schema.sessions}
+				set ${sql.identifier("annex")} = jsonb_set(
+					coalesce(${schema.sessions.annex}, '{}'::jsonb),
+					ARRAY[${REVISION_POINTS_OWNER}]::text[],
+					${JSON.stringify(keptPoints)}::jsonb,
+					true
+				)
+				where ${schema.sessions.id} = ${created.id}
+			`)
+
+		// 🚧 A copied table row names its anchor's copy (§30): the source's
+		// id means nothing in the branch, and a delete there must take it.
+		// Its anchor is always copied — a row whose anchor is gone went
+		// with it (`deleteLegacy`).
+		for (const [i, message] of messagesToCopy.entries()) {
+			const anchor = anchorOfRow(message)
+			const row = copied[i]
+			const moved = anchor !== null ? remap.get(anchor) : undefined
+			if (!row || moved === undefined) continue
+			await updateLegacyWhere(tx, eq(schema.sessionMessages.id, row.id), {
+				metadata: {
+					...((row.metadata as Record<string, unknown> | null) ?? {}),
+					anchorMessageId: moved
+				}
+			})
+		}
+
+		// 🚧 The session's own notes branch with it (PLAN-rulesets §28): a
+		// copy as of the fork, anchors remapped (`copyPhantomToBranch`).
+		const { copyPhantomToBranch } = await import("$lib/server/lorebooks/phantom")
+		const notes = await copyPhantomToBranch(tx, {
+			sessionId,
+			created,
+			forkMessageId: fromMessageId,
+			remap
+		})
+
 		await copyStateRows(tx, {
 			sessionId,
 			created: created.id,
 			forkMessageId: fromMessageId,
-			remap
+			remap,
+			seatRemap,
+			entryRemap: notes?.entryRemap ?? new Map()
 		})
 
 		// 🚧 The clock as of the fork message (live scenes §15 G15): its
@@ -264,6 +455,51 @@ export async function branchSession(
 			.where(eq(schema.sessions.id, created.id))
 		return settled ?? created
 	})
+}
+
+/**
+ * 🚧 A stat value with each `{ entryId }` reference to a copied notes entry
+ * moved to its copy (DC walk 6: the branch's Location read "entry 1" — the
+ * parent's place, which the branch cannot name). A reference to an entry the
+ * map does not hold (the attached book's, shared) stays. Pure; returns the
+ * value itself when nothing moved.
+ */
+export function remapEntryRefs<T>(value: T, entryRemap: ReadonlyMap<number, number>): T {
+	if (!entryRemap.size || value === null || typeof value !== "object") return value
+	if (Array.isArray(value)) {
+		let changed = false
+		const next = value.map((v) => {
+			const moved = remapEntryRefs(v, entryRemap)
+			if (moved !== v) changed = true
+			return moved
+		})
+		return (changed ? next : value) as T
+	}
+	let changed = false
+	const out: Record<string, unknown> = {}
+	for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+		let moved: unknown = v
+		if (k === "entryId" && typeof v === "number") moved = entryRemap.get(v) ?? v
+		else moved = remapEntryRefs(v, entryRemap)
+		if (moved !== v) changed = true
+		out[k] = moved
+	}
+	return (changed ? out : value) as T
+}
+
+/**
+ * A copied line's `metadata.speaker`, moved to the branch's seat: a card-less
+ * seat's line is stamped `player-seat:<id>`, and that id is the source session's.
+ * Returns the override to spread, or nothing when the speaker is not a seat.
+ */
+export function remapPlayerSeatSpeaker(
+	metadata: Record<string, unknown> | null | undefined,
+	seatRemap: Map<number, number>
+): { speaker?: string } {
+	const seatId = playerSeatIdOfSpeaker(metadata?.speaker)
+	if (seatId == null) return {}
+	const moved = seatRemap.get(seatId)
+	return moved == null ? {} : { speaker: playerSeatSpeaker(moved) }
 }
 
 /**
@@ -336,9 +572,29 @@ async function copyStateRows(
 		created: number
 		forkMessageId: number
 		remap: Map<number, number>
+		/** Old `session_personas.id` → the branch's copy of that seat. */
+		seatRemap: Map<number, number>
+		/** Old notes entry id → the branch's copy (`copyPhantomToBranch`). */
+		entryRemap: ReadonlyMap<number, number>
 	}
 ): Promise<void> {
-	const { sessionId, created, forkMessageId, remap } = input
+	const { sessionId, created, forkMessageId, remap, seatRemap, entryRemap } = input
+	/**
+	 * The owner id a copied row gets, or `undefined` when its owner did not
+	 * come across. Ids that name a row OF this session move with it — the
+	 * `session` owner is the session, a `player_seat` owner one of its seats — while
+	 * a `session_cast` / `session_location` owner names a character or entry
+	 * the branch shares, and stays.
+	 */
+	const ownerIdFor = (kind: string, id: number): number | undefined => {
+		if (kind === "session") return id === sessionId ? created : id
+		if (kind === "player_seat") return seatRemap.get(id)
+		// 🚧 A place in the session's own notes is copied with the notes, so
+		// it is the copy the branch's row names (DC walk 6: "Ways out → Iron
+		// Door" with no place). A place in the attached book is shared.
+		if (kind === "session_location") return entryRemap.get(id) ?? id
+		return id
+	}
 	/** The anchor a copied row gets, or `undefined` when the row stays behind. */
 	const anchor = (source: number | null): number | null | undefined => {
 		if (source === null) return null
@@ -353,9 +609,13 @@ async function copyStateRows(
 	for (const row of values) {
 		const at = anchor(row.validFromMessageId)
 		if (at === undefined) continue
+		const ownerId = ownerIdFor(row.ownerKind, row.ownerId)
+		if (ownerId === undefined) continue
 		const { id: _id, createdAt: _createdAt, ...rest } = row
 		await tx.insert(schema.attributeValues).values({
 			...rest,
+			value: remapEntryRefs(rest.value, entryRemap) as typeof rest.value,
+			ownerId,
 			sessionId: created,
 			validFromMessageId: at
 		})
@@ -368,9 +628,12 @@ async function copyStateRows(
 	for (const row of configs) {
 		const at = anchor(row.validFromMessageId)
 		if (at === undefined) continue
+		const ownerId = ownerIdFor(row.ownerKind, row.ownerId)
+		if (ownerId === undefined) continue
 		const { id: _id, createdAt: _createdAt, ...rest } = row
 		await tx.insert(schema.attributeConfigs).values({
 			...rest,
+			ownerId,
 			sessionId: created,
 			validFromMessageId: at
 		})
@@ -380,19 +643,22 @@ async function copyStateRows(
 	// sheets and its cast's. Both are keyed by `session_id`, so both are found
 	// by one predicate and both are remapped the same way — the `session_cast`
 	// owner id is a `characters.id` and does not change across a branch, which
-	// is why only the `session` owner's id moves.
+	// is why only the `session` and `player_seat` owners' ids move (`ownerIdFor`).
 	const sheets = await tx
 		.select()
 		.from(schema.ownerSheets)
 		.where(eq(schema.ownerSheets.sessionId, sessionId))
-	for (const row of sheets)
+	for (const row of sheets) {
+		const ownerId = ownerIdFor(row.ownerKind, row.ownerId)
+		if (ownerId === undefined) continue
 		await tx.insert(schema.ownerSheets).values({
 			ownerKind: row.ownerKind,
-			ownerId: row.ownerKind === "session" ? created : row.ownerId,
+			ownerId,
 			sessionId: created,
 			sheetId: row.sheetId,
 			position: row.position
 		})
+	}
 	// …and its attribute picks, the rest of what it tracks.
 	const picks = await tx
 		.select()

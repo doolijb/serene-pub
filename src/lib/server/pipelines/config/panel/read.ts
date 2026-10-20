@@ -249,6 +249,10 @@ export async function namespaceView(
 	const declared = await declarations(db, at.specVersionId)
 	const chain = await layers(db, at, viewer)
 	const sets = await choiceSets(db, at.specId)
+	// 🚧 What the shipped Default holds, for the Changed mark (Q3-6, #50).
+	const { shippedConfigValuesOf } = await import("$lib/server/pipelines/config/named")
+	const { sameConfiguredValue } = await import("$lib/server/pipelines/config/deviations")
+	const shipped = await shippedConfigValuesOf(db, at.specId, at.slug, at.specVersionId, declared)
 	// A stored chain whose seam is gone stays visible (D4, *unplaced*): one
 	// synthetic option per such address, placed after its step's declared
 	// options, so the row can be seen and cleared rather than run silently
@@ -696,8 +700,15 @@ export async function namespaceView(
 			 * whichever surface is looking at it — a person in a session can
 			 * see that a field was tuned for everyone without that being the
 			 * thing their own reset would remove.
+			 *
+			 * 🚧 …and a row the shipped Default holds too, at the same value, is
+			 * no departure (PLAN-dc-after-walk2 Q3-6, the walk's #50): a
+			 * reference's row is always written (`deviations.ts`), so an
+			 * untouched config marked every prompt and sampling row Changed.
 			 */
-			changed: chain.preset.has(key)
+			changed:
+				chain.preset.has(key) &&
+				!(shipped.has(key) && sameConfiguredValue(chain.preset.get(key), shipped.get(key)))
 		}
 
 		if (d.matrixSlot === "params" && d.path === "safetyMargin")

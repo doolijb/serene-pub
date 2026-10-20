@@ -188,7 +188,7 @@ describe("recording what a run did", () => {
 		const run = await lastRunFor(db, sessionId)
 		expect(run).toBeTruthy()
 		expect(run.outcome).toBe("ok")
-		expect(run.specSlug).toBe("core:spec/chat-respond")
+		expect(run.specSlug).toBe("core:spec/story-respond")
 		expect(run.seed).toBe("receipt:1")
 	}, 30_000)
 
@@ -219,6 +219,11 @@ describe("recording what a run did", () => {
 			// decides what fits belongs in the receipt. Before the reads since
 			// 2026-10-03 (history window): the history read is sized by it.
 			"contextBudget",
+			// 🚧 The session's background tasks, resolved at the HEAD of the
+			// reply since lane 2 (2026-10-19): the reply group obeys its own
+			// (*Read the lorebook*, *Read the scene*) and the tail reads the
+			// same answer. No model call.
+			"tasks",
 			// Spec 1.6.0: the four reads moved into an `async` block, which
 			// qualifies the keys inside it. They still each appear, and still
 			// in declaration order — the receipt is ordered by assignment, not
@@ -291,9 +296,19 @@ describe("recording what a run did", () => {
 			"names.arm.link",
 			"loreLinked",
 			// Wave 8 C2: selective logic, secrets and presences mark
-			// candidates ineligible before the ranker sees them.
-			"eligible",
+			// candidates ineligible before the ranker sees them — in the
+			// `retrieval` junction's `on` arm since lane 2: *Read the
+			// lorebook* Off takes the `off` arm, the conversation's band alone.
+			"retrieval.on.eligible",
 			"rank",
+			// 🚧 *Read the scene* (lane 2): the state and the places, read
+			// every turn, handed to the context builder only while the task is
+			// on (`scene`, and its two parts).
+			"sceneNow",
+			"scenePlaces",
+			"scene",
+			"sceneState",
+			"scenePlaceList",
 			// ⚠ **Below the ranker, where it used to be above it.** The context
 			// builder's two relationship in-ports carry `rank`'s inclusions, so
 			// the prompt's relationship sections are built from the band that
@@ -410,7 +425,7 @@ describe("recording what a run did", () => {
 			db,
 			{
 				runId: "receipt:3b:continue",
-				specId: "core:spec/chat-respond",
+				specId: "core:spec/story-respond",
 				specVersion: "1.0.0",
 				outcome: "ok",
 				triggerSource: "event",
@@ -463,7 +478,7 @@ describe("recording what a run did", () => {
 		const long = "x".repeat(WIRE_RAW_LIMIT + 1000)
 		const receipt: any = {
 			runId: "receipt:cap",
-			specId: "core:spec/chat-respond",
+			specId: "core:spec/story-respond",
 			specVersion: "1.0.0",
 			outcome: "ok",
 			triggerSource: "event",
@@ -536,7 +551,7 @@ describe("recording what a run did", () => {
 		const long = "x".repeat(WIRE_RAW_LIMIT + 1000)
 		const receipt: any = {
 			runId: "receipt:cap-input",
-			specId: "core:spec/chat-respond",
+			specId: "core:spec/story-respond",
 			specVersion: "1.0.0",
 			outcome: "ok",
 			triggerSource: "event",

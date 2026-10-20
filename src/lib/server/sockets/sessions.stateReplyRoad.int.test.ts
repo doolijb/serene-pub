@@ -54,16 +54,21 @@ vi.mock("$lib/server/db", async () => {
  * selects out of it; `generate-text` takes it as the prose. `value` is text,
  * as the shipped keeper schema declares it.
  */
+/**
+ * One answer for every call: the reply's text, and the reckoning's document
+ * (Story, 2026-10-19 — the after-turn call that replaced Adventure's keeper):
+ * the DC delta grammar, two values set in words.
+ */
+const delta = (d: Record<string, unknown>) => ({
+	owner: "", op: "set", slot: "", repertoire: "", piece: "", value: "", check: "", against: 0, reason: "", ...d
+})
 const ANSWER = JSON.stringify({
-	beats: ["The lantern gutters.", "Thunder, far off."],
-	speakers: [{ name: "Elara", intent: "warn the party" }],
-	worldHints: { location: "the fog road", timeOfDay: "dusk", weather: "storm" },
-	needsLookup: false,
-	values: [
-		{ owner: "world", slot: "weather", value: "storm" },
-		{ owner: "Elara", slot: "mood", value: "wary" }
+	deltas: [
+		delta({ owner: "world", slot: "weather", value: "storm", reason: "the storm broke" }),
+		delta({ owner: "Elara", slot: "mood", value: "wary", reason: "she saw the lantern gutter" })
 	],
-	inventory: []
+	clock: [],
+	place: []
 })
 
 class FakeAdapter implements FakeTextAdapter {
@@ -139,7 +144,7 @@ vi.mock("$lib/server/embedding", () => ({
 	batchEmbed: async () => []
 }))
 
-const ADVENTURE = "core:genre/adventure"
+const ADVENTURE = "core:genre/story"
 const WEATHER = "core:slot/weather@1"
 const MOOD = "core:slot/mood@1"
 
@@ -225,10 +230,12 @@ async function adventureSession(tag: string, opts: { trustNarrator: boolean }) {
 			name: `Road ${tag}`,
 			genreId: ADVENTURE,
 			lorebookId: lorebook!.id,
+			// Trusting the narrator is the attributes task on Full; on Review
+			// the reckoning's changes are proposals (2026-10-19).
 			genreFields: {
 				tone: "grounded",
 				difficulty: "normal",
-				trustNarrator: opts.trustNarrator
+				tasks: { v: 1, tasks: { attributes: { mode: opts.trustNarrator ? "full" : "review" } } }
 			}
 		})
 		.returning()
@@ -358,8 +365,8 @@ describe("the keeper's changes over sessions:fireTurn", () => {
 		expect(
 			runs.map((r) => `${r.specSlug}:${r.outcome}${r.haltReason ? ` (${r.haltReason})` : ""}`)
 		).toEqual([
-			"core:spec/adventure-turn-order:ok",
-			"core:spec/adventure-respond:ok"
+			"core:spec/story-turn-order:ok",
+			"core:spec/story-respond:ok"
 		])
 
 		// Held, not applied: two proposals, each stamped with the version the
@@ -403,8 +410,8 @@ describe("the keeper's changes over sessions:fireTurn", () => {
 		expect(
 			runs.map((r) => `${r.specSlug}:${r.outcome}${r.haltReason ? ` (${r.haltReason})` : ""}`)
 		).toEqual([
-			"core:spec/adventure-turn-order:ok",
-			"core:spec/adventure-respond:ok"
+			"core:spec/story-turn-order:ok",
+			"core:spec/story-respond:ok"
 		])
 
 		// Applied: rows, no proposals, and the version moved once per row.

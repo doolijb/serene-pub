@@ -9,13 +9,16 @@
 	 * Header: the title, edited in place · the slug in mono · the owner chip
 	 * (*Core* / a plugin / *Yours*) · the **Default for <job>** star · the live
 	 * **what runs** line · the description (prose on a shipped loadout, with
-	 * *Duplicate to edit*). Then three cards — **Model**, **Sampling**,
-	 * **Workflow** (ComfyUI only) — and a footer: *Used by N steps*,
-	 * *Merge into…* / *Unmerge*, **Make it**, Delete, Cancel, Save.
+	 * *Duplicate to edit*). Then, in the body, what to choose for — **Needs**,
+	 * **Best with**, *Used by N steps* and why that matters — and three cards:
+	 * **Model** (with **Fill for me** and the filter popout), **Sampling**,
+	 * **Workflow** (ComfyUI only); a footer: *Merge into…* / *Unmerge*,
+	 * Delete, Cancel, Save.
 	 *
 	 * Edits are a draft until Save (STYLE-GUIDE §6.14): closing with changes
-	 * asks *Discard unsaved changes?*. Merge, Make it and Delete are one-shot
-	 * verbs with their own buttons. Refusals are toasted centrally; this
+	 * asks *Discard unsaved changes?*. **Fill for me** proposes into the draft
+	 * (`loadouts:proposeFill`); Merge and Delete are one-shot verbs with their
+	 * own buttons. Refusals are toasted centrally; this
 	 * editor also says them inline and drops its in-flight marks. Every word
 	 * and row comes from `loadoutSheet.ts`.
 	 */
@@ -40,12 +43,16 @@
 	import SamplingCard from "./sheet/SamplingCard.svelte"
 	import WorkflowCard from "./sheet/WorkflowCard.svelte"
 	import ConfirmDialog from "./sheet/ConfirmDialog.svelte"
+	import { impliedNeeds } from "$lib/shared/loadouts/consequence"
 	import {
+		bestWithOf,
 		canSave,
 		dialRows,
 		draftOf,
 		editorHeader,
+		loadoutNeeds,
 		mergeTargets,
+		usedByWhy,
 		modelOptions,
 		needsSetDefault,
 		samplingChoices,
@@ -101,15 +108,15 @@
 	const edits = new UnsavedEdits(() => draft)
 	/** The swap rule's sentence, after a pair change. */
 	let notice = $state<string | null>(null)
-	/** Make it's sentence. */
+	/** Fill for me's sentence: what it chose and why. */
 	let explanation = $state<string | null>(null)
 	/** A refusal, said inline beside the verb that met it. */
 	let problem = $state<{
-		at: "save" | "makeIt" | "merge" | "delete"
+		at: "save" | "fill" | "merge" | "delete"
 		text: string
 	} | null>(null)
 	let busy = $state<
-		null | "save" | "makeIt" | "merge" | "delete" | "duplicate"
+		null | "save" | "fill" | "merge" | "delete" | "duplicate"
 	>(null)
 	let asking = $state<null | "discard" | "delete">(null)
 	let mergeOpen = $state(false)
@@ -150,6 +157,9 @@
 	const jobLabel = $derived(transformLabel(draft.transform, list.transforms))
 	const merged = $derived(loadout?.mergedInto != null)
 	const draws = $derived(outputKindOf(draft.transform) === "image")
+	// What to choose for, and why: the Pipelines Loadout row's words.
+	const needs = $derived(loadoutNeeds(loadout?.loadoutId))
+	const bestWith = $derived(bestWithOf(loadout, list.samplingOptions))
 
 	// ── Sampling rows, with their knobs ───────────────────────────────────
 	let samplingStore = $state<SamplingRow[]>([])
@@ -179,10 +189,16 @@
 
 	// ── The Model card ────────────────────────────────────────────────────
 	const options = $derived(
-		modelOptions(connections, draft.transform, loadout?.loadoutId ?? null, {
-			connectionId: loadout?.connectionId ?? null,
-			connectionModelId: loadout?.connectionModelId ?? null
-		})
+		modelOptions(
+			connections,
+			draft.transform,
+			loadout?.loadoutId ?? null,
+			{
+				connectionId: loadout?.connectionId ?? null,
+				connectionModelId: loadout?.connectionModelId ?? null
+			},
+			list.connectionGrades
+		)
 	)
 	const chosenKey = $derived(
 		draft.connectionId != null && draft.connectionModelId != null
@@ -191,6 +207,7 @@
 	)
 	function pickModel(option: ModelOption) {
 		if (!option.usable || option.key === chosenKey) return
+		explanation = null
 		draft.connectionId = option.connectionId
 		draft.connectionModelId = option.modelId
 		const swap = samplingOnPairChange(
@@ -205,6 +222,7 @@
 		draft.connectionId = null
 		draft.connectionModelId = null
 		notice = null
+		explanation = null
 	}
 
 	// ── The Workflow card ─────────────────────────────────────────────────
@@ -381,12 +399,16 @@
 		mergeOpen = false
 		socket.emit("loadouts:merge", { id: loadout.id, parentId })
 	}
-	function makeIt() {
-		if (!loadout) return
-		busy = "makeIt"
+	/** **Fill for me**: the server's pick, into the draft — Save writes it. */
+	function fill() {
+		if (busy) return
+		busy = "fill"
 		problem = null
 		explanation = null
-		socket.emit("loadouts:makeIt", { id: loadout.id })
+		socket.emit("loadouts:proposeFill", {
+			id: loadout?.id ?? null,
+			transform: draft.transform
+		})
 	}
 	function remove() {
 		if (!loadout || !header.canDelete) return
@@ -455,24 +477,31 @@
 		busy = null
 		problem = { at: "merge", text: msg?.error ?? "Not merged." }
 	})
-	useInterest<"loadouts:makeIt">("loadouts:makeIt", (msg) => {
-		if (!mine(msg.loadout?.id)) return
+	useInterest<"loadouts:proposeFill">("loadouts:proposeFill", (msg) => {
+		if (busy !== "fill" || (msg.id ?? null) !== (loadout?.id ?? null))
+			return
 		busy = null
-		explanation = msg.explanation
-		// The server filled the pair: the draft and what is saved both take it.
-		const filled = {
-			connectionId: msg.loadout.connectionId,
-			connectionModelId: msg.loadout.connectionModelId,
-			samplingConfigId: msg.loadout.samplingConfigId
+		const option = options.find(
+			(o) => o.key === `${msg.connectionId}:${msg.connectionModelId}`
+		)
+		if (option && option.key !== chosenKey) pickModel(option)
+		else if (!option) {
+			draft.connectionId = msg.connectionId
+			draft.connectionModelId = msg.connectionModelId
 		}
-		Object.assign(draft, filled)
-		notice = null
+		// The shipped config, only where nothing is picked: a pick stands.
+		if (draft.samplingConfigId == null && msg.samplingConfigId != null)
+			draft.samplingConfigId = msg.samplingConfigId
+		explanation = msg.explanation
 	})
-	useInterest<"loadouts:makeIt:error">("loadouts:makeIt:error", (msg) => {
-		if (busy !== "makeIt") return
-		busy = null
-		problem = { at: "makeIt", text: msg?.error ?? "Nothing was filled." }
-	})
+	useInterest<"loadouts:proposeFill:error">(
+		"loadouts:proposeFill:error",
+		(msg) => {
+			if (busy !== "fill") return
+			busy = null
+			problem = { at: "fill", text: msg?.error ?? "Nothing was filled." }
+		}
+	)
 	useInterest<"loadouts:delete">("loadouts:delete", (msg) => {
 		if (!mine(msg.id)) return
 		busy = null
@@ -502,7 +531,7 @@
 			class="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4"
 		>
 			<Dialog.Content
-				class="card bg-surface-100-900 @container/editor flex max-h-[100dvh] w-full max-w-2xl flex-col shadow-xl sm:max-h-[92vh]"
+				class="card bg-surface-100-900 @container/editor flex max-h-[100dvh] w-full max-w-3xl flex-col shadow-xl sm:max-h-[92vh]"
 			>
 				<!-- Header -->
 				<header
@@ -709,6 +738,92 @@
 				<!-- Body: the one scroller -->
 				<div class="min-h-0 flex-1 overflow-y-auto px-4 pb-4 sm:px-6">
 					<div class="flex flex-col gap-3">
+						<!-- What to choose for, and why it matters: the
+						     Pipelines Loadout row's *Needs* and *Best with*,
+						     and who runs on it. -->
+						{#if needs.length || bestWith.words.length || loadout}
+							<section
+								class="bg-surface-200-800 flex flex-col gap-2 rounded-[12px] px-3 py-2.5 text-sm"
+								aria-label="What to choose for"
+								data-loadout-needs
+							>
+								{#if needs.length || bestWith.words.length}
+									<dl
+										class="grid grid-cols-1 gap-x-3 gap-y-1.5 @lg/editor:grid-cols-[auto_1fr]"
+									>
+										{#if needs.length}
+											<dt class="font-medium">Needs</dt>
+											<dd class="flex flex-col gap-1">
+												{#each needs as need (need.word)}
+													<span>
+														<span
+															class="text-surface-950-50"
+														>
+															{need.lead}
+														</span>
+														<span
+															class="text-surface-700-300"
+														>
+															{need.why}
+														</span>
+													</span>
+												{/each}
+											</dd>
+										{/if}
+										{#if bestWith.words.length}
+											<dt class="font-medium">
+												Best with
+											</dt>
+											<dd class="text-surface-700-300">
+												{bestWith.words.join(" · ")}
+											</dd>
+										{/if}
+									</dl>
+								{/if}
+								{#if loadout}
+									<div class="flex flex-col items-start gap-1">
+										<button
+											type="button"
+											class="text-surface-700-300 hover:text-surface-950-50 -mx-1 inline-flex min-h-8 items-center gap-1.5 rounded-lg px-1 text-left pointer-coarse:min-h-11"
+											aria-expanded={usedByOpen}
+											aria-controls="{uid}-used"
+											onclick={() => (usedByOpen = !usedByOpen)}
+										>
+											<Icons.ListTree
+												size={14}
+												class="shrink-0"
+												aria-hidden="true"
+											/>
+											<span>
+												<span class="font-medium">
+													{header.usedBy}.
+												</span>
+												{usedByWhy(loadout.usedBy.steps)}
+											</span>
+											{#if loadout.usedBy.pipelines.length}
+												<Icons.ChevronDown
+													size={14}
+													class="shrink-0 transition-transform {usedByOpen
+														? 'rotate-180'
+														: ''}"
+													aria-hidden="true"
+												/>
+											{/if}
+										</button>
+										{#if usedByOpen && loadout.usedBy.pipelines.length}
+											<ul
+												id="{uid}-used"
+												class="text-surface-700-300 flex flex-col gap-0.5 pl-6"
+											>
+												{#each loadout.usedBy.pipelines as name (name)}
+													<li>{name}</li>
+												{/each}
+											</ul>
+										{/if}
+									</div>
+								{/if}
+							</section>
+						{/if}
 						<fieldset
 							class="flex min-w-0 flex-col gap-3"
 							disabled={merged}
@@ -719,14 +834,22 @@
 							<ModelCard
 								{options}
 								{chosenKey}
+								transform={draft.transform}
 								{jobLabel}
+								needs={impliedNeeds(loadout?.loadoutId)}
+								fallbackName={loadout?.fallbackName ?? null}
+								{explanation}
+								filling={busy === "fill"}
 								disabled={merged}
 								onPick={pickModel}
 								onClear={clearPair}
+								onFill={merged ? undefined : fill}
 							/>
 							{#if samplingRows.length || outputKindOf(draft.transform) === "text" || draws}
 								<SamplingCard
 									rows={samplingRows}
+									transform={draft.transform}
+									bestWithId={bestWith.samplingId}
 									checkedId={draft.samplingConfigId}
 									{notice}
 									disabled={merged}
@@ -749,44 +872,6 @@
 								/>
 							{/if}
 						</fieldset>
-
-						{#if explanation}
-							<p
-								class="bg-surface-200-800 flex items-start gap-2 rounded-[10px] px-3 py-2 text-sm"
-								role="status"
-							>
-								<Icons.Wand
-									size={14}
-									class="mt-0.5 shrink-0"
-									aria-hidden="true"
-								/>
-								<span>{explanation}</span>
-							</p>
-						{/if}
-
-						{#if loadout && usedByOpen}
-							<div
-								id="{uid}-used"
-								class="panel-card flex flex-col gap-1"
-							>
-								<h3 class="text-sm font-medium">
-									{header.usedBy}
-								</h3>
-								{#if loadout.usedBy.pipelines.length}
-									<ul
-										class="text-surface-700-300 flex flex-col gap-0.5 text-sm"
-									>
-										{#each loadout.usedBy.pipelines as name (name)}
-											<li>{name}</li>
-										{/each}
-									</ul>
-								{:else}
-									<p class="text-surface-600-400 text-sm">
-										No pipeline step names it yet.
-									</p>
-								{/if}
-							</div>
-						{/if}
 
 						{#if mergeOpen && !merged}
 							<div class="panel-card flex flex-col gap-2">
@@ -825,16 +910,6 @@
 					{/if}
 					<div class="flex flex-wrap items-center gap-2">
 						{#if loadout}
-							<button
-								type="button"
-								class="btn btn-sm text-surface-700-300 hover:bg-surface-200-800 px-2"
-								aria-expanded={usedByOpen}
-								aria-controls="{uid}-used"
-								onclick={() => (usedByOpen = !usedByOpen)}
-							>
-								<Icons.ListTree size={14} aria-hidden="true" />
-								{header.usedBy}
-							</button>
 							{#if !merged && mergeOptions.length}
 								<button
 									type="button"
@@ -845,20 +920,6 @@
 								>
 									<Icons.Merge size={14} aria-hidden="true" />
 									{VERBS.mergeInto}
-								</button>
-							{/if}
-							{#if !merged}
-								<button
-									type="button"
-									class="btn btn-sm preset-tonal-surface"
-									disabled={busy === "makeIt"}
-									title="Fill the model from the connections you have"
-									onclick={makeIt}
-								>
-									<Icons.Wand size={14} aria-hidden="true" />
-									{busy === "makeIt"
-										? "Filling…"
-										: VERBS.makeIt}
 								</button>
 							{/if}
 							{#if header.canDelete}

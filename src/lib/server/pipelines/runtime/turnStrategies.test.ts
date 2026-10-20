@@ -405,6 +405,27 @@ describe("the pool", () => {
 		)
 	})
 
+	it("🚧 admits a card-less player seat as a person's turn, `player-seat:<id>`; `others` leaves it out once it wrote", async () => {
+		const withSeat = {
+			...cast,
+			sessionPersonas: [
+				...cast.sessionPersonas,
+				{ position: 1, removedAt: null, persona: null, seatId: 4, seatName: "Ash", seatUserId: 5 },
+				// A departed card's leftover row (no card, no name) is nobody.
+				{ position: 2, removedAt: null, persona: null, seatId: 5, seatName: null, seatUserId: 6 }
+			]
+		}
+		const run = (params: Record<string, unknown>, messages: any[] = []) =>
+			bindings["core:task/turn-pool@1"]!({ cast: withSeat, messages, params }, {})
+		const seat = ordered(await run({})).find((c: any) => c.ref === "player-seat:4")
+		expect(seat).toMatchObject({ kind: "persona", name: "Ash", position: 1, ownerUserId: 5 })
+		expect(ordered(await run({})).map((c: any) => c.ref)).not.toContain("player-seat:5")
+		const others = await run({ personas: "others" }, [
+			{ role: "user", content: "hi", personaId: null, metadata: { speaker: "player-seat:4" } }
+		])
+		expect(ordered(others).map((c: any) => c.ref)).toEqual(["character:11", "character:7", "envoy:scribe"])
+	})
+
 	it("`envoys: 'none'` and `'except'` leave them out", async () => {
 		expect(ordered(await pool({ envoys: "none" })).map((c: any) => c.ref)).not.toContain(
 			"envoy:scribe"

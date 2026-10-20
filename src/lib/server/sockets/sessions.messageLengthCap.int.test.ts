@@ -46,7 +46,8 @@ afterAll(async () => {
 })
 
 async function makeUser(username: string) {
-	const { createTestUser } = await import("$lib/server/utils/testDb")
+	const { createTestUser, publishSaveMessage } = await import("$lib/server/utils/testDb")
+	await publishSaveMessage(testDb)
 	return createTestUser(testDb, username)
 }
 
@@ -90,7 +91,7 @@ describe("sessionMessages:sendPersonaMessage — length cap (PGlite integration)
 			noopEmit
 		)
 
-		expect(res.error).toMatch(/too long/i)
+		expect(res.refused).toMatch(/too long/i)
 		expect(res.sessionMessage).toBeUndefined()
 	})
 

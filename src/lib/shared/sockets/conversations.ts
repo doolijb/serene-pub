@@ -276,7 +276,7 @@ export interface ConversationsMessagePush {
 /** Membership, name or host changed, or the receiver was removed/left: re-list. */
 export interface ConversationsChangedPush {
 	conversationId: number
-	/** Set when the receiver is no longer a member. */
+	/** Set when the receiver is not a member any more. */
 	removed?: true
 }
 

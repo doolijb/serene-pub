@@ -34,6 +34,8 @@ import { storyClockReplyKey } from "$lib/client/components/sessionPage/requests/
 import { sessionPlacesReplyKey } from "$lib/client/components/sessionPage/requests/sessionPlaces"
 import { statTrailReplyKey } from "$lib/client/components/sessionPage/requests/statTrail"
 import { backdropReplyKey } from "$lib/client/components/sessionPage/requests/setBackdrop"
+import { ownerFaceReplyKey } from "$lib/client/components/sessionPage/requests/setOwnerFace"
+import { giveReplyKey } from "$lib/client/components/sessionPage/requests/givePiece"
 import type { HistoryRow } from "$lib/client/components/sessionPage/requests/historyEntries"
 import { awaitReply } from "$lib/client/utils/awaitReply"
 import { interestKey } from "$lib/shared/sockets/interest"
@@ -264,6 +266,43 @@ export function createPageAsks(d: PageAsksDeps) {
 		},
 		keyOf: backdropReplyKey,
 		timeout: "the backdrop did not change: the server did not answer"
+	})
+	// 🚧 Stats (PLAN-sheet §12): a player seat's portrait, each ask tokened.
+	const ownerFaceAsks = createPendingAsks<
+		Sockets.State.SetOwnerFace.Params,
+		Sockets.State.SetOwnerFace.Response
+	>({
+		emit: (ask) => socket.emit("state:setOwnerFace", ask),
+		listen: (onReply) => {
+			const refused = declareInterest<"state:setOwnerFace:error">(
+				"state:setOwnerFace:error",
+				onReply
+			)
+			const done = declareInterest<"state:setOwnerFace">(
+				"state:setOwnerFace",
+				onReply
+			)
+			return () => {
+				done()
+				refused()
+			}
+		},
+		keyOf: ownerFaceReplyKey,
+		timeout: "the portrait did not change: the server did not answer"
+	})
+	// 🚧 Stats (★4): Give to…, each ask tokened.
+	const giveAsks = createPendingAsks<Sockets.State.GivePiece.Params, Sockets.State.GivePiece.Response>({
+		emit: (ask) => socket.emit("state:givePiece", ask),
+		listen: (onReply) => {
+			const refused = declareInterest<"state:givePiece:error">("state:givePiece:error", onReply)
+			const done = declareInterest<"state:givePiece">("state:givePiece", onReply)
+			return () => {
+				done()
+				refused()
+			}
+		},
+		keyOf: giveReplyKey,
+		timeout: "nothing was given: the server did not answer"
 	})
 
 	/**
@@ -548,6 +587,8 @@ export function createPageAsks(d: PageAsksDeps) {
 		readCharacterGallery,
 		readStatTrail: tokenedAsk(statTrailAsks, "widget-stat-trail"),
 		writeBackdrop: tokenedAsk(backdropAsks, "widget-set-backdrop"),
+		writeOwnerFace: tokenedAsk(ownerFaceAsks, "widget-set-owner-face"),
+		writeGive: tokenedAsk(giveAsks, "widget-give-piece"),
 		openScene,
 		closeScene,
 		moveSceneBoundary,
@@ -567,6 +608,8 @@ export function createPageAsks(d: PageAsksDeps) {
 			placesAsks.drop(why)
 			statTrailAsks.drop(why)
 			backdropAsks.drop(why)
+			ownerFaceAsks.drop(why)
+			giveAsks.drop(why)
 		}
 	}
 }

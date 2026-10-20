@@ -86,10 +86,10 @@ export async function restoreFromAttic(
 	)
 	const { allEntryTypes } = await import("@serene-pub/sdk")
 	await import("@serene-pub/core-catalog")
-	const { CHAT_RESPOND_VERSION } = await import("$lib/server/pipelines/specs/respond")
+	const { STORY_RESPOND_VERSION } = await import("$lib/server/pipelines/specs/respond")
 
 	const report = await db.transaction(async (tx) => {
-		await syncDefinitionRegistry(tx, allEntryTypes(), { release: CHAT_RESPOND_VERSION })
+		await syncDefinitionRegistry(tx, allEntryTypes(), { release: STORY_RESPOND_VERSION })
 
 		const [settings] = await tx.select().from(attic.systemSettings).limit(1)
 		const [vc] = await tx.select().from(attic.vectorizationConfigs).limit(1)

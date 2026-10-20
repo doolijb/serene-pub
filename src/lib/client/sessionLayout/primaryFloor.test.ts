@@ -1,332 +1,229 @@
 /**
- * The primary floor (brief 7a): the one placement rule left once the
- * conversation may sit in any zone. A layout places at least one instance of
- * its genre's primary widget, ANYWHERE; a reader that finds none appends the
- * bare primary to the middle, and the editor hides × on the last one.
+ * The primary floor — since R-B (owner review 2026-10-14, no lock) only a
+ * CONVERTER's rule: a blob with no stored `panels` gets its genre's primary
+ * when the old slots placed none; stored panels are read as stored, a layout
+ * with no conversation included. Over panels (PLAN-session-panels-2026-10-14).
  */
 import { describe, expect, test } from "vitest"
-import { type ArrangedGridV1, primaryPlaced, type ZoneLayoutV1 } from "@serene-pub/sdk"
+import {
+	type PanelLayoutV1,
+	type PanelV1,
+	primaryPlaced,
+	type SessionLayoutV1
+} from "@serene-pub/sdk"
 import {
 	drawnIdsOf,
 	drawnOf,
-	floorKeeps,
-	floorKeptId,
-	floorNote,
-	floorRefusal,
 	readStoredLayout,
-	sessionLayoutOf,
-	withPrimaryFloor,
-	type SessionPlacement
+	withPrimaryFilled,
+	withPrimaryFloor
 } from "./primaryFloor"
-import { defaultZoneLayout } from "./schema"
-import { emptyChatLayout, loadChatLayout, widgetsInZone, withGridWidget } from "./widgetGrid"
 
-const zones = (left: string[] = [], right: string[] = []): ZoneLayoutV1 => ({
-	version: 1,
-	zones: {
-		left: { kind: "side", side: "left", widgets: left },
-		right: { kind: "side", side: "right", widgets: right }
+/** A panel layout: the primary's tabs, and a panel per id on each side. */
+function panels(
+	o: {
+		primary?: string[]
+		above?: string[]
+		below?: string[]
+		left?: string[]
+		right?: string[]
+	} = {}
+): PanelLayoutV1 {
+	let n = 1
+	const one = (id: string): PanelV1 => ({ key: `p${++n}`, tabs: [id] })
+	return {
+		version: 1,
+		middle: {
+			above: (o.above ?? []).map(one),
+			primary: { key: "p1", tabs: o.primary ?? ["messages"] },
+			below: (o.below ?? []).map(one)
+		},
+		left: (o.left ?? []).map(one),
+		right: (o.right ?? []).map(one)
 	}
-})
-const placement = (over: Partial<SessionPlacement> = {}): SessionPlacement => ({
-	zones: zones(),
-	grid: emptyChatLayout(),
-	arranged: {},
-	...over
-})
+}
 
 describe("withPrimaryFloor — fires only when no instance is placed anywhere", () => {
-	test("nothing saved: the conversation fills the middle, exactly as before", () => {
-		const out = withPrimaryFloor(placement({ zones: defaultZoneLayout() }), "messages")
-		expect(widgetsInZone(out.grid, "middle").map((w) => [w.id, w.size.h])).toEqual([
-			["messages", "grow"]
-		])
-	})
-
-	test("Messages in a side list: nothing is appended — the move is honoured", () => {
-		const p = placement({ zones: zones(["messages"]) })
+	test("Messages as the primary panel: returned by reference", () => {
+		const p = panels()
 		expect(withPrimaryFloor(p, "messages")).toBe(p)
 	})
 
-	test("Messages in the arrangement alone: nothing is appended", () => {
-		const arranged: ArrangedGridV1 = {
-			right: { cols: 1, rows: 12, items: [{ id: "messages", x: 0, y: 0, w: 1, h: 12 }] }
-		}
-		const p = placement({ arranged })
+	test("Messages in a side panel: nothing is added — the move is honoured", () => {
+		const p = panels({ primary: ["stats"], left: ["messages"] })
 		expect(withPrimaryFloor(p, "messages")).toBe(p)
 	})
 
-	test("a grid entry that names a side counts as placed", () => {
-		const grid = loadChatLayout({
-			version: 1,
-			widgets: [{ id: "messages", zone: "left", order: 0, size: { w: "grow", h: "grow" } }]
-		})
-		const p = placement({ grid })
-		expect(withPrimaryFloor(p, "messages")).toBe(p)
+	test("Messages as a strip, or a second tab: placed", () => {
+		const strip = panels({ primary: ["stats"], below: ["messages"] })
+		expect(withPrimaryFloor(strip, "messages")).toBe(strip)
+		const tab = panels({ primary: ["stats", "messages"] })
+		expect(withPrimaryFloor(tab, "messages")).toBe(tab)
 	})
 
 	test("any instance satisfies it — the Lair's Sanctum copy alone included", () => {
-		const p = placement({ zones: zones([], ["world-state", "messages#sanctum"]) })
-		expect(primaryPlaced(sessionLayoutOf(p), "messages")).toBe(true)
+		const p = panels({ primary: ["stats"], right: ["messages#sanctum"] })
 		expect(withPrimaryFloor(p, "messages")).toBe(p)
 	})
 
-	test("none placed: the bare primary is appended AFTER the middle's own widgets", () => {
-		const grid = withGridWidget(emptyChatLayout(), "world-state", "middle")
-		const out = withPrimaryFloor(placement({ grid }), "messages")
-		expect(widgetsInZone(out.grid, "middle").map((w) => w.id)).toEqual([
-			"world-state",
-			"messages"
+	test("none placed: the bare primary fills the middle, and the old primary moves up, fit", () => {
+		const out = withPrimaryFloor(panels({ primary: ["stats"], above: ["places"] }), "messages")
+		expect(out.middle.primary.tabs).toEqual(["messages"])
+		expect(out.middle.above.map((p) => [p.tabs, p.height])).toEqual([
+			[["places"], undefined],
+			[["stats"], "fit"]
 		])
+		// A fresh key: none of the layout's own.
+		expect(out.middle.primary.key).toBe("p3")
+		expect(primaryPlaced({ panels: out }, "messages")).toBe(true)
 	})
 
-	test("none placed, and an arranged middle: the arranged middle gets a cell too", () => {
-		// The live view draws an arranged middle in preference to the grid, so
-		// appending to the grid alone would draw nothing.
-		const arranged: ArrangedGridV1 = {
-			middle: { cols: 8, rows: 12, items: [{ id: "world-state", x: 0, y: 0, w: 8, h: 3 }] }
-		}
-		const out = withPrimaryFloor(placement({ arranged }), "messages")
-		const cell = out.arranged.middle!.items.find((i: { id: string }) => i.id === "messages")
-		expect(cell).toMatchObject({ x: 0, w: 8 })
-		expect(cell!.y).toBeGreaterThanOrEqual(3)
-	})
-
-	test("under a strip, the log takes the whole free band, never a 3-row sliver", () => {
-		// Seen live: world-state 14×3 over a 15-row middle, the floor's log
-		// 14×3 under it and twelve blank rows below — on every read.
-		const arranged: ArrangedGridV1 = {
-			middle: { cols: 14, rows: 15, items: [{ id: "world-state", x: 0, y: 0, w: 14, h: 3 }] }
-		}
-		const out = withPrimaryFloor(placement({ arranged }), "messages")
-		expect(out.arranged.middle!.items).toEqual([
-			{ id: "world-state", x: 0, y: 0, w: 14, h: 3 },
-			{ id: "messages", x: 0, y: 3, w: 14, h: 12 }
-		])
-	})
-
-	test("the tallest free band wins, wherever it is", () => {
-		const arranged: ArrangedGridV1 = {
-			middle: {
-				cols: 10,
-				rows: 12,
-				items: [
-					{ id: "a", x: 0, y: 2, w: 4, h: 2 },
-					{ id: "b", x: 0, y: 10, w: 10, h: 2 }
-				]
-			}
-		}
-		const out = withPrimaryFloor(placement({ arranged }), "messages")
-		expect(out.arranged.middle!.items.at(-1)).toEqual({ id: "messages", x: 0, y: 4, w: 10, h: 6 })
-	})
-
-	test("no free band 3 rows tall: room is made the way the tray makes it", () => {
-		const arranged: ArrangedGridV1 = {
-			middle: { cols: 8, rows: 6, items: [{ id: "world-state", x: 0, y: 0, w: 8, h: 6 }] }
-		}
-		const out = withPrimaryFloor(placement({ arranged }), "messages")
-		const cell = out.arranged.middle!.items.find((i: { id: string }) => i.id === "messages")
-		expect(cell).toMatchObject({ x: 0, w: 8, h: 3 })
-	})
-
-	test("an EMPTY arranged middle is filled by it", () => {
-		const arranged: ArrangedGridV1 = { middle: { cols: 8, rows: 12, items: [] } }
-		const out = withPrimaryFloor(placement({ arranged }), "messages")
-		expect(out.arranged.middle!.items).toEqual([
-			{ id: "messages", x: 0, y: 0, w: 8, h: 12 }
-		])
+	test("an old primary that draws nothing (a retired widget) is not kept", () => {
+		const out = withPrimaryFloor(panels({ primary: ["inventory"] }), "messages")
+		expect(out.middle.above).toEqual([])
+		expect(out.middle.primary.tabs).toEqual(["messages"])
 	})
 
 	test("an R71 genre's own primary is the floor there", () => {
-		const out = withPrimaryFloor(placement(), "acme.game:board")
-		expect(out.grid.widgets.map((w) => [w.id, w.zone])).toEqual([["acme.game:board", "middle"]])
+		const out = withPrimaryFloor(panels({ primary: ["stats"] }), "battleship:board")
+		expect(out.middle.primary.tabs).toEqual(["battleship:board"])
 	})
 })
 
 describe("drawnIdsOf — placed means drawn, never merely named", () => {
-	test("reading order: the middle, the left, the right, then the strips", () => {
-		const p = placement({
-			zones: {
-				version: 1,
-				zones: {
-					top: { kind: "strip", area: "top", widgets: ["banner"] },
-					left: { kind: "side", side: "left", widgets: ["stats"] },
-					right: { kind: "side", side: "right", widgets: ["lore"] }
-				}
-			} as ZoneLayoutV1,
-			arranged: { middle: { cols: 1, rows: 2, items: [{ id: "map", x: 0, y: 0, w: 1, h: 1 }] } }
-		})
-		expect(drawnIdsOf(p)).toEqual(["map", "stats", "lore", "banner"])
+	test("reading order: the middle (above, primary, below), the left, the right", () => {
+		const layout: SessionLayoutV1 = {
+			panels: panels({ above: ["places"], below: ["album"], left: ["chronicle"], right: ["stats"] })
+		}
+		expect(drawnIdsOf(layout)).toEqual(["places", "messages", "album", "chronicle", "stats"])
 	})
 
-	test("an arranged middle draws over the grid's middle", () => {
-		const p = placement({
-			grid: withGridWidget(emptyChatLayout(), "world-state", "middle"),
-			arranged: { middle: { cols: 1, rows: 1, items: [{ id: "map", x: 0, y: 0, w: 1, h: 1 }] } }
-		})
-		expect(drawnIdsOf(p)).toEqual(["map"])
+	test("a retired widget's tab is named, never drawn", () => {
+		const layout: SessionLayoutV1 = { panels: panels({ right: ["inventory", "stats"] }) }
+		expect(drawnIdsOf(layout)).toEqual(["messages", "stats"])
 	})
 
-	test("a side's arrangement draws over its list and over a grid entry naming it", () => {
-		const grid = loadChatLayout({
-			version: 1,
-			widgets: [{ id: "messages", zone: "right", order: 0, size: { w: "grow", h: "grow" } }]
-		})
-		const p = placement({
-			zones: zones([], ["world-state", "stats"]),
-			grid,
-			arranged: { right: { cols: 1, rows: 3, items: [{ id: "world-state", x: 0, y: 0, w: 1, h: 3 }] } }
-		})
-		expect(drawnIdsOf(p)).toEqual(["world-state"])
-	})
-
-	test("a grid entry naming a side with no zone on that side draws nowhere", () => {
-		const grid = loadChatLayout({
-			version: 1,
-			widgets: [{ id: "messages", zone: "left", order: 0, size: { w: "grow", h: "grow" } }]
-		})
-		const p = placement({
-			zones: { version: 1, zones: { right: { kind: "side", side: "right", widgets: [] } } },
-			grid
-		})
-		expect(drawnIdsOf(p)).toEqual([])
-		expect(primaryPlaced(sessionLayoutOf(p), "messages")).toBe(false)
+	test("an instance is drawn once, in its first panel in reading order", () => {
+		const layout: SessionLayoutV1 = { panels: panels({ left: ["stats"], right: ["stats"] }) }
+		expect(drawnIdsOf(layout)).toEqual(["messages", "stats"])
 	})
 })
 
-describe("drawnOf / readStoredLayout — the SDK's one reader over the three places (C5)", () => {
-	test("drawnOf is resolveDrawn of the placement: zones, sources and one pin each", () => {
-		const p = placement({
-			zones: zones(["stats"], []),
-			grid: loadChatLayout({
-				version: 1,
-				widgets: [{ id: "messages", zone: "middle", order: 0, size: { w: "grow", h: "grow" } }]
-			}),
-			arranged: { right: { cols: 1, rows: 4, items: [{ id: "notes", x: 0, y: 0, w: 1, h: 4, pinned: false }] } }
-		})
-		const d = drawnOf(p, { inline: 1300 })
-		expect([d.middle.drawnFrom, d.left.drawnFrom, d.right.drawnFrom]).toEqual(["grid", "ladder", "arrangement"])
-		expect(d.right.instances.map((i) => [i.instanceId, i.pinned])).toEqual([["notes", false]])
-		expect(d.left.instances.map((i) => [i.instanceId, i.pinned])).toEqual([["stats", true]])
-		expect(drawnIdsOf(p)).toEqual(["messages", "stats", "notes"])
+describe("drawnOf / readStoredLayout — the SDK's one reader (C5)", () => {
+	test("drawnOf is resolveDrawn: panels, the tab shown and one pin each", () => {
+		const d = drawnOf(
+			{
+				panels: {
+					...panels(),
+					right: [{ key: "r", tabs: ["stats", "places"], open: "places", pinned: false }]
+				}
+			},
+			{ inline: 1300 }
+		)
+		const r = d.right.panels[0]
+		expect([r.key, r.open, r.pinned, r.tabs.map((t) => t.instanceId)]).toEqual([
+			"r",
+			"places",
+			false,
+			["stats", "places"]
+		])
+		expect(d.middle.primary.tabs.map((t) => t.instanceId)).toEqual(["messages"])
 	})
 
-	test("a stored blob is repaired the page's way and floored", () => {
-		// Nothing readable: the floor's conversation, filling the middle.
-		for (const junk of [undefined, null, 7, "x", []]) {
-			const p = readStoredLayout(junk)
-			expect(drawnIdsOf(p)).toEqual(["messages"])
-		}
-		// A retired card, a cell outside its frame, and no primary anywhere.
-		const p = readStoredLayout({
-			arrangedGrid: {
-				middle: {
-					cols: 2,
-					rows: 6,
-					items: [
-						{ id: "map", x: 0, y: 0, w: 9, h: 2 },
-						{ id: "composer", x: 0, y: 2, w: 2, h: 2 }
-					]
-				}
+	test("a stored blob with only the old slots reads as panels, floored", () => {
+		const read = readStoredLayout({
+			zoneLayout: {
+				version: 1,
+				zones: { right: { kind: "side", side: "right", widgets: ["stats"] } }
 			}
 		})
-		expect(p.arranged.middle!.items[0]).toMatchObject({ id: "map", w: 2 })
-		expect(drawnIdsOf(p)).toEqual(["map", "messages"])
+		expect(read.panels!.middle.primary.tabs).toEqual(["messages"])
+		expect(read.panels!.right.map((p) => p.tabs)).toEqual([["stats"]])
+		expect("zoneLayout" in read).toBe(false)
+	})
+
+	test("stored panels are the whole truth: old slots beside them are not read", () => {
+		const read = readStoredLayout({
+			panels: panels({ right: ["places"] }),
+			zoneLayout: {
+				version: 1,
+				zones: { right: { kind: "side", side: "right", widgets: ["stats"] } }
+			}
+		})
+		expect(drawnIdsOf(read)).toEqual(["messages", "places"])
+	})
+
+	test("anything that is not an object reads as a layout that saved nothing", () => {
+		for (const junk of [null, 7, "x", []]) {
+			const read = readStoredLayout(junk)
+			expect(drawnIdsOf(read)).toEqual(["messages"])
+		}
+	})
+
+	test("settings and style pins travel with it", () => {
+		const read = readStoredLayout({
+			panels: panels(),
+			widgetSettings: { messages: { order: "newest" } },
+			widgetStyles: { messages: { slug: "novel" } }
+		})
+		expect(read.widgetSettings).toEqual({ messages: { order: "newest" } })
+		expect(read.widgetStyles).toEqual({ messages: { slug: "novel" } })
 	})
 
 	test("a genre that withholds a widget (R71) never draws it, and its own primary is floored", () => {
-		const p = readStoredLayout(
-			{
-				widgetGrid: {
-					version: 1,
-					widgets: [{ id: "messages", zone: "middle", order: 0, size: { w: "grow", h: "grow" } }]
-				}
-			},
-			"acme.battleship:board",
+		const read = readStoredLayout(
+			{ panels: panels({ right: ["stats"] }) },
+			"battleship:board",
 			new Set(["messages"])
 		)
-		expect(drawnIdsOf(p)).toEqual(["acme.battleship:board"])
+		expect(drawnIdsOf(read)).toEqual(["battleship:board", "stats"])
 	})
 })
 
-describe("withPrimaryFloor — a primary named where nothing draws it", () => {
-	test("a grid entry the side's arrangement shadows: the floor fires, and the entry moves", () => {
-		// Seen live: the grid named Messages in the right, the right's
-		// arrangement held World State alone, and no conversation drew.
-		const grid = loadChatLayout({
-			version: 1,
-			widgets: [
-				{ id: "scene-portraits", zone: "middle", order: 0, size: { w: "grow", h: "grow" } },
-				{ id: "messages", zone: "right", order: 0, size: { w: "grow", h: "grow" } }
-			]
+
+describe("a stored layout holding no conversation (R-B, no lock)", () => {
+	test("stored panels are read as stored: no floor, the primary holds what it holds", () => {
+		const read = readStoredLayout({ panels: panels({ primary: ["places"], right: ["stats"] }) })
+		expect(read.panels!.middle.primary.tabs).toEqual(["places"])
+		expect(drawnIdsOf(read)).toEqual(["places", "stats"])
+		expect(primaryPlaced(read, "messages")).toBe(false)
+	})
+
+	test("the conversation moved to a side stays there; nothing is added in the middle", () => {
+		const read = readStoredLayout({ panels: panels({ primary: ["stats"], left: ["messages"] }) })
+		expect(drawnIdsOf(read)).toEqual(["stats", "messages"])
+	})
+
+	test("an empty primary with strips is not floored either (the live view fills it, `withPrimaryFilled`)", () => {
+		const read = readStoredLayout({ panels: panels({ primary: [], above: ["places"] }) })
+		expect(read.panels!.middle.primary.tabs).toEqual([])
+		expect(drawnIdsOf(read)).toEqual(["places"])
+	})
+
+	test("a converted blob (old slots only) still gets the floor", () => {
+		const read = readStoredLayout({
+			zoneLayout: { version: 1, zones: { left: { kind: "side", side: "left", widgets: ["stats"] } } }
 		})
-		const p = placement({
-			zones: zones([], ["world-state"]),
-			grid,
-			arranged: { right: { cols: 1, rows: 3, items: [{ id: "world-state", x: 0, y: 0, w: 1, h: 3 }] } }
-		})
-		const out = withPrimaryFloor(p, "messages")
-		expect(out.grid.widgets.map((w) => [w.id, w.zone])).toEqual([
-			["scene-portraits", "middle"],
-			["messages", "middle"]
-		])
-		expect(primaryPlaced(sessionLayoutOf(out), "messages")).toBe(true)
-	})
-
-	test("a zone list the arrangement shadows stops naming it, so the editor lists it once", () => {
-		const p = placement({
-			zones: zones(["messages"], []),
-			arranged: { left: { cols: 1, rows: 3, items: [{ id: "stats", x: 0, y: 0, w: 1, h: 3 }] } }
-		})
-		const out = withPrimaryFloor(p, "messages")
-		expect(out.zones.zones.left.widgets).toEqual([])
-		expect(widgetsInZone(out.grid, "middle").map((w) => w.id)).toEqual(["messages"])
+		expect(drawnIdsOf(read)).toEqual(["messages", "stats"])
 	})
 })
 
-describe("floorRefusal — Done asks the floor of what it would commit", () => {
-	test("a layout that draws no Messages is refused, in the floor's words", () => {
-		const p = placement({ grid: withGridWidget(emptyChatLayout(), "world-state", "middle") })
-		expect(floorRefusal(p, "messages", "Messages")).toBe("A session needs one Messages widget")
+describe("withPrimaryFilled — the primary is a place, never left blank while the middle holds something", () => {
+	const P = (key: string, tabs: string[]) => ({ key, tabs })
+	test("a primary with tabs: returned by reference", () => {
+		const m = { above: [P("a", ["x"])], primary: P("p", ["map"]), below: [] }
+		expect(withPrimaryFilled(m)).toBe(m)
 	})
 
-	test("one drawn anywhere passes", () => {
-		const p = placement({ zones: zones(["messages"], []) })
-		expect(floorRefusal(p, "messages", "Messages")).toBeNull()
-	})
-})
-
-describe("floorKeptId — the card whose × is hidden", () => {
-	test("the one instance, when exactly one is placed", () => {
-		expect(floorKeptId(["stats", "messages#sanctum"], "messages")).toBe("messages#sanctum")
+	test("an empty primary takes the nearest: the last above, else the first below", () => {
+		const up = withPrimaryFilled({ above: [P("a1", ["x"]), P("a2", ["y"])], primary: P("p", []), below: [P("b1", ["z"])] })
+		expect([up.above.map((p) => p.key), up.primary.key, up.below.map((p) => p.key)]).toEqual([["a1"], "a2", ["b1"]])
+		const down = withPrimaryFilled({ above: [], primary: P("p", []), below: [P("b1", ["z"]), P("b2", ["w"])] })
+		expect([down.above.length, down.primary.key, down.below.map((p) => p.key)]).toEqual([0, "b1", ["b2"]])
 	})
 
-	test("none when two are placed, or none", () => {
-		expect(floorKeptId(["messages", "messages#sanctum"], "messages")).toBeNull()
-		expect(floorKeptId(["stats"], "messages")).toBeNull()
-	})
-})
-
-describe("floorKeeps — the × is hidden on the last one", () => {
-	test("the only Messages is kept", () => {
-		expect(floorKeeps("messages", ["stats", "messages"], "messages")).toBe(true)
-	})
-
-	test("with a second instance placed, either may go", () => {
-		const placed = ["messages", "world-state", "messages#sanctum"]
-		expect(floorKeeps("messages", placed, "messages")).toBe(false)
-		expect(floorKeeps("messages#sanctum", placed, "messages")).toBe(false)
-	})
-
-	test("the last instance is kept even when it is a copy", () => {
-		expect(floorKeeps("messages#sanctum", ["messages#sanctum"], "messages")).toBe(true)
-	})
-
-	test("never keeps anything that is not the primary", () => {
-		expect(floorKeeps("stats", ["stats"], "messages")).toBe(false)
-	})
-
-	test("says why, in place of the ×", () => {
-		expect(floorNote("Messages")).toBe("A session needs one Messages widget")
+	test("nothing in the middle at all: returned as it is", () => {
+		const m = { above: [], primary: P("p", []), below: [] }
+		expect(withPrimaryFilled(m)).toBe(m)
 	})
 })

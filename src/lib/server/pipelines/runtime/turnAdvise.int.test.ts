@@ -117,7 +117,7 @@ const chatPresetId = async () =>
 		await db
 			.select({ id: schema.sessionPresets.id })
 			.from(schema.sessionPresets)
-			.where(eq(schema.sessionPresets.seedKey, "core-chat-default"))
+			.where(eq(schema.sessionPresets.seedKey, "core-story-minimal"))
 			.limit(1)
 	)[0]?.id ?? null
 
@@ -171,7 +171,7 @@ async function recompute(sessionId: number) {
 		.where(
 			and(
 				eq(schema.pipelineRuns.sessionId, sessionId),
-				eq(schema.pipelineRuns.specSlug, "core:spec/chat-turn-order")
+				eq(schema.pipelineRuns.specSlug, "core:spec/story-turn-order")
 			)
 		)
 		.orderBy(desc(schema.pipelineRuns.id))
@@ -203,7 +203,7 @@ describe("M4 · the optional model path", () => {
 		const { setNodeRebind } = await import("$lib/server/pipelines/entities/bindings")
 		const set = await setNodeRebind(db as any, {
 			scope: { kind: "pub", id: 0 },
-			specSlug: "core:spec/chat-turn-order",
+			specSlug: "core:spec/story-turn-order",
 			nodeKey: "decide.rules.strategy",
 			definitionId: "core:task/turn-random@1",
 			userId
@@ -220,7 +220,7 @@ describe("M4 · the optional model path", () => {
 		} finally {
 			await setNodeRebind(db as any, {
 				scope: { kind: "pub", id: 0 },
-				specSlug: "core:spec/chat-turn-order",
+				specSlug: "core:spec/story-turn-order",
 				nodeKey: "decide.rules.strategy",
 				definitionId: null,
 				userId
@@ -316,7 +316,7 @@ describe("M4 · the optional model path", () => {
 			nodeDefinitions: [
 				{ id: "acme:oracle/turn-natural@1", declaration: { id: "acme:oracle/turn-natural@1", kind: "oracle", ports, slots } }
 			],
-			swaps: [{ spec: "core:spec/chat-turn-order", node: "decide.model.advise", definition: "acme:oracle/turn-natural@1" }]
+			swaps: [{ spec: "core:spec/story-turn-order", node: "decide.model.advise", definition: "acme:oracle/turn-natural@1" }]
 		}
 		const { swapContributionProblems } = await import("$lib/server/plugins/swaps")
 		const problems = await swapContributionProblems(db as any, manifest)
@@ -343,10 +343,10 @@ describe("M4 · the optional model path", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-turn-order"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/story-turn-order"))
 		const { listSessionNodeSwaps } = await import("$lib/server/pipelines/entities/bindings")
 		const offered = await listSessionNodeSwaps(db as any, {
-			spec: "core:spec/chat-turn-order",
+			spec: "core:spec/story-turn-order",
 			nodeKey: "decide.model.advise",
 			specVersionId: spec!.activeVersionId!
 		})

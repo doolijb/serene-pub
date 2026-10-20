@@ -63,6 +63,8 @@ import { canActOnMessage } from "$lib/server/messages/permissions"
 import { MAX_RUN_DEPTH, type RunLineage } from "$lib/server/pipelines/runtime/lineage"
 import { itemValuesOf, type ItemValues } from "$lib/shared/actions/itemValues"
 import { publishedBackdrop, type PublishedBackdrop } from "$lib/server/sessions/backdrop"
+import * as spriteChoices from "$lib/server/sprites/choices"
+import * as sharedSprites from "$lib/shared/sprites"
 
 export {
 	itemValuesOf,
@@ -99,13 +101,20 @@ export async function publishedSprites(
 	state: ResolvedState
 ): Promise<PublishedSprites> {
 	const out: PublishedSprites = { byId: {} }
-	const entries = Object.values(state.cast.byId ?? {}) as {
-		id: number
-		key: string
-	}[]
+	// A card-less player seat's entry (`id: 0`) has no card, so no sprites.
+	const entries = (
+		Object.values(state.cast.byId ?? {}) as {
+			id: number
+			key: string
+		}[]
+	).filter((e) => e.id > 0)
 	if (entries.length === 0) return out
-	const { asShownSprite } = await import("$lib/shared/sprites")
-	const { spriteSetOverridesFor } = await import("$lib/server/sprites/choices")
+	// Static imports, both (2026-10-19): a dynamic import on the action-list
+	// build path stalls in the module runner while a run's own imports are
+	// in flight, and the start push then lands after the run has ended —
+	// Retry read "enabled" mid-generation. Both modules are already on the
+	// sessions socket's static graph, so nothing new loads.
+	const { asShownSprite, spriteSetOverridesFor } = { ...sharedSprites, ...spriteChoices }
 	const ids = entries.map((e) => e.id)
 	const overrides = await spriteSetOverridesFor(db, sessionId, ids)
 	const rows = await db
@@ -153,8 +162,12 @@ export async function publishedSprites(
 export async function sessionGenerating(
 	db: Db,
 	sessionId: number,
-	opts: { lineage?: RunLineage } = {}
+	opts: { lineage?: RunLineage; starting?: boolean } = {}
 ): Promise<boolean> {
+	// 🚧 The start push (W-A1) says a run is generating because it IS the
+	// start: a list built a beat after a fast run ended must not read
+	// "enabled" for the push that announced the run (2026-10-19).
+	if (opts.starting) return true
 	const own = await ownTree(db, opts.lineage)
 	if (
 		runRegistry
@@ -178,6 +191,30 @@ export async function sessionGenerating(
 		)
 		.limit(1)
 	return !!row
+}
+
+/**
+ * 🚧 Wait — up to `ms` — while the session is busy only with runs nobody is
+ * watching stream: registered action runs (a turn's children settling, a
+ * background step), with no reply run and no row being written. A real
+ * reply returns at once, and the caller refuses as before; so does a wait
+ * that runs out. What a Regenerate pressed a beat after a turn waits on
+ * (PLAN-dc-after-walk2 Q1-4: it was refused "wait for the reply to finish"
+ * with nothing running).
+ */
+export async function settleBackgroundRuns(db: Db, sessionId: number, ms = 8000): Promise<void> {
+	const end = Date.now() + ms
+	for (;;) {
+		const busy = runRegistry.active().filter((h) => h.sessionId === sessionId && h.kind !== "maintenance")
+		if (!busy.length || busy.some((h) => h.kind === "reply")) return
+		const [row] = await db
+			.select({ id: schema.sessionMessages.id })
+			.from(schema.sessionMessages)
+			.where(and(eq(schema.sessionMessages.sessionId, sessionId), eq(schema.sessionMessages.isGenerating, true)))
+			.limit(1)
+		if (row || Date.now() > end) return
+		await new Promise((r) => setTimeout(r, 150))
+	}
 }
 
 /** The run ids of a fire's own tree — its root and the parent chain — or none for a person's press. */
@@ -207,7 +244,7 @@ async function ownTree(db: Db, lineage?: RunLineage): Promise<Set<string>> {
 export async function publishedValues(
 	db: Db,
 	sessionId: number,
-	opts: { lineage?: RunLineage } = {}
+	opts: { lineage?: RunLineage; starting?: boolean } = {}
 ): Promise<PublishedValues> {
 	const [generating, fields, state, open, backdrop] = await Promise.all([
 		sessionGenerating(db, sessionId, opts),

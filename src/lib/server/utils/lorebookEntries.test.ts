@@ -4,7 +4,13 @@
  */
 
 import { describe, it, expect } from "vitest"
-import { assertNoRunawayPatterns } from "$lib/server/utils/lorebookEntries"
+import {
+	assertDeclaredFields,
+	assertNoRunawayPatterns,
+	entryInsert,
+	splitUpdate,
+	toEntryRow
+} from "$lib/server/utils/lorebookEntries"
 
 const refused = /The pattern “\(a\+\)\+\$” can't be saved: it repeats a group/
 
@@ -104,5 +110,69 @@ describe("assertNoRunawayPatterns", () => {
 				})
 			).not.toThrow()
 		})
+	})
+})
+
+describe("a derived entry type's piece half (checkPiece)", () => {
+	const WEAPONS = "core:entry/vis-itineris.weapons"
+	const dagger = {
+		name: "Dagger",
+		description: "A short blade.",
+		category: "simple",
+		damage: { dice: 1, die: "d4", type: "piercing" }
+	}
+
+	it("accepts a whole piece, nested object fields included", () => {
+		expect(() => assertDeclaredFields(WEAPONS, dagger, { whole: true })).not.toThrow()
+	})
+
+	it("refuses a create missing a required piece field", () => {
+		const { damage: _d, ...noDamage } = dagger
+		expect(() => assertDeclaredFields(WEAPONS, noDamage, { whole: true })).toThrow()
+	})
+
+	it("refuses a malformed nested field, whole or patched", () => {
+		const bad = { damage: { dice: 0, die: "d7", type: "piercing" } }
+		expect(() => assertDeclaredFields(WEAPONS, { ...dagger, ...bad }, { whole: true })).toThrow()
+		expect(() => assertDeclaredFields(WEAPONS, bad)).toThrow()
+	})
+
+	it("checks a patch key by key, so a partial edit passes", () => {
+		expect(() => assertDeclaredFields(WEAPONS, { category: "martial" })).not.toThrow()
+		expect(() => assertDeclaredFields(WEAPONS, { category: "exotic" })).toThrow()
+	})
+
+	it("leaves core's five to the scalar check", () => {
+		expect(() =>
+			assertDeclaredFields("core:entry/world-lore", { priority: 2 }, { whole: true })
+		).not.toThrow()
+	})
+
+	it("stores the piece name as the title and nested fields in `fields`, and reads them back", () => {
+		const insert = entryInsert({
+			typeId: WEAPONS as any,
+			lorebookId: 1,
+			position: 0,
+			...dagger
+		} as any)
+		expect(insert.title).toBe("Dagger")
+		expect(insert.fields).not.toHaveProperty("name")
+		expect(insert.fields).toMatchObject({
+			description: "A short blade.",
+			damage: { dice: 1, die: "d4", type: "piercing" }
+		})
+		const row = toEntryRow({
+			...insert,
+			id: 9,
+			createdAt: new Date(0),
+			updatedAt: new Date(0)
+		} as any)
+		expect(row.name).toBe("Dagger")
+		expect((row as any).damage).toEqual({ dice: 1, die: "d4", type: "piercing" })
+
+		const { columns, fields } = splitUpdate(WEAPONS, { name: "Stiletto", damage: { dice: 1, die: "d4", type: "piercing" } })
+		expect(columns.title).toBe("Stiletto")
+		expect(fields).not.toHaveProperty("name")
+		expect(fields).toHaveProperty("damage")
 	})
 })

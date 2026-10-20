@@ -369,12 +369,17 @@ describe("the streaming step over sessions:fireTurn", () => {
 		expect(frames.some((t) => t.startsWith("The torch gutters."))).toBe(true)
 	})
 
-	test("Adventure still streams its scene, and nothing else", async () => {
-		const w = await session("core:genre/adventure", {
+	// Adventure's case until it retired (2026-10-19): Story, which took it in,
+	// streams the reply and never the reckoning's JSON after it.
+	test("Story streams its reply, and nothing else", async () => {
+		const w = await session("core:genre/story", {
 			tone: "grounded",
 			difficulty: "normal"
 		})
-		const { res, emitted } = await reply(w, "the adventure road")
+		const { res, emitted } = await reply(w, "the story road", {
+			ref: `character:${w.brannoc}`,
+			via: "pick"
+		})
 		expect((res as any)?.error).toBeUndefined()
 		const frames = streamedFrames(emitted)
 		for (const text of frames) expect(text).not.toContain("{")

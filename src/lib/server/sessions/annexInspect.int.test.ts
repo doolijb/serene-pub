@@ -92,7 +92,7 @@ beforeAll(async () => {
 			label: "Last roll"
 		}),
 		annexField({ key: "streak", shape: { type: "integer" } }),
-		annexField({ key: "adventure-only", shape: { type: "string" }, genre: "core:genre/adventure" })
+		annexField({ key: "lair-only", shape: { type: "string" }, genre: "core:genre/lair" })
 	])
 	// A stored manifest an SDK check would refuse: a secret-shaped key. The
 	// declaration is skipped, so its stored value reads as legacy — withheld.

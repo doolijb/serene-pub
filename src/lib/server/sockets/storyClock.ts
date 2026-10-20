@@ -204,7 +204,7 @@ export async function setSessionStoryClock(
 		})
 		await tx
 			.update(schema.sessions)
-			.set({ ...patch, updatedAt: new Date().toISOString() })
+			.set({ ...patch, updatedAt: new Date() })
 			.where(eq(schema.sessions.id, sessionId))
 	})
 	// A person setting the clock is a time action; following the line's

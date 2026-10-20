@@ -28,19 +28,34 @@ import {
 	entriesOfType,
 	entryTypeIdOfExportKey,
 	isEntryOfType,
+	isCoreEntryTypeId,
+	isDerivedEntryTypeId,
 	isEntryTypeId,
 	isFileableEntryType,
 	type LorebookEntry
 } from "./types"
-import { entryDeclarations } from "$lib/server/entries/declarations"
+import {
+	derivedEntryTypeIds,
+	entryDeclarations
+} from "$lib/server/entries/declarations"
+import { RULESET_ENTRY_TYPES } from "@serene-pub/core-catalog"
+
+/** The derived entry types core's rulesets yield, bare — from the SDK. */
+const DERIVED = RULESET_ENTRY_TYPES.map((d) => d.id.replace(/@\d+$/, ""))
 
 const declared = () => new Map(entryDeclarations().map((d) => [d.typeId, d]))
 
 describe("the shared shapes mirror the declarations", () => {
-	it("names exactly the types the catalog declares", () => {
-		expect([...ENTRY_TYPE_IDS].sort()).toEqual(
+	it("names exactly the types the catalog declares: core's five plus the derived", () => {
+		expect(DERIVED.length).toBeGreaterThan(0)
+		expect([...ENTRY_TYPE_IDS, ...DERIVED].sort()).toEqual(
 			[...declared().keys()].sort()
 		)
+		expect([...derivedEntryTypeIds()].sort()).toEqual([...DERIVED].sort())
+		// The shared predicate recognises every derived id by its shape, and
+		// no core id has it.
+		for (const id of DERIVED) expect(isDerivedEntryTypeId(id)).toBe(true)
+		for (const id of ENTRY_TYPE_IDS) expect(isDerivedEntryTypeId(id)).toBe(false)
 	})
 
 	it("carries the same field names, per type, in the same order", () => {
@@ -66,8 +81,8 @@ describe("the shared shapes mirror the declarations", () => {
 		// ⚠ The wire name, never the type id. A file is read by installs whose
 		// registry is not this one, so `core:entry/world-lore@1` must never
 		// reach one.
-		for (const [typeId, decl] of declared())
-			expect(ENTRY_EXPORT_KEY[typeId]).toBe(decl.exportKey)
+		for (const typeId of ENTRY_TYPE_IDS)
+			expect(ENTRY_EXPORT_KEY[typeId]).toBe(declared().get(typeId)!.exportKey)
 		// Every core type has its own (plan A26, E-8): a place or an item
 		// written as world lore reads back as world lore, its links and its
 		// stats with nothing left to hold them.
@@ -88,7 +103,12 @@ describe("the shared shapes mirror the declarations", () => {
 		const declaring = [...declared()]
 			.filter(([, decl]) => decl.roles.parent !== undefined)
 			.map(([typeId]) => typeId)
-		expect([...FILEABLE_ENTRY_TYPE_IDS].sort()).toEqual(declaring.sort())
+		// Every derived entry type takes the universal parts whole, a parent
+		// role included — so it is fileable by the same declaration.
+		expect([...FILEABLE_ENTRY_TYPE_IDS, ...DERIVED].sort()).toEqual(
+			declaring.sort()
+		)
+		for (const id of DERIVED) expect(isFileableEntryType(id)).toBe(true)
 		expect(isFileableEntryType(LOCATION_TYPE_ID)).toBe(false)
 		expect(isFileableEntryType(HISTORY_TYPE_ID)).toBe(false)
 		expect(isFileableEntryType(WORLD_LORE_TYPE_ID)).toBe(true)
@@ -121,7 +141,10 @@ describe("the brand narrows at runtime as well as at compile time", () => {
 
 	it("recognises a declared id and refuses anything else", () => {
 		expect(isEntryTypeId(WORLD_LORE_TYPE_ID)).toBe(true)
+		expect(isEntryTypeId("core:entry/vis-itineris.weapons")).toBe(true)
+		expect(isCoreEntryTypeId("core:entry/vis-itineris.weapons")).toBe(false)
 		expect(isEntryTypeId("core:entry/world-lore@1")).toBe(false)
+		expect(isEntryTypeId("core:entry/vis-itineris.weapons@1")).toBe(false)
 		expect(isEntryTypeId(null)).toBe(false)
 	})
 

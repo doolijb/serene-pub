@@ -15,7 +15,7 @@ import {
 	resolveCharacterName,
 	resolvePersonaName
 } from "$lib/shared/utils/resolveCharacterName"
-import { envoySlugOfRef, i18nText } from "@serene-pub/sdk"
+import { envoySlugOfRef, i18nText, senderRefOf } from "@serene-pub/sdk"
 import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
 
 /** An envoy as the cast read carries it — a seat joined to its declaration. */
@@ -150,6 +150,26 @@ export class SessionMessageProcessor
 		}
 	): ProcessedSessionMessage | null {
 		const { interpolationContext, charName, personaName } = context
+		/**
+		 * 🚧 **A pressed answer** (a row of kind `answer`, said for a person —
+		 * `speaker: user:<id>` or their seat — by a genre that writes a form's
+		 * answer down, Dungeon Crawler's interview): it is that person's line,
+		 * and reads as one. Before, a lane's transcript was the Planner's
+		 * questions, ten in a row, and none of the answers (the 100-turn walk,
+		 * P3-5).
+		 */
+		if ((message as { kind?: unknown }).kind === "answer" && message.role !== "user") {
+			const said = senderRefOf(message)
+			const person = typeof said === "string" ? /^user:(\d+)$/.exec(said) : null
+			message = {
+				...message,
+				role: "user",
+				characterId: null,
+				isNarratorResponse: false,
+				...(person ? { userId: Number(person[1]), metadata: { ...((message.metadata as object) ?? {}), speaker: undefined } } : {})
+			} as SelectSessionMessage
+			if (person) delete (message as { speaker?: unknown }).speaker
+		}
 
 		// Create message-specific interpolation context
 		let msgInterpolationContext = { ...interpolationContext }
@@ -163,7 +183,15 @@ export class SessionMessageProcessor
 		// mode), mislabeling every past narration line in history with the
 		// wrong speaker. Use the name snapshotted on the message itself
 		// (set once at trigger time, matching how it's displayed) instead.
-		const envoySlug = envoySlugOfRef((message.metadata as any)?.speaker)
+		// The reference rides on the row as the host's history read hands it
+		// on (`toMessage`: top-level `speaker`, no `metadata`) — or on its
+		// metadata, as a stored row carries it. Reading the metadata alone
+		// named every envoy's line in a pipeline prompt by the unclaimed
+		// name: a Dungeon Crawler Planner read its own lane's greeting as the
+		// Narrator's (2026-10-15).
+		const envoySlug = envoySlugOfRef(
+			(message.metadata as any)?.speaker ?? (message as any).speaker
+		)
 		if ((message as any).isNarratorResponse) {
 			const narratorName =
 				(message.metadata as any)?.narratorName || "Narrator"
@@ -234,7 +262,7 @@ export class SessionMessageProcessor
 		// Handle persona-specific context
 		if (message.personaId) {
 			const foundPersona = this.session.sessionPersonas?.find(
-				(cp: any) => cp.persona.id === message.personaId
+				(cp: any) => cp.persona?.id === message.personaId
 			)?.persona
 			let foundName: string | undefined
 			if (foundPersona) {
@@ -269,10 +297,69 @@ export class SessionMessageProcessor
 		// The genre's `playerLabel` comes first (R4): the Lair's person is
 		// the "Dungeon Master" in every transcript, whoever is typing. On a
 		// `user` row only — the label names a person's line, not a system one.
+		// 🚧 A card-less player seat's player (2026-10-14): their seat name wins
+		// over the player label, exactly as the session view names it.
+		// Found by the seat the line names (`metadata.speaker = player-seat:<id>`),
+		// never guessed from who sent it: one player may hold two seats.
+		//
+		// 🚧 Several seats (2026-10-16): the turn's default name is every seat
+		// joined ("Ann and Bo"), which is nobody's line. A person's line is
+		// THAT line's speaker's — its seat, else the sender's own seat — and
+		// never the joined list, including lines written before the second
+		// seat existed.
+		let unseated = false
+		if (message.role !== "assistant" && !message.personaId) {
+			const seats = ((this.session?.sessionPersonas as any[] | undefined) ?? []).filter(
+				(cp: any) => cp && (cp.persona || cp.seatName)
+			)
+			const seatLabel = (cp: any): string =>
+				(cp.persona ? resolvePersonaName(cp.persona) : cp.seatName ?? "").trim()
+			const sender = senderRefOf(message)
+			const seatId = sender?.startsWith("player-seat:") ? Number(sender.slice("player-seat:".length)) : null
+			let seat =
+				seatId == null ? undefined : seats.find((cp: any) => cp.seatId === seatId && seatLabel(cp))
+			const multiSeat = seats.length > 1
+			if (!seat && multiSeat && message.userId != null) {
+				const own = seats.filter(
+					(cp: any) =>
+						(cp.seatUserId ?? cp.persona?.userId) === message.userId && seatLabel(cp)
+				)
+				// Only when it names one seat — a player holding two is not guessed.
+				if (own.length === 1) seat = own[0]
+			}
+			if (seat && (multiSeat || seatId != null || !userName?.trim())) {
+				userName = seatLabel(seat)
+				msgInterpolationContext = {
+					...msgInterpolationContext,
+					user: userName,
+					persona: userName
+				}
+			} else if (multiSeat) {
+				// Nobody's seat: the label/member rules below, never the join.
+				userName = ""
+				unseated = true
+			} else if (!seat && message.userId != null && seats.length === 1) {
+				// 🚧 One seat, and the line is another person's (the 100-turn
+				// walk, B2: a guest with no seat yet wrote "as" the host's
+				// persona, and the Planner answered Wren): the label/member
+				// rules below, never the one seat's name.
+				const holder = seats[0].seatUserId ?? seats[0].persona?.userId
+				if (holder != null && Number(holder) !== Number(message.userId)) {
+					userName = ""
+					unseated = true
+				}
+			}
+		}
 		if (message.role !== "assistant" && !userName?.trim())
 			userName =
 				(message.role === "user" && this.playerLabel()) ||
 				this.memberName(message.userId)
+		if (unseated)
+			msgInterpolationContext = {
+				...msgInterpolationContext,
+				user: userName,
+				persona: userName
+			}
 
 		return {
 			id: message.id,

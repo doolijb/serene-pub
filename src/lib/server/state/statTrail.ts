@@ -316,7 +316,7 @@ export interface SessionStatChange {
 
 export interface SessionStatTrailQuery {
 	sessionId: number
-	/** A session-layer owner: `session` (its id the session's), `session_cast`, `session_location`. */
+	/** A session-layer owner: `session` (its id the session's), `session_cast`, `player_seat`, `session_location`. */
 	owner: StateOwner
 	/** Full slot id or local name. */
 	slotId: string

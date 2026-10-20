@@ -327,22 +327,24 @@ export const startupTasks: StartupTask[] = [
 	},
 	{
 		/**
-		 * ⏳ The copy model's one-shot step (brief 3 of
-		 * `PLAN-layout-one-format-2026-09-28`; delete it at the pre-release
-		 * migrations squash): every session layout row written before the copy
-		 * model is made whole with exactly what the screen drew — its own slots
-		 * over the preset it was drawn over. After BOTH reconcilers (`plugins`
-		 * above runs `syncPluginLayouts`; `layout-presets` just ran), because
-		 * that preset is one of their rows, and before sockets accept (they
-		 * await `appReady`), because the handlers now read the row alone.
-		 * Idempotent: a finished row is never selected again.
+		 * ⏳ The boot pass to **panels** (`PLAN-session-panels-2026-10-14` §2;
+		 * delete it at the 0.7 squash, with `panelsFromSlots` and the old
+		 * slots): first every session layout row written before the copy model
+		 * is made whole with exactly what the screen drew, then every stored
+		 * session layout and every person's own saved layout that holds only
+		 * the old slots gains `panels` (`panelsFromSlots`), the old slots left
+		 * on the row, inert. After BOTH reconcilers (`plugins` above runs
+		 * `syncPluginLayouts`; `layout-presets` just ran), because the
+		 * completion's base is one of their rows, and before sockets accept
+		 * (they await `appReady`). Idempotent: a finished row is never
+		 * selected again.
 		 */
 		name: "session-layouts",
 		run: async () => {
-			const { completeSessionLayouts } = await import(
-				"$lib/server/db/sessionLayoutBackfill"
+			const { sessionLayoutPanels } = await import(
+				"$lib/server/db/sessionLayoutPanels"
 			)
-			await completeSessionLayouts()
+			await sessionLayoutPanels()
 		}
 	},
 	{

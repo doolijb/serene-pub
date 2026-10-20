@@ -75,8 +75,9 @@ describe("sessions:view — a core genre's panels are core's remotes (K7, R79)",
 			grants: ["session:state"]
 		})
 		expect(byId.get("sky")).toMatchObject({
-			surface: { kind: "remote", owner: "core", component: "world-state" },
-			src: "/core-ui/world-state",
+			// ⏳ World State is Stats' module (AUDIT B, 2026-10-17): the alias is served as Stats.
+			surface: { kind: "remote", owner: "core", component: "stats" },
+			src: "/core-ui/stats",
 			grants: ["session:state"]
 		})
 		// Granted its declared section scopes as the page's own core widgets

@@ -224,15 +224,15 @@ The **post-history reminder** is a block of reminders placed near the end of the
 - **`charInstructions`**: the speaking character's own **Post-History Instructions** (see [Characters](./characters.md)).
 - **`exampleDialogue`**: one of the speaking character's **Example Dialogues**, placed here rather than at the top because a model deep into a conversation benefits more from seeing them just before it writes. A character with several shows the same one on every turn of a session (each session and speaker gets its own pick), so the prompt does not change from turn to turn for no reason.
 
-**The trigger.** The step's **Post-history token trigger** holds the whole block back until the conversation is that long, since a reminder two messages after the instructions is noise. Reply pipelines ship with it at **3000** tokens, and so do the actions that write prose from the conversation (a side character's line, Adventure's **Look**, the Lair's **Trigger trap** and **Reveal**). **Narrate** and short structured calls (answering a form, Adventure's **Ask**, **Rest** and **Time passes**, the Lair's room drafting, the tool loop) use 0, so their reminder is always there: for them it carries the direction or the answer format, not a nudge back into character.
+**The trigger.** The step's **Post-history token trigger** holds the whole block back until the conversation is that long, since a reminder two messages after the instructions is noise. Reply pipelines ship with it at **3000** tokens, and so do the actions that write prose from the conversation (a side character's line, Story's **Look**, the Lair's **Trigger trap** and **Reveal**). **Narrate** and short structured calls (answering a form, Story's **Ask**, **Rest** and **Time passes**, the Lair's room drafting, the tool loop) use 0, so their reminder is always there: for them it carries the direction or the answer format, not a nudge back into character.
 
-The depth and trigger apply to every prompt-building step in a pipeline. Adventure has four such steps, and each can be set separately in **Admin › Pipelines**. The three reminders always travel together: below the trigger none is sent, above it all are.
+The depth and trigger apply to every prompt-building step in a pipeline. the Dungeon Crawler has several such steps, and each can be set separately in **Admin › Pipelines**. The three reminders always travel together: below the trigger none is sent, above it all are.
 
 **Checking what happened.** A held-back reminder leaves nothing in the prompt, so the run inspector's **Prompt** tab says so for the step that decided: _Post-history reminder: suppressed, 278 tokens is below the 3000 trigger_, or _included at message 12_ (see [Pipelines → Inspecting a run](./pipelines.md#inspecting-a-run)).
 
 ### The authorsNote object
 
-A Chat session's [author's note](./sessions.md#authors-note) is the `authorsNote` object, read from inside the message loop with `{{#with ../authorsNote}}`:
+A Story session's [author's note](./sessions.md#authors-note) is the `authorsNote` object, read from inside the message loop with `{{#with ../authorsNote}}`:
 
 - **`targetIndex`**: which message the note goes before, set by the note's **Messages from the end** (counted the same way as the post-history depth, and also **0**, the end, unless you move it).
 - **`hasContent`**: true when the note has text and its **Every how many replies** lets it into this reply.
@@ -304,7 +304,7 @@ An entry's **Priority** (see [Lorebooks](./lorebooks.md)) adds a bonus. Entries 
 - `{{{worldLore}}}` and `{{{characterLore}}}` are in order of relevance, not lorebook order, so the first entry can change from turn to turn. `{{{history}}}` is newest first, each headed by its date (`412-03-05`, `412-03`, or `Year 412`).
 - When the model's context window is full, nothing more is added that turn. **Context Tokens** in the [sampling config](./connections.md#sampling-configs) sets the window.
 - When the conversation itself no longer fits, its oldest messages are left out: enough to free about a quarter of the budget at once, starting at a message kept for the next turns, so the start of the prompt stays the same until the conversation outgrows it again. The run inspector's **Prompt** tab says how many were left out.
-- How much of the conversation is read in the first place follows the context window too, not a count of messages: a reply reads about twice what the window could hold (up to 2,000 messages), so a long session never loses a message off its start on every turn just because it passed a fixed number. Steps that ask the model a question rather than continue the story (answering a form, Adventure's **Ask**, the Lair's room drafting) still read the newest **100**, set by the history read's **Limit** in [Admin › Pipelines](./pipelines.md).
+- How much of the conversation is read in the first place follows the context window too, not a count of messages: a reply reads about twice what the window could hold (up to 2,000 messages), so a long session never loses a message off its start on every turn just because it passed a fixed number. Steps that ask the model a question rather than continue the story (answering a form, Story's **Ask**, the Lair's room drafting) still read the newest **100**, set by the history read's **Limit** in [Admin › Pipelines](./pipelines.md).
 
 ## Why character, persona, and lore data is JSON, not prose
 

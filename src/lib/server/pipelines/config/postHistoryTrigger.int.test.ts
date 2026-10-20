@@ -56,11 +56,19 @@ afterAll(async () => {
 const SHIPPED_TRIGGER = 3000
 
 const RESPOND_SPECS = [
-	"core:spec/chat-respond",
+	"core:spec/story-respond",
 	"core:spec/guide-respond",
-	"core:spec/adventure-respond",
 	"core:spec/lair-respond"
 ]
+
+/**
+ * The structured calls inside a reply (JSON out) keep the declaration's 0,
+ * as the structured actions below do: Story's reckoning and sweep
+ * (2026-10-19) read the story to answer a schema, not to write prose.
+ */
+const STRUCTURED_STEPS: Record<string, readonly string[]> = {
+	"core:spec/story-respond": ["reckon.on.reckonPrompt", "sweep.due.sweepPrompt"]
+}
 
 /** Every node in the spec's active version that declares the trigger. */
 const triggerNodesOf = async (slug: string) => {
@@ -77,7 +85,7 @@ const triggerNodesOf = async (slug: string) => {
 
 describe("a fresh install's post-history trigger", () => {
 	it.each(RESPOND_SPECS)(
-		"resolves to 3000 at every assemble step of %s",
+		"resolves to 3000 at every prose assemble step of %s",
 		async (slug) => {
 			const nodeKeys = await triggerNodesOf(slug)
 			expect(nodeKeys.length).toBeGreaterThan(0)
@@ -91,8 +99,12 @@ describe("a fresh install's post-history trigger", () => {
 					sourced[k]?.params?.postHistoryTokenTrigger?.value
 				])
 			)
+			const structured = STRUCTURED_STEPS[slug] ?? []
+			for (const k of structured) expect(nodeKeys, `${slug} has no ${k}`).toContain(k)
 			expect(resolved).toEqual(
-				Object.fromEntries(nodeKeys.map((k) => [k, SHIPPED_TRIGGER]))
+				Object.fromEntries(
+					nodeKeys.map((k) => [k, structured.includes(k) ? 0 : SHIPPED_TRIGGER])
+				)
 			)
 		},
 		60_000
@@ -110,8 +122,8 @@ describe("the prose actions ship the trigger; the structured calls do not", () =
 	}
 
 	it.each([
-		"core:spec/chat-side-character",
-		"core:spec/adventure-look",
+		"core:spec/story-side-character",
+		"core:spec/story-look",
 		"core:spec/lair-trap",
 		"core:spec/lair-reveal"
 	])("%s resolves 3000", async (slug) => {
@@ -120,23 +132,24 @@ describe("the prose actions ship the trigger; the structured calls do not", () =
 
 	it.each([
 		// 0.5.3's narrator: the reminder carries the press's direction beside the seed.
-		"core:spec/chat-narrate",
-		"core:spec/adventure-ask",
-		"core:spec/adventure-rest",
-		"core:spec/adventure-advance-time",
+		"core:spec/story-narrate",
+		"core:spec/story-ask",
+		"core:spec/story-rest",
+		// retired with Adventure, 2026-10-19 (Adventure's Time passes; no
+		// advance-time left declares the trigger)
 		"core:spec/lair-build-room",
 		"core:spec/lair-room-answer",
 		"core:spec/lair-file-room",
-		"core:spec/chat-answer-form"
+		"core:spec/story-answer-form"
 	])("%s keeps the declaration's 0", async (slug) => {
 		for (const v of await resolvedOf(slug)) expect(v).toBe(0)
 	}, 60_000)
 
-	it("names Chat's shipped configuration Default", async () => {
+	it("names Story's reply's shipped configuration Default", async () => {
 		const [row] = await db
 			.select()
 			.from(schema.pipelineConfigs)
-			.where(eq(schema.pipelineConfigs.seedKey, "pipeline-default:core:spec/chat-respond"))
+			.where(eq(schema.pipelineConfigs.seedKey, "pipeline-default:core:spec/story-respond"))
 		expect(row?.name).toBe("Default")
 	})
 })

@@ -44,15 +44,13 @@ describe("outcomeStatusText", () => {
 		expect(renderStatusText(outcomeStatusText("err"))).toBe("failed")
 	})
 
-	it("halt names the node it stopped at", () => {
+	it("halt names the step it stopped at, by its heading", () => {
 		expect(renderStatusText(outcomeStatusText("halt", "generate"))).toBe(
 			"halted at generate"
 		)
 	})
 
-	it("halt with no node key leaves the placeholder, same as any other unfilled var", () => {
-		expect(renderStatusText(outcomeStatusText("halt"))).toBe(
-			"halted at {node}"
-		)
+	it("halt with no step heading says only 'halted' — never a placeholder or a node key", () => {
+		expect(renderStatusText(outcomeStatusText("halt"))).toBe("halted")
 	})
 })

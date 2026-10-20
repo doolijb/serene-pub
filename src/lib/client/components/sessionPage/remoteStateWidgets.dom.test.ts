@@ -143,7 +143,29 @@ const percent = (el: Element | null) => {
 }
 
 /** What a person sees of a state widget: whose, its lines, its cards, its slots. */
-function drawn(root: Element) {
+/**
+ * Re-record the snapshot: `SP_RECORD_DREW=<file>` makes every recorded case
+ * pass and writes what the remote drew to that JSON, which
+ * `nativeStateWidgets.recorded.ts` is regenerated from. The recording was the
+ * deleted natives' drawing (R79); since the sheet redesign (2026-10-18) it is
+ * the remote's own regression snapshot.
+ */
+type Slug = "world-state" | "stats"
+
+const RECORD = process.env.SP_RECORD_DREW
+const recorded: Record<string, unknown> = {}
+function record<T>(key: string, native: T, actual: T): T {
+	if (!RECORD) return native
+	recorded[key] = actual
+	return actual
+}
+afterAll(async () => {
+	if (!RECORD) return
+	const { writeFileSync } = await import("node:fs")
+	writeFileSync(RECORD, JSON.stringify(recorded, null, "\t"))
+})
+
+function drawn(root: Element, slug?: Slug) {
 	const widget = root.querySelector("[data-state-widget]")
 	const slots = [...root.querySelectorAll("[data-slot-id]")].map((s) => {
 		const b = s.querySelector("button")
@@ -161,10 +183,11 @@ function drawn(root: Element) {
 	})
 	const cards = [...root.querySelectorAll("section[data-owner-key]")].map((c) => [
 		c.getAttribute("data-owner-key"),
-		text(c.querySelector("header"))
+		text(c.querySelector('[data-widget-part~="stats.card-name"]') ?? c.querySelector("header"))
 	])
 	return {
-		widget: widget?.getAttribute("data-state-widget"),
+		// ⏳ World State mounts Stats' module (AUDIT B): the drawing keeps the alias's name.
+		widget: slug ?? widget?.getAttribute("data-state-widget"),
 		owner: widget?.getAttribute("data-owner-key") ?? null,
 		alerts: [...root.querySelectorAll("[role='alert']")].map(text),
 		cards,
@@ -173,18 +196,23 @@ function drawn(root: Element) {
 	}
 }
 
-type Slug = "world-state" | "stats"
 
 const remotes: MountedComponent[] = []
 async function mountRemote(slug: Slug, settings: Record<string, unknown> = {}) {
+	// ⏳ World State is Stats' module with the settings its alias implies
+	// (AUDIT B, 2026-10-17): `owners: world`, the stored `layout` as the
+	// arrangement, `strip` unsaid — what the app's settings reader does.
+	const { layout, ...rest } = settings
+	const implied =
+		slug === "world-state" ? { owners: "world", arrangement: typeof layout === "string" ? layout : "strip", ...rest } : settings
 	const view = await mountComponent({
 		root: CORE_CATALOG,
-		entry: `dist/components/${slug}.js`,
+		entry: `dist/components/stats.js`,
 		owner: "core",
 		timeoutMs: 60_000,
 		context: {
 			session: { id: SESSION, name: "Proof" },
-			settings,
+			settings: implied,
 			viewer: { userId: 1, isAdmin: false, isGuest: false },
 			scoped: { session_state: section() }
 		},
@@ -224,8 +252,9 @@ describe.each([
 	["stats", { members: "pick", pickMembers: ["nobody"] }]
 ] as const)("%s %j", (slug, settings) => {
 	test("the remote draws what the native drew", { timeout: 60_000 }, async () => {
-		const native = NATIVE_DREW[`${slug} ${JSON.stringify(settings)}`] as ReturnType<typeof drawn>
-		expect(native.widget).toBe(slug)
+		const key = `${slug} ${JSON.stringify(settings)}`
+		const native = NATIVE_DREW[key] as ReturnType<typeof drawn>
+		if (!RECORD) expect(native.widget).toBe(slug)
 		const remote = await mountRemote(slug, settings)
 		expect(remote.refused).toEqual([])
 		// DIFFERENCE (W7): a pick matching nothing no longer says "No cast member".
@@ -233,7 +262,8 @@ describe.each([
 			"pickMembers" in settings && settings.pickMembers[0] === "nobody"
 				? { ...native, empty: "Nothing in this session matches the names in this widget's settings." }
 				: native
-		expect(drawn(remote.root)).toEqual(expected)
+		const actual = drawn(remote.root, slug)
+		expect(actual).toEqual(record(key, expected, actual))
 	})
 })
 
@@ -244,17 +274,20 @@ describe("the empty states", () => {
 		["stats", { castValues: false }]
 	] as const)("%s %j", { timeout: 60_000 }, async (slug, over) => {
 		serverSays("state:get", stateGet(over))
-		const native = NATIVE_DREW[`${slug} ${JSON.stringify(over)}`] as ReturnType<typeof drawn>
-		expect(native.empty).toBeTruthy()
-		expect(drawn((await mountRemote(slug)).root)).toEqual(native)
+		const key = `${slug} ${JSON.stringify(over)}`
+		const native = NATIVE_DREW[key] as ReturnType<typeof drawn>
+		if (!RECORD) expect(native.empty).toBeTruthy()
+		const actual = drawn((await mountRemote(slug)).root, slug)
+		expect(actual).toEqual(record(key, native, actual))
 	})
 
 	test("world state with no world owner says what the native said", { timeout: 60_000 }, async () => {
 		const answer = stateGet()
 		serverSays("state:get", { ...answer, owners: answer.owners.filter((o) => o.key !== "world") })
 		const native = NATIVE_DREW["world-state no world owner"] as ReturnType<typeof drawn>
-		expect(native.empty).toMatch(/declares no stats to show here/)
-		expect(drawn((await mountRemote("world-state")).root)).toEqual(native)
+		if (!RECORD) expect(native.empty).toMatch(/declares no stats to show here/)
+		const actual = drawn((await mountRemote("world-state")).root, "world-state")
+		expect(actual).toEqual(record("world-state no world owner", native, actual))
 	})
 
 	test("DIFFERENCE: before the first read the remote says it is loading — the native said nothing was declared", { timeout: 60_000 }, async () => {
@@ -270,8 +303,9 @@ describe("a failed read", () => {
 	test("is said as the native said it", { timeout: 60_000 }, async () => {
 		serverSays("state:get:error", { sessionId: SESSION, error: "Could not read this session's state." })
 		const native = NATIVE_DREW["world-state failed read"] as ReturnType<typeof drawn>
-		expect(native.alerts).toEqual(["Could not read this session's state."])
-		expect(drawn((await mountRemote("world-state")).root).alerts).toEqual(native.alerts)
+		if (!RECORD) expect(native.alerts).toEqual(["Could not read this session's state."])
+		const actual = drawn((await mountRemote("world-state")).root, "world-state")
+		expect(actual.alerts).toEqual(record("world-state failed read", native, actual).alerts)
 	})
 })
 
@@ -342,7 +376,8 @@ describe("marked, where the native said nothing", () => {
 		const stats = await mountRemote("stats")
 		const gold = stats.query(`[data-owner-key="mira"] [data-slot-id="${id("gold")}"]`)!
 		expect(gold.hasAttribute("data-retired")).toBe(true)
-		expect(gold.querySelector("button")?.hasAttribute("disabled")).toBe(true)
+		// Read-only is words, never a disabled button (sheet redesign C9, 2026-10-18); the trail's button stays.
+		expect(gold.querySelector('button:not([data-widget-part~="stats.trail-open"])') === null).toBe(true)
 	})
 })
 
@@ -371,6 +406,7 @@ describe("W7: World State is Stats — one widget for every owner's state", () =
 		const native = NATIVE_DREW[`world-state ${JSON.stringify(was)}`] as ReturnType<typeof drawn>
 		const remote = await mountRemote("stats", settings)
 		expect(remote.refused).toEqual([])
+		// Recorded under World State's key by the alias case above: compared, never re-recorded here.
 		expect(drawn(remote.root)).toEqual({ ...native, widget: "stats" })
 		expect(remote.query("[data-state-widget]")?.getAttribute("data-arrangement")).toBe(settings.arrangement)
 	})
@@ -518,5 +554,74 @@ describe("F2: a stat's trail, from the button beside it", () => {
 		expect(view.query('[data-widget-part~="stats.alert"]')).toBeNull()
 		await view.push("settings", { owners: "world", trail: false })
 		expect(view.queryAll('[data-widget-part~="stats.trail-open"]').length).toBe(0)
+	})
+})
+
+describe("🚧 another player's seat is drawn, never edited (2026-10-16)", () => {
+	test("Ann's sheet has no live controls for Bo; Bo's own does", { timeout: 60_000 }, async () => {
+		const base = stateGet()
+		serverSays("state:get", {
+			...base,
+			state: {
+				...base.state,
+				cast: { byId: { "player_seat:1": { "core.hp": 9 }, "player_seat:2": { "core.hp": 4 } } }
+			},
+			owners: [
+				base.owners[0],
+				{ key: "player_seat:1", kind: "player_seat" as const, id: 1, label: "Ann", editable: false, configs: { [id("hp")]: { min: 0, max: 10 } } },
+				{ key: "player_seat:2", kind: "player_seat" as const, id: 2, label: "Bo", editable: true, configs: { [id("hp")]: { min: 0, max: 10 } } }
+			]
+		})
+		expect(section().owners.find((o) => o.label === "Ann")?.editable).toBe(false)
+		const remote = await mountRemote("stats")
+		const hp = (key: string) =>
+			remote.query<HTMLButtonElement>(`[data-owner-key="${key}"] [data-slot-id="${id("hp")}"] button:not([data-widget-part~="stats.trail-open"])`)
+		// Not hers to write: Ann's row is words, no button at all (C9); Bo's own is live.
+		expect(hp("player_seat:1") === null).toBe(true)
+		expect(hp("player_seat:2")?.disabled).toBe(false)
+		expect(remote.query(`[data-owner-key="player_seat:1"] [data-slot-id="${id("hp")}"] input`) === null).toBe(true)
+		await settle()
+		expect(writes()).toEqual([])
+	})
+})
+
+describe("🚧 Q1-3: the sheet stays whole on a live update (PLAN-dc-after-walk2, the walk's N8)", () => {
+	test("Armour class is still drawn after a `state:changed` re-read and a write's own reply", { timeout: 60_000 }, async () => {
+		const base = stateGet()
+		const seat = (hp: number) => ({
+			...base,
+			state: { ...base.state, cast: { byId: { "player_seat:1": { "core.hp": hp } } } },
+			owners: [
+				base.owners[0],
+				{
+					key: "player_seat:1",
+					kind: "player_seat" as const,
+					id: 1,
+					label: "Ann",
+					seat: true,
+					derived: [{ key: "armour-class", label: "Armour class", value: 15 }],
+					configs: { [id("hp")]: { min: 0, max: 10 } }
+				}
+			]
+		})
+		serverSays("state:get", seat(9))
+		const remote = await mountRemote("stats", { owners: "seats" })
+		const armour = () => text(remote.query('[data-derived="armour-class"] [data-widget-part~="stat-slot.line"]'))
+		expect(armour()).toBe("15")
+		// A live story update: the store re-reads on `state:changed`, the
+		// server answers, and the page posts the new section.
+		wire.emitted.length = 0
+		serverSays("state:changed", { sessionId: SESSION })
+		expect(wire.emitted.some(([event]) => event === "state:get")).toBe(true)
+		serverSays("state:get", seat(6))
+		await remote.push("scoped", { session_state: section() })
+		expect(armour()).toBe("15")
+		// A write's own reply carries the values alone: the owners — and their derived rows — stand.
+		serverSays("state:set", { sessionId: SESSION, state: seat(5).state })
+		await remote.push("scoped", { session_state: section() })
+		expect(armour()).toBe("15")
+		expect(section().owners.find((o) => o.key === "player_seat:1")?.derived).toEqual([
+			{ key: "armour-class", label: "Armour class", value: 15 }
+		])
 	})
 })

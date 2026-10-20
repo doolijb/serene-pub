@@ -10,6 +10,12 @@
 		contentTitle: string
 		classes?: string
 		itemType?: string // e.g., "Character", "Session", "Lorebook"
+		/**
+		 * The row's own name, when its accessible name should say it: the
+		 * label then reads "{contentTitle}: {itemName}" — "View session:
+		 * Crawl 4b" — rather than "Session: View session", which names no row.
+		 */
+		itemName?: string
 		totalItems?: number // Total items in the list for context
 		currentIndex?: number // Current position in list
 		/**
@@ -56,6 +62,7 @@
 		contentTitle,
 		classes = "",
 		itemType = "Item",
+		itemName,
 		totalItems,
 		currentIndex,
 		showIndex = true,
@@ -77,7 +84,9 @@
 	// Create comprehensive aria-label
 	const ariaLabel = $derived(
 		(() => {
-			let label = `${itemType}: ${contentTitle}`
+			let label = itemName
+				? `${contentTitle}: ${itemName}`
+				: `${itemType}: ${contentTitle}`
 
 			if (currentIndex !== undefined && totalItems !== undefined) {
 				label += ` - ${currentIndex + 1} of ${totalItems}`

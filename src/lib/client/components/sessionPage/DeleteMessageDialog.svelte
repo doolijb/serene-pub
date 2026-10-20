@@ -1,7 +1,9 @@
 <!--
 	@component
 	The confirm a message's Delete opens. Says yes or no through `onConfirm`
-	and `onCancel`; the message is the caller's.
+	and `onCancel`; the message is the caller's. `revision` is the server's
+	sentence for what the delete does to the timeline (On revision), shown
+	when the delete is one.
 -->
 <script lang="ts">
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
@@ -11,9 +13,11 @@
 		onOpenChange: (details: OpenChangeDetails) => void
 		onConfirm: () => void
 		onCancel: () => void
+		/** The server's On revision sentence, shown INSTEAD of the plain delete's ("This will branch here; …"). */
+		revision?: string | null
 	}
 
-	let { open, onOpenChange, onConfirm, onCancel }: Props = $props()
+	let { open, onOpenChange, onConfirm, onCancel, revision = null }: Props = $props()
 </script>
 
 <Dialog {open} {onOpenChange}>
@@ -31,10 +35,16 @@
 					<h2 class="h2">Delete this message?</h2>
 				</header>
 				<article>
-					<p class="opacity-60">
-						The message and every alternate reply it holds are
-						deleted. There is no undo.
-					</p>
+					<!-- One sentence per mode: a revision's is the server's
+					     (Overwrite or Branch), never beside the plain delete's. -->
+					{#if revision}
+						<p data-revision-sentence>{revision}</p>
+					{:else}
+						<p class="opacity-60">
+							The message and every alternate reply it holds are
+							deleted. There is no undo.
+						</p>
+					{/if}
 				</article>
 				<footer class="flex justify-end gap-4">
 					<button

@@ -65,7 +65,7 @@ beforeAll(async () => {
 		)[0]!.id
 	guideSession = await session("core:genre/guide")
 	lairSession = await session("core:genre/lair")
-	chatSession = await session("core:genre/chat")
+	chatSession = await session("core:genre/story")
 }, 60_000)
 
 describe("a line nobody claims still has a name", () => {

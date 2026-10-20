@@ -12,7 +12,8 @@ import {
 	CONVERSATION_WIDGET_ID,
 	WIDGET_SCOPED_SECTIONS,
 	type WidgetDecl,
-	type WidgetSurface
+	type WidgetSurface,
+	WIDGET_ID_ALIASES
 } from "@serene-pub/sdk"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
@@ -28,6 +29,7 @@ import {
 	pressedTurnControl,
 	resolveMessageVerbs,
 	turnControlRefusal,
+	turnDeleteVerdict,
 	unpreparedEntryRefusal,
 	verbEnablementRefusal,
 	verbRefusal
@@ -43,7 +45,7 @@ import {
 	channelDeclsOf,
 	channelsOf
 } from "$lib/server/messages/channels"
-import { formatChannel, isWidgetInstanceId, parseChannel, widgetOfInstance, type ChannelLaneV1 } from "@serene-pub/sdk"
+import { formatChannel, isWidgetInstanceId, parseChannel, validateSessionLayout, widgetOfInstance, type ChannelLaneV1 } from "@serene-pub/sdk"
 import {
 	and,
 	asc,
@@ -55,7 +57,8 @@ import {
 	like,
 	lt,
 	max,
-	or
+	or,
+	sql
 } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
 import { resolveOrCreateBindingRow } from "$lib/server/utils/characterBindingSync"
@@ -105,6 +108,7 @@ import {
 	copyLayoutIntoSession,
 	deleteUserLayoutPreset,
 	LAYOUT_PRESET_NEEDS_NAME,
+	LAYOUT_PRESET_CANT_SAVE,
 	LAYOUT_PRESET_UNKNOWN,
 	layoutPresetUsage,
 	listLayoutPresets,
@@ -211,7 +215,15 @@ async function checkLorebookOwnership(
 	lorebookId: number,
 	userId: number
 ): Promise<boolean> {
-	return !!(await findOwnedBook(db, userId, lorebookId))
+	if (!(await findOwnedBook(db, userId, lorebookId))) return false
+	// 🚧 A session's own notes are never read into another session
+	// (PLAN-rulesets §26): they are found only through their session.
+	const [book] = await db
+		.select({ sessionId: schema.lorebooks.sessionId })
+		.from(schema.lorebooks)
+		.where(eq(schema.lorebooks.id, lorebookId))
+		.limit(1)
+	return book?.sessionId == null
 }
 
 // `checkMessageEditPermission` stood here — the item rule, evaluated on the
@@ -408,10 +420,8 @@ async function buildSessionsListFor(
 	// write, so a per-row query would be a round trip per card on a list that
 	// is already the app's widest read.
 	//
-	// The last line is unscoped by channel, deliberately: it must be the line
-	// the session PAGE shows last, and that read (`getSessionFromDB`) is
-	// unscoped too. The channel-scoped read is the prompt path's, which is a
-	// different question.
+	// The last line is the `main` channel's alone (`lastVisibleMessages`): a
+	// card every member sees never quotes a private lane.
 	const sessionIds = sessionsList.map((s) => s.id)
 	const messageCounts = new Map<number, number>()
 	const lastMessages = new Map<number, Sockets.Sessions.List.LastMessage>()
@@ -664,6 +674,10 @@ export const sessionsCreateHandler: Handler<
 		// types an admin has hidden. An absent settings row means available:
 		// types are visible until someone hides them, same as sessionAdmin.
 		/** The preset's pre-seated envoys (`defaults.envoys`, R-18), by slug. */
+		/** 🚧 A preset may lower the shape's cast floor (`PresetDecl.cast`, 2026-10-19). */
+		let presetCastFloor: { characters?: number; personas?: number } | null = null
+		/** 🚧 The preset's pinned settings; `rigour` among them is a column, written here. */
+		let presetPins: Record<string, unknown> | null = null
 		let presetEnvoys: string[] = []
 		/** The preset's seeded swaps (`defaults.swaps`, R40). */
 		let presetSwaps: StoredSwapContribution[] = []
@@ -683,6 +697,8 @@ export const sessionsCreateHandler: Handler<
 				// already on one keep resolving it; only creation refuses.
 				if (!preset || !preset.enabled || preset.withdrawnAt != null)
 					return refuse("That session preset is not available.")
+				presetCastFloor = (preset.castFloor as { characters?: number; personas?: number } | null) ?? null
+				presetPins = (preset.settings as Record<string, unknown> | null) ?? null
 				// A disabled plugin's preset starts nothing (R67).
 				{
 					const { disabledPlugins } = await import(
@@ -718,6 +734,8 @@ export const sessionsCreateHandler: Handler<
 		// exactly — so every current creation passes trivially, and the seam
 		// is live for the day a picker offers a mode with real constraints.
 		let declaredFieldKeys: string[] = []
+		/** The genre's name, for a refusal below. */
+		let genreName: string | null = null
 		{
 			const { getSessionGenre, shapeViolations, STANDARD_GENRE_ID } =
 				await import("$lib/server/pipelines/entities/sessionGenres")
@@ -741,7 +759,18 @@ export const sessionsCreateHandler: Handler<
 					return refuse("That session type is not available.")
 			}
 			if (mode) {
-				const violations = shapeViolations(mode.shape, {
+				const floored = presetCastFloor
+					? {
+						...mode.shape,
+						...(mode.shape.characters && presetCastFloor.characters !== undefined
+							? { characters: { ...mode.shape.characters, min: Math.min(mode.shape.characters.min, presetCastFloor.characters) } }
+						: {}),
+						...(mode.shape.personas && presetCastFloor.personas !== undefined
+							? { personas: { ...mode.shape.personas, min: Math.min(mode.shape.personas.min, presetCastFloor.personas) } }
+						: {})
+					}
+					: mode.shape
+				const violations = shapeViolations(floored, {
 					characters: characterIds.length,
 					personas: personaIds.length,
 					hasLorebook: params.session.lorebookId != null
@@ -753,6 +782,7 @@ export const sessionsCreateHandler: Handler<
 				declaredFieldKeys = Object.keys(
 					(mode.shape as any)?.fields ?? {}
 				)
+				genreName = mode.name
 			}
 		}
 
@@ -810,6 +840,96 @@ export const sessionsCreateHandler: Handler<
 				>
 			).filter(([k]) => declaredFieldKeys.includes(k))
 		)
+
+		// 🚧 Rulesets (PLAN-rulesets §4, §13, §21, §28): a session attached to
+		// a lorebook at creation ADOPTS its ruleset, version and compendium
+		// mode, whatever the client sent — refused, with the reason, when the
+		// genre plays only rulesets (`rulesets.only`) the lorebook's is not
+		// among. With no lorebook: the client's pick when it is a registered
+		// ruleset the genre allows, else the genre's default (only's first,
+		// recommended's `default`), else Story. How strict: the client's pick
+		// among the genre's rigour options, else the genre's default (absent,
+		// `prose`). On revision: a valid value, else the owner's default, else
+		// the instance's.
+		{
+			const data = sessionDataWithoutTags as any
+			const { getGenre, getRuleset } = await import("@serene-pub/sdk")
+			const { STANDARD_GENRE_ID } = await import(
+				"$lib/server/pipelines/entities/sessionGenres"
+			)
+			const genre = getGenre((params.session as any).genreId ?? STANDARD_GENRE_ID)
+			const declared = genre?.rulesets
+			const strict = declared && "only" in declared ? declared.only : null
+			const genreDefault = declared
+				? "only" in declared
+					? declared.only[0]
+					: declared.default
+				: undefined
+			const rulesName = (id: string) => {
+				const n = getRuleset(id)?.name as unknown
+				return typeof n === "string"
+					? n
+					: ((n as Record<string, string> | undefined)?.en ?? id)
+			}
+			const listed = (ids: readonly string[]) => {
+				const names = ids.map(rulesName)
+				return names.length > 1
+					? `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`
+					: (names[0] ?? "")
+			}
+			if (data.lorebookId != null) {
+				const [book] = await db
+					.select({
+						name: schema.lorebooks.name,
+						primaryRuleset: schema.lorebooks.primaryRuleset,
+						rulesetVersion: schema.lorebooks.rulesetVersion,
+						compendiumMode: schema.lorebooks.compendiumMode
+					})
+					.from(schema.lorebooks)
+					.where(eq(schema.lorebooks.id, data.lorebookId))
+					.limit(1)
+				if (book) {
+					if (strict && !strict.includes(book.primaryRuleset))
+						return refuse(
+							`${genreName ?? "This genre"} plays only by ${listed(strict)} rules, and ` +
+								`the lorebook '${book.name}' uses ${rulesName(book.primaryRuleset)} rules. ` +
+								`Choose a lorebook that uses ${listed(strict)}, or another genre.`
+						)
+					data.primaryRuleset = book.primaryRuleset
+					data.rulesetVersion = book.rulesetVersion
+					data.compendiumMode = book.compendiumMode
+				}
+			} else {
+				const picked =
+					typeof data.primaryRuleset === "string" &&
+					getRuleset(data.primaryRuleset.trim()) &&
+					(!strict || strict.includes(data.primaryRuleset.trim()))
+						? data.primaryRuleset.trim()
+						: null
+				data.primaryRuleset = picked ?? genreDefault ?? "core:ruleset/freeform@1"
+				if (data.compendiumMode !== "derived" && data.compendiumMode !== "referenced")
+					data.compendiumMode = "referenced"
+			}
+			const rigourOptions: readonly string[] = genre?.rigour?.options ?? ["prose"]
+			// A preset may pin the rigour (Rule Based pins `scripts`); an explicit choice wins.
+			if (typeof presetPins?.rigour === "string" && (data.rigour == null || data.rigour === "") && rigourOptions.includes(presetPins.rigour))
+				data.rigour = presetPins.rigour
+			if (!rigourOptions.includes(data.rigour))
+				data.rigour = genre?.rigour?.default ?? "prose"
+			// 🚧 Rules that roll no dice (Story) play Words only (2026-10-18,
+			// the 100-turn walk #26): the form offers nothing else, and a
+			// request that names another How strict is answered with it.
+			{
+				const { rigoursPlayed } = await import("$lib/shared/rulesets/rulesOffer")
+				const played = rigoursPlayed(!!getRuleset(String(data.primaryRuleset ?? ""))?.conventions?.dice, rigourOptions)
+				if (played && !played.includes(data.rigour)) data.rigour = played[0]!
+			}
+			const { isOnRevision, onRevisionDefaultFor } = await import(
+				"$lib/server/sessions/revision"
+			)
+			if (!isOnRevision(data.onRevision))
+				data.onRevision = await onRevisionDefaultFor(db, userId)
+		}
 
 		// The clock is checked and the row written in one transaction, under
 		// the book's calendar lock (`sessionLinePatch`).
@@ -1063,13 +1183,22 @@ async function getSessionFromDB(
 	sessionId: number,
 	userId: number,
 	limit?: number,
-	beforeId?: number
+	beforeId?: number,
+	/**
+	 * 🚧 `false` reads every lane whoever asks — for the whole-session push,
+	 * which `broadcastToSessionUsers` narrows per member
+	 * (`channels/lanePush.ts`). Otherwise the asker's view: a personal lane
+	 * that is not theirs is left out, inside the query, before the limit.
+	 */
+	laneFilter = true
 ) {
 	// Check if user has access (owner or guest)
 	const sessionAccess = await checkSessionAccess(sessionId, userId)
 	if (!sessionAccess.hasAccess) {
 		return null
 	}
+	const { laneViewFor, laneViewWhere } = await import("$lib/server/channels/lanes")
+	const laneView = laneFilter ? await laneViewFor(db, sessionId, userId) : null
 
 	const res = db.query.sessions.findFirst({
 		where: (c, { eq }) => eq(c.id, sessionId),
@@ -1110,8 +1239,11 @@ async function getSessionFromDB(
 				}
 			},
 			sessionMessages: {
-				where:
-					beforeId != null ? (cm) => lt(cm.id, beforeId) : undefined,
+				where: (cm) =>
+					and(
+						beforeId != null ? lt(cm.id, beforeId) : undefined,
+						laneViewWhere(cm.channel, laneView)
+					)!,
 				orderBy: (cm, { desc }) => desc(cm.id),
 				limit: limit
 			},
@@ -1356,6 +1488,11 @@ export const sessionsDeleteHandler: Handler<
 				)
 			}
 
+			// 🚧 The session's own notes go with it (PLAN-rulesets §26): the
+			// row by the cascade, and first what on them carries no key.
+			const { purgePhantomOf } = await import("$lib/server/lorebooks/phantom")
+			await purgePhantomOf(db, params.id)
+
 			// The scenes captured from this session outlive it (their
 			// `session_id` is set to NULL) and keep their spans: the ids are
 			// their place in play (`inPlayOrder`), and `deriveSceneMentions`
@@ -1406,24 +1543,36 @@ export const sessionsModesHandler: Handler<
 		const { genreBoundaryTriggers } = await import(
 			"$lib/server/scenes/liveScenes"
 		)
-		const { i18nText } = await import("@serene-pub/sdk")
+		const { i18nText, getGenre, getRuleset, rulesets } = await import("@serene-pub/sdk")
+		const { genreRulesOffer } = await import("$lib/server/rulesets/genreOffer")
+		const { withRigoursPlayed } = await import("$lib/shared/rulesets/rulesOffer")
+		// 🚧 Rules that roll no dice play Words only (2026-10-18): each choice says so.
+		const rollsDice = (id: string) => !!getRuleset(id)?.conventions?.dice
 		const genres = await listOfferedGenres(db)
+		const registered = rulesets()
 		const res: Sockets.Sessions.Genres.Response = {
 			// 🚧 Each genre's declared boundary triggers (live scenes ★9, §15
 			// G1) beside its shape: its summarize-scene spec's, which the
 			// session settings' Scenes list as switches. Absent when none.
+			// 🚧 And its Rules / How strict offer (PLAN-rulesets §4, §21),
+			// absent for a genre that offers no choice (Chat).
 			genres: (await Promise.all(
 				genres.map(async (g) => {
 					const declared = await genreBoundaryTriggers(db, g.genreId).catch(() => [])
-					return declared.length
-						? {
-								...g,
-								sceneBoundaryTriggers: declared.map((t) => ({
-									key: t.key,
-									label: i18nText(t.label) ?? t.key
-								}))
-							}
-						: g
+					const offer = genreRulesOffer(getGenre(g.genreId) as any, registered)
+					const rules = offer ? withRigoursPlayed(offer, rollsDice) : null
+					return {
+						...g,
+						...(rules ? { rules } : {}),
+						...(declared.length
+							? {
+									sceneBoundaryTriggers: declared.map((t) => ({
+										key: t.key,
+										label: i18nText(t.label) ?? t.key
+									}))
+								}
+							: {})
+					}
 				})
 			)) as any
 		}
@@ -1948,6 +2097,13 @@ export const sessionsFireActionHandler: Handler<
 							haltExplanation(receipt) ?? "The run produced nothing."
 					} else explanation = "The run produced nothing."
 				}
+				// The step it halted at, by its heading (2026-10-16).
+				const haltStep =
+					outcome === "halt" && receipt?.haltNodeKey
+						? await (
+								await import("$lib/server/pipelines/runtime/haltStep")
+							).haltStepOf(db, receipt.specId, receipt.haltNodeKey)
+						: null
 				emitToUser("pipelines:progress", {
 					runId,
 					sessionId: params.sessionId,
@@ -1962,7 +2118,8 @@ export const sessionsFireActionHandler: Handler<
 					...(explanation !== undefined ? { error: explanation } : {}),
 					...(outcome === "halt" && receipt?.haltNodeKey
 						? { haltNodeKey: receipt.haltNodeKey }
-						: {})
+						: {}),
+					...(haltStep ? { haltStep } : {})
 				})
 				// The run moved the session's published values — at the
 				// least, `session.generating` is false again — so every
@@ -2084,14 +2241,18 @@ export const sessionsFireActionHandler: Handler<
 							runId: run.runId,
 							sessionId: params.sessionId,
 							specId: run.specId,
-							label
+							label,
+							...(run.channel ? { channel: run.channel } : {})
 						})
 						// `session.generating` just rose (U5e, review W-A1):
 						// every member's list follows, once per root — the
 						// end push queues behind it on the same session.
+						// Never awaited: a list build must not hold a run
+						// (2026-10-19: awaiting it wedged the interview when
+						// a press landed while the previous list was building).
 						void import("$lib/server/sessions/actionsPush").then(
 							({ pushSessionActions }) =>
-								pushSessionActions(socket.io, params.sessionId)
+								pushSessionActions(socket.io, params.sessionId, { starting: true })
 						)
 					},
 					onProgress: (event) => {
@@ -2228,6 +2389,70 @@ export const sessionsPipelinesHandler: Handler<
  * gets "this session is running the default pipeline for <event>", because
  * only one of them can do anything about it.
  */
+/**
+ * 🚧 Switch a session to another of its genre's **session presets**, or back
+ * to its own (PLAN-genre-restructure §3-5/§5-3, ruled 2026-10-19). The
+ * person's own choices that a preset pins (`tasks`, `tools`) are cleared, so
+ * the new preset's pins apply — "Custom" ends here. A pinned `rigour` is a
+ * column and is written. Owner only; the preset must be the session's genre,
+ * enabled and not withdrawn.
+ */
+export const sessionsSetSessionPresetHandler: Handler<
+	Sockets.Sessions.SetSessionPreset.Params,
+	Sockets.Sessions.SetSessionPreset.Response
+> = {
+	event: "sessions:setSessionPreset",
+	handler: async (socket, params, emitToUser) => {
+		const reply = (res: Sockets.Sessions.SetSessionPreset.Response) => {
+			emitToUser("sessions:setSessionPreset", res)
+			return res
+		}
+		const userId = socket.user!.id
+		const access = await checkSessionAccess(params.sessionId, userId)
+		if (!access.hasAccess || !access.isOwner)
+			return reply({ sessionId: params.sessionId, error: "Only the session's owner can change its preset." })
+		const [session] = await db
+			.select({
+				genreId: schema.sessions.genreId,
+				genreFields: schema.sessions.genreFields,
+				primaryRuleset: schema.sessions.primaryRuleset
+			})
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, params.sessionId))
+			.limit(1)
+		const [preset] = await db
+			.select()
+			.from(schema.sessionPresets)
+			.where(eq(schema.sessionPresets.id, params.presetId))
+			.limit(1)
+		if (!session || !preset || preset.genreId !== session.genreId)
+			return reply({ sessionId: params.sessionId, error: "That preset is not one of this session's genre." })
+		if (!preset.enabled || preset.withdrawnAt != null)
+			return reply({ sessionId: params.sessionId, error: "That preset is not available." })
+		const pins = (preset.settings ?? {}) as Record<string, unknown>
+		const fields = { ...((session.genreFields ?? {}) as Record<string, unknown>) }
+		for (const k of ["tasks", "tools"]) delete fields[k]
+		const { getGenre, getRuleset } = await import("@serene-pub/sdk")
+		const { rigoursPlayed } = await import("$lib/shared/rulesets/rulesOffer")
+		const rigourOptions: readonly string[] = (getGenre(session.genreId) as any)?.rigour?.options ?? ["prose"]
+		// Only a How strict the session's rules can play: Rule Based over
+		// Freeform keeps Words only (a value the rules cannot play reads blank).
+		const played =
+			rigoursPlayed(!!getRuleset(String(session.primaryRuleset ?? ""))?.conventions?.dice, rigourOptions) ?? rigourOptions
+		const rigour =
+			typeof pins.rigour === "string" && rigourOptions.includes(pins.rigour) && played.includes(pins.rigour)
+				? pins.rigour
+				: undefined
+		await db
+			.update(schema.sessions)
+			.set({ presetId: preset.id, genreFields: fields, ...(rigour ? { rigour: rigour as any } : {}) })
+			.where(eq(schema.sessions.id, params.sessionId))
+		const res = reply({ sessionId: params.sessionId, presetId: preset.id, presetName: preset.name })
+		await pushSessionToParticipants(socket.io, params.sessionId, userId)
+		return res
+	}
+}
+
 export const sessionsPresetStatusHandler: Handler<
 	Sockets.Sessions.PresetStatus.Params,
 	Sockets.Sessions.PresetStatus.Response
@@ -2501,6 +2726,11 @@ export const sessionsViewHandler: Handler<
 						// rather than offered as a box that 404s. Never
 						// looked up as a plugin row (`notCoreRow` hides any
 						// row named `core`).
+						// ⏳ An aliased id (`world-state` → `stats`, `WIDGET_ID_ALIASES`): its
+						// module is the target's (AUDIT B, 2026-10-17); a genre shape that
+						// still names it is served Stats.
+						const aliased = WIDGET_ID_ALIASES[surface.component]?.id
+						if (aliased) surface.component = aliased
 						if (!coreComponents.has(surface.component)) continue
 						// The conversation is not a panel: the layout draws
 						// every copy of it itself (`messages`, `messages#<name>`)
@@ -2696,7 +2926,7 @@ async function genreOfSession(sessionId: number): Promise<string> {
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	return row?.genreId ?? "core:genre/chat"
+	return row?.genreId ?? "core:genre/story"
 }
 
 /**
@@ -2714,7 +2944,7 @@ export async function sessionGenres(
 		.select({ id: schema.sessions.id, genreId: schema.sessions.genreId })
 		.from(schema.sessions)
 		.where(inArray(schema.sessions.id, [...sessionIds]))
-	for (const row of rows) out.set(row.id, row.genreId ?? "core:genre/chat")
+	for (const row of rows) out.set(row.id, row.genreId ?? "core:genre/story")
 	return out
 }
 
@@ -2958,6 +3188,10 @@ export const sessionsMessagesPageHandler: Handler<
 				? eq(schema.sessionMessages.channel, formatChannel(ref))
 				: or(eq(schema.sessionMessages.channel, ref.slug), like(schema.sessionMessages.channel, `${ref.slug}:%`))
 		}
+		// 🚧 A personal lane that is not the asker's is not theirs to page
+		// through (2026-10-17) — filtered in the query, before the limit.
+		const { laneViewFor, laneViewWhere } = await import("$lib/server/channels/lanes")
+		const laneView = await laneViewFor(db, sessionId, userId)
 		const page = await db
 			.select()
 			.from(schema.sessionMessages)
@@ -2965,7 +3199,8 @@ export const sessionsMessagesPageHandler: Handler<
 				and(
 					eq(schema.sessionMessages.sessionId, sessionId),
 					beforeId !== undefined ? lt(schema.sessionMessages.id, beforeId) : undefined,
-					channelWhere
+					channelWhere,
+					laneViewWhere(schema.sessionMessages.channel, laneView)
 				)
 			)
 			.orderBy(desc(schema.sessionMessages.id))
@@ -3012,9 +3247,13 @@ export const sessionsChannelLanesHandler: Handler<
 		if (!access.hasAccess) return refuse("This session is not yours to read.")
 		const ref = parseChannel(params.channel)
 		const m = schema.sessionMessages
+		// 🚧 Only the lanes the asker may read (personal lanes, 2026-10-17).
+		const { laneViewFor, laneViewWhere } = await import("$lib/server/channels/lanes")
+		const laneView = await laneViewFor(db, sessionId, userId)
 		const where = and(
 			eq(m.sessionId, sessionId),
-			ref.explicit ? eq(m.channel, formatChannel(ref)) : or(eq(m.channel, ref.slug), like(m.channel, `${ref.slug}:%`))
+			ref.explicit ? eq(m.channel, formatChannel(ref)) : or(eq(m.channel, ref.slug), like(m.channel, `${ref.slug}:%`)),
+			laneViewWhere(m.channel, laneView)
 		)
 		const grouped = await db
 			.select({ channel: m.channel, count: count(m.id), latestId: max(m.id) })
@@ -3059,6 +3298,44 @@ export const sessionsChannelLanesHandler: Handler<
 		lanes.sort((a, b) => a.lane - b.lane)
 		const res: Sockets.Sessions.ChannelLanes.Response = { sessionId, requestId, lanes }
 		emitToUser("sessions:channelLanes", res)
+		return res
+	}
+}
+
+/**
+ * 🚧 **Read to here** on one channel lane (2026-10-17, PLAN-sheet-widget
+ * §11): moves the asker's last-read mark (`sessions.metadata.laneReads`)
+ * forward to `messageId`, or to the lane's newest line, and answers their
+ * fresh channels view (`SessionV1.channels`). A lane the asker may not read
+ * is refused; access as `sessions:get`.
+ */
+export const sessionsLaneReadHandler: Handler<
+	Sockets.Sessions.LaneRead.Params,
+	Sockets.Sessions.LaneRead.Response
+> = {
+	event: "sessions:laneRead",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const sessionId = Number(params?.sessionId)
+		const refuse = (error: string): Sockets.Sessions.LaneRead.Response => {
+			const res = { sessionId, error }
+			emitToUser("sessions:laneRead", res)
+			return res
+		}
+		if (!Number.isInteger(sessionId)) return refuse("sessionId must be a session's id.")
+		if (typeof params?.channel !== "string" || !params.channel.trim()) return refuse("channel must be a channel lane.")
+		const access = await checkSessionAccess(sessionId, userId)
+		if (!access.hasAccess) return refuse("This session is not yours to read.")
+		const { laneViewFor, laneViewAllows } = await import("$lib/server/channels/lanes")
+		const { markLaneRead, newestOnLane, sessionChannelsFor } = await import("$lib/server/channels/attention")
+		const view = await laneViewFor(db, sessionId, userId)
+		if (!view) return refuse("This session is not yours to read.")
+		if (!laneViewAllows(view, params.channel)) return refuse("That lane is another person's.")
+		const asked = params.messageId == null ? await newestOnLane(db, sessionId, params.channel) : Number(params.messageId)
+		if (asked !== null && Number.isInteger(asked) && asked > 0)
+			await markLaneRead(db, sessionId, userId, params.channel, asked)
+		const res: Sockets.Sessions.LaneRead.Response = { sessionId, channels: await sessionChannelsFor(db, view) }
+		emitToUser("sessions:laneRead", res)
 		return res
 	}
 }
@@ -3189,6 +3466,21 @@ async function seatedWidgetSettings(
 }
 
 /**
+ * Is a session layout sent off the wire one the app can draw — no
+ * `validateSessionLayout` ERROR? The errors go to the log; the person reads
+ * one plain sentence. Warnings (a key readers ignore, an unknown widget)
+ * never refuse.
+ */
+function drawableLayout(layout: unknown, verb: "set" | "save"): boolean {
+	const verdict = validateSessionLayout(layout)
+	if (!verdict.ok)
+		console.warn(
+			`session layout: refused to ${verb} a layout the app cannot draw — ${verdict.errors.join("; ")}`
+		)
+	return verdict.ok
+}
+
+/**
  * Persist the caller's session layout for a session (21 §10; the copy model).
  * One row per (user, session); upsert. The `layout` blob is stored verbatim —
  * its shape is the client surface manager's business.
@@ -3204,6 +3496,13 @@ async function seatedWidgetSettings(
  * the key: the surface manager's debounced save posts `layout` alone, several
  * times a minute, and absence meaning "clear" would wipe pins and settings on
  * every drag of a gutter.
+ *
+ * The `layout` is checked with the SDK's `validateSessionLayout` — its
+ * `panels`, and the shape of any ⏳ old slot — and a layout with an error is
+ * refused (`LAYOUT_PRESET_CANT_SAVE`, the errors to the log) with nothing
+ * written, not even the keys that came with it. Warnings never refuse: the
+ * row's own `active` and `tierSizeOverrides` are keys readers of the layout
+ * ignore.
  */
 export const sessionsPanelLayoutSetHandler: Handler<
 	Sockets.Sessions.PanelLayout.Set.Params,
@@ -3221,6 +3520,8 @@ export const sessionsPanelLayoutSetHandler: Handler<
 			error = "No access to this session"
 		} else if (!params.layout || typeof params.layout !== "object") {
 			error = "Invalid layout"
+		} else if (!drawableLayout(params.layout, "set")) {
+			error = LAYOUT_PRESET_CANT_SAVE
 		} else if (
 			setsSettings &&
 			(!params.layoutSettings ||
@@ -3311,6 +3612,8 @@ export const sessionsLayoutPresetSaveHandler: Handler<
 			error = LAYOUT_PRESET_NEEDS_NAME
 		} else if (!params.layout || typeof params.layout !== "object") {
 			error = "Invalid layout"
+		} else if (!drawableLayout(params.layout, "save")) {
+			error = LAYOUT_PRESET_CANT_SAVE
 		} else {
 			const genreId = await genreOfSession(params.sessionId)
 			const saved = await saveAsNewLayout({
@@ -3735,6 +4038,8 @@ export async function buildSessionActions(
 		 * request never says so.
 		 */
 		member?: boolean
+		/** The push a run's start sends (W-A1): the list reads as generating, whatever the registry says a beat later. */
+		starting?: boolean
 	} = {}
 ): Promise<Sockets.Sessions.Actions.Response> {
 	const access = opts.member
@@ -3756,12 +4061,17 @@ export async function buildSessionActions(
 		db,
 		sessionId,
 		{ userId },
-		{ channel }
+		{ channel, ...(opts.starting ? { starting: true } : {}) }
 	)) as any
 	// What a block press of a form-venue action collects (lair pass R9):
 	// those actions are listed in no venue, so the collect modal reads here.
 	const forms = await formCollectsOf(db, sessionId, { userId })
 	if (Object.keys(forms).length) res.formCollects = forms
+	// 🚧 Where this viewer's Delete is refused (owner ruling ★9): the page
+	// takes it off a kept turn's rows instead of offering it to refuse.
+	const { turnDeleteRefusedThrough } = await import("$lib/server/messages/verbs")
+	const kept = await turnDeleteRefusedThrough(db, sessionId, userId)
+	if (kept) res.deleteRefusedThrough = kept
 	return res
 }
 
@@ -4155,17 +4465,61 @@ async function buildSessionGetResponse(
 
 	if (!sessionData) return { session: null, messages: null, sessionId }
 
-	// Count total messages for pagination metadata
+	// Count total messages for pagination metadata — the asker's rows only
+	// (personal channel lanes, 2026-10-17), or `hasMore` would promise rows
+	// the next page never brings.
+	const { laneViewFor, laneViewWhere } = await import("$lib/server/channels/lanes")
+	const laneView = await laneViewFor(db, sessionId, userId)
 	const [{ total }] = await db
 		.select({ total: count() })
 		.from(schema.sessionMessages)
-		.where(eq(schema.sessionMessages.sessionId, sessionId))
+		.where(
+			and(
+				eq(schema.sessionMessages.sessionId, sessionId),
+				laneViewWhere(schema.sessionMessages.channel, laneView)
+			)
+		)
+
+	/**
+	 * 🚧 The first page is **per channel** (PLAN-dc-after-walk2 Q1-1, owner
+	 * ruling ★7): each channel's newest `limit` lines the asker reads, so a
+	 * genre of many channels — a Story beside its Planner lanes, dice and
+	 * journal — never spends the page on the others (the walk's Story showed
+	 * six lines after a reload, and nothing older could be reached). `olderIn`
+	 * names the channels that hold more; a widget asks for those, a channel at
+	 * a time (`sessions:messagesPage`).
+	 */
+	let olderIn: string[] | undefined
+	if (beforeId == null) {
+		const m = schema.sessionMessages
+		const where = and(eq(m.sessionId, sessionId), laneViewWhere(m.channel, laneView))
+		const ranked = db
+			.select({
+				id: m.id,
+				rank: sql<number>`row_number() over (partition by ${m.channel} order by ${m.id} desc)`.as("rank")
+			})
+			.from(m)
+			.where(where)
+			.as("ranked")
+		const ids = (await db.select({ id: ranked.id }).from(ranked).where(sql`${ranked.rank} <= ${limit}`)).map((r) => r.id)
+		;(sessionData as any).sessionMessages = ids.length
+			? await db.select().from(m).where(inArray(m.id, ids)).orderBy(desc(m.id))
+			: []
+		olderIn = (
+			await db
+				.select({ channel: m.channel })
+				.from(m)
+				.where(where)
+				.groupBy(m.channel)
+				.having(sql`count(*) > ${limit}`)
+		).map((r) => r.channel ?? "main")
+	}
 
 	const loadedCount = (sessionData as any).sessionMessages.length
 	const hasMore =
 		beforeId != null
 			? loadedCount === limit // cursor mode: full page implies more exist
-			: total > limit // initial load: more exist than we fetched
+			: (olderIn?.length ?? 0) > 0 // initial load: a channel holds more than its page
 
 	// Read here, for the asker alone: the session payload never carries the
 	// drafts map, which holds every member's unsent text.
@@ -4231,10 +4585,22 @@ async function buildSessionGetResponse(
 		;(sessionData as any).castFaces = {}
 	}
 
+	// 🚧 The session's channels as this viewer has them (`SessionV1.channels`,
+	// INTEGRATING §1h): their own lane on each personal channel, and the
+	// attention each asks of them.
+	if (laneView) {
+		try {
+			const { sessionChannelsFor } = await import("$lib/server/channels/attention")
+			;(sessionData as any).channels = await sessionChannelsFor(db, laneView)
+		} catch (error) {
+			console.warn("[sessions:get] channels view failed:", error)
+		}
+	}
+
 	return {
 		session: sessionData as any,
 		messages: (sessionData as any).sessionMessages || null,
-		pagination: { total, hasMore },
+		pagination: { total, hasMore, ...(olderIn ? { olderIn } : {}) },
 		beforeId,
 		userDraft
 	}
@@ -4360,13 +4726,46 @@ function broadcastSessionToParticipants(
 	sessionId: number,
 	userId: number
 ) {
+	return pushSessionToParticipants(socket.io, sessionId, userId)
+}
+
+/**
+ * `broadcastSessionToParticipants` by `io` — the one push of the whole
+ * session to every member, for a caller with no socket (a pipeline's
+ * `core:outlet/set-seat-name`). A seat named or renamed reaches every
+ * member's page through this, as an added persona does (Dungeon Crawler
+ * walk round 2, 2026-10-15: a rename and a new seat showed only after a
+ * reload).
+ */
+export function pushSessionToParticipants(
+	io: any,
+	sessionId: number,
+	userId: number
+) {
 	return broadcastToSessionUsers(
-		socket.io,
+		io,
 		sessionId,
 		"sessions:get",
 		async () => {
-			const updatedSession = await getSessionFromDB(sessionId, userId)
+			const updatedSession = await getSessionFromDB(
+				sessionId,
+				userId,
+				undefined,
+				undefined,
+				false
+			)
 			if (!updatedSession) return null
+			// 🚧 The parts-native half too, as `buildSessionGetResponse` sends
+			// it (the 100-turn walk, B11): without it a page that took this
+			// push drew every row from its legacy fields — a Planner's question
+			// lost its answer buttons, until a reload, after any settings save.
+			if ((updatedSession as any).sessionMessages?.length) {
+				const { attachParts } = await import("$lib/server/messages/store")
+				;(updatedSession as any).sessionMessages = await attachParts(
+					db,
+					(updatedSession as any).sessionMessages
+				)
+			}
 			return {
 				session: updatedSession as any,
 				messages: (updatedSession as any).sessionMessages || null
@@ -4735,8 +5134,17 @@ export const sessionsUpdateHandler: Handler<
 					storyClockMonth,
 					storyClockDay,
 					storyClockHour,
-					storyClockMinute
+					storyClockMinute,
+					onRevision,
+					rigour
 				} = params.session
+				// 🚧 On revision (PLAN-rulesets §28): one of the two modes, or
+				// refused in a sentence — never quietly read as overwrite.
+				if (onRevision !== undefined) {
+					const { isOnRevision } = await import("$lib/server/sessions/revision")
+					if (!isOnRevision(onRevision))
+						throw new Error("On revision must be Overwrite or Branch.")
+				}
 
 				// Mode field values, filtered to the keys the session's mode
 				// declares (19 §1) — same write rule as creation. `genreId`
@@ -4788,6 +5196,27 @@ export const sessionsUpdateHandler: Handler<
 				)
 					.map((t) => t.tagId)
 					.sort()
+
+				// 🚧 How strict (PLAN-rulesets §21; changing it mid-session is
+				// allowed, ruled): one of the genre's options, or refused in a
+				// sentence that names them in the interface's words (§28).
+				if (rigour !== undefined) {
+					const { getGenre } = await import("@serene-pub/sdk")
+					const { STANDARD_GENRE_ID } = await import(
+						"$lib/server/pipelines/entities/sessionGenres"
+					)
+					const genre = getGenre(before?.genreId ?? STANDARD_GENRE_ID)
+					const options: readonly string[] = genre?.rigour?.options ?? ["prose"]
+					if (typeof rigour !== "string" || !options.includes(rigour)) {
+						const { rigourLabel } = await import("$lib/shared/rulesets/rigourLabels")
+						const named = options.map(rigourLabel)
+						throw new Error(
+							named.length > 1
+								? `How strict must be ${named.slice(0, -1).join(", ")} or ${named[named.length - 1]}.`
+								: `This genre plays ${named[0] ?? "Words only"} only.`
+						)
+					}
+				}
 
 				// 🚧 Where the session reads its book (ruling 15, story-time
 				// P3): its line and its story clock. Attaching or switching a
@@ -4842,10 +5271,12 @@ export const sessionsUpdateHandler: Handler<
 							...(metadata !== undefined ? { metadata } : {}),
 							...(drafts !== undefined ? { drafts } : {}),
 							...(lorebookId !== undefined ? { lorebookId } : {}),
+							...(onRevision !== undefined ? { onRevision } : {}),
+							...(rigour !== undefined ? { rigour } : {}),
 							...(mergedGenreFields !== undefined
 								? { genreFields: mergedGenreFields }
 								: {}),
-							updatedAt: new Date().toISOString()
+							updatedAt: new Date()
 						})
 						.where(eq(schema.sessions.id, params.session.id!))
 				})
@@ -4945,10 +5376,13 @@ export const sessionsUpdateHandler: Handler<
 						if (!same(clockOf(before), clockOf(after))) changed.push("storyClock")
 					}
 					// The line or the clock moved: what the session inherits
-					// did, so every tab reads its state afresh.
+					// did, so every tab reads its state afresh. 🚧 So did a genre
+					// field (PLAN-dc-after-walk2 Q1-7): Honour mode decides who
+					// may change a sheet by hand, and a guest's piece popover
+					// gained its Edit, Give to… and Remove only on a reload.
 					if (
 						changed.some((c) =>
-							c === "lorebookId" || c === "lorebookBranchId" || c === "storyClock"
+							c === "lorebookId" || c === "lorebookBranchId" || c === "storyClock" || c === "genreFields"
 						)
 					)
 						await broadcastToSessionUsers(socket.io, params.session.id!, "state:changed", {
@@ -5231,6 +5665,23 @@ export const sessionsUpdateHandler: Handler<
 									)
 								)
 							)
+					} else if (
+						// 🚧 The card's player's card-less player seat takes it,
+						// keeping its name and stats (`givePlayerSeatACard`).
+						await (
+							await import("$lib/server/sessions/seatName")
+						).givePlayerSeatACard(db, params.session.id!, personaId)
+					) {
+						await db
+							.update(schema.sessionPersonas)
+							.set({ position: i })
+							.where(
+								and(
+									eq(schema.sessionPersonas.sessionId, params.session.id!),
+									eq(schema.sessionPersonas.personaId, personaId)
+								)
+							)
+						await markCharacterAsPersona(personaId)
 					} else {
 						// Upsert: revive a soft-removed row if one exists for
 						// this sessionId + personaId rather than violating the
@@ -5256,6 +5707,71 @@ export const sessionsUpdateHandler: Handler<
 						await markCharacterAsPersona(personaId)
 					}
 				}
+			}
+
+			// 🚧 A seat name (2026-10-14): the caller's character name in this
+			// session, or — the owner only — any seat's by `playerSeatId`. Absent
+			// leaves it alone; blank or null clears it. Naming a seat the
+			// caller does not have opens a card-less one for them.
+			if (params.seatName !== undefined) {
+				const { writeSeatName } = await import(
+					"$lib/server/sessions/seatName"
+				)
+				const liveSeatIds = async () =>
+					new Set(
+						(
+							await db
+								.select({ id: schema.sessionPersonas.id })
+								.from(schema.sessionPersonas)
+								.where(
+									and(
+										eq(schema.sessionPersonas.sessionId, params.session.id!),
+										isNull(schema.sessionPersonas.removedAt)
+									)
+								)
+						).map((r) => r.id)
+					)
+				const seatsBefore = await liveSeatIds()
+				const seatId = await writeSeatName(db, {
+					sessionId: params.session.id!,
+					userId,
+					isOwner: sessionAccess.isOwner,
+					playerSeatId: params.playerSeatId ?? null,
+					name: params.seatName
+				})
+				// A NEW card-less player seat is a member added, exactly as a seated
+				// persona is (24 §5), so turn order and every client
+				// recompute. It has no card, so its reference is the
+				// seat's own: `player-seat:<id>`.
+				if (seatId !== null && !seatsBefore.has(seatId))
+					await emitMemberEvent(socket, {
+						sessionId: params.session.id!,
+						userId,
+						event: sessionEvents.memberAdded,
+						ref: `player-seat:${seatId}`
+					})
+			}
+
+			// 🚧 Card-less player seats renamed or removed in Edit Session
+			// (`editCardlessPlayerSeats`). A removed one is a member gone, as
+			// a removed persona is: `member-removed` with `player-seat:<id>`.
+			if (params.playerSeatChanges?.length) {
+				const { editCardlessPlayerSeats } = await import(
+					"$lib/server/sessions/seatName"
+				)
+				const removedSeats = await editCardlessPlayerSeats(db, {
+					sessionId: params.session.id!,
+					userId,
+					isOwner: sessionAccess.isOwner,
+					changes: params.playerSeatChanges
+				})
+				for (const seatId of removedSeats)
+					await emitMemberEvent(socket, {
+						sessionId: params.session.id!,
+						userId,
+						event: sessionEvents.memberRemoved,
+						ref: `player-seat:${seatId}`
+					})
 			}
 
 			// The member events (24 §5), best-effort: a failed dispatch must
@@ -5357,8 +5873,18 @@ export const sessionsUpdateHandler: Handler<
 				session: updatedSession as any
 			}
 			emitToUser("sessions:update", res)
+			// A seat named, renamed or removed is every member's news, not
+			// the caller's alone: the persona list with its `seatName` goes
+			// to each member's page, as an added persona's does.
+			if (params.seatName !== undefined || params.playerSeatChanges?.length)
+				await broadcastSessionToParticipants(socket, params.session.id!, userId)
 			// Refresh session list, behind the reply that carries the session.
 			await relistSessions(socket, emitToUser)
+			// 🚧 A lorebook attached or dropped: each book's "Read by" moved.
+			if (params.session.lorebookId !== undefined) {
+				const { relistLorebooks } = await import("./lorebooks")
+				relistLorebooks(socket, emitToUser)
+			}
 			// The published values moved (U5e, review W-A5) — a genre field a
 			// predicate reads, or the cast whose state `state.cast.<key>`
 			// predicates read — so every member's action list follows.
@@ -5455,12 +5981,15 @@ export const sessionsAddPersonaHandler: Handler<
 				? maxPosition[0].maxPos + 1
 				: 0
 
-			// Add persona to session
-			await db.insert(schema.sessionPersonas).values({
-				sessionId,
-				personaId,
-				position: nextPosition
-			})
+			// Add persona to session — 🚧 into its player's card-less player seat
+			// when they have one (`givePlayerSeatACard`), else on a row of its own.
+			const { givePlayerSeatACard } = await import("$lib/server/sessions/seatName")
+			if (!(await givePlayerSeatACard(db, sessionId, personaId)))
+				await db.insert(schema.sessionPersonas).values({
+					sessionId,
+					personaId,
+					position: nextPosition
+				})
 			await markCharacterAsPersona(personaId)
 
 			// A member added to a session that reads a book joins that book's
@@ -5541,6 +6070,22 @@ export const sessionsAddGuestHandler: Handler<
 			// this via a direct socket emission. A generic message closes
 			// that oracle without changing the ownership check above, which
 			// doesn't leak anything about other users.
+			// A solo genre (`GenreDecl.members`, ruled 2026-10-19) seats nobody
+			// else: the Guide's tools reach the app, so a guest there is a hole.
+			{
+				const { sessionMembersPolicy } = await import("$lib/server/sessions/members")
+				if ((await sessionMembersPolicy(db, sessionId)) === "solo") {
+					const res: Sockets.Sessions.AddGuest.Response = {
+						sessionId: params.sessionId,
+						guestUserId: params.guestUserId,
+						success: false,
+						error: "This kind of session is yours alone: nobody else can be added to it."
+					}
+					emitToUser("sessions:addGuest", res)
+					return res
+				}
+			}
+
 			const guestUser = await db.query.users.findFirst({
 				where: (u, { eq }) => eq(u.id, guestUserId),
 				columns: { id: true, isDeleted: true }
@@ -5600,6 +6145,15 @@ export const sessionsAddGuestHandler: Handler<
 
 			// Broadcast updated session to all participants
 			await broadcastSessionToParticipants(socket, sessionId, userId)
+			// 🚧 A person joined: `member-added` as a seated persona's is, so a
+			// genre bound to it (the Dungeon Crawler's welcome) runs. A guest
+			// has no seat yet, so the reference is the person's, `user:<id>`.
+			await emitMemberEvent(socket, {
+				sessionId,
+				userId,
+				event: sessionEvents.memberAdded,
+				ref: `user:${guestUserId}`
+			})
 			// A member joined (U5e, review W-A5): the new guest gets their own
 			// list, and everyone else's audience verdicts may have moved.
 			await (
@@ -5651,7 +6205,7 @@ export const sessionsRemoveGuestHandler: Handler<
 			}
 
 			// Remove guest from session
-			await db
+			const removed = await db
 				.delete(schema.sessionGuests)
 				.where(
 					and(
@@ -5659,6 +6213,7 @@ export const sessionsRemoveGuestHandler: Handler<
 						eq(schema.sessionGuests.userId, guestUserId)
 					)
 				)
+				.returning({ userId: schema.sessionGuests.userId })
 
 			// A removed guest has nothing left to act on here. Never throws.
 			await (
@@ -5685,6 +6240,14 @@ export const sessionsRemoveGuestHandler: Handler<
 
 			// Broadcast updated session to all remaining participants
 			await broadcastSessionToParticipants(socket, sessionId, userId)
+			// 🚧 A person left: `member-removed`, the add's mirror (`user:<id>`).
+			if (removed.length)
+				await emitMemberEvent(socket, {
+					sessionId,
+					userId,
+					event: sessionEvents.memberRemoved,
+					ref: `user:${guestUserId}`
+				})
 
 			// Also notify the removed guest that they've been removed
 			socket.io
@@ -5717,6 +6280,135 @@ export const sessionsRemoveGuestHandler: Handler<
 		}
 	}
 }
+
+/**
+ * 🚧 **Create lorebook from session** (PLAN-rulesets §26 ruling, 2026-10-16):
+ * the session's own notes become an ordinary lorebook — named, shown in the
+ * Lorebooks rail from now on — and the session reads it. Owner-only; refused
+ * for a session that already reads a lorebook. The one surface the notes
+ * ever get: no listing, no picker, no settings.
+ */
+export const sessionsCreateLorebookFromPhantomHandler: Handler<
+	Sockets.Sessions.CreateLorebookFromPhantom.Params,
+	Sockets.Sessions.CreateLorebookFromPhantom.Response
+> = refusable(
+	"sessions:createLorebookFromPhantom",
+	async (socket, params: Sockets.Sessions.CreateLorebookFromPhantom.Params, emitToUser) => {
+		const userId = socket.user!.id
+		const { createLorebookFromPhantom, CREATE_LOREBOOK_FROM_SESSION_REFUSALS } =
+			await import("$lib/server/lorebooks/phantom")
+		const access = await checkSessionAccess(params.sessionId, userId)
+		if (!access.isOwner) throw new Error(CREATE_LOREBOOK_FROM_SESSION_REFUSALS.notOwner)
+		const made = await createLorebookFromPhantom(db, {
+			sessionId: params.sessionId,
+			userId,
+			name: typeof params.name === "string" ? params.name : null
+		})
+		const res: Sockets.Sessions.CreateLorebookFromPhantom.Response = {
+			sessionId: params.sessionId,
+			lorebookId: made.lorebookId,
+			name: made.name
+		}
+		emitToUser("sessions:createLorebookFromPhantom", res)
+		// The one toast, through the central `success` path (Layout).
+		emitToUser("success", { title: `Lorebook created: ${made.name}` } satisfies Sockets.Success.Response)
+		// The book is in the rail now, and the session reads it.
+		const { relistLorebooks } = await import("./lorebooks")
+		relistLorebooks(socket, emitToUser)
+		await resendSession(socket, params.sessionId, emitToUser)
+		broadcastSessionRow(socket.io, params.sessionId)
+		return res
+	},
+	"The lorebook could not be created from this session."
+)
+
+/**
+ * 🚧 The overlay's items (PLAN-rulesets §15, §26): what the session wrote to
+ * its own notes while it read a lorebook it could not write — the review
+ * queue lists them beside the value proposals. Anyone in the session reads
+ * them; only the lorebook's owner may apply them.
+ */
+export const sessionsOverlayItemsHandler: Handler<
+	Sockets.Sessions.OverlayItems.Params,
+	Sockets.Sessions.OverlayItems.Response
+> = refusable(
+	"sessions:overlayItems",
+	async (socket, params: Sockets.Sessions.OverlayItems.Params, emitToUser) => {
+		const access = await checkSessionAccess(params.sessionId, socket.user!.id)
+		if (!access.hasAccess) throw new Error("This session is not one you are in.")
+		const { overlayItemsOf } = await import("$lib/server/lorebooks/phantom")
+		const res: Sockets.Sessions.OverlayItems.Response = {
+			sessionId: params.sessionId,
+			items: await overlayItemsOf(db, params.sessionId)
+		}
+		emitToUser("sessions:overlayItems", res)
+		return res
+	},
+	"The session's changes could not be read."
+)
+
+/**
+ * 🚧 **Apply to the lorebook** (PLAN-rulesets §26): overlay items move into
+ * the attached lorebook with their provenance and leave the notes. One item
+ * (`entryIds: [id]`) or all (absent). The lorebook's owner only.
+ */
+export const sessionsApplyOverlayHandler: Handler<
+	Sockets.Sessions.ApplyOverlay.Params,
+	Sockets.Sessions.ApplyOverlay.Response
+> = refusable(
+	"sessions:applyOverlay",
+	async (socket, params: Sockets.Sessions.ApplyOverlay.Params, emitToUser) => {
+		const { applyOverlayItems, overlayItemsOf } = await import("$lib/server/lorebooks/phantom")
+		const entryIds = Array.isArray(params.entryIds)
+			? params.entryIds.filter((id): id is number => Number.isSafeInteger(id))
+			: null
+		const done = await applyOverlayItems(db, {
+			sessionId: params.sessionId,
+			userId: socket.user!.id,
+			entryIds
+		})
+		const res: Sockets.Sessions.ApplyOverlay.Response = {
+			sessionId: params.sessionId,
+			lorebookId: done.lorebookId,
+			applied: done.applied
+		}
+		emitToUser("sessions:applyOverlay", res)
+		emitToUser("sessions:overlayItems", {
+			sessionId: params.sessionId,
+			items: await overlayItemsOf(db, params.sessionId)
+		} satisfies Sockets.Sessions.OverlayItems.Response)
+		return res
+	},
+	"The changes could not be applied to the lorebook."
+)
+
+/**
+ * 🚧 What deleting this message does to the timeline (PLAN-rulesets §28),
+ * asked before the delete confirmation opens: the session's On revision as
+ * the confirmation's sentence ("This will overwrite the last turn." / "This
+ * will branch here…"), or null when the delete is no revision (an ordinary
+ * message, or a delete the server would refuse).
+ */
+export const sessionsRevisionNoticeHandler: Handler<
+	Sockets.Sessions.RevisionNotice.Params,
+	Sockets.Sessions.RevisionNotice.Response
+> = refusable(
+	"sessions:revisionNotice",
+	async (socket, params: Sockets.Sessions.RevisionNotice.Params, emitToUser) => {
+		const userId = socket.user!.id
+		const access = await checkSessionAccess(params.sessionId, userId)
+		if (!access.hasAccess) throw new Error("This session is not one you are in.")
+		const verdict = await turnDeleteVerdict(db, params.sessionId, params.messageId, userId)
+		const res: Sockets.Sessions.RevisionNotice.Response = {
+			sessionId: params.sessionId,
+			messageId: params.messageId,
+			revision: verdict && "revision" in verdict ? verdict.revision : null
+		}
+		emitToUser("sessions:revisionNotice", res)
+		return res
+	},
+	"What this delete does could not be read."
+)
 
 export const sessionsBranchHandler: Handler<
 	Sockets.Sessions.Branch.Params,
@@ -6091,19 +6783,26 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 			 * second leg is the one that was missing: `ReplyRequest.channel`
 			 * has existed since R-C and no socket handler had ever passed one.
 			 */
-			const channel = canonicalChannel(params.channel)
+			let channel = canonicalChannel(params.channel)
+			/**
+			 * 🚧 Every answer but a saved message is a **refusal**: a sentence
+			 * the person reads, nothing saved, and their text given back by
+			 * the composer (owner ruling 2026-10-15 — never lose text).
+			 */
+			const refuse = (sentence: string, runId?: string) => {
+				const res: Sockets.SessionMessages.SendPersonaMessage.Response = {
+					sessionId,
+					refused: sentence,
+					...(runId ? { runId } : {})
+				}
+				emitToUser("sessionMessages:sendPersonaMessage", res)
+				return res
+			}
 
 			// Check if user has access to this session (both owners and guests can send messages)
 			const sessionAccess = await checkSessionAccess(sessionId, userId)
 			if (!sessionAccess.hasAccess) {
-				const res: Sockets.SessionMessages.SendPersonaMessage.Response =
-					{
-						sessionId,
-						sessionMessage: undefined,
-						error: "Access denied. Session not found or no permission to access."
-					}
-				emitToUser("sessionMessages:sendPersonaMessage", res)
-				return res
+				return refuse("Access denied. Session not found or no permission to access.")
 			}
 
 			// A session whose mode disappeared is read-only (19 §6): the history
@@ -6115,10 +6814,7 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 				)
 				const modeCheck = await sessionGenreAvailable(db, sessionId)
 				if (!modeCheck.available) {
-					const res: Sockets.SessionMessages.SendPersonaMessage.Response =
-						{ sessionId, sessionMessage: undefined, error: modeCheck.reason }
-					emitToUser("sessionMessages:sendPersonaMessage", res)
-					return res
+					return refuse(modeCheck.reason ?? "This session is read-only.")
 				}
 			}
 
@@ -6129,39 +6825,18 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 					userId
 				)
 				if (!canUsePersona) {
-					const res: Sockets.SessionMessages.SendPersonaMessage.Response =
-						{
-							sessionId,
-							sessionMessage: undefined,
-							error: "Access denied. You can only send messages with personas you own."
-						}
-					emitToUser("sessionMessages:sendPersonaMessage", res)
-					return res
+					return refuse("Access denied. You can only send messages with personas you own.")
 				}
 			}
 
 			// Check if session exists
 			const session = await getPromptSessionFromDb(sessionId, userId)
 			if (!session) {
-				const res: Sockets.SessionMessages.SendPersonaMessage.Response =
-					{
-						sessionId,
-						sessionMessage: undefined,
-						error: "Session not found"
-					}
-				emitToUser("sessionMessages:sendPersonaMessage", res)
-				return res
+				return refuse("Session not found")
 			}
 
 			if (content && content.length > MAX_CHAT_MESSAGE_LENGTH) {
-				const res: Sockets.SessionMessages.SendPersonaMessage.Response =
-					{
-						sessionId,
-						sessionMessage: undefined,
-						error: `Message too long (max ${MAX_CHAT_MESSAGE_LENGTH.toLocaleString()} characters).`
-					}
-				emitToUser("sessionMessages:sendPersonaMessage", res)
-				return res
+				return refuse(`Message too long (max ${MAX_CHAT_MESSAGE_LENGTH.toLocaleString()} characters).`)
 			}
 
 			/**
@@ -6173,95 +6848,137 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 			{
 				const refusal = await channelRefusal(db, sessionId, channel)
 				if (refusal) {
-					const res: Sockets.SessionMessages.SendPersonaMessage.Response =
-						{
-							sessionId,
-							sessionMessage: undefined,
-							error: `Cannot send here: ${refusal}`
-						}
-					emitToUser("sessionMessages:sendPersonaMessage", res)
-					return res
+					return refuse(`Cannot send here: ${refusal}`)
 				}
-			}
-
-			// Create the new message
-			const newMessage: InsertSessionMessage = {
-				userId,
-				sessionId,
-				personaId: personaId || null,
-				role: "user",
-				content,
-				channel
 			}
 
 			/**
-			 * Attachments (PLAN-composer-attachments §3.1, phase 2 lane D):
-			 * the sender's ready tray items become `core:image` / `core:file`
-			 * parts of this row, in one transaction with it — or the send is
-			 * refused whole and the tray stays. The readers verdict (§3.2,
-			 * `attachmentReaders`) is asked before the transaction, so a kind
-			 * the reply stopped reading since it was staged is refused here.
-			 * Guests send the same way (D8).
+			 * 🚧 A **personal** channel (owner ruling 2026-10-17): the send
+			 * lands on the sender's own lane — a bare slug resolves to it,
+			 * opening it on first use — and a lane that is not theirs is
+			 * refused, the session's owner included: reading every lane is
+			 * not writing in somebody else's.
 			 */
-			const {
-				normaliseTrayItemIds,
-				commitTraySend
-			} = await import("$lib/server/attachments/send")
-			const { TrayRefusal } = await import("$lib/server/attachments/tray")
-			let inserted: Awaited<ReturnType<typeof insertLegacy>>
-			let attached = false
-			try {
-				const trayItemIds = normaliseTrayItemIds(params.trayItemIds)
-				if (trayItemIds.length) {
-					const { attachmentReaders } = await import(
-						"$lib/server/attachments/readers"
-					)
-					const readers = await attachmentReaders(db, {
-						sessionId,
-						userId,
-						channel
-					})
-					inserted = (
-						await commitTraySend(db, {
-							userId,
-							sessionId,
-							trayItemIds,
-							message: newMessage,
-							readers
-						})
-					).message
-					attached = true
-				} else {
-					inserted = await insertLegacy(db, newMessage)
-				}
-			} catch (error) {
-				if (!(error instanceof TrayRefusal)) throw error
-				const res: Sockets.SessionMessages.SendPersonaMessage.Response =
-					{
-						sessionId,
-						sessionMessage: undefined,
-						error: error.message
+			{
+				const { isPersonalChannel, laneFor, sessionLaneFacts, LaneRefusal } = await import(
+					"$lib/server/channels/lanes"
+				)
+				const facts = await sessionLaneFacts(db, sessionId)
+				const asked = parseChannel(typeof params.channel === "string" ? params.channel : channel)
+				if (facts && isPersonalChannel(facts.shape, asked.slug)) {
+					try {
+						const own = await laneFor(db, sessionId, asked.slug, userId)
+						if (asked.explicit && formatChannel(asked) !== own.channel)
+							return refuse("Cannot send here: that lane is another person's.")
+						channel = own.channel
+					} catch (error) {
+						if (error instanceof LaneRefusal) return refuse(`Cannot send here: ${error.message}`)
+						throw error
 					}
-				emitToUser("sessionMessages:sendPersonaMessage", res)
-				return res
+				}
 			}
 
-			// With parts on it when it carries any, so every view draws the
-			// attachments from the push itself (the same enrichment a load
-			// gets).
-			const outbound = attached
-				? ((await attachParts(db, [inserted]))[0] as typeof inserted)
-				: inserted
+			// 🚧 A line with no persona from a card-less player seat speaks from
+			// that seat (`player-seat:<id>`), as an envoy's line names its envoy —
+			// the fact the turn order reads to call it that seat's turn.
+			const { cardlessPlayerSeatOf, playerSeatSpeaker } = await import(
+				"$lib/server/sessions/seatName"
+			)
+			/**
+			 * 🚧 A card whose seat here has retired (a new character after a
+			 * death, PLAN-dc-after-walk2 Q0-2, owner ruling ★2): the card stays
+			 * with the fallen seat, and a line sent with it while the person has
+			 * a live card-less seat speaks from that seat — the new character,
+			 * under its own name, whose line the round counts. A composer from
+			 * before the seat moved still sends the card.
+			 */
+			let speakingCard = personaId ?? null
+			if (speakingCard) {
+				const held = await db
+					.select({ removedAt: schema.sessionPersonas.removedAt })
+					.from(schema.sessionPersonas)
+					.where(
+						and(
+							eq(schema.sessionPersonas.sessionId, sessionId),
+							eq(schema.sessionPersonas.personaId, speakingCard)
+						)
+					)
+				if (held.length && held.every((h) => h.removedAt)) {
+					if ((await cardlessPlayerSeatOf(db, sessionId, userId)) !== null) speakingCard = null
+				}
+			}
+			const seatId = speakingCard ? null : await cardlessPlayerSeatOf(db, sessionId, userId)
 
+			/**
+			 * Attachments (PLAN-composer-attachments §3.1): the sender's ready
+			 * tray items become `core:image` / `core:file` parts of the saved
+			 * row, in one transaction with it — or the save is refused whole
+			 * and the tray stays. The ids are checked for shape here, at the
+			 * door; the rest (theirs, ready, a kind the reply reads) at the
+			 * write. Guests send the same way (D8).
+			 */
+			const { normaliseTrayItemIds } = await import("$lib/server/attachments/send")
+			const { TrayRefusal } = await import("$lib/server/attachments/tray")
+			let trayItemIds: string[]
+			try {
+				trayItemIds = normaliseTrayItemIds(params.trayItemIds)
+			} catch (error) {
+				if (!(error instanceof TrayRefusal)) throw error
+				return refuse(error.message)
+			}
+
+			/**
+			 * 🚧 **Saved through the pipeline** (owner ruling 2026-10-15): the
+			 * door is checked — a composer the genre closed on this lane is
+			 * refused inside the offer (`composerRefusal`), with its reason —
+			 * so the message is offered to the session's save
+			 * pipeline (`message-offered`) — core's `core:spec/save-message`
+			 * unless the genre binds its own — which writes the row, announces
+			 * it and fires its `message-completed` under the person's cause.
+			 * The host writes no person's row. A refusal comes back as a
+			 * sentence, and the composer restores the text.
+			 */
+			const { offerMessage } = await import("$lib/server/sessions/offerMessage")
+			const outcome = await offerMessage(db, {
+				sessionId,
+				userId,
+				speaker: speakingCard
+					? `character:${speakingCard}`
+					: seatId !== null
+						? playerSeatSpeaker(seatId)
+						: null,
+				channel,
+				text: content ?? "",
+				trayItemIds,
+				replyTo: params.replyTo ?? null,
+				io: socket.io
+			})
+			if ("refused" in outcome)
+				return refuse(outcome.refused, outcome.runId)
+
+			// The saved row, with parts on it when it carries any — the same
+			// enrichment a load gets — so the sender's composer clears on the
+			// answer itself rather than racing the push.
+			const saved =
+				outcome.messageId !== null
+					? await db.query.sessionMessages.findFirst({
+							where: (m, { eq }) => eq(m.id, outcome.messageId!)
+						})
+					: undefined
+			const outbound = saved
+				? ((await attachParts(db, [saved as any]))[0] as typeof saved)
+				: undefined
 			const res: Sockets.SessionMessages.SendPersonaMessage.Response = {
 				sessionId,
-				sessionMessage: outbound as any
+				accepted: true,
+				runId: outcome.runId,
+				...(outbound ? { sessionMessage: outbound as any } : {})
 			}
 			emitToUser("sessionMessages:sendPersonaMessage", res)
 
 			// The sent tray items are gone: every tab of the sender's drops
 			// their tiles from the same list reply a reload reads.
-			if (attached) {
+			if (trayItemIds.length) {
 				const { listTray } = await import("$lib/server/attachments/tray")
 				emitToUser("attachments:list", {
 					sessionId,
@@ -6269,44 +6986,14 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 				})
 			}
 
-			// Broadcast sessionMessage to all session participants
-			await broadcastToSessionUsers(
-				socket.io,
-				inserted.sessionId,
-				"sessionMessage",
-				{ sessionMessage: outbound }
-			)
-
 			// The line this session's cards quote has just changed.
-			broadcastSessionRow(socket.io, inserted.sessionId)
-
-			// The row LANDED (PLAN-turn-order §4.1, A2): a user send is a
-			// `message-completed` under the person's cause — the event the
-			// turn-order spec answers, and the one cause that may fire the
-			// head turn (§4.6). Emitted at the write, before the trigger
-			// below, which A7 retires in its favour.
-			{
-				const { emitSessionEvent } = await import(
-					"$lib/server/pipelines/runtime/sessionEvents"
-				)
-				await emitSessionEvent(db, {
-					sessionId: inserted.sessionId,
-					userId,
-					event: sessionEvents.messageCompleted,
-					payload: {
-						sessionId: inserted.sessionId,
-						messageId: inserted.id,
-						cause: { kind: "user", userId }
-					},
-					io: socket.io
-				})
-			}
+			broadcastSessionRow(socket.io, sessionId)
 
 			/**
 			 * **The send starts nothing** (PLAN-turn-order §3, §4.6; A7).
 			 *
 			 * A reply follows one road, and none of it is
-			 * here: the `message-completed` emitted above recomputes the
+			 * here: the saved row's `message-completed` recomputes the
 			 * session's turn order, the write emits `turn-order-changed`,
 			 * and the auto-advance listener fires the head turn if — and
 			 * only if — the session says to. With `off` the send produces no
@@ -6318,9 +7005,12 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 			console.error("Error sending persona message:", error)
 			const res: Sockets.SessionMessages.SendPersonaMessage.Response = {
 				sessionId: params?.sessionId,
-				sessionMessage: undefined,
-				error: "Failed to send message"
+				error: "Failed to send message",
+				refused: "Your message could not be sent. Your text was kept."
 			}
+			// The composer restores the text on the answer (silently — `error`
+			// says the catch-all below toasts the `:error`).
+			emitToUser("sessionMessages:sendPersonaMessage", res)
 			emitToUser("sessionMessages:sendPersonaMessage:error", res)
 			throw error
 		}
@@ -6542,6 +7232,78 @@ export const sessionMessagesDeleteHandler: Handler<
 				return res
 			}
 
+			// 🚧 A genre that keeps its turns (Honour mode, owner rulings
+			// 2026-10-15): an older turn is never deleted, the latest only by
+			// the owner with Honour mode on — and a row its run wrote takes
+			// the whole turn with it, as a retake would, firing nothing.
+			const turnVerdict = await turnDeleteVerdict(
+				db,
+				message.sessionId,
+				message.id,
+				userId
+			)
+			if (turnVerdict && "refusal" in turnVerdict) {
+				const res: Sockets.SessionMessages.Delete.Response = {
+					id: params.id,
+					error: turnVerdict.refusal
+				}
+				emitToUser("sessionMessages:delete", res)
+				return res
+			}
+			if (turnVerdict && "turn" in turnVerdict) {
+				// 🚧 On revision `branch` (PLAN-rulesets §28): the turn is not
+				// deleted — the session forks before it and play goes on in
+				// the branch; the old tail stays here.
+				if (turnVerdict.revision.mode === "branch") {
+					const { branchForRevision } = await import(
+						"$lib/server/sessions/revision"
+					)
+					const first = Math.min(
+						...turnVerdict.turn.rows.map((r) => r.messageId)
+					)
+					const branched = await branchForRevision(db, {
+						sessionId: message.sessionId,
+						userId,
+						firstRevisedId: first,
+						// 🚧 The deleted turn's writes stay out of the branch (B8).
+						runs: turnVerdict.turn.runs,
+						io: socket.io
+					})
+					const res: Sockets.SessionMessages.Delete.Response = branched.ok
+						? {
+								id: params.id,
+								success: "Branched here",
+								branchedTo: branched.sessionId,
+								revision: turnVerdict.revision
+							}
+						: { id: params.id, error: branched.error }
+					emitToUser("sessionMessages:delete", res)
+					if (branched.ok) {
+						await relistSessions(socket, emitToUser)
+						broadcastSessionRow(socket.io, branched.sessionId)
+					}
+					return res
+				}
+				const { deleteTurnYield } = await import(
+					"$lib/server/sessions/retakeTurn"
+				)
+				const gone = await deleteTurnYield(db, {
+					sessionId: message.sessionId,
+					userId,
+					turn: turnVerdict.turn,
+					io: socket.io
+				})
+				const res: Sockets.SessionMessages.Delete.Response = gone.ok
+					? { id: params.id, success: "Turn deleted" }
+					: { id: params.id, error: gone.error }
+				emitToUser("sessionMessages:delete", res)
+				if (gone.ok) {
+					await resendSession(socket, message.sessionId, emitToUser)
+					broadcastSessionRow(socket.io, message.sessionId)
+				}
+				return res
+			}
+
 			// The write is core's built-in: a receipted, gate-eligible run of
 			// `core:spec/builtin-delete` that emits `message-deleted` with
 			// what the row held, for the next reply's inlet.
@@ -6572,6 +7334,14 @@ export const sessionMessagesDeleteHandler: Handler<
 				success: "Message deleted successfully"
 			}
 			emitToUser("sessionMessages:delete", res)
+
+			// 🚧 What was anchored to the row went with it (Q1-3): every sheet
+			// re-reads now, never on its next reload.
+			await broadcastToSessionUsers(socket.io, message.sessionId, "state:changed", {
+				sessionId: message.sessionId
+			} satisfies Sockets.State.Changed.Response).catch((e: unknown) =>
+				console.warn("[sessionMessages:delete] state:changed failed:", e)
+			)
 
 			// Emit sessions:get to refresh the entire session after deletion
 			await resendSession(socket, message.sessionId, emitToUser)
@@ -6625,7 +7395,8 @@ export const sessionMessagesRegenerateHandler: Handler<
 					const canEdit = await canActOnMessage(
 						db,
 						params.id,
-						userId
+						userId,
+						"rerun"
 					)
 					if (!canEdit) {
 						const res: Sockets.SessionMessages.Regenerate.Response =
@@ -6835,7 +7606,8 @@ export const sessionMessagesExtendHandler: Handler<
 					const canEdit = await canActOnMessage(
 						db,
 						params.id,
-						userId
+						userId,
+						"rerun"
 					)
 					if (!canEdit) {
 						const res: Sockets.SessionMessages.Extend.Response = {
@@ -7033,7 +7805,8 @@ export const sessionMessagesSwipeLeftHandler: Handler<
 				const canEdit = await canActOnMessage(
 					db,
 					params.id,
-					userId
+					userId,
+					"rerun"
 				)
 				if (!canEdit) {
 					const res: Sockets.SessionMessages.SwipeLeft.Response = {
@@ -7172,7 +7945,8 @@ export const sessionMessagesSwipeRightHandler: Handler<
 				const canEdit = await canActOnMessage(
 					db,
 					params.id,
-					userId
+					userId,
+					"rerun"
 				)
 				if (!canEdit) {
 					const res: Sockets.SessionMessages.SwipeRight.Response = {
@@ -7337,13 +8111,32 @@ export const sessionMessagesSwipeRightHandler: Handler<
 					{ sessionMessage: updated }
 				)
 
-				await runReply({
+				const outcome = await runReply({
 					socket,
 					emitToUser,
 					sessionId: message.sessionId,
 					userId,
 					turn: { kind: "swipe", messageId: message.id }
 				})
+				/**
+				 * 🚧 A swipe whose run failed (halted empty, errored) replaced
+				 * nothing (2026-10-16 walk): the world it took back goes back
+				 * as it was — the row stays failed, with its Retry. A stop is
+				 * the person's: what arrived stands, and so does the retraction.
+				 */
+				if (!outcome.ok && !outcome.stopped) {
+					try {
+						const { restoreRetractedState } = await import("$lib/server/state/write")
+						if (await restoreRetractedState(db, retracted.taken)) {
+							if (retracted.clockMoved) broadcastSessionRow(socket.io, message.sessionId)
+							await broadcastToSessionUsers(socket.io, message.sessionId, "state:changed", {
+								sessionId: message.sessionId
+							} satisfies Sockets.State.Changed.Response)
+						}
+					} catch (e) {
+						console.warn("[swipeRight] the world could not be put back:", e)
+					}
+				}
 
 				// The new swipe is the line the cards now quote.
 				broadcastSessionRow(socket.io, message.sessionId)
@@ -7580,6 +8373,19 @@ export const sessionMessageHandler: Handler<
 					emitToUser("sessionMessage:error", res)
 					throw new Error("Access denied.")
 				}
+				// 🚧 A row on another person's personal lane is not theirs to
+				// read (2026-10-17) — refused like a session they are not in.
+				{
+					const { laneViewFor, laneViewAllows } = await import("$lib/server/channels/lanes")
+					const view = await laneViewFor(db, sessionMessage.sessionId, socket.user!.id)
+					if (!laneViewAllows(view, sessionMessage.channel)) {
+						const res: Sockets.SessionMessage.Response = {
+							error: "Access denied. Session not found or no permission to access."
+						}
+						emitToUser("sessionMessage:error", res)
+						throw new Error("Access denied.")
+					}
+				}
 				const res: Sockets.SessionMessage.Response = { sessionMessage }
 				emitToUser("sessionMessage", res)
 				return res
@@ -7755,7 +8561,7 @@ export const promptTokenCountHandler: Handler<
 							role: params.role || "user",
 							isNarratorResponse: false,
 							content: params.content,
-							createdAt: new Date().toISOString(),
+							createdAt: new Date(),
 							updatedAt: new Date(),
 							isEdited: false,
 							metadata: {},
@@ -8075,17 +8881,29 @@ export const sessionsFireTurnHandler: Handler<
 				 * always did. Only a press reaches here — auto-advance never
 				 * does — so an always-empty order cannot loop.
 				 */
-				const { carryOnEntry } = await import(
+				const { carryOnEntry, sentSinceReply } = await import(
 					"$lib/server/sessions/fireTurn"
 				)
 				const pressedOnMain = isSameChannel(pressedOn, "main")
-				const wanted =
+				const prepared =
 					params.entry ??
 					firstOn(pressedOn) ??
-					(pressedOnMain ? undefined : head) ??
-					(access.isOwner
-						? await carryOnEntry(db, params.sessionId)
-						: null)
+					(pressedOnMain ? undefined : head)
+				/**
+				 * 🚧 A guest who has moved since the story last did may carry
+				 * it on too (feature 17, D4, 2026-10-15): Dungeon Crawler's
+				 * round waits for everyone, and Continue from a player who
+				 * has declared resolves it early. One who has not is refused
+				 * below, as any guest with nothing prepared always was.
+				 */
+				const carriedOn =
+					!prepared &&
+					(access.isOwner ||
+						(pressedOnMain &&
+							(await sentSinceReply(db, params.sessionId, userId))))
+				const wanted =
+					prepared ??
+					(carriedOn ? await carryOnEntry(db, params.sessionId) : null)
 				if (!wanted)
 					return reply({
 						sessionId: params.sessionId,
@@ -8103,7 +8921,7 @@ export const sessionsFireTurnHandler: Handler<
 				 */
 				const seated = order.find((e) => sameEntry(e, wanted)) ?? wanted
 
-				if (!access.isOwner) {
+				if (!access.isOwner && !carriedOn) {
 					// The head of its own channel (R5): the order's head, or
 					// the first entry on another channel — the one a guest's
 					// Continue on that channel's composer fires.
@@ -8252,6 +9070,12 @@ export const sessionsRetakeTurnHandler: Handler<
 			try {
 				const access = await checkSessionAccess(params.sessionId, userId)
 				if (!access.hasAccess) return refuse("Session not found.")
+				// 🚧 Busy only with what nobody watches stream — a background
+				// step after the turn, its children settling: the press waits a
+				// beat for it, never "wait for the reply to finish" with nothing
+				// running (PLAN-dc-after-walk2 Q1-4, the walk's N9).
+				const { settleBackgroundRuns } = await import("$lib/server/pipelines/entities/publishedValues")
+				await settleBackgroundRuns(db, params.sessionId)
 				const refusal = await turnControlRefusal(
 					db,
 					params.sessionId,
@@ -8292,12 +9116,20 @@ export const sessionsRetakeTurnHandler: Handler<
 					characterId: r.characterId,
 					name: r.name
 				}))
+				// 🚧 On revision `branch` (PLAN-rulesets §28): the turn was
+				// taken again in a new session — the list gains it.
+				if (out.branchedTo != null) {
+					await relistSessions(socket, emitToUser)
+					broadcastSessionRow(socket.io, out.branchedTo)
+				}
 				return reply({
 					sessionId: params.sessionId,
 					ok: out.ok,
 					...(out.preview ? { preview: true } : {}),
 					...(rows ? { rows } : {}),
 					...(out.runId ? { runId: out.runId } : {}),
+					...(out.revision ? { revision: out.revision } : {}),
+					...(out.branchedTo != null ? { branchedTo: out.branchedTo } : {}),
 					...(out.error ? { error: out.error } : {})
 				})
 			} catch (error) {
@@ -9039,6 +9871,7 @@ export function registerSessionHandlers(
 	register(socket, sessionsPanelLayoutGetHandler, emitToUser)
 	register(socket, sessionsMessagesPageHandler, emitToUser)
 	register(socket, sessionsChannelLanesHandler, emitToUser)
+	register(socket, sessionsLaneReadHandler, emitToUser)
 	register(socket, sessionsPanelLayoutSetHandler, emitToUser)
 	register(socket, sessionsPanelLayoutStartFromHandler, emitToUser)
 	register(socket, sessionsPanelLayoutStartedFromUpdatedHandler, emitToUser)
@@ -9052,6 +9885,7 @@ export function registerSessionHandlers(
 	register(socket, sessionsLayoutPresetSetNewSessionLayoutHandler, emitToUser)
 	register(socket, sessionsPipelinesHandler, emitToUser)
 	register(socket, sessionsPresetStatusHandler, emitToUser)
+	register(socket, sessionsSetSessionPresetHandler, emitToUser)
 	register(socket, sessionsFireActionHandler, emitToUser)
 	register(socket, sessionsPresetsHandler, emitToUser)
 	register(socket, sessionsChoosePresetHandler, emitToUser)
@@ -9071,6 +9905,10 @@ export function registerSessionHandlers(
 	register(socket, sessionsAddGuestHandler, emitToUser)
 	register(socket, sessionsRemoveGuestHandler, emitToUser)
 	register(socket, sessionsBranchHandler, emitToUser)
+	register(socket, sessionsCreateLorebookFromPhantomHandler, emitToUser)
+	register(socket, sessionsOverlayItemsHandler, emitToUser)
+	register(socket, sessionsApplyOverlayHandler, emitToUser)
+	register(socket, sessionsRevisionNoticeHandler, emitToUser)
 	register(socket, sessionsReassignRemovedParticipantHandler, emitToUser)
 	register(socket, sessionMessagesSendPersonaMessageHandler, emitToUser)
 	register(socket, sessionMessagesUpdateHandler, emitToUser)

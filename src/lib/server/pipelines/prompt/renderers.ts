@@ -60,6 +60,13 @@ export interface RenderRun {
 	runId?: string
 	/** Who triggered the run, for the invocation log and the live monitor. */
 	user?: string
+	/**
+	 * The run's seed (the one recorded on the run row), for a binding that
+	 * labels seeded work with it — the ruleset handler's derive pass and
+	 * scripts (audit A15), so a replay with the recorded seed derives the
+	 * same. Core's renderer ignores it.
+	 */
+	seed?: string
 }
 
 export interface RenderContext extends RenderRun {

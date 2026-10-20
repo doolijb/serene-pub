@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest"
 import type { SpecDocument } from "@serene-pub/sdk"
 import {
-	ADVENTURE_RESPOND_SPEC_ID,
+	STORY_RESPOND_SPEC_ID,
 	CORE_SPECS,
 	LAIR_RESPOND_SPEC_ID
 } from "@serene-pub/core-catalog"
@@ -21,8 +21,8 @@ const build = (slug: string): SpecDocument => {
 }
 
 describe("lineOf", () => {
-	test("every node and clause of the adventure reply lands on the line exactly once", () => {
-		const doc = build(ADVENTURE_RESPOND_SPEC_ID)
+	test("every node and clause of Story's reply lands on the line exactly once", () => {
+		const doc = build(STORY_RESPOND_SPEC_ID)
 		const model = lineOf(doc)
 		const flat = flatRows(model.rows)
 		const keys = flat.map((r) => r.key)
@@ -32,7 +32,7 @@ describe("lineOf", () => {
 	})
 
 	test("a gather opens into its chains, each chain in position order", () => {
-		const model = lineOf(build(ADVENTURE_RESPOND_SPEC_ID))
+		const model = lineOf(build(STORY_RESPOND_SPEC_ID))
 		const gather = model.rows.find((r) => r.kind === "clause" && r.key === "gather")
 		expect(gather?.kind).toBe("clause")
 		if (gather?.kind !== "clause") return
@@ -65,7 +65,7 @@ describe("lineOf", () => {
 
 describe("portsOf", () => {
 	test("a node's in ports name their sources and its out ports their consumers", () => {
-		const doc = build(ADVENTURE_RESPOND_SPEC_ID)
+		const doc = build(STORY_RESPOND_SPEC_ID)
 		const ports = portsOf(doc, "gather.history.read")
 		const scope = ports.in.find((p) => p.port === "scope")
 		expect(scope?.from).toBe("input.sessionScope")
@@ -77,14 +77,14 @@ describe("portsOf", () => {
 	})
 
 	test("a clause's in ports are its own refs — what an each iterates over", () => {
-		const doc = build(ADVENTURE_RESPOND_SPEC_ID)
+		const doc = build(STORY_RESPOND_SPEC_ID)
 		const each = doc.clauses.find((c) => c.kind === "each")!
 		const ports = portsOf(doc, each.id)
 		expect(ports.in.some((p) => p.port === "over")).toBe(true)
 	})
 
 	test("edges come before slots, slots before literals", () => {
-		const doc = build(ADVENTURE_RESPOND_SPEC_ID)
+		const doc = build(STORY_RESPOND_SPEC_ID)
 		const ports = portsOf(doc, "contextBudget")
 		const order = ports.in.map((p) => p.source)
 		const firstSlot = order.indexOf("slot")
@@ -97,15 +97,15 @@ describe("portsOf", () => {
 
 describe("diffOf", () => {
 	test("a document against itself marks nothing", () => {
-		const doc = build(ADVENTURE_RESPOND_SPEC_ID)
+		const doc = build(STORY_RESPOND_SPEC_ID)
 		const d = diffOf(doc, doc)
 		expect(d.marks.size).toBe(0)
 	})
 
 	test("a removed node, an added node and a changed config each get their mark", () => {
-		const base = build(ADVENTURE_RESPOND_SPEC_ID)
+		const base = build(STORY_RESPOND_SPEC_ID)
 		const next: SpecDocument = JSON.parse(JSON.stringify(base))
-		next.nodes = next.nodes.filter((n) => n.key !== "place")
+		next.nodes = next.nodes.filter((n) => n.key !== "sceneNow")
 		next.nodes.push({
 			...next.nodes.find((n) => n.key === "rank")!,
 			key: "rerank",
@@ -113,10 +113,10 @@ describe("diffOf", () => {
 		})
 		next.nodes.find((n) => n.key === "rank")!.config = { changed: true }
 		const d = diffOf(base, next)
-		expect(d.marks.get("place")).toBe("removed")
+		expect(d.marks.get("sceneNow")).toBe("removed")
 		expect(d.marks.get("rerank")).toBe("added")
 		expect(d.marks.get("rank")).toBe("changed")
-		expect(d.removed).toEqual(["place"])
+		expect(d.removed).toEqual(["sceneNow"])
 	})
 })
 
@@ -139,7 +139,7 @@ describe("receiptIndex", () => {
 	})
 
 	test("a clause's status is the worst of its members'", () => {
-		const model = lineOf(build(ADVENTURE_RESPOND_SPEC_ID))
+		const model = lineOf(build(STORY_RESPOND_SPEC_ID))
 		const each = [...model.clauses.values()].find((c) => c.kind === "each")!
 		const member = [...model.pathOf.entries()].find(
 			([k, path]) => path.includes(each.id) && model.nodes.has(k)

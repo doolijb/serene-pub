@@ -122,7 +122,7 @@ async function processCharacterTags(
 		(tagName) => !existingTagNames.includes(tagName)
 	)
 
-	// Remove tags that are no longer in the list
+	// Remove tags that are not in the list
 	if (tagsToRemove.length > 0) {
 		const tagIdsToRemove = tagsToRemove.map((ct) => ct.tagId)
 		await dbOrTx
@@ -2126,7 +2126,7 @@ export const charactersSetAvatar: Handler<
 		// put a URL), but the ownership check still matters: without it a
 		// client could name someone else's media id.
 		//
-		// The `variant IS NULL` filter this used to carry is gone with 0182:
+		// No `variant IS NULL` filter here (0182):
 		// a stored representation has no id in this space and no provenance
 		// at all, so a `characterId` match can only ever be a file.
 		const owned = await db.query.files.findFirst({

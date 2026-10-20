@@ -192,6 +192,23 @@ export async function replaceBlocksPart(
 }
 
 /**
+ * 🚧 A text form's answer as one line of words — what "Answered · Ann" shows
+ * (Dungeon Crawler walk round 2, 2026-10-15: a text answer showed only
+ * "Answered"). The payload's scalar values in field order, joined by ", ",
+ * capped at 120 characters; null when it holds none.
+ */
+export function formAnswerText(payload: unknown): string | null {
+	if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null
+	const words = Object.values(payload as Record<string, unknown>)
+		.filter((v) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
+		.map((v) => String(v).trim())
+		.filter(Boolean)
+	if (!words.length) return null
+	const line = words.join(", ")
+	return line.length > 120 ? `${line.slice(0, 119)}…` : line
+}
+
+/**
  * Mark a form answered (U5d review, W7): the `core:blocks` part carrying
  * block `blockId` is updated **in place** with `answered` set on that block —
  * who (the addressee when the form was addressed, else the user who

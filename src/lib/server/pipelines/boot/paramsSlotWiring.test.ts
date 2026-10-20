@@ -353,7 +353,7 @@ describe("the walk is capable of the measurement it is used for", () => {
 			result.wired.some(
 				(f) =>
 					f.key ===
-					'core:spec/chat-respond node "gather.history.read" slot "params"'
+					'core:spec/story-respond node "gather.history.read" slot "params"'
 			),
 			"`respond`'s history node must show up as wired. Either the " +
 				"matcher stopped recognising the SlotRef shape, or the history " +
@@ -468,9 +468,9 @@ describe("every declared slot is named by the spec that uses it", () => {
 	it("the semantic arm's queries step wires its own embedding connection", () => {
 		const wired = new Set(result.wired.map((f) => f.key))
 		for (const slug of [
-			"core:spec/chat-respond",
-			"core:spec/chat-narrate",
-			"core:spec/chat-side-character"
+			"core:spec/story-respond",
+			"core:spec/story-narrate",
+			"core:spec/story-side-character"
 		])
 			expect(
 				wired.has(
@@ -497,9 +497,9 @@ describe("every declared slot is named by the spec that uses it", () => {
 	it("all three reply specs wire the generate node's connection, sampling and params", () => {
 		const wired = new Set(result.wired.map((f) => f.key))
 		const missing = [
-			"core:spec/chat-respond",
-			"core:spec/chat-narrate",
-			"core:spec/chat-side-character"
+			"core:spec/story-respond",
+			"core:spec/story-narrate",
+			"core:spec/story-side-character"
 		]
 			.flatMap((slug) =>
 				["connection", "sampling", "params"].map(
@@ -526,7 +526,7 @@ describe("every declared slot is named by the spec that uses it", () => {
 			"gather.relationshipsKnown.read"
 		])
 			expect(
-				wired.has(`core:spec/chat-respond node "${node}" slot "params"`),
+				wired.has(`core:spec/story-respond node "${node}" slot "params"`),
 				`${node} does not name its params slot — capRelationships is ` +
 					`back to being called with undefined on every turn`
 			).toBe(true)
@@ -544,7 +544,7 @@ describe("every declared slot is named by the spec that uses it", () => {
 	it("the image spec wires the render node's params slot", () => {
 		const wired = new Set(result.wired.map((f) => f.key))
 		expect(
-			wired.has('core:spec/chat-generate-image node "render" slot "params"'),
+			wired.has('core:spec/story-generate-image node "render" slot "params"'),
 			"the render node does not name its params slot — `streaming` is a " +
 				"control that stores and is never read"
 		).toBe(true)
@@ -570,7 +570,7 @@ describe("the check fails when a slot goes unwired", () => {
 			...d,
 			nodes: d.nodes.map((n) => ({ ...n, config: { ...n.config } }))
 		}))
-		const respond = docs.find((d) => d.id === "core:spec/chat-respond")!
+		const respond = docs.find((d) => d.id === "core:spec/story-respond")!
 		const history = respond.nodes.find(
 			(n) => n.key === "gather.history.read"
 		)!
@@ -583,7 +583,7 @@ describe("the check fails when a slot goes unwired", () => {
 		const broken = walk(docs)
 		const sentences = broken.findings.map((f) => f.sentence)
 		expect(sentences).toContain(
-			`core:spec/chat-respond@${respond.version} node "gather.history.read" ` +
+			`core:spec/story-respond@${respond.version} node "gather.history.read" ` +
 				`(core:query/session-history@1) declares a params slot the spec ` +
 				`never wires — the control renders and does nothing.`
 		)
@@ -591,7 +591,7 @@ describe("the check fails when a slot goes unwired", () => {
 		expect(
 			broken.findings.filter((f) => !LEDGER.has(f.key)).map((f) => f.key)
 		).toEqual([
-			'core:spec/chat-respond node "gather.history.read" slot "params"'
+			'core:spec/story-respond node "gather.history.read" slot "params"'
 		])
 	})
 })

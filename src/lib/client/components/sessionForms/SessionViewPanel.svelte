@@ -10,6 +10,7 @@
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { lastActivityAt, timeAgo } from "$lib/client/utils/timeAgo"
+	import { branchOf, branchOfLabel } from "$lib/shared/sessions/branchOf"
 
 	interface Props {
 		sessionId: number
@@ -97,6 +98,35 @@
 		return release
 	})
 
+	/**
+	 * 🚧 The overlay's items (PLAN-rulesets §26): what this session wrote to
+	 * its own notes while reading a lorebook it may not write, each "this
+	 * session only" until applied to the lorebook. Empty with no lorebook.
+	 */
+	let overlayItems = $state<Sockets.Sessions.OverlayItems.Item[]>([])
+	$effect(() => {
+		const id = sessionId
+		overlayItems = []
+		const onItems = (res: Sockets.Sessions.OverlayItems.Response) => {
+			if (res.sessionId === id) overlayItems = res.items ?? []
+		}
+		const releaseItems = declareInterest<"sessions:overlayItems">("sessions:overlayItems", onItems)
+		const releaseApplied = declareInterest<"sessions:applyOverlay">("sessions:applyOverlay", () => {})
+		socket.emit("sessions:overlayItems", {
+			sessionId: id
+		} satisfies Sockets.Sessions.OverlayItems.Params)
+		return () => {
+			releaseItems()
+			releaseApplied()
+		}
+	})
+	function applyOverlay(entryIds?: number[]) {
+		socket.emit("sessions:applyOverlay", {
+			sessionId,
+			...(entryIds ? { entryIds } : {})
+		} satisfies Sockets.Sessions.ApplyOverlay.Params)
+	}
+
 	let characters = $derived(
 		(session as any)?.sessionCharacters
 			?.map((cc: any) => cc.character)
@@ -109,6 +139,18 @@
 	)
 	let tags = $derived((session as any)?.tags ?? [])
 	let lorebookId = $derived((session as any)?.lorebookId ?? null)
+
+	/**
+	 * 🚧 Set when "Create lorebook from session" is chosen: the reply re-sends
+	 * the session, and the book it now reads is opened once it lands (the
+	 * toast is the server's, through the central `success` path).
+	 */
+	let openCreatedBook = $state(false)
+	$effect(() => {
+		if (!openCreatedBook || lorebookId == null) return
+		openCreatedBook = false
+		onViewLorebook?.(lorebookId)
+	})
 	/**
 	 * The book's own name, when the payload joined it. `sessions:get` carries
 	 * `lorebookId` and no lorebook row, so today this is null and the card is
@@ -136,6 +178,9 @@
 	let heroMeta = $derived.by(() => {
 		const parts: string[] = []
 		if (genreName) parts.push(genreName)
+		// 🚧 The branch marker: which session this one was branched from.
+		const branchMark = branchOfLabel(branchOf((session as any)?.metadata))
+		if (branchMark) parts.push(branchMark)
 		if (messageCount != null) {
 			parts.push(
 				`${messageCount} ${messageCount === 1 ? "message" : "messages"}`
@@ -174,6 +219,21 @@
 					label: isFavorite ? "Unstar" : "Star",
 					icon: isFavorite ? Icons.StarOff : Icons.Star,
 					onSelect: () => onToggleFavorite?.(sessionId, !isFavorite)
+				},
+			// 🚧 Create lorebook from session (PLAN-rulesets §26): the
+			// session's own notes become a lorebook it reads. Owner-only,
+			// and only while it reads none; the reply re-sends the session,
+			// so "View lorebook" takes this item's place.
+			isOwner &&
+				lorebookId == null && {
+					label: "Create lorebook from session",
+					icon: Icons.BookPlus,
+					onSelect: () => {
+						openCreatedBook = true
+						socket.emit("sessions:createLorebookFromPhantom", {
+							sessionId
+						} satisfies Sockets.Sessions.CreateLorebookFromPhantom.Params)
+					}
 				},
 			isOwner && onDelete && { separator: true },
 			isOwner &&
@@ -303,6 +363,41 @@
 								</button>
 							{/if}
 						</div>
+					</section>
+				{/if}
+
+				{#if lorebookId != null && overlayItems.length > 0}
+					<section class="panel-card" aria-label="This session only">
+						<div class="mb-1.5 flex items-center gap-2">
+							<p class="text-surface-600-400 text-xs">This session only</p>
+							{#if isOwner && overlayItems.length > 1}
+								<button
+									class="btn btn-sm preset-tonal-surface ml-auto"
+									onclick={() => applyOverlay()}
+									type="button"
+								>
+									Apply all to the lorebook
+								</button>
+							{/if}
+						</div>
+						<ul class="flex flex-col gap-1.5">
+							{#each overlayItems as item (item.entryId)}
+								<li class="flex min-w-0 items-center gap-2">
+									<span class="min-w-0 flex-1 truncate text-sm">
+										{item.title || "Untitled entry"}
+									</span>
+									{#if isOwner}
+										<button
+											class="btn btn-sm preset-tonal-surface shrink-0"
+											onclick={() => applyOverlay([item.entryId])}
+											type="button"
+										>
+											Apply to the lorebook
+										</button>
+									{/if}
+								</li>
+							{/each}
+						</ul>
 					</section>
 				{/if}
 

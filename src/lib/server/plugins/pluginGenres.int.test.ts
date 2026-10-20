@@ -257,7 +257,7 @@ describe("plugin genres (stored manifest → registries)", () => {
 		)
 		expect((await listOfferedGenres(testDb as unknown as Db)).some((g) => g.genreId === GENRE)).toBe(true)
 		// Adventure lets a session add attributes beyond its own.
-		const s = await session("core:genre/adventure")
+		const s = await session("core:genre/story")
 		expect((await addable(s.id, s.userId)).includes(ASKED)).toBe(true)
 
 		await setEnabled(false)

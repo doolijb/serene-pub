@@ -15,6 +15,8 @@
 	import SessionAttributes from "./SessionAttributes.svelte"
 	import SessionAnnexPanel from "./SessionAnnexPanel.svelte"
 	import RetakeAskSetting from "./RetakeAskSetting.svelte"
+	import RulesOptions from "./RulesOptions.svelte"
+	import { asksHowStrict, howStrictChoices } from "$lib/shared/rulesets/rulesOffer"
 	import SessionLorebookReading from "./SessionLorebookReading.svelte"
 	import type { StoryClock } from "$lib/shared/lorebooks/storyDate"
 	import { stripUnmovedReading } from "./sessionReadingPatch"
@@ -29,6 +31,7 @@
 	import type { SceneSettingsDecl } from "@serene-pub/sdk"
 	import SessionSceneSettings from "./SessionSceneSettings.svelte"
 	import SessionStepSettings from "./SessionStepSettings.svelte"
+	import SessionPresetControl from "./SessionPresetControl.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
 		declareInterest,
@@ -60,12 +63,13 @@
 	import PanelTabStrip from "../panels/PanelTabStrip.svelte"
 	import { actionIdentity } from "$lib/shared/actions/identity"
 	import { characterSummary } from "$lib/shared/characters/characterSummary"
+	import { isCardlessPlayerSeat } from "$lib/shared/sessions/playerSeat"
 
 	// The F29 floor (19 §2) — stated here rather than imported from the
 	// server-only sessionModes module. When "sessions:genres" returns nothing (a
 	// registry that never synced), the form behaves exactly as before modes
 	// existed: no picker, every section shown, today's save rules.
-	const STANDARD_GENRE_ID = "core:genre/chat"
+	const STANDARD_GENRE_ID = "core:genre/story" // Story since 2026-10-19 (was Chat, now the assistant)
 
 	// Zod validation schema
 	const sessionSchema = z.object({
@@ -91,6 +95,11 @@
 		 * row click there leaves through the view's unsaved-changes gate.
 		 */
 		showBack?: boolean
+		/**
+		 * 🚧 The tab the form opens on (2026-10-18): the session header's
+		 * **Session settings** opens it on Settings. Absent: Participants.
+		 */
+		initialTab?: "participants" | "settings" | "visibility"
 	}
 
 	let {
@@ -98,7 +107,8 @@
 		showEditSessionForm = $bindable(),
 		hasChanges = $bindable(false),
 		onClose,
-		showBack = false
+		showBack = false,
+		initialTab
 	}: Props = $props()
 
 	const socket = useTypedSocket()
@@ -146,6 +156,8 @@
 					tags: string[]
 					genreId?: string
 					genreFields?: Record<string, unknown>
+					onRevision?: "overwrite" | "branch"
+					rigour?: string | null
 				}
 				characterIds: number[]
 				personaIds: number[]
@@ -155,6 +167,8 @@
 				playerLabel: string
 				/** 🚧 The scene settings override (live scenes §4–§5), as JSON; "null" = the genre's. */
 				sceneSettings: string
+				/** 🚧 The live card-less player seats, by id, with their names. */
+				playerSeats: Array<{ id: number; name: string }>
 		  }
 		| undefined = $state()
 
@@ -168,6 +182,8 @@
 					tags: string[]
 					genreId?: string
 					genreFields?: Record<string, unknown>
+					onRevision?: "overwrite" | "branch"
+					rigour?: string | null
 				}
 				characterIds: number[]
 				personaIds: number[]
@@ -177,6 +193,8 @@
 				playerLabel: string
 				/** 🚧 The scene settings override (live scenes §4–§5), as JSON; "null" = the genre's. */
 				sceneSettings: string
+				/** 🚧 The live card-less player seats, by id, with their names. */
+				playerSeats: Array<{ id: number; name: string }>
 		  }
 		| undefined = $state()
 
@@ -197,8 +215,40 @@
 
 	// CHAT MODE (19 §2, U-C2)
 	let modesList: Sockets.Sessions.Genres.Response["genres"] = $state([])
+	/** 🚧 The genre's session presets (2026-10-19): the Preset control and the pins under the tasks field. */
+	let sessionPresetRows: Sockets.SessionAdmin.PresetRow[] = $state([])
+	$effect(() =>
+		requestWithInterest("sessionPresets:list", {}, (msg: any) => {
+			sessionPresetRows = msg?.presets ?? []
+		})
+	)
+	const sessionPresetPins = $derived(
+		((sessionPresetRows.find((p) => p.id === (session as any)?.presetId)?.settings ?? null) as Record<string, unknown> | null)
+	)
 	let genreId: string = $state(STANDARD_GENRE_ID)
 	let genreFields: Record<string, unknown> = $state({})
+	/**
+	 * 🚧 **On revision** (PLAN-rulesets §28): what deleting or regenerating
+	 * the latest turn does — overwrite it, or branch the session there. A
+	 * session setting for every genre, not a genre field.
+	 */
+	let onRevision: "overwrite" | "branch" = $state("overwrite")
+	/**
+	 * 🚧 **How strict** (PLAN-rulesets §21; NOMENCLATURE §28): one of the
+	 * genre's options, changeable mid-session (ruled). Sent only when moved
+	 * here. Not asked of a genre with one option (Chat).
+	 */
+	let rigour: string | null = $state(null)
+	const rulesOffer = $derived(
+		modesList.find((m) => m.genreId === genreId)?.rules ?? null
+	)
+	// 🚧 Only what the session's rules play (2026-10-18): Story, Words only.
+	const howStrictOptions = $derived(
+		howStrictChoices(
+			rulesOffer,
+			(session as { primaryRuleset?: string | null } | null | undefined)?.primaryRuleset ?? null
+		)
+	)
 	/**
 	 * What this session calls a person's own lines (lair re-plan R4): its
 	 * override, blank for the genre's `playerLabel`. Offered only when the
@@ -239,16 +289,8 @@
 	// floor even though its shape says min 0 — the shape states what the
 	// *server* permits, and relaxing the form here would change today's
 	// creation UX, which the parity posture forbids.
-	let charactersFloor = $derived(
-		!modeShape || genreId === STANDARD_GENRE_ID
-			? 1
-			: (modeShape.characters?.min ?? 0)
-	)
-	let personasFloor = $derived(
-		!modeShape || genreId === STANDARD_GENRE_ID
-			? 1
-			: (modeShape.personas?.min ?? 0)
-	)
+	let charactersFloor = $derived(!modeShape ? 1 : (modeShape.characters?.min ?? 0))
+	let personasFloor = $derived(!modeShape ? 1 : (modeShape.personas?.min ?? 0))
 	// The mode's declared per-session fields (SettingsSchema), rendered through
 	// the one schema renderer in session settings.
 	let modeFieldDecls = $derived(modeShape?.fields ?? {})
@@ -256,6 +298,11 @@
 	let activeSessionTab = $state<"participants" | "settings" | "visibility">(
 		"participants"
 	)
+	// 🚧 The tab an opener named (the session header's Session settings):
+	// taken whenever it names one, so a second ask lands there again.
+	$effect(() => {
+		if (initialTab) activeSessionTab = initialTab
+	})
 
 	// The pipelines involved in this chat (respond + enabled contributed
 	// functions like narrate), each rendered as its own settings card at
@@ -318,7 +365,8 @@
 		!!(
 			data?.session.name.trim() &&
 			(data?.characterIds.length ?? 0) >= charactersFloor &&
-			(data?.personaIds.length ?? 0) >= personasFloor
+			(data?.personaIds.length ?? 0) + (data?.playerSeats.length ?? 0) >=
+				personasFloor
 		)
 	)
 
@@ -336,6 +384,14 @@
 	let selectedCharacters: (Partial<SelectCharacter> & { id: number })[] =
 		$state([])
 	let selectedPersonas: (Partial<SelectCharacter> & { id: number })[] =
+		$state([])
+	/**
+	 * 🚧 The session's card-less player seats (`isCardlessPlayerSeat`): a
+	 * player character with no card, shown by its seat name — renamed or
+	 * removed here, committed by Save (`playerSeatChanges`). `userId` is the
+	 * seat's player: a guest edits only their own.
+	 */
+	let playerSeats: Array<{ id: number; name: string; userId: number | null }> =
 		$state([])
 	/**
 	 * The guests the form wants. A pending change like the cast (note 34):
@@ -411,7 +467,7 @@
 			icon: Icons.UsersRound,
 			hasError:
 				selectedCharacters.length < charactersFloor ||
-				selectedPersonas.length < personasFloor
+				selectedPersonas.length + playerSeats.length < personasFloor
 		},
 		{
 			value: "settings",
@@ -468,6 +524,7 @@
 		const _scenario = scenario.trim()
 		const _selectedCharacters = selectedCharacters
 		const _selectedPersonas = selectedPersonas
+		const _playerSeats = playerSeats.map((p) => ({ id: p.id, name: p.name.trim() }))
 		const _selectedGuests = selectedGuests
 		const _lorebookId = lorebookId || null
 		// Where it reads the book travels only with the book it was chosen
@@ -492,6 +549,8 @@
 		const _tags = selectedTags
 		const _genreId = genreId
 		const _genreFields = JSON.parse(JSON.stringify(genreFields))
+		const _onRevision = onRevision
+		const _rigour = rigour
 		const _playerLabel = playerLabelOverride.trim()
 		const _sceneSettings = JSON.stringify(sceneOverride ?? null)
 		data = {
@@ -503,7 +562,9 @@
 				..._reading,
 				tags: _tags,
 				genreId: _genreId,
-				genreFields: _genreFields
+				genreFields: _genreFields,
+				onRevision: _onRevision,
+				rigour: _rigour
 			},
 			characterIds: _selectedCharacters.map((cc) => cc.id),
 			personaIds: _selectedPersonas.map((cp) => cp.id),
@@ -512,7 +573,8 @@
 				_selectedCharacters.map((cc, i) => [cc.id, i])
 			),
 			playerLabel: _playerLabel,
-			sceneSettings: _sceneSettings
+			sceneSettings: _sceneSettings,
+			playerSeats: _playerSeats
 		}
 
 		if (!originalData) {
@@ -625,14 +687,49 @@
 					"Unknown"
 			}))
 	)
+	/**
+	 * 🚧 A seat its character's death retired (PLAN-dc-after-walk3 R3-2, the
+	 * walk's NEW-12): a genre retires a seat only when its player makes a
+	 * new character after a death (`set-seat-name`'s `retire`) — the seat
+	 * leaves, and a NEW card-less seat of the same player follows it. Such a
+	 * seat keeps its history where it is, the fallen character's: it is
+	 * listed under **The fallen**, never as "removed" with a Reassign that
+	 * would hand the dead hero's lines to somebody else. (A retired seat is
+	 * in no state any more, so its fate row cannot be read here.)
+	 */
+	const fellInStory = (cp: { id: number; removedAt?: unknown; personaId?: number | null; userId?: number | null; persona?: { userId?: number | null } | null }): boolean => {
+		if (!cp.removedAt) return false
+		const player = cp.userId ?? cp.persona?.userId ?? null
+		if (player == null) return false
+		return (session?.sessionPersonas ?? []).some(
+			(o) => o.id > cp.id && !o.removedAt && o.personaId == null && o.userId === player
+		)
+	}
 	let removedPersonas = $derived(
 		(session?.sessionPersonas || [])
-			.filter((cp) => cp.removedAt)
+			// A removed card-less player seat has no card to reassign from.
+			.filter((cp) => cp.removedAt && cp.personaId != null && !fellInStory(cp))
 			.map((cp) => ({
 				id: cp.personaId!,
 				name: cp.persona?.name || cp.removedName || "Unknown"
 			}))
 	)
+	/** 🚧 The seats a death retired, by the name they fell under (R3-2). */
+	let fallenSeats = $derived(
+		(session?.sessionPersonas || [])
+			.filter((cp) => cp.removedAt && fellInStory(cp))
+			.map((cp) => ({
+				id: cp.id,
+				name: cp.persona?.name || cp.removedName || cp.seatName?.trim() || "Unknown"
+			}))
+	)
+	/** 🚧 Whose a card-less seat is, said in its place of "No card" (R3-2). */
+	const seatPlayerWords = (userId: number | null): string => {
+		if (userId != null && userId === userCtx.user?.id) return "Your character"
+		const guest = selectedGuests.find((g) => g.userId === userId)
+		const who = guest?.user?.displayName?.trim() || guest?.user?.username?.trim()
+		return who ? `${who}'s character` : "A player's character"
+	}
 
 	function openReassignModal(
 		type: "character" | "persona",
@@ -734,7 +831,7 @@
 		if (
 			!data?.session.name.trim() ||
 			selectedCharacters.length < charactersFloor ||
-			selectedPersonas.length < personasFloor
+			selectedPersonas.length + playerSeats.length < personasFloor
 		)
 			return
 		// Ensure data is synced with current selections
@@ -774,6 +871,9 @@
 		// save of the tab (#136).
 		const was = (originalData?.session ?? {}) as Record<string, unknown>
 		stripUnmovedReading(sent, was)
+		// How strict goes only when moved here: a stored value a genre no
+		// longer offers is never posted back to be refused.
+		if ((sent.rigour ?? null) === (was.rigour ?? null)) delete sent.rigour
 		// Genre fields go only as the person changed them here, field by
 		// field (2026-10-03): the server merges them over what is stored, so
 		// an author's note saved from its widget while this form was open is
@@ -785,7 +885,21 @@
 		)
 		if (fieldsPatch) sent.genreFields = fieldsPatch
 		else delete sent.genreFields
-		const { playerLabel, sceneSettings, ...rest } = data!
+		const { playerLabel, sceneSettings, playerSeats: seatsNow, ...rest } =
+			data!
+		// 🚧 Card-less player seats: the ones gone are removed, a changed
+		// non-blank name renames (a blank one keeps the saved name).
+		const seatsWas = originalData?.playerSeats ?? []
+		type SeatChange = NonNullable<
+			Sockets.Sessions.Update.Params["playerSeatChanges"]
+		>[number]
+		const playerSeatChanges = seatsWas.flatMap((was): SeatChange[] => {
+			const now = seatsNow.find((p) => p.id === was.id)
+			if (!now) return [{ playerSeatId: was.id, remove: true }]
+			return now.name && now.name !== was.name
+				? [{ playerSeatId: was.id, seatName: now.name }]
+				: []
+		})
 		// 🚧 The scene settings go only when the person changed them here.
 		const scenesMoved =
 			sceneSettings !== (originalData?.sceneSettings ?? "null")
@@ -796,7 +910,8 @@
 			...(genrePlayerLabel ? { playerLabel } : {}),
 			...(scenesMoved
 				? { sceneSettings: JSON.parse(sceneSettings) as SceneSettingsDecl | null }
-				: {})
+				: {}),
+			...(playerSeatChanges.length ? { playerSeatChanges } : {})
 		}
 		// Participant writes first: their answers are counted, and the
 		// update's answer closes the form only once they are all in.
@@ -935,10 +1050,19 @@
 				session.sessionCharacters
 					?.filter((cc) => !cc.removedAt)
 					.map((cc) => cc.character) || []
+			// A card-less player seat has no card (`persona` null): it is
+			// listed by its seat name below, never as a persona.
 			selectedPersonas =
 				session.sessionPersonas
-					?.filter((cp) => !cp.removedAt)
-					.map((cp) => cp.persona) || []
+					?.filter((cp) => !cp.removedAt && cp.persona)
+					.map((cp) => cp.persona!) || []
+			playerSeats = (session.sessionPersonas ?? [])
+				.filter((cp) => isCardlessPlayerSeat(cp))
+				.map((cp) => ({
+					id: cp.id,
+					name: cp.seatName?.trim() ?? "",
+					userId: cp.userId ?? null
+				}))
 			selectedGuests = session.sessionGuests || []
 			activeDraft = {}
 			lorebookId = session.lorebookId || null
@@ -960,6 +1084,9 @@
 				string,
 				unknown
 			>
+			onRevision =
+				(session as any).onRevision === "branch" ? "branch" : "overwrite"
+			rigour = typeof (session as any).rigour === "string" ? (session as any).rigour : null
 			playerLabelOverride = storedPlayerLabel(session.metadata) ?? ""
 			sceneOverride = storedSceneSettings(session.metadata)
 			// Reset originalData to null so it gets re-initialized with the loaded data
@@ -1009,6 +1136,29 @@
 		if (msg.sessionId !== session?.id) return
 		if (msg.error)
 			toaster.error({ title: "Preset", description: msg.error })
+	}
+
+	/** 🚧 Make the session's own notes a lorebook it reads (2026-10-19). */
+	let makingBook = $state(false)
+	function makeBookFromNotes() {
+		if (!session?.id || makingBook) return
+		makingBook = true
+		const release = requestWithInterest(
+			"sessions:createLorebookFromPhantom",
+			{ sessionId: session.id },
+			(res) => {
+				release()
+				makingBook = false
+				if (res.error) {
+					toaster.error({ title: "Lorebook", description: res.error })
+					return
+				}
+				if (typeof res.lorebookId === "number") {
+					lorebookId = res.lorebookId
+					savedLorebookId = res.lorebookId
+				}
+			}
+		)
 	}
 
 	function choosePreset(value: string) {
@@ -1929,6 +2079,59 @@
 									</div>
 								{/each}
 							</div>
+							{#if playerSeats.length}
+								<ul
+									class="mb-2 flex flex-col gap-1"
+									aria-label="Player seats without a card"
+								>
+									{#each playerSeats as seat (seat.id)}
+										{@const mine =
+											!isGuest ||
+											seat.userId === userCtx.user?.id}
+										<li
+											class="border-surface-300 dark:border-surface-800 flex min-h-11 items-center gap-2 rounded-[10px] border p-2"
+										>
+											<Icons.UserRound
+												size={20}
+												class="text-surface-500 shrink-0"
+												aria-hidden="true"
+											/>
+											<div class="min-w-0 flex-1">
+												<input
+													class="input text-[15px]"
+													type="text"
+													id="player-seat-{seat.id}"
+													aria-label="Seat name"
+													bind:value={seat.name}
+													disabled={!mine}
+												/>
+												<div
+													class="text-surface-600-400 truncate text-xs select-none"
+												>
+													{seatPlayerWords(seat.userId)}
+												</div>
+											</div>
+											{#if mine}
+												<button
+													class="btn-ghost text-error-500 hover:bg-error-500/10 rounded p-1"
+													onclick={() =>
+														(playerSeats =
+															playerSeats.filter(
+																(p) =>
+																	p.id !==
+																	seat.id
+															))}
+													title="Remove from session"
+													aria-label="Remove {seat.name ||
+														'this seat'} from the session"
+												>
+													<Icons.X size={16} />
+												</button>
+											{/if}
+										</li>
+									{/each}
+								</ul>
+							{/if}
 							<button
 								class="btn btn-sm preset-tonal"
 								onclick={() => (showPersonaModal = true)}
@@ -1936,6 +2139,25 @@
 								<Icons.Plus size={16} aria-hidden="true" />
 								Add a persona
 							</button>
+						</section>
+					{/if}
+
+					{#if session && fallenSeats.length > 0}
+						<section class={CARD_CLASS}>
+							<h3 class="mb-1 text-sm font-medium">The fallen</h3>
+							<p class="text-surface-600-400 mb-2 text-xs">
+								Characters who died in the story. Their lines stay theirs.
+							</p>
+							<ul class="flex flex-col gap-2" aria-label="The fallen">
+								{#each fallenSeats as fallen (fallen.id)}
+									<li
+										class="border-surface-300 dark:border-surface-800 flex min-h-11 items-center gap-2 rounded-[10px] border p-2"
+									>
+										<Icons.Skull size={18} class="text-surface-500 shrink-0" aria-hidden="true" />
+										<span class="truncate text-sm">{fallen.name}</span>
+									</li>
+								{/each}
+							</ul>
 						</section>
 					{/if}
 
@@ -1993,7 +2215,8 @@
 						</section>
 					{/if}
 
-					{#if editSessionId && systemSettingsCtx?.settings?.isAccountsEnabled}
+					<!-- A solo genre (`GenreDecl.members`, ruled 2026-10-19) seats nobody else: no Guests card. -->
+					{#if editSessionId && systemSettingsCtx?.settings?.isAccountsEnabled && (modesList.find((m) => m.genreId === genreId) as any)?.members !== "solo"}
 						<section class={CARD_CLASS}>
 							<div
 								class="mb-3 flex items-center justify-between gap-2"
@@ -2163,6 +2386,27 @@
 										character lore and history entries from
 										this lorebook
 									</span>
+									<!-- 🚧 The session's own notes (PLAN-rulesets §26): kept while it reads
+									     no lorebook; made a real one here as well as from the session's
+									     menu in Sessions (2026-10-19: nobody found it there). -->
+									{#if session?.id && !isGuest && lorebookId == null && savedLorebookId == null}
+										<div class="mt-2 flex flex-col gap-1" data-testid="lorebook-from-notes">
+											<p class="text-surface-600-400 text-xs">
+												With no lorebook, this session keeps its own notes: the places,
+												people and history it writes down. Make them a lorebook to see and
+												edit them in Lorebooks; the session then reads it.
+											</p>
+											<button
+												type="button"
+												class="btn btn-sm preset-tonal self-start"
+												disabled={makingBook}
+												onclick={makeBookFromNotes}
+											>
+												<Icons.BookPlus size={16} aria-hidden="true" />
+												Make a lorebook from its notes
+											</button>
+										</div>
+									{/if}
 								</div>
 								{#if lorebookId != null && lorebookId === savedLorebookId}
 									<!-- Guests see where the session reads, read-only: the
@@ -2230,18 +2474,18 @@
 								class="text-surface-600-400 mb-1.5 block text-xs"
 								aria-hidden="true"
 							>
-								Preset · Applies at once
+								Configuration · Applies at once
 							</p>
 							<p
 								class="text-surface-600-400 mb-2 text-xs"
 								id="session-preset-help"
 							>
-								A starting recipe for this genre: the settings
-								and actions the session begins with. The
+								Which configuration of the reply pipeline this
+								session runs: its prompts and settings. The
 								default is fine.
 							</p>
 							<Select
-								label="Preset"
+								label="Configuration"
 								labelHidden
 								describedBy="session-preset-help"
 								options={presetOptions.map((p) => ({
@@ -2435,11 +2679,100 @@
 							<h3 class="mb-3 text-sm font-medium">
 								Genre settings
 							</h3>
+							{#if session?.id && !isGuest}
+								<SessionPresetControl
+									sessionId={session.id}
+									{genreId}
+									presetId={(session as any)?.presetId ?? null}
+									fields={genreFields}
+									tasks={(modesList.find((m) => m.genreId === genreId) as any)?.tasks ?? []}
+									presets={sessionPresetRows}
+									onapplied={() => {
+										const next = { ...genreFields }
+										delete next.tasks
+										delete next.tools
+										genreFields = next
+									}}
+								/>
+							{/if}
 							<SchemaForm
 								schema={modeFieldDecls as any}
 								bind:values={genreFields}
+								extras={{ tasks: (modesList.find((m) => m.genreId === genreId) as any)?.tasks ?? [], tasksPinned: sessionPresetPins?.tasks }}
 							/>
 						</section>
+					{/if}
+
+					<!-- 🚧 On revision (PLAN-rulesets §28): every genre's, beside
+					     the genre's own settings. Saved with the form. -->
+					{#if session?.id && !isGuest}
+						<section class={CARD_CLASS}>
+							<label
+								class="mb-1 block text-sm font-medium"
+								for="session-on-revision"
+							>
+								On revision
+							</label>
+							<p class="text-surface-600-400 mb-2 text-xs">
+								What deleting or regenerating the latest turn does.
+							</p>
+							<select
+								id="session-on-revision"
+								class={FIELD_CLASS}
+								bind:value={onRevision}
+							>
+								<option value="overwrite">
+									Overwrite — the old turn is gone
+								</option>
+								<option value="branch">
+									Branch — keep the old turn in the original session
+								</option>
+							</select>
+						</section>
+					{/if}
+
+					<!-- 🚧 How strict (PLAN-rulesets §21): beside On revision and
+					     Rules options; changing it mid-session is allowed.
+					     Saved with the form. Chat (one option) shows none. -->
+					{#if session?.id && !isGuest && asksHowStrict(rulesOffer)}
+						<section class={CARD_CLASS}>
+							<label
+								class="mb-1 block text-sm font-medium"
+								for="session-how-strict"
+							>
+								How strict
+							</label>
+							<!-- 🚧 Which rules the session plays (2026-10-19: nowhere said it). Set
+							     when the session started, or by its lorebook; read-only here. -->
+							<p class="mb-1 text-sm" data-testid="session-rules-name">
+								<span class="text-surface-600-400">Rules:</span>
+								{rulesOffer?.choices.find((c) => c.id === (session as any)?.primaryRuleset)?.name ?? (session as any)?.primaryRuleset ?? "None"}
+							</p>
+							<p class="text-surface-600-400 mb-2 text-xs">
+								How closely the story keeps to them. The rules themselves are set
+								when the session starts, or come from its lorebook.
+							</p>
+							<select
+								id="session-how-strict"
+								class={FIELD_CLASS}
+								bind:value={rigour}
+							>
+								{#each howStrictOptions as o (o.id)}
+									<option value={o.id}>{o.label}</option>
+								{/each}
+							</select>
+						</section>
+					{/if}
+
+					<!-- 🚧 Rules options (PLAN-rulesets §8, W3-A): the session's
+					     choices for its rules' options, beside On revision.
+					     Applies at once; hidden when the rules offer none. -->
+					{#if session?.id && !isGuest}
+						<RulesOptions
+							sessionId={session.id}
+							cardClass={CARD_CLASS}
+							fieldClass={FIELD_CLASS}
+						/>
 					{/if}
 
 					<!-- One card per pipeline this session runs — the reply's,

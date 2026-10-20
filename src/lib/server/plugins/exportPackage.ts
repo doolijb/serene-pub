@@ -35,10 +35,12 @@
  */
 import { zipSync } from "fflate"
 import { and, eq, inArray, isNull } from "drizzle-orm"
-import { i18nText } from "@serene-pub/sdk"
+import { i18nText, SAVE_MESSAGE_SPEC_ID, sessionEvents } from "@serene-pub/sdk"
+import { isDefaultSave } from "$lib/server/pipelines/entities/presetBindings"
 import type { I18n, SpecDocument } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { isCoreEventId } from "./requirements"
+import { exportedSessionLayout } from "$lib/server/db/panelsFromStored"
 import { loadDocument } from "$lib/server/pipelines/boot/store"
 import { isPluginSlug } from "./frameHost"
 import {
@@ -251,8 +253,10 @@ export async function exportGenrePackage(
 			p.from === "row"
 				? ((p.row.bindings ?? {}) as Record<string, BindingRow>)
 				: ((p.decl.bindings ?? {}) as Record<string, { spec?: string }>)
-		for (const b of Object.values(bindings)) {
+		for (const [event, b] of Object.entries(bindings)) {
 			if (!b || typeof b.spec !== "string") continue
+			// 🚧 Core's default save ships with the app: no requirement, never carried.
+			if (isDefaultSave(event, b.spec)) continue
 			wanted.add(b.spec)
 			if (p.from === "row" && typeof (b as BindingRow).config === "number")
 				boundConfigIds.add((b as BindingRow).config!)
@@ -437,8 +441,23 @@ export async function exportGenrePackage(
 			p.from === "row" ? seededPresetSlug(p.row.seedKey, slug) : p.decl.slug
 		if (s) takenPresets.add(s)
 	}
+	/**
+	 * 🚧 What `preset()` writes into every declaration (owner ruling
+	 * 2026-10-15): core's default save on `message-offered` unless the preset
+	 * binds its own — so the export says what a rebuild of it says.
+	 */
+	const withDefaultSave = <T extends Record<string, unknown>>(bindings: T): T =>
+		(bindings as Record<string, unknown>)[sessionEvents.messageOffered]
+			? bindings
+			: ({ ...bindings, [sessionEvents.messageOffered]: { spec: SAVE_MESSAGE_SPEC_ID } } as T)
 	const presets = presetSources.map((p) => {
-		if (p.from === "manifest") return p.decl
+		if (p.from === "manifest")
+			return {
+				...p.decl,
+				bindings: withDefaultSave(
+					((p.decl as { bindings?: Record<string, unknown> }).bindings ?? {}) as Record<string, unknown>
+				)
+			}
 		const r = p.row
 		const presetSlug =
 			seededPresetSlug(r.seedKey, slug) ??
@@ -458,7 +477,7 @@ export async function exportGenrePackage(
 			label: r.name
 		}
 		if (r.description) decl.description = r.description
-		decl.bindings = bindings
+		decl.bindings = withDefaultSave(bindings)
 		if (Array.isArray(r.includedActions))
 			decl.actions = { include: r.includedActions }
 		if (r.defaults && typeof r.defaults === "object") decl.defaults = r.defaults
@@ -476,7 +495,8 @@ export async function exportGenrePackage(
 	const takenLayouts = new Set<string>()
 	for (const l of (ownerManifest?.layouts ?? []) as any[])
 		if (l && l.genreId === genreId && typeof l.slug === "string") {
-			layouts.push(l)
+			// An export is new: `panels` only, never the ⏳ old slots.
+			layouts.push({ ...l, preset: exportedSessionLayout(l.preset) })
 			takenLayouts.add(l.slug)
 		}
 	const layoutRows = (await db
@@ -501,7 +521,7 @@ export async function exportGenrePackage(
 		}
 		if (mine) takenLayouts.add(base)
 		if (r.description) l.description = r.description
-		l.preset = r.layout
+		l.preset = exportedSessionLayout(r.layout)
 		layouts.push(l)
 	}
 
@@ -549,10 +569,12 @@ export async function exportGenrePackage(
 		if (typeof event === "string" && isCoreEventId(event)) requires.add(event)
 	}
 	for (const p of presets)
-		for (const event of Object.keys(
-			((p as { bindings?: unknown }).bindings ?? {}) as Record<string, unknown>
+		for (const [event, b] of Object.entries(
+			((p as { bindings?: unknown }).bindings ?? {}) as Record<string, { spec?: string }>
 		))
-			if (isCoreEventId(event)) requires.add(event)
+			// The default save is no requirement — as `preset()` records it.
+			if (isCoreEventId(event) && !isDefaultSave(event, String(b?.spec)))
+				requires.add(event)
 
 	const description =
 		opts.description ??

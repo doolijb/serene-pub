@@ -23,6 +23,7 @@
  * not hold. They are withdrawn with the events.
  */
 
+import { resolveRenamedCoreId } from "./renamedCoreIds"
 import {
 	_withdrawSessionEvent,
 	_withdrawShape,
@@ -176,7 +177,7 @@ export function registerPluginEvents(
 		return [
 			`'events' is not a list — the manifest's events were not registered`
 		]
-	for (const raw of events as StoredEventDeclaration[]) {
+	for (let raw of events as StoredEventDeclaration[]) {
 		const id = typeof raw?.event === "string" ? raw.event : "?"
 		if (id !== "?" && id.slice(0, id.indexOf(":")) !== pluginId) {
 			refused.push(
@@ -188,6 +189,15 @@ export function registerPluginEvents(
 		if (bad) {
 			refused.push(`event entry '${id}' ${bad} — not registered`)
 			continue
+		}
+		// Its genre and recorders on the ids core ships now: a package built
+		// before a rename names the old ones (`renamedCoreIds.ts`).
+		raw = {
+			...raw,
+			genre: resolveRenamedCoreId(raw.genre),
+			recordedBy: Array.isArray(raw.recordedBy)
+				? raw.recordedBy.map((r) => (typeof r === "string" ? resolveRenamedCoreId(r) : r))
+				: raw.recordedBy
 		}
 		const k = keyOf(id, raw.genre)
 		if (scopes.has(k)) {

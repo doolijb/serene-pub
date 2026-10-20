@@ -19,7 +19,7 @@ import { listNamespaces } from "$lib/server/pipelines/config/panel/read"
 import { disabledPlugins } from "$lib/server/plugins/disabledPlugins"
 
 let db: TestDb
-const GENRE = "core:genre/adventure"
+const GENRE = "core:genre/story"
 
 beforeAll(async () => {
 	db = await createTestDb()
@@ -96,13 +96,13 @@ describe("a disabled plugin in the listings (R67)", () => {
 		const [respond] = await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-respond"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/story-respond"))
 		await db
 			.update(schema.pipelineSpecs)
 			.set({ sourcePluginId: plugin.id })
 			.where(eq(schema.pipelineSpecs.id, respond.id))
 		try {
-			expect((await listOfferedGenres(db)).some((g) => g.genreId === "core:genre/chat")).toBe(true)
+			expect((await listOfferedGenres(db)).some((g) => g.genreId === "core:genre/story")).toBe(true)
 		} finally {
 			await db
 				.update(schema.pipelineSpecs)
@@ -124,7 +124,7 @@ describe("a disabled plugin in the listings (R67)", () => {
 		const off = await disabledPlugins(db)
 		expect(off.ownsId("acme.dark:spec/x")).toBe(true)
 		expect(off.ownsId("acme.darker:spec/x")).toBe(false)
-		expect(off.ownsId("core:spec/chat-respond")).toBe(false)
+		expect(off.ownsId("core:spec/story-respond")).toBe(false)
 	})
 })
 
@@ -154,7 +154,7 @@ describe("the subsystem switched off", () => {
 			expect(dark.owns(on.id)).toBe(true)
 			expect(dark.ownsId("acme.on:genre/x@1")).toBe(true)
 			// Core is never a plugin's, flag or no flag.
-			expect(dark.ownsId("core:genre/chat")).toBe(false)
+			expect(dark.ownsId("core:genre/story")).toBe(false)
 		} finally {
 			if (was === undefined) delete process.env.SP_PLUGINS_ENABLED
 			else process.env.SP_PLUGINS_ENABLED = was

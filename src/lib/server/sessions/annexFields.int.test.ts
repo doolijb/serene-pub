@@ -128,7 +128,7 @@ beforeAll(async () => {
 		annexField({
 			key: "adventure-only",
 			shape: { type: "string" },
-			genre: "core:genre/adventure"
+			genre: "core:genre/story"
 		})
 	])
 	await install(

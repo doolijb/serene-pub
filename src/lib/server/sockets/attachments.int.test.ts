@@ -109,7 +109,8 @@ function recorder() {
 
 let seq = 0
 async function makeUser() {
-	const { createTestUser } = await import("$lib/server/utils/testDb")
+	const { createTestUser, publishSaveMessage } = await import("$lib/server/utils/testDb")
+	await publishSaveMessage(db as never)
 	return createTestUser(db, `att-sock-${++seq}`)
 }
 async function makeSession(userId: number) {
@@ -541,7 +542,7 @@ describe("attachments:* (PGlite integration)", () => {
 				{ sessionId: session.id, personaId: persona.id, content: "", trayItemIds: [image, notes] } as any,
 				refusedTabs.emit
 			)
-			expect(refused.error).toMatch(/can't|cannot|No model/i)
+			expect(refused.refused).toMatch(/can't|cannot|No model/i)
 			expect(refused.sessionMessage).toBeUndefined()
 			expect(refusedTabs.sent.some((s) => s.event === "attachments:list")).toBe(false)
 			const kept = await db.select().from(schema.trayItems).where(eq(schema.trayItems.sessionId, session.id))

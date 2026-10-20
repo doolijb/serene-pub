@@ -26,14 +26,12 @@ import os from "os"
 import path from "path"
 import { ok, run } from "@serene-pub/sdk"
 import {
-	ADVENTURE_GENRE_ID,
-	ADVENTURE_RESPOND_SPEC_ID,
+	STORY_RESPOND_SPEC_ID,
 	CORE_SPECS,
 	LAIR_GENRE_ID,
 	LAIR_RESPOND_SPEC_ID,
-	CHAT_SIDE_CHARACTER_SPEC_ID,
-	CHAT_NARRATE_SPEC_ID,
-	CHAT_RESPOND_SPEC_ID
+	STORY_SIDE_CHARACTER_SPEC_ID,
+	STORY_NARRATE_SPEC_ID
 } from "@serene-pub/core-catalog"
 import * as schema from "$lib/server/db/schema"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
@@ -250,10 +248,10 @@ function expectVerityOnly(prompt: string) {
 	expect(prompt).not.toContain(COOK_SECRET)
 }
 
-describe("Chat: the speaking character's admitted lore is rendered", () => {
+describe("Story: the speaking character's admitted lore is rendered", () => {
 	it("Verity's reply prompt carries her secret and not Brask's", async () => {
-		const b = await book("core:genre/chat")
-		const receipt = await turn(b, CHAT_RESPOND_SPEC_ID, {
+		const b = await book("core:genre/story")
+		const receipt = await turn(b, STORY_RESPOND_SPEC_ID, {
 			characterId: b.cast.Verity,
 			sessionScope: { sessionId: b.session.id, currentCharacterId: b.cast.Verity }
 		})
@@ -263,10 +261,10 @@ describe("Chat: the speaking character's admitted lore is rendered", () => {
 	})
 })
 
-describe("Chat narrator: the narrator's prompt carries the lore the narrator may read", () => {
+describe("Story narrator: the narrator's prompt carries the lore the narrator may read", () => {
 	it("narrate renders the background member's secret, and no carded character's", async () => {
-		const b = await book("core:genre/chat")
-		const receipt = await turn(b, CHAT_NARRATE_SPEC_ID, {
+		const b = await book("core:genre/story")
+		const receipt = await turn(b, STORY_NARRATE_SPEC_ID, {
 			characterId: null,
 			sessionScope: { sessionId: b.session.id, currentCharacterId: null }
 		})
@@ -279,8 +277,8 @@ describe("Chat narrator: the narrator's prompt carries the lore the narrator may
 	})
 
 	it("narrate-character, speaking as Verity, renders her secret and not Brask's", async () => {
-		const b = await book("core:genre/chat")
-		const receipt = await turn(b, CHAT_SIDE_CHARACTER_SPEC_ID, {
+		const b = await book("core:genre/story")
+		const receipt = await turn(b, STORY_SIDE_CHARACTER_SPEC_ID, {
 			characterId: b.cast.Verity,
 			sessionScope: { sessionId: b.session.id, currentCharacterId: b.cast.Verity },
 			sideCharacter: { characterId: b.cast.Verity, name: "Verity" },
@@ -291,17 +289,10 @@ describe("Chat narrator: the narrator's prompt carries the lore the narrator may
 	})
 })
 
-describe("Adventure: each voice's own lore is rendered", () => {
-	it("the voice the planner named renders Verity's secret and not Brask's", async () => {
-		const b = await book(ADVENTURE_GENRE_ID, { tone: "grounded", difficulty: "normal", trustNarrator: false })
-		const receipt = await turn(b, ADVENTURE_RESPOND_SPEC_ID, {
-			characterId: null,
-			sessionScope: { sessionId: b.session.id, currentCharacterId: null },
-			fields: { tone: "grounded", difficulty: "normal", trustNarrator: false }
-		})
-		for (const prompt of promptsAt(receipt, "voices.item.prompt")) expectVerityOnly(prompt)
-	})
-})
+// retired with Adventure, 2026-10-19: "the voice the planner named renders
+// Verity's secret and not Brask's" — Adventure's planner voiced each named
+// speaker inline (voices.item.prompt); no genre left does. The Lair's planner
+// queues the speakers as turns of their own, whose prompt is the case below.
 
 describe("Lair: the delver who speaks renders their own lore", () => {
 	it("Verity's character turn prompt carries her secret and not Brask's", async () => {

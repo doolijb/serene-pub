@@ -64,7 +64,7 @@ async function viewFor() {
 	const user = await createTestUser(testDb, `ac-${n++}`)
 	const [session] = await testDb
 		.insert(schema.sessions)
-		.values({ userId: user.id, isGroup: false, genreId: "core:genre/chat" })
+		.values({ userId: user.id, isGroup: false, genreId: "core:genre/story" })
 		.returning()
 	const { sessionsViewHandler } = await import("$lib/server/sockets/sessions")
 	return sessionsViewHandler.handler(
@@ -296,7 +296,7 @@ describe("the offer", () => {
 		expect(panel!.surface.kind === "remote" && panel!.surface.owner).not.toBe("core")
 		// Seatable: a layout / settings write keyed on its id is accepted.
 		const { seatableWidgetIds } = await import("$lib/server/plugins/frameHost")
-		expect((await seatableWidgetIds(testDb as never, "core:genre/chat")).has(panel!.id)).toBe(true)
+		expect((await seatableWidgetIds(testDb as never, "core:genre/story")).has(panel!.id)).toBe(true)
 	}, 60_000)
 
 	test("disabled, uncompiled or failed components are not offered", async () => {
@@ -315,7 +315,7 @@ describe("the offer", () => {
 		for (const r of [disabled, uncompiled, failed])
 			expect(res.modePanels.some((p) => p.id.startsWith(`authored.${r.id}:`))).toBe(false)
 		const { seatableWidgetIds } = await import("$lib/server/plugins/frameHost")
-		const seatable = await seatableWidgetIds(testDb as never, "core:genre/chat")
+		const seatable = await seatableWidgetIds(testDb as never, "core:genre/story")
 		for (const r of [disabled, uncompiled, failed]) expect(seatable.has(`authored.${r.id}:${r.slug}`)).toBe(false)
 	}, 60_000)
 

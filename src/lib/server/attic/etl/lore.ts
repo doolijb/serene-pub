@@ -60,8 +60,8 @@ export async function restoreLorebooks(ctx: RestoreContext): Promise<void> {
 			extraJson: b.extraJson,
 			userId: mapped(ctx, "users", b.userId)!,
 			nextBindingNumber: b.nextBindingNumber,
-			createdAt: b.createdAt,
-			updatedAt: b.updatedAt
+			createdAt: asDate(b.createdAt),
+			updatedAt: asDate(b.updatedAt)
 		}))
 	)
 }
@@ -321,8 +321,8 @@ export async function restoreGraph(ctx: RestoreContext): Promise<void> {
 			embeddingModel: v.embeddingModel,
 			graphed: s.graphed,
 			branchId: null,
-			createdAt: s.createdAt,
-			updatedAt: s.updatedAt
+			createdAt: asDate(s.createdAt),
+			updatedAt: asDate(s.updatedAt)
 		})
 	}
 	await insertBatched(tx, schema.scenes, sceneRows, 200)

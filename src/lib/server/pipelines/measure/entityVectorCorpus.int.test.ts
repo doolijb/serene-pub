@@ -58,7 +58,7 @@ import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { run } from "@serene-pub/sdk"
-import { respondSpec } from "$lib/server/pipelines/specs/respond"
+import { storyRespondSpec } from "$lib/server/pipelines/specs/respond"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import { PRESETS } from "$lib/server/pipelines/measure/promptDiff"
@@ -248,7 +248,7 @@ const turn = async (
 			scopeKind: "defaults"
 		} as any)
 
-	return (await run(respondSpec(), {
+	return (await run(storyRespondSpec(), {
 		world,
 		input: {
 			text: "we should carry the torch glow to the gate",

@@ -11,6 +11,13 @@
 	import AtmosphereLayer from "$lib/client/atmospheres/AtmosphereLayer.svelte"
 	import { pickRandom } from "$lib/client/atmospheres/definitions"
 	import type { AtmosphereDefinition } from "$lib/client/atmospheres/types"
+	import { takeSignedOutWhy } from "$lib/client/auth/signedOutNotice"
+
+	/** 🚧 Why this tab was signed out, when the page that did it said (Q3-7, N17). */
+	let signedOutWhy = $state<string | null>(null)
+	onMount(() => {
+		signedOutWhy = takeSignedOutWhy()
+	})
 
 	// Login form schema
 	const loginSchema = z.object({
@@ -180,6 +187,11 @@
 				Sign in to pick up where the story left off.
 			</p>
 		</div>
+		{#if signedOutWhy}
+			<p class="preset-tonal-primary rounded-md px-3 py-2 text-[13px]" role="status">
+				{signedOutWhy}
+			</p>
+		{/if}
 
 		<div class="grid gap-1.5">
 			<label for="username" class="text-surface-600-400 text-xs">

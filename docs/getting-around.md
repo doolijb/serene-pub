@@ -73,7 +73,10 @@ are waiting on you. These are your notifications, and nobody else sees them. You
   [Questions put to the cast](./session-actions.md#questions-put-to-the-cast-forms));
 - a reply you asked for failed;
 - background work you started, such as a lorebook's graph build, a scene or lore summary or a
-  history compile, is ready for you to review, or failed;
+  history compile, is ready for you to review, or failed (a Story's **Track relationships**
+  files its findings on the same graph review);
+- a goal is reached in a Story you are in, when its **Mark goals reached** is on (see
+  [Story](./genre-story.md#what-happens-around-a-reply));
 - a model download you started finished or failed (admins);
 - a newer release of Serene Pub is out (admins; see
   [Update notifications](./system-settings.md#update-notifications)).
@@ -226,7 +229,7 @@ You know enough now to find your way around. A few things to try:
 
 - Add a second character to a session and let them talk to each other: [Group sessions](./group-sessions.md).
 - Give your world a memory of its places, people and history: [Lorebooks](./lorebooks.md).
-- Try a different kind of session, such as a narrated [Adventure](./genre-adventure.md): [Genres](./genres.md).
+- Try a different kind of session, such as a narrated [Story](./genre-story.md): [Genres](./genres.md).
 - Change how the app looks: [Themes and settings](./themes-and-settings.md).
 - Invite a friend to your pub: [Users and accounts](./users-and-accounts.md).
 

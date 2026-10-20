@@ -16,6 +16,7 @@ import * as schema from "$lib/server/db/schema"
 import * as attic from "../tables"
 import { vectorColumns } from "../embeddings"
 import {
+	asDate,
 	countLoss,
 	insertBatched,
 	readById,
@@ -54,8 +55,8 @@ export async function restoreCharacters(ctx: RestoreContext): Promise<void> {
 				groupOnlyGreetings: c.groupOnlyGreetings,
 				postHistoryInstructions: c.postHistoryInstructions,
 				source: c.source,
-				createdAt: c.createdAt,
-				updatedAt: c.updatedAt,
+				createdAt: asDate(c.createdAt),
+				updatedAt: asDate(c.updatedAt),
 				lorebookId: c.lorebookId,
 				extensions: c.extensions,
 				aliases: c.aliases,
@@ -118,8 +119,8 @@ export async function restoreCharacters(ctx: RestoreContext): Promise<void> {
 			userId: mapped(ctx, "users", p.userId)!,
 			name: p.name,
 			description: p.description,
-			createdAt: p.createdAt,
-			updatedAt: p.updatedAt ?? new Date(),
+			createdAt: asDate(p.createdAt),
+			updatedAt: asDate(p.updatedAt) ?? new Date(),
 			lorebookId: p.lorebookId,
 			aliases: p.aliases,
 			summary: p.summary,

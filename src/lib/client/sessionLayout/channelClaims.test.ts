@@ -1,5 +1,15 @@
 import { describe, expect, test } from "vitest"
-import { channelClaims, channelsForCopy, claimOf, pageIdsHolders, primaryLogOf } from "./channelClaims"
+import { NO_LANE_CHANNEL } from "@serene-pub/core-catalog/conversation"
+import {
+	channelClaims,
+	channelsForCopy,
+	claimOf,
+	laneClaimOf,
+	laneClaims,
+	pageIdsHolders,
+	primaryLogOf,
+	type LaneContext
+} from "./channelClaims"
 
 const LAIR = ["main", "sanctum"]
 
@@ -164,5 +174,95 @@ describe("a third Messages, pinned to a channel (brief 7b)", () => {
 	test("none placed: nobody holds them; an R71 genre's own primary never does", () => {
 		expect(pageIdsHolders(["world-state"], claims, LAIR).size).toBe(0)
 		expect(pageIdsHolders(["acme.game:board"], new Map(), LAIR).size).toBe(0)
+	})
+})
+
+describe("🚧 lane claims (channelLane, lanes by person on the server)", () => {
+	const PARLEY = ["main", "parley"]
+	const settings: Record<string, Record<string, unknown>> = {
+		messages: {},
+		"messages#parley": { channel: "parley", channelLane: "mine" }
+	}
+	const placed = ["messages", "messages#parley"]
+	const storedOf = (id: string) => settings[id]
+	/** `SessionV1.channels` as the host says it for one viewer. */
+	const channelsWith = (mine?: string): LaneContext["channels"] => [
+		{ slug: "main", lanes: "shared" },
+		{ slug: "parley", lanes: "personal", ...(mine ? { mine } : {}) }
+	]
+	const ctx = (mine?: string): LaneContext => ({ viewerId: 3, annex: null, channels: channelsWith(mine) })
+
+	test("mine: the viewer's lane from the host, always explicit", () => {
+		expect(laneClaimOf(settings["messages#parley"], ctx("parley:2"))).toBe("parley:2")
+		// Lane 1 is that lane alone, never the whole channel.
+		expect(laneClaimOf(settings["messages#parley"], ctx("parley"))).toBe("parley:1")
+	})
+
+	test("🚧 mine with no lane yet: the whole claimed channel, server-narrowed — a guest's lane opened after the page loaded still shows (the 100-turn walk, B2)", () => {
+		expect(laneClaimOf(settings["messages#parley"], ctx())).toBeUndefined()
+	})
+
+	test("mine naming another channel's lane: no lane", () => {
+		expect(laneClaimOf(settings["messages#parley"], ctx("sanctum:2"))).toBe(NO_LANE_CHANNEL)
+	})
+
+	test("mine when the host said nothing, or on a shared channel: the whole claimed channel (the server already narrowed it)", () => {
+		expect(laneClaimOf(settings["messages#parley"], { viewerId: 3, annex: null })).toBeUndefined()
+		expect(
+			laneClaimOf(settings["messages#parley"], {
+				viewerId: 3,
+				annex: null,
+				channels: [{ slug: "parley", lanes: "shared" }]
+			})
+		).toBeUndefined()
+	})
+
+	test("a number is that lane; unset, blank or junk reads no lane; no claimed channel reads none", () => {
+		expect(laneClaimOf({ channel: "parley", channelLane: "3" }, ctx())).toBe("parley:3")
+		expect(laneClaimOf({ channel: "parley" }, ctx("parley:2"))).toBeUndefined()
+		expect(laneClaimOf({ channel: "parley", channelLane: "  " }, ctx("parley:2"))).toBeUndefined()
+		expect(laneClaimOf({ channel: "parley", channelLane: "theirs" }, ctx("parley:2"))).toBeUndefined()
+		expect(laneClaimOf({ channelLane: "mine" }, ctx("parley:2"))).toBeUndefined()
+	})
+
+	test("⏳ a stored channelLaneFrom reads as mine", () => {
+		const legacy = { channel: "parley", channelLaneFrom: "annex:core.dungeon-crawler-lanes" }
+		expect(claimOf(legacy)).toBe("parley")
+		expect(laneClaimOf(legacy, ctx("parley:2"))).toBe("parley:2")
+		expect(laneClaimOf(legacy, ctx())).toBeUndefined()
+		expect(laneClaimOf({ channel: "parley", channelLaneFrom: "  " }, ctx("parley:2"))).toBeUndefined()
+	})
+
+	test("the copy shows the viewer's lane, else its whole channel; the channel stays claimed", () => {
+		const claims = channelClaims(placed, storedOf)
+		expect(claims.get("messages#parley")).toBe("parley")
+		const mine = laneClaims(placed, storedOf, ctx("parley:2"))
+		expect(channelsForCopy(PARLEY, claims, "messages#parley", "messages", mine)).toEqual(["parley:2"])
+		expect(channelsForCopy(PARLEY, claims, "messages", "messages", mine)).toEqual(["main"])
+		const none = laneClaims(placed, storedOf, ctx())
+		expect(channelsForCopy(PARLEY, claims, "messages#parley", "messages", none)).toEqual(["parley"])
+		expect(channelsForCopy(PARLEY, claims, "messages", "messages", none)).toEqual(["main"])
+		// The lane copy as the primary log keeps the unclaimed channels after its own.
+		expect(channelsForCopy(PARLEY, claims, "messages#parley", "messages#parley", none)).toEqual(["parley", "main"])
+		// Another channel's lane named as mine: nothing.
+		const wrong = laneClaims(placed, storedOf, ctx("sanctum:2"))
+		expect(channelsForCopy(PARLEY, claims, "messages#parley", "messages", wrong)).toEqual([NO_LANE_CHANNEL])
+	})
+})
+
+describe("a layout holding no conversation (R-B, no lock)", () => {
+	const order = ["places", "stats", "world-state"]
+	const settingsOf = (id: string) => (id === "world-state" ? { channel: "main" } : {})
+
+	test("nothing claims, there is no primary log, and no mount holds the page's ids", () => {
+		const claims = channelClaims(order, settingsOf)
+		expect(claims.size).toBe(0)
+		expect(primaryLogOf(order, claims)).toBeNull()
+		expect([...pageIdsHolders(order, claims, LAIR)]).toEqual([])
+	})
+
+	test("no lane claims either, and a copy asked about anyway gets the whole log", () => {
+		expect(laneClaims(order, settingsOf, { viewerId: 1, annex: null }).size).toBe(0)
+		expect(channelsForCopy(LAIR, new Map(), "places", null)).toEqual(LAIR)
 	})
 })

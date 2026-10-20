@@ -10,8 +10,10 @@
 import { onDestroy, onMount, untrack } from "svelte"
 import { runProgress } from "$lib/client/stores/runProgress.svelte"
 import type { RunProgress } from "$lib/shared/sockets/progress"
+import { createPendingReplies } from "$lib/client/components/sessionPage/pendingReply.svelte"
 import { page } from "$app/state"
-import { replaceState } from "$app/navigation"
+import { goto, replaceState } from "$app/navigation"
+import { deleteReplyAction, sessionAddress } from "$lib/client/components/sessionPage/deleteReply"
 import {
 	LANDING_SEEK_FRAMES,
 	landingTarget,
@@ -27,6 +29,7 @@ import type { StoryClock as StoryClockParts } from "$lib/shared/lorebooks/storyD
 import { readStoryCalendar, type StoryCalendar } from "$lib/shared/lorebooks/storyDate"
 import { withRevisedAvatar } from "$lib/client/utils/media"
 import { lastAuthorLine } from "$lib/client/components/sessionPage/swipeControls"
+import { createRerunRefusals, rowAsks } from "$lib/client/components/sessionPage/rerunRefusals.svelte"
 import {
 	canControlMessageAs,
 	characterForRefIn,
@@ -35,8 +38,13 @@ import {
 } from "$lib/client/components/sessionPage/sessionPageProjections"
 import type { SessionPageInbox } from "$lib/client/components/sessionPage/sessionPageInbox.svelte"
 import type { MessageV1 } from "@serene-pub/sdk"
-import { DEFAULT_CHANNEL } from "@serene-pub/sdk"
+import { DEFAULT_CHANNEL, parseChannel } from "@serene-pub/sdk"
 import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
+import {
+	asksToJoin,
+	isLivePlayerSeat,
+	ownCardlessPlayerSeats
+} from "$lib/shared/sessions/playerSeat"
 import {
 	resolvePlayerLabel,
 	storedPlayerLabel
@@ -231,7 +239,10 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		// A session whose genre lacks the chosen channel — a preset
 		// changed under an open page, or the view arrived after a guess —
 		// falls back to `main`, which every session has.
-		if (!sessionChannels.includes(composerChannel))
+		// By slug: a lane (`parley:2`) is its channel's, and lanes are never
+		// listed — only the channels the genre declares.
+		const slug = parseChannel(composerChannel).slug
+		if (!sessionChannels.some((c) => parseChannel(c).slug === slug))
 			composerChannel = DEFAULT_CHANNEL
 	})
 
@@ -253,7 +264,7 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	let modeMissing = $derived(
 		modesList.length > 0 &&
 			!!(session as any)?.genreId &&
-			(session as any).genreId !== "core:genre/chat" &&
+			(session as any).genreId !== "core:genre/story" &&
 			!modesList.some((m) => m.genreId === (session as any).genreId)
 	)
 	// A capability the shape omits (or caps at zero) does not exist for the
@@ -272,9 +283,10 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	 */
 	let personaRequiredOnSend = $derived(
 		personasInMode &&
+			// No special case for Chat any more (2026-10-19): a Story session with
+			// `personas.min` 0 sends from a card-less seat under the person's name.
 			(!modeShape ||
 				(session as any)?.genreId == null ||
-				(session as any).genreId === "core:genre/chat" ||
 				(modeShape.personas?.min ?? 0) >= 1)
 	)
 	let charactersInMode = $derived(
@@ -332,9 +344,40 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		socket.emit("sessions:annex", { sessionId })
 	})
 
+	// ── The waiting row (`pendingReply.ts`) ───────────────────────────────────
+	// A reply run on its way whose own row is not open yet — a Dungeon
+	// Crawler story turn through the Planner's call and the dice — is drawn
+	// as a generating row of the page's own, with the run's status, so the
+	// Story, the composer's Stop and the chips read "a reply is on its way"
+	// from the first moment, as Chat's do. `opened`: the runs whose row has
+	// been seen generating — never drawn again, whatever they do after.
+	const pending = createPendingReplies({
+		sessionId: () => sessionId,
+		rows: () => session?.sessionMessages
+	})
+	const pendingRows = $derived(pending.rows)
+	/**
+	 * The session as every reader of this page sees it: the loaded session,
+	 * plus the waiting rows after its own. The same object when there are
+	 * none, so a session with no waiting reply re-renders nothing new.
+	 */
+	const sessionView = $derived(
+		session && pendingRows.length
+			? {
+					...session,
+					sessionMessages: [
+						...session.sessionMessages,
+						...(pendingRows as unknown as SelectSessionMessage[])
+					]
+				}
+			: session
+	)
+
 	let lastMessage: SelectSessionMessage | undefined = $derived.by(() => {
-		if (session && session.sessionMessages.length > 0) {
-			return session.sessionMessages[session.sessionMessages.length - 1]
+		if (sessionView && sessionView.sessionMessages.length > 0) {
+			return sessionView.sessionMessages[
+				sessionView.sessionMessages.length - 1
+			]
 		}
 		return undefined
 	})
@@ -359,7 +402,8 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	// Check if any message is currently generating
 	let hasGeneratingMessage: boolean = $derived.by(() => {
 		return (
-			session?.sessionMessages?.some((msg) => msg.isGenerating) || false
+			sessionView?.sessionMessages?.some((msg) => msg.isGenerating) ||
+			false
 		)
 	})
 
@@ -369,38 +413,50 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 			?.name ?? null
 	)
 
-	// Check if current user is a guest (not the session owner)
-	let isGuest: boolean = $derived.by(() => {
-		if (!session || !userCtx.user?.id) return false
-		const isGuest = session.userId !== userCtx.user.id
-		console.log("Guest check:", {
-			sessionUserId: session.userId,
-			currentUserId: userCtx.user.id,
-			isGuest
+	// Whether the viewer is a guest (not the session owner). Read through
+	// the owner id alone: `session` is reassigned on every streamed chunk,
+	// and a primitive derived stops that churn here.
+	const sessionOwnerId: number | null = $derived(session?.userId ?? null)
+	let isGuest: boolean = $derived(
+		sessionOwnerId != null && userCtx.user?.id != null
+			? sessionOwnerId !== userCtx.user.id
+			: false
+	)
+
+	/**
+	 * 🚧 The viewer's own named card-less player seat, when they have one
+	 * (`ownCardlessPlayerSeats`, first by position): a line they send with
+	 * no persona is sent from it — the server stamps `player-seat:<id>`.
+	 */
+	let ownCardlessSeat = $derived(
+		ownCardlessPlayerSeats(session?.sessionPersonas, userCtx.user?.id)[0] ??
+			null
+	)
+
+	// Whether to show the add persona CTA: a guest with no voice here — no
+	// card and no named card-less seat (`asksToJoin`, the one rule). A mode
+	// with no persona system has nothing to add.
+	let showAddPersonaCTA: boolean = $derived(
+		asksToJoin({
+			isGuest,
+			personasInMode,
+			seats: session?.sessionPersonas,
+			userId: userCtx.user?.id,
+			playerLabel: sessionFrames?.genrePlayerLabel,
+			isPlayer: (session?.sessionGuests as Array<{ userId?: number; isPlayer?: boolean }> | undefined)?.find(
+				(g) => g.userId === userCtx.user?.id
+			)?.isPlayer
 		})
-		return isGuest
-	})
+	)
 
-	// Check if current user has a persona in this session
-	let userHasPersonaInSession: boolean = $derived.by(() => {
-		if (!session?.sessionPersonas || !userCtx.user?.id) return false
-		return session.sessionPersonas.some(
-			(cp) => cp.persona?.userId === userCtx.user?.id
-		)
-	})
-
-	// Determine if we should show the add persona CTA. A mode with no persona
-	// system has nothing to add — the CTA would ask for a thing the shape
-	// says does not exist here.
-	let showAddPersonaCTA: boolean = $derived.by(() => {
-		return isGuest && !userHasPersonaInSession && personasInMode
-	})
-
-	// All of the current user's personas in this session
+	// All of the current user's personas in this session. 🚧 A seat that
+	// retired (a new character after a death, PLAN-dc-after-walk2 Q0-2,
+	// owner ruling ★2) keeps its card, but nobody writes as it any more:
+	// the person's composer moves to their new seat.
 	let userPersonasInSession = $derived.by(() => {
 		if (!session?.sessionPersonas || !userCtx.user?.id) return []
 		return session.sessionPersonas.filter(
-			(cp) => cp.persona?.userId === userCtx.user?.id
+			(cp) => cp.persona?.userId === userCtx.user?.id && !cp.removedAt
 		)
 	})
 
@@ -435,7 +491,8 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	const needsPersona = $derived.by(
 		() =>
 			!session ||
-			(personasInMode && !session.sessionPersonas?.[0]?.personaId)
+			(personasInMode &&
+				!(session.sessionPersonas ?? []).some((s) => isLivePlayerSeat(s)))
 	)
 
 	/**
@@ -457,6 +514,20 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	 */
 	const canControlMessage = (msg: SelectSessionMessage): boolean =>
 		canControlMessageAs(userCtx, isGuest, session, msg)
+	/** The page's rerun refusals, registered on the inbox (`rerunRefusals.svelte.ts`). */
+	const rerunRefusals = createRerunRefusals(d.inbox)
+	/**
+	 * May the viewer rerun (swipe, retry, extend) this line — the same rule,
+	 * widened for an envoy's line in a channel lane the viewer is the member
+	 * of (ruled 2026-10-15; `canActOnMessage(…, "rerun")`).
+	 */
+	const canRerunMessage = (msg: SelectSessionMessage): boolean =>
+		// 🚧 A rerun the server refused (a question, not a reply) stays
+		// refused; a greeting that asks is a question no run made
+		// (`questionRowRefusal`) — 2026-10-16.
+		!rerunRefusals.isRefused(msg.id) &&
+		!(msg.metadata?.isGreeting && rowAsks(msg)) &&
+		canControlMessageAs(userCtx, isGuest, session, msg, "rerun", annexView)
 
 	/** A person speaking as themselves — named by `personLineOf`. */
 	const personLine = (msg: SelectSessionMessage) =>
@@ -558,6 +629,84 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 				resolve({ lanes: res.lanes, error: res.error })
 			})
 		})
+	}
+
+	/**
+	 * 🚧 **Read to here** on one channel lane (2026-10-17): moves the viewer's
+	 * last-read mark on the server and adopts the channels view it answers
+	 * (`SessionV1.channels` — `unseen`, `waitingOnYou`), so a panel tab's dot
+	 * clears. `messageId` absent: the lane's newest line.
+	 */
+	function laneRead(channel: string, messageId?: number): Promise<{ error?: string }> {
+		const id = sessionId
+		if (!Number.isFinite(id)) return Promise.resolve({ error: "the session is not loaded" })
+		return new Promise((resolve) => {
+			let release = () => {}
+			const timer = setTimeout(() => {
+				release()
+				resolve({ error: "the answer did not arrive in time" })
+			}, 15_000)
+			release = requestWithInterest(
+				"sessions:laneRead",
+				{ sessionId: id, channel, ...(messageId !== undefined ? { messageId } : {}) },
+				(res) => {
+					if (res.sessionId !== id) return
+					clearTimeout(timer)
+					release()
+					if (res.channels && session && session.id === id)
+						session = { ...session, channels: res.channels } as typeof session
+					resolve({ error: res.error })
+				}
+			)
+		})
+	}
+
+	/**
+	 * 🚧 The next older page of the log **per channel** (PLAN-dc-after-walk2
+	 * Q1-1, owner ruling ★7): 25 more lines of each of `channels` that still
+	 * holds older ones (`pagination.olderIn`) — absent, of every such channel
+	 * — each asked on its own (`sessions:messagesPage`, before that channel's
+	 * oldest line in the log) and merged in. A channel whose page says nothing
+	 * older remains leaves `olderIn`. What the conversation's `load-older`
+	 * asks.
+	 */
+	/** 🚧 A copy's listed channel holds a stored row's: a bare slug every lane of it, a lane only itself. */
+	const listedHolds = (listed: string, stored: string): boolean => {
+		const l = parseChannel(listed)
+		const r = parseChannel(stored)
+		return l.slug === r.slug && (!l.explicit || l.lane === r.lane)
+	}
+	/** 🚧 A stored channel as an EXACT ask — `parley` is lane 1, never every lane of it. */
+	const exactChannel = (stored: string): string => {
+		const r = parseChannel(stored)
+		return `${r.slug}:${r.lane}`
+	}
+
+	async function loadOlderIn(channels?: readonly string[]) {
+		if (loadingOlderMessages || !session) return
+		const olderIn = pagination?.olderIn
+		if (!Array.isArray(olderIn)) return loadOlderMessages()
+		const asked = channels?.length
+			? olderIn.filter((c) => channels.some((listed) => listedHolds(listed, c)))
+			: olderIn
+		if (!asked.length) return
+		loadingOlderMessages = true
+		const still = new Set(olderIn)
+		try {
+			for (const channel of asked) {
+				const mine = (session?.sessionMessages ?? []).filter((m) => (m.channel ?? "main") === channel)
+				const oldest = mine.length ? Math.min(...mine.map((m) => m.id)) : undefined
+				const page = await messagesPage({ channel: exactChannel(channel), limit: 25, ...(oldest != null ? { beforeId: oldest } : {}) })
+				if (page.error || !session) break
+				const have = new Set(session.sessionMessages.map((m) => m.id))
+				const fresh = (page.rows as unknown as SelectSessionMessage[]).filter((m) => !have.has(m.id))
+				if (fresh.length) session.sessionMessages = [...fresh, ...session.sessionMessages].sort((a, b) => a.id - b.id)
+				if (!page.nextCursor) still.delete(channel)
+			}
+		} finally {
+			loadingOlderMessages = false
+			if (pagination) pagination = { ...pagination, olderIn: [...still], hasMore: still.size > 0 }
+		}
 	}
 
 	async function loadOlderMessages() {
@@ -813,6 +962,14 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	function handleSessionMessagesDelete(
 		msg: Sockets.SessionMessages.Delete.Response
 	) {
+		const action = deleteReplyAction(msg)
+		// 🚧 On revision `branch`: nothing was deleted here — the page moves
+		// to the branch, and this session keeps its tail.
+		if (action.kind === "branch") {
+			void goto(sessionAddress(action.sessionId))
+			return
+		}
+		if (action.kind === "refused") return
 		if (session) {
 			// The row itself, while the page still holds it: the announcement
 			// below names the channel it was on so a widget that declared
@@ -963,15 +1120,21 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	// one's ticks — and an image run emits one preview frame per tick. The
 	// handlers' own id check stays as belt and braces.
 	d.inbox.on("pipelines:runStarted", handleRunStarted)
+	// Each run's status, to every user of the session — a reply's says its
+	// channel: the waiting row's source (`pendingReply.ts`).
+	d.inbox.on("sessions:runStatus", (msg) => pending.hear(msg))
 	d.inbox.on("pipelines:progress", handleRunProgress)
 	// Runs belonging to a session nobody is looking at any more. The server
 	// keeps running them; the card is what goes away.
 	onDestroy(() => runProgress.clearAll())
 
 	return {
-		/** The loaded session; undefined while it loads or after a switch. */
+		/**
+		 * The loaded session; undefined while it loads or after a switch.
+		 * With the waiting rows after its own (`sessionView`).
+		 */
 		get session() {
-			return session
+			return sessionView
 		},
 		get pagination() {
 			return pagination
@@ -1069,6 +1232,9 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		get isGuest() {
 			return isGuest
 		},
+		get ownCardlessSeat() {
+			return ownCardlessSeat
+		},
 		get showAddPersonaCTA() {
 			return showAddPersonaCTA
 		},
@@ -1086,13 +1252,17 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 			return sessionPlayerLabel
 		},
 		canControlMessage,
+		canRerunMessage,
+		rerunRefusals,
 		personLine,
 		getMessageCharacter,
 		characterForRef,
 		sessionGenreId,
 		olderPage,
+		loadOlderIn,
 		messagesPage,
 		channelLanes,
+		laneRead,
 		loadOlderMessages,
 		setLorebook,
 		setStoryClock,

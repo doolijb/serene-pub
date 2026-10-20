@@ -42,7 +42,7 @@ async function makePreset(
 		.insert(schema.sessionPresets)
 		.values({
 			name: `Preset ${n++}`,
-			genreId: "core:genre/chat",
+			genreId: "core:genre/story",
 			...over
 		})
 		.returning()
@@ -127,24 +127,24 @@ describe("preset mutations", () => {
 	test("create copies selections from fromPresetId", async () => {
 		const { sessionPresetsCreate } = await import("./sessionAdmin")
 		const source = await makePreset({
-			primarySlug: "core:spec/chat-respond",
-			configSelections: { "core:spec/chat-respond": 7 },
-			includedActions: ["core:spec/chat-narrate"]
+			primarySlug: "core:spec/story-respond",
+			configSelections: { "core:spec/story-respond": 7 },
+			includedActions: ["core:spec/story-narrate"]
 		})
 		const res = await sessionPresetsCreate.handler(
 			admin(),
 			{
 				name: "Copied",
-				genreId: "core:genre/chat",
+				genreId: "core:genre/story",
 				fromPresetId: source.id
 			},
 			noopEmit
 		)
-		expect(res.preset?.primarySlug).toBe("core:spec/chat-respond")
+		expect(res.preset?.primarySlug).toBe("core:spec/story-respond")
 		expect(res.preset?.configSelections).toEqual({
-			"core:spec/chat-respond": 7
+			"core:spec/story-respond": 7
 		})
-		expect(res.preset?.includedActions).toEqual(["core:spec/chat-narrate"])
+		expect(res.preset?.includedActions).toEqual(["core:spec/story-narrate"])
 	}, 60_000)
 
 	test("immutable presets accept availability flags only and refuse delete", async () => {
@@ -292,7 +292,7 @@ describe("sessions:create with a preset", () => {
 			},
 			noopEmit
 		)
-		expect(res.session!.genreId).toBe("core:genre/chat")
+		expect(res.session!.genreId).toBe("core:genre/story")
 		expect((res.session as any).presetId).toBe(live.id)
 	}, 60_000)
 
@@ -348,7 +348,7 @@ describe("the genre hub's writes (B4, R66)", () => {
 		const a = await makePreset({ genreId: GENRE, enabled: true })
 		const b = await makePreset({ genreId: GENRE, enabled: true })
 		const gone = await makePreset({ genreId: GENRE, enabled: true, withdrawnAt: new Date() })
-		const other = await makePreset({ genreId: "core:genre/chat", enabled: true })
+		const other = await makePreset({ genreId: "core:genre/story", enabled: true })
 		const res = await sessionGenresSetPresetsEnabled.handler(
 			admin(),
 			{ genreId: GENRE, enabled: false },
@@ -382,7 +382,7 @@ describe("the genre hub's writes (B4, R66)", () => {
 			manifest: {
 				swaps: [
 					{
-						spec: "core:spec/chat-turn-order",
+						spec: "core:spec/story-turn-order",
 						node: "strategy",
 						definition: "acme.swaps-hub:task/dice@1"
 					}
@@ -391,7 +391,7 @@ describe("the genre hub's writes (B4, R66)", () => {
 		})
 		const swap = {
 			pluginId,
-			spec: "core:spec/chat-turn-order",
+			spec: "core:spec/story-turn-order",
 			node: "strategy",
 			definition: "acme.swaps-hub:task/dice@1"
 		}
@@ -409,7 +409,7 @@ describe("the genre hub's writes (B4, R66)", () => {
 					.where(eq(schema.plugins.pluginId, pluginId))
 			)[0].d
 		expect(await read()).toEqual([
-			"core:spec/chat-turn-order#strategy#acme.swaps-hub:task/dice@1"
+			"core:spec/story-turn-order#strategy#acme.swaps-hub:task/dice@1"
 		])
 		await sessionGenresSetSwapEnabled.handler(admin(), { ...swap, enabled: true }, noopEmit)
 		expect(await read()).toEqual([])

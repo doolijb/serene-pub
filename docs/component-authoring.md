@@ -161,8 +161,8 @@ waiting forever. Core's widgets do this, so a clone of one does too.
 ## Adding it to a session
 
 Once a component is on and compiled, it is offered to every session's layout editor like any
-other widget; a scope you have not reviewed yet is simply not given to it. Open a session, press **Layout**, and on the **Move** tab
-drag it from the tray into a zone (see [Session layout](./session-layout.md#move)). It gets the
+other widget; a scope you have not reviewed yet is simply not given to it. Open a session, press **Layout**, and on the **Arrange** tab
+drag it from the tray onto a panel or into a gap (see [Session layout](./session-layout.md#arrange)). It gets the
 same settings window as every other widget: a title of your own, and a style.
 
 A component switched on while a session is open appears in that session's tray the next time the

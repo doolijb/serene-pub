@@ -14,7 +14,7 @@
  */
 
 /**
- * The seven, exactly as the CHECK constraint on the tables spells them.
+ * The eight, exactly as the CHECK constraint on the tables spells them.
  *
  * 🚧 `location` and `session_location` (attributes phase 4, 2026-09-26): a
  * place holds state of its own. `location` is the durable layer — a
@@ -22,6 +22,11 @@
  * `session_location` is this run's layer over it, by the SAME entry id
  * (exactly as `session_cast` names the character a `card` names), kept
  * apart per session by `session_id`.
+ *
+ * 🚧 `player_seat` (2026-10-14): a player seat in one session, by
+ * `session_personas.id` — the owner a card-less player character's stats are
+ * written against. Session-scoped like `session_cast`, but with no card
+ * behind it, so its chain is itself alone.
  */
 export const OWNER_KINDS = [
 	"card",
@@ -30,7 +35,8 @@ export const OWNER_KINDS = [
 	"session",
 	"session_cast",
 	"location",
-	"session_location"
+	"session_location",
+	"player_seat"
 ] as const
 
 export type OwnerKind = (typeof OWNER_KINDS)[number]
@@ -43,8 +49,8 @@ export const isOwnerKind = (v: unknown): v is OwnerKind =>
  *
  * `id` means a different table per kind — `characters.id` for `card` and
  * `session_cast`, `lorebook_bindings.id` for `cast_member`, `lorebooks.id`,
- * `sessions.id`, `lorebook_entries.id` for `location` and `session_location`
- * — which is why there is no foreign key on the column and why
+ * `sessions.id`, `lorebook_entries.id` for `location` and `session_location`,
+ * `session_personas.id` for `player_seat` — which is why there is no foreign key on the column and why
  * this type is the only place the mapping is written down for code to read.
  */
 export interface StateOwner {

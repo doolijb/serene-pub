@@ -92,13 +92,34 @@ export async function readGraphEntryLinks(
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	if (!session?.lorebookId) return null
-	const lorebookId = session.lorebookId
-	const reading = (await sessionReadingOf(db, sessionId)) ?? {
-		lorebookId,
-		...MAIN_HEAD
+	// 🚧 The union (PLAN-rulesets §26): the attached book on the session's
+	// reading, then the session's own notes at their head — the ways between
+	// the notes' places read as the book's do. Null only with neither.
+	const { phantomOf } = await import("$lib/server/lorebooks/phantom")
+	const phantom = await phantomOf(db, sessionId)
+	if (!session?.lorebookId && !phantom) return null
+	const out: GraphEntryLink[] = []
+	if (session?.lorebookId) {
+		const lorebookId = session.lorebookId
+		const reading = (await sessionReadingOf(db, sessionId)) ?? {
+			lorebookId,
+			...MAIN_HEAD
+		}
+		out.push(...(await bookEntryLinks(db, lorebookId, reading)))
 	}
+	if (phantom && phantom.id !== session?.lorebookId)
+		out.push(
+			...(await bookEntryLinks(db, phantom.id, { lorebookId: phantom.id, ...MAIN_HEAD }))
+		)
+	return out
+}
 
+/** `readGraphEntryLinks` for one book on one reading. */
+async function bookEntryLinks(
+	db: Db,
+	lorebookId: number,
+	reading: Parameters<typeof rowsOnReading>[2]
+): Promise<GraphEntryLink[]> {
 	const r = schema.narrativeRelationships
 	const standing = await db
 		.select()
@@ -116,6 +137,15 @@ export async function readGraphEntryLinks(
 	// does not exist on edges, so every one is judged.
 	const onLine = await rowsOnReading(db, standing, reading)
 	if (onLine.length === 0) return []
+	// 🚧 A session's notes overlay a book (PLAN-rulesets §26): a way kept in
+	// the notes may end at a place in the book it overlays, so an end in
+	// either book is this session's. Any other book is not.
+	const [self] = await db
+		.select({ overlayOf: schema.lorebooks.overlayOf })
+		.from(schema.lorebooks)
+		.where(eq(schema.lorebooks.id, lorebookId))
+		.limit(1)
+	const bookIds = self?.overlayOf != null ? [lorebookId, self.overlayOf] : [lorebookId]
 
 	// Both ends, named, in two queries rather than one per end: a book with a
 	// hundred roads would otherwise be two hundred reads for a list this long.
@@ -150,9 +180,10 @@ export async function readGraphEntryLinks(
 					.where(
 						and(
 							inArray(schema.lorebookEntries.id, entryIds),
-							// Same book, on the line: an end anywhere else is
-							// not a place this session's story has.
-							eq(schema.lorebookEntries.lorebookId, lorebookId),
+							// This book or the one its notes overlay, on the
+							// line: an end anywhere else is not a place this
+							// session's story has.
+							inArray(schema.lorebookEntries.lorebookId, bookIds),
 							entryOnLineSql(reading)
 						)
 					)
@@ -169,7 +200,7 @@ export async function readGraphEntryLinks(
 					.where(
 						and(
 							inArray(schema.lorebookBindings.id, nodeIds),
-							eq(schema.lorebookBindings.lorebookId, lorebookId)
+							inArray(schema.lorebookBindings.lorebookId, bookIds)
 						)
 					)
 			: [],

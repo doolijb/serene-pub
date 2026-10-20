@@ -52,13 +52,13 @@ const rowOf = async (id: number) =>
 describe("writeTurnOrder", () => {
 	it("writes the document under metadata.turnOrder and leaves every other key alone", async () => {
 		const s = await makeSession({ keep: { nested: true }, other: 3 })
-		// `updated_at` is a day-resolution column: pin it to a past day so
-		// "unchanged" is a real assertion and not today equalling today.
+		// Pin `updated_at` to a past instant so "unchanged" is a real
+		// assertion and not now equalling now.
 		await db.execute(
-			sql`update ${schema.sessions} set updated_at = '2000-01-01' where id = ${s.id}`
+			sql`update ${schema.sessions} set updated_at = '2000-01-01T00:00:00Z' where id = ${s.id}`
 		)
 		const before = await rowOf(s.id)
-		expect(String(before.updatedAt)).toContain("2000-01-01")
+		expect(new Date(before.updatedAt as Date).toISOString()).toContain("2000-01-01")
 		const result = await writeTurnOrder(db, s.id, order(1000, "first"))
 		expect(result).toEqual({ written: true })
 		const after = await rowOf(s.id)

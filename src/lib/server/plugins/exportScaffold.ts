@@ -32,6 +32,7 @@
  */
 
 import { documentFileName, type PluginPackageManifest } from "./pluginPackage"
+import { exportedSessionLayout } from "$lib/server/db/panelsFromStored"
 
 /** Files this adds beside the built package, and what the author must do. */
 export interface ScaffoldFiles {
@@ -129,7 +130,8 @@ export async function scaffoldSourceFor(
 			slug: l.slug,
 			name: l.name,
 			...(l.description ? { description: l.description } : {}),
-			preset: l.preset
+			// An export is new: `panels` only, never the ⏳ old slots.
+			preset: exportedSessionLayout(l.preset)
 		})
 		layoutsByGenre.set(l.genreId, list)
 	}

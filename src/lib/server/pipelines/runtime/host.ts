@@ -19,6 +19,7 @@
  * allowed to see rather than against the query it happened to send (F30).
  */
 
+import { withSeatName } from "$lib/server/sessions/seatName"
 import { and, asc, count, desc, eq, gte, inArray, isNull, sql, type SQL } from "drizzle-orm"
 import { MAIN_LINE } from "$lib/shared/lorebooks/lineReading"
 import * as schema from "$lib/server/db/schema"
@@ -27,11 +28,15 @@ import {
 	ENTRY_TYPE_IDS,
 	WORLD_LORE_TYPE_ID,
 	entryInsert,
-	isEntryTypeId,
 	nextPosition,
 	toEntryRow
 } from "$lib/server/utils/lorebookEntries"
-import { entryDeclaration, bandOfType } from "$lib/server/entries/declarations"
+import {
+	entryDeclaration,
+	entryDeclarations,
+	bandOfType,
+	isDeclaredEntryType
+} from "$lib/server/entries/declarations"
 import {
 	MENTION_EXTRACTOR_VERSION,
 	extractMentions
@@ -76,7 +81,7 @@ import {
 } from "@serene-pub/sdk"
 import { randomUUID } from "node:crypto"
 import { CORE_BLOCKS_PART } from "$lib/server/messages/blocks"
-import { loreWriteRefusal, loreWritesOffRefusal } from "$lib/server/messages/writes"
+import { loreWriteRefusal } from "$lib/server/messages/writes"
 import { slotModelId } from "$lib/shared/connections/slotRef"
 import type { RunProgress } from "$lib/shared/sockets/progress"
 import type { RunArtifact } from "$lib/server/pipelines/runtime/receipts"
@@ -86,6 +91,7 @@ import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
 import { streamingModeFrom } from "$lib/server/connections/streaming"
 import { tether } from "$lib/server/pipelines/runtime/callTether"
 import type { LiveRow, SessionIo } from "$lib/server/pipelines/runtime/liveRow"
+import { noteTurnMessage } from "$lib/server/pipelines/runtime/runTurnMessage"
 import type { StatusRelay } from "$lib/server/pipelines/runtime/runStatus"
 import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelpers"
 import { speakerRefOf } from "$lib/server/messages/sessionChanges"
@@ -650,13 +656,13 @@ export async function narratorNameFor(
 	sessionId: number,
 	_userId: number | undefined
 ): Promise<string | null> {
-	const [{ buildWorld }, { resolveConfigSources }, { CHAT_NARRATE_SPEC_ID }] =
+	const [{ buildWorld }, { resolveConfigSources }, { STORY_NARRATE_SPEC_ID }] =
 		await Promise.all([
 			import("$lib/server/pipelines/config/world"),
 			import("@serene-pub/sdk"),
 			import("$lib/server/pipelines/specs")
 		])
-	const world = await buildWorld(db, { specId: CHAT_NARRATE_SPEC_ID, sessionId })
+	const world = await buildWorld(db, { specId: STORY_NARRATE_SPEC_ID, sessionId })
 	const sourced = resolveConfigSources(world as any, ["context"]) as any
 	const name = sourced?.context?.prompts?.narratorName?.value
 	return typeof name === "string" && name.trim() ? name : null
@@ -1319,6 +1325,63 @@ async function loreWriteLineOf(
 	}
 }
 
+/**
+ * 🚧 Where a session's lore write lands (PLAN-rulesets §26): the attached
+ * book on the session's line when the session may write it, else the
+ * session's own notes on their main line, every row there stamped with the
+ * message that wrote it (`loreWriteTargetFor`).
+ */
+async function sessionLoreWriteTo(
+	db: Db,
+	sessionId: number,
+	/** The turn's message (the run's live row), what a notes row anchors to. */
+	anchorMessageId?: number,
+	/**
+	 * 🚧 Into the session's own notes whatever the book allows (lane 2): a
+	 * filing tool on *Remember things*' Review — the lore write mode's own
+	 * Review, where the person carries a note into their book. Host-internal:
+	 * no declared port sets it.
+	 */
+	opts: { notes?: boolean } = {}
+): Promise<{
+	route: "book" | "phantom"
+	lorebookId: number
+	line: LoreWriteLine
+	sourceMessageId: number | null
+}> {
+	const { loreWriteTargetFor, phantomLorebookFor, turnAnchorOf } = await import("$lib/server/lorebooks/phantom")
+	const target = opts.notes
+		? {
+				route: "phantom" as const,
+				lorebookId: (await phantomLorebookFor(db, sessionId)).id,
+				sourceMessageId: await turnAnchorOf(db, sessionId, anchorMessageId)
+			}
+		: await loreWriteTargetFor(db, sessionId, { anchorMessageId })
+	if (target.route === "book")
+		return {
+			route: "book",
+			lorebookId: target.lorebookId,
+			line: await loreWriteLineOf(db, sessionId, target.lorebookId),
+			sourceMessageId: null
+		}
+	return {
+		route: "phantom",
+		lorebookId: target.lorebookId,
+		line: {
+			branchId: null,
+			historyEntryId: null,
+			reading: {
+				lorebookId: target.lorebookId,
+				branchId: null,
+				moment: null,
+				forkedAt: null,
+				line: MAIN_LINE
+			}
+		},
+		sourceMessageId: target.sourceMessageId
+	}
+}
+
 /** What `writeLoreLink` did: the row's id, and whether this call made it. */
 interface LoreLinkWrite {
 	id: number
@@ -1503,6 +1566,12 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 	 * it. Before the finish, a second message on the channel still races.
 	 */
 	let liveRowId: number | undefined
+	/**
+	 * 🚧 The turn's message: the live row this run opened, kept after it
+	 * settles. A row the run writes to the session's own notes anchors here
+	 * (PLAN-rulesets §26, §29), so retaking the turn retracts it.
+	 */
+	let turnMessageId: number | undefined
 	const racesLiveRow = (nodeKey: string, raw: unknown): string | null => {
 		if (liveChannel === undefined) return null
 		const channel = canonicalChannel(raw)
@@ -1645,7 +1714,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 				else delete nextAudiences[key]
 			}
 			if (sameJson(previous, next) && Object.hasOwn(held, owner))
-				return { next, changed: false, seen: false }
+				return { previous, next, changed: false, seen: false }
 			// Whether anybody's view can have moved: a value somebody
 			// may see was written, or one they could see was dropped.
 			// A pipelines-only write — most of them — pushes nothing.
@@ -1668,7 +1737,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 				)
 				where ${schema.sessions.id} = ${sessionId}
 			`)
-			return { next, changed: true, seen }
+			return { previous, next, changed: true, seen }
 		})
 		if (annex === null)
 			throw new HostScopeError(
@@ -1688,6 +1757,15 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 				{ kind: "run" },
 				{ asChild: true }
 			)
+		// 🚧 *Mark goals reached* (lane 2, 2026-10-19): a goal newly
+		// ticked in the Story's goals note — by the sweep or by a person's
+		// own edit — is said once on the session and told to every member.
+		if (annex.changed && owner === "core") {
+			const { noteGoalsReached } = await import("$lib/server/sessions/goalsReached")
+			await noteGoalsReached(db, scope.io, sessionId, annex.previous, annex.next).catch((err) =>
+				console.warn(`[goals] the goal-reached note for session ${sessionId} failed:`, err)
+			)
+		}
 		// Every member's own view, re-sent (R57): what each may see
 		// of the annex, never the annex.
 		if (annex.changed && annex.seen && scope.io) {
@@ -1810,6 +1888,68 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 	}
 
 	/**
+	 * 🚧 Who a **person's own message** speaks as (`create-message@1`'s
+	 * `role: 'user'`; owner ruling 2026-10-15), held to the run's own person:
+	 * a persona they own (the row's `personaId`), their own card-less seat
+	 * (stamped `player-seat:<id>`), or themselves. Every refusal is a
+	 * sentence the person reads — the send restores their text.
+	 */
+	const personLineOf = async (
+		node: NodeRef,
+		sessionId: number,
+		speaker: string | null,
+		p: Record<string, unknown>
+	): Promise<{ personaId: number | null; seatRef: string | null }> => {
+		const refuse = (why: string): never => {
+			throw new HostScopeError(`${node.key}: ${why}`)
+		}
+		if (scope.userId == null)
+			refuse("a person's message needs the person — this run has no user")
+		if (scope.lineage)
+			refuse(
+				"a person's message is written only by the run their own send started, never by a run another run dispatched"
+			)
+		if (p.generating === true || p.narration === true || p.sideCharacter != null)
+			refuse("a person's message is never a placeholder, narration or a side character's line")
+		if (p.row != null || refId(p.characterId) != null)
+			refuse("a person's message is a new row, spoken through `speaker` — not a claimed row or a cast row")
+		if (!speaker) return { personaId: null, seatRef: null }
+		const parsed = parseParticipantRef(speaker)
+		if (parsed.kind === "user") {
+			if (participantRowId(parsed.id) !== scope.userId)
+				refuse("a person's message is written as the person who sent it")
+			return { personaId: null, seatRef: null }
+		}
+		if (parsed.kind === "character") {
+			const personaId = participantRowId(parsed.id)
+			const [own] = await db
+				.select({ id: schema.characters.id })
+				.from(schema.characters)
+				.where(
+					and(
+						eq(schema.characters.id, personaId ?? -1),
+						eq(schema.characters.userId, scope.userId!)
+					)
+				)
+				.limit(1)
+			if (!own) refuse("You can only send messages with personas you own.")
+			return { personaId, seatRef: null }
+		}
+		if (parsed.kind === "player-seat") {
+			const { cardlessPlayerSeatOf, playerSeatSpeaker } = await import(
+				"$lib/server/sessions/seatName"
+			)
+			const seat = await cardlessPlayerSeatOf(db, sessionId, scope.userId!)
+			if (seat === null || String(seat) !== parsed.id)
+				refuse("a person's message speaks from their own seat, not another's")
+			return { personaId: null, seatRef: playerSeatSpeaker(seat!) }
+		}
+		return refuse(
+			`a person's message speaks as their persona, their seat or themselves — not '${speaker}'`
+		)
+	}
+
+	/**
 	 * A built-in write performs only under the built-in's own document
 	 * (U5b review W8) — `validate()` refuses the placement at publish, and
 	 * this is the same refusal at the write, for a document that reached the
@@ -1852,13 +1992,17 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 	 * carries. No actor is no permission: the only default that can be
 	 * wrong in one direction is the one that grants.
 	 */
-	const assertMayAct = async (node: NodeRef, messageId: number) => {
+	const assertMayAct = async (
+		node: NodeRef,
+		messageId: number,
+		verb: "change" | "rerun" = "change"
+	) => {
 		const { canActOnMessage, MESSAGE_ACTION_REFUSAL } = await import(
 			"$lib/server/messages/permissions"
 		)
 		if (
 			scope.userId != null &&
-			(await canActOnMessage(db, messageId, scope.userId))
+			(await canActOnMessage(db, messageId, scope.userId, verb))
 		)
 			return
 		throw new HostScopeError(
@@ -2084,6 +2228,84 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 	}
 
 	/**
+	 * 🚧 **The filing tools' doors** (lane 2, 2026-10-19; `tools/writeTools.ts`):
+	 * a lorebook write, a note taken back and a picture posted — each
+	 * through the host's own write (`create-lore-entry`, `create-message`),
+	 * recorded on the run under the tool's node, so the run's receipt and
+	 * its artifacts say what the tool filed. A lore write obeys the session's
+	 * *Remember things* task: Review files into the session's own notes only.
+	 */
+	const toolDoors = (toolNode: NodeRef, sessionId: number) => {
+		const asNode = (definitionId: string, suffix: string): NodeRef => ({
+			key: `${toolNode.key}:${suffix}`,
+			definitionId,
+			definitionVersion: 1,
+			kind: "outlet"
+		})
+		return {
+			fileLore: async (entry: { name: string; content: string; entryType?: string }) => {
+				const { sessionTaskModes } = await import("$lib/server/sessions/tasks")
+				const held = (await sessionTaskModes(db, sessionId)).memory === "review"
+				const wrote = (await host.commit!(
+					{
+						name: entry.name,
+						content: entry.content,
+						params: { entryType: entry.entryType ?? "core:entry/world-lore" },
+						toNotes: held
+					},
+					asNode("core:outlet/create-lore-entry", "entry")
+				)) as { id: number; lorebookId: number; route?: string }
+				const notes = wrote.route === "phantom"
+				return {
+					id: wrote.id,
+					lorebookId: wrote.lorebookId,
+					held,
+					where: notes ? "this session's own notes" : "the lorebook attached to this session"
+				}
+			},
+			forgetLore: async (name: string) => {
+				const { forgetNote } = await import("$lib/server/sessions/forgetNote")
+				const archived = await forgetNote(db, sessionId, name)
+				for (const id of archived) record(asNode("core:outlet/create-lore-entry", "forget"), "lore_entry", id, "updated")
+				return { archived }
+			},
+			makeImage: async (prompt: string) => {
+				const { dispatchImage } = await import("$lib/server/pipelines/runtime/dispatchImage")
+				const rendered = await dispatchImage(db, {
+					prompt,
+					connectionId: null,
+					samplingId: null,
+					sessionId,
+					userId: scope.userId ?? null,
+					runId: scope.runId,
+					artifacts: scope.artifacts,
+					nodeKey: toolNode.key
+				})
+				if (!rendered.media.length) throw new HostScopeError("the image generator drew nothing for that description")
+				// The picture speaks as the run's own row does — the Assistant.
+				const [own] =
+					liveRowId !== undefined
+						? await db
+								.select({ metadata: schema.sessionMessages.metadata })
+								.from(schema.sessionMessages)
+								.where(eq(schema.sessionMessages.id, liveRowId))
+								.limit(1)
+						: []
+				const speaker = (own?.metadata as { speaker?: unknown } | undefined)?.speaker
+				const posted = (await host.commit!(
+					{
+						text: rendered.caption || prompt,
+						media: rendered.media,
+						...(typeof speaker === "string" ? { speaker } : {})
+					},
+					asNode("core:outlet/create-message", "image")
+				)) as { id: number }
+				return { messageId: posted.id, caption: rendered.caption || prompt }
+			}
+		}
+	}
+
+	/**
 	 * Named rather than returned as a literal, because one branch of `call`
 	 * needs a read: a core tool sees the session through the host's own
 	 * enumerated seam (see `ToolContext`), and the alternative — a second
@@ -2199,11 +2421,32 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * from the first one kept. Same filters, same order as the
 					 * count window below; not for the talk or a row by id.
 					 */
+					/**
+					 * 🚧 **No table lines** (`session-history@1`'s
+					 * `tableLines: false`, 2026-10-15): a row the table wrote
+					 * in no voice (`metadata.tableLine` — a roll line) is left
+					 * out of the window itself, so it never takes a place the
+					 * conversation would have had.
+					 */
+					const noTableLines =
+						q.tableLines === false
+							? sql`coalesce((${schema.sessionMessages.metadata} ->> 'tableLine')::boolean, false) = false`
+							: undefined
+					/**
+					 * 🚧 **No failed replies** (2026-10-16 walk), in every
+					 * genre: a row whose run failed — an error on it and no
+					 * words — is not something anybody said. Read, it reached
+					 * the next prompt as a bare `Narrator:` turn. A failed row
+					 * that kept a partial still reads: those words were shown.
+					 */
+					const { notAFailedReplySql: noFailedReplies } = await import("$lib/server/messages/failedReply")
 					const windowWhere = and(
 						eq(schema.sessionMessages.sessionId, sessionId),
 						eq(schema.sessionMessages.isHidden, false),
 						eq(schema.sessionMessages.isGenerating, false),
-						channelWhere(schema.sessionMessages.channel, channel)
+						channelWhere(schema.sessionMessages.channel, channel),
+						noTableLines,
+						noFailedReplies
 					)
 					const readTokens =
 						byId === null &&
@@ -2886,7 +3129,23 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						.from(schema.sessions)
 						.where(eq(schema.sessions.id, sessionId))
 						.limit(1)
-					if (!session?.lorebookId) return []
+					if (!session) return []
+					/**
+					 * The books the session reads (§26): its attached lorebook,
+					 * then its own notes (the phantom) — each read whole by the
+					 * per-book read below, at its own reading, and the union
+					 * returned with the notes' rows marked `sessionOnly`, as
+					 * every other union read marks them (`sessionEntriesAsRead`).
+					 * A session with no book but notes reads its notes.
+					 */
+					const { lorebooksReadBy } = await import(
+						"$lib/server/lorebooks/phantom"
+					)
+					const books = await lorebooksReadBy(db, {
+						id: sessionId,
+						lorebookId: session.lorebookId ?? null
+					})
+					if (!books.ids.length) return []
 
 					/**
 					 * Where the session reads its book (owner ruling 3,
@@ -2922,8 +3181,14 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						entryOnReadingSql,
 						entryOverlaysFor
 					} = await import("$lib/server/state/entriesOnReading")
-					const reading =
-						(await sessionReadingOf(db, sessionId)) ?? MAIN_HEAD
+					// The attached book at the session's reading; the notes are
+					// never branched as a book, so they read at their head.
+					const sessionReading =
+						books.attachedId != null
+							? ((await sessionReadingOf(db, sessionId)) ?? MAIN_HEAD)
+							: MAIN_HEAD
+					const speaker = loreVisibilitySubject(q)
+					const readBook = async (bookId: number, reading: any) => {
 					/**
 					 * **The book is read once per run** (plan C4). A respond turn asks
 					 * this case up to six times — the three keyword lanes, the vector and
@@ -2942,8 +3207,6 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * sees the room. No content hash moves — the rows are the rows the
 					 * reads always produced.
 					 */
-					// Narrowed above; a closure would widen it again.
-					const bookId: number = session.lorebookId
 					const bookKey = `${sessionId}:${bookId}:${JSON.stringify(reading)}`
 					let bookPending = lorebookReads.get(bookKey)
 					if (!bookPending) {
@@ -3217,10 +3480,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * retrieve it and don't show it to me.*
 					 */
 					const wheres = [
-						eq(
-							schema.lorebookEntries.lorebookId,
-							session.lorebookId
-						),
+						eq(schema.lorebookEntries.lorebookId, bookId),
 						entryOnReadingSql(reading)
 					]
 					/**
@@ -3406,7 +3666,6 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * then mean "this voice knows everything", which is the
 					 * leak the port exists to close.
 					 */
-					const speaker = loreVisibilitySubject(q)
 					const visible = (e: any) =>
 						isCharacterLoreEntryVisible(e, asSession, speaker)
 
@@ -3420,7 +3679,10 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					// documented to depend on it, which is exactly why it is
 					// not the thing to change here.
 					const out: any[] = []
-					for (const typeId of ENTRY_TYPE_IDS) {
+					// Each row's type's place in ENTRY_TYPE_IDS, beside it: the
+					// union below orders two books' rows by it.
+					const outTypes: number[] = []
+					for (const [typeIndex, typeId] of ENTRY_TYPE_IDS.entries()) {
 						const decl = entryDeclaration(typeId)
 						// The privacy gate is the type's declared anchor
 						// policy, not a branch on which shape this is. World
@@ -3451,8 +3713,51 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 									entrySourceHash(row)
 								)
 							)
+							outTypes.push(typeIndex)
 						}
 					}
+					return {
+						out,
+						outTypes,
+						entryOf,
+						asSession,
+						isCharacterLoreEntryVisible
+					}
+					}
+
+					const read = new Map<
+						number,
+						Awaited<ReturnType<typeof readBook>>
+					>()
+					for (const bookId of books.ids)
+						read.set(
+							bookId,
+							await readBook(
+								bookId,
+								bookId === books.attachedId ? sessionReading : MAIN_HEAD
+							)
+						)
+					/**
+					 * The union, still world, then character, then history
+					 * (the order one book's listing has always had): the books
+					 * are concatenated, then stably ordered by type. The
+					 * notes' rows are marked "this session only".
+					 */
+					const tagged: Array<{ e: any; t: number }> = []
+					for (const bookId of books.ids) {
+						const { out: rows, outTypes } = read.get(bookId)!
+						rows.forEach((e, i) =>
+							tagged.push({
+								e:
+									bookId === books.phantomId
+										? { ...e, sessionOnly: true }
+										: e,
+								t: outTypes[i]
+							})
+						)
+					}
+					if (books.ids.length > 1) tagged.sort((a, b) => a.t - b.t)
+					const out: any[] = tagged.map(({ e }) => e)
 
 					/**
 					 * `withLinks` (places plan B2): each listed row's lore
@@ -3518,11 +3823,18 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							const gated =
 								entryDeclaration(row.typeId)?.roles.anchor
 									?.policy === BINDING_VISIBILITY_POLICY
+							if (!gated) {
+								seen.add(row.id)
+								continue
+							}
+							// Gated by its own book's cast — a far end in a
+							// book this session does not read is unseen.
+							const own = read.get(row.lorebookId)
 							if (
-								!gated ||
-								isCharacterLoreEntryVisible(
-									entryOf(row),
-									asSession,
+								own &&
+								own.isCharacterLoreEntryVisible(
+									own.entryOf(row),
+									own.asSession,
 									farSubject
 								)
 							)
@@ -3605,14 +3917,21 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 										sessionId
 									)
 								),
+							// 🚧 Left-joined (2026-10-14): a seat need not
+							// voice a card. A card-less player seat rides with
+							// `persona: null` and its `seatName`; a departed
+							// card's leftover row (neither) is dropped below.
 							db
 								.select({
 									persona: schema.characters,
 									position: schema.sessionPersonas.position,
-									removedAt: schema.sessionPersonas.removedAt
+									removedAt: schema.sessionPersonas.removedAt,
+									seatId: schema.sessionPersonas.id,
+									seatName: schema.sessionPersonas.seatName,
+									seatUserId: schema.sessionPersonas.userId
 								})
 								.from(schema.sessionPersonas)
-								.innerJoin(
+								.leftJoin(
 									schema.characters,
 									eq(
 										schema.sessionPersonas.personaId,
@@ -4005,13 +4324,18 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							absorbedAliases:
 								absorbedByCharacter.get(cc.character?.id) ?? []
 						})),
-						sessionPersonas: sessionPersonas.map((cp) => ({
+						sessionPersonas: sessionPersonas
+							.filter((cp) => cp.persona || cp.seatName)
+							.map((cp) => ({
 							...cp,
+							// 🚧 A seat name wins over the card's name; the
+							// card still supplies the rest (`promptFields`).
+							persona: withSeatName(cp.persona, cp.seatName),
 							// A persona seat has no switch; it is always
 							// taking part. Said, so one filter serves both.
 							enabled: true,
 							absorbedAliases:
-								absorbedByPersona.get(cp.persona?.id) ?? []
+								(cp.persona && absorbedByPersona.get(cp.persona.id)) ?? []
 						})),
 						envoys,
 						declaredEnvoys,
@@ -4020,6 +4344,11 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						lorebookBindings,
 						sessionScenario: session.scenario ?? null,
 						isGroup: Boolean(session.isGroup),
+						/**
+						 * 🚧 Who triggered this run — with several seats,
+						 * `{{user}}` is their own seat (`promptFields`).
+						 */
+						...(scope.userId != null ? { viewerUserId: scope.userId } : {}),
 						/**
 						 * Whose session this cast is (B2, 2026-10-03) — the key
 						 * the speaker's example dialogue is picked by, so the
@@ -4356,16 +4685,37 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								(n: unknown) => typeof n === "string"
 							)
 						: []
-					const declared = providers.map((t) => t.declaration)
+					const { withoutForbiddenWebTools } = await import(
+						"$lib/server/pipelines/runtime/tools/webTools"
+					)
+					// The web tools are offered to the assistant genres alone (ruled 2026-10-19).
+					const declared = await withoutForbiddenWebTools(
+						db,
+						q.sessionId ?? scope.sessionId,
+						providers.map((t) => t.declaration)
+					)
+					// 🚧 The session's tool kinds (Chat's `tools` field): a list narrows
+					// the offer to those kinds' tools; absent offers everything.
+					const { toolsOfKinds } = await import("$lib/server/pipelines/runtime/tools/assistantTools")
+					const byKind = toolsOfKinds(q.kinds)
+					// 🚧 The filing tools (lane 2): only where the session switched
+					// their kind on, or its memory task is on — never by default.
+					const { WRITE_TOOL_NAMES, writeToolsAllowed } = await import(
+						"$lib/server/pipelines/runtime/tools/writeTools"
+					)
+					const writes = await writeToolsAllowed(db, q.sessionId ?? scope.sessionId)
+					const offered = declared.filter((d) =>
+						WRITE_TOOL_NAMES.has(d.name) ? writes.has(d.name) : !byKind || byKind.has(d.name)
+					)
 					// The author's order, not the registry's: `include` is a
 					// list a spec wrote, and the order tools are advertised in
 					// is one of the few things an author can use to steer which
 					// one a model reaches for first.
 					return include.length
 						? include
-								.map((n) => declared.find((d) => d.name === n))
+								.map((n) => offered.find((d) => d.name === n))
 								.filter((d): d is NonNullable<typeof d> => !!d)
-						: declared
+						: offered
 				}
 
 				case "embedding_status": {
@@ -5531,6 +5881,27 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						"$lib/server/pipelines/runtime/tools/resolve"
 					)
 					const provider = await resolveTool(db, name)
+					{
+						// Advertisement and dispatch agree: a web tool a session may not
+						// call is refused here too, by name, as a result the model reads.
+						const { WEB_TOOL_NAMES, webToolsAllowed } = await import(
+							"$lib/server/pipelines/runtime/tools/webTools"
+						)
+						if (WEB_TOOL_NAMES.has(name) && !(await webToolsAllowed(db, scope.sessionId)))
+							return {
+								tool: name,
+								error: `${name} is not available in this kind of session.`
+							}
+						// 🚧 The filing tools (lane 2): only what the session switched on.
+						const { WRITE_TOOL_NAMES, writeToolsAllowed } = await import(
+							"$lib/server/pipelines/runtime/tools/writeTools"
+						)
+						if (WRITE_TOOL_NAMES.has(name) && !(await writeToolsAllowed(db, scope.sessionId)).has(name))
+							return {
+								tool: name,
+								error: `${name} is not switched on in this session.`
+							}
+					}
 					if (!provider)
 						return {
 							tool: name,
@@ -5592,7 +5963,11 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 													change as never
 												)
 											}
-										: undefined
+										: undefined,
+									// 🚧 The filing tools' doors (lane 2, `writeTools.ts`).
+									...(scope.sessionId !== undefined
+										? toolDoors(node, scope.sessionId)
+										: {})
 								})
 								return { tool: name, result }
 							} catch (e) {
@@ -5830,6 +6205,29 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * narrator name, then `UNCLAIMED_LINE_NAME`. A claimed row
 					 * (regenerate, swipe, extend) keeps the identity it has.
 					 */
+					/**
+					 * 🚧 **A person's own message** (`role: 'user'`; owner
+					 * ruling 2026-10-15): the row the composer's Send asks
+					 * for, written by the save pipeline the session's preset
+					 * binds on `message-offered` — never by the host directly.
+					 * Held to the run's OWN person on a ROOT run: a dispatched
+					 * child is the system's, and a person's line is written
+					 * only as the person who sent it. Who it speaks as is the
+					 * `speaker`: their persona (`character:<id>`, a card they
+					 * own), their card-less seat (`player-seat:<id>`, stamped
+					 * as today), or themselves (`user:<id>` or nothing).
+					 * Anything else — an envoy, someone else's persona or
+					 * seat, a placeholder, narration, a claimed row — is
+					 * refused here, with the sentence the person reads.
+					 */
+					const personRow = p.role === "user"
+					const personLine = personRow
+						? await personLineOf(node, sessionId, namedRef, p)
+						: null
+					if (!personRow && Array.isArray(p.trayItems) && p.trayItems.length)
+						throw new HostScopeError(
+							`${node.key}: tray items are a person's attachments — only a person's message (role 'user') carries them`
+						)
 					const {
 						unclaimedLineSpeaker,
 						undeclaredSpeakerRefusal
@@ -5844,7 +6242,42 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						if (undeclared)
 							throw new HostScopeError(`${node.key} ${undeclared}`)
 					}
+					/**
+					 * 🚧 **A table row** (PLAN-rulesets §30, 2026-10-16):
+					 * `tableLine` naming the message the row belongs to (a
+					 * row id, or a write result — the Narrator's placeholder)
+					 * rather than `true`. Stored as `metadata.anchorMessageId`
+					 * on whatever channel the spec names (the genre's `table`
+					 * channel), with no speaker — not the Narrator, not an
+					 * envoy: the table speaks in no voice, so it is never an
+					 * unclaimed line handed to the fallback envoy. The anchor
+					 * must be a row of this session; deleting it takes the
+					 * row with it (`messages/store.ts`). ⏳ `true` is the
+					 * marker it replaces, still a faceless lane note's.
+					 */
+					const tableAnchor =
+						p.tableLine === true || p.tableLine === false || p.tableLine == null
+							? null
+							: messageRefId(p.tableLine)
+					if (
+						p.tableLine !== true &&
+						p.tableLine !== false &&
+						p.tableLine != null &&
+						tableAnchor === null
+					)
+						throw new HostScopeError(
+							`${node.key}: tableLine takes true or the message the table row belongs to — wire the placeholder's messageId`
+						)
+					if (tableAnchor !== null) {
+						const anchorRow = await legacyMessage(db, tableAnchor)
+						if (!anchorRow)
+							throw new HostScopeError(
+								`${node.key}: no message ${tableAnchor} to anchor the table row to`
+							)
+						assertScoped(node, anchorRow.sessionId, sessionId)
+					}
 					const unclaimed =
+						tableAnchor === null &&
 						!namedRef &&
 						!narration &&
 						!sideCharacter &&
@@ -5860,8 +6293,29 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 									contributes: scope.contributes
 								})
 							: null)
+					/**
+					 * A side note an envoy says (`narration` with an envoy
+					 * `speaker` — the Dungeon Crawler's reveal, said by the
+					 * Planner) is under the envoy's own name, not the
+					 * narrator's: the row is narration only so it is no
+					 * reply in the turn order (DUNGEON_CRAWLER_DECLARED_RULE).
+					 */
+					const envoyNarrator =
+						narration && namedEnvoy
+							? await (async () => {
+									const { sessionDeclaredEnvoys } = await import(
+										"$lib/server/pipelines/entities/envoys"
+									)
+									const { i18nText } = await import("@serene-pub/sdk")
+									const decl = (
+										await sessionDeclaredEnvoys(db, sessionId)
+									).find((d) => d.slug === namedEnvoy)
+									return decl ? i18nText(decl.name) || null : null
+								})()
+							: null
 					const narratorName = narration
 						? sideCharacter?.name ||
+							envoyNarrator ||
 							(await narratorNameFor(
 								db,
 								sessionId,
@@ -5889,7 +6343,16 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							? { narratorInstructions: instructions }
 							: {}),
 						...(sideCharacter ? { sideCharacter } : {}),
-						...(speakerRef ? { speaker: speakerRef } : {}),
+						// A person's row carries only a seat's stamp, as the
+						// send always wrote it: a persona is the row's
+						// `personaId`, and the person as themselves is the row.
+						...(personLine
+							? personLine.seatRef
+								? { speaker: personLine.seatRef }
+								: {}
+							: speakerRef
+								? { speaker: speakerRef }
+								: {}),
 						...(scope.answersForm
 							? {
 									answersForm: {
@@ -5903,6 +6366,18 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							: {})
 					}
 					if (sections?.length) metadata.sections = sections
+					// 🚧 A row's kind (2026-10-17): one word, when wired.
+					{
+						const { messageKindOf } = await import("./messageKind")
+						const kind = messageKindOf(p.kind)
+						if (kind && typeof kind === "object") throw new HostScopeError(`${node.key}: ${kind.refused}`)
+						if (kind) metadata.kind = kind
+					}
+					// ⏳ A table line (2026-10-15): the table's own line, in
+					// no voice — a history that asks for none leaves it out.
+					if (p.tableLine === true) metadata.tableLine = true
+					// 🚧 A table row (§30): the message it belongs to.
+					if (tableAnchor !== null) metadata.anchorMessageId = tableAnchor
 					/**
 					 * 🚧 The turns a planner's row plans (Lair character
 					 * turns): resolved to participant references here, once,
@@ -5932,6 +6407,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					let row: Awaited<ReturnType<typeof insertLegacy>>
 					/** The pressing person's own line — see `message-completed` below. */
 					let personsOwnLine = false
+					/** A person's message posted with tray items — announced with its parts. */
+					let personAttached = false
 					if (claimId !== null) {
 						const existing = await legacyMessage(db, claimId)
 						if (!existing)
@@ -5991,6 +6468,53 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								`${node.key}: message ${claimId} was released before this run could claim it`
 							)
 						row = claimed
+					} else if (personLine) {
+						const message = {
+							sessionId,
+							userId: scope.userId!,
+							characterId: null,
+							personaId: personLine.personaId,
+							role: "user",
+							channel: canonicalChannel(p.channel),
+							content: String(p.text ?? ""),
+							// Only what the send always stored: a seat's stamp.
+							...(Object.keys(metadata).length ? { metadata } : {})
+						}
+						const { normaliseTrayItemIds, commitTraySend } = await import(
+							"$lib/server/attachments/send"
+						)
+						const { TrayRefusal } = await import("$lib/server/attachments/tray")
+						try {
+							const trayItemIds = normaliseTrayItemIds(p.trayItems)
+							if (trayItemIds.length) {
+								const { attachmentReaders } = await import(
+									"$lib/server/attachments/readers"
+								)
+								const readers = await attachmentReaders(db, {
+									sessionId,
+									userId: scope.userId!,
+									channel: message.channel
+								})
+								row = (
+									await commitTraySend(db, {
+										userId: scope.userId!,
+										sessionId,
+										trayItemIds,
+										message,
+										readers
+									})
+								).message
+								personAttached = true
+							} else row = await insertLegacy(db, message)
+						} catch (error) {
+							// The tray's own sentence, for the person to read; the
+							// transaction rolled back and the tray is as it was.
+							if (error instanceof TrayRefusal)
+								throw new HostScopeError(error.message)
+							throw error
+						}
+						// The person's send: auto-advance answers it as one (§4.6).
+						personsOwnLine = true
 					} else {
 						/**
 						 * Who speaks, as a cast row. Wired, or — when only the
@@ -6073,6 +6597,39 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						// answer, a question they ask — stays the run's.
 						personsOwnLine =
 							(asPersona || asSelf) && scope.answersForm?.toOwner === true
+						/**
+						 * 🚧 **A table line is said once** (2026-10-16 walk): the
+						 * same table line, by the same speaker, already the
+						 * channel's newest row is that line — a Retry that fires
+						 * a halted press again ("Name: Ann.") finds it there and
+						 * writes nothing. Only a table line: no model wrote it,
+						 * so the second would be the first word for word.
+						 */
+						if (metadata.tableLine === true && !generating) {
+							const [head] = await db
+								.select({
+									id: schema.sessionMessages.id,
+									content: schema.sessionMessages.content,
+									metadata: schema.sessionMessages.metadata
+								})
+								.from(schema.sessionMessages)
+								.where(
+									and(
+										eq(schema.sessionMessages.sessionId, sessionId),
+										eq(schema.sessionMessages.channel, canonicalChannel(p.channel))
+									)
+								)
+								.orderBy(desc(schema.sessionMessages.id))
+								.limit(1)
+							const was = (head?.metadata ?? {}) as Record<string, unknown>
+							if (
+								head &&
+								was.tableLine === true &&
+								(head.content ?? "").trim() === String(p.text ?? "").trim() &&
+								(was.speaker ?? null) === (metadata.speaker ?? null)
+							)
+								return { id: head.id, sessionId }
+						}
 						row = await insertLegacy(db, {
 							sessionId,
 							userId: scope.userId ?? null,
@@ -6103,7 +6660,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					// from the write, so the client sees it the moment it
 					// exists — before a token has been spent on it.
 					scope.live?.opened(row)
-					await announce(row)
+					if (personAttached) await announceWithParts(row.id)
+					else await announce(row)
 
 					// Media posted WITH the message (the `media` in-port).
 					//
@@ -6177,6 +6735,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								: p.channel
 						)
 						liveRowId = row.id
+						turnMessageId = row.id
+						noteTurnMessage(scope.runId, row.id)
 					}
 					return { id: row.id, sessionId: row.sessionId }
 				}
@@ -6611,11 +7171,46 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							.from(schema.sessions)
 							.where(eq(schema.sessions.id, sessionId))
 							.limit(1)
+						const stored = readTurnOrder(current?.metadata)
+						/**
+						 * 🚧 A person's recompute outvoted (PLAN-dc-after-walk3 R3-1,
+						 * the walk's NEW-11: a solo line sent while a round settled
+						 * sat silent): a run's recompute emitted after it wrote
+						 * first, under a cause that never fires. The person's cause
+						 * still gets its decision — on the order now stored, which
+						 * read the person's line too — unless the listener already
+						 * fired on that order (`personOutvoted`).
+						 */
+						const outvotedCause =
+							p.cause && typeof p.cause === "object" ? (p.cause as Record<string, unknown>) : null
+						if (result.reason === "stale" && outvotedCause?.kind === "user" && scope.userId != null) {
+							const { personOutvoted } = await import("$lib/server/sessions/autoAdvance")
+							if (personOutvoted(sessionId, stored)) {
+								notes.push("the person's cause was heard on the newer order")
+								const { emitSessionEvent } = await import(
+									"$lib/server/pipelines/runtime/sessionEvents"
+								)
+								await emitSessionEvent(db, {
+									sessionId,
+									userId: scope.userId,
+									event: "core:event/turn-order-changed@1",
+									payload: {
+										sessionId,
+										runId: scope.runId ?? null,
+										turnOrder: stored,
+										cause: outvotedCause,
+										...(scope.lineage ? { lineage: scope.lineage } : {})
+									},
+									io: scope.io,
+									signal: scope.signal
+								})
+							}
+						}
 						return {
 							written: false,
 							sessionId,
 							notes,
-							turnOrder: readTurnOrder(current?.metadata)
+							turnOrder: stored
 						}
 					}
 					record(node, "session", sessionId, "updated")
@@ -6733,6 +7328,210 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						Object.fromEntries(fields.map((f) => [f.key, f.see])),
 						new Set(fields.map((f) => f.key))
 					)
+				}
+
+				case "core:outlet/set-composer-state": {
+					/**
+					 * 🚧 A composer opened or closed by the genre (owner ruling
+					 * 2026-10-15): `sessions.composer_states`, through
+					 * `writeComposerState` — the one writer. Core opens and
+					 * closes nothing on its own; the send door reads it. A
+					 * value that names no lane or no person halts with its
+					 * sentence.
+					 */
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to open or close a composer in — the run was started without a session scope`
+						)
+					const { writeComposerState, ComposerStateRefusal } = await import(
+						"$lib/server/sessions/composerStates"
+					)
+					let states: unknown
+					try {
+						states = await writeComposerState(db, sessionId, {
+							channel: p.channel,
+							open: p.open,
+							reason: p.reason,
+							person: p.person
+						})
+					} catch (e) {
+						if (e instanceof ComposerStateRefusal) return { halt: e.message }
+						throw e
+					}
+					record(node, "session", sessionId, "updated")
+					// Every member's composer greys or opens now, not on reload.
+					if (scope.io) {
+						const [row] = await db
+							.select({ userId: schema.sessions.userId })
+							.from(schema.sessions)
+							.where(eq(schema.sessions.id, sessionId))
+							.limit(1)
+						if (row) {
+							const { pushSessionToParticipants } = await import(
+								"$lib/server/sockets/sessions"
+							)
+							await pushSessionToParticipants(scope.io, sessionId, row.userId).catch(
+								(err: unknown) =>
+									console.warn("[set-composer-state] session push failed:", err)
+							)
+						}
+					}
+					return { written: true, sessionId, states }
+				}
+
+				case "core:outlet/set-seat-name": {
+					/**
+					 * 🚧 A player seat named by a pipeline (2026-10-15): the
+					 * door a person's own seat name takes (`writeSeatName`),
+					 * for the person `user` names — their card-less seat first,
+					 * else their first seat, else a new card-less seat for a
+					 * player. The person is the seat's, so they are its
+					 * writer here: the owner may name any seat, a playing
+					 * guest their own. A blank name or a refusal halts with
+					 * its sentence: this outlet never clears a name.
+					 */
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to name a seat in — the run was started without a session scope`
+						)
+					const m =
+						typeof p.user === "string" ? /^user:(\d+)$/.exec(p.user.trim()) : null
+					if (!m) return { halt: `'${String(p.user)}' is not a person (user:<id>), so no seat was named` }
+					const name = typeof p.name === "string" ? p.name.trim() : ""
+					if (!name) return { halt: "there was no name to give the seat" }
+					const userId = Number(m[1])
+					const [session] = await db
+						.select({ userId: schema.sessions.userId })
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, sessionId))
+						.limit(1)
+					const { writeSeatName, SeatNameRefusal } = await import(
+						"$lib/server/sessions/seatName"
+					)
+					/**
+					 * 🚧 `retire` (owner ruling 2026-10-18): the seat this name
+					 * replaces — a new character after a death is a NEW seat, and
+					 * the fallen's keeps its lines' name. By reference: a
+					 * card-less seat's own id, or the seat holding a card.
+					 */
+					let retireSeatId: number | null = null
+					if (typeof p.retire === "string" && p.retire.trim()) {
+						const ref = p.retire.trim()
+						const seatRef = /^player-seat:(\d+)$/.exec(ref)
+						const cardRef = /^character:(\d+)$/.exec(ref)
+						if (seatRef) retireSeatId = Number(seatRef[1])
+						else if (cardRef) {
+							const [held] = await db
+								.select({ id: schema.sessionPersonas.id })
+								.from(schema.sessionPersonas)
+								.where(
+									and(
+										eq(schema.sessionPersonas.sessionId, sessionId),
+										eq(schema.sessionPersonas.personaId, Number(cardRef[1])),
+										isNull(schema.sessionPersonas.removedAt)
+									)
+								)
+								.limit(1)
+							if (!held) return { halt: `${ref} holds no seat at this table, so no seat was retired` }
+							retireSeatId = held.id
+						} else return { halt: `'${ref}' is not a seat (player-seat:<id> or character:<id>), so no seat was retired` }
+					}
+					let seatId: number | null
+					try {
+						seatId = await writeSeatName(db, {
+							sessionId,
+							userId,
+							isOwner: session?.userId === userId,
+							name,
+							...(retireSeatId !== null ? { retireSeatId } : {})
+						})
+					} catch (e) {
+						if (e instanceof SeatNameRefusal) return { halt: e.message }
+						throw e
+					}
+					if (seatId === null) return { halt: "no seat was named" }
+					record(node, "session", sessionId, "updated")
+					// Every member's page learns the seat and its name now, not
+					// on their next reload — the push an added persona takes.
+					if (scope.io) {
+						const { pushSessionToParticipants } = await import(
+							"$lib/server/sockets/sessions"
+						)
+						await pushSessionToParticipants(scope.io, sessionId, userId).catch((err: unknown) =>
+							console.warn("[set-seat-name] session push failed:", err)
+						)
+					}
+					const [row] = await db
+						.select({ personaId: schema.sessionPersonas.personaId })
+						.from(schema.sessionPersonas)
+						.where(eq(schema.sessionPersonas.id, seatId))
+						.limit(1)
+					// A seat with a card is its card (`character:<id>`); the
+					// seat's own reference names only a card-less one.
+					const seat =
+						row?.personaId != null ? `character:${row.personaId}` : `player-seat:${seatId}`
+					return { written: true, sessionId, seat }
+				}
+
+				case "core:outlet/set-stat-config": {
+					/**
+					 * 🚧 One owner's stat configuration (owner ruling
+					 * 2026-10-15): `{ owner, slot, config }` — the document a
+					 * card or session editor sends too — through
+					 * `setStatConfig`, the writer `state:configure` takes. The
+					 * owner is a seat (`player-seat:<id>`, `character:<id>`)
+					 * or `world`; `worldRow`, as on `set-state@1`, files a
+					 * seat's or the world's row at a message this run wrote,
+					 * so a retake or swipe of it takes the row back. A refusal
+					 * halts with its sentence.
+					 */
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to configure a stat in — the run was started without a session scope`
+						)
+					const { castOwnerOfRef } = await import("./bindings.state")
+					const ref = typeof p.owner === "string" ? p.owner.trim() : ""
+					const owner =
+						ref === "world"
+							? ({ kind: "session", id: sessionId } as const)
+							: castOwnerOfRef(ref)
+					if (!owner)
+						return {
+							halt: `${JSON.stringify(p.owner ?? null)} is not an owner here — name a seat (player-seat:<id>, character:<id>) or world`
+						}
+					const slotId = typeof p.slot === "string" ? p.slot.trim() : ""
+					const row = p.worldRow as { ids?: { id?: unknown }; id?: unknown } | number | null | undefined
+					const rawRow =
+						row && typeof row === "object" ? (row.ids?.id ?? row.id) : row
+					const worldRow =
+						typeof rawRow === "number" && Number.isInteger(rawRow) ? rawRow : undefined
+					if (p.worldRow != null && worldRow === undefined)
+						return { halt: "worldRow takes a message this run wrote, as that write's result" }
+					const { setStatConfig, StateRefusal } = await import("$lib/server/state/write")
+					try {
+						const done = await setStatConfig(
+							db,
+							{
+								sessionId,
+								updatedBy: `run:${scope.runId ?? "unknown"}`,
+								...(worldRow !== undefined && owner.kind !== "session_cast"
+									? { messageId: worldRow, ownAnchor: true }
+									: {})
+							},
+							{
+								owner,
+								slotId,
+								config: (p.config ?? {}) as Record<string, unknown>
+							}
+						)
+						return { configId: done.configId, owner: ref, slot: slotId, before: done.before, config: done.config }
+					} catch (e) {
+						if (e instanceof StateRefusal) return { halt: e.message }
+						throw e
+					}
 				}
 
 				case "core:outlet/set-annex-field": {
@@ -7444,11 +8243,29 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							`${node.key}: no message ${id} to swipe`
 						)
 					assertScoped(node, current.sessionId, scope.sessionId)
-					await assertMayAct(node, id)
+					await assertMayAct(node, id, "rerun")
 					if (current.isGenerating)
 						throw new HostScopeError(
 							`${node.key}: message ${id} is still being written — stop it first, or wait.`
 						)
+					/**
+					 * 🚧 A NEW alternative is a rerun: refused on a row no reply
+					 * wrote (`questionRowRefusal`, 2026-10-16) here as at the
+					 * verb, so no road records an empty swipe on the opening
+					 * scene or a question. Selecting one already there is not.
+					 */
+					if (typeof p.text === "string") {
+						const [owning] = await db
+							.select({ genreId: schema.sessions.genreId })
+							.from(schema.sessions)
+							.where(eq(schema.sessions.id, current.sessionId))
+							.limit(1)
+						if (owning?.genreId) {
+							const { questionRowRefusal } = await import("$lib/server/messages/verbs")
+							const refused = await questionRowRefusal(db, owning.genreId, id)
+							if (refused) throw new HostScopeError(refused)
+						}
+					}
 					const metadata = (current.metadata ?? {}) as Record<
 						string,
 						any
@@ -7971,20 +8788,14 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * telling somebody to attach one would send them to a
 					 * screen that cannot help.
 					 */
-					// The genre's declared writes, then the book owner's lore
-					// write mode: Off refuses the write (plan A22). Review
-					// changes writes: this outlet is reviewed only when the
-					// spec parks it (`settings.review`), which the mode cannot
-					// force.
-					const noLore =
-						(await loreWriteRefusal(db, sessionId)) ??
-						(await loreWritesOffRefusal(db, sessionId))
+					// Only the genre's declared writes can refuse here. The lore
+					// write mode never refuses (🚧 PLAN-rulesets §26): what the
+					// session may not write to its book — no book, Review
+					// changes, Off, someone else's book — lands in its own notes.
+					const noLore = await loreWriteRefusal(db, sessionId)
 					if (noLore) throw new HostScopeError(`${node.key}: ${noLore}`)
-
-					if (!session?.lorebookId)
-						throw new HostScopeError(
-							`${node.key}: this session has no lorebook, so there is nowhere to save the summary. Read one into this session first.`
-						)
+					if (!session)
+						throw new HostScopeError(`${node.key}: session ${sessionId} not found`)
 
 					const name = String(p.name ?? "").trim() || "Untitled"
 					const content = String(p.content ?? "")
@@ -8002,9 +8813,9 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					const typeId =
 						String(p.params?.entryType ?? "").trim() ||
 						WORLD_LORE_TYPE_ID
-					if (!isEntryTypeId(typeId))
+					if (!isDeclaredEntryType(typeId))
 						throw new HostScopeError(
-							`${node.key}: '${typeId}' is not a declared entry type, so there is nothing to file this under. The declared types are ${ENTRY_TYPE_IDS.join(", ")}.`
+							`${node.key}: '${typeId}' is not a declared entry type, so there is nothing to file this under. The declared types are ${entryDeclarations().map((d) => d.typeId).join(", ")}.`
 						)
 
 					/**
@@ -8019,7 +8830,11 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * written while somebody is adding an entry by hand cannot
 					 * race it.
 					 */
-					const lorebookId = session.lorebookId
+					const target = await sessionLoreWriteTo(db, sessionId, turnMessageId, {
+						// 🚧 A filing tool on Review (lane 2): host-internal, never a port.
+						notes: (p as { toNotes?: unknown }).toNotes === true
+					})
+					const lorebookId = target.lorebookId
 					/**
 					 * The links, in the SAME transaction as the row (L2).
 					 *
@@ -8035,7 +8850,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					// The session's line, read before the transaction (only
 					// `tx` inside it): the entry and its links are that
 					// line's own, never main's by omission (finding #0).
-					const line = await loreWriteLineOf(db, sessionId, lorebookId)
+					const line = target.line
 					const { row, linkIds, madeLinkIds } = await db.transaction(
 						async (tx) => {
 							await tx.execute(
@@ -8043,8 +8858,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							)
 							const [created] = await tx
 								.insert(schema.lorebookEntries)
-								.values(
-									entryInsert(
+								.values({
+									...entryInsert(
 										{
 											typeId,
 											lorebookId,
@@ -8060,8 +8875,11 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 										// A pipeline wrote it, never a person: the
 										// rail's machine-written scope counts it.
 										{ provenance: "pipeline" }
-									)
-								)
+									),
+									// 🚧 In the session's notes, its anchor on the
+									// timeline (§29): a revision retracts it.
+									sourceMessageId: target.sourceMessageId
+								})
 								.returning()
 							const ids: number[] = []
 							// The rows THIS write made. A link the list states
@@ -8096,6 +8914,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					return {
 						id: row.id,
 						lorebookId,
+						route: target.route,
 						...(linkIds.length ? { linkIds } : {})
 					}
 				}
@@ -8120,28 +8939,15 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							`${node.key} has no session to link lore in — the run was started without a session scope`
 						)
 
-					// The genre's declared writes, then the book owner's lore
-					// write mode: Off refuses the write (plan A22). Review
-					// changes writes: this outlet is reviewed only when the
-					// spec parks it (`settings.review`), which the mode cannot
-					// force.
-					const noLore =
-						(await loreWriteRefusal(db, sessionId)) ??
-						(await loreWritesOffRefusal(db, sessionId))
+					// The genre's declared writes refuse; what the session may
+					// not write to its book links in its own notes instead
+					// (🚧 PLAN-rulesets §26) — both ends found there.
+					const noLore = await loreWriteRefusal(db, sessionId)
 					if (noLore) throw new HostScopeError(`${node.key}: ${noLore}`)
 
-					const [session] = await db
-						.select()
-						.from(schema.sessions)
-						.where(eq(schema.sessions.id, sessionId))
-						.limit(1)
-					if (!session?.lorebookId)
-						throw new HostScopeError(
-							`${node.key}: this session has no lorebook, so there is nothing to link. Read one into this session first.`
-						)
-
-					const lorebookId = session.lorebookId
-					const line = await loreWriteLineOf(db, sessionId, lorebookId)
+					const target = await sessionLoreWriteTo(db, sessionId, turnMessageId)
+					const lorebookId = target.lorebookId
+					const line = target.line
 					// Both ends under the book's own lock, for the reason the
 					// entry write takes it: an end resolved by name must not be
 					// renumbered or renamed out from under the insert — and the
@@ -8210,6 +9016,25 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						throw new HostScopeError(
 							`${node.key} has no session to propose graph changes for`
 						)
+					/**
+					 * 🚧 A Story sweep's ties (lane 2, 2026-10-19): a list of
+					 * `{ from, to, how }`, by name — filed on the lorebook's
+					 * Graph review screen, the same review a build's proposal
+					 * waits in. What could not be placed is said, never dropped.
+					 */
+					if (Array.isArray(p.proposal)) {
+						const { fileSweptRelationships } = await import(
+							"$lib/server/sessions/sweptRelationships"
+						)
+						const filed = await fileSweptRelationships(db, sessionId, p.proposal)
+						return {
+							status: filed.filed > 0 ? "proposed" : "skipped",
+							sessionId,
+							filed: filed.filed,
+							...(filed.activityId ? { activityId: filed.activityId } : {}),
+							...(filed.skipped.length ? { skipped: filed.skipped } : {})
+						}
+					}
 					return {
 						status: "proposed",
 						sessionId,
@@ -8397,6 +9222,13 @@ function toMessage(r: any, shaping?: ChannelShaping | null) {
 			: {}),
 		// A stopped row ends a standing turn plan (R34). Only when stopped.
 		...(r.generationOutcome === "stopped" ? { stopped: true } : {}),
+		// 🚧 The table's own line (a roll line), said so a script can tell
+		// it from speech. Only on such a row.
+		...(r.metadata?.tableLine === true ? { tableLine: true } : {}),
+		// 🚧 A row's kind (a journal line's `did`, a pressed answer's
+		// `answer` — Dungeon Crawler's talk reads a person's answers as
+		// their lines, the 100-turn walk's P3-5). Only on such a row.
+		...(typeof r.metadata?.kind === "string" ? { kind: r.metadata.kind } : {}),
 		createdAt: r.createdAt
 	}
 }

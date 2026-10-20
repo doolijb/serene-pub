@@ -34,7 +34,7 @@ import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { run } from "@serene-pub/sdk"
 import { loadTokenizer } from "@serene-pub/sdk/tokenizers"
 import { eq } from "drizzle-orm"
-import { respondSpec, CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs/respond"
+import { storyRespondSpec, STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs/respond"
 import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults"
 import { TEXT_CAPABILITY } from "$lib/server/connections/capabilityTarget"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
@@ -158,12 +158,12 @@ describe("tokenizerFor — which connection's setting a run budgets with", () =>
 	// one did. A session never names a connection (F20, ruled 2026-09-30): the
 	// pick is the pipeline configuration's, so the case below writes it on the
 	// configuration this session resolves through.
-	const doc = () => respondSpec()
+	const doc = () => storyRespondSpec()
 	const worldFor = async () => {
 		const { buildWorld } = await import(
 			"$lib/server/pipelines/config/world"
 		)
-		return await buildWorld(db, { sessionId, specId: CHAT_RESPOND_SPEC_ID })
+		return await buildWorld(db, { sessionId, specId: STORY_RESPOND_SPEC_ID })
 	}
 
 	it("reads the column off the registered text->text default", async () => {
@@ -182,7 +182,7 @@ describe("tokenizerFor — which connection's setting a run budgets with", () =>
 		const [spec] = await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
 		const [config] = await db
 			.insert(schema.pipelineConfigs)
 			.values({
@@ -217,7 +217,7 @@ describe("tokenizerFor — which connection's setting a run budgets with", () =>
 		const [spec] = await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
 		await db.insert(schema.pipelineNodeOverrides).values({
 			specId: spec!.id,
 			scopeKind: "session",
@@ -254,7 +254,7 @@ describe("tokenizerFor — which connection's setting a run budgets with", () =>
 describe("the id reaches the number", () => {
 	/** The reply pipeline, stopped before the provider, with a given tokenizer. */
 	const candidateTokens = async (tokenizer?: string) => {
-		const receipt = await run(respondSpec(), {
+		const receipt = await run(storyRespondSpec(), {
 			input: {
 				text: "tell me about the ashguard",
 				sessionId,
@@ -285,8 +285,8 @@ describe("the id reaches the number", () => {
 			"$lib/server/pipelines/config/world"
 		)
 		const id = tokenizerFor(
-			await buildWorld(db, { sessionId, specId: CHAT_RESPOND_SPEC_ID }),
-			respondSpec()
+			await buildWorld(db, { sessionId, specId: STORY_RESPOND_SPEC_ID }),
+			storyRespondSpec()
 		)
 		expect(id).toBe(TokenCounterOptions.OPENAI_GPT4O)
 
@@ -304,7 +304,10 @@ describe("the id reaches the number", () => {
 				`${estimate.count(LORE)}. If it matches the estimate, the id is ` +
 				`being dropped somewhere between tokenizerFor and ctx.countTokens.`
 		).toBe(gpt4o.count(LORE))
-		expect(actual.notes ?? []).toEqual([])
+		// No note but the junctions' own record of the branch each took
+		// (Story's reply reads the lorebook behind a junction, 2026-10-19):
+		// nothing degraded.
+		expect((actual.notes ?? []).filter((n) => !n.startsWith("junction "))).toEqual([])
 	}, 60_000)
 
 	it("falls back to the rough estimate when no tokenizer is named", async () => {

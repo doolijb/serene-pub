@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest"
 import {
-	BEHAVIOUR_GROUP,
 	CORE_SETTING_KEYS,
 	effectiveWidgetSettings,
 	pruneWidgetSettings,
@@ -30,7 +29,7 @@ const phone: WidgetSettingsDecl = {
 		autoscroll: {
 			type: "boolean",
 			label: "Follow new messages",
-			group: BEHAVIOUR_GROUP,
+			group: "Behaviour",
 			default: true
 		}
 	}
@@ -67,20 +66,55 @@ describe("widgetSettingsSchema — core keys plus what the widget declares", () 
 	})
 })
 
-describe("settingsSections — progressive exposure", () => {
+describe("settingsSections — core's, the widget's own, then one section per group", () => {
 	it("shows only the core fields for a widget that declares none", () => {
 		const s = settingsSections(plain)
 		expect(s.basic.map((f) => f.key)).toEqual(["title", "hostCard"])
 		expect(s.declared).toEqual([])
-		expect(s.behaviour).toEqual([])
+		expect(s.groups).toEqual([])
 	})
 
-	it("splits declared fields from the behaviour group", () => {
+	it("puts ungrouped fields under no heading and a grouped one under its group", () => {
 		const s = settingsSections(phone)
 		expect(s.basic.map((f) => f.key)).toEqual(["title", "lane", "hostCard"])
 		expect(CORE_SETTING_KEYS).toContain("backingMode")
 		expect(s.declared.map((f) => f.key)).toEqual(["density"])
-		expect(s.behaviour.map((f) => f.key)).toEqual(["autoscroll"])
+		expect(s.groups.map((g) => [g.heading, g.fields.map((f) => f.key)])).toEqual([
+			["Behaviour", ["autoscroll"]]
+		])
+	})
+
+	it("one section per distinct group, in order of first appearance; fields in declaration order", () => {
+		const log: WidgetSettingsDecl = {
+			id: "log",
+			title: "Log",
+			settings: {
+				channel: { type: "string", label: "Channel", group: "Channel" },
+				showAvatars: { type: "boolean", label: "Faces", group: "Reading" },
+				compact: { type: "boolean", label: "Compact" },
+				nextUp: { type: "boolean", label: "Next up", group: "Turns" },
+				showTimestamps: { type: "boolean", label: "Times", group: "Reading" },
+				untitled: { type: "boolean", label: "Untitled", group: "  " }
+			}
+		}
+		const s = settingsSections(log)
+		// A blank group is no group.
+		expect(s.declared.map((f) => f.key)).toEqual(["compact", "untitled"])
+		expect(s.groups.map((g) => [g.heading, g.fields.map((f) => f.key)])).toEqual([
+			["Channel", ["channel"]],
+			["Reading", ["showAvatars", "showTimestamps"]],
+			["Turns", ["nextUp"]]
+		])
+	})
+
+	it("the heading is the group string verbatim — a lowercase one is not folded or recased", () => {
+		const s = settingsSections({
+			id: "x",
+			title: "X",
+			settings: { a: { type: "boolean", label: "A", group: "behaviour" } }
+		})
+		expect(s.groups.map((g) => g.heading)).toEqual(["behaviour"])
+		expect(s.declared).toEqual([])
 	})
 })
 

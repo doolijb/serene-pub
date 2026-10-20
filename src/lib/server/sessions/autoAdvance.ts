@@ -57,13 +57,43 @@ const fired = new Map<number, number>()
 
 /** For tests, and for a session being deleted. */
 export function _resetAutoAdvance(sessionId?: number): void {
-	if (sessionId === undefined) fired.clear()
-	else fired.delete(sessionId)
+	if (sessionId === undefined) {
+		fired.clear()
+		lastDecided.clear()
+	} else {
+		fired.delete(sessionId)
+		lastDecided.delete(sessionId)
+	}
 }
 
 /** How many auto-advances this session has done since the last send. */
 export function autoAdvanceCount(sessionId: number): number {
 	return fired.get(sessionId) ?? 0
+}
+
+/**
+ * 🚧 What the listener last decided, per session: the order it was handed
+ * (by its `basedOnAt`) and whether the head fired (PLAN-dc-after-walk3 R3-1).
+ * Read by `set-turn-order` when a PERSON's recompute arrives stale — see
+ * `personOutvoted`.
+ */
+const lastDecided = new Map<number, { basedOnAt: number; fired: boolean }>()
+
+/**
+ * 🚧 A person's recompute was outvoted (PLAN-dc-after-walk3 R3-1, the walk's
+ * NEW-11): a solo line sent while a round settled sat silent. Its
+ * `message-completed` recompute queued behind a run's `annex-changed` one
+ * emitted after it; the run's — under a run's cause, which never fires —
+ * wrote the order first, and the person's arrived stale, so nothing heard
+ * the person at all. Whether the order now stored still owes that person
+ * their decision: written by a recompute this listener did not fire on.
+ * Pure read; the caller emits.
+ */
+export function personOutvoted(sessionId: number, stored: { basedOnAt?: unknown } | null | undefined): boolean {
+	const at = Number(stored?.basedOnAt)
+	if (!Number.isFinite(at)) return false
+	const last = lastDecided.get(sessionId)
+	return !last || last.basedOnAt !== at || !last.fired
 }
 
 export type AutoAdvanceMode = "off" | "next" | "round"
@@ -117,6 +147,8 @@ export async function onTurnOrderChanged(
 	// Whatever path ended it, a listener that did not fire says so — the
 	// one announcement a client waiting on a send must always get.
 	if (!outcome.fired) await say(false)
+	const decidedAt = Number((opts.turnOrder as { basedOnAt?: unknown } | null | undefined)?.basedOnAt)
+	if (Number.isFinite(decidedAt)) lastDecided.set(opts.sessionId, { basedOnAt: decidedAt, fired: outcome.fired })
 	return outcome
 }
 

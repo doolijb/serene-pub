@@ -109,13 +109,20 @@
 	let awaitingCreate = false
 
 	// Step definitions
-	const steps = [
+	const ALL_STEPS = [
 		{ title: "Name", canSkip: false },
 		{ title: "Avatar", canSkip: true },
 		{ title: "Description", canSkip: false },
 		{ title: "Personality", canSkip: true },
 		{ title: "First message", canSkip: true }
 	]
+	/**
+	 * 🚧 A persona is never played by the AI, so it is never asked for a
+	 * first message (2026-10-18, the 100-turn walk #31: "The first message
+	 * teaches the AI how your character acts" read wrong for one): its wizard
+	 * ends on Personality.
+	 */
+	const steps = $derived(initial?.isPersona ? ALL_STEPS.slice(0, 4) : ALL_STEPS)
 
 	// Validation functions
 	function validateCurrentStep(): boolean {
@@ -384,6 +391,10 @@
 		onOpenChange?.(e)
 	}}
 >
+	<!-- 🚧 Mounted only while open (PLAN-dc-after-walk2 Q3-6, the walk's #48:
+	     every closed creator left a hidden "Create Character" / "Create
+	     Persona" dialog in the page for a screen reader to find). -->
+	{#if open}
 	<Portal>
 		<Dialog.Backdrop
 			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
@@ -1057,4 +1068,5 @@
 			</Dialog.Content>
 		</Dialog.Positioner>
 	</Portal>
+	{/if}
 </Dialog>

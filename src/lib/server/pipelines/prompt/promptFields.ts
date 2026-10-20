@@ -74,8 +74,24 @@ export interface SessionCharacterRow {
 }
 
 export interface SessionPersonaRow {
-	persona: { id?: number; name: string; description: string }
+	/** The voiced card; 🚧 null for a card-less player seat (2026-10-14). */
+	persona: { id?: number; name: string; description: string } | null
+	/**
+	 * 🚧 The seat's own name — a card-less player seat's only name. On a seat with
+	 * a card the read has already laid it over the card's (`withSeatName`).
+	 */
+	seatName?: string | null
+	/** 🚧 Whose seat this is (`session_personas.user_id`), when the read knows. */
+	seatUserId?: number | null
 }
+
+/** 🚧 A seat's name in the prompt: its card's, else (card-less) its seat name. */
+const seatPersonaName = (cp: SessionPersonaRow): string =>
+	cp.persona ? F.personaName(cp.persona) : (cp.seatName ?? "")
+
+/** 🚧 A seat's description: the card's; a card-less player seat has none. */
+const seatPersonaDescription = (cp: SessionPersonaRow): string =>
+	cp.persona ? F.personaDescription(cp.persona) : ""
 
 export interface ResolveInput {
 	sessionCharacters?: readonly SessionCharacterRow[]
@@ -155,6 +171,12 @@ export interface ResolveInput {
 	 * is `full`, which is what every character rendered at before it existed.
 	 */
 	characterDetail?: unknown
+	/**
+	 * 🚧 Who triggered this run (the host's `scope.userId`, on the cast
+	 * read). With several seats it picks `{{user}}`: that person's own seat,
+	 * never the joined list (2026-10-16). Absent → the old rule.
+	 */
+	viewerUserId?: number | null
 }
 
 /**
@@ -310,9 +332,25 @@ export function stableExamplePick(
 	return (n) => (n > 0 ? h % n : 0)
 }
 
+/** 🚧 With two or more seats, the viewer's one seat's name; else null. */
+function viewerSeatName(
+	seats: readonly SessionPersonaRow[],
+	viewerUserId: number | null | undefined
+): string | null {
+	if (seats.length < 2 || viewerUserId == null) return null
+	const own = seats.filter(
+		(cp) => (cp.seatUserId ?? (cp.persona as { userId?: number } | null)?.userId) === viewerUserId
+	)
+	return own.length === 1 ? seatPersonaName(own[0]) || null : null
+}
+
 export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 	const sessionCharacters = input.sessionCharacters ?? []
-	const sessionPersonas = input.sessionPersonas ?? []
+	// A row with neither a card nor a seat name is nobody (a departed
+	// card's leftover seat).
+	const sessionPersonas = (input.sessionPersonas ?? []).filter(
+		(cp) => cp.persona || cp.seatName
+	)
 	const currentId = input.currentCharacterId ?? null
 	const current =
 		sessionCharacters.find((cc) => cc.character.id === currentId)
@@ -349,7 +387,7 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 					.filter((cc) => cc.enabled !== false)
 					.map((cc) => resolveCharacterName(cc.character as any))
 
-	const personaNames = sessionPersonas.map((cp) => F.personaName(cp.persona))
+	const personaNames = sessionPersonas.map(seatPersonaName)
 
 	// 🚧 Likeness (DESIGN-image-generation §5): the speaker's, for
 	// `{{likeness}}` / `{{likenessNegative}}` — the side character's when
@@ -367,10 +405,13 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 				name: resolveCharacterName(cc.character as any),
 				prompt: likenessOf(cc.character as any).prompt
 			})),
-		...sessionPersonas.map((cp) => ({
-			name: F.personaName(cp.persona),
-			prompt: likenessOf(cp.persona as any).prompt
-		}))
+		// A card-less player seat has no likeness to draw.
+		...sessionPersonas
+			.filter((cp) => cp.persona)
+			.map((cp) => ({
+				name: seatPersonaName(cp),
+				prompt: likenessOf(cp.persona as any).prompt
+			}))
 	]
 
 	// The example dialogue is picked once and reported, so the same run
@@ -389,8 +430,8 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 	return {
 		characters: characters as any,
 		personas: sessionPersonas.map((cp) => ({
-			name: F.personaName(cp.persona),
-			description: F.personaDescription(cp.persona)
+			name: seatPersonaName(cp),
+			description: seatPersonaDescription(cp)
 		})),
 		characterNames,
 		personaNames,
@@ -413,9 +454,11 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 		// The `"user"` fallback is the legacy default rather than an empty
 		// string — a card that says "you are talking to {{user}}" should not
 		// render "you are talking to ." (index.ts:630-633).
-		personaName: current
-			? (personaNames[0] ?? "user")
-			: joinWithAnd(personaNames),
+		// 🚧 Several seats: the triggering person's own seat, when exactly
+		// one is theirs — `{{user}}` is one person, never "Ann and Bo".
+		personaName:
+			viewerSeatName(sessionPersonas, input.viewerUserId) ??
+			(current ? (personaNames[0] ?? "user") : joinWithAnd(personaNames)),
 		narratorName: input.narratorName,
 		scenario: resolveScenario(input, current),
 		relationshipsPerspectives: input.relationshipsPerspectives,

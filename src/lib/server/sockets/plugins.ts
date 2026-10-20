@@ -158,9 +158,9 @@ async function swapSummaries(
 	rows: Row[]
 ): Promise<Map<string, NonNullable<Sockets.Plugins.PluginRow["swaps"]>>> {
 	const out = new Map<string, NonNullable<Sockets.Plugins.PluginRow["swaps"]>>()
-	const withSwaps = rows.filter(
-		(r) => Array.isArray((r.manifest as any)?.swaps) && (r.manifest as any).swaps.length
-	)
+	// Onto the spec core ships now (`renamedCoreIds.ts`).
+	const { pluginSwapsOf } = await import("$lib/server/plugins/renamedCoreIds")
+	const withSwaps = rows.filter((r) => pluginSwapsOf(r.manifest).length)
 	if (!withSwaps.length) return out
 	const { swapKey } = await import("$lib/server/pipelines/entities/bindings")
 	const specs = (await db
@@ -182,9 +182,7 @@ async function swapSummaries(
 	)
 	for (const r of withSwaps) {
 		// Only swaps onto a published pipeline — the ones a genre hub lists.
-		const swaps = ((r.manifest as any).swaps as any[]).filter(
-			(c) => c?.spec && c?.node && c?.definition && genreOf.has(c.spec)
-		)
+		const swaps = pluginSwapsOf(r.manifest).filter((c) => genreOf.has(c.spec))
 		if (!swaps.length) continue
 		const off = new Set<string>(r.disabledSwaps ?? [])
 		out.set(r.pluginId, {

@@ -19,15 +19,15 @@
  * Resolves once written; the new value arrives as a `session_state` push,
  * never in the reply.
  */
-import { isSlotLoreRef, type WidgetRequests } from "@serene-pub/sdk"
+import { isSlotLoreRef, isSlotPiece, type WidgetRequests } from "@serene-pub/sdk"
 import type { WidgetRequestHandler } from "$lib/shared/widgets/context"
 import { holdsWidgetGrant } from "./askers"
 
 type Params = WidgetRequests["set-attribute-value"]["params"]
 type Value = Params["value"]
 
-/** The session layers a widget may write — the world's, a cast member's and 🚧 a place's (phase 4). */
-const SESSION_LAYERS = new Set(["session", "session_cast", "session_location"])
+/** The session layers a widget may write — the world's, a cast member's, 🚧 a card-less player seat's and 🚧 a place's (phase 4). */
+const SESSION_LAYERS = new Set(["session", "session_cast", "player_seat", "session_location"])
 
 /** What this answer needs of the page's state store (`SessionStateHandle`). */
 export interface AttributeWriter {
@@ -38,7 +38,7 @@ export interface AttributeWriter {
 		owner: Sockets.State.Owner,
 		slotId: string,
 		value: Value,
-		opts?: { ownError?: boolean }
+		opts?: { ownError?: boolean; say?: string }
 	): Promise<void>
 }
 
@@ -48,10 +48,15 @@ const isScalar = (v: unknown): boolean =>
 	typeof v === "boolean" ||
 	(typeof v === "number" && Number.isFinite(v))
 
-/** A scalar, or a list written whole — its items words or lore references (`{ entryId }`). */
+/**
+ * A scalar, or a list written whole — its items words, lore references
+ * (`{ entryId }`) or pieces (`{ kind: 'inline' | 'compendium', … }`, audit
+ * A1). Only the outline is judged here: whether a piece fits the slot's
+ * repertoire is the server's `checkSlotValue`, which refuses in words.
+ */
 const isValue = (v: unknown): v is Value =>
 	isScalar(v) ||
-	(Array.isArray(v) && v.every((item) => isScalar(item) || isSlotLoreRef(item)))
+	(Array.isArray(v) && v.every((item) => isScalar(item) || isSlotLoreRef(item) || isSlotPiece(item)))
 
 /** The bare write grant a plugin's widget holds to ask `set-attribute-value`. */
 export const SET_ATTRIBUTE_VALUE_GRANT = "session:state:write"
@@ -90,7 +95,10 @@ export async function answerSetAttributeValue(
 	if (!row) throw new Error("that owner is not in this session")
 	if (!Object.hasOwn(row.configs ?? {}, p.slotId))
 		throw new Error(`'${p.slotId}' is not a slot ${row.label} carries`)
-	await store.set({ kind: owner.kind as "session" | "session_cast" | "session_location", id: owner.id }, p.slotId, p.value, {
-		ownError: true
+	// 🚧 A line the table hears when it lands (Give to…, 2026-10-18).
+	const say = typeof p.say === "string" ? p.say.trim().slice(0, 200) : ""
+	await store.set({ kind: owner.kind as Params["owner"]["kind"], id: owner.id }, p.slotId, p.value, {
+		ownError: true,
+		...(say ? { say } : {})
 	})
 }

@@ -12,7 +12,7 @@ import path from "path"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
-import { CHAT_RESPOND_SPEC_ID } from "@serene-pub/core-catalog"
+import { STORY_RESPOND_SPEC_ID } from "@serene-pub/core-catalog"
 
 let testDb: TestDb
 let dataDir: string
@@ -83,15 +83,15 @@ describe("admin gate", () => {
 	test("every event refuses a non-admin on its :error twin", async () => {
 		const m = await import("./pipelineDrafts")
 		const cases: Array<[any, any]> = [
-			[m.pipelinesDraftGet, { slug: CHAT_RESPOND_SPEC_ID }],
-			[m.pipelinesDraftPut, { slug: CHAT_RESPOND_SPEC_ID, document: {} }],
-			[m.pipelinesDraftDiscard, { slug: CHAT_RESPOND_SPEC_ID }],
-			[m.pipelinesDraftPreview, { slug: CHAT_RESPOND_SPEC_ID, semver: "1.0.0" }],
-			[m.pipelinesDraftPublish, { slug: CHAT_RESPOND_SPEC_ID, semver: "1.0.0" }],
+			[m.pipelinesDraftGet, { slug: STORY_RESPOND_SPEC_ID }],
+			[m.pipelinesDraftPut, { slug: STORY_RESPOND_SPEC_ID, document: {} }],
+			[m.pipelinesDraftDiscard, { slug: STORY_RESPOND_SPEC_ID }],
+			[m.pipelinesDraftPreview, { slug: STORY_RESPOND_SPEC_ID, semver: "1.0.0" }],
+			[m.pipelinesDraftPublish, { slug: STORY_RESPOND_SPEC_ID, semver: "1.0.0" }],
 			[m.pipelinesCatalogue, {}],
 			[
 				m.pipelinesFork,
-				{ slug: CHAT_RESPOND_SPEC_ID, ownerSlug: "x", name: "y", label: "Y" }
+				{ slug: STORY_RESPOND_SPEC_ID, ownerSlug: "x", name: "y", label: "Y" }
 			]
 		]
 		for (const [h, params] of cases) {
@@ -122,10 +122,10 @@ describe("shipped specs", () => {
 		const { pipelinesDraftGet } = await import("./pipelineDrafts")
 		const res: any = await pipelinesDraftGet.handler(
 			asAdmin(),
-			{ slug: CHAT_RESPOND_SPEC_ID },
+			{ slug: STORY_RESPOND_SPEC_ID },
 			() => {}
 		)
-		expect(res).toMatchObject({ slug: CHAT_RESPOND_SPEC_ID, draft: null, shipped: true })
+		expect(res).toMatchObject({ slug: STORY_RESPOND_SPEC_ID, draft: null, shipped: true })
 	}, 60_000)
 
 	test("put on a core spec is refused: fork first", async () => {
@@ -133,13 +133,13 @@ describe("shipped specs", () => {
 		const { pipelinesDocument } = await import("./pipelines")
 		const doc: any = await pipelinesDocument.handler(
 			asAdmin(),
-			{ slug: CHAT_RESPOND_SPEC_ID },
+			{ slug: STORY_RESPOND_SPEC_ID },
 			() => {}
 		)
 		const rec = recordingEmit()
 		const res: any = await pipelinesDraftPut.handler(
 			asAdmin(),
-			{ slug: CHAT_RESPOND_SPEC_ID, document: doc.document },
+			{ slug: STORY_RESPOND_SPEC_ID, document: doc.document },
 			rec.emit
 		)
 		expect(res.error).toMatch(/fork/i)
@@ -153,14 +153,14 @@ describe("fork → draft → preview → publish", () => {
 		for (const ownerSlug of ["core", "Acme", "a..b", ""]) {
 			const res: any = await pipelinesFork.handler(
 				asAdmin(),
-				{ slug: CHAT_RESPOND_SPEC_ID, ownerSlug, name: "x", label: "X" },
+				{ slug: STORY_RESPOND_SPEC_ID, ownerSlug, name: "x", label: "X" },
 				() => {}
 			)
 			expect(res.error, ownerSlug).toBeTruthy()
 		}
 		const bad: any = await pipelinesFork.handler(
 			asAdmin(),
-			{ slug: CHAT_RESPOND_SPEC_ID, ownerSlug: "acme", name: "Bad_Name", label: "X" },
+			{ slug: STORY_RESPOND_SPEC_ID, ownerSlug: "acme", name: "Bad_Name", label: "X" },
 			() => {}
 		)
 		expect(bad.error).toBeTruthy()
@@ -172,7 +172,7 @@ describe("fork → draft → preview → publish", () => {
 		const res: any = await pipelinesFork.handler(
 			asAdmin(),
 			{
-				slug: CHAT_RESPOND_SPEC_ID,
+				slug: STORY_RESPOND_SPEC_ID,
 				ownerSlug: "acme.lab",
 				name: "reply-copy",
 				label: "Reply copy"
@@ -183,7 +183,7 @@ describe("fork → draft → preview → publish", () => {
 		expect(res.slug).toBe(FORK)
 		expect(rec.last("pipelines:fork")?.slug).toBe(FORK)
 
-		const source = await specRow(CHAT_RESPOND_SPEC_ID)
+		const source = await specRow(STORY_RESPOND_SPEC_ID)
 		const fork = await specRow(FORK)
 		expect(fork?.name).toBe("Reply copy")
 		expect(fork?.sourcePluginId).toBeNull()
@@ -203,7 +203,7 @@ describe("fork → draft → preview → publish", () => {
 		// A second fork to the same name is refused.
 		const again: any = await pipelinesFork.handler(
 			asAdmin(),
-			{ slug: CHAT_RESPOND_SPEC_ID, ownerSlug: "acme.lab", name: "reply-copy", label: "X" },
+			{ slug: STORY_RESPOND_SPEC_ID, ownerSlug: "acme.lab", name: "reply-copy", label: "X" },
 			() => {}
 		)
 		expect(again.error).toMatch(/already/i)

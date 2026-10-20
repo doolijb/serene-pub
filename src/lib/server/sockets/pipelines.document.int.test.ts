@@ -12,8 +12,7 @@ import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
-import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
-import { ADVENTURE_RESPOND_SPEC_ID } from "@serene-pub/core-catalog"
+import { LAIR_RESPOND_SPEC_ID, STORY_RESPOND_SPEC_ID } from "@serene-pub/core-catalog"
 
 let testDb: TestDb
 let dataDir: string
@@ -73,7 +72,7 @@ describe("pipelines:document", () => {
 		const rec = recordingEmit()
 		const res: any = await pipelinesDocument.handler(
 			socketFor(stranger.id),
-			{ slug: CHAT_RESPOND_SPEC_ID },
+			{ slug: STORY_RESPOND_SPEC_ID },
 			rec.emit
 		)
 		expect(res.error).toMatch(/admin/i)
@@ -86,15 +85,15 @@ describe("pipelines:document", () => {
 		const rec = recordingEmit()
 		const res: any = await pipelinesDocument.handler(
 			socketFor(admin.id, true),
-			{ slug: ADVENTURE_RESPOND_SPEC_ID },
+			{ slug: STORY_RESPOND_SPEC_ID },
 			rec.emit
 		)
 		expect(res.error).toBeUndefined()
 		expect(res.version.isActive).toBe(true)
 		expect(res.version.canonicalHash).toBeTruthy()
-		expect(res.document.id).toBe(ADVENTURE_RESPOND_SPEC_ID)
+		expect(res.document.id).toBe(STORY_RESPOND_SPEC_ID)
 		expect(res.document.nodes.length).toBeGreaterThan(20)
-		// The adventure reply gathers, iterates and forks (plan §1).
+		// Story's reply gathers, iterates and forks (plan §1).
 		const kinds = new Set(res.document.clauses.map((c: any) => c.kind))
 		expect(kinds.has("gather")).toBe(true)
 		expect(kinds.has("each")).toBe(true)
@@ -109,22 +108,22 @@ describe("pipelines:document", () => {
 		expect(member?.clauseChain).toBe("history")
 		// It also reaches the socket's listeners.
 		expect(rec.last("pipelines:document")?.document?.id).toBe(
-			ADVENTURE_RESPOND_SPEC_ID
+			STORY_RESPOND_SPEC_ID
 		)
 	}, 60_000)
 
 	test("a version of another spec is 'no such version', not served", async () => {
 		const { pipelinesDocument } = await import("./pipelines")
-		const [chat] = await testDb
+		const [story] = await testDb
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
 			.limit(1)
 		const res: any = await pipelinesDocument.handler(
 			socketFor(admin.id, true),
 			{
-				slug: ADVENTURE_RESPOND_SPEC_ID,
-				versionId: chat!.activeVersionId!
+				slug: LAIR_RESPOND_SPEC_ID,
+				versionId: story!.activeVersionId!
 			},
 			() => {}
 		)

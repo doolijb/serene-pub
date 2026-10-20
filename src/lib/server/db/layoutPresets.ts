@@ -6,9 +6,13 @@
  * presets** with (save as new, rename, re-capture, share, clone, delete).
  *
  * Every row stores ONE format, the **session layout** (`SessionLayoutV1`,
- * NOMENCLATURE §9): the live blob the screen draws, `{ zoneLayout?,
- * widgetGrid?, arrangedGrid?, widgetSettings?, widgetStyles? }`, verbatim in
- * `layout`.
+ * NOMENCLATURE §9): the live blob the screen draws, `{ panels?,
+ * widgetSettings?, widgetStyles? }`, verbatim in `layout`. `panels` is the
+ * arrangement; every reader reaches it through the SDK's `panelsOf`, so a row
+ * that still holds only the ⏳ old slots (`zoneLayout?`, `widgetGrid?`,
+ * `arrangedGrid?` — a plugin manifest's, or one the boot pass
+ * `./sessionLayoutPanels` left to the floor) reads the same. The old slots
+ * ride along verbatim until the 0.7 squash.
  *
  * ## What core seeds
  *
@@ -601,14 +605,24 @@ export async function genreDefaultLayoutRow(
  * packs it.
  */
 
-/** The slots of a session layout that ARE its arrangement. */
-const ARRANGEMENT_SLOTS = ["zoneLayout", "widgetGrid", "arrangedGrid"] as const
+/**
+ * The slots of a session layout that ARE its arrangement: `panels`, and the
+ * ⏳ three old slots, carried verbatim so a row never loses them before the
+ * 0.7 squash (they are inert beside `panels`; without it, `panelsOf` reads
+ * them).
+ */
+const ARRANGEMENT_SLOTS = [
+	"panels",
+	"zoneLayout",
+	"widgetGrid",
+	"arrangedGrid"
+] as const
 
 /**
- * A layout's arrangement: its `zoneLayout`, `widgetGrid` and `arrangedGrid`,
- * verbatim, with an absent slot left absent. Never `widgetSettings` or
- * `widgetStyles` (a session keeps those in their own homes), and never the
- * session-only `active` and `tierSizeOverrides`.
+ * A layout's arrangement: its `panels` and ⏳ old slots, verbatim, with an
+ * absent slot left absent. Never `widgetSettings` or `widgetStyles` (a
+ * session keeps those in their own homes), and never the session-only
+ * `active` and `tierSizeOverrides`.
  */
 export function arrangementOf(layout: unknown): SessionLayoutBlob {
 	const out: SessionLayoutBlob = {}

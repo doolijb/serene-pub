@@ -177,10 +177,10 @@ describe("export", () => {
 		})
 		const keys = exportedManifest.configs.map((c: any) => `${c.spec}#${c.slug}`)
 		expect(keys).toContain(`${RESPOND}#tally-default`)
-		expect(keys).toContain("core:spec/chat-respond#tally-flavoured")
+		expect(keys).toContain("core:spec/story-respond#tally-flavoured")
 		const shipped = exportedManifest.configs.find((c: any) => c.slug === "tally-default")
 		expect(shipped.values).toEqual({ tally: { params: { trim: true } } })
-		expect(exportedManifest.requires).toContain("core:spec/chat-respond")
+		expect(exportedManifest.requires).toContain("core:spec/story-respond")
 		// Core's events the pipelines lock on and the presets bind travel as
 		// requirements too, so an older pub refuses by name; no package event.
 		expect(exportedManifest.requires).toContain("core:event/session-created@1")
@@ -234,7 +234,7 @@ describe("install from an upload", () => {
 		expect(res.configs.sort()).toEqual(
 			[
 				`plugin:${SLUG}:${RESPOND}#tally-default`,
-				`plugin:${SLUG}:core:spec/chat-respond#tally-flavoured`
+				`plugin:${SLUG}:core:spec/story-respond#tally-flavoured`
 			].sort()
 		)
 		expect(res.files).toBe(4)
@@ -499,7 +499,7 @@ describe("refusals", () => {
 		)
 		const c = collector()
 		await expect(
-			pluginsExportPackage.handler(asAdmin(), { genreId: "core:genre/chat" }, c.emit)
+			pluginsExportPackage.handler(asAdmin(), { genreId: "core:genre/story" }, c.emit)
 		).rejects.toThrow(/cannot be packaged/)
 	})
 

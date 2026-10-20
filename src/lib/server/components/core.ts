@@ -18,6 +18,7 @@ import {
 	CORE_WIDGETS,
 	type CoreComponentSource
 } from "@serene-pub/core-catalog"
+import { WIDGET_ID_ALIASES } from "@serene-pub/sdk"
 import type { AuthoredWidgetShape } from "$lib/server/db/schema"
 
 /**
@@ -26,7 +27,6 @@ import type { AuthoredWidgetShape } from "$lib/server/db/schema"
  */
 const SOURCES: Readonly<Record<string, () => Promise<{ default: string }>>> = {
 	messages: () => import("@serene-pub/core-catalog/components/messages.source.json?raw"),
-	"world-state": () => import("@serene-pub/core-catalog/components/world-state.source.json?raw"),
 	stats: () => import("@serene-pub/core-catalog/components/stats.source.json?raw"),
 	"lore-entries": () => import("@serene-pub/core-catalog/components/lore-entries.source.json?raw"),
 	"scene-portraits": () => import("@serene-pub/core-catalog/components/scene-portraits.source.json?raw"),
@@ -48,6 +48,10 @@ const loaded = new Map<string, Promise<CoreComponentSource>>()
 
 /** A core component's source, or `undefined` when core has no component by that slug. */
 export async function coreComponentSource(slug: string): Promise<CoreComponentSource | undefined> {
+	// ⏳ An aliased widget id (`world-state` → `stats`, `WIDGET_ID_ALIASES`): its
+	// module is the target's since 2026-10-17 (AUDIT B); a genre shape that
+	// still names it is served Stats.
+	slug = WIDGET_ID_ALIASES[slug]?.id ?? slug
 	if (!CORE_COMPONENTS.some((c) => c.slug === slug) || !Object.hasOwn(SOURCES, slug)) return undefined
 	let p = loaded.get(slug)
 	if (!p) {

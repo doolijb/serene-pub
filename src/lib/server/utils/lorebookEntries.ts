@@ -19,8 +19,11 @@
 import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm"
 import { splitKeys, type KeyList } from "$lib/server/pipelines/ranking/signals"
+import { checkPiece, type SlotPiece } from "@serene-pub/sdk"
 import {
+	TITLE_WIRE_FIELD,
 	declaredFields,
+	derivedEntryRepertoire,
 	entryDeclaration,
 	fieldDefault
 } from "$lib/server/entries/declarations"
@@ -236,15 +239,14 @@ export async function loadDefaultVectors(
 }
 
 /**
- * `timestamp` back to the `date` column's string.
+ * A `timestamp` as the wire's ISO string.
  *
- * The three legacy tables declared `created_at` as `date`, which Drizzle reads
- * as `'YYYY-MM-DD'`; the unified table's is a real `timestamp`. The wire keeps
- * the string, because the client hands it to `new Date(...)` and a shape change
- * there is a client change this step has no reason to make.
+ * The wire carries the instant as a full ISO-8601 string (UTC). It once cut it
+ * to `YYYY-MM-DD` to match the legacy `date` columns, which the client then
+ * parsed as UTC midnight and showed a day early west of Greenwich (0102).
  */
 const toDateString = (value: Date | string): string =>
-	typeof value === "string" ? value : value.toISOString().slice(0, 10)
+	typeof value === "string" ? value : value.toISOString()
 
 /**
  * A stored row, in the shape everything above the database reads.
@@ -439,11 +441,19 @@ export type EntryProvenance = (typeof ENTRY_PROVENANCES)[number]
  */
 export function assertDeclaredFields(
 	typeId: string,
-	data: Record<string, unknown>
+	data: Record<string, unknown>,
+	/**
+	 * `whole` for a new entry: a derived entry type's piece is checked whole
+	 * (its required fields too). A patch or an amendment overlay is checked
+	 * key by key.
+	 */
+	{ whole = false }: { whole?: boolean } = {}
 ): void {
 	const decl = entryDeclaration(typeId)
 	if (!decl) return
+	assertPieceFields(typeId, data, whole)
 	for (const [field, spec] of Object.entries(decl.fields)) {
+		if (decl.roles.title && field === TITLE_WIRE_FIELD) continue
 		if (!Object.prototype.hasOwnProperty.call(data, field)) continue
 		const value = data[field]
 		if (value === null || value === undefined) continue
@@ -464,6 +474,38 @@ export function assertDeclaredFields(
 				`'${field}' must be ${kind === "integer" ? "a whole number" : `a ${kind}`}.`
 			)
 	}
+}
+
+/**
+ * 🚧 A derived entry type's piece half, through the SDK's one piece checker
+ * (`checkPiece`) — nested `object`/`list` fields included, which the scalar
+ * check above passes through. The piece's `name` is the entry's title (the
+ * wire's `name`); the universal entry fields are not the piece's, and are
+ * left to the scalar check. Core's five have no repertoire: a no-op.
+ *
+ * Whole for a create (`inline`: required fields too); key by key for a patch
+ * — the checker's partial path is a reference's `overrides`, which is exactly
+ * "these fields of a piece, the rest as they are".
+ */
+function assertPieceFields(
+	typeId: string,
+	data: Record<string, unknown>,
+	whole: boolean
+): void {
+	const rep = derivedEntryRepertoire(typeId)
+	if (!rep) return
+	const props: Record<string, unknown> = {}
+	for (const field of Object.keys(rep.piece.fields ?? {})) {
+		if (!Object.prototype.hasOwnProperty.call(data, field)) continue
+		const value = data[field]
+		// `null` clears a field (absent-not-null), as everywhere else here.
+		if (value !== null && value !== undefined) props[field] = value
+	}
+	const piece = whole
+		? ({ kind: "inline", ...props } as unknown as SlotPiece)
+		: ({ kind: "lore", entryId: 1, overrides: props } as unknown as SlotPiece)
+	const problem = checkPiece(rep, piece)
+	if (problem) throw new Error(problem)
 }
 
 /** The four columns that decide whether, and which, keys are patterns. */

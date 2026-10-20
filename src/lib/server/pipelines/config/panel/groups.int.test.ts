@@ -20,11 +20,12 @@ import {
 	type NamespaceView,
 	type SettingsGroup
 } from "$lib/server/pipelines/config/panel"
-import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import { groupSteps } from "$lib/server/pipelines/config/panel/groups"
 
 const SECRET = "test-instance-secret"
-const ADVENTURE = "core:spec/adventure-respond"
+/** Story's reply: the reply, then the reckoning and the sweep (2026-10-19; Adventure retired). */
+const STORY = "core:spec/story-respond"
 const LAIR = "core:spec/lair-respond"
 
 let db: TestDb
@@ -82,27 +83,30 @@ function headings(v: NamespaceView): string[] {
 	return out
 }
 
-describe("Adventure's turn: one group per model call", () => {
-	/** The four calls, by the node keys the payload never names. */
+describe("Story's turn: one group per model call", () => {
+	/** The three calls, by the node keys the payload never names (ruled 2026-10-19). */
 	const AGENTS = [
-		{ call: "planWrite", prompt: "planContext", heading: "Planner" },
-		{ call: "scene", prompt: "sceneContext", heading: "Narrator" },
-		{ call: "voices.item.say", prompt: "voices.item.context", heading: "Voices" },
-		{ call: "keeperWrite", prompt: "keeperContext", heading: "State-keeper" }
+		{ call: "generate", heading: "Reply" },
+		{ call: "reckon.on.reckonWrite", heading: "What the reply changed" },
+		{ call: "sweep.due.sweepWrite", heading: "Look back over the story" }
 	]
 
-	it("draws four groups — planner, narrator, voices, state keeper — then the whole pipeline", async () => {
-		const v = await asAdmin(ADVENTURE)
+	it("draws three groups — the reply, the reckoning, the sweep — then the whole pipeline", async () => {
+		const v = await asAdmin(STORY)
 		expect(calls(v).map((g) => g.heading)).toEqual(AGENTS.map((a) => a.heading))
 		expect(v.groups.at(-1)).toMatchObject({ kind: "pipeline", heading: "Whole pipeline" })
 		expect(v.groups.map((g) => g.key)).toEqual(v.groups.map((_, i) => `g${i}`))
+		for (const g of calls(v)) expect(g.purpose).toBeTruthy()
 	})
 
 	it("gives each group exactly its own prompt, connection and sampling", async () => {
-		const v = await asAdmin(ADVENTURE)
+		const v = await asAdmin(STORY)
+		const prompts: string[] = []
 		calls(v).forEach((g, i) => {
 			const a = AGENTS[i]!
-			expect(ofControl(g, "prompts-ref").map((o) => o.id)).toEqual([id(a.prompt, "prompts")])
+			const p = ofControl(g, "prompts-ref").map((o) => o.id)
+			expect(p).toHaveLength(1)
+			prompts.push(p[0]!)
 			expect(ofControl(g, "connection-ref").map((o) => o.id)).toEqual([id(a.call, "connection")])
 			expect(ofControl(g, "sampling-ref").map((o) => o.id)).toEqual([id(a.call, "sampling")])
 			// …and in that order: Loadout (I12), Prompt, Model, Sampling.
@@ -113,43 +117,28 @@ describe("Adventure's turn: one group per model call", () => {
 				"sampling-ref"
 			])
 		})
+		expect(new Set(prompts).size).toBe(prompts.length)
 		// No group carries another's: nothing model-shaped is left over.
 		const pipeline = v.groups.at(-1)!
 		expect(pipeline.front.filter((o) => /-ref$/.test(o.control) && o.control !== "scripts-chain")).toEqual([])
 	})
 
-	it("puts the planner's and the state keeper's switch on their groups", async () => {
-		const v = await asAdmin(ADVENTURE)
-		const [planner, narrator, voices, keeper] = calls(v)
-		expect(planner!.enabled?.id).toBe(id("planWrite", "settings", "enabled"))
-		expect(keeper!.enabled?.id).toBe(id("keeperWrite", "settings", "enabled"))
-		expect(narrator!.enabled).toBeUndefined()
-		expect(voices!.enabled).toBeUndefined()
-	})
-
-	it("files each call's other steps under its own Advanced, and what serves the whole turn under the whole pipeline", async () => {
-		const v = await asAdmin(ADVENTURE)
-		const [planner, narrator, voices] = calls(v)
+	it("files the budget, which serves every call, under the whole pipeline", async () => {
+		const v = await asAdmin(STORY)
+		const [reply] = calls(v)
 		const pipeline = v.groups.at(-1)!
 		const has = (g: SettingsGroup, nodeKey: string, slot: string, path = "") =>
 			g.advanced.some((s) => s.options.some((o) => o.id === id(nodeKey, slot, path)))
-		// The assemble paired with the call, by its template.
-		expect(has(planner!, "planPrompt", "template")).toBe(true)
-		expect(has(narrator!, "scenePrompt", "template")).toBe(true)
-		// A step that feeds only one call: a voice's own lore share.
-		expect(has(voices!, "voices.item.lore", "params", "share")).toBe(true)
-		// The budget reads the narrator's model but serves every call.
 		expect(has(pipeline, "contextBudget", "params", "safetyMargin")).toBe(true)
-		expect(has(narrator!, "contextBudget", "params", "safetyMargin")).toBe(false)
+		expect(has(reply!, "contextBudget", "params", "safetyMargin")).toBe(false)
 	})
 
-	it("shows a non-admin the same four headings, each with its own prompt and nothing to tune", async () => {
-		const v = await asUser(ADVENTURE)
+	it("shows a non-admin the same three headings, each with its own prompt and nothing to tune", async () => {
+		const v = await asUser(STORY)
 		expect(v.groups.map((g) => g.heading)).toEqual(AGENTS.map((a) => a.heading))
 		v.groups.forEach((g, i) => {
 			const a = AGENTS[i]!
-			expect(ofControl(g, "prompts-ref").map((o) => o.id)).toEqual([id(a.prompt, "prompts")])
-			// Whatever else a non-admin is shown is this call's own, read-only.
+			expect(ofControl(g, "prompts-ref")).toHaveLength(1)
 			for (const o of g.front.filter((f) => f.control !== "prompts-ref")) {
 				expect(o.id).toBe(id(a.call, "connection"))
 				expect(o.writable).toBe(false)
@@ -160,8 +149,7 @@ describe("Adventure's turn: one group per model call", () => {
 
 	it("never numbers a heading", async () => {
 		const numbered = (hs: string[]) => hs.filter((h) => /\s\d+$/.test(h))
-		for (const v of [await asAdmin(ADVENTURE), await asAdmin(LAIR), await asAdmin(CHAT_RESPOND_SPEC_ID)]) {
-			// Once, step headings read "Generate reply 2"; no option's step does.
+		for (const v of [await asAdmin(STORY), await asAdmin(LAIR), await asAdmin("core:spec/assistant-respond")]) {
 			expect(numbered(groupSteps(v.groups).map((s) => s.heading))).toEqual([])
 			expect(numbered(headings(v))).toEqual([])
 		}
@@ -170,7 +158,7 @@ describe("Adventure's turn: one group per model call", () => {
 
 describe("a heading never names a node", () => {
 	it("is prose — no group or step heading equals a node key", async () => {
-		for (const slug of [ADVENTURE, LAIR]) {
+		for (const slug of [STORY, LAIR]) {
 			const keys = new Set(
 				(
 					await db
@@ -192,29 +180,26 @@ describe("a heading never names a node", () => {
 	})
 })
 
-describe("Chat's reply: one model call, one unheaded group", () => {
-	it("holds everything in one group with no heading", async () => {
-		const v = await asAdmin(CHAT_RESPOND_SPEC_ID)
-		expect(v.groups).toHaveLength(1)
-		const [g] = v.groups
-		expect(g!.heading).toBeUndefined()
-		expect(g!.kind).toBe("model-call")
-		expect(ofControl(g!, "prompts-ref").map((o) => o.id)).toEqual([id("context", "prompts")])
-		expect(ofControl(g!, "connection-ref").map((o) => o.id)).toEqual([id("generate", "connection")])
-		expect(ofControl(g!, "sampling-ref").map((o) => o.id)).toEqual([id("generate", "sampling")])
+describe("Story's reply group", () => {
+	it("is the first group, headed Reply, with the reply's own prompt, connection and sampling", async () => {
+		const v = await asAdmin(STORY_RESPOND_SPEC_ID)
+		const g = v.groups[0]!
+		expect(g.heading).toBe("Reply")
+		expect(g.kind).toBe("model-call")
+		expect(ofControl(g, "prompts-ref").map((o) => o.id)).toEqual([id("context", "prompts")])
+		expect(ofControl(g, "connection-ref").map((o) => o.id)).toEqual([id("generate", "connection")])
+		expect(ofControl(g, "sampling-ref").map((o) => o.id)).toEqual([id("generate", "sampling")])
 	})
 
-	it("fronts Loadout, Prompt, Model and Sampling, then each source's switch labelled by its step", async () => {
-		const [g] = (await asAdmin(CHAT_RESPOND_SPEC_ID)).groups
-		expect(g!.front.slice(0, 4).map((o) => o.control)).toEqual([
+	it("fronts Loadout, Prompt, Model and Sampling; the lore sources' switches, labelled by their step, serve the whole pipeline", async () => {
+		const v = await asAdmin(STORY_RESPOND_SPEC_ID)
+		expect(v.groups[0]!.front.slice(0, 4).map((o) => o.control)).toEqual([
 			"loadout-ref",
 			"prompts-ref",
 			"connection-ref",
 			"sampling-ref"
 		])
-		const switches = g!.front.slice(4)
-		expect(switches.length).toBeGreaterThan(1)
-		expect(switches.every((o) => o.control === "boolean")).toBe(true)
+		const switches = v.groups.at(-1)!.front.filter((o) => o.control === "boolean")
 		expect(switches.map((o) => o.label)).toContain("World lore")
 		expect(switches.map((o) => o.label)).not.toContain("Use this source")
 		expect(new Set(switches.map((o) => o.label)).size).toBe(switches.length)
@@ -285,7 +270,7 @@ describe("the Lair's turn", () => {
 
 describe("how a Model or Sampling value reads", () => {
 	it("names what an unset slot resolves to and where the value came from, never an id", async () => {
-		const v = await asAdmin(ADVENTURE)
+		const v = await asAdmin(STORY)
 		for (const g of calls(v))
 			for (const o of g.front.filter((f) => f.control === "connection-ref" || f.control === "sampling-ref")) {
 				expect(o.inherits?.label).toMatch(/^(Pipeline default — |Pub default — |From the [A-Z][A-Za-z ]* loadout — |No model set|No sampling config set)/)
@@ -299,7 +284,7 @@ describe("how a Model or Sampling value reads", () => {
 			.insert(schema.samplingConfigs)
 			.values({ name: "Steady narration", values: {} } as any)
 			.returning({ id: schema.samplingConfigs.id, name: schema.samplingConfigs.name })
-		const v0 = await asAdmin(ADVENTURE)
+		const v0 = await asAdmin(STORY)
 		const selected = v0.selectedConfig!
 		// Written straight to the selected configuration's rows, as a config edit would.
 		await db
@@ -307,19 +292,19 @@ describe("how a Model or Sampling value reads", () => {
 			.where(
 				and(
 					eq(schema.pipelineConfigValues.configId, selected.id),
-					eq(schema.pipelineConfigValues.nodeKey, "scene"),
+					eq(schema.pipelineConfigValues.nodeKey, "generate"),
 					eq(schema.pipelineConfigValues.slot, "sampling")
 				)
 			)
 		await db.insert(schema.pipelineConfigValues).values({
 			configId: selected.id,
-			nodeKey: "scene",
+			nodeKey: "generate",
 			slot: "sampling",
 			path: "",
 			value: cfg!.id
 		} as any)
-		const v = await asAdmin(ADVENTURE, { sessionId })
-		const sampling = calls(v)[1]!.front.find((o) => o.control === "sampling-ref")!
+		const v = await asAdmin(STORY, { sessionId })
+		const sampling = calls(v)[0]!.front.find((o) => o.control === "sampling-ref")!
 		expect(sampling.inherits).toEqual({ from: "config", label: `As configured — ${cfg!.name}` })
 		expect(sampling.provenance?.source).toBe("config")
 		expect(sampling.provenance?.label).toBe(`From the “${v.selectedConfig!.name}” configuration`)
@@ -332,7 +317,7 @@ describe("a step label and a step purpose on the spec", () => {
 		const [spec] = await db
 			.select({ versionId: schema.pipelineSpecs.activeVersionId })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, ADVENTURE))
+			.where(eq(schema.pipelineSpecs.slug, STORY))
 		const nodeRow = async (nodeKey: string) =>
 			(
 				await db
@@ -354,7 +339,7 @@ describe("a step label and a step purpose on the spec", () => {
 		}
 		// Put back what the catalog ships once this test is done, so the
 		// shipped-spec sweeps below read the documents as they boot.
-		const shipped = await Promise.all(["planWrite", "planPrompt", "scene"].map(nodeRow))
+		const shipped = await Promise.all(["generate", "prompt", "reckon.on.reckonWrite"].map(nodeRow))
 		onTestFinished(async () => {
 			for (const row of shipped)
 				await db
@@ -362,29 +347,29 @@ describe("a step label and a step purpose on the spec", () => {
 					.set({ expose: row.expose as any })
 					.where(eq(schema.pipelineNodes.id, row.id))
 		})
-		await relabel("planWrite", {
-			label: "Turn planner",
-			purpose: "Decides what happens next and who speaks."
+		await relabel("generate", {
+			label: "Turn writer",
+			purpose: "Writes what happens next."
 		})
-		await relabel("planPrompt", { label: "Planner's prompt layout" })
-		// The narrator without its label or purpose, as a spec that sets neither.
-		const scene = await nodeRow("scene")
+		await relabel("prompt", { label: "Writer's prompt layout" })
+		// The reckoning without its label or purpose, as a spec that sets neither.
+		const scene = await nodeRow("reckon.on.reckonWrite")
 		const { label: _label, purpose: _purpose, ...unlabelled } = (scene.expose ?? {}) as Record<string, unknown>
 		await db
 			.update(schema.pipelineNodes)
 			.set({ expose: unlabelled as any })
 			.where(eq(schema.pipelineNodes.id, scene.id))
 
-		const v = await asAdmin(ADVENTURE)
+		const v = await asAdmin(STORY)
 		const planner = calls(v)[0]!
-		expect(planner.heading).toBe("Turn planner")
-		expect(planner.purpose).toBe("Decides what happens next and who speaks.")
+		expect(planner.heading).toBe("Turn writer")
+		expect(planner.purpose).toBe("Writes what happens next.")
 		// The status heads a call that carries no label, with no purpose under it.
-		expect(calls(v)[1]!.heading).toBe("Narrating the scene")
+		expect(calls(v)[1]!.heading).toBe("Noting what changed")
 		expect(calls(v)[1]!.purpose).toBeUndefined()
-		expect(planner.advanced.map((s) => s.heading)).toContain("Planner's prompt layout")
+		expect(planner.advanced.map((s) => s.heading)).toContain("Writer's prompt layout")
 		// Every option of that step carries the same heading.
-		expect(groupSteps(v.groups).map((s) => s.heading)).toContain("Planner's prompt layout")
+		expect(groupSteps(v.groups).map((s) => s.heading)).toContain("Writer's prompt layout")
 	})
 })
 
@@ -433,14 +418,14 @@ describe("what a step and an agent receive and carry out (ruling 2026-10-12)", (
 	const stepNamed = (v: NamespaceView, heading: string) =>
 		v.groups.flatMap((g) => g.advanced).find((s) => s.heading === heading)
 
-	it("Chat's reply: the model step takes the assembled prompt and hands on its text; the save writes the reply", async () => {
-		const v = await asAdmin(CHAT_RESPOND_SPEC_ID)
-		const reply = stepNamed(v, "Generate reply")!
+	it("Story's reply: the model step takes the assembled prompt and hands on its text; the save writes the reply", async () => {
+		const v = await asAdmin(STORY_RESPOND_SPEC_ID)
+		const reply = stepNamed(v, "Reply")!
 		expect(reply.effect).toBe("external")
 		expect(reply.receives).toContainEqual(
 			expect.objectContaining({ port: "context", label: "the assembled prompt", from: "Assemble" })
 		)
-		expect(labels(reply.carriesOut)).toContain("generate reply's text")
+		expect(labels(reply.carriesOut).join(" ")).toMatch(/text/)
 
 		const save = stepNamed(v, "Update message")!
 		expect(save.effect).toBe("write")
@@ -454,34 +439,15 @@ describe("what a step and an agent receive and carry out (ruling 2026-10-12)", (
 		expect(labels(lore.carriesOut)).toContain("world lore, a share of the context")
 		expect(labels(lore.carriesOut).join(" ")).not.toMatch(/\d/)
 
-		// The one group: what the run takes from the session, and its writes.
-		const [only] = v.groups
-		expect(labels(only!.receives)).toContain("the session")
-		expect(only!.receives!.every((l) => l.from === undefined)).toBe(true)
-		expect(labels(only!.carriesOut)).toEqual(
-			expect.arrayContaining(["writes the reply", "saves the finished reply"])
-		)
-	}, 60_000)
-
-	it("Adventure's Narrator group takes the planner's plan and hands on its text, flows inside it left out", async () => {
-		const v = await asAdmin(ADVENTURE)
-		const narrator = calls(v).find((g) => g.heading === "Narrator")!
-		expect(narrator.receives).toContainEqual(expect.objectContaining({ label: "plan", from: "Planner" }))
-		expect(labels(narrator.carriesOut)).toEqual(["narrator's text"])
-		// Assemble feeds the narrator's own model call: inside the group, so not on its cards.
-		expect(narrator.receives!.some((l) => l.label === "the assembled prompt")).toBe(false)
-		const assembleHeadings = narrator.advanced.map((s) => s.heading)
-		expect(narrator.receives!.some((l) => l.from && assembleHeadings.includes(l.from))).toBe(false)
-		// …while the Narrator step's own card shows the feed from Assemble.
-		const step = narrator.advanced.find((s) => s.heading === "Narrator")
-		expect(step?.effect).toBe("external")
-		expect(step!.receives).toContainEqual(
-				expect.objectContaining({ label: "the assembled prompt", from: "Assemble" })
-			)
+		// Across the groups: what the run takes from the session, and its writes.
+		const received = v.groups.flatMap((g) => labels(g.receives))
+		const carried = v.groups.flatMap((g) => labels(g.carriesOut))
+		expect(received).toContain("the session")
+		expect(carried).toEqual(expect.arrayContaining(["saves the finished reply"]))
 	}, 60_000)
 
 	it("is the admin's view only: a member's payload carries no wiring", async () => {
-		const v = await asUser(CHAT_RESPOND_SPEC_ID)
+		const v = await asUser(STORY_RESPOND_SPEC_ID)
 		for (const g of v.groups) {
 			expect(g.receives).toBeUndefined()
 			expect(g.carriesOut).toBeUndefined()
@@ -493,3 +459,4 @@ describe("what a step and an agent receive and carry out (ruling 2026-10-12)", (
 		}
 	}, 60_000)
 })
+

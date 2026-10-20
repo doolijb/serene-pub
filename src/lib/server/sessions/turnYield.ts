@@ -31,7 +31,7 @@
  */
 
 import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm"
-import { actionsOf, envoySlugOfRef, i18nText, type I18n } from "@serene-pub/sdk"
+import { actionsOf, envoySlugOfRef, i18nText, resolveTurnControls, type I18n } from "@serene-pub/sdk"
 import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
 import * as schema from "$lib/server/db/schema"
 
@@ -315,7 +315,18 @@ export async function lastTurnOf(
 			reason: "own-line",
 			refusal: "Your line is the newest. Press Continue."
 		}
-	const run = await turnRunOf(db, newest.id)
+	return turnOfRow(db, newest.id)
+}
+
+/**
+ * The turn one row belongs to, resolved to its yield — steps 2–4 of
+ * `lastTurnOf`, for a row that is not a person's: the run whose turn it is
+ * must be a reply run (an action's row, a greeting's, a row no run recorded
+ * is no turn). 🚧 Also what `latestStoryTurnOf` reads (owner rulings
+ * 2026-10-15, deletions and retry).
+ */
+export async function turnOfRow(db: Db, messageId: number): Promise<LastTurnVerdict> {
+	const run = await turnRunOf(db, messageId)
 	const notATurn = {
 		ok: false as const,
 		reason: "not-a-turn" as const,
@@ -342,6 +353,26 @@ export async function lastTurnOf(
 		const by = await creatingRunOf(db, row.messageId)
 		if (by && !runs.has(by.id)) runs.set(by.id, by.runId)
 	}
+	// 🚧 And every run that wrote a row of the yield again — a swipe, which
+	// claims the turn's row and re-applies the turn's rules there
+	// (PLAN-rulesets §29): its work is the turn's, and goes with it.
+	if (rows.length) {
+		const rewrote = await db
+			.selectDistinct({ id: schema.pipelineRuns.id, runId: schema.pipelineRuns.runId })
+			.from(schema.pipelineRunArtifacts)
+			.innerJoin(schema.pipelineRuns, eq(schema.pipelineRuns.id, schema.pipelineRunArtifacts.runId))
+			.where(
+				and(
+					eq(schema.pipelineRunArtifacts.kind, "message"),
+					eq(schema.pipelineRuns.isPreview, false),
+					inArray(
+						schema.pipelineRunArtifacts.entityId,
+						rows.map((r) => r.messageId)
+					)
+				)
+			)
+		for (const r of rewrote) if (!runs.has(r.id)) runs.set(r.id, r.runId)
+	}
 	return {
 		ok: true,
 		yield: {
@@ -353,4 +384,97 @@ export async function lastTurnOf(
 			entry: entryOf(run.receipt)
 		}
 	}
+}
+
+/**
+ * 🚧 The **latest story turn** on a channel (owner rulings 2026-10-15,
+ * deletions and retry): its newest visible reply that is not narration
+ * (`headId` — a roll line or a reveal's notice is no reply), the turn that
+ * row belongs to, and the reply before it that the turn did not write
+ * (`previousId`, null when there is none). The person lines between the two
+ * are the round that turn answered. Null when the newest reply is no turn
+ * (an action's notice, the opening a create wrote) or there is none.
+ */
+export interface LatestStoryTurn {
+	turn: TurnYield
+	headId: number
+	previousId: number | null
+}
+
+export async function latestStoryTurnOf(
+	db: Db,
+	sessionId: number,
+	channel = "main"
+): Promise<LatestStoryTurn | null> {
+	const replies = await db
+		.select({
+			id: schema.sessionMessages.id,
+			isHidden: schema.sessionMessages.isHidden,
+			isNarratorResponse: schema.sessionMessages.isNarratorResponse
+		})
+		.from(schema.sessionMessages)
+		.where(
+			and(
+				eq(schema.sessionMessages.sessionId, sessionId),
+				eq(schema.sessionMessages.channel, channel),
+				ne(schema.sessionMessages.role, "user")
+			)
+		)
+		.orderBy(desc(schema.sessionMessages.id))
+		.limit(200)
+	const spoken = replies.filter((r) => !r.isHidden && !r.isNarratorResponse)
+	const head = spoken[0]
+	if (!head) return null
+	const verdict = await turnOfRow(db, head.id)
+	if (!verdict.ok) return null
+	const own = new Set(verdict.yield.rows.map((r) => r.messageId))
+	const previous = spoken.find((r) => r.id < head.id && !own.has(r.id))
+	return { turn: verdict.yield, headId: head.id, previousId: previous?.id ?? null }
+}
+
+/**
+ * 🚧 Where one row stands against the story's turns — what a genre that
+ * keeps its turns (`turnDeleteVerdict`, `messages/verbs.ts`) reads before a
+ * delete. Only on a channel that offers the retake (Story; a folio the
+ * story turn writes to): elsewhere — a Planner lane — every row is `open`.
+ *
+ *  - `latest` — the row is the latest story turn's: a row its run wrote
+ *    (`turn` is that yield: the reply, its roll line, its journal line), or
+ *    a line of the round it answered (`turn` null);
+ *  - `older` — the row is an earlier turn's, or anything before it;
+ *  - `open` — after the latest turn (the next round's lines), or no story
+ *    turn has been taken yet.
+ */
+export type TurnAge =
+	| { age: "open" }
+	| { age: "older" }
+	| { age: "latest"; turn: TurnYield | null }
+
+export async function turnAgeOf(
+	db: Db,
+	sessionId: number,
+	messageId: number,
+	shape: unknown,
+	storyChannel = "main"
+): Promise<TurnAge> {
+	const [row] = await db
+		.select({
+			id: schema.sessionMessages.id,
+			sessionId: schema.sessionMessages.sessionId,
+			channel: schema.sessionMessages.channel
+		})
+		.from(schema.sessionMessages)
+		.where(eq(schema.sessionMessages.id, messageId))
+		.limit(1)
+	if (!row || row.sessionId !== sessionId) return { age: "open" }
+	const channel = row.channel || "main"
+	if (!resolveTurnControls(shape, channel).retake.offered) return { age: "open" }
+	const latest = await latestStoryTurnOf(db, sessionId, storyChannel)
+	if (!latest) return { age: "open" }
+	if (latest.turn.rows.some((r) => r.messageId === row.id))
+		return { age: "latest", turn: latest.turn }
+	if (row.id > latest.headId) return { age: "open" }
+	if (channel === storyChannel && (latest.previousId === null || row.id > latest.previousId))
+		return { age: "latest", turn: null }
+	return { age: "older" }
 }

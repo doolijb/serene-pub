@@ -95,6 +95,7 @@ import {
 	slotField,
 	slotStatShapeId,
 	sheetSlotAppliesTo,
+	slotAppliesTo,
 	type FieldDecl,
 	type AttributeSheetDecl,
 	type AttributeSlotDecl,
@@ -103,6 +104,7 @@ import {
 	type SlotValue
 } from "@serene-pub/sdk"
 import {
+	ownerFacet,
 	resolutionChain,
 	type OwnerKind,
 	type StateOwner
@@ -125,7 +127,9 @@ import type { PlaceSight } from "$lib/shared/lorebooks/placeSight"
 import { declaresPrivateLore } from "$lib/server/utils/lorebookEntries"
 import { castMemberCards } from "$lib/server/utils/castMemberCards"
 import { compareDates, type StoryDate } from "$lib/shared/lorebooks/storyDate"
-import { castKey, qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
+import { castKey, castMemberKey, qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
+import { isCardlessPlayerSeat } from "$lib/server/sessions/seatName"
+import { offerableSlot, rulesetSettingAllows, sessionRulesets, withoutForeignRepertoire } from "$lib/server/rulesets/settings"
 import {
 	createExpressionBudget,
 	evaluate,
@@ -155,6 +159,22 @@ export interface CastMemberLink {
 }
 
 /**
+ * 🚧 One live **card-less player seat** of a session (2026-10-14): a player's
+ * character with no card, by `session_personas.id` — the id a `player_seat` stat
+ * owner names (`isCardlessPlayerSeat`). A seat with a card is in `cast` as that
+ * card's `session_cast` member and is not here; `stateFor` gives each of
+ * these a cast entry of its own.
+ */
+export interface PlayerSeatLink {
+	playerSeatId: number
+	/** Whose seat: the row's `user_id`. */
+	userId: number | null
+	/** The seat name. */
+	name: string
+	position: number
+}
+
+/**
  * 🚧 One place in the session's world that can hold state (attributes phase
  * 4): a `core:entry/location` lore entry of the session's lorebook. Its
  * owners are `location` (the entry, durable) and `session_location` (this
@@ -163,6 +183,11 @@ export interface CastMemberLink {
 export interface LocationLink {
 	entryId: number
 	name: string
+	/**
+	 * 🚧 A place the session's own notes hold (PLAN-rulesets §26), not its
+	 * lorebook — read at the notes' head. Absent for a place of the book.
+	 */
+	sessionOnly?: true
 }
 
 /** The session facts every resolution needs, read once. */
@@ -170,6 +195,11 @@ export interface SessionLinks {
 	sessionId: number
 	lorebookId: number | null
 	cast: CastMemberLink[]
+	/**
+	 * 🚧 Every live card-less player seat (`PlayerSeatLink`). Optional so links built
+	 * by hand stay valid; absent reads as no seats.
+	 */
+	playerSeats?: PlayerSeatLink[]
 	/** 🚧 The world's locations (phase 4), by entry id; none without a lorebook. */
 	locations: LocationLink[]
 	/** The story date, when the world has one — what `age` is measured against. */
@@ -234,8 +264,11 @@ export interface TrackedSlot {
  * line — would otherwise have to carry the identity beside it, and the first
  * one to forget is a change written against the wrong character.
  */
-export interface CastEntry {
-	/** `characters.id` — the same id a `session_cast` owner names. */
+interface CastEntryFields {
+	/**
+	 * `characters.id` — the same id a `session_cast` owner names. `0` on a
+	 * card-less player seat's entry, which has no card (read `playerSeatId`).
+	 */
 	id: number
 	/** The slug this entry is indexed under: `state.cast.verity`. */
 	key: string
@@ -248,6 +281,17 @@ export interface CastEntry {
 	enabled: boolean
 	[slot: string]: SlotValue
 }
+
+/** One cast entry: a member's identity and its values, by slot key. */
+export type CastEntry = CastEntryFields & {
+	/**
+	 * 🚧 Present only on a card-less player seat's entry: the `session_personas.id`
+	 * its stats are filed under (owner `player_seat`). Indexed in `byId` as
+	 * `player_seat:<playerSeatId>` (`castMemberKey`).
+	 */
+	playerSeatId?: number
+}
+
 
 /**
  * The cast, twice over, from one set of objects.
@@ -318,6 +362,16 @@ export interface ResolvedState {
 	locations: LocationIndex
 	/** This session's vocabulary, in sheet order. */
 	slots: TrackedSlot[]
+	/**
+	 * 🚧 The **stat configuration** in force per owner (2026-10-15): by the
+	 * owner's key — `world`, or the entry's key in `cast.byId` (a character
+	 * id, `player_seat:<id>`) — then by slot id, each kept slot's config as
+	 * `configFor` resolves it (declaration → sheet → every layer's
+	 * deviations, a `set-stat-config` row among them). What a bar is drawn
+	 * to and a prompt reads as "health 9/15". A slot with nothing to bound is
+	 * left out; absent on a state read outside a session.
+	 */
+	configs?: Record<string, Record<string, SlotConfig>>
 	/** The roles, as a sibling of the cast. */
 	who: WhoKeys
 	/**
@@ -350,7 +404,7 @@ export async function stateVersionOf(
 // expression evaluator can key a slot without importing this module, and every
 // existing caller imports them from here.
 
-export { castKey, qualifiedSlotKey, slotKey }
+export { castKey, castMemberKey, qualifiedSlotKey, slotKey }
 
 // ── Rows ────────────────────────────────────────────────────────────────────
 
@@ -474,12 +528,15 @@ export async function sessionLinks(
 
 	const voiced = await db
 		.select({
+			seatId: schema.sessionPersonas.id,
 			characterId: schema.sessionPersonas.personaId,
-			name: schema.characters.name,
+			// 🚧 A seat name wins over the card's name (2026-10-14).
+			name: sql<string | null>`coalesce(${schema.sessionPersonas.seatName}, ${schema.characters.name})`,
+			seatUserId: schema.sessionPersonas.userId,
 			position: schema.sessionPersonas.position
 		})
 		.from(schema.sessionPersonas)
-		.innerJoin(
+		.leftJoin(
 			schema.characters,
 			eq(schema.characters.id, schema.sessionPersonas.personaId)
 		)
@@ -512,6 +569,17 @@ export async function sessionLinks(
 				position: r.position ?? index
 			})
 		)
+	// 🚧 Every live card-less player seat (`isCardlessPlayerSeat`; the name read is the
+	// seat name, there being no card to fall back on).
+	const playerSeats: PlayerSeatLink[] = voiced
+		.filter((r) => isCardlessPlayerSeat({ personaId: r.characterId, seatName: r.name }))
+		.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+		.map((r, index) => ({
+			playerSeatId: r.seatId,
+			userId: r.seatUserId ?? null,
+			name: r.name!.trim(),
+			position: r.position ?? index
+		}))
 	voiced
 		.filter((r): r is typeof r & { characterId: number } =>
 			typeof r.characterId === "number"
@@ -549,7 +617,8 @@ export async function sessionLinks(
 		}),
 		reading,
 		cast,
-		locations: await locationsOf(db, lorebookId, reading)
+		playerSeats,
+		locations: await locationsOf(db, sessionId, lorebookId, reading)
 	}
 }
 
@@ -560,14 +629,26 @@ export async function sessionLinks(
  * order. An archived place, or one switched Off, is not a place in the story;
  * its stored values stay and are simply not read. A sibling fork's own place
  * is not a place in this session's story at all.
+ *
+ * 🚧 The union (PLAN-rulesets §26, "reads are the union"): then the places
+ * the session's own notes hold, at the notes' head, marked `sessionOnly` — so
+ * a session with no lorebook (a dungeon crawl) still has its rooms.
  */
 async function locationsOf(
 	db: Db,
+	sessionId: number,
 	lorebookId: number | null,
 	reading: LineReading | null
 ): Promise<LocationLink[]> {
-	if (!lorebookId) return []
-	return await placesOnReading(db, lorebookId, reading ?? MAIN_HEAD, "session")
+	const out: LocationLink[] = lorebookId
+		? await placesOnReading(db, lorebookId, reading ?? MAIN_HEAD, "session")
+		: []
+	const { phantomOf } = await import("$lib/server/lorebooks/phantom")
+	const phantom = await phantomOf(db, sessionId)
+	if (phantom && phantom.id !== lorebookId)
+		for (const place of await placesOnReading(db, phantom.id, MAIN_HEAD, "session"))
+			out.push({ ...place, sessionOnly: true })
+	return out
 }
 
 /**
@@ -802,12 +883,9 @@ export async function configFor(
 			)
 		)
 		.map((row) => (row?.config ?? null) as SlotConfig | null)
-	const fromSheet = query.sessionId
-		? (await vocabularyFor(db, query.sessionId, links)).entryFor(
-				query.slotId
-			)?.config
-		: undefined
-	return resolveSlotConfig(decl, fromSheet ?? null, ...layers)
+	const vocabulary = query.sessionId ? await vocabularyFor(db, query.sessionId, links) : null
+	const config = resolveSlotConfig(decl, vocabulary?.entryFor(query.slotId)?.config ?? null, ...layers)
+	return vocabulary ? admittedConfig(vocabulary, config) : config
 }
 
 function chainFor(owner: StateOwner, links: SessionLinks | null): StateOwner[] {
@@ -926,7 +1004,17 @@ export interface Vocabulary {
 	entries: VocabularyEntry[]
 	entryFor(slotId: string): VocabularyEntry | undefined
 	slots: TrackedSlot[]
+	/**
+	 * 🚧 The rulesets the session plays — what a resolved config's
+	 * `repertoire` is judged against (`withoutForeignRepertoire`, PLAN §15 B).
+	 * Absent when no genre is held: nothing is struck.
+	 */
+	rulesets?: readonly string[]
 }
+
+/** A slot's resolved config as the session's vocabulary admits it: a foreign ruleset's repertoire struck (PLAN §15 B). */
+const admittedConfig = (vocabulary: Pick<Vocabulary, "rulesets">, config: SlotConfig): SlotConfig =>
+	vocabulary.rulesets ? withoutForeignRepertoire(config, vocabulary.rulesets) : config
 
 /** A slot's stat shape as the vocabulary carries it: the catalogue id it names, and its field. */
 export function trackedShape(decl: AttributeSlotDecl): { shape?: string; field?: FieldDecl } {
@@ -1089,6 +1177,7 @@ export async function worldAttributesFor(
 /** The session's own owners — itself, its cast seats and its places — nearest last. */
 const ownOwnersOf = (links: SessionLinks, sessionId: number): StateOwner[] => [
 	...links.cast.map((m) => ({ kind: "session_cast" as const, id: m.characterId })),
+	...(links.playerSeats ?? []).map((s) => ({ kind: "player_seat" as const, id: s.playerSeatId })),
 	...links.locations.map((l) => ({ kind: "session_location" as const, id: l.entryId })),
 	{ kind: "session", id: sessionId }
 ]
@@ -1104,7 +1193,10 @@ export async function attributePicksFor(db: Db, sessionId: number): Promise<Map<
 
 /** Which owner kinds live inside a session, and therefore carry its id. */
 export const isSessionScoped = (kind: OwnerKind): boolean =>
-	kind === "session" || kind === "session_cast" || kind === "session_location"
+	kind === "session" ||
+	kind === "session_cast" ||
+	kind === "session_location" ||
+	kind === "player_seat"
 
 /**
  * The slots THIS session tracks (ruled 2026-09-25): its genre's **baseline**
@@ -1142,6 +1234,36 @@ export function onOwners(
 	return Object.freeze({ ...decl, appliesTo: Object.freeze([...appliesTo]) })
 }
 
+/**
+ * 🚧 How many seats a session's table counts (PLAN-sheet §14): its player
+ * seats seated and not removed — or, when more, the PEOPLE at the table
+ * whose seats are on their way: the owner, each playing guest and each
+ * seat's player (PLAN-dc-after-walk3 R0-2, the walk's NEW-2). A guest makes
+ * their seat in the interview after their lane opened, and the Dungeon
+ * Crawler asks the host's standing order once a second person is greeted
+ * (its `manyAtTable`); counting seats alone refused that answer's write —
+ * "there is no standing order to set here" — though the question was asked
+ * and its echo said "Noted". A watching guest is no one at the table.
+ */
+export async function activeSeatCount(db: Db, sessionId: number): Promise<number> {
+	const seats = await db
+		.select({ userId: schema.sessionPersonas.userId })
+		.from(schema.sessionPersonas)
+		.where(and(eq(schema.sessionPersonas.sessionId, sessionId), isNull(schema.sessionPersonas.removedAt)))
+	const [owner] = await db
+		.select({ userId: schema.sessions.userId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	const guests = await db
+		.select({ userId: schema.sessionGuests.userId })
+		.from(schema.sessionGuests)
+		.where(and(eq(schema.sessionGuests.sessionId, sessionId), eq(schema.sessionGuests.isPlayer, true)))
+	const people = new Set<number>()
+	for (const r of [owner, ...guests, ...seats]) if (r?.userId != null) people.add(r.userId)
+	return Math.max(seats.length, people.size)
+}
+
 /** What a session of a genre this process does not hold tracks: nothing. */
 const emptyVocabulary = (): Vocabulary => ({
 	entries: [],
@@ -1157,7 +1279,9 @@ export async function vocabularyFor(
 	const [row] = await db
 		.select({
 			genreId: schema.sessions.genreId,
-			worldAttributes: schema.sessions.worldAttributes
+			worldAttributes: schema.sessions.worldAttributes,
+			primaryRuleset: schema.sessions.primaryRuleset,
+			rulesetSettings: schema.sessions.rulesetSettings
 		})
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
@@ -1197,21 +1321,39 @@ export async function vocabularyFor(
 		byId.set(decl.id, v)
 		entries.push(v)
 	}
+	// One gate for every source, the picker's too (`offerableSlot`, audit
+	// A20): a slot a ruleset owns comes in only where that ruleset is played
+	// — the baseline included (PLAN §15 A: a Story session of a genre whose
+	// sheet carries Vis Itineris's abilities reads none of them).
+	const plays = sessionRulesets(row)
+	// 🚧 Solo (PLAN-sheet §14): a slot that only means something with several
+	// players (`minSeats` — the Dungeon Crawler's standing order: "what does
+	// Ann do while you are away?") is left out until the session seats that
+	// many. One rule, read from the seats the host already has. ⏳ Read
+	// loosely until the SDK types `minSeats` on the declaration.
+	const seats = await activeSeatCount(db, sessionId)
+	const offered = (slotId: string, from: "baseline" | "pick") => {
+		const decl = getAttributeSlot(slotId)
+		if (!decl || !offerableSlot(decl, plays, from)) return undefined
+		const minSeats = (decl as { minSeats?: unknown }).minSeats
+		if (typeof minSeats === "number" && minSeats > seats) return undefined
+		// 🚧 And the ruleset setting (`whenRulesetSetting`, 2026-10-18): a
+		// spell-slots table keeps no spell points, a spell-points table no slots.
+		if (!rulesetSettingAllows(decl, row)) return undefined
+		return decl
+	}
 	// The baseline — the genre's sheets and loose slots — always, and first:
 	// a pick never drops it.
 	for (const sheet of genreSheets(genreId))
 		for (const entry of sheet.slots)
-			take(getAttributeSlot(entry.id), entry, sheet.id)
-	for (const decl of genre.slots ?? []) take(getAttributeSlot(decl.id))
+			take(offered(entry.id, "baseline"), entry, sheet.id)
+	for (const decl of genre.slots ?? []) take(offered(decl.id, "baseline"))
 	if (custom) {
 		// The world's (on unless switched off), then the session's own; a
 		// pick drops either, slot by slot, and a pick adds a slot of its own.
 		// A slot a mechanism keeps (`pickable: false`) comes in with the
 		// baseline or not at all.
-		const pickableSlot = (slotId: string) => {
-			const decl = getAttributeSlot(slotId)
-			return decl && slotPickable(decl) ? decl : undefined
-		}
+		const pickableSlot = (slotId: string) => offered(slotId, "pick")
 		for (const sheet of [...world.sheets, ...(await sheetsForOwners(db, ownOwnersOf(resolved, sessionId), sessionId))])
 			for (const entry of sheet.slots)
 				if (!dropped(entry.id)) take(pickableSlot(entry.id), entry, sheet.id)
@@ -1222,6 +1364,7 @@ export async function vocabularyFor(
 	return {
 		entries,
 		entryFor: (slotId: string) => byId.get(slotId),
+		rulesets: plays,
 		slots: entries.map((e) => ({
 			id: e.decl.id,
 			key: slotKey(e.decl.id),
@@ -1317,6 +1460,32 @@ export async function stateFor(
 			)
 		byId[String(member.characterId)] = entry
 	}
+	// 🚧 Card-less player seats (2026-10-14): a player character with no card is a
+	// cast entry all the same, its values read off the `player_seat` owner. A seat
+	// with a card is already above, as that card's member (`links.playerSeats`
+	// holds only card-less ones).
+	for (const seat of links.playerSeats ?? []) {
+		const entry: CastEntry = {
+			id: 0,
+			playerSeatId: seat.playerSeatId,
+			key: castKey(seat.name),
+			name: seat.name,
+			enabled: true
+		}
+		for (const decl of declared.filter((d) => d.appliesTo.includes("cast")))
+			await writeKeys(entry, decl, declared, () =>
+				valueOf(
+					db,
+					{
+						sessionId,
+						owner: { kind: "player_seat", id: seat.playerSeatId },
+						slotId: decl.id
+					},
+					known
+				)
+			)
+		byId[castMemberKey(entry)] = entry
+	}
 	const cast: CastIndex = { byId }
 	for (const entry of Object.values(byId))
 		// First claimant keeps the slug, exactly as a contested bare slot key
@@ -1328,14 +1497,17 @@ export async function stateFor(
 
 	const who = await whoFor(db, sessionId, links, byId, opts)
 	const bags = [world, ...Object.values(byId), ...Object.values(locations.byId)]
-	await nameLoreRefs(db, bags, links.reading ?? null, "session")
+	await nameLoreRefs(db, bags, links.reading ?? null, "session", links.locations)
 	await unsetUnseenReferences(db, bags, links.reading ?? null, links.locations)
+
+	const configs = await configsFor(db, sessionId, links, vocabulary, byId)
 
 	const state: ResolvedState = {
 		world,
 		cast,
 		locations,
 		slots: vocabulary.slots,
+		configs,
 		who,
 		version
 	}
@@ -1343,6 +1515,59 @@ export async function stateFor(
 	// After the chain and after `who`, because an expression may read either.
 	deriveExpressions(state, vocabulary, links, opts)
 	return state
+}
+
+/**
+ * 🚧 `state.configs` (2026-10-15): every kept slot's configuration in force,
+ * for the world and each cast entry — `configFor`'s answer, read in one
+ * query over every owner's chain rather than one resolution per bar.
+ */
+async function configsFor(
+	db: Db,
+	sessionId: number,
+	links: SessionLinks,
+	vocabulary: Vocabulary,
+	byId: Record<string, CastEntry>
+): Promise<Record<string, Record<string, SlotConfig>>> {
+	const kept = vocabulary.entries.map((e) => e.decl).filter((d) => d.type !== "derived")
+	const owners: Array<{ key: string; owner: StateOwner }> = [
+		{ key: "world", owner: { kind: "session", id: sessionId } },
+		...Object.entries(byId).map(([key, entry]) => ({
+			key,
+			owner:
+				typeof entry.playerSeatId === "number"
+					? ({ kind: "player_seat", id: entry.playerSeatId } as StateOwner)
+					: ({ kind: "session_cast", id: entry.id } as StateOwner)
+		}))
+	]
+	const chains = owners.map((o) => ({ ...o, chain: chainFor(o.owner, links) }))
+	const rows = await configRows(
+		db,
+		chains.flatMap((c) => c.chain),
+		kept.map((d) => d.id),
+		sessionId,
+		links.reading ?? null
+	)
+	const out: Record<string, Record<string, SlotConfig>> = {}
+	for (const { key, owner, chain } of chains) {
+		const facet = ownerFacet(owner.kind)
+		for (const decl of kept) {
+			if (!slotAppliesTo(decl, facet)) continue
+			const layers = [...chain]
+				.reverse()
+				.map((layer) =>
+					inForce(
+						rows.filter((r) => ownerMatches(r, layer) && r.slotId === decl.id),
+						links.reading?.dates
+					)
+				)
+				.map((row) => (row?.config ?? null) as SlotConfig | null)
+			const config = admittedConfig(vocabulary, resolveSlotConfig(decl, vocabulary.entryFor(decl.id)?.config ?? null, ...layers))
+			if (!Object.keys(config).length) continue
+			;(out[key] ??= {})[decl.id] = config
+		}
+	}
+	return out
 }
 
 /**
@@ -1416,7 +1641,14 @@ export async function nameLoreRefs(
 	db: Db,
 	bags: Record<string, unknown>[],
 	reading: NamingReading | null,
-	sight: PlaceSight
+	sight: PlaceSight,
+	/**
+	 * 🚧 Places already named (`SessionLinks.locations`, the ledger's
+	 * places): a reference the reading does not name — a room in the
+	 * session's own notes, read with no lorebook attached — reads by its
+	 * place's name, never as `entry 12`.
+	 */
+	places: readonly LocationLink[] = []
 ): Promise<void> {
 	const ids = new Set<number>()
 	for (const bag of bags)
@@ -1427,7 +1659,34 @@ export async function nameLoreRefs(
 			// 🚧 One reference on its own: a location that is a place entry.
 			else if (isSlotLoreRef(value)) ids.add(value.entryId)
 		}
-	if (!ids.size || !reading) return
+	if (!ids.size) return
+	const titles = new Map<number, string>()
+	if (reading) await titlesOnReading(db, ids, reading, sight, titles)
+	for (const p of places) if (p.name && ids.has(p.entryId) && !titles.has(p.entryId)) titles.set(p.entryId, p.name)
+	if (!titles.size) return
+	// A new array per value: a declaration's default may be frozen, and the
+	// bare and qualified keys of one value are rewritten alike.
+	for (const bag of bags)
+		for (const [key, value] of Object.entries(bag))
+			if (Array.isArray(value) && value.some(isSlotLoreRef))
+				// `{ ...item }` keeps the held count (phase 3a); only the name is added.
+				bag[key] = value.map((item) =>
+					isSlotLoreRef(item) && titles.get(item.entryId)
+						? { ...item, name: titles.get(item.entryId)! }
+						: item
+				)
+			else if (isSlotLoreRef(value) && titles.get(value.entryId))
+				bag[key] = { ...value, name: titles.get(value.entryId)! }
+}
+
+/** The titles `reading` gives these entries, as `sight` may name them (`nameLoreRefs`). */
+async function titlesOnReading(
+	db: Db,
+	ids: ReadonlySet<number>,
+	reading: NamingReading,
+	sight: PlaceSight,
+	titles: Map<number, string>
+): Promise<void> {
 	const rows = await db
 		.select({
 			id: schema.lorebookEntries.id,
@@ -1449,24 +1708,10 @@ export async function nameLoreRefs(
 		reading,
 		named.map((r) => r.id)
 	)
-	const titles = new Map<number, string>()
 	for (const r of named) {
 		const seen = entryAt({ id: r.id, name: r.title ?? "" }, overlays, reading)
 		if (typeof seen.name === "string" && seen.name) titles.set(r.id, seen.name)
 	}
-	// A new array per value: a declaration's default may be frozen, and the
-	// bare and qualified keys of one value are rewritten alike.
-	for (const bag of bags)
-		for (const [key, value] of Object.entries(bag))
-			if (Array.isArray(value) && value.some(isSlotLoreRef))
-				// `{ ...item }` keeps the held count (phase 3a); only the name is added.
-				bag[key] = value.map((item) =>
-					isSlotLoreRef(item) && titles.get(item.entryId)
-						? { ...item, name: titles.get(item.entryId)! }
-						: item
-				)
-			else if (isSlotLoreRef(value) && titles.get(value.entryId))
-				bag[key] = { ...value, name: titles.get(value.entryId)! }
 }
 
 /**
@@ -1592,7 +1837,7 @@ function deriveExpressions(
 		}
 	for (const entry of Object.values(state.cast.byId))
 		if (order.some((d) => d.appliesTo.includes("cast")))
-			into(entry as Record<string, SlotValue>, String(entry.id))
+			into(entry as Record<string, SlotValue>, castMemberKey(entry))
 }
 
 /**
@@ -1765,7 +2010,13 @@ async function whoFor(
 		? await personaOf(db, sessionId, opts.userId, personas)
 		: undefined
 	const user = entry(asking)
+	// 🚧 A player with no card seated is their card-less player seat (2026-10-14).
+	const seatOfAsker = opts.userId
+		? (links.playerSeats ?? []).find((s) => s.userId === opts.userId)
+		: undefined
+	const seatEntry = seatOfAsker ? byId[castMemberKey(seatOfAsker)] : undefined
 	if (user) who.user = user
+	else if (seatEntry) who.user = seatEntry
 	else if (owner && opts.userId && opts.userId === session?.userId)
 		who.user = owner
 

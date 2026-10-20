@@ -21,7 +21,7 @@
  * `pipelinePreview` runs `parityPipeline()`, which has no `names` block. The
  * corpus is blind to lore *ranking* entirely — measured: zeroing every lore
  * signal weight leaves all eleven gate fixtures byte-identical — so a green gate
- * says nothing about a signal that reorders lore. These run `respondSpec()`
+ * says nothing about a signal that reorders lore. These run `storyRespondSpec()`
  * itself, and every claim below is perturbed before it is banked: the mechanism is run
  * on and off over the same session and the two results compared.
  */
@@ -32,7 +32,7 @@ import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { run } from "@serene-pub/sdk"
-import { respondSpec } from "$lib/server/pipelines/specs/respond"
+import { storyRespondSpec } from "$lib/server/pipelines/specs/respond"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 
@@ -184,7 +184,7 @@ const turn = async (
 			scopeKind: "defaults"
 		} as any)
 
-	return (await run(respondSpec(), {
+	return (await run(storyRespondSpec(), {
 		world,
 		input: {
 			text: "I hear the order rides at dawn.",

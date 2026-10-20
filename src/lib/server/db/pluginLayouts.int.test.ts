@@ -118,7 +118,7 @@ describe("projecting a package's layouts", () => {
 			const pluginId = "acme/heist"
 			await installPlugin(pluginId, [
 				{
-					genreId: "core:genre/adventure",
+					genreId: "core:genre/story",
 					slug: "cinematic",
 					name: "Cinematic",
 					description: "Wide and dark",
@@ -129,7 +129,7 @@ describe("projecting a package's layouts", () => {
 				}
 			])
 			const report = await sync()
-			const key = `layout:core:genre/adventure:${pluginId}/cinematic`
+			const key = `layout:core:genre/story:${pluginId}/cinematic`
 			expect(report.projected).toContain(key)
 
 			const row = await rowByKey(key)
@@ -156,19 +156,60 @@ describe("projecting a package's layouts", () => {
 	)
 
 	test(
+		"a manifest in panels and one in the ⏳ old slots both validate and project verbatim; panels that break a rule are refused",
+		async () => {
+			const pluginId = `acme/panels-${n++}`
+			const panels = {
+				panels: {
+					version: 1,
+					left: [{ key: "p2", tabs: ["stats", "chronicle"], open: "chronicle" }],
+					middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] },
+					right: []
+				}
+			}
+			const broken = {
+				panels: {
+					version: 1,
+					left: [{ key: "p2", tabs: ["stats"] }],
+					middle: { above: [], primary: { key: "p1", tabs: ["stats"] }, below: [] },
+					right: []
+				}
+			}
+			await installPlugin(pluginId, [
+				{ genreId: "core:genre/story", slug: "new", name: "New", preset: panels },
+				{ genreId: "core:genre/story", slug: "old", name: "Old", preset: layoutNaming("stats") },
+				{ genreId: "core:genre/story", slug: "broken", name: "Broken", preset: broken }
+			])
+			const report = await sync()
+			const key = (slug: string) => `layout:core:genre/story:${pluginId}/${slug}`
+			expect(report.projected).toEqual(expect.arrayContaining([key("new"), key("old")]))
+			expect((await rowByKey(key("new"))).layout).toEqual(panels)
+			// Stored as shipped: readers reach the old slots through `panelsOf`.
+			expect((await rowByKey(key("old"))).layout).toEqual(layoutNaming("stats"))
+			expect(report.refused.map((r) => r.key)).toContain(key("broken"))
+			expect(await rowByKey(key("broken"))).toBeUndefined()
+			// A second sync moves nothing.
+			const before = (await rowByKey(key("old"))).layoutUpdatedAt.getTime()
+			await sync()
+			expect((await rowByKey(key("old"))).layoutUpdatedAt.getTime()).toBe(before)
+		},
+		60_000
+	)
+
+	test(
 		"is idempotent, and re-forces what the manifest says",
 		async () => {
 			const pluginId = "acme/again"
 			const plugin = await installPlugin(pluginId, [
 				{
-					genreId: "core:genre/chat",
+					genreId: "core:genre/story",
 					slug: "tall",
 					name: "Tall",
 					preset: layoutNaming("tall")
 				}
 			])
 			await sync()
-			const key = `layout:core:genre/chat:${pluginId}/tall`
+			const key = `layout:core:genre/story:${pluginId}/tall`
 			const first = await rowByKey(key)
 			await new Promise((r) => setTimeout(r, 15))
 
@@ -178,7 +219,7 @@ describe("projecting a package's layouts", () => {
 					manifest: {
 						layouts: [
 							{
-								genreId: "core:genre/chat",
+								genreId: "core:genre/story",
 								slug: "tall",
 								name: "Taller",
 								preset: layoutNaming("taller")
@@ -209,14 +250,14 @@ describe("withdrawal", () => {
 			const pluginId = "acme/switch"
 			const plugin = await installPlugin(pluginId, [
 				{
-					genreId: "core:genre/chat",
+					genreId: "core:genre/story",
 					slug: "quiet",
 					name: "Quiet",
 					preset: layoutNaming("quiet")
 				}
 			])
 			await sync()
-			const key = `layout:core:genre/chat:${pluginId}/quiet`
+			const key = `layout:core:genre/story:${pluginId}/quiet`
 			const live = await rowByKey(key)
 			expect(live.withdrawnAt).toBeNull()
 
@@ -249,13 +290,13 @@ describe("withdrawal", () => {
 			const pluginId = "acme/shrink"
 			const plugin = await installPlugin(pluginId, [
 				{
-					genreId: "core:genre/chat",
+					genreId: "core:genre/story",
 					slug: "one",
 					name: "One",
 					preset: layoutNaming("one")
 				},
 				{
-					genreId: "core:genre/chat",
+					genreId: "core:genre/story",
 					slug: "two",
 					name: "Two",
 					preset: layoutNaming("two")
@@ -268,7 +309,7 @@ describe("withdrawal", () => {
 					manifest: {
 						layouts: [
 							{
-								genreId: "core:genre/chat",
+								genreId: "core:genre/story",
 								slug: "one",
 								name: "One",
 								preset: layoutNaming("one")
@@ -279,10 +320,10 @@ describe("withdrawal", () => {
 				.where(eq(schema.plugins.id, plugin.id))
 			const report = await sync()
 			expect(report.withdrawn).toContain(
-				`layout:core:genre/chat:${pluginId}/two`
+				`layout:core:genre/story:${pluginId}/two`
 			)
 			expect(
-				(await rowByKey(`layout:core:genre/chat:${pluginId}/one`))
+				(await rowByKey(`layout:core:genre/story:${pluginId}/one`))
 					.withdrawnAt
 			).toBeNull()
 		},
@@ -297,14 +338,14 @@ describe("what it refuses", () => {
 			const pluginId = "acme/broken"
 			await installPlugin(pluginId, [
 				{
-					genreId: "core:genre/chat",
+					genreId: "core:genre/story",
 					slug: "broken",
 					name: "Broken",
 					preset: TWO_ZONES
 				}
 			])
 			const report = await sync()
-			const key = `layout:core:genre/chat:${pluginId}/broken`
+			const key = `layout:core:genre/story:${pluginId}/broken`
 			expect(report.refused.map((r) => r.key)).toContain(key)
 			expect(report.projected).not.toContain(key)
 			expect(await rowByKey(key)).toBeUndefined()
@@ -339,7 +380,7 @@ describe("what it refuses", () => {
 			const pluginId = "acme/greedy"
 			await installPlugin(pluginId, [
 				{
-					genreId: "core:genre/chat",
+					genreId: "core:genre/story",
 					slug: "default",
 					name: "Mine now",
 					preset: layoutNaming("greedy")
@@ -354,7 +395,7 @@ describe("what it refuses", () => {
 				}
 			])
 			const report = await sync()
-			const stolen = `layout:core:genre/chat:${pluginId}/default`
+			const stolen = `layout:core:genre/story:${pluginId}/default`
 			const own = `layout:acme.greedy:genre/caper:${pluginId}/default`
 			expect(report.refused.map((r) => r.key)).toContain(stolen)
 			expect(await rowByKey(stolen)).toBeUndefined()
@@ -370,9 +411,9 @@ describe("what it refuses", () => {
 			const pluginId = "acme/sloppy"
 			await installPlugin(pluginId, [
 				{ slug: "nogenre", name: "No genre", preset: layoutNaming("x") },
-				{ genreId: "core:genre/chat", name: "No slug", preset: {} },
-				{ genreId: "core:genre/chat", slug: "noname", preset: {} },
-				{ genreId: "core:genre/chat", slug: "nopreset", name: "No preset" },
+				{ genreId: "core:genre/story", name: "No slug", preset: {} },
+				{ genreId: "core:genre/story", slug: "noname", preset: {} },
+				{ genreId: "core:genre/story", slug: "nopreset", name: "No preset" },
 				"not an object"
 			])
 			const report = await sync()
@@ -380,7 +421,7 @@ describe("what it refuses", () => {
 				report.projected.filter((k) => k.includes(pluginId))
 			).toEqual([])
 			expect(
-				await rowByKey(`layout:core:genre/chat:${pluginId}/noname`)
+				await rowByKey(`layout:core:genre/story:${pluginId}/noname`)
 			).toBeUndefined()
 		},
 		60_000
@@ -391,10 +432,10 @@ describe("what it refuses", () => {
 		async () => {
 			// Two manifests claiming one seed key can only happen by hand, but
 			// taking one over would silently replace somebody's layout.
-			const key = "layout:core:genre/chat:acme/first/shared-slug"
+			const key = "layout:core:genre/story:acme/first/shared-slug"
 			await testDb.insert(schema.sessionLayoutPresets).values({
 				seedKey: key,
-				genreId: "core:genre/chat",
+				genreId: "core:genre/story",
 				origin: "plugin",
 				pluginId: "acme/first",
 				slug: "shared-slug",
@@ -405,7 +446,7 @@ describe("what it refuses", () => {
 			// A second package whose id + slug spell the same key.
 			await installPlugin("acme", [
 				{
-					genreId: "core:genre/chat",
+					genreId: "core:genre/story",
 					slug: "first/shared-slug",
 					name: "Second's",
 					preset: layoutNaming("second")
@@ -484,14 +525,14 @@ describe("what it warns about", () => {
 			const pluginId = "acme.borrower"
 			await installPlugin(pluginId, [
 				{
-					genreId: "core:genre/chat",
+					genreId: "core:genre/story",
 					slug: "borrowed",
 					name: "Borrowed",
 					preset: layoutNaming("acme.dormant:dial")
 				}
 			])
 			const report = await sync()
-			const key = `layout:core:genre/chat:${pluginId}/borrowed`
+			const key = `layout:core:genre/story:${pluginId}/borrowed`
 			expect(report.projected).toContain(key)
 			expect(await linesFor(report, pluginId)).toEqual([
 				`layout ${key}: 'acme.dormant:dial' names a widget this pub does not know — it draws as a placeholder`
@@ -506,14 +547,14 @@ describe("what it warns about", () => {
 			const pluginId = "acme.squatter"
 			await installPlugin(pluginId, [
 				{
-					genreId: "core:genre/chat",
+					genreId: "core:genre/story",
 					slug: "default",
 					name: "Squat",
 					preset: layoutNaming("stats")
 				}
 			])
 			const report = await sync()
-			const key = `layout:core:genre/chat:${pluginId}/default`
+			const key = `layout:core:genre/story:${pluginId}/default`
 			expect(report.refused.find((r) => r.key === key)?.pluginId).toBe(pluginId)
 			expect(await linesFor(report, pluginId)).toEqual([
 				expect.stringMatching(new RegExp(`^layout ${key} refused: 'default' is the genre owner's slug`))
@@ -537,14 +578,14 @@ describe("writing only what changed", () => {
 			const pluginId = "acme/steady"
 			await installPlugin(pluginId, [
 				{
-					genreId: "core:genre/chat",
+					genreId: "core:genre/story",
 					slug: "steady",
 					name: "Steady",
 					preset: layoutNaming("steady")
 				}
 			])
 			await sync()
-			const key = `layout:core:genre/chat:${pluginId}/steady`
+			const key = `layout:core:genre/story:${pluginId}/steady`
 			const before = await rowByKey(key)
 			await new Promise((r) => setTimeout(r, 15))
 			const report = await sync()
@@ -565,14 +606,14 @@ describe("writing only what changed", () => {
 			const pluginId = "acme/renamed"
 			const plugin = await installPlugin(pluginId, [
 				{
-					genreId: "core:genre/chat",
+					genreId: "core:genre/story",
 					slug: "same",
 					name: "Before",
 					preset: layoutNaming("same")
 				}
 			])
 			await sync()
-			const key = `layout:core:genre/chat:${pluginId}/same`
+			const key = `layout:core:genre/story:${pluginId}/same`
 			const before = await rowByKey(key)
 			await testDb
 				.update(schema.plugins)
@@ -580,7 +621,7 @@ describe("writing only what changed", () => {
 					manifest: {
 						layouts: [
 							{
-								genreId: "core:genre/chat",
+								genreId: "core:genre/story",
 								slug: "same",
 								name: "After",
 								preset: layoutNaming("same")

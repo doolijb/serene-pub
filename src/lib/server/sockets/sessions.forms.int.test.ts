@@ -16,7 +16,7 @@
  *     `answeredBy: 'click'`. A person addressee: **no event, no child run**.
  *  3. **Elara asks Tom.** Tom is a cast character nobody portrays. The
  *     asking run writes the block; `form-addressed` is dispatched **after
- *     its receipt is saved**; `core:spec/chat-answer-form` runs as its child
+ *     its receipt is saved**; `core:spec/story-answer-form` runs as its child
  *     (`parent_run_id`, depth 1) with a fake JSON oracle answering one
  *     option; `answer-form` **collects** the fire and the host dispatches it
  *     after the answer's receipt (review W2) — the block's action runs as
@@ -180,7 +180,7 @@ vi.mock("$lib/server/embedding", () => ({
 	batchEmbed: async () => []
 }))
 
-const CHAT = "core:genre/chat"
+const CHAT = "core:genre/story"
 
 beforeAll(async () => {
 	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-forms-int-test-"))
@@ -272,7 +272,7 @@ async function publishAskAndAnswer(
 ) {
 	const { spec, compile } = await import("@serene-pub/sdk")
 	const C = await import("@serene-pub/contracts")
-	const { chatGenre } = await import("@serene-pub/core-catalog")
+	const { storyGenre } = await import("@serene-pub/core-catalog")
 	const { saveDocument } = await import("$lib/server/pipelines/boot/store")
 	const askId = `core:spec/test-${tag}-ask`
 	const answerId = `core:spec/test-${tag}-answer`
@@ -296,7 +296,7 @@ async function publishAskAndAnswer(
 			]
 		}
 	}).inlet("input", C.userMessage.v1(), {
-		genre: chatGenre,
+		genre: storyGenre,
 		event: "core:event/session-action@1"
 	})
 	const ask: SpecDocument = compile(
@@ -345,7 +345,7 @@ async function publishAskAndAnswer(
 			]
 		}
 	}).inlet("input", C.userMessage.v1(), {
-		genre: chatGenre,
+		genre: storyGenre,
 		event: "core:event/session-action@1"
 	})
 	const answer: SpecDocument = compile(
@@ -689,7 +689,7 @@ describe("R-15 · Elara asks Tom, and the AI answers as Tom", () => {
 		const runs = await runsOf(session.id)
 		expect(runs.map((r) => r.specSlug)).toEqual([
 			askId,
-			"core:spec/chat-answer-form",
+			"core:spec/story-answer-form",
 			answerId
 		])
 		const [root, child, grandchild] = runs
@@ -809,7 +809,7 @@ describe("R-15 · Elara asks Tom, and the AI answers as Tom", () => {
 			const parked = await runsOf(session.id)
 			expect(parked.map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
 				`${askId}:ok`,
-				"core:spec/chat-answer-form:ok"
+				"core:spec/story-answer-form:ok"
 			])
 			const answerNode = (parked[1]!.receipt as any).nodes.find(
 				(n: any) => n.nodeKey === "answer"
@@ -852,9 +852,9 @@ describe("R-15 · Elara asks Tom, and the AI answers as Tom", () => {
 		const runs = await runsOf(session.id)
 		expect(runs.map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
 			`${askId}:ok`,
-			"core:spec/chat-answer-form:ok",
+			"core:spec/story-answer-form:ok",
 			`${askId}:ok`,
-			"core:spec/chat-answer-form:halt",
+			"core:spec/story-answer-form:halt",
 			`${answerId}:ok`
 		])
 		const landed = runs[4]!
@@ -985,7 +985,7 @@ describe("R-15 · Elara asks Tom, and the AI answers as Tom", () => {
 		const runs = await runsOf(session.id)
 		expect(runs.map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
 			`${askId}:ok`,
-			"core:spec/chat-answer-form:ok",
+			"core:spec/story-answer-form:ok",
 			`${answerId}:ok`
 		])
 		const line = (
@@ -1022,7 +1022,7 @@ describe("R-15 · Elara asks Tom, and the AI answers as Tom", () => {
 			modelAnswer = '{"choice":"maybe"}'
 		}
 		const runs = await runsOf(session.id)
-		expect(runs.map((r) => r.specSlug)).toEqual([askId, "core:spec/chat-answer-form"])
+		expect(runs.map((r) => r.specSlug)).toEqual([askId, "core:spec/story-answer-form"])
 		const child = runs[1]!
 		expect(child.outcome).toBe("halt")
 		expect(child.haltReason).toMatch(/does not fit the form/)
@@ -1063,9 +1063,9 @@ describe("01 §8 · the cycle guard", () => {
 		// the fifth dispatch parks: no row, nothing run.
 		expect(runs.map((r) => `${r.specSlug}@${r.depth}`)).toEqual([
 			`${askId}@0`,
-			"core:spec/chat-answer-form@1",
+			"core:spec/story-answer-form@1",
 			`${answerId}@2`,
-			"core:spec/chat-answer-form@3",
+			"core:spec/story-answer-form@3",
 			`${answerId}@4`
 		])
 		for (const r of runs) expect(r.outcome).toBe("ok")
@@ -1075,7 +1075,7 @@ describe("01 §8 · the cycle guard", () => {
 		const [pause, ...more] = pendingCapPausesFor(owner.id)
 		expect(more).toEqual([])
 		expect(pause!.depth).toBe(5)
-		expect(pause!.specSlug).toBe("core:spec/chat-answer-form")
+		expect(pause!.specSlug).toBe("core:spec/story-answer-form")
 		expect(pause!.chain).toHaveLength(6)
 		expect(pause!.cap).toMatch(/cycle guard.*5 dispatches deep.*cap of 4/)
 		// Only the owner: the guest does not see it, and cannot answer it.
@@ -1144,7 +1144,7 @@ describe("01 §8 · the cycle guard", () => {
 		const runs = await runsOf(session.id)
 		// No `err` anywhere: a missed answer and a refused fire are halts.
 		expect(runs.filter((r) => r.outcome === "err")).toEqual([])
-		const children = runs.filter((r) => r.specSlug === "core:spec/chat-answer-form")
+		const children = runs.filter((r) => r.specSlug === "core:spec/story-answer-form")
 		const grandchildren = runs.filter((r) => r.specSlug === answerId)
 		expect(children).toHaveLength(9)
 		expect(grandchildren).toHaveLength(8)
@@ -1220,7 +1220,7 @@ describe("W-a · every fire leaves a row under the id the answer named", () => {
 				// aborted before it starts.
 				const answer = runRegistry
 					.active()
-					.find((h) => h.sessionId === session.id && h.specId === "core:spec/chat-answer-form")
+					.find((h) => h.sessionId === session.id && h.specId === "core:spec/story-answer-form")
 				expect(answer).toBeDefined()
 				stoppedAnswer = answer!.runId
 				expect(runRegistry.cancel(answer!.runId, owner.id)).toEqual({ found: true, allowed: true })
@@ -1232,7 +1232,7 @@ describe("W-a · every fire leaves a row under the id the answer named", () => {
 		const runs = await runsOf(session.id)
 		expect(runs.map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
 			`${askId}:ok`,
-			"core:spec/chat-answer-form:ok",
+			"core:spec/story-answer-form:ok",
 			`${answerId}:cancelled`
 		])
 		expect(runs[1]!.runId).toBe(stoppedAnswer)
@@ -1286,7 +1286,7 @@ describe("W-a · every fire leaves a row under the id the answer named", () => {
 		const runs = await runsOf(session.id)
 		expect(runs.map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
 			`${askId}:ok`,
-			"core:spec/chat-answer-form:ok",
+			"core:spec/story-answer-form:ok",
 			`${answerId}:halt`
 		])
 		const firedRunId = (runs[1]!.receipt as any).nodes.find((n: any) => n.nodeKey === "answer")
@@ -1443,7 +1443,7 @@ describe("the review's rulings (2026-09-17)", () => {
 	test("a person's press on a legacy block (no identity) is held to the sole declarer of its key: a world one is refused (W6, S6; V2)", async () => {
 		const { spec, compile } = await import("@serene-pub/sdk")
 		const C = await import("@serene-pub/contracts")
-		const { chatGenre } = await import("@serene-pub/core-catalog")
+		const { storyGenre } = await import("@serene-pub/core-catalog")
 		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
 		const { owner, session } = await sessionWithTom("legacyworld")
 		// A world action in the composer — the only place it may live.
@@ -1467,7 +1467,7 @@ describe("the review's rulings (2026-09-17)", () => {
 					}
 				})
 					.inlet("input", C.userMessage.v1(), {
-						genre: chatGenre,
+						genre: storyGenre,
 						event: "core:event/session-action@1"
 					})
 					.outlet("save", ($) => C.createMessage.v1({ text: $.input.text }))
@@ -1525,7 +1525,7 @@ describe("the review's rulings (2026-09-17)", () => {
 	test("a block naming another spec's world action by identity is refused at the write (S6), and so is one whose fn disagrees with the named action (S2)", async () => {
 		const { spec, compile } = await import("@serene-pub/sdk")
 		const C = await import("@serene-pub/contracts")
-		const { chatGenre } = await import("@serene-pub/core-catalog")
+		const { storyGenre } = await import("@serene-pub/core-catalog")
 		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
 		const { owner, session } = await sessionWithTom("foreignworld")
 		const grantId = "core:spec/test-foreign-grant"
@@ -1548,7 +1548,7 @@ describe("the review's rulings (2026-09-17)", () => {
 					}
 				})
 					.inlet("input", C.userMessage.v1(), {
-						genre: chatGenre,
+						genre: storyGenre,
 						event: "core:event/session-action@1"
 					})
 					.outlet("save", ($) => C.createMessage.v1({ text: $.input.text }))
@@ -1669,7 +1669,7 @@ describe("the review's rulings (2026-09-17)", () => {
 	test("an update's blocks replace the row's block tree rather than adding a second (S5)", async () => {
 		const { spec, compile } = await import("@serene-pub/sdk")
 		const C = await import("@serene-pub/contracts")
-		const { chatGenre } = await import("@serene-pub/core-catalog")
+		const { storyGenre } = await import("@serene-pub/core-catalog")
 		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
 		const schema = await import("$lib/server/db/schema")
 		const { owner, session } = await sessionWithTom("replace")
@@ -1688,7 +1688,7 @@ describe("the review's rulings (2026-09-17)", () => {
 				}
 			})
 				.inlet("input", C.userMessage.v1(), {
-					genre: chatGenre,
+					genre: storyGenre,
 					event: "core:event/session-action@1"
 				})
 				.outlet("first", () =>
@@ -1722,18 +1722,18 @@ describe("the review's rulings (2026-09-17)", () => {
 })
 
 /**
- * The road's first step, walked live 2026-09-17: an Adventure session cannot
- * be started without a lorebook (the genre declares `lorebook: "required"`),
- * and the refusal has to reach the person as the shape's own sentence — the
- * handler used to THROW it, and the socket layer's catch-all replaces a
- * thrown message with a constant on purpose.
+ * The road's first step, walked live 2026-09-17: an Adventure session could
+ * not be started without a lorebook (the genre declared `lorebook:
+ * "required"`), and the refusal has to reach the person as the shape's own
+ * sentence — the handler used to THROW it, and the socket layer's catch-all
+ * replaces a thrown message with a constant on purpose. Adventure retired
+ * 2026-10-19; the Lair is the genre that requires a lorebook now.
  */
-describe("starting an Adventure session over sessions:create", () => {
+describe("starting a Lair session over sessions:create", () => {
 	test("a missing required lorebook is refused on sessions:create:error in the shape's sentence, and no row is made", async () => {
 		const schema = await import("$lib/server/db/schema")
 		const owner = await makeUser("start-refusal-owner")
 		const elara = await character(owner.id, "Elara")
-		const rook = await character(owner.id, "Rook", true)
 		const { sessionsCreateHandler } = await import("./sessions")
 		const rowsOf = async () =>
 			testDb
@@ -1747,19 +1747,20 @@ describe("starting an Adventure session over sessions:create", () => {
 			{
 				session: {
 					name: "No book",
-					genreId: "core:genre/adventure",
+					genreId: "core:genre/lair",
 					presetId: null,
 					lorebookId: null
 				} as any,
 				characterIds: [elara],
-				personaIds: [rook],
+				// The Lair seats no persona.
+				personaIds: [],
 				characterPositions: { [elara]: 0 }
 			},
 			(event: string, data: unknown) => pushes.push({ event, data })
 		)
 		// The ack and the error push carry the same sentence; the success
 		// event is never sent.
-		expect(res.error).toMatch(/does not fit 'Adventure'.*requires a lorebook/)
+		expect(res.error).toMatch(/does not fit 'Lair'.*requires a lorebook/)
 		expect(res.session).toBeUndefined()
 		expect(pushes.map((p) => p.event)).toEqual(["sessions:create:error"])
 		expect(pushes[0]!.data.error).toMatch(/requires a lorebook/)
@@ -1862,7 +1863,7 @@ describe("the narrator names the player's persona", () => {
 		expect(((await lastBlockTree(session.id))!.blocks[0] as any).addressee).toBe(`character:${tom}`)
 		expect((await runsOf(session.id)).map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
 			`${askId}:ok`,
-			"core:spec/chat-answer-form:ok",
+			"core:spec/story-answer-form:ok",
 			`${answerId}:ok`
 		])
 		const line = await lastLine(session.id)
@@ -2042,7 +2043,7 @@ describe("R-15 · staleness and order", () => {
 		const runs = await runsOf(session.id)
 		expect(runs.map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
 			`${askId}:ok`,
-			"core:spec/chat-answer-form:ok",
+			"core:spec/story-answer-form:ok",
 			`${answerId}:halt`
 		])
 		const fireRow = runs[2]!
@@ -2115,11 +2116,11 @@ describe("R-15 · staleness and order", () => {
 		// Ask, then three (answer-form → answer) pairs, every one `ok`.
 		expect(runs.map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
 			`${askId}:ok`,
-			"core:spec/chat-answer-form:ok",
+			"core:spec/story-answer-form:ok",
 			`${answerId}:ok`,
-			"core:spec/chat-answer-form:ok",
+			"core:spec/story-answer-form:ok",
 			`${answerId}:ok`,
-			"core:spec/chat-answer-form:ok",
+			"core:spec/story-answer-form:ok",
 			`${answerId}:ok`
 		])
 		const written = (await lastBlockTree(session.id))!
@@ -2196,7 +2197,7 @@ describe("F41 · the effects line", () => {
 	async function worldDoc(venue: Record<string, unknown>, act: string[] = ["owner"]) {
 		const { spec, compile } = await import("@serene-pub/sdk")
 		const C = await import("@serene-pub/contracts")
-		const { chatGenre } = await import("@serene-pub/core-catalog")
+		const { storyGenre } = await import("@serene-pub/core-catalog")
 		// Built as the allowed shape, then patched — the builder refuses the
 		// disallowed shapes at construction (SDK forms.test.ts), and what is
 		// under test here is the host's publish saying the same.
@@ -2217,7 +2218,7 @@ describe("F41 · the effects line", () => {
 				}
 			})
 				.inlet("input", C.userMessage.v1(), {
-					genre: chatGenre,
+					genre: storyGenre,
 					event: "core:event/session-action@1"
 				})
 				.outlet("save", ($) => C.createMessage.v1({ text: $.input.text }))
@@ -2249,7 +2250,7 @@ describe("F41 · the effects line", () => {
 	test("a block naming a world action is refused at the write", async () => {
 		const { spec, compile } = await import("@serene-pub/sdk")
 		const C = await import("@serene-pub/contracts")
-		const { chatGenre } = await import("@serene-pub/core-catalog")
+		const { storyGenre } = await import("@serene-pub/core-catalog")
 		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
 		const { owner, session } = await sessionWithTom("worldblock")
 		const id = "core:spec/test-world-block"
@@ -2279,7 +2280,7 @@ describe("F41 · the effects line", () => {
 				}
 			})
 				.inlet("input", C.userMessage.v1(), {
-					genre: chatGenre,
+					genre: storyGenre,
 					event: "core:event/session-action@1"
 				})
 				.outlet("save", () =>
@@ -2375,7 +2376,7 @@ describe("F41 · the effects line", () => {
 	test("a block addressed to the owner may name a world action, its own or another spec's", async () => {
 		const { spec, compile } = await import("@serene-pub/sdk")
 		const C = await import("@serene-pub/contracts")
-		const { chatGenre } = await import("@serene-pub/core-catalog")
+		const { storyGenre } = await import("@serene-pub/core-catalog")
 		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
 		const { owner, session } = await sessionWithTom("worldowner")
 		// The other spec, whose `world` declaration the block will name.
@@ -2406,7 +2407,7 @@ describe("F41 · the effects line", () => {
 				}
 			})
 				.inlet("input", C.userMessage.v1(), {
-					genre: chatGenre,
+					genre: storyGenre,
 					event: "core:event/session-action@1"
 				})
 				.outlet("save", () =>
@@ -2454,7 +2455,7 @@ describe("F41 · the effects line", () => {
 	test("any other addressee keeps the refusal, on both gates", async () => {
 		const { spec, compile } = await import("@serene-pub/sdk")
 		const C = await import("@serene-pub/contracts")
-		const { chatGenre } = await import("@serene-pub/core-catalog")
+		const { storyGenre } = await import("@serene-pub/core-catalog")
 		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
 		const { owner, session, tom } = await sessionWithTom("worldchar")
 		await saveDocument(testDb as any, await worldDoc({ kind: "composer" }), {
@@ -2506,7 +2507,7 @@ describe("F41 · the effects line", () => {
 					}
 				})
 					.inlet("input", C.userMessage.v1(), {
-						genre: chatGenre,
+						genre: storyGenre,
 						event: "core:event/session-action@1"
 					})
 					.outlet("save", () =>

@@ -38,7 +38,8 @@
 					systemSettingsCtx?.settings
 						? systemSettingsCtx.capabilityDefaults
 						: null,
-					!!userCtx?.user?.isAdmin && !!panelsCtx
+					!!userCtx?.user?.isAdmin && !!panelsCtx,
+					systemSettingsCtx?.capabilitiesReady
 				)
 			: null
 	)

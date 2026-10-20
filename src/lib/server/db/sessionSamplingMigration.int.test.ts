@@ -20,8 +20,8 @@ import { resolveConfigSources, SLOT_VALUE } from "@serene-pub/sdk"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import {
-	CHAT_NARRATE_SPEC_ID,
-	CHAT_RESPOND_SPEC_ID
+	STORY_NARRATE_SPEC_ID,
+	STORY_RESPOND_SPEC_ID
 } from "$lib/server/pipelines/specs"
 
 const MIGRATION = "0098_retire_session_sampling_column"
@@ -151,7 +151,7 @@ beforeAll(async () => {
 	`)
 	// A pick the panel already holds at the reply's address.
 	await db.insert(schema.pipelineNodeOverrides).values({
-		specId: await specIdOf(CHAT_RESPOND_SPEC_ID),
+		specId: await specIdOf(STORY_RESPOND_SPEC_ID),
 		scopeKind: "session",
 		scopeId: heldId,
 		nodeKey: "generate",
@@ -177,7 +177,7 @@ describe(`${MIGRATION}: the session column becomes the session's panel row`, () 
 		const picks = await picksOf(carriedId)
 		const slugs = picks.map((p) => p.slug)
 		expect(slugs).toEqual(
-			expect.arrayContaining([CHAT_RESPOND_SPEC_ID, CHAT_NARRATE_SPEC_ID])
+			expect.arrayContaining([STORY_RESPOND_SPEC_ID, STORY_NARRATE_SPEC_ID])
 		)
 		for (const p of picks) {
 			expect(p.nodeKey).toBe("generate")
@@ -210,9 +210,9 @@ describe(`${MIGRATION}: the session column becomes the session's panel row`, () 
 
 	it("a pick the panel already holds stays; the session's other pipelines still get the value", async () => {
 		const picks = await picksOf(heldId)
-		const reply = picks.filter((p) => p.slug === CHAT_RESPOND_SPEC_ID)
+		const reply = picks.filter((p) => p.slug === STORY_RESPOND_SPEC_ID)
 		expect(reply.map((p) => p.value)).toEqual([panelPickId])
-		const narrate = picks.find((p) => p.slug === CHAT_NARRATE_SPEC_ID)
+		const narrate = picks.find((p) => p.slug === STORY_NARRATE_SPEC_ID)
 		expect(narrate?.value).toBe(columnPickId)
 	}, 60_000)
 
@@ -230,7 +230,7 @@ describe(`${MIGRATION}: the session column becomes the session's panel row`, () 
 		const { buildWorld } = await import("$lib/server/pipelines/config/world")
 		const world = await buildWorld(db, {
 			sessionId: carriedId,
-			specId: CHAT_RESPOND_SPEC_ID
+			specId: STORY_RESPOND_SPEC_ID
 		})
 		const sourced: any = resolveConfigSources(world as any, ["generate"])
 		const at = sourced?.generate?.sampling?.[SLOT_VALUE]

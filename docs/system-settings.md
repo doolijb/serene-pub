@@ -30,7 +30,7 @@ The **User accounts** card controls whether Serene Pub runs in single-user mode 
 
 Accounts are off on a new pub: there's no sign-in screen, and everyone who reaches the pub is the first administrator. That suits a personal install, but anyone who can reach the app has full admin access, which is why a [tunnel](#network) can't start until accounts are on.
 
-The **User accounts** switch turns sign-in on for everyone. It's **permanent**: once on, the switch locks. If your own account has no passphrase yet, the confirmation dialog asks you to set one first. The card isn't shown in the Android app, which is single-user.
+The **User accounts** switch turns sign-in on for everyone. It's **permanent**: once on, the switch locks. If your own account has no passphrase yet, the confirmation dialog asks you to set one first. Turning it on signs everyone out, you included, and the sign-in page says why: _User accounts are on now, so everyone signs in._ Sign back in with your username and passphrase. The card isn't shown in the Android app, which is single-user.
 
 Step by step, and what happens next (inviting people, roles, passphrases): [Users and accounts](./users-and-accounts.md#enabling-user-accounts).
 

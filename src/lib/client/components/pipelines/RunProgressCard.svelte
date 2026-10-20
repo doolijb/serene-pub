@@ -25,22 +25,43 @@
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { runProgress } from "$lib/client/stores/runProgress.svelte"
 	import { runInspector } from "$lib/client/stores/runInspector.svelte"
-	import { getContext } from "svelte"
+	import { getContext, untrack } from "svelte"
+	import { SvelteSet } from "svelte/reactivity"
 	import { statusText } from "$lib/client/i18n/state.svelte"
 	import { outcomeOf, outcomeIcon, outcomeStatusText } from "./runOutcome"
 	import { adminScreenSegments } from "./adminScreenLink"
 	import type { RunProgress } from "$lib/shared/sockets/progress"
+	import { receiptStands, runIsOnChannel } from "./runCardScope"
+	import { actionRetryOf, rememberFiredAction } from "./actionRetry"
+	import { v4 as uuid } from "uuid"
 
 	interface Props {
 		sessionId: number
+		/**
+		 * The channel of the conversation copy this card sits in — its
+		 * composer's lane. Only that channel's runs are drawn
+		 * (`runCardScope`); absent, every run of the session.
+		 */
+		channel?: string
+		/** The newest row's id on `channel`: a newer one retires a receipt. */
+		newestRowId?: number
+		/**
+		 * 🚧 A row on `channel` is generating, with its own Stop (2026-10-18,
+		 * the 100-turn walk #28: a Rest drew four Stops at once — the waiting
+		 * row's, the turn line's, this card's and the composer's). The card
+		 * then says what is running and leaves stopping to that row.
+		 */
+		rowStops?: boolean
 	}
-	let { sessionId }: Props = $props()
+	let { sessionId, channel, newestRowId = 0, rowStops = false }: Props = $props()
 	// A receipt is an administrator's (R55): only they are offered Inspect.
 	const userCtx: UserCtx | undefined = getContext("userCtx")
 	const isAdmin = $derived(!!userCtx?.user?.isAdmin)
 
 	const socket = useTypedSocket()
-	const runs = $derived(runProgress.forSession(sessionId))
+	const runs = $derived(
+		runProgress.forSession(sessionId).filter((r) => runIsOnChannel(r, channel))
+	)
 
 	/**
 	 * The run that just ended, so its receipt is still one click away.
@@ -54,7 +75,35 @@
 	 * happening now, and a list of every turn's receipt is what the runs
 	 * panel is for.
 	 */
-	const lastFinished = $derived(runProgress.lastFinished(sessionId))
+	const finishedRun = $derived(runProgress.lastFinished(sessionId))
+	/**
+	 * The receipt yields to what came after it (walkthrough 2026-10-15:
+	 * "Rest finished" stood over the next turn): the newest row on this
+	 * channel when the card first drew the receipt, and the receipt goes
+	 * once a newer one lands. Only this channel's receipt is drawn.
+	 */
+	let seen = $state<{ runId: string; newestRowId: number } | null>(null)
+	$effect(() => {
+		const ended = finishedRun
+		if (ended && seen?.runId !== ended.runId)
+			seen = { runId: ended.runId, newestRowId: untrack(() => newestRowId) }
+	})
+	/**
+	 * The runs this card has drawn in flight. A receipt is for a run the
+	 * reader watched end here, never one that ended before the card drew
+	 * (a reload, coming back to the page) — `receiptStands`.
+	 */
+	const inFlightSeen = new SvelteSet<string>()
+	$effect(() => {
+		for (const r of runs) if (!untrack(() => inFlightSeen.has(r.runId))) inFlightSeen.add(r.runId)
+	})
+	const lastFinished = $derived(
+		finishedRun &&
+			runIsOnChannel(finishedRun, channel) &&
+			receiptStands(finishedRun, seen, newestRowId, inFlightSeen.has(finishedRun.runId))
+			? finishedRun
+			: undefined
+	)
 
 	/**
 	 * The caption beside the title, which the `capitalize` class above
@@ -65,7 +114,7 @@
 	 * own `outcome`, projected by `./runOutcome`, pinned there).
 	 */
 	const outcomeCaption = (f: RunProgress) =>
-		statusText(outcomeStatusText(outcomeOf(f), f.haltNodeKey))
+		statusText(outcomeStatusText(outcomeOf(f), f.haltStep))
 
 	const onRunStarted = (event: RunProgress) => runProgress.started(event)
 	const onProgress = (event: RunProgress) => runProgress.apply(event)
@@ -104,6 +153,20 @@
 		// the server says it did. Clearing on click would claim it worked before
 		// anything confirmed it, and a render that ignores the abort would leave
 		// the person believing they stopped it.
+	}
+
+	/**
+	 * 🚧 Fire a halted (or failed) action run's press again (2026-10-16): the
+	 * same action and params, a new run id — kept too, so a second halt
+	 * offers Retry again. The receipt goes; the new run draws its own card.
+	 */
+	function retry(ended: RunProgress) {
+		const press = actionRetryOf(ended)
+		if (!press) return
+		const params = { ...press, runId: uuid() }
+		rememberFiredAction(params)
+		socket.emit("sessions:fireAction", params)
+		runProgress.dismissFinished(sessionId)
 	}
 
 	const preview = (r: (typeof runs)[number]) =>
@@ -148,6 +211,16 @@
 					{outcomeCaption(ended)}
 				</span>
 			</span>
+			{#if actionRetryOf(ended)}
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-primary shrink-0"
+					onclick={() => retry(ended)}
+					title="Run this action again"
+				>
+					<Icons.RotateCcw size={14} /> Retry
+				</button>
+			{/if}
 			{#if isAdmin}
 				<button
 					type="button"
@@ -227,6 +300,7 @@
 					></div>
 				</div>
 			</div>
+			{#if !rowStops}
 			<button
 				type="button"
 				class="btn btn-sm preset-tonal-error shrink-0"
@@ -236,6 +310,7 @@
 			>
 				<Icons.X size={14} />
 			</button>
+			{/if}
 		</div>
 
 		{#if run.message}

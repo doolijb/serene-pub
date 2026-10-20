@@ -30,25 +30,18 @@ const TWIN = "acme.twin"
 
 /** One session layout that validates: the conversation, alone. */
 const LAYOUT = {
-	widgetGrid: {
+	panels: {
 		version: 1,
-		cell: 44,
-		widgets: [
-			{
-				id: "messages",
-				zone: "middle",
-				order: 0,
-				size: { w: "grow", h: "grow" },
-				anchor: { top: true, bottom: true, left: true, right: true }
-			}
-		]
+		left: [],
+		middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] },
+		right: []
 	}
 }
 
 /** The event every row subscribes to — a granted permission, reviewed. */
 const EVENT = "core:event/message-completed@1"
 /** Core's create pipeline for Chat, as the swaps test seeds it: what a swap names. */
-const SWAPPED_SPEC = "core:spec/chat-create"
+const SWAPPED_SPEC = "core:spec/story-create"
 /** The node of it a session may swap. */
 const SWAPPED_NODE = "create"
 
@@ -62,7 +55,7 @@ const manifest = (pluginId: string, slug: string) => ({
 	templateEngines: { [`${pluginId}:template/echo@1`]: "render" },
 	layouts: [
 		{
-			genreId: "core:genre/chat",
+			genreId: "core:genre/story",
 			slug,
 			name: "Wide",
 			preset: LAYOUT
@@ -77,7 +70,7 @@ const manifest = (pluginId: string, slug: string) => ({
 	components: [{ slug: "widget", entry: "ui/widget.mjs" }],
 	permissions: [`event:${EVENT}`],
 	eventHooks: [{ event: EVENT, hook: "onCompleted" }],
-	presets: [{ slug, genre: "core:genre/chat", label: `Preset ${slug}` }],
+	presets: [{ slug, genre: "core:genre/story", label: `Preset ${slug}` }],
 	// Under core's own namespace for the core row: refused if it were ever read.
 	templates: [
 		{
@@ -178,7 +171,7 @@ describe("a stored 'core' plugin row", () => {
 	test("projects no layout — not even core's reserved slug on core's own genre", async () => {
 		const { syncPluginLayouts } = await import("$lib/server/db/pluginLayouts")
 		const report = await syncPluginLayouts(testDb as never)
-		expect(report.projected).toContain(`layout:core:genre/chat:${TWIN}/wide`)
+		expect(report.projected).toContain(`layout:core:genre/story:${TWIN}/wide`)
 		const rows = await testDb
 			.select({ pluginId: schema.sessionLayoutPresets.pluginId })
 			.from(schema.sessionLayoutPresets)
@@ -284,7 +277,7 @@ describe("a stored 'core' plugin row", () => {
 				status: "published",
 				canonicalHash: "core-row-create-chat",
 				genre: { name: "Chat", shape: {} },
-				inputGenre: "core:genre/chat",
+				inputGenre: "core:genre/story",
 				inputEvent: sessionEvents.sessionCreated
 			})
 			.returning()
@@ -307,7 +300,7 @@ describe("a stored 'core' plugin row", () => {
 
 		const { sessionGenresDetail } = await import("$lib/server/sockets/sessionAdmin")
 		const admin = { user: { id: ownerId, isAdmin: true }, io: { to: () => ({ emit: () => {} }) } } as any
-		const hub = await sessionGenresDetail.handler(admin, { genreId: "core:genre/chat" } as any, () => {})
+		const hub = await sessionGenresDetail.handler(admin, { genreId: "core:genre/story" } as any, () => {})
 		expect(hub.error).toBeUndefined()
 		expect(hub.swaps?.map((s) => [s.pluginId, s.definition])).toEqual([[TWIN, `${TWIN}:task/echo@1`]])
 
@@ -347,7 +340,7 @@ describe("a stored 'core' plugin row", () => {
 		const { disabledPlugins } = await import("./disabledPlugins")
 		const off = await disabledPlugins(testDb as never)
 		expect(off.ownsId(`${TWIN}:genre/x`)).toBe(true)
-		expect(off.ownsId("core:genre/chat")).toBe(false)
+		expect(off.ownsId("core:genre/story")).toBe(false)
 		expect(off.slugs.has("core")).toBe(false)
 	})
 })

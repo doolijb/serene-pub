@@ -1,6 +1,7 @@
 /**
  * `loadouts:*` over a real database (I12): admin-only, the list's words, a
- * pair change's sampling swap, merge refusal, default moves, Make it, delete.
+ * pair change's sampling swap, merge refusal, default moves, Make it, Fill for
+ * me's proposal, delete.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -140,6 +141,27 @@ describe("loadouts sockets", () => {
 		expect(after.loadouts.find((l) => l.loadoutId === "core:loadout/reply@1")?.defaultFor).toBeNull()
 
 		const { c } = await pair("schema", { "text->text": 2, json_schema: 2 })
+		const graded = await loadoutsList.handler(socketFor(), {}, noopEmit)
+		expect(graded.connectionGrades?.[c.id]?.json_schema).toBe(2)
+		// Fill for me proposes the same pick, says why, and writes nothing.
+		const { loadoutsProposeFill } = await S()
+		const before = await loadoutsList.handler(socketFor(), {}, noopEmit)
+		const proposed = await loadoutsProposeFill.handler(socketFor(), { id: extraction.id }, noopEmit)
+		expect(proposed.connectionId).toBe(c.id)
+		expect(proposed.explanation).toMatch(/^Filled with schema model on schema\. It has a schema door, what Extraction is best with/)
+		expect(proposed.samplingConfigId).not.toBeNull()
+		const still = await loadoutsList.handler(socketFor(), {}, noopEmit)
+		expect(still.loadouts.find((l) => l.id === extraction.id)?.connectionId).toBe(
+			before.loadouts.find((l) => l.id === extraction.id)?.connectionId
+		)
+		// A loadout not yet created proposes by transform.
+		const fresh = await loadoutsProposeFill.handler(socketFor(), { transform: "text->text" }, noopEmit)
+		expect(fresh.id).toBeNull()
+		expect(fresh.connectionId).toBeTypeOf("number")
+		await expect(
+			loadoutsProposeFill.handler(socketFor(false), { id: extraction.id }, noopEmit)
+		).rejects.toThrow(/admin/)
+
 		const made = await loadoutsMakeIt.handler(socketFor(), { id: extraction.id }, noopEmit)
 		expect(made.loadout.connectionId).toBe(c.id)
 		expect(made.explanation).toMatch(/now runs on schema model on schema/)

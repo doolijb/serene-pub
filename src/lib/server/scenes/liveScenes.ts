@@ -1065,6 +1065,16 @@ export async function openScene(
 
 	if (result.closed) await proposeAndWriteCast(db, result.closed)
 	const castProposal = await proposeAndWriteCast(db, result.scene)
+	// 🚧 *Picture each new scene* (lane 2, 2026-10-19): an open scene still
+	// open (not a range filed after the fact) is the scene changing. Never
+	// the reason a scene fails to open.
+	if (closeAt == null)
+		try {
+			const { onSceneOpened } = await import("$lib/server/sessions/taskEvents")
+			await onSceneOpened(db, { sessionId, channel })
+		} catch (err) {
+			console.warn(`[scenes] Picture each new scene for session ${sessionId} was skipped:`, err)
+		}
 	return {
 		sessionId,
 		scene: await reread(db, result.scene.id),
@@ -1444,7 +1454,7 @@ export async function sessionBoundaryTriggers(
  * scene's opening line (`scenePlaceOf` read at that line, as the name was
  * written) — a tick-captured scene's first line; nothing for a genre that
  * names no place, or a scene whose session is gone. The name may carry it
- * too (`Scene N · <place>`); a renamed scene's no longer does, so the
+ * too (`Scene N · <place>`); a renamed scene's does not, so the
  * preamble is told it apart from the name.
  */
 export async function sceneHeaderOf(

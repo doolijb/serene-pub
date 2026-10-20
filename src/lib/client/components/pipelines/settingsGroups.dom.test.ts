@@ -294,10 +294,10 @@ describe("a session's creation pipeline (owner ruling 2026-09-30)", () => {
 
 describe("the sidebar's scope inside a session (owner Q7)", () => {
 	test("writes at session scope only for a pipeline the session runs", () => {
-		const runs = new Set(["core:spec/adventure-respond"])
-		expect(sessionScopeFor("core:spec/adventure-respond", 9, runs)).toBe(9)
+		const runs = new Set(["core:spec/story-respond"])
+		expect(sessionScopeFor("core:spec/story-respond", 9, runs)).toBe(9)
 		expect(sessionScopeFor("core:spec/summarize", 9, runs)).toBeUndefined()
-		expect(sessionScopeFor("core:spec/adventure-respond", undefined, runs)).toBeUndefined()
+		expect(sessionScopeFor("core:spec/story-respond", undefined, runs)).toBeUndefined()
 	})
 
 	test("says a pipeline the session does not run is the configuration's", async () => {

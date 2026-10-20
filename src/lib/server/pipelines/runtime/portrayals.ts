@@ -20,6 +20,7 @@
  * | `participant`    | `person` — the run owner, when they are a member; else `none`.                                                                                                                                                                                             |
  * | `run-owner`      | `person` — the run owner, always.                                                                                                                                                                                                                           |
  * | `character:<id>` | `person` if the character is a member's **own presence** — a live `session_personas` row for it whose `characters.user_id` is a member (the persona ownership rule, `checkPersonaOwnership`); else `ai` if it is in the session's cast (a live `session_characters` row — `is_active` is a rotation property, not a membership, so a benched character is still the AI's) **or is the turn's `speaker`** (a side character speaks through the model for exactly this turn, and joins nothing); else `none`. |
+ * | `player-seat:<id>`      | 🚧 `person` (the seat's player — its `user_id`, else its card's owner) for a live `session_personas` row of this session whose player is a member; else `none`. Never `ai`: a seat is a person's. |
  * | `envoy:<slug>`   | `ai` if the session's genre or an installed action **declares** the slug (`declaredEnvoys`, U5g) — seated or not: an action's envoy speaks the moment its action posts, and a genre's may be named as the speaker before its seat exists; else `none`. An envoy is never a person's. |
  * | `item`           | `none` — the per-message ownership rule is evaluated at the venue, against a message (`messages/permissions.ts` `canActOnMessage`), and a run has no message to evaluate it against.                                                                             |
  *
@@ -41,6 +42,7 @@
  * one every receipt gets (`withoutConnectionIdentity`).
  */
 
+import { isCardlessPlayerSeat } from "$lib/server/sessions/seatName"
 import * as schema from "$lib/server/db/schema"
 import { and, asc, eq, inArray, isNull, isNotNull } from "drizzle-orm"
 import { sessionDeclaredEnvoys } from "$lib/server/pipelines/entities/envoys"
@@ -178,6 +180,36 @@ export async function resolvePortrayals(
 	const cast = new Set<number>(
 		castRows.map((c) => c.characterId).filter((id): id is number => id !== null)
 	)
+	// 🚧 The seat references (2026-10-14), answered from one read of the
+	// session's live card-less player seats they name — its player. A seat with a
+	// card is addressed by its card (`character:<id>`), never `player-seat:`.
+	const seatIds = [
+		...new Set(
+			parsed
+				.map((p) => (p.kind === "player-seat" ? participantRowId(p.id) : null))
+				.filter((id): id is number => id !== null)
+		)
+	]
+	const seatPlayer = new Map<number, number>()
+	if (seatIds.length)
+		for (const r of await db
+			.select({
+				seatId: schema.sessionPersonas.id,
+				userId: schema.sessionPersonas.userId,
+				personaId: schema.sessionPersonas.personaId,
+				seatName: schema.sessionPersonas.seatName,
+				removedAt: schema.sessionPersonas.removedAt
+			})
+			.from(schema.sessionPersonas)
+			.where(
+				and(
+					eq(schema.sessionPersonas.sessionId, sessionId),
+					inArray(schema.sessionPersonas.id, seatIds)
+				)
+			)) {
+			if (isCardlessPlayerSeat(r) && r.userId != null && members.has(r.userId))
+				seatPlayer.set(r.seatId, r.userId)
+		}
 	// The envoy references, answered from one read of what the session's
 	// genre and its installed actions declare (U5g). Read only when asked
 	// about — a run naming no envoy costs no query here.
@@ -233,6 +265,12 @@ export async function resolvePortrayals(
 						: id !== null && (cast.has(id) || key === speakerKey)
 							? AI
 							: NONE
+				break
+			}
+			case "player-seat": {
+				const id = participantRowId(p.id)
+				const player = id !== null ? seatPlayer.get(id) : undefined
+				portrayal = player !== undefined ? PERSON(player) : NONE
 				break
 			}
 			case "envoy":
@@ -297,7 +335,7 @@ export async function ownPresence(
  * row with `envoy_slug`, U5g), every member's presence (a live
  * `session_personas` row — a guest's persona is in the session without being
  * in the cast, and "Elara · you" on the inspector's line is unreachable
- * without it), the owner and the run owner. Read once by `runSpec` and
+ * without it; 🚧 a card-less one as `player-seat:<id>`), the owner and the run owner. Read once by `runSpec` and
  * handed to `resolvePortrayals`; nothing else composes this list.
  */
 export async function turnRefs(
@@ -317,7 +355,11 @@ export async function turnRefs(
 				)
 			),
 		db
-			.select({ characterId: schema.sessionPersonas.personaId })
+			.select({
+				seatId: schema.sessionPersonas.id,
+				characterId: schema.sessionPersonas.personaId,
+				seatName: schema.sessionPersonas.seatName
+			})
 			.from(schema.sessionPersonas)
 			.where(
 				and(
@@ -338,8 +380,13 @@ export async function turnRefs(
 	])
 	const refs = new Set<ParticipantRef>(["owner", "run-owner"])
 	if (speaker) refs.add(speaker)
-	for (const c of [...cast, ...presences])
+	for (const c of cast)
 		if (c.characterId !== null) refs.add(`character:${c.characterId}`)
+	// A presence by its card, else 🚧 as its seat (a participant is
+	// addressed by its card when it has one).
+	for (const p of presences)
+		if (p.characterId !== null) refs.add(`character:${p.characterId}`)
+		else if (isCardlessPlayerSeat({ personaId: null, seatName: p.seatName })) refs.add(`player-seat:${p.seatId}`)
 	for (const e of envoys) if (e.envoySlug) refs.add(`envoy:${e.envoySlug}`)
 	return [...refs]
 }

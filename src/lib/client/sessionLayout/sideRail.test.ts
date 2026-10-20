@@ -1,54 +1,61 @@
 /**
  * The side column's rail model (ruled 2026-09-10) — pure, so the whole
- * decision is covered without a component harness.
+ * decision is covered without a component harness. A group is a PANEL
+ * (PLAN-session-panels-2026-10-14): docked or in the rail, at its height.
  */
 import { describe, expect, it } from "vitest"
 import {
 	MIN_GROUP_PX,
-	MIN_WIDGET_PX,
 	RAIL_GAP_PX,
-	collapseColumn,
-	collapsedOrder,
+	panelTrack,
 	railFit,
 	resolveRailColumn,
 	rovingStep,
 	rovingStop,
 	type RailGroup
 } from "./sideRail"
-import { resolveDrawn } from "@serene-pub/sdk"
-import { unitPinned } from "./arrangedGeometry"
-import { unitsOf } from "./tabGroups"
+import { resolveDrawn, type PanelHeightV1, type PanelV1 } from "@serene-pub/sdk"
+
+/** A column as the test states it: `rows` twelfths of the column, or a height. */
+type Spec = { key: string; rows?: number; height?: PanelHeightV1; pinned: boolean; open: boolean }
 
 /**
- * The column as a STORED arrangement, read the way the page reads it (C5):
- * each group an arranged item stacked down a right frame, its pin written
- * the way the arrangement writes one (`pinned: false`, or no field at all),
- * then drawn by `resolveDrawn`, grouped (`unitsOf`) and pinned by the one rule
- * (`unitPinned`). So every case below runs the pin from the stored field to
- * the rail; `open` is transient and rides beside it, by key.
+ * The column as a STORED layout, read the way the page reads it (C5): each
+ * group a right-side panel, its pin written the way a panel writes one
+ * (`pinned: false`, or no field at all) and its height a `{ share }` of the
+ * rows it is given, then drawn by `resolveDrawn` — so every case below runs
+ * the pin and the height from the stored panel to the rail; `open` is
+ * transient and rides beside it, by key.
  */
-function throughDrawn(column: RailGroup[]): RailGroup[] {
-	let y = 0
-	const items = column.map((g) => {
-		const item = { id: g.key, x: 0, y, w: 1, h: g.rows, ...(g.pinned ? {} : { pinned: false }) }
-		y += g.rows
-		return item
-	})
+function throughDrawn(column: Spec[]): RailGroup[] {
+	const right: PanelV1[] = column.map((g) => ({
+		key: g.key,
+		tabs: [`w-${g.key}`],
+		...(g.pinned ? {} : { pinned: false as const }),
+		height: g.height ?? { share: g.rows ?? 4 }
+	}))
 	const zone = resolveDrawn(
-		{ arrangedGrid: { right: { cols: 1, rows: Math.max(1, y), items } } },
+		{
+			panels: {
+				version: 1,
+				left: [],
+				right,
+				middle: { above: [], primary: { key: "p0", tabs: ["messages"] }, below: [] }
+			}
+		},
 		{ inline: 1300 }
 	).right
 	const open = new Map(column.map((g) => [g.key, g.open]))
-	return unitsOf(zone).map((u) => ({
-		key: u.key,
-		rows: u.box.h,
-		pinned: unitPinned(u.members),
-		open: open.get(u.key) ?? false
+	return zone.panels.map((p) => ({
+		key: p.key,
+		height: p.height,
+		pinned: p.pinned,
+		open: open.get(p.key) ?? false
 	}))
 }
 
-/** A column of three equal groups in a 12-row arrangement. */
-function groups(...over: Partial<RailGroup>[]): RailGroup[] {
+/** A column of three equal groups, each four twelfths of it. */
+function groups(...over: Partial<Spec>[]): RailGroup[] {
 	return throughDrawn(
 		over.map((o, i) => ({
 			key: `g${i}`,
@@ -100,7 +107,6 @@ describe("resolveRailColumn — (a) expanded or an icon in the rail", () => {
 	it("expands the pinned groups and collapses the rest, with no state of its own", () => {
 		const r = resolveRailColumn({
 			columnPx: 600,
-			totalRows: 12,
 			groups: groups(
 				{ pinned: true, open: true },
 				{ pinned: false, open: false },
@@ -117,10 +123,9 @@ describe("resolveRailColumn — (a) expanded or an icon in the rail", () => {
 	it("gives an expanded group its share of the column and a collapsed one nothing", () => {
 		const r = resolveRailColumn({
 			columnPx: 600,
-			totalRows: 12,
 			groups: groups({ pinned: true, open: true }, { open: false })
 		})
-		// 4 of 12 rows, of the column less the one gap between the two groups.
+		// A share of 4 twelfths, of the column less the one gap between the two groups.
 		expect(r[0].heightPx).toBe(198)
 		expect(r[1].heightPx).toBe(0)
 	})
@@ -130,7 +135,6 @@ describe("resolveRailColumn — (b) a pinned group keeps its height", () => {
 	it("does not shrink a pinned group when a sibling expands", () => {
 		const base = {
 			columnPx: 600,
-			totalRows: 12,
 			groups: groups(
 				{ pinned: true, open: true },
 				{ pinned: true, open: true },
@@ -156,7 +160,6 @@ describe("resolveRailColumn — (b) a pinned group keeps its height", () => {
 		// pinned one below it still gets its share.
 		const r = resolveRailColumn({
 			columnPx: 400,
-			totalRows: 12,
 			groups: throughDrawn([
 				{ key: "loose", rows: 12, pinned: false, open: true },
 				{ key: "docked", rows: 6, pinned: true, open: true }
@@ -173,7 +176,6 @@ describe("resolveRailColumn — (c) no room beside the pinned ones is a flyout",
 	it("opens the group the user just asked for over the session, at full height", () => {
 		const r = resolveRailColumn({
 			columnPx: 300,
-			totalRows: 12,
 			groups: throughDrawn([
 				{ key: "big", rows: 11, pinned: true, open: true },
 				{ key: "late", rows: 4, pinned: false, open: true }
@@ -189,7 +191,6 @@ describe("resolveRailColumn — (c) no room beside the pinned ones is a flyout",
 		// group may leave the column.
 		const r = resolveRailColumn({
 			columnPx: 300,
-			totalRows: 12,
 			groups: throughDrawn([
 				{ key: "big", rows: 11, pinned: true, open: true },
 				{ key: "a", rows: 4, pinned: false, open: true },
@@ -206,7 +207,6 @@ describe("resolveRailColumn — (c) no room beside the pinned ones is a flyout",
 	it("never flies more than one group out", () => {
 		const r = resolveRailColumn({
 			columnPx: 200,
-			totalRows: 12,
 			groups: throughDrawn([
 				{ key: "big", rows: 12, pinned: true, open: true },
 				{ key: "a", rows: 4, pinned: false, open: true },
@@ -222,7 +222,6 @@ describe("resolveRailColumn — (c) no room beside the pinned ones is a flyout",
 	it("takes the room a collapsed sibling gave back", () => {
 		const open3 = {
 			columnPx: 300,
-			totalRows: 12,
 			groups: throughDrawn([
 				{ key: "a", rows: 6, pinned: true, open: true },
 				{ key: "b", rows: 6, pinned: true, open: true },
@@ -248,10 +247,9 @@ describe("resolveRailColumn — the edges", () => {
 	it("expands a group no smaller than the floor, even in a thin column", () => {
 		const r = resolveRailColumn({
 			columnPx: 600,
-			totalRows: 60,
 			groups: throughDrawn([{ key: "sliver", rows: 1, pinned: true, open: true }])
 		})
-		// One row of sixty is 10px, which is not a panel. Shares alone could
+		// One twelfth of 600 is 50px, which is not a panel. Shares alone could
 		// never overflow the column either — they are proportions OF it — so a
 		// column that only ever handed out shares would make rule (c)
 		// unreachable. The floor is what makes a short column run out.
@@ -260,18 +258,17 @@ describe("resolveRailColumn — the edges", () => {
 	})
 
 	it("runs out of column when the floors no longer fit — which is rule (c)", () => {
-		// Four groups filling a 16-row arrangement. In a 500px column each
-		// share clears the floor and all four fit — gaps and all, which is what
-		// the share denominator is for. In a 300px column they do not.
+		// Four groups of three twelfths each. In a 500px column each share
+		// clears the floor and all four fit — gaps and all, which is what the
+		// share denominator is for. In a 300px column they do not.
 		const four = (columnPx: number) =>
 			resolveRailColumn({
 				columnPx,
-				totalRows: 16,
-				groups: groups(
-					{ pinned: true, open: true },
-					{ pinned: true, open: true },
-					{ pinned: true, open: true },
-					{ pinned: true, open: true }
+					groups: groups(
+					{ rows: 3, pinned: true, open: true },
+					{ rows: 3, pinned: true, open: true },
+					{ rows: 3, pinned: true, open: true },
+					{ rows: 3, pinned: true, open: true }
 				)
 			}).map((p) => p.state)
 		expect(four(500)).toEqual([
@@ -291,7 +288,6 @@ describe("resolveRailColumn — the edges", () => {
 	it("holds an unmeasured column open rather than flying everything out", () => {
 		const r = resolveRailColumn({
 			columnPx: 0,
-			totalRows: 12,
 			groups: groups({ pinned: true, open: true }, { open: true })
 		})
 		expect(r.map((p) => p.state)).toEqual(["expanded", "expanded"])
@@ -302,7 +298,6 @@ describe("resolveRailColumn — the edges", () => {
 	it("never returns a negative height, whatever it is handed", () => {
 		const r = resolveRailColumn({
 			columnPx: -50,
-			totalRows: 0,
 			groups: groups({ pinned: true, open: true }, { open: true })
 		})
 		for (const p of r) expect(p.heightPx).toBeGreaterThanOrEqual(0)
@@ -315,7 +310,7 @@ describe("resolveRailColumn — the edges", () => {
 			{ open: false }
 		)
 		expect(
-			resolveRailColumn({ columnPx: 600, totalRows: 12, groups: g }).map(
+			resolveRailColumn({ columnPx: 600, groups: g }).map(
 				(p) => p.key
 			)
 		).toEqual(["g0", "g1", "g2"])
@@ -326,7 +321,6 @@ describe("resolveRailColumn — below the breakpoint the rail is the header's bu
 	it("docks nothing: the group the user tapped is the sheet, the rest are icons", () => {
 		const r = resolveRailColumn({
 			columnPx: 700,
-			totalRows: 12,
 			narrow: true,
 			groups: groups(
 				{ pinned: true, open: true },
@@ -345,7 +339,6 @@ describe("resolveRailColumn — below the breakpoint the rail is the header's bu
 	it("shows no sheet at all when nothing was tapped", () => {
 		const r = resolveRailColumn({
 			columnPx: 700,
-			totalRows: 12,
 			narrow: true,
 			groups: groups({ pinned: true, open: true })
 		})
@@ -353,13 +346,12 @@ describe("resolveRailColumn — below the breakpoint the rail is the header's bu
 	})
 })
 
-describe("a RAIL-ONLY side — an arrangement that pins no group (lane E1)", () => {
+describe("a RAIL-ONLY side — every panel in the rail (lane E1)", () => {
 	it("as a column it would draw nothing: every group collapsed, its whole width empty", () => {
 		// Why the model draws such a side tucked and counts a rail for it
 		// (./sideSlot `sideFlowPx` `railOnly`): docked, it is a blank column.
 		const r = resolveRailColumn({
 			columnPx: 700,
-			totalRows: 12,
 			groups: groups(
 				{ pinned: false, open: false },
 				{ pinned: false, open: false }
@@ -371,7 +363,6 @@ describe("a RAIL-ONLY side — an arrangement that pins no group (lane E1)", () 
 	it("drawn as its rail (the tucked decision), the group asked for comes out over the session", () => {
 		const r = resolveRailColumn({
 			columnPx: 700,
-			totalRows: 12,
 			narrow: true,
 			groups: groups(
 				{ pinned: false, open: false },
@@ -389,118 +380,81 @@ describe("the module's stated constants", () => {
 	})
 })
 
-describe("collapseColumn — side by side, or one under the other", () => {
-	it("keeps two widgets side by side when the column can hold both", () => {
-		expect(collapseColumn({ columnPx: 700, minWidthPx: [220, 220] })).toBe(
-			false
-		)
-	})
-
-	it("stacks them when it cannot — the threshold is the widgets, not a breakpoint", () => {
-		expect(collapseColumn({ columnPx: 400, minWidthPx: [220, 220] })).toBe(
-			true
-		)
-		// One pixel is the whole difference, and it is THEIR pixel: two 220s
-		// and the gap between them.
-		const exact = 220 + 220 + RAIL_GAP_PX
-		expect(
-			collapseColumn({ columnPx: exact, minWidthPx: [220, 220] })
-		).toBe(false)
-		expect(
-			collapseColumn({ columnPx: exact - 1, minWidthPx: [220, 220] })
-		).toBe(true)
-	})
-
-	it("never puts two widgets side by side below the breakpoint", () => {
-		// Ruled 2026-09-10: on mobile there are no side-by-side placements at
-		// all, however wide the thing claims to be.
-		expect(
-			collapseColumn({
-				columnPx: 4000,
-				minWidthPx: [220, 220],
-				narrow: true
-			})
-		).toBe(true)
-	})
-
-	it("has nothing to collapse when nothing shares a row", () => {
-		expect(collapseColumn({ columnPx: 100, minWidthPx: [220] })).toBe(false)
-		expect(collapseColumn({ columnPx: 100, minWidthPx: [] })).toBe(false)
-		// …except on mobile, where a single widget is already a row of one.
-		expect(
-			collapseColumn({ columnPx: 100, minWidthPx: [220], narrow: true })
-		).toBe(true)
-	})
-
-	it("leaves an unmeasured column as it was arranged", () => {
-		// 0 is "not laid out yet", not "no room": collapsing on it would flip
-		// every 4K layout to a single column for a frame on every load.
-		expect(collapseColumn({ columnPx: 0, minWidthPx: [220, 220] })).toBe(
-			false
-		)
-	})
-
-	it("keeps a floor a widget is actually usable at", () => {
-		expect(MIN_WIDGET_PX).toBeGreaterThan(120)
-	})
-})
-
-describe("collapsedOrder — anchors mean order, and nothing else", () => {
-	const at = (key: string, y: number, x = 0, anchor?: any) => ({
-		key,
-		box: { x, y },
-		anchor
-	})
-
-	it("draws a collapsed column in grid order: down, then across", () => {
-		expect(
-			collapsedOrder([
-				at("c", 2),
-				at("a", 0),
-				at("b", 1, 3),
-				at("b2", 1, 0)
+describe("heights — fit, fill and a share (PLAN-session-panels §1.3)", () => {
+	it("a share is its own twelfths of the docked height, as px once measured", () => {
+		const r = resolveRailColumn({
+			columnPx: 606,
+			groups: throughDrawn([
+				{ key: "a", rows: 4, pinned: true, open: true },
+				{ key: "b", rows: 8, pinned: true, open: true }
 			])
-		).toEqual(["a", "b2", "b", "c"])
+		})
+		expect(r.map((p) => p.heightPx)).toEqual([200, 400])
+		expect(r.map((p) => p.track)).toEqual(["200px", "400px"])
 	})
 
-	it("puts top-anchored first and bottom-anchored last", () => {
-		expect(
-			collapsedOrder([
-				at("mid", 1),
-				at("foot", 2, 0, { bottom: true }),
-				at("head", 3, 0, { top: true })
+	it("fit takes its content, never under the floor; fill shares what is left", () => {
+		const r = resolveRailColumn({
+			columnPx: 700,
+			groups: throughDrawn([
+				{ key: "fit", height: "fit", pinned: true, open: true },
+				{ key: "a", height: "fill", pinned: true, open: true },
+				{ key: "b", height: "fill", pinned: true, open: true }
 			])
-		).toEqual(["head", "mid", "foot"])
+		})
+		expect(r.map((p) => p.state)).toEqual(["expanded", "expanded", "expanded"])
+		// Neither is a height of its own: the grid sizes them.
+		expect(r.map((p) => p.heightPx)).toEqual([0, 0, 0])
+		expect(r.map((p) => p.track)).toEqual([
+			`minmax(${MIN_GROUP_PX}px,auto)`,
+			"minmax(0,1fr)",
+			"minmax(0,1fr)"
+		])
 	})
 
-	it("keeps grid order WITHIN each of the three bands", () => {
-		expect(
-			collapsedOrder([
-				at("h2", 5, 0, { top: true }),
-				at("h1", 1, 0, { top: true }),
-				at("f2", 9, 0, { bottom: true }),
-				at("f1", 4, 0, { bottom: true }),
-				at("m", 2)
-			])
-		).toEqual(["h1", "h2", "m", "f1", "f2"])
+	it("an absent or unreadable height draws as fill", () => {
+		const [g] = throughDrawn([
+			{ key: "x", height: "tall" as unknown as PanelHeightV1, pinned: true, open: true }
+		])
+		expect(g.height).toBe("fill")
 	})
 
-	it("reads an anchor to BOTH edges as top — it cannot be in two places", () => {
-		expect(
-			collapsedOrder([
-				at("free", 0),
-				at("both", 9, 0, { top: true, bottom: true })
-			])
-		).toEqual(["both", "free"])
+	it("a fit or fill panel costs the column its floor, so rule (c) still bites", () => {
+		// Two fills hold 2 × 120 + a gap of a 260px column: a third does not fit.
+		const r = resolveRailColumn({
+			columnPx: 260,
+			groups: throughDrawn([
+				{ key: "a", height: "fill", pinned: true, open: true },
+				{ key: "b", height: "fill", pinned: true, open: true },
+				{ key: "c", height: "fit", pinned: false, open: true }
+			]),
+			focusKey: "c"
+		})
+		expect(r.map((p) => p.state)).toEqual(["expanded", "expanded", "flyout"])
 	})
 
-	it("ignores the left/right anchors: there is only one column now", () => {
-		expect(
-			collapsedOrder([
-				at("b", 1, 0, { left: true }),
-				at("a", 0, 0, { right: true })
-			])
-		).toEqual(["a", "b"])
+	it("an unmeasured share is a proportional track, never a 0px row", () => {
+		expect(panelTrack({ share: 6 }, 0)).toBe("minmax(0,6fr)")
+		expect(panelTrack({ share: 6 }, 300)).toBe("300px")
+		expect(panelTrack("fit", 0, 90)).toBe("minmax(90px,auto)")
+		expect(panelTrack("fill", 0)).toBe("minmax(0,1fr)")
+	})
+
+	it("a collapsed or flown-out panel has no track", () => {
+		const r = resolveRailColumn({
+			columnPx: 200,
+			groups: throughDrawn([
+				{ key: "big", rows: 12, pinned: true, open: true },
+				{ key: "out", rows: 4, pinned: false, open: true },
+				{ key: "shut", rows: 4, pinned: false, open: false }
+			]),
+			focusKey: "out"
+		})
+		expect(r.map((p) => [p.state, p.track])).toEqual([
+			["expanded", "188px"], // the column less its two gaps
+			["flyout", ""],
+			["collapsed", ""]
+		])
 	})
 })
 

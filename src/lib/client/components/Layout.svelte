@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { adoptAccountTimeZone } from "$lib/client/utils/realTime.svelte"
 	import { provideCharacterImports } from "$lib/client/contexts/characterImports.svelte"
 	import { provideConnections } from "$lib/client/contexts/connections.svelte"
 	import { provideConversations } from "$lib/client/contexts/conversations.svelte"
@@ -156,6 +157,12 @@
 		"sessions:places:error",
 		// Stats (F2) says a refused stat trail in its popover (R77).
 		"sessions:statTrail:error",
+		// 🚧 The session page toasts a refused Regenerate itself, in the
+		// server's words (PLAN-dc-after-walk2 Q1-4: it arrived twice, once as
+		// "Sessions Retake Turn failed").
+		"sessions:retakeTurn:error",
+		// 🚧 Stats says a refused Give to… in the piece's popover (★4, R77).
+		"state:givePiece:error",
 		"connections:list:error",
 		// Toasted once already, as the bare `error` event with the server's
 		// own sentence; this sibling only stops the wrapper's generic
@@ -307,10 +314,22 @@
 		"scenes:delete:error"
 	])
 
+	/**
+	 * 🚧 A refusal whose event name reads as code titled in words instead
+	 * (PLAN-dc-after-walk3 R1-2, the walk's NEW-4: "State Decide failed"
+	 * over "only Maren Holt's player … can change their sheet").
+	 */
+	const ERROR_TITLES: Record<string, string> = {
+		"state:decide:error": "That change was not made",
+		"state:givePiece:error": "Nothing was given"
+	}
+
 	// Turns "characters:update:error" into "Characters update failed", etc.
 	// Used only as a fallback title when no specific listener has already
 	// produced a nicer one for a given event.
 	function humanizeErrorEvent(event: string): string {
+		const worded = ERROR_TITLES[event]
+		if (worded) return worded
 		const base = event.replace(/:error$/, "")
 		const words = base
 			.split(":")
@@ -680,6 +699,7 @@
 		sessionName: null,
 		cast: [],
 		genreName: null,
+		branchOfLabel: null,
 		lorebookId: null,
 		lorebookBranchId: null,
 		storyClock: null,
@@ -2234,6 +2254,7 @@
 			activeEmbeddingModel: message.activeEmbeddingModel
 		}
 		systemSettingsCtx.capabilityDefaults = message.capabilityDefaults
+		systemSettingsCtx.capabilitiesReady = message.capabilitiesReady
 		ollamaSettingsCtx.settings = { ...message.ollamaSettings }
 		koboldCppSettingsCtx.settings = { ...message.koboldCppSettings }
 	}
@@ -2247,6 +2268,11 @@
 		// session server-side and the socket's `io server disconnect` reloads
 		// the page, so there is no in-place clear path to mirror here.
 		setInterestUser(message.user ?? null)
+		// Real-world times show in the account's zone; an account with none
+		// takes this browser's, reported once (`onlyIfUnset`, so it is idempotent).
+		adoptAccountTimeZone(message.user, (timeZone) =>
+			socket.emit("users:current:setTimeZone", { timeZone, onlyIfUnset: true })
+		)
 
 		// userSettings:get is requested by the `hasUser` $effect above;
 		// only the admin-only taskQueue fetch needs to happen here.

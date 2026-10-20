@@ -16,7 +16,7 @@ import os from "os"
 import path from "path"
 import * as schema from "$lib/server/db/schema"
 import { defineAttributeSheet, genre } from "@serene-pub/sdk"
-import { ADVENTURE_GENRE_ID } from "@serene-pub/core-catalog"
+import { STORY_GENRE_ID } from "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
@@ -213,7 +213,7 @@ describe("a genre that puts location on the cast", () => {
 
 describe("Adventure keeps location on the world, by its sheet", () => {
 	test("tracked on the world only; a character may not carry it", async () => {
-		const w = await world(ADVENTURE_GENRE_ID)
+		const w = await world(STORY_GENRE_ID)
 		const { applyChange } = await import("$lib/server/state/write")
 		const { stateFor } = await import("$lib/server/state/resolve")
 		const ctx = { sessionId: w.session.id, updatedBy: "user" }
@@ -237,7 +237,7 @@ describe("Adventure keeps location on the world, by its sheet", () => {
 	})
 
 	test("a proposed move reads the room's title, the way the widget does (Lair W-GATE D4)", async () => {
-		const w = await world(ADVENTURE_GENRE_ID)
+		const w = await world(STORY_GENRE_ID)
 		const { proposeChange, listedProposals } = await import("$lib/server/state/write")
 		const { describeProposal } = await import("$lib/shared/state/ledgerLines")
 		const ctx = { sessionId: w.session.id, updatedBy: "keeper" }

@@ -36,7 +36,7 @@ import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import {
 	bootstrapPipelines,
-	CHAT_RESPOND_SPEC_ID
+	STORY_RESPOND_SPEC_ID
 } from "$lib/server/pipelines/boot/bootstrap"
 import { reconcileConfigs } from "$lib/server/pipelines/config/named"
 import { buildWorld } from "$lib/server/pipelines/config/world"
@@ -78,7 +78,7 @@ beforeAll(async () => {
 	const [spec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
 	specId = spec.id
 	specVersionId = spec.activeVersionId!
 
@@ -96,7 +96,7 @@ const shippedConfig = async () => {
 		.where(
 			eq(
 				schema.pipelineConfigs.seedKey,
-				`pipeline-default:${CHAT_RESPOND_SPEC_ID}`
+				`pipeline-default:${STORY_RESPOND_SPEC_ID}`
 			)
 		)
 	return row
@@ -125,7 +125,7 @@ const rowAt = async (configId: number, path = PATH) => {
  * default from a control the executor never reads.
  */
 const resolvedLimit = async (sessionId?: number) => {
-	const world = await buildWorld(db, { specId: CHAT_RESPOND_SPEC_ID, sessionId })
+	const world = await buildWorld(db, { specId: STORY_RESPOND_SPEC_ID, sessionId })
 	const sources: any = resolveConfigSources(world as any, [NODE])
 	return sources?.[NODE]?.[SLOT]?.[PATH]
 }
@@ -204,7 +204,7 @@ describe("a config with no row resolves the CURRENT declaration", () => {
 
 	it("follows the declaration when it moves", async () => {
 		await redeclareDefault(MOVED_TO)
-		await reconcileConfigs(db, specId, specVersionId, CHAT_RESPOND_SPEC_ID)
+		await reconcileConfigs(db, specId, specVersionId, STORY_RESPOND_SPEC_ID)
 		expect(
 			await resolvedLimit(),
 			"an untouched config did not follow a corrected default — which is " +
@@ -230,7 +230,7 @@ describe("a config with no row resolves the CURRENT declaration", () => {
 		await selectConfig(db, specId, "pub", 0, mine.id, adminId)
 
 		await redeclareDefault(DECLARED)
-		await reconcileConfigs(db, specId, specVersionId, CHAT_RESPOND_SPEC_ID)
+		await reconcileConfigs(db, specId, specVersionId, STORY_RESPOND_SPEC_ID)
 
 		expect(await rowAt(mine.id), "a deviation was swept").toBeTruthy()
 		expect(await resolvedLimit()).toEqual({
@@ -269,7 +269,7 @@ describe("writeOption stores a deviation or nothing", () => {
 		await writeOption(
 			db,
 			SECRET,
-			CHAT_RESPOND_SPEC_ID,
+			STORY_RESPOND_SPEC_ID,
 			viewer(),
 			handle,
 			30,
@@ -282,7 +282,7 @@ describe("writeOption stores a deviation or nothing", () => {
 		await writeOption(
 			db,
 			SECRET,
-			CHAT_RESPOND_SPEC_ID,
+			STORY_RESPOND_SPEC_ID,
 			viewer(),
 			handle,
 			DECLARED,
@@ -314,7 +314,7 @@ describe("the panel says which options were changed", () => {
 		)
 		await selectConfig(db, specId, "pub", 0, mine.id, adminId)
 
-		const view = await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, {
+		const view = await namespaceView(db, SECRET, STORY_RESPOND_SPEC_ID, {
 			userId: adminId,
 			isAdmin: true
 		})
@@ -340,6 +340,22 @@ describe("the panel says which options were changed", () => {
 			(await shippedConfig()).id,
 			adminId
 		)
+	})
+
+	it("🚧 marks nothing on the shipped Default: its reference rows are the pipeline's own (Q3-6, #50)", async () => {
+		const { selectConfig } = await import("$lib/server/pipelines/config/named")
+		await selectConfig(db, specId, "pub", 0, (await shippedConfig()).id, adminId)
+		const view = await namespaceView(db, SECRET, STORY_RESPOND_SPEC_ID, {
+			userId: adminId,
+			isAdmin: true
+		})
+		const all = groupOptions(view?.groups ?? [])
+		const refs = all.filter((o) => o.control === "prompts-ref" || o.control === "sampling-ref")
+		expect(refs.length, "the respond spec shows no reference options").toBeGreaterThan(0)
+		expect(
+			all.filter((o) => o.changed).map((o) => o.id),
+			"an untouched shipped config marks options Changed"
+		).toEqual([])
 	})
 })
 
@@ -405,7 +421,7 @@ describe("a value equal to the declaration is kept where the shipped config diff
 		await writeOption(
 			db,
 			SECRET,
-			CHAT_RESPOND_SPEC_ID,
+			STORY_RESPOND_SPEC_ID,
 			{ userId: adminId, isAdmin: true },
 			optionId(SECRET, node, SLOT, TRIGGER),
 			DECLARED_TRIGGER,
@@ -417,7 +433,7 @@ describe("a value equal to the declaration is kept where the shipped config diff
 				"back-fills the shipped 3000 over the person's 0"
 		).toBe(DECLARED_TRIGGER)
 
-		await reconcileConfigs(db, specId, specVersionId, CHAT_RESPOND_SPEC_ID)
+		await reconcileConfigs(db, specId, specVersionId, STORY_RESPOND_SPEC_ID)
 		expect(
 			await triggerAt(copy.id),
 			"a reconcile replaced an explicit 0 with the shipped value"
@@ -442,7 +458,7 @@ describe("a value equal to the declaration is kept where the shipped config diff
 			path: TRIGGER,
 			value: DECLARED_TRIGGER
 		})
-		await reconcileConfigs(db, specId, specVersionId, CHAT_RESPOND_SPEC_ID)
+		await reconcileConfigs(db, specId, specVersionId, STORY_RESPOND_SPEC_ID)
 		expect(await triggerAt(mine.id)).toBe(DECLARED_TRIGGER)
 	})
 
@@ -451,7 +467,7 @@ describe("a value equal to the declaration is kept where the shipped config diff
 			.insert(schema.pipelineConfigs)
 			.values({ specId, name: "Never set", isImmutable: false })
 			.returning()
-		await reconcileConfigs(db, specId, specVersionId, CHAT_RESPOND_SPEC_ID)
+		await reconcileConfigs(db, specId, specVersionId, STORY_RESPOND_SPEC_ID)
 		expect(await triggerAt(mine.id)).toBe(SHIPPED_TRIGGER)
 	})
 })

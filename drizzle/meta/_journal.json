@@ -708,6 +708,55 @@
       "when": 1791954907389,
       "tag": "0100_schema_0_6_0_pr_5",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1792046789165,
+      "tag": "0101_player_seat_owner_and_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1792107540450,
+      "tag": "0102_utc_timestamps_and_user_time_zone",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1792132949401,
+      "tag": "0103_session_composer_states",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1792215496669,
+      "tag": "0104_rulesets_phantom_lorebooks",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1792220105594,
+      "tag": "0105_session_ruleset_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1792305838000,
+      "tag": "0106_channel_lanes_seat_portrait",
+      "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1792415461906,
+      "tag": "0107_story_genre",
+      "breakpoints": true
     }
   ]
 }

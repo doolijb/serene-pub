@@ -72,6 +72,7 @@ export async function finishAtticUpgrade(
 
 	const notes = new UpgradeNotes()
 	const rebinds = await rebindStrategies(db, notes)
+	await adoptStoryMinimalPreset(db)
 	const sampling = await carryChatSampling(db, notes)
 	const searchOff = await switchOffIgnoredRetrieval(db, notes)
 	await noteChatPromptOverrides(db, notes)
@@ -93,6 +94,28 @@ export async function finishAtticUpgrade(
 }
 
 /** One notification to every admin, after the commit. */
+/**
+ * Restored 0.5.3 chats are Story sessions with no preset; once the pipelines
+ * bootstrap has seeded Story's presets, they adopt **Minimal** (ruled
+ * 2026-10-19: one call per turn, nothing moves unless you move it — what a
+ * 0.5.3 chat was). A session that already names a preset is left alone.
+ */
+async function adoptStoryMinimalPreset(db: Db): Promise<number> {
+	const { and, eq, isNull, like, sql } = await import("drizzle-orm")
+	const [minimal] = await db
+		.select({ id: schema.sessionPresets.id })
+		.from(schema.sessionPresets)
+		.where(like(schema.sessionPresets.seedKey, "%story-minimal"))
+		.limit(1)
+	if (!minimal) return 0
+	const rows = await db
+		.update(schema.sessions)
+		.set({ presetId: minimal.id })
+		.where(and(eq(schema.sessions.genreId, "core:genre/story"), isNull(schema.sessions.presetId), sql`${schema.sessions.id} IN (SELECT id FROM ${sql.raw("attic_0_5_3")}.chats)`))
+		.returning({ id: schema.sessions.id })
+	return rows.length
+}
+
 async function announce(db: Db, notes: number): Promise<void> {
 	try {
 		const { eq } = await import("drizzle-orm")

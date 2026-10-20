@@ -441,8 +441,8 @@ const labelSpellings = (name: string) => [
 ]
 
 /**
- * Take the speaker's OWN label off the front of their reply — once, and only at
- * the very start. The one rule for it, applied by the live view and by the
+ * Take the speaker's OWN label off the front of their reply — only at the very
+ * start (a doubled label goes whole). The one rule for it, applied by the live view and by the
  * stored reply alike (`messages/replyView.ts`), so a reader never watches a
  * label stream in that the record then drops.
  *
@@ -478,6 +478,26 @@ export function stripOwnLabel(
 		.map((name) => name?.trim())
 		.filter((name): name is string => !!name)
 	if (!names.length) return text
+	/**
+	 * A doubled label (`Narrator: Narrator: …`, seen on a Dungeon Crawler
+	 * story turn 2026-10-15) is still the prompt's, so the strip repeats while
+	 * the front is a label — a few times at most, never past the opening.
+	 */
+	let out = text
+	for (let pass = 0; pass < 4; pass++) {
+		const next = stripOneLabel(out, names, opts)
+		if (next === out || !next) return next
+		out = next
+	}
+	return out
+}
+
+/** One label off the front — {@link stripOwnLabel}'s single pass. */
+function stripOneLabel(
+	text: string,
+	names: readonly string[],
+	opts: { streaming?: boolean }
+): string {
 	const lead = text.trimStart()
 	for (const name of names) {
 		if (
@@ -545,11 +565,20 @@ export function ownLabelsFor(
 		| null
 		| undefined,
 	currentCharacterId: number | null | undefined,
-	compiled: unknown
+	compiled: unknown,
+	/**
+	 * The label the speaking voice carries when the prompt wrote NO seed line
+	 * — a prose transcript (`prose-transcript@1`): Assemble's `replyLabel`,
+	 * the template context's `{{char}}`. Read only when the payload carries
+	 * no seed label and no character speaks, so it never adds to a turn the
+	 * seed already names (a Dungeon Crawler Planner's lane, 2026-10-15).
+	 */
+	replyLabel?: string | null
 ): string[] {
 	const out: string[] = []
 	const seed = seedLabelOf(compiled)
 	if (seed) out.push(seed)
+	else if (currentCharacterId == null && replyLabel?.trim()) out.push(replyLabel.trim())
 	if (currentCharacterId != null) {
 		const character = (session?.sessionCharacters ?? [])
 			.map((cc) => cc?.character as {
@@ -614,7 +643,8 @@ export function composeStopsFor(
 	session:
 		| {
 				sessionCharacters?: { character?: unknown }[] | null
-				sessionPersonas?: { persona?: unknown }[] | null
+				/** 🚧 A card-less player seat (`persona: null`) is stopped on by its seat name. */
+				sessionPersonas?: { persona?: unknown; seatName?: string | null }[] | null
 		  }
 		| null
 		| undefined,
@@ -640,7 +670,7 @@ export function composeStopsFor(
 			.map((cc) => cc?.character)
 			.filter(Boolean) as ComposeStopsInput["characters"],
 		personas: (session?.sessionPersonas ?? [])
-			.map((cp) => cp?.persona)
+			.map((cp) => cp?.persona ?? (cp?.seatName ? { name: cp.seatName } : null))
 			.filter(Boolean) as ComposeStopsInput["personas"],
 		currentCharacterId: opts.currentCharacterId ?? null,
 		explicit: explicitStopsFrom(opts.explicit),

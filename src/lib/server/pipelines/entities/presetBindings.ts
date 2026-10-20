@@ -54,6 +54,7 @@
  */
 
 import { asc, eq } from "drizzle-orm"
+import { SAVE_MESSAGE_SPEC_ID, sessionEvents } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 
 /**
@@ -214,6 +215,26 @@ export async function lockedEventSpec(
 }
 
 /**
+ * 🚧 Is this core's default save on `message-offered` (owner ruling
+ * 2026-10-15)? `core:spec/save-message` declares no lock — it serves every
+ * genre, as the built-ins do — so a binding to it is never judged by the lock
+ * columns, and a genre whose preset binds nothing there still saves through
+ * it (`defaultEventSpec`). Read from the SDK's constants, never a literal.
+ */
+export const isDefaultSave = (event: string, slug: string): boolean =>
+	event === sessionEvents.messageOffered && slug === SAVE_MESSAGE_SPEC_ID
+
+/**
+ * 🚧 The spec an event falls to when nothing the session, its preset or the
+ * genre's lock names answers it: core's default save for `message-offered`,
+ * else null. The one default there is — the stored preset already shows it
+ * (`preset()` writes it in, the boot backfill writes it into older rows), so
+ * this answers only a session on no preset.
+ */
+export const defaultEventSpec = (event: string): string | null =>
+	event === sessionEvents.messageOffered ? SAVE_MESSAGE_SPEC_ID : null
+
+/**
  * Why a bound slug does not answer (genre, event), or null when it does.
  *
  * The predicate, in one place: read-time resolution and the boot reconcile ask
@@ -245,6 +266,9 @@ export async function bindingRefusal(
 	)
 	if (!hit)
 		return `'${opts.slug}' is not published on this pub — it was removed, retired, or never installed here.`
+	// 🚧 Core's default save (owner ruling 2026-10-15) has no lock: like the
+	// built-ins it serves every genre, on `message-offered` only.
+	if (isDefaultSave(opts.event, opts.slug)) return null
 	if (hit.inputGenre !== opts.genreId || !answersEvent(hit, opts.event))
 		return (
 			`'${opts.slug}' now answers '${hit.inputEvent ?? "nothing"}' for ` +
@@ -281,7 +305,7 @@ export async function presetBindingVerdict(
 		via: "fallback",
 		// The genre's own answer, which is what a session on no preset runs.
 		// Null here is "nothing serves", not a second failure.
-		spec: await lockedEventSpec(db, genreId, event),
+		spec: (await lockedEventSpec(db, genreId, event)) ?? defaultEventSpec(event),
 		presetId: preset.id,
 		preset: preset.name,
 		event,

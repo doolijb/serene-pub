@@ -155,3 +155,109 @@ describe("mobileSidePanels — the shared singleton", () => {
 		expect(mobileSidePanels.open).toBe("left")
 	})
 })
+
+/* ── the menu's lines, over panels (PLAN-session-panels-2026-10-14) ─────── */
+import { resolveDrawn, type PanelLayoutV1 } from "@serene-pub/sdk"
+import { panelLines, type PanelLinesInput } from "./mobileSidePanels.svelte"
+
+describe("panelLines — every side panel and the middle's strips", () => {
+	const layout: PanelLayoutV1 = {
+		version: 1,
+		left: [
+			{ key: "l1", tabs: ["chronicle"], pinned: false },
+			{ key: "l2", tabs: ["lore-entries", "places"] }
+		],
+		right: [{ key: "r1", tabs: ["stats"] }],
+		middle: {
+			above: [{ key: "a1", tabs: ["stats#world"], height: "fit" }],
+			primary: { key: "p1", tabs: ["messages"] },
+			below: [{ key: "b1", tabs: ["album"] }]
+		}
+	}
+	const d = resolveDrawn({ panels: layout }, { inline: 800 })
+	const input = (over: Partial<PanelLinesInput> = {}): PanelLinesInput => ({
+		left: { panels: d.left.panels, populated: true },
+		right: { panels: d.right.panels, populated: true },
+		middle: { above: d.middle.above, primary: d.middle.primary, below: d.middle.below },
+		stageSide: null,
+		stageKey: null,
+		title: (p) => p.tabs.map((t) => t.instanceId).join(" · "),
+		icon: () => "LayoutPanelTop",
+		...over
+	})
+
+	it("lists each side's panels, then the strips above and below — never the primary", () => {
+		expect(panelLines(input()).map((g) => [g.side, g.key, g.title])).toEqual([
+			["left", "l1", "chronicle"],
+			["left", "l2", "lore-entries · places"],
+			["right", "r1", "stats"],
+			["middle", "a1", "stats#world"],
+			["middle", "b1", "album"]
+		])
+	})
+
+	it("a docked panel's line says so — it arrives open in the sheet; a rail one does not", () => {
+		const lines = panelLines(input())
+		expect(lines.find((g) => g.key === "l1")!.pinned).toBe(false)
+		expect(lines.find((g) => g.key === "l2")!.pinned).toBe(true)
+		expect(lines.filter((g) => g.side === "middle").every((g) => g.pinned)).toBe(true)
+	})
+
+	it("an unpopulated side lists nothing", () => {
+		const lines = panelLines(input({ right: { panels: d.right.panels, populated: false } }))
+		expect(lines.some((g) => g.side === "right")).toBe(false)
+	})
+
+	it("while a side is the stage, its stage panel is no line and the middle is listed whole", () => {
+		const lines = panelLines(input({ stageSide: "left", stageKey: "l2" }))
+		expect(lines.map((g) => g.key)).toEqual(["l1", "r1", "a1", "p1", "b1"])
+	})
+})
+
+describe("panelLines — a layout holding no conversation (R-B, no lock)", () => {
+	const layout: PanelLayoutV1 = {
+		version: 1,
+		left: [{ key: "l1", tabs: ["stats"] }],
+		right: [],
+		middle: {
+			above: [{ key: "a1", tabs: ["scene-portraits"] }],
+			primary: { key: "p1", tabs: ["places"] },
+			below: []
+		}
+	}
+	const d = resolveDrawn({ panels: layout }, { inline: 800 })
+	const title = (p: { tabs: readonly { instanceId: string }[] }) => p.tabs.map((t) => t.instanceId).join(" · ")
+
+	it("the primary panel is the stage (whatever it holds): never a line; the strips and sides are", () => {
+		const lines = panelLines({
+			left: { panels: d.left.panels, populated: true },
+			right: { panels: d.right.panels, populated: false },
+			middle: { above: d.middle.above, primary: d.middle.primary, below: d.middle.below },
+			stageSide: null,
+			stageKey: null,
+			title,
+			icon: () => "LayoutPanelTop"
+		})
+		expect(lines.map((g) => [g.side, g.key])).toEqual([
+			["left", "l1"],
+			["middle", "a1"]
+		])
+	})
+
+	it("an empty middle with the stage in a side: that panel is no line, and empty middle panels are none", () => {
+		const empty = resolveDrawn(
+			{ panels: { ...layout, middle: { above: [], primary: { key: "p1", tabs: [] }, below: [] } } },
+			{ inline: 800 }
+		)
+		const lines = panelLines({
+			left: { panels: empty.left.panels, populated: true },
+			right: { panels: [], populated: false },
+			middle: { above: [], primary: empty.middle.primary, below: [] },
+			stageSide: "left",
+			stageKey: "l1",
+			title,
+			icon: () => "LayoutPanelTop"
+		})
+		expect(lines).toEqual([])
+	})
+})

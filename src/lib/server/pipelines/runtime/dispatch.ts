@@ -58,6 +58,7 @@
  * port and gives bytes to a backend. Neither lets bytes travel the graph.
  */
 
+import { withSeatName } from "$lib/server/sessions/seatName"
 import type { TaskType } from "$lib/server/utils/resolveTaskConfig"
 import {
 	resolveCapabilityTarget,
@@ -86,6 +87,8 @@ import {
 } from "$lib/server/connections/visibility"
 import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
 import { sendsAttachmentsOn } from "$lib/shared/connectionAdapters/manifest"
+import { continueWireRefusal } from "$lib/shared/connectionAdapters/continueReply"
+import { endOnUserTurn } from "$lib/server/pipelines/prompt/endOnUserTurn"
 import {
 	composeStopsFor,
 	ownLabelsFor,
@@ -416,9 +419,18 @@ async function loadAdapterSession(db: Db, sessionId: number | undefined) {
 		sessionCharacters: (session.sessionCharacters ?? []).filter(
 			(cc: any) => cc.character !== null
 		),
-		sessionPersonas: (session.sessionPersonas ?? []).filter(
-			(cp: any) => cp.persona !== null
-		)
+		// 🚧 Every seat with a card or a name (2026-10-14), in the host's
+		// cast-read shape: a card-less player seat rides with `persona: null`, and
+		// a seat name wins over its card's (`withSeatName`). A row with
+		// neither is a departed card's leftover, and nobody.
+		sessionPersonas: (session.sessionPersonas ?? [])
+			.filter((cp: any) => cp.persona !== null || cp.seatName)
+			.map((cp: any) => ({
+				...cp,
+				persona: withSeatName(cp.persona, cp.seatName),
+				seatId: cp.id,
+				seatUserId: cp.userId ?? null
+			}))
 	}
 }
 
@@ -649,6 +661,36 @@ export function withJsonInstruction(compiled: any, instruction: string): any {
 			prompt: `${compiled.prompt.replace(/\s+$/, "")}\n\n${instruction}\n`
 		}
 	return compiled
+}
+
+/**
+ * 🚧 The chat wire's last turn, repaired or refused (`endOnUserTurn`, owner
+ * ruling 2026-10-18). Only a compiled payload carrying `messages` on a
+ * connection sent as chat: a completion prompt is one string the model
+ * continues. A connection that continues a reply on the chat wire keeps a
+ * trailing assistant turn — that is its continuation. A refusal is logged
+ * and thrown in its sentence; a repair is quiet.
+ */
+export function endChatOnUserTurn(
+	compiled: any,
+	connection: { type?: string | null; wireMode?: string | null }
+): any {
+	if (connection.wireMode !== "chat" || !Array.isArray(compiled?.messages))
+		return compiled
+	const ended = endOnUserTurn(compiled.messages, {
+		prefill: continueWireRefusal(connection.type, "chat") === null,
+		seedLabel:
+			typeof compiled?.meta?.seedLabel === "string"
+				? compiled.meta.seedLabel
+				: null
+	})
+	if (!ended.ok) {
+		console.warn(`[dispatch] refused a chat prompt: ${ended.refusal}`)
+		throw new DispatchError(ended.refusal)
+	}
+	return ended.messages === compiled.messages
+		? compiled
+		: { ...compiled, messages: ended.messages }
 }
 
 /**
@@ -1006,21 +1048,24 @@ export async function dispatchGeneration(
 
 	// After this line the adapter builds nothing. Everything below is the same
 	// code the legacy path runs.
+	const asked = toCompiledPrompt(request.compiledPrompt, connection, {
+		currentCharacterId: request.currentCharacterId ?? null
+	})
+	const instructed =
+		structured?.mode === "instruction"
+			? withJsonInstruction(asked, JSON_INSTRUCTION)
+			: asked
+	// 🚧 Every chat prompt ends on a user turn (owner ruling 2026-10-18):
+	// repaired here, after the JSON instruction door, or refused in a
+	// sentence — sent, it is an empty reply that reads as a model fault.
+	const ended = endChatOnUserTurn(instructed, connection)
 	// 🚧 Each message's files come OFF the messages here (PLAN-composer-
 	// attachments §3.5.6): the parser left them as references on the message
 	// they belong to, and no adapter may put an `attachments` key on a wire.
-	// Indexed like `messages`; `withJsonInstruction` only appends, so the
-	// indices still hold after it.
-	const { compiled, perMessage: perMessageRefs } = liftMessageAttachments(
-		toCompiledPrompt(request.compiledPrompt, connection, {
-			currentCharacterId: request.currentCharacterId ?? null
-		})
-	)
-	adapter.withCompiledPrompt(
-		structured?.mode === "instruction"
-			? withJsonInstruction(compiled, JSON_INSTRUCTION)
-			: compiled
-	)
+	// Lifted LAST, so the indices are the messages the wire carries.
+	const { compiled, perMessage: perMessageRefs } =
+		liftMessageAttachments(ended)
+	adapter.withCompiledPrompt(compiled)
 
 	// The files this request carries, references turned into bytes — see the
 	// header for why that is this module's job.
@@ -1233,10 +1278,22 @@ export async function dispatchGeneration(
 				: (adapter as { reasoningOpening?: ReasoningOpening })
 						.reasoningOpening,
 			stops,
+			/**
+			 * Off the COMPILED payload — the bytes sent — never the Assemble
+			 * record: that record carries the chat wire's unsent seed label at
+			 * its top level and its completion text as `rendered`, so
+			 * `seedLabelOf` read neither, and an envoy's reply (no character
+			 * id to fall back on — the Dungeon Crawler's Narrator, 2026-10-15)
+			 * kept its `Narrator:` on the row.
+			 */
 			ownLabels: ownLabelsFor(
 				session,
 				request.currentCharacterId ?? null,
-				request.compiledPrompt
+				compiled,
+				// A seedless prompt's speaker (Assemble's `replyLabel`).
+				typeof (request.compiledPrompt as { replyLabel?: unknown } | null)?.replyLabel === "string"
+					? (request.compiledPrompt as { replyLabel: string }).replyLabel
+					: null
 			)
 		}
 		request.onReplyFacts?.(facts)

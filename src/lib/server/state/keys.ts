@@ -43,3 +43,12 @@ export const castKey = (name: string): string =>
  * stay two owners; a template reads the bare slug, `state.locations.harbor`.
  */
 export const locationOwnerKey = (name: string): string => `location:${castKey(name)}`
+
+/**
+ * 🚧 The key a cast entry is indexed and heard by: `player_seat:<playerSeatId>` for a
+ * card-less player seat, else its character id. One function, so `byId`, hearing
+ * (`state/earshot.ts`), derivation seeds and the state owners' keys never
+ * disagree.
+ */
+export const castMemberKey = (entry: { id?: unknown; playerSeatId?: unknown }): string =>
+	typeof entry.playerSeatId === "number" ? `player_seat:${entry.playerSeatId}` : String(entry.id)

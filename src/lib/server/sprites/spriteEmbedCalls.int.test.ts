@@ -13,7 +13,7 @@
  * explicit text or string passed in").
  *
  * Counted on the embedding module's spy, through `runReply` on the shipped
- * `core:spec/chat-respond`, with Search by meaning switched Off so the only embed a
+ * `core:spec/story-respond`, with Search by meaning switched Off so the only embed a
  * turn can make is the picker's.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
@@ -103,7 +103,7 @@ const chatPresetId = async () =>
 		await db
 			.select({ id: schema.sessionPresets.id })
 			.from(schema.sessionPresets)
-			.where(eq(schema.sessionPresets.seedKey, "core-chat-default"))
+			.where(eq(schema.sessionPresets.seedKey, "core-story-minimal"))
 			.limit(1)
 	)[0]?.id ?? null
 
@@ -172,14 +172,14 @@ beforeAll(async () => {
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	db = (await import("$lib/server/db")).db as unknown as TestDb
 
-	const { bootstrapPipelines, CHAT_RESPOND_SPEC_ID } = await import(
+	const { bootstrapPipelines, STORY_RESPOND_SPEC_ID } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	await bootstrapPipelines(db)
 	const [spec] = await db
 		.select({ id: schema.pipelineSpecs.id })
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
 	respondSpecId = spec!.id
 
 	const { createTestUser } = await import("$lib/server/utils/testDb")

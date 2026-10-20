@@ -1,14 +1,20 @@
 <script lang="ts">
 	/**
-	 * The loadout editor's **Sampling** card: the configs of the job's shape
-	 * as radio rows, each with its key knobs read inline (*Temperature 0.7 ·
-	 * 512 tokens max*), the swap notice when a pair change replaced one that
+	 * The loadout editor's **Sampling** card: what the choice decides (one
+	 * sentence), then the configs of the job's shape as radio rows, each with
+	 * its key knobs read inline (*Temperature 0.7 · 512 tokens max*) — the one
+	 * the loadout is **Best with** first and chipped so — a filter box once
+	 * the list is long, the swap notice when a pair change replaced one that
 	 * did not fit, and *Open in Sampling*. Every word from `loadoutSheet.ts`.
 	 */
 	import * as Icons from "@lucide/svelte"
+	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
 	import {
 		NO_SAMPLING_PICKED,
 		NO_SAMPLING_SENTENCE,
+		orderSamplingRows,
+		SAMPLING_FILTER_FROM,
+		samplingLede,
 		VERBS
 	} from "../loadoutSheet"
 
@@ -20,6 +26,10 @@
 	}
 	interface Props {
 		rows: Row[]
+		/** The job's transform, for the opening sentence. */
+		transform: string
+		/** The config the loadout ships with (its *Best with*), or null. */
+		bestWithId?: number | null
 		checkedId: number | null
 		/** The swap rule's sentence, after a pair change. */
 		notice: string | null
@@ -29,6 +39,8 @@
 	}
 	let {
 		rows,
+		transform,
+		bestWithId = null,
 		checkedId,
 		notice,
 		disabled = false,
@@ -37,8 +49,13 @@
 	}: Props = $props()
 
 	const uid = $props.id()
+	let query = $state("")
+	const shown = $derived(orderSamplingRows(rows, bestWithId, query))
+	const lede = $derived(samplingLede(transform))
 	const stopId = $derived(
-		rows.some((r) => r.id === checkedId) ? checkedId : (rows[0]?.id ?? null)
+		shown.some((r) => r.id === checkedId)
+			? checkedId
+			: (shown[0]?.id ?? null)
 	)
 	let listEl = $state<HTMLElement | null>(null)
 
@@ -49,31 +66,36 @@
 				: e.key === "ArrowUp" || e.key === "ArrowLeft"
 					? -1
 					: 0
-		if (!step || !rows.length) return
+		if (!step || !shown.length) return
 		e.preventDefault()
-		const next = rows[(index + step + rows.length) % rows.length]!
+		const next = shown[(index + step + shown.length) % shown.length]!
 		onPick(next.id)
 		listEl?.querySelector<HTMLElement>(`[data-id="${next.id}"]`)?.focus()
 	}
 </script>
 
 <section class="panel-card flex flex-col gap-3" aria-labelledby="{uid}-h">
-	<div class="flex items-center gap-2">
-		<Icons.SlidersHorizontal
-			size={16}
-			class="text-surface-600-400"
-			aria-hidden="true"
-		/>
-		<h3 id="{uid}-h" class="flex-1 text-sm font-medium">Sampling</h3>
-		{#if rows.length}
-			<button
-				type="button"
-				class="btn btn-sm preset-tonal-surface text-xs"
-				onclick={onOpenSampling}
-			>
-				<Icons.ExternalLink size={14} aria-hidden="true" />
-				{VERBS.openInSampling}
-			</button>
+	<div class="flex flex-col gap-1">
+		<div class="flex items-center gap-2">
+			<Icons.SlidersHorizontal
+				size={16}
+				class="text-surface-600-400"
+				aria-hidden="true"
+			/>
+			<h3 id="{uid}-h" class="flex-1 text-sm font-medium">Sampling</h3>
+			{#if rows.length}
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface text-xs"
+					onclick={onOpenSampling}
+				>
+					<Icons.ExternalLink size={14} aria-hidden="true" />
+					{VERBS.openInSampling}
+				</button>
+			{/if}
+		</div>
+		{#if lede && rows.length}
+			<p class="text-surface-600-400 text-xs leading-relaxed">{lede}</p>
 		{/if}
 	</div>
 
@@ -94,13 +116,22 @@
 	{#if !rows.length}
 		<p class="text-surface-600-400 text-sm">{NO_SAMPLING_SENTENCE}</p>
 	{:else}
+		{#if rows.length > SAMPLING_FILTER_FROM}
+			<PanelFilterInput
+				bind:value={query}
+				placeholder="sampling configs"
+				singular="sampling config"
+				count={rows.length}
+				{disabled}
+			/>
+		{/if}
 		<div
 			bind:this={listEl}
 			class="grid grid-cols-1 gap-1 @lg/editor:grid-cols-2"
 			role="radiogroup"
 			aria-labelledby="{uid}-h"
 		>
-			{#each rows as row, index (row.id)}
+			{#each shown as row, index (row.id)}
 				{@const checked = row.id === checkedId}
 				<button
 					type="button"
@@ -128,8 +159,18 @@
 						{/if}
 					</span>
 					<span class="min-w-0 flex-1">
-						<span class="block truncate text-sm font-medium">
-							{row.name}
+						<span class="flex min-w-0 items-center gap-1.5">
+							<span class="truncate text-sm font-medium">
+								{row.name}
+							</span>
+							{#if row.id === bestWithId}
+								<span
+									class="preset-tonal-tertiary shrink-0 rounded-full px-1.5 py-px text-[11px]"
+									title="The config this loadout ships with"
+								>
+									Best with
+								</span>
+							{/if}
 						</span>
 						{#if row.knobs.length}
 							<span
@@ -140,6 +181,10 @@
 						{/if}
 					</span>
 				</button>
+			{:else}
+				<p class="text-surface-600-400 px-3 py-2 text-sm">
+					No sampling config matches “{query.trim()}”.
+				</p>
 			{/each}
 		</div>
 		{#if checkedId == null}

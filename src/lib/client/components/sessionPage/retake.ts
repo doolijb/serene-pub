@@ -37,8 +37,8 @@ export interface RetakeDeps {
 	send: (params: Sockets.Sessions.RetakeTurn.Params) => void
 	/** Fire `core:annex#retake-quietly` with `{ value }`. */
 	setQuiet: (value: boolean) => void
-	/** Show the confirm dialog, naming these rows. */
-	ask: (rows: RetakeRow[]) => void
+	/** Show the confirm dialog, naming these rows and the server's On revision sentence. */
+	ask: (rows: RetakeRow[], revision: string | null) => void
 }
 
 export interface Retake {
@@ -47,9 +47,12 @@ export interface Retake {
 	/**
 	 * A row's ⋮ Regenerate on a row that is not a delver's: retake the whole
 	 * turn when the newest turn holds `messageId` among several rows, else
-	 * `rowRegenerate()`.
+	 * `rowRegenerate()`. 🚧 `rowRetryRefused`: the genre offers no row retry
+	 * (Dungeon Crawler — what happened stands), so a turn of ONE row is
+	 * retaken too: the failed reply's press was a Retry the genre refused,
+	 * and its clock and changes stayed (the 100-turn walk, B7).
 	 */
-	pressRow(messageId: number, rowRegenerate: () => void): void
+	pressRow(messageId: number, rowRegenerate: () => void, rowRetryRefused?: boolean): void
 	/** The dialog's Regenerate; `quietly` is its checkbox. */
 	confirm(quietly: boolean): void
 	/** The dialog closed without Regenerate. */
@@ -60,7 +63,7 @@ export interface Retake {
 
 export function createRetake(deps: RetakeDeps): Retake {
 	/** The preview in flight, and what it was asked for. */
-	let pending: { row?: { messageId: number; fallback: () => void } } | null = null
+	let pending: { row?: { messageId: number; fallback: () => void; alone: boolean } } | null = null
 	const retakeNow = () => deps.send({ sessionId: deps.sessionId() })
 	const preview = () => deps.send({ sessionId: deps.sessionId(), preview: true })
 
@@ -70,8 +73,8 @@ export function createRetake(deps: RetakeDeps): Retake {
 			pending = {}
 			preview()
 		},
-		pressRow(messageId, rowRegenerate) {
-			pending = { row: { messageId, fallback: rowRegenerate } }
+		pressRow(messageId, rowRegenerate, rowRetryRefused = false) {
+			pending = { row: { messageId, fallback: rowRegenerate, alone: rowRetryRefused } }
 			preview()
 		},
 		confirm(quietly) {
@@ -97,15 +100,15 @@ export function createRetake(deps: RetakeDeps): Retake {
 			pending = null
 			const rows = res.rows ?? []
 			if (asked.row) {
-				const whole =
-					rows.length > 1 && rows.some((r) => r.messageId === asked.row!.messageId)
+				const holds = rows.some((r) => r.messageId === asked.row!.messageId)
+				const whole = holds && (rows.length > 1 || asked.row.alone)
 				if (!whole) {
 					asked.row.fallback()
 					return true
 				}
 			}
 			if (deps.quiet()) retakeNow()
-			else deps.ask(rows)
+			else deps.ask(rows, res.revision?.sentence ?? null)
 			return true
 		}
 	}
@@ -114,10 +117,30 @@ export function createRetake(deps: RetakeDeps): Retake {
 /**
  * The dialog's sentence: "This deletes and rewrites: Brannoc, Vell, and the
  * narrator." Names in the turn's order, each once.
+ *
+ * 🚧 Never a channel's slug (2026-10-18, the 100-turn walk #27: "Narrator
+ * (table), Narrator (travelogue), and Planner (parley)"): who spoke on the
+ * story's own channel, then the other channels the turn wrote on, by the
+ * names the genre gives them (`channelLabels` — _Dice_, _Journal_), else the
+ * slug made readable — "This deletes and rewrites: Narrator, and its lines
+ * on Dice, Journal and Planner."
  */
-export function retakeSentence(rows: ReadonlyArray<RetakeRow>, locale = "en"): string {
-	const names = [...new Set(rows.map((r) => (r.channel === "main" ? r.name : `${r.name} (${r.channel})`)))]
-	if (!names.length) return "This deletes and rewrites the last turn."
-	const list = new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(names)
-	return `This deletes and rewrites: ${list}.`
+export function retakeSentence(
+	rows: ReadonlyArray<RetakeRow>,
+	locale = "en",
+	channelLabels: Readonly<Record<string, string>> = {}
+): string {
+	const list = (items: string[]) => new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(items)
+	const base = (channel: string) => (channel || "main").split(":")[0]!
+	const labelOf = (channel: string) => {
+		const slug = base(channel)
+		const named = channelLabels[slug]?.trim()
+		return named || slug.charAt(0).toUpperCase() + slug.slice(1).replace(/[-_]+/g, " ")
+	}
+	const names = [...new Set(rows.filter((r) => base(r.channel) === "main").map((r) => r.name))]
+	const elsewhere = [...new Set(rows.filter((r) => base(r.channel) !== "main").map((r) => labelOf(r.channel)))]
+	if (!names.length && !elsewhere.length) return "This deletes and rewrites the last turn."
+	if (!elsewhere.length) return `This deletes and rewrites: ${list(names)}.`
+	if (!names.length) return `This deletes and rewrites the last turn's lines on ${list(elsewhere)}.`
+	return `This deletes and rewrites: ${list(names)}, and the turn's lines on ${list(elsewhere)}.`
 }

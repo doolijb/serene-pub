@@ -242,6 +242,6 @@ A Lair reading its lorebook keeps [scenes](./sessions.md#when-a-new-scene-begins
 ## Related
 
 - [Genres](./genres.md): how the Lair compares with the other kinds of session.
-- [Adventure](./genre-adventure.md): the same world, with you in it.
+- [Story](./genre-story.md): the same world, with you in it.
 - [Lorebooks](./lorebooks.md) and [Places](./stats-and-states.md#places): where the rooms live.
 - [Group sessions](./group-sessions.md): turn order, Continue and auto-advance.

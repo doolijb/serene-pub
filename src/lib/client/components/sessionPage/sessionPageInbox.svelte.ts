@@ -67,6 +67,12 @@ const BARE_EVENTS = [
 	"sessions:setSpriteSet",
 	"sessions:fireTurn:error",
 	"sessions:fireTurn",
+	// 🚧 A rerun verb's answer — its refusal is `{ error }` on the verb's own
+	// event, with no id (`rerunRefusals.svelte.ts`).
+	"sessionMessages:swipeRight",
+	"sessionMessages:swipeLeft",
+	"sessionMessages:regenerate",
+	"sessionMessages:extend",
 	"sessions:retakeTurn",
 	"sessions:retakeTurn:error",
 	"sessions:addPersona",
@@ -96,6 +102,7 @@ const BARE_EVENTS = [
 	"sessionMessage:error",
 	"media:changed",
 	"sessionMessages:delete",
+	"sessions:revisionNotice",
 	"scenes:scenedMessageIds:error",
 	"scenes:list:error",
 	"characters:update"
@@ -135,6 +142,9 @@ const SESSION_SCOPED_EVENTS = [
 	"sessions:panelLayout:startedFromUpdated",
 	"pipelines:runStarted",
 	"pipelines:progress",
+	// Each run's status (R-19) — a reply's carries its channel, which is
+	// what the page's waiting row is drawn from (`pendingReply.ts`).
+	"sessions:runStatus",
 	"scenes:scenedMessageIds",
 	"scenes:list",
 	// 🚧 Live scenes, lane D: the session's scene cues and scene settings,

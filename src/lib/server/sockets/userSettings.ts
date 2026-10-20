@@ -191,6 +191,7 @@ export async function buildUserSettingsGet(
 			darkMode:
 				settings.darkMode !== null ? settings.darkMode : true,
 			showHomePageBanner: settings.showHomePageBanner ?? true,
+			startFavourites: (settings.startFavourites as { genre?: string; presetByGenre?: Record<string, number> } | null) ?? null,
 			enableEasyCharacterCreation:
 				settings.enableEasyCharacterCreation,
 			showAllCharacterFields: settings.showAllCharacterFields,
@@ -728,6 +729,7 @@ export function registerUserSettingsHandlers(
 	register(socket, userSettingsGet, emitToUser)
 	register(socket, userSettingsUpdateCharaVaultIncludeNsfw, emitToUser)
 	register(socket, userSettingsUpdateShowHomePageBanner, emitToUser)
+	register(socket, userSettingsUpdateStartFavourites, emitToUser)
 	register(socket, userSettingsUpdateEasyCharacterCreation, emitToUser)
 	register(socket, userSettingsUpdateShowAllCharacterFields, emitToUser)
 	register(socket, userSettingsUpdateTheme, emitToUser)
@@ -738,4 +740,44 @@ export function registerUserSettingsHandlers(
 	register(socket, userSettingsUploadBackground, emitToUser)
 	register(socket, userSettingsDeleteBackground, emitToUser)
 	register(socket, userSettingsUpdateBackground, emitToUser)
+}
+
+/**
+ * 🚧 Starred starts (ruled 2026-10-19): the person's favourite genre and
+ * their favourite preset per genre. The start form puts the starred genre's
+ * card first and pre-selects it, and pre-selects the starred preset. Stored
+ * whole; an unknown genre or preset id is simply never matched.
+ */
+export const userSettingsUpdateStartFavourites: Handler<
+	Sockets.UserSettings.UpdateStartFavourites.Params,
+	Sockets.UserSettings.UpdateStartFavourites.Response
+> = {
+	event: "userSettings:updateStartFavourites",
+	handler: async (socket: AuthenticatedSocket, params, emitToUser) => {
+		try {
+			const userId = socket.user!.id
+			if (!userId) throw new Error("User not authenticated")
+			const raw = params.favourites ?? {}
+			const favourites: { genre?: string; presetByGenre?: Record<string, number> } = {}
+			if (typeof raw.genre === "string" && raw.genre) favourites.genre = raw.genre
+			if (raw.presetByGenre && typeof raw.presetByGenre === "object") {
+				const by: Record<string, number> = {}
+				for (const [g, id] of Object.entries(raw.presetByGenre))
+					if (typeof g === "string" && Number.isInteger(id)) by[g] = id as number
+				if (Object.keys(by).length) favourites.presetByGenre = by
+			}
+			await db
+				.insert(schema.userSettings)
+				.values({ userId, startFavourites: favourites })
+				.onConflictDoUpdate({ target: schema.userSettings.userId, set: { startFavourites: favourites } })
+			const res: Sockets.UserSettings.UpdateStartFavourites.Response = { success: true, favourites }
+			emitToUser("userSettings:updateStartFavourites", res)
+			await emitToUser("userSettings:get", () => buildUserSettingsGet(userId))
+			return res
+		} catch (error: any) {
+			console.error("Update start favourites error:", error)
+			emitToUser("userSettings:updateStartFavourites:error", { error: "Failed to save your starred start" })
+			throw error
+		}
+	}
 }

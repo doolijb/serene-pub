@@ -143,7 +143,7 @@ describe("one annex declaration per owner — writes", () => {
 			compile(
 				spec(`${OWNER}:spec/publish-${Object.keys(value).join("-")}`, { version: "1.0.0" })
 					.inlet("input", C.userMessage.v1(), {
-						genre: use("core:genre/chat"),
+						genre: use("core:genre/story"),
 						event: "core:event/message-respond@1"
 					})
 					.outlet("keep", () => C.setSessionAnnex.v1({ value: value as never }))

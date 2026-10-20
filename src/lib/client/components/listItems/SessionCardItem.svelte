@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { isAwaitingUser } from "$lib/client/sessions/sessionGroups"
 	import * as Icons from "@lucide/svelte"
 	import RowMenu from "../menus/RowMenu.svelte"
 	import AvatarStack from "../AvatarStack.svelte"
@@ -56,7 +57,7 @@
 		statusText(runStatus === undefined ? session.runStatus : runStatus)
 	)
 	const isYourTurn = $derived(
-		!!session.lastMessage && !session.lastMessage.isUser && !status
+		isAwaitingUser(session, !!status)
 	)
 	const relative = $derived(timeAgoShort(new Date(lastActivityAt(session))))
 	const castNames = $derived(

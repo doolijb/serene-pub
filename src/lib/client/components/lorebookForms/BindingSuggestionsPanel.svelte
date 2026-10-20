@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { realDate } from "$lib/client/utils/realTime.svelte"
 	/**
 	 * Suggested cast members: names the story used that resolve to nothing.
 	 *
@@ -173,7 +174,7 @@
 	function when(iso: string): string {
 		if (!iso) return ""
 		const d = new Date(iso)
-		return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString()
+		return Number.isNaN(d.getTime()) ? "" : realDate(d)
 	}
 
 	/** "seen 12 times across 3 places", said in words rather than in badges. */

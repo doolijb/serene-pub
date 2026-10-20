@@ -5,8 +5,8 @@
  *
  * The tray offers every widget kind every time — a placed kind stays on
  * offer with its count — and turns one away only at its `maxInstances`, with
- * the reason. The phone's Add sheet lands the id the layout minted, and a row
- * offers Duplicate.
+ * the reason. The phone's Add sheet mints the copy's id itself and lands it
+ * in `editPanels`; a tab offers Duplicate, landing the copy after its source.
  */
 import { afterEach, describe, expect, test, vi } from "vitest"
 import { createRawSnippet, flushSync, mount, tick, unmount } from "svelte"
@@ -14,6 +14,8 @@ import * as Icons from "@lucide/svelte"
 import LayoutEditorToolbar from "./LayoutEditorToolbar.svelte"
 import MobileLayoutEditor from "./MobileLayoutEditor.svelte"
 import type { TrayWidget } from "./widgetInstances"
+import type { PanelLayoutV1 } from "@serene-pub/sdk"
+import { UNKNOWN_PANEL } from "./arrangeOps"
 
 const TRAY: TrayWidget[] = [
 	{ id: "messages", title: "Messages", icon: "MessagesSquare", placed: 2, full: null },
@@ -39,7 +41,7 @@ const chip = (id: string) => document.querySelector<HTMLButtonElement>(`[data-tr
 
 function toolbar(over: Record<string, unknown> = {}) {
 	const props = $state<Record<string, unknown>>({
-		editTab: "move",
+		editTab: "arrange",
 		insetStart: 0,
 		height: 0,
 		presets: [],
@@ -49,7 +51,6 @@ function toolbar(over: Record<string, unknown> = {}) {
 		mainWidgetTitle: "Messages",
 		presetUsage: null,
 		presetPicture: picture,
-		styleableWidgets: [],
 		trayWidgets: TRAY,
 		trayIcon: () => Icons.Box,
 		armedId: null,
@@ -59,9 +60,6 @@ function toolbar(over: Record<string, unknown> = {}) {
 		removeWidget: () => {},
 		simTier: null,
 		setSimTier: () => {},
-		railPreview: false,
-		simGrid: false,
-		simNarrow: false,
 		startFrom: () => {},
 		resetLayout: () => {},
 		savePreset: () => true,
@@ -106,36 +104,35 @@ describe("desktop: the tray offers every widget kind every time", () => {
 		await settle()
 		expect(props.armedId).toBeNull()
 	})
+	test("the tray line says a widget can go into a side's rail (§10 R-C), and so does an armed chip's hint", async () => {
+		const props = toolbar()
+		await settle()
+		expect(text(document.querySelector(".palette-tip"))).toContain("onto a side's rail to put it in the rail")
+		props.armedId = "stats"
+		await settle()
+		expect(text(document.querySelector(".palette-hint"))).toBe("tap a panel's tabs, a gap, or a rail to place")
+	})
 })
 
-const frame = (ids: string[]) => ({
-	cols: 1,
-	rows: Math.max(1, ids.length * 3),
-	items: ids.map((id, i) => ({ id, x: 0, y: i * 3, w: 1, h: 3 }))
+/** Messages in the middle, Stats then World state in one right panel. */
+const PANELS = (): PanelLayoutV1 => ({
+	version: 1,
+	left: [],
+	middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] },
+	right: [{ key: "p2", tabs: ["stats", "world-state"] }]
 })
 function phone(over: Record<string, unknown> = {}) {
 	const props = $state<Record<string, unknown>>({
-		editArranged: {},
-		leftPreview: { frame: frame([]), units: [] },
-		rightPreview: { frame: frame(["stats"]), units: [] },
-		middlePreview: { frame: frame(["messages"]), units: [] },
+		editPanels: PANELS(),
 		simTier: null,
 		simWidth: null,
-		simSnapshot: null,
-		leftZoneId: "left",
-		rightZoneId: "right",
-		groupOpen: {},
-		groupKey: (side: string, key: string) => `${side}:${key}`,
 		inst: () => undefined,
 		iconOf: () => Icons.Box,
 		trayIcon: () => Icons.Box,
 		middleWidgetIcon: () => Icons.Box,
 		widgetLabel: (id: string) => id,
 		trayWidgets: TRAY,
-		addWidget: vi.fn(() => "stats#2"),
-		duplicateWidget: vi.fn(() => "stats#2"),
-		removeWidget: () => {},
-		floorNoteOf: () => null,
+		onMinted: vi.fn(),
 		presets: [],
 		startedFrom: null,
 		startedFromUpdated: false,
@@ -154,10 +151,13 @@ function phone(over: Record<string, unknown> = {}) {
 	apps.push(mount(MobileLayoutEditor, { target: host, props: props as any }))
 	return props
 }
+const panels = (props: Record<string, unknown>) =>
+	$state.snapshot(props.editPanels) as PanelLayoutV1
 const addButtonOf = (zone: string) =>
 	[...document.querySelectorAll<HTMLButtonElement>(".medit-zone")]
 		.find((z) => text(z.querySelector(".medit-zone-head")).startsWith(zone))
 		?.querySelector<HTMLButtonElement>(".medit-zone-head button")
+const named = (label: string) => document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)
 
 describe("phone: the Add sheet and Duplicate", () => {
 	test("the sheet lists every kind, placed ones with their count, a full one disabled", async () => {
@@ -175,35 +175,51 @@ describe("phone: the Add sheet and Duplicate", () => {
 		expect(chip("acme.audio:player")!.disabled).toBe(true)
 	})
 
-	test("adding a placed kind lands the minted copy's cells, not the widget id's", async () => {
+	test("adding a placed kind mints a copy's id: a new panel from the section, a tab from a row", async () => {
 		const props = phone()
 		await settle()
 		addButtonOf("Right")!.click()
 		await settle()
 		chip("stats")!.click()
 		await settle()
-		expect(props.addWidget).toHaveBeenCalledWith("right", "stats")
-		const right = (props.editArranged as any).right
-		expect(right.items.map((i: { id: string }) => i.id)).toEqual(["stats", "stats#2"])
+		expect(panels(props).right.map((p) => p.tabs)).toEqual([["stats", "world-state"], ["stats#2"]])
+		expect(props.onMinted).toHaveBeenLastCalledWith("stats#2", null)
+
+		named("Add a tab to stats · world-state")!.click()
+		await settle()
+		chip("stats")!.click()
+		await settle()
+		expect(panels(props).right.map((p) => p.tabs)).toEqual([
+			["stats", "world-state", "stats#3"],
+			["stats#2"]
+		])
+		expect(props.onMinted).toHaveBeenLastCalledWith("stats#3", null)
 	})
 
-	test("a row's Duplicate asks the layout for a copy and lands it after the rest", async () => {
+	test("a tab's Duplicate lands the copy right after its source", async () => {
 		const props = phone()
 		await settle()
-		const dup = document.querySelector<HTMLButtonElement>('[aria-label="Duplicate stats"]')
+		const dup = named("Duplicate stats")
 		expect(dup).toBeTruthy()
 		dup!.click()
 		await settle()
-		expect(props.duplicateWidget).toHaveBeenCalledWith("stats")
-		const right = (props.editArranged as any).right
-		expect(right.items.map((i: { id: string }) => i.id)).toEqual(["stats", "stats#2"])
+		expect(panels(props).right.map((p) => p.tabs)).toEqual([["stats", "stats#2", "world-state"]])
+		expect(props.onMinted).toHaveBeenCalledWith("stats#2", "stats")
 	})
 
-	test("a refused add or duplicate writes nothing", async () => {
-		const props = phone({ duplicateWidget: vi.fn(() => null) })
+	test("a refused add writes nothing and says why", async () => {
+		const props = phone()
 		await settle()
-		document.querySelector<HTMLButtonElement>('[aria-label="Duplicate stats"]')!.click()
+		named("Add a tab to stats · world-state")!.click()
 		await settle()
-		expect((props.editArranged as any).right).toBeUndefined()
+		// The panel leaves the layout while the sheet is open.
+		const without: PanelLayoutV1 = { ...PANELS(), right: [] }
+		props.editPanels = without
+		await settle()
+		chip("world-state")!.click()
+		await settle()
+		expect(panels(props)).toEqual(without)
+		expect(props.onMinted).not.toHaveBeenCalled()
+		expect(text(document.querySelector("[data-medit-notice]"))).toBe(UNKNOWN_PANEL)
 	})
 })

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { realDate } from "$lib/client/utils/realTime.svelte"
 	/**
 	 * Admin › Users: the changelist (note 37, Django admin). Every account on
 	 * the instance with its role, last sign-in and age; filters by role and
@@ -64,7 +65,7 @@
 	})
 
 	const when = (v: string | Date | null | undefined) =>
-		v ? new Date(v).toLocaleDateString() : ""
+		v ? realDate(v) : ""
 
 	const columns: AdminChangelistColumn<SelectUser>[] = [
 		{

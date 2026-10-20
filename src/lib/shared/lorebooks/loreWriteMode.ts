@@ -1,7 +1,8 @@
 /**
  * 🚧 **Lore write mode** — how a session may write to its lorebook (owner
- * ruling 2026-09-30, plan A22): **Full**, **Review changes** (the default) or
- * **Off**.
+ * ruling 2026-09-30, plan A22): **Full** (the default since 2026-10-16,
+ * PLAN-rulesets §27: trust the narrator — the timeline makes every change
+ * reversible), **Review changes** or **Off**.
  *
  * One person's answer, for every book they own: a pub default
  * (`system_settings.lore_write_mode_default`) and a per-user override
@@ -12,8 +13,9 @@
  * What each mode does to each flow is the plan's A22 table:
  *
  * - **Full** — a session writes the book as it plays.
- * - **Review changes** — what a session changes on its own waits as a
- *   proposal to accept or reject; what a person saves from a review screen
+ * - **Review changes** — what a session changes on its own waits in the
+ *   session's own notes (🚧 PLAN-rulesets §26) or as a proposal, to accept
+ *   or reject; what a person saves from a review screen
  *   (summarize, compile, graph apply) saves, because that screen IS the
  *   review.
  * - **Off** — nothing a session does writes the book; a save or an apply is
@@ -30,7 +32,7 @@ export const LORE_WRITE_MODES = ["full", "review", "off"] as const
 export type LoreWriteMode = (typeof LORE_WRITE_MODES)[number]
 
 /** What a pub starts at, and what a user with no choice of their own follows. */
-export const DEFAULT_LORE_WRITE_MODE: LoreWriteMode = "review"
+export const DEFAULT_LORE_WRITE_MODE: LoreWriteMode = "full"
 
 /** The picker's words: a label and one line saying what it does. */
 export const LORE_WRITE_MODE_CHOICES: Readonly<

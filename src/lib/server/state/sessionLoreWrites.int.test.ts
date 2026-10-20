@@ -261,11 +261,12 @@ describe("the mode decides what an automatic write does", () => {
 		)
 	})
 
-	test("the pub default is Review changes", async () => {
+	// 🚧 Full since 2026-10-16 (PLAN-rulesets §27: trust the narrator).
+	test("the pub default is Full", async () => {
 		const w = await world()
 		const out = await run(w)
-		expect(out.value.proposed).toHaveLength(1)
-		expect(await bookRows(w)).toHaveLength(0)
+		expect(out.value.proposed).toHaveLength(0)
+		expect(await bookRows(w)).toHaveLength(1)
 	})
 
 	test("Off skips it, and the receipt names the mode", async () => {
@@ -280,7 +281,9 @@ describe("the mode decides what an automatic write does", () => {
 		expect(await proposalsOf(w)).toHaveLength(0)
 	})
 
-	test("recording onto the world: Full writes, Review changes proposes, Off skips", async () => {
+	// 🚧 Since 2026-10-16 (PLAN-rulesets §26) a recording the book may not
+	// take lands in the session's own notes, Review and Off alike.
+	test("recording onto the world: Full writes the book, Review changes and Off the session's notes", async () => {
 		const { recordToTimeline } = await import("$lib/server/state/durable")
 		const record = async (mode: "full" | "review" | "off") => {
 			const w = await world()
@@ -304,15 +307,13 @@ describe("the mode decides what an automatic write does", () => {
 		expect(full.rows[0]!.historyEntryId).toBe(full.w.forkY3.id)
 
 		const review = await record("review")
-		expect(review.report).toMatchObject({ recorded: false, mode: "review", proposed: 1 })
+		expect(review.report).toMatchObject({ recorded: true, mode: "review", route: "phantom", proposed: 0 })
+		expect(review.report.lorebookId).not.toBe(review.w.book.id)
 		expect(review.rows).toHaveLength(0)
-		expect(review.proposals).toHaveLength(1)
-		expect(review.proposals[0]!.payload).toMatchObject({ owner: { kind: "lorebook", id: review.w.book.id }, slotId: WEATHER, value: "fog" })
-		expect(review.proposals[0]!.branchId).toBe(review.w.fork.id)
-		expect(review.proposals[0]!.historyEntryId).toBe(review.w.forkY3.id)
+		expect(review.proposals).toHaveLength(0)
 
 		const off = await record("off")
-		expect(off.report).toMatchObject({ recorded: false, mode: "off", values: 0, proposed: 0 })
+		expect(off.report).toMatchObject({ recorded: true, mode: "off", route: "phantom", proposed: 0 })
 		expect(off.rows).toHaveLength(0)
 		expect(off.proposals).toHaveLength(0)
 	})
@@ -539,21 +540,23 @@ describe("the review round", () => {
 			{} as any
 		)) as any
 
-	test("a recording's proposals belong to no reply: regenerating the newest reply keeps them", async () => {
+	// 🚧 Since 2026-10-16 a Review-changes recording files no proposal: it
+	// lands in the session's notes, stamped with the newest message.
+	test("a Review-changes recording lands in the session's notes, stamped with the newest message", async () => {
 		const w = await world()
 		await setOwnMode(w.user.id, "review")
 		const reply = await say(w)
 		await sessionFog(w)
 		const { recordToTimeline } = await import("$lib/server/state/durable")
 		const report = await recordToTimeline(testDb as unknown as Db, w.session.id, { reason: "scene" })
-		expect(report.proposed).toBe(1)
-
-		const { retractStateAnchoredTo } = await import("$lib/server/state/write")
-		await retractStateAnchoredTo(testDb as unknown as Db, reply)
-		const left = await proposalsOf(w)
-		expect(left).toHaveLength(1)
-		expect(left[0]!.messageId).toBeNull()
-		expect(left[0]!.status).toBe("pending")
+		expect(report.proposed).toBe(0)
+		expect(report.route).toBe("phantom")
+		expect(await proposalsOf(w)).toHaveLength(0)
+		const rows = await testDb
+			.select()
+			.from(schema.attributeValues)
+			.where(eq(schema.attributeValues.ownerId, report.lorebookId!))
+		expect(rows.find((r) => r.ownerKind === "lorebook")?.sourceMessageId).toBe(reply)
 	})
 
 	test("only the lorebook's owner decides a change to it: a guest's Reject is refused, a guest still decides the session's own", async () => {

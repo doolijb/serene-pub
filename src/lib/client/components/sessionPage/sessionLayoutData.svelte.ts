@@ -25,6 +25,7 @@ import {
 } from "$lib/client/stores/widgetSettings.svelte"
 import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
 import type { LayoutBlob } from "$lib/client/surfaces/types"
+import { panelsOf } from "@serene-pub/sdk"
 import type { TypedSocket } from "$lib/client/sockets/typedSocket"
 import type { SessionPageInbox } from "$lib/client/components/sessionPage/sessionPageInbox.svelte"
 import type { SessionPageData } from "$lib/client/components/sessionPage/sessionPageData.svelte"
@@ -183,8 +184,8 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 	 * _Save as new layout_: a new named layout from this session's layout,
 	 * which this session then started from. Sends the arrangement — the
 	 * manager's own slots, which the editor has just committed — and every
-	 * widget instance the session draws (`drawn`, the floor's included: an
-	 * empty layout still draws the conversation and the genre's panels); the
+	 * widget instance the session draws (`drawn` — a layout holding no
+	 * conversation sends none: stored panels are never floored, R-B); the
 	 * server packs those instances' settings and style pins in with it.
 	 */
 	function saveLayoutPreset(
@@ -203,17 +204,13 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 	}
 
 	/**
-	 * The arrangement the editor just committed — the manager's own slots —
-	 * as _Save as new layout_ and _Save changes to_ send it.
+	 * The arrangement the editor just committed — the manager's panels
+	 * (PLAN-session-panels-2026-10-14; the ⏳ old slots read as panels while
+	 * the row has none) — as _Save as new layout_ and _Save changes to_ send
+	 * it. The old slots never travel: a saved layout is new.
 	 */
 	function committedArrangement(): Record<string, unknown> {
-		const slot = (k: string, v: unknown) =>
-			v !== undefined ? { [k]: $state.snapshot(v) } : {}
-		return {
-			...slot("zoneLayout", surfaceManager.zoneLayout),
-			...slot("widgetGrid", surfaceManager.widgetGrid),
-			...slot("arrangedGrid", surfaceManager.arrangedGrid)
-		}
+		return { panels: $state.snapshot(panelsOf(surfaceManager.arrangement)) }
 	}
 
 	/* ── the card menu and Save changes to (brief 6b) ─────────────────────

@@ -64,7 +64,7 @@ describe("readPluginPackage", () => {
 			"text/html; charset=utf-8"
 		)
 		// Verbatim: the halves this app does not interpret survive the read.
-		expect(pkg.manifest.requires).toEqual(["core:spec/chat-respond"])
+		expect(pkg.manifest.requires).toEqual(["core:spec/story-respond"])
 		expect((pkg.manifest as any).permissions).toContain("storage:4194304")
 	})
 
@@ -136,15 +136,15 @@ describe("readPluginPackage", () => {
 			const fs = await import("node:fs/promises")
 			const p = join(d, "dist/plugin/manifest.json")
 			const m = JSON.parse(await fs.readFile(p, "utf8"))
-			m.pipelines = [{ id: "core:spec/chat-respond", version: "1.0.0" }]
+			m.pipelines = [{ id: "core:spec/story-respond", version: "1.0.0" }]
 			m.genres = []
 			await writeFile(p, JSON.stringify(m))
 			await mkdir(join(d, "dist/plugin/pipelines"), { recursive: true })
 			await writeFile(
-				join(d, "dist/plugin/pipelines", documentFileName("core:spec/chat-respond")),
+				join(d, "dist/plugin/pipelines", documentFileName("core:spec/story-respond")),
 				JSON.stringify({
 					schemaVersion: 1,
-					id: "core:spec/chat-respond",
+					id: "core:spec/story-respond",
 					version: "1.0.0",
 					nodes: [],
 					edges: [],

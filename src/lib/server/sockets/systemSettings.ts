@@ -69,6 +69,7 @@ export async function buildSystemSettingsGet(): Promise<Sockets.SystemSettings.G
 
 	if (!settings) throw new Error("System settings not found")
 
+	const defaults = await capabilityDefaults(db)
 	const res: Sockets.SystemSettings.Get.Response = {
 		systemSettings: settings as any,
 		ollamaSettings: (ollamaSettings ?? {}) as any,
@@ -111,10 +112,27 @@ export async function buildSystemSettingsGet(): Promise<Sockets.SystemSettings.G
 		// columns on `system_settings` and rode along with the row; now it
 		// is its own table, so it is fetched and sent explicitly — the
 		// sidebars need it to star the default and to enable Set Default.
-		capabilityDefaults: await capabilityDefaults(db)
+		capabilityDefaults: defaults,
+		capabilitiesReady: capabilitiesReadyOf(defaults)
 	}
 
 	return res
+}
+
+/**
+ * The capabilities whose instance default names a connection AND a model —
+ * a fact, not an identity, so it survives `redactConnections` for a member
+ * (whose `capabilityDefaults` lose `connectionId`/`connectionModelId`). The
+ * readiness strip reads it: a guest was told "No model is set up to reply"
+ * on a working instance (Dungeon Crawler walk round 2, 2026-10-15).
+ */
+export function capabilitiesReadyOf(
+	defaults: Record<string, Pick<Sockets.CapabilityDefault, "connectionId" | "connectionModelId">>
+): string[] {
+	return Object.entries(defaults)
+		.filter(([, d]) => d?.connectionId != null && d.connectionModelId != null)
+		.map(([key]) => key)
+		.sort()
 }
 
 export const systemSettingsGet: Handler<

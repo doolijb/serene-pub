@@ -198,7 +198,7 @@ describe("surface declarations", () => {
 		expect(ids.has("board")).toBe(false)
 
 		// And the per-session allow-list a widget-settings write is held to.
-		const seatable = await seatableWidgetIds(db, "core:genre/chat")
+		const seatable = await seatableWidgetIds(db, "core:genre/story")
 		expect(seatable.has("acme.game:board")).toBe(true)
 		expect(seatable.has("acme.game:chart")).toBe(true)
 		expect(seatable.has("acme.shelved:board")).toBe(false)

@@ -40,6 +40,7 @@ import {
 	formatChannel,
 	parseChannel,
 	roundRobinOrder,
+	senderRefOf,
 	spokenRefsSince as sdkSpokenRefsSince,
 	type TurnHistoryMessage
 } from "@serene-pub/sdk"
@@ -91,6 +92,9 @@ export type RotationMessage = TurnHistoryMessage & {
 const speakerRefOf = (m: RotationMessage): unknown =>
 	m.speaker ?? (m.metadata as { speaker?: unknown } | undefined)?.speaker
 
+/** The seat a person's line was sent from — the SDK's one reading (`senderRefOf`). */
+export { senderRefOf }
+
 /** What `turn/select` scripts are handed, and hand back. */
 export interface TurnSelection {
 	/** The pick, once a link makes one. Null until then. */
@@ -122,7 +126,11 @@ export interface CastRead {
 	sessionPersonas?: Array<{
 		position?: number | null
 		removedAt?: unknown
-		persona?: { id: number; userId?: number | null } | null
+		/** Null for 🚧 a seat that voices no card — addressed `player-seat:<seatId>`. */
+		persona?: { id: number; name?: string; userId?: number | null } | null
+		seatId?: number
+		seatName?: string | null
+		seatUserId?: number | null
 	}>
 	envoys?: Array<{
 		slug: string
@@ -341,7 +349,9 @@ export function turnSelection(
  * - **A persona is a candidate** (R15). A person's entry is shown as their
  *   turn and never fired, which is how a session knows it is the user's
  *   turn. Round robin treats a persona as having spoken when a user row
- *   after the previous user row carries its `personaId`.
+ *   after the previous user row carries its `personaId` — 🚧 a card-less
+ *   seat (`player-seat:<id>`, still `kind: 'persona'`) when it carries its
+ *   `player-seat:` speaker (`senderRefOf`).
  * - **Nobody due is an empty order**, never a halt. A strategy that seats
  *   nobody has answered the question.
  */
@@ -521,11 +531,10 @@ export function userSplitEntries(
 ): TurnEntry[] {
 	const turns = rotationTurns(messages)
 	const at = lastUserIndex(turns)
-	const sender = at >= 0 ? turns[at]!.personaId : null
+	const sender = at >= 0 ? senderRefOf(turns[at]!) : null
 	const owner =
 		sender != null
-			? (candidates.find((c) => c.ref === `character:${sender}`)
-					?.ownerUserId ?? null)
+			? (candidates.find((c) => c.ref === sender)?.ownerUserId ?? null)
 			: null
 	const own =
 		owner != null ? candidates.filter((c) => c.ownerUserId === owner) : []
@@ -592,6 +601,54 @@ export interface TurnOrderSelection {
 	candidates: TurnCandidate[]
 	lastSpeaker: ParticipantRef | null
 	sinceUser: number
+	/**
+	 * 🚧 What the narrator strategy would prepare over the same history
+	 * (`narratorEntries`): one own-voice entry per channel whose newest
+	 * visible row is a person's, and a standing plan's turns. Handed so a
+	 * script can answer a side channel's talk without seating anybody —
+	 * Dungeon Crawler's round script answers each Planner lane with it
+	 * (2026-10-15). Read-only advice: what the chain returns is the order.
+	 */
+	voiceEntries: TurnEntry[]
+	/**
+	 * 🚧 Who has written on each channel since that channel's newest visible
+	 * reply (any row that is not a person's): the senders' seat references
+	 * (`senderRefOf` — `character:<id>` for a seat with a card,
+	 * `player-seat:<id>` for one without), newest first, each once, keyed by
+	 * canonical channel (`main`, `parley:2`). A channel whose newest row is a
+	 * reply is absent. Handed so a script can wait for everyone at the table
+	 * — Dungeon Crawler's round (2026-10-15) — without seeing the rows.
+	 */
+	sentSinceReply: Record<string, string[]>
+}
+
+/**
+ * 🚧 The senders of the person rows on each channel after its newest visible
+ * reply — `TurnOrderSelection.sentSinceReply`. Hidden rows and narration
+ * (`isNarratorResponse`, a side note) are skipped; a row from no seat (no persona, no `player-seat:` speaker) is counted by nobody.
+ */
+export function sentSinceReply(
+	messages: readonly RotationMessage[]
+): Record<string, string[]> {
+	const out: Record<string, string[]> = {}
+	const closed = new Set<string>()
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const row = messages[i]
+		// Narration is a side note, outside the rotation (`countedTurns`):
+		// it neither closes the window nor counts in it.
+		if (!row || row.isHidden || row.isNarratorResponse) continue
+		const channel = formatChannel(parseChannel(row.channel ?? DEFAULT_CHANNEL))
+		if (closed.has(channel)) continue
+		if (row.role !== "user") {
+			closed.add(channel)
+			continue
+		}
+		const ref = senderRefOf(row)
+		if (!ref) continue
+		const list = (out[channel] ??= [])
+		if (!list.includes(ref)) list.push(ref)
+	}
+	return out
 }
 
 /** The selection a scripted strategy builds before it calls its chain. */
@@ -604,6 +661,95 @@ export function turnOrderSelection(
 		order: roundRobinEntries(candidates, messages),
 		candidates: [...candidates],
 		lastSpeaker: lastSpeakerRef(turns),
-		sinceUser: turns.length - 1 - lastUserIndex(turns)
+		sinceUser: turns.length - 1 - lastUserIndex(turns),
+		voiceEntries: narratorEntries(messages),
+		sentSinceReply: sentSinceReply(messages)
 	}
+}
+
+/**
+ * 🚧 **Unprompted turns** (`core:task/turn-unprompted@1`; PLAN-genre-restructure
+ * §4 voices group, lane 2, 2026-10-19): the order the strategy prepared,
+ * with at most ONE entry put at its head once the round is over — an AI
+ * voice speaking without being asked. Pure: what a session's background
+ * tasks switched on (`modes`, `resolve-tasks@1`'s) over the history the
+ * recompute already read.
+ *
+ * The round is over when the order holds nothing an AI still has to say —
+ * empty, or only people's seats (a persona's or a card-less player seat's
+ * entry) — and somebody has answered the person since their newest line on
+ * `main`. Before that, or with both tasks off, the order passes through
+ * untouched. Each voice comes once a round:
+ *
+ *  · `side-cast` — a seated character who did not speak last (the
+ *    earliest of this round's speakers first) speaks up again; done once
+ *    any character has two lines since the person's;
+ *  · `narrator-interjections` — the narrator's own line (`narrate`, the
+ *    genre's Narrate action; a plain reply in no one's voice when unset);
+ *    done once a narration landed since the person's line.
+ *
+ * The person's next line opens a new round, and the recompute it causes
+ * prepares none of these (nobody has answered yet), so an unfired one
+ * never outlives its round.
+ */
+export function unpromptedEntries(
+	order: readonly TurnEntry[],
+	candidates: readonly TurnCandidate[],
+	messages: readonly RotationMessage[],
+	modes: Readonly<Record<string, unknown>>,
+	opts: { narrate?: string } = {}
+): TurnEntry[] {
+	const kept = [...order]
+	const on = (key: string) => modes[key] === "full" || modes[key] === "review"
+	const side = on("side-cast")
+	const narrator = on("narrator-interjections")
+	if (!side && !narrator) return kept
+	const main = messages.filter(
+		(m) => !!m && !m.isHidden && parseChannel(m.channel ?? DEFAULT_CHANNEL).slug === DEFAULT_CHANNEL
+	)
+	let at = -1
+	for (let i = main.length - 1; i >= 0; i--)
+		if (main[i]!.role === "user") {
+			at = i
+			break
+		}
+	if (at < 0) return kept
+	const since = main.slice(at + 1)
+	const replies = since.filter((m) => m.role === "assistant" && !m.isNarratorResponse)
+	if (!replies.length && !since.some((m) => m.isNarratorResponse)) return kept
+	const people = new Set(
+		candidates.filter((c) => c.kind === "persona").map((c) => String(c.ref))
+	)
+	const isPersons = (e: TurnEntry) =>
+		typeof e.ref === "string" && (people.has(e.ref) || e.ref.startsWith("player-seat:") || e.ref.startsWith("user:"))
+	if (kept.some((e) => !isPersons(e))) return kept
+
+	if (side) {
+		const lines = new Map<number, number>()
+		const firstAt = new Map<number, number>()
+		replies.forEach((m, i) => {
+			if (m.characterId == null) return
+			lines.set(m.characterId, (lines.get(m.characterId) ?? 0) + 1)
+			if (!firstAt.has(m.characterId)) firstAt.set(m.characterId, i)
+		})
+		const spokeTwice = [...lines.values()].some((n) => n > 1)
+		const last = replies[replies.length - 1]?.characterId ?? null
+		if (!spokeTwice) {
+			const idOf = (c: TurnCandidate) => Number(String(c.ref).slice("character:".length))
+			const seated = candidates.filter(
+				(c) => c.kind === "character" && String(c.ref).startsWith("character:") && idOf(c) !== last
+			)
+			const pick = [...seated].sort(
+				(a, b) =>
+					(firstAt.get(idOf(a)) ?? Number.MAX_SAFE_INTEGER) - (firstAt.get(idOf(b)) ?? Number.MAX_SAFE_INTEGER)
+			)[0]
+			if (pick) return [{ ref: pick.ref, via: "unprompted" }, ...kept]
+		}
+	}
+	if (narrator && !since.some((m) => m.isNarratorResponse))
+		return [
+			{ ref: null, via: "unprompted", ...(opts.narrate ? { subject: opts.narrate } : {}) },
+			...kept
+		]
+	return kept
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { adoptAccountTimeZone } from "$lib/client/utils/realTime.svelte"
 	import { provideCharacterImports } from "$lib/client/contexts/characterImports.svelte"
 	import { provideConnections } from "$lib/client/contexts/connections.svelte"
 	import { provideConversations } from "$lib/client/contexts/conversations.svelte"
@@ -122,6 +123,7 @@
 		// Layout does. Without this line those pages read `{}` forever and
 		// report a correctly-configured instance as unconfigured.
 		systemSettingsCtx.capabilityDefaults = message.capabilityDefaults ?? {}
+		systemSettingsCtx.capabilitiesReady = message.capabilitiesReady
 		ollamaSettingsCtx.settings = { ...message.ollamaSettings }
 		koboldCppSettingsCtx.settings = { ...message.koboldCppSettings }
 	}
@@ -131,6 +133,11 @@
 		// 6a). It is the first of three checks, never the boundary — the
 		// server's sync handler and each handler's own admin check are.
 		setInterestUser(message.user ?? null)
+		// Real-world times show in the account's zone; an account with none
+		// takes this browser's, reported once (`onlyIfUnset`, so it is idempotent).
+		adoptAccountTimeZone(message.user, (timeZone) =>
+			socket.emit("users:current:setTimeZone", { timeZone, onlyIfUnset: true })
+		)
 	}
 	function handleUserSettingsGet(message: any) {
 		userSettingsCtx.settings = message.userSettings

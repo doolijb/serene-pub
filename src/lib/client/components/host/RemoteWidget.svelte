@@ -58,6 +58,14 @@
 			sessionMessages?: unknown[]
 			/** 🚧 The session's backdrop (`sessions.backdropMediaId`). */
 			backdropMediaId?: number | null
+			/** 🚧 The lorebook it reads (`sessions.lorebookId`); null: none. */
+			lorebookId?: number | null
+			/** 🚧 The ruleset it plays (`sessions.primaryRuleset`). */
+			primaryRuleset?: string | null
+			/** 🚧 Its chosen ruleset setting values, by ruleset id (`sessions.rulesetSettings`). */
+			rulesetSettings?: Record<string, Record<string, string>> | null
+			/** 🚧 Its channels as this viewer has them (`sessions:get`, INTEGRATING §1h). */
+			channels?: import("@serene-pub/sdk").SessionChannelV1[]
 		} | null
 		channels?: string[]
 		props?: Record<string, unknown>
@@ -144,7 +152,35 @@
 								mediaId: session.backdropMediaId,
 								src: `/media/${session.backdropMediaId}?v=fitted`
 							}
-						: null
+						: null,
+					// 🚧 Which lorebook it reads, null for none — said only
+					// when the page's session carries the key, so a page that
+					// never loaded it reads as "unknown", not as "none".
+					...(session.lorebookId !== undefined
+						? { lorebookId: session.lorebookId ?? null }
+						: {}),
+					// 🚧 The ruleset it plays and the values it chose for that
+					// ruleset's settings (W3-S) — said only when the page's
+					// session carries the ruleset, absent otherwise.
+					...(session.primaryRuleset !== undefined
+						? {
+								rulesetSettings: session.primaryRuleset
+									? {
+											rulesetId: session.primaryRuleset,
+											values: {
+												...(session.rulesetSettings?.[session.primaryRuleset] ?? {})
+											}
+										}
+									: null
+							}
+						: {}),
+					// 🚧 The channels as this viewer has them (2026-10-17): their
+					// own lane on a personal channel (`mine`) and the attention
+					// each lane asks of them — the host's, said only when the
+					// page's session carries it.
+					...(Array.isArray(session.channels)
+						? { channels: session.channels.map((c) => ({ ...c })) }
+						: {})
 				}
 			: undefined
 	)

@@ -153,6 +153,15 @@ export async function verbRefusal(
 				`This session's genre ('${mode.name}') does not offer ${verb} on ` +
 				`messages — what happened stands. Stopping, branching and editing are always yours.`
 			)
+		// A question no reply asked — a greeting with its first question,
+		// an interview's form — has nothing a reply could take again
+		// (Dungeon Crawler's Planner lane, 2026-10-15). Before the retake's
+		// R9 sentence, which would send the person to a composer that
+		// cannot retake it either.
+		if (door && (verb === "retry" || verb === "swipe" || verb === "extend")) {
+			const asked = await questionRowRefusal(db, genreId, door.messageId)
+			if (asked) return asked
+		}
 		// A row of a several-row turn is retaken whole (R2), before any
 		// newest-row verdict: the sentence that helps is where to go instead.
 		if (verb === "retry" && door) {
@@ -164,6 +173,111 @@ export async function verbRefusal(
 	}
 	if (!door || !genreId) return null
 	return verbEnablementRefusal(db, sessionId, verb, door, genreId)
+}
+
+/**
+ * The refusal for re-driving a **row no reply wrote** (2026-10-15; widened
+ * 2026-10-16): retry, swipe and extend all re-drive a row through the reply
+ * road (`runReply`), which can only take again what a reply wrote.
+ *
+ *  - A **question no reply asked** — a row carrying a form whose creating
+ *    run was not a reply — the Dungeon Crawler Planner's greeting and its
+ *    interview questions. Re-driven, the greeting answers a line nobody
+ *    sent and the model returns nothing; a question gets chat over its form.
+ *    The question stands, open, and answering it is the way on.
+ *  - Any **other row a non-reply run wrote** — the Dungeon Crawler's opening
+ *    scene, written by genesis at the end of the interview. A swipe on it
+ *    ran a whole story round (a Planner call with nothing to plan from),
+ *    halted empty, and took the opening's world with it (2026-10-16 walk).
+ *
+ * Keyed on recorded facts — the row's creating run (or its root) against
+ * every spec the reply road could route a rerun of this genre to — never on
+ * the genre or the channel. A reply that stopped on a question (the Lair's
+ * knock) was written by the reply pipeline and is answered by
+ * `retakeRowRefusal`'s R9 instead. A row no run wrote (a card's greeting,
+ * seeded at create) keeps its swipes unless it asks.
+ */
+export async function questionRowRefusal(
+	db: Db,
+	genreId: string,
+	messageId: number
+): Promise<string | null> {
+	const [row] = await db
+		.select({
+			role: schema.sessionMessages.role,
+			sessionId: schema.sessionMessages.sessionId,
+			metadata: schema.sessionMessages.metadata
+		})
+		.from(schema.sessionMessages)
+		.where(eq(schema.sessionMessages.id, messageId))
+		.limit(1)
+	if (!row || row.role === "user") return null
+	const asks = await rowAsks(db, messageId)
+	// A card's greeting keeps its swipes — its alternates, and a new one —
+	// whoever seeded it, unless it asks.
+	if (!asks && (row.metadata as { isGreeting?: unknown } | null)?.isGreeting === true) return null
+	const { creatingRunOf } = await import("$lib/server/sessions/turnYield")
+	const run = await creatingRunOf(db, messageId)
+	if (!run && !asks) return null
+	if (run) {
+		const replySpecs = await replySpecsOf(db, genreId, row.sessionId)
+		if (replySpecs.has(run.specSlug)) return null
+		if (run.rootRunId && run.rootRunId !== run.runId) {
+			const [root] = await db
+				.select({ specSlug: schema.pipelineRuns.specSlug })
+				.from(schema.pipelineRuns)
+				.where(eq(schema.pipelineRuns.runId, run.rootRunId))
+				.limit(1)
+			if (root && replySpecs.has(root.specSlug)) return null
+		}
+	}
+	return asks
+		? "This message is a question, not a reply — there is nothing to generate again. " +
+				"Answer it to go on."
+		: "This message is not a reply — no reply wrote it, so there is nothing to generate again. " +
+				"Editing it is always yours."
+}
+
+/**
+ * Every spec the reply road could re-drive a row of this genre through
+ * (`runReply`'s `routeFor`): the reply, a narration, a side character's
+ * line and an extend — each as the genre routes it, and the floors a null
+ * route falls to.
+ */
+async function replySpecsOf(
+	db: Db,
+	genreId: string,
+	sessionId: number
+): Promise<Set<string>> {
+	const { resolveSubjectVerdict } = await import(
+		"$lib/server/pipelines/entities/sessionGenres"
+	)
+	const { sessionEvents } = await import("@serene-pub/sdk")
+	const { STORY_NARRATE_SPEC_ID, STORY_SIDE_CHARACTER_SPEC_ID } = await import(
+		"$lib/server/pipelines/specs/narrate"
+	)
+	const { STORY_RESPOND_SPEC_ID } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
+	const out = new Set<string>([
+		STORY_RESPOND_SPEC_ID,
+		STORY_NARRATE_SPEC_ID,
+		STORY_SIDE_CHARACTER_SPEC_ID
+	])
+	for (const subject of [
+		sessionEvents.messageRespond,
+		`${STORY_NARRATE_SPEC_ID}#narrate`,
+		`${STORY_SIDE_CHARACTER_SPEC_ID}#narrate-character`,
+		`${CORE_ACTION_SPEC}#extend`
+	]) {
+		try {
+			const routed = await resolveSubjectVerdict(db, genreId, subject, { sessionId })
+			if (routed.spec) out.add(routed.spec)
+		} catch {
+			// A subject the genre cannot route falls to its floor, already in.
+		}
+	}
+	return out
 }
 
 /**
@@ -524,4 +638,144 @@ export async function extendVerbRefusal(
 		// the turn's problem to report, not a reason to take the verb away.
 		return null
 	}
+}
+
+/**
+ * 🚧 The sentences a genre that keeps its turns refuses a delete with (owner
+ * rulings 2026-10-15). Exported for the tests that pin them.
+ */
+export const TURN_DELETE_REFUSALS = Object.freeze({
+	older: "Only the latest turn can be deleted — retake from there instead.",
+	notOwner: "Only the session owner can delete the latest turn.",
+	honourOff:
+		"Honour mode is off: turns can only be retaken. The session owner can turn it on in the session's settings."
+})
+
+/**
+ * 🚧 **A genre that keeps its turns** (owner rulings 2026-10-15, Dungeon
+ * Crawler): what a delete of one row comes to. A genre keeps its turns by
+ * declaring the session field `honorMode` (_Honour mode_) — a key core reads,
+ * as it reads `autoAdvance`; absent from the settings document, nothing here
+ * applies and the delete is the ordinary one (`null`).
+ *
+ * Read off the row's place against the story's turns (`turnAgeOf`), on a
+ * channel that offers the retake:
+ *
+ *  - an **older** turn's row is never deleted — the turn is retaken from the
+ *    latest instead;
+ *  - the **latest** turn's row is deleted by the session owner alone, and only
+ *    while Honour mode is on. A row that turn's run wrote takes the whole turn
+ *    with it (`{ turn }`: the reply, its roll line, its journal line — the
+ *    yield, as a retake deletes it, and nothing fired again); a line of the
+ *    round it answered goes alone (`null`);
+ *  - a row after it (the next round's lines) and every row elsewhere (a
+ *    Planner lane) is an ordinary delete.
+ *
+ * Neither enabled-when could say this: core's own predicates for `delete`
+ * beat a genre's defaults, and the grammar states one condition per
+ * predicate, never "owner and on, but only for the latest turn". The retake
+ * is not asked here: it is the owner's, whatever Honour mode says. A read
+ * that fails refuses nothing (the `verbRefusal` posture).
+ */
+export type TurnDeleteVerdict =
+	| { refusal: string }
+	| {
+			turn: import("$lib/server/sessions/turnYield").TurnYield
+			/**
+			 * 🚧 What the delete does to the timeline (PLAN-rulesets §28): the
+			 * session's On revision and the confirmation's sentence.
+			 */
+			revision: import("$lib/server/sessions/revision").RevisionNotice
+	  }
+	| null
+
+/**
+ * 🚧 **Where this viewer's Delete is refused**, for the whole session at
+ * once (2026-10-18, owner ruling ★9: Honour mode off hides Delete) — what
+ * `turnDeleteVerdict` would answer, folded into one boundary the page reads
+ * per row: on each channel that offers the retake, every row up to
+ * `messageId`. For a player, or the owner with Honour mode off, that is the
+ * whole of the latest turn and everything before it; for the owner with it
+ * on, the older turns only — the rows before the round the latest turn
+ * answered and before its own rows. A boundary, never a list: a row past it
+ * that the verdict would still refuse (an older turn's roll line written
+ * after its reply) keeps Delete, and its press is refused in words. Null
+ * where nothing is kept: a genre that does not keep its turns, no story turn
+ * yet, or a read that fails (the `verbRefusal` posture).
+ */
+export async function turnDeleteRefusedThrough(
+	db: Db,
+	sessionId: number,
+	userId: number
+): Promise<{ channels: string[]; messageId: number } | null> {
+	try {
+		const { sessionHonourMode } = await import("$lib/server/sessions/settings")
+		const honour = await sessionHonourMode(db, sessionId)
+		if (honour === undefined) return null
+		const [session] = await db
+			.select({ genreId: schema.sessions.genreId })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, sessionId))
+			.limit(1)
+		if (!session?.genreId) return null
+		const { getSessionGenre } = await import("$lib/server/pipelines/entities/sessionGenres")
+		const shape = (await getSessionGenre(db, session.genreId))?.shape as { channels?: unknown } | undefined
+		const { resolveTurnControls } = await import("@serene-pub/sdk")
+		const declared = Array.isArray(shape?.channels)
+			? (shape!.channels as Array<{ slug?: unknown }>).map((c) => (typeof c?.slug === "string" ? c.slug : "")).filter(Boolean)
+			: []
+		const channels = [...new Set(["main", ...declared])].filter((c) => resolveTurnControls(shape, c).retake.offered)
+		if (!channels.length) return null
+		const { latestStoryTurnOf } = await import("$lib/server/sessions/turnYield")
+		const latest = await latestStoryTurnOf(db, sessionId)
+		if (!latest) return null
+		const own = latest.turn.rows.map((r) => r.messageId)
+		const { sessionAccessFor } = await import("$lib/server/messages/permissions")
+		const isOwner = (await sessionAccessFor(db, sessionId, userId)).isOwner
+		const messageId =
+			!isOwner || honour !== true
+				? Math.max(latest.headId, ...own)
+				: Math.min(latest.previousId ?? 0, (own.length ? Math.min(...own) : latest.headId) - 1)
+		return messageId > 0 ? { channels, messageId } : null
+	} catch (e) {
+		console.warn("[verbs] where a delete is refused could not be read:", e)
+		return null
+	}
+}
+
+export async function turnDeleteVerdict(
+	db: Db,
+	sessionId: number,
+	messageId: number,
+	userId: number
+): Promise<TurnDeleteVerdict> {
+	let honour: boolean | undefined
+	let shape: unknown
+	try {
+		const { sessionHonourMode } = await import("$lib/server/sessions/settings")
+		honour = await sessionHonourMode(db, sessionId)
+		if (honour === undefined) return null
+		const [session] = await db
+			.select({ genreId: schema.sessions.genreId })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, sessionId))
+			.limit(1)
+		if (!session?.genreId) return null
+		const { getSessionGenre } = await import("$lib/server/pipelines/entities/sessionGenres")
+		shape = (await getSessionGenre(db, session.genreId))?.shape
+	} catch (e) {
+		console.warn("[verbs] whether this genre keeps its turns could not be read:", e)
+		return null
+	}
+	const { turnAgeOf } = await import("$lib/server/sessions/turnYield")
+	const age = await turnAgeOf(db, sessionId, messageId, shape)
+	if (age.age === "open") return null
+	if (age.age === "older") return { refusal: TURN_DELETE_REFUSALS.older }
+	const { sessionAccessFor } = await import("$lib/server/messages/permissions")
+	if (!(await sessionAccessFor(db, sessionId, userId)).isOwner)
+		return { refusal: TURN_DELETE_REFUSALS.notOwner }
+	if (honour !== true) return { refusal: TURN_DELETE_REFUSALS.honourOff }
+	if (!age.turn) return null
+	const { revisionNotice, sessionOnRevision } = await import("$lib/server/sessions/revision")
+	return { turn: age.turn, revision: revisionNotice(await sessionOnRevision(db, sessionId), 1) }
 }

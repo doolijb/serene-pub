@@ -6,6 +6,7 @@ import type { Handler } from "$lib/shared/events"
 import { z } from "zod"
 import { passphraseSchema } from "$lib/shared/validation/passphrase"
 import { displayNameSchema } from "$lib/shared/validation/displayName"
+import { canonicalTimeZone } from "$lib/shared/validation/timeZone"
 import * as passphrase from "$lib/server/providers/users/passphrase"
 import { cookies } from "$lib/server/auth"
 import * as userTokens from "$lib/server/providers/users/tokens"
@@ -373,6 +374,48 @@ export const usersCurrentUpdateDisplayName: Handler<
 			})
 			throw error
 		}
+	}
+}
+
+/**
+ * Set the zone this account's real-world times are shown in.
+ *
+ * With `onlyIfUnset` it is the first-load report from the browser: it writes
+ * only while the column is still NULL, so a zone the person picked is never
+ * overwritten by whichever device they happen to open next, and repeating the
+ * call is a no-op. Without it, it is the settings picker, and always writes.
+ * Storage stays UTC either way — this column only changes how times are SHOWN.
+ */
+export const usersCurrentSetTimeZone: Handler<
+	Sockets.Users.SetTimeZone.Params,
+	Sockets.Users.SetTimeZone.Response
+> = {
+	event: "users:current:setTimeZone",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const timeZone = canonicalTimeZone(params?.timeZone)
+		if (!timeZone) {
+			const error = "Unknown time zone"
+			emitToUser("users:current:setTimeZone:error", { error })
+			throw new Error(error)
+		}
+		const where = params.onlyIfUnset
+			? and(eq(schema.users.id, userId), isNull(schema.users.timeZone))
+			: eq(schema.users.id, userId)
+		const written = await db
+			.update(schema.users)
+			.set({ timeZone })
+			.where(where)
+			.returning({ id: schema.users.id })
+		const res: Sockets.Users.SetTimeZone.Response = {
+			success: true,
+			changed: written.length > 0,
+			timeZone
+		}
+		emitToUser("users:current:setTimeZone", res)
+		if (res.changed)
+			await emitToUser("users:current", () => buildUsersCurrent(userId))
+		return res
 	}
 }
 
@@ -858,6 +901,7 @@ export function registerUserHandlers(
 	register(socket, usersCurrentSetPassphrase, emitToUser)
 	register(socket, usersCurrentHasPassphrase, emitToUser)
 	register(socket, usersCurrentUpdateDisplayName, emitToUser)
+	register(socket, usersCurrentSetTimeZone, emitToUser)
 	register(socket, usersCurrentChangePassphrase, emitToUser)
 	register(socket, usersCurrentLogout, emitToUser)
 	register(socket, usersList, emitToUser)

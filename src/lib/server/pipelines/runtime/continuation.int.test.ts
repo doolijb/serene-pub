@@ -27,7 +27,7 @@
  * control entry beside it ("ashguard", named by the stored user line) is what
  * separates "the scan does not see the partial" from "the scan is broken".
  *
- * Asserted through `runTurn` against the SHIPPED `core:spec/chat-respond` document
+ * Asserted through `runTurn` against the SHIPPED `core:spec/story-respond` document
  * loaded from the database the bootstrap published it to — not an ad-hoc spec.
  * A test that compiled its own pipeline would wire the new port while writing
  * it, and the defect lives in the shipped document.
@@ -35,7 +35,7 @@
 
 import { describe, it, expect, beforeAll, vi } from "vitest"
 import { eq } from "drizzle-orm"
-import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
@@ -170,13 +170,13 @@ beforeAll(async () => {
 		name: "Continue Template",
 		source: continueTemplate
 	})
-	const [respondSpec] = await db
+	const [storyRespondSpec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
 		.limit(1)
 	const decl = (
-		await declarations(db, respondSpec.activeVersionId!)
+		await declarations(db, storyRespondSpec.activeVersionId!)
 	).find(
 		(d) =>
 			d.control === "context-template-ref" &&
@@ -186,8 +186,8 @@ beforeAll(async () => {
 		await import("$lib/server/pipelines/config/named")
 	const shipped = await resolveSelectedConfig(
 		db,
-		respondSpec.id,
-		CHAT_RESPOND_SPEC_ID,
+		storyRespondSpec.id,
+		STORY_RESPOND_SPEC_ID,
 		{}
 	)
 	const copy = await duplicateConfig(
@@ -195,7 +195,7 @@ beforeAll(async () => {
 		shipped!.configId,
 		"Continue host"
 	)
-	await selectConfig(db, respondSpec.id, "pub", 0, copy.id)
+	await selectConfig(db, storyRespondSpec.id, "pub", 0, copy.id)
 	await db
 		.insert(schema.pipelineConfigValues)
 		.values({

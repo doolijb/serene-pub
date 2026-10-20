@@ -60,6 +60,12 @@ describe("CharacterCreatorModal ids", () => {
 			expect(html).not.toContain(literal)
 	})
 
+	test("🚧 a closed creator leaves no dialog in the page (PLAN-dc-after-walk2 Q3-6, #48)", () => {
+		const html = render(CharacterCreatorModal, { props: { open: false }, idPrefix: "shut" }).body
+		expect(html).not.toContain("Create Character")
+		expect(html).not.toMatch(/<label[^>]*>\s*Name\*/)
+	})
+
 	test("two instances get two ids", () => {
 		expect(nameInputId(renderOpen("one"))).not.toBe(
 			nameInputId(renderOpen("two"))

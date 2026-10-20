@@ -15,35 +15,35 @@
 	 * The LIVE session layout: the drawn layout, mounted. The conversation and every widget around it come
 	 * from the model (./sessionLayoutModel — the SDK's `resolveDrawn` over the
 	 * stored layout, at the measured width); this component only measures,
-	 * mounts, and holds the transient UI state of the live view — the
-	 * pop-overs, the tucked flyout, the phone's sheets and panels menu, the tab
-	 * groups' active member.
+	 * mounts, and holds the transient UI state of the live view — the tucked
+	 * flyout, the phone's sheets and panels menu.
 	 *
-	 * Side-zone presentation follows the pin rule verbatim: a pinned rail takes
-	 * layout space; unpinned (or too narrow to dock) the zone reduces to a
-	 * per-widget icon strip, and clicking an icon pops the zone over the chat
-	 * until the user clicks away — or pins it, which docks it and persists.
+	 * Every zone is PANELS (PLAN-session-panels-2026-10-14): the middle's
+	 * strips above, its primary panel (it fills), its strips below; a side's
+	 * column of panels and its rail. A panel is drawn by ./PanelTabs — a tab
+	 * strip when it holds two or more widgets, the widget's own chrome when it
+	 * holds one — and the pin rule is the panel's: docked, or in the rail.
 	 * Each side is ONE mount (./SideMount, the no-reload law).
 	 *
 	 * Widgets are the same PanelInstances the SurfaceManager owns, rendered
 	 * through Panel (chrome="zone") — and the conversation through core's own
 	 * remote component — so remote/frame surfaces and channel wiring are
-	 * untouched. Every mount is in THIS file (the `middleWidget`, `panelStack`
-	 * and `tabGroup` snippets), and each is handed the session's venues
+	 * untouched. Every mount is in THIS file (the `middleWidget` and
+	 * `livePanel` snippets), and each is handed the session's venues
 	 * (`actions`) and the page's dispatch (`actionDispatch`) as props, never a
 	 * context.
 	 *
-	 * Nothing here writes the layout but the rail's and the pop-over's own pin
-	 * buttons, which go up through `onSetPinned`; the editor never writes this
+	 * Nothing here writes the layout but a panel's own controls — the tab a
+	 * person opens and its pin — which go through the manager
+	 * (`setPanelOpen`, `setPanelPinned`); the editor never writes this
 	 * component's state.
 	 */
 	import * as Icons from "@lucide/svelte"
 	import Panel from "$lib/client/components/surfaces/Panel.svelte"
 	import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
-	import type { ResolvedZone } from "./schema"
-	import WidgetZone from "./WidgetZone.svelte"
-	import { widgetsFromSideZones, type ZoneEntry } from "./panelWidgets"
-	import type { RenderUnit } from "./tabGroups"
+	import type { DrawnInstance, DrawnPanel } from "@serene-pub/sdk"
+	import PanelTabs from "./PanelTabs.svelte"
+	import { openWidgetSettings } from "./widgetSettingsModal.svelte"
 	import { createStageBalance } from "./stageBalance.svelte"
 	import { HOST_CARD_CLASS, hostCardShown } from "./hostCard"
 	import { mobileSidePanels } from "./mobileSidePanels.svelte"
@@ -53,7 +53,7 @@
 		type SessionLayoutModel
 	} from "./sessionLayoutModel.svelte"
 	import type { WidgetSettingsFlow } from "./widgetSettingsFlow.svelte"
-	import SideMount from "./SideMount.svelte"
+	import SideMount, { type PanelAt } from "./SideMount.svelte"
 	import PanelsMenu from "./PanelsMenu.svelte"
 	import RemoteWidget from "$lib/client/components/host/RemoteWidget.svelte"
 	import { CORE_CONVERSATION } from "$lib/client/components/sessionPage/coreWidgets"
@@ -69,6 +69,11 @@
 	import { isInstanceOf } from "@serene-pub/sdk"
 	// The session header furled (note 29): the top strips roll up with it.
 	import { shellPrefs } from "$lib/client/shell/shellPrefs.svelte"
+	// 🚧 A dot on a tab with news (PLAN-dc-after-walk2 Q3-3).
+	import { createTabAttention } from "./tabAttention.svelte"
+	import { laneClaimOf } from "./channelClaims"
+	import { widgetSettingValues } from "$lib/client/stores/widgetSettings.svelte"
+	import { getContext } from "svelte"
 
 	interface Props {
 		model: SessionLayoutModel
@@ -92,8 +97,6 @@
 			action?: string,
 			blockId?: string
 		) => void
-		/** Pin or unpin an un-arranged zone; the composition root persists it. */
-		onSetPinned: (zoneId: string, pinned: boolean) => void
 	}
 
 	let {
@@ -104,9 +107,36 @@
 		session,
 		actions,
 		actionDispatch,
-		onFrameAction,
-		onSetPinned
+		onFrameAction
 	}: Props = $props()
+
+	/* ── 🚧 a dot on a tab with news (PLAN-dc-after-walk2 Q3-3; ./tabAttention) ──
+	 * A conversation copy's tab claims a channel; while another tab is shown,
+	 * a line somebody else wrote there puts a dot on it — the walk's secret,
+	 * death and question on Planner said nothing while the Story was up. */
+	const attentionUser: UserCtx | undefined = getContext("userCtx")
+	const tabAttention = createTabAttention(
+		(id) => widgetSettingValues(id),
+		// A Planner tab shows the viewer's own lane: the others' an owner also
+		// receives are never its news.
+		(id) =>
+			laneClaimOf(widgetSettingValues(id), {
+				viewerId: attentionViewer,
+				annex: null,
+				channels: ((session as { channels?: unknown } | null | undefined)?.channels ?? null) as never
+			})
+	)
+	let attentionRows = $derived(
+		((session as { sessionMessages?: unknown } | null | undefined)?.sessionMessages ?? []) as {
+			id: number
+			channel?: string | null
+			userId?: number | null
+		}[]
+	)
+	let attentionViewer = $derived(attentionUser?.user?.id ?? null)
+	$effect(() => {
+		tabAttention.observe(model.drawn, attentionRows, attentionViewer)
+	})
 
 	/** `.live-body`: what the live view's own queries are scoped to. */
 	let liveEl: HTMLDivElement | null = $state(null)
@@ -122,42 +152,33 @@
 		}
 	})
 
-	/* ── the arranged middle and its collapse ───────────────────────────── */
-	/** The middle's cell grid, when it is drawn from an arrangement. */
-	let middleFrame = $derived(model.frameOf(model.drawn.middle))
-	let middleWPx = $state(0)
-	let middleCol = $derived(model.middleCollapse(middleWPx))
-
-	/* ── real placement for the arranged renderers (PLAN 25; the model's
-	 * `unitPlacement`) ──────────────────────────────────────────────────────
-	 * Widths are measured per CELL rather than divided out of the zone: the
-	 * tracks are `1fr`, so their real size is the browser's answer. Unmeasured
-	 * for a frame → 0 → `compact`, corrected by an ordinary `layout:changed`. */
-	let cellWidths = $state<Record<string, number>>({})
-	/* The block size of the same cells, keyed the same way, so the contract's
-	   `layout.v1.box.px` can report a real box. Absent until both axes have a
-	   number. */
-	let cellHeights = $state<Record<string, number>>({})
-	const unitPlacement: SessionLayoutModel["unitPlacement"] = (...a) =>
-		model.unitPlacement(...a)
-	const anchorCellStyle: SessionLayoutModel["anchorCellStyle"] = (a) =>
-		model.anchorCellStyle(a)
-	/* ── live tab groups ────────────────────────────────────────────────────
-	 * Widgets sharing a `group` collapse in the LIVE view to ONE footprint and
-	 * render as a tab set. Members stay mounted (shown/hidden), never
-	 * unmounted, so a panel/frame keeps its state across tab switches (the
-	 * no-reload law). Which member is showing, by group: the first member by
-	 * default, falling back if the remembered one is not present. */
-	let activeTabs = $state<Record<string, string>>({})
-	function activeTab(u: RenderUnit): string {
-		const a = activeTabs[u.key]
-		return a && u.members.some((m) => m.id === a) ? a : u.members[0].id
-	}
-	function setActiveTab(key: string, id: string) {
-		activeTabs = { ...activeTabs, [key]: id }
+	/* ── each middle panel's measured box, for its placement ──────────────
+	 * Measured per panel rather than divided out of the zone: a flex item's
+	 * real size is the browser's answer. Unmeasured → 0 → `compact`, corrected
+	 * by an ordinary `layout:changed`. */
+	let midWidths = $state<Record<string, number>>({})
+	let midHeights = $state<Record<string, number>>({})
+	/** The middle's panels in reading order: above, the primary, below. */
+	let middlePanels = $derived([
+		...model.middle.above,
+		model.middle.primary,
+		...model.middle.below
+	])
+	/**
+	 * A strip's box in the middle's column (PLAN-session-panels §1.3): `fit`
+	 * its content (capped, so a long one scrolls instead of pushing the
+	 * conversation away), `fill` an equal share with the primary panel, and
+	 * `{ share }` its twelfths of the middle's height.
+	 */
+	function stripStyle(p: DrawnPanel): string {
+		const h = p.height
+		if (typeof h === "object")
+			return `flex:0 0 calc(${Math.min(12, Math.max(1, h.share))} / 12 * 100%);`
+		if (h === "fit") return "flex:0 1 auto;max-block-size:40%;"
+		return "flex:1 1 0;"
 	}
 
-	/* ── the flyouts: the pop-over and the tucked flyout (./liveFlyouts) ── */
+	/* ── the tucked flyout (./liveFlyouts) ───────────────────────────────── */
 	const flyouts = createLiveFlyouts({
 		get model() {
 			return model
@@ -170,16 +191,32 @@
 		}
 	})
 	/**
-	 * Put the pop-over away — any, or only `zoneId`'s. What the editor's
-	 * starting points and a zone pinned from the Move tab ask for, through the
-	 * composition root: the editor never writes this component's state.
+	 * Put every flyout away. What the editor's starting points ask for,
+	 * through the composition root: the editor never writes this component's
+	 * state. (The argument is the ⏳ old editor's zone id, not read.)
 	 */
-	export function putAway(zoneId?: string) {
-		flyouts.putAway(zoneId)
+	export function putAway(_zoneId?: string) {
+		flyouts.putAway()
 	}
-	function setPinned(zoneId: string, pinned: boolean) {
-		onSetPinned(zoneId, pinned)
-		if (pinned) flyouts.putAway(zoneId)
+	/**
+	 * A side panel docked or moved to the rail, from its own pin: saved with
+	 * the layout. Its transient open state goes back to the default the pin
+	 * gives it — docked is open, in the rail is an icon — and a tucked
+	 * flyout of it is put away.
+	 */
+	function setPinned(side: "left" | "right", key: string, pinned: boolean) {
+		manager.setPanelPinned(key, pinned)
+		delete model.rail.groupOpen[model.rail.groupKey(side, key)]
+		if (model.rail.groupFocus[side] === key) model.rail.groupFocus[side] = null
+		if (flyouts.tuckedOpen(side, key)) flyouts.closeTucked(false)
+	}
+	/** A tab chosen: the panel's `open`, written to the layout at once. */
+	function selectTab(key: string, tab: string) {
+		manager.setPanelOpen(key, tab)
+	}
+	/** A tab's gear: the widget settings flow, the one modal. */
+	function openSettings(tab: string, trigger: HTMLElement) {
+		openWidgetSettings({ widgetId: tab, label: flow.widgetLabel(tab) }, trigger)
 	}
 
 	/* ── the phone's sheets (./PanelsMenu) ─────────────────────────────────
@@ -200,16 +237,17 @@
 				: null
 	)
 
-	/** alt+[ / alt+]: expand everything that fits, or send it all to the rail. */
+	/** alt+[ / alt+]: open every rail panel that fits, or put them all away. */
 	function setAllGroups(open: boolean) {
 		for (const side of ["left", "right"] as const) {
-			const units = side === "left" ? model.leftUnits : model.rightUnits
-			for (const u of units)
-				model.rail.groupOpen[model.rail.groupKey(side, u.key)] = open
+			for (const p of model.sides[side].panels)
+				model.rail.groupOpen[model.rail.groupKey(side, p.key)] = open
 			// No focus, so nothing flies out: "expand everything" fills the
 			// column and leaves what does not fit as icons.
 			model.rail.groupFocus[side] = null
 		}
+		// "Put them all away" includes the one flying out over the session.
+		if (!open) flyouts.putAway()
 	}
 	$effect(() => {
 		const onKey = (e: KeyboardEvent) => {
@@ -327,239 +365,75 @@
 	{/if}
 {/snippet}
 
-<!-- `placement` is what the rail's `WidgetZone` measured for this panel; the
-     multi-column / flyout branch of `panelStack` doesn't run on that engine yet
-     and passes none, so those mounts fall through to `UNPLACED`. -->
-{#snippet railPanelInner(
-	p: ZoneEntry,
-	z: ResolvedZone,
-	placement?: PlacementInput,
-	popover = false
-)}
-	{#if p.panel}
-		<Panel
-			instance={p.panel}
-			title={flow.titleApart.get(p.panel.id)}
-			{manager}
-			{sessionId}
-			{session}
-			{placement}
-			chrome="zone"
-			popover={popover || model.inSheet(z)}
-			{actions}
-			{actionDispatch}
-			{onFrameAction}
-		/>
-	{:else}
-		<!-- A conversation in a side (brief 7a): drawn like the log is
-		     anywhere, through the one renderer. -->
-		{@render middleWidget({
-			id: p.id,
-			placement,
-			popover: popover || model.inSheet(z)
-		})}
-	{/if}
-{/snippet}
-
-{#snippet panelStack(z: ResolvedZone, flyout: boolean)}
-	{#if !flyout && z.columns === 1}
-		<!-- PLAN 25: the common docked-rail case (pinned, single column) runs on
-		     the widget-grid engine itself. Flyout and multi-column (ultrawide)
-		     rails stay on the grid math below: a flyout's container can shrink
-		     below the declared width (min(...,86%)), which needs the old
-		     0-floor `minmax(0,1fr)`; multi-column needs a row-generalization the
-		     engine doesn't do yet (see panelWidgets.ts's module doc). -->
-		{@const zoneSide = z.def.side === "left" ? "left" : "right"}
-		{@const entries = model.zoneEntriesOf(z)}
-		{@const sideGrid = {
-			version: 1 as const,
-			cell: z.width,
-			widgets: widgetsFromSideZones(
-				[z],
-				manager.instances,
-				z.width,
-				model.isConversation
-			)
-		}}
-		{#snippet railPanel({
-			id,
-			placement
-		}: {
-			id: string
-			placement: PlacementInput
-		})}
-			{@const p = entries.find((e) => e.id === id)}
-			{#if p}
-				<div class="zone-panel" class:conversation={!p.panel}>
-					{@render railPanelInner(p, z, placement)}
-				</div>
-			{/if}
-		{/snippet}
-		<div class="zone-stack-host">
-			<!-- `hiddenIds`: the stage (QE) hides this rail's other widgets
-			     while it draws the conversation full width, and the phone's
-			     sheet of this side hides the conversation the stage shows.
-			     Hidden around their mounts, never unmounted. -->
-			<WidgetZone
-				layout={sideGrid}
-				zone={zoneSide}
-				widget={railPanel}
-				gap="0.5rem"
-				hiddenIds={model.stageHiddenIn(
-					zoneSide,
-					entries.map((e) => e.id)
-				)}
-			/>
-		</div>
-	{:else}
-		{@const hidden = model.stageHiddenIn(
-			z.def.side === "left" ? "left" : "right",
-			model.zoneEntriesOf(z).map((e) => e.id)
-		)}
-		<div
-			class="zone-stack"
-			style="grid-template-columns:repeat({flyout
-				? 1
-				: z.columns},minmax(0,1fr));"
-		>
-			{#each model.zoneEntriesOf(z) as p (p.id)}
-				<div
-					class="zone-panel"
-					class:conversation={!p.panel}
-					data-stage-hidden={!flyout && hidden?.has(p.id)
-						? ""
-						: undefined}
-				>
-					{@render railPanelInner(p, z, undefined, flyout)}
-				</div>
-			{/each}
-		</div>
-	{/if}
-{/snippet}
-
-{#snippet stripZone(z: ResolvedZone)}
-	{@const widgets = model.zoneEntriesOf(z)}
-	{#if z.mode !== "hidden" && widgets.length}
-		<!-- A top strip is a header row: it rolls up with a furled session
-		     header (note 29), except while the layout is being edited. -->
-		<div
-			class="zone-strip"
-			data-stage-hidden={model.stageOnly ||
-			(shellPrefs.headerFurled &&
-				!model.editing &&
-				z.def.area !== "bottom")
-				? ""
-				: undefined}
-			aria-label={model.labelOf(z)}
-		>
-			{#each widgets as p (p.id)}
-				<div class="strip-panel">
-					{#if p.panel}
-						<Panel
-							instance={p.panel}
-							title={flow.titleApart.get(p.panel.id)}
-							{manager}
-							{sessionId}
-							{session}
-							chrome="zone"
-							{actions}
-							{actionDispatch}
-							{onFrameAction}
-						/>
-					{:else}
-						{@render middleWidget({ id: p.id })}
-					{/if}
-				</div>
-			{/each}
-		</div>
-	{/if}
-{/snippet}
-
-<!-- A tab group in the live view: grouped widgets share one footprint, one tab
-     per member, all members mounted (shown/hidden) so their state survives a
-     switch. Used by the middle and by the sides (`unit`). -->
-{#snippet tabGroup(
-	u: RenderUnit,
-	geom?: {
-		zone: { cols: number; rows: number }
-		widthPx: number
-		heightPx?: number
-	},
-	popover = false
-)}
-	{@const active = activeTab(u)}
-	<div class="wtabs">
-		<div class="wtabs-bar" role="tablist">
-			{#each u.members as m (m.id)}
-				<button
-					class="wtab"
-					class:active={m.id === active}
-					role="tab"
-					aria-selected={m.id === active}
-					onclick={() => setActiveTab(u.key, m.id)}
-				>
-					{flow.widgetLabel(m.id)}
-				</button>
-			{/each}
-		</div>
-		<!-- Every member shares the group's ONE footprint — that is what a tab
-		     group is — so they share its placement. The tab bar it wears is the
-		     group's chrome, not a member's, so the geometry a member reports is
-		     the cell, not the cell minus a bar it does not own. -->
-		<div class="wtabs-body">
-			{#each u.members as m (m.id)}
-				<div class="wtab-pane" class:wtab-hidden={m.id !== active}>
-					{@render middleWidget({
-						id: m.id,
-						bare: true,
-						placement: geom
-							? unitPlacement(
-									geom.zone,
-									u,
-									geom.widthPx,
-									m.id,
-									geom.heightPx
-								)
-							: undefined,
-						popover
-					})}
-				</div>
-			{/each}
-		</div>
-	</div>
-{/snippet}
-
-<!-- One arranged cell's content: a lone widget at the unit's placement, or a
-     tab group. The middle's cells and a side's (./SideMount) both draw here. -->
-{#snippet unit(
-	u: RenderUnit,
-	geom: {
-		zone: { cols: number; rows: number }
+<!-- One PANEL, wherever it is drawn — a side's column, the middle's strips,
+     its primary — through ./PanelTabs: its tabs (a strip when two or more),
+     its pin (sides only) and the gear for the active tab. Every tab shares
+     the panel's ONE box, so they share its placement. -->
+{#snippet livePanel(
+	p: DrawnPanel,
+	at: {
+		zone: "left" | "middle" | "right"
+		index: number
+		count: number
 		widthPx: number
 		heightPx?: number
 	},
 	popover: boolean
 )}
-	{#if u.members.length === 1}
+	{@const side = at.zone === "middle" ? null : at.zone}
+	<!-- The conversation alone in the primary panel wears no corner gear: a
+	     control hovering over the whole session would sit on the messages
+	     themselves. Its settings open from the editor, as before. Any other
+	     widget as the primary (R-B: the primary is a place) keeps its gear. -->
+	{@const lonePrimary =
+		p === model.middle.primary &&
+		p.tabs.length === 1 &&
+		model.isConversation(p.tabs[0].instanceId)}
+	{#snippet pane(t: DrawnInstance, multi: boolean)}
 		{@render middleWidget({
-			id: u.members[0].id,
-			placement: unitPlacement(
-				geom.zone,
-				u,
-				geom.widthPx,
-				u.members[0].id,
-				geom.heightPx
+			id: t.instanceId,
+			bare: multi,
+			placement: model.rail.panelPlacement(
+				p,
+				{ index: at.index, count: at.count },
+				t.instanceId,
+				at.widthPx,
+				at.heightPx
 			),
 			popover
 		})}
-	{:else}
-		{@render tabGroup(u, geom, popover)}
-	{/if}
+	{/snippet}
+	<PanelTabs
+		panel={p}
+		dots={tabAttention.dots(p, attentionRows, attentionViewer)}
+		label={(id) => flow.widgetLabel(id)}
+		pinnable={side !== null && !p.key.startsWith("x:")}
+		controls={!model.editing && !p.floor}
+		onSelect={(tab) => selectTab(p.key, tab)}
+		onPin={side ? (pinned) => setPinned(side, p.key, pinned) : undefined}
+		onSettings={lonePrimary ? undefined : openSettings}
+		{pane}
+	/>
+{/snippet}
+
+<!-- A side's panel (./SideMount draws the cell around it). -->
+{#snippet sidePanel(p: DrawnPanel, at: PanelAt, popover: boolean)}
+	{@render livePanel(
+		p,
+		{
+			zone: at.side,
+			index: at.index,
+			count: at.count,
+			widthPx: at.widthPx,
+			heightPx: at.heightPx
+		},
+		popover
+	)}
 {/snippet}
 
 <!-- ── the live session: ONE mount, drawn or stowed ─────────────────────
      Never the other arm of an `{#if}` with the editor's canvas: a switch to
-     or from the Move tab would rebuild the whole session, reloading every
+     or from the Arrange tab would rebuild the whole session, reloading every
      iframe (the reload ./sideSlot forbids, one level up). The canvas is drawn
      over it; `.live-body` is `display: contents` while drawn and
      `display: none` while stowed. Everything FIXED in the session — flyouts,
@@ -578,11 +452,9 @@
 			side="left"
 			slot={model.leftSlot}
 			{model}
-			{unit}
-			{panelStack}
+			panel={sidePanel}
 			flowEdge={stage.flowEdge}
 			{flyouts}
-			onSetPinned={setPinned}
 			bind:el={sideEls.left}
 		/>
 
@@ -639,88 +511,54 @@
 					</button>
 				</div>
 			{/if}
-			{#each model.topStrips as z (z.id)}
-				{@render stripZone(z)}
-			{/each}
 			<!-- The layout attribute is TRANSITIONAL (./widgetSettingsFlow
 			     `msgLayoutAttr`): written from the RESOLVED style so CSS outside
 			     this repo that still keys on a pack name keeps working for one
 			     release. The measure of the message column belongs to the
 			     `messages` widget, which centres its own stage inside whatever
-			     width this zone gives it. -->
+			     width this zone gives it.
+			     The middle is a column of panels: the strips above, the primary
+			     panel (it fills), the strips below. Strips never pin. -->
 			<div class="chat-core" data-msg-layout={flow.msgLayoutAttr}>
-				{#if middleFrame}
-					<!-- The middle drawn from its arrangement: a PROPORTIONAL grid
-					     (repeat(cols,1fr) × repeat(rows,1fr)) maps the captured cell
-					     coords to this zone's actual size. An arrangement that EXISTS
-					     is authoritative even when empty — an intentionally-emptied
-					     middle stays empty instead of falling back to the default. -->
+				{#each middlePanels as p, i (p.key)}
+					{@const primary = p === model.middle.primary}
+					{@const above = i < model.middle.above.length}
+					<!-- Stage only draws the panel holding the middle's stage, alone
+					     and filling; with none holding it, the primary panel. -->
+					{@const isStage =
+						model.stageOnly && model.stageMiddleKey === p.key}
+					<!-- A strip above is a header row: it rolls up with a
+					     furled session header (note 29), except while the
+					     layout is being edited. -->
 					<div
-						class="chat-arranged"
-						class:one-column={middleCol.collapsed}
-						bind:clientWidth={middleWPx}
-						style={model.stagePrimaryKey !== null
-							? "grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr);"
-							: `grid-template-columns:repeat(${
-									middleCol.collapsed ? 1 : middleFrame.cols
-								},1fr); grid-template-rows:${
-									middleCol.collapsed
-										? middleCol.rows || "1fr"
-										: `repeat(${middleFrame.rows},1fr)`
-								};`}
+						class="mid-panel"
+						class:primary
+						data-panel-place={primary ? "primary" : above ? "above" : "below"}
+						bind:clientWidth={midWidths[p.key]}
+						bind:clientHeight={midHeights[p.key]}
+						style={primary || isStage ? "flex:1 1 0;" : stripStyle(p)}
+						data-stage-hidden={(model.stageOnly &&
+							(model.stageMiddleKey !== null ? !isStage : !primary)) ||
+						(above && shellPrefs.headerFurled && !model.editing)
+							? ""
+							: undefined}
 					>
-						{#each model.middleUnits as u (u.key)}
-							{@const widthPx =
-								cellWidths[`middle:${u.key}`] ?? 0}
-							{@const heightPx =
-								cellHeights[`middle:${u.key}`] ?? 0}
-							<div
-								class="chat-arranged-cell"
-								bind:clientWidth={cellWidths[`middle:${u.key}`]}
-								bind:clientHeight={
-									cellHeights[`middle:${u.key}`]
-								}
-								data-stage-primary={model.stagePrimaryKey !==
-									null && u.key === model.stagePrimaryKey
-									? ""
-									: undefined}
-								data-stage-hidden={model.stagePrimaryKey !==
-									null && u.key !== model.stagePrimaryKey
-									? ""
-									: undefined}
-								style="{model.stagePrimaryKey === u.key
-									? 'grid-column:1; grid-row:1;'
-									: middleCol.collapsed
-										? `grid-column:1; grid-row:${middleCol.row[u.key] ?? 1};`
-										: `grid-column:${u.box.x + 1} / span ${u.box.w}; grid-row:${u.box.y + 1} / span ${u.box.h};`}{u
-									.members.length === 1 &&
-								!middleCol.collapsed
-									? anchorCellStyle(u.members[0].anchor)
-									: ''}"
-							>
-								{@render unit(
-									u,
-									{ zone: middleFrame, widthPx, heightPx },
-									false
-								)}
-							</div>
-						{/each}
+						{#if p.tabs.length}
+							{@render livePanel(
+								p,
+								{
+									zone: "middle",
+									index: i,
+									count: middlePanels.length,
+									widthPx: midWidths[p.key] ?? 0,
+									heightPx: midHeights[p.key] ?? 0
+								},
+								false
+							)}
+						{/if}
 					</div>
-				{:else}
-					<!-- No arrangement (fresh / never edited): the middle widget
-					     grid — Messages fills the middle. -->
-					<WidgetZone
-						layout={model.chatGrid}
-						zone="middle"
-						gap="0"
-						widget={middleWidget}
-						hiddenIds={model.stageHiddenMiddleIds}
-					/>
-				{/if}
+				{/each}
 			</div>
-			{#each model.bottomStrips as z (z.id)}
-				{@render stripZone(z)}
-			{/each}
 		</div>
 
 		<!-- The right side, mounted ONCE — same deal as the left above. Both
@@ -732,95 +570,11 @@
 			side="right"
 			slot={model.rightSlot}
 			{model}
-			{unit}
-			{panelStack}
+			panel={sidePanel}
 			flowEdge={stage.flowEdge}
 			{flyouts}
-			onSetPinned={setPinned}
 			bind:el={sideEls.right}
 		/>
-
-		<!-- The pop-over: an unpinned/narrow zone slid over the chat.
-		     Desktop only — below the breakpoint the header's panels menu owns
-		     the overlay, and the icon strips that arm this one are not drawn. -->
-		{#if !model.isNarrow}
-			{#each flyouts.keptPops as z (z.id)}
-				<!-- Tucked per side: the side holding the log never is. -->
-				{@const zTucked =
-					model.tucked[z.def.side === "left" ? "left" : "right"]}
-				{@const shown = flyouts.tuckedShown[z.id]}
-				{@const tuckedHere = zTucked && !!shown}
-				{@const open = zTucked
-					? z.id === flyouts.tuckedZoneId
-					: z.id === flyouts.popId}
-				{@const onLeft = z.def.side === "left"}
-				{@const shownZone = tuckedHere ? flyouts.tuckedZone(z) : z}
-				{@const title = tuckedHere
-					? (model.inst(shown)?.title ??
-						(model.isConversation(shown)
-							? flow.widgetLabel(shown)
-							: model.labelOf(z)))
-					: model.labelOf(z)}
-				{#if open && z.mode === "drawer"}
-					<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-					<div
-						class="pop-scrim"
-						data-stage-hidden={model.stageOnly ? "" : undefined}
-						onclick={() =>
-							zTucked
-								? flyouts.closeTucked(false)
-								: (flyouts.popId = null)}
-					></div>
-				{/if}
-				<!-- Closed, it is `display: none` — kept, not unmounted (`keptPops`).
-				     Tucked, it stops at the stage's edge (`flowEdge`) so the icon
-				     strip that opened it stays in reach, and shows the ONE widget
-				     whose icon was pressed (`tuckedZone`). -->
-				<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-				<div
-					class="zone-flyout"
-					data-stage-hidden={model.stageOnly ? "" : undefined}
-					class:from-left={onLeft}
-					class:pop-closed={!open}
-					style="inline-size:min({z.width}px, 86%);{zTucked
-						? `${onLeft ? 'inset-inline-start' : 'inset-inline-end'}:${onLeft ? stage.flowEdge.start : stage.flowEdge.end}px;`
-						: ''}"
-					role="dialog"
-					aria-label={title}
-					id={zTucked ? `tucked-zone-${z.id}` : undefined}
-					data-tucked-flyout={zTucked && open ? "" : undefined}
-					tabindex={zTucked ? -1 : undefined}
-					data-pop-keep
-				>
-					<div class="zone-head">
-						<span class="zone-label always">{title}</span>
-						<span class="flex-1"></span>
-						{#if z.mode === "icons" && !zTucked}
-							<button
-								class="zone-head-btn"
-								title="Pin — keep this zone open"
-								aria-label="Pin {model.labelOf(z)}"
-								onclick={() => setPinned(z.id, true)}
-							>
-								<Icons.Pin size={13} />
-							</button>
-						{/if}
-						<button
-							class="zone-head-btn"
-							title="Close"
-							aria-label="Close {title}"
-							onclick={() =>
-								zTucked
-									? flyouts.closeTucked(true)
-									: (flyouts.popId = null)}
-						>
-							<Icons.X size={13} />
-						</button>
-					</div>
-					{@render panelStack(shownZone, true)}
-				</div>
-			{/each}
-		{/if}
 
 		<!-- The phone's panels menu and the sheet's backdrop (P6; ruled
 		     2026-09-10). The sheet itself is a side's own mount (./SideMount's
@@ -845,7 +599,7 @@
 	   a side's inline slot has it: the wrapper exists only so the subtree can
 	   be stowed whole, and it must not be a box the layout never had —
 	   `.layout-body` stays the flex child of `.session-layout` it has always
-	   been. Stowed (under the Move tab's canvas) it is ./SideMount's
+	   been. Stowed (under the Arrange tab's canvas) it is ./SideMount's
 	   `.slot-stowed`, for the whole session: no box, still MOUNTED. */
 	.live-body {
 		display: contents;
@@ -880,143 +634,27 @@
 		display: flex;
 		flex-direction: column;
 	}
-	.chat-core > :global(*) {
-		flex: 1;
-		min-block-size: 0;
-	}
-	/* The middle drawn from its arrangement. Proportional grid so the captured
-	   cell layout fills this zone's real size. */
-	.chat-arranged {
-		flex: 1;
-		min-block-size: 0;
-		display: grid;
-		gap: 0;
-	}
-	.chat-arranged-cell {
-		/* The containing block for this cell's widget overlay. `WidgetHost`'s
-		   wrapper is `display: contents` and has no box, so an inset-0 overlay
-		   inside a widget anchors to the nearest POSITIONED ancestor — which,
-		   with these cells static, was some zone far above: the conversation's
-		   controls stretched across the whole chat column instead of sitting on
-		   the widget they style. (A Panel-chromed widget was already fine —
-		   Panel's own section is relative.) Nothing inside a cell is
-		   absolutely positioned against anything higher: the message list roots
-		   itself in a `relative` box of its own, and the composer's only
-		   escapees are `fixed` modals, which a positioned ancestor does not
-		   catch. */
-		position: relative;
-		min-inline-size: 0;
-		min-block-size: 0;
-		display: flex;
-		flex-direction: column;
-		overflow: hidden;
-	}
-	.chat-arranged-cell > :global(*) {
-		flex: 1;
-		min-block-size: 0;
-	}
-
-	/* Live tab group: grouped widgets share one cell — a tab bar plus one active
-	   pane. The inactive panes are display:none but stay mounted, so a panel or
-	   frame keeps its state across a tab switch (the no-reload law). */
-	.wtabs {
-		block-size: 100%;
-		min-block-size: 0;
-		min-inline-size: 0;
-		display: flex;
-		flex-direction: column;
-	}
-	.wtabs-bar {
-		flex: none;
-		display: flex;
-		gap: 0.15rem;
-		overflow-x: auto;
-		scrollbar-width: none;
-		padding: 0.15rem 0.15rem 0;
-	}
-	.wtab {
-		flex: none;
-		font-size: 0.72rem;
-		font-weight: 600;
-		padding: 0.2rem 0.55rem;
-		border-radius: 0.4rem 0.4rem 0 0;
-		color: var(--color-surface-600-400);
-		white-space: nowrap;
-	}
-	.wtab.active {
-		background: var(--color-surface-100-900);
-		color: inherit;
-	}
-	.wtabs-body {
-		flex: 1;
-		min-block-size: 0;
-		min-inline-size: 0;
-		display: flex;
-		background: var(--color-surface-100-900);
-		border-radius: 0 0.45rem 0.45rem 0.45rem;
-		overflow: hidden;
-	}
-	.wtab-pane {
-		/* And again for a grouped widget: without it the overlay anchors past
-		   the tab strip and covers the whole group, so the pane you are looking
-		   at and the ones hidden behind it style as if they were one widget. */
-		position: relative;
-		flex: 1;
-		min-block-size: 0;
-		min-inline-size: 0;
-		display: flex;
-		flex-direction: column;
-	}
-	.wtab-pane.wtab-hidden {
-		display: none;
-	}
-	.wtab-pane > :global(*) {
-		flex: 1;
-		min-block-size: 0;
-	}
-
-	/* ── zones ─────────────────────────────────────────────────────── */
-	.zone-stack {
-		display: grid;
+	/* One panel of the middle. The primary fills; a strip's box is its
+	   height's (`stripStyle`). `relative` is the containing block for the
+	   widget overlay and a one-tab panel's hover controls: `WidgetHost`'s
+	   wrapper is `display: contents` and has no box of its own. */
+	.chat-core {
 		gap: 0.5rem;
-		align-content: start;
-		flex: 1;
-		min-block-size: 0;
-		overflow-y: auto;
 	}
-	/* The widget-grid-engine rail path (see panelStack): same sizing role as
-	   .zone-stack above (a scrolling flex:1 slot in the rail's column), but the
-	   grid itself is WidgetZone's — this just gives it a definite height. */
-	.zone-stack-host {
-		display: flex;
-		flex-direction: column;
-		flex: 1;
-		min-block-size: 0;
-		overflow-y: auto;
-	}
-	.zone-panel {
+	.mid-panel {
+		position: relative;
 		min-inline-size: 0;
+		min-block-size: 0;
 		display: flex;
 		flex-direction: column;
+		overflow: hidden;
 	}
-	/* A conversation in a rail (brief 7a) GROWS down it (./panelWidgets), so
-	   its wrapper fills the track and the log has a box to scroll in. */
-	.zone-panel.conversation {
+	.mid-panel.primary {
+		flex: 1 1 0;
+	}
+	.mid-panel > :global(*) {
 		flex: 1;
 		min-block-size: 0;
-	}
-	/* …and in the grid-math stack (a flyout, a pop-over, a multi-column rail),
-	   whose auto rows would size the log to its whole transcript and push the
-	   composer below it: while the stack holds a conversation its rows share
-	   the stack's height (each at least a readable 12rem, the stack scrolling
-	   past that), and every panel scrolls inside its own row. */
-	.zone-stack:has(> .zone-panel.conversation) {
-		grid-auto-rows: minmax(min(12rem, 100%), 1fr);
-		align-content: stretch;
-	}
-	.zone-stack:has(> .zone-panel.conversation) > .zone-panel {
-		min-block-size: 0;
-		overflow: auto;
 	}
 	/* The zone chrome — a zone's head, the pop-over, the phone's sheet — is
 	   this component's, for its whole body: a zone head is the same wherever
@@ -1058,27 +696,7 @@
 		color: var(--color-primary-600);
 	}
 
-	/* Strips (top/bottom rows) */
-	.zone-strip {
-		display: flex;
-		flex: none;
-		gap: 0.5rem;
-		align-items: stretch;
-		overflow-x: auto;
-		min-block-size: 0;
-	}
-	.strip-panel {
-		flex: 1 1 16rem;
-		min-inline-size: 14rem;
-		max-block-size: 14rem;
-		display: flex;
-		flex-direction: column;
-	}
-
-	/* Fly-out (popped zone) */
-	.zone-flyout.pop-closed {
-		display: none;
-	}
+	/* The phone's sheet (a side's own mount, or the middle) */
 	.zone-flyout,
 	.layout-body :global(.side-slot.zone-flyout) {
 		position: absolute;
@@ -1096,7 +714,6 @@
 		box-shadow: -10px 0 28px rgba(0, 0, 0, 0.22);
 		animation: fly-in-right 200ms cubic-bezier(0.22, 1, 0.36, 1);
 	}
-	.zone-flyout.from-left,
 	.layout-body :global(.side-slot.zone-flyout.from-left) {
 		inset-inline-end: auto;
 		inset-inline-start: 0;
@@ -1162,12 +779,6 @@
 		from {
 			transform: translateX(-100%);
 		}
-	}
-	.pop-scrim {
-		position: absolute;
-		inset: 0;
-		z-index: 25;
-		background: rgba(0, 0, 0, 0.32);
 	}
 
 	.layout-center {

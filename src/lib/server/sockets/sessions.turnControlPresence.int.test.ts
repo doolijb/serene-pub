@@ -13,7 +13,9 @@
  *  - **Disabled with a reason** when it applies but not now: busy, or
  *    nobody seated to pick.
  *  - The fire's door refuses on the same verdicts, by sentence.
- *  - Chat and Adventure keep what they had.
+ *  - Story (the roleplay Chat) keeps what it had, and a narrator genre's
+ *    narrator can still be handed the turn (Adventure's case, the Lair's
+ *    since Adventure retired 2026-10-19).
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -51,8 +53,8 @@ vi.mock("$lib/server/sessions/fireTurn", async (importOriginal) => {
 })
 
 const LAIR = "core:genre/lair"
-const CHAT = "core:genre/chat"
-const ADVENTURE = "core:genre/adventure"
+/** The roleplay Chat's genre — Story since 2026-10-19. */
+const STORY = "core:genre/story"
 /** The synthetic genre: Pick is present only while `mode` is `x`. */
 const MODES = "test:genre/modes"
 
@@ -344,9 +346,9 @@ describe("B8 · a control that applies but not now is grey, with its reason", ()
 	})
 })
 
-describe("B8 · Chat and Adventure are unchanged", () => {
-	test("Chat: Continue and Pick; its narrator is the narrate function, not a turn control", async () => {
-		const { owner, session: s, characterId } = await session("chat", CHAT)
+describe("B8 · Story and a narrator genre are unchanged", () => {
+	test("Story: Continue and Pick; its narrator is the narrate function, not a turn control", async () => {
+		const { owner, session: s, characterId } = await session("story", STORY)
 		const extra = keys(await extraAt(s.id, owner.id))
 		expect(extra).toContain("advance")
 		expect(extra).toContain("pick")
@@ -359,15 +361,15 @@ describe("B8 · Chat and Adventure are unchanged", () => {
 		})
 		expect(picked.error).toBeUndefined()
 		expect(fired).toHaveLength(1)
-		// Chat has no narrator voice: a null ref is the pipeline's own
+		// Story has no narrator voice: a null ref is the pipeline's own
 		// voice, the owner's latitude as before — no turn control judged.
 		const unprepared = await fire(owner.id, s.id, { ref: null, via: "pick" })
 		expect(unprepared.error).toBeUndefined()
 		expect(fired).toHaveLength(2)
 	})
 
-	test("Adventure: Continue and Pick, and its narrator can be handed the turn", async () => {
-		const { owner, session: s, characterId } = await session("adv", ADVENTURE)
+	test("the Lair: Continue and Pick, and its narrator can be handed the turn", async () => {
+		const { owner, session: s, characterId } = await session("lair-hand", LAIR)
 		const extra = keys(await extraAt(s.id, owner.id))
 		expect(extra).toContain("advance")
 		expect(extra).toContain("pick")

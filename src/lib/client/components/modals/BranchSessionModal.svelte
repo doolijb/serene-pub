@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { realDateTime } from "$lib/client/utils/realTime.svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { z } from "zod"
 
@@ -29,7 +30,7 @@
 	// so the Create button is enabled immediately instead of forcing the
 	// user to type something first. Still fully editable before confirming.
 	function defaultTitle() {
-		return initialTitle || `Branch – ${new Date().toLocaleString()}`
+		return initialTitle || `Branch – ${realDateTime(new Date())}`
 	}
 
 	let title = $state(defaultTitle())

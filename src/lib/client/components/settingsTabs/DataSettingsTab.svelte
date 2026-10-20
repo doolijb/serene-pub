@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { realDateTime } from "$lib/client/utils/realTime.svelte"
 	/**
 	 * Settings → Data: the backups an owner can see without breaking anything.
 	 *
@@ -155,7 +156,7 @@
 
 	function formatWhen(iso: string): string {
 		const at = new Date(iso)
-		return Number.isNaN(at.getTime()) ? iso : at.toLocaleString()
+		return Number.isNaN(at.getTime()) ? iso : realDateTime(at)
 	}
 </script>
 

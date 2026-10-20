@@ -584,4 +584,25 @@ describe("seedLabelOf / ownLabelsFor — the names a turn is labelled with", () 
 			"Narrator"
 		])
 	})
+
+	test("a seedless prompt's reply label is read only when no seed and no character name the turn (2026-10-15)", () => {
+		const session = { sessionCharacters: [{ character: { id: 1, name: "Verity" } }] }
+		const seedless = { messages: [{ role: "user", content: "Ann: How do rests work?" }] }
+		expect(ownLabelsFor(session, null, seedless, "Planner")).toEqual(["Planner"])
+		// The seed already names the turn: the fallback adds nothing.
+		expect(ownLabelsFor(session, null, { meta: { seedLabel: "Narrator" }, messages: [] }, "Planner")).toEqual([
+			"Narrator"
+		])
+		// A character's turn is named by the character.
+		expect(ownLabelsFor(session, 1, seedless, "Planner")).toEqual(["Verity"])
+		expect(ownLabelsFor(session, null, seedless, "  ")).toEqual([])
+	})
+
+	test("a doubled own label goes whole, at the front only (owner screenshot 2026-10-15)", () => {
+		expect(stripOwnLabel("Narrator: Narrator: The ghost flickers.", ["Narrator"])).toBe("The ghost flickers.")
+		expect(stripOwnLabel("**Narrator:** Narrator: The ghost.", ["Narrator"])).toBe("The ghost.")
+		expect(stripOwnLabel("Narrator: The ghost says Narrator: no.", ["Narrator"])).toBe("The ghost says Narrator: no.")
+		// Streaming: the second label still being written is held back, not shown.
+		expect(stripOwnLabel("Narrator: Narr", ["Narrator"], { streaming: true })).toBe("")
+	})
 })

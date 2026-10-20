@@ -13,8 +13,8 @@ import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import {
 	bootstrapPipelines,
 	loadPublished,
-	respondSpec,
-	CHAT_RESPOND_SPEC_ID
+	storyRespondSpec,
+	STORY_RESPOND_SPEC_ID
 } from "$lib/server/pipelines/boot/bootstrap"
 import { CORE_SPECS } from "$lib/server/pipelines/specs"
 import {
@@ -46,7 +46,7 @@ describe("bootstrapping the pipeline tables", () => {
 			expect(s.action).toBe("published")
 			expect(s.reconciled).toEqual([])
 		}
-		expect(report.specs.map((s) => s.id)).toContain(CHAT_RESPOND_SPEC_ID)
+		expect(report.specs.map((s) => s.id)).toContain(STORY_RESPOND_SPEC_ID)
 		// The story string and the two transcript templates, each written once.
 		expect(report.contextTemplates).toEqual({
 			created: SHIPPED_CONTEXT_TEMPLATES.length,
@@ -107,10 +107,10 @@ describe("bootstrapping the pipeline tables", () => {
 	it("publishes a document that loads back and runs", async () => {
 		// Round-tripping is the real assertion: a spec that saved but cannot be
 		// loaded is a table full of rows nobody can execute.
-		const doc = await loadPublished(db, CHAT_RESPOND_SPEC_ID)
+		const doc = await loadPublished(db, STORY_RESPOND_SPEC_ID)
 		expect(doc).toBeTruthy()
 		expect(doc!.nodes.map((n: any) => n.key)).toEqual(
-			respondSpec().nodes.map((n: any) => n.key)
+			storyRespondSpec().nodes.map((n: any) => n.key)
 		)
 	})
 
@@ -119,8 +119,8 @@ describe("bootstrapping the pipeline tables", () => {
 			"$lib/server/pipelines/runtime/sessionEvents"
 		)
 		const { TURN_ORDER_BY_GENRE } = await import("@serene-pub/core-catalog")
-		// Chat, Adventure, Guide and the Lair.
-		expect(TURN_ORDER_BY_GENRE.length).toBe(4)
+		// Chat, Adventure, Guide, the Lair and 🚧 Dungeon Crawler.
+		expect(TURN_ORDER_BY_GENRE.length).toBe(5)
 		for (const { genre, spec, events } of TURN_ORDER_BY_GENRE)
 			for (const event of events)
 				expect(
@@ -133,7 +133,7 @@ describe("bootstrapping the pipeline tables", () => {
 		const [spec] = await db
 			.select({ activeVersionId: schema.pipelineSpecs.activeVersionId })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-turn-order"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/story-turn-order"))
 		const { and: andOp } = await import("drizzle-orm")
 		const strategy = andOp(
 			eq(schema.pipelineNodes.specVersionId, spec!.activeVersionId!),

@@ -22,8 +22,8 @@ import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 let db: TestDb
 
 const REPLIES = [
-	"core:spec/chat-respond",
-	"core:spec/adventure-respond",
+	"core:spec/story-respond",
+	"core:spec/assistant-respond",
 	"core:spec/guide-respond",
 	"core:spec/lair-respond"
 ]
@@ -44,8 +44,8 @@ async function idOf(slug: string): Promise<number> {
 describe("pipelineLabelsById", () => {
 	it("puts each genre's display name beside its Reply", async () => {
 		const labels = await pipelineLabelsById(db)
-		expect(labels.get(await idOf("core:spec/chat-respond"))).toBe(
-			"Reply · Chat"
+		expect(labels.get(await idOf("core:spec/story-respond"))).toBe(
+			"Reply · Story"
 		)
 		expect(labels.get(await idOf("core:spec/lair-respond"))).toBe(
 			"Reply · Lair"
@@ -68,10 +68,10 @@ describe("payloads that name pipelines by a string", () => {
 	it("the library's pipelines carry the label usedBy and origin name them by", async () => {
 		const view = await libraryView(db)
 		const chat = view.pipelines.find(
-			(p) => p.slug === "core:spec/chat-respond"
+			(p) => p.slug === "core:spec/story-respond"
 		)!
 		expect(chat.name).toBe("Reply")
-		expect(chat.label).toBe("Reply · Chat")
+		expect(chat.label).toBe("Reply · Story")
 	}, 60_000)
 
 	it("a picker's \"from …\" names another genre's Reply with its genre", async () => {
@@ -80,7 +80,7 @@ describe("payloads that name pipelines by a string", () => {
 		const chat = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-respond"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/story-respond"))
 		const { declarations } = await import(
 			"$lib/server/pipelines/config/panel"
 		)
@@ -99,7 +99,7 @@ describe("payloads that name pipelines by a string", () => {
 			.get(promptPoolKeyFor(decl.nodeDefinitionId!, decl.slot))!
 			.find((c: any) => c.id === mine.id) as any
 		expect(offered.group).toBe("alsoFits")
-		expect(offered.description).toBe("from Reply · Chat")
+		expect(offered.description).toBe("from Reply · Story")
 	}, 60_000)
 
 	it("two genres' Reply holding one script stay two pipelines in usedBy", async () => {
@@ -112,7 +112,7 @@ describe("payloads that name pipelines by a string", () => {
 			.from(schema.pipelineSpecs)
 			.where(
 				inArray(schema.pipelineSpecs.slug, [
-					"core:spec/chat-respond",
+					"core:spec/story-respond",
 					"core:spec/lair-respond"
 				])
 			)
@@ -129,6 +129,6 @@ describe("payloads that name pipelines by a string", () => {
 		const held = (await scriptsView(db)).scripts.find(
 			(s) => s.id === row.id
 		)!
-		expect(held.usedBy).toEqual(["Reply · Chat", "Reply · Lair"])
+		expect(held.usedBy).toEqual(["Reply · Lair", "Reply · Story"])
 	}, 60_000)
 })

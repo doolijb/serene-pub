@@ -323,6 +323,8 @@ async function searchLorebooks(
 							.where(eq(schema.lorebookShares.userId, userId))
 					)
 				),
+				// 🚧 Never a session's own notes (PLAN-rulesets §26).
+				sql`${schema.lorebooks.sessionId} IS NULL`,
 				everyTermMatches(patterns, (pattern) => [
 					ilike(schema.lorebooks.name, pattern)
 				])
@@ -393,6 +395,8 @@ async function searchEntries(
 					)
 				),
 				eq(schema.lorebookEntries.archived, false),
+				// 🚧 Never a session's own notes (PLAN-rulesets §26).
+				sql`${schema.lorebooks.sessionId} IS NULL`,
 				// Main's line: shared rows only (`onLineSql(…, MAIN_LINE)`).
 				onLineSql(schema.lorebookEntries.branchId, MAIN_LINE),
 				everyTermMatches(patterns, (pattern) => [

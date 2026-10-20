@@ -8,7 +8,7 @@
 import { describe, expect, test } from "vitest"
 import { defineAttributeSlot, derivations } from "@serene-pub/sdk"
 import "@serene-pub/core-catalog"
-import { earshotSlots, heardOnly, valueHeard } from "./earshot"
+import { earshotSlots, heardOnly, playerSeatHolderAudience, valueHeard } from "./earshot"
 
 const WHISPER = "core:slot/whisper@1"
 
@@ -114,5 +114,30 @@ describe("heardOnly — an owner-only value leaves every owner", () => {
 		const row = { owner: { kind: "session_cast" as const, id: 1 }, slotId: rumour }
 		expect(valueHeard({ all: false, characterIds: new Set(["1"]) }, slots, row)).toBe(false)
 		expect(valueHeard({ all: true }, slots, row)).toBe(true)
+	})
+})
+
+describe("🚧 a seat's holder-only values (2026-10-14)", () => {
+	test("the holder is the card-less player seat's player", () => {
+		expect(playerSeatHolderAudience(3)).toEqual(["owner", "player-seat:3"])
+	})
+
+	test("a seat's whisper is heard by its own seat key, not by a character id", () => {
+		const slots = earshotSlots()
+		const row = { owner: { kind: "player_seat" as const, id: 5 }, slotId: WHISPER }
+		expect(valueHeard({ all: false, characterIds: new Set(["player_seat:5"]) }, slots, row)).toBe(true)
+		// Character 5 is somebody else entirely.
+		expect(valueHeard({ all: false, characterIds: new Set(["5"]) }, slots, row)).toBe(false)
+	})
+
+	test("heardOnly keeps a card-less player seat's whisper for that seat alone", () => {
+		const wren = { id: 0, playerSeatId: 5, key: "wren", whisper: "the key" }
+		const ash = { id: 1, key: "ash", whisper: "east door" }
+		const state = { cast: { byId: { "player_seat:5": wren, "1": ash }, wren, ash } }
+		const mine = heardOnly(state, (id) => id === "player_seat:5")
+		expect(mine.cast.wren.whisper).toBe("the key")
+		expect(mine.cast.ash.whisper).toBeUndefined()
+		const theirs = heardOnly(state, (id) => id === "1" || id === "0")
+		expect(theirs.cast.wren.whisper).toBeUndefined()
 	})
 })

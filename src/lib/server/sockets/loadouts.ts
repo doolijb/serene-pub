@@ -257,11 +257,18 @@ export async function buildLoadoutsList(): Promise<Sockets.Loadouts.List.Respons
 					}))
 			: []
 	}
+	// Each connection's stored grades, for the editor's Model card: the
+	// connections list leaves `capabilities` to the panel's own fetch, and a
+	// chip or consequence read off nothing says every model lacks everything.
+	const connectionGrades: Record<string, Record<string, number>> = {}
+	for (const c of connections)
+		connectionGrades[c.id] = storedCapabilities(c) as Record<string, number>
 	const reply = defaults.get("text->text")
 	return {
 		loadouts,
 		transforms,
 		canReply: !!reply && isFilled(rootOf(reply)),
+		connectionGrades,
 		samplingOptions
 	}
 }
@@ -536,7 +543,9 @@ export const loadoutsMerge: Handler<
 }
 
 /**
- * **Make it** — fill a loadout's pair from the fleet (§12 suggestion 3).
+ * The pick behind **Fill for me** and **Make it** (§12 suggestion 3): the
+ * best pair the fleet has for a loadout's work, and why, in words a person
+ * reads.
  *
  * The scoring, kept simple and stated here so it can be argued with:
  *   1. Candidates are every enabled, listed model on every connection that
@@ -548,7 +557,163 @@ export const loadoutsMerge: Handler<
  *   3. The transform default's own pair gets half a point, so a one-model
  *      install keeps one model rather than loading a second for a tie.
  *   4. Ties go to the connection listed first by name, then the model.
- * Sampling: the declaration's preset (by seed key) when the loadout has none.
+ * Sampling: the declaration's preset (by seed key), for a loadout with none.
+ * Null when no model can do the work at all.
+ */
+export async function pickFill(
+	dbh: typeof db,
+	opts: { transform: string; seedKey: string | null; name: string }
+): Promise<{
+	connectionId: number
+	connectionModelId: number
+	/** The declaration's preset, when it has one seeded here. */
+	seededSamplingConfigId: number | null
+	label: string
+	/** Why this pair, as a sentence ending in a full stop. */
+	why: string
+} | null> {
+	const needs = impliedNeeds(opts.seedKey)
+	const def = await defaultLoadoutFor(dbh, opts.transform)
+	const defRoot = def ? (await mergeChain(dbh, def)).at(-1)! : null
+	const connections = await dbh
+		.select()
+		.from(schema.connections)
+		.orderBy(asc(schema.connections.name))
+	const models = connections.length
+		? await dbh
+				.select()
+				.from(schema.connectionModels)
+				.where(
+					inArray(
+						schema.connectionModels.connectionId,
+						connections.map((c) => c.id)
+					)
+				)
+				.orderBy(asc(schema.connectionModels.sortOrder), asc(schema.connectionModels.name))
+		: []
+	type Pick = {
+		connectionId: number
+		modelId: number
+		score: number
+		label: string
+		answers: string[]
+		isDefault: boolean
+	}
+	let best: Pick | null = null
+	for (const c of connections) {
+		const grades = storedCapabilities(c) as Record<string, number>
+		for (const m of models.filter((x) => x.connectionId === c.id)) {
+			if (!m.enabled || m.missingSince) continue
+			const refusal = await starRefusal(dbh, {
+				capability: opts.transform,
+				connectionId: c.id,
+				connectionModelId: m.id
+			})
+			if (refusal) continue
+			const answers: string[] = []
+			if (needs.structured && (grades["json_schema"] ?? 0) > 0)
+				answers.push("has a schema door")
+			if (needs.tools && (grades["tools"] ?? 0) >= 2) answers.push("has native tool calls")
+			if (needs.references && (grades["text+image->image"] ?? 0) > 0)
+				answers.push("takes reference pictures")
+			const isDefault =
+				defRoot?.connectionId === c.id && defRoot.connectionModelId === m.id
+			const score = answers.length + (isDefault ? 0.5 : 0)
+			if (!best || score > best.score)
+				best = {
+					connectionId: c.id,
+					modelId: m.id,
+					score,
+					label: `${m.name} on ${c.name}`,
+					answers,
+					isDefault
+				}
+		}
+	}
+	if (!best) return null
+	const wanted = [
+		needs.structured && "has a schema door",
+		needs.tools && "has native tool calls",
+		needs.references && "takes reference pictures"
+	].filter((w): w is string => !!w)
+	const defName = defRoot?.name ?? "the default loadout"
+	let why: string
+	if (best.answers.length)
+		why = `It ${best.answers.join(" and ")}, what ${opts.name} is best with${best.isDefault ? `, and it is already ${defName}'s model` : ""}.`
+	else if (wanted.length && best.isDefault)
+		why = `No model here ${wanted.join(" or ")}, so it keeps ${defName}'s model and no second model loads.`
+	else if (wanted.length)
+		why = `No model here ${wanted.join(" or ")}; it is the first that can do the work.`
+	else if (best.isDefault)
+		why = `It is already ${defName}'s model, so no second model loads.`
+	else why = "It is the first model here that can do the work."
+	let seededSamplingConfigId: number | null = null
+	if (opts.seedKey) {
+		const { CORE_LOADOUTS } = await import("@serene-pub/core-catalog")
+		const seedKey = CORE_LOADOUTS.find((d) => d.id === opts.seedKey)?.sampling
+		if (seedKey) {
+			const [s] = await dbh
+				.select({ id: schema.samplingConfigs.id })
+				.from(schema.samplingConfigs)
+				.where(eq(schema.samplingConfigs.seedKey, seedKey))
+				.limit(1)
+			seededSamplingConfigId = s?.id ?? null
+		}
+	}
+	return {
+		connectionId: best.connectionId,
+		connectionModelId: best.modelId,
+		seededSamplingConfigId,
+		label: best.label,
+		why
+	}
+}
+
+/**
+ * **Fill for me** — the loadout editor's proposal: `pickFill`'s pair and
+ * sampling, written into the editor's draft, never the row. Save sends it
+ * like any other pick. Works for a loadout not yet created (by transform).
+ */
+export const loadoutsProposeFill: Handler<
+	Sockets.Loadouts.ProposeFill.Params,
+	Sockets.Loadouts.ProposeFill.Response
+> = {
+	event: "loadouts:proposeFill",
+	handler: async (socket, params, emitToUser) => {
+		requireAdmin(socket, emitToUser)
+		const row = params.id != null ? await loadoutById(db, params.id) : null
+		if (params.id != null && !row)
+			refuse(emitToUser, "loadouts:proposeFill", "That loadout no longer exists.")
+		const transform = row?.transform ?? params.transform
+		if (!transform)
+			refuse(emitToUser, "loadouts:proposeFill", "Say what the loadout is for first.")
+		const pick = await pickFill(db, {
+			transform,
+			seedKey: row?.seedKey ?? null,
+			name: row?.name ?? "this loadout"
+		})
+		if (!pick)
+			refuse(
+				emitToUser,
+				"loadouts:proposeFill",
+				`No model can do ${capabilityLabel(transform as TransformId)} yet. Get one in Models, then try again.`
+			)
+		const res = {
+			id: row?.id ?? null,
+			connectionId: pick.connectionId,
+			connectionModelId: pick.connectionModelId,
+			samplingConfigId: pick.seededSamplingConfigId,
+			explanation: `Filled with ${pick.label}. ${pick.why}`
+		}
+		emitToUser("loadouts:proposeFill", res)
+		return res
+	}
+}
+
+/**
+ * **Make it** — fill a loadout's pair from the fleet and save at once
+ * (`pickFill`). The editor's **Fill for me** proposes the same pick into its
+ * draft instead (`loadouts:proposeFill`).
  */
 export const loadoutsMakeIt: Handler<
 	Sockets.Loadouts.MakeIt.Params,
@@ -559,64 +724,18 @@ export const loadoutsMakeIt: Handler<
 		requireAdmin(socket, emitToUser)
 		const row = await loadoutById(db, params.id)
 		if (!row) refuse(emitToUser, "loadouts:makeIt", "That loadout no longer exists.")
-		const needs = impliedNeeds(row.seedKey)
-		const def = await defaultLoadoutFor(db, row.transform)
-		const defRoot = def ? (await mergeChain(db, def)).at(-1)! : null
-		const connections = await db
-			.select()
-			.from(schema.connections)
-			.orderBy(asc(schema.connections.name))
-		const models = connections.length
-			? await db
-					.select()
-					.from(schema.connectionModels)
-					.where(
-						inArray(
-							schema.connectionModels.connectionId,
-							connections.map((c) => c.id)
-						)
-					)
-					.orderBy(asc(schema.connectionModels.sortOrder), asc(schema.connectionModels.name))
-			: []
-		let best: { connectionId: number; modelId: number; score: number; label: string } | null = null
-		for (const c of connections) {
-			const grades = storedCapabilities(c) as Record<string, number>
-			for (const m of models.filter((x) => x.connectionId === c.id)) {
-				if (!m.enabled || m.missingSince) continue
-				const refusal = await starRefusal(db, {
-					capability: row.transform,
-					connectionId: c.id,
-					connectionModelId: m.id
-				})
-				if (refusal) continue
-				let score = 0
-				if (needs.structured && (grades["json_schema"] ?? 0) > 0) score++
-				if (needs.tools && (grades["tools"] ?? 0) >= 2) score++
-				if (needs.references && (grades["text+image->image"] ?? 0) > 0) score++
-				if (defRoot?.connectionId === c.id && defRoot.connectionModelId === m.id) score += 0.5
-				if (!best || score > best.score)
-					best = { connectionId: c.id, modelId: m.id, score, label: `${m.name} on ${c.name}` }
-			}
-		}
+		const best = await pickFill(db, {
+			transform: row.transform,
+			seedKey: row.seedKey,
+			name: row.name
+		})
 		if (!best)
 			refuse(
 				emitToUser,
 				"loadouts:makeIt",
 				`No model can do ${capabilityLabel(row.transform as TransformId)} yet. Get one in Models, then try again.`
 			)
-		let samplingConfigId = row.samplingConfigId
-		if (samplingConfigId == null && row.seedKey) {
-			const { CORE_LOADOUTS } = await import("@serene-pub/core-catalog")
-			const seedKey = CORE_LOADOUTS.find((d) => d.id === row.seedKey)?.sampling
-			if (seedKey) {
-				const [s] = await db
-					.select({ id: schema.samplingConfigs.id })
-					.from(schema.samplingConfigs)
-					.where(eq(schema.samplingConfigs.seedKey, seedKey))
-					.limit(1)
-				samplingConfigId = s?.id ?? null
-			}
-		}
+		const samplingConfigId = row.samplingConfigId ?? best.seededSamplingConfigId
 		const isDefault = defaultTransformOf(row) != null
 		await withStarConsequences(
 			db,
@@ -624,8 +743,8 @@ export const loadoutsMakeIt: Handler<
 				db
 					.update(schema.loadouts)
 					.set({
-						connectionId: best!.connectionId,
-						connectionModelId: best!.modelId,
+						connectionId: best.connectionId,
+						connectionModelId: best.connectionModelId,
 						samplingConfigId,
 						updatedAt: new Date()
 					})
@@ -722,6 +841,7 @@ export function registerLoadoutHandlers(
 	register(socket, loadoutsSetDefault, emitToUser)
 	register(socket, loadoutsMerge, emitToUser)
 	register(socket, loadoutsMakeIt, emitToUser)
+	register(socket, loadoutsProposeFill, emitToUser)
 	register(socket, localModelsMatting, emitToUser)
 	register(socket, localModelsCancelMatting, emitToUser)
 	register(socket, localModelsMattingRemove, emitToUser)

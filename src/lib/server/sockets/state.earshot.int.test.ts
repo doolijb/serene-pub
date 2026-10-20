@@ -503,3 +503,22 @@ describe("a stored value on a slot nobody declares any more", () => {
 		expect(o.wire).toContain(orphan)
 	})
 })
+
+describe("state:get — the viewer's own seat is marked `mine`", () => {
+	test("each viewer's owner rows flag exactly their own seat, carded or card-less", async () => {
+		const t = await table()
+		// A card-less seat of the owner's own.
+		const [rook] = await testDb
+			.insert(schema.sessionPersonas)
+			.values({ sessionId: t.sessionId, personaId: null, seatName: "Rook", userId: t.owner.id, position: 2 } as any)
+			.returning()
+		const mine = async (userId: number) =>
+			((await call("stateGet", userId, { sessionId: t.sessionId })).res.owners as any[])
+				.filter((o) => o.mine)
+				.map((o) => `${o.kind}:${o.id}`)
+		expect(await mine(t.guestA.id)).toEqual([`session_cast:${t.ash.id}`])
+		expect(await mine(t.guestB.id)).toEqual([`session_cast:${t.bram.id}`])
+		expect(await mine(t.owner.id)).toEqual([`player_seat:${rook!.id}`])
+		expect(await mine(t.watcher.id)).toEqual([])
+	})
+})

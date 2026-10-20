@@ -20,7 +20,7 @@ const decl = (id: string, extra: Record<string, unknown> = {}) => ({
 })
 const manifest = (
 	definition: string,
-	spec = "core:spec/chat-turn-order",
+	spec = "core:spec/story-turn-order",
 	node = "decide.rules.strategy",
 	defs: Array<{ id: string; declaration: Record<string, unknown> }> = [decl(definition)]
 ) => ({
@@ -59,7 +59,7 @@ describe("swapContributionProblems", () => {
 
 	it("a definition that does not fit the pin is refused with the SDK's sentence", async () => {
 		// Deliberately missing the `messages` in-port — the misfit under test.
-		const misfit = manifest("acme:task/turn-odd@1", "core:spec/chat-turn-order", "decide.rules.strategy", [
+		const misfit = manifest("acme:task/turn-odd@1", "core:spec/story-turn-order", "decide.rules.strategy", [
 			{
 				id: "acme:task/turn-odd@1",
 				declaration: {
@@ -79,7 +79,7 @@ describe("R62 · a contribution must be public", () => {
 	it("a private contribution is refused at install, naming the fix", async () => {
 		const problems = await swapContributionProblems(
 			db,
-			manifest("acme:task/turn-natural@1", "core:spec/chat-turn-order", "decide.rules.strategy", [
+			manifest("acme:task/turn-natural@1", "core:spec/story-turn-order", "decide.rules.strategy", [
 				decl("acme:task/turn-natural@1", { public: undefined })
 			])
 		)

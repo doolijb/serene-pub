@@ -142,11 +142,11 @@ describe("tiny 0.5.3 fixture, dev-mode meta", () => {
 		expect(r[0].n).toBe(0)
 	})
 
-	test("the chat is a Chat session with its messages, under the same ids", async () => {
+	test("the chat is a Story session with its messages, under the same ids (ruled 2026-10-19)", async () => {
 		expect(await count("sessions")).toBe(manifest.counts.chats)
 		expect(await count("session_messages")).toBe(manifest.counts.chat_messages)
 		const s = await rows<{ genre_id: string }>(sql`SELECT genre_id FROM sessions WHERE id = ${manifest.ids.chats.solo}`)
-		expect(s[0].genre_id).toBe("core:genre/chat")
+		expect(s[0].genre_id).toBe("core:genre/story")
 		expect(await count("messages")).toBe(manifest.counts.chat_messages)
 	})
 
@@ -167,7 +167,7 @@ describe("tiny 0.5.3 fixture, dev-mode meta", () => {
 		const sel = await rows<{ seed_key: string }>(sql`
 			SELECT c.seed_key FROM pipeline_config_selections s
 			JOIN pipeline_configs c ON c.id = s.config_id JOIN pipeline_specs p ON p.id = s.spec_id
-			WHERE p.slug = 'core:spec/chat-respond' AND s.scope_kind = 'pub'`)
+			WHERE p.slug = 'core:spec/story-respond' AND s.scope_kind = 'pub'`)
 		expect(sel).toHaveLength(0)
 		// Living Scene, the shipped default's own words.
 		expect(preview.text).toContain("You are writing interactive fiction with")

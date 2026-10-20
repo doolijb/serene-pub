@@ -32,6 +32,15 @@
  * with its own review gate, receipt line and caused event — and a tool is
  * chosen by the model at run time, so a writing tool would be a write no
  * document declared. What a run changes, it changes through an outlet.
+ *
+ * 🚧 Two kinds of exception, each through a door the HOST hands the tool on
+ * its context, never a write of the tool's own: the state tools `propose`
+ * (a request with no effect until a person decides it, `stateTools.ts`), and
+ * the filing tools (lane 2, 2026-10-19, `writeTools.ts`) `fileLore`,
+ * `forgetLore` and `makeImage` — the host's own lore write and message
+ * write, receipted on the run under the tool's node, offered only where the
+ * session switched them on, and obeying its *Remember things* task (Review
+ * files into the session's own notes only).
  */
 
 import type { HostTable } from "$lib/server/pipelines/runtime/bindingTypes"
@@ -78,6 +87,23 @@ export interface ToolContext {
 	 * than crash.
 	 */
 	propose?(change: unknown): Promise<number>
+	/**
+	 * 🚧 File one lorebook entry (lane 2, 2026-10-19; `tools/writeTools.ts`):
+	 * the host's own lore write, routed by the session's *Remember things*
+	 * task — Full where the session writes (its book when it may, else its own
+	 * notes), Review into its own notes only. `held` says which; `where` names
+	 * the book in words. Absent on a host or step that grants none.
+	 */
+	fileLore?(entry: { name: string; content: string; entryType?: string }): Promise<{
+		id: number
+		lorebookId: number
+		held: boolean
+		where: string
+	}>
+	/** 🚧 Take back a note a pipeline of this session filed, by its title (`forget`). */
+	forgetLore?(name: string): Promise<{ archived: number[] }>
+	/** 🚧 Make a picture and post it in the session as its own row (`generate_image`). */
+	makeImage?(prompt: string): Promise<{ messageId: number; caption: string }>
 }
 
 export interface CoreTool extends ToolDeclaration {

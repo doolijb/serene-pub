@@ -57,11 +57,11 @@ import {
 // Re-exported rather than moved out from under its importers: the spec now
 // lives in `specs/respond.ts`, and half the pipeline tests name it from here.
 export {
-	CHAT_RESPOND_SPEC_ID,
-	CHAT_RESPOND_VERSION,
-	respondSpec
+	STORY_RESPOND_SPEC_ID,
+	STORY_RESPOND_VERSION,
+	storyRespondSpec
 } from "$lib/server/pipelines/specs/respond"
-import { CHAT_RESPOND_VERSION } from "$lib/server/pipelines/specs/respond"
+import { STORY_RESPOND_VERSION } from "$lib/server/pipelines/specs/respond"
 import { loadDocument } from "$lib/server/pipelines/boot/store"
 import { syncDefinitionRegistry } from "$lib/server/pipelines/boot/registrySync"
 import { pluginDefinitionPins } from "$lib/server/plugins/pluginDefinitions"
@@ -286,7 +286,7 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 			),
 			// Everything core publishes, so a core row this build does not
 			// declare is marked `removed` (the reverse-diff, R-2).
-			{ release: CHAT_RESPOND_VERSION, complete: true }
+			{ release: STORY_RESPOND_VERSION, complete: true }
 		)
 		report.types = {
 			inserted: synced.inserted.length,

@@ -157,7 +157,9 @@ describe("sessions:rowChanged (PGlite integration)", () => {
 		)
 		expect(pushed!.messageCount).toBe(listed.messageCount)
 		expect(pushed!.messageCount).toBe(4)
-		expect(pushed!.updatedAt).toBe(String(listed.updatedAt))
+		// The list sends a Date, which the socket serialises to ISO; the push
+		// sends that ISO string itself (a UTC instant since 0102).
+		expect(pushed!.updatedAt).toBe(new Date(listed.updatedAt!).toISOString())
 	}, 60_000)
 
 	test("a session with nothing visible pushes a null quote", async () => {
@@ -190,6 +192,28 @@ describe("sessions:rowChanged (PGlite integration)", () => {
 		expect(hidden!.lastMessage).toBeNull()
 		// Hiding removes the quote, never the row from the count.
 		expect(hidden!.messageCount).toBe(1)
+	}, 60_000)
+
+	test("the quote is the main channel's: a newer line on a private lane never shows", async () => {
+		const owner = await makeUser("rowpush-lanes")
+		const session = await makeSession(owner.id, "The Crawl")
+		await testDb.insert(schema.sessionMessages).values([
+			{ sessionId: session.id, role: "assistant", content: "The story so far.", channel: "main" },
+			{ sessionId: session.id, role: "user", content: "My secret plan.", channel: "parley:2" },
+			{ sessionId: session.id, role: "assistant", content: "A journal line.", channel: "travelogue" }
+		])
+		const { sessionRowFrame } = await import("./rowPush")
+		const { sessionsListHandler } = await import("$lib/server/sockets/sessions")
+		const listed = (
+			await sessionsListHandler.handler(
+				{ user: { id: owner.id }, io: { to: () => ({ emit: () => {} }) } } as any,
+				{},
+				() => {}
+			)
+		)!.sessionList.find((s) => s.id === session.id)!
+		const pushed = await sessionRowFrame(testDb as any, session.id)
+		expect(pushed!.lastMessage!.excerpt).toBe("The story so far.")
+		expect(listed.lastMessage!.excerpt).toBe("The story so far.")
 	}, 60_000)
 
 	test("a session that has gone pushes nothing at all", async () => {

@@ -27,7 +27,18 @@ import {
 	setWidgetSettingValues,
 	widgetSettingValues
 } from "$lib/client/stores/widgetSettings.svelte"
-import { zoneEntries } from "./panelWidgets"
+/** Each id's instance as the layout draws it: its id, title and source. */
+function zoneEntries(
+	ids: readonly string[],
+	instances: readonly { id: string; title: string; src?: string; widgetId?: string }[],
+	_isConversation: (id: string) => boolean,
+	_title: (id: string) => string
+) {
+	return ids.flatMap((id) => {
+		const panel = instances.find((p) => p.id === id)
+		return panel ? [{ id: panel.id, title: panel.title, panel }] : []
+	})
+}
 import {
 	capRefusal,
 	DUPLICATE_RULE,

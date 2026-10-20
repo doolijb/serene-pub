@@ -86,6 +86,19 @@
 	})
 
 	function onEscapeKeyDown(e: KeyboardEvent) {
+		// 🚧 A field being typed in commits before anything closes (the
+		// 100-turn walk, B18: Escape lost a typed edit). Settings write on
+		// `change`, which a box fires as it loses focus — never as it is torn
+		// down — so it is let go of first. And the template reads
+		// `target?.` (B18's TypeError): Escape clears the target while the
+		// body is still being torn down.
+		const active = typeof document !== "undefined" ? document.activeElement : null
+		if (
+			active instanceof HTMLInputElement ||
+			active instanceof HTMLTextAreaElement ||
+			active instanceof HTMLSelectElement
+		)
+			active.blur()
 		// The editor answers Escape first — Cancel, putting the saved style back.
 		if (section?.cancelEditor()) e.preventDefault()
 	}
@@ -120,7 +133,7 @@
 					<header class="wsm-head">
 						<Icons.SlidersHorizontal size={16} aria-hidden="true" />
 						<Dialog.Title class="wsm-title">
-							{widgetSettingsTitle(target.label)}
+							{widgetSettingsTitle(target?.label ?? "")}
 						</Dialog.Title>
 						<Dialog.CloseTrigger
 							class="btn-icon btn-icon-sm hover:preset-tonal"
@@ -130,18 +143,18 @@
 						</Dialog.CloseTrigger>
 					</header>
 					<div class="wsm-body">
-						{#key target.widgetId}
+						{#key target?.widgetId}
 							{#if !editing}
 								<WidgetSettingsPanel
-									widgetId={target.widgetId}
+									widgetId={target?.widgetId ?? ""}
 								/>
 							{/if}
 							<WidgetStyleSection
 								bind:this={section}
 								bind:editing
-								widgetId={target.widgetId}
-								label={target.label}
-								mount={target.mount}
+								widgetId={target?.widgetId ?? ""}
+								label={target?.label ?? ""}
+								mount={target?.mount}
 							/>
 						{/key}
 					</div>

@@ -68,12 +68,12 @@ A pipeline that is not Serene Pub's own comes from a plugin, and it always arriv
 
 ## Agents
 
-A pipeline can call a model more than once. Adventure plans the turn, narrates it, voices each character and keeps the record: four calls a turn. Each call is an **agent**, with its own prompt, model and sampling, so you could give the planner a small fast model and the narrator a large one. You rarely need to: anything you leave alone follows the configuration, then the call's [loadout](./connections.md#loadouts).
+A pipeline can call a model more than once. Story on the Living preset replies, then reckons what the reply changed; the Dungeon Crawler plans, narrates and keeps the record: four calls a turn. Each call is an **agent**, with its own prompt, model and sampling, so you could give the planner a small fast model and the narrator a large one. You rarely need to: anything you leave alone follows the configuration, then the call's [loadout](./connections.md#loadouts).
 
 The settings show one block per agent, in the order they run, then **Whole pipeline** for what serves the whole turn (which lore sources it reads, the context budget). A pipeline with a single model call shows one block with no heading. Each block has:
 
 - its name, such as _Planner_, _Narrator_ or _Voices_, and one sentence on what it does;
-- an **On/Off** switch beside the name when that call can be skipped (Adventure's planner and state keeper can; the narrator can't). A block that is off says _Off: this part does not run._;
+- an **On/Off** switch beside the name when that call can be skipped (Story's reckoning and sweep can; the reply can't). A block that is off says _Off: this part does not run._;
 - its main choices: **Loadout** first, then **Prompt**, **Model** and **Sampling** (in **Whole pipeline**, a switch for each lore source);
 - one **Advanced** fold with the rest.
 - on the administrator's pipeline page, a **Receives** card and a **Carries out** card for the agent, or for the step you select: what comes in (_the conversation_, _world lore, a share of the context_, _the cast_, _plan_ from the Planner), what goes on to the next step, and what it writes to the session (_writes the reply_, _sets the turn order_, _records an event_). An agent's cards leave out what passes between its own steps.
@@ -101,7 +101,7 @@ When nothing is chosen, the first entry in either list says what you get instead
 | Anywhere, when nothing else names one | _From the Reply loadout — Nemo 12B · KoboldCPP_ in a configuration (the default [loadout](./connections.md#loadouts), from **Admin › Models › Loadouts**); _Pub default — …_ in a session |
 | When not even the pub has one | _No model set_ |
 
-**A muted line under each setting** says where its value comes from: _Set for this session_ or _Set in this configuration_ (with **Reset**, and a dot marking the change), _From the “Adventure” configuration_, _Pipeline default_, _From the Reply loadout_ (in a configuration) or _Pub default_ (in a session). A value you can't change here shows its name with _Set by an administrator_ under it. An administrator inside a session sees **Model** that way, because a session never names a model.
+**A muted line under each setting** says where its value comes from: _Set for this session_ or _Set in this configuration_ (with **Reset**, and a dot marking the change), _From the “Story” configuration_, _Pipeline default_, _From the Reply loadout_ (in a configuration) or _Pub default_ (in a session). A value you can't change here shows its name with _Set by an administrator_ under it. An administrator inside a session sees **Model** that way, because a session never names a model.
 
 ## Advanced settings
 
@@ -113,7 +113,7 @@ When nothing is chosen, the first entry in either list says what you get instead
 
 A **prompt** is the written instructions a step sends: a name plus a few text fields, such as a **System prompt** and **Post-history instructions** on a reply step, and a **Narrator name** too on a narrator step. A summary's drafting, merging and naming steps each have their own. A prompt belongs to a kind of step, not to one pipeline, so a narrator prompt you write is offered in every pipeline with a narrator step.
 
-Chat's reply starts on **Roleplay - Living Scene**, which carries the scene on from where it stands rather than answering each message as a request. Three more ship beside it: **Roleplay - Plain**, two sentences for small models and for cards that carry their own instructions; **Roleplay - Brief**, short dialogue-led turns; and **Writer**, which continues the story as an author rather than as one character. A configuration that already picked a prompt keeps it, including a prompt an earlier version shipped and this one doesn't: that prompt stays on your pub as an ordinary prompt you can edit or delete.
+Story's reply starts on **Roleplay - Living Scene**, which carries the scene on from where it stands rather than answering each message as a request. Three more ship beside it: **Roleplay - Plain**, two sentences for small models and for cards that carry their own instructions; **Roleplay - Brief**, short dialogue-led turns; and **Writer**, which continues the story as an author rather than as one character. A configuration that already picked a prompt keeps it, including a prompt an earlier version shipped and this one doesn't: that prompt stays on your pub as an ordinary prompt you can edit or delete.
 
 Which prompt a step uses is chosen on the step. In **Admin › Pipelines** an administrator can also write a new one there; shipped prompts are read-only, so clone one to make a version you can edit. Everyone else picks among the prompts there are, in their session's settings. **Admin › Prompts** lists every prompt with the step it serves. Filter it by **Genre**, **Pipeline** or **Step** to see exactly the prompts one of them can use: a prompt fits a pipeline when one of the pipeline's steps can pick it, and a genre through the pipelines its presets run. The **Use** filter shows which prompts a pipeline picks today. **Add prompt** starts a new one as a copy of an existing prompt for the same step.
 
@@ -125,7 +125,7 @@ The fields are plain text with a few names filled in before sending: `{{char}}` 
 
 A setting you have never touched has nothing stored: it reads its value from the pipeline every time it runs. Three useful things follow.
 
-- **You can see what you changed.** A changed setting has a dot beside it, and the **Changes** tab on the pipeline's Admin page lists every one for the selected configuration: the agent, the step, the setting, and its old value beside its new one. An untouched configuration shows an empty list.
+- **You can see what you changed.** A changed setting has a dot beside it (a prompt or sampling the pipeline ships with is its default, so it has none until somebody picks another), and the **Changes** tab on the pipeline's Admin page lists every one for the selected configuration: the agent, the step, the setting, and its old value beside its new one. An untouched configuration shows an empty list.
 - **Shipped defaults keep improving.** When an update corrects a default, every configuration that hadn't changed that setting picks up the new value. Only what you set stays where you put it.
 - **Reset really resets.** **Reset** removes your stored value, so the setting follows the pipeline again, including future changes to it. **Reset all**, in the Changes tab, does that for the whole configuration. Setting a value back to the default by hand does the same: nothing is stored.
 
@@ -214,7 +214,7 @@ Each change reaches one reply only. A reply that fails before saving leaves the 
 
 ## Forms, and when pipelines set each other off
 
-A message can carry a **form**: a question with options, addressed to one participant, such as Adventure's **Ask**. If a person plays that participant, the form waits for their click. If the AI does, Serene Pub runs an **answer** pipeline that reads the participant's card and the conversation, picks an option, and presses it exactly as a click would. A form is answered once, and every screen greys it afterwards.
+A message can carry a **form**: a question with options, addressed to one participant, such as Story's **Ask**. If a person plays that participant, the form waits for their click. If the AI does, Serene Pub runs an **answer** pipeline that reads the participant's card and the conversation, picks an option, and presses it exactly as a click would. A form is answered once, and every screen greys it afterwards.
 
 Pipelines can set each other off this way, so there are limits. A chain of pipelines answering one another may go four deep and sixteen runs wide; a pipeline that writes a message each time a message completes pauses after four in a row. When a chain reaches a limit, it pauses and the session owner sees **Keep going?**, which says how many more requests the chain is about to make (_The AI is about to make 3 more requests in a chain._); **Details** names the pipelines so far. **Continue** allows one more round of the same size; **Stop here** ends it and keeps what is done. With nobody there it simply waits, and a restart ends it.
 
@@ -226,7 +226,7 @@ A pipeline sees every member of the session's cast, including characters switche
 
 ## Attachments in a prompt
 
-A pipeline sends the files on its messages only if it has a **Place attachments** step, between the transcript and the prompt. The shipped replies (Chat, Guide, Adventure's narrator and voices, every Lair voice) have one, and so do the actions that write with a model (Chat's Narrate and Side character; Adventure's Look, Ask, Rest and Time passes; the Lair's Build room, Trigger trap, Reveal and drafted rooms) and the form answers. A pipeline without one sends no files; when nothing in the session places a kind, the composer says it can't be attached. The summarize pipelines name each file in their batches instead (`[image: cat.png]`), through the **Batch messages** step's attachments. The step is judged on the model of the step it writes for, so in Adventure the Narrator may see an image while the Planner does not. Its two settings are **Media lookback** (how many recent messages send their images and PDFs; older ones are sent as names, 10 by default) and **Text file budget** (how much of each text file goes in, 4,000 tokens by default). What a model sees is in [Sessions → What the model sees](./sessions.md#what-the-model-sees).
+A pipeline sends the files on its messages only if it has a **Place attachments** step, between the transcript and the prompt. The shipped replies (Chat, Guide, Story's narrator and voices, every Lair voice) have one, and so do the actions that write with a model (Chat's Narrate and Side character; Story's Look, Ask, Rest and Time passes; the Lair's Build room, Trigger trap, Reveal and drafted rooms) and the form answers. A pipeline without one sends no files; when nothing in the session places a kind, the composer says it can't be attached. The summarize pipelines name each file in their batches instead (`[image: cat.png]`), through the **Batch messages** step's attachments. The step is judged on the model of the step it writes for, so in Story the Narrator may see an image while the Planner does not. Its two settings are **Media lookback** (how many recent messages send their images and PDFs; older ones are sent as names, 10 by default) and **Text file budget** (how much of each text file goes in, 4,000 tokens by default). What a model sees is in [Sessions → What the model sees](./sessions.md#what-the-model-sees).
 
 ## The image step
 

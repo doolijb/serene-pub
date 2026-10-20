@@ -53,6 +53,7 @@
  * names, which is the whole point of shipping a layout for somebody else's
  * genre.
  */
+import { resolveRenamedCoreId } from "$lib/server/plugins/renamedCoreIds"
 import {
 	i18nText,
 	validateSessionLayout,
@@ -193,7 +194,9 @@ export function declaredLayoutsOf(manifest: unknown): DeclaredLayout[] {
 		)
 			continue
 		out.push({
-			genreId: d.genreId,
+			// A core genre core has since renamed is the one it ships now
+			// (`renamedCoreIds.ts`).
+			genreId: resolveRenamedCoreId(d.genreId),
 			slug: d.slug,
 			// Display text is a string or a locale map (R-20); the row keeps English.
 			name: i18nText(d.name as I18n)!,

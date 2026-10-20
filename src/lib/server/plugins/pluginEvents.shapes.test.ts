@@ -30,7 +30,7 @@ const manifest = (shape: Record<string, unknown> = { id: SHAPE, assignableTo: ["
 			name: { en: "Counted" },
 			description: "A tally landed.",
 			domain: "session",
-			genre: "core:genre/chat",
+			genre: "core:genre/story",
 			recordedBy: "any"
 		}
 	]

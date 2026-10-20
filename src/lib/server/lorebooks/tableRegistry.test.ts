@@ -29,7 +29,8 @@ const NOT_THE_BOOKS: Record<string, string> = {
 	characters: "a card links a book; the book does not own it",
 	sessions: "a session reads a book and a line; it is its owner's",
 	message_annotations: "a session message's annotation",
-	state_proposals: "a session's review queue (pending owner changes go with the owner)"
+	state_proposals: "a session's review queue (pending owner changes go with the owner)",
+	lorebook_shares: "a grant that lets a person read a book; the person's, not the book's content"
 }
 
 const allTables = (Object.values(schema) as unknown[]).filter(

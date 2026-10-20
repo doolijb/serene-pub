@@ -35,6 +35,17 @@ describe("canAnswerForm", () => {
 		expect(canAnswerForm("character:7", other, session)).toBe(false)
 	})
 
+	test("🚧 a form put to a card-less player seat is its player's alone", () => {
+		const withSeat = {
+			...session,
+			sessionPersonas: [...session.sessionPersonas, { id: 4, userId: 3, personaId: null, persona: null }]
+		}
+		expect(canAnswerForm("player-seat:4", other, withSeat)).toBe(true)
+		expect(canAnswerForm("player-seat:4", owner, withSeat)).toBe(false)
+		expect(canAnswerForm("player-seat:4", guest, withSeat)).toBe(false)
+		expect(canAnswerForm("player-seat:9", other, withSeat)).toBe(false)
+	})
+
 	test("a form put to a seated character nobody portrays is the AI's — nobody clicks", () => {
 		expect(canAnswerForm("character:12", owner, session)).toBe(false)
 		expect(canAnswerForm("character:12", guest, session)).toBe(false)

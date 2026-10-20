@@ -5,13 +5,21 @@ import type {
 	CapabilityModel
 } from "$lib/client/components/connections/jobPicker"
 import {
+	applyModelFilters,
+	bestWithOf,
 	dialRows,
 	draftOf,
 	editorHeader,
 	EDITOR_CARDS,
 	filterModelOptions,
 	loadoutForJob,
+	loadoutNeeds,
 	mergeTargets,
+	modelFilterChips,
+	modelFilterGroups,
+	NO_MODEL_FILTERS,
+	orderSamplingRows,
+	pickFilter,
 	modelOptions,
 	needsSetDefault,
 	ownerChip,
@@ -24,6 +32,7 @@ import {
 	showsWorkflowField,
 	updateParams,
 	usedByLine,
+	usedByWhy,
 	whatRuns
 } from "./loadoutSheet"
 import { summary } from "./loadoutFixtures"
@@ -311,6 +320,200 @@ describe("the Model card's list", () => {
 		const schema = rows.find((r) => r.modelName === "schema")!
 		expect(schema.consequences).toEqual([])
 		expect(schema.chips).toEqual(["Schema door"])
+	})
+})
+
+describe("the Model card's find row", () => {
+	const fleet = [
+		connection({
+			id: 1,
+			name: "Ollama",
+			type: "ollama",
+			models: [
+				model({ id: 1, name: "nemo", facts: { contextWindow: 32768 } as never }),
+				{
+					...model({ id: 2, name: "qwen" }),
+					capabilities: { resolved: { json_schema: 2, tools: 1 } }
+				} as never
+			]
+		}),
+		connection({
+			id: 2,
+			name: "Anthropic",
+			type: "anthropic",
+			models: [
+				{
+					...model({
+						id: 10,
+						name: "Sonnet",
+						facts: {
+							contextWindow: 200000,
+							pricing: { inPerMTok: 3, currency: "USD" }
+						} as never
+					}),
+					capabilities: { resolved: { json_schema: 2, tools: 2 } }
+				} as never,
+				model({
+					id: 11,
+					name: "Haiku",
+					facts: {
+						contextWindow: 200000,
+						pricing: { inPerMTok: 0.8, currency: "USD" }
+					} as never
+				})
+			]
+		})
+	]
+	const none = { connectionId: null, connectionModelId: null }
+	const rows = modelOptions(fleet, "text->text", "core:loadout/extraction@1", none)
+	const names = (r: { modelName: string }[]) => r.map((o) => o.modelName)
+
+	test("a row knows where it runs, what it does natively, and what this loadout gets", () => {
+		const qwen = rows.find((r) => r.modelName === "qwen")!
+		expect(qwen.group).toBe("local")
+		expect(qwen.price).toBe(0)
+		// Tools at grade 1 is by instruction, so no Native tools chip.
+		expect(qwen.chips).toEqual(["Schema door"])
+		expect(qwen.answers).toEqual(["Schema door"])
+		const haiku = rows.find((r) => r.modelName === "Haiku")!
+		expect(haiku.group).toBe("service")
+		expect(haiku.answers).toEqual([])
+		expect(haiku.consequences).toEqual(["JSON by instruction (no schema door)"])
+	})
+
+	test("grades come from the list's connectionGrades: the connections list carries none", () => {
+		const bare = [
+			connection({ id: 7, name: "Host", models: [model({ id: 70, name: "m" })] })
+		]
+		const blind = modelOptions(bare, "text->text", "core:loadout/extraction@1", none)
+		expect(blind[0]!.consequences).toEqual(["JSON by instruction (no schema door)"])
+		const seen = modelOptions(bare, "text->text", "core:loadout/extraction@1", none, {
+			"7": { json_schema: 2, tools: 2 }
+		})
+		expect(seen[0]!.consequences).toEqual([])
+		expect(seen[0]!.chips).toEqual(["Schema door", "Native tools"])
+		expect(seen[0]!.answers).toEqual(["Schema door"])
+	})
+
+	test("filters narrow by group, connection and what it does natively", () => {
+		const local = pickFilter(NO_MODEL_FILTERS, "where", "local")
+		expect(names(applyModelFilters(rows, "", local))).toEqual(["nemo", "qwen"])
+		const anth = pickFilter(NO_MODEL_FILTERS, "connectionId", "2")
+		expect(names(applyModelFilters(rows, "", anth))).toEqual(["Sonnet", "Haiku"])
+		const schema = pickFilter(NO_MODEL_FILTERS, "native", "json_schema")
+		expect(names(applyModelFilters(rows, "", schema))).toEqual(["Sonnet", "qwen"])
+		expect(names(applyModelFilters(rows, "son", schema))).toEqual(["Sonnet"])
+	})
+
+	test("orders: cheapest first puts this machine at free and unknown last; largest context first", () => {
+		const cheap = pickFilter(NO_MODEL_FILTERS, "sort", "price")
+		expect(names(applyModelFilters(rows, "", cheap))).toEqual([
+			"nemo",
+			"qwen",
+			"Haiku",
+			"Sonnet"
+		])
+		const wide = pickFilter(NO_MODEL_FILTERS, "sort", "context")
+		expect(names(applyModelFilters(rows, "", wide))).toEqual([
+			"Haiku",
+			"Sonnet",
+			"nemo",
+			"qwen"
+		])
+	})
+
+	test("the popout's counts are what each radio would leave; needed capabilities first", () => {
+		const local = pickFilter(NO_MODEL_FILTERS, "where", "local")
+		const groups = modelFilterGroups(rows, "", local, { structured: true })
+		const by = (k: string) => groups.find((g) => g.key === k)!
+		expect(by("where").choices.map((c) => [c.label, c.count])).toEqual([
+			["Anywhere", 4],
+			["On this machine", 2],
+			["Services", 2]
+		])
+		expect(by("where").current).toBe("local")
+		// Counted inside "On this machine": only qwen has a schema door there.
+		expect(by("native").choices.map((c) => [c.label, c.count])).toEqual([
+			["Anything", 2],
+			["Schema door", 1]
+		])
+		expect(by("sort").choices.map((c) => c.label)).toEqual([
+			"By connection",
+			"By name",
+			"Cheapest first",
+			"Largest context first"
+		])
+	})
+
+	test("every narrowing in force is a chip; clearing one picks its any", () => {
+		let f = pickFilter(NO_MODEL_FILTERS, "native", "json_schema")
+		f = pickFilter(f, "connectionId", "2")
+		f = pickFilter(f, "sort", "price")
+		expect(modelFilterChips(rows, f).map((c) => c.label)).toEqual([
+			"Anthropic",
+			"Schema door",
+			"Cheapest first"
+		])
+		expect(pickFilter(f, "native", "").native).toBeNull()
+		expect(pickFilter(f, "sort", "").sort).toBe("connection")
+	})
+})
+
+describe("needs and best with", () => {
+	test("used by: why the steps matter, singular and none", () => {
+		expect(usedByWhy(0)).toMatch(/until a pipeline step names it/)
+		expect(usedByWhy(1)).toBe("What you choose here is what it runs on.")
+		expect(usedByWhy(27)).toBe("What you choose here is what they run on.")
+	})
+
+	test("core's loadouts say what they need and why", () => {
+		expect(loadoutNeeds("core:loadout/extraction@1").map((n) => n.word)).toEqual([
+			"a structured answer"
+		])
+		expect(loadoutNeeds("core:loadout/extraction@1")[0]!.why).toMatch(/schema door/)
+		expect(loadoutNeeds("core:loadout/portrait@1").map((n) => n.word)).toEqual([
+			"reference pictures"
+		])
+		expect(loadoutNeeds("core:loadout/reply@1")).toEqual([])
+		expect(loadoutNeeds("pub:loadout/mine")).toEqual([])
+	})
+
+	test("best with: the shipped config by seed key, and the tier", () => {
+		const options = {
+			"text->text": [
+				{ id: 4, name: "Default", shape: "text", seedKey: "sampling-default" },
+				{ id: 9, name: "Extraction", shape: "text", seedKey: "sampling-extraction" }
+			],
+			"text->image": [
+				{ id: 12, name: "SD 1.5", shape: "image", seedKey: "sampling-image-default" }
+			]
+		}
+		expect(
+			bestWithOf(
+				{ loadoutId: "core:loadout/extraction@1", tier: null, transform: "text->text" },
+				options
+			)
+		).toEqual({ words: ["Extraction sampling"], samplingId: 9 })
+		expect(
+			bestWithOf(
+				{ loadoutId: "core:loadout/scene@1", tier: "fast", transform: "text->image" },
+				options
+			)
+		).toEqual({ words: ["SD 1.5 sampling", "a fast model"], samplingId: 12 })
+		expect(
+			bestWithOf({ loadoutId: "pub:loadout/x", tier: null, transform: "text->text" }, options)
+		).toEqual({ words: [], samplingId: null })
+	})
+
+	test("the Sampling card leads with the config it is best with, then filters by name", () => {
+		const rows = [
+			{ id: 1, name: "Background" },
+			{ id: 2, name: "Default" },
+			{ id: 3, name: "Extraction" }
+		]
+		expect(orderSamplingRows(rows, 3, "").map((r) => r.id)).toEqual([3, 1, 2])
+		expect(orderSamplingRows(rows, 3, "back").map((r) => r.id)).toEqual([1])
+		expect(orderSamplingRows(rows, null, "").map((r) => r.id)).toEqual([1, 2, 3])
 	})
 })
 

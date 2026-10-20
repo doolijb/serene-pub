@@ -205,7 +205,7 @@ vi.mock("$lib/server/auth/totp/service", () => ({
 
 vi.mock("$lib/server/pipelines/entities/sessionGenres", () => ({
 	listSessionGenres: async () => [],
-	STANDARD_GENRE_ID: "core:genre/chat"
+	STANDARD_GENRE_ID: "core:genre/story"
 }))
 
 import { connectSockets } from "./index"

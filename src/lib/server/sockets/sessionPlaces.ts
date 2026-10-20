@@ -43,6 +43,7 @@ import type {
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { sessionReadingOf } from "$lib/server/state/reading"
 import {
+	MAIN_HEAD,
 	entriesAsRead,
 	entryAt,
 	entryOverlaysFor
@@ -93,19 +94,25 @@ export async function readSessionPlaces(
 	if (!access.hasAccess)
 		throw new PlacesRefusal("This session is not one you are in.")
 	const reading = await sessionReadingOf(db, sessionId)
-	if (!reading) return { lorebookId: null, asOf: null, places: [], ways: [] }
-	const { lorebookId } = reading
+	// 🚧 The session's own notes' places come after the book's, marked
+	// "this session only" (PLAN-rulesets §26) — and are all a session with
+	// no book has.
+	const own = await phantomPlaces(sessionId)
+	const ownPlaces = own.places
+	const lorebookId = reading?.lorebookId ?? null
 
-	const [bookPlaces, sessionPlaces] = await Promise.all([
-		entriesAsRead(db, lorebookId, reading, "book", [LOCATION_TYPE_ID]),
-		entriesAsRead(db, lorebookId, reading, "session", [LOCATION_TYPE_ID])
-	])
+	const [bookPlaces, sessionPlaces] = reading
+		? await Promise.all([
+				entriesAsRead(db, reading.lorebookId, reading, "book", [LOCATION_TYPE_ID]),
+				entriesAsRead(db, reading.lorebookId, reading, "session", [LOCATION_TYPE_ID])
+			])
+		: [[], []]
 	const live = bookPlaces.filter((p) => !p.unseen).map((p) => p.entryId)
 	const seen = sessionPlaces.filter((p) => !p.unseen)
 
 	// Each live place's category, as the line's amendments leave it by then.
 	const category = new Map<number, string>()
-	if (live.length) {
+	if (live.length && reading && lorebookId != null) {
 		const e = schema.lorebookEntries
 		const [rows, overlays] = await Promise.all([
 			db
@@ -141,7 +148,9 @@ export async function readSessionPlaces(
 			.map((name, i) => [categoryKey(name), i])
 	)
 
-	const seenIds = new Set(seen.map((p) => p.entryId))
+	// The notes' places are places too: a way between two of them, or from
+	// one to the book's, is drawn like any other (the links read is the union).
+	const seenIds = new Set([...seen.map((p) => p.entryId), ...ownPlaces.map((p) => p.id)])
 	const links = ((await readGraphEntryLinks(db, sessionId)) ?? []).filter(
 		(l) =>
 			(l.from.kind === "entry" && seenIds.has(l.from.id)) ||
@@ -160,19 +169,16 @@ export async function readSessionPlaces(
 			)
 		)
 	]
+	const farRead = [
+		...(reading && farEntryIds.length
+			? await entriesAsRead(db, reading.lorebookId, reading, "session", null, farEntryIds)
+			: []),
+		...(own.phantomId != null && farEntryIds.length
+			? await entriesAsRead(db, own.phantomId, MAIN_HEAD, "session", null, farEntryIds)
+			: [])
+	]
 	const farTypes = new Map(
-		(
-			await entriesAsRead(
-				db,
-				lorebookId,
-				reading,
-				"session",
-				null,
-				farEntryIds
-			)
-		)
-			.filter((x) => !x.unseen)
-			.map((x) => [x.entryId, x.typeId])
+		farRead.filter((x) => !x.unseen).map((x) => [x.entryId, x.typeId])
 	)
 
 	/** An end as a sentence reads it: an entry carries its type, so a place reads apart. */
@@ -250,7 +256,52 @@ export async function readSessionPlaces(
 			linked: linked.get(p.entryId) ?? []
 		}
 	})
-	return { lorebookId, asOf: storyTimeOf(reading.moment), places, ways }
+	return {
+		lorebookId,
+		asOf: reading ? storyTimeOf(reading.moment) : null,
+		places: [
+			...places,
+			...ownPlaces.map((p) => ({ ...p, linked: linked.get(p.id) ?? [] }))
+		],
+		ways
+	}
+}
+
+/**
+ * 🚧 The places of the session's own notes (PLAN-rulesets §26), as the
+ * session sees them, each `sessionOnly`. Their category is the entry's own;
+ * the ways between them are drawn by the caller, from the union links read.
+ */
+async function phantomPlaces(sessionId: number): Promise<{
+	phantomId: number | null
+	places: (PlaceV1 & { sessionOnly: true })[]
+}> {
+	const { phantomOf } = await import("$lib/server/lorebooks/phantom")
+	const phantom = await phantomOf(db, sessionId)
+	if (!phantom) return { phantomId: null, places: [] }
+	const seen = (
+		await entriesAsRead(db, phantom.id, MAIN_HEAD, "session", [LOCATION_TYPE_ID])
+	).filter((p) => !p.unseen)
+	if (!seen.length) return { phantomId: phantom.id, places: [] }
+	const e = schema.lorebookEntries
+	const rows = await db
+		.select({ id: e.id, fields: e.fields })
+		.from(e)
+		.where(and(eq(e.lorebookId, phantom.id), inArray(e.id, seen.map((p) => p.entryId))))
+	const category = new Map(
+		rows.map((r) => [r.id, trimmed(((r.fields ?? {}) as Record<string, unknown>).category) || null])
+	)
+	return {
+		phantomId: phantom.id,
+		places: seen.map((p) => ({
+			id: p.entryId,
+			name: p.name.trim() || `#${p.entryId}`,
+			category: category.get(p.entryId) ?? null,
+			tint: null,
+			linked: [],
+			sessionOnly: true as const
+		}))
+	}
 }
 
 export const sessionsPlaces: Handler<

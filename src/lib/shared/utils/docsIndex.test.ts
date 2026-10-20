@@ -69,7 +69,7 @@ const fixture: DocsManifest = {
 		sessions: page("sessions", { title: "Sessions", order: 1 }),
 		"sdk/pipelines/core_spec_chat-respond": page(
 			"sdk/pipelines/core_spec_chat-respond",
-			{ title: "core:spec/chat-respond", source: "sdk", order: 0 }
+			{ title: "core:spec/story-respond", source: "sdk", order: 0 }
 		)
 	},
 	assets: { count: 3, bytes: 1024, budgetBytes: 6 * 1024 * 1024 }

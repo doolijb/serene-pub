@@ -3,11 +3,11 @@
 	import { untrack } from "svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import {
-		splitIntoStrokes,
-		type Stroke,
-		type StrokeKind,
-		type StrokeSplitBy
-	} from "@serene-pub/sdk"
+	splitIntoStrokes,
+	type Stroke,
+	type StrokeKind,
+	type StrokeSplitBy
+} from "@serene-pub/sdk"
 
 	/**
 	 * 🚧 **Split into strokes** (DESIGN-card-strokes §A.3): one field's text

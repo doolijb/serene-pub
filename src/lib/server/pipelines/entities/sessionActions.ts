@@ -131,6 +131,8 @@ export interface SessionAction {
 	quick: boolean
 	/** What a press collects before it fires, in the collect modal (lair pass R3) — the declaration's `collects`. */
 	collects?: ListedCollects
+	/** 🚧 The question asked before it fires (`ActionDecl.confirm`), in words. */
+	confirm?: { question: string; description?: string; confirmLabel: string }
 	audience: Audience
 	venue: ListedVenueKind
 	/** The channel this listing is for, when the venue named one. */
@@ -281,7 +283,7 @@ export async function listSessionActions(
 	db: Db,
 	sessionId: number,
 	viewer: ActionViewer,
-	opts: { channel?: string; offered?: ReadonlyArray<SessionFunction> } = {}
+	opts: { channel?: string; offered?: ReadonlyArray<SessionFunction>; starting?: boolean } = {}
 ): Promise<SessionActionVenues> {
 	const channel = opts.channel ?? "main"
 	const venues = emptyVenues()
@@ -317,7 +319,7 @@ export async function listSessionActions(
 	// Per channel (R6): a channel's declared `turnControls` win over the
 	// genre's — the Lair's Sanctum offers no Pick and no Regenerate.
 	const turnControls = resolveTurnControls(genre?.shape, channel)
-	const values = await publishedValues(db, sessionId)
+	const values = await publishedValues(db, sessionId, opts.starting ? { starting: true } : {})
 	const core = CORE_ACTIONS.filter((a) =>
 		a.floor
 			? true
@@ -400,6 +402,7 @@ export async function listSessionActions(
 				slash: a.slash,
 				quick: a.quick,
 				...(a.collects ? { collects: a.collects } : {}),
+				...(a.confirm ? { confirm: a.confirm } : {}),
 				audience: a.audience,
 				origin: a.origin,
 				floor: false,

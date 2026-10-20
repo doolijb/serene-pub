@@ -95,7 +95,7 @@ describe("samplingUseOf and the row's second line", () => {
 		job("text->image", 2, S.imageGen)
 	]
 	const pipelines = {
-		4: [{ label: "Reply · Chat", slug: "core:spec/chat-respond" }]
+		4: [{ label: "Reply · Chat", slug: "core:spec/story-respond" }]
 	}
 
 	it("names every loadout holding the config, Reply first", () => {
@@ -162,9 +162,9 @@ describe("what the row's star and the Delete dialog say", () => {
 		job("text->image", 2, S.imageGen)
 	]
 	const pipelines = {
-		3: [{ label: "Reply · Chat", slug: "core:spec/chat-respond" }],
+		3: [{ label: "Reply · Chat", slug: "core:spec/story-respond" }],
 		4: [
-			{ label: "Reply · Chat", slug: "core:spec/chat-respond" },
+			{ label: "Reply · Chat", slug: "core:spec/story-respond" },
 			{ label: "Narrate", slug: "core:spec/narrate" }
 		]
 	}

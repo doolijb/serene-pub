@@ -293,17 +293,16 @@ const UNCONSUMED_OUT_SHAPES: Deliberate[] = [
 	},
 	{
 		subject: shapeSubject(
-			"core:shape/session-settings@1",
-			OUT_PORTS.filter((p) => p.shape === "core:shape/session-settings@1")
+			"core:shape/message-offered@1",
+			OUT_PORTS.filter((p) => p.shape === "core:shape/message-offered@1")
 		),
 		reason:
-			"The settings document, whole (PLAN-turn-order §4.12, R13; A3). " +
-			"Every session inlet publishes it as `session` and " +
-			"`core:query/session-settings@1` re-reads it, and a spec reads " +
-			"INTO it — `$.input.session.fields.tone`, `$.event.session.cast` " +
-			"into `turn-pool@1`'s `cast: sessionCast` (A6) — path by path. " +
-			"Nothing wants the envelope as one value: the shape exists so the " +
-			"port is typed and the document has a name, not as a wire."
+			"🚧 An event's payload, whole (owner ruling 2026-10-15: a person's " +
+			"message is saved through the pipeline). `core:inlet/message-offered@1." +
+			"main` republishes what `core:event/message-offered@1` carried, as " +
+			"`form-addressed@1.main` does; the save reads the parts beside it — " +
+			"`text`, `speaker`, `channel`, `trayItemIds` — port by port. The shape " +
+			"exists so the event registry's `payload_shape` names it, not as a wire."
 	},
 	{
 		subject: shapeSubject(
@@ -408,6 +407,43 @@ const unfilledInPorts = (): string[] => {
  * shipped run can reach.
  */
 const UNFILLED_IN_PORTS: Deliberate[] = [
+	{
+		subject: "core:task/resolve-tasks@1.preset",
+		reason:
+			"The preset's pinned settings (2026-10-19): the host reads the session's " +
+			"preset row when the port is unwired, which every core spec leaves it. " +
+			"Closes when a spec hands a preset document in."
+	},
+	{
+		subject: "core:task/build-keeper-context@1.afterWrite",
+		reason:
+			"Adventure's state keeper is retired (2026-10-19, Story's reckoning took " +
+			"its place); Story's Rest still runs this node but never the after-write " +
+			"arm. Closes when the node goes with the rest of the keeper."
+	},
+	{
+		subject: "core:task/build-keeper-context@1.clockStep",
+		reason: "As above: the keeper's clock step was Adventure's; Story's clock moves in the reckoning."
+	},
+	{
+		subject: "core:task/build-planner-context@1.castRelationships",
+		reason:
+			"Adventure's planner is retired (2026-10-19); the node stays for the Lair, " +
+			"which wires no relationships yet. Closes when the Lair reads them or the port goes."
+	},
+	{
+		subject: "core:task/build-scene-context@1.castRelationships",
+		reason: "As above: Story's Look runs the node without relationships; closes when wired or dropped."
+	},
+	{
+		subject: "core:task/ruleset-resolve@1.viewer",
+		reason:
+			"Whose eyes the blocks are for (2026-10-17, AUDIT A13): a participant " +
+			"reference or `gm`, deciding what a repertoire's `earshot`/`gmOnly` let " +
+			"into `blocks`. The host reads it; no core spec has a game-master-facing " +
+			"step that names itself yet (the Dungeon Crawler's Planner books are the " +
+			"first candidate). Closes when one wires it."
+	},
 	{
 		subject: "core:oracle/generate-image@1.mask",
 		reason:
@@ -549,16 +585,6 @@ const UNFILLED_IN_PORTS: Deliberate[] = [
 			"keepers (Adventure, Lair) want — supply is checked against every " +
 			"item a keeper line may name. A spec that asks about a known set " +
 			"of items is what fills it."
-	},
-	{
-		subject: "core:outlet/create-lore-entry@1.links",
-		reason:
-			"Graph edges written with the entry, from a structured list. The " +
-			"shipped writer (Lair's room drafting) produces prose, and " +
-			"nothing in core parses a line of prose into " +
-			"entry names (`LAIR_ROOM_CONTENT_SHAPE`), so none has a list to " +
-			"wire. The host writes whatever arrives; a spec with structured " +
-			"output fills it."
 	},
 	{
 		subject: "core:outlet/link-lore-entries@1.name",
@@ -1120,14 +1146,19 @@ function socketReferences(): {
 		if (path === declaration) continue
 		for (const match of text.matchAll(literal)) {
 			const name = match[2]!
+			// 120 characters: a `refusable<LongParamsName>(` or `summaryVerb<…>(`
+			// spans a line break before its event name.
 			const before = text.slice(
-				Math.max(0, match.index - 40),
+				Math.max(0, match.index - 120),
 				match.index
 			)
 			const seen = referenced.get(name) ?? []
 			if (!seen.includes(path)) seen.push(path)
 			referenced.set(name, seen)
-			if (/(?:\bevent\s*:|\brefusable(?:<[^>]*>)?\()\s*$/.test(before))
+			// A handler's event: `event:` in a `register()` entry, or the first
+			// argument of the verb factories (`refusable`, `summaryVerb`) that
+			// build one — each registers it, so its `:error` is synthesised too.
+			if (/(?:\bevent\s*:|\b(?:refusable|summaryVerb)(?:<[^>]*>)?\()\s*$/.test(before))
 				handled.add(name)
 		}
 	}

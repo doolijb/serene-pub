@@ -50,8 +50,8 @@
  *    person opts into by starring an embedding model, not a retrieval call,
  *    and whether it counts against "one call" is an owner question (C3 (d)).
  *
- * Driven through `runReply` against the SHIPPED `core:spec/chat-respond` on the
- * chat-default preset's configuration — the road the socket handlers take.
+ * Driven through `runReply` against the SHIPPED `core:spec/story-respond` on the
+ * story-minimal preset's configuration — the road the socket handlers take.
  *
  * ## The other embed: descriptions to follow up (R5, 2026-10-02)
  *
@@ -187,12 +187,12 @@ const chatPresetId = async () =>
 		await db
 			.select({ id: schema.sessionPresets.id })
 			.from(schema.sessionPresets)
-			.where(eq(schema.sessionPresets.seedKey, "core-chat-default"))
+			.where(eq(schema.sessionPresets.seedKey, "core-story-minimal"))
 			.limit(1)
 	)[0]?.id ?? null
 
 /**
- * A chat-default session with one character and one line from the person —
+ * A story-minimal session with one character and one line from the person —
  * with a lorebook holding one keyed world entry, or with none.
  */
 async function makeSession(opts: { lorebook: boolean }) {
@@ -387,14 +387,14 @@ beforeAll(async () => {
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	db = (await import("$lib/server/db")).db as unknown as TestDb
 
-	const { bootstrapPipelines, CHAT_RESPOND_SPEC_ID } = await import(
+	const { bootstrapPipelines, STORY_RESPOND_SPEC_ID } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	await bootstrapPipelines(db)
 	const [spec] = await db
 		.select({ id: schema.pipelineSpecs.id })
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
 	respondSpecId = spec!.id
 
 	const { createTestUser } = await import("$lib/server/utils/testDb")

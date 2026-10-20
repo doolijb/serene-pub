@@ -150,10 +150,16 @@ describe("the script step", () => {
 		})
 		const node = receipt.nodes.find((n: any) => n.nodeKey === "step")
 		// The slow link is stopped at the step's 5 ms, not the seam's 250 —
-		// and, a failing link degrading, the next one still runs on the value.
+		// the chain's later link still runs and is recorded…
 		expect(node.scripts[0]).toMatchObject({ scriptId: spinId, result: "err" })
 		expect(node.scripts[0].reason).toMatch(/timeout after 5ms/)
 		expect(node.scripts[1]).toMatchObject({ scriptId: doubleId, result: "ok", changed: true })
-		if (node.output) expect(node.output.main).toEqual({ wrapped: "quiet", length: 5 })
+		// …but a script step whose script failed HALTS (PLAN-dc-after-walk2
+		// Q0-1/Q0-3): its answer is its script's, and handing its input on as
+		// that answer is how an interview answer wrote nothing yet was marked
+		// answered.
+		expect(node.result).toBe("halt")
+		expect(node.reason).toMatch(/the script '.*' failed: timeout after 5ms/)
+		expect(receipt.outcome).toBe("halt")
 	}, 60_000)
 })

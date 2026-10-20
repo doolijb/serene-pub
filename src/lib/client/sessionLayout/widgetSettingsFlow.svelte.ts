@@ -186,13 +186,18 @@ export function createWidgetSettingsFlow(input: WidgetSettingsFlowInput) {
 	 * opens on the look it was saved with. It is derived, never written back —
 	 * the first pick from the overlay writes a real pin and this stops
 	 * mattering. Cleared on teardown so it cannot leak into the next session.
+	 * ⏳ It lives in the old `zoneLayout` slot. The arrangement is `panels`
+	 * (PLAN-session-panels-2026-10-14); this one value is still read off that
+	 * slot, which the row keeps (`model.legacyStyles`), and nothing moves it.
+	 * Decide at the 0.7 squash whether a row with only this left gets a real
+	 * `widgetStyles` pin first.
 	 *
 	 * TWO: `data-msg-layout` is still written on `.chat-core`, from the RESOLVED
 	 * style rather than the blob (`msgLayoutAttr`). TRANSITIONAL, for one
 	 * release: nothing in this repo keys off it any more, so it is there for CSS
 	 * outside it. Drop it after 0.6. */
 	$effect(() => {
-		setLegacyStylePacks(input.model.layout.styles ?? null)
+		setLegacyStylePacks(input.model.legacyStyles)
 		return () => setLegacyStylePacks(null)
 	})
 	// Called for the subscription — the same contract WidgetHost keeps: it
@@ -207,15 +212,16 @@ export function createWidgetSettingsFlow(input: WidgetSettingsFlowInput) {
 	 * Not a panel any more: each widget wears its own hover overlay, mounted by
 	 * WidgetHost. All this owns is turning that mode on and persisting the pins.
 	 *
-	 * `placing` is intentionally not part of the mode: the Move tab draws
-	 * gridstack CARDS, not `WidgetHost`s, so an overlay could not appear on
-	 * one anyway — but style mode ending is what disarms and drops any
-	 * half-typed draft, so it must end when the tab changes. */
+	 * On while the editor shows the live session (the Layouts tab — the
+	 * Settings tab is gone, PLAN-session-panels Q4): every widget wears its
+	 * overlay there. The Arrange tab draws CARDS, not `WidgetHost`s, and its
+	 * tabs carry their own gear; style mode ending is what disarms and drops
+	 * any half-typed draft, so it ends when the tab changes. */
 	$effect(() => {
 		// The phone editor has no hover and no overlays: its rows open the
 		// settings modal directly, which needs no mode.
 		setWidgetStyleMode(
-			input.model.editing && input.model.editTab === "settings"
+			input.model.editing && input.model.editTab === "layouts"
 		)
 	})
 	$effect(() => {

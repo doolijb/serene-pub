@@ -71,15 +71,17 @@ export function withSessionActionsChain<T>(
 /** One push of `sessions:actions` to every member watching the session, each their own list. */
 export function pushSessionActions(
 	io: AuthenticatedSocket["io"] | null | undefined,
-	sessionId: number
+	sessionId: number,
+	opts: { starting?: boolean } = {}
 ): Promise<void> {
 	if (!io) return Promise.resolve()
-	return withSessionActionsChain(sessionId, () => pushNow(io, sessionId))
+	return withSessionActionsChain(sessionId, () => pushNow(io, sessionId, opts))
 }
 
 async function pushNow(
 	io: AuthenticatedSocket["io"],
-	sessionId: number
+	sessionId: number,
+	opts: { starting?: boolean } = {}
 ): Promise<void> {
 	const scope = String(sessionId)
 	// The room first, before the roster read: nobody watching this
@@ -108,7 +110,8 @@ async function pushNow(
 				userId,
 				"main",
 				{
-					member: true
+					member: true,
+					...(opts.starting ? { starting: true } : {})
 				}
 			)
 			await emitToUserRedacted(io, userId, EVENT, payload)

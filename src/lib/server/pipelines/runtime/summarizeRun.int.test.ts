@@ -456,7 +456,7 @@ describe("a summarize run names a message's files", () => {
 		const { runSpec } = await import(
 			"$lib/server/pipelines/runtime/runTurn"
 		)
-		const { CHAT_SUMMARIZE_SCENE_SPEC_ID } = await import(
+		const { STORY_SUMMARIZE_SCENE_SPEC_ID } = await import(
 			"@serene-pub/core-catalog"
 		)
 		calls.length = 0
@@ -464,7 +464,7 @@ describe("a summarize run names a message's files", () => {
 			db,
 			sessionId,
 			userId,
-			specId: CHAT_SUMMARIZE_SCENE_SPEC_ID,
+			specId: STORY_SUMMARIZE_SCENE_SPEC_ID,
 			input: {
 				scope: { sessionId },
 				request: {

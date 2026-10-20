@@ -15,12 +15,12 @@ let sessionId: number
 let narrateSpecId: number
 let respondSpecId: number
 
-const CHAT = "core:genre/chat"
+const CHAT = "core:genre/story"
 
 async function publishTwoDeclarers() {
 	const { spec, compile } = await import("@serene-pub/sdk")
 	const C = await import("@serene-pub/contracts")
-	const { chatGenre } = await import("@serene-pub/core-catalog")
+	const { storyGenre } = await import("@serene-pub/core-catalog")
 	const { saveDocument } = await import("$lib/server/pipelines/boot/store")
 	for (const [id, slash] of [
 		["core:spec/test-sum-a", "sum-a"],
@@ -43,7 +43,7 @@ async function publishTwoDeclarers() {
 				}
 			})
 				.inlet("input", C.userMessage.v1(), {
-					genre: chatGenre,
+					genre: storyGenre,
 					event: sessionEvents.sessionAction
 				})
 				.outlet("save", ($) => C.createMessage.v1({ text: $.input.text }))
@@ -68,8 +68,8 @@ beforeAll(async () => {
 		.returning()
 	sessionId = session.id
 	const slugs = await db.select().from(schema.pipelineSpecs)
-	narrateSpecId = slugs.find((s) => s.slug === "core:spec/chat-narrate")!.id
-	respondSpecId = slugs.find((s) => s.slug === "core:spec/chat-respond")!.id
+	narrateSpecId = slugs.find((s) => s.slug === "core:spec/story-narrate")!.id
+	respondSpecId = slugs.find((s) => s.slug === "core:spec/story-respond")!.id
 }, 60_000)
 
 describe("reprojectBindingSubjects (⏳ plans/31 V2)", () => {
@@ -81,14 +81,14 @@ describe("reprojectBindingSubjects (⏳ plans/31 V2)", () => {
 			{ scopeKind: "pub", scopeId: 0, genreId: CHAT, subject: "sum", specId: narrateSpecId },
 			{ scopeKind: "pub", scopeId: 0, genreId: CHAT, subject: "summon-dragon", specId: narrateSpecId },
 			// Already a subject: untouched.
-			{ scopeKind: "pub", scopeId: 0, genreId: CHAT, subject: "core:spec/chat-narrate#narrate", specId: narrateSpecId }
+			{ scopeKind: "pub", scopeId: 0, genreId: CHAT, subject: "core:spec/story-narrate#narrate", specId: narrateSpecId }
 		]
 		await db.insert(schema.pipelineBindings).values(rows as any)
 
 		const report = await reprojectBindingSubjects(db)
 		expect(report.rewritten).toEqual([
 			`(session ${sessionId}, ${CHAT}) 'respond' → '${sessionEvents.messageRespond}'`,
-			`(session ${sessionId}, ${CHAT}) 'narrate' → 'core:spec/chat-narrate#narrate'`
+			`(session ${sessionId}, ${CHAT}) 'narrate' → 'core:spec/story-narrate#narrate'`
 		])
 		expect(report.dropped).toEqual([
 			`(pub, ${CHAT}) 'sum' — 2 actions declare it (core:spec/test-sum-a#sum, acme:spec/sum-b#sum); a binding is about one`,
@@ -100,9 +100,9 @@ describe("reprojectBindingSubjects (⏳ plans/31 V2)", () => {
 			.map((r) => `${r.scopeKind}:${r.subject}`)
 			.sort()
 		expect(left).toEqual([
-			"pub:core:spec/chat-narrate#narrate",
+			"pub:core:spec/story-narrate#narrate",
 			"session:core:event/message-respond@1",
-			"session:core:spec/chat-narrate#narrate"
+			"session:core:spec/story-narrate#narrate"
 		])
 
 		// The second boot finds nothing bare.
@@ -111,7 +111,7 @@ describe("reprojectBindingSubjects (⏳ plans/31 V2)", () => {
 		// …and the rewritten rows are read by the resolver as the session's own.
 		const { resolveSubjectSpec } = await import("$lib/server/pipelines/entities/sessionGenres")
 		expect(await resolveSubjectSpec(db, CHAT, sessionEvents.messageRespond, { sessionId })).toBe(
-			"core:spec/chat-respond"
+			"core:spec/story-respond"
 		)
 	}, 60_000)
 
@@ -127,7 +127,7 @@ describe("reprojectBindingSubjects (⏳ plans/31 V2)", () => {
 		const report = await reprojectBindingSubjects(db)
 		expect(report.rewritten).toEqual([])
 		expect(report.dropped).toEqual([
-			`(session ${sessionId}, ${CHAT}) 'narrate' — a binding on 'core:spec/chat-narrate#narrate' already exists`
+			`(session ${sessionId}, ${CHAT}) 'narrate' — a binding on 'core:spec/story-narrate#narrate' already exists`
 		])
 	}, 60_000)
 })

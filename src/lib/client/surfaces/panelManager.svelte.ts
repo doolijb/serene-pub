@@ -24,6 +24,8 @@ import {
 	CONVERSATION_WIDGET_ID,
 	drawnWidgetIds,
 	layoutWidgetIds,
+	panelsOf,
+	type PanelLayoutV1,
 	widgetOfInstance,
 	type SessionLayoutV1
 } from "@serene-pub/sdk"
@@ -33,6 +35,10 @@ import type {
 	WidgetEventSource
 } from "$lib/shared/widgets/context"
 import { pack } from "./pack"
+import {
+	withPanelOpen,
+	withPanelPinned
+} from "$lib/client/sessionLayout/livePanels"
 import {
 	instanceTitle,
 	normalizeLayout,
@@ -79,15 +85,28 @@ const DEFAULT_PRIMARY: ModePanel = {
  * declaration (C2): a genre that wants a widget on places it in its layout,
  * and a session's layout is a copy of one.
  */
-function drawnIn(layout?: LayoutBlob): ReadonlySet<string> {
+function drawnIn(layout?: Parameters<typeof arrangementOf>[0]): ReadonlySet<string> {
 	if (!layout) return new Set()
-	return new Set(
-		drawnWidgetIds({
-			zoneLayout: layout.zoneLayout,
-			widgetGrid: layout.widgetGrid,
-			arrangedGrid: layout.arrangedGrid
-		} as SessionLayoutV1)
-	)
+	return new Set(drawnWidgetIds(arrangementOf(layout)))
+}
+
+/**
+ * The arrangement a blob carries, as the SDK reads it: its `panels` — the
+ * whole truth when present — and the ⏳ old slots, which `panelsOf` converts
+ * only when there are none (PLAN-session-panels §1.2).
+ */
+function arrangementOf(layout: {
+	panels?: unknown
+	zoneLayout?: unknown
+	widgetGrid?: unknown
+	arrangedGrid?: unknown
+}): SessionLayoutV1 {
+	return {
+		...(layout.panels !== undefined ? { panels: layout.panels } : {}),
+		...(layout.zoneLayout !== undefined ? { zoneLayout: layout.zoneLayout } : {}),
+		...(layout.widgetGrid !== undefined ? { widgetGrid: layout.widgetGrid } : {}),
+		...(layout.arrangedGrid !== undefined ? { arrangedGrid: layout.arrangedGrid } : {})
+	} as SessionLayoutV1
 }
 
 function toInstance(
@@ -150,8 +169,8 @@ function toCopy(
 }
 
 /**
- * Every copy id the three stored slots name (zone lists, the middle grid, the
- * arrangement), each once, in READING order — what the layout draws first
+ * Every copy id the layout names (its panels' tabs — or, while it has none,
+ * what the ⏳ old slots name), each once, in READING order — what the layout draws first
  * (the SDK's `drawnWidgetIds`: middle, left, right, strips), then what it
  * names without drawing (`layoutWidgetIds`). The order matters only past a
  * widget's `maxInstances`, where the copies read first are the ones kept
@@ -263,6 +282,7 @@ export class SurfaceManager implements WidgetEventSource {
 		this.colFr = layout?.tierSizeOverrides
 			? { ...layout.tierSizeOverrides }
 			: {}
+		this.panels = layout?.panels
 		this.zoneLayout = layout?.zoneLayout
 		this.widgetGrid = layout?.widgetGrid
 		this.arrangedGrid = layout?.arrangedGrid
@@ -273,10 +293,10 @@ export class SurfaceManager implements WidgetEventSource {
 	}
 
 	/**
-	 * Bring `copies` in line with the ids the three slots name: a copy named
+	 * Bring `copies` in line with the ids the layout names: a copy named
 	 * and not yet made is cloned from its widget's declaration; a copy no
 	 * longer named is dropped (and so leaves the blob's `active[]`). Run on
-	 * every write to a slot — `init` and the three setters are the only ways
+	 * every write to the arrangement — `init` and `setPanels` are the only ways
 	 * one changes — so it needs no effect.
 	 *
 	 * A copy of a widget nobody declares (a plugin since disabled) or of the
@@ -285,18 +305,10 @@ export class SurfaceManager implements WidgetEventSource {
 	 * slots name them, and says so — the validator's warning, at the reader.
 	 */
 	#syncCopies(seed?: LayoutBlob) {
-		const named = namedCopyIds({
-			zoneLayout: this.zoneLayout,
-			widgetGrid: this.widgetGrid,
-			arrangedGrid: this.arrangedGrid
-		} as SessionLayoutV1)
+		const named = namedCopyIds(this.arrangement)
 		const have = new Map(this.copies.map((c) => [c.id, c]))
 		const placedBare = new Set(
-			layoutWidgetIds({
-				zoneLayout: this.zoneLayout,
-				widgetGrid: this.widgetGrid,
-				arrangedGrid: this.arrangedGrid
-			} as SessionLayoutV1).filter((id) => widgetOfInstance(id) === id)
+			layoutWidgetIds(this.arrangement).filter((id) => widgetOfInstance(id) === id)
 		)
 		const counts = new Map<string, number>()
 		const next: PanelInstance[] = []
@@ -359,11 +371,7 @@ export class SurfaceManager implements WidgetEventSource {
 	 * on exactly when the layout draws it (C2), nothing else remembered.
 	 */
 	resetLayout() {
-		const drawn = drawnIn({
-			zoneLayout: this.zoneLayout,
-			widgetGrid: this.widgetGrid,
-			arrangedGrid: this.arrangedGrid
-		})
+		const drawn = drawnIn(this.arrangement)
 		this.decls = this.#declared.map((p) => toInstance(p, {}, drawn))
 		this.copies = []
 		this.#syncCopies()
@@ -726,41 +734,64 @@ export class SurfaceManager implements WidgetEventSource {
 	}
 
 	/**
-	 * The modular zone layout (mockup 2026-08-28) — the free-form template
-	 * SessionLayout edits. Stored verbatim inside the same blob; the manager
-	 * is only its courier, never its interpreter.
+	 * The arrangement (`panels`, PLAN-session-panels-2026-10-14): stored
+	 * verbatim as the row has it — absent until something writes one — and
+	 * written through `setPanels` alone. The manager is its courier, never
+	 * its interpreter; the session layout reads it through the SDK's
+	 * `panelsOf` (`arrangement`).
+	 */
+	panels = $state<unknown>(undefined)
+
+	/**
+	 * ⏳ The three old slots, as the row has them — READ ONLY (until the 0.7
+	 * squash). `panelsOf` converts them while the row has no `panels`; the
+	 * manager never writes them back, and the blob it saves never carries
+	 * them (the server's `panelLayout:set` patches by key presence, so a row
+	 * keeps them, inert). `zoneLayout.styles` (the message pack by name) is
+	 * still read off the old slot: see `legacyStyles`.
 	 */
 	zoneLayout = $state<unknown>(undefined)
-
-	setZoneLayout(layout: unknown) {
-		this.zoneLayout = layout
-		this.#syncCopies()
-		this.#schedulePersist()
-	}
-
-	/**
-	 * The chat widget grid (PLAN 25) — the middle-zone widget config
-	 * SessionLayout edits. Same courier contract as zoneLayout: stored verbatim,
-	 * never interpreted here.
-	 */
+	/** ⏳ Read only — see `zoneLayout`. */
 	widgetGrid = $state<unknown>(undefined)
-
-	setWidgetGrid(grid: unknown) {
-		this.widgetGrid = grid
-		this.#syncCopies()
-		this.#schedulePersist()
-	}
-
-	/**
-	 * The drag editor's captured per-zone geometry (PLAN 25). Same courier
-	 * contract as the two above: stored verbatim, never interpreted here.
-	 */
+	/** ⏳ Read only — see `zoneLayout`. */
 	arrangedGrid = $state<unknown>(undefined)
 
-	setArrangedGrid(grid: unknown) {
-		this.arrangedGrid = grid
+	/** The stored layout's arrangement, as the SDK's readers take it. */
+	get arrangement(): SessionLayoutV1 {
+		return arrangementOf(this)
+	}
+
+	/** Replace the arrangement; it persists (debounced) like every edit. */
+	setPanels(panels: PanelLayoutV1) {
+		this.panels = panels
 		this.#syncCopies()
 		this.#schedulePersist()
+	}
+
+	/**
+	 * The arrangement as panels — what is stored, or the ⏳ old slots read as
+	 * panels — for an edit to start from. A first edit of a row with no
+	 * `panels` writes the converted arrangement, and from then on the row
+	 * has them.
+	 */
+	#currentPanels(): PanelLayoutV1 {
+		return $state.snapshot(panelsOf(this.arrangement)) as PanelLayoutV1
+	}
+
+	/**
+	 * A panel's tab shown (PLAN-session-panels §1.3): written at once,
+	 * saved with the debounced blob, because "which tab you have open" is
+	 * part of the layout. A key or tab the layout does not hold is a no-op.
+	 */
+	setPanelOpen(key: string, tab: string) {
+		const next = withPanelOpen(this.#currentPanels(), key, tab)
+		if (next) this.setPanels(next)
+	}
+
+	/** A side panel docked (`true`) or moved to the rail (`false`). */
+	setPanelPinned(key: string, pinned: boolean) {
+		const next = withPanelPinned(this.#currentPanels(), key, pinned)
+		if (next) this.setPanels(next)
 	}
 
 	/** Serialize just the sticky per-panel state (21 §10). */
@@ -776,15 +807,8 @@ export class SurfaceManager implements WidgetEventSource {
 					on: p.active
 				})),
 			tierSizeOverrides: { ...this.colFr },
-			...(this.zoneLayout !== undefined
-				? { zoneLayout: this.zoneLayout }
-				: {}),
-			...(this.widgetGrid !== undefined
-				? { widgetGrid: this.widgetGrid }
-				: {}),
-			...(this.arrangedGrid !== undefined
-				? { arrangedGrid: this.arrangedGrid }
-				: {})
+			// The arrangement only — never the ⏳ old slots (`zoneLayout`).
+			...(this.panels !== undefined ? { panels: this.panels } : {})
 		}
 	}
 

@@ -61,7 +61,9 @@ describe("0.5.3 database", () => {
 
 		const res = await runMigrationsWithUpgrades(db, { migrationsFolder: REAL })
 
-		expect(res.upgradesRun).toEqual(["0095_schema_0_6_0"])
+		// Every anchored upgrade on the chain runs once; 0107 (Story,
+		// 2026-10-19) finds nothing to move on a database just stashed.
+		expect(res.upgradesRun).toEqual(["0095_schema_0_6_0", "0107_story_genre"])
 		expect(await atticExists(client)).toBe(true)
 		expect(await count(client, `${ATTIC_SCHEMA}.chats`)).toBe(1)
 		expect(await count(client, `${ATTIC_SCHEMA}.chat_messages`)).toBe(2)

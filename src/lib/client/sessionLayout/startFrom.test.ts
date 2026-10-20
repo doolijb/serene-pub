@@ -11,6 +11,7 @@ import {
 	copyConfirm,
 	copyTarget,
 	deleteConfirm,
+	chipFilter,
 	groupLayoutPresets,
 	newSessionChoice,
 	newSessionLayoutOf,
@@ -18,6 +19,8 @@ import {
 	reCopyAsk,
 	saveChangesConfirm,
 	sharedMark,
+	showChips,
+	sourceLine,
 	unshareAsks,
 	unshareConfirm,
 	updatedSentence,
@@ -28,7 +31,7 @@ type Preset = Sockets.Sessions.LayoutPreset
 
 function preset(over: Partial<Preset> & { id: number; name: string }): Preset {
 	return {
-		genreId: "core:genre/adventure",
+		genreId: "core:genre/story",
 		origin: "core",
 		slug: over.name.toLowerCase().replace(/\W+/g, "-"),
 		description: null,
@@ -71,28 +74,98 @@ const MINE = preset({
 })
 const SHARED = preset({ id: 5, name: "Harbour", origin: "user", authorName: "Ash" })
 
-describe("groupLayoutPresets", () => {
-	test("genre default layout, then Serene Pub's, each plugin's by name, yours, and shared with you", () => {
-		const groups = groupLayoutPresets([SHARED, MINE, BOARD, CINEMATIC, ATLAS, DEFAULT])
-		expect(groups.map((g) => [g.label, g.presets.map((p) => p.id)])).toEqual([
-			["Genre default layout", [1]],
-			["From Serene Pub", [2]],
-			["From Acme Maps", [6]],
-			["From Battleship", [3]],
-			["Your layouts", [4]],
-			["Shared with you", [5]]
+const ids = (cards: readonly Preset[]) => cards.map((p) => p.id)
+
+describe("groupLayoutPresets: two sections", () => {
+	test("Ready-made: genre default, Serene Pub's, then plugins by plugin name; Yours and shared: yours, then shared", () => {
+		const sections = groupLayoutPresets([SHARED, MINE, BOARD, CINEMATIC, ATLAS, DEFAULT])
+		expect(sections.map((s) => [s.key, s.label, ids(s.cards)])).toEqual([
+			["ready-made", "Ready-made", [1, 2, 6, 3]],
+			["yours", "Yours and shared", [4, 5]]
 		])
 	})
 
-	test("a plugin genre's own default is the genre default layout, not the plugin's group", () => {
-		const own = preset({ ...BOARD, id: 9, name: "Board", slug: "default", isGenreDefault: true })
-		const groups = groupLayoutPresets([own, BOARD])
-		expect(groups.map((g) => g.label)).toEqual(["Genre default layout", "From Battleship"])
+	test("plugin layouts sort by plugin name, then layout name; core's keep the server's order", () => {
+		const zeta = preset({ ...BOARD, id: 20, name: "Zeta" })
+		const alpha = preset({ ...BOARD, id: 21, name: "Alpha" })
+		const coreB = preset({ id: 22, name: "Beta" })
+		const sections = groupLayoutPresets([zeta, coreB, alpha, ATLAS, CINEMATIC])
+		expect(ids(sections[0].cards)).toEqual([22, 2, 6, 21, 20])
 	})
 
-	test("no rows, no groups: an empty group is never drawn", () => {
+	test("an in-app genre's own layouts are ready-made, after core's and before plugins'", () => {
+		const pubRow = preset({ id: 23, name: "Tavern", origin: "pub" })
+		const sections = groupLayoutPresets([BOARD, pubRow, CINEMATIC])
+		expect(ids(sections[0].cards)).toEqual([2, 23, 3])
+	})
+
+	test("yours by name first, then other people's by author, then name", () => {
+		const mine2 = preset({ ...MINE, id: 30, name: "Attic" })
+		const byZed = preset({ ...SHARED, id: 31, name: "Alpha", authorName: "Zed" })
+		const byAsh2 = preset({ ...SHARED, id: 32, name: "Anchor" })
+		const sections = groupLayoutPresets([byZed, SHARED, MINE, byAsh2, mine2])
+		expect(sections.map((s) => s.key)).toEqual(["yours"])
+		expect(ids(sections[0].cards)).toEqual([30, 4, 32, 5, 31])
+	})
+
+	test("a plugin genre's own default is the genre default, first in Ready-made", () => {
+		const own = preset({ ...BOARD, id: 9, name: "Board", slug: "default", isGenreDefault: true })
+		const sections = groupLayoutPresets([BOARD, own])
+		expect(ids(sections[0].cards)).toEqual([9, 3])
+	})
+
+	test("an empty section is never returned", () => {
 		expect(groupLayoutPresets([])).toEqual([])
-		expect(groupLayoutPresets([MINE]).map((g) => g.label)).toEqual(["Your layouts"])
+		expect(groupLayoutPresets([MINE]).map((s) => s.key)).toEqual(["yours"])
+		expect(groupLayoutPresets([CINEMATIC]).map((s) => s.key)).toEqual(["ready-made"])
+	})
+})
+
+describe("sourceLine: who brought a card", () => {
+	test("every source in its own words", () => {
+		expect(sourceLine(DEFAULT)).toBe("Genre default")
+		expect(sourceLine(CINEMATIC)).toBe("Serene Pub")
+		expect(sourceLine(preset({ id: 23, name: "Tavern", origin: "pub" }))).toBe("This pub")
+		expect(sourceLine(BOARD)).toBe("Battleship")
+		expect(sourceLine(MINE)).toBe("You")
+		expect(sourceLine(SHARED)).toBe("Shared by Ash")
+	})
+
+	test("a plugin with no name says its id; a shared one with no author says someone else", () => {
+		expect(sourceLine(preset({ ...BOARD, pluginName: null }))).toBe("showcase.battleship")
+		expect(sourceLine(preset({ ...SHARED, authorName: null }))).toBe("Shared by someone else")
+	})
+
+	test("yours, when this session started from it, says it is in use here", () => {
+		expect(sourceLine(MINE, MINE.id)).toBe("You · in use here")
+		expect(sourceLine(MINE, 99)).toBe("You")
+		expect(sourceLine(MINE, null)).toBe("You")
+		// Only your own wears it: a shipped one says who brought it either way.
+		expect(sourceLine(CINEMATIC, CINEMATIC.id)).toBe("Serene Pub")
+		expect(sourceLine(SHARED, SHARED.id)).toBe("Shared by Ash")
+	})
+})
+
+describe("the chips on a long section", () => {
+	const many = (n: number, over: Partial<Preset> = {}) =>
+		Array.from({ length: n }, (_, i) =>
+			preset({ ...MINE, id: 100 + i, name: `Layout ${i}`, ...over })
+		)
+
+	test("drawn only past eight cards", () => {
+		const [eight] = groupLayoutPresets(many(8))
+		const [nine] = groupLayoutPresets(many(9))
+		expect(showChips(eight)).toBe(false)
+		expect(showChips(nine)).toBe(true)
+	})
+
+	test("All, Mine and Shared filter the section's cards", () => {
+		const cards = [...many(5), ...many(4, { mine: false, visibility: "shared", authorName: "Ash" }).map((p, i) => ({ ...p, id: 200 + i }))]
+		const [section] = groupLayoutPresets(cards)
+		expect(chipFilter(section, "all")).toHaveLength(9)
+		expect(chipFilter(section, "mine").every((p) => p.mine)).toBe(true)
+		expect(chipFilter(section, "mine")).toHaveLength(5)
+		expect(ids(chipFilter(section, "shared"))).toEqual([200, 201, 202, 203])
 	})
 })
 

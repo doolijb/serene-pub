@@ -19,7 +19,7 @@ import { sessionStatTrail } from "$lib/server/state/statTrail"
 /** A refusal said to the asker in words (not a fault of the server's). */
 export class StatTrailRefusal extends Error {}
 
-const OWNER_KINDS = new Set(["session", "session_cast", "session_location"])
+const OWNER_KINDS = new Set(["session", "session_cast", "player_seat", "session_location"])
 
 const tokenOf = (params: { request?: unknown }) =>
 	typeof params?.request === "string" ? { request: params.request } : {}
@@ -46,7 +46,7 @@ export async function readStatTrail(
 	const { changes } = await sessionStatTrail(db, {
 		sessionId: params.sessionId,
 		owner: {
-			kind: owner.kind as "session" | "session_cast" | "session_location",
+			kind: owner.kind as "session" | "session_cast" | "player_seat" | "session_location",
 			id: owner.id
 		},
 		slotId,

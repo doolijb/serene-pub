@@ -1,0 +1,1 @@
+ALTER TABLE "sessions" ADD COLUMN "ruleset_settings" jsonb DEFAULT '{}'::jsonb NOT NULL;

@@ -13,20 +13,20 @@ import {
 } from "./pipelineGenre"
 
 const genres = [
-	{ genreId: "core:genre/chat", name: "Chat" },
-	{ genreId: "core:genre/adventure", name: "Adventure" }
+	{ genreId: "core:genre/story", name: "Story" },
+	{ genreId: "core:genre/lair", name: "Lair" }
 ]
 
 const pipelines = [
 	{
-		slug: "core:spec/chat-respond",
+		slug: "core:spec/story-respond",
 		name: "Reply",
-		taxonomy: { role: "primary", genre: "core:genre/chat" }
+		taxonomy: { role: "primary", genre: "core:genre/story" }
 	},
 	{
-		slug: "core:spec/adventure-respond",
+		slug: "core:spec/lair-respond",
 		name: "Reply",
-		taxonomy: { role: "primary", genre: "core:genre/adventure" }
+		taxonomy: { role: "primary", genre: "core:genre/lair" }
 	},
 	{
 		slug: "core:spec/summarize-scene",
@@ -38,7 +38,7 @@ const pipelines = [
 
 describe("pipelineGenreId", () => {
 	it("is the declared claim, or null for a shared or unclassified pipeline", () => {
-		expect(pipelineGenreId(pipelines[0])).toBe("core:genre/chat")
+		expect(pipelineGenreId(pipelines[0])).toBe("core:genre/story")
 		expect(pipelineGenreId(pipelines[2])).toBeNull()
 		expect(pipelineGenreId(pipelines[3])).toBeNull()
 		expect(pipelineGenreId({})).toBeNull()
@@ -47,7 +47,7 @@ describe("pipelineGenreId", () => {
 
 describe("pipelineGenreName", () => {
 	it("is the registry's display name, never the id", () => {
-		expect(pipelineGenreName(pipelines[1], genres)).toBe("Adventure")
+		expect(pipelineGenreName(pipelines[1], genres)).toBe("Lair")
 	})
 	it("names nothing until the genres have arrived", () => {
 		expect(pipelineGenreName(pipelines[1], null)).toBeNull()
@@ -67,19 +67,19 @@ describe("pipelineGenreName", () => {
 
 describe("withGenre", () => {
 	it("puts the genre beside the name, or leaves the name bare", () => {
-		expect(withGenre("Reply", "Adventure")).toBe("Reply · Adventure")
+		expect(withGenre("Reply", "Lair")).toBe("Reply · Lair")
 		expect(withGenre("Summarize scene", null)).toBe("Summarize scene")
 	})
 })
 
 describe("pipelineLabel", () => {
 	it("tells two genres' Reply apart by slug", () => {
-		expect(pipelineLabel("core:spec/chat-respond", pipelines, genres)).toBe(
-			"Reply · Chat"
+		expect(pipelineLabel("core:spec/story-respond", pipelines, genres)).toBe(
+			"Reply · Story"
 		)
 		expect(
-			pipelineLabel("core:spec/adventure-respond", pipelines, genres)
-		).toBe("Reply · Adventure")
+			pipelineLabel("core:spec/lair-respond", pipelines, genres)
+		).toBe("Reply · Lair")
 	})
 	it("leaves a shared pipeline's name bare", () => {
 		expect(
@@ -87,9 +87,9 @@ describe("pipelineLabel", () => {
 		).toBe("Summarize scene")
 	})
 	it("is null while either list is on its way, or for an unknown slug", () => {
-		expect(pipelineLabel("core:spec/chat-respond", null, genres)).toBeNull()
+		expect(pipelineLabel("core:spec/story-respond", null, genres)).toBeNull()
 		expect(
-			pipelineLabel("core:spec/chat-respond", pipelines, null)
+			pipelineLabel("core:spec/story-respond", pipelines, null)
 		).toBeNull()
 		expect(pipelineLabel("core:spec/gone", pipelines, genres)).toBeNull()
 	})

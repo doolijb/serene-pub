@@ -10,7 +10,7 @@ You'll know what's different and why, where each SillyTavern habit lives now, wh
 
 ## In one minute
 
-- **Genres come with a ready-made pipeline.** You don't assemble a prompt out of a system prompt, a story string, an instruct template and an author's note. You pick a genre (Chat, Adventure, the Lair, the Guide), and its pipeline already knows what goes where. To change what the model is told, you change the prompt text. See [Genres](./genres.md).
+- **Genres come with a ready-made pipeline.** You don't assemble a prompt out of a system prompt, a story string, an instruct template and an author's note. You pick a genre (Chat, Story, the Lair, the Guide), and its pipeline already knows what goes where. To change what the model is told, you change the prompt text. See [Genres](./genres.md).
 - **Lorebooks are worlds.** A lorebook still holds keyword-triggered entries, but it can also hold places joined on a map, dated history, branches of the story, and a cast whose members each have lore only they know. See [Lorebooks](./lorebooks.md).
 - **Several people can share one pub.** Turn on accounts and each person signs in to their own characters and stories. You can invite them as guests into one session, and a real turn order decides who speaks. See [Users and accounts](./users-and-accounts.md) and [Group sessions](./group-sessions.md).
 - **Your library comes over with a guided import.** Point Serene Pub at your SillyTavern folder and it brings in characters, personas, chats and World Info, swipes included. See [Importing from SillyTavern](./importing-from-sillytavern.md).
@@ -53,7 +53,7 @@ The importer is offered to administrators only, and not in the [Android app](./a
 | Context template, story string | [Context template](./context-templates.md) |
 | System prompt | The **System prompt** of a pipeline's [prompt](./pipelines.md#prompts) |
 | Post-history instructions | **Post-history instructions**, on the prompt and on the character card ([where they go](./context-templates.md#the-posthistory-object)) |
-| Author's Note | Chat's [**Author's note**](./sessions.md#authors-note): the same note, depth and interval, edited in the session's settings or its own widget. A new note goes at the end, right before the reply (depth 0, where SillyTavern uses 4); an imported chat keeps the depth it had. Adventure, the Lair and the Guide don't offer one. |
+| Author's Note | Story's [**Author's note**](./sessions.md#authors-note): the same note, depth and interval, edited in the session's settings or its own widget. A new note goes at the end, right before the reply (depth 0, where SillyTavern uses 4); an imported chat keeps the depth it had. Story, the Lair and the Guide don't offer one. |
 | World Info, lorebook | [Lorebook](./lorebooks.md) entries, plus [places](./lorebook-places.md), [history](./lorebook-time.md) and [cast](./lorebook-cast.md) |
 | Swipes | [Swipes](./sessions.md#regenerate-extend-and-swipe) |
 | Continue | **Extend** |
@@ -85,13 +85,13 @@ Entries still fire on keywords, with regex, case sensitivity and priority. With 
 
 ### Group chats
 
-A group session is a Chat session with more than one character. A turn order decides who speaks: **Round robin**, **Round robin by user**, **Random**, **Scripted**, **Manual** or **Narrator replies**, or let the model pick. **Auto-advance** decides whether one character answers or the whole round plays out, and **Character detail** sets how much the model is told about everyone who isn't speaking. See [Group sessions](./group-sessions.md).
+A group session is a Story session with more than one character. A turn order decides who speaks: **Round robin**, **Round robin by user**, **Random**, **Scripted**, **Manual** or **Narrator replies**, or let the model pick. **Auto-advance** decides whether one character answers or the whole round plays out, and **Character detail** sets how much the model is told about everyone who isn't speaking. See [Group sessions](./group-sessions.md).
 
 **What you'll notice:** the turn line above the composer says who is due next, with **Continue** and **Pick who speaks** in the Actions row.
 
 ### Stats and state
 
-**Adventure** and **the Lair** keep track of health, mood, inventory, location and the like for you. The model can only *propose* a change: it shows under the reply with **Accept** and **Reject**, and **Review N changes** gathers every waiting one. Every change is tied to the message that made it, so swiping or deleting that message takes the change back. Chat tracks nothing. See [Stats and states](./stats-and-states.md).
+**Story** and **the Lair** keep track of health, mood, inventory, location and the like for you. The model can only *propose* a change: it shows under the reply with **Accept** and **Reject**, and **Review N changes** gathers every waiting one. Every change is tied to the message that made it, so swiping or deleting that message takes the change back. Chat tracks nothing. See [Stats and states](./stats-and-states.md).
 
 **What you'll notice:** no extension or prompt trick needed to keep numbers straight, and nothing changes behind your back.
 
@@ -122,12 +122,12 @@ Things you'd otherwise patch together with extensions, or do by hand:
 - **A cast with private lore.** Each cast member can know things nobody else does, and has relationships to the others. See [Cast and relationships](./lorebook-cast.md).
 - **Real turn order.** Strategies, auto-advance, benching and a narrator on request. See [Group sessions](./group-sessions.md).
 - **Multiplayer.** Accounts, invite links and guests in one shared story. See [Users and accounts](./users-and-accounts.md).
-- **Genres.** **Chat**, **Adventure** (a narrated world with stats), **the Lair** (you are the dungeon; an AI party explores it) and the **Guide** (answers questions about the app from these docs). See [Genres](./genres.md).
+- **Genres.** **Chat** (the model as itself, with tools), **Story** (your characters, from a quiet conversation to a living world), **the Lair** (you are the dungeon; an AI party explores it) and the **Guide** (answers questions about the app from these docs). See [Genres](./genres.md).
 
 ### More
 
 - **Stats tracked for you**, with every change shown under its message. See [Stats and states](./stats-and-states.md).
-- **Visible pipelines.** Each model call has a name and its own prompt, model and sampling, so Adventure's planner can run on a small model and its narrator on a large one. See [Agents](./pipelines.md#agents).
+- **Visible pipelines.** Each model call has a name and its own prompt, model and sampling, so Story's planner can run on a small model and its narrator on a large one. See [Agents](./pipelines.md#agents).
 - **The run inspector**, for administrators: every step of a reply, the exact request sent, and why each piece of lore went in or not. See [Inspecting a run](./pipelines.md#inspecting-a-run).
 - **The template variable list**, with each value's shape and an example. See [Finding the variables a template can use](./context-templates.md#finding-the-variables-a-template-can-use).
 - **Search by meaning that doesn't redo work.** Only a change to an entry's text re-embeds it. See [Keeping the index up to date](./embeddings-and-rag.md#keeping-the-index-up-to-date).
@@ -178,9 +178,9 @@ The status line at the top of the **Models** view reads **Replies:**, naming the
 - **Not reachable**: check the program is running, or the address and your network. See [Check that it worked](./connect-a-model.md#check-that-it-worked).
 :::
 
-### 3. Start a Chat session
+### 3. Start a Story session
 
-Open **Sessions** on the rail and press **New**. Leave **Genre** on **Chat**, press **Add characters** under **Who is in it** and tick your character, check that **Who you play as** shows your persona (**Change** picks another), then press **Start**. Send a message.
+Open **Sessions** on the rail and press **New**. Leave **Genre** on **Story**, press **Add characters** under **Who is in it** and tick your character, check that **Who you play as** shows your persona (**Change** picks another), then press **Start**. Send a message.
 
 :::tip You should see
 The character's greeting from their card, then their reply streaming in under your message.

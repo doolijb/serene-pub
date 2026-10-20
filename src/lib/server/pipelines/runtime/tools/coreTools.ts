@@ -25,6 +25,9 @@ import {
 	type ToolContext
 } from "$lib/server/pipelines/runtime/tools"
 import { STATE_TOOLS } from "$lib/server/pipelines/runtime/tools/stateTools"
+import { WEB_TOOLS } from "$lib/server/pipelines/runtime/tools/webTools"
+import { ASSISTANT_TOOLS } from "$lib/server/pipelines/runtime/tools/assistantTools"
+import { WRITE_TOOLS } from "$lib/server/pipelines/runtime/tools/writeTools"
 import { keysText } from "$lib/server/pipelines/ranking/signals"
 
 /** How much of a hit's surroundings comes back, in characters, either side. */
@@ -379,7 +382,15 @@ export const CORE_TOOLS: CoreTool[] = [
 	readSummary,
 	// The three that ask rather than read — see stateTools.ts for why asking is
 	// not the write the rule above forbids.
-	...STATE_TOOLS
+	...STATE_TOOLS,
+	// The web, for the assistant genres only (`webToolsAllowed` gates the offer).
+	...WEB_TOOLS,
+	// The clock and the calculator: pure, for the assistant's `clock` / `calculator` kinds.
+	...ASSISTANT_TOOLS,
+	// 🚧 The four that file through a host door (lane 2): `lorebook-write`,
+	// `image`, and the memory (★K). See writeTools.ts for why they are not
+	// the write the rule above forbids.
+	...WRITE_TOOLS
 ]
 
 export const coreTool = (name: string): CoreTool | undefined =>

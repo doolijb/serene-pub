@@ -1,7 +1,7 @@
 /**
  * The rebind move (PLAN-turn-order §5 A5, R20; retargeted by M2, R27): the
  * Turn order control's row follows the node it names. Until 0152 a
- * session's choice was a `pipeline_node_rebinds` row on `core:spec/chat-respond`
+ * session's choice was a `pipeline_node_rebinds` row on `core:spec/story-respond`
  * node `speaker`; at A6 it moved to the shared `core:spec/turn-order` node
  * `strategy`; since the modder pass every genre has its own turn-order spec
  * (`core:spec/<genre>-turn-order`), so a row lands on the spec of **the
@@ -28,15 +28,15 @@ let userId: number
 const specs: Record<string, number> = {}
 
 const SPECS = [
-	"core:spec/chat-respond",
+	"core:spec/story-respond",
 	"core:spec/guide-respond",
 	// Retired by the modder pass; an A5/A6 boot may have left rows on them.
 	"core:spec/turn-order",
 	"core:spec/turn-order-narrator",
 	// Every genre's own (R27).
-	"core:spec/chat-turn-order",
+	"core:spec/story-turn-order",
 	"core:spec/guide-turn-order",
-	"core:spec/adventure-turn-order"
+	"core:spec/lair-turn-order"
 ]
 
 beforeAll(async () => {
@@ -68,7 +68,7 @@ beforeAll(async () => {
 }, 60_000)
 
 let nextSession = 1
-async function makeSession(genreId = "core:genre/chat") {
+async function makeSession(genreId = "core:genre/story") {
 	const [session] = await db
 		.insert(schema.sessions)
 		.values({ userId, isGroup: false, name: `rebind ${nextSession++}`, genreId })
@@ -122,7 +122,7 @@ const rebindsOf = async (sessionId: number) => {
 // Chat's strategy sits behind its model path (M4) — the move reads the key
 // from core-catalog's table; this is what the table says for chat.
 const strategyKeyOf = (spec: string) =>
-	spec === "core:spec/chat-turn-order" ? "decide.rules.strategy" : "strategy"
+	spec === "core:spec/story-turn-order" ? "decide.rules.strategy" : "strategy"
 
 const strategyOn = (spec: string, definitionId: string) => ({
 	spec,
@@ -136,7 +136,7 @@ describe("moveSpeakerRebinds", () => {
 	it("moves a 0152-shaped row to the session genre's turn-order spec, once", async () => {
 		const sessionId = await makeSession()
 		await rebind({
-			spec: "core:spec/chat-respond",
+			spec: "core:spec/story-respond",
 			sessionId,
 			nodeKey: "speaker",
 			definitionId: "core:task/turn-user-split@1"
@@ -144,7 +144,7 @@ describe("moveSpeakerRebinds", () => {
 
 		expect(await moveSpeakerRebinds(db)).toMatchObject({ moved: 1, kept: 0, dropped: 0 })
 		expect(await rebindsOf(sessionId)).toEqual([
-			strategyOn("core:spec/chat-turn-order", "core:task/turn-user-split@1")
+			strategyOn("core:spec/story-turn-order", "core:task/turn-user-split@1")
 		])
 
 		// A second boot moves nothing: the source row is gone and the
@@ -168,46 +168,48 @@ describe("moveSpeakerRebinds", () => {
 	})
 
 	it("a row an earlier boot moved onto a retired shared slug moves again, where it can", async () => {
-		const chat = await makeSession()
-		const adventure = await makeSession("core:genre/adventure")
+		const story = await makeSession()
+		// A narrator genre whose turn order offers no swaps — the Lair, as
+		// Adventure was until 2026-10-19.
+		const lair = await makeSession("core:genre/lair")
 		await rebind({
 			spec: "core:spec/turn-order",
-			sessionId: chat,
+			sessionId: story,
 			nodeKey: "strategy",
 			definitionId: "core:task/turn-manual@1"
 		})
 		await rebind({
 			spec: "core:spec/turn-order-narrator",
-			sessionId: adventure,
+			sessionId: lair,
 			nodeKey: "strategy",
 			definitionId: "core:task/turn-narrator@1"
 		})
-		// Chat's moves; adventure's has nowhere visible to go (no swaps).
+		// Story's moves; the Lair's has nowhere visible to go (no swaps).
 		expect(await moveSpeakerRebinds(db)).toMatchObject({ moved: 1, dropped: 1 })
-		expect(await rebindsOf(chat)).toEqual([
-			strategyOn("core:spec/chat-turn-order", "core:task/turn-manual@1")
+		expect(await rebindsOf(story)).toEqual([
+			strategyOn("core:spec/story-turn-order", "core:task/turn-manual@1")
 		])
-		expect(await rebindsOf(adventure)).toEqual([])
+		expect(await rebindsOf(lair)).toEqual([])
 	})
 
 	it("a row at chat's old `strategy` key follows the node behind the model path (M4)", async () => {
 		const sessionId = await makeSession()
 		await rebind({
-			spec: "core:spec/chat-turn-order",
+			spec: "core:spec/story-turn-order",
 			sessionId,
 			nodeKey: "strategy",
 			definitionId: "core:task/turn-random@1"
 		})
 		expect(await moveSpeakerRebinds(db)).toMatchObject({ moved: 1 })
 		expect(await rebindsOf(sessionId)).toEqual([
-			strategyOn("core:spec/chat-turn-order", "core:task/turn-random@1")
+			strategyOn("core:spec/story-turn-order", "core:task/turn-random@1")
 		])
 	})
 
 	it("renames turn-none to turn-manual as it moves", async () => {
 		const sessionId = await makeSession()
 		await rebind({
-			spec: "core:spec/chat-respond",
+			spec: "core:spec/story-respond",
 			sessionId,
 			nodeKey: "speaker",
 			definitionId: "core:task/turn-none@1"
@@ -221,13 +223,13 @@ describe("moveSpeakerRebinds", () => {
 	it("never overwrites a strategy row the person already has", async () => {
 		const sessionId = await makeSession()
 		await rebind({
-			spec: "core:spec/chat-respond",
+			spec: "core:spec/story-respond",
 			sessionId,
 			nodeKey: "speaker",
 			definitionId: "core:task/turn-user-split@1"
 		})
 		await rebind({
-			spec: "core:spec/chat-turn-order",
+			spec: "core:spec/story-turn-order",
 			sessionId,
 			nodeKey: "decide.rules.strategy",
 			definitionId: "core:task/turn-random@1"
@@ -237,14 +239,14 @@ describe("moveSpeakerRebinds", () => {
 		// The later choice stands; the old row is gone either way — the node
 		// it named does not exist any more.
 		expect(await rebindsOf(sessionId)).toEqual([
-			strategyOn("core:spec/chat-turn-order", "core:task/turn-random@1")
+			strategyOn("core:spec/story-turn-order", "core:task/turn-random@1")
 		])
 	})
 
 	it("drops a row whose session's genre has no core turn-order spec, and says so", async () => {
 		const sessionId = await makeSession("acme.rp:genre/tavern")
 		await rebind({
-			spec: "core:spec/chat-respond",
+			spec: "core:spec/story-respond",
 			sessionId,
 			nodeKey: "speaker",
 			definitionId: "core:task/turn-random@1"
@@ -256,13 +258,13 @@ describe("moveSpeakerRebinds", () => {
 	it("leaves rebinds on other nodes and other scopes alone", async () => {
 		const sessionId = await makeSession()
 		await rebind({
-			spec: "core:spec/chat-respond",
+			spec: "core:spec/story-respond",
 			sessionId,
 			nodeKey: "gather",
 			definitionId: "core:task/rank-hybrid@1"
 		})
 		await db.insert(schema.pipelineNodeRebinds).values({
-			specId: specs["core:spec/chat-respond"]!,
+			specId: specs["core:spec/story-respond"]!,
 			scopeKind: "pub",
 			scopeId: 0,
 			nodeKey: "speaker",
@@ -273,7 +275,7 @@ describe("moveSpeakerRebinds", () => {
 		expect(await moveSpeakerRebinds(db)).toMatchObject({ moved: 0, kept: 0, dropped: 0 })
 		expect(await rebindsOf(sessionId)).toEqual([
 			{
-				spec: "core:spec/chat-respond",
+				spec: "core:spec/story-respond",
 				nodeKey: "gather",
 				definitionId: "core:task/rank-hybrid@1",
 				updatedBy: userId
@@ -289,23 +291,23 @@ describe("moveSpeakerRebinds", () => {
 	it("leaves a row in place until its genre's spec exists, then moves it", async () => {
 		const sessionId = await makeSession()
 		await rebind({
-			spec: "core:spec/chat-respond",
+			spec: "core:spec/story-respond",
 			sessionId,
 			nodeKey: "speaker",
 			definitionId: "core:task/turn-user-split@1"
 		})
 		// The spec row the catalog seed inserts — taken away, as it is on any
 		// boot of a build that has not published it yet.
-		const chatId = specs["core:spec/chat-turn-order"]!
+		const chatId = specs["core:spec/story-turn-order"]!
 		await db
 			.update(schema.pipelineSpecs)
-			.set({ slug: "core:spec/chat-turn-order--absent" })
+			.set({ slug: "core:spec/story-turn-order--absent" })
 			.where(eq(schema.pipelineSpecs.id, chatId))
 		try {
 			expect(await moveSpeakerRebinds(db)).toEqual({ moved: 0, kept: 0, dropped: 0 })
 			expect(await rebindsOf(sessionId)).toEqual([
 				{
-					spec: "core:spec/chat-respond",
+					spec: "core:spec/story-respond",
 					nodeKey: "speaker",
 					definitionId: "core:task/turn-user-split@1",
 					updatedBy: userId
@@ -314,7 +316,7 @@ describe("moveSpeakerRebinds", () => {
 		} finally {
 			await db
 				.update(schema.pipelineSpecs)
-				.set({ slug: "core:spec/chat-turn-order" })
+				.set({ slug: "core:spec/story-turn-order" })
 				.where(eq(schema.pipelineSpecs.id, chatId))
 		}
 		// And it moves on the boot that publishes the spec.

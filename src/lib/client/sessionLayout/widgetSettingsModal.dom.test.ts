@@ -16,6 +16,7 @@ import {
 } from "./widgetSettingsModal.svelte"
 import { setWidgetStyleMode } from "$lib/client/stores/widgetStyles.svelte"
 import { setWidgetDuplicator } from "./widgetDuplicate.svelte"
+import { setWidgetSettingDecls } from "$lib/client/stores/widgetSettings.svelte"
 
 describe("widgetSettingsModal store", () => {
 	afterEach(() => {
@@ -122,6 +123,29 @@ describe("the gear opens the modal", () => {
 		)
 		// The style section lives in the modal now.
 		expect(d!.textContent).toContain("Style")
+	})
+
+	test("the widget's grouped settings sit under their headings in the dialog, nothing folded", async () => {
+		setWidgetSettingDecls({
+			messages: {
+				id: "messages",
+				title: "Conversation",
+				settings: {
+					showAvatars: { type: "boolean", label: "Faces", group: "Reading" },
+					nextUp: { type: "boolean", label: "Who is due next", group: "Turns" }
+				}
+			}
+		})
+		gear().click()
+		await settle()
+		const d = dialog()!
+		expect(
+			[...d.querySelectorAll("[data-settings-group]")].map((s) =>
+				s.getAttribute("data-settings-group")
+			)
+		).toEqual(["Reading", "Turns"])
+		expect(d.querySelector("details")).toBeNull()
+		setWidgetSettingDecls({})
 	})
 
 	test("Escape closes it and focus returns to the gear", async () => {

@@ -52,6 +52,7 @@ import {
 	SERENE_PUB_0_5_EXPORT_KEYS,
 	entryTypeIdOfExportKey,
 	type EntryExportKey,
+	type CoreEntryTypeId,
 	type EntryTypeId
 } from "$lib/shared/entries/types"
 import { isSlotLoreRef } from "@serene-pub/sdk"
@@ -617,7 +618,7 @@ function fileGroups<T extends ExportableEntryWithPosition>(
 			? typeId
 			: entryTypeIdOfExportKey(exportKeyOf(typeId, exportProfile))
 	const typeRank = (typeId: string) =>
-		ENTRY_TYPE_IDS.indexOf(typeId as EntryTypeId)
+		ENTRY_TYPE_IDS.indexOf(typeId as CoreEntryTypeId)
 	return ENTRY_TYPE_IDS.map((typeId) =>
 		entries
 			.filter((e) => typeRank(e.typeId) >= 0 && readAs(e.typeId) === typeId)

@@ -73,7 +73,8 @@ afterAll(async () => {
 
 let seq = 0
 async function makeUser() {
-	const { createTestUser } = await import("$lib/server/utils/testDb")
+	const { createTestUser, publishSaveMessage } = await import("$lib/server/utils/testDb")
+	await publishSaveMessage(db as never)
 	return createTestUser(db, `att-send-${++seq}`)
 }
 async function makeSession(userId: number) {
@@ -308,7 +309,7 @@ describe("send with attachments (PGlite integration)", () => {
 				content: "Two things",
 				trayItemIds: [image.id, pdf.id]
 			})
-			expect(res.error).toBe(PDF_REFUSED)
+			expect(res.refused).toBe(PDF_REFUSED)
 			expect(res.sessionId).toBe(session.id)
 			expect(await messageCount(session.id)).toBe(0)
 			expect(await trayRows(user.id, session.id)).toHaveLength(2)
@@ -333,7 +334,7 @@ describe("send with attachments (PGlite integration)", () => {
 					content: "hi",
 					trayItemIds
 				})
-				expect(res.error).toBe(TRAY_ITEM_GONE)
+				expect(res.refused).toBe(TRAY_ITEM_GONE)
 				expect(res.sessionId).toBe(session.id)
 			}
 			const uploading = await trayItem(owner.id, session.id, {
@@ -344,7 +345,7 @@ describe("send with attachments (PGlite integration)", () => {
 				content: "hi",
 				trayItemIds: [mine.id, uploading.id]
 			})
-			expect(res.error).toBe(TRAY_ITEM_STILL_UPLOADING)
+			expect(res.refused).toBe(TRAY_ITEM_STILL_UPLOADING)
 			expect(await messageCount(session.id)).toBe(0)
 			expect(await trayRows(owner.id, session.id)).toHaveLength(2)
 			// The stranger's tray is untouched.
@@ -373,7 +374,7 @@ describe("send with attachments (PGlite integration)", () => {
 				content: "mine now",
 				trayItemIds: [ownersItem.id]
 			})
-			expect(refused.res.error).toBe(TRAY_ITEM_GONE)
+			expect(refused.res.refused).toBe(TRAY_ITEM_GONE)
 
 			const { res } = await send(guest.id, {
 				sessionId: session.id,

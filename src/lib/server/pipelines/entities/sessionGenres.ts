@@ -40,7 +40,7 @@ import {
 	presetEventSpec,
 	type PresetFallback
 } from "$lib/server/pipelines/entities/presetBindings"
-import { i18nText, type EnvoyDecl, type I18n, type SessionShape } from "@serene-pub/sdk"
+import { getGenre, i18nText, type EnvoyDecl, type I18n, type SessionShape } from "@serene-pub/sdk"
 import { listedCollects, type ListedCollects } from "$lib/shared/actions/collects"
 import {
 	resolvePlayerLabel,
@@ -48,7 +48,8 @@ import {
 } from "$lib/shared/sessions/playerLabel"
 
 /** The F29 floor: always present, the default and the backfill (24 §3). */
-export const STANDARD_GENRE_ID = "core:genre/chat"
+/** The genre a session with none is read as — **Story** since 2026-10-19 (was Chat, which is the assistant now). */
+export const STANDARD_GENRE_ID = "core:genre/story"
 
 /** The spellings the floor wore before 24 §3; read-compat only. */
 export const LEGACY_STANDARD_GENRE_IDS = [
@@ -83,6 +84,11 @@ export interface SessionGenre {
 	 */
 	description: string
 	family?: string
+	/** 🚧 2026-10-19: the card's long copy, who may sit, ruleset uses, background tasks. */
+	about?: string
+	members?: "solo" | "group"
+	uses?: Record<string, unknown>
+	tasks?: Array<Record<string, unknown>>
 	shape: SessionShape
 	/** The event surface (24 §5), off the genre declaration row. */
 	events?: Record<string, { required?: boolean; open?: boolean }>
@@ -146,11 +152,36 @@ export async function listSessionGenres(db: Db): Promise<SessionGenre[]> {
 				r.inputGenre &&
 				r.genre?.shape
 		)
-		.map((r) => ({
+		.map((r) => {
+			// 🚧 The stored carry holds the five keys a session needs for its
+			// life; the 2026-10-19 declaration keys (about, members, uses,
+			// tasks) are read from the live registry when the carry lacks them.
+			const live: any = getGenre(r.inputGenre) ?? null
+			const g: any = {
+				...(r.genre ?? {}),
+				...(r.genre?.about === undefined && live?.about !== undefined ? { about: live.about } : {}),
+				...(r.genre?.members === undefined && live?.members !== undefined ? { members: live.members } : {}),
+				...(r.genre?.uses === undefined && live?.uses !== undefined ? { uses: live.uses } : {}),
+				...(r.genre?.tasks === undefined && live?.tasks !== undefined ? { tasks: live.tasks } : {})
+			}
+			r = { ...r, genre: g }
+			return {
 			genreId: r.inputGenre,
 			name: en(r.genre?.name) || r.inputGenre,
 			description: en(r.genre?.description),
 			family: typeof r.genre?.family === "string" ? r.genre.family : undefined,
+			...(en(r.genre?.about).trim() ? { about: en(r.genre.about).trim() } : {}),
+			...(r.genre?.members === "solo" ? { members: "solo" as const } : {}),
+			...(r.genre?.uses && typeof r.genre.uses === "object" ? { uses: r.genre.uses as Record<string, unknown> } : {}),
+			...(Array.isArray(r.genre?.tasks) && r.genre.tasks.length
+				? {
+					tasks: (r.genre.tasks as any[]).map((t) => ({
+						...t,
+						label: en(t.label) || t.key,
+						...(en(t.description).trim() ? { description: en(t.description).trim() } : {})
+					}))
+				}
+				: {}),
 			shape: r.genre.shape as SessionShape,
 			events: (r.genre?.events ?? undefined) as
 				| Record<string, { required?: boolean; open?: boolean }>
@@ -167,7 +198,8 @@ export async function listSessionGenres(db: Db): Promise<SessionGenre[]> {
 				? { settings: r.genre.settings as Record<string, unknown> }
 				: {}),
 			...(typeof r.sourcePluginId === "number" ? { sourcePluginId: r.sourcePluginId } : {})
-		}))
+		}
+		})
 
 	// Transitional: plugin genres still declared on input types, minus the
 	// standard input whose identity moved (listing both shows Chat twice).
@@ -341,6 +373,7 @@ export async function genreFieldsFor(
 		const [session] = await db
 			.select({
 				genreId: schema.sessions.genreId,
+				presetId: schema.sessions.presetId,
 				genreFields: schema.sessions.genreFields
 			})
 			.from(schema.sessions)
@@ -357,6 +390,7 @@ export async function genreFieldsFor(
 				{ default?: unknown }
 			>,
 			pinned: genre?.settings ?? {},
+			preset: await presetPinnedSettings(db, session.presetId),
 			stored: (session.genreFields ?? {}) as Record<string, unknown>
 		})
 	} catch {
@@ -402,12 +436,38 @@ export async function playerLabelFor(
  * The cascade (§4.13) over declared ∪ pinned keys, in that order — declared
  * first so the form's order is the document's, pinned-only keys after.
  */
+/**
+ * 🚧 The values a session's preset pins (`session_presets.settings`, the
+ * `PresetDecl.settings` projection) — the preset layer of the cascade.
+ * `null`/unknown preset ⇒ nothing pinned.
+ */
+export async function presetPinnedSettings(
+	db: Db,
+	presetId: number | null | undefined
+): Promise<Record<string, unknown> | null> {
+	if (presetId == null) return null
+	try {
+		const [row] = await db
+			.select({ settings: schema.sessionPresets.settings })
+			.from(schema.sessionPresets)
+			.where(eq(schema.sessionPresets.id, presetId))
+			.limit(1)
+		return (row?.settings as Record<string, unknown> | null) ?? null
+	} catch {
+		return null
+	}
+}
+
 export function cascadeFields(layers: {
 	declared: Record<string, { default?: unknown }>
 	pinned: Readonly<Record<string, unknown>>
+	/** 🚧 The preset layer (2026-10-19): `session > preset > genre > core`. */
+	preset?: Readonly<Record<string, unknown>> | null
 	stored: Record<string, unknown>
 }): Record<string, unknown> {
-	const { declared, pinned, stored } = layers
+	const { declared, stored } = layers
+	// A preset's pin sits over the genre's: merge once, preset last.
+	const pinned: Record<string, unknown> = { ...layers.pinned, ...(layers.preset ?? {}) }
 	const out: Record<string, unknown> = {}
 	const keys = [
 		...Object.keys(declared),
@@ -597,6 +657,12 @@ export interface GenreAction {
 	 */
 	collects?: ListedCollects
 	/**
+	 * 🚧 The question asked before it fires (`ActionDecl.confirm`, 2026-10-18),
+	 * display text resolved; the confirm button reads `confirmLabel`, else
+	 * the action's name.
+	 */
+	confirm?: { question: string; description?: string; confirmLabel: string }
+	/**
 	 * The action's own **enabled-when** (plans/29 R-15; U5e), in list form
 	 * — the declaration's, before the genre default beneath it and the
 	 * session override above it are applied (`effectiveEnabledWhen`).
@@ -704,6 +770,16 @@ export async function listGenreActions(
 					effects: effectsOf(a),
 					quick: a.quick === true,
 					...(listedCollects(a.collects) ? { collects: listedCollects(a.collects) } : {}),
+					// 🚧 Asked before it fires (`confirm`, 2026-10-18).
+					...(a.confirm && en(a.confirm.question)
+						? {
+								confirm: {
+									question: en(a.confirm.question),
+									...(a.confirm.description ? { description: en(a.confirm.description) } : {}),
+									confirmLabel: (a.confirm.confirmLabel ? en(a.confirm.confirmLabel) : "") || en(a.label) || a.key
+								}
+							}
+						: {}),
 					// Kept as declared, an explicit `[]` included: that is how an
 					// action opts out of its genre's default (`effectiveEnabledWhen`).
 					...(a.enabledWhen !== undefined && a.enabledWhen !== null

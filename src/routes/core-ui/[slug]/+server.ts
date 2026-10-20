@@ -17,6 +17,7 @@
 import { createHash } from "node:crypto"
 import type { RequestHandler } from "@sveltejs/kit"
 import served from "@serene-pub/core-catalog/components/core-ui.json?raw"
+import { WIDGET_ID_ALIASES } from "@serene-pub/sdk"
 
 /** Served name → module: a core component by slug, a shared chunk by its file name. */
 const MODULES: Readonly<Record<string, string>> = Object.freeze(
@@ -30,7 +31,11 @@ const ETAGS = new Map(
 )
 
 export const GET: RequestHandler = ({ params, request }) => {
-	const slug = params.slug ?? ""
+	// ⏳ An aliased widget id (`world-state` → `stats`, `WIDGET_ID_ALIASES`)
+	// is served its target's module: the wrapper is gone (2026-10-17) and a
+	// stored layout that still names the alias keeps loading.
+	const asked = params.slug ?? ""
+	const slug = Object.hasOwn(MODULES, asked) ? asked : (WIDGET_ID_ALIASES[asked]?.id ?? asked)
 	const code = Object.hasOwn(MODULES, slug) ? MODULES[slug] : undefined
 	const etag = ETAGS.get(slug)
 	if (code === undefined || !etag) return new Response("Not found", { status: 404 })

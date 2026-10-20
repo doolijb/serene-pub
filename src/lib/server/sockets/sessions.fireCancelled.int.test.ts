@@ -76,7 +76,7 @@ const PROBE_SLUG = "test:spec/cancel-probe"
 const PROBE_FUNCTION = "cancel-probe"
 /** The probe by identity — what a press and a session row name (plans/31 V2). */
 const PROBE_ACTION = `${PROBE_SLUG}#${PROBE_FUNCTION}`
-const GENRE = "core:genre/chat"
+const GENRE = "core:genre/story"
 
 beforeAll(async () => {
 	dataDir = await fs.mkdtemp(

@@ -106,6 +106,21 @@ function objectAt(src: string, from: number): string {
 	return src.slice(start)
 }
 
+/**
+ * The object a `socket.emit("<event>", …)` sends: the literal at the site,
+ * or, when the argument is an identifier, the literal of that identifier's
+ * nearest `const <id> = {` declaration before the site.
+ */
+function firedObject(src: string, site: number): string {
+	const open = src.indexOf("(", site)
+	const comma = src.indexOf(",", open)
+	const arg = src.slice(comma + 1, src.indexOf(")", comma)).trim()
+	if (arg.startsWith("{")) return objectAt(src, comma)
+	// `const params = {` or `const params: Some.Type = {` — the nearest one.
+	const decl = src.slice(0, site).search(new RegExp(`const ${arg}(?::[^=]+)? = \\{(?![\\s\\S]*const ${arg}(?::[^=]+)? = \\{)`))
+	return decl < 0 ? "" : objectAt(src, decl)
+}
+
 /** 1-based line number of an offset, so a failure names the site. */
 function lineOf(src: string, at: number): number {
 	return src.slice(0, at).split("\n").length
@@ -199,9 +214,10 @@ describe("every widget mount is handed the session's actions", () => {
 			sites.map((s) => lineOf(source, s.index)),
 			`${PAGE}: a second fire emits beside the first`
 		).toHaveLength(1)
-		expect(
-			objectAt(source, sites[0]!.index),
-			"the fire emits a run nobody can cancel"
-		).toContain("runId")
+		// The emit may pass the literal, or a `const <name> = {…}` declared
+		// just above it (kept by its run id so a halted run can offer Retry);
+		// either way the object sent must carry `runId`.
+		const sent = firedObject(source, sites[0]!.index)
+		expect(sent, "the fire emits a run nobody can cancel").toContain("runId")
 	})
 })

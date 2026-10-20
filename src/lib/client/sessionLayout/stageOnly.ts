@@ -3,8 +3,10 @@
  * Ctrl/⌘ + .). The session's side zones, its strips, every flyout, sheet,
  * scrim and the panels menu go away, and only the STAGE stays, taking the
  * whole body: the layout's primary log, wherever it is placed
- * (./placementRules `stageOf` — QE, brief 7a). In the middle that is the unit
- * holding it (`primaryUnitKey`, below); in a side it is that side's mount,
+ * (./placementRules `stageOf` — QE, brief 7a) — or, in a layout holding no
+ * conversation (R-B), the primary panel, whatever it holds. In the middle that is the
+ * PANEL holding it (`stagePanelOf`, below; PLAN-session-panels-2026-10-14);
+ * in a side it is that panel, in that side's mount,
  * drawn in ./sideSlot's `stage` slot while the middle is hidden. Turning it off restores
  * exactly what was there: nothing here writes the layout, and nothing is
  * unmounted — a hidden widget is `display: none` around its mount (the
@@ -24,14 +26,15 @@ export function stageOnlyActive(
 }
 
 /**
- * The key of the middle unit that holds the stage's widget (`primaryId`: the
- * instance `stageOf` picked), or null when no unit does — in which case
- * nothing in the middle is hidden, because hiding every unit would leave the
- * session blank.
+ * The key of the panel that holds the stage's widget (`stageId`: the
+ * instance `stageOf` picked) — as one of its tabs — or null when no panel
+ * does, in which case nothing there is hidden, because hiding every panel
+ * would leave the session blank.
  */
-export function primaryUnitKey(
-	units: readonly { key: string; memberIds: readonly string[] }[],
-	primaryId: string
+export function stagePanelOf(
+	panels: readonly { key: string; tabs: readonly { instanceId: string }[] }[],
+	stageId: string | null | undefined
 ): string | null {
-	return units.find((u) => u.memberIds.includes(primaryId))?.key ?? null
+	if (!stageId) return null
+	return panels.find((p) => p.tabs.some((t) => t.instanceId === stageId))?.key ?? null
 }

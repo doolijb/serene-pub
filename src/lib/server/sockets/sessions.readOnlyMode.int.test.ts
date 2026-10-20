@@ -54,7 +54,8 @@ describe("a session whose mode is not registered", () => {
 		)
 		const { sessionsFireActionHandler } = await import("./sessions")
 		const schema = await import("$lib/server/db/schema")
-		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const { createTestUser, publishSaveMessage } = await import("$lib/server/utils/testDb")
+		await publishSaveMessage(testDb)
 
 		const user = await createTestUser(testDb, "readonly-owner")
 		const [session] = await testDb
@@ -71,7 +72,7 @@ describe("a session whose mode is not registered", () => {
 			{ sessionId: session.id, content: "Hello?" } as any,
 			noopEmit
 		)
-		expect(sent.error).toContain("read-only")
+		expect(sent.refused).toContain("read-only")
 
 		const fired = await sessionsFireActionHandler.handler(
 			fakeSocket(user.id),
@@ -93,7 +94,8 @@ describe("a session whose mode is not registered", () => {
 			"./sessions"
 		)
 		const schema = await import("$lib/server/db/schema")
-		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const { createTestUser, publishSaveMessage } = await import("$lib/server/utils/testDb")
+		await publishSaveMessage(testDb)
 
 		const user = await createTestUser(testDb, "readonly-floor")
 		const [persona] = await testDb

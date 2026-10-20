@@ -7,6 +7,7 @@
  * tidied away.
  */
 
+import { withSeatName } from "$lib/server/sessions/seatName"
 import { describe, it, expect } from "vitest"
 import { resolveContextInput } from "$lib/server/pipelines/prompt/promptFields"
 import { buildTemplateContext } from "$lib/server/pipelines/prompt/templateContext"
@@ -294,5 +295,50 @@ describe("end to end", () => {
 		expect(ctx.characterNames).toBe("Alice")
 		expect(ctx.instructions).toContain("Be brief.")
 		expect(ctx.characters).toContain('"name": "Alice"')
+	})
+})
+
+describe("seats (🚧 2026-10-14)", () => {
+	it("a card-less player seat is a persona by its seat name, with no description", () => {
+		const r = resolveContextInput({
+			...base(),
+			sessionPersonas: [{ persona: null, seatName: "Wren" }]
+		})
+		expect(r.personas).toEqual([{ name: "Wren", description: "" }])
+		expect(r.personaName).toBe("Wren")
+		// No card, no likeness line.
+		expect(r.likenesses!.map((l) => l.name)).toEqual(["Alice"])
+	})
+
+	it("a seat name wins over the card's name (laid on at the read); the card keeps the description", () => {
+		const bob = cp("Bob")
+		const r = resolveContextInput({
+			...base(),
+			sessionPersonas: [{ ...bob, persona: withSeatName(bob.persona, "Wren"), seatName: "Wren" }]
+		})
+		expect(r.personas).toEqual([{ name: "Wren", description: "A traveller." }])
+	})
+
+	it("a row with neither a card nor a seat name is nobody", () => {
+		const r = resolveContextInput({
+			...base(),
+			sessionPersonas: [{ persona: null, seatName: null }, cp()]
+		})
+		expect(r.personas.map((p) => p.name)).toEqual(["Bob"])
+	})
+})
+
+describe("🚧 {{user}} with two seats (2026-10-16)", () => {
+	const seats = [
+		{ persona: null, seatName: "Ann", seatUserId: 1 },
+		{ persona: null, seatName: "Bo", seatUserId: 2 }
+	]
+	it("is the triggering person's own seat, never the joined list", () => {
+		expect(resolveContextInput({ ...base(), sessionPersonas: seats, viewerUserId: 2 }).personaName).toBe("Bo")
+		expect(resolveContextInput({ ...base(), sessionPersonas: seats, viewerUserId: 1 }).personaName).toBe("Ann")
+	})
+	it("keeps the old rule when the trigger holds no seat", () => {
+		const r = resolveContextInput({ ...base(), currentCharacterId: null, sessionPersonas: seats, viewerUserId: 7 })
+		expect(r.personaName).toBe("Ann and Bo")
 	})
 })

@@ -22,6 +22,8 @@ import { SvelteSet } from "svelte/reactivity"
 import {
 	WIDGET_REQUEST_ASKERS,
 	WIDGET_REQUEST_KINDS,
+	formatChannel,
+	parseChannel,
 	projectMessageRow,
 	widgetEventHeard,
 	widgetReads,
@@ -368,7 +370,8 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 				limit: typeof m.limit === "number" ? m.limit : undefined
 			}
 			// A panel's lanes are its lanes: a request cannot reach past them.
-			if (params.channel && i.channels?.length && !i.channels.includes(params.channel))
+			const asked = params.channel ? formatChannel(parseChannel(params.channel)) : undefined
+			if (asked && i.channels?.length && !i.channels.some((c) => formatChannel(parseChannel(c)) === asked))
 				return decline(`'${params.channel}' is not one of this widget's channels`)
 			if (!requests) {
 				const page = pageOf({ messages: (i.messages ?? []) as FrameRow[], channels: i.channels }, params)

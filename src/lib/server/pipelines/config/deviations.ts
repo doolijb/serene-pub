@@ -148,7 +148,7 @@ export interface AddressedValue {
  * change, one at an address the old preset never set was never the preset's,
  * and one the new preset still sets to the same value is still right.
  *
- * `core:spec/chat-generate-image` 1.0.0 → 1.1.0 is the case it was written
+ * `core:spec/story-generate-image` 1.0.0 → 1.1.0 is the case it was written
  * for: 1.0.0's default preset set `render|settings|review` to `on`; 1.1.0
  * ships no default preset, so the shipped row is dropped and the step inherits
  * its declared `off`.

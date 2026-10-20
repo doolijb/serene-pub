@@ -106,3 +106,12 @@ describe("groupSessions", () => {
 		expect(groupSessions([], { now: NOW })).toEqual([])
 	})
 })
+
+describe("a revision branch's last line", () => {
+	test("is the reader's own, yet the reader's turn: the turn after it was taken back", async () => {
+		const { isAwaitingUser } = await import("./sessionGroups")
+		expect(isAwaitingUser({ lastMessage: { isUser: true, revisedTurn: true } })).toBe(true)
+		expect(isAwaitingUser({ lastMessage: { isUser: true } })).toBe(false)
+		expect(isAwaitingUser({ lastMessage: { isUser: true, revisedTurn: true } }, true)).toBe(false)
+	})
+})

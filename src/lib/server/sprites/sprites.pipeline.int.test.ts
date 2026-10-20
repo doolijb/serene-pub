@@ -458,7 +458,7 @@ describe("a person's pick, and swipes", () => {
  */
 describe("show-sprite takes who chose it from the spec", () => {
 	const node = { key: "spriteShow", definitionId: "core:outlet/show-sprite", definitionVersion: 1 }
-	const hostFor = async (sessionId: number, userId: number, specId = "core:spec/chat-respond") => {
+	const hostFor = async (sessionId: number, userId: number, specId = "core:spec/story-respond") => {
 		const { createHost } = await import("$lib/server/pipelines/runtime/host")
 		return createHost(testDb as any, { sessionId, userId, specId })
 	}

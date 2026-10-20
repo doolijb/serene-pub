@@ -42,6 +42,22 @@
 	const openSessionCtx = getContext<OpenSessionCtx | undefined>(
 		"openSessionCtx"
 	)
+	const panelsCtx = getContext<PanelsCtx | undefined>("panelsCtx")
+
+	/**
+	 * 🚧 **Session settings**, from inside the session (2026-10-18, the
+	 * 100-turn walk #26: Honour mode, How strict and the Rules options lived
+	 * behind Sessions → ⋮ → Edit → Settings, and nobody found them). The
+	 * Sessions view opens on this session's edit form, at its Settings tab
+	 * — the one place they are kept.
+	 */
+	function openSessionSettings() {
+		const id = openSessionCtx?.sessionId
+		if (!panelsCtx || id == null) return
+		panelsCtx.digest.sessionId = id
+		panelsCtx.digest.sessionTab = "settings"
+		panelsCtx.openPanel({ key: "sessions", toggle: false })
+	}
 
 	/**
 	 * How wide the trailing button cluster is drawing itself. The identity is
@@ -61,6 +77,7 @@
 
 	const sessionName = $derived(openSessionCtx?.sessionName ?? null)
 	const genreName = $derived(openSessionCtx?.genreName ?? null)
+	const branchMark = $derived(openSessionCtx?.branchOfLabel ?? null)
 	const cast = $derived((openSessionCtx?.cast ?? []).slice(0, CAST_SHOWN))
 
 	/**
@@ -161,6 +178,16 @@
 				{#if genreName}
 					<span class="sp-head-genre">{genreName}</span>
 				{/if}
+				{#if branchMark}
+					<span class="sp-head-genre" data-branch-of>
+						<Icons.GitBranch
+							size={12}
+							class="inline align-[-1px]"
+							aria-hidden="true"
+						/>
+						{branchMark}
+					</span>
+				{/if}
 			</div>
 
 			<!-- The trailing cluster. Measured, because `.sp-head-lead` mirrors it:
@@ -184,6 +211,23 @@
 							)}
 					>
 						<Icons.PanelsTopLeft aria-hidden="true" />
+					</button>
+				{/if}
+
+				<!-- 🚧 The session's settings, at every width (2026-10-18):
+				     the Sessions view's edit form on its Settings tab. -->
+				{#if openSessionCtx?.sessionId != null && panelsCtx}
+					<button
+						type="button"
+						class="btn hover:preset-tonal focus-visible:preset-tonal text-foreground flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 lg:px-2.5 [&>svg]:size-5"
+						aria-label="Session settings"
+						title="Session settings"
+						onclick={openSessionSettings}
+					>
+						<Icons.Settings aria-hidden="true" />
+						<span class="hidden text-sm font-medium lg:inline">
+							Settings
+						</span>
 					</button>
 				{/if}
 

@@ -25,7 +25,9 @@
  * handler file.
  */
 
+import { isDefaultSave } from "$lib/server/pipelines/entities/presetBindings"
 import {
+	SAVE_MESSAGE_SPEC_ID,
 	_registerPackageGenre,
 	_withdrawGenre,
 	getGenre,
@@ -64,11 +66,11 @@ const refuse = (sentence: string): never => {
 /** `acme.lab:genre/quest` → `acme.lab`. */
 const ownerOf = (id: string): string => id.slice(0, Math.max(0, id.indexOf(":")))
 
-/** `core:genre/adventure` → `adventure`. */
+/** `core:genre/story` → `adventure`. */
 const genreNameOf = (genreId: string): string =>
 	genreId.slice(genreId.indexOf("genre/") + "genre/".length)
 
-/** `core:spec/adventure-respond` → `adventure-respond`. */
+/** `core:spec/story-respond` → `adventure-respond`. */
 const specTailOf = (slug: string): string => {
 	const i = slug.indexOf("spec/")
 	return i >= 0 ? slug.slice(i + "spec/".length) : slug.slice(slug.indexOf(":") + 1)
@@ -448,7 +450,12 @@ async function insertDefaultPreset(
 	)) {
 		const spec = slugMap.get(b?.spec)
 		if (spec) bindings[event] = { spec }
+		// 🚧 Core's default save serves every genre, so it is kept as is.
+		else if (b?.spec && isDefaultSave(event, b.spec)) bindings[event] = { spec: b.spec }
 	}
+	// 🚧 Every preset shows what saves a person's message (owner ruling 2026-10-15).
+	if (!bindings[sessionEvents.messageOffered])
+		bindings[sessionEvents.messageOffered] = { spec: SAVE_MESSAGE_SPEC_ID }
 	if (!bindings[sessionEvents.sessionCreated]) {
 		const createSlug = [...slugMap.values()][0]
 		bindings[sessionEvents.sessionCreated] = { spec: createSlug }

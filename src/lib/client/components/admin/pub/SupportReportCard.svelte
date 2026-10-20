@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { realTime } from "$lib/client/utils/realTime.svelte"
 	/**
 	 * The support report (`admin:supportReport`) — one redacted Markdown
 	 * document describing this install, to paste into a bug report or hand
@@ -182,7 +183,7 @@
 			{#if loading}
 				Gathering…
 			{:else if report}
-				Made {new Date(report.generatedAt).toLocaleTimeString()} · {kb(report.bytes)}
+				Made {realTime(report.generatedAt)} · {kb(report.bytes)}
 			{/if}
 		</span>
 	</div>

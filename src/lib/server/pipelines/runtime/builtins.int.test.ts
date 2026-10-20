@@ -1186,7 +1186,7 @@ describe("a branch's runs (S5)", () => {
 		// session's queue, and may save its row first (PLAN §8 (27)).
 		expect(listed.runs.map((r: any) => r.specSlug).sort()).toEqual([
 			"core:spec/builtin-branch",
-			"core:spec/chat-turn-order"
+			"core:spec/story-turn-order"
 		])
 		const branchRun = listed.runs.find((r: any) => r.specSlug === "core:spec/builtin-branch")
 		// The run row itself still sits on the session it ran in.

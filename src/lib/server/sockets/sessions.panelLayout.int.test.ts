@@ -141,6 +141,73 @@ describe("sessions:panelLayout", () => {
 		expect(guestGot.layout).toEqual({ active: [{ id: "guest" }] })
 	})
 
+	test(
+		"set refuses a layout the app cannot draw and writes nothing — not even the keys sent with it",
+		async () => {
+			const { sessionsPanelLayoutGetHandler, sessionsPanelLayoutSetHandler } =
+				await import("./sessions")
+			const { LAYOUT_PRESET_CANT_SAVE } = await import(
+				"$lib/server/db/layoutPresets"
+			)
+			const s = await scenario()
+			const good = {
+				panels: {
+					version: 1,
+					left: [],
+					middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] },
+					right: [{ key: "p2", tabs: ["stats"], pinned: false }]
+				}
+			}
+			const pins = { widgetStyles: { stats: { id: 1, slug: "mine" } } }
+			const first = await sessionsPanelLayoutSetHandler.handler(
+				fakeSocket(s.owner.id),
+				{ sessionId: s.session.id, layout: good, layoutSettings: pins } as any,
+				noopEmit
+			)
+			expect(first.ok).toBe(true)
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+			const bad = [
+				// One instance in two panels.
+				{
+					panels: {
+						...good.panels,
+						right: [{ key: "p2", tabs: ["messages"] }]
+					}
+				},
+				// A middle panel never pins; a primary needs a tab.
+				{
+					panels: {
+						...good.panels,
+						middle: { above: [], primary: { key: "p1", tabs: [], pinned: false }, below: [] }
+					}
+				},
+				// An old slot of the wrong shape.
+				{ zoneLayout: { version: 2 } }
+			]
+			try {
+				for (const layout of bad) {
+					const res = await sessionsPanelLayoutSetHandler.handler(
+						fakeSocket(s.owner.id),
+						{ sessionId: s.session.id, layout, layoutSettings: {} } as any,
+						noopEmit
+					)
+					expect(res.ok).toBe(false)
+					expect(res.error).toBe(LAYOUT_PRESET_CANT_SAVE)
+				}
+			} finally {
+				warn.mockRestore()
+			}
+			const got = await sessionsPanelLayoutGetHandler.handler(
+				fakeSocket(s.owner.id),
+				{ sessionId: s.session.id } as any,
+				noopEmit
+			)
+			expect(got.layout).toEqual(good)
+			expect(got.layoutSettings).toEqual(pins)
+		},
+		60_000
+	)
+
 	test("a stranger is refused both get and set", async () => {
 		const { sessionsPanelLayoutGetHandler, sessionsPanelLayoutSetHandler } =
 			await import("./sessions")

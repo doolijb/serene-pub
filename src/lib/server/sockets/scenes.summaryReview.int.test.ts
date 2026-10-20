@@ -3,7 +3,7 @@
  * model (and only the model):
  *
  * - **G10** — `scenes:process` on a Chat session runs the Chat genre's
- *   declared `core:spec/chat-summarize-scene`, and on a Lair session the
+ *   declared `core:spec/story-summarize-scene`, and on a Lair session the
  *   Lair's: the response names it, `processed_by_spec_id` records it, and
  *   the run's receipt (`pipeline_runs.spec_slug`) is that spec's. Lane B
  *   could only test the fallback; here `bootstrapPipelines` publishes the
@@ -67,9 +67,9 @@ vi.mock("$lib/server/db", async () => {
 let testDb: TestDb
 let dataDir: string
 
-const CHAT_GENRE = "core:genre/chat"
+const CHAT_GENRE = "core:genre/story"
 const LAIR_GENRE = "core:genre/lair"
-const CHAT_SPEC = "core:spec/chat-summarize-scene"
+const CHAT_SPEC = "core:spec/story-summarize-scene"
 const LAIR_SPEC = "core:spec/lair-summarize-scene"
 
 beforeAll(async () => {

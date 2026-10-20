@@ -7,6 +7,7 @@
 	// mounted below: the session layout (or a genre's session view), the host
 	// views core's composer places, and the modals.
 	import { v4 as uuid } from "uuid"
+	import { rememberFiredAction } from "$lib/client/components/pipelines/actionRetry"
 	import { avatarSrc } from "$lib/client/utils/media"
 	import { setHostParticipants } from "$lib/client/components/hostElements/context.svelte"
 	import ChangeSpriteDialog from "$lib/client/components/sprites/ChangeSpriteDialog.svelte"
@@ -73,6 +74,7 @@
 	import SummarizeLoreModal from "$lib/client/components/modals/SummarizeLoreModal.svelte"
 	import NarratorResponseModal from "$lib/client/components/modals/NarratorResponseModal.svelte"
 	import RetakeConfirm from "$lib/client/components/sessionPage/RetakeConfirm.svelte"
+	import ActionConfirm from "$lib/client/components/sessionPage/ActionConfirm.svelte"
 	import CollectModal from "$lib/client/components/sessionPage/CollectModal.svelte"
 	import EntityGalleryViewModal from "$lib/client/components/gallery/EntityGalleryViewModal.svelte"
 	import MediaLightbox from "$lib/client/components/sessionPage/MediaLightbox.svelte"
@@ -84,6 +86,7 @@
 	import SessionLayout from "$lib/client/sessionLayout/SessionLayout.svelte"
 	import { NARRATE_ACTION } from "$lib/shared/actions/identity"
 	import { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
+	import { branchOf, branchOfLabel } from "$lib/shared/sessions/branchOf"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
@@ -174,6 +177,17 @@
 	 */
 	const loadedSessionId = $derived(session?.id ?? null)
 	const sessionName = $derived(session?.name ?? null)
+	// Streamed reads, narrowed to primitives (the reader stops at a primitive
+	// derived): the effect below builds the branch label from these three.
+	const sessionBranchOfId: number | null = $derived(
+		((session?.metadata as Record<string, any> | null | undefined)?.branchOf?.sessionId as number | undefined) ?? null
+	)
+	const sessionBranchOfName: string | null = $derived(
+		((session?.metadata as Record<string, any> | null | undefined)?.branchOf?.name as string | undefined) ?? null
+	)
+	const sessionBranchOfMessageId: number | null = $derived(
+		((session?.metadata as Record<string, any> | null | undefined)?.branchOf?.messageId as number | undefined) ?? null
+	)
 	const sessionUserId = $derived(session?.userId ?? null)
 	const sessionLorebookId = $derived(session?.lorebookId ?? null)
 	const sessionLorebookBranchId = $derived(session?.lorebookBranchId ?? null)
@@ -216,6 +230,10 @@
 		openSessionCtx.sessionId = loadedSessionId
 		openSessionCtx.sessionName = sessionName
 		openSessionCtx.genreName = data.genreName
+		openSessionCtx.branchOfLabel =
+			sessionBranchOfId === null || sessionBranchOfMessageId === null
+				? null
+				: branchOfLabel({ sessionId: sessionBranchOfId, name: sessionBranchOfName, messageId: sessionBranchOfMessageId })
 		openSessionCtx.lorebookId = sessionLorebookId
 		openSessionCtx.lorebookBranchId = sessionLorebookBranchId
 		openSessionCtx.isOwner =
@@ -282,7 +300,9 @@
 		turns,
 		systemSettingsCtx,
 		draft: () => newMessage,
-		setNewMessage: (content) => (newMessage = content)
+		setNewMessage: (content) => (newMessage = content),
+		restoreDraft: (content) => writeDraft(content),
+		userId: () => userCtx.user?.id ?? null
 	})
 	const scenes = createScenesFlow({
 		...base,
@@ -337,7 +357,7 @@
 	 * form's answer comes straight here (`FiredPress` says what rides).
 	 */
 	function emitFireAction(p: FiredPress) {
-		socket.emit("sessions:fireAction", {
+		const params: Sockets.Sessions.FireAction.Params = {
 			sessionId,
 			...(p.identity ? { action: p.identity } : { key: p.fn }),
 			...(p.messageId != null ? { messageId: p.messageId } : {}),
@@ -349,7 +369,10 @@
 				? { payload: p.payload }
 				: {}),
 			runId: uuid()
-		})
+		}
+		// 🚧 Kept by its run id, so a halted run's card can offer Retry.
+		rememberFiredAction(params)
+		socket.emit("sessions:fireAction", params)
 	}
 
 	const press = createPressRouting({
@@ -416,6 +439,7 @@
 		sessionId: () => sessionId ?? null,
 		findMessage: (id) => session?.sessionMessages.find((m) => m.id === id),
 		messagesPage: (ask) => data.messagesPage(ask),
+		loadOlderIn: (channels) => data.loadOlderIn(channels),
 		channelLanes: (ask) => data.channelLanes(ask),
 		characters: () => envelope.characters.current,
 		characterForRef: (ref) => data.characterForRef(ref),
@@ -506,7 +530,11 @@
 		readSessionPlaces: asks.readSessionPlaces,
 		readCharacterGallery: asks.readCharacterGallery,
 		readStatTrail: asks.readStatTrail,
-		writeBackdrop: asks.writeBackdrop
+		writeBackdrop: asks.writeBackdrop,
+		// 🚧 A seat's portrait (PLAN-sheet-widget §12, 2026-10-18).
+		writeOwnerFace: asks.writeOwnerFace,
+		// 🚧 Give to… (PLAN-dc-after-walk2 Q0-4, ★4).
+		writeGive: asks.writeGive
 	}
 	setContext(WIDGET_REQUESTS_KEY, guardWidgetRequests(buildWidgetRequestAnswerer(widgetRequestDeps)))
 
@@ -602,6 +630,7 @@
 		openSessionCtx.sessionName = null
 		openSessionCtx.cast = []
 		openSessionCtx.genreName = null
+		openSessionCtx.branchOfLabel = null
 		openSessionCtx.lorebookId = null
 		openSessionCtx.isOwner = false
 		openSessionCtx.isGenerating = false
@@ -660,6 +689,8 @@
 				{sessionId}
 				{session}
 				conversationDossier={envelope.dossier.current}
+				viewerId={userCtx.user?.id ?? null}
+				annex={envelope.annex.current}
 				presets={layout.layoutPresets}
 				startedFromLayoutPresetId={layout.startedFromLayoutPresetId}
 				startedFromUpdated={layout.startedFromUpdated}
@@ -770,6 +801,7 @@
 		onOpenChange={controls.onOpenMessageDeleteChange}
 		onConfirm={controls.onDeleteMessageConfirm}
 		onCancel={controls.onDeleteMessageCancel}
+		revision={controls.deleteRevision}
 	/>
 
 	<PromptDetailsModal
@@ -836,9 +868,18 @@
 		onCancel={() => (press.collecting = null)}
 	/>
 
+	<!-- 🚧 An action's question before it fires (`ActionDecl.confirm`). -->
+	<ActionConfirm
+		asking={press.confirming?.asking ?? null}
+		onConfirm={() => press.confirmPress()}
+		onCancel={() => press.cancelPress()}
+	/>
+
 	<RetakeConfirm
 		open={turns.showRetakeConfirm}
 		rows={turns.retakeRows}
+		revision={turns.retakeRevision}
+		channelLabels={data.sessionFrames?.channelLabels ?? {}}
 		onConfirm={(quietly) => {
 			turns.showRetakeConfirm = false
 			turns.retake.confirm(quietly)

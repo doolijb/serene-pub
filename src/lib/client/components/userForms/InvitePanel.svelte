@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { realTime } from "$lib/client/utils/realTime.svelte"
 	/**
 	 * Creating and sharing invites (plan 27 §2–§3).
 	 *
@@ -271,9 +272,7 @@
 									? "Registration"
 									: `Recovery — ${inv.username}`}
 								<span class="text-surface-600-400">
-									· expires {new Date(
-										inv.expiresAt
-									).toLocaleTimeString()}
+									· expires {realTime(inv.expiresAt)}
 								</span>
 							</span>
 							<button

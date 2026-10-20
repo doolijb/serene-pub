@@ -597,6 +597,14 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"sessions:branch",
 	"sessions:choosePreset",
 	"sessions:create",
+	// 🚧 Create lorebook from session — consumer: SessionViewPanel's ⋯ menu.
+	"sessions:createLorebookFromPhantom",
+	// 🚧 The overlay review (§26) — consumer: SessionViewPanel's changes card.
+	"sessions:overlayItems",
+	"sessions:applyOverlay",
+	// 🚧 On revision's sentence for the delete confirmation (§28) —
+	// consumer: the session page's message controls, through its inbox.
+	"sessions:revisionNotice",
 	"sessions:delete",
 	"sessions:functionCandidates",
 	"sessions:functions",
@@ -622,6 +630,8 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// One widget's page of lines (`messages` request, D7 ruling A) — consumer: the session page, matched by requestId.
 	// The channel lanes under a channel (`channel-lanes` request) — consumer: the session page, matched by requestId.
 	"sessions:channelLanes",
+	// 🚧 Read to here on a channel lane (2026-10-17) — consumer: the session page, which adopts the channels view.
+	"sessions:laneRead",
 	"sessions:messagesPage",
 	"sessions:panelLayout:get",
 	"sessions:panelLayout:set",
@@ -645,8 +655,9 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// SessionsSidebar.svelte and routes/+page.svelte, both on the patch store
 	// (client/sessions/sessionRowPatches.svelte.ts).
 	"sessions:rowChanged",
-	// The run status push (R-19, 2026-09-16) — consumer:
-	// client/components/sidebars/SessionsSidebar.svelte, on the registry.
+	// The run status push (R-19, 2026-09-16) — consumers:
+	// client/components/sidebars/SessionsSidebar.svelte, on the registry, and
+	// the session page's inbox, SCOPED (its waiting row, `pendingReply.ts`).
 	"sessions:runStatus",
 	"sessions:saveDraft",
 	"sessions:setCastSeatEnabled",

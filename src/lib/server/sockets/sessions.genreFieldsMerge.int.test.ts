@@ -12,7 +12,7 @@ import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
-import { CHAT_GENRE_ID } from "@serene-pub/core-catalog"
+import { STORY_GENRE_ID } from "@serene-pub/core-catalog"
 import { changedGenreFields } from "$lib/client/components/sessionForms/genreFieldsPatch"
 
 let testDb: TestDb
@@ -52,7 +52,7 @@ function fakeSocket(userId: number) {
 async function chatSession(userId: number, genreFields: Record<string, unknown>) {
 	const [row] = await testDb
 		.insert(schema.sessions)
-		.values({ userId, isGroup: false, genreId: CHAT_GENRE_ID, genreFields } as any)
+		.values({ userId, isGroup: false, genreId: STORY_GENRE_ID, genreFields } as any)
 		.returning()
 	return row
 }

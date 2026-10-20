@@ -29,7 +29,7 @@
  */
 
 import "@serene-pub/core-catalog"
-import { allEntryTypes } from "@serene-pub/sdk"
+import { allEntryTypes, derivedEntryTypeSource } from "@serene-pub/sdk"
 import type { EntryRoles, EntryShape, FieldDecl } from "@serene-pub/sdk"
 import {
 	ENTRY_TYPE_IDS,
@@ -82,6 +82,41 @@ for (const descriptor of allEntryTypes()) {
 export const entryDeclaration = (
 	typeId: string
 ): EntryTypeDeclaration | undefined => BY_TYPE_ID.get(typeId)
+
+/**
+ * Whether this build declares the type — core's five, or a derived entry
+ * type whose ruleset is registered. The write gate: an id merely shaped like
+ * a derived type (`isDerivedEntryTypeId`) names nothing until its ruleset
+ * loads.
+ */
+export const isDeclaredEntryType = (typeId: unknown): typeId is EntryTypeId =>
+	typeof typeId === "string" && BY_TYPE_ID.has(typeId)
+
+/**
+ * 🚧 The derived entry types this build declares (bare ids), in declaration
+ * order — the SDK registry's answer (`derivedEntryTypeSource`), never a list
+ * kept here. Core's rulesets' ten today, and a plugin ruleset's when it loads.
+ */
+export const derivedEntryTypeIds = (): EntryTypeId[] =>
+	[...BY_TYPE_ID.keys()].filter(
+		(id) => derivedEntryTypeSource(`${id}@${BY_TYPE_ID.get(id)!.version}`) !== undefined
+	) as EntryTypeId[]
+
+/**
+ * The repertoire a derived entry type was derived from — what its piece
+ * fields are checked against (`checkPiece`) — or `undefined` for core's five.
+ */
+export const derivedEntryRepertoire = (typeId: string) => {
+	const decl = BY_TYPE_ID.get(typeId)
+	return decl ? derivedEntryTypeSource(`${typeId}@${decl.version}`)?.repertoire : undefined
+}
+
+/**
+ * The wire's name for the `title` role (`EntryColumns.name`). A derived entry
+ * type's piece shape declares a `name` field too — the same fact, so it is
+ * the title column and never a second copy in `fields` (`declaredFields`).
+ */
+export const TITLE_WIRE_FIELD = "name"
 
 /** Every declared entry type, in declaration order. */
 export const entryDeclarations = (): EntryTypeDeclaration[] => [
@@ -150,9 +185,18 @@ export const fieldDefault = (typeId: string, field: string): unknown => {
  *
  * Order matters only in that it is stable: the projection spreads them onto the
  * wire row and a reordering would change key order in a serialized payload.
+ *
+ * A field named like the title's wire name (`name`, a derived entry type's
+ * piece name) on a type that declares a `title` role is left out: it IS the
+ * title, carried by the title column, so the projection and the writers move
+ * it there and never store it twice.
  */
-export const declaredFields = (typeId: string): string[] =>
-	Object.keys(BY_TYPE_ID.get(typeId)?.fields ?? {})
+export const declaredFields = (typeId: string): string[] => {
+	const decl = BY_TYPE_ID.get(typeId)
+	if (!decl) return []
+	const keys = Object.keys(decl.fields)
+	return decl.roles.title ? keys.filter((k) => k !== TITLE_WIRE_FIELD) : keys
+}
 
 /**
  * A value from a foreign file, as this field is declared.

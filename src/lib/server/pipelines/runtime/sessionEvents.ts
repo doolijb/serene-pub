@@ -41,6 +41,7 @@ import {
 } from "$lib/server/pipelines/runtime/runTurn"
 import {
 	answersEvent,
+	defaultEventSpec,
 	lockedEventSpec,
 	presetEventSpec,
 	type PresetFallback
@@ -563,7 +564,11 @@ export async function resolveSessionEventVerdict(
 			const { via: _via, spec, ...fallback } = verdict
 			return { spec, fallback }
 		}
-		return { spec: await lockedEventSpec(db, genreId, event) }
+		// 🚧 Then the event's one default — core's save on `message-offered`,
+		// for a session on no preset (owner ruling 2026-10-15).
+		return {
+			spec: (await lockedEventSpec(db, genreId, event)) ?? defaultEventSpec(event)
+		}
 	} catch {
 		// Routing infrastructure failing still degrades to "nothing serves",
 		// which the caller answers with its own floor (the F29 posture).
@@ -790,6 +795,22 @@ export async function dispatchSessionEvent(
 		if (handle) {
 			opts.signal?.removeEventListener("abort", onParentAbort)
 			runRegistry.finish(runId)
+			/**
+			 * A registered child is `session.generating` while it runs, and
+			 * it may outlive its root's end push — a listener dispatched by
+			 * the root's event settles after it (Dungeon Crawler walk round
+			 * 2, 2026-10-15: Continue stayed "wait for the reply to finish"
+			 * with nothing running until a reload). Only then: while the root
+			 * still runs, its own end push covers this child (W-A2 keeps a
+			 * parked grandchild from pushing before every root has).
+			 */
+			const rootStillRuns = runRegistry
+				.active()
+				.some((h) => h.runId === opts.lineage?.parentRunId)
+			if (opts.io && !rootStillRuns)
+				void import("$lib/server/sessions/actionsPush").then(
+					({ pushSessionActions }) => pushSessionActions(opts.io, opts.sessionId)
+				)
 		}
 	}
 }

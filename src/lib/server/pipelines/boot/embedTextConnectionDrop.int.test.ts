@@ -18,7 +18,7 @@ beforeAll(async () => {
 	db = await createTestDb()
 	const [spec] = await db
 		.insert(schema.pipelineSpecs)
-		.values({ slug: "core:spec/chat-respond", name: "Respond" })
+		.values({ slug: "core:spec/story-respond", name: "Respond" })
 		.returning()
 	const [version] = await db
 		.insert(schema.pipelineSpecVersions)

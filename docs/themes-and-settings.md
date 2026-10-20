@@ -40,6 +40,7 @@ Themes are grouped as **Built-in**, **My themes** (ones you made, see [Creating 
 From the top:
 
 - **Language**: the language the app is shown in, or **Pub default** to follow whatever an administrator has set for everyone. See [Languages](./languages.md).
+- **Time zone**: the zone real-world dates and times are shown in (when a session was last active, when an account was made). It starts as your browser's zone the first time you open the app; pick another and it follows you to every device. Times are stored the same way whatever you pick, and in-story time (a session's or lorebook's own clock) is never affected.
 - **Lorebook writes from sessions**: how your sessions may change the lorebooks you own (the stats they record, a summary, a compiled history, a graph). **Full**, **Review changes** or **Off**, or follow the pub's default. See [Lorebooks](./lorebooks.md#what-a-session-may-write).
 - **Show all character fields**: the character form shows every field, including the less common ones, instead of just the usual few. See [Characters](./characters.md).
 - **Easy character creation**: on (the default), **New** in the Characters view opens a short guided creator for a character or a persona; off, it goes straight to the full form.

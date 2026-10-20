@@ -12,6 +12,7 @@ import { asc, eq, isNotNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import * as attic from "../tables"
 import {
+	asDate,
 	countLoss,
 	insertBatched,
 	mapFor,
@@ -48,8 +49,8 @@ export async function restoreUsers(ctx: RestoreContext): Promise<void> {
 			isAdmin: u.isAdmin,
 			isDeleted: u.isDeleted,
 			lastLoginAt: null,
-			createdAt: u.createdAt,
-			updatedAt: u.updatedAt
+			createdAt: asDate(u.createdAt),
+			updatedAt: asDate(u.updatedAt)
 		}
 		const twin = u.seedKey
 			? seeded.find((s) => s.seedKey === u.seedKey)
@@ -93,8 +94,8 @@ export async function restoreUserSettings(
 			backgroundMediaId: null,
 			backgroundOpacity: s.backgroundOpacity,
 			charaVaultIncludeNsfw: s.charaVaultIncludeNsfw,
-			createdAt: s.createdAt,
-			updatedAt: s.updatedAt
+			createdAt: asDate(s.createdAt),
+			updatedAt: asDate(s.updatedAt)
 		}
 		const [live] = await tx
 			.select({ id: schema.userSettings.id })

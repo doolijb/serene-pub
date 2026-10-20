@@ -3,12 +3,13 @@
 	 * One widget's settings, inside its settings modal (PLAN 25; ruled
 	 * 2026-09-10).
 	 *
-	 * Exposure is progressive and declaration-driven. Core's own `title` and
-	 * `lane` are shown by default; a widget's declared fields appear only
-	 * because the widget declared them; anything it put in the `behaviour` group
-	 * sits behind a disclosure. A widget that declares nothing shows the two
-	 * core fields and nothing else, so the panel never lists a control with
-	 * nothing behind it.
+	 * Exposure is declaration-driven. Core's own `title` and `lane` come
+	 * first; a widget's declared fields appear only because the widget
+	 * declared them — its ungrouped ones under no heading, then one headed
+	 * section per declared `group`, the group string verbatim, in order of
+	 * first appearance (D5 of `PLAN-session-panels-2026-10-14`). Nothing folds
+	 * away. A widget that declares nothing shows the core fields and nothing
+	 * else, so the panel never lists a control with nothing behind it.
 	 *
 	 * `SchemaForm` renders the fields — the same renderer node params and plugin
 	 * settings use, so a control fixed there is fixed here.
@@ -24,6 +25,7 @@
 	 */
 	import * as Icons from "@lucide/svelte"
 	import SchemaForm from "$lib/client/components/pipelines/SchemaForm.svelte"
+	import ListGroupLabel from "$lib/client/components/panels/ListGroupLabel.svelte"
 	import {
 		hasWidgetSettings,
 		patchWidgetSettings,
@@ -48,7 +50,7 @@
 	let sections = $derived(
 		decl
 			? settingsSections(decl)
-			: { basic: [], declared: [], behaviour: [] }
+			: { basic: [], declared: [], groups: [] }
 	)
 	let effective = $derived(
 		decl
@@ -70,10 +72,20 @@
 		values = { ...effective }
 	})
 
-	/** A section's fields as the schema `SchemaForm` wants. */
+	/** Ties each section to its heading (`aria-labelledby`). */
+	const uid = $props.id()
+
+	/**
+	 * A section's fields as the schema `SchemaForm` wants — `group` left
+	 * off, since the section's own heading already says it (SchemaForm would
+	 * draw it a second time).
+	 */
 	function schemaOf(fields: SettingsField[]): Record<string, any> {
 		const out: Record<string, any> = {}
-		for (const f of fields) out[f.key] = f.decl
+		for (const f of fields) {
+			const { group: _group, ...decl } = f.decl
+			out[f.key] = decl
+		}
 		return out
 	}
 
@@ -121,21 +133,25 @@
 			/>
 		{/if}
 
-		{#if sections.behaviour.length}
-			<details class="wsx-more">
-				<summary class="wsx-summary">
-					<Icons.ChevronRight size={12} class="wsx-chev" />
-					<span>Behaviour</span>
-				</summary>
-				<div class="wsx-more-body">
-					<SchemaForm
-						schema={schemaOf(sections.behaviour)}
-						bind:values
-						oncommit={commit}
-					/>
-				</div>
-			</details>
-		{/if}
+		{#each sections.groups as g, gi (g.heading)}
+			<section
+				class="wsx-section"
+				data-settings-group={g.heading}
+				aria-labelledby="{uid}-g{gi}"
+			>
+				<ListGroupLabel
+					id="{uid}-g{gi}"
+					label={g.heading}
+					headingLevel={3}
+					class="wsx-section-label"
+				/>
+				<SchemaForm
+					schema={schemaOf(g.fields)}
+					bind:values
+					oncommit={commit}
+				/>
+			</section>
+		{/each}
 	</div>
 {/if}
 
@@ -171,33 +187,15 @@
 		background: color-mix(in oklab, currentColor 12%, transparent);
 		opacity: 1;
 	}
-	.wsx-summary {
+	.wsx-section {
 		display: flex;
-		align-items: center;
+		flex-direction: column;
 		gap: 0.25rem;
-		padding: 0.15rem 0;
-		font-size: 12px;
-		font-weight: 400;
-		cursor: pointer;
-		opacity: 0.72;
-		list-style: none;
 	}
-	.wsx-summary::-webkit-details-marker {
-		display: none;
-	}
-	.wsx-summary:hover,
-	.wsx-more:focus-within > .wsx-summary {
-		opacity: 1;
-	}
-	/* The chevron turns with the disclosure — the only thing that says which
-	   way it is without reading the fields under it. */
-	.wsx-more[open] :global(.wsx-chev) {
-		transform: rotate(90deg);
-	}
-	:global(.wsx-chev) {
-		transition: transform 120ms ease;
-	}
-	.wsx-more-body {
-		padding-block-start: 0.3rem;
+	/* The house group label (STYLE-GUIDE §6.4), flush with the fields under
+	   it rather than inset like a sidebar list's. */
+	.wsx-section :global(.wsx-section-label) {
+		padding-inline: 0;
+		padding-block: 0.5rem 0;
 	}
 </style>

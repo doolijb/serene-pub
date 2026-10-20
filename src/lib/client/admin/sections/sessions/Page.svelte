@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { realDate } from "$lib/client/utils/realTime.svelte"
 	/**
 	 * Admin › Sessions (23 §9): the changelist (note 37, Django admin) of every
 	 * session on the instance, whoever owns it — filters by owner, genre,
@@ -43,7 +44,7 @@
 
 	const fmtDate = (iso: string | null) =>
 		iso
-			? new Date(iso).toLocaleDateString(undefined, {
+			? realDate(iso, {
 					year: "numeric",
 					month: "short",
 					day: "numeric"

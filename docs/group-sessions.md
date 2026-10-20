@@ -7,11 +7,13 @@ A group session has more than one character, and its turn order decides who spea
 - Controlling who talks when: let everyone answer in turn, pick the next speaker yourself, or let the model decide.
 :::
 
-Group sessions are a feature of the **Chat** genre. In [Adventure](./genre-adventure.md) and [the Lair](./genre-lair.md) a planner decides who speaks, so most of this page doesn't apply there; the parts that do (the *ready to continue* line, **Continue**, **Pick who speaks**) are noted as they come up.
+Group sessions are a feature of the **Story** genre. In [the Lair](./genre-lair.md) and [the Lair](./genre-lair.md) a planner decides who speaks, so most of this page doesn't apply there; the parts that do (the *ready to continue* line, **Continue**, **Pick who speaks**) are noted as they come up.
+
+In [Dungeon Crawler](./genre-dungeon-crawler.md) each person at the table plays one seat, and a guest needs no persona: the Planner's interview names their character on their own Planner tab. Until that character is made, their Story composer and **Continue** are greyed with what they wait on (*Waiting: Make your character on the Planner tab first.*), never *add a persona first*. See [Rounds with friends](./genre-dungeon-crawler.md#rounds-with-friends).
 
 ## The basics
 
-Add more than one character when you start a session, or later in **Edit session › Participants**. That's all it takes to make a group session.
+Add more than one character when you start a session, or later in **Edit session › Participants**. That's all it takes to make a group session. (A Story on the **Minimal** preset can also start with nobody at all: add characters whenever you like.)
 
 After you send a message, the characters answer in turn: by default each active character speaks once, in the order they're listed, and then it's your turn again. Drag the characters in **Participants** to change that order.
 
@@ -28,7 +30,7 @@ The right half of the **turn line**, just above the composer, shows whose turn i
 - *Your turn* when it's yours, or *Sable's turn* for someone else's persona. A person's turn is taken by writing, so there's no Continue;
 - *Waiting for a message — or pick who speaks next* when nobody is lined up, because the round is over or the strategy is **Manual**.
 
-It hides while you have a draft or while you're editing a message. While a reply is being written, **Stop** stands in its place, and **Try again** after a reply fails. **Someone else** (or **Pick**) beside it opens *Who speaks next?*, listing everyone who can speak, with the next one marked. Who else is typing shows beside it too.
+It hides while you have a draft or while you're editing a message. While a reply is being written, **Stop** stands in its place, and **Try again** after a reply fails. After a reply it waits until the turn order has worked out who's next, so the one who just spoke isn't offered again. **Someone else** (or **Pick**) beside it opens *Who speaks next?*, listing everyone who can speak, with the next one marked. Who else is typing shows beside it too.
 
 When it's your turn, you also get a notification in [Activity](./getting-around.md#activity), such as *Your turn in The Guard Room*, so you know even when the session isn't open. It clears once you take your turn.
 
@@ -40,14 +42,14 @@ To see the whole order at once, add the **Turn order** widget from the layout tr
 
 Both live in the **Actions** row above the composer, as turn controls:
 
-- **Continue** (`/advance`) lets whoever is next in the turn order speak. With nothing lined up, it says *Nothing is prepared to take a turn.* In Adventure and the Lair, the session's owner gets a narrator turn instead, which carries the story on with no new direction.
-- **Pick who speaks** (`/pick-speaker`) lets you choose who speaks next, whatever the turn order says. Search by name, nickname, description or creator notes. In Chat, the narrator is pinned at the top of the list and opens [Narrator Response](#narrator-response); in Adventure and the Lair, it gives the narrator the turn.
+- **Continue** (`/advance`) lets whoever is next in the turn order speak. With nothing lined up, it says *Nothing is prepared to take a turn.* In the Lair, the session's owner gets a narrator turn instead, which carries the story on with no new direction.
+- **Pick who speaks** (`/pick-speaker`) lets you choose who speaks next, whatever the turn order says. Search by name, nickname, description or creator notes. In Story, the narrator is pinned at the top of the list and opens [Narrator Response](#narrator-response); in the Lair, it gives the narrator the turn.
 
 Neither starts anything by itself: each press is one turn.
 
 ## Choose how the turn order works
 
-The turn order is set in **Edit session › Settings**, under **How replies are made**, on the Chat turn order's **Strategy**. **Pipeline default (Round robin)** is what you get if you change nothing. Choose another and press **Apply now** (it applies at once, not with **Save**):
+The turn order is set in **Edit session › Settings**, under **How replies are made**, on the Story turn order's **Strategy**. **Pipeline default (Round robin)** is what you get if you change nothing. Choose another and press **Apply now** (it applies at once, not with **Save**):
 
 - **Round robin**: after each of your messages, every active character speaks once, in order. The default.
 - **Round robin by user**: the characters belonging to whoever sent the last message go first. Only useful with several people in one session; alone, it's the same as round robin.
@@ -62,7 +64,7 @@ Who may take a turn at all, and how far back a mention moves someone up, are the
 
 ### Let the model decide
 
-Chat's **Who speaks next is decided by** setting (in **Genre settings**) offers **The turn order rules** (the default) or **The model**. With the model, each time the order is worked out, the model reads the recent conversation and orders who speaks next among those who haven't spoken since your last message, so a round still ends. It costs one extra model call each time. If the model's answer names nobody who can speak, round robin decides instead.
+Story's **Who speaks next is decided by** setting (in **Genre settings**) offers **The turn order rules** (the default) or **The model**. With the model, each time the order is worked out, the model reads the recent conversation and orders who speaks next among those who haven't spoken since your last message, so a round still ends. It costs one extra model call each time. If the model's answer names nobody who can speak, round robin decides instead.
 
 ### How round robin counts
 
@@ -76,11 +78,11 @@ It's worked out from the conversation itself each time, so nothing gets stuck: p
 
 - **Off**: nothing replies until you press **Continue** or pick someone. That's the point of it: you decide when anyone speaks.
 - **Next turn**: the next character in line speaks once.
-- **Whole round**: Chat's default. The next character speaks, then the next, until the round is over, it reaches a person's turn, or it has run 12 turns for your one message.
+- **Whole round**: Story's default. The next character speaks, then the next, until the round is over, it reaches a person's turn, or it has run 12 turns for your one message.
 
 Only your own message starts this. Editing or deleting a message, or changing settings, works out the order again but makes nobody speak. **Stop ends the round**: a reply you stop doesn't hand on to the next character.
 
-Adventure and the Lair have no Auto-advance setting: each message you send gets one turn, and in the Lair each delver the Castellan named follows by themselves.
+The Lair has no Auto-advance setting: each message you send gets one turn, and in the Lair each delver the Castellan named follows by themselves.
 
 ## Bench a character
 
@@ -92,7 +94,7 @@ A benched character leaves the **Scene Portraits** widget too. The **Turn order*
 
 ## Character detail
 
-**Character detail** (in **Genre settings**, in Chat and Adventure) decides how much the model is told about each character **who isn't the one speaking**:
+**Character detail** (in **Genre settings**, in Story) decides how much the model is told about each character **who isn't the one speaking**:
 
 - **Everything** (the default): name, nickname, description and personality.
 - **Name and description**: who they are, not how they behave.
@@ -126,6 +128,6 @@ Edit, Branch, Hide, Delete, Regenerate, Extend and Swipe work on it as on any re
 ## Related
 
 - [Sessions](./sessions.md): the session screen and everything you can do with a message.
-- [Genres](./genres.md): Chat and the other kinds of session.
+- [Genres](./genres.md): Story and the other kinds of session.
 - [Session actions](./session-actions.md): how actions, turn controls and slash commands are declared, for power users.
 - [Characters](./characters.md): the cards the model reads.

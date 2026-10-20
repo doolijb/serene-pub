@@ -11,6 +11,7 @@
 /** The participant links a session view holds. Structural, so both the full
  *  `sessions:get` payload and a test fixture satisfy it. */
 import { messageEnvoySlug } from "@serene-pub/core-catalog/conversation"
+import { senderRefOf } from "@serene-pub/sdk"
 
 /** The slug of an envoy's message — core's conversation reads it the same way. */
 export { messageEnvoySlug }
@@ -26,6 +27,18 @@ export interface MessageSpeakerSource {
 		/** A persona IS a character the user voices — same row shape. */
 		persona?: SelectCharacter | null
 		removedName?: string | null
+		/**
+		 * 🚧 The seat name: this player's character name in THIS session.
+		 * Wins over the voiced card's name and the player label.
+		 */
+		seatName?: string | null
+		/** 🚧 The seat's own id — what a card-less player seat's line names (`player-seat:<id>`). */
+		id?: number | null
+		/** 🚧 Whose seat it is. */
+		userId?: number | null
+		removedAt?: Date | string | null
+		/** 🚧 The seat's portrait (PLAN-sheet §12): a file id that wins over the card's avatar on the seat's lines. */
+		portraitMediaId?: number | null
 	}[]
 	/**
 	 * The session's envoys (plans/29 R-18; U5g), off `sessions:view` —
@@ -85,12 +98,16 @@ export function messageSpeaker(
 		const cp = session?.sessionPersonas?.find(
 			(p) => p.personaId === msg.personaId
 		)
-		return (
-			cp?.persona ??
-			(cp?.removedName
-				? ({ name: cp.removedName } as SelectCharacter)
-				: undefined)
-		)
+		// A seat name wins over the card's (the card still lends its face,
+		// unless the seat has a portrait of its own).
+		const seatName = cp?.seatName?.trim()
+		const speaker = seatName
+			? ({ ...(cp?.persona ?? {}), name: seatName } as SelectCharacter)
+			: (cp?.persona ??
+				(cp?.removedName
+					? ({ name: cp.removedName } as SelectCharacter)
+					: undefined))
+		return speaker ? withPortrait(speaker, cp?.portraitMediaId) : speaker
 	} else if (msg.characterId) {
 		const cc = session?.sessionCharacters?.find(
 			(c) => c.characterId === msg.characterId
@@ -102,6 +119,49 @@ export function messageSpeaker(
 				: undefined)
 		)
 	}
+}
+
+/**
+ * 🚧 A speaker drawn with its seat's portrait (PLAN-sheet §12) when the
+ * seat has one: the file id becomes the avatar every render site reads
+ * (`avatarSrc`), over the card's. Unchanged without one.
+ */
+export function withPortrait<C extends object>(speaker: C, portraitMediaId: number | null | undefined): C {
+	if (portraitMediaId == null) return speaker
+	return { ...speaker, avatarMediaId: portraitMediaId, avatarMedia: null, avatar: null, _avatar: null }
+}
+
+/**
+ * 🚧 The portrait of the card-less seat a person's line names
+ * (`metadata.speaker = player-seat:<id>`), as a file id; undefined for any
+ * other line or a seat with none.
+ */
+export function seatPortraitOf(
+	session: MessageSpeakerSource | null | undefined,
+	msg: { personaId?: number | null; metadata?: unknown }
+): number | undefined {
+	const sender = senderRefOf(msg)
+	if (!sender?.startsWith("player-seat:")) return undefined
+	const seatId = Number(sender.slice("player-seat:".length))
+	const seat = (session?.sessionPersonas ?? []).find((p) => p.id === seatId)
+	return seat?.portraitMediaId ?? undefined
+}
+
+/**
+ * 🚧 The seat name a person's line with no persona takes: the seat the line
+ * names (`metadata.speaker = player-seat:<id>`, stamped at send), never guessed
+ * from who sent it — one player may hold two seats. Undefined for a line
+ * from no card-less player seat, or from a seat with no name.
+ */
+export function seatNameOf(
+	session: MessageSpeakerSource | null | undefined,
+	msg: { personaId?: number | null; metadata?: unknown }
+): string | undefined {
+	const sender = senderRefOf(msg)
+	if (!sender?.startsWith("player-seat:")) return undefined
+	const seatId = Number(sender.slice("player-seat:".length))
+	const seat = (session?.sessionPersonas ?? []).find((p) => p.id === seatId)
+	return seat?.personaId == null ? seat?.seatName?.trim() || undefined : undefined
 }
 
 /**
@@ -117,11 +177,15 @@ export function messageSpeaker(
  * relabels every line.
  */
 export function personLineName(opts: {
+	/** 🚧 The player's seat name (`seatNameOf`): wins over everything. */
+	seatName?: string | null
 	playerLabel?: string | null
 	memberName?: string | null
 	/** The session's members: its owner plus its guests. */
 	memberCount: number
 }): { name: string; member?: string } | undefined {
+	const seat = opts.seatName?.trim()
+	if (seat) return { name: seat }
 	const label = opts.playerLabel?.trim()
 	const member = opts.memberName?.trim()
 	if (label)

@@ -42,10 +42,15 @@ vi.mock("$lib/server/db", async () => {
  * One answer for every step. `generate-json` reads the lists its `path`
  * selects out of it; `generate-text` takes it as the prose. `value` is text,
  * as the shipped keeper schema declares it.
+ *
+ * The planner names no speaker: in the Lair a named speaker is prepared as a
+ * turn of their own (Adventure voiced them inside the narrator's run), and
+ * auto-advance would play it as a second run. This file pins the narrator's
+ * turn alone.
  */
 const ANSWER = JSON.stringify({
 	beats: ["The lantern gutters.", "Thunder, far off."],
-	speakers: [{ name: "Elara", intent: "warn the party" }],
+	speakers: [],
 	worldHints: { location: "the fog road", timeOfDay: "dusk", weather: "storm" },
 	needsLookup: false,
 	values: [
@@ -128,7 +133,7 @@ vi.mock("$lib/server/embedding", () => ({
 	batchEmbed: async () => []
 }))
 
-const ADVENTURE = "core:genre/adventure"
+const ADVENTURE = "core:genre/lair" // a narrator-voiced genre (was Adventure, retired 2026-10-19)
 
 /** The hard ceiling a road gets before the suite calls it hung. */
 const HANG_MS = 20_000
@@ -299,7 +304,7 @@ async function respondRuns(sessionId: number) {
 		.select({ specSlug: schema.pipelineRuns.specSlug })
 		.from(schema.pipelineRuns)
 		.where(eq(schema.pipelineRuns.sessionId, sessionId))
-	return runs.filter((r) => r.specSlug === "core:spec/adventure-respond").length
+	return runs.filter((r) => r.specSlug === "core:spec/lair-respond").length
 }
 
 /** A press of Continue (no entry), or of a pick, by `userId`. */

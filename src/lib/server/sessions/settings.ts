@@ -51,9 +51,11 @@
  * projection of the same document.
  */
 
+import { annexWithoutPoints } from "$lib/server/sessions/annexRevisionPoints"
 import { and, asc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
+	readComposerStates,
 	readTurnOrder,
 	type SessionCastV1,
 	type SessionSettingsV1,
@@ -61,6 +63,7 @@ import {
 } from "@serene-pub/sdk"
 import {
 	cascadeFields,
+	presetPinnedSettings,
 	getSessionGenre,
 	STANDARD_GENRE_ID
 } from "$lib/server/pipelines/entities/sessionGenres"
@@ -181,11 +184,14 @@ export async function resolveSessionSettings(
 		sessionId,
 		title: session.name ?? null,
 		guests: guests.map((g) => g.userId),
+		// 🚧 Server-side only, like `guests` (never in `widgetSessionProjection`).
+		...(typeof session.userId === "number" ? { ownerUserId: session.userId } : {}),
 		genreId,
 		presetId: session.presetId ?? null,
 		fields: cascadeFields({
 			declared: (shape?.fields ?? {}) as Record<string, { default?: unknown }>,
 			pinned: genre?.settings ?? {},
+			preset: await presetPinnedSettings(db, session.presetId ?? null),
 			stored: (session.genreFields ?? {}) as Record<string, unknown>
 		}),
 		...(playerLabel ? { playerLabel } : {}),
@@ -201,11 +207,51 @@ export async function resolveSessionSettings(
 		// The cast and the `?? {}` are left over from before the schema
 		// carried it and are inert now; every value is still in here, secrets
 		// included, so never hand this to a widget (`annexViewFor`, R57).
-		annex:
-			((session as { annex?: unknown }).annex as
-				| Record<string, unknown>
-				| undefined) ?? {}
+		// 🚧 Never the revision points (`annexRevisionPoints.ts`): sixteen
+		// copies of the annex, which a script reading this document would
+		// carry into its sandbox on every evaluation.
+		annex: annexWithoutPoints((session as { annex?: unknown }).annex),
+		// 🚧 The composer states (owner ruling 2026-10-15) — only when the
+		// genre has closed something, so a document with none is unchanged.
+		...(() => {
+			const composerStates = readComposerStates(session.composerStates)
+			return Object.keys(composerStates).length ? { composerStates } : {}
+		})(),
+		// 🚧 The session's **lane register** (owner ruling 2026-10-17): on each
+		// channel the genre declares `lanes: 'personal'`, whose lane is whose —
+		// `{ parley: { "user:3": "parley:2" } }`. Server-side only, like
+		// `guests`; only when the genre declares such a channel, so every other
+		// document is unchanged. A genre's scripts read it as they read
+		// `ownerUserId`; a lane opens through `core:query/channel-lane@1`.
+		...(await laneRegisterOf(db, sessionId, shape))
 	}
+}
+
+/** 🚧 `channelLanes` for the settings document, or nothing (see the call). */
+async function laneRegisterOf(
+	db: Db,
+	sessionId: number,
+	shape: unknown
+): Promise<{ channelLanes?: Record<string, Record<string, string>> }> {
+	const { personalSlugsOf } = await import("$lib/server/channels/lanes")
+	const slugs = personalSlugsOf(shape)
+	if (!slugs.length) return {}
+	const { formatChannel } = await import("@serene-pub/sdk")
+	const rows = await db
+		.select({
+			slug: schema.channelLanes.slug,
+			lane: schema.channelLanes.lane,
+			userId: schema.channelLanes.userId
+		})
+		.from(schema.channelLanes)
+		.where(eq(schema.channelLanes.sessionId, sessionId))
+		.orderBy(asc(schema.channelLanes.lane))
+	const channelLanes: Record<string, Record<string, string>> = {}
+	for (const slug of slugs) channelLanes[slug] = {}
+	for (const r of rows)
+		if (channelLanes[r.slug])
+			channelLanes[r.slug]![`user:${r.userId}`] = formatChannel({ slug: r.slug, lane: r.lane })
+	return { channelLanes }
 }
 
 /**
@@ -239,6 +285,22 @@ async function readCast(db: Db, sessionId: number): Promise<SessionCastV1> {
 		...cast,
 		currentCharacterId: null
 	} as SessionCastV1
+}
+
+/**
+ * 🚧 **Honour mode** (owner rulings 2026-10-15, 2026-10-16): the session's
+ * `honorMode` field, a key core reads as it reads `autoAdvance`. `undefined`
+ * when the session's genre does not declare it — nothing honour mode gates
+ * applies there. The one read of it: the turn delete (`turnDeleteVerdict`)
+ * and a player's own sheet (`assertSessionOwner`, `player_seat`) both ask here.
+ */
+export async function sessionHonourMode(
+	db: Db,
+	sessionId: number
+): Promise<boolean | undefined> {
+	const doc = await resolveSessionSettings(db, sessionId)
+	const honour = (doc?.fields as Record<string, unknown> | undefined)?.honorMode
+	return honour === undefined ? undefined : honour === true
 }
 
 /**

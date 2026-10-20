@@ -42,7 +42,15 @@ import { reconcileConfigs } from "$lib/server/pipelines/config/named"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
-const ADVENTURE = "core:spec/adventure-respond"
+/**
+ * The Lair's reply: a planner and a state keeper nobody reads, and narration
+ * somebody waits for — the shape Adventure's reply had until it retired
+ * (2026-10-19).
+ */
+const LAIR = "core:spec/lair-respond"
+const PLAN_WRITE = "via.turn.channel.story.pick.planned.planWrite"
+const KEEPER_WRITE = "keep.played.keeperWrite"
+const NARRATION = "via.narrate.say"
 const BACKGROUND = "sampling-background"
 
 /**
@@ -82,12 +90,12 @@ async function shipped(db: TestDb) {
 	const [spec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, ADVENTURE))
+		.where(eq(schema.pipelineSpecs.slug, LAIR))
 	const [config] = await db
 		.select()
 		.from(schema.pipelineConfigs)
 		.where(
-			eq(schema.pipelineConfigs.seedKey, `pipeline-default:${ADVENTURE}`)
+			eq(schema.pipelineConfigs.seedKey, `pipeline-default:${LAIR}`)
 		)
 	return { spec, config }
 }
@@ -129,12 +137,12 @@ describe("a preset names a sampling config by seed identity", () => {
 		const { config } = await shipped(db)
 		const background = await backgroundId(db)
 
-		expect(await samplingOf(db, config.id, "planWrite")).toBe(background)
-		expect(await samplingOf(db, config.id, "keeperWrite")).toBe(background)
-		// The two steps a person reads keep whatever the session is set to.
+		expect(await samplingOf(db, config.id, PLAN_WRITE)).toBe(background)
+		expect(await samplingOf(db, config.id, KEEPER_WRITE)).toBe(background)
+		// The steps a person reads keep whatever the session is set to.
 		// A resolution that filled in every sampling slot would pass the two
 		// assertions above and still be wrong.
-		expect(await samplingOf(db, config.id, "scene")).toBeUndefined()
+		expect(await samplingOf(db, config.id, NARRATION)).toBeUndefined()
 	})
 
 	it("back-fills a database seeded before the preset said so, without touching an administrator's pick", async () => {
@@ -158,7 +166,7 @@ describe("a preset names a sampling config by seed identity", () => {
 			.returning()
 		await db.insert(schema.pipelineConfigValues).values({
 			configId: tuned.id,
-			nodeKey: "planWrite",
+			nodeKey: PLAN_WRITE,
 			slot: "sampling",
 			path: "",
 			value: mine.id
@@ -167,7 +175,7 @@ describe("a preset names a sampling config by seed identity", () => {
 		// The state a real upgrade is in: the shipped config was written by a
 		// build whose preset named no sampling row, so the address has never
 		// held a value in it.
-		for (const nodeKey of ["planWrite", "keeperWrite"])
+		for (const nodeKey of [PLAN_WRITE, KEEPER_WRITE])
 			await db
 				.delete(schema.pipelineConfigValues)
 				.where(
@@ -180,13 +188,13 @@ describe("a preset names a sampling config by seed identity", () => {
 
 		await reconcileConfigs(db, spec.id, spec.activeVersionId!, spec.slug)
 
-		expect(await samplingOf(db, config.id, "planWrite")).toBe(background)
-		expect(await samplingOf(db, config.id, "keeperWrite")).toBe(background)
+		expect(await samplingOf(db, config.id, PLAN_WRITE)).toBe(background)
+		expect(await samplingOf(db, config.id, KEEPER_WRITE)).toBe(background)
 		// The asymmetry the layer chain exists for: the author moving a default
 		// reaches everybody who has not opted out, and stops at everybody who
 		// has.
-		expect(await samplingOf(db, tuned.id, "planWrite")).toBe(mine.id)
-		expect(await samplingOf(db, tuned.id, "keeperWrite")).toBe(background)
+		expect(await samplingOf(db, tuned.id, PLAN_WRITE)).toBe(mine.id)
+		expect(await samplingOf(db, tuned.id, KEEPER_WRITE)).toBe(background)
 	})
 })
 
@@ -201,7 +209,7 @@ describe("a seedKey nothing seeded", () => {
 			await booted(db)
 			const { config } = await shipped(db)
 
-			expect(await samplingOf(db, config.id, "planWrite")).toBeUndefined()
+			expect(await samplingOf(db, config.id, PLAN_WRITE)).toBeUndefined()
 			expect(
 				warn.mock.calls.some((c) =>
 					c.some(

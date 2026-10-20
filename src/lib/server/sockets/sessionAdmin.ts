@@ -11,7 +11,7 @@
 import { sessionEvents, type SettingsSchema } from "@serene-pub/sdk"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { answersEvent } from "$lib/server/pipelines/entities/presetBindings"
+import { answersEvent, isDefaultSave } from "$lib/server/pipelines/entities/presetBindings"
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm"
 import { notCoreRow } from "$lib/server/plugins/frameHost"
 import { socketWants } from "./interest"
@@ -114,6 +114,9 @@ const presetRow = (
 	primarySlug: p.primarySlug ?? null,
 	configSelections: (p.configSelections ?? {}) as Record<string, number>,
 	includedActions: (p.includedActions ?? null) as string[] | null,
+	callsPerTurn: (p.callsPerTurn ?? null) as number | null,
+	castFloor: (p.castFloor ?? null) as { characters?: number; personas?: number } | null,
+	settings: (p.settings ?? null) as Record<string, unknown> | null,
 	...(effectiveIncludedActions ? { effectiveIncludedActions } : {}),
 	defaults: (p.defaults ??
 		null) as Sockets.SessionAdmin.PresetDefaults | null,
@@ -364,15 +367,12 @@ async function genreSwapContributions(
 			i18nText(r.i18n?.name) || r.definitionId
 		])
 	)
+	// Onto the spec core ships now (`renamedCoreIds.ts`).
+	const { pluginSwapsOf } = await import("$lib/server/plugins/renamedCoreIds")
 	const out: Sockets.SessionAdmin.GenreDetail.SwapRow[] = []
 	for (const p of plugins as any[]) {
-		const swaps = (p.manifest?.swaps ?? []) as Array<{
-			spec?: string
-			node?: string
-			definition?: string
-		}>
-		for (const c of Array.isArray(swaps) ? swaps : []) {
-			if (!c?.spec || !c.node || !c.definition || !specNames.has(c.spec)) continue
+		for (const c of pluginSwapsOf(p.manifest)) {
+			if (!specNames.has(c.spec)) continue
 			out.push({
 				pluginId: p.pluginId,
 				pluginName: p.name ?? p.pluginId,
@@ -609,11 +609,12 @@ export const sessionGenresSetSwapEnabled: Handler<
 			.from(schema.plugins)
 			.where(eq(schema.plugins.pluginId, params.pluginId))
 			.limit(1)) as any[]
-		const declared = ((plugin?.manifest?.swaps ?? []) as any[]).some(
+		const { pluginSwapsOf } = await import("$lib/server/plugins/renamedCoreIds")
+		const declared = pluginSwapsOf(plugin?.manifest).some(
 			(c) =>
-				c?.spec === params.spec &&
-				c?.node === params.node &&
-				c?.definition === params.definition
+				c.spec === params.spec &&
+				c.node === params.node &&
+				c.definition === params.definition
 		)
 		if (!plugin || !declared) {
 			const res = {
@@ -806,6 +807,8 @@ async function validateBindings(
 		const spec = active.find((r) => r.slug === b.spec)
 		if (!spec)
 			return `'${b.spec}' is not published on this pub, so it cannot answer '${event}'.`
+		// 🚧 Core's default save has no lock: it serves every genre (2026-10-15).
+		if (isDefaultSave(event, b.spec)) continue
 		if (spec.inputGenre !== genreId || !answersEvent(spec, event))
 			return `'${b.spec}' answers '${[spec.inputEvent, ...(spec.inputEvents ?? [])].filter(Boolean).join("', '") || "nothing"}' for '${spec.inputGenre ?? "no genre"}' — it cannot bind to '${event}' of '${genreId}' (24 §4).`
 		if (b.config != null) {
@@ -894,6 +897,17 @@ export const sessionPresetsCreate: Handler<
 				if (spec) bindings[event] = { spec }
 			}
 			base.bindings = bindings
+		}
+		// 🚧 Every preset shows what saves a person's message (owner ruling
+		// 2026-10-15): core's default save unless it binds its own.
+		{
+			const { SAVE_MESSAGE_SPEC_ID } = await import("@serene-pub/sdk")
+			const bindings = (base.bindings ?? {}) as Record<string, { spec: string }>
+			if (!bindings[sessionEvents.messageOffered])
+				base.bindings = {
+					...bindings,
+					[sessionEvents.messageOffered]: { spec: SAVE_MESSAGE_SPEC_ID }
+				}
 		}
 		// Stated beats copied: `fromPresetId` seeds the whole bundle, and an
 		// explicit `defaults` on the create is the caller overruling that one

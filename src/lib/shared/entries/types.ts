@@ -86,7 +86,50 @@ export const ENTRY_TYPE_IDS = [
 	ITEM_TYPE_ID
 ] as const
 
-export type EntryTypeId = (typeof ENTRY_TYPE_IDS)[number]
+/** One of core's five hand-declared entry types (`ENTRY_TYPE_IDS`). */
+export type CoreEntryTypeId = (typeof ENTRY_TYPE_IDS)[number]
+
+/**
+ * 🚧 A **derived entry type** — `<creator>:entry/<ruleset>.<repertoire>` (bare;
+ * the version is a separate column): one per entryable repertoire of a
+ * registered ruleset (`rulesetEntryTypeDecls` / core-catalog's
+ * `deriveEntryTypes`). Never listed here by hand — which ones exist is the
+ * SDK registry's answer (`derivedEntryTypeIds()` on the server). The dot is
+ * what tells one from a core type: a ruleset slot name and a repertoire id,
+ * joined.
+ */
+export type DerivedEntryTypeId = `${string}:entry/${string}.${string}`
+
+/** Core's five, or a derived entry type. */
+export type EntryTypeId = CoreEntryTypeId | DerivedEntryTypeId
+
+/** The bare-id shape a derived entry type has — `rulesetEntryTypeId` minus `@1`. */
+const DERIVED_ENTRY_TYPE_ID = /^[a-z0-9][a-z0-9.-]*:entry\/[a-z0-9-]+\.[a-z0-9-]+$/
+
+/**
+ * Whether an id has a derived entry type's shape. The shape only — whether
+ * that ruleset is installed is the server's question (`entryDeclaration`).
+ */
+export const isDerivedEntryTypeId = (v: unknown): v is DerivedEntryTypeId =>
+	typeof v === "string" && DERIVED_ENTRY_TYPE_ID.test(v)
+
+/**
+ * The fields of a derived entry type's row: the repertoire's piece shape
+ * (always a `description`; nested `object`/`list` fields as they were
+ * authored) beside the universal entry fields. The piece's `name` is the
+ * entry's title — it rides the row's `name` column, never twice. The fields
+ * every piece shape has are typed; a repertoire's own (`damage`, `level`, …)
+ * ride the row too and are read by name (`declaredFields`), since which ones
+ * exist is the repertoire's answer, not this file's.
+ */
+export interface DerivedEntryFields {
+	description: string
+	prose?: string | null
+	traits?: string[]
+	priority: number
+	supply: "unique" | "limited" | "unlimited"
+	supplyLimit: number | null
+}
 
 /**
  * The version every core entry type is pinned at.
@@ -98,8 +141,17 @@ export type EntryTypeId = (typeof ENTRY_TYPE_IDS)[number]
  */
 export const ENTRY_TYPE_VERSION = 1
 
-export const isEntryTypeId = (v: unknown): v is EntryTypeId =>
+/** One of core's five. */
+export const isCoreEntryTypeId = (v: unknown): v is CoreEntryTypeId =>
 	typeof v === "string" && (ENTRY_TYPE_IDS as readonly string[]).includes(v)
+
+/**
+ * Core's five, or an id with a derived entry type's shape. The server gates
+ * a write on the declaration itself (`isDeclaredEntryType`), since a derived
+ * type exists only while its ruleset is registered.
+ */
+export const isEntryTypeId = (v: unknown): v is EntryTypeId =>
+	isCoreEntryTypeId(v) || isDerivedEntryTypeId(v)
 
 /**
  * The type-specific half of a row, per type — `fields` jsonb, projected flat.
@@ -155,6 +207,8 @@ export interface EntryFieldsByType {
 		supply: "unique" | "limited" | "unlimited"
 		supplyLimit: number | null
 	}
+	/** 🚧 Every derived entry type: its piece shape + the universal fields. */
+	[derived: DerivedEntryTypeId]: DerivedEntryFields
 }
 
 /** The columns the engine reads for every type, whatever it declares. */
@@ -426,7 +480,13 @@ export const FILEABLE_ENTRY_TYPE_IDS: readonly EntryTypeId[] = [
 	ITEM_TYPE_ID
 ]
 
-/** Whether an entry of this type may be filed under another. Unknown: no. */
+/**
+ * Whether an entry of this type may be filed under another. Unknown: no. A
+ * derived entry type: yes — it takes the universal entry parts whole, and
+ * they declare the `parent` role (`ENTRY_UNIVERSAL_PARTS`; alarm in
+ * `types.test.ts`).
+ */
 export const isFileableEntryType = (typeId: unknown): boolean =>
 	typeof typeId === "string" &&
-	(FILEABLE_ENTRY_TYPE_IDS as readonly string[]).includes(typeId)
+	((FILEABLE_ENTRY_TYPE_IDS as readonly string[]).includes(typeId) ||
+		isDerivedEntryTypeId(typeId))

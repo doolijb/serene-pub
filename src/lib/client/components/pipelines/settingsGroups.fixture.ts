@@ -229,7 +229,7 @@ export function adventureView(
 	over: Partial<Sockets.Pipelines.NamespaceDetail> = {}
 ): Sockets.Pipelines.NamespaceDetail {
 	return {
-		slug: "core:spec/adventure-respond",
+		slug: "core:spec/story-respond",
 		name: "Reply",
 		version: "1.0.0",
 		event: null,
@@ -286,7 +286,7 @@ export function nonAdminSessionView(sessionId: number): Sockets.Pipelines.Namesp
 /** A pipeline with nothing a session draws — Answer, Nudge, Whisper. */
 export function emptySessionView(sessionId: number): Sockets.Pipelines.NamespaceDetail {
 	return adventureView({
-		slug: "core:spec/adventure-answer",
+		slug: "core:spec/story-answer",
 		name: "Adventure answer",
 		groups: [
 			{
@@ -330,7 +330,7 @@ export function creationSessionView(
 		: view.groups
 	return {
 		...view,
-		slug: "core:spec/adventure-create",
+		slug: "core:spec/story-create",
 		name: "Create session",
 		canSelectConfig: !readOnlyBecause,
 		groups,

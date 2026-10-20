@@ -145,25 +145,21 @@ export interface LayoutBlob {
 	/** Sparse per-tier column fr weights, keyed by tier then panel/track. */
 	tierSizeOverrides?: Partial<Record<Tier, number[]>>
 	/**
-	 * The modular zone layout (sessionLayout/schema.ts) — the free-form
-	 * template the layout editor writes. Stored verbatim; typed as unknown
-	 * here so the blob contract does not couple to the schema's evolution.
+	 * The arrangement (`PanelLayoutV1`, PLAN-session-panels-2026-10-14):
+	 * panels of widget tabs per zone. Stored verbatim; typed as unknown so
+	 * the blob contract does not couple to the SDK's evolution — readers go
+	 * through the SDK's `panelsOf`.
+	 */
+	panels?: unknown
+	/**
+	 * ⏳ The three old slots, as a row saved before the panels may carry them
+	 * (read only by `panelsOf`, while `panels` is absent; dropped at the 0.7
+	 * squash). Never written by this build.
 	 */
 	zoneLayout?: unknown
-	/**
-	 * The chat widget grid (sessionLayout/widgetGrid.ts, PLAN 25) — the
-	 * middle-zone widget config the layout editor writes. Stored verbatim
-	 * for the same reason as zoneLayout; the manager is only its courier.
-	 */
+	/** ⏳ See `zoneLayout`. */
 	widgetGrid?: unknown
-	/**
-	 * The captured gridstack geometry per zone (PLAN 25) — `{left?,middle?,right?}`
-	 * each an `ArrangedZone` (cols/rows + per-item x/y/w/h). This is the drag editor's
-	 * full arrangement, the ONE store that carries cell POSITIONS (widgetGrid and
-	 * zoneLayout carry only membership/config). Persisting it is what lets the
-	 * editor restore what you arranged and the live render survive a reload;
-	 * stored verbatim, the manager is only its courier.
-	 */
+	/** ⏳ See `zoneLayout`. */
 	arrangedGrid?: unknown
 }
 

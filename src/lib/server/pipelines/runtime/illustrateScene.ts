@@ -1,6 +1,6 @@
 /**
  * 🚧 The Scene action's bindings (DESIGN-image-generation §6.4; I9) —
- * `core:spec/chat-illustrate-scene`:
+ * `core:spec/story-illustrate-scene`:
  *
  *  - `core:query/likeness-images@1` — everyone on stage's likeness image
  *    (else avatar), in stage order: the switched-on cast by seat, then the

@@ -37,7 +37,7 @@ vi.mock("$lib/server/db", async () => {
 vi.mock("$lib/server/pipelines/config/library", () => ({
 	libraryView: async () => ({
 		pipelines: [
-			{ slug: "core:spec/chat-respond", label: "Reply · Chat" },
+			{ slug: "core:spec/story-respond", label: "Reply · Chat" },
 			{ slug: "core:spec/summarize-scene", label: "Summarize scene" }
 		],
 		samplingUsedBy: { 41: ["Reply · Chat", "From a plugin that is off"] }
@@ -151,7 +151,7 @@ describe("samplingConfigs:usedBy", () => {
 		const res = await samplingConfigsUsedBy.handler(socketFor(), {}, emit)
 
 		expect(res.pipelines[41]).toEqual([
-			{ label: "Reply · Chat", slug: "core:spec/chat-respond" },
+			{ label: "Reply · Chat", slug: "core:spec/story-respond" },
 			{ label: "From a plugin that is off", slug: null }
 		])
 		expect(events.map((e) => e.event)).toEqual(["samplingConfigs:usedBy"])

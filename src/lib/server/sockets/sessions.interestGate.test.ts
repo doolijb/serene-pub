@@ -203,7 +203,7 @@ vi.mock("$lib/server/db", async () => {
 // `genreName`, and an unreachable registry already degrades to "Chat".
 vi.mock("$lib/server/pipelines/entities/sessionGenres", () => ({
 	listSessionGenres: async () => [],
-	STANDARD_GENRE_ID: "core:genre/chat"
+	STANDARD_GENRE_ID: "core:genre/story"
 }))
 
 // The narration a `sessions:fireNarratorResponse` press runs: what is pinned

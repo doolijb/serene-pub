@@ -35,8 +35,8 @@ vi.mock("$lib/server/embedding", () => ({
 }))
 
 const LAIR = "core:genre/lair"
-const CHAT = "core:genre/chat"
-const ADVENTURE = "core:genre/adventure"
+const CHAT = "core:genre/story"
+const ADVENTURE = "core:genre/story"
 /** A genre that offers no composer Continue — declared as an inlet's shape. */
 const NO_ADVANCE = "acme.still:inlet/still@1"
 

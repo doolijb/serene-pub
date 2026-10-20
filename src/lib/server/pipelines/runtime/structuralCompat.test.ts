@@ -132,6 +132,8 @@ describe("normaliseSupplies", () => {
 		// `unplayedOnly` 2026-09-28 (lair re-plan R13): a side channel's talk
 		// since the story's last line. `talkOnly` 2026-09-28 (lair re-plan
 		// R10's fold-in): off `main`, only the talk — never a beats row.
+		// `tableLines` 2026-10-15 (dungeon crawler): whether the table's own
+		// lines (rolls, stakes) are read at all — a genre says so explicitly.
 		expect(s.params.sort()).toEqual([
 			"channel",
 			"limit",
@@ -139,6 +141,7 @@ describe("normaliseSupplies", () => {
 			"minEntries",
 			"priority",
 			"share",
+			"tableLines",
 			"talkOnly",
 			"unplayedOnly"
 		])

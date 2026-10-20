@@ -29,7 +29,7 @@ describe("resolvePresetFill", () => {
 			{
 				name: "Alice",
 				scenario: "A quiet tavern.",
-				swaps: [{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-manual@1" }],
+				swaps: [{ spec: "core:spec/story-turn-order", node: "strategy", definition: "core:task/turn-manual@1" }],
 				lorebookId: 7,
 				tags: ["fantasy", "slow-burn"],
 				genreFields: { tone: "cozy" }
@@ -38,7 +38,7 @@ describe("resolvePresetFill", () => {
 		expect(result.fields).toEqual({
 			name: "Alice",
 			scenario: "A quiet tavern.",
-			swaps: [{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-manual@1" }],
+			swaps: [{ spec: "core:spec/story-turn-order", node: "strategy", definition: "core:task/turn-manual@1" }],
 			lorebookId: 7,
 			tags: ["fantasy", "slow-burn"],
 			genreFields: { tone: "cozy" }
@@ -139,13 +139,13 @@ describe("resolvePresetFill", () => {
 		).toEqual([])
 		expect(
 			resolvePresetFill(blank(), {}, {
-				swaps: [{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-random@1" }]
+				swaps: [{ spec: "core:spec/story-turn-order", node: "strategy", definition: "core:task/turn-random@1" }]
 			}).fields.swaps
-		).toEqual([{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-random@1" }])
+		).toEqual([{ spec: "core:spec/story-turn-order", node: "strategy", definition: "core:task/turn-random@1" }])
 	})
 
 	it("swaps: switching to a preset with none clears what the previous preset seeded (M2 review)", () => {
-		const seeded = [{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-random@1" }]
+		const seeded = [{ spec: "core:spec/story-turn-order", node: "strategy", definition: "core:task/turn-random@1" }]
 		const first = resolvePresetFill(blank(), {}, { swaps: seeded })
 		expect(first.fields.swaps).toEqual(seeded)
 		const second = resolvePresetFill(first.fields, first.fillState, {})
@@ -154,9 +154,9 @@ describe("resolvePresetFill", () => {
 	})
 
 	it("swaps: a user's own choice is never overwritten by the next preset", () => {
-		const mine = [{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-user-split@1" }]
+		const mine = [{ spec: "core:spec/story-turn-order", node: "strategy", definition: "core:task/turn-user-split@1" }]
 		const result = resolvePresetFill({ ...blank(), swaps: mine }, {}, {
-			swaps: [{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-random@1" }]
+			swaps: [{ spec: "core:spec/story-turn-order", node: "strategy", definition: "core:task/turn-random@1" }]
 		})
 		expect(result.fields.swaps).toEqual(mine)
 	})

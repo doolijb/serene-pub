@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { isAwaitingUser } from "$lib/client/sessions/sessionGroups"
 	import * as Icons from "@lucide/svelte"
 	import SidebarListItem from "../SidebarListItem.svelte"
 	import RowMenu from "../menus/RowMenu.svelte"
@@ -99,7 +100,7 @@
 	 * the ember dot yields to it.
 	 */
 	const isYourTurn = $derived(
-		!!session.lastMessage && !session.lastMessage.isUser && !status
+		isAwaitingUser(session, !!status)
 	)
 
 	const relative = $derived(timeAgoShort(new Date(lastActivityAt(session))))
@@ -115,6 +116,7 @@
 
 <SidebarListItem
 	itemType="Session"
+	itemName={session.name || undefined}
 	onclick={handleClick}
 	{contentTitle}
 	{classes}

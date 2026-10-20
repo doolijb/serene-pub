@@ -62,10 +62,25 @@ export function createMessageControls(d: MessageControlsDeps) {
 	/** What the media lightbox shows: one image, or a message's media strip. */
 	let lightboxState = $state<LightboxState | null>(null)
 
+	/**
+	 * 🚧 The server's sentence for what this delete does to the timeline
+	 * (PLAN-rulesets §28, `sessions:revisionNotice`): null until it answers,
+	 * and for a delete that is no revision.
+	 */
+	let deleteRevision = $state<string | null>(null)
 	function openDeleteMessageModal(message: SelectSessionMessage) {
 		deleteSessionMessage = message
+		deleteRevision = null
 		showDeleteMessageModal = true
+		socket.emit("sessions:revisionNotice", {
+			sessionId,
+			messageId: message.id
+		})
 	}
+	d.inbox.on("sessions:revisionNotice", (res) => {
+		if (res.sessionId !== sessionId || res.messageId !== deleteSessionMessage?.id) return
+		deleteRevision = res.revision?.sentence ?? null
+	})
 
 	function onOpenMessageDeleteChange(details: OpenChangeDetails) {
 		showDeleteMessageModal = details.open
@@ -74,8 +89,22 @@ export function createMessageControls(d: MessageControlsDeps) {
 		}
 	}
 
+	/**
+	 * 🚧 The row this tab asked to delete, until the server answers (the
+	 * 100-turn walk, B9): a refusal ("Honour mode is off: turns can only be
+	 * retaken…") is said once, in the tab that pressed — a refused delete
+	 * must never close its confirmation on nothing at all.
+	 */
+	let deleteAsked: number | null = null
+	d.inbox.on("sessionMessages:delete", (res) => {
+		if (deleteAsked === null || res.id !== deleteAsked) return
+		deleteAsked = null
+		if (res.error) toaster.error({ title: "Not deleted", description: res.error })
+	})
+
 	function onDeleteMessageConfirm() {
 		if (!deleteSessionMessage) return
+		deleteAsked = deleteSessionMessage.id
 		socket.emit("sessionMessages:delete", {
 			id: deleteSessionMessage.id
 		})
@@ -107,6 +136,7 @@ export function createMessageControls(d: MessageControlsDeps) {
 
 	function handleRegenerateMessage(e: Event, msg: SelectSessionMessage) {
 		e.stopPropagation()
+		d.data.rerunRefusals.asked("sessionMessages:regenerate", msg.id)
 		socket.emit("sessionMessages:regenerate", { id: msg.id })
 	}
 
@@ -114,6 +144,7 @@ export function createMessageControls(d: MessageControlsDeps) {
 		e.stopPropagation()
 		// Extend carries the reply on from its existing content (prefill);
 		// the server keeps the partial and runs the turn from it.
+		d.data.rerunRefusals.asked("sessionMessages:extend", msg.id)
 		socket.emit("sessionMessages:extend", { id: msg.id })
 	}
 
@@ -146,6 +177,7 @@ export function createMessageControls(d: MessageControlsDeps) {
 		const req: Sockets.SessionMessages.SwipeRight.Params = {
 			id: msg.id
 		}
+		d.data.rerunRefusals.asked("sessionMessages:swipeRight", msg.id)
 		socket.emit("sessionMessages:swipeRight", req)
 	}
 
@@ -153,6 +185,7 @@ export function createMessageControls(d: MessageControlsDeps) {
 		const req: Sockets.SessionMessages.SwipeLeft.Params = {
 			id: msg.id
 		}
+		d.data.rerunRefusals.asked("sessionMessages:swipeLeft", msg.id)
 		socket.emit("sessionMessages:swipeLeft", req)
 	}
 
@@ -225,6 +258,9 @@ export function createMessageControls(d: MessageControlsDeps) {
 	d.inbox.on("sessions:branch", handleSessionsBranch)
 
 	return {
+		get deleteRevision() {
+			return deleteRevision
+		},
 		get showDeleteMessageModal() {
 			return showDeleteMessageModal
 		},

@@ -227,6 +227,28 @@ export async function persistGenerationErrorRow(
 		// the session's cards quote.
 		broadcastSessionRow(socketIo, sessionId)
 	}
+	/**
+	 * 🚧 A **failed reply** (an error, and no words) changed nothing (the
+	 * 100-turn walk, B7: a Dungeon Crawler turn that failed at the Narrator
+	 * kept the clock it had moved, 08:00 → 08:10, for good): what the failed
+	 * run filed at this row — values, configurations, proposals, clock
+	 * moves — is taken back here. A row that kept a partial keeps its world:
+	 * those words were shown. A swipe's own put-back (`restoreRetractedState`)
+	 * runs after this, and takes back the failed run's writes the same way
+	 * before it restores. Never able to throw into the failure path.
+	 */
+	if (updated && !String((updated as { content?: unknown }).content ?? "").trim()) {
+		try {
+			const { retractStateAnchoredTo } = await import("$lib/server/state/write")
+			const taken = await retractStateAnchoredTo(db, generatingMessageId)
+			if (taken.changed && socketIo) {
+				if (taken.clockMoved) broadcastSessionRow(socketIo, sessionId)
+				await broadcastToSessionUsers(socketIo, sessionId, "state:changed", { sessionId })
+			}
+		} catch (e) {
+			console.warn("[generationStatus] a failed reply's changes could not be taken back:", e)
+		}
+	}
 	// `updated` is the once-only fact: the fence lets exactly one failure
 	// through per generation, so a second call for the same row raises
 	// nothing. After the row write, outside any transaction, and never able

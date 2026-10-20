@@ -33,7 +33,7 @@
  */
 
 import { readTurnOrder, type TurnEntryV1 } from "@serene-pub/sdk"
-import { eq } from "drizzle-orm"
+import { and, desc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import type { RunLineage } from "$lib/server/pipelines/runtime/lineage"
@@ -98,6 +98,45 @@ export async function carryOnEntry(
 	)
 	const voice = (genre?.shape as { voice?: unknown } | undefined)?.voice
 	return voice === "narrator" ? { ref: null, via: "pick" } : null
+}
+
+/**
+ * 🚧 **Has this person moved since the story last did?** — a visible line of
+ * theirs on `main` after main's newest visible reply (any row that is not a
+ * person's). What lets a guest's Continue carry a narrator genre's story on
+ * (feature 17, D4, 2026-10-15): in Dungeon Crawler's round the story waits
+ * for everyone, and a player who has declared may resolve it early; one who
+ * has not is refused. In a genre whose order prepares the narrator on every
+ * person's line (Adventure, the Lair) a guest who has written always finds
+ * that entry prepared first, so this never decides there.
+ */
+export async function sentSinceReply(
+	db: Db,
+	sessionId: number,
+	userId: number
+): Promise<boolean> {
+	const rows = await db
+		.select({
+			role: schema.sessionMessages.role,
+			userId: schema.sessionMessages.userId
+		})
+		.from(schema.sessionMessages)
+		.where(
+			and(
+				eq(schema.sessionMessages.sessionId, sessionId),
+				eq(schema.sessionMessages.channel, "main"),
+				eq(schema.sessionMessages.isHidden, false),
+				// Narration is a side note, not the story moving.
+				eq(schema.sessionMessages.isNarratorResponse, false)
+			)
+		)
+		.orderBy(desc(schema.sessionMessages.id))
+		.limit(64)
+	for (const row of rows) {
+		if (row.role !== "user") return false
+		if (row.userId === userId) return true
+	}
+	return false
 }
 
 /**
@@ -232,7 +271,7 @@ export async function fireTurnEntry(
 	const { listSessionActions } = await import(
 		"$lib/server/pipelines/entities/sessionActions"
 	)
-	let offered: Array<{ identity?: string; enabled?: boolean }> = []
+	let offered: Array<{ specSlug?: string; key?: string; enabled?: boolean }> = []
 	try {
 		const venues = await listSessionActions(db, opts.sessionId, {
 			userId: opts.userId
@@ -246,18 +285,55 @@ export async function fireTurnEntry(
 	} catch {
 		offered = []
 	}
+	// ⚠ By `specSlug#key`: a listed action carries no `identity` field, so
+	// matching on one refused every action subject as not enabled (found
+	// lane 2, 2026-10-19).
+	const { actionIdentity, NARRATE_ACTION } = await import("$lib/shared/actions/identity")
 	const known = offered.some(
-		(a) => a?.identity === subject && a.enabled !== false
+		(a) =>
+			!!a?.specSlug &&
+			!!a.key &&
+			actionIdentity({ specSlug: a.specSlug, key: a.key }) === subject &&
+			a.enabled !== false
 	)
 	if (!known) return { fired: false, reason: "action not enabled" }
+
+	/**
+	 * 🚧 The narrator's own line (lane 2, 2026-10-19: *Narrator asides*,
+	 * `core:task/turn-unprompted@1`): Narrate has its own road — the reply
+	 * road's `narrate` turn, as the composer's Narrate takes it — never the
+	 * contributed-action door, which refuses it by name.
+	 */
+	if (subject === NARRATE_ACTION) {
+		const { runReply } = await import("$lib/server/utils/runReply")
+		const outcome = await runReply({
+			socket: opts.socket ?? { io: opts.io },
+			emitToUser: (opts.emitToUser as any) ?? (() => {}),
+			sessionId: opts.sessionId,
+			userId: opts.userId,
+			turn: { kind: "narrate" },
+			...(entry.via ? { via: entry.via } : {}),
+			auto: opts.cause.auto === true
+		})
+		if (outcome.ok)
+			return { fired: true, ...(outcome.receipt ? { runId: outcome.receipt.runId } : {}) }
+		return {
+			fired: false,
+			reason: outcome.stopped ? "stopped" : (outcome.error ?? "the narration produced no line")
+		}
+	}
 
 	const { fireAction } = await import(
 		"$lib/server/pipelines/runtime/fireAction"
 	)
 	try {
+		// ⚠ `action`, the request's own name for the identity: this path
+		// passed `actionId`, which the door never read, so every action
+		// subject was refused as naming nothing (found lane 2, 2026-10-19,
+		// wiring the narrator's unprompted line).
 		const result = await fireAction(db, {
 			sessionId: opts.sessionId,
-			actionId: subject,
+			action: subject,
 			actor: {
 				userId: opts.userId,
 				...(typeof entry.ref === "string"
@@ -267,6 +343,9 @@ export async function fireTurnEntry(
 			io: opts.io,
 			...(opts.lineage ? { lineage: opts.lineage } : {})
 		} as never)
+		const refusal = (result as { kind?: string; error?: string } | null)
+		if (refusal?.kind === "refused")
+			return { fired: false, reason: refusal.error ?? "the action refused" }
 		const runId = (result as { runId?: string } | null)?.runId
 		return { fired: true, ...(runId ? { runId } : {}) }
 	} catch (err) {

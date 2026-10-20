@@ -69,7 +69,7 @@ function render(over: Record<string, unknown> = {}) {
 	view = mount(PromptWordingDialog, {
 		target: document.body,
 		props: {
-			slug: "core:spec/chat-respond",
+			slug: "core:spec/story-respond",
 			sessionId: 7,
 			option,
 			rowLabel: "Reply",
@@ -88,7 +88,7 @@ function render(over: Record<string, unknown> = {}) {
 const answer = (promptId: number, rest: Record<string, unknown>) => {
 	for (const h of listeners.get("pipelines:promptWording") ?? [])
 		h({
-			slug: "core:spec/chat-respond",
+			slug: "core:spec/story-respond",
 			optionId: "opt-prompt",
 			promptId,
 			...rest
@@ -114,7 +114,7 @@ describe("the prompt dialog", () => {
 		expect(emitted[0]).toEqual([
 			"pipelines:promptWording",
 			{
-				slug: "core:spec/chat-respond",
+				slug: "core:spec/story-respond",
 				optionId: "opt-prompt",
 				promptId: 3,
 				sessionId: 7
@@ -201,7 +201,7 @@ describe("the prompt dialog", () => {
 		await tick()
 		for (const h of listeners.get("pipelines:promptWording:error") ?? [])
 			h({
-				slug: "core:spec/chat-respond",
+				slug: "core:spec/story-respond",
 				optionId: "opt-prompt",
 				promptId: 3,
 				error: "That prompt no longer exists."
@@ -234,7 +234,7 @@ describe("the prompt dialog", () => {
 		await tick()
 		for (const h of listeners.get("pipelines:promptWording") ?? [])
 			h({
-				slug: "core:spec/chat-narrate",
+				slug: "core:spec/story-narrate",
 				optionId: "opt-prompt",
 				promptId: 3,
 				name: "Narrator",

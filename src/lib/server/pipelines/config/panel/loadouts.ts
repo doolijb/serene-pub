@@ -30,6 +30,7 @@ import {
 } from "$lib/server/loadouts"
 import {
 	consequencesFor,
+	TIER_WORDS,
 	type GradeSet,
 	type StepNeeds
 } from "$lib/shared/loadouts/consequence"
@@ -102,12 +103,6 @@ export function needsWords(
 	if (needs.attachments) out.push("attachments")
 	if (needs.references) out.push("reference pictures")
 	return out
-}
-
-const TIER_WORDS: Record<string, string> = {
-	fast: "a fast model",
-	cheap: "a cheap model",
-	best: "the best model"
 }
 
 /** The *Best with* words, from a placement's `prefers` or its definition's. */

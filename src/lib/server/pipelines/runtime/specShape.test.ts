@@ -27,31 +27,23 @@ const doc = (slug: string) =>
 describe("the steps on the spine", () => {
 	it("counts the spine only — respond's two embed providers sit in blocks", () => {
 		expect(
-			spineProviders(doc("core:spec/chat-respond")).map((n) => n.key)
+			spineProviders(doc("core:spec/story-respond")).map((n) => n.key)
 		).toEqual(["generate", "spritePick"])
 	})
 
-	it("sees all four of an Adventure turn's steps", () => {
-		expect(
-			spineProviders(doc("core:spec/adventure-respond")).map((n) => n.key)
-		).toEqual(["planWrite", "scene", "spritePick", "keeperWrite"])
-	})
 })
 
 describe("which step streams — declared (lair pass B3, D6)", () => {
 	it("is the declared generate on every single-step reply spec", () => {
 		for (const slug of [
-			"core:spec/chat-respond",
-			"core:spec/chat-narrate",
-			"core:spec/chat-side-character",
+			"core:spec/story-respond",
+			"core:spec/story-narrate",
+			"core:spec/story-side-character",
 			"core:spec/guide-respond"
 		])
 			expect(streamingKeys(doc(slug)), slug).toEqual(["generate"])
 	})
 
-	it("is Adventure's narrator, not the planner that fed it", () => {
-		expect(streamingKeys(doc("core:spec/adventure-respond"))).toEqual(["scene"])
-	})
 
 	// Changed 2026-09-27 (lair pass B15, owner D2a): a pick is the picked
 	// delver's own turn and streams their line — the other branch of `pick`.
@@ -71,11 +63,11 @@ describe("which step streams — declared (lair pass B3, D6)", () => {
 
 	it("is nothing when the document declares nothing", () => {
 		expect(
-			streamingKeys(doc("core:spec/adventure-advance-time"))
+			streamingKeys(doc("core:spec/story-advance-time"))
 		).toEqual([])
 		// Ask's oracle answers in JSON: it streamed its document into the row
 		// under the inferred rule, and a JSON step never streams now.
-		expect(streamingKeys(doc("core:spec/adventure-ask"))).toEqual([])
+		expect(streamingKeys(doc("core:spec/story-ask"))).toEqual([])
 	})
 
 	it("is never a JSON step, on any core spec", () => {

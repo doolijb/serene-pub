@@ -161,13 +161,29 @@ These records are the book owner's: guests don't see them. Detailed records are 
 
 Sessions can write back to your lorebook: scenes you capture, stats recorded onto the world, links a genre draws between rooms. Your **Lorebook writes from sessions** setting, in **Settings › User**, decides how much. Where a screen can't save because of it, its notice has a **Change it in Settings › User** button that takes you there. An administrator sets the default for everyone in **Admin › General**.
 
-- **Full**: sessions write to the lorebook as they play.
-- **Review changes** (the default): changes a session makes on its own wait as proposals under its reply, for you to **Accept** or **Reject**. Only the lorebook's owner decides them. What you save yourself from a review screen, such as **Summarize to Lorebook**, **Compile to Entry** or **Apply graph**, saves straight away: that screen is the review.
-- **Off**: nothing a session does writes to the lorebook. Summarize, compile and the graph build say so and don't start, and so does drafting or saving the summary of a scene a session captured.
+- **Full** (the default): sessions write to the lorebook as they play. Changes apply as you play; the timeline lets you go back.
+- **Review changes**: what a session changes on its own is kept in the session's own notes (see below) until you bring it into the lorebook. Value changes a session proposes wait under its reply, for you to **Accept** or **Reject**. Only the lorebook's owner decides them. What you save yourself from a review screen, such as **Summarize to Lorebook**, **Compile to Entry** or **Apply graph**, saves straight away: that screen is the review.
+- **Off**: nothing a session does writes to the lorebook. What it would have written is kept in the session's own notes instead. Summarize, compile and the graph build say so and don't start, and so does drafting or saving the summary of a scene a session captured.
 
-Two writes can't wait for review, so under **Review changes** they behave as under **Full**: a genre linking two rooms, and a genre writing a new entry without its own review step. Under **Off** both are refused. Seating a character always adds them to the cast, whatever the setting.
+A session reading a lorebook someone else shared with you never writes to it: what it changes stays in its own notes. Seating a character always adds them to the cast, whatever the setting.
 
 What a session writes lands on its line, dated where its story stands. See [Stats and states](./stats-and-states.md#when-a-session-changes-the-lorebook) for stats, and [Time, history and branches](./lorebook-time.md#which-line-a-session-reads) for lines.
+
+## Your session's own notes
+
+Every session has somewhere to keep the world it plays out, even with no lorebook. When a session has no lorebook, or isn't allowed to write to the one it reads (**Review changes**, **Off**, or a book shared with you), the rooms, people and facts it writes go into notes that belong to the session alone.
+
+- You don't manage them: the session creates them the first time it needs them, and they are deleted with the session.
+- They aren't listed anywhere: not in **Lorebooks**, not in any picker. The session reads them alongside its lorebook, and what comes from them is marked **this session only**.
+- Only the session's owner and guests can see them.
+- Each note remembers the turn that wrote it. Deleting or regenerating that turn takes it back; [branching](./sessions.md#on-revision) a session copies its notes up to the branch point.
+- Places in the notes work like any other: the session's places list shows them with the ways between them, and their stats stay in the notes with them.
+
+### Bringing a session's changes into the lorebook
+
+When a session reads your lorebook but keeps its changes in its own notes (**Review changes**, or **Off**), select the session in **Sessions**: its panel has a **This session only** card listing what it added. Choose **Apply to the lorebook** beside one to move it into the lorebook, or **Apply all to the lorebook**. An applied entry keeps the turn that wrote it, the links between applied entries come with them, and the item leaves the card. Only the lorebook's owner can apply changes to it.
+
+To keep that world, select the session in **Sessions**, open the **⋯** menu on its panel and choose **Create lorebook from session**. A note says *Lorebook created:* and its name, and the new lorebook opens. The notes become an ordinary lorebook, named after the session, listed in **Lorebooks** and read by the session from then on. It is offered while the session reads no lorebook, and only to its owner. The new lorebook plays the session's ruleset, and nothing in the session is marked **this session only** after that.
 
 ## Sharing a lorebook
 

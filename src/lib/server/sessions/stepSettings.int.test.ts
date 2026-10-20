@@ -26,8 +26,8 @@ vi.mock("$lib/server/db", async () => {
 let testDb: TestDb
 let dataDir: string
 
-const CHAT_GENRE = "core:genre/chat"
-const CHAT_RESPOND = "core:spec/chat-respond"
+const CHAT_GENRE = "core:genre/story"
+const CHAT_RESPOND = "core:spec/story-respond"
 
 beforeAll(async () => {
 	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-step-settings-int-test-"))
@@ -122,7 +122,7 @@ describe("what a session's step settings are", () => {
 })
 
 describe("🚧 the specs bound to the session's events (§15 G19)", () => {
-	const TURN_ORDER = "core:spec/chat-turn-order"
+	const TURN_ORDER = "core:spec/story-turn-order"
 
 	test("the turn order's own story settings are offered — who may be seated, the mention rule — never its advise oracle", async () => {
 		const { readStepSettings } = await import("./stepSettings")

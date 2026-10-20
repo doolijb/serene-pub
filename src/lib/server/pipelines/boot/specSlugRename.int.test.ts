@@ -24,8 +24,16 @@ import "@serene-pub/contracts"
 import "@serene-pub/core-catalog"
 import { renameSpecSlugs, renamedIn, SPEC_SLUG_RENAMES } from "./specSlugRename"
 
-const CHAT = "core:genre/chat"
+const CHAT = "core:genre/story"
 const OLD = Object.fromEntries(SPEC_SLUG_RENAMES.map(([o, n]) => [n, o]))
+/**
+ * A rename onto a spec of a genre core retired since (Adventure, 2026-10-19):
+ * the pass still renames it, and the retired-genre cull removes it right
+ * after, in the same boot. A fresh install has no row of it.
+ */
+const retired = (slug: string) => slug.startsWith("core:spec/adventure-")
+const LIVE_RENAMES = SPEC_SLUG_RENAMES.filter(([, n]) => !retired(n))
+const RETIRED_RENAMES = SPEC_SLUG_RENAMES.filter(([, n]) => retired(n))
 const TOOL_LOOP = "core:spec/tool-loop"
 const TOOL_LOOP_PROMPT_KEY =
 	"pipeline-prompt:core:task/assemble:prompts:tool-loop-default"
@@ -127,18 +135,18 @@ async function snapshot(db: TestDb) {
 
 describe("the slug pattern", () => {
 	it("renames an old id at a slug's boundaries and nowhere else", () => {
-		expect(renamedIn("core:spec/respond")).toBe("core:spec/chat-respond")
+		expect(renamedIn("core:spec/respond")).toBe("core:spec/story-respond")
 		expect(renamedIn("pipeline-default:core:spec/narrate-character")).toBe(
-			"pipeline-default:core:spec/chat-side-character"
+			"pipeline-default:core:spec/story-side-character"
 		)
 		expect(renamedIn("migrated:core:spec/respond:12")).toBe(
-			"migrated:core:spec/chat-respond:12"
+			"migrated:core:spec/story-respond:12"
 		)
 		expect(renamedIn("plugin:acme.x:core:spec/generate-image#hq")).toBe(
-			"plugin:acme.x:core:spec/chat-generate-image#hq"
+			"plugin:acme.x:core:spec/story-generate-image#hq"
 		)
 		expect(renamedIn("core:spec/narrate#narrate")).toBe(
-			"core:spec/chat-narrate#narrate"
+			"core:spec/story-narrate#narrate"
 		)
 		expect(
 			renamedIn("core:spec/answer-form-lair#speaker#core:task/x@1")
@@ -146,7 +154,7 @@ describe("the slug pattern", () => {
 		for (const kept of [
 			"core:spec/respond-extra",
 			"acme.core:spec/respond",
-			"core:spec/chat-respond",
+			"core:spec/story-respond",
 			"core:spec/guide-respond",
 			"core:spec/narrated",
 			"core:event/message-respond@1"
@@ -157,10 +165,15 @@ describe("the slug pattern", () => {
 	it("maps old ids the catalogue no longer ships onto ids it does", async () => {
 		const { CORE_SPECS } = await import("@serene-pub/core-catalog")
 		const shipped = new Set(CORE_SPECS.map((e) => e.build().id))
-		for (const [old, renamed] of SPEC_SLUG_RENAMES) {
+		for (const [old, renamed] of LIVE_RENAMES) {
 			expect(shipped.has(renamed), renamed).toBe(true)
 			expect(shipped.has(old), old).toBe(false)
 		}
+		for (const [old, renamed] of RETIRED_RENAMES) {
+			expect(shipped.has(renamed), renamed).toBe(false)
+			expect(shipped.has(old), old).toBe(false)
+		}
+		expect(RETIRED_RENAMES).toHaveLength(1)
 		expect(shipped.has(TOOL_LOOP)).toBe(false)
 	})
 })
@@ -178,10 +191,19 @@ describe("an install an earlier build left", () => {
 	beforeAll(async () => {
 		db = await createTestDb()
 		await bootstrap(db)
-		for (const [, renamed] of SPEC_SLUG_RENAMES)
+		for (const [, renamed] of LIVE_RENAMES)
 			ids[renamed] = (await specRow(db, renamed))!.id
 		specCount = (await db.select().from(schema.pipelineSpecs)).length
-		param = await numericParam(db, "core:spec/chat-respond")
+		// A retired genre's spec, as the earlier build left it: a bare row
+		// under its old id (the cull takes it, so it is not in `specCount`).
+		for (const [, renamed] of RETIRED_RENAMES)
+			ids[renamed] = (
+				await db
+					.insert(schema.pipelineSpecs)
+					.values({ slug: renamed, name: renamed.split("/").pop()! })
+					.returning()
+			)[0]!.id
+		param = await numericParam(db, "core:spec/story-respond")
 		userId = (await createTestUser(db, "spec-slug-rename")).id
 		const [session] = await db
 			.insert(schema.sessions)
@@ -218,8 +240,8 @@ describe("an install an earlier build left", () => {
 				})
 				.where(eq(schema.pipelineConfigs.id, c.id))
 
-		const respond = ids["core:spec/chat-respond"]!
-		const narrate = ids["core:spec/chat-narrate"]!
+		const respond = ids["core:spec/story-respond"]!
+		const narrate = ids["core:spec/story-narrate"]!
 		// A person's configs on the reply: one tuned and selected, one that
 		// took the name "Default", one the 0.5.3 upgrade wrote.
 		const [tuned] = await db
@@ -229,7 +251,7 @@ describe("an install an earlier build left", () => {
 				name: "My tuning",
 				includedActions: [
 					"core:spec/narrate#narrate",
-					"core:spec/chat-narrate#narrate"
+					"core:spec/story-narrate#narrate"
 				]
 			})
 			.returning()
@@ -311,7 +333,7 @@ describe("an install an earlier build left", () => {
 			},
 			{
 				userId,
-				actionKey: "core:spec/chat-side-character#narrate-character"
+				actionKey: "core:spec/story-side-character#narrate-character"
 			}
 		])
 
@@ -355,7 +377,7 @@ describe("an install an earlier build left", () => {
 				configSelections: {
 					"core:spec/respond": tuned!.id,
 					"core:spec/narrate": 1,
-					"core:spec/chat-narrate": 2
+					"core:spec/story-narrate": 2
 				},
 				includedActions: ["core:spec/narrate#narrate", "narrate"],
 				defaults: {
@@ -383,7 +405,7 @@ describe("an install an earlier build left", () => {
 		const shipped = (await db.select().from(schema.pipelinePrompts)).find(
 			(p) =>
 				(p.defaultForSpecs as string[]).includes(
-					"core:spec/chat-respond"
+					"core:spec/story-respond"
 				)
 		)!
 		staged.shippedPrompt = shipped.id
@@ -449,9 +471,14 @@ describe("an install an earlier build left", () => {
 		expect(report.specSlugRename?.renamed).toHaveLength(10)
 		expect(report.specSlugRename?.merged).toEqual([])
 
-		// The rows: same ids, new slugs, no old slug left, none added.
-		for (const [old, renamed] of SPEC_SLUG_RENAMES) {
+		// The rows: same ids, new slugs, no old slug left, none added — and
+		// the retired genre's renamed, then culled.
+		for (const [old, renamed] of LIVE_RENAMES) {
 			expect((await specRow(db, renamed))?.id, renamed).toBe(ids[renamed])
+			expect(await specRow(db, old), old).toBeUndefined()
+		}
+		for (const [old, renamed] of RETIRED_RENAMES) {
+			expect(await specRow(db, renamed), renamed).toBeUndefined()
 			expect(await specRow(db, old), old).toBeUndefined()
 		}
 		const specs = await db.select().from(schema.pipelineSpecs)
@@ -466,7 +493,7 @@ describe("an install an earlier build left", () => {
 		for (const c of shipped)
 			perSpec.set(c.specId, (perSpec.get(c.specId) ?? 0) + 1)
 		expect([...perSpec.values()].every((n) => n === 1)).toBe(true)
-		for (const [old, renamed] of SPEC_SLUG_RENAMES) {
+		for (const [old, renamed] of LIVE_RENAMES) {
 			expect(
 				shipped.some((c) => c.seedKey === `pipeline-default:${old}`)
 			).toBe(false)
@@ -478,7 +505,7 @@ describe("an install an earlier build left", () => {
 		}
 
 		// C5: "Default", except beside a person's own "Default".
-		const respond = ids["core:spec/chat-respond"]!
+		const respond = ids["core:spec/story-respond"]!
 		for (const c of shipped)
 			expect(c.name, c.seedKey!).toBe(
 				c.specId === respond ? "Default 2" : "Default"
@@ -501,7 +528,7 @@ describe("an install an earlier build left", () => {
 		expect(tuned).toMatchObject({
 			specId: respond,
 			name: "My tuning",
-			includedActions: ["core:spec/chat-narrate#narrate"]
+			includedActions: ["core:spec/story-narrate#narrate"]
 		})
 		const values = await db
 			.select()
@@ -520,7 +547,7 @@ describe("an install an earlier build left", () => {
 			.select()
 			.from(schema.pipelineConfigs)
 			.where(eq(schema.pipelineConfigs.id, staged.migrated!))
-		expect(migrated!.seedKey).toBe("migrated:core:spec/chat-respond:7")
+		expect(migrated!.seedKey).toBe("migrated:core:spec/story-respond:7")
 		expect(
 			await db
 				.select({ configId: schema.pipelineConfigSelections.configId })
@@ -555,12 +582,12 @@ describe("an install an earlier build left", () => {
 			.from(schema.pipelineBindings)
 			.where(eq(schema.pipelineBindings.scopeId, sessionId))
 		expect(binding).toMatchObject({
-			subject: "core:spec/chat-narrate#narrate",
-			specId: ids["core:spec/chat-narrate"],
+			subject: "core:spec/story-narrate#narrate",
+			specId: ids["core:spec/story-narrate"],
 			enabledWhen: [
 				{
 					on: "turn.subject",
-					equals: "core:spec/chat-narrate#narrate",
+					equals: "core:spec/story-narrate#narrate",
 					reason: "Not now"
 				}
 			]
@@ -572,7 +599,7 @@ describe("an install an earlier build left", () => {
 					.from(schema.sessionFunctions)
 					.where(eq(schema.sessionFunctions.sessionId, sessionId))
 			).map((f) => f.functionKey)
-		).toEqual(["core:spec/chat-narrate#narrate"])
+		).toEqual(["core:spec/story-narrate#narrate"])
 		expect(
 			(
 				await db
@@ -583,8 +610,8 @@ describe("an install an earlier build left", () => {
 				.map((s) => s.actionKey)
 				.sort()
 		).toEqual([
-			"core:spec/chat-generate-image#generate-image",
-			"core:spec/chat-side-character#narrate-character"
+			"core:spec/story-generate-image#generate-image",
+			"core:spec/story-side-character#narrate-character"
 		])
 
 		// The presets.
@@ -599,28 +626,28 @@ describe("an install an earlier build left", () => {
 			)
 		const core = presets.find((p) => p.id === staged.corePreset)!
 		const specsBound = Object.values(core.bindings).map((b) => b.spec)
-		expect(specsBound).toContain("core:spec/chat-create")
-		expect(specsBound).toContain("core:spec/chat-respond")
+		expect(specsBound).toContain("core:spec/story-create")
+		expect(specsBound).toContain("core:spec/story-respond")
 		const minePreset = presets.find((p) => p.id === staged.myPreset)!
 		expect(minePreset).toMatchObject({
-			primarySlug: "core:spec/chat-respond",
+			primarySlug: "core:spec/story-respond",
 			bindings: {
 				"core:event/message-respond@1": {
-					spec: "core:spec/chat-respond",
+					spec: "core:spec/story-respond",
 					config: staged.tuned
 				}
 			},
 			// A key under both ids keeps the new one's choice.
 			configSelections: {
-				"core:spec/chat-respond": staged.tuned,
-				"core:spec/chat-narrate": 2
+				"core:spec/story-respond": staged.tuned,
+				"core:spec/story-narrate": 2
 			},
-			includedActions: ["core:spec/chat-narrate#narrate", "narrate"],
+			includedActions: ["core:spec/story-narrate#narrate", "narrate"],
 			defaults: {
 				envoys: ["core.mascot"],
 				swaps: [
 					{
-						spec: "core:spec/chat-respond",
+						spec: "core:spec/story-respond",
 						node: "speaker",
 						definition: "core:task/turn-round-robin@1"
 					}
@@ -632,7 +659,7 @@ describe("an install an earlier build left", () => {
 			.from(schema.sessionPresetNotices)
 			.where(eq(schema.sessionPresetNotices.presetId, staged.myPreset!))
 		expect(notices.map((n) => [n.boundSpec, n.fallbackSpec])).toEqual([
-			["core:spec/chat-respond", "core:spec/chat-respond"]
+			["core:spec/story-respond", "core:spec/story-respond"]
 		])
 		// The core preset's bindings resolve again, so it carries no notice.
 		expect(
@@ -656,16 +683,16 @@ describe("an install an earlier build left", () => {
 			)
 		expect(
 			prompts.find((p) => p.id === staged.shippedPrompt)!.defaultForSpecs
-		).toContain("core:spec/chat-respond")
+		).toContain("core:spec/story-respond")
 		expect(
 			prompts.find((p) => p.id === staged.myPrompt)!.defaultForSpecs
-		).toEqual(["core:spec/chat-narrate"])
+		).toEqual(["core:spec/story-narrate"])
 		const [plugin] = await db
 			.select()
 			.from(schema.plugins)
 			.where(eq(schema.plugins.pluginId, "acme.swaps"))
 		expect(plugin!.disabledSwaps).toEqual([
-			"core:spec/chat-respond#speaker#core:task/turn-round-robin@1",
+			"core:spec/story-respond#speaker#core:task/turn-round-robin@1",
 			"acme:spec/respond#speaker#core:task/turn-round-robin@1"
 		])
 
@@ -705,7 +732,7 @@ describe("an install an earlier build left", () => {
 	}, 240_000)
 
 	it("names a newly seeded default 'Default' without clashing with a person's", async () => {
-		const slug = "core:spec/chat-generate-image"
+		const slug = "core:spec/story-generate-image"
 		const specId = ids[slug]!
 		await db
 			.delete(schema.pipelineConfigs)
@@ -734,7 +761,7 @@ describe("an install an earlier build left", () => {
 
 	describe("a database that booted this build before the pass existed", () => {
 		const OLD_NARRATE = "core:spec/narrate"
-		const NEW_NARRATE = "core:spec/chat-narrate"
+		const NEW_NARRATE = "core:spec/story-narrate"
 		const m: Record<string, number> = {}
 
 		it("merges the old row into the new one, the new one winning a shared address", async () => {

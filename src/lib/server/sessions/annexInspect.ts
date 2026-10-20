@@ -11,6 +11,7 @@
  * holds a `secret` is withheld — R61 says such a field cannot be declared,
  * and this checks again rather than trusting that.
  */
+import { annexWithoutPoints } from "$lib/server/sessions/annexRevisionPoints"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { declaredAnnexFields, type DeclaredAnnexField } from "$lib/server/sessions/annexFields"
@@ -126,7 +127,8 @@ export async function inspectAnnex(
 		result: {
 			sessionId,
 			...groupAnnex(
-				row.annex as Record<string, unknown> | null,
+				// 🚧 The revision points are core's bookkeeping, not a value.
+				annexWithoutPoints(row.annex),
 				declared,
 				await refusedSecretKeys(db)
 			)

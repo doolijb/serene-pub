@@ -89,7 +89,7 @@ It never searches messages. The recent conversation is already in the prompt, an
 
 An entry found by meaning reaches the prompt exactly as one found by keyword. If it was found both ways, it ranks above one found either way alone.
 
-Adventure and the Lair search by meaning and by name too, as Chat does. A character's own turn there searches as that character, so it finds their private lore and never another's.
+Story and the Lair search by meaning and by name too, as Chat does. A character's own turn there searches as that character, so it finds their private lore and never another's.
 
 ### What the Embeddings loadout's model costs per turn
 
@@ -191,7 +191,7 @@ Before anything is ranked, a few rules take out lore the turn mustn't use, howev
 - **Its own conditions.** An entry whose secondary keys or logic rule it out on this turn is left out even when Search by meaning or a name brought it in.
 - **Secrets.** A secret relationship reaches only its holder.
 - **Not in the world yet, or any more.** Lore about a cast member who has presences, none of them covering the session's story date, is left out (see [When a cast member is in the world](./lorebook-cast.md#when-a-cast-member-is-in-the-world)). A member with no presences is always here.
-- **Already shown.** In Adventure and the Lair, the room the party stand in is written under its own heading, so it isn't ranked in a second time as lore.
+- **Already shown.** In Story and the Lair, the room the party stand in is written under its own heading, so it isn't ranked in a second time as lore.
 
 Searching by name is on by default too: up to 5 entries whose names the recent conversation shares (**Entries found by name**, on the **Entity search** step). The same step also finds up to 20 earlier lines naming the same people and places (**Earlier messages found by name**), which keeps the session's messages indexed by name; they reach a prompt only where a context template places `{{{recalledLines}}}`, and no shipped one does (see [Context templates](./context-templates.md)). Set either to 0 to turn that half off.
 
@@ -211,9 +211,9 @@ Relationships between cast members are offered from the point of view of whoever
 
 The order is strict: presence beats everything below it. Set the share back to zero to return to the full set. The retrieval explanation lists every relationship it considered, with its reasons written out.
 
-When nobody is speaking, as on an Adventure narrator's turn, there's no one to see from: the planner and narrator read every relationship any cast member holds, except secrets. Adventure gives relationships a share of their own out of the box. See [Adventure](./genre-adventure.md).
+When nobody is speaking, as on a Dungeon Crawler narrator's turn, there's no one to see from: the planner and narrator read every relationship any cast member holds, except secrets. Story gives relationships a share of their own out of the box. See [Story](./genre-story.md).
 
-**Follow lore links**, on the same step, also ranks links reached from entries the turn found, such as a room's ways out. These count toward the relationships' share, but they aren't written into the prompt; a place's ways reach Adventure and Lair turns in their own way (see [Places and maps](./lorebook-places.md#how-a-session-uses-places)).
+**Follow lore links**, on the same step, also ranks links reached from entries the turn found, such as a room's ways out. These count toward the relationships' share, but they aren't written into the prompt; a place's ways reach Story and Lair turns in their own way (see [Places and maps](./lorebook-places.md#how-a-session-uses-places)).
 
 ## Context debugging
 

@@ -58,6 +58,7 @@ import {
 } from "@serene-pub/sdk"
 import { poolKeyFor } from "$lib/shared/pipelines/poolKey"
 import { notCoreRow } from "$lib/server/plugins/frameHost"
+import { resolveRenamedCoreId } from "$lib/server/plugins/renamedCoreIds"
 import { objectLayoutSeedsFor } from "$lib/server/pipelines/entities/objectVariableLayouts"
 
 export interface SyncResult {
@@ -713,6 +714,26 @@ export const legacyPluginConfigSeedKey = (pluginId: string, slug: string) =>
 	`plugin:${pluginId}:${slug}`
 
 /**
+ * A package preset's `defaults`, its swaps onto the specs core ships now
+ * (`renamedCoreIds.ts`). Everything else is the declaration's, as shipped.
+ */
+function presetDefaultsWithRenamedCoreIds(
+	defaults: Record<string, unknown> | undefined
+): Record<string, unknown> | null {
+	if (!defaults) return null
+	const swaps = defaults.swaps
+	if (!Array.isArray(swaps)) return defaults
+	return {
+		...defaults,
+		swaps: swaps.map((c) =>
+			c && typeof c === "object" && typeof (c as { spec?: unknown }).spec === "string"
+				? { ...c, spec: resolveRenamedCoreId((c as { spec: string }).spec) }
+				: c
+		)
+	}
+}
+
+/**
  * Project every enabled plugin's `preset()` declarations into `session_presets`.
  *
  * ## The gap this closes
@@ -854,7 +875,9 @@ export async function syncPluginPresets(
 				continue
 			}
 			const event = key
-			const specSlug = (b as any).spec as string
+			// A core spec core has since renamed binds the one it ships now
+			// (`renamedCoreIds.ts`); its config was installed under that id too.
+			const specSlug = resolveRenamedCoreId((b as any).spec as string)
 			const configSlug = (b as any).config
 			let config: number | null = null
 			if (typeof configSlug === "string" && configSlug) {
@@ -877,7 +900,7 @@ export async function syncPluginPresets(
 		// and reported once per preset, never written.
 		let includedActions: string[] | null = null
 		if (Array.isArray(decl.actions?.include)) {
-			const entries = (decl.actions.include as unknown[]).map(String)
+			const entries = (decl.actions.include as unknown[]).map((k) => resolveRenamedCoreId(String(k)))
 			const bare = entries.filter((k) => !parseActionIdentity(k))
 			includedActions = [...new Set(entries.filter((k) => parseActionIdentity(k)))]
 			if (bare.length && !report.bareIncludedKeys.includes(seedKey)) {
@@ -898,10 +921,14 @@ export async function syncPluginPresets(
 			// gate makes unreachable.
 			name: i18nText(decl.label as I18n | undefined) ?? decl.slug,
 			description: i18nText(decl.description as I18n | undefined) ?? null,
-			genreId: decl.genre as string,
+			genreId: resolveRenamedCoreId(decl.genre as string),
 			bindings,
 			includedActions,
-			defaults: (decl.defaults as Record<string, unknown>) ?? null,
+			defaults: presetDefaultsWithRenamedCoreIds(decl.defaults as Record<string, unknown> | undefined),
+			// The preset layer of the cascade and the card's numbers (2026-10-19).
+			settings: ((decl as any).settings as Record<string, unknown> | undefined) ?? null,
+			callsPerTurn: typeof (decl as any).callsPerTurn === "number" ? ((decl as any).callsPerTurn as number) : null,
+			castFloor: ((decl as any).cast as { characters?: number; personas?: number } | undefined) ?? null,
 			ownerPluginId: ownerId
 		}
 
@@ -962,7 +989,10 @@ export async function syncPluginPresets(
 					"genreId",
 					"bindings",
 					"includedActions",
-					"defaults"
+					"defaults",
+					"settings",
+					"callsPerTurn",
+					"castFloor"
 				] as const
 			).every(
 				(k) =>

@@ -226,7 +226,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// resolved and stored as `metadata.turnPlan`. Additive. Proven: the
 	// contracts source with only this lane's ports reverted hashes back to
 	// the old pin. (was "1a521707874871")
-	"core:outlet/create-message@1": "648433d37fbc8",
+	// Moved 2026-10-15, twice in one tree: 🚧 `role` and `trayItems` in-ports
+	// (a person's message, saved through the pipeline — owner ruling), and
+	// another lane's `tableLine`. Additive. (was "648433d37fbc8")
+	// Moved 2026-10-18: 🚧 `kind` in-port (a folio line's kind, `metadata.kind`). Additive. (was "c68faae53ae85")
+	"core:outlet/create-message@1": "8b312519bebc4",
 	"core:outlet/graph-proposal@1": "68c1f10a8eb0c",
 	// Moved (09-B B4, 2026-09-15): a `thinking` in-port, so the reply's
 	// reasoning trace lands on the row it fills; the `target` port now takes
@@ -300,7 +304,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved 2026-10-13 (live scenes lane D, §6): an additive `clockStep`
 	// out-port — the clock step a press collected on the stepper
 	// (`collects.clockStep`, checked by the host). (was "11b79532336221")
-	"core:inlet/user-message@1": "a8419562a1a98",
+	// Moved 2026-10-18: 🚧 `ruleset` port — `{ id, rigour }`, the ruleset the session plays, always supplied. Additive. (was "a8419562a1a98")
+	"core:inlet/user-message@1": "8f9505bb1e485",
 	/**
 	 * Forms (U5d, R-15 *Forms*, 2026-09-17). NEW types — a line each: the
 	 * inlet `core:event/form-addressed@1` lands on; the task that turns the
@@ -312,6 +317,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	 * `causesEvent: form-answered`).
 	 */
 	"core:inlet/form-addressed@1": "eaa49f3684cc2",
+	// 🚧 A person's message, saved through the pipeline (owner ruling 2026-10-15).
+	"core:inlet/message-offered@1": "275f9cdcaaaf9",
 	"core:task/form-context@1": "1d7e674904cdd6",
 	// Both moved 2026-09-27 (lair pass B12): an additive `referent` port —
 	// in on make-choices (stamped on the block), out on read-answer (read
@@ -717,7 +724,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// read is the newest rows up to twice the window by a generous estimate
 	// (never more than 2000) and `limit` is not read; `limit`'s description
 	// says so. Every shipped reply wires it. (was "1b671cade13c9c")
-	"core:query/session-history@1": "4d8a07e5d38b0",
+	// Moved 2026-10-15 (🚧 table lines): the `tableLines` param — off, the
+	// rows written as the table's own (`create-message@1`'s `tableLine`, a
+	// Dungeon Crawler roll line) are left out of the read. Default on, so
+	// every other spec reads what it read. Measured with other lanes'
+	// in-flight edits in the tree. (was "4d8a07e5d38b0")
+	"core:query/session-history@1": "bf56f6315cb53",
 	// Lair character turns (owner ruling 2026-09-30): the standing turn plan
 	// a character turn plays from. A new type: no migration.
 	"core:query/turn-plan@1": "a71a679f5d817",
@@ -751,6 +763,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// and hint per option, so the Pipelines panel stops showing raw values. Display
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "192ca120c8b84e")
 	"core:query/stat-trail@1": "17f0de75a3a3b3",
+	// 🚧 A person's channel lane (owner ruling 2026-10-17, lanes by person on the server).
+	"core:query/channel-lane@1": "40af273332f05",
 	// ⚠ `core:query/graph-context@1` was here, and is gone rather than frozen.
 	// It split into the two below, because one node emitting both directions of
 	// the graph gave them one heading, one layout and one switch. Removing a
@@ -1156,7 +1170,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// from, a Query because which extensions are enabled is not a property of
 	// a spec; `join-text` is the reduce a repeated block has always needed —
 	// `map` and `loop` publish a list and every write takes a scalar.
-	"core:query/available-tools@1": "1275d437461a7e",
+	"core:query/available-tools@1": "1087ce6d645803",
 	"core:oracle/run-tool@1": "e3dfadabceed9",
 	"core:task/join-text@1": "89b6a865c3edd",
 	// Lair pass B5 (2026-09-27, owner D5): a document's lists as one folded
@@ -1262,7 +1276,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// and hint per option, so the Pipelines panel stops showing raw values. Display
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "170f772cd314a4")
 	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "122a7ddc81dfeb")
-	"core:oracle/generate-json@1": "146c833da5b381",
+	// Moved 2026-10-18 (the 100-turn walk, B7): the opt-in `emptyIsUnreadable` parameter — an empty answer read as an unreadable one, the step going on. `@1` evolves in place. (was "146c833da5b381")
+	"core:oracle/generate-json@1": "9889aed6acfce",
 	// Re-projected by **0102** (policy answer 3): a `sampling` slot, so the cut
 	// can be clamped to the window the batch is actually sent against — the
 	// binding read no sampling config at all, and there is no truncation on
@@ -1322,7 +1337,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// it. (Its absence is also what keeps it out of `UNFILLED_IN_PORTS` —
 	// there is no port to excuse.)
 	// ⚠ MOVED: two declared in-ports, `state` and `plan`, both unwired on the
-	// pipeline that had this node first (`core:spec/chat-side-character`), so
+	// pipeline that had this node first (`core:spec/story-side-character`), so
 	// nothing it does changes. A voice built with no place in front of it
 	// answered from whatever the transcript suggested.
 	// Moved (U5a, 2026-09-16): the fact's in-port is `sideCharacter` (was
@@ -1500,7 +1515,19 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// step in every shipped spec, so the ONE window computation reads the
 	// model's own window (0114) off the same pair the request goes out on.
 	// (was "efdd9a915c681")
-	"core:task/context-budget@1": "1949a34d1d682",
+	// Moved 2026-10-17 (rulesets W3-S, bound W4-A): an optional `blocks`
+	// in-port and `fittedBlocks` out-port — labelled prompt blocks fitted
+	// into what `available` leaves, degrade depth before drop
+	// (`rulesets/budget.ts fitContextBlocks`). Additive; absent `blocks`, the
+	// outputs are as before. (was "1949a34d1d682")
+	"core:task/context-budget@1": "f03c8b23cd82b",
+	// NEW (rulesets wave 2–3, 2026-10-16/17): the ruleset handler every genre
+	// calls — `resolve` / `apply` / `advance` over a session's ruleset
+	// (PLAN-rulesets §25). Recorded as built: `scope` in-port (W3-S),
+	// `declaresRandomness`, no longer provisional.
+	// Moved 2026-10-18: 🚧 `viewer` in-port (whose eyes the blocks are for). Additive. (was "d17ff77dd78f2")
+	"core:task/ruleset-resolve@1": "1c67b2caa9974",
+	"core:task/resolve-tasks@1": "8b29345b105df",
 	// Re-projected by 0191 (policy answer 3). Two changes, one hash move: the
 	// dead `strategy` and `dedup` parameters are gone — the binding read
 	// neither, `strategy` was 0.5's engine choice that wiring replaced, and
@@ -1705,6 +1732,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "4a8e6145972ba")
 	"core:task/turn-pool@1": "d6ab8b813bf74",
 	"core:task/turn-mentioned@1": "14877e0d91b65e",
+	// 🚧 Unprompted turns (lane 2, 2026-10-19): the voices group in a turn order.
+	"core:task/turn-unprompted@1": "12a90826a3e07e",
 	/** The one write path for `metadata.turnOrder` (§4.2). */
 	"core:outlet/set-turn-order@1": "1147dd9013c784",
 	/** The session's annex (§4.3, R6) — the pipeline layer's own memory. */
@@ -1721,6 +1750,14 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// annex declaration's. Nothing else moved: with the port and the contract
 	// key put back the descriptor hashes to the old pin (was "1f42d118c9b036").
 	"core:outlet/set-session-annex@1": "7bc796f8c8b43",
+	// NEW (2026-10-15, Dungeon Crawler's interview): a player seat named by a
+	// pipeline — the seat-name door's pipeline outlet. 🚧
+	// Moved 2026-10-18 (owner ruling ★6, P3-1): the `retire` in-port — a new character after a death is a NEW seat, the fallen's retired. `@1` evolves in place. (was "8f8583a68b71d")
+	"core:outlet/set-seat-name@1": "15bb5329e236d5",
+	"core:outlet/set-composer-state@1": "18ea9105b85500",
+	// NEW (2026-10-15, owner ruling): a stat configured by a pipeline — one
+	// owner's { owner, slot, config } through `setStatConfig`. 🚧
+	"core:outlet/set-stat-config@1": "a7ec91e849f91",
 	// 2026-09-26: annex fields — the one write every declared field goes through.
 	"core:outlet/set-annex-field@1": "18bd0af3e04563",
 	/** Recording a declared event (E1, R45/R47): the write whose event its literal names. */
@@ -1823,6 +1860,29 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// `@1` under the freeze. Proven: the snapshot with `entryShape.exportKey`
 	// removed hashes to the old pin. (was "1eea67730e8c97")
 	"core:entry/item@1": "12c63b4101539c",
+	// NEW (rulesets W3-S, 2026-10-17): the entry types a ruleset's
+	// repertoires derive (`core:entry/<ruleset>.<repertoire>@1`) — Story's
+	// things and conditions, Vis Itineris's eight entryable repertoires.
+	// Moved 2026-10-18: the rulesets W1 contract — nested compendium rows, universal `equipped`/`duration` piece parts, `earshot`, families (the SDK lane). Derived entry types follow their repertoire's shape. (was "f3b39e7cd656c")
+	"core:entry/freeform.things@1": "4344838a1395f",
+	// Moved 2026-10-18: the rulesets W1 contract — nested compendium rows, universal `equipped`/`duration` piece parts, `earshot`, families (the SDK lane). Derived entry types follow their repertoire's shape. (was "132b8a1ae8f25a")
+	"core:entry/freeform.conditions@1": "392f70a7f8d8e",
+	// Moved 2026-10-18: the rulesets W1 contract — nested compendium rows, universal `equipped`/`duration` piece parts, `earshot`, families (the SDK lane). Derived entry types follow their repertoire's shape. (was "5168269427e58")
+	"core:entry/vis-itineris.weapons@1": "df2ddc3df2aab",
+	// Moved 2026-10-18: the rulesets W1 contract — nested compendium rows, universal `equipped`/`duration` piece parts, `earshot`, families (the SDK lane). Derived entry types follow their repertoire's shape. (was "16d9ddf5f24cfb")
+	"core:entry/vis-itineris.armour@1": "a490ea945677c",
+	// Moved 2026-10-18: the rulesets W1 contract — nested compendium rows, universal `equipped`/`duration` piece parts, `earshot`, families (the SDK lane). Derived entry types follow their repertoire's shape. (was "39da0eacd9b9e")
+	"core:entry/vis-itineris.gear@1": "195189b65a558d",
+	// Moved 2026-10-18: the rulesets W1 contract — nested compendium rows, universal `equipped`/`duration` piece parts, `earshot`, families (the SDK lane). Derived entry types follow their repertoire's shape. (was "5a34bd9b53785")
+	"core:entry/vis-itineris.consumables@1": "1d9baf75e15469",
+	// Moved 2026-10-18: the rulesets W1 contract — nested compendium rows, universal `equipped`/`duration` piece parts, `earshot`, families (the SDK lane). Derived entry types follow their repertoire's shape. (was "1ef83ce6d0ee23")
+	"core:entry/vis-itineris.spells@1": "184d9c7da9a52a",
+	// Moved 2026-10-18: the rulesets W1 contract — nested compendium rows, universal `equipped`/`duration` piece parts, `earshot`, families (the SDK lane). Derived entry types follow their repertoire's shape. (was "172d81b53c31ba")
+	"core:entry/vis-itineris.feats@1": "bc0134cc00771",
+	// Moved 2026-10-18: the rulesets W1 contract — nested compendium rows, universal `equipped`/`duration` piece parts, `earshot`, families (the SDK lane). Derived entry types follow their repertoire's shape. (was "78d17856af267")
+	"core:entry/vis-itineris.conditions@1": "13e7d12badbfdd",
+	// Moved 2026-10-18: the rulesets W1 contract — nested compendium rows, universal `equipped`/`duration` piece parts, `earshot`, families (the SDK lane). Derived entry types follow their repertoire's shape. (was "10992f1119655")
+	"core:entry/vis-itineris.creatures@1": "167b3322c9817f",
 	"test:task/passthrough@1": "14f0c9d8aaf7b0",
 	"test:task/sloppy-stream@1": "1224877b3fece4",
 	"test:task/slow@1": "b227d955f2539"
@@ -1867,9 +1927,10 @@ describe("published type content hashes", () => {
 	it("records every type this build publishes", () => {
 		// A new type is safe to add — this only keeps the file complete, so the
 		// drift check above stays meaningful as the registry grows.
-		const unrecorded = Object.keys(now).filter(
-			(pin) => !(pin in PUBLISHED_HASHES)
-		)
+		const unrecorded = Object.keys(now)
+			.filter((pin) => !(pin in PUBLISHED_HASHES))
+			// The hash rides the pin, so the line to add is in the failure.
+			.map((pin) => `${pin}: ${now[pin]}`)
 		expect(
 			unrecorded,
 			unrecorded.length

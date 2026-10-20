@@ -43,6 +43,10 @@
 	const rows = $derived(cost?.rows ?? null)
 </script>
 
+<!-- 🚧 Mounted only while open (PLAN-dc-after-walk3 R3-5, #48): the shell,
+     the Connections view and the admin pages each hold one, and every closed
+     copy stayed in the page — hidden, with the same ids. -->
+{#if open}
 <Dialog {open} onOpenChange={(e) => !e.open && onCancel()}>
 	<Portal>
 		<Dialog.Backdrop
@@ -155,3 +159,4 @@
 		</Dialog.Positioner>
 	</Portal>
 </Dialog>
+{/if}

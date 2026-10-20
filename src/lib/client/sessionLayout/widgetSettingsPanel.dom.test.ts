@@ -119,3 +119,95 @@ describe("the settings panel writes every control", () => {
 		expect(writes.at(-1)).toEqual({ notes: { hostCard: true } })
 	})
 })
+
+describe("the settings panel's sections", () => {
+	let app: ReturnType<typeof mount> | null = null
+	let host: HTMLElement
+	let writes: Array<Record<string, Record<string, unknown>>> = []
+
+	function open(widgetId: string) {
+		host = document.createElement("div")
+		document.body.append(host)
+		app = mount(WidgetSettingsPanel, { target: host, props: { widgetId } })
+		flushSync()
+	}
+
+	beforeEach(() => {
+		writes = []
+		setWidgetSettingDecls({
+			log: {
+				id: "log",
+				title: "Log",
+				settings: {
+					channel: { type: "string", label: "Channel name", group: "Channel" },
+					compact: { type: "boolean", label: "Compact" },
+					showAvatars: { type: "boolean", label: "Faces", group: "Reading" },
+					nextUp: { type: "boolean", label: "Who is due next", group: "Turns" },
+					showTimestamps: { type: "boolean", label: "Times", group: "Reading" }
+				}
+			},
+			notes: { id: "notes", title: "Notes" }
+		})
+		setWidgetSettingValues({})
+		setWidgetSettingsWriter((next) => {
+			writes.push(next)
+			setWidgetSettingValues(next)
+		})
+	})
+
+	afterEach(() => {
+		if (app) unmount(app)
+		app = null
+		setWidgetSettingsWriter(null)
+		setWidgetSettingDecls({})
+		document.body.innerHTML = ""
+	})
+
+	const sectionsOf = () =>
+		[...host.querySelectorAll<HTMLElement>("[data-settings-group]")].map((s) => ({
+			heading: s.querySelector("h3")?.textContent?.trim(),
+			labelled: document.getElementById(s.getAttribute("aria-labelledby") ?? "") ===
+				s.querySelector("h3"),
+			fields: [...s.querySelectorAll("input")].map((i) => i.id)
+		}))
+
+	test("one headed section per group, in declaration order, the group string verbatim; nothing folds", () => {
+		open("log")
+		expect(sectionsOf()).toEqual([
+			{ heading: "Channel", labelled: true, fields: ["sf-channel"] },
+			{ heading: "Reading", labelled: true, fields: ["sf-showAvatars", "sf-showTimestamps"] },
+			{ heading: "Turns", labelled: true, fields: ["sf-nextUp"] }
+		])
+		expect(host.querySelector("details, summary")).toBeNull()
+		// The heading is drawn once — the form under it does not repeat it.
+		expect(
+			[...host.querySelectorAll("p, h3")].filter((e) => e.textContent?.trim() === "Reading")
+		).toHaveLength(1)
+	})
+
+	test("ungrouped fields come before every section, under no heading", () => {
+		open("log")
+		const compact = host.querySelector("#sf-compact")
+		expect(compact).not.toBeNull()
+		expect(compact!.closest("[data-settings-group]")).toBeNull()
+		const first = host.querySelector("[data-settings-group]")!
+		expect(
+			compact!.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING
+		).toBeTruthy()
+	})
+
+	test("a grouped field writes on its change like any other", async () => {
+		open("log")
+		host.querySelector<HTMLInputElement>("#sf-showAvatars")!.click()
+		flushSync()
+		await tick()
+		expect(writes.at(-1)).toEqual({ log: { showAvatars: true } })
+	})
+
+	test("a widget with no groups draws no section and no fold", () => {
+		open("notes")
+		expect(host.querySelector("[data-settings-group]")).toBeNull()
+		expect(host.querySelector("details")).toBeNull()
+		expect(host.querySelector("#sf-hostCard")).not.toBeNull()
+	})
+})

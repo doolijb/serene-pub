@@ -5,9 +5,9 @@
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import {
-		STORY_CALENDAR_PRESETS,
-		storyCalendarProblems
-	} from "@serene-pub/sdk"
+	STORY_CALENDAR_PRESETS,
+	storyCalendarProblems
+} from "@serene-pub/sdk"
 	import {
 		formatDate,
 		nextStoryDate,

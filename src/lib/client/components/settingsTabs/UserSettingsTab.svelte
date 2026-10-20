@@ -25,6 +25,12 @@
 	} from "$lib/shared/validation/passphrase"
 	import * as Icons from "@lucide/svelte"
 	import LanguagePicker from "$lib/client/components/inputs/LanguagePicker.svelte"
+	import TimeZonePicker from "$lib/client/components/inputs/TimeZonePicker.svelte"
+	import {
+		browserTimeZone,
+		displayTimeZone,
+		realDateTime
+	} from "$lib/client/utils/realTime.svelte"
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	import { languageDefinition } from "$lib/shared/i18n/languages"
 	import LoreWriteModePicker from "$lib/client/components/inputs/LoreWriteModePicker.svelte"
@@ -90,6 +96,24 @@
 				title: `Language set to ${languageDefinition(message.effectiveLanguage).name}`
 			})
 		}
+	}
+
+	function handleUsersCurrentSetTimeZone(
+		message: SocketEventMap["users:current:setTimeZone"]["response"]
+	) {
+		// The shell's first-load report lands here too; only a change the
+		// picker asked for is worth a toast.
+		if (!timeZoneRequested) return
+		timeZoneRequested = false
+		if (message.success)
+			toaster.success({ title: `${t("Time zone set to")} ${message.timeZone}` })
+	}
+
+	function handleUsersCurrentSetTimeZoneError(
+		message: SocketEventMap["users:current:setTimeZone:error"]["response"]
+	) {
+		timeZoneRequested = false
+		toaster.error({ title: message.error || t("Failed to set time zone") })
 	}
 
 	function handleUsersCurrentUpdateDisplayName(
@@ -197,6 +221,14 @@
 		"users:current:updateDisplayName",
 		handleUsersCurrentUpdateDisplayName
 	)
+	useInterest<"users:current:setTimeZone">(
+		"users:current:setTimeZone",
+		handleUsersCurrentSetTimeZone
+	)
+	useInterest<"users:current:setTimeZone:error">(
+		"users:current:setTimeZone:error",
+		handleUsersCurrentSetTimeZoneError
+	)
 	useInterest<"users:current:changePassphrase">(
 		"users:current:changePassphrase",
 		handleUsersCurrentChangePassphrase
@@ -247,6 +279,16 @@
 		socket.emit("userSettings:updateLanguage", {
 			language: value === "" ? null : value
 		})
+	}
+
+	// ── Time zone ─────────────────────────────────────────────────────────────
+	// Where real-world times are SHOWN. Storage is UTC; story time is the
+	// session's or lorebook's timeline and never reads this.
+	let timeZoneRequested = false
+	function onTimeZoneChange(value: string) {
+		if (!value) return
+		timeZoneRequested = true
+		socket.emit("users:current:setTimeZone", { timeZone: value })
 	}
 
 	// ── Lorebook writes from sessions (plan A22) ─────────────────────────────
@@ -463,6 +505,26 @@
 			>
 				{t("How your language affects search")}
 			</a>
+		</p>
+	</div>
+
+	<!-- Time zone -->
+	<div class="card preset-filled-surface-100-900 p-4">
+		<h3 class="mb-2 text-sm font-medium">{t("Time zone")}</h3>
+		<p class="text-surface-700-300 mb-3 text-sm">
+			{t(
+				"The zone real-world dates and times are shown in. It starts as your browser's; in-story time is the story's own and is not affected."
+			)}
+		</p>
+		<TimeZonePicker
+			label={t("Time zone")}
+			value={userCtx.user?.timeZone ?? browserTimeZone()}
+			describedBy="user-time-zone-note"
+			onValueChange={onTimeZoneChange}
+		/>
+		<p id="user-time-zone-note" class="text-surface-700-300 mt-3 text-sm">
+			{t("Now")}: {realDateTime(new Date(), { dateStyle: "medium", timeStyle: "short" })}
+			({displayTimeZone()})
 		</p>
 	</div>
 

@@ -65,16 +65,16 @@ describe("picturePlacement", () => {
 
 describe("the Backdrop widget's Illustrate", () => {
 	it("names the Scene action the spec declares", async () => {
-		const { CHAT_ILLUSTRATE_SCENE_SPEC_ID, ILLUSTRATE_SCENE_ACTION_KEY } = await import(
+		const { STORY_ILLUSTRATE_SCENE_SPEC_ID, ILLUSTRATE_SCENE_ACTION_KEY } = await import(
 			"@serene-pub/core-catalog"
 		)
 		const { BACKDROP_ILLUSTRATE_ACTION, illustrateActionOf } = await import(
 			"@serene-pub/core-catalog/backdrop"
 		)
 		expect(BACKDROP_ILLUSTRATE_ACTION).toBe(
-			`${CHAT_ILLUSTRATE_SCENE_SPEC_ID}#${ILLUSTRATE_SCENE_ACTION_KEY}`
+			`${STORY_ILLUSTRATE_SCENE_SPEC_ID}#${ILLUSTRATE_SCENE_ACTION_KEY}`
 		)
-		const listed = (canAct: boolean, specSlug = CHAT_ILLUSTRATE_SCENE_SPEC_ID) =>
+		const listed = (canAct: boolean, specSlug = STORY_ILLUSTRATE_SCENE_SPEC_ID) =>
 			({
 				composer: {
 					primary: [{ specSlug, key: ILLUSTRATE_SCENE_ACTION_KEY, canAct }],
@@ -87,10 +87,9 @@ describe("the Backdrop widget's Illustrate", () => {
 		})
 		expect(illustrateActionOf(listed(false))?.disabled).toBe(true)
 		expect(illustrateActionOf(listed(true, "core:spec/other"))).toBeNull()
-		// Adventure's Scene (§16 follow-up D3): its own spec, the same key.
-		const { ADVENTURE_ILLUSTRATE_SCENE_SPEC_ID } = await import("@serene-pub/core-catalog")
-		expect(illustrateActionOf(listed(true, ADVENTURE_ILLUSTRATE_SCENE_SPEC_ID))).toEqual({
-			identity: `${ADVENTURE_ILLUSTRATE_SCENE_SPEC_ID}#${ILLUSTRATE_SCENE_ACTION_KEY}`,
+		// Story's Scene (was Adventure's, §16 follow-up D3): the same spec, the same key.
+		expect(illustrateActionOf(listed(true, STORY_ILLUSTRATE_SCENE_SPEC_ID))).toEqual({
+			identity: `${STORY_ILLUSTRATE_SCENE_SPEC_ID}#${ILLUSTRATE_SCENE_ACTION_KEY}`,
 			disabled: false
 		})
 		expect(illustrateActionOf(undefined)).toBeNull()

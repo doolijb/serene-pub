@@ -45,7 +45,7 @@ const PALETTE = [
 	row({ key: "nudge", specSlug: "core:spec/lair-nudge", name: "Nudge", slash: "nudge", collects: NUDGE_COLLECTS }),
 	row({ key: "whisper", specSlug: "core:spec/lair-whisper", name: "Whisper", slash: "whisper", collects: WHISPER_COLLECTS }),
 	row({ key: "room", specSlug: "core:spec/lair-room-answer", name: "Answer the door", slash: "room", collects: ROOM_COLLECTS }),
-	row({ key: "narrate", specSlug: "core:spec/chat-narrate", name: "Narrate", slash: "narrator" })
+	row({ key: "narrate", specSlug: "core:spec/story-narrate", name: "Narrate", slash: "narrator" })
 ]
 const byIdentity = (identity: string) =>
 	PALETTE.find((a) => `${a.specSlug}#${a.key}` === identity) as
@@ -79,7 +79,8 @@ class Page {
 				draft: this.draft,
 				personas: [],
 				personaId: null,
-				playerLabel: "Dungeon Master",
+				// As the projection phrases it (`composerWritingAs`).
+				playerLabel: "the Dungeon Master",
 				palette: PALETTE
 			}
 		}

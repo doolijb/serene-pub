@@ -208,7 +208,7 @@ vi.mock("$lib/server/db", async () => {
 // off it — `connectSockets` registers that family too.
 vi.mock("$lib/server/pipelines/entities/sessionGenres", () => ({
 	listSessionGenres: async () => [],
-	STANDARD_GENRE_ID: "core:genre/chat"
+	STANDARD_GENRE_ID: "core:genre/story"
 }))
 
 // The two background lanes an entry write wakes. Neither is what these tests

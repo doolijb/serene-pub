@@ -38,7 +38,7 @@ afterAll(async () => {
 const fakeSocket = (userId: number) =>
 	({ user: { id: userId, isAdmin: false }, io: { to: () => ({ emit: () => {} }) } }) as any
 const noopEmit = () => {}
-const TIME_PASSES = "core:spec/chat-advance-time#advance-time"
+const TIME_PASSES = "core:spec/story-advance-time#advance-time"
 
 let seq = 0
 async function makeWorld() {
@@ -83,7 +83,7 @@ describe("Time passes… in Chat", () => {
 		const w = await makeWorld()
 		const res: any = await sessionsActionsHandler.handler(fakeSocket(w.user.id), { sessionId: w.session.id }, noopEmit)
 		const composer = [...res.venues.composer.primary, ...res.venues.composer.overflow]
-		const action = composer.find((a: any) => a.specSlug === "core:spec/chat-advance-time")
+		const action = composer.find((a: any) => a.specSlug === "core:spec/story-advance-time")
 		expect(action).toMatchObject({
 			key: "advance-time",
 			name: "Time passes…",

@@ -203,13 +203,14 @@ export async function runCardAction(req: CardActionRequest): Promise<Receipt> {
 	const world = await buildWorld(db, { specId })
 	if (req.overrides?.length) world.overrides.push(...req.overrides)
 	const user = String(req.userId)
+	const seed = uuidv4()
 	const receipt = await run(doc, {
 		world,
 		input,
 		runId,
-		seed: uuidv4(),
+		seed,
 		triggerSource: "ui",
-		bindings: coreBindings({ runId, user }),
+		bindings: coreBindings({ runId, user, seed }),
 		host: createHost(db, scope),
 		onNode: req.onNode,
 		...(req.onStatus ? { onStatus: req.onStatus } : {}),

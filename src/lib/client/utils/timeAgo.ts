@@ -1,3 +1,5 @@
+import { realDate } from "./realTime.svelte"
+
 /**
  * "just now", "3 minutes ago", "yesterday" — for a timestamp a person reads
  * beside a status, where the exact second is noise and the magnitude is the
@@ -21,18 +23,13 @@ export function timeAgo(
 	const days = Math.round(hours / 24)
 	if (days === 1) return "yesterday"
 	if (days < 7) return `${days} days ago`
-	return new Date(then).toLocaleDateString(undefined, {
-		month: "short",
-		day: "numeric"
-	})
+	return realDate(then, { month: "short", day: "numeric" })
 }
 
-/** A short calendar date — "Sep 12" — for "not listed since …". */
+/** A short calendar date — "Sep 12" in the profile zone — for "not listed since …". */
 export function shortDate(iso: string | Date | null | undefined): string {
 	if (!iso) return ""
-	const d = typeof iso === "string" ? new Date(iso) : iso
-	if (Number.isNaN(d.getTime())) return ""
-	return d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+	return realDate(iso, { month: "short", day: "numeric" })
 }
 
 /**
@@ -66,9 +63,9 @@ export function timeAgoShort(
  * When a session last moved, as an instant — 0 when it has never moved or the
  * stamp will not parse, so a sort never has to handle NaN.
  *
- * The last message's timestamp in preference to `sessions.updatedAt`: that
- * column is a PG `date` (day granularity), so ordering by it alone shuffles
- * everything touched today into an arbitrary order.
+ * The last message's timestamp in preference to `sessions.updatedAt`, which
+ * moves on edits to the session itself, not only on new lines. It is a UTC
+ * `timestamptz`, so the string parses to the instant it was written.
  *
  * Typed structurally rather than against `Sockets.Sessions.List`: the same two
  * fields reach this from the list row, from a view panel's props and from the

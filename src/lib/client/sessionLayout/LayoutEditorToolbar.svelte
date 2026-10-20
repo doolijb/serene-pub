@@ -1,7 +1,8 @@
 <script lang="ts">
 	/**
-	 * The layout editor's DESKTOP toolbar (tabbed: Layouts · Settings · Move),
-	 * split out of SessionLayout.
+	 * The layout editor's DESKTOP toolbar (tabbed: Layouts · Arrange,
+	 * PLAN-session-panels-2026-10-14 — the Settings tab is gone, Q4: settings
+	 * open from a tab's gear), split out of SessionLayout.
 	 *
 	 * It survives a previewed phone width — the tier buttons and the grid escape
 	 * live in it — so a real narrow window is the only thing that has no toolbar
@@ -20,7 +21,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { tick } from "svelte"
 	import type { TrayWidget } from "./widgetInstances"
-	// The Move tab's screen-size simulator: the width presets the picker offers.
+	// The Arrange tab's screen-size simulator: the width presets the picker offers.
 	import { SIM_OPTIONS, type SimTier } from "./simulator"
 	import LayoutConfirmDialog from "./LayoutConfirmDialog.svelte"
 	import SaveAsNewLayoutDialog from "./SaveAsNewLayoutDialog.svelte"
@@ -30,7 +31,13 @@
 		copyConfirm,
 		copyTarget,
 		deleteConfirm,
+		chipFilter,
 		groupLayoutPresets,
+		PRESET_CHIPS,
+		showChips,
+		sourceLine,
+		type PresetChip,
+		type PresetSectionKey,
 		newSessionChoice,
 		newSessionLayoutOf,
 		newSessionMark,
@@ -50,11 +57,11 @@
 
 	interface Props {
 		/** Which pane is showing. Bound: SessionLayout derives `placing` from it. */
-		editTab: "presets" | "settings" | "move"
+		editTab: "layouts" | "arrange"
 		/**
 		 * Where the band starts. The toolbar is taken out of flow, so it cannot
 		 * read the session root's box itself: SessionLayout passes 0 while the
-		 * Move tab's scrim is covering the nav rail, and the root's measured
+		 * Arrange tab's scrim is covering the nav rail, and the root's measured
 		 * offset otherwise — see `.editor`'s rule.
 		 */
 		insetStart: number
@@ -122,10 +129,8 @@
 		onShareLayout?: (presetId: number, visibility: "shared" | "private") => void
 		onCloneLayout?: (presetId: number) => void
 		onSetNewSessionLayout?: (presetId: number | null) => void
-		/** Every widget on screen; the Settings tab only counts them. */
-		styleableWidgets: { id: string; label: string }[]
 		/**
-		 * The Move tab's tray (brief 7b): every widget kind, every time — a
+		 * The Arrange tab's tray (brief 7b): every widget kind, every time — a
 		 * placed one with its count, one at its `maxInstances` disabled with
 		 * the reason. A chip carries its WIDGET id; landing it mints the
 		 * instance (`SessionLayout`'s `addWidget`).
@@ -141,12 +146,17 @@
 		draggedId: (e: DragEvent) => string | null
 		/** The tray's own drop: a card dragged back out of the layout. */
 		removeWidget: (widgetId: string) => void
-		/** The screen-size simulator, and the two lenses beside it. */
+		/** The screen-size simulator. */
 		simTier: SimTier | null
 		setSimTier: (tier: SimTier | null) => void
-		railPreview: boolean
-		simGrid: boolean
-		simNarrow: boolean
+		/**
+		 * The Arrange tab's status line: the last refusal of an edit
+		 * (`MIDDLE_EMPTY`, a cap…), said here rather than in a toast.
+		 */
+		notice?: string | null
+		/** Undo the last arrangement edit; absent or `canUndo` false draws it disabled. */
+		onUndo?: () => void
+		canUndo?: boolean
 		/** The two commit controls, SessionLayout's own. */
 		onCancel: () => void
 		onDone: () => void
@@ -176,7 +186,6 @@
 		onShareLayout,
 		onCloneLayout,
 		onSetNewSessionLayout,
-		styleableWidgets,
 		trayWidgets,
 		trayIcon,
 		armedId = $bindable(),
@@ -186,9 +195,9 @@
 		removeWidget,
 		simTier,
 		setSimTier,
-		railPreview = $bindable(),
-		simGrid = $bindable(),
-		simNarrow,
+		notice = null,
+		onUndo,
+		canUndo = false,
 		onCancel,
 		onDone
 	}: Props = $props()
@@ -287,6 +296,8 @@
 	 * provenance, the Updated offer, and a question before anything replaces
 	 * this session's layout. */
 	let groups = $derived(groupLayoutPresets(presets))
+	/** Each long section's chip (All / Mine / Shared, lane 5's `showChips`). */
+	let chipOf = $state<Partial<Record<PresetSectionKey, PresetChip>>>({})
 	let provenance = $derived(provenanceLine(startedFrom))
 	let genreDefault = $derived(presets.find((p) => p.isGenreDefault) ?? null)
 	/**
@@ -423,9 +434,8 @@
 
 <!-- The layout editor: a tabbed toolbar over the chat. Layouts starts
      this session's layout again from a copy (and saves it as a new named
-     layout); Style picks the message packs (live preview); Move places and
-     arranges widgets in the zones. -->
-<!-- The band stops at the session's own left edge unless the Move tab's
+     layout); Arrange places widgets as tabs of panels in the zones. -->
+<!-- The band stops at the session's own left edge unless the Arrange tab's
      scrim is covering the nav rail — see `.editor`'s rule. `insetStart` is
      the root's measured offset from the window, and since the one-rail
      shell that offset IS the rail. -->
@@ -444,10 +454,11 @@
 		<div class="editor-tablist">
 			<button
 				class="editor-tab"
-				class:active={editTab === "presets"}
+				class:active={editTab === "layouts"}
 				role="tab"
-				aria-selected={editTab === "presets"}
-				onclick={() => (editTab = "presets")}
+				aria-selected={editTab === "layouts"}
+				data-editor-tab="layouts"
+				onclick={() => (editTab = "layouts")}
 			>
 				<Icons.LayoutTemplate size={16} />
 				<!-- "Layouts", never "Presets" on screen: that is the session
@@ -462,26 +473,29 @@
 			</button>
 			<button
 				class="editor-tab"
-				class:active={editTab === "settings"}
+				class:active={editTab === "arrange"}
 				role="tab"
-				aria-selected={editTab === "settings"}
-				onclick={() => (editTab = "settings")}
+				aria-selected={editTab === "arrange"}
+				data-editor-tab="arrange"
+				onclick={() => (editTab = "arrange")}
 			>
-				<Icons.SlidersHorizontal size={16} />
-				Settings
-			</button>
-			<button
-				class="editor-tab"
-				class:active={editTab === "move"}
-				role="tab"
-				aria-selected={editTab === "move"}
-				onclick={() => (editTab = "move")}
-			>
-				<Icons.Move size={16} />
-				Move
+				<Icons.LayoutPanelLeft size={16} />
+				Arrange
 			</button>
 		</div>
 		<span class="flex-1"></span>
+		{#if onUndo}
+			<button
+				class="tool-btn"
+				data-editor-undo
+				disabled={!canUndo}
+				onclick={onUndo}
+				title="Undo the last change to the arrangement"
+			>
+				<Icons.Undo2 size={14} />
+				<span>Undo</span>
+			</button>
+		{/if}
 		<button
 			class="tool-btn"
 			onclick={onCancel}
@@ -497,7 +511,7 @@
 	</div>
 
 	<div class="editor-panel">
-		{#if editTab === "presets"}
+		{#if editTab === "layouts"}
 			<!-- The pane's head: where this session's layout started from,
 			     then the three verbs that REPLACE it with a copy, then the
 			     one that writes a new named layout from it. Done saves the
@@ -597,6 +611,7 @@
 			     ring is the one it started from. -->
 			<div class="sf-groups">
 				{#each groups as g, gi (g.key)}
+					{@const chip = chipOf[g.key] ?? "all"}
 					<section
 						class="sf-group"
 						data-preset-group={g.key}
@@ -609,8 +624,26 @@
 						>
 							{g.label}
 						</h3>
+						{#if showChips(g)}
+							<div
+								class="sf-chips"
+								role="group"
+								aria-label="Show in {g.label}"
+								data-preset-chips
+							>
+								{#each PRESET_CHIPS as c (c.chip)}
+									<button
+										type="button"
+										class="sf-chip-btn"
+										class:active={chip === c.chip}
+										aria-pressed={chip === c.chip}
+										onclick={() => (chipOf[g.key] = c.chip)}>{c.label}</button
+									>
+								{/each}
+							</div>
+						{/if}
 						<div class="presets-row">
-							{#each g.presets as p (p.id)}
+							{#each chipFilter(g, chip) as p (p.id)}
 								{@const current = startedFrom?.id === p.id}
 								{@const forNewSessions = newSessionLayout?.id === p.id}
 								<div class="preset-item">
@@ -657,11 +690,12 @@
 												>{`, ${newSessionMark(genreName)}`}</span
 											>
 										{/if}
-										<!-- Someone else's, shared on this server: whose.
-										     Yours, shared: that it is. -->
-										{#if !p.mine && p.origin === "user" && p.authorName}
-											<span class="preset-by">by {p.authorName}</span>
-										{:else if sharedMark(p)}
+										<!-- Who brought it (lane 5's `sourceLine`), and
+										     yours, shared: that it is. -->
+										<span class="preset-by" data-preset-source
+											>{sourceLine(p, startedFrom?.id ?? null)}</span
+										>
+										{#if sharedMark(p)}
 											<span
 												class="preset-by"
 												data-shared-mark
@@ -723,19 +757,7 @@
 					</span>
 				{/each}
 			</div>
-		{:else if editTab === "settings"}
-			<!-- One line, because the controls are on the widgets: every
-			     widget on screen wears its own settings overlay while
-			     this tab is open, with Style as one of its sections. -->
-			<p class="pack-hint">
-				{#if styleableWidgets.length}
-					Hover a widget to change its settings.
-				{:else}
-					Put a widget in the layout on the Move tab, then
-					hover it to change its settings.
-				{/if}
-			</p>
-		{:else if editTab === "move"}
+		{:else if editTab === "arrange"}
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div
 				class="palette"
@@ -776,8 +798,8 @@
 								(armedId = armedId === t.id ? null : t.id)}
 							title={t.full ??
 								(armedId === t.id
-									? "Tap a zone to place"
-									: "Drag to a zone, or tap to arm")}
+									? "Now tap where it goes"
+									: "Drag onto the layout, or tap and then tap where it goes")}
 						>
 							<IconCmp size={18} />
 							<span class="widget-card-label">{t.title}</span>
@@ -797,11 +819,13 @@
 					{/each}
 				</div>
 				{#if armedId}
-					<span class="palette-hint">tap a zone to place</span>
+					<span class="palette-hint">tap a panel's tabs, a gap, or a rail to place</span>
 				{/if}
 				<span class="flex-1"></span>
 				<span class="palette-tip">
-					Drag onto a zone · drop here to remove
+					Drag onto a panel's tabs or between panels · onto a
+					side's rail to put it in the rail · drop a tab here to
+					remove it
 				</span>
 			</div>
 			<!-- The screen-size simulator (P5, ruled 2026-08-30): a LENS
@@ -853,41 +877,6 @@
 						</button>
 					{/each}
 				</div>
-				<!-- The rail model (ruled 2026-09-10), on the SAME
-				     arrangement: each group in a side column is its own
-				     toggling panel, so this draws the sides the way a
-				     session draws them — docked, or an icon in the rail,
-				     or opened over the chat when the column has no room.
-				     A lens like the width presets, and nothing it does is
-				     persisted: pin and open live for the page. -->
-				<button
-					class="move-sim-btn move-sim-rails"
-					class:active={railPreview}
-					aria-pressed={railPreview}
-					title="Draw the side columns as rails — toggle a group, pin one, and watch what does not fit fly out"
-					onclick={() => (railPreview = !railPreview)}
-				>
-					<Icons.PanelLeftClose size={12} />
-					Rails
-				</button>
-				<!-- The MOBILE-EDIT mode (ruled 2026-09-10): a previewed
-				     width below the breakpoint draws the row editor that
-				     width really gets, so it can be checked without a
-				     phone. This is the way back to the grid, and it is
-				     offered only here — a real narrow window has no zones
-				     to drag in. -->
-				{#if simNarrow}
-					<button
-						class="move-sim-btn move-sim-rails"
-						class:active={simGrid}
-						aria-pressed={simGrid}
-						title="Draw the grid at this width instead of the row editor a screen this narrow gets"
-						onclick={() => (simGrid = !simGrid)}
-					>
-						<Icons.Grid2x2 size={12} />
-						Grid
-					</button>
-				{/if}
 			</div>
 			<!-- Says out loud what the guard enforces: looking at a tier
 			     changes nothing, but ARRANGING at one is an edit to the
@@ -900,14 +889,14 @@
 					size.
 				</span>
 			{/if}
-			{#if railPreview}
-				<span class="palette-hint">
-					Click a rail icon to open or close a group; the pin
-					keeps one open at its own height. Alt+[ expands
-					every group that fits, Alt+] sends them all to the
-					rail.
-				</span>
-			{/if}
+			<!-- The status line: what the last edit could not do, and why
+			     (§10 R-B — a refusal is said here, never a toast). -->
+			<span
+				class="palette-hint"
+				class:sr-only={!notice}
+				role="status"
+				data-arrange-notice>{notice ?? ""}</span
+			>
 		{/if}
 	</div>
 </div>
@@ -923,19 +912,19 @@
 <SaveAsNewLayoutDialog bind:open={saveAsOpen} onSave={savePreset} />
 
 <style>
-	/* ── Layout editor toolbar (tabbed: Layouts · Settings · Move) ─────
+	/* ── Layout editor toolbar (tabbed: Layouts · Arrange) ───────────────
 	   While the editor is open this bar OWNS the header's band: the shell takes
 	   the session header and the Jump pill out of it for the duration (see
 	   layoutEditor.svelte.ts), so the bar wears the header's own ground and
 	   rules off from the page the way the header did — no card, no radius, no
 	   margin.
 
-	   On MOVE it spans the whole VIEWPORT, nav rail included, because the
+	   On ARRANGE it spans the whole VIEWPORT, nav rail included, because the
 	   editor's three columns are laid out across the viewport rather than
 	   across `<main>` — the scrim already covers the rail, and a toolbar
 	   stopping short of the columns it commands would read as a second thing.
 
-	   On PRESETS and SETTINGS there is no canvas and no scrim: those tabs are a
+	   On LAYOUTS there is no canvas and no scrim: that tab is a
 	   LIVE preview of the session, and the session starts to the right of the
 	   nav rail. A full-bleed band there painted over the rail's first icon, so
 	   its start edge is the root's own (`mLeft`, an inline style — the rail can
@@ -950,7 +939,7 @@
 			color-mix(in oklab, var(--color-surface-300) 60%, transparent);
 		box-shadow: 0 6px 20px -12px rgba(0, 0, 0, 0.4);
 		overflow: hidden;
-		/* The start edge moves when the tab does (viewport on Move, the root's
+		/* The start edge moves when the tab does (viewport on Arrange, the root's
 		   own edge on the others). Intentionally NOT transitioned: a tab switch
 		   also swaps the canvas for the live session (or back), and in Chromium
 		   a slide on this property played out only after that mount had
@@ -1040,14 +1029,6 @@
 		padding-block: 0.5rem;
 		padding-inline: 1rem;
 	}
-	/* Style tab: the whole panel is one line pointing at the widgets themselves,
-	   which is where the controls are. */
-	.pack-hint {
-		inline-size: 100%;
-		font-size: 12px;
-		line-height: 1.45;
-		color: var(--color-surface-500);
-	}
 	/* Widgets tip + Advanced note + row. */
 	.palette-tip,
 	.advanced-note {
@@ -1131,6 +1112,28 @@
 	}
 	:global([data-mode="dark"]) .sf-chip {
 		color: var(--color-primary-200);
+	}
+	/* A long section's All / Mine / Shared: one value from three, so a
+	   segmented row (STYLE-GUIDE §6.5), `aria-pressed` on the chosen one. */
+	.sf-chips {
+		display: inline-flex;
+		gap: 2px;
+		padding: 2px;
+		margin-block-end: 0.3rem;
+		border-radius: 0.45rem;
+		background: var(--color-surface-200-800);
+	}
+	.sf-chip-btn {
+		min-block-size: 24px;
+		padding: 0 0.55rem;
+		border-radius: 0.35rem;
+		font-size: 12px;
+		font-weight: 500;
+		color: var(--color-surface-700-300);
+	}
+	.sf-chip-btn.active {
+		background: color-mix(in oklab, var(--color-primary-500) 22%, transparent);
+		color: var(--color-primary-800-200);
 	}
 	/* The groups sit side by side, each a muted label over its cards. */
 	.sf-groups {
@@ -1488,7 +1491,7 @@
 		font-weight: 500;
 	}
 
-	/* ── Move tab: the screen-size simulator's width picker ──────────────── */
+	/* ── Arrange tab: the screen-size simulator's width picker ───────────── */
 	.move-sim {
 		display: flex;
 		align-items: center;
@@ -1558,13 +1561,5 @@
 	}
 	:global([data-mode="dark"]) .move-sim-btn.active {
 		color: var(--color-surface-50);
-	}
-	/* The Rails toggle sits beside the width presets and is a lens like them,
-	   so it wears the same button — with its icon on the leading edge. */
-	.move-sim-rails {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.25rem;
-		margin-inline-start: 0.35rem;
 	}
 </style>

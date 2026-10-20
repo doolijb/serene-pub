@@ -12,6 +12,7 @@ import { paletteRowState } from "@serene-pub/core-catalog/conversation"
 import { DEFAULT_CHANNEL } from "@serene-pub/sdk"
 import { canRegenerateNewest } from "$lib/client/components/sessionPage/swipeControls"
 import { actionTitle } from "$lib/client/components/sessionPage/actionTitle"
+import { withinAudience } from "$lib/client/components/sessionPage/audienceVenues"
 import {
 	legendSections,
 	type LegendVerdict
@@ -50,6 +51,8 @@ export function createActionList(d: ActionListDeps) {
 	// message verbs ride the same list, so the message menu and the quick
 	// row hand-write no verb button either.
 	let actionVenues = $state<Sockets.Sessions.Actions.Response["venues"]>({})
+	/** 🚧 Where this viewer's Delete is refused (owner ruling ★9), off the list. */
+	let deleteRefusedThrough = $state<Sockets.Sessions.Actions.Response["deleteRefusedThrough"]>(null)
 	/**
 	 * What a block press of a form-venue action collects (lair pass R9) —
 	 * those actions are listed in no venue, so `listedAction` cannot find
@@ -274,12 +277,14 @@ export function createActionList(d: ActionListDeps) {
 		if (onOtherChannel(msg.channel)) {
 			channelVenues = {
 				...channelVenues,
-				[msg.channel]: msg.venues || {}
+				[msg.channel]: withinAudience(msg.venues)
 			}
 			return
 		}
-		actionVenues = msg.venues || {}
+		// Outside the viewer's audience is hidden, never listed greyed (round 2).
+		actionVenues = withinAudience(msg.venues)
 		formCollects = msg.formCollects ?? {}
+		deleteRefusedThrough = msg.deleteRefusedThrough ?? null
 		// Every other channel the session has is listed again with it: a run
 		// ending pushes `main`'s alone, and the Sanctum's Continue must lift
 		// when the story's does.
@@ -332,7 +337,24 @@ export function createActionList(d: ActionListDeps) {
 	d.inbox.on("state:changed", () => relistActions())
 	d.inbox.on("sessions:actions", handleSessionsActions)
 
+	/**
+	 * 🚧 Whether the server would refuse this viewer's Delete on `row`
+	 * (owner ruling ★9, `deleteRefusedThrough`): a kept turn's row, which
+	 * loses Delete rather than offering it to refuse.
+	 */
+	function deleteRefused(row: { id: number; channel?: string | null }): boolean {
+		const kept = deleteRefusedThrough
+		if (!kept || row.id > kept.messageId) return false
+		const slug = (row.channel || "main").split(":")[0]
+		return kept.channels.includes(slug)
+	}
+
 	return {
+		deleteRefused,
+		/** For a projection's cache key: moves whenever the delete floor does. */
+		get deleteRefusedKey(): string {
+			return deleteRefusedThrough ? `${deleteRefusedThrough.messageId}:${deleteRefusedThrough.channels.join(",")}` : ""
+		},
 		/** `main`'s venues. */
 		get actionVenues() {
 			return actionVenues

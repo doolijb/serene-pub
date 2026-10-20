@@ -17,11 +17,38 @@ import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelp
 
 /**
  * Whether any `set-state` node in this run applied or proposed something —
- * 🚧 or wrote a skipped clock line (live scenes §15 G16): the ledger moved.
+ * 🚧 or wrote a skipped clock line (live scenes §15 G16), or a
+ * `set-stat-config` node configured a stat: the ledger moved. 🚧 And
+ * (2026-10-18, the 100-turn walk B10) a ruleset handler's `apply` that
+ * wrote through the gate or filed a proposal (`core:task/ruleset-resolve@1`,
+ * its `facts.applied` / `facts.proposed`, a refusal filed for review), or
+ * a seat named (`core:outlet/set-seat-name@1`): a Planner-lane edit wrote
+ * the sheet through the handler alone, and the sheet stayed stale until a
+ * reload.
  */
 export function stateMoved(receipt: Receipt): boolean {
 	return receipt.nodes.some((node) => {
-		if (!String(node.definitionId ?? "").startsWith("core:task/set-state"))
+		const def = String(node.definitionId ?? "")
+		// 🚧 A stat configured (`set-stat-config@1`): a bar's ceiling moved.
+		if (def.startsWith("core:outlet/set-stat-config"))
+			return typeof (node.output as { main?: { configId?: unknown } } | null)?.main?.configId === "number"
+		// 🚧 The ruleset handler's writes (`apply`, `advance`).
+		if (def.startsWith("core:task/ruleset-resolve")) {
+			const out = node.output as
+				| { facts?: { applied?: unknown[]; proposed?: unknown[] }; rejected?: Array<{ proposalId?: unknown }> }
+				| null
+				| undefined
+			return Boolean(
+				out?.facts?.applied?.length ||
+					out?.facts?.proposed?.length ||
+					out?.rejected?.some((r) => typeof r?.proposalId === "number")
+			)
+		}
+		// 🚧 A seat named or renamed: the sheet's head reads its name.
+		if (def.startsWith("core:outlet/set-seat-name"))
+			return (node.output as { status?: unknown } | null)?.status === "committed"
+
+		if (!def.startsWith("core:task/set-state"))
 			return false
 		const out = node.output as
 			| { applied?: unknown[]; proposed?: unknown[]; skipped?: unknown[] }

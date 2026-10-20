@@ -3,8 +3,8 @@
 	 * The modular session layout (mockup: serene-pub-chat-layout.html, ruled
 	 * 2026-08-28) — its COMPOSITION ROOT.
 	 * The chat core sits in the middle; every zone around it comes from the
-	 * free-form zone template in the user's layout blob, resolved against the
-	 * MEASURED container width.
+	 * panels in the user's layout blob (PLAN-session-panels-2026-10-14),
+	 * resolved against the MEASURED container width.
 	 *
 	 * This file owns the stored layout's round trip and nothing else:
 	 *
@@ -13,8 +13,10 @@
 	 *   rail model) and the per-widget settings flow (./widgetSettingsFlow);
 	 * - it measures the root and owns the editor's open state, the working
 	 *   arrangement it emits, and the bridge to the header's Layout button;
-	 * - it PERSISTS: the editor and the live view's own pin buttons emit the
-	 *   slots they change, and this writes them to the manager (`persist`);
+	 * - it PERSISTS the editor's arrangement: the editor emits the panels it
+	 *   commits (`panels`, PLAN-session-panels-2026-10-14), and this writes
+	 *   them to the manager (`persist`). A panel's own controls in the live
+	 *   view (its tab, its pin) write through the manager themselves;
 	 * - it renders the live session (./SessionLayoutRender) once, always, and
 	 *   the editor (./SessionLayoutEditor) over it while it is open. The two
 	 *   never share state: what crosses between them goes through here.
@@ -23,7 +25,7 @@
 	 * props, through the renderer — never a context.
 	 */
 	import { getContext, onMount, untrack } from "svelte"
-	import type { SessionLayoutV1 } from "@serene-pub/sdk"
+	import type { SessionChannelV1, SessionLayoutV1 } from "@serene-pub/sdk"
 	import type { ConversationDossierV1 } from "$lib/shared/widgets/conversation"
 	import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
 	import type { ActionsV1 } from "$lib/shared/widgets/context"
@@ -40,7 +42,6 @@
 	// singleton is the bridge — see layoutEditor.svelte.ts.
 	import { layoutEditor } from "./layoutEditor.svelte"
 	import { mobileSidePanels } from "./mobileSidePanels.svelte"
-	import { GS_CELL_PX } from "./GridStackZone.svelte"
 	import {
 		createSessionLayoutModel,
 		type PanelsCtx
@@ -63,6 +64,13 @@
 		 * its `session_full.v1`, granted to that one widget.
 		 */
 		conversationDossier?: ConversationDossierV1 | null
+		/**
+		 * 🚧 Who is looking (their user id) and what of the session annex
+		 * they may see (R57) — what a Messages copy's `channelLaneFrom`
+		 * resolves the viewer's lane from (./channelClaims `laneClaims`).
+		 */
+		viewerId?: number | null
+		annex?: Record<string, Record<string, unknown>>
 		/**
 		 * This user's per-widget layout settings blob, round-tripped by the
 		 * page. Read-only here; the Settings tab writes through
@@ -97,6 +105,8 @@
 		sessionId,
 		session,
 		conversationDossier = null,
+		viewerId = null,
+		annex = {},
 		presets = [],
 		startedFromLayoutPresetId = null,
 		startedFromUpdated = false,
@@ -129,11 +139,12 @@
 	/* ── the editor's open state, and the arrangement it is working on ──── */
 	let editing = $state(false)
 	/**
-	 * The editor's working arrangement, as it emits it — what the live view
-	 * draws while the editor is open. Seeded with the stored arrangement as
-	 * the editor opens, so the first frame already draws it.
+	 * The editor's working arrangement, as it emits it — a `PanelLayoutV1`,
+	 * what the live view draws while the editor is open (anything else draws
+	 * the saved layout). Seeded with the saved panels as the editor opens, so
+	 * the first frame already draws them.
 	 */
-	let working = $state.raw<SessionLayoutV1["arrangedGrid"] | null>(null)
+	let working = $state.raw<unknown>(null)
 
 	const model = createSessionLayoutModel({
 		get manager() {
@@ -148,10 +159,20 @@
 		get conversationDossier() {
 			return conversationDossier
 		},
+		get viewerId() {
+			return viewerId
+		},
+		get annex() {
+			return annex
+		},
+		// 🚧 The viewer's own lane on each personal channel (the 100-turn walk, B2).
+		get channels() {
+			const list = (session as { channels?: unknown } | null | undefined)?.channels
+			return Array.isArray(list) ? (list as SessionChannelV1[]) : null
+		},
 		get panelsCtx() {
 			return panelsCtx
 		},
-		cellPx: GS_CELL_PX,
 		widgetLabel: (id) => flow.widgetLabel(id)
 	})
 	const flow = createWidgetSettingsFlow({
@@ -172,32 +193,20 @@
 		}
 	})
 
-	/* ── persistence: the one writer of the stored layout ─────────────────
-	 * The editor and the live view's pin buttons EMIT the slots a change
-	 * rewrites; this writes them through the manager's existing round trip, in
-	 * the order given (zones, grid, arrangement). A slot present with no value
-	 * is written as unset — what an empty arrangement, or a grid restored by
-	 * Cancel to "never saved", means. */
+	/* ── persistence: the one writer of the editor's arrangement ──────────
+	 * The editor EMITS the layout it commits; this writes its `panels`
+	 * through the manager's existing round trip. ⏳ The old slots
+	 * (`zoneLayout`, `widgetGrid`, `arrangedGrid`) are never written: a patch
+	 * that carries only them is the old editor's, and changes nothing. */
 	function persist(patch: SessionLayoutV1) {
-		if ("zoneLayout" in patch) manager.setZoneLayout(patch.zoneLayout)
-		if ("widgetGrid" in patch) manager.setWidgetGrid(patch.widgetGrid)
-		if ("arrangedGrid" in patch) manager.setArrangedGrid(patch.arrangedGrid)
-	}
-	/** An un-arranged zone pinned or unpinned from the live rail or pop-over. */
-	function setZonePinned(zoneId: string, pinned: boolean) {
-		const layout = model.layout
-		const def = layout.zones[zoneId]
-		if (!def) return
-		persist({
-			zoneLayout: { ...layout, zones: { ...layout.zones, [zoneId]: { ...def, pinned } } }
-		})
+		if (patch.panels) manager.setPanels(patch.panels)
 	}
 
 	let render: ReturnType<typeof SessionLayoutRender> | undefined = $state()
 	let editor: ReturnType<typeof SessionLayoutEditor> | undefined = $state()
 	/** Open the editor on the layout that is actually saved. */
 	function openEditor() {
-		working = model.storedArranged
+		working = model.savedPanels
 		editing = true
 	}
 	function closeEditor() {
@@ -334,7 +343,7 @@
 			{genreName}
 			{isGuest}
 			{isAdmin}
-			onWorking={(next) => (working = next)}
+			onWorking={(next: unknown) => (working = next)}
 			onLayout={persist}
 			onPutAway={(zoneId) => render?.putAway(zoneId)}
 			onClose={closeEditor}
@@ -350,7 +359,6 @@
 		{actions}
 		{actionDispatch}
 		{onFrameAction}
-		onSetPinned={setZonePinned}
 	/>
 </div>
 

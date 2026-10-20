@@ -31,6 +31,7 @@
  */
 import { and, asc, desc, eq, gt, inArray, ne, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { notAFailedReplySql } from "$lib/server/messages/failedReply"
 import {
 	DEFAULT_CHANNEL,
 	channelWhere,
@@ -120,6 +121,8 @@ export async function unplayedTalkRows(
 				eq(schema.sessionMessages.sessionId, sessionId),
 				eq(schema.sessionMessages.isHidden, false),
 				eq(schema.sessionMessages.isGenerating, false),
+				// A failed reply is nobody's talk (`messages/failedReply.ts`).
+				notAFailedReplySql,
 				channelWhere(schema.sessionMessages.channel, channel),
 				...(bound !== null ? [gt(schema.sessionMessages.id, bound)] : [])
 			)

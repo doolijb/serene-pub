@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { realDateTime } from "$lib/client/utils/realTime.svelte"
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	/**
 	 * Pub › Network: plan 26, how this instance becomes reachable from
@@ -224,7 +225,7 @@
 	 */
 	const expiresAtLabel = $derived.by(() => {
 		if (!tunnel?.expiresAt || !isRunning) return null
-		return new Date(tunnel.expiresAt).toLocaleString()
+		return realDateTime(tunnel.expiresAt)
 	})
 
 	// The one state plan 26 §5 makes unreachable, surfaced rather than hidden:

@@ -255,3 +255,27 @@ describe("authMiddleware — per-user concurrent connection cap (Round-12 audit 
 		expect(socket.joined).toEqual(["user_1"])
 	})
 })
+
+describe("authMiddleware — a token this server cannot read (PLAN-dc-after-walk2 Q3-7, N17)", () => {
+	test("is a signed-out visitor, said in one line: never a PasetoDecryptionFailed stack trace", async () => {
+		const { db } = await import("$lib/server/db")
+		const schema = await import("$lib/server/db/schema")
+		// A bare test database has no settings row: accounts on, for this test alone.
+		const before = await db.query.systemSettings.findFirst()
+		if (before) await db.update(schema.systemSettings).set({ isAccountsEnabled: true })
+		else await db.insert(schema.systemSettings).values({ isAccountsEnabled: true } as any)
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {})
+		try {
+			const socket = makeFakeSocket({ address: "203.0.113.77", origin: "http://myserver.local", host: "myserver.local" })
+			socket.handshake.auth = { token: "v2.local.not-a-token-this-server-minted" }
+			const err = await callMiddleware(socket)
+			expect(err?.message).toBe("Authentication required")
+			expect(socket.isDisconnected).toBe(true)
+			expect(errors).not.toHaveBeenCalled()
+		} finally {
+			errors.mockRestore()
+			if (before) await db.update(schema.systemSettings).set({ isAccountsEnabled: false })
+			else await db.delete(schema.systemSettings)
+		}
+	})
+})

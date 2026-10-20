@@ -17,7 +17,6 @@ import {
 	uniqueIndex,
 	index,
 	json,
-	date,
 	type AnyPgColumn,
 	numeric,
 	timestamp,
@@ -73,11 +72,18 @@ export const users = pgTable(
 		 * hands over the instance.
 		 */
 		lastLoginAt: timestamp("last_login_at"),
+		/**
+		 * The IANA time zone (e.g. "America/Los_Angeles") real-world times are
+		 * shown in for this account. NULL until the browser reports its own zone
+		 * on first load; the account settings can change it. Story time never
+		 * reads it — that is the session or lorebook timeline's concern.
+		 */
+		timeZone: text("time_zone"),
 		isDeleted: boolean("is_deleted").notNull().default(false),
-		createdAt: date("created_at")
+		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`),
-		updatedAt: date("updated_at")
+		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`)
 			.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`)
@@ -111,6 +117,8 @@ export const userSettings = pgTable(
 		theme: text("theme").notNull().default("lamplight"),
 		darkMode: boolean("dark_mode").notNull().default(true),
 		showHomePageBanner: boolean("show_home_page_banner").default(true),
+		/** 🚧 Starred starts (ruled 2026-10-19): a favourite genre, and a favourite preset per genre — pre-selected on the start form. */
+		startFavourites: json("start_favourites").$type<{ genre?: string; presetByGenre?: Record<string, number> } | null>(),
 		// ⚠ No `enable_easy_persona_creation`: a persona IS a character, so the
 		// one switch below governs both surfaces.
 		enableEasyCharacterCreation: boolean("enable_easy_character_creation")
@@ -180,10 +188,17 @@ export const userSettings = pgTable(
 		 * alone.
 		 */
 		loreWriteMode: text("lore_write_mode"),
-		createdAt: date("created_at")
+		/**
+		 * 🚧 This person's default **On revision** for sessions they start
+		 * (PLAN-rulesets §28): `overwrite` or `branch`. Nullable as
+		 * `lore_write_mode` is: NULL follows
+		 * `system_settings.on_revision_default`.
+		 */
+		onRevisionDefault: text("on_revision_default"),
+		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`),
-		updatedAt: date("updated_at")
+		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`)
 			.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`)
@@ -193,6 +208,10 @@ export const userSettings = pgTable(
 		check(
 			"user_settings_lore_write_mode_check",
 			sql`${table.loreWriteMode} IS NULL OR ${table.loreWriteMode} IN ('full', 'review', 'off')`
+		),
+		check(
+			"user_settings_on_revision_default_check",
+			sql`${table.onRevisionDefault} IS NULL OR ${table.onRevisionDefault} IN ('overwrite', 'branch')`
 		)
 	]
 )
@@ -1263,16 +1282,80 @@ export const lorebooks = pgTable(
 		/** Optional time of day on the clock, 24-hour. */
 		storyClockHour: integer("story_clock_hour"),
 		storyClockMinute: integer("story_clock_minute"),
-		createdAt: date("created_at")
+		/**
+		 * 🚧 The book's **primary ruleset** (PLAN-rulesets §4, §31): the rules
+		 * its world is told by. Never NULL — "no ruleset" and Story are one
+		 * state, so every book that existed before rulesets reads Story by
+		 * this column's default, and that default IS the upgrade (0104; no
+		 * approval: Story is the book as it already was). A session attached
+		 * at creation adopts it.
+		 */
+		primaryRuleset: text("primary_ruleset")
+			.notNull()
+			.default("core:ruleset/freeform@1"),
+		/**
+		 * 🚧 The ruleset version this book adopted (§23): a pin, compared with
+		 * the registry's to say "update available" — never moved on its own.
+		 * NULL = no pin yet (follows the installed version).
+		 */
+		rulesetVersion: text("ruleset_version"),
+		/**
+		 * 🚧 The book's **compendium mode** (§21): `derived` materialises the
+		 * ruleset's entryable content as entries (each stamped
+		 * `lorebook_entries.derived_from`); `referenced` (the default, and
+		 * always a session's own notes') keeps only the book's additions and
+		 * lists the compendium beside them.
+		 */
+		compendiumMode: text("compendium_mode").notNull().default("referenced"),
+		/**
+		 * 🚧 Set only on a **session's own notes** (PLAN-rulesets §26, ruled
+		 * 2026-10-16; working word *phantom*, never said in the UI): the book
+		 * a session writes world structure to when it has no lorebook, or may
+		 * not write the one it has. Managed by the session alone
+		 * (`$lib/server/lorebooks/phantom.ts`): created on the first write,
+		 * hidden from every listing and picker (`session_id IS NULL` there),
+		 * readable and writable by the session's members and nobody else, and
+		 * deleted with the session by this cascade. "Create lorebook from
+		 * session" clears it, which is the whole of making it a real book.
+		 */
+		sessionId: integer("session_id").references(
+			(): AnyPgColumn => sessions.id,
+			{ onDelete: "cascade" }
+		),
+		/**
+		 * 🚧 The real book a session's own notes overlay (§26): set while the
+		 * session reads an attached lorebook it may not write (Review, Off, a
+		 * book it does not own), so these notes are the session's DIFF on it
+		 * and a reading takes the union. NULL on every real book, and on
+		 * notes that are the session's whole world. Cascade: the overlay
+		 * means nothing without its book.
+		 */
+		overlayOf: integer("overlay_of").references(
+			(): AnyPgColumn => lorebooks.id,
+			{ onDelete: "cascade" }
+		),
+		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`),
-		updatedAt: date("updated_at")
+		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`)
 			.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`)
 	},
 	(table) => [
 		index("lorebooks_user_id_idx").on(table.userId),
+		// A session's own notes, found by their session — and the session
+		// delete's cascade. Partial: every real book is NULL here.
+		uniqueIndex("lorebooks_session_id_idx")
+			.on(table.sessionId)
+			.where(sql`${table.sessionId} IS NOT NULL`),
+		index("lorebooks_overlay_of_idx")
+			.on(table.overlayOf)
+			.where(sql`${table.overlayOf} IS NOT NULL`),
+		check(
+			"lorebooks_compendium_mode_check",
+			sql`${table.compendiumMode} IN ('derived', 'referenced')`
+		),
 		// Unique per-owner, not globally — two different users legitimately
 		// importing the same shared lorebook file must each be able to own a
 		// row stamped with that file's uuid.
@@ -2052,7 +2135,7 @@ export const characters = pgTable(
 		// `assets` (a JSON array of card asset descriptors) was dropped by 28:
 		// nothing ever wrote it — buildCharacterCardV3 emits no `assets` field
 		// and the card parser never populated it — and nothing ever read it.
-		createdAt: date("created_at")
+		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`),
 		updatedAt: timestamp("updated_at")
@@ -2209,7 +2292,7 @@ export const sessions = pgTable(
 		 * for every session created before genres existed. Creation validates
 		 * the cast and fields against the genre's declared shape.
 		 */
-		genreId: text("genre_id").notNull().default("core:genre/chat"),
+		genreId: text("genre_id").notNull().default("core:genre/story"),
 		/** The session preset this session was born from (23 §9); null = ad-hoc. */
 		presetId: integer("preset_id"),
 		/**
@@ -2238,10 +2321,10 @@ export const sessions = pgTable(
 		userId: integer("user_id")
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
-		createdAt: date("created_at")
+		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`),
-		updatedAt: date("updated_at")
+		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`)
 			.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`),
@@ -2284,6 +2367,20 @@ export const sessions = pgTable(
 			.notNull()
 			.default({})
 			.$type<Record<string, Record<string, string[]>>>(),
+		/**
+		 * 🚧 The session's **composer states** (owner ruling 2026-10-15):
+		 * which channel lanes' composers the genre closed, for whom, and what
+		 * each waits on — channel (canonical, or `*`) → who (`user:<id>`, or
+		 * `*`) → `{ open: false, reason? }` (SDK `ComposerStatesV1`). Absent
+		 * is open. Written by `core:outlet/set-composer-state@1` alone; core
+		 * opens and closes nothing on its own. Read by the send door
+		 * (`composerClosureFor`) and by the page, which hands the composer the
+		 * viewer's closures (`ConversationComposerV1.closed`).
+		 */
+		composerStates: jsonb("composer_states")
+			.notNull()
+			.default({})
+			.$type<Record<string, Record<string, { open: false; reason?: string }>>>(),
 		lorebookId: integer("lorebook_id").references(() => lorebooks.id, {
 			onDelete: "set null"
 		}),
@@ -2356,10 +2453,69 @@ export const sessions = pgTable(
 		backdropMediaId: integer("backdrop_media_id").references(
 			() => files.id,
 			{ onDelete: "set null" }
-		)
+		),
+		/**
+		 * 🚧 The session's **primary ruleset** (PLAN-rulesets §4, §31): adopted
+		 * from its lorebook when one is attached at creation, else the genre's
+		 * pick. Never NULL — Story is the default, and the state of every
+		 * session made before rulesets. Its own notes take the same.
+		 */
+		primaryRuleset: text("primary_ruleset")
+			.notNull()
+			.default("core:ruleset/freeform@1"),
+		/**
+		 * 🚧 The ruleset version this session started on (§23): sessions keep
+		 * the version they began with until upgraded. NULL = no pin yet.
+		 */
+		rulesetVersion: text("ruleset_version"),
+		/** 🚧 The compendium mode, adopted from the lorebook as the ruleset is (§21). */
+		compendiumMode: text("compendium_mode").notNull().default("referenced"),
+		/**
+		 * 🚧 How strictly the ruleset is played (UI: _How strict_): `prose`
+		 * (voice and sheet index only, no dice — the default, and all a genre
+		 * with no proposing call can run, §31), `mechanics` (the handler
+		 * resolves what the genre's call proposes), `scripts`.
+		 */
+		rigour: text("rigour").notNull().default("prose"),
+		/**
+		 * 🚧 **On revision** (PLAN-rulesets §28, ruled 2026-10-16): what a
+		 * delete or retake of the latest turn does to the timeline.
+		 * `overwrite` (default) — the tail goes and everything anchored to it
+		 * is retracted by the cascade; `branch` — a session branch is forked
+		 * before the revised turn and play goes on there, the old tail kept on
+		 * the old session. Genre-agnostic; new sessions start at the owner's
+		 * `user_settings.on_revision_default`, else the instance's.
+		 */
+		onRevision: text("on_revision").notNull().default("overwrite"),
+		/**
+		 * 🚧 **Ruleset settings** (UI: _Rules options_; PLAN-rulesets §8, W3-A
+		 * 2026-10-16): the values this session chose for each ruleset's
+		 * settings, by ruleset id then setting name —
+		 * `{ 'core:ruleset/vis-itineris@1': { degrees: 'classic' } }`. A setting
+		 * left unsaid plays its default; a preset is one way to fill these,
+		 * never stored by name. Keyed by ruleset so a session that changes
+		 * ruleset and back keeps what it chose. Written by
+		 * `sessions:setRulesetSettings`, read by `rulesets/conventions.ts`.
+		 */
+		rulesetSettings: jsonb("ruleset_settings")
+			.$type<Record<string, Record<string, string>>>()
+			.notNull()
+			.default({})
 	},
 	(table) => [
 		index("sessions_user_id_idx").on(table.userId),
+		check(
+			"sessions_compendium_mode_check",
+			sql`${table.compendiumMode} IN ('derived', 'referenced')`
+		),
+		check(
+			"sessions_rigour_check",
+			sql`${table.rigour} IN ('prose', 'mechanics', 'scripts')`
+		),
+		check(
+			"sessions_on_revision_check",
+			sql`${table.onRevision} IN ('overwrite', 'branch')`
+		),
 		// A branch delete sets this NULL on every session played on the line;
 		// partial because almost every session is on main.
 		index("sessions_lorebook_branch_id_idx")
@@ -2444,7 +2600,7 @@ export const sessionMessages = pgTable(
 			.notNull()
 			.default(false),
 		content: text("content").notNull(),
-		createdAt: date("created_at")
+		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`),
 		updatedAt: timestamp("updated_at")
@@ -2461,6 +2617,14 @@ export const sessionMessages = pgTable(
 			 * is what gives it its place in play (`inPlayOrder`).
 			 */
 			copyOf?: number
+			/**
+			 * 🚧 A **table row**'s anchor (PLAN-rulesets §30): the message it
+			 * belongs to — a Dungeon Crawler roll line's Narrator row. Stamped
+			 * by the host's create-message commit from `tableLine`; deleting
+			 * the anchor deletes the row (`messages/store.ts`), and a branch
+			 * remaps it to the anchor's copy.
+			 */
+			anchorMessageId?: number
 			swipes?: {
 				currentIdx: number | null
 				history: string[]
@@ -2497,6 +2661,13 @@ export const sessionMessages = pgTable(
 			 * answered in turn.
 			 */
 			answersForm?: { messageId: number; blockId: string }
+			/**
+			 * The participant reference the row was spoken as, where no
+			 * column names it: `envoy:<slug>` on an envoy's line, 🚧
+			 * `player-seat:<id>` on a person's line from a card-less player seat (stamped
+			 * at the send; the turn order reads it as that seat's turn).
+			 */
+			speaker?: string
 		}>(), // JSON for extra info
 		isGenerating: boolean("is_generating").notNull().default(false), // 1 if processing, 0 otherwise
 		/**
@@ -3203,7 +3374,9 @@ export const messagePartsRelations = relations(messageParts, ({ one }) => ({
 	})
 }))
 
-// Many-to-many: sessions <-> the characters their users voice.
+// Many-to-many: sessions <-> the characters their users voice. Each row is
+// one **player seat** (a person's place at the table, with or without a
+// card), beside the character seats of `session_characters`.
 //
 // THE PERSONA FACT THAT VARIES. `characters.is_persona` says a character is one
 // the user is willing to play; this table says who is actually speaking as whom
@@ -3211,6 +3384,10 @@ export const messagePartsRelations = relations(messageParts, ({ one }) => ({
 export const sessionPersonas = pgTable(
 	"session_personas",
 	{
+		// 🚧 The player seat's own id: what a `player_seat` stat owner and a
+		// `player-seat:<id>` reference name (`state/owners.ts`). A player
+		// seat need not voice a card.
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 		sessionId: integer("session_id")
 			.notNull()
 			.references(() => sessions.id, { onDelete: "cascade" }),
@@ -3226,12 +3403,67 @@ export const sessionPersonas = pgTable(
 		// Snapshot of the voiced character's name at removal time, for the case
 		// where that character is later deleted globally (personaId nulls out
 		// via onDelete: "set null") and no live name is available anymore.
-		removedName: text("removed_name")
+		removedName: text("removed_name"),
+		// 🚧 Seat name (of this player seat): the player's character name in THIS session, set
+		// without a card. When set it wins over the voiced card's name and
+		// the player label wherever a speaker is named. Null = none.
+		seatName: text("seat_name"),
+		// 🚧 Whose player seat this is: the player who sits in it. Needed for a seat
+		// with no card, whose user cannot be read off `persona_id`. Null on
+		// rows from before it (read the voiced card's owner then).
+		userId: integer("user_id").references(() => users.id, {
+			onDelete: "set null"
+		}),
+		/**
+		 * 🚧 The seat's **portrait** (2026-10-17): the one picture every
+		 * widget draws for this player seat — the sheet head, the faces
+		 * strip, Scene Portraits, the avatar on their replies — as a file
+		 * id, set by `set-owner-face`. Null: the voiced card's art, else
+		 * nothing. A card-less seat (the Dungeon Crawler's) has no other
+		 * picture to show, which is why this lives on the seat and not the
+		 * card. ⚠ Not the user's avatar, not a sprite.
+		 */
+		portraitMediaId: integer("portrait_media_id").references(() => files.id, {
+			onDelete: "set null"
+		})
 	},
 	(table) => [
 		uniqueIndex("session_personas_pk").on(table.sessionId, table.personaId),
 		// canViewCharacter() looks up sessionPersonas by personaId alone.
 		index("session_personas_persona_id_idx").on(table.personaId)
+	]
+)
+
+/**
+ * 🚧 The session's **lane register** (owner ruling 2026-10-17, lanes by
+ * person on the server): one row per lane of a channel the genre declared
+ * `lanes: 'personal'` (`ChannelDecl.lanes`), naming whose it is. Core
+ * allocates a person's lane on their first `core:query/channel-lane@1` or
+ * send, under the same session-scoped advisory lock `nextLane` takes, and
+ * the host sends a personal lane's rows — history, pushes, the layout's
+ * claim — to its person and the session's owner alone. A shared channel's
+ * lanes are the genre's and have no row here. Replaces the Dungeon
+ * Crawler's annex map (`dungeon-crawler-lanes`) and its client-side hiding.
+ * `lane` is the number; the canonical channel string is
+ * `formatChannel({ slug, lane })` (lane 1 = the bare slug).
+ */
+export const channelLanes = pgTable(
+	"channel_lanes",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		sessionId: integer("session_id")
+			.notNull()
+			.references(() => sessions.id, { onDelete: "cascade" }),
+		slug: text("slug").notNull(),
+		lane: integer("lane").notNull(),
+		userId: integer("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+	},
+	(table) => [
+		uniqueIndex("channel_lanes_lane_uq").on(table.sessionId, table.slug, table.lane),
+		uniqueIndex("channel_lanes_person_uq").on(table.sessionId, table.slug, table.userId)
 	]
 )
 
@@ -3519,12 +3751,21 @@ export const systemSettings = pgTable("system_settings", {
 	/**
 	 * 🚧 The instance's **lore write mode** (plan A22, ruled 2026-09-30): what
 	 * every user who has not chosen one of their own follows
-	 * (`user_settings.lore_write_mode` NULL). **Review changes** by ruling —
-	 * what a session changes in a book on its own waits to be accepted.
+	 * (`user_settings.lore_write_mode` NULL). **Full** by ruling
+	 * (PLAN-rulesets §27, 2026-10-16: trust the narrator — the timeline
+	 * makes every change reversible). Migration 0104 moved only the column
+	 * default: an existing instance's row keeps the mode it holds.
 	 */
 	loreWriteModeDefault: text("lore_write_mode_default")
 		.notNull()
-		.default("review"),
+		.default("full"),
+	/**
+	 * 🚧 The instance's default **On revision** (PLAN-rulesets §28) for
+	 * everyone whose `user_settings.on_revision_default` is NULL.
+	 */
+	onRevisionDefault: text("on_revision_default")
+		.notNull()
+		.default("overwrite"),
 	/**
 	 * Private **messages between people** (PLAN-private-messages, ruled
 	 * 2026-10-12 Q7: on by default). Only meaningful once accounts are on; off
@@ -3536,6 +3777,10 @@ export const systemSettings = pgTable("system_settings", {
 	check(
 		"system_settings_lore_write_mode_default_check",
 		sql`${t.loreWriteModeDefault} IN ('full', 'review', 'off')`
+	),
+	check(
+		"system_settings_on_revision_default_check",
+		sql`${t.onRevisionDefault} IN ('overwrite', 'branch')`
 	)
 ])
 
@@ -3851,10 +4096,10 @@ export const scenes = pgTable(
 			.$type<SceneSummaryStatus>(),
 		/** The summarize-scene spec that last processed this scene (receipt). */
 		processedBySpecId: text("processed_by_spec_id"),
-		createdAt: date("created_at")
+		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`),
-		updatedAt: date("updated_at")
+		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`)
 			.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`)
@@ -5054,7 +5299,7 @@ export const sessionFunctions = pgTable(
 		/** The full genre id the choice was made under. */
 		genreId: text("genre_id").notNull(),
 		/**
-		 * The action's identity — `<spec slug>#<key>`, `core:spec/chat-narrate#narrate`
+		 * The action's identity — `<spec slug>#<key>`, `core:spec/story-narrate#narrate`
 		 * (U5c review, W1): enablement is per action, so two actions sharing a
 		 * key switch independently. Identity only (plans/31 V2): the bare-key
 		 * reading of a row is gone, and the column keeps its name because a
@@ -5098,7 +5343,7 @@ export const seenActions = pgTable(
 		userId: integer("user_id")
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
-		/** `<spec slug>#<action key>` — `core:spec/chat-narrate#narrate`. */
+		/** `<spec slug>#<action key>` — `core:spec/story-narrate#narrate`. */
 		actionKey: text("action_key").notNull(),
 		seenAt: timestamp("seen_at").notNull().defaultNow()
 	},
@@ -6765,9 +7010,10 @@ export const sessionPanelLayouts = pgTable(
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
 		/**
-		 * The session layout, whole: its arrangement (`zoneLayout?`,
-		 * `widgetGrid?`, `arrangedGrid?` — the SDK's `SessionLayoutV1` slots)
-		 * plus this session's `active` and `tierSizeOverrides`. Never
+		 * The session layout, whole: its arrangement (`panels`, the SDK's
+		 * `PanelLayoutV1`; ⏳ the old `zoneLayout?` / `widgetGrid?` /
+		 * `arrangedGrid?` slots ride along inert until the 0.7 squash) plus
+		 * this session's `active` and `tierSizeOverrides`. Never
 		 * `widgetSettings` or `widgetStyles`: those live in `widget_settings`
 		 * rows and `layout_settings`. Stored verbatim.
 		 */
@@ -6791,7 +7037,7 @@ export const sessionPanelLayouts = pgTable(
 		 * When `layout` was last copied in from a source (see
 		 * `startedFromLayoutPresetId`). Every write under the copy model stamps
 		 * it; NULL is only a row written before the copy model, which the
-		 * ⏳ boot step (`db/sessionLayoutBackfill.ts`) makes whole.
+		 * ⏳ boot pass (`db/sessionLayoutPanels.ts`) makes whole.
 		 */
 		layoutCopiedAt: timestamp("layout_copied_at"),
 		/**
@@ -6868,8 +7114,9 @@ export const sessionLayoutPresets = pgTable(
 		/** `shared` · `private`. Core and plugin rows are always shared. */
 		visibility: text("visibility").notNull().default("private"),
 		/**
-		 * The session layout, stored verbatim: the arrangement (`zoneLayout?`,
-		 * `widgetGrid?`, `arrangedGrid?`) plus the `widgetSettings` and
+		 * The session layout, stored verbatim: the arrangement (`panels`; ⏳ the
+		 * old `zoneLayout?` / `widgetGrid?` / `arrangedGrid?` ride along inert
+		 * until the 0.7 squash) plus the `widgetSettings` and
 		 * `widgetStyles` slots, keyed by widget instance id — one blob, so
 		 * share, clone and re-capture move all of it together. `{}` means "no
 		 * overrides". The v2 `document`, `widget_settings` and `widget_styles`
@@ -6946,7 +7193,7 @@ export const userLayoutDefaults = pgTable(
 		userId: integer("user_id")
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
-		/** The genre this default is for (e.g. `core:genre/adventure`). */
+		/** The genre this default is for (e.g. `core:genre/story`). */
 		genreId: text("genre_id").notNull(),
 		layoutPresetId: integer("layout_preset_id").references(
 			() => sessionLayoutPresets.id,
@@ -7132,6 +7379,12 @@ export const sessionPresets = pgTable(
 		includedActions: json("included_actions").$type<string[] | null>(),
 		/** Optional pre-fill for creation (fields, lorebook policy…). */
 		defaults: json("defaults").$type<Record<string, unknown> | null>(),
+		/** 🚧 Values the preset pins — the preset layer of the settings cascade (`PresetDecl.settings`, 2026-10-19). */
+		settings: json("settings").$type<Record<string, unknown> | null>(),
+		/** 🚧 Model calls one turn costs, as the card prints it (`PresetDecl.callsPerTurn`). */
+		callsPerTurn: integer("calls_per_turn"),
+		/** 🚧 The cast floor this preset lowers the shape's to (`PresetDecl.cast`). */
+		castFloor: json("cast_floor").$type<{ characters?: number; personas?: number } | null>(),
 		/** May users pick it? Disabled presets stay for admins and history. */
 		enabled: boolean("enabled").notNull().default(true),
 		isDefault: boolean("is_default").notNull().default(false),
@@ -7823,6 +8076,25 @@ export const lorebookEntries = pgTable(
 			.notNull()
 			.default({})
 			.$type<Record<string, any>>(),
+		/**
+		 * 🚧 Where a **derived** entry came from (PLAN-rulesets §21): the
+		 * compendium, the piece and the version it was materialised at, so a
+		 * compendium bump can offer a refresh diff. NULL on every entry a
+		 * person or a session wrote.
+		 */
+		derivedFrom: jsonb("derived_from").$type<{
+			compendium: string
+			piece: string
+			version: string
+		} | null>(),
+		/**
+		 * 🚧 The message that wrote this entry, on a **session's own notes**
+		 * (§26, §29): its anchor on the timeline, so a revision retracts it
+		 * and a branch knows whether it came across. A plain int with no
+		 * key, as the durable state rows stamp theirs: the entry outlives the
+		 * message when the notes become a real lorebook.
+		 */
+		sourceMessageId: integer("source_message_id"),
 		/** Foreign per-entry payload an import could not map. Not `fields`:
 		 *  `fields` is declared and validated, this is whatever came in. */
 		extraJson: json("extra_json")
@@ -8777,6 +9049,7 @@ export const bindingSuggestionsRelations = relations(
 // | `session_cast` | `characters.id` — this run's cast member | the session |
 // | `location` 🚧 | `lorebook_entries.id` — a place in this world (phase 4) | null |
 // | `session_location` 🚧 | `lorebook_entries.id` — this run's place | the session |
+// | `player_seat` 🚧 | `session_personas.id` — a player seat, card or not | the session |
 //
 // No foreign key on `owner_id`: it points at six different tables depending on
 // the row beside it, which is the one thing a foreign key cannot express.
@@ -8911,7 +9184,7 @@ export const attributeConfigs = pgTable(
 			.where(sql`${t.sceneId} IS NOT NULL`),
 		check(
 			"attribute_configs_owner_kind_check",
-			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location')`
+			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location', 'player_seat')`
 		)
 	]
 )
@@ -9019,7 +9292,7 @@ export const attributeValues = pgTable(
 			.where(sql`${t.sceneId} IS NOT NULL`),
 		check(
 			"attribute_values_owner_kind_check",
-			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location')`
+			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location', 'player_seat')`
 		)
 	]
 )
@@ -9219,7 +9492,7 @@ export const attributeDeclarations = pgTable(
 export const attributeSheets = pgTable(
 	"attribute_sheets",
 	{
-		/** The sheet id — `core:sheet/adventure@1`. */
+		/** The sheet id — `core:sheet/story@1`. */
 		id: text("id").primaryKey(),
 		userId: integer("user_id").references(() => users.id, {
 			onDelete: "set null"
@@ -9305,7 +9578,7 @@ export const ownerSheets = pgTable(
 		),
 		check(
 			"owner_sheets_owner_kind_check",
-			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location')`
+			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location', 'player_seat')`
 		)
 	]
 )
@@ -9689,7 +9962,7 @@ export const conversationMessages = pgTable(
 /**
  * An **attachment** carried with a conversation message: a session, a
  * character, a lorebook or a file. `subject_id` has no FK by the media
- * provenance convention — a deleted subject renders "No longer available" and
+ * provenance convention — a deleted subject renders as unavailable (its card says so) and
  * the message stands. Visibility is gated per reader at read time
  * (`server/conversations/gate.ts`), and for every member at send time.
  */

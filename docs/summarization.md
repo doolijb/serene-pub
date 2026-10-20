@@ -41,7 +41,7 @@ A session on a [branch](./lorebook-time.md#branches) saves to that branch, and t
 
 **Process** on a scene, in the lorebook's History or Scenes, has the model write the scene's summary from its messages (their images and files read as names, as above) and lists who was there: **Participants** (who spoke) and **Mentioned** (who was talked about). Once a scene has a summary the action reads **Reprocess**, which writes it again from scratch; useful when the messages changed or the first summary came out wrong. Review the result in the **Scene summary** window and press **Apply**.
 
-The model is told the scene's name, the day it began and who was present, and, in a genre that keeps a place (Adventure and the Lair keep the party's **Location**), where the scene began, even after the scene has been renamed.
+The model is told the scene's name, the day it began and who was present, and, in a genre that keeps a place (Story and the Lair keep the party's **Location**), where the scene began, even after the scene has been renamed.
 
 A scene keeps its summary and cast even if its messages, or the whole session, are later deleted.
 

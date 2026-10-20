@@ -68,9 +68,9 @@ describe("openInConnections", () => {
 describe("openInPipelines", () => {
 	it("opens Admin › Pipelines at one pipeline", () => {
 		const c = ctx()
-		openInPipelines(c, { slug: "core:spec/chat-respond" })
+		openInPipelines(c, { slug: "core:spec/story-respond" })
 		expect(go).toHaveBeenCalledWith(
-			"/admin/pipelines/core%3Aspec%2Fchat-respond"
+			"/admin/pipelines/core%3Aspec%2Fstory-respond"
 		)
 		expect(c.openPanel).toHaveBeenCalledWith({ key: "admin", toggle: false })
 	})

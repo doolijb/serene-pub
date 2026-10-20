@@ -32,7 +32,7 @@ import {
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
-import { ADVENTURE_GENRE_ID, CHAT_GENRE_ID } from "@serene-pub/core-catalog"
+import { CHAT_GENRE_ID, STORY_GENRE_ID } from "@serene-pub/core-catalog"
 import { genreEnabledWhen } from "@serene-pub/sdk"
 import {
 	itemValuesFor,
@@ -79,13 +79,14 @@ async function session(genreId: string) {
 }
 
 describe("state is the resolver's answer", () => {
-	it("an Adventure session publishes state.world.location once set, under the bare slot key a predicate names", async () => {
-		const w = await session(ADVENTURE_GENRE_ID)
+	it("a Story session publishes state.world.location once set, under the bare slot key a predicate names", async () => {
+		const w = await session(STORY_GENRE_ID)
 		const before = await publishedValues(db, w.session.id)
 		expect(before.state.world.location).toBeUndefined()
-		// No shipped genre declares a default (review W8): Adventure's Look
-		// opens a fresh session and must not begin grey.
-		expect(genreEnabledWhen(ADVENTURE_GENRE_ID, "look")).toEqual([])
+		// No shipped genre declares a default (review W8): Story's Look
+		// (Adventure's until 2026-10-19) opens a fresh session and must not
+		// begin grey.
+		expect(genreEnabledWhen(STORY_GENRE_ID, "look")).toEqual([])
 
 		await setValue(
 			db,
@@ -105,18 +106,14 @@ describe("state is the resolver's answer", () => {
 	}, 60_000)
 
 	it("a Chat session, whose genre declares no slots, publishes an empty world", async () => {
+		// Chat is the assistant since 2026-10-19: no world, no slots.
 		const w = await session(CHAT_GENRE_ID)
 		const doc = await publishedValues(db, w.session.id)
 		expect(doc.state.world).toEqual({})
 		expect(doc.state.slots).toEqual([])
-		// Chat's own fields, at their declared defaults (B16x) — no world.
-		expect(doc.session.fields).toEqual({
-			// The note goes at the end unless moved (owner ruling 2026-10-03).
-			authorsNote: { text: "", depth: 0, interval: 1, role: "system" },
-			autoAdvance: "round",
-			characterDetail: "full",
-			turnMode: "rules"
-		})
+		// Chat's own fields, at their declared defaults (B16x) — no world:
+		// no tools until a preset or the session turns them on.
+		expect(doc.session.fields).toEqual({ tools: [] })
 		expect(doc.session.generating).toBe(false)
 		expect(doc.item).toBeUndefined()
 	}, 60_000)
@@ -124,7 +121,7 @@ describe("state is the resolver's answer", () => {
 
 describe("session.generating", () => {
 	it("is true for a generating row, true for a registered run with no row, false once both are gone", async () => {
-		const w = await session(CHAT_GENRE_ID)
+		const w = await session(STORY_GENRE_ID)
 		expect(await sessionGenerating(db, w.session.id)).toBe(false)
 
 		const row = await w.message({ isGenerating: true })
@@ -145,7 +142,7 @@ describe("session.generating", () => {
 		try {
 			expect(await sessionGenerating(db, w.session.id)).toBe(true)
 			// Another session's run is not this one's.
-			const other = await session(CHAT_GENRE_ID)
+			const other = await session(STORY_GENRE_ID)
 			expect(await sessionGenerating(db, other.session.id)).toBe(false)
 		} finally {
 			runRegistry.finish(handle.runId)
@@ -156,7 +153,7 @@ describe("session.generating", () => {
 
 describe("session.fields", () => {
 	it("is the stored value of a declared key, else its default, and nothing else", async () => {
-		const w = await session(ADVENTURE_GENRE_ID)
+		const w = await session(STORY_GENRE_ID)
 		await db
 			.update(schema.sessions)
 			.set({ genreFields: { tone: "grim", smuggled: "no" } })
@@ -167,15 +164,18 @@ describe("session.fields", () => {
 		expect(doc.session.fields).toEqual({
 			tone: "grim",
 			difficulty: "normal",
-			trustNarrator: false,
-			characterDetail: "full"
+			characterDetail: "full",
+			// The note goes at the end unless moved (owner ruling 2026-10-03).
+			authorsNote: { text: "", depth: 0, interval: 1, role: "system" },
+			autoAdvance: "round",
+			turnMode: "rules"
 		})
 	}, 60_000)
 })
 
 describe("item", () => {
 	it("is built from the real row — newest on its channel, hidden, generating, role, the item rule", async () => {
-		const w = await session(CHAT_GENRE_ID)
+		const w = await session(STORY_GENRE_ID)
 		const older = await w.message()
 		const newer = await w.message({ isHidden: true })
 		const stranger = await createTestUser(db, `pv-stranger-${n}`)
@@ -222,7 +222,7 @@ describe("item", () => {
 		).toBe(true)
 
 		// Another session's row is not this session's item.
-		const other = await session(CHAT_GENRE_ID)
+		const other = await session(STORY_GENRE_ID)
 		const theirs = await other.message()
 		expect(
 			await itemValuesFor(db, w.session.id, theirs.id, {

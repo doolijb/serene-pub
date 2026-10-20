@@ -1,6 +1,7 @@
 <script lang="ts">
 	/**
-	 * A layout preset's PICTURE: three columns of blocks, drawn from the pure
+	 * A layout preset's PICTURE: three columns of stacked panel boxes (a small
+	 * number on a panel holding more than one tab), drawn from the pure
 	 * `previewOf` translation (./presetPreview — a blob → geometry
 	 * translation, never a live mount). Deliberately inert — aria-hidden and
 	 * pointer-events:none — because it is a diagram of a layout, not a second
@@ -35,8 +36,11 @@
 			{#each z.cells as c (c.id)}
 				<span
 					class="pv-cell"
+					class:pv-rail={c.rail}
 					style={`grid-column:${c.x + 1}/span ${c.w};grid-row:${c.y + 1}/span ${c.h};`}
-				></span>
+				>
+					{#if c.tabs > 1}<span class="pv-tabs">{c.tabs}</span>{/if}
+				</span>
 			{/each}
 		</span>
 	{/each}
@@ -71,12 +75,25 @@
 		);
 	}
 	.pv-cell {
+		overflow: hidden;
 		border-radius: 0.12rem;
 		background: color-mix(
 			in oklab,
 			var(--color-surface-600) 55%,
 			transparent
 		);
+	}
+	/* A panel in the rail: there, but not taking the column. */
+	.pv-cell.pv-rail {
+		opacity: 0.45;
+	}
+	.pv-tabs {
+		display: block;
+		font-size: 0.45rem;
+		font-weight: 700;
+		line-height: 1;
+		padding: 1px 2px;
+		color: var(--color-surface-50);
 	}
 	.pv-middle .pv-cell {
 		background: color-mix(

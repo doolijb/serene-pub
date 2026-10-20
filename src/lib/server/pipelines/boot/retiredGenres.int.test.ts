@@ -117,7 +117,7 @@ describe("the boot · retired core genres", () => {
 			const genres = await genreIds(db)
 			expect(genres).not.toContain(WHODUNIT)
 			expect(genres).not.toContain(WRITING_ROOM)
-			for (const kept of ["core:genre/chat", "core:genre/adventure", "core:genre/guide", "core:genre/lair"])
+			for (const kept of ["core:genre/chat", "core:genre/story", "core:genre/guide", "core:genre/lair"])
 				expect(genres).toContain(kept)
 			// The cull is by retired stem only: every spec this build ships
 			// survives it, the genre-first ids of 2026-10-05 included
@@ -187,10 +187,10 @@ describe("the retired lists · never a live core spec", () => {
 		)
 		const shipped = CORE_SPECS.map((e) => e.build().id)
 		for (const id of [
-			"core:spec/chat-create",
-			"core:spec/chat-respond",
+			"core:spec/story-create",
+			"core:spec/story-respond",
 			"core:spec/guide-create",
-			"core:spec/chat-answer-form",
+			"core:spec/story-answer-form",
 			"core:spec/lair-answer-form"
 		])
 			expect(shipped).toContain(id)

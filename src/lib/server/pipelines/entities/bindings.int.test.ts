@@ -100,10 +100,10 @@ let userId: number
 let characterId: number
 
 // The standard genre's own id (24 §3) — the id sessions carry.
-const STANDARD = "core:genre/chat"
-const CORE_NARRATE = "core:spec/chat-narrate"
+const STANDARD = "core:genre/story"
+const CORE_NARRATE = "core:spec/story-narrate"
 const STAGE_NARRATE = "chariot.stage:spec/dramatic-narrate"
-const CORE_RESPOND = "core:spec/chat-respond"
+const CORE_RESPOND = "core:spec/story-respond"
 /** A second member of the primary-turn bucket, seeded below: the same lock, and a message write. */
 const STAGE_RESPOND = "chariot.stage:spec/dramatic-respond"
 
@@ -357,7 +357,7 @@ describe("bindings (19 §3; plans/31 V2)", () => {
 
 describe("the session-scope rebind (PLAN-turn-order §4.7, R28, R29)", () => {
 	// Chat's own turn-order spec (R27): the session under test is a chat session.
-	const TURN_ORDER = "core:spec/chat-turn-order"
+	const TURN_ORDER = "core:spec/story-turn-order"
 	// Chat's strategy sits behind its model path (M4): the key comes from the
 	// table in the app, spelled here.
 	const STRATEGY = "decide.rules.strategy"
@@ -460,11 +460,12 @@ describe("the session-scope rebind (PLAN-turn-order §4.7, R28, R29)", () => {
 		const refused = await setSessionNodeRebind(db, {
 			sessionId,
 			userId,
-			spec: "core:spec/adventure-turn-order",
+			// The Lair's (Adventure's until 2026-10-19): a Story session never runs it.
+			spec: "core:spec/lair-turn-order",
 			nodeKey: STRATEGY,
 			definitionId: "core:task/turn-narrator@1"
 		})
-		expect(refused.error).toContain("serves 'core:genre/adventure'")
+		expect(refused.error).toContain("serves 'core:genre/lair'")
 	})
 
 	it("lists the session's pipeline cards: the turn-order strategy, with its offered swaps (A8)", async () => {
@@ -558,13 +559,13 @@ describe("the session-scope rebind (PLAN-turn-order §4.7, R28, R29)", () => {
 			"$lib/server/pipelines/entities/bindings"
 		)
 		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
-		const { turnOrderSpec, chatGenre } = await import("@serene-pub/core-catalog")
+		const { turnOrderSpec, storyGenre } = await import("@serene-pub/core-catalog")
 		const C = await import("@serene-pub/contracts")
 		await saveDocument(
 			db,
 			turnOrderSpec({
 				id: "acme.rp:spec/chat-turn-order-alt",
-				genre: chatGenre,
+				genre: storyGenre,
 				events: ["core:event/message-completed@1"],
 				strategy: C.turnRoundRobin,
 				swaps: [C.turnRandom]
@@ -585,7 +586,7 @@ describe("the session-scope rebind (PLAN-turn-order §4.7, R28, R29)", () => {
 		const { bindSubject } = await import("$lib/server/pipelines/entities/bindings")
 		const bound = await bindSubject(db, {
 			scope: { kind: "session", id: sessionId },
-			genreId: "core:genre/chat",
+			genreId: "core:genre/story",
 			subject: "core:event/message-completed@1",
 			specSlug: "acme.rp:spec/chat-turn-order-alt",
 			userId

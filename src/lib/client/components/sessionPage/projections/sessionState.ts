@@ -24,6 +24,7 @@
  *    widget asked for fails as that request's own rejection (R77).
  */
 import type {
+	SessionStateOfferV1,
 	SessionStateOwnerV1,
 	SessionStateSlotV1,
 	SessionStateV1
@@ -39,6 +40,14 @@ export interface SessionStateSource {
 	state: Sockets.State.ResolvedState
 	slots: Iterable<Sockets.State.SlotDescriptor>
 	owners: Iterable<Sockets.State.StateOwnerRow>
+	/** 🚧 The held changes the store lists: an **offer** among them is drawn on both sheets (★4). */
+	proposals?: Iterable<Sockets.State.ProposalRow>
+	/** 🚧 Who is looking: an offer they made is theirs to withdraw. */
+	viewerUserId?: number | null
+	/** 🚧 The table keeps no numbers (Q2-3, ★3). */
+	wordsOnly?: boolean
+	/** 🚧 The people the story has met (Q3-5). */
+	metPeople?: readonly { entryId: number; name: string }[]
 }
 
 /** Before the store answers for THIS session: empty means "not yet", never "nothing". */
@@ -71,7 +80,11 @@ function slotOf(d: Sockets.State.SlotDescriptor): SessionStateSlotV1 {
 		appliesTo: [...d.appliesTo],
 		...(d.required ? { required: true } : {}),
 		...(d.retired ? { retired: true } : {}),
-		...(d.sheetId !== undefined ? { sheetId: d.sheetId } : {})
+		...(d.sheetId !== undefined ? { sheetId: d.sheetId } : {}),
+		// 🚧 How it reads at a table that keeps no numbers (Q2-3).
+		...(d.words?.length ? { words: d.words.map((b) => ({ upTo: b.upTo, label: b.label })) } : {}),
+		// 🚧 Drawn only while it holds something (Q3-8).
+		...(d.shownWhenSet ? { shownWhenSet: true as const } : {})
 	}
 }
 
@@ -88,7 +101,30 @@ function ownerOf(o: Sockets.State.StateOwnerRow): SessionStateOwnerV1 {
 				)
 			)
 		)
-	return { key: o.key, kind: o.kind, id: o.id, label: o.label, configs }
+	return {
+		key: o.key,
+		kind: o.kind,
+		id: o.id,
+		label: o.label,
+		// 🚧 Not the viewer's to write (another player's seat): the widget
+		// draws its values without edit controls.
+		...(o.editable === false ? { editable: false } : {}),
+		// 🚧 The viewer's own seat (`owners: 'mine'` on the stats widget).
+		// TODO: drop the cast once the SDK dist carries `SessionStateOwnerV1.mine`.
+		...(o.mine ? ({ mine: true } as unknown as Partial<SessionStateOwnerV1>) : {}),
+		// 🚧 Each repertoire its list stats hold — name and piece shape (§8).
+		// TODO: drop the cast once the SDK dist carries `SessionStateOwnerV1.repertoires`.
+		...(o.repertoires ? ({ repertoires: detached(o.repertoires) } as unknown as Partial<SessionStateOwnerV1>) : {}),
+		// 🚧 A player seat (`owners: 'seats'`, 2026-10-18).
+		...(o.seat ? { seat: true } : {}),
+		// 🚧 The owner's face (PLAN-sheet §12): the sheet head's and the
+		// faces strip's picture. Sent by the host since 2026-10-17, never
+		// projected until 2026-10-18 — the sheet drew initials only.
+		...(o.face !== undefined ? { face: o.face ? { ...o.face } : null } : {}),
+		// 🚧 What the ruleset works out from the sheet (2026-10-18): armour class.
+		...(o.derived?.length ? { derived: detached(o.derived) } : {}),
+		configs
+	}
 }
 
 /**
@@ -103,10 +139,14 @@ function castOf(
 	slots: readonly Sockets.State.SlotDescriptor[]
 ): Record<string, Record<string, unknown>> {
 	const valueKeys = new Set(slots.flatMap((s) => [s.qualifiedKey, s.key]))
+	// 🚧 A card-less player seat's owner key is its `byId` key (`player_seat:<id>`).
+	const byId = ((cast ?? {}) as Record<string, unknown>).byId as
+		| Record<string, Record<string, unknown>>
+		| undefined
 	const out: Record<string, Record<string, unknown>> = {}
 	for (const o of owners) {
-		if (o.kind !== "session_cast") continue
-		const entry = (cast ?? {})[o.key] ?? {}
+		if (o.kind !== "session_cast" && o.kind !== "player_seat") continue
+		const entry = (o.kind === "player_seat" ? byId?.[o.key] : (cast ?? {})[o.key]) ?? {}
 		out[o.key] = detached(
 			Object.fromEntries(
 				Object.entries(entry).filter(([k]) => valueKeys.has(k))
@@ -171,6 +211,61 @@ export function projectSessionState(
 				: {})
 		},
 		slots: slots.map(slotOf),
-		owners: owners.map(ownerOf)
+		owners: owners.map(ownerOf),
+		...(source.wordsOnly ? { wordsOnly: true as const } : {}),
+		...(source.metPeople?.length
+			? { metPeople: source.metPeople.map((p) => ({ entryId: p.entryId, name: p.name })) }
+			: {}),
+		...((): { offers?: SessionStateOfferV1[] } => {
+			const offers = offersOf(source.proposals, owners, source.viewerUserId ?? null)
+			return offers.length ? { offers } : {}
+		})()
 	}
+}
+
+/**
+ * 🚧 The pending **offers** (_Give to…_, owner ruling ★4): a held change whose
+ * payload is an offer (`state/give.ts`), named by the owners the store holds —
+ * the words the offer was made with when an owner is not among them.
+ */
+function offersOf(
+	proposals: Iterable<Sockets.State.ProposalRow> | undefined,
+	owners: readonly Sockets.State.StateOwnerRow[],
+	viewerUserId: number | null
+): SessionStateOfferV1[] {
+	const out: SessionStateOfferV1[] = []
+	const named = (o: { kind?: unknown; id?: unknown } | undefined, words: unknown) => {
+		const row = owners.find((r) => r.kind === o?.kind && r.id === o?.id)
+		if (!row || !o) return null
+		return {
+			kind: row.kind as SessionStateOfferV1["from"]["kind"],
+			id: row.id,
+			key: row.key,
+			label: row.label || (typeof words === "string" ? words : "")
+		}
+	}
+	for (const row of proposals ?? []) {
+		if (row.status !== "pending") continue
+		const payload = (row.payload ?? {}) as {
+			owner?: { kind?: unknown; id?: unknown }
+			slotId?: unknown
+			offer?: { from?: { kind?: unknown; id?: unknown }; count?: unknown; by?: unknown; fromLabel?: unknown; toLabel?: unknown; itemName?: unknown }
+		}
+		const offer = payload.offer
+		if (!offer || typeof payload.slotId !== "string") continue
+		const from = named(offer.from, offer.fromLabel)
+		const to = named(payload.owner, offer.toLabel)
+		if (!from || !to) continue
+		const count = typeof offer.count === "number" && offer.count >= 1 ? Math.trunc(offer.count) : 1
+		out.push({
+			proposalId: row.id,
+			slotId: payload.slotId,
+			from,
+			to,
+			item: typeof offer.itemName === "string" && offer.itemName ? offer.itemName : "something",
+			count,
+			...(viewerUserId != null && offer.by === viewerUserId ? { yours: true } : {})
+		})
+	}
+	return out
 }

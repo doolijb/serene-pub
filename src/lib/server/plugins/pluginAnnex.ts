@@ -14,6 +14,7 @@
  * Uninstall withdraws it.
  */
 
+import { resolveRenamedCoreId } from "./renamedCoreIds"
 import {
 	_withdrawAnnex,
 	annexField,
@@ -45,7 +46,9 @@ export function registerPluginAnnex(manifest: unknown, pluginId: string): string
 			continue
 		}
 		taken.add(decl.key)
-		fields.push(decl)
+		// Scoped to a core genre core has since renamed: the one it ships now
+		// (`renamedCoreIds.ts`).
+		fields.push(decl.genre ? { ...decl, genre: resolveRenamedCoreId(decl.genre) } : decl)
 	}
 	declareAnnex(pluginId, fields)
 	return refused

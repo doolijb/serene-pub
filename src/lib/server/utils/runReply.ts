@@ -46,6 +46,16 @@ import { persistGenerationErrorRow } from "./generationStatus"
 import { turnDirectionText } from "$lib/server/sessions/turnDirection"
 import { spineProviders } from "$lib/server/pipelines/runtime/specShape"
 import { announceStateChanges } from "$lib/server/state/announce"
+
+/** 🚧 The steps that write a sheet: their settling is announced mid-run (Q1-3). */
+const STATE_WRITERS = [
+	"core:task/ruleset-resolve",
+	"core:task/set-state",
+	"core:outlet/set-stat-config",
+	// 🚧 A place or a person the story writes (Q3-5): the session's state reads
+	// its places and the people it has met off its own notes.
+	"core:outlet/create-lore-entry"
+] as const
 import type { RunProgress } from "$lib/shared/sockets/progress"
 import {
 	livePresenceIds,
@@ -196,17 +206,17 @@ async function routeFor(
 	speakerRef?: ParticipantRef
 	narration: boolean
 }> {
-	const { CHAT_NARRATE_SPEC_ID, CHAT_SIDE_CHARACTER_SPEC_ID } = await import(
+	const { STORY_NARRATE_SPEC_ID, STORY_SIDE_CHARACTER_SPEC_ID } = await import(
 		"$lib/server/pipelines/specs/narrate"
 	)
-	const { CHAT_RESPOND_SPEC_ID } = await import(
+	const { STORY_RESPOND_SPEC_ID } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	if (turn.kind === "respond")
 		return {
 			subject: sessionEvents.messageRespond,
 			label: "respond",
-			floorSpecId: CHAT_RESPOND_SPEC_ID,
+			floorSpecId: STORY_RESPOND_SPEC_ID,
 			currentCharacterId: turn.speaker ? null : (turn.characterId ?? null),
 			speaker: null,
 			...(turn.speaker ? { speakerRef: turn.speaker } : {}),
@@ -214,18 +224,18 @@ async function routeFor(
 		}
 	if (turn.kind === "narrate")
 		return {
-			subject: `${CHAT_NARRATE_SPEC_ID}#narrate`,
+			subject: `${STORY_NARRATE_SPEC_ID}#narrate`,
 			label: "narrate",
-			floorSpecId: CHAT_NARRATE_SPEC_ID,
+			floorSpecId: STORY_NARRATE_SPEC_ID,
 			currentCharacterId: null,
 			speaker: null,
 			narration: true
 		}
 	if (turn.kind === "narrate-character")
 		return {
-			subject: `${CHAT_SIDE_CHARACTER_SPEC_ID}#narrate-character`,
+			subject: `${STORY_SIDE_CHARACTER_SPEC_ID}#narrate-character`,
 			label: "narrate-character",
-			floorSpecId: CHAT_SIDE_CHARACTER_SPEC_ID,
+			floorSpecId: STORY_SIDE_CHARACTER_SPEC_ID,
 			// The side character's id reaches the RUN but never the row: it
 			// is what makes character lore bound to them visible, while the
 			// row stays narration with a null `characterId`.
@@ -250,17 +260,17 @@ async function routeFor(
 	if (narration)
 		return speaker
 			? {
-					subject: `${CHAT_SIDE_CHARACTER_SPEC_ID}#narrate-character`,
+					subject: `${STORY_SIDE_CHARACTER_SPEC_ID}#narrate-character`,
 					label: "narrate-character",
-					floorSpecId: CHAT_SIDE_CHARACTER_SPEC_ID,
+					floorSpecId: STORY_SIDE_CHARACTER_SPEC_ID,
 					currentCharacterId: speaker.characterId,
 					speaker,
 					narration
 				}
 			: {
-					subject: `${CHAT_NARRATE_SPEC_ID}#narrate`,
+					subject: `${STORY_NARRATE_SPEC_ID}#narrate`,
 					label: "narrate",
-					floorSpecId: CHAT_NARRATE_SPEC_ID,
+					floorSpecId: STORY_NARRATE_SPEC_ID,
 					currentCharacterId: null,
 					speaker: null,
 					narration
@@ -268,7 +278,7 @@ async function routeFor(
 	return {
 		subject: turn.kind === "extend" ? `${CORE_ACTION_SPEC}#extend` : sessionEvents.messageRespond,
 		label: turn.kind === "extend" ? "extend" : "respond",
-		floorSpecId: CHAT_RESPOND_SPEC_ID,
+		floorSpecId: STORY_RESPOND_SPEC_ID,
 		currentCharacterId: existing?.characterId ?? null,
 		speaker: null,
 		...(envoySlug ? { speakerRef: `envoy:${envoySlug}` as EnvoyRef } : {}),
@@ -418,11 +428,27 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 	const { pushSessionActions } = await import(
 		"$lib/server/sessions/actionsPush"
 	)
-	void pushSessionActions(socket.io, sessionId)
+	void pushSessionActions(socket.io, sessionId, { starting: true })
 
 	let declaredSteps = doc ? spineProviders(doc).length : 0
 	let stepsSeen = 0
+	/** 🚧 One `state:changed` per burst of writing steps, a beat after the last (Q1-3). */
+	let announceTimer: ReturnType<typeof setTimeout> | null = null
+	const announceSoon = () => {
+		if (announceTimer) clearTimeout(announceTimer)
+		announceTimer = setTimeout(() => {
+			announceTimer = null
+			void import("$lib/server/sockets/utils/broadcastHelpers")
+				.then(({ broadcastToSessionUsers }) =>
+					broadcastToSessionUsers(socket.io, sessionId, "state:changed", { sessionId })
+				)
+				.catch((e) => console.warn("[runReply] the sheet's move could not be announced:", e))
+		}, 250)
+	}
 	const spine = new Set(doc ? spineProviders(doc).map((n) => n.key) : [])
+	// The channel the turn is on — a reply always has one (`main` unsaid) —
+	// so a channel-pinned conversation's progress card shows its own runs.
+	const runChannel = channel || "main"
 	// `...event` is spread LAST, so it must never carry `runId` (or `specId`):
 	// this run's key is decided here, and a frame keyed to another run — a
 	// child's step, say — would be a card the client never saw start.
@@ -432,6 +458,7 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 			sessionId,
 			specId,
 			label,
+			channel: runChannel,
 			...event
 		})
 	emitToUser("pipelines:runStarted", {
@@ -439,6 +466,7 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 		sessionId,
 		specId,
 		label,
+		channel: runChannel,
 		steps: declaredSteps
 	})
 
@@ -558,6 +586,13 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 			signal: handle.controller.signal,
 			cancelSignal: () => runRegistry.cancellation(handle),
 			onNode: (event) => {
+				// 🚧 The sheet moves when the turn writes it, not when the
+				// narration ends (PLAN-dc-after-walk2 Q1-3, the walk's N8:
+				// updates landed seconds after the reply): a writing step that
+				// settled tells every tab to re-read, once per burst. The run's
+				// end still announces as before (`announceStateChanges`).
+				if (event.phase === "end" && event.result === "ok" && STATE_WRITERS.some((d) => event.definitionId.startsWith(d)))
+					announceSoon()
 				if (event.kind !== "oracle" || event.phase !== "start") return
 				if (!spine.has(event.nodeKey)) return
 				stepsSeen += 1
@@ -584,6 +619,22 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 		stopped = runRegistry.cancellation(handle)
 
 		if (stopped) return { ok: false, stopped: true, receipt }
+		/**
+		 * 🚧 A verb's row the run never reached (2026-10-16 walk): a story
+		 * turn that halts at its Planner's call stops before its placeholder
+		 * claims the row, so the run-end hook has no live row to fail and
+		 * the swipe's row was left "working" with Stop. Failed here, with
+		 * the run's reason — fenced on the row still generating, so a row
+		 * the hook already settled is untouched.
+		 */
+		if (receipt.outcome !== "ok" && messageId !== undefined)
+			await persistGenerationErrorRow(
+				socket.io,
+				sessionId,
+				messageId,
+				new ComposedError(haltExplanation(receipt) ?? "The turn produced no reply."),
+				{ userId }
+			)
 		// ⚠ There is no `nobodyDue` any more (PLAN-turn-order §7). A reply
 		// run is started by FIRING a prepared entry, so "nobody is due" is
 		// answered before a run exists — by an empty order — rather than by
@@ -656,6 +707,13 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 		const outcome: NonNullable<RunProgress["outcome"]> = stopped
 			? "cancelled"
 			: (receipt?.outcome ?? "err")
+		// The step it halted at, by its heading — never the node key (2026-10-16).
+		const haltStep =
+			outcome === "halt" && receipt?.haltNodeKey
+				? await (
+						await import("$lib/server/pipelines/runtime/haltStep")
+					).haltStepOf(db, specId, receipt.haltNodeKey)
+				: null
 		// The terminal frame first (review W-A6), as the trigger road orders
 		// it: the card clears, then the list.
 		progress({
@@ -672,7 +730,8 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 				: {}),
 			...(outcome === "halt" && receipt?.haltNodeKey
 				? { haltNodeKey: receipt.haltNodeKey }
-				: {})
+				: {}),
+			...(haltStep ? { haltStep } : {})
 		})
 		// The action list follows the run's end (U5e, review C1): the reply
 		// is the newest row now and nothing is generating, so every member's

@@ -43,15 +43,15 @@ vi.mock("$lib/client/components/pipelines/PipelineConfigOptions.svelte", async (
 	return { default: Stub }
 })
 
-import { ADVENTURE_RESPOND_SPEC_ID, CORE_SPECS } from "@serene-pub/core-catalog"
+import { STORY_RESPOND_SPEC_ID, CORE_SPECS } from "@serene-pub/core-catalog"
 import CanvasPanel from "./CanvasPanel.svelte"
 
-const doc = CORE_SPECS.find((s) => s.slug === ADVENTURE_RESPOND_SPEC_ID)!.build() as any
+const doc = CORE_SPECS.find((s) => s.slug === STORY_RESPOND_SPEC_ID)!.build() as any
 const version = { id: 7, semver: doc.version, status: "published", canonicalHash: "abc", isActive: true }
 const previous = { id: 5, semver: "1.0.0", status: "retired", canonicalHash: "aaa", isActive: false, publishedAt: null, nodeCount: 1 }
 
 const props = () => ({
-	slug: ADVENTURE_RESPOND_SPEC_ID,
+	slug: STORY_RESPOND_SPEC_ID,
 	versions: [{ ...version, publishedAt: null, nodeCount: doc.nodes.length }, previous],
 	graph: {
 		nodes: doc.nodes.map((n: any) => ({
@@ -74,7 +74,7 @@ const props = () => ({
 		{
 			id: 1,
 			runId: "run-1234-abcd",
-			specSlug: ADVENTURE_RESPOND_SPEC_ID,
+			specSlug: STORY_RESPOND_SPEC_ID,
 			userId: 1,
 			specVersion: doc.version,
 			specHash: "abc",
@@ -213,7 +213,7 @@ describe("CanvasPanel", () => {
 /* ── the editor (P2) ─────────────────────────────────────────────── */
 
 const deliverNoDraft = () => {
-	listeners.get("pipelines:draft:get")!({ slug: ADVENTURE_RESPOND_SPEC_ID, draft: null, shipped: false })
+	listeners.get("pipelines:draft:get")!({ slug: STORY_RESPOND_SPEC_ID, draft: null, shipped: false })
 	flushSync()
 }
 const lastEmitted = (event: string) => emitted.filter(([e]) => e === event).at(-1)?.[1]
@@ -229,7 +229,7 @@ const echoDraft = async (findings: any[] = []) => {
 	const sent = lastEmitted("pipelines:draft:put")
 	expect(sent?.document).toBeTruthy()
 	listeners.get("pipelines:draft:put")!({
-		slug: ADVENTURE_RESPOND_SPEC_ID,
+		slug: STORY_RESPOND_SPEC_ID,
 		draft: { document: sent.document, findings, basedOnVersionId: 7, basedOnSemver: doc.version, updatedAt: "now" }
 	})
 	await settle()
@@ -245,7 +245,7 @@ describe("CanvasPanel editor", async () => {
 		expect(edit).not.toBeNull()
 		edit.click()
 		flushSync()
-		expect(lastEmitted("pipelines:draft:put")?.document?.id).toBe(ADVENTURE_RESPOND_SPEC_ID)
+		expect(lastEmitted("pipelines:draft:put")?.document?.id).toBe(STORY_RESPOND_SPEC_ID)
 		await echoDraft()
 		expect(document.body.textContent).toMatch(/draft/)
 		expect(document.body.textContent).toMatch(/valid/)
@@ -258,7 +258,7 @@ describe("CanvasPanel editor", async () => {
 		app = mount(CanvasPanel, { target: document.body, props: props() as any })
 		flushSync()
 		deliverDocument()
-		listeners.get("pipelines:draft:get")!({ slug: ADVENTURE_RESPOND_SPEC_ID, draft: null, shipped: true })
+		listeners.get("pipelines:draft:get")!({ slug: STORY_RESPOND_SPEC_ID, draft: null, shipped: true })
 		flushSync()
 		;(document.querySelector('button[title^="A shipped pipeline"]') as HTMLButtonElement).click()
 		flushSync()
@@ -301,8 +301,9 @@ describe("CanvasPanel editor", async () => {
 		expect(picker.value).toBe("")
 		const offered = Array.from(picker.options).map((o) => o.value)
 		expect(offered).toContain("rank.main")
-		expect(offered.some((v) => v.startsWith("keeperResolve."))).toBe(false)
-		expect(offered.some((v) => v.startsWith("planContext."))).toBe(false)
+		// Steps that run after it (Story's reply: the context, the reply).
+		expect(offered.some((v) => v.startsWith("generate."))).toBe(false)
+		expect(offered.some((v) => v.startsWith("context."))).toBe(false)
 	})
 
 	test("removing a step asks first and names what loses a source; Notices lists findings", async () => {
@@ -322,9 +323,9 @@ describe("CanvasPanel editor", async () => {
 		;(Array.from(document.querySelectorAll('[aria-label="Edit the selection"] button')).find((b) => b.textContent?.trim() === "Remove") as HTMLButtonElement).click()
 		await settle()
 		expect(lastEmitted("pipelines:draft:put").document.nodes.some((n: any) => n.key === "rank")).toBe(false)
-		await echoDraft([{ law: "01 §2", severity: "error", nodeKey: "planContext", message: "reads a node that is gone", fix: "wire another source" }])
+		await echoDraft([{ law: "01 §2", severity: "error", nodeKey: "context", message: "reads a node that is gone", fix: "wire another source" }])
 		expect(document.body.textContent).toMatch(/1 notice · publish blocked/)
-		;(document.querySelector('[role="list"] button[aria-label="planContext"]') as HTMLButtonElement).click()
+		;(document.querySelector('[role="list"] button[aria-label="context"]') as HTMLButtonElement).click()
 		flushSync()
 		;(document.querySelector('#canvas-drawer-notices-tab') as HTMLButtonElement).click()
 		flushSync()
@@ -343,14 +344,14 @@ describe("CanvasPanel editor", async () => {
 		await settle()
 		const asked = lastEmitted("pipelines:draft:preview")
 		expect(asked.semver).toBe(doc.version.replace(/\.(\d+)$/, (_: string, p: string) => `.${Number(p) + 1}`))
-		listeners.get("pipelines:draft:preview")!({ slug: ADVENTURE_RESPOND_SPEC_ID, findings: [], semverTaken: false, affected: [{ configId: 1, configName: "Adventure", culled: ["place.params"], backfilled: [] }] })
+		listeners.get("pipelines:draft:preview")!({ slug: STORY_RESPOND_SPEC_ID, findings: [], semverTaken: false, affected: [{ configId: 1, configName: "Living", culled: ["place.params"], backfilled: [] }] })
 		await settle()
-		expect(document.body.textContent).toMatch(/Adventure/)
+		expect(document.body.textContent).toMatch(/Living/)
 		expect(document.body.textContent).toMatch(/place\.params/)
 		;(Array.from(document.querySelectorAll("button")).find((b) => /^\s*Publish \d/.test(b.textContent ?? "")) as HTMLButtonElement).click()
 		await settle()
 		expect(lastEmitted("pipelines:draft:publish")?.semver).toBe(asked.semver)
-		listeners.get("pipelines:draft:publish")!({ slug: ADVENTURE_RESPOND_SPEC_ID, version: { id: 9, semver: asked.semver, canonicalHash: "zzz" }, reconcile: { culled: 1, backfilled: 0 } })
+		listeners.get("pipelines:draft:publish")!({ slug: STORY_RESPOND_SPEC_ID, version: { id: 9, semver: asked.semver, canonicalHash: "zzz" }, reconcile: { culled: 1, backfilled: 0 } })
 		await settle()
 		expect(document.body.textContent).toMatch(new RegExp(`Published ${asked.semver.replace(/\\./g, "\\\\.")}`))
 		expect(document.body.textContent).toMatch(/1 value culled/)
@@ -388,23 +389,24 @@ describe("CanvasPanel composite steps", () => {
 		flushSync()
 		expect(to.value).toBe("rank")
 		const name = document.querySelector('input[aria-label="Composite name"]') as HTMLInputElement
-		name.value = "retrieval"
+		// Not "retrieval": Story's reply has a junction under that key (2026-10-19).
+		name.value = "recall"
 		name.dispatchEvent(new Event("input", { bubbles: true }))
 		const label = document.querySelector('input[aria-label="Composite label"]') as HTMLInputElement
-		label.value = "Retrieval"
+		label.value = "Recall"
 		label.dispatchEvent(new Event("input", { bubbles: true }))
 		flushSync()
-		expect(document.body.textContent).toMatch(/acme\.lab:composite\/retrieval/)
+		expect(document.body.textContent).toMatch(/acme\.lab:composite\/recall/)
 		;(Array.from(document.querySelectorAll('[aria-label="Save as a composite step"] button')).find((b) => b.textContent?.trim() === "Save") as HTMLButtonElement).click()
 		await settle()
 		const saved = emitted.filter(([e]) => e === "pipelines:composite:save").at(-1)![1]
-		expect(saved.slug).toBe("acme.lab:composite/retrieval")
-		expect(saved.label).toBe("Retrieval")
+		expect(saved.slug).toBe("acme.lab:composite/recall")
+		expect(saved.label).toBe("Recall")
 		expect(saved.document.nodes.map((n: any) => n.key)).toContain("names.arm.link")
-		listeners.get("pipelines:composite:save")!({ slug: saved.slug, composite: { slug: saved.slug, label: "Retrieval", nodeCount: saved.document.nodes.length, reads: saved.document.reads, updatedAt: "now" } })
+		listeners.get("pipelines:composite:save")!({ slug: saved.slug, composite: { slug: saved.slug, label: "Recall", nodeCount: saved.document.nodes.length, reads: saved.document.reads, updatedAt: "now" } })
 		await settle()
 		// The catalogue is re-read and now lists it; insert it after input.
-		listeners.get("pipelines:catalogue")!({ definitions: [], composites: [{ slug: saved.slug, label: "Retrieval", nodeCount: saved.document.nodes.length, reads: saved.document.reads, updatedAt: "now", document: saved.document }] })
+		listeners.get("pipelines:catalogue")!({ definitions: [], composites: [{ slug: saved.slug, label: "Recall", nodeCount: saved.document.nodes.length, reads: saved.document.reads, updatedAt: "now", document: saved.document }] })
 		await settle()
 		;(document.querySelector('[role="list"] button[aria-label="input"]') as HTMLButtonElement).click()
 		flushSync()
@@ -412,15 +414,15 @@ describe("CanvasPanel composite steps", () => {
 		flushSync()
 		;(Array.from(document.querySelectorAll('[role="group"][aria-label="Kind"] button')).find((b) => b.textContent?.trim() === "composite") as HTMLButtonElement).click()
 		flushSync()
-		;(Array.from(document.querySelectorAll("button")).find((b) => /Retrieval/.test(b.textContent ?? "") && /composite\//.test(b.textContent ?? "")) as HTMLButtonElement).click()
+		;(Array.from(document.querySelectorAll("button")).find((b) => /Recall/.test(b.textContent ?? "") && /composite\//.test(b.textContent ?? "")) as HTMLButtonElement).click()
 		await settle()
 		const inserted = emitted.filter(([e]) => e === "pipelines:draft:put").at(-1)![1].document
-		expect(inserted.nodes.some((n: any) => n.key === "retrieval.lore")).toBe(true)
-		expect(inserted.nodes.some((n: any) => n.key === "retrieval.names.arm.link")).toBe(true)
-		expect(inserted.includes.at(-1)).toEqual({ key: "retrieval", fragmentId: saved.slug })
+		expect(inserted.nodes.some((n: any) => n.key === "recall.lore")).toBe(true)
+		expect(inserted.nodes.some((n: any) => n.key === "recall.names.arm.link")).toBe(true)
+		expect(inserted.includes.at(-1)).toEqual({ key: "recall", fragmentId: saved.slug })
 		// The selection lands on the composite's first member, a real card.
 		listeners.get("pipelines:draft:put")!({ slug: "acme.lab:spec/reply", draft: { document: inserted, findings: [], basedOnVersionId: 7, basedOnSemver: doc.version, updatedAt: "now" } })
 		await settle()
-		expect(document.querySelector('[role="list"] button[aria-label="retrieval.lore"]')?.getAttribute("aria-current")).toBe("true")
+		expect(document.querySelector('[role="list"] button[aria-label="recall.lore"]')?.getAttribute("aria-current")).toBe("true")
 	})
 })

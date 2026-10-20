@@ -50,20 +50,20 @@ const review = (
 
 const pipelinesList = [
 	{
-		slug: "core:spec/chat-respond",
+		slug: "core:spec/story-respond",
 		name: "Reply",
 		version: "1.0.0",
 		event: null,
 		enabled: true,
-		taxonomy: { role: "primary", genre: "core:genre/chat" }
+		taxonomy: { role: "primary", genre: "core:genre/story" }
 	},
 	{
-		slug: "core:spec/adventure-respond",
+		slug: "core:spec/lair-respond",
 		name: "Reply",
 		version: "1.0.0",
 		event: null,
 		enabled: true,
-		taxonomy: { role: "primary", genre: "core:genre/adventure" }
+		taxonomy: { role: "primary", genre: "core:genre/lair" }
 	},
 	{
 		slug: "core:spec/summarize-scene",
@@ -76,10 +76,10 @@ const pipelinesList = [
 ]
 
 const genres = [
-	{ genreId: "core:genre/chat", name: "Chat", description: "", shape: {} },
+	{ genreId: "core:genre/story", name: "Story", description: "", shape: {} },
 	{
-		genreId: "core:genre/adventure",
-		name: "Adventure",
+		genreId: "core:genre/lair",
+		name: "Lair",
 		description: "",
 		shape: {}
 	}
@@ -112,7 +112,7 @@ describe("PipelineReviewModal — the pipeline a card belongs to", () => {
 	})
 
 	test("names the pipeline and its genre once both lists arrive", () => {
-		open(review("r1", "core:spec/adventure-respond"))
+		open(review("r1", "core:spec/lair-respond"))
 		expect(requested).toContain("pipelines:list")
 		expect(requested).toContain("sessions:genres")
 
@@ -120,8 +120,8 @@ describe("PipelineReviewModal — the pipeline a card belongs to", () => {
 		declared.get("sessions:genres")!({ genres })
 		flushSync()
 
-		expect(what()).toContain("Reply · Adventure · step “placeholder”:")
-		expect(what()).not.toMatch(/Adventure respond/)
+		expect(what()).toContain("Reply · Lair · step “placeholder”:")
+		expect(what()).not.toMatch(/Lair respond/)
 	})
 
 	test("a pipeline every genre shares shows its bare name", () => {
@@ -134,7 +134,7 @@ describe("PipelineReviewModal — the pipeline a card belongs to", () => {
 	})
 
 	test("until the lists arrive, the slug's tail stands in", () => {
-		open(review("r1", "core:spec/chat-respond"))
-		expect(what()).toContain("Chat respond · step “placeholder”:")
+		open(review("r1", "core:spec/story-respond"))
+		expect(what()).toContain("Story respond · step “placeholder”:")
 	})
 })

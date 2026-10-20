@@ -14,6 +14,8 @@ export interface GroupableSession {
 	lastMessage?: {
 		isUser?: boolean | null
 		createdAt?: string | null
+		/** 🚧 A revision branch's last line: the turn after it was taken back. */
+		revisedTurn?: boolean | null
 	} | null
 	updatedAt?: string | Date | null
 }
@@ -31,7 +33,10 @@ export function isAwaitingUser(
 	session: GroupableSession,
 	running = false
 ): boolean {
-	return !!session.lastMessage && !session.lastMessage.isUser && !running
+	const last = session.lastMessage
+	// A revision branch's last line is the reader's own, but the turn after
+	// it was taken back: nobody else owes a line.
+	return !!last && (!last.isUser || !!last.revisedTurn) && !running
 }
 
 export type SessionGroupKey = "yourTurn" | "recent" | "older"

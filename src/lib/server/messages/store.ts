@@ -116,6 +116,14 @@ export async function insertLegacy(
 		.values(trimCommittedContent(stamped))
 		.returning()
 	await mirrorRow(db, row)
+	// 🚧 The annex as it stood before this line (`annexRevisionPoints.ts`):
+	// what a revision puts back. Never the reason an insert fails.
+	try {
+		const { takeRevisionPoint } = await import("$lib/server/sessions/annexRevisionPoints")
+		await takeRevisionPoint(db, row)
+	} catch (err) {
+		console.warn("[messages] annex revision point skipped:", err)
+	}
 	return row
 }
 
@@ -172,6 +180,12 @@ export async function updateLegacyWhere(
  * A scene span that names a deleted message keeps its id: the id is the
  * scene's place in play (`inPlayOrder`), and the span's readers count only
  * the messages that exist (`deriveSceneMentions`).
+ *
+ * 🚧 **Anchored rows go with their anchor** (PLAN-rulesets §30): a table row
+ * names the message it belongs to as `metadata.anchorMessageId`, and is
+ * deleted with it — the cascade a self-FK would give, through the one path
+ * every delete takes. They are returned with the rest, after them, so a
+ * caller that announces each delete announces these too.
  */
 export async function deleteLegacyWhere(
 	db: Db,
@@ -181,14 +195,19 @@ export async function deleteLegacyWhere(
 		.delete(schema.sessionMessages)
 		.where(where)
 		.returning()
-	if (rows.length)
+	const anchored = await deleteAnchoredTo(
+		db,
+		rows.map((r) => r.id)
+	)
+	const all = anchored.length ? [...rows, ...anchored] : rows
+	if (all.length)
 		await db.delete(schema.messages).where(
 			inArray(
 				schema.messages.id,
-				rows.map((r) => r.id)
+				all.map((r) => r.id)
 			)
 		)
-	return rows
+	return all
 }
 
 /** Delete one message from both worlds; scene spans keep its id (above). */
@@ -197,6 +216,37 @@ export async function deleteLegacy(db: Db, id: number): Promise<void> {
 		.delete(schema.sessionMessages)
 		.where(eq(schema.sessionMessages.id, id))
 	await db.delete(schema.messages).where(eq(schema.messages.id, id))
+	// 🚧 And every row anchored to it (§30, above).
+	const anchored = await deleteAnchoredTo(db, [id])
+	if (anchored.length)
+		await db.delete(schema.messages).where(
+			inArray(
+				schema.messages.id,
+				anchored.map((r) => r.id)
+			)
+		)
+}
+
+/**
+ * 🚧 The legacy rows anchored to `ids` (`metadata.anchorMessageId`), deleted
+ * and returned — the table rows (PLAN-rulesets §30) of messages that are
+ * going. One level: a table row anchors to a story row, never to another
+ * table row. The mirror is the caller's.
+ */
+async function deleteAnchoredTo(
+	db: Db,
+	ids: number[]
+): Promise<Array<typeof schema.sessionMessages.$inferSelect>> {
+	if (!ids.length) return []
+	return db
+		.delete(schema.sessionMessages)
+		.where(
+			inArray(
+				sql`${schema.sessionMessages.metadata} ->> 'anchorMessageId'`,
+				ids.map(String)
+			)
+		)
+		.returning()
 }
 
 /** Re-derive one message's new-model rows from its legacy row. */

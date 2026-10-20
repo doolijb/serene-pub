@@ -16,7 +16,7 @@
  * form serves callers with no transaction.
  */
 
-import { and, eq } from "drizzle-orm"
+import { and, eq, isNotNull, or } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { db as appDb } from "$lib/server/db"
 import { isSharedWith } from "$lib/server/utils/shares"
@@ -42,17 +42,26 @@ export async function findOwnedBook(
 		.select({
 			id: schema.lorebooks.id,
 			name: schema.lorebooks.name,
-			userId: schema.lorebooks.userId
+			userId: schema.lorebooks.userId,
+			sessionId: schema.lorebooks.sessionId
 		})
 		.from(schema.lorebooks)
 		.where(
 			and(
 				eq(schema.lorebooks.id, lorebookId as number),
-				eq(schema.lorebooks.userId, userId)
+				// The owner's own book, or a session's notes (asked below).
+				or(eq(schema.lorebooks.userId, userId), isNotNull(schema.lorebooks.sessionId))
 			)
 		)
 		.limit(1)
-	return book
+	if (!book) return undefined
+	// 🚧 A session's own notes (PLAN-rulesets §26): its members', nobody
+	// else's — the owner of the row included only as a member.
+	if (book.sessionId != null) {
+		const { phantomAccessFor } = await import("$lib/server/lorebooks/phantom")
+		if (!(await phantomAccessFor(db, book.id, userId))) return undefined
+	}
+	return { id: book.id, name: book.name, userId: book.userId }
 }
 
 /** The book, if `userId` owns it; otherwise throws `LOREBOOK_NOT_FOUND`. */
@@ -92,6 +101,11 @@ export async function lorebookAccessFor(
 		.where(eq(schema.lorebooks.id, lorebookId as number))
 		.limit(1)
 	if (!book) return null
+	// 🚧 A session's own notes: its members read them as their own, and no
+	// share or administrator exception reaches them (PLAN-rulesets §26).
+	const { phantomAccessFor } = await import("$lib/server/lorebooks/phantom")
+	const member = await phantomAccessFor(db, lorebookId as number, userId)
+	if (member !== undefined) return member ? "owner" : null
 	if (book.userId === userId) return "owner"
 	if (await isSharedWith(db, "lorebook", lorebookId as number, userId))
 		return "shared"

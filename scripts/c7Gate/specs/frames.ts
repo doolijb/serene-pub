@@ -397,8 +397,12 @@ const PANEL_FRAME = `${cellOf(WIDGET)} iframe`
 /** The chat session's stored layout: the probe alone on the left. */
 const PANEL_LAYOUT = {
 	active: [{ id: WIDGET, on: true }],
-	zoneLayout: { version: 1, zones: { left: { kind: "side", side: "left", pinned: true, widgets: [WIDGET] } } },
-	arrangedGrid: { left: { cols: 1, rows: 12, items: [{ id: WIDGET, x: 0, y: 0, w: 1, h: 12 }] } }
+	panels: {
+		version: 1,
+		left: [{ key: "p2", tabs: [WIDGET] }],
+		middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] },
+		right: []
+	}
 }
 
 /** A chat session of its own, with one exchange (the gate's model answers). */

@@ -27,6 +27,7 @@
  * never offered.
  */
 
+import { resolveRenamedCoreId } from "$lib/server/plugins/renamedCoreIds"
 import {
 	annexField,
 	annexFieldAction,
@@ -95,7 +96,8 @@ async function everyDeclaration(db: Db): Promise<AnnexDeclaration[]> {
 			// a stored manifest that carries two is read as its first.
 			if (!decl || taken.has(decl.key)) continue
 			taken.add(decl.key)
-			fields.push(decl)
+			// Scoped to a core genre core has since renamed: the one it ships now.
+			fields.push(decl.genre ? { ...decl, genre: resolveRenamedCoreId(decl.genre) } : decl)
 		}
 		out.push({ owner: p.pluginId, enabled: p.enabled, fields })
 	}

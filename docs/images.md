@@ -36,7 +36,7 @@ The likeness prompt does most of the work. A good line of looks matters more tha
 
 ## Press Image or Scene in a session
 
-In a Chat session, open **Actions** above the composer. Adventure sessions have **Scene** too.
+In a Story session, open **Actions** above the composer; **Scene** is there too.
 
 - **Image** asks *What should the image show?*. Describe it and the picture is drawn and posted in the session.
 - **Scene** asks nothing. It reads the last few messages and how everyone in the session looks, writes a description of the moment, and draws a wide picture of it. By default the picture is posted and also becomes the session's backdrop.

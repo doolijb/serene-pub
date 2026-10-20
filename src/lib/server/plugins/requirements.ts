@@ -11,6 +11,7 @@ import { eventById, sessionEvents } from "@serene-pub/sdk"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { isRegisteredPackageEvent } from "./pluginEvents"
+import { resolveRenamedCoreId } from "./renamedCoreIds"
 
 /** Which of these ids this instance cannot satisfy right now. */
 export async function missingRequirements(
@@ -67,11 +68,15 @@ export async function missingRequirements(
 
 /**
  * The requirement list a manifest carries, wherever the packager put it —
- * announcement-shaped manifests carry it top-level; absent means none.
+ * announcement-shaped manifests carry it top-level; absent means none. A
+ * core id core has since renamed reads as the id it ships now
+ * (`renamedCoreIds.ts`).
  */
 export function requirementsOf(manifest: unknown): string[] {
 	const r = (manifest as any)?.requires
-	return Array.isArray(r) ? r.filter((x) => typeof x === "string") : []
+	return Array.isArray(r)
+		? r.filter((x): x is string => typeof x === "string").map(resolveRenamedCoreId)
+		: []
 }
 
 /** Whether a required id is one of core's events (`core:event/<slug>@<n>`). */

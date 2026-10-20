@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest"
 import type { WidgetEvent } from "$lib/shared/widgets/context"
+import type { PanelLayoutV1 } from "@serene-pub/sdk"
 import {
 	SurfaceManager,
 	type WitnessedMessage
@@ -139,27 +140,38 @@ describe("SurfaceManager — explicit intents + persistence", () => {
 		vi.useRealTimers()
 	})
 
-	it("couriers the widget grid: init reads it, setWidgetGrid persists it in the blob", async () => {
+	it("couriers the panels: init reads them, setPanels persists them in the blob", async () => {
 		vi.useFakeTimers()
 		const save = vi.fn()
 		const m = new SurfaceManager()
+		const seeded: PanelLayoutV1 = {
+			version: 1,
+			left: [],
+			right: [],
+			middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] }
+		}
 		// init rehydrates from the blob…
-		m.init(1, PANELS, { widgetGrid: { version: 1, seeded: true } }, save)
-		expect(m.widgetGrid).toEqual({ version: 1, seeded: true })
+		m.init(1, PANELS, { panels: seeded }, save)
+		expect(m.panels).toEqual(seeded)
 		// …and an edit persists (debounced) verbatim inside the same blob.
-		m.setWidgetGrid({ version: 1, edited: true })
+		const edited = { ...seeded, right: [{ key: "p2", tabs: ["tasks"] }] }
+		m.setPanels(edited)
 		vi.advanceTimersByTime(500)
 		expect(save).toHaveBeenCalledOnce()
-		expect(save.mock.calls[0][0].widgetGrid).toEqual({
-			version: 1,
-			edited: true
-		})
+		expect(save.mock.calls[0][0].panels).toEqual(edited)
 		vi.useRealTimers()
 	})
 
-	it("omits widgetGrid from the blob when never set", () => {
-		const m = make()
+	it("reads the ⏳ widget grid but never writes it into the blob", () => {
+		const m = new SurfaceManager()
+		m.init(1, PANELS, { widgetGrid: { version: 1, seeded: true } }, () => {})
+		expect(m.widgetGrid).toEqual({ version: 1, seeded: true })
 		expect("widgetGrid" in m.toBlob()).toBe(false)
+	})
+
+	it("omits panels from the blob when never set", () => {
+		const m = make()
+		expect("panels" in m.toBlob()).toBe(false)
 	})
 
 	it("applyCloseIntent deactivates a panel", () => {
@@ -501,12 +513,18 @@ describe("SurfaceManager — widget instances (brief 7b)", () => {
 
 	it("placing a copy makes it; removing it drops it, and the blob forgets it", () => {
 		const m = new SurfaceManager()
+		const withRight = (...ids: string[]) => ({
+			version: 1 as const,
+			left: [],
+			middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] },
+			right: ids.map((id, i) => ({ key: `r${i}`, tabs: [id] }))
+		})
 		m.init(1, PANELS, right("portraits"), () => {})
-		m.setZoneLayout(right("portraits", "tasks#2").zoneLayout)
+		m.setPanels(withRight("portraits", "tasks#2"))
 		expect(m.instances.map((p) => p.id)).toContain("tasks#2")
 		m.toggleCollapse("tasks#2")
 		expect(m.toBlob().active!.find((a) => a.id === "tasks#2")?.collapsed).toBe(true)
-		m.setZoneLayout(right("portraits").zoneLayout)
+		m.setPanels(withRight("portraits"))
 		expect(m.instances.map((p) => p.id)).not.toContain("tasks#2")
 		expect(m.toBlob().active!.some((a) => a.id === "tasks#2")).toBe(false)
 	})

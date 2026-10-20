@@ -47,7 +47,7 @@ type DocNode = SpecDocument["nodes"][number] & {
 }
 
 /** The step's name, as a person reads it: its step label, else its definition's name. */
-function stepLabelOf(node: DocNode): string {
+export function stepLabelOf(node: DocNode): string {
 	const def = getDefinition(`${node.definitionId}@${node.definitionVersion}`) as
 		| { i18n?: { name?: unknown } }
 		| undefined

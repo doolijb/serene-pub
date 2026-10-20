@@ -16,8 +16,8 @@ describe("eventHref", () => {
 		expect(eventHref(EV)).toBe("/admin/pipelines/events/core%3Aevent%2Fsession-created%401")
 	})
 	it("carries a map scope", () => {
-		expect(eventHref(EV, { genreId: "core:genre/chat" })).toBe(
-			"/admin/pipelines/events/core%3Aevent%2Fsession-created%401?genre=core%3Agenre%2Fchat"
+		expect(eventHref(EV, { genreId: "core:genre/story" })).toBe(
+			"/admin/pipelines/events/core%3Aevent%2Fsession-created%401?genre=core%3Agenre%2Fstory"
 		)
 	})
 })

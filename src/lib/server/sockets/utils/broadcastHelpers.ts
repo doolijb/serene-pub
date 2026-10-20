@@ -255,15 +255,19 @@ export async function broadcastToSessionUsers(
 		columns: { userId: true }
 	})
 
-	await emitRedacted(
-		io,
+	// 🚧 Personal channel lanes (owner ruling 2026-10-17): a row on a
+	// personal lane reaches its person and the session's owner alone, and a
+	// whole-session push is narrowed per member (`channels/lanePush.ts`).
+	const { laneScopedRecipients } = await import("$lib/server/channels/lanePush")
+	const recipients = await laneScopedRecipients(
+		db,
+		sessionId,
 		event,
-		[
-			{ userId: session.userId, data: payload },
-			...guests.map((guest) => ({ userId: guest.userId, data: payload }))
-		],
-		scope
+		payload,
+		[session.userId, ...guests.map((guest) => guest.userId)]
 	)
+
+	await emitRedacted(io, event, recipients, scope)
 }
 
 /*

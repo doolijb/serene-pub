@@ -59,7 +59,7 @@ function fakeIo() {
 async function withDisabledPreset<T>(run: (id: number) => Promise<T>): Promise<T> {
 	const [row] = await db
 		.insert(schema.sessionPresets)
-		.values({ name: "Push test (off)", genreId: "core:genre/chat", enabled: false })
+		.values({ name: "Push test (off)", genreId: "core:genre/story", enabled: false })
 		.returning()
 	try {
 		return await run(row.id)

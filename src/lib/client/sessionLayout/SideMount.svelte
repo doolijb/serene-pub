@@ -1,3 +1,14 @@
+<script lang="ts" module>
+	/** Where one panel is drawn: its side, its place in the column, its box. */
+	export type PanelAt = {
+		side: "left" | "right"
+		index: number
+		count: number
+		widthPx: number
+		heightPx?: number
+	}
+</script>
+
 <script lang="ts">
 	/**
 	 * A side zone's ONE mount (the no-reload law). The renderer draws one of
@@ -6,58 +17,42 @@
 	 * layer behind a flag would destroy one subtree and build the other,
 	 * reloading every iframe in the zone and dropping every native panel's
 	 * state. The SUBTREE never moves and only the container around it changes
-	 * — the same trick the tab groups use to keep an inactive pane alive.
+	 * — the same trick a panel's tabs use to keep an inactive pane alive.
 	 * ./sideSlot (and its unit tests) is the whole decision: `inline`,
 	 * `stowed` (display:none, never an unmount), `overlay` (this wrapper wears
 	 * the mobile sheet and IS the dialog) or `stage`.
 	 *
-	 * A side draws its ARRANGEMENT when it places anything (the arranged
-	 * column: the side rail model's groups plus their rail), else its zones
-	 * the ladder's way (a docked rail, or an icon strip that pops the zone
-	 * over), else — empty — an empty column. Which is read off the drawn
-	 * layout (./sessionLayoutModel).
+	 * A side is a column of PANELS and its rail (PLAN-session-panels
+	 * 2026-10-14): each panel a box of widget tabs, docked or in the rail,
+	 * at its height (`fit` · `fill` · `{ share }`, ./sideRail). The side rail
+	 * model decides which are expanded, which are icons and which one flies
+	 * out (./sideRailModel `columnLayout`). Empty, it keeps an empty column.
 	 *
-	 * The widgets themselves are the renderer's snippets (`unit`,
-	 * `panelStack`), so every widget mount stays in one file. The zone chrome
-	 * this wrapper wears in the sheet (`.zone-flyout.mobile`, `.zone-head`) is
-	 * styled by the renderer, which owns it for its whole body.
+	 * The panels themselves are the renderer's snippet (`panel`), so every
+	 * widget mount stays in one file. The zone chrome this wrapper wears in
+	 * the sheet (`.zone-flyout.mobile`, `.zone-head`) is styled by the
+	 * renderer, which owns it for its whole body.
 	 */
 	import type { Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import type { ResolvedZone } from "./schema"
+	import type { DrawnPanel } from "@serene-pub/sdk"
 	import type { SessionLayoutModel } from "./sessionLayoutModel.svelte"
-	import type { RenderUnit } from "./tabGroups"
 	import type { SideSlot } from "./sideSlot"
-	import { rovingStep, rovingStop } from "./sideRail"
 	import type { Gutters } from "./tuckedSides"
 	import type { LiveFlyouts } from "./liveFlyouts.svelte"
 	import { mobileSidePanels } from "./mobileSidePanels.svelte"
-	import GroupRail from "./GroupRail.svelte"
-
-	/** The cells one unit is drawn in, and the box they measured. */
-	type UnitGeometry = {
-		zone: { cols: number; rows: number }
-		widthPx: number
-		heightPx?: number
-	}
+	import PanelRail from "./PanelRail.svelte"
 
 	interface Props {
 		side: "left" | "right"
 		slot: SideSlot
 		model: SessionLayoutModel
-		/** One render unit's widget(s) — a lone widget, or a tab group. */
-		unit: Snippet<[RenderUnit, UnitGeometry, boolean]>
-		/** A zone's panel stack (the rail, or a pop-over's). */
-		panelStack: Snippet<[ResolvedZone, boolean]>
+		/** One panel — its tabs, or its one widget. `popover`: opened over the session. */
+		panel: Snippet<[DrawnPanel, PanelAt, boolean]>
 		/** Body edge → the column's area, balance included: where a tucked flyout stops. */
 		flowEdge: Gutters
-		/**
-		 * The pop-over (an un-arranged zone popped over the session) and the
-		 * tucked flyout, across both sides (./liveFlyouts).
-		 */
+		/** The tucked flyout, across both sides (./liveFlyouts). */
 		flyouts: LiveFlyouts
-		/** Pin or unpin an un-arranged zone (the rail's own pin button). */
-		onSetPinned: (zoneId: string, pinned: boolean) => void
 		/** This side's wrapper — the dialog while it is the phone's sheet. */
 		el?: HTMLDivElement | null
 	}
@@ -66,18 +61,14 @@
 		side,
 		slot,
 		model,
-		unit,
-		panelStack,
+		panel,
 		flowEdge,
 		flyouts,
-		onSetPinned,
 		el = $bindable(null)
 	}: Props = $props()
 
-	let zones = $derived(side === "left" ? model.leftZones : model.rightZones)
-	let units = $derived(side === "left" ? model.leftUnits : model.rightUnits)
-	/** The arranged column's cell grid, when this side draws its arrangement. */
-	let arr = $derived(model.frameOf(model.drawn[side]))
+	let view = $derived(model.sides[side])
+	let panels = $derived(view.panels)
 	/** Already 0 unless this side's slot is `inline` (./sideSlot `dockedZoneWidths`). */
 	let flowPx = $derived(model.sideWidths[side])
 	/** This side's EMPTY COLUMN, when it has one; 0 for a populated side. */
@@ -85,23 +76,26 @@
 	let overlay = $derived(slot === "overlay")
 	let sideLabel = $derived(side === "left" ? "Left" : "Right")
 	let isTucked = $derived(model.tucked[side])
+	/** A side on a hidden rung draws nothing — but the phone's sheet and the stage still do. */
+	let shown = $derived(
+		view.populated || ((overlay || slot === "stage") && panels.length > 0)
+	)
 
-	/** Measured height and width of the column of groups (0 = not laid out yet). */
+	/** Measured height of the column of panels (0 = not laid out yet). */
 	let columnPx = $state(0)
-	let columnWPx = $state(0)
 	/*
 	 * The cell's own measured width is the widget's tier: a rail widget is
 	 * `compact` however wide the window is, which is what it has to reflow
-	 * against (PLAN 25). Bound per cell rather than divided out of the zone,
-	 * because a flex item's real size is the browser's answer, not ours. The
-	 * block size rides beside it so `layout.v1.box.px` can report a real box.
+	 * against (PLAN 25). Bound per cell, because a grid item's real size is
+	 * the browser's answer, not ours. The block size rides beside it so
+	 * `layout.v1.box.px` can report a real box.
 	 */
 	let cellWidths = $state<Record<string, number>>({})
 	let cellHeights = $state<Record<string, number>>({})
 
 	/** The live column: the side rail model at this column's measure. */
 	let col = $derived(
-		model.rail.columnLayout(side, units, arr?.rows ?? 1, {
+		model.rail.columnLayout(side, panels, {
 			sheet: overlay,
 			narrow: model.isNarrow,
 			tucked: isTucked,
@@ -109,8 +103,8 @@
 				flyouts.tuckedFlyout?.side === side
 					? flyouts.tuckedFlyout.key
 					: null,
-			heightPx: columnPx,
-			widthPx: columnWPx
+			alwaysDocked: model.logPanelKeys(side),
+			heightPx: columnPx
 		})
 	)
 
@@ -137,16 +131,16 @@
 		return `position:fixed;z-index:30;inset-block-start:${model.liveTop}px;inset-block-end:0;${start}:${edge}px;inline-size:min(22rem,86vw);`
 	}
 	/**
-	 * A flyout closes on outside click and Escape, exactly like the unpinned
-	 * rail's pop-over — `data-pop-keep` marks what is inside it (the flyout
-	 * itself, the rail that opened it). Only armed while a group is actually
-	 * flying: an EXPANDED group is part of the layout and clicking the chat
-	 * must not put it away. Tucked, the flyout is the tucked one's and so are
-	 * its closers; while the Move tab previews the rail, the preview's are.
+	 * A flyout closes on outside click and Escape — `data-pop-keep` marks what
+	 * is inside it (the flyout itself, the rail that opened it). Only armed
+	 * while a panel is actually flying: an EXPANDED panel is part of the
+	 * layout and clicking the chat must not put it away. Tucked, the flyout
+	 * is the tucked one's and so are its closers; while the editor previews
+	 * the rail, the preview's are.
 	 */
 	$effect(() => {
 		const k = col.flyout
-		if (!k || isTucked || (model.editing && model.railPreview)) return
+		if (!k || isTucked) return
 		const shut = () => {
 			model.rail.groupOpen[model.rail.groupKey(side, k)] = false
 			model.rail.groupFocus[side] = null
@@ -166,122 +160,19 @@
 			document.removeEventListener("keydown", onKey)
 		}
 	})
-
-	/** Which icon holds each icon strip's one tab stop, keyed by zone. */
-	let railStop = $state<Record<string, number>>({})
-	function onStripKeydown(e: KeyboardEvent, key: string) {
-		const bar = (e.currentTarget as HTMLElement).closest("[data-rail]")
-		if (!bar) return
-		const btns = [
-			...bar.querySelectorAll<HTMLButtonElement>(":scope > button")
-		]
-		const at = btns.indexOf(e.currentTarget as HTMLButtonElement)
-		const next = rovingStep(e.key, at < 0 ? 0 : at, btns.length)
-		if (next == null) return
-		e.preventDefault()
-		railStop[key] = next
-		btns[next]?.focus()
-	}
 </script>
 
-{#snippet sideZone(z: ResolvedZone)}
-	{@const widgets = model.zoneEntriesOf(z)}
-	{#if z.mode !== "hidden" && widgets.length}
-		{#if z.mode === "rail"}
-			<!-- Pinned rail: takes layout space. -->
-			<aside
-				class="zone-rail"
-				style="inline-size:var(--side-flow-px, {z.width *
-					z.columns}px);"
-				aria-label={model.labelOf(z)}
-				data-pop-keep
-			>
-				<div class="zone-head">
-					<span class="zone-label">{model.labelOf(z)}</span>
-					<span class="flex-1"></span>
-					<button
-						class="zone-head-btn"
-						title="Unpin — collapse to icons"
-						aria-label="Unpin {model.labelOf(z)}"
-						onclick={(e) => {
-							e.stopPropagation()
-							onSetPinned(z.id, false)
-						}}
-					>
-						<Icons.PinOff size={13} />
-					</button>
-				</div>
-				{@render panelStack(z, false)}
-			</aside>
-		{:else}
-			<!-- Unpinned / narrow: an icon strip; tapping pops the zone over. -->
-			<div
-				class="zone-iconstrip"
-				tabindex="-1"
-				role="toolbar"
-				aria-orientation="vertical"
-				aria-label={model.labelOf(z)}
-				data-pop-keep
-				data-rail
-			>
-				{#each widgets as p, i (p.id)}
-					{@const IconCmp = model.entryIcon(p)}
-					{@const out = isTucked && tuckedOpen(p.id)}
-					<!-- Template literals, not "{p.title}": inside an expression
-					     those braces are ordinary characters, and a screen reader
-					     was announcing the literal text "Open {p.title}". -->
-					<button
-						class="icon-btn"
-						tabindex={i ===
-						rovingStop(railStop[`z:${z.id}`], widgets.length)
-							? 0
-							: -1}
-						onkeydown={(e) => onStripKeydown(e, `z:${z.id}`)}
-						onfocus={() => (railStop[`z:${z.id}`] = i)}
-						class:active={isTucked ? out : flyouts.popId === z.id}
-						title={p.title}
-						aria-label={`Open ${p.title}`}
-						aria-pressed={isTucked
-							? undefined
-							: flyouts.popId === z.id}
-						aria-expanded={isTucked ? out : undefined}
-						aria-haspopup={isTucked ? "dialog" : undefined}
-						aria-controls={out ? `tucked-zone-${z.id}` : undefined}
-						onclick={(e) => {
-							e.stopPropagation()
-							// Tucked, it brings THIS widget out, one at a time
-							// (./tuckedSides).
-							if (isTucked)
-								flyouts.toggleTucked(
-									side,
-									p.id,
-									e.currentTarget
-								)
-							else flyouts.togglePop(z.id, p.id)
-						}}
-					>
-						<IconCmp size={16} />
-					</button>
-				{/each}
-			</div>
-		{/if}
-	{/if}
-{/snippet}
-
-{#snippet arrangedSide(frame: { cols: number; rows: number })}
-	<!-- The unit holding the stage's conversation (QE), when this side has
-	     it: as the stage it is the ONE cell drawn, full size and open;
-	     in this side's phone sheet it is the one cell NOT listed. -->
-	{@const stageKey = model.stageUnitKey(side, units)}
+{#snippet column()}
+	<!-- The panel holding the stage's conversation (QE), when this side has
+	     it: as the stage it is the ONE cell drawn, full size and open; in this
+	     side's phone sheet it is the one cell NOT listed. -->
+	{@const stageKey = model.stagePanelKey(side)}
 	{@const asStage = slot === "stage" && stageKey !== null}
 	{@const sheetHides =
 		overlay && model.isNarrow && !model.editing && stageKey !== null}
-	<!-- The column and its rail. The stack is still a grid, but its ROWS are
-	     the rail model's answer rather than the arrangement's own
-	     `repeat(rows,1fr)`: a group that collapses has to give its height
-	     BACK to the column, and an empty track of a fixed template gives
-	     nothing back. The arrangement still decides the order and each
-	     group's share — see ./sideRailModel `columnLayout`. -->
+	<!-- The column and its rail. The stack is a grid of one column whose
+	     ROWS are the rail model's answer: a panel that collapses gives its
+	     height BACK to the column. -->
 	<div
 		class="side-column"
 		class:col-left={side === "left"}
@@ -290,33 +181,23 @@
 			? `flex:0 0 ${flowPx}px; inline-size:${flowPx}px;`
 			: ""}
 	>
-		<!-- One grid. Not collapsed it is the arrangement's own columns with
-		     a row per band, at the heights the rail model resolved; collapsed
-		     it is ONE column and a row per group, in the collapsed order —
-		     which is where a top/bottom anchor ends up meaning first and
-		     last. Either way the cells are placed explicitly, so nothing in
-		     the `{#each}` ever has to be re-sorted to reorder the column. -->
 		<div
 			class="live-side"
 			class:sheet={overlay}
-			class:one-column={col.collapsed}
 			bind:clientHeight={columnPx}
-			bind:clientWidth={columnWPx}
 			style={asStage
 				? "grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);"
-				: `grid-template-columns:repeat(${
-						col.collapsed ? 1 : frame.cols
-					},1fr);grid-template-rows:${col.rows || "1fr"};`}
+				: `grid-template-columns:minmax(0,1fr);grid-template-rows:${col.rows || "1fr"};`}
 		>
-			{#each units as u (u.key)}
-				{@const widthPx = cellWidths[u.key] ?? 0}
-				{@const heightPx = cellHeights[u.key] ?? 0}
+			{#each panels as p, i (p.key)}
+				{@const widthPx = cellWidths[p.key] ?? 0}
+				{@const heightPx = cellHeights[p.key] ?? 0}
 				<!-- The stage cell is open, whatever the column decided. -->
 				{@const st =
-					asStage && u.key === stageKey
+					asStage && p.key === stageKey
 						? "expanded"
-						: (col.state[u.key] ?? "expanded")}
-				<!-- ONE cell per group, whatever it is doing: expanded is a
+						: (col.state[p.key] ?? "expanded")}
+				<!-- ONE cell per panel, whatever it is doing: expanded is a
 				     row, collapsed is a display:none, folded is its title bar
 				     and a hidden body, and a flyout is the same box
 				     positioned over the session. Four containers, one mount —
@@ -327,68 +208,60 @@
 				<div
 					class="live-side-cell cell-{st}"
 					class:from-left={side === "left"}
-					data-group-key={u.key}
+					data-group-key={p.key}
 					data-pop-keep={st === "flyout" ? "" : undefined}
-					id={tuckedOut ? `tucked-${side}-${u.key}` : undefined}
+					id={tuckedOut ? `tucked-${side}-${p.key}` : undefined}
 					data-tucked-flyout={tuckedOut ? "" : undefined}
 					role={tuckedOut ? "dialog" : undefined}
-					aria-label={tuckedOut
-						? model.rail.groupTitle(u)
-						: undefined}
+					aria-label={tuckedOut ? model.rail.groupTitle(p) : undefined}
 					tabindex={tuckedOut ? -1 : undefined}
-					data-stage-hidden={(asStage && u.key !== stageKey) ||
-					(sheetHides && u.key === stageKey)
+					data-stage-hidden={(asStage && p.key !== stageKey) ||
+					(sheetHides && p.key === stageKey)
 						? ""
 						: undefined}
-					bind:clientWidth={cellWidths[u.key]}
-					bind:clientHeight={cellHeights[u.key]}
-					style={asStage && u.key === stageKey
+					bind:clientWidth={cellWidths[p.key]}
+					bind:clientHeight={cellHeights[p.key]}
+					style={asStage && p.key === stageKey
 						? "grid-column:1; grid-row:1;"
-						: `${model.rail.cellGridStyle(u, col, st)}${
+						: `${model.rail.cellGridStyle(p, col, st)}${
 								st === "flyout" ? flyoutStyle() : ""
-							}${
-								u.members.length === 1 && !col.collapsed
-									? model.anchorCellStyle(u.members[0].anchor)
-									: ""
-							}`}
+							}${overlay ? `order:${i};` : ""}`}
 				>
 					{#if st === "folded"}
 						<!-- Ruled 2026-09-10: on a phone a tap on the header
-						     folds a widget to a title bar. Its own nodes,
-						     added at their anchor — the widget below never
-						     moves, which is the whole point. -->
-						{@const FoldIcon = model.rail.groupIcon(u)}
+						     folds a panel to a title bar. Its own nodes, added
+						     at their anchor — the widget below never moves. -->
+						{@const FoldIcon = model.rail.groupIcon(p)}
 						<button
 							class="fold-bar"
 							aria-expanded="false"
-							onclick={() => model.rail.toggleGroup(side, u)}
+							onclick={() => model.rail.toggleGroup(side, p)}
 						>
 							<FoldIcon size={14} />
 							<span class="fold-title">
-								{model.rail.groupTitle(u)}
+								{model.rail.groupTitle(p)}
 							</span>
 							<Icons.ChevronDown size={14} />
 						</button>
 					{/if}
 					<!-- Out over the session (rule (c), a tucked panel) or in the
-					     phone's sheet, a group is momentarily opened: carded
+					     phone's sheet, a panel is momentarily opened: carded
 					     whatever its setting says (./hostCard). -->
-					{@render unit(
-						u,
-						{ zone: frame, widthPx, heightPx },
+					{@render panel(
+						p,
+						{ side, index: i, count: panels.length, widthPx, heightPx },
 						st === "flyout" || overlay
 					)}
 				</div>
 			{/each}
 		</div>
-		<!-- No groups, no rail. In the mobile SHEET there is no rail either:
-		     the sheet IS the side, opened from the header's own control. -->
-		{#if units.length && !overlay && !asStage}
-			<GroupRail
+		<!-- In the mobile SHEET there is no rail: the sheet IS the side,
+		     opened from the header's own control. -->
+		{#if panels.length && !overlay && !asStage}
+			<PanelRail
 				{side}
-				{units}
+				{panels}
 				{col}
-				markPinned={false}
 				rail={model.rail}
 				tucked={isTucked}
 				{tuckedOpen}
@@ -436,33 +309,18 @@
 			</button>
 		</div>
 	{/if}
-	<!-- `arr` only when the arrangement places something (./sessionLayoutModel
-	     `arrangedHere`): a box drawn here with no width reserved for it falls
-	     back to `.side-column { inline-size: 100% }` and shrinks the centre. -->
-	{#if arr}
-		{@render arrangedSide(arr)}
+	{#if shown}
+		{@render column()}
 	{:else if emptyPx > 0 && flowPx > 0}
 		<!-- An EMPTY side keeps its column (ruled 2026-09-29; ./sideSlot
 		     `emptyColumnsPx`). Drawn exactly when its width was granted, so
-		     the box and the reserve cannot disagree; the grant is already 0
-		     where the side takes no room — stowed, in the sheet, tucked,
-		     hidden, or given way to the stage. Nothing in it to reach, so no
-		     tab stop and no a11y tree; widgets go in from the editor's Move
-		     tab. -->
+		     the box and the reserve cannot disagree. Nothing in it to reach,
+		     so no tab stop and no a11y tree; widgets go in from the editor. -->
 		<div
 			class="side-empty"
 			aria-hidden="true"
 			style="flex:0 0 {flowPx}px; inline-size:{flowPx}px;"
 		></div>
-	{:else}
-		<!-- Docked below the breakpoint, and as the stage: an unpinned
-		     zone's icon strip mounts nothing, and the stage has to draw
-		     its conversation. -->
-		{#each zones as z (z.id)}
-			{@render sideZone(
-				model.isNarrow || slot === "stage" ? model.dockedZone(z) : z
-			)}
-		{/each}
 	{/if}
 </div>
 
@@ -481,7 +339,7 @@
 	   layout at all — no box, no tab stop, no a11y tree — but is still
 	   MOUNTED, so the iframes keep running and the panels keep their state
 	   (the no-reload law). The renderer's `.live-body.body-stowed` is the
-	   WHOLE session in that same state, under the Move tab's canvas. */
+	   WHOLE session in that same state, under the Arrange tab's canvas. */
 	.side-slot.slot-stowed {
 		display: none;
 	}
@@ -490,11 +348,6 @@
 	   dialog, so there is nothing here but making its contents fill the sheet
 	   under the header. A rail's ladder width and the inline slot's clamp are
 	   both wrong in a sheet that already has a width of its own. */
-	.side-slot.slot-overlay > :global(.zone-rail) {
-		inline-size: 100% !important;
-		max-inline-size: none;
-		flex: 1;
-	}
 	.side-slot.slot-overlay > :global(.side-column) {
 		flex: 1;
 		min-block-size: 0;
@@ -514,15 +367,6 @@
 		flex: 1;
 		inline-size: auto;
 	}
-	.side-slot.slot-stage > :global(.zone-rail) {
-		flex: 1;
-		inline-size: auto !important;
-		max-inline-size: none;
-	}
-	.side-slot.slot-stage > :global(.zone-rail > .zone-head) {
-		display: none;
-	}
-
 	/* ── the side rail model (ruled 2026-09-10) ───────────────────────────
 	   A side column is a stack of toggling group panels plus a slim rail of
 	   icons at its OUTER edge. `row-reverse` on a left column puts the rail on
@@ -689,57 +533,4 @@
 		}
 	}
 
-	/* ── zones (the ladder's way) ──────────────────────────────────────── */
-	.zone-rail {
-		display: flex;
-		flex-direction: column;
-		flex: none;
-		min-block-size: 0;
-		gap: 0.35rem;
-	}
-	/* The centre's floor, on the rail path. A rail is `flex: none` at the
-	   ladder's definite width and `.layout-center` is `min-inline-size: 0`, so
-	   two rails wider than the body would have squeezed the chat to nothing.
-	   `--side-flow-px` is this side's share after the body reserved
-	   MIN_CENTER_PX (see `sideWidths` / ./sideSlot), and with room to spare it
-	   IS the ladder width, so the cap only bites in the tight case. */
-	.side-slot.slot-inline > :global(.zone-rail) {
-		max-inline-size: var(--side-flow-px, none);
-	}
-	/* Icon strip (unpinned rail / narrow drawer): just its icons, no boxed
-	   "ring" around them. */
-	.zone-iconstrip {
-		display: flex;
-		flex-direction: column;
-		flex: none;
-		align-items: center;
-		gap: 0.25rem;
-		inline-size: 2.25rem;
-		padding-block: 0.375rem;
-		border-radius: 0.6rem;
-		background: transparent;
-		border: none;
-	}
-	/* The icon button's face — the same one ./GroupRail wears. */
-	.icon-btn {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		inline-size: 1.75rem;
-		block-size: 1.75rem;
-		border-radius: 0.5rem;
-		color: var(--color-surface-600);
-	}
-	:global([data-mode="dark"]) .icon-btn {
-		color: var(--color-surface-400);
-	}
-	.icon-btn:hover,
-	.icon-btn.active {
-		background: color-mix(
-			in oklab,
-			var(--color-primary-500) 15%,
-			transparent
-		);
-		color: var(--color-primary-600);
-	}
 </style>

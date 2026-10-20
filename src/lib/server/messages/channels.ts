@@ -318,7 +318,9 @@ export async function channelHead(
  * answer to one of its questions, and an answer does not move the
  * conversation on from the row it answers. So three questions on one row
  * can each be answered in turn, while any other line on the channel stales
- * every open form on the row. `channelHead` stays the newest-row
+ * every open form on the row. A **table line** (`metadata.tableLine` — a
+ * roll line, "Give me a moment…") does not move it either: it is the
+ * table's, not conversation (2026-10-16). `channelHead` stays the newest-row
  * definition (`item.isNewest`); this is the one the block write stamps as
  * `head` and the fire door compares against.
  */
@@ -335,7 +337,11 @@ export async function stalenessHead(
 			and(
 				eq(schema.sessionMessages.sessionId, sessionId),
 				eq(schema.sessionMessages.channel, channel),
-				sql`coalesce(${schema.sessionMessages.metadata}->'answersForm'->>'messageId', '') <> ${String(rowId)}`
+				sql`coalesce(${schema.sessionMessages.metadata}->'answersForm'->>'messageId', '') <> ${String(rowId)}`,
+				// 🚧 A table line is the table's, not the conversation's
+				// (2026-10-16): "Give me a moment to build the world." written
+				// after the question it follows must not overtake it.
+				sql`coalesce((${schema.sessionMessages.metadata} ->> 'tableLine')::boolean, false) = false`
 			)
 		)
 		.orderBy(desc(schema.sessionMessages.id))

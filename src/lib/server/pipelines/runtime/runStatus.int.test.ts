@@ -438,11 +438,15 @@ describe("the live row and the session list", () => {
 			i18n: { en: "{speaker} is typing" },
 			vars: { speaker: "Jasmine" }
 		})
-		// The list's push: each change, then the end.
+		// The list's push: each change, then the end. Story's reply runs its
+		// reckoning after the reply (2026-10-19; a session with no preset
+		// takes the declared defaults, the reckoning on), so the list says
+		// that too; the row is the reply's and stops at typing.
 		expect(listStatuses(sessionId).map(rendered)).toEqual([
 			"Jasmine is thinking",
 			"Jasmine is composing",
 			"Jasmine is typing",
+			"Noting what changed",
 			null
 		])
 		// The retired enum was never written; the status leaves with the run.
@@ -479,11 +483,12 @@ describe("the live row and the session list", () => {
 			.map((e) => rendered(e.data.status))
 		// *Thinking* included since A7: the speaker is known from the first
 		// node, so the reads' status is no longer withheld — see the first
-		// case.
+		// case. Then Story's reckoning, after the reply (2026-10-19).
 		expect(statuses).toEqual([
 			"Jasmine is thinking",
 			"Jasmine is composing",
-			"Jasmine is typing"
+			"Jasmine is typing",
+			"Noting what changed"
 		])
 	})
 })
@@ -537,7 +542,7 @@ describe("Stop mid-typing", () => {
 		)
 		const inspected = {
 			runId: run!.runId,
-			specSlug: "core:spec/chat-respond",
+			specSlug: "core:spec/story-respond",
 			specVersion: "1",
 			specHash: null,
 			specHashIsCurrent: true,

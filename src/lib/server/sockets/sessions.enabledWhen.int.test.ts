@@ -116,7 +116,7 @@ vi.mock("$lib/server/embedding", () => ({
 	batchEmbed: async () => []
 }))
 
-const CHAT = "core:genre/chat"
+const CHAT = "core:genre/story"
 
 beforeAll(async () => {
 	dataDir = await fs.mkdtemp(
@@ -206,8 +206,8 @@ async function character(userId: number, name: string) {
  * write is refused and nothing moves.
  */
 async function weatherWhenGenre() {
-	const { adventureGenre } = await import("@serene-pub/core-catalog")
-	return adventureGenre
+	const { storyGenre } = await import("@serene-pub/core-catalog")
+	return storyGenre
 }
 
 /** A chat session with an owner, a guest, and a cast character Tom nobody portrays. */
@@ -239,7 +239,7 @@ async function sessionWithTom(tag: string, genreId: string = CHAT) {
 async function publishAskAndAnswer(tag: string, tom: number) {
 	const { spec, compile } = await import("@serene-pub/sdk")
 	const C = await import("@serene-pub/contracts")
-	const { chatGenre } = await import("@serene-pub/core-catalog")
+	const { storyGenre } = await import("@serene-pub/core-catalog")
 	const { saveDocument } = await import("$lib/server/pipelines/boot/store")
 	const askId = `core:spec/test-${tag}-ask`
 	const answerId = `core:spec/test-${tag}-answer`
@@ -289,7 +289,7 @@ async function publishAskAndAnswer(tag: string, tom: number) {
 			}
 		})
 			.inlet("input", C.userMessage.v1(), {
-				genre: chatGenre,
+				genre: storyGenre,
 				event: "core:event/session-action@1"
 			})
 			.outlet("save", () =>
@@ -326,7 +326,7 @@ async function publishAskAndAnswer(tag: string, tom: number) {
 			}
 		})
 			.inlet("input", C.userMessage.v1(), {
-				genre: chatGenre,
+				genre: storyGenre,
 				event: "core:event/session-action@1"
 			})
 			.task("answer", ($) =>
@@ -403,7 +403,7 @@ describe("W1 · the oracle road", () => {
 		const slugs = runs.map((r) => r.specSlug)
 		expect(slugs.filter((x) => !x.endsWith("-turn-order"))).toEqual([
 			askId,
-			"core:spec/chat-answer-form",
+			"core:spec/story-answer-form",
 			answerId
 		])
 		expect(slugs.filter((x) => x.endsWith("-turn-order")).length).toBe(2)
@@ -543,7 +543,7 @@ async function publishParkable() {
 	parkablePublished = true
 	const { spec, compile } = await import("@serene-pub/sdk")
 	const C = await import("@serene-pub/contracts")
-	const { chatGenre } = await import("@serene-pub/core-catalog")
+	const { storyGenre } = await import("@serene-pub/core-catalog")
 	const { saveDocument } = await import("$lib/server/pipelines/boot/store")
 	const doc: SpecDocument = compile(
 		spec(PARKABLE, {
@@ -561,7 +561,7 @@ async function publishParkable() {
 			}
 		})
 			.inlet("input", C.userMessage.v1(), {
-				genre: chatGenre,
+				genre: storyGenre,
 				event: "core:event/session-action@1"
 			})
 			.outlet("save", ($) => C.createMessage.v1({ text: $.input.text }))
@@ -629,8 +629,9 @@ describe("S-A2 / W-A2 · a parked run pushes when it settles, and never while it
 			ownEmit
 		)
 		expect(ack).toMatchObject({ parked: true })
-		// The rise, and nothing more while it waits.
-		expect(pushes()).toHaveLength(1)
+		// The rise, and nothing more while it waits. Sent, never awaited by
+		// the run: it lands a beat after the ack.
+		await vi.waitFor(() => expect(pushes()).toHaveLength(1), { timeout: 10_000, interval: 25 })
 		expect(retryOf(pushes()[0]!)).toMatchObject({
 			enabled: false,
 			reason: { i18n: CORE_VERB_REASONS.generating }
@@ -672,7 +673,7 @@ describe("S-A2 / W-A2 · a parked run pushes when it settles, and never while it
 		)
 		const rows = await runsOf(session.id)
 		expect(rows.map((r) => `${r.specSlug}:${r.outcome}`).sort()).toEqual([
-			"core:spec/chat-turn-order:ok",
+			"core:spec/story-turn-order:ok",
 			`${PARKABLE}:ok`
 		])
 	})
@@ -773,7 +774,7 @@ describe("W-A3 · a reply that moves state announces it after the list", () => {
 			"@serene-pub/sdk"
 		)
 		const C = await import("@serene-pub/contracts")
-		const { chatGenre } = await import("@serene-pub/core-catalog")
+		const { storyGenre } = await import("@serene-pub/core-catalog")
 		const { saveDocument } = await import(
 			"$lib/server/pipelines/boot/store"
 		)
@@ -846,7 +847,7 @@ describe("W-A3 · a reply that moves state announces it after the list", () => {
 		expect(
 			(await runsOf(session.id)).map((r) => `${r.specSlug}:${r.outcome}`).sort()
 			// The genre's own turn-order spec runs beside the test's (an Adventure's).
-		).toEqual(["core:spec/adventure-turn-order:ok", `${specId}:ok`].sort())
+		).toEqual(["core:spec/story-turn-order:ok", `${specId}:ok`].sort())
 
 		// The state moved and was announced — after the run left the
 		// registry and the list went out, never before.
@@ -883,7 +884,7 @@ describe("pass 3 · the trigger road announces state whatever the outcome", () =
 			"@serene-pub/sdk"
 		)
 		const C = await import("@serene-pub/contracts")
-		const { chatGenre } = await import("@serene-pub/core-catalog")
+		const { storyGenre } = await import("@serene-pub/core-catalog")
 		const { saveDocument } = await import(
 			"$lib/server/pipelines/boot/store"
 		)

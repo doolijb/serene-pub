@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { page } from "$app/state"
+	import { appVersion } from "$lib/shared/constants/version"
 	import { withoutShared } from "$lib/shared/utils/sharedRows"
 	import {
 		onCardImported,
@@ -39,6 +41,10 @@
 	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
+	import {
+		CONNECTIONS_CONTEXT,
+		type ConnectionsCtx
+	} from "$lib/client/contexts/connections.svelte"
 	import { cardFileForUpload } from "$lib/client/utils/cardUpload"
 	import { refusedSwapsSentence } from "$lib/client/components/sessionForms/refusedSwaps"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -54,6 +60,7 @@
 	} from "$lib/client/sessions/sessionRowPatches.svelte"
 	import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 	import {
+		GAME_GENRE_ID,
 		GUIDE_GENRE_ID,
 		STANDARD_GENRE_ID,
 		autoSessionName,
@@ -84,6 +91,10 @@
 	)
 
 	const socket = useTypedSocket()
+	// 🚧 The one "Connection created" toast is the connections context's
+	// (`expectCreate`); this page names its own creates there (2026-10-16).
+	const conns = getContext<ConnectionsCtx | undefined>(CONNECTIONS_CONTEXT)
+	$effect(() => conns?.hold())
 	const interest = getInterestContext()
 
 	// Data
@@ -460,7 +471,7 @@
 		const part =
 			hour >= 5 && hour < 12
 				? "Morning"
-				: hour < 18
+				: hour >= 12 && hour < 18
 					? "Afternoon"
 					: "Evening"
 		return `${part}, ${name}.`
@@ -570,6 +581,10 @@
 	function turnHint(session: SessionListRow): string | null {
 		const last = session.lastMessage
 		if (!last) return null
+		// A reply that failed is nobody's wait: the session shows its Retry.
+		if (last.replyFailed) return "The reply failed"
+		// A branch made on revision: the turn after this line was taken back.
+		if (last.revisedTurn) return "Your turn"
 		if (!last.isUser) return "Your turn"
 		const cast = session.sessionCharacters ?? []
 		if (cast.length === 1) {
@@ -982,6 +997,19 @@
 	}
 	let guidePick = $derived(wizardGenrePick(GUIDE_GENRE_ID))
 	let chatPick = $derived(wizardGenrePick(STANDARD_GENRE_ID))
+	/** 🚧 The game the wizard offers (Play a game); null when this pub offers none. */
+	let gamePick = $derived(wizardGenrePick(GAME_GENRE_ID))
+
+	/**
+	 * 🚧 **Play a game** (2026-10-18): the New session screen, on the game's
+	 * genre — a game needs no character and no persona to start, and its
+	 * own interview makes the rest.
+	 */
+	/** Ruled 2026-10-19: the one door is the start screen's genre cards; no second way in. */
+	function startGameSession() {
+		closeDock()
+		startASession({})
+	}
 
 	/** The persona the person plays as by default, if they have one. */
 	let defaultPersonaId = $derived(
@@ -1161,9 +1189,11 @@
 			socket.emit("systemSettings:updateOllamaManagerEnabled", {
 				enabled: true
 			})
+		const connectionName = freeConnectionName(provider.label)
+		conns?.expectCreate(connectionName)
 		socket.emit("connections:create", {
 			connection: {
-				name: freeConnectionName(provider.label),
+				name: connectionName,
 				type: provider.type,
 				baseUrl: provider.baseUrl,
 				// The picked model becomes its row at create
@@ -1388,10 +1418,12 @@
 				})
 			}
 			socket.emit("connectionDefaults:list", {})
-			toaster.success({
-				title: "Connection created",
-				description: `Connected to ${res.connection.name}`
-			})
+			// Toasted once, by the connections context (`expectCreate`).
+			if (!conns)
+				toaster.success({
+					title: "Connection created",
+					description: `Connected to ${res.connection.name}`
+				})
 			// The wizard's Choose an AI step moves on when the chat default
 			// lands (the `hasConnection` effect), not here: a row can exist
 			// long before any model on it can answer.
@@ -1622,6 +1654,22 @@
 		></span>
 		Serene Pub is in beta. Expect bugs and rapid changes.
 	</div>
+	{#if page.data?.isPrerelease}
+		<!-- A pre-release build is a preview with no guarantee: its data is not
+		     promised to carry into release candidates (ruled 2026-10-19). Said
+		     once, plainly, at the same volume as the beta line. -->
+		<div
+			class="text-warning-800 dark:text-warning-400 flex w-full items-center gap-2 text-xs"
+			data-testid="home-prerelease-notice"
+		>
+			<span
+				class="bg-warning-500 h-1.5 w-1.5 shrink-0 rounded-full"
+				aria-hidden="true"
+			></span>
+			Pre-release build {appVersion}: no guarantees. Your data may not carry
+			into release candidates, so keep backups and nothing you can't lose.
+		</div>
+	{/if}
 
 	<!-- Loading state while socket data arrives -->
 	{#if !dataReady}
@@ -2851,7 +2899,7 @@
 									class="text-surface-600-400 mx-auto max-w-md"
 								>
 									{t(
-										"You can do both later. This is just where to start."
+										"You can do any of these later. This is just where to start."
 									)}
 								</p>
 							</div>
@@ -2925,6 +2973,36 @@
 										</span>
 									</span>
 								</button>
+								<!-- 🚧 Play a game (2026-10-18, the 100-turn walk #31):
+								     the game's own door, where the pub offers it. -->
+								{#if true}
+									<button
+										type="button"
+										class="{CHOICE_CARD} flex-col sm:col-span-2"
+										data-testid="wizard-start-a-session"
+										onclick={startGameSession}
+										disabled={startingSession}
+									>
+										<span
+											class="preset-tonal-primary flex size-10 shrink-0 items-center justify-center rounded-xl"
+											aria-hidden="true"
+										>
+											<Icons.Dices size={20} />
+										</span>
+										<span class="flex min-w-0 flex-col gap-1.5">
+											<span class="font-semibold">
+												{t("Start a session")}
+											</span>
+											<span
+												class="text-surface-600-400 text-sm"
+											>
+												{t(
+													"Pick the kind of session: a plain chat with the model, a story with your characters, a game the AI runs, or one you run yourself."
+												)}
+											</span>
+										</span>
+									</button>
+								{/if}
 							</div>
 
 							<!-- ══ CHARACTER ══ -->

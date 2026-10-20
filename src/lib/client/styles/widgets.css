@@ -2039,6 +2039,21 @@ button[data-widget-part~="messages.composer-persona"] {
 	clip-path: inset(50%);
 	white-space: nowrap;
 }
+/* The pill in a narrow box (a side panel's lane, ~200px): four 36px controls
+   would leave the field a sliver and clip its placeholder, so the field takes
+   the whole first row and the controls sit under it, Send at the end. */
+@container sp-widget (width < 22rem) {
+	[data-composer-skin="minimal"] [data-widget-part~="messages.composer-card"] {
+		flex-wrap: wrap;
+	}
+	[data-composer-skin="minimal"] [data-widget-part~="messages.composer-body"] {
+		order: -2;
+		flex-basis: 100%;
+	}
+	[data-composer-skin="minimal"] [data-widget-part~="messages.composer-footer-end"] {
+		margin-inline-start: auto;
+	}
+}
 @media (pointer: coarse) {
 	[data-composer-skin="minimal"] :is([data-widget-part~="messages.composer-persona"], [data-widget-part~="messages.composer-icon-button"], [data-widget-part~="messages.composer-send"], [data-widget-part~="messages.composer-stop"]) {
 		inline-size: calc(var(--spacing) * 11);
@@ -2537,6 +2552,20 @@ button[data-widget-part~="messages.composer-persona"] {
 		transition: none;
 	}
 }
+/* 🚧 A table line (`metadata.tableLine`, 2026-10-15): the table's own line —
+   a Dungeon Crawler roll line — in no voice. The component draws its content
+   cell alone (no face, name or controls); here it reads as a quiet aside in
+   the log: small, muted, its figures lined up, its own glyph (⚄, ☠) the
+   only marker. */
+[data-widget-part~="messages.message"][data-msg-table-line] {
+	display: block;
+	padding-block: calc(var(--spacing) * 1);
+	color: light-dark(var(--color-surface-700), var(--color-surface-300));
+	font-variant-numeric: tabular-nums;
+}
+[data-widget-part~="messages.message"][data-msg-table-line] [data-widget-part~="messages.message-body"] {
+	font-size: calc(0.875rem * var(--text-scaling, 1));
+}
 /* What the log says instead of lines: not granted, loading, nothing yet. */
 [data-widget-part~="messages.log-floor"] {
 	display: flex;
@@ -2659,6 +2688,17 @@ button[data-widget-part~="messages.composer-persona"] {
 }
 [data-widget-part~="messages.block-submit"] {
 	width: fit-content;
+}
+/* A choice or a submit in a narrow panel (a side's Planner lane, a phone):
+   its label wraps inside the button rather than running past the panel's
+   edge, so the panel never scrolls sideways (STYLE-GUIDE §5.3). */
+[data-widget-part~="messages.block-choice"],
+[data-widget-part~="messages.block-submit"] {
+	white-space: normal;
+	overflow-wrap: break-word;
+	text-align: center;
+	max-inline-size: 100%;
+	min-inline-size: 0;
 }
 
 /* Selecting lines for a summary: a line's own choice and the two range
@@ -2811,6 +2851,12 @@ button[data-widget-part~="messages.composer-persona"] {
 	list-style-type: disc;
 	padding-inline-start: calc(var(--spacing) * 5);
 }
+/* 🚧 A copy of the table channel (a crawl's Dice panel): one result a line,
+   as the Story's fold reads them (PLAN-dc-after-walk3 R1-6, the walk's N14
+   residue: a round's lines ran together as one paragraph). */
+[data-widget-part~="messages.root"][data-channel="table"] [data-widget-part~="messages.message-text"] :where(p) {
+	white-space: pre-line;
+}
 
 /* A line being edited: one surface, the field on it, and under it how to
    save or leave and whether anything changed. */
@@ -2948,7 +2994,15 @@ button[data-widget-part~="messages.composer-persona"] {
 	border-radius: var(--radius-container);
 	width: min(92vw, 360px);
 	padding: calc(var(--spacing) * 3);
-	background-color: light-dark(var(--color-surface-100), var(--color-surface-900));
+	/* 🚧 Lifted off the log (PLAN-dc-after-walk3 R1-2, the walk's NEW-4: on a
+	   dark theme the stage's own shade, it read as text laid over the lines
+	   under it): one step up from the stage, a rule round it, the popover's
+	   shadow. */
+	background-color: light-dark(var(--color-surface-50), var(--color-surface-800));
+	border: 1px solid light-dark(var(--color-surface-300), var(--color-surface-700));
+	box-shadow:
+		0 20px 25px -5px rgb(0 0 0 / 0.1),
+		0 8px 10px -6px rgb(0 0 0 / 0.1);
 }
 /* `space-y-2`, as weightless as the utility's `:where()`. */
 :where([data-widget-part~="messages.ledger-review-panel"], [data-widget-part~="messages.turn-line-panel"]) > :where(:not(:last-child)) {
@@ -3333,6 +3387,7 @@ button[data-widget-part~="messages.composer-persona"] {
 }
 [data-widget-part~="messages.block-answered"] {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
 	gap: var(--spacing);
 	font-size: calc(0.875rem * var(--text-scaling));
@@ -4221,6 +4276,382 @@ button[data-widget-part~="messages.composer-persona"] {
 	opacity: var(--sp-w-muted-opacity);
 }
 
+/* ── Stats: the sheet's pieces, faces and worked-out values (2026-10-18) ──── */
+
+/* 🚧 PLAN-sheet-widget §2, §3, §10, §12 and the 100-turn walk (B21, #40):
+   these parts were drawn bare — a piece's popout and the portrait picker put
+   their text straight over the panel under them, and the narrow column read
+   as one cramped run. Parts: stat-slot.root[data-stacked] (a list's label
+   over its full-width rows) · piece-card.row · .name · .count · .brief ·
+   piece-card.detail-panel (the popout's body, portalled to <body>) · its
+   .detail-head · .from · .facts · .fact · .fact-label · .fact-value ·
+   .description · .prose-label · .prose · .traits · .trait · .invalid ·
+   .actions · .edit · .give-open · .remove · piece-card.names · .word ·
+   stats.faces · .faces-chip · .faces-img · .faces-name · .faces-dot ·
+   stats.face · .face-img · .face-initial · stats.face-panel (portalled) ·
+   .face-head · .face-heading · .face-choices · .face-choice · .face-more ·
+   .face-actions · .face-draw · .face-use · .face-clear · .face-note ·
+   stats.derived (a worked-out value's row, the slot row's own parts). */
+
+/* A list's row stacks: its label on a line of its own, its pieces under it
+   across the whole width — a 200px column no longer squeezes a weapon's
+   name beside the word "Weapons". */
+[data-widget-part~="stat-slot.root"][data-stacked] {
+	grid-template-columns: minmax(0, 1fr);
+	align-items: start;
+	gap: 0.15rem;
+}
+[data-widget-part~="stat-slot.root"][data-stacked]:has(> [data-widget-part~="stats.trail"]) {
+	grid-template-columns: minmax(0, 1fr) auto;
+}
+[data-widget-part~="stat-slot.root"][data-stacked] > [data-widget-part~="stat-slot.control"] {
+	grid-column: 1 / -1;
+	grid-row: 2;
+}
+/* Rows a sheet stacks breathe apart from their neighbours. */
+[data-widget-part~="stats.card-body"] > [data-widget-part~="stat-slot.root"][data-stacked] {
+	padding-block: 0.2rem;
+}
+
+/* One piece: a quiet full-width button — name, ×count, the first facts. */
+[data-widget-part~="piece-card.row"] {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+	inline-size: 100%;
+	min-width: 0;
+	padding: 0.15rem 0.3rem;
+	border-radius: var(--sp-w-control-radius);
+	text-align: start;
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="piece-card.row"]:hover,
+[data-widget-part~="piece-card.row"]:focus-visible,
+[data-widget-part~="piece-card.row"][aria-expanded="true"] {
+	background: var(--sp-w-hover-bg);
+}
+[data-widget-part~="piece-card.row"] > [data-widget-part~="piece-card.name"] {
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: var(--font-weight-medium);
+}
+[data-widget-part~="piece-card.brief"] {
+	flex: 1 1 0;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--sp-w-font-note);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="piece-card.row"] > sp-icon {
+	margin-inline-start: auto;
+	flex: none;
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="piece-card.count"] {
+	flex: none;
+	padding: var(--sp-w-chip-pad);
+	border-radius: var(--sp-w-chip-radius);
+	background: var(--sp-w-chip-bg);
+	font-size: var(--sp-w-font-note);
+	font-variant-numeric: tabular-nums;
+}
+[data-widget-part~="piece-card.unresolved"],
+[data-widget-part~="piece-card.row"][data-unresolved] > [data-widget-part~="piece-card.name"] {
+	font-style: italic;
+}
+[data-widget-part~="piece-card.names"] {
+	overflow-wrap: anywhere;
+}
+
+/* The popouts' bodies: a card with a ground of its own (B21), as the stat
+   trail's panel is — never text laid over whatever is under it. */
+[data-widget-part~="piece-card.detail-panel"],
+[data-widget-part~="stats.face-panel"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	width: min(90vw, 300px);
+	max-height: min(70vh, 28rem);
+	overflow: auto;
+	padding: calc(var(--spacing) * 3);
+	border-radius: var(--radius-container);
+	background-color: light-dark(var(--color-surface-100), var(--color-surface-900));
+	color: light-dark(var(--color-surface-950), var(--color-surface-50));
+	border: 1px solid light-dark(var(--color-surface-300), var(--color-surface-700));
+	box-shadow:
+		0 20px 25px -5px rgb(0 0 0 / 0.1),
+		0 8px 10px -6px rgb(0 0 0 / 0.1);
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="piece-card.detail-head"],
+[data-widget-part~="stats.face-head"] {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	font-size: var(--sp-w-font-head);
+	font-weight: var(--font-weight-semibold);
+}
+[data-widget-part~="piece-card.from"],
+[data-widget-part~="piece-card.prose-label"],
+[data-widget-part~="stats.face-heading"],
+[data-widget-part~="stats.face-note"] {
+	font-size: var(--sp-w-font-note);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="piece-card.facts"] {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	gap: 0.15rem 0.6rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="piece-card.fact"] {
+	display: contents;
+}
+[data-widget-part~="piece-card.fact-label"] {
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="piece-card.fact-value"] {
+	overflow-wrap: anywhere;
+	font-variant-numeric: tabular-nums;
+}
+[data-widget-part~="piece-card.description"],
+[data-widget-part~="piece-card.prose"] {
+	margin: 0;
+	line-height: 1.4;
+}
+[data-widget-part~="piece-card.traits"] {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="piece-card.trait"] {
+	padding: var(--sp-w-chip-pad);
+	border-radius: var(--sp-w-chip-radius);
+	background: var(--sp-w-chip-bg);
+	font-size: var(--sp-w-font-note);
+}
+[data-widget-part~="piece-card.invalid"] {
+	font-size: var(--sp-w-font-note);
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+[data-widget-part~="piece-card.actions"],
+[data-widget-part~="stats.face-actions"] {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.3rem;
+}
+[data-widget-part~="piece-card.edit"],
+[data-widget-part~="piece-card.give-open"],
+[data-widget-part~="piece-card.remove"],
+[data-widget-part~="stats.face-draw"],
+[data-widget-part~="stats.face-use"],
+[data-widget-part~="stats.face-clear"],
+[data-widget-part~="stats.face-more"] {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	padding: var(--sp-w-control-pad);
+	border-radius: var(--sp-w-control-radius);
+	background: var(--sp-w-control-bg);
+	font-size: var(--sp-w-font-note);
+}
+[data-widget-part~="piece-card.edit"]:hover,
+[data-widget-part~="piece-card.give-open"]:hover,
+[data-widget-part~="piece-card.remove"]:hover,
+[data-widget-part~="stats.face-use"]:hover:not(:disabled),
+[data-widget-part~="stats.face-clear"]:hover,
+[data-widget-part~="stats.face-more"]:hover {
+	background: var(--sp-w-chip-on-bg);
+}
+[data-widget-part~="stats.face-draw"]:disabled,
+[data-widget-part~="stats.face-use"]:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+/* 🚧 Give to… a stack (★4): how many, before the menu. */
+[data-widget-part~="piece-card.give-count"] {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.3rem;
+	font-size: var(--sp-w-font-note);
+}
+[data-widget-part~="piece-card.give-count"] > input {
+	inline-size: 3.5rem;
+	padding: var(--sp-w-control-pad);
+	border-radius: var(--sp-w-control-radius);
+	background: var(--sp-w-control-bg);
+	font-variant-numeric: tabular-nums;
+}
+/* 🚧 Offers on a sheet (★4): a row each, its answers at its end. */
+[data-widget-part~="stats.offers"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	margin: 0;
+	padding: 0 0 0.3rem;
+	list-style: none;
+}
+[data-widget-part~="stats.offer"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.3rem;
+	padding: var(--sp-w-control-pad);
+	border-radius: var(--sp-w-control-radius);
+	background: var(--sp-w-chip-bg);
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="stats.offer-text"] {
+	flex: 1 1 10rem;
+	min-inline-size: 0;
+	overflow-wrap: anywhere;
+}
+[data-widget-part~="stats.offer-accept"],
+[data-widget-part~="stats.offer-decline"],
+[data-widget-part~="stats.offer-withdraw"] {
+	padding: var(--sp-w-control-pad);
+	border-radius: var(--sp-w-control-radius);
+	background: var(--sp-w-control-bg);
+	font-size: var(--sp-w-font-note);
+}
+[data-widget-part~="stats.offer-accept"]:hover,
+[data-widget-part~="stats.offer-decline"]:hover,
+[data-widget-part~="stats.offer-withdraw"]:hover {
+	background: var(--sp-w-chip-on-bg);
+}
+[data-widget-part~="stats.offer-note"] {
+	font-size: var(--sp-w-font-note);
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+@media (pointer: coarse) {
+	[data-widget-part~="stats.offer-accept"],
+	[data-widget-part~="stats.offer-decline"],
+	[data-widget-part~="stats.offer-withdraw"] {
+		min-height: 44px;
+	}
+}
+@media (pointer: coarse) {
+	[data-widget-part~="piece-card.row"],
+	[data-widget-part~="piece-card.edit"],
+	[data-widget-part~="piece-card.give-open"],
+	[data-widget-part~="piece-card.remove"],
+	[data-widget-part~="stats.face-use"],
+	[data-widget-part~="stats.face-clear"],
+	[data-widget-part~="stats.faces-chip"] {
+		min-height: 44px;
+	}
+}
+
+/* The faces strip: one chip per seat over the one sheet below it. */
+[data-widget-part~="stats.faces"] {
+	display: flex;
+	gap: 0.3rem;
+	overflow-x: auto;
+	padding-block-end: 0.3rem;
+	scrollbar-width: thin;
+}
+[data-widget-part~="stats.faces-chip"] {
+	position: relative;
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: 0.3rem;
+	max-inline-size: 10rem;
+	padding: 0.1rem 0.5rem 0.1rem 0.15rem;
+	border-radius: var(--sp-w-chip-radius);
+	background: var(--sp-w-chip-bg);
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="stats.faces-chip"][aria-selected="true"] {
+	background: var(--sp-w-chip-on-bg);
+	font-weight: var(--font-weight-semibold);
+}
+[data-widget-part~="stats.faces-name"] {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+[data-widget-part~="stats.faces-dot"] {
+	inline-size: 0.45rem;
+	block-size: 0.45rem;
+	flex: none;
+	border-radius: 999px;
+	background: light-dark(var(--color-primary-600), var(--color-primary-400));
+}
+
+/* A face: the sheet head's portrait and each chip's, round; an initial when
+   there is no picture. */
+[data-widget-part~="stats.face"] {
+	display: inline-flex;
+	flex: none;
+	border-radius: 999px;
+}
+[data-widget-part~="stats.face-img"],
+[data-widget-part~="stats.faces-img"] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	inline-size: 1.6rem;
+	block-size: 1.6rem;
+	flex: none;
+	border-radius: 999px;
+	object-fit: cover;
+	background: var(--sp-w-chip-bg);
+	font-size: var(--sp-w-font-note);
+	font-weight: var(--font-weight-semibold);
+}
+[data-widget-part~="stats.faces-img"] {
+	inline-size: 1.25rem;
+	block-size: 1.25rem;
+}
+button[data-widget-part~="stats.face"]:hover [data-widget-part~="stats.face-img"],
+button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.face-img"] {
+	outline: 2px solid light-dark(var(--color-primary-600), var(--color-primary-400));
+	outline-offset: 1px;
+}
+[data-widget-part~="stats.face-choices"] {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(3.5rem, 1fr));
+	gap: 0.3rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="stats.face-choice"] {
+	display: block;
+	inline-size: 100%;
+	aspect-ratio: 1;
+	overflow: hidden;
+	border-radius: var(--sp-w-card-radius);
+	outline: 2px solid transparent;
+}
+[data-widget-part~="stats.face-choice"] > img {
+	inline-size: 100%;
+	block-size: 100%;
+	object-fit: cover;
+}
+[data-widget-part~="stats.face-choice"][aria-pressed="true"] {
+	outline-color: light-dark(var(--color-primary-600), var(--color-primary-400));
+}
+
+/* A worked-out value (armour class): the slot row's own look, its number in
+   tabular figures — read-only, so nothing in it is a control. */
+[data-widget-part~="stats.derived"] [data-widget-part~="stat-slot.line"] {
+	font-variant-numeric: tabular-nums;
+	font-weight: var(--font-weight-medium);
+}
+
 /* ── One slot (SlotControl) ──────────────────────────────────────────────── */
 
 /* Keyed on the slot control's own parts (`data-widget-part`, P3e): a shared
@@ -4260,14 +4691,14 @@ button[data-widget-part~="messages.composer-persona"] {
 	gap: 0.3rem;
 	font-size: var(--sp-w-font-row-compact);
 }
+/* A label too long for its column wraps to a second line rather than being
+   clipped mid-word ("Standing orc…"): the name is the row's meaning. */
 [data-widget-part~="stat-slot.label"] {
 	display: inline-flex;
 	align-items: center;
 	gap: 0.2rem;
 	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	overflow-wrap: break-word;
 	opacity: var(--sp-w-muted-opacity);
 }
 /* A sheet requires a value (R7): said, never enforced here. */
@@ -4369,6 +4800,15 @@ button[data-widget-part~="messages.composer-persona"] {
 	border-radius: var(--sp-w-control-radius);
 	background: transparent;
 	padding-inline: 0.1rem;
+	/* A text value ("The Sunken Gate") wraps inside the panel, never clipped
+	   mid-word (DC walkthrough 2026-10-15); a word longer than the box breaks. */
+	white-space: normal;
+	overflow-wrap: anywhere;
+	text-align: start;
+}
+/* A number stays one line: it is short, and a wrapped figure misreads. */
+[data-widget-part~="stat-slot.root"][data-slot-shape="number"] [data-widget-part~="stat-slot.line"] {
+	white-space: nowrap;
 }
 /* A switch that is on. */
 [data-widget-part~="stat-slot.chip"][aria-pressed="true"] {
@@ -5763,6 +6203,15 @@ button[data-widget-part~="messages.composer-persona"] {
 	min-width: 0;
 	overflow-wrap: anywhere;
 	font-weight: var(--font-weight-medium);
+}
+/* 🚧 A member that is a list (Q3-6, the leads): an item a line, never commas. */
+[data-widget-part~="annex.row-items"] {
+	margin: 0;
+	padding-inline-start: 1.1em;
+	list-style: disc;
+}
+[data-widget-part~="annex.row-item"] + [data-widget-part~="annex.row-item"] {
+	margin-block-start: calc(var(--spacing) * 0.5);
 }
 
 /* A list: a chip per item, wrapping. */

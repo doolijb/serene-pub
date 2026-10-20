@@ -17,6 +17,7 @@
  * migration and was deleted 2026-09-16 once nothing called it.)
  */
 
+import { isCardlessPlayerSeat } from "$lib/server/sessions/seatName"
 import type { Bindings, TypedReads } from "@serene-pub/sdk"
 import {
 	ok,
@@ -249,7 +250,9 @@ import {
 	inTurnEnvoys,
 	mentionedFirst,
 	narratorEntries,
+	unpromptedEntries,
 	rotationTurns,
+	senderRefOf,
 	roundRobinEntries,
 	spokenRefsSince,
 	standingTurnPlan,
@@ -1765,6 +1768,19 @@ export function renderToolResult(result: unknown): string {
  * carries one declaration; `generate-with-tools@1` reads `tools` and
  * `generate-text@1` declares no such port, and each pin says exactly its own.
  */
+/**
+ * 🚧 The reply's own label (2026-10-15): the voice the template context casts
+ * the model as — its `{{char}}` — on Assemble's record as `replyLabel`, so
+ * the dispatch can take a reply's echoed `Name:` off even when no seed line
+ * was written (a prose transcript: a Dungeon Crawler Planner's lane). The
+ * dispatch reads it only when the prompt carries no seed label and no
+ * character speaks (`ownLabelsFor`). Absent when the context names nobody.
+ */
+const replyLabelOf = (templateContext: unknown): { replyLabel?: string } => {
+	const name = (templateContext as { char?: unknown } | null | undefined)?.char
+	return typeof name === "string" && name.trim() ? { replyLabel: name.trim() } : {}
+}
+
 const generateBinding = async (
 	input: SharedInput<
 		[typeof C.generateText, typeof C.generateWithTools],
@@ -2087,7 +2103,13 @@ const generateJsonBinding = async (
 
 	if (result?.isAborted)
 		return halt("generation was aborted before the model finished")
-	if (!result?.text)
+	/**
+	 * 🚧 An empty answer halts — unless the step reads it as an unreadable one
+	 * (`emptyIsUnreadable`, the Dungeon Crawler 100-turn walk, B7): then the
+	 * check a spec places after the call — ask once more, then go on without
+	 * it — runs, where the halt failed the turn on "there is no answer to read".
+	 */
+	if (!result?.text && input?.params?.emptyIsUnreadable !== true)
 		return halt("the model returned nothing — there is no answer to read")
 
 	/**
@@ -2103,7 +2125,8 @@ const generateJsonBinding = async (
 	)
 	let json: unknown = null
 	let parseError: string | undefined
-	try {
+	if (!result?.text) parseError = "the model returned nothing — there is no answer to read"
+	else try {
 		json = JSON.parse(extractJson(result.text))
 	} catch (e) {
 		parseError =
@@ -2119,7 +2142,7 @@ const generateJsonBinding = async (
 		json,
 		value,
 		items,
-		text: result.text,
+		text: result?.text ?? "",
 		// The connection TYPE, not the connection — the same key the projection
 		// removes for everyone who is not an administrator.
 		connection: { type: result.via },
@@ -2183,6 +2206,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		// receipt was saved; the identity hands it on.
 		"core:inlet/form-addressed@1": reads<typeof C.formAddressed>(
 			async (input: NodeInput<typeof C.formAddressed>) => ok(input),
+			{ ports: [] }
+		),
+		// 🚧 A person's message (owner ruling 2026-10-15): the send handler
+		// checked the door and shaped it from the person's Send; the identity
+		// hands it to the save spec.
+		"core:inlet/message-offered@1": reads<typeof C.messageOffered>(
+			async (input: NodeInput<typeof C.messageOffered>) => ok(input),
 			{ ports: [] }
 		),
 
@@ -2264,9 +2294,23 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				 * `main` (or every channel, which holds it): the story's own
 				 * rows are the bound, never the talk.
 				 */
+				/**
+				 * One channel lane, chosen at run time (2026-10-15): the
+				 * `channelLane` in-port, wired, names the lane the turn is on
+				 * and wins over the `channel` parameter. Written `slug:n` so a bare slug reads its
+				 * lane 1, never every lane of it (`channelWhere`) — a lane
+				 * is one private conversation.
+				 */
+				const laneIn =
+					typeof input?.channelLane === "string" && input.channelLane.trim()
+						? parseChannel(input.channelLane)
+						: null
+				const channel = laneIn
+					? `${laneIn.slug}:${laneIn.lane}`
+					: (input?.params?.channel ?? "main")
 				const unplayedOnly = input?.params?.unplayedOnly === true
 				if (unplayedOnly) {
-					const selector = resolveChannel(input?.params?.channel ?? "main")
+					const selector = resolveChannel(channel)
 					if (
 						isAllChannels(selector) ||
 						parseChannel(selector).slug === DEFAULT_CHANNEL
@@ -2314,7 +2358,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					// log and today's exact behaviour; another value is a mode's
 					// declared channel, read on purpose by the pipeline that
 					// wants it. No flat `input.channel` either, on the same terms.
-					channel: input?.params?.channel ?? "main",
+					channel,
 					...(unplayedOnly ? { unplayedOnly: true } : {}),
 					/**
 					 * Side channels as talk (lair re-plan R10's fold-in of the
@@ -2323,6 +2367,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					 * row. The host applies the rule (`sideTalkOnly`).
 					 */
 					...(input?.params?.talkOnly === true ? { talkOnly: true } : {}),
+					/**
+					 * 🚧 No table lines (2026-10-15): a spec that turns them
+					 * off reads only what was said — never a roll line
+					 * (`metadata.tableLine`) a model would take for its own
+					 * speech. Absent or true reads every row, as always.
+					 */
+					...(input?.params?.tableLines === false ? { tableLines: false } : {}),
 					/**
 					 * One row, by id (lair re-plan R11): the message a press
 					 * on a message's ⋮ was made on, when the spec wires the
@@ -2354,12 +2405,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				})
 			},
 			{
-				ports: ["scope", "messageId", "budget"],
+				ports: ["scope", "messageId", "budget", "channelLane"],
 				params: [
 					"limit",
 					"channel",
 					"unplayedOnly",
 					"talkOnly",
+					"tableLines",
 					// The band intent — `priority` read at last (R-7 P5).
 					"share",
 					"maxEntries",
@@ -3966,6 +4018,39 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				params: ["share", "maxEntries", "priority", "scanDepth"]
 			}
 		),
+		/**
+		 * 🚧 **A person's channel lane** (owner ruling 2026-10-17;
+		 * INTEGRATING §1h): the lane that is `person`'s on a channel the
+		 * genre declares `lanes: 'personal'` — the session's lane register
+		 * row, or a new one allocated under the `nextLane` lock
+		 * (`channels/lanes.ts`). The same ask twice is the same lane; a
+		 * shared channel, a person who is not `user:<id>` of a member, or a
+		 * session that is gone halts with the sentence.
+		 */
+		"core:query/channel-lane@1": reads<typeof C.channelLane>(
+			async (input: NodeInput<typeof C.channelLane>) => {
+				const sessionId = Number(input?.scope?.sessionId)
+				if (!Number.isInteger(sessionId))
+					return halt("there is no session to find a lane in — the run is not scoped to one")
+				const slug = typeof input?.channel === "string" ? input.channel.trim() : ""
+				if (!slug) return halt("channel names the channel's slug — it was empty")
+				const m = /^user:([1-9][0-9]*)$/.exec(String(input?.person ?? ""))
+				if (!m)
+					return halt(
+						`person is a person's reference, 'user:<id>' — '${String(input?.person ?? "")}' is not one`
+					)
+				const { laneFor, LaneRefusal } = await import("$lib/server/channels/lanes")
+				const { db } = await import("$lib/server/db")
+				try {
+					const out = await laneFor(db, sessionId, slug, Number(m[1]))
+					return ok({ lane: out.channel, opened: out.opened })
+				} catch (error) {
+					if (error instanceof LaneRefusal) return halt(error.message)
+					throw error
+				}
+			},
+			{ ports: ["scope", "channel", "person"] }
+		),
 		"core:query/session-cast@1": reads<typeof C.sessionCast>(
 			async (
 				input: NodeInput<typeof C.sessionCast>,
@@ -4134,29 +4219,35 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				const personas = params.personas ?? "all"
 				if (personas !== "none") {
 					const turns = rotationTurns(messages)
-					let lastSender: number | null = null
+					let lastSender: ParticipantRef | null = null
 					for (let i = turns.length - 1; i >= 0; i--)
 						if (turns[i]!.role === "user") {
-							lastSender = turns[i]!.personaId ?? null
+							lastSender = senderRefOf(turns[i]!)
 							break
 						}
-					for (const cp of (cast.sessionPersonas ?? [])
+					for (const { cp, position } of (cast.sessionPersonas ?? [])
 						.map((cp, index) => ({ cp, position: cp.position ?? index }))
-						.filter(({ cp }) => cp.persona && !cp.removedAt)
+						// A seat with a card, or 🚧 a card-less one with a
+						// name; a departed card's leftover row is nobody.
+						.filter(({ cp }) => (cp.persona ? !cp.removedAt : isCardlessPlayerSeat(cp)))
 						.sort((a, b) => a.position - b.position)) {
-						const id = cp.cp.persona!.id
-						if (personas === "others" && id === lastSender) continue
+						// A participant is addressed by its card when it has
+						// one: a persona IS a character row (0132), so
+						// `character:<id>`; a card-less player seat is `player-seat:<id>`.
+						// `kind` is the role either way (PLAN §8 (8)).
+						const ref: ParticipantRef = cp.persona
+							? `character:${cp.persona.id}`
+							: `player-seat:${cp.seatId}`
+						if (personas === "others" && ref === lastSender) continue
+						const ownerUserId = cp.persona
+							? cp.persona.userId
+							: cp.seatUserId
 						out.push({
-							// A persona IS a character row (0132), so its
-							// reference is `character:<id>`; `kind` is the
-							// discriminator (PLAN §8 (8)).
-							ref: `character:${id}`,
+							ref,
 							kind: "persona",
-							name: (cp.cp.persona as { name?: string })?.name ?? "",
-							position: cp.position,
-							...(cp.cp.persona!.userId != null
-								? { ownerUserId: cp.cp.persona!.userId }
-								: {})
+							name: cp.persona?.name ?? cp.seatName ?? "",
+							position,
+							...(ownerUserId != null ? { ownerUserId } : {})
 						})
 					}
 				}
@@ -4206,6 +4297,32 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				return ok({ main: candidates, mentioned })
 			},
 			{ ports: ["candidates", "messages"], params: ["lookback"] }
+		),
+		/**
+		 * 🚧 Unprompted turns (lane 2, 2026-10-19): the voices group's tasks
+		 * over the order a strategy prepared — at most one entry at its head
+		 * once the round is over (`unpromptedEntries`). Pure.
+		 */
+		"core:task/turn-unprompted@1": reads<typeof C.turnUnprompted>(
+			async (input: NodeInput<typeof C.turnUnprompted>, ctx: TaskCtx) => {
+				const before = (input?.order ?? []) as TurnEntry[]
+				const modes =
+					input?.modes && typeof input.modes === "object" && !Array.isArray(input.modes)
+						? (input.modes as Record<string, unknown>)
+						: {}
+				const narrate = (input?.params as { narrate?: unknown } | undefined)?.narrate
+				const order = unpromptedEntries(
+					before,
+					(input?.candidates ?? []) as TurnCandidate[],
+					(input?.messages ?? []) as RotationMessage[],
+					modes,
+					typeof narrate === "string" && narrate.trim() ? { narrate: narrate.trim() } : {}
+				)
+				if (order.length > before.length)
+					ctx?.log("info", `unprompted: ${order[0]!.ref ?? "the narrator"}`)
+				return ok({ main: order, order })
+			},
+			{ ports: ["order", "candidates", "messages", "modes"], params: ["narrate"] }
 		),
 		/**
 		 * Fuse the two mechanisms into one ordering.
@@ -4432,7 +4549,70 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				ok({ main: input?.input ?? null }),
 			{ ports: ["input"] }
 		),
-		"core:task/concat-candidates@1": reads<typeof C.concatCandidates>(
+		/**
+		 * 🚧 The ruleset handler (PLAN-rulesets §25, §32; BACKBONE §4):
+		 * `resolve` reads a session's ruleset into labelled blocks, `apply`
+		 * validates the model's deltas, rolls from `ctx.random` (declared
+		 * randomness, so a retake with the run's seed rolls the same dice)
+		 * and writes through the state gate, `advance` passes story time.
+		 * The work is `$lib/server/rulesets/resolve`; the database is a
+		 * dynamic import on `set-state`'s stated terms (`bindings.state.ts`).
+		 *
+		 * The session is named by the `scope` in-port (W3-S); a spec that wires
+		 * no scope names it by the world's own owner among `owners`
+		 * (`session:<id>`), which every shipped spec's owners list carries.
+		 * The session's stored ruleset settings and the ruleset's `derived`
+		 * scripts are read inside the handler. Its blocks carry `{ priority,
+		 * depth }` and every depth's render; `rulesets/budget.ts` degrades
+		 * before it drops.
+		 */
+		"core:task/ruleset-resolve@1": reads<typeof C.rulesetResolve>(
+			async (input: NodeInput<typeof C.rulesetResolve>, ctx: TaskCtx) => {
+				const { resolveRulesetTurn } = await import("$lib/server/rulesets/resolve")
+				const { db } = await import("$lib/server/db")
+				const result = await resolveRulesetTurn(
+					db,
+					{
+						scope: input?.scope,
+						owners: input?.owners,
+						rigour: input?.rigour,
+						mode: input?.mode,
+						actions: input?.actions,
+						deltas: input?.deltas,
+						elapsed: input?.elapsed,
+						// Whose eyes (2026-10-17): a participant reference or
+						// `gm`. Unwired: everyone's view.
+						viewer: input?.viewer
+					},
+					{
+						random: ctx?.random,
+						// The run's seed (A15), handed in on `RenderRun` by
+						// `runTurn` / `cardAction`, labels the derive pass and
+						// the scripts — a retake with the recorded seed derives
+						// the same; each new turn, anew. A run with no seed on
+						// it (a direct binding call) falls back to one draw of
+						// the node's seeded randomness, else the handler's own
+						// per-session constant.
+						...(run.seed
+							? { seed: `run:${run.seed}` }
+							: ctx?.random
+								? { seed: `run:${Math.floor(ctx.random() * 2 ** 32).toString(36)}` }
+								: {}),
+						runId: run.runId,
+						// The run's live row, once it opened one: `apply`'s
+						// writes anchor there, so a retake or swipe of the
+						// turn takes them back with the row.
+						turnMessageId: (
+							await import("$lib/server/pipelines/runtime/runTurnMessage")
+						).turnMessageOf(run.runId)
+					}
+				)
+				if ("halt" in result) return halt(result.halt)
+				return ok(result.ok)
+			},
+			{ ports: ["scope", "owners", "rigour", "mode", "actions", "deltas", "elapsed", "viewer"] }
+		),
+		"core:task/concat-candidates@1":reads<typeof C.concatCandidates>(
 			async (input: NodeInput<typeof C.concatCandidates>) => {
 				const orderings: any[][] = (input?.sources ?? []).filter(
 					Array.isArray
@@ -4697,7 +4877,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * is handed what it needs rather than looking anything up (F11).
 		 */
 		"core:task/context-budget@1": reads<typeof C.contextBudget>(
-			async (input: NodeInput<typeof C.contextBudget>) => {
+			async (input: NodeInput<typeof C.contextBudget>, ctx: TaskCtx) => {
 				// Already the *values*, not a `sampling_configs` row: the
 				// executor resolves a `sampling` slot through the world's config
 				// values, so a key missing here is a parameter switched off. The
@@ -4711,9 +4891,20 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					connection: input?.connection ?? null,
 					safetyMargin: input?.params?.safetyMargin
 				})
-				return ok({ main: budget, available: budget })
+				// The `blocks` in-port (rulesets W3-S): labelled prompt blocks
+				// fitted into what the window leaves, degrade depth before
+				// drop (`rulesets/budget.ts`). Absent `blocks`, `fittedBlocks`
+				// is absent.
+				if (input?.blocks == null) return ok({ main: budget, available: budget })
+				const { fitContextBlocks } = await import("$lib/server/rulesets/budget")
+				return ok({
+					main: budget,
+					available: budget,
+					// Counted in the run's own tokens, as the window is.
+					fittedBlocks: fitContextBlocks(input.blocks, budget.available, ctx?.countTokens ? (t) => ctx.countTokens(t) : undefined)
+				})
 			},
-			{ ports: ["sampling", "connection"], params: ["safetyMargin"] }
+			{ ports: ["sampling", "connection", "blocks"], params: ["safetyMargin"] }
 		),
 
 		"core:task/rank-hybrid@1": reads<typeof C.rankHybrid>(
@@ -5648,8 +5839,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					 * connection's format on a receipt for a prompt rendered in
 					 * something else. The same lie, one layer along.
 					 */
-					main: { ...allocation, ...rendered },
-					context: { ...allocation, ...rendered },
+					main: { ...allocation, ...rendered, ...replyLabelOf(input?.templateContext) },
+					context: { ...allocation, ...rendered, ...replyLabelOf(input?.templateContext) },
 					/**
 					 * ⚠ **Allocations, not blocks** — one retrieved item each, with
 					 * its verdict, where a *block* is one message (NOMENCLATURE
@@ -5821,7 +6012,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			generateJsonBinding,
 			{
 				ports: ["context", "schema", "connection", "sampling"],
-				params: ["path", "stopSequences", "streaming"]
+				params: ["path", "stopSequences", "streaming", "emptyIsUnreadable"]
 			}
 		),
 		/**
@@ -6256,6 +6447,22 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * and refuse one that was added. The host resolves the list; this is
 		 * the shape.
 		 */
+		"core:task/resolve-tasks@1": reads<typeof C.resolveTasks>(
+			async (input: NodeInput<typeof C.resolveTasks>) => {
+				// 🚧 Background tasks for this turn (2026-10-19): the host resolves
+				// stored > preset > declared and adds the "when" (`sessions/tasks.ts`).
+				const sessionId = (input?.session as any)?.sessionId ?? (input as any)?.scope?.sessionId
+				const empty = { reckoning: false, sweep: false, sweepEvery: 5, waitForRound: true, tasks: [], modes: {}, scripts: false }
+				if (typeof sessionId !== "number") return ok({ main: empty, ...empty })
+				const { resolveSessionTasks } = await import("$lib/server/sessions/tasks")
+				const { db } = await import("$lib/server/db")
+				const doc = await resolveSessionTasks(db as any, sessionId, {
+					ruleset: (input?.ruleset as { rigour?: string } | null | undefined) ?? null
+				})
+				return ok({ main: doc, ...doc })
+			},
+			{ ports: ["session", "fields", "preset", "genre", "ruleset"] }
+		),
 		"core:query/available-tools@1": reads<typeof C.availableTools>(
 			async (
 				input: NodeInput<typeof C.availableTools>,
@@ -6264,12 +6471,14 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				const tools = await ctx.read("available_tools", {
 					sessionId: input?.scope?.sessionId,
 					include: input?.params?.include ?? [],
-					plugins: input?.params?.plugins !== false
+					plugins: input?.params?.plugins !== false,
+					// 🚧 Which kinds a session switched on (2026-10-19); unwired = all.
+					kinds: (input as any)?.kinds
 				})
 				const list = Array.isArray(tools) ? tools : []
 				return ok({ main: list, tools: list })
 			},
-			{ ports: ["scope"], params: ["include", "plugins"] }
+			{ ports: ["scope", "kinds"], params: ["include", "plugins"] }
 		),
 
 		/**
@@ -7518,6 +7727,63 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				ok(await ctx.commit(input)),
 			{ ports: ["payload"] }
 		),
+		/**
+		 * 🚧 A player seat named by a pipeline (Dungeon Crawler's interview,
+		 * 2026-10-15): the host's commit is the seat-name door
+		 * (`sessions/seatName.ts`); the seat it named is lifted beside the
+		 * write result, as one reference and as a one-item list for
+		 * `resolve-state-changes`' `owners`.
+		 */
+		"core:outlet/set-seat-name@1": reads<typeof C.setSeatName>(
+			async (input: NodeInput<typeof C.setSeatName>, ctx: OutletCtx) => {
+				const { seat, halt: halted, ...ids } = (await ctx.commit(input)) as {
+					seat?: unknown
+					halt?: unknown
+				}
+				if (typeof halted === "string") return halt(halted)
+				const ref = typeof seat === "string" ? seat : null
+				return ok({
+					status: "committed",
+					ids,
+					seat: ref,
+					seats: ref ? [ref] : []
+				})
+			},
+			{ ports: ["user", "name", "retire"] }
+		),
+		/**
+		 * 🚧 A composer opened or closed by the genre (owner ruling
+		 * 2026-10-15): the host's commit is `writeComposerState`
+		 * (`sessions/composerStates.ts`); a refusal halts with its sentence.
+		 * `states` is the session's whole document after the write.
+		 */
+		"core:outlet/set-composer-state@1": reads<typeof C.setComposerState>(
+			async (input: NodeInput<typeof C.setComposerState>, ctx: OutletCtx) => {
+				const { states, halt: halted, ...ids } = (await ctx.commit(input)) as {
+					states?: unknown
+					halt?: unknown
+				}
+				if (typeof halted === "string") return halt(halted)
+				return ok({ status: "committed", ids, states: states ?? {} })
+			},
+			{ ports: ["channel", "open", "reason", "person"] }
+		),
+		/**
+		 * 🚧 A stat configured by a pipeline (owner ruling 2026-10-15): the
+		 * host's commit is `setStatConfig` (`state/write.ts`), the writer a
+		 * person's `state:configure` takes; a refusal halts with its sentence.
+		 * `main` is `{ configId, owner, slot, before, config }`.
+		 */
+		"core:outlet/set-stat-config@1": reads<typeof C.setStatConfig>(
+			async (input: NodeInput<typeof C.setStatConfig>, ctx: OutletCtx) => {
+				const { halt: halted, ...main } = (await ctx.commit(input)) as Record<string, unknown> & {
+					halt?: unknown
+				}
+				if (typeof halted === "string") return halt(halted)
+				return ok({ main })
+			},
+			{ ports: ["owner", "slot", "config", "worldRow"] }
+		),
 		/** A declared event, recorded (E1b): the host checks scope, writes the ledger row, dispatches. */
 		"core:outlet/record-event@1": reads<typeof C.recordEvent>(
 			async (input: NodeInput<typeof C.recordEvent>, ctx: OutletCtx) =>
@@ -7543,7 +7809,11 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					"channel",
 					"blocks",
 					"sections",
-					"turnPlan"
+					"turnPlan",
+					"role",
+					"trayItems",
+					"tableLine",
+					"kind"
 				]
 			}
 		),
@@ -8082,7 +8352,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 	 * template did on every live turn. See `prompt/adventureContext.ts`.
 	 *
 	 * Gated on there being a state or a plan at all, so the one non-adventure
-	 * pipeline that shares a surface here — `core:spec/chat-side-character`,
+	 * pipeline that shares a surface here — `core:spec/story-side-character`,
 	 * which wires neither — gets the context it always got, key for key.
 	 *
 	 * Takes the three ports by name rather than the whole input, so a surface
@@ -8491,7 +8761,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 	 * ⚠ **Through `mergeContext` like its three siblings**, so a voice is told
 	 * where it is standing and who else is there. Without it a voice answered
 	 * from whatever the transcript suggested and walked the scene to a harbour
-	 * the plan had never mentioned. `core:spec/chat-side-character` wires neither
+	 * the plan had never mentioned. `core:spec/story-side-character` wires neither
 	 * `state` nor `plan`, so its context is unchanged key for key. This
 	 * definition declares no `fields` port, so no genre fields are read here —
 	 * which is what the untyped wrapper did too, one `undefined` later.

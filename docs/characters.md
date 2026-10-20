@@ -30,7 +30,7 @@ The new character in your list, with its picture, name and one line about it: it
 
 ### Write one yourself
 
-**Write a character** opens a short guided creator, one step at a time: **Name**, **Avatar**, **Description**, **Personality** and **First message**. Only the name and description are required; skip the rest and fill them in later. Each step shows an example and tips on what to write.
+**Write a character** opens a short guided creator, one step at a time: **Name**, **Avatar**, **Description**, **Personality** and **First message**. Only the name and description are required; skip the rest and fill them in later. Each step shows an example and tips on what to write. **Write a persona** is the same creator without **First message**: the AI never plays a persona, so it has nothing to open with.
 
 - **Description**: who they are: looks, background, role in the story.
 - **Personality**: how they think, feel and behave.

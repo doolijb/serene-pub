@@ -13,7 +13,8 @@
  * channels as the dossier's `composer.channels` (the list the conversation
  * shows rows for and writes on).
  */
-import { isInstanceOf } from "@serene-pub/sdk"
+import { isInstanceOf, parseChannel, type SessionChannelV1 } from "@serene-pub/sdk"
+import { NO_LANE_CHANNEL } from "@serene-pub/core-catalog/conversation"
 import {
 	effectiveWidgetSettings,
 	type WidgetSettingsDecl
@@ -43,8 +44,107 @@ function conversationDecl(): WidgetSettingsDecl {
  * nothing in the widget.
  */
 export function claimOf(stored: unknown): string | null {
-	const raw = effectiveWidgetSettings({ decl: conversationDecl(), stored }).channel
-	return typeof raw === "string" && raw.trim() ? raw.trim() : null
+	const values = effectiveWidgetSettings({ decl: conversationDecl(), stored })
+	const raw = values.channel
+	if (typeof raw !== "string" || !raw.trim()) return null
+	return raw.trim()
+}
+
+/** 🚧 The viewer's annex view (`sessionPageData.annex`): owner → key → value. */
+export type AnnexView = Readonly<Record<string, Readonly<Record<string, unknown>>>>
+
+/** 🚧 Who is looking, and what the host says of their channels — a lane claim's inputs. */
+export interface LaneContext {
+	viewerId: number | null | undefined
+	/**
+	 * ⏳ The viewer's annex view — what the retired `channelLaneFrom` read a
+	 * genre's user→lane map from. Read by nothing now (owner ruling
+	 * 2026-10-17: lanes by person, on the server); kept so a caller that
+	 * still passes it compiles.
+	 */
+	annex: AnnexView | null | undefined
+	/**
+	 * 🚧 The session's channels as this viewer has them
+	 * (`SessionV1.channels`, from `sessions:get`): `mine` is the viewer's own
+	 * lane on a personal channel. Absent — a caller that does not pass it, a
+	 * host that does not say — a `channelLane: 'mine'` copy shows its claimed
+	 * channel whole, which the server has already narrowed to the lanes the
+	 * viewer may read.
+	 */
+	channels?: ReadonlyArray<SessionChannelV1> | null
+}
+
+/**
+ * 🚧 Which lane a claiming copy asks for: `mine`, a lane number, or
+ * `undefined` (the whole channel). Its `channelLane` setting; ⏳ a stored
+ * `channelLaneFrom` (the retired annex-map claim, declared nowhere) reads
+ * as `mine` until the layout is saved again.
+ */
+export function laneAskOf(stored: unknown): "mine" | number | undefined {
+	const values = effectiveWidgetSettings({ decl: conversationDecl(), stored })
+	const raw = values.channelLane
+	if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1) return raw
+	if (typeof raw === "string") {
+		const text = raw.trim()
+		if (text === "mine") return "mine"
+		if (/^[1-9][0-9]*$/.test(text)) return Number(text)
+	}
+	const legacy =
+		stored && typeof stored === "object" && !Array.isArray(stored)
+			? (stored as Record<string, unknown>).channelLaneFrom
+			: undefined
+	if (typeof legacy === "string" && legacy.trim()) return "mine"
+	return undefined
+}
+
+/**
+ * 🚧 A claiming copy's lane for this viewer (`channelLane`): an explicit lane
+ * string (`parley:2`, and `parley:1` for lane 1 — the lane alone, never the
+ * whole channel). `mine` reads the host's `SessionV1.channels[].mine` for
+ * the claimed channel; `undefined` (the whole channel, server-narrowed) while
+ * the viewer has no lane there, when the host said nothing or the channel is
+ * shared. A number is that lane. `undefined` when the copy claims no
+ * channel or asks for no lane. Privacy is the server's — this narrows what
+ * the viewer may already read (the session's owner reads every lane).
+ */
+export function laneClaimOf(stored: unknown, ctx: LaneContext): string | undefined {
+	const channel = claimOf(stored)
+	if (!channel) return undefined
+	const ask = laneAskOf(stored)
+	if (ask === undefined) return undefined
+	const slug = parseChannel(channel).slug
+	if (typeof ask === "number") return `${slug}:${ask}`
+	const list = ctx.channels
+	if (!Array.isArray(list)) return undefined
+	const entry = list.find((c) => c && c.slug === slug)
+	if (!entry || entry.lanes !== "personal") return undefined
+	// 🚧 No lane yet, as this view was told (the 100-turn walk, B2): the
+	// whole claimed channel, which the server narrowed to the lanes the
+	// viewer may read — a lane opened after the page loaded shows its rows
+	// as they arrive, and a line written on the bare slug lands on the
+	// sender's own lane. Showing nothing left a guest with no way in.
+	if (typeof entry.mine !== "string" || !entry.mine.trim()) return undefined
+	const ref = parseChannel(entry.mine)
+	if (ref.warning || ref.slug !== slug) return NO_LANE_CHANNEL
+	return `${ref.slug}:${ref.lane}`
+}
+
+/**
+ * 🚧 Every lane claim in a layout (`laneClaimOf`): placed conversation copy →
+ * the lane it shows this viewer, for the copies that read one.
+ */
+export function laneClaims(
+	placed: Iterable<string>,
+	storedOf: (id: string) => unknown,
+	ctx: LaneContext
+): Map<string, string> {
+	const out = new Map<string, string>()
+	for (const id of placed) {
+		if (!isInstanceOf(id, CONVERSATION_WIDGET)) continue
+		const lane = laneClaimOf(storedOf(id), ctx)
+		if (lane) out.set(id, lane)
+	}
+	return out
 }
 
 /**
@@ -101,9 +201,13 @@ export function channelsForCopy(
 	all: readonly string[],
 	claims: ReadonlyMap<string, string>,
 	id: string,
-	primaryLog: string | null = null
+	primaryLog: string | null = null,
+	lanes: ReadonlyMap<string, string> = new Map()
 ): string[] {
-	const own = claims.get(id)
+	const claim = claims.get(id)
+	// 🚧 A lane claim (`laneClaims`) narrows the claimed channel to the
+	// viewer's lane, or to nothing; the channel stays claimed either way.
+	const own = claim ? (lanes.get(id) ?? claim) : undefined
 	const claimed = new Set(claims.values())
 	const rest = all.filter((c) => !claimed.has(c))
 	if (own) return id === primaryLog ? [own, ...rest] : [own]

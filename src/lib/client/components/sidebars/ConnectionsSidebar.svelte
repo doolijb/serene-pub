@@ -627,10 +627,19 @@
 	let newConnectionCategory = $state<ConnectionServiceCategory | undefined>(
 		undefined
 	)
+	/**
+	 * 🚧 The address, asked in the dialog of a service whose whole setup it is
+	 * (`setupNeed: 'address'` — Custom (OpenAI-compatible), 2026-10-18, the
+	 * 100-turn walk #31: the address was never asked, and the card blamed a
+	 * missing key).
+	 */
+	let newConnectionBaseUrl = $state("")
+	const newConnectionAsksAddress = $derived(newConnectionService?.setupNeed === "address")
 	function handleNew(opts: { category?: ConnectionServiceCategory } = {}) {
 		newConnectionCategory = opts.category
 		newConnectionName = ""
 		newConnectionService = undefined
+		newConnectionBaseUrl = ""
 		nameTouched = false
 		// Seed the picker's modality from where the person is standing: the
 		// index's capability filter, or the open connection's own modality.
@@ -682,6 +691,7 @@
 				return
 			}
 		}
+		const baseUrl = newConnectionAsksAddress ? newConnectionBaseUrl.trim() : ""
 		const newConn = {
 			name,
 			type,
@@ -693,7 +703,9 @@
 			...(type === CONNECTION_TYPE.OPENAI
 				? OPENAI_COMPATIBLE_PRESETS.find((p) => p.value === presetValue)
 						?.connectionDefaults
-				: CONNECTION_DEFAULTS[type] || {})
+				: CONNECTION_DEFAULTS[type] || {}),
+			// 🚧 The address the dialog asked for, over the preset's blank one.
+			...(baseUrl ? { baseUrl } : {})
 		}
 		conns.expectCreate(name)
 		socket.emit("connections:create", { connection: newConn })
@@ -1992,6 +2004,9 @@
 	</div>
 {/snippet}
 
+<!-- 🚧 Mounted only while open (PLAN-dc-after-walk3 R3-5, #48): two views
+     hold this sidebar, and each left a hidden "Discard changes?". -->
+{#if showConfirmModal}
 <Dialog
 	open={showConfirmModal}
 	onOpenChange={(e) => (showConfirmModal = e.open)}
@@ -2040,10 +2055,14 @@
 		</Dialog.Positioner>
 	</Portal>
 </Dialog>
+{/if}
 <Dialog
 	open={showNewConnectionModal}
 	onOpenChange={(e) => (showNewConnectionModal = e.open)}
 >
+	<!-- 🚧 Mounted only while open (Q3-6, #48): the Connections and Models
+	     views each hold this sidebar, and each left a hidden New connection. -->
+	{#if showNewConnectionModal}
 	<Portal>
 		<Dialog.Backdrop
 			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
@@ -2119,6 +2138,26 @@
 								{/if}
 								{@html newConnectionService.description}
 							</div>
+							{#if newConnectionAsksAddress}
+								<div class="mt-2">
+									<label class="font-semibold" for="newConnBaseUrl">
+										Base URL
+									</label>
+									<input
+										id="newConnBaseUrl"
+										type="url"
+										class="input w-full"
+										bind:value={newConnectionBaseUrl}
+										placeholder={newConnectionService.type === CONNECTION_TYPE.OPENAI
+											? "http://localhost:8080/v1"
+											: ((CONNECTION_DEFAULTS as Record<string, { baseUrl?: string }>)[newConnectionService.type]?.baseUrl ?? "")}
+										autocomplete="off"
+									/>
+									<p class="text-surface-600-400 mt-1 text-xs">
+										The server's address, as its own settings or documentation give it{newConnectionService.type === CONNECTION_TYPE.OPENAI ? " — usually ending in /v1" : ""}. You can change it later in the connection's settings.
+									</p>
+								</div>
+							{/if}
 						{/if}
 					</form>
 					<footer class="mt-4 flex justify-end gap-4">
@@ -2152,11 +2191,14 @@
 			</Dialog.Content>
 		</Dialog.Positioner>
 	</Portal>
+	{/if}
 </Dialog>
 <!-- An edit of the starred connection that makes it another model re-embeds;
      the number is the whole point of this dialog. (A choice's own two
      questions are the shell's — `ConnectionsDialogs`.) -->
 <EmbeddingSwitchDialog {...embeddingEdits.dialog} />
+<!-- 🚧 …and a hidden "Delete connection" (R3-5, #48). -->
+{#if showDeleteModal}
 <Dialog open={showDeleteModal} onOpenChange={(e) => (showDeleteModal = e.open)}>
 	<Portal>
 		<Dialog.Backdrop
@@ -2206,3 +2248,4 @@
 		</Dialog.Positioner>
 	</Portal>
 </Dialog>
+{/if}

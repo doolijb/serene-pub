@@ -1,24 +1,22 @@
 /**
  * The surface manager under the copy model (brief 3 of
- * `PLAN-layout-one-format-2026-09-28`): it holds the session's WHOLE layout —
- * the first open copied a starting point into the person's own row — and
- * nothing sits under it. What the old preset base did is gone with it:
+ * `PLAN-layout-one-format-2026-09-28`) and the panels
+ * (PLAN-session-panels-2026-10-14): it holds the session's WHOLE layout — the
+ * first open copied a starting point into the person's own row — and nothing
+ * sits under it.
  *
- *   • `init` seeds every slot from the row, and `toBlob` hands back exactly
- *     the slots it holds (an unset one stays unset);
+ *   • `init` seeds the arrangement from the row: `panels` when it has them,
+ *     and the ⏳ old slots READ ONLY beside them;
+ *   • `toBlob` hands back the panels it holds and NEVER the old slots (the
+ *     server patches by key presence, so the row keeps them, inert);
  *   • a copy landing re-seeds the manager, and `seedCount` is how an open
  *     editor knows its working copy is stale;
  *   • a debounced save still waiting when a copy is asked for is dropped, so
  *     it cannot land after the copy and write the old layout back.
  */
-import type { ArrangedGridV1 } from "@serene-pub/sdk"
+import type { PanelLayoutV1 } from "@serene-pub/sdk"
 import { describe, expect, it, vi } from "vitest"
 import { SurfaceManager } from "./panelManager.svelte"
-import {
-	arrangementIsEmpty,
-	loadArranged,
-	unitPinned
-} from "$lib/client/sessionLayout/arrangedGeometry"
 
 type ModePanel = Sockets.Sessions.View.ModePanel
 
@@ -31,8 +29,16 @@ const PANELS: ModePanel[] = [
 	}
 ]
 
-/** A session layout that sets all three arrangement slots. */
-const WHOLE = {
+const panels = (over: Partial<PanelLayoutV1> = {}): PanelLayoutV1 => ({
+	version: 1,
+	left: [],
+	right: [],
+	middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] },
+	...over
+})
+
+/** A row saved before the panels: the three old slots. */
+const OLD = {
 	zoneLayout: { version: 1, zones: {} },
 	widgetGrid: { version: 1, cell: 44, widgets: [] },
 	arrangedGrid: { left: { cols: 4, rows: 8, items: [] } }
@@ -45,37 +51,40 @@ function make(layout: any, save: (blob: any) => void = () => {}) {
 }
 
 describe("SurfaceManager — the session's layout is the whole layout", () => {
-	it("seeds every slot from the row and serialises exactly those", () => {
-		const m = make(WHOLE)
-		expect(m.zoneLayout).toEqual(WHOLE.zoneLayout)
-		expect(m.widgetGrid).toEqual(WHOLE.widgetGrid)
-		expect(m.arrangedGrid).toEqual(WHOLE.arrangedGrid)
-		const blob = m.toBlob()
-		expect(blob.zoneLayout).toEqual(WHOLE.zoneLayout)
-		expect(blob.widgetGrid).toEqual(WHOLE.widgetGrid)
-		expect(blob.arrangedGrid).toEqual(WHOLE.arrangedGrid)
+	it("seeds the panels from the row and serialises them", () => {
+		const p = panels({ right: [{ key: "p2", tabs: ["tasks"] }] })
+		const m = make({ panels: p })
+		expect(m.panels).toEqual(p)
+		expect(m.toBlob().panels).toEqual(p)
 	})
 
-	it("leaves an unset slot unset — the floor draws it, nothing is borrowed", () => {
+	it("reads the old slots, and never writes them back", () => {
+		const m = make(OLD)
+		expect(m.zoneLayout).toEqual(OLD.zoneLayout)
+		expect(m.arrangedGrid).toEqual(OLD.arrangedGrid)
+		const blob = m.toBlob()
+		for (const slot of ["zoneLayout", "widgetGrid", "arrangedGrid", "panels"])
+			expect(slot in blob).toBe(false)
+	})
+
+	it("leaves an unset arrangement unset — the floor draws it, nothing is borrowed", () => {
 		const m = make({})
-		expect(m.zoneLayout).toBeUndefined()
-		expect(m.widgetGrid).toBeUndefined()
-		expect(m.arrangedGrid).toBeUndefined()
-		const blob = m.toBlob()
-		expect("zoneLayout" in blob).toBe(false)
-		expect("widgetGrid" in blob).toBe(false)
-		expect("arrangedGrid" in blob).toBe(false)
+		expect(m.panels).toBeUndefined()
+		expect("panels" in m.toBlob()).toBe(false)
 	})
 
-	it("has no base to layer: the retired names are gone", () => {
-		const m = make(WHOLE) as unknown as Record<string, unknown>
+	it("has no base to layer, and no old-slot writers: the retired names are gone", () => {
+		const m = make(OLD) as unknown as Record<string, unknown>
 		for (const name of [
 			"baseLayout",
 			"setBaseLayout",
 			"effectiveZoneLayout",
 			"effectiveWidgetGrid",
 			"effectiveArrangedGrid",
-			"clearArrangement"
+			"clearArrangement",
+			"setZoneLayout",
+			"setWidgetGrid",
+			"setArrangedGrid"
 		])
 			expect(name in m).toBe(false)
 	})
@@ -83,23 +92,23 @@ describe("SurfaceManager — the session's layout is the whole layout", () => {
 
 describe("SurfaceManager — a copy replaces the layout", () => {
 	it("counts every seeding, so an open editor can tell its copy is stale", () => {
-		const m = make(WHOLE)
+		const m = make({ panels: panels() })
 		const before = m.seedCount
 		m.init(1, PANELS, {}, () => {})
 		expect(m.seedCount).toBe(before + 1)
-		expect(m.arrangedGrid).toBeUndefined()
+		expect(m.panels).toBeUndefined()
 	})
 
 	it("drops a pending save without sending it", () => {
 		vi.useFakeTimers()
 		const save = vi.fn()
-		const m = make(WHOLE, save)
-		m.setArrangedGrid({ right: { cols: 1, rows: 12, items: [] } })
+		const m = make({ panels: panels() }, save)
+		m.setPanels(panels({ right: [{ key: "p2", tabs: ["tasks"] }] }))
 		m.cancelPendingSave()
 		vi.advanceTimersByTime(1000)
 		expect(save).not.toHaveBeenCalled()
 		// …and the next change schedules a save as usual.
-		m.setArrangedGrid(undefined)
+		m.setPanels(panels())
 		vi.advanceTimersByTime(1000)
 		expect(save).toHaveBeenCalledTimes(1)
 		vi.useRealTimers()
@@ -108,16 +117,16 @@ describe("SurfaceManager — a copy replaces the layout", () => {
 	it("says whether it dropped one, and a refused copy sends it after all", () => {
 		vi.useFakeTimers()
 		const save = vi.fn()
-		const m = make(WHOLE, save)
+		const m = make({ panels: panels() }, save)
 		// Nothing waiting: nothing to give back.
 		expect(m.cancelPendingSave()).toBe(false)
-		const dragged = { right: { cols: 1, rows: 12, items: [] } }
-		m.setArrangedGrid(dragged)
+		const dragged = panels({ left: [{ key: "p2", tabs: ["tasks"] }] })
+		m.setPanels(dragged)
 		expect(m.cancelPendingSave()).toBe(true)
-		// The copy was refused, so the drag is still this session's layout.
+		// The copy was refused, so the edit is still this session's layout.
 		m.persistNow()
 		expect(save).toHaveBeenCalledTimes(1)
-		expect(save.mock.calls[0][0].arrangedGrid).toEqual(dragged)
+		expect(save.mock.calls[0][0].panels).toEqual(dragged)
 		// …sent once, not again when the old debounce would have fired.
 		vi.advanceTimersByTime(1000)
 		expect(save).toHaveBeenCalledTimes(1)
@@ -127,8 +136,8 @@ describe("SurfaceManager — a copy replaces the layout", () => {
 	it("persistNow replaces a save still waiting rather than adding one", () => {
 		vi.useFakeTimers()
 		const save = vi.fn()
-		const m = make(WHOLE, save)
-		m.setArrangedGrid({ right: { cols: 1, rows: 12, items: [] } })
+		const m = make({ panels: panels() }, save)
+		m.setPanels(panels({ right: [{ key: "p2", tabs: ["tasks"] }] }))
 		m.persistNow()
 		vi.advanceTimersByTime(1000)
 		expect(save).toHaveBeenCalledTimes(1)
@@ -136,105 +145,79 @@ describe("SurfaceManager — a copy replaces the layout", () => {
 	})
 })
 
-/**
- * The empty commit — `SessionLayout.commitArrangement`'s one hazard. Open the
- * editor, press Done with no widgets at all and no zone ever reports, so the
- * working copy is `{}` — TRUTHY, and stored it would read as "this layout has
- * an arrangement". The seam stores none instead; `done` below mirrors it.
- */
-describe("SurfaceManager — an empty commit stores no arrangement", () => {
-	/** What `commitArrangement` does with the editor's snapshot on Done. */
-	function done(m: SurfaceManager, snapshot: ArrangedGridV1) {
-		m.setArrangedGrid(arrangementIsEmpty(snapshot) ? undefined : snapshot)
-	}
+describe("SurfaceManager — a panel's tab and pin, from the session", () => {
+	const two = () =>
+		panels({
+			right: [
+				{ key: "p2", tabs: ["tasks", "notes"] },
+				{ key: "p3", tabs: ["album"], pinned: false }
+			]
+		})
 
-	it("reads an arrangement with no widgets in it as empty", () => {
-		expect(arrangementIsEmpty({})).toBe(true)
-		expect(
-			arrangementIsEmpty({ left: { cols: 4, rows: 8, items: [] } })
-		).toBe(true)
-		expect(
-			arrangementIsEmpty({
-				middle: {
-					cols: 18,
-					rows: 34,
-					items: [{ id: "world-state", x: 0, y: 31, w: 18, h: 3 }]
-				}
-			})
-		).toBe(false)
-	})
-
-	it("persists no arrangement after Done on an empty editor", () => {
+	it("switching a tab writes `open` at once, saved with the debounced blob", () => {
 		vi.useFakeTimers()
 		const save = vi.fn()
-		const m = make(WHOLE, save)
-		done(m, { left: { cols: 6, rows: 12, items: [] } })
+		const m = make({ panels: two() }, save)
+		m.setPanelOpen("p2", "notes")
+		// At once: the drawn layout reads it on the next frame.
+		expect((m.panels as PanelLayoutV1).right[0].open).toBe("notes")
+		expect(save).not.toHaveBeenCalled()
 		vi.advanceTimersByTime(500)
-		const blob = save.mock.calls.at(-1)?.[0] ?? m.toBlob()
-		expect("arrangedGrid" in blob).toBe(false)
-		// The other slots are the layout's own and stay.
-		expect(blob.zoneLayout).toEqual(WHOLE.zoneLayout)
+		expect(save).toHaveBeenCalledTimes(1)
+		expect(save.mock.calls[0][0].panels.right[0].open).toBe("notes")
+		// Back to the first tab: `open` is left out again.
+		m.setPanelOpen("p2", "tasks")
+		expect("open" in (m.panels as PanelLayoutV1).right[0]).toBe(false)
 		vi.useRealTimers()
 	})
 
-	it("still commits an arrangement that HAS a widget", () => {
-		const m = make({})
-		const real = {
-			middle: {
-				cols: 18,
-				rows: 34,
-				items: [{ id: "world-state", x: 0, y: 31, w: 18, h: 3 }]
-			}
-		}
-		done(m, real)
-		expect(m.arrangedGrid).toEqual(real)
-	})
-})
-
-/**
- * The per-group pin (ruled 2026-09-10) rides the arrangement slot: it is a
- * field on the arranged items, so a layout copied in hands it back and Save as
- * new captures what the session shows. Nothing in the manager knows about it —
- * which is the property worth pinning.
- */
-describe("SurfaceManager — the arrangement carries the per-group pin", () => {
-	const unpinned = {
-		left: {
-			cols: 9,
-			rows: 12,
-			items: [
-				{ id: "map", x: 0, y: 0, w: 9, h: 4 },
-				{ id: "notes", x: 0, y: 4, w: 9, h: 4, pinned: false }
-			]
-		}
-	}
-
-	it("restores it from a copied-in layout", () => {
-		const m = make({ arrangedGrid: unpinned })
-		const items = loadArranged(m.arrangedGrid).left!.items
-		expect(items.map((i) => unitPinned([i]))).toEqual([true, false])
+	it("a tab the panel does not hold, or the one already open, writes nothing", () => {
+		vi.useFakeTimers()
+		const save = vi.fn()
+		const m = make({ panels: two() }, save)
+		m.setPanelOpen("p2", "album")
+		m.setPanelOpen("p2", "tasks")
+		m.setPanelOpen("nope", "tasks")
+		vi.advanceTimersByTime(1000)
+		expect(save).not.toHaveBeenCalled()
 	})
 
-	it("saves it — Save as new sends the manager's own arrangement", () => {
-		const m = make({})
-		m.setArrangedGrid(unpinned)
-		// What `saveLayoutPreset` sends (src/routes/sessions/[id]/+page.svelte).
-		const sent = JSON.parse(JSON.stringify({ arrangedGrid: m.arrangedGrid }))
-		const back = loadArranged(sent.arrangedGrid).left!.items
-		expect(unitPinned(back.filter((i) => i.id === "notes"))).toBe(false)
+	it("the pin docks a side panel or moves it to the rail; `false` is the only value written", () => {
+		const m = make({ panels: two() })
+		m.setPanelPinned("p3", true)
+		expect("pinned" in (m.panels as PanelLayoutV1).right[1]).toBe(false)
+		m.setPanelPinned("p2", false)
+		expect((m.panels as PanelLayoutV1).right[0].pinned).toBe(false)
+		// The middle never pins.
+		m.setPanelPinned("p1", false)
+		expect("pinned" in (m.panels as PanelLayoutV1).middle.primary).toBe(false)
 	})
 
-	it("reads an arrangement saved before the field existed as all pinned", () => {
-		const m = make({
-			arrangedGrid: {
-				left: {
-					cols: 9,
-					rows: 12,
-					items: [{ id: "map", x: 0, y: 0, w: 9, h: 4 }]
+	it("a first edit of a row with only the old slots writes the converted panels", () => {
+		vi.useFakeTimers()
+		const save = vi.fn()
+		const m = make(
+			{
+				arrangedGrid: {
+					right: {
+						cols: 1,
+						rows: 12,
+						items: [
+							{ id: "tasks", x: 0, y: 0, w: 1, h: 12, group: "g:notes,tasks" },
+							{ id: "notes", x: 0, y: 0, w: 1, h: 12, group: "g:notes,tasks" }
+						]
+					}
 				}
-			}
-		})
-		const items = loadArranged(m.arrangedGrid).left!.items
-		expect(unitPinned(items)).toBe(true)
+			},
+			save
+		)
+		const key = "p2"
+		m.setPanelOpen(key, "notes")
+		vi.advanceTimersByTime(500)
+		const blob = save.mock.calls[0][0]
+		expect(blob.panels.right[0]).toMatchObject({ key, tabs: ["tasks", "notes"], open: "notes" })
+		// The old slots stay on the row, never written.
+		expect("arrangedGrid" in blob).toBe(false)
+		vi.useRealTimers()
 	})
 })

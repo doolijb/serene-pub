@@ -84,6 +84,10 @@ export const DATA_UPGRADES: DataUpgrade[] = [
 	{
 		afterMigration: "0095_schema_0_6_0",
 		load: () => import("./0095_schema_0_6_0")
+	},
+	{
+		afterMigration: "0107_story_genre",
+		load: () => import("./0107_story_genre")
 	}
 ]
 

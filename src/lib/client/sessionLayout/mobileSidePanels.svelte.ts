@@ -92,6 +92,66 @@ export function showsToggles(
 	return s.narrow && (s.left > 0 || s.right > 0 || (s.middle ?? 0) > 0)
 }
 
+/** A panel as the panels menu lists it: its key, its pin, its tabs. */
+export interface ListedPanel {
+	key: string
+	pinned: boolean
+	tabs: readonly { instanceId: string }[]
+}
+
+export interface PanelLinesInput {
+	/** Each side's drawn panels, and whether the side is populated at all. */
+	left: { panels: readonly ListedPanel[]; populated: boolean }
+	right: { panels: readonly ListedPanel[]; populated: boolean }
+	/** The middle's three places. */
+	middle: {
+		above: readonly ListedPanel[]
+		primary: ListedPanel
+		below: readonly ListedPanel[]
+	}
+	/**
+	 * The side drawn as the stage (QE), or null: its stage panel is the stage
+	 * rather than a line, and the middle is listed whole.
+	 */
+	stageSide: "left" | "right" | null
+	/** The key of the stage's panel on `stageSide`, when there is one. */
+	stageKey: string | null
+	title(p: ListedPanel): string
+	icon(p: ListedPanel): string
+}
+
+/**
+ * The panels menu's lines (PLAN-session-panels-2026-10-14 §1.3): every panel
+ * of a populated side, then the middle's — its strips above and below the
+ * primary panel (the stage: the conversation, or with none placed, whatever
+ * the primary holds — R-B), or, while a side is the stage, all of it (the
+ * primary included, which then opens the middle as a sheet of its own). A side's
+ * line carries its panel's pin: docked panels arrive OPEN in the sheet, rail
+ * ones folded. A middle panel is always docked.
+ */
+export function panelLines(o: PanelLinesInput): MobileGroup[] {
+	const line = (side: MobileSide, p: ListedPanel, pinned: boolean): MobileGroup => ({
+		side,
+		key: p.key,
+		title: o.title(p),
+		icon: o.icon(p),
+		pinned
+	})
+	const sideLines = (side: "left" | "right") => {
+		const v = o[side]
+		if (!v.populated) return []
+		const stage = o.stageSide === side ? o.stageKey : null
+		return v.panels
+			.filter((p) => p.key !== stage)
+			.map((p) => line(side, p, p.pinned))
+	}
+	const m = o.middle
+	const middle = (o.stageSide ? [...m.above, m.primary, ...m.below] : [...m.above, ...m.below])
+		.filter((p) => p.tabs.length > 0)
+		.map((p) => line("middle", p, true))
+	return [...sideLines("left"), ...sideLines("right"), ...middle]
+}
+
 class MobileSidePanels {
 	narrow = $state(false)
 	left = $state(0)

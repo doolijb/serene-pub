@@ -11,7 +11,7 @@ import path from "path"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
-import { ADVENTURE_GENRE_ID } from "@serene-pub/core-catalog"
+import { STORY_GENRE_ID } from "@serene-pub/core-catalog"
 import { getGenre, sessionEvents } from "@serene-pub/sdk"
 
 let testDb: TestDb
@@ -36,7 +36,7 @@ beforeAll(async () => {
 	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
 	await bootstrapPipelines(testDb as any)
 	const { syncLayoutPresets } = await import("$lib/server/db/layoutPresets")
-	await syncLayoutPresets([ADVENTURE_GENRE_ID])
+	await syncLayoutPresets([STORY_GENRE_ID])
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	stranger = await createTestUser(testDb, "pub-genres-stranger")
 	admin = await createTestUser(testDb, "pub-genres-admin")
@@ -105,7 +105,7 @@ describe("sessionGenres:create refusals", () => {
 			ownerSlug: "acme.lab",
 			name: "quest",
 			label: "Quest",
-			from: ADVENTURE_GENRE_ID,
+			from: STORY_GENRE_ID,
 			scope: "all"
 		}
 		const denied = await create(base, socketFor(stranger.id))
@@ -142,7 +142,7 @@ describe("create from Adventure, everything", () => {
 	let sourceSlugs: string[] = []
 
 	test("copies every pipeline under the new genre with rewritten locks", async () => {
-		sourceSlugs = (await activeLockedTo(ADVENTURE_GENRE_ID))
+		sourceSlugs = (await activeLockedTo(STORY_GENRE_ID))
 			.filter((r) => r.status === "published")
 			.map((r) => r.slug)
 		expect(sourceSlugs.length).toBeGreaterThan(2)
@@ -153,7 +153,7 @@ describe("create from Adventure, everything", () => {
 			label: "Quest",
 			description: "A quest of one's own.",
 			family: "story",
-			from: ADVENTURE_GENRE_ID,
+			from: STORY_GENRE_ID,
 			scope: "all"
 		})
 		expect(res.error).toBeUndefined()
@@ -209,8 +209,15 @@ describe("create from Adventure, everything", () => {
 		expect(p.enabled).toBe(true)
 		expect(p.isImmutable).toBe(false)
 		expect(p.bindings[sessionEvents.messageRespond]?.spec).toBe("acme.lab:spec/quest-respond")
-		for (const b of Object.values(p.bindings) as any[])
-			expect(b.spec.startsWith("acme.lab:spec/quest-")).toBe(true)
+		// Every copied binding is a copy — but the save, core's default, serves
+		// every genre and is kept as is (owner ruling 2026-10-15).
+		for (const [event, b] of Object.entries(p.bindings) as any[])
+			expect(
+				event === sessionEvents.messageOffered
+					? b.spec === "core:spec/save-message"
+					: b.spec.startsWith("acme.lab:spec/quest-")
+			).toBe(true)
+		expect(p.bindings[sessionEvents.messageOffered]?.spec).toBe("core:spec/save-message")
 	}, 60_000)
 
 	test("the registry holds the genre with the source's declaration", async () => {
@@ -218,7 +225,7 @@ describe("create from Adventure, everything", () => {
 		expect(g).toBeTruthy()
 		expect(g?.name).toBe("Quest")
 		expect(g?.family).toBe("story")
-		expect(g?.slots?.length ?? 0).toBe(getGenre(ADVENTURE_GENRE_ID)?.slots?.length ?? 0)
+		expect(g?.slots?.length ?? 0).toBe(getGenre(STORY_GENRE_ID)?.slots?.length ?? 0)
 	})
 
 	test("the default layout is copied with origin pub", async () => {
@@ -234,7 +241,7 @@ describe("create from Adventure, everything", () => {
 		)
 		expect((await genreDefaultLayoutRow(QUEST))?.id).toBe(rows[0].id)
 		// Neither reconciler takes it away.
-		await syncLayoutPresets([ADVENTURE_GENRE_ID, QUEST])
+		await syncLayoutPresets([STORY_GENRE_ID, QUEST])
 		const { syncPluginLayouts } = await import("$lib/server/db/pluginLayouts")
 		await syncPluginLayouts(testDb as any)
 		const [still] = await testDb
@@ -261,7 +268,7 @@ describe("create from Adventure, everything", () => {
 			ownerSlug: "acme.lab",
 			name: "quest",
 			label: "Quest again",
-			from: ADVENTURE_GENRE_ID,
+			from: STORY_GENRE_ID,
 			scope: "all"
 		})
 		expect(res.error).toMatch(/already a genre called/)
@@ -283,7 +290,7 @@ describe("create from Adventure, everything", () => {
 
 		const core: any = await sessionGenresDetail.handler(
 			asAdmin(),
-			{ genreId: ADVENTURE_GENRE_ID },
+			{ genreId: STORY_GENRE_ID },
 			() => {}
 		)
 		expect(core.genre.origin).toBe("core")
@@ -325,7 +332,7 @@ describe("create from Adventure, everything", () => {
 		const rec = recordingEmit()
 		const res: any = await sessionGenresUpdate.handler(
 			asAdmin(),
-			{ slug: ADVENTURE_GENRE_ID, name: "Mine now" } as any,
+			{ slug: STORY_GENRE_ID, name: "Mine now" } as any,
 			rec.emit
 		)
 		expect(res.error).toMatch(/ships with Serene Pub/)
@@ -380,7 +387,7 @@ describe("create the create pipeline only", () => {
 			ownerSlug: "acme.lab",
 			name: "solo",
 			label: "Solo",
-			from: ADVENTURE_GENRE_ID,
+			from: STORY_GENRE_ID,
 			scope: "create"
 		})
 		expect(res.error).toBeUndefined()
@@ -391,6 +398,9 @@ describe("create the create pipeline only", () => {
 			.select()
 			.from(schema.sessionPresets)
 			.where(eq(schema.sessionPresets.genreId, "acme.lab:genre/solo"))
-		expect(Object.keys(preset.bindings)).toEqual([sessionEvents.sessionCreated])
+		// The create binding, and the save every preset shows (2026-10-15).
+		expect(Object.keys(preset.bindings).sort()).toEqual(
+			[sessionEvents.sessionCreated, sessionEvents.messageOffered].sort()
+		)
 	}, 120_000)
 })

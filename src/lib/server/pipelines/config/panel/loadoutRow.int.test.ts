@@ -17,13 +17,15 @@ import {
 	type ConfigOption,
 	type NamespaceView
 } from "$lib/server/pipelines/config/panel"
-import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import { seedCoreLoadouts } from "$lib/server/loadouts/seed"
 import { findLoadout } from "$lib/server/loadouts"
 import { capabilityLabel } from "@serene-pub/sdk"
 
 const SECRET = "test-instance-secret"
-const ADVENTURE = "core:spec/adventure-respond"
+/** A reply with a JSON state keeper on Extraction — the Lair's (Adventure's until 2026-10-19). */
+const LAIR = "core:spec/lair-respond"
+const KEEPER_WRITE = "keep.played.keeperWrite"
 const SUMMARIZE = "core:spec/summarize-scene"
 
 let db: TestDb
@@ -117,10 +119,10 @@ afterAll(async () => {
 
 describe("the Loadout picker", () => {
 	it("leads each model call's group, offering only the step's transform's loadouts", async () => {
-		const v = await asAdmin(ADVENTURE)
+		const v = await asAdmin(LAIR)
 		for (const g of v.groups.filter((x) => x.kind === "model-call"))
 			expect(g.front[0]!.control).toBe("loadout-ref")
-		const keeper = opt(v, id("keeperWrite", "loadout"))
+		const keeper = opt(v, id(KEEPER_WRITE, "loadout"))
 		const names = keeper.choices!.map((c) => c.label)
 		expect(names).toEqual(expect.arrayContaining(["Reply", "Extraction"]))
 		expect(names).not.toContain("Images")
@@ -128,8 +130,8 @@ describe("the Loadout picker", () => {
 	})
 
 	it("says each row's consequences for this step — never a grade", async () => {
-		const v = await asAdmin(ADVENTURE)
-		const keeper = opt(v, id("keeperWrite", "loadout"))
+		const v = await asAdmin(LAIR)
+		const keeper = opt(v, id(KEEPER_WRITE, "loadout"))
 		const extraction = keeper.choices!.find((c) => c.label === "Extraction")!
 		expect(extraction.description).toContain("Unfilled — falls back to Reply")
 		// The keeper answers with JSON; an untested pair has no schema door.
@@ -147,10 +149,10 @@ describe("the Loadout picker", () => {
 	})
 
 	it("shows the selected loadout's title and resolved chain", async () => {
-		await setConfigValue(CHAT_RESPOND_SPEC_ID, "generate", "loadout", {
+		await setConfigValue(STORY_RESPOND_SPEC_ID, "generate", "loadout", {
 			id: "core:loadout/extraction@1"
 		})
-		const v = await asAdmin(CHAT_RESPOND_SPEC_ID)
+		const v = await asAdmin(STORY_RESPOND_SPEC_ID)
 		const row = opt(v, id("generate", "loadout"))
 		expect(row.loadout?.selected?.name).toBe("Extraction")
 		expect(row.loadout?.selected?.chain).toBe("Extraction → Reply (unfilled fallback)")
@@ -160,11 +162,11 @@ describe("the Loadout picker", () => {
 
 describe("the slots beneath it", () => {
 	it("read From the <fallback> loadout (unfilled fallback) when the named one is unfilled", async () => {
-		await setConfigValue(CHAT_RESPOND_SPEC_ID, "generate", "loadout", {
+		await setConfigValue(STORY_RESPOND_SPEC_ID, "generate", "loadout", {
 			id: "core:loadout/extraction@1"
 		})
-		await setConfigValue(CHAT_RESPOND_SPEC_ID, "generate", "connection", undefined)
-		const v = await asAdmin(CHAT_RESPOND_SPEC_ID)
+		await setConfigValue(STORY_RESPOND_SPEC_ID, "generate", "connection", undefined)
+		const v = await asAdmin(STORY_RESPOND_SPEC_ID)
 		const conn = opt(v, id("generate", "connection"))
 		expect(conn.provenance).toEqual({
 			source: "loadout",
@@ -174,8 +176,8 @@ describe("the slots beneath it", () => {
 	})
 
 	it("read From the Reply loadout when the named one is filled", async () => {
-		await setConfigValue(CHAT_RESPOND_SPEC_ID, "generate", "loadout", { id: "core:loadout/reply@1" })
-		const v = await asAdmin(CHAT_RESPOND_SPEC_ID)
+		await setConfigValue(STORY_RESPOND_SPEC_ID, "generate", "loadout", { id: "core:loadout/reply@1" })
+		const v = await asAdmin(STORY_RESPOND_SPEC_ID)
 		const conn = opt(v, id("generate", "connection"))
 		expect(conn.provenance?.label).toBe("From the Reply loadout")
 		expect(conn.inherits?.label).toBe(`From the Reply loadout — ${pairName}`)
@@ -183,22 +185,22 @@ describe("the slots beneath it", () => {
 	})
 
 	it("read Set here for an explicit pick, offering Use loadout's", async () => {
-		await setConfigValue(CHAT_RESPOND_SPEC_ID, "generate", "loadout", { id: "core:loadout/reply@1" })
+		await setConfigValue(STORY_RESPOND_SPEC_ID, "generate", "loadout", { id: "core:loadout/reply@1" })
 		const [conn] = await db.select().from(schema.connections).limit(1)
-		await setConfigValue(CHAT_RESPOND_SPEC_ID, "generate", "connection", {
+		await setConfigValue(STORY_RESPOND_SPEC_ID, "generate", "connection", {
 			id: String(conn!.id),
 			modelId: null
 		})
-		const v = await asAdmin(CHAT_RESPOND_SPEC_ID)
+		const v = await asAdmin(STORY_RESPOND_SPEC_ID)
 		const row = opt(v, id("generate", "connection"))
 		expect(row.provenance).toEqual({ source: "config", label: "Set here" })
 		expect(row.useLoadout).toBe("Reply")
-		await setConfigValue(CHAT_RESPOND_SPEC_ID, "generate", "connection", undefined)
+		await setConfigValue(STORY_RESPOND_SPEC_ID, "generate", "connection", undefined)
 	})
 
 	it("read From the Reply loadout when the step names no loadout", async () => {
-		await setConfigValue(CHAT_RESPOND_SPEC_ID, "generate", "loadout", null)
-		const v = await asAdmin(CHAT_RESPOND_SPEC_ID)
+		await setConfigValue(STORY_RESPOND_SPEC_ID, "generate", "loadout", null)
+		const v = await asAdmin(STORY_RESPOND_SPEC_ID)
 		const row = opt(v, id("generate", "connection"))
 		expect(row.provenance).toEqual({ source: "pub", label: "From the Reply loadout" })
 		expect(row.valueLabel).toBe(pairName)
@@ -208,9 +210,9 @@ describe("the slots beneath it", () => {
 
 describe("sessions never pick a loadout", () => {
 	it("sends no Loadout row in a session's view, an admin's included, nor to a member", async () => {
-		const inSession = await asAdmin(CHAT_RESPOND_SPEC_ID, { sessionId })
+		const inSession = await asAdmin(STORY_RESPOND_SPEC_ID, { sessionId })
 		expect(all(inSession).some((o) => o.control === "loadout-ref")).toBe(false)
-		const member = (await namespaceView(db, SECRET, CHAT_RESPOND_SPEC_ID, {
+		const member = (await namespaceView(db, SECRET, STORY_RESPOND_SPEC_ID, {
 			userId,
 			isAdmin: false
 		})) as NamespaceView

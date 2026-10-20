@@ -90,20 +90,20 @@ describe("Admin › Pipelines — Recent runs", () => {
 		flushSync()
 		listeners.get("pipelines:list")!({
 			pipelinesList: [
-				ns("core:spec/chat-respond", "Reply", "core:genre/chat"),
+				ns("core:spec/story-respond", "Reply", "core:genre/story"),
 				ns("core:spec/lair-respond", "Reply", "core:genre/lair"),
 				ns("core:spec/summarize-scene", "Summarize scene")
 			]
 		})
 		listeners.get("sessions:genres")!({
 			genres: [
-				{ genreId: "core:genre/chat", name: "Chat" },
+				{ genreId: "core:genre/story", name: "Chat" },
 				{ genreId: "core:genre/lair", name: "Lair" }
 			]
 		})
 		listeners.get("pipelines:runs")!({
 			runs: [
-				run("r1", "core:spec/chat-respond"),
+				run("r1", "core:spec/story-respond"),
 				run("r2", "core:spec/lair-respond"),
 				run("r3", "core:spec/summarize-scene")
 			]

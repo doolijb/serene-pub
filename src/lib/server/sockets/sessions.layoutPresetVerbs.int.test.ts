@@ -34,8 +34,11 @@ beforeAll(async () => {
 	testDb = dbModule.db as unknown as TestDb
 }, 60_000)
 
-const ADVENTURE = "core:genre/adventure"
-const CHAT = "core:genre/chat"
+// Two genres that each ship a default layout: the Lair, whose layouts these
+// tests make, and Story as "another genre" (Adventure and the roleplay Chat
+// until 2026-10-19).
+const LAIR = "core:genre/lair"
+const STORY = "core:genre/story"
 // On screen it is a **layout**, never a "preset" (NOMENCLATURE §9): the
 // page shows these sentences verbatim.
 const UNKNOWN = "That layout isn't available."
@@ -57,7 +60,7 @@ async function user(label: string) {
 	return createTestUser(testDb, `l4-${label}-${n++}`)
 }
 
-async function sessionOf(userId: number, genreId = ADVENTURE) {
+async function sessionOf(userId: number, genreId = LAIR) {
 	const [session] = await testDb
 		.insert(schema.sessions)
 		.values({ userId, isGroup: true, genreId })
@@ -66,7 +69,7 @@ async function sessionOf(userId: number, genreId = ADVENTURE) {
 }
 
 /** An owner's session with a guest in it. */
-async function scenario(genreId = ADVENTURE) {
+async function scenario(genreId = LAIR) {
 	const owner = await user("owner")
 	const guest = await user("guest")
 	const session = await sessionOf(owner.id, genreId)
@@ -77,7 +80,7 @@ async function scenario(genreId = ADVENTURE) {
 }
 
 /** Seed a core genre's layouts as boot does; the genre default layout row. */
-async function seed(genreId = ADVENTURE) {
+async function seed(genreId = LAIR) {
 	const { syncLayoutPresets } = await import("$lib/server/db/layoutPresets")
 	await syncLayoutPresets([genreId])
 	const [row] = await testDb
@@ -92,7 +95,7 @@ async function namedLayout(
 	userId: number,
 	name: string,
 	layout: Record<string, unknown>,
-	genreId = ADVENTURE
+	genreId = LAIR
 ) {
 	const { saveUserLayoutPreset } = await import("$lib/server/db/layoutPresets")
 	return saveUserLayoutPreset({ genreId, userId, name, layout })
@@ -204,7 +207,7 @@ async function setNewSessionLayout(
 	) as Promise<Sockets.Sessions.PanelLayout.SetNewSessionLayout.Response>
 }
 
-/** A two-column arrangement that differs from Adventure's in every slot. */
+/** A two-column arrangement that differs from the Lair's in every slot. */
 const TWO_COLUMNS = {
 	zoneLayout: {
 		version: 1,
@@ -261,7 +264,7 @@ describe("sessions:layoutPreset:share", () => {
 			const shared = await share(s.owner.id, s.session.id, mine.id, "shared")
 			expect(shared.ok).toBe(true)
 			expect(shared.id).toBe(mine.id)
-			expect(shared.genreId).toBe(ADVENTURE)
+			expect(shared.genreId).toBe(LAIR)
 			expect(shared.preset!.visibility).toBe("shared")
 			expect(shared.presets.find((p) => p.id === mine.id)!.visibility).toBe("shared")
 			// Everyone on the server now sees it, under "shared with you".
@@ -387,9 +390,9 @@ describe("sessions:layoutPreset:share", () => {
 		async () => {
 			await seed()
 			const author = await user("cross-genre")
-			const own = await namedLayout(author.id, "Adventure one", TWO_COLUMNS)
-			const chat = await sessionOf(author.id, CHAT)
-			const res = await share(author.id, chat.id, own.id, "shared")
+			const own = await namedLayout(author.id, "Lair one", TWO_COLUMNS)
+			const story = await sessionOf(author.id, STORY)
+			const res = await share(author.id, story.id, own.id, "shared")
 			expect(res.ok).toBe(false)
 			expect(res.error).toBe(UNKNOWN)
 			expect(res.presets).toEqual([])
@@ -437,7 +440,7 @@ describe("sessions:layoutPreset:share", () => {
 			const layout = await namedLayout(s.owner.id, "Everyone's", TWO_COLUMNS)
 			await share(s.owner.id, s.session.id, layout.id, "shared")
 			const friend = await user("friend")
-			const chose = await setNewSessionLayout(friend.id, ADVENTURE, layout.id)
+			const chose = await setNewSessionLayout(friend.id, LAIR, layout.id)
 			expect(chose.ok).toBe(true)
 
 			const first = await sessionOf(friend.id)
@@ -469,7 +472,7 @@ describe("sessions:layoutPreset:clone", () => {
 			const res = await clone(s.owner.id, def.id)
 			expect(res.ok).toBe(true)
 			expect(res.id).toBe(def.id)
-			expect(res.genreId).toBe(ADVENTURE)
+			expect(res.genreId).toBe(LAIR)
 			const copy = res.preset!
 			expect(copy.id).not.toBe(def.id)
 			expect(copy.name).toBe(`${def.name} (copy)`)
@@ -548,8 +551,8 @@ describe("sessions:layoutPreset:clone", () => {
 			const [withdrawn] = await testDb
 				.insert(schema.sessionLayoutPresets)
 				.values({
-					seedKey: `layout:${ADVENTURE}:gone.plugin/wide-${n++}`,
-					genreId: ADVENTURE,
+					seedKey: `layout:${LAIR}:gone.plugin/wide-${n++}`,
+					genreId: LAIR,
 					origin: "plugin",
 					pluginId: "gone.plugin",
 					withdrawnAt: new Date(),
@@ -620,7 +623,7 @@ describe("sessions:layoutPreset:update", () => {
 			])
 			expect(res.ok).toBe(true)
 			expect(res.id).toBe(s.mine.id)
-			expect(res.genreId).toBe(ADVENTURE)
+			expect(res.genreId).toBe(LAIR)
 			expect(res.preset!.layout).toEqual({
 				...STATS_RIGHT,
 				widgetSettings: { stats: { density: "compact" } },
@@ -731,24 +734,24 @@ describe("sessions:layoutPreset:update", () => {
 		"refused, with nothing moved: a built-in, a stranger's private layout, someone else's shared one, another genre's, and a session the caller is not in",
 		async () => {
 			const def = await seed()
-			await seed(CHAT)
+			await seed(STORY)
 			const s = await scenario()
 			await get(s.owner.id, s.session.id)
 			const author = await user("sharer")
 			const secret = await namedLayout(author.id, "Secret", TWO_COLUMNS)
 			const open = await namedLayout(author.id, "Open", TWO_COLUMNS)
 			await shareDirect(open.id, author.id)
-			const chatOwn = await namedLayout(s.owner.id, "Chat one", TWO_COLUMNS, CHAT)
+			const storyOwn = await namedLayout(s.owner.id, "Story one", TWO_COLUMNS, STORY)
 			const own = await namedLayout(s.owner.id, "Own", TWO_COLUMNS)
 			const before = await Promise.all(
-				[def.id, secret.id, open.id, chatOwn.id, own.id].map(presetRow)
+				[def.id, secret.id, open.id, storyOwn.id, own.id].map(presetRow)
 			)
 
 			const cases: [number, number, string][] = [
 				[s.session.id, def.id, "Built-in layouts can't be changed — save a copy instead."],
 				[s.session.id, secret.id, UNKNOWN],
 				[s.session.id, open.id, "Only the owner or an admin can change a shared layout."],
-				[s.session.id, chatOwn.id, UNKNOWN]
+				[s.session.id, storyOwn.id, UNKNOWN]
 			]
 			for (const [sessionId, id, error] of cases) {
 				const res = await update(s.owner.id, sessionId, id, STATS_RIGHT, ["stats"])
@@ -762,7 +765,7 @@ describe("sessions:layoutPreset:update", () => {
 			expect(outsider.error).toBe(NO_ACCESS)
 
 			const after = await Promise.all(
-				[def.id, secret.id, open.id, chatOwn.id, own.id].map(presetRow)
+				[def.id, secret.id, open.id, storyOwn.id, own.id].map(presetRow)
 			)
 			expect(after).toEqual(before)
 			expect((await rowOf(s.session.id, s.owner.id)).startedFromLayoutPresetId).toBe(
@@ -817,9 +820,9 @@ describe("sessions:layoutPreset:setNewSessionLayout", () => {
 				...TWO_COLUMNS,
 				widgetSettings: { stats: { density: "compact" } }
 			})
-			const res = await setNewSessionLayout(person.id, ADVENTURE, preferred.id)
+			const res = await setNewSessionLayout(person.id, LAIR, preferred.id)
 			expect(res.ok).toBe(true)
-			expect(res.genreId).toBe(ADVENTURE)
+			expect(res.genreId).toBe(LAIR)
 			expect(res.layoutPresetId).toBe(preferred.id)
 			expect(res.presets.find((p) => p.id === preferred.id)!.isNewSessionLayout).toBe(true)
 			expect(res.presets.find((p) => p.id === def.id)!.isNewSessionLayout).toBe(false)
@@ -830,7 +833,7 @@ describe("sessions:layoutPreset:setNewSessionLayout", () => {
 			expect(opened.layout).toEqual(TWO_COLUMNS)
 			expect(opened.widgetSettings.stats).toEqual({ density: "compact" })
 
-			const cleared = await setNewSessionLayout(person.id, ADVENTURE, null)
+			const cleared = await setNewSessionLayout(person.id, LAIR, null)
 			expect(cleared.ok).toBe(true)
 			expect(cleared.layoutPresetId).toBeNull()
 			expect(cleared.presets.some((p) => p.isNewSessionLayout)).toBe(false)
@@ -848,9 +851,9 @@ describe("sessions:layoutPreset:setNewSessionLayout", () => {
 		"refused: another genre's layout, a stranger's private one, a withdrawn one; someone's shared one may be chosen",
 		async () => {
 			await seed()
-			await seed(CHAT)
+			await seed(STORY)
 			const person = await user("picky")
-			const chatOwn = await namedLayout(person.id, "Chat one", TWO_COLUMNS, CHAT)
+			const storyOwn = await namedLayout(person.id, "Story one", TWO_COLUMNS, STORY)
 			const author = await user("maker")
 			const secret = await namedLayout(author.id, "Secret", TWO_COLUMNS)
 			const open = await namedLayout(author.id, "Open", TWO_COLUMNS)
@@ -858,8 +861,8 @@ describe("sessions:layoutPreset:setNewSessionLayout", () => {
 			const [withdrawn] = await testDb
 				.insert(schema.sessionLayoutPresets)
 				.values({
-					seedKey: `layout:${ADVENTURE}:gone.plugin/tall-${n++}`,
-					genreId: ADVENTURE,
+					seedKey: `layout:${LAIR}:gone.plugin/tall-${n++}`,
+					genreId: LAIR,
 					origin: "plugin",
 					pluginId: "gone.plugin",
 					withdrawnAt: new Date(),
@@ -869,8 +872,8 @@ describe("sessions:layoutPreset:setNewSessionLayout", () => {
 					layout: TWO_COLUMNS
 				})
 				.returning()
-			for (const id of [chatOwn.id, secret.id, withdrawn.id, 999_999]) {
-				const res = await setNewSessionLayout(person.id, ADVENTURE, id)
+			for (const id of [storyOwn.id, secret.id, withdrawn.id, 999_999]) {
+				const res = await setNewSessionLayout(person.id, LAIR, id)
 				expect(res.ok, `layout ${id}`).toBe(false)
 				expect(res.error).toBe(UNKNOWN)
 			}
@@ -880,7 +883,7 @@ describe("sessions:layoutPreset:setNewSessionLayout", () => {
 				.where(eq(schema.userLayoutDefaults.userId, person.id))
 			expect(rows).toEqual([])
 
-			const ok = await setNewSessionLayout(person.id, ADVENTURE, open.id)
+			const ok = await setNewSessionLayout(person.id, LAIR, open.id)
 			expect(ok.ok).toBe(true)
 			const first = await sessionOf(person.id)
 			expect((await get(person.id, first.id)).startedFromLayoutPresetId).toBe(open.id)
@@ -894,7 +897,7 @@ describe("sessions:layoutPreset:setNewSessionLayout", () => {
 			const def = await seed()
 			const person = await user("deleter")
 			const mine = await namedLayout(person.id, "Short-lived", TWO_COLUMNS)
-			await setNewSessionLayout(person.id, ADVENTURE, mine.id)
+			await setNewSessionLayout(person.id, LAIR, mine.id)
 			const { sessionsLayoutPresetDeleteHandler } = await handlers()
 			const del = await sessionsLayoutPresetDeleteHandler.handler(
 				fakeSocket(person.id),
@@ -912,12 +915,12 @@ describe("sessions:layoutPreset:setNewSessionLayout", () => {
 		"a new-session layout is its chooser's, for its genre: another person's first open and the chooser's first open of another genre copy their genre default layout",
 		async () => {
 			const def = await seed()
-			const chatDef = await seed(CHAT)
+			const storyDef = await seed(STORY)
 			const chooser = await user("chooser-only")
 			const open = await namedLayout(chooser.id, "Chooser's", TWO_COLUMNS)
 			// Shared, so the other person can see it — and still not get it.
 			await shareDirect(open.id, chooser.id)
-			expect((await setNewSessionLayout(chooser.id, ADVENTURE, open.id)).ok).toBe(true)
+			expect((await setNewSessionLayout(chooser.id, LAIR, open.id)).ok).toBe(true)
 
 			const other = await user("bystander")
 			const theirs = await sessionOf(other.id)
@@ -925,10 +928,10 @@ describe("sessions:layoutPreset:setNewSessionLayout", () => {
 			expect(opened.startedFromLayoutPresetId).toBe(def.id)
 			expect(opened.presets.find((p) => p.id === open.id)!.isNewSessionLayout).toBe(false)
 
-			const chat = await sessionOf(chooser.id, CHAT)
-			const chatOpened = await get(chooser.id, chat.id)
-			expect(chatOpened.startedFromLayoutPresetId).toBe(chatDef.id)
-			expect(chatOpened.layout).toEqual(chatDef.layout)
+			const story = await sessionOf(chooser.id, STORY)
+			const storyOpened = await get(chooser.id, story.id)
+			expect(storyOpened.startedFromLayoutPresetId).toBe(storyDef.id)
+			expect(storyOpened.layout).toEqual(storyDef.layout)
 		},
 		60_000
 	)
@@ -939,8 +942,8 @@ describe("sessions:layoutPreset:setNewSessionLayout", () => {
 			const def = await seed()
 			const person = await user("back-to-default")
 			const mine = await namedLayout(person.id, "Mine first", TWO_COLUMNS)
-			expect((await setNewSessionLayout(person.id, ADVENTURE, mine.id)).ok).toBe(true)
-			const res = await setNewSessionLayout(person.id, ADVENTURE, def.id)
+			expect((await setNewSessionLayout(person.id, LAIR, mine.id)).ok).toBe(true)
+			const res = await setNewSessionLayout(person.id, LAIR, def.id)
 			expect(res.ok).toBe(true)
 			// Answered as the clear it is, so the page says "the genre default layout".
 			expect(res.layoutPresetId).toBeNull()
@@ -1043,8 +1046,8 @@ describe("a shipped layout is nobody's to change, an admin's included", () => {
 			const [plugin] = await testDb
 				.insert(schema.sessionLayoutPresets)
 				.values({
-					seedKey: `layout:${ADVENTURE}:some.plugin/wide-${n++}`,
-					genreId: ADVENTURE,
+					seedKey: `layout:${LAIR}:some.plugin/wide-${n++}`,
+					genreId: LAIR,
 					origin: "plugin",
 					pluginId: "some.plugin",
 					slug: `wide-${n++}`,

@@ -57,7 +57,7 @@ const keysOf = (p: Sockets.SessionAdmin.PresetRow) =>
 describe("sessionPresets:list — effective included actions", () => {
 	test("the shipped Chat preset (included set null) carries narrate by the companion rule", async () => {
 		const chat = (await listPresets()).find(
-			(p) => p.genreId === "core:genre/chat" && p.isImmutable && p.isDefault
+			(p) => p.genreId === "core:genre/story" && p.isImmutable && p.isDefault
 		)!
 		expect(chat).toBeDefined()
 		expect(chat.includedActions).toBeNull()
@@ -80,7 +80,7 @@ describe("sessionPresets:list — effective included actions", () => {
 
 	test("the picker's cut carries it too", async () => {
 		const chat = (await listPresets(false)).find(
-			(p) => p.genreId === "core:genre/chat" && p.isDefault
+			(p) => p.genreId === "core:genre/story" && p.isDefault
 		)!
 		expect(keysOf(chat)).toContain("narrate")
 	}, 60_000)

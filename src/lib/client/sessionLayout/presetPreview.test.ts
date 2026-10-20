@@ -1,15 +1,26 @@
 /**
  * The Presets tab's picture. Pure input → geometry, so the one part of that tab
- * with real logic is covered without a component harness.
+ * with real logic is covered without a component harness. Each zone is its
+ * panels stacked in twelve rows (PLAN-session-panels-2026-10-14).
  */
 import { describe, expect, it } from "vitest"
+import type { PanelLayoutV1 } from "@serene-pub/sdk"
 import { previewOf } from "./presetPreview"
 
+const layout = (over: Partial<PanelLayoutV1> = {}) => ({
+	panels: {
+		version: 1 as const,
+		left: [],
+		right: [],
+		middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] },
+		...over
+	}
+})
+
 describe("previewOf — the shipped default", () => {
-	it("draws the built-in chat arrangement for an empty preset", () => {
+	it("draws the conversation filling the middle for an empty preset", () => {
 		const p = previewOf({})
 		expect(p.middle.cells.map((c) => c.id)).toEqual(["messages"])
-		// The conversation is the whole middle.
 		const [messages] = p.middle.cells
 		expect(messages.y).toBe(0)
 		expect(messages.h).toBe(p.middle.rows)
@@ -25,213 +36,130 @@ describe("previewOf — the shipped default", () => {
 	})
 })
 
-describe("previewOf — zoneLayout side zones", () => {
-	it("stacks a side zone's widgets top to bottom", () => {
-		const p = previewOf({
-			zoneLayout: {
-				version: 1,
-				zones: {
-					right: {
-						kind: "side",
-						side: "right",
-						widgets: ["scene-portraits", "sample-map"]
-					}
-				}
-			}
-		})
-		expect(p.right.cells.map((c) => c.id)).toEqual([
-			"scene-portraits",
-			"sample-map"
-		])
-		expect(p.right.cells.map((c) => c.y)).toEqual([0, 1])
-		expect(p.left.cells).toEqual([])
-	})
-
-	it("routes a left-side zone to the left column", () => {
-		const p = previewOf({
-			zoneLayout: {
-				version: 1,
-				zones: {
-					l: { kind: "side", side: "left", widgets: ["tasks"] }
-				}
-			}
-		})
-		expect(p.left.cells.map((c) => c.id)).toEqual(["tasks"])
-		expect(p.right.cells).toEqual([])
-	})
-
-	it("ignores strips and non-string widget entries", () => {
-		const p = previewOf({
-			zoneLayout: {
-				version: 1,
-				zones: {
-					top: { kind: "strip", area: "top", widgets: ["banner"] },
-					right: {
-						kind: "side",
-						side: "right",
-						widgets: ["ok", 5, null]
-					}
-				}
-			}
-		})
-		expect(p.right.cells.map((c) => c.id)).toEqual(["ok"])
-		expect(p.left.cells).toEqual([])
-	})
-})
-
-describe("previewOf — arrangedGrid wins", () => {
-	const arranged = {
-		arrangedGrid: {
-			middle: {
-				cols: 4,
-				rows: 8,
-				items: [
-					{ id: "world-state", x: 0, y: 0, w: 4, h: 2 },
-					{ id: "messages", x: 0, y: 2, w: 4, h: 6 }
-				]
-			}
-		}
-	}
-
-	it("uses the editor's captured geometry over the defaults", () => {
-		const p = previewOf(arranged)
-		expect(p.middle.cols).toBe(4)
-		expect(p.middle.rows).toBe(8)
-		expect(p.middle.cells[1]).toMatchObject({
-			id: "messages",
-			y: 2,
-			h: 6
-		})
-	})
-
-	it("draws no block for a retired widget id a saved preset still names", () => {
-		// A preset arranged when the composer was its own widget. The picture
-		// has to show what applying it will actually produce.
-		const p = previewOf({
-			arrangedGrid: {
-				middle: {
-					cols: 4,
-					rows: 8,
-					items: [
-						{ id: "messages", x: 0, y: 0, w: 4, h: 6 },
-						{ id: "composer", x: 0, y: 6, w: 4, h: 2 }
-					]
-				}
-			},
-			zoneLayout: {
-				version: 1,
-				zones: {
-					right: {
-						kind: "side",
-						side: "right",
-						widgets: ["composer", "notes"]
-					}
-				}
-			}
-		})
-		expect(p.middle.cells.map((c) => c.id)).toEqual(["messages"])
-		expect(p.right.cells.map((c) => c.id)).toEqual(["notes"])
-	})
-
-	it("draws a cell outside its frame where the page does — back inside it", () => {
-		// The live session clamps every saved cell into its own frame
-		// (`loadArranged`), so the picture of that preset is the same 1 × 1
-		// column the session would draw, not a 6 × 9 frame it never has.
-		const p = previewOf({
-			arrangedGrid: {
-				right: {
-					cols: 1,
-					rows: 1,
-					items: [{ id: "wide", x: 0, y: 0, w: 6, h: 9 }]
-				}
-			}
-		})
-		expect(p.right.cols).toBe(1)
-		expect(p.right.rows).toBe(1)
-		expect(p.right.cells).toMatchObject([{ id: "wide", x: 0, y: 0, w: 1, h: 1 }])
-	})
-
-	it("falls back per zone — an arranged middle leaves the sides to zoneLayout", () => {
-		const p = previewOf({
-			...arranged,
-			zoneLayout: {
-				version: 1,
-				zones: {
-					right: { kind: "side", side: "right", widgets: ["notes"] }
-				}
-			}
-		})
-		expect(p.middle.cols).toBe(4)
-		expect(p.right.cells.map((c) => c.id)).toEqual(["notes"])
-	})
-
-	it("skips malformed items and falls back when none survive", () => {
-		const p = previewOf({
-			arrangedGrid: { middle: { cols: 4, rows: 8, items: [{ x: 1 }] } }
-		})
-		expect(p.middle.cells.map((c) => c.id)).toEqual(["messages"])
-	})
-})
-
-describe("previewOf — labels", () => {
-	it("labels every cell through the supplied resolver", () => {
+describe("previewOf — a side is its panels, stacked", () => {
+	it("stacks a side's panels top to bottom, fills sharing the column", () => {
 		const p = previewOf(
-			{
-				zoneLayout: {
-					version: 1,
-					zones: {
-						right: {
-							kind: "side",
-							side: "right",
-							widgets: ["scene-portraits"]
-						}
-					}
-				}
-			},
-			(id) => (id === "scene-portraits" ? "Scene Portraits" : id)
+			layout({
+				right: [
+					{ key: "a", tabs: ["scene-portraits"] },
+					{ key: "b", tabs: ["sample-map"] }
+				]
+			})
 		)
-		expect(p.right.cells[0].label).toBe("Scene Portraits")
-		expect(p.middle.cells[0].label).toBe("messages")
+		expect(p.right.cells.map((c) => [c.id, c.y, c.h])).toEqual([
+			["scene-portraits", 0, 6],
+			["sample-map", 6, 6]
+		])
+		expect(p.left.cells).toEqual([])
+	})
+
+	it("a share is its own twelfths; fit and a rail panel are small boxes", () => {
+		const p = previewOf(
+			layout({
+				left: [
+					{ key: "a", tabs: ["places"], height: { share: 4 } },
+					{ key: "b", tabs: ["annex#notes"], height: "fit" },
+					{ key: "c", tabs: ["chronicle"], pinned: false },
+					{ key: "d", tabs: ["stats"] }
+				]
+			})
+		)
+		expect(p.left.cells.map((c) => [c.id, c.h, c.rail])).toEqual([
+			["places", 4, false],
+			["annex#notes", 2, false],
+			["chronicle", 2, true],
+			["stats", 4, false]
+		])
+		expect(p.left.rows).toBe(12)
+	})
+
+	it("says how many tabs a panel holds, and names it by every tab", () => {
+		const p = previewOf(
+			layout({ right: [{ key: "a", tabs: ["stats", "places"] }] }),
+			(id) => (id === "stats" ? "Stats" : "Places")
+		)
+		expect(p.right.cells[0]).toMatchObject({ id: "stats", key: "a", tabs: 2, label: "Stats · Places" })
 	})
 })
 
-describe("previewOf — the page's own reading (resolveDrawn)", () => {
-	it("draws the middle's grid: a content-sized strip over the conversation", async () => {
-		const { ADVENTURE_LAYOUT } = await import("@serene-pub/core-catalog")
-		const p = previewOf(ADVENTURE_LAYOUT)
+describe("previewOf — the middle", () => {
+	it("strips above and below; the primary panel takes what is left", () => {
+		const p = previewOf(
+			layout({
+				middle: {
+					above: [{ key: "s", tabs: ["stats#world"], height: "fit" }],
+					primary: { key: "p1", tabs: ["messages"] },
+					below: [{ key: "b", tabs: ["album"], height: { share: 3 } }]
+				}
+			})
+		)
 		expect(p.middle.cells.map((c) => [c.id, c.y, c.h])).toEqual([
-			["stats#world", 0, 1],
-			["messages", 1, 5]
+			["stats#world", 0, 2],
+			["messages", 2, 7],
+			["album", 9, 3]
 		])
-		// The right is ARRANGED: its cells, in its grid.
-		expect(p.right).toMatchObject({ cols: 1, rows: 12 })
+	})
+
+	it("draws no box for a retired widget a saved preset still names", () => {
+		const p = previewOf(
+			layout({
+				middle: {
+					above: [],
+					primary: { key: "p1", tabs: ["messages"] },
+					below: [{ key: "c", tabs: ["composer"] }]
+				},
+				right: [
+					{ key: "r1", tabs: ["composer"] },
+					{ key: "r2", tabs: ["notes"] }
+				]
+			})
+		)
+		expect(p.middle.cells.map((c) => c.id)).toEqual(["messages"])
+		expect(p.right.cells.map((c) => c.id)).toEqual(["notes"])
+	})
+})
+
+describe("previewOf — the page's own reading (panelsOf, resolveDrawn)", () => {
+	it("Adventure: the world strip over the conversation, the party docked, the lore in the rail", async () => {
+		const { STORY_WORLD_LAYOUT } = await import("@serene-pub/core-catalog")
+		const p = previewOf(STORY_WORLD_LAYOUT)
+		expect(p.middle.cells.map((c) => [c.id, c.y, c.h])).toEqual([
+			["stats#world", 0, 2],
+			["messages", 2, 10]
+		])
 		expect(p.right.cells.map((c) => [c.id, c.y, c.h])).toEqual([
 			["scene-portraits", 0, 6],
 			["stats", 6, 6]
 		])
-		// The unpinned left rail is not arranged: its list, the Chronicle first.
-		expect(p.left.cells.map((c) => c.id)).toEqual([
-			"chronicle",
-			"lore-entries"
+		expect(p.left.cells.map((c) => [c.id, c.rail])).toEqual([
+			["chronicle", true],
+			["lore-entries", true]
 		])
 	})
 
-	it("puts the conversation back where the page's floor does", () => {
+	it("an old-slot preset is read through the converter", () => {
 		const p = previewOf({
-			arrangedGrid: {
-				middle: { cols: 4, rows: 8, items: [{ id: "world-state", x: 0, y: 0, w: 4, h: 2 }] }
+			zoneLayout: {
+				version: 1,
+				zones: { right: { kind: "side", side: "right", widgets: ["notes"] } }
 			}
 		})
-		expect(p.middle.cells.map((c) => c.id)).toEqual(["world-state", "messages"])
-		expect(p.middle.cells[1]).toMatchObject({ x: 0, y: 2, w: 4, h: 6 })
+		expect(p.right.cells.map((c) => c.id)).toEqual(["notes"])
+		expect(p.middle.cells.map((c) => c.id)).toEqual(["messages"])
 	})
 
-	it("a side the arrangement emptied of live widgets draws its list", () => {
-		const p = previewOf({
-			arrangedGrid: { right: { cols: 1, rows: 4, items: [{ id: "inventory", x: 0, y: 0, w: 1, h: 4 }] } },
-			zoneLayout: { version: 1, zones: { right: { kind: "side", side: "right", widgets: ["notes"] } } }
-		})
-		expect(p.right.cells.map((c) => c.id)).toEqual(["notes"])
+	it("draws a layout holding no conversation as it is (R-B, no lock): no floor over stored panels", () => {
+		const p = previewOf(layout({ middle: { above: [], primary: { key: "p1", tabs: ["world-state"] }, below: [] } }))
+		expect(p.middle.cells.map((c) => c.id)).toEqual(["world-state"])
+	})
+
+	it("labels every box through the supplied resolver", () => {
+		const p = previewOf(
+			layout({ right: [{ key: "a", tabs: ["scene-portraits"] }] }),
+			(id) => (id === "scene-portraits" ? "Scene Portraits" : id)
+		)
+		expect(p.right.cells[0].label).toBe("Scene Portraits")
+		expect(p.middle.cells[0].label).toBe("messages")
 	})
 
 	it("a genre's own primary is the one the floor keeps", () => {

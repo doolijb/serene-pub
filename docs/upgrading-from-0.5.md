@@ -47,7 +47,7 @@ A few things work differently in 0.6, so they live somewhere new:
 - **Accounts**: every user, their passphrase, admin status, settings and theme. Anyone signed in stays signed in.
 - **Characters**, with their avatars and galleries, which join the media library (**Settings › Media**).
 - **Personas**, as characters marked as personas. Each person's default persona stays their default. If a persona's card id clashed with one of that person's characters, it gets a new id, and a note says which.
-- **Chats**, as **Chat** sessions with every message in order: swipes, reasoning, edits, hidden messages, narrator messages, drafts and scenarios. Characters, personas and guests keep their seats.
+- **Chats**, as **Story** sessions on the **Minimal** preset (one call per turn, as before) with every message in order: swipes, reasoning, edits, hidden messages, narrator messages, drafts and scenarios. Characters, personas and guests keep their seats.
     - **Group reply strategy** becomes the session's turn order: *Manual* stays manual, *User split* becomes *Round robin by user*, and *Ordered* (or none) is the usual round robin. See [Group sessions](./group-sessions.md#choose-how-the-turn-order-works).
     - **Character visibility** is now one setting per session, **Character detail**: *visible* is *Everything*, *minimal* is *Name and description*, *hidden* is *Only whoever is speaking*. Where a group chat mixed them, the most detailed wins, and a note lists those chats.
     - A chat that **ignored retrieval** has **Search by meaning** off; turn it back on in the session's pipeline settings.

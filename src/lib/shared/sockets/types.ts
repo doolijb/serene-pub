@@ -26,6 +26,7 @@ import type {
 import type { SpriteSetView } from "$lib/shared/sprites"
 import type { CharacterLikenessInput } from "$lib/shared/characters/likeness"
 import type { LoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
+import type { GenreRulesOffer } from "$lib/shared/rulesets/rulesOffer"
 import type { RetoldField } from "$lib/shared/lorebooks/retold"
 import type { ConversationPerson } from "$lib/shared/sockets/conversations"
 
@@ -2917,6 +2918,12 @@ declare global {
 					}[]
 					/** *Sessions can reply* = the Reply default is filled. */
 					canReply: boolean
+					/**
+					 * Each connection's stored capability grades, by connection id —
+					 * the Model card's chips, filters and consequences read them
+					 * (`connections:list` does not carry `capabilities`).
+					 */
+					connectionGrades?: Record<string, Record<string, number>>
 					/** Sampling configs offerable per transform (`samplingShapeForCapability`). */
 					samplingOptions: Record<
 						string,
@@ -3000,6 +3007,28 @@ declare global {
 				interface Response {
 					loadout: Summary
 					/** What was chosen and why, in a sentence. */
+					explanation: string
+				}
+			}
+			/**
+			 * **Fill for me** — the pick Make it would write, proposed for the
+			 * editor's draft instead. Writes nothing.
+			 */
+			namespace ProposeFill {
+				interface Params {
+					/** The loadout; absent for one not yet created. */
+					id?: number | null
+					/** What a not-yet-created loadout is for; ignored with `id`. */
+					transform?: string
+				}
+				interface Response {
+					/** Echoes `id`, so an editor knows the answer is its own. */
+					id: number | null
+					connectionId: number
+					connectionModelId: number
+					/** The declaration's preset, for a draft with none picked; else null. */
+					samplingConfigId: number | null
+					/** *Filled with X on Y. It has a schema door, what Extraction is best with.* */
 					explanation: string
 				}
 			}
@@ -3275,6 +3304,10 @@ declare global {
 				 * companion's action for that function only.
 				 */
 				includedActions: string[] | null
+				/** 🚧 The card's numbers and the preset layer (2026-10-19). */
+				callsPerTurn?: number | null
+				castFloor?: { characters?: number; personas?: number } | null
+				settings?: Record<string, unknown> | null
 				/**
 				 * The actions sessions on this preset include, RESOLVED: the
 				 * included set above where it states one, the companion rule
@@ -3420,6 +3453,56 @@ declare global {
 
 		// Sessions namespace
 		namespace Sessions {
+			/**
+			 * 🚧 A session's **ruleset settings** (UI: _Rules options_;
+			 * PLAN-rulesets §8, W3-A 2026-10-16): read with `sessionId` alone,
+			 * changed by the session's owner with `values` (option → choice)
+			 * and/or `preset` (a preset's id or name, applied whole). Stored on
+			 * the session for its ruleset; a change pushes the session to its
+			 * members. Refused as `sessions:setRulesetSettings:error`.
+			 */
+			namespace SetRulesetSettings {
+				interface Params {
+					sessionId: number
+					/** Absent: the session's primary ruleset. */
+					rulesetId?: string
+					preset?: string
+					values?: Record<string, string>
+				}
+				interface Choice {
+					id: string
+					label: string
+					description?: string
+				}
+				interface Option {
+					id: string
+					label: string
+					description?: string
+					value: string
+					default: string
+					choices: Choice[]
+				}
+				interface RulesOptions {
+					rulesetId: string
+					rulesetName: string
+					installed: boolean
+					options: Option[]
+					presets: Choice[]
+					/** The preset the session's values match exactly, if any. */
+					preset?: string
+					stored: Record<string, string>
+				}
+				interface Response {
+					sessionId: number
+					/** Only the session's owner changes them. */
+					canEdit: boolean
+					rulesOptions: RulesOptions
+				}
+				interface ErrorResponse {
+					error: string
+					sessionId?: number
+				}
+			}
 			/**
 			 * Show a character in another sprite set FOR THIS SESSION ONLY
 			 * (DESIGN-sprites §2.3) — "she changed clothes in this scene".
@@ -3567,7 +3650,7 @@ declare global {
 					sessionId: number
 					request?: string
 					owner: {
-						kind: "session" | "session_cast" | "session_location"
+						kind: "session" | "session_cast" | "player_seat" | "session_location"
 						id: number
 					}
 					slotId: string
@@ -3643,6 +3726,18 @@ declare global {
 					 * minute ago read as hours old.
 					 */
 					createdAt: string
+					/**
+					 * 🚧 The newest settled line after this one is a reply that
+					 * failed (an error, no words) — the card says so rather
+					 * than "Waiting on the model" (2026-10-16).
+					 */
+					replyFailed?: boolean
+					/**
+					 * 🚧 This line ends a branch made by On revision: Branch —
+					 * the turn after it was revised away, so nobody is waiting
+					 * on the model; the card says "Your turn".
+					 */
+					revisedTurn?: boolean
 				}
 				interface Response {
 					// Matches the `with: { sessionCharacters, sessionPersonas, sessionTags }`
@@ -3711,6 +3806,8 @@ declare global {
 					sessionId: number
 					runId: string
 					status: import("@serene-pub/sdk").StatusText | null
+					/** A reply run, on this channel (`RunStatusFrame.reply`). */
+					reply?: { channel: string }
 				}
 			}
 			/**
@@ -3818,7 +3915,13 @@ declare global {
 						  })
 						| null
 					messages?: SelectSessionMessage[] | null // Legacy field
-					pagination?: { total: number; hasMore: boolean } | null
+					/**
+					 * `olderIn` 🚧 (PLAN-dc-after-walk2 Q1-1, owner ruling ★7):
+					 * the channels — each as its rows store it (`parley:2`) —
+					 * that hold lines older than this page. The first page is
+					 * each channel's newest 25, never 25 across them all.
+					 */
+					pagination?: { total: number; hasMore: boolean; olderIn?: string[] } | null
 					/** Echoed from request — present only on load-more responses, not initial load */
 					beforeId?: number
 					/** The current user's in-progress composer draft, if any */
@@ -4379,6 +4482,19 @@ declare global {
 			 * fetched on every page and every message. Asked once, where the
 			 * banner is.
 			 */
+			/** 🚧 Switch a session to another of its genre's session presets, or back to its own (2026-10-19). */
+			namespace SetSessionPreset {
+				interface Params {
+					sessionId: number
+					presetId: number
+				}
+				interface Response {
+					sessionId: number
+					presetId?: number
+					presetName?: string
+					error?: string
+				}
+			}
 			namespace PresetStatus {
 				interface Params {
 					sessionId: number
@@ -4674,8 +4790,9 @@ declare global {
 				/** The caller's **new-session layout** for this genre. */
 				isNewSessionLayout: boolean
 				/**
-				 * The session layout, verbatim: its arrangement (`zoneLayout?`,
-				 * `widgetGrid?`, `arrangedGrid?`) plus the `widgetSettings` and
+				 * The session layout, verbatim: its arrangement (`panels`; ⏳ the
+				 * old `zoneLayout?` / `widgetGrid?` / `arrangedGrid?` ride along
+				 * inert until the 0.7 squash) plus the `widgetSettings` and
 				 * `widgetStyles` a copy unpacks.
 				 */
 				layout: Record<string, unknown>
@@ -4708,6 +4825,26 @@ declare global {
 					sessionId: number
 					requestId?: string
 					lanes: import("@serene-pub/sdk").ChannelLaneV1[]
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 **Read to here** on one channel lane (2026-10-17): moves the
+			 * asker's last-read mark forward (`sessions.metadata.laneReads`),
+			 * which `SessionV1.channels[].unseen` counts from. `messageId`
+			 * absent: the lane's newest line. Answered with the asker's fresh
+			 * channels view.
+			 */
+			namespace LaneRead {
+				interface Params {
+					sessionId: number
+					/** The lane (canonical or bare — a bare slug is lane 1). */
+					channel: string
+					messageId?: number
+				}
+				interface Response {
+					sessionId: number
+					channels?: import("@serene-pub/sdk").SessionChannelV1[]
 					error?: string
 				}
 			}
@@ -4812,7 +4949,10 @@ declare global {
 						/**
 						 * The session's whole layout. Provenance is never written
 						 * here — only a copy (`StartFrom`) or _Save as new
-						 * layout_ writes it.
+						 * layout_ writes it. Checked with the SDK's
+						 * `validateSessionLayout` (its `panels` and the shape of
+						 * any ⏳ old slot): a layout with an error is refused
+						 * and nothing is written.
 						 */
 						layout: Record<string, unknown>
 						/**
@@ -4836,6 +4976,7 @@ declare global {
 					interface Response {
 						sessionId: number
 						ok: boolean
+						/** "This layout can't be saved: …" (`LAYOUT_PRESET_CANT_SAVE`) for a layout the app cannot draw. */
 						error?: string
 					}
 				}
@@ -4853,7 +4994,7 @@ declare global {
 						sessionId: number
 						name: string
 						description?: string
-						/** The arrangement to save: `zoneLayout?`, `widgetGrid?`, `arrangedGrid?`. */
+						/** The arrangement to save: `panels` (⏳ old slots carried verbatim). */
 						layout: Record<string, unknown>
 						/**
 						 * Every widget instance id this session draws — the
@@ -5022,7 +5163,7 @@ declare global {
 					interface Params {
 						sessionId: number
 						id: number
-						/** The arrangement to save: `zoneLayout?`, `widgetGrid?`, `arrangedGrid?`. */
+						/** The arrangement to save: `panels` (⏳ old slots carried verbatim). */
 						layout: Record<string, unknown>
 						/** Every widget instance id this session draws (see `Save.Params`). */
 						drawnWidgetIds: string[]
@@ -5126,6 +5267,12 @@ declare global {
 					quick: boolean
 					/** What a press collects before it fires — the collect modal's fields (lair pass R3). */
 					collects?: import("$lib/shared/actions/collects").ListedCollects
+					/**
+					 * 🚧 The question asked before it fires (`ActionDecl.confirm`,
+					 * 2026-10-18), in the viewer's words: the confirmation's
+					 * title, its sentence, and the confirm button's label.
+					 */
+					confirm?: { question: string; description?: string; confirmLabel: string }
 					audience: { see: string[]; act: string[] }
 					venue: string
 					channel?: string
@@ -5193,6 +5340,19 @@ declare global {
 							collects: import("$lib/shared/actions/collects").ListedCollects
 						}
 					>
+					/**
+					 * 🚧 Where this viewer's Delete is refused (2026-10-18, owner
+					 * ruling ★9: Honour mode off HIDES Delete): in a genre that
+					 * keeps its turns, every row on `channels` (each a channel
+					 * that offers the retake) up to `messageId` is a kept turn's
+					 * — the latest under Honour mode off or for a player, the
+					 * older ones always. The page takes Delete off those rows
+					 * (`ConversationLineV1.deletable`); the server's refusal
+					 * (`turnDeleteVerdict`) stays the floor. Absent or null:
+					 * nothing is kept. Re-sent with the list, so it follows each
+					 * turn.
+					 */
+					deleteRefusedThrough?: { channels: string[]; messageId: number } | null
 				}
 			}
 			/** The caller has met these actions — clears their *new* mark. */
@@ -5324,6 +5484,23 @@ declare global {
 						name: string
 						/** The picker card's subtitle; empty when undeclared. */
 						description: string
+						/** 🚧 The card's long copy, "More" unfolds it (2026-10-19). */
+						about?: string
+						/** 🚧 `solo` seats nobody else (the Guide). */
+						members?: "solo" | "group"
+						/** 🚧 The background tasks the genre offers (`TaskDecl[]`). */
+						tasks?: {
+							key: string
+							label: string
+							description?: string
+							group: "reply" | "reckoning" | "sweep" | "events" | "voices"
+							kind: "prose" | "script" | "both"
+							default: "full" | "review" | "off"
+							detachable?: boolean
+							reviewable?: boolean
+						}[]
+						/** 🚧 What the genre uses of a ruleset (`GenreUses`). */
+						uses?: Record<string, unknown>
 						/**
 						 * What a person's persona-less line is called (lair
 						 * re-plan R4) — the genre's `playerLabel`, `en`. Absent
@@ -5338,12 +5515,27 @@ declare global {
 						 * default. Absent when it declares none.
 						 */
 						sceneBoundaryTriggers?: { key: string; label: string }[]
+						/**
+						 * 🚧 What the session forms offer under **Rules** and
+						 * **How strict** (PLAN-rulesets §4, §21; NOMENCLATURE
+						 * §28). Absent when the genre offers no choice (Chat).
+						 */
+						rules?: GenreRulesOffer
 						// Structurally mirrors SessionShape from @serene-pub/sdk,
 						// stated inline so the shared socket contract does not
 						// couple to the SDK package.
 						shape: {
 							characters?: { min: number; max?: number }
-							personas?: { min: number; max?: number }
+							/**
+							 * `preselectDefault` 🚧: false when the new-session
+							 * form must start with no persona chosen (SDK
+							 * `SessionShape.personas.preselectDefault`).
+							 */
+							personas?: {
+								min: number
+								max?: number
+								preselectDefault?: boolean
+							}
 							lorebook?: "optional" | "required"
 							composer?: "text" | "none"
 							voice?: "character" | "narrator"
@@ -5377,6 +5569,30 @@ declare global {
 					 * `metadata.scenes`, never a column.
 					 */
 					sceneSettings?: import("@serene-pub/sdk").SceneSettingsDecl | null
+					/**
+					 * 🚧 A **seat name** (2026-10-14): a player's character
+					 * name in this session, on their `session_personas` row
+					 * — set without a card. A name stores it (trimmed), blank
+					 * or null clears it, absent leaves it alone. Names the
+					 * caller's own seat (opening a card-less one when they
+					 * have none) unless `playerSeatId` picks one; only the
+					 * session's owner may name another player's seat.
+					 */
+					seatName?: string | null
+					/** 🚧 The player seat (`session_personas.id`) `seatName` names. */
+					playerSeatId?: number | null
+					/**
+					 * 🚧 Card-less player seats edited in Edit Session, each
+					 * renamed (`seatName`, non-blank) or removed (`remove`).
+					 * The session's owner may edit any; anyone else only
+					 * their own. A seat with a card is refused here — it is
+					 * edited as its card (`personaIds`).
+					 */
+					playerSeatChanges?: Array<{
+						playerSeatId: number
+						seatName?: string
+						remove?: boolean
+					}>
 				}
 				interface Response {
 					session: SelectSession
@@ -5633,6 +5849,14 @@ declare global {
 					/** The new turn's run, when it started. */
 					runId?: string
 					error?: string
+					/**
+					 * 🚧 What the retake does to the timeline (PLAN-rulesets
+					 * §28) — on a preview, the confirm's sentence: "This will
+					 * overwrite the last turn." / "This will branch here…".
+					 */
+					revision?: { mode: "overwrite" | "branch"; turns: number; sentence: string }
+					/** 🚧 On revision `branch`: the new session the turn was taken again in. */
+					branchedTo?: number
 				}
 			}
 			/**
@@ -5831,6 +6055,76 @@ declare global {
 				}
 			}
 			/**
+			 * 🚧 "Create lorebook from session" (PLAN-rulesets §26): the
+			 * session's own notes become a real lorebook the session reads.
+			 * Owner-only; refused when the session already reads a lorebook.
+			 */
+			namespace CreateLorebookFromPhantom {
+				interface Params {
+					sessionId: number
+					/** The new lorebook's name; absent takes the session's. */
+					name?: string | null
+				}
+				interface Response {
+					sessionId: number
+					lorebookId?: number
+					name?: string
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 What deleting a message does to the timeline (§28), for the
+			 * delete confirmation: null when the delete is no revision.
+			 */
+			namespace RevisionNotice {
+				interface Params {
+					sessionId: number
+					messageId: number
+				}
+				interface Response {
+					sessionId: number
+					messageId: number
+					revision?: { mode: "overwrite" | "branch"; turns: number; sentence: string } | null
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 The overlay's items (PLAN-rulesets §26): entries the session
+			 * wrote to its own notes while reading a lorebook it may not write.
+			 */
+			namespace OverlayItems {
+				interface Params {
+					sessionId: number
+				}
+				interface Item {
+					entryId: number
+					typeId: string
+					title: string
+					sourceMessageId: number | null
+				}
+				interface Response {
+					sessionId: number
+					items?: Item[]
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 Apply to the lorebook: overlay items move into the attached
+			 * lorebook. `entryIds` absent applies every item.
+			 */
+			namespace ApplyOverlay {
+				interface Params {
+					sessionId: number
+					entryIds?: number[] | null
+				}
+				interface Response {
+					sessionId: number
+					lorebookId?: number
+					applied?: number[]
+					error?: string
+				}
+			}
+			/**
 			 * Re-points a removed (soft-deleted) session participant's message
 			 * history to a new character/persona, and makes the new one an
 			 * active participant. See sessionsReassignRemovedParticipantHandler
@@ -5954,11 +6248,27 @@ declare global {
 					 * the whole send and leaves the tray as it was.
 					 */
 					trayItemIds?: string[]
+					/** 🚧 The message this one answers, when the composer named one. */
+					replyTo?: number | null
 				}
+				/**
+				 * 🚧 The send's answer (owner ruling 2026-10-15: a person's
+				 * message is saved through the pipeline). `accepted` — the
+				 * session's save pipeline took it; `sessionMessage` is the
+				 * saved row when it already exists, as it does whenever the
+				 * save finished before the answer. `refused` — the door or the
+				 * pipeline refused it, said as a sentence; nothing was saved,
+				 * and the composer restores the person's text.
+				 */
 				interface Response {
 					/** The session asked about — on every reply, refusals too. */
 					sessionId?: number
+					accepted?: true
+					/** The save run's id. */
+					runId?: string
 					sessionMessage?: SelectSessionMessage
+					refused?: string
+					/** Unexpected failure (also on `:error`); the text is restored like a refusal. */
 					error?: string
 				}
 			}
@@ -5992,6 +6302,13 @@ declare global {
 					id: number // ID of the deleted message
 					success?: string
 					error?: string
+					/**
+					 * 🚧 On revision `branch` (PLAN-rulesets §28): the turn was
+					 * kept and the session forked before it — the new session.
+					 */
+					branchedTo?: number
+					/** 🚧 The mode the delete followed, and its sentence. */
+					revision?: { mode: "overwrite" | "branch"; turns: number; sentence: string }
 				}
 			}
 			namespace DeleteFromId {
@@ -6217,6 +6534,12 @@ declare global {
 						 * client derives read-only from. Every row carries it.
 						 */
 						bookAccess?: "owner" | "shared" | "admin"
+						/**
+						 * 🚧 The asker's own sessions that read this book (DC
+						 * walk 6): the header's "Read by" when no session that
+						 * reads it is open. Newest first.
+						 */
+						readBy?: { id: number; name: string | null }[]
 					})[]
 				}
 			}
@@ -10408,6 +10731,23 @@ declare global {
 					displayName: string | null
 				}
 			}
+			namespace SetTimeZone {
+				interface Params {
+					/** An IANA id; stored in the engine's canonical spelling. */
+					timeZone: string
+					/**
+					 * Write only while the account has none — the browser's
+					 * first-load report. The settings picker leaves it off.
+					 */
+					onlyIfUnset?: boolean
+				}
+				interface Response {
+					success: boolean
+					/** False when `onlyIfUnset` found a zone already set. */
+					changed: boolean
+					timeZone: string
+				}
+			}
 			namespace ChangePassphrase {
 				interface Params {
 					currentPassphrase: string
@@ -11379,6 +11719,13 @@ declare global {
 					 * `{}`, which says the same thing without a second branch.
 					 */
 					capabilityDefaults: Record<string, CapabilityDefault>
+					/**
+					 * 🚧 The capabilities whose default names a connection and a
+					 * model (`capabilitiesReadyOf`). Every viewer may read it — a
+					 * member's `capabilityDefaults` arrive without connection
+					 * identity, so they cannot tell a set default from none.
+					 */
+					capabilitiesReady: string[]
 				}
 			}
 			namespace UpdateOllamaManagerEnabled {
@@ -11562,6 +11909,8 @@ declare global {
 						theme: string
 						darkMode: boolean
 						showHomePageBanner: boolean
+						/** 🚧 Starred starts: favourite genre, favourite preset per genre (2026-10-19). */
+						startFavourites?: { genre?: string; presetByGenre?: Record<string, number> } | null
 						enableEasyCharacterCreation: boolean
 						showAllCharacterFields: boolean
 						backgroundImagePath: string | null
@@ -11673,6 +12022,16 @@ declare global {
 				interface Response {
 					success: boolean
 					enabled: boolean
+				}
+			}
+			namespace UpdateStartFavourites {
+				interface Params {
+					favourites: { genre?: string; presetByGenre?: Record<string, number> }
+				}
+				interface Response {
+					success: boolean
+					favourites: { genre?: string; presetByGenre?: Record<string, number> }
+					error?: string
 				}
 			}
 			namespace UpdateShowHomePageBanner {
@@ -14168,6 +14527,8 @@ declare global {
 					| "location"
 					/** 🚧 This session's layer over a location, by the same entry id. */
 					| "session_location"
+					/** 🚧 A card-less player seat, by `session_personas.id` (`player-seat:<id>`). */
+					| "player_seat"
 				id: number
 			}
 
@@ -14264,6 +14625,10 @@ declare global {
 				retired?: boolean
 				/** The sheet that first named it, when a sheet did. */
 				sheetId?: string
+				/** 🚧 How it reads at a table that keeps no numbers (Q2-3): bands, in the viewer's language. */
+				words?: { upTo: number; label: string }[]
+				/** 🚧 Drawn only while it holds something (Q3-8). */
+				shownWhenSet?: true
 			}
 
 			/**
@@ -14277,17 +14642,55 @@ declare global {
 			 * where the two would disagree.
 			 */
 			interface StateOwnerRow {
-				/** `world`, a cast member's slug, or 🚧 `location:<slug>` (phase 4). */
+				/** `world`, a cast member's or card-less player seat's slug, or 🚧 `location:<slug>` (phase 4). */
 				key: string
-				kind: "session" | "session_cast" | "session_location"
+				kind: "session" | "session_cast" | "player_seat" | "session_location"
 				id: number
 				label: string
 				/**
+				 * 🚧 Whether the caller may write this owner's values — false
+				 * on another player's seat (2026-10-16). Absent: writable.
+				 */
+				editable?: boolean
+				/**
+				 * 🚧 The caller's own player seat — their card-less seat, or
+				 * the cast member their seated card is (the stats widget's
+				 * `owners: 'mine'`). Absent on everyone else's.
+				 */
+				mine?: boolean
+				/**
+				 * 🚧 A player seat (2026-10-18, `SessionStateOwnerV1.seat`): a
+				 * card-less seat, or a card seated as one — never a companion.
+				 * The stats widget's `owners: 'seats'`.
+				 */
+				seat?: boolean
+				/**
+				 * 🚧 What the ruleset works out from this owner's sheet and puts
+				 * on it (2026-10-18, `SessionStateOwnerV1.derived`): armour
+				 * class. Never stored; drawn read-only.
+				 */
+				derived?: Array<{ key: string; label: string; value: string | number }>
+				/**
+				 * 🚧 The owner's face (PLAN-sheet §12, `SessionStateOwnerV1.face`):
+				 * a cast member's card avatar, a player seat's seat portrait
+				 * (`session_personas.portrait_media_id`, else its card's
+				 * avatar); null for the world, a place, or an owner with none.
+				 * `mediaRef` is the file's id as text — what `set-owner-face`
+				 * takes back.
+				 */
+				face?: { src: string; mediaRef: string | null } | null
+				/**
 				 * The configuration in force for this owner, per slot — what a
 				 * bar's bounds and a chip's options are read from. Only the
-				 * slots this owner may carry appear.
+				 * slots this owner may carry appear. 🚧 `lock` (`none` ·
+				 * `people` · `all`, PLAN-sheet §10) is one universal key here.
 				 */
 				configs: Record<string, Record<string, unknown>>
+				/**
+				 * 🚧 Each repertoire this owner's list stats hold, by address:
+				 * its name and piece shape (`SessionStateOwnerV1.repertoires`).
+				 */
+				repertoires?: Record<string, { label: string; piece: import("@serene-pub/sdk").FieldDecl }>
 			}
 
 			/**
@@ -14326,6 +14729,8 @@ declare global {
 				 * as it reads now), or why it did not move (`skipped`).
 				 */
 				clock?: LedgerClockMove
+				/** 🚧 A bounded number's maximum this session configured for the owner (Q3-1). */
+				max?: number
 			}
 
 			/** 🚧 One clock move, as a ledger row carries it (live scenes §15 G5). */
@@ -14336,6 +14741,13 @@ declare global {
 				cause: "action" | "keeper" | "tick" | null
 				fromLabel: string | null
 				toLabel: string | null
+				/**
+				 * 🚧 The same two readings as parts, named through the
+				 * calendar — what a widget copy's `timeFormat` spells.
+				 * Additive: absent from a host that predates them.
+				 */
+				from?: import("@serene-pub/core-catalog/session-state").StoryTimeParts | null
+				to?: import("@serene-pub/core-catalog/session-state").StoryTimeParts | null
 				/** The sentence a skipped move left; null when the clock moved. */
 				skipped: string | null
 			}
@@ -14363,6 +14775,13 @@ declare global {
 					 */
 					slots: SlotDescriptor[]
 					owners: StateOwnerRow[]
+					/** 🚧 The table keeps no numbers (Q2-3, ★3): a ruleset of words. */
+					wordsOnly?: true
+					/**
+					 * 🚧 The people the session's story has met (Q3-5): its own
+					 * notes' `core:entry/character-lore` entries, entry order.
+					 */
+					metPeople?: { entryId: number; name: string }[]
 				}
 				/**
 				 * A read refused. `sessionId` is the session the read named,
@@ -14372,6 +14791,31 @@ declare global {
 				interface ErrorResponse {
 					error: string
 					sessionId?: number
+				}
+			}
+
+			/**
+			 * 🚧 `state:setOwnerFace` (PLAN-sheet §12): set or clear a player
+			 * seat's portrait (`session_personas.portrait_media_id`) — the
+			 * `set-owner-face` widget request's door. Its own seat's player,
+			 * or the session's owner for anyone. The new face arrives on the
+			 * next state read (`state:changed` follows).
+			 */
+			namespace SetOwnerFace {
+				interface Params {
+					sessionId: number
+					owner: { kind: "session" | "session_cast" | "player_seat" | "session_location"; id: number }
+					/** A file's id (or uuid); null clears it. */
+					mediaRef: string | null
+					/** The ask's own token, echoed on its reply and its refusal. */
+					request?: string
+				}
+				interface Response {
+					sessionId?: number
+					request?: string
+					playerSeatId?: number
+					portraitMediaId?: number | null
+					error?: string
 				}
 			}
 
@@ -14393,6 +14837,13 @@ declare global {
 					 * settles the one write the id names and nothing else.
 					 */
 					requestId?: string
+					/**
+					 * 🚧 One line the table hears when the write lands
+					 * (`set-attribute-value`'s `say`, 2026-10-18: Give to…),
+					 * written on the session's table channel when its genre
+					 * keeps one.
+					 */
+					say?: string
 				}
 				interface Response {
 					sessionId: number
@@ -14458,6 +14909,11 @@ declare global {
 					own: Row[]
 					/** Every other slot this install declares, to add. */
 					addable: Row[]
+					/**
+					 * 🚧 The rulesets the session plays (primary, then add-ons):
+					 * a slot a ruleset owns is addable only among these.
+					 */
+					rulesets?: string[]
 				}
 			}
 			/**
@@ -14496,6 +14952,38 @@ declare global {
 					 * than losing its left-hand side.
 					 */
 					baselines: LedgerBaseline[]
+					/**
+					 * 🚧 The session keeps no numbers (the `prose` rigour,
+					 * 2026-10-18): a number's line reads in words — `Health
+					 * falls`, never `Health 10 → 8`. Absent: numbers shown.
+					 */
+					words?: boolean
+				}
+			}
+
+			/**
+			 * 🚧 _Give to…_ (PLAN-dc-after-walk2 Q0-4, owner ruling ★4): `count`
+			 * (absent: one) of the piece at `index` of `from`'s `slotId` list to
+			 * `to`. Given at once when the caller may write both sheets; else
+			 * offered to a player's seat — a pending change its player accepts
+			 * or declines, and the giver may withdraw (`state:decide`).
+			 */
+			namespace GivePiece {
+				interface Params {
+					sessionId: number
+					from: Owner
+					to: Owner
+					slotId: string
+					index: number
+					count?: number
+					/** The ask's own token, echoed on its reply and its refusal. */
+					request?: string
+				}
+				interface Response {
+					sessionId?: number
+					request?: string
+					given?: "direct" | "offered"
+					error?: string
 				}
 			}
 

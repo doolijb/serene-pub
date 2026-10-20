@@ -2,12 +2,12 @@
 	import * as Icons from "@lucide/svelte"
 	import { tick, type Snippet } from "svelte"
 	import {
-		STROKE_LIMITS,
-		type Stroke,
-		type StrokeKeywordsWhen,
-		type StrokeKind,
-		type StrokeMatchMode
-	} from "@serene-pub/sdk"
+	STROKE_LIMITS,
+	type Stroke,
+	type StrokeKeywordsWhen,
+	type StrokeKind,
+	type StrokeMatchMode
+} from "@serene-pub/sdk"
 	import RowMenu from "$lib/client/components/menus/RowMenu.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import KeywordChips from "$lib/client/lorebooks/editor/KeywordChips.svelte"

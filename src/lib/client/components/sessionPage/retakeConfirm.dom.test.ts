@@ -125,3 +125,79 @@ describe("the press: preview, ask, and 'don't ask again'", () => {
 		expect(rowRegenerated).toBe(1)
 	})
 })
+
+describe("On revision's sentence (PLAN-rulesets §28)", () => {
+	test("the preview's revision sentence reaches the ask, and the dialog says it", async () => {
+		let said: string | null = null
+		const retake = createRetake({
+			sessionId: () => 7,
+			quiet: () => false,
+			send: () => {},
+			setQuiet: () => {},
+			ask: (_rows, revision) => (said = revision)
+		})
+		retake.press()
+		retake.hear({
+			sessionId: 7,
+			ok: true,
+			preview: true,
+			rows: ROWS,
+			revision: { mode: "overwrite", turns: 3, sentence: "This will overwrite the last 3 turns." }
+		})
+		expect(said).toBe("This will overwrite the last 3 turns.")
+
+		const host = document.createElement("div")
+		document.body.append(host)
+		apps.push(
+			mount(RetakeConfirm, {
+				target: host,
+				props: { open: true, rows: ROWS, revision: said, onConfirm: () => {}, onCancel: () => {} }
+			})
+		)
+		flushSync()
+		await tick()
+		expect(document.querySelector("[data-revision-sentence]")?.textContent?.trim()).toBe(
+			"This will overwrite the last 3 turns."
+		)
+	})
+
+	test("the delete confirmation shows the server's sentence, and nothing without one", async () => {
+		const { default: DeleteMessageDialog } = await import("./DeleteMessageDialog.svelte")
+		const host = document.createElement("div")
+		document.body.append(host)
+		apps.push(
+			mount(DeleteMessageDialog, {
+				target: host,
+				props: {
+					open: true,
+					onOpenChange: () => {},
+					onConfirm: () => {},
+					onCancel: () => {},
+					revision: "This will branch here; the old turns stay on the old branch."
+				}
+			})
+		)
+		flushSync()
+		await tick()
+		expect(document.querySelector("[data-revision-sentence]")?.textContent?.trim()).toBe(
+			"This will branch here; the old turns stay on the old branch."
+		)
+		// One sentence per mode: the plain delete's "no undo" never sits beside a branch.
+		expect(document.body.textContent).not.toContain("There is no undo")
+		for (const app of apps.splice(0)) unmount(app)
+		document.body.innerHTML = ""
+		const bare = document.createElement("div")
+		document.body.append(bare)
+		apps.push(
+			mount(DeleteMessageDialog, {
+				target: bare,
+				props: { open: true, onOpenChange: () => {}, onConfirm: () => {}, onCancel: () => {} }
+			})
+		)
+		flushSync()
+		await tick()
+		expect(document.body.textContent).toContain("Delete this message?")
+		expect(document.querySelector("[data-revision-sentence]")).toBeNull()
+		expect(document.body.textContent).toContain("There is no undo.")
+	})
+})

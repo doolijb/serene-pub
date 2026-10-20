@@ -1,6 +1,6 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { and, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm"
+import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm"
 import {
 	resolveOrCreateBindingRow,
 	syncLorebookBindingsForCharacter
@@ -238,10 +238,15 @@ async function buildLorebooksList(
 	// §6.7) ride the same read, each marked and named by its owner.
 	const sharedIds = await sharedLorebookIdsFor(db as unknown as Db, userId)
 	const books = await db.query.lorebooks.findMany({
-		where: (l, { eq, inArray, or }) =>
-			sharedIds.length
-				? or(eq(l.userId, userId), inArray(l.id, sharedIds))
-				: eq(l.userId, userId),
+		// 🚧 Never a session's own notes (PLAN-rulesets §26): they are
+		// found only through their session.
+		where: (l, { and, eq, inArray, isNull, or }) =>
+			and(
+				isNull(l.sessionId),
+				sharedIds.length
+					? or(eq(l.userId, userId), inArray(l.id, sharedIds))
+					: eq(l.userId, userId)
+			),
 		orderBy: (l, { desc }) => desc(l.name),
 		with: {
 			user: { columns: { username: true, displayName: true } },
@@ -264,6 +269,33 @@ async function buildLorebooksList(
 			}
 		}
 	})
+
+	// 🚧 Which of the asker's own sessions read each book (DC walk 6: a book
+	// made from a session said "Not read by a session" while it was read).
+	// The asker's sessions only — another person's session is theirs.
+	const readers = books.length
+		? await db
+				.select({
+					id: schema.sessions.id,
+					name: schema.sessions.name,
+					lorebookId: schema.sessions.lorebookId
+				})
+				.from(schema.sessions)
+				.where(
+					and(
+						eq(schema.sessions.userId, userId),
+						inArray(
+							schema.sessions.lorebookId,
+							books.map((b) => b.id)
+						)
+					)
+				)
+				.orderBy(desc(schema.sessions.updatedAt))
+		: []
+	const readByOf = (lorebookId: number) =>
+		readers
+			.filter((r) => r.lorebookId === lorebookId)
+			.map((r) => ({ id: r.id, name: r.name ?? null }))
 
 	// Transform lorebook tags to include tags as string array. The three
 	// entry lists are id-only and exist for the card's counts, so they are
@@ -299,6 +331,7 @@ async function buildLorebooksList(
 			worldLoreEntries: idsOf(WORLD_LORE_TYPE_ID),
 			characterLoreEntries: idsOf(CHARACTER_LORE_TYPE_ID),
 			historyEntries: idsOf(HISTORY_TYPE_ID),
+			readBy: readByOf(book.id),
 			tags:
 				book.lorebookTags?.map(
 					(lt: SelectLorebookTag & { tag: SelectTag }) => lt.tag.name
@@ -318,7 +351,7 @@ async function buildLorebooksList(
  * no lorebook list pays for no re-list at all. Skipping the emit alone would
  * save nothing; the query is the cost.
  */
-function relistLorebooks(
+export function relistLorebooks(
 	socket: any,
 	emitToUser: (event: string, data: any) => void
 ) {

@@ -218,7 +218,13 @@ export function createPressRouting(d: PressRoutingDeps) {
 							m.characterId == null &&
 							m.role !== "user"
 						)
-							retake.pressRow(m.id, regenerate)
+							retake.pressRow(
+								m.id,
+								regenerate,
+								// 🚧 No row retry in this genre: even a one-row
+								// turn — a failed reply — is retaken whole (B7).
+								d.data.messageVerbs?.retry === false
+							)
 						else regenerate()
 					})
 				: handleRegenerateLastMessage(new Event("invoke")),
@@ -382,7 +388,9 @@ export function createPressRouting(d: PressRoutingDeps) {
 		 * which the run then spends (D1). Absent, a collecting action opens
 		 * the collect modal.
 		 */
-		supplied?: Collected & { fromDraft?: boolean }
+		supplied?: Collected & { fromDraft?: boolean },
+		/** 🚧 The person already answered this action's question (`confirm`). */
+		confirmed = false
 	) {
 		// The functions with a bespoke client flow: both halves of the narrator
 		// split open the same modal — whose first step *is* the choice between
@@ -405,6 +413,16 @@ export function createPressRouting(d: PressRoutingDeps) {
 		// collects none — `/narrator x` among them, before the narrator's
 		// divert — is refused and nothing fires; the draft stays.
 		const listedRow = identity ? listedAction(identity) : undefined
+		// 🚧 An action that asks first (`confirm`, 2026-10-18): the question,
+		// then this same press again. A form's press is not asked again — the
+		// form was the question.
+		if (listedRow?.confirm && !args?.blockId && !confirmed) {
+			confirming = {
+				asking: listedRow.confirm,
+				go: () => fireOfferedAction(a, args, supplied, true)
+			}
+			return
+		}
 		const listed = identity
 			? (listedRow ?? formCollects[identity])
 			: undefined
@@ -493,6 +511,12 @@ export function createPressRouting(d: PressRoutingDeps) {
 	}
 
 	/** The press the collect modal is open for (lair pass R3), until submit or Cancel. */
+	/** 🚧 A press waiting on its action's question (`confirm`), until answered. */
+	let confirming = $state<{
+		asking: { question: string; description?: string; confirmLabel: string }
+		go: () => void
+	} | null>(null)
+
 	let collecting = $state<{
 		action: CollectingAction
 		identity: string
@@ -562,6 +586,20 @@ export function createPressRouting(d: PressRoutingDeps) {
 		handleFrameAction,
 		fireOfferedAction,
 		/** The press the collect modal is open for (lair pass R3), until submit or Cancel. */
+		/** 🚧 The question an action asks before it fires, while it waits (`ActionConfirm`). */
+		get confirming() {
+			return confirming
+		},
+		/** The question answered: the press goes on. */
+		confirmPress() {
+			const asked = confirming
+			confirming = null
+			asked?.go()
+		},
+		/** The question declined: nothing fires. */
+		cancelPress() {
+			confirming = null
+		},
 		get collecting() {
 			return collecting
 		},

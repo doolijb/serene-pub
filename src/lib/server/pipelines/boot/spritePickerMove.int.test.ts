@@ -27,9 +27,9 @@ beforeAll(async () => {
 	db = await createTestDb()
 	userId = (await createTestUser(db, "sprite-picker-move")).id
 	for (const slug of [
-		"core:spec/chat-respond",
+		"core:spec/story-respond",
 		"core:spec/tool-loop",
-		"core:spec/chat-side-character",
+		"core:spec/story-side-character",
 		"core:spec/guide-respond",
 		// Two of the four before the 2026-10-05 spec id rename: a database
 		// the rename pass has not reached yet holds these spellings.
@@ -87,12 +87,12 @@ const overridesAt = (spec: string, sessionId: number, nodeKey: string) =>
 describe("the sprite picker's settings move to `spritePick`", () => {
 	it("moves session settings on each of the four specs, keeping who set them", async () => {
 		const sessionId = await makeSession()
-		await override("core:spec/chat-respond", sessionId, OLD, "enabled", false)
-		await override("core:spec/chat-respond", sessionId, OLD, "margin", 0.2)
+		await override("core:spec/story-respond", sessionId, OLD, "enabled", false)
+		await override("core:spec/story-respond", sessionId, OLD, "margin", 0.2)
 		await override("core:spec/guide-respond", sessionId, OLD, "floor", 0.3)
 		await override("core:spec/tool-loop", sessionId, OLD, "enabled", false)
 		await override(
-			"core:spec/chat-side-character",
+			"core:spec/story-side-character",
 			sessionId,
 			OLD,
 			"enabled",
@@ -103,13 +103,13 @@ describe("the sprite picker's settings move to `spritePick`", () => {
 		expect(report.moved.overrides).toBe(5)
 
 		for (const spec of [
-			"core:spec/chat-respond",
+			"core:spec/story-respond",
 			"core:spec/guide-respond",
 			"core:spec/tool-loop",
-			"core:spec/chat-side-character"
+			"core:spec/story-side-character"
 		])
 			expect(await overridesAt(spec, sessionId, OLD)).toEqual([])
-		const respond = await overridesAt("core:spec/chat-respond", sessionId, NEW)
+		const respond = await overridesAt("core:spec/story-respond", sessionId, NEW)
 		expect(
 			Object.fromEntries(respond.map((r) => [r.path, r.value]))
 		).toEqual({ enabled: false, margin: 0.2 })
@@ -159,15 +159,15 @@ describe("the sprite picker's settings move to `spritePick`", () => {
 
 	it("a value already at the new address wins, and the old row goes", async () => {
 		const sessionId = await makeSession()
-		await override("core:spec/chat-respond", sessionId, NEW, "enabled", true)
-		await override("core:spec/chat-respond", sessionId, OLD, "enabled", false)
+		await override("core:spec/story-respond", sessionId, NEW, "enabled", true)
+		await override("core:spec/story-respond", sessionId, OLD, "enabled", false)
 		const report = await moveSpritePickerSettings(db as any)
 		expect(report).toMatchObject({ moved: { overrides: 0 }, kept: 1 })
-		expect(await overridesAt("core:spec/chat-respond", sessionId, OLD)).toEqual(
+		expect(await overridesAt("core:spec/story-respond", sessionId, OLD)).toEqual(
 			[]
 		)
 		expect(
-			(await overridesAt("core:spec/chat-respond", sessionId, NEW)).map(
+			(await overridesAt("core:spec/story-respond", sessionId, NEW)).map(
 				(r) => r.value
 			)
 		).toEqual([true])
@@ -177,14 +177,14 @@ describe("the sprite picker's settings move to `spritePick`", () => {
 		const sessionId = await makeSession()
 		await db.insert(schema.pipelineNodeRebinds).values([
 			{
-				specId: specs["core:spec/chat-respond"]!,
+				specId: specs["core:spec/story-respond"]!,
 				scopeKind: "session",
 				scopeId: sessionId,
 				nodeKey: OLD,
 				definitionId: "acme:oracle/pick-by-mood@1"
 			},
 			{
-				specId: specs["core:spec/chat-respond"]!,
+				specId: specs["core:spec/story-respond"]!,
 				scopeKind: "pub",
 				scopeId: 0,
 				nodeKey: OLD,
@@ -220,7 +220,7 @@ describe("the sprite picker's settings move to `spritePick`", () => {
 			.where(
 				eq(
 					schema.pipelineNodeRebinds.specId,
-					specs["core:spec/chat-respond"]!
+					specs["core:spec/story-respond"]!
 				)
 			)
 		expect(rebinds.map((r) => [r.scopeKind, r.nodeKey]).sort()).toEqual([

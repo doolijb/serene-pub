@@ -293,3 +293,43 @@ describe("a slot a mechanism keeps is never an attribute", () => {
 		expect(await tracked(w.session.id)).not.toContain(SPRITE)
 	})
 })
+
+// 🚧 DC walk 6: Abilities and Inventory, retired for Vis Itineris's lists
+// (`DUNGEON_CRAWLER_RETIRED_SLOT_IDS`), were still offered in the panel.
+describe("a slot the genre took off its sheet is never offered", () => {
+	test("declared by the genre but on none of its sheets: in no list, and refused as a pick", async () => {
+		declareSlots()
+		const { defineAttributeSheet, genre: defineGenre } = await import("@serene-pub/sdk")
+		const k = ++n
+		const GENRE = `test:genre/attributes-sheet-${k}`
+		const sheet = defineAttributeSheet(`test:sheet/crawl-${k}@1`, {
+			label: { en: "Crawl" },
+			slots: [{ id: HP }]
+		})
+		defineGenre(GENRE, {
+			name: { en: "Crawl" },
+			family: "test",
+			// GOLD is the genre's own, retired: declared, on no sheet.
+			slots: [getAttributeSlot(HP)!, getAttributeSlot(GOLD)!],
+			sheets: [sheet],
+			customAttributes: "allow",
+			events: {}
+		})
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const user = await createTestUser(testDb, `attributes-sheet-${k}`)
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: user.id, isGroup: false, name: `Crawl ${k}`, genreId: GENRE })
+			.returning()
+		const { stateAttributes, droppedGenreSlots } = await import("./state")
+		const { getGenre } = await import("@serene-pub/sdk")
+		expect([...droppedGenreSlots(getGenre(GENRE))]).toEqual([GOLD])
+		const res = await stateAttributes.handler(socketOf(user.id), { sessionId: session.id }, () => {})
+		const listed = [...res.baseline, ...res.world, ...res.own, ...res.addable].map((r) => r.slotId)
+		expect(res.baseline.map((r) => r.slotId)).toEqual([HP])
+		expect(listed).not.toContain(GOLD)
+		expect((await pick(user.id, session.id, { picks: [{ slotId: GOLD, enabled: true }] })).error).toMatch(
+			/no longer part of this genre's sheet/
+		)
+	})
+})

@@ -6,7 +6,7 @@
  * character shared into a session brings its gallery with it, with no second
  * grant to keep in sync.
  *
- * **One row decides it, since 0182.** This used to take whatever `media` row
+ * **One row decides it.** The old rule took whatever `media` row
  * the route had resolved, notice a derivative had no provenance of its own, and
  * go and fetch its parent — with an orphan branch for a thumbnail whose
  * original was gone. Provenance now lives on the FILE and a variant is never
@@ -68,7 +68,7 @@ export async function canViewMedia(
 	// that is where the face is drawn. Judged by the members that wear it, not
 	// by `files.lorebook_id` alone: files are one row per (user, bytes), so the
 	// same picture can be worn in a second book, or be a gallery image of a
-	// card the session no longer seats (review 2026-10-13). The stamp still
+	// card the session does not seat (review 2026-10-13). The stamp still
 	// counts, for a book's own upload no member wears yet.
 	const wornIn = await db
 		.selectDistinct({ lorebookId: schema.lorebookBindings.lorebookId })

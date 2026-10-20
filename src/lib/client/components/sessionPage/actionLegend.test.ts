@@ -29,7 +29,7 @@ const venues: LegendVenues = {
 		primary: [
 			act({
 				key: "narrate",
-				specSlug: "core:spec/chat-narrate",
+				specSlug: "core:spec/story-narrate",
 				name: "Narrate",
 				description: "Ask the narrator to describe what happens next.",
 				icon: "book-open-text",
@@ -48,7 +48,7 @@ const venues: LegendVenues = {
 		overflow: [
 			act({
 				key: "look",
-				specSlug: "core:spec/adventure-look",
+				specSlug: "core:spec/story-look",
 				name: "Look",
 				description: "Describe where the party is.",
 				enabled: false,
@@ -101,9 +101,9 @@ describe("legendSections", () => {
 		expect(
 			sections.flatMap((s) => s.entries.map((e) => `${s.venue}:${e.identity}:${e.description}`))
 		).toEqual([
-			"composer:core:spec/chat-narrate#narrate:Ask the narrator to describe what happens next.",
+			"composer:core:spec/story-narrate#narrate:Ask the narrator to describe what happens next.",
 			"composer:core:spec/lair-build-room#build-room:Draft a new room.",
-			"composer:core:spec/adventure-look#look:Describe where the party is.",
+			"composer:core:spec/story-look#look:Describe where the party is.",
 			"extra:core#advance:Let whoever is next in the turn order speak.",
 			"message:core#edit:Change the text of this message."
 		])

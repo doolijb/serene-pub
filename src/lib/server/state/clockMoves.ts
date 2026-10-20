@@ -36,6 +36,7 @@
 
 import { and, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { storyTimePartsOf, type StoryTimeParts } from "@serene-pub/core-catalog/session-state"
 import { anchorFor } from "$lib/server/state/write"
 import {
 	bookCalendarOf,
@@ -411,6 +412,9 @@ export interface ClockLedgerRow {
 	cause: ClockMoveCause | null
 	fromLabel: string | null
 	toLabel: string | null
+	/** 🚧 The same two readings as parts, named through the calendar (`storyTimePartsOf`). */
+	from: StoryTimeParts | null
+	to: StoryTimeParts | null
 	skipped: string | null
 }
 
@@ -440,6 +444,10 @@ export async function clockLedgerRows(
 		clock && typeof clock === "object" && typeof (clock as StoryClock).year === "number"
 			? formatDate(clock as StoryClock, calendar)
 			: null
+	const parts = (clock: unknown): StoryTimeParts | null =>
+		clock && typeof clock === "object" && typeof (clock as StoryClock).year === "number"
+			? storyTimePartsOf(clock as StoryClock, calendar)
+			: null
 	const out: ClockLedgerRow[] = []
 	for (const row of rows) {
 		const p = (row.payload ?? {}) as Partial<ClockMovePayload>
@@ -459,6 +467,8 @@ export async function clockLedgerRows(
 					: null,
 			fromLabel: label(p.from),
 			toLabel: label(p.to),
+			from: parts(p.from),
+			to: parts(p.to),
 			skipped: row.status === "skipped" ? (p.skipped ?? NO_STORY_CLOCK_YET) : null
 		})
 	}

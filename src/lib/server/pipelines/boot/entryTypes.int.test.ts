@@ -25,7 +25,7 @@ import type { RegistryEntry } from "@serene-pub/sdk"
 // core's three in `allEntryTypes()` — the same fact-about-the-code route the
 // contracts take for node types, and the one boot follows through
 // `specs/respond`.
-import "@serene-pub/core-catalog"
+import { RULESET_ENTRY_TYPES } from "@serene-pub/core-catalog"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 
@@ -46,7 +46,10 @@ const PINS = [
 	"core:entry/location@1",
 	// A thing somebody can hold, with a supply (attributes phase 3a,
 	// 2026-09-26). World lore's shape plus `supply` / `supplyLimit`.
-	"core:entry/item@1"
+	"core:entry/item@1",
+	// 🚧 Then every derived entry type core's rulesets yield (one per
+	// entryable repertoire) — the registry's answer, never a hand list.
+	...RULESET_ENTRY_TYPES.map((d) => d.id)
 ]
 
 const rowFor = async (typeId: string) => {

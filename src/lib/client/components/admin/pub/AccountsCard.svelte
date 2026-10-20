@@ -14,6 +14,7 @@
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import SettingSwitch from "./SettingSwitch.svelte"
 	import { requireAdmin } from "./requireAdmin"
+	import { noteSignedOutWhy } from "$lib/client/auth/signedOutNotice"
 	import {
 		passphraseSchema,
 		PASSPHRASE_MIN_LENGTH
@@ -32,6 +33,8 @@
 	let confirmPassphrase = $state("")
 	let passphraseError = $state("")
 	let isSettingPassphrase = $state(false)
+	/** 🚧 Whether this dialog set the passphrase the sign-in note then names (R3-5). */
+	let setPassphraseHere = false
 
 	const accountsOn = $derived(!!systemSettingsCtx.settings?.isAccountsEnabled)
 
@@ -82,6 +85,7 @@
 		if (!hasPassphrase) {
 			if (!validatePassphrase()) return
 			isSettingPassphrase = true
+			setPassphraseHere = true
 			socket?.emit("users:current:setPassphrase", { passphrase })
 		} else {
 			socket?.emit("systemSettings:updateAccountsEnabled", {
@@ -102,6 +106,17 @@
 		if (!socket) return
 
 		const handleAccountsEnabled = (message: any) => {
+			// 🚧 The server signs every no-account session out next (Q3-7,
+			// N17): the sign-in form says why after the reload.
+			// 🚧 "just set" only when this dialog set it (PLAN-dc-after-walk3
+			// R3-5): an administrator whose passphrase already existed — from
+			// the environment, or set before — set nothing just now.
+			if (message.success && message.enabled)
+				noteSignedOutWhy(
+					setPassphraseHere
+						? "User accounts are on now, so everyone signs in. Use your username and the passphrase you just set."
+						: "User accounts are on now, so everyone signs in. Use your username and your passphrase."
+				)
 			if (message.success) {
 				toaster.success({
 					title: "User accounts turned on",

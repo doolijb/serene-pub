@@ -81,5 +81,5 @@ export function patchedRow<T extends ListRow>(row: T): T {
 		messageCount: patch.messageCount,
 		updatedAt: patch.updatedAt,
 		...(patch.lastMessage ? { lastMessage: patch.lastMessage } : {})
-	} as T
+	} as unknown as T // `updatedAt` is typed from the schema (Date) but rides the wire as ISO
 }

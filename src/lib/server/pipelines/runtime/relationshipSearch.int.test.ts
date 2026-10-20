@@ -36,7 +36,7 @@ import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
-import { respondSpec, CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { storyRespondSpec, STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 
 // No embedding model: the other retrieval mechanisms stay on the keyword path,
 // which needs no network. Nothing here asserts on them.
@@ -157,7 +157,7 @@ beforeAll(async () => {
 
 /** One turn of the shipped reply spec, stopped before the model. */
 const turn = async () =>
-	await run(respondSpec(), {
+	await run(storyRespondSpec(), {
 		input: {
 			text: "who is with us?",
 			sessionId,
@@ -166,7 +166,7 @@ const turn = async () =>
 		},
 		seed: "seed:relationship-search",
 		bindings: coreBindings(),
-		world: await buildWorld(db, { sessionId, specId: CHAT_RESPOND_SPEC_ID }),
+		world: await buildWorld(db, { sessionId, specId: STORY_RESPOND_SPEC_ID }),
 		host: createHost(db, { sessionId, userId }),
 		preview: true
 	} as any)

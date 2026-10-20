@@ -7,9 +7,12 @@
 	 * Below 1024px the side zones are hidden inline entirely — the centre takes
 	 * the full width. A populated side is reached from the ONE panels button the
 	 * app header grows (Header.svelte + mobileSidePanels.svelte.ts): it opens
-	 * this menu, which LISTS the side groups — icon, title, which side, and
-	 * which are pinned — and tapping one slides that side in over the session
-	 * as a modal sheet, one at a time. The list is what scales: another widget
+	 * this menu, which LISTS every side panel and the middle's strips (the
+	 * panels above and below the conversation; PLAN-session-panels
+	 * 2026-10-14) — icon, title, where, and which are docked — and tapping a
+	 * side's slides that side in over the session as a modal sheet, one at a
+	 * time, its docked panels open. A strip is already on screen, above or
+	 * below the conversation: tapping it brings it into view. The list is what scales: another widget
 	 * is another line here, not another button in the header.
 	 *
 	 * The sheet itself is the side's ONE mount wearing `.zone-flyout.mobile`
@@ -20,10 +23,10 @@
 	 */
 	import { untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import type { ResolvedZone } from "./schema"
-	import { zonePopulated } from "./sideSlot"
+	import type { DrawnPanel } from "@serene-pub/sdk"
 	import {
 		mobileSidePanels,
+		panelLines,
 		type MobileGroup
 	} from "./mobileSidePanels.svelte"
 	import type { SessionLayoutModel } from "./sessionLayoutModel.svelte"
@@ -45,80 +48,46 @@
 	let { model, flow, liveEl, sheetEl }: Props = $props()
 
 	/* While a side is the phone's stage (QE, `stageSide`), its conversation is
-	 * the stage rather than a line here, and the MIDDLE's widgets are listed
-	 * instead ("Middle"), opening the middle as a sheet of its own. An arranged
-	 * side lists its render units — the same groups the rail draws — and a side
-	 * with no arrangement yet lists its zone widgets, so the menu is never
-	 * empty while the button is showing. */
-	// A side shows on mobile exactly when it is POPULATED on the desktop: a
-	// visible mode with at least one entry, conversation copies included
-	// (./sideSlot `zonePopulated`, the same test the empty column asks).
-	function mobileZonesOf(side: "left" | "right"): ResolvedZone[] {
-		return (side === "left" ? model.leftZones : model.rightZones).filter(
-			(z) => zonePopulated(model.zoneFill(z))
-		)
-	}
-	function mobileGroupsOf(side: "left" | "right"): MobileGroup[] {
-		const stageId =
-			model.stageSide === side ? model.stagePick?.id : undefined
-		const units = side === "left" ? model.leftUnits : model.rightUnits
-		if (units.length)
-			return units
-				.filter(
-					(u) => !stageId || !u.members.some((m) => m.id === stageId)
-				)
-				.map((u) => ({
-					side,
-					key: u.key,
-					title: model.rail.groupTitle(u),
-					icon: model.rail.groupIconName(u),
-					pinned: model.rail.groupPinned(u)
-				}))
-		return mobileZonesOf(side).flatMap((z) =>
-			model
-				.zoneEntriesOf(z)
-				.filter((p) => p.id !== stageId)
-				.map((p) => ({
-					side,
-					key: p.id,
-					title: p.title,
-					icon: p.icon || "LayoutPanelTop",
-					pinned: model.zonePinned(side)
-				}))
-		)
-	}
-	/** The middle's widgets as menu lines, while a side is the phone's stage. */
-	function mobileMiddleGroups(): MobileGroup[] {
-		if (!(model.stageSide && model.isNarrow)) return []
-		const units: { key: string; members: { id: string }[] }[] =
-			model.frameOf(model.drawn.middle)
-				? model.rail.columnUnits(model.drawn.middle)
-				: model.drawn.middle.instances.map((i) => ({
-						key: i.instanceId,
-						members: [{ id: i.instanceId }]
-					}))
-		return units.map((u) => ({
-			side: "middle" as const,
-			key: u.key,
-			title: u.members.map((m) => flow.widgetLabel(m.id)).join(" · "),
-			icon:
-				u.members.length > 1
-					? "Layers"
-					: model.isConversation(u.members[0].id)
-						? "MessagesSquare"
-						: model.inst(u.members[0].id)?.icon || "LayoutPanelTop",
-			pinned: true
-		}))
-	}
+	 * the stage rather than a line here, and the MIDDLE's panels are listed
+	 * whole ("Middle"), opening the middle as a sheet of its own. Otherwise the
+	 * middle lists its strips. A side is listed exactly when it is POPULATED on
+	 * the desktop (./sideSlot `sidePopulated`, the same test the empty column
+	 * asks), conversation copies included. */
 	let mobileGroups = $derived<MobileGroup[]>(
 		model.isNarrow
-			? [
-					...mobileGroupsOf("left"),
-					...mobileGroupsOf("right"),
-					...mobileMiddleGroups()
-				]
+			? panelLines({
+					left: model.sides.left,
+					right: model.sides.right,
+					middle: model.middle,
+					stageSide: model.stageSide,
+					stageKey: model.stageSide
+						? model.stagePanelKey(model.stageSide)
+						: null,
+					title: (p) => model.rail.groupTitle(p as DrawnPanel),
+					icon: (p) => model.rail.groupIconName(p as DrawnPanel)
+				})
 			: []
 	)
+	/**
+	 * A line tapped. A side's (or, while a side is the stage, the middle's)
+	 * opens its sheet; a strip in the flow is already on screen, so the menu
+	 * closes and brings it into view.
+	 */
+	function openLine(g: MobileGroup) {
+		if (g.side === "middle" && !model.stageSide) {
+			mobileSidePanels.closeMenu()
+			requestAnimationFrame(() =>
+				liveEl
+					?.querySelector(
+						`.layout-center [data-panel-key="${CSS.escape(g.key)}"]`
+					)
+					?.scrollIntoView({ block: "nearest" })
+			)
+			return
+		}
+		mobileSidePanels.openGroup(g.side, g.key)
+	}
+
 	// The one writer of the shared store: the breakpoint plus how many lines
 	// each sheet lists. `untrack` because setSides also RESOLVES `open`
 	// (dropping an overlay a resize just invalidated), and reading that back
@@ -154,7 +123,7 @@
 			requestAnimationFrame(() =>
 				liveEl
 					?.querySelector(
-						`:is(.slot-overlay, .center-sheet) [data-group-key="${CSS.escape(p.key)}"]`
+						`:is(.slot-overlay, .center-sheet) :is([data-group-key="${CSS.escape(p.key)}"], [data-panel-key="${CSS.escape(p.key)}"])`
 					)
 					?.scrollIntoView({ block: "nearest" })
 			)
@@ -255,8 +224,7 @@
 				<li>
 					<button
 						class="panels-menu-item"
-						onclick={() =>
-							mobileSidePanels.openGroup(g.side, g.key)}
+						onclick={() => openLine(g)}
 					>
 						<GroupIcon size={18} />
 						<span class="pm-title">{g.title}</span>

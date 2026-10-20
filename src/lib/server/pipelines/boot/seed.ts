@@ -40,6 +40,7 @@ import * as schema from "$lib/server/db/schema"
 import { CORE_SPECS } from "$lib/server/pipelines/specs"
 import { reconcileConfigs } from "$lib/server/pipelines/config/named"
 import { seedPipelinePrompts } from "$lib/server/pipelines/boot/seedPrompts"
+import { seedCoreScripts } from "$lib/server/pipelines/boot/seedScripts"
 import { unshipPrompts } from "$lib/server/pipelines/boot/unshipPrompts"
 import { reconcilePromptFields } from "$lib/server/pipelines/boot/reconcilePromptFields"
 import { parseActionIdentity } from "$lib/shared/actions/identity"
@@ -367,6 +368,11 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 	// as a default.
 	await unshipPrompts(db)
 
+	// 2c — 🚧 the scripts core ships (`CORE_SCRIPTS`), by seed key. Before
+	// the configs: a shipped config's script chain names these rows, by the
+	// seed key its author preset wrote (`PresetBuilder.scripts`).
+	await seedCoreScripts(db)
+
 	// 3 — the archive sweep, between the seed and the configs on purpose.
 	//
 	// After the seed because it sweeps every prompt row including the ones just
@@ -512,7 +518,40 @@ export async function seedSessionPresets(
 				.set({ bindings })
 				.where(eq(schema.sessionPresets.id, row.id))
 	}
+	await backfillDefaultSave(db)
 	return { created, present, bareIncluded: noticeBareIncludedKeys(rows) }
+}
+
+/**
+ * 🚧 Every preset shows what saves a person's message (owner ruling
+ * 2026-10-15). `preset()` writes core's default save,
+ * `core:spec/save-message`, into every declaration that binds nothing of its
+ * own on `message-offered`; a row stored before that — a seeded core preset,
+ * a plugin's from an older build, an administrator's own — gets the same
+ * binding written in here, so the row says what runs. A row that binds its
+ * own spec there keeps it. Idempotent; returns how many rows it wrote.
+ */
+export async function backfillDefaultSave(db: Db): Promise<number> {
+	const { SAVE_MESSAGE_SPEC_ID } = await import("@serene-pub/sdk")
+	const rows = await db
+		.select({ id: schema.sessionPresets.id, bindings: schema.sessionPresets.bindings })
+		.from(schema.sessionPresets)
+	let wrote = 0
+	for (const row of rows) {
+		const bindings = (row.bindings ?? {}) as Record<string, { spec: string; config?: number }>
+		if (bindings[sessionEvents.messageOffered]?.spec) continue
+		await db
+			.update(schema.sessionPresets)
+			.set({
+				bindings: {
+					...bindings,
+					[sessionEvents.messageOffered]: { spec: SAVE_MESSAGE_SPEC_ID }
+				}
+			})
+			.where(eq(schema.sessionPresets.id, row.id))
+		wrote++
+	}
+	return wrote
 }
 
 /** One preset whose included set still carries bare function keys. */
@@ -613,7 +652,7 @@ export interface RebindMoveReport {
 
 /** The speaker rebind's old homes — core's two respond specs (§7), node `speaker`. */
 const SPEAKER_REBIND_SPECS = [
-	"core:spec/chat-respond",
+	"core:spec/story-respond",
 	"core:spec/guide-respond"
 ]
 

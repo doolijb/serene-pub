@@ -43,7 +43,7 @@ import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
-import { respondSpec, CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { storyRespondSpec, STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 import {
 	historyValues,
 	worldLoreValues
@@ -341,7 +341,7 @@ const setClock = async (year: number | null) =>
 
 /** One turn of the shipped reply spec, stopped before the model: its prompt. */
 const prompt = async (): Promise<string> => {
-	const receipt = (await run(respondSpec(), {
+	const receipt = (await run(storyRespondSpec(), {
 		input: {
 			text: "What news?",
 			sessionId,
@@ -350,7 +350,7 @@ const prompt = async (): Promise<string> => {
 		},
 		seed: "seed:prompt-at-reading",
 		bindings: coreBindings(),
-		world: await buildWorld(db, { sessionId, specId: CHAT_RESPOND_SPEC_ID }),
+		world: await buildWorld(db, { sessionId, specId: STORY_RESPOND_SPEC_ID }),
 		host: createHost(db, { sessionId, userId }),
 		preview: true
 	} as any)) as any

@@ -75,6 +75,8 @@
 	let searchPersona: Sockets.Characters.Get.Response["character"] =
 		$state(null)
 	let editSessionId: number | null = $state(null)
+	/** 🚧 The tab the edit form opens on, when its asker named one; reset on each open. */
+	let editSessionTab = $state<"participants" | "settings" | "visibility" | undefined>(undefined)
 	/**
 	 * The start-a-session screen is open.
 	 *
@@ -424,6 +426,7 @@
 		closeStartForm()
 		showEditSessionForm = true
 		editSessionId = sessionId
+		editSessionTab = undefined
 		viewingId = null
 	}
 
@@ -492,10 +495,13 @@
 	}
 
 	function closeEditForm() {
+		// 🚧 The panel stays on the session it edited (PLAN-dc-after-walk3
+		// R3-5: after Save from the session's Settings it dropped back to the
+		// list): its view, wherever the form was opened from.
+		const returnId = returnToViewId ?? editSessionId
 		showEditSessionForm = false
 		editSessionId = null
 		sessionFormHasChanges = false
-		const returnId = returnToViewId
 		returnToViewId = null
 		if (returnId) viewingId = returnId
 	}
@@ -716,7 +722,10 @@
 		if (panelsCtx.digest.sessionId) {
 			showEditSessionForm = true
 			editSessionId = panelsCtx.digest.sessionId
+			// 🚧 The tab the asker named (the session header's Session settings).
+			editSessionTab = panelsCtx.digest.sessionTab
 			delete panelsCtx.digest.sessionId
+			delete panelsCtx.digest.sessionTab
 			delete panelsCtx.digest.sessionCharacterId
 			delete panelsCtx.digest.sessionPersonaId
 		}
@@ -944,6 +953,7 @@
 					bind:hasChanges={sessionFormHasChanges}
 					onClose={closeEditForm}
 					showBack={vm.mode === "compact"}
+					initialTab={editSessionTab}
 				/>
 			{:else if viewingId}
 				{#key viewingId}

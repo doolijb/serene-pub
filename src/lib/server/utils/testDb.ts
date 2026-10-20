@@ -290,3 +290,18 @@ export async function releaseDataDir(dir: string): Promise<void> {
 		retryDelay: 50
 	})
 }
+
+/**
+ * 🚧 Publish core's default save, `core:spec/save-message` (owner ruling
+ * 2026-10-15): a person's message is saved through the pipeline, so a test
+ * that sends one on a database no boot seeded publishes the save first — the
+ * one spec a send needs. Idempotent.
+ */
+export async function publishSaveMessage(db: TestDb): Promise<void> {
+	const { saveMessageSpec } = await import("@serene-pub/core-catalog")
+	const { saveDocument } = await import("$lib/server/pipelines/boot/store")
+	await saveDocument(db as never, saveMessageSpec() as never, {
+		name: "Save message",
+		publish: true
+	})
+}

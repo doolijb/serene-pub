@@ -891,6 +891,21 @@ describe("the turn lock", () => {
 			.where(eq(schema.attributeConfigs.id, id))
 		expect(row.validFromMessageId).toBeNull()
 	})
+
+	test("🚧 a stat configuration takes only what the shape bounds, and a max is a seat's own", async () => {
+		declareSlots()
+		const w = await world()
+		const { configure, StateRefusal } = await import("$lib/server/state/write")
+		const { configFor } = await import("$lib/server/state/resolve")
+		const owner = { kind: "session_cast" as const, id: w.verity.id }
+		const ctx = { sessionId: w.session.id, updatedBy: "run:test" }
+		// A key the number shape does not bound is refused, not kept for nobody.
+		await expect(configure(testDb as unknown as Db, ctx, { owner, slotId: HP, config: { default: 30 } })).rejects.toBeInstanceOf(StateRefusal)
+		// A floor above the ceiling in force refuses, naming both.
+		await expect(configure(testDb as unknown as Db, ctx, { owner, slotId: HP, config: { min: 50 } })).rejects.toThrow(/from 50 up to/)
+		await configure(testDb as unknown as Db, ctx, { owner, slotId: HP, config: { max: 26 } })
+		expect((await configFor(testDb as unknown as Db, { sessionId: w.session.id, owner, slotId: HP })).max).toBe(26)
+	})
 })
 
 // ── Lists (R18) ─────────────────────────────────────────────────────────────
@@ -1268,4 +1283,272 @@ describe("the one gate", () => {
 		})
 		expect(outcome.budget.evaluations).toBe(0)
 	})
+})
+
+/**
+ * 🚧 A card-less player character (2026-10-14): a seat with a seat name and
+ * no card, whose stats are written against the `player_seat` owner by the
+ * `session_personas.id` — session-scoped, so the row carries the session.
+ */
+describe("a card-less player seat", () => {
+	test("naming a seat opens one; its stats are the session's, and only this session's seat is writable", async () => {
+		declareSlots()
+		const w = await world()
+		const { writeSeatName } = await import("$lib/server/sessions/seatName")
+		const seatId = await writeSeatName(testDb as unknown as Db, {
+			sessionId: w.session.id,
+			userId: w.user.id,
+			isOwner: true,
+			name: "  Wren  "
+		})
+		expect(seatId).not.toBeNull()
+		const [seat] = await testDb
+			.select()
+			.from(schema.sessionPersonas)
+			.where(eq(schema.sessionPersonas.id, seatId!))
+		expect(seat).toMatchObject({
+			personaId: null,
+			userId: w.user.id,
+			seatName: "Wren"
+		})
+		// Naming again renames the same seat rather than opening another.
+		expect(
+			await writeSeatName(testDb as unknown as Db, {
+				sessionId: w.session.id,
+				userId: w.user.id,
+				isOwner: true,
+				name: "Wren the Bold"
+			})
+		).toBe(seatId)
+
+		const { assertSessionOwner, setValue } = await import(
+			"$lib/server/state/write"
+		)
+		const owner = { kind: "player_seat" as const, id: seatId! }
+		await expect(
+			assertSessionOwner(testDb as unknown as Db, w.session.id, owner)
+		).resolves.toBeUndefined()
+		const other = await world()
+		await expect(
+			assertSessionOwner(testDb as unknown as Db, other.session.id, owner)
+		).rejects.toThrow(/not a player's seat in this session/)
+
+		const id = await setValue(
+			testDb as unknown as Db,
+			{ sessionId: w.session.id, updatedBy: "user" },
+			{ owner, slotId: HP, value: 7 }
+		)
+		const [row] = await testDb
+			.select()
+			.from(schema.attributeValues)
+			.where(eq(schema.attributeValues.id, id))
+		expect(row).toMatchObject({
+			ownerKind: "player_seat",
+			ownerId: seatId,
+			sessionId: w.session.id
+		})
+	}, 60_000)
+
+	test("a guest may not name another player's seat", async () => {
+		const w = await world()
+		const { writeSeatName, SeatNameRefusal } = await import(
+			"$lib/server/sessions/seatName"
+		)
+		const seatId = await writeSeatName(testDb as unknown as Db, {
+			sessionId: w.session.id,
+			userId: w.user.id,
+			isOwner: true,
+			name: "Wren"
+		})
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const guest = await createTestUser(testDb, `state-write-guest-${++n}`)
+		await expect(
+			writeSeatName(testDb as unknown as Db, {
+				sessionId: w.session.id,
+				userId: guest.id,
+				isOwner: false,
+				playerSeatId: seatId,
+				name: "Mine now"
+			})
+		).rejects.toBeInstanceOf(SeatNameRefusal)
+		// Not a guest of the session at all: no seat of their own to open.
+		await expect(
+			writeSeatName(testDb as unknown as Db, {
+				sessionId: w.session.id,
+				userId: guest.id,
+				isOwner: false,
+				name: "Stranger"
+			})
+		).rejects.toThrow(/Only a player/)
+	}, 60_000)
+
+	test("🚧 a guest edits only their own seat's sheet; the owner edits any (2026-10-16)", async () => {
+		declareSlots()
+		const w = await world()
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const guest = await createTestUser(testDb, `state-seat-editor-${++n}`)
+		await testDb
+			.insert(schema.sessionGuests)
+			.values({ sessionId: w.session.id, userId: guest.id, isPlayer: true })
+		const { writeSeatName } = await import("$lib/server/sessions/seatName")
+		const ann = (await writeSeatName(testDb as unknown as Db, {
+			sessionId: w.session.id,
+			userId: w.user.id,
+			isOwner: true,
+			name: "Ann"
+		}))!
+		const bo = (await writeSeatName(testDb as unknown as Db, {
+			sessionId: w.session.id,
+			userId: guest.id,
+			isOwner: false,
+			name: "Bo"
+		}))!
+		const { setValue } = await import("$lib/server/state/write")
+		const write = (userId: number, seat: number, value: number) =>
+			setValue(
+				testDb as unknown as Db,
+				{ sessionId: w.session.id, updatedBy: "user", userId },
+				{ owner: { kind: "player_seat", id: seat }, slotId: HP, value }
+			)
+		await expect(write(guest.id, ann, 1)).rejects.toThrow(/only Ann's player or the session's owner/)
+		await expect(write(guest.id, bo, 6)).resolves.toBeTypeOf("number")
+		await expect(write(w.user.id, bo, 5)).resolves.toBeTypeOf("number")
+		await expect(write(w.user.id, ann, 9)).resolves.toBeTypeOf("number")
+	}, 60_000)
+
+	test("a card-less player seat is a cast entry, and its player alone (with the owner) hears it", async () => {
+		declareSlots()
+		const w = await world()
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const guest = await createTestUser(testDb, `state-seat-guest-${++n}`)
+		const bystander = await createTestUser(testDb, `state-seat-bystander-${n}`)
+		await testDb.insert(schema.sessionGuests).values([
+			{ sessionId: w.session.id, userId: guest.id, isPlayer: true },
+			{ sessionId: w.session.id, userId: bystander.id, isPlayer: true }
+		])
+		const { writeSeatName } = await import("$lib/server/sessions/seatName")
+		const seatId = (await writeSeatName(testDb as unknown as Db, {
+			sessionId: w.session.id,
+			userId: guest.id,
+			isOwner: false,
+			name: "Wren"
+		}))!
+		const { setValue } = await import("$lib/server/state/write")
+		await setValue(
+			testDb as unknown as Db,
+			{ sessionId: w.session.id, updatedBy: "user" },
+			{ owner: { kind: "player_seat", id: seatId }, slotId: HP, value: 7 }
+		)
+
+		const { stateFor, sessionLinks } = await import("$lib/server/state/resolve")
+		const state = await stateFor(testDb as unknown as Db, w.session.id, {
+			userId: guest.id
+		})
+		const entry = state.cast.byId[`player_seat:${seatId}`]
+		expect(entry).toMatchObject({ playerSeatId: seatId, name: "Wren", key: "wren" })
+		expect(entry.hp).toBe(7)
+		expect(state.who.user).toBe(entry)
+
+		const { hearingOf, hears } = await import("$lib/server/state/earshot")
+		const links = await sessionLinks(testDb as unknown as Db, w.session.id)
+		const of = (userId: number) =>
+			hearingOf(testDb as unknown as Db, w.session.id, userId, links.cast, links.playerSeats)
+		expect(hears(await of(guest.id), `player_seat:${seatId}`)).toBe(true)
+		expect(hears(await of(bystander.id), `player_seat:${seatId}`)).toBe(false)
+		expect((await of(w.user.id)).all).toBe(true)
+	}, 60_000)
+	test("given a card, the seat keeps its row and its stats, and is addressed as the card", async () => {
+		declareSlots()
+		const w = await world()
+		const db = testDb as unknown as Db
+		const { writeSeatName, givePlayerSeatACard } = await import("$lib/server/sessions/seatName")
+		const seatId = (await writeSeatName(db, {
+			sessionId: w.session.id,
+			userId: w.user.id,
+			isOwner: true,
+			name: "Wren"
+		}))!
+		const { assertSessionOwner, setValue } = await import("$lib/server/state/write")
+		await setValue(db, { sessionId: w.session.id, updatedBy: "user" }, {
+			owner: { kind: "player_seat", id: seatId },
+			slotId: HP,
+			value: 7
+		})
+		const [card] = await testDb
+			.insert(schema.characters)
+			.values({ userId: w.user.id, name: "Wren's card", description: "…" })
+			.returning()
+		// A line the seat sent before it had a card, and a stat change of its
+		// still waiting at the gate.
+		const { insertLegacy } = await import("$lib/server/messages/store")
+		const line = await insertLegacy(db, {
+			sessionId: w.session.id,
+			userId: w.user.id,
+			personaId: null,
+			role: "user",
+			content: "Hello.",
+			metadata: { speaker: `player-seat:${seatId}`, isGreeting: false }
+		})
+		const [proposal] = await testDb
+			.insert(schema.stateProposals)
+			.values({
+				sessionId: w.session.id,
+				kind: "value",
+				payload: { owner: { kind: "player_seat", id: seatId }, slotId: HP, value: 3 },
+				status: "pending"
+			})
+			.returning()
+
+		expect(await givePlayerSeatACard(db, w.session.id, card.id)).toBe(true)
+		// The line is now what a line sent as the card is: persona set, no speaker.
+		const [relined] = await testDb
+			.select()
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.id, line.id))
+		expect(relined.personaId).toBe(card.id)
+		expect(relined.metadata).toEqual({ isGreeting: false })
+		const [native] = await testDb
+			.select({ personaId: schema.messages.personaId })
+			.from(schema.messages)
+			.where(eq(schema.messages.id, line.id))
+		expect(native.personaId).toBe(card.id)
+		// The waiting change moved with the values.
+		const [moved] = await testDb
+			.select()
+			.from(schema.stateProposals)
+			.where(eq(schema.stateProposals.id, proposal.id))
+		expect(moved.payload).toEqual({
+			owner: { kind: "session_cast", id: card.id },
+			slotId: HP,
+			value: 3
+		})
+		const seats = await testDb
+			.select()
+			.from(schema.sessionPersonas)
+			.where(eq(schema.sessionPersonas.sessionId, w.session.id))
+		expect(seats).toHaveLength(1)
+		expect(seats[0]).toMatchObject({ id: seatId, personaId: card.id, seatName: "Wren" })
+
+		const { valueOf } = await import("$lib/server/state/resolve")
+		expect(
+			await valueOf(db, {
+				sessionId: w.session.id,
+				owner: { kind: "session_cast", id: card.id },
+				slotId: HP
+			})
+		).toBe(7)
+		// `player-seat:` names only a card-less player seat now.
+		await expect(
+			assertSessionOwner(db, w.session.id, { kind: "player_seat", id: seatId })
+		).rejects.toThrow(/written as its card/)
+		// The seat name still wins over the card's for the stats panel's
+		// owner (its header) and the resolver's cast entry (2026-10-15).
+		const { sessionLinks, stateFor } = await import("$lib/server/state/resolve")
+		const links = await sessionLinks(db, w.session.id)
+		expect(links.cast.find((m) => m.characterId === card.id)?.name).toBe("Wren")
+		const state = await stateFor(db, w.session.id, { userId: w.user.id })
+		expect(state.cast.byId[card.id]).toMatchObject({ name: "Wren" })
+		// The card already has its row: a second call seats nothing.
+		expect(await givePlayerSeatACard(db, w.session.id, card.id)).toBe(false)
+	}, 60_000)
 })

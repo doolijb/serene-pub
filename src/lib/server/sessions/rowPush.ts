@@ -93,7 +93,7 @@ export async function sessionRowFrame(
 		// Null rather than absent: the push has to be able to say the quote is
 		// gone, which is what a delete of the last visible line leaves behind.
 		lastMessage: lastMessages.get(sessionId) ?? null,
-		updatedAt: String(head.updatedAt)
+		updatedAt: head.updatedAt.toISOString()
 	}
 }
 

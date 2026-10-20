@@ -109,7 +109,12 @@ export function createEnvelopeSections(d: EnvelopeSectionsDeps) {
 						readError: stateStore.readError,
 						state: stateStore.state,
 						slots: stateStore.slots.values(),
-						owners: stateStore.owners.values()
+						owners: stateStore.owners.values(),
+						// 🚧 Offers (Give to…, ★4) ride the held changes.
+						proposals: stateStore.proposals,
+						viewerUserId: userCtx.user?.id ?? null,
+						wordsOnly: stateStore.wordsOnly,
+						metPeople: stateStore.metPeople
 					},
 					sessionId
 				)

@@ -91,7 +91,7 @@ The wizard moves on by itself to **What would you like to do?** (If you come bac
 
 <!-- SHOT: the Loadouts view's status strip reading "Replies: ‹model› · ‹connection›" -->
 
-That's it: your pub can write. The wizard now asks what you'd like to do first: **Talk to an AI** (a conversation with Serene, Serene Pub's guide) or **Play with characters** (pick a character, and a persona for yourself). Either is a fine place to start.
+That's it: your pub can write. The wizard now asks what you'd like to do first: **Talk to an AI** (a conversation with Serene, Serene Pub's guide), **Play with characters** (pick a character, and a persona for yourself) or **Start a session** (the start screen's genre cards). Any is a fine place to start.
 
 :::warning If this didn't work
 - **The connection says _Needs a key_.** It's waiting for you, not broken: open it, paste the API key and press **Save**.

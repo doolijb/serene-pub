@@ -41,6 +41,31 @@ describe("answerSend", () => {
 		expect(did).toEqual(["draft hi", "send"])
 	})
 
+	test("🚧 a lane of a session channel is that channel's: taken, canonical", () => {
+		const { did, deps } = page()
+		answerSend({ content: "hi", channel: "ooc:2" }, deps)
+		answerSend({ content: "hi", channel: "ooc:1" }, deps)
+		// A lane of a channel the session lacks, or an unreadable lane: ignored.
+		answerSend({ content: "hi", channel: "nowhere:2" }, deps)
+		answerSend({ content: "hi", channel: "ooc:x" }, deps)
+		expect(did).toEqual([
+			"draft hi", "channel ooc:2", "send",
+			"draft hi", "channel ooc", "send",
+			"draft hi", "send",
+			"draft hi", "send"
+		])
+	})
+
+	test("🚧 a plugin's send on a lane needs the channel's write grant, not the lane's", () => {
+		const { did, deps } = page()
+		const plugin = { widgetId: "acme:dice", owner: "acme", grants: ["channel:ooc:write"] }
+		answerSend({ content: "4", channel: "ooc:3", personaId: null }, deps, plugin)
+		expect(did).toEqual(["draft 4", "channel ooc:3", "send"])
+		expect(() =>
+			answerSend({ content: "4", channel: "main:2", personaId: null }, deps, plugin)
+		).toThrow("not granted the write grant 'channel:main:write'")
+	})
+
 	test("the composer refusing is the widget's refusal, in words — and the draft stays", () => {
 		const { did, deps } = page(false)
 		expect(() => answerSend({ content: "kept" }, deps)).toThrow("the line was not sent")

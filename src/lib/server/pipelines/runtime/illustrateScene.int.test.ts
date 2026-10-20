@@ -1,6 +1,6 @@
 /**
  * 🚧 The Scene action, end to end (DESIGN-image-generation §6.4, I9) —
- * `core:spec/chat-illustrate-scene` on the real document, config store,
+ * `core:spec/story-illustrate-scene` on the real document, config store,
  * bindings, host and dispatch, with the text and image adapters faked.
  *
  *  1. The spec is published and seeded with its Default config and its two
@@ -23,7 +23,7 @@ import { createTestDb, releaseDataDir, type TestDb } from "$lib/server/utils/tes
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
-const SPEC = "core:spec/chat-illustrate-scene"
+const SPEC = "core:spec/story-illustrate-scene"
 
 /** Every text request the fake saw, whole. */
 const textCalls: string[] = []
@@ -299,7 +299,7 @@ describe("the Scene action — seeding", () => {
 
 describe("the Scene action — Adventure's spec (§16 follow-up D3)", () => {
 	it("is published with a Default config, and the scene prompt rows are its defaults too", async () => {
-		const ADVENTURE = "core:spec/adventure-illustrate-scene"
+		const ADVENTURE = "core:spec/story-illustrate-scene"
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
@@ -315,11 +315,11 @@ describe("the Scene action — Adventure's spec (§16 follow-up D3)", () => {
 		expect(tags.defaultForSpecs).toContain(ADVENTURE)
 		expect(tags.defaultForSpecs).toContain(SPEC)
 		// Same graph, Adventure's inlet: the action is offered under Adventure.
-		const { CORE_SPECS, ADVENTURE_ILLUSTRATE_SCENE_SPEC_ID, ADVENTURE_GENRE_ID } = await import(
+		const { CORE_SPECS, STORY_ILLUSTRATE_SCENE_SPEC_ID, STORY_GENRE_ID } = await import(
 			"@serene-pub/core-catalog"
 		)
-		const doc: any = CORE_SPECS.find((c: any) => c.slug === ADVENTURE_ILLUSTRATE_SCENE_SPEC_ID)!.build()
-		expect(doc.input.genre).toBe(ADVENTURE_GENRE_ID)
+		const doc: any = CORE_SPECS.find((c: any) => c.slug === STORY_ILLUSTRATE_SCENE_SPEC_ID)!.build()
+		expect(doc.input.genre).toBe(STORY_GENRE_ID)
 		expect(doc.contributes.actions.map((a: any) => a.key)).toEqual(["illustrate-scene"])
 	})
 })

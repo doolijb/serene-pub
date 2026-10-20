@@ -173,7 +173,7 @@ export async function writeSessionAuthorsNote(
 		const next = { ...stored, authorsNote: note }
 		await tx
 			.update(schema.sessions)
-			.set({ genreFields: next, updatedAt: new Date().toISOString() })
+			.set({ genreFields: next, updatedAt: new Date() })
 			.where(eq(schema.sessions.id, sessionId))
 		return { changed: true, genreFields: next }
 	})

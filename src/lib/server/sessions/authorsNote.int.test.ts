@@ -13,7 +13,7 @@ import {
 	type TestDb
 } from "$lib/server/utils/testDb"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
-import { ADVENTURE_GENRE_ID, CHAT_GENRE_ID } from "@serene-pub/core-catalog"
+import { LAIR_GENRE_ID, STORY_GENRE_ID } from "@serene-pub/core-catalog"
 import { genreFieldsFor } from "$lib/server/pipelines/entities/sessionGenres"
 import {
 	AuthorsNoteRefusal,
@@ -39,7 +39,7 @@ async function receipt(sessionId: number, runId: string, nodes: unknown[]) {
 	const at = new Date()
 	await db.insert(schema.pipelineRuns).values({
 		runId,
-		specSlug: "core:spec/chat-respond",
+		specSlug: "core:spec/story-respond",
 		specVersion: "1.21.0",
 		sessionId,
 		userId: owner,
@@ -61,8 +61,8 @@ beforeAll(async () => {
 }, 60_000)
 
 describe("the author's note (AN1)", () => {
-	it("Chat offers it with its declared defaults; a run reads the same value", async () => {
-		const s = await session(CHAT_GENRE_ID)
+	it("Story offers it with its declared defaults; a run reads the same value", async () => {
+		const s = await session(STORY_GENRE_ID)
 		const read = await readSessionAuthorsNote(db, s.id, owner)
 		// At the end unless moved (owner ruling 2026-10-03; it was 4).
 		expect(read).toEqual({
@@ -79,8 +79,9 @@ describe("the author's note (AN1)", () => {
 		})
 	}, 60_000)
 
-	it("Adventure does not offer it, and refuses a write", async () => {
-		const s = await session(ADVENTURE_GENRE_ID)
+	it("the Lair does not offer it, and refuses a write", async () => {
+		// Adventure was the genre without one until it retired (2026-10-19).
+		const s = await session(LAIR_GENRE_ID)
 		expect((await readSessionAuthorsNote(db, s.id, owner)).offered).toBe(false)
 		await expect(
 			writeSessionAuthorsNote(db, s.id, owner, { text: "x", depth: 1, interval: 1, role: "system" })
@@ -88,7 +89,7 @@ describe("the author's note (AN1)", () => {
 	}, 60_000)
 
 	it("the owner writes the note alone; a guest reads it and may not write", async () => {
-		const s = await session(CHAT_GENRE_ID, { autoAdvance: "off" })
+		const s = await session(STORY_GENRE_ID, { autoAdvance: "off" })
 		const { answer, changed } = await writeSessionAuthorsNote(db, s.id, owner, {
 			text: "It is raining.",
 			depth: "2",
@@ -114,7 +115,7 @@ describe("the author's note (AN1)", () => {
 	}, 60_000)
 
 	it("reports the newest receipt's decision, passing over runs that made none", async () => {
-		const s = await session(CHAT_GENRE_ID, {
+		const s = await session(STORY_GENRE_ID, {
 			authorsNote: { text: "Rain.", depth: 4, interval: 2, role: "system" }
 		})
 		await receipt(s.id, `an-${s.id}-1`, [

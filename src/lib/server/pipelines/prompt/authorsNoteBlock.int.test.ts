@@ -19,7 +19,7 @@ import { spec, compile, run, slot } from "@serene-pub/sdk"
 import * as C from "@serene-pub/contracts"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
-import { CHAT_GENRE_ID } from "@serene-pub/core-catalog"
+import { STORY_GENRE_ID } from "@serene-pub/core-catalog"
 import { genreFieldsFor } from "$lib/server/pipelines/entities/sessionGenres"
 import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults"
 
@@ -129,7 +129,7 @@ beforeAll(async () => {
 		.values({
 			userId,
 			isGroup: false,
-			genreId: CHAT_GENRE_ID,
+			genreId: STORY_GENRE_ID,
 			genreFields: { authorsNote: { text: NOTE, depth: 1, interval: 2, role: "system" } }
 		} as any)
 		.returning()

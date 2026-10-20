@@ -63,15 +63,25 @@ import { and, asc, eq, inArray, isNull, like, or } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { defaultConfigNameCandidates } from "$lib/server/pipelines/config/named"
 
-/** The ten renames, old id → new id. */
+/**
+ * The ten renames, old id → new id.
+ *
+ * 🚧 The roleplay Chat's five land on Story's ids directly (genre
+ * restructure, 2026-10-19): the 0107 data upgrade, which renames
+ * `core:spec/chat-*` to `core:spec/story-*`, runs before this pass, so an id
+ * from before 2026-10-05 has to reach today's in one step. Adventure's
+ * answer form keeps its 2026-10-05 id — one new id per old id, never two
+ * onto one — and the retired-genre cull (`retiredGenres.ts`) removes it
+ * right after this pass, as it removes every Adventure spec.
+ */
 export const SPEC_SLUG_RENAMES: ReadonlyArray<readonly [string, string]> = [
-	["core:spec/create-chat", "core:spec/chat-create"],
-	["core:spec/respond", "core:spec/chat-respond"],
-	["core:spec/narrate", "core:spec/chat-narrate"],
-	["core:spec/narrate-character", "core:spec/chat-side-character"],
-	["core:spec/generate-image", "core:spec/chat-generate-image"],
+	["core:spec/create-chat", "core:spec/story-create"],
+	["core:spec/respond", "core:spec/story-respond"],
+	["core:spec/narrate", "core:spec/story-narrate"],
+	["core:spec/narrate-character", "core:spec/story-side-character"],
+	["core:spec/generate-image", "core:spec/story-generate-image"],
 	["core:spec/create-guide", "core:spec/guide-create"],
-	["core:spec/answer-form-chat", "core:spec/chat-answer-form"],
+	["core:spec/answer-form-chat", "core:spec/story-answer-form"],
 	["core:spec/answer-form-adventure", "core:spec/adventure-answer-form"],
 	["core:spec/answer-form-guide", "core:spec/guide-answer-form"],
 	["core:spec/answer-form-lair", "core:spec/lair-answer-form"]

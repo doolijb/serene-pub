@@ -20,25 +20,26 @@
  * implementations of "and then record it" is how the delete safeguard ends up
  * recording a different set of slots from the capture beside it.
  *
- * ## No lorebook, no timeline
+ * ## No lorebook: the session's own notes (🚧 PLAN-rulesets §26)
  *
- * A session with no world has nowhere to record to, and its state dies with it.
- * That is correct and not a gap (R8): there is no world for the numbers to be
- * true *of*, and inventing one to hold them would be inventing a world nobody
- * asked for.
+ * Until 2026-10-16 a session with no world recorded nothing. It now has one
+ * of its own — its notes (`$lib/server/lorebooks/phantom.ts`), a hidden
+ * lorebook it alone owns — and the world's values land there. The delete
+ * safeguard is the exception: the notes go with the session it records.
  *
- * ## Where, and whether (plan A22, ruled 2026-09-30)
+ * ## Where, and whether (plan A22, ruled 2026-09-30; routed 2026-10-16)
  *
- * A row lands on the session's line, dated at the moment the recording names
- * (a capture's scene names its history entry) or else at the latest history
+ * A capture or a mark lands in the attached book when the session may write
+ * it — the session's owner owns it and their **lore write mode** is Full —
+ * on the session's line, dated at the moment the recording names (a
+ * capture's scene names its history entry) or else at the latest history
  * entry on that line at or before the session's story now
- * (`writeDatingAt`). And recording is a session writing the book, so the book
- * owner's **lore write mode** decides it: Full writes, Off records nothing,
- * and Review changes files each value as a proposal instead — values only,
- * because the gate holds values; a value the book already holds there is not
- * proposed again, and a proposal is held under no reply (a regenerate never
- * takes it). The delete safeguard cannot be reviewed (a proposal goes with
- * its session), so under Review changes it writes as Full.
+ * (`writeDatingAt`). Otherwise — no book, Review changes, Off, or someone
+ * else's book — the world's values land in the session's notes, on their
+ * main line and undated (`loreWriteTargetFor`); Review changes files no
+ * proposals from here, the notes being the overlay a review resolves.
+ * The delete safeguard keeps the A22 table: Full and Review changes write
+ * the book (a proposal would go with its session), Off records nothing.
  *
  * Full writes each value through the book's own door (`validateValue`), as
  * Review's proposals are judged: a value may resolve from the card's layer,
@@ -48,7 +49,7 @@
 
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { slotValueForStorage, type SlotValue } from "@serene-pub/sdk"
+import { slotValueForStorage } from "@serene-pub/sdk"
 import type { LoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
 import { sessionLoreWriteMode } from "$lib/server/state/loreWriteMode"
 import { sessionReadingOf, writeDatingAt } from "$lib/server/state/reading"
@@ -61,7 +62,6 @@ import {
 } from "$lib/server/state/resolve"
 import {
 	newestMessageId,
-	proposeChange,
 	StateRefusal,
 	validateValue
 } from "$lib/server/state/write"
@@ -88,6 +88,13 @@ export interface RecordOptions {
 export interface RecordReport {
 	/** False when nothing was written — no world to record to, Off, or everything proposed. */
 	recorded: boolean
+	/**
+	 * 🚧 Where it landed (PLAN-rulesets §26): the attached `book`, or the
+	 * session's own notes (`phantom`, with their id in `lorebookId`).
+	 */
+	route: "book" | "phantom" | null
+	/** The book the rows were filed against; null when nothing could be. */
+	lorebookId: number | null
 	/** The book owner's lore write mode the recording followed. */
 	mode: LoreWriteMode
 	values: number
@@ -135,6 +142,8 @@ export async function recordToTimeline(
 	const mode = await sessionLoreWriteMode(db, sessionId)
 	const report: RecordReport = {
 		recorded: false,
+		route: null,
+		lorebookId: null,
 		mode,
 		values: 0,
 		configs: 0,
@@ -144,14 +153,35 @@ export async function recordToTimeline(
 		historyEntryId: opts.historyEntryId ?? null,
 		sceneId: opts.sceneId ?? null
 	}
-	// No world, no timeline. See the file header: this is the design, not a gap.
-	if (!links.lorebookId) return report
-	const lorebookId = links.lorebookId
-	// Off: a session writes nothing to the book, this included.
-	if (mode === "off") return report
-	// Review changes files proposals — except for the delete safeguard, whose
-	// proposals would go with the session it is recording (the A22 table).
-	const proposing = mode === "review" && opts.reason !== "delete"
+	/**
+	 * 🚧 Where it lands (PLAN-rulesets §26, brief P1-A): a capture or a mark
+	 * goes to the attached book when the session may write it (its owner's
+	 * book, Full), else to the session's own notes — no book, Review
+	 * changes, Off or someone else's book. The notes take the WORLD's values
+	 * (the session owner); a cast member's or a place's live in the real
+	 * book, so they wait for a write the book can take.
+	 *
+	 * The delete safeguard never routes to the notes — they go with the
+	 * session it records — and keeps the A22 table: Full and Review changes
+	 * write the book, Off and no book record nothing.
+	 */
+	let lorebookId: number
+	let route: "book" | "phantom"
+	if (opts.reason === "delete") {
+		if (!links.lorebookId || mode === "off") return report
+		lorebookId = links.lorebookId
+		route = "book"
+	} else {
+		const { loreWriteTargetFor } = await import("$lib/server/lorebooks/phantom")
+		const target = await loreWriteTargetFor(db, sessionId)
+		lorebookId = target.lorebookId
+		route = target.route
+	}
+	report.route = route
+	report.lorebookId = lorebookId
+	// Nothing is proposed from here: under Review changes a write waits in
+	// the session's notes, as the overlay a review resolves
+	// (`report.proposed` stays 0 for the callers that read it).
 
 	const vocabulary = await vocabularyFor(db, sessionId, links)
 	const storable = vocabulary.entries
@@ -165,9 +195,13 @@ export async function recordToTimeline(
 	// on main and on every branch — so a branch session's facts would leak
 	// onto every line. The FK on `branch_id` cascades it away with the
 	// branch, as the line's amendments and entries go.
-	const reading = links.reading ?? (await sessionReadingOf(db, sessionId))
+	// The notes are never branched as a book, and the book's history is not
+	// theirs to file under: main, undated (unless the caller named one).
+	const reading =
+		route === "phantom" ? null : (links.reading ?? (await sessionReadingOf(db, sessionId)))
 	if (opts.historyEntryId === undefined && reading)
 		report.historyEntryId = (await writeDatingAt(db, reading))?.historyEntryId ?? null
+	if (route === "phantom" && opts.historyEntryId === undefined) report.historyEntryId = null
 	const common = {
 		branchId: reading?.branchId ?? null,
 		historyEntryId: report.historyEntryId,
@@ -183,26 +217,15 @@ export async function recordToTimeline(
 		note: opts.note ?? null
 	}
 
-	/** Whether the book already holds `value` for this owner, where the recording stands. */
-	const alreadyHeld = async (
-		write: { kind: "lorebook" | "cast_member" | "location"; id: number },
-		slotId: string,
-		value: SlotValue
-	) => {
-		const held = await valueOf(db, { sessionId, owner: write, slotId }, { links, vocabulary })
-		return (
-			held !== undefined &&
-			JSON.stringify(slotValueForStorage(held)) === JSON.stringify(slotValueForStorage(value))
-		)
-	}
-
 	/** One owner's whole state, read from the session and filed against the world. */
 	const record = async (
 		read: { kind: "session" | "session_cast" | "session_location"; id: number },
 		write: { kind: "lorebook" | "cast_member" | "location"; id: number },
 		facet: "world" | "cast" | "location",
 		/** Whose values these are, to lead a refusal's sentence. */
-		who: string
+		who: string,
+		/** The book the owner is of, and the columns its rows carry. */
+		into: { lorebookId: number; common: typeof common } = { lorebookId, common }
 	) => {
 		let wrote = false
 		const refuse = (e: StateRefusal) => report.refused.push(`${who} · ${e.message}`)
@@ -218,31 +241,6 @@ export async function recordToTimeline(
 				{ links, vocabulary }
 			)
 			if (value === undefined) continue
-			if (proposing) {
-				if (await alreadyHeld(write, decl.id, value)) continue
-				try {
-					await proposeChange(
-						db,
-						{
-							sessionId,
-							updatedBy,
-							// Held under no reply: the recording is the capture's,
-							// as the rows Full writes are — a regenerate of the
-							// newest reply never takes it.
-							messageId: null,
-							branchId: common.branchId,
-							historyEntryId: common.historyEntryId
-						},
-						{ owner: write, slotId: decl.id, value }
-					)
-					report.proposed++
-					wrote = true
-				} catch (e) {
-					if (e instanceof StateRefusal) refuse(e)
-					else throw e
-				}
-				continue
-			}
 			// The configuration in force, as the whole resolved thing rather
 			// than as this layer's deviations: a timeline row has no layers
 			// underneath it to inherit from, so a deviation alone would resolve
@@ -256,7 +254,7 @@ export async function recordToTimeline(
 			// under the book's lock (`lockBookCalendar`, A18(d)).
 			try {
 				await db.transaction(async (tx) => {
-					await lockBookCalendar(tx, lorebookId)
+					await lockBookCalendar(tx, into.lorebookId)
 					await validateValue(tx, {
 						owner: write,
 						slotId: decl.id,
@@ -268,14 +266,14 @@ export async function recordToTimeline(
 						ownerId: write.id,
 						slotId: decl.id,
 						value: { v: value },
-						...common
+						...into.common
 					})
 					await tx.insert(schema.attributeConfigs).values({
 						ownerKind: write.kind,
 						ownerId: write.id,
 						slotId: decl.id,
 						config,
-						...common
+						...into.common
 					})
 				})
 			} catch (e) {
@@ -292,12 +290,54 @@ export async function recordToTimeline(
 		if (wrote) report.owners.push(`${write.kind}:${write.id}`)
 	}
 
+	/**
+	 * 🚧 The owners of the session's own notes (PLAN-rulesets §26): a place
+	 * the notes hold, and a cast member bound there, file into the notes like
+	 * the entries they are — main line, undated, anchored to the message.
+	 * Under the book route a seat bound in the book files there instead.
+	 */
+	const recordPhantomOwners = async (allCast: boolean) => {
+		const { phantomOf } = await import("$lib/server/lorebooks/phantom")
+		const phantom = await phantomOf(db, sessionId)
+		if (!phantom) return
+		const into = {
+			lorebookId: phantom.id,
+			common: { ...common, branchId: null, historyEntryId: null, sceneId: report.sceneId }
+		}
+		const { castMemberCards } = await import("$lib/server/utils/castMemberCards")
+		const { memberOf } = await castMemberCards(db, phantom.id)
+		for (const member of links.cast) {
+			const bound = memberOf.get(member.characterId)
+			if (bound == null || (!allCast && member.castMemberId)) continue
+			await record(
+				{ kind: "session_cast", id: member.characterId },
+				{ kind: "cast_member", id: bound },
+				"cast",
+				member.name,
+				into
+			)
+		}
+		for (const place of await placesOnReading(db, phantom.id, MAIN_HEAD, "session"))
+			await record(
+				{ kind: "session_location", id: place.entryId },
+				{ kind: "location", id: place.entryId },
+				"location",
+				place.name,
+				into
+			)
+	}
+
 	await record(
 		{ kind: "session", id: sessionId },
-		{ kind: "lorebook", id: links.lorebookId },
+		{ kind: "lorebook", id: lorebookId },
 		"world",
 		"The world"
 	)
+	if (opts.reason !== "delete") await recordPhantomOwners(route === "phantom")
+	if (route === "phantom") {
+		report.recorded = report.values > 0 || report.configs > 0
+		return report
+	}
 	for (const member of links.cast) {
 		// Only a character bound into this world has a versioned cast member to
 		// live beside. One that is not bound has nowhere on the timeline to be,
@@ -315,7 +355,8 @@ export async function recordToTimeline(
 	// world's own record of what lay where. A location IS a lore entry of
 	// this world, so unlike a character there is always somewhere to file it.
 	// Which places: see `recordedLinks`.
-	for (const place of links.locations)
+	// The notes' own places file into the notes (`recordPhantomOwners`).
+	for (const place of links.locations.filter((l) => !l.sessionOnly))
 		await record(
 			{ kind: "session_location", id: place.entryId },
 			{ kind: "location", id: place.entryId },

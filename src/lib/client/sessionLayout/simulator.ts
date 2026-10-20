@@ -1,41 +1,21 @@
 /**
- * The Move tab's SCREEN-SIZE SIMULATOR (P5, ruled 2026-08-30) — pure geometry.
+ * The Arrange tab's SCREEN-SIZE SIMULATOR (P5, ruled 2026-08-30) — pure geometry.
  *
  * The layout editor draws its three zones as a ¼ | ½ | ¼ split of the width it
- * is given, deliberately identical in both width modes (see the `.edit-canvas`
- * / `.edit-center` comments in SessionLayout: "This keeps the edit screen
- * identical in both modes"). This module is the ONE implementation of that
- * split — the editor calls it with the real viewport width, the simulator calls
- * it with a tier's width — so a previewed tier can never drift from what the
- * editor actually draws.
+ * is given. This module is the ONE implementation of that split — the editor
+ * calls it with the real viewport width, the simulator with a tier's width —
+ * so a previewed tier can never drift from what the editor actually draws.
  *
  * What the simulator is NOT: a second arrangement, or a per-tier layout.
- * Picking a tier only changes how wide each zone is drawn, which changes each
- * zone's column count, which is exactly how the SAME saved arrangement clamps
- * on that device. Nothing here is persisted and there is no per-tier storage:
- * a layout arranged at a narrow tier is the same `arrangedGrid` as one arranged
- * at a wide tier, and it will be clamped down (or spread out) on every other
- * tier — that is the point of previewing it.
+ * Picking a tier only changes how wide (and how tall) the zones are drawn;
+ * a panel layout (PLAN-session-panels-2026-10-14) has no cells to clamp, so
+ * looking at a tier never changes the layout and needs no guard.
  *
- * ## The split and the ladder are two different things
- *
- * The live side zones resolve their width and their COLUMN COUNT from a rule
- * ladder (the SDK's `DEFAULT_SIDE_RULES`) — and from 2400px up that ladder
- * turns each rail into a 344px TWO-column grid. The editor's ¼ | ½ | ¼ does not
- * follow it, and deliberately: a SIDE TRACK of `.edit-canvas` is the app
- * shell's own reclaimed margin — the box a rail rides IN, not the rail.
- * Widening it to the ladder's footprint would draw an edit margin wider than
- * the margin the shell actually reserves, so at a real ultrawide the editor
- * would promise the middle a width the session never gives it.
- *
- * So: the SPLIT governs the frame, the LADDER governs the columns. That is why
- * `sideColumns` is reported here (read off the ladder through `resolveZone`,
- * never restated) and why the too-narrow cull counts a whole cell PER rail
- * column — a 2-column rail drawn one cell wide is not the rail that device
- * shows, it is a sliver pretending to be one.
+ * The SPLIT governs the frame; the side ladder (the SDK's
+ * `DEFAULT_SIDE_RULES`) governs a rail's columns, reported as `sideColumns`.
  */
 import { TIER_MIN_PX } from "../surfaces/types"
-import { resolveZone } from "./schema"
+import { zoneRungAt } from "@serene-pub/sdk"
 import type { WidgetTier } from "$lib/shared/widgets/types"
 
 /**
@@ -44,16 +24,6 @@ import type { WidgetTier } from "$lib/shared/widgets/types"
  * closed sidebars reserve), which is what the side zones ride in.
  */
 export const EDIT_SIDE_FRACTION = 0.25
-
-/**
- * Non-grid pixels inside one editor zone box, both edges summed: the `.zgrid`
- * border (1.5px × 2 = 3) and the `.zgrid-body` padding (0.4rem × 2 = 12.8).
- * That is the whole of it — `.edit-canvas`'s own 0.4rem gutter is OUTSIDE the
- * side track, not inside the zone. Only used to answer "can this margin hold a
- * single cell at all?" — the exact column count is still derived by
- * `GridStackZone` from its own measured box.
- */
-export const EDIT_ZONE_CHROME_PX = 16
 
 /**
  * The width previewed for each tier. Cozy/roomy/wide preview at the width where
@@ -120,7 +90,7 @@ export const SIM_HEIGHT_PX: Record<SimTier, number> = {
  * How many columns the LIVE layout runs a side rail at, for a container of
  * `width`.
  *
- * Read off the zone ladder through `resolveZone` — the same walk the live
+ * Read off the zone ladder through the SDK's `zoneRungAt` — the same walk the live
  * render does — rather than restated here, so editing `DEFAULT_SIDE_RULES`
  * moves the preview with it instead of leaving the two to disagree quietly. The
  * max of the two sides: the editor draws each margin as ONE box, so the honest
@@ -134,18 +104,16 @@ export function railColumns(width: number): number {
 	return Math.max(
 		...(["left", "right"] as const).map(
 			(side) =>
-				resolveZone(side, { kind: "side", side, widgets: [] }, w)
-					.columns
+				zoneRungAt({ kind: "side", side, widgets: [] }, w).columns
 		)
 	)
 }
 
 /**
  * The width the app stops giving the side zones any layout space at, and so
- * the width the GRID editor stops being editable at: a margin culled to 0 has
- * no zone to drag into, and the cells left in the middle are a thumb's width
- * apart. Read off the tier ladder rather than restated, because it is the same
- * threshold `.zone-rail` docks at and a session's `matchMedia` reads.
+ * the width the desktop editor hands over to the phone's row editor. Read off
+ * the tier ladder rather than restated, because it is the same threshold
+ * `.zone-rail` docks at and a session's `matchMedia` reads.
  */
 export const MOBILE_EDIT_PX = TIER_MIN_PX.roomy
 
@@ -160,20 +128,15 @@ export interface MobileEditInput {
 	narrow: boolean
 	/** The width being drawn — a previewed tier's, or the real one — is. */
 	simNarrow: boolean
-	/** The desktop asked to see the grid clamp at the width it is previewing. */
-	grid: boolean
 }
 
 /**
- * Does the editor draw the phone's ordered rows instead of the grid?
- *
- * A real narrow window has no other answer — the zones it would drag into are
- * culled — so the grid escape is offered only while a desktop PREVIEWS one,
- * which is what lets the row editor be checked without a phone.
+ * Does the editor draw the phone's row editor instead of the Arrange canvas?
+ * A real narrow window always does, and so does a desktop PREVIEWING a phone
+ * width — which is what lets the row editor be checked without a phone.
  */
 export function mobileEditing(o: MobileEditInput): boolean {
-	if (o.narrow) return true
-	return o.simNarrow && !o.grid
+	return o.narrow || o.simNarrow
 }
 
 export interface SimOption {
@@ -229,14 +192,12 @@ export interface SimRules {
 	 * scaling.
 	 */
 	available?: number
-	/** Whole cells a side margin must fit to be worth drawing. Default 1. */
-	minSideCells?: number
 }
 
 export interface SimGeometry {
-	/** Left margin width, px (0 = too narrow to hold a widget; don't draw it). */
+	/** Left margin width, px (0 = no room for a side at all; don't draw it). */
 	left: number
-	/** Centre column width, px. Absorbs the rounding, and any culled margin. */
+	/** Centre column width, px. Absorbs the rounding. */
 	centre: number
 	/** Right margin width, px. */
 	right: number
@@ -253,30 +214,15 @@ export interface SimGeometry {
 /**
  * Split `width` into the editor's three zones, and say how far the result has
  * to shrink to fit `rules.available`.
- *
- * `cell` is the editor's square cell module. It does not size the zones — it
- * only decides whether a margin is wide enough to hold one whole cell; a
- * narrower margin holds no widget at all, so it is culled to 0 and its space
- * goes back to the centre (which is what a phone does: no rails, just chat).
  */
 export function simulatedGeometry(
 	width: number,
-	cell: number,
 	rules: SimRules = {}
 ): SimGeometry {
 	const frac = rules.sideFraction ?? EDIT_SIDE_FRACTION
-	const minCells = rules.minSideCells ?? 1
 	const w = Number.isFinite(width) ? Math.max(0, Math.round(width)) : 0
-
-	// The ladder's column count for this width — the split does not follow it
-	// (see the module doc), but the cull below has to: a rail is only a rail if
-	// it can hold a whole cell in each of its columns.
 	const sideColumns = railColumns(w)
-
 	let side = Math.max(0, Math.round(w * frac))
-	// Cull a margin that cannot host a single cell — a sliver of a rail is
-	// worse than no rail, and it is not what the device would show either.
-	if (side - EDIT_ZONE_CHROME_PX < minCells * sideColumns * cell) side = 0
 	if (side * 2 > w) side = 0
 
 	const available = rules.available
@@ -295,60 +241,4 @@ export function simulatedGeometry(
 		scale,
 		sideColumns
 	}
-}
-
-/** What leaving a simulated tier decides. */
-export interface SimExit<T> {
-	/** The arrangement to keep — the snapshot, or the simulated one. */
-	arranged: T
-	/** True when the snapshot was put back (i.e. the preview was discarded). */
-	restored: boolean
-}
-
-/**
- * Leave a simulated tier without letting the preview eat the real layout.
- *
- * Previewing re-measures every zone, so gridstack clamps the arrangement into
- * the previewed column count and reports it back as if the user had done it —
- * which would make LOOKING at a phone width silently rewrite a desktop layout,
- * unrecoverably (returning to Actual re-spreads nothing). So the editor
- * snapshots the arrangement on the way in and asks this on the way out.
- *
- * The one thing that earns the simulated arrangement its place is a real user
- * gesture while it was showing (`dirty`): a drag, resize, drop, anchor, group,
- * add or remove. There is only ever ONE arrangement — the simulator is a lens,
- * not a per-tier layout — so an edit made at a narrow tier is an edit to the
- * layout at every size, and keeping it is the only honest reading.
- *
- * Pure: it picks between the two arrangements it was handed and copies neither.
- */
-export function simulationExit<T>(
-	snapshot: T | null | undefined,
-	current: T,
-	dirty: boolean
-): SimExit<T> {
-	// No snapshot means simulation never properly started — never invent one.
-	if (dirty || snapshot == null) return { arranged: current, restored: false }
-	return { arranged: snapshot, restored: true }
-}
-
-/** The guard's state while a tier is previewed: what to restore, and whether it was earned. */
-export interface SimGuard<T> {
-	snapshot: T | null
-	dirty: boolean
-}
-
-/**
- * The guard after the arrangement is REPLACED under an open preview — a copy
- * landing (Start from, Start again from, Reset, Start from scratch) while the
- * phone-width preview is up. The replacement is the new "before": leaving the
- * preview restores IT, and nobody has arranged it yet. Keeping the old
- * snapshot would let Done put the pre-copy arrangement back and save it under
- * the copy's provenance, settings and pins.
- *
- * At Actual (`simulating` false) there is no guard: `{ null, false }`, what
- * the editor holds whenever no tier is showing.
- */
-export function simulationRebase<T>(simulating: boolean, arranged: T): SimGuard<T> {
-	return { snapshot: simulating ? arranged : null, dirty: false }
 }

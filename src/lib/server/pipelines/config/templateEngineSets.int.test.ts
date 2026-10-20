@@ -27,7 +27,7 @@ import {
 	type ConfigOption,
 	type NamespaceView
 } from "$lib/server/pipelines/config/panel"
-import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import {
 	CORE_LIQUID_ENGINE,
 	CORE_TEMPLATE_ENGINE
@@ -144,7 +144,7 @@ describe("the panel's template setting", () => {
 		const gate = await contextTemplateOptionGate(
 			db,
 			SECRET,
-			CHAT_RESPOND_SPEC_ID,
+			STORY_RESPOND_SPEC_ID,
 			admin(),
 			templateOption()
 		)
@@ -158,7 +158,7 @@ describe("the panel's template setting", () => {
 		const gate = await contextTemplateOptionGate(
 			db,
 			SECRET,
-			CHAT_RESPOND_SPEC_ID,
+			STORY_RESPOND_SPEC_ID,
 			admin(),
 			templateOption()
 		)
@@ -182,7 +182,7 @@ describe("the picker the panel renders", () => {
 		const v = (await namespaceView(
 			db,
 			SECRET,
-			CHAT_RESPOND_SPEC_ID,
+			STORY_RESPOND_SPEC_ID,
 			admin()
 		)) as NamespaceView
 		const all = groupOptions(v.groups)

@@ -55,13 +55,14 @@ export function outcomeIcon(outcome: RunOutcome): OutcomeIcon {
  */
 export function outcomeStatusText(
 	outcome: RunOutcome,
-	haltNodeKey?: string
+	haltStep?: string
 ): StatusText {
+	// The step by its heading (`RunProgress.haltStep`), never a node key; no
+	// heading, no "at" (2026-10-16).
 	if (outcome === "halt")
-		return {
-			i18n: { en: "halted at {node}" },
-			...(haltNodeKey ? { vars: { node: haltNodeKey } } : {})
-		}
+		return haltStep
+			? { i18n: { en: "halted at {node}" }, vars: { node: haltStep } }
+			: { i18n: { en: "halted" } }
 	return {
 		ok: { i18n: { en: "finished" } },
 		cancelled: { i18n: { en: "stopped" } },

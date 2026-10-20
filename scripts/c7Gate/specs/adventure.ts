@@ -55,8 +55,8 @@ export const WORLD_VALUES = { location: "The Lantern Bridge", weather: "fog" } a
 export const ROOK_VALUES = { hp: 14, mood: "wary" } as const
 
 /**
- * The session's stored layout: Lore entries docked down the left, as the
- * layout editor stores a side a person arranged. Adventure's own right column
+ * The session's stored layout, in `panels`: Lore entries docked down the
+ * left, as the layout editor stores a side a person arranged. Adventure's own right column
  * and middle (World State over the conversation) are restated: under the copy
  * model a session's row IS its whole layout, so a slot the fixture left out
  * would no longer fall through to the genre default layout's — it would draw
@@ -64,31 +64,18 @@ export const ROOK_VALUES = { hp: 14, mood: "wary" } as const
  */
 export const FIXTURE_LAYOUT = {
 	active: [{ id: "lore-entries", on: true }],
-	widgetGrid: {
+	panels: {
 		version: 1,
-		cell: 44,
-		widgets: [
-			{ id: "world-state", zone: "middle", order: 0, size: { w: "grow", h: "fixed" }, anchor: { top: true, left: true, right: true } },
-			{ id: "messages", zone: "middle", order: 1, size: { w: "grow", h: "grow" }, anchor: { top: true, bottom: true, left: true, right: true } }
+		left: [{ key: "p3", tabs: ["lore-entries"] }],
+		middle: {
+			above: [{ key: "p2", tabs: ["world-state"], height: "fit" }],
+			primary: { key: "p1", tabs: ["messages"] },
+			below: []
+		},
+		right: [
+			{ key: "p4", tabs: ["scene-portraits"] },
+			{ key: "p5", tabs: ["stats"] }
 		]
-	},
-	zoneLayout: {
-		version: 1,
-		zones: {
-			left: { kind: "side", side: "left", pinned: true, widgets: ["lore-entries"] },
-			right: { kind: "side", side: "right", pinned: true, widgets: ["scene-portraits", "stats"] }
-		}
-	},
-	arrangedGrid: {
-		left: { cols: 1, rows: 12, items: [{ id: "lore-entries", x: 0, y: 0, w: 1, h: 12 }] },
-		right: {
-			cols: 1,
-			rows: 12,
-			items: [
-				{ id: "scene-portraits", x: 0, y: 0, w: 1, h: 6 },
-				{ id: "stats", x: 0, y: 6, w: 1, h: 6 }
-			]
-		}
 	}
 }
 /** The per-widget settings the fixture stores: Lore entries paged at five; the portraits as Adventure ships them. */

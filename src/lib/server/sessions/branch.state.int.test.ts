@@ -316,4 +316,129 @@ describe("branching carries the state", () => {
 				)
 		).toHaveLength(0)
 	})
+
+	test("a card-less player seat comes across, its stats under the new seat id", async () => {
+		declareSlots()
+		const w = await world()
+		const fork = await w.message(w.verity.id)
+		const [seat] = await db
+			.insert(schema.sessionPersonas)
+			.values({
+				sessionId: w.session.id,
+				personaId: null,
+				userId: w.user.id,
+				seatName: "Wren",
+				position: 0
+			})
+			.returning()
+		await put(w.session.id, "player_seat", seat.id, HP, 11, fork.id)
+
+		const { branchSession } = await import("$lib/server/sessions/branch")
+		const branch = await branchSession(db, {
+			sessionId: w.session.id,
+			fromMessageId: fork.id
+		})
+		const [copy] = await db
+			.select()
+			.from(schema.sessionPersonas)
+			.where(eq(schema.sessionPersonas.sessionId, branch.id))
+		expect(copy.seatName).toBe("Wren")
+		expect(copy.userId).toBe(w.user.id)
+		expect(copy.personaId).toBeNull()
+		expect(copy.id).not.toBe(seat.id)
+
+		const { valueOf } = await import("$lib/server/state/resolve")
+		expect(
+			await valueOf(db, {
+				sessionId: branch.id,
+				owner: { kind: "player_seat", id: copy.id },
+				slotId: HP
+			})
+		).toBe(11)
+		const rows = await db
+			.select()
+			.from(schema.attributeValues)
+			.where(eq(schema.attributeValues.sessionId, branch.id))
+		expect(rows.filter((r) => r.ownerKind === "player_seat").map((r) => r.ownerId)).toEqual([
+			copy.id
+		])
+	}, 60_000)
+
+	test("a card-less player seat's line names the branch's seat", async () => {
+		declareSlots()
+		const w = await world()
+		const [seat] = await db
+			.insert(schema.sessionPersonas)
+			.values({
+				sessionId: w.session.id,
+				personaId: null,
+				userId: w.user.id,
+				seatName: "Wren",
+				position: 0
+			})
+			.returning()
+		const [line] = await db
+			.insert(schema.sessionMessages)
+			.values({
+				sessionId: w.session.id,
+				role: "user",
+				userId: w.user.id,
+				content: "Hello.",
+				metadata: { speaker: `player-seat:${seat.id}` }
+			})
+			.returning()
+		await db.insert(schema.messages).values({
+			id: line.id,
+			sessionId: w.session.id,
+			role: "user"
+		})
+
+		const { branchSession } = await import("$lib/server/sessions/branch")
+		const branch = await branchSession(db, {
+			sessionId: w.session.id,
+			fromMessageId: line.id
+		})
+		const [copy] = await db
+			.select()
+			.from(schema.sessionPersonas)
+			.where(eq(schema.sessionPersonas.sessionId, branch.id))
+		const [copied] = await db
+			.select()
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.sessionId, branch.id))
+		expect((copied.metadata as any).speaker).toBe(`player-seat:${copy.id}`)
+		expect((copied.metadata as any).copyOf).toBe(line.id)
+	}, 60_000)
+
+	test("the annex and its audiences come along, as copies", async () => {
+		declareSlots()
+		const w = await world()
+		const fork = await w.message(w.verity.id)
+		const annex = {
+			core: { "castellan-scratchpad": "The east gate sticks." },
+			"acme.rp": { rooms: { hall: { lit: true } } }
+		}
+		const annexAudiences = {
+			core: { "castellan-scratchpad": ["owner"] }
+		}
+		await db
+			.update(schema.sessions)
+			.set({ annex, annexAudiences })
+			.where(eq(schema.sessions.id, w.session.id))
+
+		const { branchSession } = await import("$lib/server/sessions/branch")
+		const branch = await branchSession(db, {
+			sessionId: w.session.id,
+			fromMessageId: fork.id
+		})
+		const [row] = await db
+			.select({
+				annex: schema.sessions.annex,
+				annexAudiences: schema.sessions.annexAudiences
+			})
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, branch.id))
+		expect(row.annex).toEqual(annex)
+		expect(row.annexAudiences).toEqual(annexAudiences)
+	}, 60_000)
 })

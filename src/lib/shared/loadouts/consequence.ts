@@ -21,6 +21,16 @@ export interface StepNeeds {
 	references?: boolean
 }
 
+/**
+ * The *Best with* words for a `prefers.tier` — the Pipelines Loadout row's
+ * and the loadout editor's, one list.
+ */
+export const TIER_WORDS: Readonly<Record<string, string>> = {
+	fast: "a fast model",
+	cheap: "a cheap model",
+	best: "the best model"
+}
+
 /** The loadouts core ships that imply a need, by seed key. */
 const IMPLIED: Record<string, StepNeeds> = {
 	"core:loadout/extraction@1": { structured: true },

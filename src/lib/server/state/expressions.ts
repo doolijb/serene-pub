@@ -168,7 +168,7 @@ export const createExpressionBudget = (
  * a die is a pure function of its seed label, and the whole point is that
  * replaying a run rolls the same numbers.
  */
-function seededRandom(label: string): () => number {
+export function seededRandom(label: string): () => number {
 	let h = 1779033703 ^ label.length
 	for (let i = 0; i < label.length; i++) {
 		h = Math.imul(h ^ label.charCodeAt(i), 3432918353)
@@ -188,6 +188,33 @@ function seededRandom(label: string): () => number {
 
 /** `d20` · `2d6` · `2d6+1` · `d8-2`. Anything else is not a die. */
 const DICE = /^\s*(\d*)\s*d\s*(\d+)\s*(?:([+-])\s*(\d+))?\s*$/i
+
+/** A die expression, read: how many, how many faces, and the flat modifier. */
+export interface ParsedDice {
+	count: number
+	faces: number
+	modifier: number
+}
+
+/**
+ * Read `d20` · `2d6` · `2d6+1` · `d8-2`, or say why it is not a die. The one
+ * dice grammar: the `roll` filter below and the ruleset handler's `rollDice`
+ * (`$lib/server/rulesets/dice`) both read through it.
+ */
+export function parseDice(spec: unknown): ParsedDice | { refusal: string } {
+	const m = DICE.exec(String(spec ?? ""))
+	if (!m) return { refusal: `'${String(spec)}' is not a die. Write 'd20', '2d6' or '2d6+1'.` }
+	const count = m[1] ? Number(m[1]) : 1
+	const faces = Number(m[2])
+	const modifier = m[3] === "-" ? -Number(m[4]) : Number(m[4] || 0)
+	if (faces < 1 || count < 1 || count > 100)
+		return {
+			refusal:
+				`'${String(spec)}' is not a die anyone could throw: 1 to 100 dice of ` +
+				`at least one face.`
+		}
+	return { count, faces, modifier }
+}
 
 // ── Filters ─────────────────────────────────────────────────────────────────
 
@@ -317,19 +344,9 @@ function expressionLiquid(
 	// expression two different numbers, which is what `2d6` plainly means.
 	let rolls = 0
 	liquid.registerFilter("roll", (spec: unknown) => {
-		const m = DICE.exec(String(spec ?? ""))
-		if (!m)
-			throw new Error(
-				`'${String(spec)}' is not a die. Write 'd20', '2d6' or '2d6+1'.`
-			)
-		const count = m[1] ? Number(m[1]) : 1
-		const faces = Number(m[2])
-		const modifier = m[3] === "-" ? -Number(m[4]) : Number(m[4] || 0)
-		if (faces < 1 || count < 1 || count > 100)
-			throw new Error(
-				`'${String(spec)}' is not a die anyone could throw: 1 to 100 dice of ` +
-					`at least one face.`
-			)
+		const dice = parseDice(spec)
+		if ("refusal" in dice) throw new Error(dice.refusal)
+		const { count, faces, modifier } = dice
 		const random = seededRandom(`${seedLabel}:${rolls++}`)
 		let total = modifier
 		for (let i = 0; i < count; i++) total += Math.floor(random() * faces) + 1

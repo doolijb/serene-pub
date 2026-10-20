@@ -19,6 +19,7 @@
  * scope inherits again. There is no "bound to nothing" state.
  */
 
+import { pluginSwapsOf } from "$lib/server/plugins/renamedCoreIds"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import { notCoreRow } from "$lib/server/plugins/frameHost"
 import { i18nText, isEventId, sessionEvents, type EnabledWhen, type NodeSwap } from "@serene-pub/sdk"
@@ -679,13 +680,9 @@ export async function listSessionNodeSwaps(
 		.where(and(eq(schema.plugins.enabled, true), notCoreRow()))
 		.orderBy(asc(schema.plugins.id))
 	for (const p of plugins) {
-		const swaps = ((p.manifest as { swaps?: unknown })?.swaps ?? []) as Array<{
-			spec?: string
-			node?: string
-			definition?: string
-		}>
-		for (const c of Array.isArray(swaps) ? swaps : []) {
-			if (c?.spec !== opts.spec || c.node !== opts.nodeKey || !c.definition) continue
+		// Onto the spec core ships now (`renamedCoreIds.ts`).
+		for (const c of pluginSwapsOf(p.manifest)) {
+			if (c.spec !== opts.spec || c.node !== opts.nodeKey) continue
 			if ((p.disabledSwaps ?? []).includes(swapKey(c.spec, c.node, c.definition))) continue
 			contributed.push(c.definition)
 		}

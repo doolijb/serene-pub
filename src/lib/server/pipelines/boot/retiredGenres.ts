@@ -34,6 +34,18 @@ export interface RetiredCoreGenre {
 }
 
 export const RETIRED_CORE_GENRES: readonly RetiredCoreGenre[] = [
+	/**
+	 * Adventure folded into **Story** 2026-10-19: its sessions and its default
+	 * preset were moved by the `0107_story_genre` data upgrade before this cull
+	 * runs, so what is deleted here is its specs, prompts, layouts and genre
+	 * settings — superseded by Story's (today's Chat prompts, ruled).
+	 */
+	{
+		genreId: "core:genre/adventure",
+		specStem: "adventure",
+		otherSpecs: ["core:spec/answer-form-adventure"],
+		promptStem: "adventure"
+	},
 	{
 		genreId: "core:genre/whodunit",
 		specStem: "whodunit",

@@ -15,7 +15,7 @@ import { pluginRuleRef } from "@serene-pub/sdk"
 import { and, eq } from "drizzle-orm"
 import { swapFitFinding, type Descriptor } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
-import { storedSwapsOf } from "$lib/shared/swaps"
+import { pluginSwapsOf } from "./renamedCoreIds"
 
 type ManifestLike = {
 	slug?: string
@@ -28,7 +28,8 @@ export async function swapContributionProblems(
 	db: Db,
 	manifest: ManifestLike | null | undefined
 ): Promise<string[]> {
-	const swaps = storedSwapsOf(manifest?.swaps)
+	// Onto the spec core ships now: a package built before a rename names the old id.
+	const swaps = pluginSwapsOf(manifest)
 	if (!swaps.length) return []
 	const own = new Map<string, Descriptor>()
 	for (const d of manifest?.nodeDefinitions ?? []) {

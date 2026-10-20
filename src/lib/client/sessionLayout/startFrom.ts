@@ -18,60 +18,112 @@
 
 type LayoutPreset = Sockets.Sessions.LayoutPreset
 
-/** One labelled group of cards in the pane. */
-export interface PresetGroup {
-	key: string
+/** The pane's two sections: what was made for this genre, and people's own. */
+export type PresetSectionKey = "ready-made" | "yours"
+
+/** One headed section of cards in the pane. */
+export interface PresetSection {
+	key: PresetSectionKey
 	label: string
-	presets: LayoutPreset[]
+	cards: LayoutPreset[]
 }
 
-/** Core's name, as the group and the Updated sentence say it. */
+/** Core's name, as the source line and the Updated sentence say it. */
 const CORE_NAME = "Serene Pub"
 
 function pluginNameOf(p: LayoutPreset): string {
 	return p.pluginName ?? p.pluginId ?? "A plugin"
 }
 
-function groupOf(p: LayoutPreset): { key: string; label: string; rank: number } {
-	if (p.isGenreDefault)
-		return { key: "genre-default", label: "Genre default layout", rank: 0 }
-	if (p.origin === "core")
-		return { key: "core", label: `From ${CORE_NAME}`, rank: 1 }
-	if (p.origin === "plugin")
-		return {
-			key: `plugin:${p.pluginId ?? ""}`,
-			label: `From ${pluginNameOf(p)}`,
-			rank: 2
-		}
-	return p.mine
-		? { key: "yours", label: "Your layouts", rank: 3 }
-		: { key: "shared", label: "Shared with you", rank: 4 }
+/** Shipped rows: the genre default layout, core's, an in-app genre's, a plugin's. */
+const isReadyMade = (p: LayoutPreset): boolean =>
+	p.isGenreDefault || p.origin !== "user"
+
+/** Where a ready-made card sits: genre default, core, the pub's, then plugins. */
+function readyRank(p: LayoutPreset): number {
+	if (p.isGenreDefault) return 0
+	if (p.origin === "core") return 1
+	if (p.origin === "pub") return 2
+	return 3
+}
+
+const byName = (a: LayoutPreset, b: LayoutPreset) => a.name.localeCompare(b.name)
+
+/**
+ * The cards in two sections (D4 of `PLAN-session-panels-2026-10-14`):
+ * **Ready-made** — the genre default layout first, then core's (_Serene
+ * Pub_), the pub's own, then plugin layouts by plugin name, then layout name
+ * — and **Yours and shared** — this person's own by name, then other
+ * people's shared ones by author, then name. Core's and the pub's keep the
+ * server's order. An empty section is never returned.
+ */
+export function groupLayoutPresets(
+	cards: readonly LayoutPreset[]
+): PresetSection[] {
+	const ready = cards
+		.filter(isReadyMade)
+		.sort((a, b) => {
+			const r = readyRank(a) - readyRank(b)
+			if (r || readyRank(a) !== 3) return r
+			return pluginNameOf(a).localeCompare(pluginNameOf(b)) || byName(a, b)
+		})
+	const people = cards.filter((p) => !isReadyMade(p))
+	const yours = [
+		...people.filter((p) => p.mine).sort(byName),
+		...people
+			.filter((p) => !p.mine)
+			.sort(
+				(a, b) =>
+					(a.authorName ?? "").localeCompare(b.authorName ?? "") || byName(a, b)
+			)
+	]
+	const out: PresetSection[] = []
+	if (ready.length) out.push({ key: "ready-made", label: "Ready-made", cards: ready })
+	if (yours.length) out.push({ key: "yours", label: "Yours and shared", cards: yours })
+	return out
 }
 
 /**
- * The cards, grouped by who brought them: the **genre default layout**, core's
- * other layouts (_From Serene Pub_), one group per plugin (by name), _Your
- * layouts_, then _Shared with you_. The server already sends them in that
- * order; grouping here does not depend on it. Within a group the order is the
- * server's, and an empty group is never returned.
+ * The small line under a card's name: who brought it. _Genre default_,
+ * _Serene Pub_, _This pub_ (an in-app genre's), the plugin's name, _You_
+ * (with _· in use here_ when this session started from it, so Save changes
+ * has a face), or _Shared by *Name*_.
  */
-export function groupLayoutPresets(
-	presets: readonly LayoutPreset[]
-): PresetGroup[] {
-	const groups = new Map<string, PresetGroup & { rank: number }>()
-	for (const p of presets) {
-		const { key, label, rank } = groupOf(p)
-		let g = groups.get(key)
-		if (!g) groups.set(key, (g = { key, label, rank, presets: [] }))
-		g.presets.push(p)
-	}
-	return [...groups.values()]
-		.sort(
-			(a, b) =>
-				a.rank - b.rank ||
-				(a.rank === 2 ? a.label.localeCompare(b.label) : 0)
-		)
-		.map(({ key, label, presets }) => ({ key, label, presets }))
+export function sourceLine(
+	card: LayoutPreset,
+	startedFromLayoutPresetId: number | null = null
+): string {
+	if (card.isGenreDefault) return "Genre default"
+	if (card.origin === "core") return CORE_NAME
+	if (card.origin === "pub") return "This pub"
+	if (card.origin === "plugin") return pluginNameOf(card)
+	if (card.mine)
+		return card.id === startedFromLayoutPresetId ? "You · in use here" : "You"
+	return `Shared by ${card.authorName ?? "someone else"}`
+}
+
+/** Past this many cards a section offers the All / Mine / Shared chips. */
+export const CHIP_THRESHOLD = 8
+
+/** The chips a long section offers above its cards. */
+export type PresetChip = "all" | "mine" | "shared"
+
+export const PRESET_CHIPS: ReadonlyArray<{ chip: PresetChip; label: string }> = [
+	{ chip: "all", label: "All" },
+	{ chip: "mine", label: "Mine" },
+	{ chip: "shared", label: "Shared" }
+]
+
+/** Does this section draw the chips row? Only when it holds more than eight. */
+export function showChips(section: PresetSection): boolean {
+	return section.cards.length > CHIP_THRESHOLD
+}
+
+/** A section's cards under a chip: all, this person's own, or everyone else's. */
+export function chipFilter(section: PresetSection, chip: PresetChip): LayoutPreset[] {
+	if (chip === "mine") return section.cards.filter((p) => p.mine)
+	if (chip === "shared") return section.cards.filter((p) => !p.mine)
+	return section.cards
 }
 
 /** A layout's name as the pane quotes it. */

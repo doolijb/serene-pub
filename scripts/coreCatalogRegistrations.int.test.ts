@@ -21,6 +21,9 @@ import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { build, type Plugin } from "vite"
 import { afterAll, describe, expect, test } from "vitest"
+// The expectation's derived half, read in this process — the bundle under
+// test must still get there by its bare import alone.
+import { RULESET_ENTRY_TYPES } from "@serene-pub/core-catalog"
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
 
@@ -40,8 +43,8 @@ const MODULES: Record<string, string> = {
 		}
 	`,
 	"virtual:by-value": `
-		import { CORE_ENTRY_TYPES, ADVENTURE_SLOTS, CORE_STAT_SHAPES } from "@serene-pub/core-catalog"
-		export const count = CORE_ENTRY_TYPES.length + ADVENTURE_SLOTS.length + CORE_STAT_SHAPES.length
+		import { CORE_ENTRY_TYPES, STORY_SLOTS, CORE_STAT_SHAPES } from "@serene-pub/core-catalog"
+		export const count = CORE_ENTRY_TYPES.length + STORY_SLOTS.length + CORE_STAT_SHAPES.length
 	`
 }
 
@@ -78,13 +81,18 @@ describe("core-catalog registrations in a production build", () => {
 		const main = await import(pathToFileURL(path.join(outDir, "main.js")).href)
 		const snapshot = await main.readRegistries()
 
-		expect(snapshot.entryTypes).toEqual([
-			"core:entry/character-lore@1",
-			"core:entry/history@1",
-			"core:entry/item@1",
-			"core:entry/location@1",
-			"core:entry/world-lore@1"
-		])
+		// Core's five, then every derived entry type its rulesets yield.
+		expect(snapshot.entryTypes).toEqual(
+			[
+				"core:entry/character-lore@1",
+				"core:entry/history@1",
+				"core:entry/item@1",
+				"core:entry/location@1",
+				"core:entry/world-lore@1",
+				...RULESET_ENTRY_TYPES.map((d) => d.id)
+			].sort()
+		)
+		expect(RULESET_ENTRY_TYPES.length).toBeGreaterThan(0)
 		expect(snapshot.slots).toContain("core:slot/hp@1")
 		expect(snapshot.statShapes).toContain("core:stat-shape/number@1")
 		// The sibling chunk is real and loads; it is not what registered them.

@@ -3101,8 +3101,14 @@ export const pipelinesDetail: Handler<
 				})),
 				nodes: (nodes as any[]).map((n) => ({
 					key: n.nodeKey,
+					// The step label the spec gave the node as placed
+					// (`expose.label`), else what its type is called — the
+					// inspector's step heading by the same rule
+					// (`panel/declarations.ts`), so a card and the settings it
+					// opens say the same name.
 					label:
-						typeNames.get(n.definitionId) ??
+						i18nText(n.expose?.label) ||
+						typeNames.get(n.definitionId) ||
 						humanizeTypeId(n.definitionId),
 					kind: n.kind,
 					definitionId: n.definitionId,
@@ -3228,12 +3234,17 @@ async function portrayalLinesOf(
 
 	const characterIds = new Set<number>()
 	const userIds = new Set<number>()
+	const seatIds = new Set<number>()
 	for (const [ref, portrayal] of entries) {
 		if (portrayal.by === "none") continue
 		const parsed = parseParticipantRef(ref)
 		if (parsed.kind === "character") {
 			const id = participantRowId(parsed.id)
 			if (id !== null) characterIds.add(id)
+		}
+		if (parsed.kind === "player-seat") {
+			const id = participantRowId(parsed.id)
+			if (id !== null) seatIds.add(id)
 		}
 		if (parsed.kind === "user") {
 			const id = participantRowId(parsed.id)
@@ -3244,7 +3255,7 @@ async function portrayalLinesOf(
 			if (id !== null) userIds.add(id)
 		}
 	}
-	const [characters, users] = await Promise.all([
+	const [characters, users, seats] = await Promise.all([
 		characterIds.size
 			? db
 					.select({
@@ -3263,8 +3274,19 @@ async function portrayalLinesOf(
 					})
 					.from(schema.users)
 					.where(inArray(schema.users.id, [...userIds]))
+			: [],
+		// 🚧 A card-less player seat is named by its seat name.
+		seatIds.size
+			? db
+					.select({
+						id: schema.sessionPersonas.id,
+						name: schema.sessionPersonas.seatName
+					})
+					.from(schema.sessionPersonas)
+					.where(inArray(schema.sessionPersonas.id, [...seatIds]))
 			: []
 	])
+	const seatName = new Map(seats.map((s) => [s.id, s.name?.trim() || null]))
 	const characterName = new Map(characters.map((c) => [c.id, c.name]))
 	const userName = new Map(
 		users.map((u) => [u.id, u.displayName?.trim() || u.username])
@@ -3299,6 +3321,10 @@ async function portrayalLinesOf(
 			case "user": {
 				const id = participantRowId(parsed.id)
 				return (id !== null ? userName.get(id) : undefined) ?? ref
+			}
+			case "player-seat": {
+				const id = participantRowId(parsed.id)
+				return (id !== null ? seatName.get(id) : undefined) ?? ref
 			}
 			case "envoy":
 				return envoyName.get(parsed.slug) ?? parsed.slug

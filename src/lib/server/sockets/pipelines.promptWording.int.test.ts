@@ -14,7 +14,7 @@ import path from "path"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
-import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import { groupOptions } from "$lib/server/pipelines/config/panel/groups"
 
 let testDb: TestDb
@@ -72,7 +72,7 @@ async function memberPromptRow() {
 	const { pipelinesGet } = await import("./pipelines")
 	const res: any = await pipelinesGet.handler(
 		socketFor(member.id),
-		{ slug: CHAT_RESPOND_SPEC_ID, sessionId },
+		{ slug: STORY_RESPOND_SPEC_ID, sessionId },
 		() => {}
 	)
 	const option = groupOptions(res.pipeline.groups).find(
@@ -87,7 +87,7 @@ const ask = async (params: Record<string, unknown>) => {
 	const rec = recordingEmit()
 	const res: any = await pipelinesPromptWording.handler(
 		socketFor(member.id),
-		{ slug: CHAT_RESPOND_SPEC_ID, sessionId, ...params } as any,
+		{ slug: STORY_RESPOND_SPEC_ID, sessionId, ...params } as any,
 		rec.emit
 	)
 	return { res, rec }
@@ -109,7 +109,7 @@ describe("a member reads the prompts their session offers", () => {
 		expect(res.error).toBeUndefined()
 		expect(rec.last("pipelines:promptWording")).toEqual(res)
 		expect(res).toMatchObject({
-			slug: CHAT_RESPOND_SPEC_ID,
+			slug: STORY_RESPOND_SPEC_ID,
 			optionId: option.id,
 			promptId: plain.id,
 			name: "Roleplay - Plain",

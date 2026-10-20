@@ -66,9 +66,9 @@ export async function moveSpritePickerSettings(
 	const {
 		SPRITE_PICKER_NODE_KEY,
 		SPRITE_PICKER_NODE_KEY_V0,
-		CHAT_RESPOND_SPEC_ID,
+		STORY_RESPOND_SPEC_ID,
 		TOOL_LOOP_SPEC_ID,
-		CHAT_SIDE_CHARACTER_SPEC_ID,
+		STORY_SIDE_CHARACTER_SPEC_ID,
 		GUIDE_RESPOND_SPEC_ID
 	} = await import("@serene-pub/core-catalog")
 	const report: SpritePickerMoveReport = {
@@ -86,10 +86,10 @@ export async function moveSpritePickerSettings(
 		.from(schema.pipelineSpecs)
 		.where(
 			inArray(schema.pipelineSpecs.slug, [
-				CHAT_RESPOND_SPEC_ID,
+				STORY_RESPOND_SPEC_ID,
 				"core:spec/respond",
 				TOOL_LOOP_SPEC_ID,
-				CHAT_SIDE_CHARACTER_SPEC_ID,
+				STORY_SIDE_CHARACTER_SPEC_ID,
 				"core:spec/narrate-character",
 				GUIDE_RESPOND_SPEC_ID
 			])

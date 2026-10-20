@@ -113,7 +113,7 @@ vi.mock("$lib/server/pipelines/runtime/runStatus", async (importOriginal) => {
 	}
 })
 
-const CHAT = "core:genre/chat"
+const CHAT = "core:genre/story"
 
 beforeAll(async () => {
 	dataDir = await fs.mkdtemp(
@@ -192,13 +192,13 @@ async function publishActionSpec(
 ) {
 	const { spec, compile } = await import("@serene-pub/sdk")
 	const C = await import("@serene-pub/contracts")
-	const { chatGenre, adventureGenre } = await import("@serene-pub/core-catalog")
+	const { storyGenre } = await import("@serene-pub/core-catalog")
 	const genre =
 		opts.genre === "adventure"
-			? adventureGenre
+			? storyGenre
 			: opts.genre && typeof opts.genre === "object"
 				? opts.genre
-				: chatGenre
+				: storyGenre
 	const declared = Array.isArray(action) ? action : [action]
 	const doc: SpecDocument = compile(
 		spec(id, {
@@ -384,7 +384,7 @@ describe("listSessionActions — audiences", () => {
 		)
 		expect(narrate).toMatchObject({
 			key: "narrate",
-			specSlug: "core:spec/chat-narrate",
+			specSlug: "core:spec/story-narrate",
 			slash: "narrate",
 			quick: true,
 			canAct: true,
@@ -502,10 +502,12 @@ describe("listSessionActions — placement", () => {
 		// Every venue kind is present, even the ones nothing declares for.
 		for (const k of ["session-settings", "pipelines", "admin", "review"])
 			expect(res.venues[k]).toEqual({ primary: [], overflow: [] })
-		// The widget venue holds core's one annex field (retake's "don't ask
-		// again", R2 2026-09-28): an annex field is declared for every genre.
+		// The widget venue holds core's annex fields: retake's "don't ask
+		// again" (R2 2026-09-28), declared for every genre, and Story's goals
+		// (2026-10-19), declared for Story.
 		expect(all(res.venues.widget).map((a) => `${a.specSlug}#${a.key}`)).toEqual([
-			"core:annex#retake-quietly"
+			"core:annex#retake-quietly",
+			"core:annex#story-goals"
 		])
 	})
 
@@ -907,7 +909,7 @@ describe("sessions:fireAction reads the declaration it was handed", () => {
 		})
 		const narrate = (
 			await listSessionFunctions(testDb as any, session.id, CHAT, owner.id)
-		).find((f) => f.specSlug === "core:spec/chat-narrate")
+		).find((f) => f.specSlug === "core:spec/story-narrate")
 		expect(narrate).toMatchObject({ enabled: true, source: "default", explicit: false })
 
 		// A write stores the identity and answers from then on.
@@ -915,14 +917,14 @@ describe("sessions:fireAction reads the declaration it was handed", () => {
 			testDb as any,
 			session.id,
 			CHAT,
-			"core:spec/chat-narrate#narrate",
+			"core:spec/story-narrate#narrate",
 			false,
 			{ userId: owner.id }
 		)
 		expect(
 			(
 				await listSessionFunctions(testDb as any, session.id, CHAT, owner.id)
-			).find((f) => f.specSlug === "core:spec/chat-narrate")
+			).find((f) => f.specSlug === "core:spec/story-narrate")
 		).toMatchObject({ enabled: false, source: "session", explicit: true })
 		expect(
 			(
@@ -933,7 +935,7 @@ describe("sessions:fireAction reads the declaration it was handed", () => {
 			)
 				.map((r) => r.functionKey)
 				.sort()
-		).toEqual(["core:spec/chat-narrate#narrate", "narrate"])
+		).toEqual(["core:spec/story-narrate#narrate", "narrate"])
 	}, 60_000)
 
 	test("a channel filters where an action is listed, never who may fire it (W2)", async () => {
@@ -1105,10 +1107,10 @@ describe("sessions:actionsSeen", () => {
 			{
 				sessionId: session.id,
 				keys: [
-					"core:spec/chat-narrate#narrate",
+					"core:spec/story-narrate#narrate",
 					"narrate",
 					"#narrate",
-					"core:spec/chat-narrate#",
+					"core:spec/story-narrate#",
 					"<script>alert(1)</script>#x",
 					`${"a".repeat(200)}#k`,
 					42 as any,
@@ -1128,7 +1130,7 @@ describe("sessions:actionsSeen", () => {
 			)
 				.map((r) => r.actionKey)
 				.sort()
-		).toEqual(["acme:spec/roll#roll-again", "core:spec/chat-narrate#narrate"])
+		).toEqual(["acme:spec/roll#roll-again", "core:spec/story-narrate#narrate"])
 	})
 })
 
@@ -1236,7 +1238,7 @@ describe("a preset includes actions by identity (W-A)", () => {
 		)
 		expect(stored.error).toBeUndefined()
 		expect(stored.preset?.includedActions).toEqual([
-			"core:spec/chat-narrate#narrate",
+			"core:spec/story-narrate#narrate",
 			"acme:spec/summarize#summarize"
 		])
 	}, 60_000)
@@ -1271,7 +1273,7 @@ describe("a preset includes actions by identity (W-A)", () => {
 		)
 		expect(res.error).toBeUndefined()
 		expect(res.preset?.includedActions).toEqual([
-			"core:spec/chat-narrate#narrate",
+			"core:spec/story-narrate#narrate",
 			"acme:spec/tally#tally",
 			"summarize",
 			"teleport",
@@ -1299,7 +1301,7 @@ describe("a preset includes actions by identity (W-A)", () => {
 		const [respond] = await testDb
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-respond"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/story-respond"))
 			.limit(1)
 		const [cfg] = await testDb
 			.insert(schema.pipelineConfigs)
@@ -1318,7 +1320,7 @@ describe("a preset includes actions by identity (W-A)", () => {
 			.select({ includedActions: schema.pipelineConfigs.includedActions })
 			.from(schema.pipelineConfigs)
 			.where(eq(schema.pipelineConfigs.id, cfg!.id))
-		expect(row!.includedActions).toEqual(["core:spec/chat-narrate#narrate"])
+		expect(row!.includedActions).toEqual(["core:spec/story-narrate#narrate"])
 	}, 60_000)
 })
 
@@ -1361,7 +1363,7 @@ describe("R-6 narrowing at sessions:bindFunction (subjects, plans/31 V2)", () =>
 			{
 				sessionId: session.id,
 				subject: "acme:spec/greet#greet",
-				specSlug: "core:spec/chat-narrate",
+				specSlug: "core:spec/story-narrate",
 				scope: "session"
 			},
 			noopEmit
@@ -1416,8 +1418,8 @@ describe("R-6 narrowing at sessions:bindFunction (subjects, plans/31 V2)", () =>
 			fakeSocket(owner.id),
 			{
 				sessionId: session.id,
-				subject: "core:spec/chat-narrate#narrate",
-				specSlug: "core:spec/chat-narrate",
+				subject: "core:spec/story-narrate#narrate",
+				specSlug: "core:spec/story-narrate",
 				scope: "session"
 			},
 			noopEmit
@@ -1545,7 +1547,7 @@ describe("sessions:fireAction announces its run (R-19)", () => {
 })
 
 describe("enabled-when (U5e)", () => {
-	const ADVENTURE = "core:genre/adventure"
+	const ADVENTURE = "core:genre/story"
 	const LOCATION = "core:slot/location@1"
 	const LOOK_REASON = "Set a location first — Look describes where you are."
 
@@ -1784,7 +1786,7 @@ describe("enabled-when (U5e)", () => {
 			{
 				sessionId: session.id,
 				subject: "core:event/message-respond@1",
-				specSlug: "core:spec/chat-respond",
+				specSlug: "core:spec/story-respond",
 				scope: "session",
 				enabledWhen: { on: "state.world.location", truthy: true, reason: { en: "r" } }
 			},
@@ -2268,7 +2270,7 @@ describe("one slash name means one action across the install (plans/31 V2)", () 
 				key: "hex",
 				slash: "cast"
 			})
-		).rejects.toThrow(/'\/cast' is claimed twice for genre 'core:genre\/chat'/)
+		).rejects.toThrow(/'\/cast' is claimed twice for genre 'core:genre\/story'/)
 
 		// Until V2 the same *function* under one name was an alternative a
 		// binding selected among; the function is gone, and two specs
@@ -2376,7 +2378,7 @@ describe("R2 · retake in the listing", () => {
 	}
 
 	test("Chat and Guide: unchanged — no retake, the row regenerate at both venues", async () => {
-		const chat = await listing("core:genre/chat")
+		const chat = await listing("core:genre/story")
 		expect(keysOf(chat.extra)).toEqual(["advance", "pick", "retry"])
 		expect(keysOf(chat.message)).toContain("retry")
 		const guide = await listing("core:genre/guide")
@@ -2401,7 +2403,7 @@ describe("R2 · retake in the listing", () => {
 	})
 
 	test("retake's \"don't ask again\" is core's annex field, the owner's to set", async () => {
-		for (const genreId of ["core:genre/chat", "core:genre/lair"]) {
+		for (const genreId of ["core:genre/story", "core:genre/lair"]) {
 			const v = await listing(genreId)
 			const widget = [...v.widget.primary, ...v.widget.overflow]
 			const field = widget.find((a) => a.specSlug === "core:annex" && a.key === "retake-quietly")

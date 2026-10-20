@@ -191,8 +191,19 @@ export async function authMiddleware(
 			return next(new Error("Authentication required"))
 		}
 
-		// Decrypt the PASETO token to get the payload
-		const payload = await tokens.decryptLocalToken({ token })
+		// Decrypt the PASETO token to get the payload. 🚧 A token this server
+		// cannot read — one minted before accounts were turned on, or by
+		// another install's key — is an ordinary signed-out visitor, said in
+		// one line, never a stack trace per reconnect (PLAN-dc-after-walk2
+		// Q3-7, the walk's N17: `PasetoDecryptionFailed` after the switch).
+		let payload: Record<string, unknown>
+		try {
+			payload = await tokens.decryptLocalToken({ token })
+		} catch {
+			console.log("A sign-in token this server cannot read — rejecting connection; the visitor signs in again")
+			socket.disconnect()
+			return next(new Error("Authentication required"))
+		}
 
 		if (!payload.id) {
 			console.log("Invalid token payload - rejecting connection")

@@ -1,406 +1,353 @@
 /**
- * The MOBILE layout editor's model (ruled 2026-09-10) — pure, and the whole of
- * what a narrow-screen edit may do to an arrangement.
+ * The PHONE layout editor's model (PLAN-session-panels-2026-10-14 §3 lane 4)
+ * — pure, and the whole of what a narrow-screen edit may do to a session's
+ * panels.
  *
- * Below the app's breakpoint a session draws no side-by-side widgets: every
- * render unit gets its own row, in the order `collapsedOrder` resolves (see
- * ./sideRail). The editor there edits exactly that — an ordered list per zone,
- * an order inside each tab group, and the per-group pin — because a free-form
- * 2D grid is not a thing a phone can draw or a thumb can drag.
+ * Below the breakpoint a session draws one panel under the next, so the
+ * editor is a list: one ROW per panel, its tabs listed inside, in the order
+ * Above · Middle (the primary panel) · Below · Left · Right. Every edit is one
+ * of ./arrangeOps — the desktop editor's ops — so a layout arranged on a phone
+ * is the same `PanelLayoutV1` a desktop opens, and commits down the same path.
  *
- * ## One arrangement, both editors
+ * Neighbours are counted within one COLUMN: the middle is one column (its
+ * strips above, the primary, its strips below), each side another. That is
+ * what **Move into panel above / below** reaches, and what a row's up / down
+ * crosses (a strip moved past the primary changes from above to below).
  *
- * There is no mobile layout blob. Every function here takes a captured
- * `ArrangedZone` and returns one, so a layout arranged on a phone is the same
- * `arrangedGrid` a desktop opens, travels through the same presets, and commits
- * through the same path. Two rules keep that honest:
+ * A side is two GROUPS (§10 R-C): **Docked** then **In the rail**. Its column
+ * reads docked rows first, rail rows after; moving the last docked row down
+ * puts it first in the rail, moving the first rail row up docks it last. An
+ * all-rail side is an empty Docked group above its rail rows (R-A).
  *
- *   1. A move is only ever accepted when it produces EXACTLY the order asked
- *      for and leaves the cells drawable — no unit overlapping another, none
- *      outside the zone's own grid. A move with no such expression returns the
- *      arrangement it was given, by reference.
- *   2. A move that changes nothing changes no bytes. Untouched items are
- *      returned by reference and untouched fields keep their key order, so a
- *      move and its inverse round-trip to the original JSON.
+ * The primary is a place (§10): **Make main** (`setPrimary`) on any other row
+ * puts that panel there, the old primary going to the end of Above. Nothing
+ * is locked (R-B); the one refusal left is `MIDDLE_EMPTY`.
  *
- * ## Anchors are order here, and only order
- *
- * A top/bottom anchor is what puts a group first or last in one column, so it
- * surfaces as a group's RANK (first / between / last) and moving across a rank
- * boundary writes it. The left/right edges of the same anchor are a desktop
- * alignment and are carried through untouched.
- *
- * ## What a cross-row move costs
- *
- * Two widgets arranged side by side are one row of the grid and two rows of the
- * phone. Reordering them against each other trades their columns and keeps the
- * row. Moving one of them past the row above or below cannot keep it, so that
- * widget takes a row of its own — which is what the phone was already drawing.
+ * Every function answers an `ArrangeOutcome`: a new layout, the SAME layout
+ * object when nothing changed, or the refusal to show.
  */
-import type { ArrangedItem, ArrangedZone, WidgetAnchor } from "@serene-pub/sdk"
-import { unitPinned, withPins } from "./arrangedGeometry"
-import { collapsedOrder } from "./sideRail"
-import { unitsOf, type RenderUnit } from "./tabGroups"
+import type { PanelLayoutV1, PanelV1 } from "@serene-pub/sdk"
+import {
+	addTab,
+	allPanels,
+	moveTab,
+	movePanel,
+	newPanel,
+	panelOfTab,
+	placedIds,
+	removeTab,
+	setHeight,
+	setPinned,
+	setPrimary,
+	setTabOrder,
+	splitOut,
+	stackOf,
+	UNKNOWN_PANEL,
+	UNKNOWN_TAB,
+	type ArrangeOutcome,
+	type StackPlace
+} from "./arrangeOps"
+import type { PanelPlace } from "./livePanels"
+import { mintInstanceId } from "./widgetInstances"
 
-/** Where a group sits in one column: 0 first, 1 between, 2 last. */
-export type OrderRank = 0 | 1 | 2
+export const NO_PANEL_ABOVE = "There's no panel above this one."
+export const NO_PANEL_BELOW = "There's no panel below this one."
 
-/** One row of the phone editor's list: a render unit and what it can be told. */
-export interface MobileRow {
-	/** The render unit's key — a group id, or a lone widget's id. */
+/** The five sections the phone editor lists, in order. */
+export const PHONE_SECTIONS: ReadonlyArray<{ place: PanelPlace; label: string }> = [
+	{ place: "above", label: "Above" },
+	{ place: "primary", label: "Middle" },
+	{ place: "below", label: "Below" },
+	{ place: "left", label: "Left" },
+	{ place: "right", label: "Right" }
+]
+
+/** A side's two groups, in the order the section lists them. */
+export type SideGroup = "docked" | "rail"
+export const SIDE_GROUPS: ReadonlyArray<{ group: SideGroup; label: string }> = [
+	{ group: "docked", label: "Docked" },
+	{ group: "rail", label: "In the rail" }
+]
+
+/** Where the Add picker lands a widget: into a panel as a tab, or a new panel at a stack's end. */
+export type AddTarget = { kind: "panel"; panelKey: string } | { kind: "stack"; place: StackPlace }
+
+/** One row of the phone editor: a panel and what it can be told. */
+export interface PhoneRow {
 	key: string
-	/** The widget ids in it, in tab order. One entry for a lone widget. */
-	members: string[]
-	/** Expanded by default, and it keeps its height (see ./sideRail rule (b)). */
-	pinned: boolean
-	rank: OrderRank
-	/** The cells the unit holds, for the caller that draws a size hint. */
-	box: { x: number; y: number; w: number; h: number }
+	place: PanelPlace
+	/** Widget instance ids, in tab order. */
+	tabs: string[]
+	title?: string
+	/** A side row's group; `null` on middle rows, which never go in the rail. */
+	group: SideGroup | null
+	/** Fit or Fill (a `{ share }` reads as Fill here); `null` on the primary. */
+	height: "fit" | "fill" | null
+	/** **Make main** applies: every row but the primary. */
+	canMakeMain: boolean
+	/** The row can move a step up / down in its column (a side's crosses its group boundary). */
+	canMoveUp: boolean
+	canMoveDown: boolean
+	/** The neighbouring panels in its column, for Move into panel above / below. */
+	aboveKey: string | null
+	belowKey: string | null
 }
 
-/** The rank a widget's anchor means in one column — `collapsedOrder`'s ranking. */
-function rankOf(a?: WidgetAnchor): OrderRank {
-	return a?.top ? 0 : a?.bottom ? 2 : 1
+export interface PhoneSection {
+	place: PanelPlace
+	label: string
+	rows: PhoneRow[]
+	/** A side's rows split Docked · In the rail (both listed, even empty); `null` elsewhere. */
+	groups: Array<{ group: SideGroup; label: string; rows: PhoneRow[] }> | null
+	/** Where this section's Add lands a widget. */
+	add: AddTarget
 }
 
-/**
- * The zone's render units in the order a narrow screen draws them.
- *
- * The order is `collapsedOrder`'s, read through the same `unitsOf` the live
- * view uses, so the list is the render rather than a second reading of it.
- */
-export function mobileRows(zone: ArrangedZone | null | undefined): MobileRow[] {
-	if (!zone?.items?.length) return []
-	const units = unitsOf(zone.items)
-	const byKey = new Map(units.map((u) => [u.key, u]))
-	return collapsedOrder(
-		units.map((u) => ({
-			key: u.key,
-			box: u.box,
-			anchor: u.members[0]?.anchor
-		}))
-	)
-		.map((k) => byKey.get(k))
-		.filter((u): u is RenderUnit => !!u)
-		.map((u) => ({
-			key: u.key,
-			members: u.members.map((m) => m.id),
-			pinned: unitPinned(u.members),
-			rank: rankOf(u.members[0]?.anchor),
-			box: u.box
-		}))
+const isRail = (panel: PanelV1) => panel.pinned === false
+
+/** A side's panels in the order its section reads: docked first, then the rail. */
+function sideColumn(layout: PanelLayoutV1, place: "left" | "right"): PanelV1[] {
+	const stack = stackOf(layout, place)
+	return [...stack.filter((p) => !isRail(p)), ...stack.filter(isRail)]
 }
 
-/** Rewrite the items a mapper changes, keeping the zone itself when none do. */
-function withItems(
-	zone: ArrangedZone,
-	map: (it: ArrangedItem) => ArrangedItem,
-	rows?: number
-): ArrangedZone {
-	const items = zone.items.map(map)
-	const nextRows = rows ?? zone.rows
-	if (nextRows === zone.rows && items.every((it, i) => it === zone.items[i]))
-		return zone
-	return { ...zone, rows: nextRows, items }
+/** A column's panels, top to bottom, with their places. */
+function columnOf(layout: PanelLayoutV1, place: PanelPlace): Array<{ panel: PanelV1; place: PanelPlace }> {
+	if (place === "left" || place === "right") return sideColumn(layout, place).map((panel) => ({ panel, place }))
+	return [
+		...stackOf(layout, "above").map((panel) => ({ panel, place: "above" as const })),
+		...(layout.middle?.primary ? [{ panel: layout.middle.primary, place: "primary" as const }] : []),
+		...stackOf(layout, "below").map((panel) => ({ panel, place: "below" as const }))
+	]
 }
 
-/**
- * The zone's ROWS: units that share cell rows, top to bottom.
- *
- * A row of the grid is one row of the column — two widgets side by side are one
- * band, not two — and it is the unit a re-stack moves, so a reorder never
- * silently un-pairs widgets it did not touch.
- */
-function bandsOf(units: RenderUnit[]): RenderUnit[][] {
-	const sorted = [...units].sort(
-		(a, b) => a.box.y - b.box.y || a.box.x - b.box.x
-	)
-	const bands: RenderUnit[][] = []
-	for (const u of sorted) {
-		const last = bands[bands.length - 1]
-		if (last?.some((v) => u.box.y < v.box.y + v.box.h)) last.push(u)
-		else bands.push([u])
+function rowOf(layout: PanelLayoutV1, panel: PanelV1, place: PanelPlace): PhoneRow {
+	const column = columnOf(layout, place)
+	const i = column.findIndex((c) => c.panel.key === panel.key)
+	const side = place === "left" || place === "right"
+	const primary = place === "primary"
+	// A middle strip moves past the primary; the primary itself never moves.
+	// A side row crosses its group boundary: a docked row can always go down
+	// (into the rail), a rail row always up (docked).
+	const rail = side && isRail(panel)
+	const canMoveUp = !primary && (side ? i > 0 || rail : place === "below" || i > 0)
+	const canMoveDown = !primary && (side ? i < column.length - 1 || !rail : place === "above" || i < column.length - 1)
+	return {
+		key: panel.key,
+		place,
+		tabs: [...panel.tabs],
+		...(panel.title ? { title: panel.title } : {}),
+		group: side ? (isRail(panel) ? "rail" : "docked") : null,
+		canMakeMain: !primary,
+		height: primary ? null : panel.height === "fit" ? "fit" : "fill",
+		canMoveUp,
+		canMoveDown,
+		aboveKey: i > 0 ? column[i - 1].panel.key : null,
+		belowKey: i >= 0 && i < column.length - 1 ? column[i + 1].panel.key : null
 	}
-	return bands
 }
 
-/**
- * Stack the zone's bands top to bottom in `order`, each keeping its own height,
- * its widgets' columns and their offsets inside it.
- *
- * Consecutive units that already shared a band stay in it, so re-stacking a
- * zone in its own order is a no-op down to the bytes — which is what makes an
- * ordering edit cost only the ordering. `split` names the unit a move is about:
- * it always takes a band of its own, since a widget cannot be ordered against a
- * widget it is drawn beside.
- *
- * The zone keeps its declared `rows` unless the new stack needs more.
- */
-export function restackZone(
-	zone: ArrangedZone,
-	order?: string[],
-	split?: string
-): ArrangedZone {
-	const units = unitsOf(zone.items)
-	const byKey = new Map(units.map((u) => [u.key, u]))
-	const bandIndex = new Map<string, number>()
-	bandsOf(units).forEach((b, i) => b.forEach((u) => bandIndex.set(u.key, i)))
-
-	const keys = order ?? mobileRows(zone).map((r) => r.key)
-	const bands: RenderUnit[][] = []
-	// -2 marks "nothing may join this": the band a split unit occupies alone.
-	let prev = -1
-	for (const k of keys) {
-		const u = byKey.get(k)
-		if (!u) continue
-		const band = bandIndex.get(k) ?? -1
-		const alone = k === split
-		if (!alone && bands.length && band === prev)
-			bands[bands.length - 1].push(u)
-		else bands.push([u])
-		prev = alone ? -2 : band
-	}
-
-	const dy = new Map<string, number>()
-	let top = 0
-	for (const b of bands) {
-		const bandTop = Math.min(...b.map((u) => u.box.y))
-		const bandEnd = Math.max(...b.map((u) => u.box.y + u.box.h))
-		for (const u of b) {
-			const d = top + (u.box.y - bandTop) - u.box.y
-			for (const m of u.members) dy.set(m.id, d)
+/** The phone editor's list: five sections, one row per panel. */
+export function phoneSections(layout: PanelLayoutV1): PhoneSection[] {
+	return PHONE_SECTIONS.map(({ place, label }) => {
+		const side = place === "left" || place === "right"
+		const panels =
+			place === "primary"
+				? layout.middle?.primary
+					? [layout.middle.primary]
+					: []
+				: side
+					? sideColumn(layout, place)
+					: stackOf(layout, place)
+		const rows = panels.map((panel) => rowOf(layout, panel, place))
+		return {
+			place,
+			label,
+			rows,
+			groups: side
+				? SIDE_GROUPS.map(({ group, label }) => ({ group, label, rows: rows.filter((r) => r.group === group) }))
+				: null,
+			add:
+				place === "primary"
+					? { kind: "panel", panelKey: layout.middle?.primary?.key ?? "" }
+					: { kind: "stack", place }
 		}
-		top += bandEnd - bandTop
-	}
-
-	return withItems(
-		zone,
-		(it) => {
-			const d = dy.get(it.id)
-			return d ? { ...it, y: it.y + d } : it
-		},
-		Math.max(top, zone.rows)
-	)
-}
-
-/**
- * Trade two units' columns inside the row they share.
- *
- * Their column spans exchange places within the span the two of them already
- * covered, so nothing else in the row moves and neither can land on it. Null
- * when their columns interleave, which no exchange of two blocks can express.
- */
-function swapColumns(
-	zone: ArrangedZone,
-	u: MobileRow,
-	v: MobileRow
-): ArrangedZone | null {
-	const a = u.box
-	const b = v.box
-	if (!(a.x + a.w <= b.x || b.x + b.w <= a.x)) return null
-	const [lo, hi] = a.x < b.x ? [u, v] : [v, u]
-	const end = hi.box.x + hi.box.w
-	const shift = new Map<string, number>()
-	for (const id of lo.members) shift.set(id, end - lo.box.w - lo.box.x)
-	for (const id of hi.members) shift.set(id, lo.box.x - hi.box.x)
-	return withItems(zone, (it) => {
-		const d = shift.get(it.id)
-		return d ? { ...it, x: it.x + d } : it
 	})
 }
 
-/**
- * The anchor a widget wears at `rank`, written in one canonical key order so
- * an anchor set and cleared again is the anchor that was there. An anchor with
- * nothing left in it is absent, never `{}`.
- */
-function anchorAt(
-	a: WidgetAnchor | undefined,
-	rank: OrderRank
-): WidgetAnchor | undefined {
-	const next: WidgetAnchor = {}
-	if (rank === 0) next.top = true
-	if (a?.right) next.right = true
-	if (rank === 2) next.bottom = true
-	if (a?.left) next.left = true
-	return Object.keys(next).length ? next : undefined
+/** Every row, in the list's order. */
+export function phoneRows(layout: PanelLayoutV1): PhoneRow[] {
+	return phoneSections(layout).flatMap((s) => s.rows)
 }
 
-/** Put a unit's widgets in `rank`, keeping their left/right edges. */
-function withRank(
-	zone: ArrangedZone,
-	ids: Iterable<string>,
-	rank: OrderRank
-): ArrangedZone {
-	const set = new Set(ids)
-	return withItems(zone, (it) => {
-		if (!set.has(it.id)) return it
-		const next = anchorAt(it.anchor, rank)
-		if (JSON.stringify(next ?? null) === JSON.stringify(it.anchor ?? null))
-			return it
-		const { anchor: _drop, ...rest } = it
-		return next ? { ...rest, anchor: next } : rest
-	})
-}
-
-function overlapCount(zone: ArrangedZone): number {
-	const boxes = unitsOf(zone.items).map((u) => u.box)
-	let n = 0
-	for (let i = 0; i < boxes.length; i++)
-		for (let j = i + 1; j < boxes.length; j++) {
-			const a = boxes[i]
-			const b = boxes[j]
-			if (
-				a.x < b.x + b.w &&
-				a.x + a.w > b.x &&
-				a.y < b.y + b.h &&
-				a.y + a.h > b.y
-			)
-				n++
-		}
-	return n
-}
-
-function withinGrid(zone: ArrangedZone): boolean {
-	return zone.items.every(
-		(it) =>
-			it.x >= 0 &&
-			it.y >= 0 &&
-			it.x + it.w <= zone.cols &&
-			it.y + it.h <= zone.rows
-	)
-}
-
-/** Is this candidate drawable — no worse than the arrangement it came from? */
-function drawable(next: ArrangedZone, from: ArrangedZone): boolean {
-	return (
-		overlapCount(next) <= overlapCount(from) &&
-		(withinGrid(next) || !withinGrid(from))
-	)
-}
-
-function sameOrder(a: string[], b: string[]): boolean {
-	return a.length === b.length && a.every((k, i) => k === b[i])
+function placeOf(layout: PanelLayoutV1, key: string): PanelPlace | null {
+	return allPanels(layout).find(({ panel }) => panel.key === key)?.place ?? null
 }
 
 /**
- * Move one group a step up (`-1`) or down (`1`) in the zone's phone order.
- *
- * The first expression that lands the asked-for order and stays drawable wins:
- * the rank alone where the neighbour holds a different one, a column trade
- * where the two share a row, and otherwise a re-stack that gives the moved
- * group a row of its own. Nothing else in the zone moves that does not have to.
+ * Put a side panel at `index` among its `group`'s rows, in that group. The
+ * stack keeps every other panel where it was; only this one moves.
  */
-export function moveRow(zone: ArrangedZone, key: string, delta: number): ArrangedZone {
-	if (!delta) return zone
-	const rows = mobileRows(zone)
-	const i = rows.findIndex((r) => r.key === key)
-	if (i < 0) return zone
-	const j = i + delta
-	if (j < 0 || j >= rows.length) return zone
-
-	const want = rows.map((r) => r.key)
-	;[want[i], want[j]] = [want[j], want[i]]
-	const moved = rows[i]
-	const past = rows[j]
-
-	const base =
-		moved.rank === past.rank
-			? zone
-			: withRank(zone, moved.members, past.rank)
-	const shareRow =
-		moved.box.y < past.box.y + past.box.h &&
-		past.box.y < moved.box.y + moved.box.h
-
-	for (const cand of [
-		base,
-		shareRow ? swapColumns(base, moved, past) : null,
-		restackZone(base, want, moved.key)
-	]) {
-		if (!cand || cand === zone) continue
-		if (!drawable(cand, zone)) continue
-		if (
-			!sameOrder(
-				mobileRows(cand).map((r) => r.key),
-				want
-			)
-		)
-			continue
-		return cand
-	}
-	return zone
-}
-
-/**
- * Drop a group at `index` in the zone's phone order — the drag handle's answer.
- *
- * Spent as single steps, so a drag can express nothing a pair of move buttons
- * cannot, and a step that finds no drawable expression stops the drag there.
- */
-export function moveRowTo(
-	zone: ArrangedZone,
+function placeInGroup(
+	layout: PanelLayoutV1,
 	key: string,
+	place: "left" | "right",
+	group: SideGroup,
 	index: number
-): ArrangedZone {
-	let cur = zone
-	for (;;) {
-		const rows = mobileRows(cur)
-		const at = rows.findIndex((r) => r.key === key)
-		if (at < 0 || !rows.length) return cur
-		const want = Math.min(Math.max(0, Math.round(index)), rows.length - 1)
-		if (at === want) return cur
-		const next = moveRow(cur, key, want > at ? 1 : -1)
-		if (next === cur) return cur
-		cur = next
-	}
-}
-
-/** Pin or unpin one group — the arrangement's own field (see `withPins`). */
-export function setRowPinned(
-	zone: ArrangedZone,
-	key: string,
-	pinned: boolean
-): ArrangedZone {
-	const row = mobileRows(zone).find((r) => r.key === key)
-	if (!row) return zone
-	return withPins(zone, row.members, pinned)
+): ArrangeOutcome {
+	const stack = stackOf(layout, place)
+	const without = stack.filter((p) => p.key !== key)
+	const members = without.filter((p) => isRail(p) === (group === "rail"))
+	const at =
+		index < members.length
+			? without.indexOf(members[Math.max(0, index)])
+			: members.length
+				? without.indexOf(members[members.length - 1]) + 1
+				: group === "docked"
+					? 0
+					: without.length
+	const moved = movePanel(layout, key, { place, index: at })
+	if (!moved.layout) return moved
+	return setPinned(moved.layout, key, group === "docked")
 }
 
 /**
- * Move one widget a step within its tab group.
- *
- * The two widgets trade cells outright, so the group's footprint, and every
- * other unit's, is exactly what it was — a group's members share one footprint
- * in the live view, and their cells decide only which tab comes first.
+ * Move a row a step up (`-1`) or down (`1`) in its column. A strip at the
+ * primary's edge crosses it: the last panel above moves to the first below,
+ * and back. A side row at its group's edge crosses the boundary: the last
+ * docked row goes first in the rail, the first rail row docks last. The
+ * primary does not move (Make main on another row moves it).
  */
-export function moveMember(
-	zone: ArrangedZone,
-	key: string,
-	id: string,
-	delta: number
-): ArrangedZone {
-	if (!delta) return zone
-	const row = mobileRows(zone).find((r) => r.key === key)
-	if (!row || row.members.length < 2) return zone
-	const i = row.members.indexOf(id)
-	if (i < 0) return zone
-	const j = i + delta
-	if (j < 0 || j >= row.members.length) return zone
+export function moveRow(layout: PanelLayoutV1, key: string, delta: number): ArrangeOutcome {
+	const place = placeOf(layout, key)
+	if (!place) return { refused: UNKNOWN_PANEL }
+	if (!delta || place === "primary") return { layout }
+	if (place === "left" || place === "right") {
+		const column = sideColumn(layout, place)
+		const i = column.findIndex((p) => p.key === key)
+		const j = i + Math.sign(delta)
+		const rail = isRail(column[i])
+		// A docked row always has somewhere below (the rail, even empty); a rail row above.
+		if ((j < 0 && !rail) || (j >= column.length && rail)) return { layout }
+		const docked = column.filter((p) => !isRail(p)).length
+		// Group-relative index the row lands at; crossing lands at the boundary.
+		if (j < docked || (rail && j < 0)) return placeInGroup(layout, key, place, "docked", rail ? docked : j)
+		return placeInGroup(layout, key, place, "rail", rail ? j - docked : 0)
+	}
+	const stack = stackOf(layout, place)
+	const i = stack.findIndex((p) => p.key === key)
+	const j = i + Math.sign(delta)
+	if (j >= 0 && j < stack.length) return movePanel(layout, key, { place, index: j })
+	if (place === "above" && delta > 0) return movePanel(layout, key, { place: "below", index: 0 })
+	if (place === "below" && delta < 0)
+		return movePanel(layout, key, { place: "above", index: stackOf(layout, "above").length })
+	return { layout }
+}
 
-	const want = [...row.members]
-	;[want[i], want[j]] = [want[j], want[i]]
-	const a = zone.items.find((it) => it.id === row.members[i])
-	const b = zone.items.find((it) => it.id === row.members[j])
-	if (!a || !b) return zone
-	const cells = new Map<string, ArrangedItem>([
-		[a.id, b],
-		[b.id, a]
-	])
-	const next = withItems(zone, (it) => {
-		const c = cells.get(it.id)
-		return c ? { ...it, x: c.x, y: c.y, w: c.w, h: c.h } : it
+/** Drag a row to `index` in its column's rows, spent as single steps. */
+export function moveRowTo(layout: PanelLayoutV1, key: string, index: number): ArrangeOutcome {
+	let cur = layout
+	for (let guard = 0; guard < 64; guard++) {
+		const place = placeOf(cur, key)
+		if (!place) return { refused: UNKNOWN_PANEL }
+		const column = columnOf(cur, place)
+		const at = column.findIndex((c) => c.panel.key === key)
+		const want = Math.min(Math.max(0, Math.round(index)), column.length - 1)
+		if (at === want) break
+		const out = moveRow(cur, key, want > at ? 1 : -1)
+		if (!out.layout || out.layout === cur) break
+		cur = out.layout
+	}
+	return { layout: cur }
+}
+
+/** Move one tab a step earlier (`-1`) or later (`1`) among its panel's tabs. */
+export function moveTabWithin(layout: PanelLayoutV1, tabId: string, delta: number): ArrangeOutcome {
+	const holder = panelOfTab(layout, tabId)
+	if (!holder) return { refused: UNKNOWN_TAB }
+	const tabs = [...holder.panel.tabs]
+	const i = tabs.indexOf(tabId)
+	const j = i + Math.sign(delta)
+	if (!delta || j < 0 || j >= tabs.length) return { layout }
+	;[tabs[i], tabs[j]] = [tabs[j], tabs[i]]
+	return setTabOrder(layout, holder.panel.key, tabs)
+}
+
+/**
+ * **Move into panel above / below**: the tab joins the neighbouring panel in
+ * its column — at the end of the one above, the start of the one below, so
+ * the reading order holds. A one-tab panel moved so merges into it.
+ */
+export function moveTabInto(layout: PanelLayoutV1, tabId: string, dir: -1 | 1): ArrangeOutcome {
+	const holder = panelOfTab(layout, tabId)
+	if (!holder) return { refused: UNKNOWN_TAB }
+	const row = rowOf(layout, holder.panel, holder.place)
+	const target = dir < 0 ? row.aboveKey : row.belowKey
+	if (!target) return { refused: dir < 0 ? NO_PANEL_ABOVE : NO_PANEL_BELOW }
+	return moveTab(layout, tabId, dir < 0 ? { panelKey: target } : { panelKey: target, index: 0 })
+}
+
+/** Whether a tab can be split out: only out of a panel holding two or more. */
+export function canSplitOut(layout: PanelLayoutV1, tabId: string): boolean {
+	return (panelOfTab(layout, tabId)?.panel.tabs.length ?? 0) > 1
+}
+
+/**
+ * **Split out**: the tab takes a panel of its own, right after the one it
+ * leaves (a tab of the primary: the first panel below). A tab alone in its
+ * panel already is one; nothing changes.
+ */
+export function splitTab(layout: PanelLayoutV1, tabId: string): ArrangeOutcome {
+	const holder = panelOfTab(layout, tabId)
+	if (!holder) return { refused: UNKNOWN_TAB }
+	if (holder.panel.tabs.length < 2) return { layout }
+	if (holder.place === "primary") return splitOut(layout, tabId, { place: "below", index: 0 })
+	const stack = stackOf(layout, holder.place)
+	const i = stack.findIndex((p) => p.key === holder.panel.key)
+	return splitOut(layout, tabId, { place: holder.place, index: i + 1 })
+}
+
+/**
+ * The instance id an added widget gets (./widgetInstances `mintInstanceId`):
+ * the bare id when nothing holds it, else `W#n`, skipping what is placed or
+ * stored. `fresh` (Duplicate) never reuses an id holding stored values.
+ */
+export function mintFor(
+	layout: PanelLayoutV1,
+	widgetId: string,
+	stored: Iterable<string> = [],
+	opts: { fresh?: boolean } = {}
+): string {
+	return mintInstanceId(widgetId, placedIds(layout), stored, opts)
+}
+
+/** Land an instance from the Add picker: a tab of a panel, or a new panel at a stack's end. */
+export function addAt(layout: PanelLayoutV1, instanceId: string, target: AddTarget): ArrangeOutcome {
+	if (target.kind === "panel") return addTab(layout, instanceId, { panelKey: target.panelKey })
+	return newPanel(layout, instanceId, { place: target.place, index: stackOf(layout, target.place).length })
+}
+
+/** **Duplicate**: the copy (already minted) lands as the tab right after its source. */
+export function duplicateTab(layout: PanelLayoutV1, sourceId: string, copyId: string): ArrangeOutcome {
+	const holder = panelOfTab(layout, sourceId)
+	if (!holder) return { refused: UNKNOWN_TAB }
+	return addTab(layout, copyId, {
+		panelKey: holder.panel.key,
+		index: holder.panel.tabs.indexOf(sourceId) + 1
 	})
-	if (!drawable(next, zone)) return zone
-	const after = mobileRows(next).find((r) => r.key === key)
-	return after && sameOrder(after.members, want) ? next : zone
+}
+
+/** ×: remove a tab. Every tab has one; the primary's last, with nothing to promote, is refused (`MIDDLE_EMPTY`). */
+export function removeTabFrom(layout: PanelLayoutV1, tabId: string): ArrangeOutcome {
+	return removeTab(layout, tabId)
+}
+
+/** **Make main**: this row's panel becomes the primary; the old primary goes to the end of Above. */
+export function makeMain(layout: PanelLayoutV1, key: string): ArrangeOutcome {
+	return setPrimary(layout, key)
+}
+
+/** A row's height: Fit takes its content's height, Fill shares what is left. */
+export function setRowHeight(layout: PanelLayoutV1, key: string, height: "fit" | "fill"): ArrangeOutcome {
+	return setHeight(layout, key, height === "fit" ? "fit" : undefined)
 }

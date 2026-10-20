@@ -38,7 +38,9 @@ afterAll(async () => {
 	installStartedFromPush(null)
 })
 
-const ADVENTURE = "core:genre/adventure"
+// The genre these layouts are made for — the Lair; Story stands in as another
+// genre (Adventure and the roleplay Chat until 2026-10-19).
+const LAIR = "core:genre/lair"
 const EVENT = "sessions:panelLayout:startedFromUpdated"
 const CHANGED_ELSEWHERE =
 	"That layout has changed since this session copied it. Start again from it, or save over those changes."
@@ -80,14 +82,14 @@ async function user(label: string) {
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	return createTestUser(testDb, `sfu-${label}-${n++}`)
 }
-async function sessionOf(userId: number, genreId = ADVENTURE) {
+async function sessionOf(userId: number, genreId = LAIR) {
 	const [session] = await testDb
 		.insert(schema.sessions)
 		.values({ userId, isGroup: true, genreId })
 		.returning()
 	return session
 }
-async function seed(genreId = ADVENTURE) {
+async function seed(genreId = LAIR) {
 	const { syncLayoutPresets } = await import("$lib/server/db/layoutPresets")
 	await syncLayoutPresets([genreId])
 	const [row] = await testDb
@@ -98,7 +100,7 @@ async function seed(genreId = ADVENTURE) {
 }
 async function namedLayout(userId: number, name: string, layout: Record<string, unknown>) {
 	const { saveUserLayoutPreset } = await import("$lib/server/db/layoutPresets")
-	return saveUserLayoutPreset({ genreId: ADVENTURE, userId, name, layout })
+	return saveUserLayoutPreset({ genreId: LAIR, userId, name, layout })
 }
 const presetRow = async (id: number) => {
 	const [row] = await testDb
@@ -398,7 +400,7 @@ describe("Updated is pushed to the sessions that started from a layout", () => {
 			const manifest = (widget: string) => ({
 				layouts: [
 					{
-						genreId: ADVENTURE,
+						genreId: LAIR,
 						slug: "cinematic",
 						name: "Cinematic",
 						preset: {
@@ -427,7 +429,7 @@ describe("Updated is pushed to the sessions that started from a layout", () => {
 				.where(
 					eq(
 						schema.sessionLayoutPresets.seedKey,
-						`layout:${ADVENTURE}:${pluginId}/cinematic`
+						`layout:${LAIR}:${pluginId}/cinematic`
 					)
 				)
 			const person = await user("player")
@@ -494,21 +496,21 @@ describe("what other people see of a shared layout follows it live", () => {
 		)
 	}
 
-	/** Wren makes a layout; Ash has an Adventure session and a Chat one open. */
+	/** Wren makes a layout; Ash has a Lair session and a Story one open. */
 	async function twoPeople() {
 		await seed()
 		const wren = await user("wren")
 		const ash = await user("ash")
 		const w = await sessionOf(wren.id)
 		const a = await sessionOf(ash.id)
-		const chat = await sessionOf(ash.id, "core:genre/chat")
+		const story = await sessionOf(ash.id, "core:genre/story")
 		await get(wren.id, w.id)
 		await get(ash.id, a.id)
 		const layout = await namedLayout(wren.id, "Harbour watch", TWO_COLUMNS)
 		const { io, sent } = fakeIo([
 			{ id: "wren-w", userId: wren.id, interest: [`${EVENT}#${w.id}`] },
 			{ id: "ash-a", userId: ash.id, interest: [`${EVENT}#${a.id}`] },
-			{ id: "ash-chat", userId: ash.id, interest: [`${EVENT}#${chat.id}`] }
+			{ id: "ash-story", userId: ash.id, interest: [`${EVENT}#${story.id}`] }
 		])
 		const pushes = () => {
 			const out = sent.filter((x) => x.event === EVENT)

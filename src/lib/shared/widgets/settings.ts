@@ -59,9 +59,6 @@ export const CORE_SETTING_KEYS = [
 	BACKING_MODE_KEY
 ] as const
 
-/** `FieldDecl.group` that puts a declared field behind the advanced disclosure. */
-export const BEHAVIOUR_GROUP = "behaviour"
-
 /** The half of a widget declaration this module reads. */
 export interface WidgetSettingsDecl {
 	/**
@@ -81,14 +78,25 @@ export interface SettingsField {
 	decl: FieldDecl
 }
 
-/** How a widget's fields are exposed: basics first, behaviour behind a fold. */
+/** How a widget's fields are exposed: core's first, then its own, then one headed section per group. */
 export interface SettingsSections {
-	/** Core-owned, shown by default. */
+	/** Core-owned, shown first. */
 	basic: SettingsField[]
-	/** The widget's own fields, shown by default. */
+	/** The widget's own fields that name no `group`, shown next under no heading. */
 	declared: SettingsField[]
-	/** The widget's `behaviour`-group fields, shown behind the disclosure. */
-	behaviour: SettingsField[]
+	/**
+	 * The widget's grouped fields: one section per distinct `FieldDecl.group`,
+	 * in order of first appearance, each headed by the group string verbatim
+	 * (_Channel_, _Reading_, _Turns_…), its fields in declaration order.
+	 */
+	groups: SettingsGroup[]
+}
+
+/** One headed section of a widget's settings. */
+export interface SettingsGroup {
+	/** The declared `group`, verbatim: the section's heading. */
+	heading: string
+	fields: SettingsField[]
 }
 
 /** Why a stored value did not survive a prune. */
@@ -183,19 +191,28 @@ export function widgetSettingsSchema(decl: WidgetSettingsDecl): SettingsSchema {
 	return schema
 }
 
-/** Split a widget's schema into the sections the settings panel draws. */
+/**
+ * Split a widget's schema into the sections the settings panel draws: core's
+ * fields, the widget's ungrouped ones, then one section per declared `group`
+ * (D5 of `PLAN-session-panels-2026-10-14`; nothing folds away).
+ */
 export function settingsSections(decl: WidgetSettingsDecl): SettingsSections {
 	const schema = widgetSettingsSchema(decl)
-	const out: SettingsSections = { basic: [], declared: [], behaviour: [] }
+	const out: SettingsSections = { basic: [], declared: [], groups: [] }
 	for (const key of CORE_SETTING_KEYS) {
 		const field = schema[key]
 		if (field) out.basic.push({ key, decl: field })
 	}
 	for (const [key, field] of Object.entries(schema)) {
 		if ((CORE_SETTING_KEYS as readonly string[]).includes(key)) continue
-		if (field.group === BEHAVIOUR_GROUP)
-			out.behaviour.push({ key, decl: field })
-		else out.declared.push({ key, decl: field })
+		const heading = field.group?.trim()
+		if (!heading) {
+			out.declared.push({ key, decl: field })
+			continue
+		}
+		let g = out.groups.find((x) => x.heading === heading)
+		if (!g) out.groups.push((g = { heading, fields: [] }))
+		g.fields.push({ key, decl: field })
 	}
 	return out
 }

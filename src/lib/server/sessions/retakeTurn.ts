@@ -43,7 +43,7 @@ import {
 import type { AnyPgColumn } from "drizzle-orm/pg-core"
 import * as schema from "$lib/server/db/schema"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
-import { lastTurnOf, type TurnYieldRow } from "$lib/server/sessions/turnYield"
+import { lastTurnOf, type TurnYield, type TurnYieldRow } from "$lib/server/sessions/turnYield"
 
 export interface RetakeOutcome {
 	ok: boolean
@@ -54,6 +54,10 @@ export interface RetakeOutcome {
 	/** The new turn's run, when it started. */
 	runId?: string
 	error?: string
+	/** 🚧 What the retake does to the timeline (PLAN-rulesets §28); on a preview, the confirm's sentence. */
+	revision?: import("$lib/server/sessions/revision").RevisionNotice
+	/** 🚧 On revision `branch`: the new session the turn was taken again in. */
+	branchedTo?: number
 }
 
 export async function retakeTurn(
@@ -73,17 +77,95 @@ export async function retakeTurn(
 	const channel = opts.channel ?? "main"
 	const last = await lastTurnOf(db, opts.sessionId, channel)
 	if (!last.ok) return { ok: false, error: last.refusal }
-	const { rows, entry, runs } = last.yield
-	if (opts.preview) return { ok: true, preview: true, rows }
+	const { rows, entry } = last.yield
+	const { revisionNotice, sessionOnRevision, branchForRevision } = await import(
+		"$lib/server/sessions/revision"
+	)
+	const revision = revisionNotice(await sessionOnRevision(db, opts.sessionId), 1)
+	if (opts.preview) return { ok: true, preview: true, rows, revision }
 	if (!rows.length)
 		return {
 			ok: false,
 			error: "The last turn left nothing to regenerate."
 		}
 
+	/**
+	 * 🚧 On revision `branch` (PLAN-rulesets §28): nothing is deleted here —
+	 * the session is forked before the turn and the turn is taken again in
+	 * the branch, the old one kept where it was.
+	 */
+	let firedIn = opts.sessionId
+	if (revision.mode === "branch") {
+		const first = Math.min(...rows.map((r) => r.messageId))
+		const branched = await branchForRevision(db, {
+			sessionId: opts.sessionId,
+			userId: opts.userId,
+			firstRevisedId: first,
+			// 🚧 The revised turn's writes stay out of the branch (B8).
+			runs: last.yield.runs,
+			...(opts.io ? { io: opts.io } : {})
+		})
+		if (!branched.ok) return { ok: false, rows, revision, error: branched.error }
+		firedIn = branched.sessionId
+	} else {
+		// 1–2. The yield goes, in one transaction, and says so.
+		const gone = await deleteTurnYield(db, {
+			sessionId: opts.sessionId,
+			userId: opts.userId,
+			turn: last.yield,
+			...(opts.io ? { io: opts.io } : {})
+		})
+		if (!gone.ok) return { ok: false, error: gone.error }
+		await opts.onDeleted?.()
+	}
+	const branchedTo = firedIn !== opts.sessionId ? { branchedTo: firedIn } : {}
+
+	// 3. The same turn again.
+	const { fireTurnEntry } = await import("$lib/server/sessions/fireTurn")
+	const fired = await fireTurnEntry(db, {
+		sessionId: firedIn,
+		userId: opts.userId,
+		entry: {
+			ref: entry.ref as import("@serene-pub/sdk").ParticipantRef | null,
+			via: entry.via,
+			...(channel !== "main" ? { channel } : {})
+		},
+		// A press: the person's cause.
+		cause: { kind: "user", userId: opts.userId },
+		...(opts.io ? { io: opts.io } : {}),
+		...(opts.socket ? { socket: opts.socket } : {}),
+		...(opts.emitToUser ? { emitToUser: opts.emitToUser } : {})
+	})
+	if (!fired.fired)
+		return {
+			ok: false,
+			rows,
+			revision,
+			...branchedTo,
+			error:
+				revision.mode === "branch"
+					? `The branch was made, but the new turn did not start: ${fired.reason ?? "the turn produced no reply"}.`
+					: `The last turn was deleted, but the new one did not start: ${fired.reason ?? "the turn produced no reply"}.`
+		}
+	return { ok: true, rows, revision, ...branchedTo, ...(fired.runId ? { runId: fired.runId } : {}) }
+}
+
+/**
+ * Steps 1 and 2 of a retake, on their own: a turn's **yield** deleted in ONE
+ * transaction (what outlives it re-anchored first, its clock moves taken
+ * back, the anchored state and proposals cascading off the rows), then one
+ * `message-deleted` per row with an `edit` cause — so auto-advance never
+ * fires off it. 🚧 Also the delete of a whole latest story turn in a genre
+ * that keeps its turns (`turnDeleteRefusal`, owner rulings 2026-10-15): the
+ * same rows go, and nothing is fired again.
+ */
+export async function deleteTurnYield(
+	db: Db,
+	opts: { sessionId: number; userId: number; turn: TurnYield; io?: SessionIo }
+): Promise<{ ok: true; deleted: number[] } | { ok: false; error: string }> {
 	// 1. The yield, in one transaction: what outlives it moved off it first,
 	// then both message worlds, and the cascade.
-	const ids = rows.map((r) => r.messageId)
+	const ids = opts.turn.rows.map((r) => r.messageId)
 	const { deleteLegacyWhere } = await import("$lib/server/messages/store")
 	const { revertClockMovesAnchoredTo, StoryClockRefusal } = await import(
 		"$lib/server/state/clockMoves"
@@ -96,13 +178,34 @@ export async function retakeTurn(
 			await keepLaterState(t, {
 				sessionId: opts.sessionId,
 				yieldIds: ids,
-				runs
+				runs: opts.turn.runs
+			})
+			// 🚧 And what the turn wrote anchored elsewhere — a seated card's
+			// change filed under its player's line (the 100-turn walk, B8).
+			await dropTurnWritesElsewhere(t, {
+				sessionId: opts.sessionId,
+				runs: opts.turn.runs,
+				yieldIds: ids
 			})
 			// 🚧 The turn's own clock moves go with it, tick included — the
 			// turn is taken again and ticks again (live scenes §15 G5). Taken
 			// back by their steps before the cascade drops their rows; what
 			// `keepLaterState` re-anchored above stands.
 			clockMoved = (await revertClockMovesAnchoredTo(t, ids)).sessionIds.length > 0
+			// 🚧 The session's own notes' entries the turn wrote go with it
+			// (PLAN-rulesets §28 `overwrite`): their anchor is a plain int,
+			// so the message cascade cannot take them.
+			const { retractPhantomEntriesAnchoredTo } = await import(
+				"$lib/server/lorebooks/phantom"
+			)
+			await retractPhantomEntriesAnchoredTo(t, opts.sessionId, ids)
+			// 🚧 The annex goes back to where it stood before the turn
+			// (`annexRevisionPoints.ts`): what the turn wrote there — a
+			// genre's last telling, its leads — goes with it.
+			const { reviseAnnexInPlace } = await import(
+				"$lib/server/sessions/annexRevisionPoints"
+			)
+			await reviseAnnexInPlace(t, opts.sessionId, Math.min(...ids))
 			return deleteLegacyWhere(t, inArray(schema.sessionMessages.id, ids))
 		})
 	} catch (e) {
@@ -112,6 +215,17 @@ export async function retakeTurn(
 	if (clockMoved && opts.io) {
 		const { broadcastSessionRow } = await import("$lib/server/sessions/rowPush")
 		broadcastSessionRow(opts.io, opts.sessionId)
+	}
+	// 🚧 The turn's writes went with it (PLAN-dc-after-walk2 Q1-3, the walk's
+	// N8): every sheet re-reads now — a Delete left the live sheet holding
+	// the undone change until a reload.
+	if (opts.io) {
+		try {
+			const { broadcastToSessionUsers } = await import("$lib/server/sockets/utils/broadcastHelpers")
+			await broadcastToSessionUsers(opts.io as any, opts.sessionId, "state:changed", { sessionId: opts.sessionId })
+		} catch (e) {
+			console.warn("[deleteTurnYield] telling the session its state moved failed:", e)
+		}
 	}
 
 	// 2. One `message-deleted` per row, with what it held — the event every
@@ -145,31 +259,7 @@ export async function retakeTurn(
 		})
 		await clearReplyFailed(opts.sessionId, row.id)
 	}
-	await opts.onDeleted?.()
-
-	// 3. The same turn again.
-	const { fireTurnEntry } = await import("$lib/server/sessions/fireTurn")
-	const fired = await fireTurnEntry(db, {
-		sessionId: opts.sessionId,
-		userId: opts.userId,
-		entry: {
-			ref: entry.ref as import("@serene-pub/sdk").ParticipantRef | null,
-			via: entry.via,
-			...(channel !== "main" ? { channel } : {})
-		},
-		// A press: the person's cause.
-		cause: { kind: "user", userId: opts.userId },
-		...(opts.io ? { io: opts.io } : {}),
-		...(opts.socket ? { socket: opts.socket } : {}),
-		...(opts.emitToUser ? { emitToUser: opts.emitToUser } : {})
-	})
-	if (!fired.fired)
-		return {
-			ok: false,
-			rows,
-			error: `The last turn was deleted, but the new one did not start: ${fired.reason ?? "the turn produced no reply"}.`
-		}
-	return { ok: true, rows, ...(fired.runId ? { runId: fired.runId } : {}) }
+	return { ok: true, deleted: deleted.map((r) => r.id) }
 }
 
 /**
@@ -324,4 +414,75 @@ async function keepLaterState(
 				.set({ messageId: to })
 				.where(inArray(schema.stateProposals.id, p))
 	}
+}
+
+/**
+ * 🚧 What the turn's own runs wrote **outside** its yield goes with it
+ * (2026-10-18, the 100-turn walk B8): a seated card's changes keep that
+ * member's own open anchor — the declaration line the player sent, which is
+ * no row of the turn's — so "Wren Ashdown Health 12 → 10" outlived the
+ * deleted (or branched-away) turn, and the sheet never went back. Every
+ * state row of this session a turn's run wrote — its values, its stat
+ * configurations, its proposals — is removed wherever it is anchored.
+ *
+ * `landedBefore` (the in-place delete and retake): only what landed before
+ * the run ended is the run's, `keepLaterState`'s rule — a proposal the
+ * person accepted afterwards carries the run's name and stays. Off for a
+ * branch made to take the turn again: its copied rows were all stamped at
+ * the copy, and nothing of the revised turn belongs in it.
+ */
+export async function dropTurnWritesElsewhere(
+	db: Db,
+	opts: {
+		sessionId: number
+		runs: Array<{ runId: number; runUuid: string }>
+		/** The yield's rows: their own anchored rows cascade with them. */
+		yieldIds?: number[]
+		landedBefore?: boolean
+	}
+): Promise<void> {
+	if (!opts.runs.length) return
+	const landed = opts.landedBefore !== false
+	/** Written by one of the turn's runs (and, in place, before it ended). */
+	const byTheRuns = (by: AnyPgColumn, at: AnyPgColumn | SQL): SQL =>
+		or(
+			...opts.runs.map(
+				(r) =>
+					landed
+						? and(
+								eq(by, `run:${r.runUuid}`),
+								sql`${at} <= (SELECT ${schema.pipelineRuns.createdAt} FROM ${schema.pipelineRuns} WHERE ${schema.pipelineRuns.id} = ${r.runId})`
+							)!
+						: eq(by, `run:${r.runUuid}`)
+			)
+		)!
+	const notTheYield = (anchor: AnyPgColumn): SQL | undefined =>
+		opts.yieldIds?.length ? or(sql`${anchor} IS NULL`, notInArray(anchor, opts.yieldIds)) : undefined
+	await db
+		.delete(schema.attributeValues)
+		.where(
+			and(
+				eq(schema.attributeValues.sessionId, opts.sessionId),
+				byTheRuns(schema.attributeValues.updatedBy, schema.attributeValues.createdAt),
+				notTheYield(schema.attributeValues.validFromMessageId)
+			)
+		)
+	await db
+		.delete(schema.attributeConfigs)
+		.where(
+			and(
+				eq(schema.attributeConfigs.sessionId, opts.sessionId),
+				byTheRuns(schema.attributeConfigs.updatedBy, schema.attributeConfigs.createdAt),
+				notTheYield(schema.attributeConfigs.validFromMessageId)
+			)
+		)
+	await db
+		.delete(schema.stateProposals)
+		.where(
+			and(
+				eq(schema.stateProposals.sessionId, opts.sessionId),
+				byTheRuns(schema.stateProposals.proposedBy, schema.stateProposals.createdAt),
+				notTheYield(schema.stateProposals.messageId)
+			)
+		)
 }

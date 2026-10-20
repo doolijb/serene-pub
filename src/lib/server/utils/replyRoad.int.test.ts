@@ -29,7 +29,7 @@
  *     model's own context window (0114) caps both — and the panel's figure —
  *     through the one function (`runtime/contextWindow.ts`).
  *
- * Asserted through `runReply` against the SHIPPED `core:spec/chat-respond` document
+ * Asserted through `runReply` against the SHIPPED `core:spec/story-respond` document
  * published by the bootstrap — the road the socket handlers take — with a fake
  * adapter standing in for the model.
  */
@@ -184,9 +184,16 @@ const fakeSocket = (uid: number) => ({ user: { id: uid }, io: {} }) as any
 
 /** A session with one character and one user line, ready for a turn. */
 async function makeSession(tag: string) {
+	// Story · Minimal: the one-call reply road this file pins (2026-10-19 —
+	// a session with no preset runs the genre's declared tasks, which add the
+	// reckoning's call).
+	const [minimal] = await db
+		.select({ id: schema.sessionPresets.id })
+		.from(schema.sessionPresets)
+		.where(eq(schema.sessionPresets.seedKey, "core-story-minimal"))
 	const [session] = await db
 		.insert(schema.sessions)
-		.values({ userId, isGroup: false })
+		.values({ userId, isGroup: false, presetId: minimal!.id })
 		.returning()
 	await db.insert(schema.sessionCharacters).values({
 		sessionId: session.id,
@@ -238,11 +245,11 @@ beforeAll(async () => {
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	db = (await import("$lib/server/db")).db as unknown as TestDb
 
-	const { bootstrapPipelines, CHAT_RESPOND_SPEC_ID } = await import(
+	const { bootstrapPipelines, STORY_RESPOND_SPEC_ID } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	await bootstrapPipelines(db)
-	RESPOND = CHAT_RESPOND_SPEC_ID
+	RESPOND = STORY_RESPOND_SPEC_ID
 
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	userId = (await createTestUser(db, "reply-road")).id
@@ -412,7 +419,7 @@ describe("the pipeline owns its row", () => {
 		const inletSession = (receipt.nodes[0]!.output as any).session
 		expect(inletSession.v).toBe(1)
 		expect(inletSession.sessionId).toBe(sessionId)
-		expect(inletSession.genreId).toBe("core:genre/chat")
+		expect(inletSession.genreId).toBe("core:genre/story")
 		expect(inletSession.cast.sessionCharacters.map((c: any) => c.character.id)).toEqual([
 			characterId
 		])
@@ -626,10 +633,10 @@ describe("the pipeline owns its row", () => {
 			messageId: existing.id
 		})
 		expect(outcome.ok, outcome.error).toBe(true)
-		const { CHAT_NARRATE_SPEC_ID } = await import(
+		const { STORY_NARRATE_SPEC_ID } = await import(
 			"$lib/server/pipelines/specs/narrate"
 		)
-		expect(outcome.receipt!.specId).toBe(CHAT_NARRATE_SPEC_ID)
+		expect(outcome.receipt!.specId).toBe(STORY_NARRATE_SPEC_ID)
 
 		const after = await messagesOf(sessionId)
 		expect(after.length, "a second narration was inserted").toBe(
@@ -665,10 +672,10 @@ describe("the pipeline owns its row", () => {
 			messageId: existing.id
 		})
 		expect(outcome.ok, outcome.error).toBe(true)
-		const { CHAT_SIDE_CHARACTER_SPEC_ID } = await import(
+		const { STORY_SIDE_CHARACTER_SPEC_ID } = await import(
 			"$lib/server/pipelines/specs/narrate"
 		)
-		expect(outcome.receipt!.specId).toBe(CHAT_SIDE_CHARACTER_SPEC_ID)
+		expect(outcome.receipt!.specId).toBe(STORY_SIDE_CHARACTER_SPEC_ID)
 
 		const after = await messagesOf(sessionId)
 		expect(after.length).toBe(before.length)
@@ -1072,7 +1079,7 @@ describe("Stop is a run-level guarantee", () => {
 			runId: "render-in-progress",
 			userId,
 			sessionId,
-			specId: "core:spec/chat-generate-image",
+			specId: "core:spec/story-generate-image",
 			kind: "action"
 		})
 		try {

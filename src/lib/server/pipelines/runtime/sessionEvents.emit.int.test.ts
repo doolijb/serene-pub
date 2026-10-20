@@ -122,7 +122,7 @@ const chatPresetId = async (): Promise<number | null> => {
 	const [row] = await db
 		.select({ id: schema.sessionPresets.id })
 		.from(schema.sessionPresets)
-		.where(eq(schema.sessionPresets.seedKey, "core-chat-default"))
+		.where(eq(schema.sessionPresets.seedKey, "core-story-minimal"))
 		.limit(1)
 	return row?.id ?? null
 }
@@ -274,7 +274,7 @@ describe("emitSessionEvent", () => {
 		// Chat binds `core:spec/<genre>-turn-order` to this event since A6
 		// (PLAN-turn-order §4.5), so the emit dispatches it — which is the
 		// whole road: an event recomputes the order.
-		expect(result.dispatched?.specSlug).toBe("core:spec/chat-turn-order")
+		expect(result.dispatched?.specSlug).toBe("core:spec/story-turn-order")
 		// Scoped to the event under test: since A6 a session event also
 		// recomputes the turn order, whose write lands on this same ledger.
 		const rows = await ofEvent(s.sessionId, sessionEvents.messageHidden)
@@ -343,8 +343,11 @@ describe("cause at every emitter", () => {
 		const byUser = completed.filter((c) => (cause(c) as any)?.kind === "user")
 		expect(byUser.length).toBe(1)
 		expect(byUser[0]!.messageId).toBe(sent)
-		expect(byUser[0]!.runId).toBeNull()
-		expect(cause(byUser[0]!)).toEqual({ kind: "user", userId })
+		// 🚧 Saved through the pipeline (owner ruling 2026-10-15): the row's
+		// `message-completed` is the save run's write, under the person's cause.
+		expect(res.accepted).toBe(true)
+		expect(byUser[0]!.runId).toBe(res.runId)
+		expect(cause(byUser[0]!)).toEqual({ kind: "user", userId, runId: res.runId })
 
 		// The send triggered a reply (the one-decider road, until A7): its
 		// finishing write completed the reply row under the run's cause.
@@ -415,7 +418,7 @@ describe("cause at every emitter", () => {
 		const dispatched = await dispatchSessionEvent(db, {
 			sessionId: session.id,
 			userId,
-			genreId: "core:genre/chat",
+			genreId: "core:genre/story",
 			event: sessionEvents.sessionCreated,
 			input: {
 				main: {},
@@ -425,7 +428,7 @@ describe("cause at every emitter", () => {
 				fields: {}
 			}
 		})
-		expect(dispatched?.specSlug).toBe("core:spec/chat-create")
+		expect(dispatched?.specSlug).toBe("core:spec/story-create")
 		expect((dispatched?.receipt as any).outcome).not.toBe("err")
 		const seeded = await db
 			.select()
@@ -686,7 +689,7 @@ describe("M3 review · annex-changed is bounded, and the envoy seat emits only o
 		const loop = compile(
 			spec("test:spec/annex-loop", { version: "1.0.0" })
 				.inlet("event", C.sessionEvent.v1(), {
-					genre: use("core:genre/chat"),
+					genre: use("core:genre/story"),
 					events: [ev.annexChanged]
 				})
 				.outlet("write", ($) => C.setSessionAnnex.v1({ value: { last: $.event.payload } as never }))
@@ -695,7 +698,7 @@ describe("M3 review · annex-changed is bounded, and the envoy seat emits only o
 		await saveDocument(db as any, loop, { publish: true })
 		const bound = await bindSubject(db as any, {
 			scope: { kind: "session", id: s.sessionId },
-			genreId: "core:genre/chat",
+			genreId: "core:genre/story",
 			subject: ev.annexChanged,
 			specSlug: "test:spec/annex-loop",
 			userId
@@ -828,7 +831,7 @@ describe("M3 review · annex-changed is bounded, and the envoy seat emits only o
 		const out = await dispatchSessionEvent(db as any, {
 			sessionId: s.sessionId,
 			userId,
-			genreId: "core:genre/chat",
+			genreId: "core:genre/story",
 			event: sessionEvents.sessionCreated,
 			input: {},
 			lineage: { parentRunId: "x", rootRunId: "pin-root", depth: 1 },
@@ -951,7 +954,7 @@ describe("E1b · a package's declared event, recorded", () => {
 						name: { en: "Dice rolled" },
 						description: "A roll landed.",
 						domain: "session",
-						genre: "core:genre/chat",
+						genre: "core:genre/story",
 						recordedBy: [ev.messageRespond]
 					}
 				]
@@ -970,7 +973,7 @@ describe("E1b · a package's declared event, recorded", () => {
 				db as any,
 				compile(
 					spec(slug, { version: "1.0.0" })
-						.inlet("input", C.userMessage.v1(), { genre: use("core:genre/chat"), event })
+						.inlet("input", C.userMessage.v1(), { genre: use("core:genre/story"), event })
 						.build()
 				),
 				{ publish: true }
@@ -1008,7 +1011,7 @@ describe("E1b · a package's declared event, recorded", () => {
 		const listener = compile(
 			spec("acme.dice:spec/cheer", { version: "1.0.0" })
 				.inlet("event", C.sessionEvent.v1(), {
-					genre: use("core:genre/chat"),
+					genre: use("core:genre/story"),
 					events: ["acme.dice:event/rolled@1"]
 				})
 				.outlet("note", ($) => C.setSessionAnnex.v1({ value: { heard: $.event.payload } as never }))
@@ -1018,7 +1021,7 @@ describe("E1b · a package's declared event, recorded", () => {
 		const { bindSubject } = await import("$lib/server/pipelines/entities/bindings")
 		const bound = await bindSubject(db as any, {
 			scope: { kind: "session", id: s.sessionId },
-			genreId: "core:genre/chat",
+			genreId: "core:genre/story",
 			subject: "acme.dice:event/rolled@1",
 			specSlug: "acme.dice:spec/cheer",
 			userId
@@ -1056,7 +1059,7 @@ describe("E1b · a package's declared event, recorded", () => {
 		await expect(
 			hostFor("acme.dice:spec/created").commit!({ event: "acme.dice:event/rolled@1", payload: {} }, node)
 		).rejects.toThrow(
-			/refused — 'acme.dice:event\/rolled@1' may be recorded in 'core:genre\/chat' by core:event\/message-respond@1/
+			/refused — 'acme.dice:event\/rolled@1' may be recorded in 'core:genre\/story' by core:event\/message-respond@1/
 		)
 		// …and the publish door says so first, for a literal recording.
 		await expect(
@@ -1064,7 +1067,7 @@ describe("E1b · a package's declared event, recorded", () => {
 				db as any,
 				compile(
 					spec("acme.dice:spec/created-records", { version: "1.0.0" })
-						.inlet("input", C.sessionEvent.v1(), { genre: use("core:genre/chat"), event: ev.sessionCreated })
+						.inlet("input", C.sessionEvent.v1(), { genre: use("core:genre/story"), event: ev.sessionCreated })
 						.outlet("rolled", () => C.recordEvent.v1({ event: "acme.dice:event/rolled@1", payload: {} as never }))
 						.build()
 				),
@@ -1081,7 +1084,7 @@ describe("E1b · a package's declared event, recorded", () => {
 		await expect(
 			hostFor("acme.dice:spec/respond").commit!({ event: "acme.dice:event/rolled@1", payload: {} }, node)
 		).rejects.toThrow(/not declared for the genre 'acme.dice:genre\/table'/)
-		await db.update(schema.sessions).set({ genreId: "core:genre/chat" }).where(eq(schema.sessions.id, s.sessionId))
+		await db.update(schema.sessions).set({ genreId: "core:genre/story" }).where(eq(schema.sessions.id, s.sessionId))
 
 		// A reinstall replaces the scopes: the new manifest names another subject.
 		const reinstall = registerPluginEvents(
@@ -1093,7 +1096,7 @@ describe("E1b · a package's declared event, recorded", () => {
 						name: { en: "Dice rolled" },
 						description: "A roll landed.",
 						domain: "session",
-						genre: "core:genre/chat",
+						genre: "core:genre/story",
 						recordedBy: [ev.sessionCreated]
 					}
 				]
@@ -1103,7 +1106,7 @@ describe("E1b · a package's declared event, recorded", () => {
 		expect(reinstall).toEqual([])
 		await expect(
 			hostFor("acme.dice:spec/respond").commit!({ event: "acme.dice:event/rolled@1", payload: {} }, node)
-		).rejects.toThrow(/may be recorded in 'core:genre\/chat' by core:event\/session-created@1/)
+		).rejects.toThrow(/may be recorded in 'core:genre\/story' by core:event\/session-created@1/)
 		expect(
 			(await hostFor("acme.dice:spec/created").commit!({ event: "acme.dice:event/rolled@1", payload: {} }, node) as any)
 				.written
@@ -1123,7 +1126,7 @@ describe("E1b · a package's declared event, recorded", () => {
 						name: { en: "Dice rolled" },
 						description: "A roll landed.",
 						domain: "session",
-						genre: "core:genre/chat",
+						genre: "core:genre/story",
 						recordedBy: [ev.messageRespond]
 					}
 				]

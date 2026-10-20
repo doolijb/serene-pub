@@ -16,7 +16,7 @@
 	 * both when one arrives, and hands the new id to `onCreated`, which is
 	 * where navigation lives.
 	 */
-	import { getContext, onDestroy, tick } from "svelte"
+	import { getContext, onDestroy, tick, untrack } from "svelte"
 	import { v4 as uuid } from "uuid"
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
 	import * as Icons from "@lucide/svelte"
@@ -26,11 +26,19 @@
 	} from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { refusedSwapsSentence } from "./refusedSwaps"
+	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
+	import {
+		asksHowStrict,
+		howStrictChoices,
+		rulesField
+	} from "$lib/shared/rulesets/rulesOffer"
 	import CharacterPickRow from "./CharacterPickRow.svelte"
 	import CharacterSelectModal from "../modals/CharacterSelectModal.svelte"
 	import PersonaSelectModal from "../modals/PersonaSelectModal.svelte"
 	import NewLorebookDialog from "../lorebookForms/NewLorebookDialog.svelte"
 	import PanelNavHeader from "../panels/PanelNavHeader.svelte"
+	import RulesFitAuditDialog from "./RulesFitAuditDialog.svelte"
+	import type { RulesChoice } from "$lib/shared/rulesets/rulesOffer"
 	import {
 		autoSessionName,
 		castCountHint,
@@ -39,6 +47,7 @@
 		finalSessionName,
 		genreFacts,
 		playAsOptions,
+		preselectsDefaultPersona,
 		StartSessionFlow
 	} from "./createSession.svelte"
 
@@ -77,6 +86,42 @@
 	 *  test that mounts the form alone. */
 	const userCtx = getContext<UserCtx | undefined>("userCtx")
 	const isAdmin = $derived(!!userCtx?.user?.isAdmin)
+	/** 🚧 Starred starts (ruled 2026-10-19): the favourite genre and the favourite preset per genre. */
+	const settingsCtx = getContext<UserSettingsCtx | undefined>("userSettingsCtx")
+	const favourites = $derived(settingsCtx?.settings?.startFavourites ?? null)
+	function saveFavourites(next: { genre?: string; presetByGenre?: Record<string, number> }) {
+		if (settingsCtx?.settings) settingsCtx.settings = { ...settingsCtx.settings, startFavourites: next }
+		const release = requestWithInterest("userSettings:updateStartFavourites", { favourites: next }, () => release())
+	}
+	function starGenre(id: string) {
+		const cur = favourites ?? {}
+		saveFavourites({ ...cur, ...(cur.genre === id ? { genre: undefined } : { genre: id }) })
+	}
+	function starPreset(genreId: string, id: number) {
+		const cur = favourites ?? {}
+		const by = { ...(cur.presetByGenre ?? {}) }
+		if (by[genreId] === id) delete by[genreId]
+		else by[genreId] = id
+		saveFavourites({ ...cur, presetByGenre: by })
+	}
+	/** The one genre card whose long copy is unfolded ("More"); never a dialog. */
+	let aboutOpen = $state<string | null>(null)
+	/** The rules choice whose fit audit is open (admins). */
+	let auditChoice = $state<RulesChoice | null>(null)
+	const RATING_WORD: Record<string, string> = {
+		incompatible: "Incompatible", poor: "Poor", ok: "Ok", good: "Good", great: "Great", perfect: "Perfect"
+	}
+	/** The picker's bands (ruled 2026-10-19): [Incompatible] · [Poor] · [Ok, Good] · [Great, Perfect], best first. */
+	const rulesBands = $derived.by(() => {
+		const choices = rulesOffer?.choices ?? []
+		if (!choices.some((c) => c.fit)) return [{ group: -1, label: "", choices }]
+		const bands = [3, 2, 1, 0].map((group) => ({
+			group,
+			label: ["Incompatible", "Poor", "Ok · Good", "Great · Perfect"][group]!,
+			choices: choices.filter((c) => (c.fit?.group ?? 3) === group)
+		}))
+		return bands.filter((b) => b.choices.length)
+	})
 
 	/** The card a section sits in — the shared `@utility panel-card` in app.css. */
 	const CARD_CLASS = "panel-card"
@@ -102,6 +147,7 @@
 	/** The two pickers the cast step opens: Add characters, and Change. */
 	let castPickerOpen = $state(false)
 	let playAsPickerOpen = $state(false)
+	let choosePlayAsButton = $state<HTMLButtonElement | null>(null)
 	let addCharactersButton = $state<HTMLButtonElement | null>(null)
 	let touched = $state(false)
 	/** The person has answered this step themselves, so it may collapse. */
@@ -171,6 +217,10 @@
 			flow.chooseGenre(genres[0].genreId)
 			return
 		}
+		if (favourites?.genre && genres.some((g) => g.genreId === favourites.genre)) {
+			flow.chooseGenre(favourites.genre)
+			return
+		}
 		if (!flow.presetsLoaded) return
 		const wanted = defaultGenreId(genres, flow.rawPresets)
 		if (wanted) flow.chooseGenre(wanted)
@@ -182,7 +232,7 @@
 		// Read what the choice depends on, so the effect re-runs with it.
 		void flow.presetsForGenre
 		void flow.presetId
-		const wanted = prefill?.presetId
+		const wanted = prefill?.presetId ?? favourites?.presetByGenre?.[flow.genreId ?? ""]
 		if (
 			wanted != null &&
 			flow.presetId !== wanted &&
@@ -205,17 +255,43 @@
 			flow.characterIds = [...flow.characterIds, id]
 	})
 
-	/** The persona the person speaks as: the prefilled one, else their default. */
-	let prefilledPersona = false
+	/**
+	 * The persona the person speaks as: the caller's prefilled one, else
+	 * their default — when the genre preselects it
+	 * (`preselectsDefaultPersona`; Dungeon Crawler does not: a persona there
+	 * is only a seed, and the player is the seat). Decided once the genre is
+	 * known, and again when it changes, but only over the form's own pick:
+	 * once the person chooses or removes a persona, the form never refills.
+	 */
+	let personaDecidedByPerson = false
+	let autoPersonaId: number | null = null
 	$effect(() => {
-		if (prefilledPersona || !personaOptions.length) return
-		const wanted =
-			prefill?.personaId != null &&
-			personaOptions.some((p) => p.id === prefill.personaId)
-				? prefill.personaId
-				: (personaOptions.find((p) => p.isDefaultPersona)?.id ?? null)
-		prefilledPersona = true
-		if (wanted != null) flow.personaIds = [wanted]
+		if (personaDecidedByPerson || !personaOptions.length) return
+		if (flow.genreId === null) return
+		const shape = flow.shape
+		const held = untrack(() => flow.personaIds)
+		const prefilled = prefill?.personaId
+		if (
+			prefilled != null &&
+			personaOptions.some((p) => p.id === prefilled)
+		) {
+			// The caller's answer is the person's: kept as given.
+			personaDecidedByPerson = true
+			if (held.length !== 1 || held[0] !== prefilled)
+				flow.personaIds = [prefilled]
+			return
+		}
+		const ownPick =
+			held.length === 0 ||
+			(held.length === 1 && held[0] === autoPersonaId)
+		if (!ownPick) return
+		const wanted = preselectsDefaultPersona(shape)
+			? (personaOptions.find((p) => p.isDefaultPersona)?.id ?? null)
+			: null
+		autoPersonaId = wanted
+		const next = wanted != null ? [wanted] : []
+		if (next.length !== held.length || next[0] !== held[0])
+			flow.personaIds = next
 	})
 
 	/**
@@ -235,7 +311,9 @@
 			personaIds: flow.personaIds,
 			lorebookId: flow.fields.lorebookId,
 			name: flow.fields.name.trim(),
-			scenario: flow.fields.scenario
+			scenario: flow.fields.scenario,
+			rulesPick: flow.rulesPick,
+			rigourPick: flow.rigourPick
 		}),
 		{ unordered: ["personaIds"] }
 	)
@@ -249,7 +327,12 @@
 		hasChanges = edits.dirty
 	})
 
-	const genreOptions = $derived(flow.genres)
+	const genreOptions = $derived.by(() => {
+		const fav = favourites?.genre
+		const all = flow.genres
+		if (!fav) return all
+		return [...all.filter((g) => g.genreId === fav), ...all.filter((g) => g.genreId !== fav)]
+	})
 	const presetOptions = $derived(flow.presetsForGenre)
 
 	const genreAnswered = $derived(flow.genreId !== null)
@@ -344,6 +427,10 @@
 		lorebookList.filter((l): l is LorebookOption => l.id != null)
 	)
 	const lorebookRequired = $derived(flow.shape?.lorebook === "required")
+	/** 🚧 What the genre says of its characters while none is added (`shape.characters.hint`). */
+	const charactersHint = $derived(
+		i18nTextIn((flow.shape?.characters as { hint?: unknown } | undefined)?.hint) ?? null
+	)
 	/** On screen once everything above it has an answer, like the Name card. */
 	const showLorebook = $derived(
 		genreAnswered &&
@@ -582,12 +669,70 @@
 	function choosePersona(id: number) {
 		touch()
 		castTouched = true
+		personaDecidedByPerson = true
 		flow.playAs(id)
+	}
+
+	/** Play as nobody: the removed row takes its × with it, so focus lands
+	 *  on Choose who you play as. */
+	async function removePersona() {
+		touch()
+		castTouched = true
+		personaDecidedByPerson = true
+		flow.personaIds = []
+		await tick()
+		if (!choosePlayAsButton?.disabled) choosePlayAsButton?.focus()
 	}
 
 	function chooseLorebook(id: number | null) {
 		touch()
 		flow.fields.lorebookId = id
+	}
+
+	/**
+	 * 🚧 Rules and How strict (PLAN-rulesets §4, §21): the genre's offer,
+	 * asked once the genre and preset are answered. A chosen lorebook's rules
+	 * are adopted (the server takes them whatever is sent), so the picker
+	 * says where they come from instead of offering a choice.
+	 */
+	const rulesOffer = $derived(flow.rulesOffer)
+	/** A genre with a lorebook step asks it first: the Rules card sits under
+	 *  the Lorebook card and appears with it, never ahead of it — a book's
+	 *  rules are adopted, so "From the lorebook" is only said once the book
+	 *  is on screen to see and change. */
+	const showRules = $derived(
+		genreAnswered &&
+			presetAnswered &&
+			!!rulesOffer &&
+			(!flow.shape?.lorebook || showLorebook)
+	)
+	const chosenLorebook = $derived(
+		flow.fields.lorebookId == null
+			? null
+			: (lorebookOptions.find((l) => l.id === flow.fields.lorebookId) ?? null)
+	)
+	const rulesNow = $derived(
+		rulesOffer ? rulesField(rulesOffer, flow.rulesNowId, chosenLorebook) : null
+	)
+	/**
+	 * A preset that pins a How strict the chosen rules cannot play (Rule Based
+	 * with Freeform): said, not hidden — the session runs in words.
+	 */
+	const presetRigourUnplayed = $derived(
+		!!flow.presetRigour &&
+			!!rulesOffer &&
+			!!rulesNow &&
+			!howStrictChoices(rulesOffer, rulesNow.value).some((o) => o.id === flow.presetRigour)
+	)
+
+	function chooseRules(id: string) {
+		touch()
+		flow.rulesPick = id
+	}
+
+	function chooseHowStrict(id: string) {
+		touch()
+		flow.rigourPick = id
 	}
 
 	const handleCreated = (res: Sockets.Sessions.Create.Response) => {
@@ -702,24 +847,6 @@
 	</PanelNavHeader>
 
 	<div class="flex flex-col gap-3">
-		<!-- ── 0. Name ──────────────────────────────────────────────────── -->
-		<section class="{CARD_CLASS} flex flex-col">
-			<label class="text-sm font-medium" for="start-session-name">
-				Name
-			</label>
-			<input
-				id="start-session-name"
-				type="text"
-				class="input mt-2 rounded-[10px]"
-				placeholder={placeholderName}
-				bind:value={flow.fields.name}
-				onbeforeinput={touch}
-			/>
-			<p class="text-surface-600-400 mt-1 text-xs">
-				Optional. Leave it empty and the session is called “{placeholderName}”.
-			</p>
-		</section>
-
 		<!-- ── 1. Genre ─────────────────────────────────────────────────── -->
 		<section class={CARD_CLASS} aria-labelledby="start-genre-heading">
 			<div class="flex min-w-0 items-baseline gap-2">
@@ -750,31 +877,56 @@
 				>
 					{#each genreOptions as g (g.genreId)}
 						{@const selected = g.genreId === flow.genreId}
-						<button
-							type="button"
-							role="radio"
-							aria-checked={selected}
-							class="border-surface-300 dark:border-surface-800 hover:bg-surface-200-800 flex flex-col items-start gap-1 rounded-[10px] border p-3 text-left {selected
+						{@const starred = favourites?.genre === g.genreId}
+						<div
+							class="border-surface-300 dark:border-surface-800 flex flex-col gap-1 rounded-[10px] border p-3 {selected
 								? 'sidebar-row-active'
 								: ''}"
-							onclick={() => chooseGenre(g.genreId)}
+							data-genre-card={g.genreId}
 						>
-							<span class="text-[15px] font-medium">
-								{g.name}
-							</span>
-							{#if g.description}
-								<span
-									class="text-surface-600 dark:text-surface-400 line-clamp-2 text-xs"
+							<div class="flex items-start gap-2">
+								<button
+									type="button"
+									role="radio"
+									aria-checked={selected}
+									class="hover:bg-surface-200-800 -m-1 flex min-w-0 flex-1 flex-col items-start gap-1 rounded-[8px] p-1 text-left"
+									onclick={() => chooseGenre(g.genreId)}
 								>
-									{g.description}
-								</span>
+									<span class="text-[15px] font-medium">
+										{g.name}
+									</span>
+									{#if g.description}
+										<span class="text-surface-600 dark:text-surface-400 line-clamp-2 text-xs">
+											{g.description}
+										</span>
+									{/if}
+									{#if genreFacts(g.shape)}
+										<span class="text-surface-600-400 text-[11px]">
+											{genreFacts(g.shape)}
+										</span>
+									{/if}
+								</button>
+								<button
+									type="button"
+									class="btn-icon btn-icon-sm shrink-0 {starred ? 'text-warning-500' : 'text-surface-500 hover:text-warning-500'}"
+									aria-pressed={starred}
+									aria-label={starred ? `Unstar ${g.name}` : `Star ${g.name} as your usual start`}
+									title={starred ? "Your usual start" : "Star as your usual start"}
+									onclick={() => starGenre(g.genreId)}
+								>
+									<Icons.Star size={16} fill={starred ? "currentColor" : "none"} aria-hidden="true" />
+								</button>
+							</div>
+							{#if g.about}
+								{#if aboutOpen === g.genreId}
+									<p class="text-surface-600-400 mt-1 text-xs whitespace-pre-line" data-genre-about={g.genreId}>{g.about}</p>
+									<button type="button" class="anchor self-start text-xs" onclick={() => (aboutOpen = null)}>Less</button>
+								{:else}
+									<p class="text-surface-600-400 mt-1 line-clamp-2 text-xs">{g.about}</p>
+									<button type="button" class="anchor self-start text-xs" onclick={() => (aboutOpen = g.genreId)}>More</button>
+								{/if}
 							{/if}
-							{#if genreFacts(g.shape)}
-								<span class="text-surface-600-400 text-[11px]">
-									{genreFacts(g.shape)}
-								</span>
-							{/if}
-						</button>
+						</div>
 					{/each}
 				</div>
 			{:else}
@@ -782,6 +934,24 @@
 					{flow.genre?.name ?? "Loading…"}
 				</p>
 			{/if}
+		</section>
+
+		<!-- ── 1b. Name ──────────────────────────────────────────────────── -->
+		<section class="{CARD_CLASS} flex flex-col">
+			<label class="text-sm font-medium" for="start-session-name">
+				Name
+			</label>
+			<input
+				id="start-session-name"
+				type="text"
+				class="input mt-2 rounded-[10px]"
+				placeholder={placeholderName}
+				bind:value={flow.fields.name}
+				onbeforeinput={touch}
+			/>
+			<p class="text-surface-600-400 mt-1 text-xs">
+				Optional. Leave it empty and the session is called “{placeholderName}”.
+			</p>
 		</section>
 
 		<!-- ── 2. Preset ────────────────────────────────────────────────── -->
@@ -834,33 +1004,51 @@
 					>
 						{#each presetOptions as p (p.id)}
 							{@const selected = p.id === flow.presetId}
-							<button
-								type="button"
-								role="radio"
-								aria-checked={selected}
-								class="border-surface-300 dark:border-surface-800 hover:bg-surface-200-800 flex flex-col items-start gap-1 rounded-[10px] border p-3 text-left {selected
+							{@const starred = favourites?.presetByGenre?.[flow.genreId ?? ""] === p.id}
+							<div
+								class="border-surface-300 dark:border-surface-800 flex items-start gap-2 rounded-[10px] border p-3 {selected
 									? 'sidebar-row-active'
 									: ''}"
-								onclick={() => choosePreset(p.id)}
+								data-preset-card={p.id}
 							>
-								<span class="text-[15px] font-medium">
-									{p.name}
-								</span>
-								{#if p.description}
-									<span
-										class="text-surface-600 dark:text-surface-400 line-clamp-2 text-xs"
-									>
-										{p.description}
+								<button
+									type="button"
+									role="radio"
+									aria-checked={selected}
+									class="hover:bg-surface-200-800 -m-1 flex min-w-0 flex-1 flex-col items-start gap-1 rounded-[8px] p-1 text-left"
+									onclick={() => choosePreset(p.id)}
+								>
+									<span class="text-[15px] font-medium">
+										{p.name}
 									</span>
-								{/if}
-								{#if p.isDefault}
-									<span
-										class="text-surface-600-400 text-[11px]"
-									>
-										Default for this genre
+									{#if p.description}
+										<span class="text-surface-600 dark:text-surface-400 line-clamp-2 text-xs">
+											{p.description}
+										</span>
+									{/if}
+									<span class="text-surface-600-400 text-[11px]">
+										{#if typeof p.callsPerTurn === "number"}
+											{p.callsPerTurn === 0 ? "No model call per turn" : p.callsPerTurn === 1 ? "1 call per turn" : `${p.callsPerTurn} calls per turn`}
+										{/if}
+										{#if p.castFloor && (p.castFloor.characters === 0 || p.castFloor.personas === 0)}
+											{typeof p.callsPerTurn === "number" ? " · " : ""}Nobody required
+										{/if}
+										{#if p.isDefault}
+											{typeof p.callsPerTurn === "number" || p.castFloor ? " · " : ""}Default
+										{/if}
 									</span>
-								{/if}
-							</button>
+								</button>
+								<button
+									type="button"
+									class="btn-icon btn-icon-sm shrink-0 {starred ? 'text-warning-500' : 'text-surface-500 hover:text-warning-500'}"
+									aria-pressed={starred}
+									aria-label={starred ? `Unstar ${p.name}` : `Star ${p.name} as your usual preset`}
+									title={starred ? "Your usual preset" : "Star as your usual preset"}
+									onclick={() => flow.genreId && starPreset(flow.genreId, p.id)}
+								>
+									<Icons.Star size={16} fill={starred ? "currentColor" : "none"} aria-hidden="true" />
+								</button>
+							</div>
 						{/each}
 					</div>
 				{:else}
@@ -971,8 +1159,11 @@
 								</ul>
 							{:else if !addCharactersBlocked}
 								<p class="text-surface-600-400 text-[13px]">
-									No one yet. Add the characters you'll talk
-									to.
+									<!-- 🚧 The genre's own words when it has
+									     them (`shape.characters.hint`): the
+									     Dungeon Crawler's join as companions. -->
+									{charactersHint ??
+										"No one yet. Add the characters you'll talk to."}
 								</p>
 							{/if}
 							<div
@@ -1008,7 +1199,7 @@
 							<p class="text-surface-600-400 text-xs">
 								Who you play as{flow.floors.personas > 0
 									? " — pick one"
-									: ""}
+									: " — optional"}
 							</p>
 							{#if selectedPersonas.length > 0}
 								<ul
@@ -1031,6 +1222,21 @@
 													>
 														Change
 													</button>
+													{#if flow.floors.personas === 0}
+														<button
+															type="button"
+															class="{ICON_BUTTON} hover:text-error-600-400"
+															aria-label="Remove {p.name ||
+																'persona'}"
+															title="Play without a persona"
+															onclick={removePersona}
+														>
+															<Icons.X
+																size={16}
+																aria-hidden="true"
+															/>
+														</button>
+													{/if}
 												{/snippet}
 											</CharacterPickRow>
 										</li>
@@ -1041,6 +1247,7 @@
 									class="flex flex-wrap items-center gap-x-3 gap-y-1"
 								>
 									<button
+										bind:this={choosePlayAsButton}
 										type="button"
 										class="btn btn-sm preset-tonal-surface"
 										disabled={!!playAsBlocked}
@@ -1184,6 +1391,110 @@
 			</section>
 		{/if}
 
+		<!-- ── 4b. Rules and How strict (PLAN-rulesets §4, §21; NOMENCLATURE
+		     §28). Only for a genre that offers a choice: Chat shows none. -->
+		{#if showRules && rulesOffer}
+			<section class={CARD_CLASS} aria-labelledby="start-rules-heading">
+				<h3 id="start-rules-heading" class="text-sm font-medium">Rules</h3>
+				{#if rulesNow?.fromLorebook}
+					<p
+						class="text-surface-600-400 mt-1 text-[13px]"
+						data-rules-from-lorebook
+					>
+						{rulesNow.fromLorebook}
+					</p>
+				{:else}
+					<div class="mt-3 flex flex-col gap-2" role="radiogroup" aria-labelledby="start-rules-heading">
+						{#each rulesBands as band (band.group)}
+							{#if band.label}
+								<p class="text-surface-600-400 text-[11px] font-semibold uppercase tracking-wide" data-rules-band={band.group}>{band.label}</p>
+							{/if}
+							<ul class="flex flex-col gap-1">
+								{#each band.choices as r (r.id)}
+									{@const selected = rulesNow?.value === r.id}
+									{@const incompatible = r.fit?.rating === "incompatible"}
+									<li class="flex items-center gap-1">
+										<button
+											type="button"
+											role="radio"
+											aria-checked={selected}
+											aria-disabled={incompatible}
+											disabled={incompatible}
+											data-rules-choice={r.id}
+											data-rules-rating={r.fit?.rating ?? ""}
+											class="hover:bg-surface-200-800 flex min-h-11 min-w-0 flex-1 items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left disabled:cursor-not-allowed disabled:opacity-50 {selected
+												? 'sidebar-row-active'
+												: ''}"
+											onclick={() => chooseRules(r.id)}
+										>
+											<span class="min-w-0 flex-1">
+												<span class="flex items-center gap-1.5 text-[15px] font-medium">
+													<span class="truncate">{r.name}</span>
+													{#if r.recommended}
+														<Icons.Star size={14} class="text-warning-500 shrink-0" aria-label="Recommended for this genre" />
+													{/if}
+													{#if r.fit}
+														<span class="text-surface-600-400 shrink-0 text-xs font-normal">{RATING_WORD[r.fit.rating]}</span>
+													{/if}
+												</span>
+												{#if r.fit && r.fit.rating !== "perfect" && r.fit.rating !== "great"}
+													<span class="text-surface-600-400 line-clamp-2 block text-xs">{r.fit.reason}</span>
+												{:else if r.subtitle}
+													<span class="text-surface-600-400 line-clamp-2 block text-xs">{r.subtitle}</span>
+												{/if}
+											</span>
+											{#if selected}
+												<Icons.Check size={16} class="text-primary-500 shrink-0" aria-hidden="true" />
+											{/if}
+										</button>
+										{#if isAdmin && r.fit}
+											<button type="button" class="anchor shrink-0 text-xs" data-rules-audit={r.id} onclick={() => (auditChoice = r)}>Why?</button>
+										{/if}
+									</li>
+								{/each}
+							</ul>
+						{/each}
+					</div>
+				{/if}
+				{#if presetRigourUnplayed}
+					<p class="text-surface-600-400 mt-2 text-xs" data-testid="start-rules-preset-hint">
+						{rulesOffer?.choices.find((c) => c.id === rulesNow?.value)?.name ?? "These rules"} keeps no numbers,
+						so {flow.preset?.name ?? "this preset"} runs in words here. Pick rules with numbers
+						for them to decide.
+					</p>
+				{/if}
+				{#if asksHowStrict(rulesOffer) && howStrictChoices(rulesOffer, rulesNow?.value).length > 1}
+					<h3
+						id="start-how-strict-heading"
+						class="mt-4 text-sm font-medium"
+					>
+						How strict
+					</h3>
+					<div
+						class="mt-2 flex flex-wrap gap-2"
+						role="radiogroup"
+						aria-labelledby="start-how-strict-heading"
+					>
+						{#each howStrictChoices(rulesOffer, rulesNow?.value) as o (o.id)}
+							{@const selected = flow.rigour === o.id}
+							<button
+								type="button"
+								role="radio"
+								aria-checked={selected}
+								data-how-strict={o.id}
+								class="btn btn-sm min-h-11 {selected
+									? 'preset-filled-primary-500'
+									: 'preset-tonal-surface'}"
+								onclick={() => chooseHowStrict(o.id)}
+							>
+								{o.label}
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</section>
+		{/if}
+
 		<!-- ── 5. Scenario ─────────────────────────────────────────────── -->
 		{#if showScenarioCard}
 			{#if showScenario}
@@ -1242,4 +1553,13 @@
 	excludeIds={flow.characterIds}
 	onOpenChange={(e) => (playAsPickerOpen = e.open)}
 	onSelect={(id: number) => choosePersona(id)}
+/>
+
+<RulesFitAuditDialog
+	open={auditChoice !== null}
+	onOpenChange={(e) => {
+		if (!e.open) auditChoice = null
+	}}
+	choice={auditChoice}
+	genreName={flow.genre?.name ?? "this genre"}
 />

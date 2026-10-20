@@ -46,7 +46,7 @@ import {
 	type UnseenReason
 } from "$lib/shared/lorebooks/placeSight"
 import { historyDateColumns, onLineAtSql, onLineSql } from "./lineSql"
-import { lineOfReading, sessionReadingOf, type LineReading } from "./reading"
+import { lineOfReading, type LineReading } from "./reading"
 
 /** What these readers need of a reading: its line and its moment. */
 export type EntryReading = Pick<LineReading, "branchId" | "moment" | "forkedAt" | "line">
@@ -399,10 +399,9 @@ export async function sessionEntryNamed(
 	name: string
 ): Promise<NamedEntry> {
 	if (!name.trim()) return { kind: "none" }
-	const reading = await sessionReadingOf(db, sessionId)
-	if (!reading) return { kind: "none" }
-	return entryNamed(
-		name,
-		await entriesAsRead(db, reading.lorebookId, reading, "session", typeIds)
-	)
+	// 🚧 The union (PLAN-rulesets §26): the session's book on its reading,
+	// then its own notes — a session with no book still names the rooms its
+	// notes hold. One name rule over both, so a tie across them refuses.
+	const { sessionEntriesAsRead } = await import("$lib/server/lorebooks/phantom")
+	return entryNamed(name, await sessionEntriesAsRead(db, sessionId, "session", typeIds))
 }

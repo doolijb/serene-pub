@@ -38,7 +38,7 @@ function makeClientSocket() {
 }
 
 const TICK = {
-	spec: "core:spec/chat-respond",
+	spec: "core:spec/story-respond",
 	specName: "Reply",
 	nodeKey: "tick",
 	definitionId: "core:task/clock-step@1",
@@ -60,7 +60,7 @@ const TICK = {
 	]
 }
 const SPRITES = {
-	spec: "core:spec/chat-respond",
+	spec: "core:spec/story-respond",
 	specName: "Reply",
 	nodeKey: "spritePick",
 	definitionId: "core:oracle/pick-sprite@1",

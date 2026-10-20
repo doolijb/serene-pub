@@ -114,12 +114,12 @@ describe("boot seeds every core genre's layouts", () => {
 					getGenre(g.genreId)?.layouts?.[0]?.preset ?? {}
 				)
 			}
-			// …and the standard genre, unioned in regardless — Chat, whose
+			// …and the standard genre, unioned in regardless — Story, whose
 			// default places the Author's note (2026-10-03).
-			const std = await seededFor("core:genre/chat")
+			const std = await seededFor("core:genre/story")
 			expect(std).toHaveLength(1)
-			expect(std[0].name).toBe("Chat")
-			expect(std[0].layout).toEqual(getGenre("core:genre/chat")?.layouts?.[0]?.preset)
+			expect(std[0].name).toBe("Story")
+			expect(std[0].layout).toEqual(getGenre("core:genre/story")?.layouts?.[0]?.preset)
 		},
 		60_000
 	)

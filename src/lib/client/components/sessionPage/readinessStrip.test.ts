@@ -52,4 +52,12 @@ describe("readinessStripState", () => {
 	it("gives a member no button", () => {
 		expect(readinessStripState({}, false)?.action).toBeUndefined()
 	})
+
+	it("reads the server's verdict, not a member's redacted defaults (round 2)", () => {
+		// A member's defaults arrive without connection identity.
+		const redacted = { "text->text": { samplingConfigId: null } as any }
+		expect(readinessStripState(redacted, false, ["text->text"])).toBeNull()
+		expect(readinessStripState(redacted, false, [])).not.toBeNull()
+		expect(readinessStripState({ "text->text": set }, false, ["text->image"])).not.toBeNull()
+	})
 })

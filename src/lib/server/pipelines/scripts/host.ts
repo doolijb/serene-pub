@@ -102,6 +102,9 @@ const { getQuickJS } = require("quickjs-emscripten")
 let enginePromise = null
 module.exports = async function evaluate(job) {
 	const qjs = await (enginePromise ??= getQuickJS())
+	// The worker's host is told the moment THIS job starts (below): its wall
+	// clock counts from here, never from when the job was queued.
+	if (typeof module.exports.onStart === "function") module.exports.onStart(job)
 	const runtime = qjs.newRuntime()
 	try {
 		runtime.setMemoryLimit(job.memoryLimitBytes)
@@ -140,9 +143,10 @@ const WORKER_SOURCE =
 	EVALUATOR_SOURCE +
 	String.raw`
 const { parentPort } = require("worker_threads")
+module.exports.onStart = (job) => parentPort.postMessage({ id: job.id, started: true })
 parentPort.on("message", async (msg) => {
 	try {
-		const outcome = await module.exports(msg.job)
+		const outcome = await module.exports({ ...msg.job, id: msg.id })
 		parentPort.postMessage({ id: msg.id, outcome })
 	} catch (e) {
 		parentPort.postMessage({
@@ -155,13 +159,25 @@ parentPort.on("message", async (msg) => {
 
 /* ── The pool: one worker, wall-clock kill, inline fallback ────────────── */
 
+/**
+ * One job in the worker's queue. The worker evaluates one job at a time, so
+ * jobs posted together WAIT their turn there: the wall-clock backstop is
+ * armed when the worker says the job started (`started`), never when it was
+ * posted — the 2026-10-19 walk's books, round and interview scripts were
+ * killed while still queued behind others (`timeout after 250ms (worker
+ * killed)` on a script that never ran), and a script step handed its input
+ * on as if the script had answered.
+ */
+interface PendingJob {
+	job: EvalJob
+	resolve: (o: EvalOutcome) => void
+	killer: NodeJS.Timeout | null
+}
+
 let worker: Worker | null = null
 let workerBroken = false
 let jobSeq = 0
-const pending = new Map<
-	number,
-	{ resolve: (o: EvalOutcome) => void; killer: NodeJS.Timeout }
->()
+const pending = new Map<number, PendingJob>()
 
 let inlineEvaluate: ((job: EvalJob) => Promise<EvalOutcome>) | null = null
 function inline(): (job: EvalJob) => Promise<EvalOutcome> {
@@ -178,16 +194,42 @@ function inline(): (job: EvalJob) => Promise<EvalOutcome> {
 	return inlineEvaluate
 }
 
-/** Terminate everything in flight — a stuck script kills the worker, not the server. */
-function breakWorker(reason: string): void {
+/**
+ * A stuck script kills the worker, not the server — and only the stuck job
+ * fails with it: every job queued behind it, which never started, is posted
+ * again to a fresh worker. With no culprit (the worker itself failed),
+ * everything in flight fails with `reason`.
+ */
+function breakWorker(reason: string, culprit?: number): void {
 	const w = worker
 	worker = null
-	for (const [, entry] of pending) {
-		clearTimeout(entry.killer)
-		entry.resolve({ ok: false, reason })
+	const requeue: Array<[number, PendingJob]> = []
+	for (const [id, entry] of pending) {
+		if (entry.killer) clearTimeout(entry.killer)
+		if (culprit !== undefined && id !== culprit) requeue.push([id, entry])
+		else entry.resolve({ ok: false, reason })
 	}
 	pending.clear()
 	if (w) void w.terminate()
+	for (const [id, entry] of requeue) post(id, entry)
+}
+
+/** Arm the backstop for a job the worker has just started (18 §7). */
+function arm(id: number): void {
+	const entry = pending.get(id)
+	if (!entry || entry.killer) return
+	// The absolute backstop: the interrupt should fire first; if an engine
+	// gap ever lets a script run past it, the worker dies and the server does
+	// not. Grace over the inner clock so a healthy near-deadline eval is
+	// never killed by the outer one.
+	entry.killer = setTimeout(() => {
+		pending.delete(id)
+		breakWorker(`killed after ${entry.job.timeoutMs}ms — the evaluation hung`, id)
+		entry.resolve({
+			ok: false,
+			reason: `timeout after ${entry.job.timeoutMs}ms (worker killed)`
+		})
+	}, entry.job.timeoutMs + 1000)
 }
 
 function ensureWorker(): Worker | null {
@@ -196,14 +238,17 @@ function ensureWorker(): Worker | null {
 	try {
 		const w = new Worker(WORKER_SOURCE, { eval: true })
 		w.unref()
-		w.on("message", (msg: { id: number; outcome: EvalOutcome }) => {
+		w.on("message", (msg: { id: number; started?: true; outcome?: EvalOutcome }) => {
+			if (w !== worker) return
+			if (msg.started) return arm(msg.id)
 			const entry = pending.get(msg.id)
 			if (!entry) return
 			pending.delete(msg.id)
-			clearTimeout(entry.killer)
-			entry.resolve(msg.outcome)
+			if (entry.killer) clearTimeout(entry.killer)
+			entry.resolve(msg.outcome!)
 		})
 		w.on("error", () => {
+			if (w !== worker) return
 			// A worker that cannot even start is an environment problem, not a
 			// per-script one: fall back to inline for the process's lifetime,
 			// loudly once. The sandbox itself is identical either way.
@@ -224,25 +269,24 @@ function ensureWorker(): Worker | null {
 	}
 }
 
-async function evaluate(job: EvalJob): Promise<EvalOutcome> {
+/** Hand a job to the worker (or, with none, to the inline evaluator). */
+function post(id: number, entry: PendingJob): void {
 	const w = ensureWorker()
-	if (!w) return inline()(job)
+	if (!w) {
+		void inline()(entry.job).then(entry.resolve, (e) =>
+			entry.resolve({ ok: false, reason: String((e as Error)?.message ?? e) })
+		)
+		return
+	}
+	entry.killer = null
+	pending.set(id, entry)
+	w.postMessage({ id, job: entry.job })
+}
+
+async function evaluate(job: EvalJob): Promise<EvalOutcome> {
+	if (!ensureWorker()) return inline()(job)
 	return await new Promise<EvalOutcome>((resolve) => {
-		const id = ++jobSeq
-		// The absolute backstop (18 §7): the interrupt should fire first; if
-		// an engine gap ever lets a script run past it, the worker dies and
-		// the server does not. Grace over the inner clock so a healthy
-		// near-deadline eval is never killed by the outer one.
-		const killer = setTimeout(() => {
-			pending.delete(id)
-			breakWorker(`killed after ${job.timeoutMs}ms — the evaluation hung`)
-			resolve({
-				ok: false,
-				reason: `timeout after ${job.timeoutMs}ms (worker killed)`
-			})
-		}, job.timeoutMs + 1000)
-		pending.set(id, { resolve, killer })
-		w.postMessage({ id, job })
+		post(++jobSeq, { job, resolve, killer: null })
 	})
 }
 

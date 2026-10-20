@@ -98,8 +98,8 @@ describe("pipeline store", () => {
 	})
 
 	it("round-trips a node's expose mark and swaps, so a reader finds them off the registry (R28)", async () => {
-		const { TURN_ORDER_BY_GENRE, CHAT_TURN_ORDER_SPEC_ID } = await import("@serene-pub/core-catalog")
-		const doc = TURN_ORDER_BY_GENRE.find((t) => t.spec === CHAT_TURN_ORDER_SPEC_ID)!.build()
+		const { TURN_ORDER_BY_GENRE, STORY_TURN_ORDER_SPEC_ID } = await import("@serene-pub/core-catalog")
+		const doc = TURN_ORDER_BY_GENRE.find((t) => t.spec === STORY_TURN_ORDER_SPEC_ID)!.build()
 		const saved = await saveDocument(db, { ...doc, id: "test:spec/expose-round-trip" }, { publish: true })
 		const back = await loadDocument(db, saved.specVersionId)
 		const strategy = back.nodes.find((n) => n.key === "decide.rules.strategy")!
@@ -514,7 +514,7 @@ describe("saveDocument runs validate() (U5d review, W9)", () => {
 	// A widget venue since 2026-09-28: a message's own ⋮ is the owner's side of
 	// the line (lair re-plan R11, File as a room).
 	it("a forged document — a world action in a widget venue — is refused at saveDocument by validate()", async () => {
-		const { chatGenre } = await import("@serene-pub/core-catalog")
+		const { storyGenre } = await import("@serene-pub/core-catalog")
 		const doc = compile(
 			spec("core:spec/test-forged-world", {
 				version: "1.0.0",
@@ -531,7 +531,7 @@ describe("saveDocument runs validate() (U5d review, W9)", () => {
 				}
 			})
 				.inlet("input", C.userMessage.v1(), {
-					genre: chatGenre,
+					genre: storyGenre,
 					event: sessionEvents.sessionAction
 				})
 				.outlet("save", ($) => C.createMessage.v1({ text: $.input.text }))

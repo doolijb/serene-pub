@@ -67,6 +67,10 @@ let lastError = $state<string | null>(null)
  * a write's failure is that write's own (R77), never a line every widget shows.
  */
 let readError = $state<string | null>(null)
+/** 🚧 The session's table keeps no numbers (PLAN-dc-after-walk2 Q2-3, owner ruling ★3). */
+let wordsOnly = $state(false)
+/** 🚧 The people the session's story has met (Q3-5): Scene Portraits' faces. */
+let metPeople = $state<{ entryId: number; name: string }[]>([])
 
 /**
  * The writes this tab has sent and not yet heard back about, by the
@@ -157,8 +161,13 @@ function onGet(res: Sockets.State.Get.Response) {
 	state = res.state ?? EMPTY
 	slots.clear()
 	for (const slot of res.slots ?? []) slots.set(slot.slotId, slot)
+	// A story-time slot's lines are spelled by its shape (`ledgerLines`).
+	if (lastLedger && mine(lastLedger.sessionId)) onLedger(lastLedger)
 	owners.clear()
 	for (const owner of res.owners ?? []) owners.set(owner.key, owner)
+	// 🚧 A table that keeps no numbers (Q2-3, ★3).
+	wordsOnly = res.wordsOnly === true
+	metPeople = Array.isArray(res.metPeople) ? res.metPeople : []
 	loaded = true
 }
 
@@ -168,9 +177,19 @@ function onProposals(res: Sockets.State.Proposals.Response) {
 	for (const row of res.proposals ?? []) proposals.set(row.id, row)
 }
 
+/** The last ledger read, re-read when the slots (their shapes) land after it. */
+let lastLedger: Sockets.State.Ledger.Response | null = null
+
 function onLedger(res: Sockets.State.Ledger.Response) {
 	if (!mine(res?.sessionId)) return
-	const lines = ledgerLines(res.rows ?? [], res.baselines ?? [])
+	lastLedger = res
+	const lines = ledgerLines(
+		res.rows ?? [],
+		res.baselines ?? [],
+		(id) => slots.get(id),
+		// 🚧 A table that keeps no numbers reads its change lines in words (P2-6).
+		{ words: res.words === true }
+	)
 	const byMessage = linesByMessage(lines)
 	messageLines.clear()
 	for (const [messageId, anchored] of byMessage)
@@ -410,6 +429,8 @@ export function openSessionState(sessionId: number | null): void {
 	proposals.clear()
 	messageLines.clear()
 	headLines = []
+	wordsOnly = false
+	metPeople = []
 	if (sessionId != null) refresh()
 }
 
@@ -449,6 +470,14 @@ export function sessionState() {
 		},
 		get proposals() {
 			return [...proposals.values()]
+		},
+		/** 🚧 The table keeps no numbers (Q2-3): widgets draw words. */
+		get wordsOnly() {
+			return wordsOnly
+		},
+		/** 🚧 The people the story has met (Q3-5). */
+		get metPeople() {
+			return metPeople
 		},
 		/* ── naming a payload ───────────────────────────────────────────
 		 * A proposal names its owner by kind and id and its item by entry id,
@@ -527,7 +556,7 @@ export function sessionState() {
 			slotId: string,
 			/** A list is written whole, its items in order. */
 			value: Sockets.State.Set.Params["value"],
-			opts: { ownError?: boolean } = {}
+			opts: { ownError?: boolean; say?: string } = {}
 		): Promise<void> {
 			const ownError = !!opts.ownError
 			if (openSessionId == null)
@@ -556,7 +585,7 @@ export function sessionState() {
 			written.catch(() => {})
 			requestWithInterest(
 				"state:set",
-				{ sessionId: openSessionId, owner, slotId, value, requestId },
+				{ sessionId: openSessionId, owner, slotId, value, requestId, ...(opts.say ? { say: opts.say } : {}) },
 				onSetReply
 			)
 			return written

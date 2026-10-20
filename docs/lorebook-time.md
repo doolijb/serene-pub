@@ -100,18 +100,18 @@ The **clock** is where the story stands: its present. With no clock set, the pre
 **What moves a session's clock.** Only a person or a fixed tick, never the model on its own:
 
 - **Time passes…**, an action above the composer, moves it by the amount you pick (see [Sessions](./sessions.md#time-passes)).
-- In Adventure, the state-keeper can suggest how long a scene or a rest took. The clock moves only when you accept, or at once when the session trusts the narrator (see [Adventure](./genre-adventure.md#time-the-scene-took)).
-- Chat's reply can tick it on by a fixed amount after every reply: the reply pipeline's step **Each reply advances the clock by** (**By** and **Unit**; **By** 0, the default, is off). The session's owner sets it in the session's settings, under **The story**, below the story clock; an administrator sets it for every session in **Admin › Pipelines**, on Chat's **Reply**. A regenerated or swiped reply doesn't tick again.
+- In Story, the after-turn reckoning can suggest how long a scene or a rest took. The clock moves only when you accept (the **time** task on **Review**), or at once when it is **Full** (see [What happens around a reply](./genre-story.md#what-happens-around-a-reply)).
+- Story's reply can tick it on by a fixed amount after every reply: the reply pipeline's step **Each reply advances the clock by** (**By** and **Unit**; **By** 0, the default, is off). The session's owner sets it in the session's settings, under **The story**, below the story clock; an administrator sets it for every session in **Admin › Pipelines**, on Chat's **Reply**. A regenerated or swiped reply doesn't tick again.
 - The session's settings and the **Chronicle** widget, by hand.
 
-**Every move leaves a line, and goes back with its message.** A move made by **Time passes…**, by the state-keeper, by an accepted suggestion or by a reply's tick shows under the message it came with, beside that turn's other changes: *Time passes: 3 hours (…, 14:00 → …, 17:00)*. Delete that message, or regenerate or swipe the reply, and the clock steps back by the same amount, the way a stat goes back with the line that changed it. A move you made by hand since stays where you put it. Two exceptions:
+**Every move leaves a line, and goes back with its message.** A move made by **Time passes…**, by the reckoning, by an accepted suggestion or by a reply's tick shows under the message it came with, beside that turn's other changes: *Time passes: 3 hours (…, 14:00 → …, 17:00)*. Delete that message, or regenerate or swipe the reply, and the clock steps back by the same amount, the way a stat goes back with the line that changed it. A move you made by hand since stays where you put it. Two exceptions:
 
 - A reply's **tick** stays when the reply is regenerated or swiped, because the new reply doesn't tick again. Deleting the reply takes the tick back.
 - A session that has gone back to following its line's present has no clock of its own to step back, so nothing moves.
 
 If the calendar can't place the step back (the clock was set somewhere the step would run off the calendar), the delete, regenerate or swipe is refused and says why.
 
-When a move was asked for but the story had no clock yet (nothing in the lorebook is dated and no clock is set, or the session reads no lorebook), the line says so instead: *Time passes: 3 hours, not on the clock. This story has no clock yet: set one in the lorebook to track time.* That goes for **Time passes…** in every genre, a reply's tick, and the state-keeper's move or suggestion in Adventure. Nothing else stops: the reply stands, the press finishes, and the keeper's other changes are kept.
+When a move was asked for but the story had no clock yet (nothing in the lorebook is dated and no clock is set, or the session reads no lorebook), the line says so instead: *Time passes: 3 hours, not on the clock. This story has no clock yet: set one in the lorebook to track time.* That goes for **Time passes…** in every genre, a reply's tick, and the state-keeper's move or suggestion in Story. Nothing else stops: the reply stands, the press finishes, and the keeper's other changes are kept.
 
 A move made before the session has any line at all, not even a greeting, shows at the head of the conversation, above the first message. Once there is a line, a move shows under the newest one, a greeting included.
 

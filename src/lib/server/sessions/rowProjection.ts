@@ -6,7 +6,7 @@
  * (`sockets/sessions.ts`'s `buildSessionsListFor`) asks it for every session at
  * once; the `sessions:rowChanged` push (`sessions/rowPush.ts`) asks it for a
  * single session after a message lands, is edited, hidden, deleted or
- * streamed. Both therefore read the same three exclusions — an in-flight
+ * streamed. Both therefore read the same `main`-only rule and three exclusions — an in-flight
  * generation, a hidden message, a blank body — so a row the push keeps current
  * says exactly what the next list would.
  *
@@ -17,6 +17,8 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
 import * as schema from "$lib/server/db/schema"
+import { DEFAULT_CHANNEL } from "@serene-pub/sdk"
+import { isFailedReplySql } from "$lib/server/messages/failedReply"
 import {
 	resolveCharacterName,
 	resolvePersonaName
@@ -81,9 +83,11 @@ export function messageExcerpt(content: string | null | undefined): string {
  * session that is generating right now shows an empty quote. A session with
  * nothing to show is absent from the map rather than present with a null.
  *
- * The read is unscoped by channel, deliberately: it must be the line the
- * session PAGE shows last, and that read (`getSessionFromDB`) is unscoped too.
- * The channel-scoped read is the prompt path's, which is a different question.
+ * The read is the `main` channel's alone (2026-10-15): a card is seen by
+ * everyone in the session, and another channel may be private — a Dungeon
+ * Crawler's Planner lane (`parley:2`) is one person's talk, and its newest
+ * line quoted on every member's card was a leak. A session's other channels
+ * (folios, lanes, side channels) never stand in for its story.
  */
 export async function lastVisibleMessages(
 	db: Db,
@@ -118,6 +122,7 @@ export async function lastVisibleMessages(
 		.where(
 			and(
 				inArray(schema.sessionMessages.sessionId, sessionIds),
+				eq(schema.sessionMessages.channel, DEFAULT_CHANNEL),
 				eq(schema.sessionMessages.isGenerating, false),
 				eq(schema.sessionMessages.isHidden, false),
 				// Whitespace spelled with `chr()` rather than an escape:
@@ -151,8 +156,40 @@ export async function lastVisibleMessages(
 			excerpt,
 			speakerName: speakerName || null,
 			isUser: row.role === "user",
-			createdAt: new Date(row.updatedAt).toISOString()
+			createdAt: new Date(row.updatedAt).toISOString(),
+			// 🚧 A revision branch's last line (`REVISED_TURN_KEY`): the turn
+			// after it was revised away, so no reply is owed.
+			...((row.metadata as Record<string, unknown> | null)?.revisedTurn === true ? { revisedTurn: true } : {})
 		})
+	}
+	/**
+	 * 🚧 **A reply that failed after it** (2026-10-16 walk): the newest
+	 * settled row on `main` is a failed one — an error and no words — which
+	 * the excerpt read above skips as blank. Without this the card read the
+	 * person's line as the newest and said "Waiting on the model" over a
+	 * failure. One more DISTINCT ON, the same channel and exclusions minus
+	 * the blank-body one.
+	 */
+	if (lastMessages.size) {
+		const newest = await db
+			.selectDistinctOn([schema.sessionMessages.sessionId], {
+				sessionId: schema.sessionMessages.sessionId,
+				failed: isFailedReplySql
+			})
+			.from(schema.sessionMessages)
+			.where(
+				and(
+					inArray(schema.sessionMessages.sessionId, [...lastMessages.keys()]),
+					eq(schema.sessionMessages.channel, DEFAULT_CHANNEL),
+					eq(schema.sessionMessages.isGenerating, false),
+					eq(schema.sessionMessages.isHidden, false)
+				)
+			)
+			.orderBy(schema.sessionMessages.sessionId, desc(schema.sessionMessages.id))
+		for (const row of newest) {
+			const last = lastMessages.get(row.sessionId)
+			if (last && row.failed === true) last.replyFailed = true
+		}
 	}
 	return lastMessages
 }

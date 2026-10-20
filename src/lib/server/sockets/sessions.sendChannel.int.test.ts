@@ -73,7 +73,8 @@ beforeAll(async () => {
 	const dbModule = await import("$lib/server/db")
 	testDb = dbModule.db as unknown as TestDb
 
-	const { createTestUser } = await import("$lib/server/utils/testDb")
+	const { createTestUser, publishSaveMessage } = await import("$lib/server/utils/testDb")
+	await publishSaveMessage(testDb)
 	const user = await createTestUser(testDb, "send-channel-user")
 	userId = user.id
 
@@ -228,7 +229,7 @@ describe("a channel the genre never declared", () => {
 		const before = await testDb.select().from(schema.sessionMessages)
 		const res = await send({ content: "nowhere", channel: "map" })
 		expect(res.sessionMessage).toBeUndefined()
-		expect(res.error).toMatch(/no channel 'map'/)
+		expect(res.refused).toMatch(/no channel 'map'/)
 		// Refused, not coerced: no row anywhere, on `main` or otherwise.
 		const after = await testDb.select().from(schema.sessionMessages)
 		expect(after.length).toBe(before.length)

@@ -23,6 +23,7 @@ import { DERELICT_REPLY_SENTENCE } from "$lib/server/sessions/derelictReplies"
 import * as attic from "../tables"
 import { vectorColumns } from "../embeddings"
 import {
+	asDate,
 	countDrop,
 	countLoss,
 	insertBatched,
@@ -33,7 +34,10 @@ import {
 	type RestoreContext
 } from "../context"
 
-export const CHAT_GENRE_ID = "core:genre/chat"
+/** 0.5.3 chats become **Story** sessions on the Minimal preset (ruled 2026-10-19; was Chat). */
+export const STORY_GENRE_ID = "core:genre/story"
+/** @deprecated the old target; kept for readers. */
+export const CHAT_GENRE_ID = STORY_GENRE_ID
 
 /** 0.5.3's per-seat visibility, as the session-wide character detail. */
 const DETAIL_OF: Record<string, string> = {
@@ -88,15 +92,15 @@ export async function restoreSessions(ctx: RestoreContext): Promise<void> {
 				id: c.id,
 				name: c.name,
 				isGroup: c.isGroup,
-				genreId: CHAT_GENRE_ID,
+				genreId: STORY_GENRE_ID,
 				presetId: null,
 				// Only a level that differs from the genre's default is
 				// written, so the session keeps following the default.
 				genreFields: detail === "full" ? {} : { characterDetail: detail },
 				sessionType: c.chatType,
 				userId: mapped(ctx, "users", c.userId)!,
-				createdAt: c.createdAt,
-				updatedAt: c.updatedAt,
+				createdAt: asDate(c.createdAt),
+				updatedAt: asDate(c.updatedAt),
 				scenario: c.scenario,
 				metadata: c.metadata,
 				annex: {},
@@ -217,7 +221,7 @@ export async function restoreMessages(ctx: RestoreContext): Promise<void> {
 					channel: "main",
 					isNarratorResponse: m.isNarratorResponse,
 					content: m.content,
-					createdAt: m.createdAt,
+					createdAt: asDate(m.createdAt),
 					updatedAt: m.updatedAt,
 					isEdited: m.isEdited,
 					metadata: messageMetadataFrom053(m.metadata),

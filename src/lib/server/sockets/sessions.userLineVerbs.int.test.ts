@@ -133,7 +133,7 @@ describe("F1 · the author's own line is edited, never regenerated", () => {
 		const { sessionMessagesExtendHandler } = await import("./sessions")
 		// Chat, not the Lair: the Lair offers no prefill extend at all (B7,
 		// D4), so its genre's refusal would answer first.
-		const { owner, mine } = await lairWithAuthorLast("cont", "core:genre/chat")
+		const { owner, mine } = await lairWithAuthorLast("cont", "core:genre/story")
 		const before = await rowOf(mine.id)
 		const res = await sessionMessagesExtendHandler.handler(
 			fakeSocket(owner.id),

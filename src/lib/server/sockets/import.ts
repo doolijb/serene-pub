@@ -1606,8 +1606,6 @@ async function insertImportedHistory(
 				content: msg.mes,
 				metadata,
 				createdAt: normalizeTimestamp(msg.send_date)
-					.toISOString()
-					.split("T")[0]
 			}
 		})
 	for (let i = 0; i < rows.length; i += HISTORY_INSERT_BATCH)

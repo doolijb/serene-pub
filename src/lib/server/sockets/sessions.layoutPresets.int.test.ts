@@ -393,8 +393,12 @@ describe("sessions:panelLayout — presets", () => {
 					}
 				],
 				tierSizeOverrides: { wide: [2, 1] },
-				zoneLayout: { version: 1, zones: { right: { kind: "side" } } },
-				arrangedGrid: { right: { cols: 4, rows: 8, items: [] } }
+				panels: {
+					version: 1,
+					left: [],
+					middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] },
+					right: [{ key: "p2", tabs: ["scene-portraits"] }]
+				}
 			}
 			await sessionsPanelLayoutSetHandler.handler(
 				fakeSocket(s.owner.id),

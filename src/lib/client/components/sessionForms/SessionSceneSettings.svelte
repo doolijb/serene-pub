@@ -21,13 +21,13 @@
 	 */
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import {
-		declaredScenePlace,
-		declaredTriggerStates,
-		resolveSceneSettings,
-		sceneSettingsDecl,
-		type SceneSettings,
-		type SceneSettingsDecl
-	} from "@serene-pub/sdk"
+	declaredScenePlace,
+	declaredTriggerStates,
+	resolveSceneSettings,
+	sceneSettingsDecl,
+	type SceneSettings,
+	type SceneSettingsDecl
+} from "@serene-pub/sdk"
 	import {
 		SCENE_MODE_LABELS,
 		SCENE_SUMMARY_LABELS,

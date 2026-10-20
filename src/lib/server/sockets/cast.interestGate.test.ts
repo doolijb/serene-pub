@@ -76,6 +76,8 @@ const seam = vi.hoisted(() => {
 	function chain(label: string, result: any = []) {
 		const self: any = {
 			from: () => self,
+			innerJoin: () => self,
+			leftJoin: () => self,
 			where: () => self,
 			limit: () => self,
 			orderBy: () => self,
@@ -238,7 +240,7 @@ vi.mock("$lib/server/embedding/vectorizationQueue", async (importOriginal) => ({
 // off it — nothing in these paths depends on a real genre.
 vi.mock("$lib/server/pipelines/entities/sessionGenres", () => ({
 	listSessionGenres: async () => [],
-	STANDARD_GENRE_ID: "core:genre/chat"
+	STANDARD_GENRE_ID: "core:genre/story"
 }))
 
 import { connectSockets } from "./index"

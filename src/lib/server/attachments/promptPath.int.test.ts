@@ -474,11 +474,11 @@ describe("the action specs keep the parity guard", async () => {
 		]
 	}
 	const cases: Array<{ slug: string; promptKey: string; template: string; input?: Record<string, unknown>; atNode?: string }> = [
-		{ slug: "core:spec/chat-answer-form", promptKey: "prompt", template: ANSWER_FORM_TEMPLATE, input: { form, addressee: "character:1" } },
+		{ slug: "core:spec/story-answer-form", promptKey: "prompt", template: ANSWER_FORM_TEMPLATE, input: { form, addressee: "character:1" } },
 		{ slug: "core:spec/tool-loop", promptKey: "tools.item.prompt", template: TOOL_LOOP_TEMPLATE, atNode: "tools.item.generate" },
-		{ slug: "core:spec/adventure-look", promptKey: "prompt", template: SHIPPED_CONTEXT_TEMPLATE },
-		{ slug: "core:spec/adventure-rest", promptKey: "prompt", template: SHIPPED_CONTEXT_TEMPLATE },
-		{ slug: "core:spec/adventure-ask", promptKey: "prompt", template: SHIPPED_CONTEXT_TEMPLATE },
+		{ slug: "core:spec/story-look", promptKey: "prompt", template: SHIPPED_CONTEXT_TEMPLATE },
+		{ slug: "core:spec/story-rest", promptKey: "prompt", template: SHIPPED_CONTEXT_TEMPLATE },
+		{ slug: "core:spec/story-ask", promptKey: "prompt", template: SHIPPED_CONTEXT_TEMPLATE },
 		{ slug: "core:spec/lair-build-room", promptKey: "prompt", template: SHIPPED_CONTEXT_TEMPLATE, input: { text: "The Vault" } },
 		{ slug: "core:spec/lair-trap", promptKey: "prompt", template: SHIPPED_CONTEXT_TEMPLATE, input: { text: "a pit" } }
 	]
@@ -504,7 +504,7 @@ describe("the action specs keep the parity guard", async () => {
 		const first = await say(sessionId, personaId, "user", "Look at my map")
 		const image = await attach(sessionId, first.id, { bytes: png(13), filename: "map.png", alt: "a hand-drawn map" })
 		await say(sessionId, null, "assistant", "A fine map.")
-		const look = shipped("core:spec/adventure-look")
+		const look = shipped("core:spec/story-look")
 		const c = { promptKey: "prompt", template: SHIPPED_CONTEXT_TEMPLATE }
 		await useDefault(anthropicId)
 		const vision = await previewSpec(look, sessionId, c)

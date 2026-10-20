@@ -22,7 +22,7 @@ import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import {
 	bootstrapPipelines,
-	CHAT_RESPOND_SPEC_ID
+	STORY_RESPOND_SPEC_ID
 } from "$lib/server/pipelines/boot/bootstrap"
 import {
 	acknowledgeNotices,
@@ -48,7 +48,7 @@ beforeAll(async () => {
 	const [spec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
 	specId = spec.id
 	specVersionId = spec.activeVersionId!
 }, 60_000)
@@ -65,7 +65,7 @@ describe("the shipped default", () => {
 			db,
 			specId,
 			specVersionId,
-			CHAT_RESPOND_SPEC_ID
+			STORY_RESPOND_SPEC_ID
 		)
 		const [config] = await db
 			.select()
@@ -87,7 +87,9 @@ describe("the shipped default", () => {
 	 * A live Adventure turn is what this is written from. Both selections were
 	 * absent, so the voices map iterated the whole plan document as one speaker
 	 * and the keeper's whole document reached `resolve-state-changes` as one
-	 * change with no slot on it.
+	 * change with no slot on it. Adventure retired 2026-10-19; the Lair's reply
+	 * carries the same two selections (its planner's speakers, its keeper's
+	 * write), so the pin reads it.
 	 *
 	 * ⚠ A PIN rather than a reproduction, and the distinction is the same one
 	 * migration ordering has: a fresh database projects whatever the preset
@@ -96,15 +98,15 @@ describe("the shipped default", () => {
 	 * never revisits — that is what `0122_adventure_config_reprojection` is for.
 	 */
 	it("carries the author preset's path selections, which have no declared default", async () => {
-		const [adventure] = await db
+		const [lair] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/adventure-respond"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/lair-respond"))
 		const res = await ensureDefaultConfig(
 			db,
-			adventure.id,
-			adventure.activeVersionId!,
-			adventure.slug
+			lair.id,
+			lair.activeVersionId!,
+			lair.slug
 		)
 		const at = (nodeKey: string, path: string) =>
 			valuesOf(res.configId).then(
@@ -116,8 +118,8 @@ describe("the shipped default", () => {
 							r.path === path
 					)?.value
 			)
-		expect(await at("planWrite", "path")).toBe("speakers")
-		expect(await at("keeperWrite", "path")).toBe("values,inventory")
+		expect(await at("via.turn.channel.story.pick.planned.speaking", "path")).toBe("speakers")
+		expect(await at("keep.played.keeperWrite", "path")).toBe("values,inventory")
 	})
 
 	it("is created once, not once per boot", async () => {
@@ -125,7 +127,7 @@ describe("the shipped default", () => {
 			db,
 			specId,
 			specVersionId,
-			CHAT_RESPOND_SPEC_ID
+			STORY_RESPOND_SPEC_ID
 		)
 		expect(again.action).toBe("present")
 
@@ -148,7 +150,10 @@ describe("the shipped default", () => {
 	 *
 	 * What is worth asserting instead is the consequence: a template reference
 	 * resolves to a row that states its own engine, so nothing downstream has to
-	 * guess.
+	 * guess. A template an author preset ships inline (`{ source, engine }` —
+	 * Story's reckoning and sweep calls, 2026-10-19) is the template itself,
+	 * taken as written (`world.ts derefTemplate`), so it states its engine on
+	 * the value.
 	 */
 	it("points a template slot at a row that knows its own language", async () => {
 		const [config] = await db
@@ -157,12 +162,19 @@ describe("the shipped default", () => {
 			.where(
 				eq(
 					schema.pipelineConfigs.seedKey,
-					`pipeline-default:${CHAT_RESPOND_SPEC_ID}`
+					`pipeline-default:${STORY_RESPOND_SPEC_ID}`
 				)
 			)
 		let checked = 0
 		for (const v of await valuesOf(config.id)) {
 			if (v.slot !== "template") continue
+			if (v.value && typeof v.value === "object") {
+				const inline = v.value as { source?: unknown; engine?: unknown }
+				expect(typeof inline.source, `${v.nodeKey}: an inline template has no source`).toBe("string")
+				expect(inline.engine, `${v.nodeKey}: an inline template has no engine`).toBeTruthy()
+				checked++
+				continue
+			}
 			const [row] = await db
 				.select()
 				.from(schema.pipelineContextTemplates)
@@ -217,7 +229,7 @@ describe("what a new version does to a tuned config", () => {
 	})
 
 	it("culls a value the new version no longer declares", async () => {
-		await reconcileConfigs(db, specId, specVersionId, CHAT_RESPOND_SPEC_ID)
+		await reconcileConfigs(db, specId, specVersionId, STORY_RESPOND_SPEC_ID)
 
 		const rows = await valuesOf(mine)
 		expect(
@@ -298,7 +310,7 @@ describe("what a new version does to a tuned config", () => {
 			db,
 			specId,
 			specVersionId,
-			CHAT_RESPOND_SPEC_ID
+			STORY_RESPOND_SPEC_ID
 		)
 		expect(report).toEqual([])
 		expect((await pendingNotices(db, mine)).length).toBe(before)
@@ -336,7 +348,7 @@ describe("which config a scope has selected", () => {
 	})
 
 	it("falls back to what core shipped when nothing has chosen", async () => {
-		const res = await resolveSelectedConfig(db, specId, CHAT_RESPOND_SPEC_ID, {})
+		const res = await resolveSelectedConfig(db, specId, STORY_RESPOND_SPEC_ID, {})
 		expect(res!.source).toBe("shipped")
 
 		const [shipped] = await db
@@ -345,7 +357,7 @@ describe("which config a scope has selected", () => {
 			.where(
 				eq(
 					schema.pipelineConfigs.seedKey,
-					`pipeline-default:${CHAT_RESPOND_SPEC_ID}`
+					`pipeline-default:${STORY_RESPOND_SPEC_ID}`
 				)
 			)
 		expect(res!.configId).toBe(shipped.id)
@@ -356,13 +368,13 @@ describe("which config a scope has selected", () => {
 		// config is made per session, or it is the instance's.
 		await selectConfig(db, specId, "pub", 0, mine, userId)
 		expect(
-			(await resolveSelectedConfig(db, specId, CHAT_RESPOND_SPEC_ID, {}))!
+			(await resolveSelectedConfig(db, specId, STORY_RESPOND_SPEC_ID, {}))!
 				.source
 		).toBe("pub")
 
 		await selectConfig(db, specId, "session", sessionId, mine, userId)
 		expect(
-			(await resolveSelectedConfig(db, specId, CHAT_RESPOND_SPEC_ID, {
+			(await resolveSelectedConfig(db, specId, STORY_RESPOND_SPEC_ID, {
 				sessionId
 			}))!.source
 		).toBe("session")
@@ -383,7 +395,7 @@ describe("which config a scope has selected", () => {
 		expect(rows.length).toBeGreaterThan(0)
 		for (const r of rows) expect(r.configId).toBeNull()
 
-		const res = await resolveSelectedConfig(db, specId, CHAT_RESPOND_SPEC_ID, {
+		const res = await resolveSelectedConfig(db, specId, STORY_RESPOND_SPEC_ID, {
 			sessionId
 		})
 		expect(res!.source).toBe("shipped")
@@ -411,7 +423,7 @@ describe("which config a scope has selected", () => {
 /**
  * Upgrading past the narrator split does not silently drop somebody's tuning.
  *
- * `core:spec/chat-narrate` moved to its own context-builder type, which stopped
+ * `core:spec/story-narrate` moved to its own context-builder type, which stopped
  * declaring two layouts it could never fill — `exampleDialogue`, read off a
  * speaking character a narrator does not have, and `speakerRelationships`,
  * which that spec never supplies. Any configuration written before the split
@@ -432,7 +444,7 @@ describe("the narrator split, from an older configuration", () => {
 		const [narrate] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-narrate"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/story-narrate"))
 		narrateSpecId = narrate.id
 		narrateVersionId = narrate.activeVersionId!
 
@@ -474,7 +486,7 @@ describe("the narrator split, from an older configuration", () => {
 			db,
 			narrateSpecId,
 			narrateVersionId,
-			"core:spec/chat-narrate"
+			"core:spec/story-narrate"
 		)
 		const paths = (await valuesOf(configId))
 			.filter((v: any) => v.slot === "variables")
@@ -528,7 +540,7 @@ describe("the narrator split, from an older configuration", () => {
  * for as long as it only matched the exact spelling, every author preset that
  * set `settings` was dropped in silence and the config took the author default.
  *
- * The visible cost of that: `core:spec/chat-generate-image` 1.0.0 shipped
+ * The visible cost of that: `core:spec/story-generate-image` 1.0.0 shipped
  * `review-on` as its DEFAULT preset, labelled "Ask for the prompt". The shipped
  * config was named after it, so the panel said "Ask for the prompt", and
  * pressing Image rendered immediately with whatever the prompts slot happened
@@ -724,7 +736,7 @@ describe("naming what was culled", () => {
 	}, 60_000)
 
 	it("labels the cull with what the version that declared it called it", async () => {
-		await reconcileConfigs(db, specId, specVersionId, CHAT_RESPOND_SPEC_ID)
+		await reconcileConfigs(db, specId, specVersionId, STORY_RESPOND_SPEC_ID)
 		const culled = (await pendingNotices(db, mine)).filter(
 			(n: any) => n.kind === "culled" && n.path === retired.path
 		)
@@ -878,7 +890,7 @@ describe("a script chain whose seam is gone (PLAN-script-placement D4)", () => {
 			db,
 			specId,
 			specVersionId,
-			CHAT_RESPOND_SPEC_ID
+			STORY_RESPOND_SPEC_ID
 		)
 		const mine = reports.find((r) => r.configId === drift)!
 		expect(mine.unplaced).toEqual([
@@ -919,7 +931,7 @@ describe("a script chain whose seam is gone (PLAN-script-placement D4)", () => {
 			db,
 			specId,
 			specVersionId,
-			CHAT_RESPOND_SPEC_ID
+			STORY_RESPOND_SPEC_ID
 		)
 		const mine = reports.find((r) => r.configId === drift)!
 		expect(mine.unplaced).toHaveLength(1)
@@ -934,7 +946,7 @@ describe("a script chain whose seam is gone (PLAN-script-placement D4)", () => {
  * `ensureDefaultConfig` projects the default preset once and returns early on
  * every later boot, so a release that moved a preset value never reached an
  * install that had booted the old one. The case that forced it:
- * `core:spec/chat-generate-image` 1.0.0 shipped review ON as its default
+ * `core:spec/story-generate-image` 1.0.0 shipped review ON as its default
  * preset; 1.1.0 ships it off, and a 0.6 install's Default kept asking.
  *
  * Both specs here are synthetic so the claim does not move with the catalogue.

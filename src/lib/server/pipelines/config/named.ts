@@ -70,6 +70,7 @@ import {
 	type Decl
 } from "$lib/server/pipelines/config/panel"
 import { defaultPromptFor } from "$lib/server/pipelines/boot/seedPrompts"
+import { scriptIdFor } from "$lib/server/pipelines/boot/seedScripts"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 import { defaultVariableTemplateFor } from "$lib/server/pipelines/boot/seedVariableTemplates"
 import { defaultContextTemplateFor } from "$lib/server/pipelines/boot/seedContextTemplates"
@@ -161,6 +162,8 @@ async function refDefaults(
 	// Per *seed key*: the same shipped row answers every step that named it,
 	// and the adventure preset names one row from two steps.
 	const samplings = new Map<string, number | null>()
+	// 🚧 Per *seed key* too: a shipped script row (`CORE_SCRIPTS`).
+	const scripts = new Map<string, number | null>()
 
 	for (const d of decls) {
 		const key = addr(d.nodeKey, d.slot, d.path)
@@ -249,6 +252,39 @@ async function refDefaults(
 			if (id != null) out.set(key, id)
 			continue
 		}
+		/**
+		 * 🚧 A script chain an author preset named by seed key
+		 * (`PresetBuilder.scripts`, 2026-10-15): each `{ seedKey }` link is
+		 * the row core seeded under it (`seedScripts.ts`), kept in order; a
+		 * key this install seeded nothing for drops out of the chain with a
+		 * warning — the chain still runs, one link shorter, as an unset
+		 * Sampling slot does. A bare number (an id an admin's own pick
+		 * stores) passes through.
+		 */
+		if (d.control === "scripts-chain") {
+			const links = scriptChainRefsOf(presetValues.get(key))
+			if (!links) continue
+			const ids: number[] = []
+			for (const link of links) {
+				if (typeof link === "number") {
+					ids.push(link)
+					continue
+				}
+				if (!scripts.has(link))
+					scripts.set(link, await scriptIdFor(db, link))
+				const id = scripts.get(link)
+				if (id == null) {
+					console.warn(
+						`[pipelines] ${specSlug}: no script is seeded as "${link}", so ` +
+							`${d.nodeKey}'s chain ships without it`
+					)
+					continue
+				}
+				ids.push(id)
+			}
+			out.set(key, ids)
+			continue
+		}
 		if (d.control === "sampling-ref") {
 			const seedKey = samplingSeedKeyOf(presetValues.get(key))
 			if (!seedKey) continue
@@ -287,6 +323,29 @@ function samplingSeedKeyOf(value: unknown): string | null {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return null
 	const seedKey = (value as { seedKey?: unknown }).seedKey
 	return typeof seedKey === "string" && seedKey ? seedKey : null
+}
+
+/**
+ * 🚧 A script chain an author preset named by seed key — `[{ seedKey }, …]`
+ * — as its links: a seed key per named row, a number per id. Null when the
+ * value names no row by key (a plain id list is a value, stored as written).
+ */
+function scriptChainRefsOf(value: unknown): Array<string | number> | null {
+	if (!Array.isArray(value)) return null
+	const links: Array<string | number> = []
+	let named = false
+	for (const link of value) {
+		if (typeof link === "number") links.push(link)
+		else if (
+			link &&
+			typeof link === "object" &&
+			typeof (link as { seedKey?: unknown }).seedKey === "string"
+		) {
+			links.push((link as { seedKey: string }).seedKey)
+			named = true
+		}
+	}
+	return named ? links : null
 }
 
 /** The row one seed key names, or null where this install has no such row. */
@@ -436,7 +495,7 @@ async function presetValuesFor(
 		// set `settings` was silently dropped and the config fell back to
 		// the author default.
 		//
-		// That was not a small miss. `core:spec/chat-generate-image` 1.0.0
+		// That was not a small miss. `core:spec/story-generate-image` 1.0.0
 		// shipped `review-on` as its DEFAULT preset, labelled "Ask for the
 		// prompt", so the shipped config was named after a preset whose one
 		// value never landed, and pressing Image rendered immediately instead
@@ -543,31 +602,12 @@ export async function ensureDefaultConfig(
 		})
 		.returning()
 
-	const refs = await refDefaults(db, specId, specSlug, decls, presetValues)
+	const shipped = await shippedConfigValues(db, specId, specSlug, decls, presetValues)
 
 	const values = decls
 		.map((d) => {
 			const key = addr(d.nodeKey, d.slot, d.path)
-			// A seed reference is the AUTHOR'S spelling of a row id, so what
-			// lands in the config is `refDefaults`' resolution of it and never
-			// the reference itself: one that resolved to nothing leaves the
-			// slot unset, where falling through to the preset would store
-			// `{ seedKey: ... }` at an address every reader treats as an
-			// integer.
-			// Every other slot keeps the preset on top of the shipped row,
-			// which is what a document setting its own template INLINE relies
-			// on — a `template` slot's `{ engine, source }` is a value, not a
-			// reference, and `templateRefOf` returns null for it.
-			// The three template controls read the same way as sampling since
-			// R19: `{ templateId }` / `{ seedKey }` is a NAME for a row, so it
-			// is resolved or it is dropped, never stored.
-			const seedRef = isSeedRef(d, presetValues.get(key))
-			const value = seedRef
-				? refs.get(key)
-				: presetValues.has(key)
-					? presetValues.get(key)
-					: (refs.get(key) ?? d.authorDefault)
-			return { d, value }
+			return { d, value: shipped.get(key) }
 		})
 		// A declaration with no default and no preset value is a field the author
 		// left open. Writing a NULL row for it would make "never set" and "set to
@@ -584,7 +624,7 @@ export async function ensureDefaultConfig(
 		// row is a deviation and stays. Shipping a preset IS departing from
 		// the bare declaration; the row is how it says so.
 		//
-		// `core:spec/chat-generate-image` was the other example until 1.1.0
+		// `core:spec/story-generate-image` was the other example until 1.1.0
 		// (2026-10-11). Its 1.0.0 default preset set `render|settings|review`
 		// to `on` where the substrate's `settings` slot (projected from the
 		// definition's `reviewDefault`, R-9) says `off`. 1.1.0 ships that
@@ -605,6 +645,61 @@ export async function ensureDefaultConfig(
 	return { configId: config.id, action: "created" }
 }
 
+/** 🚧 `shippedConfigValues` for one spec version, its declarations and author preset read here. */
+export async function shippedConfigValuesOf(
+	db: Db,
+	specId: number,
+	specSlug: string,
+	specVersionId: number,
+	decls: Decl[]
+): Promise<Map<string, unknown>> {
+	return shippedConfigValues(db, specId, specSlug, decls, (await presetValuesFor(db, specVersionId)).values)
+}
+
+/**
+ * 🚧 What the shipped Default config holds at each address, by key — the
+ * author preset over the declaration, a seed reference resolved to its row
+ * (`refDefaults`), an address with neither absent. What `ensureDefaultConfig`
+ * seeds (before dropping the values equal to the declaration), and what the
+ * panel's **Changed** mark compares a stored row to (PLAN-dc-after-walk2
+ * Q3-6, the walk's #50: every prompt and sampling row read "Changed" on an
+ * untouched config, because a reference's row is always written).
+ */
+export async function shippedConfigValues(
+	db: Db,
+	specId: number,
+	specSlug: string,
+	decls: Decl[],
+	presetValues: Map<string, unknown>
+): Promise<Map<string, unknown>> {
+	const refs = await refDefaults(db, specId, specSlug, decls, presetValues)
+	const out = new Map<string, unknown>()
+	for (const d of decls) {
+		const key = addr(d.nodeKey, d.slot, d.path)
+			// A seed reference is the AUTHOR'S spelling of a row id, so what
+			// lands in the config is `refDefaults`' resolution of it and never
+			// the reference itself: one that resolved to nothing leaves the
+			// slot unset, where falling through to the preset would store
+			// `{ seedKey: ... }` at an address every reader treats as an
+			// integer.
+			// Every other slot keeps the preset on top of the shipped row,
+			// which is what a document setting its own template INLINE relies
+			// on — a `template` slot's `{ engine, source }` is a value, not a
+			// reference, and `templateRefOf` returns null for it.
+			// The three template controls read the same way as sampling since
+			// R19: `{ templateId }` / `{ seedKey }` is a NAME for a row, so it
+			// is resolved or it is dropped, never stored.
+		const seedRef = isSeedRef(d, presetValues.get(key))
+		const value = seedRef
+			? refs.get(key)
+			: presetValues.has(key)
+				? presetValues.get(key)
+				: (refs.get(key) ?? d.authorDefault)
+		if (value !== undefined) out.set(key, value)
+	}
+	return out
+}
+
 /**
  * Whether a preset value at a reference slot is the author's NAME for a row
  * (`{ seedKey }`, `{ templateId }`) rather than a value to store. A name is
@@ -613,6 +708,7 @@ export async function ensureDefaultConfig(
 function isSeedRef(d: Decl, value: unknown): boolean {
 	return (
 		(d.control === "sampling-ref" && samplingSeedKeyOf(value) !== null) ||
+		(d.control === "scripts-chain" && scriptChainRefsOf(value) !== null) ||
 		((d.control === "prompts-ref" ||
 			d.control === "context-template-ref" ||
 			d.control === "variable-template-ref") &&

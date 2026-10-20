@@ -18,6 +18,15 @@ export interface RunProgress {
 	/** Identifies the run, for cancelling it and for keying client state. */
 	runId: string
 	sessionId?: number
+	/**
+	 * The channel the run is about, when the server knows it: a reply's
+	 * turn channel; an action's subject row's channel, else the one channel
+	 * every venue of its declaration names. Absent for an action placed on
+	 * every channel and pressed with no subject — the press carries no
+	 * channel (`FireAction.Params`). The progress card shows a run on the
+	 * conversation copy of its channel; an unknown one on the main copy.
+	 */
+	channel?: string
 	/** Which spec is running, when a pipeline is what started this. */
 	specId?: string
 	/** Which node inside it, so a multi-step run reads as steps rather than one bar. */
@@ -87,4 +96,9 @@ export interface RunProgress {
 	outcome?: "ok" | "halt" | "err" | "cancelled"
 	/** Which node halted the run, when `outcome` is `"halt"`. */
 	haltNodeKey?: string
+	/**
+	 * 🚧 That node's heading — its step label, else its definition's name —
+	 * which is what the card shows (2026-10-16); the key is for the inspector.
+	 */
+	haltStep?: string
 }

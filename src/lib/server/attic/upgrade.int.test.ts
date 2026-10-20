@@ -414,10 +414,12 @@ describe("lorebooks (cast tag repair 0200/0201, binding merge, entries)", () => 
 })
 
 describe("sessions", () => {
-	test("every chat is a Chat session under its own id", async () => {
+	test("every chat is a Story session under its own id (ruled 2026-10-19; Minimal once the presets are seeded)", async () => {
 		const sessions = await q(`SELECT * FROM sessions ORDER BY id`)
 		expect(sessions.map((s) => s.id)).toEqual(before.chats.map((c) => c.id))
-		expect(sessions.every((s) => s.genre_id === "core:genre/chat" && s.preset_id === null)).toBe(true)
+		expect(sessions.every((s) => s.genre_id === "core:genre/story")).toBe(true)
+		// Restored with no preset; `finishAtticUpgrade` adopts Story's Minimal once the pipelines bootstrap seeded it.
+		expect(sessions.every((s) => s.preset_id === null || Number.isInteger(s.preset_id))).toBe(true)
 		const summarize = sessions.find((s) => s.id === ids.chats.summarize)
 		expect(summarize.session_type).toBe("summarize")
 		for (const c of before.chats) {
@@ -447,7 +449,7 @@ describe("sessions", () => {
 		for (const c of expected) {
 			const r = rebinds.find((x) => x.scope_id === c.id)
 			expect(r?.definition_id).toBe(STRATEGY_REBINDS[c.group_reply_strategy])
-			expect(r?.slug).toBe("core:spec/chat-turn-order")
+			expect(r?.slug).toBe("core:spec/story-turn-order")
 			expect(r?.node_key).toBe("decide.rules.strategy")
 		}
 		expect(rebinds.find((r) => r.scope_id === ids.chats.manual)?.definition_id).toBe("core:task/turn-manual@1")
@@ -645,7 +647,7 @@ describe("connections and sampling (0096/0097/0105/0114/0127)", () => {
 			ids.chats.visibility
 		)
 		expect(picks.map((p) => p.slug)).toEqual(
-			expect.arrayContaining(["core:spec/chat-respond", "core:spec/chat-narrate"])
+			expect.arrayContaining(["core:spec/story-respond", "core:spec/story-narrate"])
 		)
 		for (const p of picks) {
 			expect(p.path).toBe("")
@@ -673,7 +675,7 @@ describe("configurations wired from the attic", () => {
 	test("every 0.5.3 config a person wrote has its migrated pipeline config", async () => {
 		const markers = (await q(`SELECT seed_key FROM pipeline_configs WHERE seed_key LIKE 'migrated:%'`)).map((r) => r.seed_key)
 		for (const p of before.prompt_configs.filter((r) => !r.seed_key))
-			expect(markers).toContain(`migrated:core:spec/chat-respond:${p.id}`)
+			expect(markers).toContain(`migrated:core:spec/story-respond:${p.id}`)
 		expect(markers.length).toBeGreaterThanOrEqual(
 			before.prompt_configs.filter((r) => !r.seed_key).length +
 				before.narrator_prompt_configs.filter((r) => !r.seed_key).length
@@ -693,7 +695,7 @@ describe("configurations wired from the attic", () => {
 			)
 		const mine = before.prompt_configs.find((p) => p.name === "My prompt")!
 		expect(mine.connection_id).not.toBeNull()
-		const respond = await valuesOf(`migrated:core:spec/chat-respond:${mine.id}`)
+		const respond = await valuesOf(`migrated:core:spec/story-respond:${mine.id}`)
 		expect(respond.map((v) => v.value)).not.toContainEqual(expect.objectContaining({ ref: mine.connection_id }))
 		const dry = await one(`SELECT id FROM sampling_configs WHERE name = 'DRY + XTC'`)
 		expect(respond.filter((v) => v.slot === "sampling").map((v) => v.value)).not.toContain(dry.id)
@@ -707,10 +709,10 @@ describe("configurations wired from the attic", () => {
 		const sel = await one(
 			`SELECT c.seed_key FROM pipeline_config_selections s JOIN pipeline_configs c ON c.id = s.config_id
 			 JOIN pipeline_specs p ON p.id = s.spec_id
-			 WHERE s.scope_kind = 'session' AND s.scope_id = $1 AND p.slug = 'core:spec/chat-respond'`,
+			 WHERE s.scope_kind = 'session' AND s.scope_id = $1 AND p.slug = 'core:spec/story-respond'`,
 			ids.chats.visibility
 		)
-		expect(sel.seed_key).toBe(`migrated:core:spec/chat-respond:${ids.legacyConfigs.prompt}`)
+		expect(sel.seed_key).toBe(`migrated:core:spec/story-respond:${ids.legacyConfigs.prompt}`)
 	})
 })
 

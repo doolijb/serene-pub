@@ -101,7 +101,12 @@ function feed(key: string, msg: unknown) {
 	for (const h of listeners.get(key) ?? []) h(msg)
 }
 
-/** The form on a genre that takes one to `max` characters and one persona. */
+/**
+ * The form on a genre that takes one to `max` characters and one persona, and
+ * starts with the default persona chosen — which a genre has to say outright
+ * since 2026-10-19 (`preselectDefault: true`); one that says nothing starts
+ * with nobody played (the last cases below).
+ */
 async function render(max = 3, more: Record<string, unknown> = {}) {
 	host = document.createElement("div")
 	document.body.append(host)
@@ -118,7 +123,7 @@ async function render(max = 3, more: Record<string, unknown> = {}) {
 				description: "",
 				shape: {
 					characters: { min: 1, max },
-					personas: { min: 1, max: 1 },
+					personas: { min: 1, max: 1, preselectDefault: true },
 					...more
 				}
 			}
@@ -370,6 +375,54 @@ describe("Start a session › Who is in it", () => {
 
 		expect(openDialog()).toBeNull()
 		expect(listed("Who you play as")).toEqual(["Wren"])
+	})
+
+	test("a genre that does not preselect starts with nobody played, and creates with no persona", async () => {
+		// Ruled 2026-10-19: a genre that says nothing preselects nobody (Story,
+		// and Dungeon Crawler, where a persona is only a seed for the seat).
+		await render(3, {
+			characters: { min: 0 },
+			personas: { min: 0 }
+		})
+		expect(listed("Who you play as")).toEqual([])
+		expect(buttonByText("Choose who you play as", host)).not.toBeNull()
+		expect(host.textContent).toContain("Who you play as — optional")
+
+		buttonByText("Start", host)!.click()
+		await settle()
+		const create = requests.find((r) => r.key === "sessions:create")
+		expect(create?.params.personaIds).toEqual([])
+	})
+
+	test("an optional persona is removable with ×, and the default does not come back", async () => {
+		await render(3, {
+			characters: { min: 0 },
+			personas: { min: 0, max: 1, preselectDefault: true }
+		})
+		expect(listed("Who you play as")).toEqual(["You"])
+
+		button("Remove You", host)!.click()
+		await settle()
+		expect(listed("Who you play as")).toEqual([])
+		const choose = buttonByText("Choose who you play as", host)!
+		expect(document.activeElement).toBe(choose)
+
+		// A later change to the lists does not refill the removed default.
+		feed("characters:list", { characterList: [...CHARACTERS] })
+		await settle()
+		expect(listed("Who you play as")).toEqual([])
+
+		buttonByText("Start", host)!.click()
+		await settle()
+		const create = requests.find((r) => r.key === "sessions:create")
+		expect(create?.params.personaIds).toEqual([])
+	})
+
+	test("a required persona has Change but no ×", async () => {
+		await render()
+		expect(listed("Who you play as")).toEqual(["You"])
+		expect(button("Change who you play as", host)).not.toBeNull()
+		expect(button("Remove You", host)).toBeNull()
 	})
 
 	test("the picker takes focus, and Escape closes it", async () => {

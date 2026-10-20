@@ -247,6 +247,21 @@ export const CONVERSATION_MESSAGE = defineNotificationKind({
 })
 
 /**
+ * 🚧 A goal in a Story session's goals note was reached (PLAN-genre-restructure
+ * §4, lane 2, 2026-10-19): the *Mark goals reached* task, on Full, tells
+ * every member of the session once, as the story says it. News: seeing it
+ * is enough. One row per goal (`regarding session:<id>/goal:<key>`).
+ */
+export const GOAL_REACHED = defineNotificationKind({
+	id: "core:notification/goal-reached@1",
+	level: "info",
+	clearsOn: "view",
+	title: "A goal was reached in {session}",
+	detail: "{goal}",
+	cta: "Open session"
+})
+
+/**
  * The `regarding` keys, built in one place so a raise and its clear can never
  * spell the same thing two ways.
  */
@@ -264,7 +279,9 @@ export const regardingFor = {
 	formsIn: (sessionId: number) => `session:${sessionId}/form:`,
 	replyFailed: (sessionId: number, messageId: number) =>
 		`session:${sessionId}/failed:${messageId}`,
-	conversation: (conversationId: number) => `conversation:${conversationId}`
+	conversation: (conversationId: number) => `conversation:${conversationId}`,
+	/** 🚧 One goal of a Story session's goals note, by its lower-cased words. */
+	goal: (sessionId: number, goalKey: string) => `session:${sessionId}/goal:${goalKey}`
 }
 
 /** The Messages view landed on one conversation. */

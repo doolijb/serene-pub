@@ -77,7 +77,7 @@ const NUDGE = {
 }
 const SURVEY = act({
 	key: "survey",
-	specSlug: "core:spec/adventure-survey",
+	specSlug: "core:spec/story-survey",
 	origin: "companion",
 	venue: "composer",
 	name: "Survey",
@@ -185,7 +185,7 @@ describe("core's remote Actions", () => {
 					head: "Genre actions",
 					buttons: [
 						"core:spec/lair-nudge#nudge",
-						"core:spec/adventure-survey#survey"
+						"core:spec/story-survey#survey"
 					]
 				},
 				{
@@ -207,7 +207,7 @@ describe("core's remote Actions", () => {
 		{ timeout: 120_000 },
 		async () => {
 			const view = await mountActions()
-			const survey = button(view, "core:spec/adventure-survey#survey")
+			const survey = button(view, "core:spec/story-survey#survey")
 			expect(survey.getAttribute("aria-disabled")).toBe("true")
 			expect(survey.getAttribute("title")).toBe(
 				"Survey — set a location first"

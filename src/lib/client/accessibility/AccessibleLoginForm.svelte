@@ -1,7 +1,8 @@
 <script lang="ts">
 	/** Accessible-mode analogue of LoginForm.svelte — same POST /api/login +
 	 * refreshAuthAfterLogin() flow, high-contrast/keyboard-first markup. */
-	import { onDestroy } from "svelte"
+	import { onDestroy, onMount } from "svelte"
+	import { takeSignedOutWhy } from "$lib/client/auth/signedOutNotice"
 	import { z } from "zod"
 	import { refreshAuthAfterLogin } from "$lib/client/sockets/loadSockets.client"
 	import "./accessible.css"
@@ -103,6 +104,11 @@
 			isLoading = false
 		}
 	}
+	/** 🚧 Why this tab was signed out, when the page that did it said (Q3-7, N17). */
+	let signedOutWhy = $state<string | null>(null)
+	onMount(() => {
+		signedOutWhy = takeSignedOutWhy()
+	})
 </script>
 
 <div
@@ -113,6 +119,11 @@
 	<main class="a11y-main">
 		<h1>Serene Pub — Document View (Accessible)</h1>
 		<p>Sign in to your Serene Pub account.</p>
+		{#if signedOutWhy}
+			<div class="a11y-status" role="status">
+				<p>{signedOutWhy}</p>
+			</div>
+		{/if}
 
 		{#if formError}
 			<div class="a11y-status a11y-status-error" role="alert">

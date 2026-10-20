@@ -31,6 +31,7 @@
 	import { attachLorebookToSession } from "$lib/client/utils/attachLorebookToSession"
 	import type { RowMenuEntries } from "$lib/client/components/menus/RowMenu.svelte"
 	import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
+	import BookReadBy from "./BookReadBy.svelte"
 	import BookSettings from "./BookSettings.svelte"
 	import DayOne from "./DayOne.svelte"
 	import LensTrack from "./LensTrack.svelte"
@@ -800,6 +801,16 @@
 					clock: openSessionCtx.storyClock ?? null
 				}
 			: null
+	)
+
+	/**
+	 * 🚧 A session that reads this book but is not the open one (DC walk 6: a
+	 * book made from a session said "Not read by a session"): the asker's own
+	 * readers off the list row (`readBy`), newest first. Named only — where
+	 * it stands is the open session's to say.
+	 */
+	let closedReaders = $derived(
+		railSession ? [] : ((book as { readBy?: { id: number; name: string | null }[] } | undefined)?.readBy ?? [])
 	)
 
 	/**
@@ -2251,7 +2262,7 @@
 					Read what it reads
 				</button>{/if}
 		{:else}
-			Not read by a session
+			<BookReadBy readers={closedReaders} />
 		{/if}
 	</p>
 {/snippet}

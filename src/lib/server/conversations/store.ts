@@ -1010,6 +1010,8 @@ async function askerCandidates(
 		.where(
 			and(
 				or(eq(L.userId, userId), inArray(L.id, shared)),
+				// 🚧 Never a session's own notes (PLAN-rulesets §26).
+				sql`${L.sessionId} IS NULL`,
 				like ? ilike(L.name, like) : undefined
 			)
 		)

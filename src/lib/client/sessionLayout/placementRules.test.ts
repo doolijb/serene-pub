@@ -5,14 +5,10 @@
  *
  * QE (1): when the conversation is not in the middle, the phone and Stage
  * only show the first unclaimed Messages as the stage, wherever it sits.
- * QF (1): Done refuses an empty middle.
  */
 import { describe, expect, test } from "vitest"
 import {
-	EMPTY_MIDDLE_REFUSAL,
-	REFUSE_EMPTY_MIDDLE,
 	STAGE_FOLLOWS_CONVERSATION,
-	emptyMiddleRefusal,
 	primaryLogPick,
 	stageOf
 } from "./placementRules"
@@ -57,32 +53,23 @@ describe("QE — the stage follows the conversation (recommended (1))", () => {
 		).toEqual({ id: "messages#sanctum", zone: "right" })
 	})
 
-	test("no conversation placed at all: no stage, so nothing is hidden", () => {
+	test("no conversation placed at all (R-B): the primary panel is the stage", () => {
 		expect(
-			stageOf({ middle: ["world-state"], left: [], right: [], claims: noClaims, primaryId: "messages" })
-		).toBeNull()
+			stageOf({ middle: ["world-state"], left: ["stats"], right: [], claims: noClaims, primaryId: "messages" })
+		).toEqual({ id: "world-state", zone: "middle" })
+	})
+
+	test("no conversation and nothing in the middle: the first side panel is the stage; nothing at all, none", () => {
+		expect(
+			stageOf({ middle: [], left: [], right: ["map"], claims: noClaims, primaryId: "messages" })
+		).toEqual({ id: "map", zone: "right" })
+		expect(stageOf({ middle: [], left: [], right: [], claims: noClaims, primaryId: "messages" })).toBeNull()
 	})
 
 	test("an R71 genre's own primary is its stage", () => {
 		expect(
 			stageOf({ middle: ["map"], left: ["acme.game:board"], right: [], claims: noClaims, primaryId: "acme.game:board" })
 		).toEqual({ id: "acme.game:board", zone: "left" })
-	})
-})
-
-describe("QF — Done refuses an empty middle (recommended (1))", () => {
-	test("is the default in force", () => {
-		expect(REFUSE_EMPTY_MIDDLE).toBe(true)
-	})
-
-	test("an empty middle is refused, in the plan's words", () => {
-		expect(emptyMiddleRefusal([])).toBe("Put a widget in the middle, or move one back.")
-		expect(EMPTY_MIDDLE_REFUSAL).toBe("Put a widget in the middle, or move one back.")
-	})
-
-	test("any widget in the middle lets Done through — it need not be the conversation", () => {
-		expect(emptyMiddleRefusal(["world-state"])).toBeNull()
-		expect(emptyMiddleRefusal(["messages"])).toBeNull()
 	})
 })
 

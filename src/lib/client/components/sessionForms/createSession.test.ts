@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest"
 import {
+	preselectsDefaultPersona,
 	addToCast,
 	applyPresetFill,
 	autoSessionName,
@@ -66,14 +67,14 @@ describe("buildCreatePayload", () => {
 	it("sends the exact sessions:create shape the server reads", () => {
 		const params = buildCreatePayload({
 			name: "  Night market  ",
-			genreId: "core:genre/adventure@2",
+			genreId: "core:genre/story@2",
 			presetId: 7,
 			characterIds: [4, 9],
 			personaIds: [2],
 			scenario: "  A stall of lanterns.  ",
 			tags: ["noir"],
 			genreFields: { trustNarrator: true },
-			swaps: [{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-manual@1" }],
+			swaps: [{ spec: "core:spec/story-turn-order", node: "strategy", definition: "core:task/turn-manual@1" }],
 			lorebookId: 3
 		})
 
@@ -81,9 +82,9 @@ describe("buildCreatePayload", () => {
 			session: {
 				name: "Night market",
 				scenario: "A stall of lanterns.",
-				swaps: [{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-manual@1" }],
+				swaps: [{ spec: "core:spec/story-turn-order", node: "strategy", definition: "core:task/turn-manual@1" }],
 				lorebookId: 3,
-				genreId: "core:genre/adventure@2",
+				genreId: "core:genre/story@2",
 				presetId: 7,
 				genreFields: { trustNarrator: true }
 			},
@@ -140,24 +141,24 @@ describe("latestGenres", () => {
 	it("offers each genre once, at its newest version", () => {
 		const rows = [
 			genre("core:genre/chat"),
-			genre("core:genre/adventure@1"),
-			genre("core:genre/adventure@3"),
-			genre("core:genre/adventure@2")
+			genre("core:genre/story@1"),
+			genre("core:genre/story@3"),
+			genre("core:genre/story@2")
 		]
 		expect(latestGenres(rows).map((g) => g.genreId)).toEqual([
 			"core:genre/chat",
-			"core:genre/adventure@3"
+			"core:genre/story@3"
 		])
 	})
 
 	it("says a genre's version in words, from the id's @N", () => {
 		expect(genreVersionLabel("core:genre/chat@2")).toBe("version 2")
-		expect(genreVersionLabel("core:genre/chat")).toBe("version 1")
+		expect(genreVersionLabel("core:genre/story")).toBe("version 1")
 	})
 
 	it("reads a version-less id as version 1", () => {
-		expect(genreVersion("core:genre/chat")).toEqual({
-			bare: "core:genre/chat",
+		expect(genreVersion("core:genre/story")).toEqual({
+			bare: "core:genre/story",
 			version: 1
 		})
 		expect(genreVersion("core:genre/chat@4")).toEqual({
@@ -180,7 +181,7 @@ describe("enabledPresetsFor / defaultGenreId", () => {
 		const presets = [
 			preset({ id: 1 }),
 			preset({ id: 2, enabled: false }),
-			preset({ id: 3, genreId: "core:genre/adventure" })
+			preset({ id: 3, genreId: "core:genre/lair" })
 		]
 		expect(
 			enabledPresetsFor(presets, STANDARD_GENRE_ID).map((p) => p.id)
@@ -211,20 +212,20 @@ describe("enabledPresetsFor / defaultGenreId", () => {
 })
 
 describe("participantFloors", () => {
-	it("keeps the standard genre at one character and one persona", () => {
+	it("reads the standard genre's floor from its shape too (2026-10-19: Story may start with nobody)", () => {
 		expect(
 			participantFloors(
 				{ characters: { min: 0 }, personas: { min: 0 } },
 				STANDARD_GENRE_ID
 			)
-		).toEqual({ characters: 1, personas: 1 })
+		).toEqual({ characters: 0, personas: 0 })
 	})
 
 	it("reads another genre's floor from its own shape", () => {
 		expect(
 			participantFloors(
 				{ characters: { min: 2, max: 4 }, personas: { min: 0 } },
-				"core:genre/adventure"
+				"core:genre/story"
 			)
 		).toEqual({ characters: 2, personas: 0 })
 	})
@@ -267,7 +268,7 @@ describe("lorebookSatisfied", () => {
  * (2026-09-17): its genre requires a lorebook, and the card knows none.
  */
 describe("oneClickStart", () => {
-	const ADVENTURE = "core:genre/adventure"
+	const ADVENTURE = "core:genre/lair" // a lorebook-requiring genre (was Adventure, retired 2026-10-19)
 	const genres = [
 		genre(STANDARD_GENRE_ID, {
 			shape: { characters: { min: 0 }, lorebook: "optional" }
@@ -309,7 +310,7 @@ describe("oneClickStart", () => {
  * create in a sentence the client swallowed (2026-09-17).
  */
 describe("StartSessionFlow.canStart", () => {
-	const ADVENTURE = "core:genre/adventure"
+	const ADVENTURE = "core:genre/lair" // a lorebook-requiring genre (was Adventure, retired 2026-10-19)
 	function flowOn(genreId: string, shape: GenreRow["shape"]) {
 		const flow = new StartSessionFlow()
 		flow.rawGenres = [genre(genreId, { shape })]
@@ -806,7 +807,7 @@ describe("the wizard's first Guide session", () => {
 
 describe("firstUnmetStartRule", () => {
 	const ready = {
-		genreId: "core:genre/adventure",
+		genreId: "core:genre/story",
 		noPresetsForGenre: false,
 		characterCount: 1,
 		personaCount: 1,
@@ -861,5 +862,19 @@ describe("firstUnmetStartRule", () => {
 				shape: { lorebook: "optional" } as GenreRow["shape"]
 			})
 		).toBeNull()
+	})
+})
+
+describe("preselectsDefaultPersona", () => {
+	it("never preselects unless the genre says so outright (ruled 2026-10-19)", () => {
+		expect(preselectsDefaultPersona(null)).toBe(false)
+		expect(preselectsDefaultPersona({ personas: { min: 0 } })).toBe(false)
+		expect(preselectsDefaultPersona({ personas: { min: 1, max: 1 } })).toBe(false)
+		expect(preselectsDefaultPersona({ personas: { min: 0, preselectDefault: true } })).toBe(true)
+		expect(
+			preselectsDefaultPersona({ personas: { min: 0, preselectDefault: false } })
+		).toBe(false)
+		expect(preselectsDefaultPersona({ personas: { min: 0, max: 0 } })).toBe(false)
+		expect(preselectsDefaultPersona({})).toBe(false)
 	})
 })

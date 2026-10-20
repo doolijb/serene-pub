@@ -17,6 +17,8 @@
 	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { enumOptions } from "$lib/shared/i18n/enumOptions"
+	import TasksField from "$lib/client/components/sessionForms/TasksField.svelte"
+	import type { TaskDecl } from "@serene-pub/sdk"
 
 	interface FieldDecl {
 		type:
@@ -29,6 +31,8 @@
 			| "string[]"
 			| "secret"
 			| "object"
+			/** 🚧 Background tasks grouped by trigger (`TasksField`). */
+			| "tasks"
 		label?: string | ({ en: string } & Record<string, string>)
 		description?: string | ({ en: string } & Record<string, string>)
 		min?: number
@@ -41,6 +45,8 @@
 			description?: string | ({ en: string } & Record<string, string>)
 		}[]
 		group?: string
+		/** 🚧 Folded under "Advanced" until opened (2026-10-19). */
+		advanced?: true
 		showIf?: { field: string; equals: unknown }
 		format?: "json"
 		/** Shown while nothing is stored: the value a run reads (B16x). */
@@ -64,9 +70,12 @@
 		 * one on a wrapper silently misses every pick.
 		 */
 		oncommit?: () => void
+		/** 🚧 What a `tasks` field needs beyond its declaration: the genre's task declarations and the preset's pin. */
+		extras?: { tasks?: readonly TaskDecl[]; tasksPinned?: unknown }
+		disabled?: boolean
 	}
 
-	let { schema, values = $bindable(), oncommit }: Props = $props()
+	let { schema, values = $bindable(), oncommit, extras, disabled = false }: Props = $props()
 
 	/** Write one field and tell the host it was committed. */
 	function commit(key: string, value: unknown) {
@@ -77,6 +86,9 @@
 	const text = (v: FieldDecl["label"], fallback: string): string =>
 		i18nTextIn(v) ?? fallback
 
+	/** The trailing fold every `advanced: true` field lands in. */
+	const ADVANCED_GROUP = "\u0000advanced"
+
 	/** Declaration order within a group; group order is first appearance. */
 	const groups = $derived.by(() => {
 		const out: Array<{
@@ -84,7 +96,8 @@
 			fields: Array<{ key: string; decl: FieldDecl }>
 		}> = []
 		for (const [key, decl] of Object.entries(schema)) {
-			const name = decl.group ?? ""
+			// An advanced field sits in the trailing fold, whatever its group.
+			const name = decl.advanced ? ADVANCED_GROUP : (decl.group ?? "")
 			let g = out.find((x) => x.group === name)
 			if (!g) out.push((g = { group: name, fields: [] }))
 			g.fields.push({ key, decl })
@@ -106,6 +119,34 @@
 
 	const asLines = (v: unknown): string =>
 		Array.isArray(v) ? v.join("\n") : String(v ?? "")
+
+	/**
+	 * 🚧 A `string[]` that names its choices (`of` / `members`) is ticked, one
+	 * box a choice, never typed (2026-10-18, the 100-turn walk #46: a
+	 * Messages copy's _Line kinds_ was a comma-separated text box).
+	 */
+	const isTicks = (decl: FieldDecl): boolean =>
+		decl.type === "string[]" && !!(decl.of?.length || decl.members?.length)
+	/** What is ticked: the stored list — ⏳ or one comma-separated string, an older row's form. */
+	const ticked = (v: unknown): string[] =>
+		(Array.isArray(v) ? v.map(String) : typeof v === "string" ? v.split(",") : [])
+			.map((s) => s.trim())
+			.filter(Boolean)
+	/** The boxes: the declared choices, then any stored value they do not name (kept, so it can be unticked). */
+	function tickOptions(decl: FieldDecl, v: unknown) {
+		const declared = enumOptions(decl)
+		const extra = ticked(v).filter((t) => !declared.some((o) => o.value === t))
+		return [...declared, ...extra.map((value) => ({ value, label: value }))]
+	}
+	/** The list after one box moved, in the boxes' own order. */
+	function toggled(decl: FieldDecl, v: unknown, value: string, on: boolean): string[] {
+		const now = new Set(ticked(v))
+		if (on) now.add(value)
+		else now.delete(value)
+		return tickOptions(decl, v)
+			.map((o) => o.value)
+			.filter((o) => now.has(o))
+	}
 
 	const isBag = (v: unknown): v is Record<string, unknown> =>
 		!!v && typeof v === "object" && !Array.isArray(v)
@@ -233,13 +274,17 @@
 	</div>
 {/snippet}
 
+{#snippet groupHeading(g: (typeof groups)[number])}
+	{#if g.group && g.group !== ADVANCED_GROUP}
+		<p class="text-surface-600-400 mt-1 text-xs font-semibold">
+			{g.group}
+		</p>
+	{/if}
+{/snippet}
+
 <div class="flex flex-col gap-3">
-	{#each groups as g (g.group)}
-		{#if g.group}
-			<p class="text-surface-600-400 mt-1 text-xs font-semibold">
-				{g.group}
-			</p>
-		{/if}
+	{#each groups.filter((g) => g.group !== ADVANCED_GROUP) as g (g.group)}
+		{@render groupHeading(g)}
 		{#each g.fields as { key, decl } (key)}
 			{#if visible(decl) && decl.type === "object"}
 				<!-- A fixed-key record: its members under its label, a member
@@ -282,12 +327,26 @@
 						{/if}
 					{/each}
 				</fieldset>
+			{:else if visible(decl) && decl.type === "tasks"}
+				<div class="flex flex-col gap-1">
+					<span class="text-sm font-medium">{text(decl.label, key)}</span>
+					{#if decl.description}
+						<p class="text-surface-600-400 text-xs">{text(decl.description, "")}</p>
+					{/if}
+					<TasksField
+						decls={extras?.tasks ?? []}
+						value={shown(key)}
+						pinned={extras?.tasksPinned}
+						onchange={(v) => commit(key, v)}
+						{disabled}
+					/>
+				</div>
 			{:else if visible(decl)}
 				<div class="flex flex-col gap-1">
-					{#if decl.type === "enum"}
+					{#if decl.type === "enum" || isTicks(decl)}
 						<!-- Select carries its own (visually hidden) label;
 						     this is the same visible text, kept for the
-						     column's rhythm. -->
+						     column's rhythm. A ticked list's group says it. -->
 						<span class="text-sm font-medium" aria-hidden="true">
 							{text(decl.label, key)}
 						</span>
@@ -345,6 +404,33 @@
 								: String(shown(key))}
 							onchange={(e) => commit(key, e.currentTarget.value)}
 						/>
+					{:else if isTicks(decl)}
+						<div
+							class="flex flex-col gap-1"
+							role="group"
+							aria-label={text(decl.label, key)}
+						>
+							{#each tickOptions(decl, shown(key)) as o (o.value)}
+								<label class="flex items-center gap-2 text-sm">
+									<input
+										type="checkbox"
+										class="checkbox"
+										checked={ticked(shown(key)).includes(o.value)}
+										onchange={(e) =>
+											commit(
+												key,
+												toggled(
+													decl,
+													shown(key),
+													o.value,
+													e.currentTarget.checked
+												)
+											)}
+									/>
+									<span>{o.label}</span>
+								</label>
+							{/each}
+						</div>
 					{:else if decl.type === "string[]"}
 						<textarea
 							id="sf-{key}"
@@ -388,5 +474,17 @@
 				</div>
 			{/if}
 		{/each}
+	{/each}
+	{#each groups.filter((g) => g.group === ADVANCED_GROUP) as g (g.group)}
+		<details class="border-surface-200-800 rounded-[12px] border p-3" data-testid="schema-form-advanced">
+			<summary class="text-surface-600-400 cursor-pointer text-xs font-semibold">Advanced</summary>
+			<div class="mt-3 flex flex-col gap-3">
+				{#each g.fields as { key, decl } (key)}
+					{#if visible(decl)}
+						{@render control(`sf-${key}`, key, decl, shown(key), (v) => commit(key, v), (v) => (values[key] = v))}
+					{/if}
+				{/each}
+			</div>
+		</details>
 	{/each}
 </div>

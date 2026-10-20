@@ -1,44 +1,55 @@
 <script lang="ts">
 	/**
-	 * The PHONE editor (ruled 2026-09-10), split out of SessionLayout.
+	 * The PHONE editor (PLAN-session-panels-2026-10-14 §3 lane 4).
 	 *
-	 * Below the breakpoint the layout is an ordered list per zone, because that
-	 * is what the session draws there — no side-by-side placements, anchors
-	 * reduced to order, each side group a panel that is either open or an icon.
-	 * The editor edits exactly those three facts, through ./mobileEdit, into the
-	 * SAME `editArranged` the grid writes and the same commit on Done. There is
-	 * no mobile layout blob and no mobile preset.
+	 * Below the breakpoint the session draws one panel under the next, so the
+	 * editor is a list: one row per panel, its tabs listed inside, in the order
+	 * Above · Middle · Below · Left · Right (./mobileEdit). Every edit is one of
+	 * ./arrangeOps — the desktop editor's — over the one working
+	 * `PanelLayoutV1`, so there is no mobile layout blob and no mobile preset.
 	 *
-	 * The two gates that decide whether this is mounted at all — `mobileEdit`
-	 * and `liveStowed` — stay in SessionLayout, because the live session's own
-	 * mount reads them. This component is only what is drawn once they say yes,
-	 * and its sheet state is its own: closing the editor unmounts it, which
-	 * resets that state with no work in SessionLayout's `closeEditor`.
+	 * Nothing is locked (§10 R-B): every tab has ×, and a refusal
+	 * (`MIDDLE_EMPTY`) is said in the status line. A side lists two groups,
+	 * Docked then In the rail (R-C); a row's up / down crosses between them.
+	 * Any row but the primary can be made main (`makeMain`).
+	 *
+	 * Done writes the panels through the manager's `setPanels` only when they
+	 * differ from what the editor opened on (`samePanels`), then closes.
+	 *
+	 * It sits OVER the live session rather than replacing it, so nothing in the
+	 * session reloads while the order is edited. Its sheet state is its own:
+	 * closing the editor unmounts it, which resets that state.
 	 */
-	import { tick, type Snippet } from "svelte"
+	import { tick, untrack, type Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
+	import type { PanelLayoutV1 } from "@serene-pub/sdk"
+	import { isInstanceOf, widgetOfInstance } from "@serene-pub/sdk"
 	import type { PanelInstance } from "$lib/client/surfaces/types"
 	import { duplicateOffered, type TrayWidget } from "./widgetInstances"
-	// The phone editor's model (ruled 2026-09-10): below the breakpoint the
-	// layout is an ordered list per zone, not a grid, and these are the only
-	// edits it may make to the one arrangement. See ./mobileEdit.
+	import { samePanels, type ArrangeOutcome } from "./arrangeOps"
 	import {
-		mobileRows,
-		moveMember,
+		addAt,
+		canSplitOut,
+		duplicateTab,
+		mintFor,
 		moveRow,
 		moveRowTo,
-		restackZone,
-		setRowPinned,
-		type MobileRow
+		moveTabInto,
+		moveTabWithin,
+		phoneSections,
+		removeTabFrom,
+		makeMain,
+		setRowHeight,
+		splitTab,
+		type AddTarget,
+		type PhoneRow
 	} from "./mobileEdit"
-	import type { RenderUnit } from "./tabGroups"
 	import type { SimTier } from "./simulator"
 	// A widget's settings and style open in the one app-level modal — the same
 	// one the desktop editor's gear opens, a full-screen sheet at this width.
 	import { openWidgetSettings } from "./widgetSettingsModal.svelte"
-	// The layouts sheet says what the desktop's Layouts tab says (brief 4):
-	// the same groups, status line, Updated offer and questions — and, since
-	// brief 6b, the same card menu and Save changes to.
+	// The layouts sheet says what the desktop's Layouts tab says: the same
+	// sections, source lines, status line, Updated offer, questions and card menu.
 	import LayoutConfirmDialog from "./LayoutConfirmDialog.svelte"
 	import SaveAsNewLayoutDialog from "./SaveAsNewLayoutDialog.svelte"
 	import LayoutCardMenu from "./LayoutCardMenu.svelte"
@@ -57,6 +68,7 @@
 		reCopyLabel,
 		saveChangesConfirm,
 		sharedMark,
+		sourceLine,
 		unshareAsks,
 		unshareConfirm,
 		updatedSentence,
@@ -64,75 +76,53 @@
 		type CopyAsk,
 		type LayoutPresetUsage
 	} from "./startFrom"
-	import {
-		type ArrangedGridV1,
-		type ArrangedZone,
-		isInstanceOf,
-		widgetOfInstance,
-		type ZoneId
-	} from "@serene-pub/sdk"
 
-	/** One side's previewed column, as SessionLayout's `previewColumn` returns it. */
-	type PreviewColumn = { frame: ArrangedZone; units: RenderUnit[] }
+	/** The floor a session draws with nothing placed: Messages alone in the middle. */
+	const floorPanels = (): PanelLayoutV1 => ({
+		version: 1,
+		left: [],
+		middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] },
+		right: []
+	})
 
 	interface Props {
 		/**
-		 * The editor's working arrangement — the same object the grid editor
-		 * writes, bound so `writeZone` stores a re-ordered zone into it.
+		 * The editor's working arrangement. Bound: every row edit replaces it
+		 * with the op's answer, so the live view under the editor follows.
 		 */
-		editArranged: ArrangedGridV1
-		/** The three previewed columns; only their `frame` is edited here. */
-		leftPreview: PreviewColumn
-		rightPreview: PreviewColumn
-		middlePreview: PreviewColumn
+		editPanels?: PanelLayoutV1
+		/**
+		 * The arrangement the editor opened on; Done writes only when the
+		 * working one differs from it. Absent: `editPanels` as it is mounted.
+		 */
+		openedPanels?: PanelLayoutV1
+		/** The surface manager: Done's one write (`setPanels`). */
+		manager?: { setPanels(panels: PanelLayoutV1): void }
+		/**
+		 * The instance ids that hold stored values (settings, a style pin), so
+		 * a minted id never inherits a removed copy's (`mintInstanceId`).
+		 */
+		storedIds?: () => Iterable<string>
+		/**
+		 * A widget instance was minted and placed — `sourceId` set for a
+		 * Duplicate, so the owner copies the source's settings and style to
+		 * it; null for an Add.
+		 */
+		onMinted?: (id: string, sourceId: string | null) => void
 		/** The Move tab's width preset, and the width it stands for. */
-		simTier: SimTier | null
-		simWidth: number | null
-		/**
-		 * The arrangement as it stood the moment Actual was left. Written into
-		 * as well as read, for the reason `toggleGroupPin` is (see
-		 * SessionLayout): leaving the preview restores this snapshot. Bound, so
-		 * that write is a co-owner's rather than a stranger's.
-		 */
-		simSnapshot: ArrangedGridV1 | null
-		/** The canonical side zones, or null where the layout has none. */
-		leftZoneId: string | null
-		rightZoneId: string | null
-		/**
-		 * The live column's open/closed state, keyed by `groupKey`. Bound for
-		 * the same reason `simSnapshot` is: pinning a row writes into it.
-		 */
-		groupOpen: Record<string, boolean>
-		groupKey: (side: "left" | "right", key: string) => string
+		simTier?: SimTier | null
+		simWidth?: number | null
 		/** SessionLayout's lookups over the surface manager. */
 		inst: (id: string) => PanelInstance | undefined
 		iconOf: (p: PanelInstance) => any
 		middleWidgetIcon: (id: string) => any
 		widgetLabel: (id: string) => string
 		/**
-		 * The picker sheet's list (brief 7b): every widget kind, every time —
-		 * a placed one with its count, one at its cap disabled with the reason.
+		 * The picker sheet's list: every widget kind, every time — a placed
+		 * one with its count, one at its cap disabled with the reason.
 		 */
 		trayWidgets: TrayWidget[]
 		trayIcon: (t: TrayWidget) => any
-		/**
-		 * Add a widget kind: SessionLayout mints its instance id and lands it,
-		 * answering that id (null: refused at its cap).
-		 */
-		addWidget: (target: string, widgetId: string) => string | null
-		/**
-		 * A row's Duplicate (QD): SessionLayout mints the copy and copies the
-		 * source's settings and style, answering the copy's id (null: refused).
-		 */
-		duplicateWidget: (widgetId: string) => string | null
-		/** The one removal, SessionLayout's. */
-		removeWidget: (widgetId: string) => void
-		/**
-		 * What the primary floor says about a widget (./primaryFloor): the note
-		 * shown in place of its ×, when it is the last instance of the genre's
-		 * primary widget, else null.
-		 */
-		floorNoteOf: (widgetId: string) => string | null
 		/**
 		 * The layouts sheet: the presets this person may start from, and the
 		 * one this session's layout started from (provenance, never a base).
@@ -157,11 +147,7 @@
 		resetLayout: () => void
 		/** What Start from scratch keeps in the middle, by name. */
 		mainWidgetTitle?: string
-		/**
-		 * The card menu (brief 6b), as the desktop's: managing a layout this
-		 * person manages, and the new-session layout. The page owns the
-		 * round trips and pushes the refreshed list back through `presets`.
-		 */
+		/** The card menu, as the desktop's. */
 		onRenamePreset?: (presetId: number, name: string) => void
 		onDeletePreset?: (presetId: number) => void
 		onPresetUsage?: (presetId: number) => void
@@ -178,14 +164,9 @@
 		isGuest?: boolean
 		/** An admin manages someone else's shared layout too. */
 		isAdmin?: boolean
-		/** The sticky bar's two commit controls, SessionLayout's own. */
+		/** The sticky bar's commit controls: close without writing, and close after Done's write. */
 		onCancel: () => void
 		onDone: () => void
-		/**
-		 * A row was moved in this zone: its frame is the user's now, so Done
-		 * writes it (./donePlacement `arrangementAtDone`).
-		 */
-		onZoneAuthored?: (zone: ZoneId) => void
 		/**
 		 * A preset's picture. Defined in SessionLayout because the desktop
 		 * Layouts tab draws it too, and passed down so both draw the one.
@@ -194,28 +175,19 @@
 	}
 
 	let {
-		editArranged = $bindable(),
-		onZoneAuthored,
-		leftPreview,
-		rightPreview,
-		middlePreview,
-		simTier,
-		simWidth,
-		simSnapshot = $bindable(),
-		leftZoneId,
-		rightZoneId,
-		groupOpen = $bindable(),
-		groupKey,
+		editPanels = $bindable(floorPanels()),
+		openedPanels,
+		manager,
+		storedIds = () => [],
+		onMinted,
+		simTier = null,
+		simWidth = null,
 		inst,
 		iconOf,
 		middleWidgetIcon,
 		widgetLabel,
 		trayWidgets,
 		trayIcon,
-		addWidget,
-		duplicateWidget,
-		removeWidget,
-		floorNoteOf,
 		presets,
 		startedFrom,
 		startedFromUpdated = false,
@@ -240,8 +212,64 @@
 		presetPicture
 	}: Props = $props()
 
-	/** The zone a widget is being added to, if the picker sheet is open. */
-	let pickerTarget = $state<{ zone: ZoneId; id: string } | null>(null)
+	/** What the editor opened on, taken once: Done compares against it. */
+	const opened: PanelLayoutV1 = untrack(() =>
+		$state.snapshot(openedPanels ?? editPanels)
+	) as PanelLayoutV1
+
+	/* ── the rows ───────────────────────────────────────────────────────── */
+	let sections = $derived(phoneSections(editPanels))
+	/** The last refusal, said under the list until the next edit. */
+	let notice = $state<string | null>(null)
+
+	/** Take an op's answer: the new arrangement, or its refusal said. */
+	function apply(out: ArrangeOutcome): boolean {
+		if (!out.layout) {
+			notice = out.refused
+			return false
+		}
+		notice = null
+		if (out.layout !== editPanels) editPanels = out.layout
+		return true
+	}
+	/** Ops read a plain document, never the bound proxy. */
+	const cur = () => $state.snapshot(editPanels) as PanelLayoutV1
+
+	function addFromPicker(target: AddTarget, widgetId: string) {
+		const id = mintFor(cur(), widgetId, storedIds())
+		if (apply(addAt(cur(), id, target))) onMinted?.(id, null)
+	}
+	function duplicate(sourceId: string) {
+		const id = mintFor(cur(), widgetOfInstance(sourceId), storedIds(), {
+			fresh: true
+		})
+		const out = duplicateTab(cur(), sourceId, id)
+		// The owner seeds the copy's settings first, so its first draw wears them.
+		if (out.layout) onMinted?.(id, sourceId)
+		apply(out)
+	}
+	function tabIcon(id: string) {
+		if (isInstanceOf(id, "messages")) return middleWidgetIcon(id)
+		const p = inst(id)
+		return p ? iconOf(p) : Icons.LayoutPanelTop
+	}
+	function rowIcon(row: PhoneRow) {
+		return row.tabs.length > 1 ? Icons.Layers : tabIcon(row.tabs[0])
+	}
+	function rowTitle(row: PhoneRow): string {
+		return row.title ?? row.tabs.map(widgetLabel).join(" · ")
+	}
+
+	/** Done: write only what changed, then close. */
+	function done() {
+		const now = cur()
+		if (manager && !samePanels(opened, now)) manager.setPanels(now)
+		onDone()
+	}
+
+	/* ── sheets ─────────────────────────────────────────────────────────── */
+	/** Where the picker sheet lands a widget, while it is open. */
+	let pickerTarget = $state<AddTarget | null>(null)
 	/** The presets sheet is open. */
 	let presetSheet = $state(false)
 	/** The bar's Layouts button: where focus lands when a yes closes the sheet. */
@@ -256,13 +284,13 @@
 	/** A copy waiting on a yes (the bar's Reset chip, or the sheet's). */
 	let copyAsk = $state<CopyAsk | null>(null)
 	let saveAsOpen = $state(false)
-	let groups = $derived(groupLayoutPresets(presets))
+	let layoutSections = $derived(groupLayoutPresets(presets))
 	let provenance = $derived(provenanceLine(startedFrom))
 	let genreDefault = $derived(presets.find((p) => p.isGenreDefault) ?? null)
 	/** The source, when it changed since the copy; the offer re-copies it. */
 	let updatedSource = $derived(startedFromUpdated ? startedFrom : null)
 
-	/* ── the card menu, rename, delete and Save changes to (brief 6b) ──── */
+	/* ── the card menu, rename, delete and Save changes to ─────────────── */
 	let newSessionLayout = $derived(newSessionLayoutOf(presets))
 	let menuContext = $derived({
 		genreName,
@@ -411,173 +439,56 @@
 		unshareAsk = null
 		deleteAskId = null
 	}
-	/** The group a drag handle is carrying, for the row's own styling. */
-	let dragRowKey = $state<string | null>(null)
-
-	/** The frame the phone editor writes into — the working one, or the default. */
-	function editFrame(zone: ZoneId): ArrangedZone {
-		return (
-			zone === "left"
-				? leftPreview
-				: zone === "right"
-					? rightPreview
-					: middlePreview
-		).frame
-	}
-	/**
-	 * Store one zone's re-ordered arrangement.
-	 *
-	 * Written into a simulated tier's snapshot as well, for the reason a pin is
-	 * (see SessionLayout's `toggleGroupPin`): leaving the preview restores that snapshot, and an
-	 * order the user stated must survive it without also rescuing the clamp a
-	 * narrow preview made of everything else.
-	 */
-	function writeZone(zone: ZoneId, next: ArrangedZone) {
-		if (next === editFrame(zone)) return
-		editArranged[zone] = next
-		onZoneAuthored?.(zone)
-		if (simTier !== null && simSnapshot) simSnapshot[zone] = next
-	}
-	function moveRowIn(zone: ZoneId, key: string, delta: number) {
-		writeZone(zone, moveRow(editFrame(zone), key, delta))
-	}
-	function moveMemberIn(
-		zone: ZoneId,
-		key: string,
-		id: string,
-		delta: number
-	) {
-		writeZone(zone, moveMember(editFrame(zone), key, id, delta))
-	}
-	/**
-	 * Add or remove a widget from the phone editor, cells and all.
-	 *
-	 * The grid editor lets gridstack seed a newcomer and report the result back;
-	 * with no grid mounted the arrangement has to be written here, or Done would
-	 * commit a frame that does not name the widget just added — and the side
-	 * would draw everything except it. Removal closes the row it leaves behind.
-	 */
-	function addWidgetTo(zone: ZoneId, zoneId: string, widgetId: string) {
-		// Read the frame BEFORE the placement: the landing rewrites the
-		// zone's widget list, which is what `editFrame` is derived from.
-		const frame = editFrame(zone)
-		// The id the layout MINTED (brief 7b): a kind already placed lands
-		// as a copy, `W#n`, and the row's cells must name the copy.
-		const id = addWidget(zoneId, widgetId)
-		if (id) landAtFoot(zone, frame, id, 3)
-	}
-	/** A row's Duplicate: the copy lands at the foot of the list, at the source's height. */
-	function duplicateIn(zone: ZoneId, sourceId: string) {
-		const frame = editFrame(zone)
-		const id = duplicateWidget(sourceId)
-		if (!id) return
-		const src = frame.items.find((i) => i.id === sourceId)
-		landAtFoot(zone, frame, id, src?.h ?? 3)
-	}
-	/** Write one more row at the foot of a zone's frame (as it was before the landing). */
-	function landAtFoot(zone: ZoneId, frame: ArrangedZone, id: string, h: number) {
-		const foot = frame.items.length
-			? Math.max(...frame.items.map((i) => i.y + i.h))
-			: 0
-		writeZone(zone, {
-			cols: frame.cols,
-			rows: Math.max(frame.rows, foot + h),
-			items: [...frame.items, { id, x: 0, y: foot, w: frame.cols, h }]
-		})
-	}
-	function removeWidgetFrom(zone: ZoneId, widgetId: string) {
-		const frame = editFrame(zone)
-		removeWidget(widgetId)
-		writeZone(
-			zone,
-			restackZone({
-				...frame,
-				items: frame.items.filter((i) => i.id !== widgetId)
-			})
-		)
-	}
-	function setRowPin(zone: ZoneId, key: string, pinned: boolean) {
-		writeZone(zone, setRowPinned(editFrame(zone), key, pinned))
-		// "Pinned" IS "expanded by default", so the live column follows.
-		if (zone !== "middle") groupOpen[groupKey(zone, key)] = pinned
-	}
-
-	/** The zones the phone editor lists, chat first. */
-	let mobileZones = $derived(
-		(
-			[
-				["middle", "Middle", Icons.MessageSquare, null],
-				["left", "Left", Icons.PanelLeft, leftZoneId],
-				["right", "Right", Icons.PanelRight, rightZoneId]
-			] as const
-		)
-			.filter(([key, , , zoneId]) => key === "middle" || !!zoneId)
-			.map(([key, label, icon, zoneId]) => ({
-				key,
-				label,
-				icon,
-				zoneId,
-				rows: mobileRows(editFrame(key))
-			}))
-	)
-	function rowIcon(row: MobileRow) {
-		if (row.members.length > 1) return Icons.Layers
-		const id = row.members[0]
-		if (isInstanceOf(id, "messages")) return middleWidgetIcon(id)
-		const p = inst(id)
-		return p ? iconOf(p) : Icons.LayoutPanelTop
-	}
-	function rowTitle(row: MobileRow): string {
-		return row.members.map(widgetLabel).join(" · ")
-	}
 
 	/* ── the drag handle ────────────────────────────────────────────────────
 	 * A touch reorder, spent as the same single steps the arrow buttons are: a
-	 * pointer that has travelled a whole row's height asks for the next index,
-	 * and `moveRowTo` decides whether the arrangement can express it. Pointer
-	 * events rather than HTML drag-and-drop, which no mobile browser fires.
+	 * pointer that has travelled a whole row's height asks for the next index
+	 * in the row's column (`moveRowTo`). Pointer events rather than HTML
+	 * drag-and-drop, which no mobile browser fires.
 	 */
-	let dragZone: ZoneId | null = null
+	let dragRowKey = $state<string | null>(null)
 	let dragIndex = 0
 	let dragOriginY = 0
 	let dragStepPx = 44
 
-	function startRowDrag(
-		e: PointerEvent,
-		zone: ZoneId,
-		key: string,
-		index: number
-	) {
+	/** A row's index in its column (the middle's three sections are one column). */
+	function columnIndex(key: string): number {
+		const row = sections.flatMap((s) => s.rows).find((r) => r.key === key)
+		if (!row) return -1
+		const middle = row.place === "above" || row.place === "primary" || row.place === "below"
+		const column = sections
+			.filter((s) =>
+				middle
+					? s.place === "above" || s.place === "primary" || s.place === "below"
+					: s.place === row.place
+			)
+			.flatMap((s) => s.rows)
+		return column.findIndex((r) => r.key === key)
+	}
+	function startRowDrag(e: PointerEvent, key: string) {
 		const grip = e.currentTarget as HTMLElement
 		const row = grip.closest("li") as HTMLElement | null
 		if (!row) return
 		e.preventDefault()
 		grip.setPointerCapture(e.pointerId)
-		dragZone = zone
 		dragRowKey = key
-		dragIndex = index
+		dragIndex = columnIndex(key)
 		dragOriginY = e.clientY
 		dragStepPx = Math.max(24, row.offsetHeight)
 	}
 	function dragRow(e: PointerEvent) {
-		if (!dragRowKey || !dragZone) return
+		if (!dragRowKey) return
 		const steps = Math.trunc((e.clientY - dragOriginY) / dragStepPx)
 		if (!steps) return
-		const zone = dragZone
-		const key = dragRowKey
-		const before = editFrame(zone)
-		const next = moveRowTo(before, key, dragIndex + steps)
-		writeZone(zone, next)
+		apply(moveRowTo(cur(), dragRowKey, dragIndex + steps))
 		dragOriginY += steps * dragStepPx
-		const at = mobileRows(next).findIndex((r) => r.key === key)
-		if (at >= 0) dragIndex = at
+		dragIndex = columnIndex(dragRowKey)
 	}
 	function endRowDrag(e: PointerEvent) {
 		const grip = e.currentTarget as HTMLElement
 		if (grip.hasPointerCapture(e.pointerId))
 			grip.releasePointerCapture(e.pointerId)
 		dragRowKey = null
-		dragZone = null
 	}
 
 	/**
@@ -616,187 +527,183 @@
 	})
 </script>
 
-<!-- The PHONE editor (ruled 2026-09-10). A screen this narrow draws no
-     side-by-side widgets and no rail, so the editor is what the session is: an
-     ordered list per zone, a pin per group, and sheets for everything that a
-     desktop hovers for. It writes the same arrangement the grid does — see
-     ./mobileEdit — and commits down the same path.
-
-     It sits OVER the live session rather than replacing it, so nothing in the
-     session reloads while the order is edited. -->
-<!-- A row's Duplicate (brief 7b; QD): a copy of the widget at the foot of the
-     list, its settings and style copied. At the widget's cap, the reason. -->
-{#snippet duplicateControl(zone: ZoneId, id: string, label: string, size: number)}
+<!-- The PHONE editor (PLAN-session-panels-2026-10-14 §3 lane 4): one row per
+     panel, its tabs inside, in the order Above · Middle · Below · Left ·
+     Right. A screen this narrow draws one panel under the next and hovers
+     for nothing, so every control is on the row. -->
+<!-- A tab's Duplicate: a copy of the widget beside it in the same panel, its
+     settings and style copied. At the widget's cap, the reason. -->
+{#snippet duplicateControl(id: string, label: string)}
 	{@const full = trayWidgets.find((t) => t.id === widgetOfInstance(id))?.full}
 	{#if !duplicateOffered()}
 		<!-- QD's "tray only": no Duplicate. -->
 	{:else if full}
 		<span class="medit-floor medit-nocopy" role="note" title={full} aria-label={full}>
-			<Icons.Copy size={size - 1} aria-hidden="true" />
+			<Icons.Copy size={13} aria-hidden="true" />
 		</span>
 	{:else}
-		<button
-			class="medit-btn"
-			aria-label="Duplicate {label}"
-			onclick={() => duplicateIn(zone, id)}
-		>
-			<Icons.Copy size={size} />
+		<button class="medit-btn" aria-label="Duplicate {label}" onclick={() => duplicate(id)}>
+			<Icons.Copy size={14} />
 		</button>
 	{/if}
 {/snippet}
 
-{#snippet mobileRowItem(
-	zone: ZoneId,
-	zoneId: string | null,
-	rows: MobileRow[],
-	row: MobileRow,
-	index: number
-)}
+{#snippet tabItem(row: PhoneRow, id: string, t: number)}
+	{@const label = widgetLabel(id)}
+	{@const TabIcon = tabIcon(id)}
+	<li class="medit-member" data-panel-tab={id}>
+		<TabIcon size={14} aria-hidden="true" />
+		<span class="medit-name">{label}</span>
+		{#if row.tabs.length > 1}
+			<button
+				class="medit-btn"
+				disabled={t === 0}
+				aria-label="Move {label} earlier"
+				onclick={() => apply(moveTabWithin(cur(), id, -1))}
+			>
+				<Icons.ChevronLeft size={14} />
+			</button>
+			<button
+				class="medit-btn"
+				disabled={t === row.tabs.length - 1}
+				aria-label="Move {label} later"
+				onclick={() => apply(moveTabWithin(cur(), id, 1))}
+			>
+				<Icons.ChevronRight size={14} />
+			</button>
+		{/if}
+		{#if row.aboveKey}
+			<button
+				class="medit-btn"
+				aria-label="Move {label} into panel above"
+				title="Move into panel above"
+				onclick={() => apply(moveTabInto(cur(), id, -1))}
+			>
+				<Icons.ArrowUpToLine size={14} />
+			</button>
+		{/if}
+		{#if row.belowKey}
+			<button
+				class="medit-btn"
+				aria-label="Move {label} into panel below"
+				title="Move into panel below"
+				onclick={() => apply(moveTabInto(cur(), id, 1))}
+			>
+				<Icons.ArrowDownToLine size={14} />
+			</button>
+		{/if}
+		{#if canSplitOut(editPanels, id)}
+			<button
+				class="medit-btn"
+				aria-label="Split {label} out"
+				title="Split out"
+				onclick={() => apply(splitTab(cur(), id))}
+			>
+				<Icons.SquareSplitVertical size={14} />
+			</button>
+		{/if}
+		<button
+			class="medit-btn"
+			aria-label="Open {label} settings"
+			aria-haspopup="dialog"
+			onclick={(e) => openWidgetSettings({ widgetId: id, label }, e.currentTarget)}
+		>
+			<Icons.Settings size={14} />
+		</button>
+		{@render duplicateControl(id, label)}
+		<button
+			class="medit-btn"
+			aria-label="Remove {label}"
+			onclick={() => apply(removeTabFrom(cur(), id))}
+		>
+			<Icons.X size={14} />
+		</button>
+	</li>
+{/snippet}
+
+{#snippet panelRow(row: PhoneRow)}
 	{@const Icon = rowIcon(row)}
 	{@const title = rowTitle(row)}
-	<li class="medit-row" class:dragging={dragRowKey === row.key}>
+	<li class="medit-row" class:dragging={dragRowKey === row.key} data-panel-row={row.key}>
 		<div class="medit-line">
-			<!-- The drag handle. `touch-action: none` (in CSS) is what stops the
-			     page scrolling under a finger that is reordering. -->
-			<button
-				class="medit-grip"
-				aria-label="Reorder {title}"
-				onpointerdown={(e) => startRowDrag(e, zone, row.key, index)}
-				onpointermove={dragRow}
-				onpointerup={endRowDrag}
-				onpointercancel={endRowDrag}
-			>
-				<Icons.GripVertical size={16} />
-			</button>
-			<Icon size={16} />
+			{#if row.canMoveUp || row.canMoveDown}
+				<!-- The drag handle. `touch-action: none` (in CSS) is what stops
+				     the page scrolling under a finger that is reordering. -->
+				<button
+					class="medit-grip"
+					aria-label="Reorder {title}"
+					onpointerdown={(e) => startRowDrag(e, row.key)}
+					onpointermove={dragRow}
+					onpointerup={endRowDrag}
+					onpointercancel={endRowDrag}
+				>
+					<Icons.GripVertical size={16} />
+				</button>
+			{/if}
+			<Icon size={16} aria-hidden="true" />
 			<span class="medit-name">{title}</span>
-			{#if row.rank !== 1}
-				<span class="medit-badge">
-					{row.rank === 0 ? "First" : "Last"}
-				</span>
+			{#if row.tabs.length > 1}
+				<span class="medit-badge">{row.tabs.length} tabs</span>
 			{/if}
 		</div>
 		<div class="medit-acts">
-			<button
-				class="medit-btn"
-				disabled={index === 0}
-				aria-label="Move {title} up"
-				onclick={() => moveRowIn(zone, row.key, -1)}
-			>
-				<Icons.ChevronUp size={15} />
-			</button>
-			<button
-				class="medit-btn"
-				disabled={index === rows.length - 1}
-				aria-label="Move {title} down"
-				onclick={() => moveRowIn(zone, row.key, 1)}
-			>
-				<Icons.ChevronDown size={15} />
-			</button>
-			{#if zone !== "middle"}
-				<!-- The per-group pin, the arrangement's own field: pinned it is
-				     open from the start and keeps its height, unpinned it waits
-				     as an entry in the panels menu. -->
+			{#if row.canMoveUp || row.canMoveDown}
 				<button
 					class="medit-btn"
-					class:on={row.pinned}
-					aria-pressed={row.pinned}
-					aria-label={row.pinned ? `Unpin ${title}` : `Pin ${title}`}
-					onclick={() => setRowPin(zone, row.key, !row.pinned)}
+					disabled={!row.canMoveUp}
+					aria-label="Move {title} up"
+					onclick={() => apply(moveRow(cur(), row.key, -1))}
 				>
-					<Icons.Pin size={15} />
+					<Icons.ChevronUp size={15} />
+				</button>
+				<button
+					class="medit-btn"
+					disabled={!row.canMoveDown}
+					aria-label="Move {title} down"
+					onclick={() => apply(moveRow(cur(), row.key, 1))}
+				>
+					<Icons.ChevronDown size={15} />
+				</button>
+			{/if}
+			{#if row.height && row.group !== "rail"}
+				{@const fit = row.height === "fit"}
+				<!-- Fit takes the content's height; Fill shares what is left. -->
+				<button
+					class="medit-chip medit-height"
+					aria-label="Height of {title}: {fit ? 'Fit' : 'Fill'}. Switch to {fit ? 'Fill' : 'Fit'}"
+					onclick={() => apply(setRowHeight(cur(), row.key, fit ? "fill" : "fit"))}
+				>
+					{#if fit}<Icons.FoldVertical size={13} />{:else}<Icons.UnfoldVertical size={13} />{/if}
+					{fit ? "Fit" : "Fill"}
+				</button>
+			{/if}
+			{#if row.canMakeMain}
+				<!-- The primary is a place: this panel goes there, the old
+				     primary to the end of Above. -->
+				<button
+					class="medit-btn"
+					aria-label="Make {title} main"
+					title="Make main"
+					data-make-main={row.key}
+					onclick={() => apply(makeMain(cur(), row.key))}
+				>
+					<Icons.Crown size={15} />
 				</button>
 			{/if}
 			<button
 				class="medit-btn"
-				aria-label="Open {title} settings"
+				aria-label="Add a tab to {title}"
 				aria-haspopup="dialog"
-				onclick={(e) =>
-					openWidgetSettings(
-						{
-							widgetId: row.members[0],
-							label: widgetLabel(row.members[0])
-						},
-						e.currentTarget
-					)}
+				onclick={() => (pickerTarget = { kind: "panel", panelKey: row.key })}
 			>
-				<Icons.Settings size={15} />
+				<Icons.Plus size={15} />
 			</button>
-			{#if zoneId && row.members.length === 1}
-				{@const keep = floorNoteOf(row.members[0])}
-				{@render duplicateControl(zone, row.members[0], title, 15)}
-				{#if keep}
-					<!-- The primary floor keeps the last Messages: no ×, and
-					     the reason where the × would be. -->
-					<span class="medit-floor" role="note" title={keep} aria-label={keep}>
-						<Icons.Lock size={14} aria-hidden="true" />
-					</span>
-				{:else}
-					<button
-						class="medit-btn"
-						aria-label="Remove {title}"
-						onclick={() => removeWidgetFrom(zone, row.members[0])}
-					>
-						<Icons.X size={15} />
-					</button>
-				{/if}
-			{/if}
 		</div>
-		{#if row.members.length > 1}
-			<!-- A tab group's own order: which tab comes first. -->
-			<ul class="medit-members">
-				{#each row.members as id, m (id)}
-					<li class="medit-member">
-						<span class="medit-name">{widgetLabel(id)}</span>
-						<button
-							class="medit-btn"
-							disabled={m === 0}
-							aria-label="Move {widgetLabel(id)} earlier"
-							onclick={() => moveMemberIn(zone, row.key, id, -1)}
-						>
-							<Icons.ChevronUp size={14} />
-						</button>
-						<button
-							class="medit-btn"
-							disabled={m === row.members.length - 1}
-							aria-label="Move {widgetLabel(id)} later"
-							onclick={() => moveMemberIn(zone, row.key, id, 1)}
-						>
-							<Icons.ChevronDown size={14} />
-						</button>
-						<button
-							class="medit-btn"
-							aria-label="Open {widgetLabel(id)} settings"
-							aria-haspopup="dialog"
-							onclick={(e) =>
-								openWidgetSettings(
-									{ widgetId: id, label: widgetLabel(id) },
-									e.currentTarget
-								)}
-						>
-							<Icons.Settings size={14} />
-						</button>
-						{#if zoneId}
-							{@const keep = floorNoteOf(id)}
-							{@render duplicateControl(zone, id, widgetLabel(id), 14)}
-							{#if keep}
-								<span class="medit-floor" role="note" title={keep} aria-label={keep}>
-									<Icons.Lock size={13} aria-hidden="true" />
-								</span>
-							{:else}
-								<button
-									class="medit-btn"
-									aria-label="Remove {widgetLabel(id)}"
-									onclick={() => removeWidgetFrom(zone, id)}
-								>
-									<Icons.X size={14} />
-								</button>
-							{/if}
-						{/if}
-					</li>
-				{/each}
-			</ul>
-		{/if}
+		<ul class="medit-members">
+			{#each row.tabs as id, t (id)}
+				{@render tabItem(row, id, t)}
+			{/each}
+		</ul>
 	</li>
 {/snippet}
 
@@ -811,37 +718,48 @@
 	</header>
 	<div class="medit-body">
 		<p class="medit-note">
-			A screen this narrow draws one widget under the next. Drag a handle,
-			or use the arrows, to change the order.
+			A screen this narrow draws one panel under the next. Drag a handle, or
+			use the arrows, to change the order.
 		</p>
-		{#each mobileZones as z (z.key)}
-			{@const ZoneIcon = z.icon}
-			<section class="medit-zone">
+		{#if notice}
+			<p class="medit-notice" role="status" data-medit-notice>{notice}</p>
+		{/if}
+		{#each sections as s (s.place)}
+			<section class="medit-zone" data-panel-section={s.place}>
 				<header class="medit-zone-head">
-					<ZoneIcon size={13} />
-					{z.label}
+					{s.label}
 					<span class="flex-1"></span>
-					{#if z.zoneId}
-						<button
-							class="medit-chip"
-							onclick={() =>
-								(pickerTarget = z.zoneId
-									? { zone: z.key, id: z.zoneId }
-									: null)}
-						>
-							<Icons.Plus size={13} />
-							Add
-						</button>
-					{/if}
+					<button class="medit-chip" onclick={() => (pickerTarget = s.add)}>
+						<Icons.Plus size={13} />
+						Add
+					</button>
 				</header>
-				<ul class="medit-list">
-					{#each z.rows as row, i (row.key)}
-						{@render mobileRowItem(z.key, z.zoneId, z.rows, row, i)}
+				{#if s.groups}
+					<!-- A side: Docked, then In the rail. Both headers always
+					     show, so an empty group still says where rows go. -->
+					{#each s.groups as g (g.group)}
+						<h3 class="medit-group-head" data-side-group={g.group}>{g.label}</h3>
+						<ul class="medit-list" data-side-group-list={g.group}>
+							{#each g.rows as row (row.key)}
+								{@render panelRow(row)}
+							{/each}
+							{#if !g.rows.length}
+								<li class="medit-empty">
+									{g.group === "docked" ? "Nothing docked." : "Nothing in the rail."}
+								</li>
+							{/if}
+						</ul>
 					{/each}
-					{#if !z.rows.length}
-						<li class="medit-empty">Nothing here yet.</li>
-					{/if}
-				</ul>
+				{:else}
+					<ul class="medit-list">
+						{#each s.rows as row (row.key)}
+							{@render panelRow(row)}
+						{/each}
+						{#if !s.rows.length}
+							<li class="medit-empty">Nothing here yet.</li>
+						{/if}
+					</ul>
+				{/if}
 			</section>
 		{/each}
 	</div>
@@ -875,7 +793,7 @@
 		</button>
 		<span class="flex-1"></span>
 		<button class="medit-chip" onclick={onCancel}>Cancel</button>
-		<button class="medit-chip primary" onclick={onDone}>
+		<button class="medit-chip primary" onclick={done}>
 			<Icons.Check size={14} />
 			Done
 		</button>
@@ -899,8 +817,7 @@
 			</button>
 		</header>
 		<div class="msheet-body">
-			<!-- Every kind, every time (brief 7b): picking a placed one adds
-			     another copy of it. -->
+			<!-- Every kind, every time: picking a placed one adds another copy. -->
 			{#each trayWidgets as t (t.id)}
 				{@const IconCmp = trayIcon(t)}
 				<button
@@ -911,7 +828,7 @@
 					onclick={() => {
 						const target = pickerTarget
 						pickerTarget = null
-						if (target) addWidgetTo(target.zone, target.id, t.id)
+						if (target) addFromPicker(target, t.id)
 					}}
 				>
 					<IconCmp size={18} />
@@ -980,14 +897,15 @@
 					</button>
 				</div>
 			{/if}
-			<!-- Start from: grouped by who brought them. Choosing one asks,
-			     then COPIES it in; the marked one is what it started from. -->
-			{#each groups as g (g.key)}
+			<!-- Start from: two sections, Ready-made and Yours (./startFrom
+			     `groupLayoutPresets`). Choosing one asks, then COPIES it in;
+			     the marked one is what it started from. -->
+			{#each layoutSections as g (g.key)}
 				<section class="msheet-group" data-preset-group={g.key}>
 					<h3 class="msheet-group-label" data-preset-group-label>
 						{g.label}
 					</h3>
-					{#each g.presets as p (p.id)}
+					{#each g.cards as p (p.id)}
 						{@const current = startedFrom?.id === p.id}
 						{@const forNewSessions = newSessionLayout?.id === p.id}
 						<!-- The row starts from it (asks first); its menu, at the
@@ -1049,9 +967,12 @@
 												{newSessionMark(genreName)}
 											</span>
 										{/if}
-										{#if !p.mine && p.origin === "user" && p.authorName}
-											<span class="msheet-item-desc">by {p.authorName}</span>
-										{:else if sharedMark(p)}
+										<!-- Where it comes from (./startFrom `sourceLine`). -->
+										<span class="msheet-item-desc" data-preset-source
+											>{sourceLine(p, startedFrom?.id ?? null)}</span
+										>
+										<!-- Yours, shared: the desktop card's word. -->
+										{#if sharedMark(p)}
 											<span class="msheet-item-desc" data-shared-mark
 												>{sharedMark(p)}</span
 											>
@@ -1201,6 +1122,8 @@
 		margin: 0;
 	}
 	.medit-zone {
+		/* The body scrolls; a section never shrinks to fit it. */
+		flex-shrink: 0;
 		border: 1px solid color-mix(in oklab, currentColor 14%, transparent);
 		border-radius: 0.5rem;
 		overflow: hidden;
@@ -1286,9 +1209,8 @@
 		opacity: 0.3;
 		cursor: default;
 	}
-	/* Where the × would be on the row the primary floor keeps: the reason, as
-	   a quiet lock (its label says it), taking the ×'s square so the row's
-	   controls do not shift. */
+	/* A control that is not offered here (Duplicate at a widget's cap): the
+	   reason, quiet, taking the button's square so the row does not shift. */
 	.medit-floor {
 		display: inline-flex;
 		align-items: center;
@@ -1297,13 +1219,13 @@
 		block-size: 2.25rem;
 		color: var(--color-surface-600-400);
 	}
-	.medit-btn.on {
-		color: var(--color-primary-500);
-		border-color: color-mix(
-			in oklab,
-			var(--color-primary-500) 40%,
-			transparent
-		);
+	/* A side's group label (Docked / In the rail): plain, under the section head. */
+	.medit-group-head {
+		margin: 0;
+		padding: 0.3rem 0.5rem 0.15rem;
+		font-size: 0.6875rem;
+		font-weight: 600;
+		color: var(--color-surface-600-400);
 	}
 	.medit-members {
 		flex-basis: 100%;
@@ -1311,10 +1233,23 @@
 	}
 	.medit-member {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: 0.2rem;
 		font-size: 0.8rem;
 		opacity: 0.85;
+	}
+	.medit-notice {
+		margin: 0;
+		padding: 0.4rem 0.6rem;
+		border-radius: 0.4rem;
+		font-size: 0.8rem;
+		background: color-mix(in oklab, var(--color-warning-500) 16%, transparent);
+	}
+	.medit-chip.medit-height {
+		min-block-size: 2.25rem;
+		padding-inline: 0.5rem;
+		font-size: 0.75rem;
 	}
 	.medit-empty {
 		padding: 0.5rem;

@@ -93,6 +93,15 @@ export interface RunStatusFrame {
 	runId: string
 	/** The filled status, or null when the run ended. */
 	status: StatusText | null
+	/**
+	 * The run is a **reply** on this channel (`main` unsaid) — a turn whose
+	 * answer lands as a row there. What lets the session page draw a waiting
+	 * row while the reply's own row is not open yet: a Dungeon Crawler story
+	 * turn opens the Narrator's row only after the Planner's call and the
+	 * dice (client `pendingReply.ts`, owner 2026-10-15). Absent on a run
+	 * that is not a reply.
+	 */
+	reply?: { channel: string }
 }
 
 export interface StatusRelayOptions {
@@ -121,6 +130,11 @@ export interface StatusRelayOptions {
 	 * what the step is. `stepStatuses(doc)`.
 	 */
 	declared?: ReadonlyMap<string, StatusText>
+	/**
+	 * The run is a reply on this channel — said on every frame
+	 * (`RunStatusFrame.reply`). The reply road's (`runTurn`); absent elsewhere.
+	 */
+	reply?: { channel: string }
 }
 
 export interface StatusRelay {
@@ -301,7 +315,8 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 			await broadcastToSessionUsers(io, sessionId, "sessions:runStatus", {
 				sessionId,
 				runId,
-				status: filled
+				status: filled,
+				...(opts.reply ? { reply: opts.reply } : {})
 			} satisfies RunStatusFrame).catch(() => {})
 		try {
 			opts.onStatus?.(nodeKey, filled)
@@ -324,7 +339,8 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 				await broadcastToSessionUsers(io, sessionId, "sessions:runStatus", {
 					sessionId,
 					runId,
-					status: null
+					status: null,
+					...(opts.reply ? { reply: opts.reply } : {})
 				} satisfies RunStatusFrame).catch(() => {})
 		})
 

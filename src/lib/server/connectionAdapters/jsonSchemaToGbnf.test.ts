@@ -2,8 +2,8 @@ import { describe, expect, test } from "vitest"
 import { jsonSchemaToGbnf, type JsonSchemaNode } from "./jsonSchemaToGbnf"
 import { buildPerspectiveSchema } from "$lib/server/utils/graphSchema"
 import {
-	ADVENTURE_KEEPER_SCHEMA,
-	ADVENTURE_PLAN_SCHEMA
+	STORY_SWEEP_SCHEMA,
+	STORY_RECKON_SCHEMA
 } from "@serene-pub/core-catalog"
 
 /**
@@ -386,8 +386,8 @@ describe("numbers and booleans", () => {
  */
 describe("the adventure genre's two schemas stay inside the subset", () => {
 	test.each([
-		["planner", ADVENTURE_PLAN_SCHEMA],
-		["state keeper", ADVENTURE_KEEPER_SCHEMA]
+		["reckoning", STORY_RECKON_SCHEMA],
+		["sweep", STORY_SWEEP_SCHEMA]
 	])("%s", (_name, schema) => {
 		const grammar = jsonSchemaToGbnf(schema as unknown as JsonSchemaNode)
 		expect(grammar).toContain("root ::=")

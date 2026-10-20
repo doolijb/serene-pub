@@ -237,7 +237,7 @@ let pickedModelId: number
 /** Spec slugs, hoisted so the pick helper and the runs cannot disagree. */
 let RESPOND: string
 let SUMMARIZE: string
-const IMAGE = "core:spec/chat-generate-image"
+const IMAGE = "core:spec/story-generate-image"
 
 /**
  * The mutable config every pick is written into, per spec.
@@ -305,11 +305,11 @@ async function setSlot(
 
 beforeAll(async () => {
 	db = await createTestDb()
-	const { bootstrapPipelines, CHAT_RESPOND_SPEC_ID } = await import(
+	const { bootstrapPipelines, STORY_RESPOND_SPEC_ID } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	await bootstrapPipelines(db)
-	RESPOND = CHAT_RESPOND_SPEC_ID
+	RESPOND = STORY_RESPOND_SPEC_ID
 	SUMMARIZE = (await import("$lib/server/pipelines/specs/summarize"))
 		.SUMMARIZE_WORLD_SPEC_ID
 
@@ -620,13 +620,13 @@ describe("dispatch — the reply step's own Sampling", () => {
 		)
 		// All three, where it used to be two: `narrate-character` carries the
 		// same `generate` node and was missing the same two lines.
-		const { CHAT_NARRATE_SPEC_ID, CHAT_SIDE_CHARACTER_SPEC_ID } = await import(
+		const { STORY_NARRATE_SPEC_ID, STORY_SIDE_CHARACTER_SPEC_ID } = await import(
 			"$lib/server/pipelines/specs/narrate"
 		)
 		for (const slug of [
 			RESPOND,
-			CHAT_NARRATE_SPEC_ID,
-			CHAT_SIDE_CHARACTER_SPEC_ID
+			STORY_NARRATE_SPEC_ID,
+			STORY_SIDE_CHARACTER_SPEC_ID
 		]) {
 			const doc: any = await loadPublished(db, slug)
 			const generate = doc.nodes.find((n: any) => n.key === "generate")

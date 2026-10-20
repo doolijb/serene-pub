@@ -118,7 +118,7 @@ export async function canSee(
 
 /**
  * Can every one of `userIds` see this subject? `blockedBy` names those who
- * cannot, in the order given; a subject that no longer exists blocks everyone
+ * cannot, in the order given; a subject that does not exist blocks everyone
  * and says `gone`.
  */
 export async function canAttach(

@@ -18,7 +18,13 @@
 		NARRATE_ACTION
 	} from "$lib/shared/actions/identity"
 	import { paletteRowState } from "@serene-pub/core-catalog/conversation"
+	import {
+	composerClosedOn,
+	composerClosedPlaceholder,
+	composerClosuresFor
+} from "@serene-pub/sdk"
 	import RunProgressCard from "$lib/client/components/pipelines/RunProgressCard.svelte"
+	import { newestRowIdOn } from "$lib/client/components/pipelines/runCardScope"
 	import SessionRetrievalPreview from "$lib/client/components/pipelines/workspace/SessionRetrievalPreview.svelte"
 	import SessionUsagePanel from "$lib/client/components/pipelines/workspace/SessionUsagePanel.svelte"
 	import GraphBuildModal from "$lib/client/components/modals/GraphBuildModal.svelte"
@@ -32,6 +38,7 @@
 	import type { ComposerFlow } from "$lib/client/components/sessionPage/composerFlow.svelte"
 	import type { ScenesFlow } from "$lib/client/components/sessionPage/scenesFlow.svelte"
 	import type { PressRouting } from "$lib/client/components/sessionPage/pressRouting.svelte"
+	import { mayContinue } from "$lib/shared/sessions/carryOn"
 
 	interface Props {
 		data: SessionPageData
@@ -74,8 +81,32 @@
 	const sessionActions = $derived(actions.sessionActions)
 	const actionLegend = $derived(actions.actionLegend)
 	const newestItem = $derived(actions.newestItem)
+	/**
+	 * 🚧 The lanes the genre closed this viewer's composer on (owner ruling
+	 * 2026-10-15): the genre's action chips grey with the composer, saying
+	 * what it waits on. The turn controls are the round's and stay.
+	 */
+	const closedComposers = $derived(
+		composerClosuresFor(
+			(session as { composerStates?: unknown } | null)?.composerStates,
+			userCtx.user?.id ?? null
+		)
+	)
 	const sessionChipClass = $derived(actions.sessionChipClass)
 	const NO_PERSONA = $derived(actions.NO_PERSONA)
+	/**
+	 * 🚧 Why a turn control is grey for a viewer with no seat (2026-10-18, the
+	 * 100-turn walk #26): the genre's own words when it closed this channel's
+	 * composer on them — the Dungeon Crawler's _Waiting: Make your character
+	 * on the Planner tab first._ — never "add a persona first" in a genre
+	 * whose seat is not a persona.
+	 */
+	const noSeatReason = (channel?: string): string => {
+		const shut = composerClosedOn(closedComposers, channel ?? "main")
+		return shut ? composerClosedPlaceholder(shut) : NO_PERSONA
+	}
+	/** A member's Continue before they have moved (the server's `sentSinceReply`). */
+	const NOT_YOUR_CONTINUE = "send your line first"
 	const draftCompiledPrompt = $derived(composer.draftCompiledPrompt)
 	const contextExceeded = $derived(composer.contextExceeded)
 	const newMessage = $derived(draft)
@@ -102,6 +133,21 @@
 	const extendBookId = $derived(sessionLorebookId)
 	const handleAdvance = (e: Event, channel?: string) =>
 		turns.handleAdvance(e, channel)
+	/**
+	 * 🚧 One Continue at a time (PLAN-dc-after-walk2 Q3-4, the walk's #28): the
+	 * turn line above the composer already offers one — a voice prepared on
+	 * this channel, shown — so this row draws none beside it.
+	 */
+	const turnLineContinues = (channel?: string): boolean => {
+		if (!turns.shouldShowNextCharacterBlock) return false
+		const here = (turns.turnOrder?.order ?? []).find(
+			(e) => (((e as { channel?: unknown }).channel as string | undefined) ?? "main") === (channel ?? "main")
+		)
+		if (!here) return false
+		if (here.ref === null) return true
+		const candidate = (turns.turnOrder?.candidates ?? []).find((c) => c.ref === here.ref)
+		return candidate?.kind !== "persona"
+	}
 	const handlePickSpeaker = (e: Event) => turns.handlePickSpeaker(e)
 	const handleFireNarratorTurn = (e: Event, channel?: string) =>
 		turns.handleFireNarratorTurn(e, channel)
@@ -225,9 +271,21 @@
 	     the tab order and the reason — the listed verdict's, or the
 	     newest row's — reaches a screen reader through
 	     `aria-describedby`; the click is guarded instead. -->
-	{#if extraActionOn("advance", channel)}
+	{#if extraActionOn("advance", channel) && !turnLineContinues(channel)}
 		{@const t = extraActionOn("advance", channel)!}
-		{@const chip = extraChip(t, [[needsPersona, NO_PERSONA]])}
+		{@const chip = extraChip(t, [
+			[needsPersona, noSeatReason(channel)],
+			[
+				!mayContinue({
+					isOwner: !data.isGuest,
+					userId: userCtx.user?.id,
+					channel,
+					rows: session?.sessionMessages,
+					sessionMetadata: session?.metadata
+				}),
+				NOT_YOUR_CONTINUE
+			]
+		])}
 		<button
 			class={sessionChipClass}
 			class:opacity-60={chip.disabled}
@@ -253,7 +311,7 @@
 	{/if}
 	{#if extraActionOn("pick", channel)}
 		{@const t = extraActionOn("pick", channel)!}
-		{@const pick = extraChip(t, [[needsPersona, NO_PERSONA]])}
+		{@const pick = extraChip(t, [[needsPersona, noSeatReason(channel)]])}
 		<button
 			class={sessionChipClass}
 			class:opacity-60={pick.disabled}
@@ -389,10 +447,18 @@
      readiness strip first — no chat model means no run to show — then the
      run in flight. The strip shows where the composer does, the typing
      pill's condition. -->
-{#snippet runProgress()}
+{#snippet runProgress(channel?: string)}
 	<ReadinessStrip show={!data.modeMissing && !data.composerHidden} />
 	{#if loadedSessionId}
-		<RunProgressCard sessionId={loadedSessionId} />
+		<!-- This copy's channel's runs only; a newer row there retires a receipt. -->
+		<RunProgressCard
+			sessionId={loadedSessionId}
+			{channel}
+			newestRowId={newestRowIdOn(session?.sessionMessages, channel)}
+			rowStops={(session?.sessionMessages ?? []).some(
+				(m) => !!m.isGenerating && ((m as { channel?: string | null }).channel || "main").split(":")[0] === (channel ?? "main").split(":")[0]
+			)}
+		/>
 	{/if}
 {/snippet}
 
@@ -411,11 +477,14 @@
 	<!-- This composer's channel's chips (S1): the Sanctum's on the
 	     Sanctum panel, `main`'s elsewhere. -->
 	{#each onOtherChannel(channel) ? venueOn("composer", channel).primary : sessionActions as t (actionIdentity(t))}
-		{@const chip = paletteRowState(chipVerdict(t), {
-			generating: !session || !!lastMessage?.isGenerating,
-			newest: newestItem,
-			statusText
-		})}
+		{@const shut = composerClosedOn(closedComposers, channel ?? "main")}
+		{@const chip = shut
+			? { disabled: true, reason: composerClosedPlaceholder(shut) }
+			: paletteRowState(chipVerdict(t), {
+					generating: !session || !!lastMessage?.isGenerating,
+					newest: newestItem,
+					statusText
+				})}
 		{@const chipNoteId = `chip-note-${channel ?? "main"}-${actionIdentity(t).replace(/[^a-z0-9-]/g, "-")}`}
 		<!-- Greyed, not disabled (S6): `aria-disabled` keeps the chip in
 		     the tab order and the reason reaches a screen reader through

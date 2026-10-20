@@ -1,0 +1,1 @@
+ALTER TABLE "sessions" ADD COLUMN "composer_states" jsonb DEFAULT '{}'::jsonb NOT NULL;

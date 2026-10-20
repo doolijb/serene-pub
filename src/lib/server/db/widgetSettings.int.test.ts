@@ -39,7 +39,7 @@ async function scenario() {
 	const user = await createTestUser(testDb, `ws-owner-${n++}`)
 	const [session] = await testDb
 		.insert(schema.sessions)
-		.values({ userId: user.id, isGroup: false, genreId: "core:genre/chat" })
+		.values({ userId: user.id, isGroup: false, genreId: "core:genre/story" })
 		.returning()
 	return { user, session }
 }

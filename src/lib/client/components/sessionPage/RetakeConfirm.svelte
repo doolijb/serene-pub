@@ -17,11 +17,15 @@
 		open: boolean
 		/** The last turn's rows, as the preview named them. */
 		rows: RetakeRow[]
+		/** The server's On revision sentence, from the same preview. */
+		revision?: string | null
 		onConfirm: (quietly: boolean) => void
 		onCancel: () => void
+		/** 🚧 What the session's channels are called, by slug — the dialog names no slug. */
+		channelLabels?: Record<string, string>
 	}
 
-	let { open, rows, onConfirm, onCancel }: Props = $props()
+	let { open, rows, revision = null, onConfirm, onCancel, channelLabels = {} }: Props = $props()
 
 	let quietly = $state(false)
 	// A fresh ask starts unticked.
@@ -29,7 +33,7 @@
 		if (open) quietly = false
 	})
 
-	const sentence = $derived(retakeSentence(rows))
+	const sentence = $derived(retakeSentence(rows, "en", channelLabels))
 </script>
 
 <Dialog
@@ -51,6 +55,9 @@
 				<Dialog.Description data-retake-rows>
 					{sentence}
 				</Dialog.Description>
+				{#if revision}
+					<p class="text-sm" data-revision-sentence>{revision}</p>
+				{/if}
 				<label class="flex items-center gap-2 text-sm">
 					<input
 						type="checkbox"

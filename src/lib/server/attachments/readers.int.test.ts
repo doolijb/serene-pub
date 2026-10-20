@@ -83,7 +83,7 @@ describe("attachmentReaders (PGlite integration)", () => {
 		"the standard reply on an Anthropic pair reads images, PDFs and text",
 		async () => {
 			await useDefault(await pair("anthropic", "claude-sonnet-4-5"))
-			const r = await readers(await session("core:genre/chat"))
+			const r = await readers(await session("core:genre/story"))
 			expect(r.calls.length).toBeGreaterThan(0)
 			expect(r.kinds.image).toEqual({ allowed: true })
 			expect(r.kinds.pdf).toEqual({ allowed: true })
@@ -102,7 +102,7 @@ describe("attachmentReaders (PGlite integration)", () => {
 		"a KoboldCPP pair with vision unproven refuses images, naming no connection",
 		async () => {
 			await useDefault(await pair("koboldcpp", "nemo-12b"))
-			const r = await readers(await session("core:genre/chat"))
+			const r = await readers(await session("core:genre/story"))
 			expect(r.kinds.image.allowed).toBe(false)
 			expect(r.kinds.image.reason).toMatch(/^No model in this reply can read images\./)
 			expect(r.kinds.image.reason).not.toContain("koboldcpp endpoint")
@@ -117,10 +117,12 @@ describe("attachmentReaders (PGlite integration)", () => {
 	)
 
 	test(
-		"an Adventure reply: every reading call answers, and the union decides (D1)",
+		"a planner's reply: every reading call answers, and the union decides (D1)",
 		async () => {
+			// The Lair's reply, as Adventure's was until 2026-10-19: a planner
+			// that answers JSON and narration somebody reads.
 			await useDefault(await pair("anthropic", "claude-opus"))
-			const r = await readers(await session("core:genre/adventure"))
+			const r = await readers(await session("core:genre/lair"))
 			// The planner answers JSON and is not a reading call; the
 			// narration is.
 			expect(r.calls.length).toBeGreaterThan(0)
@@ -128,9 +130,9 @@ describe("attachmentReaders (PGlite integration)", () => {
 			expect(r.kinds.image.allowed).toBe(true)
 			expect(new Set(r.calls.map((c) => c.key)).size).toBe(r.calls.length)
 			const keys = r.calls.map((c) => c.key)
-			expect(keys).toContain("scene")
-			expect(keys).not.toContain("planWrite")
-			expect(r.calls.find((c) => c.key === "scene")?.label).toBe("Narrator")
+			expect(keys).toContain("via.narrate.say")
+			expect(keys).not.toContain("via.turn.channel.story.pick.planned.planWrite")
+			expect(r.calls.find((c) => c.key === "via.narrate.say")?.label).toBe("Castellan's narration")
 		},
 		T
 	)
@@ -166,15 +168,15 @@ describe("attachmentReaders (PGlite integration)", () => {
 		"the action specs read the transcript too: each is its own reading call (2026-10-03)",
 		async () => {
 			await useDefault(await pair("anthropic", "claude-opus-4"))
-			const r = await readers(await session("core:genre/adventure"))
+			const r = await readers(await session("core:genre/story"))
 			const byKey = new Map(r.calls.map((c) => [c.key, c]))
 			// The reply's calls keep their node keys and headings, first.
 			expect(r.calls[0].key).not.toContain("#")
 			// Look, Ask and the form answer, keyed by spec and node, headed by name.
-			expect(byKey.get("core:spec/adventure-look#write")?.label).toBe("Look")
-			expect(byKey.get("core:spec/adventure-ask#write")?.label).toBe("Ask")
-			expect(byKey.get("core:spec/adventure-answer-form#generate")?.label).toBe("Form answers")
-			expect(byKey.get("core:spec/adventure-look#write")?.reads).toEqual(["image", "text", "pdf"])
+			expect(byKey.get("core:spec/story-look#write")?.label).toBe("Look")
+			expect(byKey.get("core:spec/story-ask#write")?.label).toBe("Ask")
+			expect(byKey.get("core:spec/story-answer-form#generate")?.label).toBe("Form answers")
+			expect(byKey.get("core:spec/story-look#write")?.reads).toEqual(["image", "text", "pdf"])
 			expect(new Set(r.calls.map((c) => c.key)).size).toBe(r.calls.length)
 			expect(new Set(r.calls.map((c) => c.label)).size).toBe(r.calls.length)
 		},

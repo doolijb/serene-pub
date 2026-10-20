@@ -213,6 +213,11 @@ declare global {
 			 */
 			viewPersonId?: number
 			sessionId?: number
+			/**
+			 * 🚧 With `sessionId`: the edit form's tab to open on (2026-10-18) —
+			 * the session header's **Session settings** opens Settings.
+			 */
+			sessionTab?: "participants" | "settings" | "visibility"
 			sessionPersonaId?: number
 			sessionCharacterId?: number
 			/**
@@ -329,6 +334,12 @@ declare global {
 		 * this change exists to remove. No defaults registered is `{}`.
 		 */
 		capabilityDefaults: Record<string, Sockets.CapabilityDefault>
+		/**
+		 * 🚧 Capabilities whose default has a connection and a model — the
+		 * server's verdict, readable by a member (`capabilityDefaults` is
+		 * redacted for them). Absent until settings arrive.
+		 */
+		capabilitiesReady?: string[]
 	}
 
 	interface OllamaSettingsCtx {
@@ -394,6 +405,8 @@ declare global {
 		cast: OpenSessionCastMember[]
 		/** The genre's display name, as the header prints it. */
 		genreName: string | null
+		/** 🚧 "Branch of ‹parent›" for a branched session, else null (`branchOf`). */
+		branchOfLabel?: string | null
 		lorebookId: number | null
 		/**
 		 * The line of that book the session runs on. NULL = main.

@@ -55,7 +55,7 @@ import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { pluginNodeBindings } from "$lib/server/pipelines/runtime/pluginBindings"
 import {
 	loadPublished,
-	CHAT_RESPOND_SPEC_ID
+	STORY_RESPOND_SPEC_ID
 } from "$lib/server/pipelines/boot/bootstrap"
 import { specOwnerPluginId } from "$lib/server/pipelines/boot/store"
 import {
@@ -153,7 +153,7 @@ export interface TurnRequest {
 	 * 2026-09-08, D-2).
 	 *
 	 * Absent on every other turn. It travels to the input node's
-	 * `continuationPrefill` port and from there, on `core:spec/chat-respond`, to
+	 * `continuationPrefill` port and from there, on `core:spec/story-respond`, to
 	 * `core:task/process-messages@1`, which puts it in the seed line the model
 	 * writes from. Nothing else reads it.
 	 *
@@ -758,7 +758,10 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 					onStatus: request.onStatus,
 					// What each step says while it runs, as the spec declared
 					// it (lair pass B18 / D5) — never a node key.
-					declared: stepStatuses(doc)
+					declared: stepStatuses(doc),
+					// A reply, on the turn's channel: the session page draws a
+					// waiting row from it until the reply's own row opens.
+					reply: { channel: request.channel || "main" }
 				})
 
 	const scope: HostScope = {
@@ -981,7 +984,7 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		// cancelling this run stops the executor between nodes and leaves the
 		// render going — the SDK's `TaskCtx` carries no run id for a binding to
 		// read, so this is where the association has to be made.
-		bindings: { ...coreBindings({ runId, user }), ...pluginNodes },
+		bindings: { ...coreBindings({ runId, user, seed }), ...pluginNodes },
 		host: createHost(request.db, scope),
 		// The script engine, behind the executor's seam (18 §4a). Chains are
 		// config, so which ones run is already decided by the world above;
@@ -1009,6 +1012,13 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 						// running against that endpoint inherits its model
 						// knowledge. The instance default's, for a seam on a
 						// step `stopsByNode` does not name.
+						// 🚧 The session's state for a `select` script (the
+						// round script reads fates off the rows, A8) — read
+						// only when a link declares it.
+						lazyExtras: {
+							state: async () =>
+								(await import("$lib/server/state/resolve")).stateFor(request.db, request.sessionId)
+						},
 						connectionStops: await connectionStopsFor(request.db),
 						// …and per guarded step, the guards of the connection
 						// THAT step runs on (a configuration may name another).
@@ -1398,7 +1408,8 @@ async function dispatchAddressedForms(
 					addressee: payload.addressee,
 					characterId:
 						parsed.kind === "character" ? participantRowId(parsed.id) : null,
-					fields: await genreFieldsFor(request.db, request.sessionId)
+					fields: await genreFieldsFor(request.db, request.sessionId),
+					ruleset: await sessionRulesetInput(request.db, request.sessionId)
 				}
 			})
 		} catch (err) {
@@ -1408,6 +1419,36 @@ async function dispatchAddressedForms(
 			)
 		}
 	}
+}
+
+/**
+ * 🚧 The ruleset a session plays, as the turn input's `ruleset` port carries
+ * it (PLAN-sheet §15 C): its id, its rigour and — 🚧 2026-10-18 (P2-4) — its
+ * `settings`, every setting of that ruleset at the session's value or its
+ * default (`settingValues`), so a genre's script reads a choice such as
+ * Vis Itineris's `casting` without a handler call. Empty for a ruleset that
+ * is not installed or declares no settings.
+ */
+export async function sessionRulesetInput(
+	db: Db,
+	sessionId: number
+): Promise<{ id: string; rigour: string; settings: Record<string, string> }> {
+	const [row] = await db
+		.select({
+			primaryRuleset: schema.sessions.primaryRuleset,
+			rigour: schema.sessions.rigour,
+			rulesetSettings: schema.sessions.rulesetSettings
+		})
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	const id = row?.primaryRuleset ?? "core:ruleset/freeform@1"
+	const { getRuleset } = await import("@serene-pub/sdk")
+	const { settingValues } = await import("$lib/server/rulesets/conventions")
+	const { storedRulesetSettings } = await import("$lib/server/rulesets/settings")
+	const decl = getRuleset(id)
+	const settings = decl ? settingValues(decl, { values: storedRulesetSettings(row?.rulesetSettings)[id] ?? {} }) : {}
+	return { id, rigour: row?.rigour ?? "prose", settings }
 }
 
 /**
@@ -1499,7 +1540,7 @@ async function runTurnUnderHold(request: TurnRequest): Promise<Receipt> {
 		db: request.db,
 		sessionId: request.sessionId,
 		userId: request.userId,
-		specId: request.specId ?? CHAT_RESPOND_SPEC_ID,
+		specId: request.specId ?? STORY_RESPOND_SPEC_ID,
 		currentCharacterId: request.currentCharacterId,
 		speaker,
 		draftMessage: request.draftMessage,
@@ -1567,7 +1608,12 @@ async function runTurnUnderHold(request: TurnRequest): Promise<Receipt> {
 			// The mode's declared fields, supplied back (19 §1): session settings
 			// wrote them to the row; this is where they enter the run, filtered
 			// to the shape's declared keys — see genreFieldsFor.
-			fields: await genreFieldsFor(request.db, request.sessionId)
+			fields: await genreFieldsFor(request.db, request.sessionId),
+			// 🚧 Which ruleset the session plays and how strictly (PLAN-sheet
+			// §15 C) — always supplied, so a spec may branch (the interview
+			// under Story writes words, under Vis Itineris pieces). Story and
+			// `prose` when the row says nothing.
+			ruleset: await sessionRulesetInput(request.db, request.sessionId)
 		},
 		seed: request.seed,
 		runId,

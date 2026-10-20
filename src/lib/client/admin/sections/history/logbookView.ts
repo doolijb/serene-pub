@@ -1,3 +1,4 @@
+import { realDateTime } from "$lib/client/utils/realTime.svelte"
 /**
  * How Admin › History words and links a logbook record — shared by the
  * changelist (`Page.svelte`) and the record's change view (`IdPage.svelte`),
@@ -43,7 +44,7 @@ export function objectHistoryHref(r: LogbookRecordView): string {
 }
 
 export const fmtWhen = (iso: string, seconds = false) =>
-	new Date(iso).toLocaleString(undefined, {
+	realDateTime(iso, {
 		year: "numeric",
 		month: "short",
 		day: "numeric",

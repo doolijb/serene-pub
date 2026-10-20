@@ -10,7 +10,7 @@
  */
 import { describe, expect, test } from "vitest"
 import { resolveWidgetSurface } from "@serene-pub/sdk"
-import { ADVENTURE_LAYOUT } from "@serene-pub/core-catalog"
+import { STORY_WORLD_LAYOUT } from "@serene-pub/core-catalog"
 import { CORE_WIDGETS } from "$lib/shared/widgets/types"
 import { widgetSettingsSchema } from "$lib/shared/widgets/settings"
 
@@ -24,7 +24,9 @@ describe.each(STATE_WIDGETS)("%s", (id) => {
 	})
 
 	test("it runs remote, as core's own component (R79)", () => {
-		expect(resolveWidgetSurface(declOf(id)!, "core")).toEqual({ kind: "remote", owner: "core", component: id })
+		// ⏳ World State's module is Stats' own (AUDIT B, 2026-10-17): the alias resolves to it everywhere.
+		const component = id === "world-state" ? "stats" : id
+		expect(resolveWidgetSurface(declOf(id)!, "core")).toEqual({ kind: "remote", owner: "core", component })
 	})
 
 	test("it declares settings, and every declared field has a default", () => {
@@ -86,7 +88,7 @@ describe("scene portraits", () => {
 		// one-time pin seed (`scenePinsSeed.takesPins`).
 		expect(
 			(
-				ADVENTURE_LAYOUT.widgetSettings as Record<
+				STORY_WORLD_LAYOUT.widgetSettings as Record<
 					string,
 					Record<string, unknown>
 				>

@@ -53,7 +53,7 @@ import {
 	type AttributeSlotDecl,
 	type ParticipantRef
 } from "@serene-pub/sdk"
-import { qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
+import { castMemberKey, qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
 import type { StateOwner } from "$lib/server/state/owners"
 
 /** What a state has to carry for the filter to find the holder-only values. */
@@ -221,7 +221,7 @@ export function heardOnly<S>(state: S, hears: (characterId: string) => boolean):
 		if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry
 		if (copies.has(entry)) return copies.get(entry)
 		const values = entry as Record<string, unknown>
-		const gone = [...ownerOnlyKeys, ...(member && !hears(String(values.id)) ? holderKeys : [])]
+		const gone = [...ownerOnlyKeys, ...(member && !hears(castMemberKey(values)) ? holderKeys : [])]
 		let out: Record<string, unknown> = values
 		if (gone.some((k) => k in values)) {
 			out = { ...values }
@@ -265,6 +265,7 @@ export function heardOnly<S>(state: S, hears: (characterId: string) => boolean):
  */
 export type Hearing =
 	| { all: true }
+	// Member keys: a character id, or 🚧 `player_seat:<playerSeatId>` for a seat.
 	| { all: false; characterIds: ReadonlySet<string> }
 
 const EVERYTHING: Hearing = Object.freeze({ all: true })
@@ -280,6 +281,13 @@ export const holderAudience = (characterId: number | string): ParticipantRef[] =
 ]
 
 /**
+ * 🚧 A card-less player seat's holder-only audience (2026-10-14): the session's
+ * owner, and whoever sits in the seat (`player-seat:<id>`, which the resolver
+ * answers with the seat's player). A seat with a card is heard as its card.
+ */
+export const playerSeatHolderAudience = (seatId: number): ParticipantRef[] => ["owner", `player-seat:${seatId}`]
+
+/**
  * One person's hearing in one session, for the cast `cast` lists (the
  * session's seated members and presences — `sessionLinks(...).cast`).
  *
@@ -291,23 +299,40 @@ export async function hearingOf(
 	db: Db,
 	sessionId: number,
 	userId: number,
-	cast: ReadonlyArray<{ characterId: number }>
+	cast: ReadonlyArray<{ characterId: number }>,
+	/**
+	 * 🚧 The session's live card-less player seats (`sessionLinks(...).playerSeats`): each
+	 * is heard as `player_seat:<playerSeatId>` by its `playerSeatHolderAudience`. Absent = none.
+	 */
+	playerSeats: ReadonlyArray<{ playerSeatId: number }> = []
 ): Promise<Hearing> {
 	const { resolvePortrayals } = await import("$lib/server/pipelines/runtime/portrayals")
+	const seatAudiences = playerSeats.map((s) => ({
+		key: castMemberKey(s),
+		refs: playerSeatHolderAudience(s.playerSeatId)
+	}))
+	const refs = new Set<ParticipantRef>([
+		"owner",
+		...cast.map((c) => `character:${c.characterId}` as const),
+		...seatAudiences.flatMap((s) => s.refs)
+	])
 	const portrayals = await resolvePortrayals(db, {
 		sessionId,
 		runOwnerUserId: userId,
-		refs: ["owner", ...cast.map((c) => `character:${c.characterId}` as const)]
+		refs: [...refs]
 	})
 	const viewer = { userId }
 	if (audienceHolds(["owner"], portrayals, viewer)) return EVERYTHING
 	return {
 		all: false,
-		characterIds: new Set(
-			cast
+		characterIds: new Set([
+			...cast
 				.filter((c) => audienceHolds(holderAudience(c.characterId), portrayals, viewer))
-				.map((c) => String(c.characterId))
-		)
+				.map((c) => String(c.characterId)),
+			...seatAudiences
+				.filter((s) => audienceHolds(s.refs, portrayals, viewer))
+				.map((s) => s.key)
+		])
 	}
 }
 
@@ -316,7 +341,7 @@ export const stateAsHeard = <S>(state: S, hearing: Hearing): S =>
 	hearing.all ? state : heardOnly(state, (id) => hears(hearing, id))
 
 /** The owner kinds a cast member's values are filed under, at each layer. */
-const CAST_OWNER_KINDS: ReadonlySet<string> = new Set(["session_cast", "card", "cast_member"])
+const CAST_OWNER_KINDS: ReadonlySet<string> = new Set(["session_cast", "card", "cast_member", "player_seat"])
 
 /**
  * Whether one stored value — a session-layer row, a pending change's payload
@@ -345,6 +370,8 @@ export function valueHeard(
 		slots.holder.has(value.slotId) ||
 		(CAST_OWNER_KINDS.has(kind) && !getAttributeSlot(value.slotId))
 	if (!holderOnly) return true
+	// 🚧 A seat is heard by its own key (`hearingOf`'s `player_seat:<id>`).
+	if (kind === "player_seat") return hears(hearing, castMemberKey({ playerSeatId: id }))
 	const characterId =
 		kind === "session_cast" || kind === "card"
 			? id

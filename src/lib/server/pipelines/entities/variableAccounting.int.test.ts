@@ -12,7 +12,7 @@ import { and, eq } from "drizzle-orm"
 import { definePluginVariable, resolveConfig } from "@serene-pub/sdk"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
-import { CHAT_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { renderVariable } from "$lib/server/pipelines/entities/variableLayouts"
 
@@ -37,7 +37,7 @@ beforeAll(async () => {
 	const [spec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
+		.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
 
 	// A pick made while `currentDate` still means core's variable: the shipped
 	// "Numeric" row, written straight into the selected configuration.
@@ -50,7 +50,7 @@ beforeAll(async () => {
 				eq(schema.pipelineVariableTemplates.name, "Numeric")
 			)
 		)
-	const selected = await resolveSelectedConfig(db, spec!.id, CHAT_RESPOND_SPEC_ID, {})
+	const selected = await resolveSelectedConfig(db, spec!.id, STORY_RESPOND_SPEC_ID, {})
 	plantedConfigId = selected!.configId
 	plantedRowId = numeric!.id
 	const at = and(
@@ -110,7 +110,7 @@ describe("a spec's renders, stored and read back", () => {
 	}, 60_000)
 
 	it("the run hands the render the spec's variable, and drops the pick made for core's", async () => {
-		const world = await buildWorld(db, { specId: CHAT_RESPOND_SPEC_ID })
+		const world = await buildWorld(db, { specId: STORY_RESPOND_SPEC_ID })
 		const layouts = (resolveConfig(world, ["prompt"]).prompt?.variables ?? {}) as any
 		expect(layouts.currentDate?.variableId).toBe(PLAIN_DATE)
 		// The "Numeric" row was core's layout for core's date parts. It no
@@ -128,8 +128,8 @@ describe("a spec's renders, stored and read back", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
-		await reconcileConfigs(db, spec!.id, versionId, CHAT_RESPOND_SPEC_ID)
+			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
+		await reconcileConfigs(db, spec!.id, versionId, STORY_RESPOND_SPEC_ID)
 		const left = await db
 			.select()
 			.from(schema.pipelineConfigValues)
@@ -159,7 +159,7 @@ describe("a spec's renders, stored and read back", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, CHAT_RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
 		const [numeric] = await db
 			.select()
 			.from(schema.pipelineVariableTemplates)
@@ -194,9 +194,9 @@ describe("a spec's renders, stored and read back", () => {
 					.from(schema.pipelineConfigNotices)
 					.where(eq(schema.pipelineConfigNotices.path, "currentDate"))
 			).length
-		await reconcileConfigs(db, spec!.id, versionId, CHAT_RESPOND_SPEC_ID)
+		await reconcileConfigs(db, spec!.id, versionId, STORY_RESPOND_SPEC_ID)
 		const afterFirst = await noticesAt()
-		await reconcileConfigs(db, spec!.id, versionId, CHAT_RESPOND_SPEC_ID)
+		await reconcileConfigs(db, spec!.id, versionId, STORY_RESPOND_SPEC_ID)
 		// A second boot says nothing new about the address…
 		expect(await noticesAt()).toBe(afterFirst)
 		// …and no configuration holds core's row for a key that means the plugin's.

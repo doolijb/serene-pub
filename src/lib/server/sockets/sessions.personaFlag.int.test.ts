@@ -183,7 +183,7 @@ describe("sessions:addPersona — the auto-flag (PGlite integration)", () => {
 					name: "Night walk",
 					scenario: "",
 					lorebookId: null,
-					genreId: "core:genre/chat",
+					genreId: "core:genre/story",
 					presetId: null,
 					genreFields: {}
 				} as any,

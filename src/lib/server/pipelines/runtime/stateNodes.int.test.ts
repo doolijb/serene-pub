@@ -481,7 +481,18 @@ describe("the three tools", () => {
 			"read_summary",
 			"set_state",
 			"give_item",
-			"take_item"
+			"take_item",
+			// The assistant genres' tools after them (2026-10-19): the web
+			// (Guide and Chat only), the clock and arithmetic, and Chat's
+			// memory and image doors.
+			"web_search",
+			"fetch_url",
+			"clock_now",
+			"calculate",
+			"write_entry",
+			"remember",
+			"forget",
+			"generate_image"
 		])
 	})
 })
@@ -742,7 +753,8 @@ describe("the keeper's inventory arm (2026-09-27)", () => {
 		}) as any
 
 	const KEEPERS: Array<[slug: string, nodeKey: string]> = [
-		["core:spec/adventure-respond", "keeperWrite"],
+		// retired with Adventure, 2026-10-19: Adventure's reply `keeperWrite`
+		// (Story's reckoning answers its own schema, STORY_RECKON_SCHEMA).
 		["core:spec/lair-respond", "keep.played.keeperWrite"]
 	]
 	const shippedPath = async (slug: string, nodeKey: string) => {
@@ -798,7 +810,7 @@ describe("the keeper's inventory arm (2026-09-27)", () => {
 				values: [{ owner: w.verity.name, slot: "hp", value: "12" }],
 				inventory: [{ owner: w.verity.name, entryId: w.key.id, delta: 2 }]
 			},
-			await shippedPath("core:spec/adventure-respond", "keeperWrite")
+			await shippedPath("core:spec/lair-respond", "keep.played.keeperWrite")
 		)
 		expect(got.changes).toHaveLength(2)
 		expect(got.changes[1]).toEqual(inventoryAdd(w.verity.id, w.key.id, 2))

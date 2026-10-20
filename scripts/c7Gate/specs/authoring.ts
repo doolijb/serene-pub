@@ -227,10 +227,9 @@ const marksOn = (page: Page, owner: string) =>
 function layoutWith(widgetId: string) {
 	const l = structuredClone(FIXTURE_LAYOUT) as typeof FIXTURE_LAYOUT & { active: Array<{ id: string; on: boolean }> }
 	l.active = [...l.active, { id: widgetId, on: true }]
-	;(l.zoneLayout.zones.left.widgets as string[]) = ["lore-entries", widgetId]
-	l.arrangedGrid.left.items = [
-		{ id: "lore-entries", x: 0, y: 0, w: 1, h: 6 },
-		{ id: widgetId, x: 0, y: 6, w: 1, h: 6 }
+	;(l.panels.left as Array<{ key: string; tabs: string[] }>) = [
+		{ key: "p3", tabs: ["lore-entries"] },
+		{ key: "p6", tabs: [widgetId] }
 	]
 	return l
 }

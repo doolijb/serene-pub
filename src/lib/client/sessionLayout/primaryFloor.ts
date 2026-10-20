@@ -1,134 +1,209 @@
 /**
- * The **primary floor** (layout plan M.3.10 / M.4, brief 7a, 2026-09-29): the
- * one placement rule left once placement is free.
+ * The **primary floor** — now only a CONVERTER's rule (owner review
+ * 2026-10-14, R-B: no lock at all).
  *
- * A session layout places at least one instance of its genre's **primary
- * widget** — `messages`, or the widget an R71 genre names when it withholds the
- * conversation (Battleship's board) — ANYWHERE: the middle, a side, a tab
- * group. It is a rule about the whole layout, never about a zone, and it
- * replaces the widget grid's retired `required` flag, which pinned the
- * conversation to the middle in seven places.
+ * A layout stored as `panels` is read exactly as stored: it may hold no
+ * conversation at all, and its primary panel may hold any widget (a map,
+ * stats, a plugin's). Reset to genre default layout is the way back; nothing
+ * here puts the conversation back behind the person's back.
  *
- * Three halves, all here so they cannot disagree:
+ * The floor survives in one place: a blob with NO `panels` (only the ⏳ old
+ * slots, or nothing) is converted by the SDK (`panelsOf` → `panelsFromSlots`),
+ * which puts the bare conversation in the middle when the old slots placed
+ * none. `readStoredLayout` swaps that converter's conversation for this
+ * genre's primary (`withPrimaryFloor`) — an R71 genre's board, say. And when
+ * a genre that withholds a widget empties the WHOLE middle of a stored layout
+ * by omitting it (the genre did that, not the person), its primary takes the
+ * primary panel.
  *
- * - **Readers** (`withPrimaryFloor`): a layout that DRAWS no instance of the
- *   primary gets the bare primary appended to its middle, in the shape the
- *   genre default gives it (`defaultChatLayout`). A saved layout is otherwise
- *   read exactly as saved — the conversation stays in the side it was moved to.
- * - **The editor** (`floorKeeps`): the remove control is hidden on the LAST
- *   placed instance, which says why (`floorNote`) — so the floor is never
- *   something a person meets as a silent undo.
- * - **Done** (`floorRefusal`): the layout Done would commit is asked the
- *   readers' question, and Done refuses rather than commit one the readers
- *   would have to repair.
+ * "Placed" means DRAWN, never merely named: what is drawn is the SDK's one
+ * reading of a layout (`resolveDrawn` over `panelsOf`, `drawnOf` here) — a
+ * retired widget's tab draws nothing.
  *
- * "Placed" means DRAWN (`drawnIdsOf`), never merely named: a grid entry or a
- * zone list that the arrangement shadows puts nothing on screen, so it does
- * not satisfy the floor either. What is drawn is the SDK's one reading of a
- * layout (`resolveDrawn`, `drawnOf` here); the floor never reads the three
- * places a second way.
- *
- * Pure: the session layout feeds it the three places a widget can be placed
- * (the side zone lists, the middle widget grid, the saved arrangement).
+ * Pure: it reads a session layout (`SessionLayoutV1`) and its panels
+ * (PLAN-session-panels-2026-10-14), never the ⏳ old slots directly.
  */
 import {
-	type ArrangedGridV1,
 	type DrawnLayout,
 	drawnInstances,
 	isInstanceOf,
+	type PanelLayoutV1,
+	type PanelV1,
+	panelsOf,
 	primaryPlaced,
 	resolveDrawn,
 	type SessionLayoutV1,
-	type WidgetGridV1,
-	type ZoneLayoutV1
+	widgetOfInstance
 } from "@serene-pub/sdk"
-import { firstSlot, loadArranged, makeRoom } from "./arrangedGeometry"
-import { normalizeZoneLayout, withoutWidget } from "./schema"
-import { defaultChatLayout, loadChatLayout } from "./widgetGrid"
-
-/** The three places a session layout places widgets. */
-export interface SessionPlacement {
-	/** The side (and strip) zones' lists — the zone template. */
-	zones: ZoneLayoutV1
-	/** The middle widget grid (it may also name side-zone entries). */
-	grid: WidgetGridV1
-	/** The saved arrangement: cells per zone, authoritative where it exists. */
-	arranged: ArrangedGridV1
-}
-
-/** A zone frame's cells, as far as the floor reads them. */
-interface FrameCells {
-	rows: number
-	items: readonly { id: string; x: number; y: number; h: number }[]
-}
 
 /**
- * What these three places DRAW, and where, in a session box `box.inline` px
- * wide — the SDK's `resolveDrawn`, the one reading of the page's precedence:
- *
- * - the middle draws its arranged frame whenever one exists (an emptied middle
- *   stays empty), else the grid's middle;
- * - a side draws its arranged frame when it places anything, else its zones'
- *   lists — and, folded into them, any grid entry naming that side, but only
- *   when the template has a zone on that side to fold it into; the width
- *   ladder then says how an un-arranged side is drawn;
- * - a strip draws its list.
- *
- * Every instance carries one `pinned` (`pinnedOf`: absent means pinned). The
- * box only moves a side's ladder rung; membership is the same at any width.
+ * What a session layout DRAWS, and where, in a session box `box.inline` px
+ * wide — the SDK's `resolveDrawn`: per zone, its panels in reading order,
+ * each with its tabs, the tab shown, its pin and its height. The box only
+ * moves a side's ladder rung; membership is the same at any width.
  */
 export function drawnOf(
-	p: SessionPlacement,
+	layout: SessionLayoutV1,
 	box: { inline: number; block?: number } = { inline: 0 }
 ): DrawnLayout {
-	return resolveDrawn(sessionLayoutOf(p), box)
+	return resolveDrawn(layout, box)
 }
 
 /**
- * Every id the layout DRAWS, in reading order: middle, left, right, then the
- * strips (`drawnOf`), so the floor, a genre's check and any other reader
- * agree on what "placed" means. A grid entry or a list entry the arrangement
- * shadows is named but not drawn, and is not counted.
+ * Every id the layout DRAWS, in reading order: the middle (above, primary,
+ * below), left, right (`drawnOf`), so the floor, a genre's check and any other
+ * reader agree on what "placed" means.
  */
-export function drawnIdsOf(p: SessionPlacement): string[] {
-	return drawnInstances(drawnOf(p)).map((i) => i.instanceId)
+export function drawnIdsOf(layout: SessionLayoutV1): string[] {
+	return drawnInstances(drawnOf(layout)).map((i) => i.instanceId)
+}
+
+/** Every panel of a panel layout, in reading order. */
+function everyPanel(p: PanelLayoutV1): PanelV1[] {
+	return [
+		...(p.middle.above ?? []),
+		p.middle.primary,
+		...(p.middle.below ?? []),
+		...(p.left ?? []),
+		...(p.right ?? [])
+	].filter((x): x is PanelV1 => !!x)
+}
+
+/** A key no panel of the layout uses: `p` + the next counter. */
+function freshKey(p: PanelLayoutV1): string {
+	let n = 0
+	for (const panel of everyPanel(p)) {
+		const m = /^p(\d+)$/.exec(panel.key ?? "")
+		if (m) n = Math.max(n, Number(m[1]))
+	}
+	return `p${n + 1}`
 }
 
 /**
- * The session layout these three places are — the input the SDK's reader
- * takes (`resolveDrawn`, and `primaryPlaced` over it), so the floor asks it
- * rather than a second reading of its own.
+ * The panels with the primary floor applied: returned BY REFERENCE when an
+ * instance of `primaryId` is drawn anywhere, else with the bare primary as
+ * the middle's primary panel. The primary panel that was there — when it
+ * draws anything — becomes the last panel above it, sized to `fit`, so
+ * nothing the layout placed is lost and the log gets the fill.
+ *
+ * For a CONVERTED blob only (`readStoredLayout`) — never over stored
+ * `panels` or the editor's working copy (R-B, no lock).
  */
-export function sessionLayoutOf(p: SessionPlacement): SessionLayoutV1 {
-	return { zoneLayout: p.zones, widgetGrid: p.grid, arrangedGrid: p.arranged }
+export function withPrimaryFloor(
+	panels: PanelLayoutV1,
+	primaryId: string
+): PanelLayoutV1 {
+	if (primaryPlaced({ panels }, primaryId)) return panels
+	// The old primary's tabs, less any instance of the primary itself: one
+	// that is not drawn is the converter's floor (`panelsFromSlots` puts the
+	// conversation there when a layout places none), never a second copy.
+	const { pinned: _pinned, ...old } = panels.middle.primary ?? { key: "", tabs: [] }
+	const moved: PanelV1 = {
+		...old,
+		tabs: (old.tabs ?? []).filter((id) => !isInstanceOf(id, primaryId))
+	}
+	const kept =
+		drawnOf({
+			panels: {
+				version: 1,
+				left: [],
+				right: [],
+				middle: { above: [], below: [], primary: moved }
+			}
+		}).middle.primary.tabs.length > 0
+	return {
+		...panels,
+		middle: {
+			...panels.middle,
+			above: [
+				...(panels.middle.above ?? []),
+				...(kept ? [{ ...moved, height: "fit" as const }] : [])
+			],
+			primary: { key: freshKey(panels), tabs: [primaryId] }
+		}
+	}
+}
+
+/** Does the blob store `panels` a reader can walk (the SDK's own test)? */
+function storesPanels(blob: SessionLayoutV1): boolean {
+	const p = blob.panels as Partial<PanelLayoutV1> | undefined
+	return (
+		!!p &&
+		typeof p === "object" &&
+		p.version === 1 &&
+		!!p.middle &&
+		typeof p.middle === "object" &&
+		!!p.middle.primary &&
+		typeof p.middle.primary === "object"
+	)
 }
 
 /**
  * A STORED session layout — a preset's `layout`, a genre's shipped one, any
- * blob this build did not write — as the three places, repaired the way the
- * page repairs its own (`normalizeZoneLayout`, `loadChatLayout`,
- * `loadArranged`: retired ids out, malformed entries dropped, every cell back
- * inside its frame) and with the primary floor applied. So `drawnOf` of it is
- * what applying that layout would draw. The one place a stored blob's three
- * slots are read into a placement; anything that is not an object reads as a
+ * blob this build did not write — read the way the page reads its own: its
+ * panels (`panelsOf`: the stored `panels`, else the ⏳ old slots converted)
+ * and the tabs of an `omit`ted widget dropped. So `drawnOf` of it is what
+ * applying that layout would draw. Anything that is not an object reads as a
  * layout that saved nothing.
+ *
+ * Stored `panels` are read as stored — no floor (R-B): a layout with no
+ * conversation draws what it holds. Only a converted blob gets the floor,
+ * for this genre's primary (`withPrimaryFloor`) in place of the converter's
+ * conversation; and a stored layout whose whole middle the genre's `omit`
+ * emptied gets the genre's primary as its primary panel.
  */
 export function readStoredLayout(
 	layout: unknown,
 	primaryId = "messages",
 	omit: ReadonlySet<string> = new Set()
-): SessionPlacement {
+): SessionLayoutV1 {
 	const blob: SessionLayoutV1 =
-		layout && typeof layout === "object" && !Array.isArray(layout) ? layout : {}
-	const { zoneLayout, widgetGrid, arrangedGrid } = blob
-	return withPrimaryFloor(
-		{
-			zones: normalizeZoneLayout(zoneLayout),
-			grid: loadChatLayout(widgetGrid, primaryId, omit),
-			arranged: loadArranged(arrangedGrid)
-		},
-		primaryId
-	)
+		layout && typeof layout === "object" && !Array.isArray(layout)
+			? (layout as SessionLayoutV1)
+			: {}
+	const stored = storesPanels(blob)
+	let panels = panelsOf(blob, { primaryWidgetIds: [primaryId] })
+	// The converter's own floor (`panelsFromSlots` puts the bare conversation
+	// in the middle of a layout that places none) is not the layout's: this
+	// floor, for this genre's primary, stands in for it.
+	if (!stored && drawnOf(blob).middle.primary.floor)
+		panels = {
+			...panels,
+			middle: { ...panels.middle, primary: { ...panels.middle.primary, tabs: [] } }
+		}
+	let omittedMiddle = false
+	if (omit.size) {
+		const keep = (p: PanelV1): PanelV1 => ({
+			...p,
+			tabs: (p.tabs ?? []).filter((id) => !omit.has(widgetOfInstance(id)))
+		})
+		const list = (l: PanelV1[] | undefined) =>
+			(l ?? []).map(keep).filter((p) => p.tabs.length > 0)
+		const before = middleTabs(panels)
+		panels = {
+			...panels,
+			left: list(panels.left),
+			right: list(panels.right),
+			middle: {
+				above: list(panels.middle.above),
+				primary: keep(panels.middle.primary),
+				below: list(panels.middle.below)
+			}
+		}
+		omittedMiddle = before > 0 && middleTabs(panels) === 0
+	}
+	return {
+		panels: !stored || omittedMiddle ? withPrimaryFloor(panels, primaryId) : panels,
+		...(blob.widgetSettings ? { widgetSettings: blob.widgetSettings } : {}),
+		...(blob.widgetStyles ? { widgetStyles: blob.widgetStyles } : {})
+	}
+}
+
+/** How many tabs the middle's panels hold, all three places. */
+function middleTabs(p: PanelLayoutV1): number {
+	return [...(p.middle.above ?? []), p.middle.primary, ...(p.middle.below ?? [])]
+		.filter((x): x is PanelV1 => !!x)
+		.reduce((n, x) => n + (x.tabs?.length ?? 0), 0)
 }
 
 /** The placed instances of `primaryId` — the bare id and every `#name` copy. */
@@ -139,157 +214,35 @@ export function primaryInstances(
 	return [...placed].filter((id) => isInstanceOf(id, primaryId))
 }
 
-/** The card rows a floor-appended primary takes in an arranged middle. */
-const FLOOR_CARD_ROWS = 3
+
+/** The middle's three places, as any reader holds them. */
+export interface MiddlePlaces<P extends { tabs: readonly unknown[] }> {
+	above: readonly P[]
+	primary: P
+	below: readonly P[]
+}
 
 /**
- * The tallest run of rows no card touches, across the frame's whole width —
- * where a card can go without moving anything — or null when every row holds
- * something.
+ * The middle as the LIVE view draws it (R-B; the primary is a place): when
+ * the primary panel draws nothing — its widget uninstalled, withheld by the
+ * genre, or every tab undrawable here — the nearest middle panel takes its
+ * place (the last above, else the first below), the same panel the editor
+ * promotes when the primary leaves. Never written: the stored layout is the
+ * person's. With nothing in the middle at all it is returned as it is; the
+ * page then draws the sides and the stage moves to the first drawn panel
+ * (./placementRules `stageOf`).
  */
-function tallestFreeBand(frame: FrameCells): { y: number; h: number } | null {
-	let best: { y: number; h: number } | null = null
-	let start = -1
-	for (let y = 0; y <= frame.rows; y++) {
-		const free =
-			y < frame.rows && !frame.items.some((i) => y >= i.y && y < i.y + i.h)
-		if (free) {
-			if (start < 0) start = y
-			continue
+export function withPrimaryFilled<P extends { tabs: readonly unknown[] }>(
+	m: MiddlePlaces<P>
+): MiddlePlaces<P> {
+	if (m.primary.tabs.length > 0) return m
+	if (m.above.length > 0)
+		return {
+			above: m.above.slice(0, -1),
+			primary: m.above[m.above.length - 1],
+			below: m.below
 		}
-		if (start >= 0 && (!best || y - start > best.h)) best = { y: start, h: y - start }
-		start = -1
-	}
-	return best
-}
-
-/**
- * The layout, with the primary floor applied: returned BY REFERENCE when an
- * instance of `primaryId` is drawn anywhere, else with the bare primary
- * appended to the middle.
- *
- * Appended to BOTH middle models, because either can be the one drawn: the
- * grid (in the floor's shape, after what it already holds) and, when the
- * arrangement has a middle frame — which the live view draws in preference to
- * the grid — a cell there too:
- *
- * - the whole frame when it is empty;
- * - else the tallest band of rows nothing touches, full width, so the log has
- *   the room it would have had (a 3-row sliver under a strip read as a broken
- *   log, and came back on every read, since the floor is never saved);
- * - else, with no band that tall, a full-width slot made the way the tray
- *   makes one (`makeRoom` / `firstSlot`).
- *
- * A middle frame with no room even then is dropped, so the grid (which does
- * hold the primary) is what draws, rather than a middle without it.
- *
- * Where the bare primary was named but not drawn — a grid entry or a zone list
- * the arrangement shadows — that entry goes, so the layout names it once.
- */
-export function withPrimaryFloor(
-	p: SessionPlacement,
-	primaryId: string
-): SessionPlacement {
-	if (primaryPlaced(sessionLayoutOf(p), primaryId)) return p
-	const floor = defaultChatLayout(primaryId).widgets[0]
-	const kept = p.grid.widgets.filter((w) => w.id !== primaryId)
-	const order =
-		kept
-			.filter((w) => w.zone === "middle")
-			.reduce((n, w) => Math.max(n, w.order), -1) + 1
-	const grid: WidgetGridV1 = {
-		...p.grid,
-		widgets: [...kept, { ...floor, order }]
-	}
-	const named = Object.values(p.zones.zones).some((z) => z.widgets.includes(primaryId))
-	const zones = named ? withoutWidget(p.zones, primaryId) : p.zones
-	const frame = p.arranged.middle
-	if (!frame) return { ...p, zones, grid }
-	const arranged: ArrangedGridV1 = { ...p.arranged }
-	if (!frame.items.length) {
-		arranged.middle = {
-			...frame,
-			items: [{ id: primaryId, x: 0, y: 0, w: frame.cols, h: frame.rows }]
-		}
-		return { ...p, zones, grid, arranged }
-	}
-	const band = tallestFreeBand(frame)
-	if (band && band.h >= FLOOR_CARD_ROWS) {
-		arranged.middle = {
-			...frame,
-			items: [
-				...frame.items,
-				{ id: primaryId, x: 0, y: band.y, w: frame.cols, h: band.h }
-			]
-		}
-		return { ...p, zones, grid, arranged }
-	}
-	const need = { w: frame.cols, h: FLOOR_CARD_ROWS }
-	const roomy = makeRoom(frame, need)
-	const slot = firstSlot(roomy, need)
-	if (slot)
-		arranged.middle = {
-			...roomy,
-			items: [
-				...roomy.items,
-				{
-					id: primaryId,
-					x: slot.x,
-					y: slot.y,
-					w: Math.min(need.w, roomy.cols),
-					h: Math.min(need.h, roomy.rows)
-				}
-			]
-		}
-	else delete arranged.middle
-	return { ...p, zones, grid, arranged }
-}
-
-/**
- * Does the floor keep `id` in the layout — is it the LAST placed instance of
- * the primary widget? The editor hides that card's remove control (and says
- * why, `floorNote`); every other widget, and every instance but the last, may
- * go.
- */
-export function floorKeeps(
-	id: string,
-	placed: Iterable<string>,
-	primaryId: string
-): boolean {
-	if (!isInstanceOf(id, primaryId)) return false
-	// No OTHER instance would be left to stand in for it.
-	return primaryInstances(placed, primaryId).every((other) => other === id)
-}
-
-/**
- * The one instance the floor keeps, when exactly one is placed — the card
- * whose × is hidden — else null. The editor re-seeds its zones when this
- * changes, since a card's controls are drawn once, at seed.
- */
-export function floorKeptId(
-	placed: Iterable<string>,
-	primaryId: string
-): string | null {
-	const all = new Set(primaryInstances(placed, primaryId))
-	return all.size === 1 ? [...all][0] : null
-}
-
-/** What the card the floor keeps says in place of its remove control. */
-export function floorNote(widgetTitle: string): string {
-	return `A session needs one ${widgetTitle} widget`
-}
-
-/**
- * What Done says when the layout it would commit draws no instance of the
- * primary, else null. The editor never offers to remove the last one, so this
- * is the backstop for a card lost some other way: refused, and said, rather
- * than committed for every reader to repair with a card the person never
- * arranged.
- */
-export function floorRefusal(
-	p: SessionPlacement,
-	primaryId: string,
-	widgetTitle: string
-): string | null {
-	return primaryPlaced(sessionLayoutOf(p), primaryId) ? null : floorNote(widgetTitle)
+	if (m.below.length > 0)
+		return { above: m.above, primary: m.below[0], below: m.below.slice(1) }
+	return m
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { realDateTime } from "$lib/client/utils/realTime.svelte"
 	/**
 	 * One conversation in the Messages view (PLAN-private-messages §6.3): the
 	 * nav header with its `⋯`, the member strip, the **log** and the composer
@@ -51,7 +52,7 @@
 		onBack?: () => void
 		/** Open a member's person detail. */
 		onOpenPerson: (userId: number) => void
-		/** The reader left, or the conversation is no longer theirs. */
+		/** The reader left, or the conversation is not theirs any more. */
 		onGone: () => void
 	}
 
@@ -318,7 +319,7 @@
 	}
 	function fullTime(iso: string): string {
 		const d = new Date(iso)
-		return Number.isNaN(d.getTime()) ? "" : d.toLocaleString()
+		return Number.isNaN(d.getTime()) ? "" : realDateTime(d)
 	}
 </script>
 

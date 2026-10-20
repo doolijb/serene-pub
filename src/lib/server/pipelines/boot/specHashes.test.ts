@@ -81,7 +81,10 @@ const PUBLISHED: Record<string, string> = {
 	// One turn-order spec per genre since the modder pass (R27, M2); the
 	// shared `turn-order` / `turn-order-narrator` pins are retired.
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "2d13f7b17a0fb")
-	"core:spec/chat-turn-order@1.0.0": "13d6a6453f2412",
+	// Moved 2026-10-19 (PLAN-genre-restructure lane 2): the voices group — a
+	// `tasks` step and `unprompted` (`core:task/turn-unprompted@1`) before the
+	// write, the narrator's line Narrate. Edited in place under the freeze. (was "404361a5ed026")
+	"core:spec/story-turn-order@1.0.0": "a4799f0c90c18",
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "1e155929f443a5")
 	"core:spec/guide-turn-order@1.0.0": "127cf804a74c6d",
 	// Moved 2026-09-27 (lair pass B9): the `TURN_ORDER_NARRATOR_EVENTS` list gains `message-deleted` and
@@ -89,7 +92,6 @@ const PUBLISHED: Record<string, string> = {
 	// Proven: with those two event ids removed, the document hashes back to
 	// the old pin. (was 'b605f68c2205f')
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "61d38f952d6ab")
-	"core:spec/adventure-turn-order@1.0.0": "1c8ef96c2530a2",
 	// Moved 2026-09-27 (lair pass B9): the `TURN_ORDER_NARRATOR_EVENTS` list gains `message-deleted` and
 	// `message-hidden`, so Continue re-decides after a delete or a hide.
 	// Proven: with those two event ids removed, the document hashes back to
@@ -178,7 +180,16 @@ const PUBLISHED: Record<string, string> = {
 	// story clock* says `onRefusal: 'skip'` — a story with no clock skips
 	// the tick with a ledger line instead of halting after the reply. Edited
 	// in place under the freeze. (was "1384332893aea")
-	"core:spec/chat-respond@1.21.0": "1ce32d3e6de41a",
+	// Moved 2026-10-19 (PLAN-genre-restructure lane 2): `tasks` at the head,
+	// the `retrieval` junction (*Read the lorebook*) before `rank`, the
+	// *Read the scene* gate before `context`, and the reckoning's Review
+	// arms, item supply and *Describe new places*; the sweep's relationships.
+	// Edited in place under the freeze. (was "156aae1808c043")
+	// Moved 2026-10-19 (main session after lane 2): the reply's model calls
+	// labelled by purpose — Reply, What the reply changed, Look back over the
+	// story — and the Review arms' step labels. Edited in place under the
+	// freeze. (was "1d2f322ed2c3c9")
+	"core:spec/story-respond@1.21.0": "f5dec0a9f3778",
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
 	// two keys stripped, the document hashes back to the old pin. (was 'b0c3e32a16d1d')
@@ -228,7 +239,17 @@ const PUBLISHED: Record<string, string> = {
 	// carries Chat's shape, and the author's note field's `depth` default is
 	// 0 (was 4). Edited in place under the freeze. (was "1566992a444e50")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/create-chat`; nothing else changed. (was "18b84026deb74b")
-	"core:spec/chat-create@2.2.0": "1cd1222a275dec",
+	"core:spec/assistant-answer-form@1.0.0": "3fd5d0832ce80",
+	"core:spec/assistant-create@1.0.0": "63c78ba748cb9",
+	// Moved 2026-10-19 (PLAN-genre-restructure lane 2): `tasks` at the head,
+	// the `retrieval` junction, and *Remember things* (★K) after the answer.
+	// Edited in place under the freeze. (was "16a65b471d2187")
+	// Moved 2026-10-19 (main session after lane 2): the model calls labelled
+	// by purpose — Reply, Reply with tools, Remember things. Edited in place
+	// under the freeze. (was "1c74aca94a7dbd")
+	"core:spec/assistant-respond@1.0.0": "1f4d71c32add75",
+	"core:spec/assistant-turn-order@1.0.0": "12e06b4f3ee833",
+	"core:spec/story-create@2.2.0": "1244f17da8e07b",
 	/**
 	 * The guide genre (plans/29 R-18; U5g, 2026-09-16) — two new slugs, and
 	 * nothing above them moves. `create-guide` carries the genre's
@@ -264,7 +285,7 @@ const PUBLISHED: Record<string, string> = {
 	// `drizzle/0101_create_guide_greeting_reprojection`, which re-seeds the
 	// shipped config so an existing install's Guide greets too.
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/create-guide`; nothing else changed. (was "6b6c45bf731ba")
-	"core:spec/guide-create@1.1.0": "1cb7b0cfc1ae44",
+	"core:spec/guide-create@1.1.0": "16fb2ead93ba5",
 	// (was "1d39898d4c7a0c") — W9 shape pins, see the note above adventure-ask.
 	"core:spec/guide-respond@1.0.0": "b7997d7b1d904",
 	/**
@@ -290,7 +311,7 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-09-28 (enum option labels on Adventure's tone/difficulty); was e611ef3a97923.
 	// Moved 2026-10-13 (live scenes §15 G2): the embedded shape names
 	// Adventure's place, `scenes: { place: { stateKey: "location" } }`. (was "17f29013f5ffc6")
-	"core:spec/adventure-create@1.0.0": "2b63bc55e3597",
+	"core:spec/story-create@1.0.0": "2b63bc55e3597",
 	// ⚠ MOVED, in place, while the genre is still unreleased: the planner and
 	// the keeper now pin `core:oracle/generate-json@1` instead of
 	// `generate-text` + `parse-json`, their transcript comes from
@@ -406,7 +427,7 @@ const PUBLISHED: Record<string, string> = {
 	// the old reply). Edited in
 	// place under the freeze. Measured with other lanes' in-flight core-catalog
 	// edits in the tree. (was "1185045ca49580")
-	"core:spec/adventure-respond@1.0.0": "18695a640a1593",
+	"core:spec/story-respond@1.0.0": "18695a640a1593",
 	// ⚠ MOVED, unreleased-genre terms (R-8, 2026-09-15): the three actions'
 	// `contextBudget` shares the writing step's connection for the model's
 	// own window, like every other budget node.
@@ -456,7 +477,7 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): `attachments` (history-attachments) + `attached` (place-attachments on `write`'s pair) before `prompt`, which reads `attached.messages`.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "e99170c35c4c0")
-	"core:spec/adventure-look@1.0.0": "1229f22a09ce29",
+	"core:spec/story-look@1.0.0": "d359d2d1b30f9",
 	// ⚠ MOVED, in place, on the same unreleased-genre terms: Rest and Time
 	// passes ask `core:oracle/generate-json@1` for the keeper's own shape
 	// instead of parsing prose out of a prefilled reply.
@@ -499,7 +520,7 @@ const PUBLISHED: Record<string, string> = {
 	// outlet says `cause: 'keeper'` and `onRefusal: 'skip'`. Edited in
 	// place under the freeze. Measured with other lanes' in-flight core-catalog
 	// edits in the tree. (was "1466f141e5dc14")
-	"core:spec/adventure-rest@1.0.0": "1f64e83107b6f4",
+	"core:spec/story-rest@1.0.0": "8297e986b8bbc",
 	// (was "135459cfe7c4c0" — R-8, see `adventure-look`)
 	// Hash moved (R-12, 2026-09-16): the generating step no longer wires
 	// `prompts: slot.prompts({ node: … })` — `core:oracle/generate-*@1`
@@ -546,7 +567,7 @@ const PUBLISHED: Record<string, string> = {
 	// skips the move with a ledger line instead of halting. Edited in
 	// place under the freeze. Measured with other lanes' in-flight core-catalog
 	// edits in the tree. (was "1b7157728a8132")
-	"core:spec/adventure-advance-time@1.0.0": "2a3ba89fbc8ae",
+	"core:spec/story-advance-time@1.0.0": "145dfed9e6763a",
 	/**
 	 * Forms (plans/29 R-15 *Forms*; 30 §U5d, 2026-09-17) — five new slugs,
 	 * and the three create specs above move with their genre surface. The
@@ -586,9 +607,9 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): `attachments` (history-attachments) + `attached` (place-attachments on `write`'s pair) before `prompt`, which reads `attached.messages`.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "358cb55e1154a")
-	"core:spec/adventure-ask@1.0.0": "e1c4f11db7bb3",
+	"core:spec/story-ask@1.0.0": "183f8263149ade",
 	// (was "1387dc7a4901d6") — W9 shape pins, see the note above adventure-ask.
-	"core:spec/adventure-answer@1.0.0": "11363c44f7099c",
+	"core:spec/story-answer@1.0.0": "3f7d64a64b379",
 	// (was "a2ddb2700ce09") — W9 shape pins, see the note above adventure-ask.
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
@@ -598,7 +619,7 @@ const PUBLISHED: Record<string, string> = {
 	// `attachments/promptPath.int.test.ts`). (was "ef5be600b6ed7")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/answer-form-chat`; nothing else changed. (was "1a1744b015b27a")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "a10f3d0d9292d")
-	"core:spec/chat-answer-form@1.0.0": "ce214eedc20d3",
+	"core:spec/story-answer-form@1.0.0": "105a87a0b6b917",
 	// (was "b89f3d6c0484b") — W9 shape pins, see the note above adventure-ask.
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
@@ -608,7 +629,6 @@ const PUBLISHED: Record<string, string> = {
 	// `attachments/promptPath.int.test.ts`). (was "d38acc496a3c1")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/answer-form-adventure`; nothing else changed. (was "8175a60b3bfc4")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "9a0a93d0fce6f")
-	"core:spec/adventure-answer-form@1.0.0": "83db35548ba3a",
 	// (was "1ddc286846b82d") — W9 shape pins, see the note above adventure-ask.
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
@@ -871,7 +891,7 @@ const PUBLISHED: Record<string, string> = {
 	// in-flight core-catalog edits in the tree. (was "1fa23cc37eaad0")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/narrate-character`; nothing else changed. (was "8bfbf7d9b46e9")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "15899aae9ed73d")
-	"core:spec/chat-side-character@1.0.0": "13b7abd61e7851",
+	"core:spec/story-side-character@1.0.0": "142a27f931338",
 	// (was "b6ba835e86244", then "431aa4254af1", then "12971669b900fd",
 	//  then "bc304a8a52b71")
 	// ⚠ MOVED on the same terms as `narrate-character` above (09-B B4):
@@ -947,7 +967,7 @@ const PUBLISHED: Record<string, string> = {
 	// in-flight core-catalog edits in the tree. (was "a98a294e26041")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/narrate`; nothing else changed. (was "cdba24cd29eaf")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "1890d6de7d7cfc")
-	"core:spec/chat-narrate@1.11.0": "1aec28beb3be77",
+	"core:spec/story-narrate@1.11.0": "1814fbb71316e4",
 	// ⚠ `core:spec/respond@1.20.0`'s hash MOVED for the SECOND time without a
 	// bump, on the same terms as the two paragraphs above and paired with
 	// `drizzle/0106_continuation_prefill_reprojection`, which deletes its
@@ -1174,8 +1194,7 @@ const PUBLISHED: Record<string, string> = {
 	// *Transcript aside attachments* (`expose.label`), so a Combining group
 	// never shows two steps headed "History attachments". (were
 	// "d6d9936a441b" / "150185e62c94a9" / "69c16d2df4303" / "d410ef541cb80")
-	"core:spec/chat-summarize-scene@1.0.0": "5d20235baeafd",
-	"core:spec/adventure-summarize-scene@1.0.0": "1f6c4b2f5ee94d",
+	"core:spec/story-summarize-scene@1.0.0": "119ee8ce3f667f",
 	"core:spec/guide-summarize-scene@1.0.0": "9c19042ad22a0",
 	// The Lair's reads the Sanctum as asides, through its own template.
 	// Moved 2026-10-13 (live scenes §15 G1, ★9): it carries the Lair's own
@@ -1211,6 +1230,8 @@ const PUBLISHED: Record<string, string> = {
 	// 2026-09-26: annex fields — core's one pipeline for every declared field.
 	// Moved 2026-10-05 (lock, PLAN-catalogue-and-pipeline-names N3): its inlet loses the Chat lock. (was "7e5c1e7091921")
 	"core:spec/set-annex-field@1.0.0": "1fc239ad46fb2d",
+	// 🚧 A person's message, saved through the pipeline (owner ruling 2026-10-15).
+	"core:spec/save-message@1.0.0": "17c4e2a15296cd",
 	/**
 	 * The built-in writes (U5b, R-15, 2026-09-16) — five NEW slugs, one per
 	 * message verb core implements: `core:inlet/built-in-request@1` straight
@@ -1254,7 +1275,7 @@ const PUBLISHED: Record<string, string> = {
 	// I12 (2026-10-12): the Default config names its loadouts; measured with
 	// lane A4's (I7a) `workflow: slot.workflow()` wiring on the render node in
 	// the tree. (was "1f4f95d38c8c86")
-	"core:spec/chat-generate-image@1.1.0": "7869765949f7c",
+	"core:spec/story-generate-image@1.1.0": "afcb4a23d1cbc",
 	// 🚧 1.0.0 (image generation I5, 2026-10-12): the Sprite set fill — a card
 	// action from the Sprites tab, no session: build-sprite-series → generate-
 	// image (series, likeness references, one seed per run) → cut-out →
@@ -1267,12 +1288,11 @@ const PUBLISHED: Record<string, string> = {
 	// Image generation I9 (lane C3, 2026-10-12): the Scene action — a quiet
 	// scene prompt off the last lines, the picture with the likeness images
 	// as references, posted and/or set as the backdrop. A new slug.
-	"core:spec/chat-illustrate-scene@1.0.0": "ea0dbc3998d55", // 2026-10-12 sweep: purposes on the two calls
+	"core:spec/story-illustrate-scene@1.0.0": "78e8e1adf0d59", // 2026-10-12 sweep: purposes on the two calls
 	// §16 follow-up D3 (2026-10-12): the same Scene graph with Adventure's
 	// inlet (`shared/illustrateScene.ts`; an inlet is one genre's). A new slug.
 	// Chat's hash above did not move when its graph was lifted into the shared
 	// builder.
-	"core:spec/adventure-illustrate-scene@1.0.0": "61ec0ac5e15fb",
 	// New 2026-10-13 (live scenes lane D, §6): *Time passes…* for Chat and
 	// the Lair — the clock step a press collects, and Advance story clock
 	// behind a junction on whether it moves. No model, no message.
@@ -1282,7 +1302,6 @@ const PUBLISHED: Record<string, string> = {
 	// edits in the tree. (was "146016a3e78051")
 	// Moved 2026-10-13 (live scenes §15 G12, lane J): `onRefusal: 'skip'`.
 	// Edited in place under the freeze. (was "1c8435302b630f")
-	"core:spec/chat-advance-time@1.0.0": "1397c71709d413",
 	// Moved 2026-10-13 (live scenes §15 G4–G7, lane H): *Advance story clock*
 	// says `cause: 'action'`. Edited in
 	// place under the freeze. Measured with other lanes' in-flight core-catalog
@@ -1671,6 +1690,117 @@ const PUBLISHED: Record<string, string> = {
 	// `input.recipients`), `apply` — the model call and its preset values
 	// gone. Proven with the lair-respond pin above. (was "76066b2c2a5ab")
 	"core:spec/lair-whisper@1.0.0": "17cf2e37e34e6",
+	// NEW 2026-10-15 (PLAN-dungeon-crawler-2026-10-14, the create lane): the
+	// genre published — create, the welcome (`member-added`), the interview
+	// with genesis at its end, the reply (story ⏳ + the Planner's lanes), the
+	// answer form, and the turn order (scripted, the round script by seed key,
+	// history `*`). 🚧
+	// Moved 2026-10-15 (walkthrough fixes): the Planner's greeting says
+	// "I'm the {{char}}". (was "baefc49a22797")
+	// Moved 2026-10-15 (deletions and retry, unreleased): the genre's shape
+	// the create inlet carries declares the Honour mode field and Story's
+	// `messageVerbs: { retry: false }`. (was "12456d5817a890")
+	// Moved 2026-10-16 (🚧 table channel, PLAN-rulesets §30): the shape the
+	// create inlet carries declares the `table` channel (folio, voice none,
+	// _Dice_). (was "16ffc138e02ee9")
+	// Moved 2026-10-17 (rulesets W3-B, DC onto the ruleset handler + the session's own notes; recorded W4-A): the annex keys the
+	// create seeds blank are `progress` (⏳ was `world` — the world is the
+	// session's own lorebook now), and the genre the create inlet carries
+	// declares `writes.lore: true` and its sheet's `crawl-*` slots.
+	// (was "11a21e67c9365f")
+	// Moved 2026-10-18: lanes by person (channel-lane), one exit model, asks, journal kinds, solo standing order, A11 placeholder-first (was "aeb8428aa5bef").
+	// Moved 2026-10-18 (lane C, after the 100-turn walk): the genre's characters `hint` (companions), its layout's faces strip (`owners: seats`), the Dice tab (`messages#table`) and Line kinds as a ticked list (was "64ba72a67b170").
+	"core:spec/dungeon-crawler-create@1.0.0": "79c5aef3f2a47",
+	// Moved 2026-10-18: lanes by person (channel-lane), one exit model, asks, journal kinds, solo standing order, A11 placeholder-first (was "10e007b633e3a9").
+	"core:spec/dungeon-crawler-welcome@1.0.0": "169cfff3d40856",
+	// Moved 2026-10-15 (the multiplayer lane, unreleased): the interview asks
+	// the standing order under the sheet and answers it on the seat. (was "c15d142de0003")
+	// Moved 2026-10-15 (walkthrough fixes): the interview and sheet scripts
+	// are handed the state (no change that changes nothing), and genesis
+	// files each seat's location at the opening's row. (was "f08003273f275")
+	// Moved 2026-10-15 (per-character max HP, unreleased): the sheet's
+	// `healthConfig` configures the seat's hp max (`set-stat-config@1`,
+	// `route.sheet.after.seat.health.set.write`) before its stats. (was "da692d91998c5")
+	// Moved 2026-10-16 (wire fixes, unreleased): the class offer, the sheet,
+	// the world and the opening are laid out by DUNGEON_CRAWLER_BRIEF_TEMPLATE
+	// (the brief the last user turn), and an acknowledgement is a table line
+	// (`route.noted`, `nextWrite`). (was "2d3cc4d68cbd")
+	// Moved 2026-10-17 (rulesets W3-B, DC onto the ruleset handler + the session's own notes; recorded W4-A): the class's starting
+	// kit is the handler's `apply` (`core:task/ruleset-resolve@1`, compendium
+	// ids); genesis files the world into the session's own lorebook (places
+	// as location entries, people as character lore). (was "15ad13f8b81797")
+	// Moved 2026-10-18: lanes by person (channel-lane), one exit model, asks, journal kinds, solo standing order, A11 placeholder-first (was "14b3d46be252fc").
+	// Moved 2026-10-18 (the 100-turn walk, lane A): each answer said back as the person's line (`said.echo`, kind `answer`) before the answer's changes, filed there; the sheet's summary first (`route.sheet.told.said`), its stats filed at it; the kit on the seat named in the same run (`after.seat.kit.given`); a new character's seat `retire`s the fallen's. (was "f142e90bf72c3")
+	// Moved 2026-10-18 (the 100-turn walk, lane B — P2-4, P2-6): the sheet's apply step is handed the turn's ruleset (`ruleset: $.input.ruleset`), so the kit follows the casting choice and Story's words. (was "109b9da5a90972")
+	// Moved 2026-10-19 (PLAN-dc-after-walk2 Q1-6, Q3-3): the sheet writes the seat's own spell-point most (`seatWrites` points junction), and genesis says on the lane that the story has started (`started`, a table line by the Planner). Measured with other lanes' in-flight edits in the tree. (was "1d4b9e6a65efcf")
+	// Moved 2026-10-19 (PLAN-dc-after-walk3 R1-4, R2-1, R2-2, ★4): the seat's full health and spell-point most are filed at the stats' row (`worldRow`); genesis reads the places back and holds the world's ways out as `exits` pieces (`worldPlaces`, `ways`, `hold.ways.apply`); a way out's grammar carries the trap's `trapDamage` and `trapCondition`; the sheet writes the class's trained skills (was "18eea397cb41e1").
+	"core:spec/dungeon-crawler-interview@1.0.0": "14255f89e8559f",
+	// NEW 2026-10-15 (the multiplayer lane): Reveal the planning notes (D8). 🚧
+	// Moved 2026-10-15 (walkthrough fixes): a quick action — a button among
+	// the composer's actions. (was "ded39ad9f077b")
+	// Moved 2026-10-18 (lane C, P4-10): the reveal asks first (`confirm`) (was "172e46833e9041").
+	"core:spec/dungeon-crawler-reveal@1.0.0": "14e4e70ccbba9f",
+	// Moved 2026-10-15 (the story-turn lane, unreleased): the story branch is
+	// the hidden Planner's JSON, the dice, the books and the Narrator — no
+	// longer the ⏳ Narrator-only placeholder; the story read is 30 rows.
+	// (was "19e45d072e274a")
+	// Moved 2026-10-15 (one heading per step): the parley's crib text step is
+	// "The Planner's out-of-character crib, as text". Proven: with that label
+	// reverted the document hashes back to the old pin. (was "2041de49e7d50")
+	// Moved 2026-10-15 (walkthrough fixes): the ledger and the edits are
+	// handed the state, so a change that changes nothing is dropped.
+	// (was "171ac1ff83ed79")
+	// Moved 2026-10-15 (per-character max HP, unreleased): the story turn's
+	// `raise.levels.*` raises a levelled seat's hp max (`set-stat-config@1`)
+	// before the round's changes. (was "1292603d104813")
+	// Moved 2026-10-15 (Planner lane bug, unreleased): the parley branch reads
+	// its own channel lane (`channel.parley.lane`, `session-history@1`'s
+	// `channelLane` in-port) as the conversation, the story as
+	// `recentStory`; `deliverSecrets` reads what the lanes were told
+	// (`told`) so a secret is told once. Also carries the concurrent
+	// story-turn edits of the same day. (was "89775cf4fb8e2")
+	// Moved 2026-10-16 (🚧 table channel, PLAN-rulesets §30): the roll line
+	// is written after the Narrator's placeholder, on `table`, with no
+	// speaker and `tableLine` naming the placeholder (its anchor); the
+	// ledger's outcomes reach the Narrator as `fields` (`channel.story.outcomes`,
+	// `{{outcomes}}` after the history). Measured with other lanes' in-flight
+	// edits in the tree. (was "713bf53888435")
+	// Moved 2026-10-17 (rulesets W3-B, DC onto the ruleset handler + the session's own notes; recorded W4-A): the story turn is
+	// books → `resolve` → Planner → placeholder → `apply` → door script →
+	// table line (with the explain) → ledger → Narrator; the dice/ledger gate
+	// and the snapshots are gone. (was "1190e52759cf39")
+	// Moved 2026-10-18: lanes by person (channel-lane), one exit model, asks, journal kinds, solo standing order, A11 placeholder-first (was "2a8b7145dd0c5").
+	// Moved 2026-10-18 (the 100-turn walk, lane A): the books call's round and the Narrator's outcomes are their last user turn (DUNGEON_CRAWLER_BRIEF_TEMPLATE, DUNGEON_CRAWLER_NARRATE_TEMPLATE); the Planner's calls read an empty answer as unreadable (`emptyIsUnreadable`); the turn step reads the session and its owners are their own part (`turnOwners`), the replay applying on them; the fields step reads the books and the state; the crib reads the turn's ruleset; the told step the session and the places. (was "84299a0e9f34e")
+	// Moved 2026-10-18 (the 100-turn walk, lane B — P2-1, P2-4, P2-6): the books are handed the turn's ruleset (kit, casting, death saves, rigour), and a delta carries its `aimedAt` (the Planner's and the talk's grammar). (was "8dc7ecb75d9aa", then "a70c7ae6eec76" while the member was still called `target`)
+	// Moved 2026-10-19 (PLAN-dc-after-walk2 Q2-1…Q2-4, Q3-1, Q3-2): the story turn's words branch (`plan.words`, the Story ruleset asked in plain words), a raise naming its slot, the traverse's actor and the door's own lock difficulty, the redo's raises, the books' standing in words. Measured with other lanes' in-flight edits in the tree. (was "28326d2e17935")
+	// Moved 2026-10-19: the two Planner placements (dice / words) carry their own headings (was "e52300ed3a81f").
+	// Moved 2026-10-19 (PLAN-dc-after-walk3 R2-1): a way out's grammar carries the trap's `trapDamage` and `trapCondition` (a table of words' carries neither) (was "14f666c57c1284").
+	"core:spec/dungeon-crawler-respond@1.0.0": "340a50523c9ac",
+	// NEW 2026-10-15 (the story-turn lane): Rest (no model call) and what
+	// follows the goal (its form; one call for a new goal). 🚧
+	// Moved 2026-10-16 (🚧 table channel, PLAN-rulesets §30): the rest's
+	// line is the table's — on `table`, no speaker, anchored to Story's
+	// newest line (a `head` read, `rested.said.anchor`). (was "1510d75025efb6")
+	// Moved 2026-10-17 (rulesets W3-B, DC onto the ruleset handler + the session's own notes; recorded W4-A): the rest's script
+	// reads the progress annex (no world document, no fuses burnt there —
+	// fuses are `crawl-fuses` on the world owner) and its line goes to the
+	// journal only, anchored to Story's line. (was "730f8893b76e6")
+	// Moved 2026-10-18: lanes by person (channel-lane), one exit model, asks, journal kinds, solo standing order, A11 placeholder-first (was "1e4d17ded73ca6").
+	"core:spec/dungeon-crawler-rest@1.0.0": "11ad47b290ec51",
+	// Moved 2026-10-15 (one heading per step): "Draw up the new goal" (the
+	// script) and "Keep the new goal in the world" (the write), no longer both
+	// "File the new goal". Proven: with the labels reverted the document hashes
+	// back to the old pin. (was "ae87e3a077dd3")
+	// Moved 2026-10-16 (wire fixes, unreleased): the new goal's call is laid
+	// out by DUNGEON_CRAWLER_BRIEF_TEMPLATE. (was "688d793e413fd")
+	// Moved 2026-10-17 (rulesets W3-B, DC onto the ruleset handler + the session's own notes; recorded W4-A): the goal's
+	// bookkeeping (`goalReached`, `goalDone`, `ended`) is the progress annex's,
+	// no longer the world document's. (was "19f071376de2e1")
+	// Moved 2026-10-18: lanes by person (channel-lane), one exit model, asks, journal kinds, solo standing order, A11 placeholder-first (was "54a3aeac8cfec").
+	// Moved 2026-10-18 (the 100-turn walk, lane A): End has the Narrator close the adventure at once (`route.closing.*`, the narrate row and template). (was "118dc8ba87098b")
+	"core:spec/dungeon-crawler-goal@1.0.0": "543d52c482263",
+	"core:spec/dungeon-crawler-answer-form@1.0.0": "1524465e47d46c",
+	"core:spec/dungeon-crawler-turn-order@1.0.0": "b315665323b9a",
 	// Moved 2026-09-28 (lair re-plan R3, `collects`): `composerText` became `collects.text`
 	// ('Direction the party should feel'). Proven: the built document with `collects` deleted and
 	// `composerText` restored hashes back to the old pin. (was "16413e137630d4")

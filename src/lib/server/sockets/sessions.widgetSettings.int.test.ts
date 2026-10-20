@@ -32,7 +32,7 @@ beforeAll(async () => {
 
 afterAll(() => {})
 
-const GENRE = "core:genre/chat"
+const GENRE = "core:genre/story"
 
 function fakeSocket(userId: number) {
 	return {

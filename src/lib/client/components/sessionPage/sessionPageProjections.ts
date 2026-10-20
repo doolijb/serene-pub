@@ -6,6 +6,7 @@
  * there, exactly where it is read.
  */
 import { avatarSrc } from "$lib/client/utils/media"
+import { composerClosuresFor, DEFAULT_CHANNEL, parseChannel } from "@serene-pub/sdk"
 import { castFaceOf } from "./projections/characters"
 import {
 	resolveSprite,
@@ -18,7 +19,10 @@ import { embeddingsStarred } from "$lib/shared/constants/embeddings"
 import {
 	messageEnvoySlug,
 	messageSpeaker,
-	personLineName
+	personLineName,
+	seatNameOf,
+	seatPortraitOf,
+	withPortrait
 } from "$lib/client/utils/messageSpeaker"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import { describeProposal } from "$lib/shared/state/ledgerLines"
@@ -43,6 +47,8 @@ import {
 	type SceneCastFaces
 } from "$lib/client/components/sessionPage/liveSceneProjection"
 import { effectiveLoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
+import { composerWritingAs } from "$lib/shared/sessions/playerSeat"
+import { roundWaitingFor } from "$lib/client/components/sessionPage/roundWaiting"
 import type { DraftWrite } from "$lib/client/components/sessionPage/collects"
 
 type LoadedSession = Sockets.Sessions.Get.Response["session"] | undefined
@@ -71,12 +77,17 @@ export function characterForRefIn(
 // - A user line with no persona: its author's, by `userId`.
 // - An orphaned row (its character/persona deleted globally, its author
 //   gone — the rows that render as "Unknown"): the session owner's.
+// - 🚧 For the rerun verbs (swipe, retry, extend) only: an envoy's line in a
+//   channel lane the viewer is the member of (ruled 2026-10-15) — see
+//   `viewerLanesIn`.
 // An affordance only — the server refuses regardless.
 export function canControlMessageAs(
 	userCtx: UserCtx,
 	isGuest: boolean,
 	session: LoadedSession,
-	msg: SelectSessionMessage
+	msg: SelectSessionMessage,
+	verb: "change" | "rerun" = "change",
+	annex?: Readonly<Record<string, Readonly<Record<string, unknown>>>> | null
 ): boolean {
 	if (!userCtx.user?.id) return false
 
@@ -104,7 +115,14 @@ export function canControlMessageAs(
 	// An envoy's line (U5g): no character row behind it, the reference
 	// on the row is its identity, and it is the session owner's to act
 	// on, as narration is.
-	if (messageEnvoySlug(msg)) return !isGuest
+	if (messageEnvoySlug(msg)) {
+		if (!isGuest) return true
+		if (verb !== "rerun") return false
+		const ref = parseChannel(msg.channel)
+		return viewerLanesIn(annex, userCtx.user.id).some(
+			(l) => l.slug === ref.slug && l.lane === ref.lane
+		)
+	}
 
 	// Narrator response messages aren't owned by any persona/character —
 	// only the session owner controls them, mirroring
@@ -118,6 +136,35 @@ export function canControlMessageAs(
 
 	// Nothing on the row names anyone: the session owner's, as narration.
 	return !isGuest
+}
+
+/**
+ * 🚧 The channel lanes the viewer is the member of, off their annex view —
+ * the client half of the server's `laneMemberOf`
+ * (`server/messages/permissions.ts`). Core stores no lane membership; a
+ * genre keeps it in an annex map keyed `user:<id>` → lane (the Dungeon
+ * Crawler's `dungeon-crawler-lanes`). The view carries only declared keys
+ * the viewer may see, so the map is found by its value's shape: an object
+ * whose `user:<viewerId>` entry names a lane. `main` is never one.
+ */
+export function viewerLanesIn(
+	annex: Readonly<Record<string, Readonly<Record<string, unknown>>>> | null | undefined,
+	viewerId: number | null | undefined
+): Array<{ slug: string; lane: number }> {
+	if (!annex || typeof viewerId !== "number") return []
+	const out: Array<{ slug: string; lane: number }> = []
+	for (const doc of Object.values(annex)) {
+		if (!doc || typeof doc !== "object") continue
+		for (const map of Object.values(doc)) {
+			if (!map || typeof map !== "object" || Array.isArray(map)) continue
+			const mine = (map as Record<string, unknown>)[`user:${viewerId}`]
+			if (typeof mine !== "string" || !mine.trim()) continue
+			const ref = parseChannel(mine)
+			if (ref.warning || ref.slug === DEFAULT_CHANNEL) continue
+			out.push({ slug: ref.slug, lane: ref.lane })
+		}
+	}
+	return out
 }
 
 /**
@@ -139,6 +186,7 @@ export function personLineOf(
 			? me
 			: session?.sessionGuests?.find((g) => g.userId === msg.userId)?.user
 	return personLineName({
+		seatName: seatNameOf(session, msg),
 		playerLabel: sessionPlayerLabel,
 		memberName: member
 			? member.displayName?.trim() || member.username
@@ -165,8 +213,11 @@ export function messageCharacterOf(
 	)
 	if (speaker || msg.role !== "user" || msg.personaId != null) return speaker
 	const own = personLine(msg)
-	// The character shape, so the row renders as any other.
-	return own ? ({ name: own.name } as unknown as SelectCharacter) : undefined
+	// The character shape, so the row renders as any other — with the
+	// seat's portrait as its face when it has one (PLAN-sheet §12).
+	return own
+		? withPortrait({ name: own.name } as unknown as SelectCharacter, seatPortraitOf(session, msg))
+		: undefined
 }
 
 /**
@@ -243,9 +294,17 @@ export function headerCastKeyOf(
 /** A state proposal row as the conversation draws it (C0b). */
 export function describeProposalRowWith(
 	stateStore: SessionStateHandle,
-	row: Sockets.State.ProposalRow
+	row: Sockets.State.ProposalRow,
+	viewerId?: number | null
 ): ConversationProposalV1 {
 	const payload = (row.payload ?? {}) as Record<string, unknown>
+	// 🚧 A player's offer (Give to…, ★4; PLAN-dc-after-walk3 R1-2): its two
+	// names as the offer was made, and whether the viewer made it — the
+	// giver's own offer is theirs to withdraw, never to accept.
+	const offer =
+		payload.offer && typeof payload.offer === "object"
+			? (payload.offer as { by?: unknown; fromLabel?: unknown; toLabel?: unknown })
+			: null
 	const moved =
 		row.status !== "superseded"
 			? null
@@ -262,7 +321,16 @@ export function describeProposalRowWith(
 			itemName: (entryId) => stateStore.itemNameFor(entryId)
 		}),
 		proposedBy: (row as { proposedBy?: string | null }).proposedBy ?? null,
-		moved
+		moved,
+		...(offer
+			? {
+					offer: {
+						from: typeof offer.fromLabel === "string" ? offer.fromLabel : "",
+						to: typeof offer.toLabel === "string" ? offer.toLabel : "",
+						yours: viewerId != null && offer.by === viewerId
+					}
+				}
+			: {})
 	}
 }
 
@@ -340,12 +408,16 @@ export function projectConversationDossier(
 		extendRefusal,
 		userPersonasInSession,
 		currentUserPersona,
+		ownCardlessSeat,
 		showAddPersonaCTA,
 		composerHidden,
 		sessionChannels,
 		modeMissing,
 		getMessageCharacter,
 		canControlMessage,
+		canRerunMessage,
+		rerunRefusals,
+		annex,
 		personLine,
 		offersWrite
 	} = src.data
@@ -356,6 +428,10 @@ export function projectConversationDossier(
 		paletteActions,
 		newestItem
 	} = src.actions
+	// 🚧 A kept turn's rows lose Delete (owner ruling ★9). Absent from an
+	// action list built before it (a test double): every row keeps it.
+	const deleteRefused = (row: { id: number; channel?: string | null }) =>
+		src.actions.deleteRefused?.(row) ?? false
 	const { showSwipeControls, canSwipeRight } = src.controls
 	const {
 		turnOrder,
@@ -366,8 +442,13 @@ export function projectConversationDossier(
 	const { sceneList, capturedMessageIds, selectForSummary, summaryEnded } =
 		src.scenes
 	const composerDraft = src.composerDraft()
+	// Whom the viewer writes as with no persona (`composerWritingAs`).
+	const writingAs = composerWritingAs({
+		ownSeat: ownCardlessSeat,
+		playerLabel: sessionPlayerLabel
+	})
 	const describeProposalRow = (row: Sockets.State.ProposalRow) =>
-		describeProposalRowWith(stateStore, row)
+		describeProposalRowWith(stateStore, row, userCtx.user?.id ?? null)
 	const embeddingStatusOf = (model: string | null | undefined) =>
 		embeddingStatusIn(systemSettingsCtx, model)
 	const lines: ConversationDossierV1["lines"] = {}
@@ -404,7 +485,13 @@ export function projectConversationDossier(
 		ownVoice,
 		...(session.sessionGuests ?? []).map(
 			(g) => `${g.userId}:${g.user?.displayName}:${g.user?.username}`
-		)
+		),
+		// The lanes the viewer is a member of: an envoy's line there reruns.
+		JSON.stringify(viewerLanesIn(annex, userCtx.user?.id)),
+		// 🚧 A row the server refused a rerun of loses its rerun controls.
+		rerunRefusals?.key ?? "",
+		// 🚧 Where Delete is refused moves with each turn (★9).
+		src.actions.deleteRefusedKey ?? ""
 	].join("|")
 	for (const m of session.sessionMessages) {
 		const key = JSON.stringify([
@@ -422,6 +509,8 @@ export function projectConversationDossier(
 			m.metadata?.isGreeting,
 			m.metadata?.swipes?.currentIdx,
 			m.metadata?.swipes?.history?.length,
+			// A greeting that asks is not rerunnable (`rowAsks`).
+			(m as { parts?: unknown[] }).parts?.length,
 			(m as { embeddingModel?: string | null }).embeddingModel,
 			!!(m as { debugMeta?: unknown }).debugMeta
 		])
@@ -438,7 +527,14 @@ export function projectConversationDossier(
 				: null
 		const greeting = !!m.metadata?.isGreeting
 		const line: ConversationLineV1 = {
+			// 🚧 Two verdicts (ruled 2026-10-15): edit, hide and delete read
+			// `controllable` (`canActOnMessage`'s rule); swipe, retry and
+			// extend read `rerunnable` — wider for an envoy's line in a lane
+			// the viewer is the member of.
 			controllable: canControlMessage(m),
+			rerunnable: canRerunMessage(m),
+			// 🚧 Hidden, not refused, on a kept turn's row (owner ruling ★9).
+			...(deleteRefused(m as { id: number; channel?: string | null }) ? { deletable: false } : {}),
 			speaker: {
 				name: m.isNarratorResponse
 					? m.metadata?.narratorName || "Narrator"
@@ -468,7 +564,9 @@ export function projectConversationDossier(
 					: {})
 			},
 			swipes: {
-				show: showSwipeControls(m, greeting),
+				// 🚧 No rerun, no swipe row (2026-10-16): the arrows are a
+				// rerun affordance, gone rather than dead.
+				show: showSwipeControls(m, greeting) && canRerunMessage(m),
 				right: canSwipeRight(m, greeting)
 			},
 			embedding: embeddingStatusOf(
@@ -533,6 +631,8 @@ export function projectConversationDossier(
 		scened: capturedMessageIds,
 		hasOlder: !!pagination?.hasMore,
 		loadingOlder: loadingOlderMessages,
+		// 🚧 Which channels hold older lines (★7): each copy scrolls back through its own.
+		...(Array.isArray(pagination?.olderIn) ? { olderIn: [...pagination!.olderIn] } : {}),
 		extendRefusal,
 		isOwner: !isGuest,
 		cast: {
@@ -593,13 +693,25 @@ export function projectConversationDossier(
 				})),
 			personaId:
 				currentUserPersona?.personaId ??
-				(!isGuest
+				// 🚧 Writing from their own card-less player seat: no persona.
+				(!isGuest && !ownCardlessSeat
 					? (session.sessionPersonas?.[0]?.personaId ?? null)
 					: null),
 			addPersona: showAddPersonaCTA,
+			// "Write as Ann…" from the viewer's own card-less seat, else
 			// "Write as the Dungeon Master…" (R4's label; S2).
-			...(sessionPlayerLabel ? { playerLabel: sessionPlayerLabel } : {}),
+			...(writingAs ? { playerLabel: writingAs } : {}),
 			hidden: composerHidden,
+			// 🚧 The lanes the genre closed this viewer's composer on, with
+			// what each waits on (`set-composer-state@1`, owner ruling
+			// 2026-10-15); absent when every composer is open.
+			...(() => {
+				const closed = composerClosuresFor(
+					(session as { composerStates?: unknown }).composerStates,
+					userCtx.user?.id ?? null
+				)
+				return Object.keys(closed).length ? { closed } : {}
+			})(),
 			channels: sessionChannels,
 			// What each channel is called (S1): the strip and a pinned
 			// copy's head read the Lair's `sanctum` as _Sanctum_.
@@ -617,8 +729,17 @@ export function projectConversationDossier(
 						limit: draftCompiledPrompt.meta.tokenCounts.limit
 					}
 				: null,
+			// A member has the turn controls too (round 2, 2026-10-15): the
+			// server's listing and its door decide what is in them; the
+			// owner's own tools (Lore, Statistics) stay the owner's.
 			tabs: isGuest
-				? []
+				? [
+						{
+							view: "session-controls",
+							title: "Turn controls",
+							icon: "message-square"
+						}
+					]
 				: [
 						{
 							view: "session-controls",
@@ -664,7 +785,30 @@ export function projectConversationDossier(
 			) as ConversationDossierV1["turn"]["candidates"],
 			show: shouldShowNextCharacterBlock,
 			canChoose: canChooseDifferentCharacter,
-			ownVoiceName: ownVoice
+			ownVoiceName: ownVoice,
+			// 🚧 Who the round waits on once the viewer has had their say
+			// (PLAN-dc-after-walk2 Q3-3): "Waiting for Maren Holt".
+			...(() => {
+				const states = (session as { composerStates?: unknown }).composerStates
+				const cast = (stateStore.state?.cast ?? {}) as Record<string, unknown>
+				const byId = (cast.byId ?? {}) as Record<string, Record<string, unknown> | undefined>
+				const waitingFor = roundWaitingFor({
+					seats: session.sessionPersonas as never,
+					rows: session.sessionMessages as never,
+					viewerUserId: userCtx.user?.id ?? null,
+					preparedOnStory: (turnOrder?.order ?? []).filter(
+						(e) => ((e as { channel?: unknown }).channel ?? "main") === "main"
+					).length,
+					fateOf: (ref) => {
+						const key = ref.startsWith("player-seat:") ? `player_seat:${ref.slice(12)}` : ref.replace(/^character:/, "")
+						const bag = byId[key]
+						const fate = bag?.["core.fate"] ?? bag?.fate
+						return typeof fate === "string" ? fate : null
+					},
+					storyClosedFor: (uid) => Object.hasOwn(composerClosuresFor(states, uid), "main")
+				})
+				return waitingFor.length ? { waitingFor } : {}
+			})()
 		},
 		readOnly: modeMissing
 			? { genreId: ((session as any)?.genreId as string | null) ?? null }

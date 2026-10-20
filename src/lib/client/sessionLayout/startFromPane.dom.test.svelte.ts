@@ -20,7 +20,7 @@ type Preset = Sockets.Sessions.LayoutPreset
 
 function preset(over: Partial<Preset> & { id: number; name: string }): Preset {
 	return {
-		genreId: "core:genre/adventure",
+		genreId: "core:genre/story",
 		origin: "core",
 		slug: over.name.toLowerCase().replace(/\W+/g, "-"),
 		description: null,
@@ -134,7 +134,7 @@ function toolbar(over: Record<string, unknown> = {}) {
 		onSetNewSessionLayout: vi.fn()
 	}
 	const props = $state<Record<string, unknown>>({
-		editTab: "presets",
+		editTab: "layouts",
 		genreName: "Adventure",
 		isGuest: false,
 		isAdmin: false,
@@ -147,7 +147,6 @@ function toolbar(over: Record<string, unknown> = {}) {
 		mainWidgetTitle: "Messages",
 		presetUsage: null,
 		presetPicture: picture,
-		styleableWidgets: [],
 		trayWidgets: [],
 		trayIcon: () => Icons.Box,
 		armedId: null,
@@ -157,9 +156,6 @@ function toolbar(over: Record<string, unknown> = {}) {
 		removeWidget: () => {},
 		simTier: null,
 		setSimTier: () => {},
-		railPreview: false,
-		simGrid: false,
-		simNarrow: false,
 		onCancel: () => {},
 		onDone: () => {},
 		...calls,
@@ -210,7 +206,6 @@ function phone(over: Record<string, unknown> = {}) {
 		addWidget: () => null,
 		duplicateWidget: () => null,
 		removeWidget: () => {},
-		floorNoteOf: () => null,
 		presets: PRESETS,
 		startedFrom: null,
 		startedFromUpdated: false,
@@ -229,7 +224,7 @@ function phone(over: Record<string, unknown> = {}) {
 }
 
 describe("desktop: the Start from pane", () => {
-	test("groups the cards: genre default layout, Serene Pub's, each plugin's, yours, shared with you", async () => {
+	test("two sections: Ready-made, then Yours and shared; each card says who brought it", async () => {
 		toolbar()
 		await settle()
 		const groups = [...document.querySelectorAll("[data-preset-group]")]
@@ -241,15 +236,55 @@ describe("desktop: the Start from pane", () => {
 				)
 			])
 		).toEqual([
-			["Genre default layout", [1]],
-			["From Serene Pub", [2]],
-			["From Battleship", [3]],
-			["Your layouts", [4]],
-			["Shared with you", [5]]
+			["Ready-made", [1, 2, 3]],
+			["Yours and shared", [4, 5]]
 		])
+		// The small line under each card's name: who brought it.
+		const source = (id: number) =>
+			text(document.querySelector(`[data-preset-card="${id}"] [data-preset-source]`))
+		expect([1, 2, 3, 4, 5].map(source)).toEqual([
+			"Genre default",
+			"Serene Pub",
+			"Battleship",
+			"You",
+			"Shared by Ash"
+		])
+		// Five cards: no section is long enough for the chips.
+		expect(document.querySelector("[data-preset-chips]")).toBeNull()
 		// A layout shared by someone else says whose it is.
 		expect(text(document.querySelector('[data-preset-card="5"]'))).toContain("by Ash")
 		expect(text(document.querySelector('[data-preset-card="4"]'))).not.toContain("by")
+	})
+
+	test("a section past eight cards draws All / Mine / Shared above it, which filter it", async () => {
+		const many = [
+			...Array.from({ length: 6 }, (_, i) =>
+				preset({ ...MINE, id: 40 + i, name: `Mine ${i}` })
+			),
+			...Array.from({ length: 3 }, (_, i) =>
+				preset({ ...SHARED, id: 50 + i, name: `Theirs ${i}` })
+			)
+		]
+		toolbar({ presets: [DEFAULT, ...many] })
+		await settle()
+		const yours = document.querySelector('[data-preset-group="yours"]')
+		const chips = yours?.querySelector("[data-preset-chips]")
+		expect(chips).not.toBeNull()
+		// Ready-made holds one card: no chips there.
+		expect(
+			document.querySelector('[data-preset-group="ready-made"] [data-preset-chips]')
+		).toBeNull()
+		const cardsShown = () =>
+			[...(yours?.querySelectorAll("[data-preset-card]") ?? [])].length
+		expect(cardsShown()).toBe(9)
+		const chip = (name: string) =>
+			[...(chips?.querySelectorAll("button") ?? [])].find((b) => text(b) === name)
+		await click(chip("Shared"))
+		expect(cardsShown()).toBe(3)
+		await click(chip("Mine"))
+		expect(cardsShown()).toBe(6)
+		await click(chip("All"))
+		expect(cardsShown()).toBe(9)
 	})
 
 	test("heads with where this session's layout started from", async () => {
@@ -406,7 +441,7 @@ describe("phone: the bar and the layouts sheet", () => {
 		expect(calls.resetLayout).toHaveBeenCalledTimes(1)
 	})
 
-	test("the sheet heads with the status line and groups the layouts; a card asks, then copies", async () => {
+	test("the sheet heads with the status line and the two sections; a card asks, then copies", async () => {
 		const { calls } = phone({ startedFrom: MINE, startAgainFrom: MINE })
 		await settle()
 		await click(buttonNamed("Layouts"))
@@ -415,13 +450,11 @@ describe("phone: the bar and the layouts sheet", () => {
 		)
 		expect(
 			[...document.querySelectorAll("[data-preset-group-label]")].map((g) => text(g))
-		).toEqual([
-			"Genre default layout",
-			"From Serene Pub",
-			"From Battleship",
-			"Your layouts",
-			"Shared with you"
-		])
+		).toEqual(["Ready-made", "Yours and shared"])
+		// The session started from this layout of yours: its row says so.
+		expect(
+			text(document.querySelector('[data-preset-card="4"] [data-preset-source]'))
+		).toBe("You · in use here")
 		// A layout's description rides its row down here.
 		expect(text(document.querySelector('[data-preset-card="3"]'))).toContain(
 			"The board across the middle."

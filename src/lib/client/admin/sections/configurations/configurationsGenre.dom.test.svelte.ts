@@ -95,7 +95,7 @@ function open() {
 	flushSync()
 	listeners.get("pipelines:configsIndex")!({
 		configs: [
-			row(1, "core:spec/chat-respond"),
+			row(1, "core:spec/story-respond"),
 			row(2, "core:spec/lair-respond"),
 			row(3, "core:spec/summarize-scene")
 		]
@@ -117,14 +117,14 @@ describe("Admin › Configurations — the genre beside the pipeline", () => {
 		open()
 		listeners.get("pipelines:list")!({
 			pipelinesList: [
-				ns("core:spec/chat-respond", "Reply", "core:genre/chat"),
+				ns("core:spec/story-respond", "Reply", "core:genre/story"),
 				ns("core:spec/lair-respond", "Reply", "core:genre/lair"),
 				ns("core:spec/summarize-scene", "Summarize scene")
 			]
 		})
 		listeners.get("sessions:genres")!({
 			genres: [
-				{ genreId: "core:genre/chat", name: "Chat" },
+				{ genreId: "core:genre/story", name: "Chat" },
 				{ genreId: "core:genre/lair", name: "Lair" }
 			]
 		})

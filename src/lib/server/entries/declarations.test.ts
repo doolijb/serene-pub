@@ -16,9 +16,12 @@
  */
 
 import { describe, it, expect } from "vitest"
+import { RULESET_ENTRY_TYPES } from "@serene-pub/core-catalog"
 import {
 	assertEntryDeclarations,
 	declaredFields,
+	derivedEntryTypeIds,
+	isDeclaredEntryType,
 	declaresPriority,
 	entryDeclaration,
 	entryDeclarations,
@@ -38,11 +41,32 @@ const BANDS = Object.keys(DEFAULT_SIGNAL_WEIGHTS)
 
 describe("the declarations this build reads", () => {
 	it("has every one of them, which is what proves the catalog's side effect ran", () => {
+		// Core's five, then the derived entry types the registry holds —
+		// read from the SDK, never a hand-kept list.
+		const derived = RULESET_ENTRY_TYPES.map((d) => d.id.replace(/@\d+$/, ""))
+		expect(derived.length).toBeGreaterThan(0)
 		expect(
 			entryDeclarations()
 				.map((d) => d.typeId)
 				.sort()
-		).toEqual([...ENTRY_TYPE_IDS].sort())
+		).toEqual([...ENTRY_TYPE_IDS, ...derived].sort())
+		expect([...derivedEntryTypeIds()].sort()).toEqual([...derived].sort())
+	})
+
+	it("gates writes on the declaration, not on the id's shape", () => {
+		expect(isDeclaredEntryType(WORLD_LORE_TYPE_ID)).toBe(true)
+		expect(isDeclaredEntryType("core:entry/vis-itineris.weapons")).toBe(true)
+		// Shaped like a derived type, but no ruleset of that name is registered.
+		expect(isDeclaredEntryType("core:entry/no-such-ruleset.things")).toBe(false)
+		expect(isDeclaredEntryType("core:entry/vis-itineris.weapons@1")).toBe(false)
+	})
+
+	it("carries a derived type's piece name as the title, never as a field", () => {
+		// The piece's `name` IS the entry's title: one column, never two copies.
+		expect(entryDeclaration("core:entry/vis-itineris.weapons")?.roles.title).toBe("title")
+		const fields = declaredFields("core:entry/vis-itineris.weapons")
+		expect(fields).not.toContain("name")
+		expect(fields).toEqual(expect.arrayContaining(["description", "damage", "priority", "supply"]))
 	})
 
 	it("passes the boot assertion against the real weight map", () => {
@@ -63,7 +87,9 @@ describe("the declarations this build reads", () => {
 	it("refuses every type at once when the weight map is empty", () => {
 		// Which is also the shape of "the declarations did not load" from the
 		// other side: no bands, so nothing fits.
-		expect(assertEntryDeclarations([])).toHaveLength(ENTRY_TYPE_IDS.length)
+		expect(assertEntryDeclarations([])).toHaveLength(
+			entryDeclarations().length
+		)
 	})
 
 	it("passes the retrieval mechanisms' own bands against the real weight map", () => {

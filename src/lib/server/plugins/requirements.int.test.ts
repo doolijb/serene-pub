@@ -29,14 +29,14 @@ describe("missingRequirements", () => {
 		const { missingRequirements } = await import("./requirements")
 		expect(
 			await missingRequirements(db, [
-				"core:spec/chat-respond",
-				"core:genre/chat",
-				"core:spec/chat-create"
+				"core:spec/story-respond",
+				"core:genre/story",
+				"core:spec/story-create"
 			])
 		).toEqual([])
 		expect(
 			await missingRequirements(db, [
-				"core:genre/chat",
+				"core:genre/story",
 				"acme.dice:spec/roll",
 				"acme.dice:genre/board"
 			])

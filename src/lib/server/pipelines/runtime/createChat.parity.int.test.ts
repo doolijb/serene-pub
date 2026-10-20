@@ -109,7 +109,7 @@ describe("creation as a run (24 §12)", () => {
 		const dispatched = await dispatchSessionEvent(db, {
 			sessionId: viaPipeline.id,
 			userId,
-			genreId: "core:genre/chat",
+			genreId: "core:genre/story",
 			event: sessionEvents.sessionCreated,
 			input: {
 				main: {},
@@ -119,7 +119,7 @@ describe("creation as a run (24 §12)", () => {
 				fields: {}
 			}
 		})
-		expect(dispatched?.specSlug).toBe("core:spec/chat-create")
+		expect(dispatched?.specSlug).toBe("core:spec/story-create")
 		expect((dispatched?.receipt as any)?.outcome).not.toBe("err")
 
 		const viaFloor = await makeSession("via-floor")
@@ -176,9 +176,9 @@ describe("creation as a run (24 §12)", () => {
 		expect(
 			await resolveSessionEventSpec(
 				db,
-				"core:genre/chat",
+				"core:genre/story",
 				"core:event/member-added@1"
 			)
-		).toBe("core:spec/chat-turn-order")
+		).toBe("core:spec/story-turn-order")
 	}, 120_000)
 })

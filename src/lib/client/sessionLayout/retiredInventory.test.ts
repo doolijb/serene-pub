@@ -15,16 +15,13 @@ import { describe, expect, test } from "vitest"
 import {
 	drawnWidgetIds,
 	RETIRED_WIDGET_IDS,
+	resolveDrawn,
 	validateSessionLayout
 } from "@serene-pub/sdk"
 import { CORE_WIDGETS } from "@serene-pub/core-catalog"
 import { coreDefaultWidgets } from "$lib/client/components/sessionPage/coreWidgets"
 import { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
-import { loadArranged } from "./arrangedGeometry"
 import { previewOf } from "./presetPreview"
-import { normalizeZoneLayout, placedWidgetIds } from "./schema"
-import { unitsOf } from "./tabGroups"
-import { isRetiredWidget, loadChatLayout, widgetsInZone } from "./widgetGrid"
 
 /** A stored layout from before R79: every slot names the widget somewhere. */
 const STORED = {
@@ -88,7 +85,6 @@ describe("core no longer has an Inventory widget (R79)", () => {
 		expect(ids(CORE_WIDGETS)).not.toContain("inventory")
 		expect(ids(coreDefaultWidgets())).not.toContain("inventory")
 		expect(RETIRED_WIDGET_IDS.has("inventory")).toBe(true)
-		expect(isRetiredWidget("inventory")).toBe(true)
 	})
 })
 
@@ -109,30 +105,12 @@ describe("a stored placement of 'inventory' is ignored on every layout path", ()
 		expect(m.instances.find((p) => p.id === "stats")?.active).toBe(true)
 	})
 
-	test("side zones: the widget list loses it, and a zone that only held it is empty", () => {
-		const zones = normalizeZoneLayout(STORED.zoneLayout).zones
-		expect(zones.right.widgets).toEqual(["scene-portraits", "stats"])
-		expect(zones.left.widgets).toEqual([])
-		expect(placedWidgetIds(normalizeZoneLayout(STORED.zoneLayout))).not.toContain("inventory")
-	})
-
-	test("arranged geometry: the card goes, a tab group keeps its other member", () => {
-		const arranged = loadArranged(STORED.arrangedGrid)
-		expect(ids(arranged.right?.items)).toEqual(["scene-portraits", "stats"])
-		expect(ids(arranged.left?.items)).toEqual(["lore-entries"])
-	})
-
-	test("the rail and the mobile views (render units) never list it", () => {
-		const arranged = loadArranged(STORED.arrangedGrid)
+	test("the rail and the mobile views (panels) never list it", () => {
+		const drawn = resolveDrawn(STORED as never, { inline: 1300 })
 		const keys = (side: "left" | "right") =>
-			unitsOf(arranged[side]!.items).flatMap((u) => u.members.map((m) => m.id))
+			drawn[side].panels.flatMap((p) => p.tabs.map((t) => t.instanceId))
 		expect(keys("right")).toEqual(["scene-portraits", "stats"])
 		expect(keys("left")).toEqual(["lore-entries"])
-	})
-
-	test("the middle grid does not seat it", () => {
-		const grid = loadChatLayout(STORED.widgetGrid)
-		expect(ids(widgetsInZone(grid, "middle"))).toEqual(["world-state", "messages"])
 	})
 
 	test("a preset's picture does not draw it", () => {

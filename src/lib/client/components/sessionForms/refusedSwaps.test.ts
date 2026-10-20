@@ -9,7 +9,7 @@ describe("refusedSwapsSentence", () => {
 	it("names each refused step with the setter's reason", () => {
 		const s = refusedSwapsSentence({
 			refusedSwaps: [
-				{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "x@1", reason: "not offered" }
+				{ spec: "core:spec/story-turn-order", node: "strategy", definition: "x@1", reason: "not offered" }
 			]
 		})
 		expect(s).toMatch(/^One setting could not be applied, so that step uses/)

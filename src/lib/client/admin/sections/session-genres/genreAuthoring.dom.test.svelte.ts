@@ -106,8 +106,8 @@ const saveButton = () =>
 		| undefined
 
 const GENRES = [
-	{ slug: "core:genre/adventure", name: "Adventure", description: "", family: "roleplay", enabled: true, defaultPresetId: 1, presetCount: 1, createSpecSlug: "core:spec/adventure-create" },
-	{ slug: "core:genre/chat", name: "Chat", description: "", family: "chat", enabled: true, defaultPresetId: 2, presetCount: 1, createSpecSlug: "core:spec/chat-create" }
+	{ slug: "core:genre/story", name: "Adventure", description: "", family: "roleplay", enabled: true, defaultPresetId: 1, presetCount: 1, createSpecSlug: "core:spec/story-create" },
+	{ slug: "core:genre/story", name: "Chat", description: "", family: "chat", enabled: true, defaultPresetId: 2, presetCount: 1, createSpecSlug: "core:spec/story-create" }
 ]
 
 describe("Admin › Genres › Add genre", () => {
@@ -137,7 +137,7 @@ describe("Admin › Genres › Add genre", () => {
 					description: "A party on the road.",
 					family: undefined,
 					// Chat is the default starting point.
-					from: "core:genre/chat",
+					from: "core:genre/story",
 					scope: "create"
 				}
 			]

@@ -19,7 +19,7 @@ import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import {
 	bootstrapPipelines,
-	CHAT_RESPOND_SPEC_ID,
+	STORY_RESPOND_SPEC_ID,
 	loadPublished
 } from "$lib/server/pipelines/boot/bootstrap"
 import {
@@ -51,7 +51,7 @@ const worldWith = (
 beforeAll(async () => {
 	db = await createTestDb()
 	await bootstrapPipelines(db)
-	doc = (await loadPublished(db, CHAT_RESPOND_SPEC_ID))!
+	doc = (await loadPublished(db, STORY_RESPOND_SPEC_ID))!
 	guarded = doc.nodes.find((n) => {
 		const def = getDefinition(`${n.definitionId}@${n.definitionVersion}`) as any
 		return (

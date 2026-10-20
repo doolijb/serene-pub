@@ -3,7 +3,7 @@
  *
  * ## The defect
  *
- * Until the narrator split (ruling 2026-09-07) `core:spec/chat-narrate` wired the
+ * Until the narrator split (ruling 2026-09-07) `core:spec/story-narrate` wired the
  * keyword mechanism and the ranker and **nothing else**. Every other retrieval
  * control the panel renders for that pipeline — "find entries by meaning",
  * "find entries by name", the entity scan — resolved through the whole scope
@@ -219,8 +219,8 @@ const rankedKeys = (receipt: any): string[] =>
 	)
 
 const SPECS: Array<[string, () => any]> = [
-	["core:spec/chat-narrate", narrateSpec],
-	["core:spec/chat-side-character", narrateCharacterSpec]
+	["core:spec/story-narrate", narrateSpec],
+	["core:spec/story-side-character", narrateCharacterSpec]
 ]
 
 describe.each(SPECS)("%s — the semantic control moves retrieval", (_, spec) => {
@@ -322,7 +322,7 @@ describe("the retrieval controls are all wired, not just the ones with a test", 
 		 * its slot wired makes this demand the same of narration, which is the
 		 * half that keeps getting forgotten.
 		 */
-		const { respondSpec } = await import(
+		const { storyRespondSpec: respondSpec } = await import(
 			"$lib/server/pipelines/specs/respond"
 		)
 		const reference = new Set<string>(

@@ -7,7 +7,7 @@
  * to change what a message renders, with no reload and no per-message state.
  */
 import { describe, expect, test } from "vitest"
-import { messageSpeaker, personLineName } from "./messageSpeaker"
+import { messageSpeaker, personLineName, seatNameOf } from "./messageSpeaker"
 import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import { avatarSrc } from "./media"
@@ -209,5 +209,62 @@ describe("personLineName", () => {
 
 	test("no label and no member: nothing to name it by", () => {
 		expect(personLineName({ memberCount: 1 })).toBeUndefined()
+	})
+})
+
+/**
+ * 🚧 A seat name (2026-10-14): the player's character name in this session.
+ * It wins over the voiced card's name and over the player label.
+ */
+describe("seat name", () => {
+	test("wins over the persona's name, keeping the card's face", () => {
+		const session = {
+			sessionPersonas: [
+				{
+					personaId: 7,
+					persona: persona({ avatarMediaId: 3 }),
+					seatName: "Wren"
+				}
+			]
+		}
+		const speaker = messageSpeaker(session, { personaId: 7 })
+		expect(speaker?.name).toBe("Wren")
+		expect((speaker as any)?.avatarMediaId).toBe(3)
+	})
+
+	test("a blank seat name is no name: the persona's stands", () => {
+		const session = {
+			sessionPersonas: [{ personaId: 7, persona: persona(), seatName: "  " }]
+		}
+		expect(messageSpeaker(session, { personaId: 7 })?.name).toBe("Jody")
+	})
+
+	test("a card-less player seat names the lines that name it, not every line of its player", () => {
+		const session = {
+			sessionPersonas: [
+				{ id: 1, personaId: null, userId: 2, seatName: "Old", removedAt: "2026-10-01" },
+				{ id: 2, personaId: null, userId: 2, seatName: " Wren " },
+				{ id: 3, personaId: 9, userId: 2, seatName: "Carded" }
+			]
+		}
+		const line = (speaker?: string) => ({ metadata: speaker ? { speaker } : {} })
+		expect(seatNameOf(session, line("player-seat:2"))).toBe("Wren")
+		// A removed seat still names the lines it sent.
+		expect(seatNameOf(session, line("player-seat:1"))).toBe("Old")
+		// A seat with a card is named by its card, never as `player-seat:`.
+		expect(seatNameOf(session, line("player-seat:3"))).toBeUndefined()
+		expect(seatNameOf(session, line())).toBeUndefined()
+		expect(seatNameOf(session, { personaId: 9, metadata: { speaker: "player-seat:2" } })).toBeUndefined()
+	})
+
+	test("wins over the player label and the member's name", () => {
+		expect(
+			personLineName({
+				seatName: "Wren",
+				playerLabel: "Dungeon Master",
+				memberName: "jody",
+				memberCount: 2
+			})
+		).toEqual({ name: "Wren" })
 	})
 })

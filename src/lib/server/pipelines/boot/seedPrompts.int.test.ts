@@ -30,8 +30,8 @@ import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import { CORE_SPECS } from "$lib/server/pipelines/specs"
 import {
 	GRAPH_BUILD_SPEC_ID,
-	CHAT_NARRATE_SPEC_ID,
-	CHAT_RESPOND_SPEC_ID,
+	STORY_NARRATE_SPEC_ID,
+	STORY_RESPOND_SPEC_ID,
 	SUMMARIZE_CHARACTER_SPEC_ID,
 	SUMMARIZE_HISTORY_SPEC_ID,
 	SUMMARIZE_SCENE_SPEC_ID,
@@ -182,7 +182,7 @@ describe("every pipeline arrives usable", () => {
 		// rather than by a column: the reply's context node and the world
 		// summarizer's drafting node are different types, so the two pools
 		// cannot overlap however many pipelines share them.
-		const reply = await promptDeclsOf(CHAT_RESPOND_SPEC_ID)
+		const reply = await promptDeclsOf(STORY_RESPOND_SPEC_ID)
 		const world = await promptDeclsOf(SUMMARIZE_WORLD_SPEC_ID)
 		const replyPools = new Set(
 			reply.map((d: any) => `${d.nodeDefinitionId}#${d.slot}`)
@@ -317,7 +317,7 @@ describe("the wording is the wording", () => {
 	})
 
 	it("gives the narrator its display name, which seeds the line it speaks on", async () => {
-		for (const d of await promptDeclsOf(CHAT_NARRATE_SPEC_ID))
+		for (const d of await promptDeclsOf(STORY_NARRATE_SPEC_ID))
 			if ((d as any).promptFields?.includes("narratorName"))
 				for (const p of await poolRows(d.nodeDefinitionId!, d.slot))
 					expect(p.fields.narratorName).toBeTruthy()
@@ -413,7 +413,7 @@ describe("a row the catalog stopped shipping", () => {
 		const { createPrompt } = await import(
 			"$lib/server/pipelines/entities/prompts"
 		)
-		const decl = (await promptDeclsOf(CHAT_RESPOND_SPEC_ID))[0]!
+		const decl = (await promptDeclsOf(STORY_RESPOND_SPEC_ID))[0]!
 		const key =
 			"pipeline-prompt:core:task/build-template-context:prompts:prompt-lightning-1-1"
 		const old = await createPrompt(db, {
@@ -423,7 +423,7 @@ describe("a row the catalog stopped shipping", () => {
 			fields: { systemPrompt: "an earlier build's prose" },
 			seedKey: key,
 			isImmutable: true,
-			defaultForSpecs: ["core:spec/chat-respond"]
+			defaultForSpecs: ["core:spec/story-respond"]
 		})
 		const first = await unshipPrompts(db)
 		expect(first.demoted).toEqual(["Roleplay - Stage"])
@@ -499,7 +499,7 @@ describe("re-seeding", () => {
 		const { createPrompt } = await import(
 			"$lib/server/pipelines/entities/prompts"
 		)
-		const decl = (await promptDeclsOf(CHAT_RESPOND_SPEC_ID))[0]!
+		const decl = (await promptDeclsOf(STORY_RESPOND_SPEC_ID))[0]!
 		const mine = await createPrompt(db, {
 			nodeDefinitionId: decl.nodeDefinitionId!,
 			slot: decl.slot,
