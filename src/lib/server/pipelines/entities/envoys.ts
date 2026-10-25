@@ -17,6 +17,7 @@
  * the slug.
  */
 
+import { onRegistrationsChanged } from "$lib/server/pipelines/registrations/resolve"
 import { and, asc, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
@@ -98,6 +99,8 @@ export function invalidateDeclaredEnvoys(): void {
 	// A WeakMap cannot be cleared; a new one is the same thing.
 	declaredCache = new WeakMap()
 }
+// 🚧 An action's envoys follow the registrations that offer it (D3).
+onRegistrationsChanged(invalidateDeclaredEnvoys)
 
 /**
  * Every envoy declared for a genre: the genre's own, then each installed
@@ -151,12 +154,19 @@ async function readDeclaredEnvoys(
 		})
 		.from(schema.pipelineSpecVersions)
 		.where(eq(schema.pipelineSpecVersions.status, "published"))
+	// 🚧 An action's genre is the genre whose registrations include it
+	// (PLAN-layering D3) — ⏳ or, for a lock-era package action, its lock's.
+	const { registeredActionIdentities } = await import(
+		"$lib/server/pipelines/entities/sessionGenres"
+	)
+	const registered = new Set((await registeredActionIdentities(db, genreId)).offered)
 	for (const s of specs) {
 		if (s.activeVersionId == null) continue
 		const v = versions.find((x) => x.id === s.activeVersionId)
 		if (!v?.contributes) continue
 		for (const a of actionsOf({ id: s.slug, contributes: v.contributes })) {
-			if (a.genre !== genreId || !a.envoy) continue
+			if (!a.envoy) continue
+			if (a.genre !== genreId && !registered.has(`${s.slug}#${a.key}`)) continue
 			out.push(
 				fromDecl(
 					a.envoy,

@@ -41,6 +41,7 @@ import {
 	type TypedSocket
 } from "$lib/client/sockets/typedSocket"
 import { toaster } from "$lib/client/utils/toaster"
+import { notify } from "$lib/client/utils/notify"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { defaultLoadoutName } from "$lib/shared/loadouts/defaultLoadoutName"
 import { needsCredential } from "$lib/shared/connections/credentials"
@@ -178,6 +179,8 @@ export function createConnections(deps: ConnectionsDeps) {
 	let syncingAll = $state(false)
 	/** Forced syncs — the ones whose failure earns a toast. Not $state. */
 	const forcedIds = new Set<number>()
+	/** This tab forced a sync of every endpoint (the same rule, id-less). */
+	let forcedAll = false
 
 	function requestSync(id?: number, force = false) {
 		if (id != null) {
@@ -189,9 +192,17 @@ export function createConnections(deps: ConnectionsDeps) {
 			})
 		} else {
 			syncingAll = true
+			if (force) forcedAll = true
 			socket.emit("connections:syncModels", force ? { force: true } : {})
 		}
 	}
+	/**
+	 * Whether a sync's failure is one this tab pressed for. A sync nobody
+	 * forced — the one a list asks for as it opens, or another tab's
+	 * broadcast — is a poll: its row already says _Not working_, so its
+	 * failure is never a toast (PLAN-0-5-polish-parity L4.4).
+	 */
+	const askedHere = () => forcedAll || forcedIds.size > 0
 	function handleSyncModels(msg: Synced) {
 		// Broadcast to every tab; results name the endpoints that were
 		// actually synced (fresh ones are skipped and absent). Clearing every
@@ -199,7 +210,12 @@ export function createConnections(deps: ConnectionsDeps) {
 		// tab ending ours a moment early costs a spinner, not a fact.
 		syncingIds.clear()
 		syncingAll = false
-		if (msg.error) toaster.error({ title: msg.error })
+		if (msg.error)
+			notify.error({
+				title: msg.error,
+				source: "connections:sync",
+				fromPoll: !askedHere()
+			})
 		for (const r of msg.results) {
 			if (!r.error || !forcedIds.has(r.connectionId)) continue
 			const name =
@@ -211,13 +227,20 @@ export function createConnections(deps: ConnectionsDeps) {
 			})
 		}
 		forcedIds.clear()
+		forcedAll = false
 		for (const listener of synced) listener(msg)
 	}
 	function handleSyncModelsError(msg: { error?: string }) {
+		const fromPoll = !askedHere()
 		syncingIds.clear()
 		syncingAll = false
 		forcedIds.clear()
-		toaster.error({ title: msg.error ?? "Couldn't refresh models" })
+		forcedAll = false
+		notify.error({
+			title: msg.error ?? "Couldn't refresh models",
+			source: "connections:sync",
+			fromPoll
+		})
 	}
 	/**
 	 * Whether a follow-up model sync may be forced for this connection. ⚠ Not

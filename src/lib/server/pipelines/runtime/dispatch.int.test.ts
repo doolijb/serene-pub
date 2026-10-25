@@ -34,6 +34,7 @@ let seen: {
 	attachments?: unknown
 	tools?: unknown
 	streaming?: unknown
+	outputs?: unknown
 } = {}
 /**
  * Whether the stand-in adapter has a vision path this run.
@@ -45,6 +46,8 @@ let seen: {
  */
 let adapterSendsAttachments = true
 let adapterSendsTools = true
+/** 🚧 O6: what the stand-in can write. */
+let adapterWrites: string[] = ["text"]
 /**
  * What the stand-in recorded of its own send, if anything.
  *
@@ -66,7 +69,8 @@ let mode:
 	| "streamWithToolCall"
 	| "templateOpenedStream"
 	| "labelledAfterReasoning"
-	| "toolCallNoStream" = "text"
+	| "toolCallNoStream"
+	| "spoken" = "text"
 let connectionForRun: any = connection
 /** What the stand-in says it asked of a chat template — `reasoningOpening`. */
 let adapterOpening: "requested" | undefined
@@ -133,6 +137,14 @@ class FakeAdapter implements FakeTextAdapter {
 		seen.tools = tools
 		return this
 	}
+	/** 🚧 O6: which kinds the stand-in can ask for this run. */
+	get writesKinds() {
+		return adapterWrites
+	}
+	withOutputs(outputs: any, speech: any) {
+		seen.outputs = { outputs, speech }
+		return this
+	}
 	withAttachments(inputs: any) {
 		seen.attachments = inputs
 		return this
@@ -142,6 +154,13 @@ class FakeAdapter implements FakeTextAdapter {
 		seen.aborted = true
 	}
 	async generateText() {
+		if (mode === "spoken")
+			return {
+				completionResult: "Hello there.",
+				compiledPrompt: this.injected,
+				isAborted: false,
+				media: [{ kind: "audio" as const, mime: "audio/wav", base64: "UklGRg==", meta: { providerAudioId: "a1" } }]
+			}
 		if (mode === "empty")
 			return {
 				completionResult: "",
@@ -374,6 +393,7 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		...real,
 		resolveCapabilityTarget: async (_db: any, req: any) => {
 			resolveArgs = {
+				capability: req.capability,
 				pipelineConnectionId: req.pipelineConfig?.connectionId ?? null,
 				pipelineConnectionModelId:
 					req.pipelineConfig?.connectionModelId ?? null,
@@ -447,6 +467,7 @@ beforeEach(() => {
 	connectionForRun = connection
 	adapterSendsAttachments = true
 	adapterSendsTools = true
+	adapterWrites = ["text"]
 })
 
 /**
@@ -1306,5 +1327,64 @@ describe("toCompiledPrompt's retrieval trail", () => {
 			{ promptFormat: "vicuna" }
 		)
 		expect(bare.meta.retrieval).toEqual({ budget: null, blocks: [] })
+	})
+})
+
+
+// ── 🚧 Requested outputs (O5, O6, O7) ────────────────────────────────────────
+describe("asking the model to write more than text", () => {
+	it("a text reply resolves the reply's requirement and asks the adapter for nothing new", async () => {
+		await dispatchGeneration({ db: fakeDb, compiledPrompt: compiled, sessionId: 7 })
+		expect(resolveArgs.capability).toBe("text->text")
+		expect(seen.outputs).toBeUndefined()
+	})
+
+	it("audio derives the spoken-reply requirement and hands the outputs and the voice over", async () => {
+		adapterWrites = ["text", "audio"]
+		mode = "spoken"
+		const r = await dispatchGeneration({
+			db: fakeDb,
+			compiledPrompt: compiled,
+			sessionId: 7,
+			outputs: ["text", "audio"],
+			speechSampling: { voice: "verse" }
+		})
+		expect(resolveArgs.capability).toBe("text->text+audio")
+		expect(seen.outputs).toEqual({ outputs: ["text", "audio"], speech: { voice: "verse" } })
+		expect(r.text).toBe("Hello there.")
+		// The bytes, with the model's provenance on them — stored by the host.
+		expect(r.media).toEqual([
+			{
+				kind: "audio",
+				mime: "audio/wav",
+				base64: "UklGRg==",
+				meta: expect.objectContaining({ providerAudioId: "a1", backend: connection.type })
+			}
+		])
+	})
+
+	it("refuses, in words, an adapter with no code that asks for audio", async () => {
+		await expect(
+			dispatchGeneration({
+				db: fakeDb,
+				compiledPrompt: compiled,
+				sessionId: 7,
+				outputs: ["text", "audio"]
+			})
+		).rejects.toThrow(/asks the model to write audio, and the configured adapter has no code that asks for it/)
+		expect(seen.outputs).toBeUndefined()
+	})
+
+	it("a pair the resolver refuses for a spoken reply is never sent", async () => {
+		connectionForRun = null
+		await expect(
+			dispatchGeneration({
+				db: fakeDb,
+				compiledPrompt: compiled,
+				sessionId: 7,
+				outputs: ["text", "audio"]
+			})
+		).rejects.toThrow(/nothing to send this prompt to/)
+		expect(resolveArgs.capability).toBe("text->text+audio")
 	})
 })

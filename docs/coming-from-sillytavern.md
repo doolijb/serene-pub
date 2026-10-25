@@ -10,7 +10,7 @@ You'll know what's different and why, where each SillyTavern habit lives now, wh
 
 ## In one minute
 
-- **Genres come with a ready-made pipeline.** You don't assemble a prompt out of a system prompt, a story string, an instruct template and an author's note. You pick a genre (Chat, Story, the Lair, the Guide), and its pipeline already knows what goes where. To change what the model is told, you change the prompt text. See [Genres](./genres.md).
+- **Genres come with a ready-made pipeline.** You don't assemble a prompt out of a system prompt, a story string, an instruct template and an author's note. You pick a genre (Chat, Story, the Lair, Dungeon Crawler, the Guide), and its pipeline already knows what goes where. To change what the model is told, you change the prompt text. See [Genres](./genres.md).
 - **Lorebooks are worlds.** A lorebook still holds keyword-triggered entries, but it can also hold places joined on a map, dated history, branches of the story, and a cast whose members each have lore only they know. See [Lorebooks](./lorebooks.md).
 - **Several people can share one pub.** Turn on accounts and each person signs in to their own characters and stories. You can invite them as guests into one session, and a real turn order decides who speaks. See [Users and accounts](./users-and-accounts.md) and [Group sessions](./group-sessions.md).
 - **Your library comes over with a guided import.** Point Serene Pub at your SillyTavern folder and it brings in characters, personas, chats and World Info, swipes included. See [Importing from SillyTavern](./importing-from-sillytavern.md).
@@ -110,7 +110,7 @@ Instead of a stack of drawers, settings sit in a few places:
 - **Admin**: connections, defaults, users, backups and the rest of the pub. See [The admin area](./getting-around.md#the-admin-area).
 - **Settings**: your own language, theme and preferences.
 
-**What you'll notice:** a session's model isn't on the session screen. It comes from the pipeline's configuration, or the pub's default (see [Which connection a session uses](./sessions.md#which-connection-a-session-uses)).
+**What you'll notice:** a session's model isn't on the session screen. It comes from the pipeline, or the pub's default (see [Which connection a session uses](./sessions.md#which-connection-a-session-uses)).
 
 ## What Serene Pub gives you built in
 
@@ -122,7 +122,7 @@ Things you'd otherwise patch together with extensions, or do by hand:
 - **A cast with private lore.** Each cast member can know things nobody else does, and has relationships to the others. See [Cast and relationships](./lorebook-cast.md).
 - **Real turn order.** Strategies, auto-advance, benching and a narrator on request. See [Group sessions](./group-sessions.md).
 - **Multiplayer.** Accounts, invite links and guests in one shared story. See [Users and accounts](./users-and-accounts.md).
-- **Genres.** **Chat** (the model as itself, with tools), **Story** (your characters, from a quiet conversation to a living world), **the Lair** (you are the dungeon; an AI party explores it) and the **Guide** (answers questions about the app from these docs). See [Genres](./genres.md).
+- **Genres.** **Chat** (the model as itself, with tools), **Story** (your characters, from a quiet conversation to a living world), **the Lair** (you are the dungeon and its game master; an AI party, and any friends who take a seat, explore it, and you call the rolls), **Dungeon Crawler** (the AI runs the dungeon and you play a character) and the **Guide** (answers questions about the app from these docs). See [Genres](./genres.md).
 
 ### More
 
@@ -195,5 +195,5 @@ The character's greeting from their card, then their reply streaming in under yo
 
 - [Importing from SillyTavern](./importing-from-sillytavern.md)
 - [Genres](./genres.md)
-- [Pipelines and configurations](./pipelines.md)
+- [Pipelines](./pipelines.md)
 - [Lorebooks](./lorebooks.md)

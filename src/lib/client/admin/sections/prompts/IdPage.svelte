@@ -1,4 +1,5 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
 	/**
 	 * Admin › Prompts › one prompt: the change form (Django admin). A prompt
 	 * is a name plus named text fields, belonging to a **step** rather than to
@@ -209,11 +210,11 @@
 		{/snippet}
 		{#snippet headerExtra()}
 			<div class="flex flex-wrap items-center gap-1.5 text-xs">
-				<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+				<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
 					{row!.poolLabel}
 				</span>
 				{#if readOnly}
-					<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+					<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
 						Built-in
 					</span>
 				{/if}
@@ -268,7 +269,7 @@
 					></textarea>
 				</AdminField>
 			{:else}
-				<p class="text-surface-600-400 text-sm">This step declares no text fields.</p>
+				<FieldHelp>This step declares no text fields.</FieldHelp>
 			{/each}
 		</AdminFieldset>
 

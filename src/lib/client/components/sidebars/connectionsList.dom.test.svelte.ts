@@ -701,7 +701,7 @@ describe("the status card names the next step", () => {
 		// The chat default leads the list now.
 		const names = [
 			...target.querySelectorAll(
-				"[data-connection-models] .text-\\[15px\\]"
+				"[data-connection-models] .text-lead"
 			)
 		].map((n) => text(n).trim())
 		expect(names).toEqual(["Qwen", "Nemo"])

@@ -131,6 +131,89 @@ describe("the header's notice slot", () => {
 	})
 })
 
+/**
+ * 🚧 Back · Forward (RF fix 5) are the header's since polish parity L1
+ * (2026-10-24): two icon buttons at the head of the trailing cluster, drawn
+ * from `openSessionCtx.rewind` — none without it. Greyed, never disabled: a
+ * grey press is `aria-disabled`, says why, and does nothing.
+ */
+describe("the header's Back · Forward", () => {
+	const mountWith = (rewind: SessionHeaderRewind | null) => {
+		vi.stubGlobal("localStorage", {
+			getItem: () => null,
+			setItem: () => {},
+			removeItem: () => {}
+		})
+		const ctx = $state<Partial<OpenSessionCtx>>({
+			sessionId: 1,
+			sessionName: "The Lantern Inn",
+			genreName: "Chat",
+			cast: [],
+			rewind
+		})
+		app = mount(Header, {
+			target: document.body,
+			props: {},
+			context: new Map<string, unknown>([["openSessionCtx", ctx]])
+		})
+		flushSync()
+		return ctx
+	}
+	const press = (label: string) =>
+		document.querySelector<HTMLButtonElement>(`header button[aria-label="${label}"]`)
+	afterEach(() => vi.unstubAllGlobals())
+
+	test("no state, no buttons", () => {
+		mountWith(null)
+		expect(press("Back one turn")).toBeNull()
+		expect(press("Forward one turn")).toBeNull()
+	})
+
+	test("Back presses; Forward is grey with its reason and presses nothing", () => {
+		const goBack = vi.fn()
+		const goForward = vi.fn()
+		mountWith({
+			back: { disabled: false },
+			forward: { disabled: true, reason: "There is nothing ahead to bring back." },
+			ahead: 0,
+			aheadText: "",
+			goBack,
+			goForward
+		})
+		const back = press("Back one turn")!
+		const forward = press("Forward one turn")!
+		expect(back.getAttribute("title")).toBe("Back one turn")
+		expect(back.getAttribute("aria-disabled")).toBe("false")
+		expect(forward.getAttribute("aria-disabled")).toBe("true")
+		expect(forward.getAttribute("title")).toBe(
+			"Forward one turn — There is nothing ahead to bring back."
+		)
+		const note = document.getElementById(forward.getAttribute("aria-describedby")!)
+		expect(note?.textContent?.trim()).toBe("There is nothing ahead to bring back.")
+		forward.click()
+		back.click()
+		expect(goForward).not.toHaveBeenCalled()
+		expect(goBack).toHaveBeenCalledOnce()
+	})
+
+	test("rewound: Forward says how many turns are ahead", () => {
+		const goForward = vi.fn()
+		mountWith({
+			back: { disabled: true, reason: "There is nothing to go back to yet." },
+			forward: { disabled: false },
+			ahead: 2,
+			aheadText: "2 turns ahead",
+			goBack: vi.fn(),
+			goForward
+		})
+		const forward = press("Forward one turn")!
+		expect(forward.getAttribute("title")).toBe("Forward one turn (2 turns ahead)")
+		forward.click()
+		expect(goForward).toHaveBeenCalledOnce()
+		expect(press("Back one turn")!.getAttribute("aria-disabled")).toBe("true")
+	})
+})
+
 describe("the banners host view keeps only who is typing", () => {
 	test("everyone typing as one pill (it takes no preset status: the header draws that notice)", () => {
 		app = mount(SessionBanners, {

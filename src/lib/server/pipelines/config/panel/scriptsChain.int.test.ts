@@ -348,7 +348,6 @@ describe("where a chain runs (PLAN-script-placement D3)", () => {
 })
 
 describe("an unplaced chain in the panel (PLAN-script-placement D4)", () => {
-	let configId: number
 	let nodeKey: string
 	let a: { id: number }
 	let b: { id: number }
@@ -361,15 +360,10 @@ describe("an unplaced chain in the panel (PLAN-script-placement D4)", () => {
 	}
 
 	beforeAll(async () => {
-		const { resolveSelectedConfig } = await import(
-			"$lib/server/pipelines/config/named"
-		)
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
 			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
-		configId = (await resolveSelectedConfig(db, spec.id, STORY_RESPOND_SPEC_ID, {}))!
-			.configId
 		const nodes = await db
 			.select()
 			.from(schema.pipelineNodes)
@@ -385,13 +379,17 @@ describe("an unplaced chain in the panel (PLAN-script-placement D4)", () => {
 			typeId: "core:script:text/transform@1",
 			name: "Stranded B"
 		})
-		await db.insert(schema.pipelineConfigValues).values({
-			configId,
-			nodeKey,
-			slot: "scripts",
-			path: "a-point-that-is-gone",
-			value: [a.id, b.id]
-		})
+		// The reply is a registered pipeline (PLAN-layering D5): an instance-wide
+		// value lives on the genre's defaults, not in a configuration.
+		const { genreValueTargets, setGenreValue } = await import(
+			"$lib/server/pipelines/registrations/genreValues"
+		)
+		await setGenreValue(
+			db,
+			await genreValueTargets(db, STORY_RESPOND_SPEC_ID),
+			{ nodeKey, slot: "scripts", path: "a-point-that-is-gone" },
+			[a.id, b.id]
+		)
 	}, 60_000)
 
 	it("still shows, marked, with its entries and nothing to add", async () => {
@@ -426,10 +424,12 @@ describe("an unplaced chain in the panel (PLAN-script-placement D4)", () => {
 		])
 		await writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, admin(), o.id, [])
 		expect(await unplacedOption()).toBeUndefined()
-		const left = await db
-			.select()
-			.from(schema.pipelineConfigValues)
-			.where(eq(schema.pipelineConfigValues.path, "a-point-that-is-gone"))
+		const { genreStoredValues } = await import(
+			"$lib/server/pipelines/registrations/genreValues"
+		)
+		const left = (await genreStoredValues(db, STORY_RESPOND_SPEC_ID)).filter(
+			(r) => r.path === "a-point-that-is-gone"
+		)
 		expect(left).toEqual([])
 	}, 60_000)
 })

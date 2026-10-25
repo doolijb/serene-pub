@@ -30,7 +30,16 @@ const NOT_THE_BOOKS: Record<string, string> = {
 	sessions: "a session reads a book and a line; it is its owner's",
 	message_annotations: "a session message's annotation",
 	state_proposals: "a session's review queue (pending owner changes go with the owner)",
-	lorebook_shares: "a grant that lets a person read a book; the person's, not the book's content"
+	lorebook_shares: "a grant that lets a person read a book; the person's, not the book's content",
+	// 🚧 PLAN-rulesets-functions D5 (2026-10-23): `owner_kind` names whose zone, and every row
+	// carries its session (`session_id`, cascading) — a game's state, never the book's content.
+	zone_contents: "a session's zones under its rules — what each owner holds in play; it goes with its session",
+	// 🚧 RF fix 2, item 3 (2026-10-23): `owner_kind` names a session-layer holder (a check keeps it
+	// so), and every row carries its session (`session_id`, cascading) — a session's choice, never the book's.
+	attribute_carries: "a session's switches for who carries which of its rules' attributes; it goes with its session",
+	// 🚧 RF fix 4 (2026-10-23): what a session's runs wrote on a book, so a swipe or a delete takes it
+	// back — the session's record (`session_id`, cascading), never the book's content; a copy is not the run's.
+	lore_imprints: "a session's record of what its runs wrote on a book, taken back with their message; it goes with its session"
 }
 
 const allTables = (Object.values(schema) as unknown[]).filter(

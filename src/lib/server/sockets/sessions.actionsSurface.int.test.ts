@@ -318,20 +318,17 @@ describe("a session's action set gates both the surface and the fire", () => {
 			.from(schema.pipelineSpecs)
 			.where(eq(schema.pipelineSpecs.slug, "core:spec/story-respond"))
 			.limit(1)
-		const [cfg] = await testDb
-			.insert(schema.pipelineConfigs)
-			.values({
-				specId: spec.id,
-				name: `bare-${session.id}`,
-				includedActions: []
-			})
+		// 🚧 A preset that leaves the narrator out (PLAN-layering D7): its
+		// changes drop the action's registration; the session runs on it.
+		const [bare] = await testDb
+			.insert(schema.sessionPresets)
+			.values({ name: `bare-${session.id}`, genreId: "core:genre/story" })
 			.returning()
-		await testDb.insert(schema.pipelineConfigSelections).values({
-			specId: spec.id,
-			scopeKind: "session",
-			scopeId: session.id,
-			configId: cfg.id
-		})
+		const { writePresetChanges } = await import("$lib/server/pipelines/registrations/presetRows")
+		const { actionRegistrationKey } = await import("$lib/server/pipelines/registrations/rows")
+		await writePresetChanges(testDb as any, bare!.id, { drop: [actionRegistrationKey(NARRATE_ACTION)] })
+		await testDb.update(schema.sessions).set({ presetId: bare!.id }).where(eq(schema.sessions.id, session.id))
+		void spec
 
 		const denied = await sessionsSetFunctionHandler.handler(
 			fakeSocket(user.id, false),

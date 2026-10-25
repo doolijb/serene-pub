@@ -284,7 +284,7 @@
 		{:else}
 			<ul class="flex flex-col gap-2">
 				{#each active as a (a.callId)}
-					<li class="bg-surface-50-950 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[10px] p-3">
+					<li class="bg-surface-50-950 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-base p-3">
 						<div class="min-w-0 flex-1">
 							<div class="text-sm font-medium">
 								{a.pluginName} · {a.hookName}{a.lifecycle ? " (lifecycle)" : ""}
@@ -335,7 +335,7 @@
 			<ul class="flex flex-col gap-1">
 				{#each logs as l (l.id)}
 					{@const o = hookOutcome(l)}
-					<li class="bg-surface-50-950 flex flex-col gap-0.5 rounded-[10px] px-3 py-2 text-sm">
+					<li class="bg-surface-50-950 flex flex-col gap-0.5 rounded-base px-3 py-2 text-sm">
 						<div class="flex flex-wrap items-baseline gap-x-2">
 							<span class="font-medium">{l.pluginName}</span>
 							<span class="text-surface-700-300">{l.hookName}</span>

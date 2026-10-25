@@ -112,7 +112,7 @@
 			<button
 				class="chip rounded-full px-2.5 py-1 text-xs {outcomeFilter ===
 				o
-					? 'preset-tonal-primary'
+					? 'preset-pressed'
 					: 'preset-tonal-surface'}"
 				onclick={() => (outcomeFilter = outcomeFilter === o ? null : o)}
 			>

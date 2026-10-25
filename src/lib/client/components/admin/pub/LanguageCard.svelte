@@ -3,6 +3,8 @@
 	import { getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import LanguagePicker from "$lib/client/components/inputs/LanguagePicker.svelte"
+	import SettingCard from "$lib/client/components/settingsTabs/SettingCard.svelte"
+	import { docsHref } from "$lib/shared/utils/docsHref"
 	import { requireAdmin } from "./requireAdmin"
 
 	const socket = useTypedSocket()
@@ -17,22 +19,26 @@
 	}
 </script>
 
-<section class="panel-card flex flex-col gap-3" aria-labelledby="language-heading">
-	<h2 id="language-heading" class="text-sm font-medium">Language</h2>
-	<p class="text-surface-600-400 text-sm">
-		The language this pub is drawn in. Every user who has not chosen
-		one of their own follows this, so changing it moves them — and only
-		them; anyone with their own choice keeps it.
-	</p>
+<SettingCard
+	title="Language"
+	titleId="language-heading"
+	headingLevel={2}
+	helpId="default-language-note"
+>
+	{#snippet help()}
+		Everyone without a language of their own follows this one.
+		<a
+			class="anchor"
+			href={docsHref("languages", "for-power-users-language-and-lore-search")}
+		>
+			How language affects search
+		</a>
+	{/snippet}
 	<LanguagePicker
 		label="Default language"
+		labelHidden
 		value={systemSettingsCtx.settings?.defaultLanguage ?? "en"}
 		describedBy="default-language-note"
 		onValueChange={handleDefaultLanguageChange}
 	/>
-	<p id="default-language-note" class="text-surface-600-400 text-sm">
-		Some search features depend on the language: word stems are matched
-		for the languages a stemmer exists for, and partial matches for the
-		rest. See the Languages documentation page.
-	</p>
-</section>
+</SettingCard>

@@ -177,6 +177,11 @@ export interface AttachmentReadingCall {
 	placeholderFor: AttachmentKind[]
 	/** Why it cannot read each kind it cannot — safe sentences, no names. */
 	reasons: Partial<Record<AttachmentKind, string>>
+	/**
+	 * 🚧 Kinds it cannot read that reach it as their WORDS — audio the
+	 * reply's transcribe step hears for it (O9). A subset of `placeholderFor`.
+	 */
+	transcribes?: AttachmentKind[]
 	/** 🔒 Admin only: the pair it runs on. `redactConnections` removes it. */
 	connection?: ConnectionIdentity
 }

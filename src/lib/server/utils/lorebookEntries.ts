@@ -307,6 +307,7 @@ export function toEntryRow(
 		enabled: row.enabled,
 		archived: row.archived,
 		provenance: row.provenance,
+		derivedFrom: row.derivedFrom ?? null,
 		extraJson: row.extraJson,
 		createdAt: toDateString(row.createdAt),
 		updatedAt: row.updatedAt,

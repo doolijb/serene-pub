@@ -88,6 +88,12 @@ export async function retakeTurn(
 			ok: false,
 			error: "The last turn left nothing to regenerate."
 		}
+	// 🚧 Replace on write (RF fix 5): a retake of the now-newest turn while
+	// rewound replaces the forward stack, before the live turn goes.
+	{
+		const { discardForwardStack } = await import("$lib/server/messages/store")
+		await discardForwardStack(db, opts.sessionId)
+	}
 
 	/**
 	 * 🚧 On revision `branch` (PLAN-rulesets §28): nothing is deleted here —
@@ -192,13 +198,11 @@ export async function deleteTurnYield(
 			// back by their steps before the cascade drops their rows; what
 			// `keepLaterState` re-anchored above stands.
 			clockMoved = (await revertClockMovesAnchoredTo(t, ids)).sessionIds.length > 0
-			// 🚧 The session's own notes' entries the turn wrote go with it
-			// (PLAN-rulesets §28 `overwrite`): their anchor is a plain int,
-			// so the message cascade cannot take them.
-			const { retractPhantomEntriesAnchoredTo } = await import(
-				"$lib/server/lorebooks/phantom"
-			)
-			await retractPhantomEntriesAnchoredTo(t, opts.sessionId, ids)
+			// 🚧 What the turn wrote on a lorebook — the session's own notes'
+			// entries (PLAN-rulesets §28 `overwrite`), its lore imprints on a
+			// real book by the one rule (RF fix 4) — goes with it inside the
+			// store's delete below (`deleteLegacyWhere`): their anchors are
+			// plain ints, so the message cascade cannot take them.
 			// 🚧 The annex goes back to where it stood before the turn
 			// (`annexRevisionPoints.ts`): what the turn wrote there — a
 			// genre's last telling, its leads — goes with it.
@@ -485,4 +489,13 @@ export async function dropTurnWritesElsewhere(
 				notTheYield(schema.stateProposals.messageId)
 			)
 		)
+	// 🚧 And what the runs wrote on a lorebook, wherever it is anchored (RF
+	// fix 4): their lore imprints, by the one rule. A run's imprints are
+	// always written during the run, so no landed-before test applies; a
+	// branch's session holds none of the parent's.
+	const { retractImprints } = await import("$lib/server/lorebooks/imprints")
+	await retractImprints(db, {
+		sessionId: opts.sessionId,
+		runIds: opts.runs.map((r) => r.runUuid)
+	})
 }

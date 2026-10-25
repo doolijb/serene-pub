@@ -9,6 +9,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import BackgroundPicker from "$lib/client/components/backgrounds/BackgroundPicker.svelte"
 	import CustomThemeEditor from "./CustomThemeEditor.svelte"
+	import SettingCard from "./settingsTabs/SettingCard.svelte"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 
 	const socket = useTypedSocket()
@@ -126,26 +127,21 @@
 		toaster.error({ title: "Failed to load themes" })
 	}
 
+	// A success says nothing: the switch and the whole screen already show
+	// the new mode or theme, and "Light mode enabled" over the switch that
+	// just moved was a second report of one fact (PLAN-0-5-polish-parity
+	// L4.4, STYLE-GUIDE §6.21). Only a refusal is worth a word.
 	function handleUserSettingsUpdateDarkMode(
 		message: SocketEventMap["userSettings:updateDarkMode"]["response"]
 	) {
-		if (message.success) {
-			toaster.success({
-				title: `${message.enabled ? "Dark" : "Light"} mode enabled`
-			})
-		} else {
+		if (!message.success)
 			toaster.error({ title: "Failed to update dark mode setting" })
-		}
 	}
 
 	function handleUserSettingsUpdateTheme(
 		message: SocketEventMap["userSettings:updateTheme"]["response"]
 	) {
-		if (message.success) {
-			toaster.success({
-				title: "Theme updated"
-			})
-		} else {
+		if (!message.success) {
 			toaster.error({ title: "Failed to update theme" })
 		}
 	}
@@ -200,7 +196,7 @@
 		/>
 	</div>
 {:else}
-	<div class="flex flex-col gap-4 p-4">
+	<div class="flex max-w-[760px] flex-col gap-3 p-4">
 		<!-- Theme picker: one swatch card per theme. Each preview carries its
 		     own `data-theme`, so the role colours inside it resolve to THAT
 		     theme's ladders — built-ins are all imported in app.css, and every
@@ -208,7 +204,7 @@
 		     `[data-theme='<cssKey>']`. Light/dark follows the page's data-mode. -->
 		<section class="panel-card flex flex-col gap-4" aria-labelledby="theme-heading">
 			<div class="flex flex-wrap items-center justify-between gap-3">
-				<h3 id="theme-heading" class="text-sm font-medium">Theme</h3>
+				<h3 id="theme-heading" class="text-lead font-medium">Theme</h3>
 				<Switch
 					name="dark-mode"
 					checked={isDarkMode}
@@ -243,7 +239,7 @@
 							{#each group.themes as t (t.value)}
 								{@const isSelected = selectedTheme === t.value}
 								<label
-									class="bg-surface-50-950 border-surface-300 dark:border-surface-800 hover:border-surface-400 dark:hover:border-surface-600 has-[:focus-visible]:ring-primary-500 relative flex cursor-pointer flex-col gap-2 rounded-[12px] border p-2 has-[:focus-visible]:ring-2 {isSelected
+									class="bg-surface-50-950 border-surface-200-800 hover:border-surface-400-600 has-[:focus-visible]:ring-primary-500 relative flex cursor-pointer flex-col gap-2 rounded-container border p-2 has-[:focus-visible]:ring-2 {isSelected
 										? 'ring-primary-500 ring-offset-surface-100 dark:ring-offset-surface-900 ring-2 ring-offset-2'
 										: ''}"
 								>
@@ -259,7 +255,7 @@
 									     ink bars and an accent pill. -->
 									<div
 										data-theme={t.dataTheme}
-										class="bg-surface-50-950 border-surface-200 dark:border-surface-800 flex h-16 flex-col justify-center gap-1.5 rounded-[8px] border px-3"
+										class="bg-surface-50-950 border-surface-200-800 flex h-16 flex-col justify-center gap-1.5 rounded-lg border px-3"
 										aria-hidden="true"
 									>
 										<span
@@ -273,7 +269,7 @@
 										></span>
 									</div>
 									<span
-										class="flex min-w-0 items-center gap-1 text-[13px]"
+										class="flex min-w-0 items-center gap-1 text-chip"
 									>
 										<!-- "(Default)" is part of the option label for the
 										     dropdowns elsewhere; on a swatch it would push
@@ -284,7 +280,7 @@
 											</span>
 											{#if /\(Default\)$/.test(t.label)}
 												<span
-													class="text-surface-600-400 block text-[11px]"
+													class="text-surface-600-400 block text-meta"
 													>Default</span
 												>
 											{/if}
@@ -292,7 +288,7 @@
 										{#if isSelected}
 											<Icons.Check
 												size={14}
-												class="text-primary-700 dark:text-primary-500 shrink-0"
+												class="text-primary-ink shrink-0"
 												aria-hidden="true"
 											/>
 										{/if}
@@ -306,83 +302,75 @@
 		</section>
 
 		<!-- Per-browser, not per-account: shellPrefs keeps these in
-		     localStorage, so a phone and a desktop can differ. -->
-		<section
-			class="panel-card flex flex-col gap-4"
-			aria-labelledby="reading-motion-heading"
+		     localStorage, so a phone and a desktop can differ. Each is a
+		     setting card (STYLE-GUIDE §6.4); the control's own label is the
+		     title, so it is kept for a screen reader only. -->
+		<SettingCard
+			title="Story text size"
+			titleId="prose-size-heading"
+			help="Only the story in a session; saved in this browser."
 		>
-			<div>
-				<h3 id="reading-motion-heading" class="text-sm font-medium">
-					Reading and motion
-				</h3>
-				<p class="text-surface-600-400 text-xs">
-					Saved in this browser only.
-				</p>
-			</div>
+			<SegmentedControl
+				value={String(shellPrefs.proseSize)}
+				onValueChange={onProseSizeChange}
+				class="items-start"
+			>
+				<SegmentedControl.Label class="sr-only">
+					Story text size
+				</SegmentedControl.Label>
+				<SegmentedControl.Control>
+					<SegmentedControl.Indicator />
+					{#each PROSE_SIZES as px (px)}
+						<SegmentedControl.Item
+							value={String(px)}
+							aria-label="{px} pixels"
+						>
+							<SegmentedControl.ItemText>{px}</SegmentedControl.ItemText>
+							<SegmentedControl.ItemHiddenInput />
+						</SegmentedControl.Item>
+					{/each}
+				</SegmentedControl.Control>
+			</SegmentedControl>
+		</SettingCard>
 
-			<div class="flex flex-col gap-2">
-				<SegmentedControl
-					value={String(shellPrefs.proseSize)}
-					onValueChange={onProseSizeChange}
-					class="items-start"
+		<SettingCard
+			title="Animate views"
+			titleId="animate-views-heading"
+			help="Opening, resizing and focusing a view, in this browser; your system's reduced-motion setting always wins."
+			layout="switch"
+		>
+			<Switch
+				name="animate-views"
+				checked={shellPrefs.animateViews}
+				onCheckedChange={(e) => shellPrefs.setAnimateViews(e.checked)}
+			>
+				<Switch.Control
+					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 				>
-					<SegmentedControl.Label class="text-sm">
-						Story text size
-					</SegmentedControl.Label>
-					<SegmentedControl.Control>
-						<SegmentedControl.Indicator />
-						{#each PROSE_SIZES as px (px)}
-							<SegmentedControl.Item
-								value={String(px)}
-								aria-label="{px} pixels"
-							>
-								<SegmentedControl.ItemText>{px}</SegmentedControl.ItemText>
-								<SegmentedControl.ItemHiddenInput />
-							</SegmentedControl.Item>
-						{/each}
-					</SegmentedControl.Control>
-				</SegmentedControl>
-				<p class="text-surface-600-400 text-xs">
-					Only the story in a session; the interface stays the same size.
-				</p>
-			</div>
+					<Switch.Thumb />
+				</Switch.Control>
+				<Switch.HiddenInput />
+				<Switch.Label class="sr-only">Animate views</Switch.Label>
+			</Switch>
+		</SettingCard>
 
-			<div class="flex flex-col gap-1">
-				<Switch
-					name="animate-views"
-					checked={shellPrefs.animateViews}
-					onCheckedChange={(e) => shellPrefs.setAnimateViews(e.checked)}
-				>
-					<Switch.Control
-						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-					>
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-					<Switch.Label class="text-sm">Animate views</Switch.Label>
-				</Switch>
-				<p class="text-surface-600-400 text-xs">
-					Opening, resizing and focusing a view. Your system's
-					reduced-motion setting always wins.
-				</p>
-			</div>
+		<!-- Background: a card, not a rule over a section (§1.4). -->
+		<section
+			class="panel-card flex flex-col gap-3"
+			aria-labelledby="background-heading"
+		>
+			<h3 id="background-heading" class="text-lead font-medium">
+				Background
+			</h3>
+			<BackgroundPicker
+				bind:selectedPath={selectedBackground}
+				bind:opacity={backgroundOpacity}
+				onchange={handleBackgroundChange}
+			/>
 		</section>
 
-		<!-- Background -->
-		<div class="panel-edge border-t pt-4">
-			<h3 class="text-sm font-medium">Background</h3>
-
-			<div class="mt-3">
-				<BackgroundPicker
-					bind:selectedPath={selectedBackground}
-					bind:opacity={backgroundOpacity}
-					onchange={handleBackgroundChange}
-				/>
-			</div>
-		</div>
-
-		<div class="flex items-center justify-between pt-4">
-			<h3 class="text-sm font-medium">Custom themes</h3>
+		<div class="flex items-center justify-between pt-2">
+			<h3 class="text-lead font-medium">Custom themes</h3>
 			<button
 				class="btn btn-sm preset-filled-primary-500"
 				onclick={() => (editing = "new")}
@@ -399,7 +387,7 @@
 		{:else}
 			<!-- Generator tip -->
 			<div
-				class="bg-surface-100-800 flex items-start gap-3 rounded-lg p-3 text-sm"
+				class="bg-surface-100-900 flex items-start gap-3 rounded-lg p-3 text-sm"
 			>
 				<Icons.Sparkles
 					size={16}
@@ -410,7 +398,7 @@
 						href="https://themes.skeleton.dev/themes/create"
 						target="_blank"
 						rel="noopener noreferrer"
-						class="text-primary-500 font-medium hover:underline"
+						class="text-primary-ink font-medium hover:underline"
 					>
 						Skeleton theme generator
 					</a>
@@ -427,7 +415,7 @@
 				</p>
 				{#if myThemes.length === 0}
 					<div
-						class="bg-surface-100-800 rounded-lg p-4 text-center text-sm opacity-60"
+						class="bg-surface-100-900 rounded-lg p-4 text-center text-sm opacity-60"
 					>
 						No custom themes yet. Import a file or start from
 						scratch.
@@ -435,7 +423,7 @@
 				{:else}
 					{#each myThemes as theme}
 						<div
-							class="bg-surface-100-800 flex items-center gap-3 rounded-lg p-3"
+							class="bg-surface-100-900 flex items-center gap-3 rounded-lg p-3"
 						>
 							<!-- Theme preview swatch -->
 							<div
@@ -491,7 +479,7 @@
 					</p>
 					{#each pubThemes as theme}
 						<div
-							class="bg-surface-100-800 flex items-center gap-3 rounded-lg p-3"
+							class="bg-surface-100-900 flex items-center gap-3 rounded-lg p-3"
 						>
 							<div
 								class="h-8 w-8 shrink-0 rounded-md border border-black/10"

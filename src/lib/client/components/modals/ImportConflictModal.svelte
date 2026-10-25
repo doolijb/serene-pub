@@ -55,7 +55,7 @@
 					</p>
 					{#if losses}
 						<p
-							class="text-error-600-400 bg-error-500/10 rounded-[8px] p-2 text-sm"
+							class="text-error-600-400 bg-error-500/10 rounded-lg p-2 text-sm"
 						>
 							{losses}
 						</p>

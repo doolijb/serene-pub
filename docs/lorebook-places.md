@@ -46,6 +46,8 @@ Links save on their own, as soon as you save the link; they're never part of the
 
 When a place's content has an **Exits:** line, such as *Exits: north → The Drowned Hall, down → the crypt* (the Lair's room drafts write one), **Read links from the Exits line** offers the ways that line names. Nothing is written until you confirm.
 
+A room the [Lair](./genre-lair.md#building-and-filing-rooms) saves (a knock's answer, **Build room**, **File as a room**) is linked from its *Exits:* line by itself, when it has no links of its own yet: one link for each way that names a place the lorebook already has, one way, from the new room. A name that matches no place, or more than one, is left for you to read here.
+
 - A way to a room that isn't linked yet is ticked.
 - A way that's already linked is marked **Already linked** and not offered again, so reading the line twice never doubles a link.
 - A name no place answers to is offered unticked as a **New place**; tick it to create and link it.

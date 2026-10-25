@@ -25,7 +25,7 @@ const REPLIES = [
 	"core:spec/story-respond",
 	"core:spec/assistant-respond",
 	"core:spec/guide-respond",
-	"core:spec/lair-respond"
+	"core:spec/lair-reply"
 ]
 
 beforeAll(async () => {
@@ -47,7 +47,7 @@ describe("pipelineLabelsById", () => {
 		expect(labels.get(await idOf("core:spec/story-respond"))).toBe(
 			"Reply · Story"
 		)
-		expect(labels.get(await idOf("core:spec/lair-respond"))).toBe(
+		expect(labels.get(await idOf("core:spec/lair-reply"))).toBe(
 			"Reply · Lair"
 		)
 		const replies = await Promise.all(
@@ -94,7 +94,7 @@ describe("payloads that name pipelines by a string", () => {
 			name: "Written for Chat's reply",
 			fields: { systemPrompt: "s", postHistoryInstructions: "p" }
 		})
-		const sets = await choiceSets(db, await idOf("core:spec/lair-respond"))
+		const sets = await choiceSets(db, await idOf("core:spec/lair-reply"))
 		const offered = sets.promptsBy
 			.get(promptPoolKeyFor(decl.nodeDefinitionId!, decl.slot))!
 			.find((c: any) => c.id === mine.id) as any
@@ -113,7 +113,7 @@ describe("payloads that name pipelines by a string", () => {
 			.where(
 				inArray(schema.pipelineSpecs.slug, [
 					"core:spec/story-respond",
-					"core:spec/lair-respond"
+					"core:spec/lair-reply"
 				])
 			)
 		for (const spec of specs)

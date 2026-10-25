@@ -314,13 +314,20 @@ describe("the Scene action — Adventure's spec (§16 follow-up D3)", () => {
 		const tags = rows.find((r) => r.name === "Scene prompt from the last lines")!
 		expect(tags.defaultForSpecs).toContain(ADVENTURE)
 		expect(tags.defaultForSpecs).toContain(SPEC)
-		// Same graph, Adventure's inlet: the action is offered under Adventure.
+		// No lock any more (PLAN-layering, lane 3): the action is offered under
+		// Story because Story's defaults register it.
 		const { CORE_SPECS, STORY_ILLUSTRATE_SCENE_SPEC_ID, STORY_GENRE_ID } = await import(
 			"@serene-pub/core-catalog"
 		)
 		const doc: any = CORE_SPECS.find((c: any) => c.slug === STORY_ILLUSTRATE_SCENE_SPEC_ID)!.build()
-		expect(doc.input.genre).toBe(STORY_GENRE_ID)
+		expect(doc.input).toBeUndefined()
 		expect(doc.contributes.actions.map((a: any) => a.key)).toEqual(["illustrate-scene"])
+		const { genreRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
+		expect(
+			(await genreRegistrations(db as any, STORY_GENRE_ID)).some(
+				(r) => r.trigger.family === "action" && r.pipeline === STORY_ILLUSTRATE_SCENE_SPEC_ID
+			)
+		).toBe(true)
 	})
 })
 

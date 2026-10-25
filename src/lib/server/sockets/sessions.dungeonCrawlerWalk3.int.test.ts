@@ -597,14 +597,16 @@ async function ledgerTexts(sessionId: number) {
 }
 
 describe("R1-4: a new character's sheet reads as made, not as a fall", () => {
-	it("Vis Itineris: 'Health 12 (full)', never 'Health 20 → 12'; Story: 'Health Unhurt', never 'Health falls'", async () => {
+	it("Vis Itineris: 'Health 12 (full)', never 'Health 20 → 12'; Freeform: no health line, never 'Health falls'", async () => {
 		const { sessionId } = await madeTable("walk3-creation-lines")
 		const lines = await ledgerTexts(sessionId)
 		expect(lines).toContain("Health 12 (full)")
 		expect(lines.some((t) => /^Health 20 →/.test(t))).toBe(false)
 		const story = await madeTable("walk3-creation-words", { ruleset: "core:ruleset/freeform@1", rigour: "prose" })
 		const words = await ledgerTexts(story.sessionId)
-		expect(words).toContain("Health Unhurt")
+		// 🚧 S4 (lane G3, 2026-10-23): Freeform keeps no classes, so no kit sets a full health of its own —
+		// the sheet already reads full, and creation writes no health line at all (never a fall).
+		expect(words.filter((t) => /^Health/.test(t))).toEqual([])
 		expect(words).not.toContain("Health falls")
 	})
 })

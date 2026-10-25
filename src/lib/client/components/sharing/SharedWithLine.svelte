@@ -5,6 +5,7 @@
 	 * names, the rest as `+N`. Renders nothing when there is nobody.
 	 */
 	import Avatar from "$lib/client/components/Avatar.svelte"
+	import { avatarSrc } from "$lib/client/utils/media"
 	import type { ConversationPerson } from "$lib/shared/sockets/conversations"
 
 	interface Props {
@@ -31,6 +32,7 @@
 		{#each shown as person (person.id)}
 			<span class="inline-flex min-w-0 items-center gap-1">
 				<Avatar
+					src={avatarSrc(person)}
 					name={label(person)}
 					fallback="initial"
 					size="xs"

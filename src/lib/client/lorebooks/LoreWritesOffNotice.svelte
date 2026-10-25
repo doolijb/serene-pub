@@ -14,10 +14,13 @@
 	import * as Icons from "@lucide/svelte"
 	import { getContext } from "svelte"
 	import {
+		BOOK_LORE_WRITES_OFF_NOTICE_ACTION,
+		BOOK_LORE_WRITES_OFF_NOTICE_LEAD,
 		LORE_WRITES_OFF_NOTICE,
 		LORE_WRITES_OFF_NOTICE_ACTION,
 		LORE_WRITES_OFF_NOTICE_LEAD
 	} from "$lib/shared/lorebooks/loreWriteMode"
+	import { DEFAULT_SCOPE } from "$lib/shared/lorebooks/loreRoute"
 
 	interface Props {
 		/**
@@ -25,16 +28,35 @@
 		 * page (a modal) can step aside and let the setting be seen.
 		 */
 		onOpenSettings?: () => void
+		/**
+		 * Which level is Off (`useLoreWritesOff().by`): the person's own
+		 * setting (the default), or the book's — then the button opens that
+		 * book's Book settings instead.
+		 */
+		by?: "personal" | "lorebook" | null
+		/** The book, for `by: "lorebook"`. */
+		lorebookId?: number | null
 	}
 
-	let { onOpenSettings }: Props = $props()
+	let { onOpenSettings, by = "personal", lorebookId = null }: Props = $props()
 
 	const panelsCtx = getContext<PanelsCtx | undefined>("panelsCtx")
+	const bookIsOff = $derived(by === "lorebook" && lorebookId != null)
 
 	function openSettings() {
 		if (!panelsCtx) return
-		panelsCtx.digest.settingsSection = "user"
-		panelsCtx.openView("settings", { toggle: false })
+		if (bookIsOff) {
+			// The book's own page, the way Jump opens a book (`digest.lore`).
+			panelsCtx.digest.lore = {
+				lorebookId: lorebookId!,
+				scope: DEFAULT_SCOPE,
+				settings: true
+			}
+			panelsCtx.openView("lorebooks", { toggle: false })
+		} else {
+			panelsCtx.digest.settingsSection = "user"
+			panelsCtx.openView("settings", { toggle: false })
+		}
 		onOpenSettings?.()
 	}
 </script>
@@ -47,7 +69,9 @@
 	<Icons.TriangleAlert size={16} class="text-warning-500 mt-0.5 shrink-0" aria-hidden="true" />
 	{#if panelsCtx}
 		<div class="flex min-w-0 flex-col items-start gap-2">
-			<span>{LORE_WRITES_OFF_NOTICE_LEAD}</span>
+			<span>
+				{bookIsOff ? BOOK_LORE_WRITES_OFF_NOTICE_LEAD : LORE_WRITES_OFF_NOTICE_LEAD}
+			</span>
 			<button
 				type="button"
 				class="btn btn-sm preset-tonal-surface gap-1"
@@ -55,7 +79,7 @@
 				onclick={openSettings}
 			>
 				<Icons.Settings size={14} aria-hidden="true" />
-				{LORE_WRITES_OFF_NOTICE_ACTION}
+				{bookIsOff ? BOOK_LORE_WRITES_OFF_NOTICE_ACTION : LORE_WRITES_OFF_NOTICE_ACTION}
 			</button>
 		</div>
 	{:else}

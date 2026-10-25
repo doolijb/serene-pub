@@ -127,23 +127,17 @@ describe("the declared default costs no row", () => {
 	})
 
 	it("writing the shipped pack back is a reset, not a stored copy", async () => {
-		// A configuration of its own: the shipped one is immutable, which is a
-		// different refusal and not the one under test here.
-		const [config] = await db
-			.insert(schema.pipelineConfigs)
-			.values({ specId, name: "Reset probe", isDefault: false })
-			.returning()
-		const configId = config.id
-		await writeOption(
-			db,
-			SECRET,
-			STORY_RESPOND_SPEC_ID,
-			{ userId: adminId, isAdmin: true },
-			handle(),
-			REORDERED,
-			configId
-		)
-		expect(await rowAt(configId)).toBeTruthy()
+		// 🚧 An instance-wide write lands as a change to the genre's defaults
+		// (R38, A15); putting the order back removes it.
+		const genreBlocks = async () =>
+			(
+				await db
+					.select()
+					.from(schema.registrations)
+					.where(and(eq(schema.registrations.scopeKind, "genre"), eq(schema.registrations.origin, "admin")))
+			).map((r) => (r.values as any)?.[NODE]?.[SLOT]?.[PATH])
+		await writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, { userId: adminId, isAdmin: true }, handle(), REORDERED)
+		expect((await genreBlocks()).length).toBe(1)
 
 		await writeOption(
 			db,
@@ -151,53 +145,32 @@ describe("the declared default costs no row", () => {
 			STORY_RESPOND_SPEC_ID,
 			{ userId: adminId, isAdmin: true },
 			handle(),
-			SHIPPED_PROMPT_BLOCKS,
-			configId
+			SHIPPED_PROMPT_BLOCKS
 		)
 		expect(
-			await rowAt(configId),
+			await genreBlocks(),
 			"putting the order back stored a copy of the default instead of " +
 				"deleting the deviation"
-		).toBeUndefined()
+		).toEqual([])
 	})
 })
 
 describe("a preset carries the pack to its sessions", () => {
-	let presetConfigId: number
+	let presetId: number
 	let sessionId: number
 
 	beforeAll(async () => {
-		// A configuration of this pipeline, with a reordered pack on it. Its
-		// own row rather than the shipped one, because that is what an
-		// administrator building a preset actually does.
-		const [config] = await db
-			.insert(schema.pipelineConfigs)
-			.values({
-				specId,
-				name: "Cast first",
-				isDefault: false
-			})
-			.returning()
-		presetConfigId = config.id
-
-		await writeOption(
-			db,
-			SECRET,
-			STORY_RESPOND_SPEC_ID,
-			{ userId: adminId, isAdmin: true },
-			handle(),
-			REORDERED,
-			presetConfigId
-		)
-
+		// 🚧 A preset's change to the reply's registration (R38): the reorder
+		// as its values — what an administrator building a preset sets.
 		const [preset] = await db
 			.insert(schema.sessionPresets)
-			.values({
-				name: "Cast first",
-				genreId: "core:genre/story",
-				configSelections: { [STORY_RESPOND_SPEC_ID]: presetConfigId }
-			})
+			.values({ name: "Cast first", genreId: "core:genre/story" })
 			.returning()
+		presetId = preset.id
+		const { writePresetChanges } = await import("$lib/server/pipelines/registrations/presetRows")
+		await writePresetChanges(db as any, presetId, {
+			change: [{ key: "message-respond→story-respond", values: { [NODE]: { [SLOT]: { [PATH]: REORDERED } } } }]
+		})
 
 		const [session] = await db
 			.insert(schema.sessions)
@@ -210,10 +183,12 @@ describe("a preset carries the pack to its sessions", () => {
 		sessionId = session.id
 	}, 60_000)
 
-	it("stores the reorder as a deviation on the preset's configuration", async () => {
-		const row = await rowAt(presetConfigId)
-		expect(row).toBeTruthy()
-		expect((row!.value as { id: string }[]).map((b) => b.id)).toEqual([
+	it("stores the reorder as the preset's change", async () => {
+		const [row] = await db
+			.select()
+			.from(schema.registrations)
+			.where(eq(schema.registrations.presetId, presetId))
+		expect(((row!.values as any)[NODE][SLOT][PATH] as { id: string }[]).map((b) => b.id)).toEqual([
 			"characters",
 			"instructions",
 			"scenario",
@@ -225,8 +200,8 @@ describe("a preset carries the pack to its sessions", () => {
 		const resolved = await resolvedBlocks(sessionId)
 		expect(
 			(resolved?.value as { id: string }[]).map((b) => b.id),
-			"the preset's configuration did not reach the run — " +
-				"`resolveSelectedConfig`'s preset layer is what carries it"
+			"the preset's change did not reach the run — " +
+				"the value cascade's preset layer is what carries it (R38)"
 		).toEqual(["characters", "instructions", "scenario", "worldLore"])
 	})
 

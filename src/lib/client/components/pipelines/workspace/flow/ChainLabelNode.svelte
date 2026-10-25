@@ -16,7 +16,7 @@
 
 <div class="flex h-full w-full items-center gap-1.5 overflow-hidden px-1">
 	{#if index !== null}
-		<span class="text-surface-600-400 shrink-0 font-mono text-[11px]">
+		<span class="text-surface-600-400 shrink-0 font-mono text-meta">
 			{String(index + 1).padStart(2, "0")}
 		</span>
 	{/if}
@@ -26,7 +26,7 @@
 		{chain}
 	</span>
 	{#if predicate}
-		<span class="text-secondary-500 truncate font-mono text-[11px]">
+		<span class="text-secondary-500 truncate font-mono text-meta">
 			{predicate}
 		</span>
 	{/if}

@@ -44,9 +44,9 @@ So `in:text` on the step that writes a message is the text before it is saved, `
 
 ### Attaching scripts to a seam
 
-Open a pipeline in **Admin › Pipelines**, pick a configuration, and open a step's **Advanced** fold. Each seam is one list, labelled with where it runs. Under the label, a muted line says what flows there, and chips name the script types the seam takes, so an empty list still tells you what could go in it. The picker offers only scripts of those types.
+Open a pipeline in **Admin › Pipelines** and open a step's **Advanced** fold. Each seam is one list, labelled with where it runs. Under the label, a muted line says what flows there, and chips name the script types the seam takes, so an empty list still tells you what could go in it. The picker offers only scripts of those types.
 
-Add scripts, drag them into order, or remove them. A list belongs to the configuration, like every other setting, so a change reaches everyone who uses that configuration. A script that has since been deleted stays in the list as _Missing script_ until you remove it.
+Add scripts, drag them into order, or remove them. A list is a setting like any other: what you save there is the genre's default, so it reaches every session of the genre that hasn't changed it, and a preset can change it for its own sessions (see [Pipelines › Where a value comes from](./pipelines.md#where-a-value-comes-from)). A script that has since been deleted stays in the list as _Missing script_ until you remove it.
 
 ### The order scripts run in
 
@@ -60,7 +60,7 @@ Within one seam, scripts run top to bottom, and each script is handed what the o
 
 ## The script map
 
-To see every seam in a pipeline at once, open the pipeline in **Admin › Pipelines** and choose the **Scripts** tab, beside **Configure**. The **script map** lists every seam in the order the pipeline runs them, grouped by step, with the scripts attached to each for the configuration you picked.
+To see every seam in a pipeline at once, open the pipeline in **Admin › Pipelines** and choose the **Scripts** tab, beside **Configure**. The **script map** lists every seam in the order the pipeline runs them, grouped by step, with the scripts attached to each.
 
 On a seam that can end a reply, the map also shows the [stop scripts of the connection](#a-connections-stop-scripts) that join it. Pick a row to jump to that step's list in **Configure**.
 
@@ -70,7 +70,7 @@ The map only reads. To change a list, use the step's **Advanced** box.
 
 A pipeline can change under a script list: an update renames a step's value, or a plugin drops a point. A list whose seam no longer exists is **unplaced**. Serene Pub never deletes it for you.
 
-- In the step's **Advanced** box, the list stays, marked _no longer here_. Everything else in the configuration saves as usual.
+- In the step's **Advanced** box, the list stays, marked _no longer here_. Everything else on the page saves as usual.
 - In the script map, it is listed under **Unplaced**.
 - In **Admin › Scripts**, its scripts count as used, under the **Unplaced** filter.
 - **Admin › Diagnostics** shows one line counting unplaced lists, so you hear about it without opening every step.
@@ -84,7 +84,7 @@ To fix it, open the step, move the scripts to a list that still exists, and remo
 The [run inspector](./pipelines.md#inspecting-a-run), which only administrators see, has a **Scripts** block on each step that ran any. One row per script that ran:
 
 - the script's name and the seam it ran at;
-- where it came from: the configuration, the connection, or the step itself;
+- where it came from: the pipeline's settings, the connection, or the step itself;
 - what happened: _ok_, _skipped_ with the reason, or _error_;
 - on a stop script, whether its ending was the one used, the place where the reply was cut;
 - how long it took.

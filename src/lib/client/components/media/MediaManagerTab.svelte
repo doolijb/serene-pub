@@ -14,6 +14,7 @@
 	fullscreen panel.
 -->
 <script lang="ts">
+	import { MOTION, motionDuration } from "$lib/client/utils/motion"
 	import { realDate, realDateTime } from "$lib/client/utils/realTime.svelte"
 	import { getContext } from "svelte"
 	import { SvelteMap } from "svelte/reactivity"
@@ -494,7 +495,7 @@
 	     that clips anything rendered inside it. -->
 	<RowMenu
 		label="Image"
-		triggerLabel="Image options for {displayName(item)}"
+		triggerLabel="More actions for {displayName(item)}"
 		triggerClass="bg-surface-950/60 hover:bg-surface-950/80 rounded-full p-1 text-white"
 		bind:open={
 			() => menuOpenFor === item.id,
@@ -617,7 +618,7 @@
 			<button
 				type="button"
 				class="btn btn-sm p-2 {viewMode === 'grid'
-					? 'preset-tonal-primary'
+					? 'preset-pressed'
 					: 'preset-tonal-surface'}"
 				onclick={() => (viewMode = "grid")}
 				title="Grid view"
@@ -629,7 +630,7 @@
 			<button
 				type="button"
 				class="btn btn-sm p-2 {viewMode === 'list'
-					? 'preset-tonal-primary'
+					? 'preset-pressed'
 					: 'preset-tonal-surface'}"
 				onclick={() => (viewMode = "list")}
 				title="List view"
@@ -687,7 +688,7 @@
 		<button
 			type="button"
 			class="btn shrink-0 {orphanedOnly
-				? 'preset-tonal-primary'
+				? 'preset-pressed'
 				: 'preset-tonal-surface'}"
 			onclick={() => (orphanedOnly = !orphanedOnly)}
 			disabled={orphanCount === 0 && !orphanedOnly}
@@ -712,7 +713,7 @@
 		</div>
 	{:else if filtered.length === 0}
 		<div
-			class="border-surface-300-600 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed py-8"
+			class="border-surface-300-700 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed py-8"
 		>
 			<Icons.ImageOff class="text-surface-600-400 h-8 w-8" />
 			<p class="text-surface-600-400 text-sm">
@@ -732,9 +733,9 @@
 			{#each filtered as item (item.id)}
 				<div
 					role="listitem"
-					class="group border-surface-300-600 relative overflow-hidden rounded-lg border"
-					animate:flip={{ duration: 150 }}
-					out:fade={{ duration: 120 }}
+					class="group border-surface-200-800 relative overflow-hidden rounded-lg border"
+					animate:flip={{ duration: motionDuration(MOTION.base) }}
+					out:fade={{ duration: motionDuration(MOTION.fast) }}
 				>
 					<button
 						type="button"
@@ -793,17 +794,17 @@
 					<div
 						class="bg-surface-100-900/90 absolute right-0 bottom-0 left-0 px-1.5 py-1"
 					>
-						<p class="truncate text-[11px] font-medium">
+						<p class="truncate text-meta font-medium">
 							{displayName(item)}
 						</p>
-						<p class="text-surface-600-400 truncate text-[11px]">
+						<p class="text-surface-600-400 truncate text-meta">
 							{formatBytes(item.bytes)} · {shortDate(
 								item.createdAt
 							)}
 						</p>
 						{#if item.attachedTo}
 							<p
-								class="text-surface-600-400 truncate text-[11px]"
+								class="text-surface-600-400 truncate text-meta"
 							>
 								{item.orphaned
 									? "orphaned"
@@ -819,9 +820,9 @@
 			{#each filtered as item (item.id)}
 				<div
 					role="listitem"
-					class="border-surface-300-600 flex items-center gap-2 rounded-lg border p-1.5"
-					animate:flip={{ duration: 150 }}
-					out:fade={{ duration: 120 }}
+					class="border-surface-200-800 flex items-center gap-2 rounded-lg border p-1.5"
+					animate:flip={{ duration: motionDuration(MOTION.base) }}
+					out:fade={{ duration: motionDuration(MOTION.fast) }}
 				>
 					<button
 						type="button"
@@ -926,7 +927,7 @@
 		{#if cleanupOpen}
 			<div
 				id="media-cleanup"
-				class="border-surface-300-600 flex flex-col gap-4 border-t p-3"
+				class="border-surface-200-800 flex flex-col gap-4 border-t p-3"
 			>
 				{#if !cleanup}
 					<div class="flex justify-center py-4">
@@ -938,10 +939,9 @@
 					<section class="flex flex-col gap-2">
 						<h3 class="text-sm font-medium">Derived forms</h3>
 						<p class="text-surface-600-400 text-xs">
-							Thumbnails and other copies that can be re-made from
-							what is kept. Removing them frees space now and
-							costs one re-encode the next time each image is
-							shown.
+							Thumbnails and other copies made from what is kept;
+							removing them frees space now and costs one
+							re-encode the next time each image is shown.
 						</p>
 						<p class="text-sm">
 							{cleanup.derived.variants}
@@ -974,11 +974,14 @@
 							<span>Uploaded originals — irreversible</span>
 						</h3>
 						<p class="text-surface-600-400 text-xs">
-							Deletes the bytes you uploaded, leaving the web-safe
-							copy stored beside them to serve. Nothing can bring
-							an original back afterwards.
+							Deletes the bytes you uploaded and serves the
+							web-safe copy kept beside them; nothing brings an
+							original back.
 						</p>
-						<p class="text-sm">
+						<p
+							class="text-sm"
+							title="Files whose web-safe copy has not been made yet are not counted until it exists."
+						>
 							at least {cleanup.originals.files}
 							{cleanup.originals.files === 1 ? "file" : "files"} ·
 							<strong>
@@ -989,11 +992,8 @@
 						     web-safe copy has never been made would mean doing
 						     the encode, which is the expensive half. Those
 						     files are absent from the figure and are still
-						     acted on, so this is a floor. -->
-						<p class="text-surface-600-400 text-xs">
-							Files whose web-safe copy has not been made yet are
-							not counted until it exists.
-						</p>
+						     acted on, so this is a floor; the count's title
+						     says so (STYLE-GUIDE §6.4: one sentence of help). -->
 						<button
 							type="button"
 							class="btn btn-sm preset-filled-error-500 self-start"
@@ -1038,11 +1038,12 @@
 							<span class="text-sm">
 								Keep derived forms on disk
 							</span>
-							<span class="text-surface-600-400 block text-xs">
-								Off means a thumbnail is re-made on every
-								request — less disk, more CPU. The display form
-								is never affected: it is what a plain image URL
-								serves, not an optimisation of it.
+							<span
+								class="text-surface-600-400 block text-xs"
+								title="The display form is never affected: it is what a plain image URL serves, not an optimisation of it."
+							>
+								Off re-makes a thumbnail on every request: less
+								disk, more CPU.
 							</span>
 						</span>
 					</label>
@@ -1078,7 +1079,7 @@
 				class="card bg-surface-100-900 max-w-sm space-y-4 p-6 shadow-xl"
 			>
 				<header class="flex items-center gap-3">
-					<Icons.Trash2 class="text-error-500 h-5 w-5 shrink-0" />
+					<Icons.Trash2 class="text-error-600-400 h-5 w-5 shrink-0" />
 					<h2 class="text-lg font-bold">Delete image</h2>
 				</header>
 				{#if pendingDelete}
@@ -1191,7 +1192,7 @@
 			>
 				<header class="flex items-center gap-3">
 					<Icons.AlertTriangle
-						class="text-error-500 h-5 w-5 shrink-0"
+						class="text-error-600-400 h-5 w-5 shrink-0"
 					/>
 					<h2 class="text-lg font-bold">Delete uploaded originals</h2>
 				</header>

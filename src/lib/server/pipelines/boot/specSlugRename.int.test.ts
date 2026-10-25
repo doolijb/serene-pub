@@ -661,14 +661,18 @@ describe("an install an earlier build left", () => {
 		expect(notices.map((n) => [n.boundSpec, n.fallbackSpec])).toEqual([
 			["core:spec/story-respond", "core:spec/story-respond"]
 		])
-		// The core preset's bindings resolve again, so it carries no notice.
+		// The core preset's bindings resolve again, so it carries no rename
+		// notice. (An "Unavailable: needs a model …" row is R56's unserved
+		// verdict on a pub with no image model, not a rename.)
 		expect(
-			await db
-				.select()
-				.from(schema.sessionPresetNotices)
-				.where(
-					eq(schema.sessionPresetNotices.presetId, staged.corePreset!)
-				)
+			(
+				await db
+					.select()
+					.from(schema.sessionPresetNotices)
+					.where(
+						eq(schema.sessionPresetNotices.presetId, staged.corePreset!)
+					)
+			).filter((n) => !n.reason?.startsWith("Unavailable:"))
 		).toEqual([])
 
 		// Prompts and the plugin's swaps.

@@ -178,7 +178,16 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// transaction as the row). `links` is here rather than only on the link
 	// outlet so an entry and its links commit together, or not at all. No shipped spec
 	// wires either, so no document moves. (was "c745cab165e22")
-	"core:outlet/create-lore-entry@1": "15401f006df68c",
+	// Moved 2026-10-21 (Lair rewrite D2, L1): a `fields` in-port — the
+	// entry's typed fields, checked against its entry type
+	// (`fieldsFindings`) at the review gate and at the commit; review fields
+	// `name`, `content`, `fields`. Additive. (was "15401f006df68c")
+	"core:outlet/create-lore-entry@1": "57d4f78aa9d7c",
+	// NEW 2026-10-21 (Lair rewrite D2, L1): change an entry of the session's
+	// lorebook — `entry` (id | write result | name), `name?`, `content?`,
+	// `fields?` (a patch; null clears a field); out `entryId`;
+	// `effects: 'write'`, no `causesEvent`.
+	"core:outlet/update-lore-entry@1": "1a064e69b9ff51",
 	// NEW (L2, 2026-09-17): one link between two entries of the session's
 	// lorebook — an entry-ended `narrative_relationships` row, the same edge
 	// the lorebook's own graph draws, which no pipeline could write. `to`
@@ -243,7 +252,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// `create-message`. (was "1f7eec771e6f80")
 	// Moved 2026-10-03 (owner note 39): the `thinking` in-port is `reasoning`
 	// — one concept, one name (NOMENCLATURE §23). (was "3359a3cadb39")
-	"core:outlet/update-message@1": "fda61fb31de76",
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni): the additive `parts` in-port — a spoken reply's audio lands with the text. (was "fda61fb31de76")
+	"core:outlet/update-message@1": "17b6afeb32c7fb",
 	"core:inlet/summarize-request@1": "1ffc99d5933e6c",
 	// Gained the `greeting` field on its sessionShape (20, migration 0151) —
 	// the default greeting-on-creation behaviour stated, not changed.
@@ -306,6 +316,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// (`collects.clockStep`, checked by the host). (was "11b79532336221")
 	// Moved 2026-10-18: 🚧 `ruleset` port — `{ id, rigour }`, the ruleset the session plays, always supplied. Additive. (was "a8419562a1a98")
 	"core:inlet/user-message@1": "8f9505bb1e485",
+	// NEW 2026-10-20 (PLAN-layering D2, lane 1; pinned in lane 3): where a
+	// routine enters — session, routine, cause, the moment's entities flat,
+	// and (lane 3) `ruleset`, the ruleset the session plays.
+	"core:inlet/routine@1": "89e439797a0ee",
+	// NEW 2026-10-23 (rulesets as functions D6): where a ruleset's action enters — session, actor, function, answer, aimedAt.
+	"core:inlet/rules-action@1": "268edc4f78350",
 	/**
 	 * Forms (U5d, R-15 *Forms*, 2026-09-17). NEW types — a line each: the
 	 * inlet `core:event/form-addressed@1` lands on; the task that turns the
@@ -319,6 +335,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:inlet/form-addressed@1": "eaa49f3684cc2",
 	// 🚧 A person's message, saved through the pipeline (owner ruling 2026-10-15).
 	"core:inlet/message-offered@1": "275f9cdcaaaf9",
+	// 🚧 A person's Delete, carried out by the genre's deletion pipeline
+	// (RF fix 5, owner ruling 2026-10-23: deletion requires a pipeline).
+	"core:inlet/message-deletion-asked@1": "196e7474d94f1e",
 	"core:task/form-context@1": "1d7e674904cdd6",
 	// Both moved 2026-09-27 (lair pass B12): an additive `referent` port —
 	// in on make-choices (stamped on the block), out on read-answer (read
@@ -390,7 +409,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// +`sprite` port 2026-09-24 (DESIGN-sprites §6): a person's pick for
 	// `core:spec/show-sprite`. Additive; re-recorded pre-release, not bumped.
 	"core:inlet/built-in-request@1": "1cc4d1e1258b67",
-	"core:outlet/delete-message@1": "1df20df447956b",
+	// +`taken` out port 2026-10-23 (RF fix 5): what went with the row, by
+	// the one retraction rule. Additive; re-recorded pre-release, not bumped.
+	"core:outlet/delete-message@1": "159fdeb33225b4",
 	"core:outlet/hide-message@1": "75981562f5865",
 	"core:outlet/edit-message@1": "1f8b8b73d43d57",
 	"core:outlet/swipe-message@1": "9f6bbbdd40316",
@@ -522,7 +543,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved 2026-10-03 (owner note 39): the `thinking` out-port is `reasoning`
 	// — one concept, one name (NOMENCLATURE §23). (was "1ae8e1f7b8300e")
 	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "160d9dc57f992a")
-	"core:oracle/generate-text@1": "440496fad192c",
+	// O6 (2026-10-20, layering lane 2): the requested-outputs param `outputs`
+	// (`string[]`, default `['text']`) and `media.emits` gains `audio` — evolved
+	// in place, no @2 before 0.7; a spec that states nothing asks for text as
+	// before. (was "440496fad192c")
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni): the `speechSampling` slot (O7) and `audio` in `media.accepts` (O4). (was "17b8798d59e1fa")
+	"core:oracle/generate-text@1": "640089256b79d",
 	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "338643a12d7a")
 	"core:oracle/graph-node-description@1": "20a8efcfbb22c",
 	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "144ed35a261c23")
@@ -554,6 +580,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// owns the handler. Policy since V6 — binding it moves nothing here.
 	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "15b834f7e24c86")
 	"core:oracle/speak@1": "d72aee8a96401",
+	// 🚧 New 2026-10-21 (PLAN-layering lane 8, O9): the transcribe step before placement.
+	"core:oracle/transcribe-audio@1": "184cad092b0093",
 	// Re-projected by **0113** — `loreType`, on the same terms as `name-entry`
 	// above.
 	// Moved (R-11, 2026-09-16 — U4): its `each-draft` interior point declares
@@ -1520,14 +1548,26 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// into what `available` leaves, degrade depth before drop
 	// (`rulesets/budget.ts fitContextBlocks`). Additive; absent `blocks`, the
 	// outputs are as before. (was "1949a34d1d682")
-	"core:task/context-budget@1": "f03c8b23cd82b",
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni): the additive `reads` out-port, what the transcribe step hears by. (was "f03c8b23cd82b")
+	"core:task/context-budget@1": "1637e88a7ff35c",
 	// NEW (rulesets wave 2–3, 2026-10-16/17): the ruleset handler every genre
 	// calls — `resolve` / `apply` / `advance` over a session's ruleset
 	// (PLAN-rulesets §25). Recorded as built: `scope` in-port (W3-S),
 	// `declaresRandomness`, no longer provisional.
 	// Moved 2026-10-18: 🚧 `viewer` in-port (whose eyes the blocks are for). Additive. (was "d17ff77dd78f2")
-	"core:task/ruleset-resolve@1": "1c67b2caa9974",
-	"core:task/resolve-tasks@1": "8b29345b105df",
+	// Moved 2026-10-23 (rulesets as functions D3, D7): the `replySchema` out-port (lane A2), the `event` in-port and the `emits` parameter (merge M1). Additive. (was "1c67b2caa9974")
+	"core:task/ruleset-resolve@1": "1648ecf3a7d5f0",
+	// RETIRED 2026-10-20 (PLAN-layering lane 3): `core:task/resolve-tasks@1` —
+	// the genre tasks it resolved became routines and their duties
+	// (below). Never released: added 2026-10-19, after 0.6.0-pr-5, so no
+	// install's stored spec pins it. (was "8b29345b105df")
+	// NEW 2026-10-20 (PLAN-layering lane 3): the duties — a reply's, a
+	// reckoning routine's, a sweep routine's own on/off settings (reach
+	// `owner`), publishing `modes` at the routine's mode. A new type each.
+	// Moved 2026-10-23 (rulesets as functions D7, lane A2): the `changes` duty — *Replies carry changes*, off, owner reach; its mode key `reply-changes`. (was "813e35d0b16fc")
+	"core:task/reply-duties@1": "95072a19b7e5b",
+	"core:task/reckoning-duties@1": "1ff656be4784e3",
+	"core:task/sweep-duties@1": "1c9d02b72a380e",
 	// Re-projected by 0191 (policy answer 3). Two changes, one hash move: the
 	// dead `strategy` and `dedup` parameters are gone — the binding read
 	// neither, `strategy` was 0.5's engine choice that wiring replaced, and
@@ -1787,6 +1827,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// The data scope (2026-10-12): JSON in, JSON out, the script step's kind.
 	// A new type — inserts a row, conflicts with nothing, needs no migration.
 	"core:script:data/transform@1": "be44ed70e3d72",
+	// NEW 2026-10-20 (PLAN-layering D2, lane 1; pinned in lane 3): a plugin
+	// cadence's due-or-not verdict. A new type — inserts a row, needs no migration.
+	"core:script:cadence/due@1": "5f31a4f002da8",
 	// Local image generation: the modality twin of generate-text, same node kind,
 	// its shape naming which one. A new type — inserts a row, needs no migration.
 	// Gained a `params` slot, holding `streaming` alone — the node had none, so
@@ -2129,12 +2172,16 @@ describe("published type content hashes", () => {
 			reviewDefault: generate.reviewDefault === "on" ? "off" : "on",
 			toggleable: !generate.toggleable,
 			provisional: true,
+			previewRunsThrough: true,
 			public: !generate.public,
 			timeoutMs: 1,
 			timeoutKind: generate.timeoutKind === "idle" ? "wall" : "idle",
 			usage: "somewhere.else",
 			// I12: what a model call runs best on — a suggestion, never hashed.
-			prefers: { sampling: "sampling-extraction", tier: "fast" }
+			prefers: { sampling: "sampling-extraction", tier: "fast" },
+			// 🚧 D3: the entities an inlet's ports stand for — fit reads them,
+			// never hashed (lane 1, 2026-10-20).
+			entities: { scope: "session" }
 		}
 		for (const key of DESCRIPTOR_POLICY_KEYS)
 			expect(hashOf({ ...generate, [key]: moved[key] }), key).toBe(before)

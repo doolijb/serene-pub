@@ -18,6 +18,7 @@ import * as schema from "$lib/server/db/schema"
 import { defineAttributeSlot, genre, getAttributeSlot, _clearAttributeSlots } from "@serene-pub/sdk"
 import "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -84,7 +85,7 @@ async function world(opts: { slots?: string[]; custom?: boolean } = {}) {
 		])
 		.returning()
 	const GENRE = `test:genre/locations-${suffix}`
-	genre(GENRE, {
+	genreKeeping(GENRE, {
 		name: { en: "Places" },
 		family: "test",
 		slots: (opts.slots ?? [BAG, HP]).map((id) => getAttributeSlot(id)!),
@@ -188,7 +189,8 @@ describe("the doors gate a place like any owner", () => {
 		await expect(proposeChange(db(), ctx, change)).rejects.toThrow(/not tracked in this session/)
 	})
 
-	test("a pick brings a slot in for places, as for everyone (genre allows custom)", async () => {
+	// 🚧 RF fix 8: a session adds no attributes — a stored pick no longer brings a slot in, for places or anyone.
+	test("a stored pick brings nothing in: the session tracks only what its rules and its host keep", async () => {
 		declareSlots()
 		const w = await world({ slots: [HP], custom: true })
 		const { applyChange } = await import("$lib/server/state/write")
@@ -196,7 +198,7 @@ describe("the doors gate a place like any owner", () => {
 		const change = { owner: place(w.crypt.id), slotId: BAG, op: "add" as const, items: ["lantern"] }
 		await expect(applyChange(db(), ctx, change)).rejects.toThrow(/not tracked/)
 		await testDb.insert(schema.sessionAttributePicks).values({ sessionId: w.session.id, slotId: BAG, enabled: true })
-		await applyChange(db(), ctx, change)
+		await expect(applyChange(db(), ctx, change)).rejects.toThrow(/not tracked/)
 	})
 
 	test("a cast-only slot does not apply to a place", async () => {

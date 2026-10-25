@@ -21,9 +21,9 @@ Four ideas carry the whole page.
 - **A connection is a place.** It holds an address, an API key where the service needs one, and a few settings about how requests are sent. It does not, by itself, pick a model.
 - **A connection has models.** Serene Pub asks the service which models it offers and keeps that list up to date. One connection to OpenRouter can offer hundreds; one llama.cpp offers the one it was started with.
 - **A loadout is what a kind of work runs on.** Writing replies, drawing pictures, embeddings, named entities and the rest are kinds of work the pub needs done. A **loadout** names a connection _and_ one of its models, a **pair** such as _Nemo 12B · KoboldCPP_, plus the sampling config it is driven with. Each kind of work has a **default loadout**: _the Reply loadout_ for replies, _the Images loadout_ for pictures, _the Embeddings loadout_, _the Entities loadout_ and _the Narration loadout_. A default loadout with no pair is switched off, which is fine for every one except Reply. Serene Pub also ships specialist loadouts, such as _Extraction_ for summaries, that start **unfilled** and simply use the default loadout of their kind until you fill them. You fill them in the [Loadouts view](#loadouts), in [Admin › Models › Loadouts](#admin--models--loadouts), or with **Use in…** wherever a model is listed. What a connection or a model _can do_ (chat, draw, embed, read pictures, stream, call tools) is its **capabilities**: a loadout can only be given a model whose capabilities include its kind of work.
-- **A pipeline can ask for a different model.** Each model call in a pipeline names a loadout (summaries name _Extraction_), and its configuration can also name a pair or a sampling config for that one call, for example a small fast model for Adventure's planner. Anything it leaves unset comes from its loadout, and an unfilled loadout uses the default loadout of its kind. See [Pipelines → Model and sampling](./pipelines.md#model-and-sampling).
+- **A pipeline can ask for a different model.** Each model call in a pipeline names a loadout (summaries name _Extraction_), and the pipeline's settings can also name a pair or a sampling config for that one call, for example a small fast model for the Dungeon Crawler's planner. Anything it leaves unset comes from its loadout, and an unfilled loadout uses the default loadout of its kind. See [Pipelines → Model and sampling](./pipelines.md#model-and-sampling).
 
-A **session never picks a connection or a model.** Its replies use whatever its pipeline configuration names, else the Reply loadout. To change the model a session uses, an administrator changes it in **Admin › Pipelines** (see [Sessions → Which connection a session uses](./sessions.md#which-connection-a-session-uses)).
+A **session never picks a connection or a model.** Its replies use whatever its pipeline names, else the Reply loadout. To change the model a session uses, an administrator changes it in **Admin › Pipelines** (see [Sessions → Which connection a session uses](./sessions.md#which-connection-a-session-uses)).
 
 ## The Models view
 
@@ -89,9 +89,9 @@ There are three places in the view: the list, a connection, and a model. **Back*
 - **Filter** matches a connection's name, service, address and the names of its models. The menu beside it narrows the list to _Needs attention_ (every gold or red connection: unfinished or broken), or the connections that can serve _Chat_, _Images_, _Embeddings_ or _Entities_. The two buttons after it show the connections as a **list** or as **cards**; your choice is remembered in this browser.
 - **The connections**, in two groups: **On this machine** (_private · free_) and **Services** (_billed per message_). The group comes from the kind of connection: KoboldCPP, Ollama, LM Studio, llama.cpp, Stable Diffusion, ComfyUI and the local ONNX models count as on this machine wherever their address points, and OpenAI, Anthropic, the OpenAI-compatible services and the online image services (AI Horde, NovelAI, Black Forest Labs) count as services.
 
-Each row shows the connection's name, the host under it (or the host's own error when something failed), and on the right its **state** and one figure, such as _Ready · 9 models_ or _Stopped · 2 on disk_. A card shows the same, with room for all of it at once: what kind of connection it is, its state, how many models it has, its host, and its action. A small label after the name says what kind of connection it is, unless the name already says so. A gold star marks each default loadout the connection fills, so you can see at a glance which connection your sessions use. A row or card offers at most one quick action, such as **Start**, **Set up**, **Choose**, **Fix** or **Refresh**. Tap it to open the connection.
+Each row shows the connection's name, the host under it (or the host's own error when something failed), and its **state**: a small coloured dot and a few quiet words with one figure, such as _Ready · 9 models_, _Stopped · 2 on disk_ or _Not reachable · 127.0.0.1:11434_. A card shows the same, with room for all of it at once: what kind of connection it is, its state, how many models it has, its host, and its action. A small label after the name says what kind of connection it is, unless the name already says so. A gold star marks each default loadout the connection fills, so you can see at a glance which connection your sessions use. A row or card offers at most one quick action, such as **Start**, **Set up**, **Choose**, **Fix** or **Refresh**. Only two are ever filled in gold: **Start** on the connection that can start, and **Fix** on a connection that is blocking a loadout (below). Tap the row to open the connection.
 
-There are five kinds of state, and only one of them is red:
+There are five kinds of state, each with its own dot colour:
 
 | State                                                                     | Colour | Means                                                                                                                                   |
 | ------------------------------------------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
@@ -99,9 +99,11 @@ There are five kinds of state, and only one of them is red:
 | **Stopped**, **Offline**, **Not tested**, **Installed**, **Not in use** | grey   | Set up, nothing wrong, not running. **Offline** is a KoboldCPP that is switched off with its files kept; **Start** switches it back on. **Not in use** is a local embeddings or entities connection while its loadout uses another connection. Its counterpart, **In use**, means the Embeddings or Entities loadout runs on it; **Loadout unfilled** means that loadout is empty. |
 | **Needs a key**, **Not set up**, **Pick a model**, **N no longer listed** | gold   | It is waiting for _you_. Nothing has failed.                                                                                            |
 | **Checking**, **Downloading**                                             | amber  | Something is in progress.                                                                                                               |
-| **Not working**, **Not reachable**, **Crashed**                           | red    | It was set up and it still failed.                                                                                                      |
+| **Not working**, **Not reachable**, **Crashed**                           | grey, or red | It was set up and it still failed. Red only when a loadout runs on it (see below).                                       |
 
 A connection you created a minute ago and haven't given a key yet is gold, not red: it is unfinished, not broken.
+
+**Red means a loadout is blocked.** A failing connection is drawn red (red words, a red dot and a red bar along the row's edge) only when one of your default loadouts runs on it, so replies, pictures or whatever that loadout does will fail until it is fixed. That is the same case **Admin › Overview** lists under _Needs you_. A failing connection that nothing uses keeps a grey dot and says what went wrong, quietly; fix it or delete it when you like.
 
 **Pick a model** means the connection works and lists models that can chat, but the Reply loadout is still empty. Its action, **Choose**, opens the connection, whose Models tab is where you choose. Every connection that can chat says this until the Reply loadout is filled from any of them; then they all read **Ready**.
 
@@ -154,9 +156,9 @@ A **loadout** is a named choice of engine: a model on a connection, and the samp
 
 - **Text:** _Reply_ (every session reply and form answer), _Tool calling_, _Extraction_ (summaries and the state keeper), _Scene prompt_.
 - **Images:** _Images_ (the Image action), _Portrait_, _Sprites_, _Scene_.
-- **Audio:** _Narration_. **Embeddings:** _Embeddings_. **Entities:** _Entities_.
+- **Audio:** _Narration_ (reads text aloud), _Transcription_ (writes down what a voice note says, for a reply that can't hear it). **Text and audio:** _Spoken reply_ (one model writes a reply and speaks it). **Embeddings:** _Embeddings_. **Entities:** _Entities_.
 
-One loadout per kind of work is its **default**, marked gold: _the Reply loadout_ for replies, _the Images loadout_ for pictures, then _Embeddings_, _Entities_ and _Narration_. Choosing a model for a kind of work anywhere (the wizard, **Use in Reply**, **Use in…**, Admin › Models › Loadouts) fills its default loadout.
+One loadout per kind of work is its **default**, marked gold: _the Reply loadout_ for replies, _the Images loadout_ for pictures, then _Embeddings_, _Entities_, _Narration_, _Transcription_ and _Spoken reply_. Transcription and Spoken reply arrive unfilled and stay off until you fill them (see [Sound from OpenAI](#sound-from-openai)). Choosing a model for a kind of work anywhere (the wizard, **Use in Reply**, **Use in…**, Admin › Models › Loadouts) fills its default loadout.
 
 **Unfilled falls back.** A loadout with no model yet is **unfilled**, and anything that names it simply runs on the default loadout of its kind. So on a fresh pub everything runs on the Reply loadout's one model, and you only fill _Extraction_ when you want summaries on something else, say a small fast model. The tile says _Unfilled — falls back to Reply_ until you do.
 
@@ -298,6 +300,16 @@ Many services accept requests in the same shape as OpenAI's API, so one kind of 
 | Aphrodite Engine _(Experimental)_      | `http://localhost:2242/v1/`                                |
 
 _Experimental_ services have had less testing with Serene Pub; check the address and the service's own notes. Everything a preset fills in can be changed afterwards.
+
+### Sound from OpenAI
+
+An **OpenAI (Official)** connection can hear and speak as well as write. Three loadouts use it:
+
+- **Transcription** writes down what a voice note says, so a reply whose model can't hear still reads it. Put a transcription model in it (`whisper-1`, `gpt-4o-transcribe`); each recording is heard once and the words are kept with the file.
+- A reply model that **Hears** (an OpenAI audio model) is sent voice notes as sound, WAV or MP3, instead of their words. Tick **Hears** on it.
+- **Spoken reply** is for a model that writes a reply and speaks it in the same call. A step asks for it when its **Outputs** include audio; the reply's sound then plays under the message, and its transcript is the message's text. Tick **Speaks** on the model. The voice is the **Narration** loadout's sampling (**Voice**, **Speed**), unless the step picks its own **Speech sampling**.
+
+A llama.cpp server can also be sent voice notes when its model was loaded with an audio projector: switch on **Hearing** under **What this connection can do**. Other connection types don't send sound to their model; their replies get the words instead, through the Transcription loadout.
 
 ### Embeddings from an OpenAI-compatible service
 
@@ -593,26 +605,28 @@ Ollama and the KoboldCPP run by Serene Pub have no **Add** or **Remove**: their 
 
 ### What a model is for
 
-A model's view has **What it's for**. The choices are the kinds of work its connection can do, such as **Chat**, **Image generation** and **Embeddings**, plus **Not sure**. A connection whose models all do one kind of work, such as Anthropic, doesn't show it.
+A model's view has **What it's for**: what the model **writes** and what it **reads**, ticked separately — **Writes replies**, **Draws pictures**, **Speaks**, **Hears** and **Sees**. Only the choices its connection can carry are shown; a connection whose models can only do one thing doesn't show it. One model can tick several: an OpenAI audio model **Writes replies**, **Speaks** and **Hears**. An embedding or entities model has one job and keeps the single choice (**Embeddings**, **Named entities** or **Not sure**).
+
+Ticking **Hears** or **Sees** says what the model reads; until you tick either, the connection's own switches (**Vision**, **Hearing**) decide whether it gets pictures and sounds. Unticking everything it writes is **Not sure**, which offers it for every kind of work its connection can do.
 
 It decides which models are offered for which loadout. A model for embeddings isn't offered for chat, and a chat model isn't offered for embeddings: **Use** and **Use in…** leave it out, **Admin › Models › Loadouts** refuses it, and a run that names it for the wrong kind of work stops with a sentence saying so. **Not sure** offers the model for every kind of work its connection can do.
 
 Some services say what each model is for, and Serene Pub fills it in from their list: Ollama, LM Studio, llama.cpp, KoboldCPP, OpenRouter, Together AI, Mistral AI and Google Gemini. Others don't, OpenAI's own service and LocalAI among them, so their models start as **Not sure** and every chat model is offered for embeddings too. The exception is image models whose names Serene Pub recognises, such as OpenAI's `gpt-image` and `dall-e` models, which start as **Image generation**. Set it on the models you use. When the service does say, its answer wins and replaces yours on the next refresh; when it says nothing, your choice is kept.
 
-A change that would break something is refused. **What it's for** can't be changed while a loadout or a pipeline configuration uses the model for work the new choice can't do; the message names each one, so choose another model there first. A model in the Reply loadout, for example, can't be set to **Embeddings** until another model is put in the Reply loadout (_This model is in the Reply loadout._).
+A change that would break something is refused. **What it's for** can't be changed while a loadout or a pipeline's settings use the model for work the new choice can't do; the message names each one, so choose another model there first. A model in the Reply loadout, for example, can't be set to **Embeddings** until another model is put in the Reply loadout (_This model is in the Reply loadout._).
 
 When the service's own list changes what a model is for, its answer stands even if that model is in a default loadout. The loadout isn't cleared or moved to another model; it is shown as broken. **Admin › Models › Loadouts** marks it **Can't do this** and says why, the status strip and loadout tiles show it in red as _can't do this loadout's work_, and Admin's **Needs you** lists it, for example _The Embeddings loadout can't use its model_, with **Choose a model**. Runs that need it stop with a sentence until you choose a model that can. The same happens when that kind of work is switched off on the connection the loadout uses.
 
 ### Choosing a pair
 
 - A [loadout's editor](#the-loadout-editor) sets one pair per loadout, and **Admin › Models › Loadouts** does the same for each default loadout. In the editor you pick the model itself, from one list of every connection's models; in Admin, choosing a connection picks its first usable model and the model picker beside it changes that.
-- A pipeline configuration's **Model** setting picks a pair the same way, as one choice (see [Pipelines → Model and sampling](./pipelines.md#model-and-sampling)).
+- A pipeline's **Model** setting picks a pair the same way, as one choice (see [Pipelines → Model and sampling](./pipelines.md#model-and-sampling)).
 - A model's own **Use in…** puts it in one default loadout it can run, or all of them.
 - A model that is deleted leaves whatever used it unset, with a message naming the fix. A model that is switched off or no longer listed is refused when used, rather than quietly replaced with another.
 
 ## Sampling configs
 
-A **sampling config** is a named set of generation settings: how adventurous or predictable a model's writing is, how long a reply may be, how much of the story it is sent. Each loadout names one, and a pipeline configuration can pick a different one for any of its model calls.
+A **sampling config** is a named set of generation settings: how adventurous or predictable a model's writing is, how long a reply may be, how much of the story it is sent. Each loadout names one, and a pipeline's settings can pick a different one for any of its model calls.
 
 Configs are edited in the **Sampling** view, on the rail. Its list groups every config by what it samples, **Large language models** or **Image generation**; a row says whether the config is built in, carries a star when a default loadout uses it (its tooltip names the loadouts, _In the Reply loadout_), and says how many settings it turns on and what uses it. **New** makes a config. Pick one and its editor opens beside the list: its name, its [parameters](#adjustable-parameters) with **Choose parameters**, and a **Used by** card naming the default loadouts that use it (each opens [that loadout](#the-loadout-editor) in Loadouts) and the pipelines that pick it (each opens in **Admin › Pipelines**). **Save** keeps your changes; **⋯** holds **Set as default…**, **Duplicate**, **Reset unsaved changes** and **Delete**, whose dialog says which jobs and pipelines lose it.
 

@@ -10,6 +10,8 @@
 /** A lorebook as the book list knows it: its name and its figures. */
 export interface DeletingBook {
 	name?: string | null
+	/** 🚧 The book kind (`lorebooks.kind`): a starter lorebook is said as one. */
+	kind?: string | null
 	/** Non-archived entries of every type, places included. */
 	entryCount?: number | null
 	/** Non-archived entries, keyed by entry type id. */

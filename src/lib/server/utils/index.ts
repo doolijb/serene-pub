@@ -12,6 +12,7 @@ import {
 	mediaFor,
 	reorderMedia
 } from "$lib/server/media"
+import { MediaVisibility } from "$lib/shared/constants/MediaVisibility"
 
 // Re-exported, not defined here: importing this barrel opens a database, and
 // the callers that need only a path must not have to. See `./appDataDir`.
@@ -139,6 +140,83 @@ export async function handleCharacterAvatarUpload({
  * before, they are an exact query rather than a guess.
  */
 
+/**
+ * The bytes a socket upload carried, or null when it carried none. Socket.IO
+ * hands a browser `File` over as a Buffer; a typed array arrives as a
+ * Uint8Array or an ArrayBuffer.
+ */
+export function uploadedBytes(raw: unknown): Buffer | null {
+	if (Buffer.isBuffer(raw)) return raw
+	if (raw instanceof Uint8Array) return Buffer.from(raw)
+	if (raw instanceof ArrayBuffer) return Buffer.from(new Uint8Array(raw))
+	return null
+}
+
+/**
+ * Files are one row per (user, bytes), so an upload may come back as a file
+ * the person already has. A private one stays private — other people could
+ * never see it as the picture they are shown — so it is refused, never
+ * re-stamped (the `lorebooks:uploadMemberFace` rule).
+ */
+function refusePrivateReuse(
+	created: Awaited<ReturnType<typeof createMedia>>,
+	what: string
+) {
+	if (!created.created && created.file.visibility === MediaVisibility.PRIVATE)
+		throw new Error(
+			`That picture is one of your private files, so nobody else could see it as ${what}. Choose another picture.`
+		)
+}
+
+/**
+ * The account's avatar (`users.avatar_media_id`). The file is personal — no
+ * entity parent, the `avatars` bucket — and the pointer is the role. As with
+ * a character's, the previous file is not deleted (the note above).
+ */
+export async function handleUserAvatarUpload({
+	userId,
+	avatarFile
+}: {
+	userId: number
+	avatarFile: Buffer
+}) {
+	const created = await createMedia(db, {
+		userId,
+		bytes: avatarFile,
+		bucket: "avatars"
+	})
+	refusePrivateReuse(created, "your avatar")
+	await db
+		.update(schema.users)
+		.set({ avatarMediaId: created.file.id })
+		.where(eq(schema.users.id, userId))
+	return created
+}
+
+/**
+ * A lorebook's cover image, STORED only: the caller points
+ * `lorebooks.cover_media_id` at it inside the save's own transaction. The
+ * file is **lorebook-owned media** (`files.lorebook_id`), so it stays out of
+ * the person's backgrounds and out of every card's gallery.
+ */
+export async function storeLorebookCover({
+	userId,
+	lorebookId,
+	coverFile
+}: {
+	userId: number
+	lorebookId: number
+	coverFile: Buffer
+}) {
+	const created = await createMedia(db, {
+		userId,
+		lorebookId,
+		bytes: coverFile
+	})
+	refusePrivateReuse(created, "this book's cover")
+	return created
+}
+
 export function getUserBackgroundsDir({ userId }: { userId: number }) {
 	const appData = getAppDataDir()
 	return path.join(appData, "data", "users", String(userId), "backgrounds")
@@ -165,7 +243,15 @@ export async function handleUserBackgroundUpload({
 /** A user's uploaded backgrounds, newest last. Shipped defaults are static
  *  assets and are listed separately by `getDefaultBackgrounds`. */
 export async function listUserBackgrounds({ userId }: { userId: number }) {
-	return clientMediaFor(db, { userId })
+	// The account's avatar is a personal file too; it is not a background.
+	const [user] = await db
+		.select({ avatarMediaId: schema.users.avatarMediaId })
+		.from(schema.users)
+		.where(eq(schema.users.id, userId))
+	const media = await clientMediaFor(db, { userId })
+	return user?.avatarMediaId
+		? media.filter((m) => m.id !== user.avatarMediaId)
+		: media
 }
 
 export async function deleteUserBackground({

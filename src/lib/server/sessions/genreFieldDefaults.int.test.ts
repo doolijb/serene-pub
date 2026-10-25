@@ -7,10 +7,12 @@
  * than this fix — gets it from the same place, and a stored value (or a
  * genre pin) still wins.
  *
- * The Lair is the real case: its respond spec reads `tone` and
- * `trustNarrator`, and a preset-less session ran with `fields: {}`. Its
- * retired `turnStyle` (R12, 2026-09-28) shows the other half of the rule:
- * a stored value under a key the genre no longer declares is not a field.
+ * The Lair is the real case: its reply reads `tone`, `roomsLayer` and the
+ * dice switches, and a preset-less session ran with `fields: {}`. Its
+ * retired `turnStyle` (R12, 2026-09-28) — and, since the rewrite
+ * (2026-10-21), `partySpeech` and `trustNarrator` — show the other half of
+ * the rule: a stored value under a key the genre no longer declares is not
+ * a field.
  */
 
 import { beforeAll, describe, expect, it } from "vitest"
@@ -56,13 +58,15 @@ beforeAll(async () => {
 describe("genre field defaults (B16x)", () => {
 	it("a Lair session created with no preset has its declared defaults", async () => {
 		const session = await lairSession({})
-		// `sanctumSteers` (R13, 2026-09-28): on by default. `partySpeech`
-		// (owner ruling 2026-09-30): each delver speaks, by default.
+		// `sanctumSteers` (R13, 2026-09-28): on by default; the rooms layer
+		// on, the GM asked before rolling, dice shown (rewrite, 2026-10-21).
 		const expected = {
 			tone: "grounded",
-			trustNarrator: false,
+			roomsLayer: true,
 			sanctumSteers: true,
-			partySpeech: "each"
+			askBeforeRolling: true,
+			autoRoll: false,
+			showDice: true
 		}
 		// The run's read (the inlet's `fields`) and the settings document agree.
 		expect(await genreFieldsFor(db, session.id)).toEqual(expected)
@@ -74,34 +78,38 @@ describe("genre field defaults (B16x)", () => {
 	it("an explicit value wins over the declared default", async () => {
 		const session = await lairSession({
 			tone: "grim",
-			trustNarrator: true
+			showDice: false
 		})
 		expect(await genreFieldsFor(db, session.id)).toEqual({
 			tone: "grim",
-			trustNarrator: true,
+			roomsLayer: true,
 			sanctumSteers: true,
-			partySpeech: "each"
+			askBeforeRolling: true,
+			autoRoll: false,
+			showDice: false
 		})
 	}, 60_000)
 
 	it("an older session with no stored field resolves to the default", async () => {
-		// A row from before `trustNarrator` existed: it stored one field, and
-		// nothing has been written since. No migration seats the rest.
+		// A row from before the dice switches existed: it stored one field,
+		// and nothing has been written since. No migration seats the rest.
 		const session = await lairSession({ tone: "pulpy" })
 		const fields = await genreFieldsFor(db, session.id)
 		expect(fields.tone).toBe("pulpy")
-		expect(fields.trustNarrator).toBe(false)
+		expect(fields.askBeforeRolling).toBe(true)
 	}, 60_000)
 
-	it("a stored value under a retired key is inert (R12: the Lair's turnStyle)", async () => {
+	it("a stored value under a retired key is inert (R12: the Lair's turnStyle; the rewrite's partySpeech, trustNarrator)", async () => {
 		// The owner ruled no back-compat: the JSON keeps the key, and no read
 		// passes it on — not the run's fields, not the settings document.
-		const session = await lairSession({ turnStyle: "narrator" })
+		const session = await lairSession({ turnStyle: "narrator", partySpeech: "castellan", trustNarrator: true })
 		const expected = {
 			tone: "grounded",
-			trustNarrator: false,
+			roomsLayer: true,
 			sanctumSteers: true,
-			partySpeech: "each"
+			askBeforeRolling: true,
+			autoRoll: false,
+			showDice: true
 		}
 		expect(await genreFieldsFor(db, session.id)).toEqual(expected)
 		expect((await resolveSessionSettings(db, session.id))!.fields).toEqual(

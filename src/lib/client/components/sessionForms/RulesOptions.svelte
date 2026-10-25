@@ -91,7 +91,7 @@
 					<button
 						type="button"
 						class="btn btn-sm {view.preset === preset.id
-							? 'preset-filled-primary-500'
+							? 'preset-pressed'
 							: 'preset-tonal'}"
 						aria-pressed={view.preset === preset.id}
 						title={preset.description}

@@ -84,9 +84,11 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-19 (PLAN-genre-restructure lane 2): the voices group — a
 	// `tasks` step and `unprompted` (`core:task/turn-unprompted@1`) before the
 	// write, the narrator's line Narrate. Edited in place under the freeze. (was "404361a5ed026")
-	"core:spec/story-turn-order@1.0.0": "a4799f0c90c18",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was 'a4799f0c90c18')
+	"core:spec/story-turn-order@1.0.0": "c9fcf581d1791",
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "1e155929f443a5")
-	"core:spec/guide-turn-order@1.0.0": "127cf804a74c6d",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '127cf804a74c6d')
+	"core:spec/guide-turn-order@1.0.0": "6e430e962cd0b",
 	// Moved 2026-09-27 (lair pass B9): the `TURN_ORDER_NARRATOR_EVENTS` list gains `message-deleted` and
 	// `message-hidden`, so Continue re-decides after a delete or a hide.
 	// Proven: with those two event ids removed, the document hashes back to
@@ -105,7 +107,8 @@ const PUBLISHED: Record<string, string> = {
 	// lane's edits reverted (lair.ts, turnOrder.ts, genres.ts) hashes back to
 	// every old Lair pin. (was "1bee84716ce1fa")
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "c0edd4e6d3d23")
-	"core:spec/lair-turn-order@1.0.0": "1a6264ad2eae4f",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '1a6264ad2eae4f')
+	"core:spec/lair-turn-order@1.0.0": "f6801bd2a7aac",
 	/**
 	 * ⚠ Every respond spec bumped a semver at A6 (§4.4, §7): the `speaker`
 	 * node moved to the turn-order spec and `placeholder` returned to
@@ -189,7 +192,15 @@ const PUBLISHED: Record<string, string> = {
 	// labelled by purpose — Reply, What the reply changed, Look back over the
 	// story — and the Review arms' step labels. Edited in place under the
 	// freeze. (was "1d2f322ed2c3c9")
-	"core:spec/story-respond@1.21.0": "f5dec0a9f3778",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was 'f5dec0a9f3778')
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni O5/O7/O9): the `heard` transcribe-audio step before placement, `generate`'s speech sampling, `save`'s parts; every `generate-text` node names its speech sampling. Edited in place. (was 'e07249d51bcf4')
+	// Moved 2026-10-21 (PLAN-layering repair 1): the `heard` step declares no status — a declared one shows on every run; the step says *listening* only when it hears. (was "138b8589c3e476")
+	// Moved 2026-10-21 (lane F1, R54): the `context` step offers its prompt choice to the session owner (`expose.promptReach: 'owner'`). (was "1a523538d00b9d")
+	// Moved 2026-10-23 (rulesets as functions D7, lane A2): *Replies carry changes* — the `changes` branch (shape → generate-json → the words saved, the changes parsed and applied or proposed at the reply's `reply-changes` mode) beside `reply.prose.*`, which the words' steps moved under. Edited in place. (was "11bb370d5bdf34")
+	// Moved 2026-10-23 (core genres on the seams, merge GM): S2: the reply's commit reads its own mode (`reply-changes`), `asked` takes its params, and an `owners` step names whose changes (lane G1). Edited in place. (was "179a3507fd2182")
+	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read; the changes branch's `message` names its params. Edited in place. (was "6cc089a5fe8b0")
+	// Moved 2026-10-23 (RF fix 3): the `reply` junction holds only what differs — the prose call; the changes call, its `owners`, `shape`, `asked` and, last, `message` — and ONE tail after it (`save` reading the junction's `text`, the commit's Apply, `spritePick`, `spriteShow`) runs once at the top-level keys; the never-reachable Review arm is gone. Edited in place. (was "b30e48c4270fb")
+	"core:spec/story-respond@1.21.0": "e396fa6e5ffb8",
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
 	// two keys stripped, the document hashes back to the old pin. (was 'b0c3e32a16d1d')
@@ -227,7 +238,10 @@ const PUBLISHED: Record<string, string> = {
 	// 'picker'`). Edited in place under the freeze. Measured with other lanes'
 	// in-flight core-catalog edits in the tree. (was "abff4d2cceef8")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "100e883f026237")
-	"core:spec/guide-respond@1.2.0": "14bc517e7b7e62",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '14bc517e7b7e62')
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni O5/O7/O9): the `heard` transcribe-audio step before placement, `generate`'s speech sampling, `save`'s parts; every `generate-text` node names its speech sampling. Edited in place. (was '21c627a8d31cf')
+	// Moved 2026-10-21 (PLAN-layering repair 1): the `heard` step declares no status — a declared one shows on every run; the step says *listening* only when it hears. (was "ff693a649fd3e")
+	"core:spec/guide-respond@1.2.0": "1273d3e728562b",
 	// Moved 2026-09-27 (characterDetail genre field): Chat and Adventure
 	// declare `fields.characterDetail` (CHARACTER_DETAIL_FIELD: full / brief /
 	// speaker-only). Proven: a copy of core-catalog/src with just those two
@@ -239,17 +253,26 @@ const PUBLISHED: Record<string, string> = {
 	// carries Chat's shape, and the author's note field's `depth` default is
 	// 0 (was 4). Edited in place under the freeze. (was "1566992a444e50")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/create-chat`; nothing else changed. (was "18b84026deb74b")
-	"core:spec/assistant-answer-form@1.0.0": "3fd5d0832ce80",
-	"core:spec/assistant-create@1.0.0": "63c78ba748cb9",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '3fd5d0832ce80')
+	"core:spec/assistant-answer-form@1.0.0": "1a5af4b489d165",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '63c78ba748cb9')
+	"core:spec/assistant-create@1.0.0": "1180def0f20ddf",
 	// Moved 2026-10-19 (PLAN-genre-restructure lane 2): `tasks` at the head,
 	// the `retrieval` junction, and *Remember things* (★K) after the answer.
 	// Edited in place under the freeze. (was "16a65b471d2187")
 	// Moved 2026-10-19 (main session after lane 2): the model calls labelled
 	// by purpose — Reply, Reply with tools, Remember things. Edited in place
 	// under the freeze. (was "1c74aca94a7dbd")
-	"core:spec/assistant-respond@1.0.0": "1f4d71c32add75",
-	"core:spec/assistant-turn-order@1.0.0": "12e06b4f3ee833",
-	"core:spec/story-create@2.2.0": "1244f17da8e07b",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '1f4d71c32add75')
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni O5/O7/O9): the `heard` transcribe-audio step before placement, `generate`'s speech sampling, `save`'s parts; every `generate-text` node names its speech sampling. Edited in place. (was 'd5e414d4ae2f')
+	// Moved 2026-10-21 (PLAN-layering repair 1): the `heard` step declares no status — a declared one shows on every run; the step says *listening* only when it hears. (was "1c104e3f27d708")
+	"core:spec/assistant-respond@1.0.0": "1b6b90c7f64460",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '12e06b4f3ee833')
+	"core:spec/assistant-turn-order@1.0.0": "7e2fbf0f4dfd1",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '1244f17da8e07b')
+	// Moved 2026-10-21 (lane F1): Story's declaration lost `applyActionChanges` (R55). (was "ae777ed4f3b4e")
+	// Moved 2026-10-23 (core genres on the seams, merge GM): Story's `about` and its difficulty words corrected, in the genre shape it carries (lane G0, S7). Edited in place. (was "1b30b1e4ad7357")
+	"core:spec/story-create@2.2.0": "37a22c038f516",
 	/**
 	 * The guide genre (plans/29 R-18; U5g, 2026-09-16) — two new slugs, and
 	 * nothing above them moves. `create-guide` carries the genre's
@@ -285,7 +308,9 @@ const PUBLISHED: Record<string, string> = {
 	// `drizzle/0101_create_guide_greeting_reprojection`, which re-seeds the
 	// shipped config so an existing install's Guide greets too.
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/create-guide`; nothing else changed. (was "6b6c45bf731ba")
-	"core:spec/guide-create@1.1.0": "16fb2ead93ba5",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '16fb2ead93ba5')
+	// Moved 2026-10-23 (core genres on the seams, merge GM): the Guide's `tools` field dropped and its `about` written (lane G0, S8). Edited in place. (was "16e203934af640")
+	"core:spec/guide-create@1.1.0": "c06cc623f9142",
 	// (was "1d39898d4c7a0c") — W9 shape pins, see the note above adventure-ask.
 	"core:spec/guide-respond@1.0.0": "b7997d7b1d904",
 	/**
@@ -477,7 +502,9 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): `attachments` (history-attachments) + `attached` (place-attachments on `write`'s pair) before `prompt`, which reads `attached.messages`.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "e99170c35c4c0")
-	"core:spec/story-look@1.0.0": "d359d2d1b30f9",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was 'd359d2d1b30f9')
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni O7): every `generate-text` node names its speech sampling (`speechSampling: slot.speechSampling()`). Edited in place. (was '13a9a71d778ad4')
+	"core:spec/story-look@1.0.0": "bd03062aad518",
 	// ⚠ MOVED, in place, on the same unreleased-genre terms: Rest and Time
 	// passes ask `core:oracle/generate-json@1` for the keeper's own shape
 	// instead of parsing prose out of a prefilled reply.
@@ -520,7 +547,10 @@ const PUBLISHED: Record<string, string> = {
 	// outlet says `cause: 'keeper'` and `onRefusal: 'skip'`. Edited in
 	// place under the freeze. Measured with other lanes' in-flight core-catalog
 	// edits in the tree. (was "1466f141e5dc14")
-	"core:spec/story-rest@1.0.0": "8297e986b8bbc",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '8297e986b8bbc')
+	// Moved 2026-10-21 (lane F1): the `commit` junction reads the reckoning's mode (`routineModes`, R55), not `applyActionChanges`. (was "1f294045d3a082")
+	// Moved 2026-10-23 (core genres on the seams, merge GM): Rest names what the rules restore (`restores`, `core:script/story-rest-crib`, G1, S3) and applies at its own action's mode — the `commit` junction on the reckoning's mode is gone (GM, G1 ★3). Edited in place. (was "cda4746b28543")
+	"core:spec/story-rest@1.0.0": "6eb5ec3a35902",
 	// (was "135459cfe7c4c0" — R-8, see `adventure-look`)
 	// Hash moved (R-12, 2026-09-16): the generating step no longer wires
 	// `prompts: slot.prompts({ node: … })` — `core:oracle/generate-*@1`
@@ -567,7 +597,8 @@ const PUBLISHED: Record<string, string> = {
 	// skips the move with a ledger line instead of halting. Edited in
 	// place under the freeze. Measured with other lanes' in-flight core-catalog
 	// edits in the tree. (was "1b7157728a8132")
-	"core:spec/story-advance-time@1.0.0": "145dfed9e6763a",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '145dfed9e6763a')
+	"core:spec/story-advance-time@1.0.0": "8af797de995bf",
 	/**
 	 * Forms (plans/29 R-15 *Forms*; 30 §U5d, 2026-09-17) — five new slugs,
 	 * and the three create specs above move with their genre surface. The
@@ -607,9 +638,11 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): `attachments` (history-attachments) + `attached` (place-attachments on `write`'s pair) before `prompt`, which reads `attached.messages`.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "358cb55e1154a")
-	"core:spec/story-ask@1.0.0": "183f8263149ade",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '183f8263149ade')
+	"core:spec/story-ask@1.0.0": "aaaf5626cd65b",
 	// (was "1387dc7a4901d6") — W9 shape pins, see the note above adventure-ask.
-	"core:spec/story-answer@1.0.0": "3f7d64a64b379",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '3f7d64a64b379')
+	"core:spec/story-answer@1.0.0": "11d95fa0fe8f3e",
 	// (was "a2ddb2700ce09") — W9 shape pins, see the note above adventure-ask.
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
@@ -619,7 +652,8 @@ const PUBLISHED: Record<string, string> = {
 	// `attachments/promptPath.int.test.ts`). (was "ef5be600b6ed7")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/answer-form-chat`; nothing else changed. (was "1a1744b015b27a")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "a10f3d0d9292d")
-	"core:spec/story-answer-form@1.0.0": "105a87a0b6b917",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '105a87a0b6b917')
+	"core:spec/story-answer-form@1.0.0": "17692d8f0cdab5",
 	// (was "b89f3d6c0484b") — W9 shape pins, see the note above adventure-ask.
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
@@ -638,7 +672,8 @@ const PUBLISHED: Record<string, string> = {
 	// `attachments/promptPath.int.test.ts`). (was "811b474234fb8")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/answer-form-guide`; nothing else changed. (was "4cc69e9d12db0")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "ee8145c98c894")
-	"core:spec/guide-answer-form@1.0.0": "110dc3facd34ba",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '110dc3facd34ba')
+	"core:spec/guide-answer-form@1.0.0": "1c9bdc6da0eb3a",
 	"core:spec/create-chat@2.1.0": "ea80f2679383c",
 	"core:spec/create-chat@2.0.0": "a6281141b21ea",
 	// 1.16.0 / 1.10.0: the three lore gather branches and the narrator's trigger query
@@ -891,7 +926,10 @@ const PUBLISHED: Record<string, string> = {
 	// in-flight core-catalog edits in the tree. (was "1fa23cc37eaad0")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/narrate-character`; nothing else changed. (was "8bfbf7d9b46e9")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "15899aae9ed73d")
-	"core:spec/story-side-character@1.0.0": "142a27f931338",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '142a27f931338')
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni O5/O7/O9): the `heard` transcribe-audio step before placement, `generate`'s speech sampling, `save`'s parts; every `generate-text` node names its speech sampling. Edited in place. (was '1bc0aee4f58ea7')
+	// Moved 2026-10-21 (PLAN-layering repair 1): the `heard` step declares no status — a declared one shows on every run; the step says *listening* only when it hears. (was "15aa6f9a036898")
+	"core:spec/story-side-character@1.0.0": "1f9200326c48e5",
 	// (was "b6ba835e86244", then "431aa4254af1", then "12971669b900fd",
 	//  then "bc304a8a52b71")
 	// ⚠ MOVED on the same terms as `narrate-character` above (09-B B4):
@@ -967,7 +1005,10 @@ const PUBLISHED: Record<string, string> = {
 	// in-flight core-catalog edits in the tree. (was "a98a294e26041")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/narrate`; nothing else changed. (was "cdba24cd29eaf")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "1890d6de7d7cfc")
-	"core:spec/story-narrate@1.11.0": "1814fbb71316e4",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '1814fbb71316e4')
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni O5/O7/O9): the `heard` transcribe-audio step before placement, `generate`'s speech sampling, `save`'s parts; every `generate-text` node names its speech sampling. Edited in place. (was '1d69e112b9b8a2')
+	// Moved 2026-10-21 (PLAN-layering repair 1): the `heard` step declares no status — a declared one shows on every run; the step says *listening* only when it hears. (was "14543f10b90f87")
+	"core:spec/story-narrate@1.11.0": "1015774ca55aa6",
 	// ⚠ `core:spec/respond@1.20.0`'s hash MOVED for the SECOND time without a
 	// bump, on the same terms as the two paragraphs above and paired with
 	// `drizzle/0106_continuation_prefill_reprojection`, which deletes its
@@ -1130,7 +1171,8 @@ const PUBLISHED: Record<string, string> = {
 	// `attachments/promptPath.int.test.ts`). (was "1b308b18a35d96")
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "17b311b14fdba7")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "8bc929819eff7")
-	"core:spec/summarize-world@1.3.0": "16b18ff001d740",
+	// Moved 2026-10-21 (lane F1): declares its `summarize-world` action (an audience naming nobody — the host fires it), inlet `{ suits: [] }` (R50). (was "16b18ff001d740")
+	"core:spec/summarize-world@1.3.0": "5761942287ba5",
 	// Moved 2026-09-30 (config grouping, catalog lane): `expose.label` (and, on
 	// a model call of a multi-call spec, `expose.purpose`) names the step in
 	// settings. Display text only; the run is unchanged. Proven: a copy of
@@ -1141,7 +1183,8 @@ const PUBLISHED: Record<string, string> = {
 	// `attachments/promptPath.int.test.ts`). (was "1bad3c7575bf71")
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "1832ba27d42a06")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "28cbabf6ea61b")
-	"core:spec/summarize-character@1.3.0": "a1ba26c4e2971",
+	// Moved 2026-10-21 (lane F1): declares its `summarize-character` action (an audience naming nobody — the host fires it), inlet `{ suits: [] }` (R50). (was "a1ba26c4e2971")
+	"core:spec/summarize-character@1.3.0": "6db76b9e73bdc",
 	// ⚠ `summarize-scene@1.3.0`'s hash MOVED a SECOND time, again under an
 	// unchanged version, and again paired with a migration —
 	// `drizzle/0104_ice_scene_cast_extraction.sql` deletes its published
@@ -1166,7 +1209,8 @@ const PUBLISHED: Record<string, string> = {
 	// `attachments/promptPath.int.test.ts`). (was "1ba1f48dae9bdb")
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "7469e93c1c11c")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "e0c98ab5632b4")
-	"core:spec/summarize-scene@1.3.0": "d99dc8578d801",
+	// Moved 2026-10-21 (lane F1): declares its `summarize-scene` action (an audience naming nobody — the host fires it), inlet `{ suits: [] }` (R50). (was "d99dc8578d801")
+	"core:spec/summarize-scene@1.3.0": "1507a157e60f91",
 	// Moved 2026-09-30 (config grouping, catalog lane): `expose.label` (and, on
 	// a model call of a multi-call spec, `expose.purpose`) names the step in
 	// settings. Display text only; the run is unchanged. Proven: a copy of
@@ -1177,7 +1221,8 @@ const PUBLISHED: Record<string, string> = {
 	// `attachments/promptPath.int.test.ts`). (was "6a6de8aef8046")
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "1f93de35465e8c")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "49cbc8b7ae8dc")
-	"core:spec/summarize-history@1.3.0": "1a30e9b006458",
+	// Moved 2026-10-21 (lane F1): declares its `summarize-history` action (an audience naming nobody — the host fires it), inlet `{ suits: [] }` (R50). (was "1a30e9b006458")
+	"core:spec/summarize-history@1.3.0": "1940840a09ff76",
 	// 🚧 New 2026-10-13 (live scenes §13–§14): each core genre's own
 	// summarize-scene, built by `summarizeScene()` — the scene's range
 	// (`summarize-source@2`), its story rows' files (`history-attachments`),
@@ -1194,13 +1239,17 @@ const PUBLISHED: Record<string, string> = {
 	// *Transcript aside attachments* (`expose.label`), so a Combining group
 	// never shows two steps headed "History attachments". (were
 	// "d6d9936a441b" / "150185e62c94a9" / "69c16d2df4303" / "d410ef541cb80")
-	"core:spec/story-summarize-scene@1.0.0": "119ee8ce3f667f",
-	"core:spec/guide-summarize-scene@1.0.0": "9c19042ad22a0",
+	// Moved 2026-10-21 (lane F1): declares its `summarize-scene` action (an audience naming nobody — the host fires it), inlet `{ suits: [] }` (R50). (was "119ee8ce3f667f")
+	"core:spec/story-summarize-scene@1.0.0": "1ad856ab45f64f",
+	// Moved 2026-10-21 (lane F1): declares its `summarize-scene` action (an audience naming nobody — the host fires it), inlet `{ suits: [] }` (R50). (was "9c19042ad22a0")
+	"core:spec/guide-summarize-scene@1.0.0": "1f9d6798655f8b",
 	// The Lair's reads the Sanctum as asides, through its own template.
 	// Moved 2026-10-13 (live scenes §15 G1, ★9): it carries the Lair's own
 	// boundary trigger, `contributes.boundaryTriggers` (a new floor on main).
 	// (was "14ef483fc1f337")
-	"core:spec/lair-summarize-scene@1.0.0": "69777beaaf6a6",
+	// Moved 2026-10-21 (lane F1): declares its `summarize-scene` action (an audience naming nobody — the host fires it), inlet `{ suits: [] }` (R50). (was "69777beaaf6a6")
+	// Moved 2026-10-21 (Lair rewrite L3): the floor boundary trigger is gone (no dungeon-floor tracking). (was "485ef62767a03")
+	"core:spec/lair-summarize-scene@1.0.0": "249eb28ab0204",
 	// Moved 2026-09-30 (config grouping, catalog lane): `expose.label` (and, on
 	// a model call of a multi-call spec, `expose.purpose`) names the step in
 	// settings. Display text only; the run is unchanged. Proven: a copy of
@@ -1275,40 +1324,29 @@ const PUBLISHED: Record<string, string> = {
 	// I12 (2026-10-12): the Default config names its loadouts; measured with
 	// lane A4's (I7a) `workflow: slot.workflow()` wiring on the render node in
 	// the tree. (was "1f4f95d38c8c86")
-	"core:spec/story-generate-image@1.1.0": "afcb4a23d1cbc",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was 'afcb4a23d1cbc')
+	"core:spec/story-generate-image@1.1.0": "235ebebbafe60",
 	// 🚧 1.0.0 (image generation I5, 2026-10-12): the Sprite set fill — a card
 	// action from the Sprites tab, no session: build-sprite-series → generate-
 	// image (series, likeness references, one seed per run) → cut-out →
 	// attach-sprite. A new spec: no migration.
-	"core:spec/sprite-set-fill@1.0.0": "1a4b358b7d51d3", // 2026-10-12 sweep: Default preset names core:loadout/sprites@1
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '1a4b358b7d51d3')
+	"core:spec/sprite-set-fill@1.0.0": "15598708863480", // 2026-10-12 sweep: Default preset names core:loadout/sprites@1
 	// Image generation I8 (2026-10-12): Portrait — a card action from the
 	// Gallery tab. New spec.
-	"core:spec/character-portrait@1.0.0": "438207384f24e", // 2026-10-12 sweep: both presets name core:loadout/portrait@1
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '438207384f24e')
+	"core:spec/character-portrait@1.0.0": "78a91b905834b", // 2026-10-12 sweep: both presets name core:loadout/portrait@1
 	"core:spec/describe-likeness@1.0.0": "bb28ace5bf811", // D1 2026-10-12: Describe from image — a card action, no loadout
 	// Image generation I9 (lane C3, 2026-10-12): the Scene action — a quiet
 	// scene prompt off the last lines, the picture with the likeness images
 	// as references, posted and/or set as the backdrop. A new slug.
-	"core:spec/story-illustrate-scene@1.0.0": "78e8e1adf0d59", // 2026-10-12 sweep: purposes on the two calls
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '78e8e1adf0d59')
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni O7): every `generate-text` node names its speech sampling (`speechSampling: slot.speechSampling()`). Edited in place. (was 'dd093ed71a4be')
+	"core:spec/story-illustrate-scene@1.0.0": "1c5a6e00dbb9e4", // 2026-10-12 sweep: purposes on the two calls
 	// §16 follow-up D3 (2026-10-12): the same Scene graph with Adventure's
 	// inlet (`shared/illustrateScene.ts`; an inlet is one genre's). A new slug.
 	// Chat's hash above did not move when its graph was lifted into the shared
 	// builder.
-	// New 2026-10-13 (live scenes lane D, §6): *Time passes…* for Chat and
-	// the Lair — the clock step a press collects, and Advance story clock
-	// behind a junction on whether it moves. No model, no message.
-	// Moved 2026-10-13 (live scenes §15 G4–G7, lane H): *Advance story clock*
-	// says `cause: 'action'`. Edited in
-	// place under the freeze. Measured with other lanes' in-flight core-catalog
-	// edits in the tree. (was "146016a3e78051")
-	// Moved 2026-10-13 (live scenes §15 G12, lane J): `onRefusal: 'skip'`.
-	// Edited in place under the freeze. (was "1c8435302b630f")
-	// Moved 2026-10-13 (live scenes §15 G4–G7, lane H): *Advance story clock*
-	// says `cause: 'action'`. Edited in
-	// place under the freeze. Measured with other lanes' in-flight core-catalog
-	// edits in the tree. (was "5dc482ba17d89")
-	// Moved 2026-10-13 (live scenes §15 G12, lane J): `onRefusal: 'skip'`.
-	// Edited in place under the freeze. (was "12cff8a420c99a")
-	"core:spec/lair-advance-time@1.0.0": "7e1eaa16ea91a",
 	// 1.0.0: the tool-loop reference (20 §9, 01 §4a) — a bounded agentic turn
 	// written out, bound to no genre so it is never offered in a composer. New
 	// slug, not a bump: the 0.6 freeze forbids moving an existing semver and
@@ -1415,151 +1453,15 @@ const PUBLISHED: Record<string, string> = {
 	// every old Lair pin. (was "17398a61457451")
 	// Moved 2026-10-13 (live scenes §15 G2): the embedded shape names the
 	// Lair's place, `scenes: { place: { stateKey: "location" } }`. (was "b41ea5ad6054d")
-	"core:spec/lair-create@1.0.0": "1dff70c6bd68c1",
-	// Moved (W1, 2026-09-17): the same per-voice lore lane Adventure's
-	// respond gained, inside the `cast` branch's `each`.
-	// (was "7557cc5126f8e")
-	// Moved 2026-09-27 (owner ruling): the item-arm rename, and Lair reads `core:query/item-supply@1` into `keep.played.keeperResolve.supply`; proven: core-catalog/src with those edits reverted hashes to the old pin (was "4f1008e05a481").
-	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
-	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
-	// two keys stripped, the document hashes back to the old pin. (was '922d63165f241')
-	// Moved 2026-09-27 (lair pass B5, owner D5): the Plan and Thinking folds —
-	// `planSection` (`core:task/list-section@1` over `planWrite.json`), its
-	// preset params, and `save` wiring `thinking` and `sections`. Proven: a
-	// copy of core-catalog/src with just those edits reverted hashes back to
-	// the old pin. (was '65d55afd66146')
-	// Moved 2026-09-27 (lair pass B11, Lair half): `direction: $.input.text`
-	// on `planContext` and `turn.play.sceneContext`. Proven: a copy of
-	// core-catalog/src with just those two wires reverted hashes back to the
-	// old pin. (was 'd4d32992afafb')
-	// Moved twice 2026-09-27 (lair wave 3). First (R1): `direction` →
-	// `turnDirection` on both contexts — that rename alone hashed to
-	// "10254b22ea51d". Then B12/B13: `gather.rooms` (lorebook-entries,
-	// location entries), `exit` + `exitCheck` (then `unlisted-name@1`) routing the
-	// `turn` junction, the knock's `referent`, `locationEntries` on both
-	// contexts. Measured step by step, only these edits between.
-	// (was "1517a24e807bc2")
-	// Moved 2026-09-27 (lair pass B15/B16, owner D1a/D2a): a `pick` junction
-	// on `input.characterId` — `picked` (the delver answers alone, streamed)
-	// or `planned` (the whole turn, every former spine node now under
-	// `pick.planned.`); the voices run after `save`, one complete row each.
-	// Proven: a copy of core-catalog/src with only lair.ts reverted hashes
-	// back to the old pin. (was "2629bfa0a7e2d")
-	// Moved 2026-09-28 (lair re-plan R12, cast only): the `voices` junction on
-	// `turnStyle` is a plain `each` (`pick.planned.voices.item.*`); proven in the
-	// SDK pin tests (canonical diff, dist vs source). (was "1c883db7b28f29")
-	// Moved 2026-09-28 (lair re-plan R7): `exitCheck` is
-	// `core:task/undescribed-name@1` (was `unlisted-name@1`), reading the rooms
-	// (`locationEntries`), a new `gather.lorebook` listing (every entry type,
-	// `entries`), `gather.history` (`messages`) and its params; the junction
-	// and the knock's `referent` read `undescribed`. Proven: a copy of
-	// core-catalog/src with only those lair.ts edits reverted (the old
-	// definition stubbed) hashes back to the old pin. (was "1721382a7b9fbd")
-	// Moved 2026-09-28 (lair re-plan R6): the `channel` junction — the
-	// Castellan's `channel.sanctum` branch; the story's nodes at
-	// `channel.story.*` — and the placeholder on `$.input.channel`. Proven (SDK and app pins alike): the SDK sources copied with only R6's edits reverted hash back to the old pin.
-	// (was "5d97100fa4cfe")
-	// Moved 2026-09-28 (lair re-plan R8, the Castellan's turn): a `via`
-	// junction first (`via.narrate`, the Castellan's narration on `main`; or
-	// `via.turn`, holding R6's `channel` junction); each branch opens its own
-	// row (F7 per execution path); the planned turn's `door` (knock row, or
-	// the play: the Sanctum beats row, the streamed lead delver, the rest);
-	// the narrator scene step, `planSection`, `turnText` and the spine
-	// placeholder retired; the keeper on the spine with `set-state.worldRow`
-	// = the beats row. Proven (SDK and app pins alike): a copy of the SDK sources (sdk, contracts, core-catalog) with only R8's edits reverted hashes back to the old pin, and the golden with it. (was "1c6d397bcec39f")
-	// Moved 2026-09-28 (lair re-plan R13, Sanctum talk steers the story):
-	// `gather.scratchpad` (the Castellan's AI view of the annex); the
-	// planner's `planned.steer` junction (an `unplayedOnly` Sanctum read and
-	// the scratchpad into `sideTalk`/`scratchpad`); the narration's `asked`
-	// pair and `talk` junction (`pressed` · `steered` · `none`) into
-	// `sideTalk`; the Sanctum branch's `pad`, its context's `fields`, and the
-	// scratchpad rewrite after the reply (`padExchange` …
-	// `padKeep.kept.write`). Proven with the lair-create pin above.
-	// (was "101726d7537e82")
-	// Moved 2026-09-28 (lair re-plan R9, the knock asks for a description):
-	// the knock's one option `describe` (_Describe <room>…_, labelled by
-	// `door.knock.named` + `door.knock.describeLabel`; was build · improvise);
-	// the union read `planned.exitProse` (`channel: '*'`, 40) feeding
-	// `exitCheck` with `channels: ['main', 'sanctum']`; the lead's and the
-	// voices' `locationPassage`. Proven (SDK and app pins alike): a copy of the
-	// SDK sources (sdk, contracts, core-catalog) with only R9's edits reverted
-	// hashes back to the old pin, to lair-room-answer's and to the golden.
-	// (was "1926a1f0104ff7")
-	// Moved 2026-09-28 (lair re-plan R10's fold-in of the R9 follow-up):
-	// `exitProse` reads `talkOnly: true`, so the Sanctum's beats row is never
-	// taken for a room's description. Proven: a copy of the SDK sources (sdk,
-	// contracts, core-catalog) with only R10's edits reverted hashes back to
-	// this old pin, lair-whisper's and the golden. (was "a4efff601d22a")
-	// Moved 2026-09-29 (places plan B6): the rooms read's preset asks
-	// `withLinks: true`, so each room carries its ways out for
-	// `{{locationEntry}}`'s "From here:" block. Proven (SDK and app pins
-	// alike): a copy of core-catalog/src with only B6's lair.ts,
-	// lairActions.ts and prompts.ts edits reverted hashes back to this old pin
-	// and to lair-room-answer's. (was "91b5f45f61cf3")
-	// Moved 2026-09-30 (plan A27 P5, the "fall back" default): the knock reads the
-	// planner's `worldHints.location` (`door.knock.vantage`, `parse-json@1`
-	// and its preset path) onto `make-choices@1`'s `vantage`; migration 0212
-	// re-projects the shipped config for the new preset value. Proven (SDK
-	// and app pins alike): a copy of core-catalog/src with only P5's lair.ts
-	// and lairActions.ts edits reverted hashes back to this old pin, to
-	// lair-room-answer's and to the golden. (was "17adaaa371d25")
-	// Moved 2026-09-30 (config grouping, catalog lane): `expose.label` (and, on
-	// a model call of a multi-call spec, `expose.purpose`) names the step in
-	// settings. Display text only; the run is unchanged. Proven: a copy of
-	// core-catalog/src with only this lane's edits reverted hashes back to the
-	// old pin. (was "1280f739cee9f1")
-	// Moved 2026-09-30 (Lair party speech, owner ruling: no lead delver): who
-	// speaks is picked first (`pick` → `split-first@1`), the knock-or-play
-	// `door` follows, and the play's `speech` junction runs each delver as one
-	// Voices call or the Castellan for the party (its own prompt row, named
-	// by the preset); migration 0219 re-projects the shipped config. Proven
-	// (SDK and app pins alike): a copy of the SDK sources with only this
-	// lane's edits reverted hashes back to this old pin, lair-create's and
-	// the golden. (was "18c218a4d5c165")
-	// Moved 2026-09-30 (Lair character turns, owner ruling: "they are
-	// character turns, not first delver, later delver"): a planned turn voices
-	// nobody and its plan row hands the turns on (`turnPlan`); each delver's
-	// line is ONE character turn (`speech.each.character.turn`: the standing
-	// plan, their own lore, their own streamed row, their own books on the
-	// State-keeper's settings); the Castellan's keeper keeps the world's; the
-	// Castellan speaking for the party reads the party's reach. Proven (SDK and app pins alike): a copy of core-catalog/src with only this
-	// lane's edits reverted (lair.ts, turnOrder.ts, genres.ts) hashes back to
-	// every old Lair pin. (was "15357b92b9b0b")
-	// Moved 2026-10-02 (owner ruling: whoever writes a delver's line keeps
-	// that delver's stats): the party call's `speakers` step, and the
-	// Castellan keeper's `keeps` naming the world and the delvers it voiced.
-	// No migration: the new step is a task with no settings. Proven (SDK and
-	// app pins alike): a copy of core-catalog/src with only these lair.ts
-	// edits reverted hashes back to this old pin. (was "1e50c2c3a93641")
-	// Moved 2026-10-02 (lorebooks Wave 8): the vector and entity arms on the
-	// spine and per delver turn, the delver as `speaker`, and on the party call,
-	// the Castellan as `speaker` (C3, R3); a `presences` read and an `eligible`
-	// step (`core:task/eligibility@1`) before every ranker (C2, R2/R4); the room
-	// rule's `place` step wired into every ranker as `shownElsewhere`; statuses
-	// on the two embeds. Edited in place under the freeze, content-addressed;
-	// its shipped config re-projected for the `place` preset by `0109`. Measured
-	// with other lanes' in-flight core-catalog edits in the tree, not proven in
-	// isolation. (was "49be755914342")
-	// Moved 2026-10-02 (composer attachments phase 4, PLAN §3.5): a
-	// `history-attachments` read and a `place-attachments` step before each
-	// reading call's prompt; the prompt reads the placed lines. Edited in
-	// place under the freeze. (was "1934de4b58c1bb")
-	// Moved 2026-10-03 (owner note 39): `save` wires `reasoning` — the port
-	// `thinking` -> `reasoning` on generate-text / update-message. Edited in
-	// place under the freeze. Measured with other lanes' in-flight core-catalog
-	// edits in the tree. (was "1c71b226eaa76a")
-	// Moved 2026-10-03 (history window): `contextBudget` runs before the
-	// reads; `gather.history.read` and the Sanctum's `talk` take its `budget` —
-	// sized by the window, not the newest 100 rows. Edited in place under the
-	// freeze. (was "a3874a2f8cc28")
-	// Moved 2026-10-05 (sprites in-pipeline, plan D-a): gains the sprite step
-	// in the character turn, after its `save` — `spritePick` (`core:oracle/pick-sprite@1`, handed the
-	// reply's text and speaker) and `spriteShow` (`source: 'picker'`). And D-c: the retrieval arms' embed steps lose their
-	// `connection` slot, and `semantic.arm.queries` wires its own
-	// (`slot.connection()`). Edited in place under the freeze. Measured with other lanes'
-	// in-flight core-catalog edits in the tree. (was "13506ae2e7456")
-	// I12 (2026-10-12): the Default config names its loadouts. (was "198869a81e17d5")
-	"core:spec/lair-respond@1.0.0": "3919232d21aac",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '1dff70c6bd68c1')
+	// Moved 2026-10-21 (Lair rewrite L3): the embedded genre shape is the rewritten Lair's (personas min 0, sanctum audience owner, fields roomsLayer/askBeforeRolling/autoRoll/showDice; partySpeech and trustNarrator gone). (was "1d24f862baa0f3")
+	// Moved 2026-10-21 (Lair rewrite L5): Auto roll's description says "the rules' usual difficulty" (§28). (was "8a34738f8b52d")
+	// Moved 2026-10-22 (lair fix 2): the embedded shape labels `main` *Story* (the story's channel tab), and the Castellan's greeting says Narrate plays what it would. (was "1244f8cd5cbb03")
+	// Moved 2026-10-22 (rulesets M2): the embedded shape's *Show dice* reads *Show outcomes* (the field id `showDice` kept). (was "9eeaaa394f17f")
+	// Moved 2026-10-22 (rulesets M3): Auto roll's description says "When the rules decide", never "Under Rules and dice". (was "799554471956d")
+	// Moved 2026-10-23 (core genres on the seams, merge GM): the Lair's relabels (_Ask me before each check_, _Decide checks at once_, _Show the outcomes_) and its recommended rulesets, in the genre shape it carries (lane G0, S6–S7). Edited in place. (was "c46bd3f8d3a77")
+	// Moved 2026-10-23 (RF fix 2): the genre shape it carries says `lorebook: 'optional'` — 'required' is retired; a Lair session may start without a book (its phantom lorebook is the dungeon). Edited in place. (was "1cb73ccca537ee")
+	"core:spec/lair-create@1.0.0": "1a7932ed813f14",
 	// Moved twice on 2026-09-17. First (L3, contracts batch 2): `params:
 	// slot.params()` on the `create-lore-entry` node. That outlet now declares
 	// an `entryType` parameters slot, and a slot the spec never NAMES is not a
@@ -1594,7 +1496,10 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): `attachments` (history-attachments) + `attached` (place-attachments on `write`'s pair) before `prompt`, which reads `attached.messages`.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "1f69f3eeb34e18")
-	"core:spec/lair-build-room@1.0.0": "12bcd383afd725",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '12bcd383afd725')
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni O7): every `generate-text` node names its speech sampling (`speechSampling: slot.speechSampling()`). Edited in place. (was '1a26f0c2c8ea06')
+	// Moved 2026-10-21 (Lair rewrite L3, D2/D10): the draft is one JSON answer (`LAIR_ROOM_DRAFT_SCHEMA`: body, ways out, the place entry type's fields) made into the write by `core:script/lair-room`; ways to known rooms linked in the entry's own commit. (was "108d95a7e9f0d")
+	"core:spec/lair-build-room@1.0.0": "7d6ab54d3173c",
 	// New 2026-09-28 (lair re-plan R11): File as a room, on a message's ⋮.
 	// Proven (SDK and app pins alike): a copy of the SDK sources (sdk,
 	// contracts, core-catalog) with only R11's edits reverted has no such
@@ -1620,7 +1525,10 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): an `attachments` query on the spine and `attached` in the drafting arm, before its `prompt`.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "e7dab423b1f49")
-	"core:spec/lair-file-room@1.0.0": "15e4a1a9fb7c47",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '15e4a1a9fb7c47')
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni O7): every `generate-text` node names its speech sampling (`speechSampling: slot.speechSampling()`). Edited in place. (was '5fd05e1c777d3')
+	// Moved 2026-10-21 (Lair rewrite L3, D2/D10): drafts as JSON with typed fields, as build-room. (was "1995d8e27f5306")
+	"core:spec/lair-file-room@1.0.0": "638ab8005cf0e",
 	// Moved (L1, 2026-09-17): the knock's options write the room. The one
 	// write-class outlet is `core:outlet/create-lore-entry` (was
 	// `create-message`), the `build` branch drafts the dungeon's room layout
@@ -1674,7 +1582,10 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): an `attachments` query on the spine and `attached` in the drafting arm, before its `prompt`.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "b3f5009baca91")
-	"core:spec/lair-room-answer@1.0.0": "aeba7feeb1b33",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was 'aeba7feeb1b33')
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni O7): every `generate-text` node names its speech sampling (`speechSampling: slot.speechSampling()`). Edited in place. (was '1bda2c525885a6')
+	// Moved 2026-10-21 (Lair rewrite L3, D2/D10): drafts as JSON with typed fields, the both-ways link kept. (was "1156167a5aff2f")
+	"core:spec/lair-room-answer@1.0.0": "3d7d4cce10e94",
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
 	// two keys stripped, the document hashes back to the old pin. (was '1c2a2e148f7f4e')
@@ -1689,7 +1600,8 @@ const PUBLISHED: Record<string, string> = {
 	// new description; the graph is pure — inlet, state, `resolve` (`owners` =
 	// `input.recipients`), `apply` — the model call and its preset values
 	// gone. Proven with the lair-respond pin above. (was "76066b2c2a5ab")
-	"core:spec/lair-whisper@1.0.0": "17cf2e37e34e6",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '17cf2e37e34e6')
+	"core:spec/lair-whisper@1.0.0": "8e2c522cf5ea9",
 	// NEW 2026-10-15 (PLAN-dungeon-crawler-2026-10-14, the create lane): the
 	// genre published — create, the welcome (`member-added`), the interview
 	// with genesis at its end, the reply (story ⏳ + the Planner's lanes), the
@@ -1710,9 +1622,14 @@ const PUBLISHED: Record<string, string> = {
 	// (was "11a21e67c9365f")
 	// Moved 2026-10-18: lanes by person (channel-lane), one exit model, asks, journal kinds, solo standing order, A11 placeholder-first (was "aeb8428aa5bef").
 	// Moved 2026-10-18 (lane C, after the 100-turn walk): the genre's characters `hint` (companions), its layout's faces strip (`owners: seats`), the Dice tab (`messages#table`) and Line kinds as a ticked list (was "64ba72a67b170").
-	"core:spec/dungeon-crawler-create@1.0.0": "79c5aef3f2a47",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '79c5aef3f2a47')
+	// Moved 2026-10-23 (RF fix 5): the Honour mode field the create inlet's
+	// genre carries reads "…and the host delete the latest turn where
+	// deleting is on. Off: neither." (deletion needs a pipeline). (was "1249c16d98f1e")
+	"core:spec/dungeon-crawler-create@1.0.0": "4d5dc06bd6b9e",
 	// Moved 2026-10-18: lanes by person (channel-lane), one exit model, asks, journal kinds, solo standing order, A11 placeholder-first (was "10e007b633e3a9").
-	"core:spec/dungeon-crawler-welcome@1.0.0": "169cfff3d40856",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '169cfff3d40856')
+	"core:spec/dungeon-crawler-welcome@1.0.0": "19ed24cbe42e4",
 	// Moved 2026-10-15 (the multiplayer lane, unreleased): the interview asks
 	// the standing order under the sheet and answers it on the seat. (was "c15d142de0003")
 	// Moved 2026-10-15 (walkthrough fixes): the interview and sheet scripts
@@ -1734,12 +1651,18 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-18 (the 100-turn walk, lane B — P2-4, P2-6): the sheet's apply step is handed the turn's ruleset (`ruleset: $.input.ruleset`), so the kit follows the casting choice and Story's words. (was "109b9da5a90972")
 	// Moved 2026-10-19 (PLAN-dc-after-walk2 Q1-6, Q3-3): the sheet writes the seat's own spell-point most (`seatWrites` points junction), and genesis says on the lane that the story has started (`started`, a table line by the Planner). Measured with other lanes' in-flight edits in the tree. (was "1d4b9e6a65efcf")
 	// Moved 2026-10-19 (PLAN-dc-after-walk3 R1-4, R2-1, R2-2, ★4): the seat's full health and spell-point most are filed at the stats' row (`worldRow`); genesis reads the places back and holds the world's ways out as `exits` pieces (`worldPlaces`, `ways`, `hold.ways.apply`); a way out's grammar carries the trap's `trapDamage` and `trapCondition`; the sheet writes the class's trained skills (was "18eea397cb41e1").
-	"core:spec/dungeon-crawler-interview@1.0.0": "14255f89e8559f",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '14255f89e8559f')
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni O7): every `generate-text` node names its speech sampling (`speechSampling: slot.speechSampling()`). Edited in place. (was '1d1e19c43ee743')
+	// Moved 2026-10-21 (Lair rewrite L2, D1/D9): the sheet's class, difficulty and goal are their slots' own schemas (`jsonSchemaOf`, descriptions and options read, '' kept for "not asked"); genesis's ways out read the ruleset's exit piece (kinds, standings, the trap's condition). Edited in place. (was "1544203ee9975e")
+	// Moved 2026-10-23 (core genres on the seams, merge GM): kits as the session's rules' class rows, read at run time (lane G3, S4). Edited in place. (was "62087cf4de501")
+	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "1ff08425d1064c")
+	"core:spec/dungeon-crawler-interview@1.0.0": "563a02b06d940",
 	// NEW 2026-10-15 (the multiplayer lane): Reveal the planning notes (D8). 🚧
 	// Moved 2026-10-15 (walkthrough fixes): a quick action — a button among
 	// the composer's actions. (was "ded39ad9f077b")
 	// Moved 2026-10-18 (lane C, P4-10): the reveal asks first (`confirm`) (was "172e46833e9041").
-	"core:spec/dungeon-crawler-reveal@1.0.0": "14e4e70ccbba9f",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '14e4e70ccbba9f')
+	"core:spec/dungeon-crawler-reveal@1.0.0": "25c62df03bdec",
 	// Moved 2026-10-15 (the story-turn lane, unreleased): the story branch is
 	// the hidden Planner's JSON, the dice, the books and the Narrator — no
 	// longer the ⏳ Narrator-only placeholder; the story read is 30 rows.
@@ -1775,7 +1698,12 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-19 (PLAN-dc-after-walk2 Q2-1…Q2-4, Q3-1, Q3-2): the story turn's words branch (`plan.words`, the Story ruleset asked in plain words), a raise naming its slot, the traverse's actor and the door's own lock difficulty, the redo's raises, the books' standing in words. Measured with other lanes' in-flight edits in the tree. (was "28326d2e17935")
 	// Moved 2026-10-19: the two Planner placements (dice / words) carry their own headings (was "e52300ed3a81f").
 	// Moved 2026-10-19 (PLAN-dc-after-walk3 R2-1): a way out's grammar carries the trap's `trapDamage` and `trapCondition` (a table of words' carries neither) (was "14f666c57c1284").
-	"core:spec/dungeon-crawler-respond@1.0.0": "340a50523c9ac",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '340a50523c9ac')
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni O7): every `generate-text` node names its speech sampling (`speechSampling: slot.speechSampling()`). Edited in place. (was '1a239efe6d813e')
+	// Moved 2026-10-21 (Lair rewrite L2, D9): a way out's grammar reads the ruleset's exit piece — its kinds and standings and what a trap may leave (`jsonSchemaOf`). Edited in place. (was "1d07b704852bb6")
+	// Moved 2026-10-23 (core genres on the seams, merge GM): the Planner's grammar laid over the session's rules (`core:script/dungeon-crawler-shape`, lane G3, S1, S4), and its two resolve steps headed by their branch (_(dice)_ · _(words)_, GM). Edited in place. (was "7514f5a052a56")
+	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "bb0ea113263db")
+	"core:spec/dungeon-crawler-respond@1.0.0": "9ec5ea8729236",
 	// NEW 2026-10-15 (the story-turn lane): Rest (no model call) and what
 	// follows the goal (its form; one call for a new goal). 🚧
 	// Moved 2026-10-16 (🚧 table channel, PLAN-rulesets §30): the rest's
@@ -1786,7 +1714,10 @@ const PUBLISHED: Record<string, string> = {
 	// fuses are `crawl-fuses` on the world owner) and its line goes to the
 	// journal only, anchored to Story's line. (was "730f8893b76e6")
 	// Moved 2026-10-18: lanes by person (channel-lane), one exit model, asks, journal kinds, solo standing order, A11 placeholder-first (was "1e4d17ded73ca6").
-	"core:spec/dungeon-crawler-rest@1.0.0": "11ad47b290ec51",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '11ad47b290ec51')
+	// Moved 2026-10-23 (core genres on the seams, merge GM): Rest's length the session's rules' and one body with *After a rest* (lane G3, S3, S4). Edited in place. (was "f58384e131f26")
+	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "1dfa16c74e4181")
+	"core:spec/dungeon-crawler-rest@1.0.0": "53224cac7f345",
 	// Moved 2026-10-15 (one heading per step): "Draw up the new goal" (the
 	// script) and "Keep the new goal in the world" (the write), no longer both
 	// "File the new goal". Proven: with the labels reverted the document hashes
@@ -1798,15 +1729,20 @@ const PUBLISHED: Record<string, string> = {
 	// no longer the world document's. (was "19f071376de2e1")
 	// Moved 2026-10-18: lanes by person (channel-lane), one exit model, asks, journal kinds, solo standing order, A11 placeholder-first (was "54a3aeac8cfec").
 	// Moved 2026-10-18 (the 100-turn walk, lane A): End has the Narrator close the adventure at once (`route.closing.*`, the narrate row and template). (was "118dc8ba87098b")
-	"core:spec/dungeon-crawler-goal@1.0.0": "543d52c482263",
-	"core:spec/dungeon-crawler-answer-form@1.0.0": "1524465e47d46c",
-	"core:spec/dungeon-crawler-turn-order@1.0.0": "b315665323b9a",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '543d52c482263')
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni O7): every `generate-text` node names its speech sampling (`speechSampling: slot.speechSampling()`). Edited in place. (was '94629a034f581')
+	"core:spec/dungeon-crawler-goal@1.0.0": "169cb881199cd5",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '1524465e47d46c')
+	"core:spec/dungeon-crawler-answer-form@1.0.0": "1e7803cf9f381",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was 'b315665323b9a')
+	"core:spec/dungeon-crawler-turn-order@1.0.0": "6199658f630c5",
 	// Moved 2026-09-28 (lair re-plan R3, `collects`): `composerText` became `collects.text`
 	// ('Direction the party should feel'). Proven: the built document with `collects` deleted and
 	// `composerText` restored hashes back to the old pin. (was "16413e137630d4")
 	// Moved 2026-09-28 (lair re-plan R8): the description tells the Castellan. Proven (SDK and app pins alike): a copy of the SDK sources (sdk, contracts, core-catalog) with only R8's edits reverted hashes back to the old pin, and the golden with it.
 	// (was "1877bfe4e0a7c3")
-	"core:spec/lair-nudge@1.0.0": "21b5bb80f5a13",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '21b5bb80f5a13')
+	"core:spec/lair-nudge@1.0.0": "1f6e668013b7c1",
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
 	// two keys stripped, the document hashes back to the old pin. (was '13c47a285b09c5')
@@ -1841,7 +1777,9 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): `attachments` (history-attachments) + `attached` (place-attachments on `write`'s pair) before `prompt`, which reads `attached.messages`.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "2cd46fc610e39")
-	"core:spec/lair-trap@1.0.0": "15e6228b78c851",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '15e6228b78c851')
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni O7): every `generate-text` node names its speech sampling (`speechSampling: slot.speechSampling()`). Edited in place. (was '10aa3bf67ebd2d')
+	"core:spec/lair-trap@1.0.0": "1b7dac15d70c7f",
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
 	// two keys stripped, the document hashes back to the old pin. (was '194ea02b271eb3')
@@ -1871,7 +1809,9 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-03 (attachments follow-ups, owner ruling): `attachments` (history-attachments) + `attached` (place-attachments on `write`'s pair) before `prompt`, which reads `attached.messages`.
 	// Prompts with no attachments are byte-identical (parity guard,
 	// `attachments/promptPath.int.test.ts`). (was "177a82bd12699e")
-	"core:spec/lair-reveal@1.0.0": "130237fa29fa50",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '130237fa29fa50')
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni O7): every `generate-text` node names its speech sampling (`speechSampling: slot.speechSampling()`). Edited in place. (was '819bb19781bcf')
+	"core:spec/lair-reveal@1.0.0": "1e25c31a42adad",
 	/** The genre's answer pipeline — one graph, published once per shipped genre. */
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
@@ -1881,7 +1821,49 @@ const PUBLISHED: Record<string, string> = {
 	// `attachments/promptPath.int.test.ts`). (was "1c32eb6a456349")
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/answer-form-lair`; nothing else changed. (was "d5cd2911aa349")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "1e04feae5374a")
-	"core:spec/lair-answer-form@1.0.0": "1c86e1cc01c1b7",
+	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '1c86e1cc01c1b7')
+	"core:spec/lair-answer-form@1.0.0": "e03c023079828",
+	// NEW 2026-10-21 (Lair rewrite L3): the reply — plan, checks, voices
+	// (was lair-respond; the books and the scratchpad are routines now).
+	// Moved 2026-10-22 (lair fix 2): the voice's `say` wires `currentCharacterId`, the turn plan stores the plan as the turn plays it (`door.play.played`, its speakers filled when the planner named nobody), and the Sanctum's reminder lands at no token trigger. (was "3732939546be3")
+	// Moved 2026-10-23 (core genres on the seams, merge GM): _Deciding the checks_ as its status (lane G0, S7). Edited in place. (was "18ab1e1e72aac4")
+	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "5cbe8f5325b1b")
+	// Moved 2026-10-23 (RF fix 2, Lair voice): the voice's `prompt` step places its reminder at no token trigger, so a delver's turn reads whose turn it is after the GM's first line. Edited in place. (was "ee12352ed2052")
+	"core:spec/lair-reply@1.0.0": "c4fe814f1e089",
+	// NEW 2026-10-21 (Lair rewrite L3, D5): a seat taken, told to the GM in the Sanctum.
+	"core:spec/lair-welcome@1.0.0": "1bf873c4b48d0b",
+	// NEW 2026-10-21 (Lair rewrite L3, D7): routines — the keeper (Story's
+	// reckoning under the Lair's prompt), the scratchpad, file the current room.
+	// Moved 2026-10-23 (core genres on the seams, merge GM): _Keep the books_ (G0), the one change grammar of the shared reckoning (G1, S1), and the keeper's lift `tableRules` retired (GM). Edited in place. (was "123fac28db816a")
+	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "13f43d1c42809")
+	"core:spec/lair-keeper@1.0.0": "1e7e03116e5d3d",
+	"core:spec/lair-scratchpad@1.0.0": "8ffdc89f6eb8",
+	// L4 (2026-10-21): its two saves headed apart — two steps of one group never share a heading. (L3's was "507d5063e77de")
+	"core:spec/lair-file-current-room@1.0.0": "567f7947865d0",
+	// NEW 2026-10-21 (Lair rewrite L3, D3): the GM's Roll and a roll form's answer.
+	"core:spec/lair-roll@1.0.0": "196c24d8b373b6",
+	// Moved 2026-10-23 (core genres on the seams, merge GM): _Deciding the check_ as its status (lane G0, S7). Edited in place. (was "10e23e3a75024")
+	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "180b95879690f1")
+	"core:spec/lair-roll-answer@1.0.0": "132974277207e4",
+	// New 2026-10-20 (PLAN-layering lane 3): Story's routines — the reckoning
+	// and the sweep, out of story-respond, and *Picture each new scene* (the
+	// Scene action's graph on a routine inlet) — and Chat's *Remember things*.
+	// Moved 2026-10-23 (core genres on the seams, merge GM): _Note what changed_ titles its duties card (G0, S7); the one change grammar — the crib writes the schema the call asks in, commit arms `ruled` · `ruledHeld` · `words` (G1, S1). Edited in place. (was "1ea1946ced835")
+	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "155e7dcd4aa7d")
+	"core:spec/story-reckoning@1.0.0": "10867c2eda2502",
+	// Moved 2026-10-23 (core genres on the seams, merge GM): _Look back over the story_ titles its duties card (lane G0, S7); its model call labelled _File what is worth keeping_, never the routine's name its duties card carries (GM). Edited in place. (was "17981ba0e2bec5")
+	"core:spec/story-sweep@1.0.0": "1baa5f325cd667",
+	// Moved 2026-10-21 (PLAN-layering lane 8, omni O7): every `generate-text` node names its speech sampling (`speechSampling: slot.speechSampling()`). Edited in place. (was '1989d733a38b8')
+	"core:spec/story-illustrate-new-scene@1.0.0": "9b8440cff74d8",
+	"core:spec/assistant-memory@1.0.0": "1811e7b16e1c3",
+	// NEW 2026-10-23 (rulesets as functions D6): a ruleset's action — the one generic pipeline every invokable function runs, Full or Review by its registration's mode.
+	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "47e5217d6d257")
+	"core:spec/rules-action@1.0.0": "988b95d02e6db",
+	// NEW 2026-10-23 (PLAN-genres-seams S3, lane G3): the crawl's own effects after the rules' Rest, on `rest-taken`.
+	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read; its resolve steps take the routine's cause as their `event` (the functions' `ctx.event`). Edited in place. (was "1c6b2a2d957d5")
+	"core:spec/dungeon-crawler-after-rest@1.0.0": "12de3951048577",
+	// NEW 2026-10-23 (genres GM, G1 ★5): Story's clock moved by the rest the rules raised, on `rest-taken`.
+	"core:spec/story-after-rest@1.0.0": "ef952f79caa2",
 }
 
 describe("published spec hashes", () => {

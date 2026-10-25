@@ -392,9 +392,13 @@
 <div class="flex h-full min-h-0 flex-col" data-view-links use:vm.observe>
 	<!-- No toolbar without pages: there is nothing to search, and the empty
 	     state says why on its own. -->
+	<!-- `listFills` (L7, 2026-10-24): no page open, the index sits centred
+	     at the list's own 560px instead of beside an empty pane. -->
 	<PanelSplit
 		mode={vm.mode}
 		hasDetail={slug !== null}
+		listFills
+		fillWidth="list"
 		emptyMessage="Pick a page to read it."
 		toolbar={groups.length > 0 ? indexToolbar : undefined}
 		list={indexPane}
@@ -494,7 +498,7 @@
 				>
 					{#snippet content()}
 						<span
-							class="bg-surface-200-800 text-surface-600-400 grid size-10 shrink-0 place-items-center rounded-[9px]"
+							class="bg-surface-200-800 text-surface-600-400 grid size-10 shrink-0 place-items-center rounded-base"
 						>
 							{#if pageLevel}
 								<Icons.FileText size={18} aria-hidden="true" />
@@ -503,7 +507,7 @@
 							{/if}
 						</span>
 						<span class="flex min-w-0 flex-1 flex-col text-left">
-							<span class="truncate text-[15px] font-medium">
+							<span class="truncate text-lead font-medium">
 								{@render marked(hit.title)}
 							</span>
 							{#if !pageLevel}
@@ -567,7 +571,7 @@
 						>
 							{#snippet content()}
 								<span
-									class="bg-surface-200-800 text-surface-600-400 grid size-10 shrink-0 place-items-center rounded-[9px]"
+									class="bg-surface-200-800 text-surface-600-400 grid size-10 shrink-0 place-items-center rounded-base"
 								>
 									<Icons.FileText
 										size={18}
@@ -578,7 +582,7 @@
 									class="flex min-w-0 flex-1 flex-col text-left"
 								>
 									<span
-										class="truncate text-[15px] font-medium"
+										class="truncate text-lead font-medium"
 									>
 										{doc.title}
 									</span>

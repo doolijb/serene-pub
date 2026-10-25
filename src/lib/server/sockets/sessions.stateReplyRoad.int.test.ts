@@ -57,19 +57,23 @@ vi.mock("$lib/server/db", async () => {
 /**
  * One answer for every call: the reply's text, and the reckoning's document
  * (Story, 2026-10-19 — the after-turn call that replaced Adventure's keeper):
- * the DC delta grammar, two values set in words.
+ * 🚧 the one change grammar since S1 (2026-10-23, the reply schema's), two
+ * values the sheets keep (Freeform keeps neither) set in words.
  */
-const delta = (d: Record<string, unknown>) => ({
-	owner: "", op: "set", slot: "", repertoire: "", piece: "", value: "", check: "", against: 0, reason: "", ...d
+const change = (d: Record<string, unknown>) => ({
+	owner: "", changes: "attribute", attribute: "", entryType: "", op: "set", value: "", name: "", reason: "", ...d
 })
 const ANSWER = JSON.stringify({
-	deltas: [
-		delta({ owner: "world", slot: "weather", value: "storm", reason: "the storm broke" }),
-		delta({ owner: "Elara", slot: "mood", value: "wary", reason: "she saw the lantern gutter" })
+	changes: [
+		change({ owner: "world", attribute: "weather", value: "storm", reason: "the storm broke" }),
+		change({ owner: "Elara", attribute: "mood", value: "wary", reason: "she saw the lantern gutter" })
 	],
 	clock: [],
 	place: []
 })
+
+/** Every prompt compiled on the road, in order (RF fix 8's prompt assertion reads them). */
+const PROMPTS: unknown[] = []
 
 class FakeAdapter implements FakeTextAdapter {
 	injected: any
@@ -87,6 +91,8 @@ class FakeAdapter implements FakeTextAdapter {
 	}
 	withCompiledPrompt(p: any) {
 		this.injected = p
+		// 🚧 RF fix 8: every prompt the road compiles, for the prompt assertion below.
+		PROMPTS.push(p)
 		return this
 	}
 	abort() {}
@@ -214,7 +220,27 @@ async function character(userId: number, name: string, isPersona = false) {
  * for a reply. Elara is the character the trigger names, so the road is the
  * character's reply road and not the envoy's.
  */
-async function adventureSession(tag: string, opts: { trustNarrator: boolean }) {
+/**
+ * 🚧 RF fix 8: the rules that keep the weather and a mood — a Story session's
+ * attributes are its rules' (Freeform keeps neither), so the road's two
+ * changes land only where the rules keep them.
+ */
+const ROAD_RULES = "test:ruleset/road@1"
+async function declareRoadRules() {
+	const { defineRuleset, getRuleset } = await import("@serene-pub/sdk")
+	await import("@serene-pub/core-catalog")
+	if (!getRuleset(ROAD_RULES))
+		defineRuleset(ROAD_RULES, {
+			name: { en: "Road" },
+			attributes: [
+				{ id: "weather", slot: WEATHER, borrowed: true, carriedBy: ["world"] },
+				{ id: "mood", slot: MOOD, borrowed: true }
+			]
+		})
+}
+
+async function adventureSession(tag: string, opts: { applies: boolean; rules?: string | null }) {
+	await declareRoadRules()
 	const schema = await import("$lib/server/db/schema")
 	const { insertLegacy } = await import("$lib/server/messages/store")
 	const owner = await makeUser(`${tag}-owner`)
@@ -230,15 +256,21 @@ async function adventureSession(tag: string, opts: { trustNarrator: boolean }) {
 			name: `Road ${tag}`,
 			genreId: ADVENTURE,
 			lorebookId: lorebook!.id,
-			// Trusting the narrator is the attributes task on Full; on Review
-			// the reckoning's changes are proposals (2026-10-19).
+			...(opts.rules !== null ? { primaryRuleset: opts.rules ?? ROAD_RULES } : {}),
 			genreFields: {
 				tone: "grounded",
-				difficulty: "normal",
-				tasks: { v: 1, tasks: { attributes: { mode: opts.trustNarrator ? "full" : "review" } } }
+				difficulty: "normal"
 			}
 		})
 		.returning()
+	// Trusting the narrator is the reckoning on Full; on Review its changes
+	// are proposals (2026-10-19) — the retired task, where it lives now: the
+	// reckoning routine's duty and mode (lane 6).
+	const { applyLegacyTasks } = await import("$lib/server/utils/testDb")
+	await applyLegacyTasks(testDb, session!.id, {
+		v: 1,
+		tasks: { attributes: { mode: opts.applies ? "full" : "review" } }
+	})
 	await testDb
 		// The real shape: the lorebook is the session row's own binding.
 		.update(schema.sessions)
@@ -312,6 +344,47 @@ function fakeSocket(userId: number, io: any) {
 	return { user: { id: userId, isAdmin: false }, io } as any
 }
 
+/**
+ * The reckoning after each TURN (an administrator's swap of its cadence,
+ * R12/R36): the genre's after-each-round registration dropped, the same
+ * pipeline registered after each turn — Elara's reply ends her turn while Tom
+ * is still to speak, so the round would not end on it.
+ */
+async function reckonEveryTurn(sessionId: number) {
+	const { afterEachTurn, register } = await import("@serene-pub/sdk")
+	const { STORY_RECKONING_SPEC_ID } = await import("@serene-pub/core-catalog")
+	const { effectiveRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
+	const { rowOfDecl, rowOfDrop } = await import("$lib/server/pipelines/registrations/rows")
+	const { upsertRow } = await import("$lib/server/pipelines/registrations/write")
+	const round = (await effectiveRegistrations(testDb as never, sessionId))!.effective.find(
+		(r) => r.pipeline === STORY_RECKONING_SPEC_ID
+	)!
+	const scope = { kind: "session" as const, sessionId }
+	await upsertRow(testDb as never, rowOfDrop(round.key, scope, "admin"))
+	await upsertRow(
+		testDb as never,
+		rowOfDecl(
+			register(afterEachTurn(), STORY_RECKONING_SPEC_ID, {
+				...(round.values ? { values: round.values } : {}),
+				...(round.mode ? { mode: round.mode } : {})
+			}),
+			scope,
+			"admin"
+		)
+	)
+}
+
+/** Run `fn` with the routine runtime on (it is off under Vitest unless a test turns it on). */
+async function withRoutines<T>(fn: () => Promise<T>): Promise<T> {
+	const { setRoutinesEnabled } = await import("$lib/server/pipelines/routines/runs")
+	setRoutinesEnabled(true)
+	try {
+		return await fn()
+	} finally {
+		setRoutinesEnabled(false)
+	}
+}
+
 async function runsOf(sessionId: number) {
 	// Event work runs after the writer, on the session's queue (PLAN §8 (27)).
 	await (await import("$lib/server/pipelines/runtime/sessionEvents")).settleSessionEvents()
@@ -352,21 +425,26 @@ async function reply(
 }
 
 describe("the keeper's changes over sessions:fireTurn", () => {
-	test("propose mode: the run completes, holds the two changes as proposals with base_version, and announces state:changed", async () => {
+	// The keeper's changes are the reckoning's — a routine since PLAN-layering
+	// (`core:spec/story-reckoning`, lane 3), run by the routine queue after
+	// the reply settled (lane 6), here after each turn.
+	test("propose mode: the run completes, holds the two changes as proposals with base_version, and announces state:changed", () => withRoutines(async () => {
 		const schema = await import("$lib/server/db/schema")
-		const w = await adventureSession("propose", { trustNarrator: false })
+		const w = await adventureSession("propose", { applies: false })
+		await reckonEveryTurn(w.session.id)
 		const { res, emitted } = await reply(w, "the propose road")
 		expect((res as any)?.error).toBeUndefined()
 
-		// The receipt is saved: the run went to its end. The narrator
-		// prologue run an adventure fire walks first (§4.6) is an ordinary
-		// board run, and the respond run after it is the fire's own.
+		// The receipts are saved: each run went to its end — the fire's own
+		// respond run, the turn order its line recomputed, and the reckoning
+		// routine once both had settled (R13).
 		const runs = await runsOf(w.session.id)
 		expect(
 			runs.map((r) => `${r.specSlug}:${r.outcome}${r.haltReason ? ` (${r.haltReason})` : ""}`)
 		).toEqual([
+			"core:spec/story-respond:ok",
 			"core:spec/story-turn-order:ok",
-			"core:spec/story-respond:ok"
+			"core:spec/story-reckoning:ok"
 		])
 
 		// Held, not applied: two proposals, each stamped with the version the
@@ -398,11 +476,12 @@ describe("the keeper's changes over sessions:fireTurn", () => {
 		expect(emitted.some((e) => e.event === "pipelines:runStarted")).toBe(
 			true
 		)
-	})
+	}))
 
-	test("apply mode (trustNarrator): the run completes, both rows land under a moved state version, and state:changed is announced", async () => {
+	test("apply mode (the reckoning on Full): the run completes, both rows land under a moved state version, and state:changed is announced", () => withRoutines(async () => {
 		const schema = await import("$lib/server/db/schema")
-		const w = await adventureSession("apply", { trustNarrator: true })
+		const w = await adventureSession("apply", { applies: true })
+		await reckonEveryTurn(w.session.id)
 		const { res, emitted } = await reply(w, "the apply road")
 		expect((res as any)?.error).toBeUndefined()
 
@@ -410,8 +489,9 @@ describe("the keeper's changes over sessions:fireTurn", () => {
 		expect(
 			runs.map((r) => `${r.specSlug}:${r.outcome}${r.haltReason ? ` (${r.haltReason})` : ""}`)
 		).toEqual([
+			"core:spec/story-respond:ok",
 			"core:spec/story-turn-order:ok",
-			"core:spec/story-respond:ok"
+			"core:spec/story-reckoning:ok"
 		])
 
 		// Applied: rows, no proposals, and the version moved once per row.
@@ -442,13 +522,13 @@ describe("the keeper's changes over sessions:fireTurn", () => {
 			(e) => e.event === "pipelines:progress" && e.payload?.done
 		)
 		expect(terminal).toBeLessThan(changed)
-	})
+	}))
 
 	test("a second send after the first lands still runs — nothing is left holding the database", async () => {
 		// A transaction that deadlocked would hold PGlite's mutex for the rest
 		// of the process: every later query would wait forever. The second
 		// send is the probe.
-		const w = await adventureSession("again", { trustNarrator: true })
+		const w = await adventureSession("again", { applies: true })
 		const first = await reply(w, "the first send")
 		expect((first.res as any)?.error).toBeUndefined()
 		const second = await reply(w, "the second send")
@@ -461,4 +541,45 @@ describe("the keeper's changes over sessions:fireTurn", () => {
 			"ok"
 		])
 	})
+})
+
+// 🚧 RF fix 8 (owner ruling 2026-10-23): "Story still injects cast attributes
+// not the ruleset's" — no more. Under Freeform (rules that declare no
+// attributes) every prompt the road compiles — the reply's and the
+// reckoning's — reads none of the old genre's: no health, stamina, mood or
+// trust lines, even where a session still holds values on them; the host's
+// place reads as a place.
+describe("🚧 RF fix 8: under Freeform the prompts read only the rules' attributes and the host's place", () => {
+	test("no hp, stamina, mood or trust line reaches any prompt; the place does", () => withRoutines(async () => {
+		const schema = await import("$lib/server/db/schema")
+		const w = await adventureSession("freeform", { applies: true, rules: null })
+		const [row] = await testDb.select({ primaryRuleset: schema.sessions.primaryRuleset }).from(schema.sessions).where(eq(schema.sessions.id, w.session.id))
+		expect(row!.primaryRuleset).toBe("core:ruleset/freeform@1")
+		await reckonEveryTurn(w.session.id)
+		// Values an older session held on the retired slots (the 0126 upgrade carries them into the notes; these are left to prove they are never read).
+		const held = (slotId: string, v: unknown, owner: { kind: string; id: number }) =>
+			testDb.insert(schema.attributeValues).values({ ownerKind: owner.kind, ownerId: owner.id, slotId, value: { v }, sessionId: w.session.id, updatedBy: "user" })
+		await held("core:slot/hp@1", 13, { kind: "session_cast", id: w.elara })
+		await held("core:slot/stamina@1", 7, { kind: "session_cast", id: w.elara })
+		await held(MOOD, "giddy", { kind: "session_cast", id: w.elara })
+		await held("core:slot/trust@1", 4, { kind: "session_cast", id: w.elara })
+		await held("core:slot/location@1", "the old pier", { kind: "session", id: w.session.id })
+		const { stateFor } = await import("$lib/server/state/resolve")
+		const state = await stateFor(testDb as unknown as Db, w.session.id)
+		// Nothing but what the host keeps: the place, and ⏳ what someone carries — no attribute at all.
+		expect(state.slots.map((s) => [s.id, s.hostState ?? "attribute"])).toEqual([
+			["core:slot/location@1", "place"],
+			["core:slot/inventory@1", "carried"]
+		])
+		PROMPTS.length = 0
+		const { res } = await reply(w, "the freeform road")
+		expect((res as any)?.error).toBeUndefined()
+		await (await import("$lib/server/pipelines/runtime/sessionEvents")).settleSessionEvents()
+		expect(PROMPTS.length).toBeGreaterThan(0)
+		const said = PROMPTS.map((p) => JSON.stringify(p)).join("\n")
+		for (const gone of [/\bstamina\b/i, /\btrust\b/i, /giddy/, /\bhp\b/i, /\bmood\b\s*(is|:|giddy)/i, /Health\b/])
+			expect(said, String(gone)).not.toMatch(gone)
+		// The host's place is read — as a place.
+		expect(said).toMatch(/the old pier/)
+	}), 120_000)
 })

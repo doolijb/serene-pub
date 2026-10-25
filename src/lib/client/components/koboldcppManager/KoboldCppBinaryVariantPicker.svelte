@@ -297,7 +297,7 @@
 		</div>
 	{:else if download?.status === "error"}
 		<div
-			class="bg-error-100-900 text-error-700-300 flex items-center gap-2 rounded-lg p-3 text-xs"
+			class="bg-error-100-900 text-error-600-400 flex items-center gap-2 rounded-lg p-3 text-xs"
 		>
 			<Icons.AlertTriangle size={14} />
 			{download.error ?? "Download failed"}
@@ -310,7 +310,7 @@
 			Fetching releases…
 		</div>
 	{:else if error}
-		<div class="text-error-500 flex items-center gap-2 text-sm">
+		<div class="text-error-600-400 flex items-center gap-2 text-sm">
 			<Icons.AlertTriangle size={14} />
 			{error}
 		</div>
@@ -326,7 +326,7 @@
 					{#each grouped[platform] as variant (variant.name)}
 						{@const isSelected = selected?.name === variant.name}
 						<button
-							class="border-surface-300-700 flex items-start gap-3 rounded-lg border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-50 {isSelected
+							class="border-surface-200-800 flex items-start gap-3 rounded-lg border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-50 {isSelected
 								? 'border-primary-500 bg-primary-50-950'
 								: 'bg-surface-100-900 hover:bg-surface-200-800'}"
 							onclick={() => (selected = variant)}
@@ -355,9 +355,9 @@
 		{/each}
 
 		{#if selected}
-			<div class="border-surface-300-700 mt-1 rounded-lg border p-3">
+			<div class="border-surface-200-800 mt-1 rounded-lg border p-3">
 				<p class="text-xs font-medium">
-					Selected: <span class="text-primary-500">
+					Selected: <span class="text-primary-ink">
 						{selected.name}
 					</span>
 				</p>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
 	/**
 	 * The two pub-wide backup policies (ruled 2026-09-10): daily on/off
 	 * and whether user files ride along. The list, Back up now and Delete are
@@ -34,20 +35,20 @@
 		checked={systemSettingsCtx.settings?.backupDaily ?? true}
 		onCheckedChange={(e) => save({ backupDaily: e.checked })}
 	/>
-	<p class="text-surface-600-400 text-sm">
+	<FieldHelp>
 		Takes a copy of the database once a day, on top of the one always
 		taken before a version upgrade. Backups are never deleted on their own
 		— remove one from the list below.
-	</p>
+	</FieldHelp>
 	<SettingSwitch
 		name="backup-include-user-files"
 		label="Include user files"
 		checked={systemSettingsCtx.settings?.backupIncludeUserFiles ?? false}
 		onCheckedChange={(e) => save({ backupIncludeUserFiles: e.checked })}
 	/>
-	<p class="text-surface-600-400 text-sm">
+	<FieldHelp>
 		Archives media and avatars beside each backup, so a restored database
 		still has the images it points at — this makes backups much larger,
 		which is why it is off by default.
-	</p>
+	</FieldHelp>
 </section>

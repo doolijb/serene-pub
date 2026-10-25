@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SpProgress from "$lib/client/components/hostElements/SpProgress.svelte"
 	/**
 	 * The embedding queue, as the STARRED connection's detail panel.
 	 *
@@ -248,22 +249,13 @@
 									</span>
 								{/if}
 							</div>
-							<div
-								class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full"
-							>
-								{#if downloadProgress.percent !== undefined}
-									<div
-										class="bg-primary-500 h-full transition-all duration-300"
-										style="width: {downloadProgress.percent}%"
-									></div>
-								{:else}
-									<!-- The source gave no total, so an
-									     indeterminate bar rather than a
-									     percentage nobody measured. -->
-									<div
-										class="bg-primary-500 h-full w-1/3 animate-pulse rounded-full"
-									></div>
-								{/if}
+							<div class="text-primary-500" class:animate-pulse={downloadProgress.percent === undefined}>
+								<SpProgress
+									attrs={{
+										value: downloadProgress.percent === undefined ? null : String(downloadProgress.percent),
+										label: "Download progress"
+									}}
+								/>
 							</div>
 						</div>
 					{/if}
@@ -385,7 +377,7 @@
 							class="preset-tonal-surface flex items-start gap-2 rounded-lg p-2.5 text-xs"
 						>
 							<span
-								class="bg-surface-300-700 mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
+								class="bg-surface-300-700 mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-meta font-bold"
 							>
 								{i + 1}
 							</span>
@@ -435,7 +427,7 @@
 									/>
 								</button>
 								<button
-									class="btn-ghost text-error-500 rounded p-0.5"
+									class="btn-ghost text-error-600-400 rounded p-0.5"
 									onclick={() => removeGroup(group.groupId)}
 									disabled={removingGroup === group.groupId}
 									title="Remove from queue"

@@ -917,13 +917,13 @@ describe("Q2-1 / Q2-2: locks use the picker; ways out by name", () => {
 })
 
 describe("Q2-3: the Story ruleset keeps no numbers (★3)", () => {
-	it("the sheet's health is words and no level or spell slots are kept; the crib says health in words; a condition is words; the Planner's shape has no difficulties", async () => {
+	it("the sheet keeps no health, level or spell slots; the crib says no health at all; a condition is words; the Planner's shape has no difficulties", async () => {
 		const { sessionId, ref, owner } = await madeTable("walk2-story", { cls: "cleric", ruleset: "core:ruleset/freeform@1", rigour: "prose" })
 		const { stateGet } = await import("./state")
 		const got: any = await stateGet.handler(fakeSocket(ownerId), { sessionId } as any, emit)
 		expect(got.wordsOnly).toBe(true)
-		const hp = got.slots.find((d: any) => d.slotId === "core:slot/hp@1")
-		expect(hp.words.map((b: any) => b.label)).toEqual(["At death's door", "Badly hurt", "Hurt", "Unhurt"])
+		// 🚧 RF fix 8: Freeform keeps no health — attributes are the rules', never the genre's — so the sheet holds none.
+		expect(got.slots.some((d: any) => d.slotId === "core:slot/hp@1")).toBe(false)
 		expect(got.slots.some((d: any) => d.slotId === "core:slot/crawl-spell-slots@1")).toBe(false)
 		const from = compiled.length
 		await turn(
@@ -933,13 +933,16 @@ describe("Q2-3: the Story ruleset keeps no numbers (★3)", () => {
 			plan({ deltas: [delta({ owner: ref, op: "add", repertoire: "conditions", piece: "Poisoned", reason: "foul water" })] })
 		)
 		const conditions = ((await value(sessionId, owner, "core:slot/crawl-conditions@1")) as any[]) ?? []
-		// A table of words keeps it as words: "Poisoned — Sick and shaky." (or an inline piece saying so).
-		const said = conditions.map((c) => (typeof c === "string" ? c : `${c?.name ?? ""} — ${c?.description ?? c?.prose ?? ""}`))
-		expect(said.find((c) => c.startsWith("Poisoned"))).toBe("Poisoned — Sick and shaky.")
+		// A table of words keeps it as words — 🚧 S4 (lane G3, 2026-10-23): Freeform keeps no conditions of its
+		// own, so the name alone, never another ruleset's rule for it.
+		const said = conditions.map((c) => (typeof c === "string" ? c : String(c?.name ?? "")))
+		expect(said.some((c) => c.startsWith("Poisoned"))).toBe(true)
 		expect(JSON.stringify(conditions)).not.toMatch(/attacks and checks/)
 		const books = String(lastTurnOf(promptsWith(BOOKS, from)[0])?.content)
-		expect(books).toMatch(/- Ann the Bold \([^)]*Cleric, unhurt/)
-		expect(books).not.toMatch(/health \d+\/\d+|level \d/)
+		// 🚧 RF fix 8: Freeform keeps neither health nor class, so the crib names the hero and where they
+		// stand — no health words, no number, no class (they were the genre's, never these rules').
+		expect(books).toMatch(/- Ann the Bold \(player-seat:\d+, at The Sunken Gate\)/)
+		expect(books).not.toMatch(/unhurt|badly hurt|health \d+\/\d+|level \d|Cleric/)
 		// The Planner was asked in the words branch: its node, never the counted one.
 		const runs = await db.select({ receipt: schema.pipelineRuns.receipt }).from(schema.pipelineRuns).where(eq(schema.pipelineRuns.sessionId, sessionId))
 		const receipts = runs.map((r) => JSON.stringify(r.receipt ?? {}))

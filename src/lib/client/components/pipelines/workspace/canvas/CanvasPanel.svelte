@@ -320,14 +320,14 @@
 	const SEG = "btn btn-sm rounded-none"
 	const on = (o: Overlay) => (overlay === o ? "preset-tonal-primary" : "preset-tonal-surface")
 	const DIALOG =
-		"bg-surface-100-900 border-surface-200-800 flex w-[30rem] max-w-full flex-col gap-3 rounded-[12px] border p-4"
+		"bg-surface-100-900 border-surface-200-800 flex w-[30rem] max-w-full flex-col gap-3 rounded-container border p-4"
 </script>
 
 <div bind:this={el} class="panel-card flex flex-col !p-0" style="min-height: 32rem">
 	<!-- ── the bar: version or draft, overlay, actions ──────────── -->
 	<div class="border-surface-200-800 flex flex-wrap items-center gap-2 border-b px-3 py-2">
 		{#if editing}
-			<span class="chip preset-tonal-primary text-[11px]">draft</span>
+			<span class="chip preset-tonal-primary text-meta">draft</span>
 			<span class="text-surface-600-400 text-xs">from {session.draft?.basedOnSemver ?? version?.semver ?? "?"}</span>
 			{#if session.errorCount}
 				<span class="text-error-600-400 flex items-center gap-1 text-xs"><i class="bg-error-500 block size-2 rounded-full"></i>{session.errorCount} {session.errorCount === 1 ? "notice" : "notices"} · publish blocked</span>
@@ -337,8 +337,8 @@
 				<span class="text-success-600-400 flex items-center gap-1 text-xs"><i class="bg-success-500 block size-2 rounded-full"></i>valid</span>
 			{/if}
 		{:else if version}
-			<span class="font-mono text-[12px]">{version.semver}</span>
-			<span class="chip preset-tonal-surface text-[11px]">{version.status}{version.isActive ? " · active" : ""}</span>
+			<span class="font-mono text-xs">{version.semver}</span>
+			<span class="chip preset-tonal-surface text-meta">{version.status}{version.isActive ? " · active" : ""}</span>
 		{/if}
 		{#if model}
 			<span class="text-surface-600-400 text-xs">{model.nodeCount} nodes · {model.clauseCount} clauses</span>
@@ -347,7 +347,7 @@
 			<span class="text-error-600-400 text-xs" role="alert">{session.error}</span>
 		{/if}
 		<div class="ml-auto flex flex-wrap items-center gap-2">
-			<div class="border-surface-300-700 flex overflow-hidden rounded-md border" role="group" aria-label="Colour the line by">
+			<div class="border-surface-200-800 flex overflow-hidden rounded-md border" role="group" aria-label="Colour the line by">
 				<button type="button" class="{SEG} {on('none')}" aria-pressed={overlay === "none"} onclick={() => (overlay = "none")}>Structure</button>
 				<button type="button" class="{SEG} {on('receipt')}" aria-pressed={overlay === "receipt"} disabled={runs.length === 0} title={runs.length ? "Colour by the last run's receipt" : "No runs yet"} onclick={() => (overlay = "receipt")}>Last run</button>
 				<button type="button" class="{SEG} {on('diff')}" aria-pressed={overlay === "diff"} disabled={!editing && !previousVersion} title={editing ? "The draft against the published version" : previousVersion ? `Changes since ${previousVersion.semver}` : "No earlier version"} onclick={() => (overlay = "diff")}>Changes</button>
@@ -371,7 +371,7 @@
 		</div>
 	</div>
 	{#if overlay === "receipt"}
-		<div class="text-surface-600-400 border-surface-200-800 flex flex-wrap items-center gap-3 border-b px-3 py-1 text-[11px]">
+		<div class="text-surface-600-400 border-surface-200-800 flex flex-wrap items-center gap-3 border-b px-3 py-1 text-meta">
 			{#each LEGEND as s (s)}
 				<span class="flex items-center gap-1"><i class="block size-2 rounded-full" style="background: {STATUS_VAR[s]}"></i>{STATUS_LABEL[s]}</span>
 			{/each}
@@ -379,7 +379,7 @@
 			{#if !index}<span class="italic">loading the receipt…</span>{/if}
 		</div>
 	{:else if overlay === "diff"}
-		<div class="text-surface-600-400 border-surface-200-800 flex flex-wrap items-center gap-3 border-b px-3 py-1 text-[11px]">
+		<div class="text-surface-600-400 border-surface-200-800 flex flex-wrap items-center gap-3 border-b px-3 py-1 text-meta">
 			{#if diff}
 				<span class="flex items-center gap-1"><i class="block size-2 rounded-sm" style="background: {MARK_VAR.added}"></i>{diff.added.length} added</span>
 				<span class="flex items-center gap-1"><i class="block size-2 rounded-sm" style="background: {MARK_VAR.changed}"></i>{diff.changed.length} changed</span>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * Which FILE of a repo to fetch — asked once, in one dialog, for both
 	 * managers.
@@ -86,7 +87,7 @@
 	const TONE: Record<string, string> = {
 		good: "text-success-500",
 		warn: "text-warning-500",
-		bad: "text-error-500",
+		bad: "text-error-600-400",
 		muted: "text-surface-600-400"
 	}
 </script>
@@ -100,7 +101,7 @@
 			class="fixed inset-0 z-50 flex items-center justify-center p-4"
 		>
 			<Dialog.Content
-				class="card bg-surface-100-900 border-surface-300-700 flex max-h-[80vh] w-[min(92vw,440px)] flex-col gap-3 border p-4 shadow-xl"
+				class="card bg-surface-100-900 border-surface-200-800 flex max-h-[80vh] w-[min(92vw,440px)] flex-col gap-3 border p-4 shadow-xl"
 			>
 				<header class="flex min-w-0 items-start gap-2">
 					<div class="min-w-0 flex-1">
@@ -139,7 +140,7 @@
 								type="button"
 								role="radio"
 								aria-checked={selected === index}
-								class="flex min-h-11 w-full min-w-0 items-center gap-2 rounded-[10px] px-2.5 py-1.5 text-left {selected ===
+								class="flex min-h-11 w-full min-w-0 items-center gap-2 rounded-base px-2.5 py-1.5 text-left {selected ===
 								index
 									? 'sidebar-row-active'
 									: 'hover:preset-tonal-primary'}"
@@ -150,16 +151,14 @@
 										class="flex min-w-0 items-center gap-1.5"
 									>
 										<span
-											class="min-w-0 truncate text-[15px] font-medium"
+											class="min-w-0 truncate text-lead font-medium"
 										>
 											{quant.name}
 										</span>
 										{#if quant.recommended}
-											<span
-												class="preset-tonal-primary shrink-0 rounded-full px-1.5 py-0.5 text-[11px]"
-											>
+											<Badge tone="primary" size="sm" class="shrink-0">
 												Recommended
-											</span>
+											</Badge>
 										{/if}
 									</span>
 									<span

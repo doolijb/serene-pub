@@ -546,7 +546,7 @@
 										: `Edit ${header.title}`}
 								</Dialog.Title>
 								<input
-									class="hover:bg-surface-200-800 focus:bg-surface-50-950 focus-visible:outline-primary-500 -mx-2 w-[calc(100%+1rem)] rounded-[10px] bg-transparent px-2 py-1 [font-family:var(--typo-heading--font-family)] text-[20px] leading-tight font-semibold tracking-[-0.01em] focus-visible:outline-2"
+									class="hover:bg-surface-200-800 focus:bg-surface-50-950 focus-visible:outline-primary-500 -mx-2 w-[calc(100%+1rem)] rounded-base bg-transparent px-2 py-1 [font-family:var(--typo-heading--font-family)] text-[20px] leading-tight font-semibold tracking-[-0.01em] focus-visible:outline-2"
 									type="text"
 									aria-label="Name"
 									placeholder="Name this loadout"
@@ -576,7 +576,7 @@
 								</span>
 								{#if header.pluginOff}
 									<span
-										class="border-surface-300-700 text-surface-700-300 rounded-full border px-2 py-0.5"
+										class="border-surface-200-800 text-surface-700-300 rounded-full border px-2 py-0.5"
 									>
 										Plugin off
 									</span>
@@ -622,7 +622,7 @@
 								? "Make another loadout the default to change this"
 								: undefined}
 							class="inline-flex min-h-8 items-center gap-1.5 rounded-full px-3 text-xs font-medium disabled:cursor-default pointer-coarse:min-h-11 {draft.isDefault
-								? 'preset-tonal-primary'
+								? 'preset-pressed'
 								: 'preset-tonal-surface'}"
 							onclick={() => (draft.isDefault = !draft.isDefault)}
 						>
@@ -636,7 +636,7 @@
 						<p
 							class="flex min-w-0 items-center gap-1.5 text-sm {runs.tone ===
 							'unfilled'
-								? 'text-primary-700-300'
+								? 'text-primary-ink'
 								: 'text-surface-700-300'}"
 							role="status"
 							aria-label="What runs: {runs.text}"
@@ -665,7 +665,7 @@
 
 					{#if merged && loadout}
 						<div
-							class="bg-surface-200-800 flex flex-col gap-2 rounded-[12px] p-3 @lg/editor:flex-row @lg/editor:items-center"
+							class="bg-surface-200-800 flex flex-col gap-2 rounded-container p-3 @lg/editor:flex-row @lg/editor:items-center"
 							role="status"
 						>
 							<p class="min-w-0 flex-1 text-sm">
@@ -743,7 +743,7 @@
 						     and who runs on it. -->
 						{#if needs.length || bestWith.words.length || loadout}
 							<section
-								class="bg-surface-200-800 flex flex-col gap-2 rounded-[12px] px-3 py-2.5 text-sm"
+								class="bg-surface-200-800 flex flex-col gap-2 rounded-container px-3 py-2.5 text-sm"
 								aria-label="What to choose for"
 								data-loadout-needs
 							>
@@ -897,7 +897,7 @@
 				>
 					{#if problem}
 						<p
-							class="text-error-700-300 flex items-start gap-1.5 text-sm"
+							class="text-error-600-400 flex items-start gap-1.5 text-sm"
 							role="alert"
 						>
 							<Icons.CircleAlert

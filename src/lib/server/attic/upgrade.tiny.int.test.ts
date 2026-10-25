@@ -26,6 +26,8 @@ const manifest = fixtureManifest("tiny")
 let db: Db
 let run: Awaited<ReturnType<typeof runUpgradeTasks>>
 let preview: PreviewOutcome
+/** The reply's model call, by the address its document gives it (Story's sits in its `reply` junction). */
+let replyCall: string | undefined
 const A = `"${ATTIC_SCHEMA}"`
 
 const rows = async <T extends Record<string, unknown>>(q: ReturnType<typeof sql>) =>
@@ -62,6 +64,8 @@ beforeAll(async () => {
 	await addLegacyConnections()
 	run = await runUpgradeTasks(db)
 	preview = await previewTurn(db, manifest.ids.chats.solo)
+	const { oracleNodeKeyOf } = await import("$lib/server/pipelines/config/world")
+	replyCall = await oracleNodeKeyOf(db as never, { slug: "core:spec/story-respond" })
 }, 300_000)
 
 /**
@@ -156,7 +160,8 @@ describe("tiny 0.5.3 fixture, dev-mode meta", () => {
 	})
 
 	test("the session compiles its prompt on the first boot", () => {
-		expect(preview.halt, preview.reason ?? "").toBe("generate")
+		expect(replyCall).toBeTruthy()
+		expect(preview.halt, preview.reason ?? "").toBe(replyCall)
 	})
 
 	test("a pick of a prompt 0.6 no longer ships is not carried: the session starts on the shipped default (B1, M1)", async () => {

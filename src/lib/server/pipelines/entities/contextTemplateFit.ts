@@ -274,6 +274,10 @@ export async function scanContextTemplateFits(
 				.from(schema.pipelineConfigs)
 				.where(eq(schema.pipelineConfigs.specId, spec.id))
 			const configIds = configs.map((c) => c.id)
+			const { genreStoredValues } = await import(
+				"$lib/server/pipelines/registrations/genreValues"
+			)
+			const genreValues = await genreStoredValues(db, spec.slug)
 
 			for (const d of slots) {
 				// templateId → the configurations selecting it.
@@ -315,6 +319,17 @@ export async function scanContextTemplateFits(
 					))
 					if (typeof o.value === "number" && !selected.has(o.value))
 						selected.set(o.value, new Set())
+				// 🚧 And the genre's defaults' values (PLAN-layering D5) — where an
+				// instance-wide selection of a pipeline registrations run lives.
+				// Reported like an override: no configuration to notice it on.
+				for (const g of genreValues)
+					if (
+						g.nodeKey === d.nodeKey &&
+						g.slot === d.slot &&
+						typeof g.value === "number" &&
+						!selected.has(g.value)
+					)
+						selected.set(g.value, new Set())
 				if (!selected.size) continue
 
 				const rows = await db

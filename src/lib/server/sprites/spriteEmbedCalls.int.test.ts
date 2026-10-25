@@ -89,6 +89,8 @@ vi.mock("$lib/server/utils/getConnectionAdapter", () => ({
 let userId: number
 let characterId: number
 let respondSpecId: number
+/** The reply's sprite picker, by the address its document gives it (Story's sits in its `reply` junction). */
+let PICKER: string
 
 function png(seed: number): Buffer {
 	const img = new PNG({ width: 2, height: 2 })
@@ -181,6 +183,7 @@ beforeAll(async () => {
 		.from(schema.pipelineSpecs)
 		.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
 	respondSpecId = spec!.id
+	PICKER = (await (await import("$lib/server/utils/testDb")).replyStepKeys(db, STORY_RESPOND_SPEC_ID)).spritePick!
 
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	userId = (await createTestUser(db, "sprite-embed-calls")).id
@@ -251,15 +254,12 @@ describe("the sprite picker's embedding request", () => {
 
 	it("is not made at all with Choose sprites off", async () => {
 		const sessionId = await makeSession()
-		const { SPRITE_PICKER_NODE_KEY } = await import(
-			"@serene-pub/core-catalog"
-		)
-		await sessionOverride(sessionId, SPRITE_PICKER_NODE_KEY, "enabled", false)
+		await sessionOverride(sessionId, PICKER, "enabled", false)
 		const outcome: any = await turn(sessionId)
 		expect(embedCalls).toEqual([])
 		// The step still ran, and picked nothing.
 		const pick = (outcome.receipt?.nodes ?? []).find(
-			(n: any) => n.nodeKey === SPRITE_PICKER_NODE_KEY
+			(n: any) => n.nodeKey === PICKER
 		)
 		expect(pick).toBeTruthy()
 		expect(pick?.output?.main ?? null).toBeNull()

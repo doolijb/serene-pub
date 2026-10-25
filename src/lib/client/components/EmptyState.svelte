@@ -24,7 +24,7 @@
      edge is the ground's own border stop, never a signal colour — a dashed
      primary edge is the drop target's. -->
 <div
-	class="border-surface-200-800 flex flex-col items-center gap-3 rounded-[12px] border border-dashed px-4 py-12 text-center"
+	class="border-surface-200-800 flex flex-col items-center gap-3 rounded-container border border-dashed px-4 py-12 text-center"
 	role="status"
 >
 	<Icon size={40} class="text-surface-600-400" aria-hidden="true" />

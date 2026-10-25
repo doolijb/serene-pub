@@ -58,7 +58,7 @@ const pipelinesList = [
 		taxonomy: { role: "primary", genre: "core:genre/story" }
 	},
 	{
-		slug: "core:spec/lair-respond",
+		slug: "core:spec/lair-reply",
 		name: "Reply",
 		version: "1.0.0",
 		event: null,
@@ -112,7 +112,7 @@ describe("PipelineReviewModal — the pipeline a card belongs to", () => {
 	})
 
 	test("names the pipeline and its genre once both lists arrive", () => {
-		open(review("r1", "core:spec/lair-respond"))
+		open(review("r1", "core:spec/lair-reply"))
 		expect(requested).toContain("pipelines:list")
 		expect(requested).toContain("sessions:genres")
 

@@ -81,7 +81,7 @@
 		{#if validationErrors.baseUrl}
 			<p
 				id="baseUrl-error"
-				class="text-error-500 mt-1 text-sm"
+				class="text-error-600-400 mt-1 text-sm"
 				role="alert"
 			>
 				{validationErrors.baseUrl}
@@ -119,7 +119,7 @@
 		{#if validationErrors.apiKey}
 			<p
 				id="apiKey-error"
-				class="text-error-500 mt-1 text-sm"
+				class="text-error-600-400 mt-1 text-sm"
 				role="alert"
 			>
 				{validationErrors.apiKey}

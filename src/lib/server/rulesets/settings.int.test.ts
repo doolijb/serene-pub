@@ -15,6 +15,7 @@ import * as schema from "$lib/server/db/schema"
 import { defineAttributeSlot, genre, getAttributeSlot } from "@serene-pub/sdk"
 import "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -44,7 +45,7 @@ beforeAll(async () => {
 		appliesTo: ["cast"],
 		rulesetOwned: VIS_ITINERIS
 	} as Parameters<typeof defineAttributeSlot>[1])
-	genre(GENRE, { name: { en: "Ruleset settings" }, family: "test", slots: [getAttributeSlot(HP)!], customAttributes: "allow", events: {} })
+	genreKeeping(GENRE, { name: { en: "Ruleset settings" }, family: "test", slots: [getAttributeSlot(HP)!], customAttributes: "allow", events: {} })
 }, 60_000)
 
 afterAll(async () => {
@@ -142,25 +143,13 @@ describe("sessions:setRulesetSettings", () => {
 })
 
 describe("a slot a ruleset owns", () => {
-	test("is offered to add only in a session that plays its ruleset", async () => {
-		const { stateAttributes, stateSetAttributePicks } = await import("$lib/server/sockets/state")
-		const addable = async (userId: number, sessionId: number) =>
-			((await stateAttributes.handler(socketOf(userId), { sessionId } as any, () => {})) as any).addable.map((r: any) => r.slotId)
-
-		const story = await world("core:ruleset/freeform@1")
-		expect(await addable(story.owner.id, story.session.id)).not.toContain(KNACK)
-		await expect(
-			stateSetAttributePicks.handler(socketOf(story.owner.id), { sessionId: story.session.id, picks: [{ slotId: KNACK, enabled: true }] } as any, () => {})
-		).rejects.toThrow(/belongs to a ruleset this session does not play/)
-
-		const visItineris = await world()
-		expect(await addable(visItineris.owner.id, visItineris.session.id)).toContain(KNACK)
-		await stateSetAttributePicks.handler(
-			socketOf(visItineris.owner.id),
-			{ sessionId: visItineris.session.id, picks: [{ slotId: KNACK, enabled: true }] } as any,
-			() => {}
-		)
-		const { vocabularyFor } = await import("$lib/server/state/resolve")
-		expect((await vocabularyFor(db as never, visItineris.session.id)).entries.map((e) => e.decl.id)).toContain(KNACK)
+	// 🚧 RF fix 8: a session adds no attributes — a ruleset's own slot is tracked where that ruleset is played, and never picked.
+	test("a ruleset's own slot is never picked: refused in words, played or not", async () => {
+		const { stateSetAttributePicks } = await import("$lib/server/sockets/state")
+		for (const w of [await world("core:ruleset/freeform@1"), await world()])
+			await expect(
+				stateSetAttributePicks.handler(socketOf(w.owner.id), { sessionId: w.session.id, picks: [{ slotId: KNACK, enabled: true }] } as any, () => {})
+			).rejects.toThrow(/a session adds none/)
 	})
+
 })

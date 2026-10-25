@@ -182,6 +182,11 @@ export async function saveDocument(
 					inputEvents:
 						(doc.input as { events?: string[] } | undefined)?.events ??
 						null,
+					// 🚧 What replaced the lock (PLAN-layering D3, R6): hints
+					// and declared emissions, stored as the document states
+					// them so it reads back hashing the same.
+					suits: (doc as { suits?: string[] }).suits ?? null,
+					emits: (doc as { emits?: string[] }).emits ?? null,
 					contributes:
 						(doc.contributes as Record<string, any>) ?? null,
 					taxonomy:
@@ -327,6 +332,14 @@ export async function saveDocument(
 				spec.activeVersionId,
 				version.id
 			)
+			// ⏳ A spec still locked to a genre (D7 back-compat): that genre's
+			// derived defaults follow what its locks answer now.
+			if (doc.input?.genre) {
+				const { projectLockedGenre } = await import(
+					"$lib/server/pipelines/registrations/project"
+				)
+				await projectLockedGenre(tx, doc.input.genre)
+			}
 		}
 
 		return {
@@ -424,6 +437,8 @@ async function publishVersion(
 	await assertActionEnvoyKeysFree(tx, specId, versionId, batch)
 	// The one writer of the rows `declaredEnvoys` caches (U5g review, S4).
 	invalidateDeclaredEnvoys()
+	// 🚧 …and of what the registrations resolver judges published (D7).
+	;(await import("$lib/server/pipelines/registrations/resolve")).invalidateRegistrations()
 	await tx
 		.update(schema.pipelineSpecVersions)
 		.set({ status: "retired" })
@@ -483,7 +498,10 @@ async function assertSlashNamesFree(
 		.from(schema.pipelineSpecs)
 		.where(eq(schema.pipelineSpecs.id, specId))
 		.limit(1)
-	const mine = actionsOf({ id: spec!.slug, contributes: incoming.contributes })
+	const mine = await inRegisteringGenres(
+		tx,
+		actionsOf({ id: spec!.slug, contributes: incoming.contributes })
+	)
 	if (!mine.length) return
 	// Every OTHER spec's active version — the install as it stands, less the
 	// batch-mates whose versions are on their way out.
@@ -894,13 +912,57 @@ async function installedActions(
 			schema.pipelineSpecVersions,
 			eq(schema.pipelineSpecVersions.id, schema.pipelineSpecs.activeVersionId)
 		)
-	return rows
-		.filter((r) => keep(r))
-		.flatMap((o) =>
-			o.contributes
-				? actionsOf({ id: o.slug, contributes: o.contributes })
-				: []
+	return await inRegisteringGenres(
+		db,
+		rows
+			.filter((r) => keep(r))
+			.flatMap((o) =>
+				o.contributes
+					? actionsOf({ id: o.slug, contributes: o.contributes })
+					: []
+			)
+	)
+}
+
+/**
+ * 🚧 Each action in the genres that offer it (PLAN-layering D3, D7): an
+ * action's genre comes from the registrations that include it — the genre's
+ * defaults' and its presets' — ⏳ else its lock's. One copy per genre, so a
+ * slash name is judged where a person meets it; an action no genre offers
+ * yet is judged nowhere (it is offered to nobody).
+ */
+async function inRegisteringGenres(
+	db: Db,
+	actions: ReturnType<typeof actionsOf>
+): Promise<ReturnType<typeof actionsOf>> {
+	if (!actions.length) return actions
+	const regs = await db
+		.select({
+			scopeKind: schema.registrations.scopeKind,
+			scopeRef: schema.registrations.scopeRef,
+			triggerRef: schema.registrations.triggerRef,
+			presetGenre: schema.sessionPresets.genreId
+		})
+		.from(schema.registrations)
+		.leftJoin(schema.sessionPresets, eq(schema.sessionPresets.id, schema.registrations.presetId))
+		.where(
+			and(
+				eq(schema.registrations.triggerFamily, "action"),
+				eq(schema.registrations.dropped, false)
+			)
 		)
+	const genresOf = new Map<string, Set<string>>()
+	for (const r of regs) {
+		const genre = r.scopeKind === "genre" ? r.scopeRef : r.scopeKind === "preset" ? r.presetGenre : null
+		if (!genre || !r.triggerRef) continue
+		const set = genresOf.get(r.triggerRef) ?? new Set<string>()
+		set.add(genre)
+		genresOf.set(r.triggerRef, set)
+	}
+	return actions.flatMap((a) => {
+		if (a.genre) return [a]
+		return [...(genresOf.get(`${a.specId}#${a.key}`) ?? [])].map((genre) => ({ ...a, genre }))
+	})
 }
 
 /**
@@ -1006,6 +1068,9 @@ export async function loadDocument(
 					}
 				}
 			: {}),
+		// 🚧 Only when stored, so a new-form document reads back as written.
+		...(Array.isArray(version.suits) ? { suits: [...version.suits] } : {}),
+		...(Array.isArray(version.emits) ? { emits: [...version.emits] } : {}),
 		...(version.contributes ? { contributes: version.contributes } : {}),
 		...(version.taxonomy ? { taxonomy: version.taxonomy } : {}),
 		includes: includeRows.map((i: any) => ({

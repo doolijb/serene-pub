@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * The Changes view (22 §2.2): the configuration *is* its diff — every
 	 * setting it departs from the shipped default by, saved deviations and the
@@ -138,13 +139,9 @@
 			</span>
 		{:else if col.key === "state"}
 			{#if row.state === "pending"}
-				<span class="preset-tonal-warning rounded-full px-2 py-0.5 text-xs"
-					>pending</span
-				>
+				<Badge tone="warning" size="md">pending</Badge>
 			{:else if row.state === "pending-reset"}
-				<span class="preset-tonal-warning rounded-full px-2 py-0.5 text-xs"
-					>resets on save</span
-				>
+				<Badge tone="warning" size="md">resets on save</Badge>
 			{:else}
 				<span
 					class="preset-tonal-secondary rounded-full px-2 py-0.5 text-xs"

@@ -74,13 +74,14 @@ describe("preset bindings validation", () => {
 				id,
 				bindings: {
 					"core:event/session-created@1": { spec: "core:spec/story-create" },
-					// narrate answers session-action, not message-respond.
-					"core:event/message-respond@1": { spec: "core:spec/story-narrate" }
+					// 🚧 A pipeline this pub does not publish (fit, R4, is the
+					// registration door's — lane 5b).
+					"core:event/message-respond@1": { spec: "test:spec/never-published" }
 				}
 			},
 			noop
 		)
-		expect(wrong.error).toMatch(/cannot bind to 'core:event\/message-respond@1'/)
+		expect(wrong.error).toMatch(/'test:spec\/never-published' is not published on this pub/)
 
 		const missing = await sessionPresetsUpdate.handler(
 			admin(),
@@ -177,60 +178,6 @@ describe("the genre dashboard", () => {
 			"core:spec/story-narrate"
 		)
 		expect(res.presets.length).toBeGreaterThan(0)
-	}, 60_000)
-})
-
-describe("the configurations index", () => {
-	test("counts preset dependents off the bindings", async () => {
-		const { sessionPresetsCreate, sessionPresetsUpdate } = await import(
-			"./sessionAdmin"
-		)
-		const { pipelinesConfigsIndex } = await import("./pipelines")
-		const [config] = (await db
-			.select()
-			.from(schema.pipelineConfigs)
-			.innerJoin(
-				schema.pipelineSpecs,
-				eq(schema.pipelineSpecs.id, schema.pipelineConfigs.specId)
-			)) as any[]
-		const respondConfig = (await db
-			.select({
-				id: schema.pipelineConfigs.id,
-				specId: schema.pipelineConfigs.specId
-			})
-			.from(schema.pipelineConfigs)
-			.innerJoin(
-				schema.pipelineSpecs,
-				eq(schema.pipelineSpecs.id, schema.pipelineConfigs.specId)
-			)
-			.where(
-				eq(schema.pipelineSpecs.slug, "core:spec/story-respond")
-			)) as any[]
-		const cfgId = respondConfig[0].id
-
-		const created = await sessionPresetsCreate.handler(
-			admin(),
-			{ name: "Counts test", genreId: "core:genre/story" },
-			noop
-		)
-		await sessionPresetsUpdate.handler(
-			admin(),
-			{
-				id: created.preset!.id,
-				bindings: {
-					"core:event/session-created@1": { spec: "core:spec/story-create" },
-					"core:event/message-respond@1": {
-						spec: "core:spec/story-respond",
-						config: cfgId
-					}
-				}
-			},
-			noop
-		)
-		const index = await pipelinesConfigsIndex.handler(admin(), {}, noop)
-		const row = index.configs.find((c) => c.id === cfgId)
-		expect(row?.usedByPresets).toBeGreaterThan(0)
-		expect(config).toBeTruthy()
 	}, 60_000)
 })
 
@@ -356,129 +303,80 @@ describe("the preset decides the run", () => {
 		).toBe("core:spec/story-respond")
 	}, 60_000)
 
-	test("a preset naming a configuration gets that configuration", async () => {
-		const { sessionPresetsUpdate } = await import("./sessionAdmin")
-		const { duplicateConfig, resolveSelectedConfig } = await import(
-			"$lib/server/pipelines/config/named"
-		)
+	/**
+	 * 🚧 Configurations retired (R38, PLAN-layering D5): a configuration an
+	 * old client's form names becomes the preset's registration `values`,
+	 * read by the value cascade at the preset layer.
+	 */
+	async function configWithValue(specSlug: string, name: string, maxTokens: number): Promise<number> {
 		const [spec] = (await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/story-respond"))
+			.where(eq(schema.pipelineSpecs.slug, specSlug))
 			.limit(1)) as any[]
-		const shipped = await resolveSelectedConfig(
-			db as any,
-			spec.id,
-			"core:spec/story-respond",
-			{}
-		)
-		const copy = await duplicateConfig(
-			db as any,
-			shipped!.configId,
-			"Preset's own values"
-		)
+		const [config] = (await db
+			.insert(schema.pipelineConfigs)
+			.values({ specId: spec.id, name, isImmutable: false })
+			.returning()) as any[]
+		await db.insert(schema.pipelineConfigValues).values({
+			configId: config.id,
+			nodeKey: "generate",
+			slot: "params",
+			path: "maxTokens",
+			value: maxTokens
+		})
+		return config.id
+	}
 
+	test("a preset naming a configuration gets its values", async () => {
+		const { sessionPresetsUpdate } = await import("./sessionAdmin")
+		const configId = await configWithValue("core:spec/story-respond", "Preset's own values", 777)
 		const presetId = await presetFor("Names a config")
-		await sessionPresetsUpdate.handler(
+		const res = await sessionPresetsUpdate.handler(
 			admin(),
 			{
 				id: presetId,
 				bindings: {
 					"core:event/session-created@1": { spec: "core:spec/story-create" },
-					"core:event/message-respond@1": {
-						spec: "core:spec/story-respond",
-						config: copy.id
-					}
+					"core:event/message-respond@1": { spec: "core:spec/story-respond", config: configId }
 				}
 			},
 			noop
 		)
+		expect(res.preset?.registrations?.change).toEqual([
+			{ key: "message-respond→story-respond", values: { generate: { params: { maxTokens: 777 } } } }
+		])
 		const sessionId = await sessionOnPreset(presetId, "preset-config-owner")
-
-		const selected = await resolveSelectedConfig(
-			db as any,
-			spec.id,
-			"core:spec/story-respond",
-			{ sessionId }
-		)
-		expect(selected?.configId).toBe(copy.id)
-		expect(selected?.source).toBe("preset")
-
-		// And through the seam the session settings screen reads.
-		const { sessionPipeline } = await import(
-			"$lib/server/pipelines/entities/sessionGenres"
-		)
-		expect(
-			(await sessionPipeline(db as any, sessionId, GENRE))?.configId
-		).toBe(copy.id)
+		const { registrationValueLayers } = await import("$lib/server/pipelines/registrations/values")
+		const layers = await registrationValueLayers(db as any, { specSlug: "core:spec/story-respond", sessionId })
+		expect(layers.key).toBe("message-respond→story-respond")
+		expect(layers.preset).toEqual({ generate: { params: { maxTokens: 777 } } })
+		expect(layers.session).toBeNull()
 	}, 60_000)
 
 	test("configSelections answers for a spec no event binding names", async () => {
 		const { sessionPresetsUpdate } = await import("./sessionAdmin")
-		const { duplicateConfig, resolveSelectedConfig } = await import(
-			"$lib/server/pipelines/config/named"
-		)
-		const [narrate] = (await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/story-narrate"))
-			.limit(1)) as any[]
-		const shipped = await resolveSelectedConfig(
-			db as any,
-			narrate.id,
-			"core:spec/story-narrate",
-			{}
-		)
-		const copy = await duplicateConfig(
-			db as any,
-			shipped!.configId,
-			"Narrate, preset's own"
-		)
+		const configId = await configWithValue("core:spec/story-narrate", "Narrate, preset's own", 555)
 		const presetId = await presetFor("Selects an action's config")
 		await sessionPresetsUpdate.handler(
 			admin(),
-			{
-				id: presetId,
-				configSelections: { "core:spec/story-narrate": copy.id }
-			},
+			{ id: presetId, configSelections: { "core:spec/story-narrate": configId } },
 			noop
 		)
 		const sessionId = await sessionOnPreset(presetId, "preset-action-owner")
-		const selected = await resolveSelectedConfig(
-			db as any,
-			narrate.id,
-			"core:spec/story-narrate",
-			{ sessionId }
-		)
-		expect(selected?.configId).toBe(copy.id)
-		expect(selected?.source).toBe("preset")
+		const { registrationValueLayers } = await import("$lib/server/pipelines/registrations/values")
+		const layers = await registrationValueLayers(db as any, { specSlug: "core:spec/story-narrate", sessionId })
+		expect(layers.key).toBe("story-narrate#narrate→story-narrate")
+		expect(layers.preset).toEqual({ generate: { params: { maxTokens: 555 } } })
 	}, 60_000)
 
-	test("a preset naming no configuration still gets the default", async () => {
-		const { resolveSelectedConfig } = await import(
-			"$lib/server/pipelines/config/named"
-		)
+	test("a preset naming no configuration changes no values", async () => {
 		const presetId = await presetFor("Names no config")
 		const sessionId = await sessionOnPreset(presetId, "preset-default-owner")
-		const [spec] = (await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/story-respond"))
-			.limit(1)) as any[]
-		const shipped = await resolveSelectedConfig(
-			db as any,
-			spec.id,
-			"core:spec/story-respond",
-			{}
-		)
-
-		// The regression: a preset-born session used to be told it had no
-		// configuration at all, where a preset-less one got the shipped default.
-		const { presetActionsFor } = await import(
-			"$lib/server/pipelines/entities/sessionGenres"
-		)
-		const actions = await presetActionsFor(db as any, sessionId, GENRE)
-		expect(actions.configId).toBe(shipped!.configId)
+		const { registrationValueLayers } = await import("$lib/server/pipelines/registrations/values")
+		const layers = await registrationValueLayers(db as any, { specSlug: "core:spec/story-respond", sessionId })
+		// The declared defaults apply; no layer above them says anything.
+		expect(layers).toMatchObject({ key: "message-respond→story-respond", preset: null, session: null })
 	}, 60_000)
 
 	/**
@@ -490,17 +388,14 @@ describe("the preset decides the run", () => {
 	 */
 	test("a binding that stopped resolving falls back, and says what it did", async () => {
 		const presetId = await presetFor("Went stale")
-		// Written past the handler on purpose: this is the state a republish
-		// produces underneath a binding that was valid when it was saved.
-		await db
-			.update(schema.sessionPresets)
-			.set({
-				bindings: {
-					"core:event/session-created@1": { spec: "core:spec/story-create" },
-					"core:event/message-respond@1": { spec: "core:spec/story-narrate" }
-				}
-			})
-			.where(eq(schema.sessionPresets.id, presetId))
+		// Written past the handler on purpose: this is the state a removal
+		// leaves underneath a registration that was valid when it was saved.
+		const { writeLegacyPresetChanges } = await import(
+			"$lib/server/pipelines/registrations/presetRows"
+		)
+		await writeLegacyPresetChanges(db as any, { id: presetId, genreId: GENRE }, {
+			bindings: { "core:event/message-respond@1": { spec: "test:spec/gone-respond" } }
+		})
 		const sessionId = await sessionOnPreset(presetId, "preset-stale-owner")
 
 		const { resolveSessionEventVerdict } = await import(
@@ -516,9 +411,9 @@ describe("the preset decides the run", () => {
 		expect(verdict.spec).toBe("core:spec/story-respond")
 		// And the substitution is stated, by preset and by slug.
 		expect(verdict.fallback?.preset).toBe("Went stale")
-		expect(verdict.fallback?.bound).toBe("core:spec/story-narrate")
+		expect(verdict.fallback?.bound).toBe("test:spec/gone-respond")
 		expect(verdict.fallback?.event).toBe("core:event/message-respond@1")
-		expect(verdict.fallback?.reason).toMatch(/core:spec\/story-narrate/)
+		expect(verdict.fallback?.reason).toMatch(/test:spec\/gone-respond/)
 
 		// The reply seam agrees with the dispatch seam, as it must.
 		const { resolveSubjectVerdict } = await import(
@@ -531,7 +426,7 @@ describe("the preset decides the run", () => {
 			{ sessionId }
 		)
 		expect(reply.spec).toBe("core:spec/story-respond")
-		expect(reply.fallback?.bound).toBe("core:spec/story-narrate")
+		expect(reply.fallback?.bound).toBe("test:spec/gone-respond")
 	}, 60_000)
 })
 

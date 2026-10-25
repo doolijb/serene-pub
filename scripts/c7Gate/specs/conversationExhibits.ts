@@ -7,17 +7,19 @@
  * character, and the narrator), the read-only banner, and the bar and the
  * nudge at a tablet and a phone width; and the composer (P3g): a line typed,
  * each footer control and the Actions toggle hovered and keyboard-focused, the
- * preview, the More panel and a pane in the field's place, the actions row, its
- * overflow menu and the action legend, the `/` palette, two personas and the
+ * preview, the More panel (the fixture has no pane for the field's place: the
+ * Pinned images pane retired 2026-10-11, Lore needs a lorebook), the actions
+ * row, its overflow menu and the action legend, the `/` palette, two personas and the
  * persona menu, a reply in flight (Stop), a guest's Join, a line's editor
  * (MessageComposer), all at a tablet's and a phone's width, and the minimal and
  * writer skins; and the message (P3h): a line under the pointer and the
  * keyboard (its quick actions, its ⋮ trigger, its name), the ⋮ menu
  * open, swipes, a failed reply with Retry, the thinking and sections
  * disclosures (from fields and from typed parts), a block tree, the state
- * ledger and its proposals with the Review panel, scenes and history entries,
- * a hidden line, a line's selection controls, the widget's settings (newest
- * first, avatars off, timestamps off, the composer on top, the log hidden), an
+ * ledger and its proposals with the Review panel, scenes and history entries
+ * (Start a new entry in the scene divider's ⋯ menu), a hidden line, a line's
+ * selection controls, the widget's settings (newest first, avatars off,
+ * timestamps off, the composer on top, the log hidden), an
  * empty session, a line at a phone's width, the line's own Stop while a reply
  * is in flight, and a line's editor's Cancel and Save. Each pack reads every
  * one, judged and recorded like its snapshot (`exhibits` in
@@ -159,7 +161,9 @@ const selectionAt = (label: string, viewport: { width: number; height: number })
 	name: `selection at ${label}`,
 	viewport,
 	setup: startSelection,
-	states: [{ name: `the selection bar at ${label}`, show: rest }]
+	// The bar's arrival can leave the narrow log a few px off its newest end
+	// (12px once at 390px), so the state ends there (`toNewest`).
+	states: [{ name: `the selection bar at ${label}`, show: toNewest }]
 })
 
 /* ── who is due next ─────────────────────────────────────────────────── */
@@ -386,8 +390,12 @@ async function opened(ctx: ExhibitCtx, trigger: Locator, panel: Locator) {
 	await pointerAway(ctx)
 	await settle(ctx)
 }
-/** The More panel's row for the Pinned images pane, in its portalled panel. */
-const paneOption = (ctx: ExhibitCtx) => ctx.page.getByRole("dialog").getByRole("button", { name: "Pinned images" })
+/**
+ * The More panel's row, in its portalled panel: What can be attached (the
+ * readers dialog). The fixture has no pane to offer there — Pinned images
+ * retired (W6, 2026-10-11), Lore needs a lorebook, Statistics context debugging.
+ */
+const paneOption = (ctx: ExhibitCtx) => ctx.page.getByRole("dialog").getByRole("button", { name: "What can be attached", exact: true })
 /** The second persona's row in the persona menu's portalled panel. */
 const personaOption = (ctx: ExhibitCtx) => ctx.page.getByRole("dialog").getByRole("button", { name: /C7 gate Ash/ })
 /** Press Edit on the newest line: its editor (MessageComposer) opens in the row, the composer steps aside. */
@@ -432,7 +440,7 @@ const composerGroup: ExhibitGroup = {
 		{ name: "the composer, a line typed", show: (ctx) => typed(ctx) },
 		...pointedAndFocused("the composer, Send", (ctx) => only(ctx, "Send message")),
 		...pointedAndFocused("the composer, Preview", (ctx) => only(ctx, "Preview the formatted draft")),
-		...pointedAndFocused("the composer, More", (ctx) => only(ctx, "More composer panels")),
+		...pointedAndFocused("the composer, More", (ctx) => only(ctx, "More")),
 		...pointedAndFocused("the composer, Actions", (ctx) => only(ctx, "Actions")),
 		{
 			name: "the composer, the draft previewed",
@@ -451,19 +459,11 @@ const panelsGroup: ExhibitGroup = {
 	states: [
 		{
 			name: "the composer, the More panel open",
-			show: (ctx) => opened(ctx, lastNamed(ctx, "button", "More composer panels"), paneOption(ctx))
+			show: (ctx) => opened(ctx, lastNamed(ctx, "button", "More"), paneOption(ctx))
 		},
-		{ name: "the composer, a More panel row hovered", show: (ctx) => hover(ctx, paneOption(ctx)) },
-		{
-			name: "the composer, a panel in the field's place",
-			show: async (ctx) => {
-				await paneOption(ctx).click()
-				await only(ctx, "Back to compose")
-				await rest(ctx)
-			}
-		},
-		...pointedAndFocused("the composer, Back to compose", (ctx) => only(ctx, "Back to compose")),
-		...pointedAndFocused("the composer, More with a panel open,", (ctx) => only(ctx, "More composer panels"))
+		{ name: "the composer, a More panel row hovered", show: (ctx) => hover(ctx, paneOption(ctx)) }
+		// "a panel in the field's place", "Back to compose" and "More with a
+		// panel open" are gone with the fixture's last pane (see `paneOption`).
 	]
 }
 
@@ -640,7 +640,7 @@ const composerAt = (label: string, viewport: { width: number; height: number }):
 	states: [
 		{ name: `the composer at ${label}, a line typed`, show: (ctx) => typed(ctx) },
 		{ name: `the composer at ${label}, Send focused`, show: async (ctx) => keyboardTo(ctx, await only(ctx, "Send message")) },
-		{ name: `the composer at ${label}, More focused`, show: async (ctx) => keyboardTo(ctx, await only(ctx, "More composer panels")) },
+		{ name: `the composer at ${label}, More focused`, show: async (ctx) => keyboardTo(ctx, await only(ctx, "More")) },
 		{
 			name: `the composer at ${label}, the actions open`,
 			show: async (ctx) => {
@@ -651,7 +651,7 @@ const composerAt = (label: string, viewport: { width: number; height: number }):
 		},
 		{
 			name: `the composer at ${label}, the More panel open`,
-			show: (ctx) => opened(ctx, lastNamed(ctx, "button", "More composer panels"), paneOption(ctx))
+			show: (ctx) => opened(ctx, lastNamed(ctx, "button", "More"), paneOption(ctx))
 		},
 		{
 			name: `the composer at ${label}, two personas`,
@@ -887,12 +887,13 @@ const disclosureGroup: ExhibitGroup = {
 		),
 	states: [
 		{ name: "disclosures, folded", show: rest },
-		...pointedAndFocused("disclosures, Thinking", (ctx) => newest(ctx).getByRole("button", { name: "Thinking", exact: true })),
-		...pointedAndFocused("disclosures, a part's Thinking", (ctx) => lines(ctx).nth(-3).getByRole("button", { name: "Thinking", exact: true })),
+		// The thinking fold reads "Reasoning" (the state names keep the exhibit's).
+		...pointedAndFocused("disclosures, Thinking", (ctx) => newest(ctx).getByRole("button", { name: "Reasoning", exact: true })),
+		...pointedAndFocused("disclosures, a part's Thinking", (ctx) => lines(ctx).nth(-3).getByRole("button", { name: "Reasoning", exact: true })),
 		{
 			name: "disclosures, unfolded",
 			show: async (ctx) => {
-				for (const name of ["Extra instructions", "Plan", "Notes", "Thinking", "Tool: lookup"])
+				for (const name of ["Extra instructions", "Plan", "Notes", "Reasoning", "Tool: lookup"])
 					for (const b of await conv(ctx).getByRole("button", { name, exact: true }).all()) await b.click()
 				await rest(ctx)
 				await toNewest(ctx)
@@ -1009,7 +1010,13 @@ const ledgerGroup: ExhibitGroup = {
 		{ name: "the ledger, Reject hovered", show: (ctx) => hover(ctx, conv(ctx).getByRole("button", { name: "Reject", exact: true }).first()) },
 		{
 			name: "the ledger, the Review panel open",
-			show: (ctx) => opened(ctx, conv(ctx).getByRole("button", { name: /^Review 1 change/ }), ctx.page.getByRole("dialog", { name: "Waiting for you" }))
+			// The turn line's popover ("The last run"), its "Waiting for you" list.
+			show: (ctx) =>
+				opened(
+					ctx,
+					conv(ctx).getByRole("button", { name: /^Review 1 change/ }),
+					ctx.page.getByRole("dialog", { name: "The last run" }).filter({ hasText: "Waiting for you" })
+				)
 		}
 	]
 }
@@ -1063,6 +1070,24 @@ async function scenes(ctx: ExhibitCtx) {
 	}
 	await rest(ctx)
 }
+/**
+ * The scene divider's ⋯ opened from the keyboard (Enter on its trigger): the
+ * menu's first row, Start a new entry (the last scene of a finished entry with
+ * none after it), takes the focus, `:focus-visible`.
+ */
+async function startEntryFromKeyboard(ctx: ExhibitCtx) {
+	await keyboardTo(ctx, conv(ctx).getByRole("button", { name: /^Options for / }))
+	await ctx.page.keyboard.press("Enter")
+	const start = ctx.page.getByRole("dialog", { name: "Scene options" }).getByRole("button", { name: "Start a new entry", exact: true })
+	await start.waitFor({ timeout: 8_000 })
+	for (let i = 0; ; i++) {
+		if (await start.evaluate((el) => el === document.activeElement && el.matches(":focus-visible"))) break
+		if (i >= 30) throw new Error("the scene menu opened from the keyboard, and Start a new entry did not take the focus")
+		await ctx.page.waitForTimeout(100)
+	}
+	await pointerAway(ctx)
+	await settle(ctx)
+}
 const scenesGroup: ExhibitGroup = {
 	name: "scenes",
 	setup: scenes,
@@ -1070,12 +1095,19 @@ const scenesGroup: ExhibitGroup = {
 		{ name: "scenes and history entries", show: rest },
 		...pointedAndFocused("scenes, a scene's title", (ctx) => conv(ctx).getByRole("button", { name: /The gate opens/ })),
 		{ name: "scenes, a history marker hovered", show: (ctx) => hover(ctx, conv(ctx).getByRole("button", { name: /^Next: / })) },
-		{ name: "scenes, Start a new entry focused", show: (ctx) => keyboardTo(ctx, conv(ctx).getByRole("button", { name: /Start a new entry/ })) },
-		{ name: "scenes, selecting: lines a scene has taken", show: startSelection }
+		{ name: "scenes, Start a new entry focused", show: startEntryFromKeyboard },
+		{
+			name: "scenes, selecting: lines a scene has taken",
+			show: async (ctx) => {
+				await ctx.page.keyboard.press("Escape")
+				await settle(ctx)
+				await startSelection(ctx)
+			}
+		}
 	]
 }
 
-/** A hidden line: out of what the model reads (its ghost badge, the dimmed row, Unhide pressed in its menu). */
+/** A hidden line: out of what the characters read (its "Hidden from the story" badge, the dimmed row, Unhide pressed in its menu). */
 const hiddenGroup: ExhibitGroup = {
 	name: "a hidden line",
 	setup: (ctx) =>
@@ -1085,7 +1117,7 @@ const hiddenGroup: ExhibitGroup = {
 				rows[1].isHidden = true
 				lastReply(rows).isHidden = true
 			},
-			(ctx) => conv(ctx).getByRole("img", { name: "Hidden from the model" })
+			(ctx) => conv(ctx).getByText("Hidden from the story", { exact: true })
 		),
 	states: [
 		{ name: "a hidden line", show: rest },

@@ -21,6 +21,10 @@ import {
 } from "$lib/shared/constants/connectionSections"
 import { adapterCapabilities } from "$lib/shared/connectionAdapters/manifest"
 import {
+	modelKindsAllow,
+	type ModelKindFields
+} from "$lib/shared/connections/modelKinds"
+import {
 	capabilityLabel,
 	isTransformId,
 	satisfies,
@@ -160,11 +164,21 @@ const modalityAllows = (type: string, capability: CapabilityId): boolean => {
  * that transform is judged on its own.
  */
 export function modelModalityAllows(
-	modality: string | null | undefined,
+	modality: string | null | undefined | ModelKindFields,
 	capability: CapabilityId
 ): boolean {
-	if (!modality || !isTransformId(capability)) return true
-	return modalityOfTransform(capability) === modality
+	// 🚧 O3 (0109): the transform's in ⊆ the model's reads and its out ⊆ its
+	// writes — each half gating only when stated — replacing "the output's
+	// modality is the model's". A bare modality string still reads (a
+	// generating one as what it writes; embeddings and NER as themselves).
+	const fields: ModelKindFields | null =
+		modality == null
+			? null
+			: typeof modality === "string"
+				? { modality }
+				: modality
+	if (!fields || !isTransformId(capability)) return true
+	return modelKindsAllow(fields, capability, modalityOfTransform)
 }
 
 /**
@@ -203,13 +217,25 @@ export function capabilityRefusal(
 		capabilities?: unknown
 		/** The merged pair's model modality — see `modelModalityAllows`. */
 		connectionModelModality?: string | null
+		/** 🚧 The merged pair's model reads and writes (O3) — see `modelKinds.ts`. */
+		connectionModelReads?: readonly string[] | null
+		connectionModelWrites?: readonly string[] | null
 	},
 	capability: CapabilityId
 ): string | null {
 	// Before the endpoint's layers, and not overridable by them: a switch on
 	// the endpoint says what the HOST can do, never that an embedding model
-	// can chat.
-	if (!modelModalityAllows(connection.connectionModelModality, capability))
+	// can chat — nor that a model nobody said speaks can speak.
+	if (
+		!modelModalityAllows(
+			{
+				modality: connection.connectionModelModality ?? null,
+				reads: connection.connectionModelReads ?? null,
+				writes: connection.connectionModelWrites ?? null
+			},
+			capability
+		)
+	)
 		return (
 			`This model cannot do ${capabilityLabel(capability)}. ` +
 			`Choose a model that can.`

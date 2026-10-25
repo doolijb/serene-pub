@@ -27,6 +27,7 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import type { Handler } from "$lib/shared/events"
 import { refusable } from "./refusable"
+import { relayToBookReaders } from "./utils/bookReaders"
 import {
 	datesThatDoNotLand,
 	readStoryCalendar,
@@ -70,6 +71,20 @@ async function storyTimeReply(lorebookId: number): Promise<Sockets.Lorebooks.Boo
 			)
 		}
 	}
+}
+
+/**
+ * The book's story time, to the people it is shared with: their open book
+ * spells its dates through this calendar and reads its present off this
+ * clock. Sent as the READ (`lorebooks:storyTime`), the one event every
+ * reader's view listens to; the payload is the book's, the same for anyone.
+ */
+async function relayStoryTime(
+	socket: { io?: unknown; user?: { id: number } | null },
+	lorebookId: number,
+	res: Sockets.Lorebooks.BookStoryTime
+) {
+	await relayToBookReaders(socket, lorebookId, "lorebooks:storyTime", async () => res)
 }
 
 export const lorebookStoryTimeHandler: Handler<
@@ -226,6 +241,7 @@ export const lorebookSetCalendarHandler: Handler<
 		})
 		const res = await storyTimeReply(params.lorebookId)
 		emitToUser("lorebooks:setCalendar", res)
+		await relayStoryTime(socket, params.lorebookId, res)
 		return res
 	},
 	"The calendar could not be saved."
@@ -279,6 +295,7 @@ export const lorebookSetClockHandler: Handler<
 		})
 		const res = await storyTimeReply(params.lorebookId)
 		emitToUser("lorebooks:setClock", res)
+		await relayStoryTime(socket, params.lorebookId, res)
 		return res
 	},
 	"The clock could not be set."

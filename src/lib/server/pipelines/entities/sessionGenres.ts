@@ -35,12 +35,29 @@ import {
 } from "$lib/shared/actions/identity"
 import { and, asc, eq, inArray, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { answersEvent } from "$lib/server/pipelines/entities/presetBindings"
 import {
-	presetEventSpec,
+	lockedEventSpec,
 	type PresetFallback
 } from "$lib/server/pipelines/entities/presetBindings"
-import { getGenre, i18nText, type EnvoyDecl, type I18n, type SessionShape } from "@serene-pub/sdk"
+import {
+	effectiveRegistrations,
+	genreRegistrations,
+	onAction,
+	onEvent,
+	whenHolds
+} from "$lib/server/pipelines/registrations/resolve"
+import { actionRegistration, actionRegistrationKey } from "$lib/server/pipelines/registrations/rows"
+import {
+	getGenre,
+	i18nText,
+	resolveExposure,
+	settingValueOf,
+	type EnvoyDecl,
+	type FieldDecl,
+	type I18n,
+	type SessionShape,
+	type SettingValue
+} from "@serene-pub/sdk"
 import { listedCollects, type ListedCollects } from "$lib/shared/actions/collects"
 import {
 	resolvePlayerLabel,
@@ -144,14 +161,42 @@ export async function listSessionGenres(db: Db): Promise<SessionGenre[]> {
 			eq(schema.pipelineSpecVersions.specId, schema.pipelineSpecs.id)
 		)
 		.orderBy(asc(schema.pipelineSpecs.id))
-	const fromSpecs: SessionGenre[] = (specRows as any[])
-		.filter(
-			(r) =>
-				r.activeVersionId === r.versionId &&
-				r.inputEvent === sessionEvents.sessionCreated &&
-				r.inputGenre &&
-				r.genre?.shape
+	/**
+	 * 🚧 Which genre each create pipeline creates (PLAN-layering D3, D7): the
+	 * genre whose defaults register it on `session-created` — a pipeline
+	 * mounted by registrations has no lock to say. ⏳ A package's create spec
+	 * still locked to its genre is read off the lock, as before.
+	 */
+	const createdBy = new Map<string, string[]>()
+	for (const r of await db
+		.select({ genreId: schema.registrations.scopeRef, specSlug: schema.registrations.specSlug })
+		.from(schema.registrations)
+		.where(
+			and(
+				eq(schema.registrations.scopeKind, "genre"),
+				eq(schema.registrations.triggerFamily, "event"),
+				eq(schema.registrations.triggerRef, sessionEvents.sessionCreated),
+				eq(schema.registrations.dropped, false)
+			)
 		)
+		.orderBy(asc(schema.registrations.id))) {
+		if (!r.specSlug) continue
+		const list = createdBy.get(r.specSlug) ?? []
+		if (!list.includes(r.genreId)) list.push(r.genreId)
+		createdBy.set(r.specSlug, list)
+	}
+	const seenGenres = new Set<string>()
+	const fromSpecs: SessionGenre[] = (specRows as any[])
+		.filter((r) => r.activeVersionId === r.versionId && r.genre?.shape)
+		.flatMap((r) => {
+			const ids =
+				r.inputEvent === sessionEvents.sessionCreated && r.inputGenre
+					? [r.inputGenre as string]
+					: (createdBy.get(r.slug) ?? [])
+			return ids
+				.filter((id) => !seenGenres.has(id) && (seenGenres.add(id), true))
+				.map((id) => ({ ...r, inputGenre: id }))
+		})
 		.map((r) => {
 			// 🚧 The stored carry holds the five keys a session needs for its
 			// life; the 2026-10-19 declaration keys (about, members, uses,
@@ -254,6 +299,21 @@ export async function listOfferedGenres(db: Db): Promise<SessionGenre[]> {
 			)
 		)
 	const hidden = new Set(owned.map((r) => r.inputGenre).filter(Boolean))
+	// 🚧 …and a genre whose defaults register a create pipeline a disabled
+	// plugin owns (PLAN-layering D7: a pipeline mounted by registrations has
+	// no lock to say whose genre it creates).
+	for (const r of await db
+		.select({ genreId: schema.registrations.scopeRef })
+		.from(schema.registrations)
+		.innerJoin(schema.pipelineSpecs, eq(schema.pipelineSpecs.slug, schema.registrations.specSlug))
+		.where(
+			and(
+				eq(schema.registrations.scopeKind, "genre"),
+				eq(schema.registrations.triggerRef, sessionEvents.sessionCreated),
+				inArray(schema.pipelineSpecs.sourcePluginId, [...off.ids])
+			)
+		))
+		hidden.add(r.genreId)
 	return all.filter((g) => !hidden.has(g.genreId) && !off.ownsId(g.genreId))
 }
 
@@ -298,8 +358,9 @@ export function shapeViolations(
 	}
 	bound("character", session.characters, shape.characters)
 	bound("persona", session.personas, shape.personas)
-	if (shape.lorebook === "required" && !session.hasLorebook)
-		out.push("this genre requires a lorebook and the session has none")
+	// ⏳ No "requires a lorebook" (RF fix 2, 2026-10-23): `lorebook: 'required'`
+	// is retired and reads as optional — every session has a world, its own
+	// (the phantom lorebook) when none is attached.
 	if (!shape.lorebook && session.hasLorebook)
 		out.push("this genre has no lorebook attachment — the session has one")
 	return out
@@ -384,13 +445,14 @@ export async function genreFieldsFor(
 			db,
 			session.genreId ?? STANDARD_GENRE_ID
 		)
+		const { genreLayerValues, presetLayerValues } = await import("$lib/server/sessions/exposure")
 		return cascadeFields({
 			declared: ((genre?.shape as any)?.fields ?? {}) as Record<
 				string,
 				{ default?: unknown }
 			>,
-			pinned: genre?.settings ?? {},
-			preset: await presetPinnedSettings(db, session.presetId),
+			pinned: await genreLayerValues(session.genreId ?? STANDARD_GENRE_ID, genre?.settings),
+			preset: await presetLayerValues(db, session.presetId),
 			stored: (session.genreFields ?? {}) as Record<string, unknown>
 		})
 	} catch {
@@ -452,41 +514,71 @@ export async function presetPinnedSettings(
 			.from(schema.sessionPresets)
 			.where(eq(schema.sessionPresets.id, presetId))
 			.limit(1)
-		return (row?.settings as Record<string, unknown> | null) ?? null
+		return row?.settings ? presetPinValues(row.settings) : null
 	} catch {
 		return null
 	}
 }
 
+/**
+ * 🚧 A preset's pins as plain values (PLAN-layering D4, A10): each layer may
+ * set a value, lock it or leave it open — `{ value, lock?, askAtStart? }`
+ * (`SettingValue`) — and every reader of a pin's *value* reads it through
+ * the SDK's `settingValueOf` (Rule Based's rigour is `{ value: 'scripts',
+ * lock: true }`). Who may change it is lane 5b's exposure cascade.
+ */
+export function presetPinValues(settings: unknown): Record<string, unknown> {
+	const out: Record<string, unknown> = {}
+	if (!settings || typeof settings !== "object" || Array.isArray(settings)) return out
+	for (const [k, v] of Object.entries(settings as Record<string, unknown>))
+		out[k] = settingValueOf(v as never).value
+	return out
+}
+
 export function cascadeFields(layers: {
 	declared: Record<string, { default?: unknown }>
+	/**
+	 * The genre layer — the genre's defaults' settings over its older pins
+	 * (`genreLayerValues`), each a value or `{ value, lock?, askAtStart? }`.
+	 */
 	pinned: Readonly<Record<string, unknown>>
-	/** 🚧 The preset layer (2026-10-19): `session > preset > genre > core`. */
+	/** 🚧 The preset layer (2026-10-19): `session > preset > genre > core`; values as above. */
 	preset?: Readonly<Record<string, unknown>> | null
 	stored: Record<string, unknown>
 }): Record<string, unknown> {
-	const { declared, stored } = layers
-	// A preset's pin sits over the genre's: merge once, preset last.
-	const pinned: Record<string, unknown> = { ...layers.pinned, ...(layers.preset ?? {}) }
+	// 🚧 PLAN-layering A10: each layer may lock what the layers below it may
+	// change — the session's stored value under a key the preset locked is
+	// not read, nor the preset's under one the genre locked. One resolver,
+	// the SDK's (`resolveExposure`), over the declared fields.
+	const defined = (o: Readonly<Record<string, unknown>> | null | undefined) =>
+		Object.fromEntries(Object.entries(o ?? {}).filter(([, v]) => v !== undefined)) as Record<string, SettingValue>
+	const genre = defined(layers.pinned)
+	const preset = layers.preset ? defined(layers.preset) : null
+	const stored = defined(layers.stored)
+	const { declared } = layers
+	const resolved = resolveExposure(
+		declared as Record<string, FieldDecl>,
+		[
+			{ layer: "genre", values: genre },
+			...(preset ? [{ layer: "preset", values: preset }] : []),
+			{ layer: "session", values: stored }
+		],
+		{ defaultReach: "owner" }
+	)
 	const out: Record<string, unknown> = {}
-	const keys = [
-		...Object.keys(declared),
-		...Object.keys(pinned).filter((k) => !(k in declared))
-	]
-	for (const key of keys) {
-		const isDeclared = key in declared
-		// The session layer exists only for a declared field: a stored value
-		// under an undeclared key is not a field and cannot be smuggled in.
-		if (isDeclared && key in stored && stored[key] !== undefined) {
-			out[key] = stored[key]
-			continue
-		}
-		if (key in pinned && pinned[key] !== undefined) {
-			out[key] = pinned[key]
-			continue
-		}
-		const fallback = isDeclared ? declared[key]?.default : undefined
-		if (fallback !== undefined) out[key] = fallback
+	for (const key of Object.keys(declared)) {
+		const v = resolved[key]?.value
+		if (v !== undefined) out[key] = v
+	}
+	// A pinned key with no field renders no control and stores nothing: the
+	// pin is what every run reads (the preset's over the genre's, unless the
+	// genre locked it). A stored value under an undeclared key is not a field.
+	for (const key of new Set([...Object.keys(genre), ...Object.keys(preset ?? {})])) {
+		if (key in declared) continue
+		const g = key in genre ? settingValueOf(genre[key]) : null
+		const p = preset && key in preset && !g?.lock ? settingValueOf(preset[key]) : null
+		const v = p ? p.value : g?.value
+		if (v !== undefined) out[key] = v
 	}
 	return out
 }
@@ -728,17 +820,72 @@ const namespaceOf = (id: string): string => {
  * spelling a stored plugin version may still carry — one reader, so a
  * document from before the rename and one from after answer the same.
  */
+/**
+ * 🚧 The action identities a genre's registrations name (PLAN-layering D3,
+ * D7): its defaults' (`defaults`) and any of its presets', in order. An
+ * action's genre comes from the registrations that include it. `add` lets a
+ * caller append a lock-era action to the same list.
+ */
+export async function registeredActionIdentities(
+	db: Db,
+	genreId: string
+): Promise<{
+	defaults: Set<string>
+	offered: string[]
+	add: (identity: string | null | undefined, isDefault: boolean) => void
+}> {
+	const defaults = new Set<string>()
+	const offered: string[] = []
+	const add = (identity: string | null | undefined, isDefault: boolean) => {
+		if (!identity) return
+		if (isDefault) defaults.add(identity)
+		if (!offered.includes(identity)) offered.push(identity)
+	}
+	const regRows = await db
+		.select({
+			scopeKind: schema.registrations.scopeKind,
+			scopeRef: schema.registrations.scopeRef,
+			triggerRef: schema.registrations.triggerRef
+		})
+		.from(schema.registrations)
+		.where(
+			and(
+				eq(schema.registrations.triggerFamily, "action"),
+				eq(schema.registrations.dropped, false)
+			)
+		)
+		.orderBy(asc(schema.registrations.id))
+	const presetIds = new Set(
+		(
+			await db
+				.select({ id: schema.sessionPresets.id })
+				.from(schema.sessionPresets)
+				.where(eq(schema.sessionPresets.genreId, genreId))
+		).map((r) => String(r.id))
+	)
+	for (const r of regRows)
+		if (r.scopeKind === "genre" && r.scopeRef === genreId) add(r.triggerRef, true)
+	for (const r of regRows)
+		if (r.scopeKind === "preset" && presetIds.has(r.scopeRef)) add(r.triggerRef, false)
+	return { defaults, offered, add }
+}
+
 export async function listGenreActions(
 	db: Db,
 	genreId: string
 ): Promise<GenreAction[]> {
 	try {
-		// ⚠ Ordered. The tie-break below is "first-published", and an
-		// unordered SELECT makes that whatever order the heap returns —
-		// which differs between a freshly seeded database and one that has
-		// been rewritten a few hundred times. Two installs with identical
-		// data would route the same session to different pipelines, and only one
-		// of them would ever see it go wrong.
+		/**
+		 * 🚧 What a genre offers (PLAN-layering D3, D7, R33): the actions its
+		 * defaults register (on by default — the companion rule, explicit),
+		 * then those any of its presets registers, then ⏳ an action a package
+		 * spec still locks to this genre (foreign, off by default — what the
+		 * companion rule left opt-in). An action's genre comes from the
+		 * registrations that include it, never from a lock (D3).
+		 */
+		const { defaults, offered, add } = await registeredActionIdentities(db, genreId)
+		// ⚠ Ordered: the tie-break below is "first-published" (see the note
+		// on `resolveSubjectVerdict`'s ordering).
 		const specs = await db
 			.select()
 			.from(schema.pipelineSpecs)
@@ -747,57 +894,69 @@ export async function listGenreActions(
 			.select()
 			.from(schema.pipelineSpecVersions)
 			.where(eq(schema.pipelineSpecVersions.status, "published"))
-		const out: GenreAction[] = []
+		const declared = new Map<string, { spec: any; action: any }>()
 		for (const s of specs as any[]) {
 			if (s.activeVersionId == null) continue
-			const v = (versions as any[]).find(
-				(x) => x.id === s.activeVersionId
-			)
+			const v = (versions as any[]).find((x) => x.id === s.activeVersionId)
 			if (!v?.contributes) continue
 			for (const a of actionsOf({ id: s.slug, contributes: v.contributes })) {
-				if (a.genre !== genreId) continue
-				const origin =
-					namespaceOf(s.slug) === namespaceOf(genreId)
-						? "companion"
-						: "foreign"
-				out.push({
-					key: a.key,
-					venues: a.venue,
-					audience: a.audience ?? {
-						see: [...DEFAULT_ACTION_AUDIENCE.see],
-						act: [...DEFAULT_ACTION_AUDIENCE.act]
-					},
-					effects: effectsOf(a),
-					quick: a.quick === true,
-					...(listedCollects(a.collects) ? { collects: listedCollects(a.collects) } : {}),
-					// 🚧 Asked before it fires (`confirm`, 2026-10-18).
-					...(a.confirm && en(a.confirm.question)
-						? {
-								confirm: {
-									question: en(a.confirm.question),
-									...(a.confirm.description ? { description: en(a.confirm.description) } : {}),
-									confirmLabel: (a.confirm.confirmLabel ? en(a.confirm.confirmLabel) : "") || en(a.label) || a.key
-								}
-							}
-						: {}),
-					// Kept as declared, an explicit `[]` included: that is how an
-					// action opts out of its genre's default (`effectiveEnabledWhen`).
-					...(a.enabledWhen !== undefined && a.enabledWhen !== null
-						? { enabledWhen: normalizeEnabledWhen(a.enabledWhen) }
-						: {}),
-					...(a.presentWhen != null && normalizeEnabledWhen(a.presentWhen).length
-						? { presentWhen: normalizeEnabledWhen(a.presentWhen) }
-						: {}),
-					slash: slashNameOf(a, s.slug),
-					icon: typeof a.icon === "string" ? a.icon : undefined,
-					...(a.iconAlt ? { iconAlt: en(a.iconAlt) } : {}),
-					name: en(a.label) || a.key,
-					...(a.description ? { description: en(a.description) } : {}),
-					specSlug: s.slug,
-					origin,
-					enabledByDefault: origin === "companion"
-				})
+				declared.set(`${s.slug}#${a.key}`, { spec: s, action: a })
+				// ⏳ A lock-era package action for this genre: offered, opt-in.
+				if ((a as { genre?: string }).genre === genreId) add(`${s.slug}#${a.key}`, false)
 			}
+		}
+
+		const out: GenreAction[] = []
+		for (const identity of offered) {
+			const hit = declared.get(identity)
+			if (!hit) continue
+			const { spec: s, action: a } = hit
+			// 🚧 An action whose audience names nobody (`see: []`) is the
+			// host's to fire — a summary (R50): registered so its values
+			// resolve through the registration, never listed, never pressed.
+			if (Array.isArray(a.audience?.see) && a.audience.see.length === 0) continue
+			const origin =
+				namespaceOf(s.slug) === namespaceOf(genreId)
+					? "companion"
+					: "foreign"
+			out.push({
+				key: a.key,
+				venues: a.venue,
+				audience: a.audience ?? {
+					see: [...DEFAULT_ACTION_AUDIENCE.see],
+					act: [...DEFAULT_ACTION_AUDIENCE.act]
+				},
+				effects: effectsOf(a),
+				quick: a.quick === true,
+				...(listedCollects(a.collects) ? { collects: listedCollects(a.collects) } : {}),
+				// 🚧 Asked before it fires (`confirm`, 2026-10-18).
+				...(a.confirm && en(a.confirm.question)
+					? {
+							confirm: {
+								question: en(a.confirm.question),
+								...(a.confirm.description ? { description: en(a.confirm.description) } : {}),
+								confirmLabel: (a.confirm.confirmLabel ? en(a.confirm.confirmLabel) : "") || en(a.label) || a.key
+							}
+						}
+					: {}),
+				// Kept as declared, an explicit `[]` included: that is how an
+				// action opts out of its genre's default (`effectiveEnabledWhen`).
+				...(a.enabledWhen !== undefined && a.enabledWhen !== null
+					? { enabledWhen: normalizeEnabledWhen(a.enabledWhen) }
+					: {}),
+				...(a.presentWhen != null && normalizeEnabledWhen(a.presentWhen).length
+					? { presentWhen: normalizeEnabledWhen(a.presentWhen) }
+					: {}),
+				slash: slashNameOf(a, s.slug),
+				icon: typeof a.icon === "string" ? a.icon : undefined,
+				...(a.iconAlt ? { iconAlt: en(a.iconAlt) } : {}),
+				name: en(a.label) || a.key,
+				...(a.description ? { description: en(a.description) } : {}),
+				specSlug: s.slug,
+				origin,
+				// 🚧 On by default = the genre's defaults register it (R33).
+				enabledByDefault: defaults.has(identity)
+			})
 		}
 		return out
 	} catch {
@@ -846,6 +1005,8 @@ export async function listGenreActions(
  */
 export interface SubjectResolution {
 	spec: string | null
+	/** 🚧 The registration that answers (PLAN-layering D7) — its key, for the run's record. */
+	registrationKey?: string
 	/**
 	 * Set when the session's preset bound this event to something this
 	 * instance cannot resolve, so the layers below decided instead. Carried
@@ -875,205 +1036,104 @@ export async function resolveSubjectVerdict(
 		/**
 		 * The spec the caller has already chosen — the one whose *action*
 		 * was pressed (U5c review, W1). The verdict is then only the
-		 * eligibility check: that spec if it currently serves the subject
-		 * for this genre, else null. No binding layer is consulted, because
-		 * a binding selects among alternatives when nobody named one, and
-		 * here somebody did.
+		 * eligibility check: that spec if a registration in force runs it
+		 * for the subject, else null.
 		 */
 		spec?: string | null
 	}
 ): Promise<SubjectResolution> {
-	let fallback: PresetFallback | undefined
 	try {
-		/**
-		 * A genre id carries no `@`; a transitional input-type genre does.
-		 * Dispatch for genre ids keys on the input lock — (genre, event) as
-		 * columns (24 §3/§4); the type-matching path below serves only the
-		 * transitional plugin genres.
-		 */
-		const [bareType, versionStr] = genreId.split("@")
-		const isGenreId = versionStr === undefined
-		const genreNamespace = genreId.split(":")[0]
 		const event = isEventId(subject) ? subject : null
 		const identity = event ? null : parseActionIdentity(subject)
 		if (!event && !identity) return { spec: null }
 
-		// ⚠ Ordered. The tie-break below is "first-published", and an
-		// unordered SELECT makes that whatever order the heap returns —
-		// which differs between a freshly seeded database and one that has
-		// been rewritten a few hundred times. Two installs with identical
-		// data would route the same session to different pipelines, and only one
-		// of them would ever see it go wrong.
-		const specs = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.orderBy(asc(schema.pipelineSpecs.id))
-		const versions = await db
-			.select()
-			.from(schema.pipelineSpecVersions)
-			.where(eq(schema.pipelineSpecVersions.status, "published"))
-		const activeBySpec = new Map<number, any>()
-		for (const s of specs as any[])
-			if (s.activeVersionId != null)
-				activeBySpec.set(
-					s.id,
-					(versions as any[]).find((v) => v.id === s.activeVersionId)
-				)
-
-		const candidates: Array<{ slug: string; namespace: string }> = []
-
-		if (event) {
-			const primary = event === sessionEvents.messageRespond
-			for (const s of specs as any[]) {
-				const v = activeBySpec.get(s.id)
-				if (!v) continue
-				/**
-				 * The bucket, genre-first (24 §4): the input lock declares
-				 * (genre, event) as columns, so membership is a field check —
-				 * this spec answers the event for this genre.
-				 */
-				if (isGenreId) {
-					if (v.inputGenre !== genreId || !answersEvent(v, event)) continue
-				} else {
-					if (!primary) continue
-					/**
-					 * Transitional (plugin input-type genres): entry input pins
-					 * the genre's type — and the primary-write signature below
-					 * still applies (19 §0), because `graph-build` reads a
-					 * session exactly as a reply does and must not answer one.
-					 */
-					const nodes = await db
-						.select()
-						.from(schema.pipelineNodes)
-						.where(eq(schema.pipelineNodes.specVersionId, v.id))
-					const entry = (nodes as any[])
-						.filter((n) => n.kind === "inlet")
-						.sort((a, b) => a.position - b.position)[0]
-					if (
-						!entry ||
-						entry.definitionId !== bareType ||
-						String(entry.definitionVersion) !== versionStr
-					)
-						continue
-				}
-				// The primary turn: membership is structural at both ends —
-				// what the pipeline reads (above) and what it writes (19 §0).
-				if (primary && !(await writesASessionMessage(db, v.id))) continue
-				candidates.push({
-					slug: s.slug,
-					namespace: String(s.slug).split(":")[0]
-				})
-			}
-		} else if (identity) {
-			// The declarer, and only the declarer: the identity names it.
-			const s = (specs as any[]).find((x) => x.slug === identity.specSlug)
-			const v = s ? activeBySpec.get(s.id) : undefined
-			if (
-				s &&
-				v?.contributes &&
-				actionsOf({ id: s.slug, contributes: v.contributes }).some(
-					(a) => a.genre === genreId && a.key === identity.key
-				)
-			)
-				candidates.push({
-					slug: s.slug,
-					namespace: String(s.slug).split(":")[0]
-				})
-		}
-
-		// A named spec (W1): eligible, or nothing — the layers below are for
-		// a fire that named none.
-		if (scope?.spec != null)
-			return {
-				spec: candidates.some((c) => c.slug === scope.spec)
-					? scope.spec
-					: null
-			}
-
-		// The binding selects (19 §3). Eligibility is re-checked at every
-		// layer — a bound spec must still be a candidate to win — and there
-		// is no user layer (simplified 2026-08-24).
-		const slugBySpecId = new Map<number, string>(
-			(specs as any[]).map((s) => [s.id, s.slug])
-		)
-		const eligible = new Set(candidates.map((c) => c.slug))
-		const bindings = (await db
-			.select()
-			.from(schema.pipelineBindings)
-			.where(
-				and(
-					eq(schema.pipelineBindings.genreId, genreId),
-					eq(schema.pipelineBindings.subject, subject)
-				)
-			)) as any[]
-		const boundAt = (kind: string, id: number): string | null => {
-			const row = bindings.find(
-				(b) => b.scopeKind === kind && b.scopeId === id
-			)
-			const slug = row ? slugBySpecId.get(row.specId) : undefined
-			return slug && eligible.has(slug) ? slug : null
-		}
-
-		// 1. The session's own binding (R-6). A work, not a preference: the
-		//    person's choice for this session is the first thing consulted,
-		//    and the preset is never asked when it answers — so no fallback
-		//    account is owed either.
-		if (scope?.sessionId != null) {
-			const own = boundAt("session", scope.sessionId)
-			if (own) return { spec: own }
-		}
+		// ⏳ A transitional input-type genre (`ns:inlet/x@1`) has no
+		// registrations: its reply is still found by its entry inlet.
+		if (genreId.includes("@"))
+			return await transitionalSubject(db, genreId, subject, scope?.spec ?? null)
 
 		/**
-		 * 2. The session's preset (24 §1), through the same reader
-		 *    `resolveSessionEventSpec` uses — two doors onto one fact, so a
-		 *    reply and a dispatched event agree on the session and preset
-		 *    layers. ⚠ Only those: this resolver also reads the pub
-		 *    binding (layer 3) and the companion rule, and the dispatcher
-		 *    reads neither, so a pub-scope binding of a turn-order event
-		 *    is stored and never dispatched (A7r review; owed). An event
-		 *    subject only: a preset binds events, never actions.
-		 *
-		 * A binding that stopped resolving carries on to the layers below and
-		 * takes its account with it (ruled 2026-09-10): the reply still
-		 * happens, on whatever the bucket would have chosen, and every surface
-		 * says which and why.
+		 * 🚧 The registrations in force (PLAN-layering D7, R33): the
+		 * session's own rows over its preset's changes over the genre's
+		 * defaults — one resolver for the reply, every event and every
+		 * action. With no session in hand, the genre's defaults. The pub
+		 * layer and the companion rule are retired (R33): what a session
+		 * runs is what its registrations say, nothing inferred.
 		 */
-		if (event) {
-			const verdict = await presetEventSpec(db, {
-				sessionId: scope?.sessionId,
-				genreId,
-				event
-			})
-			if (verdict.via === "preset") return { spec: verdict.spec }
-			if (verdict.via === "fallback") {
-				const { via: _via, spec: _spec, ...rest } = verdict
-				fallback = rest
+		// The session's registrations answer for the session's own genre; a
+		// caller naming another genre is answered by that genre's defaults.
+		const resolved = scope?.sessionId != null ? await effectiveRegistrations(db, scope.sessionId) : null
+		if (scope?.sessionId != null && resolved && resolved.genreId === genreId) {
+			const regs = event
+				? onEvent(resolved.effective, event)
+				: [onAction(resolved.effective, subject)].filter((r) => !!r)
+			const fallback = event ? resolved.fallbacks.find((f) => f.event === event) : undefined
+			const said = fallback ? { fallback } : {}
+			// A named spec (W1): eligible, or nothing.
+			if (scope.spec != null) {
+				const named = regs.find((r) => r!.pipeline === scope.spec)
+				return named ? { spec: scope.spec, registrationKey: named.key, ...said } : { spec: null, ...said }
+			}
+			// An event's registrations run when their `when` holds (R31); an
+			// action's `when` is its enabled-when, judged at its door.
+			const runs = event ? (await whenHolds(db, scope.sessionId, regs as never)).run : regs
+			return {
+				spec: runs[0]?.pipeline ?? null,
+				...(runs[0] ? { registrationKey: runs[0].key } : {}),
+				...said
 			}
 		}
-
-		if (!candidates.length)
-			return { spec: null, ...(fallback ? { fallback } : {}) }
-
-		// 3. The pub's binding — an administrator's default for every
-		//    session of the genre that neither chose for itself nor was born
-		//    on a preset that did.
-		const pubWide = boundAt("pub", 0)
-		if (pubWide)
-			return { spec: pubWide, ...(fallback ? { fallback } : {}) }
-
-		// 4. The companion rule.
-		const companion = candidates.find((c) => c.namespace === genreNamespace)
-		return {
-			spec: (companion ?? candidates[0]!).slug,
-			...(fallback ? { fallback } : {})
-		}
+		const regs = await genreRegistrations(db, genreId)
+		const hits = event ? onEvent(regs, event) : [onAction(regs, subject)].filter((r) => !!r)
+		if (scope?.spec != null)
+			return { spec: hits.some((r) => r!.pipeline === scope.spec) ? scope.spec : null }
+		return { spec: hits[0]?.pipeline ?? (event ? await lockedEventSpec(db, genreId, event) : null) }
 	} catch {
 		// Routing infrastructure failing still degrades to the caller's floor
-		// (F29). So does a preset binding pointing at nothing — the difference
-		// is that the second one is *reported*, on the verdict, all the way
-		// out to the receipt and the screens.
-		return { spec: null, ...(fallback ? { fallback } : {}) }
+		// (F29).
+		return { spec: null }
 	}
+}
+
+/**
+ * ⏳ A transitional plugin genre declared on an input type (pre-24 §3): the
+ * primary turn's candidates are the published specs whose entry inlet pins
+ * that type and which write a session message (19 §0); the first by spec id.
+ * Nothing else routes for it.
+ */
+async function transitionalSubject(
+	db: Db,
+	genreId: string,
+	subject: string,
+	named: string | null
+): Promise<SubjectResolution> {
+	if (subject !== sessionEvents.messageRespond) return { spec: null }
+	const [bareType, versionStr] = genreId.split("@")
+	const specs = await db
+		.select()
+		.from(schema.pipelineSpecs)
+		.orderBy(asc(schema.pipelineSpecs.id))
+	for (const s of specs as any[]) {
+		if (s.activeVersionId == null) continue
+		const [v] = await db
+			.select()
+			.from(schema.pipelineSpecVersions)
+			.where(eq(schema.pipelineSpecVersions.id, s.activeVersionId))
+			.limit(1)
+		if (!v || v.status !== "published") continue
+		const nodes = await db
+			.select()
+			.from(schema.pipelineNodes)
+			.where(eq(schema.pipelineNodes.specVersionId, v.id))
+		const entry = (nodes as any[])
+			.filter((n) => n.kind === "inlet")
+			.sort((a, b) => a.position - b.position)[0]
+		if (!entry || entry.definitionId !== bareType || String(entry.definitionVersion) !== versionStr) continue
+		if (!(await writesASessionMessage(db, v.id))) continue
+		if (named != null && s.slug !== named) continue
+		return { spec: s.slug }
+	}
+	return { spec: null }
 }
 
 /** The same answer, for the callers that only need the slug. */
@@ -1112,6 +1172,12 @@ export interface SessionFunction extends GenreAction {
 	included: boolean
 	/** Which layer decided, for the control surface to explain itself. */
 	source: "session" | "preset" | "default"
+	/**
+	 * 🚧 R56: no model on this pub can do what its pipeline needs — the
+	 * sentence ("Unavailable: needs a model that can draw pictures."). Such an
+	 * action is not enabled, whatever the layers say, until a model is set.
+	 */
+	unavailable?: string
 }
 
 /**
@@ -1152,9 +1218,12 @@ export async function sessionPipeline(
 ): Promise<{
 	specId: number
 	specSlug: string
+	/** ⏳ Always null since configurations retired (R38). */
 	configId: number | null
+	/** ⏳ Always null since configurations retired (R38). */
 	configName: string | null
 } | null> {
+	void userId
 	try {
 		const specSlug = await resolveSubjectSpec(
 			db,
@@ -1170,19 +1239,7 @@ export async function sessionPipeline(
 			.where(eq(schema.pipelineSpecs.slug, specSlug))
 			.limit(1)
 		if (!spec) return null
-
-		const { resolveSelectedConfig } = await import(
-			"$lib/server/pipelines/config/named"
-		)
-		const selected = await resolveSelectedConfig(db, spec.id, specSlug, {
-			sessionId
-		})
-		return {
-			specId: spec.id,
-			specSlug,
-			configId: selected?.configId ?? null,
-			configName: selected?.name ?? null
-		}
+		return { specId: spec.id, specSlug, configId: null, configName: null }
 	} catch {
 		return null
 	}
@@ -1194,64 +1251,24 @@ export async function presetActionsFor(
 	genreId: string,
 	userId?: number | null
 ): Promise<{ configId: number | null; included: string[] | null }> {
+	void genreId
+	void userId
 	try {
 		/**
-		 * The serving pipeline's configuration — resolved for EVERY session,
-		 * whether or not it names a preset.
-		 *
-		 * ⚠ Never skipped for a session with a preset: a preset-born session
-		 * has a configuration just as a preset-less one does.
-		 * `resolveSelectedConfig` is itself preset-aware, so this one call
-		 * answers for both kinds of session.
+		 * 🚧 What the session's preset includes (PLAN-layering D7): the
+		 * actions its effective registrations — the genre's defaults with
+		 * the preset's changes — register, by identity. Never null any more:
+		 * the companion rule is the genre's defaults, written out (R33).
 		 */
-		const pipeline = await sessionPipeline(db, sessionId, genreId, userId)
-		const configId = pipeline?.configId ?? null
-
-		// The session preset is the ruled home of action curation (24 §1,
-		// admin IA 2026-08-28): a session born from a preset reads that
-		// preset's list. The config-row path below survives as the fallback
-		// for sessions with no preset, until the legacy squat retires fully.
-		const [session] = await db
-			.select({ presetId: schema.sessions.presetId })
-			.from(schema.sessions)
-			.where(eq(schema.sessions.id, sessionId))
-			.limit(1)
-		if (session?.presetId != null) {
-			const [preset] = await db
-				.select({
-					includedActions: schema.sessionPresets.includedActions
-				})
-				.from(schema.sessionPresets)
-				.where(eq(schema.sessionPresets.id, session.presetId))
-				.limit(1)
-			if (preset) {
-				const raw = preset.includedActions
-				return {
-					configId,
-					included: Array.isArray(raw) ? raw.map(String) : null
-				}
-			}
-		}
-
-		if (configId == null) return { configId: null, included: null }
-
-		const [config] = await db
-			.select({
-				id: schema.pipelineConfigs.id,
-				includedActions: schema.pipelineConfigs.includedActions
-			})
-			.from(schema.pipelineConfigs)
-			.where(eq(schema.pipelineConfigs.id, configId))
-			.limit(1)
-
-		const raw = config?.includedActions
+		const resolved = await effectiveRegistrations(db, sessionId)
+		if (!resolved) return { configId: null, included: null }
 		return {
-			configId: config?.id ?? null,
-			included: Array.isArray(raw) ? raw.map(String) : null
+			configId: null,
+			included: resolved.offered
+				.filter((r) => r.trigger.family === "action")
+				.map((r) => (r.trigger as { action: string }).action)
 		}
 	} catch {
-		// Routing or config resolution failing must not decide a session has no
-		// actions — the F29 posture. Fall through to the companion rule.
 		return { configId: null, included: null }
 	}
 }
@@ -1342,42 +1359,80 @@ export async function listSessionFunctions(
 	genreId: string,
 	userId?: number | null
 ): Promise<SessionFunction[]> {
+	void userId
 	const available = await listGenreActions(db, genreId)
-	const rows = await db
-		.select()
-		.from(schema.sessionFunctions)
-		.where(
-			and(
-				eq(schema.sessionFunctions.sessionId, sessionId),
-				eq(schema.sessionFunctions.genreId, genreId)
-			)
-		)
-	const stated = new Map<string, boolean>(
-		(rows as any[]).map((r) => [r.functionKey as string, !!r.enabled])
-	)
 	/**
-	 * A row is keyed by the action's identity — `<spec slug>#<key>` — so two
-	 * actions sharing a key switch independently (U5c review, W1). Identity
-	 * only (plans/31 V2): a row keyed any other way answers for nothing.
+	 * 🚧 Three layers, one resolver (PLAN-layering D7): the session's own
+	 * rows over its preset's changes over the genre's defaults. `included`
+	 * is what the preset offers (genre ⊕ preset); `enabled` is what is in
+	 * force once the session's rows apply — a row that drops an action
+	 * switches it off, one that registers it switches it on.
 	 */
-	const statedFor = (t: GenreAction): boolean | undefined =>
-		stated.get(actionIdentity(t))
+	const resolved = await effectiveRegistrations(db, sessionId)
+	const actionsIn = (regs: ReadonlyArray<{ trigger: { family: string } }> | undefined) =>
+		new Set(
+			(regs ?? [])
+				.filter((r) => r.trigger.family === "action")
+				.map((r) => (r.trigger as unknown as { action: string }).action)
+		)
+	const offeredIds = actionsIn(resolved?.offered)
+	const inForce = actionsIn(resolved?.effective)
+	const sessionKeys = new Set((resolved?.rows.session ?? []).map((r) => r.key))
+	const presetKeys = new Set((resolved?.rows.preset ?? []).map((r) => r.key))
+	const keyOf = (identity: string): string =>
+		[...(resolved?.offered ?? []), ...(resolved?.effective ?? [])].find(
+			(r) => r.trigger.family === "action" && (r.trigger as { action: string }).action === identity
+		)?.key ?? actionRegistrationKey(identity)
 
-	const preset = await presetActionsFor(db, sessionId, genreId, userId)
+	/**
+	 * 🚧 A ruleset's actions (PLAN-rulesets-functions D6): each invokable
+	 * function of the session's ruleset, run by the one rules-action
+	 * pipeline — registered in the genre's layer (`effectiveRegistrations`),
+	 * offered at the composer, its label and words the function header's.
+	 */
+	{
+		const { sessionRulesActions, RULES_ACTION_SPEC } = await import("$lib/server/rulesets/rulesActions")
+		for (const a of await sessionRulesActions(db, sessionId)) {
+			if (available.some((t) => actionIdentity(t) === a.identity)) continue
+			const key = a.identity.slice(a.identity.lastIndexOf("#") + 1)
+			available.push({
+				key,
+				venues: [{ kind: "composer" }] as GenreAction["venues"],
+				audience: { see: [...DEFAULT_ACTION_AUDIENCE.see], act: [...DEFAULT_ACTION_AUDIENCE.act] },
+				effects: "fiction",
+				quick: false,
+				slash: slashNameOf({ key }, RULES_ACTION_SPEC),
+				name: en(a.label) || a.function,
+				...(a.description !== undefined ? { description: en(a.description) } : {}),
+				specSlug: RULES_ACTION_SPEC,
+				origin: "companion",
+				enabledByDefault: true
+			} as GenreAction)
+		}
+	}
+
+	// A session row may switch on an action its genre's list does not carry.
+	for (const identity of inForce)
+		if (!available.some((t) => actionIdentity(t) === identity)) {
+			const parsed = parseActionIdentity(identity)
+			if (!parsed) continue
+			const extra = (await listGenreActionsFor(db, identity)) as GenreAction | null
+			// 🚧 Not one the host fires (an audience naming nobody — a summary, R50).
+			if (extra && !(Array.isArray(extra.audience?.see) && extra.audience.see.length === 0)) available.push(extra)
+		}
 
 	/**
 	 * Annex fields (2026-09-26): each settable declared field is one action,
 	 * `<owner>:annex#<key>` at the `widget` venue, seen and pressed by its
 	 * `act` audience. A declared capability of its package rather than a
-	 * pipeline a preset picks, so it is on unless this session's own row
-	 * turned it off — a preset's included set does not reach it.
+	 * pipeline a preset registers, so it is on unless this session's own row
+	 * dropped it.
 	 */
 	const { settableAnnexFields } = await import("$lib/server/sessions/annexFields")
-	// Only a field that names who may set it (`act`) is an action; one
-	// without is pipeline-written only (ruling 2026-09-26) and never listed.
 	const fields: SessionFunction[] = (await settableAnnexFields(db, genreId)).map((f) => {
 		const specSlug = f.identity.slice(0, f.identity.lastIndexOf("#"))
-		const own = stated.get(f.identity)
+		const row = resolved?.rows.session.find((r) => r.key === actionRegistrationKey(f.identity))
+		const own = row ? !row.dropped : undefined
 		const act = [...(f.decl.act ?? [])]
 		return {
 			key: f.decl.key,
@@ -1398,38 +1453,77 @@ export async function listSessionFunctions(
 		}
 	})
 
+	// 🚧 R56: an action whose pipeline needs a model nothing here serves is
+	// unavailable — not enabled, with the sentence that says what is missing.
+	const { unservedPipelines } = await import("$lib/server/pipelines/registrations/unserved")
+	const unserved = await unservedPipelines(db, available.map((t) => t.specSlug))
 	return [
-		...available
-		.map((t) => {
-			// Three layers, first answer wins: the session's own row, then the
-			// preset's included set, then the companion rule. Each is only
-			// consulted where the one above it said nothing, which is what
-			// lets a preset change reach sessions that never had a view while
-			// leaving alone the ones that did.
-			const included = includedByPreset(preset.included, t, available)
-			const own = statedFor(t)
-			const source: SessionFunction["source"] =
-				own !== undefined
-					? "session"
-					: preset.included === null
-						? "default"
-						: "preset"
+		...available.map((t) => {
+			const identity = actionIdentity(t)
+			const key = keyOf(identity)
+			const included = offeredIds.has(identity)
+			const explicit = sessionKeys.has(key)
+			const source: SessionFunction["source"] = explicit
+				? "session"
+				: presetKeys.has(key)
+					? "preset"
+					: "default"
+			const missing = unserved.get(t.specSlug)
 			return {
 				...t,
 				included,
 				source,
-				explicit: own !== undefined,
-				enabled: own !== undefined ? own : included
+				explicit,
+				enabled: inForce.has(identity) && !missing,
+				...(missing ? { unavailable: missing.sentence } : {})
 			}
 		}),
 		...fields
-	]
-		.sort(
-			(a, b) =>
-				Number(b.origin === "companion") -
-					Number(a.origin === "companion") ||
-				a.name.localeCompare(b.name)
-		)
+	].sort(
+		(a, b) =>
+			Number(b.origin === "companion") - Number(a.origin === "companion") ||
+			a.name.localeCompare(b.name)
+	)
+}
+
+/** One declared action by identity, in the listing's shape — for an action a session row registers. */
+async function listGenreActionsFor(db: Db, identity: string): Promise<GenreAction | null> {
+	const parsed = parseActionIdentity(identity)
+	if (!parsed) return null
+	const [spec] = await db
+		.select()
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.slug, parsed.specSlug))
+		.limit(1)
+	if (!spec?.activeVersionId) return null
+	const [v] = await db
+		.select()
+		.from(schema.pipelineSpecVersions)
+		.where(eq(schema.pipelineSpecVersions.id, spec.activeVersionId))
+		.limit(1)
+	if (!v || v.status !== "published" || !v.contributes) return null
+	const a = actionsOf({ id: spec.slug, contributes: v.contributes }).find((x) => x.key === parsed.key)
+	if (!a) return null
+	return {
+		key: a.key,
+		venues: a.venue,
+		audience: a.audience ?? { see: [...DEFAULT_ACTION_AUDIENCE.see], act: [...DEFAULT_ACTION_AUDIENCE.act] },
+		effects: effectsOf(a),
+		quick: a.quick === true,
+		...(listedCollects(a.collects) ? { collects: listedCollects(a.collects) } : {}),
+		...(a.enabledWhen !== undefined && a.enabledWhen !== null ? { enabledWhen: normalizeEnabledWhen(a.enabledWhen) } : {}),
+		...(a.presentWhen != null && normalizeEnabledWhen(a.presentWhen).length
+			? { presentWhen: normalizeEnabledWhen(a.presentWhen) }
+			: {}),
+		slash: slashNameOf(a, spec.slug),
+		icon: typeof a.icon === "string" ? a.icon : undefined,
+		...(a.iconAlt ? { iconAlt: en(a.iconAlt) } : {}),
+		name: en(a.label) || a.key,
+		...(a.description ? { description: en(a.description) } : {}),
+		specSlug: spec.slug,
+		origin: "foreign",
+		enabledByDefault: false
+	}
 }
 
 /**
@@ -1555,36 +1649,40 @@ export async function setSessionFunction(
 				`using it has it.`
 		}
 
-	const where = and(
-		eq(schema.sessionFunctions.sessionId, sessionId),
-		eq(schema.sessionFunctions.genreId, genreId),
-		eq(schema.sessionFunctions.functionKey, functionKey)
-	)
-	// Reset-is-delete against the layer *below* this one — the preset's answer,
-	// or the companion rule where the preset states nothing. Comparing against
-	// the companion rule alone would leave a row behind every time somebody
-	// agreed with their preset, and those rows would then outlive the preset.
+	/**
+	 * 🚧 Written as the session's registration row (PLAN-layering D7,
+	 * §11-1) — `session_functions` is ⏳ kept unread. Reset-is-delete against
+	 * the layer below (the preset's offer): agreeing with it removes the row,
+	 * switching an included action off drops it here, switching on one the
+	 * preset leaves out registers it here.
+	 */
+	const { deleteRow, upsertRow } = await import("$lib/server/pipelines/registrations/write")
+	const { rowOfDecl, rowOfDrop } = await import("$lib/server/pipelines/registrations/rows")
+	const resolved = await effectiveRegistrations(db, sessionId)
+	const key =
+		[...(resolved?.offered ?? []), ...(resolved?.effective ?? [])].find(
+			(r) => r.trigger.family === "action" && (r.trigger as { action: string }).action === functionKey
+		)?.key ?? actionRegistrationKey(functionKey)
+	const scope = { kind: "session" as const, sessionId }
+	const origin = actor?.isAdmin === true ? "admin" : "owner"
 	if (enabled === decl.included) {
-		await db.delete(schema.sessionFunctions).where(where)
+		await deleteRow(db, scope, key)
 		return { ok: true, enabled }
 	}
-
-	const [existing] = await db
-		.select({ id: schema.sessionFunctions.id })
-		.from(schema.sessionFunctions)
-		.where(where)
-		.limit(1)
-
-	if (existing)
-		await db
-			.update(schema.sessionFunctions)
-			.set({ enabled, updatedAt: new Date() })
-			.where(eq(schema.sessionFunctions.id, existing.id))
-	else
-		await db
-			.insert(schema.sessionFunctions)
-			.values({ sessionId, genreId, functionKey, enabled })
-
+	if (!enabled) {
+		await upsertRow(db, { ...rowOfDrop(key, scope, origin), triggerRef: functionKey })
+		return { ok: true, enabled }
+	}
+	// 🚧 The registration door (§11-2): a session's own registration is
+	// judged like any other — the action's pipeline installed, fitting, and
+	// the genre's envoys — and refused in a sentence.
+	const registration = actionRegistration(functionKey)
+	{
+		const { registrationDoor, doorSentence } = await import("$lib/server/pipelines/registrations/door")
+		const verdict = await registrationDoor(db, [registration], { layer: "this session", genreId, sessionId })
+		if (verdict.errors.length) return { ok: false, error: doorSentence(verdict.errors) }
+	}
+	await upsertRow(db, rowOfDecl(registration, scope, origin))
 	return { ok: true, enabled }
 }
 
@@ -1613,7 +1711,22 @@ export async function genreOfSpec(
 			.limit(1)
 		if (!spec?.activeVersionId) return null
 
-		// The input lock answers directly (24 §4).
+		// 🚧 The genre whose defaults register it (PLAN-layering D3, D7): a
+		// pipeline mounted by registrations has no lock to say.
+		const [registered] = await db
+			.select({ genreId: schema.registrations.scopeRef })
+			.from(schema.registrations)
+			.where(
+				and(
+					eq(schema.registrations.scopeKind, "genre"),
+					eq(schema.registrations.specSlug, specSlug)
+				)
+			)
+			.orderBy(asc(schema.registrations.id))
+			.limit(1)
+		if (registered?.genreId) return registered.genreId
+
+		// ⏳ The input lock answers directly (24 §4).
 		const [version] = await db
 			.select({
 				inputGenre: schema.pipelineSpecVersions.inputGenre
@@ -1754,65 +1867,23 @@ export function promoteIncludedActions(
 }
 
 /**
- * Set which actions a preset includes, and whether it may be chosen.
- *
- * Admin-only at the socket; the refusals here are about meaning. An immutable
- * preset is refused because core's shipped rows are "selectable and copyable,
- * never edited in place" — the same rule the rest of the panel runs under, so
- * the answer to "why can't I edit this" is one answer everywhere. The list is
- * validated and stored **by identity** (`normalizeIncludedActions`): an
- * action no spec contributes to this pipeline's mode is refused by name,
- * because storing it would put a key in the list that can never match
- * anything.
- *
- * ⏳ This writes the legacy squat on `pipeline_configs.included_actions`;
- * `session_presets.included_actions` (`sessionPresets:update`) is the ruled
- * home and runs the same normaliser.
+ * ⏳ The legacy squat on a pipeline configuration's actions and its "may be
+ * chosen" switch — retired with configurations (R38; R50, 0110: nothing
+ * reads a configuration). A preset's actions are its registrations
+ * (`sessionPresets:update`); this answers every caller with the refusal and
+ * touches nothing. Kept one release for the callers that still name it.
  */
 export async function setPresetActions(
-	db: Db,
-	configId: number,
-	patch: { includedActions?: string[] | null; enabled?: boolean }
+	_db: Db,
+	_configId: number,
+	_patch: { includedActions?: string[] | null; enabled?: boolean }
 ): Promise<{ ok: boolean; error?: string }> {
-	const [config] = await db
-		.select()
-		.from(schema.pipelineConfigs)
-		.where(eq(schema.pipelineConfigs.id, configId))
-		.limit(1)
-	if (!config) return { ok: false, error: "that preset no longer exists" }
-
-	if (config.isImmutable)
-		return {
-			ok: false,
-			error:
-				`'${config.name}' is shipped with Serene Pub and is never edited in ` +
-				`place. Duplicate it and edit the copy.`
-		}
-
-	let includedActions = patch.includedActions
-	if (includedActions != null) {
-		const [spec] = await db
-			.select({ slug: schema.pipelineSpecs.slug })
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.id, config.specId))
-			.limit(1)
-		const genreId = spec ? await genreOfSpec(db, spec.slug) : null
-		const offered = genreId ? await listGenreActions(db, genreId) : []
-		const normalized = normalizeIncludedActions(offered, includedActions)
-		if (!normalized.ok) return normalized
-		includedActions = normalized.included
+	return {
+		ok: false,
+		error:
+			"A pipeline configuration no longer carries actions — configurations are retired. " +
+			"Change which actions a session preset offers in the preset itself."
 	}
-
-	await db
-		.update(schema.pipelineConfigs)
-		.set({
-			...(includedActions !== undefined ? { includedActions } : {}),
-			...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-			updatedAt: new Date()
-		})
-		.where(eq(schema.pipelineConfigs.id, configId))
-
-	return { ok: true }
 }
 
 // ── The preset a session runs on (19 §7, ruled 2026-08-24) ────────────────────
@@ -1850,87 +1921,28 @@ export async function listSessionPresets(
 	selectedId: number | null
 	options: PresetOption[]
 }> {
+	// ⏳ The session's "Configuration" menu is retired with configurations
+	// (R38, PLAN-layering D7): nothing to pick — a session's values come
+	// from its preset's registrations. The pipeline is still named.
 	const pipeline = await sessionPipeline(db, sessionId, genreId, viewer.userId)
-	if (!pipeline) return { specSlug: null, selectedId: null, options: [] }
-
-	const rows = await db
-		.select()
-		.from(schema.pipelineConfigs)
-		.where(eq(schema.pipelineConfigs.specId, pipeline.specId))
-		.orderBy(asc(schema.pipelineConfigs.id))
-
-	const options = (rows as any[])
-		.filter((c) => viewer.isAdmin === true || c.enabled !== false)
-		.map((c) => ({
-			configId: c.id as number,
-			name: c.name as string,
-			isDefault: !!c.isDefault,
-			enabled: c.enabled !== false,
-			readOnly: !!c.isImmutable
-		}))
-
-	return {
-		specSlug: pipeline.specSlug,
-		selectedId: pipeline.configId,
-		options
-	}
+	return { specSlug: pipeline?.specSlug ?? null, selectedId: null, options: [] }
 }
 
+/** The refusal an old client's Configuration pick gets (R38). */
+export const CONFIGURATION_RETIRED =
+	"Pipeline configurations are retired: a session runs on its preset's settings now. " +
+	"Pick another preset, or ask an administrator to change this one."
+
 /**
- * Put a session on a preset.
- *
- * Writes a **session-scope** selection, which is the same row `pipelines:
- * selectConfig` writes — one mechanism, so a preset chosen here and one chosen
- * from the pipeline panel are the same fact rather than two that can disagree.
- *
- * The refusal that matters is the disabled one. `enabled` is the
- * administrator's answer to "what may people choose", and a picker that hid a
- * preset while the write accepted it would make the switch advisory — anything
- * able to emit a socket event would still get it.
+ * ⏳ Retired (R38, PLAN-layering D7): a session picks no pipeline
+ * configuration. Kept so an old client's pick gets a sentence, not silence.
  */
 export async function chooseSessionPreset(
-	db: Db,
-	sessionId: number,
-	genreId: string,
-	configId: number,
-	viewer: { userId?: number | null; isAdmin?: boolean }
+	_db: Db,
+	_sessionId: number,
+	_genreId: string,
+	_configId: number,
+	_viewer: { userId?: number | null; isAdmin?: boolean }
 ): Promise<{ ok: boolean; error?: string }> {
-	const pipeline = await sessionPipeline(db, sessionId, genreId, viewer.userId)
-	if (!pipeline)
-		return {
-			ok: false,
-			error: "no pipeline serves this session's genre, so there is nothing to configure"
-		}
-
-	const [config] = await db
-		.select()
-		.from(schema.pipelineConfigs)
-		.where(eq(schema.pipelineConfigs.id, configId))
-		.limit(1)
-	if (!config) return { ok: false, error: "that preset no longer exists" }
-
-	if (config.specId !== pipeline.specId)
-		return {
-			ok: false,
-			error:
-				`'${config.name}' belongs to a different pipeline. Presets are ` +
-				`namespaced to the pipeline they were written for.`
-		}
-
-	if (config.enabled === false && viewer.isAdmin !== true)
-		return {
-			ok: false,
-			error: `'${config.name}' is not available to choose.`
-		}
-
-	const { selectConfig } = await import("$lib/server/pipelines/config/named")
-	await selectConfig(
-		db,
-		pipeline.specId,
-		"session",
-		sessionId,
-		configId,
-		viewer.userId ?? undefined
-	)
-	return { ok: true }
+	return { ok: false, error: CONFIGURATION_RETIRED }
 }

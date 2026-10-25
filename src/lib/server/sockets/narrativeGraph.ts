@@ -3671,6 +3671,17 @@ export const narrativeGraphUpdateRelationshipHandler: Handler<
 			fields.toEntryId = to.entryId
 		}
 
+		// 🚧 A row the rules feed (T2, T3): its fed words follow the held tie
+		// side, so a hand that retypes them is refused — the number is set
+		// from the tie instead (Set…, a change for review).
+		if (
+			existing.rulesRunId &&
+			r.relationshipType !== undefined &&
+			wayWords(r.relationshipType) !== existing.relationshipType
+		)
+			throw new Error(
+				"This relationship's type comes from the rules. Set the number it follows instead."
+			)
 		// The words and the name, trimmed; a blank reverse is one way (B1).
 		if (r.relationshipType !== undefined)
 			fields.relationshipType = wayWords(r.relationshipType)
@@ -3822,6 +3833,15 @@ export const narrativeGraphDeleteRelationshipHandler: Handler<
 		await db
 			.delete(schema.narrativeRelationships)
 			.where(eq(schema.narrativeRelationships.id, params.id))
+		// 🚧 T4: the held tie sides that read onto it retire with it — in
+		// every session reading the book. Never the reverse.
+		try {
+			await (
+				await import("$lib/server/rulesets/ties")
+			).retireTieSides(db, existing)
+		} catch (e) {
+			console.warn("[narrativeGraph] the tie sides of a deleted link could not be retired:", e)
+		}
 
 		// The id and book ride the reply so an open canvas drops the one edge
 		// in place (no reload, the layout stays) and a canvas on another book
@@ -3944,6 +3964,16 @@ export const narrativeGraphCreateRelationshipHandler: Handler<
 			})
 			.returning()
 
+		// 🚧 T4: a tie drawn on the lorebook makes its held sides in every
+		// session reading the book whose rules keep ties of its kind.
+		try {
+			await (
+				await import("$lib/server/rulesets/ties")
+			).drawTieSides(db, inserted)
+		} catch (e) {
+			console.warn("[narrativeGraph] the held sides of a drawn tie could not be made:", e)
+		}
+
 		const res: Sockets.NarrativeGraph.CreateRelationship.Response = {
 			relationship: wireRelationship(
 				inserted,
@@ -3954,6 +3984,80 @@ export const narrativeGraphCreateRelationshipHandler: Handler<
 		return res
 	},
 	"The link could not be saved."
+)
+
+// ─── Ties on the graph: a rule-fed row's sides (T1–T4) ────────────────────────
+
+/**
+ * 🚧 `narrativeGraph:tieSides` (screen 3): the held sides a rule-fed row
+ * reads from — each side's words and numbers, from the session whose run
+ * last wrote it — and how the row changed, read from its runs' receipts.
+ * The book's owner's, as the row is.
+ */
+export const narrativeGraphTieSidesHandler: Handler<
+	Sockets.NarrativeGraph.TieSides.Params,
+	Sockets.NarrativeGraph.TieSides.Response
+> = refusable(
+	"narrativeGraph:tieSides",
+	async (socket, params: Sockets.NarrativeGraph.TieSides.Params, emitToUser) => {
+		const userId = socket.user!.id
+		const id = Number(params?.relationshipId)
+		const existing = Number.isSafeInteger(id)
+			? await db.query.narrativeRelationships.findFirst({
+					where: eq(schema.narrativeRelationships.id, id)
+				})
+			: undefined
+		if (!existing || !(await findOwnedBook(db, userId, existing.lorebookId)))
+			throw new Error("That link is not in this lorebook.")
+		const { sidesOfRow, tieHistory } = await import("$lib/server/rulesets/ties")
+		const res: Sockets.NarrativeGraph.TieSides.Response = {
+			relationshipId: existing.id,
+			sides: await sidesOfRow(db, existing.id),
+			history: existing.rulesRunId ? await tieHistory(db, existing.id) : []
+		}
+		emitToUser("narrativeGraph:tieSides", res)
+		return res
+	},
+	"The sides of that tie could not be read."
+)
+
+/**
+ * 🚧 `narrativeGraph:setTieSide` (screen 3's **Set…**): the game master sets
+ * one side's number of a rule-fed row. Never written here: it files a held
+ * change in that side's session, and the row follows only when it is kept.
+ */
+export const narrativeGraphSetTieSideHandler: Handler<
+	Sockets.NarrativeGraph.SetTieSide.Params,
+	Sockets.NarrativeGraph.SetTieSide.Response
+> = refusable(
+	"narrativeGraph:setTieSide",
+	async (socket, params: Sockets.NarrativeGraph.SetTieSide.Params, emitToUser) => {
+		const userId = socket.user!.id
+		const id = Number(params?.relationshipId)
+		const existing = Number.isSafeInteger(id)
+			? await db.query.narrativeRelationships.findFirst({
+					where: eq(schema.narrativeRelationships.id, id)
+				})
+			: undefined
+		if (!existing || !(await findOwnedBook(db, userId, existing.lorebookId)))
+			throw new Error("That link is not in this lorebook.")
+		const { fileHeldFieldChange } = await import("$lib/server/rulesets/ties")
+		const filed = await fileHeldFieldChange(db, {
+			relationshipId: existing.id,
+			owner: String(params.owner ?? ""),
+			field: String(params.field ?? ""),
+			value: Number(params.value),
+			userId
+		})
+		const res: Sockets.NarrativeGraph.SetTieSide.Response = {
+			success: "Filed as a change for review.",
+			relationshipId: existing.id,
+			...filed
+		}
+		emitToUser("narrativeGraph:setTieSide", res)
+		return res
+	},
+	"That number could not be set."
 )
 
 // ─── A cast member's own story (absorb / undo) ────────────────────────────────
@@ -5670,6 +5774,8 @@ export function registerNarrativeGraphHandlers(
 	register(socket, narrativeGraphUpdateRelationshipHandler, emitToUser)
 	register(socket, narrativeGraphDeleteRelationshipHandler, emitToUser)
 	register(socket, narrativeGraphCreateRelationshipHandler, emitToUser)
+	register(socket, narrativeGraphTieSidesHandler, emitToUser)
+	register(socket, narrativeGraphSetTieSideHandler, emitToUser)
 	register(socket, narrativeGraphMergeNodeHandler, emitToUser)
 	register(socket, narrativeGraphUndoMergeHandler, emitToUser)
 	register(socket, narrativeGraphListMergeLogsHandler, emitToUser)

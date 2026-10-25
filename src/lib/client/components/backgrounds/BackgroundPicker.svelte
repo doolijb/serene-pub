@@ -190,7 +190,7 @@
 				class="relative h-16 w-24 overflow-hidden rounded-lg border-2 transition-all
 					{selectedPath === null
 					? 'border-primary-500 ring-primary-500 ring-2 ring-offset-1'
-					: 'border-surface-300-600 hover:border-surface-400-500'}"
+					: 'border-surface-200-800 hover:border-surface-400-600'}"
 				onclick={() => select(null)}
 				title="No background"
 				aria-label="No background"
@@ -246,7 +246,7 @@
 							class="group relative h-16 overflow-hidden rounded-lg border-2 transition-all
 								{selectedPath === path
 								? 'border-primary-500 ring-primary-500 ring-2 ring-offset-1'
-								: 'border-surface-300-600 hover:border-surface-400-500'}"
+								: 'border-surface-200-800 hover:border-surface-400-600'}"
 							onclick={() => select(path)}
 							title={labelFromPath(path)}
 						>
@@ -302,7 +302,7 @@
 
 			{#if visibleUploads.length === 0}
 				<div
-					class="border-surface-300-600 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed py-6"
+					class="border-surface-300-700 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed py-6"
 				>
 					<Icons.ImagePlus class="text-surface-600-400 h-8 w-8" />
 					<p class="text-surface-600-400 text-sm">No uploads yet</p>
@@ -324,7 +324,7 @@
 							class="group relative h-16 overflow-hidden rounded-lg border-2 transition-all
 								{selectedPath === path
 								? 'border-primary-500 ring-primary-500 ring-2 ring-offset-1'
-								: 'border-surface-300-600 hover:border-surface-400-500'}"
+								: 'border-surface-200-800 hover:border-surface-400-600'}"
 						>
 							<button
 								type="button"
@@ -384,7 +384,7 @@
 				class="card bg-surface-100-900 max-w-sm space-y-4 p-6 shadow-xl"
 			>
 				<header class="flex items-center gap-3">
-					<Icons.Trash2 class="text-error-500 h-5 w-5 shrink-0" />
+					<Icons.Trash2 class="text-error-600-400 h-5 w-5 shrink-0" />
 					<h2 class="text-lg font-bold">Delete Background</h2>
 				</header>
 				{#if pendingDeletePath}

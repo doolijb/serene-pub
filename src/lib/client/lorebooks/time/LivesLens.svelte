@@ -77,20 +77,20 @@
 			{#each axis.lanes as lane (lane.castId)}
 				<div class="flex items-center gap-3">
 					<button
-						class="hover:preset-tonal-surface w-28 shrink-0 truncate rounded-[7px] px-2 py-1 text-left text-xs"
+						class="hover:preset-tonal-surface w-28 shrink-0 truncate rounded-lg px-2 py-1 text-left text-xs"
 						type="button"
 						onclick={() => onOpenMember(lane.castId)}
 					>
 						{lane.name}
 					</button>
 					<div
-						class="bg-surface-100-900 relative h-8 flex-1 rounded-[8px]"
+						class="bg-surface-100-900 relative h-8 flex-1 rounded-lg"
 					>
 						{#each lane.runs as run (run.presenceId)}
 							<!-- A run is a stretch of world time this version of
 							     them stood in. Two that overlap are two people. -->
 							<div
-								class="absolute inset-y-1 rounded-[6px] {lane.doubled
+								class="absolute inset-y-1 rounded-md {lane.doubled
 									? 'preset-tonal-primary'
 									: 'preset-tonal-surface'} flex items-center overflow-hidden px-2"
 								style="left: {pct(run.from)}; width: {pct(
@@ -98,7 +98,7 @@
 								)}"
 								title={run.note ?? `at ${run.personalPosition}`}
 							>
-								<span class="truncate text-[11px]">
+								<span class="truncate text-meta">
 									{run.personalPosition}
 								</span>
 							</div>
@@ -112,7 +112,7 @@
 					</div>
 					{#if lane.doubled}
 						<span
-							class="chip preset-tonal-primary shrink-0 text-[11px]"
+							class="chip preset-tonal-primary shrink-0 text-meta"
 						>
 							two of them
 						</span>

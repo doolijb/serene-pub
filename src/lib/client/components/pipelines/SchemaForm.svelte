@@ -17,8 +17,6 @@
 	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { enumOptions } from "$lib/shared/i18n/enumOptions"
-	import TasksField from "$lib/client/components/sessionForms/TasksField.svelte"
-	import type { TaskDecl } from "@serene-pub/sdk"
 
 	interface FieldDecl {
 		type:
@@ -31,8 +29,6 @@
 			| "string[]"
 			| "secret"
 			| "object"
-			/** 🚧 Background tasks grouped by trigger (`TasksField`). */
-			| "tasks"
 		label?: string | ({ en: string } & Record<string, string>)
 		description?: string | ({ en: string } & Record<string, string>)
 		min?: number
@@ -70,12 +66,10 @@
 		 * one on a wrapper silently misses every pick.
 		 */
 		oncommit?: () => void
-		/** 🚧 What a `tasks` field needs beyond its declaration: the genre's task declarations and the preset's pin. */
-		extras?: { tasks?: readonly TaskDecl[]; tasksPinned?: unknown }
 		disabled?: boolean
 	}
 
-	let { schema, values = $bindable(), oncommit, extras, disabled = false }: Props = $props()
+	let { schema, values = $bindable(), oncommit, disabled = false }: Props = $props()
 
 	/** Write one field and tell the host it was committed. */
 	function commit(key: string, value: unknown) {
@@ -327,20 +321,6 @@
 						{/if}
 					{/each}
 				</fieldset>
-			{:else if visible(decl) && decl.type === "tasks"}
-				<div class="flex flex-col gap-1">
-					<span class="text-sm font-medium">{text(decl.label, key)}</span>
-					{#if decl.description}
-						<p class="text-surface-600-400 text-xs">{text(decl.description, "")}</p>
-					{/if}
-					<TasksField
-						decls={extras?.tasks ?? []}
-						value={shown(key)}
-						pinned={extras?.tasksPinned}
-						onchange={(v) => commit(key, v)}
-						{disabled}
-					/>
-				</div>
 			{:else if visible(decl)}
 				<div class="flex flex-col gap-1">
 					{#if decl.type === "enum" || isTicks(decl)}
@@ -476,7 +456,7 @@
 		{/each}
 	{/each}
 	{#each groups.filter((g) => g.group === ADVANCED_GROUP) as g (g.group)}
-		<details class="border-surface-200-800 rounded-[12px] border p-3" data-testid="schema-form-advanced">
+		<details class="border-surface-200-800 rounded-container border p-3" data-testid="schema-form-advanced">
 			<summary class="text-surface-600-400 cursor-pointer text-xs font-semibold">Advanced</summary>
 			<div class="mt-3 flex flex-col gap-3">
 				{#each g.fields as { key, decl } (key)}

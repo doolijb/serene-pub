@@ -1,27 +1,43 @@
 # Stats and states
 
-A **stat** is something about a character or the world that changes as the story goes: health, mood, gold, the weather, what someone is carrying, where the party is. Serene Pub keeps stats beside the story, shows them while you play, tells the model about them, and lets you approve or reject every change the model wants to make.
+A **stat** is something about a character or the world that changes as the story goes: health, mood, gold, what someone is carrying, where the party is. Serene Pub keeps stats beside the story, shows them while you play, tells the model about them, and lets you approve or reject every change the model wants to make.
 
-Stats come with the session's **genre**. **Story** and the **Lair** track them; **Chat** tracks none, so a Chat session looks and reads exactly as if stats didn't exist.
+Stats come from the session's **rules**. The rules a session plays (Vis Itineris, Wherewithal, rules you built yourself) say which **attributes** its characters, its world and its places carry: health, level, nerve, a mood. A genre never adds any, and neither does a session. Rules that keep no attributes, such as **Freeform**, keep the story in words: the sheet says so, and nothing is counted.
+
+Beside the rules' attributes, Serene Pub keeps a few things itself:
+
+- **Where and when.** Where the scene is (or, in the Dungeon Crawler, where each hero is) and the story's clock. They show in a row of their own on a sheet, never among the attributes, and the model reads them as place and time.
+- **What someone carries**, in a Story or Lair session: each character's **Inventory**, and what lies about in the world or in a place. A list under the sheet, where the model hands out the lorebook's items.
+- **A genre's own tools.** The Lair's **whisper** and standing **direction**, the Dungeon Crawler's standing orders and who is still standing. The genre's own steps read and write them; they are never one of the rules' attributes.
 
 :::note By the end of this page
 You'll know where to see a session's stats, how to change them, how to accept or reject the model's changes, and how your lorebook can set the world up before play. Further down, power users will find how values layer, how they reach a prompt, and how a pipeline reads them.
 :::
 
-## What each genre tracks
+## What a genre plays best with
 
-| Genre | On each cast member | On the world | Also |
-| --- | --- | --- | --- |
-| **Chat** | nothing | nothing | Can't track stats. |
-| **Story (Minimal)** | nothing moves unless you move it | the world's, read only | Tracks what its lorebook and cast bring; nothing changes by itself. |
-| **Story** | Health, Stamina, Mood, Trust | Location, Time of day, Weather | **Inventory** on cast members, the world and places. You can add more (see [What a session tracks](#what-a-session-tracks)). |
-| **Lair** | Health, Stamina, Mood, Trust, Whisper | Location, Floor, Gold, Direction | **Inventory** on cast members, the world and places. You can add more. |
+A genre doesn't decide what is tracked, but it can say what it **plays best with**, so the start form can recommend rules that fit:
 
-Nothing has to be filled in when a session starts: a fresh story already has every stat at its starting value, read from the character's card or the stat's own default. See [Story](./genre-story.md) for what Story does with them.
+| Genre | Plays best with |
+| --- | --- |
+| **Chat** | nothing: it keeps no stats. |
+| **Story** | a health-like number, a mood word, what ails someone, somewhere to keep what they carry. All optional: Freeform plays it all in words. |
+| **Lair** | the party's health, what ails them, somewhere to keep what they carry. All optional. |
+| **Dungeon Crawler** | a health and a level to count, weapons, armour, gear, things used up, spells, what training lets someone do, what ails someone. Rules without them play the crawl in words. |
+
+The start form's Rules card lists these as **Plays best with …**, rates each set of rules against them, and says what the rules you picked will tell in words instead, and why. Nothing is locked: any rules can be played.
+
+Nothing has to be filled in when a session starts: a fresh story already has every stat at its starting value, read from the character's card or the stat's own default. See [Story](./genre-story.md) for what Story does with them, and [Rulesets](./rulesets.md) for the attributes a set of rules can declare.
 
 ## In a session
 
 The **Stats** widget shows stats while you play. It isn't on by default: open the layout editor and add it (see [Session layout](./session-layout.md)). A genre that wants it from the first message ships a layout with it already placed. Each stat is drawn by its [shape](#stat-shapes): a number with limits as a bar (`14/20`), a choice as a chip, a list as its items, a date as a date line. Its settings choose **whose stats** it shows (the cast, the world, the [places](#places) that hold something, all three under a heading each, or the ones you name), **which cast members** (those with a stat in play, or everyone), **which stats** (all of them, only the bars, or the ones you name) and the **arrangement**: a card for each, a list down a side column, or a strip across the top of the messages. The world's stats are what the model is told. To show the world as a strip and the party as cards, place Stats twice. **World State** is now Stats showing the world as a strip: a layout that has it keeps drawing it the same way.
+
+**Every kind of attribute, as the rules would like it.** The rules say what each attribute is, and may hint how it is drawn: a number as a bar (`14/20`), a count or a badge; a pool as pips (●●●○○) or a bar; a tally as a count; a word as a badge or plain words; a list as its items; free text over several lines. A hint the widget doesn't know is drawn the usual way for that kind. Under the attributes the sheet shows what each character **holds**, place by place the rules keep things in (what someone carries, a hand of cards), and their **ties** to other people. Rules that declare no attributes show _This session's rules declare no attributes._ instead. Rules that keep numbers without deciding anything by them (a sheet you track by hand) still show their numbers.
+
+**Where and when.** The scene's place and the story clock are a row of their own at the top of the world's sheet (and, in the Dungeon Crawler, each hero's place on their own). Click the place to change it.
+
+**The game's own state.** A genre's own tools (the Dungeon Crawler's standing orders, fate and death saves, the Lair's whisper and direction) are drawn under a sheet in a block of their own, never among the attributes. A copy of the widget can hide them: set **The game's own state** to **Hidden**.
 
 **The character sheet.** A sheet shown alone (yours, with **Whose stats: Mine**) fills its box edge to edge — no card inside a card. Plain stats keep their label beside the value; a stat that holds **pieces** (weapons, armour, spells, conditions — anything the session's rules describe) puts its label on its own line with the pieces listed underneath, one row each: the name, **×3** when more than one is held, and a few words of what matters (*1d8 slashing*, *Heavy · AC 16*). Click a row to open its details: every fact, the description, the rules it carries, and — when the sheet is yours to change — **Edit**, **Give to…** and **Remove**. **Give to…** moves a piece to another character in the scene (or drops it in the place); when the other sheet is not yours to change, it becomes an offer they accept or decline on their own sheet. **Add** stays at the end of the list.
 
@@ -31,7 +47,7 @@ The **Stats** widget shows stats while you play. It isn't on by default: open th
 
 **Portraits.** Click the picture (or the initial) at the top of a sheet to choose a portrait: one of the session's pictures, an upload, or — with an image model connected — **Draw**, from what the sheet says. The portrait shows everywhere that character does: the sheet, the faces strip, Scene Portraits and their replies.
 
-**Locked stats.** A session's rules, or its owner, can lock a stat: a small lock shows beside it and the edit controls go away. *People* locks hand edits only (the dice still write it); *All* locks every write until it is unlocked.
+**Locked stats.** A session's rules, or its owner, can lock a stat: a small lock shows beside it and the edit controls go away. *People* locks hand edits only (the rules still write it); *All* locks every write until it is unlocked.
 
 The clock button beside a stat shows how it changed in this session, newest first: what it was, what it became, who changed it (you or another player, the story, or something automatic) and when. Anyone in the session can open it. To hide these buttons, turn off **Show changes** in the widget's settings.
 
@@ -58,7 +74,7 @@ When the model *asks* for a change, the line shows it with **Accept** and **Reje
 | Who | What happens |
 | --- | --- |
 | **You** | Applied at once. |
-| **A pipeline the genre ships** (a damage roll, a shop) | Applied at once, recorded as that run's. |
+| **A pipeline the genre ships** (a check's damage, a shop) | Applied at once, recorded as that run's. |
 | **The model** | **Proposed.** Nothing changes until you accept it. |
 
 A model that could silently rewrite a character between two messages would leave you nothing to point at afterwards, so its changes always wait for you. Accepting one records it as the model's change that you agreed to, which is what makes "why is my health 3?" answerable.
@@ -69,19 +85,19 @@ In a shared session, guests change the session's own values like anyone playing.
 
 ## Swipes, regenerates and taking things back
 
-Every change is tied to the message that made it. **Delete a message**, **regenerate** a reply or **swipe** to another, and what that message changed goes with it: the reply that wounded her is gone, so the wound is too, and the new reply proposes its own. A stat is only ever as durable as the line that justified it.
+Every change is tied to the message that made it. Go **Back** a turn, **regenerate** a reply or **swipe** to another (or delete a message, where the genre offers Delete), and what that message changed goes with it: the reply that wounded her is gone, so the wound is too, and the new reply proposes its own. **Forward** brings the turn back, wound and all. A stat is only ever as durable as the line that justified it.
 
 The story clock follows the same rule: a move that came with the message steps back with it, all but a reply's fixed tick on a regenerate or a swipe. See [What moves a session's clock](./lorebook-time.md#the-story-clock).
 
 ## What a session tracks
 
-The genre sets the baseline, and decides whether a session may track anything more. **Chat** doesn't. **Story** and **Lair** do, and the session's settings have an **Attributes** section with three parts:
+A session tracks what its rules declare, and nothing more: no genre adds attributes, the lorebook's and the cards' stat sheets don't add any, and the session can't add its own. Change the rules (before play, or with the session's rules settings) and what is tracked changes with them. A value the session held on a stat it no longer tracks is kept: older sessions had theirs carried onto the rules' attribute of the same kind (health onto health), or written into the session's notes as a line under **Carried over from before**.
 
-- **From the genre**: the genre's own stats, always tracked.
-- **From the world**: the stats the session's lorebook brings, such as stat sheets on the lorebook or its cast, and stats an earlier session recorded onto the world, then the sheets on the cards of the characters in the session (in each card's order, after the world's). A card's sheets count even when the session reads no lorebook. On by default; switch them all off, or untick any one.
-- **This session's own**: any other stat installed on this pub, added for this session alone with **Add an attribute…**.
+The session's settings have an **Attributes** section. Under rules that declare none it says _This session's rules declare no attributes._
 
-A change applies from that moment on: values already recorded stay. Only the session's owner can change what it tracks. A stat the session doesn't track can't be changed in it, and the refusal says so.
+### Who carries what
+
+When the rules leave an attribute optional, the **Attributes** section lists **Who carries what**: each character (and the world or each place, where the rules put an attribute there), with a **Carries ‹attribute›** switch for each. The same switches are on the Stats widget, under each sheet, for the sheets you may change. Switched off, that attribute isn't shown on their sheet, isn't read into any prompt or by the rules, and can't be changed for them; what it held is kept, and comes back when it's switched on again. Whoever plays a character can switch their own; the session's owner can switch anyone's, and the world's and places'. An attribute the rules mark as required is always carried, so it isn't listed.
 
 ## Stat shapes
 
@@ -94,11 +110,11 @@ Every stat has a **shape**, so the same kind of value behaves the same way every
 | **List** | an ordered list of text or lorebook entries | its items |
 | **Story time** | a story date, with an optional time of day | a date line: `Year 412, Mo. 3, Day 5, 22:30` |
 
-A stat can also be a line of **text** (Location, Direction, Whisper) or **on or off**. A card, a lorebook or a session can change a stat's limits, such as raising one character's maximum health, without changing its shape.
+A stat can also be a line of **text** (Location, the Lair's Direction and Whisper) or **on or off**. The rules' attributes are said by kind (a number, a pool, a tally, a word, a list, free text), each drawn as above. A card, a lorebook or a session can change a stat's limits, such as raising one character's maximum health, without changing its shape.
 
 ### Lists and items
 
-An inventory, the companions travelling with the party, the clues found so far: all lists. **Inventory** is a list stat like any other.
+The companions travelling with the party, the clues found so far: lists, where the rules keep one. What someone carries is the things they hold, kept where the rules keep them (every session has somewhere to keep what someone carries). In a **Story** or **Lair** session, Serene Pub keeps it itself, as each character's **Inventory** (and what lies about in the world or in a place): a list under the sheet, never among the rules' attributes, whatever the rules.
 
 An item in a list is either a line of text or a lorebook entry. An entry always shows its current name, so renaming the entry renames it in every list. A lorebook can hold **Items** as their own kind of entry, each saying how many exist: **One of a kind**, **Limited** or **Unlimited** (see [Lorebooks](./lorebooks.md#the-entry)). An entry appears once in a list with a count: one is written plainly (`Rusty key`), two or more with the count (`Rusty key ×2`).
 
@@ -116,13 +132,13 @@ A story date is written year first: `412`, `412-03`, `412-03-05` or `412-03-05 2
 
 ### Location
 
-**Location** says where the scene is. Story and the Lair keep it on the world. It's a line of text, such as *the old mill*, or, when the model names a place in the session's lorebook, a pointer to that place. The place is found by its exact name, then a looser spelling (with *the*, *a* or *an* aside), then its keywords. A name two places share is refused rather than guessed, and so is a place the session can't see. Anything else stays as words.
+**Location** says where the scene is. It is Serene Pub's own, never one of the rules' attributes: Story and the Lair keep it on the world, and the Dungeon Crawler on each hero, whose party may split. It's a line of text, such as *the old mill*, or, when the model names a place in the session's lorebook, a pointer to that place. The place is found by its exact name, then a looser spelling (with *the*, *a* or *an* aside), then its keywords. A name two places share is refused rather than guessed, and so is a place the session can't see. Anything else stays as words.
 
 A location that points at a place reads by the place's name, so a place renamed later in the story reads by its new name everywhere.
 
 ## Places
 
-A place in the session's lorebook can hold stats of its own, as the world and each character do. In **Story** and the **Lair**, every place can hold an **Inventory**: the key lying in the crypt, the nets on the harbour wall.
+A place in the session's lorebook can hold stats of its own, as the world and each character do, where the rules put an attribute on places, and what lies there: the key lying in the crypt, the nets on the harbour wall.
 
 **The places a session can see** are its lorebook's places on its line, at its point in the story, except any that are archived or switched off. Everything in the session uses this one rule: the prompt, the rooms the Lair lists, the Stats widget, and what a change may name. A place that's switched off keeps its stats in the lorebook; the session just doesn't read them until it's back. If the party's **Location** points at it, the location reads as _none_ until then.
 
@@ -145,8 +161,7 @@ The same stat can be answered in several places, and a session reads the nearest
 1. **The session**: this playthrough, changed during play.
 2. **The lorebook**: what this world says, shared by every session on it.
 3. **The character card**: what this character starts as, wherever they turn up.
-4. **The sheet's default**: what the genre's stat sheet says it starts at.
-5. **The stat's own default.**
+4. **The stat's own default.**
 
 In short: **the card is the template, the lorebook is the world, the session is this run.**
 
@@ -154,7 +169,7 @@ In short: **the card is the template, the lorebook is the world, the session is 
 
 A character's card can carry stats of its own: open the character, press **Edit** and switch to the **Stats** tab (see [Stats on a card](./characters.md#stats-on-a-card)). There you pick the card's **sheets** and set where each stat starts, and its limits, for every session the character joins.
 
-- **The sheets join what a session tracks.** A card's sheets are added to the session's tracked stats for that character, after the world's, in the card's order, under the same switch as the world's (see [What a session tracks](#what-a-session-tracks)). A genre that tracks nothing more, such as **Chat**, still tracks nothing.
+- **The sheets don't add stats.** What a session tracks is its rules' (see [What a session tracks](#what-a-session-tracks)); a card's values answer for the stats the rules keep.
 - **The card is only the start.** A cast member in a lorebook, or the session itself, can change any value the card sets; the card is never changed by play.
 - **They travel with the card.** Exporting the character carries its sheets, values and limits, and any stat you declared yourself, so a Serene Pub import gets them back. See [Exporting a character](./characters.md#exporting-a-character).
 
@@ -174,7 +189,7 @@ Most of what a session changes is its own. A few things change the **lorebook**:
 - **Dated where its story stands**: at the latest history entry on its line, up to its story clock. The value holds from that date on, and a session whose clock is earlier doesn't see it.
 - **Before the first date, from the beginning.** A change made before the line's first history entry counts from the start of the line.
 
-Whether a session may change the lorebook at all is the lorebook owner's **Lorebook writes from sessions** setting (in **Settings › User**; an administrator sets the default for everyone in **Admin › General**):
+Whether a session may change the lorebook at all is the lorebook owner's **Lorebook writes from sessions** setting (in **Settings › User**; an administrator sets the default for everyone in **Admin › General**), made stricter by the book's own **Writes from sessions** in its Book settings when that is stricter (see [What a session may write](./lorebooks.md#what-a-session-may-write)):
 
 | Setting | A pipeline's change to the lorebook | Recording onto the world | Your own edit, or an Accept |
 | --- | --- | --- | --- |
@@ -186,15 +201,13 @@ A proposal to change the lorebook remembers the line and date it was made at, an
 
 ## In a prompt
 
-A genre's prompt template reads the values (`state.world.weather`, `state.cast.verity.hp`) and writes them however it likes, usually as a line the model reads: *Verity: 14/20, wary; carrying a rusty key*. Lists read as their items with counts (`carrying Rusty key ×2, rope`). A place's values are under `state.locations`, by the place's name: `state.locations.the_crypt.inventory`. A template sees only the stats the session tracks; see [Context templates](./context-templates.md#stats-state).
+A genre's prompt template reads the values (`state.world.location`, `state.cast.verity.hp`) and writes them however it likes, usually as a line the model reads: *Verity: 14/20, wary; carrying a rusty key*. Only the rules' attributes reach it, beside the place and the time, which read as place and time (*The scene is at the old mill.*). Under rules that declare no attributes, the prompt carries no health, stamina, mood or trust line at all. Lists read as their items with counts (`carrying Rusty key ×2, rope`). A place's values are under `state.locations`, by the place's name: `state.locations.the_crypt.inventory`. A template sees only the stats the session tracks; see [Context templates](./context-templates.md#stats-state).
 
 Who is told about which place:
 
 - **A character's own voice** (a Story cast member, a Lair delver) is told the stats of **one** place: the one the scene is in. A character never knows what's waiting in a room nobody has reached.
 - **The planner, narrator and reckoning** aren't anybody in the scene, and read every place the session can see.
-- **The Lair's Castellan, speaking for the party**, reads the party's place and the places one way on from it.
-
-In the Lair, the Castellan's state-keeper keeps the world's and places' stats, and whoever writes a delver's line keeps that delver's stats: the delver's own turn, or, when the Castellan speaks for the party, the Castellan's state-keeper for the delvers it voiced that turn. A change reported for anybody else is refused. See [How the party speak](./genre-lair.md#how-the-party-speak).
+In the Lair, a delver's own turn keeps no books: the routine **Keep the books** reads the round's lines afterwards and keeps the delvers', the world's and the places' stats. See [Keeping the books](./genre-lair.md#keeping-the-books).
 
 ### Heard by its holder alone (earshot)
 

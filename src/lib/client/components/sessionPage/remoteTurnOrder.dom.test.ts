@@ -335,6 +335,44 @@ describe("core's remote Turn order", () => {
 	)
 
 	test(
+		"🚧 the Lair's Party panel: a seated player's planned turn waits for them; the owner alone may Continue past them",
+		{ timeout: 120_000 },
+		async () => {
+			// The plan's turns (Lair rewrite D5): Sable's player's delver, then Wren.
+			const planned = turnOrder([
+				{ ref: "character:9", via: "plan" },
+				{ ref: "character:3", via: "plan" }
+			])
+			const owner = await mount({ order: planned })
+			expect(text(owner.query(part("head")))).toBe("Waiting for Sable")
+			const go = owner.query<HTMLButtonElement>(part("continue"))!
+			expect(go.hasAttribute("disabled")).toBe(false)
+			expect(go.getAttribute("aria-label")).toBe("Continue without Sable")
+			// Another guest at the table waits too, and may not move past anybody.
+			const guest = await mount({
+				order: planned,
+				viewer: { userId: 77, isAdmin: false, isGuest: true }
+			})
+			expect(text(guest.query(part("head")))).toBe("Waiting for Sable")
+			expect(control(guest, "continue").disabled).toBe(true)
+			// Sable's player: their own turn, taken by writing.
+			const player = await mount({
+				order: planned,
+				viewer: { userId: 30, isAdmin: false, isGuest: true }
+			})
+			expect(text(player.query(part("head")))).toBe("Your turn")
+			expect(control(player, "continue")).toEqual({
+				disabled: true,
+				title: "A person's turn is taken by writing."
+			})
+			expect(rows(player).map((r) => [r.name, r.chip])).toEqual([
+				["Sable", "You"],
+				["Wren", "Then"]
+			])
+		}
+	)
+
+	test(
 		"nothing prepared: waiting, with Pick offered and Continue greyed",
 		{ timeout: 120_000 },
 		async () => {

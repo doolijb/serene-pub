@@ -41,7 +41,7 @@ import {
 	type RunArtifact
 } from "$lib/server/pipelines/runtime/receipts"
 import { createReviewer } from "$lib/server/pipelines/runtime/reviewGate"
-import { NODE_TIMEOUT_CEILING_MS } from "$lib/server/pipelines/runtime/callTether"
+import { ceilingFor } from "$lib/server/pipelines/runtime/callTether"
 import { PipelineUnavailableError } from "$lib/server/pipelines/runtime/runTurn"
 import { likenessOf } from "$lib/server/characters/likeness"
 import { getMedia } from "$lib/server/media"
@@ -215,7 +215,8 @@ export async function runCardAction(req: CardActionRequest): Promise<Receipt> {
 		onNode: req.onNode,
 		...(req.onStatus ? { onStatus: req.onStatus } : {}),
 		cancelSignal: req.cancelSignal,
-		timeoutCeilingMs: NODE_TIMEOUT_CEILING_MS,
+		// 🚧 LS3: the ceiling of the run's trigger family — a person's press.
+		timeoutCeilingMs: ceilingFor("action"),
 		reviewer: createReviewer({
 			userId: req.userId,
 			specId,
@@ -224,6 +225,17 @@ export async function runCardAction(req: CardActionRequest): Promise<Receipt> {
 	} as any)
 
 	receiptWithoutQueryText(receipt)
+	// 🚧 LS2: every run records its trigger family — a card's action is a press.
+	receipt.triggerFamily = "action"
 	await saveReceipt(db, receipt, { userId: req.userId, artifacts })
+	// 🚧 What its ruleset functions raised (D3), after the receipt — as `runTurn` does. A card's
+	// action has no session, so this is nothing unless its spec resolves one's ruleset. Never throws.
+	await (await import("$lib/server/rulesets/emits")).dispatchRulesetEmits(db, {
+		runId: receipt.runId,
+		outcome: receipt.outcome,
+		userId: req.userId,
+		signal: req.signal,
+		pipelineEmits: (doc as { functionEvents?: unknown }).functionEvents
+	})
 	return receipt
 }

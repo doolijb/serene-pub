@@ -250,6 +250,8 @@ export interface CreateMediaInput extends MediaProvenance {
 	/** Permit documents as well as images. Off by default so an avatar field
 	 *  cannot be handed a PDF. */
 	allowDocuments?: boolean
+	/** 🚧 Permit sounds and moving pictures (O4) — a voice note, a spoken reply. */
+	allowMedia?: boolean
 	/** User-level bucket when there is no entity parent (eg. "backgrounds"). */
 	bucket?: string
 	/**
@@ -312,7 +314,8 @@ export async function createMedia(
 		: Buffer.from(input.bytes)
 	const sniffed = await sniffMedia(buf, {
 		filename: input.filename ?? undefined,
-		allowDocuments: input.allowDocuments
+		allowDocuments: input.allowDocuments,
+		allowMedia: input.allowMedia
 	})
 	const hash = sha256(buf)
 

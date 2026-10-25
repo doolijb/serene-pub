@@ -16,14 +16,13 @@
 
 import { describe, it, expect, beforeAll } from "vitest"
 import { and, eq } from "drizzle-orm"
-import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
+import { createTestDb, replyStepKeys, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import {
 	clearOption,
 	listNamespaces,
 	namespaceView,
 	optionId,
-	selectNamedConfig,
 	writeOption,
 	OptionNotFoundError,
 	OptionNotWritableError,
@@ -40,6 +39,8 @@ let userId: number
 let otherUserId: number
 let adminId: number
 let sessionId: number
+/** Story's reply steps, by the addresses its document gives them (in its `reply` junction). */
+let reply: Awaited<ReturnType<typeof replyStepKeys>>
 
 beforeAll(async () => {
 	db = await createTestDb()
@@ -69,6 +70,7 @@ beforeAll(async () => {
 		.values({ userId, isGroup: false })
 		.returning()
 	sessionId = session.id
+	reply = await replyStepKeys(db, STORY_RESPOND_SPEC_ID)
 }, 60_000)
 
 const viewer = (over: any = {}) => ({
@@ -454,42 +456,16 @@ describe("resolution and provenance", () => {
 		expect(target).toBeTruthy()
 		expect(target.control).toBe("prompts-ref")
 
-		// A mutable copy of the shipped default, selected for the instance —
-		// the global edit below lands in *it*, because there is no other
-		// global place left for an edit to go.
-		const { duplicateConfig, selectConfig } = await import(
-			"$lib/server/pipelines/config/named"
-		)
-		const [spec] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
-		const [shipped] = await db
-			.select()
-			.from(schema.pipelineConfigs)
-			.where(
-				and(
-					eq(schema.pipelineConfigs.specId, spec.id),
-					eq(schema.pipelineConfigs.isImmutable, true)
-				)
-			)
-		const copy = await duplicateConfig(db, shipped.id, "Walk copy")
-		await selectConfig(db, spec.id, "pub", 0, copy.id, adminId)
-
-		// Clearing deletes the copy's row, so the author default resolves —
-		// the bottom of the chain, seen before the layers stack back up.
-		await clearOption(
-			db,
-			SECRET,
-			STORY_RESPOND_SPEC_ID,
-			viewer({ userId: adminId, isAdmin: true }),
-			target.id
-		)
-		let base = allOptions(
+		// 🚧 The prompt the pipeline's declared defaults pick is a reference,
+		// so it reads as set above the declaration (R38) — there is no bare
+		// declaration under a prompt to clear down to.
+		const base = allOptions(
 			await view({ userId: adminId, isAdmin: true })
 		).find((o) => o.id === target.id)!
-		expect(base.source).toBe("author")
+		expect(base.source).toBe("config")
 
+		// An administrator's instance-wide edit: a change to the genre's
+		// defaults (A15), the global place an edit goes now.
 		await writeOption(
 			db,
 			SECRET,
@@ -534,50 +510,21 @@ describe("resolution and provenance", () => {
 			viewer({ sessionId }),
 			target.id
 		)
-		await selectConfig(db, spec.id, "pub", 0, null, adminId)
+		await clearOption(
+			db,
+			SECRET,
+			STORY_RESPOND_SPEC_ID,
+			viewer({ userId: adminId, isAdmin: true }),
+			target.id
+		)
 	})
 
-	it("a global edit lands in the selected configuration — and a shipped one refuses", async () => {
-		// The former instance override layer is gone (ruled 2026-08-24). A
-		// global edit *is* an edit to the selected configuration: against the
-		// shipped immutable default it refuses with the duplicate suggestion,
-		// and against a mutable selection it becomes that configuration's own
-		// value — reset deletes the value row, so the author default resolves
-		// again.
+	it("a global edit lands in the genre's defaults — and reset deletes it (R38, A15)", async () => {
 		const asAdmin = () => view({ userId: adminId, isAdmin: true })
 		const param = allOptions(await asAdmin()).find(
 			(o) => o.control === "integer" && o.writable
 		)!
 		expect(param).toBeTruthy()
-
-		// Nothing selected: the shipped default resolves, and refuses edits.
-		await expect(
-			writeOption(
-				db,
-				SECRET,
-				STORY_RESPOND_SPEC_ID,
-				viewer({ userId: adminId, isAdmin: true }),
-				param.id,
-				777
-			)
-		).rejects.toThrow(/Duplicate it and edit the copy/)
-
-		const { createConfig, selectConfig } = await import(
-			"$lib/server/pipelines/config/named"
-		)
-		const [spec] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
-		const landing = await createConfig(db, spec.id, "Landing")
-		await selectConfig(
-			db,
-			spec.id,
-			"pub",
-			0,
-			landing.id,
-			adminId
-		)
 
 		await writeOption(
 			db,
@@ -587,18 +534,17 @@ describe("resolution and provenance", () => {
 			param.id,
 			777
 		)
-		const after = allOptions(await asAdmin()).find(
-			(o) => o.id === param.id
-		)!
+		const after = allOptions(await asAdmin()).find((o) => o.id === param.id)!
 		expect(after.value).toBe(777)
 		expect(after.source).toBe("config")
-		const rows = await db
+		// Stored as an administrator's change at genre scope — no configuration.
+		const changes = await db
 			.select()
-			.from(schema.pipelineConfigValues)
-			.where(eq(schema.pipelineConfigValues.configId, landing.id))
-		expect((rows as any[]).some((r) => r.value === 777)).toBe(true)
+			.from(schema.registrations)
+			.where(and(eq(schema.registrations.scopeKind, "genre"), eq(schema.registrations.origin, "admin")))
+		expect(JSON.stringify(changes.map((r) => r.values))).toContain("777")
 
-		// Reset deletes the configuration's value; the author default resolves.
+		// Reset deletes the change; the declaration resolves again.
 		await clearOption(
 			db,
 			SECRET,
@@ -609,8 +555,6 @@ describe("resolution and provenance", () => {
 		const back = allOptions(await asAdmin()).find((o) => o.id === param.id)!
 		expect(back.value).not.toBe(777)
 		expect(back.source).not.toBe("config")
-
-		await selectConfig(db, spec.id, "pub", 0, null, adminId)
 	})
 
 	it("keeps one session's overrides out of another's view", async () => {
@@ -730,260 +674,62 @@ describe("what a write refuses", () => {
 	})
 })
 
-describe("named configs", () => {
-	it("selects the config the runtime resolves, not a parallel mechanism", async () => {
-		// The panel and world.ts must read the same table, or every screen
-		// agrees with the user while the run uses something else. The shipped
-		// immutable default is always offered; selecting a copy stores its id
-		// in the same selections row the runtime walks.
-		const v0 = await view()
-		expect(v0.configs.length).toBeGreaterThan(0)
-		// Nothing selected yet still resolves — to the shipped default.
-		expect(v0.selectedConfig).toBeTruthy()
-		expect(v0.selectedConfig!.source).toBe("shipped")
-
-		const [spec] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
-		const [copy] = await db
-			.insert(schema.pipelineConfigs)
-			.values({ specId: spec.id, name: "My copy", isImmutable: false })
-			.returning()
-
-		await selectNamedConfig(
-			db,
-			STORY_RESPOND_SPEC_ID,
-			viewer({ userId: adminId, isAdmin: true }),
-			copy.id,
-			"pub"
-		)
-		const [row] = await db
-			.select()
-			.from(schema.pipelineConfigSelections)
-			.where(eq(schema.pipelineConfigSelections.scopeKind, "pub"))
-		expect(row.configId).toBe(copy.id)
-
-		const v = await view()
-		expect(v.selectedConfig).toEqual({
-			id: copy.id,
-			name: "My copy",
-			source: "pub"
-		})
-		expect(v.configs.map((c) => c.id)).toContain(copy.id)
-	})
-
-	it("refuses a config belonging to another pipeline", async () => {
-		// A selection that silently does nothing is the hardest configuration
-		// bug to see — refused at the write, not resolved past at the read.
-		const [foreign] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/story-narrate"))
-		const [other] = await db
-			.insert(schema.pipelineConfigs)
-			.values({
-				specId: foreign.id,
-				name: "Wrong namespace",
-				isImmutable: false
-			})
-			.returning()
-
-		await expect(
-			selectNamedConfig(
-				db,
-				STORY_RESPOND_SPEC_ID,
-				viewer({ userId: adminId, isAdmin: true }),
-				other.id,
-				"pub"
-			)
-		).rejects.toThrow(/different pipeline/)
-	})
-})
-
 /**
- * Admins define which configurations exist; everyone else chooses among them.
- *
- * R8, and the half of it that is easy to get wrong is the second clause. There
- * is no owner column here and there never was, so "removing user ownership" is
- * not a schema change — it is making the administrator's curation *binding*.
- * `enabled` is that curation, and until this it was advisory in the panel path:
- * every configuration was listed to everyone, and `selectNamedConfig` would
- * store a choice of a withdrawn one without comment. The picker filter is not
- * what protects it — a config id is a small integer arriving from the client —
- * so the refusal is asserted separately from the listing.
+ * 🚧 Configurations retired (R38; R50, lane F1 2026-10-21): the panel lists
+ * none and selects none — a pipeline's values come from its registrations, or,
+ * for one nothing registers, its instance values. Choosing a configuration is
+ * gone (`selectNamedConfig` removed), and an edit naming one is refused below.
  */
-describe("the curated set", () => {
-	let specId: number
-	let withdrawn: number
-	let offered: number
+describe("named configs", () => {
+	it("the panel offers no configuration to list, select or choose", async () => {
+		const v0 = (await view()) as unknown as Record<string, unknown>
+		expect(v0.selectedConfig).toBeUndefined()
+		expect(v0.configs).toBeUndefined()
+		expect(v0.canSelectConfig).toBeUndefined()
+		const panel = await import("$lib/server/pipelines/config/panel")
+		expect((panel as Record<string, unknown>).selectNamedConfig).toBeUndefined()
+	})
 
-	beforeAll(async () => {
-		const [spec] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
-		specId = spec.id
-
-		const [off] = await db
-			.insert(schema.pipelineConfigs)
-			.values({ specId, name: "Withdrawn", enabled: false })
-			.returning()
-		withdrawn = off.id
-		const [on] = await db
-			.insert(schema.pipelineConfigs)
-			.values({ specId, name: "On the menu", enabled: true })
-			.returning()
-		offered = on.id
+	it("a member chooses among the prompts an administrator has not hidden (R54)", async () => {
+		const { setPromptHidden } = await import("$lib/server/pipelines/entities/prompts")
+		const v = await view({ sessionId })
+		const option = allOptions(v).find((o) => o.control === "prompts-ref" && o.writable && (o.choices?.length ?? 0) > 1)
+		expect(option, "no prompt choice offered to the member").toBeTruthy()
+		const hide = option!.choices!.find((c) => c.id !== option!.value)!
+		await setPromptHidden(db as never, hide.id, true)
+		try {
+			const again = allOptions(await view({ sessionId })).find((o) => o.id === option!.id)!
+			expect(again.choices!.map((c) => c.id)).not.toContain(hide.id)
+			const asAdmin = allOptions(await view({ sessionId, isAdmin: true, userId: adminId })).find((o) => o.label === option!.label && o.control === "prompts-ref")
+			expect(asAdmin?.choices?.some((c) => c.id === hide.id)).toBe(true)
+			await expect(
+				writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, viewer({ sessionId }), option!.id, hide.id)
+			).rejects.toThrow(/hid it/)
+		} finally {
+			await setPromptHidden(db as never, hide.id, false)
+		}
 	}, 60_000)
 
-	it("does not list a withdrawn configuration to a non-admin", async () => {
-		const v = await view()
-		const ids = v.configs.map((c) => c.id)
-		expect(ids).toContain(offered)
-		expect(ids).not.toContain(withdrawn)
-	})
-
-	it("still lists it to an admin, marked, so switching one off is not deletion", async () => {
-		// An admin who withdrew a configuration and then could not find it
-		// would reasonably conclude they had deleted it.
-		const v = await view({ isAdmin: true, userId: adminId })
-		const row = v.configs.find((c) => c.id === withdrawn)
-		expect(row).toBeTruthy()
-		expect(row!.enabled).toBe(false)
-	})
-
-	it("refuses a non-admin who names a withdrawn configuration anyway", async () => {
-		// The id did not have to come from the list. This is the check that
-		// makes the switch a rule rather than a rendering decision.
-		await expect(
-			selectNamedConfig(
-				db,
-				STORY_RESPOND_SPEC_ID,
-				viewer({ sessionId }),
-				withdrawn,
-				"session"
-			)
-		).rejects.toThrow(OptionNotWritableError)
-
-		const rows = await db
-			.select()
-			.from(schema.pipelineConfigSelections)
-			.where(
-				and(
-					eq(schema.pipelineConfigSelections.scopeKind, "session"),
-					eq(schema.pipelineConfigSelections.scopeId, sessionId)
-				)
-			)
-		// Refused means nothing was written, not "written and then reported".
-		expect(rows.map((r) => r.configId)).not.toContain(withdrawn)
-	})
-
-	it("lets a non-admin choose an offered one for their own session", async () => {
-		// The other half of the ruling, and the one a permission change is
-		// most likely to break by accident: choosing is the verb people keep.
-		await selectNamedConfig(
-			db,
-			STORY_RESPOND_SPEC_ID,
-			viewer({ sessionId }),
-			offered,
-			"session"
-		)
-		const v = await view({ sessionId })
-		expect(v.selectedConfig).toEqual({
-			id: offered,
-			name: "On the menu",
-			source: "session"
-		})
-	})
-
-	it("lets an admin choose a withdrawn one, since it is their switch", async () => {
-		await selectNamedConfig(
-			db,
-			STORY_RESPOND_SPEC_ID,
-			viewer({ userId: adminId, isAdmin: true }),
-			withdrawn,
-			"pub"
-		)
-		const [row] = await db
-			.select()
-			.from(schema.pipelineConfigSelections)
-			.where(eq(schema.pipelineConfigSelections.scopeKind, "pub"))
-		expect(row.configId).toBe(withdrawn)
-	})
-
-	it("refuses a session-scope choice made from outside a session", async () => {
-		// It used to fall through to scope id 0 — a selection stored against a
-		// session that does not exist, resolved by nobody, reported as saved.
-		// A no-op that answers "done" is the failure the refusals here exist
-		// to prevent.
-		await expect(
-			selectNamedConfig(
-				db,
-				STORY_RESPOND_SPEC_ID,
-				viewer(),
-				offered,
-				"session"
-			)
-		).rejects.toThrow(OptionNotWritableError)
-
-		const rows = await db
-			.select()
-			.from(schema.pipelineConfigSelections)
-			.where(
-				and(
-					eq(schema.pipelineConfigSelections.scopeKind, "session"),
-					eq(schema.pipelineConfigSelections.scopeId, 0)
-				)
-			)
-		expect(rows).toHaveLength(0)
-	})
-})
-
-/**
- * Choosing is offered where it can succeed, and stated where it cannot.
- *
- * `canSelectConfig` exists because the client cannot work this out: it knows
- * neither the viewer's role nor the scope rule. Without it the Pipelines panel
- * rendered a live dropdown for a non-admin standing outside a session, whose
- * every use ended in "only an administrator chooses the configuration for
- * everyone on this pub" — a control that would have worked for somebody
- * else, which is worse than no control at all.
- */
-describe("whether the selection is this viewer's to make", () => {
-	it("is false for a non-admin outside a session", async () => {
-		const v = await view()
-		expect(v.canSelectConfig).toBe(false)
-	})
-
-	it("is true inside a session they own", async () => {
-		const v = await view({ sessionId })
-		expect(v.canSelectConfig).toBe(true)
-	})
-
-	it("is true for an admin anywhere", async () => {
-		const v = await view({ userId: adminId, isAdmin: true })
-		expect(v.canSelectConfig).toBe(true)
-	})
-
-	it("agrees with what the write path actually accepts", async () => {
-		// The claim is not "the flag has a value" but "the flag and the
-		// refusal are the same rule". Two independent copies of a permission
-		// rule is how a screen ends up disagreeing with the server — the
-		// configuration named here is one the panel itself just offered, so
-		// nothing but the viewer's standing can be the reason it is refused.
-		const v = await view()
-		expect(v.canSelectConfig).toBe(false)
-		expect(v.configs.length).toBeGreaterThan(0)
-		await expect(
-			selectNamedConfig(
-				db,
-				STORY_RESPOND_SPEC_ID,
-				viewer(),
-				v.configs[0].id
-			)
-		).rejects.toThrow(OptionNotWritableError)
-	})
+	it("an administrator's edit of a pipeline nothing registers lands in its instance values (R50)", async () => {
+		const { CHARACTER_PORTRAIT_SPEC_ID } = await import("@serene-pub/core-catalog")
+		const { instanceValuesOf } = await import("$lib/server/pipelines/registrations/instanceValues")
+		const admin = { userId: adminId, isAdmin: true }
+		const v = (await namespaceView(db, SECRET, CHARACTER_PORTRAIT_SPEC_ID, admin)) as NamespaceView
+		const options = groupOptions(v.groups)
+		const option = options.find((o) => o.writable && o.control === "enum" && (o.of?.length ?? 0) > 1)
+		expect(option, `the portrait offers an administrator no plain setting: ${options.map((o) => `${o.control}${o.writable ? "" : " (ro)"}`).join(", ")}`).toBeTruthy()
+		// Another of its choices than the one in force.
+		const value = option!.of!.find((c) => c !== option!.value)
+		await writeOption(db, SECRET, CHARACTER_PORTRAIT_SPEC_ID, admin, option!.id, value)
+		const stored = JSON.stringify(await instanceValuesOf(db as never, CHARACTER_PORTRAIT_SPEC_ID))
+		expect(stored).toContain(JSON.stringify(value))
+		// The panel reads it back from where it landed.
+		const again = groupOptions(((await namespaceView(db, SECRET, CHARACTER_PORTRAIT_SPEC_ID, admin)) as NamespaceView).groups)
+		const read = again.find((o) => o.id === option!.id)!
+		expect(read.value).toEqual(value)
+		await clearOption(db, SECRET, CHARACTER_PORTRAIT_SPEC_ID, admin, option!.id)
+		expect(await instanceValuesOf(db as never, CHARACTER_PORTRAIT_SPEC_ID)).toBeNull()
+	}, 60_000)
 })
 
 /**
@@ -1001,149 +747,27 @@ describe("whether the selection is this viewer's to make", () => {
  * Asserting only that the write landed somewhere would pass either way.
  */
 describe("configurations hold their own values", () => {
-	let specId: number
-	let alpha: number
-	let beta: number
-	const admin = { userId: 1, isAdmin: true }
-
 	/**
-	 * A plain scalar option on the ranker, used here as *any* per-config value.
-	 *
-	 * This was "Budget" until the absolute token count was retired for the
-	 * share model. Nothing in this block is about ranking — it is about a
-	 * configuration keeping its own values — so the option only has to be a
-	 * scalar somebody can set.
+	 * 🚧 An edit naming a configuration of a pipeline registrations run is
+	 * refused (R38): that configuration is read by nothing any more. A
+	 * global edit without one lands in the genre's defaults (above).
 	 */
-	const budget = async (): Promise<ConfigOption> => {
-		const v = (await namespaceView(
-			db,
-			SECRET,
-			STORY_RESPOND_SPEC_ID,
-			admin
-		)) as NamespaceView
-		// Any scalar option in the panel. This was the ranker's "Guaranteed
-		// conversation", which is a per-source stack now — what these tests
-		// need is a single number with an address, not that setting.
-		return groupOptions(v.groups)
-			.find((o) => o.label === "Limit")!
-	}
-
-	const useConfig = async (configId: number) => {
-		const { selectConfig } = await import(
-			"$lib/server/pipelines/config/named"
-		)
-		await selectConfig(db, specId, "pub" as any, 0, configId)
-	}
-
-	beforeAll(async () => {
-		const { createConfig } = await import(
-			"$lib/server/pipelines/config/named"
-		)
+	it("refuses an edit that names a configuration, by sentence", async () => {
+		const admin = { userId: adminId, isAdmin: true }
+		const v = (await namespaceView(db, SECRET, STORY_RESPOND_SPEC_ID, admin)) as NamespaceView
+		const limit = groupOptions(v.groups).find((o) => o.label === "Limit")!
+		const { createConfig } = await import("$lib/server/pipelines/config/named")
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
 			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
-		specId = spec.id
-		alpha = (await createConfig(db, specId, "Alpha")).id
-		beta = (await createConfig(db, specId, "Beta")).id
-	})
-
-	it("keeps each configuration's value with that configuration", async () => {
-		await useConfig(alpha)
-		await writeOption(
-			db,
-			SECRET,
-			STORY_RESPOND_SPEC_ID,
-			admin,
-			(await budget()).id,
-			1111,
-			alpha
-		)
-
-		await useConfig(beta)
-		await writeOption(
-			db,
-			SECRET,
-			STORY_RESPOND_SPEC_ID,
-			admin,
-			(await budget()).id,
-			2222,
-			beta
-		)
-
-		await useConfig(alpha)
-		expect(
-			(await budget()).value,
-			"Beta's edit followed the switch back to Alpha"
-		).toBe(1111)
-
-		await useConfig(beta)
-		expect((await budget()).value).toBe(2222)
-	})
-
-	it("resets only the configuration it was asked about", async () => {
-		await useConfig(beta)
-		await clearOption(
-			db,
-			SECRET,
-			STORY_RESPOND_SPEC_ID,
-			admin,
-			(await budget()).id,
-			beta
-		)
-		expect((await budget()).value).not.toBe(2222)
-
-		await useConfig(alpha)
-		expect(
-			(await budget()).value,
-			"clearing Beta took Alpha's value with it"
-		).toBe(1111)
-	})
-
-	it("refuses to rewrite a configuration Serene Pub ships", async () => {
-		const [shipped] = await db
-			.select()
-			.from(schema.pipelineConfigs)
-			.where(
-				and(
-					eq(schema.pipelineConfigs.specId, specId),
-					eq(schema.pipelineConfigs.isImmutable, true)
-				)
-			)
-		expect(shipped, "no immutable config to test against").toBeTruthy()
+		const alpha = (await createConfig(db, spec.id, "Alpha")).id
 		await expect(
-			writeOption(
-				db,
-				SECRET,
-				STORY_RESPOND_SPEC_ID,
-				admin,
-				(await budget()).id,
-				4242,
-				shipped.id
-			)
-		).rejects.toThrow(/ships|Duplicate/i)
-	})
-
-	it("refuses a configuration belonging to another pipeline", async () => {
-		const [narrate] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/story-narrate"))
-		const [foreign] = await db
-			.select()
-			.from(schema.pipelineConfigs)
-			.where(eq(schema.pipelineConfigs.specId, narrate.id))
+			writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, admin, limit.id, 1111, alpha)
+		).rejects.toThrow(/configurations are retired/)
 		await expect(
-			writeOption(
-				db,
-				SECRET,
-				STORY_RESPOND_SPEC_ID,
-				admin,
-				(await budget()).id,
-				7,
-				foreign.id
-			)
-		).rejects.toThrow(/different pipeline/i)
+			clearOption(db, SECRET, STORY_RESPOND_SPEC_ID, admin, limit.id, alpha)
+		).rejects.toThrow(/configurations are retired/)
 	})
 })
 
@@ -1247,8 +871,10 @@ describe("each source carries its own intent", () => {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
+		// The reply's own Sampling — the one the budget reads its window from
+		// (Story's reply has two alternative calls, and the budget sizes the prose one).
 		const sampling = groupOptions(v.groups)
-			.find((o) => o.control === "sampling-ref")
+			.find((o) => o.control === "sampling-ref" && o.id === optionId(SECRET, reply.generate, "sampling", ""))
 		expect(sampling, "no sampling slot to read a window from").toBeTruthy()
 
 		// Absent until something is selected, and that is the honest state
@@ -1505,7 +1131,7 @@ describe("a shared slot renders once, on its owner", () => {
 		// slot; the second assertion is what tells the two apart.
 		const decls = await declsOf(STORY_RESPOND_SPEC_ID)
 		const conns = decls.filter((d) => d.control === "connection-ref")
-		expect(conns.filter((d) => d.nodeKey === "generate").length).toBe(1)
+		expect(conns.filter((d) => d.nodeKey === reply.generate).length).toBe(1)
 		expect(conns.some((d) => d.nodeKey === "prompt")).toBe(false)
 		const [spec] = await db
 			.select()
@@ -1523,13 +1149,13 @@ describe("a shared slot renders once, on its owner", () => {
 		expect((prompt!.config as any).connection).toMatchObject({
 			__ref: "slot",
 			slot: "connection",
-			ofNode: "generate"
+			ofNode: reply.generate
 		})
-		expect((prompt!.resolvedRefs as any).connection).toBe("generate")
+		expect((prompt!.resolvedRefs as any).connection).toBe(reply.generate)
 	})
 
 	it("adds no second Sampling control on the step that only reads the window", async () => {
-		// `contextBudget` reads `slot.samplingOf("generate")`: one control for
+		// `contextBudget` reads the reply call's `slot.samplingOf(…)`: one control for
 		// the pair, which is what makes the two windows unable to disagree.
 		const decls = await declsOf(STORY_RESPOND_SPEC_ID)
 		expect(
@@ -1538,7 +1164,7 @@ describe("a shared slot renders once, on its owner", () => {
 			)
 		).toEqual([])
 		expect(
-			decls.filter((d) => d.nodeKey === "generate" && d.slot === "sampling")
+			decls.filter((d) => d.nodeKey === reply.generate && d.slot === "sampling")
 				.length
 		).toBe(1)
 	})
@@ -1681,7 +1307,7 @@ describe("the substrate's settings render from the row, like any slot", () => {
 		// hand-written control said `off` for every node, which was wrong for
 		// any author defaulting review on — pinned on the SDK side against
 		// `attach-image`, and here that the panel reads the default at all.
-		expect(review.find((d) => d.nodeKey === "save")?.authorDefault).toBe("off")
+		expect(review.find((d) => d.nodeKey === reply.save)?.authorDefault).toBe("off")
 		expect(review.find((d) => d.nodeKey === "placeholder")?.authorDefault).toBe("off")
 	})
 
@@ -1927,20 +1553,17 @@ describe("options arrive in the order they were declared", () => {
 			isAdmin: true
 		})) as NamespaceView
 		// The order the machine runs in: each Advanced lists its steps so.
-		// Story's reply has three model calls (2026-10-19), so the steps the
-		// calls share — the context budget, the gathers — sit in the whole
-		// pipeline's group, and the order is read group by group.
-		const stepsOf = (kind: string, heading?: string) => {
-			const g = v.groups.find(
-				(x) => x.kind === kind && (heading === undefined || x.heading === heading)
-			)
-			expect(g, `no ${heading ?? kind} group`).toBeTruthy()
+		// 🚧 Story's reply is one model call again since the reckoning and
+		// the sweep became routines (2026-10-20), so the order is read in
+		// whichever group holds each pair.
+		const holding = (heading: string) => {
+			const g = v.groups.find((x) => x.advanced.some((s) => s.heading === heading))
+			expect(g, `no group holds ${heading}`).toBeTruthy()
 			return g!.advanced.map((s) => s.heading)
 		}
-		const reply = stepsOf("model-call", "Reply")
-		expect(reply.indexOf("Rank hybrid")).toBeGreaterThanOrEqual(0)
+		const reply = holding("Rank hybrid")
 		expect(reply.indexOf("Rank hybrid")).toBeLessThan(reply.indexOf("Assemble"))
-		const whole = stepsOf("pipeline")
+		const whole = holding("Context budget")
 		expect(whole.indexOf("Context budget")).toBeGreaterThanOrEqual(0)
 		expect(whole.indexOf("Context budget")).toBeLessThan(whole.indexOf("Gather"))
 		expect(whole.indexOf("Gather")).toBeLessThan(whole.indexOf("Session history"))

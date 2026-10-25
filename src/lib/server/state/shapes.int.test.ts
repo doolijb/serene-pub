@@ -15,9 +15,9 @@ import * as schema from "$lib/server/db/schema"
 import {
 	attributeSlots,
 	defineAttributeSlot,
-	genre,
 	_clearAttributeSlots
 } from "@serene-pub/sdk"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 // Core's catalogue: declaring a shape registers it, and a slot naming one
 // needs it registered first.
 import "@serene-pub/core-catalog"
@@ -87,7 +87,7 @@ async function world() {
 		.values({ userId: user.id, name: `World ${suffix}` })
 		.returning()
 	const GENRE = `test:genre/shapes-${suffix}`
-	genre(GENRE, { name: { en: "Shapes" }, family: "test", slots: attributeSlots(), events: {} })
+	genreKeeping(GENRE, { name: { en: "Shapes" }, family: "test", slots: attributeSlots(), events: {} })
 	const [session] = await testDb
 		.insert(schema.sessions)
 		.values({ userId: user.id, isGroup: false, name: `Run ${suffix}`, genreId: GENRE })

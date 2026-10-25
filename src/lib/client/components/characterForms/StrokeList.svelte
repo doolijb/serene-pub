@@ -197,7 +197,7 @@
 			{label}
 			{@render labelExtra?.()}
 		</span>
-		<span class="text-surface-600-400 text-[11px]" data-stroke-total>
+		<span class="text-surface-600-400 text-meta" data-stroke-total>
 			{mine.length} {mine.length === 1 ? "stroke" : "strokes"}{#if total}&nbsp;· {total}{/if}
 		</span>
 		{#if onBackToOneText}
@@ -332,7 +332,7 @@
 						</div>
 					</details>
 
-					<span class="text-surface-600-400 ml-auto text-[11px]" data-stroke-tokens>
+					<span class="text-surface-600-400 ml-auto text-meta" data-stroke-tokens>
 						{strokeTokens(index) ?? ""}
 					</span>
 					<RowMenu

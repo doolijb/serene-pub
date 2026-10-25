@@ -609,26 +609,26 @@
 							{row.sentence}
 						</span>
 						{#if row.rel.visibility === "secret"}
-							<span class="badge preset-tonal-surface shrink-0 text-[11px]">
+							<span class="badge preset-tonal-surface shrink-0 text-meta">
 								secret
 							</span>
 						{/if}
 						{#if row.rel.status !== "active"}
 							<span
 								class="badge {STATUS_BADGE[row.rel.status] ??
-									'preset-tonal-surface'} shrink-0 text-[11px]"
+									'preset-tonal-surface'} shrink-0 text-meta"
 							>
 								{row.rel.status}
 							</span>
 						{/if}
 						{#if row.later}
-							<span class="badge preset-tonal-surface shrink-0 text-[11px]">
+							<span class="badge preset-tonal-surface shrink-0 text-meta">
 								{row.later}
 							</span>
 						{/if}
 						{#if row.archived}
 							<span
-								class="badge preset-tonal-surface shrink-0 text-[11px]"
+								class="badge preset-tonal-surface shrink-0 text-meta"
 								title="{row.otherName} is archived at this moment: the map and the prompt leave this link out."
 							>
 								archived

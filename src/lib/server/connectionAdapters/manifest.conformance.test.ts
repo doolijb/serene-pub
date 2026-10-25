@@ -67,6 +67,7 @@ import { BaseConnectionAdapter } from "$lib/server/connectionAdapters/BaseConnec
 import { BaseImageAdapter } from "$lib/server/imageAdapters/BaseImageAdapter"
 import { BaseEmbeddingAdapter } from "$lib/server/embeddingAdapters/BaseEmbeddingAdapter"
 import { BaseNerAdapter } from "$lib/server/nerAdapters/BaseNerAdapter"
+import { BaseTranscriptionAdapter } from "$lib/server/transcriptionAdapters/BaseTranscriptionAdapter"
 import {
 	ADAPTER_MANIFEST,
 	adapterCapabilities
@@ -167,6 +168,13 @@ beforeAll(async () => {
 			for (const a of actionsOf(
 				(await modules.ner()).Adapter,
 				BaseNerAdapter
+			))
+				found.add(a)
+		// 🚧 The fifth family (O9), with its own stop class.
+		if (modules?.transcription)
+			for (const a of actionsOf(
+				(await modules.transcription()).Adapter,
+				BaseTranscriptionAdapter
 			))
 				found.add(a)
 		IMPLEMENTED.set(type, found)

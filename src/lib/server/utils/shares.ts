@@ -64,7 +64,8 @@ export async function listSharedWith(
 		.select({
 			id: schema.users.id,
 			username: schema.users.username,
-			displayName: schema.users.displayName
+			displayName: schema.users.displayName,
+			avatarMediaId: schema.users.avatarMediaId
 		})
 		.from(t.table)
 		.innerJoin(schema.users, eq(schema.users.id, t.user))

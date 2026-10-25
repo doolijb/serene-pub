@@ -134,7 +134,7 @@
 
 	const ROW = "border-surface-200-800 flex items-baseline justify-between gap-3 border-b py-1 text-sm last:border-b-0"
 	const KEY = "text-surface-600-400 shrink-0"
-	const VAL = "min-w-0 truncate text-right font-mono text-[12px]"
+	const VAL = "min-w-0 truncate text-right font-mono text-xs"
 	const ACT = "btn btn-sm preset-tonal-surface"
 
 	const literalPreview = (v: unknown) => {
@@ -473,12 +473,12 @@
 		</button>
 		{#if selected}
 			{#if renaming}
-				<input class="input h-7 w-56 font-mono text-[13px]" aria-label="New key" bind:value={renameValue} onkeydown={(e) => (e.key === "Enter" ? doRename() : e.key === "Escape" ? (renaming = false) : null)} />
+				<input class="input h-7 w-56 font-mono text-chip" aria-label="New key" bind:value={renameValue} onkeydown={(e) => (e.key === "Enter" ? doRename() : e.key === "Escape" ? (renaming = false) : null)} />
 				<button type="button" class="btn btn-sm preset-filled-primary-500" disabled={busy || !renameValue.trim()} onclick={doRename}>Rename</button>
 				<button type="button" class={ACT} onclick={() => (renaming = false)}>Cancel</button>
 			{:else}
-				<span class="truncate font-mono text-[14px]">{selected}</span>
-				<span class="text-surface-600-400 shrink-0 font-mono text-[11px]">
+				<span class="truncate font-mono text-sm">{selected}</span>
+				<span class="text-surface-600-400 shrink-0 font-mono text-meta">
 					{#if node}{node.kind}{:else if clause}{CLAUSE_LABEL[clause.kind] ?? clause.kind} · {clause.chains.length} {clause.chains.length === 1 ? (clause.kind === "junction" ? "branch" : "chain") : clause.kind === "junction" ? "branches" : "chains"}{/if}
 				</span>
 			{/if}
@@ -506,7 +506,7 @@
 				<button type="button" class="btn btn-sm preset-filled-error-500" disabled={busy} onclick={doRemove}>Remove</button>
 				<button type="button" class={ACT} onclick={() => (confirmingRemove = false)}>Cancel</button>
 			{:else if addingBranch && clause}
-				<input class="input h-7 w-40 font-mono text-[12px]" placeholder={clause.kind === "junction" ? "branch name" : "chain name"} aria-label="Branch name" bind:value={branchName} onkeydown={(e) => e.key === "Enter" && doAddBranch()} />
+				<input class="input h-7 w-40 font-mono text-xs" placeholder={clause.kind === "junction" ? "branch name" : "chain name"} aria-label="Branch name" bind:value={branchName} onkeydown={(e) => e.key === "Enter" && doAddBranch()} />
 				{#if clause.kind === "junction"}
 					<label class="flex items-center gap-1 text-xs"><input type="checkbox" class="checkbox" bind:checked={branchOtherwise} /> otherwise</label>
 				{/if}
@@ -516,7 +516,7 @@
 				<select class="select h-7 w-32 text-xs" aria-label="Clause kind" bind:value={clauseKind}>
 					<option value="gather">gather</option><option value="each">each</option><option value="junction">junction</option><option value="loop">loop</option>
 				</select>
-				<input class="input h-7 w-40 font-mono text-[12px]" placeholder="clause id" aria-label="Clause id" bind:value={clauseId} onkeydown={(e) => e.key === "Enter" && doAddClause()} />
+				<input class="input h-7 w-40 font-mono text-xs" placeholder="clause id" aria-label="Clause id" bind:value={clauseId} onkeydown={(e) => e.key === "Enter" && doAddClause()} />
 				<button type="button" class="btn btn-sm preset-filled-primary-500" disabled={busy || !clauseId.trim()} onclick={doAddClause}>Add clause {selected ? "after" : "first"}</button>
 				<button type="button" class={ACT} onclick={() => (addingClause = false)}>Cancel</button>
 			{:else}
@@ -545,9 +545,9 @@
 				<select class="select h-7 w-40 text-xs" aria-label="Last step of the composite" value={compositeTo} onchange={(e) => (compositeTo = (e.currentTarget as HTMLSelectElement).value)}>
 					{#each laterSiblings as k (k)}<option value={k}>{shortName(k)}</option>{/each}
 				</select>
-				<input class="input h-7 w-36 font-mono text-[12px]" placeholder="name" aria-label="Composite name" bind:value={compositeName} />
-				<input class="input h-7 w-44 text-[12px]" placeholder="Label" aria-label="Composite label" bind:value={compositeLabel} onkeydown={(e) => e.key === "Enter" && doSaveComposite()} />
-				<span class="text-surface-600-400 font-mono text-[11px]">{ownerSlug}:composite/{compositeName || "…"}</span>
+				<input class="input h-7 w-36 font-mono text-xs" placeholder="name" aria-label="Composite name" bind:value={compositeName} />
+				<input class="input h-7 w-44 text-xs" placeholder="Label" aria-label="Composite label" bind:value={compositeLabel} onkeydown={(e) => e.key === "Enter" && doSaveComposite()} />
+				<span class="text-surface-600-400 font-mono text-meta">{ownerSlug}:composite/{compositeName || "…"}</span>
 				<button type="button" class="btn btn-sm preset-filled-primary-500" disabled={busy || !compositeOk} onclick={doSaveComposite}>Save</button>
 				<button type="button" class={ACT} onclick={() => (savingComposite = false)}>Cancel</button>
 			</div>
@@ -558,10 +558,10 @@
 		<!-- ── the catalogue ───────────────────────────────────── -->
 		<div class="border-surface-200-800 flex items-center gap-2 border-t px-3 py-1.5">
 			<span class="text-sm">Add a step {adding.after ? `after ${adding.after}` : adding.container ? `in ${adding.container.clauseId} › ${adding.container.chain}` : "first"}</span>
-			<input class="input h-7 w-64 text-[13px]" placeholder="Search the catalogue…" aria-label="Search the catalogue" bind:value={search} />
+			<input class="input h-7 w-64 text-chip" placeholder="Search the catalogue…" aria-label="Search the catalogue" bind:value={search} />
 			<div class="flex gap-1" role="group" aria-label="Kind">
 				{#each ["all", "query", "task", "oracle", "outlet", "composite"] as k (k)}
-					<button type="button" class="chip {kindFilter === k ? 'preset-tonal-primary' : 'preset-tonal-surface'} text-[11px]" aria-pressed={kindFilter === k} onclick={() => (kindFilter = k)}>{k}</button>
+					<button type="button" class="chip {kindFilter === k ? 'preset-tonal-primary' : 'preset-tonal-surface'} text-meta" aria-pressed={kindFilter === k} onclick={() => (kindFilter = k)}>{k}</button>
 				{/each}
 			</div>
 			<div class="flex-1"></div>
@@ -581,8 +581,8 @@
 							<button type="button" class="bg-surface-100-900 border-surface-200-800 hover:border-primary-500/60 flex h-11 items-center gap-2 rounded-md border px-2 text-left" disabled={busy} onclick={() => insertFromLibrary(c)}>
 								<span aria-hidden="true" class="bg-tertiary-500 h-6 w-[3px] shrink-0"></span>
 								<span class="min-w-0 flex-1">
-									<span class="block truncate text-[13px]">{c.label}</span>
-									<span class="text-surface-600-400 block truncate font-mono text-[10.5px]">{c.slug} · {c.nodeCount} {c.nodeCount === 1 ? "step" : "steps"}{c.reads.length ? ` · reads ${c.reads.length}` : ""}</span>
+									<span class="block truncate text-chip">{c.label}</span>
+									<span class="text-surface-600-400 block truncate font-mono text-meta">{c.slug} · {c.nodeCount} {c.nodeCount === 1 ? "step" : "steps"}{c.reads.length ? ` · reads ${c.reads.length}` : ""}</span>
 								</span>
 							</button>
 						{/each}
@@ -596,8 +596,8 @@
 						<button type="button" class="bg-surface-100-900 border-surface-200-800 hover:border-primary-500/60 flex h-11 items-center gap-2 rounded-md border px-2 text-left" disabled={busy} onclick={() => insert(e)}>
 							<span aria-hidden="true" class="h-6 w-[3px] shrink-0 {KIND_STRIPE[e.kind] ?? 'bg-surface-400-600'}"></span>
 							<span class="min-w-0 flex-1">
-								<span class="block truncate text-[13px]">{nameOf(e)}</span>
-								<span class="text-surface-600-400 block truncate font-mono text-[10.5px]">{e.id}@{e.version}{e.owner ? ` · ${e.owner}` : ""}</span>
+								<span class="block truncate text-chip">{nameOf(e)}</span>
+								<span class="text-surface-600-400 block truncate font-mono text-meta">{e.id}@{e.version}{e.owner ? ` · ${e.owner}` : ""}</span>
 							</span>
 						</button>
 					{/each}
@@ -675,7 +675,7 @@
 									<span class={KEY}>{r.port}</span>
 									<span class="flex min-w-0 items-center gap-1">
 										{#if literalEditing === r.port}
-											<input class="input h-7 w-44 font-mono text-[12px]" aria-label="Literal for {r.port}" placeholder="text, or JSON" bind:value={literalValue} onkeydown={(e) => (e.key === "Enter" ? commitLiteral(r.port) : e.key === "Escape" ? (literalEditing = null) : null)} />
+											<input class="input h-7 w-44 font-mono text-xs" aria-label="Literal for {r.port}" placeholder="text, or JSON" bind:value={literalValue} onkeydown={(e) => (e.key === "Enter" ? commitLiteral(r.port) : e.key === "Escape" ? (literalEditing = null) : null)} />
 											<button type="button" class="btn btn-sm preset-filled-primary-500" disabled={busy} onclick={() => commitLiteral(r.port)}>Set</button>
 										{:else}
 											<select class="select h-7 max-w-56 text-xs" aria-label="Source for {r.port}" disabled={busy} value={sourceValue(r.current)} onchange={(e) => pickSource(r.port, (e.currentTarget as HTMLSelectElement).value)}>
@@ -686,10 +686,10 @@
 												{#if r.current?.source === "edge" && !sources.includes(r.current.from)}<option value={r.current.from}>{r.current.from}</option>{/if}
 											</select>
 											{#if !r.current && ports.in.some((p) => p.port === r.port && p.implicit)}
-												<span class="text-surface-500 text-[11px]">the step before, unless wired</span>
+												<span class="text-surface-500 text-meta">the step before, unless wired</span>
 											{/if}
 											{#if r.current?.source === "literal"}
-												<button type="button" class="text-surface-600-400 font-mono text-[11px] hover:underline" title="Edit the literal" onclick={() => { literalEditing = r.port; literalValue = typeof r.current?.literal === "string" ? r.current.literal : JSON.stringify(r.current?.literal) }}>{literalPreview(r.current.literal)}</button>
+												<button type="button" class="text-surface-600-400 font-mono text-meta hover:underline" title="Edit the literal" onclick={() => { literalEditing = r.port; literalValue = typeof r.current?.literal === "string" ? r.current.literal : JSON.stringify(r.current?.literal) }}>{literalPreview(r.current.literal)}</button>
 											{/if}
 										{/if}
 									</span>
@@ -785,9 +785,9 @@
 								<i class="mt-1.5 block size-2 shrink-0 rounded-full {f.severity === 'error' ? 'bg-error-500' : 'bg-warning-500'}"></i>
 								<div class="min-w-0 flex-1">
 									<div class="flex flex-wrap items-baseline gap-2">
-										<span class="text-surface-600-400 font-mono text-[11px]">{f.law}</span>
+										<span class="text-surface-600-400 font-mono text-meta">{f.law}</span>
 										{#if f.nodeKey}
-											<button type="button" class="font-mono text-[12px] hover:underline" onclick={() => onSelect(f.nodeKey!)}>{f.nodeKey}</button>
+											<button type="button" class="font-mono text-xs hover:underline" onclick={() => onSelect(f.nodeKey!)}>{f.nodeKey}</button>
 										{/if}
 									</div>
 									<div>{f.message}</div>

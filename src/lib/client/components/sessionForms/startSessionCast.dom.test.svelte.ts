@@ -225,12 +225,15 @@ describe("Start a session › Who is in it", () => {
 		expect(host.querySelector("#start-session-reason")).toBeNull()
 	})
 
-	test("a required lorebook with none to pick offers Create a lorebook, and the new book is chosen", async () => {
+	test("⏳ a genre still saying 'required' (RF fix 2): Start is offered with no book; with none to pick, Create a lorebook, and the new book is chosen", async () => {
 		await render(3, { lorebook: "required" })
 		await addCharacters("Corin")
-		expect(
-			host.querySelector("#start-session-reason")?.textContent?.trim()
-		).toBe("This genre needs a lorebook.")
+		// Never required: the session's own book is its world until one is chosen.
+		expect(host.querySelector("#start-session-reason")).toBeNull()
+		expect(buttonByText("Start", host)!.disabled).toBe(false)
+		expect(host.querySelector("#start-lorebook-heading")?.textContent?.trim()).toBe("Lorebook")
+		expect(host.textContent).not.toContain("needs a lorebook")
+		expect(host.textContent).toContain("This genre can start without")
 
 		buttonByText("Create a lorebook", host)!.click()
 		await settle()

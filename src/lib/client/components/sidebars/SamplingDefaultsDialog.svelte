@@ -108,7 +108,7 @@
 				{:else}
 					<div class="flex min-h-0 flex-col gap-1 overflow-y-auto">
 						<label
-							class="flex items-center gap-3 rounded-[10px] px-3 py-2 text-sm font-semibold"
+							class="flex items-center gap-3 rounded-base px-3 py-2 text-sm font-semibold"
 						>
 							<input
 								type="checkbox"
@@ -126,7 +126,7 @@
 								<li>
 									<label
 										class={[
-											"flex items-start gap-3 rounded-[10px] px-3 py-2",
+											"flex items-start gap-3 rounded-base px-3 py-2",
 											held(j)
 												? "opacity-60"
 												: "hover:bg-surface-200-800 cursor-pointer"

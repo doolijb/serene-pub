@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * Admin › Scripts › Add script: the add form. Pick the type (grouped by
 	 * content scope — the type decides the variable space, the blast radius
@@ -142,9 +143,9 @@
 				<div class="text-surface-600-400 text-xs">
 					{#if selected.description}<p>{selected.description}</p>{/if}
 					<p class="mt-1">
-						<span class="preset-tonal-warning rounded-full px-1.5 py-0.5 text-[11px]">
+						<Badge tone="warning" size="sm">
 							{selected.blastRadius}
-						</span>
+						</Badge>
 						· reads {[...selected.varsIn, ...selected.extras].join(", ") || "—"} · rewrites {selected.varsOut.join(", ") || "—"}
 					</p>
 				</div>

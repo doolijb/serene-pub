@@ -26,6 +26,16 @@ describe("answerInspectRun", () => {
 		expect(opened).toEqual(["run-1"])
 	})
 
+	test("🚧 opens one run by its id (While you were away, lane 7), looking nothing up", async () => {
+		const { opened, looked, deps } = page()
+		await answerInspectRun({ runId: "run-9" }, deps)
+		expect(opened).toEqual(["run-9"])
+		expect(looked).toEqual([])
+		const viewer = page(false)
+		await expect(answerInspectRun({ runId: "run-9" }, viewer.deps)).rejects.toThrow("runs are for admins")
+		expect(viewer.opened).toEqual([])
+	})
+
 	test("refuses a viewer who is not an admin, in words, before looking anything up", async () => {
 		const { opened, looked, deps } = page(false)
 		await expect(answerInspectRun({ messageId: 1 }, deps)).rejects.toThrow("runs are for admins")

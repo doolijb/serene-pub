@@ -103,39 +103,61 @@ export function folioGuarded(css: string): string {
  * STAGE — the house look. Occupies the `default` slot (see the file header):
  * what an unpinned messages widget resolves to.
  */
-const STAGE_CSS = `/* Stage — prose in a reading column, the cast in lamp gold, the persona's turn
-   on a card, narration a centred aside with no portrait. */
+const STAGE_CSS = `/* Stage — every line on one calm card (polish parity ★R3, 2026-10-24): the
+   same shape for the cast and the persona, the persona's turn marked by a 3px
+   bar at its leading edge, never by being the only box; names in ink, prose in
+   a reading column; narration a centred aside with no portrait. */
 [data-widget-part~="messages.root"] {
 	--sp-quote: light-dark(var(--color-surface-950), var(--color-surface-50));
 	--sp-body: light-dark(var(--color-surface-700), var(--color-surface-300));
-	--sp-speaker: light-dark(var(--color-primary-700), var(--color-primary-500));
-	--sp-speaker-persona: light-dark(var(--color-surface-800), var(--color-surface-200));
+	--sp-speaker: light-dark(var(--color-surface-950), var(--color-surface-50));
+	--sp-speaker-persona: light-dark(var(--color-surface-950), var(--color-surface-50));
 	--sp-aside: light-dark(var(--color-surface-600), var(--color-surface-400));
-	--sp-stage-card: light-dark(var(--color-surface-50), var(--color-surface-950));
-	--sp-stage-edge: light-dark(var(--color-surface-300), var(--color-surface-800));
-	--sp-stage-hover: light-dark(
-		color-mix(in oklab, var(--color-surface-500) 10%, transparent),
-		color-mix(in oklab, var(--color-surface-950) 55%, transparent)
+	--sp-stage-card: light-dark(
+		color-mix(in oklab, var(--color-surface-200) 70%, transparent),
+		color-mix(in oklab, var(--color-surface-800) 70%, transparent)
 	);
+	--sp-stage-ring: light-dark(var(--color-surface-300), var(--color-surface-700));
+	--sp-stage-turn: light-dark(var(--color-secondary-700), var(--color-secondary-500));
 }
+/* The card: one tint for every role, 12px round, 16px in, no border; the log's
+   12px gap sits between cards. The avatar spans the card's height, so the
+   prose runs beside it. */
 [data-widget-part~="messages.message"] {
 	position: relative;
+	grid-template-areas:
+		"avatar identity controls"
+		"avatar content  content";
 	column-gap: 0.75rem;
 	row-gap: 0.25rem;
-	padding: 0.5rem 0.75rem;
+	padding: 16px;
 	border-radius: 12px;
 }
+/* A table line (a roll, in no voice) stays a quiet aside between the cards. */
+[data-widget-part~="messages.message"][data-msg-table-line] {
+	padding: 0.25rem 16px;
+}
 /* Guarded on the NORMAL state so the shared selected / dim / editing overlay
-   keeps the message under the pointer. */
-[data-widget-part~="messages.message"][data-msg-state="normal"]:hover,
-[data-widget-part~="messages.message"][data-msg-state="normal"]:focus-within {
-	background: var(--sp-stage-hover);
+   keeps the message's look under selection and editing. */
+[data-widget-part~="messages.message"][data-msg-state="normal"]:not([data-msg-table-line]) {
+	background: var(--sp-stage-card);
+}
+/* Your own turn: a 3px bar at the card's leading edge (the selection bar's
+   gesture in the secondary tone), never a second shape. */
+[data-widget-part~="messages.message"][data-msg-state="normal"]:is([data-msg-role="user"], [data-msg-author="persona"]) {
+	box-shadow: inset 3px 0 0 var(--sp-stage-turn);
 }
 [data-widget-part~="messages.message-avatar"] {
-	--sp-av: 2.5rem;
+	--sp-av: 3rem;
 	--sp-av-radius: 9999px;
 }
+[data-widget-part~="messages.message"] :is([data-widget-part~="messages.message-avatar-img"], [data-widget-part~="messages.message-avatar-glyph"]) {
+	box-shadow: 0 0 0 2px var(--sp-stage-ring);
+}
+/* The name in ink, Display 15/600 — gold is for the next action (★R2). */
 [data-widget-part~="messages.message-name"] {
+	font-size: 15px;
+	font-weight: 600;
 	color: var(--sp-speaker);
 }
 [data-widget-part~="messages.message"][data-msg-author="persona"] [data-widget-part~="messages.message-name"] {
@@ -146,26 +168,18 @@ const STAGE_CSS = `/* Stage — prose in a reading column, the cast in lamp gold
 	font-size: calc(17px * var(--sp-prose-scale, 1));
 	line-height: 1.65;
 }
-/* The scene's edge: a 2px rule in the row's own --sp-scene, at the leading edge
-   INSIDE the message's padding box, where a scrolling log cannot clip it and
-   no horizontal scrollbar can appear. */
+/* The scene's edge: a 2px rule in the row's own --sp-scene, at the TRAILING
+   edge inside the card's padding box (the leading edge is your turn's bar),
+   where a scrolling log cannot clip it and no horizontal scrollbar can appear. */
 [data-widget-part~="messages.message-row"][style*="--sp-scene"] [data-widget-part~="messages.message"]::before {
 	content: "";
 	position: absolute;
-	inset-block: 10px;
-	inset-inline-start: 0;
+	inset-block: 12px;
+	inset-inline-end: 0;
 	width: 2px;
 	border-radius: 2px;
 	background: var(--sp-scene);
 	opacity: 0.55;
-}
-/* The persona's turn reads as a card; the cast's sits straight on the page. */
-[data-widget-part~="messages.message"][data-msg-author="persona"] [data-widget-part~="messages.message-content"] {
-	background: var(--sp-stage-card);
-	border: 1px solid var(--sp-stage-edge);
-	border-radius: 12px;
-	padding: 14px 16px;
-	margin-top: 6px;
 }
 /* Narration: centred italic, no portrait, the name reduced to a quiet label. */
 [data-widget-part~="messages.message"][data-msg-role="narration"] {
@@ -202,7 +216,7 @@ const BUBBLES_CSS = `/* Bubbles — portrait beside a speech bubble, the persona
 [data-widget-part~="messages.root"] {
 	--sp-quote: light-dark(var(--color-surface-950), var(--color-surface-50));
 	--sp-body: light-dark(var(--color-surface-700), var(--color-surface-300));
-	--sp-speaker: light-dark(var(--color-primary-700), var(--color-primary-500));
+	--sp-speaker: light-dark(var(--color-surface-950), var(--color-surface-50));
 	--sp-speaker-persona: light-dark(var(--color-surface-800), var(--color-surface-200));
 	--sp-aside: light-dark(var(--color-surface-600), var(--color-surface-400));
 	/* The cast's bubble carries an indigo tint so it reads AS a bubble instead
@@ -356,7 +370,7 @@ const COMPACT_CSS = `/* Compact — one dense line per message. The name is its 
 [data-widget-part~="messages.root"] {
 	--sp-quote: light-dark(var(--color-surface-950), var(--color-surface-50));
 	--sp-body: light-dark(var(--color-surface-700), var(--color-surface-300));
-	--sp-speaker: light-dark(var(--color-primary-700), var(--color-primary-500));
+	--sp-speaker: light-dark(var(--color-surface-950), var(--color-surface-50));
 	--sp-speaker-persona: light-dark(var(--color-surface-800), var(--color-surface-200));
 	--sp-aside: light-dark(var(--color-surface-600), var(--color-surface-400));
 }
@@ -455,7 +469,7 @@ const CAMEO_CSS = `/* Dreamlit Cameo — after Moonlit Echoes' "Echo" message st
 	--sp-backing: none;
 	--sp-quote: light-dark(var(--color-surface-950), var(--color-surface-50));
 	--sp-body: light-dark(var(--color-surface-800), var(--color-surface-200));
-	--sp-speaker: light-dark(var(--color-primary-700), var(--color-primary-500));
+	--sp-speaker: light-dark(var(--color-surface-950), var(--color-surface-50));
 	--sp-speaker-persona: light-dark(var(--color-surface-800), var(--color-surface-200));
 	--sp-aside: light-dark(var(--color-surface-700), var(--color-surface-300));
 	--sp-portrait: clamp(5.5rem, 22cqi, 9.5rem);

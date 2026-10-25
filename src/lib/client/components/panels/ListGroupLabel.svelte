@@ -45,6 +45,6 @@
 >
 	<span class="max-w-full min-w-0 shrink-0 truncate">{label}</span>
 	{#if trailing}
-		<span class="min-w-0 truncate text-[11px]">{trailing}</span>
+		<span class="min-w-0 truncate text-meta">{trailing}</span>
 	{/if}
 </svelte:element>

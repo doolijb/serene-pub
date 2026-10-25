@@ -90,6 +90,7 @@ import {
 import { noteRun } from "$lib/server/pipelines/runtime/capPause"
 import { createStatusRelay } from "$lib/server/pipelines/runtime/runStatus"
 import {
+	messageStreamSteps,
 	stepStatuses,
 	streamingSteps
 } from "$lib/server/pipelines/runtime/specShape"
@@ -112,7 +113,8 @@ import type { FormAwaitingPerson } from "$lib/server/notifications/openForm"
 import { v4 as uuidv4 } from "uuid"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { NODE_TIMEOUT_CEILING_MS } from "$lib/server/pipelines/runtime/callTether"
+import { ceilingFor } from "$lib/server/pipelines/runtime/callTether"
+import { currentRunFamily, withRunFamily } from "$lib/server/utils/llmQueue"
 
 export class PipelineUnavailableError extends Error {}
 
@@ -242,6 +244,10 @@ export interface TurnRequest {
 	skipReceipt?: boolean
 	/** Run-level facts the dispatch decided — see `SpecRunRequest.meta`. */
 	meta?: ReceiptMeta
+	/** 🚧 The registration that answers — see `SpecRunRequest.registration`. */
+	registration?: { family: string; key: string }
+	/** 🚧 LS2 — see `SpecRunRequest.triggerFamily`. A turn is the reply's event (`message-respond`) unless said. */
+	triggerFamily?: string
 }
 
 /**
@@ -439,6 +445,23 @@ export interface SpecRunRequest {
 	 * through `RunOptions.meta`, never stamped on after the run.
 	 */
 	meta?: ReceiptMeta
+	/**
+	 * 🚧 The registration that started this run (PLAN-layering D7, LS2):
+	 * its trigger family and derived key, stamped on the receipt and its
+	 * `pipeline_runs` row. Absent for a run no registration started.
+	 */
+	registration?: { family: string; key: string }
+	/**
+	 * 🚧 The trigger family of a run no registration started (LS2): every
+	 * run records one. Absent, the registration's family; with neither, an
+	 * `action` — a person's press (a summarize, a built-in edit).
+	 */
+	triggerFamily?: string
+	/**
+	 * 🚧 This run creates the session (`session-created`): its model calls
+	 * wait first in the queue, with actions (A13, R26).
+	 */
+	creation?: boolean
 	skipReceipt?: boolean
 	/**
 	 * Where this run stands in a tree of runs (01 §8; U5d): set by a
@@ -469,6 +492,13 @@ export interface SpecRunRequest {
 	 * socket, a route or a trigger, and it must not become a fourth
 	 * user-editable scope — that chain was deliberately narrowed (plan §3,
 	 * phase 5).
+	 *
+	 * 🚧 The one other caller is the **routine runtime** (`routines/run.ts`,
+	 * lane 6), for two run-time facts no layer stores: a routine on Review
+	 * whose pipeline never reads its mode holds its writes at the review gate
+	 * (`settings.review: 'on'` on each write), and a duty that writes a
+	 * lorebook reads Off in a session with none (the duties contracts). Both
+	 * are decided by the host from the session, never by a person.
 	 */
 	overrides?: Array<{
 		nodeKey: string
@@ -513,7 +543,27 @@ function forceOverrides(
 	}
 }
 
+/**
+ * 🚧 The trigger family a run records (LS2): its registration's, else the
+ * caller's, else an `action` — a run nobody registered is a person's press.
+ */
+export function triggerFamilyOf(request: Pick<SpecRunRequest, "registration" | "triggerFamily">): string {
+	return request.registration?.family ?? request.triggerFamily ?? "action"
+}
+
 export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
+	/**
+	 * 🚧 The run's place in the model queue (A13, R26): its family's — a
+	 * child of a run (a `lineage`) keeps the tree's, so what a routine set
+	 * off waits as a routine does and a session's creation stays first.
+	 */
+	if (request.lineage && currentRunFamily() !== undefined) return runSpecRooted(request)
+	return withRunFamily(triggerFamilyOf(request), () => runSpecRooted(request), {
+		creation: request.creation
+	})
+}
+
+async function runSpecRooted(request: SpecRunRequest): Promise<Receipt> {
 	// A root holds its run tree from its first instant to its last, whatever
 	// it throws (E1c): a child its write caused may be queued before the root
 	// returns, and the tree's count must survive until that child settles.
@@ -576,6 +626,9 @@ async function haltBeforeRun(
 		...(request.meta && Object.keys(request.meta).length
 			? { meta: request.meta }
 			: {}),
+		// 🚧 LS2: every run records its trigger family (+ its registration).
+		...(request.preview ? {} : { triggerFamily: triggerFamilyOf(request) }),
+		...(request.registration ? { registrationKey: request.registration.key } : {}),
 		nodes: [],
 		emitted: [],
 		consumption: { tokens: 0, nodeExecutions: 0 }
@@ -698,7 +751,8 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		sessionId: request.sessionId,
 		runId,
 		userId: request.userId,
-		streamingNodes: streamingSteps(doc)
+		streamingNodes: streamingSteps(doc),
+		messageStreams: messageStreamSteps(doc)
 	})
 
 	/**
@@ -761,7 +815,11 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 					declared: stepStatuses(doc),
 					// A reply, on the turn's channel: the session page draws a
 					// waiting row from it until the reply's own row opens.
-					reply: { channel: request.channel || "main" }
+					// 🚧 Never a routine's (lane 6): it runs after the turn,
+					// and nothing it says is a reply on its way.
+					...(triggerFamilyOf(request) === "routine"
+						? {}
+						: { reply: { channel: request.channel || "main" } })
 				})
 
 	const scope: HostScope = {
@@ -861,7 +919,9 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		// read. Without it the run resolves against the legacy projection
 		// only, and everything a person set in the pipeline panel is
 		// invisible to the thing it was supposed to configure.
-		specId
+		specId,
+		// 🚧 Which registration started it, so its values are the ones read (D5).
+		...(request.registration ? { registrationKey: request.registration.key } : {})
 	})
 	// A no-op on every path but the comparison tool's, which is the only caller
 	// that supplies any. In memory, on this run's copy of the world — nothing
@@ -957,6 +1017,15 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		preview: !!request.preview
 	})
 
+	/**
+	 * 🚧 The receipt the run-end hook was handed (lair fix 2, 2026-10-22).
+	 * The executor rethrows a host failure AFTER that hook — the row already
+	 * settled, its `message-completed` already emitted — so a run that threw
+	 * on its way out left a finished line whose run had no `pipeline_runs`
+	 * row at all (the owner's Lair, run b6c9a68d…). Kept here so the throw
+	 * still records it, below.
+	 */
+	let endedReceipt: Receipt | undefined
 	const receipt = await run(doc, {
 		world,
 		input,
@@ -1050,7 +1119,8 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		// The absolute bound on any one node (F36). An idle-timed node — a
 		// reply, a render — keeps its window open while its request is alive
 		// (`callTether`); this is what still ends one that never ends.
-		timeoutCeilingMs: NODE_TIMEOUT_CEILING_MS,
+		// 🚧 LS3: chosen per run, from its trigger family (`ceilingFor`).
+		timeoutCeilingMs: ceilingFor(triggerFamilyOf(request)),
 		/**
 		 * The run-level guarantee (R-17): a row this run created and did not
 		 * fill is finalised here — stopped with the partial text, failed with
@@ -1060,6 +1130,7 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		 * the session list hears `null` once the row has settled.
 		 */
 		onRunEnd: async (end) => {
+			endedReceipt = end.receipt
 			// Before the row reads its reason: a failed query quoted anywhere
 			// in the receipt becomes the plain sentence (`receipts.ts`), for
 			// the row, its notification, the stored run and every caller.
@@ -1118,6 +1189,25 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 						? { onParked: () => request.onParked!({ runId, specId }) }
 						: {})
 				})
+	}).catch(async (error: unknown) => {
+		// 🚧 Every run records its receipt (lair fix 2): a throw ends the run
+		// as `err` (the executor wrote the reason), and the receipt is saved
+		// before the throw goes on to the caller, as a returned one is below.
+		if (endedReceipt && !request.skipReceipt && !request.preview) {
+			if (!endedReceipt.triggerFamily) endedReceipt.triggerFamily = triggerFamilyOf(request)
+			if (request.registration) endedReceipt.registrationKey = request.registration.key
+			endedReceipt.notes = [
+				...(endedReceipt.notes ?? []),
+				`the run ended by throwing: ${error instanceof Error ? error.message : String(error)}`
+			]
+			await saveReceipt(request.db, endedReceipt, {
+				sessionId: request.sessionId,
+				userId: request.userId,
+				artifacts,
+				io: request.io
+			})
+		}
+		throw error
 	})
 
 	// The SDK says so when a tokenizer degraded; a counter handed in as a
@@ -1127,6 +1217,10 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 	// Unplaced chains this run skipped (D4) — one note each.
 	if (seamsAtStart.notes.length)
 		receipt.notes = [...(receipt.notes ?? []), ...seamsAtStart.notes]
+	// 🚧 LS2: every run records its trigger family, and the registration
+	// that started it when one did (D7). A preview is nobody's trigger.
+	if (!request.preview) receipt.triggerFamily = triggerFamilyOf(request)
+	if (request.registration) receipt.registrationKey = request.registration.key
 
 	// Recorded before returning, and never allowed to fail the turn. A run that
 	// produced a good reply and then could not write its own receipt has still
@@ -1186,6 +1280,22 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 	 * the tree's reader can see.
 	 */
 	if (fires.length) await dispatchFires(request, receipt, fires)
+	/**
+	 * 🚧 The events this run's ruleset functions raised (PLAN-rulesets-
+	 * functions D3), emitted now — after the receipt, only for a run that
+	 * went to the end, as this run's children under the depth cap — unless
+	 * the pipeline turned them off (`SpecDocument.functionEvents: false`).
+	 * Never throws.
+	 */
+	await (await import("$lib/server/rulesets/emits")).dispatchRulesetEmits(request.db, {
+		runId: receipt.runId,
+		outcome: receipt.outcome,
+		lineage: request.lineage,
+		userId: request.userId,
+		io: request.io,
+		signal: request.signal,
+		pipelineEmits: (doc as { functionEvents?: unknown }).functionEvents
+	})
 
 	return receipt
 }
@@ -1238,6 +1348,8 @@ async function dispatchFires(
 				userId: request.userId,
 				lineage,
 				reason,
+				// LS2: an answer's fire is an action's run.
+				triggerFamily: "action",
 				...(stop ? { outcome: "cancelled" as const, cancelledBy: stop.by } : {})
 			})
 		} catch (err) {
@@ -1432,7 +1544,7 @@ async function dispatchAddressedForms(
 export async function sessionRulesetInput(
 	db: Db,
 	sessionId: number
-): Promise<{ id: string; rigour: string; settings: Record<string, string> }> {
+): Promise<SessionRulesetInput> {
 	const [row] = await db
 		.select({
 			primaryRuleset: schema.sessions.primaryRuleset,
@@ -1448,8 +1560,49 @@ export async function sessionRulesetInput(
 	const { storedRulesetSettings } = await import("$lib/server/rulesets/settings")
 	const decl = getRuleset(id)
 	const settings = decl ? settingValues(decl, { values: storedRulesetSettings(row?.rulesetSettings)[id] ?? {} }) : {}
-	return { id, rigour: row?.rigour ?? "prose", settings }
+	const { rulesetRolls } = await import("$lib/server/rulesets/rollForms")
+	// 🚧 S1/S3 (PLAN-genres-seams, 2026-10-23): its attributes and entry types, with their tags.
+	const { rulesetInletSections } = await import("$lib/server/pipelines/runtime/rulesetInlet")
+	return {
+		id,
+		rigour: row?.rigour ?? "prose",
+		settings,
+		...(decl ? await rulesetRolls(decl) : {}),
+		...(decl ? await rulesetInletSections(decl) : {}),
+		// 🚧 S4 (lane G3, 2026-10-23): what a genre reads of it — its gist (`rulesetGistOf`).
+		...(decl ? await rulesetGist(decl, settings) : {})
+	}
 }
+
+/** 🚧 A ruleset's gist under the session's options (S4): `{}` for one nothing can read. */
+async function rulesetGist(decl: object, settings: Record<string, string>): Promise<Partial<RulesetGist>> {
+	try {
+		const { rulesetGistOf } = await import("@serene-pub/core-catalog")
+		return rulesetGistOf(decl as { id: string } & object, settings)
+	} catch {
+		return {}
+	}
+}
+
+/** 🚧 What a ruleset rolls, as the inlet's `ruleset` carries it (`rulesets/rollForms.ts`). */
+import type { RulesetRolls } from "$lib/server/rulesets/rollForms"
+export type { RulesetRolls }
+
+/**
+ * The ruleset the session plays, as every inlet's `ruleset` port carries it
+ * (PLAN-sheet §15 C): its id, the rigour in force, its settings — and, for
+ * a ruleset this build holds, what it rolls (`RulesetRolls`).
+ */
+export type SessionRulesetInput = {
+	id: string
+	rigour: string
+	settings: Record<string, string>
+} & Partial<RulesetRolls> &
+	Partial<import("$lib/server/pipelines/runtime/rulesetInlet").RulesetInletSections> &
+	Partial<RulesetGist>
+
+/** 🚧 What a genre reads of the session's ruleset (S4), as the inlet's `ruleset` carries it. */
+type RulesetGist = import("@serene-pub/core-catalog").RulesetGist
 
 /**
  * Run a turn and return its receipt.
@@ -1623,6 +1776,9 @@ async function runTurnUnderHold(request: TurnRequest): Promise<Receipt> {
 		preview: request.preview,
 		skipReceipt: request.skipReceipt,
 		meta: request.meta,
+		...(request.registration ? { registration: request.registration } : {}),
+		// 🚧 LS2: a turn is the reply — `message-respond`'s event — unless its caller says.
+		triggerFamily: request.triggerFamily ?? "event",
 		overrides: request.overrides,
 		...(request.auto ? { auto: true } : {})
 	})

@@ -1,13 +1,14 @@
 /**
- * What a session tracks (ruled 2026-09-25): "Genres set the baseline and
- * allow/deny custom attributes from being added. Only those tracked in the
- * session are updated in the lorebook, other stats carry forward. If a genre
- * allows attributes, session can set attributes or carry them in from the
- * lorebook as a defaulted opt in."
+ * What a session tracks — 🚧 RF fix 8 (owner ruling 2026-10-23): "attributes
+ * are the ruleset's; sessions never add attributes". A genre brings none, the
+ * world (a lorebook's sheets, its timeline) adds none, the session picks none:
+ * the session's rules declare them, and a holder opts out of an optional one
+ * (an attribute carry). Only what the session tracks is written back to the
+ * world; the rest carries forward.
  *
- * The fixture: a genre whose baseline is Health; a world (lorebook) with a
- * sheet bringing Mood and a timeline value for Weather; Gold declared and in
- * nobody's set. The genre allows or denies custom attributes per test.
+ * The fixture: a genre that names nothing; a world (lorebook) with a sheet
+ * bringing Mood and a timeline value for Weather; Gold declared and in
+ * nobody's set; rules declared per test.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -15,7 +16,7 @@ import os from "os"
 import path from "path"
 import { and, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { defineAttributeSlot, genre, getAttributeSlot, _clearAttributeSlots } from "@serene-pub/sdk"
+import { defineAttributeSlot, defineRuleset, genre, _clearAttributeSlots } from "@serene-pub/sdk"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
@@ -91,15 +92,14 @@ const socketOf = (userId: number) => ({ user: { id: userId }, io: { to: () => ({
 
 let n = 0
 
-async function world(custom: "allow" | "deny") {
+async function world() {
 	declareSlots()
 	const k = ++n
-	const GENRE = `test:genre/attributes-${custom}-${k}`
+	const GENRE = `test:genre/attributes-${k}`
+	// 🚧 RF fix 8: a genre names no slots — refused if it tried.
 	genre(GENRE, {
 		name: { en: "Attributes" },
 		family: "test",
-		slots: [getAttributeSlot(HP)!],
-		customAttributes: custom,
 		events: {}
 	})
 	const { createTestUser } = await import("$lib/server/utils/testDb")
@@ -159,83 +159,55 @@ async function pick(
 	return { res, error: said.find(([e]) => e.endsWith(":error"))?.[1]?.error as string | undefined }
 }
 
-describe("the genre sets the baseline and decides whether anything else may come in", () => {
-	test("a genre that denies tracks its baseline alone, whatever its world brings", async () => {
-		const w = await world("deny")
+/** Rules borrowing Health and Mood — what a session on them tracks. */
+function rulesBorrowing(k: number, slots: string[] = [HP, MOOD]): string {
+	const id = `test:ruleset/attributes-${k}@1`
+	defineRuleset(id, {
+		name: { en: "Borrowed" },
+		attributes: slots.map((slot) => ({ id: slot.replace(/^core:slot\/|@1$/g, ""), slot, borrowed: true as const }))
+	})
+	return id
+}
+
+describe("🚧 RF fix 8: attributes are the rules' — a genre brings none, the world adds none, the session picks none", () => {
+	test("rules that declare none: nothing tracked, whatever the world brings, and the card says so", async () => {
+		const w = await world()
+		expect(await tracked(w.session.id)).toEqual([])
+		const { stateAttributes } = await import("./state")
+		const res = await stateAttributes.handler(socketOf(w.user.id), { sessionId: w.session.id }, () => {})
+		expect(res).toMatchObject({ declaresAttributes: false })
+		expect(res.carries).toBeUndefined()
+	})
+
+	test("the rules' attributes, and only theirs — never the world's sheet or its timeline", async () => {
+		const w = await world()
+		const rules = rulesBorrowing(n, [HP])
+		await testDb.update(schema.sessions).set({ primaryRuleset: rules }).where(eq(schema.sessions.id, w.session.id))
 		expect(await tracked(w.session.id)).toEqual([HP])
 		const { stateAttributes } = await import("./state")
 		const res = await stateAttributes.handler(socketOf(w.user.id), { sessionId: w.session.id }, () => {})
-		expect(res).toMatchObject({ customAttributes: false, world: [], addable: [] })
-		expect(res.baseline.map((r) => r.slotId)).toEqual([HP])
-		// Nor can the session change it.
-		expect((await pick(w.user.id, w.session.id, { picks: [{ slotId: GOLD, enabled: true }] })).error).toMatch(
-			/tracks only its own attributes/
-		)
+		expect(res.declaresAttributes).toBe(true)
+		expect(res.carries?.map((r) => r.slotId)).toEqual([HP])
 	})
 
-	test("a genre that allows carries in the world's attributes by default — its sheets and its timeline", async () => {
-		const w = await world("allow")
-		expect(await tracked(w.session.id)).toEqual([HP, MOOD, WEATHER].sort())
-		const { stateAttributes } = await import("./state")
-		const res = await stateAttributes.handler(socketOf(w.user.id), { sessionId: w.session.id }, () => {})
-		expect(res.customAttributes).toBe(true)
-		expect(res.worldAttributes).toBe(true)
-		expect(res.world.map((r) => [r.slotId, r.tracked])).toEqual([
-			[MOOD, true],
-			[WEATHER, true]
-		])
-		expect(res.addable.map((r) => r.slotId)).toEqual([GOLD])
-	})
-})
-
-describe("the session picks, and a pick carries forward", () => {
-	test("switching the world off drops what it brought, never the baseline, and it stays listed to switch back", async () => {
-		const w = await world("allow")
-		const { res } = await pick(w.user.id, w.session.id, { worldAttributes: false })
-		expect(await tracked(w.session.id)).toEqual([HP])
-		expect(res!.world.map((r) => [r.slotId, r.tracked])).toEqual([
-			[MOOD, false],
-			[WEATHER, false]
-		])
-		await pick(w.user.id, w.session.id, { worldAttributes: true })
-		expect(await tracked(w.session.id)).toEqual([HP, MOOD, WEATHER].sort())
-	})
-
-	test("a pick drops one world attribute, adds one of the session's own, and a cleared pick is the default again", async () => {
-		const w = await world("allow")
-		await pick(w.user.id, w.session.id, {
-			picks: [
-				{ slotId: WEATHER, enabled: false },
-				{ slotId: GOLD, enabled: true }
-			]
-		})
-		expect(await tracked(w.session.id)).toEqual([GOLD, HP, MOOD].sort())
-		const { res } = await pick(w.user.id, w.session.id, { picks: [{ slotId: WEATHER, enabled: null }] })
-		expect(await tracked(w.session.id)).toEqual([GOLD, HP, MOOD, WEATHER].sort())
-		expect(res!.own.map((r) => r.slotId)).toEqual([GOLD])
-	})
-
-	test("the baseline cannot be dropped, and only the session's owner picks", async () => {
-		const w = await world("allow")
-		expect((await pick(w.user.id, w.session.id, { picks: [{ slotId: HP, enabled: false }] })).error).toMatch(
-			/Health is part of this genre and cannot be dropped/
-		)
-		expect((await pick(w.guest.id, w.session.id, { worldAttributes: false })).error).toMatch(
-			/Only the session's owner/
-		)
-		expect(await tracked(w.session.id)).toEqual([HP, MOOD, WEATHER].sort())
+	test("a session adds none: a pick is refused in words, by anyone", async () => {
+		const w = await world()
+		for (const who of [w.user.id, w.guest.id])
+			expect((await pick(who, w.session.id, { picks: [{ slotId: GOLD, enabled: true }] })).error).toMatch(/a session adds none/)
+		expect((await pick(w.user.id, w.session.id, { worldAttributes: true })).error).toMatch(/a session adds none/)
+		expect(await tracked(w.session.id)).toEqual([])
 	})
 
 	test("only what the session tracks is written back to the world; the rest carries forward", async () => {
-		const w = await world("allow")
+		const w = await world()
+		await testDb.update(schema.sessions).set({ primaryRuleset: rulesBorrowing(n) }).where(eq(schema.sessions.id, w.session.id))
 		// Recording writes the world under Full (plan A22; Review changes, the
 		// default, would file proposals instead).
 		await testDb
 			.insert(schema.userSettings)
 			.values({ userId: w.user.id, loreWriteMode: "full" })
 			.onConflictDoUpdate({ target: schema.userSettings.userId, set: { loreWriteMode: "full" } })
-		await pick(w.user.id, w.session.id, { picks: [{ slotId: WEATHER, enabled: false }] })
-		// The session plays on: Mood moves; Weather it no longer tracks.
+		// The session plays on: Mood moves; Weather it never tracks.
 		const { setValue } = await import("$lib/server/state/write")
 		await setValue(
 			testDb as never,
@@ -269,12 +241,9 @@ describe("the session picks, and a pick carries forward", () => {
 			)
 		expect(mood.map((r) => (r.value as { v: unknown }).v)).toEqual(["wary"])
 	})
-})
 
-describe("a slot a mechanism keeps is never an attribute", () => {
-	test("never offered, never carried in from the world, and refused as a pick", async () => {
-		const w = await world("allow")
-		// Even with a value on the world's timeline…
+	test("a slot a mechanism keeps is never tracked, even with a value on the world's timeline", async () => {
+		const w = await world()
 		await testDb.insert(schema.attributeValues).values({
 			ownerKind: "lorebook",
 			ownerId: w.lorebook.id,
@@ -284,52 +253,46 @@ describe("a slot a mechanism keeps is never an attribute", () => {
 			updatedBy: "session:0"
 		})
 		expect(await tracked(w.session.id)).not.toContain(SPRITE)
-		const { stateAttributes } = await import("./state")
-		const res = await stateAttributes.handler(socketOf(w.user.id), { sessionId: w.session.id }, () => {})
-		expect([...res.world, ...res.addable].map((r) => r.slotId)).not.toContain(SPRITE)
-		expect((await pick(w.user.id, w.session.id, { picks: [{ slotId: SPRITE, enabled: true }] })).error).toMatch(
-			/Sprite set is kept by Serene Pub itself/
-		)
-		expect(await tracked(w.session.id)).not.toContain(SPRITE)
 	})
 })
 
-// 🚧 DC walk 6: Abilities and Inventory, retired for Vis Itineris's lists
-// (`DUNGEON_CRAWLER_RETIRED_SLOT_IDS`), were still offered in the panel.
-describe("a slot the genre took off its sheet is never offered", () => {
-	test("declared by the genre but on none of its sheets: in no list, and refused as a pick", async () => {
-		declareSlots()
-		const { defineAttributeSheet, genre: defineGenre } = await import("@serene-pub/sdk")
-		const k = ++n
-		const GENRE = `test:genre/attributes-sheet-${k}`
-		const sheet = defineAttributeSheet(`test:sheet/crawl-${k}@1`, {
-			label: { en: "Crawl" },
-			slots: [{ id: HP }]
+describe("🚧 who carries what (attribute carries, RF fix 2 item 3)", () => {
+	test("the session's owner switches a holder's attribute; a guest who does not play them cannot; a required one never switches", async () => {
+		const w = await world()
+		const { rulesetAttributeSlotId } = await import("@serene-pub/sdk")
+		const RULES = `test:ruleset/carry-socket-${n}@1`
+		defineRuleset(RULES, {
+			name: { en: "Carry" },
+			attributes: [
+				{ id: "nerve", name: { en: "Nerve" }, kind: "pool", bounds: { max: 5 }, carriedBy: ["cast"], prose: "Nerve: courage held in reserve." },
+				{ id: "heart", name: { en: "Heart" }, kind: "number", carriedBy: ["cast"], required: true, prose: "Heart: what keeps someone going." }
+			]
 		})
-		defineGenre(GENRE, {
-			name: { en: "Crawl" },
-			family: "test",
-			// GOLD is the genre's own, retired: declared, on no sheet.
-			slots: [getAttributeSlot(HP)!, getAttributeSlot(GOLD)!],
-			sheets: [sheet],
-			customAttributes: "allow",
-			events: {}
-		})
-		const { createTestUser } = await import("$lib/server/utils/testDb")
-		const user = await createTestUser(testDb, `attributes-sheet-${k}`)
-		const [session] = await testDb
-			.insert(schema.sessions)
-			.values({ userId: user.id, isGroup: false, name: `Crawl ${k}`, genreId: GENRE })
-			.returning()
-		const { stateAttributes, droppedGenreSlots } = await import("./state")
-		const { getGenre } = await import("@serene-pub/sdk")
-		expect([...droppedGenreSlots(getGenre(GENRE))]).toEqual([GOLD])
-		const res = await stateAttributes.handler(socketOf(user.id), { sessionId: session.id }, () => {})
-		const listed = [...res.baseline, ...res.world, ...res.own, ...res.addable].map((r) => r.slotId)
-		expect(res.baseline.map((r) => r.slotId)).toEqual([HP])
-		expect(listed).not.toContain(GOLD)
-		expect((await pick(user.id, session.id, { picks: [{ slotId: GOLD, enabled: true }] })).error).toMatch(
-			/no longer part of this genre's sheet/
-		)
+		await testDb.update(schema.sessions).set({ primaryRuleset: RULES }).where(eq(schema.sessions.id, w.session.id))
+		const NERVE = rulesetAttributeSlotId(RULES, "nerve")
+		const HEART = rulesetAttributeSlotId(RULES, "heart")
+		const { stateAttributes, stateSetCarry } = await import("./state")
+		const res = await stateAttributes.handler(socketOf(w.user.id), { sessionId: w.session.id }, () => {})
+		// 🚧 RF fix 8: the optional one alone — Heart is no one's to switch.
+		expect(res.carries?.map((r) => [r.slotId, r.required, r.holders.map((h) => [h.name, h.carries, h.mayChange])])).toEqual([
+			[NERVE, false, [[w.character.name, true, true]]]
+		])
+		const setCarry = async (userId: number, slotId: string, carries: boolean) => {
+			const said: Array<[string, any]> = []
+			const out = await stateSetCarry
+				.handler(socketOf(userId), { sessionId: w.session.id, owner: { kind: "session_cast", id: w.character.id }, slotId, carries }, (e: string, d: unknown) => said.push([e, d]))
+				.catch(() => undefined)
+			return { out, error: said.find(([e]) => e.endsWith(":error"))?.[1]?.error as string | undefined }
+		}
+		expect((await setCarry(w.guest.id, NERVE, false)).error).toBe(`Only whoever plays ${w.character.name}, or the session's owner, can change what ${w.character.name} carries.`)
+		expect((await setCarry(w.user.id, HEART, false)).error).toBe("Everyone carries Heart: the rules require it.")
+		const off = await setCarry(w.user.id, NERVE, false)
+		expect(off.error).toBeUndefined()
+		expect(off.out!.carries![0]!.holders[0]!.carries).toBe(false)
+		const { stateFor } = await import("$lib/server/state/resolve")
+		expect((await stateFor(testDb as never, w.session.id)).notCarried).toEqual({ [String(w.character.id)]: [NERVE] })
+		// The guest is never offered the switch on someone else's holder.
+		const theirs = await stateAttributes.handler(socketOf(w.guest.id), { sessionId: w.session.id }, () => {})
+		expect(theirs.carries?.[0]?.holders[0]?.mayChange).toBe(false)
 	})
 })

@@ -292,10 +292,6 @@ async function scriptUsageIndex(
 	const bySpec = new Map<number, PipelineScriptSeams>(
 		(pipelines ?? (await pipelineScriptSeams(db))).map((p) => [p.specId, p])
 	)
-	const configs = await db.select().from(schema.pipelineConfigs)
-	const specOfConfig = new Map<number, number>(
-		(configs as any[]).map((c) => [c.id, c.specId])
-	)
 
 	const note = (
 		v: { nodeKey: string; slot: string; path: string; value: unknown },
@@ -340,10 +336,44 @@ async function scriptUsageIndex(
 				add(id, use, `${pipeline.slug}\u0000${v.nodeKey}\u0000${v.slot}\u0000${path}`)
 	}
 
-	for (const v of (await db.select().from(schema.pipelineConfigValues)) as any[])
-		note(v, specOfConfig.get(v.configId))
+	// Configurations are retired (R50, 0110): their value rows hold nothing.
 	for (const o of (await db.select().from(schema.pipelineNodeOverrides)) as any[])
 		note(o, o.specId)
+	// 🚧 R50: a pipeline's instance values attach chains too.
+	for (const p of bySpec.values()) {
+		const { instanceStoredValues } = await import("$lib/server/pipelines/registrations/instanceValues")
+		for (const v of await instanceStoredValues(db, p.slug)) note(v, p.specId)
+	}
+
+	// 🚧 And every registration's values (R38, PLAN-layering D5): a chain a
+	// preset, the genre's defaults or a session attached by registration is a
+	// use like a configuration's was. A change row names its pipeline by the
+	// registration it changes.
+	{
+		const regRows = (await db.select().from(schema.registrations)) as any[]
+		const { baseKeyOf } = await import("$lib/server/pipelines/registrations/rows")
+		const slugOfKey = new Map<string, string>()
+		for (const r of regRows) if (r.specSlug && !slugOfKey.has(r.key)) slugOfKey.set(r.key, r.specSlug)
+		const specIdOfSlug = new Map<string, number>(
+			[...bySpec.values()].map((p) => [p.slug, p.specId] as const)
+		)
+		for (const r of regRows) {
+			if (!r.values || typeof r.values !== "object") continue
+			const slug = r.specSlug ?? slugOfKey.get(baseKeyOf(r.key))
+			const specId = slug ? specIdOfSlug.get(slug) : undefined
+			if (specId == null) continue
+			for (const [nodeKey, slots] of Object.entries(r.values as Record<string, Record<string, unknown>>))
+				for (const [slot, value] of Object.entries(slots ?? {})) {
+					if (Array.isArray(value) || typeof value === "number") {
+						note({ nodeKey, slot, path: "", value }, specId)
+						continue
+					}
+					if (value && typeof value === "object")
+						for (const [path, v] of Object.entries(value as Record<string, unknown>))
+							note({ nodeKey, slot, path, value: v }, specId)
+				}
+		}
+	}
 
 	// Connection attachments count too (18 §4b): a stop guard riding a
 	// connection is a reference like any chain's, and a delete that stranded

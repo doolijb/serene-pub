@@ -98,7 +98,17 @@ export const ADMIN_NAV: AdminNavGroup[] = [
 				icon: "MessagesSquare"
 			},
 			{ href: "/admin/session-genres", label: "Genres", icon: "Shapes" },
-			{ href: "/admin/session-presets", label: "Presets", icon: "Ticket" }
+			{ href: "/admin/session-presets", label: "Presets", icon: "Ticket" },
+			// 🚧 What a lorebook or a session can start from (PLAN-lorebook-
+			// kinds §B): beside the presets, the other thing people pick.
+			{
+				href: "/admin/starter-lorebooks",
+				label: "Starter lorebooks",
+				icon: "Package"
+			},
+			// 🚧 The rules sessions and lorebooks play (PLAN-ruleset-editor §6):
+			// administrators read Rulesets here; players see Rules (§28).
+			{ href: "/admin/rulesets", label: "Rulesets", icon: "Scale" }
 		]
 	},
 	{
@@ -133,11 +143,6 @@ export const ADMIN_NAV: AdminNavGroup[] = [
 		group: "Pipelines",
 		items: [
 			{ href: "/admin/pipelines", label: "Pipelines", icon: "Workflow" },
-			{
-				href: "/admin/configurations",
-				label: "Configurations",
-				icon: "SlidersVertical"
-			},
 			{ href: "/admin/pipelines/events", label: "Events", icon: "Zap" },
 			{ href: "/admin/scripts", label: "Scripts", icon: "SquareCode" }
 		]

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
 	/**
 	 * Admin › Completion templates › one template: the change form (note 37,
 	 * Django admin, on `AdminChangeForm`). Fieldsets: Template (name, key,
@@ -400,7 +401,7 @@
 		{/snippet}
 		{#snippet headerExtra()}
 			{#if readonly}
-				<span class="border-surface-300-700 text-surface-600-400 self-start rounded-full border px-2 py-0.5 text-xs">
+				<span class="border-surface-200-800 text-surface-600-400 self-start rounded-full border px-2 py-0.5 text-xs">
 					Built-in
 				</span>
 			{/if}
@@ -440,7 +441,7 @@
 				</AdminFieldset>
 
 				<AdminFieldset title="Framing" description="What opens and closes each role's block.">
-				<p class="text-surface-600-400 text-xs">
+				<FieldHelp>
 					<strong>Escapes, not characters.</strong>
 					Type
 					<code>\n</code>
@@ -448,7 +449,7 @@
 					<code>\t</code>
 					 for a tab — a marker's trailing newline is the byte that separates
 					one turn from the next, and no text field shows it otherwise.
-				</p>
+				</FieldHelp>
 
 				<div class="framing-grid text-sm">
 					<span class="text-surface-600-400 text-xs font-medium">
@@ -529,7 +530,7 @@
 				description="Three blocks, wrapped by this draft through the same formatter the prompt renderer uses. Unsaved edits show here immediately."
 			>
 				<pre
-					class="bg-surface-50-950 max-h-[28rem] overflow-auto rounded-[10px] p-2 font-mono text-xs whitespace-pre-wrap">{preview}</pre>
+					class="bg-surface-50-950 max-h-[28rem] overflow-auto rounded-base p-2 font-mono text-xs whitespace-pre-wrap">{preview}</pre>
 			</AdminFieldset>
 		</div>
 	</AdminChangeForm>

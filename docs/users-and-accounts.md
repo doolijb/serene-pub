@@ -96,11 +96,17 @@ To play in the same story as someone else, add them to a session as a guest: see
 
 ## Your own account
 
-Everyone's own settings are in **Settings** on the rail, on the **User** tab: language, how sessions may change your lorebooks, character form preferences, Document View and your **Display name** (see [Themes and settings](./themes-and-settings.md#your-preferences-the-user-tab)). The display name is there with accounts on or off. With accounts on, the passphrase, logout and two-factor controls appear there too.
+Everyone's own settings are in **Settings** on the rail, on the **User** tab: language, how sessions may change your lorebooks, character form preferences, Document View, your **Avatar** and your **Display name** (see [Themes and settings](./themes-and-settings.md#your-preferences-the-user-tab)). The display name is there with accounts on or off. With accounts on, the passphrase, logout and two-factor controls appear there too.
+
+### Your avatar
+
+The **User profile** card in **Settings › User** starts with your **avatar**: the round picture shown for your account on the rail, in the **Users** view, when sharing and in conversations. Click it (or drop an image on it) to choose one. The crop editor opens first; **Save** there uploads it, and **Cancel** keeps the avatar you had. The menu under the picture has **Adjust crop** and **Remove image**, which take effect at once. Without an avatar, your account shows the first letter of your name.
+
+Anyone signed in to the pub can see your avatar, just as they can see your name. It belongs to your account, not to your personas: a persona has its own avatar, and that is the picture beside what you say in a session.
 
 ### Changing your own passphrase
 
-In **Settings › User**, the **User profile** card has your **Display name** (up to 50 characters; press **Update** to save it, or empty it to go by your username), **Change passphrase** and **Logout**.
+In **Settings › User**, the **User profile** card has your [avatar](#your-avatar), your **Display name** (up to 50 characters; press **Update** to save it, or empty it to go by your username), **Change passphrase** and **Logout**.
 
 **Change passphrase** asks for your **Current passphrase**, a **New passphrase** and its confirmation. The new one must follow the passphrase rule above.
 

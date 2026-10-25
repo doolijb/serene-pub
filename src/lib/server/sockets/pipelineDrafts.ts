@@ -340,46 +340,13 @@ async function affectedConfigs(
 	activeVersionId: number | null,
 	draft: SpecDocument
 ): Promise<Sockets.Pipelines.Draft.Affected[]> {
-	const active = activeVersionId ? await loadDocument(db, activeVersionId) : null
-	const before = declaredSlots(active)
-	const after = declaredSlots(draft)
-
-	const configs = await db
-		.select({ id: schema.pipelineConfigs.id, name: schema.pipelineConfigs.name })
-		.from(schema.pipelineConfigs)
-		.where(eq(schema.pipelineConfigs.specId, specId))
-		.orderBy(asc(schema.pipelineConfigs.id))
-	if (!configs.length) return []
-	const rows = await db
-		.select()
-		.from(schema.pipelineConfigValues)
-		.where(
-			inArray(
-				schema.pipelineConfigValues.configId,
-				configs.map((c) => c.id)
-			)
-		)
-
-	const newPairs: Array<[string, string]> = []
-	for (const [nodeKey, slots] of after)
-		for (const slot of slots)
-			if (!declares(before, nodeKey, slot)) newPairs.push([nodeKey, slot])
-
-	return configs.map((c) => {
-		const mine = rows.filter((r) => r.configId === c.id)
-		const culled = mine
-			.filter(
-				(r) =>
-					!declares(after, r.nodeKey, r.slot) &&
-					(!active || declares(before, r.nodeKey, r.slot))
-			)
-			.map(addressOf)
-		const held = new Set(mine.map((r) => `${r.nodeKey}\u0000${r.slot}`))
-		const backfilled = newPairs
-			.filter(([k, s]) => !held.has(`${k}\u0000${s}`))
-			.map(([k, s]) => `${k}.${s}`)
-		return { configId: c.id, configName: c.name, culled, backfilled }
-	})
+	// 🚧 R50 (lane F1, 0110): configurations are retired — nothing reads one,
+	// so a publish culls or back-fills none. Values live on registrations and
+	// a pipeline's instance values, which the publish's A11 re-check judges.
+	void specId
+	void activeVersionId
+	void draft
+	return []
 }
 
 export const pipelinesDraftPreview: Handler<
@@ -487,6 +454,13 @@ export const pipelinesDraftPublish: Handler<
 			saved.specVersionId,
 			spec.slug
 		)
+		// 🚧 A11: every registration that runs this pipeline goes back through
+		// the door — one the new version does not fit is left out, and its
+		// preset says so. Best-effort: the publish has landed.
+		{
+			const { refitAfterChange } = await import("$lib/server/pipelines/registrations/fit")
+			await refitAfterChange(db as any, [spec.slug])
+		}
 		await db
 			.delete(schema.pipelineDrafts)
 			.where(eq(schema.pipelineDrafts.id, row.id))

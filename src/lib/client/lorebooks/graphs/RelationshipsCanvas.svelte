@@ -104,7 +104,7 @@
 				<button
 					type="button"
 					class="btn btn-sm {layout === option
-						? 'preset-tonal-primary'
+						? 'preset-pressed'
 						: 'preset-tonal-surface'}"
 					aria-pressed={layout === option}
 					onclick={() => (layout = option)}

@@ -197,7 +197,7 @@
 				<li
 					class="flex h-8 max-w-64 items-center gap-1.5 rounded-full pr-0.5 pl-2.5 text-xs {t.status ===
 					'refused'
-						? 'bg-error-500/10 text-error-700-300'
+						? 'bg-error-500/10 text-error-600-400'
 						: 'bg-surface-200-800'}"
 					title={t.refusal ?? t.filename}
 				>

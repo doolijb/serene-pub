@@ -118,6 +118,32 @@ const rowAt = async (configId: number, path = PATH) => {
 }
 
 /**
+ * 🚧 An administrator's change to the genre's defaults for the reply (R38,
+ * A15) — what an instance-wide edit is since configurations retired — and
+ * the value it holds at the file's address.
+ */
+const genreTargets = async () => {
+	const { genreValueTargets } = await import("$lib/server/pipelines/registrations/genreValues")
+	return genreValueTargets(db as any, STORY_RESPOND_SPEC_ID)
+}
+const genreValueAt = async (path = PATH) => {
+	const { genreChangeKey } = await import("$lib/server/pipelines/registrations/rows")
+	const [t] = await genreTargets()
+	const [row] = await db
+		.select()
+		.from(schema.registrations)
+		.where(
+			and(
+				eq(schema.registrations.scopeKind, "genre"),
+				eq(schema.registrations.scopeRef, t!.genreId),
+				eq(schema.registrations.key, genreChangeKey(t!.key))
+			)
+		)
+	const slot = (row?.values as any)?.[NODE]?.[SLOT]
+	return slot && typeof slot === "object" ? slot[path] : undefined
+}
+
+/**
  * What a run would resolve, through the path a run takes.
  *
  * `buildWorld` then `resolveConfigSources` — the executor's own two calls, not
@@ -212,134 +238,83 @@ describe("a config with no row resolves the CURRENT declaration", () => {
 		).toEqual({ value: MOVED_TO, scopeKind: "author" })
 	})
 
-	it("does not move a config that departed from it", async () => {
-		const [mine] = await db
-			.insert(schema.pipelineConfigs)
-			.values({ specId, name: "Deviating", isImmutable: false })
-			.returning()
-		await db.insert(schema.pipelineConfigValues).values({
-			configId: mine.id,
-			nodeKey: NODE,
-			slot: SLOT,
-			path: PATH,
-			value: 42
-		})
-		const { selectConfig } = await import(
-			"$lib/server/pipelines/config/named"
+	it("does not move a change that departed from it", async () => {
+		// 🚧 The instance's own value: a change to the genre's defaults (A15).
+		const { setGenreValue, resetGenreValues } = await import(
+			"$lib/server/pipelines/registrations/genreValues"
 		)
-		await selectConfig(db, specId, "pub", 0, mine.id, adminId)
+		await setGenreValue(db as any, await genreTargets(), { nodeKey: NODE, slot: SLOT, path: PATH }, 42)
 
 		await redeclareDefault(DECLARED)
 		await reconcileConfigs(db, specId, specVersionId, STORY_RESPOND_SPEC_ID)
 
-		expect(await rowAt(mine.id), "a deviation was swept").toBeTruthy()
+		expect(await genreValueAt(), "a deviation was swept").toBe(42)
 		expect(await resolvedLimit()).toEqual({
 			value: 42,
-			scopeKind: "config"
+			scopeKind: "genre"
 		})
 
-		// Put the instance back on the shipped config for the writes below.
-		await selectConfig(
-			db,
-			specId,
-			"pub",
-			0,
-			(await shippedConfig()).id,
-			adminId
-		)
+		// Back on the declared defaults for the writes below.
+		await resetGenreValues(db as any, await genreTargets())
 	})
 })
 
 describe("writeOption stores a deviation or nothing", () => {
-	let mine: number
 	let handle: string
 
 	beforeAll(async () => {
-		const [config] = await db
-			.insert(schema.pipelineConfigs)
-			.values({ specId, name: "Write target", isImmutable: false })
-			.returning()
-		mine = config.id
 		handle = optionId(SECRET, NODE, SLOT, PATH)
 	})
 
 	const viewer = () => ({ userId: adminId, isAdmin: true })
 
 	it("writes a row for a value that differs", async () => {
-		await writeOption(
-			db,
-			SECRET,
-			STORY_RESPOND_SPEC_ID,
-			viewer(),
-			handle,
-			30,
-			mine
-		)
-		expect((await rowAt(mine))?.value).toBe(30)
+		// An administrator's instance-wide edit: the genre's defaults (R38).
+		await writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, viewer(), handle, 30)
+		expect(await genreValueAt()).toBe(30)
 	})
 
 	it("deletes the row when the value returns to the default", async () => {
-		await writeOption(
-			db,
-			SECRET,
-			STORY_RESPOND_SPEC_ID,
-			viewer(),
-			handle,
-			DECLARED,
-			mine
-		)
+		await writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, viewer(), handle, DECLARED)
 		expect(
-			await rowAt(mine),
-			`writing the declared default stored a row. It resolves to the same ` +
-				`number today and pins the config to it forever after.`
+			await genreValueAt(),
+			`writing the declared default stored a value. It resolves to the same ` +
+				`number today and pins the genre's defaults to it forever after.`
 		).toBeUndefined()
+	})
+
+	it("refuses to edit a named configuration of a pipeline registrations run (R38)", async () => {
+		const [config] = await db
+			.insert(schema.pipelineConfigs)
+			.values({ specId, name: "Write target", isImmutable: false })
+			.returning()
+		await expect(
+			writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, viewer(), handle, 30, config!.id)
+		).rejects.toThrow(/configurations are retired/)
+		expect(await rowAt(config!.id)).toBeUndefined()
 	})
 })
 
 describe("the panel says which options were changed", () => {
 	it("marks a deviated option and leaves an inherited one unmarked", async () => {
-		const [mine] = await db
-			.insert(schema.pipelineConfigs)
-			.values({ specId, name: "Marked", isImmutable: false })
-			.returning()
-		await db.insert(schema.pipelineConfigValues).values({
-			configId: mine.id,
-			nodeKey: NODE,
-			slot: SLOT,
-			path: PATH,
-			value: 7
-		})
-		const { selectConfig } = await import(
-			"$lib/server/pipelines/config/named"
+		const { setGenreValue, resetGenreValues } = await import(
+			"$lib/server/pipelines/registrations/genreValues"
 		)
-		await selectConfig(db, specId, "pub", 0, mine.id, adminId)
-
-		const view = await namespaceView(db, SECRET, STORY_RESPOND_SPEC_ID, {
-			userId: adminId,
-			isAdmin: true
-		})
-		const all = groupOptions(view?.groups ?? [])
-		const changed = all.find(
-			(o) => o.id === optionId(SECRET, NODE, SLOT, PATH)
-		)
-		expect(changed?.changed, "a deviated option is not marked").toBe(true)
-		// Its neighbour on the same slot, which nobody touched.
-		const untouched = all.find(
-			(o) => o.id === optionId(SECRET, NODE, SLOT, "channel")
-		)
-		expect(
-			untouched?.changed,
-			"an inherited option is marked as changed"
-		).toBe(false)
-
-		await selectConfig(
-			db,
-			specId,
-			"pub",
-			0,
-			(await shippedConfig()).id,
-			adminId
-		)
+		await setGenreValue(db as any, await genreTargets(), { nodeKey: NODE, slot: SLOT, path: PATH }, 7)
+		try {
+			const view = await namespaceView(db, SECRET, STORY_RESPOND_SPEC_ID, {
+				userId: adminId,
+				isAdmin: true
+			})
+			const all = groupOptions(view?.groups ?? [])
+			const changed = all.find((o) => o.id === optionId(SECRET, NODE, SLOT, PATH))
+			expect(changed?.changed, "a deviated option is not marked").toBe(true)
+			// Its neighbour on the same slot, which nobody touched.
+			const untouched = all.find((o) => o.id === optionId(SECRET, NODE, SLOT, "channel"))
+			expect(untouched?.changed, "an inherited option is marked as changed").toBe(false)
+		} finally {
+			await resetGenreValues(db as any, await genreTargets())
+		}
 	})
 
 	it("🚧 marks nothing on the shipped Default: its reference rows are the pipeline's own (Q3-6, #50)", async () => {
@@ -407,43 +382,40 @@ describe("a value equal to the declaration is kept where the shipped config diff
 		).toBe(SHIPPED_TRIGGER)
 	})
 
-	it("keeps an explicit declared value through the write, a reconcile and a duplicate", async () => {
-		const { duplicateConfig } = await import(
-			"$lib/server/pipelines/config/named"
-		)
-		const copy = await duplicateConfig(
-			db,
-			(await shippedConfig()).id,
-			"Trigger off"
-		)
-		expect(await triggerAt(copy.id)).toBe(SHIPPED_TRIGGER)
-
+	it("keeps an explicit declared value through the write and a reconcile", async () => {
+		// 🚧 An instance-wide edit is a change to the genre's defaults (R38):
+		// 0 is a choice there, because the declared defaults ship 3000.
 		await writeOption(
 			db,
 			SECRET,
 			STORY_RESPOND_SPEC_ID,
 			{ userId: adminId, isAdmin: true },
 			optionId(SECRET, node, SLOT, TRIGGER),
-			DECLARED_TRIGGER,
-			copy.id
+			DECLARED_TRIGGER
 		)
+		const at = async () => {
+			const { genreChangeKey } = await import("$lib/server/pipelines/registrations/rows")
+			const [t] = await genreTargets()
+			const [row] = await db
+				.select()
+				.from(schema.registrations)
+				.where(
+					and(
+						eq(schema.registrations.scopeKind, "genre"),
+						eq(schema.registrations.scopeRef, t!.genreId),
+						eq(schema.registrations.key, genreChangeKey(t!.key))
+					)
+				)
+			return (row?.values as any)?.[node]?.[SLOT]?.[TRIGGER]
+		}
 		expect(
-			await triggerAt(copy.id),
-			"writing the declared value deleted the row, so the next boot " +
-				"back-fills the shipped 3000 over the person's 0"
+			await at(),
+			"writing the declared value dropped it, so the shipped 3000 runs over the person's 0"
 		).toBe(DECLARED_TRIGGER)
-
 		await reconcileConfigs(db, specId, specVersionId, STORY_RESPOND_SPEC_ID)
-		expect(
-			await triggerAt(copy.id),
-			"a reconcile replaced an explicit 0 with the shipped value"
-		).toBe(DECLARED_TRIGGER)
-
-		const again = await duplicateConfig(db, copy.id, "Trigger off again")
-		expect(
-			await triggerAt(again.id),
-			"a duplicate dropped the explicit 0"
-		).toBe(DECLARED_TRIGGER)
+		expect(await at(), "a reconcile replaced an explicit 0").toBe(DECLARED_TRIGGER)
+		const { resetGenreValues } = await import("$lib/server/pipelines/registrations/genreValues")
+		await resetGenreValues(db as any, await genreTargets())
 	})
 
 	it("keeps a stored declared value the reconcile finds already there", async () => {

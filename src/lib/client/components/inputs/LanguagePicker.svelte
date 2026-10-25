@@ -23,6 +23,9 @@
 		inheritLabel?: string
 		disabled?: boolean
 		describedBy?: string
+		/** The label for a screen reader only: a setting card's title says it
+		 *  on screen (STYLE-GUIDE §6.4). */
+		labelHidden?: boolean
 		class?: string
 		onValueChange?: (value: string) => void
 	}
@@ -33,6 +36,7 @@
 		inheritLabel,
 		disabled = false,
 		describedBy,
+		labelHidden = false,
 		class: className = "",
 		onValueChange
 	}: Props = $props()
@@ -64,6 +68,7 @@
 	{value}
 	{disabled}
 	{describedBy}
+	{labelHidden}
 	class={className}
 	{onValueChange}
 />

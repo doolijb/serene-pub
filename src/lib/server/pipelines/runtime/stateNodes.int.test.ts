@@ -22,6 +22,7 @@ import {
 } from "@serene-pub/sdk"
 import "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 let testDb: TestDb
 let dataDir: string
@@ -70,14 +71,14 @@ function declareSlots() {
 		descriptor: "What they carry.",
 		appliesTo: ["cast", "world"]
 	})
-	genre(GENRE, {
+	genreKeeping(GENRE, {
 		name: { en: "Stats" },
 		family: "test",
 		slots: [hp, inventory],
 		events: {}
 	})
 	// A genre that does not carry inventory, for the refusal.
-	genre(BARE_GENRE, { name: { en: "Bare" }, family: "test", slots: [hp], events: {} })
+	genreKeeping(BARE_GENRE, { name: { en: "Bare" }, family: "test", slots: [hp], events: {} })
 }
 
 const BARE_GENRE = "test:genre/stats-bare"
@@ -324,7 +325,8 @@ describe("core:query/session-state@1", () => {
 		const state = await stateFor(testDb as unknown as Db, w.session.id)
 		expect(state.slots).toEqual([
 			// `field` since phase 2 (stat shapes): the slot's value as a FieldDecl.
-			{ id: HP, key: "hp", type: "integer", field: { type: "integer" }, appliesTo: ["cast"] }
+			// 🚧 RF fix 8: a test genre's slot is the host's tool state (`genreKeeping`), and says so.
+			{ id: HP, key: "hp", type: "integer", field: { type: "integer" }, appliesTo: ["cast"], hostState: "tool" }
 		])
 	})
 
@@ -754,9 +756,14 @@ describe("the keeper's inventory arm (2026-09-27)", () => {
 
 	const KEEPERS: Array<[slug: string, nodeKey: string]> = [
 		// retired with Adventure, 2026-10-19: Adventure's reply `keeperWrite`
-		// (Story's reckoning answers its own schema, STORY_RECKON_SCHEMA).
-		["core:spec/lair-respond", "keep.played.keeperWrite"]
+		// (Story's reckoning answers its own schema, STORY_RECKON_SCHEMA);
+		// retired with the Lair rewrite, 2026-10-21: lair-respond's
+		// `keep.played.keeperWrite` — the Lair's keeper is Story's reckoning
+		// routine (`lair-keeper`). No shipped keeper selects the arm by path
+		// now; the arm itself still resolves, below.
 	]
+	/** The keeper path the old graphs shipped — the arm's contract. */
+	const KEEPER_PATH = "values,inventory"
 	const shippedPath = async (slug: string, nodeKey: string) => {
 		const { coreAnnouncement } = await import("@serene-pub/core-catalog")
 		const doc = (coreAnnouncement().document as any).pipelines.find((p: any) => p.id === slug)
@@ -799,7 +806,7 @@ describe("the keeper's inventory arm (2026-09-27)", () => {
 		}
 	}
 
-	test("every shipped keeper selects `values,inventory`, and its inventory arm applies", async () => {
+	test("every shipped keeper that selects by path selects `values,inventory`, and its inventory arm applies", async () => {
 		declareSlots()
 		for (const [slug, nodeKey] of KEEPERS)
 			expect(await shippedPath(slug, nodeKey), slug).toBe("values,inventory")
@@ -810,7 +817,7 @@ describe("the keeper's inventory arm (2026-09-27)", () => {
 				values: [{ owner: w.verity.name, slot: "hp", value: "12" }],
 				inventory: [{ owner: w.verity.name, entryId: w.key.id, delta: 2 }]
 			},
-			await shippedPath("core:spec/lair-respond", "keep.played.keeperWrite")
+			KEEPER_PATH
 		)
 		expect(got.changes).toHaveLength(2)
 		expect(got.changes[1]).toEqual(inventoryAdd(w.verity.id, w.key.id, 2))

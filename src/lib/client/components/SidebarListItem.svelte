@@ -19,12 +19,11 @@
 		totalItems?: number // Total items in the list for context
 		currentIndex?: number // Current position in list
 		/**
-		 * Whether the leading id column is drawn.
-		 *
-		 * The number is an aid for lists whose rows are otherwise hard to tell
-		 * apart; a row carrying an avatar, a name and its tags identifies
-		 * itself, so those pass `false` and spend the 32px on content. `id`
-		 * still reaches the row's accessible name either way.
+		 * Whether the leading id column is drawn. Off by default
+		 * (PLAN-0-5-polish-parity L6, 2026-10-24): the gutter read _1, 2, 3,
+		 * 34, 37_ down the Lorebooks list — a database id, which helps no
+		 * reader. A list whose rows really are hard to tell apart may still
+		 * ask for it. `id` reaches the row's accessible name either way.
 		 */
 		showIndex?: boolean
 		/**
@@ -65,7 +64,7 @@
 		itemName,
 		totalItems,
 		currentIndex,
-		showIndex = true,
+		showIndex = false,
 		active = false,
 		preset,
 		hoverPreset
@@ -102,7 +101,7 @@
 <!-- `aria-current` and not only colour: selection is a fact about the list,
      and the bar plus the tonal surface say it to everyone who can see them. -->
 <div
-	class="card {rowPreset} {rowHover} relative flex w-full gap-2 overflow-hidden rounded-[10px] py-2 pr-3 pl-2 {classes}"
+	class="card {rowPreset} {rowHover} relative flex w-full gap-2 overflow-hidden rounded-base py-2 pr-3 pl-2 {classes}"
 	role="listitem"
 	aria-current={active ? "true" : undefined}
 >
@@ -125,9 +124,11 @@
 		{/if}
 		<div class="flex w-full min-w-0 flex-col">
 			<div class="flex min-w-0">
+				<!-- The row's anatomy (STYLE-GUIDE §6.4): face, 12px, then the
+				     name over its one meta line. -->
 				<button
 					{onclick}
-					class="flex min-w-0 flex-1 gap-2"
+					class="flex min-w-0 flex-1 items-center gap-3"
 					title={contentTitle}
 					aria-label={ariaLabel}
 					type="button"

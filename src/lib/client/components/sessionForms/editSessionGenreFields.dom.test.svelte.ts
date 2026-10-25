@@ -1,10 +1,12 @@
 /**
- * Edit Session › Settings and the session's genre fields (owner ruling
- * 2026-10-03): Save sends only the genre fields the person changed in the
- * form — dirty meaning different from the value loaded (STYLE-GUIDE §6.14),
- * field by field, an `object` field whole — and a newer save pushed while
- * the form is open (`sessions:genreFieldsChanged`, the Author's note widget's)
- * refreshes a field nobody touched here and leaves an edited one alone.
+ * Edit Session › Settings and the session's genre fields, since the derived
+ * settings form (PLAN-layering §5, A10; lane 7, 2026-10-21): the genre's
+ * settings are drawn from `sessions:settingsForm` and each applies at once
+ * through `sessions:updateSetting` — an `object` field (the Author's note)
+ * by the one schema renderer, from the genre's own declaration, written
+ * whole. Save never sends genre fields any more, so it can never put back a
+ * value the form loaded before someone else saved (the 2026-10-03 rule,
+ * now by construction).
  */
 import { afterEach, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
@@ -142,77 +144,83 @@ function save() {
 	return emitted.filter(([e]) => e === "sessions:update").at(-1)?.[1]
 }
 
-const unsaved = () => document.body.textContent?.includes("Unsaved changes") ?? false
+const writes = () => emitted.filter(([e]) => e === "sessions:updateSetting").map(([, p]) => p)
 
-describe("Edit Session — genre fields go only as the person changed them (2026-10-03)", () => {
-	test("an opened form is clean, and saving another change sends no genre fields", async () => {
+/** The genre group as the server derives it for the owner. */
+function settingsForm(note: Record<string, unknown> = NOTE) {
+	return {
+		sessionId: 7,
+		viewer: "owner",
+		groups: [
+			{
+				kind: "genre",
+				id: "genre",
+				heading: "Notes",
+				fields: [
+					{
+						id: JSON.stringify(["genre", "mood"]),
+						address: { kind: "genre", key: "mood" },
+						label: "Mood",
+						control: "text",
+						value: "calm",
+						inherited: "",
+						source: "session",
+						reach: "owner",
+						editable: true
+					},
+					{
+						id: JSON.stringify(["genre", "authorsNote"]),
+						address: { kind: "genre", key: "authorsNote" },
+						label: "Author's note",
+						control: "json",
+						value: note,
+						inherited: FIELDS.authorsNote.default,
+						source: "session",
+						reach: "owner",
+						editable: true
+					}
+				]
+			}
+		]
+	}
+}
+
+describe("Edit Session — genre fields apply at once (lane 7)", () => {
+	test("the form asks for the session's derived settings", async () => {
 		await openForm()
-		expect(field<HTMLTextAreaElement>("sf-authorsNote-text").value).toBe(NOTE.text)
-		expect(unsaved()).toBe(false)
+		expect(emitted.some(([e, p]) => e === "sessions:settingsForm" && p.sessionId === 7)).toBe(true)
+	})
 
-		const name = document.querySelector<HTMLInputElement>("input#name, input[name='name']")
+	test("a text field writes at once, never with Save", async () => {
+		await openForm()
+		deliver("sessions:settingsForm", settingsForm())
+		const mood = document.querySelector<HTMLTextAreaElement>("[data-setting] textarea")!
+		expect(mood.value).toBe("calm")
+		type(mood, "tense")
+		expect(writes().at(-1)).toEqual(
+			expect.objectContaining({ sessionId: 7, address: { kind: "genre", key: "mood" }, value: "tense" })
+		)
+		const name = document.querySelector<HTMLInputElement>("input#sessionName")
 		if (name) type(name, "The lighthouse at dusk")
 		const sent = save()
 		expect(sent).toBeTruthy()
 		expect(sent.session.genreFields).toBeUndefined()
 	})
 
-	test("changing one field sends that field alone — not the untouched note", async () => {
+	test("the note is drawn from the genre's declaration and written whole", async () => {
 		await openForm()
-		type(field<HTMLInputElement>("sf-mood"), "tense")
-		expect(unsaved()).toBe(true)
-		expect(save().session.genreFields).toEqual({ mood: "tense" })
-	})
-
-	test("changing one member of the note sends the note whole", async () => {
-		await openForm()
-		type(field<HTMLInputElement>("sf-authorsNote-depth"), "2")
-		expect(save().session.genreFields).toEqual({ authorsNote: { ...NOTE, depth: 2 } })
-	})
-
-	test("changing a field and changing it back is clean", async () => {
-		await openForm()
-		const mood = field<HTMLInputElement>("sf-mood")
-		type(mood, "tense")
-		expect(unsaved()).toBe(true)
-		type(mood, "calm")
-		expect(unsaved()).toBe(false)
-	})
-
-	test("a newer note saved by the widget refreshes the untouched note and stays clean", async () => {
-		await openForm()
-		const newer = { ...NOTE, text: "The storm has passed." }
-		deliver("sessions:genreFieldsChanged", {
-			sessionId: 7,
-			genreFields: { mood: "calm", authorsNote: newer }
-		})
-		await tick()
-		expect(field<HTMLTextAreaElement>("sf-authorsNote-text").value).toBe(newer.text)
-		expect(unsaved()).toBe(false)
-
-		type(field<HTMLInputElement>("sf-mood"), "tense")
-		expect(save().session.genreFields).toEqual({ mood: "tense" })
-	})
-
-	test("a push for another session is not this form's", async () => {
-		await openForm()
-		deliver("sessions:genreFieldsChanged", {
-			sessionId: 8,
-			genreFields: { authorsNote: { ...NOTE, text: "Elsewhere" } }
-		})
+		deliver("sessions:settingsForm", settingsForm())
 		expect(field<HTMLTextAreaElement>("sf-authorsNote-text").value).toBe(NOTE.text)
+		type(field<HTMLInputElement>("sf-authorsNote-depth"), "2")
+		expect(writes().at(-1)).toEqual(
+			expect.objectContaining({ address: { kind: "genre", key: "authorsNote" }, value: { ...NOTE, depth: 2 } })
+		)
 	})
 
-	test("an edited note keeps the person's edit when a newer one is pushed", async () => {
+	test("a newer note in the form the server re-sends replaces what is drawn", async () => {
 		await openForm()
-		type(field<HTMLTextAreaElement>("sf-authorsNote-text"), "Mine")
-		deliver("sessions:genreFieldsChanged", {
-			sessionId: 7,
-			genreFields: { mood: "calm", authorsNote: { ...NOTE, text: "Theirs" } }
-		})
-		await tick()
-		expect(field<HTMLTextAreaElement>("sf-authorsNote-text").value).toBe("Mine")
-		expect(unsaved()).toBe(true)
-		expect(save().session.genreFields).toEqual({ authorsNote: { ...NOTE, text: "Mine" } })
+		deliver("sessions:settingsForm", settingsForm())
+		deliver("sessions:settingsForm", settingsForm({ ...NOTE, text: "The storm has passed." }))
+		expect(field<HTMLTextAreaElement>("sf-authorsNote-text").value).toBe("The storm has passed.")
 	})
 })

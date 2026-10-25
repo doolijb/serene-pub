@@ -43,13 +43,12 @@ import { reconcileConfigs } from "$lib/server/pipelines/config/named"
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 /**
- * The Lair's reply: a planner and a state keeper nobody reads, and narration
- * somebody waits for — the shape Adventure's reply had until it retired
- * (2026-10-19).
+ * The Lair's reply: a planner nobody reads, and narration somebody waits
+ * for — the shape Adventure's reply had until it retired (2026-10-19). Its
+ * keeper is a routine of its own since the Lair rewrite (2026-10-21).
  */
-const LAIR = "core:spec/lair-respond"
+const LAIR = "core:spec/lair-reply"
 const PLAN_WRITE = "via.turn.channel.story.pick.planned.planWrite"
-const KEEPER_WRITE = "keep.played.keeperWrite"
 const NARRATION = "via.narrate.say"
 const BACKGROUND = "sampling-background"
 
@@ -133,15 +132,14 @@ describe("a preset names a sampling config by seed identity", () => {
 		await booted(db)
 	}, 60_000)
 
-	it("ships the planner and the keeper on Background, and the narrator on nothing", async () => {
+	it("ships the planner on Background, and the narrator on nothing", async () => {
 		const { config } = await shipped(db)
 		const background = await backgroundId(db)
 
 		expect(await samplingOf(db, config.id, PLAN_WRITE)).toBe(background)
-		expect(await samplingOf(db, config.id, KEEPER_WRITE)).toBe(background)
 		// The steps a person reads keep whatever the session is set to.
-		// A resolution that filled in every sampling slot would pass the two
-		// assertions above and still be wrong.
+		// A resolution that filled in every sampling slot would pass the
+		// assertion above and still be wrong.
 		expect(await samplingOf(db, config.id, NARRATION)).toBeUndefined()
 	})
 
@@ -175,7 +173,7 @@ describe("a preset names a sampling config by seed identity", () => {
 		// The state a real upgrade is in: the shipped config was written by a
 		// build whose preset named no sampling row, so the address has never
 		// held a value in it.
-		for (const nodeKey of [PLAN_WRITE, KEEPER_WRITE])
+		for (const nodeKey of [PLAN_WRITE])
 			await db
 				.delete(schema.pipelineConfigValues)
 				.where(
@@ -189,12 +187,10 @@ describe("a preset names a sampling config by seed identity", () => {
 		await reconcileConfigs(db, spec.id, spec.activeVersionId!, spec.slug)
 
 		expect(await samplingOf(db, config.id, PLAN_WRITE)).toBe(background)
-		expect(await samplingOf(db, config.id, KEEPER_WRITE)).toBe(background)
 		// The asymmetry the layer chain exists for: the author moving a default
 		// reaches everybody who has not opted out, and stops at everybody who
 		// has.
 		expect(await samplingOf(db, tuned.id, PLAN_WRITE)).toBe(mine.id)
-		expect(await samplingOf(db, tuned.id, KEEPER_WRITE)).toBe(background)
 	})
 })
 

@@ -287,7 +287,7 @@
 						if (e.key === "Escape") naming = null
 					}}
 				/>
-				<span id="component-file-name-problem" class="text-error-700-300 min-h-4" aria-live="polite">{problem ?? ""}</span>
+				<span id="component-file-name-problem" class="text-error-600-400 min-h-4" aria-live="polite">{problem ?? ""}</span>
 			</label>
 			<div class="flex gap-2 pt-5">
 				<button type="submit" class="btn btn-sm preset-filled-primary-500" disabled={!!problem}>
@@ -305,7 +305,7 @@
 		id="component-file-panel"
 		role="tabpanel"
 		aria-labelledby="component-file-{order.indexOf(active)}-tab"
-		class="border-surface-200-800 min-h-0 flex-1 overflow-hidden rounded-[10px] border"
+		class="border-surface-200-800 min-h-0 flex-1 overflow-hidden rounded-base border"
 		bind:this={host}
 	></div>
 </div>

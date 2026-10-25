@@ -24,8 +24,8 @@ import os from "os"
 import path from "path"
 import { and, eq, inArray } from "drizzle-orm"
 import {
-	clearConfigValue,
-	setConfigValue,
+	clearPipelineValue,
+	setPipelineValue,
 	type TestDb
 } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
@@ -234,17 +234,13 @@ describe("a lore node's scan depth reaches the scan", () => {
 		// The assertion the unwired slot could not fail: an unwired `params`
 		// resolves to nothing regardless of what is stored, so every number
 		// below came back as the engine default however the row read.
-		const configId = await selectedConfigId(
-			STORY_RESPOND_SPEC_ID,
-			respondSpecRow.id
-		)
 
 		// ⚠ An upsert, not the `UPDATE` this was. A config stores **deviations**
 		// (ruled 2026-09-10), so at an untouched address there is no row to
 		// update — the old form matched nothing and every lane came back at the
 		// engine default, which is the very reading this test exists to
 		// distinguish from an unwired slot.
-		await setConfigValue(db, configId, SCAN_DEPTH_AT, 4)
+		await setPipelineValue(db, STORY_RESPOND_SPEC_ID, SCAN_DEPTH_AT, 4)
 
 		try {
 			const depths = await scanned(storyRespondSpec(), STORY_RESPOND_SPEC_ID)
@@ -260,7 +256,7 @@ describe("a lore node's scan depth reaches the scan", () => {
 			// And the restore is a delete: writing the declared number back
 			// would leave a row the next reconcile sweeps, so the restore and
 			// the sweep would disagree about what this config holds.
-			await clearConfigValue(db, configId, SCAN_DEPTH_AT)
+			await clearPipelineValue(db, STORY_RESPOND_SPEC_ID, SCAN_DEPTH_AT)
 		}
 	}, 60_000)
 })
@@ -304,10 +300,6 @@ describe("a lore node's guaranteed window reaches the scan", () => {
 	}, 60_000)
 
 	it("a value configured on the owner lane reaches all three lanes (R-7 P2)", async () => {
-		const configId = await selectedConfigId(
-			STORY_RESPOND_SPEC_ID,
-			respondSpecRow.id
-		)
 		const windowAt = (nodeKey: string) => ({
 			nodeKey,
 			slot: "params",
@@ -315,7 +307,7 @@ describe("a lore node's guaranteed window reaches the scan", () => {
 		})
 
 		// The same upsert the `scanDepth` case above uses, for the same reason.
-		await setConfigValue(db, configId, windowAt("gather.worldLore.read"), 3)
+		await setPipelineValue(db, STORY_RESPOND_SPEC_ID, windowAt("gather.worldLore.read"), 3)
 
 		try {
 			const windows = await scannedOn(
@@ -336,9 +328,9 @@ describe("a lore node's guaranteed window reaches the scan", () => {
 				DEFAULT_RETRIEVAL.scanDepth
 			)
 		} finally {
-			await clearConfigValue(
+			await clearPipelineValue(
 				db,
-				configId,
+				STORY_RESPOND_SPEC_ID,
 				windowAt("gather.worldLore.read")
 			)
 		}

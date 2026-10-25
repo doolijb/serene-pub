@@ -63,7 +63,7 @@
 	{#if mode === "limited"}
 		<div class="flex flex-col gap-1">
 			<label class="text-sm font-semibold" for="iteSupplyLimit">
-				How many exist <span class="text-error-500">*</span>
+				How many exist <span class="text-error-600-400">*</span>
 			</label>
 			<input
 				id="iteSupplyLimit"
@@ -77,7 +77,7 @@
 				bind:value={draft.supplyLimit}
 			/>
 			{#if problem}
-				<p class="text-error-700-300 text-xs" id="iteSupplyProblem" role="alert">{problem}</p>
+				<p class="text-error-600-400 text-xs" id="iteSupplyProblem" role="alert">{problem}</p>
 			{/if}
 		</div>
 	{/if}

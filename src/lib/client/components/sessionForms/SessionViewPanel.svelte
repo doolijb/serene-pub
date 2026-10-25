@@ -437,11 +437,11 @@
 		<img
 			src={badgeSrc}
 			alt=""
-			class="ring-surface-100-900 block size-9 rounded-[10px] object-cover object-top ring-2"
+			class="ring-surface-100-900 block size-9 rounded-base object-cover object-top ring-2"
 		/>
 	{:else}
 		<span
-			class="bg-surface-300-700 ring-surface-100-900 grid size-9 place-items-center rounded-[10px] ring-2"
+			class="bg-surface-300-700 ring-surface-100-900 grid size-9 place-items-center rounded-base ring-2"
 		>
 			<Icons.UsersRound
 				size={18}

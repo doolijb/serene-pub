@@ -1,4 +1,6 @@
 <script lang="ts">
+	import InlineError from "$lib/client/components/InlineError.svelte"
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * Admin › Scripts (18 §4d): the changelist (note 37, Django admin) of
 	 * typed text transforms — type, scope, status, the chains using each and
@@ -445,7 +447,7 @@
 						</button>
 					</div>
 					{#if importError}
-						<p class="text-error-600-400 text-sm">{importError}</p>
+						<InlineError>{importError}</InlineError>
 					{/if}
 				{:else}
 					<div class="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
@@ -465,15 +467,9 @@
 										>{item.typeName}</span
 									>
 									{#if item.known}
-										<span
-											class="preset-tonal-warning rounded-full px-1.5 py-0.5 text-[11px]"
-											>{item.blastRadius}</span
-										>
+										<Badge tone="warning" size="sm">{item.blastRadius}</Badge>
 									{:else}
-										<span
-											class="preset-tonal-error rounded-full px-1.5 py-0.5 text-[11px]"
-											>unknown type</span
-										>
+										<Badge tone="error" size="sm">unknown type</Badge>
 									{/if}
 								</label>
 								<p class="text-surface-600-400 mt-1 text-xs">

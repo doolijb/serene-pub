@@ -13,6 +13,7 @@
 import {
 	CHARACTER_LORE_TYPE_ID,
 	HISTORY_TYPE_ID,
+	isDerivedEntryTypeId,
 	ITEM_TYPE_ID,
 	LOCATION_TYPE_ID,
 	WORLD_LORE_TYPE_ID
@@ -34,7 +35,40 @@ export const LORE_SCOPES = [
 	"items"
 ] as const
 
-export type LoreScope = (typeof LORE_SCOPES)[number]
+/** One of the seven scopes every book offers. */
+export type CoreLoreScope = (typeof LORE_SCOPES)[number]
+
+/**
+ * 🚧 A **rules list** scope (PLAN-lorebook-kinds §C, 2026-10-21): one list of
+ * the book's rules — Vis Itineris's Weapons, Freeform's Things — named by its
+ * derived entry type, `list:core:entry/vis-itineris.weapons`. Qualified (R3):
+ * the `list:` prefix is what keeps it apart from the seven core scopes, whose
+ * spellings never change. Which lists a book draws is the workspace's call
+ * (`scopes.ts` `rulesListFacets`); the route only carries the address.
+ */
+export type ListScope = `list:${string}`
+
+export type LoreScope = CoreLoreScope | ListScope
+
+const LIST_SCOPE_PREFIX = "list:"
+
+/** The scope that draws one rules list. */
+export const listScope = (typeId: string): ListScope =>
+	`${LIST_SCOPE_PREFIX}${typeId}`
+
+/** Whether a scope is a rules list's — and names a derived entry type. */
+export function isListScope(scope: unknown): scope is ListScope {
+	return (
+		typeof scope === "string" &&
+		scope.startsWith(LIST_SCOPE_PREFIX) &&
+		isDerivedEntryTypeId(scope.slice(LIST_SCOPE_PREFIX.length))
+	)
+}
+
+/** The derived entry type a rules list scope draws, or null for a core scope. */
+export function listScopeType(scope: LoreScope): string | null {
+	return isListScope(scope) ? scope.slice(LIST_SCOPE_PREFIX.length) : null
+}
 
 /**
  * How the set is drawn — the route's spelling of each lens (`?lens=`), in the
@@ -66,13 +100,21 @@ export const DEFAULT_LENS: LoreLens = "list"
  * `places` is its `core:entry/location` entries — the one definition of a
  * place (2026-09-28), a pool kind since places plan B5.
  */
-export const SCOPE_KIND: Partial<Record<LoreScope, string>> = {
+export const SCOPE_KIND: Partial<Record<CoreLoreScope, string>> = {
 	cast: CHARACTER_LORE_TYPE_ID,
 	world: WORLD_LORE_TYPE_ID,
 	history: HISTORY_TYPE_ID,
 	scenes: "scene",
 	places: LOCATION_TYPE_ID,
 	items: ITEM_TYPE_ID
+}
+
+/**
+ * The pool kind any scope narrows to: a core scope's `SCOPE_KIND`, a rules
+ * list's own derived entry type, or undefined for `all`.
+ */
+export function scopeKind(scope: LoreScope): string | undefined {
+	return listScopeType(scope) ?? SCOPE_KIND[scope as CoreLoreScope]
 }
 
 export interface LoreRoute {
@@ -118,7 +160,7 @@ export interface LoreRoute {
 	settings?: boolean
 }
 
-export const SCOPE_LABELS: Record<LoreScope, string> = {
+export const SCOPE_LABELS: Record<CoreLoreScope, string> = {
 	all: "Everything",
 	cast: "Cast",
 	world: "World lore",
@@ -126,6 +168,19 @@ export const SCOPE_LABELS: Record<LoreScope, string> = {
 	scenes: "Scenes",
 	places: "Places",
 	items: "Items"
+}
+
+/**
+ * What a scope is called. A rules list is called by its own label
+ * (NOMENCLATURE §28: "Weapons", never the type id); `listLabel` is that label
+ * when the caller holds it, and the id's last part, worded, when it does not.
+ */
+export function scopeLabel(scope: LoreScope, listLabel?: string): string {
+	const typeId = listScopeType(scope)
+	if (typeId === null) return SCOPE_LABELS[scope as CoreLoreScope] ?? ""
+	if (listLabel) return listLabel
+	const tail = typeId.slice(typeId.lastIndexOf(".") + 1)
+	return tail.replace(/[-_]/g, " ").replace(/^\w/, (c) => c.toUpperCase())
 }
 
 export type LoreAction =
@@ -169,7 +224,7 @@ export function emptyRoute(): LoreRoute {
 }
 
 function isScope(value: string): value is LoreScope {
-	return (LORE_SCOPES as readonly string[]).includes(value)
+	return (LORE_SCOPES as readonly string[]).includes(value) || isListScope(value)
 }
 
 function isLens(value: string): value is LoreLens {
@@ -377,7 +432,9 @@ export function sameLineAndMoment(
 export function toHash(route: LoreRoute): string {
 	if (route.lorebookId === null) return ""
 	const r = normalize(route)
-	const path = [r.lorebookId, r.scope, r.entryId]
+	// A rules list's scope carries its type id, slashes and all, so the
+	// segment is encoded; a core scope's spelling encodes to itself.
+	const path = [r.lorebookId, encodeURIComponent(r.scope), r.entryId]
 		.filter((p) => p != null)
 		.join("/")
 	const query = new URLSearchParams()
@@ -419,6 +476,16 @@ function legacyScope(segment: string): LoreScope | null {
  */
 const SETTINGS_SEGMENT = "settings"
 
+/** A path segment as written, or itself when it is not valid encoding. */
+function decodeSegment(segment: string | undefined): string | undefined {
+	if (segment === undefined) return undefined
+	try {
+		return decodeURIComponent(segment)
+	} catch {
+		return segment
+	}
+}
+
 /**
  * Reads a fragment that is not ours, or is not an address at all, as "no
  * route" rather than as a default one: the panel's own state is a better
@@ -428,7 +495,8 @@ export function fromHash(hash: string): LoreRoute | null {
 	const raw = hash.startsWith("#") ? hash.slice(1) : hash
 	if (!raw.startsWith("lore=")) return null
 	const [path, search] = raw.slice("lore=".length).split("?")
-	const [bookPart, scopePart, entryPart] = path.split("/")
+	const [bookPart, rawScopePart, entryPart] = path.split("/")
+	const scopePart = decodeSegment(rawScopePart)
 	const lorebookId = Number(bookPart)
 	if (!bookPart || !Number.isFinite(lorebookId)) return null
 	if (!scopePart) return null
@@ -491,7 +559,7 @@ function lensFromQuery(
  */
 export function scopeForKinds(kinds: readonly string[]): LoreScope | null {
 	if (kinds.length !== 1) return null
-	const found = (Object.keys(SCOPE_KIND) as LoreScope[]).find(
+	const found = (Object.keys(SCOPE_KIND) as CoreLoreScope[]).find(
 		(scope) => SCOPE_KIND[scope] === kinds[0]
 	)
 	return found ?? null
@@ -500,11 +568,14 @@ export function scopeForKinds(kinds: readonly string[]): LoreScope | null {
 /** The breadcrumb, which is the route said out loud. */
 export function describeRoute(
 	route: LoreRoute,
-	names?: { book?: string; entry?: string }
+	names?: { book?: string; entry?: string; scope?: string }
 ): string[] {
 	if (route.lorebookId === null) return ["Lorebooks"]
 	if (route.settings) return [names?.book || "Lorebook", "Settings"]
-	const crumbs = [names?.book || "Lorebook", SCOPE_LABELS[route.scope]]
+	const crumbs = [
+		names?.book || "Lorebook",
+		scopeLabel(route.scope, names?.scope)
+	]
 	if (route.entryId != null && names?.entry) crumbs.push(names.entry)
 	return crumbs
 }

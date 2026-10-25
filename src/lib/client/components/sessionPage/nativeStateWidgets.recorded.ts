@@ -231,7 +231,7 @@ export const NATIVE_DREW: Record<string, unknown> = {
 		"alerts": [],
 		"cards": [],
 		"slots": [],
-		"empty": "Nothing in this session declares world stats. A genre or an extension adds them."
+		"empty": "This session's rules declare no attributes."
 	},
 	"stats {\"slots\":[]}": {
 		"widget": "stats",
@@ -239,7 +239,7 @@ export const NATIVE_DREW: Record<string, unknown> = {
 		"alerts": [],
 		"cards": [],
 		"slots": [],
-		"empty": "Nothing in this session declares stats. A genre, an extension or an administrator adds them, and they show up here."
+		"empty": "This session's rules declare no attributes."
 	},
 	"stats {\"castValues\":false}": {
 		"widget": "stats",

@@ -1023,7 +1023,7 @@
 		justify-content: center;
 		min-block-size: 10px;
 		border-radius: 0.35rem;
-		transition: min-block-size 120ms ease;
+		transition: min-block-size var(--transition-duration-base) ease;
 	}
 	.agap.drag-over {
 		min-block-size: 32px;

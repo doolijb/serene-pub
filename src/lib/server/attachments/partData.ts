@@ -11,6 +11,10 @@
  *    before it loads, and the strip has no layout shift.
  *  - `core:file` — `{ assetId, mime, name?, bytes? }`. `bytes` is the display
  *    form's size, so the strip's chip says "3 KB" without a second read.
+ *  - 🚧 `core:audio` / `core:video` (O5, 2026-10-21) — the `core:file` shape,
+ *    plus `duration` (seconds) when the file row knows it. A voice note, a
+ *    spoken reply, a clip: the media strip draws a player for each (O11).
+ *    Every other kind — a kind a later release brings — stays `core:file`.
  *
  * Every field but `assetId` is a copy of the file row at write time — what a
  * reader shows, never what decides access. One writer, so the three paths
@@ -19,7 +23,7 @@
 import type { FileRow } from "$lib/server/media"
 
 export interface MediaPartInput {
-	type: "core:image" | "core:file"
+	type: "core:image" | "core:audio" | "core:video" | "core:file"
 	data: Record<string, unknown>
 }
 
@@ -31,7 +35,8 @@ export function mediaPartFor(
 	file: Pick<
 		FileRow,
 		"id" | "kind" | "filename" | "width" | "height" | "displayMime" | "displayBytes"
-	>,
+	> &
+		Partial<Pick<FileRow, "durationMs">>,
 	opts: {
 		/** Force the part type — an outlet that was told it is attaching an image. */
 		as?: "image" | "file"
@@ -44,6 +49,13 @@ export function mediaPartFor(
 ): MediaPartInput {
 	const isImage = opts.as ? opts.as === "image" : file.kind === "image"
 	const name = file.filename ?? opts.name ?? null
+	const player: "core:audio" | "core:video" | null = opts.as
+		? null
+		: file.kind === "audio"
+			? "core:audio"
+			: file.kind === "video"
+				? "core:video"
+				: null
 	if (isImage)
 		return {
 			type: "core:image",
@@ -56,7 +68,7 @@ export function mediaPartFor(
 			}
 		}
 	return {
-		type: "core:file",
+		type: player ?? "core:file",
 		data: {
 			assetId: file.id,
 			// The display variant's mime, denormalised onto the file row so
@@ -64,7 +76,10 @@ export function mediaPartFor(
 			// pointer, which `createMedia` never leaves behind.
 			mime: file.displayMime ?? opts.mime ?? "application/octet-stream",
 			...(name ? { name } : {}),
-			...(known(file.displayBytes) ? { bytes: file.displayBytes } : {})
+			...(known(file.displayBytes) ? { bytes: file.displayBytes } : {}),
+			...(player && known(file.durationMs)
+				? { duration: file.durationMs / 1000 }
+				: {})
 		}
 	}
 }

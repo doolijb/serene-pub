@@ -181,14 +181,15 @@
 		<section class="flex flex-col gap-2">
 			{#if groupHeadings}
 				<!-- The shared group label (STYLE-GUIDE §6.4), no rule, with
-				     how many of the group's parameters are sent. Its row inset
-				     is dropped: the fields under it are flush. -->
+				     how many of the group's parameters are sent at its right
+				     edge (11px, polish parity L5). Its row inset is dropped:
+				     the fields under it are flush. -->
 				<ListGroupLabel
 					label={g.group}
 					trailing={count
-						? `· ${count.on} of ${count.total} sent`
+						? `${count.on} of ${count.total} sent`
 						: undefined}
-					class="px-0!"
+					class="justify-between px-0!"
 				/>
 			{/if}
 
@@ -229,9 +230,13 @@
 						     group of rows, named by this label's id. A parameter
 						     that is not sent has no control, so its label is
 						     its checkbox's. -->
+						<!-- The parameter's hint is the label's title (polish
+						     parity L5): one line per slider, not two; a screen
+						     reader hears it through the control's describedby. -->
 						<label
 							id="sv-{key}-label"
 							class="min-w-0 text-sm font-semibold"
+							title={describe(decl) || undefined}
 							for={offered
 								? `sv-${key}-on`
 								: decl.type === "enum" ||
@@ -256,11 +261,6 @@
 
 					{#if offered}
 						<p class="text-surface-600-400 text-xs">not sent</p>
-						{#if describe(decl)}
-							<p class="text-surface-600-400 text-xs">
-								{describe(decl)}
-							</p>
-						{/if}
 					{:else}
 						<div>
 							{#if decl.type === "number" || decl.type === "integer"}
@@ -270,6 +270,9 @@
 									<input
 										type="range"
 										id="sv-{key}"
+										aria-describedby={describe(decl)
+											? `sv-${key}-hint`
+											: undefined}
 										{min}
 										{max}
 										step={step(decl)}
@@ -346,6 +349,9 @@
 									<input
 										id="sv-{key}"
 										type="checkbox"
+										aria-describedby={describe(decl)
+											? `sv-${key}-hint`
+											: undefined}
 										class="accent-primary"
 										{disabled}
 										checked={!!values[key]}
@@ -360,6 +366,9 @@
 							{:else if decl.type === "string[]"}
 								<textarea
 									id="sv-{key}"
+									aria-describedby={describe(decl)
+										? `sv-${key}-hint`
+										: undefined}
 									class="textarea w-full text-sm"
 									rows="3"
 									placeholder="One per line"
@@ -381,6 +390,9 @@
 							{:else if decl.type === "text" && decl.format === "json"}
 								<textarea
 									id="sv-{key}"
+									aria-describedby={describe(decl)
+										? `sv-${key}-hint`
+										: undefined}
 									class="textarea w-full font-mono text-xs"
 									rows="4"
 									{disabled}
@@ -404,6 +416,9 @@
 								<input
 									id="sv-{key}"
 									type="text"
+									aria-describedby={describe(decl)
+										? `sv-${key}-hint`
+										: undefined}
 									class="input w-full"
 									{disabled}
 									placeholder={decl.default === undefined
@@ -416,7 +431,7 @@
 							{/if}
 
 							{#if describe(decl)}
-								<p class="text-surface-600-400 mt-1 text-xs">
+								<p id="sv-{key}-hint" class="sr-only">
 									{describe(decl)}
 								</p>
 							{/if}

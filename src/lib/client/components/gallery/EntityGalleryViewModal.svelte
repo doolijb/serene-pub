@@ -116,7 +116,7 @@
 			class="fixed inset-0 z-50 flex items-center justify-center p-4"
 		>
 			<Dialog.Content
-				class="card bg-surface-100-900 border-surface-300-700 flex max-h-[92vh] w-[min(95vw,1000px)] flex-col space-y-4 border p-4 shadow-xl"
+				class="card bg-surface-100-900 border-surface-200-800 flex max-h-[92vh] w-[min(95vw,1000px)] flex-col space-y-4 border p-4 shadow-xl"
 			>
 				<header class="flex shrink-0 items-center justify-between">
 					<h2 class="h2">
@@ -139,7 +139,7 @@
 						<img
 							src={selectedSrc}
 							alt={entity?.name ?? (image ? "Image" : "Avatar")}
-							class="border-surface-300-700 max-h-[72vh] max-w-full shrink-0 rounded-lg border object-contain"
+							class="border-surface-200-800 max-h-[72vh] max-w-full shrink-0 rounded-lg border object-contain"
 						/>
 					{:else}
 						<div class="text-surface-700-300 py-12 text-sm">
@@ -163,7 +163,7 @@
 										class="overflow-hidden rounded border-2 transition-colors {selectedSrc ===
 										img.url
 											? 'border-primary-500'
-											: 'border-surface-300-700 hover:border-surface-500'}"
+											: 'border-surface-200-800 hover:border-surface-500'}"
 										onclick={() => (selectedSrc = img.url)}
 										title="View"
 									>

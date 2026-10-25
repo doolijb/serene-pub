@@ -194,7 +194,7 @@ let n = 0
 async function session(
 	genreFields: Record<string, unknown> = {},
 	genreId = "core:genre/lair",
-	opts: { line?: boolean } = {}
+	opts: { line?: boolean; rules?: string } = {}
 ) {
 	const schema = await import("$lib/server/db/schema")
 	const { insertLegacy } = await import("$lib/server/messages/store")
@@ -214,7 +214,8 @@ async function session(
 			name: `Session ${tag}`,
 			genreId,
 			lorebookId: lorebook!.id,
-			genreFields
+			genreFields,
+			...(opts.rules ? { primaryRuleset: opts.rules } : {})
 		})
 		.returning()
 	await testDb
@@ -314,6 +315,51 @@ async function turn(w: World, label: string) {
 	return res
 }
 
+/** Rules that declare health, for a session whose turn proposes Brannoc's. */
+const HEALTH_RULES = "core:ruleset/vis-itineris@1"
+
+/**
+ * What a turn's run files against its own rows: a world value at the plan
+ * row, and a proposal of Brannoc's health at his line, both written as the
+ * planning run (`run:<id>`). Health is an attribute the session's rules
+ * declare, so the session plays {@link HEALTH_RULES}
+ * (`session({}, "core:genre/lair", { rules: HEALTH_RULES })`). The retake's
+ * cascade is what these tests hold; which pipeline files the writes is not.
+ */
+async function fileAsTheTurn(w: World) {
+	const rows = await turnRows(w.session.id)
+	const planRow = rows.find((r) => r.characterId == null)!
+	const line = rows.find((r) => r.characterId === w.brannoc)!
+	const { creatingRunOf } = await import("$lib/server/sessions/turnYield")
+	const run = await creatingRunOf(testDb as any, planRow.id)
+	const ctx = (messageId: number) =>
+		({ sessionId: w.session.id, updatedBy: `run:${run!.runId}`, messageId, ownAnchor: true }) as any
+	const { applyChange, proposeChange } = await import("$lib/server/state/write")
+	await applyChange(testDb as any, ctx(planRow.id), {
+		owner: { kind: "session", id: w.session.id },
+		slotId: "core:slot/location@1",
+		value: "The Flooded Stair"
+	} as any)
+	await proposeChange(testDb as any, ctx(line.id), {
+		owner: { kind: "session_cast", id: w.brannoc },
+		slotId: "core:slot/hp@1",
+		value: 8
+	} as any)
+	// Landed while the run was going, as the keeper's did: what a run wrote
+	// after it ended is somebody's acceptance, and stays (`keepLaterState`).
+	const schema = await import("$lib/server/db/schema")
+	const during = new Date(run!.createdAt.getTime() - 1000)
+	await testDb
+		.update(schema.attributeValues)
+		.set({ createdAt: during })
+		.where(eq(schema.attributeValues.updatedBy, `run:${run!.runId}`))
+	await testDb
+		.update(schema.stateProposals)
+		.set({ createdAt: during })
+		.where(eq(schema.stateProposals.proposedBy, `run:${run!.runId}`))
+	return run!
+}
+
 /** `sessions:retakeTurn`, as `userId` presses it. */
 async function retake(
 	w: World,
@@ -374,7 +420,7 @@ async function respondRuns(sessionId: number) {
 		.select({ specSlug: schema.pipelineRuns.specSlug })
 		.from(schema.pipelineRuns)
 		.where(eq(schema.pipelineRuns.sessionId, sessionId))
-	return runs.filter((r) => r.specSlug === "core:spec/lair-respond").length
+	return runs.filter((r) => r.specSlug === "core:spec/lair-reply").length
 }
 
 async function press(w: World, action: string, text: string, recipients?: string[]) {
@@ -400,8 +446,9 @@ async function press(w: World, action: string, text: string, recipients?: string
 describe("R2 · retake deletes the turn's yield and takes the turn again", () => {
 	test("a cast turn: the narrator's row and both delvers' go, with their proposals, and a new turn runs", async () => {
 		proseCalls.length = 0
-		const w = await session({ trustNarrator: false })
+		const w = await session({}, "core:genre/lair", { rules: HEALTH_RULES })
 		await turn(w, "the first turn")
+		await fileAsTheTurn(w)
 		const before = await turnRows(w.session.id)
 		expect(before.map((r) => r.characterId)).toEqual([
 			null,
@@ -471,8 +518,9 @@ describe("R2 · retake deletes the turn's yield and takes the turn again", () =>
 	})
 
 	test("applied state anchored to the turn goes with it", async () => {
-		const w = await session({ trustNarrator: true })
+		const w = await session({}, "core:genre/lair", { rules: HEALTH_RULES })
 		await turn(w, "the trusted turn")
+		await fileAsTheTurn(w)
 		const oldIds = (await turnRows(w.session.id)).map((r) => r.id)
 		const schema = await import("$lib/server/db/schema")
 		const anchored = async () =>
@@ -599,7 +647,7 @@ describe("R2 · what somebody else wrote against the turn survives a retake", ()
 		Object.values(state.cast).find((c: any) => c?.name === "Brannoc") as any
 
 	test("a Nudge given after the turn survives, re-anchored to the master's line", async () => {
-		const w = await session({ trustNarrator: true })
+		const w = await session({})
 		await turn(w, "the turn before the nudge")
 		const turnIds = (await turnRows(w.session.id)).map((r) => r.id)
 		expect(
@@ -622,7 +670,7 @@ describe("R2 · what somebody else wrote against the turn survives a retake", ()
 	})
 
 	test("a whisper given after the turn survives, re-anchored to the master's line", async () => {
-		const w = await session({ trustNarrator: true })
+		const w = await session({})
 		await turn(w, "the turn before the whisper")
 		const turnIds = (await turnRows(w.session.id)).map((r) => r.id)
 		expect(
@@ -652,25 +700,12 @@ describe("R2 · what somebody else wrote against the turn survives a retake", ()
 		expect(kept?.validFromMessageId).toBe(w.line)
 	})
 
-	test("the run's own keeper writes still cascade, beside a Nudge on the same rows that survives", async () => {
-		const w = await session({ trustNarrator: true })
+	test("the run's own writes still cascade, beside a Nudge on the same rows that survives", async () => {
+		const w = await session({}, "core:genre/lair", { rules: HEALTH_RULES })
 		await turn(w, "the trusted turn")
+		const filed = await fileAsTheTurn(w)
 		const turnIds = (await turnRows(w.session.id)).map((r) => r.id)
-		const [run] = await (async () => {
-			const schema = await import("$lib/server/db/schema")
-			return testDb
-				.select({ runId: schema.pipelineRuns.runId })
-				.from(schema.pipelineRuns)
-				.where(
-					and(
-						eq(schema.pipelineRuns.sessionId, w.session.id),
-						eq(
-							schema.pipelineRuns.specSlug,
-							"core:spec/lair-respond"
-						)
-					)
-				)
-		})()
+		const run = filed
 		const keeper = (await anchoredTo(turnIds)).values.filter(
 			(v) => v.updatedBy === `run:${run!.runId}`
 		)
@@ -687,14 +722,11 @@ describe("R2 · what somebody else wrote against the turn survives a retake", ()
 	})
 
 	test("🚧 what the turn's run filed under the person's own line goes with it too (the 100-turn walk, B8)", async () => {
-		const w = await session({ trustNarrator: true })
+		const w = await session({}, "core:genre/lair", { rules: HEALTH_RULES })
 		await turn(w, "the turn that files under the line")
+		const run = await fileAsTheTurn(w)
 		const turnIds = (await turnRows(w.session.id)).map((r) => r.id)
 		const schema = await import("$lib/server/db/schema")
-		const [run] = await testDb
-			.select({ runId: schema.pipelineRuns.runId })
-			.from(schema.pipelineRuns)
-			.where(and(eq(schema.pipelineRuns.sessionId, w.session.id), eq(schema.pipelineRuns.specSlug, "core:spec/lair-respond")))
 		const keeper = (await anchoredTo(turnIds)).values.filter((v) => v.updatedBy === `run:${run!.runId}`)
 		expect(keeper.length).toBeGreaterThan(0)
 		// A seated card's change keeps that member's own open anchor — the
@@ -708,8 +740,9 @@ describe("R2 · what somebody else wrote against the turn survives a retake", ()
 	})
 
 	test("a proposal the person applied after the turn: the value survives on a valid anchor, the proposal goes", async () => {
-		const w = await session({ trustNarrator: false })
+		const w = await session({}, "core:genre/lair", { rules: HEALTH_RULES })
 		await turn(w, "the proposing turn")
+		await fileAsTheTurn(w)
 		const turnIds = (await turnRows(w.session.id)).map((r) => r.id)
 		const { proposals } = await anchoredTo(turnIds)
 		const hp = proposals.find(
@@ -738,7 +771,7 @@ describe("R2 · what somebody else wrote against the turn survives a retake", ()
 	})
 
 	test("a retake of the very first turn: nothing survives before the yield, so the Nudge is unanchored", async () => {
-		const w = await session({ trustNarrator: true }, "core:genre/lair", {
+		const w = await session({}, "core:genre/lair", {
 			line: false
 		})
 		await turn(w, "the opening turn")

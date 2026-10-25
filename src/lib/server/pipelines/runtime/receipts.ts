@@ -338,50 +338,55 @@ export async function saveReceipt(
 		scope.specVersionId != null && scope.specHash
 			? { id: scope.specVersionId, hash: scope.specHash }
 			: await resolveSpecVersion(db, receipt.specId, receipt.specVersion)
+	/** The run's row as stored, for a receipt in the shape it is kept (`stored`). */
+	const runRow = (stored: Receipt) => ({
+		runId: receipt.runId,
+		specSlug: receipt.specId,
+		specVersion: receipt.specVersion,
+		specVersionId: scope.specVersionId ?? pinned.id,
+		specHash: scope.specHash ?? pinned.hash,
+		sessionId: scope.sessionId ?? null,
+		userId: scope.userId ?? null,
+		outcome: receipt.outcome,
+		haltNodeKey: receipt.haltNodeKey ?? null,
+		haltReason: receipt.haltReason ?? null,
+		triggerSource: receipt.triggerSource,
+		// 🚧 The registration that started it (PLAN-layering D7, LS2).
+		triggerFamily: receipt.triggerFamily ?? null,
+		registrationKey: receipt.registrationKey ?? null,
+		seed: receipt.seed,
+		/**
+		 * ⚠ **"Nothing was produced" — not "the executor halted early".**
+		 *
+		 * Since 09-B B4 the two agree by construction: a preview is a
+		 * dry run, its outlets commit nothing, and every reply runs to
+		 * the end and writes through its own outlet. The rule stays
+		 * stated in both halves because the column's three consumers —
+		 * `pipelines:sessionEntryUsage` (`is_preview = false`),
+		 * `lastRunFor` and every panel reading them — ask "did this run
+		 * leave something behind", and leaving something behind is what
+		 * makes a run not a preview, whichever artifact it was.
+		 */
+		isPreview: artifacts.length === 0 && Boolean(receipt.preview),
+		// Lineage (01 §8; U5d): what the executor stamped from
+		// `RunOptions.lineage`, or a root's nothing at depth 0.
+		parentRunId: receipt.parentRunId ?? null,
+		rootRunId: receipt.rootRunId ?? null,
+		depth: receipt.depth ?? 0,
+		startedAt: new Date(receipt.startedAt),
+		endedAt: new Date(receipt.endedAt),
+		elapsedMs: Math.max(0, receipt.endedAt - receipt.startedAt),
+		tokensSpent: receipt.consumption?.tokens ?? 0,
+		receipt: stored as unknown as Record<string, unknown>
+	})
+	/** Set once the run's row is in: a later part failing never writes a second. */
+	let landed: number | null = null
 	try {
 		const [row] = await db
 			.insert(schema.pipelineRuns)
-			.values({
-				runId: receipt.runId,
-				specSlug: receipt.specId,
-				specVersion: receipt.specVersion,
-				specVersionId: scope.specVersionId ?? pinned.id,
-				specHash: scope.specHash ?? pinned.hash,
-				sessionId: scope.sessionId ?? null,
-				userId: scope.userId ?? null,
-				outcome: receipt.outcome,
-				haltNodeKey: receipt.haltNodeKey ?? null,
-				haltReason: receipt.haltReason ?? null,
-				triggerSource: receipt.triggerSource,
-				seed: receipt.seed,
-				/**
-				 * ⚠ **"Nothing was produced" — not "the executor halted early".**
-				 *
-				 * Since 09-B B4 the two agree by construction: a preview is a
-				 * dry run, its outlets commit nothing, and every reply runs to
-				 * the end and writes through its own outlet. The rule stays
-				 * stated in both halves because the column's three consumers —
-				 * `pipelines:sessionEntryUsage` (`is_preview = false`),
-				 * `lastRunFor` and every panel reading them — ask "did this run
-				 * leave something behind", and leaving something behind is what
-				 * makes a run not a preview, whichever artifact it was.
-				 */
-				isPreview: artifacts.length === 0 && Boolean(receipt.preview),
-				// Lineage (01 §8; U5d): what the executor stamped from
-				// `RunOptions.lineage`, or a root's nothing at depth 0.
-				parentRunId: receipt.parentRunId ?? null,
-				rootRunId: receipt.rootRunId ?? null,
-				depth: receipt.depth ?? 0,
-				startedAt: new Date(receipt.startedAt),
-				endedAt: new Date(receipt.endedAt),
-				elapsedMs: Math.max(0, receipt.endedAt - receipt.startedAt),
-				tokensSpent: receipt.consumption?.tokens ?? 0,
-				receipt: boundedForStorage(receipt) as unknown as Record<
-					string,
-					unknown
-				>
-			})
+			.values(runRow(boundedForStorage(receipt)))
 			.returning()
+		landed = row.id
 
 		if (receipt.nodes?.length)
 			await db.insert(schema.pipelineRunNodes).values(
@@ -445,8 +450,69 @@ export async function saveReceipt(
 				"unaffected:",
 			err
 		)
+		if (landed !== null) return landed
+		return await saveCompactReceipt(db, receipt, runRow, artifacts, err)
+	}
+}
+
+/**
+ * 🚧 **The run's row, whatever its payloads** (lair fix 2, 2026-10-22): a
+ * receipt the store refused — a payload no `jsonb` takes (a NUL, half a
+ * surrogate pair out of a model's stream), a value too odd to bind — is kept
+ * compact instead: the run's facts and its artifacts, its nodes' payloads
+ * left out and every string made storable, with a note saying why. A finished
+ * line whose run left no row at all (the owner's Lair, run b6c9a68d…) answers
+ * no "why did this happen" afterwards; a compact one still names the run.
+ */
+async function saveCompactReceipt(
+	db: Db,
+	receipt: Receipt,
+	runRow: (stored: Receipt) => Record<string, unknown>,
+	artifacts: RunArtifact[],
+	why: unknown
+): Promise<number | null> {
+	try {
+		const compact = storableStrings({
+			...receipt,
+			nodes: (receipt.nodes ?? []).map(({ input: _i, output: _o, ...n }) => n) as Receipt["nodes"],
+			compact: true,
+			notes: [
+				...(receipt.notes ?? []),
+				`stored compact, without its nodes' payloads: the full receipt was refused (${withoutQueryText(
+					why instanceof Error ? why.message : String(why)
+				)})`
+			]
+		} as Receipt)
+		const [row] = await db
+			.insert(schema.pipelineRuns)
+			.values(runRow(compact) as never)
+			.returning()
+		if (artifacts.length)
+			await db.insert(schema.pipelineRunArtifacts).values(
+				artifacts.map((a, i) => ({
+					runId: row.id,
+					seq: i,
+					kind: a.kind,
+					entityId: a.entityId,
+					action: a.action,
+					nodeKey: a.nodeKey ?? null
+				}))
+			)
+		return row.id
+	} catch (err) {
+		console.warn("[pipelines] the compact receipt was refused too:", err)
 		return null
 	}
+}
+
+/** Lone surrogates and NULs, which no `jsonb` value may hold. */
+const UNSTORABLE = /\u0000|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g
+
+/** A value with every string made storable — `UNSTORABLE` read as U+FFFD. @internal */
+export function storableStrings<T>(value: T): T {
+	return JSON.parse(
+		JSON.stringify(value, (_key, v) => (typeof v === "string" ? v.replace(UNSTORABLE, "\ufffd") : v))
+	) as T
 }
 
 /** First occurrence wins, so an artifact keeps the seq it was produced at. */

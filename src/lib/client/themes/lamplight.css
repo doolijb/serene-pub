@@ -12,7 +12,10 @@
  */
 [data-theme='lamplight'] {
 	--spacing: 0.25rem;
-	--text-scaling: 1.067;
+	/* 1, not hamlindigo's 1.067 (ruled 2026-10-24): the closed type scale (STYLE-GUIDE §3.2)
+	   is literal — `text-xs` 12, `text-chip` 13, `text-sm` 14, `text-lead` 15 — so its rows
+	   stay distinct instead of collapsing onto one another. */
+	--text-scaling: 1;
 	--typo-base--font-family: 'Funnel Sans', Seravek, 'Gill Sans Nova', Ubuntu, Calibri, 'DejaVu Sans', sans-serif;
 	--typo-base--font-size: inherit;
 	--typo-base--color-light: var(--color-surface-950);
@@ -41,7 +44,7 @@
 	--typo-heading--text-transform: inherit;
 	--typo-anchor--font-family: inherit;
 	--typo-anchor--font-size: inherit;
-	--typo-anchor--color-light: var(--color-primary-700);
+	--typo-anchor--color-light: var(--color-primary-950);
 	--typo-anchor--color-dark: var(--color-primary-500);
 	--typo-anchor--line-height: inherit;
 	--typo-anchor--font-weight: inherit;
@@ -77,13 +80,22 @@
 	--typo-anchor--focus--text-decoration-thickness: inherit;
 	--typo-anchor--focus--text-underline-offset: inherit;
 	--typo-anchor--focus--text-underline-position: inherit;
-	--radius-base: 0.375rem;
+	/* 10px: the house radius for rows, inputs, chips and buttons, so
+	   `rounded-base` is the literal it replaced (L13, 2026-10-24; STYLE-GUIDE §4.1). */
+	--radius-base: 0.625rem;
 	--radius-container: 0.75rem;
 	--default-border-width: 1px;
 	--default-outline-width: 1px;
 	--default-ring-width: 1px;
 	--corner-shape-base: inherit;
 	--corner-shape-container: inherit;
+	/* Light-mode hooks app.css reads (STYLE-GUIDE §2.6, 2026-10-24). The ladder is
+	   lifted (500 is a dark-mode accent at 80%), so gold as TEXT on a light ground
+	   takes 950 (6.3:1 on surface-50; 700 measured 2.5:1), and the filled
+	   primary takes 600 with its dark ink (8.9:1). Anchors follow the text stop. */
+	--sp-primary-ink-light: var(--color-primary-950);
+	--sp-primary-fill-light: var(--color-primary-600);
+	--sp-primary-fill-ink-light: var(--color-primary-contrast-600);
 	--color-root-bg-light: oklch(1 0 0 / 1);
 	--color-root-bg-dark: var(--color-surface-950);
 	--color-brand-light: var(--color-primary-500);

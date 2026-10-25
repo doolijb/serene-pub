@@ -372,7 +372,10 @@ describe("the eager load stays in one place", () => {
 			"src/lib/server/utils/getConnectionAdapter.ts",
 			"src/lib/server/utils/getEmbeddingAdapter.ts",
 			"src/lib/server/utils/getImageAdapter.ts",
-			"src/lib/server/utils/getNerAdapter.ts"
+			"src/lib/server/utils/getNerAdapter.ts",
+			// The transcription family's loader (O9): one key lookup, one thunk
+			// awaited — the shape of `getEmbeddingAdapter`.
+			"src/lib/server/utils/getTranscriptionAdapter.ts"
 		]
 		const found = [
 			...new Set(

@@ -54,7 +54,7 @@
  * because a list is presentation and a refusal is the law.
  */
 
-import { and, eq, inArray, isNotNull } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	CORE_ACTIONS,
@@ -79,6 +79,8 @@ import {
 	// resolve what only the host holds, then call the judge and quote it.
 	audienceVerdict as judgeAudience,
 	enablementVerdict as judgeEnablement,
+	evaluateCondition,
+	type ConditionDecl,
 	type Audience,
 	type EnabledWhen,
 	type I18n,
@@ -320,12 +322,20 @@ export async function listSessionActions(
 	// genre's — the Lair's Sanctum offers no Pick and no Regenerate.
 	const turnControls = resolveTurnControls(genre?.shape, channel)
 	const values = await publishedValues(db, sessionId, opts.starting ? { starting: true } : {})
+	// 🚧 Delete is offered only where a pipeline deletes (RF fix 5, owner
+	// ruling 2026-10-23): an event pipeline registered on
+	// `message-deletion-asked` here. Core registers none, so by default no
+	// message offers Delete; Hide and Back are the recommended ways.
+	const { deletionOffered } = await import("$lib/server/messages/deletion")
+	const deletes = await deletionOffered(db, sessionId)
 	const core = CORE_ACTIONS.filter((a) =>
 		a.floor
 			? true
 			: isTurnControl(a.key)
 				? turnControlPresent(turnControls, a.key, values).present
-				: (verbs as Record<string, boolean>)[a.key] !== false
+				: a.key === "delete"
+					? deletes && (verbs as Record<string, boolean>).delete !== false
+					: (verbs as Record<string, boolean>)[a.key] !== false
 	)
 
 	// 2. Audience, resolved once for every reference any of them names.
@@ -344,17 +354,21 @@ export async function listSessionActions(
 	// 4. Enablement (U5e): the published values once, the session's overrides
 	//    once, then each action's effective predicate set against them. The
 	//    `item.*` half rides to the client.
-	const overrides = await sessionEnabledWhenOverrides(db, sessionId, genreId)
+	const { overrides, registered } = await enabledWhenLayers(db, sessionId, genreId)
 	const enablement = (
 		identity: string,
 		own: ReadonlyArray<EnabledWhen> | undefined
 	): Pick<SessionAction, "enabled" | "reason" | "itemPredicates"> => {
-		const verdict = enablementOf(
-			effectiveEnabledWhen(
-				own,
-				genreEnabledWhen(genreId, identity),
-				overrides.get(identity)
+		const verdict = withConditions(
+			enablementOf(
+				effectiveEnabledWhen(
+					own,
+					genreEnabledWhen(genreId, identity),
+					overrides.get(identity)
+				),
+				values
 			),
+			registered.get(identity),
 			values
 		)
 		return {
@@ -390,6 +404,11 @@ export async function listSessionActions(
 		// Present-when (W-GATE D3): an action with nothing to act on is left
 		// out, not greyed — the same verdict the door reads (`absentRefusal`).
 		if (!actionPresent(a, values)) continue
+		// 🚧 S3: a registration `when` over the session's rules alone — Story's
+		// Rest while the rules offer their own — is a fact of the session, not
+		// of the moment: the action is left out, not greyed, so the composer
+		// never shows two Rests. The door refuses it the same (`withConditions`).
+		if (rulesExclude(registered.get(actionIdentity(a)), values)) continue
 		const itemGated = a.audience.act.includes("item")
 		place(
 			{
@@ -617,35 +636,152 @@ export function effectiveEnabledWhen(
 }
 
 /**
- * The session-scope overrides, by action identity — the `enabled_when`
- * column of `pipeline_bindings` rows this session holds for its genre
- * (plans/31 V2: the row's `subject` is the identity). Read once per
- * listing; the door reads the one it needs.
+ * The session-scope overrides, by action identity (U5e) — 🚧 since
+ * PLAN-layering D7 a registration's `when` (R31): the effective
+ * registration of an action, when any layer gave it one (the genre's
+ * defaults, the preset, the session's own row), and a session row's `when`
+ * on an action no registration carries (core's verbs). The `enabled_when`
+ * column of `pipeline_bindings` is ⏳ kept unread (the data upgrade moved it).
+ * Read once per listing; the door reads the one it needs.
  */
 export async function sessionEnabledWhenOverrides(
 	db: Db,
 	sessionId: number,
 	genreId: string
 ): Promise<Map<string, EnabledWhen[]>> {
-	const rows = await db
-		.select({
-			subject: schema.pipelineBindings.subject,
-			enabledWhen: schema.pipelineBindings.enabledWhen
-		})
-		.from(schema.pipelineBindings)
-		.where(
-			and(
-				eq(schema.pipelineBindings.scopeKind, "session"),
-				eq(schema.pipelineBindings.scopeId, sessionId),
-				eq(schema.pipelineBindings.genreId, genreId),
-				isNotNull(schema.pipelineBindings.enabledWhen)
-			)
-		)
-	const out = new Map<string, EnabledWhen[]>()
-	for (const r of rows)
-		if (r.enabledWhen) out.set(r.subject, normalizeEnabledWhen(r.enabledWhen))
-	return out
+	return (await enabledWhenLayers(db, sessionId, genreId)).overrides
 }
+
+/**
+ * 🚧 Both halves at once: the session's own overrides (replace, U5e) and the
+ * `when` a genre's defaults or a preset gave an action's registration (R31)
+ * — which ADDS to the action's own predicates, never lifts them: an author
+ * narrowing when an action may fire must not undo why it declared its own.
+ */
+export async function enabledWhenLayers(
+	db: Db,
+	sessionId: number,
+	genreId: string
+): Promise<{ overrides: Map<string, EnabledWhen[]>; registered: Map<string, ConditionDecl> }> {
+	void genreId
+	const overrides = new Map<string, EnabledWhen[]>()
+	const registered = new Map<string, ConditionDecl>()
+	const { effectiveRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
+	const resolved = await effectiveRegistrations(db, sessionId)
+	if (!resolved) return { overrides, registered }
+	for (const row of resolved.rows.session) {
+		if (!row.when || row.dropped) continue
+		const identity = row.triggerFamily === "action" ? row.triggerRef : !row.triggerFamily ? row.triggerRef : null
+		if (identity && identity.includes("#")) overrides.set(identity, enabledWhenOfCondition(row.when))
+	}
+	// 🚧 A registration's `when` stays a condition (lane 2): judged by the
+	// SDK's `evaluateCondition`, which knows `any`, `not` and the any-member
+	// `*` segment the enabled-when list cannot say.
+	for (const r of resolved.effective)
+		if (r.trigger.family === "action" && r.when && !overrides.has(r.trigger.action))
+			registered.set(r.trigger.action, r.when as ConditionDecl)
+	return { overrides, registered }
+}
+
+/** 🚧 Why an action a `when` over the session's rules turned off is refused at the door (S3). */
+export const RULES_OFFER_THEIR_OWN = { en: "This session's rules offer their own." }
+
+/** 🚧 Every leaf of a condition reads the session's rules (`rules.*`, S3) — never a moment's state. */
+function readsOnlyRules(c: unknown): boolean {
+	if (!c || typeof c !== "object") return false
+	const x = c as { on?: unknown; all?: unknown[]; any?: unknown[]; not?: unknown }
+	if (typeof x.on === "string") return x.on === "rules" || x.on.startsWith("rules.")
+	const kids = [...(x.all ?? []), ...(x.any ?? []), ...(x.not ? [x.not] : [])]
+	return kids.length > 0 && kids.every(readsOnlyRules)
+}
+
+/**
+ * 🚧 Is an action left out of the listing by its registration's `when` (S3):
+ * a condition over the session's rules alone that does not hold. A `when`
+ * over anything else greys the action instead (`withConditions`).
+ */
+export function rulesExclude(condition: ConditionDecl | undefined, doc: PublishedValues): boolean {
+	return !!condition && readsOnlyRules(condition) && !evaluateCondition(condition, doc)
+}
+
+/** Does a condition read the message row (`item.*`)? */
+function readsItem(c: unknown): boolean {
+	if (!c || typeof c !== "object") return false
+	const x = c as { on?: unknown; all?: unknown[]; any?: unknown[]; not?: unknown }
+	if (typeof x.on === "string") return x.on === "item" || x.on.startsWith("item.")
+	return [...(x.all ?? []), ...(x.any ?? []), ...(x.not ? [x.not] : [])].some(readsItem)
+}
+
+/** The leaves of a condition that is one leaf or an `all` of leaves — the enabled-when list it is — else null. */
+function leafList(c: unknown): EnabledWhen[] | null {
+	const x = c as { on?: unknown; all?: unknown[] } | null
+	if (!x || typeof x !== "object") return null
+	const leaves = typeof x.on === "string" ? [x] : Array.isArray(x.all) ? x.all : null
+	if (!leaves || !leaves.every((l) => l && typeof (l as { on?: unknown }).on === "string")) return null
+	if (leaves.some((l) => String((l as { on: string }).on).split(".").includes("*"))) return null
+	return normalizeEnabledWhen(leaves as never)
+}
+
+/** The reason of the first leaf that does not hold, read down `all` and `not`; undefined when none says one. */
+function failingReason(c: unknown, doc: unknown): unknown {
+	const x = c as { on?: unknown; reason?: unknown; all?: unknown[]; any?: unknown[] } | null
+	if (!x || typeof x !== "object") return undefined
+	if (evaluateCondition(x as ConditionDecl, doc)) return undefined
+	if (typeof x.on === "string") return x.reason
+	for (const child of x.all ?? []) {
+		const r = failingReason(child, doc)
+		if (r !== undefined) return r
+	}
+	for (const child of x.any ?? []) {
+		const r = (child as { reason?: unknown } | null)?.reason
+		if (r !== undefined) return r
+	}
+	return undefined
+}
+
+/**
+ * 🚧 A predicate verdict narrowed by a registration's `when` (R31; lane 2):
+ * the condition is judged by `evaluateCondition` over the same document. A
+ * listing with no row sets an `item.*` condition aside for the client when
+ * it is the enabled-when list it can carry, and otherwise leaves it to the
+ * door, which has the row. The first failing leaf's `reason` is the
+ * sentence.
+ */
+export function withConditions(
+	verdict: EnablementVerdict,
+	condition: ConditionDecl | undefined,
+	doc: PublishedValues
+): EnablementVerdict {
+	if (!condition || !verdict.enabled) return verdict
+	if (!doc.item && readsItem(condition)) {
+		const leaves = leafList(condition)
+		return leaves ? { ...verdict, itemPredicates: [...verdict.itemPredicates, ...leaves] } : verdict
+	}
+	if (evaluateCondition(condition, doc)) return verdict
+	// 🚧 S3: a `when` over the session's rules alone, with no reason of its own, says why in plain words.
+	const reason = failingReason(condition, doc) ?? (readsOnlyRules(condition) ? RULES_OFFER_THEIR_OWN : undefined)
+	return {
+		enabled: false,
+		...(reason !== undefined ? { reason: { i18n: localeMapOf(reason as never) } } : {}),
+		itemPredicates: []
+	}
+}
+
+/**
+ * A registration's `when` read as the enabled-when list it replaces: `{ all:
+ * [...] }` of leaves is the list; a leaf is a list of one. (The SDK's
+ * condition leaf IS the enabled-when shape, `reason` included.)
+ */
+export function enabledWhenOfCondition(when: unknown): EnabledWhen[] {
+	const w = when as { all?: unknown[] } | null
+	if (w && Array.isArray(w.all)) return normalizeEnabledWhen(w.all as never)
+	return normalizeEnabledWhen([w] as never)
+}
+
+/** An enabled-when list as a registration's `when` — `{ all: [...] }`; an empty list lifts every predicate. */
+export const conditionOfEnabledWhen = (list: ReadonlyArray<EnabledWhen>): Record<string, unknown> => ({
+	all: [...list]
+})
 
 /** What one predicate set says over one published-values document. */
 export interface EnablementVerdict {
@@ -751,16 +887,18 @@ export async function enablementVerdict(
 		messageId != null ? await itemValuesFor(db, sessionId, messageId, actor) : null
 	if (messageId != null && !item) return refusal(NOT_THIS_SESSION)
 
-	const overrides = await sessionEnabledWhenOverrides(db, sessionId, genreId)
+	const { overrides, registered } = await enabledWhenLayers(db, sessionId, genreId)
 	const identity = actionIdentity(action)
 	const preds = effectiveEnabledWhen(
 		action.enabledWhen,
 		genreEnabledWhen(genreId, identity),
 		overrides.get(identity)
 	)
-	if (!preds.length) return { enabled: true, itemPredicates: [] }
+	const condition = registered.get(identity)
+	if (!preds.length && !condition) return { enabled: true, itemPredicates: [] }
 	const values = await publishedValues(db, sessionId, opts)
-	const verdict = enablementOf(preds, item ? { ...values, item } : values)
+	const doc = item ? { ...values, item } : values
+	const verdict = withConditions(enablementOf(preds, doc), condition, doc)
 	// A predicate over `item.*` with no row to read it from (review W4): the
 	// door has nothing to judge, so it does not admit — the first such
 	// predicate's reason is the sentence, as it is for the client's palette

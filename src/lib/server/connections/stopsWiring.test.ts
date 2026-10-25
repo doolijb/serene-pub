@@ -56,9 +56,10 @@ function walk(dir: string, out: string[] = []): string[] {
  * Sites that build an adapter from a family with NO PROMPT, named rather than
  * pattern-matched.
  *
- * None of `BaseImageAdapter`, `BaseEmbeddingAdapter` or `BaseNerAdapter` has a
- * prompt, a completion template or a stop path: `generateImage(req, opts)`,
- * `embedText(req, opts)` and `extractEntities(req, opts)` each take their whole
+ * None of `BaseImageAdapter`, `BaseEmbeddingAdapter`, `BaseNerAdapter` or
+ * `BaseTranscriptionAdapter` has a prompt, a completion template or a stop
+ * path: `generateImage(req, opts)`, `embedText(req, opts)`,
+ * `extractEntities(req, opts)` and `transcribeAudio(…)` each take their whole
  * request as a parameter, so a stop list would be meaningless on any of them.
  * Listed by file so each exemption is a decision somebody made rather than a
  * regex that happened not to match.
@@ -80,7 +81,11 @@ const NO_PROMPT = new Set([
 	"lib/server/connections/modelSync.ts",
 	// `leasedNerAdapter` constructs the NER adapter `getNerAdapter` returns, for
 	// the annotation lane's `extractEntities`. An entity call has no prompt.
-	"lib/server/ner/broker.ts"
+	"lib/server/ner/broker.ts",
+	// `transcribeFiles` constructs the TRANSCRIPTION adapter
+	// `getTranscriptionAdapter` returns (O9) for `transcribeAudio`: audio in,
+	// text out, no prompt and no completion to stop.
+	"lib/server/attachments/transcribe.ts"
 ])
 
 interface Site {

@@ -10,6 +10,7 @@
 	 * empty confirm, and both are what a replace-set needs.
 	 */
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
+	import { avatarSrc } from "$lib/client/utils/media"
 	import * as Icons from "@lucide/svelte"
 	import { getContext, untrack } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
@@ -121,7 +122,7 @@
 			class="fixed inset-0 z-50 flex items-center justify-center p-4"
 		>
 			<Dialog.Content
-				class="card bg-surface-100-900 border-surface-300-700 flex max-h-[85dvh] w-[min(92vw,480px)] flex-col gap-3 border p-4 shadow-xl"
+				class="card bg-surface-100-900 border-surface-200-800 flex max-h-[85dvh] w-[min(92vw,480px)] flex-col gap-3 border p-4 shadow-xl"
 			>
 				<header class="flex min-w-0 items-start gap-2">
 					<div class="min-w-0 flex-1">
@@ -168,13 +169,14 @@
 								<li>
 									<button
 										type="button"
-										class="flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-[10px] px-2.5 py-1.5 text-left hover:bg-surface-200-800 {on
+										class="flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-base px-2.5 py-1.5 text-left hover:bg-surface-200-800 {on
 											? 'sidebar-row-active'
 											: ''}"
 										aria-pressed={on}
 										onclick={() => toggle(person.id)}
 									>
 										<Avatar
+											src={avatarSrc(person)}
 											name={label(person)}
 											fallback="initial"
 											size="sm"

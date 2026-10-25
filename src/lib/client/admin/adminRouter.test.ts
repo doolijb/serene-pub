@@ -74,4 +74,52 @@ describe("adminRouter unsaved edits", () => {
 		adminRouter.setDiscardPrompt(async () => false)
 		expect(await adminRouter.confirmDiscard()).toBe(true)
 	})
+
+	/** 🚧 RF fix 3 (owner, 2026-10-23: "only ask if unsaved changes"). */
+	test("asks only while something is unsaved: the same section asks when dirty, and not once it is clean again", async () => {
+		adminRouter.adopt("/admin/general")
+		const ask = vi.fn(async () => false)
+		adminRouter.setDiscardPrompt(ask)
+		let dirty = true
+		const release = adminRouter.addUnsavedEdits(() => dirty)
+		expect(await adminRouter.confirmDiscard()).toBe(false)
+		expect(await adminRouter.go("/admin/network")).toBe(false)
+		expect(ask).toHaveBeenCalledTimes(2)
+		dirty = false
+		expect(await adminRouter.confirmDiscard()).toBe(true)
+		expect(await adminRouter.go("/admin/network")).toBe(true)
+		expect(ask).toHaveBeenCalledTimes(2)
+		release()
+	})
+})
+
+describe("🚧 adminRouter: the question's Save (RF fix 2, item 5)", () => {
+	test("a section that registers its Save can be saved from the question; one that does not, cannot", async () => {
+		let dirty = true
+		const save = vi.fn(async () => {
+			dirty = false
+			return true
+		})
+		const release = adminRouter.addUnsavedEdits(() => dirty, save)
+		expect(adminRouter.canSaveUnsaved).toBe(true)
+		expect(await adminRouter.saveUnsaved()).toBe(true)
+		expect(save).toHaveBeenCalledTimes(1)
+		expect(adminRouter.hasUnsavedEdits).toBe(false)
+		release()
+		const other = adminRouter.addUnsavedEdits(() => true)
+		expect(adminRouter.canSaveUnsaved).toBe(false)
+		expect(await adminRouter.saveUnsaved()).toBe(false)
+		other()
+	})
+
+	test("a Save that does not land keeps the section's edits, and the move waits on the answer", async () => {
+		adminRouter.adopt("/admin/rulesets/x")
+		const release = adminRouter.addUnsavedEdits(() => true, async () => false)
+		expect(await adminRouter.saveUnsaved()).toBe(false)
+		// The question answered Stay (what a failed Save resolves to): the section stays.
+		adminRouter.setDiscardPrompt(async () => false)
+		expect(await adminRouter.go("/admin/rulesets")).toBe(false)
+		expect(adminRouter.path).toBe("/admin/rulesets/x")
+		release()
+	})
 })

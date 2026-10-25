@@ -229,7 +229,7 @@
 	/>
 	<details class="mt-4">
 		<summary
-			class="hover:preset-tonal-primary flex cursor-pointer items-center gap-2 rounded-[10px] px-2 py-2 text-[13px] font-medium"
+			class="hover:preset-tonal-primary flex cursor-pointer items-center gap-2 rounded-base px-2 py-2 text-chip font-medium"
 		>
 			Request settings
 		</summary>
@@ -286,7 +286,7 @@
 						</div>
 					{/if}
 				{/each}
-				<hr class="border-surface-300-700" />
+				<hr class="border-surface-200-800" />
 				<p class="text-surface-600-400 text-xs">
 					Managed mode launch settings — applied the next time this
 					model is loaded.

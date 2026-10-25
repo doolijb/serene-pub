@@ -1,143 +1,176 @@
 # The Lair
 
-In a Lair session you are the dungeon, and the party of adventurers delving into it is played by the AI.
+In a Lair session you are the dungeon and its game master. A party of adventurers, the **delvers**, explores what you build: the AI plays some of them, and friends you invite can each play one.
 
 :::tip What it's for
-- Building a dungeon room by room while an AI party explores it.
-- Steering a story from behind the screen: you set the scene, spring traps and whisper to the party, and they decide what to do.
+- Running a dungeon from behind the screen: you set the scene, spring traps and call the rolls, and the party decide what to do.
+- Building a dungeon room by room while the party explore it.
+- Playing a game night with friends, each at their own seat, while you run the dungeon.
 :::
 
 ## The basics
 
-Nothing you type in a Lair is a line of dialogue. What you send is **direction** from whoever runs this place, such as *the torches gutter as they reach the stair* or *the cleric is more frightened than she lets on*, and the party answer for themselves.
+You never play a character in the scene. Everything you type in the story is **direction**: what the dungeon does, such as *the torches gutter as they reach the stair*, or a note about the party, such as *the cleric is more frightened than she lets on*. Your lines are labelled **Dungeon Master**. The delvers answer for themselves.
 
-**You are the narrator.** Nothing narrates a turn for you. You don't play a persona either: you are not in the scene, and your lines are labelled **Dungeon Master**.
+Three helpers run the table with you:
 
-A Lair needs:
+- **The Castellan** is your assistant. It plans each turn, keeps the books, drafts rooms and talks the dungeon through with you in the **Sanctum**, a private conversation only you can see.
+- **The Oracle** speaks for the rules: what the dice, or whatever the rules decide by, say. When the rules call for a roll, it asks you to call it, then reports how it came out. It never narrates.
+- **The delvers** are the party: each one the AI plays speaks and acts on their own turn.
 
-- **at least one character**, who make up the party (the *delvers*);
-- **a lorebook**, which is the dungeon: one place entry per room, linked to the rooms it leads to.
+A Lair needs **at least one character**, who join the party as AI delvers.
 
-The Lair writes rooms into that lorebook as you play, because building rooms is the game.
+The dungeon is a **lorebook**: one place entry per room, joined to the rooms it leads to. Choosing one is up to you. With none, the session keeps the rooms you build in [its own notes](./lorebooks.md#your-sessions-own-notes), and you can make a lorebook from them later.
 
-:::note You'll need
-A lorebook you're happy for the Lair to add rooms to. Your **Lorebook writes from sessions** setting (in **Settings › User**) must not be **Off**, or the Lair can't save rooms and says so. See [What a session may write](./lorebooks.md#what-a-session-may-write).
+:::note If you choose a lorebook
+Choose one you're happy for the Lair to add rooms to. Your **Lorebook writes from sessions** setting (in **Settings › User**) and the book's own **Writes from sessions** (in its Book settings) must not be **Off**, or the Lair can't save rooms there and says so. See [What a session may write](./lorebooks.md#what-a-session-may-write).
 :::
+
+### Pick a preset
+
+When you start a Lair, the **Preset** card offers three ways to play. You can change most of it later in the session's settings.
+
+| Preset | What you get |
+| --- | --- |
+| **Words only** | The party and you, in words. Nothing is rolled and there are no rooms to build: the dungeon lives in what you write. The cheapest: one model call a turn, plus one for each delver who speaks. |
+| **Rules** (the default) | Rooms to build, and the Castellan keeps the books after each round. When the session's rules call for a roll, the Oracle asks you to call it. |
+| **The rules decide** | Rules, with every risky moment the rules' to decide: you call each check, or let them all be decided at once. It plays the session's rules, your lorebook's or the first recommended rules that decide; under rules that decide nothing, risky moments are told in words. |
+
+Each card says what it needs and what makes it better, such as *Needs: a text model*. See [Rules](./rulesets.md) for what the rules are.
 
 ### Your first turn
 
-1. Start a session, pick the **Lair** genre, choose your party and a lorebook, and press **Start**.
-2. Read the Castellan's greeting in the **Sanctum** panel at the foot of the right-hand column. The Castellan is the dungeon's steward and your assistant.
+1. Start a session, pick the **Lair** genre and a preset, choose the party (and a lorebook, if you have one for the dungeon), pick the **Rules** the session plays, and press **Start**. A lorebook with rules of its own gives the session those; one on Freeform, every new book's rules, leaves the choice to you, as with no lorebook.
+2. Read the Castellan's greeting on the **Sanctum** tab, above the story beside the **Story** tab.
 3. In the story, write where the party stand and what they notice, and send it.
 
 :::tip You should see
-The Castellan's plan for the turn appears in the Sanctum as a short list. Then each delver it named speaks in the story, one message each.
+The Castellan's plan for the turn appears in the Sanctum as a short list. If the rules call for a roll, the Oracle asks you to call it in the story. Then each delver the plan named speaks, one message each.
 :::
 
 ### What's on the screen
 
-The party's stats run down the left: you watch them rather than play them. The story is in the middle. Down the right:
+**Your view.** The party's stats run down the left: you watch them rather than play them. The story is in the middle, with two tabs across its top: **Story** and **Sanctum**, your talk with the Castellan (see [below](#the-sanctum-and-the-castellan)). Down the right:
 
-- **Places**: the dungeon's rooms from your lorebook, as a list. The room the party stand in is marked **Here**, and each room's ways out are listed under it. Click a room to open it in the lorebook, or press **Show the map** to see the rooms joined by their ways. See [Places and maps](./lorebook-places.md).
+- **Places**: the dungeon's rooms from your lorebook. The room the party stand in is marked **Here**, and each room's ways out are listed under it. Click a room to open it, or press **Show the map**. See [Places and maps](./lorebook-places.md).
 - **Castellan's scratchpad**: the Castellan's running notes (see [below](#the-castellans-scratchpad)).
-- **The Sanctum**: your talk with the Castellan (see [below](#the-sanctum-and-the-castellan)).
 
-The world's floor and gold have no panel of their own here. To keep them on screen, add **Stats** from the tray and set **Whose stats** to *World*. On a phone, each of these is one of the side views in the **Session panels** menu. See [Session layout](./session-layout.md).
+**A player's view.** A friend who joins sees the **Party** layout: the stats, the story (with no tabs), the rooms, and a **Party** panel where your scratchpad would be. The Party panel has two tabs: **Turn order**, whose turn it is and who the turn waits for, and **Who's here**, who has the session open and which delver each plays. Players never see the Sanctum or the scratchpad.
 
-## What your lines are called
-
-Your messages show the name **Dungeon Master**, and the AI reads them under that name. In a session with guests, the name of whoever wrote the line follows it in muted text: *Dungeon Master · jody*. The composer's placeholder reads *Write as the Dungeon Master…*.
-
-To call yourself something else, such as *Game Master*, open **Edit session › Settings › What your lines are called**. Leave it empty to go back to Dungeon Master. The name isn't saved on the messages themselves, so a rename relabels every line you've already written, both on screen and in the next prompt.
-
-## The Sanctum and the Castellan
-
-The **Castellan** runs each turn. It plans the party's moves, posts the plan in the Sanctum, hands the party their turns, keeps the world's books, and knocks when the party reach a room you haven't built. When you want the dungeon to act without writing it yourself, press **Narrate** and the Castellan narrates what happens next.
-
-The **Sanctum** is a second conversation beside the story: your table, outside the game. The party never hear what is said there. Use it to brainstorm rooms and traps, plan what lies ahead, fix a mistake, or talk the story through with the Castellan.
-
-- **Its greeting.** Every new Lair opens with one message from the Castellan in the Sanctum. It explains the reverse dungeon, names the party and invites you to start. It's written without asking the model, so it appears at once.
-- **Talking with it.** Write a line in the Sanctum and the Castellan answers there, out of character. It reads the Sanctum's conversation, the dungeon's rooms, the party's state and the story's last 12 messages. It never writes a line for the party and never narrates from the Sanctum: ask it what should happen next and it tells you what it would play and that **Narrate** will play it.
-- **Its panel.** The Sanctum has its own panel on the right (on a phone, one of the side views in the panels menu), with its own composer. What you write there goes to the Sanctum; the story in the middle shows the story alone. Its **Actions** offer **Continue** (answer your newest Sanctum line) and **Narrate** (the narration still lands in the story). The panel is a second Messages widget set to the Sanctum: see [Session layout](./session-layout.md#a-second-messages-widget-for-one-channel). A layout without that panel shows a small switch above the story's composer instead, with **Main** (the story) and **Sanctum**.
-- **Seating.** The Castellan is seated in every new Lair. If you unseat it in **Edit session › Participants**, the story still runs, but it no longer answers in the Sanctum: Continue there says *Castellan is not seated in this session*.
-
-### What reaches the story from the Sanctum
-
-The setting **Sanctum talk steers the story** (Edit session › Settings, on by default) decides:
-
-- **On.** When the Castellan plans the next turn, it reads what you and it said in the Sanctum since the story's last reply, as plans rather than facts: it follows what you decided and drops what you didn't take up. Talk from before the story's last reply has already been played and isn't read again. At most the newest 12 messages of talk are read.
-- **Off.** The Sanctum is for brainstorming only. The planner doesn't read the talk.
-
-Whichever you choose, three things always reach the story: a **Nudge**, a room you build or file, and **Narrate** pressed in the Sanctum (which plays the talk since the story's last reply once, even with the setting off). The party's own turns never read the Sanctum.
-
-### The Castellan's scratchpad
-
-The Castellan keeps running notes from the Sanctum: rooms you planned together, what you want to happen, corrections you gave it. It rewrites them after each of its Sanctum replies (one short extra request to the model) and reads them when it talks with you and, while Sanctum talk steers the story, when it plans a turn. The party never read them.
-
-To read or correct the notes, open **Edit session › Settings › Session data** and find **Castellan's scratchpad**. Its **Edit** button saves your version, which the Castellan then works from. See [Session data](./sessions.md#session-data).
-
-The notes also sit beside the story, on the right under **Places**: an **Annex** widget titled *Castellan's scratchpad*, with the same **Edit** button once there are notes (before the Castellan's first Sanctum reply it reads *Nothing written yet*). It shows them to you, the session's owner, and to no other member. A layout without it can have it back: add an **Annex** from the tray and set its **Key** to `core.castellan-scratchpad` (see [the widgets](./session-layout.md#the-widgets)).
+On a phone, each of these is one of the side views in the **Session panels** menu. To arrange your own, see [Session layout](./session-layout.md).
 
 ## How a turn runs
 
-1. **Your direction.** Everything you've sent since the last reply is this turn's direction, oldest first.
-2. **The plan.** The Castellan plans **the party only**: what each of them does, who speaks and why, and whether they try a door the dungeon doesn't have (see [The party knocks](#the-party-knocks)). What the *dungeon* does is yours: your lines, a narration you asked for, a trap or a reveal. The planner never invents a dungeon event. While it works, the progress card reads **The Castellan is planning the turn**, and stopping now writes nothing.
-3. **The beats, in the Sanctum.** The plan is posted in the Sanctum as one short list, so you can read what the party are about to do.
-4. **The party speak**, in the planner's order, the way **How the party speak** says (below).
-5. **The books.** The Castellan proposes what changed in the world: the purse, the floor, where the party are, what lies in a room. The change is filed with the beats. Each delver's own stats are kept by whoever wrote their line: their own turn, or the Castellan when it speaks for the party.
+1. **Direction.** Everything you've written in the story since the last reply is this turn's direction, oldest first. A seated player's lines are their delver's own turns, never direction.
+2. **The plan.** The Castellan plans **the party only**: who acts, what they try, and which attempts are risky enough for a roll. You wrote because you want the party to answer, so the plan names somebody: if it names nobody, every delver the AI plays takes a turn, in the party's order. What the *dungeon* does is yours: your lines, a narration you asked for, a trap or a reveal. While it works, the progress card reads **The Castellan is planning the turn**, and stopping now writes nothing.
+3. **The beats, in the Sanctum.** The plan is posted in the Sanctum as one short list, so you can read what the party are about to do. While you're on the **Story** tab, a dot on the **Sanctum** tab says it has arrived.
+4. **The checks.** When the rules call for a roll, the Oracle asks you (see [Rolls](#rolls)). The party wait for your answer.
+5. **The voices.** Each delver the plan named takes their own turn, in the plan's order: a message under their own name, in their own voice, streamed as it's written. Each turn is shown only what that delver knows: their own private lore and whatever you whispered to them. A delver speaks for themselves alone: their turn is stopped where a line of yours or the Castellan's would begin, and a label such as *Dungeon Master:* at the start of their message is taken off. A delver a friend plays waits for them (see [Playing with friends](#playing-with-friends)).
+6. **The books.** After each round, the Castellan works out what changed: health, what someone picked up, where the party are, what lies in a room. See [Keeping the books](#keeping-the-books).
 
-A delver's message carries their line, with the model's reasoning folded under **Reasoning** when it gives one. The planner's reasoning never reaches a message; an administrator can read it in the run inspector. None of this is sent back to the model as part of the story.
+A delver's message carries their line, with the model's reasoning folded under **Reasoning** when it gives one. The planner's reasoning never reaches a message; an administrator can read it in the run inspector.
 
-## How the party speak
+**Stop** ends the round, and nobody else speaks until you press **Continue** or write. Writing a line of your own moves the story on: the delvers who hadn't spoken yet don't, and the Castellan plans afresh.
 
-Nobody leads the party: the planner's order is the order they speak in. How they speak is the session setting **How the party speak** (Edit session › Settings):
+## Rolls
 
-- **Each delver speaks** (the default). Each delver the planner named takes a **character turn** of their own: a message under their own name, in their own voice, streamed as it's written. They may act as they speak (*I kick the door*). Each turn is shown only what that delver knows: their own private lore and whatever you whispered to them, never another delver's. While the turns are under way, the *ready to continue* line names the next delver. **Stop** ends the round, and nobody else speaks until you press **Continue** or write. Writing a line of your own moves the story on: the delvers who hadn't spoken yet don't, and the Castellan plans afresh.
-- **Castellan speaks for the party.** One request writes the whole turn: the Castellan writes each named delver's words and actions, each on its own line under their name, in one message under the Castellan's name. It's cheaper (one request a turn instead of one per delver), and it knows only what the whole party could know: no private lore, nothing whispered.
+Rolls follow the session's rules, never the Lair. The **Rules** field (Vis Itineris, Wherewithal, Freeform, or rules made on your pub) says how a risky moment is decided, and **How strict** says whether the rules decide it:
 
-**What each sees of the rooms.** A delver taking their turn is told what lies in the room they stand in and nothing about other rooms. The Castellan speaking for the party is told what lies in the party's room and in the rooms one way on from it. Everyone knows every room's name. The Castellan's planner knows what lies everywhere.
+- **Words only**: nothing is decided by the rules. A risky moment is told in words.
+- **Rules**: when the rules make a check against a difficulty (Vis Itineris's d20, a contest in Wherewithal), the Oracle asks you to call each risky moment. A moment the rules decide with no difficulty to pick (a spend from a pool, a pool of dice) is told in words, and so is every moment under rules that decide nothing themselves, like Freeform.
+- **The rules decide**: the same, and you can turn on **Decide checks at once** so each check is decided with no form.
 
-**Who keeps which books.** Whoever writes a delver's line keeps that delver's stats: their health, stamina, mood, trust and inventory. The Castellan always keeps the world's: the purse, the floor, where the party are, and what lies in each room.
+The Lair keeps no list of its own: what a form offers is read from the session's rules each turn, so rules made on your pub play exactly as the ones Serene Pub ships. A way of deciding that has difficulties to pick (a die against a target, a comparison) gives the form its checks and difficulties; a check decided any other way is told in words.
 
-- With **Each delver speaks**, each character turn keeps its own delver's stats, filed with their own line.
-- With **Castellan speaks for the party**, the Castellan also keeps the stats of the delvers it wrote lines for that turn. A delver who didn't speak that turn keeps theirs untouched: a change the Castellan reports for them is refused. A line written by **Pick who speaks** in this mode changes no stats, since nothing is planned and no books are kept on a pick.
+### Calling a roll
 
-In the session's pipeline settings, the party's model calls are listed as **Character turn** (one prompt, model and sampling for every delver) and **Castellan speaks for the party**.
+When the plan marks an attempt as risky, the Oracle posts a **roll form** in the story, addressed to you: *Brannoc: force the rusted gate. Roll for it?* Each form offers:
 
-## Continue, Pick who speaks and Narrate
+- **Check**: what is decided, in the rules' own words and order, with the plan's guess chosen: Vis Itineris offers checks such as *Athletics* or *Strength save*, Wherewithal its one contest, *Mettle against mettle*.
+- **Difficulty**: how hard it is, from the rules' own scale, with the number to beat beside each (Vis Itineris runs from *Very easy (5)* to *Nearly impossible (30)*, *Medium (15)* the usual; Wherewithal's contests from *Slight (1)* to *Towering (7)*, *Even (3)* the usual).
+- **Roll**: roll it now, by the rules.
+- **No check**: no roll at all. The attempt goes as the story says.
 
-- **Continue** moves the story on: the Castellan takes a turn. When nothing is waiting, for example because you deleted the last reply, your Continue still gives the Castellan a turn with no new direction: the party simply carry on. Nothing continues by itself in a loop.
-- **Narrate** (`/narrator`, or the first row of **Pick who speaks**, *Castellan*) asks the Castellan to narrate what happens next, in the third person. The narration lands in the story whichever composer you pressed it in. The party answer on the next turn.
-- **Pick who speaks** gives one delver the turn alone, with no planning and no beats. With **Each delver speaks** it is that delver's own character turn; with **Castellan speaks for the party** the Castellan writes that delver's line into the delver's own message.
-- **Regenerate and swipe** on a delver's message re-voice that delver and keep the other versions as swipes. Regenerating a narration narrates again. Your own lines are never regenerated or swiped: edit them instead.
-- **No Extend.** A Lair reply is planned in one piece, so the message menu offers no **Extend**.
+Once you answer, the form shows your call, such as *Answered · Athletics — Hard*, and the result appears under the Oracle's name. The delvers wait until every form on the turn is answered: a turn with an open form shows nobody speaking yet. Players see the question with *Awaiting an answer*: only you call rolls.
 
-## Regenerate the last turn
+### The outcome
 
-A Lair turn writes several messages: the beats in the Sanctum, then one per delver who spoke. The composer's **Regenerate** (`/retake`) takes that whole turn again rather than rewriting only its last message:
+A result is a framed line in the story: what was checked, what it came to, what it was set against and how it came out, in the rules' own words (*Success*, *It holds, at a cost*), tinted green, amber or red. Under it is how it was reached, such as *d20 14 + str 3 = 17 vs 15*. A contest reads the other side's value instead of a number to beat. The voices that follow must honour it.
 
-1. A dialog, **Regenerate the last turn?**, names what goes: *This deletes and rewrites: Castellan (sanctum), Brannoc, and Vell.*
-2. **Regenerate** deletes every message that turn wrote, on both conversations, along with any stat change or proposal they made. Your own lines are never deleted, and nor is anything you did after the turn: a Nudge, a Whisper, or a change you accepted or made yourself stays.
-3. The same turn runs again from the same point.
+**Show outcomes** (on by default) decides what the party read. Off, the results still show in the story for everyone, but the delvers are told only how things went, never the numbers.
 
-Tick **Don't ask again for this session** to skip the dialog. To be asked again, turn **Ask before regenerating a turn** back on in Edit session › Settings.
+### Calling a roll yourself
 
-Only the session's owner can do this, and only while nothing is being written. It's refused, with a reason, when your own line is the newest (press **Continue** instead) or when the newest message came from **Trigger trap** or **Reveal** (regenerate that from its own message menu).
+**Roll** (`/roll`, among the composer's actions) asks for a roll whenever you like. Its window asks **Who rolls** and **What do they attempt?** (`/roll force the gate` fills the second in); the Oracle then puts one roll form to you for each delver you picked, with the rules' usual difficulty proposed. At a table whose rules have no roll to call (they decide nothing themselves, or decide without a difficulty to pick), the Castellan tells you so in the Sanctum instead. **Roll** isn't offered under **Words only**.
 
-A message's own **Regenerate** still rewrites one message: a delver's line, a narration, a picked delver, or a Castellan reply in the Sanctum. On the beats message, it takes the whole turn again, like the composer's. On a knock, it's refused with a pointer to the composer's **Regenerate**, which deletes the knock and takes the turn again.
+### Check settings
 
-## The party knocks
+Under **Edit session › Settings**:
 
-When the planner sends the party through a way out to a room nothing describes yet, the turn stops. Instead of playing a room nobody built, the Castellan asks you to describe it, in the story. Nothing else is written: no beats, nobody speaks.
+- **Ask me before each check** (on): the Oracle asks you to call each risky moment. Off, and with **Decide checks at once** off, risky moments are told in words.
+- **Decide checks at once** (off): under **The rules decide**, every check the plan calls for is decided at once against the rules' usual difficulty, with no form.
+- **Show outcomes** (on): see [The outcome](#the-outcome).
+
+## Playing with friends
+
+Invite friends to the session as guests (see [Group sessions](./group-sessions.md) and [Users and accounts](./users-and-accounts.md)). You stay the game master, always: the session's owner runs the dungeon.
+
+- **Taking a seat.** A guest's story composer starts as **Take a seat**: they name the character they'll play and press **Take a seat**, or press **Play one of your personas instead** to bring a character of their own. From then on their lines are that delver's turns, and their composer reads *Write as Maren…*.
+- **The Castellan tells you.** When someone takes a seat, the Castellan says so in the Sanctum, where only you read it.
+- **Their turns wait for them.** When the plan names a seated player's delver, the turn waits for that player. The turn line reads *Your turn* to them and *Waiting for Maren* to everyone else.
+- **Moving past a waiting player.** As the game master, your turn line also offers **Continue**, with the sentence *Continue moves past Maren: their turn is skipped this round.* Press it and the next delver in the plan goes ahead. Only you can do this.
+- **What players never see.** The Sanctum, the Castellan's scratchpad, and any whisper but their own delver's.
+
+## The Sanctum and the Castellan
+
+The **Sanctum** is a second conversation beside the story, on its own tab: your table, outside the game. Nobody else ever sees it, not even a seated player. Use it to brainstorm rooms and traps, plan what lies ahead, fix a mistake, or talk the story through with the Castellan.
+
+- **Its greeting.** Every new Lair opens with one message from the Castellan in the Sanctum. It explains how the Lair works, names the party and invites you to start. It's written without asking the model, so it appears at once.
+- **Talking with it.** Write a line in the Sanctum and the Castellan answers there, out of character. It reads the Sanctum's conversation, the dungeon's rooms, the party's state and the story's last 12 messages. It never writes a line for the party and never narrates from the Sanctum: ask it what should happen next and it tells you what it would play and that **Narrate** will play it. That rule comes first in its instructions, and a short reminder of it follows your newest line every time.
+- **Its tab.** The Sanctum is a tab above the story, beside **Story**: pick it and the conversation shows the Sanctum, and what you write goes there, in a single-line composer. Its **Actions** offer **Continue** (answer your newest Sanctum line) and **Narrate** (the narration lands in the story). When the Castellan writes there while you're on the story, the **Sanctum** tab shows a dot. See [Channel tabs](./session-layout.md#channel-tabs). To keep the Sanctum in view beside the story instead, give it its own panel: add a second **Messages** widget and set its **Channel** to `sanctum` (see [Session layout](./session-layout.md#a-second-messages-widget-for-one-channel)).
+- **Seating.** The Castellan is seated in every new Lair. If you unseat it in **Edit session › Participants**, the story still runs, but it no longer answers in the Sanctum.
+
+### What reaches the story from the Sanctum
+
+The setting **Sanctum talk steers the story** (on by default) decides:
+
+- **On.** When the Castellan plans the next turn, it reads what you and it said in the Sanctum since the story's last reply, as plans rather than facts: it follows what you decided and drops what you didn't take up. At most the newest 12 messages of talk are read.
+- **Off.** The Sanctum is for brainstorming only. The planner doesn't read the talk.
+
+Whichever you choose, three things always reach the story: a **Nudge**, a room you build or file, and **Narrate** pressed in the Sanctum (which plays the talk since the story's last reply once, even with the setting off). The delvers' own turns never read the Sanctum.
+
+### The Castellan's scratchpad
+
+The Castellan keeps running notes from the Sanctum: rooms you planned together, what you want to happen, corrections you gave it. The routine **Keep the scratchpad** rewrites them after each of its Sanctum replies (one short extra request to the model). The Castellan reads them when it talks with you and, while Sanctum talk steers the story, when it plans a turn. The party never read them.
+
+The notes sit on the right under **Places**, in an **Annex** widget titled *Castellan's scratchpad*, with an **Edit** button once there are notes. They're also under **Edit session › Settings › Session data**. Only you see them. A layout without the widget can have it back: add an **Annex** from the tray and set its **Key** to `core.castellan-scratchpad` (see [the widgets](./session-layout.md#the-widgets)).
+
+## Keeping the books
+
+The routine **Keep the books** works out what each round changed: a wound, a coin spent, a torch picked up, the party moving to another room, what lies in a room. Under **Rules** and **The rules decide** it works by the session's rules; under **Words only** it keeps the books in words.
+
+Find it under **Edit session › Settings › Routines**. Like every [routine](./sessions.md#routines) it has three modes:
+
+- **Review** (the default under Rules and The rules decide): each change waits under the turn for you to **Accept** or **Reject**.
+- **Full**: changes are applied as they come.
+- **Off** (the default under Words only): nothing keeps the books unless you change a stat yourself.
+
+Its **When it runs** is **After each round** (once everyone has had their turn) unless you pick **After each turn**, which keeps the books after every line and costs a model call each time.
+
+## Rooms
+
+Rooms are an optional layer: the loop runs without them. The setting **Rooms** (on by default, off and locked under **Words only**) turns them on. Rooms are the lorebook's place entries, and they're yours to approve, never the model's to file on its own.
+
+### The party knocks
+
+When the planner sends the party through a way out to a room nothing describes yet, the turn stops. Instead of playing a room nobody built, the Oracle asks you to describe it, in the story. Nothing else is written: no beats, nobody speaks.
 
 The question has one button, **Describe *the room*…**, which opens a small window:
 
-- **Write the room.** What you write is saved to the lorebook exactly as you wrote it, with no review: they're your own words. You don't need to write the way back. Other ways out can go in an *Exits:* line, such as *Exits: north → the Old Well*, until you link them.
-- **Leave it empty.** The Castellan drafts the room, and the draft waits for your review: rename it and edit the text before it's saved.
+- **Write the room.** What you write is saved to the lorebook exactly as you wrote it, with no review: they're your own words. You don't need to write the way back. Other ways out can go in an *Exits:* line, such as *Exits: north → the Old Well*.
+- **Leave it empty.** The Castellan drafts the room, and the draft waits for your review: rename it and edit the text before it's saved. A draft fills in only what the session's rules describe for a place, and nothing they don't.
 
-The room is named after the door the party knocked at. Once saved, it's **linked to the room the party stand in**, both ways (*leads to*), so the next turn's planner sees the way through. If the party's **Location** doesn't name a room yet, the room the planner named as it knocked is used; if neither does, the room is saved without a link and you can link it yourself on the lorebook's **Show as › Map**. Then a line of yours, *The party go on into …*, is added and the story carries on by itself.
-
-If you reject the Castellan's draft, nothing is saved and the knock opens again.
+The room is named after the door the party knocked at. Once saved, it's **linked to the room the party stand in**, both ways (*leads to*), so the next turn's planner sees the way through. Then a line of yours, *The party go on into …*, is added and the story carries on by itself. If you reject the Castellan's draft, nothing is saved and the knock opens again.
 
 **Answer the door** (`/room`) appears in the composer's actions only while a knock is waiting. It opens the same window. `/room <text>` answers straight away with your description.
 
@@ -148,65 +181,60 @@ Only a place nothing describes yet knocks. The party walk through a way out, wit
 - a lorebook entry of any kind has that name or a key with it; or
 - among the last 40 messages in the story and the Sanctum, a paragraph you or the Castellan wrote names it and has at least 12 other words. A delver's line doesn't count, nor do the Castellan's beats or greeting.
 
-So you can describe a room in the story, or tell the Castellan about it in the Sanctum. A room described only in a message, not in the lorebook, is shown to the party as they walk in.
+So you can describe a room in the story, or tell the Castellan about it in the Sanctum. Names match ignoring case, punctuation and a leading *the*, *a* or *an*, and only whole names count: *the vault* is not *the sunken vault*.
 
-Names match ignoring case, punctuation and a leading *the*, *a* or *an*, and only whole names count: *the vault* is not *the sunken vault*.
+### Building and filing rooms
 
-## Rooms
+- **Build room** in the composer writes one without waiting for a door: give the room's name, then edit what the Castellan drafts before it's saved.
+- **File as a room**, in a message's **⋮** menu, turns a message that describes a room into one. Give the room's name (a message can describe more than one room); the Castellan drafts a place entry from that one message, with an *Exits:* line for every way out the message names, and the draft waits for your review. It's offered on your own messages and the Castellan's, in the story and the Sanctum; on a delver's line it's greyed. If the lorebook already has an entry by that name, the Castellan says so in the Sanctum instead.
+- **File the current room** is a routine, **Off** to begin with. Turn it on in **Settings › Routines** and, when the party walk into a room the story described only in prose, the Castellan drafts it for your review.
 
-Rooms are the lorebook's place entries, and they're yours to approve, never the model's to file on its own.
+**Exits become links.** A room saved with an *Exits:* line and no links of its own gets one link for each way out that names a room the lorebook already has. A name that matches no room, or more than one, is left for you: open the room and press **Read links from the Exits line** in its Links section, or link it on the lorebook's **Show as › Map** (see [Lorebooks](./lorebooks.md#the-entry)). Links the Lair writes are dated at the session's point in the story.
 
-- **Build room** in the composer writes one without waiting for a door: give the room's name, then edit what the model drafts before it's saved.
-- **File as a room**, in a message's **⋮** menu, turns a message into a room (below).
-- The party's current room is the world's **Location**, which the Castellan moves as the party walk. It finds a room by the same name rules as the knock. A name two rooms answer to alike is refused rather than guessed, and so is a room the session can't see (switched off or archived).
+### What the party read of the rooms
 
-The ways between rooms are **links**: one per way, with its words from each end (*leads north to* / *leads south to*), drawn on the lorebook's **Show as › Map** or in a room's own links. The planner, the party and the Castellan read the room they stand in with its ways out listed under it:
+The party's current room is the world's **Location**, which the Castellan moves as the party walk. The planner, the delvers and the Castellan read the room the party stand in with its ways out under it:
 
 ```
 The Guardroom
 A bare room with a brazier.
 From here:
 - The rusted iron door leads north to The Drowned Hall.
-- Is inside The Rusty Flagon.
 ```
 
-Only links that stand are listed: a secret link, one that has ended, or one to a room the session can't see is left out. A room is read into every delver's prompt, so it names only what all of them may know.
-
-Every room the Castellan drafts is given the names of the rooms the dungeon already has, so its *Exits:* line points at rooms that exist. A draft reads only the public part of the lorebook, never anyone's character lore. **Build room** and **File as a room** write no links themselves: open the room in the lorebook and press **Read links from the Exits line** in its Links section to turn that line into links you confirm (see [Lorebooks](./lorebooks.md#the-entry)).
-
-### File as a room
-
-A room is often written in prose first: you narrate the party into it, plan it with the Castellan, or the Castellan describes it in a narration. **File as a room** turns that message into a room:
-
-1. Choose **File as a room** in the message's **⋮** menu and give the room's name. The name is required, because a message can describe more than one room.
-2. The Castellan drafts a place entry from that one message, with an *Exits:* line for every way out the message names. It invents none.
-3. The draft waits for your review. It's saved only when you approve it.
-
-It's offered on your own messages and the Castellan's, in the story and in the Sanctum. On a delver's line it's greyed: *a delver's line is theirs, not the dungeon's plan*. Only the session's owner can file a room. If the lorebook already has an entry by that name, nothing new is filed and the Castellan says so in the Sanctum.
+A delver is told what lies in their own room and nothing about other rooms; everyone knows every room's name. The planner knows what lies everywhere. Only links that stand are listed: a secret link, one that has ended, or one to a room the session can't see is left out.
 
 ## Steering from the composer
 
-An action that needs words from you asks for them when you press it: a small window opens with a box for your text. **Enter** sends, **Shift+Enter** starts a new line, **Cancel** sends nothing. What you were writing in the composer stays put.
+An action that needs words from you asks for them when you press it: a small window with a box for your text. **Enter** sends, **Shift+Enter** starts a new line, **Cancel** sends nothing.
 
 - **Nudge** sets a standing direction the Castellan's planner reads every turn until you nudge again. It writes no message.
-- **Whisper** gives the delvers you pick a standing private note. Its window asks **Who hears it** and **What do you whisper?**, and spells out who will hear it: *Brannoc and Vell will hear this. Isolde will not, and nor will the Castellan.*
-  - Each delver you pick gets the same note, replacing the one they held. Delvers you don't pick keep theirs.
-  - Only that delver's own turns read it: no other delver, and none of the Castellan's work. To let a whispered delver act on it now, use **Pick who speaks**. See [Heard by its holder alone](./stats-and-states.md#heard-by-its-holder-alone-earshot).
-  - Only you see whispers. A guest sees none, and can't change or clear one.
-  - No model is asked: the note is saved exactly as you typed it.
-- **Build room**, above.
-- **Trigger trap** and **Reveal**, below.
+- **Whisper** gives the delvers you pick a standing private note. Its window asks **Who hears it** and **What do you whisper?**, and spells out who will hear it: *Brannoc and Vell will hear this. Isolde will not, and nor will the Castellan.* Only that delver's own turns read it. Players never see another delver's whisper. No model is asked: the note is saved exactly as you typed it. See [Heard by its holder alone](./stats-and-states.md#heard-by-its-holder-alone-earshot).
+- **Roll**, above, and **Build room**.
+- **Trigger trap** springs a trap in the party's room, and **Reveal** uncovers something hidden there that was there all along. Say what it is (*the floor tilts into a pit of spikes*), or leave the box empty and the room decides. Either way you get one Castellan message in the story, and the party react on the next turn.
 
 With text after the name, a slash command runs at once: `/nudge the ceiling drips`. `/whisper <text>` opens Whisper's window with the text filled in, to ask who hears it. See [Slash commands](./sessions.md#slash-commands).
 
-## Trigger trap and Reveal
+## Continue, Pick who speaks and Narrate
 
-Two buttons for moments you want to happen *now*:
+- **Continue** moves the story on. With delvers still to speak, the next one takes their turn; with a seated player's turn waiting, your Continue moves past them. When nothing is waiting, the Castellan takes a turn with no new direction: the party simply carry on.
+- **Narrate** (`/narrator`, or the first row of **Pick who speaks**, *Castellan*) asks the Castellan to narrate what happens next. The narration lands in the story whichever composer you pressed it in.
+- **Pick who speaks** gives one delver the turn alone, with no planning and no beats. Every turn leaves its record in the run inspector, a picked one included.
+- **Regenerate and swipe** on a delver's message re-voice that delver and keep the other versions as swipes. Your own lines are never regenerated: edit them instead. A Lair reply is planned in one piece, so the message menu offers no **Extend**.
 
-- **Trigger trap** springs a trap in the party's room, and the Castellan tells what it caught and what it cost.
-- **Reveal** uncovers something hidden in that room that was there all along, such as a seam in the floor or a name cut into a doorframe.
+## Regenerate the last turn
 
-Say what it is in the window that opens (*the floor tilts into a pit of spikes*) and the Castellan writes exactly that. Leave the box empty and the room decides, from its lore and the party's state. Either way you get one Castellan message in the story. The party react on the next turn. Neither changes any stats by itself.
+A Lair turn writes several messages: the beats in the Sanctum, the Oracle's roll forms and outcomes, then one per delver who spoke. The composer's **Regenerate** (`/retake`) takes that whole turn again:
+
+1. A dialog, **Regenerate the last turn?**, names what goes: *This deletes and rewrites: Castellan (sanctum), Brannoc, and Vell.*
+2. **Regenerate** deletes every message that turn wrote, on both conversations, along with any stat change or proposal they made. Your own lines are never deleted, and nor is anything you did after the turn.
+3. The same turn runs again from the same point.
+
+Tick **Don't ask again for this session** to skip the dialog; **Ask before regenerating a turn** in the settings brings it back. Only you can do this, and only while nothing is being written. It's refused when your own line is the newest (press **Continue** instead) or when the newest message came from **Trigger trap** or **Reveal**.
+
+## What your lines are called
+
+Your messages show the name **Dungeon Master**, and the AI reads them under that name. With guests at the table, the name of whoever wrote the line follows it in muted text: *Dungeon Master · jody*. To call yourself something else, such as *Game Master*, open **Edit session › Settings › What your lines are called**. The name isn't saved on the messages, so a rename relabels every line you've already written.
 
 ## Lair settings
 
@@ -215,33 +243,45 @@ Under **Edit session › Settings**:
 | Setting | What it does |
 | --- | --- |
 | **Tone** | Grounded, pulpy, grim or whimsical. |
-| **How the party speak** | **Each delver speaks** (default) or **Castellan speaks for the party**. See [How the party speak](#how-the-party-speak). |
-| **Apply the Castellan's stat changes without asking** | Off by default: each change waits for you to accept it. |
+| **Rooms** | On by default. See [Rooms](#rooms). |
 | **Sanctum talk steers the story** | On by default. See [What reaches the story](#what-reaches-the-story-from-the-sanctum). |
+| **Ask me before each check** · **Decide checks at once** · **Show outcomes** | See [Check settings](#check-settings). |
 | **What your lines are called** | Your lines' name, *Dungeon Master* when empty. |
 | **Ask before regenerating a turn** | Brings back the dialog you turned off with *Don't ask again*. |
 
-## Stats, inventory and supply
+**Rules** and **How strict** are the session's own (see [Rules](./rulesets.md)); **Routines** lists **Keep the books**, **Keep the scratchpad** and **File the current room**. A preset can lock a setting: **Words only** locks How strict and Rooms, and **The rules decide** locks How strict. Neither locks the rules.
 
-- **Each delver** carries **Health**, **Stamina**, **Mood** and **Trust**, an **Inventory**, and any whisper you gave them.
-- **The world** carries its **Location**, the **Floor**, the party's **Gold**, the **Direction** you set with Nudge, and its own **Inventory**.
-- **Each room** can hold an **Inventory** of its own: what lies there.
+## Stats
 
-Changes proposed after a turn wait under the turn for you to **Accept** or **Reject**, unless **Apply the Castellan's stat changes without asking** is on. A world change can be accepted while its turn is still the newest. The Lair checks an item's supply: a one-of-a-kind relic someone already holds, or more of a limited item than is left, is refused rather than offered to you. See [Stats and states](./stats-and-states.md).
+The Lair declares no stats of its own: what the party carry is the session's **rules'**. Under Vis Itineris, a delver's health, abilities, class and gear; under Freeform, nothing counted, and the sheet says _This session's rules declare no attributes_. The Lair **plays best with** the party's health, what ails them and somewhere to keep what they carry, and the Rules card says which of those your rules tell in words instead.
+
+Serene Pub keeps the rest itself, and none of it is ever one of the rules' attributes:
+
+- **The world's Location**: where the party are, in a **Where and when** row on the sheet.
+- **What someone carries**: each delver's **Inventory**, what lies about in the world and what lies in each room, as a list under the sheet. The Castellan hands out the lorebook's items on it, keeping to each item's supply.
+- **Your tools**: the **Direction** you set with Nudge, and each delver's **Whisper**. Only the Castellan's planner reads the direction, and only a delver's own voice their whisper.
+
+Changes wait for you as described in [Keeping the books](#keeping-the-books). See [Stats and states](./stats-and-states.md).
 
 ## Scenes
 
-A Lair reading its lorebook keeps [scenes](./sessions.md#when-a-new-scene-begins) like any session, with two moments of its own. **The place changes** follows the party's **Location**: when the Castellan moves them into another room (or you change it yourself), a new scene is suggested at the next line, named after the room, such as *Scene 4 · the Crypt*. **The party reached a new floor** follows the world's **Floor** the same way: a new floor is a new chapter of the dungeon. Both are on by default, and each can be switched off under **Scenes** in the session's settings. Talk in the Sanctum never suggests a scene.
+A Lair keeps [scenes](./sessions.md#when-a-new-scene-begins) like any session, with one moment of its own: **The place changes** follows the party's **Location**. When the Castellan moves them into another room (or you change it yourself), a new scene is suggested at the next line, named after the room, such as *Scene 4 · the Crypt*. Switch it off under **Scenes** in the session's settings. Talk in the Sanctum never suggests a scene.
+
+## Coming from an older Lair
+
+A Lair session started before this version opens on the **Rules** preset. A Lair started before the Sanctum became a tab keeps its Sanctum panel on the right: press **Reset to genre default layout** on the layout editor's **Layouts** tab to have it as a tab instead. **How the party speak** is gone: each delver always speaks for themselves. **Apply the Castellan's stat changes without asking** became the mode of **Keep the books** (on became **Full**). The world's **Floor** and **Gold**, and each delver's **Stamina** and **Trust**, are kept as the session's own stats, so nothing you tracked is lost; the Lair no longer moves them by itself. Since stats became the rules' alone, a value on one the session's rules don't keep (Health or Mood under Freeform) is written into the session's notes, under **Carried over from before**.
 
 ## What it doesn't do yet
 
-- An *Exits:* line in a room's text isn't turned into links when the room is saved. Only answering a knock links a room by itself. For the rest, use **Read links from the Exits line** or link them yourself.
-- A link the Lair writes isn't dated at the session's story clock: it stands at every moment of the lorebook's line.
-- A room described in prose isn't filed for you. Use **File as a room**.
+- A guest can't take over a delver already in the party: they name a new one or bring a persona.
+- **Roll** and **Whisper** offer the AI delvers only: a seated player's delver isn't in **Who rolls** or **Who hears it** yet.
+- **Words only** keeps the **Places** panel in its layout, though it builds no rooms. Close it yourself if you like (see [Session layout](./session-layout.md)).
+- Nothing in the dungeon happens by itself between turns: no wandering monsters, no traps that spring on their own.
 
 ## Related
 
 - [Genres](./genres.md): how the Lair compares with the other kinds of session.
-- [Story](./genre-story.md): the same world, with you in it.
-- [Lorebooks](./lorebooks.md) and [Places](./stats-and-states.md#places): where the rooms live.
-- [Group sessions](./group-sessions.md): turn order, Continue and auto-advance.
+- [Dungeon Crawler](./genre-dungeon-crawler.md): the AI runs the dungeon, and you play a character.
+- [Rules](./rulesets.md): how the rules decide, and How strict.
+- [Lorebooks](./lorebooks.md) and [Places](./lorebook-places.md): where the rooms live.
+- [Group sessions](./group-sessions.md): turn order, Continue and guests.

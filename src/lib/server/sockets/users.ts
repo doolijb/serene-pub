@@ -11,6 +11,7 @@ import * as passphrase from "$lib/server/providers/users/passphrase"
 import { cookies } from "$lib/server/auth"
 import * as userTokens from "$lib/server/providers/users/tokens"
 import { loginRateLimit } from "$lib/server/services/loginRateLimit"
+import { handleUserAvatarUpload, uploadedBytes } from "$lib/server/utils"
 
 /**
  * Enforce the one passphrase rule (`passphraseSchema`) on the server. The
@@ -53,13 +54,17 @@ async function requireAccountsEnabled() {
  * profile pays for no re-read at all. Skipping the emit alone would save
  * nothing; the query is the cost.
  *
- * ⚠ Columns only — no `with`. That is what keeps this payload free of the
- * passphrase and TOTP rows, which live in their own tables (`passphrases`,
- * `user_totp`) and are joined by relations this deliberately does not ask for.
+ * ⚠ Columns only — the one `with` is the avatar's address. That is what keeps
+ * this payload free of the passphrase and TOTP rows, which live in their own
+ * tables (`passphrases`, `user_totp`) and are joined by relations this
+ * deliberately does not ask for.
  */
 async function loadUserRow(userId: number) {
 	const user = await db.query.users.findFirst({
-		where: (u, { eq }) => eq(u.id, userId)
+		where: (u, { eq }) => eq(u.id, userId),
+		with: {
+			avatarMedia: { columns: { uuid: true, rev: true, frame: true } }
+		}
 	})
 	if (!user) throw new Error("User not found")
 	return user
@@ -316,6 +321,47 @@ export async function setTheme(
 	emitToUser: (event: string, data: any) => void
 ) {
 	await usersSetTheme.handler(socket, message, emitToUser)
+}
+
+/**
+ * `users:current:updateAvatar` — the signed-in account's own avatar: a
+ * picture replaces it, `null` clears it. Self-scoped, so it is live with
+ * accounts on or off, like the display name.
+ */
+export const usersCurrentUpdateAvatar: Handler<
+	Sockets.Users.UpdateAvatar.Params,
+	Sockets.Users.UpdateAvatar.Response
+> = {
+	event: "users:current:updateAvatar",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		try {
+			if (params?.avatarFile === null) {
+				await db
+					.update(schema.users)
+					.set({ avatarMediaId: null })
+					.where(eq(schema.users.id, userId))
+			} else {
+				const bytes = uploadedBytes(params?.avatarFile)
+				if (!bytes) throw new Error("No picture came with that upload.")
+				await handleUserAvatarUpload({ userId, avatarFile: bytes })
+			}
+			const { user } = await buildUsersCurrent(userId)
+			const res: Sockets.Users.UpdateAvatar.Response = {
+				avatarMediaId: user.avatarMediaId ?? null,
+				avatarMedia: user.avatarMedia ?? null
+			}
+			emitToUser("users:current:updateAvatar", res)
+			await emitToUser("users:current", () => buildUsersCurrent(userId))
+			return res
+		} catch (error: any) {
+			console.error("[usersCurrentUpdateAvatar]", error)
+			emitToUser("users:current:updateAvatar:error", {
+				error: error?.message || "The avatar could not be saved."
+			})
+			throw error
+		}
+	}
 }
 
 export const usersCurrentUpdateDisplayName: Handler<
@@ -901,6 +947,7 @@ export function registerUserHandlers(
 	register(socket, usersCurrentSetPassphrase, emitToUser)
 	register(socket, usersCurrentHasPassphrase, emitToUser)
 	register(socket, usersCurrentUpdateDisplayName, emitToUser)
+	register(socket, usersCurrentUpdateAvatar, emitToUser)
 	register(socket, usersCurrentSetTimeZone, emitToUser)
 	register(socket, usersCurrentChangePassphrase, emitToUser)
 	register(socket, usersCurrentLogout, emitToUser)

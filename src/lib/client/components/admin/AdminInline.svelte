@@ -1,4 +1,5 @@
 <script lang="ts" generics="Row">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * Django admin's **inline** (`TabularInline`) for a change form: the
 	 * objects related to this one, as a small table inside an
@@ -129,9 +130,9 @@
 
 {#snippet marks(row: Row)}
 	{#if rowNew(row)}
-		<span class="preset-tonal-primary shrink-0 rounded-full px-2 py-0.5 text-[11px]">Ready to add</span>
+		<Badge tone="primary" size="sm" class="shrink-0">Ready to add</Badge>
 	{:else if rowDeleted(row)}
-		<span class="preset-tonal-error shrink-0 rounded-full px-2 py-0.5 text-[11px]">Deleted on save</span>
+		<Badge tone="error" size="sm" class="shrink-0">Deleted on save</Badge>
 	{/if}
 {/snippet}
 
@@ -169,7 +170,7 @@
 				<span class="sr-only">Delete {nameOf(row)}</span>
 			</label>
 		{:else}
-			<span class="text-surface-600-400 text-[11px]" title={ok}>{ok}</span>
+			<span class="text-surface-600-400 text-meta" title={ok}>{ok}</span>
 		{/if}
 	{/if}
 {/snippet}

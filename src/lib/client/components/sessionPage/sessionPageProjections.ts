@@ -5,6 +5,7 @@
  * `$derived` or a handler of the page's, so whatever it reads is tracked
  * there, exactly where it is read.
  */
+import { rewindStateWith } from "$lib/shared/sessions/rewind"
 import { avatarSrc } from "$lib/client/utils/media"
 import { composerClosuresFor, DEFAULT_CHANNEL, parseChannel } from "@serene-pub/sdk"
 import { castFaceOf } from "./projections/characters"
@@ -46,7 +47,11 @@ import {
 	type LiveSceneRow,
 	type SceneCastFaces
 } from "$lib/client/components/sessionPage/liveSceneProjection"
-import { effectiveLoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
+import {
+	effectiveLoreWriteMode,
+	loreWriteLimit,
+	type LoreWriteMode
+} from "$lib/shared/lorebooks/loreWriteMode"
 import { composerWritingAs } from "$lib/shared/sessions/playerSeat"
 import { roundWaitingFor } from "$lib/client/components/sessionPage/roundWaiting"
 import type { DraftWrite } from "$lib/client/components/sessionPage/collects"
@@ -410,6 +415,7 @@ export function projectConversationDossier(
 		currentUserPersona,
 		ownCardlessSeat,
 		showAddPersonaCTA,
+		showTakeSeatCTA,
 		composerHidden,
 		sessionChannels,
 		modeMissing,
@@ -634,6 +640,12 @@ export function projectConversationDossier(
 		// 🚧 Which channels hold older lines (★7): each copy scrolls back through its own.
 		...(Array.isArray(pagination?.olderIn) ? { olderIn: [...pagination!.olderIn] } : {}),
 		extendRefusal,
+		// 🚧 Back · Forward (RF fix 5): the server's state off the session; the
+		// strip adds the owner rule and a reply being written.
+		...(() => {
+			const rewind = rewindStateWith(session, session.sessionMessages ?? [])
+			return rewind ? { rewind } : {}
+		})(),
 		isOwner: !isGuest,
 		cast: {
 			sessionPersonas: (session.sessionPersonas ?? []).map((cp) => ({
@@ -652,11 +664,17 @@ export function projectConversationDossier(
 			isOwner: !isGuest,
 			readsLorebook: session.lorebookId != null,
 			opensScenes: offersWrite("scenes"),
+			// Off at either level (Personal > Lorebook > Session, 2026-10-21):
+			// the owner's own setting, or the book's (on the joined row).
 			loreWritesOff:
-				effectiveLoreWriteMode(
-					userSettingsCtx.settings?.loreWriteMode,
-					systemSettingsCtx.settings?.loreWriteModeDefault
-				) === "off"
+				loreWriteLimit({
+					personal: effectiveLoreWriteMode(
+						userSettingsCtx.settings?.loreWriteMode,
+						systemSettingsCtx.settings?.loreWriteModeDefault
+					),
+					book: (session as { lorebook?: { loreWriteMode?: string } | null })
+						.lorebook?.loreWriteMode as LoreWriteMode | undefined
+				}).mode === "off"
 		}),
 		// 🚧 Suggested mode's *New scene?* chips (live scenes §4, lane D):
 		// the owner's alone — deciding one is a boundary write.
@@ -698,6 +716,8 @@ export function projectConversationDossier(
 					? (session.sessionPersonas?.[0]?.personaId ?? null)
 					: null),
 			addPersona: showAddPersonaCTA,
+			// 🚧 A guest's seat, offered on the story (Lair rewrite D5).
+			...(showTakeSeatCTA ? { takeSeat: true } : {}),
 			// "Write as Ann…" from the viewer's own card-less seat, else
 			// "Write as the Dungeon Master…" (R4's label; S2).
 			...(writingAs ? { playerLabel: writingAs } : {}),

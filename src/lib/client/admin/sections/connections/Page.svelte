@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * Admin → Connections: the changelist (owner ruling 2026-09-27 — admin
 	 * manages its objects Django-style instead of nesting the Models
@@ -29,7 +30,7 @@
 	import {
 		connectionRowStatus,
 		rowDefaults,
-		stateTone,
+		rowStatusClasses,
 		type RowStatus
 	} from "$lib/client/components/connections/connectionRowStatus"
 	import { defaultsSummary } from "$lib/client/components/connections/defaultsSummary"
@@ -84,7 +85,9 @@
 	const defaults = $derived(systemSettingsCtx?.capabilityDefaults ?? {})
 	// The index view's reading, so a row here and the same row there carry
 	// one label.
-	const rowFacts = $derived(rowDefaults(defaultsSummary(rows, defaults).entries))
+	const rowFacts = $derived(
+		rowDefaults(defaultsSummary(rows, defaults).entries, defaults)
+	)
 	const statusOf = (r: Row): RowStatus =>
 		connectionRowStatus(r as any, {
 			kind: endpointKind(r.type),
@@ -92,13 +95,6 @@
 			defaults: rowFacts
 		})
 	const STATE_ORDER = ["broken", "unfinished", "busy", "ready", "idle"]
-	const DOT: Record<string, string> = {
-		ok: "bg-success-500",
-		quiet: "bg-surface-400-600",
-		primary: "bg-primary-500",
-		warning: "bg-warning-500",
-		error: "bg-error-500"
-	}
 
 	const columns: AdminChangelistColumn<Row>[] = [
 		{
@@ -251,12 +247,9 @@
 			{#if held.length}
 				<span class="flex flex-wrap gap-1">
 					{#each held as h (h.capability)}
-						<span
-							class="preset-tonal-primary rounded-full px-2 py-0.5 text-[11px]"
-							title={h.modelName ? `${h.label}: ${h.modelName}` : h.label}
-						>
+						<Badge tone="primary" size="sm" title={h.modelName ? `${h.label}: ${h.modelName}` : h.label}>
 							{h.label}
-						</span>
+						</Badge>
 					{/each}
 				</span>
 			{:else}
@@ -264,9 +257,15 @@
 			{/if}
 		{:else if col.key === "status"}
 			{@const status = statusOf(row)}
-			<span class="inline-flex items-center gap-1.5" title={status.detail ?? undefined}>
+			{@const marks = rowStatusClasses(status)}
+			<!-- The index row's vocabulary (★R2 L4.1): a 6px dot and muted
+			     words, red only when a loadout runs on a broken connection. -->
+			<span
+				class="inline-flex items-center gap-1.5 text-chip {marks.text}"
+				title={status.detail ?? undefined}
+			>
 				<span
-					class="size-2 shrink-0 rounded-full {DOT[stateTone(status.state)]}"
+					class="size-1.5 shrink-0 rounded-full {marks.dot}"
 					aria-hidden="true"
 				></span>
 				{status.label}

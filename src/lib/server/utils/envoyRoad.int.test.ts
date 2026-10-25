@@ -583,22 +583,8 @@ describe("a guide reply", () => {
 		// envoy owns the text (the three-System-boxes rule).
 		expect(front.some((o) => o.control === "prompts-ref")).toBe(false)
 
-		// The shipped configuration stays as written; the edit lands on a
-		// copy the instance selects — the panel's own gesture, by hand.
-		const { duplicateConfig, selectConfig } = await import(
-			"$lib/server/pipelines/config/named"
-		)
-		const copy = await duplicateConfig(
-			db,
-			view!.selectedConfig!.id,
-			"Tuned guide"
-		)
-		const [spec] = await db
-			.select({ id: schema.pipelineSpecs.id })
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, GUIDE_RESPOND))
-		await selectConfig(db, spec!.id, "pub", 0, copy.id, userId)
-
+		// 🚧 The edit lands as a change to the genre's defaults (R38, A15) —
+		// the panel's instance-wide write since configurations retired.
 		const TUNED = "You are a terse librarian. Answer in one sentence."
 		await writeOption(db, secret, GUIDE_RESPOND, viewer, option.id, TUNED)
 		const after = await namespaceView(db, secret, GUIDE_RESPOND, viewer)
@@ -609,17 +595,19 @@ describe("a guide reply", () => {
 		expect(tunedOption.source).toBe("config")
 		expect(tunedOption.changed).toBe(true)
 		// The row is where the config stores it: the envoy's address.
-		const stored = await db
-			.select()
-			.from(schema.pipelineConfigValues)
-			.where(
-				and(
-					eq(schema.pipelineConfigValues.nodeKey, "envoy:mascot"),
-					eq(schema.pipelineConfigValues.slot, "prompts"),
-					eq(schema.pipelineConfigValues.path, "systemPrompt")
-				)
-			)
-		expect(stored.map((r) => r.value)).toEqual([TUNED])
+		const genreChanges = async () =>
+			(
+				await db
+					.select()
+					.from(schema.registrations)
+					.where(
+						and(
+							eq(schema.registrations.scopeKind, "genre"),
+							eq(schema.registrations.origin, "admin")
+						)
+					)
+			).map((r) => (r.values as any)?.["envoy:mascot"]?.prompts?.systemPrompt)
+		expect(await genreChanges()).toEqual([TUNED])
 
 		compiledPrompts.length = 0
 		const { runReply } = await import("$lib/server/utils/runReply")
@@ -640,16 +628,7 @@ describe("a guide reply", () => {
 			"$lib/server/pipelines/config/panel"
 		)
 		await clearOption(db, secret, GUIDE_RESPOND, viewer, option.id)
-		expect(
-			(
-				await db
-					.select()
-					.from(schema.pipelineConfigValues)
-					.where(
-						eq(schema.pipelineConfigValues.nodeKey, "envoy:mascot")
-					)
-			).length
-		).toBe(0)
+		expect(await genreChanges()).toEqual([])
 	})
 
 	it("firing drives the seated envoy — Continue with nothing prepared is refused in a sentence, and a verb re-drives its row as its turn", async () => {
@@ -909,6 +888,8 @@ describe("who may act (U5g review, C1)", () => {
 
 	it("an envoy's reply is the session owner's: regenerate, edit and delete run for the owner and refuse a guest, through the real handlers", async () => {
 		const sessionId = await createGuideSession("acting")
+		// 🚧 Deletion needs a pipeline (RF fix 5): this session registers one.
+		await (await import("$lib/server/utils/testDb")).registerTestDeletion(db, sessionId)
 		await db
 			.insert(schema.sessionGuests)
 			.values({ sessionId, userId: guestId })
@@ -989,6 +970,8 @@ describe("who may act (U5g review, C1)", () => {
 
 	it("a user line with no persona is its author's — editable by them and by nobody else, the owner included", async () => {
 		const sessionId = await createGuideSession("own-line")
+		// 🚧 Deletion needs a pipeline (RF fix 5): this session registers one.
+		await (await import("$lib/server/utils/testDb")).registerTestDeletion(db, sessionId)
 		await db
 			.insert(schema.sessionGuests)
 			.values({ sessionId, userId: guestId })
@@ -1039,6 +1022,8 @@ describe("who may act (U5g review, C1)", () => {
 	})
 	it("an orphaned row — an AI reply whose character was deleted globally, or a line whose author is gone — is the session owner's to delete, never a guest's", async () => {
 		const sessionId = await createGuideSession("orphan")
+		// 🚧 Deletion needs a pipeline (RF fix 5): this session registers one.
+		await (await import("$lib/server/utils/testDb")).registerTestDeletion(db, sessionId)
 		await db
 			.insert(schema.sessionGuests)
 			.values({ sessionId, userId: guestId })

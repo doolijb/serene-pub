@@ -16,9 +16,17 @@ import {
 	DUNGEON_CRAWLER_GENESIS_SCRIPT,
 	DUNGEON_CRAWLER_INTERVIEW_SCRIPT,
 	DUNGEON_CRAWLER_LANES_SCRIPT,
+	DUNGEON_CRAWLER_SHAPE_SCRIPT,
 	DUNGEON_CRAWLER_SHEET_SCRIPT,
-	READ_PATH_SCRIPT
+	READ_PATH_SCRIPT,
+	rulesetGistOf
 } from "@serene-pub/core-catalog"
+import { getRuleset } from "@serene-pub/sdk"
+import { replySchemaOf } from "$lib/server/rulesets/replies"
+import { jsonSchemaToGbnf, type JsonSchemaNode } from "$lib/server/connectionAdapters/jsonSchemaToGbnf"
+
+/** 🚧 Vis Itineris as the host lays it on the inlet (S4, lane G3, 2026-10-23): the kits are its class rows, read at run time. */
+const ruleset = { id: "core:ruleset/vis-itineris@1", rigour: "scripts", settings: {}, ...rulesetGistOf(getRuleset("core:ruleset/vis-itineris@1")! as never, {}) }
 
 const run = async (source: string, value: unknown) => {
 	const r = await runScriptSource({ source, vars: { value }, extras: {}, seedLabel: "test:dc", nowMs: 1 })
@@ -33,6 +41,18 @@ describe("Dungeon Crawler's scripts in QuickJS", () => {
 			await run((s as { source: string }).source, {})
 		}
 	)
+
+	it("the Planner's grammar compiles to GBNF under every shipped ruleset (G1 ★4: no null, no type unions)", async () => {
+		const owners = [{ key: "session:1", name: "The world" }, { key: "character:1", name: "Ann" }]
+		for (const id of ["core:ruleset/vis-itineris@1", "core:ruleset/wherewithal@1", "core:ruleset/freeform@1"]) {
+			const decl = getRuleset(id)!
+			const inlet = { id, rigour: id.includes("freeform") ? "prose" : "scripts", settings: {}, ...rulesetGistOf(decl as never, {}) }
+			for (const want of ["turn", "edits", "genesis"]) {
+				const schema = await run(DUNGEON_CRAWLER_SHAPE_SCRIPT.source, { shape: replySchemaOf(decl as never, owners), ruleset: inlet, want })
+				expect(() => jsonSchemaToGbnf(schema as JsonSchemaNode), `${id} ${want}`).not.toThrow()
+			}
+		}
+	})
 
 	it("read-path reads a part, or null", async () => {
 		expect(await run(READ_PATH_SCRIPT.source, { from: { a: { b: 2 } }, path: "a.b" })).toBe(2)
@@ -60,9 +80,9 @@ describe("Dungeon Crawler's scripts in QuickJS", () => {
 			channelLanes: { parley: { "user:1": "parley" } }, annex: { core: {} }
 		}
 		const state = { world: { difficulty: "fair" }, cast: { byId: { "player_seat:4": { "standing-order": "follow" } } } }
-		const fair = await run(DUNGEON_CRAWLER_INTERVIEW_SCRIPT.source, { session, state, referent: "difficulty", choice: "fair", addressee: "user:1" })
+		const fair = await run(DUNGEON_CRAWLER_INTERVIEW_SCRIPT.source, { ruleset, session, state, referent: "difficulty", choice: "fair", addressee: "user:1" })
 		expect(fair.worldChanges).toBeNull()
-		const brutal = await run(DUNGEON_CRAWLER_INTERVIEW_SCRIPT.source, { session, state, referent: "difficulty", choice: "brutal", addressee: "user:1" })
+		const brutal = await run(DUNGEON_CRAWLER_INTERVIEW_SCRIPT.source, { ruleset, session, state, referent: "difficulty", choice: "brutal", addressee: "user:1" })
 		expect(brutal.worldChanges).toEqual([{ owner: "world", slot: "core:slot/difficulty@1", value: "brutal" }])
 		// A re-run over a seat the kit already wrote (no class: the fighter's —
 		// d10 + Constitution 14's +2 = 12 health, its six scores): nothing to write.
@@ -86,7 +106,7 @@ describe("Dungeon Crawler's scripts in QuickJS", () => {
 			},
 			configs: { "player_seat:4": { "core:slot/hp@1": { min: 0, max: 12 } } }
 		}
-		const sheet = await run(DUNGEON_CRAWLER_SHEET_SCRIPT.source, {
+		const sheet = await run(DUNGEON_CRAWLER_SHEET_SCRIPT.source, { ruleset,
 			session, state: kitted, plan: { addressee: "user:1", currentName: "Bo" }, json: { hp: 20, backstory: "" }
 		})
 		// Level 1 and alive are what a fresh seat already reads; health, its max, the scores and the skills are the kit's already.
@@ -96,7 +116,7 @@ describe("Dungeon Crawler's scripts in QuickJS", () => {
 		expect(sheet.healthConfig).toBeNull()
 		// Full health is the kit's (2026-10-17), never the model's number: a max
 		// that differs is configured, then filled.
-		const hardy = await run(DUNGEON_CRAWLER_SHEET_SCRIPT.source, {
+		const hardy = await run(DUNGEON_CRAWLER_SHEET_SCRIPT.source, { ruleset,
 			session,
 			state: { ...state, configs: { "player_seat:4": { "core:slot/hp@1": { min: 0, max: 20 } } } },
 			plan: { addressee: "user:1", currentName: "Bo" },
@@ -111,7 +131,7 @@ describe("Dungeon Crawler's scripts in QuickJS", () => {
 	})
 
 	it("a character made once the world exists stands where the party is; what comes next is its own line", async () => {
-		const out = await run(DUNGEON_CRAWLER_SHEET_SCRIPT.source, {
+		const out = await run(DUNGEON_CRAWLER_SHEET_SCRIPT.source, { ruleset,
 			session: {
 				ownerUserId: 1,
 				cast: {

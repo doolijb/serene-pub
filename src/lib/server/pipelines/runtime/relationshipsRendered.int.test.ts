@@ -201,24 +201,15 @@ const setBandParam = async (
 	path: "share" | "maxEntries",
 	value: Record<string, number> | null
 ) => {
-	const configId = await selectedConfigId()
-	for (const [band, nodeKey] of Object.entries(BAND_NODE)) {
-		const where = and(
-			eq(schema.pipelineConfigValues.configId, configId),
-			eq(schema.pipelineConfigValues.nodeKey, nodeKey),
-			eq(schema.pipelineConfigValues.slot, "params"),
-			eq(schema.pipelineConfigValues.path, path)
+	// The reply's instance-wide values: the genre's defaults (PLAN-layering D5).
+	const { setPipelineValue } = await import("$lib/server/utils/testDb")
+	for (const [band, nodeKey] of Object.entries(BAND_NODE))
+		await setPipelineValue(
+			db,
+			STORY_RESPOND_SPEC_ID,
+			{ nodeKey, slot: "params", path },
+			value === null ? undefined : value[band]
 		)
-		await db.delete(schema.pipelineConfigValues).where(where)
-		if (value === null || value[band] === undefined) continue
-		await db.insert(schema.pipelineConfigValues).values({
-			configId,
-			nodeKey,
-			slot: "params",
-			path,
-			value: value[band] as any
-		})
-	}
 }
 
 /** The band, on, with room for both ties. */

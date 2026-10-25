@@ -50,3 +50,12 @@ export function withSessionGenerationLock<T>(
 ): Promise<T> {
 	return withKeyedLock("generation", sessionId, fn)
 }
+
+/**
+ * 🚧 Is this (key, id) held right now — something running or queued under
+ * it? A probe, never a wait: the routine queue (R13) reads it to start a
+ * routine only once no run holds the session's generation lock.
+ */
+export function keyedLockHeld(key: string, id: number): boolean {
+	return keyedLocks.has(`${key}:${id}`)
+}

@@ -11,8 +11,9 @@
  *    `resolve-state-changes@1`'s `owners` port. The old "who is it for"
  *    model call and its "Lair whisper" prompt row are retired.
  *  - **Reach:** earshot (R1) — each recipient's voice prompt carries it; a
- *    non-recipient's voice, the Castellan's planner, keeper, narration and
- *    Sanctum talk never do.
+ *    non-recipient's voice, the Castellan's planner, keeper (the
+ *    `lair-keeper` routine, after the round), narration and Sanctum talk
+ *    never do.
  *  - **Refusals** at the door: no recipient, one not seated and enabled, a
  *    guest's press.
  *
@@ -42,6 +43,7 @@ vi.mock("$lib/server/db", async () => {
 const WHISPER = "core:spec/lair-whisper#whisper"
 const HUSH = "the east door is a lie"
 
+/** The planner's answer, in `LAIR_PLAN_SCHEMA`'s shape: the three delvers named, nothing risky. */
 const PLAN = {
 	beats: ["The torch gutters."],
 	speakers: [
@@ -49,12 +51,13 @@ const PLAN = {
 		{ name: "Vell", intent: "hold the light" },
 		{ name: "Isolde", intent: "watch the rear" }
 	],
+	risks: [],
 	unknownExit: "",
 	knockQuestion: "",
-	worldHints: { location: "The Old Well" },
-	values: [],
-	inventory: []
+	worldHints: { location: "The Old Well" }
 }
+/** How the keeper's prompt opens — the `lair-keeper` routine's. */
+const KEEPER = "You keep the record of a delve"
 
 /** Every call the model was asked for — the whisper must add none. */
 let modelCalls = 0
@@ -96,7 +99,7 @@ class FakeAdapter implements FakeTextAdapter {
 			completionResult: async (onContent: (c: string) => void) => {
 				if (json) {
 					jsonPrompts.push(prompt)
-					onContent(JSON.stringify(PLAN))
+					onContent(JSON.stringify(prompt.includes(KEEPER) ? { deltas: [] } : PLAN))
 					return
 				}
 				const who = voiceOf(prompt)
@@ -313,6 +316,17 @@ const reset = () => {
 }
 const voicePrompts = (who: string) => prosePrompts.filter((p) => p.who === who).map((p) => p.prompt)
 
+/** Wait until `probe` answers truthy (every 20 ms), or fail after `ms`. */
+async function until<T>(probe: () => T | null | undefined | false, ms = 20_000): Promise<T> {
+	const end = Date.now() + ms
+	for (;;) {
+		const got = probe()
+		if (got) return got
+		if (Date.now() > end) throw new Error("waited too long")
+		await new Promise((r) => setTimeout(r, 20))
+	}
+}
+
 describe("R10 · a whisper is stored on each recipient, with no model call", () => {
 	test("two recipients get the same whisper; the third delver gets nothing; the model is never asked", async () => {
 		const w = await session()
@@ -381,13 +395,23 @@ describe("R10 · only the recipients' own voices ever read it", () => {
 		const w = await session()
 		await whisper(w, [ref(w, "Brannoc"), ref(w, "Vell")])
 		reset()
-		await fire(w, "the turn")
+		// The keeper is a routine (after each round): on for this test.
+		const { setRoutinesEnabled } = await import("$lib/server/pipelines/routines/runs")
+		setRoutinesEnabled(true)
+		try {
+			await fire(w, "the turn")
+			// The three planned character turns, then the keeper once the round is over.
+			await until(() => ["Brannoc", "Vell", "Isolde"].every((name) => voicePrompts(name).length))
+			await until(() => jsonPrompts.some((p) => p.includes(KEEPER)))
+			await (await import("$lib/server/pipelines/runtime/sessionEvents")).settleSessionEvents()
+		} finally {
+			setRoutinesEnabled(false)
+		}
 
 		const planner = jsonPrompts.filter((p) => p.includes("You plan the PARTY only"))
-		const keeper = jsonPrompts.filter((p) => p.includes("You keep the record of a delve"))
+		const keeper = jsonPrompts.filter((p) => p.includes(KEEPER))
 		expect(planner).toHaveLength(1)
-		// The Castellan's keeper, then each of the three character turns' own.
-		expect(keeper).toHaveLength(4)
+		expect(keeper).toHaveLength(1)
 		for (const name of ["Brannoc", "Vell", "Isolde"]) expect(voicePrompts(name)).toHaveLength(1)
 
 		expect(voicePrompts("Brannoc")[0]).toContain(HUSH)

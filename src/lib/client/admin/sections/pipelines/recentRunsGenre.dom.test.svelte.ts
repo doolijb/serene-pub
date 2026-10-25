@@ -91,7 +91,7 @@ describe("Admin › Pipelines — Recent runs", () => {
 		listeners.get("pipelines:list")!({
 			pipelinesList: [
 				ns("core:spec/story-respond", "Reply", "core:genre/story"),
-				ns("core:spec/lair-respond", "Reply", "core:genre/lair"),
+				ns("core:spec/lair-reply", "Reply", "core:genre/lair"),
 				ns("core:spec/summarize-scene", "Summarize scene")
 			]
 		})
@@ -104,7 +104,7 @@ describe("Admin › Pipelines — Recent runs", () => {
 		listeners.get("pipelines:runs")!({
 			runs: [
 				run("r1", "core:spec/story-respond"),
-				run("r2", "core:spec/lair-respond"),
+				run("r2", "core:spec/lair-reply"),
 				run("r3", "core:spec/summarize-scene")
 			]
 		})

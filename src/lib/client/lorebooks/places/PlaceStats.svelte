@@ -289,7 +289,7 @@
 							</span>
 						{/if}
 						{#if !row.writable}
-							<span class="badge preset-tonal-surface text-[11px]">retired</span>
+							<span class="badge preset-tonal-surface text-meta">retired</span>
 						{/if}
 					</div>
 

@@ -5,11 +5,10 @@
 	 * as every other lens draws (#88): its title names the scope, so its line
 	 * must be the scope's too.
 	 */
-	import { SCOPE_LABELS } from "$lib/shared/lorebooks/loreRoute"
 	import TimeLens from "../time/TimeLens.svelte"
 	import type { TimeEntryRow, TimeSceneRow } from "../time/storyTime"
 	import { getBookData } from "../bookData.svelte"
-	import { timeLensEntries } from "../scopes"
+	import { scopeTitle, timeLensEntries } from "../scopes"
 	import type { LensProps } from "./types"
 
 	let {
@@ -32,7 +31,7 @@
 <TimeLens
 	{lorebookId}
 	mode={bench.mode}
-	scopeTitle={SCOPE_LABELS[bench.route.scope]}
+	scopeTitle={scopeTitle(bench.route.scope)}
 	{entries}
 	scenes={book.scenes as unknown as TimeSceneRow[]}
 	session={bench.timeSession}

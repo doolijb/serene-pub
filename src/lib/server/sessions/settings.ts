@@ -21,26 +21,38 @@
  *     host's `session_settings` read.
  *  3. Scripts and hooks receive it as the read-only extra `session`.
  *
- * ## The cascade (§4.13)
+ * ## The cascade (§4.13; 🚧 PLAN-layering A3, A10, R32 — 2026-10-20)
  *
- * For every key the genre declares (`shape.fields`) or pins
- * (`GenreDecl.settings`), the first layer with a value answers:
+ * For every key the genre declares (`shape.fields`) or pins, the lowest
+ * layer with a value answers — unless a layer above it **locked** the key,
+ * which no layer below may then change (`server/sessions/exposure.ts`, the
+ * SDK's `resolveExposure`):
  *
  * ```
- * session   sessions.genre_fields[key]   — stored only when the genre DECLARES the field
- * genre     GenreDecl.settings[key]      — a pinned value; never stored per session
- * core      the FieldDecl's `default`    — the tooling core ships and its genres use
+ * session   sessions.genre_fields[key]        — stored only when the genre DECLARES the field
+ * preset    session_presets.settings[key]     — the session's preset's value (may lock)
+ * genre     the genre's defaults' settings    — GenreDecl.defaults.settings over the older
+ *           (GenreDecl.settings pins)            GenreDecl.settings pins (may lock)
+ * core      the FieldDecl's `default`         — the tooling core ships and its genres use
  * ```
+ *
+ * Each layer's value is a plain value or `{ value, lock?, askAtStart? }`
+ * (`SettingValue`); `askAtStart` places an owner-open setting on the start
+ * form and is no level. Who may change a key — the owner when its `reach`
+ * is `owner` and nothing above locked it, an administrator otherwise — is
+ * the settings form's (`settingsForm.ts`), read through the same resolver.
+ * The rules the session plays (its ruleset and rigour) are columns fixed at
+ * start (R32): resolved through the same cascade at creation, read-only
+ * after, and not part of `fields`.
  *
  * A pinned key with no field renders no control and stores nothing: the pin
  * is what every run reads (the replacement for a `hidden` flag). A stored
  * value under a key the genre does not declare is not a field — declaration
  * is the only way in (§4.11) — so it never reaches the document.
  *
- * ⚠ A key nobody declares or pins resolves to core's default only when core
- * ships a `FieldDecl` for it; that field (`AUTO_ADVANCE_FIELD`, §4.6) is
- * born in A6, and this resolver grows that layer with it. Until then the
- * cascade runs over declared ∪ pinned keys.
+ * A pipeline's settings are not here: they are its registration's values
+ * (R38, A9), read by the run through `registrationValueLayers` and shown by
+ * the settings form under each registration.
  *
  * ## What the widget envelope gets
  *
@@ -55,6 +67,7 @@ import { annexWithoutPoints } from "$lib/server/sessions/annexRevisionPoints"
 import { and, asc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
+	isSettingDecision,
 	readComposerStates,
 	readTurnOrder,
 	type SessionCastV1,
@@ -63,10 +76,10 @@ import {
 } from "@serene-pub/sdk"
 import {
 	cascadeFields,
-	presetPinnedSettings,
 	getSessionGenre,
 	STANDARD_GENRE_ID
 } from "$lib/server/pipelines/entities/sessionGenres"
+import { genreLayerValues, presetLayerValues } from "$lib/server/sessions/exposure"
 import { channelsOf } from "$lib/server/messages/channels"
 import {
 	resolvePlayerLabel,
@@ -165,6 +178,36 @@ export async function resolveSessionSettings(
 				Object.assign(params, r.value as Record<string, unknown>)
 		} else params[r.path] = r.value
 	}
+	// 🚧 A9: the session's own values of a pipeline it runs live on its
+	// registration rows (the settings form's session layer) — over the
+	// ⏳ older per-spec rows above, keyed by the pipeline the row's
+	// registration runs.
+	// 🚧 R55: each routine in force's mode, by the pipeline it runs. (Story's
+	// Rest read the reckoning's here until GM 2026-10-23 — G1 ★3: a press
+	// applies at its own action's mode; no core pipeline reads this now.)
+	const routineModes: Record<string, "off" | "review" | "full"> = {}
+	{
+		const { effectiveRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
+		const resolved = await effectiveRegistrations(db, sessionId)
+		for (const r of resolved?.effective ?? [])
+			if (r.trigger.family === "routine" && !(r.pipeline in routineModes))
+				routineModes[r.pipeline] = r.mode ?? "full"
+		const pipelineOf = new Map<string, string>()
+		for (const r of [...(resolved?.offered ?? []), ...(resolved?.effective ?? [])]) pipelineOf.set(r.key, r.pipeline)
+		for (const row of resolved?.rows.session ?? []) {
+			if (row.dropped || !row.values) continue
+			const slug = row.specSlug ?? pipelineOf.get(row.key)
+			if (!slug) continue
+			for (const [nodeKey, slots] of Object.entries(row.values as Record<string, Record<string, unknown>>)) {
+				const p = (slots ?? {}).params
+				if (p === undefined) continue
+				const params = (entry(slug).params[nodeKey] ??= {})
+				if (p && typeof p === "object" && !Array.isArray(p))
+					for (const [k, v] of Object.entries(p as Record<string, unknown>))
+						params[k] = isSettingDecision(v) ? v.value : v
+			}
+		}
+	}
 
 	const metadata = (session.metadata ?? {}) as Record<string, unknown>
 	// The state only (R28): what the session chose is in `pipelines[slug]
@@ -190,8 +233,8 @@ export async function resolveSessionSettings(
 		presetId: session.presetId ?? null,
 		fields: cascadeFields({
 			declared: (shape?.fields ?? {}) as Record<string, { default?: unknown }>,
-			pinned: genre?.settings ?? {},
-			preset: await presetPinnedSettings(db, session.presetId ?? null),
+			pinned: await genreLayerValues(genreId, genre?.settings),
+			preset: await presetLayerValues(db, session.presetId ?? null),
 			stored: (session.genreFields ?? {}) as Record<string, unknown>
 		}),
 		...(playerLabel ? { playerLabel } : {}),
@@ -201,6 +244,7 @@ export async function resolveSessionSettings(
 		channels: channelsOf(shape),
 		cast,
 		pipelines,
+		routineModes,
 		turnOrder,
 		metadata,
 		// The annex column (0153, A5) is on the row: not null, default `{}`.

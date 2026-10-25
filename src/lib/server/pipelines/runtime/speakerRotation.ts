@@ -83,9 +83,15 @@ export type RotationMessage = TurnHistoryMessage & {
 	 * participant references it plans a character turn for, in order. Only
 	 * on such a row.
 	 */
-	turnPlan?: { turns?: unknown } | null
+	turnPlan?: { turns?: unknown; waits?: unknown; rolls?: unknown; skipped?: unknown } | null
 	/** The row was stopped while it was written (`generationOutcome: 'stopped'`). Only when it was. */
 	stopped?: boolean
+	/**
+	 * 🚧 The form this row answers (`metadata.answersForm`, U5f) — what holds
+	 * a plan's turns while its roll forms are open (Lair rewrite D3). Only on
+	 * an answer's row.
+	 */
+	answersForm?: { messageId?: unknown; blockId?: unknown } | null
 }
 
 /** Who voiced a row, by reference: the projected `speaker`, else the raw `metadata.speaker`. */
@@ -400,14 +406,52 @@ const plannedRefsOf = (row: RotationMessage): ParticipantRef[] | null => {
 	return turns.filter((t): t is ParticipantRef => typeof t === "string" && t.length > 0)
 }
 
+/** 🚧 A plan's string list (`waits`, `skipped`), empty when absent. */
+const planList = (row: RotationMessage, key: "waits" | "skipped"): string[] => {
+	const list = (row.turnPlan as Record<string, unknown> | null | undefined)?.[key]
+	return Array.isArray(list) ? list.filter((t): t is string => typeof t === "string" && !!t) : []
+}
+
+/**
+ * 🚧 Whether a plan's turns are **held** (Lair rewrite D3): it names a roll
+ * row (`turnPlan.rolls`) and at least one of that row's roll forms has no
+ * answer yet — no visible row after it stamped `answersForm` for that form.
+ * Read off the history, so the recompute a roll's answer row sets off
+ * already sees it answered, whenever the press's own stamp lands.
+ */
+const heldOn = (
+	plan: RotationMessage,
+	after: readonly RotationMessage[]
+): boolean => {
+	const rolls = (plan.turnPlan as { rolls?: unknown } | null | undefined)?.rolls as
+		| { messageId?: unknown; forms?: unknown }
+		| undefined
+	if (!rolls || typeof rolls !== "object") return false
+	const forms = Array.isArray(rolls.forms) ? rolls.forms.filter((f): f is string => typeof f === "string") : []
+	if (!forms.length) return false
+	const answered = new Set<string>()
+	for (const row of after) {
+		if (!row || row.isHidden) continue
+		const a = row.answersForm
+		if (a && Number(a.messageId) === Number(rolls.messageId) && typeof a.blockId === "string")
+			answered.add(a.blockId)
+	}
+	return forms.some((f) => !answered.has(f))
+}
+
 /**
  * 🚧 **The standing turn plan** (Lair character turns, owner ruling
  * 2026-09-30): the newest visible row that carries a turn plan, unless a
- * person's line on `main` is newer than it — a person speaking after a plan
- * has moved the story past it. `before`, a row id: only rows older than it
- * count (a regenerate or swipe re-voicing that row reads the plan it was
- * played from). Null when no plan stands. `index` is the plan row's place in
- * `messages`.
+ * person's line on `main` after it moved the story past it. `before`, a row
+ * id: only rows older than it count (a regenerate or swipe re-voicing that
+ * row reads the plan it was played from). Null when no plan stands. `index`
+ * is the plan row's place in `messages`.
+ *
+ * 🚧 **A seat's own turn is no direction** (Lair rewrite D5, 2026-10-21): a
+ * person's line from a seat the plan still waits for — the persona or
+ * card-less seat it names, not yet spoken, not skipped — is that seat's
+ * planned turn, and the plan stands through it. Any other person's line on
+ * `main` (the GM's direction, a seat speaking out of turn) moves past it.
  *
  * The one reading of "which plan stands": the narrator strategy prepares the
  * plan's turns from it, and `core:query/turn-plan@1` hands a character turn
@@ -417,24 +461,38 @@ export function standingTurnPlan(
 	messages: readonly RotationMessage[],
 	before?: number
 ): { index: number; turns: ParticipantRef[]; row: RotationMessage } | null {
+	const counts = (row: RotationMessage | null | undefined): row is RotationMessage =>
+		!!row && !row.isHidden && !(before !== undefined && typeof row.id === "number" && row.id >= before)
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const row = messages[i]
-		if (!row || row.isHidden) continue
-		if (before !== undefined && typeof row.id === "number" && row.id >= before) continue
-		if (isPersonsMainLine(row)) return null
+		if (!counts(row)) continue
+		if (isPersonsMainLine(row) && senderRefOf(row) === null) return null
 		const turns = plannedRefsOf(row)
-		if (turns) return { index: i, turns, row }
+		if (!turns) continue
+		// The person lines after it, oldest first: each a seat's own turn.
+		const waiting = new Set(planList(row, "waits").filter((r) => turns.includes(r as ParticipantRef)))
+		for (const ref of planList(row, "skipped")) waiting.delete(ref)
+		for (const later of messages.slice(i + 1)) {
+			if (!counts(later) || !isPersonsMainLine(later)) continue
+			const sender = senderRefOf(later)
+			if (!sender || !waiting.has(sender)) return null
+			waiting.delete(sender)
+		}
+		return { index: i, turns, row }
 	}
 	return null
 }
 
 /**
  * 🚧 **The planned turns** still to be taken: the standing plan's references,
- * in its order, less every one whose character has a visible row on `main`
- * after the plan row — each `{ ref, via: 'plan' }`. A row after the plan
- * that was stopped ends the plan (R34, "a Stop ends the round"): nothing is
- * left to take. A reference named twice is one turn. `planned` is whether a
- * plan stands at all — one naming nobody still answered the person's line.
+ * in its order, less every one whose seat has a visible row on `main` after
+ * the plan row (a character's reply, or a person's own line from the seat)
+ * and every waiting player the GM moved past (`turnPlan.skipped`) — each
+ * `{ ref, via: 'plan' }`. A row after the plan that was stopped ends the plan
+ * (R34, "a Stop ends the round"): nothing is left to take. A reference named
+ * twice is one turn. While the plan's roll forms are open (`heldOn`, Lair
+ * rewrite D3) nothing is prepared yet. `planned` is whether a plan stands at
+ * all — one naming nobody still answered the person's line.
  */
 function plannedTurns(messages: readonly RotationMessage[]): {
 	planned: boolean
@@ -442,12 +500,18 @@ function plannedTurns(messages: readonly RotationMessage[]): {
 } {
 	const standing = standingTurnPlan(messages)
 	if (!standing) return { planned: false, entries: [] }
-	const spoken = new Set<string>()
-	for (const row of messages.slice(standing.index + 1)) {
+	const after = messages.slice(standing.index + 1)
+	if (heldOn(standing.row, after)) return { planned: true, entries: [] }
+	const spoken = new Set<string>(planList(standing.row, "skipped"))
+	for (const row of after) {
 		if (!row || row.isHidden) continue
 		if (row.stopped === true) return { planned: true, entries: [] }
 		if (parseChannel(row.channel ?? DEFAULT_CHANNEL).slug !== DEFAULT_CHANNEL) continue
 		if (typeof row.characterId === "number") spoken.add(`character:${row.characterId}`)
+		if (row.role === "user") {
+			const sender = senderRefOf(row)
+			if (sender) spoken.add(sender)
+		}
 	}
 	const seen = new Set<string>()
 	const entries: TurnEntry[] = []
@@ -671,15 +735,19 @@ export function turnOrderSelection(
  * 🚧 **Unprompted turns** (`core:task/turn-unprompted@1`; PLAN-genre-restructure
  * §4 voices group, lane 2, 2026-10-19): the order the strategy prepared,
  * with at most ONE entry put at its head once the round is over — an AI
- * voice speaking without being asked. Pure: what a session's background
- * tasks switched on (`modes`, `resolve-tasks@1`'s) over the history the
- * recompute already read.
+ * voice speaking without being asked. Pure: what the session's genre
+ * settings switched on (`modes` — Story's *Let others speak up* and
+ * *Narrator asides*, read by `core:script/unprompted-modes`) over the
+ * history the recompute already read.
  *
  * The round is over when the order holds nothing an AI still has to say —
  * empty, or only people's seats (a persona's or a card-less player seat's
  * entry) — and somebody has answered the person since their newest line on
- * `main`. Before that, or with both tasks off, the order passes through
- * untouched. Each voice comes once a round:
+ * `main`. Before that, or with both off, the order passes through
+ * untouched. 🚧 The `modes` are no host task lookup (lane 6): the genre's
+ * settings `sideCast` and `narratorInterjections`, mapped onto these keys by
+ * the seeded script the turn-order pipeline runs. Each voice comes once a
+ * round:
  *
  *  · `side-cast` — a seated character who did not speak last (the
  *    earliest of this round's speakers first) speaks up again; done once

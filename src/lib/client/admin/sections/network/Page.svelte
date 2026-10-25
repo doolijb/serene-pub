@@ -1,4 +1,6 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
+	import InlineError from "$lib/client/components/InlineError.svelte"
 	import { realDateTime } from "$lib/client/utils/realTime.svelte"
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	/**
@@ -352,10 +354,10 @@
 			<section class="panel-card flex flex-col gap-4" aria-labelledby="tunnel-heading">
 				<div class="flex flex-col gap-1">
 					<h2 id="tunnel-heading" class="text-sm font-medium">Tunnel</h2>
-					<p class="text-surface-600-400 text-sm">
+					<FieldHelp>
 						Make this pub reachable from outside your network,
 						without port forwarding.
-					</p>
+					</FieldHelp>
 				</div>
 
 				<!-- Status line -->
@@ -382,7 +384,7 @@
 					{/if}
 				</div>
 				{#if tunnel?.lastError}
-					<p class="text-error-600-400 text-sm">{tunnel.lastError}</p>
+					<InlineError>{tunnel.lastError}</InlineError>
 				{/if}
 
 				<!-- Mode. Switching while something is running would orphan
@@ -397,7 +399,7 @@
 								aria-checked={mode === opt.id}
 								disabled={isRunning}
 								class="btn btn-sm {mode === opt.id
-									? 'preset-tonal-primary'
+									? 'preset-pressed'
 									: 'preset-tonal-surface'}"
 								onclick={() => (mode = opt.id as "easy" | "custom")}
 							>
@@ -406,21 +408,21 @@
 						{/each}
 					</div>
 					{#if mode === "easy"}
-						<p class="text-surface-600-400 text-sm">
+						<FieldHelp>
 							A free Cloudflare quick tunnel. No account, no domain —
 							but the address is random and <strong>
 								changes every time the tunnel restarts
 							</strong>
 							, so the link you share is good for this session only.
-						</p>
+						</FieldHelp>
 					{:else}
-						<p class="text-surface-600-400 text-sm">
+						<FieldHelp>
 							Your own domain on a free Cloudflare account. The address
 							is stable across restarts. In the Cloudflare dashboard,
 							point the tunnel's public hostname at
 							<code>http://localhost:{"{PORT}"}</code>
 							— the same port this page is served on.
-						</p>
+						</FieldHelp>
 						<label class="label">
 							<span class="label-text text-surface-600-400 text-xs">
 								Public hostname
@@ -465,7 +467,7 @@
 								disabled={isRunning}
 								aria-pressed={ttlEnabled && ttlHours === preset}
 								class="btn btn-sm {ttlEnabled && ttlHours === preset
-									? 'preset-tonal-primary'
+									? 'preset-pressed'
 									: 'preset-tonal-surface'}"
 								onclick={() => {
 									ttlEnabled = true
@@ -480,7 +482,7 @@
 							disabled={isRunning}
 							aria-pressed={!ttlEnabled}
 							class="btn btn-sm {!ttlEnabled
-								? 'preset-tonal-primary'
+								? 'preset-pressed'
 								: 'preset-tonal-surface'}"
 							onclick={() => (ttlEnabled = false)}
 						>
@@ -510,9 +512,9 @@
 						</p>
 					{/if}
 					{#if ttlEnabled && expiresAtLabel}
-						<p class="text-surface-600-400 text-sm">
+						<FieldHelp>
 							This tunnel stops at {expiresAtLabel}.
-						</p>
+						</FieldHelp>
 					{/if}
 				</div>
 
@@ -525,18 +527,18 @@
 						onCheckedChange={(e) => (autoStart = e.checked)}
 					/>
 					{#if autoStart && mode === "easy"}
-						<p class="text-surface-600-400 text-sm">
+						<FieldHelp>
 							On Easy mode this brings the tunnel back after a
 							restart, but with a new address — the old link stops
 							working.
-						</p>
+						</FieldHelp>
 					{/if}
 				</div>
 
 				{#if isRunning && !starting}
-					<p class="text-surface-600-400 text-sm">
+					<FieldHelp>
 						Stop the tunnel to change its configuration.
-					</p>
+					</FieldHelp>
 				{/if}
 
 				<div class="flex flex-wrap items-center gap-2">
@@ -580,28 +582,28 @@
 				</div>
 
 				{#if starting}
-					<p class="text-surface-600-400 text-sm">
+					<FieldHelp>
 						Waiting for Cloudflare to assign an address. The first
 						start also downloads <code>cloudflared</code>
 						, so this can take up to a minute.
-					</p>
+					</FieldHelp>
 				{/if}
 			</section>
 
 			<section class="panel-card flex flex-col gap-3" aria-labelledby="hosts-heading">
 				<div class="flex flex-col gap-1">
 					<h2 id="hosts-heading" class="text-sm font-medium">Allowed hosts</h2>
-					<p class="text-surface-600-400 text-sm">
+					<FieldHelp>
 						Which origins may open a realtime connection to this
 						pub, and where each one comes from.
-					</p>
+					</FieldHelp>
 				</div>
 
 				<!-- Stated as a rule, not rendered as a list entry. An Origin
 				     matching the request's own Host is allowed without
 				     appearing anywhere, so inventing a row for it would name a
 				     hostname nobody configured. -->
-				<div class="bg-surface-50-950 rounded-[10px] p-3 text-sm">
+				<div class="bg-surface-50-950 rounded-base p-3 text-sm">
 					<p class="font-medium">Any host you reach this app on</p>
 					<p class="text-surface-600-400">
 						A page and its realtime connection are served from the
@@ -616,7 +618,7 @@
 				<ul class="flex flex-col gap-2">
 					{#each allowedHosts as host (host.hostname)}
 						<li
-							class="bg-surface-50-950 flex items-center justify-between gap-3 rounded-[10px] px-3 py-2"
+							class="bg-surface-50-950 flex items-center justify-between gap-3 rounded-base px-3 py-2"
 						>
 							<code class="min-w-0 truncate text-sm" title={host.hostname}>{host.hostname}</code>
 							<span class="badge preset-tonal-surface shrink-0 text-xs">
@@ -626,12 +628,12 @@
 					{/each}
 				</ul>
 
-				<p class="text-surface-600-400 text-xs">
+				<FieldHelp>
 					This list is read-only. Every entry is configured somewhere
 					with more authority than this page — the process environment,
 					or the tunnel that is currently running — so editing it here
 					would only last until the next restart.
-				</p>
+				</FieldHelp>
 			</section>
 		{/if}
 	</div>

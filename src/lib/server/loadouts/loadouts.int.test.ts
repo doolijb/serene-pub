@@ -68,11 +68,23 @@ describe("seeding", () => {
 			.where(eq(schema.loadouts.id, extraction.id))
 		const again = await seedCoreLoadouts(db as any)
 		expect(again.inserted).toBe(0)
-		expect(again.refreshed).toBe(11)
+		// 13 since O12 (2026-10-21): + Transcription and Spoken reply.
+		expect(again.refreshed).toBe(13)
 		expect((await byId("core:loadout/extraction@1")).samplingConfigId).toBeNull()
 		expect(
 			(await db.select().from(schema.loadouts)).filter((r) => r.owner === "core")
-		).toHaveLength(11)
+		).toHaveLength(13)
+		// 🚧 O12: both arrive unfilled, on their own transforms.
+		expect(await byId("core:loadout/transcription@1")).toMatchObject({
+			name: "Transcription",
+			transform: "audio->text",
+			connectionId: null
+		})
+		expect(await byId("core:loadout/spoken-reply@1")).toMatchObject({
+			name: "Spoken reply",
+			transform: "text->text+audio",
+			connectionId: null
+		})
 	})
 
 	it("a plugin's declaration arrives unfilled and unmerged; a foreign namespace is refused", async () => {

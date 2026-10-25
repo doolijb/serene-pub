@@ -354,7 +354,7 @@
 				<span class="text-sm font-semibold">{headline.text}</span>
 				{#if isActive && section}
 					<span
-						class="preset-tonal-primary inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium"
+						class="preset-tonal-primary inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-meta font-medium"
 						title={`In the ${isEmbeddings ? "Embeddings" : "Entities"} loadout`}
 					>
 						<Icons.Star size={9} aria-hidden="true" />
@@ -404,12 +404,12 @@
 							></span>
 						</span>
 						{#if progressText}
-							<span class="text-surface-600-400 text-[11px]">
+							<span class="text-surface-600-400 text-meta">
 								{progressText}
 							</span>
 						{/if}
 						{#if cancelling}
-							<span class="text-surface-600-400 text-[11px]">
+							<span class="text-surface-600-400 text-meta">
 								Cancelling — the current file finishes first.
 							</span>
 						{/if}
@@ -508,12 +508,12 @@
 							></span>
 						</span>
 						{#if progressText}
-							<span class="text-surface-600-400 text-[11px]">
+							<span class="text-surface-600-400 text-meta">
 								{progressText}
 							</span>
 						{/if}
 						{#if cancelling}
-							<span class="text-surface-600-400 text-[11px]">
+							<span class="text-surface-600-400 text-meta">
 								Cancelling — the current file finishes first.
 							</span>
 						{/if}

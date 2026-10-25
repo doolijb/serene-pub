@@ -28,6 +28,7 @@
  *   §map-canvas       — the shared map control Places draws with (2026-10-11, W4)
  *   §attendance       — Who's here, new with the widget (2026-10-11, W10)
  *   §backdrop         — new with the widget (2026-10-12, DESIGN-image-generation §6.4)
+ *   §routine-log      — While you were away, new with the widget (2026-10-21, PLAN-layering A7)
  * The P3 phases re-key these rules on widget parts (`data-widget-part`,
  * STYLE-GUIDE §6.16 "Widget parts"), one widget at a time: Stats (P3a),
  * World State (P3b), Scene Portraits (P3c), Lore entries (P3d), and the
@@ -68,7 +69,7 @@
 	--sp-w-chip-radius: 999px;
 	--sp-w-control-radius: 0.3rem;
 	--sp-w-icon-button-radius: 0.25rem;
-	--sp-w-meter-radius: 999px;
+	--sp-w-meter-radius: var(--sp-w-chip-radius);
 	/* spacing and sizes */
 	--sp-w-card-pad: 0.45rem 0.55rem;
 	--sp-w-card-gap: 0.3rem;
@@ -79,11 +80,11 @@
 	--sp-w-empty-gap: 0.5rem;
 	--sp-w-meter-height: 0.55rem;
 	/* type */
+	/* three sizes, not six (L13, 2026-10-24; STYLE-GUIDE §3.2, §6.16): a
+	   head line, a row, and everything smaller (notes, empty floors, compact
+	   rows, meta lines). A 13px control reads the app scale's --text-chip. */
 	--sp-w-font-head: 0.76rem;
 	--sp-w-font-row: 0.74rem;
-	--sp-w-font-row-compact: 0.68rem;
-	--sp-w-font-empty: 0.72rem;
-	--sp-w-font-note: 0.7rem;
 	--sp-w-font-meta: 0.68rem;
 	/* quiet text */
 	--sp-w-muted-opacity: 0.7;
@@ -129,11 +130,16 @@
 	min-inline-size: 0;
 }
 
-/* Line width: Comfortable (the `lineWidth` setting, `data-line-width`) — the
-   rows and the field keep a reading measure, about 640px of prose plus the
+/* Line width: Column and Comfortable (the `lineWidth` setting,
+   `data-line-width`) — the rows and the field keep a reading measure plus the
    avatar gutter (STYLE-GUIDE 3.4), centred in however wide the box is; the
-   scroll region around them is not capped. A widget style can move the
-   measure with `--sp-measure`.
+   scroll region around them is not capped. Comfortable's measure is about
+   640px of prose (40rem). Column, the default (★R1, 2026-10-24), is 76ch of
+   the story's body — Literata's `ch` is 0.58em at the body's 17px, scaled by
+   the person's story text size — never wider than the box. A unit `ch` here
+   would be the interface face's at the interface size, a Comfortable in all
+   but name, so the measure is spelled out. A widget style can move either
+   with `--sp-measure`.
 
    The box can be wider on one end than the other: the session's middle zone
    carries the balance that centres the column on the whole session
@@ -141,15 +147,18 @@
    by half the difference and never past either edge. Outside a session
    layout both are unset and this is `margin-inline: auto`. The pure mirror
    is `columnInsetPx` in sessionLayout/tuckedSides.ts. */
-[data-widget-part~="messages.root"][data-line-width="comfortable"] {
+[data-widget-part~="messages.root"][data-line-width="column"] {
+	--sp-measure: min(100%, calc(76 * 0.58 * 17px * var(--sp-prose-scale, 1)));
+}
+[data-widget-part~="messages.root"]:is([data-line-width="comfortable"], [data-line-width="column"]) {
 	--sp-column-width: calc(var(--sp-measure, 40rem) + 3.5rem);
 	--sp-column-shift: calc(
 		(var(--sp-stage-balance-start, 0px) - var(--sp-stage-balance-end, 0px)) /
 			2
 	);
 }
-[data-widget-part~="messages.root"][data-line-width="comfortable"] [data-widget-part~="messages.stage"],
-[data-widget-part~="messages.root"][data-line-width="comfortable"] [data-widget-part~="messages.compose"] {
+[data-widget-part~="messages.root"]:is([data-line-width="comfortable"], [data-line-width="column"]) [data-widget-part~="messages.stage"],
+[data-widget-part~="messages.root"]:is([data-line-width="comfortable"], [data-line-width="column"]) [data-widget-part~="messages.compose"] {
 	max-inline-size: var(--sp-column-width);
 	margin-inline-start: clamp(
 		0px,
@@ -228,9 +237,9 @@
 [data-sp-backing="glass"] [data-widget-part~="messages.root"]::before {
 	@apply preset-glass-surface;
 }
-/* Under Comfortable the pane is the column's, balance included (see the
-   Line width rules above). */
-[data-sp-backing]:not([data-sp-backing="none"]) [data-widget-part~="messages.root"][data-line-width="comfortable"]::before {
+/* Under Column and Comfortable the pane is the column's, balance included
+   (see the Line width rules above). */
+[data-sp-backing]:not([data-sp-backing="none"]) [data-widget-part~="messages.root"]:is([data-line-width="comfortable"], [data-line-width="column"])::before {
 	inset-inline: clamp(
 			0px,
 			(100% - var(--sp-column-width)) / 2 + var(--sp-column-shift),
@@ -291,6 +300,145 @@
 	white-space: nowrap;
 	font-size: calc(0.875rem * var(--text-scaling, 1));
 	font-weight: var(--font-weight-semibold);
+}
+
+/* 🚧 Back · Forward (RF fix 5, owner ruling 2026-10-23): the two presses are
+   the session header's since polish parity L1 (2026-10-24); the widget keeps
+   the composer's note while rewound, and Forward beside it for the owner. The
+   note's Forward is the quiet button (the turn line's Review). A grey press
+   is `aria-disabled` (reachable, its reason in the title), never `disabled`. */
+[data-widget-part~="messages.rewind-replace-forward"] {
+	display: inline-flex;
+	height: calc(var(--spacing) * 7);
+	align-items: center;
+	gap: var(--spacing);
+	border-radius: 6px;
+	padding-inline: calc(var(--spacing) * 2);
+	white-space: nowrap;
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+@media (hover: hover) {
+	[data-widget-part~="messages.rewind-replace-forward"]:not([aria-disabled="true"]):hover {
+		color: light-dark(var(--color-surface-900), var(--color-surface-50));
+		background: var(--sp-w-chip-bg);
+	}
+}
+[data-widget-part~="messages.rewind-replace-forward"]:focus-visible {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: 2px;
+}
+[data-widget-part~="messages.rewind-replace-forward"][aria-disabled="true"] {
+	opacity: var(--sp-w-muted-opacity);
+	cursor: default;
+}
+/* While rewound: the composer's one-line note, above the field — what a new
+   line does to the turns ahead — and Forward beside it for the owner. The
+   warning's tone (a write here deletes the turns ahead), never the error's. */
+[data-widget-part~="messages.rewind-replace"] {
+	display: flex;
+	align-items: center;
+	gap: 0.375rem;
+	min-inline-size: 0;
+	margin: 0 0 0.375rem;
+	padding: 0.25rem 0.5rem;
+	border-radius: 6px;
+	background: color-mix(in oklab, var(--color-warning-500) 12%, transparent);
+	color: light-dark(var(--color-warning-900), var(--color-warning-100));
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+}
+[data-widget-part~="messages.rewind-replace-icon"] {
+	flex: none;
+}
+[data-widget-part~="messages.rewind-replace-text"] {
+	min-inline-size: 0;
+}
+[data-widget-part~="messages.rewind-replace-forward"] {
+	margin-inline-start: auto;
+	color: inherit;
+}
+/* Hidden from the story: the badge says it whole (the base's 12ch is for a scene's name). */
+[data-widget-part~="messages.message-badge-hidden"] [data-widget-part~="messages.message-badge-text"] {
+	max-inline-size: none;
+}
+
+/* 🚧 The channel tabs (lair fix 2: the Lair's Story · Sanctum): a copy that
+   shows two or more channels, one tab each across the box's top, first
+   whichever end the composer is at. The tabs are the host's (`sp-tabs` draws
+   the list and a trigger per `sp-tab`), so the list and the triggers are
+   reached through the tabs' part, as the line editor's are. STYLE-GUIDE
+   §6.5's tab: 13px labels, a 2px primary underline on the chosen tab above a
+   1px rule; a dot after a hidden tab's name when a line somebody else wrote
+   lands on it. */
+[data-widget-part~="messages.channel-tabs"] {
+	order: -2;
+	flex: 0 0 auto;
+	display: block;
+	min-inline-size: 0;
+	border-block-end: 1px solid color-mix(in oklab, currentColor 12%, transparent);
+}
+[data-widget-part~="messages.channel-tabs"] .sp-tabs-list {
+	display: flex;
+	align-items: stretch;
+	gap: 0.25rem;
+	min-inline-size: 0;
+	margin: 0;
+	padding: 0 0.5rem;
+	border-style: none;
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+.sp-tab-trigger:has(> .sp-tab-trigger-body > [data-widget-part~="messages.channel-tab"]) {
+	display: inline-flex;
+	align-items: center;
+	min-block-size: 2.25rem;
+	padding: 0 0.75rem;
+	margin-block-end: -1px;
+	border-style: none;
+	border-block-end: 2px solid transparent;
+	border-radius: 0;
+	background: none;
+	white-space: nowrap;
+	font-size: calc(13px * var(--text-scaling, 1));
+	line-height: 1.45;
+	font-weight: var(--font-weight-medium);
+	color: var(--color-surface-600);
+}
+.sp-tab-trigger:has(> .sp-tab-trigger-body > [data-widget-part~="messages.channel-tab"]):where([data-mode="dark"], [data-mode="dark"] *) {
+	color: var(--color-surface-400);
+}
+@media (hover: hover) {
+	.sp-tab-trigger:has(> .sp-tab-trigger-body > [data-widget-part~="messages.channel-tab"]):not([aria-selected="true"]):hover {
+		color: var(--color-surface-900);
+	}
+	.sp-tab-trigger:has(> .sp-tab-trigger-body > [data-widget-part~="messages.channel-tab"]):not([aria-selected="true"]):where([data-mode="dark"], [data-mode="dark"] *):hover {
+		color: var(--color-surface-50);
+	}
+}
+.sp-tab-trigger:has(> .sp-tab-trigger-body > [data-widget-part~="messages.channel-tab"])[aria-selected="true"] {
+	border-block-end-color: var(--color-primary-500);
+	color: var(--color-surface-950);
+}
+.sp-tab-trigger:has(> .sp-tab-trigger-body > [data-widget-part~="messages.channel-tab"])[aria-selected="true"]:where([data-mode="dark"], [data-mode="dark"] *) {
+	color: var(--color-surface-50);
+}
+.sp-tab-trigger:has(> .sp-tab-trigger-body > [data-widget-part~="messages.channel-tab"]):focus-visible {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: -2px;
+}
+[data-widget-part~="messages.channel-tab"] {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.3rem;
+}
+[data-widget-part~="messages.channel-tab-dot"] {
+	display: inline-block;
+	inline-size: 0.4rem;
+	block-size: 0.4rem;
+	border-radius: var(--sp-w-chip-radius);
+	background: var(--color-primary-500);
 }
 
 /* ── the selection bar, the read-only banner, who is due next ────────────── */
@@ -428,7 +576,8 @@
 	min-width: 0px;
 	padding-inline: calc(var(--spacing) * 4);
 }
-/* Left: the status pill, then Review and Inspect run. */
+/* Left: the status pill while a reply is written or after one failed, then
+   Review; at rest nothing (the newest reply's ⋮ menu says how it went). */
 [data-widget-part~="messages.turn-line-run"] {
 	display: flex;
 	flex: 0 1 auto;
@@ -466,7 +615,7 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 	flex: none;
 	inline-size: 6px;
 	block-size: 6px;
-	border-radius: 9999px;
+	border-radius: var(--sp-w-chip-radius);
 	background: var(--color-warning-500);
 	animation: sp-dot-pulse 1.6s ease-out infinite;
 }
@@ -490,16 +639,14 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 	flex: none;
 	opacity: var(--sp-w-muted-opacity);
 }
-/* Review and Inspect run beside the pill: the quiet button, as Pick. */
+/* Review beside the pill: the quiet button, as Pick. */
 [data-widget-part~="messages.turn-line-links"] {
 	display: inline-flex;
 	flex: none;
 	align-items: center;
 	gap: var(--spacing);
 }
-[data-widget-part~="messages.turn-line-review"],
-[data-widget-part~="messages.turn-line-inspect"],
-[data-widget-part~="messages.turn-line-panel-inspect"] {
+[data-widget-part~="messages.turn-line-review"] {
 	display: inline-flex;
 	height: calc(var(--spacing) * 7);
 	align-items: center;
@@ -512,19 +659,15 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 	color: light-dark(var(--color-surface-600), var(--color-surface-400));
 }
 @media (hover: hover) {
-	[data-widget-part~="messages.turn-line-review"]:hover,
-	[data-widget-part~="messages.turn-line-inspect"]:hover,
-	[data-widget-part~="messages.turn-line-panel-inspect"]:hover {
+	[data-widget-part~="messages.turn-line-review"]:hover {
 		color: light-dark(var(--color-surface-900), var(--color-surface-50));
 	}
 }
-[data-widget-part~="messages.turn-line-review"]:focus-visible,
-[data-widget-part~="messages.turn-line-inspect"]:focus-visible,
-[data-widget-part~="messages.turn-line-panel-inspect"]:focus-visible {
+[data-widget-part~="messages.turn-line-review"]:focus-visible {
 	outline: 2px solid var(--color-primary-500);
 	outline-offset: 2px;
 }
-/* A narrow box: the pill alone; its panel holds the links. */
+/* A narrow box: the pill alone; its panel holds Review. */
 @container sp-widget (width < 40rem) {
 	[data-widget-part~="messages.turn-line-links"] {
 		display: none;
@@ -559,10 +702,10 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 	gap: calc(var(--spacing) * 1.5);
 	height: calc(var(--spacing) * 8);
 	margin-block: calc(var(--spacing) * 2);
-	border-radius: calc(infinity * 1px);
+	border-radius: var(--sp-w-chip-radius);
 	padding-inline: calc(var(--spacing) * 3);
 	white-space: nowrap;
-	font-size: 13px;
+	font-size: var(--text-chip, 13px);
 	line-height: 1.45;
 	font-weight: var(--font-weight-medium);
 }
@@ -626,7 +769,7 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-size: 13px;
+	font-size: var(--text-chip, 13px);
 	line-height: 1.45;
 }
 [data-widget-part~="messages.turn-line-text"]:where([data-mode="dark"], [data-mode="dark"] *) {
@@ -697,12 +840,12 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 	justify-content: center;
 	gap: calc(var(--spacing) * 1.5);
 	height: calc(var(--spacing) * 8);
-	border-radius: calc(infinity * 1px);
+	border-radius: var(--sp-w-chip-radius);
 	padding-block: calc((var(--text-base) - calc(var(--spacing) * 0.5)) / 2);
 	padding-inline: calc(var(--spacing) * 3);
 	text-decoration-line: none;
 	white-space: nowrap;
-	font-size: 13px;
+	font-size: var(--text-chip, 13px);
 	line-height: 1.45;
 	font-weight: var(--font-weight-medium);
 	background-color: var(--color-primary-500);
@@ -729,6 +872,19 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 	white-space: nowrap;
 	font-size: calc(0.75rem * var(--text-scaling));
 	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+}
+/* 🚧 What the owner's Continue does at a waiting player (Lair rewrite D5):
+   one muted sentence under the line, wrapped, never cut; and that Continue
+   is the quieter, tonal button — moving past someone is not the usual
+   press. */
+[data-widget-part~="messages.turn-line-skip"] {
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.75) * var(--text-scaling));
+}
+[data-widget-part~="messages.turn-line-continue"][data-skips] {
+	background-color: var(--color-primary-100-900);
+	color: var(--color-primary-900-100);
 }
 
 /* The bar's buttons and Continue answer the pointer, the press and the
@@ -774,8 +930,6 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 @media (pointer: coarse) {
 	[data-widget-part~="messages.turn-line-pick"],
 	[data-widget-part~="messages.turn-line-review"],
-	[data-widget-part~="messages.turn-line-inspect"],
-	[data-widget-part~="messages.turn-line-panel-inspect"],
 	[data-widget-part~="messages.turn-line-stop"],
 	[data-widget-part~="messages.turn-line-retry"],
 	button[data-widget-part~="messages.turn-line-status"] {
@@ -877,32 +1031,76 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 	inline-size: var(--text-base);
 	block-size: var(--text-base);
 }
-
-/* The Actions disclosure above the card, and the retrieval notice beside it. */
-[data-widget-part~="messages.composer-disclosure-bar"] {
+/* 🚧 Take a seat (Lair rewrite D5): the name and the button on one row,
+   wrapping in a narrow box; the persona alternative a quiet link under it. */
+[data-widget-part~="messages.join"][data-join="seat"] {
+	padding-block: calc(var(--spacing) * 6);
+}
+[data-widget-part~="messages.join-seat"] {
 	display: flex;
 	flex-wrap: wrap;
-	align-items: center;
-	column-gap: calc(var(--spacing) * 3);
-	row-gap: var(--spacing);
+	justify-content: center;
+	gap: calc(var(--spacing) * 2);
+	width: 100%;
+	max-width: var(--container-sm);
 }
+[data-widget-part~="messages.join-name"] {
+	flex: 1 1 12rem;
+	min-width: 0;
+	padding-block: calc((var(--text-base) - calc(var(--spacing) * 0.5)) / 2);
+	padding-inline: calc((var(--text-base) - calc(var(--spacing) * 0.5)) / 2 + var(--spacing));
+	border: 1px solid var(--color-surface-300-700);
+	border-radius: var(--radius-base);
+	font-size: var(--text-base);
+	line-height: var(--text-base);
+	color: var(--color-surface-950-50);
+	background-color: var(--color-surface-50-950);
+}
+[data-widget-part~="messages.join-name"]:focus-visible {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: 1px;
+}
+[data-widget-part~="messages.join-alternative"] {
+	font-size: calc(0.875rem * var(--text-scaling));
+	color: light-dark(var(--color-primary-700), var(--color-primary-300));
+	text-decoration-line: underline;
+	text-underline-offset: 2px;
+}
+[data-widget-part~="messages.join-alternative"]:focus-visible {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: 2px;
+	border-radius: var(--radius-base);
+}
+[data-widget-part~="messages.join-refusal"] {
+	font-size: calc(0.875rem * var(--text-scaling));
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+
+/* The Actions disclosure: its toggle is the footer's, beside the persona
+   (polish parity L1, 2026-10-24); its row of chips opens above the card. */
 [data-widget-part~="messages.composer-actions-toggle"] {
+	flex: none;
 	display: inline-flex;
-	height: calc(var(--spacing) * 7);
+	height: calc(var(--spacing) * 8);
 	align-items: center;
 	gap: var(--spacing);
-	border-radius: 6px;
-	font-size: calc(0.75rem * var(--text-scaling));
-	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
-	color: var(--color-surface-500);
+	border-radius: var(--sp-w-chip-radius);
+	padding-inline: calc(var(--spacing) * 2.5);
+	font-size: var(--text-chip, 13px);
+	line-height: 1.45;
+	--tw-font-weight: var(--font-weight-medium);
+	font-weight: var(--font-weight-medium);
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
 }
 @media (hover: hover) {
 	[data-widget-part~="messages.composer-actions-toggle"]:hover {
-		color: var(--color-surface-700);
+		background-color: light-dark(var(--color-surface-200), var(--color-surface-800));
+		color: light-dark(var(--color-surface-800), var(--color-surface-200));
 	}
-	[data-widget-part~="messages.composer-actions-toggle"]:where([data-mode="dark"], [data-mode="dark"] *):hover {
-		color: var(--color-surface-300);
-	}
+}
+[data-widget-part~="messages.composer-actions-toggle"][aria-expanded="true"] {
+	background-color: light-dark(var(--color-surface-200), var(--color-surface-800));
+	color: light-dark(var(--color-surface-800), var(--color-surface-200));
 }
 [data-widget-part~="messages.composer-actions-chevron"] {
 	transition-property: transform, translate, scale, rotate;
@@ -913,9 +1111,13 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 [data-widget-part~="messages.composer-actions-toggle"][aria-expanded="true"] > [data-widget-part~="messages.composer-actions-chevron"] {
 	rotate: 180deg;
 }
-[data-widget-part~="messages.composer-notice"] {
-	margin-left: auto;
-	min-width: 0px;
+/* The retrieval notice's place: the start of the footer's end. It lays out
+   no box of its own — the page's view sizes itself: a line the first time a
+   session shows it (it takes the room it needs, and the footer wraps it under
+   the persona on a narrow box), an icon beside Attach after that. */
+[data-widget-part~="messages.composer-notice"],
+[data-widget-part~="messages.composer-notice"] > sp-host-view {
+	display: contents;
 }
 
 /* The actions row: ONE group of chips (next-pass note 30, 2026-10-02) — the
@@ -947,9 +1149,9 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 	align-items: center;
 	justify-content: center;
 	gap: calc(var(--spacing) * 1.5);
-	border-radius: calc(infinity * 1px);
+	border-radius: var(--sp-w-chip-radius);
 	padding-inline: calc(var(--spacing) * 3);
-	font-size: 13px;
+	font-size: var(--text-chip, 13px);
 	--tw-leading: 1.45;
 	line-height: 1.45;
 	--tw-font-weight: var(--font-weight-medium);
@@ -991,12 +1193,12 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 	right: calc(var(--spacing) * -0.5);
 	width: calc(var(--spacing) * 2);
 	height: calc(var(--spacing) * 2);
-	border-radius: calc(infinity * 1px);
+	border-radius: var(--sp-w-chip-radius);
 	background-color: var(--color-primary-500);
 }
 [data-widget-part~="messages.composer-new"] {
 	margin-left: auto;
-	border-radius: calc(infinity * 1px);
+	border-radius: var(--sp-w-chip-radius);
 	background-color: var(--color-primary-50-950);
 	color: var(--color-primary-950-50);
 	padding-inline: calc(var(--spacing) * 1.5);
@@ -1158,7 +1360,7 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 	padding-inline: calc(var(--spacing) * 2);
 	padding-block: calc(var(--spacing) * 1.5);
 	text-align: left;
-	font-size: 13px;
+	font-size: var(--text-chip, 13px);
 }
 [data-widget-part~="messages.composer-palette-row"][aria-selected="true"] [data-widget-part~="messages.composer-palette-button"] {
 	background-color: var(--color-primary-50-950);
@@ -1253,9 +1455,12 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 	max-block-size: none;
 }
 
-/* The footer: the channel, the persona, Preview, More and Send. */
+/* The footer, ONE row at rest: the persona, Actions, then — at the end — the
+   retrieval notice, Attach, Preview, More and Send. It wraps only for a
+   notice too long to sit beside the persona. */
 [data-widget-part~="messages.composer-footer"] {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
 	gap: var(--spacing);
 	padding: calc(var(--spacing) * 2);
@@ -1263,32 +1468,11 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 [data-widget-part~="messages.composer-footer-end"] {
 	margin-left: auto;
 	display: flex;
+	flex: 1 1 auto;
+	justify-content: flex-end;
 	align-items: center;
 	gap: var(--spacing);
-}
-/* The channel strip (R-C): which of the session's channels the next line
-   lands on; the chosen one is `aria-pressed`. */
-[data-widget-part~="messages.composer-channels"] {
-	display: inline-flex;
-	align-items: center;
-	gap: calc(var(--spacing) * 0.5);
-}
-[data-widget-part~="messages.composer-channel"] {
-	display: inline-flex;
-	height: calc(var(--spacing) * 8);
-	align-items: center;
-	justify-content: center;
-	border-radius: calc(infinity * 1px);
-	padding-inline: calc(var(--spacing) * 3);
-	font-size: 13px;
-	--tw-leading: 1.45;
-	line-height: 1.45;
-	--tw-font-weight: var(--font-weight-medium);
-	font-weight: var(--font-weight-medium);
-}
-[data-widget-part~="messages.composer-channel"][aria-pressed="true"] {
-	background-color: var(--color-primary-50-950);
-	color: var(--color-primary-950-50);
+	min-inline-size: 0;
 }
 /* The persona written as: a chip, and a switch with a menu when there is a choice. */
 [data-widget-part~="messages.composer-persona"] {
@@ -1296,11 +1480,11 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 	height: calc(var(--spacing) * 8);
 	align-items: center;
 	gap: calc(var(--spacing) * 1.5);
-	border-radius: calc(infinity * 1px);
+	border-radius: var(--sp-w-chip-radius);
 	padding-block: 0px;
 	padding-right: calc(var(--spacing) * 2);
 	padding-left: var(--spacing);
-	font-size: 13px;
+	font-size: var(--text-chip, 13px);
 	--tw-leading: 1.45;
 	line-height: 1.45;
 	--tw-font-weight: var(--font-weight-medium);
@@ -1357,7 +1541,7 @@ button[data-widget-part~="messages.composer-persona"] {
 	height: calc(var(--spacing) * 8);
 	align-items: center;
 	justify-content: center;
-	border-radius: calc(infinity * 1px);
+	border-radius: var(--sp-w-chip-radius);
 }
 [data-widget-part~="messages.composer-icon-button"] > :where(svg, sp-icon) {
 	width: calc(var(--spacing) * 4);
@@ -1367,23 +1551,19 @@ button[data-widget-part~="messages.composer-persona"] {
 	background-color: var(--color-primary-50-950);
 	color: var(--color-primary-950-50);
 }
-[data-widget-part~="messages.composer-icon-button"]:not([aria-pressed="true"], [data-active]),
-[data-widget-part~="messages.composer-channel"]:not([aria-pressed="true"]) {
+[data-widget-part~="messages.composer-icon-button"]:not([aria-pressed="true"], [data-active]) {
 	color: var(--color-surface-600);
 }
 @media (hover: hover) {
-	[data-widget-part~="messages.composer-icon-button"]:not([aria-pressed="true"], [data-active]):hover,
-	[data-widget-part~="messages.composer-channel"]:not([aria-pressed="true"]):hover {
+	[data-widget-part~="messages.composer-icon-button"]:not([aria-pressed="true"], [data-active]):hover {
 		color: var(--color-surface-900);
 	}
 }
-[data-widget-part~="messages.composer-icon-button"]:not([aria-pressed="true"], [data-active]):where([data-mode="dark"], [data-mode="dark"] *),
-[data-widget-part~="messages.composer-channel"]:not([aria-pressed="true"]):where([data-mode="dark"], [data-mode="dark"] *) {
+[data-widget-part~="messages.composer-icon-button"]:not([aria-pressed="true"], [data-active]):where([data-mode="dark"], [data-mode="dark"] *) {
 	color: var(--color-surface-400);
 }
 @media (hover: hover) {
-	[data-widget-part~="messages.composer-icon-button"]:not([aria-pressed="true"], [data-active]):where([data-mode="dark"], [data-mode="dark"] *):hover,
-	[data-widget-part~="messages.composer-channel"]:not([aria-pressed="true"]):where([data-mode="dark"], [data-mode="dark"] *):hover {
+	[data-widget-part~="messages.composer-icon-button"]:not([aria-pressed="true"], [data-active]):where([data-mode="dark"], [data-mode="dark"] *):hover {
 		color: var(--color-surface-50);
 	}
 }
@@ -1474,12 +1654,12 @@ button[data-widget-part~="messages.composer-persona"] {
 	justify-content: center;
 	gap: calc(var(--spacing) * 1.5);
 	height: calc(var(--spacing) * 8);
-	border-radius: calc(infinity * 1px);
+	border-radius: var(--sp-w-chip-radius);
 	padding-block: calc((var(--text-base) - calc(var(--spacing) * 0.5)) / 2);
 	padding-inline: calc(var(--spacing) * 3);
 	text-decoration-line: none;
 	white-space: nowrap;
-	font-size: 13px;
+	font-size: var(--text-chip, 13px);
 	--tw-leading: 1.45;
 	line-height: 1.45;
 	--tw-font-weight: var(--font-weight-medium);
@@ -1727,7 +1907,7 @@ button[data-widget-part~="messages.composer-persona"] {
 	filter: grayscale(0.3);
 }
 /* The quiet controls: a 2px primary outline at a 2px offset. */
-:is([data-widget-part~="messages.composer-actions-toggle"], [data-widget-part~="messages.composer-back"], [data-widget-part~="messages.composer-persona"], [data-widget-part~="messages.composer-icon-button"], [data-widget-part~="messages.composer-channel"]):focus-visible {
+:is([data-widget-part~="messages.composer-actions-toggle"], [data-widget-part~="messages.composer-back"], [data-widget-part~="messages.composer-persona"], [data-widget-part~="messages.composer-icon-button"]):focus-visible {
 	outline-style: solid;
 	outline-width: 2px;
 	outline-offset: 2px;
@@ -1763,12 +1943,10 @@ button[data-widget-part~="messages.composer-persona"] {
 }
 @container sp-widget (width < 64rem) {
 	[data-widget-part~="messages.composer-persona"],
-	[data-widget-part~="messages.composer-channel"],
 	[data-widget-part~="messages.composer-send"],
 	[data-widget-part~="messages.composer-stop"] {
 		height: calc(var(--spacing) * 11);
 	}
-	[data-widget-part~="messages.composer-channel"],
 	[data-widget-part~="messages.composer-send"],
 	[data-widget-part~="messages.composer-stop"] {
 		padding-inline: calc(var(--spacing) * 4);
@@ -1788,13 +1966,12 @@ button[data-widget-part~="messages.composer-persona"] {
 	[data-widget-part~="messages.composer-actions-toggle"],
 	[data-widget-part~="messages.composer-back"],
 	[data-widget-part~="messages.composer-persona"],
-	[data-widget-part~="messages.composer-channel"],
 	[data-widget-part~="messages.composer-send"],
 	[data-widget-part~="messages.composer-stop"],
-	[data-widget-part~="messages.composer-chips"] :where(button) {
+	[data-widget-part~="messages.composer-chips"] :where(button),
+	.sp-tab-trigger:has(> .sp-tab-trigger-body > [data-widget-part~="messages.channel-tab"]) {
 		height: calc(var(--spacing) * 11);
 	}
-	[data-widget-part~="messages.composer-channel"],
 	[data-widget-part~="messages.composer-send"],
 	[data-widget-part~="messages.composer-stop"],
 	[data-widget-part~="messages.composer-chips"] :where(button) {
@@ -1868,11 +2045,18 @@ button[data-widget-part~="messages.composer-persona"] {
 	white-space: nowrap;
 	font-weight: 500;
 }
+/* 🚧 O11: an attached sound's player, under its name in the tile. */
+[data-widget-part~="messages.composer-tray-audio"] {
+	grid-column: 2;
+	inline-size: 100%;
+	min-inline-size: 0;
+	block-size: 2rem;
+}
 /* Upload progress: a thin bar filling to `--sp-fill`. */
 [data-widget-part~="messages.composer-tray-progress"] {
 	display: block;
 	block-size: 4px;
-	border-radius: 9999px;
+	border-radius: var(--sp-w-chip-radius);
 	background: linear-gradient(to right, var(--color-primary-500) var(--sp-fill, 0%), var(--color-surface-200-800) var(--sp-fill, 0%));
 }
 [data-widget-part~="messages.composer-tray-refusal"] {
@@ -1892,7 +2076,7 @@ button[data-widget-part~="messages.composer-persona"] {
 	inline-size: 1.5rem;
 	block-size: 1.5rem;
 	padding: 0;
-	border-radius: 9999px;
+	border-radius: var(--sp-w-chip-radius);
 	color: var(--color-surface-700-300);
 	cursor: pointer;
 }
@@ -1992,7 +2176,7 @@ button[data-widget-part~="messages.composer-persona"] {
 	flex-basis: 100%;
 	padding-inline: calc(var(--spacing) * 1.5);
 }
-[data-composer-skin="minimal"] :is([data-widget-part~="messages.composer-channels"], [data-widget-part~="messages.composer-persona"]) {
+[data-composer-skin="minimal"] [data-widget-part~="messages.composer-persona"] {
 	order: -1;
 }
 [data-composer-skin="minimal"] [data-widget-part~="messages.composer-body"] {
@@ -2004,6 +2188,7 @@ button[data-widget-part~="messages.composer-persona"] {
 }
 [data-composer-skin="minimal"] [data-widget-part~="messages.composer-footer-end"] {
 	order: 1;
+	flex: none;
 	margin-left: 0;
 	gap: calc(var(--spacing) * 0.5);
 }
@@ -2389,13 +2574,13 @@ button[data-widget-part~="messages.composer-persona"] {
 }
 /* The region spans the panel. At Line width: Full the rows span it too, and
    the scrollbar's own edge is the only gutter it keeps, so the rows start
-   where the composer does. At Comfortable the column is centred in it: where
+   where the composer does. At Column and Comfortable the column is centred in it: where
    the box has room beside the column, a classic scrollbar's width is kept on
    both edges so the column's centre stays the panel's (and the header's),
    with the scrollbar showing or not. Narrower, the gutter would only squeeze
    the rows. */
 @container sp-widget (min-width: 46rem) {
-	[data-widget-part~="messages.root"][data-line-width="comfortable"] [data-widget-part~="messages.log-scroll"] .sp-scroll-region {
+	[data-widget-part~="messages.root"]:is([data-line-width="comfortable"], [data-line-width="column"]) [data-widget-part~="messages.log-scroll"] .sp-scroll-region {
 		scrollbar-gutter: stable both-edges;
 	}
 }
@@ -2566,6 +2751,23 @@ button[data-widget-part~="messages.composer-persona"] {
 [data-widget-part~="messages.message"][data-msg-table-line] [data-widget-part~="messages.message-body"] {
 	font-size: calc(0.875rem * var(--text-scaling, 1));
 }
+/* 🚧 A dice line (Lair rewrite D3): the rules speaking — a roll form, the
+   dice, a roll's "No check" — under its speaker's face and name (the Lair's
+   Oracle), drawn as mechanics rather than speech: its body a little smaller
+   and muted, its figures lined up. The blocks inside carry their own frame. */
+[data-widget-part~="messages.message"][data-msg-dice-line] {
+	/* The interface's face, not the story's: the rules, not a voice. Its
+	   prose a step smaller — the row keeps the inherited scale under its own
+	   name, and its content scales that, so the property never reads itself. */
+	--sp-prose: var(--typo-base--font-family, inherit);
+	--sp-dice-prose-scale: var(--sp-prose-scale, 1);
+	font-family: var(--typo-base--font-family, inherit);
+	font-variant-numeric: tabular-nums;
+}
+[data-widget-part~="messages.message"][data-msg-dice-line] [data-widget-part~="messages.message-content"] {
+	--sp-prose-scale: calc(var(--sp-dice-prose-scale, 1) * 0.88);
+	color: light-dark(var(--color-surface-700), var(--color-surface-300));
+}
 /* What the log says instead of lines: not granted, loading, nothing yet. */
 [data-widget-part~="messages.log-floor"] {
 	display: flex;
@@ -2624,8 +2826,10 @@ button[data-widget-part~="messages.composer-persona"] {
 	flex-shrink: 0;
 	align-items: center;
 }
+/* Up to date says nothing at rest (polish parity L2, 2026-10-24: no glyph
+   beside every name); stale is a thing to act on, so it stays. */
 [data-widget-part~="messages.message-vectors"][data-vectors="current"] {
-	color: var(--color-success-500);
+	display: none;
 }
 [data-widget-part~="messages.message-vectors"][data-vectors="stale"] {
 	color: var(--color-warning-500);
@@ -2915,6 +3119,17 @@ button[data-widget-part~="messages.composer-persona"] {
 	--tw-font-weight: var(--font-weight-bold);
 	font-weight: var(--font-weight-bold);
 }
+/* The newest reply's run, as this view saw it (*Replied · 6.2 s*): one muted
+   12px line under the head — the turn line's pill said it at rest until
+   polish parity L1. Tabular, as the message's own time is. */
+[data-widget-part~="messages.message-options-run"] {
+	/* Close under the head, not a section's 16px below it. */
+	margin-block-start: calc(var(--spacing) * -3);
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	font-variant-numeric: tabular-nums;
+	color: var(--color-surface-500);
+}
 [data-widget-part~="messages.message-options-list"] {
 	display: flex;
 	flex-direction: column;
@@ -2966,7 +3181,7 @@ button[data-widget-part~="messages.composer-persona"] {
 /* The *new* mark on a newcomer (R-15, U5c): a quiet badge at the row's end. */
 [data-widget-part~="messages.message-option-new"] {
 	margin-left: auto;
-	border-radius: calc(infinity * 1px);
+	border-radius: var(--sp-w-chip-radius);
 	background-color: var(--color-primary-50-950);
 	color: var(--color-primary-950-50);
 	padding-inline: calc(var(--spacing) * 1.5);
@@ -3216,6 +3431,43 @@ button[data-widget-part~="messages.composer-persona"] {
 		display: none;
 	}
 }
+/* 🚧 Players (O11, 2026-10-21): a voice note or a spoken reply plays where it
+   was said — the browser's own controls, a caption under them, no tile. */
+[data-widget-part~="messages.media-players"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	inline-size: 100%;
+	min-inline-size: 0;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="messages.media-player"] {
+	display: grid;
+	gap: calc(var(--spacing) * 1);
+	min-inline-size: 0;
+	max-inline-size: 28rem;
+	margin: 0;
+}
+[data-widget-part~="messages.media-audio"] {
+	inline-size: 100%;
+	min-inline-size: 0;
+}
+[data-widget-part~="messages.media-video"] {
+	inline-size: 100%;
+	max-block-size: 20rem;
+	border: 1px solid var(--color-surface-300-700);
+	border-radius: 12px;
+	background-color: var(--color-surface-200-800);
+}
+[data-widget-part~="messages.media-player-caption"] {
+	min-inline-size: 0;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+	font-size: var(--text-xs);
+	color: var(--color-surface-700-300);
+}
 [data-widget-part~="messages.media-remove"] {
 	position: absolute;
 	inset-block-start: calc(var(--spacing) * -2);
@@ -3226,7 +3478,7 @@ button[data-widget-part~="messages.composer-persona"] {
 	block-size: 1.5rem;
 	padding: 0;
 	border: 1px solid var(--color-surface-300-700);
-	border-radius: 9999px;
+	border-radius: var(--sp-w-chip-radius);
 	background-color: var(--color-surface-100-900);
 	color: var(--color-surface-950-50);
 	cursor: pointer;
@@ -3407,6 +3659,112 @@ button[data-widget-part~="messages.composer-persona"] {
 	display: flex;
 	flex-direction: column;
 	gap: var(--spacing);
+}
+/* 🚧 A roll form (Lair rewrite D3): the question, then Check and Difficulty
+   side by side (stacked in a narrow box), then Roll and No check. Framed
+   like the rules' other work, so it never reads as a character's line. */
+[data-widget-part~="messages.block-roll"],
+[data-widget-part~="messages.block-dice"] {
+	display: flex;
+	width: 100%;
+	max-width: var(--container-sm);
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	padding: calc(var(--spacing) * 3);
+	border: 1px solid var(--color-surface-300-700);
+	border-radius: var(--radius-container);
+	background-color: light-dark(color-mix(in oklab, var(--color-surface-100) 70%, transparent), color-mix(in oklab, var(--color-surface-900) 70%, transparent));
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+	font-variant-numeric: tabular-nums;
+}
+[data-widget-part~="messages.block-roll"][data-answered] {
+	opacity: 60%;
+}
+[data-widget-part~="messages.block-roll-fields"] {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.block-roll-value"] {
+	font-weight: var(--font-weight-medium);
+}
+/* A dice result: one row — what was rolled for, the total, against what,
+   how it came out — and how the number was reached under it. */
+[data-widget-part~="messages.block-dice"] {
+	gap: var(--spacing);
+	padding-block: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.block-dice-head"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.block-dice-glyph"] {
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+[data-widget-part~="messages.block-dice-stat"] {
+	font-weight: var(--font-weight-medium);
+}
+[data-widget-part~="messages.block-dice-total"] {
+	font-size: calc(1.125rem * var(--text-scaling));
+	line-height: 1;
+	font-weight: var(--font-weight-semibold);
+}
+[data-widget-part~="messages.block-dice-against"],
+[data-widget-part~="messages.block-dice-explain"] {
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+[data-widget-part~="messages.block-dice-explain"] {
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.75) * var(--text-scaling));
+	overflow-wrap: anywhere;
+}
+/* How it came out: a chip, its tone from the one five-band scale. */
+[data-widget-part~="messages.block-dice-outcome"] {
+	margin-inline-start: auto;
+	padding-inline: calc(var(--spacing) * 2);
+	padding-block: calc(var(--spacing) * 0.5);
+	border-radius: var(--sp-w-chip-radius);
+	font-size: calc(0.75rem * var(--text-scaling));
+	font-weight: var(--font-weight-medium);
+	background-color: var(--color-surface-200-800);
+	color: var(--color-surface-900-100);
+}
+[data-widget-part~="messages.block-dice"]:is([data-five="success"], [data-five="crit"]) [data-widget-part~="messages.block-dice-outcome"] {
+	background-color: var(--color-success-100-900);
+	color: var(--color-success-900-100);
+}
+[data-widget-part~="messages.block-dice"][data-five="partial"] [data-widget-part~="messages.block-dice-outcome"] {
+	background-color: var(--color-warning-100-900);
+	color: var(--color-warning-900-100);
+}
+[data-widget-part~="messages.block-dice"]:is([data-five="fail"], [data-five="crit-fail"]) [data-widget-part~="messages.block-dice-outcome"] {
+	background-color: var(--color-error-100-900);
+	color: var(--color-error-900-100);
+}
+/* 🚧 A lorebook row that followed a tie the outcome moved (ties on the
+   graph, T2): told under the outcome in the warning tone — the graph moved
+   with the rules, nothing of its own to keep or undo. */
+[data-widget-part~="messages.block-dice-follows"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: calc(var(--spacing) * 2);
+	margin-block-start: var(--spacing);
+	padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 2);
+	border: 1px solid var(--color-warning-300-700);
+	border-radius: var(--radius-base);
+	background-color: var(--color-warning-50-950);
+	color: var(--color-warning-950-50);
+	font-size: calc(0.875rem * var(--text-scaling));
+	overflow-wrap: anywhere;
+}
+[data-widget-part~="messages.block-dice-follows-note"] {
+	font-size: calc(0.75rem * var(--text-scaling));
+	color: light-dark(var(--color-surface-700), var(--color-surface-300));
 }
 /* A form's switch: Skeleton's `checkbox`. */
 [data-widget-part~="messages.block-checkbox"] {
@@ -3661,7 +4019,7 @@ button[data-widget-part~="messages.composer-persona"] {
 	align-items: center;
 	padding-inline: calc(var(--spacing) * 2.5);
 	padding-block: var(--spacing);
-	border-radius: calc(infinity * 1px);
+	border-radius: var(--sp-w-chip-radius);
 	font-size: calc(0.75rem * var(--text-scaling));
 	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
 	cursor: pointer;
@@ -4026,7 +4384,7 @@ button[data-widget-part~="messages.composer-persona"] {
 	height: 100%;
 	padding: var(--sp-w-empty-pad);
 	text-align: center;
-	font-size: var(--sp-w-font-empty);
+	font-size: var(--sp-w-font-row);
 	opacity: var(--sp-w-muted-opacity);
 }
 [data-widget-part~="stats.card"] {
@@ -4344,7 +4702,7 @@ button[data-widget-part~="messages.composer-persona"] {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	opacity: var(--sp-w-muted-opacity);
 }
 [data-widget-part~="piece-card.row"] > sp-icon {
@@ -4357,7 +4715,7 @@ button[data-widget-part~="messages.composer-persona"] {
 	padding: var(--sp-w-chip-pad);
 	border-radius: var(--sp-w-chip-radius);
 	background: var(--sp-w-chip-bg);
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	font-variant-numeric: tabular-nums;
 }
 [data-widget-part~="piece-card.unresolved"],
@@ -4400,7 +4758,7 @@ button[data-widget-part~="messages.composer-persona"] {
 [data-widget-part~="piece-card.prose-label"],
 [data-widget-part~="stats.face-heading"],
 [data-widget-part~="stats.face-note"] {
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	opacity: var(--sp-w-muted-opacity);
 }
 [data-widget-part~="piece-card.facts"] {
@@ -4438,10 +4796,10 @@ button[data-widget-part~="messages.composer-persona"] {
 	padding: var(--sp-w-chip-pad);
 	border-radius: var(--sp-w-chip-radius);
 	background: var(--sp-w-chip-bg);
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 }
 [data-widget-part~="piece-card.invalid"] {
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	color: light-dark(var(--color-error-700), var(--color-error-300));
 }
 [data-widget-part~="piece-card.actions"],
@@ -4463,7 +4821,7 @@ button[data-widget-part~="messages.composer-persona"] {
 	padding: var(--sp-w-control-pad);
 	border-radius: var(--sp-w-control-radius);
 	background: var(--sp-w-control-bg);
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 }
 [data-widget-part~="piece-card.edit"]:hover,
 [data-widget-part~="piece-card.give-open"]:hover,
@@ -4483,7 +4841,7 @@ button[data-widget-part~="messages.composer-persona"] {
 	display: inline-flex;
 	align-items: center;
 	gap: 0.3rem;
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 }
 [data-widget-part~="piece-card.give-count"] > input {
 	inline-size: 3.5rem;
@@ -4522,7 +4880,7 @@ button[data-widget-part~="messages.composer-persona"] {
 	padding: var(--sp-w-control-pad);
 	border-radius: var(--sp-w-control-radius);
 	background: var(--sp-w-control-bg);
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 }
 [data-widget-part~="stats.offer-accept"]:hover,
 [data-widget-part~="stats.offer-decline"]:hover,
@@ -4530,8 +4888,203 @@ button[data-widget-part~="messages.composer-persona"] {
 	background: var(--sp-w-chip-on-bg);
 }
 [data-widget-part~="stats.offer-note"] {
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+/* 🚧 A sheet's ties (ties on the graph, screen 2): a row per tie — the other
+   person's name and the tie's words as chips, this side's numbers as a bar,
+   how the other person feels in words, and the holder's switch. */
+[data-widget-part~="stats.ties"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.4rem;
+	margin: 0;
+	padding: 0.3rem 0;
+	list-style: none;
+}
+[data-widget-part~="stats.tie"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.3rem;
+	padding: var(--sp-w-control-pad);
+	border-radius: var(--sp-w-control-radius);
+	background: var(--sp-w-chip-bg);
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="stats.tie-head"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.3rem;
+}
+[data-widget-part~="stats.tie-name"] {
+	font-weight: var(--font-weight-semibold);
+	margin-inline-end: 0.2rem;
+}
+[data-widget-part~="stats.tie-chip"] {
+	padding: 0 0.45rem;
+	border-radius: var(--sp-w-chip-radius);
+	background: var(--sp-w-chip-on-bg);
+	font-size: var(--sp-w-font-meta);
+}
+[data-widget-part~="stats.tie-number"] {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 0.15rem 0.5rem;
+}
+[data-widget-part~="stats.tie-number-label"],
+[data-widget-part~="stats.tie-other-label"],
+[data-widget-part~="stats.tie-other-note"] {
+	font-size: var(--sp-w-font-meta);
+	color: light-dark(var(--color-surface-700), var(--color-surface-300));
+}
+[data-widget-part~="stats.tie-number-value"] {
+	font-variant-numeric: tabular-nums;
+	font-size: var(--sp-w-font-meta);
+}
+[data-widget-part~="stats.tie-bar"] {
+	grid-column: 1 / -1;
+	position: relative;
+	height: var(--sp-w-meter-height);
+	border-radius: var(--sp-w-meter-radius);
+	background: linear-gradient(var(--sp-w-meter-fill-bg), var(--sp-w-meter-fill-bg)) no-repeat left / var(--sp-tie-fill, 0%) 100%, var(--sp-w-meter-track-bg);
+}
+[data-widget-part~="stats.tie-other"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.15rem 0.5rem;
+}
+[data-widget-part~="stats.tie-other-words"] {
+	overflow-wrap: anywhere;
+}
+[data-widget-part~="stats.tie-show"] {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	min-height: 2rem;
+	font-size: var(--sp-w-font-meta);
+}
+[data-widget-part~="stats.tie-error"] {
+	font-size: var(--sp-w-font-meta);
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+@media (pointer: coarse) {
+	[data-widget-part~="stats.tie-show"] {
+		min-height: 44px;
+	}
+}
+/* 🚧 RF fix 8 (2026-10-23): the host's place and time in a row of their own
+   (Where and when), never among the rules' attributes; a genre's tool state
+   under them when a copy shows it; ⏳ what an owner carries as the host's
+   list; what an owner holds, zone by zone (a list, or a fan of chips); and
+   the holder's own carry switches, folded. */
+[data-widget-part~="stats.where"],
+[data-widget-part~="stats.tools"],
+[data-widget-part~="stats.carried"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.15rem;
+	padding: 0.2rem 0;
+}
+[data-widget-part~="stats.where"] {
+	border-block-end: 1px solid var(--color-surface-300-700);
+}
+[data-widget-part~="stats.where-head"],
+[data-widget-part~="stats.zone-head"],
+[data-widget-part~="stats.carries-head"] {
+	margin: 0;
+	font-size: var(--sp-w-font-meta);
+	font-weight: var(--font-weight-semibold);
+	color: light-dark(var(--color-surface-700), var(--color-surface-300));
+}
+[data-widget-part~="stats.zone"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	padding: 0.3rem 0;
+}
+[data-widget-part~="stats.zone-entries"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.2rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="stats.zone"][data-shown-as="fan"] [data-widget-part~="stats.zone-entries"] {
+	flex-direction: row;
+	flex-wrap: wrap;
+}
+[data-widget-part~="stats.zone-entry"] {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 0.4rem;
+	padding: var(--sp-w-chip-pad);
+	border-radius: var(--sp-w-control-radius);
+	background: var(--sp-w-chip-bg);
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="stats.zone-type"] {
+	font-size: var(--sp-w-font-meta);
+	color: light-dark(var(--color-surface-700), var(--color-surface-300));
+}
+[data-widget-part~="stats.carries"] {
+	padding: 0.3rem 0;
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="stats.carries-head"] {
+	min-height: 1.5rem;
+	display: flex;
+	align-items: center;
+}
+[data-widget-part~="stats.carries-list"] {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="stats.carry-switch"] {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	min-height: 2rem;
+}
+[data-widget-part~="stats.carry-error"] {
+	font-size: var(--sp-w-font-meta);
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+/* A pool as pips (filled of its most), a number as a count or a badge. */
+[data-widget-part~="stat-slot.pips"] {
+	display: inline-flex;
+	flex-wrap: wrap;
+	gap: 0.2rem;
+	align-items: center;
+}
+[data-widget-part~="stat-slot.pip"] {
+	width: 0.6rem;
+	height: 0.6rem;
+	border-radius: var(--sp-w-chip-radius);
+	border: 1px solid var(--sp-w-meter-fill-bg);
+	background: transparent;
+}
+[data-widget-part~="stat-slot.pip"][data-filled] {
+	background: var(--sp-w-meter-fill-bg);
+}
+[data-widget-part~="stat-slot.pips-open"] {
+	display: inline-flex;
+	align-items: center;
+	min-height: 1.5rem;
+	text-align: left;
+}
+[data-widget-part~="stat-slot.line"][data-multiline] {
+	display: block;
+	white-space: pre-line;
+}
+@media (pointer: coarse) {
+	[data-widget-part~="stats.carry-switch"] {
+		min-height: 44px;
+	}
 }
 @media (pointer: coarse) {
 	[data-widget-part~="stats.offer-accept"],
@@ -4586,7 +5139,7 @@ button[data-widget-part~="messages.composer-persona"] {
 	inline-size: 0.45rem;
 	block-size: 0.45rem;
 	flex: none;
-	border-radius: 999px;
+	border-radius: var(--sp-w-chip-radius);
 	background: light-dark(var(--color-primary-600), var(--color-primary-400));
 }
 
@@ -4595,7 +5148,7 @@ button[data-widget-part~="messages.composer-persona"] {
 [data-widget-part~="stats.face"] {
 	display: inline-flex;
 	flex: none;
-	border-radius: 999px;
+	border-radius: var(--sp-w-chip-radius);
 }
 [data-widget-part~="stats.face-img"],
 [data-widget-part~="stats.faces-img"] {
@@ -4605,10 +5158,10 @@ button[data-widget-part~="messages.composer-persona"] {
 	inline-size: 1.6rem;
 	block-size: 1.6rem;
 	flex: none;
-	border-radius: 999px;
+	border-radius: var(--sp-w-chip-radius);
 	object-fit: cover;
 	background: var(--sp-w-chip-bg);
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	font-weight: var(--font-weight-semibold);
 }
 [data-widget-part~="stats.faces-img"] {
@@ -4689,7 +5242,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 [data-widget-part~="stat-slot.root"][data-density="compact"] {
 	grid-template-columns: auto minmax(0, 1fr);
 	gap: 0.3rem;
-	font-size: var(--sp-w-font-row-compact);
+	font-size: var(--sp-w-font-meta);
 }
 /* A label too long for its column wraps to a second line rather than being
    clipped mid-word ("Standing orc…"): the name is the row's meaning. */
@@ -4909,7 +5462,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 [data-widget-part~="stat-slot.invalid"] {
 	flex-basis: 100%;
 	margin: 0;
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	color: var(--color-error-700);
 }
 
@@ -4950,7 +5503,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 }
 [data-widget-part~="stat-slot.pick-heading"] {
 	margin: 0.15rem 0 0;
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	font-weight: 600;
 	opacity: 0.75;
 }
@@ -4994,7 +5547,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	white-space: nowrap;
 }
 [data-widget-part~="stat-slot.pick-held"] {
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	opacity: 0.75;
 	white-space: nowrap;
 }
@@ -5081,7 +5634,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	height: 100%;
 	padding: var(--sp-w-empty-pad);
 	text-align: center;
-	font-size: var(--sp-w-font-empty);
+	font-size: var(--sp-w-font-row);
 	opacity: var(--sp-w-muted-opacity);
 }
 
@@ -5358,7 +5911,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	background: var(--sp-w-hover-bg);
 }
 [data-widget-part~="scene-portraits.chooser-note"] {
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	opacity: var(--sp-w-muted-opacity);
 }
 
@@ -5726,7 +6279,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	flex: 1;
 	padding: var(--sp-w-empty-pad);
 	text-align: center;
-	font-size: var(--sp-w-font-empty);
+	font-size: var(--sp-w-font-row);
 	opacity: var(--sp-w-muted-opacity);
 }
 
@@ -5737,7 +6290,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	gap: calc(var(--spacing) * 2);
 	min-width: 0;
 	margin: 0;
-	font-size: 13px;
+	font-size: var(--text-chip, 13px);
 	line-height: 1.45;
 	font-weight: var(--font-weight-medium);
 }
@@ -5781,7 +6334,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	flex-shrink: 0;
 	width: calc(var(--spacing) * 6);
 	height: calc(var(--spacing) * 6);
-	border-radius: 999px;
+	border-radius: var(--sp-w-chip-radius);
 	object-fit: cover;
 }
 [data-widget-part~="turn-order.face"][data-blank] {
@@ -5875,10 +6428,10 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	justify-content: center;
 	gap: calc(var(--spacing) * 1.5);
 	height: calc(var(--spacing) * 8);
-	border-radius: calc(infinity * 1px);
+	border-radius: var(--sp-w-chip-radius);
 	padding-inline: calc(var(--spacing) * 3);
 	white-space: nowrap;
-	font-size: 13px;
+	font-size: var(--text-chip, 13px);
 	line-height: 1.45;
 	font-weight: var(--font-weight-medium);
 	background-color: var(--color-primary-500);
@@ -5918,7 +6471,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 [data-widget-part~="turn-order.strategy"] {
 	margin: 0;
 	text-align: end;
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	opacity: var(--sp-w-muted-opacity);
 }
 
@@ -5973,7 +6526,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	flex: 1;
 	padding: var(--sp-w-empty-pad);
 	text-align: center;
-	font-size: var(--sp-w-font-empty);
+	font-size: var(--sp-w-font-row);
 	opacity: var(--sp-w-muted-opacity);
 }
 
@@ -6002,10 +6555,10 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	align-items: center;
 	justify-content: center;
 	gap: calc(var(--spacing) * 1.5);
-	border-radius: calc(infinity * 1px);
+	border-radius: var(--sp-w-chip-radius);
 	border-style: none;
 	padding-inline: calc(var(--spacing) * 3);
-	font-size: 13px;
+	font-size: var(--text-chip, 13px);
 	line-height: 1.45;
 	font-weight: var(--font-weight-medium);
 	white-space: nowrap;
@@ -6060,7 +6613,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	right: calc(var(--spacing) * -0.5);
 	width: calc(var(--spacing) * 2);
 	height: calc(var(--spacing) * 2);
-	border-radius: calc(infinity * 1px);
+	border-radius: var(--sp-w-chip-radius);
 	background-color: var(--color-primary-500);
 }
 /* Why it is grey: read to a screen reader in compact (`sr-only`), a second
@@ -6109,7 +6662,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	overflow: visible;
 	clip-path: none;
 	white-space: normal;
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	font-weight: var(--font-weight-normal);
 	opacity: var(--sp-w-muted-opacity);
 }
@@ -6171,7 +6724,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	flex: 1;
 	padding: var(--sp-w-empty-pad);
 	text-align: center;
-	font-size: var(--sp-w-font-empty);
+	font-size: var(--sp-w-font-row);
 	opacity: var(--sp-w-muted-opacity);
 }
 
@@ -6385,7 +6938,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	flex: 1;
 	padding: var(--sp-w-empty-pad);
 	text-align: center;
-	font-size: var(--sp-w-font-empty);
+	font-size: var(--sp-w-font-row);
 	opacity: var(--sp-w-muted-opacity);
 }
 
@@ -6474,7 +7027,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	place-items: center;
 	inline-size: 1.4rem;
 	block-size: 1.4rem;
-	border-radius: 999px;
+	border-radius: var(--sp-w-chip-radius);
 	background-color: color-mix(in oklab, var(--color-surface-50-950) 85%, transparent);
 	color: var(--color-surface-950-50);
 	pointer-events: none;
@@ -6571,7 +7124,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 [data-widget-part~="chronicle.note"] {
 	margin: 0;
 	padding: calc(var(--spacing) * 1) 0;
-	font-size: var(--sp-w-font-empty);
+	font-size: var(--sp-w-font-row);
 	opacity: var(--sp-w-muted-opacity);
 }
 [data-widget-part~="chronicle.root"][data-state="no-book"] > [data-widget-part~="chronicle.empty"] {
@@ -6616,7 +7169,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 }
 [data-widget-part~="chronicle.clock-note"] {
 	margin: 0;
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	opacity: var(--sp-w-muted-opacity);
 }
 
@@ -6859,7 +7412,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	width: 0.25rem;
 	align-self: stretch;
 	min-height: 1rem;
-	border-radius: 999px;
+	border-radius: var(--sp-w-chip-radius);
 	background: hsl(220, 65%, 62%);
 }
 /* The conversation's scene palette (messages' SessionContainer), in order. */
@@ -6945,7 +7498,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 }
 [data-widget-part~="chronicle.open-scene-note"] {
 	margin: 0;
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	opacity: var(--sp-w-muted-opacity);
 }
 /* A scene row: the row's button, then its Summarize beside it. */
@@ -6962,7 +7515,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	flex-shrink: 0;
 	width: 0.5rem;
 	height: 0.5rem;
-	border-radius: 999px;
+	border-radius: var(--sp-w-chip-radius);
 	border: 1.5px solid currentColor;
 	opacity: var(--sp-w-muted-opacity);
 }
@@ -7015,7 +7568,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 }
 [data-widget-part~="chronicle.earlier-more"] {
 	margin: 0;
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	opacity: var(--sp-w-muted-opacity);
 }
 
@@ -7096,7 +7649,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 /* Not granted `session:state`: one quiet line over the list, why nobody is in it. */
 [data-widget-part~="places.grant-note"] {
 	margin: 0;
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	opacity: var(--sp-w-muted-opacity);
 }
 /* Nothing to draw: why, quietly, in the middle of the box. */
@@ -7107,7 +7660,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	justify-content: center;
 	margin: 0;
 	padding: var(--sp-w-empty-pad);
-	font-size: var(--sp-w-font-empty);
+	font-size: var(--sp-w-font-row);
 	text-align: center;
 	opacity: var(--sp-w-muted-opacity);
 }
@@ -7219,7 +7772,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 }
 [data-widget-part~="places.face"] {
 	display: inline-flex;
-	border-radius: 999px;
+	border-radius: var(--sp-w-chip-radius);
 	box-shadow: 0 0 0 2px light-dark(var(--color-surface-50), var(--color-surface-900));
 }
 /* The ways out: one muted line under the row. */
@@ -7229,7 +7782,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	opacity: var(--sp-w-muted-opacity);
 }
 
@@ -7277,7 +7830,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 }
 [data-widget-part~="places.detail-none"] {
 	margin: 0;
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	opacity: var(--sp-w-muted-opacity);
 }
 [data-widget-part~="places.stats"] {
@@ -7485,7 +8038,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 }
 [data-widget-part~="map-canvas.face"] {
 	display: inline-flex;
-	border-radius: 999px;
+	border-radius: var(--sp-w-chip-radius);
 	box-shadow: 0 0 0 2px light-dark(var(--color-surface-50), var(--color-surface-900));
 }
 [data-widget-part~="map-canvas.face"] + [data-widget-part~="map-canvas.face"] {
@@ -7647,7 +8200,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	flex-shrink: 0;
 	width: calc(var(--spacing) * 5);
 	height: calc(var(--spacing) * 5);
-	border-radius: 999px;
+	border-radius: var(--sp-w-chip-radius);
 	object-fit: cover;
 }
 [data-widget-part~="attendance.face"][data-blank] {
@@ -7671,7 +8224,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	flex: none;
 	inline-size: 6px;
 	block-size: 6px;
-	border-radius: 9999px;
+	border-radius: var(--sp-w-chip-radius);
 	background: var(--color-warning-500);
 	animation: sp-dot-pulse 1.6s ease-out infinite;
 }
@@ -7706,7 +8259,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	margin: 0;
 	padding: calc(var(--spacing) * 1) var(--sp-w-empty-pad);
 	text-align: center;
-	font-size: var(--sp-w-font-empty);
+	font-size: var(--sp-w-font-row);
 	opacity: var(--sp-w-muted-opacity);
 }
 
@@ -7773,7 +8326,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	flex: 1;
 	padding: var(--sp-w-empty-pad);
 	text-align: center;
-	font-size: var(--sp-w-font-empty);
+	font-size: var(--sp-w-font-row);
 	opacity: var(--sp-w-muted-opacity);
 }
 [data-widget-part~="backdrop.alert"] {
@@ -7905,7 +8458,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 }
 [data-widget-part~="backdrop.chooser-note"] {
 	margin: 0;
-	font-size: var(--sp-w-font-note);
+	font-size: var(--sp-w-font-meta);
 	opacity: var(--sp-w-muted-opacity);
 }
 
@@ -7920,3 +8473,143 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 }
 
 } /* @layer sp-widgets */
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   §routine-log (While you were away, new with the widget, 2026-10-21,
+   PLAN-layering A7, R23)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Core's While you were away widget, keyed on its widget parts; the markup
+ * carries no look. Parts: routine-log.root · .toolbar · .refresh · .alert ·
+ * .empty · .group · .group-head · .list · .entry · .name · .outcome ·
+ * .wrote · .run-now · .when · .inspect (STYLE-GUIDE §6.16). A line's outcome
+ * rides on `data-kind` (`ran` · `skipped` · `paused` · `failed` · `stopped`),
+ * Run now on `data-run-now`; a group's on `data-group` (`away` · `earlier`).
+ * The rows are a card's, as Who's here draws its people.
+ */
+[data-widget-part~="routine-log.root"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 3);
+	height: 100%;
+	min-width: 0;
+	padding: calc(var(--spacing) * 2);
+	overflow: auto;
+}
+[data-widget-part~="routine-log.toolbar"] {
+	display: flex;
+	justify-content: flex-end;
+}
+[data-widget-part~="routine-log.refresh"] {
+	display: inline-flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 1);
+	padding: 0.15rem 0.5rem;
+	border-radius: var(--sp-w-card-radius);
+	font-size: var(--sp-w-font-meta);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="routine-log.refresh"]:hover,
+[data-widget-part~="routine-log.refresh"]:focus-visible {
+	opacity: 1;
+	background: var(--sp-w-card-bg);
+}
+[data-widget-part~="routine-log.alert"] {
+	margin: 0;
+	font-size: calc(0.75rem * var(--text-scaling));
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+[data-widget-part~="routine-log.empty"] {
+	margin: 0;
+	padding: calc(var(--spacing) * 1) var(--sp-w-empty-pad);
+	text-align: center;
+	font-size: var(--sp-w-font-row);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="routine-log.group"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 1);
+	min-width: 0;
+}
+/* While you were away · Earlier: a quiet small-caps head over each group. */
+[data-widget-part~="routine-log.group-head"] {
+	margin: 0;
+	font-size: var(--sp-w-font-meta);
+	font-weight: var(--font-weight-semibold);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="routine-log.list"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.2rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+/* One line: what ran, how it came out, what it wrote, when — wrapping in a narrow column. */
+[data-widget-part~="routine-log.entry"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.15rem calc(var(--spacing) * 1.5);
+	min-width: 0;
+	padding: var(--sp-w-card-pad);
+	border-radius: var(--sp-w-card-radius);
+	background: var(--sp-w-card-bg);
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="routine-log.group"][data-group="earlier"] [data-widget-part~="routine-log.entry"] {
+	background: transparent;
+}
+[data-widget-part~="routine-log.name"] {
+	font-weight: var(--font-weight-medium);
+}
+[data-widget-part~="routine-log.outcome"],
+[data-widget-part~="routine-log.wrote"],
+[data-widget-part~="routine-log.when"] {
+	font-size: var(--sp-w-font-meta);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="routine-log.entry"][data-kind="failed"] [data-widget-part~="routine-log.outcome"] {
+	opacity: 1;
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+[data-widget-part~="routine-log.entry"][data-kind="paused"] [data-widget-part~="routine-log.outcome"] {
+	opacity: 1;
+	color: light-dark(var(--color-warning-700), var(--color-warning-300));
+}
+[data-widget-part~="routine-log.when"] {
+	margin-inline-start: auto;
+}
+[data-widget-part~="routine-log.run-now"] {
+	padding: 0 0.4rem;
+	border-radius: var(--sp-w-chip-radius);
+	font-size: var(--sp-w-font-meta);
+	background: color-mix(in oklab, var(--color-primary-500) 16%, transparent);
+	color: light-dark(var(--color-primary-800), var(--color-primary-200));
+}
+[data-widget-part~="routine-log.inspect"] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0.15rem;
+	border-radius: var(--sp-w-card-radius);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="routine-log.inspect"]:hover,
+[data-widget-part~="routine-log.inspect"]:focus-visible {
+	opacity: 1;
+}
+/* STYLE-GUIDE §9: a finger lands on 44px. */
+@media (pointer: coarse) {
+	[data-widget-part~="routine-log.refresh"],
+	[data-widget-part~="routine-log.inspect"] {
+		min-height: 44px;
+		min-width: 44px;
+	}
+}

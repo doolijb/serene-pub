@@ -149,7 +149,7 @@
 				canMove && tile.spriteId != null && tiles.length > 1}
 			{@const express = canReexpress(tile.label)}
 			<li
-				class="border-surface-300-700 space-y-1 rounded-md border p-1.5"
+				class="border-surface-200-800 space-y-1 rounded-md border p-1.5"
 				class:ring-2={dropOn === tile.label}
 				class:ring-primary-500={dropOn === tile.label}
 				data-testid="contact-tile"
@@ -238,7 +238,7 @@
 							<RowMenu
 								label={tile.label}
 								width={220}
-								triggerLabel="More for the {tile.label} sprite"
+								triggerLabel="More actions for the {tile.label} sprite"
 								triggerClass="btn btn-sm preset-tonal-surface px-1"
 								bind:open={
 									() => menuFor === tile.label,

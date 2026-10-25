@@ -342,3 +342,21 @@ describe("🚧 {{user}} with two seats (2026-10-16)", () => {
 		expect(r.personaName).toBe("Ann and Bo")
 	})
 })
+
+describe("🚧 {{user}} is the player label when no persona names the person (lair fix 2)", () => {
+	it("a delver's turn reads the GM as the Dungeon Master, never 'user'", () => {
+		const r = resolveContextInput({ ...base(), sessionPersonas: [], playerLabel: "Dungeon Master" })
+		expect(r.personaName).toBe("Dungeon Master")
+	})
+	it("a persona still names the person, label or not", () => {
+		expect(resolveContextInput({ ...base(), playerLabel: "Dungeon Master" }).personaName).toBe("Bob")
+	})
+	it("a genre with no label keeps the legacy 'user'", () => {
+		expect(resolveContextInput({ ...base(), sessionPersonas: [] }).personaName).toBe("user")
+	})
+	it("nobody speaking keeps the joined list, empty here — the processor's label rule names the line", () => {
+		expect(
+			resolveContextInput({ ...base(), currentCharacterId: null, sessionPersonas: [], playerLabel: "Dungeon Master" }).personaName
+		).toBe("")
+	})
+})

@@ -45,6 +45,16 @@ export interface ReplyFacts {
 	stops?: ComposedStops
 	/** Every name the speaking turn is labelled with (`ownLabelsFor`). */
 	ownLabels?: readonly string[]
+	/**
+	 * 🚧 The labels of the session's other non-cast voices — the player
+	 * label, the envoys this turn is not (lair fix 2, 2026-10-22). One that
+	 * OPENS a reply is the transcript bleeding through (a delver's line that
+	 * began *Dungeon Master: As you walk along the path…*), and comes off the
+	 * front as the reply's own label does — the last guard behind the stops
+	 * (`ComposeStopsInput.nonCastLabels`). Mid-reply, the stops and the cut
+	 * are what hold.
+	 */
+	strayLabels?: readonly string[]
 }
 
 export interface ReplyView {
@@ -67,11 +77,15 @@ export function replyView(
 		final: opts.final
 	})
 	const streaming = !opts.final
+	// The labels a reply never opens with: its own, and a stray voice's.
+	const front = facts?.strayLabels?.length
+		? [...(facts.ownLabels ?? []), ...facts.strayLabels]
+		: facts?.ownLabels
 	const bounded = facts?.stops
-		? trimAtSpeakerBoundary(split.content, facts.stops, facts.ownLabels, {
+		? trimAtSpeakerBoundary(split.content, facts.stops, front, {
 				streaming
 			})
-		: { text: stripOwnLabel(split.content, facts?.ownLabels, { streaming }) }
+		: { text: stripOwnLabel(split.content, front, { streaming }) }
 	// A body that is so far only a held-back label has not started yet.
 	const phase: ReplyPhase =
 		split.phase === "writing" && bounded.text.trim().length === 0

@@ -69,13 +69,13 @@
 		{@const GroupIcon = (Icons as any)[group.icon] ?? Icons.Boxes}
 		<section aria-label={group.label}>
 			<header
-				class="border-surface-200-700 mb-1.5 flex items-center gap-2 border-b pb-1"
+				class="border-surface-200-800 mb-1.5 flex items-center gap-2 border-b pb-1"
 			>
 				<GroupIcon size={14} class="shrink-0" aria-hidden="true" />
 				<h3 class="min-w-0 flex-1 truncate text-xs font-semibold">
 					{group.label}
 				</h3>
-				<span class="text-surface-600-400 shrink-0 text-[11px]">
+				<span class="text-surface-600-400 shrink-0 text-meta">
 					{group.setCount} of {group.total}
 				</span>
 			</header>
@@ -96,14 +96,14 @@
 									{entry.label}
 								</span>
 								<span
-									class="text-surface-600-400 shrink-0 font-mono text-[11px]"
+									class="text-surface-600-400 shrink-0 font-mono text-meta"
 								>
 									{entry.capability}
 								</span>
 							</span>
 							{#if entry.set && entry.model}
 								<span
-									class="text-surface-600-400 flex items-center gap-1.5 text-[11px]"
+									class="text-surface-600-400 flex items-center gap-1.5 text-meta"
 								>
 									<span
 										class="size-1.5 shrink-0 rounded-full {DOT_CLASS[
@@ -118,7 +118,7 @@
 								</span>
 							{:else if unsetChat}
 								<span
-									class="text-warning-500 flex items-center gap-1.5 text-[11px]"
+									class="text-warning-500 flex items-center gap-1.5 text-meta"
 								>
 									<Icons.TriangleAlert
 										size={11}
@@ -128,7 +128,7 @@
 									Not set — sessions cannot reply until it is
 								</span>
 							{:else}
-								<span class="text-surface-600-400 text-[11px]">
+								<span class="text-surface-600-400 text-meta">
 									Not set · pick in
 									<a
 										class="anchor"
@@ -172,7 +172,7 @@
 		</section>
 	{/each}
 
-	<p class="text-surface-600-400 px-0.5 text-[11px] leading-relaxed">
+	<p class="text-surface-600-400 px-0.5 text-meta leading-relaxed">
 		Each default loadout holds an endpoint and a model together. Fill
 		them in the <a class="anchor" href="/loadouts">Loadouts view</a>, or
 		from any model's <strong class="font-medium">Use in…</strong>.

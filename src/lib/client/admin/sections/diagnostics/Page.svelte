@@ -47,7 +47,7 @@
 				<Icons.TriangleAlert size={16} class="text-warning-600-400 shrink-0" aria-hidden="true" />
 				<a
 					href={UNPLACED_SCRIPTS_HREF}
-					class="hover:text-primary-600-400 underline-offset-2 hover:underline focus-visible:underline"
+					class="hover:text-primary-ink underline-offset-2 hover:underline focus-visible:underline"
 				>
 					{unplacedLine}
 				</a>

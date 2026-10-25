@@ -186,7 +186,7 @@
 	<Popover.Trigger
 		class="chip shrink-0 gap-1 text-xs {branchId === null
 			? 'preset-tonal-surface'
-			: 'preset-tonal-primary'}"
+			: 'preset-pressed'}"
 		title="Which line of the story is being read"
 		data-lore-branch={label}
 	>
@@ -217,7 +217,7 @@
 						<button
 							class="btn btn-sm w-full justify-start {branchId ===
 							null
-								? 'preset-tonal-primary'
+								? 'preset-pressed'
 								: 'preset-tonal-surface'}"
 							type="button"
 							role="menuitem"
@@ -299,7 +299,7 @@
 									<button
 										class="btn btn-sm min-w-0 flex-1 justify-start {branchId ===
 										b.id
-											? 'preset-tonal-primary'
+											? 'preset-pressed'
 											: 'preset-tonal-surface'}"
 										type="button"
 										role="menuitem"
@@ -350,7 +350,7 @@
 									{/if}
 								</div>
 								<span
-									class="text-surface-600-400 pl-2 text-[11px]"
+									class="text-surface-600-400 pl-2 text-meta"
 								>
 									{forkedAt(b)}
 								</span>
@@ -359,7 +359,7 @@
 					{/each}
 				</ul>
 
-				<hr class="border-surface-300-700" />
+				<hr class="border-surface-200-800" />
 
 				{#if branchId !== null && onCompare && !comparing}
 					<button

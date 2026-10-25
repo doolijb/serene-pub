@@ -29,6 +29,7 @@ import {
 	LOCATION_TYPE_ID
 } from "$lib/shared/entries/types"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -143,7 +144,7 @@ async function world() {
 		.values({ lorebookId: elsewhere!.id, name: `Far fork ${suffix}` })
 		.returning()
 	const GENRE = `test:genre/l4-${suffix}`
-	genre(GENRE, {
+	genreKeeping(GENRE, {
 		name: { en: "Rooms" },
 		family: "test",
 		slots: [getAttributeSlot(INVENTORY)!],

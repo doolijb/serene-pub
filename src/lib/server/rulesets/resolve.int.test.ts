@@ -11,10 +11,11 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { defineAttributeSlot, genre } from "@serene-pub/sdk"
+import { defineAttributeSlot, defineRuleset, genre } from "@serene-pub/sdk"
 import "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { declareTrial, GEAR, HP, STR, TRIAL } from "./trialRuleset.testkit"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -45,7 +46,7 @@ beforeAll(async () => {
 		appliesTo: ["cast"],
 		config: { repertoire: "core:ruleset/freeform@1#things" }
 	})
-	genre(GENRE, { name: { en: "Rulesets" }, family: "test", slots: [...slots, things], events: {} })
+	genreKeeping(GENRE, { name: { en: "Rulesets" }, family: "test", slots: [...slots, things], events: {} })
 	const owned = defineAttributeSlot(OWNED, {
 		type: "integer",
 		label: { en: "Grit" },
@@ -60,8 +61,36 @@ beforeAll(async () => {
 		appliesTo: ["cast"],
 		config: { repertoire: `${TRIAL}#weapons` }
 	})
-	genre(SHEETED, { name: { en: "Sheeted" }, family: "test", slots: [owned, kit], events: {} })
+	genreKeeping(SHEETED, { name: { en: "Sheeted" }, family: "test", slots: [owned, kit], events: {} })
+	// 🚧 M2 (2026-10-22): a ruleset with every script phase, a die and a deck.
+	const grit = defineAttributeSlot(GRIT, { type: "integer", label: { en: "Grit" }, descriptor: "Grit.", appliesTo: ["cast"], config: { min: 0, max: 10 }, default: 2 })
+	defineRuleset(PHASED, {
+		name: { en: "Phased" },
+		voice: { prose: "Phased, in words.", mechanics: "Phased decides." },
+		conventions: {
+			methods: { d6: { kind: "die-target", sides: 6 }, cards: { kind: "card-draw", ranks: 13 } },
+			defaultMethod: "d6",
+			time: { unit: "round" }
+		},
+		stats: [{ id: GRIT }],
+		selectors: { dare: { kind: "check", base: "ph-int-grit" }, peek: { kind: "check", base: "ph-int-grit", method: "cards" } },
+		repertoires: [],
+		scripts: (["effects", "derived", "pre-roll", "post-roll", "render"] as const).map((phase) => ({ phase, priority: 1, seedKey: `test:script/ph-int-${phase}` }))
+	})
+	genreKeeping(PHASED_GENRE, { name: { en: "Phased" }, family: "test", slots: [grit], events: {} })
 }, 60_000)
+
+const GRIT = "test:slot/ph-int-grit@1"
+const PHASED = "test:ruleset/phased-int@1"
+const PHASED_GENRE = "test:genre/phased-int"
+/** One ES5 script per phase, each saying it ran — the QuickJS host runs them. */
+const PHASE_SOURCES: Record<string, string> = {
+	"test:script/ph-int-effects": `return { modifies: [{ target: "dare", value: 1, label: "Steeled" }], explain: "effects ran on " + value.events.join(",") };`,
+	"test:script/ph-int-derived": `return { explain: "derived ran, grit " + value.values["ph-int-grit"] };`,
+	"test:script/ph-int-pre-roll": `return { against: value.check.against + 1, explain: "pre-roll ran" };`,
+	"test:script/ph-int-post-roll": `return { riders: ["post-roll ran: " + (value.check.degree ? value.check.degree.id : "none")] };`,
+	"test:script/ph-int-render": `return { blocks: value.blocks.outcomes ? { outcomes: value.blocks.outcomes + "\\n- render ran" } : {}, explain: "render ran" };`
+}
 
 afterAll(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true })
@@ -219,6 +248,86 @@ describe("a rigorous ruleset, applied", () => {
 		)
 		if ("halt" in res2) throw new Error(res2.halt)
 		expect((res2.ok.outcomes as any[])[0].check).toEqual(check.check)
+	})
+})
+
+describe("🚧 every script phase, through the handler (M2, 2026-10-22)", () => {
+	test("effects, derived, pre-roll, post-roll and render each run in their place; their words on the explain trail", async () => {
+		const w = await world({ genreId: PHASED_GENRE, primaryRuleset: PHASED, rigour: "mechanics" })
+		await put(w.session.id, w.ann.id, GRIT, 2)
+		const { seededRandom } = await import("$lib/server/state/expressions")
+		const { resolveRulesetTurn } = await import("./resolve")
+		const owners = [`session:${w.session.id}`, `character:${w.ann.id}`]
+		const res = await resolveRulesetTurn(
+			db as any,
+			{ owners, mode: "apply", deltas: [{ owner: `character:${w.ann.id}`, op: "use", check: "dare", against: 3 }] },
+			{ random: seededRandom("phases"), runId: "ph1", scripts: { loadSource: async (key) => PHASE_SOURCES[key] ?? null } }
+		)
+		if ("halt" in res) throw new Error(res.halt)
+		const check = (res.ok.outcomes as any[]).find((o) => o.kind === "check")
+		// The effects' bonus counted, the pre-roll's target raised by one.
+		expect(check.check).toMatchObject({ selector: "dare", against: 4, method: "die-target", methodKey: "d6" })
+		expect(check.check.total).toBe(check.check.natural + 3)
+		expect(check.block).toMatchObject({ kind: "dice", method: "die-target", stat: "Dare", against: 4, by: `character:${w.ann.id}` })
+		const texts = (res.ok.explain as any[]).map((e) => e.text)
+		expect(texts).toEqual(
+			expect.arrayContaining([
+				"test:script/ph-int-effects: effects ran on use",
+				"test:script/ph-int-derived: derived ran, grit 2",
+				"test:script/ph-int-pre-roll: pre-roll ran",
+				"test:script/ph-int-render: render ran"
+			])
+		)
+		expect((res.ok.outcomes as any[]).map((o) => o.text)).toContain(`post-roll ran: ${check.check.band}`)
+		expect(res.ok.blocks.outcomes!.text).toMatch(/\n- render ran$/)
+		expect(res.ok.facts.scriptsFailed).toBeUndefined()
+		expect(res.ok.facts.scriptsNotRun).toBeUndefined()
+	})
+
+	test("a script that fails is on the receipt, and the turn goes on", async () => {
+		const w = await world({ genreId: PHASED_GENRE, primaryRuleset: PHASED, rigour: "mechanics" })
+		await put(w.session.id, w.ann.id, GRIT, 2)
+		const { seededRandom } = await import("$lib/server/state/expressions")
+		const { resolveRulesetTurn } = await import("./resolve")
+		const res = await resolveRulesetTurn(
+			db as any,
+			{ owners: [`session:${w.session.id}`, `character:${w.ann.id}`], mode: "apply", deltas: [{ owner: `character:${w.ann.id}`, op: "use", check: "dare", against: 3 }] },
+			{
+				random: seededRandom("phases"),
+				runId: "ph2",
+				scripts: { loadSource: async (key) => (key.endsWith("pre-roll") ? `throw new Error("no omens")` : (PHASE_SOURCES[key] ?? null)) }
+			}
+		)
+		if ("halt" in res) throw new Error(res.halt)
+		expect(res.ok.facts.scriptsFailed).toEqual([{ phase: "pre-roll", seedKey: "test:script/ph-int-pre-roll", owner: `character:${w.ann.id}`, why: expect.stringContaining("no omens") }])
+		expect((res.ok.outcomes as any[]).find((o) => o.kind === "check").check.against).toBe(3)
+	})
+
+	test("a card-draw method draws from the session's deck, which the session keeps between turns", async () => {
+		const w = await world({ genreId: PHASED_GENRE, primaryRuleset: PHASED, rigour: "mechanics" })
+		await put(w.session.id, w.ann.id, GRIT, 2)
+		const { seededRandom } = await import("$lib/server/state/expressions")
+		const { resolveRulesetTurn, RULESET_DECKS_KEY } = await import("./resolve")
+		const peek = { owners: [`session:${w.session.id}`, `character:${w.ann.id}`], mode: "apply", deltas: [{ owner: `character:${w.ann.id}`, op: "use", check: "peek", against: 9 }] }
+		const none = { scripts: { loadSource: async () => null } }
+		const first = await resolveRulesetTurn(db as any, peek, { random: seededRandom("deck-1"), runId: "d1", ...none })
+		if ("halt" in first) throw new Error(first.halt)
+		const card = (first.ok.outcomes as any[]).find((o) => o.kind === "check")
+		expect(card.block).toMatchObject({ method: "card-draw", against: 9 })
+		expect(card.block.cards).toHaveLength(1)
+		const meta = async () => ((await db.select().from(schema.sessions).where(eq(schema.sessions.id, w.session.id)))[0]!.metadata as any)?.[RULESET_DECKS_KEY]
+		expect(await meta()).toEqual({ cards: { scene: null, shuffle: 0, drawn: 1 } })
+		const second = await resolveRulesetTurn(db as any, peek, { random: seededRandom("deck-2"), runId: "d2", ...none })
+		if ("halt" in second) throw new Error(second.halt)
+		expect(await meta()).toEqual({ cards: { scene: null, shuffle: 0, drawn: 2 } })
+		// The deck's order is the session's, never the run's: the second card is the deck's second.
+		const { deckOrder } = await import("./methods")
+		const order = deckOrder(`deck:${w.session.id}:cards:session:0`, 52)
+		expect((second.ok.outcomes as any[]).find((o) => o.kind === "check").block.cards[0].rank).toBe((order[1]! % 13) + 1)
+		// A resolve reads no deck and writes none.
+		const read = await resolveRulesetTurn(db as any, { owners: peek.owners }, none)
+		if ("halt" in read) throw new Error(read.halt)
+		expect(await meta()).toEqual({ cards: { scene: null, shuffle: 0, drawn: 2 } })
 	})
 })
 

@@ -121,7 +121,7 @@
 	data-node-panel
 >
 	<div class="flex items-center gap-2">
-		<span class="badge preset-tonal-surface shrink-0 text-[11px] capitalize">
+		<span class="badge preset-tonal-surface shrink-0 text-meta capitalize">
 			{node.kind}
 		</span>
 		<span class="min-w-0 flex-1 truncate font-semibold">{node.name}</span>
@@ -202,13 +202,13 @@
 							{row.otherName}
 						{/if}
 					</button>
-					<span class="text-surface-600-400 shrink-0 text-[11px]">
+					<span class="text-surface-600-400 shrink-0 text-meta">
 						{row.provenanceWord}
 					</span>
 					{#if row.statusWord}
 						<span
 							class="badge {STATUS_BADGE[row.statusWord] ??
-								'preset-tonal-surface'} shrink-0 text-[11px]"
+								'preset-tonal-surface'} shrink-0 text-meta"
 						>
 							{row.cut ? "cut" : row.statusWord}
 						</span>
@@ -235,7 +235,7 @@
 						</button>
 					{/if}
 					{#if confirmingDelete === row.edge.id}
-						<span class="text-error-500 shrink-0 text-xs">
+						<span class="text-error-600-400 shrink-0 text-xs">
 							Delete for good?
 						</span>
 						<button

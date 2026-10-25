@@ -67,15 +67,24 @@ describe("sessionPresets:list — effective included actions", () => {
 		expect(narrate.name).toBeTruthy()
 	}, 60_000)
 
-	test("the shipped Lair preset (included set null) carries its companion actions", async () => {
-		const lair = (await listPresets()).find(
-			(p) => p.genreId === "core:genre/lair" && p.isImmutable
+	test("the shipped Lair presets (included set null) carry their companion actions", async () => {
+		const presets = await listPresets()
+		// Rules, the default: the Castellan's verbs, building and filing rooms, and rolls.
+		const rules = presets.find(
+			(p) => p.genreId === "core:genre/lair" && p.isImmutable && p.isDefault
 		)!
-		expect(lair).toBeDefined()
-		expect(lair.includedActions).toBeNull()
-		expect(keysOf(lair)).toEqual(
-			expect.arrayContaining(["build-room", "whisper", "nudge", "trap", "reveal"])
+		expect(rules).toBeDefined()
+		expect(rules.includedActions).toBeNull()
+		expect(keysOf(rules)).toEqual(
+			expect.arrayContaining(["build-room", "file", "nudge", "reveal", "roll", "trap", "whisper"])
 		)
+		// Words only: the Castellan's verbs alone — no rooms built or filed, no rolls.
+		const wordsOnly = presets.find(
+			(p) => p.genreId === "core:genre/lair" && p.isImmutable && p.name === "Words only"
+		)!
+		expect(wordsOnly).toBeDefined()
+		expect(wordsOnly.includedActions).toBeNull()
+		expect(keysOf(wordsOnly)).toEqual(["nudge", "reveal", "trap", "whisper"])
 	}, 60_000)
 
 	test("the picker's cut carries it too", async () => {
@@ -103,6 +112,13 @@ describe("sessionPresets:list — effective included actions", () => {
 			.insert(schema.sessionPresets)
 			.values({ name: "No actions", genreId: "core:genre/lair", includedActions: [] })
 			.returning()
+		// 🚧 What a preset includes is its registrations (PLAN-layering D7):
+		// the included sets as an old client's save writes them.
+		const { writeLegacyPresetChanges } = await import(
+			"$lib/server/pipelines/registrations/presetRows"
+		)
+		await writeLegacyPresetChanges(db as any, { id: only!.id, genreId: "core:genre/lair" }, { includedActions: [nudge.identity] })
+		await writeLegacyPresetChanges(db as any, { id: none!.id, genreId: "core:genre/lair" }, { includedActions: [] })
 
 		const presets = await listPresets()
 		expect(

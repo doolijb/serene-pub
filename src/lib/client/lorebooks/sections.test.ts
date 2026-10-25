@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { LORE_SCOPES, SCOPE_LABELS, type LoreScope } from "$lib/shared/lorebooks/loreRoute"
+import { LORE_SCOPES, SCOPE_LABELS, type CoreLoreScope } from "$lib/shared/lorebooks/loreRoute"
 import { comparePoolBy, type PoolItem } from "./poolFilter"
 import { containedBy } from "./editor/partOf"
 import { POOL_KINDS } from "./scopes"
@@ -57,7 +57,7 @@ describe("section descriptors", () => {
 				expect(descriptor.label.length).toBeGreaterThan(0)
 				if (isScopeDoor(descriptor))
 					expect(descriptor.label).toBe(
-						SCOPE_LABELS[descriptor.id as LoreScope]
+						SCOPE_LABELS[descriptor.id as CoreLoreScope]
 					)
 			})
 

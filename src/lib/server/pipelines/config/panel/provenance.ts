@@ -121,10 +121,17 @@ export function readingOf(args: {
 	d: Pick<Decl, "control" | "requires" | "shape" | "authorDefault">
 	value: unknown
 	source: OptionSource
-	/** The selected configuration's value at this address, when it holds one. */
+	/** The value the layers above the declaration hold at this address, when one does. */
 	configured: { has: boolean; value?: unknown }
 	scope: WriteScope
-	configName: string | undefined
+	/** ⏳ Always absent since configurations retired (R50, 0110); kept so a caller may still pass it. */
+	configName?: string | undefined
+	/**
+	 * 🚧 The layer a configured value came from (PLAN-layering D5, R50): the
+	 * pipeline's instance values, the genre's defaults, the session's preset,
+	 * or the session itself.
+	 */
+	layer?: "instance" | "genre" | "preset" | "session"
 	defaults: Record<string, CapabilityDefault>
 	sets: NameSets
 	/**
@@ -137,7 +144,7 @@ export function readingOf(args: {
 	 */
 	loadout?: SlotLoadout | null
 }): { inherits?: OptionInherits; provenance?: OptionProvenance; valueLabel?: string } {
-	const { d, value, source, configured, scope, configName, defaults, sets, loadout } = args
+	const { d, value, source, configured, scope, configName, layer, defaults, sets, loadout } = args
 	const named = valueNameOf(d, value, sets)
 	if (d.control !== "connection-ref" && d.control !== "sampling-ref")
 		return named ? { valueLabel: named } : {}
@@ -179,7 +186,15 @@ export function readingOf(args: {
 								source: "config",
 								label: configName
 									? `From the “${configName}” configuration`
-									: "From the selected configuration"
+									: layer === "instance"
+										? "Set for this pipeline on this pub"
+										: layer === "genre"
+										? "From the genre's defaults"
+										: layer === "preset"
+											? "From the session's preset"
+											: layer === "session"
+												? "Set for this session"
+												: "From the selected configuration"
 							}
 					: { source: "author", label: "Pipeline default" }
 

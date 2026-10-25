@@ -24,7 +24,7 @@ import { hostElementContext } from "./hostElements/context.svelte"
 
 describe("Avatar", () => {
 	test("the scale is fixed pixels", () => {
-		expect(AVATAR_PX).toEqual({ xs: 24, sm: 32, md: 40, lg: 56, xl: 72 })
+		expect(AVATAR_PX).toEqual({ xs: 24, sm: 32, md: 44, lg: 56, xl: 72 })
 	})
 
 	test("a step draws its size and shape", () => {
@@ -33,8 +33,8 @@ describe("Avatar", () => {
 		}).body
 		expect(html).toContain('data-avatar="md"')
 		expect(html).toContain('data-avatar-shape="square"')
-		expect(html).toContain("size-10")
-		expect(html).toContain("rounded-[9px]")
+		expect(html).toContain("size-11")
+		expect(html).toContain("rounded-base")
 		expect(html).toContain('alt=""')
 	})
 
@@ -67,7 +67,7 @@ describe("Avatar", () => {
 	test("no size is the list row's step, md, with its guards", () => {
 		const html = render(Avatar, { props: {} }).body
 		expect(html).toContain('data-avatar="md"')
-		expect(html).toContain("min-w-10")
+		expect(html).toContain("min-w-11")
 	})
 
 	test("avatarInitial", () => {
@@ -102,13 +102,23 @@ describe("sp-avatar", () => {
 })
 
 describe("AvatarStack", () => {
-	test("up to max faces, then a spoken count", () => {
+	test("up to max faces, then a count, shown and spoken", () => {
 		const members = ["A", "B", "C", "D"].map((name, id) => ({ id, name }))
 		const html = render(AvatarStack, {
 			props: { members: members as any, size: "md", max: 3 }
 		}).body
 		expect(html.match(/data-avatar="md"/g)?.length).toBe(3)
 		expect(html).toContain("and 1 more")
+		// L6 (2026-10-24): "+n" on the stack, not only for a screen reader.
+		expect(html).toMatch(/data-avatar-stack-more[^>]*>\s*\+1\s*</)
+	})
+
+	test("no count when everyone fits", () => {
+		const members = ["A", "B"].map((name, id) => ({ id, name }))
+		const html = render(AvatarStack, {
+			props: { members: members as any, size: "md", max: 3 }
+		}).body
+		expect(html).not.toContain("data-avatar-stack-more")
 	})
 })
 
@@ -144,10 +154,11 @@ describe("SessionCardItem", () => {
 })
 
 describe("view toolbar", () => {
-	test("icon buttons are never bare: tonal surface at rest, tonal primary on", () => {
+	test("icon buttons are never bare: tonal surface at rest, pressed (never gold) on", () => {
 		expect(toolbarButtonClass()).toContain("preset-tonal-surface")
-		expect(toolbarButtonClass(true)).toContain("preset-tonal-primary")
+		expect(toolbarButtonClass(true)).toContain("preset-pressed")
 		expect(toolbarButtonClass(true)).not.toContain("preset-filled")
+		expect(toolbarButtonClass(true)).not.toContain("primary")
 	})
 
 	test("rows render in order and empty rows are not drawn", () => {

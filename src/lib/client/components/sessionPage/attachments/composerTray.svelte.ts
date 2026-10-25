@@ -58,6 +58,8 @@ interface Tile {
 	bytes: number
 	kind: AttachmentKindV1 | null
 	thumbSrc: string | null
+	/** 🚧 O11: the stored sound, for the tray's player; null otherwise. */
+	previewSrc?: string | null
 	/** Tray order: the server's position, or arrival order for a local tile. */
 	order: number
 }
@@ -80,13 +82,18 @@ function tileOf(view: TrayItemView, progress = 1): Tile {
 			view.status === "ready" && view.attachmentKind === "image"
 				? (view.file?.thumbUrl ?? null)
 				: null,
+		// 🚧 O11: an attached sound plays in the tray before it is sent.
+		previewSrc:
+			view.status === "ready" && view.attachmentKind === "audio"
+				? (view.file?.url ?? null)
+				: null,
 		order: view.position
 	}
 }
 
 /** The readers as the composer reads them (`AttachmentReadersV1`). */
 export function readersV1(r: AttachmentReaders): AttachmentReadersV1 {
-	const accept = (["image", "text", "pdf"] as const)
+	const accept = (["image", "text", "pdf", "audio", "video"] as const)
 		.filter((k) => r.kinds[k]?.allowed)
 		.flatMap((k) => r.accepts[k] ?? [])
 	return {
@@ -96,6 +103,7 @@ export function readersV1(r: AttachmentReaders): AttachmentReadersV1 {
 			label: c.label,
 			reads: c.reads,
 			placeholderFor: c.placeholderFor,
+			...(c.transcribes?.length ? { transcribes: c.transcribes } : {}),
 			// Present only for an administrator: the server removed the
 			// pair for everyone else (`redactConnections`).
 			...(c.connection?.model || c.connection?.name
@@ -295,7 +303,9 @@ export function createComposerTray(
 					filename: t.filename,
 					bytes: t.bytes,
 					kind: t.kind,
-					thumbSrc: t.thumbSrc
+					thumbSrc: t.thumbSrc,
+					// 🚧 O11: a ready sound plays in the tray.
+					...(t.previewSrc ? { previewSrc: t.previewSrc } : {})
 				}))
 		},
 		/** What this reply can read (`composer.attachments`); null until asked. */

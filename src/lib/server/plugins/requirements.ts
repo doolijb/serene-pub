@@ -45,9 +45,28 @@ export async function missingRequirements(
 			)
 			.map((r) => r.inputGenre)
 	)
+	// 🚧 A genre whose defaults register a create pipeline (PLAN-layering D3):
+	// no lock says so any more, the genre list does.
+	const { listSessionGenres } = await import("$lib/server/pipelines/entities/sessionGenres")
+	for (const g of await listSessionGenres(db)) publishedGenres.add(g.genreId)
 
 	const missing: string[] = []
-	for (const id of requires) {
+	// 🚧 A16: an entry may carry a version range (`acme.dice@^1.2`,
+	// `acme.dice:spec/roll@^1.2`) — the package must be installed, enabled
+	// and in range; the id (when it names one) must exist as before.
+	const { parseRequirement } = await import("@serene-pub/sdk")
+	const { presetRequirementFindings } = await import("$lib/server/pipelines/registrations/door")
+	for (const raw of requires) {
+		const req = parseRequirement(raw)
+		if (req && req.package !== "core" && (req.range || !req.id)) {
+			const unmet = await presetRequirementFindings(db, [raw])
+			if (unmet.length) {
+				missing.push(raw)
+				continue
+			}
+			if (!req.id) continue
+		}
+		const id = req?.id ?? raw
 		if (id.includes(":genre/")) {
 			if (!publishedGenres.has(id)) missing.push(id)
 		} else if (isCoreEventId(id)) {

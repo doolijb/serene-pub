@@ -6,7 +6,8 @@
  * sweep's *Track goals* writes one goal a line, `- [ ] …` while it is open
  * and `- [x] …` once the story has reached it, and a person may tick one by
  * hand in the Annex. When a write ticks a goal that was not ticked before,
- * and the session's `goal-reached` task is on, the story says so **once**:
+ * and the session's sweep routine has *Mark goals reached* on (its duty,
+ * `goal-reached`), the story says so **once**:
  * one line on the table channel where the genre keeps one, else a narrated
  * line on `main`, and every member of the
  * session — the owner and each guest — is told (`GOAL_REACHED`).
@@ -56,8 +57,11 @@ export async function noteGoalsReached(
 ): Promise<string[]> {
 	const goals = newlyReached(previous?.[STORY_GOALS_KEY], next?.[STORY_GOALS_KEY])
 	if (!goals.length) return []
-	const { sessionTaskModes } = await import("$lib/server/sessions/tasks")
-	const mode = (await sessionTaskModes(db, sessionId))["goal-reached"]
+	// 🚧 *Mark goals reached* is the sweep routine's duty (lane 6, R37): on
+	// at the routine's mode, else nothing is said.
+	const { sessionDutiesOf } = await import("$lib/server/pipelines/routines/sessionRoutines")
+	const { sweepDuties } = await import("@serene-pub/contracts")
+	const mode = (await sessionDutiesOf(db, sessionId, sweepDuties.id))?.["goal-reached"]
 	if (!mode || mode === "off") return []
 
 	const [session] = await db

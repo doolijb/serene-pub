@@ -151,12 +151,14 @@ async function makeSession(username: string) {
 		.insert(schema.sessions)
 		.values({ userId: user.id, isGroup: false })
 		.returning()
-	await testDb.insert(schema.sessionFunctions).values({
-		sessionId: session.id,
-		genreId: GENRE,
-		functionKey: PROBE_ACTION,
-		enabled: true
-	})
+	// 🚧 Switched on as the session's own registration row (PLAN-layering D7).
+	const { actionRegistration, rowOfDecl } = await import("$lib/server/pipelines/registrations/rows")
+	const { upsertRow } = await import("$lib/server/pipelines/registrations/write")
+	await upsertRow(
+		testDb as any,
+		rowOfDecl(actionRegistration(PROBE_ACTION), { kind: "session", sessionId: session.id }, "admin")
+	)
+	void schema
 	return { user, session }
 }
 

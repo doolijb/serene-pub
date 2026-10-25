@@ -7,11 +7,23 @@ import {
 	LOCATION_TYPE_ID,
 	WORLD_LORE_TYPE_ID
 } from "$lib/shared/entries/types"
-import { LORE_SCOPES, type LoreScope } from "$lib/shared/lorebooks/loreRoute"
+import {
+	listScope,
+	listScopeType,
+	LORE_SCOPES,
+	type LoreScope
+} from "$lib/shared/lorebooks/loreRoute"
 import { keyList } from "$lib/shared/entries/keyList"
 import { SCENE_KIND, type PoolItem } from "../poolFilter"
 import CharacterLoreEditor from "./CharacterLoreEditor.svelte"
 import CharacterLoreRow from "./CharacterLoreRow.svelte"
+import DerivedEntryEditor from "./DerivedEntryEditor.svelte"
+import {
+	newRulesListEntryLabel,
+	pieceProblem,
+	rulesListOf,
+	type PieceList
+} from "./derivedPiece"
 import GenericEntryEditor from "./GenericEntryEditor.svelte"
 import HistoryEditor from "./HistoryEditor.svelte"
 import HistoryRow from "./HistoryRow.svelte"
@@ -425,6 +437,77 @@ const all: SectionDescriptor = {
 	validate: (draft, _siblings, warn) => requireName(draft, warn)
 }
 
+/**
+ * 🚧 The door of one of the book's rules lists (PLAN-lorebook-kinds §C):
+ * generated from the list (its label, its piece shape), never declared by
+ * hand. Its rows are the generic entry row; its editor is the core fields
+ * plus the list's own (`DerivedEntryEditor`); one neutral glyph, since a
+ * list declares no icon. Kept per list, so a door is the same object for as
+ * long as its list reads the same.
+ *
+ * ⚠ The seam the rules' library joins (lane C2): its read-only rows are
+ * pool items of this door's kind under their own key space, as the cast's
+ * rows are in Everything.
+ */
+const rulesListDoors = new Map<string, { sig: string; door: SectionDescriptor }>()
+
+export function rulesListDoor(list: PieceList): SectionDescriptor {
+	const sig = `${list.label}|${JSON.stringify(list.piece)}`
+	const held = rulesListDoors.get(list.typeId)
+	if (held && held.sig === sig) return held.door
+	const typeId = list.typeId
+	const newLabel = newRulesListEntryLabel(list.label)
+	const door: SectionDescriptor = {
+		id: listScope(typeId),
+		label: list.label,
+		icon: Icons.ListTree,
+		typeId,
+		kind: typeId,
+		store: "entries",
+		// A derived entry type takes core's universal parts: world lore's band.
+		vectorSource: "worldLore",
+		roles: new Set(["position"]),
+		row: PoolRow,
+		editor: DerivedEntryEditor,
+		inspector: [FIRES_TAB, REFERENCES_TAB],
+		emptyCopy: {
+			title: `Nothing in ${list.label} yet`,
+			body: `${list.label} is one of this book's rules lists. Add an entry here and the story can use it.`,
+			action: newLabel
+		},
+		creatable: true,
+		newLabel,
+		newDraft: (lorebookId) => ({
+			...namedEntryDraft(lorebookId, typeId),
+			description: "",
+			supply: "unlimited",
+			supplyLimit: null
+		}),
+		toPoolItem: (source) => entryPoolItem(source, typeId),
+		toDraft: entryDraft,
+		title: (source) => source.name ?? "",
+		validate: (draft, _siblings, warn) => {
+			if (!requireName(draft, warn)) return false
+			const problem = pieceProblem(draft, rulesListOf(typeId) ?? list)
+			if (problem) {
+				if (warn) toaster.error({ title: problem.message })
+				return false
+			}
+			const supply = supplyProblem(draft)
+			if (supply && warn) toaster.error({ title: supply })
+			return !supply
+		}
+	}
+	rulesListDoors.set(typeId, { sig, door })
+	return door
+}
+
+/** The door of a derived entry type the workspace has been told about. */
+function rulesListDoorOf(typeId: string): SectionDescriptor | undefined {
+	const list = rulesListOf(typeId)
+	return list ? rulesListDoor(list) : undefined
+}
+
 export const SECTION_DESCRIPTORS: SectionDescriptor[] = [
 	all,
 	world,
@@ -450,10 +533,12 @@ export const SECTION_DESCRIPTORS: SectionDescriptor[] = [
  */
 export function bookPoolItems(
 	rowsByKind: Record<string, PoolSource[]>,
-	scenes: readonly PoolSource[]
+	scenes: readonly PoolSource[],
+	/** The doors of the book's rules lists (`rulesListDoor`), whose rows are the book's too. */
+	listDoors: readonly SectionDescriptor[] = []
 ): PoolItem[] {
 	const out: PoolItem[] = []
-	for (const descriptor of SECTION_DESCRIPTORS) {
+	for (const descriptor of [...SECTION_DESCRIPTORS, ...listDoors]) {
 		if (!descriptor.kind) continue
 		const rows =
 			descriptor.store === "scenes"
@@ -466,12 +551,17 @@ export function bookPoolItems(
 
 /** The door a scope opens, or undefined for a scope that draws no pool. */
 export function descriptorFor(scope: LoreScope): SectionDescriptor | undefined {
+	const typeId = listScopeType(scope)
+	if (typeId) return rulesListDoorOf(typeId)
 	return SECTION_DESCRIPTORS.find((d) => d.id === scope)
 }
 
 /** Whether this door is a scope of its own, or lives inside another one. */
 export function isScopeDoor(descriptor: SectionDescriptor): boolean {
-	return (LORE_SCOPES as readonly string[]).includes(descriptor.id)
+	return (
+		(LORE_SCOPES as readonly string[]).includes(descriptor.id) ||
+		listScopeType(descriptor.id as LoreScope) !== null
+	)
 }
 
 /** The editor Cast mounts for a member's anchored lore. */
@@ -479,7 +569,9 @@ export const CHARACTER_LORE_DOOR = characters
 
 /** The door that curates one kind of row, wherever that row is listed. */
 export function descriptorForKind(kind: string): SectionDescriptor | undefined {
-	return SECTION_DESCRIPTORS.find((d) => d.kind === kind)
+	return (
+		SECTION_DESCRIPTORS.find((d) => d.kind === kind) ?? rulesListDoorOf(kind)
+	)
 }
 
 /**

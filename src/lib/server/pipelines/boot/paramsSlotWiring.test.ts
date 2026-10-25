@@ -78,6 +78,7 @@ import { describe, it, expect } from "vitest"
 import { CORE_SPECS } from "$lib/server/pipelines/specs"
 import { getDefinition, isSlotRef, type SlotDecl } from "@serene-pub/sdk"
 import { UNREAD_ALLOW_LIST } from "$lib/server/pipelines/boot/unreadAllowList"
+import { replyLoadoutSteps } from "$lib/server/pipelines/runtime/specShape"
 
 /**
  * Slot kinds the **host** supplies, so a spec that never names one is correct.
@@ -496,16 +497,22 @@ describe("every declared slot is named by the spec that uses it", () => {
 	 */
 	it("all three reply specs wire the generate node's connection, sampling and params", () => {
 		const wired = new Set(result.wired.map((f) => f.key))
+		// Every reply call, by the address its document gives it: the steps a spec
+		// runs on the Reply loadout — Story's are both branches of its `reply` junction (D7).
 		const missing = [
 			"core:spec/story-respond",
 			"core:spec/story-narrate",
 			"core:spec/story-side-character"
 		]
-			.flatMap((slug) =>
-				["connection", "sampling", "params"].map(
-					(s) => `${slug} node "generate" slot "${s}"`
+			.flatMap((slug) => {
+				const calls = replyLoadoutSteps(CORE_SPECS.find((c) => c.slug === slug)!.build() as never)
+				expect(calls.length, `${slug} runs no step on the Reply loadout`).toBeGreaterThan(0)
+				return calls.flatMap((call) =>
+					["connection", "sampling", "params"].map(
+						(s) => `${slug} node "${call}" slot "${s}"`
+					)
 				)
-			)
+			})
 			.filter((k) => !wired.has(k))
 		expect(
 			missing,

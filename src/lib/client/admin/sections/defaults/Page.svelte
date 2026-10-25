@@ -1,4 +1,5 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	/**
 	 * Admin → Defaults: which connection and sampling config this instance uses
@@ -1097,16 +1098,16 @@
 				</span>
 				{#if loadout.owner !== "core" && loadout.owner !== "pub"}
 					<span
-						class="bg-surface-200-800 text-surface-700-300 shrink-0 truncate rounded px-1.5 py-0.5 text-[11px] font-medium"
+						class="bg-surface-200-800 text-surface-700-300 shrink-0 truncate rounded px-1.5 py-0.5 text-meta font-medium"
 					>
 						{loadout.owner}
 					</span>
 				{/if}
 			</span>
 			{#if loadout.description}
-				<p class="text-surface-600-400 text-xs break-words">
+				<FieldHelp class="break-words">
 					{loadout.description}
-				</p>
+				</FieldHelp>
 			{/if}
 			{#if loadout.mergedIntoName}
 				<p class="text-surface-600-400 mt-0.5 text-xs">

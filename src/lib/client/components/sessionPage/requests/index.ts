@@ -19,6 +19,7 @@ import type {
 import type { WidgetRequestHandler } from "$lib/shared/widgets/context"
 import { answerActionsSeen, type ActionsSeenDeps } from "./actionsSeen"
 import { answerAddPersona, type AddPersonaDeps } from "./addPersona"
+import { answerTakeSeat, type TakeSeatDeps } from "./takeSeat"
 import {
 	answerAttachFiles,
 	answerRemoveAttachment,
@@ -36,6 +37,7 @@ import { answerClearSceneImage, type SceneImagePins } from "./clearSceneImage"
 import { answerDecideProposal, type DecideProposalDeps } from "./decideProposal"
 import { answerDraft, type DraftDeps } from "./draft"
 import { answerFireTurn, type FireTurnDeps } from "./fireTurn"
+import { answerForwardTurn, answerRewindTurn, type RewindTurnDeps } from "./rewindTurn"
 import { answerInspectRun, type InspectRunDeps } from "./inspectRun"
 import { answerMessages, type MessagesDeps } from "./messages"
 import { answerChannelLanes, type ChannelLanesDeps } from "./channelLanes"
@@ -52,6 +54,8 @@ import {
 } from "./setAttributeValue"
 import { answerSetEntryMarks, type EntryMarksWrite } from "./setEntryMarks"
 import { answerSetSpriteSet, type SpriteSetWrite } from "./setSpriteSet"
+import { answerSetTieShown, type TieShownWrite } from "./setTieShown"
+import { answerSetAttributeCarry, type AttributeCarryWrite } from "./setAttributeCarry"
 import { answerSummarize, type SummarizeDeps } from "./summarize"
 import {
 	answerSceneClose,
@@ -84,6 +88,7 @@ import { answerSummarizeScenes, type SummarizeScenesDeps } from "./summarizeScen
 import { answerSessionPlaces, type SessionPlacesRead } from "./sessionPlaces"
 import { answerCharacterImages, type CharacterGalleryRead } from "./characterImages"
 import { answerStatTrail, type StatTrailRead } from "./statTrail"
+import { answerRoutineLog, type RoutineLogRead } from "./routineLog"
 import { answerSetChosenImage, type InstanceSettings } from "./setChosenImage"
 import { answerSetBackdrop, type BackdropWrite } from "./setBackdrop"
 import { answerSetOwnerFace, type OwnerFaceWrite } from "./setOwnerFace"
@@ -145,6 +150,8 @@ export interface WidgetRequestDeps {
 	showTurnPicker: PickTurnDeps["showTurnPicker"]
 	showSpritePicker(msg: SelectSessionMessage): void
 	showAddPersona: AddPersonaDeps["showAddPersona"]
+	/** 🚧 A guest's seat, opened by name (`take-seat`, Lair rewrite D5). */
+	takeSeat: TakeSeatDeps["takeSeat"]
 	markActionsSeen: ActionsSeenDeps["markActionsSeen"]
 
 	// ── Summarize ──
@@ -199,6 +206,9 @@ export interface WidgetRequestDeps {
 	send: SendDeps["send"]
 	composerTray(): AttachmentRequestDeps
 	fireTurn: FireTurnDeps["fireTurn"]
+	/** 🚧 Back · Forward (`rewind-turn` · `forward-turn`, RF fix 5). */
+	rewindTurn: RewindTurnDeps["rewindTurn"]
+	forwardTurn: RewindTurnDeps["forwardTurn"]
 
 	// ── Session state and scene pins ──
 	stateStore(): AttributeWriter & DecideProposalDeps
@@ -222,12 +232,18 @@ export interface WidgetRequestDeps {
 	readCharacterGallery: CharacterGalleryRead
 	/** 🚧 Stats (F2): one owner's stat trail (`sessions:statTrail`). */
 	readStatTrail: StatTrailRead
+	/** 🚧 What the session's routines did (`routine-log`, A7), from the server. */
+	readRoutineLog: RoutineLogRead
 	/** 🚧 Backdrop: set or clear the session's backdrop (`sessions:setBackdrop`). */
 	writeBackdrop: BackdropWrite
 	/** 🚧 Stats (PLAN-sheet §12): set or clear a player seat's portrait (`state:setOwnerFace`). */
 	writeOwnerFace: OwnerFaceWrite
 	/** 🚧 Stats (★4): Give to… — a piece given or offered (`state:givePiece`). */
 	writeGive: GiveWrite
+	/** 🚧 Stats (ties on the graph): a tie side shown or hidden (`state:showTieSide`). */
+	writeTieShown: TieShownWrite
+	/** 🚧 Stats (RF fix 8): one of the rules' optional attributes carried or not (`state:setCarry`). */
+	writeCarry: AttributeCarryWrite
 }
 
 /**
@@ -384,8 +400,17 @@ export const WIDGET_REQUEST_ANSWERS: {
 	"add-persona": (p, _from, d) => {
 		answerAddPersona(p, d)
 	},
+	"take-seat": (p, _from, d) => {
+		answerTakeSeat(p, d)
+	},
 	"fire-turn": (p, _from, d) => {
 		answerFireTurn(p, d)
+	},
+	"rewind-turn": (p, _from, d) => {
+		answerRewindTurn(p, d)
+	},
+	"forward-turn": (p, _from, d) => {
+		answerForwardTurn(p, d)
 	},
 	"decide-proposal": (p, _from, d) => {
 		answerDecideProposal(p, d.stateStore())
@@ -404,6 +429,10 @@ export const WIDGET_REQUEST_ANSWERS: {
 	// 🚧 Give to… (★4): ONE request; the host gives at once or files an
 	// offer, and its refusal is the asking widget's (R77).
 	"give-piece": (p, from, d) => answerGivePiece(p, d.sessionId(), d.writeGive, from),
+	// 🚧 A tie side shown or hidden (ties on the graph, screen 2): the holder's or the game master's.
+	"set-tie-shown": (p, from, d) => answerSetTieShown(p, d.sessionId(), d.writeTieShown, from),
+	// 🚧 RF fix 8: an optional attribute carried or not — the holder's or the session owner's.
+	"set-attribute-carry": (p, from, d) => answerSetAttributeCarry(p, d.sessionId(), d.writeCarry, from),
 	// Core's scene portraits (R21): judged against the cast the widget was
 	// shown (R77 — offered only where allowed); the server's refusal is the
 	// asking widget's, not a toast.
@@ -461,6 +490,8 @@ export const WIDGET_REQUEST_ANSWERS: {
 	// reads the ledger; a guest may ask.
 	"stat-trail": (p, _from, d) =>
 		answerStatTrail(p, d.sessionId(), d.readStatTrail),
+	// 🚧 While you were away (A7, R23): what the session's routines did.
+	"routine-log": (p, _from, d) => answerRoutineLog(p, d.sessionId(), d.readRoutineLog),
 	// 🚧 Scene Portraits (F2): the ASKING instance's own settings — the
 	// wire's `from.widgetId` is the instance its panel mounted.
 	"set-chosen-image": (p, from, d) => {

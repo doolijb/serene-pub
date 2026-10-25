@@ -30,6 +30,7 @@
 	import GraphBuildModal from "$lib/client/components/modals/GraphBuildModal.svelte"
 	import RagNotice from "$lib/client/components/sessionPage/RagNotice.svelte"
 	import ActionLegend from "$lib/client/components/sessionPage/ActionLegend.svelte"
+	import ComposerRoutinesMenu from "$lib/client/components/sessionPage/ComposerRoutinesMenu.svelte"
 	import SessionBanners from "$lib/client/components/sessionPage/SessionBanners.svelte"
 	import ReadinessStrip from "$lib/client/components/sessionPage/ReadinessStrip.svelte"
 	import type { SessionPageData } from "$lib/client/components/sessionPage/sessionPageData.svelte"
@@ -427,6 +428,16 @@
 			</span>
 		{/if}
 	{/if}
+	<!-- 🚧 Routines (R39; lane 7): the session's owner runs an enabled
+	     routine now, like an action — on the main conversation's copy
+	     only, so a pinned channel's composer does not repeat it. -->
+	{#if loadedSessionId && !data.isGuest && (channel ?? "main").split(":")[0] === "main"}
+		<ComposerRoutinesMenu
+			sessionId={loadedSessionId}
+			isOwner={!data.isGuest}
+			chipClass={sessionChipClass}
+		/>
+	{/if}
 	<!-- The legend here when the genre lists no chips (so the
 	     genre's view, which carries it, is not drawn): a genre with
 	     none still has a way to learn what its controls and message
@@ -567,9 +578,9 @@
 		{#if draftCompiledPrompt?.meta}
 			<div class="flex gap-4 text-xs">
 				<div class="flex flex-col gap-0.5">
-					<span class="text-surface-700-300 text-[11px]">Tokens</span>
+					<span class="text-surface-700-300 text-meta">Tokens</span>
 					<span
-						class:text-error-500={contextExceeded}
+						class:text-error-600-400={contextExceeded}
 						class="font-medium tabular-nums"
 					>
 						{draftCompiledPrompt.meta.tokenCounts.total} / {draftCompiledPrompt
@@ -577,7 +588,7 @@
 					</span>
 				</div>
 				<div class="flex flex-col gap-0.5">
-					<span class="text-surface-700-300 text-[11px]">
+					<span class="text-surface-700-300 text-meta">
 						Messages
 					</span>
 					<span class="font-medium tabular-nums">
@@ -587,7 +598,7 @@
 				</div>
 			</div>
 		{:else if draftCompiledPrompt?.error}
-			<span class="text-error-500 text-xs">
+			<span class="text-error-600-400 text-xs">
 				{draftCompiledPrompt.error}
 			</span>
 		{:else}

@@ -1,5 +1,8 @@
 /**
- * F2 — a sheet entry's `default` is part of the chain. What a sheet says a
+ * 🚧 RF fix 8 (2026-10-23): a genre names no sheet any more, so a genre
+ * sheet's per-slot `default` is retired with it — the slot's own default is
+ * the answer below every owner layer (`genreKeeping` keeps the slots, never
+ * the sheet's defaults). Before: F2 — a sheet entry's `default` is part of the chain. What a sheet says a
  * slot "starts at" (SDK `SheetSlotEntry.default`, "this sheet's deviation
  * from the declaration's own default") is the answer below every owner layer
  * and above the declaration's own default, for every owner kind: a seat
@@ -22,6 +25,7 @@ import {
 	_clearAttributeSlots
 } from "@serene-pub/sdk"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -110,7 +114,7 @@ async function world() {
 		]
 	})
 	const GENRE = `test:genre/sheetdefault-${suffix}`
-	genre(GENRE, {
+	genreKeeping(GENRE, {
 		name: { en: "Grim" },
 		family: "test",
 		sheets: [sheet],
@@ -135,22 +139,22 @@ const seat = (id: number) => ({ kind: "session_cast" as const, id })
 const place = (id: number) => ({ kind: "session_location" as const, id })
 
 describe("a sheet entry's default", () => {
-	test("shows when nothing is set, for a seat, the world and a place", async () => {
+	test("🚧 RF fix 8: a genre sheet's default no longer answers — the slot's own does, for a seat, the world and a place", async () => {
 		declareSlots()
 		const w = await world()
 		const { stateFor, valueOf } = await import("$lib/server/state/resolve")
 		const s = w.session.id
-		expect(await valueOf(db(), { sessionId: s, owner: seat(w.verity.id), slotId: HP })).toBe(25)
-		expect(await valueOf(db(), { sessionId: s, owner: { kind: "session", id: s }, slotId: WEATHER })).toBe("rain")
-		expect(await valueOf(db(), { sessionId: s, owner: place(w.crypt.id), slotId: DUST })).toBe(7)
+		expect(await valueOf(db(), { sessionId: s, owner: seat(w.verity.id), slotId: HP })).toBe(10)
+		expect(await valueOf(db(), { sessionId: s, owner: { kind: "session", id: s }, slotId: WEATHER })).toBe("clear")
+		expect(await valueOf(db(), { sessionId: s, owner: place(w.crypt.id), slotId: DUST })).toBe(1)
 
 		const state = await stateFor(db(), s)
-		expect(state.world.skies).toBe("rain")
-		expect((state.cast.byId[String(w.verity.id)] as Record<string, unknown>).grit).toBe(25)
-		expect((state.locations.byId[String(w.crypt.id)] as Record<string, unknown>).dust).toBe(7)
+		expect(state.world.skies).toBe("clear")
+		expect((state.cast.byId[String(w.verity.id)] as Record<string, unknown>).grit).toBe(10)
+		expect((state.locations.byId[String(w.crypt.id)] as Record<string, unknown>).dust).toBe(1)
 	})
 
-	test("the slot's own default is used only when the sheet names the slot without one", async () => {
+	test("the slot's own default answers where nothing names one", async () => {
 		declareSlots()
 		const w = await world()
 		const { stateFor, valueOf } = await import("$lib/server/state/resolve")
@@ -185,7 +189,7 @@ describe("a sheet entry's default", () => {
 		await applyChange(db(), ctx, { owner: seat(w.verity.id), slotId: HP, op: "set", value: 5 })
 		await applyChange(db(), ctx, { owner: place(w.crypt.id), slotId: DUST, op: "set", value: 0 })
 		expect(await read(seat(w.verity.id), HP)).toBe(5)
-		// A zero is a value, not an absence: the sheet's 7 must not come back.
+		// A zero is a value, not an absence: the slot's 1 must not come back.
 		expect(await read(place(w.crypt.id), DUST)).toBe(0)
 
 		const state = await stateFor(db(), s)

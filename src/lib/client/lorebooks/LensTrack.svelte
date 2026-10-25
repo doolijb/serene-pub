@@ -114,7 +114,7 @@
 	     width, because a control that moves is a control nobody learns the
 	     position of. -->
 	<div
-		class="bg-surface-100-900 flex shrink-0 gap-0.5 rounded-[10px] p-0.5"
+		class="bg-surface-100-900 flex shrink-0 gap-0.5 rounded-base p-0.5"
 		role="group"
 		aria-label="Show as"
 		data-lore-lens-track
@@ -126,7 +126,7 @@
 			<button
 				type="button"
 				class="focus-visible:outline-primary-500 flex size-8 items-center justify-center rounded-lg transition-colors focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-60 {selected
-					? 'preset-tonal-primary'
+					? 'preset-pressed'
 					: 'text-surface-600-400 hover:bg-surface-200-800 hover:text-surface-950-50'}"
 				disabled={!!reason}
 				title={reason ??

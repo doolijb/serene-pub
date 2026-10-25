@@ -4,11 +4,18 @@
  * PLAN-rulesets §27: trust the narrator — the timeline makes every change
  * reversible), **Review changes** or **Off**.
  *
- * One person's answer, for every book they own: a pub default
- * (`system_settings.lore_write_mode_default`) and a per-user override
- * (`user_settings.lore_write_mode`, NULL = follow the pub). A session's
- * book is its owner's, so the mode that governs a session's book writes is the
- * book owner's — never a guest's who took the turn.
+ * Three levels, each only ever tightening the one above (owner ruling
+ * 2026-10-21, "Personal > Lorebook > Session"):
+ *
+ * 1. **Personal** — the book owner's own mode (`user_settings.lore_write_mode`,
+ *    NULL = follow the pub's `system_settings.lore_write_mode_default`).
+ * 2. **Lorebook** — the book's own (`lorebooks.lore_write_mode`, default
+ *    Full): it can make writes to THIS book stricter, never looser.
+ * 3. **Session** — writes at the stricter of the two (`loreWriteLimit`).
+ *
+ * A session's book is its owner's, so the personal mode is the BOOK OWNER's
+ * — never a guest's who took the turn. Each level says when one above it is
+ * stricter (Book settings: the personal mode; session settings: either).
  *
  * What each mode does to each flow is the plan's A22 table:
  *
@@ -53,17 +60,74 @@ export const LORE_WRITE_MODE_CHOICES: Readonly<
 	}
 })
 
+/**
+ * A lorebook's own choices (Book settings): the same three modes, worded for
+ * one book. Full leaves the owner's own setting as the answer.
+ */
+export const BOOK_LORE_WRITE_MODE_CHOICES: Readonly<
+	Record<LoreWriteMode, { label: string; description: string }>
+> = Object.freeze({
+	full: {
+		label: "Full",
+		description: "Sessions write to this book as their own settings allow."
+	},
+	review: {
+		label: "Review changes",
+		description:
+			"Changes a session makes on its own wait for you to accept them, even where your setting is Full."
+	},
+	off: {
+		label: "Off",
+		description: "Sessions never write to this book, whatever your setting."
+	}
+})
+
+/** How strict each mode is: a higher number allows less. */
+const STRICTNESS: Readonly<Record<LoreWriteMode, number>> = { full: 0, review: 1, off: 2 }
+
+/** The stricter of two modes — the one that allows less. */
+export function stricterLoreWriteMode(a: LoreWriteMode, b: LoreWriteMode): LoreWriteMode {
+	return STRICTNESS[a] >= STRICTNESS[b] ? a : b
+}
+
+/**
+ * What a session may write to a book, and which level set it: the personal
+ * mode, tightened by the book's (`stricterLoreWriteMode`). `limitedBy` names
+ * the level that is STRICTER than the other — what a screen below annotates —
+ * and is null when the two agree. A book with no mode of its own (absent:
+ * a session reading none) leaves the personal mode as the answer.
+ */
+export function loreWriteLimit(opts: {
+	personal: LoreWriteMode
+	book?: LoreWriteMode | null
+}): { mode: LoreWriteMode; limitedBy: "personal" | "lorebook" | null } {
+	const book = isLoreWriteMode(opts.book) ? opts.book : null
+	if (!book) return { mode: opts.personal, limitedBy: null }
+	const mode = stricterLoreWriteMode(opts.personal, book)
+	const limitedBy =
+		STRICTNESS[book] > STRICTNESS[opts.personal]
+			? "lorebook"
+			: STRICTNESS[opts.personal] > STRICTNESS[book]
+				? "personal"
+				: null
+	return { mode, limitedBy }
+}
+
 /** Where the setting lives, as the refusals name it. */
 export const LORE_WRITE_MODE_SETTING = "Settings › User › Lorebook writes from sessions"
+
+/** Where a book's own setting lives. */
+export const BOOK_LORE_WRITE_MODE_SETTING = "the lorebook's Book settings"
 
 /**
  * Refused under Off: a save, an apply, a run's change. The mode is the BOOK
  * OWNER's, and this sentence reaches whoever reads the refusal — a guest, a
- * run's receipt — so it names the owner's setting, never the reader's own.
+ * run's receipt — so it names the owner's settings, never the reader's own.
+ * Either level can be what is Off, so it names both.
  */
 export const LORE_WRITES_OFF =
 	`Lorebook writes from sessions are off for this lorebook, so nothing was saved to it. ` +
-	`Its owner can change this in ${LORE_WRITE_MODE_SETTING}.`
+	`Its owner can change this in ${LORE_WRITE_MODE_SETTING}, or in ${BOOK_LORE_WRITE_MODE_SETTING}.`
 
 /**
  * The notice's sentence on its own: what Off means for this screen. The
@@ -83,7 +147,15 @@ export const LORE_WRITES_OFF_NOTICE_ACTION = "Change it in Settings › User"
  * line, a notice drawn with no shell around it).
  */
 export const LORE_WRITES_OFF_NOTICE =
-	`${LORE_WRITES_OFF_NOTICE_LEAD} ` + `Change this in ${LORE_WRITE_MODE_SETTING}.`
+	`${LORE_WRITES_OFF_NOTICE_LEAD} ` +
+	`Change this in ${LORE_WRITE_MODE_SETTING}, or in ${BOOK_LORE_WRITE_MODE_SETTING}.`
+
+/** The notice's sentence when it is the BOOK that is Off: its button opens Book settings. */
+export const BOOK_LORE_WRITES_OFF_NOTICE_LEAD =
+	"This lorebook takes no writes from sessions, so this can't be saved to it."
+
+/** The notice's button when the book is what is Off. */
+export const BOOK_LORE_WRITES_OFF_NOTICE_ACTION = "Change it in Book settings"
 
 /** Whether a value is one of the three modes. */
 export function isLoreWriteMode(value: unknown): value is LoreWriteMode {

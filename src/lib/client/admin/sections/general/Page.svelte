@@ -17,6 +17,7 @@
 	import ScriptsCard from "$lib/client/components/admin/pub/ScriptsCard.svelte"
 	import MessagingCard from "$lib/client/components/admin/pub/MessagingCard.svelte"
 	import LoreWriteModeCard from "$lib/client/components/admin/pub/LoreWriteModeCard.svelte"
+	import RoutineCapsCard from "$lib/client/components/settingsTabs/RoutineCapsCard.svelte"
 
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
@@ -41,7 +42,8 @@
 	/>
 
 	{#if systemSettingsCtx.settings}
-		<div class="flex flex-col gap-4">
+		<!-- One card per setting (STYLE-GUIDE §6.4, setting cards). -->
+		<div class="flex flex-col gap-3">
 			<LanguageCard />
 			<AutoTranslateCard bind:hasUnsavedChanges={translateDirty} />
 			<!-- Android is single-user by design; the server refuses the
@@ -55,19 +57,17 @@
 			<CharaVaultCard bind:hasUnsavedChanges={charaVaultDirty} />
 			<ScriptsCard />
 			<LoreWriteModeCard />
+			<!-- 🚧 The pub's two limits on real-time routines (R11; lane 7). -->
+			<RoutineCapsCard scope="system" />
 
 			{#if systemSettingsCtx.settings.isAndroidWrapper}
-				<section class="panel-card flex flex-col gap-2" aria-labelledby="runtimes-heading">
-					<h2 id="runtimes-heading" class="text-sm font-medium">
+				<section class="panel-card flex flex-col gap-1" aria-labelledby="runtimes-heading">
+					<h2 id="runtimes-heading" class="text-lead font-medium">
 						Local model runtimes
 					</h2>
-					<p class="text-surface-600-400 text-sm">
-						Serene Pub can't run Ollama or KoboldCPP for you in the
-						Android app — both depend on locally-run binaries this
-						build can't bundle. Connect to a remote Ollama or
-						KoboldCPP in Models › Connections instead. Local
-						embeddings aren't available either, but an external
-						embeddings API works fine.
+					<p class="text-surface-600-400 text-chip">
+						The Android app can't run Ollama, KoboldCPP or local
+						embeddings; connect to remote ones in Models › Connections.
 					</p>
 				</section>
 			{/if}

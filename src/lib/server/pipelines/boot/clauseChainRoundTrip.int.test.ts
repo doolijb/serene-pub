@@ -13,8 +13,8 @@ import { describe, it, expect, beforeAll } from "vitest"
 import { and, eq, isNotNull } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { saveDocument, loadDocument } from "$lib/server/pipelines/boot/store"
-import { canonicalHash } from "@serene-pub/sdk"
-import { lairRespondSpec, LAIR_RESPOND_SPEC_ID } from "@serene-pub/core-catalog"
+import { canonicalHash, type SpecDocument } from "@serene-pub/sdk"
+import { lairReplySpec, LAIR_REPLY_SPEC_ID } from "@serene-pub/core-catalog"
 import * as schema from "$lib/server/db/schema"
 
 let db: TestDb
@@ -34,8 +34,8 @@ async function loadActive(slug: string) {
 }
 
 describe("nested clauses round-trip through the store", () => {
-	it("the Lair's respond spec loads back with every clause's chain (hash equal)", async () => {
-		const doc = lairRespondSpec()
+	it("the Lair's reply spec loads back with every clause's chain (hash equal)", async () => {
+		const doc = lairReplySpec()
 		const saved = await saveDocument(
 			db,
 			{ ...doc, id: "test:spec/lair-round-trip" },
@@ -46,28 +46,27 @@ describe("nested clauses round-trip through the store", () => {
 
 		// Named first because it is the defect: a nested clause without its
 		// chain matches no level in the executor and never runs.
-		const nested = (d: typeof doc) =>
+		const nested = (d: SpecDocument) =>
 			d.clauses
 				.filter((c) => c.clauseId)
 				.map((c) => [c.id, c.clauseId, c.clauseChain])
 		expect(nested(back)).toEqual(nested(want))
 		expect(nested(want)).toEqual(
 			expect.arrayContaining([
-				// R8 (2026-09-28): `via` routes Narrate first; the knock or
-				// the play is the `door`, after who speaks (`pick`); the play
-				// runs the session's party speech (owner ruling 2026-09-30):
-				// each delver's character turn (with its own propose-or-apply
-				// inside it) or the Castellan for the party; the Castellan's
-				// keeper is on the spine.
+				// Rewritten 2026-10-21 (Lair rewrite L3): `via` routes Narrate
+				// first; the story's `pick` decides a character turn or the
+				// plan; the plan's `steer` and `rooms` junctions, then the
+				// knock or the play (`door`); the play's `checks` (asked,
+				// or rolled and `shown`) and the plan row (`plan`).
+				["via.narrate.talk", "via", "narrate"],
 				["via.turn.channel", "via", "turn"],
 				["via.turn.channel.story.pick", "via.turn.channel", "story"],
-				["via.turn.channel.story.door", "via.turn.channel", "story"],
-				["via.turn.channel.story.door.play.speech", "via.turn.channel.story.door", "play"],
-				["via.turn.channel.story.door.play.speech.each.character", "via.turn.channel.story.door.play.speech", "each"],
-				["via.turn.channel.story.door.play.speech.each.character.turn.commit", "via.turn.channel.story.door.play.speech.each.character", "turn"],
-				["via.turn.channel.story.door.play.speech.castellan.party", "via.turn.channel.story.door.play.speech", "castellan"],
-				["via.turn.channel.story.door.play.speech.castellan.party.speaks.row", "via.turn.channel.story.door.play.speech.castellan.party", "speaks"],
-				["keep.played.commit", "keep", "played"]
+				["via.turn.channel.story.pick.planned.steer", "via.turn.channel.story.pick", "planned"],
+				["via.turn.channel.story.pick.planned.rooms", "via.turn.channel.story.pick", "planned"],
+				["via.turn.channel.story.pick.planned.door", "via.turn.channel.story.pick", "planned"],
+				["via.turn.channel.story.pick.planned.door.play.checks", "via.turn.channel.story.pick.planned.door", "play"],
+				["via.turn.channel.story.pick.planned.door.play.checks.rolled.shown", "via.turn.channel.story.pick.planned.door.play.checks", "rolled"],
+				["via.turn.channel.story.pick.planned.door.play.plan", "via.turn.channel.story.pick.planned.door", "play"]
 			])
 		)
 		expect(back.clauses).toEqual(want.clauses)
@@ -96,7 +95,7 @@ describe("nested clauses round-trip through the store", () => {
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, LAIR_RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, LAIR_REPLY_SPEC_ID))
 			.limit(1)
 		await db
 			.update(schema.pipelineClauses)
@@ -107,7 +106,7 @@ describe("nested clauses round-trip through the store", () => {
 					isNotNull(schema.pipelineClauses.parentClauseId)
 				)
 			)
-		const doc = lairRespondSpec()
+		const doc = lairReplySpec()
 		expect(canonicalHash(await loadActive(doc.id))).not.toBe(
 			canonicalHash(doc)
 		)
@@ -118,7 +117,7 @@ describe("nested clauses round-trip through the store", () => {
 		const [after] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, LAIR_RESPOND_SPEC_ID))
+			.where(eq(schema.pipelineSpecs.slug, LAIR_REPLY_SPEC_ID))
 			.limit(1)
 		// Healed in place — the same version row, not a new one.
 		expect(after!.activeVersionId).toBe(spec!.activeVersionId)

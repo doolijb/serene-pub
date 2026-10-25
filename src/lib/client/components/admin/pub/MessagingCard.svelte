@@ -9,6 +9,7 @@
 	import { getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import SettingSwitch from "./SettingSwitch.svelte"
+	import SettingCard from "$lib/client/components/settingsTabs/SettingCard.svelte"
 	import { requireAdmin } from "./requireAdmin"
 
 	const socket = useTypedSocket()
@@ -30,33 +31,26 @@
 	}
 </script>
 
-<section
+{#snippet accountsOffNote()}
+	User accounts are off, so there is nobody to message yet; turn them on
+	above for this to apply.
+{/snippet}
+
+<!-- The switch says on or off itself, so no status line repeats it. -->
+<SettingCard
 	id="messaging"
-	class="panel-card flex flex-col gap-3"
-	aria-labelledby="messaging-heading"
+	title="Messages between people"
+	titleId="messaging-heading"
+	headingLevel={2}
+	help="People with accounts write to each other privately and attach sessions, characters, lorebooks and files; off hides Messages and deletes nothing."
+	layout="switch"
+	below={accountsOn ? undefined : accountsOffNote}
 >
-	<h2 id="messaging-heading" class="text-sm font-medium">
-		Messages between people
-	</h2>
-	<p class="text-surface-600-400 text-sm">
-		People with accounts on this pub can write to each other privately,
-		one to one or in a group, and attach sessions, characters, lorebooks
-		and files. Off hides Messages for everyone; nothing already written is
-		deleted.
-	</p>
 	<SettingSwitch
 		name="messaging-enabled"
 		label="Messages between people"
+		labelHidden
 		checked={enabled}
 		{onCheckedChange}
 	/>
-	<p class="text-surface-600-400 text-sm" aria-live="polite">
-		{enabled ? "On — people with accounts can message each other" : "Off"}
-	</p>
-	{#if !accountsOn}
-		<p class="text-surface-600-400 text-sm">
-			User accounts are off, so there is nobody to message yet. Turn on
-			User accounts above for this to apply.
-		</p>
-	{/if}
-</section>
+</SettingCard>

@@ -229,6 +229,23 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				"text->text": "native",
 				"text+image->text": { unproven: true, until: "none" },
 				"text+document->text": { unproven: true, until: "none" },
+				/**
+				 * 🚧 Audio in and a spoken reply out on the chat wire (O4, O6,
+				 * 2026-10-21) — `input_audio` content parts (wav, mp3) and the
+				 * `modalities: ["text","audio"]` + `audio: {voice, format}`
+				 * request, answered with `message.audio` (data + transcript).
+				 * OpenAI's audio models speak this shape; which MODEL hears or
+				 * speaks is the per-model reads/writes gate (O3). PROBED, like
+				 * vision: of the services behind this format only some do.
+				 */
+				"text+audio->text": { unproven: true, until: "none" },
+				"text->text+audio": { unproven: true, until: "none" },
+				/**
+				 * 🚧 Transcription (O9): `POST {base}/audio/transcriptions`
+				 * through `OpenAITranscriptionAdapter` — OpenAI, and the
+				 * compatible servers that answer the route. PROBED.
+				 */
+				"audio->text": { unproven: true, until: "none" },
 				json_object: "native",
 				json_schema: { unproven: true, until: "none" },
 				strict_schema: { unproven: true, until: "none" },
@@ -323,6 +340,17 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				image: {
 					accepts: ["image/png", "image/jpeg", "image/webp", "image/gif"],
 					prefers: ["image/webp", "image/jpeg", "image/png"]
+				},
+				/**
+				 * 🚧 `input_audio` takes `format: "wav" | "mp3"` (OpenAI's
+				 * audio guide). Nothing here re-encodes audio, so another
+				 * container is not sent — the reply's transcribe step hears it
+				 * instead (O9). About ten prompt tokens a second: an estimate
+				 * for the budget (O10), never a cap.
+				 */
+				audio: {
+					accepts: ["audio/wav", "audio/mpeg"],
+					cost: { perSecond: 10 }
 				}
 			}
 		},
@@ -810,6 +838,13 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 			supports: {
 				"text->text": "native",
 				"text+image->text": { unproven: true, until: "none" },
+				/**
+				 * 🚧 Audio in on the chat wire (O4, 2026-10-21): llama-server
+				 * takes OpenAI's `input_audio` part (wav, mp3) for a model
+				 * loaded with an audio projector. Per-model, so probed — off
+				 * until a person or a probe says the loaded model hears.
+				 */
+				"text+audio->text": { unproven: true, until: "none" },
 				// Probed — see above. Which model is the embedding one is the
 				// listing's answer: the server's one model, `embeddings` when the
 				// same probe says so.
@@ -866,7 +901,9 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				image: {
 					accepts: ["image/png", "image/jpeg"],
 					prefers: ["image/jpeg", "image/png"]
-				}
+				},
+				// 🚧 O4: `input_audio`'s two formats; nothing here re-encodes audio.
+				audio: { accepts: ["audio/wav", "audio/mpeg"] }
 			}
 		},
 		sendsAttachments: { chat: true, completion: false },
@@ -1159,6 +1196,13 @@ export const PRESET_CAPABILITIES: Record<
 
 	"openai-official": {
 		"text+image->text": true,
+		// 🚧 O4/O6/O9: OpenAI's own API hears (`input_audio`), speaks
+		// (`gpt-4o-audio-preview` and its kin) and transcribes
+		// (`/audio/transcriptions`). Which model does is the model's
+		// reads/writes (O3).
+		"text+audio->text": true,
+		"text->text+audio": true,
+		"audio->text": true,
 		/**
 		 * Chat only — a KNOWN TRUTH about the service, recorded at the layer that
 		 * can hold one.

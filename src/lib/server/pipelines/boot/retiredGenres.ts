@@ -164,10 +164,18 @@ export async function cullRetiredCoreGenres(
  * - `core:spec/tool-loop` — the reference agentic turn, not seeded (ruled
  *   2026-10-05, PLAN-catalogue-and-pipeline-names C3). It stays in
  *   core-catalog as an example and a test fixture; nothing ran it.
+ * - 🚧 `core:spec/lair-respond` — the old Lair's one graph, rewritten as
+ *   `core:spec/lair-reply` with its books and scratchpad as routines (Lair
+ *   rewrite, 2026-10-21; `RENAMED_CORE_IDS` aliases a package's reference,
+ *   and the 0112 data upgrade moved the registrations that named it).
+ * - 🚧 `core:spec/lair-advance-time` — *Time passes…* left the Lair (rewrite
+ *   L3): its story clock is the GM's.
  */
 export const RETIRED_CORE_SPECS: readonly string[] = [
 	"core:spec/echo",
-	"core:spec/tool-loop"
+	"core:spec/tool-loop",
+	"core:spec/lair-respond",
+	"core:spec/lair-advance-time"
 ]
 
 /**
@@ -175,6 +183,10 @@ export const RETIRED_CORE_SPECS: readonly string[] = [
  * by node, not spec, so the spec's delete does not reach it.
  *
  * - tool-loop's `Tool loop` (`TOOL_LOOP_PROMPT` in core-catalog).
+ *
+ * ⚠ Not the old Lair's *party* and *keeper* prompts (rewrite, 2026-10-21):
+ * a row the catalog stops shipping is kept as a person's (owner ruling
+ * 2026-10-13, `unshipPrompts.ts`), and nothing selects them any more.
  */
 export const RETIRED_CORE_PROMPTS: readonly string[] = [
 	"pipeline-prompt:core:task/assemble:prompts:tool-loop-default"

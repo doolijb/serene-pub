@@ -148,23 +148,26 @@ export interface ValueLayerRow {
  */
 const LAYER_LABEL: Record<string, string> = {
 	session: "session override",
+	// 🚧 The value cascade since R38 (PLAN-layering D5, 2026-10-20): the
+	// preset's registration values, then the genre's defaults'.
+	preset: "preset",
+	genre: "genre default",
+	// ⏳ A receipt written before configurations retired.
 	config: "selected config",
 	defaults: "pub defaults",
 	author: "node default"
 }
 const LAYER_ORDER = Object.keys(LAYER_LABEL)
 
-/**
- * `NodeReceipt.configLayers`, flattened. `preset` is the pre-2026-09-26
- * spelling of `config` — no receipt was written with it, but a stored blob is
- * nobody's guarantee, so it reads as what it meant.
- */
+/** `NodeReceipt.configLayers`, flattened, in the chain's order. */
 function layersOf(node: ReceiptNode): ValueLayerRow[] {
 	const out: ValueLayerRow[] = []
 	for (const [slot, paths] of Object.entries(asRecord(node.configLayers) ?? {}))
 		for (const [path, raw] of Object.entries(asRecord(paths) ?? {})) {
 			if (typeof raw !== "string") continue
-			const layer = raw === "preset" ? "config" : raw
+			// `preset` is a layer of its own since R38 (it was the
+			// pre-2026-09-26 spelling of `config`, which no receipt carried).
+			const layer = raw
 			out.push({ slot, path, layer, label: LAYER_LABEL[layer] ?? layer })
 		}
 	const rank = (l: string) => {
@@ -409,6 +412,50 @@ export function lastStatusOf(
 	return { nodeKey: String(last.nodeKey ?? ""), text }
 }
 
+/* ── routines (PLAN-layering R9, R18, R19, R11; lane 7) ─────────────── */
+
+/**
+ * 🚧 A routine's line in the inspector — the receipt's `meta.routine`, as
+ * the routine runtime writes it (lane 6): a run says whom it ran for
+ * (_routine Note what changed, for Ann_, R25), and whether the owner pressed
+ * **Run now**; a firing that did not run is a halted receipt with no nodes
+ * whose reason is the whole sentence — _Skipped: already waiting_, _Skipped:
+ * the clock jumped 3 days (more than 12 hours)_, _Paused after 12 runs in a
+ * row_. Null for every other run.
+ */
+export interface RoutineLine {
+	/** `ran` a run; `skipped` or `paused` a firing that did not run. */
+	kind: "ran" | "skipped" | "paused"
+	/** "routine ‹name›, for ‹owner›" — a run's; null on a skip or pause. */
+	said: string | null
+	/** The registration it fired under. */
+	registrationKey: string | null
+	/** The owner pressed Run now (R39). */
+	runNow: boolean
+}
+
+export function routineLineOf(receipt: unknown): RoutineLine | null {
+	const r = asRecord(asRecord(asRecord(receipt)?.meta)?.routine)
+	if (!r) return null
+	return {
+		kind: r.skipped === true ? "skipped" : r.paused === true ? "paused" : "ran",
+		said: asString(r.said) ?? null,
+		registrationKey: asString(r.registrationKey) ?? null,
+		runNow: r.runNow === true
+	}
+}
+
+/**
+ * What started a run, in words, for the header's "started by" — a routine's
+ * line where it is one, else the receipt's trigger source. Null when the
+ * receipt names neither.
+ */
+export function startedByOf(receipt: unknown): string | null {
+	const routine = routineLineOf(receipt)
+	if (routine?.said) return routine.runNow ? `${routine.said} (Run now)` : routine.said
+	return asString(asRecord(receipt)?.triggerSource) ?? null
+}
+
 /**
  * What happened, in one sentence.
  *
@@ -432,6 +479,12 @@ export function verdict(
 	const reason = run.haltReason ?? asString(receipt?.haltReason)
 	const at = node ? ` at ${node}` : ""
 	const whileDoing = opts.status ? ` while ${opts.status}` : ""
+
+	// A routine's firing that did not run (lane 6's inspector lines): the
+	// reason is the whole sentence — "Skipped: already waiting."
+	const routine = routineLineOf(receipt)
+	if (routine && routine.kind !== "ran" && reason)
+		return /[.!?]$/.test(reason) ? reason : `${reason}.`
 
 	if (run.outcome === "ok") {
 		const count = asArray(receipt?.nodes).length

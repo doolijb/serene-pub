@@ -1,28 +1,28 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
-	 * The pipeline workspace (22, rebuilt): one pipeline, and the
-	 * configurations written against it.
+	 * The pipeline workspace (22, rebuilt): one pipeline — its steps, the
+	 * values it runs with, its canvas, scripts, runs and versions.
 	 *
-	 * The page is a shell now — the map, step list, and the tab panels live in
+	 * The page is a shell — the map, step list, and the tab panels live in
 	 * `$lib/client/components/pipelines/workspace/` — and it owns exactly the
 	 * things that have to be one thing: the draft (nothing writes until Save
-	 * all, 22 §2.1), the configuration verbs (New / Duplicate / Rename /
-	 * Delete), the seat's URL mirror (tab, step, configuration), and the
-	 * socket wiring.
+	 * all, 22 §2.1), the seat's URL mirror (tab, step), and the socket wiring.
 	 *
 	 * It is the pipeline's change view (Django admin, STYLE-GUIDE §6.11):
-	 * `AdminChangeForm` draws the trail, the header and the save row. The
-	 * configuration's settings — every option, and whether it is offered —
-	 * are unsaved edits until Save (owner ruling 2026-10-02, "levers wait for
-	 * Save"); Save sends the option batch, then the switch, each waiting for
-	 * its own answer, and only then says it saved.
+	 * `AdminChangeForm` draws the trail, the header and the save row. Its
+	 * settings are unsaved edits until Save (owner ruling 2026-10-02, "levers
+	 * wait for Save").
 	 *
-	 * The pipeline itself is the *backbone* — a fixed sequence a published
-	 * version freezes. What people tune and keep is a **configuration**: a
-	 * named set of values against that backbone. Shipped configurations
-	 * refuse edits; Save offers a copy instead. Structural editing —
-	 * swapping a node, reordering, publishing — is the lens view (05 §1–§5)
-	 * and remains undrafted: this page configures the published backbone.
+	 * 🚧 **Named configurations are retired** (PLAN-layering R38, A20; lane 7,
+	 * 2026-10-21): a pipeline's values come from one cascade — its declared
+	 * defaults < the genre's defaults < a preset's changes < the session. What
+	 * this page saves is **the genre's defaults** of every genre that
+	 * registers the pipeline (`pipelines:setOptions` with no configuration);
+	 * a preset changes them in Admin › Presets. ⏳ A pipeline nothing
+	 * registers still reads the pub's own values, saved here the same way.
+	 * **Where it runs** lists the genres and presets that register it.
 	 */
 	import { getContext, onMount, tick, untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
@@ -36,13 +36,12 @@
 		saveSummary,
 		type SaveStep
 	} from "$lib/client/admin/sequentialSave"
-	import { adminRouter, adminUnsavedEdits, adminGoto as goto, adminReplaceState as replaceState } from "$lib/client/admin/adminRouter.svelte"
+	import { adminUnsavedEdits, adminGoto as goto, adminReplaceState as replaceState } from "$lib/client/admin/adminRouter.svelte"
 	import { sameFormValue } from "$lib/client/forms/sameFormValue"
 	import { adminPage as page } from "$lib/client/admin/adminRouter.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
-	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import PipelineConfigOptions from "$lib/client/components/pipelines/PipelineConfigOptions.svelte"
 	import CanvasPanel from "$lib/client/components/pipelines/workspace/canvas/CanvasPanel.svelte"
 	import {
@@ -52,7 +51,6 @@
 		portCardsOf
 	} from "$lib/client/components/pipelines/settingsGroups"
 	import PortCards from "$lib/client/components/pipelines/PortCards.svelte"
-	import ConfigNotices from "$lib/client/components/pipelines/ConfigNotices.svelte"
 	import PipelineMap from "$lib/client/components/pipelines/workspace/PipelineMap.svelte"
 	import StepList from "$lib/client/components/pipelines/workspace/StepList.svelte"
 	import RunsPanel from "$lib/client/components/pipelines/workspace/RunsPanel.svelte"
@@ -156,84 +154,8 @@
 			inspectorEl?.scrollIntoView({ behavior: "smooth", block: "start" })
 	}
 
-	/* ── configurations ─────────────────────────────────────────────── */
-
-	let renaming = $state<{ id: number; name: string } | null>(null)
-	let creating = $state<{ name: string; fromConfigId?: number } | null>(null)
-
-	const selected = $derived(
-		detail?.configs.find((c) => c.id === detail?.selectedConfig?.id) ?? null
-	)
-
-	function chooseConfig(value: string) {
-		const configId = Number(value)
-		if (!Number.isFinite(configId)) return
-		socket.emit("pipelines:selectConfig", { slug, configId })
-	}
-
-	function startNew(duplicate: boolean) {
-		const base = duplicate
-			? `${selected?.name ?? "Configuration"} copy`
-			: ""
-		creating = {
-			name: base,
-			...(duplicate && selected ? { fromConfigId: selected.id } : {})
-		}
-	}
-
-	function commitNew() {
-		if (!creating?.name.trim()) return
-		socket.emit("pipelines:createConfig", {
-			slug,
-			name: creating.name.trim(),
-			...(creating.fromConfigId != null
-				? { fromConfigId: creating.fromConfigId }
-				: {})
-		})
-		creating = null
-	}
-
-	function commitRename() {
-		if (!renaming?.name.trim()) return
-		socket.emit("pipelines:renameConfig", {
-			slug,
-			configId: renaming.id,
-			name: renaming.name.trim()
-		})
-		renaming = null
-	}
-
-	/**
-	 * Withdraw a configuration from the set people may choose, or put it back.
-	 *
-	 * The half of R8 that makes "users choose among them" mean anything: an
-	 * administrator decides what the list contains. Withdrawing is deliberately
-	 * NOT deletion — sessions already on it keep running, it simply stops being
-	 * offered — so it is a switch here and not a second confirm dialog.
-	 *
-	 * The shipped configuration has no switch: it is the fallback everything
-	 * else resolves through, so withdrawing it would leave a scope resolving to
-	 * something it may not choose. `setPresetActions` refuses an immutable row
-	 * for the same reason.
-	 */
-	function setAvailability(enabled: boolean) {
-		if (!selected || selected.readOnly) return
-		// An unsaved edit like any setting: the save row sends it.
-		offeredDraft = enabled === selected.enabled ? null : enabled
-	}
-	/** The "Offered" tick as edited; null while it is what is saved. */
-	let offeredDraft = $state<boolean | null>(null)
-
-	function removeConfig() {
-		if (!selected) return
-		const ok = confirm(
-			`Delete the configuration "${selected.name}"?\n\n` +
-				`Anything currently using it falls back to this pipeline's ` +
-				`default. This cannot be undone.`
-		)
-		if (!ok) return
-		socket.emit("pipelines:deleteConfig", { slug, configId: selected.id })
-	}
+	/** 🚧 Where it runs (lane 7): the genres and presets that register it. */
+	let registeredIn = $state<Sockets.Pipelines.RegisteredIn.Place[]>([])
 
 	/* ── wiring ─────────────────────────────────────────────────────── */
 
@@ -245,20 +167,8 @@
 		loading = false
 		if (res?.error) toaster.error({ title: res.error })
 	}
-	const onConfigError = (res: { error?: string }) => {
-		if (res?.error) toaster.error({ title: res.error })
-	}
-
-	/**
-	 * A configuration you just made is the one you want to be editing — the
-	 * handler answers with the new id, and the client selects it.
-	 */
-	const onConfigCreated = (res: Sockets.Pipelines.CreateConfig.Response) => {
-		if (res.error || res.configId == null) return
-		if (res.pipeline && res.pipeline.slug !== slug) return
-		// The shipped-save path waits for this answer itself (`saveToCopy`).
-		if (savingToCopy) return
-		socket.emit("pipelines:selectConfig", { slug, configId: res.configId })
+	const onRegisteredIn = (res: Sockets.Pipelines.RegisteredIn.Response) => {
+		if (res.slug === untrack(() => slug)) registeredIn = res.places ?? []
 	}
 
 	onMount(() => {
@@ -272,11 +182,8 @@
 	 * Everything this workspace reads, each key declared before the request
 	 * that needs it goes out.
 	 *
-	 * The writes' answers stand — a configuration create, rename, delete,
-	 * reset, availability switch or option batch arrives whenever the person
-	 * presses the button, not in reply to anything asked here — while `detail`
-	 * and `runs` have one request site each and are asked for and listened for
-	 * in one. All BARE: a pipeline workspace is not one session's anything.
+	 * `detail`, `registeredIn` and `runs` have one request site each and are
+	 * asked for and listened for in one. All BARE: a pipeline workspace is not one session's anything.
 	 *
 	 * The app-wide interest context, not `adminInterest`: `pipelines:` is a
 	 * MIXED family — most of its handlers answer every user — so these are
@@ -295,25 +202,10 @@
 				"pipelines:detail:error",
 				onDetailError
 			),
-			interest.declareInterest<"pipelines:createConfig">(
-				"pipelines:createConfig",
-				onConfigCreated
-			),
-			interest.declareInterest<"pipelines:createConfig:error">(
-				"pipelines:createConfig:error",
-				onConfigError
-			),
-			interest.declareInterest<"pipelines:renameConfig:error">(
-				"pipelines:renameConfig:error",
-				onConfigError
-			),
-			interest.declareInterest<"pipelines:deleteConfig:error">(
-				"pipelines:deleteConfig:error",
-				onConfigError
-			),
-			interest.declareInterest<"pipelines:resetConfig:error">(
-				"pipelines:resetConfig:error",
-				onConfigError
+			interest.requestWithInterest(
+				"pipelines:registeredIn",
+				{ slug: initialSlug },
+				onRegisteredIn
 			),
 			interest.requestWithInterest(
 				"pipelines:detail",
@@ -375,8 +267,6 @@
 	// is still empty, so seeding it here is enough for deep links.
 	if (initialParams.get("step")) selectedStep = initialParams.get("step")
 	if (initialParams.get("group")) selectedGroup = initialParams.get("group")
-	/** ?config= applied once, after the first view arrives. */
-	let urlConfigId: number | null = Number(initialParams.get("config")) || null
 	/**
 	 * ?option= (with ?step=): land on that option once the first view
 	 * arrives — Admin › Scripts' *Where used* opens a chain this way.
@@ -384,7 +274,7 @@
 	let urlOptionId: string | null = initialParams.get("option")
 
 	/**
-	 * The address bar mirrors the seat — tab, step, configuration — without
+	 * The address bar mirrors the seat — tab and step — without
 	 * touching history (replaceState): back/forward should leave the page,
 	 * not replay every step click.
 	 */
@@ -397,10 +287,10 @@
 		else p.delete("step")
 		if (selectedGroup) p.set("group", selectedGroup)
 		else p.delete("group")
-		// A landing, not a seat: once read it leaves the address.
+		// A landing, not a seat: once read it leaves the address. ⏳ `config`
+		// named a configuration (retired, R38): an old link's is dropped.
 		p.delete("option")
-		if (detail?.selectedConfig)
-			p.set("config", String(detail.selectedConfig.id))
+		p.delete("config")
 		const q = p.toString()
 		try {
 			replaceState(q ? `?${q}` : page.url.pathname, {})
@@ -413,18 +303,15 @@
 
 	let pending = $state<Record<string, unknown>>({})
 	let pendingClears = $state<string[]>([])
-	const offeredChange = $derived(
-		offeredDraft != null && !!selected && offeredDraft !== selected.enabled
-	)
 	const optionCount = $derived(Object.keys(pending).length + pendingClears.length)
-	const pendingCount = $derived(optionCount + (offeredChange ? 1 : 0))
+	const pendingCount = $derived(optionCount)
 
 	/** The raw (un-overlaid) option row, for "was it truly overridden". */
 	const rawOption = (id: string) =>
 		(detail ? optionsOf(detail.groups) : []).find((o) => o.id === id)
 
 	/**
-	 * A value put back to what the configuration holds is no edit: it leaves
+	 * A value put back to what the pipeline holds is no edit: it leaves
 	 * the draft rather than counting as a pending change (a slider dragged
 	 * away and back, `"5"` typed over `5`).
 	 */
@@ -451,44 +338,6 @@
 	function discardAll() {
 		pending = {}
 		pendingClears = []
-		offeredDraft = null
-	}
-
-	/**
-	 * Reset the whole configuration — every deviation at once (ruled
-	 * 2026-09-10).
-	 *
-	 * ⚠ **This writes immediately, where an option edit drafts.** Deliberate,
-	 * and it follows the page's existing line rather than crossing it: choosing,
-	 * creating, renaming and deleting a configuration all write straight
-	 * through, because they are acts on the configuration itself; only edits to
-	 * a SETTING draft. Emptying a configuration belongs on the first side.
-	 *
-	 * And it is one server-side delete rather than a queue of clears over the
-	 * rows on screen. A client-side loop can only reach the deviations this view
-	 * loaded, which is the half a person means least to keep — the addresses
-	 * they cannot see.
-	 *
-	 * Refused server-side for a shipped configuration, which has nothing to
-	 * reset because it IS the reset.
-	 */
-	function resetAll() {
-		const config = selected
-		if (!config || config.readOnly) return
-		const n = changeRows.filter((r) => r.state === "saved").length
-		if (!n) return
-		if (
-			!confirm(
-				`Reset ${n} change${n === 1 ? "" : "s"} in “${config.name}”? ` +
-					`Every setting goes back to what this pipeline ships, and ` +
-					`that cannot be undone.`
-			)
-		)
-			return
-		// A draft over rows that are about to be deleted would apply on top of
-		// the reset and half-undo it.
-		discardAll()
-		socket.emit("pipelines:resetConfig", { slug, configId: config.id })
 	}
 
 	/** Unsaved edits waiting on a step — the amber dot in both navigators. */
@@ -506,7 +355,7 @@
 	 * refusal mid-batch stops it and names what landed; the edits stay, so
 	 * Save again resends them (re-setting what landed changes nothing).
 	 */
-	function sendOptions(configId: number) {
+	function sendOptions() {
 		const set = Object.entries($state.snapshot(pending)).map(([optionId, value]) => ({
 			optionId,
 			value
@@ -516,8 +365,10 @@
 			socket,
 			event: "pipelines:setOptions",
 			errorEvent: "pipelines:setOptions:error",
-			params: { slug, configId, set, clear },
-			match: (r) => r.slug === slug && r.configId === configId,
+			// No configuration (retired, R38): the server writes the genre's
+			// defaults of every genre that registers this pipeline.
+			params: { slug, set, clear },
+			match: (r) => r.slug === slug && r.configId == null,
 			timeoutMs: 60_000
 		}).then(
 			() => {
@@ -533,51 +384,20 @@
 	let saving = $state(false)
 	let formErrors = $state<string[]>([])
 
-	/** The shipped-configuration question, asked at save time (22 §2.1). */
-	let shippedDialog = $state(false)
-	let shippedNewName = $state("")
-	/** The intent a Save asked with, held while the shipped question is open. */
-	let shippedIntent: AdminSaveIntent = "continue"
-	/** The shipped-save path is creating the copy; its answer is the save's. */
-	let savingToCopy = false
-
 	function land(intent: AdminSaveIntent) {
 		if (intent === "save") void goto("/admin/pipelines")
 	}
 
 	async function save(intent: AdminSaveIntent) {
-		if (!selected || saving) return
+		if (saving) return
 		formErrors = []
 		if (!pendingCount) return land(intent)
-		if (selected.readOnly) {
-			shippedIntent = intent
-			shippedNewName = `${selected.name} copy`
-			shippedDialog = true
-			return
-		}
-		const configId = selected.id
 		const steps: SaveStep[] = []
 		if (optionCount) {
 			const n = optionCount
 			steps.push({
 				label: `${n} setting${n === 1 ? "" : "s"}`,
-				run: () => sendOptions(configId)
-			})
-		}
-		if (offeredChange) {
-			const enabled = offeredDraft!
-			steps.push({
-				label: enabled ? "Offer this configuration" : "Withdraw this configuration",
-				run: () =>
-					awaitReply({
-						socket,
-						event: "pipelines:setPresetActions",
-						errorEvent: "pipelines:setPresetActions:error",
-						params: { slug, configId, enabled },
-						match: (r) => r.slug === slug && r.configId === configId
-					}).then(() => {
-						offeredDraft = null
-					})
+				run: () => sendOptions()
 			})
 		}
 		await finishSave(steps, intent)
@@ -587,7 +407,7 @@
 		saving = true
 		const outcome = await saveInSequence(steps)
 		saving = false
-		const name = selected?.name ?? spec?.name ?? slug
+		const name = spec?.name ?? slug
 		if (outcome.refused.length || outcome.skipped.length) {
 			formErrors = saveErrors(outcome)
 			toaster.warning({ title: saveSummary(outcome, name) })
@@ -597,51 +417,8 @@
 		land(intent)
 	}
 
-	/** Shipped: the edits land in a new copy, which becomes the selection. */
-	async function saveAsNewConfig() {
-		if (!shippedNewName.trim() || !selected) return
-		const name = shippedNewName.trim()
-		const fromConfigId = selected.id
-		shippedDialog = false
-		const steps: SaveStep[] = []
-		let copyId: number | null = null
-		steps.push({
-			label: `Create ${name}`,
-			run: async () => {
-				savingToCopy = true
-				try {
-					const res = await awaitReply({
-						socket,
-						event: "pipelines:createConfig",
-						errorEvent: "pipelines:createConfig:error",
-						params: { slug, name, fromConfigId },
-						match: (r) => r.configId != null && (!r.pipeline || r.pipeline.slug === slug)
-					})
-					copyId = res.configId!
-					socket.emit("pipelines:selectConfig", { slug, configId: copyId })
-				} finally {
-					savingToCopy = false
-				}
-			}
-		})
-		if (optionCount)
-			steps.push({
-				label: "Settings",
-				after: [`Create ${name}`],
-				run: () => sendOptions(copyId!)
-			})
-		await finishSave(steps, shippedIntent)
-	}
-
 	/** Leaving with unsaved edits is asked about, through the Admin view's dialog. */
 	adminUnsavedEdits(() => pendingCount > 0)
-
-	/** A different configuration is a different draft: the same question. */
-	async function chooseConfigGuarded(value: string) {
-		if (!(await adminRouter.confirmDiscard())) return
-		discardAll()
-		chooseConfig(value)
-	}
 
 	/* ── the Changes rows (22 §2.2) ─────────────────────────────────── */
 
@@ -652,13 +429,10 @@
 			for (const o of s.options) {
 				const isPend = o.id in pending
 				const isClear = pendingClears.includes(o.id)
-				// `changed`, not `overriddenHere` (ruled 2026-09-10). The two
-				// coincide on this page — the builder writes at config scope,
-				// where a row in the configuration IS the thing an edit lands
-				// in — but they answer different questions, and this list is
-				// asking the configuration's: what does it depart from the
-				// shipped default by. `overriddenHere` follows the write scope
-				// and would start describing a session's overrides the day this
+				// `changed`, not `overriddenHere` (ruled 2026-09-10): this list
+				// asks what the pipeline's values depart from its declared
+				// defaults by. `overriddenHere` follows the write scope and
+				// would start describing a session's overrides the day this
 				// panel is opened from inside one.
 				if (!o.changed && !isPend && !isClear) continue
 				out.push({
@@ -705,9 +479,9 @@
 	})
 
 	/**
-	 * A configuration view arrived — from the Configure panel or the Scripts
-	 * tab, which read the same `pipelines:get` view. The page keeps it, and
-	 * the deep links (`?option=`, `?config=`) are applied once, then forgotten.
+	 * A view arrived — from the Configure panel or the Scripts tab, which read
+	 * the same `pipelines:get` view. The page keeps it, and the deep link
+	 * (`?option=`) is applied once, then forgotten.
 	 */
 	function onConfigView(d: Sockets.Pipelines.NamespaceDetail) {
 		detail = d
@@ -717,17 +491,6 @@
 			const optionId = urlOptionId
 			urlOptionId = null
 			void jumpToOption(selectedStep, optionId)
-		}
-		if (
-			urlConfigId != null &&
-			d.selectedConfig?.id !== urlConfigId &&
-			d.configs.some((c) => c.id === urlConfigId)
-		) {
-			const id = urlConfigId
-			urlConfigId = null
-			socket.emit("pipelines:selectConfig", { slug, configId: id })
-		} else {
-			urlConfigId = null
 		}
 	}
 
@@ -802,7 +565,7 @@
 		{ id: "changes", label: "Changes", icon: "Diff" },
 		{ id: "runs", label: "Runs", icon: "History" },
 		{ id: "versions", label: "Versions", icon: "GitCommitHorizontal" },
-		{ id: "preset", label: "Used by", icon: "Ticket" }
+		{ id: "preset", label: "Where it runs", icon: "Ticket" }
 	]
 	const workspaceTabs: PanelTabDef[] = $derived(
 		TABS.map((t) => ({
@@ -827,7 +590,7 @@
 	changelistLabel="Pipelines"
 	dirty={pendingCount > 0}
 	{saving}
-	canSave={pendingCount > 0 && !saving && !!selected}
+	canSave={pendingCount > 0 && !saving}
 	addAnother={false}
 	errors={formErrors}
 	onSave={save}
@@ -841,11 +604,9 @@
 				</span>
 				<!-- The catalogue claims (23 §4), worn where the version is. -->
 				{#if detail?.taxonomy?.zone}
-					<span
-						class="preset-tonal-surface rounded-full px-1.5 py-0.5 font-sans text-[11px]"
-					>
+					<Badge size="sm" class="font-sans">
 						{detail.taxonomy.zone}
-					</span>
+					</Badge>
 				{/if}
 				{#if detail?.taxonomy?.role}
 					<span
@@ -855,7 +616,7 @@
 								? 'preset-tonal-secondary'
 								: detail.taxonomy.role === 'create'
 									? 'preset-tonal-tertiary'
-									: 'preset-tonal-surface'} rounded-full px-1.5 py-0.5 font-sans text-[11px]"
+									: 'preset-tonal-surface'} rounded-full px-1.5 py-0.5 font-sans text-meta"
 					>
 						{detail.taxonomy.role}
 					</span>
@@ -863,7 +624,7 @@
 				{#if detail?.taxonomy?.role === "create" && detail?.taxonomy?.genre}
 					<!-- A create pipeline is its genre's required member (24 §3). -->
 					<a
-						class="preset-tonal-primary rounded-full px-1.5 py-0.5 font-sans text-[11px] hover:underline"
+						class="preset-tonal-primary rounded-full px-1.5 py-0.5 font-sans text-meta hover:underline"
 						href="/admin/session-genres/{encodeURIComponent(
 							detail.taxonomy.genre
 						)}"
@@ -873,18 +634,15 @@
 							detail.taxonomy.genre}
 					</a>
 				{:else if detail?.taxonomy?.genre}
-					<span
-						class="preset-tonal-surface rounded-full px-1.5 py-0.5 font-sans text-[11px]"
-						title={detail.taxonomy.genre}
-					>
+					<Badge size="sm" class="font-sans" title={detail.taxonomy.genre}>
 						{genreNames.get(detail.taxonomy.genre) ??
 							detail.taxonomy.genre}
-					</span>
+					</Badge>
 				{/if}
 			</p>
 			<!-- The workspace is a two-pane tool; in the dock it stacks and
 			     still works, and this says where the room is. -->
-			<p class="text-surface-600-400 text-[13px] @min-[700px]/content:hidden">
+			<p class="text-surface-600-400 text-chip @min-[700px]/content:hidden">
 				Wider is easier: press the Focus button above.
 			</p>
 	{/snippet}
@@ -910,164 +668,26 @@
 			on this pub.
 		</p>
 	{:else}
-		<!-- ── configuration bar ─────────────────────────────────────── -->
-		<section
-			class="panel-card flex flex-wrap items-end gap-2"
-			aria-label="Configuration"
-		>
-			<Select
-				label="Configuration"
-				class="min-w-[14rem] flex-1 text-sm"
-				options={(detail?.configs ?? []).map((c) => ({
-					value: String(c.id),
-					label: `${c.isDefault ? "★ " : ""}${c.name}${
-						c.readOnly ? " (shipped)" : ""
-					}${c.enabled ? "" : " (withdrawn)"}`
-				}))}
-				value={detail?.selectedConfig
-					? String(detail.selectedConfig.id)
-					: ""}
-				onValueChange={(v) => {
-					// A clear is not a choice: the native select never offered one.
-					if (v) chooseConfigGuarded(v)
-				}}
-			/>
-
-			<!-- What the instance offers. Only an admin sees a withdrawn
-			     configuration at all — everyone else's list is the offered set,
-			     and the server refuses a selection outside it. -->
-			<label
-				class="flex items-center gap-1.5 pb-2 text-xs"
-				title={selected?.readOnly
-					? "The shipped configuration is the fallback everything else resolves through, so it is always offered"
-					: "Whether people may choose this configuration. Withdrawing it leaves sessions already on it running."}
-			>
-				<input
-					type="checkbox"
-					class="checkbox"
-					checked={selected ? (offeredDraft ?? selected.enabled) : true}
-					disabled={!selected || selected.readOnly}
-					onchange={(e) => setAvailability(e.currentTarget.checked)}
-				/>
-				{selected && !(offeredDraft ?? selected.enabled) ? "Withdrawn" : "Offered"}
-			</label>
-
-			<div class="flex flex-wrap items-center gap-1">
-				<button
-					type="button"
-					class="btn btn-sm preset-tonal-primary"
-					onclick={() => startNew(false)}
-				>
-					<Icons.Plus size={16} /> New
-				</button>
-				<button
-					type="button"
-					class="btn btn-sm preset-tonal-surface"
-					disabled={!selected}
-					title="Copy this configuration, values and all"
-					onclick={() => startNew(true)}
-				>
-					<Icons.Copy size={16} /> Duplicate
-				</button>
-				<button
-					type="button"
-					class="btn btn-sm preset-tonal-surface"
-					disabled={!selected || selected.readOnly}
-					title={selected?.readOnly
-						? "Shipped configurations keep their name"
-						: "Rename"}
-					onclick={() =>
-						selected &&
-						(renaming = { id: selected.id, name: selected.name })}
-				>
-					<Icons.Pencil size={16} /> Rename
-				</button>
-				<button
-					type="button"
-					class="btn btn-sm preset-tonal-error"
-					disabled={!selected || selected.readOnly}
-					title={selected?.readOnly
-						? "Shipped configurations stay — duplicate one instead"
-						: "Delete"}
-					onclick={removeConfig}
-				>
-					<Icons.Trash2 size={16} /> Delete
-				</button>
-			</div>
+		<!-- 🚧 Where its values come from (R38; lane 7): no configurations —
+		     what this page saves is the genre's defaults of each genre that
+		     registers it. -->
+		<section class="panel-card flex flex-col gap-1" aria-label="Where its values come from" data-testid="pipeline-values-scope">
+			<p class="text-sm">
+				{#if registeredIn.some((p) => p.scope === "genre")}
+					What you save here is the genre's defaults for
+					{[...new Set(registeredIn.filter((p) => p.scope === "genre").map((p) => p.genreName))].join(", ")}.
+					A preset changes them in Admin › Presets; a session's owner may change what the pipeline exposes.
+				{:else if registeredIn.length}
+					A preset registers this pipeline: what you save here is its genres' defaults, under each preset's own
+					changes.
+				{:else}
+					Nothing registers this pipeline yet. What you save here is this pub's own values for it.
+				{/if}
+			</p>
+			<button type="button" class="anchor self-start text-xs" onclick={() => (tab = "preset")}>Where it runs</button>
 		</section>
 
-		<!-- What the last published version did to the configuration named
-		     above: a setting it removed takes the value somebody set with it,
-		     and this is the only place that says so. -->
-		<ConfigNotices {slug} configId={selected?.id ?? null} />
 
-		{#if creating}
-			<div
-				class="panel-card flex flex-wrap gap-2"
-			>
-				<label class="min-w-[14rem] flex-1">
-					<span class="mb-1 block text-xs font-semibold">
-						{creating.fromConfigId != null
-							? "Name for the copy"
-							: "Name the new configuration"}
-					</span>
-					<!-- svelte-ignore a11y_autofocus -->
-					<input
-						class="input w-full"
-						autofocus
-						bind:value={creating.name}
-						onkeydown={(e) => e.key === "Enter" && commitNew()}
-					/>
-				</label>
-				<div class="flex items-end gap-1">
-					<button
-						class="btn btn-sm preset-filled-primary-500"
-						onclick={commitNew}
-					>
-						Create
-					</button>
-					<button
-						class="btn btn-sm preset-tonal-surface"
-						onclick={() => (creating = null)}
-					>
-						Cancel
-					</button>
-				</div>
-			</div>
-		{/if}
-
-		{#if renaming}
-			<div
-				class="panel-card flex flex-wrap gap-2"
-			>
-				<label class="min-w-[14rem] flex-1">
-					<span class="mb-1 block text-xs font-semibold">
-						Rename configuration
-					</span>
-					<!-- svelte-ignore a11y_autofocus -->
-					<input
-						class="input w-full"
-						autofocus
-						bind:value={renaming.name}
-						onkeydown={(e) => e.key === "Enter" && commitRename()}
-					/>
-				</label>
-				<div class="flex items-end gap-1">
-					<button
-						class="btn btn-sm preset-filled-primary-500"
-						onclick={commitRename}
-					>
-						Save
-					</button>
-					<button
-						class="btn btn-sm preset-tonal-surface"
-						onclick={() => (renaming = null)}
-					>
-						Cancel
-					</button>
-				</div>
-			</div>
-		{/if}
 
 		<!-- ── the workspace tabs (22) ───────────────────────────────── -->
 		<!-- Six labelled tabs share the row. Below ~560px of `content` (the
@@ -1102,7 +722,7 @@
 					/>
 					{#if searchResults.length}
 						<div
-							class="bg-surface-50-950 border-surface-200-800 absolute top-full right-0 left-0 z-30 mt-1 max-h-80 overflow-y-auto rounded-[10px] border p-1"
+							class="bg-surface-50-950 border-surface-200-800 absolute top-full right-0 left-0 z-30 mt-1 max-h-80 overflow-y-auto rounded-base border p-1"
 						>
 							{#each searchResults as r (r.option.id)}
 								<button
@@ -1124,7 +744,7 @@
 						</div>
 					{:else if optionQuery.trim()}
 						<div
-							class="bg-surface-50-950 border-surface-200-800 text-surface-600-400 absolute top-full right-0 left-0 z-30 mt-1 rounded-[10px] border p-3 text-sm"
+							class="bg-surface-50-950 border-surface-200-800 text-surface-600-400 absolute top-full right-0 left-0 z-30 mt-1 rounded-base border p-3 text-sm"
 						>
 							Nothing matches.
 						</div>
@@ -1132,14 +752,14 @@
 				</div>
 
 				<div
-					class="border-surface-300-700 ml-auto flex overflow-hidden rounded-md border"
+					class="border-surface-200-800 ml-auto flex overflow-hidden rounded-md border"
 					role="group"
 					aria-label="Step navigator"
 				>
 					<button
 						type="button"
 						class="btn btn-sm rounded-none {navView === 'list'
-							? 'preset-tonal-primary'
+							? 'preset-pressed'
 							: 'preset-tonal-surface'}"
 						aria-pressed={navView === "list"}
 						title="Compact step list"
@@ -1150,7 +770,7 @@
 					<button
 						type="button"
 						class="btn btn-sm rounded-none {navView === 'map'
-							? 'preset-tonal-primary'
+							? 'preset-pressed'
 							: 'preset-tonal-surface'}"
 						aria-pressed={navView === "map"}
 						title="The full signal-path map"
@@ -1189,7 +809,7 @@
 						/>
 					{:else}
 						<div
-							class="border-surface-300-700 flex items-baseline gap-2 border-b px-3 py-2"
+							class="border-surface-200-800 flex items-baseline gap-2 border-b px-3 py-2"
 						>
 							<span class={LEGEND}>Steps</span>
 						</div>
@@ -1215,7 +835,7 @@
 						: ''}"
 				>
 					<div
-						class="border-surface-300-700 mb-2 flex items-baseline gap-2 border-b pb-1"
+						class="border-surface-200-800 mb-2 flex items-baseline gap-2 border-b pb-1"
 					>
 						<span class={LEGEND}>
 							{activeGroup ? "Agent" : "Step configuration"}
@@ -1228,9 +848,9 @@
 								{activeGroup.heading ?? "This pipeline"}
 							</h2>
 							{#if activeGroup.purpose}
-								<p class="text-surface-600-400 text-sm">
+								<FieldHelp>
 									{activeGroup.purpose}
-								</p>
+								</FieldHelp>
 							{/if}
 						</div>
 					{:else if active}
@@ -1278,25 +898,11 @@
 					<!-- Stays mounted while an agent is picked: it is what
 					     loads the page's view (`onLoaded`). -->
 					<div class:hidden={!!activeGroup}>
-					{#if selected?.readOnly}
-						<p
-							class="text-surface-600-400 mb-2 flex items-center gap-1.5 text-xs"
-						>
-							<Icons.Lock size={12} class="shrink-0" />
-							<span>
-								<strong>{selected.name}</strong>
-								 is shipped — Save will ask where your changes
-								land.
-							</span>
-						</p>
-					{/if}
+
 					<PipelineConfigOptions
 						{slug}
 						stepKey={active?.key}
 						mode="builder"
-						editsConfigId={selected && !selected.readOnly
-							? selected.id
-							: undefined}
 						{pending}
 						{pendingClears}
 						onDraftSet={draftSet}
@@ -1325,10 +931,6 @@
 				versions={spec?.versions ?? []}
 				{graph}
 				runs={pipelineRuns}
-				editsConfigId={selected && !selected.readOnly
-					? selected.id
-					: undefined}
-				readOnlyName={selected?.readOnly ? selected.name : null}
 				{pending}
 				{pendingClears}
 				onDraftSet={draftSet}
@@ -1345,75 +947,27 @@
 		{:else if tab === "changes"}
 			<ChangesPanel
 				rows={changeRows}
-				configName={selected?.name}
-				canResetAll={!!selected &&
-					!selected.readOnly &&
-					changeRows.some((r) => r.state === "saved")}
 				onJump={jumpToOption}
 				onQueueReset={draftClear}
-				onResetAll={resetAll}
 			/>
 		{:else if tab === "runs"}
-			<p class="text-surface-600-400 text-sm">
+			<FieldHelp>
 				This pipeline's recent run receipts. A halt is not a failure —
 				an aborted generation and an empty completion both halt, with
 				the reason recorded.
-			</p>
+			</FieldHelp>
 			<RunsPanel runs={pipelineRuns} loading={runsLoading} />
 		{:else if tab === "versions"}
 			<VersionsPanel versions={spec.versions} />
 		{:else if tab === "preset"}
-			<PresetPanel {slug} {detail} {selected} />
+			<PresetPanel {slug} places={registeredIn} />
 		{/if}
 		</div>
 	{/if}
 
 </AdminChangeForm>
 
-<!-- ── the shipped-configuration question, at save time (22 §2.1) ────── -->
-<Dialog open={shippedDialog} onOpenChange={(e) => (shippedDialog = e.open)}>
-	<Portal>
-		<Dialog.Backdrop class="bg-surface-950/60 fixed inset-0 z-50" />
-		<Dialog.Positioner
-			class="fixed inset-0 z-50 flex items-center justify-center p-4"
-		>
-			<Dialog.Content
-				class="bg-surface-100-900 border-surface-200-800 flex w-[28rem] max-w-full flex-col gap-3 rounded-[12px] border p-4"
-			>
-				<Dialog.Title class="text-base font-semibold">
-					{selected?.name ?? "This configuration"} is shipped
-				</Dialog.Title>
-				<Dialog.Description class="text-surface-600-400 text-sm">
-					Shipped configurations stay as written — the server refuses
-					edits into them. Your {pendingCount}
-					change{pendingCount === 1 ? "" : "s"} land in a copy, which becomes
-					the selected configuration:
-				</Dialog.Description>
-				<label class="flex flex-col gap-1 text-sm">
-					<span class="font-medium">Name the new configuration</span>
-					<input
-						class="input"
-						bind:value={shippedNewName}
-						onkeydown={(e) => e.key === "Enter" && saveAsNewConfig()}
-					/>
-				</label>
-				<button
-					class="btn btn-sm preset-filled-primary-500"
-					disabled={!shippedNewName.trim()}
-					onclick={saveAsNewConfig}
-				>
-					<Icons.Copy size={14} /> Create and save there
-				</button>
-				<button
-					class="btn btn-sm preset-tonal-surface"
-					onclick={() => (shippedDialog = false)}
-				>
-					Cancel
-				</button>
-			</Dialog.Content>
-		</Dialog.Positioner>
-	</Portal>
-</Dialog>
+
 
 <style>
 	/* The landing flash for a search/diff jump (22 §2.3). */

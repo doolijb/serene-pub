@@ -159,7 +159,7 @@
 					<input class="input" type="password" bind:value={confirm} />
 				</label>
 				{#if error}
-					<p class="text-error-500 text-sm" role="alert">{error}</p>
+					<p class="text-error-600-400 text-sm" role="alert">{error}</p>
 				{/if}
 				<button
 					type="submit"
@@ -208,7 +208,7 @@
 						/>
 					</label>
 					{#if error}
-						<p class="text-error-500 text-sm" role="alert">
+						<p class="text-error-600-400 text-sm" role="alert">
 							{error}
 						</p>
 					{/if}

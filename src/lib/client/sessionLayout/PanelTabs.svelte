@@ -298,7 +298,7 @@
 		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
 		opacity: 0;
 		pointer-events: none;
-		transition: opacity 120ms ease;
+		transition: opacity var(--transition-duration-fast) ease;
 	}
 	.ptabs:hover .ptabs-hover,
 	.ptabs-hover:focus-within {

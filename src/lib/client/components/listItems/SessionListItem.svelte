@@ -1,10 +1,9 @@
 <script lang="ts">
-	import { isAwaitingUser } from "$lib/client/sessions/sessionGroups"
 	import * as Icons from "@lucide/svelte"
 	import SidebarListItem from "../SidebarListItem.svelte"
 	import RowMenu from "../menus/RowMenu.svelte"
-	import Avatar from "../Avatar.svelte"
 	import AvatarStack from "../AvatarStack.svelte"
+	import MetaLine from "../panels/MetaLine.svelte"
 	import { lastActivityAt, timeAgoShort } from "$lib/client/utils/timeAgo"
 	import { statusText } from "$lib/client/i18n/state.svelte"
 	import type { StatusText } from "@serene-pub/sdk"
@@ -24,10 +23,11 @@
 		/** The currently-open session — highlighted and pinned by the sidebar. */
 		active?: boolean
 		/**
-		 * Whether the genre chip is drawn.
+		 * Whether the genre is named on the meta line (a chip after the name
+		 * until 2026-10-24).
 		 *
 		 * The VIEW decides, not the row: on an install with one genre every
-		 * row would carry the same chip, which is a column of noise saying
+		 * row would carry the same word, which is a column of noise saying
 		 * nothing. The sidebar knows how many genres its list holds; a row
 		 * only knows its own.
 		 */
@@ -38,13 +38,6 @@
 		 * run ended. Absent, the row reads the list's own `runStatus`.
 		 */
 		runStatus?: StatusText | null
-		/**
-		 * How the row draws its cast. `cover` is the 40px picture with the
-		 * second member badged on; `stack` is the Sessions sidebar's grouped
-		 * list — up to three 40px faces overlapping, a 14px name and a 12px
-		 * time — where the row is one of many a reader scans by who is in it.
-		 */
-		layout?: "cover" | "stack"
 	}
 
 	let {
@@ -58,10 +51,8 @@
 		classes = "",
 		active = false,
 		showGenre = false,
-		runStatus,
-		layout = "cover"
+		runStatus
 	}: Props = $props()
-
 
 	function handleClick() {
 		onclick?.(session)
@@ -72,12 +63,6 @@
 			.map((sc) => sc.character)
 			.filter(Boolean)
 	)
-
-	/**
-	 * The second cast member, drawn as a badge on the cover — the one glance
-	 * that separates a group from a two-hander.
-	 */
-	const isGroup = $derived(cast.length > 1)
 
 	/** The stack's faces: the first three of the cast, then a count. */
 	const STACK_MAX = 3
@@ -93,16 +78,6 @@
 		statusText(runStatus === undefined ? session.runStatus : runStatus)
 	)
 
-	/**
-	 * The model spoke last, so the next line is the reader's. Absent
-	 * `lastMessage` means nothing has been said yet, which is not a turn —
-	 * and neither is a reply still being written: while a run has a status
-	 * the ember dot yields to it.
-	 */
-	const isYourTurn = $derived(
-		isAwaitingUser(session, !!status)
-	)
-
 	const relative = $derived(timeAgoShort(new Date(lastActivityAt(session))))
 
 	/** Who is in the scene, for a session with nothing said in it yet. */
@@ -112,7 +87,33 @@
 			.filter(Boolean)
 			.join(", ")
 	)
+
+	/** Whether the meta line has a lead at all; a bare one starts with " · ". */
+	const hasLead = $derived(
+		!!status || !!session.lastMessage || castNames.length > 0
+	)
 </script>
+
+<!-- The meta line's lead: the run's status while a reply is being written,
+     else the last line, else who is in the scene. -->
+{#snippet lead()}
+	{#if status}
+		<span
+			class="bg-warning-500 mr-1.5 inline-block size-1.5 animate-pulse rounded-full align-middle"
+			aria-hidden="true"
+		></span>
+		<span data-session-run-status>{status}</span>
+	{:else if session.lastMessage}
+		{#if session.lastMessage.speakerName}
+			<span class="text-surface-700-300">
+				{session.lastMessage.speakerName}:
+			</span>
+		{/if}
+		{session.lastMessage.excerpt}
+	{:else if castNames}
+		{castNames}
+	{/if}
+{/snippet}
 
 <SidebarListItem
 	itemType="Session"
@@ -124,57 +125,26 @@
 	showIndex={false}
 >
 	{#snippet content()}
-		{#if layout === "stack"}
-			<!-- The avatar scale's row step (STYLE-GUIDE §6.4): 40px faces,
-			     up from 26px (notes 36). Fixed width, whatever the cast size,
-			     so every name in the list starts at the same x. The ring is the
-			     row's own ground, which is what separates one overlapping face
-			     from the next. -->
-			<span class="flex shrink-0" title={castNames || undefined}>
-				<AvatarStack
-					members={cast}
-					size="md"
-					max={STACK_MAX}
-					ring="ring-surface-200-800"
-					fixedWidth
-				/>
-			</span>
-		{:else}
-			<span class="relative block shrink-0">
-				{#if cast[0]}
-					<Avatar char={cast[0]} size="md" decorative />
-				{:else}
-					<span
-						class="bg-surface-200-800 grid size-10 place-items-center rounded-[9px]"
-					>
-						<Icons.MessageSquare
-							size={18}
-							class="text-surface-600-400"
-							aria-hidden="true"
-						/>
-					</span>
-				{/if}
-				{#if isGroup}
-					<!-- The ring is the row's own ground, so the badge reads as a
-					     notch cut out of the cover rather than a second sticker
-					     sitting on it. -->
-					<span class="absolute -right-1 -bottom-1">
-						<Avatar
-							char={cast[1]}
-							size="xs"
-							decorative
-							class="ring-surface-200-800 ring-2"
-						/>
-					</span>
-				{/if}
-			</span>
-		{/if}
-		<div class="flex min-w-0 flex-1 flex-col gap-0.5">
-			<div class="flex min-w-0 items-center gap-1.5">
+		<!-- The row's anatomy (STYLE-GUIDE §6.4; PLAN-0-5-polish-parity L6,
+		     2026-10-24): up to three 44px faces, the 15px name, ONE muted
+		     meta line, the kebab. No "your turn" dot: the group label above
+		     the row already says it. The one dot left is ember, while a reply
+		     is being written. The slot is the width of a full stack whatever
+		     the cast, so every name in the list starts at the same x; the
+		     ring is the row's own ground. -->
+		<span class="flex shrink-0" title={castNames || undefined}>
+			<AvatarStack
+				members={cast}
+				size="md"
+				max={STACK_MAX}
+				ring="ring-surface-200-800"
+				fixedWidth
+			/>
+		</span>
+		<span class="flex min-w-0 flex-1 flex-col gap-0.5">
+			<span class="flex min-w-0 items-center gap-1.5">
 				<span
-					class="truncate text-left font-medium {layout === 'stack'
-						? 'text-sm'
-						: 'text-[15px]'}"
+					class="truncate text-left text-lead font-medium"
 					id="session-name-{session.id}"
 				>
 					{name}
@@ -187,16 +157,6 @@
 						class="text-primary-500 shrink-0 fill-current"
 						aria-label="Favorite"
 					/>
-				{/if}
-				{#if showGenre && session.genreName}
-					<!-- The session's genre. The open session is already marked
-					     by the selected-row treatment (see SidebarListItem's
-					     `active`), so there is no extra "open" tag here. -->
-					<span
-						class="bg-surface-200-800 shrink-0 rounded-md px-1.5 text-[11px]"
-					>
-						{session.genreName}
-					</span>
 				{/if}
 				{#if session.isGuest}
 					<!-- The tooltip hangs on the span, not the glyph: `title`
@@ -211,62 +171,19 @@
 						<span class="sr-only">Shared with you</span>
 					</span>
 				{/if}
-				<!-- `ml-auto` and not a spacer: the name truncates into
-				     whatever room the time and the dot leave, which is what
-				     keeps a long name from pushing the timestamp off the row. -->
-				<span class="ml-auto flex shrink-0 items-center gap-1">
-					{#if isYourTurn}
-						<!-- Primary, the app's "waiting on YOU" colour
-						     (STYLE-GUIDE §2): the model has moved and nothing
-						     has failed. Never colour alone: the dot carries a
-						     title and an off-screen label. -->
-						<span
-							class="bg-primary-500 size-1.5 rounded-full"
-							title="Your turn"
-							aria-hidden="true"
-						></span>
-						<span class="sr-only">Your turn</span>
-					{/if}
-					{#if relative}
-						<!-- Muted, not quiet: a time is text the reader
-						     came for, and quiet text fails AA (§6.4). -->
-						<span
-							class="text-surface-600-400 {layout === 'stack'
-								? 'text-xs'
-								: 'text-[11px]'}"
-						>
-							{relative}
-						</span>
-					{/if}
-				</span>
-			</div>
-			<!-- The last line, or the cast when there is none: one line either
-			     way, so a row never grows taller than its neighbours. While a
-			     reply is being written the line is the run's status instead
-			     (R-19) — *Jasmine is typing* — with a pulsing dot so the row
+			</span>
+			<!-- The meta line: the last line (or the cast, when nothing has
+			     been said), upright, giving way first; then the genre where
+			     the view has several, then when it last moved. While a reply
+			     is being written the lead is the run's status instead (R-19)
+			     — *Jasmine is typing* — after a pulsing ember dot, so the row
 			     says "in progress" without colour alone. -->
-			<div
-				class="text-surface-600-400 truncate text-left text-xs"
+			<MetaLine
 				id="session-line-{session.id}"
-			>
-				{#if status}
-					<span
-						class="bg-primary-500 mr-1 inline-block size-1.5 animate-pulse rounded-full align-middle"
-						aria-hidden="true"
-					></span>
-					<span class="italic" data-session-run-status>{status}</span>
-				{:else if session.lastMessage}
-					{#if session.lastMessage.speakerName}
-						<span class="text-surface-700-300">
-							{session.lastMessage.speakerName}:
-						</span>
-					{/if}
-					<span class="italic">{session.lastMessage.excerpt}</span>
-				{:else if castNames}
-					{castNames}
-				{/if}
-			</div>
-		</div>
+				items={[showGenre && session.genreName, relative]}
+				children={hasLead ? lead : undefined}
+			/>
+		</span>
 	{/snippet}
 	{#snippet controls()}
 		{#if showControls && session.canEdit && (onclick || onEdit || onDelete)}

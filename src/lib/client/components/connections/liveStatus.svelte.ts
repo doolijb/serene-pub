@@ -25,6 +25,7 @@ import { connectionTypeDisabledReason } from "$lib/shared/utils/connectionServic
 import {
 	connectionRowStatus,
 	rowDefaults,
+	type RowDefaults,
 	type RowStatus
 } from "./connectionRowStatus"
 import type { DefaultsSummaryEntry } from "./defaultsSummary"
@@ -42,6 +43,11 @@ export interface LiveStatusOptions {
 	admin: () => boolean
 	/** The defaults summary's entries — the row's gold marks read them. */
 	entries?: () => readonly DefaultsSummaryEntry[]
+	/**
+	 * The registered capability defaults — whether a broken row fills a
+	 * loadout, and so is the one drawn red (`RowStatus.blocked`).
+	 */
+	capabilityDefaults?: () => RowDefaults["capabilityDefaults"]
 	/** Whether a sync is in flight for a connection. */
 	syncing?: (connectionId: number) => boolean
 }
@@ -401,7 +407,10 @@ export function useLiveStatus(getRows: () => Row[], opts: LiveStatusOptions) {
 					: null,
 			lane: laneFor(connection),
 			kcppInstall: kind === "koboldcpp-managed" ? kcppInstall : undefined,
-			defaults: rowDefaults((opts.entries?.() ?? []) as any),
+			defaults: rowDefaults(
+				(opts.entries?.() ?? []) as any,
+				opts.capabilityDefaults?.()
+			),
 			syncing: !ignoreSyncing && (opts.syncing?.(connection.id) ?? false),
 			timeAgo
 		})

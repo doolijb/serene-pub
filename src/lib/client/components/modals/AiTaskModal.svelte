@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SpProgress from "$lib/client/components/hostElements/SpProgress.svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import type { Snippet } from "svelte"
@@ -135,13 +136,13 @@
 								{progressPercent}%
 							</span>
 						</div>
-						<div
-							class="bg-surface-300-700 h-2 w-full overflow-hidden rounded-full"
-						>
-							<div
-								class="bg-primary-500 h-full rounded-full transition-all duration-300"
-								style="width: {progressPercent}%"
-							></div>
+						<div class="text-primary-500">
+							<SpProgress
+								attrs={{
+									value: String(progressPercent),
+									label: "Task progress"
+								}}
+							/>
 						</div>
 					</div>
 
@@ -229,7 +230,7 @@
 					</footer>
 				{:else if step === "error"}
 					<header class="mb-4">
-						<h2 class="h3 text-error-500">
+						<h2 class="h3 text-error-600-400">
 							{badge ? badge + " — " : ""}Generation failed
 						</h2>
 					</header>
@@ -239,7 +240,7 @@
 					>
 						<Icons.AlertCircle
 							size={16}
-							class="text-error-500 mt-0.5 shrink-0"
+							class="text-error-600-400 mt-0.5 shrink-0"
 						/>
 						<span>
 							{errorMessage ?? "An unknown error occurred."}

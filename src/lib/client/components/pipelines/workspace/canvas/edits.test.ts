@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 import type { SpecDocument } from "@serene-pub/sdk"
-import { STORY_RESPOND_SPEC_ID, CORE_SPECS } from "@serene-pub/core-catalog"
+import { STORY_RESPOND_SPEC_ID, STORY_SWEEP_SPEC_ID, CORE_SPECS } from "@serene-pub/core-catalog"
 import {
 	addBranch,
 	addClause,
@@ -447,14 +447,21 @@ describe("upstreamOf", () => {
 	test("in Story's reply: a gather chain sees the spine before it, never another chain", () => {
 		const doc = story()
 		const up = upstreamOf(doc, "gather.history.attachments")
-		expect(up).toEqual(["input", "placeholder", "contextBudget", "tasks", "gather", "gather.history.read"])
+		// `reading` is the reply's duties step (PLAN-layering §4), where the
+		// retired `tasks` step stood.
+		expect(up).toEqual(["input", "placeholder", "contextBudget", "reading", "gather", "gather.history.read"])
 		const context = upstreamOf(doc, "context")
 		expect(context).toContain("gather.cast.read")
 		expect(context).toContain("rank")
 		expect(context).not.toContain("lines")
-		// A map's item sees the map and the item's earlier members — never a
-		// later member, nor the other branch's map.
-		const item = upstreamOf(doc, "sweep.due.lore.full.entry.item.content")
+	})
+
+	// The per-entry maps are the sweep routine's (PLAN-layering lane 3), not
+	// the reply's.
+	test("in Story's sweep: a map's item sees the map and the item's earlier members", () => {
+		const sweep = build(STORY_SWEEP_SPEC_ID)
+		// Never a later member, nor the other branch's map.
+		const item = upstreamOf(sweep, "sweep.due.lore.full.entry.item.content")
 		expect(item).toContain("sweep.due.lore.full.entry")
 		expect(item).toContain("sweep.due.lore.full.entry.item.name")
 		expect(item).not.toContain("sweep.due.lore.full.entry.item.write")

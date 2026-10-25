@@ -138,7 +138,7 @@ export async function setSessionStoryClock(
 	sessionId: number,
 	userId: number,
 	params: Sockets.Sessions.SetStoryClock.Params
-): Promise<{ moved: boolean }> {
+): Promise<{ moved: boolean; from?: StoryClock | null; to?: StoryClock | null }> {
 	const access = await checkSessionAccess(sessionId, userId)
 	if (!access.isOwner)
 		throw new StoryClockRefusal(
@@ -165,14 +165,14 @@ export async function setSessionStoryClock(
 			)
 		// The step's own refusals (no present, a step of nothing, a date
 		// that does not land) are StoryClockRefusals with their sentence.
-		await advanceSessionStoryClock(
+		const stepped = await advanceSessionStoryClock(
 			db,
 			sessionId,
 			params.by as number,
 			params.unit as StoryTimeUnit
 		)
 		await noteTimeActionQuietly(sessionId)
-		return { moved: true }
+		return { moved: true, from: stepped.from, to: stepped.clock }
 	}
 
 	const clock = follow ? null : clockFrom(params.to)
@@ -210,7 +210,9 @@ export async function setSessionStoryClock(
 	// A person setting the clock is a time action; following the line's
 	// present again is not — it moves back to where the book stands.
 	if (!follow) await noteTimeActionQuietly(sessionId)
-	return { moved: true }
+	// 🚧 Where it stood and where it stands, for `story-clock-moved` — a set
+	// date; following the line again names no date of its own.
+	return { moved: true, ...(clock ? { from: was, to: clock } : {}) }
 }
 
 /**
@@ -230,7 +232,15 @@ async function noteTimeActionQuietly(sessionId: number): Promise<void> {
  * `settings` cause — which never fires a turn. Best-effort: the clock moved
  * either way.
  */
-async function announceMoved(socket: any, sessionId: number, userId: number) {
+async function announceMoved(
+	socket: any,
+	sessionId: number,
+	userId: number,
+	move: { from?: StoryClock | null; to?: StoryClock | null } = {}
+) {
+	// 🚧 The owner moved a setting of the session: an interaction (R11, R21).
+	const { noteInteraction } = await import("$lib/server/pipelines/routines/interaction")
+	await noteInteraction(db, sessionId, "setting")
 	try {
 		await broadcastToSessionUsers(socket.io, sessionId, "state:changed", {
 			sessionId
@@ -249,6 +259,18 @@ async function announceMoved(socket: any, sessionId: number, userId: number) {
 			},
 			io: socket.io
 		})
+		// 🚧 The session moment (PLAN-layering D7, lane 6): once per move.
+		if (move.from && move.to) {
+			const { noteStoryClockMoved } = await import("$lib/server/pipelines/routines/moments")
+			await noteStoryClockMoved(db, {
+				sessionId,
+				userId,
+				cause: { kind: "settings", userId },
+				from: move.from,
+				to: move.to,
+				io: socket.io
+			})
+		}
 	} catch (err) {
 		console.warn("[storyClock] session-updated emit failed:", err)
 	}
@@ -295,12 +317,12 @@ export const sessionsSetStoryClock: Handler<
 		const token = tokenOf(params)
 		const userId = socket.user!.id
 		try {
-			const { moved } = await setSessionStoryClock(
+			const { moved, from, to } = await setSessionStoryClock(
 				params.sessionId,
 				userId,
 				params
 			)
-			if (moved) await announceMoved(socket, params.sessionId, userId)
+			if (moved) await announceMoved(socket, params.sessionId, userId, { from, to })
 			const reading = await readSessionStoryClock(
 				params.sessionId,
 				userId

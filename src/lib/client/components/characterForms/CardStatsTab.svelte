@@ -391,7 +391,7 @@
 						>
 							<span class="min-w-0 truncate">{sheet?.label ?? id}</span>
 							{#if sheet?.retired}
-								<span class="badge preset-tonal-warning ml-1 text-[11px]">retired</span>
+								<span class="badge preset-tonal-warning ml-1 text-meta">retired</span>
 							{/if}
 							<button
 								type="button"
@@ -486,10 +486,10 @@
 										<span class="text-surface-600-400 text-xs">{row.slot.description}</span>
 									{/if}
 									{#if row.slot.retired}
-										<span class="badge preset-tonal-surface text-[11px]">retired</span>
+										<span class="badge preset-tonal-surface text-meta">retired</span>
 									{/if}
 									{#if slotId in values || slotId in limits}
-										<span class="text-primary-700-300 ml-auto text-[11px]">Not saved</span>
+										<span class="text-primary-ink ml-auto text-meta">Not saved</span>
 									{/if}
 								</div>
 
@@ -677,12 +677,12 @@
 				<div class="flex flex-col gap-3 text-sm">
 					<label class="flex flex-col gap-1">
 						<span class="text-surface-600-400 text-xs">Label</span>
-						<input class="input rounded-[10px]" type="text" bind:value={slotForm.label} placeholder="Nerve" />
+						<input class="input rounded-base" type="text" bind:value={slotForm.label} placeholder="Nerve" />
 					</label>
 					<label class="flex flex-col gap-1">
 						<span class="text-surface-600-400 text-xs">Description (optional)</span>
 						<input
-							class="input rounded-[10px]"
+							class="input rounded-base"
 							type="text"
 							bind:value={slotForm.description}
 							placeholder="Shown where the stat is listed"
@@ -701,7 +701,7 @@
 					<label class="flex flex-col gap-1">
 						<span class="text-surface-600-400 text-xs">What the model is told this is</span>
 						<textarea
-							class="input rounded-[10px]"
+							class="input rounded-base"
 							rows="2"
 							bind:value={slotForm.descriptor}
 							placeholder="How steady their nerves are, 0 to 10."
@@ -716,7 +716,7 @@
 					{:else if slotForm.type === "enum"}
 						<label class="flex flex-col gap-1">
 							<span class="text-surface-600-400 text-xs">Values, comma separated</span>
-							<input class="input rounded-[10px]" type="text" bind:value={slotForm.values} placeholder="calm, wary, afraid" />
+							<input class="input rounded-base" type="text" bind:value={slotForm.values} placeholder="calm, wary, afraid" />
 						</label>
 					{:else if slotForm.type === "text"}
 						{@render numberField("Longest text", slotForm.maxLength, (n) => (slotForm.maxLength = n))}
@@ -747,7 +747,7 @@
 							<span class="text-surface-600-400 text-xs">
 								Default (optional){slotForm.type === "list" ? ", comma separated" : ""}
 							</span>
-							<input class="input rounded-[10px]" type="text" bind:value={slotForm.defaultText} />
+							<input class="input rounded-base" type="text" bind:value={slotForm.defaultText} />
 						</label>
 					{/if}
 				</div>
@@ -795,11 +795,11 @@
 				<div class="flex flex-col gap-3 text-sm">
 					<label class="flex flex-col gap-1">
 						<span class="text-surface-600-400 text-xs">Label</span>
-						<input class="input rounded-[10px]" type="text" bind:value={sheetLabel} placeholder="Grit" />
+						<input class="input rounded-base" type="text" bind:value={sheetLabel} placeholder="Grit" />
 					</label>
 					<label class="flex flex-col gap-1">
 						<span class="text-surface-600-400 text-xs">Description (optional)</span>
-						<input class="input rounded-[10px]" type="text" bind:value={sheetDescription} />
+						<input class="input rounded-base" type="text" bind:value={sheetDescription} />
 					</label>
 					<div class="flex flex-col gap-1.5">
 						<span class="text-surface-600-400 text-xs">Slots, in order</span>

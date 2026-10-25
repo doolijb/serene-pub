@@ -642,12 +642,22 @@ describe("connections and sampling (0096/0097/0105/0114/0127)", () => {
 		// Named by its live row, so a config whose id moved in the restore is
 		// read through the id map.
 		const picks = await q(
-			`SELECT p.slug, o.value, o.path FROM pipeline_node_overrides o JOIN pipeline_specs p ON p.id = o.spec_id
-			 WHERE o.scope_kind = 'session' AND o.scope_id = $1 AND o.node_key = 'generate' AND o.slot = 'sampling'`,
+			`SELECT p.slug, o.node_key, o.value, o.path FROM pipeline_node_overrides o JOIN pipeline_specs p ON p.id = o.spec_id
+			 WHERE o.scope_kind = 'session' AND o.scope_id = $1 AND o.slot = 'sampling'`,
 			ids.chats.visibility
 		)
 		expect(picks.map((p) => p.slug)).toEqual(
 			expect.arrayContaining(["core:spec/story-respond", "core:spec/story-narrate"])
+		)
+		// On each pipeline's reply steps — the steps it runs on the Reply loadout, by the
+		// addresses its document gives them: Story's reply call is in its `reply` junction (D7).
+		const { replyLoadoutSteps } = await import("$lib/server/pipelines/runtime/specShape")
+		const { loadPublished } = await import("$lib/server/pipelines/boot/bootstrap")
+		const { oracleNodeKeyOf } = await import("$lib/server/pipelines/config/world")
+		for (const p of picks)
+			expect(replyLoadoutSteps((await loadPublished(db as never, p.slug))!), `${p.slug} ${p.node_key}`).toContain(p.node_key)
+		expect(picks.filter((p) => p.slug === "core:spec/story-respond").map((p) => p.node_key)).toContain(
+			await oracleNodeKeyOf(db as never, { slug: "core:spec/story-respond" })
 		)
 		for (const p of picks) {
 			expect(p.path).toBe("")

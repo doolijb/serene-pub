@@ -38,7 +38,9 @@ const SOURCES: Readonly<Record<string, () => Promise<{ default: string }>>> = {
 	backdrop: () => import("@serene-pub/core-catalog/components/backdrop.source.json?raw"),
 	chronicle: () => import("@serene-pub/core-catalog/components/chronicle.source.json?raw"),
 	places: () => import("@serene-pub/core-catalog/components/places.source.json?raw"),
-	attendance: () => import("@serene-pub/core-catalog/components/attendance.source.json?raw")
+	attendance: () => import("@serene-pub/core-catalog/components/attendance.source.json?raw"),
+	// 🚧 While you were away (PLAN-layering A7, R23; lane 7).
+	"routine-log": () => import("@serene-pub/core-catalog/components/routine-log.source.json?raw")
 }
 
 /** The slugs this module can load a source for — for the test that pins it to `CORE_COMPONENTS`. */

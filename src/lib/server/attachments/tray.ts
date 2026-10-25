@@ -400,7 +400,9 @@ function withoutPartialUtf8Tail(bytes: Buffer): Buffer {
 async function kindOf(bytes: Buffer, filename: string): Promise<AttachmentKind> {
 	let mime: string
 	try {
-		mime = (await sniffMedia(bytes, { filename, allowDocuments: true })).mime
+		mime = (
+			await sniffMedia(bytes, { filename, allowDocuments: true, allowMedia: true })
+		).mime
 	} catch (error: any) {
 		// HEIC carries its own actionable sentence; every other unknown type
 		// gets the attachment one (the store's lists types no model reads).
@@ -560,7 +562,9 @@ async function storeUpload(
 			conversationId: upload.conversationId,
 			bytes,
 			filename: upload.filename,
-			allowDocuments: true
+			allowDocuments: true,
+			// 🚧 O4: a voice note, a clip.
+			allowMedia: true
 		})
 		const [row] = await db
 			.update(schema.trayItems)
@@ -700,7 +704,8 @@ async function toView(db: Db, row: TrayRow): Promise<TrayItemView> {
  * - a message part naming it (`data->>'assetId'`, `message_parts_asset_idx`),
  *   whatever its type;
  * - another tray item (a second attach of the same bytes deduped onto it);
- * - an avatar, a sprite, a user's background.
+ * - an avatar (a character's or an account's), a sprite, a user's
+ *   background, a lorebook's cover image.
  *
  * Not checked: an `{kind:"image", assetId}` block nested in a part's block
  * tree (a plugin's), which no index can reach. A fresh tray file — at most a
@@ -740,6 +745,18 @@ export async function isFileReferenced(
 		.where(eq(schema.characters.avatarMediaId, fileId))
 		.limit(1)
 	if (avatar.length) return true
+	const accountAvatar = await db
+		.select({ id: schema.users.id })
+		.from(schema.users)
+		.where(eq(schema.users.avatarMediaId, fileId))
+		.limit(1)
+	if (accountAvatar.length) return true
+	const cover = await db
+		.select({ id: schema.lorebooks.id })
+		.from(schema.lorebooks)
+		.where(eq(schema.lorebooks.coverMediaId, fileId))
+		.limit(1)
+	if (cover.length) return true
 	const sprite = await db
 		.select({ id: schema.sprites.id })
 		.from(schema.sprites)

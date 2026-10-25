@@ -1,4 +1,6 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
+	import InlineError from "$lib/client/components/InlineError.svelte"
 	/**
 	 * User accounts — the one-way switch to authentication and multi-user
 	 * support. Turning it on first makes sure the admin has a passphrase, so
@@ -13,6 +15,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import SettingSwitch from "./SettingSwitch.svelte"
+	import SettingCard from "$lib/client/components/settingsTabs/SettingCard.svelte"
 	import { requireAdmin } from "./requireAdmin"
 	import { noteSignedOutWhy } from "$lib/client/auth/signedOutNotice"
 	import {
@@ -188,34 +191,47 @@
 	})
 </script>
 
-<section
-	id="accounts"
-	class="panel-card flex scroll-mt-4 flex-col gap-3"
-	aria-labelledby="accounts-heading"
->
-	<h2 id="accounts-heading" class="text-sm font-medium">User accounts</h2>
-	<p class="flex items-center gap-2 text-sm">
+{#snippet accountsState()}
+	<span class="flex items-center gap-2">
 		<span
 			class="size-2 shrink-0 rounded-full {accountsOn
 				? 'bg-success-500'
 				: 'bg-surface-500'}"
 			aria-hidden="true"
 		></span>
-		{accountsOn ? "On — sign-in is required" : "Off — anyone who can reach this pub uses it as you"}
-	</p>
+		{accountsOn
+			? "On — sign-in is required"
+			: "Off — anyone who can reach this pub uses it as you"}
+	</span>
+{/snippet}
+
+{#snippet accountsNote()}
+	{accountsOn
+		? "This can't be turned off; add and manage people in Pub › Users."
+		: "Turning it on is permanent, and a tunnel needs it before it can make this pub public."}
+{/snippet}
+
+<!-- The status line is the help (dot and plain words, §6.11); the one line
+     under it says what the switch alone cannot: that it is for good. -->
+<SettingCard
+	id="accounts"
+	class="scroll-mt-4"
+	title="User accounts"
+	titleId="accounts-heading"
+	headingLevel={2}
+	help={accountsState}
+	layout="switch"
+	below={accountsNote}
+>
 	<SettingSwitch
 		name="enable-accounts"
 		label="User accounts"
+		labelHidden
 		checked={accountsOn}
 		disabled={accountsOn}
 		onCheckedChange={handleEnableAccountsClick}
 	/>
-	<p class="text-surface-600-400 text-sm">
-		{accountsOn
-			? "User accounts are on. This setting cannot be reversed. Add and manage people in Pub › Users."
-			: "Turns on sign-in and multi-user support. This is a permanent change, and it is required before a tunnel can make this pub public."}
-	</p>
-</section>
+</SettingCard>
 
 <Dialog open={showModal} onOpenChange={(e) => (showModal = e.open)}>
 	<Portal>
@@ -244,10 +260,10 @@
 						User accounts turn on sign-in and multi-user support.
 						Once on, they stay on.
 					</p>
-					<p class="text-surface-600-400 text-sm">
+					<FieldHelp>
 						After this, every new person needs an account, which you
 						create in Pub › Users.
-					</p>
+					</FieldHelp>
 
 					{#if !hasPassphrase}
 						<div
@@ -297,7 +313,7 @@
 									/>
 								</div>
 								{#if passphraseError}
-									<p class="text-error-600-400 text-sm">{passphraseError}</p>
+									<InlineError>{passphraseError}</InlineError>
 								{/if}
 								<div class="text-surface-600-400 text-xs">
 									<p>Requirements:</p>

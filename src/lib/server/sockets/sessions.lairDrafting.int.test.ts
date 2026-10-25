@@ -20,6 +20,9 @@
  *  - **Build room names the room.** The collected name never reached the
  *    draft ("They have given you its name", and they had not); it now rides
  *    `{{turnDirection}}`, as *File as a room*'s does.
+ *  - Each draft is one JSON answer (the Lair rewrite, 2026-10-21): the
+ *    room's content, its ways out and the place entry type's fields, made
+ *    into the write by `core:script/lair-room`.
  *  - **A delver's voice sees the stats of the room it stands in** — never
  *    what lies in a room the party have not reached. The planner, who is
  *    nobody's voice, still reads every place the session sees.
@@ -62,11 +65,22 @@ const KNOCK = {
 }
 /** What the planner answers this test with. */
 let document: Record<string, unknown> = PLAN
+/** A room draft's answer: the body, the ways out, the place entry type's fields. */
+const ROOM_DRAFT = {
+	content: "A vaulted room knee-deep in black water.",
+	exits: [{ way: "up", to: "The Stair" }],
+	fields: { category: "Undercroft" }
+}
+/** How a room draft's prompt opens: Build room, the knock answered with nothing typed, File as a room. */
+const DRAFT_OPENINGS = ["you draft a room for a dungeon", "you file a room into the dungeon"]
+/** Every room draft call, in order — a JSON answer each. */
+let draftCalls = 0
+const draftPrompts: string[] = []
 /** Every prose call, in order — the narrator's is the first of a turn. */
 let proseCalls = 0
 /** Every prompt a JSON step (the planner, the keeper) was sent. */
 const jsonPrompts: string[] = []
-/** Every prompt a prose step (the narrator, a voice, a draft) was sent. */
+/** Every prompt a prose step (the narrator, a voice) was sent. */
 const prosePrompts: string[] = []
 const PROSE = ["The torch gutters. ", "Something scrapes behind the door."]
 /** What every prose call streams — `PROSE` unless a test says otherwise. */
@@ -105,8 +119,15 @@ class FakeAdapter implements FakeTextAdapter {
 				onContent: (c: string) => void,
 				onReasoning?: (c: string) => void
 			) => {
+				const prompt = JSON.stringify(this.injected ?? "")
+				if (json && DRAFT_OPENINGS.some((o) => prompt.toLowerCase().includes(o))) {
+					draftCalls++
+					draftPrompts.push(prompt)
+					onContent(JSON.stringify(ROOM_DRAFT))
+					return
+				}
 				if (json) {
-					jsonPrompts.push(JSON.stringify(this.injected ?? ""))
+					jsonPrompts.push(prompt)
 					// The planner reasons too — and that must NOT reach the row.
 					onReasoning?.("The planner weighs the beats.")
 					onContent(JSON.stringify(document))
@@ -368,6 +389,8 @@ const reset = (doc: Record<string, unknown>) => {
 	proseCalls = 0
 	jsonPrompts.length = 0
 	prosePrompts.length = 0
+	draftCalls = 0
+	draftPrompts.length = 0
 }
 
 /** A press of an action with its collected text, as the composer or a row's ⋮ sends it. */
@@ -401,8 +424,8 @@ describe("a room draft is shown every room the dungeon holds", () => {
 		reset(PLAN)
 		const ack = await press(w, "core:spec/lair-build-room#build-room", { text: "The Drowned Hall" })
 		expect(ack?.error, JSON.stringify(ack)).toBeUndefined()
-		expect(proseCalls).toBe(1)
-		const draft = prosePrompts[0]!
+		expect(draftCalls).toBe(1)
+		const draft = draftPrompts[0]!
 		expect(draft).toContain("You draft a room for a dungeon")
 		expect(draft).toContain(ROOMS_LISTED)
 		expect(draft).toContain("The Drowned Hall")
@@ -423,8 +446,8 @@ describe("a room draft is shown every room the dungeon holds", () => {
 			payload: { choice: block.actions[0].choice }
 		})
 		expect(ack?.error, JSON.stringify(ack)).toBeUndefined()
-		expect(proseCalls).toBe(1)
-		const draft = prosePrompts[0]!
+		expect(draftCalls).toBe(1)
+		const draft = draftPrompts[0]!
 		expect(draft).toContain("has left the description to you")
 		expect(draft).toContain(ROOMS_LISTED)
 		expect(draft).not.toContain("{{")
@@ -445,7 +468,7 @@ describe("a room draft never reads anybody's private lore", () => {
 			blockId: block.id,
 			payload: { choice: block.actions[0].choice }
 		})
-		const draft = prosePrompts[0]!
+		const draft = draftPrompts[0]!
 		expect(draft).toContain(PUBLIC)
 		expect(draft).not.toContain(SECRET)
 		expect(draft).not.toContain(WARDEN_SECRET)
@@ -472,8 +495,8 @@ describe("a room draft never reads anybody's private lore", () => {
 			text: "The Drowned Hall"
 		})
 		expect(ack?.error, JSON.stringify(ack)).toBeUndefined()
-		expect(proseCalls).toBe(1)
-		const draft = prosePrompts[0]!
+		expect(draftCalls).toBe(1)
+		const draft = draftPrompts[0]!
 		expect(draft).toContain(PUBLIC)
 		expect(draft).not.toContain(SECRET)
 		expect(draft).not.toContain(WARDEN_SECRET)
@@ -488,7 +511,7 @@ describe("a room draft never reads anybody's private lore", () => {
 		const w = await lair()
 		reset(PLAN)
 		await press(w, "core:spec/lair-build-room#build-room", { text: "The Drowned Hall" })
-		const draft = prosePrompts[0]!
+		const draft = draftPrompts[0]!
 		expect(draft).toContain(PUBLIC)
 		expect(draft).not.toContain(SECRET)
 		expect(draft).not.toContain(WARDEN_SECRET)
@@ -549,8 +572,8 @@ describe("a room draft never reads the private lore of a persona someone plays",
 			blockId: block.id,
 			payload: { choice: block.actions[0].choice }
 		})
-		expect(proseCalls).toBe(1)
-		const draft = prosePrompts[0]!
+		expect(draftCalls).toBe(1)
+		const draft = draftPrompts[0]!
 		expect(draft).toContain(PUBLIC)
 		expect(draft).not.toContain(PERSONA_SECRET)
 		expect(draft).not.toContain("Ysolde's debt")
@@ -574,14 +597,26 @@ describe("a room draft never reads the private lore of a persona someone plays",
 			text: "The Drowned Hall"
 		})
 		expect(ack?.error, JSON.stringify(ack)).toBeUndefined()
-		expect(proseCalls).toBe(1)
-		const draft = prosePrompts[0]!
+		expect(draftCalls).toBe(1)
+		const draft = draftPrompts[0]!
 		expect(draft).toContain(PUBLIC)
 		expect(draft).not.toContain(PERSONA_SECRET)
 		expect(draft).not.toContain("Ysolde's debt")
 		await rejectParked(w.owner.id)
 	})
 })
+
+/**
+ * The voice's person rule (RF fix 2, 2026-10-23) — speech in the first
+ * person, actions in the third, never a "you" — read off the seeded
+ * `lair-voice` row for `char`, escaped as the captured prompt holds it.
+ */
+async function voicePersonRule(char: string): Promise<string> {
+	const { CORE_PROMPTS } = await import("@serene-pub/core-catalog")
+	const row = CORE_PROMPTS.find((p) => p.seedKey.endsWith(":lair-voice"))!
+	const rule = row.fields.systemPrompt!.split("\n\n").find((p) => p.includes("in the first person"))!
+	return JSON.stringify(rule.replaceAll("{{char}}", char)).slice(1, -1)
+}
 
 describe("a delver's voice sees the stats of the room it stands in", () => {
 	test("a delver's character turn is told what lies in the Old Well, and not what lies on the Stair; the planner is told both", async () => {
@@ -592,7 +627,7 @@ describe("a delver's voice sees the stats of the room it stands in", () => {
 		expect(planner).toContain(HERE_ITEM)
 		expect(planner).toContain(AHEAD_ITEM)
 		const turn = prosePrompts[0]!
-		expect(turn).toContain("nobody narrates it for you")
+		expect(turn).toContain(await voicePersonRule("Brannoc"))
 		expect(turn).toContain(HERE_ITEM)
 		expect(turn).not.toContain(AHEAD_ITEM)
 		// The room names stay: a delver still knows which rooms exist.

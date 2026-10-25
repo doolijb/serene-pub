@@ -43,6 +43,15 @@ describe("narrow panels", () => {
 		expect(lastValue('[data-widget-part~="messages.message-save"]', "white-space")).toBe("nowrap")
 	})
 
+	it("🚧 a roll form's fields stack in a narrow box, and a dice result wraps (Lair rewrite D3)", () => {
+		expect(lastValue('[data-widget-part~="messages.block-roll-fields"]', "grid-template-columns")).toBe(
+			"repeat(auto-fit, minmax(10rem, 1fr))"
+		)
+		expect(lastValue('[data-widget-part~="messages.block-dice-head"]', "flex-wrap")).toBe("wrap")
+		expect(lastValue('[data-widget-part~="messages.block-dice-explain"]', "overflow-wrap")).toBe("anywhere")
+		expect(lastValue('[data-widget-part~="messages.block-roll"]', "max-width")).toBe("var(--container-sm)")
+	})
+
 	it("an answered line wraps", () => {
 		expect(lastValue('[data-widget-part~="messages.block-answered"]', "flex-wrap")).toBe("wrap")
 	})

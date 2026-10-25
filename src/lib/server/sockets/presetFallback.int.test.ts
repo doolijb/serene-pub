@@ -138,6 +138,13 @@ async function presetBinding(
 			}
 		})
 		.where(eq(schema.sessionPresets.id, id))
+	// 🚧 What a preset says now is its registration rows (PLAN-layering D7):
+	// the bindings written as the changes they are on Story's defaults — the
+	// path an old client's save takes.
+	const { writeLegacyPresetChanges } = await import(
+		"$lib/server/pipelines/registrations/presetRows"
+	)
+	await writeLegacyPresetChanges(db as any, { id, genreId: GENRE }, { bindings })
 	return id
 }
 
@@ -241,10 +248,16 @@ describe("a binding that stopped resolving", () => {
 		)
 		// (c) one notice, naming the slot and what it bound.
 		await reconcilePresetBindings(db as any)
-		const stale = (await db
+		const all = (await db
 			.select()
 			.from(schema.sessionPresetNotices)
 			.where(eq(schema.sessionPresetNotices.presetId, presetId))) as any[]
+		// 🚧 R56: beside the stale slot, each action this Story preset offers
+		// that needs a model nothing here serves (the two picture actions on a
+		// pub with no model that draws) is noticed too, keyed by registration.
+		const stale = all.filter((n) => n.event.startsWith("core:event/"))
+		for (const n of all.filter((x) => !x.event.startsWith("core:event/")))
+			expect(n.reason).toMatch(/^Unavailable: needs a model that can .*draw pictures/)
 		expect(stale.length).toBe(1)
 		expect(stale[0]).toMatchObject({
 			event: "core:event/message-respond@1",
@@ -255,12 +268,12 @@ describe("a binding that stopped resolving", () => {
 		await reconcilePresetBindings(db as any)
 		expect(
 			(
-				(await db
+				((await db
 					.select()
 					.from(schema.sessionPresetNotices)
 					.where(
 						eq(schema.sessionPresetNotices.presetId, presetId)
-					)) as any[]
+					)) as any[]).filter((r) => r.event.startsWith("core:event/"))
 			).length
 		).toBe(1)
 
@@ -269,12 +282,12 @@ describe("a binding that stopped resolving", () => {
 		await reconcilePresetBindings(db as any)
 		expect(
 			(
-				(await db
+				((await db
 					.select()
 					.from(schema.sessionPresetNotices)
 					.where(
 						eq(schema.sessionPresetNotices.presetId, presetId)
-					)) as any[]
+					)) as any[]).filter((r) => r.event.startsWith("core:event/"))
 			).length
 		).toBe(0)
 	}, 120_000)
@@ -369,12 +382,14 @@ describe("a binding that stopped resolving", () => {
 				id: created.preset!.id,
 				bindings: {
 					"core:event/session-created@1": { spec: "core:spec/story-create" },
-					"core:event/message-respond@1": { spec: "core:spec/story-narrate" }
+					// 🚧 Fit (R4) is the registration door's (lane 5b); what the
+					// save refuses here is a pipeline this pub does not publish.
+					"core:event/message-respond@1": { spec: "test:spec/never-published" }
 				}
 			},
 			noop
 		)
-		expect(res.error).toMatch(/cannot bind to 'core:event\/message-respond@1'/)
+		expect(res.error).toMatch(/'test:spec\/never-published' is not published on this pub/)
 	}, 120_000)
 })
 
@@ -400,10 +415,11 @@ describe("the reconcile's shape", () => {
 			"$lib/server/pipelines/boot/presetReconcile"
 		)
 		await reconcilePresetBindings(db as any)
-		const rows = (await db
+		// 🚧 R56's notices (unserved picture actions) aside — see above.
+		const rows = ((await db
 			.select()
 			.from(schema.sessionPresetNotices)
-			.where(eq(schema.sessionPresetNotices.presetId, presetId))) as any[]
+			.where(eq(schema.sessionPresetNotices.presetId, presetId))) as any[]).filter((r) => r.event.startsWith("core:event/"))
 		expect(rows.map((r) => r.event).sort()).toEqual([
 			"core:event/message-respond@1",
 			"core:event/session-created@1"
@@ -418,12 +434,12 @@ describe("the reconcile's shape", () => {
 			)) as any[]
 		expect(
 			(
-				(await db
+				((await db
 					.select()
 					.from(schema.sessionPresetNotices)
 					.where(
 						and(eq(schema.sessionPresetNotices.presetId, floor.id))
-					)) as any[]
+					)) as any[]).filter((r) => r.event.startsWith("core:event/"))
 			).length
 		).toBe(0)
 	}, 120_000)

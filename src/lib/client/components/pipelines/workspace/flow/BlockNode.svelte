@@ -99,7 +99,7 @@
 			{humanizeBlockName(block.id)}
 		</span>
 		<span
-			class="min-w-0 truncate text-[11px] {active
+			class="min-w-0 truncate text-meta {active
 				? 'opacity-80'
 				: 'text-surface-600-400'}"
 		>
@@ -107,7 +107,7 @@
 		</span>
 		{#if counts?.overridden}
 			<span
-				class="preset-filled-secondary-500 ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
+				class="preset-filled-secondary-500 ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-meta font-semibold"
 				title="{counts.overridden} set here, not inherited"
 			>
 				{counts.overridden}

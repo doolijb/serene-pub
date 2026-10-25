@@ -229,128 +229,80 @@ beforeAll(async () => {
 		.where(eq(schema.pipelineSpecs.id, respondSpec.id))
 }, 60_000)
 
+/**
+ * 🚧 Since PLAN-layering D7 (2026-10-20) what a session runs on a subject is
+ * its registrations — the genre's defaults, its preset's changes, its own
+ * rows. `pipeline_bindings` is ⏳ unread; these pin the same three facts the
+ * binding layer stood for, on the rows that say them now.
+ */
 describe("bindings (19 §3; plans/31 V2)", () => {
+	const ownRows = () => ({ kind: "session" as const, sessionId })
+	const clearOwn = async () =>
+		db
+			.delete(schema.registrations)
+			.where(and(eq(schema.registrations.scopeKind, "session"), eq(schema.registrations.scopeRef, String(sessionId))))
+
 	it("an action identity is served by its declarer alone — a foreign narrator is a second action, not an alternative", async () => {
 		const { resolveSubjectSpec } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
-		const { bindSubject, subjectCandidates } = await import(
-			"$lib/server/pipelines/entities/bindings"
-		)
-
-		// Two actions, two subjects: each names its own declarer.
-		expect(await subjectCandidates(db, STANDARD, `${CORE_NARRATE}#narrate`)).toEqual([CORE_NARRATE])
-		expect(await subjectCandidates(db, STANDARD, `${STAGE_NARRATE}#narrate`)).toEqual([STAGE_NARRATE])
+		const { actionRegistration, rowOfDecl } = await import("$lib/server/pipelines/registrations/rows")
+		const { upsertRow } = await import("$lib/server/pipelines/registrations/write")
+		// Core's narrator is the genre's default; the stage's is offered, not on.
 		expect(await resolveSubjectSpec(db, STANDARD, `${CORE_NARRATE}#narrate`, { sessionId })).toBe(CORE_NARRATE)
-		expect(await resolveSubjectSpec(db, STANDARD, `${STAGE_NARRATE}#narrate`, { sessionId })).toBe(STAGE_NARRATE)
-
-		// Binding core's narrator to the stage's spec is refused: the stage
-		// spec does not serve that identity — it serves its own.
-		const refused = await bindSubject(db, {
-			scope: { kind: "session", id: sessionId },
-			genreId: STANDARD,
-			subject: `${CORE_NARRATE}#narrate`,
-			specSlug: STAGE_NARRATE,
-			userId
-		})
-		expect(refused.error).toContain(`does not serve '${CORE_NARRATE}#narrate'`)
-
-		// Something that is neither an identity nor an event id is refused by name.
-		const bare = await bindSubject(db, {
-			scope: { kind: "session", id: sessionId },
-			genreId: STANDARD,
-			subject: "narrate",
-			specSlug: STAGE_NARRATE,
-			userId
-		})
-		expect(bare.error).toMatch(/'narrate' is not something a binding is about/)
+		expect(await resolveSubjectSpec(db, STANDARD, `${STAGE_NARRATE}#narrate`, { sessionId })).toBeNull()
+		// Switched on for this session, it is served by its own declarer — never core's.
+		await upsertRow(db as any, rowOfDecl(actionRegistration(`${STAGE_NARRATE}#narrate`), ownRows(), "admin"))
+		try {
+			expect(await resolveSubjectSpec(db, STANDARD, `${STAGE_NARRATE}#narrate`, { sessionId })).toBe(STAGE_NARRATE)
+			expect(await resolveSubjectSpec(db, STANDARD, `${CORE_NARRATE}#narrate`, { sessionId })).toBe(CORE_NARRATE)
+		} finally {
+			await clearOwn()
+		}
+		// Something that is neither an identity nor an event id names nothing.
+		expect(await resolveSubjectSpec(db, STANDARD, "narrate", { sessionId })).toBeNull()
 	})
 
-	it("the binding selects among the eligible on an event subject — session scope beats the companion default", async () => {
+	it("the session's own rows select on an event subject — beating the genre's default", async () => {
 		const { resolveSubjectSpec } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
-		const { bindSubject, subjectCandidates } = await import(
-			"$lib/server/pipelines/entities/bindings"
-		)
+		const { eventRegistration, rowOfDecl, rowOfDrop } = await import("$lib/server/pipelines/registrations/rows")
+		const { upsertRow } = await import("$lib/server/pipelines/registrations/write")
 		const { sessionEvents } = await import("@serene-pub/sdk")
 		const RESPOND = sessionEvents.messageRespond
-
-		// The bucket: core's respond spec, and the second one seeded below.
-		const candidates = await subjectCandidates(db, STANDARD, RESPOND)
-		expect(candidates).toEqual(expect.arrayContaining([CORE_RESPOND, STAGE_RESPOND]))
 		expect(await resolveSubjectSpec(db, STANDARD, RESPOND, { sessionId })).toBe(CORE_RESPOND)
 
-		// This session picks the foreign one for its turns.
-		const bound = await bindSubject(db, {
-			scope: { kind: "session", id: sessionId },
-			genreId: STANDARD,
-			subject: RESPOND,
-			specSlug: STAGE_RESPOND,
-			userId
-		})
-		expect(bound.error).toBeUndefined()
-		expect(await resolveSubjectSpec(db, STANDARD, RESPOND, { sessionId })).toBe(STAGE_RESPOND)
-		// …and the event road reads the same row (R-6, the event half).
-		const { resolveSessionEventSpec } = await import(
-			"$lib/server/pipelines/runtime/sessionEvents"
-		)
-		expect(await resolveSessionEventSpec(db, STANDARD, RESPOND, { sessionId })).toBe(STAGE_RESPOND)
-		// Another session still gets the default — the binding is scoped.
-		expect(await resolveSubjectSpec(db, STANDARD, RESPOND, { sessionId: sessionId + 999 })).toBe(
-			CORE_RESPOND
-		)
-	})
+		// This session runs the foreign one for its turns.
+		await upsertRow(db as any, rowOfDrop(eventRegistration(RESPOND, CORE_RESPOND).key, ownRows(), "owner"))
+		await upsertRow(db as any, rowOfDecl(eventRegistration(RESPOND, STAGE_RESPOND), ownRows(), "owner"))
+		try {
+			expect(await resolveSubjectSpec(db, STANDARD, RESPOND, { sessionId })).toBe(STAGE_RESPOND)
+			// …and the event road reads the same rows (R-6, the event half).
+			const { resolveSessionEventSpec } = await import(
+				"$lib/server/pipelines/runtime/sessionEvents"
+			)
+			expect(await resolveSessionEventSpec(db, STANDARD, RESPOND, { sessionId })).toBe(STAGE_RESPOND)
+			// Another session still gets the default — the rows are scoped.
+			const [other] = await db.insert(schema.sessions).values({ userId, isGroup: false }).returning()
+			expect(await resolveSubjectSpec(db, STANDARD, RESPOND, { sessionId: other!.id })).toBe(CORE_RESPOND)
 
-	it("an ineligible bind refuses at write; a bind gone stale falls through at read", async () => {
-		const { resolveSubjectSpec } = await import(
-			"$lib/server/pipelines/entities/sessionGenres"
-		)
-		const { bindSubject } = await import(
-			"$lib/server/pipelines/entities/bindings"
-		)
-		const { sessionEvents } = await import("@serene-pub/sdk")
-		const RESPOND = sessionEvents.messageRespond
-
-		// The narrate spec does not answer the primary turn.
-		const refused = await bindSubject(db, {
-			scope: { kind: "session", id: sessionId },
-			genreId: STANDARD,
-			subject: RESPOND,
-			specSlug: CORE_NARRATE,
-			userId
-		})
-		expect(refused.error).toContain(`does not serve '${RESPOND}'`)
-
-		// Retire the bound contributor: the session-scope row still exists, but
-		// eligibility is re-checked at read, so resolution falls through.
-		const [spec] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, STAGE_RESPOND))
-		await db
-			.update(schema.pipelineSpecs)
-			.set({ activeVersionId: null })
-			.where(eq(schema.pipelineSpecs.id, spec.id))
-		expect(await resolveSubjectSpec(db, STANDARD, RESPOND, { sessionId })).toBe(CORE_RESPOND)
-
-		// Restore, then clear: reset-is-delete, back to the default.
-		const [version] = await db
-			.select()
-			.from(schema.pipelineSpecVersions)
-			.where(eq(schema.pipelineSpecVersions.specId, spec.id))
-		await db
-			.update(schema.pipelineSpecs)
-			.set({ activeVersionId: version.id })
-			.where(eq(schema.pipelineSpecs.id, spec.id))
-		const cleared = await bindSubject(db, {
-			scope: { kind: "session", id: sessionId },
-			genreId: STANDARD,
-			subject: RESPOND,
-			specSlug: null,
-			userId
-		})
-		expect(cleared.error).toBeUndefined()
+			// A registration gone stale falls through at read (A11).
+			const [spec] = await db
+				.select()
+				.from(schema.pipelineSpecs)
+				.where(eq(schema.pipelineSpecs.slug, STAGE_RESPOND))
+			const activeVersionId = spec!.activeVersionId
+			await db.update(schema.pipelineSpecs).set({ activeVersionId: null }).where(eq(schema.pipelineSpecs.id, spec!.id))
+			try {
+				expect(await resolveSubjectSpec(db, STANDARD, RESPOND, { sessionId })).toBe(CORE_RESPOND)
+			} finally {
+				await db.update(schema.pipelineSpecs).set({ activeVersionId }).where(eq(schema.pipelineSpecs.id, spec!.id))
+			}
+		} finally {
+			await clearOwn()
+		}
+		// Reset is delete: back to the default.
 		expect(await resolveSubjectSpec(db, STANDARD, RESPOND, { sessionId })).toBe(CORE_RESPOND)
 	})
 })
@@ -465,7 +417,8 @@ describe("the session-scope rebind (PLAN-turn-order §4.7, R28, R29)", () => {
 			nodeKey: STRATEGY,
 			definitionId: "core:task/turn-narrator@1"
 		})
-		expect(refused.error).toContain("serves 'core:genre/lair'")
+		// 🚧 Nothing registers the Lair's pipeline in a Story session (D7).
+		expect(refused.error).toMatch(/is not a pipeline this session runs/)
 	})
 
 	it("lists the session's pipeline cards: the turn-order strategy, with its offered swaps (A8)", async () => {
@@ -479,25 +432,18 @@ describe("the session-scope rebind (PLAN-turn-order §4.7, R28, R29)", () => {
 		expect(card!.default).toBe(card!.options[0].definitionId)
 	})
 
-	it("refuses a spec whose lock answers no event — nothing would run the rebind (A7r review)", async () => {
+	it("refuses a spec no registration of the session runs — nothing would run the rebind (A7r review)", async () => {
 		const { setSessionNodeRebind } = await import(
 			"$lib/server/pipelines/entities/bindings"
 		)
-		const [spec] = await db
-			.select({ activeVersionId: schema.pipelineSpecs.activeVersionId })
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, TURN_ORDER))
-		const [before] = await db
-			.select({
-				inputEvent: schema.pipelineSpecVersions.inputEvent,
-				inputEvents: schema.pipelineSpecVersions.inputEvents
-			})
-			.from(schema.pipelineSpecVersions)
-			.where(eq(schema.pipelineSpecVersions.id, spec.activeVersionId!))
-		await db
-			.update(schema.pipelineSpecVersions)
-			.set({ inputEvent: null, inputEvents: null })
-			.where(eq(schema.pipelineSpecVersions.id, spec.activeVersionId!))
+		const { rowOfDrop } = await import("$lib/server/pipelines/registrations/rows")
+		const { upsertRow } = await import("$lib/server/pipelines/registrations/write")
+		const { effectiveRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
+		// Drop every registration of the turn order in this session.
+		const keys = (await effectiveRegistrations(db as any, sessionId))!.effective
+			.filter((r) => r.pipeline === TURN_ORDER)
+			.map((r) => r.key)
+		for (const key of keys) await upsertRow(db as any, rowOfDrop(key, { kind: "session", sessionId }, "owner"))
 		try {
 			const refused = await setSessionNodeRebind(db, {
 				sessionId,
@@ -506,12 +452,11 @@ describe("the session-scope rebind (PLAN-turn-order §4.7, R28, R29)", () => {
 				nodeKey: STRATEGY,
 				definitionId: "core:task/turn-user-split@1"
 			})
-			expect(refused.error).toContain("answers no event")
+			expect(refused.error).toMatch(/is not a pipeline this session runs/)
 		} finally {
 			await db
-				.update(schema.pipelineSpecVersions)
-				.set(before)
-				.where(eq(schema.pipelineSpecVersions.id, spec.activeVersionId!))
+				.delete(schema.registrations)
+				.where(and(eq(schema.registrations.scopeKind, "session"), eq(schema.registrations.scopeRef, String(sessionId))))
 		}
 	})
 
@@ -582,16 +527,17 @@ describe("the session-scope rebind (PLAN-turn-order §4.7, R28, R29)", () => {
 			})
 		// Not a pipeline this session runs: a swap there would change nothing.
 		expect((await rebind()).error).toMatch(/is not a pipeline this session runs/)
-		// Once the session runs it — its own binding — the swap is its to make.
-		const { bindSubject } = await import("$lib/server/pipelines/entities/bindings")
-		const bound = await bindSubject(db, {
-			scope: { kind: "session", id: sessionId },
-			genreId: "core:genre/story",
-			subject: "core:event/message-completed@1",
-			specSlug: "acme.rp:spec/chat-turn-order-alt",
-			userId
-		})
-		expect(bound.error).toBeUndefined()
+		// Once the session runs it — its own registration — the swap is its to make.
+		const { eventRegistration, rowOfDecl } = await import("$lib/server/pipelines/registrations/rows")
+		const { upsertRow } = await import("$lib/server/pipelines/registrations/write")
+		await upsertRow(
+			db as any,
+			rowOfDecl(
+				eventRegistration("core:event/message-completed@1", "acme.rp:spec/chat-turn-order-alt"),
+				{ kind: "session", sessionId },
+				"admin"
+			)
+		)
 		expect((await rebind()).error).toBeUndefined()
 	})
 

@@ -54,6 +54,11 @@ class AdminRouter {
 	 * A `SvelteSet` so `hasUnsavedEdits` follows a section mounting.
 	 */
 	#unsaved = new SvelteSet<() => boolean>()
+	/**
+	 * 🚧 A section's own Save, beside its probe (RF fix 2, item 5): what the
+	 * unsaved-changes question's **Save** runs. Resolves true once saved.
+	 */
+	#savers = new Map<() => boolean, () => Promise<boolean>>()
 	/** Set by AdminView, which hosts the dialog. Resolves true to discard. */
 	#askDiscard: () => Promise<boolean> = async () => true
 	/** Set by the shell: is the Admin view the view in Focus right now? */
@@ -136,10 +141,30 @@ class AdminRouter {
 		return false
 	}
 
-	/** A section registers its dirty probe; the return unregisters it. */
-	addUnsavedEdits(probe: () => boolean): () => void {
+	/** A section registers its dirty probe (and, 🚧 when it has one, its Save); the return unregisters it. */
+	addUnsavedEdits(probe: () => boolean, save?: () => Promise<boolean>): () => void {
 		this.#unsaved.add(probe)
-		return () => this.#unsaved.delete(probe)
+		if (save) this.#savers.set(probe, save)
+		return () => {
+			this.#unsaved.delete(probe)
+			this.#savers.delete(probe)
+		}
+	}
+
+	/** 🚧 Every section holding unsaved edits can save them from the question (it offers **Save**). */
+	get canSaveUnsaved(): boolean {
+		const dirty = [...this.#unsaved].filter((probe) => probe())
+		return dirty.length > 0 && dirty.every((probe) => this.#savers.has(probe))
+	}
+
+	/** 🚧 Save what is unsaved, section by section; false when one did not save (it says why). */
+	async saveUnsaved(): Promise<boolean> {
+		for (const probe of [...this.#unsaved]) {
+			if (!probe()) continue
+			const save = this.#savers.get(probe)
+			if (!save || !(await save())) return false
+		}
+		return true
 	}
 
 	/** AdminView hosts the dialog, and hands the router the way to ask. */
@@ -283,11 +308,14 @@ export function adminReplaceState(url: string | URL, state: App.PageState) {
 
 /**
  * A section's unsaved edits, told to the Admin view: moving to another
- * section, closing the view, or reloading the tab asks first while
- * `isDirty()` is true. Call during component initialisation.
+ * section, closing the view, stepping it down with Escape, or reloading the
+ * tab asks first while `isDirty()` is true. 🚧 With `save` (RF fix 2, item
+ * 5) the question offers **Save** beside **Discard** and **Stay**: it runs
+ * `save`, and goes on only once that resolves true. Call during component
+ * initialisation.
  */
-export function adminUnsavedEdits(isDirty: () => boolean) {
-	onMount(() => adminRouter.addUnsavedEdits(isDirty))
+export function adminUnsavedEdits(isDirty: () => boolean, save?: () => Promise<boolean>) {
+	onMount(() => adminRouter.addUnsavedEdits(isDirty, save))
 }
 
 /** Stands in for `beforeNavigate`: asked before the view moves to another section. */

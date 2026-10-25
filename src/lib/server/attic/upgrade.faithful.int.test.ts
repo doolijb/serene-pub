@@ -68,6 +68,8 @@ let galleryDays: Row[] = []
 /** The previews of the first boot, taken before any test touches the database. */
 const firstBoot: Record<number, PreviewOutcome> = {}
 let firstState: Awaited<ReturnType<typeof configurationState>>
+/** The reply's model call, by the address its document gives it (Story's sits in its `reply` junction). */
+let replyCall: string | undefined
 const PREVIEWED = [ids.chats.visibility, 34, ids.chats.bard, ids.chats.solo, 48]
 
 beforeAll(async () => {
@@ -104,6 +106,8 @@ beforeAll(async () => {
 	for (const id of PREVIEWED) firstBoot[id] = await previewTurn(db, id)
 	await settleAnnotationQueue()
 	firstState = await configurationState(db)
+	const { oracleNodeKeyOf } = await import("$lib/server/pipelines/config/world")
+	replyCall = await oracleNodeKeyOf(db as never, { slug: "core:spec/story-respond" })
 }, 900_000)
 
 /** 0.5.3's seeded reply default, which 0.6 no longer ships as the respond default. */
@@ -126,7 +130,7 @@ describe("the first boot compiles every session's prompt (B2)", () => {
 	test("sessions on a migrated configuration preview through to the model call", () => {
 		for (const id of PREVIEWED) {
 			const p = firstBoot[id]
-			expect(p.halt, `session ${id}: ${p.reason}`).toBe("generate")
+			expect(p.halt, `session ${id}: ${p.reason}`).toBe(replyCall)
 			expect(p.reason, `session ${id}`).toMatch(/preview/)
 		}
 	})
@@ -245,14 +249,21 @@ describe("prompt text only (owner ruling, 2026-10-01)", () => {
 			)
 			expect(differs.filter((r) => r.slot !== "prompts"), `config ${c.id}`).toEqual([])
 		}
-		// A chat's own sampling config is its session's sampling pick, on the
-		// `generate` step; nothing else is a session override.
-		expect(
-			await q(
-				`SELECT scope_id FROM pipeline_node_overrides
-				 WHERE path <> 'searchByMeaning' AND NOT (node_key = 'generate' AND slot = 'sampling')`
-			)
-		).toEqual([])
+		// A chat's own sampling config is its session's sampling pick, on each
+		// pipeline's reply steps (the steps it runs on the Reply loadout, by the
+		// addresses its document gives them); nothing else is a session override.
+		const { replyLoadoutSteps } = await import("$lib/server/pipelines/runtime/specShape")
+		const { loadPublished } = await import("$lib/server/pipelines/boot/bootstrap")
+		const stepsOf = new Map<string, string[]>()
+		const others: Row[] = []
+		for (const r of await q(
+			`SELECT o.scope_id, o.node_key, o.slot, p.slug FROM pipeline_node_overrides o JOIN pipeline_specs p ON p.id = o.spec_id
+			 WHERE o.path <> 'searchByMeaning'`
+		)) {
+			if (!stepsOf.has(r.slug)) stepsOf.set(r.slug, replyLoadoutSteps((await loadPublished(db as never, r.slug))!))
+			if (!(r.slot === "sampling" && stepsOf.get(r.slug)!.includes(r.node_key))) others.push(r)
+		}
+		expect(others).toEqual([])
 		const picked = (await q(`SELECT DISTINCT scope_id FROM pipeline_node_overrides WHERE slot = 'sampling' ORDER BY scope_id`)).map((r) => r.scope_id)
 		expect(picked).toEqual(
 			before.chats

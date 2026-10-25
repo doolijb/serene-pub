@@ -26,9 +26,10 @@
 	 *   own edge. Pass `toolbar` and the pane pins it: the toolbar is
 	 *   `shrink-0`, 12px above the `list` (Q4), and the list alone scrolls,
 	 *   so views stop writing `min-h-0 flex-1 overflow-y-auto` wrappers and
-	 *   nobody's filter scrolls away. `listFills` keeps Connections' desk
-	 *   index (Q5): with nothing open the list takes the whole view at the
-	 *   1120px reading width instead of sitting beside an empty column.
+	 *   nobody's filter scrolls away. `listFills` (Connections' desk index,
+	 *   Q5; every list view since L7, 2026-10-24): with nothing open the
+	 *   list takes the whole view, centred at `fillWidth` (560px of rows,
+	 *   1120px of cards), instead of sitting beside an empty column.
 	 * - `kind="sections"` — the column is the PLACES in the view (Settings,
 	 *   Admin, Sampling, Pipelines): a 240px column with no padding and no
 	 *   edge of its own, because the `SectionList` it holds is flush and
@@ -78,11 +79,21 @@
 		kind?: "list" | "sections"
 		/**
 		 * Desk with nothing open: the list pane alone fills the whole view,
-		 * its content centred at `max-w-[1120px]`, instead of a column beside
-		 * the empty message (Connections' index, ruling Q5). Opening
+		 * its content centred at `fillWidth`, instead of a column beside
+		 * the empty message (Connections' index, ruling Q5; every list view
+		 * since PLAN-0-5-polish-parity L7, 2026-10-24 — no voids). Opening
 		 * something splits it as usual. List kind only; default false.
 		 */
 		listFills?: boolean
+		/**
+		 * How wide a filling list's content may grow (`listFills` only):
+		 * `list` — 560px, the list column's own ceiling (STYLE-GUIDE §4.2), so
+		 * a list of rows reads the same centred as it will beside a detail;
+		 * `reading` (default) — 1120px, the app's reading width, for a card
+		 * grid (Connections' index); `whole` — no cap, for a list that IS
+		 * the thing being looked at (the Library's portrait grid).
+		 */
+		fillWidth?: "list" | "reading" | "whole"
 		/** What the list opens — a view panel, an edit form, a creator. */
 		detail: Snippet
 		/**
@@ -117,6 +128,7 @@
 		toolbar,
 		kind = "list",
 		listFills = false,
+		fillWidth = "reading",
 		detail,
 		empty,
 		emptyMessage = "Nothing selected.",
@@ -127,6 +139,15 @@
 	const sections = $derived(kind === "sections")
 	const pinned = $derived(!!toolbar && !sections)
 	const fills = $derived(listFills && !sections && !hasDetail)
+	/** The filling list's cap, as a whole class so Tailwind can see it. */
+	const FILL_CAP: Record<"list" | "reading" | "whole", string> = {
+		list: "max-w-[560px]",
+		reading: "max-w-[1120px]",
+		whole: "max-w-none"
+	}
+	const capClass = $derived(
+		`w-[calc(100%-2rem)] ${FILL_CAP[fillWidth] ?? FILL_CAP.reading} self-center`
+	)
 
 	// Read through a getter so the answer follows `mode` without the
 	// context being set again (it can only be set during init).
@@ -164,8 +185,9 @@
 
 <!-- The list pane's body. The toolbar pinned over the scrolling list when
      there is one, else the list as it always was. Under `listFills` with
-     nothing open the content is capped at the app's 1120px reading width;
-     otherwise the cap wrappers are `display: contents` and change nothing.
+     nothing open the content is centred at `fillWidth` (560px for rows,
+     the app's 1120px reading width for a card grid); otherwise the cap
+     classes are absent and change nothing.
      The wrappers are ALWAYS there, so opening a detail beside a filling
      list re-lays the same elements instead of remounting the list (its
      filter, its scroll) — Connections' old full-width bypass did remount.
@@ -174,26 +196,20 @@
 {#snippet listBody(capped: boolean)}
 	{#if pinned}
 		<div
-			class="mx-4 mt-4 shrink-0 {capped
-				? 'w-[calc(100%-2rem)] max-w-[1120px] self-center'
-				: ''}"
+			class="mx-4 mt-4 shrink-0 {capped ? capClass : ''}"
 		>
 			{@render toolbar?.()}
 		</div>
 		<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
 			<div
-				class="mx-4 mt-3 mb-4 flex flex-1 flex-col {capped
-					? 'w-[calc(100%-2rem)] max-w-[1120px] self-center'
-					: ''}"
+				class="mx-4 mt-3 mb-4 flex flex-1 flex-col {capped ? capClass : ''}"
 			>
 				{@render list()}
 			</div>
 		</div>
 	{:else}
 		<div
-			class="m-4 flex flex-1 flex-col {capped
-				? 'w-[calc(100%-2rem)] max-w-[1120px] self-center'
-				: ''}"
+			class="m-4 flex flex-1 flex-col {capped ? capClass : ''}"
 		>
 			{@render list()}
 		</div>

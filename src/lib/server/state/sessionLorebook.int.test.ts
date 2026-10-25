@@ -13,7 +13,8 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import * as schema from "$lib/server/db/schema"
-import { attributeSlots, defineAttributeSlot, genre, _clearAttributeSlots } from "@serene-pub/sdk"
+import { attributeSlots, defineAttributeSlot, _clearAttributeSlots } from "@serene-pub/sdk"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 import "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -54,7 +55,7 @@ async function realSession() {
 	const user = await createTestUser(testDb, `session-lorebook-${Math.random().toString(36).slice(2)}`)
 	const [lorebook] = await testDb.insert(schema.lorebooks).values({ userId: user.id, name: "World" }).returning()
 	const GENRE = "test:genre/session-lorebook"
-	genre(GENRE, { name: { en: "Real" }, family: "test", slots: attributeSlots(), events: {} })
+	genreKeeping(GENRE, { name: { en: "Real" }, family: "test", slots: attributeSlots(), events: {} })
 	// The real shape: the binding is the session row's column, and no
 	// `session_lorebooks` row exists.
 	const [session] = await testDb

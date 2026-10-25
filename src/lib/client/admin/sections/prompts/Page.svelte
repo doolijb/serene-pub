@@ -106,6 +106,14 @@
 			sortValue: (r) => (r.isImmutable ? 0 : 1)
 		},
 		{
+			// 🚧 R54: whether session owners may choose it where a pipeline offers them its prompt.
+			key: "owners",
+			label: "Owners",
+			text: (r) => (r.hidden ? "Hidden" : "Offered"),
+			sortValue: (r) => (r.hidden ? 1 : 0),
+			hideWhenStacked: true
+		},
+		{
 			key: "written",
 			label: "Written in",
 			text: (r) => r.origin ?? "",
@@ -141,6 +149,13 @@
 			order: ["builtin", "custom"]
 		},
 		{
+			key: "owners",
+			label: "Owners",
+			values: (r) => (r.hidden ? "hidden" : "offered"),
+			optionLabel: (v) => (v === "hidden" ? "Hidden from owners" : "Offered to owners"),
+			order: ["offered", "hidden"]
+		},
+		{
 			key: "use",
 			label: "Use",
 			values: (r) => (r.usedBy.length ? "picked" : "unused"),
@@ -149,7 +164,31 @@
 		}
 	])
 
+	/**
+	 * 🚧 R54: where a pipeline offers session owners a choice of prompt, they
+	 * choose among the prompts not hidden here. The text is never theirs.
+	 */
+	function setHidden(selected: Prompt[], hidden: boolean) {
+		const ids = selected.filter((r) => r.hidden !== hidden).map((r) => r.id)
+		for (const id of ids) socket.emit("pipelines:libraryUpdatePrompt", { id, hidden })
+		toaster.success({
+			title: `${ids.length} ${ids.length === 1 ? "prompt" : "prompts"} ${hidden ? "hidden from session owners" : "offered to session owners"}`
+		})
+	}
+
 	const bulkActions: AdminBulkAction<Prompt>[] = [
+		{
+			key: "offer",
+			label: "Offer selected prompts to session owners",
+			icon: Icons.Eye,
+			run: (s) => setHidden(s, false)
+		},
+		{
+			key: "hide",
+			label: "Hide selected prompts from session owners",
+			icon: Icons.EyeOff,
+			run: (s) => setHidden(s, true)
+		},
 		{
 			key: "delete",
 			label: "Delete selected prompts…",

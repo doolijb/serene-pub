@@ -78,7 +78,7 @@
 	{:else}
 		{#each scripts.attached ?? [] as s (s.id)}
 			<div
-				class="border-surface-200-700 flex items-center gap-2 rounded-lg border px-2 py-1"
+				class="border-surface-200-800 flex items-center gap-2 rounded-lg border px-2 py-1"
 			>
 				<span
 					class="min-w-0 flex-1 truncate text-sm {s.enabled
@@ -89,7 +89,7 @@
 				</span>
 				{#if !s.enabled}
 					<span
-						class="text-surface-600-400 text-[11px]"
+						class="text-surface-600-400 text-meta"
 						title="Disabled on the scripts page — attached, does nothing."
 					>
 						off

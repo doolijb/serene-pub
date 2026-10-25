@@ -477,34 +477,6 @@ export interface SettingsGroup {
 	carriesOut?: PortLine[]
 }
 
-/**
- * A named configuration the panel can offer — the shipped immutable default
- * plus any copies a person has made. One mechanism, not two: this is the same
- * `pipeline_configs` row the runtime resolves against in `world.ts`, so what
- * the picker shows is what the run uses.
- */
-export interface NamedConfigSummary {
-	id: number
-	name: string
-	isDefault: boolean
-	readOnly: boolean
-	/**
-	 * Whether a non-admin may choose this preset. Admin's site-wide switch.
-	 *
-	 * Only ever `false` in an admin's view: a withdrawn configuration is not
-	 * listed for anyone else (R8 — people choose from the curated set), so a
-	 * non-admin never receives one to render.
-	 */
-	enabled: boolean
-	/**
-	 * Which of the mode's actions sessions on this preset include (19 §3).
-	 *
-	 * `null` is not `[]`: null means the preset states nothing and the
-	 * companion rule decides, so a companion shipped later reaches sessions whose
-	 * preset never had a view. `[]` means somebody said none.
-	 */
-	includedActions: string[] | null
-}
 
 export interface NamespaceSummary {
 	slug: string
@@ -517,7 +489,6 @@ export interface NamespaceSummary {
 }
 
 export interface NamespaceView extends NamespaceSummary {
-	configs: NamedConfigSummary[]
 	/**
 	 * Every action this pipeline's mode is offered (19 §3) — the checklist the
 	 * preset editor renders. Empty where the pipeline serves no mode.
@@ -534,15 +505,6 @@ export interface NamespaceView extends NamespaceSummary {
 		specSlug: string
 		origin: "companion" | "foreign"
 	}[]
-	selectedConfig: { id: number; name: string; source: string } | null
-	/**
-	 * Whether this viewer may change the selection from here (R8).
-	 *
-	 * False for a non-admin outside a session: the selection they would be
-	 * making is the pub's, and that one is the administrator's. The panel
-	 * shows what is selected instead of offering a control that is refused.
-	 */
-	canSelectConfig: boolean
 	/**
 	 * The settings, grouped by model call (owner rulings 2026-09-30) — what
 	 * every surface renders. See `SettingsGroup`.

@@ -35,8 +35,8 @@ import os from "os"
 import path from "path"
 import { and, eq } from "drizzle-orm"
 import {
-	clearConfigValue,
-	setConfigValue,
+	clearPipelineValue,
+	setPipelineValue,
 	type TestDb
 } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
@@ -176,25 +176,6 @@ const historyLengthOn = async (
 }
 
 /**
- * The config a run on this session actually resolves to.
- *
- * ⚠ Not the `pipeline-default:` row. A run resolves through the session's
- * selection chain, which may name a mutable configuration rather than the
- * shipped one, so a fixture writing to the immutable original could change
- * nothing and prove nothing.
- */
-const selectedConfigId = async (slug: string, specId: number) => {
-	const { resolveSelectedConfig } = await import(
-		"$lib/server/pipelines/config/named"
-	)
-	const selected = await resolveSelectedConfig(db, specId, slug, {
-		sessionId
-	})
-	expect(selected, `${slug} resolves to no configuration`).toBeTruthy()
-	return selected!.configId
-}
-
-/**
  * The address this file tunes, on whichever spec is asking.
  *
  * The narrator's history node is keyed `history` and the reply's
@@ -213,17 +194,12 @@ const limitAt = (slug: string) => ({
  * declared 100, and the failure read as "the wiring regressed" rather than "the
  * fixture stored nothing".
  */
-const setLimit = async (slug: string, specId: number, value: number) =>
-	await setConfigValue(
-		db,
-		await selectedConfigId(slug, specId),
-		limitAt(slug),
-		value
-	)
+const setLimit = async (slug: string, _specId: number, value: number) =>
+	await setPipelineValue(db, slug, limitAt(slug), value)
 
 /** And the restore is a delete — back to inheriting, not pinned to today's number. */
-const resetLimit = async (slug: string, specId: number) =>
-	await clearConfigValue(db, await selectedConfigId(slug, specId), limitAt(slug))
+const resetLimit = async (slug: string, _specId: number) =>
+	await clearPipelineValue(db, slug, limitAt(slug))
 
 describe("the session history window reaches the query", () => {
 	// A liveness check, not the wiring guard — say so, because a shipped value

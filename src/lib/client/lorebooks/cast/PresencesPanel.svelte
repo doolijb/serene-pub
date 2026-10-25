@@ -263,7 +263,7 @@
 						<span
 							class="badge shrink-0 {here
 								? 'preset-tonal-primary'
-								: 'preset-tonal-surface'} text-[11px]"
+								: 'preset-tonal-surface'} text-meta"
 						>
 							at {p.personalPosition}
 						</span>
@@ -272,7 +272,7 @@
 						</span>
 						{#if whereFrom(p)}
 							<span
-								class="badge preset-tonal-primary shrink-0 text-[11px]"
+								class="badge preset-tonal-primary shrink-0 text-meta"
 							>
 								{whereFrom(p)}
 							</span>
@@ -313,7 +313,7 @@
 						</p>
 					{/if}
 					{#if p.note}
-						<p class="text-surface-600-400 text-[11px] italic">
+						<p class="text-surface-600-400 text-meta italic">
 							{p.note}
 						</p>
 					{/if}
@@ -460,7 +460,7 @@
 			{/if}
 
 			<div class="flex items-center gap-2">
-				<p class="text-surface-600-400 min-w-0 flex-1 text-[11px]">
+				<p class="text-surface-600-400 min-w-0 flex-1 text-meta">
 					Written to <strong>{lineName}</strong>
 					{#if branchId != null}, so it is not a presence on main.{/if}
 				</p>

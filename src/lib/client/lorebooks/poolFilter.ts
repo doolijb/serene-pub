@@ -22,6 +22,18 @@ export const SCENE_KIND = "scene"
 export const CAST_KIND = "cast"
 
 /**
+ * 🚧 The key space of a **rules library** row (PLAN-lorebook-kinds §C,
+ * ruling 10): `library#<typeId>/<pieceId>`. A piece of the book's rules
+ * library, shown under the book while the library chip is on — read only,
+ * the rules' and not the book's, until **Edit a copy** copies it in.
+ */
+export const LIBRARY_KEY_PREFIX = "library#"
+
+/** The pool key of one library piece of one rules list. */
+export const libraryKey = (typeId: string, pieceId: string): string =>
+	`${LIBRARY_KEY_PREFIX}${typeId}/${pieceId}`
+
+/**
  * One row of the pool, whatever table it came from.
  *
  * `key` and not `id`: entries and scenes are separate id spaces, and the tree
@@ -70,6 +82,13 @@ export interface PoolItem {
 	priority: number
 	createdAt: number
 	updatedAt: number
+	/**
+	 * 🚧 A piece of the book's rules library rather than a row of the book
+	 * (key `library#…`). Read only, shown only while the library chip is on,
+	 * and never counted, filed, queued or jumped to: it is the rules', not
+	 * the book's, until a copy is made.
+	 */
+	fromLibrary?: boolean
 }
 
 /** Whether the pool shows rows that have keywords, rows that do not, or both. */
@@ -90,6 +109,12 @@ export interface PoolFilters {
 	 */
 	needsKeywords: boolean
 	keywords: KeywordFilter
+	/**
+	 * 🚧 The **‹Rules› library** chip: adds the rules library's pieces to
+	 * the list, read only. Off each time a book opens (owner default,
+	 * 2026-10-21).
+	 */
+	library: boolean
 }
 
 export function emptyFilters(): PoolFilters {
@@ -101,7 +126,8 @@ export function emptyFilters(): PoolFilters {
 		machineWritten: false,
 		readIn: false,
 		needsKeywords: false,
-		keywords: "any"
+		keywords: "any",
+		library: false
 	}
 }
 
@@ -115,6 +141,7 @@ export function activeFilterCount(filters: PoolFilters): number {
 	if (filters.readIn) n++
 	if (filters.needsKeywords) n++
 	if (filters.keywords !== "any") n++
+	if (filters.library) n++
 	return n
 }
 
@@ -137,6 +164,7 @@ export const needsKeywords = (item: PoolItem) =>
 	!item.pinned &&
 	item.kind !== SCENE_KIND &&
 	item.kind !== CAST_KIND &&
+	!item.fromLibrary &&
 	!hasKeywords(item)
 
 /**
@@ -154,6 +182,8 @@ export function filterPool(
 ): PoolItem[] {
 	const needle = filters.search.trim().toLowerCase()
 	return items.filter((item) => {
+		// A library piece is listed only while its chip is on.
+		if (item.fromLibrary && !filters.library) return false
 		if (item.archived !== filters.archived) return false
 		if (filters.pinned && !item.pinned) return false
 		if (filters.off && !item.off) return false

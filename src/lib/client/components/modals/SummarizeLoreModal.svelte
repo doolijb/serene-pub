@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { withoutShared } from "$lib/shared/utils/sharedRows"
+	import { isStarterKit } from "$lib/client/lorebooks/starterKitCards"
 	import {
 		CHARACTER_LORE_TYPE_ID,
 		HISTORY_TYPE_ID,
@@ -301,7 +302,7 @@
 
 	// Lorebook writes from sessions Off (plan A22): nothing this could make
 	// would save, so it says so before any work and starts none.
-	const loreWrites = useLoreWritesOff()
+	const loreWrites = useLoreWritesOff(() => lorebookId)
 	let canGenerate = $derived(
 		!loreWrites.off &&
 		!!lorebookId &&
@@ -534,7 +535,11 @@
 	}
 
 	function handleLorebooksList(data: Sockets.Lorebooks.List.Response) {
-		availableLorebooks = withoutShared(data.lorebookList) // only owned books: a shared one is read and copy only (PLAN-private-messages §6.7)
+		// Only owned books: a shared one is read and copy only (PLAN-private-
+		// messages §6.7), and a starter lorebook is never summarized into.
+		availableLorebooks = withoutShared(data.lorebookList).filter(
+			(l) => !isStarterKit(l)
+		)
 	}
 
 	/**
@@ -1099,11 +1104,13 @@
 		{#if loreWrites.off}
 			<!-- Nothing has started: stepping aside for Settings loses nothing. -->
 			<LoreWritesOffNotice
+				by={loreWrites.by}
+				{lorebookId}
 				onOpenSettings={() => onOpenChange({ open: false })}
 			/>
 		{/if}
 		<!-- Lorebook status -->
-		<div class="border-surface-300-700 rounded-lg border p-3">
+		<div class="border-surface-200-800 rounded-lg border p-3">
 			{#if hasLorebook}
 				{@const book = availableLorebooks.find(
 					(l) => l.id === lorebookId
@@ -1252,7 +1259,7 @@
 				<!-- A heading for both branches; the Select carries its own
 				     (visually hidden) label. -->
 				<p class="label text-sm font-semibold">
-					History entry <span class="text-error-500">*</span>
+					History entry <span class="text-error-600-400">*</span>
 				</p>
 				{#if lineHistory.length > 0 || selectedHistoryEntryId}
 					<div class="flex gap-2">
@@ -1335,7 +1342,7 @@
 				>
 					Focus topic
 					{#if loreType === "character"}
-						<span class="text-error-500">*</span>
+						<span class="text-error-600-400">*</span>
 					{:else}
 						<span class="text-surface-600-400 font-normal">
 							(optional)
@@ -1419,6 +1426,8 @@
 			     its activity stay, so the review can be reopened), never as
 			     Cancel. -->
 			<LoreWritesOffNotice
+				by={loreWrites.by}
+				{lorebookId}
 				onOpenSettings={() => {
 					activeCleanup?.()
 					onOpenChange({ open: false })
@@ -1427,7 +1436,7 @@
 		{/if}
 		{#if saveError}
 			<p
-				class="border-error-500 text-error-700-300 rounded-lg border p-3 text-sm"
+				class="border-error-500 text-error-600-400 rounded-lg border p-3 text-sm"
 				role="alert"
 			>
 				Not saved: {saveError} Your text is still here — try Save again.
@@ -1444,7 +1453,7 @@
 		{/if}
 		<div class="space-y-1">
 			<label class="label text-sm font-semibold" for="review-name">
-				Name <span class="text-error-500">*</span>
+				Name <span class="text-error-600-400">*</span>
 			</label>
 			<input
 				id="review-name"
@@ -1462,7 +1471,7 @@
 
 		<div class="space-y-1">
 			<label class="label text-sm font-semibold" for="review-content">
-				Content <span class="text-error-500">*</span>
+				Content <span class="text-error-600-400">*</span>
 			</label>
 			<textarea
 				id="review-content"

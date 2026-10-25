@@ -277,7 +277,7 @@
 		{:else if col.key === "action"}
 			{@const Icon = Icons[ACTION_ICON[row.action]]}
 			<span
-				class="{ACTION_TONE[row.action]} inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]"
+				class="{ACTION_TONE[row.action]} inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-meta"
 			>
 				<Icon size={12} aria-hidden="true" />
 				{LOGBOOK_ACTION_LABELS[row.action]}
@@ -285,7 +285,7 @@
 		{:else if col.key === "object"}
 			<span class="flex min-w-0 flex-col">
 				<span class="truncate">{row.objectLabel || typeLabel(row.objectType)}</span>
-				<span class="text-surface-600-400 text-[11px]">
+				<span class="text-surface-600-400 text-meta">
 					{typeLabel(row.objectType)}
 				</span>
 			</span>

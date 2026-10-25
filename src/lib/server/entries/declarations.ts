@@ -29,7 +29,7 @@
  */
 
 import "@serene-pub/core-catalog"
-import { allEntryTypes, derivedEntryTypeSource } from "@serene-pub/sdk"
+import { allEntryTypes, derivedEntryTypeSource, getDefinition } from "@serene-pub/sdk"
 import type { EntryRoles, EntryShape, FieldDecl } from "@serene-pub/sdk"
 import {
 	ENTRY_TYPE_IDS,
@@ -63,34 +63,55 @@ const splitPin = (pin: string): [string, number] => {
 		: [pin.slice(0, at), Number(pin.slice(at + 1))]
 }
 
+/**
+ * 🚧 The registry's entry types, as a cache of the SDK's registry (ties T3,
+ * 2026-10-23). Core's are registered before this module loads; a **pub
+ * ruleset's** derived entry types are registered later — at boot once the
+ * database is ready (`registerPubRulesets`), or when an administrator
+ * publishes — and a withdrawn ruleset takes its own away. So the cache is
+ * read again when an id is missed, and a hit the registry has withdrawn is
+ * dropped: `entries:list` knows a published ruleset's lists.
+ */
 const BY_TYPE_ID = new Map<string, EntryTypeDeclaration>()
-for (const descriptor of allEntryTypes()) {
-	const [typeId, version] = splitPin(descriptor.id)
-	const shape = descriptor.entryShape
-	BY_TYPE_ID.set(typeId, {
-		typeId: typeId as EntryTypeId,
-		version,
-		roles: shape.roles ?? {},
-		fields: (shape.fields ?? {}) as Record<string, FieldDecl>,
-		sourceKind: shape.sourceKind,
-		exportKey: shape.exportKey,
-		render: shape.render
-	})
+function readRegistry(): void {
+	BY_TYPE_ID.clear()
+	for (const descriptor of allEntryTypes()) {
+		const [typeId, version] = splitPin(descriptor.id)
+		const shape = descriptor.entryShape
+		BY_TYPE_ID.set(typeId, {
+			typeId: typeId as EntryTypeId,
+			version,
+			roles: shape.roles ?? {},
+			fields: (shape.fields ?? {}) as Record<string, FieldDecl>,
+			sourceKind: shape.sourceKind,
+			exportKey: shape.exportKey,
+			render: shape.render
+		})
+	}
+}
+readRegistry()
+
+/** The cached declaration, checked against the registry; read again on a miss. */
+function current(typeId: string): EntryTypeDeclaration | undefined {
+	const hit = BY_TYPE_ID.get(typeId)
+	if (hit && getDefinition(`${typeId}@${hit.version}`)) return hit
+	readRegistry()
+	return BY_TYPE_ID.get(typeId)
 }
 
 /** What a type declares, or `undefined` for a type this build does not know. */
 export const entryDeclaration = (
 	typeId: string
-): EntryTypeDeclaration | undefined => BY_TYPE_ID.get(typeId)
+): EntryTypeDeclaration | undefined => current(typeId)
 
 /**
  * Whether this build declares the type — core's five, or a derived entry
- * type whose ruleset is registered. The write gate: an id merely shaped like
- * a derived type (`isDerivedEntryTypeId`) names nothing until its ruleset
- * loads.
+ * type whose ruleset is registered (🚧 a pub ruleset's too, published after
+ * boot). The write gate: an id merely shaped like a derived type
+ * (`isDerivedEntryTypeId`) names nothing until its ruleset loads.
  */
 export const isDeclaredEntryType = (typeId: unknown): typeId is EntryTypeId =>
-	typeof typeId === "string" && BY_TYPE_ID.has(typeId)
+	typeof typeId === "string" && current(typeId) !== undefined
 
 /**
  * 🚧 The derived entry types this build declares (bare ids), in declaration
@@ -98,7 +119,7 @@ export const isDeclaredEntryType = (typeId: unknown): typeId is EntryTypeId =>
  * kept here. Core's rulesets' ten today, and a plugin ruleset's when it loads.
  */
 export const derivedEntryTypeIds = (): EntryTypeId[] =>
-	[...BY_TYPE_ID.keys()].filter(
+	(readRegistry(), [...BY_TYPE_ID.keys()]).filter(
 		(id) => derivedEntryTypeSource(`${id}@${BY_TYPE_ID.get(id)!.version}`) !== undefined
 	) as EntryTypeId[]
 
@@ -107,7 +128,7 @@ export const derivedEntryTypeIds = (): EntryTypeId[] =>
  * fields are checked against (`checkPiece`) — or `undefined` for core's five.
  */
 export const derivedEntryRepertoire = (typeId: string) => {
-	const decl = BY_TYPE_ID.get(typeId)
+	const decl = current(typeId)
 	return decl ? derivedEntryTypeSource(`${typeId}@${decl.version}`)?.repertoire : undefined
 }
 
@@ -119,9 +140,10 @@ export const derivedEntryRepertoire = (typeId: string) => {
 export const TITLE_WIRE_FIELD = "name"
 
 /** Every declared entry type, in declaration order. */
-export const entryDeclarations = (): EntryTypeDeclaration[] => [
-	...BY_TYPE_ID.values()
-]
+export const entryDeclarations = (): EntryTypeDeclaration[] => {
+	readRegistry()
+	return [...BY_TYPE_ID.values()]
+}
 
 /**
  * The budget band a type's rows compete in.
@@ -136,7 +158,7 @@ export const entryDeclarations = (): EntryTypeDeclaration[] => [
  * moves with a version bump and not with a rename; the boundary is here.
  */
 export const bandOfType = (typeId: string): string =>
-	BY_TYPE_ID.get(typeId)?.sourceKind ?? typeId
+	current(typeId)?.sourceKind ?? typeId
 
 /**
  * Whether a type's rows earn the author's priority bonus.
@@ -150,7 +172,7 @@ export const bandOfType = (typeId: string): string =>
  * Ungate this and every prompt containing history changes.
  */
 export const declaresPriority = (typeId: string): boolean =>
-	BY_TYPE_ID.get(typeId)?.roles.priority !== undefined
+	current(typeId)?.roles.priority !== undefined
 
 /**
  * Whether a type's entries may be filed under another entry (Part of) — it
@@ -163,7 +185,7 @@ export const declaresPriority = (typeId: string): boolean =>
  * because a handler names its type. Unknown types: no.
  */
 export const declaresParent = (typeId: string): boolean =>
-	BY_TYPE_ID.get(typeId)?.roles.parent !== undefined
+	current(typeId)?.roles.parent !== undefined
 
 /**
  * The declared default of one field, or `null`.
@@ -176,7 +198,7 @@ export const declaresParent = (typeId: string): boolean =>
  * this one lookup rather than two.
  */
 export const fieldDefault = (typeId: string, field: string): unknown => {
-	const decl = BY_TYPE_ID.get(typeId)?.fields[field]
+	const decl = current(typeId)?.fields[field]
 	return decl?.default ?? null
 }
 
@@ -192,7 +214,7 @@ export const fieldDefault = (typeId: string, field: string): unknown => {
  * it there and never store it twice.
  */
 export const declaredFields = (typeId: string): string[] => {
-	const decl = BY_TYPE_ID.get(typeId)
+	const decl = current(typeId)
 	if (!decl) return []
 	const keys = Object.keys(decl.fields)
 	return decl.roles.title ? keys.filter((k) => k !== TITLE_WIRE_FIELD) : keys
@@ -222,7 +244,7 @@ export function coerceDeclaredField(
 	field: string,
 	value: unknown
 ): unknown {
-	const decl = BY_TYPE_ID.get(typeId)?.fields[field]
+	const decl = current(typeId)?.fields[field]
 	if (!decl) return value ?? null
 	const inRange = (n: number) =>
 		Number.isFinite(n) &&

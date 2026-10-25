@@ -91,7 +91,7 @@
 							{#if face && onOpenMember}
 								<button
 									type="button"
-									class="hover:text-primary-500 min-w-0 cursor-pointer truncate text-left text-sm font-semibold underline-offset-2 hover:underline"
+									class="hover:text-primary-ink min-w-0 cursor-pointer truncate text-left text-sm font-semibold underline-offset-2 hover:underline"
 									title="Open {face.name}"
 									data-cast-edge-other={face.id}
 									onclick={() => onOpenMember(face.id)}
@@ -125,19 +125,19 @@
 							</span>
 						</span>
 					</span>
-					<span class="text-surface-600-400 shrink-0 text-[11px]">
+					<span class="text-surface-600-400 shrink-0 text-meta">
 						{row.provenanceWord}
 					</span>
 					{#if row.cut}
 						<span
-							class="badge preset-tonal-error shrink-0 text-[11px]"
+							class="badge preset-tonal-error shrink-0 text-meta"
 						>
 							cut
 						</span>
 					{/if}
 					{#if later}
 						<span
-							class="badge preset-tonal-surface shrink-0 text-[11px]"
+							class="badge preset-tonal-surface shrink-0 text-meta"
 						>
 							{later}
 						</span>

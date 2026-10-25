@@ -10,10 +10,14 @@
 		label: string
 		checked: boolean
 		disabled?: boolean
+		/** The label for a screen reader only: a setting card's title says it
+		 *  on screen (STYLE-GUIDE §6.4). */
+		labelHidden?: boolean
 		onCheckedChange: (event: { checked: boolean }) => void
 	}
 
-	let { name, label, checked, disabled, onCheckedChange }: Props = $props()
+	let { name, label, checked, disabled, labelHidden = false, onCheckedChange }: Props =
+		$props()
 </script>
 
 <!-- `data-field`: the name is what an admin address lands on (`#name`,
@@ -26,6 +30,8 @@
 			<Switch.Thumb />
 		</Switch.Control>
 		<Switch.HiddenInput />
-		<Switch.Label class="text-sm font-medium">{label}</Switch.Label>
+		<Switch.Label class={labelHidden ? "sr-only" : "text-sm font-medium"}>
+			{label}
+		</Switch.Label>
 	</Switch>
 </div>

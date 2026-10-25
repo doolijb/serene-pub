@@ -138,7 +138,9 @@ describe("every provider has a dispatch path", () => {
 			"core:oracle/generate-image",
 			"core:oracle/run-tool",
 			// 2026-10-12 (D1): `runtime/describeImage.ts` + its host case — the vision caption behind *Describe from image*.
-			"core:oracle/describe-image"
+			"core:oracle/describe-image",
+			// 🚧 2026-10-21 (O9): `attachments/transcribe.ts` + its host case — the reply's hearing step.
+			"core:oracle/transcribe-audio"
 		])
 
 		const missing = [...ids].filter((id) => !dispatchable.has(id))

@@ -1,0 +1,2 @@
+ALTER TABLE "lorebooks" ADD COLUMN "kind" text DEFAULT 'book' NOT NULL;--> statement-breakpoint
+ALTER TABLE "lorebooks" ADD CONSTRAINT "lorebooks_kind_check" CHECK ("lorebooks"."kind" IN ('book', 'starter_kit'));

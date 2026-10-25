@@ -142,8 +142,8 @@ export async function resolveTaskConfig(params: {
 
 /**
  * The session's own sampling pick: the session-scope pipeline panel row on the
- * oracle's `sampling` slot of the pipeline serving its turns
- * (`sessionPipeline`), or null when it set none.
+ * `sampling` slot of the model call (`oracleNodeKeyOf`) of the pipeline
+ * serving its turns (`sessionPipeline`), or null when it set none.
  *
  * The one session layer — the same row the executor projects at `session`
  * scope (`world.ts`, `applyPipelineLayer`), so a run outside the executor
@@ -157,12 +157,14 @@ async function sessionSamplingPick(sessionId: number): Promise<number | null> {
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	if (!session) return null
-	const [{ sessionPipeline }, { ORACLE_NODE_KEY }] = await Promise.all([
+	const [{ sessionPipeline }, { oracleNodeKeyOf, ORACLE_NODE_KEY }] = await Promise.all([
 		import("$lib/server/pipelines/entities/sessionGenres"),
 		import("$lib/server/pipelines/config/world")
 	])
 	const pipeline = await sessionPipeline(db, sessionId, session.genreId)
 	if (!pipeline) return null
+	// The pipeline's own reply call, read off its document (`buildWorld`'s rule).
+	const oracle = (await oracleNodeKeyOf(db, { id: pipeline.specId })) ?? ORACLE_NODE_KEY
 	const [row] = await db
 		.select({ value: schema.pipelineNodeOverrides.value })
 		.from(schema.pipelineNodeOverrides)
@@ -171,7 +173,7 @@ async function sessionSamplingPick(sessionId: number): Promise<number | null> {
 				eq(schema.pipelineNodeOverrides.specId, pipeline.specId),
 				eq(schema.pipelineNodeOverrides.scopeKind, "session"),
 				eq(schema.pipelineNodeOverrides.scopeId, sessionId),
-				eq(schema.pipelineNodeOverrides.nodeKey, ORACLE_NODE_KEY),
+				eq(schema.pipelineNodeOverrides.nodeKey, oracle),
 				eq(schema.pipelineNodeOverrides.slot, "sampling"),
 				eq(schema.pipelineNodeOverrides.path, "")
 			)

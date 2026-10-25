@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
@@ -35,6 +35,14 @@ import {
 import { sessionEvents } from "@serene-pub/sdk"
 import { STORY_NARRATE_SPEC_ID } from "$lib/server/pipelines/specs/narrate"
 import { STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs/respond"
+import { writePresetChanges } from "$lib/server/pipelines/registrations/presetRows"
+import {
+	actionRegistrationKey,
+	eventRegistration,
+	rowOfDecl,
+	rowOfDrop
+} from "$lib/server/pipelines/registrations/rows"
+import { upsertRow } from "$lib/server/pipelines/registrations/write"
 
 let db: TestDb
 
@@ -108,6 +116,12 @@ describe("the shape validator", () => {
 				hasLorebook: false
 			})
 		).toEqual(["this genre has no characters — the session has 1"])
+	})
+
+	it("⏳ 'required' is retired (RF fix 2): a session may start without a lorebook — its own is its world", () => {
+		const shape = { characters: { min: 0 }, personas: { min: 0 }, lorebook: "required" } as any
+		expect(shapeViolations(shape, { characters: 1, personas: 0, hasLorebook: false })).toEqual([])
+		expect(shapeViolations({ ...shape, lorebook: "optional" }, { characters: 1, personas: 0, hasLorebook: false })).toEqual([])
 	})
 })
 
@@ -281,7 +295,12 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 			characterDetail: "full",
 			difficulty: "normal",
 			tone: "grounded",
-			turnMode: "rules"
+			turnMode: "rules",
+			// 🚧 The voices, genre settings since the tasks retired
+			// (PLAN-layering §4, 2026-10-20). Rest's apply-or-propose follows
+			// the reckoning's mode (R55, 2026-10-21) — no field.
+			sideCast: false,
+			narratorInterjections: false
 		})
 	})
 })
@@ -769,10 +788,15 @@ describe("session actions resolve through session, preset, then default", () => 
  * contributed to the mode and still resolvable, so nothing stops it *except*
  * this layer — and a non-admin may not step over it.
  */
+/**
+ * 🚧 A preset decides what a session includes by its registrations (PLAN-
+ * layering D7, R2): a preset that drops an action's registration leaves it
+ * out of every session on it; a session's own row is the exception.
+ */
 describe("a preset decides what a session includes", () => {
 	let sessionId: number
 	let userId: number
-	let configId: number
+	let presetId: number
 
 	beforeAll(async () => {
 		const [u] = await db
@@ -780,45 +804,24 @@ describe("a preset decides what a session includes", () => {
 			.values({ username: "preset-actor", isAdmin: false })
 			.returning()
 		userId = u.id
+		const [preset] = await db
+			.insert(schema.sessionPresets)
+			.values({ name: "No narrator", genreId: STANDARD_GENRE_ID })
+			.returning()
+		presetId = preset.id
+		await writePresetChanges(db as any, presetId, {
+			drop: [actionRegistrationKey(`${STORY_NARRATE_SPEC_ID}#narrate`)]
+		})
 		const [c] = await db
 			.insert(schema.sessions)
-			.values({ userId, isGroup: false, genreId: STANDARD_GENRE_ID })
+			.values({ userId, isGroup: false, genreId: STANDARD_GENRE_ID, presetId })
 			.returning()
 		sessionId = c.id
-
-		// A mutable preset on the respond pipeline, selected at session scope —
-		// the shipped one is immutable and refuses edits by design.
-		const [spec] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
-			.limit(1)
-		const [cfg] = await db
-			.insert(schema.pipelineConfigs)
-			.values({ specId: spec.id, name: "No narrator" })
-			.returning()
-		configId = cfg.id
-		await db.insert(schema.pipelineConfigSelections).values({
-			specId: spec.id,
-			scopeKind: "session",
-			scopeId: sessionId,
-			configId
-		})
 	}, 30_000)
 
 	it("excluding an action turns it off for sessions on that preset", async () => {
-		const set = await setPresetActions(db, configId, {
-			includedActions: []
-		})
-		expect(set.ok).toBe(true)
-
 		const n = (
-			await listSessionFunctions(
-				db,
-				sessionId,
-				STANDARD_GENRE_ID,
-				userId
-			)
+			await listSessionFunctions(db, sessionId, STANDARD_GENRE_ID, userId)
 		).find((f) => f.key === "narrate")!
 		expect(n.included).toBe(false)
 		expect(n.enabled).toBe(false)
@@ -826,99 +829,60 @@ describe("a preset decides what a session includes", () => {
 	})
 
 	it("a non-admin may not switch on what the preset left out", async () => {
-		const r = await setSessionFunction(
-			db,
-			sessionId,
-			STANDARD_GENRE_ID,
-			"narrate",
-			true,
-			{ userId, isAdmin: false }
-		)
+		const r = await setSessionFunction(db, sessionId, STANDARD_GENRE_ID, "narrate", true, {
+			userId,
+			isAdmin: false
+		})
 		expect(r.ok).toBe(false)
 		expect(r.error).toMatch(/administrator/i)
 	})
 
 	it("an admin may, and it lands on that session alone", async () => {
-		const r = await setSessionFunction(
-			db,
-			sessionId,
-			STANDARD_GENRE_ID,
-			"narrate",
-			true,
-			{ userId, isAdmin: true }
-		)
+		const r = await setSessionFunction(db, sessionId, STANDARD_GENRE_ID, "narrate", true, {
+			userId,
+			isAdmin: true
+		})
 		expect(r.ok).toBe(true)
-
 		const n = (
-			await listSessionFunctions(
-				db,
-				sessionId,
-				STANDARD_GENRE_ID,
-				userId
-			)
+			await listSessionFunctions(db, sessionId, STANDARD_GENRE_ID, userId)
 		).find((f) => f.key === "narrate")!
 		expect(n.enabled).toBe(true)
 		expect(n.source).toBe("session")
-
-		// The preset is unchanged — the exception is the session's, not the
-		// preset's, which is the difference between the two admin paths.
-		const [cfg] = await db
+		// The preset is unchanged — the exception is the session's own row.
+		const presetRows = await db
 			.select()
-			.from(schema.pipelineConfigs)
-			.where(eq(schema.pipelineConfigs.id, configId))
-		expect(cfg.includedActions).toEqual([])
+			.from(schema.registrations)
+			.where(eq(schema.registrations.presetId, presetId))
+		expect(presetRows.map((r) => [r.key, r.dropped])).toEqual([
+			[actionRegistrationKey(`${STORY_NARRATE_SPEC_ID}#narrate`), true]
+		])
 	})
 
 	it("a non-admin may still switch an excluded action back off", async () => {
 		// Only turning *on* is gated. Refusing someone the ability to give up
 		// something they already have would be a rule with nobody to protect.
-		const r = await setSessionFunction(
-			db,
-			sessionId,
-			STANDARD_GENRE_ID,
-			"narrate",
-			false,
-			{ userId, isAdmin: false }
-		)
+		const r = await setSessionFunction(db, sessionId, STANDARD_GENRE_ID, "narrate", false, {
+			userId,
+			isAdmin: false
+		})
 		expect(r.ok).toBe(true)
 	})
 
-	it("refuses to include an action the pipeline's mode never offered", async () => {
-		const r = await setPresetActions(db, configId, {
-			includedActions: ["teleport"]
-		})
+	it("a configuration no longer carries actions (R38)", async () => {
+		const r = await setPresetActions(db, 1, { includedActions: [] })
 		expect(r.ok).toBe(false)
-		expect(r.error).toContain("teleport")
-	})
-
-	it("refuses to edit a preset Serene Pub ships", async () => {
-		const [shipped] = await db
-			.select()
-			.from(schema.pipelineConfigs)
-			.where(eq(schema.pipelineConfigs.isImmutable, true))
-			.limit(1)
-		const r = await setPresetActions(db, shipped.id, {
-			includedActions: []
-		})
-		expect(r.ok).toBe(false)
-		expect(r.error).toMatch(/Duplicate it/)
+		expect(r.error).toMatch(/configurations are retired/)
 	})
 })
 
 /**
- * The preset a session runs on (19 §7, ruled 2026-08-24).
- *
- * A preset *is* a pipeline configuration somebody is allowed to see and use;
- * the two used to be separate ideas. The assertions worth reading are the two
- * about `enabled`: it is the administrator's answer to "what may people
- * choose", so it has to hold at the write and not only in the list — a switch
- * the picker respects and the handler ignores is advisory.
+ * 🚧 The session's "Configuration" menu is retired with configurations (R38,
+ * PLAN-layering D7): nothing to pick, and an old client's pick is refused in
+ * a sentence. What a session runs follows its preset.
  */
 describe("a session runs on a preset", () => {
 	let sessionId: number
 	let userId: number
-	let specId: number
-	let extraId: number
 
 	beforeAll(async () => {
 		const [u] = await db
@@ -931,166 +895,32 @@ describe("a session runs on a preset", () => {
 			.values({ userId, isGroup: false, genreId: STANDARD_GENRE_ID })
 			.returning()
 		sessionId = c.id
-
-		const [spec] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
-			.limit(1)
-		specId = spec.id
-		const [extra] = await db
-			.insert(schema.pipelineConfigs)
-			.values({ specId, name: "Picker copy" })
-			.returning()
-		extraId = extra.id
 	}, 30_000)
 
-	it("offers the serving pipeline's presets, and says which is on", async () => {
-		const r = await listSessionPresets(
-			db,
-			sessionId,
-			STANDARD_GENRE_ID,
-			{
-				userId,
-				isAdmin: false
-			}
-		)
-		expect(r.specSlug).toBe(STORY_RESPOND_SPEC_ID)
-		expect(r.options.map((o) => o.configId)).toContain(extraId)
-		// Nothing chosen yet, so the shipped default is what is in force —
-		// "default preset pre-selected" without anybody having selected it.
-		expect(r.selectedId).not.toBeNull()
+	it("offers no configuration, and still names the serving pipeline", async () => {
+		const r = await listSessionPresets(db, sessionId, STANDARD_GENRE_ID, { userId, isAdmin: false })
+		expect(r).toEqual({ specSlug: STORY_RESPOND_SPEC_ID, selectedId: null, options: [] })
 	})
 
-	it("choosing one writes a session-scope selection", async () => {
-		const set = await chooseSessionPreset(
-			db,
-			sessionId,
-			STANDARD_GENRE_ID,
-			extraId,
-			{ userId, isAdmin: false }
-		)
-		expect(set.ok).toBe(true)
-
-		const r = await listSessionPresets(
-			db,
-			sessionId,
-			STANDARD_GENRE_ID,
-			{
-				userId,
-				isAdmin: false
-			}
-		)
-		expect(r.selectedId).toBe(extraId)
-
-		// The same row the pipeline panel writes — one mechanism, so a preset
-		// chosen here and one chosen there cannot become two facts.
-		const rows = await db
-			.select()
-			.from(schema.pipelineConfigSelections)
-			.where(eq(schema.pipelineConfigSelections.scopeId, sessionId))
-		expect(
-			rows.some(
-				(x: any) => x.scopeKind === "session" && x.configId === extraId
-			)
-		).toBe(true)
-	})
-
-	it("hides a disabled preset from a non-admin and shows it to an admin", async () => {
-		await db
-			.update(schema.pipelineConfigs)
-			.set({ enabled: false })
-			.where(eq(schema.pipelineConfigs.id, extraId))
-
-		const asUser = await listSessionPresets(
-			db,
-			sessionId,
-			STANDARD_GENRE_ID,
-			{ userId, isAdmin: false }
-		)
-		expect(asUser.options.map((o) => o.configId)).not.toContain(extraId)
-
-		// An admin still sees it, marked. One they just switched off vanishing
-		// entirely would read as deleted.
-		const asAdmin = await listSessionPresets(
-			db,
-			sessionId,
-			STANDARD_GENRE_ID,
-			{ userId, isAdmin: true }
-		)
-		const found = asAdmin.options.find((o) => o.configId === extraId)
-		expect(found?.enabled).toBe(false)
-	})
-
-	it("refuses a disabled preset at the write, not only in the list", async () => {
-		const denied = await chooseSessionPreset(
-			db,
-			sessionId,
-			STANDARD_GENRE_ID,
-			extraId,
-			{ userId, isAdmin: false }
-		)
-		expect(denied.ok).toBe(false)
-		expect(denied.error).toMatch(/not available to choose/)
-
-		const allowed = await chooseSessionPreset(
-			db,
-			sessionId,
-			STANDARD_GENRE_ID,
-			extraId,
-			{ userId, isAdmin: true }
-		)
-		expect(allowed.ok).toBe(true)
-	})
-
-	it("refuses a preset belonging to another pipeline", async () => {
-		const [other] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, STORY_NARRATE_SPEC_ID))
-			.limit(1)
-		const [foreign] = await db
-			.insert(schema.pipelineConfigs)
-			.values({ specId: other.id, name: "Wrong pipeline" })
-			.returning()
-
-		const r = await chooseSessionPreset(
-			db,
-			sessionId,
-			STANDARD_GENRE_ID,
-			foreign.id,
-			{ userId, isAdmin: true }
-		)
+	it("refuses a pick, in a sentence", async () => {
+		const r = await chooseSessionPreset(db, sessionId, STANDARD_GENRE_ID, 1, { userId, isAdmin: true })
 		expect(r.ok).toBe(false)
-		expect(r.error).toMatch(/different pipeline/)
+		expect(r.error).toMatch(/configurations are retired/)
 	})
 
 	it("changing preset changes which actions the session includes", async () => {
-		// The join between the two features: a preset decides the included
-		// set, so switching preset has to move the action list with it.
-		await db
-			.update(schema.pipelineConfigs)
-			.set({ includedActions: [] })
-			.where(eq(schema.pipelineConfigs.id, extraId))
-		await chooseSessionPreset(
-			db,
-			sessionId,
-			STANDARD_GENRE_ID,
-			extraId,
-			{
-				userId,
-				isAdmin: true
-			}
-		)
-
-		const n = (
-			await listSessionFunctions(
-				db,
-				sessionId,
-				STANDARD_GENRE_ID,
-				userId
-			)
-		).find((f) => f.key === "narrate")!
+		const narrateOn = async () =>
+			(await listSessionFunctions(db, sessionId, STANDARD_GENRE_ID, userId)).find((f) => f.key === "narrate")!
+		expect((await narrateOn()).included).toBe(true)
+		const [preset] = await db
+			.insert(schema.sessionPresets)
+			.values({ name: "No narrator either", genreId: STANDARD_GENRE_ID })
+			.returning()
+		await writePresetChanges(db as any, preset.id, {
+			drop: [actionRegistrationKey(`${STORY_NARRATE_SPEC_ID}#narrate`)]
+		})
+		await db.update(schema.sessions).set({ presetId: preset.id }).where(eq(schema.sessions.id, sessionId))
+		const n = await narrateOn()
 		expect(n.included).toBe(false)
 		expect(n.source).toBe("preset")
 	})
@@ -1126,11 +956,8 @@ describe("a session's own binding beats its preset (R-6)", () => {
 	const OTHER = "test:spec/respond-other"
 	let presetId: number
 	let sessionId: number
-	let otherSpecId: number
-	let graphSpecId: number
-	let respondSpecId: number
 
-	/** A second pipeline answering the same lock, so "which layer chose" is visible. */
+	/** A second pipeline that writes a reply, so "which layer chose" is visible. */
 	async function cloneRespondSpec(slug: string): Promise<number> {
 		const [spec] = (await db
 			.insert(schema.pipelineSpecs)
@@ -1143,13 +970,9 @@ describe("a session's own binding beats its preset (R-6)", () => {
 				semver: "1.0.0",
 				status: "published",
 				canonicalHash: `hash-${slug}`,
-				inputGenre: STANDARD_GENRE_ID,
-				inputEvent: "core:event/message-respond@1",
 				publishedAt: new Date()
 			})
 			.returning()) as any[]
-		// The bucket is structural at both ends (19 §0): a respond candidate
-		// must write a session message.
 		await db.insert(schema.pipelineNodes).values({
 			specVersionId: version.id,
 			nodeKey: "write",
@@ -1164,22 +987,16 @@ describe("a session's own binding beats its preset (R-6)", () => {
 		return spec.id
 	}
 
-	const bindAt = async (
-		scopeKind: "session" | "pub",
-		scopeId: number,
-		specId: number
-	) =>
-		db.insert(schema.pipelineBindings).values({
-			scopeKind,
-			scopeId,
-			genreId: STANDARD_GENRE_ID,
-			subject: sessionEvents.messageRespond,
-			specId
-		})
-	const unbind = async () =>
+	const REPLY_KEY = eventRegistration(sessionEvents.messageRespond, STORY_RESPOND_SPEC_ID).key
+	const scope = () => ({ kind: "session" as const, sessionId })
+	const own = async (pipeline: string) => {
+		await upsertRow(db as any, rowOfDrop(REPLY_KEY, scope(), "owner"))
+		await upsertRow(db as any, rowOfDecl(eventRegistration(sessionEvents.messageRespond, pipeline), scope(), "owner"))
+	}
+	const clear = async () =>
 		db
-			.delete(schema.pipelineBindings)
-			.where(eq(schema.pipelineBindings.genreId, STANDARD_GENRE_ID))
+			.delete(schema.registrations)
+			.where(and(eq(schema.registrations.scopeKind, "session"), eq(schema.registrations.scopeRef, String(sessionId))))
 
 	const verdict = async () => {
 		const { resolveSubjectVerdict } = await import(
@@ -1191,31 +1008,11 @@ describe("a session's own binding beats its preset (R-6)", () => {
 	}
 
 	beforeAll(async () => {
-		otherSpecId = await cloneRespondSpec(OTHER)
-		const [graph] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/graph-build"))
-			.limit(1)
-		graphSpecId = graph!.id
-		const [respond] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
-			.limit(1)
-		respondSpecId = respond!.id
-
-		// A preset binding the reply to the shipped pipeline, and a session
-		// born on it.
+		await cloneRespondSpec(OTHER)
+		// An administrator's preset that changes nothing — the genre's defaults.
 		const [preset] = (await db
 			.insert(schema.sessionPresets)
-			.values({
-				name: "R-6 preset",
-				genreId: STANDARD_GENRE_ID,
-				bindings: {
-					"core:event/message-respond@1": { spec: STORY_RESPOND_SPEC_ID }
-				}
-			})
+			.values({ name: "R-6 preset", genreId: STANDARD_GENRE_ID })
 			.returning()) as any[]
 		presetId = preset.id
 		const [u] = await db
@@ -1224,74 +1021,63 @@ describe("a session's own binding beats its preset (R-6)", () => {
 			.returning()
 		const [c] = (await db
 			.insert(schema.sessions)
-			.values({
-				userId: u.id,
-				isGroup: false,
-				genreId: STANDARD_GENRE_ID,
-				presetId
-			})
+			.values({ userId: u.id, isGroup: false, genreId: STANDARD_GENRE_ID, presetId })
 			.returning()) as any[]
 		sessionId = c.id
 	}, 60_000)
 
-	it("with no binding of its own, the preset decides", async () => {
-		await unbind()
+	it("with no row of its own, the preset decides", async () => {
+		await clear()
 		expect((await verdict()).spec).toBe(STORY_RESPOND_SPEC_ID)
 	})
 
-	it("a session binding beats its preset", async () => {
-		await unbind()
-		await bindAt("session", sessionId, otherSpecId)
+	it("a session's own registration beats its preset", async () => {
+		await clear()
+		await own(OTHER)
 		try {
 			const v = await verdict()
 			expect(v.spec).toBe(OTHER)
-			// The preset was never asked, so there is no substitution to report.
+			// The preset decided nothing here, so there is no substitution to report.
 			expect(v.fallback).toBeUndefined()
 		} finally {
-			await unbind()
+			await clear()
 		}
 	})
 
-	it("a session binding whose spec is no longer a candidate falls through to the preset", async () => {
-		// graph-build reads the standard genre's sessions but writes a
-		// proposal, so it is not in the respond bucket (19 §0): the row exists
-		// and cannot win, and the next layer — the preset — answers.
-		await unbind()
-		await bindAt("session", sessionId, graphSpecId)
+	it("a session registration whose pipeline is gone falls back to the preset's", async () => {
+		await clear()
+		await own("test:spec/never-published")
 		try {
 			expect((await verdict()).spec).toBe(STORY_RESPOND_SPEC_ID)
 		} finally {
-			await unbind()
+			await clear()
 		}
 	})
 
-	it("an instance binding still sits below the preset", async () => {
-		await unbind()
-		await bindAt("pub", 0, otherSpecId)
+	it("a pub-wide binding answers nothing any more (R33)", async () => {
+		await clear()
+		const [other] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, OTHER))
+			.limit(1)
+		await db.insert(schema.pipelineBindings).values({
+			scopeKind: "pub",
+			scopeId: 0,
+			genreId: STANDARD_GENRE_ID,
+			subject: sessionEvents.messageRespond,
+			specId: other!.id
+		})
 		try {
-			// The preset's session: the preset wins over the instance row.
 			expect((await verdict()).spec).toBe(STORY_RESPOND_SPEC_ID)
-			// A session on no preset: the instance row is the top layer left.
 			const { resolveSubjectVerdict } = await import(
 				"$lib/server/pipelines/entities/sessionGenres"
 			)
 			expect(
-				(await resolveSubjectVerdict(db, STANDARD_GENRE_ID, sessionEvents.messageRespond))
-					.spec
-			).toBe(OTHER)
+				(await resolveSubjectVerdict(db, STANDARD_GENRE_ID, sessionEvents.messageRespond)).spec
+			).toBe(STORY_RESPOND_SPEC_ID)
 		} finally {
-			await unbind()
-		}
-	})
-
-	it("the session's binding beats the instance's as well", async () => {
-		await unbind()
-		await bindAt("pub", 0, respondSpecId)
-		await bindAt("session", sessionId, otherSpecId)
-		try {
-			expect((await verdict()).spec).toBe(OTHER)
-		} finally {
-			await unbind()
+			await db.delete(schema.pipelineBindings).where(eq(schema.pipelineBindings.genreId, STANDARD_GENRE_ID))
 		}
 	})
 })

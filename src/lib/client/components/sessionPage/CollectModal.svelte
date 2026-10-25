@@ -98,6 +98,13 @@
 	})
 	const ready = $derived(!!collects && collectReady(collects, got))
 	const reach = $derived(reachSentence(cast, picked, ownVoice))
+	/**
+	 * 🚧 Whether the recipients HEAR something — the action writes a slot
+	 * on each (`overwrites`, the Lair's Whisper): only then is "who will and
+	 * won't hear it" the right sentence. The Lair's Roll picks who rolls,
+	 * and nobody hears anything (L5, 2026-10-21).
+	 */
+	const hears = $derived(!!collects?.recipients?.overwrites)
 	const uid = $props.id()
 
 	function submit() {
@@ -169,7 +176,7 @@
 								{:else}
 									<p class="text-surface-600-400 text-sm">Nobody in the cast is enabled.</p>
 								{/each}
-								{#if cast.length}
+								{#if cast.length && hears}
 									<p class="text-sm" aria-live="polite" data-collect-reach>
 										{#each reach as run, i (i)}{#if run.name}<strong>{run.text}</strong>{:else}{run.text}{/if}{/each}
 									</p>
@@ -184,7 +191,7 @@
 										<span class="text-surface-600-400">How many</span>
 										<input
 											bind:this={amountField}
-											class="input w-24 rounded-[10px]"
+											class="input w-24 rounded-base"
 											type="number"
 											min="1"
 											max={CLOCK_STEP_LIMIT}
@@ -217,7 +224,7 @@
 									>
 										<button
 											type="button"
-											class="btn btn-sm {stepBack ? 'preset-tonal-surface' : 'preset-tonal-primary'}"
+											class="btn btn-sm {stepBack ? 'preset-tonal-surface' : 'preset-pressed'}"
 											aria-pressed={!stepBack}
 											onclick={() => (stepBack = false)}
 										>
@@ -225,7 +232,7 @@
 										</button>
 										<button
 											type="button"
-											class="btn btn-sm {stepBack ? 'preset-tonal-primary' : 'preset-tonal-surface'}"
+											class="btn btn-sm {stepBack ? 'preset-pressed' : 'preset-tonal-surface'}"
 											aria-pressed={stepBack}
 											onclick={() => (stepBack = true)}
 										>
@@ -235,7 +242,7 @@
 								</div>
 								<p
 									id="{uid}-step-note"
-									class="text-xs {stepNote ? 'text-error-700-300' : 'text-surface-600-400'}"
+									class="text-xs {stepNote ? 'text-error-600-400' : 'text-surface-600-400'}"
 									aria-live="polite"
 								>
 									{stepNote ?? "Moves this session's story clock, never the lorebook's."}

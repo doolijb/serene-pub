@@ -643,12 +643,20 @@ export async function published(
  */
 export async function subscription(db: Db, specVersionId: number) {
 	const [row] = await db
-		.select({ inputEvent: schema.pipelineSpecVersions.inputEvent })
+		.select({
+			inputEvent: schema.pipelineSpecVersions.inputEvent,
+			suits: schema.pipelineSpecVersions.suits
+		})
 		.from(schema.pipelineSpecVersions)
 		.where(eq(schema.pipelineSpecVersions.id, specVersionId))
 		.limit(1)
 	return {
-		event: (row?.inputEvent as string | undefined) ?? null,
+		// 🚧 A pipeline mounted by registrations names the events it suits
+		// (D3) — the first is what the panel shows; ⏳ else the lock's event.
+		event:
+			(row?.inputEvent as string | undefined) ??
+			(Array.isArray(row?.suits) ? (row!.suits[0] as string | undefined) : undefined) ??
+			null,
 		enabled: true
 	}
 }
@@ -994,16 +1002,25 @@ export async function declarations(
 			if (isEnvoyConfigKey(target)) envoyKeys.add(target)
 	if (envoyKeys.size) {
 		const [version] = await db
-			.select({ inputGenre: schema.pipelineSpecVersions.inputGenre })
+			.select({
+				inputGenre: schema.pipelineSpecVersions.inputGenre,
+				slug: schema.pipelineSpecs.slug
+			})
 			.from(schema.pipelineSpecVersions)
+			.innerJoin(schema.pipelineSpecs, eq(schema.pipelineSpecs.id, schema.pipelineSpecVersions.specId))
 			.where(eq(schema.pipelineSpecVersions.id, specVersionId))
 			.limit(1)
 		const { declaredEnvoys } = await import(
 			"$lib/server/pipelines/entities/envoys"
 		)
-		const declared = version?.inputGenre
-			? await declaredEnvoys(db, version.inputGenre)
-			: []
+		// 🚧 The genre whose envoys these are: the lock's (⏳), else the genre
+		// whose defaults register this pipeline (PLAN-layering D3, D7).
+		let genreId = version?.inputGenre ?? null
+		if (!genreId && version?.slug) {
+			const { genreOfSpec } = await import("$lib/server/pipelines/entities/sessionGenres")
+			genreId = await genreOfSpec(db, version.slug)
+		}
+		const declared = genreId ? await declaredEnvoys(db, genreId) : []
 		for (const key of envoyKeys) {
 			const slug = key.slice(ENVOY_CONFIG_PREFIX.length)
 			const envoy = declared.find((d) => d.slug === slug)

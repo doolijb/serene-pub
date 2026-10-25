@@ -120,7 +120,7 @@
 		letter-spacing: 0.02em;
 		font-variant-numeric: tabular-nums;
 		opacity: 0.4;
-		transition: opacity 200ms ease-out;
+		transition: opacity var(--transition-duration-fast) ease-out;
 	}
 
 	.prerelease-watermark.is-near {

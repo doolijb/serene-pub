@@ -199,8 +199,14 @@ describe("the rows as a whole", () => {
 	const rows = readinessRows(summary.entries)
 
 	test("every SDK transform gets a row, and none is ready on a bare install", () => {
-		expect(rows).toHaveLength(10)
+		// Twelve, with Hearing (`text+audio->text`, O4) and Spoken reply
+		// (`text->text+audio`, O6).
+		expect(rows).toHaveLength(12)
 		expect(rows.every((r) => r.state === "unfinished")).toBe(true)
+		const hearing = rows.find((r) => r.capability === "text+audio->text")
+		const spoken = rows.find((r) => r.capability === "text->text+audio")
+		expect(hearing?.label).toBe("Hearing")
+		expect(spoken?.label).toBe("Spoken reply")
 	})
 })
 

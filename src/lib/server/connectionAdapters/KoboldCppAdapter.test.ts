@@ -226,7 +226,11 @@ describe("KoboldCppAdapter — base URL trailing-slash normalization", () => {
 				{
 					model: "koboldcpp/gemma-4-E4B-it-Q4_K_M",
 					name: "koboldcpp/gemma-4-E4B-it-Q4_K_M",
-					modality: "text-gen"
+					modality: "text-gen",
+					// 🚧 O3: what the loaded text model reads, from the version
+					// flags — no vision projector here.
+					reads: ["text"],
+					writes: ["text"]
 				},
 				{
 					model: "sdxs-512-tinySDdistilled_Q8_0",
@@ -234,6 +238,19 @@ describe("KoboldCppAdapter — base URL trailing-slash normalization", () => {
 					modality: "image-gen"
 				}
 			])
+		})
+
+		// 🚧 O3 (2026-10-21): the probe's `vision` fills what the text model
+		// reads — it SEES — instead of being dropped.
+		test("a vision projector loaded beside the text model makes it see", async () => {
+			answer("koboldcpp/x", { status: 200, body: [] })
+			const base = fetchMock.getMockImplementation() as unknown as (url: string) => unknown
+			fetchMock.mockImplementation((async (url: string) =>
+				url.endsWith("/api/extra/version")
+					? { ok: true, status: 200, json: async () => ({ vision: true }) }
+					: base(url)) as any)
+			const result = await exportsDefault.listModels(makeConnection())
+			expect(result.models[0]).toMatchObject({ reads: ["text", "image"], writes: ["text"] })
 		})
 
 		test("an image-only instance's \"inactive\" is not a text model", async () => {

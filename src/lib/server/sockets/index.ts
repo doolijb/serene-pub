@@ -37,6 +37,9 @@ import { registerAuthorsNoteHandlers } from "./authorsNote"
 import { registerBackdropHandlers } from "./backdrop"
 import { registerStoryClockHandlers } from "./storyClock"
 import { registerStepSettingsHandlers } from "./stepSettings"
+import { registerSessionSettingsHandlers } from "./sessionSettings"
+import { registerRoutineHandlers } from "./routines"
+import { registerPresetEditorHandlers } from "./presetEditor"
 import { registerSessionPlacesHandlers } from "./sessionPlaces"
 import { registerStatTrailHandlers } from "./statTrail"
 import { registerSessionHandlers } from "./sessions"
@@ -44,6 +47,7 @@ import { registerUserHandlers } from "./users"
 import { registerUserSettingsHandlers } from "./userSettings"
 import { registerLanguageHandlers } from "./language"
 import { registerLorebookHandlers } from "./lorebooks"
+import { registerStarterKitHandlers } from "./starterKits"
 import { registerEntryHandlers } from "./entries"
 import { registerAmendmentHandlers } from "./amendments"
 import { registerLorebookStoryTimeHandlers } from "./lorebookStoryTime"
@@ -70,6 +74,7 @@ import { registerCardStateHandlers } from "./cardState"
 import { registerCardSourceHandlers } from "./cardSources"
 import { registerPipelineHandlers } from "./pipelines"
 import { registerSessionAdminHandlers } from "./sessionAdmin"
+import { registerRulesetHandlers } from "./rulesets"
 import { registerTunnelHandlers } from "./tunnels"
 import { registerAllowedHostHandlers } from "./allowedHosts"
 import { registerBackupHandlers } from "./backups"
@@ -309,11 +314,18 @@ export function connectSockets(io: {
 		registerStoryClockHandlers(socket, emitToUser, register)
 		// 🚧 Step settings (live scenes §15 G11): an exposed step's story settings.
 		registerStepSettingsHandlers(socket, emitToUser, register)
+		// 🚧 The derived settings form (PLAN-layering A9, A10, R32, R36, R37).
+		registerSessionSettingsHandlers(socket, emitToUser, register)
+		// 🚧 Routines (PLAN-layering R23, R39, lane 6): Run now, their state, the log.
+		registerRoutineHandlers(socket, emitToUser, register)
+		registerPresetEditorHandlers(socket, emitToUser, register)
 		registerSessionPlacesHandlers(socket, emitToUser, register)
 		registerStatTrailHandlers(socket, emitToUser, register)
 		registerCardSourceHandlers(socket, emitToUser, register)
 		registerSessionHandlers(socket, emitToUser, register)
 		registerLorebookHandlers(socket, emitToUser, register)
+		// 🚧 Starter lorebooks (PLAN-lorebook-kinds §B): the list and the admin verbs.
+		registerStarterKitHandlers(socket, emitToUser, register)
 		registerEntryHandlers(socket, emitToUser, register)
 		registerAmendmentHandlers(socket, emitToUser, register)
 		registerLorebookStoryTimeHandlers(socket, emitToUser, register)
@@ -336,6 +348,7 @@ export function connectSockets(io: {
 		registerCardStateHandlers(socket, emitToUser, register)
 		registerPipelineHandlers(socket, emitToUser, register)
 		registerSessionAdminHandlers(socket, emitToUser, register)
+		registerRulesetHandlers(socket, emitToUser, register)
 		registerTunnelHandlers(socket, emitToUser, register)
 		registerAllowedHostHandlers(socket, emitToUser, register)
 		registerBackupHandlers(socket, emitToUser, register)

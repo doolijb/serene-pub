@@ -7,7 +7,9 @@ A group session has more than one character, and its turn order decides who spea
 - Controlling who talks when: let everyone answer in turn, pick the next speaker yourself, or let the model decide.
 :::
 
-Group sessions are a feature of the **Story** genre. In [the Lair](./genre-lair.md) and [the Lair](./genre-lair.md) a planner decides who speaks, so most of this page doesn't apply there; the parts that do (the *ready to continue* line, **Continue**, **Pick who speaks**) are noted as they come up.
+Group sessions are a feature of the **Story** genre. In [the Lair](./genre-lair.md) and [Dungeon Crawler](./genre-dungeon-crawler.md) a planner decides who speaks, so most of this page doesn't apply there; the parts that do (the *ready to continue* line, **Continue**, **Pick who speaks**) are noted as they come up.
+
+In the Lair, a guest takes a seat by naming the character they'll play (or bringing a persona), and that delver's turns wait for them. The session's owner is the game master and never takes a seat. See [Playing with friends](./genre-lair.md#playing-with-friends).
 
 In [Dungeon Crawler](./genre-dungeon-crawler.md) each person at the table plays one seat, and a guest needs no persona: the Planner's interview names their character on their own Planner tab. Until that character is made, their Story composer and **Continue** are greyed with what they wait on (*Waiting: Make your character on the Planner tab first.*), never *add a persona first*. See [Rounds with friends](./genre-dungeon-crawler.md#rounds-with-friends).
 
@@ -28,6 +30,7 @@ The right half of the **turn line**, just above the composer, shows whose turn i
 - *Wren is ready to continue*, with **Continue** to let them speak;
 - *Narrator is ready to continue* in a narrated genre (*Castellan* in the Lair), also with **Continue**;
 - *Your turn* when it's yours, or *Sable's turn* for someone else's persona. A person's turn is taken by writing, so there's no Continue;
+- *Waiting for Maren* in the Lair, when the Castellan's plan has reached a seated player's delver. The game master also gets **Continue** there, with *Continue moves past Maren: their turn is skipped this round.*;
 - *Waiting for a message — or pick who speaks next* when nobody is lined up, because the round is over or the strategy is **Manual**.
 
 It hides while you have a draft or while you're editing a message. While a reply is being written, **Stop** stands in its place, and **Try again** after a reply fails. After a reply it waits until the turn order has worked out who's next, so the one who just spoke isn't offered again. **Someone else** (or **Pick**) beside it opens *Who speaks next?*, listing everyone who can speak, with the next one marked. Who else is typing shows beside it too.
@@ -42,7 +45,7 @@ To see the whole order at once, add the **Turn order** widget from the layout tr
 
 Both live in the **Actions** row above the composer, as turn controls:
 
-- **Continue** (`/advance`) lets whoever is next in the turn order speak. With nothing lined up, it says *Nothing is prepared to take a turn.* In the Lair, the session's owner gets a narrator turn instead, which carries the story on with no new direction.
+- **Continue** (`/advance`) lets whoever is next in the turn order speak. With nothing lined up, it says *Nothing is prepared to take a turn.* In the Lair, the session's owner gets a narrator turn instead, which carries the story on with no new direction; and when the plan is waiting for a seated player, the owner's Continue moves past them to the next delver.
 - **Pick who speaks** (`/pick-speaker`) lets you choose who speaks next, whatever the turn order says. Search by name, nickname, description or creator notes. In Story, the narrator is pinned at the top of the list and opens [Narrator Response](#narrator-response); in the Lair, it gives the narrator the turn.
 
 Neither starts anything by itself: each press is one turn.
@@ -60,7 +63,7 @@ The turn order is set in **Edit session › Settings**, under **How replies are 
 
 A plugin can add strategies of its own to this list.
 
-Who may take a turn at all, and how far back a mention moves someone up, are the turn order's own settings, on the **Step settings** card in the same place: **Characters** (active ones, all, or none), **Personas**, **Envoys** and **Messages scanned**. Each applies at once (see [Step settings](./sessions.md#step-settings)).
+Who may take a turn at all, and how far back a mention moves someone up, are the turn order's own settings, on the **Turn order** card in the same place: **Characters** (active ones, all, or none), **Personas**, **Envoys** and **Messages scanned**. Each applies at once (see [Pipeline settings in a session](./sessions.md#pipeline-settings-in-a-session)).
 
 ### Let the model decide
 

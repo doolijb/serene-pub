@@ -46,7 +46,9 @@
 	 * invitations to undo it.
 	 */
 	import * as Icons from "@lucide/svelte"
-	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
+	import RowMenu, {
+		type RowMenuEntries
+	} from "$lib/client/components/menus/RowMenu.svelte"
 	import {
 		formatContext,
 		type ModelFacts
@@ -130,6 +132,20 @@
 
 	let menuOpen = $state(false)
 
+	/** The row's ⋯ (RowMenu, the app's one kebab): a destructive action sits
+	 *  under a separator, as it always has. */
+	const menuItems = $derived<RowMenuEntries>(
+		actions.flatMap((action) => [
+			action.destructive && { separator: true as const },
+			{
+				label: action.label,
+				icon: ((Icons as any)[action.icon ?? ""] as any) ?? undefined,
+				destructive: action.destructive,
+				onSelect: () => onAction?.(action.id)
+			}
+		])
+	)
+
 	const display = $derived(modelDisplay(model))
 	const missing = $derived(!!model.missingSince)
 
@@ -175,12 +191,12 @@
 	>
 		<span class="min-w-0 flex-1">
 			<span class="flex min-w-0 items-center gap-1.5">
-				<span class="min-w-0 truncate text-[15px] font-medium">
+				<span class="min-w-0 truncate text-lead font-medium">
 					{display.name}
 				</span>
 				{#each defaultFor as capability (capability)}
 					<span
-						class="preset-tonal-primary text-primary-900 dark:text-primary-300 flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-bold"
+						class="preset-tonal-primary text-primary-ink flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-meta font-bold"
 					>
 						<Icons.Star
 							size={9}
@@ -192,7 +208,7 @@
 				{/each}
 				{#if missing}
 					<span
-						class="border-surface-300-700 text-surface-600-400 shrink-0 rounded border px-1.5 py-0.5 text-[11px] font-medium"
+						class="border-surface-200-800 text-surface-600-400 shrink-0 rounded border px-1.5 py-0.5 text-meta font-medium"
 					>
 						No longer listed
 					</span>
@@ -201,7 +217,7 @@
 			{#if chip}
 				<span class="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs">
 					<span
-						class="bg-surface-200-800 text-surface-700-300 max-w-[50%] shrink-0 truncate rounded px-1.5 py-0.5 text-[11px] font-medium"
+						class="bg-surface-200-800 text-surface-700-300 max-w-[50%] shrink-0 truncate rounded px-1.5 py-0.5 text-meta font-medium"
 						title={chip.title ?? chip.label}
 					>
 						{chip.label}
@@ -229,7 +245,7 @@
 		     width so a settled list is a settled list. -->
 		<button
 			type="button"
-			class="btn btn-sm preset-tonal-surface mr-0.5 shrink-0 text-[11px] font-semibold opacity-100 disabled:cursor-not-allowed @min-[900px]/view:opacity-0 @min-[900px]/view:group-focus-within:opacity-100 @min-[900px]/view:group-hover:opacity-100"
+			class="btn btn-sm preset-tonal-surface mr-0.5 shrink-0 text-meta font-semibold opacity-100 disabled:cursor-not-allowed @min-[900px]/view:opacity-0 @min-[900px]/view:group-focus-within:opacity-100 @min-[900px]/view:group-hover:opacity-100"
 			onclick={() => onUse?.()}
 			disabled={!!useDisabledReason}
 			aria-label={useDisabledReason
@@ -245,47 +261,14 @@
 	{/if}
 
 	{#if actions.length}
-		<Popover open={menuOpen} onOpenChange={(e) => (menuOpen = e.open)}>
-			<Popover.Trigger
-				class="btn mr-1 grid size-7 shrink-0 place-items-center p-0"
-				aria-label={`More actions — ${display.name}`}
-			>
-				<Icons.EllipsisVertical size={15} aria-hidden="true" />
-			</Popover.Trigger>
-			<Portal>
-				<Popover.Positioner class="z-[1000]!">
-					<Popover.Content
-						class="card bg-surface-100-900 border-surface-300-700 w-[min(90vw,220px)] border p-1 shadow-xl"
-					>
-						{#each actions as action (action.id)}
-							{@const ActionIcon =
-								((Icons as any)[action.icon ?? ""] as any) ??
-								null}
-							{#if action.destructive}
-								<div
-									class="bg-surface-300-700 my-1 h-px"
-									role="separator"
-								></div>
-							{/if}
-							<button
-								type="button"
-								class="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm {action.destructive
-									? 'text-error-800 dark:text-error-300 hover:preset-tonal-error'
-									: 'hover:preset-tonal-primary'}"
-								onclick={() => {
-									menuOpen = false
-									onAction?.(action.id)
-								}}
-							>
-								{#if ActionIcon}
-									<ActionIcon size={15} aria-hidden="true" />
-								{/if}
-								{action.label}
-							</button>
-						{/each}
-					</Popover.Content>
-				</Popover.Positioner>
-			</Portal>
-		</Popover>
+		<span class="mr-1 inline-flex">
+			<RowMenu
+				label={display.name}
+				triggerLabel="More actions for {display.name}"
+				width={220}
+				bind:open={menuOpen}
+				items={menuItems}
+			/>
+		</span>
 	{/if}
 </div>

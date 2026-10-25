@@ -26,7 +26,10 @@ import type {
 import type { SpriteSetView } from "$lib/shared/sprites"
 import type { CharacterLikenessInput } from "$lib/shared/characters/likeness"
 import type { LoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
-import type { GenreRulesOffer } from "$lib/shared/rulesets/rulesOffer"
+import type {
+	GenreRulesOffer,
+	RulesChoice
+} from "$lib/shared/rulesets/rulesOffer"
 import type { RetoldField } from "$lib/shared/lorebooks/retold"
 import type { ConversationPerson } from "$lib/shared/sockets/conversations"
 
@@ -2192,6 +2195,13 @@ declare global {
 					 * job that answer names.
 					 */
 					modality: string | null
+					/**
+					 * 🚧 What the model reads and writes (O3, 0109): kind
+					 * words, null where not stated. The **What it's for**
+					 * choices read them (`modelKinds.ts`).
+					 */
+					reads: string[] | null
+					writes: string[] | null
 					/** NULL means "the endpoint's". A `completion_templates.key`. */
 					promptFormat: string | null
 					/** NULL means "the endpoint's". */
@@ -2340,6 +2350,13 @@ declare global {
 						 * the next sync.
 						 */
 						modality?: string | null
+						/**
+						 * 🚧 What it reads / writes (O3): kind words, or null
+						 * for "not stated". Only the half a choice touched is
+						 * sent (`toggledPurpose`).
+						 */
+						reads?: string[] | null
+						writes?: string[] | null
 					}
 				}
 				type Response = Models.Response
@@ -3118,6 +3135,137 @@ declare global {
 		}
 
 		/**
+		 * 🚧 Admin › Rulesets (PLAN-ruleset-editor §5): the rulesets the pub
+		 * knows and the ones authored on it. Rows are `RulesetListRow` /
+		 * `RulesetDetail` from `server/rulesets/pubRulesets.ts`.
+		 */
+		namespace Rulesets {
+			type ListRow = import("$lib/server/rulesets/pubRulesets").RulesetListRow
+			type DetailRow = import("$lib/server/rulesets/pubRulesets").RulesetDetail
+			type TemplateCard = import("$lib/server/rulesets/pubRulesets").RulesetTemplateCard
+			namespace List {
+				interface Params {}
+				interface Response {
+					rulesets: ListRow[]
+					/** 🚧 The ruleset templates _Add ruleset_ starts from (D4, 2026-10-22). */
+					templates?: TemplateCard[]
+				}
+			}
+			namespace Detail {
+				interface Params {
+					rulesetId: string
+				}
+				interface Response {
+					ruleset?: DetailRow
+					/** On `:error`, the id asked for, so a page tells its own not-found apart. */
+					rulesetId?: string
+					error?: string
+				}
+			}
+			namespace Create {
+				interface Params {
+					ownerSlug: string
+					name: string
+					label: string
+					/** A registered ruleset or a ruleset template to copy; from scratch when left out. */
+					from?: string | null
+					/** 🚧 Paste a document (D8, 2026-10-23): a shared ruleset's JSON, taken under the new id; wins over `from`. */
+					document?: Record<string, unknown> | null
+				}
+				interface Response {
+					rulesetId?: string
+					error?: string
+				}
+			}
+			namespace SaveDraft {
+				interface Params {
+					rulesetId: string
+					/** The whole document (`RulesetDocument`); may be invalid. */
+					draft: Record<string, unknown>
+					label?: string
+				}
+				interface Response {
+					rulesetId?: string
+					findings?: string[]
+					error?: string
+				}
+			}
+			namespace Publish {
+				interface Params {
+					rulesetId: string
+					version?: string
+					acknowledgeUpgrade?: boolean
+				}
+				interface Response {
+					rulesetId?: string
+					version?: string
+					error?: string
+				}
+			}
+			namespace Retire {
+				interface Params {
+					rulesetId: string
+					/** `false` unretires. */
+					retired?: boolean
+				}
+				interface Response {
+					rulesetId?: string
+					retired?: boolean
+					error?: string
+				}
+			}
+			namespace Delete {
+				interface Params {
+					rulesetId: string
+				}
+				interface Response {
+					rulesetId?: string
+					error?: string
+				}
+			}
+			namespace ScriptKey {
+				interface Params {
+					rulesetId: string
+					scriptId: number
+				}
+				interface Response {
+					rulesetId?: string
+					scriptId?: number
+					seedKey?: string
+					error?: string
+				}
+			}
+			namespace TryOut {
+				/**
+				 * 🚧 `runId` (lane M4, 2026-10-22): several runs may be in flight
+				 * on one page (a step's preview, a rule's dry run, a playtest);
+				 * the answer and the refusal echo it, so each finds its own.
+				 */
+				type Params = { rulesetId: string; runId?: string } & import("$lib/server/rulesets/tryOut").TryOutParams
+				interface Response {
+					runId?: string
+					rulesetId?: string
+					result?: import("$lib/server/rulesets/tryOut").TryOutResult
+					error?: string
+					/** 🚧 A refusal for the draft's findings lists them (RF fix 6, 2026-10-23). */
+					findings?: string[]
+				}
+			}
+			/** 🚧 Playtest a scene and ask the Reply loadout to narrate it (lane M4, 2026-10-22). */
+			namespace AskModel {
+				type Params = { rulesetId: string; runId?: string } & import("$lib/server/rulesets/tryOut").AskModelParams
+				interface Response {
+					runId?: string
+					rulesetId?: string
+					result?: import("$lib/server/rulesets/tryOut").TryOutResult
+					narration?: string
+					loadout?: string
+					error?: string
+				}
+			}
+		}
+
+		/**
 		 * The session catalogue's admin half (23 §9): types (create specs),
 		 * presets (the bundle users pick), and the all-users sessions list.
 		 */
@@ -3215,7 +3363,7 @@ declare global {
 						editable: boolean
 						/** The session form, `shape.fields` — `{}` when it declares none. */
 						fields: import("@serene-pub/sdk").SettingsSchema
-						/** Does the genre carry attribute slots or sheets (state)? */
+						/** 🚧 Does the host keep a place, a time or a tool's state for the genre's sessions (RF fix 8: a genre brings no attributes)? */
 						hasState: boolean
 						/** Its genre default layout row, or null when none exists. */
 						layout: { id: number; slug: string; name: string } | null
@@ -3340,6 +3488,89 @@ declare global {
 				 * person who can fix it.
 				 */
 				staleBindings?: StaleBinding[]
+				/**
+				 * 🚧 The preset's **changes** on its genre's defaults
+				 * (PLAN-layering D4, D7, R2): the registrations it adds, the
+				 * keys it drops, the changes it makes to the rest. Carried by
+				 * `sessionPresets:list`; lane 7's preset editor reads and
+				 * writes it (`sessionPresets:update.registrations`).
+				 */
+				registrations?: PresetRegistrations
+				/**
+				 * 🚧 **What the start form asks under this preset** (R32, A10;
+				 * lane 5b): each setting open to the owner that the preset or
+				 * the genre's defaults mark `askAtStart`, and each one fixed at
+				 * start that is open to the owner (always asked — it cannot
+				 * change after). `value` is what it is if left alone. A locked
+				 * setting is never asked. Carried by `sessionPresets:list`
+				 * only; absent when nothing is asked.
+				 */
+				asks?: StartAsk[]
+				/**
+				 * 🚧 **Derived numbers** (§7; lane 5b) — read from what the
+				 * preset registers, never typed: the model calls one turn
+				 * costs (the reply's, plus each routine due after every turn or
+				 * round that is not Off) and what its pipelines write. Carried
+				 * by `sessionPresets:list` only.
+				 */
+				derived?: PresetDerived
+				/**
+				 * 🚧 R56: the models this preset's registrations need (`needs` —
+				 * the events and routines it runs) and those that would make it
+				 * better (`betterWith` — its actions and Off routines), as
+				 * transform ids; `unserved` the ones no model on this pub is set
+				 * for; `words` the start card's line ("Needs: a text model ·
+				 * Better with: an image model"). Sent by `sessionPresets:list`.
+				 */
+				recommendations?: Recommendations
+			}
+			/** 🚧 R56: what a preset needs and what would make it better — see `PresetRow.recommendations`. */
+			interface Recommendations {
+				needs: string[]
+				betterWith: string[]
+				unserved: string[]
+				words: string
+			}
+			/** 🚧 One setting the start form asks (see `PresetRow.asks`). */
+			interface StartAsk {
+				/** A genre field's key, or `ruleset` / `rigour` (the rules the session plays, `rules: true`). */
+				key: string
+				label: string
+				description?: string
+				control: "integer" | "number" | "boolean" | "enum" | "string" | "text" | "list" | "json"
+				min?: number
+				max?: number
+				members?: { key: string; label: string; description?: string }[]
+				value: unknown
+				/** Fixed at start (R32): read-only once the session exists. */
+				fixed?: true
+				/** A session column (`ruleset` → `primaryRuleset`, `rigour`), sent beside the genre fields. */
+				rules?: true
+			}
+			/** 🚧 A preset's derived numbers (see `PresetRow.derived`). */
+			interface PresetDerived {
+				callsPerTurn: number
+				/** The reply's share — what a turn costs before any routine. */
+				replyCalls: number
+				/** The per-turn routines' share. */
+				routineCalls: number
+				/** The routines counted, by registration key. */
+				perTurnRoutines: string[]
+				/** What the registered pipelines write, each once: a write step's id and name. */
+				writeTargets: Array<{ id: string; name: string }>
+			}
+			/**
+			 * 🚧 A preset's changes as the wire carries them — the SDK's
+			 * `PresetRegistrationChanges` in JSON: `register` entries are
+			 * registrations (`{ key, trigger, pipeline, when?, values?, order?,
+			 * mode?, allowStacking?, caps?, label? }`, the key re-derived by
+			 * the server), `drop` are registration keys, `change` are `{ key,
+			 * …fields }`.
+			 */
+			interface PresetRegistrations {
+				register?: Array<Record<string, unknown>>
+				drop?: string[]
+				change?: Array<Record<string, unknown>>
 			}
 			/** One action a preset includes, as `effectiveIncludedActions` lists it. */
 			interface PresetIncludedAction {
@@ -3408,6 +3639,20 @@ declare global {
 					 * clears it; absent leaves it alone.
 					 */
 					defaults?: PresetDefaults | null
+					/**
+					 * 🚧 The preset's changes on its genre's defaults, whole
+					 * (PLAN-layering D7) — replaces what the preset stated. An
+					 * immutable preset refuses it (duplicate to change). ⏳
+					 * `bindings`, `includedActions` and `configSelections` are
+					 * still accepted from an old client and read as changes.
+					 */
+					registrations?: PresetRegistrations
+					/**
+					 * 🚧 The preset's settings, whole (A10; lane 7): each a value,
+					 * or `{ value, lock?, askAtStart? }`. `null` clears them; absent
+					 * leaves them alone. Refused on an immutable preset.
+					 */
+					settings?: Record<string, unknown> | null
 					enabled?: boolean
 					isDefault?: boolean
 				}
@@ -3447,6 +3692,118 @@ declare global {
 				}
 				interface Response {
 					sessions: Row[]
+				}
+			}
+			/**
+			 * 🚧 **The admin preset editor** (PLAN-layering §4, P4, R2; lane 7):
+			 * the genre's defaults (registrations and settings, read-only), the
+			 * preset's changes as stored, what a session on it would run, the
+			 * genre's settings with the preset's value / lock / ask-at-start, and
+			 * the catalogue the Add picker builds a trigger from. Admin only.
+			 */
+			namespace PresetEditor {
+				interface Params {
+					presetId: number
+				}
+				/** One registration, as the editor lists it. */
+				interface Registration {
+					key: string
+					/** The SDK's `Trigger` as stored: `{ family: 'event', event }` · `{ family: 'action', action }` · `{ family: 'routine', cadence: { id, options } }`. */
+					trigger: Record<string, unknown>
+					pipeline: string
+					pipelineName: string
+					mode?: "off" | "review" | "full"
+					allowStacking?: boolean
+					caps?: { idleTimeoutMinutes?: number; maxRunsInRow?: number }
+					when?: Record<string, unknown>
+					values?: Record<string, unknown>
+					order?: number
+					label?: string
+					/** Which layer it stands at: the genre's defaults, or this preset. */
+					origin: "genre" | "preset" | "session" | string
+					/** 🚧 R56: its pipeline needs a model nothing on this pub serves — "Unavailable: needs a model that can draw pictures." A routine or an action so marked is disabled until one is set. */
+					unavailable?: string
+				}
+				/** One of the genre's settings, with each layer's say. */
+				interface Setting {
+					key: string
+					label: string
+					description?: string
+					control: "integer" | "number" | "boolean" | "enum" | "string" | "text" | "list" | "json"
+					members?: { key: string; label: string }[]
+					min?: number
+					max?: number
+					/** The declaration's default. */
+					declared?: unknown
+					/** The genre's defaults' value, and whether they lock it or ask it at start. */
+					genre?: { value: unknown; lock?: true; askAtStart?: true }
+					/** This preset's — absent when it says nothing. */
+					preset?: { value: unknown; lock?: true; askAtStart?: true }
+					reach: "owner" | "admin"
+					fixedAtStart?: true
+					/** One of the rules a session plays (a column): ruleset, How strict. */
+					rules?: true
+					advanced?: true
+				}
+				interface Catalogue {
+					events: { id: string; name: string; carries: string[] }[]
+					actions: { identity: string; name: string; specSlug: string; description?: string }[]
+					cadences: {
+						id: string
+						name: string
+						description?: string
+						clock?: "system" | "story"
+						options: Record<
+							string,
+							{
+								label: string
+								control: Setting["control"]
+								members?: { key: string; label: string }[]
+								min?: number
+								max?: number
+								default?: unknown
+							}
+						>
+					}[]
+				}
+				interface Response {
+					presetId: number
+					genreId?: string
+					genreName?: string
+					defaults?: Registration[]
+					changes?: PresetRegistrations
+					effective?: Registration[]
+					settings?: Setting[]
+					catalogue?: Catalogue
+					/** 🚧 R56: what this preset needs and what would make it better (see `PresetRow.recommendations`). */
+					recommendations?: Recommendations
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 **The registration picker, filtered by fit** (R4, A11; lane 7):
+			 * every published pipeline, whether it fits the trigger and, when not,
+			 * why in words. Admin only.
+			 */
+			namespace RegistrationCandidates {
+				interface Params {
+					trigger: Record<string, unknown>
+					/** Echoed, so the asker settles its own. */
+					requestId?: string
+				}
+				interface Candidate {
+					slug: string
+					name: string
+					fits: boolean
+					/** Why it does not fit, in a sentence. */
+					reason?: string
+					/** It declares that it suits this event (the author's own pick). */
+					suits?: true
+				}
+				interface Response {
+					requestId?: string
+					candidates: Candidate[]
+					error?: string
 				}
 			}
 		}
@@ -3904,6 +4261,13 @@ declare global {
 								}[]
 								tags?: string[]
 								/**
+								 * 🚧 The book lock (PLAN-lorebook-kinds §A): play has
+								 * written (a line that is not a greeting, or anything
+								 * in its notes), so the session keeps the book it has
+								 * — or, with none, its own notes.
+								 */
+								lorebookFixed?: boolean
+								/**
 								 * The faces the session's cast members are drawn
 								 * with (PLAN-cast-retold-fields): seated card id →
 								 * `files.id`, for each seat whose card is a member
@@ -3968,6 +4332,14 @@ declare global {
 					personaIds: number[]
 					characterPositions: Record<number, number>
 					tags?: string[]
+					/**
+					 * 🚧 Start from a starter lorebook (PLAN-lorebook-kinds ruling 8):
+					 * the kit is copied into the session's own notes and the
+					 * session plays its Rules; nothing appears in Lorebooks
+					 * until **Create lorebook from session**. Refused beside
+					 * `session.lorebookId`.
+					 */
+					starterKit?: StarterKits.Ref
 				}
 				interface Response {
 					session?: SelectSession
@@ -4482,6 +4854,251 @@ declare global {
 			 * fetched on every page and every message. Asked once, where the
 			 * banner is.
 			 */
+			/**
+			 * 🚧 The session's **settings form, derived** (PLAN-layering A9,
+			 * A10, R1, R32, R36, R37; lane 5b, 2026-10-20) — never declared
+			 * twice: the genre's fields (and the rules the session plays, fixed
+			 * at start), the settings of every pipeline its registrations run
+			 * (`registrationKey · step · slot · path`, A9 — a preset swap leaves
+			 * the values of a pipeline it stops running dormant, never deleted),
+			 * and each routine's mode, cadence options, Allow stacking and caps.
+			 *
+			 * Each value is resolved by one cascade — the declaration (a
+			 * pipeline's declared defaults: `author`) < the genre's defaults <
+			 * the preset < the session — in which any layer may lock a setting
+			 * for the layers below it. Who sees what (R1): the session's
+			 * **owner** sees a setting whose `reach` is `owner` and that nothing
+			 * locked (fixed-at-start ones read-only); an **administrator** — in
+			 * their own session — sees every one, locked and fixed ones
+			 * read-only; anyone else (a guest) is answered with no groups and an
+			 * `error`. Model plumbing (connection, sampling, loadout, prompts,
+			 * templates) is never in it. Routines (R36, R37): anyone with access
+			 * to the settings picks Off / Review / Full; only an administrator
+			 * changes a cadence's options, Allow stacking and the cron caps.
+			 */
+			namespace SettingsForm {
+				interface Params {
+					sessionId: number
+				}
+				/** Where a setting lives — what `sessions:updateSetting` names. */
+				type Address =
+					| { kind: "genre"; key: string }
+					| {
+							kind: "pipeline"
+							/** The registration the values are stored under (the first, when a pipeline is registered on several triggers — a write sets them all). */
+							registrationKey: string
+							nodeKey: string
+							slot: string
+							path: string
+					  }
+					| {
+							kind: "routine"
+							registrationKey: string
+							/** `mode`, `cadence` (🚧 R52: after each turn ⇄ after each round, the owner's), `allowStacking`, `idleTimeoutMinutes`, `maxRunsInRow`, or `cadence.<option>`. */
+							field: string
+					  }
+				/** The layer a value came from, top (the declaration) to bottom (the session). */
+				type Layer = "declaration" | "author" | "genre" | "preset" | "session"
+				interface Field {
+					/** Stable for the address; a client keys its controls on it. */
+					id: string
+					address: Address
+					label: string
+					description?: string
+					control: "integer" | "number" | "boolean" | "enum" | "string" | "text" | "list" | "json"
+					min?: number
+					max?: number
+					/** An enum's choices, in order. */
+					members?: { key: string; label: string; description?: string }[]
+					/** What the session runs with now. */
+					value: unknown
+					/** What it runs with when the session sets nothing — a reset returns here. */
+					inherited: unknown
+					source: Layer
+					/** The layer that locked it; nothing below may change it. */
+					lockedAt?: Layer
+					/** How far it may ever reach: the session's owner, or administrators only. */
+					reach: "owner" | "admin"
+					/** Fixed at start (R32): resolved when the session was created, read-only for everyone since. */
+					fixed?: true
+					/** Folded under "Advanced" until opened. */
+					advanced?: true
+					/** Whether the asker may change it here. */
+					editable: boolean
+					/** Why not, in a sentence — present when `editable` is false. */
+					readOnlyReason?: string
+				}
+				interface Routine {
+					registrationKey: string
+					pipeline: string
+					label: string
+					/** 🚧 What it does, in a sentence — its pipeline's first declared step purpose (lane 7). */
+					purpose?: string
+					cadence: { id: string; name: string; options: Record<string, unknown> }
+					/** Off · Review · Full (R37). */
+					mode: "off" | "review" | "full"
+					/** Mode for everyone with access; cadence options, Allow stacking and caps for administrators (R36). */
+					fields: Field[]
+				}
+				interface Group {
+					/** `genre` — its fields; `registration` — one pipeline's settings; `routines` — every routine. */
+					kind: "genre" | "registration" | "routines"
+					/** `genre`, the pipeline's spec slug, or `routines`. */
+					id: string
+					heading: string
+					description?: string
+					/** A registration group: the pipeline, and every registration its values are written under. */
+					pipeline?: string
+					registrationKeys?: string[]
+					/** What it runs on: event ids, action identities, cadence ids. */
+					triggers?: string[]
+					fields: Field[]
+					routines?: Routine[]
+				}
+				interface Response {
+					sessionId: number
+					/** Who the form was derived for. Absent with `error`. */
+					viewer?: "owner" | "admin"
+					groups: Group[]
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 Change one setting of the session's derived form — validated
+			 * through the same cascade (lock, reach, fixed at start, the
+			 * asker's role, the routine rules of R36/R37); writes the session
+			 * layer. `value: null`, or the value it inherits, resets it.
+			 * Answered with the form as it stands after.
+			 */
+			namespace UpdateSetting {
+				interface Params {
+					sessionId: number
+					address: SettingsForm.Address
+					value: unknown
+					/** Echoed on the reply, so the asker settles its own. */
+					requestId?: string
+				}
+				interface Response {
+					sessionId: number
+					requestId?: string
+					address: SettingsForm.Address
+					form?: SettingsForm.Response
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 **Run now** (R39; PLAN-layering lane 6, 2026-10-20): the
+			 * session's owner fires one of its routines by hand — one that is
+			 * not Off — from the composer's Routines sub-menu. It counts as an
+			 * interaction, waits in its session for a running action or event
+			 * like any routine (R13), and Allow stacking still holds. Answered
+			 * `queued`, or with a sentence why not.
+			 */
+			namespace RunRoutine {
+				interface Params {
+					sessionId: number
+					registrationKey: string
+					requestId?: string
+				}
+				interface Response {
+					sessionId: number
+					registrationKey: string
+					requestId?: string
+					queued?: boolean
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 The session's **routines** as they stand (lane 6) — for the
+			 * composer's Routines sub-menu and the settings rows: each one's
+			 * cadence, mode, whether it is waiting or running, why it is
+			 * paused (a cron cap, R11; or, on the system clock, the app
+			 * restarted and nobody has played since, R21), what it needs
+			 * ("Needs a story clock"), and whether the viewer may Run it now.
+			 * Anyone with access to the session reads it.
+			 */
+			namespace Routines {
+				interface Params {
+					sessionId: number
+				}
+				interface Routine {
+					registrationKey: string
+					pipeline: string
+					name: string
+					cadence: { id: string; name: string; options: Record<string, unknown> }
+					clock?: "system" | "story"
+					mode: "off" | "review" | "full"
+					allowStacking: boolean
+					/** How many of its firings wait in the session's routine queue. */
+					waiting: number
+					running: boolean
+					paused?: string
+					needs?: string
+					runNow: boolean
+				}
+				interface Response {
+					sessionId: number
+					routines: Routine[]
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 **"While you were away"** (A7, R23; lane 6) — the session's
+			 * recent routine runs, newest first: what ran and wrote (its
+			 * artifacts), what was skipped or paused, and why. `since`
+			 * (epoch ms) narrows it; `lastInteractionAt` says when a person
+			 * last played, for the widget to split "while you were away".
+			 * Anyone with access to the session reads it.
+			 */
+			namespace RoutineLog {
+				interface Params {
+					sessionId: number
+					since?: number
+					limit?: number
+				}
+				interface Entry {
+					runId: string
+					registrationKey: string
+					pipeline: string
+					name: string
+					kind: "ran" | "skipped" | "paused" | "failed" | "stopped"
+					reason?: string
+					startedAt: number
+					endedAt: number
+					wrote: Array<{ kind: string; entityId: number; action: string }>
+					runNow?: boolean
+				}
+				interface Response {
+					sessionId: number
+					lastInteractionAt: number | null
+					entries: Entry[]
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 **The condition picker's properties** (A5; lane 7): what
+			 * `sessionOf(genre)` derives — each a name, its stored path, its type
+			 * and an enum's members — for an administrator writing a
+			 * registration's `when`. No free-text paths anywhere. Admin only.
+			 */
+			namespace ConditionProps {
+				interface Params {
+					genreId: string
+				}
+				interface Prop {
+					/** Where it sits in the derived view: `world.weather`, `cast.any.hp`, `fields.tone`. */
+					name: string
+					/** The stored form — what a condition's `on` holds. */
+					path: string
+					type: "boolean" | "number" | "string" | "enum" | "unknown"
+					members?: string[]
+				}
+				interface Response {
+					genreId: string
+					props: Prop[]
+					error?: string
+				}
+			}
 			/** 🚧 Switch a session to another of its genre's session presets, or back to its own (2026-10-19). */
 			namespace SetSessionPreset {
 				interface Params {
@@ -5451,6 +6068,8 @@ declare global {
 						included: boolean
 						/** Which layer decided. */
 						source: "session" | "preset" | "default"
+						/** 🚧 R56: no model on this pub can do what it needs — "Unavailable: needs a model that can draw pictures." It is off until one is set. */
+						unavailable?: string
 					}[]
 					error?: string
 				}
@@ -5488,7 +6107,7 @@ declare global {
 						about?: string
 						/** 🚧 `solo` seats nobody else (the Guide). */
 						members?: "solo" | "group"
-						/** 🚧 The background tasks the genre offers (`TaskDecl[]`). */
+						/** ⏳ Retired with genre tasks (PLAN-layering D4, 2026-10-20) — never sent; routines are registrations. */
 						tasks?: {
 							key: string
 							label: string
@@ -5818,6 +6437,47 @@ declare global {
 					 * no `error` string.
 					 */
 					reason?: string
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 **Back** (RF fix 5, owner ruling 2026-10-23): take the newest
+			 * turn of the story out of the history — kept, never deleted, with
+			 * everything it changed taken back — onto the session's **forward
+			 * stack** (`sessions/rewind.ts`). The session's owner; refused in
+			 * words while a reply is being written, with nothing to go back to,
+			 * or at a branch's fork. Answered to the asker; the session is
+			 * pushed to everyone in it.
+			 */
+			namespace RewindTurn {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					ok: boolean
+					/** The rows taken out, oldest first. */
+					messageIds?: number[]
+					/** How many turns are ahead now. */
+					ahead?: number
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 **Forward** (RF fix 5): bring the newest rewound turn back into
+			 * the history, with what it changed (ids kept). Same door as Back.
+			 */
+			namespace ForwardTurn {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					ok: boolean
+					/** The rows brought back, oldest first. */
+					messageIds?: number[]
+					/** How many turns are still ahead. */
+					ahead?: number
 					error?: string
 				}
 			}
@@ -6406,10 +7066,103 @@ declare global {
 			}
 		}
 
+		/**
+		 * 🚧 Starter lorebooks (PLAN-lorebook-kinds §B): static templates a new
+		 * lorebook — or a new session's notes — is copied from. Shipped kits
+		 * are SDK primers; admin kits are lorebook rows of book kind
+		 * `starter_kit`.
+		 */
+		namespace StarterKits {
+			/** Which kit to start from: a shipped one by primer id, an admin one by its row. */
+			type Ref = { primerId: string } | { lorebookId: number }
+			/** One kit as the pickers show it. */
+			interface Card {
+				/** `primer:<primer id>` or `book:<lorebook id>` — what `starterKits:clone` takes. */
+				id: string
+				/** Core's catalogue, a plugin's, or one of the pub's admins. */
+				source: "core" | "plugin" | "admin"
+				name: string
+				description: string
+				/** The Rules a book made from it plays. */
+				rulesId: string
+				rulesName: string
+				counts: { entries: number; places: number; cast: number }
+				/** The admin who made it. Admin kits only. */
+				ownerName?: string
+				/** The asker made it, and edits it in place. Admin kits only. */
+				mine?: boolean
+			}
+			/** `starterKits:list` — every signed-in person. */
+			namespace List {
+				interface Params {}
+				interface Response {
+					/** Shipped kits first, then admin kits by name. */
+					kits: Card[]
+				}
+			}
+			/** `starterKits:saveFromBook` — admins, their own book: a snapshot as a new admin kit. */
+			namespace SaveFromBook {
+				interface Params {
+					lorebookId: number
+					/** Absent: the book's name. */
+					name?: string
+				}
+				interface Response {
+					kit: Card
+				}
+			}
+			/** `starterKits:clone` — admins: a new admin kit from any kit. */
+			namespace Clone {
+				interface Params {
+					/** A card's `id`. */
+					id: string
+					/** Absent: "‹Kit› (copy)". */
+					name?: string
+				}
+				interface Response {
+					kit: Card
+				}
+			}
+			/** `starterKits:delete` — admins: an admin kit, whoever made it. */
+			namespace Delete {
+				interface Params {
+					lorebookId: number
+				}
+				interface Response {
+					lorebookId: number
+					/** The deleted card's `id`. */
+					id: string
+				}
+			}
+		}
+
 		// Lorebooks namespace
 		namespace Lorebooks {
 			/** A lorebook row as the wire carries it. */
 			type WireLorebook = SelectLorebook
+			/**
+			 * 🚧 `lorebooks:settleImprint` (RF fix 4, 2026-10-23): an entry's
+			 * note *Written by a reply that was since replaced* — **Revert**
+			 * puts back what the field held before (an entry the reply added
+			 * is removed), **Keep** leaves it; the note goes either way. For
+			 * whoever may edit the book. The book's list follows.
+			 */
+			namespace SettleImprint {
+				interface Params {
+					/** `LorebookEntry.keptImprints[].id`. */
+					imprintId: number
+					choice: "revert" | "keep"
+				}
+				interface Response {
+					imprintId: number
+					lorebookId: number
+					choice: "revert" | "keep"
+				}
+				interface ErrorResponse {
+					imprintId?: number
+					error: string
+				}
+			}
 			/**
 			 * A lorebook's story time (DESIGN-story-time P5 + the lorebook
 			 * clock): its declared calendar (`null` = free-form) and every
@@ -6528,6 +7281,8 @@ declare global {
 						isSharedWithMe?: boolean
 						/** The sharer's display name (else username). Shared rows only. */
 						ownerName?: string | null
+						/** The cover image's address; null when the book has none. */
+						coverMedia?: AvatarMedia | null
 						/**
 						 * 🚧 How the asker reads this book (lane A3): `owner` writes,
 						 * `shared` reads and duplicates only. The ONE field the
@@ -6562,6 +7317,8 @@ declare global {
 								isSharedWithMe?: boolean
 								/** The sharer's display name. Shared reads only. */
 								ownerName?: string | null
+								/** The cover image's address; null when it has none. */
+								coverMedia?: AvatarMedia | null
 								/**
 								 * 🚧 How the asker reads this book (lane A3): `owner`
 								 * writes; `shared` (and `admin`) read only — every
@@ -6584,9 +7341,54 @@ declare global {
 					lorebookId: number
 				}
 			}
+			/**
+			 * 🚧 `lorebooks:library` — the book's ‹Rules› library (§C): its
+			 * name in the interface ("Vis Itineris library"; null with none), its
+			 * source line, and its pieces for the book's entryable lists.
+			 */
+			namespace Library {
+				interface Params {
+					lorebookId: number
+				}
+				interface Response {
+					lorebookId: number
+					name: string | null
+					source: { document: string; licence: string } | null
+					rows: {
+						typeId: string
+						repertoireId: string
+						id: string
+						version: string
+						piece: Record<string, unknown>
+						source?: { document: string; licence: string }
+					}[]
+				}
+			}
+			/** 🚧 `lorebooks:rulesChoices` — the Rules a book may be told by. */
+			namespace RulesChoices {
+				interface Params {}
+				interface Response {
+					/** Every installed ruleset, Freeform first. */
+					choices: RulesChoice[]
+					/** A new book's rules when none are chosen. */
+					defaultId: string
+				}
+			}
 			namespace Create {
 				interface Params {
 					name: string
+					/**
+					 * 🚧 The book's **Rules** (`lorebooks.primary_ruleset`): an
+					 * installed ruleset id, else refused. Absent: Freeform.
+					 * Not read when `starterKit` is sent: the kit's Rules win.
+					 */
+					primaryRuleset?: string
+					/**
+					 * 🚧 Start from a starter lorebook: the kit is copied whole into
+					 * the new book (its cast's cards made, or copied, for the
+					 * asker). `name` empty takes the kit's name.
+					 */
+					starterKit?: StarterKits.Ref
 					/**
 					 * The asker's id for this create, echoed on the broadcast
 					 * and on `lorebooks:create:error`, so the one surface that
@@ -6608,6 +7410,26 @@ declare global {
 					 */
 					lorebook: UpdateLorebook & { tags?: string[] }
 					/**
+					 * The cover image: a picture replaces it, `null` clears
+					 * it, absent leaves it. (`lorebook.coverMediaId` is never
+					 * written here — a whole row sent back from a stale read
+					 * would otherwise undo a newer cover.)
+					 */
+					coverFile?: Buffer | null
+					/**
+					 * 🚧 The book's **Rules**, sent only when changed (never
+					 * read off `lorebook`): an installed ruleset id. Sessions
+					 * already reading the book keep the rules they started on;
+					 * new ones adopt these. Refused for a session's own notes.
+					 */
+					primaryRuleset?: string
+					/**
+					 * 🚧 The book's own **lore write mode** (`full` · `review` ·
+					 * `off`), sent only when changed. It only tightens the
+					 * owner's own mode. Refused for a session's own notes.
+					 */
+					loreWriteMode?: string
+					/**
 					 * The asker's id, echoed on the reply (every tab hears
 					 * it) and on the refusal, so only the form that saved
 					 * says so and leaves its edit mode (plan B8).
@@ -6615,8 +7437,12 @@ declare global {
 					requestId?: string
 				}
 				interface Response {
-					/** The saved row, with its tags as they now stand. */
-					lorebook: WireLorebook & { tags: string[] }
+					/** The saved row, with its tags as they now stand and its
+					 *  cover image's address. */
+					lorebook: WireLorebook & {
+						tags: string[]
+						coverMedia: AvatarMedia | null
+					}
 					/** The `requestId` the save was sent with, when it had one. */
 					requestId?: string
 				}
@@ -7160,6 +7986,44 @@ declare global {
 			 * value double-counts places. Counts exclude archived rows and
 			 * read the line with its ancestor chain and fork cuts.
 			 */
+			/** 🚧 `entries:types` — the book's rules lists (PLAN-lorebook-kinds §C). */
+			namespace Types {
+				interface Params {
+					lorebookId: number
+				}
+				interface Response {
+					lorebookId: number
+					/** What the book's rules are called ("Vis Itineris"); null when not installed. */
+					rulesName: string | null
+					types: {
+						typeId: string
+						/** The list's own label: "Weapons". */
+						label: string
+						repertoireId: string
+						/** The list's piece shape: its entries' own fields. */
+						piece: import("@serene-pub/sdk").FieldDecl
+						/** Pieces the rules' library offers for it; 0 for none. */
+						libraryRows: number
+					}[]
+				}
+			}
+			/**
+			 * 🚧 `entries:copyFromLibrary` — Edit a copy (§C): the server copies one
+			 * library piece into the book. `copied: false` when the line already holds
+			 * a copy of it, which is then the answer.
+			 */
+			namespace CopyFromLibrary {
+				interface Params {
+					lorebookId: number
+					branchId?: number | null
+					typeId: string
+					pieceId: string
+				}
+				interface Response {
+					entry: import("$lib/shared/entries/types").LorebookEntry
+					copied: boolean
+				}
+			}
 			namespace Counts {
 				interface Params {
 					lorebookId: number
@@ -8466,36 +9330,6 @@ declare global {
 				carriesOut?: PortLine[]
 			}
 			/**
-			 * A named configuration for this pipeline — the shipped immutable
-			 * default plus whatever an administrator has added. Selecting one
-			 * is what the old preset picker did, over the table the runtime
-			 * actually resolves against.
-			 *
-			 * Nobody but an administrator owns one. A person's relationship to
-			 * a configuration is a *selection*, so this list is a menu rather
-			 * than an inventory, and it carries no create/rename/delete verbs
-			 * for the surfaces a non-admin sees.
-			 */
-			interface NamedConfig {
-				id: number
-				name: string
-				isDefault: boolean
-				readOnly: boolean
-				/**
-				 * Whether a non-admin may choose this preset.
-				 *
-				 * Only ever `false` in an admin's view — a withdrawn
-				 * configuration is not listed for anyone else.
-				 */
-				enabled: boolean
-				/**
-				 * Which of the mode's actions sessions on this preset include,
-				 * by identity (`<spec slug>#<key>`; W-A). `null` states nothing
-				 * (the companion rule decides); `[]` states none.
-				 */
-				includedActions: string[] | null
-			}
-			/**
 			 * What publishing a new version did to a configuration, kept until
 			 * somebody has seen it.
 			 *
@@ -8554,7 +9388,6 @@ declare global {
 				} | null
 			}
 			interface NamespaceDetail extends Namespace {
-				configs: NamedConfig[]
 				/** Every action this pipeline's mode is offered (19 §3). */
 				modeActions: {
 					/** The action's key; with `specSlug`, its identity. */
@@ -8563,22 +9396,6 @@ declare global {
 					specSlug: string
 					origin: "companion" | "foreign"
 				}[]
-				/** `source` is where the selection came from: session | instance | shipped. */
-				selectedConfig: {
-					id: number
-					name: string
-					source: string
-				} | null
-				/**
-				 * Whether this viewer may change the selection from here.
-				 *
-				 * A selection made inside a session is the session's; made
-				 * anywhere else it is the instance's, which is the
-				 * administrator's alone. False therefore means "show what is
-				 * selected, offer no picker" — an absent control rather than a
-				 * live one whose every use is refused.
-				 */
-				canSelectConfig: boolean
 				/**
 				 * The settings grouped by model call — what every surface
 				 * renders (owner rulings 2026-09-30). One group per model call,
@@ -8622,6 +9439,35 @@ declare global {
 					error?: string
 				}
 			}
+			/**
+			 * 🚧 **Where a pipeline runs** (PLAN-layering R2, R38; lane 7): the
+			 * genres whose defaults register it and the presets that add, drop
+			 * or change it — the pipelines view's reverse question, now that
+			 * named configurations are retired. Admin only.
+			 */
+			namespace RegisteredIn {
+				interface Params {
+					slug: string
+				}
+				interface Place {
+					scope: "genre" | "preset"
+					genreId: string
+					genreName: string
+					presetId?: number
+					presetName?: string
+					/** The registration's key. */
+					key: string
+					/** The SDK's `Trigger` as stored; `{}` on a preset's change or drop. */
+					trigger: Record<string, unknown>
+					/** The preset drops the genre's registration. */
+					dropped?: true
+				}
+				interface Response {
+					slug: string
+					places: Place[]
+					error?: string
+				}
+			}
 			namespace SetOption {
 				interface Params {
 					slug: string
@@ -8653,28 +9499,6 @@ declare global {
 				}
 				interface Response {
 					pipeline?: NamespaceDetail
-					error?: string
-				}
-			}
-			/**
-			 * Reset a whole configuration — every deviation at once.
-			 *
-			 * A delete of the configuration's rows rather than a loop of
-			 * `clearOption` over what the panel happened to be showing: a
-			 * client-side loop leaves behind exactly the rows the viewer could
-			 * not see, which is the half a person means least to keep.
-			 */
-			namespace ResetConfig {
-				interface Params {
-					slug: string
-					sessionId?: number
-					/** Which configuration. Absent means the instance's selected one. */
-					configId?: number
-				}
-				interface Response {
-					pipeline?: NamespaceDetail
-					/** How many deviations went, so "reset" and "nothing to reset" differ. */
-					cleared?: number
 					error?: string
 				}
 			}
@@ -9494,132 +10318,6 @@ declare global {
 				}
 			}
 			/**
-			 * Named-config CRUD from the builder.
-			 *
-			 * A pipeline is the backbone; a configuration is the thing someone
-			 * keeps and tunes. Every one of these answers with the refreshed
-			 * view, so the caller never has to reconcile its own copy.
-			 */
-			namespace CreateConfig {
-				interface Params {
-					slug: string
-					name: string
-					/** Copy this configuration's values instead of starting empty. */
-					fromConfigId?: number
-					sessionId?: number
-				}
-				interface Response {
-					pipeline?: NamespaceDetail
-					configId?: number
-					error?: string
-				}
-			}
-			/**
-			 * Which actions a preset includes, and whether it may be chosen
-			 * (19 §3). Admin-only: this decides what sessions using the preset
-			 * can do, and which presets a non-admin is offered.
-			 */
-			namespace SetPresetActions {
-				interface Params {
-					slug: string
-					configId: number
-					/**
-					 * Identities (`<spec slug>#<key>`; W-A). Omit to leave
-					 * unchanged. `null` restores the default rule.
-					 */
-					includedActions?: string[] | null
-					/** Omit to leave unchanged. */
-					enabled?: boolean
-					sessionId?: number
-				}
-				interface Response {
-					pipeline?: NamespaceDetail
-					error?: string
-					/** On success: which configuration was written. */
-					slug?: string
-					configId?: number
-				}
-			}
-			namespace RenameConfig {
-				interface Params {
-					slug: string
-					configId: number
-					name: string
-					sessionId?: number
-				}
-				interface Response {
-					pipeline?: NamespaceDetail
-					error?: string
-					/** On success: which configuration was renamed. */
-					slug?: string
-					configId?: number
-				}
-			}
-			namespace DeleteConfig {
-				interface Params {
-					slug: string
-					configId: number
-					sessionId?: number
-				}
-				interface Response {
-					pipeline?: NamespaceDetail
-					error?: string
-				}
-			}
-			namespace SelectConfig {
-				interface Params {
-					slug: string
-					configId: number
-					sessionId?: number
-					scope?: "pub"
-				}
-				interface Response {
-					pipeline?: NamespaceDetail
-					error?: string
-				}
-			}
-			/**
-			 * The notices one configuration is holding, oldest first.
-			 *
-			 * Read separately from the view rather than folded into it: the
-			 * view is re-emitted by every write, and a banner that reappeared
-			 * on each keystroke-driven refresh would be a notice nobody could
-			 * get rid of. This answers only when asked, and after a dismissal.
-			 */
-			namespace ConfigNotices {
-				interface Params {
-					slug: string
-					configId: number
-				}
-				interface Response {
-					configId?: number
-					notices?: ConfigNotice[]
-					error?: string
-				}
-			}
-			/**
-			 * Dismiss one notice — or, with no id, everything pending on the
-			 * configuration.
-			 *
-			 * Answers on `pipelines:configNotices` with the refreshed list, the
-			 * same "a mutation answers with the whole view" rule the option
-			 * writes follow: what is left is the only thing the caller needs
-			 * and re-deriving it client-side is how the two come to disagree.
-			 */
-			namespace AcknowledgeConfigNotices {
-				interface Params {
-					slug: string
-					configId: number
-					/** Omit to dismiss every pending notice for the config. */
-					noticeId?: number
-				}
-				interface Response {
-					configId?: number
-					notices?: ConfigNotice[]
-					error?: string
-				}
-			}
-			/**
 			 * Prompt CRUD from the panel.
 			 *
 			 * A prompt belongs to a `(node type, slot)` POOL, not to a
@@ -9939,6 +10637,8 @@ declare global {
 					origin?: string
 					name: string
 					isImmutable: boolean
+					/** 🚧 R54: hidden from session owners' prompt choice. */
+					hidden: boolean
 					fields: Record<string, string>
 					/** Text for fields the slot no longer declares. */
 					archived: Record<string, string>
@@ -10107,6 +10807,12 @@ declare global {
 					id: number
 					name?: string
 					fields?: Record<string, string>
+					/**
+					 * 🚧 R54: hide it from session owners' prompt choice (or offer
+					 * it again). Allowed on a built-in prompt too — it is the
+					 * choice that is curated, never the text.
+					 */
+					hidden?: boolean
 				}
 				interface DeleteParams {
 					id: number
@@ -10264,26 +10970,6 @@ declare global {
 				}
 			}
 			/** The management page: versions, publish state, and the boot diagnostic. */
-			/** The configurations inventory (admin IA 2026-08-28): every named
-			 * config across every spec, with its dependents — the reverse edges
-			 * the workspaces cannot show. Editing stays in the workspace. */
-			namespace ConfigsIndex {
-				interface Params {}
-				interface Row {
-					id: number
-					name: string
-					specSlug: string
-					specName: string
-					isDefault: boolean
-					isImmutable: boolean
-					usedByPresets: number
-					usedBySessions: number
-					updatedAt: string | null
-				}
-				interface Response {
-					configs: Row[]
-				}
-			}
 			namespace Detail {
 				interface Params {
 					slug: string
@@ -10695,7 +11381,8 @@ declare global {
 			namespace Get {
 				interface Params {}
 				interface Response {
-					user: SelectUser
+					/** The row, with its avatar's address joined on. */
+					user: WithAvatarMedia<SelectUser>
 				}
 			}
 			namespace SetTheme {
@@ -10729,6 +11416,16 @@ declare global {
 					success: boolean
 					/** NULL when the name was cleared. */
 					displayName: string | null
+				}
+			}
+			namespace UpdateAvatar {
+				interface Params {
+					/** A picture replaces the account's avatar; `null` clears it. */
+					avatarFile: Buffer | null
+				}
+				interface Response {
+					avatarMediaId: number | null
+					avatarMedia: AvatarMedia | null
 				}
 			}
 			namespace SetTimeZone {
@@ -11802,6 +12499,22 @@ declare global {
 					enabled: boolean
 				}
 			}
+			/**
+			 * 🚧 The system's two routine caps (R11; lane 7): the maximum every
+			 * person's and every session's own may reach. Admin only.
+			 */
+			namespace UpdateRoutineCaps {
+				interface Params {
+					idleTimeoutMinutes: number
+					maxRunsInRow: number
+				}
+				interface Response {
+					success: boolean
+					idleTimeoutMinutes?: number
+					maxRunsInRow?: number
+					error?: string
+				}
+			}
 			namespace UpdateContextDebuggingEnabled {
 				interface Params {
 					enabled: boolean
@@ -11941,7 +12654,36 @@ declare global {
 						loreWriteMode: LoreWriteMode | null
 						/** The resolved mode — theirs, else the instance's. */
 						effectiveLoreWriteMode: LoreWriteMode
+						/**
+						 * 🚧 **Background routines** (R11; lane 7): this person's own
+						 * caps on their sessions' real-time routines — null following
+						 * the system's — and the system's, which theirs may not exceed.
+						 */
+						routineCaps?: RoutineCapsView
 					}
+				}
+			}
+			/** 🚧 A person's routine caps beside the system's (R11). */
+			interface RoutineCapsView {
+				/** Minutes a session may go without anyone playing before its real-time routines stop; null = the system's. */
+				idleTimeoutMinutes: number | null
+				/** Real-time routine runs a session may have since anyone last played; null = the system's. */
+				maxRunsInRow: number | null
+				system: { idleTimeoutMinutes: number; maxRunsInRow: number }
+			}
+			/**
+			 * 🚧 Set this person's own routine caps (R11; lane 7) — each at most
+			 * the system's, null to follow it. Refused in a sentence.
+			 */
+			namespace UpdateRoutineCaps {
+				interface Params {
+					idleTimeoutMinutes: number | null
+					maxRunsInRow: number | null
+				}
+				interface Response {
+					success: boolean
+					routineCaps?: RoutineCapsView
+					error?: string
 				}
 			}
 			/**
@@ -13060,10 +13802,74 @@ declare global {
 				visibility: string
 				status: string
 				reason: string | null
+				/**
+				 * 🚧 **From the rules** (T2–T4, 2026-10-23): the run whose
+				 * ruleset last wrote this row's words as a projection of a held
+				 * tie side; null for a row drawn and worded by hand. Absent
+				 * from a host that predates it.
+				 */
+				rulesRunId?: string | null
 				embedding: number[] | null
 				embeddingModel: string | null
 				createdAt: Date | string
 				updatedAt: Date | string
+			}
+
+			/**
+			 * 🚧 One held side of a rule-fed relationship (T1–T3): whose
+			 * side, towards whom, the words it reads onto the row with, and its
+			 * numbers — read from the session whose run last wrote the row.
+			 */
+			interface TieSide {
+				sessionId: number
+				owner: string
+				ownerName: string
+				towards: string
+				zone: string
+				entryType: string
+				onto: { field: string; target: string; label: string; value: unknown }[]
+				numbers: { field: string; label: string; value: number | null; min?: number; max?: number }[]
+				exposed: boolean
+			}
+			/** 🚧 One change to a rule-fed row, from its run's receipt (T3). */
+			interface TieHistoryLine {
+				runId: string
+				at: number
+				sessionId: number | null
+				owner: string
+				ownerName: string
+				towards?: string
+				towardsName?: string
+				made?: true
+				columns: { target: string; from: unknown; to: unknown }[]
+				moved?: Record<string, { from: unknown; to: unknown }>
+				note?: string
+			}
+			/** 🚧 `narrativeGraph:tieSides` — a rule-fed row's held sides and how it changed. */
+			namespace TieSides {
+				interface Params {
+					relationshipId: number
+				}
+				interface Response {
+					relationshipId: number
+					sides: TieSide[]
+					history: TieHistoryLine[]
+				}
+			}
+			/** 🚧 `narrativeGraph:setTieSide` — the game master sets one side's number; it waits for review. */
+			namespace SetTieSide {
+				interface Params {
+					relationshipId: number
+					owner: string
+					field: string
+					value: number
+				}
+				interface Response {
+					success: string
+					relationshipId: number
+					proposalId: number
+					sessionId: number
+				}
 			}
 
 			// A proposal returned from a graph build — pending user approval
@@ -14629,6 +15435,12 @@ declare global {
 				words?: { upTo: number; label: string }[]
 				/** 🚧 Drawn only while it holds something (Q3-8). */
 				shownWhenSet?: true
+				/** 🚧 The rules' attribute kind (RF fix 8; `SessionStateSlotV1.kind`). */
+				kind?: string
+				/** 🚧 The rules' shown-as hint (RF fix 8; `SessionStateSlotV1.shownAs`). */
+				shownAs?: string
+				/** 🚧 What the host keeps it as (RF fix 8; `SessionStateSlotV1.hostState`): never an attribute. */
+				hostState?: "place" | "time" | "carried" | "tool"
 			}
 
 			/**
@@ -14670,6 +15482,16 @@ declare global {
 				 * class. Never stored; drawn read-only.
 				 */
 				derived?: Array<{ key: string; label: string; value: string | number }>
+				/**
+				 * 🚧 The owner's tie sides (ties on the graph, 2026-10-23,
+				 * `SessionStateOwnerV1.ties`): each towards someone, its words,
+				 * its numbers where the viewer may see them, the other side.
+				 */
+				ties?: import("@serene-pub/sdk").SessionStateTieV1[]
+				/** 🚧 What the owner holds, zone by zone (RF fix 8; `SessionStateOwnerV1.zones`). */
+				zones?: import("@serene-pub/sdk").SessionStateZoneV1[]
+				/** 🚧 The rules' optional attributes this owner may carry or not (RF fix 8; `SessionStateOwnerV1.carries`). */
+				carries?: { slotId: string; label: string; carries: boolean; mayChange: boolean }[]
 				/**
 				 * 🚧 The owner's face (PLAN-sheet §12, `SessionStateOwnerV1.face`):
 				 * a cast member's card avatar, a player seat's seat portrait
@@ -14782,6 +15604,8 @@ declare global {
 					 * notes' `core:entry/character-lore` entries, entry order.
 					 */
 					metPeople?: { entryId: number; name: string }[]
+					/** 🚧 The session's story clock in words (RF fix 8): the world's _when_. */
+					storyTime?: string
 				}
 				/**
 				 * A read refused. `sessionId` is the session the read named,
@@ -14885,36 +15709,63 @@ declare global {
 				interface Params {
 					sessionId: number
 				}
-				/** One attribute as the picker shows it. */
-				interface Row {
-					slotId: string
-					label: string
-					/** Whether the session tracks it now. */
-					tracked: boolean
-					/** A baseline slot the genre requires: never droppable. */
-					required?: boolean
-				}
+				/**
+				 * 🚧 What the session's rules bring (RF fix 8, owner ruling
+				 * 2026-10-23): attributes are the rules' alone — a genre brings
+				 * none and a session adds none — so this is who carries each of
+				 * their optional ones. `declaresAttributes` false: the rules
+				 * declare none (Freeform, From scratch), said in words.
+				 */
 				interface Response {
 					sessionId: number
-					/** The genre allows attributes beyond its baseline. */
-					customAttributes: boolean
-					/** The session reads its world's attributes (`sessions.world_attributes`). */
-					worldAttributes: boolean
-					/** Only the session's owner may change what it tracks. */
+					/** 🚧 The session's rules declare at least one attribute. */
+					declaresAttributes: boolean
+					/** The caller is the session's owner. */
 					canEdit: boolean
-					baseline: Row[]
-					/** What the world brings — tracked unless the session dropped it. */
-					world: Row[]
-					/** What the session added itself. */
-					own: Row[]
-					/** Every other slot this install declares, to add. */
-					addable: Row[]
-					/**
-					 * 🚧 The rulesets the session plays (primary, then add-ons):
-					 * a slot a ruleset owns is addable only among these.
-					 */
+					/** 🚧 The rulesets the session plays (primary, then add-ons). */
 					rulesets?: string[]
+					/**
+					 * 🚧 Who carries each of the rules' OPTIONAL attributes
+					 * (attribute carries, RF fix 2 item 3; RF fix 8: one the
+					 * rules require is no one's to switch, so not listed).
+					 * Absent when the rules have none.
+					 */
+					carries?: CarryRow[]
 				}
+				/** 🚧 One of the rules' attributes, and each holder's switch for it. */
+				interface CarryRow {
+					slotId: string
+					label: string
+					/** Every holder carries it: no switch turns it off. */
+					required: boolean
+					holders: CarryHolder[]
+				}
+				interface CarryHolder {
+					owner: { kind: "session" | "session_cast" | "player_seat" | "session_location"; id: number }
+					name: string
+					carries: boolean
+					/** The caller may switch it: whoever plays the holder, or the session's owner. */
+					mayChange: boolean
+				}
+			}
+			/**
+			 * 🚧 Switch whether one holder carries one of the rules'
+			 * attributes (attribute carries, RF fix 2 item 3). Off, it is not
+			 * shown, read or written for them, and what it held is kept for
+			 * when they carry it again. Whoever plays the holder, or the
+			 * session's owner; the world and places, the owner alone. An
+			 * attribute the rules require is never switched off.
+			 */
+			namespace SetCarry {
+				interface Params {
+					sessionId: number
+					owner: { kind: "session" | "session_cast" | "player_seat" | "session_location"; id: number }
+					slotId: string
+					carries: boolean
+					/** 🚧 The ask's own token (RF fix 8: the sheet's `set-attribute-carry`), echoed on its reply and its refusal. */
+					request?: string
+				}
+				type Response = Attributes.Response & { request?: string }
 			}
 			/**
 			 * 🚧 Change what a session tracks: switch its world attributes on
@@ -14922,6 +15773,7 @@ declare global {
 			 * adds one, `null` returns it to the default. The session's owner
 			 * only, and only when its genre allows custom attributes.
 			 */
+			/** ⏳ Retired (RF fix 8): a session adds no attributes — refused in words, always. */
 			namespace SetAttributePicks {
 				interface Params {
 					sessionId: number
@@ -14983,6 +15835,29 @@ declare global {
 					sessionId?: number
 					request?: string
 					given?: "direct" | "offered"
+					error?: string
+				}
+			}
+
+			/**
+			 * 🚧 `state:showTieSide` (ties on the graph, screen 2): show or
+			 * hide one tie side's numbers to others — its `exposed` flag.
+			 * The holder's, or the session owner's; refused otherwise.
+			 */
+			namespace ShowTieSide {
+				interface Params {
+					sessionId: number
+					owner: Owner
+					entryType: string
+					towards: string
+					shown: boolean
+					/** The ask's own token, echoed on its reply and its refusal. */
+					request?: string
+				}
+				interface Response {
+					sessionId?: number
+					request?: string
+					shown?: boolean
 					error?: string
 				}
 			}

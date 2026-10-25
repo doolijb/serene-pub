@@ -1,6 +1,7 @@
 import { db } from "$lib/server/db"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { afterModelChange } from "$lib/server/pipelines/registrations/unserved"
 import { buildUsersCurrent, user } from "./users"
 import { userSettingsGet } from "./userSettings"
 import { buildSystemSettingsGet } from "./systemSettings"
@@ -35,7 +36,16 @@ import type {
 	CapabilitySet
 } from "@serene-pub/sdk"
 import { adapterCapabilities } from "$lib/shared/connectionAdapters/manifest"
-import { modelModalityChoices } from "$lib/shared/connections/modelModality"
+import {
+	modelModalityChoices,
+	modelPurposeChoices
+} from "$lib/shared/connections/modelModality"
+import {
+	modalityOfWrites,
+	parseKindList,
+	SINGLE_MODALITIES,
+	type ModelKindFields
+} from "$lib/shared/connections/modelKinds"
 import { normalizeConnectionPreset } from "$lib/shared/connectionAdapters/presetSlug"
 import {
 	capabilityRefusal,
@@ -1579,6 +1589,9 @@ function modelRowView(
 		enabled: m.enabled,
 		missingSince: m.missingSince?.toISOString() ?? null,
 		modality: m.modality ?? null,
+		// 🚧 O3: what it reads and writes, as stated (null: not stated).
+		reads: (m.reads as string[] | null) ?? null,
+		writes: (m.writes as string[] | null) ?? null,
 		contextWindow: m.contextWindow ?? null,
 		promptFormat: m.promptFormat ?? null,
 		tokenCounter: m.tokenCounter ?? null,
@@ -1707,6 +1720,15 @@ function modelPayload(input: unknown): {
 				error: "Choose what this model is for from the list, or Not sure."
 			}
 	}
+	// 🚧 What it reads and writes (O3) — the shape only, like `modality`
+	// above; which kinds fit is the type's question, judged by the handler
+	// (`modelPurposeChoices`).
+	for (const side of ["reads", "writes"] as const)
+		if (side in raw) {
+			const parsed = parseKindList(raw[side], side)
+			if ("error" in parsed) return { error: parsed.error }
+			values[side] = parsed.value
+		}
 	return { values }
 }
 
@@ -1737,7 +1759,7 @@ function jobWord(capability: string): string {
 async function defaultsRefusedByModality(
 	connectionId: number,
 	modelId: number,
-	modality: string
+	modality: string | ModelKindFields
 ): Promise<string[]> {
 	const defaults = await capabilityDefaults(db)
 	return Object.entries(defaults)
@@ -1758,7 +1780,7 @@ async function defaultsRefusedByModality(
 async function configValuesRefusedByModality(
 	connectionId: number,
 	modelId: number,
-	modality: string
+	modality: string | ModelKindFields
 ): Promise<ConfigValueNamingModel[]> {
 	return (await configValuesNamingModel(db, connectionId, modelId)).filter(
 		(v) => !modelModalityAllows(modality, v.capability as CapabilityId)
@@ -1776,7 +1798,7 @@ const NAMED_CONFIGS_PER_JOB = 3
 async function modalityChangeRefusal(
 	connectionId: number,
 	modelId: number,
-	modality: string
+	modality: string | ModelKindFields
 ): Promise<string | null> {
 	const defaults = (
 		await defaultsRefusedByModality(connectionId, modelId, modality)
@@ -2022,6 +2044,57 @@ export const connectionsUpdateModel: Handler<
 				)
 				if (refusal) return fail(refusal)
 			}
+		}
+		// 🚧 What it reads and writes (O3), judged against what its
+		// connection's type can carry — the five **What it's for** choices
+		// the page offers (`modelPurposeChoices`). A generating model is
+		// filed under the modality its writes lead with, so every reader of
+		// the single column keeps its answer; an embedding or NER model
+		// keeps its one modality and states no sets.
+		if (values!.reads !== undefined || values!.writes !== undefined) {
+			const currentModality = (values!.modality as string | null | undefined) ?? row.modality
+			if (currentModality && SINGLE_MODALITIES.has(currentModality))
+				return fail(
+					`This model is for ${modalityWord(currentModality)} — one thing only, so it has nothing else to choose here.`
+				)
+			const endpoint = await db.query.connections.findFirst({
+				where: (c, { eq }) => eq(c.id, params.id),
+				columns: { type: true }
+			})
+			const offered = endpoint ? modelPurposeChoices(endpoint.type) : []
+			for (const side of ["reads", "writes"] as const) {
+				const next = values![side] as string[] | null | undefined
+				if (!next) continue
+				const bad = next.filter(
+					(k) =>
+						!(side === "reads" && k === "text") &&
+						!offered.some((p) => p.side === side && p.kind === k)
+				)
+				if (bad.length)
+					return fail(
+						offered.length
+							? `A model on this connection can only be chosen for: ${offered.map((p) => p.label.toLowerCase()).join(", ")}.`
+							: "This connection's models have nothing to choose here."
+					)
+			}
+			const nextFields = {
+				reads:
+					values!.reads !== undefined
+						? (values!.reads as string[] | null)
+						: ((row.reads as string[] | null) ?? null),
+				writes:
+					values!.writes !== undefined
+						? (values!.writes as string[] | null)
+						: ((row.writes as string[] | null) ?? null)
+			}
+			const filed = modalityOfWrites(nextFields.writes)
+			if (values!.writes !== undefined && filed !== row.modality)
+				values!.modality = filed
+			const refusal = await modalityChangeRefusal(params.id, row.id, {
+				modality: (values!.modality as string | null | undefined) ?? row.modality,
+				...nextFields
+			})
+			if (refusal) return fail(refusal)
 		}
 		if (values!.model !== undefined && !values!.model)
 			return fail(
@@ -2289,22 +2362,22 @@ export function registerConnectionHandlers(
 ) {
 	register(socket, connectionsList, emitToUser)
 	register(socket, connectionsGet, emitToUser)
-	register(socket, connectionsCreate, emitToUser)
-	register(socket, connectionsUpdate, emitToUser)
-	register(socket, connectionsDelete, emitToUser)
-	register(socket, connectionsSetDefault, emitToUser)
+	register(socket, afterModelChange(connectionsCreate), emitToUser)
+	register(socket, afterModelChange(connectionsUpdate), emitToUser)
+	register(socket, afterModelChange(connectionsDelete), emitToUser)
+	register(socket, afterModelChange(connectionsSetDefault), emitToUser)
 	register(socket, connectionsTest, emitToUser)
 	register(socket, connectionsRefreshModels, emitToUser)
 	register(socket, connectionsCapabilities, emitToUser)
-	register(socket, connectionsSetCapability, emitToUser)
+	register(socket, afterModelChange(connectionsSetCapability), emitToUser)
 	register(socket, connectionsScripts, emitToUser)
 	register(socket, connectionsAttachScript, emitToUser)
 	register(socket, connectionsDetachScript, emitToUser)
 	register(socket, connectionsModels, emitToUser)
-	register(socket, connectionsCreateModel, emitToUser)
-	register(socket, connectionsUpdateModel, emitToUser)
-	register(socket, connectionsDeleteModel, emitToUser)
-	register(socket, connectionsImportModels, emitToUser)
-	register(socket, connectionsSyncModels, emitToUser)
+	register(socket, afterModelChange(connectionsCreateModel), emitToUser)
+	register(socket, afterModelChange(connectionsUpdateModel), emitToUser)
+	register(socket, afterModelChange(connectionsDeleteModel), emitToUser)
+	register(socket, afterModelChange(connectionsImportModels), emitToUser)
+	register(socket, afterModelChange(connectionsSyncModels), emitToUser)
 	register(socket, connectionsDiscoverLocal, emitToUser)
 }

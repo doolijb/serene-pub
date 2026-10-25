@@ -39,6 +39,7 @@ import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults
 import { TEXT_CAPABILITY } from "$lib/server/connections/capabilityTarget"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { tokenizerFor } from "$lib/server/pipelines/runtime/tokenizers"
+import { budgetedProviderOf } from "$lib/server/pipelines/runtime/specShape"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 
@@ -159,6 +160,8 @@ describe("tokenizerFor — which connection's setting a run budgets with", () =>
 	// pick is the pipeline configuration's, so the case below writes it on the
 	// configuration this session resolves through.
 	const doc = () => storyRespondSpec()
+	/** The node the budget sizes for, by the address the document gives it (Story's is in its `reply` junction). */
+	const sized = () => budgetedProviderOf(doc())!.key
 	const worldFor = async () => {
 		const { buildWorld } = await import(
 			"$lib/server/pipelines/config/world"
@@ -173,41 +176,30 @@ describe("tokenizerFor — which connection's setting a run budgets with", () =>
 	})
 
 	it("follows the pipeline panel's pick on the node the budget sizes for", async () => {
-		// The generate node's own connection slot, written on a configuration
-		// the session selects — the one scope a connection pick lives at
-		// (`WRITE_MATRIX.connection = ['config']`).
-		const { selectConfig } = await import(
-			"$lib/server/pipelines/config/named"
+		// The reply call's own connection slot, as the session's own
+		// registration values hold it (PLAN-layering D5 — where a configuration
+		// a session selected went): the registration layer above the defaults.
+		const { effectiveRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
+		const { rowOfChange } = await import("$lib/server/pipelines/registrations/rows")
+		const { upsertRow, deleteRow } = await import("$lib/server/pipelines/registrations/write")
+		// A session's own registrations sit on its genre's defaults.
+		const [before] = await db.select({ genreId: schema.sessions.genreId }).from(schema.sessions).where(eq(schema.sessions.id, sessionId))
+		await db.update(schema.sessions).set({ genreId: "core:genre/story" }).where(eq(schema.sessions.id, sessionId))
+		const regs = await effectiveRegistrations(db as any, sessionId)
+		const reg = regs!.effective.find((r) => r.pipeline === STORY_RESPOND_SPEC_ID)!
+		expect(reg).toBeTruthy()
+		const scope = { kind: "session" as const, sessionId }
+		await upsertRow(
+			db as any,
+			rowOfChange({ key: reg.key, values: { [sized()]: { connection: { id: llamaConnectionId } } } as never }, scope, "owner")
 		)
-		const [spec] = await db
-			.select({ id: schema.pipelineSpecs.id })
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
-		const [config] = await db
-			.insert(schema.pipelineConfigs)
-			.values({
-				specId: spec!.id,
-				name: "Tokenizer pick",
-				isImmutable: false
-			})
-			.returning()
-		await db.insert(schema.pipelineConfigValues).values({
-			configId: config.id,
-			nodeKey: "generate",
-			slot: "connection",
-			path: "",
-			value: { id: llamaConnectionId }
-		})
-		await selectConfig(db, spec!.id, "session", sessionId, config.id)
 		try {
 			expect(tokenizerFor(await worldFor(), doc())).toBe(
 				TokenCounterOptions.LLAMA
 			)
 		} finally {
-			await selectConfig(db, spec!.id, "session", sessionId, null)
-			await db
-				.delete(schema.pipelineConfigs)
-				.where(eq(schema.pipelineConfigs.id, config.id))
+			await deleteRow(db as any, scope, reg.key)
+			await db.update(schema.sessions).set({ genreId: before!.genreId }).where(eq(schema.sessions.id, sessionId))
 		}
 	})
 
@@ -222,7 +214,7 @@ describe("tokenizerFor — which connection's setting a run budgets with", () =>
 			specId: spec!.id,
 			scopeKind: "session",
 			scopeId: sessionId,
-			nodeKey: "generate",
+			nodeKey: sized(),
 			slot: "connection",
 			path: "",
 			value: { id: llamaConnectionId }
@@ -234,7 +226,7 @@ describe("tokenizerFor — which connection's setting a run budgets with", () =>
 		} finally {
 			await db
 				.delete(schema.pipelineNodeOverrides)
-				.where(eq(schema.pipelineNodeOverrides.nodeKey, "generate"))
+				.where(eq(schema.pipelineNodeOverrides.nodeKey, sized()))
 		}
 	})
 

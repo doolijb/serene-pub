@@ -105,7 +105,7 @@
 			{title}
 		</svelte:element>
 		{#if subtitle}
-			<p class="text-surface-600-400 truncate text-[13px]">
+			<p class="text-surface-600-400 truncate text-chip">
 				{subtitle}
 			</p>
 		{/if}

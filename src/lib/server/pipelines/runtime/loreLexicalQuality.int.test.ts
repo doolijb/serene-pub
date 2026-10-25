@@ -39,7 +39,7 @@ import os from "os"
 import path from "path"
 import { and, eq, inArray } from "drizzle-orm"
 import {
-	setConfigValue,
+	setPipelineValue,
 	type TestDb
 } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
@@ -261,10 +261,7 @@ const setParam = async (nodeKey: string, path: string, value: unknown) => {
 	// ⚠ An upsert, not the `UPDATE` this was. A config stores **deviations**
 	// (ruled 2026-09-10), so at an untouched address there is no row to update
 	// — the old form matched nothing and every case ran at the declared value.
-	await setConfigValue(
-		db,
-		await selectedConfigId(),
-		{ nodeKey, slot: "params", path },
+	await setPipelineValue(db, STORY_RESPOND_SPEC_ID, { nodeKey, slot: "params", path },
 		value
 	)
 	// A write that landed nowhere is the failure this whole file exists to

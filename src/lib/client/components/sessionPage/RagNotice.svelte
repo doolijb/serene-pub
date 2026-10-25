@@ -8,12 +8,14 @@
 	 * `requestWithInterest` whose handler IS the reply.
 	 */
 	import * as Icons from "@lucide/svelte"
-	import { getContext, onDestroy } from "svelte"
+	import { getContext, onDestroy, untrack } from "svelte"
 	import {
 		requestWithInterest,
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import {
+		markNoticeRead,
+		noticeRead,
 		ragNoticeActions,
 		ragNoticeSentence,
 		ragNoticeVariant
@@ -190,13 +192,54 @@
 			: ""
 	)
 	let actions = $derived(variant ? ragNoticeActions(variant, isAdmin) : [])
+
+	/**
+	 * Once a session, then an icon (polish parity L1, 2026-10-24): the line
+	 * shows the first time this device opens a session the notice applies
+	 * to; from the next open it is an icon in the composer's footer that
+	 * opens the line again. Collapsing the line makes it the icon now. A
+	 * per-viewer convenience on this device (`noticeRead`): when storage
+	 * fails, the line just shows.
+	 */
+	let collapsed = $state(false)
+	let collapsedFor: number | null = null
+	$effect(() => {
+		const sid = id
+		untrack(() => {
+			if (collapsedFor === sid) return
+			collapsedFor = sid
+			collapsed = noticeRead(sid)
+		})
+	})
+	// Shown as a line: read, for the next time this session opens.
+	$effect(() => {
+		if (!variant || collapsed) return
+		const sid = id
+		untrack(() => markNoticeRead(sid))
+	})
 </script>
 
-<!-- One quiet line, sized and placed by whatever hosts it: the composer sets
-     it above the card, opposite the Actions label. -->
-{#if ragStatus?.applicable && variant}
+<!-- Placed by whatever hosts it: the composer seats it at the start of its
+     footer's end, beside Attach. A line takes the room it needs (the footer
+     wraps it under the persona in a narrow box); an icon is one control. -->
+{#if ragStatus?.applicable && variant && collapsed}
+	<button
+		type="button"
+		class="rag-notice-icon"
+		aria-expanded="false"
+		aria-label="Show the indexing notice"
+		title={sentence}
+		onclick={() => (collapsed = false)}
+	>
+		{#if variant === "processing"}
+			<Icons.Loader size={16} class="animate-spin" aria-hidden="true" />
+		{:else}
+			<Icons.AlertTriangle size={16} aria-hidden="true" />
+		{/if}
+	</button>
+{:else if ragStatus?.applicable && variant}
 	<div
-		class="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs"
+		class="flex min-w-0 flex-[1_1_16rem] flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs"
 		role="alert"
 		aria-live="polite"
 	>
@@ -253,27 +296,34 @@
 				Hide for this session
 			</button>
 		{/if}
+		<!-- The line, back to its icon beside Attach. -->
+		<button
+			type="button"
+			class="rag-notice-collapse"
+			aria-expanded="true"
+			aria-label="Collapse the indexing notice"
+			title="Collapse the indexing notice"
+			onclick={() => (collapsed = true)}
+		>
+			<Icons.X size={12} aria-hidden="true" />
+		</button>
 	</div>
 {:else if canHide && ragStatus?.ragIgnored && pendingVariant}
 	<!-- Only while the hidden notice would have something to say: over a
-	     fully indexed book there is nothing hidden to show again. -->
-	<div
-		class="text-surface-500 flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs"
+	     fully indexed book there is nothing hidden to show again. An icon, as
+	     the read notice is; its name says the whole of it. -->
+	<button
+		type="button"
+		class="rag-notice-icon"
+		onclick={() => handleSetRagIgnored(false)}
+		disabled={ignoring}
+		title="Notice hidden for this session. Search by meaning still runs. Show it again"
 	>
-		<Icons.EyeOff size={12} class="shrink-0" aria-hidden="true" />
-		<span>
-			Notice hidden for this session. Search by meaning still runs.
+		<Icons.EyeOff size={16} aria-hidden="true" />
+		<span class="sr-only">
+			Notice hidden for this session. Search by meaning still runs. Show again
 		</span>
-		<button
-			type="button"
-			class="rag-notice-link"
-			onclick={() => handleSetRagIgnored(false)}
-			disabled={ignoring}
-			title="Show the indexing notice again for this session"
-		>
-			Show again
-		</button>
-	</div>
+	</button>
 {/if}
 
 <style>
@@ -298,8 +348,56 @@
 		pointer-events: none;
 	}
 
-	.rag-notice-link:focus-visible {
+	.rag-notice-link:focus-visible,
+	.rag-notice-icon:focus-visible,
+	.rag-notice-collapse:focus-visible {
 		outline: 2px solid var(--color-primary-500);
 		outline-offset: 2px;
+	}
+
+	/* The icon: the composer's own quiet round control, its 32px (44px where
+	   a finger lands), muted until pointed at. */
+	.rag-notice-icon {
+		display: inline-flex;
+		flex: none;
+		align-items: center;
+		justify-content: center;
+		inline-size: 2rem;
+		block-size: 2rem;
+		border-radius: 9999px;
+		color: light-dark(var(--color-surface-600), var(--color-surface-400));
+		cursor: pointer;
+	}
+	.rag-notice-icon:hover:not(:disabled) {
+		background: light-dark(var(--color-surface-200), var(--color-surface-800));
+	}
+	.rag-notice-icon:disabled {
+		opacity: 0.4;
+		pointer-events: none;
+	}
+	@media (pointer: coarse) {
+		.rag-notice-icon {
+			inline-size: 2.75rem;
+			block-size: 2.75rem;
+		}
+	}
+
+	.rag-notice-collapse {
+		display: inline-grid;
+		place-items: center;
+		inline-size: 1.25rem;
+		block-size: 1.25rem;
+		border-radius: 9999px;
+		color: light-dark(var(--color-surface-600), var(--color-surface-400));
+		cursor: pointer;
+	}
+	.rag-notice-collapse:hover {
+		background: light-dark(var(--color-surface-200), var(--color-surface-800));
+	}
+	@media (pointer: coarse) {
+		.rag-notice-collapse {
+			inline-size: 2.75rem;
+			block-size: 2.75rem;
+		}
 	}
 </style>

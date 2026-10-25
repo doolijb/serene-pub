@@ -5,8 +5,10 @@
  * A room the master narrated on `main`, planned in the Sanctum, or the
  * Castellan narrated reaches the lorebook from that message's ⋮: the press
  * collects the room's name (R3), the Castellan drafts a location entry from
- * the row, and it lands only through `create-lore-entry`'s review, where the
- * name stays editable. Offered on the person's rows and the Castellan's
+ * the row — one JSON answer (the Lair rewrite, 2026-10-21): the body, the
+ * ways out and the place entry type's fields, made into the write by
+ * `core:script/lair-room` — and it lands only through `create-lore-entry`'s
+ * review, where the name stays editable. Offered on the person's rows and the Castellan's
  * (`item.characterLine equals false`), refused on a delver's with the
  * reason, and never files a room the book already has (R7's name rule).
  */
@@ -46,11 +48,16 @@ let document: Record<string, unknown> = PLAN
 let proseCalls = 0
 /** Every prompt a JSON step (the planner, the keeper) was sent. */
 const jsonPrompts: string[] = []
-/** Every prompt a prose step (the narrator, a voice, a draft) was sent. */
+/** Every prompt a prose step (the narrator, a voice) was sent. */
 const prosePrompts: string[] = []
+/** How File as a room's draft prompt opens. */
+const DRAFT_OPENING = "you file a room into the dungeon"
+/** Every room draft call, in order — a JSON answer each. */
+let draftCalls = 0
+const draftPrompts: string[] = []
 const PROSE = ["The torch gutters. ", "Something scrapes behind the door."]
-/** What every prose call streams — `PROSE` unless a test says otherwise. */
-let prose: string[] = PROSE
+/** What every prose call streams. */
+const prose: string[] = PROSE
 
 class FakeAdapter implements FakeTextAdapter {
 	injected: any
@@ -85,8 +92,15 @@ class FakeAdapter implements FakeTextAdapter {
 				onContent: (c: string) => void,
 				onReasoning?: (c: string) => void
 			) => {
+				const prompt = JSON.stringify(this.injected ?? "")
+				if (json && prompt.includes(DRAFT_OPENING)) {
+					draftCalls++
+					draftPrompts.push(prompt)
+					onContent(JSON.stringify(DRAFT))
+					return
+				}
 				if (json) {
-					jsonPrompts.push(JSON.stringify(this.injected ?? ""))
+					jsonPrompts.push(prompt)
 					// The planner reasons too — and that must NOT reach the row.
 					onReasoning?.("The planner weighs the beats.")
 					onContent(JSON.stringify(document))
@@ -306,14 +320,22 @@ const reset = () => {
 	proseCalls = 0
 	jsonPrompts.length = 0
 	prosePrompts.length = 0
-	prose = DRAFT
+	draftCalls = 0
+	draftPrompts.length = 0
 }
 
-/** What the Castellan drafts, in the room's layout. */
-const DRAFT = [
-	"A vaulted hall, knee-deep in black water.\n\n",
-	"Exits: north → The Stair, east → The Sluice\nContents: a drowned lantern\nHazards: the floor drops away\nOccupants: nobody"
-]
+/** What the Castellan drafts: the room's body, its ways out, the place entry type's fields. */
+const DRAFT = {
+	content:
+		"A vaulted hall, knee-deep in black water.\nContents: a drowned lantern\nHazards: the floor drops away\nOccupants: nobody",
+	exits: [
+		{ way: "north", to: "The Stair" },
+		{ way: "east", to: "The Sluice" }
+	],
+	fields: {}
+}
+/** The entry the draft makes: its body, then an Exits line naming every way out. */
+const FILED = `${DRAFT.content}\n\nExits: north → The Stair, east → The Sluice`
 /** A room described with two ways out, the way the master or the Castellan writes one. */
 const DESCRIBED =
 	"The stair ends in the Drowned Hall, a vaulted room knee-deep in black water. A doorway north climbs back to the Stair; a grate in the east wall drains into the Sluice."
@@ -391,24 +413,33 @@ describe("R11 · File as a room is offered on the person's rows and the Castella
 		expect(ack?.error).toBeUndefined()
 		expect(ack?.parked).toBe(true)
 		// One model call: the Castellan's draft, from that row and under that name.
-		expect(proseCalls).toBe(1)
-		expect(prosePrompts[0]).toContain("you file a room into the dungeon's lorebook")
-		expect(prosePrompts[0]).toContain("The room is The Drowned Hall.")
-		expect(prosePrompts[0]).toContain("a grate in the east wall drains into the Sluice")
+		expect(draftCalls).toBe(1)
+		expect(proseCalls).toBe(0)
+		expect(draftPrompts[0]).toContain("you file a room into the dungeon's lorebook")
+		expect(draftPrompts[0]).toContain("The room is The Drowned Hall.")
+		expect(draftPrompts[0]).toContain("a grate in the east wall drains into the Sluice")
 		// The rooms the dungeon has are named to it, for its exits.
-		expect(prosePrompts[0]).toContain("The Old Well")
-		expect(prosePrompts[0]).not.toContain("{{")
+		expect(draftPrompts[0]).toContain("The rooms this dungeon already has: The Old Well, The Stair.")
+		expect(draftPrompts[0]).not.toContain("{{")
 		const review = await parkedReview(w.owner.id)
 		expect(review.nodeKey).toBe("room.new.save")
 		expect(review.values.name).toBe("The Drowned Hall")
-		expect(review.values.content).toBe(DRAFT.join(""))
+		expect(review.values.content).toBe(FILED)
 		// Nothing lands before the gate.
 		expect((await rooms(w.lorebookId)).map((r) => r.title)).toEqual(["The Old Well", "The Stair"])
 		await approve(w, review.id)
 		const filed = (await rooms(w.lorebookId)).find((r) => r.title === "The Drowned Hall")!
 		expect(filed.typeId).toBe("core:entry/location")
-		expect(filed.content).toBe(DRAFT.join(""))
-		expect(filed.content).toContain("Exits: north → The Stair, east → The Sluice")
+		expect(filed.content).toBe(FILED)
+		// A way out to a room the book holds is a link, in the entry's own
+		// commit; a way to a room nobody built yet (the Sluice) stays words.
+		const schema = await import("$lib/server/db/schema")
+		const stair = (await rooms(w.lorebookId)).find((r) => r.title === "The Stair")!
+		const links = await testDb
+			.select()
+			.from(schema.narrativeRelationships)
+			.where(eq(schema.narrativeRelationships.fromEntryId, filed.id))
+		expect(links.map((l) => [l.toEntryId, l.relationshipType])).toEqual([[stair.id, "leads north to"]])
 		// No message was written: the entry is the whole result.
 		expect((await rowsOf(w.session.id)).map((r) => r.id)).toEqual([row])
 	})
@@ -439,7 +470,7 @@ describe("R11 · File as a room is offered on the person's rows and the Castella
 			const ack = await file(w, row, name)
 			expect(ack?.error, by).toBeUndefined()
 			expect(ack?.parked, by).toBe(true)
-			expect(prosePrompts[0]).toContain("a narrow brick channel")
+			expect(draftPrompts[0]).toContain("a narrow brick channel")
 			const review = await parkedReview(w.owner.id)
 			expect(review.values.name).toBe(name)
 			await approve(w, review.id)
@@ -460,7 +491,7 @@ describe("R11 · refused where it is not the dungeon's plan", () => {
 		const row = await line(w, { content: DESCRIBED, by: "delver" })
 		const ack = await file(w, row, "The Drowned Hall")
 		expect(ack?.error).toMatch(/a delver's line is theirs, not the dungeon's plan/)
-		expect(proseCalls).toBe(0)
+		expect(draftCalls).toBe(0)
 		expect((await runsOf(w.session.id)).filter((r) => r.specSlug === "core:spec/lair-file-room")).toEqual([])
 		expect((await rooms(w.lorebookId)).map((r) => r.title)).toEqual(["The Old Well", "The Stair"])
 	})
@@ -473,7 +504,7 @@ describe("R11 · refused where it is not the dungeon's plan", () => {
 		const hidden = await line(w, { content: DESCRIBED, by: "castellan", hidden: true })
 		expect((await file(w, hidden, "The Drowned Hall"))?.error).toMatch(/unhide it first/)
 		expect((await file(w, row, "   "))?.error).toMatch(/needs text/)
-		expect(proseCalls).toBe(0)
+		expect(draftCalls).toBe(0)
 		expect((await rooms(w.lorebookId)).map((r) => r.title)).toEqual(["The Old Well", "The Stair"])
 	})
 })
@@ -521,7 +552,7 @@ describe("R11 · the name", () => {
 		const ack = await file(w, row, "the old well")
 		expect(ack?.error).toBeUndefined()
 		expect(ack?.parked).toBeUndefined()
-		expect(proseCalls).toBe(0)
+		expect(draftCalls).toBe(0)
 		const { pendingReviewsFor } = await import("$lib/server/pipelines/runtime/reviewGate")
 		expect(pendingReviewsFor(w.owner.id).filter((r) => r.specId === "core:spec/lair-file-room")).toEqual([])
 		expect((await rooms(w.lorebookId)).map((r) => r.title)).toEqual(["The Old Well", "The Stair"])

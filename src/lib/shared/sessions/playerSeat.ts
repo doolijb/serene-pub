@@ -71,6 +71,31 @@ export function asksToJoin(opts: {
 }
 
 /**
+ * 🚧 Whether a guest's story composer offers them a **seat** instead
+ * ("Take a seat": name the character you'll play, or bring a persona — Lair
+ * rewrite D5, 2026-10-21): the other half of `asksToJoin`'s rule for a genre
+ * of player seats (one that declares a `playerLabel`). A guest who plays
+ * (`mayOpenCardlessSeat`), in such a genre, with no voice of their own here,
+ * is never asked for a persona — their seat is opened by name — and until
+ * it is, their line would be the game master's. Only on the story (`main`):
+ * a genre that seats people another way (Dungeon Crawler's interview, on its
+ * Planner lane) closes the story's composer until then, and a closed
+ * composer's reason wins.
+ */
+export function offersSeat(opts: {
+	isGuest: boolean
+	personasInMode: boolean
+	seats: readonly PlayerSeatLike[] | null | undefined
+	userId: number | null | undefined
+	playerLabel?: string | null
+	isPlayer?: boolean
+}): boolean {
+	if (!opts.isGuest || !opts.personasInMode || !opts.playerLabel?.trim()) return false
+	if (!mayOpenCardlessSeat({ isOwner: false, isPlayer: opts.isPlayer })) return false
+	return !(opts.seats ?? []).some((s) => isOwnPlayerSeat(s, opts.userId))
+}
+
+/**
  * 🚧 Whether a member may open a card-less player seat for themselves — the
  * server's rule (`writeSeatName`): the session's owner, or a guest who
  * plays. Absent `isPlayer` reads as a player, the column's default.

@@ -15,6 +15,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import SettingCard from "$lib/client/components/settingsTabs/SettingCard.svelte"
 
 	interface Props {
 		hasUnsavedChanges?: boolean
@@ -139,17 +140,16 @@
 	})
 </script>
 
-<section class="panel-card flex flex-col gap-3" aria-labelledby="charavault-heading">
-	<h2 id="charavault-heading" class="text-sm font-medium">
-		Community library: CharaVault
-	</h2>
-	<p class="text-surface-600-400 text-sm">
-		Connect one CharaVault account to enable browsing charavault.net from
-		the Character Library. This account is shared across the pub — it raises
-		the search rate limit for every user on this pub, not
-		just you. Create an App Password at charavault.net named "Serene Pub"
-		and paste it below along with the account email.
-	</p>
+<!-- One account for the whole pub, so its higher search limit is
+     everyone's. How to make the App Password rides the password box's title
+     and the docs; the card says what it is for. -->
+<SettingCard
+	title="Community library: CharaVault"
+	titleId="charavault-heading"
+	headingLevel={2}
+	help="One CharaVault account, shared by everyone on this pub, lets the Library browse charavault.net at its higher search limit."
+	layout="stack"
+>
 
 	{#if connected}
 		<div class="flex flex-wrap items-center gap-2">
@@ -187,6 +187,7 @@
 				bind:value={tokenField}
 				autocomplete="new-password"
 				placeholder="App password (cv_...)"
+				title={'Create an App Password at charavault.net named "Serene Pub"'}
 				class="input flex-1"
 				aria-label="CharaVault app password"
 			/>
@@ -205,4 +206,4 @@
 			</button>
 		</div>
 	{/if}
-</section>
+</SettingCard>

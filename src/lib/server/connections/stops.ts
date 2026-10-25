@@ -154,6 +154,22 @@ export interface ComposeStopsInput {
 	personas: { name?: string | null }[]
 	/** Whoever is speaking. Their own name must never end their own reply. */
 	currentCharacterId?: number | null
+	/**
+	 * 🚧 The labels of the session's voices that nobody in the cast is (lair
+	 * fix 2, 2026-10-22): what the person's own lines are called — a genre's
+	 * `playerLabel`, the Lair's *Dungeon Master* — and the genre's envoys
+	 * (*Castellan*, *Oracle*). A Lair delver's turn read the GM's lines and
+	 * the Castellan's in its transcript, and with neither a stop a model
+	 * continued the transcript as the GM. Stopped on like any participant's
+	 * label, except where it is this reply's own (`ownLabels`).
+	 */
+	nonCastLabels?: readonly string[]
+	/**
+	 * 🚧 This reply's own labels — its seed line's, the envoy or narrator it
+	 * speaks as — never a stop of its own: the Castellan answering in the
+	 * Sanctum is not stopped on *Castellan:*.
+	 */
+	ownLabels?: readonly string[]
 	/** The author's own list, from `generate-text.params.stopSequences`. */
 	explicit?: readonly string[] | null
 	wire: WireMode
@@ -216,6 +232,16 @@ function speakerStops(input: ComposeStopsInput, all = false): string[] {
 	}
 	for (const persona of input.personas) {
 		if (persona.name) out.push(`${persona.name}:`)
+	}
+	// 🚧 The player label and the envoys (lair fix 2): voices with no card,
+	// whose labels a transcript carries all the same.
+	const own = new Set(
+		(input.ownLabels ?? []).map((label) => label?.trim()).filter(Boolean)
+	)
+	for (const label of input.nonCastLabels ?? []) {
+		const name = label?.trim()
+		if (!name || (!all && own.has(name))) continue
+		out.push(`${name}:`)
 	}
 	return out
 }
@@ -419,12 +445,38 @@ export function trimAtSpeakerBoundary(
 	if (!labels.length) return { text: out }
 
 	const match = atLineStart(labels, false).exec(out)
-	if (!match) return { text: out }
+	// 🚧 The same label in markdown emphasis (lair fix 2, 2026-10-22): a model
+	// that writes `**Suzume:**` or `**Suzume**:` on a new line is writing her
+	// line as surely as `Suzume:` — and a stop on `\nSuzume:` never sees it.
+	const emphasised = emphasisedLabelAtLineStart(labels).exec(out)
+	const first =
+		match && emphasised
+			? match.index <= emphasised.index
+				? { index: match.index, label: match[1]! }
+				: { index: emphasised.index, label: `${emphasised[1]!}:` }
+			: match
+				? { index: match.index, label: match[1]! }
+				: emphasised
+					? { index: emphasised.index, label: `${emphasised[1]!}:` }
+					: null
+	if (!first) return { text: out }
 
 	return {
-		text: out.slice(0, match.index).trimEnd(),
-		trimmedAt: { label: match[1]!, offset: match.index }
+		text: out.slice(0, first.index).trimEnd(),
+		trimmedAt: { label: first.label, offset: first.index }
 	}
+}
+
+/**
+ * 🚧 A participant's label in markdown emphasis opening a line after the
+ * first — `**Rook:**`, `**Rook**:`, `*Rook:*` — the name captured without its
+ * colon. Only an emphasised form: the plain label is `atLineStart`'s.
+ */
+function emphasisedLabelAtLineStart(labels: readonly string[]): RegExp {
+	const names = labels.map((label) => escapeRegExp(label.replace(/:$/, "")))
+	return new RegExp(
+		`\\n[ \\t]*(?:\\*\\*|__|\\*|_)(${names.join("|")})(?:\\*\\*|__|\\*|_)?:`
+	)
 }
 
 /** Markdown emphasis a model wraps its own label in: `**Verity:**`, `__Verity__:`. */
@@ -657,6 +709,10 @@ export function composeStopsFor(
 		 * speaker stops stay held back with the reason on the receipt.
 		 */
 		messages?: CompiledMessagesProbe | null
+		/** 🚧 The player label and the envoys' names (`ComposeStopsInput.nonCastLabels`). */
+		nonCastLabels?: readonly string[] | null
+		/** 🚧 This reply's own labels (`ComposeStopsInput.ownLabels`). */
+		ownLabels?: readonly string[] | null
 	} = {}
 ): ComposedStops {
 	const row = (connection ?? {}) as {
@@ -675,6 +731,8 @@ export function composeStopsFor(
 		currentCharacterId: opts.currentCharacterId ?? null,
 		explicit: explicitStopsFrom(opts.explicit),
 		wire: row.wireMode ?? resolveWireMode(row as any),
-		messages: opts.messages ?? null
+		messages: opts.messages ?? null,
+		...(opts.nonCastLabels?.length ? { nonCastLabels: opts.nonCastLabels } : {}),
+		...(opts.ownLabels?.length ? { ownLabels: opts.ownLabels } : {})
 	})
 }

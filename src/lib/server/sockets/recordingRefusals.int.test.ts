@@ -19,6 +19,7 @@ import type { TestDb } from "$lib/server/utils/testDb"
 import type { StoryCalendar } from "$lib/shared/lorebooks/storyDate"
 import { defineAttributeSlot, genre } from "@serene-pub/sdk"
 import "@serene-pub/core-catalog"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -66,7 +67,7 @@ beforeAll(async () => {
 		descriptor: "When they were born.",
 		appliesTo: ["cast", "world", "location"]
 	})
-	genre(GENRE, { name: { en: "Born" }, family: "test", slots: [born], events: {} })
+	genreKeeping(GENRE, { name: { en: "Born" }, family: "test", slots: [born], events: {} })
 })
 
 afterAll(async () => {

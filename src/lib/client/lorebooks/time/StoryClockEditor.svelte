@@ -104,7 +104,7 @@
 >
 	<p
 		id="clockHeading"
-		class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold"
+		class="text-primary-ink flex items-center gap-1.5 text-xs font-semibold"
 	>
 		<Icons.Clock size={13} aria-hidden="true" />
 		The story's present · {lineName}
@@ -195,7 +195,7 @@
 		</div>
 		<p class="text-sm" aria-live="polite">
 			{#if problem}
-				<span class="text-error-700-300">{problem}</span>
+				<span class="text-error-600-400">{problem}</span>
 			{:else if draftClock}
 				<span class="text-surface-700-300">Reads as</span>
 				<span class="font-semibold">{formatDate(draftClock as StoryDate)}</span>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	import { withoutShared } from "$lib/shared/utils/sharedRows"
 	/**
 	 * A session's own settings: its name, then Participants, Settings and
@@ -16,8 +17,16 @@
 	import SessionAnnexPanel from "./SessionAnnexPanel.svelte"
 	import RetakeAskSetting from "./RetakeAskSetting.svelte"
 	import RulesOptions from "./RulesOptions.svelte"
-	import { asksHowStrict, howStrictChoices } from "$lib/shared/rulesets/rulesOffer"
+	import { howStrictChoices } from "$lib/shared/rulesets/rulesOffer"
 	import SessionLorebookReading from "./SessionLorebookReading.svelte"
+	import {
+		LORE_WRITE_MODE_CHOICES,
+		effectiveLoreWriteMode,
+		isLoreWriteMode,
+		loreWriteLimit,
+		type LoreWriteMode
+	} from "$lib/shared/lorebooks/loreWriteMode"
+	import { DEFAULT_SCOPE } from "$lib/shared/lorebooks/loreRoute"
 	import type { StoryClock } from "$lib/shared/lorebooks/storyDate"
 	import { stripUnmovedReading } from "./sessionReadingPatch"
 	import {
@@ -30,7 +39,7 @@
 	import { storedSceneSettings } from "$lib/shared/sessions/sceneSettings"
 	import type { SceneSettingsDecl } from "@serene-pub/sdk"
 	import SessionSceneSettings from "./SessionSceneSettings.svelte"
-	import SessionStepSettings from "./SessionStepSettings.svelte"
+	import SessionSettingsForm from "./SessionSettingsForm.svelte"
 	import SessionPresetControl from "./SessionPresetControl.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
@@ -54,7 +63,6 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { resolveUserHandle } from "$lib/shared/utils/resolveCharacterName"
 	import { z } from "zod"
-	import SchemaForm from "../pipelines/SchemaForm.svelte"
 	import PipelineConfigOptions from "../pipelines/PipelineConfigOptions.svelte"
 	import DocPeek from "$lib/client/components/docs/DocPeek.svelte"
 	import { docsHref } from "$lib/shared/utils/docsHref"
@@ -118,7 +126,7 @@
 	 * theme-aware background, a focus ring that is already primary — with this
 	 * view's corner radius.
 	 */
-	const FIELD_CLASS = "input rounded-[10px]"
+	const FIELD_CLASS = "input rounded-base"
 
 	/**
 	 * The card a section sits in, and the hook a shared `@utility panel-card`
@@ -127,7 +135,7 @@
 	 * legible under a light theme.
 	 */
 	const CARD_CLASS =
-		"panel-card border-surface-300 bg-surface-100 dark:border-surface-800 dark:bg-surface-900 rounded-[12px] border p-4"
+		"panel-card border-surface-200-800 bg-surface-100-900 rounded-container border p-4"
 
 	// STATE VARIABLES
 
@@ -215,15 +223,16 @@
 
 	// CHAT MODE (19 §2, U-C2)
 	let modesList: Sockets.Sessions.Genres.Response["genres"] = $state([])
-	/** 🚧 The genre's session presets (2026-10-19): the Preset control and the pins under the tasks field. */
+	/** 🚧 The genre's session presets (2026-10-19): the Preset control. */
 	let sessionPresetRows: Sockets.SessionAdmin.PresetRow[] = $state([])
 	$effect(() =>
 		requestWithInterest("sessionPresets:list", {}, (msg: any) => {
 			sessionPresetRows = msg?.presets ?? []
 		})
 	)
-	const sessionPresetPins = $derived(
-		((sessionPresetRows.find((p) => p.id === (session as any)?.presetId)?.settings ?? null) as Record<string, unknown> | null)
+	/** The genre's presets a session may switch to — the Preset card shows only when there is a choice. */
+	const switchablePresets = $derived(
+		sessionPresetRows.filter((p) => p.genreId === genreId && p.enabled && !(p as { withdrawnAt?: unknown }).withdrawnAt)
 	)
 	let genreId: string = $state(STANDARD_GENRE_ID)
 	let genreFields: Record<string, unknown> = $state({})
@@ -235,8 +244,9 @@
 	let onRevision: "overwrite" | "branch" = $state("overwrite")
 	/**
 	 * 🚧 **How strict** (PLAN-rulesets §21; NOMENCLATURE §28): one of the
-	 * genre's options, changeable mid-session (ruled). Sent only when moved
-	 * here. Not asked of a genre with one option (Chat).
+	 * genre's options, changeable mid-session (ruled). Changed in the derived
+	 * settings below (lane 7), which write it at once; held here only so Save
+	 * never posts back a value it did not move.
 	 */
 	let rigour: string | null = $state(null)
 	const rulesOffer = $derived(
@@ -455,6 +465,42 @@
 	let isGuest: boolean = $derived(
 		!!session && session.userId !== userCtx.user?.id
 	)
+	/** 🚧 The book lock: play has written, so the session keeps its book. */
+	let lorebookFixed: boolean = $derived(!!session?.lorebookFixed)
+
+	/**
+	 * 🚧 What this session may write to its lorebook (owner ruling 2026-10-21,
+	 * "Personal > Lorebook > Session"): the stricter of the owner's own setting
+	 * and the book's. The session has no setting of its own; this line says
+	 * which level is the stricter one, so a session that writes less than
+	 * expected says why.
+	 */
+	const userSettingsCtx = getContext<UserSettingsCtx | undefined>("userSettingsCtx")
+	const writesPanelsCtx = getContext<PanelsCtx | undefined>("panelsCtx")
+	let sessionWrites = $derived.by(() => {
+		if (lorebookId == null) return null
+		const personal = effectiveLoreWriteMode(
+			userSettingsCtx?.settings?.loreWriteMode,
+			systemSettingsCtx?.settings?.loreWriteModeDefault
+		)
+		const book = lorebookList.find((l) => l.id === lorebookId)?.loreWriteMode
+		return { personal, ...loreWriteLimit({ personal, book: isLoreWriteMode(book) ? book : null }) }
+	})
+
+	function openWritesSetting(where: "personal" | "lorebook") {
+		if (!writesPanelsCtx || lorebookId == null) return
+		if (where === "lorebook") {
+			writesPanelsCtx.digest.lore = {
+				lorebookId,
+				scope: DEFAULT_SCOPE,
+				settings: true
+			}
+			writesPanelsCtx.openView("lorebooks", { toggle: false })
+		} else {
+			writesPanelsCtx.digest.settingsSection = "user"
+			writesPanelsCtx.openView("settings", { toggle: false })
+		}
+	}
 
 	/**
 	 * The three groups, each carrying whether something it holds is missing —
@@ -469,12 +515,9 @@
 				selectedCharacters.length < charactersFloor ||
 				selectedPersonas.length + playerSeats.length < personasFloor
 		},
-		{
-			value: "settings",
-			label: "Settings",
-			icon: Icons.Settings2,
-			hasError: modeShape?.lorebook === "required" && lorebookId == null
-		},
+		// No lorebook error (RF fix 2, 2026-10-23): a session may always run
+		// without a book — its own is its world.
+		{ value: "settings", label: "Settings", icon: Icons.Settings2 },
 		{ value: "visibility", label: "Privacy", icon: Icons.Eye }
 	])
 
@@ -1099,7 +1142,10 @@
 	}
 
 	const handleLorebooksList = (msg: Sockets.Lorebooks.List.Response) => {
-		lorebookList = withoutShared(msg.lorebookList) // only owned books: a shared one is read and copy only (PLAN-private-messages §6.7)
+		lorebookList = withoutShared(msg.lorebookList).filter(
+			// 🚧 An admin's own starter lorebooks: a session starts from a kit, never reads one.
+			(l) => (l as { kind?: string }).kind !== "starter_kit"
+		) // only owned books: a shared one is read and copy only (PLAN-private-messages §6.7)
 	}
 
 	const handleSessionsModes = (msg: Sockets.Sessions.Genres.Response) => {
@@ -1111,31 +1157,6 @@
 	) => {
 		if (msg.sessionId !== session?.id) return
 		accountVisibility = msg
-	}
-
-	// The preset this session runs on (19 §7). A preset is a pipeline
-	// configuration a person is allowed to see and use — what a non-admin is
-	// offered is the enabled ones, and it is the ordinary user's one lever over
-	// how their session behaves. Changing it changes which actions the session
-	// includes, which is why both refresh together.
-	let presetOptions: Sockets.Sessions.PresetOptions.Response["options"] =
-		$state([])
-	let selectedPreset: number | null = $state(null)
-
-	const handleSessionsPresets = (
-		msg: Sockets.Sessions.PresetOptions.Response
-	) => {
-		if (msg.sessionId !== session?.id) return
-		presetOptions = msg.options || []
-		selectedPreset = msg.selectedId
-	}
-
-	const handleSessionsChoosePreset = (
-		msg: Sockets.Sessions.ChoosePreset.Response
-	) => {
-		if (msg.sessionId !== session?.id) return
-		if (msg.error)
-			toaster.error({ title: "Preset", description: msg.error })
 	}
 
 	/** 🚧 Make the session's own notes a lorebook it reads (2026-10-19). */
@@ -1160,27 +1181,6 @@
 			}
 		)
 	}
-
-	function choosePreset(value: string) {
-		if (!session?.id) return
-		const configId = Number(value)
-		if (!Number.isFinite(configId)) return
-		socket.emit("sessions:choosePreset", {
-			sessionId: session.id,
-			configId
-		})
-	}
-
-	/** The preset options for this session — interest and request in one, bare. */
-	$effect(() => {
-		const id = session?.id
-		if (!id) return
-		return requestWithInterest(
-			"sessions:presets",
-			{ sessionId: id },
-			handleSessionsPresets
-		)
-	})
 
 	// The mode's functions and their state on this session (19 §3). Companions —
 	// contributed from the mode owner's own namespace — arrive on; foreign ones
@@ -1496,10 +1496,6 @@
 		"sessions:pipelines",
 		handleSessionsPipelines
 	)
-	useInterest<"sessions:choosePreset">(
-		"sessions:choosePreset",
-		handleSessionsChoosePreset
-	)
 	useInterest<"sessions:setFunction">(
 		"sessions:setFunction",
 		handleSessionsSetFunction
@@ -1635,7 +1631,7 @@
 			<LoadingState message="Loading session…" />
 		{:else}
 			{#if isGuest}
-				<p class="preset-tonal-surface rounded-[10px] p-3 text-[13px]">
+				<p class="preset-tonal-surface rounded-base p-3 text-chip">
 					You're a guest in this session. You can manage characters
 					and personas below — guests and session settings (name,
 					scenario, lorebook, tags, etc.) can only be changed by the
@@ -1670,7 +1666,7 @@
 						}}
 					/>
 					{#if validationErrors.name}
-						<p class="text-error-500 mt-1 text-xs" role="alert">
+						<p class="text-error-600-400 mt-1 text-xs" role="alert">
 							{validationErrors.name}
 						</p>
 					{/if}
@@ -1686,7 +1682,7 @@
 					<h3 class="mb-3 text-sm font-medium">Genre</h3>
 					<div class="flex flex-wrap items-center gap-2">
 						<span
-							class="preset-tonal rounded-[10px] px-3 py-1.5 text-[13px]"
+							class="preset-tonal rounded-base px-3 py-1.5 text-chip"
 						>
 							{modesList.find((m) => m.genreId === genreId)
 								?.name ?? genreId}
@@ -1766,11 +1762,11 @@
 										{@const label =
 											c.nickname || c.name || ""}
 										<div
-											class="border-surface-300 dark:border-surface-800 flex min-h-11 flex-wrap items-center gap-2 rounded-[10px] border p-2"
+											class="border-surface-200-800 flex min-h-11 flex-wrap items-center gap-2 rounded-base border p-2"
 											data-dnd-handle
 										>
 											<span
-												class="text-surface-500 hover:text-primary-500 shrink-0 cursor-grab"
+												class="text-surface-500 hover:text-primary-ink shrink-0 cursor-grab"
 												data-dnd-handle
 												class:hidden={selectedCharacters.length <=
 													1}
@@ -1785,7 +1781,7 @@
 											/>
 											<div class="min-w-0 flex-1">
 												<div
-													class="truncate text-[15px] font-medium select-none"
+													class="truncate text-lead font-medium select-none"
 												>
 													{label}
 												</div>
@@ -1875,7 +1871,7 @@
 													</span>
 												{/if}
 												<button
-													class="btn-ghost text-error-500 hover:bg-error-500/10 rounded p-1"
+													class="btn-ghost text-error-600-400 hover:bg-error-500/10 rounded p-1"
 													onclick={() =>
 														confirmRemoveCharacter(
 															c.id,
@@ -1913,7 +1909,7 @@
 							<div class="mb-2 flex flex-col gap-1">
 								{#each genreEnvoys as envoy (envoy.slug)}
 									<div
-										class="border-surface-300 dark:border-surface-800 flex min-h-11 flex-wrap items-center gap-2 rounded-[10px] border p-2"
+										class="border-surface-200-800 flex min-h-11 flex-wrap items-center gap-2 rounded-base border p-2"
 									>
 										{#if envoy.image}
 											<img
@@ -1934,7 +1930,7 @@
 										{/if}
 										<div class="min-w-0 flex-1">
 											<div
-												class="truncate text-[15px] font-medium select-none"
+												class="truncate text-lead font-medium select-none"
 											>
 												{envoy.name}
 											</div>
@@ -2007,11 +2003,11 @@
 							>
 								{#each selectedPersonas as p, i (p.id)}
 									<div
-										class="border-surface-300 dark:border-surface-800 flex min-h-11 flex-wrap items-center gap-2 rounded-[10px] border p-2"
+										class="border-surface-200-800 flex min-h-11 flex-wrap items-center gap-2 rounded-base border p-2"
 										data-dnd-handle
 									>
 										<span
-											class="text-surface-500 hover:text-primary-500 shrink-0 cursor-grab"
+											class="text-surface-500 hover:text-primary-ink shrink-0 cursor-grab"
 											data-dnd-handle
 											class:hidden={selectedPersonas.length <=
 												1}
@@ -2022,7 +2018,7 @@
 										<Avatar char={p} size="md" decorative />
 										<div class="min-w-0 flex-1">
 											<div
-												class="truncate text-[15px] font-medium select-none"
+												class="truncate text-lead font-medium select-none"
 											>
 												{p.name}
 											</div>
@@ -2064,7 +2060,7 @@
 												</button>
 											{/if}
 											<button
-												class="btn-ghost text-error-500 hover:bg-error-500/10 rounded p-1"
+												class="btn-ghost text-error-600-400 hover:bg-error-500/10 rounded p-1"
 												onclick={() =>
 													confirmRemovePersona(
 														p.id,
@@ -2089,7 +2085,7 @@
 											!isGuest ||
 											seat.userId === userCtx.user?.id}
 										<li
-											class="border-surface-300 dark:border-surface-800 flex min-h-11 items-center gap-2 rounded-[10px] border p-2"
+											class="border-surface-200-800 flex min-h-11 items-center gap-2 rounded-base border p-2"
 										>
 											<Icons.UserRound
 												size={20}
@@ -2098,7 +2094,7 @@
 											/>
 											<div class="min-w-0 flex-1">
 												<input
-													class="input text-[15px]"
+													class="input text-lead"
 													type="text"
 													id="player-seat-{seat.id}"
 													aria-label="Seat name"
@@ -2113,7 +2109,7 @@
 											</div>
 											{#if mine}
 												<button
-													class="btn-ghost text-error-500 hover:bg-error-500/10 rounded p-1"
+													class="btn-ghost text-error-600-400 hover:bg-error-500/10 rounded p-1"
 													onclick={() =>
 														(playerSeats =
 															playerSeats.filter(
@@ -2151,7 +2147,7 @@
 							<ul class="flex flex-col gap-2" aria-label="The fallen">
 								{#each fallenSeats as fallen (fallen.id)}
 									<li
-										class="border-surface-300 dark:border-surface-800 flex min-h-11 items-center gap-2 rounded-[10px] border p-2"
+										class="border-surface-200-800 flex min-h-11 items-center gap-2 rounded-base border p-2"
 									>
 										<Icons.Skull size={18} class="text-surface-500 shrink-0" aria-hidden="true" />
 										<span class="truncate text-sm">{fallen.name}</span>
@@ -2173,7 +2169,7 @@
 							<div class="flex flex-col gap-2">
 								{#each removedCharacters as rc (rc.id)}
 									<div
-										class="border-surface-300 dark:border-surface-800 flex min-h-11 items-center justify-between gap-3 rounded-[10px] border p-2"
+										class="border-surface-200-800 flex min-h-11 items-center justify-between gap-3 rounded-base border p-2"
 									>
 										<span class="truncate text-sm">
 											{rc.name}
@@ -2193,7 +2189,7 @@
 								{/each}
 								{#each removedPersonas as rp (rp.id)}
 									<div
-										class="border-surface-300 dark:border-surface-800 flex min-h-11 items-center justify-between gap-3 rounded-[10px] border p-2"
+										class="border-surface-200-800 flex min-h-11 items-center justify-between gap-3 rounded-base border p-2"
 									>
 										<span class="truncate text-sm">
 											{rp.name}
@@ -2244,7 +2240,7 @@
 											(g) => g.userId === guest.userId
 										)}
 									<div
-										class="border-surface-300 dark:border-surface-800 flex min-h-11 items-center justify-between gap-2 rounded-[10px] border p-2"
+										class="border-surface-200-800 flex min-h-11 items-center justify-between gap-2 rounded-base border p-2"
 									>
 										<span
 											class="flex min-w-0 flex-1 items-center gap-2"
@@ -2255,7 +2251,7 @@
 												aria-hidden="true"
 											/>
 											<span
-												class="truncate text-[15px] font-medium"
+												class="truncate text-lead font-medium"
 											>
 												{resolveUserHandle(guest.user)}
 											</span>
@@ -2268,7 +2264,7 @@
 											</span>
 										{/if}
 										<button
-											class="btn-ghost text-error-500 hover:bg-error-500/10 shrink-0 rounded p-1"
+											class="btn-ghost text-error-600-400 hover:bg-error-500/10 shrink-0 rounded p-1"
 											onclick={() =>
 												confirmRemoveGuest(
 													guest.userId,
@@ -2302,9 +2298,10 @@
 					     the session's own fields wait for Save; the controls that
 					     change how it runs write as they move and say so. -->
 					<p class="text-surface-600-400 text-xs">
-						The story, genre settings and what your lines are called
-						wait for Save. Controls marked “Applies at once” change
-						the session as you set them.
+						The story, what your lines are called and the tags wait
+						for Save. Everything marked “Applies at once” — the
+						genre's settings, each pipeline's and the routines —
+						changes the session as you set it.
 					</p>
 					<section class={CARD_CLASS}>
 						<h3 class="mb-3 text-sm font-medium">The story</h3>
@@ -2362,7 +2359,7 @@
 										required={modeShape?.lorebook ===
 											"required"}
 										describedBy="lorebook-help"
-										disabled={isGuest}
+										disabled={isGuest || lorebookFixed}
 										options={[
 											{ value: "", label: "None" },
 											...lorebookList.map((lorebook) => ({
@@ -2386,6 +2383,65 @@
 										character lore and history entries from
 										this lorebook
 									</span>
+									<!-- 🚧 The book lock (PLAN-lorebook-kinds §A): once play
+									     has written, the session keeps its book — said
+									     as what it does, and what to do for another. -->
+									{#if lorebookFixed && !isGuest}
+										<p
+											class="text-surface-600-400 mt-1 text-xs"
+											data-session-lorebook-fixed
+										>
+											{savedLorebookId != null
+												? `This story is underway with ${
+														lorebookList.find((l) => l.id === savedLorebookId)
+															?.name ?? "its lorebook"
+													}, so it keeps reading it. Start a new session to read another book.`
+												: "This story is underway in its own notes. Make them a lorebook to keep them and build on them."}
+										</p>
+									{/if}
+									<!-- 🚧 Lorebook writes: the stricter of the owner's
+									     setting and the book's, and which one it is when
+									     they differ (owner 2026-10-21). The owner's to
+									     read: a guest's turn writes under the owner's. -->
+									{#if sessionWrites && !isGuest}
+										<div
+											class="text-surface-600-400 mt-2 flex flex-col items-start gap-1 text-xs"
+											data-session-lore-writes={sessionWrites.mode}
+											data-session-lore-writes-limited={sessionWrites.limitedBy ?? ""}
+										>
+											<p>
+												Lorebook writes:
+												<strong class="text-surface-800-200">
+													{LORE_WRITE_MODE_CHOICES[sessionWrites.mode].label}
+												</strong>
+												{#if sessionWrites.limitedBy === "lorebook"}
+													— this lorebook allows no more, though your own
+													setting is {LORE_WRITE_MODE_CHOICES[sessionWrites.personal].label}.
+												{:else if sessionWrites.limitedBy === "personal"}
+													— your own setting allows no more, though this
+													lorebook would take
+													{LORE_WRITE_MODE_CHOICES[
+														(lorebookList.find((l) => l.id === lorebookId)
+															?.loreWriteMode as LoreWriteMode) ?? "full"
+													].label}.
+												{:else}
+													— as your setting and this lorebook allow.
+												{/if}
+											</p>
+											{#if sessionWrites.limitedBy && writesPanelsCtx}
+												<button
+													type="button"
+													class="anchor text-xs"
+													onclick={() =>
+														openWritesSetting(sessionWrites!.limitedBy!)}
+												>
+													{sessionWrites.limitedBy === "lorebook"
+														? "Change it in Book settings"
+														: "Change it in Settings › User"}
+												</button>
+											{/if}
+										</div>
+									{/if}
 									<!-- 🚧 The session's own notes (PLAN-rulesets §26): kept while it reads
 									     no lorebook; made a real one here as well as from the session's
 									     menu in Sessions (2026-10-19: nobody found it there). -->
@@ -2418,15 +2474,9 @@
 										bind:clock={storyClock}
 										readOnly={isGuest}
 									/>
-									<!-- 🚧 The story clock's step settings (live scenes §15 G11):
-									     the reply tick — *Each reply advances the clock by …* —
-									     the owner's, applied at once. -->
-									{#if session && !isGuest}
-										<SessionStepSettings
-											sessionId={session.id}
-											place="story-clock"
-										/>
-									{/if}
+									<!-- The reply tick (*Each reply advances the clock by …*)
+									     is the reply's own setting now: it sits on the Reply
+									     card of the settings below (lane 7, 2026-10-21). -->
 								{:else if lorebookId != null}
 									<p class="text-surface-600-400 text-xs">
 										Save to choose the line (which version
@@ -2463,43 +2513,6 @@
 						/>
 					{/if}
 
-					<!-- The preset (19 §7). One pipeline configuration, chosen
-						     per session, deciding the settings this session runs on and
-						     which actions it includes. Admins additionally see
-						     disabled presets, marked — one an admin just switched
-						     off vanishing entirely would read as deleted. -->
-					{#if session && !isGuest && presetOptions.length > 0}
-						<section class={CARD_CLASS}>
-							<p
-								class="text-surface-600-400 mb-1.5 block text-xs"
-								aria-hidden="true"
-							>
-								Configuration · Applies at once
-							</p>
-							<p
-								class="text-surface-600-400 mb-2 text-xs"
-								id="session-preset-help"
-							>
-								Which configuration of the reply pipeline this
-								session runs: its prompts and settings. The
-								default is fine.
-							</p>
-							<Select
-								label="Configuration"
-								labelHidden
-								describedBy="session-preset-help"
-								options={presetOptions.map((p) => ({
-									value: String(p.configId),
-									label: `${p.isDefault ? "★ " : ""}${p.name}${!p.enabled ? " (unavailable)" : ""}`
-								}))}
-								value={selectedPreset == null
-									? ""
-									: String(selectedPreset)}
-								onValueChange={choosePreset}
-							/>
-						</section>
-					{/if}
-
 					<!-- Session actions (19 §3). Three layers decide what a session has:
 						     its own answer, then its preset's included set, then the
 						     companion rule. The permission line runs between the two
@@ -2528,7 +2541,7 @@
 										class="checkbox mt-0.5"
 										checked={f.enabled}
 										disabled={functionsBusy ===
-											actionIdentity(f)}
+											actionIdentity(f) || !!f.unavailable}
 										onchange={(e) =>
 											toggleSessionFunction(
 												f,
@@ -2540,7 +2553,7 @@
 											{f.name}
 											{#if f.source === "session"}
 												<span
-													class="text-surface-600-400 text-[11px]"
+													class="text-surface-600-400 text-meta"
 												>
 													· set for this session
 												</span>
@@ -2552,6 +2565,10 @@
 											>
 												{f.description}
 											</span>
+										{/if}
+										{#if f.unavailable}
+											<!-- 🚧 R56: off until an administrator sets a model for it. -->
+											<span class="text-warning-700-300 text-xs">{f.unavailable}</span>
 										{/if}
 									</span>
 								</label>
@@ -2627,17 +2644,6 @@
 							cardClass={CARD_CLASS}
 						/>
 					{/if}
-					<!-- 🚧 Step settings (live scenes §15 G11): every other story
-					     setting a step of the session's pipelines offers it (the
-					     sprite picker's) — never a model's plumbing. The owner's. -->
-					{#if session && !isGuest}
-						<SessionStepSettings
-							sessionId={session.id}
-							place="other"
-							cardClass={CARD_CLASS}
-						/>
-					{/if}
-
 					<!-- What the person's own lines are called (lair re-plan R4): only
 					     for a genre that declares a `playerLabel`. Blank keeps the
 					     genre's; a rename relabels every line already written. -->
@@ -2671,36 +2677,48 @@
 						</section>
 					{/if}
 
-					<!-- Mode-declared per-session fields (19 §2): rendered through the one
-			     schema renderer, stored on the session row, supplied back through the
-			     input node's published document. Standard mode declares none. -->
-					{#if Object.keys(modeFieldDecls).length > 0}
-						<section class={CARD_CLASS}>
-							<h3 class="mb-3 text-sm font-medium">
-								Genre settings
-							</h3>
-							{#if session?.id && !isGuest}
-								<SessionPresetControl
-									sessionId={session.id}
-									{genreId}
-									presetId={(session as any)?.presetId ?? null}
-									fields={genreFields}
-									tasks={(modesList.find((m) => m.genreId === genreId) as any)?.tasks ?? []}
-									presets={sessionPresetRows}
-									onapplied={() => {
-										const next = { ...genreFields }
-										delete next.tasks
-										delete next.tools
-										genreFields = next
-									}}
-								/>
-							{/if}
-							<SchemaForm
-								schema={modeFieldDecls as any}
-								bind:values={genreFields}
-								extras={{ tasks: (modesList.find((m) => m.genreId === genreId) as any)?.tasks ?? [], tasksPinned: sessionPresetPins?.tasks }}
+					<!-- 🚧 The preset (2026-10-19): which of its genre's presets the
+					     session runs, when the genre offers more than one. Applies at
+					     once; what it changes reaches the settings below. -->
+					{#if session?.id && !isGuest && switchablePresets.length > 1}
+						<section class={CARD_CLASS} aria-label="Preset">
+							<SessionPresetControl
+								sessionId={session.id}
+								{genreId}
+								presetId={(session as any)?.presetId ?? null}
+								fields={genreFields}
+								presets={sessionPresetRows}
+								onapplied={() => {
+									const next = { ...genreFields }
+									delete next.tools
+									genreFields = next
+								}}
 							/>
 						</section>
+					{/if}
+
+					<!-- 🚧 The session's settings, derived (PLAN-layering §5, A10;
+					     lane 7, 2026-10-21): the genre's settings — How strict and
+					     the rules among them — then a card per pipeline the preset
+					     registers that offers anything, then Routines. Each applies
+					     at once; who sees what is the server's (an owner the
+					     settings that reach them, an administrator all of it,
+					     locked ones read-only). Replaces the Genre settings card,
+					     How strict, the step settings and the background tasks. -->
+					{#if session?.id && !isGuest}
+						<SessionSettingsForm
+							sessionId={session.id}
+							cardClass={CARD_CLASS}
+							genreFieldDecls={modeFieldDecls}
+							valueLabelOf={(f) =>
+								f.address.kind === "genre" && f.address.key === "ruleset"
+									? (rulesOffer?.choices.find((c) => c.id === f.value)?.name ?? null)
+									: null}
+							membersOf={(f) =>
+								f.address.kind === "genre" && f.address.key === "rigour" && howStrictOptions.length
+									? howStrictOptions.map((o) => ({ key: o.id, label: o.label }))
+									: undefined}
+						/>
 					{/if}
 
 					<!-- 🚧 On revision (PLAN-rulesets §28): every genre's, beside
@@ -2727,39 +2745,6 @@
 								<option value="branch">
 									Branch — keep the old turn in the original session
 								</option>
-							</select>
-						</section>
-					{/if}
-
-					<!-- 🚧 How strict (PLAN-rulesets §21): beside On revision and
-					     Rules options; changing it mid-session is allowed.
-					     Saved with the form. Chat (one option) shows none. -->
-					{#if session?.id && !isGuest && asksHowStrict(rulesOffer)}
-						<section class={CARD_CLASS}>
-							<label
-								class="mb-1 block text-sm font-medium"
-								for="session-how-strict"
-							>
-								How strict
-							</label>
-							<!-- 🚧 Which rules the session plays (2026-10-19: nowhere said it). Set
-							     when the session started, or by its lorebook; read-only here. -->
-							<p class="mb-1 text-sm" data-testid="session-rules-name">
-								<span class="text-surface-600-400">Rules:</span>
-								{rulesOffer?.choices.find((c) => c.id === (session as any)?.primaryRuleset)?.name ?? (session as any)?.primaryRuleset ?? "None"}
-							</p>
-							<p class="text-surface-600-400 mb-2 text-xs">
-								How closely the story keeps to them. The rules themselves are set
-								when the session starts, or come from its lorebook.
-							</p>
-							<select
-								id="session-how-strict"
-								class={FIELD_CLASS}
-								bind:value={rigour}
-							>
-								{#each howStrictOptions as o (o.id)}
-									<option value={o.id}>{o.label}</option>
-								{/each}
 							</select>
 						</section>
 					{/if}
@@ -2851,7 +2836,7 @@
 							<!-- Tag suggestions dropdown -->
 							{#if showTagSuggestions && filteredTags.length > 0}
 								<div
-									class="bg-surface-100-900 border-surface-300 dark:border-surface-800 absolute z-10 mt-1 max-h-40 w-full overflow-y-auto rounded-[10px] border shadow-lg"
+									class="bg-surface-100-900 border-surface-200-800 absolute z-10 mt-1 max-h-40 w-full overflow-y-auto rounded-base border shadow-lg"
 								>
 									{#each filteredTags as tag}
 										<button
@@ -2936,7 +2921,7 @@
 			>
 				<div class="flex flex-col gap-3 pt-3">
 					<div
-						class="preset-tonal-surface rounded-[10px] p-4 text-[13px]"
+						class="preset-tonal-surface rounded-base p-4 text-chip"
 					>
 						<div class="flex items-start gap-2">
 							<Icons.Eye size={18} class="mt-0.5 shrink-0" />
@@ -2978,7 +2963,7 @@
 						{@const ex = accountVisibility.exposed}
 						{#if ex.characters.length + ex.personas.length + ex.lorebooks.length === 0}
 							<div
-								class="border-surface-300 bg-surface-100 dark:border-surface-800 dark:bg-surface-900 rounded-[12px] border p-4 text-[13px]"
+								class="border-surface-200-800 bg-surface-100-900 rounded-container border p-4 text-chip"
 							>
 								You have not added any of your own characters,
 								personas, or lorebooks to this session — so it
@@ -2988,7 +2973,7 @@
 							<div class="flex flex-col gap-3">
 								{#if ex.characters.length}
 									<div
-										class="border-surface-300 bg-surface-100 dark:border-surface-800 dark:bg-surface-900 flex flex-col gap-2 rounded-[12px] border p-3"
+										class="border-surface-200-800 bg-surface-100-900 flex flex-col gap-2 rounded-container border p-3"
 									>
 										<div
 											class="flex items-center gap-2 text-sm font-medium"
@@ -3008,7 +2993,7 @@
 								{/if}
 								{#if ex.personas.length}
 									<div
-										class="border-surface-300 bg-surface-100 dark:border-surface-800 dark:bg-surface-900 flex flex-col gap-2 rounded-[12px] border p-3"
+										class="border-surface-200-800 bg-surface-100-900 flex flex-col gap-2 rounded-container border p-3"
 									>
 										<div
 											class="flex items-center gap-2 text-sm font-medium"
@@ -3028,7 +3013,7 @@
 								{/if}
 								{#if ex.lorebooks.length}
 									<div
-										class="border-surface-300 bg-surface-100 dark:border-surface-800 dark:bg-surface-900 flex flex-col gap-2 rounded-[12px] border p-3"
+										class="border-surface-200-800 bg-surface-100-900 flex flex-col gap-2 rounded-container border p-3"
 									>
 										<div
 											class="flex items-center gap-2 text-sm font-medium"
@@ -3062,7 +3047,7 @@
 								<div class="flex flex-col gap-2">
 									{#each accountVisibility.viewers as v}
 										<div
-											class="border-surface-300 bg-surface-100 dark:border-surface-800 dark:bg-surface-900 flex items-center justify-between gap-3 rounded-[12px] border p-3 text-[13px]"
+											class="border-surface-200-800 bg-surface-100-900 flex items-center justify-between gap-3 rounded-container border p-3 text-chip"
 										>
 											<span
 												class="flex items-center gap-2"
@@ -3070,11 +3055,9 @@
 												<Icons.User size={16} />
 												{v.username}
 											</span>
-											<span
-												class="preset-tonal-surface rounded-full px-2 py-0.5 text-xs capitalize"
-											>
+											<Badge size="md" class="capitalize">
 												{v.role}
-											</span>
+											</Badge>
 										</div>
 									{/each}
 								</div>

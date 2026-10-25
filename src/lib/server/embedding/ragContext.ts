@@ -20,6 +20,7 @@ import {
 	eq,
 	inArray,
 	isNotNull,
+	isNull,
 	type SQL
 } from "drizzle-orm"
 import type { PgTable } from "drizzle-orm/pg-core"
@@ -447,7 +448,9 @@ export async function fetchScopedCandidates(
 				.where(
 					and(
 						eq(schema.sessionMessages.sessionId, context.sessionId),
-						messageChannel
+						messageChannel,
+						// 🚧 The live history (RF fix 5): the window the history read built.
+						isNull(schema.sessionMessages.rewindOrdinal)
 					)
 				)
 				.orderBy(desc(schema.sessionMessages.id))

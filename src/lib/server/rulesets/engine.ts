@@ -11,8 +11,18 @@
  * database and writes nothing: `resolve.ts` does both.
  *
  * Two moments (audit C1): `runResolve` renders the blocks a model call
- * reads; `runApply` validates the model's deltas, rolls, and lets time pass.
- * The `advance` moment is `runApply` with no deltas.
+ * reads; `runApply` validates the model's deltas, decides checks, and lets
+ * time pass. The `advance` moment is `runApply` with no deltas.
+ *
+ * 🚧 **Check methods** (PLAN-rulesets-authoring D2, 2026-10-22): a check
+ * is decided by the method its selector names, else the ruleset's default
+ * (`checkMethodOf`, the conventions read through `normaliseRuleset` at
+ * every entry — `conventionsOf`) — a die against a target, a pool of dice,
+ * cards from the scene's deck, a comparison, a spend, or the game master's
+ * judgement (`methods.ts`) — and writes its **outcome block**
+ * (`Outcome.block`). Its `pre-roll` and `post-roll` scripts are asked
+ * mid-check (`applySteps` yields an `EngineAsk`; `runApplyAsync` awaits
+ * the answers); `effects` scripts are laid on in phase 2 (`effectsPhase`).
  *
  * Every modify — a piece's, a script's, a bridge's — goes through one
  * `addModify` and is folded into the shown value by one `foldModifies`
@@ -23,12 +33,13 @@
  * ## What the rigours do here
  *
  *  · `prose` — what things are, in words: voice, sheet and pieces with no
- *    numbers (unless a stat says `showNumbers`), riders as prose, no dice.
+ *    numbers (unless a stat says `showNumbers`), riders as prose, nothing
+ *    decided.
  *    `apply` records what the model said and computes nothing but relative
  *    arithmetic.
- *  · `mechanics` — adds phases 2–4, delta validation, checks and time.
- *  · `scripts` — `mechanics`, at index depth by default, with the ruleset's
- *    `derived`-phase scripts (QuickJS, `scripts.ts`) laid over in phase 3.
+ *  · `mechanics` — adds phases 2–4, delta validation, checks and time, and
+ *    the ruleset's scripts at every phase (QuickJS, `scripts.ts`).
+ *  · `scripts` — `mechanics`, at index depth by default.
  *
  * Deterministic: owners in key order, fields in the ruleset's order, pieces
  * by name — so the same state renders the same bytes.
@@ -36,16 +47,32 @@
 
 import {
 	advanceStoryTime,
+	CHECK_METHOD_KINDS,
 	checkPiece,
 	compareStoryTimes,
+	getAttributeSlot,
+	guessRepertoireTags,
 	i18nText,
+	mechanicAmount,
+	normaliseRuleset,
 	predicateHolds,
+	rulesetCheckMethod,
 	rulesetSelectorFamily,
+	functionRefKey,
 	rulesetSelectors,
 	slotListItemText,
+	type BidMethod,
+	type CardDrawMethod,
+	type CheckMethodDecl,
+	type CheckMethodKind,
+	type CompareMethod,
+	type DicePoolMethod,
+	type DieTargetMethod,
 	type FiveBand,
 	type MechanicDecl,
 	type MechanicPredicate,
+	type NormalisedConventions,
+	type OutcomeBlock,
 	type RenderDepth,
 	type RepertoireDecl,
 	type Rigour,
@@ -58,9 +85,28 @@ import {
 import { evaluate, isRefusal } from "$lib/server/state/expressions"
 import { slotKey } from "$lib/server/state/keys"
 import { byString, compendiumRow, DEPTHS, minutesPer, normaliseSlotRef, parseAtTime, slotNamed } from "./common"
-import { degreeOf, rollDice } from "./dice"
+import { degreeNamed, rollDice, stepDegree, type Degree } from "./dice"
+import {
+	bidDegree,
+	coreKindOf,
+	drawFromDeck,
+	judgedDegree,
+	noResolverWhy,
+	priceOfSuccess,
+	resolveCardDraw,
+	resolveCompare,
+	resolveDicePool,
+	resolveDieTarget,
+	type MethodCheck,
+	type MethodResult
+} from "./methods"
 import { roundsSince } from "./rounds"
+import { derivedVoice, sectionsOf, attributeSlotsOf } from "./functionRun"
+import { changedByAllows } from "./scopes"
 import type {
+	CheckAskContext,
+	DeckState,
+	EngineAsk,
 	EngineChange,
 	EngineInput,
 	EngineOutput,
@@ -69,6 +115,8 @@ import type {
 	HeldRepertoire,
 	Outcome,
 	OwnerView,
+	PostRollAnswer,
+	PreRollAnswer,
 	ProposedDelta,
 	RejectedDelta,
 	RulesetBlock,
@@ -117,8 +165,10 @@ const selectorWords = (segment: string): string =>
 /**
  * What a person reads for a selector in an explain line or an outcome:
  * the stat's own label, else the selector's declared `label` when the
- * ruleset gives one, else its words — `attack.melee` → _Melee attack_,
- * `strength-mod` → _Strength modifier_. Never the bare id.
+ * ruleset gives one, else 🚧 the `label` its check reference carries in the
+ * functions section (`checkRef(key, { label })` — Vis Itineris's
+ * _Athletics_, the roll form's words), else its words — `attack.melee` →
+ * _Melee attack_, `strength-mod` → _Strength modifier_. Never the bare id.
  */
 export function selectorLabel(input: Pick<EngineInput, "ruleset">, owner: Pick<OwnerView, "stats"> | null, selector: string): string {
 	const stat = owner?.stats.find((s) => s.selector === selector)
@@ -126,6 +176,9 @@ export function selectorLabel(input: Pick<EngineInput, "ruleset">, owner: Pick<O
 	const decl = rulesetSelectors(input.ruleset).get(selector) as { label?: Parameters<typeof i18nText>[0] } | undefined
 	const declared = decl?.label !== undefined ? text(decl.label) : ""
 	if (declared) return declared
+	const ref = (sectionsOf(input.ruleset).functions ?? []).find((f) => functionRefKey(f) === selector)
+	const referenced = ref?.options?.label !== undefined ? text(ref.options.label as Parameters<typeof i18nText>[0]) : ""
+	if (referenced) return referenced
 	const parts = selector.split(".").filter(Boolean).map(selectorWords)
 	// `attack.melee` reads _melee attack_; a lone word reads as itself.
 	const words = parts.length > 1 ? [...parts.slice(1).reverse(), parts[0]!].join(" ") : (parts[0] ?? selector)
@@ -228,8 +281,60 @@ export function stackModifies(
 	return { kept: out, edge: (up ? 1 : 0) - (down ? 1 : 0) }
 }
 
-/** The conventions this resolution plays by: the session's (settings laid over), else the ruleset's own. */
-const conventionsOf = (input: EngineInput): RulesetConventions => input.conventions ?? input.ruleset.conventions
+/** Each conventions object read once, normalised (`normaliseRuleset` is pure, so the reading is too). */
+const NORMALISED = new WeakMap<object, NormalisedConventions>()
+
+/**
+ * The conventions this resolution plays by — the session's (settings laid
+ * over), else the ruleset's own — 🚧 read through `normaliseRuleset`
+ * (2026-10-22), the SDK's one reading of a ruleset: the ⏳ `dice` as the
+ * `die` check method, the ⏳ top-level `difficultyBands` as its bands, the
+ * degrees in force (`DEFAULT_DEGREES` when none are declared). Every
+ * engine entry reads conventions here, never off the declaration.
+ */
+export function conventionsOf(input: Pick<EngineInput, "conventions" | "ruleset">): NormalisedConventions {
+	if (!input.conventions && input.ruleset) {
+		// 🚧 The ruleset's own (2026-10-23): a ruleset in sections says no ⏳ `conventions`; the SDK reads them back.
+		let own = OWN.get(input.ruleset)
+		if (!own) {
+			own = normaliseRuleset(input.ruleset).conventions
+			OWN.set(input.ruleset, own)
+		}
+		return own
+	}
+	const raw: RulesetConventions = input.conventions ?? ({} as RulesetConventions)
+	let n = NORMALISED.get(raw)
+	if (!n) {
+		n = normaliseRuleset({ conventions: raw, difficultyBands: input.ruleset?.difficultyBands }).conventions
+		NORMALISED.set(raw, n)
+	}
+	return n
+}
+
+/** The ruleset's own conventions, read once per declaration. */
+const OWN = new WeakMap<object, NormalisedConventions>()
+
+/**
+ * 🚧 The check method a check is decided by (2026-10-22): its selector's
+ * `method`, else the ruleset's default, under the conventions the session
+ * plays — or `none` with a null key, when the ruleset names no method.
+ */
+export function checkMethodOf(input: Pick<EngineInput, "conventions" | "ruleset">, selector?: string): { key: string | null; method: CheckMethodDecl } {
+	return rulesetCheckMethod({ stats: input.ruleset.stats, selectors: input.ruleset.selectors, conventions: conventionsOf(input) as RulesetConventions }, selector)
+}
+
+/**
+ * 🚧 Whether a repertoire carries a **repertoire tag** (2026-10-22): read as
+ * `rulesetProvides` reads it — once any of the ruleset's repertoires
+ * declares tags, the declared ones alone; ⏳ before that, the tags its name
+ * suggests (`guessRepertoireTags`). How the engine finds conditions (a
+ * trap's, *Track conditions*) and casting, never by a repertoire's id.
+ */
+export function repertoireTagged(input: Pick<EngineInput, "ruleset">, rep: RepertoireDecl, tag: string): boolean {
+	const tagged = (input.ruleset.repertoires ?? []).some((r) => r?.tags !== undefined) || rep.tags !== undefined
+	if (tagged) return Array.isArray(rep.tags) && rep.tags.includes(tag)
+	return guessRepertoireTags(rep).includes(tag)
+}
 
 /** Does a mechanic's predicate hold, for this piece, over these values? */
 export function predicateHoldsFor(
@@ -342,6 +447,28 @@ function piecePhase(input: EngineInput, owner: OwnerView, r: Resolved): void {
 }
 
 /**
+ * 🚧 Phase 2, scripted (2026-10-22) — what the ruleset's `effects`-phase
+ * scripts laid on this owner for the events in play (`EngineInput.effects`,
+ * run by `scripts.ts` on phases 1–2's values): riders in words, bonuses
+ * stacked with the pieces' own, degree steps on checks. Before the
+ * `derived` phase, so a derived value reads them as it reads a piece's.
+ */
+function effectsPhase(input: EngineInput, owner: OwnerView, r: Resolved): void {
+	const laid = input.effects?.[owner.key]
+	if (!laid || !atLeast(input.rigour, "mechanics")) return
+	for (const x of laid.riders) r.riders.push(x.text)
+	if (laid.modifies.length) {
+		const selectors = rulesetSelectors(input.ruleset)
+		for (const m of laid.modifies) {
+			const label = selectors.has(m.label) ? selectorLabel(input, owner, m.label) : m.label
+			addModify(r, m.target, { value: m.value, bonusType: m.bonusType, label, origin: { kind: "derived", ref: `script:${m.seedKey}` } })
+		}
+		foldModifies(input, owner, r)
+	}
+	for (const a of laid.adjust) r.adjust.set(a.target, (r.adjust.get(a.target) ?? 0) + a.by)
+}
+
+/**
  * Phase 3 — derived, pure: the ruleset's `derived`-phase scripts first (run
  * by `scripts.ts` on phases 1–2's values), so a stat's expression may read
  * what they computed; their modifies fold with the rest. Then each derived
@@ -408,7 +535,9 @@ function bridgePhase(input: EngineInput, owner: OwnerView, r: Resolved): void {
 /**
  * Phases 1–2 for every owner, by key — what `scripts.ts` hands a `derived`
  * script, and where `runResolve` / `runApply` pick up, so the phases run
- * once a moment whether or not the ruleset has scripts (audit C2).
+ * once a moment whether or not the ruleset has scripts (audit C2). 🚧 With
+ * `EngineInput.effects`, the `effects`-phase scripts' answers are laid on
+ * at the end of phase 2 (`effectsPhase`).
  */
 export function earlyPhases(input: EngineInput): Map<string, Resolved> {
 	const out = new Map<string, Resolved>()
@@ -416,6 +545,7 @@ export function earlyPhases(input: EngineInput): Map<string, Resolved> {
 		const r = newResolved()
 		basePhase(input, owner, r)
 		piecePhase(input, owner, r)
+		effectsPhase(input, owner, r)
 		out.set(owner.key, r)
 	}
 	return out
@@ -457,6 +587,20 @@ export function explainText(target: string, total: number, terms: readonly Expla
 
 // ── Phase 5: render ─────────────────────────────────────────────────────────
 
+/**
+ * 🚧 The **turn economy line** (PLAN-rulesets-authoring D1, 2026-10-22):
+ * how many actions a turn holds (`conventions.actions.perTurn`) and whether
+ * a reaction is had besides — _A turn holds 3 actions and a reaction._ —
+ * read into the voice block where numbers show. Empty when the ruleset
+ * says no `perTurn`.
+ */
+export function turnEconomyLine(conv: Pick<RulesetConventions, "actions">): string {
+	const a = conv.actions
+	const n = a?.perTurn
+	if (typeof n !== "number" || !Number.isInteger(n) || n < 1) return ""
+	return `A turn holds ${n} ${n === 1 ? "action" : "actions"}${a?.reaction ? " and a reaction" : ""}.`
+}
+
 /** The cast owners this turn names — the holders a holder-only field may be read by. */
 const actingHolders = (owners: readonly OwnerView[]): OwnerView[] =>
 	owners.filter((o) => o.owner.kind === "session_cast" || o.owner.kind === "player_seat")
@@ -471,6 +615,14 @@ function voiceOf(owners: readonly OwnerView[], viewer?: string | null): string |
 	if (viewer && viewer !== "gm" && owners.some((o) => o.key === viewer)) return viewer
 	const cast = actingHolders(owners)
 	return cast.length === 1 ? cast[0]!.key : null
+}
+
+/** 🚧 A free text value as a sentence of its own: trimmed, one line, ending in a stop (RF fix 2, item 2). */
+export function proseSentence(value: SlotValue | undefined): string | undefined {
+	if (typeof value !== "string") return undefined
+	const t = value.replace(/\s+/g, " ").trim()
+	if (!t) return undefined
+	return /[.!?…"”')]$/.test(t) ? t : `${t}.`
 }
 
 function valueText(value: SlotValue | undefined, showNumbers: boolean): string | undefined {
@@ -557,8 +709,17 @@ function sheetRenders(
 ): Partial<Record<RenderDepth, string>> {
 	const numbers = atLeast(input.rigour, "mechanics")
 	const parts: string[] = []
+	/** 🚧 Free text attributes (RF fix 2, item 2): each its own sentence under the sheet line. */
+	const sentences: string[] = []
 	for (const stat of owner.stats) {
 		if (stat.holderOnly && voice !== owner.key) continue
+		// 🚧 D4: an attribute whose visibility keeps it from this view.
+		if (input.hidden?.[owner.key]?.has(stat.slotId)) continue
+		if (stat.prose) {
+			const t = proseSentence(r.values.get(stat.selector) ?? stat.value)
+			if (t) sentences.push(`  · ${owner.name}'s ${stat.label.toLowerCase()}: ${t}`)
+			continue
+		}
 		const v = valueText(r.values.get(stat.selector) ?? stat.value, numbers || !!stat.showNumbers)
 		if (v !== undefined) parts.push(`${stat.label}: ${v}`)
 	}
@@ -569,8 +730,9 @@ function sheetRenders(
 		if (!audienceAllows(rep.repertoire, owner, voice) || !rep.pieces.length) continue
 		parts.push(`${repLabel(rep.repertoire)}: ${rep.pieces.map((p) => pieceLine(p, "index", numbers)).join(", ")}`)
 	}
-	const index = parts.length ? `${owner.name} — ${parts.join("; ")}` : ""
-	if (!index) return {}
+	const line = parts.length ? `${owner.name} — ${parts.join("; ")}` : sentences.length ? owner.name : ""
+	if (!line) return {}
+	const index = sentences.length ? `${line}\n${sentences.join("\n")}` : line
 	const notes = r.riders
 	const summary = notes.length ? `${index}\n${notes.map((n) => `  · ${n}`).join("\n")}` : index
 	const derived = numbers
@@ -598,6 +760,19 @@ function defaultDepth(rigour: Rigour, which: "sheet" | "pieces"): RenderDepth {
 	return which === "sheet" ? "index" : "summary"
 }
 
+/** The words in play for an owner: its own actions, everyone's, and the pieces the deltas name. */
+function ownerTokens(input: EngineInput, owner: OwnerView): Set<string> {
+	const own = input.actions[owner.key] ?? ""
+	const all = input.actions["*"] ?? ""
+	const fromDeltas = input.deltas
+		.map((d) => (typeof d?.piece === "string" ? d.piece : (d?.piece as { name?: string } | undefined)?.name ?? ""))
+		.join(" ")
+	return tokensOf(`${own} ${all} ${fromDeltas}`)
+}
+
+/** 🚧 The events in play for an owner this moment (2026-10-22) — what an `effects`-phase script is handed. */
+export const ownerEvents = (input: EngineInput, owner: OwnerView): string[] => [...eventsInPlay(input, ownerTokens(input, owner))].sort(byString)
+
 /** Events in play this turn: named in the actions, or an op of a delta. */
 function eventsInPlay(input: EngineInput, tokens: Set<string>): Set<string> {
 	const events = new Set<string>()
@@ -612,12 +787,7 @@ function eventsInPlay(input: EngineInput, tokens: Set<string>): Set<string> {
  * or the piece equipped or active.
  */
 export function selectPieces(input: EngineInput, owner: OwnerView): { rep: HeldRepertoire; pieces: HeldPiece[] }[] {
-	const own = input.actions[owner.key] ?? ""
-	const all = input.actions["*"] ?? ""
-	const fromDeltas = input.deltas
-		.map((d) => (typeof d?.piece === "string" ? d.piece : (d?.piece as { name?: string } | undefined)?.name ?? ""))
-		.join(" ")
-	const tokens = tokensOf(`${own} ${all} ${fromDeltas}`)
+	const tokens = ownerTokens(input, owner)
 	const events = eventsInPlay(input, tokens)
 	const out: { rep: HeldRepertoire; pieces: HeldPiece[] }[] = []
 	for (const rep of owner.repertoires) {
@@ -721,7 +891,9 @@ function holderRenders(
 	const parts: string[] = []
 	for (const stat of owner.stats) {
 		if (!stat.holderOnly) continue
-		const v = valueText(r.values.get(stat.selector) ?? stat.value, numbers || !!stat.showNumbers)
+		const v = stat.prose
+			? proseSentence(r.values.get(stat.selector) ?? stat.value)
+			: valueText(r.values.get(stat.selector) ?? stat.value, numbers || !!stat.showNumbers)
 		if (v !== undefined) parts.push(`${stat.label}: ${v}`)
 	}
 	for (const f of owner.custom) {
@@ -872,6 +1044,8 @@ interface ApplyState {
 	rolls: number
 	/** 🚧 The pieces this moment spent, as it left them (`spendPiece`); null once gone. */
 	pieces: Map<string, PieceNow | null>
+	/** 🚧 The `card-draw` decks this moment drew from, as it left them, by method key. */
+	decks: Map<string, DeckState>
 }
 
 /** A stat's value as this moment has left it: as resolved, plus what its changes moved. */
@@ -934,8 +1108,98 @@ function fireEffect(
 /** The degrees an event's effects land on: a partial success or better. */
 const LANDS: readonly FiveBand[] = ["partial", "success", "crit"]
 
-function resolveCheck(st: ApplyState, input: EngineInput, owner: OwnerView, delta: ProposedDelta, op: string): void {
-	const dice = conventionsOf(input).dice
+/** 🚧 A check's words when it names no selector — a judged `hit` reads as "hit". */
+const opWords = (op: string): string => op
+
+/** The words an outcome falls back on when its check came to no degree. */
+function unjudgedWords(kind: string, against: number | undefined): string {
+	if (kind === "none") return "as the story tells"
+	if (against !== undefined) return "rolled"
+	return kind === "compare" ? "compared, against nothing" : kind === "card-draw" ? "drawn, against nothing" : "rolled, against nothing"
+}
+
+/** The selector a method reads when a check names none of its own: its modifier, or its pool. */
+const methodFallbackSelector = (m: CheckMethodDecl): string | undefined => {
+	const o = m as { modifierOf?: unknown; poolOf?: unknown }
+	return typeof o.modifierOf === "string" && o.modifierOf ? o.modifierOf : typeof o.poolOf === "string" && o.poolOf ? o.poolOf : undefined
+}
+
+/** A method's options for a script: everything but its kind and words. */
+function methodOptions(m: CheckMethodDecl): Record<string, unknown> {
+	const { kind: _k, label: _l, description: _d, ...rest } = m as unknown as Record<string, unknown>
+	return JSON.parse(JSON.stringify(rest)) as Record<string, unknown>
+}
+
+/**
+ * 🚧 A pre-roll script's `options`, laid over a core method's own for one
+ * check: only the options its kind declares (`CHECK_METHOD_KINDS`), an
+ * integer option only as a whole number at or above its least, a choice only
+ * as one of its members. Its kind never changes.
+ */
+function withOptions(m: CheckMethodDecl, options: Record<string, unknown> | undefined): CheckMethodDecl {
+	const kind = coreKindOf(m)
+	if (!options || !kind) return m
+	const declared = CHECK_METHOD_KINDS[kind as keyof typeof CHECK_METHOD_KINDS].options
+	const out: Record<string, unknown> = { ...(m as unknown as Record<string, unknown>) }
+	for (const [k, v] of Object.entries(options)) {
+		const d = declared[k] as { type?: string; min?: number; of?: readonly string[] } | undefined
+		if (!d) continue
+		if (d.type === "integer" && Number.isInteger(v) && (d.min === undefined || (v as number) >= d.min)) out[k] = v
+		else if (d.type === "enum" && typeof v === "string" && (d.of ?? []).includes(v)) out[k] = v
+		else if (d.type === "string" && typeof v === "string" && v) out[k] = v
+	}
+	return out as unknown as CheckMethodDecl
+}
+
+/** A pre-roll answer, as the engine takes it: each part only when it reads. */
+function preRollOf(raw: unknown): PreRollAnswer {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {}
+	const a = raw as Record<string, unknown>
+	const out: PreRollAnswer = {}
+	if (isNumber(a.against)) out.against = Math.round(a.against)
+	if (a.edge === -1 || a.edge === 0 || a.edge === 1) out.edge = a.edge
+	if (isNumber(a.pool)) out.pool = Math.trunc(a.pool)
+	if (typeof a.method === "string" && a.method) out.method = a.method
+	if (a.options && typeof a.options === "object" && !Array.isArray(a.options)) out.options = a.options as Record<string, unknown>
+	if (Array.isArray(a.modifies))
+		out.modifies = a.modifies.flatMap((m) =>
+			m && typeof m === "object" && isNumber((m as { value?: unknown }).value)
+				? [{ value: (m as { value: number }).value, label: String((m as { label?: unknown }).label ?? "a script") || "a script" }]
+				: []
+		)
+	return out
+}
+
+/** A post-roll answer, as the engine takes it. */
+function postRollOf(raw: unknown): PostRollAnswer {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {}
+	const a = raw as Record<string, unknown>
+	const out: PostRollAnswer = {}
+	if (isNumber(a.shift) && Number.isInteger(a.shift)) out.shift = a.shift
+	if (typeof a.degree === "string" && a.degree) out.degree = a.degree
+	if (Array.isArray(a.riders)) out.riders = a.riders.filter((r): r is string => typeof r === "string" && !!r.trim()).map((r) => r.trim())
+	return out
+}
+
+/** An owner's resolved values, as a script reads them. */
+const valuesOf = (r: Resolved): Record<string, SlotValue> => Object.fromEntries([...r.values].sort(([a], [b]) => byString(a, b)))
+
+/** Whether an owner key names a person's seat or a character — what an outcome block's `by` may say. */
+const PARTICIPANT_KEY = /^(character|player-seat):\d+$/
+
+/**
+ * 🚧 A check, decided by its **check method** (PLAN-rulesets-authoring D2,
+ * 2026-10-22): the method its selector names, else the ruleset's default,
+ * else `none` (`checkMethodOf`); the modifier and the bonuses stacked as
+ * before (the base selector folded, the family's modifies, the used piece's,
+ * typed stacking, edge); then — with a driver answering (`EngineInput.checkAsks`)
+ * — the `pre-roll` scripts may change the target, the edge, the pool, the
+ * method or its options; the method's resolver reads it (`methods.ts`); the
+ * `post-roll` scripts may move the degree or add riders; and the outcome,
+ * its **outcome block** and the explain line are written. A generator: it
+ * yields each ask (`EngineAsk`) and reads the answer.
+ */
+function* resolveCheck(st: ApplyState, input: EngineInput, owner: OwnerView, delta: ProposedDelta, op: string): Generator<EngineAsk, void, unknown> {
 	const piece = delta.piece !== undefined && delta.piece !== null && delta.piece !== ""
 		? (() => {
 				for (const rep of owner.repertoires) {
@@ -950,9 +1214,9 @@ function resolveCheck(st: ApplyState, input: EngineInput, owner: OwnerView, delt
 	// The last of it already used up this moment: nothing left to use.
 	if (piece && !pieceNow(st, owner, piece.rep, piece.piece))
 		return reject(st, delta, "unknown-piece", `${owner.name} has no ${pieceName(piece.piece)} left to ${op}.`)
-	// Prose rigour, or a ruleset with no dice: told in the story, nothing
-	// rolled — but a piece used is still used (its `cure`, its `consume`).
-	if (!atLeast(input.rigour, "mechanics") || !dice) {
+	// Prose rigour: told in the story, nothing resolved — but a piece used is
+	// still used (its `cure`, its `consume`).
+	if (!atLeast(input.rigour, "mechanics")) {
 		const told = (st.out.facts.unrolled as string[] | undefined) ?? []
 		told.push(`${owner.key}:${op}${piece ? `:${pieceName(piece.piece)}` : ""}`)
 		st.out.facts.unrolled = told
@@ -975,18 +1239,26 @@ function resolveCheck(st: ApplyState, input: EngineInput, owner: OwnerView, delt
 		}
 		return
 	}
+	const conv = conventionsOf(input)
 	const selectors = rulesetSelectors(input.ruleset)
-	const selector = delta.check ?? dice.modifierOf
-	if (!selector || !selectors.has(selector))
+	const named = typeof delta.check === "string" && delta.check ? delta.check : undefined
+	let pick = checkMethodOf(input, named)
+	const selector = named ?? methodFallbackSelector(pick.method)
+	// A check that names nothing is judged (`none`), or refused: a die needs something to add.
+	if (selector === undefined ? coreKindOf(pick.method) !== "none" : !selectors.has(selector))
 		return reject(st, delta, "unknown-selector", `${String(selector ?? "(no check named)")} is not a check or stat ${text(input.ruleset.name)} knows.`)
-	if (!input.random) throw new Error("a check needs the run's randomness, and this resolution was handed none")
-	const decl = selectors.get(selector)!
+	const decl = selector !== undefined ? selectors.get(selector)! : undefined
 	// A tally adds up modifies and nothing rolls: never a check.
-	if (decl.kind === "tally")
-		return reject(st, delta, "unknown-selector", `${selectorLabel(input, roller, selector)} is a total, not a check — nothing rolls for it.`)
-	const family = selectorFamily(input, selector)
+	if (decl?.kind === "tally")
+		return reject(st, delta, "unknown-selector", `${selectorLabel(input, roller, selector!)} is a total, not a check — nothing rolls for it.`)
+	const family = selector !== undefined ? selectorFamily(input, selector) : []
 	const reaches = (target: string) => family.includes(target)
-	let baseSel = decl.kind === "check" ? decl.base ?? dice.modifierOf : decl.kind === "stat" ? selector : dice.modifierOf
+	let baseSel =
+		decl?.kind === "check"
+			? decl.base ?? methodFallbackSelector(pick.method)
+			: decl?.kind === "stat"
+				? selector
+				: methodFallbackSelector(pick.method)
 	// 🚧 `rollWith` (P2-2): a check made with this piece rolls with the
 	// highest of the mechanic's selectors — a finesse blade with Strength or
 	// Dexterity, whichever is better.
@@ -998,13 +1270,15 @@ function resolveCheck(st: ApplyState, input: EngineInput, owner: OwnerView, delt
 			if (best) baseSel = best.selector
 		}
 	const terms: ExplainTerm[] = []
-	const baseValue = baseSel ? r.values.get(baseSel) : undefined
+	// 🚧 A tie field selector (`bond.affection`, T1): the side the one aimed at holds, towards the one checking.
+	const tieBase = baseSel && !isNumber(r.values.get(baseSel)) ? tieFieldOf(input, baseSel, roller, aimedAtOf(input, delta.aimedAt).owner) : undefined
+	const baseValue = tieBase ? tieBase.value : baseSel ? r.values.get(baseSel) : undefined
 	if (baseSel && isNumber(baseValue)) {
 		// The stat as it resolved: its base term and the passive modifies
 		// already folded into it, each kept as its own term.
-		const folded = r.terms.get(baseSel)
+		const folded = tieBase ? undefined : r.terms.get(baseSel)
 		if (folded?.length && folded.reduce((a, t) => a + t.value, 0) === baseValue) terms.push(...folded)
-		else terms.push({ value: baseValue, label: selectorLabel(input, roller, baseSel), origin: { kind: "base", ref: baseSel } })
+		else terms.push({ value: baseValue, label: tieBase?.label ?? selectorLabel(input, roller, baseSel), origin: { kind: "base", ref: baseSel } })
 	}
 	// Modifies on the check's whole family — itself (unless it is the stat
 	// already counted), its dotted parents and the generic `check` — and the
@@ -1018,42 +1292,189 @@ function resolveCheck(st: ApplyState, input: EngineInput, owner: OwnerView, delt
 				mods.push({ value: m.value, bonusType: m.bonusType, label: pieceName(piece.piece), origin: { kind: "piece", ref: piece.piece.key } })
 			else if (m.verb === "adjustDegree" && reaches(m.target)) adjust += m.by
 		}
-	const conv = conventionsOf(input)
 	const stacked = stackModifies(mods, conv.bonuses)
 	// Edge from passive modifies the base stat already folded counts too.
-	const edge = Math.sign(
-		stacked.edge + (baseSel === selector ? stackModifies(r.modifies.get(selector) ?? [], conv.bonuses).edge : 0)
+	let edge = Math.sign(
+		stacked.edge + (baseSel === selector ? stackModifies(r.modifies.get(selector!) ?? [], conv.bonuses).edge : 0)
 	)
-	const first = rollDice(`d${dice.sides}`, input.random).total
-	const second = edge !== 0 ? rollDice(`d${dice.sides}`, input.random).total : undefined
-	const natural = second === undefined ? first : edge > 0 ? Math.max(first, second) : Math.min(first, second)
-	terms.unshift({
-		value: natural,
-		label: second === undefined ? `d${dice.sides}` : `d${dice.sides} (${first}, ${second}, ${edge > 0 ? "edge" : "against the edge"})`,
-		origin: { kind: "roll", ref: `d${dice.sides}` }
-	})
 	for (const k of stacked.kept) terms.push({ value: k.value, label: k.label, origin: k.origin })
-	const total = terms.reduce((a, t) => a + t.value, 0)
-	const against = isNumber(delta.against) ? delta.against : undefined
-	const degree = degreeOf(conv.degrees, { total, natural, against, adjust })
-	st.out.explain.push({
-		target: `${roller.key}.${selector}`,
-		total,
-		terms,
-		text: explainText(selectorLabel(input, roller, selector), total, terms) + (against !== undefined ? ` vs ${against}` : "")
-	})
-	const label = degree ? text(degree.band.label, degree.band.id) : undefined
+	let against = isNumber(delta.against) ? delta.against : undefined
+	// 🚧 `compare` against the other side (2026-10-22): the value its
+	// `opposedBy` holds on whoever the check is aimed at.
+	const opposedOf = (m: CheckMethodDecl): { against: number; versus: string } | undefined => {
+		const by = coreKindOf(m) === "compare" ? (m as CompareMethod).opposedBy : undefined
+		const other = by ? aimedAtOf(input, delta.aimedAt).owner : undefined
+		const v = other && by ? st.resolved.get(other.key)?.values.get(by) : undefined
+		return other && by && isNumber(v) ? { against: v, versus: `${other.name}'s ${selectorLabel(input, other, by)}` } : undefined
+	}
+	let opposed = opposedOf(pick.method)
+	if (opposed) against = opposed.against
+	const label = selector !== undefined ? selectorLabel(input, roller, selector) : opWords(op)
 	const what = piece ? `${op} ${pieceName(piece.piece)}` : op
+	let extraDice = 0
+	const askOf = (): CheckAskContext => ({
+		op,
+		by: roller.key,
+		selector: selector ?? "",
+		label,
+		method: { key: pick.key, kind: String(pick.method.kind), options: methodOptions(pick.method) },
+		...(against !== undefined ? { against } : {}),
+		...(baseSel && isNumber(baseValue) ? { base: { selector: baseSel, value: baseValue } } : {}),
+		terms: terms.map((t) => ({ label: t.label, value: t.value })),
+		edge,
+		...(piece ? { piece: pieceName(piece.piece) } : {}),
+		...(typeof delta.aimedAt === "string" && delta.aimedAt ? { aimedAt: delta.aimedAt } : {})
+	})
+	// 🚧 Pre-roll (2026-10-22): the ruleset's scripts may change the check before it resolves.
+	if (input.checkAsks?.preRoll) {
+		const pre = preRollOf(yield { phase: "pre-roll", owner: roller.key, values: valuesOf(r), check: askOf() })
+		if (pre.method !== undefined && Object.prototype.hasOwnProperty.call(conv.methods, pre.method)) {
+			pick = { key: pre.method, method: conv.methods[pre.method]! }
+			opposed = opposedOf(pick.method)
+			if (opposed) against = opposed.against
+		}
+		if (pre.options) pick = { ...pick, method: withOptions(pick.method, pre.options) }
+		if (pre.against !== undefined) {
+			against = pre.against
+			opposed = undefined
+		}
+		if (pre.edge !== undefined) edge = pre.edge
+		if (pre.pool !== undefined) extraDice = pre.pool
+		for (const m of pre.modifies ?? []) terms.push({ value: m.value, label: m.label, origin: { kind: "derived", ref: "pre-roll" } })
+	}
+	const kind = String(pick.method.kind)
+	const core = coreKindOf(pick.method)
+	// 🚧 A package's own kind (`owner:name`) this pub cannot resolve: refused, politely.
+	if (!core) return reject(st, delta, "no-resolver", `${roller.name} — ${what} (${label}): ${noResolverWhy(kind)}.`)
+	const mc: MethodCheck = { degrees: conv.degrees, terms, edge, adjust, against, random: input.random }
+	let res: MethodResult
+	let judged: string | undefined
+	switch (core) {
+		case "die-target":
+			if (!input.random) throw new Error("a check needs the run's randomness, and this resolution was handed none")
+			res = resolveDieTarget(pick.method as DieTargetMethod, mc)
+			break
+		case "dice-pool":
+			if (!input.random) throw new Error("a check needs the run's randomness, and this resolution was handed none")
+			res = resolveDicePool(pick.method as DicePoolMethod, mc, extraDice)
+			break
+		case "card-draw": {
+			const m = pick.method as CardDrawMethod
+			const key = pick.key ?? "cards"
+			const drawn = drawFromDeck(m, key, st.decks.get(key) ?? input.decks?.[key], input.scene ?? null, input.deckSeed ?? `ruleset:${input.ruleset.id}`, Math.max(1, m.draw ?? 1))
+			st.decks.set(key, drawn.state)
+			res = resolveCardDraw(m, mc, drawn.cards)
+			break
+		}
+		case "compare":
+			res = resolveCompare(mc)
+			break
+		case "bid": {
+			// 🚧 A spend from a stat buys the degree; refused when it is more than is held.
+			const m = pick.method as BidMethod
+			const stat = roller.stats.find((s) => s.selector === m.resource && s.derive === undefined)
+			if (!stat) return reject(st, delta, "no-resource", `${roller.name} has no ${selectorLabel(input, roller, m.resource)} to spend on ${what}.`)
+			// 🚧 RF fix 8 (RF fix 6 ★2): what is spent is a number — a word or free text never reaches the sum.
+			if (stat.type !== "integer" || stat.prose) return reject(st, delta, "no-resource", `${roller.name}'s ${stat.label} is not a number to spend on ${what}.`)
+			const held = statNow(st, roller, stat)
+			const asked = delta.value === undefined || delta.value === null || delta.value === "" ? Number.NaN : Number(delta.value)
+			const spend = Number.isFinite(asked) ? Math.max(0, Math.floor(asked)) : priceOfSuccess(m.costs, conv.degrees)
+			if (spend > held) return reject(st, delta, "not-enough", `${roller.name} has ${held} ${stat.label}, not the ${spend} ${what} would spend.`)
+			if (spend > 0) addToStat(st, roller, stat, -spend, delta.reason?.trim() || what)
+			res = {
+				terms: [{ value: spend, label: `${stat.label} spent`, origin: { kind: "base", ref: stat.slotId } }],
+				total: spend,
+				degree: bidDegree(m.costs, spend, conv.degrees, adjust),
+				explain: `spent ${spend} of ${held} ${stat.label} (${held - spend} left)`
+			}
+			break
+		}
+		default: {
+			// `none`: nothing resolves it — the degree (or the words) it was judged.
+			const j = judgedDegree(conv.degrees, delta.value, adjust)
+			res = { terms, degree: j.degree }
+			judged = j.words
+		}
+	}
+	const riders: string[] = []
+	// 🚧 Post-roll (2026-10-22): the ruleset's scripts may move the degree, set it, or add riders.
+	if (input.checkAsks?.postRoll) {
+		const margin = res.total !== undefined && against !== undefined && (core === "die-target" || core === "card-draw" || core === "compare") ? res.total - against : undefined
+		const post = postRollOf(
+			yield {
+				phase: "post-roll",
+				owner: roller.key,
+				values: valuesOf(r),
+				check: {
+					...askOf(),
+					...(res.total !== undefined ? { rolled: res.total } : {}),
+					...(res.natural !== undefined ? { natural: res.natural } : {}),
+					...(res.faces ? { faces: res.faces } : {}),
+					...(res.pool ? { pool: res.pool } : {}),
+					...(res.cards ? { cards: res.cards } : {}),
+					...(opposed ? { versus: opposed.versus } : {}),
+					...(margin !== undefined ? { margin } : {}),
+					degree: res.degree ? { id: res.degree.band.id, label: text(res.degree.band.label, res.degree.band.id), five: res.degree.five } : null
+				}
+			}
+		)
+		if (post.degree !== undefined) {
+			const set = degreeNamed(conv.degrees, post.degree)
+			if (set) res = { ...res, degree: set }
+		}
+		if (post.shift && res.degree) res = { ...res, degree: stepDegree(conv.degrees, res.degree, post.shift) }
+		riders.push(...(post.riders ?? []))
+	}
+	const degree: Degree | null = res.degree
+	const counted = core === "die-target" || core === "card-draw" || core === "compare"
+	const shownAgainst = counted ? against : undefined
+	const explainLine =
+		core === "none"
+			? undefined
+			: res.explain !== undefined
+				? res.explain
+				: explainText(label, res.total ?? 0, res.terms) + (shownAgainst !== undefined ? ` vs ${shownAgainst}` : "")
+	if (explainLine !== undefined) st.out.explain.push({ target: `${roller.key}.${selector ?? op}`, total: res.total ?? 0, terms: res.terms, text: explainLine })
+	const outcomeWords = degree ? text(degree.band.label, degree.band.id) : judged
+	const told = outcomeWords ?? unjudgedWords(core, shownAgainst)
+	const block: OutcomeBlock = {
+		kind: "dice",
+		method: kind as CheckMethodKind,
+		stat: label,
+		...(core !== "none" && res.total !== undefined ? { rolled: res.total } : {}),
+		...(res.faces?.length ? { faces: res.faces } : {}),
+		...(res.pool ? { pool: res.pool } : {}),
+		...(res.cards?.length ? { cards: res.cards } : {}),
+		...(opposed ? { compare: { versus: opposed.versus } } : {}),
+		...(shownAgainst !== undefined ? { against: shownAgainst } : {}),
+		outcome: told.charAt(0).toUpperCase() + told.slice(1),
+		...(degree ? { five: degree.five } : {}),
+		...(explainLine !== undefined ? { explain: explainLine } : {}),
+		...(PARTICIPANT_KEY.test(roller.key) ? { by: roller.key as OutcomeBlock["by"] } : {})
+	}
 	st.out.outcomes.push({
 		// The way's place keeps the outcome (what a genre's books match it by);
 		// the words name whoever made the check.
 		owner: owner.key,
 		kind: "check",
-		text: `${roller.name} — ${what} (${selectorLabel(input, roller, selector)}): ${label ?? "rolled, against nothing"}`,
-		check: { selector, natural, total, against, band: degree?.band.id, five: degree?.five, label, ...(roller !== owner ? { actor: roller.key } : {}) }
+		text: `${roller.name} — ${what}${selector !== undefined ? ` (${label})` : ""}: ${told}`,
+		check: {
+			selector: selector ?? "",
+			...(res.natural !== undefined ? { natural: res.natural } : {}),
+			...(core !== "none" && res.total !== undefined ? { total: res.total } : {}),
+			against: shownAgainst,
+			band: degree?.band.id,
+			five: degree?.five,
+			label: outcomeWords,
+			...(roller !== owner ? { actor: roller.key } : {}),
+			method: kind,
+			methodKey: pick.key
+		},
+		block
 	})
+	for (const rider of riders) st.out.outcomes.push({ owner: owner.key, kind: "effect", text: rider })
 	// The event's effects: on a success or better, or always when the check
-	// was against nothing (a potion drunk).
+	// was against nothing (a potion drunk) or judged in words alone.
 	const lands = !degree || LANDS.includes(degree.five)
 	// 🚧 A failed crossing of a trapped way springs the trap on whoever tried
 	// (Q2-1; Vis Itineris's rider: "A trap springs unless noticed or disarmed").
@@ -1064,7 +1485,8 @@ function resolveCheck(st: ApplyState, input: EngineInput, owner: OwnerView, delt
 			lands,
 			counted: true,
 			...(degree ? { five: degree.five } : {}),
-			...(baseSel && isNumber(baseValue) ? { base: { value: baseValue, label: selectorLabel(input, roller, baseSel) } } : {})
+			// What `harm`'s `plus: 'check'` adds: the modifier a die, cards or a comparison read.
+			...(counted && baseSel && isNumber(baseValue) ? { base: { value: baseValue, label: selectorLabel(input, roller, baseSel) } } : {})
 		})
 	}
 }
@@ -1117,7 +1539,7 @@ function springTrap(st: ApplyState, input: EngineInput, on: OwnerView, way: Held
 /**
  * 🚧 The condition a sprung trap leaves on `on` (R2-1): the piece of that
  * name from the repertoire of `on`'s that keeps it — the ruleset's library
- * answering to the name, else an inline piece on a `conditions` list — added
+ * answering to the name, else an inline piece on a list tagged `condition` — added
  * as any gained piece is. Its words, or null when there is none to leave, no
  * list that keeps it, or a cure this moment keeps it off.
  */
@@ -1126,7 +1548,7 @@ function trapCondition(st: ApplyState, input: EngineInput, on: OwnerView, raw: u
 	if (!wanted) return null
 	const rep =
 		on.repertoires.find((r) => !!compendiumRow(input.ruleset, wanted, r.repertoire.id)) ??
-		on.repertoires.find((r) => r.repertoire.id === "conditions")
+		on.repertoires.find((r) => repertoireTagged(input, r.repertoire, "condition"))
 	if (!rep) return null
 	const piece = pieceFrom(input, rep.repertoire, wanted, trapName)
 	if (!piece || checkPiece(rep.repertoire, piece)) return null
@@ -1195,6 +1617,57 @@ export function diceOfPiece(props: Readonly<Record<string, unknown>>, field: str
 	return null
 }
 
+/**
+ * 🚧 What a `harm` / `heal`'s **amount expression** comes to (2026-10-22,
+ * `mechanicAmount`: the ⏳ `dice: 'piece.<field>'` read as `amount:
+ * { selector }`): a number — that much; a dice string — dice to throw; a
+ * selector — a field of the piece used (its number, or the dice it holds),
+ * else the owner's resolved value. Null when it comes to nothing.
+ */
+function amountOf(amount: ReturnType<typeof mechanicAmount>, props: Readonly<Record<string, unknown>>, r: Resolved): { value: number } | { dice: string } | null {
+	const read = (raw: string): { value: number } | { dice: string } | null => {
+		const t = raw.trim()
+		if (!t) return null
+		return /^-?\d+$/.test(t) ? { value: Number(t) } : { dice: t }
+	}
+	if (amount === undefined || amount === null) return null
+	if (typeof amount === "number") return Number.isFinite(amount) ? { value: amount } : null
+	if (typeof amount === "string") return read(amount)
+	const sel = typeof amount.selector === "string" ? amount.selector : ""
+	if (sel.startsWith("piece.")) {
+		const v = props[sel.slice("piece.".length)]
+		if (isNumber(v)) return { value: v }
+		const dice = diceOfPiece(props, sel)
+		return dice ? read(dice) : null
+	}
+	const v = sel ? r.values.get(sel) : undefined
+	return isNumber(v) ? { value: v } : null
+}
+
+/**
+ * 🚧 A **tie field selector** read at a check (T1, 2026-10-23):
+ * `<entry type>.<field>` of one of the ruleset's ties — the side held by the
+ * one the check is aimed at, towards the one checking ("how they feel about
+ * you"), from the zones the moment read. Undefined when nobody is aimed at,
+ * or that side holds no such number.
+ */
+function tieFieldOf(input: EngineInput, selector: string, roller: OwnerView, aimed: OwnerView | undefined): { value: number; label: string } | undefined {
+	const m = /^([a-z0-9]+(?:-[a-z0-9]+)*)\.([a-z0-9]+(?:-[a-z0-9]+)*)$/.exec(selector)
+	if (!m || !aimed || !input.zones) return undefined
+	const tie = (sectionsOf(input.ruleset).entryTypes ?? []).find((e) => e.id === m[1] && e.relational === true && e.farEnd !== undefined)
+	if (!tie) return undefined
+	for (const entries of Object.values(input.zones[aimed.key] ?? {}))
+		for (const e of entries) {
+			const v = e.fields[m[2]!]
+			if (e.entryType === tie.id && e.fields.towards === roller.key && isNumber(v)) {
+				const field = (tie.fields ?? {})[m[2]!] as { label?: unknown } | undefined
+				const word = (field?.label ? i18nText(field.label as never) : undefined) ?? m[2]!
+				return { value: v, label: `${aimed.name}'s ${word.toLowerCase()}` }
+			}
+		}
+	return undefined
+}
+
 /** Who a piece is used on: an owner this moment resolves, else a name told only. */
 function aimedAtOf(input: EngineInput, raw: unknown): { owner?: OwnerView; name?: string } {
 	if (raw === undefined || raw === null || raw === "") return {}
@@ -1218,26 +1691,34 @@ function rollEffect(
 	m: Extract<MechanicDecl, { verb: "harm" | "heal" }>,
 	ctx: UseContext
 ): { total: number; terms: ExplainTerm[]; key: string } | null {
-	const expr = diceOfPiece(used.props, m.dice)
-	if (!expr || !input.random) return null
-	const crit = m.verb === "harm" && ctx.five === "crit"
-	let roll
-	try {
-		roll = rollDice(expr, input.random)
-	} catch {
-		st.out.explain.push({ target: `${owner.key}.${m.verb}`, total: 0, terms: [], text: `${pieceName(used)}: '${expr}' is not dice the table can roll — skipped` })
-		return null
+	const amount = amountOf(mechanicAmount(m), used.props, r)
+	if (!amount) return null
+	let terms: ExplainTerm[]
+	if ("value" in amount) {
+		// 🚧 A number (2026-10-22): that much, no dice thrown — a critical doubles dice only.
+		terms = [{ value: amount.value, label: pieceName(used), origin: { kind: "piece", ref: used.key } }]
+	} else {
+		const expr = amount.dice
+		if (!input.random) return null
+		const crit = m.verb === "harm" && ctx.five === "crit"
+		let roll
+		try {
+			roll = rollDice(expr, input.random)
+		} catch {
+			st.out.explain.push({ target: `${owner.key}.${m.verb}`, total: 0, terms: [], text: `${pieceName(used)}: '${expr}' is not dice the table can roll — skipped` })
+			return null
+		}
+		const extra = crit ? rollDice(`${roll.faces.length}d${/d(\d+)/.exec(expr)?.[1] ?? 6}`, input.random) : null
+		const faces = [...roll.faces, ...(extra?.faces ?? [])]
+		// 🚧 The dice alone when the expression's own number is its own term
+		// (Q3-2, N14: "2d4+2 (3, 2) + 2 (Potion of healing)" counted the 2 twice
+		// to the eye): "2d4 (3, 2) + 2 (Potion of healing) = 7".
+		const dice = roll.modifier ? expr.replace(/\s*[+-]\s*\d+\s*$/, "") : expr
+		terms = [
+			{ value: faces.reduce((a, b) => a + b, 0), label: `${crit ? `${dice} doubled for a critical` : dice} (${faces.join(", ")})`, origin: { kind: "roll", ref: expr } }
+		]
+		if (roll.modifier) terms.push({ value: roll.modifier, label: pieceName(used), origin: { kind: "piece", ref: used.key } })
 	}
-	const extra = crit ? rollDice(`${roll.faces.length}d${/d(\d+)/.exec(expr)?.[1] ?? 6}`, input.random) : null
-	const faces = [...roll.faces, ...(extra?.faces ?? [])]
-	// 🚧 The dice alone when the expression's own number is its own term
-	// (Q3-2, N14: "2d4+2 (3, 2) + 2 (Potion of healing)" counted the 2 twice
-	// to the eye): "2d4 (3, 2) + 2 (Potion of healing) = 7".
-	const dice = roll.modifier ? expr.replace(/\s*[+-]\s*\d+\s*$/, "") : expr
-	const terms: ExplainTerm[] = [
-		{ value: faces.reduce((a, b) => a + b, 0), label: `${crit ? `${dice} doubled for a critical` : dice} (${faces.join(", ")})`, origin: { kind: "roll", ref: expr } }
-	]
-	if (roll.modifier) terms.push({ value: roll.modifier, label: pieceName(used), origin: { kind: "piece", ref: used.key } })
 	if (m.plus === "check") {
 		if (ctx.base && ctx.base.value !== 0) terms.push({ value: ctx.base.value, label: ctx.base.label, origin: { kind: "derived", ref: "check" } })
 	} else if (m.plus) {
@@ -1412,39 +1893,106 @@ function pieceNow(st: ApplyState, owner: OwnerView, rep: HeldRepertoire, held: H
 	return { item: held.item, uses: isNumber(held.props.uses) ? held.props.uses : null, count: held.count }
 }
 
-// ── Spell points (Vis Itineris `casting: points`, PLAN-sheet §8) ─────────────
-
-/** The pool a caster spends under `casting: points` (core-catalog `visItinerisSpellPointsSlot`). */
-export const SPELL_POINTS_SLOT = "core:slot/itineris-spell-points@1"
-
-/** Story minutes a long rest takes: an advance of at least this long refills the pool. */
-export const LONG_REST_MINUTES = 8 * 60
-
-/** Whether the table plays spell points: the ruleset's `casting` setting, read by id. */
-const playsSpellPoints = (input: EngineInput): boolean => input.settings?.casting === "points"
-
-/** A spend on a spells repertoire, at a table playing spell points. */
-const castsByPoints = (input: EngineInput, rep: HeldRepertoire): boolean =>
-	playsSpellPoints(input) && rep.repertoire.id === "spells"
-
-/** An owner's spell-point stat, when they carry one. */
-const spellPointsOf = (owner: OwnerView): OwnerView["stats"][number] | undefined =>
-	owner.stats.find((s) => s.slotId === SPELL_POINTS_SLOT)
+// ── Casting from a pool (Vis Itineris `casting: points`, PLAN-sheet §8) ──────
 
 /**
- * Cast a spell under `casting: points`: the spell stays known, and the pool
- * loses the spell's level (a cantrip, level 0, costs nothing). Refused, in
- * words, when the pool holds too few — or when the caster has no pool.
+ * ⏳ Vis Itineris's spell-point slot (core-catalog `visItinerisSpellPointsSlot`).
+ * The engine reads only the declared pool (`conventions.casting`,
+ * M3), and data upgrade 0118 declared it on the pub's copies (lane M4,
+ * 2026-10-22). Kept for the tests that seat a caster.
  */
-function spendSpellPoints(st: ApplyState, input: EngineInput, owner: OwnerView, held: HeldPiece, delta: ProposedDelta): void {
+export const SPELL_POINTS_SLOT = "core:slot/itineris-spell-points@1"
+
+/**
+ * ⏳ Story minutes a long rest takes when the ruleset declares no rest
+ * (`conventions.rest`): Vis Itineris declares its long rest, 480 minutes.
+ */
+export const LONG_REST_MINUTES = 8 * 60
+
+/**
+ * 🚧 **Casting from a pool** (2026-10-22, PLAN-rulesets-authoring D1: VI's
+ * numbers move into its declaration) — `conventions.casting`, laid by a
+ * setting's choice (Vis Itineris's `casting: points`): a `spend` on a
+ * repertoire tagged `casting` (or the one `repertoire` names) costs the
+ * piece's `cost` field (its level; 0 costs nothing) from the stat `pool`
+ * instead of spending the piece, and the rest `refill` names (else the
+ * long rest, else the longest) fills the pool back to the derived value
+ * `max` names (else the pool's configured max).
+ *
+ * Read untyped (the SDK's `RulesetCasting`). 🚧 With no such convention a
+ * cast spends its piece: the fallback that read Vis Itineris's `casting:
+ * points` by its id went with data upgrade 0118 (lane M4, 2026-10-22), which
+ * declared the pool on every copy that relied on it.
+ */
+export interface CastingPool {
+	pool: string
+	cost: string
+	repertoire?: string
+	refill?: string
+	max?: string
+}
+
+/** The casting pool the session plays, read off its conventions; null when none is declared. */
+export function castingPoolOf(input: Pick<EngineInput, "conventions" | "ruleset" | "settings">): CastingPool | null {
+	const declared = (conventionsOf(input) as { casting?: unknown }).casting
+	if (declared && typeof declared === "object" && !Array.isArray(declared)) {
+		const c = declared as Record<string, unknown>
+		if (typeof c.pool === "string" && c.pool && typeof c.cost === "string" && c.cost)
+			return {
+				pool: c.pool,
+				cost: c.cost.replace(/^piece\./, ""),
+				...(typeof c.repertoire === "string" && c.repertoire ? { repertoire: c.repertoire } : {}),
+				...(typeof c.refill === "string" && c.refill ? { refill: c.refill } : {}),
+				...(typeof c.max === "string" && c.max ? { max: c.max } : {})
+			}
+		return null
+	}
+	return null
+}
+
+/** A spend on a repertoire a cast from the pool comes out of. */
+const castsFromPool = (input: EngineInput, pool: CastingPool | null, rep: HeldRepertoire): pool is CastingPool =>
+	!!pool && (pool.repertoire !== undefined ? rep.repertoire.id === pool.repertoire : repertoireTagged(input, rep.repertoire, "casting"))
+
+/** The pool in words, as its slot names it (_spell points_). */
+function poolWords(input: EngineInput, pool: CastingPool): string {
+	const id = (input.ruleset.stats ?? []).find((s) => s.id === pool.pool || slotKey(s.id) === pool.pool)?.id
+	const label = id ? text(getAttributeSlot(id)?.label) : ""
+	return (label || selectorLabel(input, null, pool.pool)).toLowerCase()
+}
+
+/** An owner's pool stat, when they carry one — by its selector or its slot id. */
+const poolStatOf = (owner: OwnerView, pool: CastingPool): OwnerView["stats"][number] | undefined =>
+	owner.stats.find((s) => (s.selector === pool.pool || s.slotId === pool.pool) && s.derive === undefined)
+
+/**
+ * The story minutes the pool's refill takes: the rest `refill` names, else
+ * the rest that recharges what a long rest does, else the longest rest
+ * declared; ⏳ else {@link LONG_REST_MINUTES}.
+ */
+function refillMinutesOf(input: EngineInput, pool: CastingPool): number {
+	const rests = (conventionsOf(input).rest ?? []).filter((r) => isNumber(r.minutes))
+	const named = pool.refill !== undefined ? rests.find((r) => r.id === pool.refill) : undefined
+	const long = rests.find((r) => r.id === "long" || (r.recharges ?? []).includes("long"))
+	const longest = [...rests].sort((a, b) => b.minutes! - a.minutes!)[0]
+	return (named ?? long ?? longest)?.minutes ?? LONG_REST_MINUTES
+}
+
+/**
+ * Cast from the pool: the piece stays known, and the pool loses the piece's
+ * cost (a cantrip, 0, costs nothing). Refused, in words, when the pool holds
+ * too few — or when the caster has no pool.
+ */
+function spendFromPool(st: ApplyState, input: EngineInput, pool: CastingPool, owner: OwnerView, held: HeldPiece, delta: ProposedDelta): void {
 	const name = pieceName(held)
-	const level = isNumber(held.props.level) ? Math.max(0, Math.floor(held.props.level)) : 0
+	const raw = held.props[pool.cost]
+	const level = isNumber(raw) ? Math.max(0, Math.floor(raw)) : 0
 	if (level === 0) {
 		st.out.outcomes.push({ owner: owner.key, kind: "effect", text: `${owner.name} casts ${name}` })
 		return
 	}
-	const stat = spellPointsOf(owner)
-	if (!stat) return reject(st, delta, "not-enough", `${owner.name} has no spell points to cast ${name} with.`)
+	const stat = poolStatOf(owner, pool)
+	if (!stat) return reject(st, delta, "not-enough", `${owner.name} has no ${poolWords(input, pool)} to cast ${name} with.`)
 	// What this moment's earlier casts left (P2-4): a second spell reads the pool the first left.
 	const base = statNow(st, owner, stat)
 	if (base < level)
@@ -1459,21 +2007,26 @@ function spendSpellPoints(st: ApplyState, input: EngineInput, owner: OwnerView, 
 }
 
 /**
- * A long rest under `casting: points` (an advance of at least
- * {@link LONG_REST_MINUTES}): every caster's pool back to its maximum — 🚧
- * the derive script's `spell-points-max` (by class and level, P2-4), else a
- * script's `spellPoints`, else the pool's configured `max` (set per
- * character by `set-stat-config`).
+ * A rest that refills the pool (an advance of at least its minutes,
+ * `refillMinutesOf`): every caster's pool back to its most — 🚧 the derived
+ * value `max` names (Vis Itineris: `spell-points-max`, by class and level,
+ * P2-4), else ⏳ a script's `spellPoints` / `spell-points`, else the pool's
+ * configured `max` (set per character by `set-stat-config`).
  */
-function refillSpellPoints(st: ApplyState, input: EngineInput): void {
-	if (!playsSpellPoints(input) || input.deltas.length) return
+function refillPools(st: ApplyState, input: EngineInput): void {
+	const pool = castingPoolOf(input)
+	if (!pool || input.deltas.length) return
 	const minutes = elapsedMinutesOf(input)
-	if (minutes === null || minutes < LONG_REST_MINUTES) return
+	if (minutes === null || minutes < refillMinutesOf(input, pool)) return
 	for (const owner of input.owners) {
-		const stat = spellPointsOf(owner)
+		const stat = poolStatOf(owner, pool)
 		if (!stat) continue
 		const scripted = input.scripted?.[owner.key]?.values
-		const fromScript = scripted?.["spell-points-max"] ?? scripted?.spellPoints ?? scripted?.["spell-points"]
+		const fromScript =
+			(pool.max !== undefined ? scripted?.[pool.max] ?? st.resolved.get(owner.key)?.values.get(pool.max) : undefined) ??
+			scripted?.["spell-points-max"] ??
+			scripted?.spellPoints ??
+			scripted?.["spell-points"]
 		const max = isNumber(fromScript) ? fromScript : stat.max
 		if (!isNumber(max)) continue
 		const current = st.resolved.get(owner.key)?.values.get(stat.selector) ?? stat.value
@@ -1483,13 +2036,14 @@ function refillSpellPoints(st: ApplyState, input: EngineInput): void {
 	}
 }
 
-function applyDelta(st: ApplyState, input: EngineInput, delta: ProposedDelta): void {
+/** One proposed change, validated and applied — a generator, as a check may ask its scripts (`resolveCheck`). */
+function* applyDelta(st: ApplyState, input: EngineInput, delta: ProposedDelta): Generator<EngineAsk, void, unknown> {
 	if (!delta || typeof delta !== "object") return
 	const op = typeof delta.op === "string" ? delta.op.trim().toLowerCase() : ""
 	const owner = ownerOf(input, delta.owner)
 	if (!owner)
 		return reject(st, delta, "unknown-owner", `${JSON.stringify(delta.owner)} is not one of the owners this turn resolves.`)
-	if (CHECK_OPS.has(op)) return resolveCheck(st, input, owner, delta, op)
+	if (CHECK_OPS.has(op)) return yield* resolveCheck(st, input, owner, delta, op)
 	const prose = input.rigour === "prose"
 	if (delta.repertoire !== undefined) {
 		const rep = owner.repertoires.find((r) => r.repertoire.id === delta.repertoire)
@@ -1527,7 +2081,8 @@ function applyDelta(st: ApplyState, input: EngineInput, delta: ProposedDelta): v
 			if (!held)
 				return reject(st, delta, "unknown-piece", `${owner.name}'s ${repLabel(rep.repertoire)} hold nothing called ${JSON.stringify(delta.piece)}.`)
 			if (op === "spend") {
-				if (castsByPoints(input, rep)) return spendSpellPoints(st, input, owner, held, delta)
+				const pool = castingPoolOf(input)
+				if (castsFromPool(input, pool, rep)) return spendFromPool(st, input, pool, owner, held, delta)
 				if (!pieceNow(st, owner, rep, held))
 					return reject(st, delta, "unknown-piece", `${owner.name} has no ${pieceName(held)} left to spend.`)
 				return spendPiece(st, owner, rep, held, delta.reason)
@@ -1544,15 +2099,26 @@ function applyDelta(st: ApplyState, input: EngineInput, delta: ProposedDelta): v
 	const field = stat ? undefined : slotNamed(owner.custom, delta.slot)
 	const slot = String(delta.slot ?? "").trim()
 	const repSlot = !stat && !field ? owner.repertoires.find((r) => normaliseSlotRef(r.slotId) === normaliseSlotRef(slot)) : undefined
-	if (repSlot) return applyDelta(st, input, { ...delta, slot: undefined, repertoire: repSlot.repertoire.id })
+	if (repSlot) return yield* applyDelta(st, input, { ...delta, slot: undefined, repertoire: repSlot.repertoire.id })
 	if (!stat && !field)
 		return reject(st, delta, "unknown-slot", `${owner.name} has no '${slot || "(unnamed)"}' to change.`)
 	const slotId = (stat?.slotId ?? field?.slotId)!
 	if (stat?.derive !== undefined)
 		return reject(st, delta, "derived-value", `${stat.label} is worked out from the sheet; change what it is worked out from.`)
+	// 🚧 D4: who may change it (`changedBy`) — the rules' pipelines write as
+	// `rules`; a value only its holder or the game master may change is
+	// refused here, and filed for one of them to accept.
+	if (stat && !changedByAllows(input.ruleset, slotId, "rules")) {
+		const asked: EngineChange =
+			op === "set"
+				? { owner: owner.owner, slotId, op: "set", value: delta.value as SlotValue, note: delta.reason }
+				: { owner: owner.owner, slotId, op: "add", value: Number(delta.value) as SlotValue, note: delta.reason }
+		return reject(st, delta, "changed-by", `${stat.label} is changed by ${changersOf(input.ruleset, slotId)}, not by the rules.`, Number.isFinite(Number(asked.value)) || op === "set" ? asked : undefined)
+	}
 	if (op === "set") {
 		const change: EngineChange = { owner: owner.owner, slotId, op: "set", value: delta.value as SlotValue, note: delta.reason }
-		if (stat && !prose)
+		// A function's own `set` is the rules deciding (R8: it asked, the outlet applies).
+		if (stat && !prose && delta.origin !== "rules")
 			return reject(
 				st,
 				delta,
@@ -1669,9 +2235,19 @@ function applyInWords(
 	return reject(st, delta, "unknown-op", `'${op}' is not something a list of things takes; say add, spend or remove.`)
 }
 
+/** Who may change a value, in words (`changedBy`). */
+function changersOf(ruleset: EngineInput["ruleset"], slotId: string): string {
+	const id = attributeSlotsOf(ruleset).attributeOf.get(slotId)
+	const who = (sectionsOf(ruleset).attributes ?? []).find((a) => a.id === id)?.changedBy ?? []
+	const words: Record<string, string> = { gm: "the game master", holder: "who holds it", rules: "the rules", everyone: "anyone" }
+	return who.map((w) => words[w] ?? w).join(" or ") || "nobody"
+}
+
 /** Story minutes passed this moment, or null for a unit no clock counts (`scene`). */
 function elapsedMinutesOf(input: EngineInput): number | null {
+	// R9: a ruleset that keeps no time unit counts no minutes.
 	const t = conventionsOf(input).time
+	if (!t) return null
 	const perUnit = minutesPer(t.unit, t.roundSeconds)
 	return perUnit === null ? null : input.elapsed * perUnit
 }
@@ -1703,7 +2279,7 @@ function fireTime(st: ApplyState, input: EngineInput): void {
 							total: 0,
 							terms: [],
 							text: `needs a clock: something fires at a story date, and this session ${
-								!cal ? "keeps no clock" : minutes === null ? `counts time in ${conventionsOf(input).time.unit}s` : "cannot place the time passed on its calendar"
+								!cal ? "keeps no clock" : minutes === null ? `counts time in ${conventionsOf(input).time?.unit ?? "no unit"}s` : "cannot place the time passed on its calendar"
 							} — skipped`
 						})
 					clockNoted = true
@@ -1820,14 +2396,14 @@ function expireTimed(st: ApplyState, input: EngineInput): void {
 	// conditions repertoire alone. Absent: both run.
 	if (input.expiry?.pieces === false) return
 	const conv = conventionsOf(input)
-	const roundSeconds = conv.time.roundSeconds ?? 6
+	const roundSeconds = conv.time?.roundSeconds ?? 6
 	const minutes = elapsedMinutesOf(input)
-	const rounds = conv.time.unit === "round" ? input.elapsed : minutes !== null ? (minutes * 60) / roundSeconds : 0
+	const rounds = conv.time?.unit === "round" ? input.elapsed : minutes !== null ? (minutes * 60) / roundSeconds : 0
 	const cal = input.clock ?? null
 	const to = cal ? addStoryMinutes(cal.now, minutes ?? 0, cal.calendar) : null
 	for (const owner of input.owners)
 		for (const rep of owner.repertoires) {
-			if (input.expiry?.conditions === false && rep.repertoire.id === "conditions") continue
+			if (input.expiry?.conditions === false && repertoireTagged(input, rep.repertoire, "condition")) continue
 			// One `set` of the whole list per repertoire, never a remove+add
 			// pair for a piece that merely counts down: two ops on one slot in
 			// one batch read the same base, and the add was lost (walk
@@ -1931,11 +2507,18 @@ function common(input: EngineInput, resolved: Map<string, Resolved>): EngineOutp
 			out.explain.push({ target: `${owner.key}.${sel}`, total, terms, text: explainText(selectorLabel(input, owner, sel), total, terms) })
 		}
 		for (const why of r.skipped) out.explain.push({ target: `${owner.key}.skipped`, total: 0, terms: [], text: why })
+		// 🚧 Each script's own explain sentence and failures, by phase (2026-10-22: `effects` beside `derived`).
+		const laid = input.effects?.[owner.key]
 		const scripted = input.scripted?.[owner.key]
-		for (const e of scripted?.explain ?? []) out.explain.push({ target: `${owner.key}.script`, total: 0, terms: [], text: `${e.seedKey}: ${e.text}` })
-		if (scripted?.failed.length) {
+		for (const e of [...(laid?.explain ?? []), ...(scripted?.explain ?? [])])
+			out.explain.push({ target: `${owner.key}.script`, total: 0, terms: [], text: `${e.seedKey}: ${e.text}` })
+		const failures = [
+			...(laid?.failed ?? []).map((f) => ({ owner: owner.key, phase: "effects", ...f })),
+			...(scripted?.failed ?? []).map((f) => ({ owner: owner.key, phase: "derived", ...f }))
+		]
+		if (failures.length) {
 			const failed = (out.facts.scriptsFailed as unknown[] | undefined) ?? []
-			failed.push(...scripted.failed.map((f) => ({ owner: owner.key, ...f })))
+			failed.push(...failures)
 			out.facts.scriptsFailed = failed
 		}
 	}
@@ -1952,9 +2535,14 @@ export function runResolve(input: EngineInput, seed = "ruleset", early?: Map<str
 	const out = common(ordered, resolved)
 	const owners = ordered.owners
 	const voice = voiceOf(owners, input.viewer)
-	const voiceText = input.ruleset.voice[input.rigour] ?? input.ruleset.voice.prose ?? ""
+	// R6, R9: voice is optional — and derived when a ruleset declares none
+	// (its attributes' sentences, its functions' prose); a ruleset from
+	// scratch says nothing at all.
+	const voiceText = input.ruleset.voice?.[input.rigour] ?? input.ruleset.voice?.prose ?? derivedVoice(input.ruleset)
+	// 🚧 The turn economy (2026-10-22): `actions.perTurn`, read where numbers show.
+	const economy = atLeast(input.rigour, "mechanics") ? turnEconomyLine(conventionsOf(ordered)) : ""
 	const blocks: RulesetBlocks = {}
-	const v = block({ full: voiceText }, "full", PRIORITY.voice)
+	const v = block({ full: [voiceText, economy].filter(Boolean).join("\n") }, "full", PRIORITY.voice)
 	if (v) blocks.voice = v
 	const sheet: Record<RenderDepth, string[]> = { index: [], summary: [], full: [] }
 	for (const owner of owners) {
@@ -1996,20 +2584,53 @@ export function runResolve(input: EngineInput, seed = "ruleset", early?: Map<str
 /**
  * Apply the model's deltas and let `elapsed` pass: timed pieces that ran
  * out leave first (on what was held), then each delta is validated and
- * rolled from `input.random`, then time triggers fire. With no deltas this
- * is the `advance` moment. Returns the changes for `resolve.ts` to write.
+ * resolved by its check method (dice from `input.random`), then time
+ * triggers fire. With no deltas this is the `advance` moment. Returns the
+ * changes for `resolve.ts` to write.
+ *
+ * 🚧 A generator (2026-10-22): a check yields an `EngineAsk` for each check
+ * phase a driver answers (`EngineInput.checkAsks` — the `pre-roll` and
+ * `post-roll` scripts) and reads the answer. `runApply` drives it with no
+ * answers; `runApplyAsync` awaits each from the driver.
  */
-export function runApply(input: EngineInput, seed = "ruleset", early?: Map<string, Resolved>): EngineOutput {
+export function* applySteps(input: EngineInput, seed = "ruleset", early?: Map<string, Resolved>): Generator<EngineAsk, EngineOutput, unknown> {
 	const { ordered, resolved } = resolveAll(input, seed, early)
 	const out = common(ordered, resolved)
-	const st: ApplyState = { out, resolved, pending: new Map(), cured: new Map(), rolls: 0, pieces: new Map() }
+	const st: ApplyState = { out, resolved, pending: new Map(), cured: new Map(), rolls: 0, pieces: new Map(), decks: new Map() }
 	expireTimed(st, ordered)
-	for (const delta of input.deltas) applyDelta(st, ordered, delta)
+	for (const delta of input.deltas) yield* applyDelta(st, ordered, delta)
 	fireTime(st, ordered)
-	refillSpellPoints(st, ordered)
+	refillPools(st, ordered)
+	if (st.decks.size) out.decks = Object.fromEntries([...st.decks].sort(([a], [b]) => byString(a, b)))
 	if (out.outcomes.length) {
 		const b = block({ full: out.outcomes.map((o) => `- ${o.text}`).join("\n") }, "full", PRIORITY.outcomes)
 		if (b) out.blocks = { outcomes: b }
 	}
 	return out
+}
+
+/** The `apply` moment, run straight through: nothing is asked (see `applySteps`). */
+export function runApply(input: EngineInput, seed = "ruleset", early?: Map<string, Resolved>): EngineOutput {
+	const steps = applySteps({ ...input, checkAsks: undefined }, seed, early)
+	let at = steps.next()
+	while (!at.done) at = steps.next(null)
+	return at.value
+}
+
+/**
+ * 🚧 The `apply` moment with a driver answering each check's asks
+ * (2026-10-22) — `resolve.ts` runs the ruleset's `pre-roll` and `post-roll`
+ * scripts through QuickJS between the steps. One pass, one stream of
+ * randomness: a replay with the same seed and answers decides the same.
+ */
+export async function runApplyAsync(
+	input: EngineInput,
+	answer: (ask: EngineAsk) => Promise<unknown>,
+	seed = "ruleset",
+	early?: Map<string, Resolved>
+): Promise<EngineOutput> {
+	const steps = applySteps(input, seed, early)
+	let at = steps.next()
+	while (!at.done) at = steps.next(await answer(at.value))
+	return at.value
 }

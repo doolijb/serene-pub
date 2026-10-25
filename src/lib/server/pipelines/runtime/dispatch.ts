@@ -66,6 +66,7 @@ import {
 } from "$lib/server/connections/capabilityTarget"
 import {
 	isQueueCancellation,
+	currentLlmPriority,
 	llmQueue,
 	type LLMQueueStatus
 } from "$lib/server/utils/llmQueue"
@@ -81,6 +82,7 @@ import {
 import type { AttachmentInput } from "$lib/server/adapters/attachments"
 import type { ToolCall, ToolDeclaration } from "$lib/server/adapters/actions"
 import type { MediaRef } from "@serene-pub/sdk"
+import { capabilityForOutputs } from "$lib/shared/capabilities/outputs"
 import {
 	ComposedError,
 	connectionIdentity
@@ -189,6 +191,20 @@ export interface DispatchRequest {
 	attachments?: readonly (MediaRef | string)[]
 	samplingId?: number | null
 	/**
+	 * 🚧 The kinds the step asks the model to WRITE, in order
+	 * (`generate-text@1`'s `outputs`, O6). Absent or `["text"]` is today's
+	 * reply. Audio among them makes the requirement `text->text+audio`
+	 * (`requirementForOutputs`) — the resolution refuses a pair that cannot
+	 * speak, in words — and asks the adapter for a spoken reply.
+	 */
+	outputs?: readonly string[]
+	/**
+	 * 🚧 The speech sampling's VALUES (O7) — the TTS vocabulary the executor
+	 * resolved for `speechSampling`, the pick or the `text->audio` default.
+	 * Read only when `outputs` asks for audio.
+	 */
+	speechSampling?: Record<string, unknown> | null
+	/**
 	 * The author's own stop sequences — `generate-text.params.stopSequences`,
 	 * forwarded verbatim from the node's params slot.
 	 *
@@ -276,6 +292,8 @@ export interface DispatchRequest {
 
 export interface DispatchResult {
 	text: string
+	/** 🚧 Media the model wrote (O5) — bytes; the host stores them. */
+	media?: import("$lib/shared/imageGen/types").GeneratedMediaItem[]
 	/** The reasoning trace, native or lifted out of the text. */
 	reasoning?: string
 	isAborted: boolean
@@ -432,6 +450,49 @@ async function loadAdapterSession(db: Db, sessionId: number | undefined) {
 				seatUserId: cp.userId ?? null
 			}))
 	}
+}
+
+/**
+ * 🚧 The labels of the session's voices nobody in the cast is (lair fix 2,
+ * 2026-10-22): what the person's own lines are called (`playerLabelFor` — the
+ * Lair's *Dungeon Master*) and the genre's envoys by their declared names
+ * (*Castellan*, *Oracle*), as a transcript labels their lines. Stopped on
+ * like a participant's label (`ComposeStopsInput.nonCastLabels`) and taken
+ * off a reply's front when one opens it (`ReplyFacts.strayLabels`). None for
+ * a request made in no session.
+ */
+async function nonCastLabelsFor(db: Db, sessionId: number | undefined): Promise<string[]> {
+	if (sessionId === undefined) return []
+	try {
+		const [{ playerLabelFor }, { sessionDeclaredEnvoys }, { i18nText }] = await Promise.all([
+			import("$lib/server/pipelines/entities/sessionGenres"),
+			import("$lib/server/pipelines/entities/envoys"),
+			import("@serene-pub/sdk")
+		])
+		const [label, envoys] = await Promise.all([
+			playerLabelFor(db, sessionId),
+			sessionDeclaredEnvoys(db, sessionId)
+		])
+		const names = [
+			label?.trim() ?? "",
+			...envoys.map((e) => (i18nText(e.name as Parameters<typeof i18nText>[0], "en") ?? "").trim())
+		]
+		return [...new Set(names.filter(Boolean))]
+	} catch {
+		return []
+	}
+}
+
+/**
+ * 🚧 The labels the reply speaks under, off the Assemble record before the
+ * payload is compiled: its seed line's (`seedLabel`, the chat wire's unsent
+ * one) and the context's `replyLabel`. Never a stop of the reply's own.
+ */
+function assembledOwnLabels(compiledPrompt: unknown): string[] {
+	const record = (compiledPrompt ?? {}) as { seedLabel?: unknown; replyLabel?: unknown }
+	return [record.seedLabel, record.replyLabel]
+		.map((v) => (typeof v === "string" ? v.trim() : ""))
+		.filter(Boolean)
 }
 
 /**
@@ -931,8 +992,16 @@ export async function dispatchGeneration(
 	 * of both is in the world now, and a second walk of them here is what let
 	 * the request go to a connection the budget never saw.
 	 */
+	// 🚧 O6: the requirement follows what the step asks the model to write —
+	// `text->text+audio` for a spoken reply — so a pair that cannot speak is
+	// refused here in the resolver's own words, never sent and left silent.
+	const outputs = (request.outputs ?? []).filter(
+		(k): k is string => typeof k === "string" && !!k
+	)
+	const capability =
+		request.capability ?? capabilityForOutputs(outputs, TEXT_CAPABILITY)
 	const target = await resolveCapabilityTarget(request.db, {
-		capability: request.capability ?? TEXT_CAPABILITY,
+		capability: capability as typeof TEXT_CAPABILITY,
 		pipelineConfig:
 			request.connectionId != null || request.samplingId != null
 				? {
@@ -997,9 +1066,14 @@ export async function dispatchGeneration(
 	// the message CONTENT carry `Name:` labels? `toCompiledPrompt` passes
 	// `messages` through untouched on both of its branches, so reading it here —
 	// before the conversion below — is the same array the adapter sends.
+	// 🚧 The player label and the envoys (lair fix 2): stopped on like any
+	// participant, never the reply's own.
+	const nonCastLabels = await nonCastLabelsFor(request.db, request.sessionId)
 	const stops = composeStopsFor(connection, session, {
 		currentCharacterId: request.currentCharacterId ?? null,
 		explicit: request.stopSequences,
+		nonCastLabels,
+		ownLabels: assembledOwnLabels(request.compiledPrompt),
 		messages:
 			(
 				request.compiledPrompt as {
@@ -1104,11 +1178,16 @@ export async function dispatchGeneration(
 		// connection is not refused, and phrased in the words the connection
 		// screen showed rather than in a transform id. Asked per kind the
 		// request carries: an image needs vision, a PDF needs documents.
+		// 🚧 A sound needs hearing, a moving picture watching (O4).
 		const kinds = new Set(
 			allFiles.map((f) =>
 				f.mime.startsWith("image/")
 					? ("text+image->text" as const)
-					: ("text+document->text" as const)
+					: f.mime.startsWith("audio/")
+						? ("text+audio->text" as const)
+						: f.mime.startsWith("video/")
+							? ("text+video->text" as const)
+							: ("text+document->text" as const)
 			)
 		)
 		for (const transform of kinds) {
@@ -1171,6 +1250,21 @@ export async function dispatchGeneration(
 	 * declarations at it is a wiring mistake worth reporting rather than a
 	 * request to send stripped.
 	 */
+	// 🚧 O6: a request asking for more than text needs an adapter with code
+	// that asks for it and reads it back (`writesKinds`) — refused rather
+	// than sent as text alone, which would read as the model choosing
+	// silence.
+	if (outputs.some((k) => k !== "text")) {
+		const missing = outputs.filter((k) => !adapter.writesKinds.includes(k))
+		if (missing.length)
+			throw new DispatchError(
+				`this step asks the model to write ${missing.join(" and ")}, and the configured adapter has no ` +
+					`code that asks for ${missing.length === 1 ? "it" : "them"}. Bind a connection whose adapter does.`,
+				connectionIdentity(connection)
+			)
+		adapter.withOutputs(outputs, request.speechSampling ?? null)
+	}
+
 	const tools = request.tools ?? []
 	if (tools.length) {
 		const refusal = capabilityRefusal(connection, "tools")
@@ -1221,6 +1315,9 @@ export async function dispatchGeneration(
 				messageId: queue.messageId,
 				userId: queue.userId,
 				label: queue.label,
+				// 🚧 The run's family's place in the queue (A13, R26): actions
+				// and session creation, then events, then routines.
+				priority: currentLlmPriority(),
 				// Both lifecycle hooks the base class always has, read
 				// structurally like `recordedWire` reads its getters: a test
 				// fake standing in for a model implements `generateText` and
@@ -1272,6 +1369,15 @@ export async function dispatchGeneration(
 		 * `generateText()` returned — that is when the adapter decided what it
 		 * asked — and structurally, since a test fake has no such getter.
 		 */
+		const ownLabels = ownLabelsFor(
+			session,
+			request.currentCharacterId ?? null,
+			compiled,
+			// A seedless prompt's speaker (Assemble's `replyLabel`).
+			typeof (request.compiledPrompt as { replyLabel?: unknown } | null)?.replyLabel === "string"
+				? (request.compiledPrompt as { replyLabel: string }).replyLabel
+				: null
+		)
 		const facts: ReplyFacts = {
 			opensInReasoning: promptOpensReasoning(request.compiledPrompt)
 				? "prompt"
@@ -1286,16 +1392,13 @@ export async function dispatchGeneration(
 			 * id to fall back on — the Dungeon Crawler's Narrator, 2026-10-15)
 			 * kept its `Narrator:` on the row.
 			 */
-			ownLabels: ownLabelsFor(
-				session,
-				request.currentCharacterId ?? null,
-				compiled,
-				// A seedless prompt's speaker (Assemble's `replyLabel`).
-				typeof (request.compiledPrompt as { replyLabel?: unknown } | null)?.replyLabel === "string"
-					? (request.compiledPrompt as { replyLabel: string }).replyLabel
-					: null
-			)
+			ownLabels
 		}
+		// 🚧 A stray voice's label opening the reply comes off it too (lair fix 2).
+		const stray = nonCastLabels.filter(
+			(label) => !ownLabels.includes(label) && !assembledOwnLabels(request.compiledPrompt).includes(label)
+		)
+		if (stray.length) facts.strayLabels = stray
 		request.onReplyFacts?.(facts)
 
 		if (typeof result.completionResult === "function") {
@@ -1415,7 +1518,24 @@ export async function dispatchGeneration(
 			...(samplingReportOf(adapter) ?? {}),
 			// Same seam, same reason: the accounting a stream reports arrives
 			// on its last chunks. Recorded only — see `DispatchResult` above.
-			...usageOf(result, adapter)
+			...usageOf(result, adapter),
+			// 🚧 O5: what the model wrote besides text, bytes in hand, in its
+			// order — stored by the host, never here.
+			...(result.media?.length
+				? {
+						media: result.media.map((m) => ({
+							...m,
+							// Provenance, as an image's is (0173): which model
+							// spoke it. Written once on the file, never read back.
+							meta: {
+								...(m.meta ?? {}),
+								backend: connection.type,
+								...(connection.name ? { connectionName: connection.name } : {}),
+								...(connection.model ? { model: connection.model } : {})
+							}
+						}))
+					}
+				: {})
 		}
 	} finally {
 		request.signal?.removeEventListener("abort", onAbort)

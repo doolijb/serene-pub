@@ -492,7 +492,7 @@
 
 		<button
 			type="button"
-			class="border-surface-300-700 hover:preset-tonal-primary flex items-center gap-2.5 rounded-[10px] border border-dashed px-3 py-2.5 text-left"
+			class="border-surface-300-700 hover:preset-tonal-primary flex items-center gap-2.5 rounded-base border border-dashed px-3 py-2.5 text-left"
 			onclick={onGetModels}
 		>
 			<Icons.Download
@@ -501,10 +501,10 @@
 				aria-hidden="true"
 			/>
 			<span class="min-w-0 flex-1">
-				<span class="block text-[13px] font-medium">
+				<span class="block text-chip font-medium">
 					Get another model
 				</span>
-				<span class="text-surface-600-400 block text-[11px]">
+				<span class="text-surface-600-400 block text-meta">
 					Recommended lists and Hugging Face
 				</span>
 			</span>

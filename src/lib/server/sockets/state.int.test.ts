@@ -20,6 +20,7 @@ import {
 	_clearAttributeSlots
 } from "@serene-pub/sdk"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 let testDb: TestDb
 let dataDir: string
@@ -74,7 +75,7 @@ function declareSlots() {
 		appliesTo: ["world"],
 		config: { of: ["clear", "fog", "storm"] }
 	})
-	genre(GENRE, {
+	genreKeeping(GENRE, {
 		name: { en: "Stats" },
 		family: "test",
 		slots: [hp, weather],
@@ -678,11 +679,11 @@ describe("a write's reply and refusal carry the writer's requestId, unchanged", 
 // ── what a surface is told of a slot ────────────────────────────────────────
 
 describe("a slot's descriptor says what the session's vocabulary says of it", () => {
-	test("retired, required and the sheet that named it reach the read — each only when it holds", async () => {
+	// 🚧 RF fix 8: `required` is the rules' (an attribute every holder carries); a genre names no sheet.
+	test("retired, required and the rules' kind reach the read — each only when it holds; the host's own says so", async () => {
 		declareSlots()
 		const w = await world()
-		const { defineAttributeSheet, defineStoredAttributeSlot, retireAttributeSlot, getAttributeSlot } =
-			await import("@serene-pub/sdk")
+		const { defineRuleset, defineStoredAttributeSlot, retireAttributeSlot, getAttributeSlot } = await import("@serene-pub/sdk")
 		const dread = `somebody${n}:slot/dread@1`
 		defineStoredAttributeSlot(
 			dread,
@@ -695,37 +696,53 @@ describe("a slot's descriptor says what the session's vocabulary says of it", ()
 			{ userId: w.user.id }
 		)
 		retireAttributeSlot(dread)
-		const sheetId = `test:sheet/vitals-${n}@1`
-		const sheet = defineAttributeSheet(sheetId as never, {
-			label: { en: "Vitals" },
-			slots: [{ id: HP, required: true }]
+		const rules = `test:ruleset/vitals-${n}@1`
+		defineRuleset(rules, {
+			name: { en: "Vitals" },
+			attributes: [
+				{ id: "hp", slot: HP, borrowed: true, required: true, shownAs: "count" },
+				{ id: "dread", slot: dread, borrowed: true },
+				{ id: "nerve", name: { en: "Nerve" }, kind: "pool", bounds: { max: 5 }, shownAs: "pips", prose: "Nerve: courage held in reserve." }
+			]
 		})
+		const { rulesetAttributeSlotId } = await import("@serene-pub/sdk")
+		const nerve = rulesetAttributeSlotId(rules, "nerve")
 		const genreId = `test:genre/sheeted-${n}`
-		genre(genreId, {
+		genreKeeping(genreId, {
 			name: { en: "Sheeted" },
 			family: "test",
-			slots: [getAttributeSlot(WEATHER)!, getAttributeSlot(dread)!],
-			sheets: [sheet],
+			slots: [getAttributeSlot(WEATHER)!],
 			events: {}
 		})
 		const { eq } = await import("drizzle-orm")
-		await testDb.update(schema.sessions).set({ genreId }).where(eq(schema.sessions.id, w.session.id))
+		await testDb.update(schema.sessions).set({ genreId, primaryRuleset: rules }).where(eq(schema.sessions.id, w.session.id))
 
 		const { stateGet } = await import("./state")
 		const res = await stateGet.handler(fakeSocket(w.user.id), { sessionId: w.session.id }, () => {})
 		const of = (id: string) => res.slots.find((s) => s.slotId === id)
-		expect(of(HP)).toMatchObject({ required: true, sheetId })
+		// A borrowed slot's kind is its slot's (never said); an attribute of the rules' own says it.
+		expect(of(HP)).toMatchObject({ required: true, shownAs: "count" })
+		expect(of(HP)).not.toHaveProperty("kind")
+		expect(of(nerve)).toMatchObject({ kind: "pool", shownAs: "pips" })
 		expect(of(HP)).not.toHaveProperty("retired")
+		expect(of(HP)).not.toHaveProperty("hostState")
 		expect(of(dread)).toMatchObject({ retired: true })
 		expect(of(dread)).not.toHaveProperty("required")
+		expect(of(WEATHER)).toMatchObject({ hostState: "tool" })
 		expect(of(WEATHER)).not.toHaveProperty("retired")
 		expect(of(WEATHER)).not.toHaveProperty("required")
-		expect(of(WEATHER)).not.toHaveProperty("sheetId")
+		expect(of(WEATHER)).not.toHaveProperty("kind")
 		// Phase 2: what the value IS rides the read — the field always, the
 		// catalogue shape when the slot names one (these declare `type` alone).
 		expect(of(HP)).toMatchObject({ field: { type: "integer" } })
 		expect(of(HP)).not.toHaveProperty("shape")
 		expect(of(WEATHER)?.field?.type).toBe("enum")
+		// 🚧 RF fix 8: these rules decide nothing, yet keep numbers of their own — so their numbers are drawn;
+		// only rules that count nothing at all (Freeform) are a table of words.
+		expect(res).not.toHaveProperty("wordsOnly")
+		await testDb.update(schema.sessions).set({ primaryRuleset: "core:ruleset/freeform@1" }).where(eq(schema.sessions.id, w.session.id))
+		const words = await stateGet.handler(fakeSocket(w.user.id), { sessionId: w.session.id }, () => {})
+		expect(words.wordsOnly).toBe(true)
 	}, 60_000)
 
 	test("a slot shaped from the catalogue carries its shape id and field to the read", async () => {
@@ -740,7 +757,7 @@ describe("a slot's descriptor says what the session's vocabulary says of it", ()
 			appliesTo: ["world"]
 		})
 		const genreId = `test:genre/clocked-${n}`
-		genre(genreId, { name: { en: "Clocked" }, family: "test", slots: [getAttributeSlot(clock)!], events: {} })
+		genreKeeping(genreId, { name: { en: "Clocked" }, family: "test", slots: [getAttributeSlot(clock)!], events: {} })
 		const { eq } = await import("drizzle-orm")
 		await testDb.update(schema.sessions).set({ genreId }).where(eq(schema.sessions.id, w.session.id))
 		const { stateGet } = await import("./state")
@@ -768,7 +785,7 @@ describe("places", () => {
 			descriptor: "What is lying there.",
 			appliesTo: ["world", "location"]
 		})
-		genre(PLACES, { name: { en: "Places" }, family: "test", slots: [stash], events: {} })
+		genreKeeping(PLACES, { name: { en: "Places" }, family: "test", slots: [stash], events: {} })
 		const w = await world()
 		await testDb.update(schema.sessions).set({ genreId: PLACES }).where(eq(schema.sessions.id, w.session.id))
 		const [crypt] = await testDb

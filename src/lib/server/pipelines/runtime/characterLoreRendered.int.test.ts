@@ -29,7 +29,7 @@ import {
 	STORY_RESPOND_SPEC_ID,
 	CORE_SPECS,
 	LAIR_GENRE_ID,
-	LAIR_RESPOND_SPEC_ID,
+	LAIR_REPLY_SPEC_ID,
 	STORY_SIDE_CHARACTER_SPEC_ID,
 	STORY_NARRATE_SPEC_ID
 } from "@serene-pub/core-catalog"
@@ -296,16 +296,13 @@ describe("Story narrator: the narrator's prompt carries the lore the narrator ma
 
 describe("Lair: the delver who speaks renders their own lore", () => {
 	it("Verity's character turn prompt carries her secret and not Brask's", async () => {
-		const b = await book(LAIR_GENRE_ID, { trustNarrator: false })
-		const receipt = await turn(b, LAIR_RESPOND_SPEC_ID, {
+		const b = await book(LAIR_GENRE_ID, {})
+		const receipt = await turn(b, LAIR_REPLY_SPEC_ID, {
 			characterId: b.cast.Verity,
 			sessionScope: { sessionId: b.session.id },
-			fields: { trustNarrator: false }
+			fields: {}
 		})
-		const [prompt] = promptsAt(
-			receipt,
-			"via.turn.channel.story.door.play.speech.each.character.turn.prompt"
-		)
+		const [prompt] = promptsAt(receipt, "via.turn.channel.story.pick.picked.prompt")
 		expectVerityOnly(prompt!)
 	})
 })

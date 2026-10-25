@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { getContext } from "svelte"
-	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
+	import RowMenu from "$lib/client/components/menus/RowMenu.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { loreRoute } from "../loreRoute.svelte"
 	import type { PoolSource } from "./types"
@@ -25,8 +25,6 @@
 	const pool = getLorePoolCtx()
 	const sceneSummarizesCtx: SceneSummarizesCtx =
 		getContext("sceneSummarizesCtx")
-
-	let openMenuSceneId = $state<number | null>(null)
 
 	let scenes = $derived(pool.scenesOf(entry.id))
 	let readyToGraph = $derived(scenes.filter((s) => !s.graphed && s.summary))
@@ -124,86 +122,49 @@
 							<Icons.Eye size={11} />
 						</button>
 					{/if}
-					<div role="none" onclick={(e) => e.stopPropagation()}>
-						<Popover
-							open={openMenuSceneId === scene.id}
-							onOpenChange={(e) =>
-								(openMenuSceneId = e.open ? scene.id : null)}
-							positioning={{ placement: "bottom-end" }}
-						>
-							<Popover.Trigger
-								class="btn btn-sm preset-tonal-surface shrink-0 p-1"
-								title="More options"
-								aria-label="More options for {scene.name ??
-									'Unnamed scene'}"
-							>
-								<Icons.Ellipsis size={14} />
-							</Popover.Trigger>
-							<Portal>
-								<Popover.Positioner class="z-[1000]!">
-									<Popover.Content
-										class="card bg-surface-100-900 flex min-w-36 flex-col gap-1 p-2 shadow-xl"
-									>
-										{#if pending}
-											<button
-												class="btn btn-sm preset-tonal-surface w-full justify-start"
-												type="button"
-												onclick={() => {
-													openMenuSceneId = null
-													pool.openProcess(
-														scene.id,
-														pending.activityId
-													)
-												}}
-											>
-												<Icons.Eye size={13} /> Review
-											</button>
-										{:else if hasMessages}
-											<button
-												class="btn btn-sm preset-tonal-surface w-full justify-start"
-												type="button"
-												disabled={isProcessing}
-												onclick={() => {
-													openMenuSceneId = null
-													processScene(scene.id)
-												}}
-											>
-												{#if scene.summary}
-													<Icons.RefreshCw
-														size={13}
-													/> Reprocess
-												{:else}
-													<Icons.Sparkles size={13} />
-													Process
-												{/if}
-											</button>
-										{/if}
-										<button
-											class="btn btn-sm preset-tonal-surface w-full justify-start"
-											type="button"
-											onclick={() => {
-												openMenuSceneId = null
-												openScene(scene.id)
-											}}
-										>
-											<Icons.Pencil size={13} /> Edit
-										</button>
-										<hr class="border-surface-300-700" />
-										<button
-											class="btn btn-sm preset-filled-error-500 w-full justify-start"
-											type="button"
-											onclick={() => {
-												openMenuSceneId = null
-												deleteScene(scene.id)
-											}}
-										>
-											<Icons.Trash2 size={13} /> Delete
-										</button>
-									</Popover.Content>
-								</Popover.Positioner>
-							</Portal>
-						</Popover>
-					</div>
+					<RowMenu
+						label={scene.name ?? "Unnamed scene"}
+						triggerLabel="More actions for {scene.name ??
+							'Unnamed scene'}"
+						triggerTitle="More actions"
+						triggerClass="btn btn-sm preset-tonal-surface shrink-0 p-1"
+						horizontal
+						width={180}
+						items={[
+							pending
+								? {
+										label: "Review",
+										icon: Icons.Eye,
+										onSelect: () =>
+											pool.openProcess(
+												scene.id,
+												pending.activityId
+											)
+									}
+								: hasMessages && {
+										label: scene.summary
+											? "Reprocess"
+											: "Process",
+										icon: scene.summary
+											? Icons.RefreshCw
+											: Icons.Sparkles,
+										disabled: isProcessing,
+										onSelect: () => processScene(scene.id)
+									},
+							{
+								label: "Edit",
+								icon: Icons.Pencil,
+								onSelect: () => openScene(scene.id)
+							},
+							{ separator: true },
+							{
+								label: "Delete",
+								icon: Icons.Trash2,
+								destructive: true,
+								onSelect: () => deleteScene(scene.id)
+							}
+						]}
+					/>
 				</div>
 				{#if scene.summary}
 					<p

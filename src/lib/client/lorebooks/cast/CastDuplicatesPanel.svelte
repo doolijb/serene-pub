@@ -243,7 +243,7 @@
 									"(deleted)"}"
 							</span>
 							<button
-								class="text-primary-500 shrink-0 hover:underline disabled:opacity-40"
+								class="text-primary-ink shrink-0 hover:underline disabled:opacity-40"
 								type="button"
 								disabled={log.survivorId === null}
 								title={log.survivorId === null

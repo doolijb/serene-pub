@@ -728,8 +728,11 @@ describe("P2-4: Vis Itineris's options the crawl now honours (owner ruling ★7)
 		// 🚧 One row, bounded by the seat's own most (PLAN-dc-after-walk2 Q1-6): never a second "at most" row.
 		expect(books).toContain("Spell points: 4")
 		expect(books).not.toContain("Spell points at most")
-		const { DUNGEON_CRAWLER_REST_SPEC_ID } = await import("@serene-pub/core-catalog")
-		const rested = await fire(ownerId, sessionId, `${DUNGEON_CRAWLER_REST_SPEC_ID}#rest`, undefined, undefined, {})
+		// 🚧 S3 (lane G3, 2026-10-23): the rules' Rest (Vis Itineris offers one); the crawl's night follows on
+		// its event — the routine After a rest (routines run here only when a test turns them on).
+		const { setRoutinesEnabled } = await import("$lib/server/pipelines/routines/runs")
+		setRoutinesEnabled(true)
+		const rested = await fire(ownerId, sessionId, "core:spec/rules-action#rest", undefined, undefined, {}).finally(() => setRoutinesEnabled(false))
 		expect(rested?.error, rested?.error).toBeUndefined()
 		expect(await value(sessionId, owner, SPELL_POINTS)).toBe(4)
 	})
@@ -764,9 +767,10 @@ describe("P2-4: Vis Itineris's options the crawl now honours (owner ruling ★7)
 describe("P2-6: the Story ruleset keeps a sheet with things in words (owner ruling ★10)", () => {
 	it("the kit lands as names and words; a bought potion and a poison land; the books prompt names no Vis Itineris word", async () => {
 		const { sessionId, ref, owner } = await madeTable("walk100-story", { cls: "cleric", ruleset: "core:ruleset/freeform@1", rigour: "prose" })
-		const weapons = (await value(sessionId, owner, "core:slot/crawl-weapons@1")) as any[]
-		expect(weapons).toEqual([expect.stringMatching(/^Mace — \S/)])
-		expect(namesIn(await value(sessionId, owner, "core:slot/crawl-features@1"))).toEqual(["Turn the dead"])
+		// 🚧 S4 (lane G3, 2026-10-23): the kits are the session's rules' class rows — Freeform keeps none,
+		// so a character starts with what the interview gave, and nothing of Vis Itineris's lands.
+		expect(((await value(sessionId, owner, "core:slot/crawl-weapons@1")) as any[] | null) ?? []).toEqual([])
+		expect(((await value(sessionId, owner, "core:slot/crawl-features@1")) as any[] | null) ?? []).toEqual([])
 		expect(((await value(sessionId, owner, "core:slot/crawl-spell-slots@1")) as any[] | null) ?? []).toEqual([])
 		const from = compiled.length
 		await turn(
@@ -786,5 +790,48 @@ describe("P2-6: the Story ruleset keeps a sheet with things in words (owner ruli
 		const books = JSON.stringify(promptsWith(BOOKS, from)[0])
 		expect(books).not.toMatch(/spell-slots|spell slot|attack\.melee|Vis Itineris|Prone, Restrained/)
 		expect(books).toContain("add it as a condition in a word or two")
+		// 🚧 RF fix 8: Freeform keeps no health — attributes are the rules', never the genre's — so a
+		// fall is told in words: no number moves, nobody reaches death's door, the hero stands.
+		const tracks = async (slotId: string) => !!(await (await import("$lib/server/state/resolve")).vocabularyFor(db as any, sessionId)).entryFor(slotId)
+		expect(await tracks("core:slot/hp@1")).toBe(false)
+		await turn(sessionId, ref, "I fall into the pit.", plan({ deltas: [delta({ owner: ref, op: "spend", slot: "hp", value: "20", reason: "the pit" })] }))
+		const door = (await tableRows(sessionId)).flatMap((r) => r.split("\n")).filter((l) => l.includes("death's door"))
+		expect(door).toEqual([])
+		expect(await value(sessionId, owner, "core:slot/fate@1")).toBe("alive")
 	})
+})
+
+describe("🚧 S4 (lane G3, 2026-10-23): a crawl under Wherewithal plays by Wherewithal", () => {
+	it("no kit, its own checks, no die at death's door, and the crawl's own Rest — the night told without a length", async () => {
+		const { sessionId, ref, owner } = await madeTable("walk100-wherewithal", { cls: "ranger", ruleset: "core:ruleset/wherewithal@1", rigour: "scripts" })
+		// No class rows in Wherewithal: no starting kit.
+		expect(((await value(sessionId, owner, "core:slot/crawl-weapons@1")) as any[] | null) ?? []).toEqual([])
+		// The Planner is told the table decides by its rules — no dice (Wherewithal decides by no chance).
+		const from = compiled.length
+		await turn(sessionId, ref, "I dare the rope bridge.", plan())
+		const books = JSON.stringify(promptsWith(BOOKS, from)[0])
+		expect(books).toContain("The table decides every check by its rules, never you.")
+		expect(books).not.toMatch(/d20|rolls the dice|Vis Itineris|attack\.melee/)
+		// 🚧 RF fix 8: Wherewithal keeps no health (its pools are nerve, favour and provisions) — a fall
+		// is told in words: no number moves and nobody reaches death's door.
+		expect(!!(await (await import("$lib/server/state/resolve")).vocabularyFor(db as any, sessionId)).entryFor("core:slot/hp@1")).toBe(false)
+		await turn(sessionId, ref, "The bridge gives way.", plan({ deltas: [delta({ owner: ref, op: "spend", slot: "hp", value: "20", reason: "the fall" })] }))
+		const door = (await tableRows(sessionId)).flatMap((r) => r.split("\n")).filter((l) => l.includes("death's door"))
+		expect(door).toEqual([])
+		expect(await value(sessionId, owner, "core:slot/fate@1")).toBe("alive")
+		// Wherewithal offers no Rest of its own: the crawl's is the one, and the owner's.
+		const { listSessionActions } = await import("$lib/server/pipelines/entities/sessionActions")
+		const venues: any = await listSessionActions(db as any, sessionId, { userId: ownerId })
+		const ids = [...venues.composer.primary, ...venues.composer.overflow].map((a: any) => `${a.specSlug}#${a.key}`)
+		expect(ids).toContain("core:spec/dungeon-crawler-rest#rest")
+		expect(ids.filter((i: string) => i.startsWith("core:spec/rules-action#"))).toEqual([])
+		const clock = await value(sessionId, { kind: "session", id: sessionId } as any, "core:slot/crawl-time@1")
+		const rested = await fire(ownerId, sessionId, "core:spec/dungeon-crawler-rest#rest", undefined, undefined, {})
+		expect(rested?.error, rested?.error).toBeUndefined()
+		expect(await value(sessionId, owner, "core:slot/fate@1")).toBe("alive")
+		// Its rests take no set time: the night is told without one, and the clock stays. 🚧 RF fix 8:
+		// with no health in Wherewithal's keeping, nobody is said to recover — the rest is told alone.
+		expect((await tableRows(sessionId)).at(-1)).toMatch(/^The party rests\.$/)
+		expect(await value(sessionId, { kind: "session", id: sessionId } as any, "core:slot/crawl-time@1")).toEqual(clock)
+	}, 600_000)
 })

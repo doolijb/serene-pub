@@ -12,9 +12,9 @@
  *     `core:task/turn-manual@1`, `userSplit` → `core:task/turn-user-split@1`;
  *     `ordered` and none are the spec's own round robin and write nothing;
  *   · a chat's own sampling config becomes its session's sampling pick: the
- *     session-scope pipeline panel row on the `sampling` slot of every
- *     pipeline whose `generate` step writes text, the config's live id read
- *     through the restore's id map;
+ *     session-scope pipeline panel row on the `sampling` slot of every step a
+ *     pipeline runs on the Reply loadout that writes text, the config's live
+ *     id read through the restore's id map;
  *   · a chat that ignored retrieval (`metadata.ragIgnored`, which switched
  *     0.5.3's RAG off for that chat) gets search-by-meaning **off** as a session
  *     override on every pipeline that has the switch; the flag stays, since
@@ -76,6 +76,7 @@ export async function finishAtticUpgrade(
 	const sampling = await carryChatSampling(db, notes)
 	const searchOff = await switchOffIgnoredRetrieval(db, notes)
 	await noteChatPromptOverrides(db, notes)
+	await carryIntoRegistrations(db)
 	await assertWiring(db, notes)
 	const written = await writeUpgradeNotes(db, notes.list)
 	// The summary and the notification come last, so they count every note
@@ -91,6 +92,33 @@ export async function finishAtticUpgrade(
 	await dropAttic(db)
 	await announce(db, total)
 	return { rebinds, sampling, searchOff, notes: written + 1 }
+}
+
+/**
+ * 🚧 The selections the wiring above wrote, carried into registrations
+ * (PLAN-layering D7): the 0108 data upgrade ran with the migrations, before
+ * this attic wiring existed, so a 0.5.3 database's per-session picks — the
+ * admin's reply prompt, 0.5.3's shipped one on everyone else's — would
+ * otherwise sit in `pipeline_config_selections`, which a run never reads
+ * (a run reads registrations). The same conversion, run again: it is
+ * idempotent (every insert `ON CONFLICT DO NOTHING`), in one transaction.
+ */
+async function carryIntoRegistrations(db: Db): Promise<void> {
+	const { layeringUpgrade } = await import(
+		"$lib/server/db/dataUpgrades/0108_layering_registrations"
+	)
+	const { followUpsUpgrade } = await import(
+		"$lib/server/db/dataUpgrades/0110_layering_follow_ups"
+	)
+	await db.transaction(async (tx) => {
+		await layeringUpgrade(tx as never, { shippedHashes: new Set() })
+		// 🚧 R50 (lane F1): the pub's selections the attic wrote → instance values.
+		await followUpsUpgrade(tx as never, { shippedHashes: new Set() })
+	})
+	const { invalidateRegistrations } = await import(
+		"$lib/server/pipelines/registrations/resolve"
+	)
+	invalidateRegistrations()
 }
 
 /** One notification to every admin, after the commit. */
@@ -191,9 +219,9 @@ async function rebindStrategies(db: Db, notes: UpgradeNotes): Promise<number> {
 
 /**
  * A chat's sampling config, as its session's sampling pick: a session-scope
- * `pipeline_node_overrides` row on each text `generate` step's `sampling`
- * slot (`textSamplingSlots`), the one session layer the Pipelines card shows
- * and the run reads. A row already at that address stays.
+ * `pipeline_node_overrides` row on each text reply step's `sampling` slot
+ * (`textSamplingSlots`), the one session layer the Pipelines card shows and
+ * the run reads. A row already at that address stays.
  */
 async function carryChatSampling(
 	db: Db,
@@ -266,22 +294,27 @@ async function carryChatSampling(
 }
 
 /**
- * Every pipeline's `generate` sampling slot whose step writes text: its
- * connection slot requires `text->text`, or names no transform and a text
- * shape or none — the same reading `world.ts` gives the oracle's capability.
+ * Every pipeline's reply-step `sampling` slot whose step writes text: the
+ * steps it runs on the **Reply** loadout (`replyLoadoutSteps`, read off the
+ * active version's document — Story's `reply.prose.generate` and
+ * `reply.changes.generate`, Guide's `generate`), each whose connection slot
+ * requires `text->text`, or names no transform and a text shape or none —
+ * the same reading `world.ts` gives the oracle's capability.
  */
 async function textSamplingSlots(
 	db: Db
 ): Promise<Array<{ specId: number; nodeKey: string; slot: string }>> {
 	const [
 		{ declarations },
-		{ ORACLE_NODE_KEY },
+		{ loadDocument },
+		{ replyLoadoutSteps },
 		{ TEXT_CAPABILITY },
 		{ capabilityForSamplingShape },
 		{ isTransformId }
 	] = await Promise.all([
 		import("$lib/server/pipelines/config/panel"),
-		import("$lib/server/pipelines/config/world"),
+		import("$lib/server/pipelines/boot/store"),
+		import("$lib/server/pipelines/runtime/specShape"),
 		import("$lib/server/connections/capabilityTarget"),
 		import("$lib/shared/capabilities/samplingShape"),
 		import("@serene-pub/sdk")
@@ -290,19 +323,22 @@ async function textSamplingSlots(
 	const out: Array<{ specId: number; nodeKey: string; slot: string }> = []
 	for (const spec of specs) {
 		if (spec.activeVersionId == null) continue
-		const decls = (await declarations(db, spec.activeVersionId)).filter(
-			(d) => d.nodeKey === ORACLE_NODE_KEY
-		)
-		const sampling = decls.find(
-			(d) => d.control === "sampling-ref" && d.slot === "sampling" && !d.path
-		)
-		if (!sampling) continue
-		const connection = decls.find((d) => d.control === "connection-ref")
-		const capability =
-			connection?.requires?.find(isTransformId) ??
-			capabilityForSamplingShape(connection?.shape)
-		if (capability !== TEXT_CAPABILITY) continue
-		out.push({ specId: spec.id, nodeKey: ORACLE_NODE_KEY, slot: sampling.slot })
+		const steps = replyLoadoutSteps(await loadDocument(db, spec.activeVersionId))
+		if (!steps.length) continue
+		const all = await declarations(db, spec.activeVersionId)
+		for (const nodeKey of steps) {
+			const decls = all.filter((d) => d.nodeKey === nodeKey)
+			const sampling = decls.find(
+				(d) => d.control === "sampling-ref" && d.slot === "sampling" && !d.path
+			)
+			if (!sampling) continue
+			const connection = decls.find((d) => d.control === "connection-ref")
+			const capability =
+				connection?.requires?.find(isTransformId) ??
+				capabilityForSamplingShape(connection?.shape)
+			if (capability !== TEXT_CAPABILITY) continue
+			out.push({ specId: spec.id, nodeKey, slot: sampling.slot })
+		}
 	}
 	return out
 }

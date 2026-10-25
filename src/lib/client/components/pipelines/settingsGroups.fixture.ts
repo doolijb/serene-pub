@@ -235,12 +235,7 @@ export function adventureView(
 		event: null,
 		enabled: true,
 		taxonomy: null,
-		configs: [
-			{ id: 3, name: "Adventure", isDefault: true, readOnly: false, enabled: true, includedActions: null }
-		],
 		modeActions: [],
-		selectedConfig: { id: 3, name: "Adventure", source: "shipped" },
-		canSelectConfig: true,
 		groups: adventureGroups(),
 		scope: { kind: "config" },
 		...over
@@ -280,7 +275,7 @@ export function nonAdminSessionView(sessionId: number): Sockets.Pipelines.Namesp
 			changedInAdvanced: 0
 		}))
 		.filter((g) => g.front.length)
-	return adventureView({ groups, canSelectConfig: true, scope: { kind: "session", sessionId } })
+	return adventureView({ groups, scope: { kind: "session", sessionId } })
 }
 
 /** A pipeline with nothing a session draws — Answer, Nudge, Whisper. */
@@ -332,7 +327,6 @@ export function creationSessionView(
 		...view,
 		slug: "core:spec/story-create",
 		name: "Create session",
-		canSelectConfig: !readOnlyBecause,
 		groups,
 		scope: { kind: "session", sessionId, ...(readOnlyBecause ? { readOnlyBecause } : {}) }
 	}

@@ -4,6 +4,7 @@
 	import Avatar from "../Avatar.svelte"
 	import EmbeddingStatusIcon from "../EmbeddingStatusIcon.svelte"
 	import RowMenu from "../menus/RowMenu.svelte"
+	import MetaLine from "../panels/MetaLine.svelte"
 	import { characterSummary } from "$lib/shared/characters/characterSummary"
 	import { sharedFromLine } from "$lib/shared/utils/sharedRows"
 
@@ -77,7 +78,7 @@
 	function tagColorPreset(tag: { colorPreset?: string }): string {
 		return (
 			tag.colorPreset ||
-			"bg-primary-500/20 text-primary-600 dark:text-primary-400"
+			"bg-primary-500/20 text-primary-ink"
 		)
 	}
 </script>
@@ -92,13 +93,14 @@
 	{active}
 >
 	{#snippet content()}
-		<!-- The avatar scale's row step (STYLE-GUIDE §6.4): 40px, the
-		     identity's rounded square. Decorative — the name is beside it. -->
+		<!-- The row's anatomy (STYLE-GUIDE §6.4, L6 2026-10-24): the 44px face
+		     (the scale's row step), the 15px name, one muted meta line, the
+		     tag chip, the kebab. Decorative — the name is beside it. -->
 		<Avatar char={character as any} size="md" decorative />
 		<div class="flex min-w-0 flex-1 items-center gap-2">
 			<div class="min-w-0 flex-1">
 				<div
-					class="flex items-center gap-1 text-left text-[15px] font-medium"
+					class="flex items-center gap-1 text-left text-lead font-medium"
 					id="character-name-{character.id}"
 				>
 					<span class="truncate">
@@ -147,25 +149,22 @@
 					/>
 				</div>
 				{#if summaryLine}
-					<div
-						class="text-surface-600-400 truncate text-left text-xs"
-						id="character-desc-{character.id}"
-					>
+					<MetaLine id="character-desc-{character.id}">
 						{summaryLine}
-					</div>
+					</MetaLine>
 				{/if}
 			</div>
 			{#if tags.length > 0}
 				<span class="flex shrink-0 items-center gap-1">
 					<span
-						class="max-w-24 truncate rounded px-1.5 py-0.5 text-[11px] {tagColorPreset(
+						class="max-w-24 truncate rounded px-1.5 py-0.5 text-meta {tagColorPreset(
 							tags[0]
 						)}"
 					>
 						{tags[0].name}
 					</span>
 					{#if tags.length > 1}
-						<span class="text-surface-600-400 text-[11px]">
+						<span class="text-surface-600-400 text-meta">
 							+{tags.length - 1}
 						</span>
 					{/if}

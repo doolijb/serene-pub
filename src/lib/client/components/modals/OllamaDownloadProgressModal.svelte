@@ -98,9 +98,9 @@
 			class="fixed inset-0 z-50 flex items-center justify-center p-4"
 		>
 			<Dialog.Content
-				class="card bg-surface-100-900 border-surface-300-700 max-h-[90dvh] w-[min(95vw,640px)] space-y-6 border p-6 shadow-2xl"
+				class="card bg-surface-100-900 border-surface-200-800 max-h-[90dvh] w-[min(95vw,640px)] space-y-6 border p-6 shadow-2xl"
 			>
-				<header class="border-surface-300-700 border-b pb-4">
+				<header class="border-surface-200-800 border-b pb-4">
 					<div class="flex items-center gap-3">
 						<div class="bg-primary-500/10 rounded-full p-2">
 							<Icons.Download
@@ -142,7 +142,7 @@
 											{:else if progress.status.toLowerCase() === "error"}
 												<Icons.AlertTriangle
 													size={16}
-													class="text-error-500"
+													class="text-error-600-400"
 												/>
 											{:else}
 												<Icons.Check
@@ -224,7 +224,7 @@
 														</div>
 														{#if fileProgress.total > 0}
 															<div
-																class="text-surface-600-400 flex justify-end font-mono text-[11px]"
+																class="text-surface-600-400 flex justify-end font-mono text-meta"
 															>
 																{(
 																	fileProgress.completed /
@@ -244,7 +244,7 @@
 											</div>
 
 											<div
-												class="border-surface-300-700 flex items-center justify-between border-t pt-2 text-xs"
+												class="border-surface-200-800 flex items-center justify-between border-t pt-2 text-xs"
 											>
 												<div
 													class="flex items-center gap-2"
@@ -282,7 +282,7 @@
 						{/if}
 					{/each}
 				</article>
-				<footer class="border-surface-300-700 border-t pt-4">
+				<footer class="border-surface-200-800 border-t pt-4">
 					<div
 						class="text-surface-700-300 flex items-center justify-between text-xs"
 					>

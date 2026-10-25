@@ -7,6 +7,7 @@
 	import Header from "./Header.svelte"
 	import PanelHeader from "./panels/PanelHeader.svelte"
 	import Avatar from "./Avatar.svelte"
+	import { avatarSrc } from "$lib/client/utils/media"
 	import "../../../app.css"
 	import * as Icons from "@lucide/svelte"
 	import { fly, fade } from "svelte/transition"
@@ -48,6 +49,7 @@
 		setLanguage
 	} from "$lib/client/i18n/state.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { sayUnshownSceneRunFailure } from "$lib/client/components/modals/sceneRunShown"
 	import { KeyboardNavigationManager } from "$lib/client/utils/keyboardNavigation"
 	import SettingsSidebar from "$lib/client/components/sidebars/SettingsSidebar.svelte"
@@ -163,6 +165,19 @@
 		"sessions:retakeTurn:error",
 		// 🚧 Stats says a refused Give to… in the piece's popover (★4, R77).
 		"state:givePiece:error",
+		// 🚧 The session's Attributes card says a refused carry switch under
+		// it (RF fix 2, item 3).
+		"state:setCarry:error",
+		// 🚧 The ruleset editor says each of these where it was asked (RF fix
+		// 2, items 1 and 8): a refused run in What the model will read, under
+		// Try this function or in Playtest a scene; a refused Save in the
+		// form's error summary; a refused Publish under its button. Toasted
+		// as well, a refused preview would stack one toast per keystroke over
+		// the editor and its Save.
+		"rulesets:tryOut:error",
+		"rulesets:askModel:error",
+		"rulesets:saveDraft:error",
+		"rulesets:publish:error",
 		"connections:list:error",
 		// Toasted once already, as the bare `error` event with the server's
 		// own sentence; this sibling only stops the wrapper's generic
@@ -232,7 +247,6 @@
 		// another pipeline was still using.
 		"pipelines:setOption:error",
 		"pipelines:clearOption:error",
-		"pipelines:selectConfig:error",
 		"pipelines:clonePrompt:error",
 		"pipelines:updatePrompt:error",
 		"pipelines:deletePrompt:error",
@@ -279,6 +293,7 @@
 		"users:current:changePassphrase:error",
 		"users:current:logout:error",
 		"users:current:updateDisplayName:error",
+		"users:current:updateAvatar:error",
 		"userSettings:uploadBackground:error",
 		"vectorization:loadModel:error",
 		// The admin components pages (C6, P6) show each of these themselves —
@@ -315,13 +330,30 @@
 	])
 
 	/**
+	 * `:error` events answering a STATUS ASK the app makes on its own — the
+	 * connections live status asks every Ollama for its version and running
+	 * models when a list holding one mounts, and again on every reconnect
+	 * (`liveStatus.svelte.ts`). The row that asked already says _Not
+	 * reachable_, so its failure is never a toast (PLAN-0-5-polish-parity
+	 * L4.4: the walk's two Ollama toasts sat on every screen for twenty
+	 * minutes). `notify`'s `fromPoll` logs and drops them.
+	 */
+	const POLLED_ERROR_EVENTS = new Set<string>([
+		"ollama:version:error",
+		"ollama:listRunningModels:error"
+	])
+
+	/**
 	 * 🚧 A refusal whose event name reads as code titled in words instead
 	 * (PLAN-dc-after-walk3 R1-2, the walk's NEW-4: "State Decide failed"
 	 * over "only Maren Holt's player … can change their sheet").
 	 */
 	const ERROR_TITLES: Record<string, string> = {
 		"state:decide:error": "That change was not made",
-		"state:givePiece:error": "Nothing was given"
+		"state:givePiece:error": "Nothing was given",
+		// 🚧 Back · Forward (RF fix 5): the server's sentence under it.
+		"sessions:rewindTurn:error": "Could not go back",
+		"sessions:forwardTurn:error": "Could not go forward"
 	}
 
 	// Turns "characters:update:error" into "Characters update failed", etc.
@@ -363,9 +395,13 @@
 				: typeof payload?.description === "string"
 					? payload.description
 					: undefined
-		toaster.error({
+		// One source per event: the same refusal twice replaces itself
+		// rather than stacking (L4.4).
+		notify.error({
 			title: humanizeErrorEvent(event),
-			description
+			description,
+			source: `socket:${event}`,
+			fromPoll: POLLED_ERROR_EVENTS.has(event)
 		})
 	}
 
@@ -478,6 +514,15 @@
 	 * tabs every open view can be holding unsaved work at the same time.
 	 */
 	let viewCloseGates = $state<
+		Record<string, (() => Promise<boolean> | undefined) | undefined>
+	>({})
+	/**
+	 * 🚧 Escape gates, by view (RF fix 2, item 5): asked before Escape steps
+	 * a view down (out of Focus, or the dock collapsing). A view holding
+	 * unsaved work answers with its own question; false keeps it as it is.
+	 * Only views that bind one are asked.
+	 */
+	let viewEscapeGates = $state<
 		Record<string, (() => Promise<boolean> | undefined) | undefined>
 	>({})
 	/**
@@ -1065,6 +1110,7 @@
 		openViews = openViews.filter((k) => k !== key)
 		viewRecency = viewRecency.filter((k) => k !== key)
 		delete viewCloseGates[key]
+		delete viewEscapeGates[key]
 		if (activeView === key) activeView = null
 		if (fullPageView === key) fullPageView = null
 		return true
@@ -1458,11 +1504,22 @@
 			railPeek = false
 		} else if (fullPageView !== null) {
 			event.preventDefault()
-			setViewWidth(shellPrefs.dockWidth)
+			void escapeStep(() => setViewWidth(shellPrefs.dockWidth))
 		} else if (activeView !== null) {
 			event.preventDefault()
-			collapseSidebar()
+			void escapeStep(collapseSidebar)
 		}
+	}
+
+	/**
+	 * 🚧 Step the active view down, once its Escape gate agrees (RF fix 2,
+	 * item 5) — and only if it is still the view on screen by then.
+	 */
+	async function escapeStep(step: () => void) {
+		const key = activeView
+		const gate = key ? viewEscapeGates[key] : undefined
+		if (gate && !((await gate()) ?? true)) return
+		if (activeView === key) step()
 	}
 
 	/* ── the rail ──────────────────────────────────────────────────────── */
@@ -1594,6 +1651,8 @@
 		userCtx.user?.displayName || userCtx.user?.username || "Account"
 	)
 	let userInitial = $derived(userLabel.trim().charAt(0).toUpperCase() || "?")
+	/** The account's own avatar (Settings › User), when it has one. */
+	let userAvatar = $derived(avatarSrc(userCtx.user))
 
 	let railEntries = $derived.by<RailEntry[]>(() => {
 		const entries: RailEntry[] = [
@@ -1834,7 +1893,7 @@
 	function handleSheetKeydown(event: KeyboardEvent) {
 		if (event.key !== "Escape") return
 		if (desktop.matches || !activeView) return
-		collapseSidebar()
+		void escapeStep(collapseSidebar)
 	}
 
 	function handleMoreMenuClick(entry: RailEntry) {
@@ -2605,7 +2664,7 @@
 			     you get instead. -->
 			<nav
 				bind:this={railRef}
-				class="panel-edge hidden shrink-0 flex-col overflow-y-auto border-r py-3 transition-[width] duration-150 {!stageOnly
+				class="panel-edge hidden shrink-0 flex-col overflow-y-auto border-r py-3 transition-[width] duration-base {!stageOnly
 					? 'lg:flex'
 					: railPeek
 						? 'lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:flex lg:shadow-2xl'
@@ -2651,7 +2710,7 @@
 							<!-- The wide rail names its groups where the narrow one
 							     rules a line between them. -->
 							<div
-								class="text-surface-500 shrink-0 px-3 pt-3.5 pb-1 text-[11px]"
+								class="text-surface-500 shrink-0 px-3 pt-3.5 pb-1 text-meta"
 							>
 								{GROUP_NAMES[entry.group]}
 							</div>
@@ -2695,17 +2754,27 @@
 									: `Account: ${entry.title}`}
 								aria-label="Account: {entry.title}"
 								class="focus-visible:outline-primary-500 flex shrink-0 items-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 {railWide
-									? 'hover:bg-surface-200-800 h-11 min-w-0 flex-1 gap-3 rounded-[10px] px-2'
+									? 'hover:bg-surface-200-800 h-11 min-w-0 flex-1 gap-3 rounded-base px-2'
 									: 'mt-1.5 size-8 justify-center rounded-full hover:brightness-125'}"
 								onfocus={() => (railFocusIndex = userSlot)}
 								onkeydown={handleRailKeydown}
 								onclick={() => handleRailActivate(entry)}
 							>
-								<span
-									class="bg-surface-300-700 text-surface-950-50 flex size-8 shrink-0 items-center justify-center rounded-full text-[13px] font-semibold"
-								>
-									{userInitial}
-								</span>
+								{#if userAvatar}
+									<Avatar
+										src={userAvatar}
+										name={userLabel}
+										size="sm"
+										fallback="initial"
+										decorative
+									/>
+								{:else}
+									<span
+										class="bg-surface-300-700 text-surface-950-50 flex size-8 shrink-0 items-center justify-center rounded-full text-chip font-semibold"
+									>
+										{userInitial}
+									</span>
+								{/if}
 								{#if railWide}
 									<span
 										class="text-surface-800-200 min-w-0 flex-1 truncate text-left text-sm"
@@ -2730,10 +2799,10 @@
 							title={railTitle(entry.title, dotFacts)}
 							aria-label={railLabel(entry.title, dotFacts)}
 							aria-current={isActive ? "true" : undefined}
-							class="focus-visible:outline-primary-500 relative flex shrink-0 items-center rounded-[10px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 {railWide
+							class="focus-visible:outline-primary-500 relative flex shrink-0 items-center rounded-base transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 {railWide
 								? 'h-10 w-full gap-3 px-3'
 								: 'size-11 justify-center'} {isActive
-								? 'bg-surface-200-800 text-primary-500'
+								? 'bg-surface-200-800 text-surface-950-50'
 								: railRestClass(entry)}"
 							style={isActive
 								? "box-shadow: inset 3px 0 0 var(--color-primary-500);"
@@ -2856,7 +2925,7 @@
 						? "Hide navigation titles"
 						: "Show navigation titles"}
 					aria-expanded={railWide}
-					class="text-surface-600-400 hover:bg-surface-200-800 hover:text-surface-950-50 focus-visible:outline-primary-500 flex shrink-0 items-center justify-center rounded-[10px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 {railWide
+					class="text-surface-600-400 hover:bg-surface-200-800 hover:text-surface-950-50 focus-visible:outline-primary-500 flex shrink-0 items-center justify-center rounded-base transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 {railWide
 						? 'size-8'
 						: 'size-11'}"
 					onfocus={() => (railFocusIndex = slot)}
@@ -2985,7 +3054,7 @@
 							<Icons.House class="size-4" aria-hidden="true" />
 						</a>
 						<span
-							class="text-surface-500 text-[13px]"
+							class="text-surface-500 text-chip"
 							aria-hidden="true"
 						>
 							›
@@ -2997,7 +3066,7 @@
 						{activeView ? titleOf(activeView) : ""}
 					</h2>
 					<div
-						class="bg-surface-100-900 flex shrink-0 gap-0.5 rounded-[10px] p-0.5"
+						class="bg-surface-100-900 flex shrink-0 gap-0.5 rounded-base p-0.5"
 						role="group"
 						aria-label="View width"
 					>
@@ -3143,7 +3212,7 @@
 				>
 					<button
 						type="button"
-						class="bg-surface-200-800 text-surface-950-50 focus-visible:outline-primary-500 flex size-10 items-center justify-center rounded-[10px] hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2"
+						class="bg-surface-200-800 text-surface-950-50 focus-visible:outline-primary-500 flex size-10 items-center justify-center rounded-base hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2"
 						title="Back to {openSessionCtx.sessionName ??
 							'the session'}"
 						aria-label="Back to {openSessionCtx.sessionName ??
@@ -3184,7 +3253,7 @@
 						></span>
 					{/if}
 					<span
-						class="text-surface-700-300 max-h-60 truncate [font-family:var(--typo-heading--font-family)] text-[13px] font-semibold [writing-mode:vertical-rl]"
+						class="text-surface-700-300 max-h-60 truncate [font-family:var(--typo-heading--font-family)] text-chip font-semibold [writing-mode:vertical-rl]"
 					>
 						{openSessionCtx.sessionName ?? ""}
 					</span>
@@ -3263,8 +3332,11 @@
 					<button
 						type="button"
 						class="flex h-12 w-16 flex-col items-center justify-center gap-[3px] rounded-lg transition-colors {isActive
-							? 'text-primary-500'
+							? 'bg-surface-200-800 text-surface-950-50'
 							: 'text-surface-600-400'}"
+						style={isActive && entry.key !== "more"
+							? "box-shadow: inset 0 2px 0 var(--color-primary-500);"
+							: undefined}
 						aria-label={entry.key === "more"
 							? viewsLabel(entry)
 							: entry.title}
@@ -3298,7 +3370,7 @@
 								{/if}
 							</span>
 						{/if}
-						<span class="text-[11px] leading-none">
+						<span class="text-meta leading-none">
 							{entry.title}
 						</span>
 					</button>
@@ -3331,7 +3403,7 @@
 			     8px strip on the left edge brings the rail back over the stage. -->
 			<button
 				type="button"
-				class="bg-surface-50-950/90 border-surface-200-800 text-surface-700-300 hover:text-surface-950-50 focus-visible:outline-primary-500 fixed top-2 right-4 z-[44] flex h-[34px] items-center gap-2 rounded-full border px-3 text-[13px] backdrop-blur focus-visible:outline-2"
+				class="bg-surface-50-950/90 border-surface-200-800 text-surface-700-300 hover:text-surface-950-50 focus-visible:outline-primary-500 fixed top-2 right-4 z-[44] flex h-[34px] items-center gap-2 rounded-full border px-3 text-chip backdrop-blur focus-visible:outline-2"
 				onclick={() => {
 					stageOnly = false
 					railPeek = false
@@ -3339,7 +3411,7 @@
 			>
 				Leave stage only
 				<kbd
-					class="bg-surface-200-800 text-surface-800-200 rounded-md px-1.5 py-0.5 font-mono text-[11px]"
+					class="bg-surface-200-800 text-surface-800-200 rounded-md px-1.5 py-0.5 font-mono text-meta"
 				>
 					Esc
 				</kbd>
@@ -3475,7 +3547,7 @@
 		{#if key === "admin"}
 			<!-- The gate asks when the section on screen holds unsaved edits
 			     (`adminUnsavedEdits`). -->
-			<AdminView bind:onclose={viewCloseGates[key]} />
+			<AdminView bind:onclose={viewCloseGates[key]} bind:onescape={viewEscapeGates[key]} />
 		{:else if key === "sampling"}
 			<SamplingSidebar bind:onclose={viewCloseGates[key]} />
 		{:else if key === "models"}

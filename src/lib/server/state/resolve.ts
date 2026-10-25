@@ -84,8 +84,10 @@ import {
 	getAttributeSheet,
 	getAttributeSlot,
 	getGenre,
-	genreAllowsCustomAttributes,
-	genreSheets,
+	getRuleset,
+	rulesetAttributeSlots,
+	rulesetSections,
+	hostStateFor,
 	slotPickable,
 	slotEarshot,
 	resolveSlotConfig,
@@ -99,7 +101,9 @@ import {
 	type FieldDecl,
 	type AttributeSheetDecl,
 	type AttributeSlotDecl,
+	type HostStateRole,
 	type SheetSlotEntry,
+	type SlotAppliesTo,
 	type SlotConfig,
 	type SlotValue
 } from "@serene-pub/sdk"
@@ -110,6 +114,7 @@ import {
 	type StateOwner
 } from "$lib/server/state/owners"
 import { deriveValue } from "$lib/server/state/derive"
+import { notCarriedFor } from "$lib/server/state/carries"
 // THE comparator for the book's calendar (one comparator per calendar): the
 // shared one, which delegates to the SDK's `compareStoryTimes`.
 import { storyNowOf } from "$lib/server/state/storyTime"
@@ -250,8 +255,14 @@ export interface TrackedSlot {
 	 * so the ordinary slot, heard by all, carries no key at all.
 	 */
 	earshot?: "holder"
-	/** The sheet that first named it, when a sheet did. */
+	/** ⏳ The sheet that first named it, when a sheet did (a genre names none since RF fix 8). */
 	sheetId?: string
+	/** 🚧 What the host keeps it as (RF fix 8): `place` · `time` · `tool` — never one of the rules' attributes. */
+	hostState?: HostStateRole
+	/** 🚧 The rules' attribute kind, where it is one of theirs and they say it (RF fix 8). */
+	kind?: string
+	/** 🚧 The rules' shown-as hint (RF fix 8). */
+	shownAs?: string
 }
 
 /**
@@ -372,6 +383,14 @@ export interface ResolvedState {
 	 * left out; absent on a state read outside a session.
 	 */
 	configs?: Record<string, Record<string, SlotConfig>>
+	/**
+	 * 🚧 What a holder does not carry (attribute carries, RF fix 2 item 3):
+	 * by the holder's key — `world`, a cast entry's key in `cast.byId`,
+	 * `location:<id>` — the slot ids switched off for them. Their bag holds
+	 * no key for these, so nothing reads them; a sheet leaves them out.
+	 * Absent when nobody switched anything off.
+	 */
+	notCarried?: Record<string, string[]>
 	/** The roles, as a sibling of the cast. */
 	who: WhoKeys
 	/**
@@ -991,13 +1010,23 @@ async function configRows(
 
 // ── The vocabulary ──────────────────────────────────────────────────────────
 
-/** A slot in a session's vocabulary, with what naming it on a sheet decided. */
+/**
+ * A slot in a session's vocabulary (🚧 RF fix 8): one of the rules'
+ * attributes (`attribute`: its id, kind and shown-as hint; `required` — every
+ * holder carries it), or what the host keeps (`hostState`: its place, its
+ * time, a genre tool's own). ⏳ `default`, `config` and `sheetId` were a genre
+ * sheet's; a genre names none since.
+ */
 export interface VocabularyEntry {
 	decl: AttributeSlotDecl
 	required?: boolean
 	default?: SlotValue
 	config?: SlotConfig
 	sheetId?: string
+	/** 🚧 What the host keeps it as (RF fix 8): never an attribute. */
+	hostState?: HostStateRole
+	/** 🚧 The rules' attribute it is (RF fix 8). */
+	attribute?: { id: string; kind?: string; shownAs?: string }
 }
 
 export interface Vocabulary {
@@ -1271,60 +1300,42 @@ const emptyVocabulary = (): Vocabulary => ({
 	slots: []
 })
 
+/**
+ * 🚧 What a session tracks (RF fix 8, owner ruling 2026-10-23: "attributes
+ * are the ruleset's; sessions never add attributes"): what the host keeps for
+ * its genre — the place, the time, a tool's own state — then the rules'
+ * attributes, each played ruleset's. A genre brings none, and neither the
+ * world nor the session adds any: the lorebook's and card's sheets, the
+ * world's recorded slots and the session's own picks are not read here.
+ * `links` is kept for its callers.
+ */
 export async function vocabularyFor(
 	db: Db,
 	sessionId: number,
-	links?: SessionLinks | null
+	_links?: SessionLinks | null
 ): Promise<Vocabulary> {
 	const [row] = await db
 		.select({
 			genreId: schema.sessions.genreId,
-			worldAttributes: schema.sessions.worldAttributes,
 			primaryRuleset: schema.sessions.primaryRuleset,
 			rulesetSettings: schema.sessions.rulesetSettings
 		})
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	const resolved = links ?? (await sessionLinks(db, sessionId))
 	const genreId = row?.genreId ?? ""
 	const genre = getGenre(genreId)
 	// A genre this process does not hold states no vocabulary: see above.
 	if (!genre) return emptyVocabulary()
-	const custom = genreAllowsCustomAttributes(genre)
-	const world = await worldAttributesFor(db, resolved, sessionId, custom && row?.worldAttributes !== false)
-	const picks = custom ? await attributePicksFor(db, sessionId) : new Map<string, boolean>()
-	const dropped = (slotId: string) => picks.get(slotId) === false
 
 	const entries: VocabularyEntry[] = []
 	const byId = new Map<string, VocabularyEntry>()
-	const take = (
-		decl: AttributeSlotDecl | undefined,
-		entry?: SheetSlotEntry,
-		sheetId?: string
-	) => {
+	const take = (decl: AttributeSlotDecl | undefined, extra: Omit<VocabularyEntry, "decl"> = {}) => {
 		if (!decl || byId.has(decl.id)) return
-		const v: VocabularyEntry = {
-			// 🚧 The owners THIS sheet puts it on (2026-09-26): a premade stat
-			// that fits the world and the cast — `location` — is carried
-			// where the genre's sheet says, and every reader downstream (the
-			// state bag, the keeper's guide, the write gate, write-back) sees
-			// the narrowed declaration rather than the catalogue's.
-			decl: onOwners(decl, entry && sheetSlotAppliesTo(entry, decl)),
-			...(entry?.required === undefined
-				? {}
-				: { required: entry.required }),
-			...(entry?.default === undefined ? {} : { default: entry.default }),
-			...(entry?.config === undefined ? {} : { config: entry.config }),
-			...(sheetId === undefined ? {} : { sheetId })
-		}
+		const v: VocabularyEntry = { decl, ...extra }
 		byId.set(decl.id, v)
 		entries.push(v)
 	}
-	// One gate for every source, the picker's too (`offerableSlot`, audit
-	// A20): a slot a ruleset owns comes in only where that ruleset is played
-	// — the baseline included (PLAN §15 A: a Story session of a genre whose
-	// sheet carries Vis Itineris's abilities reads none of them).
 	const plays = sessionRulesets(row)
 	// 🚧 Solo (PLAN-sheet §14): a slot that only means something with several
 	// players (`minSeats` — the Dungeon Crawler's standing order: "what does
@@ -1332,9 +1343,11 @@ export async function vocabularyFor(
 	// many. One rule, read from the seats the host already has. ⏳ Read
 	// loosely until the SDK types `minSeats` on the declaration.
 	const seats = await activeSeatCount(db, sessionId)
-	const offered = (slotId: string, from: "baseline" | "pick") => {
+	const offered = (slotId: string) => {
 		const decl = getAttributeSlot(slotId)
-		if (!decl || !offerableSlot(decl, plays, from)) return undefined
+		// One gate (`offerableSlot`, audit A20): a slot a ruleset owns comes in
+		// only where that ruleset is played.
+		if (!decl || !offerableSlot(decl, plays, "baseline")) return undefined
 		const minSeats = (decl as { minSeats?: unknown }).minSeats
 		if (typeof minSeats === "number" && minSeats > seats) return undefined
 		// 🚧 And the ruleset setting (`whenRulesetSetting`, 2026-10-18): a
@@ -1342,23 +1355,46 @@ export async function vocabularyFor(
 		if (!rulesetSettingAllows(decl, row)) return undefined
 		return decl
 	}
-	// The baseline — the genre's sheets and loose slots — always, and first:
-	// a pick never drops it.
-	for (const sheet of genreSheets(genreId))
-		for (const entry of sheet.slots)
-			take(offered(entry.id, "baseline"), entry, sheet.id)
-	for (const decl of genre.slots ?? []) take(offered(decl.id, "baseline"))
-	if (custom) {
-		// The world's (on unless switched off), then the session's own; a
-		// pick drops either, slot by slot, and a pick adds a slot of its own.
-		// A slot a mechanism keeps (`pickable: false`) comes in with the
-		// baseline or not at all.
-		const pickableSlot = (slotId: string) => offered(slotId, "pick")
-		for (const sheet of [...world.sheets, ...(await sheetsForOwners(db, ownOwnersOf(resolved, sessionId), sessionId))])
-			for (const entry of sheet.slots)
-				if (!dropped(entry.id)) take(pickableSlot(entry.id), entry, sheet.id)
-		for (const slotId of world.recorded) if (!dropped(slotId)) take(pickableSlot(slotId))
-		for (const [slotId, enabled] of picks) if (enabled) take(pickableSlot(slotId))
+	// 🚧 **What the host keeps** first (RF fix 8, owner ruling 2026-10-23): the
+	// place and the time, and a genre tool's own state — on the owners the
+	// host keeps each on (the place on the world for Story and the Lair, on
+	// each hero for the crawl), never an attribute, even where a ruleset
+	// borrows the same slot.
+	const kept = new Map<string, { role: HostStateRole; owners: Set<SlotAppliesTo> }>()
+	for (const d of hostStateFor(genre)) {
+		const decl = getAttributeSlot(d.slot)
+		if (!decl) continue
+		const k = kept.get(d.slot) ?? { role: d.role, owners: new Set<SlotAppliesTo>() }
+		for (const o of d.owners ?? decl.appliesTo) if (decl.appliesTo.includes(o)) k.owners.add(o)
+		kept.set(d.slot, k)
+	}
+	for (const [slotId, k] of kept) {
+		const decl = offered(slotId)
+		if (decl && k.owners.size) take(onOwners(decl, decl.appliesTo.filter((o) => k.owners.has(o))), { hostState: k.role })
+	}
+	// 🚧 **The rules' attributes** (PLAN-rulesets-functions D2; RF fix 8: the
+	// only attributes a session has — a genre brings none, a session adds
+	// none): each played ruleset's, in its sections or the shape before them,
+	// each filed under the slot it names or its derived one, with its kind,
+	// its shown-as hint and whether every holder carries it.
+	for (const rulesetId of plays) {
+		const ruleset = getRuleset(rulesetId)
+		if (!ruleset) continue
+		const attributes = rulesetSections(ruleset).attributes ?? []
+		if (!attributes.length) continue
+		const slotOf = rulesetAttributeSlots({ id: ruleset.id, attributes: attributes as never })
+		for (const a of attributes) {
+			const slotId = slotOf.get(a.id)
+			if (!slotId) continue
+			take(offered(slotId), {
+				attribute: {
+					id: a.id,
+					...(a.kind ? { kind: a.kind } : {}),
+					...(typeof a.shownAs === "string" ? { shownAs: a.shownAs } : {})
+				},
+				...(a.required ? { required: true } : {})
+			})
+		}
 	}
 
 	return {
@@ -1374,7 +1410,9 @@ export async function vocabularyFor(
 			...(e.required === undefined ? {} : { required: e.required }),
 			...(e.decl.retired ? { retired: true as const } : {}),
 			...(slotEarshot(e.decl) === "holder" ? { earshot: "holder" as const } : {}),
-			...(e.sheetId === undefined ? {} : { sheetId: e.sheetId })
+			...(e.hostState ? { hostState: e.hostState } : {}),
+			...(e.attribute?.kind ? { kind: e.attribute.kind } : {}),
+			...(e.attribute?.shownAs ? { shownAs: e.attribute.shownAs } : {})
 		}))
 	}
 }
@@ -1423,8 +1461,12 @@ export async function stateFor(
 	const declared = vocabulary.entries.map((e) => e.decl)
 
 	const known = { links, vocabulary }
+	// 🚧 What each holder carries (RF fix 2, item 3): a slot switched off for
+	// a holder is never read into their bag.
+	const notCarried = await notCarriedFor(db, sessionId, vocabulary.rulesets ?? [])
+	const carried = (key: string, slotId: string) => !notCarried.get(key)?.has(slotId)
 	const world: Record<string, SlotValue> = {}
-	for (const decl of declared.filter((d) => d.appliesTo.includes("world")))
+	for (const decl of declared.filter((d) => d.appliesTo.includes("world") && carried("world", d.id)))
 		await writeKeys(world, decl, declared, () =>
 			valueOf(
 				db,
@@ -1446,7 +1488,7 @@ export async function stateFor(
 			name: member.name,
 			enabled: member.isActive
 		}
-		for (const decl of declared.filter((d) => d.appliesTo.includes("cast")))
+		for (const decl of declared.filter((d) => d.appliesTo.includes("cast") && carried(String(member.characterId), d.id)))
 			await writeKeys(entry, decl, declared, () =>
 				valueOf(
 					db,
@@ -1472,7 +1514,7 @@ export async function stateFor(
 			name: seat.name,
 			enabled: true
 		}
-		for (const decl of declared.filter((d) => d.appliesTo.includes("cast")))
+		for (const decl of declared.filter((d) => d.appliesTo.includes("cast") && carried(castMemberKey(entry), d.id)))
 			await writeKeys(entry, decl, declared, () =>
 				valueOf(
 					db,
@@ -1493,14 +1535,14 @@ export async function stateFor(
 		// and one reachable slug, rather than one of them silently vanishing.
 		if (!(entry.key in cast)) cast[entry.key] = entry
 
-	const locations = await locationsFor(db, sessionId, links, vocabulary)
+	const locations = await locationsFor(db, sessionId, links, vocabulary, notCarried)
 
 	const who = await whoFor(db, sessionId, links, byId, opts)
 	const bags = [world, ...Object.values(byId), ...Object.values(locations.byId)]
 	await nameLoreRefs(db, bags, links.reading ?? null, "session", links.locations)
 	await unsetUnseenReferences(db, bags, links.reading ?? null, links.locations)
 
-	const configs = await configsFor(db, sessionId, links, vocabulary, byId)
+	const configs = await configsFor(db, sessionId, links, vocabulary, byId, notCarried)
 
 	const state: ResolvedState = {
 		world,
@@ -1508,6 +1550,7 @@ export async function stateFor(
 		locations,
 		slots: vocabulary.slots,
 		configs,
+		...(notCarried.size ? { notCarried: Object.fromEntries([...notCarried].map(([k, v]) => [k, [...v].sort()])) } : {}),
 		who,
 		version
 	}
@@ -1527,7 +1570,8 @@ async function configsFor(
 	sessionId: number,
 	links: SessionLinks,
 	vocabulary: Vocabulary,
-	byId: Record<string, CastEntry>
+	byId: Record<string, CastEntry>,
+	notCarried: ReadonlyMap<string, ReadonlySet<string>> = new Map()
 ): Promise<Record<string, Record<string, SlotConfig>>> {
 	const kept = vocabulary.entries.map((e) => e.decl).filter((d) => d.type !== "derived")
 	const owners: Array<{ key: string; owner: StateOwner }> = [
@@ -1553,6 +1597,7 @@ async function configsFor(
 		const facet = ownerFacet(owner.kind)
 		for (const decl of kept) {
 			if (!slotAppliesTo(decl, facet)) continue
+			if (notCarried.get(key)?.has(decl.id)) continue
 			const layers = [...chain]
 				.reverse()
 				.map((layer) =>
@@ -1585,7 +1630,8 @@ async function locationsFor(
 	db: Db,
 	sessionId: number,
 	links: SessionLinks,
-	vocabulary: Vocabulary
+	vocabulary: Vocabulary,
+	notCarried: ReadonlyMap<string, ReadonlySet<string>> = new Map()
 ): Promise<LocationIndex> {
 	const declared = vocabulary.entries.map((e) => e.decl)
 	const byId: Record<string, LocationEntry> = {}
@@ -1602,12 +1648,15 @@ async function locationsFor(
 		const entry: LocationEntry = { id: place.entryId, key: castKey(place.name), name: place.name }
 		const owner: StateOwner = { kind: "session_location", id: place.entryId }
 		const chain = resolutionChain(owner, {})
-		for (const decl of carried)
+		const off = notCarried.get(`location:${place.entryId}`)
+		for (const decl of carried) {
+			if (off?.has(decl.id)) continue
 			await writeKeys(entry, decl, declared, async () =>
 				decl.type === "derived"
 					? valueOf(db, { sessionId, owner, slotId: decl.id }, { links, vocabulary })
 					: (fromLayers(rows, chain, decl.id, links.reading?.dates) ?? defaultFor(decl, vocabulary))
 			)
+		}
 		byId[String(place.entryId)] = entry
 	}
 	// First claimant keeps the slug, as the cast's do.
@@ -1972,7 +2021,13 @@ async function whoFor(
 			personaId: schema.messages.personaId
 		})
 		.from(schema.messages)
-		.where(eq(schema.messages.sessionId, sessionId))
+		.where(
+			and(
+				eq(schema.messages.sessionId, sessionId),
+				// 🚧 The live history (RF fix 5): a rewound row spoke in no history.
+				sql`not exists (select 1 from ${schema.sessionMessages} sm where sm.id = ${schema.messages.id} and sm.rewind_ordinal is not null)`
+			)
+		)
 		.orderBy(desc(schema.messages.id))
 		.limit(SPEAKER_WINDOW)
 	for (const message of tail) {

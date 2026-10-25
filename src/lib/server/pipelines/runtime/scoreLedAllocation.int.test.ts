@@ -32,7 +32,7 @@ import os from "os"
 import path from "path"
 import { and, eq } from "drizzle-orm"
 import {
-	setConfigValue,
+	setPipelineValue,
 	type TestDb
 } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
@@ -249,7 +249,7 @@ const setScoreLed = async (value: boolean) =>
 	// (ruled 2026-09-10), so at an address nobody has tuned there is no row to
 	// update — the old form matched nothing and the run resolved the declared
 	// default while the failure pointed at the ranker.
-	await setConfigValue(db, await selectedConfigId(), SWITCH_AT, value)
+	await setPipelineValue(db, STORY_RESPOND_SPEC_ID, SWITCH_AT, value)
 
 describe("the declared switch and the shipped behaviour are one answer", () => {
 	it("declares false, so an upgrade selects what it selected yesterday", async () => {
@@ -453,10 +453,7 @@ describe("a stored switch reaches the selection", () => {
 		// direction a misread must not go: a default-off control that switches
 		// itself on during an upgrade changes what reaches the model on an
 		// install that never asked.
-		await setConfigValue(
-			db,
-			await selectedConfigId(),
-			SWITCH_AT,
+		await setPipelineValue(db, STORY_RESPOND_SPEC_ID, SWITCH_AT,
 			"false" as any
 		)
 		try {

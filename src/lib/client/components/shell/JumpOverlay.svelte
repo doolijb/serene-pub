@@ -650,7 +650,7 @@
 						oninput={handleInput}
 					/>
 					<kbd
-						class="border-surface-300-700 text-surface-600-400 shrink-0 rounded border px-1 py-px font-mono text-[11px]"
+						class="border-surface-200-800 text-surface-600-400 shrink-0 rounded border px-1 py-px font-mono text-meta"
 					>
 						Esc
 					</kbd>
@@ -675,7 +675,7 @@
 						{#each groups as group (group.label)}
 							<div role="group" aria-label={group.label}>
 								<div
-									class="text-surface-600-400 px-3 pt-3 pb-1 text-[11px]"
+									class="text-surface-600-400 px-3 pt-3 pb-1 text-meta"
 									aria-hidden="true"
 								>
 									{group.label}
@@ -703,14 +703,14 @@
 				     keys it names are not the phone's keys anyway. Decorative
 				     for AT — the combobox already announces its own keys. -->
 				<div
-					class="border-surface-200-800 text-surface-500 hidden shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t px-3 py-2 text-[11px] @min-[480px]/jump:flex"
+					class="border-surface-200-800 text-surface-500 hidden shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t px-3 py-2 text-meta @min-[480px]/jump:flex"
 					aria-hidden="true"
 				>
 					{#each KEY_HINTS as hint (hint.label)}
 						<span class="flex items-center gap-1">
 							{#each hint.keys as key (key)}
 								<kbd
-									class="border-surface-300-700 text-surface-600-400 rounded border px-1 py-px font-mono text-[11px]"
+									class="border-surface-200-800 text-surface-600-400 rounded border px-1 py-px font-mono text-meta"
 								>
 									{key}
 								</kbd>

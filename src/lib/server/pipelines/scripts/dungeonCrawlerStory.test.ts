@@ -15,14 +15,24 @@ import {
 	DUNGEON_CRAWLER_ANNEX_KEYS as K,
 	DUNGEON_CRAWLER_BOOKS_SCRIPT,
 	DUNGEON_CRAWLER_DOOR_SCRIPT,
-	DUNGEON_CRAWLER_HP_PER_LEVEL,
 	DUNGEON_CRAWLER_LEDGER_SCRIPT,
 	DUNGEON_CRAWLER_PLAN_SCRIPT,
 	DUNGEON_CRAWLER_REST_SCRIPT,
 	DUNGEON_CRAWLER_RULESET_FIELDS_SCRIPT,
 	DUNGEON_CRAWLER_SHEET_SCRIPT,
-	DUNGEON_CRAWLER_TURN_SCRIPT
+	DUNGEON_CRAWLER_TURN_SCRIPT,
+	rulesetGistOf
 } from "@serene-pub/core-catalog"
+import { getRuleset } from "@serene-pub/sdk"
+
+/** 🚧 Vis Itineris as the host lays it on the inlet (S4, lane G3, 2026-10-23): its id, rigour, settings and gist. */
+const ruleset = {
+	id: "core:ruleset/vis-itineris@1",
+	rigour: "scripts",
+	settings: {},
+	chance: true,
+	...rulesetGistOf(getRuleset("core:ruleset/vis-itineris@1")! as never, {})
+}
 
 const run = async (source: string, value: unknown, seedLabel = "test:dc-story") => {
 	const r = await runScriptSource({ source, vars: { value }, extras: {}, seedLabel, nowMs: 1 })
@@ -66,7 +76,7 @@ const applied = (text: string, rigour = "scripts") => ({
 
 describe("Dungeon Crawler's story turn in QuickJS", () => {
 	it("books, the ruleset fields, the plan check and the turn run in the sandbox", async () => {
-		const books = await run(DUNGEON_CRAWLER_BOOKS_SCRIPT.source, { session, state, story, places })
+		const books = await run(DUNGEON_CRAWLER_BOOKS_SCRIPT.source, { session, state, story, places, ruleset })
 		expect(books.fresh).toBe(true)
 		expect(books.owners).toEqual(["session:7", "player-seat:4", "location:50"])
 		expect(books.actions).toEqual([{ owner: "player-seat:4", text: "I climb the wall." }])
@@ -80,7 +90,7 @@ describe("Dungeon Crawler's story turn in QuickJS", () => {
 	})
 
 	it("death's door rolls on the seeded stream: the same label, the same face; the door's table holds", async () => {
-		const books = await run(DUNGEON_CRAWLER_BOOKS_SCRIPT.source, { session, state, story, places })
+		const books = await run(DUNGEON_CRAWLER_BOOKS_SCRIPT.source, { session, state, story, places, ruleset })
 		const turn = { plan: (await run(DUNGEON_CRAWLER_PLAN_SCRIPT.source, { json: { ...PLAN, deltas: [] } })).plan }
 		const after = { ...state, cast: { byId: { "player_seat:4": { hp: 0, level: 1, location: "The Sunken Gate" } } } }
 		const input = { session, books, turn, applied: applied("Mira: Health −12"), after }
@@ -102,20 +112,22 @@ describe("Dungeon Crawler's story turn in QuickJS", () => {
 	})
 
 	it("the ledger and Rest run in the sandbox: the world for the lorebook, a level's full health, no snapshot", async () => {
-		const books = await run(DUNGEON_CRAWLER_BOOKS_SCRIPT.source, { session, state, story, places })
+		const books = await run(DUNGEON_CRAWLER_BOOKS_SCRIPT.source, { session, state, story, places, ruleset })
 		const turn = await run(DUNGEON_CRAWLER_TURN_SCRIPT.source, { books, first: await run(DUNGEON_CRAWLER_PLAN_SCRIPT.source, { json: PLAN }) })
 		const ap = applied("Mira: Level +1")
 		const after = { ...state, cast: { byId: { "player_seat:4": { hp: 12, level: 2, location: "The Sunken Gate" } } } }
 		const door = await run(DUNGEON_CRAWLER_DOOR_SCRIPT.source, { session, books, turn, applied: ap, after })
 		const ledger = await run(DUNGEON_CRAWLER_LEDGER_SCRIPT.source, { session, books, turn, door, applied: ap, after, state, row: 50 })
-		expect(ledger.raises).toEqual([{ owner: "player-seat:4", slot: "core:slot/hp@1", config: { max: 15 + DUNGEON_CRAWLER_HP_PER_LEVEL } }])
-		expect(ledger.changes).toContainEqual({ owner: "player-seat:4", slot: "core:slot/hp@1", value: 12 + DUNGEON_CRAWLER_HP_PER_LEVEL })
+		// 🚧 What a level brings is the session's rules' (S4): the class's kit's level gain (no class: the first kit's).
+		const gain = ruleset.kits!.byId[ruleset.kits!.order[0]!]!.levelHp
+		expect(ledger.raises).toEqual([{ owner: "player-seat:4", slot: "core:slot/hp@1", config: { max: 15 + gain } }])
+		expect(ledger.changes).toContainEqual({ owner: "player-seat:4", slot: "core:slot/hp@1", value: 12 + gain })
 		expect(ledger.changes).toContainEqual({ owner: "world", slot: "core:slot/crawl-time@1", value: "1-01-01 08:30" })
 		expect(ledger.places).toEqual([{ name: "The Hall", content: "Pillars.", links: [{ to: "The Sunken Gate", linkType: "leads to", reverseLinkType: "leads to" }] }])
 		expect(ledger.progress.lastTelling.row).toBe(50)
 		expect(ledger.progress.lastTurn).toBeUndefined()
 		expect(ledger.travelogue).toBe("Mira tried the wall.")
-		const rest = await run(DUNGEON_CRAWLER_REST_SCRIPT.source, { session, state })
+		const rest = await run(DUNGEON_CRAWLER_REST_SCRIPT.source, { session, state, ruleset })
 		// Rest heals to the seat's own max, the bar's number — not the slot's 20.
 		expect(rest.changes[0]).toEqual({ owner: "player-seat:4", slot: "core:slot/hp@1", value: 15 })
 		expect(rest.journal).toMatch(/^The party rests\. Day \d+, \d\d:\d\d → Day \d+, \d\d:\d\d\.$/)
@@ -126,7 +138,8 @@ describe("Dungeon Crawler's story turn in QuickJS", () => {
 			session: { ...session, annex: { core: { ...session.annex.core, [K.progress]: { ...PROGRESS, heroes: { "user:1": { name: "Mira", class: "Ranger" } } } } } },
 			plan: { addressee: "user:1", currentName: "Mira" },
 			json: { backstory: "" },
-			state
+			state,
+			ruleset
 		})
 		const weapons = sheet.kit.deltas.filter((d: any) => d.repertoire === "weapons")
 		expect(weapons.map((d: any) => d.piece)).toEqual(["longbow", "spear"])

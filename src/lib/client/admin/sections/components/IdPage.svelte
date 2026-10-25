@@ -1,4 +1,6 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * One authored component in the editor (C6, P6): its files in CodeMirror,
 	 * a preview of the draft fed fixtures, the problems the compiler and the
@@ -539,7 +541,7 @@
 {#if loadError}
 	<AdminPageHeader title="Component" />
 	<div class="panel-card text-sm" role="alert">
-		<p class="text-error-700-300">{loadError}</p>
+		<p class="text-error-600-400">{loadError}</p>
 		<a class="underline" href="/admin/components">All components</a>
 	</div>
 {:else if !component}
@@ -711,12 +713,12 @@
 							<li>
 								{#if row.location}
 									<button type="button" class="problem-row w-full text-left" onclick={() => jump(row)}>
-										<span class="{row.kind === 'warning' ? 'text-warning-700-300' : 'text-error-700-300'} font-mono text-xs">{row.kind === "warning" ? "Warning · " : ""}{row.place}</span>
+										<span class="{row.kind === 'warning' ? 'text-warning-700-300' : 'text-error-600-400'} font-mono text-xs">{row.kind === "warning" ? "Warning · " : ""}{row.place}</span>
 										<span class="block text-sm whitespace-pre-wrap">{row.text}</span>
 									</button>
 								{:else}
 									<div class="problem-row">
-										<span class="{row.kind === 'warning' ? 'text-warning-700-300' : 'text-error-700-300'} font-mono text-xs"
+										<span class="{row.kind === 'warning' ? 'text-warning-700-300' : 'text-error-600-400'} font-mono text-xs"
 											>{row.kind === "runtime" ? "While running" : row.kind === "warning" ? `Warning${row.place ? ` · ${row.place}` : ""}` : row.place || "Compile"}</span
 										>
 										<span class="block text-sm whitespace-pre-wrap">{row.text}</span>
@@ -768,7 +770,7 @@
 					</div>
 				</fieldset>
 				{#if widgetDirty}
-					<p class="text-surface-600-400 text-xs">Saved with the source. The scopes it asks for wait for review once saved.</p>
+					<FieldHelp>Saved with the source. The scopes it asks for wait for review once saved.</FieldHelp>
 				{/if}
 
 				{#if component.scopes.length}
@@ -779,13 +781,13 @@
 								<input type="checkbox" class="checkbox" bind:checked={consent.review[s.key]} />
 								<span class="flex-1">{s.label}</span>
 								{#if s.pending}
-									<span class="preset-tonal-warning rounded-full px-2 py-0.5 text-xs">Waiting for review</span>
+									<Badge tone="warning" size="md">Waiting for review</Badge>
 								{:else}
 									<span class="text-surface-600-400 text-xs">{s.granted ? "Granted" : "Denied"}</span>
 								{/if}
 							</label>
 						{/each}
-						<p class="text-surface-600-400 text-xs">Saved with the save row, before the source.</p>
+						<FieldHelp>Saved with the save row, before the source.</FieldHelp>
 					</fieldset>
 				{/if}
 			</div>

@@ -24,7 +24,7 @@ const pipelines = [
 		taxonomy: { role: "primary", genre: "core:genre/story" }
 	},
 	{
-		slug: "core:spec/lair-respond",
+		slug: "core:spec/lair-reply",
 		name: "Reply",
 		taxonomy: { role: "primary", genre: "core:genre/lair" }
 	},
@@ -78,7 +78,7 @@ describe("pipelineLabel", () => {
 			"Reply · Story"
 		)
 		expect(
-			pipelineLabel("core:spec/lair-respond", pipelines, genres)
+			pipelineLabel("core:spec/lair-reply", pipelines, genres)
 		).toBe("Reply · Lair")
 	})
 	it("leaves a shared pipeline's name bare", () => {

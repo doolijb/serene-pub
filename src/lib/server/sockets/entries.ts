@@ -44,6 +44,7 @@ import {
 	eq,
 	gte,
 	inArray,
+	isNull,
 	lte,
 	or,
 	sql
@@ -81,7 +82,13 @@ import { assertRedateKeepsLines } from "$lib/server/utils/forkHistory"
 import { formatDate, nextStoryDate, type StoryDate } from "$lib/shared/lorebooks/storyDate"
 import { ENTRY_DATE_PARTS } from "$lib/shared/lorebooks/amendments"
 import { MAIN_LINE, type Line } from "$lib/shared/lorebooks/lineReading"
-import { LOCATION_TYPE_ID } from "$lib/shared/entries/types"
+import { LOCATION_TYPE_ID, isDerivedEntryTypeId } from "$lib/shared/entries/types"
+import {
+	bookRulesLists,
+	bookRulesListsRead,
+	libraryRowOf,
+	rulesListRefusal
+} from "$lib/server/lorebooks/rulesLists"
 import {
 	assertDateLands,
 	bookCalendarOf,
@@ -181,6 +188,9 @@ const listOrder = (typeId: string) =>
  * The vectors are loaded and sent because they always were: the relations this
  * replaces selected every column, `embedding` included, and the manager reads
  * `embeddingModel` off the row to show whether an entry is vectorized.
+ *
+ * 🚧 Each row carries what a replaced reply wrote on it that stayed (RF fix
+ * 4, `keptImprints`): the list's mark and the inspector's note read it.
  */
 export async function listEntryRows(
 	lorebookId: number,
@@ -195,7 +205,17 @@ export async function listEntryRows(
 		db,
 		rows.map((r) => r.id)
 	)
-	return rows.map((r) => toEntryRow(r, vectors.get(r.id)))
+	const { keptImprintsByEntry } = await import("$lib/server/lorebooks/imprints")
+	const kept = await keptImprintsByEntry(
+		db,
+		lorebookId,
+		rows.map((r) => r.id)
+	)
+	return rows.map((r) => {
+		const entry = toEntryRow(r, vectors.get(r.id))
+		const notes = kept.get(r.id)
+		return notes ? ({ ...entry, keptImprints: notes } as LorebookEntry) : entry
+	})
 }
 
 /**
@@ -452,6 +472,108 @@ export const entryListHandler: Handler<
 )
 
 /**
+ * 🚧 `entries:types` — the book's rules lists (PLAN-lorebook-kinds §C): each
+ * entryable list of the rules the book is told by, with its piece shape and
+ * how many library pieces stand behind it. The workspace draws a list only
+ * where it has something in it (owner, 2026-10-21).
+ */
+export const entryTypesHandler: Handler<
+	Sockets.Entries.Types.Params,
+	Sockets.Entries.Types.Response
+> = refusable(
+	"entries:types",
+	async (socket, params: Sockets.Entries.Types.Params, emitToUser) => {
+		await assertReadableBook(db, socket.user!.id, params.lorebookId, {
+			isAdmin: !!socket.user?.isAdmin
+		})
+		const res: Sockets.Entries.Types.Response = {
+			lorebookId: params.lorebookId,
+			...(await bookRulesListsRead(db, params.lorebookId))
+		}
+		emitToUser("entries:types", res)
+		return res
+	},
+	"The book's lists could not be read."
+)
+
+/**
+ * 🚧 `entries:copyFromLibrary` — **Edit a copy** (§C, ruling 10): the server
+ * copies one piece of the book's rules library into the book, as an entry of
+ * its list stamped with where it came from (`derived_from`), on the line
+ * asked. Never trusts a client's piece. Already copied on that line: the copy
+ * there is the answer.
+ */
+export const copyFromLibraryHandler: Handler<
+	Sockets.Entries.CopyFromLibrary.Params,
+	Sockets.Entries.CopyFromLibrary.Response
+> = refusable(
+	"entries:copyFromLibrary",
+	async (socket, params: Sockets.Entries.CopyFromLibrary.Params, emitToUser) => {
+		const userId = socket.user!.id
+		const book = await assertOwnedBook(db, userId, params.lorebookId)
+		const typeId = assertTypeId(params.typeId)
+		const found = await libraryRowOf(db, book.id, typeId, String(params.pieceId ?? ""))
+		if (!found)
+			throw new Error(
+				"That isn't in this book's rules library. Choose something the library lists."
+			)
+		const branchId = params.branchId ?? null
+		const [held] = await db
+			.select()
+			.from(schema.lorebookEntries)
+			.where(
+				and(
+					eq(schema.lorebookEntries.lorebookId, book.id),
+					eq(schema.lorebookEntries.typeId, typeId),
+					// What the line reads: main's copy is a branch's too (the
+					// workspace hides a piece the line already holds the same way).
+					branchId === null
+						? isNull(schema.lorebookEntries.branchId)
+						: or(
+								isNull(schema.lorebookEntries.branchId),
+								eq(schema.lorebookEntries.branchId, branchId)
+							),
+					sql`${schema.lorebookEntries.derivedFrom} ->> 'piece' = ${found.row.id}`
+				)
+			)
+			.limit(1)
+		if (held) {
+			const res = { entry: toEntryRow(held), copied: false }
+			if (emitToUser) emitToUser("entries:copyFromLibrary", res)
+			return res
+		}
+		// The SDK's mapping (`primerDerivedEntries`): the piece is the entry's
+		// fields, its name the title, its description the content.
+		const piece = found.row.piece as Record<string, unknown>
+		const created = await createEntry(
+			socket,
+			{
+				entry: {
+					...piece,
+					lorebookId: book.id,
+					typeId,
+					branchId,
+					name: typeof piece.name === "string" ? piece.name : found.row.id,
+					content: typeof piece.description === "string" ? piece.description : ""
+				} as any
+			},
+			emitToUser,
+			{
+				derivedFrom: {
+					compendium: found.compendium,
+					piece: found.row.id,
+					version: found.row.version
+				}
+			}
+		)
+		const res = { entry: created.entry, copied: true }
+		if (emitToUser) emitToUser("entries:copyFromLibrary", res)
+		return res
+	},
+	"That could not be copied into the book."
+)
+
+/**
  * Whether an `entries:create` is a summarize review being saved — the one
  * client-sent create that is machine-written (`provenance: "summarizer"`).
  *
@@ -480,158 +602,181 @@ export const createEntryHandler: Handler<
 	Sockets.Entries.Create.Response
 > = refusable(
 	"entries:create",
-	async (socket, params: Sockets.Entries.Create.Params, emitToUser) => {
-		const userId = socket.user!.id
-		const typeId = assertTypeId(params.entry?.typeId)
-
-		// A raw client payload may never set these. A forged
-		// vectorizedAt/embedding would make `vectorizationQueue.ts`'s staleness
-		// check treat the entry as already current, permanently skipping real
-		// embedding; a forged `position` collides with the unique constraint the
-		// allocator below exists to respect.
-		const {
-			id: _id,
-			createdAt: _createdAt,
-			updatedAt: _updatedAt,
-			vectorizedAt: _vectorizedAt,
-			embedding: _embedding,
-			embeddingModel: _embeddingModel,
-			position: _position,
-			...safeInsert
-		} = params.entry as Record<string, any>
-		const data: Record<string, any> = { ...safeInsert, typeId }
-		if (typeof data.name === "string") data.name = data.name.trim()
-		data.content =
-			typeof data.content === "string" ? data.content.trim() : ""
-
-		const book = await assertOwnedBook(db, userId, data.lorebookId)
-
-		// A session write (plan A12): the row lands where the session reads —
-		// its line, decided here and never by the request — and a dated row
-		// that brings no date is dated at the session's story now.
-		if (params.sessionId != null) {
-			const write = await sessionLoreWrite(db, {
-				sessionId: params.sessionId,
-				userId,
-				lorebookId: data.lorebookId
-			})
-			data.branchId = write.branchId
-			if (entryDeclaration(typeId)?.roles.order && data.year == null)
-				Object.assign(
-					data,
-					historyDateOfSessionWrite(
-						write,
-						await bookCalendarOf(db, data.lorebookId)
-					)
-				)
-		}
-
-		// Character lore that names its character (a summarize's save): the
-		// cast member it is private to is found, or added, inside the entry's
-		// own write below, so a refused write adds no one.
-		const castCharacterId = params.lorebookBindingCharacterId ?? null
-		if (castCharacterId != null) {
-			if (!entryDeclaration(typeId)?.roles.anchor)
-				throw new Error(
-					"Only character lore is kept for one cast member."
-				)
-			if (
-				!(await verifyBindingTargetAccess(
-					{ characterId: castCharacterId },
-					userId
-				))
-			)
-				throw new Error(
-					"You can't add that character to this book's cast."
-				)
-			delete data.lorebookBindingId
-		}
-
-		await assertAnchorInBook(data.lorebookBindingId, data.lorebookId)
-		await assertEntryBranch((data as any).branchId, data.lorebookId)
-		await assertAnchorEntry(
-			data.anchorEntryId,
-			data.lorebookId,
-			undefined,
-			(data as any).branchId ?? null,
-			typeId
-		)
-		// Declared fields are typed; a wrong-typed value is refused here,
-		// never stored in jsonb where no column type could refuse it.
-		assertDeclaredFields(typeId, data, { whole: true })
-		// A regex key that could take unbounded time to match is refused
-		// before it can run on anyone's turn (plan S3).
-		assertNoRunawayPatterns(data as any, null)
-		// Advisory lock scoped to lorebookId — without it, two concurrent
-		// creates read the same free position and the second one raises a
-		// unique violation, since `position` is unique per (lorebook, type).
-		// Same fix, same reason, as resolveOrCreateBinding's already-fixed race
-		// — and the same lock, so the cast member a character-lore entry adds
-		// is found or inserted under it and commits with the entry.
-		const provenance = summarizerSave(params, userId, data.lorebookId)
-		const { newEntry, member } = await db.transaction(async (tx) => {
-			await lockBookCalendar(tx, data.lorebookId)
-			// A dated entry's date must land in the book's calendar, once it
-			// declares one (DESIGN-story-time §0: validated at entry, so the
-			// preflight list can never refill) — under the lock, so a calendar
-			// is never declared between this check and the row (A18(d)).
-			if (entryDeclaration(typeId)?.roles.order && data.year != null)
-				await assertDateLands(tx, data.lorebookId, {
-					year: Number(data.year),
-					month: data.month ?? null,
-					day: data.day ?? null
-				})
-			const member =
-				castCharacterId != null
-					? await findOrInsertBinding(
-							tx,
-							data.lorebookId,
-							castCharacterId
-						)
-					: null
-			// Only a card deleted since the access check above answers null.
-			if (castCharacterId != null && !member)
-				throw new Error("You can't add that character to this book's cast.")
-			const [newEntry] = await tx
-				.insert(schema.lorebookEntries)
-				.values(
-					entryInsert({
-						...(data as any),
-						...(member ? { lorebookBindingId: member.row.id } : {}),
-						position: await allocatePosition(
-							tx,
-							data.lorebookId,
-							typeId
-						)
-					}, provenance)
-				)
-				.returning()
-			return { newEntry, member }
-		})
-		// A member added here is named from the card, and the cast list
-		// re-sent, as `lorebooks:createBinding` does for one added there.
-		if (member?.created) {
-			await syncLorebookBindingsForCharacter(castCharacterId!, db, {
-				lorebookId: newEntry.lorebookId
-			})
-			if (emitToUser)
-				await relistBindings(socket, newEntry.lorebookId, emitToUser)
-		}
-
-		const entry = toEntryRow(newEntry)
-		if (emitToUser) emitToUser("entries:create", { entry })
-		await afterWrite(
-			socket,
-			emitToUser,
-			newEntry.lorebookId,
-			typeId,
-			book.name
-		)
-
-		return { entry }
-	},
+	(socket, params: Sockets.Entries.Create.Params, emitToUser) =>
+		createEntry(socket, params, emitToUser),
 	"That entry could not be saved."
 )
+
+/**
+ * The one way an entry is created — `entries:create`, and a copy out of the
+ * book's rules library (`entries:copyFromLibrary`), which alone may stamp
+ * where the copy came from (`derivedFrom`: the server's answer, never a
+ * payload's).
+ */
+async function createEntry(
+	socket: any,
+	params: Sockets.Entries.Create.Params,
+	emitToUser: ((event: string, data: any) => void) | undefined,
+	opts: {
+		derivedFrom?: { compendium: string; piece: string; version: string }
+	} = {}
+): Promise<Sockets.Entries.Create.Response> {
+	const userId = socket.user!.id
+	const typeId = assertTypeId(params.entry?.typeId)
+
+	// A raw client payload may never set these. A forged
+	// vectorizedAt/embedding would make `vectorizationQueue.ts`'s staleness
+	// check treat the entry as already current, permanently skipping real
+	// embedding; a forged `position` collides with the unique constraint the
+	// allocator below exists to respect.
+	const {
+		id: _id,
+		createdAt: _createdAt,
+		updatedAt: _updatedAt,
+		vectorizedAt: _vectorizedAt,
+		embedding: _embedding,
+		embeddingModel: _embeddingModel,
+		position: _position,
+		derivedFrom: _derivedFrom,
+		...safeInsert
+	} = params.entry as Record<string, any>
+	const data: Record<string, any> = { ...safeInsert, typeId }
+	if (typeof data.name === "string") data.name = data.name.trim()
+	data.content =
+		typeof data.content === "string" ? data.content.trim() : ""
+
+	const book = await assertOwnedBook(db, userId, data.lorebookId)
+	// A rules list's entry belongs in a book told by those rules (§C).
+	{
+		const refusal = await rulesListRefusal(db, data.lorebookId, typeId)
+		if (refusal) throw new Error(refusal)
+	}
+
+	// A session write (plan A12): the row lands where the session reads —
+	// its line, decided here and never by the request — and a dated row
+	// that brings no date is dated at the session's story now.
+	if (params.sessionId != null) {
+		const write = await sessionLoreWrite(db, {
+			sessionId: params.sessionId,
+			userId,
+			lorebookId: data.lorebookId
+		})
+		data.branchId = write.branchId
+		if (entryDeclaration(typeId)?.roles.order && data.year == null)
+			Object.assign(
+				data,
+				historyDateOfSessionWrite(
+					write,
+					await bookCalendarOf(db, data.lorebookId)
+				)
+			)
+	}
+
+	// Character lore that names its character (a summarize's save): the
+	// cast member it is private to is found, or added, inside the entry's
+	// own write below, so a refused write adds no one.
+	const castCharacterId = params.lorebookBindingCharacterId ?? null
+	if (castCharacterId != null) {
+		if (!entryDeclaration(typeId)?.roles.anchor)
+			throw new Error(
+				"Only character lore is kept for one cast member."
+			)
+		if (
+			!(await verifyBindingTargetAccess(
+				{ characterId: castCharacterId },
+				userId
+			))
+		)
+			throw new Error(
+				"You can't add that character to this book's cast."
+			)
+		delete data.lorebookBindingId
+	}
+
+	await assertAnchorInBook(data.lorebookBindingId, data.lorebookId)
+	await assertEntryBranch((data as any).branchId, data.lorebookId)
+	await assertAnchorEntry(
+		data.anchorEntryId,
+		data.lorebookId,
+		undefined,
+		(data as any).branchId ?? null,
+		typeId
+	)
+	// Declared fields are typed; a wrong-typed value is refused here,
+	// never stored in jsonb where no column type could refuse it.
+	assertDeclaredFields(typeId, data, { whole: true })
+	// A regex key that could take unbounded time to match is refused
+	// before it can run on anyone's turn (plan S3).
+	assertNoRunawayPatterns(data as any, null)
+	// Advisory lock scoped to lorebookId — without it, two concurrent
+	// creates read the same free position and the second one raises a
+	// unique violation, since `position` is unique per (lorebook, type).
+	// Same fix, same reason, as resolveOrCreateBinding's already-fixed race
+	// — and the same lock, so the cast member a character-lore entry adds
+	// is found or inserted under it and commits with the entry.
+	const provenance = summarizerSave(params, userId, data.lorebookId)
+	const { newEntry, member } = await db.transaction(async (tx) => {
+		await lockBookCalendar(tx, data.lorebookId)
+		// A dated entry's date must land in the book's calendar, once it
+		// declares one (DESIGN-story-time §0: validated at entry, so the
+		// preflight list can never refill) — under the lock, so a calendar
+		// is never declared between this check and the row (A18(d)).
+		if (entryDeclaration(typeId)?.roles.order && data.year != null)
+			await assertDateLands(tx, data.lorebookId, {
+				year: Number(data.year),
+				month: data.month ?? null,
+				day: data.day ?? null
+			})
+		const member =
+			castCharacterId != null
+				? await findOrInsertBinding(
+						tx,
+						data.lorebookId,
+						castCharacterId
+					)
+				: null
+		// Only a card deleted since the access check above answers null.
+		if (castCharacterId != null && !member)
+			throw new Error("You can't add that character to this book's cast.")
+		const [newEntry] = await tx
+			.insert(schema.lorebookEntries)
+			.values({
+				...entryInsert({
+					...(data as any),
+					...(member ? { lorebookBindingId: member.row.id } : {}),
+					position: await allocatePosition(
+						tx,
+						data.lorebookId,
+						typeId
+					)
+				}, provenance),
+				...(opts.derivedFrom ? { derivedFrom: opts.derivedFrom } : {})
+			})
+			.returning()
+		return { newEntry, member }
+	})
+	// A member added here is named from the card, and the cast list
+	// re-sent, as `lorebooks:createBinding` does for one added there.
+	if (member?.created) {
+		await syncLorebookBindingsForCharacter(castCharacterId!, db, {
+			lorebookId: newEntry.lorebookId
+		})
+		if (emitToUser)
+			await relistBindings(socket, newEntry.lorebookId, emitToUser)
+	}
+
+	const entry = toEntryRow(newEntry)
+	if (emitToUser) emitToUser("entries:create", { entry })
+	await afterWrite(
+		socket,
+		emitToUser,
+		newEntry.lorebookId,
+		typeId,
+		book.name
+	)
+
+	return { entry }
+}
 
 /**
  * Where a new row of this type lands.
@@ -1575,8 +1720,15 @@ export const entryCountsHandler: Handler<
 		// behind reads "0" rather than going blank — an absent figure is how a
 		// reader learns a count has not arrived, and it must not also be how
 		// they learn there is nothing there.
+		// Core's kinds and the book's own rules lists only: another rules'
+		// lists are none of this book's (§C).
 		const counts: Record<string, number> = {}
-		for (const { typeId } of entryDeclarations()) counts[typeId] = 0
+		const ownLists = new Set(
+			(await bookRulesLists(db, params.lorebookId)).map((l) => l.typeId)
+		)
+		for (const { typeId } of entryDeclarations())
+			if (!isDerivedEntryTypeId(typeId) || ownLists.has(typeId))
+				counts[typeId] = 0
 		counts[SCENE_KIND] = 0
 		counts[CAST_KIND] = 0
 
@@ -1812,6 +1964,50 @@ export const entryRecentDecisionsHandler: Handler<
 	"What the recent turns read could not be listed."
 )
 
+/**
+ * 🚧 `lorebooks:settleImprint` — the two buttons of an entry's note *Written
+ * by a reply that was since replaced* (RF fix 4, 2026-10-23): **Revert**
+ * puts the field back to what it held before that reply wrote it (an entry
+ * the reply added is removed), **Keep** leaves it and the note goes. Whoever
+ * may edit the book only — its owner, or a session's member on its notes —
+ * the rule every entry write keeps (`assertOwnedBook`). The book's list is
+ * sent again, so the note leaves the row.
+ */
+export const settleImprintHandler: Handler<
+	Sockets.Lorebooks.SettleImprint.Params,
+	Sockets.Lorebooks.SettleImprint.Response
+> = refusable(
+	"lorebooks:settleImprint",
+	async (socket, params: Sockets.Lorebooks.SettleImprint.Params, emitToUser) => {
+		const { keptImprintBook, settleKeptImprint, KEPT_IMPRINT_REFUSALS } = await import(
+			"$lib/server/lorebooks/imprints"
+		)
+		const choice = params.choice === "revert" ? "revert" : params.choice === "keep" ? "keep" : null
+		if (!choice) throw new Error("Say which: revert or keep.")
+		const lorebookId = await keptImprintBook(db, params.imprintId)
+		if (lorebookId == null) throw new Error(KEPT_IMPRINT_REFUSALS.missing)
+		if (!(await findOwnedBook(db, socket.user!.id, lorebookId)))
+			throw new Error(KEPT_IMPRINT_REFUSALS.notYours)
+		const settled = await db.transaction(async (tx) => {
+			await tx.execute(sql`select pg_advisory_xact_lock(${lorebookId})`)
+			return settleKeptImprint(tx as unknown as Db, params.imprintId, choice)
+		})
+		const res: Sockets.Lorebooks.SettleImprint.Response = {
+			imprintId: params.imprintId,
+			lorebookId,
+			choice
+		}
+		emitToUser("lorebooks:settleImprint", res)
+		if (settled.typeId && isDeclaredEntryType(settled.typeId))
+			await relistEntries(socket, lorebookId, settled.typeId, emitToUser)
+		return res
+	},
+	"The change could not be settled.",
+	undefined,
+	// The refusal names the note it answers.
+	(params) => ({ imprintId: (params as { imprintId?: unknown } | null)?.imprintId })
+)
+
 export function registerEntryHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -1823,6 +2019,8 @@ export function registerEntryHandlers(
 ) {
 	register(socket, entryListHandler, emitToUser)
 	register(socket, createEntryHandler, emitToUser)
+	register(socket, entryTypesHandler, emitToUser)
+	register(socket, copyFromLibraryHandler, emitToUser)
 	register(socket, updateEntryHandler, emitToUser)
 	register(socket, entrySetMarksHandler, emitToUser)
 	register(socket, entrySessionEntriesHandler, emitToUser)
@@ -1831,4 +2029,5 @@ export function registerEntryHandlers(
 	register(socket, iterateNextEntryHandler, emitToUser)
 	register(socket, entryCountsHandler, emitToUser)
 	register(socket, entryRecentDecisionsHandler, emitToUser)
+	register(socket, settleImprintHandler, emitToUser)
 }

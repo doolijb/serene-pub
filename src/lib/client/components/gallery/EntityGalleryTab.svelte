@@ -454,7 +454,7 @@
 		</div>
 	{:else if tiles.length === 0}
 		<div
-			class="border-surface-300-600 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed py-6"
+			class="border-surface-300-700 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed py-6"
 		>
 			<Icons.ImagePlus class="text-surface-600-400 h-8 w-8" />
 			<p class="text-surface-600-400 text-sm">No images yet</p>
@@ -486,7 +486,7 @@
 					class="group relative aspect-square overflow-hidden rounded-lg border-2 transition-all
 						{currentAvatarMediaId === tile.id
 						? 'border-primary-500 ring-primary-500 ring-2 ring-offset-1'
-						: 'border-surface-300-600 hover:border-surface-400-500'}"
+						: 'border-surface-200-800 hover:border-surface-400-600'}"
 				>
 					<button
 						type="button"
@@ -523,6 +523,7 @@
 						>
 							<RowMenu
 								label="Image"
+								triggerLabel="More actions for this image"
 								width={200}
 								triggerClass="bg-surface-950/60 hover:bg-surface-950/80 rounded-full p-0.5 text-white"
 								bind:open={
@@ -560,7 +561,7 @@
 
 					{#if newIds.has(tile.id)}
 						<span
-							class="bg-surface-950/70 pointer-events-none absolute bottom-1 left-1 rounded-full px-1.5 text-[10px] font-semibold text-white"
+							class="bg-surface-950/70 pointer-events-none absolute bottom-1 left-1 rounded-full px-1.5 text-meta font-semibold text-white"
 							data-testid="gallery-new-badge"
 						>
 							New
@@ -598,7 +599,7 @@
 				class="card bg-surface-100-900 max-w-sm space-y-4 p-6 shadow-xl"
 			>
 				<header class="flex items-center gap-3">
-					<Icons.Trash2 class="text-error-500 h-5 w-5 shrink-0" />
+					<Icons.Trash2 class="text-error-600-400 h-5 w-5 shrink-0" />
 					<h2 class="text-lg font-bold">Delete image</h2>
 				</header>
 				{#if pendingDeleteMedia}

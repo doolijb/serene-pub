@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * Why the retrieval chose what it chose — design §9, plan Part 6.
 	 *
@@ -242,7 +243,7 @@
 	     and the same preset nested in itself reads as a rendering fault rather
 	     than as a division. -->
 	<section
-		class="border-surface-300-700 flex flex-col gap-2 rounded border p-3"
+		class="border-surface-200-800 flex flex-col gap-2 rounded border p-3"
 		aria-label={title}
 	>
 		<div class="flex flex-wrap items-baseline gap-2">
@@ -515,7 +516,7 @@
 											? 'preset-tonal-primary'
 											: row.markerKind === 'none'
 												? 'preset-tonal-surface opacity-70'
-												: 'preset-tonal-surface'} rounded-full px-2 py-0.5 text-[11px]"
+												: 'preset-tonal-surface'} rounded-full px-2 py-0.5 text-meta"
 									>
 										{row.marker}
 									</span>
@@ -530,17 +531,13 @@
 									     honest answer rather than a reassuring
 									     badge nothing verified. -->
 									{#if row.provenance === "changed"}
-										<span
-											class="preset-tonal-warning rounded-full px-2 py-0.5 text-[11px]"
-										>
+										<Badge tone="warning" size="sm">
 											Edited since
-										</span>
+										</Badge>
 									{:else if row.provenance === "deleted"}
-										<span
-											class="preset-tonal-error rounded-full px-2 py-0.5 text-[11px]"
-										>
+										<Badge tone="error" size="sm">
 											Gone since
-										</span>
+										</Badge>
 									{/if}
 								</span>
 								<span
@@ -570,7 +567,7 @@
 						{#if isOpen}
 							<div
 								id="retrieval-{row.key}"
-								class="border-surface-300-700/50 flex flex-col gap-2 border-t px-2 py-2"
+								class="border-surface-200-800 flex flex-col gap-2 border-t px-2 py-2"
 							>
 								<!-- What happened to the entry, before anything
 								     it says. The excerpt below is the recorded
@@ -616,7 +613,7 @@
 												</span>
 												{#if c.value != null}
 													<span
-														class="text-surface-600-400 font-mono text-[11px]"
+														class="text-surface-600-400 font-mono text-meta"
 													>
 														{c.value.toFixed(3)}
 													</span>
@@ -632,7 +629,7 @@
 
 								{#if row.why?.length || row.reason}
 									<p
-										class="text-surface-600-400 font-mono text-[11px]"
+										class="text-surface-600-400 font-mono text-meta"
 									>
 										{[...(row.why ?? []), row.reason]
 											.filter(Boolean)
@@ -731,7 +728,7 @@
 						>
 							<thead>
 								<tr
-									class="text-surface-600-400 border-surface-300-700 border-b text-left text-xs"
+									class="text-surface-600-400 border-surface-200-800 border-b text-left text-xs"
 								>
 									<th class="px-2 py-1.5">Source</th>
 									<th class="px-2 py-1.5 text-right">
@@ -751,7 +748,7 @@
 							<tbody>
 								{#each explanation.bands as b (b.source)}
 									<tr
-										class="border-surface-300-700/50 border-b last:border-b-0"
+										class="border-surface-200-800 border-b last:border-b-0"
 									>
 										<td class="px-2 py-1.5">{b.label}</td>
 										<td

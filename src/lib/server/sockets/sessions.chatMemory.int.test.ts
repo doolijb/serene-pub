@@ -113,9 +113,11 @@ beforeAll(async () => {
 		.returning()
 	const { setCapabilityDefault } = await import("$lib/server/connections/capabilityDefaults")
 	await setCapabilityDefault(db, "text->text", { connectionId: textConn!.id, connectionModelId: modelId, samplingConfigId: sampling!.id })
+	;(await import("$lib/server/pipelines/routines/runs")).setRoutinesEnabled(true)
 }, 180_000)
 
 afterAll(async () => {
+	;(await import("$lib/server/pipelines/routines/runs")).setRoutinesEnabled(false)
 	await fs.rm(dataDir, { recursive: true, force: true }).catch(() => {})
 })
 
@@ -130,11 +132,27 @@ async function chat(name: string, seedKey: string, fields: Record<string, unknow
 	expect(res?.error, res?.error).toBeUndefined()
 	await settle()
 	const sessionId = res.session.id as number
+	// ⏳ The retired `tasks` field, written where it lives now (PLAN-layering
+	// D4): the routines' modes. Every other field as before.
+	const { tasks, ...rest } = fields
 	const [row] = await db.select({ genreFields: schema.sessions.genreFields }).from(schema.sessions).where(eq(schema.sessions.id, sessionId))
 	await db
 		.update(schema.sessions)
-		.set({ genreFields: { ...((row?.genreFields ?? {}) as Record<string, unknown>), ...fields } })
+		.set({ genreFields: { ...((row?.genreFields ?? {}) as Record<string, unknown>), ...rest } })
 		.where(eq(schema.sessions.id, sessionId))
+	if (tasks !== undefined) {
+		const { applyLegacyTasks, setRoutineCadenceOptions } = await import("$lib/server/utils/testDb")
+		await applyLegacyTasks(db as any, sessionId, tasks)
+		// The old group's `every` is the memory routine's cadence option now
+		// (an administrator's, R36; the upgrade does not carry it).
+		const every = (tasks as { groups?: { sweep?: { every?: number } } }).groups?.sweep?.every
+		if (typeof every === "number") {
+			const { ASSISTANT_MEMORY_SPEC_ID } = await import("@serene-pub/core-catalog")
+			const { effectiveRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
+			const memory = (await effectiveRegistrations(db as never, sessionId))!.effective.find((r) => r.pipeline === ASSISTANT_MEMORY_SPEC_ID)
+			if (memory) await setRoutineCadenceOptions(db as any, sessionId, memory.key, { n: every })
+		}
+	}
 	return sessionId
 }
 
@@ -159,6 +177,9 @@ async function notesOf(sessionId: number) {
 }
 
 describe("Chat's memory (lane 2)", () => {
+	// *Remember things* is a routine since PLAN-layering (lanes 3, 6):
+	// `core:spec/assistant-memory`, every N turns, run by the routine queue
+	// once the reply has settled.
 	it("Remember things on Full files a note in the session's own notes, made on first use — with no lorebook attached", async () => {
 		const sessionId = await chat("memory-sweep", "core-chat-basic", {
 			tasks: { v: 1, groups: { sweep: { every: 1 } }, tasks: { memory: { mode: "full" } } }

@@ -643,14 +643,17 @@ function objectEntries(v: unknown): Record<string, Record<string, unknown>> {
 
 /**
  * The person's **new-session layout** for a genre if it still applies to them
- * (not deleted, unshared or withdrawn — `canApplyLayoutPreset`), else the
- * genre default layout, else `null` (start from scratch). What a first open
- * copies.
+ * (not deleted, unshared or withdrawn — `canApplyLayoutPreset`), else — for a
+ * 🚧 **guest** of the session, its genre's **guests' layout** when the genre
+ * ships one (`GenreLayoutDecl.forGuests`, Lair rewrite D6: the Lair's
+ * _Party_, no Sanctum) — else the genre default layout, else `null` (start
+ * from scratch). What a first open copies.
  */
 export async function resolveNewSessionLayout(
 	tx: Db,
 	userId: number,
-	genreId: string
+	genreId: string,
+	opts: { guest?: boolean } = {}
 ): Promise<number | null> {
 	const [chosen] = await tx
 		.select({ id: schema.userLayoutDefaults.layoutPresetId })
@@ -664,7 +667,44 @@ export async function resolveNewSessionLayout(
 		.limit(1)
 	if (chosen?.id != null && (await applicableRow(tx, chosen.id, genreId, userId)))
 		return chosen.id
+	if (opts.guest) {
+		const forGuests = await guestsLayoutRow(genreId, tx)
+		if (forGuests) return forGuests.id
+	}
 	return (await genreDefaultLayoutRow(genreId, tx))?.id ?? null
+}
+
+/**
+ * 🚧 The genre's **guests' layout** row (Lair rewrite D6): the layout its
+ * declaration marks `forGuests`, as its owner shipped it — the same owner
+ * origins and the same not-withdrawn rule as the genre default
+ * (`genreDefaultLayoutRow`), found by the declared slug. Null when the genre
+ * marks none, or its row is gone. Read from the genre's registered
+ * declaration (`getGenre`), which every core genre has once the catalog is
+ * imported; ⏳ a plugin's manifest does not carry the mark yet.
+ */
+export async function guestsLayoutRow(genreId: string, handle: Db = db): Promise<PresetRow | null> {
+	await import("@serene-pub/core-catalog")
+	const slug = getGenre(genreId)?.layouts?.find((l) => l.forGuests === true)?.slug
+	if (!slug || slug === DEFAULT_LAYOUT_SLUG) return null
+	const [row] = await handle
+		.select()
+		.from(schema.sessionLayoutPresets)
+		.where(
+			and(
+				eq(schema.sessionLayoutPresets.genreId, genreId),
+				eq(schema.sessionLayoutPresets.slug, slug),
+				inArray(
+					schema.sessionLayoutPresets.origin,
+					GENRE_OWNER_ORIGINS(genreId) as string[]
+				),
+				isNull(schema.sessionLayoutPresets.authorUserId),
+				isNull(schema.sessionLayoutPresets.withdrawnAt)
+			)
+		)
+		.orderBy(asc(schema.sessionLayoutPresets.id))
+		.limit(1)
+	return row ?? null
 }
 
 /** What a copy was asked to do. */

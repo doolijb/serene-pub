@@ -16,6 +16,7 @@
 	import { lorebookImportedToast } from "./lorebookImportedToast"
 	import { deleteBookCopy, type DeletingBook } from "./deleteCopy"
 	import { LOCATION_TYPE_ID } from "$lib/shared/entries/types"
+	import { isStarterKit } from "./starterKitCards"
 
 	/**
 	 * Everything that happens to a lorebook as a whole — create, import,
@@ -116,15 +117,28 @@
 	/** The book this tab asked to delete, until the server answers. */
 	let pendingDeleteId: number | null = $state(null)
 
+	/** 🚧 The book being deleted is a starter lorebook (`lorebooks.kind`). */
+	const deletingKit = $derived(isStarterKit(deletingBook))
+
 	/** What the delete confirmation says: the book by name, and what goes. */
 	const deleteCopy = $derived(
-		deleteBookCopy(deletingBook, {
+		deletingKit
+			? {
+					title: deletingBook?.name
+						? `Delete the starter lorebook "${deletingBook.name}"?`
+						: "Delete this starter lorebook?",
+					lines: [
+						"People stop seeing it among the starter lorebooks. Lorebooks and sessions already started from it keep everything they copied.",
+						"This cannot be undone."
+					]
+				}
+			: deleteBookCopy(deletingBook, {
 			placeTypeId: LOCATION_TYPE_ID,
 			openSessionName:
 				deletingId !== null && openSessionCtx?.lorebookId === deletingId
 					? openSessionCtx.sessionName
 					: null
-		})
+			})
 	)
 
 	/** What the copy will be called, as the reader may still edit it. */
@@ -153,8 +167,10 @@
 	function handleCreateConfirm(details: {
 		name: string
 		attachToSession: boolean
+		primaryRuleset?: string
+		starterKit?: Sockets.StarterKits.Ref
 	}) {
-		if (!details.name.trim()) return
+		if (!details.name.trim() && !details.starterKit) return
 		creating = false
 		const trimmed = details.name.trim()
 		// Only claim the create when the switch was both shown and on;
@@ -163,9 +179,55 @@
 		pendingCreateRequestId = uuid()
 		const req: Sockets.Lorebooks.Create.Params = {
 			name: trimmed,
-			requestId: pendingCreateRequestId
+			requestId: pendingCreateRequestId,
+			...(details.starterKit
+				? { starterKit: details.starterKit }
+				: details.primaryRuleset
+					? { primaryRuleset: details.primaryRuleset }
+					: {})
 		}
 		socket.emit("lorebooks:create", req)
+	}
+
+	/**
+	 * 🚧 **Make a lorebook from this kit** (Book settings of a kit, PLAN-
+	 * lorebook-kinds §B): a new book of the asker's, copied from the kit and
+	 * named after it, opened when it lands — the create path, so the answer
+	 * is claimed by its request id like any other.
+	 */
+	export function makeBookFromKit(kitBookId: number, kitName: string) {
+		handleCreateConfirm({
+			name: kitName,
+			attachToSession: false,
+			starterKit: { lorebookId: kitBookId }
+		})
+	}
+
+	/** The book this tab asked to save as a starter lorebook, until answered. */
+	let pendingSaveAsKit: number | null = $state(null)
+
+	/**
+	 * 🚧 **Save as starter lorebook** (an admin's own book): a snapshot of it as a
+	 * new kit; the toast names the kit and where it is.
+	 */
+	export function saveAsStarterKit(lorebookId: number) {
+		if (pendingSaveAsKit !== null) return
+		pendingSaveAsKit = lorebookId
+		socket.emit("starterKits:saveFromBook", { lorebookId })
+	}
+
+	function handleSaveFromBook(msg: Sockets.StarterKits.SaveFromBook.Response) {
+		if (pendingSaveAsKit === null || !msg?.kit) return
+		pendingSaveAsKit = null
+		toaster.success({
+			title: "Saved as a starter lorebook",
+			description: `"${msg.kit.name}" is under Your starter lorebooks here and in Admin › Starter lorebooks. Everyone on the pub can start a lorebook or a session from it.`
+		})
+	}
+
+	/** The refusal is toasted by Layout's catch-all; stop waiting on it. */
+	function handleSaveFromBookError() {
+		pendingSaveAsKit = null
 	}
 
 	/**
@@ -262,10 +324,23 @@
 	function handleDeleteConfirm() {
 		if (deletingId === null) return
 		const id = deletingId
-		const req: Sockets.Lorebooks.Delete.Params = { id }
 		pendingDeleteId = id
-		socket.emit("lorebooks:delete", req)
+		// 🚧 A starter lorebook goes through its own family, so Admin › Starter
+		// kits and every picker hear it went.
+		if (deletingKit) socket.emit("starterKits:delete", { lorebookId: id })
+		else {
+			const req: Sockets.Lorebooks.Delete.Params = { id }
+			socket.emit("lorebooks:delete", req)
+		}
 		deletingId = null
+	}
+
+	function handleStarterKitDelete(msg: Sockets.StarterKits.Delete.Response) {
+		if (pendingDeleteId === null || msg?.lorebookId !== pendingDeleteId) return
+		const id = pendingDeleteId
+		pendingDeleteId = null
+		toaster.success({ title: "Starter lorebook deleted" })
+		onDeleted?.(id)
 	}
 
 	function handleDuplicateConfirm() {
@@ -424,6 +499,20 @@
 		handleLorebooksImportResolveError
 	)
 	useInterest<"lorebooks:delete">("lorebooks:delete", handleLorebooksDelete)
+	// 🚧 Starter lorebooks (a GATED family: these keys are what lets them through).
+	useInterest<"starterKits:delete">("starterKits:delete", handleStarterKitDelete)
+	useInterest<"starterKits:delete:error">(
+		"starterKits:delete:error",
+		handleLorebooksDeleteError
+	)
+	useInterest<"starterKits:saveFromBook">(
+		"starterKits:saveFromBook",
+		handleSaveFromBook
+	)
+	useInterest<"starterKits:saveFromBook:error">(
+		"starterKits:saveFromBook:error",
+		handleSaveFromBookError
+	)
 	useInterest<"lorebooks:delete:error">(
 		"lorebooks:delete:error",
 		handleLorebooksDeleteError
@@ -486,7 +575,7 @@
 				class="fixed inset-0 z-50 flex items-center justify-center p-4"
 			>
 				<Dialog.Content
-					class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
+					class="card bg-surface-100-900 border-surface-200-800 max-w-[95vw] space-y-4 border p-4 shadow-xl"
 				>
 					<div class="p-6">
 						<h2 class="mb-2 text-lg font-bold">Import lorebook</h2>
@@ -551,7 +640,7 @@
 				class="fixed inset-0 z-50 flex items-center justify-center p-4"
 			>
 				<Dialog.Content
-					class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
+					class="card bg-surface-100-900 border-surface-200-800 max-w-[95vw] space-y-4 border p-4 shadow-xl"
 				>
 					<div class="p-6">
 						<h2 class="mb-2 text-lg font-bold">
@@ -613,10 +702,10 @@
 				class="fixed inset-0 z-50 flex items-center justify-center p-4"
 			>
 				<Dialog.Content
-					class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
+					class="card bg-surface-100-900 border-surface-200-800 max-w-[95vw] space-y-4 border p-4 shadow-xl"
 				>
 					<div class="p-6">
-						<h2 class="text-error-500 mb-2 text-lg font-bold">
+						<h2 class="text-error-600-400 mb-2 text-lg font-bold">
 							{deleteCopy.title}
 						</h2>
 						<div class="mb-4 flex max-w-prose flex-col gap-2">

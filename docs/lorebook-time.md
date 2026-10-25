@@ -100,7 +100,7 @@ The **clock** is where the story stands: its present. With no clock set, the pre
 **What moves a session's clock.** Only a person or a fixed tick, never the model on its own:
 
 - **Time passes…**, an action above the composer, moves it by the amount you pick (see [Sessions](./sessions.md#time-passes)).
-- In Story, the after-turn reckoning can suggest how long a scene or a rest took. The clock moves only when you accept (the **time** task on **Review**), or at once when it is **Full** (see [What happens around a reply](./genre-story.md#what-happens-around-a-reply)).
+- In Story, the routine **Note what changed** can suggest how long a scene or a rest took (its **Move the clock** switch). The clock moves only when you accept, with the routine on **Review**, or at once on **Full** (see [What runs between turns](./genre-story.md#what-runs-between-turns)).
 - Story's reply can tick it on by a fixed amount after every reply: the reply pipeline's step **Each reply advances the clock by** (**By** and **Unit**; **By** 0, the default, is off). The session's owner sets it in the session's settings, under **The story**, below the story clock; an administrator sets it for every session in **Admin › Pipelines**, on Chat's **Reply**. A regenerated or swiped reply doesn't tick again.
 - The session's settings and the **Chronicle** widget, by hand.
 

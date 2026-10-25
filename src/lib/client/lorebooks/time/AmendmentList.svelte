@@ -200,7 +200,7 @@
 	{@const ahead = aheadIds.has(row.id)}
 	{@const where = whereItIs(row)}
 	<li
-		class="bg-surface-100-900 flex flex-wrap items-center gap-2 rounded-[10px] px-3 py-2"
+		class="bg-surface-100-900 flex flex-wrap items-center gap-2 rounded-base px-3 py-2"
 		class:opacity-60={(ahead || !readsHere.has(row.id)) && editing !== row.id}
 	>
 		{#if editing === row.id}
@@ -283,7 +283,7 @@
 				</span>
 			{:else}
 				<button
-					class="hover:preset-tonal-surface shrink-0 rounded-[6px] px-1 text-xs font-semibold"
+					class="hover:preset-tonal-surface shrink-0 rounded-md px-1 text-xs font-semibold"
 					type="button"
 					onclick={() => startEdit(row)}
 					title="Change the date this begins at"
@@ -296,14 +296,14 @@
 			</span>
 			{#if where}
 				<span
-					class="chip preset-tonal-surface shrink-0 text-[11px]"
+					class="chip preset-tonal-surface shrink-0 text-meta"
 					data-lore-amendment-line
 				>
 					{where}
 				</span>
 			{/if}
 			{#if ahead}
-				<span class="chip preset-tonal-surface shrink-0 text-[11px]">
+				<span class="chip preset-tonal-surface shrink-0 text-meta">
 					not yet
 				</span>
 			{/if}
@@ -344,7 +344,7 @@
 		{#if elsewhere.length}
 			<!-- Listed, not filtered: this is the only place another line's
 			     amendment can be re-dated or deleted. -->
-			<h5 class="text-surface-600-400 text-[11px]">
+			<h5 class="text-surface-600-400 text-meta">
 				Not read on {openBookTime.lineName(branchId)}
 			</h5>
 			<ul class="flex flex-col gap-1" data-lore-amendments-elsewhere>

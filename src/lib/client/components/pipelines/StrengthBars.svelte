@@ -164,7 +164,7 @@
 				{/if}
 			</div>
 			{#if m.description}
-				<p class="text-surface-600-400 text-[11px] leading-snug">
+				<p class="text-surface-600-400 text-meta leading-snug">
 					{m.description}
 				</p>
 			{/if}

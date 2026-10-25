@@ -31,6 +31,7 @@ import { defineAttributeSheet, genre } from "@serene-pub/sdk"
 import "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { LOCATION_TYPE_ID } from "$lib/shared/entries/types"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -55,7 +56,7 @@ const SIGHT_SHEET = defineAttributeSheet("test:sheet/place-sight@1", {
 	]
 })
 const SIGHT_GENRE = "test:genre/place-sight"
-genre(SIGHT_GENRE, {
+genreKeeping(SIGHT_GENRE, {
 	name: { en: "Place sight" },
 	family: "test",
 	sheets: [SIGHT_SHEET],

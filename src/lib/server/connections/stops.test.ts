@@ -606,3 +606,94 @@ describe("seedLabelOf / ownLabelsFor — the names a turn is labelled with", () 
 		expect(stripOwnLabel("Narrator: Narr", ["Narrator"], { streaming: true })).toBe("")
 	})
 })
+
+/**
+ * 🚧 Lair fix 2 (2026-10-22): the player label and the envoys are voices with
+ * no card. A Lair delver's turn read "Dungeon Master: …" lines with nothing to
+ * stop on — its own name was the cast's only label — and the reply went on as
+ * the Dungeon Master.
+ */
+describe("composeStops — the player label and the envoys (lair fix 2)", () => {
+	const suzume = [{ id: 1, name: "Suzume Akagane", nickname: "Suzume" }] as any[]
+	const LAIR = ["Dungeon Master", "Castellan", "Oracle"]
+	const voiceTranscript = [
+		{ role: "system", content: "You are Suzume." },
+		{ role: "user", content: "Dungeon Master: The floor gives way beneath Suzume." }
+	]
+
+	test("a delver's turn stops on the GM's label and the envoys', never its own", () => {
+		const { sent } = composeStops({
+			template: CUSTOM,
+			characters: suzume,
+			personas: [],
+			currentCharacterId: 1,
+			nonCastLabels: LAIR,
+			wire: "chat",
+			messages: voiceTranscript
+		})
+		expect(valuesOf(sent)).toEqual(["\nDungeon Master:", "\nCastellan:", "\nOracle:"])
+	})
+
+	test("the inline-label question counts them: a GM line alone is a labelled transcript", () => {
+		// Before: the cast was the only label, the speaker's own, so nothing went out.
+		expect(
+			valuesOf(composeStops({ template: CUSTOM, characters: suzume, personas: [], currentCharacterId: 1, wire: "chat", messages: voiceTranscript }).sent)
+		).toEqual([])
+	})
+
+	test("the Castellan in the Sanctum stops on the party and the GM, never on itself", () => {
+		const { sent } = composeStops({
+			template: CUSTOM,
+			characters: suzume,
+			personas: [],
+			currentCharacterId: null,
+			nonCastLabels: LAIR,
+			ownLabels: ["Castellan"],
+			wire: "chat",
+			messages: [
+				{ role: "system", content: "You are the Castellan." },
+				{ role: "assistant", content: "Castellan: Welcome, Dungeon Master." },
+				{ role: "user", content: "Dungeon Master: Suzume gets sucked into a dungeon." }
+			]
+		})
+		expect(valuesOf(sent)).toEqual(["\nSuzume Akagane:", "\nSuzume:", "\nDungeon Master:", "\nOracle:"])
+	})
+
+	test("composeStopsFor carries them through", () => {
+		const { sent } = composeStopsFor(
+			{ promptFormat: "chatml", wireMode: "completion" },
+			{ sessionCharacters: suzume.map((character) => ({ character })), sessionPersonas: [] },
+			{ currentCharacterId: 1, nonCastLabels: LAIR, ownLabels: ["Suzume"] }
+		)
+		expect(valuesOf(sent)).toEqual(expect.arrayContaining(["Dungeon Master:", "Castellan:", "Oracle:"]))
+		expect(valuesOf(sent)).not.toContain("Suzume Akagane:")
+	})
+})
+
+describe("trimAtSpeakerBoundary — a label in markdown emphasis (lair fix 2)", () => {
+	const stops = composeStops({
+		template: CUSTOM,
+		characters: [{ id: 1, name: "Suzume Akagane", nickname: "Suzume" }] as any[],
+		personas: [],
+		currentCharacterId: null,
+		nonCastLabels: ["Dungeon Master", "Castellan", "Oracle"],
+		ownLabels: ["Castellan"],
+		wire: "completion"
+	})
+
+	test("a line opening **Suzume:** or **Suzume**: is somebody else's, and ends the reply", () => {
+		const said = "No exit? Good.\n\n**Suzume:** What do we do?"
+		expect(trimAtSpeakerBoundary(said, stops, ["Castellan"])).toEqual({
+			text: "No exit? Good.",
+			trimmedAt: { label: "Suzume:", offset: 15 }
+		})
+		expect(trimAtSpeakerBoundary("Hm.\n__Dungeon Master__: Wait.", stops, ["Castellan"]).text).toBe("Hm.")
+	})
+
+	test("the first boundary wins, plain or emphasised; prose that names somebody is kept", () => {
+		expect(trimAtSpeakerBoundary("A.\nOracle: x\n**Suzume:** y", stops).trimmedAt?.label).toBe("Oracle:")
+		expect(trimAtSpeakerBoundary("A.\n**Suzume:** y\nOracle: x", stops).trimmedAt?.label).toBe("Suzume:")
+		const prose = "She glances at **Suzume** and nods."
+		expect(trimAtSpeakerBoundary(prose, stops).text).toBe(prose)
+	})
+})

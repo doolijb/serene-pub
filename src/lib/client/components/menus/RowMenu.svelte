@@ -126,7 +126,7 @@
 	// (skeleton-common `menu.css`) spaces an item's children apart
 	// (`justify-content: space-between`), which this overrides.
 	const rowClass =
-		"flex h-9 w-full cursor-pointer items-center justify-start gap-2 rounded-[8px] px-2.5 text-left text-[13px] outline-none data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50"
+		"flex h-9 w-full cursor-pointer items-center justify-start gap-2 rounded-lg px-2.5 text-left text-chip outline-none data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50"
 	const neutralRow =
 		"hover:bg-surface-200-800 data-[highlighted]:bg-surface-200-800"
 	const destructiveRow =
@@ -168,7 +168,7 @@
 		<Portal>
 			<Menu.Positioner class="z-[1000]!">
 				<Menu.Content
-					class="bg-surface-50-950 border-surface-200-800 flex flex-col rounded-[12px] border p-1 shadow-xl outline-none"
+					class="bg-surface-50-950 border-surface-200-800 flex flex-col rounded-container border p-1 shadow-xl outline-none"
 					style="width: min(90vw, {width}px)"
 				>
 					{#if header}

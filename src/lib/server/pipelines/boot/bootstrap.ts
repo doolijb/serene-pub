@@ -155,6 +155,10 @@ export interface BootstrapReport {
 	 * boot after the first.
 	 */
 	specSlugRename?: import("$lib/server/pipelines/boot/specSlugRename").SpecSlugRenameReport
+	/** 🚧 The registrations projection (PLAN-layering D7). */
+	registrations?: import("$lib/server/pipelines/registrations/project").RegistrationProjectionReport
+	/** 🚧 A11: every registration re-run through the door after the projection (`fit.ts`). */
+	registrationFit?: import("$lib/server/pipelines/registrations/fit").RefitReport
 	/** Named-config values for `embed-text`'s retired connection slot, removed quietly. */
 	embedTextConnectionDropped?: number
 	/**
@@ -436,6 +440,23 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		"$lib/server/pipelines/boot/seed"
 	)
 	await seedSessionPresets(db)
+
+	// 🚧 Then the registrations (PLAN-layering D7): every genre's defaults and
+	// every shipped preset's changes, projected into rows — after the specs,
+	// whose publication decides which genre each derived default names, and
+	// after the presets, whose rows they hang off. Everything that answers
+	// "what runs in this session" reads these rows.
+	{
+		const { projectRegistrations } = await import(
+			"$lib/server/pipelines/registrations/project"
+		)
+		report.registrations = await projectRegistrations(db)
+		// A11: the build itself may have changed what a pipeline reads, so
+		// every registration goes back through the door once a boot — a
+		// broken one is left out as stale, and the reconcile below says so.
+		const { refitRegistrations } = await import("$lib/server/pipelines/registrations/fit")
+		report.registrationFit = await refitRegistrations(db)
+	}
 
 	// Straight after the presets, and the order is the whole point: the seed
 	// back-fills bindings from the locks this boot just published, so a

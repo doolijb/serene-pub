@@ -234,6 +234,112 @@ export async function clearConfigValue(
 }
 
 /**
+ * 🚧 Store a tuned value where a run of this pipeline reads it (PLAN-layering
+ * D5, R50): on the genre's defaults' registrations of it — the
+ * administrator's instance-wide edit, what the pub-selected configuration
+ * was — or, for a pipeline no genre registers, its instance values.
+ * `undefined` clears the address (a delete, never a write of the default).
+ */
+export async function setPipelineValue(
+	db: TestDb,
+	slug: string,
+	at: ConfigValueAddress,
+	value: unknown
+): Promise<void> {
+	const address = { nodeKey: at.nodeKey, slot: at.slot, path: at.path ?? "" }
+	const { setPipelineGenreValue } = await import(
+		"$lib/server/pipelines/registrations/genreValues"
+	)
+	if (await setPipelineGenreValue(db as never, slug, address, value)) return
+	const [spec] = await db
+		.select({ id: schema.pipelineSpecs.id })
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.slug, slug))
+		.limit(1)
+	if (!spec) throw new Error(`setPipelineValue: no pipeline '${slug}'`)
+	const { setInstanceValue } = await import("$lib/server/pipelines/registrations/instanceValues")
+	await setInstanceValue(db as never, slug, address, value)
+}
+
+/** Put an address back to inheriting — `setPipelineValue`'s clear. */
+export async function clearPipelineValue(
+	db: TestDb,
+	slug: string,
+	at: ConfigValueAddress
+): Promise<void> {
+	await setPipelineValue(db, slug, at, undefined)
+}
+
+/**
+ * ⏳ A session's retired background-task choices (`{ v: 1, tasks: { key: {
+ * mode } } }`, the old `genre_fields.tasks`) written where they live now —
+ * the session's routine and reply registrations and the voices' genre fields
+ * (`legacyTasks.ts`, the 0108 data upgrade's mapping) — for the tests that
+ * state a session's tasks the old way (the routine runtime reads them where
+ * they now live, lane 6).
+ */
+export async function applyLegacyTasks(
+	db: TestDb,
+	sessionId: number,
+	stored: unknown
+): Promise<void> {
+	const { effectiveRegistrations } = await import(
+		"$lib/server/pipelines/registrations/resolve"
+	)
+	const regs = await effectiveRegistrations(db as never, sessionId)
+	if (!regs) throw new Error(`applyLegacyTasks: no session #${sessionId}`)
+	const { tasksAsRegistrations } = await import(
+		"$lib/server/pipelines/registrations/legacyTasks"
+	)
+	const t = tasksAsRegistrations(stored, regs.offered, { kind: "session", sessionId }, "owner")
+	const { upsertRow } = await import("$lib/server/pipelines/registrations/write")
+	for (const r of t.rows) await upsertRow(db as never, r)
+	if (!Object.keys(t.fields).length) return
+	const [row] = await db
+		.select({ genreFields: schema.sessions.genreFields })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+	await db
+		.update(schema.sessions)
+		.set({ genreFields: { ...((row?.genreFields as object) ?? {}), ...t.fields } as never })
+		.where(eq(schema.sessions.id, sessionId))
+}
+
+/**
+ * 🚧 A session's change of a routine's cadence options (lane 6; the
+ * administrator's in their own session, R36) — a session change row with
+ * `cadence_options`, as the settings form writes it. The registration's
+ * identity (its key) is unchanged (A8).
+ */
+export async function setRoutineCadenceOptions(
+	db: TestDb,
+	sessionId: number,
+	key: string,
+	options: Record<string, unknown>
+): Promise<void> {
+	const { rowOfChange } = await import("$lib/server/pipelines/registrations/rows")
+	const { invalidateRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
+	// Onto the session's own row when it has one (its mode and values stay).
+	const updated = await db
+		.update(schema.registrations)
+		.set({ cadenceOptions: options })
+		.where(
+			and(
+				eq(schema.registrations.scopeKind, "session"),
+				eq(schema.registrations.scopeRef, String(sessionId)),
+				eq(schema.registrations.key, key)
+			)
+		)
+		.returning({ id: schema.registrations.id })
+	if (!updated.length)
+		await db.insert(schema.registrations).values({
+			...rowOfChange({ key }, { kind: "session", sessionId }, "admin"),
+			cadenceOptions: options
+		})
+	invalidateRegistrations()
+}
+
+/**
  * A query's rejection as the driver raised it, for
  * `rejects.toThrow(/constraint_name/)`.
  *
@@ -304,4 +410,107 @@ export async function publishSaveMessage(db: TestDb): Promise<void> {
 		name: "Save message",
 		publish: true
 	})
+}
+
+/** 🚧 A test's deletion pipeline (RF fix 5): its id. */
+export const TEST_DELETION_SPEC_ID = "test:spec/delete-asked"
+
+/**
+ * 🚧 **Deletion needs a pipeline** (RF fix 5, owner ruling 2026-10-23): core
+ * registers none, so a test that deletes a message registers one on the
+ * session first — the minimal deletion pipeline, `message-deletion-asked`'s
+ * inlet straight into `delete-message@1`, the deletion the event carried
+ * wired whole from the inlet's `main` onto the delete's `asked` — as a
+ * session-scope registration row. Publishes the pipeline once per database
+ * (idempotent).
+ */
+export async function registerTestDeletion(db: TestDb, sessionId: number): Promise<void> {
+	const { compile, spec, sessionEvents } = await import("@serene-pub/sdk")
+	const C = await import("@serene-pub/contracts")
+	const { saveDocument } = await import("$lib/server/pipelines/boot/store")
+	const doc = compile(
+		spec(TEST_DELETION_SPEC_ID, { version: "1.0.0", taxonomy: { role: "action" } })
+			.inlet("input", C.messageDeletionAsked.v1())
+			.outlet("write", ($: any) => C.deleteMessage.v1({ asked: $.input.main }))
+			.build()
+	)
+	await saveDocument(db as never, doc as never, { name: "Delete a message", publish: true })
+	const { eventRegistration, rowOfDecl } = await import("$lib/server/pipelines/registrations/rows")
+	const { upsertRow } = await import("$lib/server/pipelines/registrations/write")
+	await upsertRow(
+		db as never,
+		rowOfDecl(
+			eventRegistration(sessionEvents.messageDeletionAsked, TEST_DELETION_SPEC_ID),
+			{ kind: "session", sessionId },
+			"admin"
+		)
+	)
+}
+
+/**
+ * 🚧 Where a reply applies what it carried (*Replies carry changes*): the
+ * published document's one `ruleset-resolve` step in `apply` mode — Story's
+ * commit, after the `reply` junction (RF fix 3) — by its address, never spelled.
+ */
+export async function replyApplyKey(db: TestDb, slug: string): Promise<string> {
+	const C = await import("@serene-pub/contracts")
+	const { loadPublished } = await import("$lib/server/pipelines/boot/bootstrap")
+	const doc = await loadPublished(db as never, slug)
+	if (!doc) throw new Error(`replyApplyKey: no published '${slug}'`)
+	const resolve = C.rulesetResolve.id.replace(/@\d+$/, "")
+	const apply = doc.nodes.filter(
+		(n) => n.definitionId === resolve && (n.config as { mode?: unknown } | undefined)?.mode === "apply"
+	)
+	if (apply.length !== 1) throw new Error(`replyApplyKey: '${slug}' has ${apply.length} apply steps`)
+	return apply[0]!.key
+}
+
+/**
+ * A reply pipeline's own steps, by the addresses its published document gives
+ * them — never spelled: the model call its budget is sized for
+ * (`budgetedProviderOf`) and, on that call's own path or the nearest level
+ * enclosing it, the write that fills its row and the sprite steps. Story's
+ * call sits in its `reply` junction's prose branch (PLAN-rulesets-functions
+ * D7) and its save and sprite steps after that junction, once (RF fix 3);
+ * Guide's and the narrators' all on the spine.
+ */
+export async function replyStepKeys(
+	db: TestDb,
+	slug: string
+): Promise<{ generate: string; save: string; spritePick?: string; spriteShow?: string }> {
+	const { loadPublished } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { budgetedProviderOf } = await import("$lib/server/pipelines/runtime/specShape")
+	const doc = await loadPublished(db as never, slug)
+	if (!doc) throw new Error(`replyStepKeys: no published '${slug}'`)
+	const call = budgetedProviderOf(doc)
+	if (!call) throw new Error(`replyStepKeys: '${slug}' makes no model call`)
+	// The call's own level, then each level enclosing it, out to the spine.
+	const levels: Array<{ clauseId?: string; clauseChain?: string }> = []
+	for (let at: { clauseId?: string; clauseChain?: string } | undefined = call; at; ) {
+		levels.push({ clauseId: at.clauseId, clauseChain: at.clauseChain })
+		if (!at.clauseId) break
+		at = (doc.clauses ?? []).find((c) => c.id === at!.clauseId) ?? {}
+	}
+	const onItsPath = (definitionId: string) => {
+		for (const l of levels) {
+			const found = doc.nodes.find(
+				(n) =>
+					n.definitionId === definitionId &&
+					(n.clauseId ?? undefined) === (l.clauseId ?? undefined) &&
+					(n.clauseChain ?? undefined) === (l.clauseChain ?? undefined)
+			)
+			if (found) return found.key
+		}
+		return undefined
+	}
+	const save = onItsPath("core:outlet/update-message")
+	if (!save) throw new Error(`replyStepKeys: '${slug}' fills no row beside '${call.key}'`)
+	const spritePick = onItsPath("core:oracle/pick-sprite")
+	const spriteShow = onItsPath("core:outlet/show-sprite")
+	return {
+		generate: call.key,
+		save,
+		...(spritePick ? { spritePick } : {}),
+		...(spriteShow ? { spriteShow } : {})
+	}
 }

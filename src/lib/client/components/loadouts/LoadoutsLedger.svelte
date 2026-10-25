@@ -37,13 +37,13 @@
 					<span class="flex items-baseline gap-1.5">
 						<span class="truncate text-sm font-medium">{row.label}</span>
 						<span
-							class="text-surface-600-400 shrink-0 font-mono text-[11px]"
+							class="text-surface-600-400 shrink-0 font-mono text-meta"
 						>
 							{row.transform}
 						</span>
 					</span>
 					<span
-						class="block truncate text-[11px] {row.filled
+						class="block truncate text-meta {row.filled
 							? 'text-surface-600-400'
 							: row.transform === 'text->text'
 								? 'text-warning-700-300'

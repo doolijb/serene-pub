@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
@@ -50,15 +50,23 @@ describe("a disabled plugin in the listings (R67)", () => {
 				manifest: {} as any
 			})
 			.returning({ id: schema.plugins.id })
-		// Stand the plugin in as the owner of adventure's pipelines.
-		const owned = await db
-			.select({ id: schema.pipelineSpecs.id, slug: schema.pipelineSpecs.slug })
-			.from(schema.pipelineSpecs)
-			.innerJoin(
-				schema.pipelineSpecVersions,
-				eq(schema.pipelineSpecVersions.id, schema.pipelineSpecs.activeVersionId)
+		// Stand the plugin in as the owner of the genre's pipelines — the ones
+		// its defaults register (🚧 PLAN-layering D7; core's save is everyone's).
+		const mounted = new Set(
+			(
+				await db
+					.select({ specSlug: schema.registrations.specSlug })
+					.from(schema.registrations)
+					.where(and(eq(schema.registrations.scopeKind, "genre"), eq(schema.registrations.scopeRef, GENRE)))
 			)
-			.where(eq(schema.pipelineSpecVersions.inputGenre, GENRE))
+				.map((r) => r.specSlug)
+				.filter((s) => s && s !== "core:spec/save-message")
+		)
+		const owned = (
+			await db
+				.select({ id: schema.pipelineSpecs.id, slug: schema.pipelineSpecs.slug })
+				.from(schema.pipelineSpecs)
+		).filter((s) => mounted.has(s.slug))
 		expect(owned.length).toBeGreaterThan(0)
 		for (const s of owned)
 			await db

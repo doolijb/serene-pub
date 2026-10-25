@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SpProgress from "$lib/client/components/hostElements/SpProgress.svelte"
 	/**
 	 * The connection form for ANY image backend.
 	 *
@@ -255,7 +256,7 @@
 	     here. Two Test buttons on one screen, styled differently and
 	     reporting into different places, was the shipped state. -->
 	{#if testResult?.error}
-		<p class="text-error-500 mt-2 text-sm">{testResult.error}</p>
+		<p class="text-error-600-400 mt-2 text-sm">{testResult.error}</p>
 	{/if}
 
 {/if}
@@ -365,20 +366,19 @@
 								<span>{Math.round(progress.percent)}%</span>
 							{/if}
 						</div>
-						<div
-							class="bg-surface-500/20 h-1.5 w-full overflow-hidden rounded-full"
-						>
-							<div
-								class="bg-primary-500 h-full transition-all duration-300"
-								class:animate-pulse={progress?.percent == null}
-								style="width: {progress?.percent ?? 100}%"
-							></div>
+						<div class="text-primary-500" class:animate-pulse={progress?.percent == null}>
+							<SpProgress
+								attrs={{
+									value: progress?.percent == null ? null : String(progress?.percent),
+									label: "Download progress"
+								}}
+							/>
 						</div>
 						{#if previewSrc}
 							<img
 								src={previewSrc}
 								alt="Generation preview"
-								class="border-surface-200-700 mt-2 h-auto w-full rounded border"
+								class="border-surface-200-800 mt-2 h-auto w-full rounded border"
 							/>
 						{/if}
 					</div>
@@ -390,7 +390,7 @@
 					result to your media.
 				</p>
 				{#if genError}
-					<p class="text-error-500 text-sm">{genError}</p>
+					<p class="text-error-600-400 text-sm">{genError}</p>
 				{/if}
 				{#if ignored.length}
 					<p class="text-warning-600 dark:text-warning-400 text-xs">
@@ -405,7 +405,7 @@
 								href={mediaUrl(m.id)}
 								target="_blank"
 								rel="noopener noreferrer"
-								class="border-surface-200-700 block overflow-hidden rounded-lg border"
+								class="border-surface-200-800 block overflow-hidden rounded-lg border"
 								title={m.seed != null
 									? `Seed ${m.seed}`
 									: undefined}

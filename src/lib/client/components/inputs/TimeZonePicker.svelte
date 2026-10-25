@@ -14,6 +14,9 @@
 		value: string
 		label: string
 		describedBy?: string
+		/** The label for a screen reader only: a setting card's title says it
+		 *  on screen (STYLE-GUIDE §6.4). */
+		labelHidden?: boolean
 		disabled?: boolean
 		class?: string
 		onValueChange?: (value: string) => void
@@ -23,6 +26,7 @@
 		value,
 		label,
 		describedBy,
+		labelHidden = false,
 		disabled = false,
 		class: className = "",
 		onValueChange
@@ -67,6 +71,7 @@
 	{value}
 	{disabled}
 	{describedBy}
+	{labelHidden}
 	class={className}
 	{onValueChange}
 />

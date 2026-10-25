@@ -75,7 +75,7 @@ Up to three choices. You can do any of them later; this is only where to start.
 
 - **Play with characters**: the AI plays a character and you play yourself (or someone you make up). Choose this for your first story. It adds the two screens below.
 - **Talk to an AI**: a calm conversation with **Serene**, Serene Pub's mascot and guide, who answers questions about the app from this documentation. Pressing it starts a session called *Welcome to Serene Pub* straight away, and Serene greets you. If it says *The Guide is switched off on this pub*, the person who runs the pub has turned it off.
-- **Start a session**: the start screen with its genre cards: a plain [Chat](./genres.md#chat) with the model, a [Story](./genre-story.md) with your characters, a [Dungeon Crawler](./genre-dungeon-crawler.md) the AI runs, or [the Lair](./genre-lair.md) you run yourself. Each card says what it is; **More** says the rest.
+- **Start a session**: the start screen with its list of genres: a plain [Chat](./genres.md#chat) with the model, a [Story](./genre-story.md) with your characters, a [Dungeon Crawler](./genre-dungeon-crawler.md) the AI runs, or [the Lair](./genre-lair.md) you run yourself. Each row says what it is in a line; **More**, on the one you pick, says the rest.
 
 ### 4. Pick a character
 
@@ -121,9 +121,10 @@ That's it: you're playing. Not happy with a reply? Hover it and press **Regenera
 
 Once you've started a session (and, if you run the pub, a model can reply), the home page stops showing the wizard. Instead it shows what you were doing:
 
+- One quiet line at the top: _Beta, pre-release 0.6.0-pr-5. Expect changes; keep backups of anything you can't lose._ (it names the version you run). The **×** puts it away in this browser until the next version. The wizard doesn't show it.
 - A greeting, with how many sessions are waiting on your reply, an **Import a card** button and a **New session** button.
-- **Pick up where you left off**: your most recent sessions, newest first. A **Your turn** label marks one waiting on you; **Continue** opens it.
-- A **Characters** shelf of your characters, with **All** to open the Characters view and a **New or import** tile.
+- **Pick up where you left off**: your most recent sessions, newest first. A **Your turn** label with a gold dot marks one waiting on you; **Continue** opens it.
+- **Characters**: your characters as a list in two columns, each with its picture, its name and one line about it, ending with **New or import**. Click one to see its sessions; **All** opens the Characters view. The two icons beside **All** switch to a shelf of portrait cards and back; this browser remembers which.
 - **Playing as**: your personas.
 - At the foot, links to the **Documentation** and to **Document View**, a simplified, screen-reader-friendly version of the app.
 

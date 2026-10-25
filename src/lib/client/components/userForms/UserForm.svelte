@@ -464,7 +464,7 @@
 				</div>
 
 				{#if passphraseError}
-					<p class="text-error-500 text-sm">{passphraseError}</p>
+					<p class="text-error-600-400 text-sm">{passphraseError}</p>
 				{/if}
 
 				<div class="flex gap-2">

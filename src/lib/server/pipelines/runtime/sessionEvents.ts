@@ -40,12 +40,11 @@ import {
 	type SpecRunRequest
 } from "$lib/server/pipelines/runtime/runTurn"
 import {
-	answersEvent,
 	defaultEventSpec,
 	lockedEventSpec,
-	presetEventSpec,
 	type PresetFallback
 } from "$lib/server/pipelines/entities/presetBindings"
+import { registrationsOn } from "$lib/server/pipelines/registrations/resolve"
 import {
 	admitDescendant,
 	closeBranch,
@@ -68,6 +67,24 @@ import {
 	type SessionEventPayload
 } from "$lib/server/messages/sessionChanges"
 import { STANDARD_GENRE_ID } from "$lib/server/pipelines/entities/sessionGenres"
+import { routineRunOf, routinesEnabled, type RoutineRunFact } from "$lib/server/pipelines/routines/runs"
+
+/**
+ * Events the ledger does not record: `turn-order-changed` (see (a) below)
+ * and 🚧 the five session moments (PLAN-layering D7, lane 6) — a turn or a
+ * round ending, a scene opening or closing, the story clock moving. Each
+ * describes something already on record (the line, the scene row, the
+ * clock's `session-updated`); a ledger row for it would reach the next
+ * reply's `sessionChanges` once per turn forever, saying nothing new.
+ */
+const OFF_LEDGER: ReadonlySet<string> = new Set([
+	"core:event/turn-order-changed@1",
+	sdkSessionEvents.turnEnded,
+	sdkSessionEvents.roundEnded,
+	sdkSessionEvents.sceneOpened,
+	sdkSessionEvents.sceneClosed,
+	sdkSessionEvents.storyClockMoved
+])
 
 /**
  * Emit one session event (PLAN-turn-order §4.1): the ledger row, the plugin
@@ -124,14 +141,27 @@ export async function emitSessionEvent(
 	const at = typeof given.at === "number" ? given.at : Date.now()
 	const payload = {
 		...given,
+		...(opts.event === sdkSessionEvents.messageCompleted
+			? await landedLineFacts(db, given as { messageId?: unknown; channel?: unknown; speaker?: unknown })
+			: {}),
 		event: opts.event,
 		sessionId: opts.sessionId,
 		at
 	} as SessionEventPayload
 	const cause = payload.cause
+	/**
+	 * 🚧 The routine run behind this write, if one is (R19) — read now, while
+	 * that run is still in flight: a routine takes no turn, and what its own
+	 * writes set off wakes no routine past one level.
+	 */
+	const fromRoutine = routineRunOf(
+		cause?.runId,
+		(payload as { lineage?: { rootRunId?: string } }).lineage?.rootRunId
+	)
 
 	/**
-	 * (a) The ledger — for every event but `turn-order-changed`.
+	 * (a) The ledger — for every event but `turn-order-changed` (and the
+	 * session moments, `OFF_LEDGER`).
 	 *
 	 * `session_changes` is what the built-ins DID, read by the next reply's
 	 * inlet so a pipeline knows the history it is about to read has moved
@@ -145,7 +175,7 @@ export async function emitSessionEvent(
 	 * The event still happens: plugins hear it, the push carries it, and
 	 * auto-advance reads it. It is the LEDGER it stays off.
 	 */
-	if (opts.event !== "core:event/turn-order-changed@1")
+	if (!OFF_LEDGER.has(opts.event))
 		await recordSessionChange(db, {
 			...payload,
 			runId: cause?.runId ?? null
@@ -245,19 +275,103 @@ export async function emitSessionEvent(
 
 	// (c) and (d) run after the writer returns, on the session's queue —
 	// unless the caller asked to wait (see `wait` above).
-	const rest = () => settleRest(db, opts, payload, cause, at)
+	const rest = () => settleRest(db, opts, payload, cause, at, fromRoutine)
+	/**
+	 * (f) 🚧 A line landed, so a turn may have ended — and with it a round
+	 * (PLAN-layering D7, lane 6): queued AFTER this event's own work, so the
+	 * turn ends once what the line set off has run (its recompute wrote the
+	 * order the round is read from). Emits `turn-ended` / `round-ended`
+	 * through this same emitter; see `routines/moments.ts`.
+	 */
+	const landedId = (payload as { messageId?: unknown }).messageId
+	const landed =
+		opts.event === sdkSessionEvents.messageCompleted && typeof landedId === "number"
+			? async () => {
+					const { noteLineLanded } = await import("$lib/server/pipelines/routines/moments")
+					await noteLineLanded(db, {
+						sessionId: opts.sessionId,
+						userId: opts.userId,
+						messageId: landedId,
+						...(cause ? { cause } : {}),
+						...(opts.lineage ? { lineage: opts.lineage, depthOnly: opts.depthOnly } : {}),
+						...(opts.io ? { io: opts.io } : {}),
+						fromRoutine: !!fromRoutine
+					})
+				}
+			: null
+	const queueLanded = () => {
+		if (!landed) return
+		if (opts.lineage) queueChild(opts.sessionId, opts.lineage.rootRunId, landed)
+		else enqueue(opts.sessionId, landed)
+	}
 	if (!opts.wait) {
 		if (opts.lineage)
 			queueChild(opts.sessionId, opts.lineage.rootRunId, rest)
 		else enqueue(opts.sessionId, rest)
+		queueLanded()
 		return { dispatched: null }
 	}
-	if (!opts.lineage) return await rest()
+	if (!opts.lineage) {
+		const done = await rest()
+		queueLanded()
+		return done
+	}
 	openBranch(opts.lineage.rootRunId)
 	try {
-		return await rest()
+		const done = await rest()
+		queueLanded()
+		return done
 	} finally {
 		closeBranch(opts.lineage.rootRunId)
+	}
+}
+
+/**
+ * 🚧 **Where a landed line is, and whose it is** (Lair rewrite L4,
+ * 2026-10-21): `message-completed` carries the row's `channel` (canonical)
+ * and its `speaker` — the participant reference that wrote it
+ * (`metadata.speaker`, else `character:<id>` for a character's reply or a
+ * persona's line, else `user:<id>` for a person as themselves) — so a
+ * routine's `onEvent` cadence may say which lines wake it (the Lair's
+ * scratchpad: the Castellan's lines on the Sanctum, `where`). Read off the
+ * row once, here, for every writer; a payload that already says them keeps
+ * its own.
+ */
+async function landedLineFacts(
+	db: Db,
+	given: { messageId?: unknown; channel?: unknown; speaker?: unknown }
+): Promise<{ channel?: string; speaker?: string }> {
+	if (typeof given.channel === "string" && typeof given.speaker === "string") return {}
+	const id = given.messageId
+	if (typeof id !== "number" || !Number.isInteger(id)) return {}
+	const [row] = await db
+		.select({
+			channel: schema.sessionMessages.channel,
+			role: schema.sessionMessages.role,
+			characterId: schema.sessionMessages.characterId,
+			personaId: schema.sessionMessages.personaId,
+			userId: schema.sessionMessages.userId,
+			metadata: schema.sessionMessages.metadata
+		})
+		.from(schema.sessionMessages)
+		.where(eq(schema.sessionMessages.id, id))
+		.limit(1)
+	if (!row) return {}
+	const { canonicalChannel } = await import("$lib/server/messages/channels")
+	const said = (row.metadata as { speaker?: unknown } | null)?.speaker
+	const speaker =
+		typeof said === "string" && said
+			? said
+			: row.characterId != null
+				? `character:${row.characterId}`
+				: row.personaId != null
+					? `character:${row.personaId}`
+					: row.role === "user" && row.userId != null
+						? `user:${row.userId}`
+						: undefined
+	return {
+		...(typeof given.channel === "string" ? {} : { channel: canonicalChannel(row.channel ?? "main") }),
+		...(typeof given.speaker === "string" || !speaker ? {} : { speaker })
 	}
 }
 
@@ -311,16 +425,49 @@ function enqueue(sessionId: number, work: () => Promise<unknown>): void {
 }
 
 /**
+ * 🚧 Is anything of this session's still on its event chain — queued or
+ * running? A probe, never a wait: the routine queue reads it (R13).
+ */
+export function sessionEventsPending(sessionId: number): boolean {
+	return queues.has(sessionId)
+}
+
+/** 🚧 Wait until this session's event chain is empty (and only it — no settle probes). */
+export async function sessionEventsIdle(sessionId: number): Promise<void> {
+	for (;;) {
+		const pending = queues.get(sessionId)
+		if (!pending) return
+		await pending
+	}
+}
+
+/**
+ * 🚧 More work a settle waits for, beside the event chains — the routine
+ * queue's drains (lane 6). A probe hands back the promises of what is in
+ * flight now, for one session or every one.
+ */
+type SettleProbe = (sessionId?: number) => Promise<unknown>[]
+const PROBES_KEY = Symbol.for("serene-pub.sessionEventSettleProbes")
+const settleProbes = ((globalThis as Record<symbol, unknown>)[PROBES_KEY] ??= new Set<SettleProbe>()) as Set<SettleProbe>
+
+/** 🚧 Register a settle probe (idempotent per function). */
+export function addSettleProbe(probe: SettleProbe): void {
+	settleProbes.add(probe)
+}
+
+/**
  * Wait until a session's queue (or every session's) is empty — work queued
- * by work already queued included. For tests and for a caller that must see
- * the settled state; production writers never wait on it.
+ * by work already queued included, and 🚧 the routines it set off (the
+ * settle probes). For tests and for a caller that must see the settled
+ * state; production writers never wait on it.
  */
 export async function settleSessionEvents(sessionId?: number): Promise<void> {
 	for (;;) {
-		const pending =
+		const pending: Promise<unknown>[] =
 			sessionId === undefined
 				? [...queues.values()]
-				: [queues.get(sessionId)].filter(Boolean)
+				: [queues.get(sessionId)].filter((p): p is Promise<void> => !!p)
+		for (const probe of settleProbes) pending.push(...probe(sessionId))
 		if (!pending.length) return
 		await Promise.all(pending)
 	}
@@ -339,7 +486,8 @@ async function settleRest(
 	},
 	payload: SessionEventPayload,
 	cause: EventCause | undefined,
-	at: number
+	at: number,
+	fromRoutine?: RoutineRunFact
 ): Promise<{ dispatched: SessionEventDispatch | null }> {
 	/**
 	 * (c) The core-internal listeners for `turn-order-changed` (§4.6, §4.7):
@@ -440,95 +588,59 @@ async function settleRest(
 	} catch (err) {
 		console.warn(`[sessionEvents] dispatch for ${opts.event} failed:`, err)
 	}
+
+	/**
+	 * (e) 🚧 The session's **routines** (PLAN-layering D2/D7, lane 6): each
+	 * whose cadence wakes on this event — or on the moment it is (a turn, a
+	 * round, a scene, a clock move) — is evaluated, after the event's own
+	 * registrations ran; one that comes due is queued (`routines/queue.ts`)
+	 * and waits until the session has no action or event run left (R13).
+	 * Nothing is read for a session with no routine that wakes on it.
+	 */
+	if (routinesEnabled())
+		try {
+			const { onSessionEvent } = await import("$lib/server/pipelines/routines/evaluate")
+			await onSessionEvent(db, {
+				sessionId: opts.sessionId,
+				event: opts.event,
+				payload,
+				at,
+				...(opts.io ? { io: opts.io } : {}),
+				...(fromRoutine ? { fromRoutine } : {})
+			})
+		} catch (err) {
+			console.warn(`[sessionEvents] the routines on ${opts.event} were not evaluated:`, err)
+		}
 	return { dispatched }
 }
 
 /**
- * The session's own binding for an event (plans/31 V2): the spec its
- * `pipeline_bindings` row at session scope names for `event`, when that spec
- * still answers (genre, event) on its inlet lock — else null, and the layers
- * below decide. Eligibility is re-checked at read for the reason every
- * binding's is: a row whose spec left the bucket falls through rather than
- * routing to something that cannot serve.
- */
-export async function sessionBoundEventSpec(
-	db: Db,
-	sessionId: number,
-	genreId: string,
-	event: string
-): Promise<string | null> {
-	const [row] = await db
-		.select({ specId: schema.pipelineBindings.specId })
-		.from(schema.pipelineBindings)
-		.where(
-			and(
-				eq(schema.pipelineBindings.scopeKind, "session"),
-				eq(schema.pipelineBindings.scopeId, sessionId),
-				eq(schema.pipelineBindings.genreId, genreId),
-				eq(schema.pipelineBindings.subject, event)
-			)
-		)
-		.limit(1)
-	if (!row) return null
-	const [spec] = await db
-		.select({
-			slug: schema.pipelineSpecs.slug,
-			activeVersionId: schema.pipelineSpecs.activeVersionId
-		})
-		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.id, row.specId))
-		.limit(1)
-	if (!spec?.activeVersionId) return null
-	const [version] = await db
-		.select({
-			status: schema.pipelineSpecVersions.status,
-			inputGenre: schema.pipelineSpecVersions.inputGenre,
-			inputEvent: schema.pipelineSpecVersions.inputEvent,
-			inputEvents: schema.pipelineSpecVersions.inputEvents
-		})
-		.from(schema.pipelineSpecVersions)
-		.where(eq(schema.pipelineSpecVersions.id, spec.activeVersionId))
-		.limit(1)
-	// A lock names one event or several (`input_events`, 0154): asked through
-	// the one helper the preset's resolution uses, so the two cannot disagree.
-	const answers = !!version && answersEvent(version as never, event)
-	if (!version || version.status !== "published" || version.inputGenre !== genreId || !answers)
-		return null
-	return spec.slug
-}
-
-/**
- * Which spec answers (genre, event) for this session, and how it was reached.
+ * Which spec answers an event for this session, and how it was reached.
  *
- * Three layers, in this order:
- *
- * 0. **The session's own binding** on the event id (plans/31 V2; closes the
- *    R-6 gap): a `pipeline_bindings` row at session scope whose `subject` is
- *    this event, when its spec still answers (genre, event) — the same
- *    eligibility `resolveSubjectVerdict` re-checks. A session is a work, not
- *    a preference (12 §2): its own choice beats its preset's.
- * 1. **The session's preset**, when a `sessionId` is given and its preset
- *    binds this event (24 §1). A preset that names a pipeline is an
- *    administrator answering the question directly, so it outranks the lock's
- *    own answer — which is the whole reason the binding exists. A binding the
- *    instance cannot resolve does NOT refuse the turn (ruled 2026-09-10): it comes
- *    back as `fallback`, carrying layer 2's answer plus everything a surface
- *    needs to say the substitution out loud. An upgrade or a plugin removal
- *    must never stop a session working without an admin change.
- * 2. **The input lock** — the one published spec whose active version declares
- *    (genre, event) as columns. Unchanged, and still the answer for every
- *    session on no preset and every caller with no session in hand (the seed
- *    backfill, the admin form's defaults).
+ * 🚧 **Registrations** (PLAN-layering D7, R24, R31, R33; 2026-10-20): the
+ * session's own rows over its preset's changes over the genre's defaults —
+ * the one resolver (`registrations/resolve.ts`). An event may carry several
+ * registrations; each runs in order when its `when` holds, and this names
+ * the first (`registrations` lists them all, `skipped` the ones whose `when`
+ * did not hold). A preset registration that no longer resolves falls back to
+ * the genre's defaults on the event and says so (`fallback`, ruled
+ * 2026-09-10). With no session in hand, the genre's defaults answer.
  *
  * Everything else still degrades to null, which is a normal state and not a
  * failure (the F29 posture).
  */
 export interface SessionEventResolution {
 	spec: string | null
+	/** The first registration's key — the one `spec` is. */
+	registrationKey?: string
+	/** Every registration that runs, in order (R24). */
+	registrations?: Array<{ spec: string; key: string }>
+	/** Registrations on the event whose `when` did not hold (R31). */
+	skipped?: Array<{ spec: string; key: string }>
 	/**
-	 * Present only when the session's preset bound this event to something
-	 * this instance cannot resolve. Its presence IS the fact the receipt, the
-	 * banner and the admin notice all state.
+	 * Present only when the session's preset registered something on this
+	 * event that this instance cannot resolve. Its presence IS the fact the
+	 * receipt, the banner and the admin notice all state.
 	 */
 	fallback?: PresetFallback
 }
@@ -540,32 +652,26 @@ export async function resolveSessionEventVerdict(
 	scope?: { sessionId?: number | null }
 ): Promise<SessionEventResolution> {
 	try {
-		// R-6 (ruled 2026-09-15; the event half built with plans/31 V2): a
-		// session's own choice resolves BEFORE its preset, on the same row
-		// and the same eligibility the reply's `resolveSubjectVerdict` reads
-		// for an event subject, so a reply and a dispatched event cannot
-		// route differently.
-		if (scope?.sessionId != null) {
-			const own = await sessionBoundEventSpec(
-				db,
-				scope.sessionId,
-				genreId,
-				event
-			)
-			if (own) return { spec: own }
+		// The session's registrations answer for the session's own genre; a
+		// caller naming another genre is answered by that genre's defaults.
+		if (scope?.sessionId != null && (await sessionGenreIs(db, scope.sessionId, genreId))) {
+			const on = await registrationsOn(db, scope.sessionId, event)
+			const said = on.fallback ? { fallback: on.fallback } : {}
+			const registrations = on.run.map((r) => ({ spec: r.pipeline, key: r.key }))
+			const skipped = on.skipped.map((r) => ({ spec: r.pipeline, key: r.key }))
+			if (registrations.length)
+				return {
+					spec: registrations[0]!.spec,
+					registrationKey: registrations[0]!.key,
+					registrations,
+					...(skipped.length ? { skipped } : {}),
+					...said
+				}
+			if (skipped.length) return { spec: null, skipped, ...said }
+			// Nothing registered on the event: core's default save still
+			// answers `message-offered` (owner ruling 2026-10-15).
+			return { spec: defaultEventSpec(event), ...said }
 		}
-		const verdict = await presetEventSpec(db, {
-			sessionId: scope?.sessionId,
-			genreId,
-			event
-		})
-		if (verdict.via === "preset") return { spec: verdict.spec }
-		if (verdict.via === "fallback") {
-			const { via: _via, spec, ...fallback } = verdict
-			return { spec, fallback }
-		}
-		// 🚧 Then the event's one default — core's save on `message-offered`,
-		// for a session on no preset (owner ruling 2026-10-15).
 		return {
 			spec: (await lockedEventSpec(db, genreId, event)) ?? defaultEventSpec(event)
 		}
@@ -574,6 +680,16 @@ export async function resolveSessionEventVerdict(
 		// which the caller answers with its own floor (the F29 posture).
 		return { spec: null }
 	}
+}
+
+/** Is this session in this genre? (A missing session is in none.) */
+async function sessionGenreIs(db: Db, sessionId: number, genreId: string): Promise<boolean> {
+	const [row] = await db
+		.select({ genreId: schema.sessions.genreId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	return !!row && (row.genreId ?? "core:genre/story") === genreId
 }
 
 /** The same answer, for the callers that only need the slug. */
@@ -588,6 +704,10 @@ export async function resolveSessionEventSpec(
 
 export interface SessionEventDispatch {
 	specSlug: string
+	/** 🚧 The registration this run answered for (D7). */
+	registrationKey?: string
+	/** 🚧 The event's other registrations' runs, in order, after this one (R24). */
+	others?: SessionEventDispatch[]
 	/** Absent only when the run is `paused`: it has not run, and nothing has been written. */
 	receipt?: Receipt
 	/** Set when the preset's own choice could not answer — see the resolution. */
@@ -649,16 +769,105 @@ export async function dispatchSessionEvent(
 		 * pipeline, not whatever answers now — receipted as a halt saying so.
 		 */
 		expectSpec?: string
+		/**
+		 * 🚧 Run only this registration of the event (its key) — a parked one
+		 * the owner let continue (E1c, R24): the event's other registrations
+		 * ran when it was first emitted and must not run again.
+		 */
+		onlyRegistration?: string
 	}
 ): Promise<SessionEventDispatch | null> {
 	const resolved = await resolveSessionEventVerdict(
 		db,
 		opts.genreId,
 		opts.event,
-		// The session is in hand here, so its preset gets to answer first.
+		// The session is in hand here, so its registrations answer.
 		{ sessionId: opts.sessionId }
 	)
-	if (opts.expectSpec && resolved.spec !== opts.expectSpec && opts.lineage) {
+	/**
+	 * 🚧 Every registration on the event runs, in order, each its own run
+	 * (R24). The first carries the caller's run id, signal and parked
+	 * relay — what the caller is waiting on; the rest run after it.
+	 */
+	const all = resolved.registrations?.length
+		? resolved.registrations
+		: resolved.spec
+			? [{ spec: resolved.spec, key: resolved.registrationKey ?? "" }]
+			: []
+	const list =
+		opts.onlyRegistration !== undefined
+			? all.filter((r) => (r.key ?? "") === opts.onlyRegistration)
+			: all
+	if (!list.length) {
+		// A required event whose registrations' conditions all failed runs
+		// nothing — and the receipt says so (R24).
+		if (resolved.skipped?.length)
+			await skippedReceipt(db, {
+				sessionId: opts.sessionId,
+				userId: opts.userId,
+				event: opts.event,
+				skipped: resolved.skipped,
+				lineage: opts.lineage
+			}).catch(() => undefined)
+		return await dispatchOne(db, opts, { spec: null, ...(resolved.fallback ? { fallback: resolved.fallback } : {}) })
+	}
+	const first = await dispatchOne(db, opts, {
+		spec: list[0]!.spec,
+		registrationKey: list[0]!.key || undefined,
+		...(resolved.fallback ? { fallback: resolved.fallback } : {})
+	})
+	const others: SessionEventDispatch[] = []
+	for (const next of list.slice(1)) {
+		try {
+			const d = await dispatchOne(
+				db,
+				{ ...opts, runId: undefined, expectSpec: undefined, onParked: undefined },
+				{ spec: next.spec, registrationKey: next.key || undefined }
+			)
+			if (d) others.push(d)
+		} catch (err) {
+			console.warn(`[sessionEvents] ${opts.event} → ${next.spec} failed:`, err)
+		}
+	}
+	return first && others.length ? { ...first, others } : first
+}
+
+/** One registration's run — the dispatch as it stood for one spec (expect-spec, caps, park, run). */
+async function dispatchOne(
+	db: Db,
+	opts: {
+		sessionId: number
+		userId: number
+		genreId: string
+		event: string
+		input: unknown
+		signal?: AbortSignal
+		/** The dispatching run's lineage plus one — a child run. Absent for a person-less root. */
+		lineage?: RunLineage
+		/** Hold `lineage` to the depth cap only (R65); see `admitDescendant`. */
+		depthOnly?: boolean
+		/** Where a child's rows are announced — the parent's socket server, when it had one. */
+		io?: SessionIo
+		runId?: string
+		/**
+		 * The parent's progress sink and status relay, handed down (U5d
+		 * review, S4): a child's frames ride the parent's card, so the person
+		 * who pressed sees the answer being made — its stage, its statuses.
+		 */
+		sink?: SpecRunRequest["sink"]
+		onStatus?: SpecRunRequest["onStatus"]
+		/** The parent's park relay, handed down — see `SpecRunRequest.onParked`. */
+		onParked?: SpecRunRequest["onParked"]
+		/**
+		 * The pipeline the session owner let run past a cap (E1c). If the
+		 * binding has changed since, nothing runs: the owner approved that
+		 * pipeline, not whatever answers now — receipted as a halt saying so.
+		 */
+		expectSpec?: string
+	}
+,
+	resolved: { spec: string | null; registrationKey?: string; fallback?: PresetFallback }
+): Promise<SessionEventDispatch | null> {	if (opts.expectSpec && resolved.spec !== opts.expectSpec && opts.lineage) {
 		const reason =
 			`the pipeline answering ${opts.event} changed while this waited at the cycle cap ` +
 			`(now ${resolved.spec ?? "none"}); the approved one did not run`
@@ -702,7 +911,8 @@ export async function dispatchSessionEvent(
 							sink: undefined,
 							onStatus: undefined,
 							onParked: undefined,
-							expectSpec: resolved.spec ?? undefined
+							expectSpec: resolved.spec ?? undefined,
+							onlyRegistration: resolved.registrationKey ?? ""
 						})
 					)
 			})
@@ -775,6 +985,13 @@ export async function dispatchSessionEvent(
 			...(opts.sink ? { sink: opts.sink } : {}),
 			...(opts.onStatus ? { onStatus: opts.onStatus } : {}),
 			...(opts.onParked ? { onParked: opts.onParked } : {}),
+			// 🚧 The registration that started it (D7, LS2) — an event run
+			// either way (LS2: every run records its family).
+			...(resolved.registrationKey
+				? { registration: { family: "event", key: resolved.registrationKey } }
+				: { triggerFamily: "event" }),
+			// 🚧 A session's creation waits first in the model queue (R26).
+			...(opts.event === sdkSessionEvents.sessionCreated ? { creation: true } : {}),
 			// A run reached through a substitution says so on its own receipt.
 			// The explain surface reads it from there, which is where every other
 			// "why did the turn do that" answer already lives.
@@ -789,6 +1006,7 @@ export async function dispatchSessionEvent(
 		return {
 			specSlug: resolved.spec,
 			receipt,
+			...(resolved.registrationKey ? { registrationKey: resolved.registrationKey } : {}),
 			...(resolved.fallback ? { fallback: resolved.fallback } : {})
 		}
 	} finally {
@@ -813,6 +1031,63 @@ export async function dispatchSessionEvent(
 				)
 		}
 	}
+}
+
+/**
+ * 🚧 R24: an event whose registrations' conditions all failed ran nothing,
+ * and the receipt says so — one row on the first skipped pipeline, a halt
+ * naming every registration that did not hold. No nodes ran.
+ */
+async function skippedReceipt(
+	db: Db,
+	opts: {
+		sessionId: number
+		userId: number
+		event: string
+		skipped: Array<{ spec: string; key: string }>
+		lineage?: RunLineage
+	}
+): Promise<void> {
+	const runId = uuidv4()
+	const reason =
+		`nothing ran on ${opts.event}: the condition of every registration on it was false now ` +
+		`(${opts.skipped.map((s) => s.key).join(", ")})`
+	if (opts.lineage) {
+		await refusalReceipt(db, {
+			runId,
+			specId: opts.skipped[0]!.spec,
+			sessionId: opts.sessionId,
+			userId: opts.userId,
+			lineage: opts.lineage,
+			reason
+		})
+		return
+	}
+	const { loadPublished } = await import("$lib/server/pipelines/boot/bootstrap")
+	const doc = await loadPublished(db, opts.skipped[0]!.spec)
+	const now = Date.now()
+	await saveReceipt(
+		db,
+		{
+			runId,
+			specId: opts.skipped[0]!.spec,
+			specVersion: doc?.version ?? "0.0.0",
+			schemaVersion: 1,
+			seed: "",
+			triggerSource: "event",
+			triggerFamily: "event",
+			registrationKey: opts.skipped[0]!.key,
+			depth: 0,
+			startedAt: now,
+			endedAt: now,
+			outcome: "halt",
+			haltReason: reason,
+			nodes: [],
+			emitted: [],
+			consumption: { tokens: 0, nodeExecutions: 0 }
+		} as Receipt,
+		{ sessionId: opts.sessionId, userId: opts.userId, artifacts: [] }
+	)
 }
 
 /**
@@ -844,6 +1119,8 @@ export async function refusalReceipt(
 		outcome?: "halt" | "cancelled"
 		/** Who stopped it — set with `outcome: 'cancelled'`. */
 		cancelledBy?: string
+		/** 🚧 LS2: the family of the run that did not run — an event's unless said (a fire is an action's). */
+		triggerFamily?: string
 	}
 ): Promise<Receipt> {
 	const { loadPublished } = await import(
@@ -858,6 +1135,7 @@ export async function refusalReceipt(
 		schemaVersion: 1,
 		seed: "",
 		triggerSource: "event",
+		triggerFamily: opts.triggerFamily ?? "event",
 		parentRunId: opts.lineage.parentRunId,
 		rootRunId: opts.lineage.rootRunId,
 		depth: opts.lineage.depth,

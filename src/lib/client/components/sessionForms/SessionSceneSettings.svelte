@@ -191,7 +191,7 @@
 					The scene reaches
 				</label>
 				<input
-					class="input w-20 rounded-[10px]"
+					class="input w-20 rounded-base"
 					type="number"
 					min="1"
 					step="1"
@@ -221,7 +221,7 @@
 					A pause in play of more than
 				</label>
 				<input
-					class="input w-20 rounded-[10px]"
+					class="input w-20 rounded-base"
 					type="number"
 					min="1"
 					step="1"

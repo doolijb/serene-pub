@@ -167,6 +167,109 @@
 	background-color: var(--color-surface-200-800);
 }
 
+/*
+ * PRIMARY AS INK (PLAN-0-5-polish-parity L4, 2026-10-24; STYLE-GUIDE §2.3,
+ * §2.6). Gold as TEXT — a link, "All 46", a tab's label, a pill's words — is
+ * `primary-500` on dark and the theme's light text stop on light, written once
+ * here instead of as a pair at every call site. Skeleton has no
+ * `text-primary-700-500` (its pairs sum to 1000), and `text-primary-700-300`
+ * moved the dark side too.
+ *
+ * The light stop is a theme hook, `--sp-primary-ink-light`, defaulting to
+ * `primary-700` (Skeleton's own link convention, right for a ladder whose 500
+ * sits near 60% lightness). Lamplight's ladder is lifted — its 500 is a dark-mode
+ * accent at oklch 80% — so its 700 measures 2.5:1 on `surface-50` and the theme
+ * sets the hook to `primary-950` (6.3:1). Resolved at the use site, not on
+ * `:root`, so a subtree that sets its own `data-theme` gets its own stop.
+ */
+@utility text-primary-ink {
+	color: light-dark(
+		var(--sp-primary-ink-light, var(--color-primary-700)),
+		var(--color-primary-500)
+	);
+}
+
+/*
+ * FILLED PRIMARY IN LIGHT MODE (L4, 2026-10-24; STYLE-GUIDE §2.6). The one
+ * filled primary is the same recipe in both modes unless the theme asks
+ * otherwise: `--sp-primary-fill-light` (and its ink) move the LIGHT fill only.
+ * Lamplight sets them to `primary-600` and its contrast stop, so the button
+ * stands off a light ground (1.96:1 against 1.55:1 at 500) while the dark ink
+ * on it stays at 8.9:1. Every other theme keeps Skeleton's 500. Merged into
+ * Skeleton's utility like `preset-tonal-surface` above.
+ */
+@utility preset-filled-primary-500 {
+	background-color: light-dark(
+		var(--sp-primary-fill-light, var(--color-primary-500)),
+		var(--color-primary-500)
+	);
+	color: light-dark(
+		var(--sp-primary-fill-ink-light, var(--color-primary-contrast-500)),
+		var(--color-primary-contrast-500)
+	);
+}
+
+/*
+ * PRESSED (★R2 "gold is for the next action", 2026-10-24; STYLE-GUIDE §2.4).
+ * A chip or toggle that is ON — a standing filter pick (All · Your turn ·
+ * Favorites), a toolbar icon button whose filter is in force, a chosen preset,
+ * a picked radio button — is a surface one step beyond the rest chip
+ * (`preset-tonal-surface`, 200-800), ink text, and a 2px primary bar along its
+ * foot: the tab's underline (§6.5) folded into the control, the row's 3px
+ * leading bar (`.sidebar-row-active`) turned on its side for a pill. Never a
+ * gold fill or a gold tint: tonal primary read as one more thing to press.
+ * `box-shadow` so the bar costs no layout and follows the radius.
+ */
+@utility preset-pressed {
+	background-color: var(--color-surface-300-700);
+	color: var(--color-surface-950-50);
+	box-shadow: inset 0 -2px 0 var(--color-primary-500);
+}
+
+/*
+ * THE CLOSED TYPE SCALE (L13, 2026-10-24; STYLE-GUIDE §3.2). The three rows of
+ * the scale Tailwind's defaults miss: 12 is `text-xs`, 14 `text-sm`, 16
+ * `text-base`, and these carry 11, 13 and 15 so no component writes a
+ * bracketed size again. Theme keys rather than hand `@utility` rules: Tailwind
+ * makes `text-meta` · `text-chip` · `text-lead` from them the way it makes
+ * `text-xs` (a `leading-*` beside one still wins), and the widget sheet reads
+ * the same `--text-chip` for its 13px controls, so one number moves both.
+ * Literal px, like the table: Skeleton's `text-xs`/`-sm` scale with the theme's
+ * `--text-scaling` (Lamplight 1.067, so they draw 12.8 and 14.9); these do not.
+ */
+@theme {
+	--text-meta: 11px;
+	--text-meta--line-height: 1.3;
+	--text-chip: 13px;
+	--text-chip--line-height: 1.45;
+	--text-lead: 15px;
+	--text-lead--line-height: 1.4;
+}
+
+/*
+ * MOTION AS CSS (L13, 2026-10-24; STYLE-GUIDE §8). The three durations of
+ * `MOTION` in src/lib/client/utils/motion.ts, as theme keys, so a Tailwind
+ * class (`duration-fast` · `duration-base` · `duration-slow`) or a component's
+ * `<style>` (`var(--transition-duration-fast)`) uses the same numbers a Svelte
+ * transition does. Keep the two in step. `static`: a component's own <style>
+ * is not scanned, so the variables are always emitted. The reduced-motion
+ * block below collapses them like any CSS transition.
+ */
+@theme static {
+	--transition-duration-fast: 130ms;
+	--transition-duration-base: 180ms;
+	--transition-duration-slow: 220ms;
+}
+
+/* Inline <code> keeps the 6px it had. Skeleton rounds it with --radius-base,
+   which Lamplight raised to the 10px row radius (L13, 2026-10-24); a 10px
+   corner on a 20px-tall word reads as a pill. */
+@layer base {
+	[data-theme="lamplight"] code {
+		border-radius: var(--radius-md);
+	}
+}
+
 .funnel-display {
 	font-family: "Funnel Display", sans-serif;
 	font-optical-sizing: auto;
@@ -230,7 +333,7 @@
 }
 
 .rendered-chat-message-content img {
-	@apply border-surface-300-700 max-h-48 max-w-full cursor-pointer rounded-lg border object-cover;
+	@apply border-surface-200-800 max-h-48 max-w-full cursor-pointer rounded-lg border object-cover;
 }
 
 .sidebar-list-item {
@@ -262,7 +365,7 @@
    when it became selected, and `inset` keeps the bar inside the rounded
    corners the card already has. */
 .sidebar-row-active {
-	@apply bg-surface-200 dark:bg-surface-800;
+	@apply bg-surface-200-800;
 	box-shadow: inset 3px 0 0 var(--color-primary-500);
 }
 
@@ -278,7 +381,7 @@
    site adds its own layout utilities beside this one, and an unlayered rule
    beats every Tailwind utility regardless of specificity. */
 @utility panel-card {
-	@apply border-surface-300 bg-surface-100 dark:border-surface-800 dark:bg-surface-900 rounded-[12px] border p-4;
+	@apply border-surface-200-800 bg-surface-100-900 rounded-container border p-4;
 }
 
 /* The card's edge on its own, for a bordered box that is not a section card
@@ -287,13 +390,13 @@
    colour is currentColor, which drew white bars across the Lorebooks view
    (notes 3/24, 2026-10-02). */
 @utility panel-edge {
-	@apply border-surface-300 dark:border-surface-800;
+	@apply border-surface-200-800;
 }
 
 /* A section inside a card, one step back toward the ground (950 on a 900
    card) — the replacement for a `border-t` separator between sections. */
 @utility panel-inset {
-	@apply border-surface-300 bg-surface-50 dark:border-surface-800 dark:bg-surface-950 rounded-[10px] border p-3;
+	@apply border-surface-200-800 bg-surface-50-950 rounded-base border p-3;
 }
 
 /* The action row that sits under a panel's back/title row. Write it as

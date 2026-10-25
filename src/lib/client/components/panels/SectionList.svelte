@@ -86,7 +86,7 @@
 	)
 
 	const rowBase =
-		"group focus-visible:outline-primary-500 mx-2 flex min-h-10 items-center gap-3 rounded-[10px] px-3 text-left transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 pointer-coarse:min-h-11"
+		"group focus-visible:outline-primary-500 mx-2 flex min-h-10 items-center gap-3 rounded-base px-3 text-left transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 pointer-coarse:min-h-11"
 
 	function rowClass(selected: boolean, disabled: boolean, twoLine: boolean) {
 		const state = disabled
@@ -148,7 +148,7 @@
 		<!-- The badge's tonal ground IS the selected and hovered row's
 		     ground, so there it steps one further to stay a pill. -->
 		<span
-			class="badge shrink-0 text-[11px] {selected
+			class="badge shrink-0 text-meta {selected
 				? 'bg-surface-300-700'
 				: 'preset-tonal-surface group-hover:bg-surface-300-700'}"
 		>

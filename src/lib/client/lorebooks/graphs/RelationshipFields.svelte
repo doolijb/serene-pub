@@ -37,6 +37,11 @@
 		whenOptions?: { value: string; label: string }[]
 		/** The edit form also asks why it stands where it does. */
 		withReason?: boolean
+		/**
+		 * 🚧 The relationship type comes from the rules (ties on the graph,
+		 * T2): shown, marked, and never typed here — it follows a held side.
+		 */
+		typeFromTheRules?: boolean
 		onChange: (next: T) => void
 	}
 
@@ -45,6 +50,7 @@
 		pairing,
 		whenOptions = [],
 		withReason = false,
+		typeFromTheRules = false,
 		onChange
 	}: Props = $props()
 
@@ -60,12 +66,20 @@
 </script>
 
 <div class="flex flex-col gap-2" data-relationship-fields>
+	{#if typeFromTheRules}
+		<p class="flex flex-wrap items-center gap-1.5 text-sm" data-type-from-the-rules>
+			<span class="text-surface-600-400 text-xs">Relationship type</span>
+			<span class="font-medium">{value.relationshipType}</span>
+			<span class="border-primary-500 text-primary-ink rounded-full border px-2 text-xs">from the rules</span>
+			<span class="text-surface-600-400 text-xs">read-only here</span>
+		</p>
+	{:else}
 	<div class="flex flex-wrap gap-1" role="group" aria-label="Suggested types">
 		{#each suggestions as suggestion (suggestion.type)}
 			<button
 				type="button"
 				class="chip {value.relationshipType === suggestion.type
-					? 'preset-tonal-primary'
+					? 'preset-pressed'
 					: 'preset-tonal-surface'}"
 				aria-pressed={value.relationshipType === suggestion.type}
 				onclick={() => onChange(pickSuggestion(value, suggestion, pairing))}
@@ -86,6 +100,7 @@
 		oninput={(e) =>
 			onChange({ ...value, relationshipType: e.currentTarget.value })}
 	/>
+	{/if}
 
 	{#if offersBothWays}
 		<Switch

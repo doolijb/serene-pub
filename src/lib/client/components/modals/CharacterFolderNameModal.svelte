@@ -78,7 +78,7 @@
 			class="fixed inset-0 z-50 flex items-center justify-center p-4"
 		>
 			<Dialog.Content
-				class="card bg-surface-100-900 border-surface-300-700 w-[min(95vw,420px)] border p-6 shadow-xl"
+				class="card bg-surface-100-900 border-surface-200-800 w-[min(95vw,420px)] border p-6 shadow-xl"
 				aria-labelledby="character-folder-name-title"
 			>
 				<form onsubmit={submit} class="flex flex-col gap-4">
@@ -107,7 +107,7 @@
 							autofocus
 							bind:value={name}
 							oninput={() => (localError = "")}
-							class="input preset-filled-surface-200-800 rounded-[10px]"
+							class="input preset-filled-surface-200-800 rounded-base"
 							placeholder="Villains"
 							aria-invalid={shownError ? "true" : undefined}
 							aria-describedby={shownError
@@ -118,7 +118,7 @@
 						{#if shownError}
 							<p
 								id="character-folder-name-error"
-								class="text-error-500 mt-1.5 text-xs"
+								class="text-error-600-400 mt-1.5 text-xs"
 								role="alert"
 							>
 								{shownError}

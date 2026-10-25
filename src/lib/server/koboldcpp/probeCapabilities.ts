@@ -79,7 +79,15 @@ export function flagsFrom(data: unknown): KoboldCppFlags {
  * `websearch` and `admin` are deliberately absent — they are server features,
  * not things a model turns one kind of data into.
  *
- * ## ⚠ Two of these answers are currently DISCARDED, and that is correct
+ * ## ⚠ Two of these answers are currently UNRESOLVED, and that is correct
+ *
+ * 🚧 O3 (2026-10-21): they are KEPT — in `probe.found`, and filed now that
+ * `…->audio` names a modality (`tts`) rather than none — but not resolved:
+ * KoboldCPP loads its speech and whisper models beside the text model and
+ * its listing names neither, so there is no model row to state them on, and
+ * no adapter here calls its speech or transcription routes (none is verified
+ * in this adapter's code, so none is guessed). What the probe DOES fill is
+ * the loaded text model's reads: `vision` makes it see (`listModels`).
  *
  * `text->audio` and `audio->text` are not declared in `ADAPTER_MANIFEST` for
  * either KoboldCPP type, because no adapter implements `synthesizeSpeech` or

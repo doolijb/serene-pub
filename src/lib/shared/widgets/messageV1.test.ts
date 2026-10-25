@@ -95,7 +95,11 @@ const stored: SelectSessionMessage = {
 	storyClockMonth: 3,
 	storyClockDay: 5,
 	storyClockHour: 22,
-	storyClockMinute: 30
+	storyClockMinute: 30,
+	// 🚧 The forward stack (RF fix 5): a live row is in no stack and carries
+	// nothing taken — host bookkeeping, never posted.
+	rewindOrdinal: null,
+	rewindTaken: null
 }
 
 describe("messages.v1 is the host's own rows", () => {

@@ -497,8 +497,11 @@ describe("conditions, spell slots and Rest (§7, §8, A4)", () => {
 		expect(held.length).toBe(1)
 		expect(((await value(sessionId, owner, "core:slot/crawl-spell-slots@1")) as any[])[0]).toMatchObject({ used: 1 })
 
-		const { DUNGEON_CRAWLER_REST_SPEC_ID } = await import("@serene-pub/core-catalog")
-		const rested = await fire(ownerId, sessionId, `${DUNGEON_CRAWLER_REST_SPEC_ID}#rest`, undefined, undefined, {})
+		// 🚧 S3 (lane G3, 2026-10-23): the rules' Rest (Vis Itineris offers one); the crawl's night follows on
+		// its event — the routine After a rest (routines run here only when a test turns them on).
+		const { setRoutinesEnabled } = await import("$lib/server/pipelines/routines/runs")
+		setRoutinesEnabled(true)
+		const rested = await fire(ownerId, sessionId, "core:spec/rules-action#rest", undefined, undefined, {}).finally(() => setRoutinesEnabled(false))
 		expect(rested?.error, rested?.error).toBeUndefined()
 		expect(((await value(sessionId, owner, "core:slot/crawl-conditions@1")) as any[] | null) ?? []).toEqual([])
 		expect(((await value(sessionId, owner, "core:slot/crawl-spell-slots@1")) as any[])[0]).toMatchObject({ used: 0 })

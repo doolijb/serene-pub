@@ -3,7 +3,7 @@
 	import ResizableSplit from "$lib/client/components/panels/ResizableSplit.svelte"
 	import { LORE_SPLIT_KEY } from "./layoutMode"
 	import { embeddingsStarred } from "$lib/shared/constants/embeddings"
-	import { getContext, onDestroy, onMount, tick } from "svelte"
+	import { getContext, onDestroy, onMount, tick, untrack } from "svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
@@ -56,6 +56,7 @@
 	import {
 		comparePoolBy,
 		filterPool,
+		libraryKey,
 		SCENE_KIND,
 		type PoolFilters,
 		type PoolItem
@@ -74,6 +75,15 @@
 	} from "./sections"
 	import EntryInspector from "./sections/EntryInspector.svelte"
 	import CastPoolRow from "./sections/CastPoolRow.svelte"
+	import LibraryPoolRow from "./sections/LibraryPoolRow.svelte"
+	import {
+		heldLibraryPieces,
+		libraryOffered,
+		libraryPoolItem,
+		libraryRowsFor,
+		librarySource,
+		librarySourceLine
+	} from "./libraryRows"
 	import type { CastPoolItem } from "./castPool"
 	import { newPlaceEntry } from "./places/placeGraph"
 	import { kindLabel } from "./sections/kinds"
@@ -380,6 +390,31 @@
 		rowMenu: undefined
 	})
 
+	/**
+	 * 🚧 The book's rules library under this list (§C, ruling 10): the
+	 * pieces of the list's kinds the book holds no copy of on the line being
+	 * read (a copy stands in its piece's place). Always in the pool, listed
+	 * only while the ‹Rules› library chip is on (`filterPool`), and never
+	 * the book's: not counted, filed, queued or jumped to (`bookPool` never
+	 * holds them).
+	 */
+	let library = $derived(book.library)
+	let libraryKinds = $derived(new Set(entryDoors.map((d) => d.kind!)))
+	let libraryRows = $derived(
+		libraryRowsFor(library, libraryKinds, heldLibraryPieces(resolvedByKind))
+	)
+	/** The chip's word ("Vis Itineris library"), or null where nothing is offered. */
+	let libraryName = $derived(
+		libraryOffered(library, libraryKinds) ? library!.name : null
+	)
+
+	/** How a library piece's row is drawn: its badge, and no row menu. */
+	let libraryRowDoor = (door: SectionDescriptor): SectionDescriptor => ({
+		...door,
+		row: LibraryPoolRow,
+		rowMenu: undefined
+	})
+
 	let poolItems = $derived.by(() => {
 		const out: PoolItem[] = []
 		for (const door of poolDoors) {
@@ -391,6 +426,7 @@
 		}
 		// Everything is every kind, the people too (note 12).
 		if (!descriptor.kind) out.push(...castItems)
+		for (const row of libraryRows) out.push(libraryPoolItem(row))
 		return out
 	})
 
@@ -414,6 +450,12 @@
 		// A cast row's source is the row itself: it lists, and opens Cast.
 		if (!descriptor.kind)
 			for (const item of castItems) map.set(item.key, { ...item })
+		// A library piece's source reads as the entry a copy of it would be.
+		for (const row of libraryRows)
+			map.set(
+				libraryKey(row.typeId, row.id),
+				librarySource(row, lorebookId)
+			)
 		return map
 	})
 
@@ -463,21 +505,45 @@
 		)
 	)
 	let facets = $derived(facetCounts(poolItems, readIn))
-	let summary = $derived(
-		poolSummary(
-			visibleItems.length,
+	/** What the list can list: the book's rows, and the library's while its chip is on. */
+	let listedCount = $derived(
+		facets.total + (filters.library ? facets.library : 0)
+	)
+	let summary = $derived.by(() => {
+		// The book's rows and the library's pieces are counted apart: a
+		// piece is listed here, never held.
+		const shown = visibleItems.filter((i) => !i.fromLibrary).length
+		const pieces = visibleItems.length - shown
+		return poolSummary(
+			shown,
 			readInKeys
 				? visibleItems.filter((i) => readInKeys.has(i.key)).length
+				: null,
+			pieces && library?.name
+				? { count: pieces, name: library.name }
 				: null
 		)
-	)
+	})
+
+	/**
+	 * 🚧 The library piece open in the editor, read only, by its key. Not an
+	 * address: a piece is the rules', and the route names the book's rows.
+	 * Any row the route opens takes its place.
+	 */
+	let libraryOpenKey = $state<string | null>(null)
+	$effect(() => {
+		if (route.entryId != null || route.sceneId != null || !filters.library)
+			untrack(() => {
+				if (libraryOpenKey !== null) libraryOpenKey = null
+			})
+	})
 
 	let selectedKey = $derived(
 		route.sceneId != null
 			? `scene#${route.sceneId}`
 			: route.entryId != null
 				? `entry#${route.entryId}`
-				: null
+				: libraryOpenKey
 	)
 	let selectedItem = $derived(
 		selectedKey ? poolItems.find((i) => i.key === selectedKey) : undefined
@@ -485,6 +551,15 @@
 	let selectedSource = $derived(
 		selectedKey ? sourceByKey.get(selectedKey) : undefined
 	)
+	/** The library piece the editor is reading, when it is reading one. */
+	let libraryOpenRow = $derived(
+		selectedItem?.fromLibrary
+			? libraryRows.find(
+					(r) => libraryKey(r.typeId, r.id) === selectedItem!.key
+				)
+			: undefined
+	)
+	let libraryOpen = $derived(!!libraryOpenRow)
 	/** The door that owns whatever the editor is showing. */
 	let activeDoor = $derived(
 		creatingDoor ?? doorForKey(selectedKey, poolItems, descriptor)
@@ -788,6 +863,17 @@
 			})
 			return
 		}
+		// A library piece opens to read, beside the route: the row the
+		// route held closes first (its guard asks about unsaved changes).
+		if (item.fromLibrary) {
+			if (route.entryId != null || route.sceneId != null) {
+				await loreRoute.navigate({ type: "back" })
+				const now = loreRoute.route
+				if (now.entryId != null || now.sceneId != null) return
+			}
+			libraryOpenKey = item.key
+			return
+		}
 		void loreRoute.navigate({
 			type: "openEntry",
 			entryId:
@@ -803,6 +889,7 @@
 		newMenuOpen = false
 		if (!(await loreRoute.confirmLeave())) return
 		discardDraft()
+		libraryOpenKey = null
 		creatingDoor = door
 		draftKey = "new"
 		draft = door.newDraft(lorebookId)
@@ -812,8 +899,56 @@
 	async function closeEditor() {
 		if (!(await loreRoute.confirmLeave())) return
 		const wasCreating = creatingDoor !== null
+		const wasLibrary = libraryOpen
 		discardDraft()
-		if (!wasCreating) void loreRoute.navigate({ type: "back" })
+		if (wasLibrary) libraryOpenKey = null
+		else if (!wasCreating) void loreRoute.navigate({ type: "back" })
+	}
+
+	/** Whether **Edit a copy** is on its way to the server. */
+	let copying = $state(false)
+
+	/**
+	 * 🚧 **Edit a copy** (§C, ruling 10: "On edit, they are imported"): the
+	 * server copies the open library piece into the book, on the line being
+	 * read, as an entry of its list (`entries:copyFromLibrary`, which answers
+	 * with the copy the line already holds when there is one), and the
+	 * editor moves to the copy — the book's own from then on. A refusal is
+	 * said by Layout's `:error` catch-all; a reply that never came, here.
+	 */
+	async function editACopy() {
+		const row = libraryOpenRow
+		if (!row || readOnly || copying) return
+		copying = true
+		try {
+			const res = await awaitReply({
+				socket,
+				event: "entries:copyFromLibrary",
+				params: {
+					lorebookId,
+					branchId: route.branch ?? null,
+					typeId: row.typeId,
+					pieceId: row.id
+				},
+				replyKey: interestKey("entries:copyFromLibrary", lorebookId),
+				errorEvent: "entries:copyFromLibrary:error",
+				fallbackError: "The copy could not be made.",
+				match: (data) =>
+					data.entry?.lorebookId === lorebookId &&
+					data.entry.typeId === row.typeId &&
+					data.entry.derivedFrom?.piece === row.id
+			})
+			libraryOpenKey = null
+			discardDraft()
+			await loreRoute.navigate({
+				type: "openEntry",
+				entryId: res.entry.id
+			})
+		} catch (err) {
+			reportUnanswered(err, "The copy could not be made")
+		} finally {
+			copying = false
+		}
 	}
 
 	/**
@@ -1310,7 +1445,7 @@
 	})
 
 	$effect(() => {
-		hasUnsavedChanges = dirty && !readOnly
+		hasUnsavedChanges = dirty && !readOnly && !libraryOpen
 	})
 
 	// The activity sidebar asks for a review by naming the compile, not the
@@ -1554,8 +1689,13 @@
 			descriptorOf={(item) =>
 				item.kind === CAST_KIND
 					? castRowDoor
-					: (descriptorForKind(item.kind) ?? descriptor)}
+					: item.fromLibrary
+						? libraryRowDoor(
+								descriptorForKind(item.kind) ?? descriptor
+							)
+						: (descriptorForKind(item.kind) ?? descriptor)}
 			{descriptor}
+			{libraryName}
 			{bindings}
 			{vectorizationEnabled}
 			{selectedKey}
@@ -1688,11 +1828,11 @@
 	mark: string,
 	toggle: () => void
 )}
-	<!-- An entry mark as a toggle: tonal primary with `aria-pressed` while
-	     ON (STYLE-GUIDE §6.3), the check saying it without colour. -->
+	<!-- An entry mark as a toggle: `preset-pressed` with `aria-pressed` while
+	     ON (STYLE-GUIDE §2.4), the check saying it without colour. -->
 	<button
 		class="btn btn-sm w-full justify-start {on
-			? 'preset-tonal-primary'
+			? 'preset-pressed'
 			: 'preset-tonal-surface'}"
 		type="button"
 		aria-pressed={on}
@@ -1701,7 +1841,7 @@
 	>
 		<Icon size={14} aria-hidden="true" />
 		<span>{label}</span>
-		<span class="ml-auto text-[11px] font-normal opacity-75">{hint}</span>
+		<span class="ml-auto text-meta font-normal opacity-75">{hint}</span>
 		<Icons.Check
 			size={14}
 			class="shrink-0 {on ? '' : 'invisible'}"
@@ -1723,8 +1863,8 @@
 	>
 		<Popover.Trigger
 			class="btn btn-sm preset-tonal-surface shrink-0 p-2"
-			title="More options"
-			aria-label="More options for this entry"
+			title="More actions"
+			aria-label="More actions for this entry"
 		>
 			<Icons.Ellipsis size={16} aria-hidden="true" />
 		</Popover.Trigger>
@@ -1837,7 +1977,7 @@
 								{dated} and reads from then on.
 							</p>
 						</div>
-						<hr class="border-surface-300-700" />
+						<hr class="border-surface-200-800" />
 						<div class="flex flex-col gap-2">
 							<p
 								class="text-surface-700-300 text-xs leading-relaxed"
@@ -1890,15 +2030,33 @@
 					class="text-surface-600-400 shrink-0 text-xs"
 					data-lore-save-state
 				>
-					{readOnly
-						? "Read only"
-						: isNew
-							? "Not saved yet"
-							: dirty
-								? "Unsaved changes"
-								: "Saved"}
+					{libraryOpen
+						? (library?.name ?? "Read only")
+						: readOnly
+							? "Read only"
+							: isNew
+								? "Not saved yet"
+								: dirty
+									? "Unsaved changes"
+									: "Saved"}
 				</span>
-				{#if readOnly}
+				{#if libraryOpen}
+					<!-- A library piece reads; its one action makes it the
+					     book's own (ruling 10). A reader of a shared book
+					     reads it with no action. -->
+					{#if !readOnly}
+						<button
+							class="btn btn-sm preset-filled-primary-500 shrink-0"
+							type="button"
+							data-library-edit-copy
+							onclick={editACopy}
+							disabled={copying}
+						>
+							<Icons.CopyPlus size={16} aria-hidden="true" />
+							<span>Edit a copy</span>
+						</button>
+					{/if}
+				{:else if readOnly}
 					<!-- Shared with the reader: no save, no marks. -->
 				{:else if canAmend}
 					{@render amendSave()}
@@ -1916,7 +2074,7 @@
 						</span>
 					</button>
 				{/if}
-				{#if !readOnly && activeDoor.store === "entries" && (isNew || selectedSource)}
+				{#if !readOnly && !libraryOpen && activeDoor.store === "entries" && (isNew || selectedSource)}
 					{@render editorMenu()}
 				{/if}
 				{#if queue && !isNew && mode === "compact"}
@@ -1935,10 +2093,28 @@
 			</div>
 			<!-- A shared book's fields read, never write: one `disabled`
 			     fieldset stills every control the editor draws. -->
+			{#if libraryOpen && libraryOpenRow}
+				{@const sourceLine = librarySourceLine(libraryOpenRow, library)}
+				<!-- Where the piece comes from, and what Edit a copy does:
+				     said once, above the fields it is about. -->
+				<div
+					class="text-surface-600-400 flex flex-col gap-1 text-xs"
+					data-library-reading
+				>
+					<p>
+						{readOnly
+							? `From the ${library?.name ?? "rules library"}.`
+							: `From the ${library?.name ?? "rules library"}. Edit a copy to make it this book's own entry; the library keeps its original.`}
+					</p>
+					{#if sourceLine}
+						<p data-library-source>{sourceLine}</p>
+					{/if}
+				</div>
+			{/if}
 			<fieldset
 				class="flex min-w-0 flex-col gap-4"
-				disabled={readOnly}
-				data-lore-read-only={readOnly ? "" : undefined}
+				disabled={readOnly || libraryOpen}
+				data-lore-read-only={readOnly || libraryOpen ? "" : undefined}
 			>
 				<Editor
 					bind:draft
@@ -1954,7 +2130,7 @@
 			<!-- What the newest run did with this row, under the fields and
 			     above the account of why. A row nothing has saved has no run to
 			     report on. -->
-			{#if !isNew && selectedItem && activeDoor.store === "entries"}
+			{#if !isNew && selectedItem && !libraryOpen && activeDoor.store === "entries"}
 				<AmendmentList
 					{lorebookId}
 					amendments={amendmentsFor?.(selectedItem.id) ?? []}
@@ -1972,7 +2148,7 @@
 			<!-- Level two, and the last one. A row being created has no
 			     inspector: every tab of it reports on a stored row, so a
 			     verdict about text nothing has saved would be about nothing. -->
-			{#if !isNew && selectedItem && selectedSource}
+			{#if !isNew && selectedItem && selectedSource && !libraryOpen}
 				<EntryInspector
 					{lorebookId}
 					item={selectedItem}
@@ -1981,6 +2157,7 @@
 					pool={bookPool}
 					links={bookLinks}
 					showBody={mode === "desk"}
+					mayEdit={!readOnly}
 					onOpenItem={select}
 				/>
 			{/if}
@@ -2005,11 +2182,11 @@
 				{:else}
 					<!-- Empty copy is about an empty book, so a pool with rows
 					     in it is told what to do instead. -->
-					{readOnly && poolItems.length > 0
+					{readOnly && listedCount > 0
 						? "Pick an entry to read it."
 						: editorPlaceholder({
 								descriptor,
-								poolEmpty: poolItems.length === 0,
+								poolEmpty: listedCount === 0,
 								canCreate: creatableDoors.length > 0
 							})}
 				{/if}
@@ -2044,6 +2221,7 @@
 				door={activeDoor}
 				pool={bookPool}
 				links={bookLinks}
+				mayEdit={!readOnly}
 				onOpenItem={select}
 			/>
 		{:else if !poolReady}

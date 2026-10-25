@@ -44,7 +44,7 @@ import * as schema from "$lib/server/db/schema"
 import { ComposedError } from "$lib/server/connections/visibility"
 import { persistGenerationErrorRow } from "./generationStatus"
 import { turnDirectionText } from "$lib/server/sessions/turnDirection"
-import { spineProviders } from "$lib/server/pipelines/runtime/specShape"
+import { previewProviders, providerSteps } from "$lib/server/pipelines/runtime/specShape"
 import { announceStateChanges } from "$lib/server/state/announce"
 
 /** 🚧 The steps that write a sheet: their settling is announced mid-run (Q1-3). */
@@ -371,6 +371,24 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 		if (!modeCheck.available) return await refuse(modeCheck.reason!)
 	}
 
+	/**
+	 * 🚧 **Replace on write** (RF fix 5, owner ruling 2026-10-23): a turn,
+	 * a regenerate, a swipe's new alternative or an extend while rewound
+	 * deletes the forward stack for good, before the run reads anything —
+	 * and a verb on a rewound row (one Back took out of the history) is
+	 * refused: it is in no history to write over.
+	 */
+	if (existing?.rewindOrdinal != null)
+		return {
+			ok: false,
+			error: "That message was taken back with Back. Press Forward to bring it back first.",
+			shown: false
+		}
+	{
+		const { discardForwardStack } = await import("$lib/server/messages/store")
+		await discardForwardStack(db, sessionId)
+	}
+
 	const route = await routeFor(turn, existing)
 
 	/**
@@ -397,9 +415,15 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 		{ sessionId }
 	)
 	const specId = routed.spec ?? route.floorSpecId
-	const runMeta = routed.fallback
-		? { meta: { preset: { via: "fallback" as const, ...routed.fallback } } }
-		: {}
+	const runMeta = {
+		...(routed.fallback
+			? { meta: { preset: { via: "fallback" as const, ...routed.fallback } } }
+			: {}),
+		// 🚧 The registration that answers (D7, LS2) — on the receipt and its row.
+		...(routed.spec && routed.registrationKey
+			? { registration: { family: "event", key: routed.registrationKey } }
+			: {})
+	}
 
 	const { loadPublished } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
@@ -430,7 +454,7 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 	)
 	void pushSessionActions(socket.io, sessionId, { starting: true })
 
-	let declaredSteps = doc ? spineProviders(doc).length : 0
+	let declaredSteps = doc ? providerSteps(doc) : 0
 	let stepsSeen = 0
 	/** 🚧 One `state:changed` per burst of writing steps, a beat after the last (Q1-3). */
 	let announceTimer: ReturnType<typeof setTimeout> | null = null
@@ -445,7 +469,7 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 				.catch((e) => console.warn("[runReply] the sheet's move could not be announced:", e))
 		}, 250)
 	}
-	const spine = new Set(doc ? spineProviders(doc).map((n) => n.key) : [])
+	const spine = new Set(doc ? previewProviders(doc).map((n) => n.key) : [])
 	// The channel the turn is on — a reply always has one (`main` unsaid) —
 	// so a channel-pinned conversation's progress card shows its own runs.
 	const runChannel = channel || "main"

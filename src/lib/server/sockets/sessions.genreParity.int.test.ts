@@ -108,9 +108,12 @@ beforeAll(async () => {
 		.returning()
 	const { setCapabilityDefault } = await import("$lib/server/connections/capabilityDefaults")
 	await setCapabilityDefault(db, "text->text", { connectionId: textConn!.id, connectionModelId: modelId, samplingConfigId: sampling!.id })
+	// The routine runtime (lane 6): a Living turn's reckoning runs after it.
+	;(await import("$lib/server/pipelines/routines/runs")).setRoutinesEnabled(true)
 }, 180_000)
 
 afterAll(async () => {
+	;(await import("$lib/server/pipelines/routines/runs")).setRoutinesEnabled(false)
 	await fs.rm(dataDir, { recursive: true, force: true }).catch(() => {})
 })
 
@@ -195,6 +198,26 @@ describe("genre parity (ruled 2026-10-19)", () => {
 		expect(t.structural).toEqual([])
 	}, 120_000)
 
+	// 🚧 Lane 5b: the card's number is DERIVED from what the preset registers
+	// (the reply's model calls plus each per-turn routine not Off) — and a
+	// real turn measures all of it: since lane 6 the routine's share runs on
+	// the routine queue after the reply.
+	it("the derived calls per turn agree with a real turn: Minimal and Living alike", async () => {
+		const { presetDerivedNumbers } = await import("$lib/server/pipelines/registrations/derived")
+		const minimal = await createOn("parity-derived-minimal", "core-story-minimal", [await aCharacter("Ash")])
+		const living = await createOn("parity-derived-living", "core-story-living", [await aCharacter("Bryn")])
+		const derived = await presetDerivedNumbers(db as any, [minimal.preset.id, living.preset.id])
+		const m = derived.get(minimal.preset.id)!
+		const l = derived.get(living.preset.id)!
+		expect(m).toMatchObject({ callsPerTurn: 1, replyCalls: 1, routineCalls: 0 })
+		expect(l).toMatchObject({ callsPerTurn: 2, replyCalls: 1, routineCalls: 1 })
+		expect(l.perTurnRoutines).toEqual([expect.stringContaining("story-reckoning")])
+		expect((await measureTurn(minimal.sessionId)).calls).toBe(m.callsPerTurn)
+		expect((await measureTurn(living.sessionId)).calls).toBe(l.callsPerTurn)
+	}, 120_000)
+
+	// The reckoning is a routine (after each round, lane 3), run by the
+	// routine queue once the reply has settled (lane 6).
 	it("Story · Living: the reply plus one reckoning call, as the card says", async () => {
 		const { sessionId, preset } = await createOn("parity-story-living", "core-story-living", [await aCharacter("Maren")])
 		const t = await measureTurn(sessionId)

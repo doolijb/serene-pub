@@ -36,6 +36,8 @@ import { statTrailReplyKey } from "$lib/client/components/sessionPage/requests/s
 import { backdropReplyKey } from "$lib/client/components/sessionPage/requests/setBackdrop"
 import { ownerFaceReplyKey } from "$lib/client/components/sessionPage/requests/setOwnerFace"
 import { giveReplyKey } from "$lib/client/components/sessionPage/requests/givePiece"
+import { tieShownReplyKey } from "$lib/client/components/sessionPage/requests/setTieShown"
+import { attributeCarryReplyKey } from "$lib/client/components/sessionPage/requests/setAttributeCarry"
 import type { HistoryRow } from "$lib/client/components/sessionPage/requests/historyEntries"
 import { awaitReply } from "$lib/client/utils/awaitReply"
 import { interestKey } from "$lib/shared/sockets/interest"
@@ -305,6 +307,36 @@ export function createPageAsks(d: PageAsksDeps) {
 		timeout: "nothing was given: the server did not answer"
 	})
 
+	/** 🚧 A tie side shown or hidden (ties on the graph, screen 2), settled on its own reply. */
+	const tieShownAsks = createPendingAsks<Sockets.State.ShowTieSide.Params, Sockets.State.ShowTieSide.Response>({
+		emit: (ask) => socket.emit("state:showTieSide", ask),
+		listen: (onReply) => {
+			const refused = declareInterest<"state:showTieSide:error">("state:showTieSide:error", onReply)
+			const done = declareInterest<"state:showTieSide">("state:showTieSide", onReply)
+			return () => {
+				done()
+				refused()
+			}
+		},
+		keyOf: tieShownReplyKey,
+		timeout: "nothing was shown: the server did not answer"
+	})
+
+	/** 🚧 An optional attribute carried or not (RF fix 8), settled on its own reply. */
+	const carryAsks = createPendingAsks<Sockets.State.SetCarry.Params, Sockets.State.SetCarry.Response & { error?: string }>({
+		emit: (ask) => socket.emit("state:setCarry", ask),
+		listen: (onReply) => {
+			const refused = declareInterest<"state:setCarry:error">("state:setCarry:error", onReply as never)
+			const done = declareInterest<"state:setCarry">("state:setCarry", onReply)
+			return () => {
+				done()
+				refused()
+			}
+		},
+		keyOf: attributeCarryReplyKey,
+		timeout: "nothing changed: the server did not answer"
+	})
+
 	/**
 	 * The book's history entries (`entries:list`), its lines
 	 * (`lorebooks:lines`) and its next date (`entries:iterateNext`) — the
@@ -565,6 +597,36 @@ export function createPageAsks(d: PageAsksDeps) {
 			})
 		})
 
+	/**
+	 * 🚧 What the session's routines did (`routine-log`, A7; lane 7): one
+	 * `sessions:routineLog` for this session, settled on the first reply for
+	 * it. The log names no token, and one widget asks it at a time
+	 * (`maxInstances: 1`), so the session id is the filter.
+	 */
+	const readRoutineLog = (
+		ask: Sockets.Sessions.RoutineLog.Params
+	): Promise<Sockets.Sessions.RoutineLog.Response> =>
+		new Promise((resolve, reject) => {
+			let done = false
+			const finish = (fn: () => void) => {
+				if (done) return
+				done = true
+				release()
+				clearTimeout(timer)
+				fn()
+			}
+			// BARE: `sessions:routineLog` is not a scoped event; the session id is the filter.
+			const release = declareInterest<"sessions:routineLog">("sessions:routineLog", (res) => {
+				if (res?.sessionId !== ask.sessionId) return
+				finish(() => resolve(res))
+			})
+			const timer = setTimeout(
+				() => finish(() => reject(new Error("the server did not answer"))),
+				15_000
+			)
+			socket.emit("sessions:routineLog", ask)
+		})
+
 	// A widget's `set-sprite-set` owns its reply, refusal included (R77).
 	d.inbox.on("sessions:setSpriteSet", (msg) =>
 		settleSpriteSetReply(msg, spriteSetAsks, d.sessionId(), (title) =>
@@ -586,9 +648,12 @@ export function createPageAsks(d: PageAsksDeps) {
 		readSessionPlaces: tokenedAsk(placesAsks, "widget-places"),
 		readCharacterGallery,
 		readStatTrail: tokenedAsk(statTrailAsks, "widget-stat-trail"),
+		readRoutineLog,
 		writeBackdrop: tokenedAsk(backdropAsks, "widget-set-backdrop"),
 		writeOwnerFace: tokenedAsk(ownerFaceAsks, "widget-set-owner-face"),
 		writeGive: tokenedAsk(giveAsks, "widget-give-piece"),
+		writeTieShown: tokenedAsk(tieShownAsks, "widget-set-tie-shown"),
+		writeCarry: tokenedAsk(carryAsks, "widget-set-attribute-carry"),
 		openScene,
 		closeScene,
 		moveSceneBoundary,
@@ -610,6 +675,8 @@ export function createPageAsks(d: PageAsksDeps) {
 			backdropAsks.drop(why)
 			ownerFaceAsks.drop(why)
 			giveAsks.drop(why)
+			tieShownAsks.drop(why)
+			carryAsks.drop(why)
 		}
 	}
 }

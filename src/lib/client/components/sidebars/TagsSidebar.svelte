@@ -498,9 +498,13 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col" use:vm.observe>
+	<!-- `listFills` (L7, 2026-10-24): nothing open, the tag cloud sits
+	     centred at the list's own 560px instead of beside an empty pane. -->
 	<PanelSplit
 		mode={vm.mode}
 		hasDetail={isCreating || isEditing || selectedTag != null}
+		listFills
+		fillWidth="list"
 		emptyMessage="Pick a tag to see what it is on."
 	>
 		{#snippet detail()}
@@ -576,7 +580,7 @@
 							{#if validationErrors.name}
 								<p
 									id="name-error"
-									class="text-error-500 mt-1 text-sm"
+									class="text-error-600-400 mt-1 text-sm"
 									role="alert"
 								>
 									{validationErrors.name}
@@ -686,7 +690,7 @@
 							{#if editValidationErrors.name}
 								<p
 									id="edit-name-error"
-									class="text-error-500 mt-1 text-sm"
+									class="text-error-600-400 mt-1 text-sm"
 									role="alert"
 								>
 									{editValidationErrors.name}
@@ -908,7 +912,7 @@
 						<button
 							type="button"
 							class="chip {tag.colorPreset ||
-								'preset-filled-primary-500'} text-sm transition-all duration-200 {isSelected
+								'preset-filled-primary-500'} text-sm transition-all duration-base {isSelected
 								? 'ring-primary-500 ring-offset-surface-50-950 ring-2 ring-offset-2'
 								: ''}"
 							onclick={() => handleTagClick(tag)}

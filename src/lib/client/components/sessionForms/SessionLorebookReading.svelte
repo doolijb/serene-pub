@@ -270,7 +270,7 @@
 				<label class="flex flex-col gap-1 text-xs">
 					<span class="text-surface-600-400">Year</span>
 					<input
-						class="input rounded-[10px]"
+						class="input rounded-base"
 						type="number"
 						step="1"
 						value={year}
@@ -284,7 +284,7 @@
 				<label class="flex flex-col gap-1 text-xs">
 					<span class="text-surface-600-400">Month</span>
 					<input
-						class="input rounded-[10px]"
+						class="input rounded-base"
 						type="number"
 						min="1"
 						step="1"
@@ -299,7 +299,7 @@
 				<label class="flex flex-col gap-1 text-xs">
 					<span class="text-surface-600-400">Day</span>
 					<input
-						class="input rounded-[10px]"
+						class="input rounded-base"
 						type="number"
 						min="1"
 						step="1"
@@ -315,7 +315,7 @@
 				<label class="flex flex-col gap-1 text-xs">
 					<span class="text-surface-600-400">Hour</span>
 					<input
-						class="input rounded-[10px]"
+						class="input rounded-base"
 						type="number"
 						min="0"
 						max="23"
@@ -332,7 +332,7 @@
 				<label class="flex flex-col gap-1 text-xs">
 					<span class="text-surface-600-400">Minute</span>
 					<input
-						class="input rounded-[10px]"
+						class="input rounded-base"
 						type="number"
 						min="0"
 						max="59"
@@ -360,7 +360,7 @@
 				<label class="flex flex-col gap-1 text-xs">
 					<span class="text-surface-600-400">Step by</span>
 					<input
-						class="input w-20 rounded-[10px]"
+						class="input w-20 rounded-base"
 						type="number"
 						min="1"
 						step="1"
@@ -395,7 +395,7 @@
 				</button>
 			</div>
 			{#if stepProblem}
-				<p class="text-error-700-300 text-xs" role="alert">{stepProblem}</p>
+				<p class="text-error-600-400 text-xs" role="alert">{stepProblem}</p>
 			{/if}
 		</fieldset>
 	{/if}

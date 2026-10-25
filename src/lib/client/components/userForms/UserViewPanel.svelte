@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
+	import { avatarSrc } from "$lib/client/utils/media"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import DetailHero from "$lib/client/components/panels/DetailHero.svelte"
 	import { roleWord } from "$lib/client/admin/sections/users/usersAdmin"
@@ -49,6 +50,7 @@
 			title={name}
 			subtitle="@{user.username}"
 			meta={roleWord(user)}
+			image={avatarSrc(user, { full: true })}
 			letter={name}
 			actions={isCurrentUserAdmin ? heroActions : undefined}
 		/>

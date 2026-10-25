@@ -74,7 +74,7 @@
 
 {#snippet laterBadge()}
 	<span
-		class="badge preset-tonal-surface shrink-0 text-[11px]"
+		class="badge preset-tonal-surface shrink-0 text-meta"
 		title="Dated after the moment being read"
 	>
 		later
@@ -120,7 +120,7 @@
 					{#each only as d (d.key)}
 						<li>
 							<button
-								class="bg-surface-100-900 hover:preset-tonal-surface flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left"
+								class="bg-surface-100-900 hover:preset-tonal-surface flex w-full items-center gap-2 rounded-base px-3 py-2 text-left"
 								class:opacity-50={d.later}
 								type="button"
 								onclick={() => onOpen?.(d)}
@@ -153,7 +153,7 @@
 				<ul class="flex flex-col gap-2">
 					{#each differs as d (d.key)}
 						<li
-							class="bg-surface-100-900 flex flex-col gap-2 rounded-[10px] px-3 py-2"
+							class="bg-surface-100-900 flex flex-col gap-2 rounded-base px-3 py-2"
 							class:opacity-50={d.later}
 						>
 							<div class="flex min-w-0 items-center gap-2">
@@ -183,7 +183,7 @@
 									>
 										<div class="flex flex-col gap-0.5">
 											<span
-												class="text-surface-600-400 text-[11px]"
+												class="text-surface-600-400 text-meta"
 											>
 												main
 											</span>
@@ -195,7 +195,7 @@
 										</div>
 										<div class="flex flex-col gap-0.5">
 											<span
-												class="text-primary-500 text-[11px]"
+												class="text-primary-ink text-meta"
 											>
 												{lineName}
 											</span>

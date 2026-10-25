@@ -2,8 +2,9 @@ import { describe, expect, test } from "vitest"
 import type { SpecDocument } from "@serene-pub/sdk"
 import {
 	STORY_RESPOND_SPEC_ID,
+	STORY_SWEEP_SPEC_ID,
 	CORE_SPECS,
-	LAIR_RESPOND_SPEC_ID
+	LAIR_REPLY_SPEC_ID
 } from "@serene-pub/core-catalog"
 import {
 	clauseStatus,
@@ -47,7 +48,7 @@ describe("lineOf", () => {
 	})
 
 	test("the Lair's junctions nest: via › turn holds the channel junction", () => {
-		const model = lineOf(build(LAIR_RESPOND_SPEC_ID))
+		const model = lineOf(build(LAIR_REPLY_SPEC_ID))
 		const via = model.rows.find((r) => r.kind === "clause" && r.key === "via")
 		expect(via?.kind).toBe("clause")
 		if (via?.kind !== "clause") return
@@ -76,9 +77,12 @@ describe("portsOf", () => {
 			for (const to of o.to) expect(to).toMatch(/^[a-zA-Z0-9.$]+\.[a-zA-Z0-9.]+$/)
 	})
 
+	// Story's reply carries no `each` (its loops are the sweep routine's,
+	// PLAN-layering lane 3): the sweep's per-entry writes are the fixture.
 	test("a clause's in ports are its own refs — what an each iterates over", () => {
-		const doc = build(STORY_RESPOND_SPEC_ID)
+		const doc = build(STORY_SWEEP_SPEC_ID)
 		const each = doc.clauses.find((c) => c.kind === "each")!
+		expect(each, "the sweep carries an each").toBeTruthy()
 		const ports = portsOf(doc, each.id)
 		expect(ports.in.some((p) => p.port === "over")).toBe(true)
 	})
@@ -139,7 +143,7 @@ describe("receiptIndex", () => {
 	})
 
 	test("a clause's status is the worst of its members'", () => {
-		const model = lineOf(build(STORY_RESPOND_SPEC_ID))
+		const model = lineOf(build(STORY_SWEEP_SPEC_ID))
 		const each = [...model.clauses.values()].find((c) => c.kind === "each")!
 		const member = [...model.pathOf.entries()].find(
 			([k, path]) => path.includes(each.id) && model.nodes.has(k)
@@ -148,6 +152,11 @@ describe("receiptIndex", () => {
 			nodes: [{ seq: 1, nodeKey: member, result: "err" }]
 		})
 		expect(clauseStatus(model, index, each.id)).toBe("err")
-		expect(clauseStatus(model, index, "gather")).toBeNull()
+		// A clause the failed node is not inside reads nothing.
+		const other = [...model.clauses.values()].find(
+			(c) => !model.pathOf.get(member)!.includes(c.id)
+		)!
+		expect(other, "the sweep has a clause beside the failed one").toBeTruthy()
+		expect(clauseStatus(model, index, other.id)).toBeNull()
 	})
 })

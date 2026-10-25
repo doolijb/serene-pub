@@ -24,11 +24,20 @@
  * group claims is the **whole pipeline**. A spec with one model call (or
  * none) is one group, unheaded.
  *
+ * 🚧 **Alternative branches** (lane T3, 2026-10-23): a junction whose
+ * branches each hold a model call — Story's reply, as prose or carrying
+ * changes — is one group per branch; where two would be headed alike, each
+ * heading names its branch (_Reply · prose_ · _Reply · changes_); a
+ * step inside a branch with one model call belongs to that call, so the
+ * branches' own steps (each its _Update message_, its sprite) sit with
+ * their call, not twice in the whole pipeline. Two steps of one group still
+ * headed alike are told apart by their branch.
+ *
  * Pure over the stored document so the rule is testable without a database;
  * `read.ts` shapes the payload from it.
  */
 
-import { type I18n } from "@serene-pub/sdk"
+import { S, type I18n } from "@serene-pub/sdk"
 import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 import { humanizeCamel, humanizeTypeId } from "$lib/server/pipelines/config/panel/declarations"
 import type {
@@ -52,6 +61,9 @@ export interface GroupingNode {
 	config?: Record<string, unknown> | null
 	resolvedRefs?: Record<string, string> | null
 	clauseId?: string | null
+	/** 🚧 The clause's kind (a `junction` holds alternatives) and the branch (chain) of it the node sits in. */
+	clauseKind?: string | null
+	clauseChain?: string | null
 	/** The node kind — an `oracle` that borrows a call's model joins that call. */
 	kind?: string
 	/** The node definition it places — what the *Receives* / *Carries out* lines read ports from. */
@@ -60,16 +72,29 @@ export interface GroupingNode {
 	expose?: { status?: I18n; label?: I18n; purpose?: I18n } | null
 }
 
+/** 🚧 A clause, as the grouping reads its nesting: its kind, and the clause and branch it sits in. */
+export interface GroupingClause {
+	id: string
+	kind?: string
+	clauseId?: string
+	clauseChain?: string
+}
+
 export interface GroupingInput {
 	nodes: readonly GroupingNode[]
 	edges: readonly { from: string; to: string }[]
+	/** 🚧 The spec's clauses — how a nested clause sits in a junction's branch. Absent: a node's own clause only. */
+	clauses?: readonly GroupingClause[]
 	/** The model calls, as the panel found them — oracles owning a person-facing connection or sampling slot. */
 	modelCalls: readonly string[]
 }
 
 export interface GroupPlan {
-	/** One per model call, in spine order. Empty when the spec has at most one. */
-	calls: { modelCall: string; members: Set<string> }[]
+	/**
+	 * One per model call, in spine order. Empty when the spec has at most one.
+	 * 🚧 `branch` — the junction branch the call is one of the alternatives in.
+	 */
+	calls: { modelCall: string; members: Set<string>; branch?: string }[]
 	/**
 	 * Where an address belongs: a node key, a clause id or an envoy config key
 	 * (`envoy:<key>`) → the index into `calls`, or `-1` for the whole pipeline.
@@ -133,6 +158,54 @@ export function planGroups(input: GroupingInput): GroupPlan {
 	const isCall = new Set(calls)
 	const claim = (address: string, g: number) => {
 		if (!owner.has(address)) owner.set(address, g)
+	}
+
+	// 🚧 Alternative branches (lane T3): a junction whose branches each hold a
+	// model call. Every step inside a branch holding exactly one call is that
+	// call's — the branch exists only to serve it.
+	const clauseById = new Map((input.clauses ?? []).map((c) => [c.id, c]))
+	/** The junction branches a clause address sits in, outermost first. */
+	const branchPath = (clauseId: string | null | undefined, kind: string | null | undefined, chain: string | null | undefined) => {
+		const out: { junction: string; branch: string }[] = []
+		const seen = new Set<string>()
+		let id = clauseId ?? null
+		let k = kind ?? clauseById.get(id ?? "")?.kind ?? null
+		let ch = chain ?? null
+		while (id && !seen.has(id)) {
+			seen.add(id)
+			if (k === "junction" && ch) out.unshift({ junction: id, branch: ch })
+			const c = clauseById.get(id)
+			id = c?.clauseId ?? null
+			ch = c?.clauseChain ?? null
+			k = id ? (clauseById.get(id)?.kind ?? null) : null
+		}
+		return out
+	}
+	const pathOfNode = (n: GroupingNode) => branchPath(n.clauseId, n.clauseKind, n.clauseChain)
+	const callsIn = new Map<string, Map<string, string[]>>()
+	for (const c of calls)
+		for (const p of pathOfNode(byKey.get(c)!)) {
+			const branches = callsIn.get(p.junction) ?? new Map<string, string[]>()
+			branches.set(p.branch, [...(branches.get(p.branch) ?? []), c])
+			callsIn.set(p.junction, branches)
+		}
+	const alternatives = new Set([...callsIn].filter(([, b]) => b.size >= 2).map(([j]) => j))
+	/** The innermost alternative branch an address sits in, with the calls it holds. */
+	const branchOf = (path: { junction: string; branch: string }[]) => {
+		for (let i = path.length - 1; i >= 0; i--)
+			if (alternatives.has(path[i]!.junction))
+				return { ...path[i]!, calls: callsIn.get(path[i]!.junction)!.get(path[i]!.branch) ?? [] }
+		return null
+	}
+	const callBranch = new Map<string, string>()
+	for (const c of calls) {
+		const b = branchOf(pathOfNode(byKey.get(c)!))
+		if (b) callBranch.set(c, b.branch)
+	}
+	for (const n of input.nodes) {
+		if (isCall.has(n.key)) continue
+		const b = branchOf(pathOfNode(n))
+		if (b?.calls.length === 1) claim(n.key, owner.get(b.calls[0]!)!)
 	}
 
 	// The prompt wiring. A step pairing a prompt with ONE model call joins
@@ -232,7 +305,8 @@ export function planGroups(input: GroupingInput): GroupPlan {
 			modelCall,
 			members: new Set(
 				[...owner.entries()].filter(([, g]) => g === i).map(([k]) => k)
-			)
+			),
+			...(callBranch.has(modelCall) ? { branch: callBranch.get(modelCall)! } : {})
 		})),
 		ownerOf,
 		clauseMembers
@@ -256,19 +330,47 @@ export function groupHeadingOf(
 	return definitionName
 }
 
+/** 🚧 A junction branch as a heading's suffix reads it: `changes` → _changes_, `carriesChanges` → _carries changes_. */
+export const branchWords = (branch: string): string => humanizeCamel(branch).toLowerCase()
+
 /** One option the view drew, beside the declaration it came from. */
 export interface PlacedOption {
-	d: Pick<Decl, "nodeKey" | "nodeKind" | "control" | "slot" | "path" | "typeLabel" | "stepHeading">
+	d: Pick<Decl, "nodeKey" | "nodeKind" | "control" | "slot" | "path" | "typeLabel" | "stepHeading"> &
+		Partial<Pick<Decl, "shape">>
 	option: ConfigOption
 }
 
 const MODEL_CONTROLS = new Set(["connection-ref", "sampling-ref"])
 
+/**
+ * 🚧 Model controls that are not a call's FRONT (O7, O9): the reply's speech
+ * sampling, read only when the step asks for audio, and the transcribe step's
+ * model, called only for audio the reply cannot hear. Each sits in its step's
+ * Advanced, and the transcribe step is no model-call group of its own — a
+ * reply is still one call, one group.
+ */
+export function isAuxiliaryModelControl(
+	d: Partial<Pick<Decl, "control" | "slot" | "shape">>
+): boolean {
+	return (
+		MODEL_CONTROLS.has(d.control ?? "") &&
+		(d.slot === "speechSampling" || d.shape === S.transcription)
+	)
+}
+
 /** The model calls among a spec's declarations: oracles owning a person-facing connection or sampling slot. */
-export function modelCallsOf(decls: readonly Pick<Decl, "nodeKey" | "nodeKind" | "control">[]): string[] {
+export function modelCallsOf(
+	decls: readonly (Pick<Decl, "nodeKey" | "nodeKind" | "control"> &
+		Partial<Pick<Decl, "slot" | "shape">>)[]
+): string[] {
 	const out: string[] = []
 	for (const d of decls)
-		if (d.nodeKind === "oracle" && MODEL_CONTROLS.has(d.control) && !out.includes(d.nodeKey))
+		if (
+			d.nodeKind === "oracle" &&
+			MODEL_CONTROLS.has(d.control) &&
+			!isAuxiliaryModelControl(d) &&
+			!out.includes(d.nodeKey)
+		)
 			out.push(d.nodeKey)
 	return out
 }
@@ -283,6 +385,8 @@ export function settingsGroupsOf(args: {
 	decls: readonly Pick<Decl, "nodeKey" | "nodeKind" | "control" | "typeLabel">[]
 	nodes: readonly GroupingNode[]
 	edges: readonly FlowEdge[]
+	/** 🚧 The spec's clauses — how a nested clause sits in a junction's branch (lane T3). */
+	clauses?: readonly GroupingClause[]
 	language?: string
 	/**
 	 * Each node's registry row, by node — given, the groups and their steps
@@ -292,9 +396,17 @@ export function settingsGroupsOf(args: {
 	 */
 	definitionOf?: (node: GroupingNode) => FlowDefinition | undefined
 }): SettingsGroup[] {
-	const { placed, decls, nodes, edges, language, definitionOf } = args
+	const { placed, decls, nodes, edges, clauses, language, definitionOf } = args
 	const modelCalls = modelCallsOf(decls)
-	const plan = planGroups({ nodes, edges, modelCalls })
+	// 🚧 The steps whose model is auxiliary (the transcribe step, O9): their
+	// loadout and model sit in their own Advanced step.
+	const auxiliaryCalls = new Set(
+		decls
+			.filter((d) => isAuxiliaryModelControl(d as Partial<Decl>))
+			.map((d) => d.nodeKey)
+			.filter((k) => !modelCalls.includes(k))
+	)
+	const plan = planGroups({ nodes, edges, modelCalls, ...(clauses ? { clauses } : {}) })
 	const byKey = new Map(nodes.map((n) => [n.key, n]))
 	const definitionName = (nodeKey: string) =>
 		decls.find((d) => d.nodeKey === nodeKey)?.typeLabel ?? ""
@@ -312,6 +424,12 @@ export function settingsGroupsOf(args: {
 			front: [],
 			advanced: []
 		}
+	})
+	// 🚧 Alternatives headed alike (lane T3): the branch names each — _Reply · prose_, _Reply · changes_.
+	const baseHeadings = drafts.map((d) => d.heading)
+	plan.calls.forEach((c, i) => {
+		if (c.branch && baseHeadings.some((h, j) => j !== i && h === baseHeadings[i]))
+			drafts[i]!.heading = `${baseHeadings[i]} · ${branchWords(c.branch)}`
 	})
 	// The whole pipeline — or, for a spec with one model call or none, the
 	// one unheaded group that holds everything.
@@ -349,10 +467,13 @@ export function settingsGroupsOf(args: {
 		// The Loadout row leads its model call's group (I12, §14 item 4) —
 		// only a model call's own: a step running on another call's model
 		// takes that call's loadout, so a second picker would change nothing.
-		else if (d.control === "loadout-ref") {
-			if (modelCalls.includes(d.nodeKey)) push(loadouts, g, option)
+		else if (d.control === "loadout-ref" && modelCalls.includes(d.nodeKey))
+			push(loadouts, g, option)
+		else if (d.control === "loadout-ref" && !auxiliaryCalls.has(d.nodeKey)) {
+			// A step running on another call's model takes that call's
+			// loadout: a second picker would change nothing.
 		} else if (d.control === "prompts-ref" || d.nodeKind === "envoy") push(prompts, g, option)
-		else if (MODEL_CONTROLS.has(d.control)) push(models, g, option)
+		else if (MODEL_CONTROLS.has(d.control) && !isAuxiliaryModelControl(d)) push(models, g, option)
 		else if (isSwitch && d.nodeKind === "query")
 			// A source's switch reads by the step it turns off (*World lore*),
 			// not as one of several identical "Use this source" rows.
@@ -408,7 +529,16 @@ export function settingsGroupsOf(args: {
 			...(models.get(g) ?? []),
 			...(sources.get(g) ?? [])
 		]
-		const advanced = [...(steps.get(g)?.values() ?? [])].map((s) => {
+		// 🚧 Two steps of one group headed alike are told apart by the junction branch each sits in (lane T3).
+		const drafted = [...(steps.get(g)?.values() ?? [])]
+		const clash = new Set(drafted.map((s) => s.heading).filter((h, i, all) => all.indexOf(h) !== i))
+		const branchOfAddress = (address: string | undefined): string | undefined => {
+			const n = address ? byKey.get(address) : undefined
+			return n?.clauseKind === "junction" && n.clauseChain ? n.clauseChain : undefined
+		}
+		const advanced = drafted.map((s0) => {
+			const branch = clash.has(s0.heading) ? branchOfAddress(addressOf.get(s0.key)) : undefined
+			const s = branch ? { ...s0, heading: `${s0.heading} · ${branchWords(branch)}` } : s0
 			const address = addressOf.get(s.key)
 			if (!graph || !address) return s
 			const lines = stepFlowsOf(graph, address)

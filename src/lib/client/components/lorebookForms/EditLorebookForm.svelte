@@ -12,10 +12,15 @@
 	import { z } from "zod"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 	import { sameFormValue } from "$lib/client/forms/sameFormValue"
+	import AvatarPicker from "../media/AvatarPicker.svelte"
+	import { lorebookCoverSrc } from "$lib/client/utils/media"
 
 	// Zod validation schema
+	// Trimmed BEFORE the length check: `.min(1).trim()` let a name of spaces
+	// through (audit 2026-10-21). The server trims and refuses an empty name
+	// too.
 	const lorebookSchema = z.object({
-		name: z.string().min(1, "Name is required").trim(),
+		name: z.string().trim().min(1, "Name is required"),
 		description: z.string().optional()
 	})
 
@@ -24,13 +29,11 @@
 	interface Props {
 		lorebookId: number
 		hasUnsavedChanges?: boolean
-		mode?: "view" | "edit"
 	}
 
 	let {
 		lorebookId,
-		hasUnsavedChanges = $bindable(false),
-		mode = $bindable("view")
+		hasUnsavedChanges = $bindable(false)
 	}: Props = $props()
 
 	const socket = useTypedSocket()
@@ -61,14 +64,37 @@
 	 */
 	const editedFields = (l: EditableLorebook | undefined) =>
 		l ? { name: l.name, description: l.description, tags: l.tags } : null
+	/**
+	 * The cover image, sent with the save like the fields: a picked file
+	 * replaces it, `coverRemoved` clears it. The picker holds the new one's
+	 * crop until the save answers with its id.
+	 */
+	let coverFile = $state<File | undefined>()
+	let coverPreview = $state("")
+	let coverRemoved = $state(false)
+	/** A new crop of the stored cover, held for Save like every field here. */
+	let coverCropPending = $state(false)
+	let coverPicker = $state<ReturnType<typeof AvatarPicker> | null>(null)
+
+	function resetCover() {
+		coverPicker?.clear()
+		coverFile = undefined
+		coverPreview = ""
+		coverRemoved = false
+		coverCropPending = false
+	}
+
 	let isDirty = $derived(
 		!!editLorebook &&
 			!!originalLorebook &&
-			!sameFormValue(
-				$state.snapshot(editedFields(editLorebook)),
-				$state.snapshot(editedFields(originalLorebook)),
-				{ unordered: ["tags"] }
-			)
+			(!!coverFile ||
+				coverRemoved ||
+				coverCropPending ||
+				!sameFormValue(
+					$state.snapshot(editedFields(editLorebook)),
+					$state.snapshot(editedFields(originalLorebook)),
+					{ unordered: ["tags"] }
+				))
 	)
 	$effect(() => {
 		hasUnsavedChanges = isDirty
@@ -131,7 +157,7 @@
 	/**
 	 * The save this form sent and has not heard back about. Its reply goes to
 	 * every tab of the user; only this one's (`requestId`, echoed by the
-	 * server) is toasted and leaves edit mode (plan B8).
+	 * server) is toasted (plan B8).
 	 */
 	let savingRequestId: string | null = null
 
@@ -139,8 +165,15 @@
 		if (!validateForm()) return
 		savingRequestId = uuid()
 		const updateReq: Sockets.Lorebooks.Update.Params = {
-			lorebook: editLorebook!,
-			requestId: savingRequestId
+			lorebook: { ...editLorebook!, name: editLorebook!.name.trim() },
+			requestId: savingRequestId,
+			// Socket.IO marshals a browser File to a Node Buffer on the
+			// server; the wire shape differs from the client-side type.
+			...(coverFile
+				? { coverFile: coverFile as unknown as Buffer }
+				: coverRemoved
+					? { coverFile: null }
+					: {})
 		}
 		socket.emit("lorebooks:update", updateReq)
 	}
@@ -169,7 +202,8 @@
 	}
 	function handleCancel() {
 		editLorebook = { ...originalLorebook! }
-		mode = "view"
+		resetCover()
+		validationErrors = {}
 	}
 
 	async function handleLorebooksGet(msg: Sockets.Lorebooks.Get.Response) {
@@ -212,9 +246,10 @@
 				return
 			}
 			savingRequestId = null
+			coverPicker?.commitPendingFrame(msg.lorebook.coverMediaId)
+			resetCover()
 			editLorebook = kept
 			originalLorebook = { ...kept }
-			mode = "view"
 			toaster.success({
 				title: "Lorebook updated",
 				description: `Lorebook "${msg.lorebook.name}" updated successfully.`
@@ -286,77 +321,56 @@
 		<div class="text-center">
 			<Icons.AlertTriangle
 				size={24}
-				class="text-error-500 mx-auto mb-2"
+				class="text-error-600-400 mx-auto mb-2"
 			/>
-			<p class="text-error-500">{loadError}</p>
+			<p class="text-error-600-400">{loadError}</p>
 		</div>
 	</div>
 {:else if editLorebook}
-	{#if mode === "view"}
-		<div class="flex flex-col gap-3">
-			<div class="flex gap-2">
-				<button
-					class="btn btn-sm preset-filled-primary-500"
-					onclick={() => (mode = "edit")}
-				>
-					<Icons.Pencil size={14} /> Edit
-				</button>
-			</div>
-			<!-- Name is already shown in the sidebar's header above these
-			     tabs — repeating it here would just be noise. -->
-			<section class="card preset-filled-surface-100-900 space-y-1 p-3">
-				<p
-					class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold"
-				>
-					<Icons.FileText size={13} />
-					Description
-				</p>
-				{#if editLorebook.description}
-					<p class="text-sm leading-relaxed whitespace-pre-wrap">
-						{editLorebook.description}
-					</p>
-				{:else}
-					<p class="text-surface-700-300 text-sm italic">
-						No description yet. Click Edit to add one.
-					</p>
-				{/if}
-			</section>
-			{#if editLorebook.tags && editLorebook.tags.length > 0}
-				<div class="flex flex-wrap gap-2">
-					{#each editLorebook.tags as tagName}
-						{@const tag = tagsList.find((t) => t.name === tagName)}
-						<span
-							class="chip {tag?.colorPreset ||
-								'preset-filled-primary-500'}"
-						>
-							{tagName}
-						</span>
-					{/each}
-				</div>
-			{:else}
-				<p class="text-surface-700-300 text-sm italic">No tags yet.</p>
-			{/if}
-		</div>
-	{:else}
-		<div class="flex flex-col gap-6">
-			<div class="flex gap-2">
-				<button
-					class="btn btn-sm preset-tonal-surface w-full"
-					onclick={handleCancel}
-				>
-					Cancel
-				</button>
-				<button
-					class="btn btn-sm preset-filled-primary-500 w-full"
-					onclick={handleSave}
-					disabled={!hasUnsavedChanges}
-				>
-					<Icons.Save size={16} />
-					Update
-				</button>
-			</div>
-			<div>
-				<label class="font-semibold" for="lorebookName">Name*</label>
+	<!-- About this book, always editable: there is no view to leave before
+	     the fields can be changed (2026-10-21, owner: "make the edit lorebook
+	     settings more obvious"). Discard and Save light up once something
+	     has changed; leaving with changes asks first, as every form does. -->
+	<section
+		class="card preset-filled-surface-100-900 flex flex-col gap-4 p-3"
+		aria-labelledby="about-book-heading"
+		data-lore-about-book
+	>
+		<p
+			id="about-book-heading"
+			class="text-primary-ink flex items-center gap-1.5 text-xs font-semibold"
+		>
+			<Icons.BookMarked size={13} aria-hidden="true" />
+			About this book
+		</p>
+		<!-- The cover image beside the name, as a character's avatar sits
+		     beside theirs: square, since a book is a cover, not a face. -->
+		<fieldset
+			class="flex items-start gap-4"
+			aria-labelledby="cover-section"
+		>
+			<legend id="cover-section" class="sr-only">Cover image</legend>
+			<AvatarPicker
+				bind:this={coverPicker}
+				bind:file={coverFile}
+				bind:preview={coverPreview}
+				src={coverRemoved
+					? null
+					: lorebookCoverSrc(editLorebook, { full: true })}
+				mediaId={coverRemoved ? null : editLorebook.coverMediaId}
+				media={coverRemoved ? null : editLorebook.coverMedia}
+				shape="square"
+				noun="cover"
+				glyph={Icons.BookMarked}
+				subject={`${editLorebook.name || "this book"}'s cover`}
+				onRemove={() => (coverRemoved = true)}
+				deferStoredCrop
+				bind:cropPending={coverCropPending}
+			/>
+			<div class="min-w-0 flex-1">
+				<label class="font-semibold" for="lorebookName">
+					Name*
+				</label>
 				<input
 					id="lorebookName"
 					class="input input-lg w-full {validationErrors.name
@@ -374,94 +388,113 @@
 					}}
 				/>
 				{#if validationErrors.name}
-					<p class="text-error-500 mt-1 text-sm" role="alert">
+					<p class="text-error-600-400 mt-1 text-sm" role="alert">
 						{validationErrors.name}
 					</p>
 				{/if}
 			</div>
-			<div>
-				<label class="font-semibold" for="lorebookDescription">
-					Description
-				</label>
-				<textarea
-					id="lorebookDescription"
-					class="textarea input-lg w-full"
-					placeholder="Describe this lorebook (optional)"
-					bind:value={editLorebook.description}
-					rows={2}
-				></textarea>
-			</div>
+		</fieldset>
+		<div>
+			<label class="font-semibold" for="lorebookDescription">
+				Description
+			</label>
+			<textarea
+				id="lorebookDescription"
+				class="textarea input-lg w-full"
+				placeholder="Describe this lorebook (optional)"
+				bind:value={editLorebook.description}
+				rows={2}
+			></textarea>
+		</div>
 
-			<!-- Tags Section -->
-			<div>
-				<label class="font-semibold" for="tagInput">Tags</label>
-				<div class="relative">
-					<input
-						id="tagInput"
-						type="text"
-						bind:value={tagSearchInput}
-						class="input w-full"
-						placeholder="Add a tag..."
-						onfocus={() => (showTagSuggestions = true)}
-						onblur={() =>
-							setTimeout(() => (showTagSuggestions = false), 200)}
-						onkeydown={handleTagInputKeydown}
-					/>
+		<!-- Tags Section -->
+		<div>
+			<label class="font-semibold" for="tagInput">Tags</label>
+			<div class="relative">
+				<input
+					id="tagInput"
+					type="text"
+					bind:value={tagSearchInput}
+					class="input w-full"
+					placeholder="Add a tag..."
+					onfocus={() => (showTagSuggestions = true)}
+					onblur={() =>
+						setTimeout(() => (showTagSuggestions = false), 200)}
+					onkeydown={handleTagInputKeydown}
+				/>
 
-					<!-- Tag suggestions dropdown -->
-					{#if showTagSuggestions && filteredTags.length > 0}
-						<div
-							class="bg-surface-100-900 absolute z-10 mt-1 max-h-40 w-full overflow-y-auto panel-edge rounded-lg border shadow-lg"
-						>
-							{#each filteredTags as tag}
-								<button
-									type="button"
-									class="hover:bg-surface-200-800 w-full px-3 py-2 text-left transition-colors"
-									onclick={() => addTag(tag.name)}
-								>
-									<span
-										class="chip mr-2 {tag.colorPreset ||
-											'preset-filled-primary-500'}"
-									>
-										{tag.name}
-									</span>
-									{#if tag.description}
-										<span
-											class="text-surface-600-400 text-sm"
-										>
-											- {tag.description}
-										</span>
-									{/if}
-								</button>
-							{/each}
-						</div>
-					{/if}
-				</div>
-
-				<!-- Selected tags display -->
-				{#if editLorebook.tags && editLorebook.tags.length > 0}
-					<div class="mt-2 flex flex-wrap gap-2">
-						{#each editLorebook.tags as tagName}
-							{@const tag = tagsList.find(
-								(t) => t.name === tagName
-							)}
+				<!-- Tag suggestions dropdown -->
+				{#if showTagSuggestions && filteredTags.length > 0}
+					<div
+						class="bg-surface-100-900 absolute z-10 mt-1 max-h-40 w-full overflow-y-auto panel-edge rounded-lg border shadow-lg"
+					>
+						{#each filteredTags as tag}
 							<button
 								type="button"
-								class="chip {tag?.colorPreset ||
-									'preset-filled-primary-500'} group relative"
-								onclick={() => removeTag(tagName)}
-								title="Click to remove tag"
+								class="hover:bg-surface-200-800 w-full px-3 py-2 text-left transition-colors"
+								onclick={() => addTag(tag.name)}
 							>
-								{tagName}
-								<Icons.X
-									size={14}
-									class="ml-1 opacity-60 group-hover:opacity-100"
-								/>
+								<span
+									class="chip mr-2 {tag.colorPreset ||
+										'preset-filled-primary-500'}"
+								>
+									{tag.name}
+								</span>
+								{#if tag.description}
+									<span
+										class="text-surface-600-400 text-sm"
+									>
+										- {tag.description}
+									</span>
+								{/if}
 							</button>
 						{/each}
 					</div>
 				{/if}
 			</div>
+
+			<!-- Selected tags display -->
+			{#if editLorebook.tags && editLorebook.tags.length > 0}
+				<div class="mt-2 flex flex-wrap gap-2">
+					{#each editLorebook.tags as tagName}
+						{@const tag = tagsList.find(
+							(t) => t.name === tagName
+						)}
+						<button
+							type="button"
+							class="chip {tag?.colorPreset ||
+								'preset-filled-primary-500'} group relative"
+							onclick={() => removeTag(tagName)}
+							title="Click to remove tag"
+						>
+							{tagName}
+							<Icons.X
+								size={14}
+								class="ml-1 opacity-60 group-hover:opacity-100"
+							/>
+						</button>
+					{/each}
+				</div>
+			{/if}
 		</div>
-	{/if}
+		<footer class="flex justify-end gap-2">
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface"
+				onclick={handleCancel}
+				disabled={!hasUnsavedChanges}
+			>
+				Discard changes
+			</button>
+			<button
+				type="button"
+				class="btn btn-sm preset-filled-primary-500"
+				onclick={handleSave}
+				disabled={!hasUnsavedChanges}
+			>
+				<Icons.Save size={14} aria-hidden="true" />
+				Save
+			</button>
+		</footer>
+	</section>
 {/if}

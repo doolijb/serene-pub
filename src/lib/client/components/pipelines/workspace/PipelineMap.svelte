@@ -269,22 +269,22 @@
 
 <div class="flex h-full min-h-0 flex-col">
 	<div
-		class="border-surface-300-700 flex flex-wrap items-center gap-2 border-b px-3 py-2"
+		class="border-surface-200-800 flex flex-wrap items-center gap-2 border-b px-3 py-2"
 	>
 		<span class={LEGEND}>Signal path</span>
-		<span class="text-surface-600-400 font-mono text-[11px]">
+		<span class="text-surface-600-400 font-mono text-meta">
 			{countLine}
 		</span>
 		<span class="flex-1"></span>
 		<div
-			class="border-surface-300-700 flex overflow-hidden rounded-md border"
+			class="border-surface-200-800 flex overflow-hidden rounded-md border"
 			role="group"
 			aria-label="Flow direction"
 		>
 			<button
 				type="button"
 				class="btn btn-sm rounded-none {direction === 'DOWN'
-					? 'preset-tonal-primary'
+					? 'preset-pressed'
 					: 'preset-tonal-surface'}"
 				aria-pressed={direction === "DOWN"}
 				title="Top to bottom"
@@ -296,7 +296,7 @@
 			<button
 				type="button"
 				class="btn btn-sm rounded-none {direction === 'RIGHT'
-					? 'preset-tonal-primary'
+					? 'preset-pressed'
 					: 'preset-tonal-surface'}"
 				aria-pressed={direction === "RIGHT"}
 				title="Left to right"
@@ -345,7 +345,7 @@
 
 	{#if legend && (legendKinds.length || legendBlocks.length)}
 		<div
-			class="border-surface-300-700 flex flex-wrap gap-x-5 gap-y-1 border-t px-3 py-2"
+			class="border-surface-200-800 flex flex-wrap gap-x-5 gap-y-1 border-t px-3 py-2"
 		>
 			{#each legendKinds as k (k)}
 				<span class="flex items-center gap-2 text-xs">

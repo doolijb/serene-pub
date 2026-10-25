@@ -26,7 +26,7 @@ import {
 	type SpecDocument
 } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
-import { spineProviders } from "$lib/server/pipelines/runtime/specShape"
+import { budgetedProviderOf } from "$lib/server/pipelines/runtime/specShape"
 import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 import { slotConnectionId, slotModelId } from "$lib/shared/connections/slotRef"
 import {
@@ -180,19 +180,10 @@ export async function stopGuardsByNode(
 	if (!guarded.length) return {}
 	// Whose `connection` slot decides: the guarded step's own, when its
 	// definition declares one; else the run's text provider — the node the
-	// budget pairs its connection with, else the first spine oracle — which
+	// budget pairs its connection with, else the first preview provider — which
 	// is where the text a write-side seam guards came from (core's stop
 	// seams sit on the outlets, `in:text`, and an outlet runs on no model).
-	const budget = nodes.find(
-		(n) => n.definitionId === "core:task/context-budget"
-	)
-	const budgetRef = budget?.config?.["connection"] as
-		| { __ref?: unknown; ofNode?: unknown }
-		| undefined
-	const provider =
-		budgetRef?.__ref === "slot" && typeof budgetRef.ofNode === "string"
-			? budgetRef.ofNode
-			: spineProviders(doc)[0]?.key
+	const provider = budgetedProviderOf(doc)?.key
 	const followRef = (n: DocNode): string => {
 		const ref = n.config?.["connection"] as
 			| { __ref?: unknown; ofNode?: unknown }

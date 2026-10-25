@@ -1390,7 +1390,7 @@
 			"koboldcpp-managed" ||
 		endpointKind(connection?.type ?? selectedRow?.type) === "ollama"}
 	<span
-		class="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-normal {managed
+		class="shrink-0 rounded-full px-1.5 py-0.5 text-meta font-normal {managed
 			? 'preset-tonal-tertiary'
 			: 'panel-edge text-surface-600-400 border'}"
 	>
@@ -1501,7 +1501,7 @@
 										aria-hidden="true"
 									/>
 									<span
-										class="text-primary-700 dark:text-primary-300 shrink-0 text-sm font-medium"
+										class="text-primary-ink shrink-0 text-sm font-medium"
 									>
 										Needs an API key
 									</span>

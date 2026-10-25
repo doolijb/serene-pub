@@ -21,6 +21,8 @@ import {
 	getRuleset,
 	i18nText,
 	parseRepertoireAddress,
+	presetsOf,
+	settingsOf,
 	slotPickableIn,
 	slotRulesetOwners,
 	type AttributeSlotProps,
@@ -151,7 +153,7 @@ export class RulesetSettingsRefusal extends Error {}
 /** A preset named by its id or its label, either case. */
 function presetNamed(decl: RulesetDecl, name: string) {
 	const want = name.trim().toLowerCase()
-	return decl.presets?.find((p) => p.id.toLowerCase() === want || (i18nText(p.label) ?? "").toLowerCase() === want)
+	return presetsOf(decl).find((p) => p.id.toLowerCase() === want || (i18nText(p.label) ?? "").toLowerCase() === want)
 }
 
 /**
@@ -168,14 +170,16 @@ export function checkedRulesetSettings(
 	change: { preset?: unknown; values?: unknown }
 ): Record<string, string> {
 	const name = i18nText(decl.name) ?? decl.id
-	const settings = decl.settings ?? {}
+	// 🚧 Its options, read through the SDK (a ruleset in sections says them under `options`).
+	const settings = settingsOf(decl)
+	const presets = presetsOf(decl)
 	const out: Record<string, string> = { ...before }
 	if (change.preset !== undefined && change.preset !== null) {
 		const preset = typeof change.preset === "string" ? presetNamed(decl, change.preset) : undefined
 		if (!preset)
 			throw new RulesetSettingsRefusal(
 				`${name} has no preset called ${JSON.stringify(change.preset)}.` +
-					(decl.presets?.length ? ` Its presets are ${decl.presets.map((p) => i18nText(p.label) ?? p.id).join(", ")}.` : "")
+					(presets.length ? ` Its presets are ${presets.map((p) => i18nText(p.label) ?? p.id).join(", ")}.` : "")
 			)
 		Object.assign(out, preset.values)
 	}
@@ -233,7 +237,7 @@ export function rulesOptionsFor(rulesetId: string, stored: Readonly<Record<strin
 		rulesetId,
 		rulesetName: text(decl.name) ?? rulesetId,
 		installed: true,
-		options: Object.entries(decl.settings ?? {}).map(([id, s]) => ({
+		options: Object.entries(settingsOf(decl)).map(([id, s]) => ({
 			id,
 			label: text(s.label) ?? id,
 			...(text(s.description) ? { description: text(s.description) } : {}),
@@ -245,7 +249,7 @@ export function rulesOptionsFor(rulesetId: string, stored: Readonly<Record<strin
 				...(text(c.description) ? { description: text(c.description) } : {})
 			}))
 		})),
-		presets: (decl.presets ?? []).map((p) => ({
+		presets: presetsOf(decl).map((p) => ({
 			id: p.id,
 			label: text(p.label) ?? p.id,
 			...(text(p.description) ? { description: text(p.description) } : {})

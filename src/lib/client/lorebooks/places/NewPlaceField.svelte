@@ -96,6 +96,6 @@
 		</button>
 	</div>
 	{#if error}
-		<p class="text-error-500 text-xs" role="alert">{error}</p>
+		<p class="text-error-600-400 text-xs" role="alert">{error}</p>
 	{/if}
 </form>

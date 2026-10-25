@@ -81,7 +81,7 @@
 
 				{#each inhabitants as who (who.key)}
 					<button
-						class="hover:preset-tonal-surface flex items-center gap-2 rounded-[8px] px-2 py-1.5 text-left"
+						class="hover:preset-tonal-surface flex items-center gap-2 rounded-lg px-2 py-1.5 text-left"
 						type="button"
 						onclick={() => {
 							open = false
@@ -89,7 +89,7 @@
 						}}
 					>
 						<span
-							class="bg-surface-200-800 flex size-7 shrink-0 items-center justify-center rounded-[7px] text-xs"
+							class="bg-surface-200-800 flex size-7 shrink-0 items-center justify-center rounded-lg text-xs"
 						>
 							{who.initial}
 						</span>
@@ -99,7 +99,7 @@
 							</span>
 							{#if who.aspect}
 								<span
-									class="text-surface-600-400 block truncate text-[11px]"
+									class="text-surface-600-400 block truncate text-meta"
 								>
 									{who.aspect}
 								</span>
@@ -109,7 +109,7 @@
 							<!-- Two of them at one moment: the case a single
 							     resolved row cannot express. -->
 							<span
-								class="chip preset-tonal-primary shrink-0 text-[11px]"
+								class="chip preset-tonal-primary shrink-0 text-meta"
 							>
 								also here
 							</span>

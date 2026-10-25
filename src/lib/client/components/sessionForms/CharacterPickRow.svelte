@@ -106,13 +106,13 @@
 	)
 
 	const ROW =
-		"flex min-h-11 w-full items-center gap-2.5 rounded-[10px] px-2 py-1.5"
+		"flex min-h-11 w-full items-center gap-2.5 rounded-base px-2 py-1.5"
 </script>
 
 {#snippet body()}
 	<Avatar char={character} size="md" decorative />
 	<span class="min-w-0 flex-1 text-left">
-		<span class="flex items-center gap-1 text-[15px] font-medium">
+		<span class="flex items-center gap-1 text-lead font-medium">
 			<span id={nameId} class="truncate">{label}</span>
 			{#if character.isFavorite}
 				<Icons.Star
@@ -154,14 +154,14 @@
 	{#if showTags}
 		<span id="{uid}-tags" class="flex shrink-0 items-center gap-1">
 			<span
-				class="max-w-24 truncate rounded px-1.5 py-0.5 text-[11px] {tags[0]
+				class="max-w-24 truncate rounded px-1.5 py-0.5 text-meta {tags[0]
 					.colorPreset ||
-					'bg-primary-500/20 text-primary-600 dark:text-primary-400'}"
+					'bg-primary-500/20 text-primary-ink'}"
 			>
 				{tags[0].name}
 			</span>
 			{#if tags.length > 1}
-				<span class="text-surface-600-400 text-[11px]">
+				<span class="text-surface-600-400 text-meta">
 					+{tags.length - 1}
 				</span>
 			{/if}

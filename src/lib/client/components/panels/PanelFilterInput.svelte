@@ -86,7 +86,7 @@
      what makes that honest — the ring appears whichever of the three has
      focus. -->
 <div
-	class="border-surface-300 bg-surface-100 dark:border-surface-800 dark:bg-surface-950 focus-within:ring-primary-500 relative flex h-10 w-full items-center gap-2 rounded-[10px] border px-2.5 focus-within:ring-2"
+	class="border-surface-200-800 bg-surface-100 dark:bg-surface-950 focus-within:ring-primary-500 relative flex h-10 w-full items-center gap-2 rounded-base border px-2.5 focus-within:ring-2"
 >
 	<Icons.Search
 		size={16}
@@ -120,7 +120,7 @@
 		     stretch the row or be clipped by it. -->
 		<button
 			type="button"
-			class="text-surface-500 hover:bg-surface-200 hover:text-foreground dark:hover:bg-surface-800 focus-visible:outline-primary-500 relative grid size-8 shrink-0 place-items-center rounded-md transition-colors before:absolute before:top-1/2 before:left-1/2 before:size-8 before:-translate-x-1/2 before:-translate-y-1/2 before:content-[''] focus-visible:outline-2 pointer-coarse:before:size-11"
+			class="text-surface-500 hover:bg-surface-200-800 hover:text-foreground focus-visible:outline-primary-500 relative grid size-8 shrink-0 place-items-center rounded-md transition-colors before:absolute before:top-1/2 before:left-1/2 before:size-8 before:-translate-x-1/2 before:-translate-y-1/2 before:content-[''] focus-visible:outline-2 pointer-coarse:before:size-11"
 			title="Clear filter"
 			aria-label="Clear filter"
 			onclick={clear}

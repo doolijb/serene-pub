@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * **A job's sheet** — one job, three questions, in the order a person asks
 	 * them (plan 2026-10-11, lane B; `jobSheet.ts`):
@@ -422,7 +423,7 @@
 													type="button"
 													role="radio"
 													aria-checked={!!row.inUse}
-													class="focus-visible:ring-primary-500 flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none {row.inUse
+													class="focus-visible:ring-primary-500 flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-base px-2 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none {row.inUse
 														? 'sidebar-row-active'
 														: blocked || offline
 															? 'cursor-not-allowed opacity-70'
@@ -447,7 +448,7 @@
 														class="min-w-0 flex-1"
 													>
 														<span
-															class="block truncate text-[15px] font-medium"
+															class="block truncate text-lead font-medium"
 														>
 															{row.modelName}
 														</span>
@@ -470,15 +471,13 @@
 														</span>
 													</span>
 													{#if row.inUse}
-														<span
-															class="preset-tonal-primary inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-medium"
-														>
+														<Badge tone="primary" size="sm" class="inline-flex shrink-0 items-center gap-1 font-medium">
 															<Icons.Star
 																size={9}
 																aria-hidden="true"
 															/>
 															In use
-														</span>
+														</Badge>
 													{:else if row.usable}
 														<!-- The radio is the control; this is its
 											     word, drawn as the action it is. -->
@@ -507,7 +506,7 @@
 										{#if rows.length > CANDIDATE_LIMIT}
 											<button
 												type="button"
-												class="hover:preset-tonal-primary text-surface-600-400 flex min-h-9 items-center gap-2 rounded-[10px] px-1.5 text-left text-xs"
+												class="hover:preset-tonal-primary text-surface-600-400 flex min-h-9 items-center gap-2 rounded-base px-1.5 text-left text-xs"
 												aria-expanded={showAll}
 												onclick={() =>
 													(showAll = !showAll)}
@@ -549,7 +548,7 @@
 									{#if toDownload}
 										<button
 											type="button"
-											class="text-surface-600-400 flex min-h-9 items-center gap-2 rounded-[10px] px-1.5 text-left text-xs {toDownloadBlocked
+											class="text-surface-600-400 flex min-h-9 items-center gap-2 rounded-base px-1.5 text-left text-xs {toDownloadBlocked
 												? 'cursor-not-allowed opacity-70'
 												: 'hover:preset-tonal-primary'}"
 											disabled={!!toDownloadBlocked}

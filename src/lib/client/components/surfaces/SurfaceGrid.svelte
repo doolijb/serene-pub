@@ -329,7 +329,7 @@
 							aria-label="Layout"
 						>
 							<div
-								class="text-surface-500 px-1.5 pt-0.5 pb-1 text-[11px] font-semibold tracking-wide uppercase"
+								class="text-surface-500 px-1.5 pt-0.5 pb-1 text-meta font-semibold tracking-wide uppercase"
 							>
 								Panels
 							</div>
@@ -383,11 +383,11 @@
 
 							<hr class="border-surface-200-800 my-1" />
 							<div
-								class="text-surface-500 px-1.5 py-0.5 text-[10px] leading-tight"
+								class="text-surface-500 px-1.5 py-0.5 text-meta leading-tight"
 							>
 								Drag the gutters between columns to resize · press
 								<kbd
-									class="preset-tonal-surface rounded px-1 font-mono text-[10px]"
+									class="preset-tonal-surface rounded px-1 font-mono text-meta"
 									>F6</kbd
 								> to move between widgets · use each widget's title bar
 								to collapse, move, or send it to this drawer.
@@ -472,7 +472,7 @@
 		transform: translateX(-1px);
 		background: transparent;
 		border-radius: 999px;
-		transition: background 120ms ease;
+		transition: background var(--transition-duration-fast) ease;
 	}
 	/* Skeleton v5 tokens are complete colors (oklch) — use them directly,
 	   with color-mix for alpha. Dark mode is [data-mode="dark"] on <html>. */

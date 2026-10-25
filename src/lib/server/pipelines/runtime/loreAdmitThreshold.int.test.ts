@@ -30,7 +30,7 @@ import os from "os"
 import path from "path"
 import { and, eq, inArray } from "drizzle-orm"
 import {
-	setConfigValue,
+	setPipelineValue,
 	type TestDb
 } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
@@ -208,10 +208,7 @@ const setThreshold = async (value: number) =>
 	// (ruled 2026-09-10), so at an untouched address there is no row to update
 	// — the old form matched nothing and the threshold stayed at its declared
 	// value on every case here.
-	await setConfigValue(
-		db,
-		await selectedConfigId(),
-		{ nodeKey: WORLD_LORE_LANE, slot: "params", path: "admitThreshold" },
+	await setPipelineValue(db, STORY_RESPOND_SPEC_ID, { nodeKey: WORLD_LORE_LANE, slot: "params", path: "admitThreshold" },
 		value
 	)
 

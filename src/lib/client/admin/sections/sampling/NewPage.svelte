@@ -1,4 +1,5 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
 	/**
 	 * Admin → Sampling → Add sampling config: the add form. A name, a
 	 * modality, and the config it starts as a copy of (or nothing switched
@@ -211,10 +212,10 @@
 				onValueChange={(v) => v && pickShape(v)}
 				describedBy="new-sampling-modality-help"
 			/>
-			<p id="new-sampling-modality-help" class="text-surface-600-400 text-xs">
+			<FieldHelp id="new-sampling-modality-help">
 				Which parameters it has. Text and image sampling share none, and a
 				config never changes modality once made.
-			</p>
+			</FieldHelp>
 		</div>
 	</AdminFieldset>
 
@@ -235,10 +236,10 @@
 				bind:value={startFrom}
 				describedBy="new-sampling-from-help"
 			/>
-			<p id="new-sampling-from-help" class="text-surface-600-400 text-xs">
+			<FieldHelp id="new-sampling-from-help">
 				A parameter switched off is not sent, so the backend uses its own value
 				for it.
-			</p>
+			</FieldHelp>
 		</div>
 	</AdminFieldset>
 </AdminChangeForm>

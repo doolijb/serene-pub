@@ -49,7 +49,7 @@
 		</p>
 		{#if deletion.objects.length}
 			<ul
-				class="border-surface-200-800 flex flex-col gap-3 rounded-[10px] border p-3 text-sm"
+				class="border-surface-200-800 flex flex-col gap-3 rounded-base border p-3 text-sm"
 				aria-label="What will be deleted"
 			>
 				{#each deletion.objects as object, i (i)}

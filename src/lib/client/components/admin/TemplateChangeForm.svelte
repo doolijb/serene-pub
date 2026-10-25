@@ -1,4 +1,5 @@
 <script lang="ts">
+	import InlineError from "$lib/client/components/InlineError.svelte"
 	/**
 	 * The change-form half of the template admin: one dedicated page per
 	 * template (Django's change form, built on `AdminChangeForm`), shared by
@@ -358,11 +359,11 @@
 		{#snippet headerExtra()}
 			{#if row}
 				<div class="flex flex-wrap items-center gap-1.5 text-xs">
-					<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+					<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
 						{row.poolLabel}
 					</span>
 					{#if readonly}
-						<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+						<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
 							Built-in
 						</span>
 					{/if}
@@ -436,7 +437,7 @@
 		{#if preview}
 			<AdminFieldset title="Preview">
 				{#if preview.error}
-					<p class="text-error-600-400 text-xs">{preview.error}</p>
+					<InlineError>{preview.error}</InlineError>
 				{/if}
 				{#if preview.issues?.length}
 					<ul class="text-warning-600-400 list-inside list-disc text-xs">
@@ -447,14 +448,14 @@
 				{/if}
 				{#if preview.rendered != null}
 					<pre
-						class="bg-surface-50-950 overflow-x-auto rounded-[10px] p-2 font-mono text-xs whitespace-pre-wrap">{preview.rendered}</pre>
+						class="bg-surface-50-950 overflow-x-auto rounded-base p-2 font-mono text-xs whitespace-pre-wrap">{preview.rendered}</pre>
 				{/if}
 				{#if preview.messages?.length}
 					{#each preview.messages as m, i (i)}
 						<div class="text-xs">
 							<span class="font-semibold">{m.role}:</span>
 							<pre
-								class="bg-surface-50-950 mt-1 overflow-x-auto rounded-[10px] p-2 font-mono whitespace-pre-wrap">{m.content}</pre>
+								class="bg-surface-50-950 mt-1 overflow-x-auto rounded-base p-2 font-mono whitespace-pre-wrap">{m.content}</pre>
 						</div>
 					{/each}
 				{/if}

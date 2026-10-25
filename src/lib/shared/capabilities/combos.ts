@@ -199,7 +199,9 @@ export function aggregateCombos(rows: readonly RegistryDefinitionRow[]): ComboRo
 export function compareCombos(a: string, b: string): number {
 	const rank = (id: string) => {
 		const kind = outputKindOf(id)
-		return kind ? IO_KINDS.indexOf(kind) : IO_KINDS.length
+		// ⏳ Open kinds (O1): a kind this build does not know sorts after the known ones.
+		const at = kind ? (IO_KINDS as readonly string[]).indexOf(kind) : -1
+		return at >= 0 ? at : IO_KINDS.length
 	}
 	return rank(a) - rank(b) || a.localeCompare(b)
 }

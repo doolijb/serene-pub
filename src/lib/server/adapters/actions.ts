@@ -130,6 +130,15 @@ export interface TextGenResult {
 	 */
 	toolCall?: ToolCall | null
 	/**
+	 * 🚧 Media the model wrote in the reply, in the order it gave them (O5) —
+	 * a spoken reply's audio. Bytes, never stored by the adapter: the host
+	 * stores each with `createMedia` (provenance: run, step, model) and hands
+	 * a `MediaRef` on. A provider's transcript of its own audio is already
+	 * the text (`completionResult`). Absent on every request that asked for
+	 * text alone.
+	 */
+	media?: GeneratedMediaItem[]
+	/**
 	 * The model's native reasoning trace, if the service returned one. Only
 	 * populated for non-streaming responses — streaming adapters deliver
 	 * reasoning through `reasoningCb`.
@@ -297,7 +306,14 @@ export interface EntitySpan {
 // ── transcribeAudio ─────────────────────────────────────────────────────────
 
 export interface TranscribeRequest {
-	audio: MediaRef
+	/**
+	 * 🚧 The sound, BYTES IN HAND (O9, 2026-10-21; was a `MediaRef` while
+	 * nothing implemented this action). The same seam `AttachmentInput`
+	 * draws: loading a reference needs the database, which no adapter may
+	 * import, so the host resolves and access-checks the file and hands over
+	 * its bytes.
+	 */
+	audio: { bytes: Buffer | Uint8Array; mime: string; filename?: string }
 	/** BCP-47, when the caller knows. Absent lets the backend detect. */
 	language?: string
 	/** Vocabulary hint some backends accept to bias the decode. */

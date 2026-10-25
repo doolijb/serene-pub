@@ -11,6 +11,8 @@
 import type {
 	BridgeDecl,
 	FiveBand,
+	OutcomeBlock,
+	OutcomeCard,
 	PieceProps,
 	RenderDepth,
 	RepertoireDecl,
@@ -70,6 +72,14 @@ export interface OwnerStat {
 	label: string
 	/** 🚧 The configuration's `max` in force for this owner, when it is a number (a pool's refill). */
 	max?: number
+	/** 🚧 Who sees it, when its ruleset attribute says (D4): a visibility word or a scope. */
+	visibility?: string
+	/**
+	 * 🚧 A **free text** attribute (`kind: 'text'`, RF fix 2 item 2): its
+	 * value is a holder's own prose, read as a sentence of its own rather than
+	 * inline beside the numbers.
+	 */
+	prose?: true
 }
 
 /** A field the ruleset does not own (a genre's or a custom one) — rendered as prose. */
@@ -118,7 +128,6 @@ export interface ProposedDelta {
 	/** A repertoire id of the ruleset (`things`). */
 	repertoire?: string
 	op: string
-	value?: unknown
 	/** A piece: its name, a compendium row id, or a written-out piece. */
 	piece?: unknown
 	reason?: string
@@ -126,6 +135,14 @@ export interface ProposedDelta {
 	check?: string
 	/** `hit` / `use` / `traverse`: the number the check is against. */
 	against?: number
+	/**
+	 * A change's amount (`add`, `spend`, …) or the value a `set` writes. 🚧 On
+	 * a check (2026-10-22), what its **check method** reads: under `bid`, how
+	 * much is spent (absent: the least spend that buys a success); under
+	 * `none`, how it went as the game master or the model judged it — one of
+	 * the ruleset's degrees by id or word, else words of its own.
+	 */
+	value?: unknown
 	/**
 	 * 🚧 `hit` / `use`: who the piece is aimed at (2026-10-18, P2-1) — an
 	 * owner's key, reference or name, whose sheet a `harm`, `heal` or `cure`
@@ -143,6 +160,58 @@ export interface ProposedDelta {
 	 * a genre infers it (the seat whose declaration names the way).
 	 */
 	actor?: unknown
+	/**
+	 * 🚧 Who asked for the change (D3/D4, 2026-10-23): `rules` — one of the
+	 * ruleset's functions (R8: it returned the delta, the outlet applies it),
+	 * which may `set` a ruleset value the model may only move by an amount.
+	 * Absent: the model's proposal. Read by the write gate's `changedBy`.
+	 */
+	origin?: "rules"
+}
+
+/**
+ * 🚧 One entry in a zone (D5): a copy stamped from its lorebook entry —
+ * `entryId` kept so a function may read the source, null for one made in
+ * play — its entry type, name and fields; `exposed` when its holder revealed
+ * it beyond its zone's visibility (D4).
+ */
+export interface ZoneEntry {
+	entryId: number | null
+	entryType: string
+	name: string
+	fields: Record<string, unknown>
+	count?: number
+	exposed?: true
+	/** 🚧 A held tie side's owner (T1): whose side it is (`HeldEntry.sideOwner`). */
+	sideOwner?: string
+}
+
+/**
+ * 🚧 A change to what sits in a zone, as a function asks it (R8: asked,
+ * never written by the function): `move` an entry from one zone to another
+ * (`zone` → `to`, across owners with `toOwner`), `add` one (from its entry,
+ * by id or name, or written out), `remove` one, `reveal` (expose) or `hide`
+ * it. `zone` defaults to `carried`.
+ *
+ * 🚧 `set` (ties on the graph, T2, 2026-10-23): one field of a held entry —
+ * to `value`, or moved `by` a number — held to the field's bounds (a number)
+ * or its words (a choice). What lands is what reads onto the lorebook.
+ * A tie side is named by `{ entryType, towards }`.
+ */
+export interface ZoneOp {
+	op: "move" | "add" | "remove" | "reveal" | "hide" | "set"
+	owner: string
+	entry: unknown
+	zone?: string
+	to?: string
+	toOwner?: string
+	/** `set`: the field. */
+	field?: string
+	/** `set`: its new value. */
+	value?: unknown
+	/** `set`: how far a number moves. */
+	by?: number
+	key: string
 }
 
 /** Everything one resolution reads. */
@@ -190,14 +259,138 @@ export interface EngineInput {
 	/** What the ruleset's `derived`-phase scripts computed, by owner key (`scripts.ts`). */
 	scripted?: Readonly<Record<string, ScriptedValues>>
 	/**
+	 * 🚧 What the ruleset's `effects`-phase scripts laid on each owner for the
+	 * events in play (2026-10-22), by owner key — folded in with the pieces'
+	 * own passive effects, before the `derived` phase (`earlyPhases`).
+	 */
+	effects?: Readonly<Record<string, ScriptedEffects>>
+	/**
+	 * 🚧 The check phases a driver answers (2026-10-22): with `preRoll`, a
+	 * check asks before it is resolved (`EngineAsk` `pre-roll`); with
+	 * `postRoll`, after (`post-roll`). Absent: nothing is asked — the
+	 * engine runs straight through (`runApply`).
+	 */
+	checkAsks?: { preRoll?: boolean; postRoll?: boolean }
+	/**
+	 * 🚧 The session's `card-draw` decks as this moment finds them, by check
+	 * method key (`sessions.metadata.rulesetDecks`); a deck absent, or of
+	 * another scene, is shuffled anew. `scene` is the open scene the decks
+	 * belong to (null: none open — the session is one scene); `deckSeed`
+	 * seeds each shuffle, so a deck's order is fixed by session, scene and
+	 * shuffle, never by the run.
+	 */
+	decks?: Readonly<Record<string, DeckState>>
+	scene?: number | null
+	deckSeed?: string
+	/**
 	 * 🚧 Whether time runs out on timed pieces (PLAN-genre-restructure §4,
 	 * lane 2, 2026-10-19): `pieces: false` — the session's *End what runs
 	 * out* task (`timed-expiry`) is Off, and nothing timed counts down or
 	 * leaves; `conditions: false` — *Track conditions* (`conditions`) is Off,
-	 * and the `conditions` repertoire's pieces neither tick nor end. Absent
+	 * and the pieces of a repertoire tagged `condition` (🚧 2026-10-22) neither tick nor end. Absent
 	 * (a genre that declares neither task): both run, as before.
 	 */
 	expiry?: { pieces?: boolean; conditions?: boolean; review?: boolean }
+	/**
+	 * 🚧 What each owner's zones hold (D5, 2026-10-23), by owner key then zone
+	 * type id — the session's stored zones (`zones.ts`). The `carried` zone of a
+	 * ruleset before sections is its repertoires' pieces, read in place.
+	 */
+	zones?: Readonly<Record<string, Readonly<Record<string, readonly ZoneEntry[]>>>>
+	/**
+	 * 🚧 What this viewer may not see (D4), by owner key: the slots whose
+	 * attribute's visibility (a `gm` word or a scope) keeps them from the
+	 * view the blocks are built for — worked out before the engine runs.
+	 */
+	hidden?: Readonly<Record<string, ReadonlySet<string>>>
+}
+
+/**
+ * 🚧 A `card-draw` deck between moments (2026-10-22): the scene it was
+ * shuffled for, how many times it has been shuffled there, and how many of
+ * its cards are drawn. Its order is `seededRandom(deckSeed:method:scene:shuffle)`'s
+ * — stored as three numbers, never as cards.
+ */
+export interface DeckState {
+	scene: number | null
+	shuffle: number
+	drawn: number
+}
+
+/**
+ * 🚧 What one owner's `effects`-phase scripts laid on for the events in
+ * play (2026-10-22): bonuses stacked like a piece's, degree steps on checks,
+ * riders in words — and each script's explain and failures.
+ */
+export interface ScriptedEffects {
+	modifies: { target: string; value: number; label: string; bonusType?: string; seedKey: string }[]
+	adjust: { target: string; by: number; seedKey: string }[]
+	riders: { text: string; seedKey: string }[]
+	explain: { seedKey: string; text: string }[]
+	failed: { seedKey: string; why: string }[]
+}
+
+/**
+ * 🚧 A check as a `pre-roll` script reads it (2026-10-22): what is
+ * attempted, by whom, decided by which check method (its key, kind and
+ * options), against what, the modifier's terms and the edge.
+ */
+export interface CheckAskContext {
+	op: string
+	/** Who makes the check — an owner key. */
+	by: string
+	selector: string
+	label: string
+	method: { key: string | null; kind: string; options: Record<string, unknown> }
+	against?: number
+	/** The selector the check reads (a modifier, a pool's size, a value compared) and its value. */
+	base?: { selector: string; value: number }
+	terms: { label: string; value: number }[]
+	edge: number
+	piece?: string
+	aimedAt?: string
+}
+
+/** 🚧 A resolved check as a `post-roll` script reads it: the ask's context and how it came out. */
+export interface CheckResultContext extends CheckAskContext {
+	rolled?: number
+	natural?: number
+	faces?: number[]
+	pool?: { size: number; successes: number; successOn?: number }
+	cards?: OutcomeCard[]
+	versus?: string
+	margin?: number
+	degree: { id: string; label: string; five: FiveBand } | null
+}
+
+/**
+ * 🚧 What the engine asks a driver mid-check (2026-10-22): the `pre-roll`
+ * scripts before a check resolves, the `post-roll` ones after. `values` are
+ * the checker's resolved values.
+ */
+export type EngineAsk =
+	| { phase: "pre-roll"; owner: string; values: Record<string, SlotValue>; check: CheckAskContext }
+	| { phase: "post-roll"; owner: string; values: Record<string, SlotValue>; check: CheckResultContext }
+
+/**
+ * 🚧 A `pre-roll` answer: a target of its own, an edge, dice added to a
+ * pool, another of the ruleset's check methods (by key), options laid over
+ * the method's for this check, and bonuses.
+ */
+export interface PreRollAnswer {
+	against?: number
+	edge?: -1 | 0 | 1
+	pool?: number
+	method?: string
+	options?: Record<string, unknown>
+	modifies?: { value: number; label: string }[]
+}
+
+/** 🚧 A `post-roll` answer: the degree moved `shift` steps or set to a band by id, and riders told after it. */
+export interface PostRollAnswer {
+	shift?: number
+	degree?: string
+	riders?: string[]
 }
 
 /** What one owner's `derived`-phase scripts returned, laid over in phase 3. */
@@ -274,15 +467,32 @@ export interface Outcome {
 	explainKey?: string
 	check?: {
 		selector: string
-		natural: number
-		total: number
+		/** The die face a die-target kept. Absent under any other check method. */
+		natural?: number
+		/** The number the check came to (`OutcomeBlock.rolled`). Absent under `none`. */
+		total?: number
 		against?: number
 		band?: string
 		five?: FiveBand
 		label?: string
 		/** 🚧 Who made the check, when not the outcome's owner (a traverse's actor, Q2-1). */
 		actor?: string
+		/** 🚧 The check method that decided it (2026-10-22): its kind, and its key in the ruleset's methods. */
+		method?: string
+		methodKey?: string | null
 	}
+	/**
+	 * 🚧 The **outcome block** for this check (2026-10-22): how it was decided
+	 * — dice, a pool, cards, a comparison, a spend, or a judgement — as a
+	 * genre posts it in the story (`OutcomeBlock`, stored kind `dice`).
+	 */
+	block?: OutcomeBlock
+	/**
+	 * 🚧 A row on the lorebook following a held tie side (T2, 2026-10-23):
+	 * the tie's entry type. The outcome line says the graph moved with it —
+	 * what the in-play outcome draws as "follows the bond".
+	 */
+	follows?: string
 }
 
 /** A proposed change the handler refused, with the reason's name and sentence. */
@@ -319,4 +529,19 @@ export interface EngineOutput {
 	changes: EngineChange[]
 	/** Refused deltas a reviewer could still accept, as the change they would make. */
 	reviewable: { change: EngineChange; rejected: RejectedDelta }[]
+	/** 🚧 The `card-draw` decks this moment drew from, as it left them — `resolve.ts` stores them. */
+	decks?: Record<string, DeckState>
+}
+
+/**
+ * 🚧 An event a function raised (D3, 2026-10-23): collected while the moment
+ * runs and **emitted after the receipt** (`emits.ts`), never inside it —
+ * the event's id, its payload, the function that raised it and the owner it
+ * ran for.
+ */
+export interface PendingEmit {
+	event: string
+	payload?: unknown
+	key: string
+	owner?: string
 }

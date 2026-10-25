@@ -294,7 +294,7 @@ describe("an entry in a shared book reads", () => {
 		const editor = document.querySelector("[data-lore-editor]")
 		expect(editor?.textContent).toContain("The harbour")
 		expect(buttonNamed(/^\s*Save\b/)).not.toBeNull()
-		expect(buttonNamed(/More options for this entry/)).not.toBeNull()
+		expect(buttonNamed(/More actions for this entry/)).not.toBeNull()
 		expect(document.querySelector("[data-lore-read-only]")).toBeNull()
 	})
 
@@ -306,7 +306,7 @@ describe("an entry in a shared book reads", () => {
 			editor?.querySelector("[data-lore-save-state]")?.textContent
 		).toContain("Read only")
 		expect(buttonNamed(/^\s*Save\b/)).toBeNull()
-		expect(buttonNamed(/More options for this entry/)).toBeNull()
+		expect(buttonNamed(/More actions for this entry/)).toBeNull()
 		const fields = document.querySelector("fieldset[data-lore-read-only]")
 		expect(fields).not.toBeNull()
 		expect((fields as HTMLFieldSetElement).disabled).toBe(true)

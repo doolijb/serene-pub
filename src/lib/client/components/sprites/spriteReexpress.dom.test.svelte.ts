@@ -38,7 +38,7 @@ function render(canReexpress: (label: string) => boolean) {
 
 const trigger = (label: string) =>
 	document.querySelector(
-		`[aria-label="More for the ${label} sprite"]`
+		`[aria-label="More actions for the ${label} sprite"]`
 	) as HTMLButtonElement | null
 
 const menuItem = (name: RegExp) =>

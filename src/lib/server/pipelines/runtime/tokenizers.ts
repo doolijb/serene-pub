@@ -57,7 +57,7 @@ import {
 	type SpecDocument
 } from "@serene-pub/sdk"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
-import { spineProviders } from "$lib/server/pipelines/runtime/specShape"
+import { budgetedProviderOf } from "$lib/server/pipelines/runtime/specShape"
 
 /**
  * What a counter measures when handed something that is not a string.
@@ -236,9 +236,9 @@ export async function loadTokenIdEncoder(
  * the connection the request goes to, which is what a connection carries one
  * for.
  *
- * Which node: the context-budget node's `connection` ref names it
- * (`slot.connectionOf('generate')` on the shipped specs); a document with no
- * budget node budgets for its first spine provider, the preview target.
+ * Which node: `budgetedProviderOf` — the context-budget node's `connection`
+ * ref names it (`slot.connectionOf(…)` on the shipped specs); a document with
+ * no budget node budgets for its first preview provider.
  *
  * ⚠ The tokenizer has to be resident before the first block is counted, so it
  * is read here, before `run`, rather than at the node — which is why this is a
@@ -268,17 +268,7 @@ export function budgetConnectionOf(
 	doc: SpecDocument
 ): ConfigWorld["connections"][number] | undefined {
 	try {
-		const budget = doc.nodes.find(
-			(n) => n.definitionId === "core:task/context-budget"
-		)
-		const ref = budget?.config?.["connection"] as
-			| { __ref?: unknown; ofNode?: unknown }
-			| undefined
-		const named =
-			ref && ref.__ref === "slot" && typeof ref.ofNode === "string"
-				? doc.nodes.find((n) => n.key === ref.ofNode)
-				: undefined
-		const target = named ?? spineProviders(doc)[0]
+		const target = budgetedProviderOf(doc)
 		if (!target) return undefined
 		const stored = resolveConfig(world, [target.key])[target.key]?.[
 			"connection"

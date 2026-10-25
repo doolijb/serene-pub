@@ -116,7 +116,7 @@
 			class="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4"
 		>
 			<Dialog.Content
-				class="card bg-surface-100-900 border-surface-300-700 @container flex max-h-[96dvh] w-[min(96vw,1200px)] flex-col gap-2 border p-2 shadow-xl sm:p-3"
+				class="card bg-surface-100-900 border-surface-200-800 @container flex max-h-[96dvh] w-[min(96vw,1200px)] flex-col gap-2 border p-2 shadow-xl sm:p-3"
 				data-media-lightbox
 				onkeydown={onKeydown}
 			>
@@ -222,7 +222,7 @@
 					{#if showInfo && current?.mediaRef}
 						<section
 							id="media-lightbox-info"
-							class="border-surface-300-700 max-h-[30dvh] shrink-0 overflow-y-auto border-t pt-2 text-sm @3xl:max-h-none @3xl:w-80 @3xl:border-t-0 @3xl:border-l @3xl:pt-0 @3xl:pl-3"
+							class="border-surface-200-800 max-h-[30dvh] shrink-0 overflow-y-auto border-t pt-2 text-sm @3xl:max-h-none @3xl:w-80 @3xl:border-t-0 @3xl:border-l @3xl:pt-0 @3xl:pl-3"
 							aria-label="Image info"
 							data-lightbox-info
 						>

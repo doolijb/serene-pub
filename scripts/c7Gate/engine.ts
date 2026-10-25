@@ -449,7 +449,37 @@ export function judgeConsole() {
  * Written for the conversation first (the clock sample, `sp-scroll`'s own
  * drawing); inert for a widget that has neither.
  */
+/**
+ * Wait for every scroller under `sel` (and the page) to stand still — two
+ * reads 120ms apart agreeing, within 1.5s — before a shape is read. The
+ * 2026-10-24 re-baseline caught Compact's log mid-settle (45px from the
+ * bottom) and the judged runs read 0px: the same drawing, a moment apart.
+ */
+async function settleScroll(page: Page, sel: string) {
+	await page
+		.evaluate(
+			async ({ sel }) => {
+				const read = () => {
+					const root = document.querySelector(sel)
+					const els = [document.scrollingElement, ...(root ? Array.from(root.querySelectorAll("*")) : [])]
+					return els.map((e) => (e ? Math.round((e as Element).scrollTop) : 0)).join(",")
+				}
+				const t0 = Date.now()
+				let last = read()
+				while (Date.now() - t0 < 1500) {
+					await new Promise((r) => setTimeout(r, 120))
+					const now = read()
+					if (now === last) return
+					last = now
+				}
+			},
+			{ sel }
+		)
+		.catch(() => {})
+}
+
 export async function readShape(page: Page, sel: string) {
+	await settleScroll(page, sel)
 	return page.evaluate(
 		({ sel, props, placement, idrefs, hostFlags, clock }) => {
 			const root = document.querySelector(sel) as HTMLElement
@@ -926,16 +956,17 @@ export async function restoreInstance(page: Page, prior: Prior) {
 /**
  * What differs between two runs and says nothing about either copy, taken out
  * when a live copy is judged against a recording: the fake reply's counter,
- * the clock beside a name, and database numbers in spelled-out ids (`id`,
- * `href`, a host element's `ref`, a reference to an element outside the
- * conversation) — numbered in order of appearance, per attribute. That
- * numbering reads the same for ids swapped between rows, shifted, or a wrong
+ * the clock beside a name, a proposal's anchor ("on message <id>"), and
+ * database numbers in spelled-out ids (`id`, `href`, a host element's `ref`, a
+ * reference to an element outside the conversation, a row's `data-drag-key`,
+ * a ledger's `data-ledger-message`) — numbered in order of appearance, per
+ * attribute. That numbering reads the same for ids swapped between rows, shifted, or a wrong
  * `ref`, and the media uuid and reply counter are gone too: `checkRecords`
  * holds each to the session's own records instead, outright. (Unchanged, so
  * the goldens recorded through it still read the same.) A reference resolved
  * to a path has no database number in it and is left alone.
  */
-export const DB_NUMBERED = new Set(["id", "href", "ref", ...IDREFS])
+export const DB_NUMBERED = new Set(["id", "href", "ref", "data-drag-key", "data-ledger-message", ...IDREFS])
 export function goldenize(s: Snapshot): Snapshot {
 	const numbers = new Map<string, Map<string, string>>()
 	const ordinal = (name: string, v: string) =>
@@ -947,7 +978,11 @@ export function goldenize(s: Snapshot): Snapshot {
 				return token.replace(/\d+/g, (d) => seen.get(d) ?? seen.set(d, `#${seen.size + 1}`).get(d)!)
 			})
 			.join(" ")
-	const text = (v: string) => v.replace(/\br\d+(?= w0\b)/g, "r#").replace(/\b\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AP]M)?/g, "<time>")
+	const text = (v: string) =>
+		v
+			.replace(/\br\d+(?= w0\b)/g, "r#")
+			.replace(/\b\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AP]M)?/g, "<time>")
+			.replace(/\bon message \d+\b/g, "on message #")
 	return {
 		...s,
 		attrs: s.attrs.map(({ path, attrs }) => ({

@@ -1839,7 +1839,9 @@ export async function scopedMissingVectors(
 				.where(
 					and(
 						eq(schema.sessionMessages.sessionId, sessionId),
-						messageChannel
+						messageChannel,
+						// 🚧 The live history (RF fix 5).
+						sql`${schema.sessionMessages.rewindOrdinal} is null`
 					)
 				)
 				.orderBy(desc(schema.sessionMessages.id))

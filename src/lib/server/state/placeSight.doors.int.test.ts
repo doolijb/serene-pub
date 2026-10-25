@@ -36,6 +36,7 @@ import {
 	ITEM_TYPE_ID,
 	LOCATION_TYPE_ID
 } from "$lib/shared/entries/types"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -59,7 +60,7 @@ const DOORS_SHEET = defineAttributeSheet("test:sheet/place-sight-doors@1", {
 	]
 })
 const DOORS_GENRE = "test:genre/place-sight-doors"
-genre(DOORS_GENRE, {
+genreKeeping(DOORS_GENRE, {
 	name: { en: "Place sight doors" },
 	family: "test",
 	sheets: [DOORS_SHEET],

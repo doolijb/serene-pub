@@ -101,7 +101,7 @@
 
 	{#if notice}
 		<p
-			class="bg-surface-200-800 flex items-start gap-2 rounded-[10px] px-3 py-2 text-xs"
+			class="bg-surface-200-800 flex items-start gap-2 rounded-base px-3 py-2 text-xs"
 			role="status"
 		>
 			<Icons.ArrowRightLeft
@@ -140,7 +140,7 @@
 					data-id={row.id}
 					tabindex={row.id === stopId ? 0 : -1}
 					{disabled}
-					class="focus-visible:outline-primary-500 flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-[10px] px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed {checked
+					class="focus-visible:outline-primary-500 flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-base px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed {checked
 						? 'sidebar-row-active'
 						: 'hover:bg-surface-200-800'}"
 					onclick={() => onPick(row.id)}
@@ -165,7 +165,7 @@
 							</span>
 							{#if row.id === bestWithId}
 								<span
-									class="preset-tonal-tertiary shrink-0 rounded-full px-1.5 py-px text-[11px]"
+									class="preset-tonal-tertiary shrink-0 rounded-full px-1.5 py-px text-meta"
 									title="The config this loadout ships with"
 								>
 									Best with

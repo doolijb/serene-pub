@@ -1575,3 +1575,125 @@ describe("OpenAIChatAdapter — images on the wire", () => {
 		expect(params.messages).toEqual([{ role: "user", content: "hi" }])
 	})
 })
+
+// ── 🚧 Audio in, and a spoken reply out (O4, O5, O6, O7) ─────────────────────
+describe("OpenAIChatAdapter — sound on the wire", () => {
+	const wav = Buffer.from("RIFF....WAVEfmt fake wav bytes")
+	const mp3 = Buffer.from("ID3 fake mp3 bytes")
+	const run = async (
+		perMessage: any[][],
+		opts: {
+			outputs?: string[]
+			speech?: Record<string, unknown>
+			response?: any
+			stream?: boolean
+		} = {}
+	) => {
+		createMock.mockClear()
+		createMock.mockResolvedValue(opts.response ?? { choices: [{ message: { content: "ok" } }] })
+		const adapter = makeAdapter({
+			wireMode: "chat",
+			extraJson: { apiKey: "sk-test", ...(opts.stream ? { stream: true } : {}) }
+		})
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [{ role: "user", content: "Ash: listen" }],
+			meta: {} as any
+		} as any)
+		if (perMessage.length) adapter.withMessageAttachments(perMessage)
+		if (opts.outputs) adapter.withOutputs(opts.outputs, opts.speech ?? null)
+		const result = await adapter.generateText()
+		return { params: createMock.mock.calls.at(-1)![0], result }
+	}
+
+	test("a WAV or MP3 on a turn becomes an input_audio part, base64, with its format", async () => {
+		const { params } = await run([
+			[
+				{ bytes: wav, mime: "audio/wav", filename: "note.wav" },
+				{ bytes: mp3, mime: "audio/mpeg", filename: "note.mp3" }
+			]
+		])
+		expect(params.messages[0].content).toEqual([
+			{ type: "input_audio", input_audio: { data: wav.toString("base64"), format: "wav" } },
+			{ type: "input_audio", input_audio: { data: mp3.toString("base64"), format: "mp3" } },
+			{ type: "text", text: "Ash: listen" }
+		])
+	})
+
+	test("a sound in a format the wire does not take is refused, never sent as something else", async () => {
+		createMock.mockClear()
+		const adapter = makeAdapter({ wireMode: "chat" })
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [{ role: "user", content: "hi" }],
+			meta: {} as any
+		} as any)
+		adapter.withMessageAttachments([[{ bytes: Buffer.from("OggS...."), mime: "audio/ogg", filename: "n.ogg" }]])
+		await expect(adapter.generateText()).rejects.toThrow()
+		expect(createMock).not.toHaveBeenCalled()
+	})
+
+	test("declares that it can ask for a spoken reply", () => {
+		expect(makeAdapter().writesKinds).toEqual(["text", "audio"])
+	})
+
+	test("asking for audio sends modalities and the voice, unstreamed", async () => {
+		// Streaming is on for this connection — and off for a spoken reply.
+		const { params } = await run([], {
+			outputs: ["text", "audio"],
+			speech: { voice: "verse" },
+			stream: true
+		})
+		expect(params.modalities).toEqual(["text", "audio"])
+		expect(params.audio).toEqual({ voice: "verse", format: "wav" })
+		expect(params.stream).toBe(false)
+	})
+
+	test("with no voice in the speech sampling, OpenAI's default voice is asked for", async () => {
+		const { params } = await run([], { outputs: ["text", "audio"] })
+		expect(params.audio).toEqual({ voice: "alloy", format: "wav" })
+	})
+
+	test("text alone asks for nothing new", async () => {
+		const { params } = await run([])
+		expect("modalities" in params).toBe(false)
+		expect("audio" in params).toBe(false)
+	})
+
+	test("a spoken reply comes back as a media part, its transcript the text", async () => {
+		const audio = Buffer.from("spoken wav").toString("base64")
+		const { result } = await run([], {
+			outputs: ["text", "audio"],
+			response: {
+				choices: [
+					{
+						message: {
+							content: null,
+							audio: { id: "audio_1", data: audio, transcript: " Hello there. ", expires_at: 1 }
+						}
+					}
+				]
+			}
+		})
+		expect(result.completionResult).toBe("Hello there.")
+		expect(result.media).toEqual([
+			{
+				kind: "audio",
+				mime: "audio/wav",
+				base64: audio,
+				meta: { providerAudioId: "audio_1", expiresAt: 1 }
+			}
+		])
+	})
+
+	test("text beside the audio stays the text; no audio is no media", async () => {
+		const { result } = await run([], {
+			outputs: ["text", "audio"],
+			response: { choices: [{ message: { content: "Written.", audio: { data: "QQ==", transcript: "Spoken." } } }] }
+		})
+		expect(result.completionResult).toBe("Written.")
+		expect(result.media).toHaveLength(1)
+		const plain = await run([], { response: { choices: [{ message: { content: "hi" } }] } })
+		expect(plain.result.media).toBeUndefined()
+	})
+})

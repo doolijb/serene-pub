@@ -1,4 +1,6 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
+	import InlineError from "$lib/client/components/InlineError.svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import TotpSettings from "./TotpSettings.svelte"
 	import PluginUserSettingsCard from "./PluginUserSettingsCard.svelte"
@@ -34,6 +36,10 @@
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	import { languageDefinition } from "$lib/shared/i18n/languages"
 	import LoreWriteModePicker from "$lib/client/components/inputs/LoreWriteModePicker.svelte"
+	import RoutineCapsCard from "./RoutineCapsCard.svelte"
+	import SettingCard from "./SettingCard.svelte"
+	import AvatarPicker from "$lib/client/components/media/AvatarPicker.svelte"
+	import { avatarSrc } from "$lib/client/utils/media"
 	import {
 		LORE_WRITE_MODE_CHOICES,
 		effectiveLoreWriteMode,
@@ -133,6 +139,39 @@
 		} else {
 			toaster.error({ title: "Failed to update display name" })
 		}
+	}
+
+	function handleUsersCurrentUpdateAvatar(
+		message: SocketEventMap["users:current:updateAvatar"]["response"]
+	) {
+		// Every tab of the account hears it; only the one that sent the
+		// picture holds its crop.
+		if (!isUpdatingAvatar) return
+		isUpdatingAvatar = false
+		avatarPicker?.commitPendingFrame(message.avatarMediaId)
+		avatarPicker?.clear()
+		// Drawn now rather than when the `users:current` behind it lands.
+		if (userCtx.user)
+			userCtx.user = {
+				...userCtx.user,
+				avatarMediaId: message.avatarMediaId,
+				avatarMedia: message.avatarMedia
+			}
+		toaster.success({
+			title: message.avatarMediaId ? "Avatar updated" : "Avatar removed"
+		})
+	}
+
+	function handleUsersCurrentUpdateAvatarError(
+		message: SocketEventMap["users:current:updateAvatar:error"]["response"]
+	) {
+		if (!isUpdatingAvatar) return
+		isUpdatingAvatar = false
+		avatarPicker?.clear()
+		toaster.error({
+			title: "Avatar error",
+			description: message.error || "The avatar could not be saved."
+		})
 	}
 
 	function handleUsersCurrentChangePassphrase(
@@ -241,6 +280,14 @@
 		"users:current:updateDisplayName:error",
 		handleUsersCurrentUpdateDisplayNameError
 	)
+	useInterest<"users:current:updateAvatar">(
+		"users:current:updateAvatar",
+		handleUsersCurrentUpdateAvatar
+	)
+	useInterest<"users:current:updateAvatar:error">(
+		"users:current:updateAvatar:error",
+		handleUsersCurrentUpdateAvatarError
+	)
 	useInterest<"users:current:changePassphrase:error">(
 		"users:current:changePassphrase:error",
 		handleUsersCurrentChangePassphraseError
@@ -317,6 +364,26 @@
 	// Profile form data
 	let displayName = $state("")
 	let displayNameError = $state("")
+
+	// The account's avatar: no Save of its own, so the crop editor's Save
+	// sends it (`onCommit`), and Remove clears it at once.
+	let avatarPicker = $state<ReturnType<typeof AvatarPicker> | null>(null)
+	let avatarFile = $state<File | undefined>()
+	let avatarPreview = $state("")
+	let isUpdatingAvatar = $state(false)
+
+	function uploadAvatar(file: File) {
+		isUpdatingAvatar = true
+		socket.emit("users:current:updateAvatar", {
+			// Socket.IO marshals a browser File to a Node Buffer.
+			avatarFile: file as unknown as Buffer
+		})
+	}
+
+	function removeAvatar() {
+		isUpdatingAvatar = true
+		socket.emit("users:current:updateAvatar", { avatarFile: null })
+	}
 
 	// Change password form data
 	let currentPassword = $state("")
@@ -475,27 +542,17 @@
 	}
 </script>
 
-<div class="flex flex-col gap-4">
-	<!-- Language -->
-	<div class="card preset-filled-surface-100-900 p-4">
-		<h3 class="mb-2 text-sm font-medium">{t("Language")}</h3>
-		<p class="text-surface-700-300 mb-3 text-sm">
-			{t(
-				"The language this interface is drawn in. Leave it on the pub default to follow whatever an administrator has set for everyone."
-			)}
-		</p>
-		<LanguagePicker
-			label={t("Language")}
-			inheritLabel={serverDefaultOptionLabel}
-			value={userSettingsCtx.settings?.language ?? ""}
-			describedBy="user-language-note"
-			onValueChange={onLanguageChange}
-		/>
-		<p id="user-language-note" class="text-surface-700-300 mt-3 text-sm">
-			{t(
-				"Translations are produced automatically and are only as good as the translation service; text a translation has not reached yet stays in English."
-			)}
-			{t("Some search features depend on your language.")}
+<!-- One card per setting (STYLE-GUIDE §6.4, setting cards): the title is the
+     setting's name and its control's label, one sentence of help, the
+     control beside the words once the view is wide enough. -->
+<div class="flex max-w-[760px] flex-col gap-3">
+	<SettingCard
+		title={t("Language")}
+		titleId="user-language-heading"
+		helpId="user-language-note"
+	>
+		{#snippet help()}
+			{t("Pub default follows what an administrator set for everyone.")}
 			<a
 				class="anchor"
 				href={docsHref(
@@ -503,41 +560,45 @@
 					"for-power-users-language-and-lore-search"
 				)}
 			>
-				{t("How your language affects search")}
+				{t("How language affects search")}
 			</a>
-		</p>
-	</div>
+		{/snippet}
+		<LanguagePicker
+			label={t("Language")}
+			labelHidden
+			inheritLabel={serverDefaultOptionLabel}
+			value={userSettingsCtx.settings?.language ?? ""}
+			describedBy="user-language-note"
+			onValueChange={onLanguageChange}
+		/>
+	</SettingCard>
 
-	<!-- Time zone -->
-	<div class="card preset-filled-surface-100-900 p-4">
-		<h3 class="mb-2 text-sm font-medium">{t("Time zone")}</h3>
-		<p class="text-surface-700-300 mb-3 text-sm">
-			{t(
-				"The zone real-world dates and times are shown in. It starts as your browser's; in-story time is the story's own and is not affected."
-			)}
-		</p>
+	<SettingCard
+		title={t("Time zone")}
+		titleId="user-time-zone-heading"
+		help={t("Real-world dates and times are shown in it; story time keeps its own.")}
+	>
 		<TimeZonePicker
 			label={t("Time zone")}
+			labelHidden
 			value={userCtx.user?.timeZone ?? browserTimeZone()}
 			describedBy="user-time-zone-note"
 			onValueChange={onTimeZoneChange}
 		/>
-		<p id="user-time-zone-note" class="text-surface-700-300 mt-3 text-sm">
+		<p id="user-time-zone-note" class="text-surface-600-400 text-xs">
 			{t("Now")}: {realDateTime(new Date(), { dateStyle: "medium", timeStyle: "short" })}
 			({displayTimeZone()})
 		</p>
-	</div>
+	</SettingCard>
 
 	<!-- Lorebook writes from sessions (plan A22) -->
-	<div class="card preset-filled-surface-100-900 p-4">
-		<h3 class="mb-2 text-sm font-medium">Lorebook writes from sessions</h3>
-		<p
-			id="user-lore-write-mode-note"
-			class="text-surface-700-300 mb-3 text-sm"
-		>
-			How your sessions may change the lorebooks you own: the stats they
-			record, a summary, a compiled history, a graph.
-		</p>
+	<SettingCard
+		title="Lorebook writes from sessions"
+		titleId="user-lore-write-mode-heading"
+		helpId="user-lore-write-mode-note"
+		help="How your sessions may change the lorebooks you own; a lorebook can allow less, never more."
+		layout="stack"
+	>
 		<LoreWriteModePicker
 			legend="Lorebook writes from sessions"
 			name="user-lore-write-mode"
@@ -547,116 +608,103 @@
 			describedBy="user-lore-write-mode-note"
 			onValueChange={onLoreWriteModeChange}
 		/>
-	</div>
+	</SettingCard>
 
-	<div
-		class="card preset-filled-surface-100-900 divide-surface-300-700 divide-y p-4"
+	<!-- 🚧 Background routines (R11; lane 7): this person's own caps on
+	     their sessions' real-time routines, under the pub's. -->
+	<RoutineCapsCard scope="user" />
+
+	<SettingCard
+		title="Show all character fields"
+		titleId="user-show-all-fields-heading"
+		help="Every field on the character form, not just the common ones."
+		layout="switch"
 	>
-		<div class="flex flex-col gap-2 pb-4">
-			<p class="text-surface-600-400 text-sm">
-				Shows every field on the character form (advanced/less-common
-				ones included), instead of just the commonly-used subset.
-			</p>
-			<Switch
-				name="show-all-character-fields"
-				checked={userSettingsCtx.settings?.showAllCharacterFields ??
-					false}
-				onCheckedChange={onShowAllCharacterFieldsClick}
+		<Switch
+			name="show-all-character-fields"
+			checked={userSettingsCtx.settings?.showAllCharacterFields ?? false}
+			onCheckedChange={onShowAllCharacterFieldsClick}
+		>
+			<Switch.Control
+				class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 			>
-				<Switch.Control
-					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-				>
-					<Switch.Thumb />
-				</Switch.Control>
-				<Switch.HiddenInput />
-				<Switch.Label class="font-semibold">
-					Show all character fields
-				</Switch.Label>
-			</Switch>
-		</div>
+				<Switch.Thumb />
+			</Switch.Control>
+			<Switch.HiddenInput />
+			<Switch.Label class="sr-only">Show all character fields</Switch.Label>
+		</Switch>
+	</SettingCard>
 
-		<div class="flex flex-col gap-2 pt-4">
-			<p class="text-surface-600-400 text-sm">
-				Writing a character — or a persona — from the Characters view's
-				"New" menu opens a quick, simplified creator instead of the full
-				character form. Turn off to always go straight to the full form.
-			</p>
-			<Switch
-				name="easy-character-creation"
-				checked={userSettingsCtx.settings
-					?.enableEasyCharacterCreation ?? true}
-				onCheckedChange={onEasyCharacterCreationClick}
+	<SettingCard
+		title="Easy character creation"
+		titleId="user-easy-creation-heading"
+		help="New in the Characters view opens a quick creator; off, it goes straight to the full form."
+		layout="switch"
+	>
+		<Switch
+			name="easy-character-creation"
+			checked={userSettingsCtx.settings?.enableEasyCharacterCreation ??
+				true}
+			onCheckedChange={onEasyCharacterCreationClick}
+		>
+			<Switch.Control
+				class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 			>
-				<Switch.Control
-					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-				>
-					<Switch.Thumb />
-				</Switch.Control>
-				<Switch.HiddenInput />
-				<Switch.Label class="font-semibold">
-					Easy character creation
-				</Switch.Label>
-			</Switch>
-		</div>
-	</div>
+				<Switch.Thumb />
+			</Switch.Control>
+			<Switch.HiddenInput />
+			<Switch.Label class="sr-only">Easy character creation</Switch.Label>
+		</Switch>
+	</SettingCard>
 
-	<!-- Document View Section -->
-	<div class="card preset-filled-surface-100-900 p-4">
-		<h3 class="mb-2 text-sm font-medium">Document View</h3>
-		<p class="text-surface-700-300 mb-3 text-sm">
-			A simplified, high-contrast, keyboard- and screen-reader-friendly
-			alternative to this interface. You can also switch to it any time
-			with Ctrl+Shift+Y.
-		</p>
-		<div class="flex flex-wrap gap-2">
+	<SettingCard
+		title="Document View"
+		titleId="user-document-view-heading"
+		help="A simplified, high-contrast view for the keyboard and screen readers; Ctrl+Shift+Y switches any time."
+	>
+		<button
+			type="button"
+			class="btn preset-tonal-surface w-fit max-w-full whitespace-normal"
+			onclick={switchToDocumentView}
+		>
+			<Icons.Accessibility size={16} aria-hidden="true" />
+			Switch to Document View
+		</button>
+		{#if accessibilityModeStore.persisted}
 			<button
 				type="button"
-				class="btn preset-filled-primary-500 w-fit max-w-full whitespace-normal"
-				onclick={switchToDocumentView}
+				class="btn preset-tonal-surface w-fit max-w-full whitespace-normal"
+				onclick={exitDocumentView}
 			>
-				<Icons.Accessibility size={16} />
-				Switch to Document View
+				<Icons.X size={16} aria-hidden="true" />
+				Exit Document View
 			</button>
-			{#if accessibilityModeStore.persisted}
-				<button
-					type="button"
-					class="btn preset-tonal-surface w-fit max-w-full whitespace-normal"
-					onclick={exitDocumentView}
-				>
-					<Icons.X size={16} />
-					Exit Document View
-				</button>
-			{/if}
-		</div>
-		{#if accessibilityModeStore.persisted}
-			<p class="text-surface-700-300 mt-3 text-sm">
-				This browser currently opens Document View by default.
-			</p>
+			<FieldHelp>
+				This browser opens Document View by default.
+			</FieldHelp>
 		{/if}
-	</div>
+	</SettingCard>
 
 	<!-- Extension settings that are this person's own (scope: 'user') -->
 	<PluginUserSettingsCard />
 
-	<!-- Import Section -->
+	<!-- Import: opens this view's own Import section (owner note 23,
+	     2026-10-02; it was the /import page). -->
 	{#if userCtx.user?.isAdmin && !systemSettingsCtx.settings?.isAndroidWrapper}
-		<div class="card preset-filled-surface-100-900 p-4">
-			<h3 class="mb-4 text-sm font-medium">Data import</h3>
-			<p class="text-surface-700-300 mb-3 text-sm">
-				Import your characters, personas, sessions, and lorebooks from
-				other applications.
-			</p>
-			<!-- Opens this view's own Import section (owner note 23,
-			     2026-10-02; it was the /import page). -->
+		<SettingCard
+			title="Data import"
+			titleId="user-data-import-heading"
+			help="Characters, personas, sessions and lorebooks from another app."
+		>
 			<button
 				type="button"
-				class="btn preset-filled-primary-500 w-fit max-w-full whitespace-normal"
+				class="btn preset-tonal-surface w-fit max-w-full whitespace-normal"
 				onclick={() => (panelsCtx.digest.settingsSection = "import")}
 			>
-				<Icons.Download size={16} />
+				<Icons.Download size={16} aria-hidden="true" />
 				Import from SillyTavern
 			</button>
-		</div>
+		</SettingCard>
 	{/if}
 
 	<!-- User profile: the display name is everyone's, in every mode; the
@@ -666,12 +714,45 @@
 			<TotpSettings />
 		{/if}
 
-		<div class="card preset-filled-surface-100-900 p-4">
-			<h3 class="mb-4 text-sm font-medium">User profile</h3>
+		<section
+			class="panel-card flex flex-col gap-4"
+			aria-labelledby="user-profile-heading"
+		>
+			<h3 id="user-profile-heading" class="text-lead font-medium">
+				User profile
+			</h3>
+
+			<!-- Avatar: round, as the account is drawn everywhere. -->
+			<div class="flex items-start gap-4">
+				<AvatarPicker
+					bind:this={avatarPicker}
+					bind:file={avatarFile}
+					bind:preview={avatarPreview}
+					src={avatarSrc(userCtx.user, { full: true })}
+					mediaId={userCtx.user.avatarMediaId}
+					media={userCtx.user.avatarMedia}
+					shape="round"
+					glyph={Icons.User}
+					subject="your avatar"
+					busy={isUpdatingAvatar}
+					onCommit={uploadAvatar}
+					onRemove={removeAvatar}
+				/>
+				<div class="flex min-w-0 flex-col gap-1">
+					<p class="text-sm font-medium">Avatar</p>
+					<p
+						class="text-surface-600-400 text-chip"
+						title="Your personas keep their own."
+					>
+						Shown beside your name in the rail, the people lists and
+						conversations; click it or drop a picture on it.
+					</p>
+				</div>
+			</div>
 
 			<!-- Display Name -->
-			<div class="flex flex-col gap-2">
-				<label for="display-name" class="font-semibold">
+			<div class="flex flex-col gap-1.5">
+				<label for="display-name" class="text-sm font-medium">
 					Display name
 				</label>
 				<div class="flex gap-2">
@@ -699,18 +780,18 @@
 						{/if}
 					</button>
 				</div>
-				<p id="display-name-help" class="text-surface-600-400 text-sm">
-					What the app and the characters call you. Leave it empty to
-					go by your username.
+				<p id="display-name-help" class="text-surface-600-400 text-chip">
+					What the app and the characters call you; leave it empty to go
+					by your username.
 				</p>
 				{#if displayNameError}
-					<p class="text-error-500 text-sm">{displayNameError}</p>
+					<InlineError>{displayNameError}</InlineError>
 				{/if}
 			</div>
 
 			{#if systemSettingsCtx.settings?.isAccountsEnabled}
 				<!-- Profile Actions -->
-				<div class="mt-4 flex flex-col gap-2">
+				<div class="flex flex-col gap-2">
 					<button
 						type="button"
 						class="btn preset-tonal-surface mx-auto w-fit"
@@ -736,7 +817,7 @@
 					</button>
 				</div>
 			{/if}
-		</div>
+		</section>
 	{/if}
 </div>
 
@@ -813,7 +894,7 @@
 					</div>
 
 					{#if passwordError}
-						<p class="text-error-500 text-sm">{passwordError}</p>
+						<InlineError>{passwordError}</InlineError>
 					{/if}
 
 					<footer class="flex justify-end gap-2">

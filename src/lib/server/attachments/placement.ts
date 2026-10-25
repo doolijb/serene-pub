@@ -6,14 +6,20 @@
  *
  * Per file, in part order:
  *
- *  - an **image or PDF** the call reads, on a line within `mediaLookback`
+ *  - an **image, PDF or sound** the call reads (🚧 audio and video since O2,
+ *    by kind, in a format the pair takes), on a line within `mediaLookback`
  *    messages of the end → a media marker (`<@media:{uuid}>`), which the
- *    prompt parser lifts onto that line's own turn;
+ *    prompt parser lifts onto that line's own turn — and, with it, the line's
+ *    estimated media cost and text form for the context budget (O10);
+ *  - 🚧 a **spoken reply** (the model's own audio, O13) → nothing beside the
+ *    line's text, which is what it said — as audio only within the lookback
+ *    where the pair takes audio on the model's turns;
  *  - a **text file** → a fenced block under its name, cut to `textFileTokens`
  *    with a sentence saying so — never silently;
  *  - **anything else** — a kind the call cannot read, media older than the
  *    lookback, a file no model is offered → a placeholder (D3):
- *    `[image: cat.png — a grey cat]`, the person's description when given.
+ *    `[image: cat.png — a grey cat]`, the person's description when given;
+ *    a heard sound with its words, `[audio: note.mp3 — "…"]` (O9).
  *
  * A line with no files is returned as the SAME object, and no `attachments`
  * key is added to it: a transcript with no attachments renders byte for byte
@@ -23,7 +29,11 @@
  * file's body — is neutralised for media markers here, because the template
  * scope's neutraliser exempts exactly the value this produces.
  */
-import type { ConnectionReadsV1, HistoryAttachmentV1 } from "@serene-pub/sdk"
+import {
+	connectionReadsKind,
+	type ConnectionReadsV1,
+	type HistoryAttachmentV1
+} from "@serene-pub/sdk"
 import {
 	mediaMarker,
 	neutralizeMediaMarkers
@@ -31,6 +41,60 @@ import {
 
 /** The default estimate of what one placed image costs, when the pair says nothing. */
 export const DEFAULT_TOKENS_PER_IMAGE = 1600
+
+/**
+ * 🚧 What one placed item costs when the pair states nothing (O10) — an
+ * ESTIMATE for the receipt and the context budget, never a cap. A PDF page
+ * count is unknown here, so a PDF is a flat figure; audio and video cost by
+ * the second.
+ */
+export const DEFAULT_MEDIA_COST = {
+	image: { perItem: DEFAULT_TOKENS_PER_IMAGE },
+	document: { perItem: 3000 },
+	audio: { perSecond: 10 },
+	video: { perSecond: 300 }
+} as const
+
+/**
+ * Seconds of audio a file holds when nothing measured it — about 16 KB a
+ * second (128 kbit/s), the common voice-note rate. An estimate for the
+ * budget only.
+ */
+export const ESTIMATED_AUDIO_BYTES_PER_SECOND = 16_000
+
+/** The media kind each placeable attachment kind is READ as (a PDF is a document). */
+const READ_KIND = {
+	image: "image",
+	pdf: "document",
+	audio: "audio",
+	video: "video"
+} as const
+type PlaceableKind = keyof typeof READ_KIND
+const isPlaceable = (k: unknown): k is PlaceableKind =>
+	k === "image" || k === "pdf" || k === "audio" || k === "video"
+
+/** What one placed file is estimated to cost, by the pair's stated cost or the default. */
+export function estimateMediaTokens(
+	file: Pick<HistoryAttachmentV1, "attachmentKind" | "duration" | "bytes">,
+	reads?: ConnectionReadsV1 | null
+): number {
+	const kind = file.attachmentKind
+	if (!isPlaceable(kind)) return 0
+	const readKind = READ_KIND[kind]
+	const stated = connectionReadsKind(reads, readKind).cost
+	const cost = { ...DEFAULT_MEDIA_COST[readKind], ...(stated ?? {}) } as {
+		perItem?: number
+		perSecond?: number
+	}
+	if (kind === "audio" || kind === "video") {
+		const seconds =
+			typeof file.duration === "number" && file.duration > 0
+				? file.duration
+				: Math.max(1, (file.bytes ?? 0) / ESTIMATED_AUDIO_BYTES_PER_SECOND)
+		return Math.ceil(seconds * (cost.perSecond ?? 0)) + (cost.perItem ?? 0)
+	}
+	return cost.perItem ?? 0
+}
 
 export const MEDIA_LOOKBACK_DEFAULT = 10
 export const TEXT_FILE_TOKENS_DEFAULT = 4000
@@ -62,8 +126,28 @@ export interface PlacementResult {
 	placed: { media: number; estimatedTokens: number }
 }
 
-const KIND_WORD = { image: "image", pdf: "PDF", text: "file" } as const
-const KIND_PLURAL = { image: "images", pdf: "PDFs" } as const
+/**
+ * 🚧 O10: the two keys a line that places media carries, beside
+ * `attachments`, so the context budget can count it and fall it back:
+ * `mediaTokens` — the estimated cost of its markers — and `attachmentsAsText`
+ * — the same `attachments` with every marker as its name.
+ */
+export const LINE_MEDIA_TOKENS = "mediaTokens"
+export const LINE_ATTACHMENTS_AS_TEXT = "attachmentsAsText"
+
+const KIND_WORD = {
+	image: "image",
+	pdf: "PDF",
+	text: "file",
+	audio: "audio",
+	video: "video"
+} as const
+const KIND_PLURAL = {
+	image: "images",
+	pdf: "PDFs",
+	audio: "audio files",
+	video: "videos"
+} as const
 
 const plural = (n: number, one: string, many: string) =>
 	`${n} ${n === 1 ? one : many}`
@@ -81,13 +165,16 @@ function cleanName(raw: unknown): string {
  * spelling serves both paths.
  */
 export function attachmentPlaceholder(file: HistoryAttachmentV1): string {
-	const word =
-		file.attachmentKind === "image" || file.attachmentKind === "pdf"
-			? KIND_WORD[file.attachmentKind]
-			: "file"
+	const word = isPlaceable(file.attachmentKind)
+		? KIND_WORD[file.attachmentKind]
+		: "file"
 	const name = cleanName(file.filename)
-	const alt = cleanName(file.text)
 	const label = name ? `${word}: ${name}` : word
+	// 🚧 O9: a sound named WITH ITS WORDS, quoted — `[audio: note.mp3 — "…"]`;
+	// anything else with the person's description, as before.
+	const transcript = cleanName(file.transcript)
+	if (transcript) return `[${label} — "${transcript.replace(/"/g, "'")}"]`
+	const alt = cleanName(file.text)
 	return `[${label}${alt ? ` — ${alt}` : ""}]`
 }
 
@@ -149,10 +236,6 @@ export function placeAttachments(input: PlacementInput): PlacementResult {
 	const count =
 		input.countTokens ?? ((text: string) => Math.ceil(text.length / 4))
 	const reads = input.reads ?? null
-	const tokensPerImage =
-		reads?.tokensPerImage && reads.tokensPerImage > 0
-			? reads.tokensPerImage
-			: DEFAULT_TOKENS_PER_IMAGE
 
 	// How far from the end each real message line sits: 0 is the newest.
 	// The seed (-2) and folio blocks (-3) are not messages and carry no files.
@@ -164,8 +247,11 @@ export function placeAttachments(input: PlacementInput): PlacementResult {
 	}
 
 	let placedMedia = 0
+	let placedTokens = 0
 	let pastLookback = 0
-	const unreadable = { image: 0, pdf: 0 }
+	const unreadable = { image: 0, pdf: 0, audio: 0, video: 0 }
+	let heardAsWords = 0
+	let spokenAsWords = 0
 	let unoffered = 0
 	let cutFiles = 0
 
@@ -176,53 +262,108 @@ export function placeAttachments(input: PlacementInput): PlacementResult {
 		if (!files?.length) return line
 		const within = (ages.get(index) ?? Infinity) < lookback
 		const pieces: string[] = []
+		// The same pieces with every marker as its name — the line's text form
+		// when the context budget cannot hold its media (O10).
+		const asText: string[] = []
+		let lineTokens = 0
+		const named = (file: HistoryAttachmentV1) => {
+			const p = attachmentPlaceholder(file)
+			pieces.push(p)
+			asText.push(p)
+		}
 		for (const file of files) {
 			const kind = file.attachmentKind
 			if (kind === "text") {
 				const { block, cut } = textBlock(file, budget, count)
 				if (cut) cutFiles++
 				pieces.push(block)
-			} else if (kind === "image" || kind === "pdf") {
-				if (!reads?.[kind]) {
+				asText.push(block)
+			} else if (isPlaceable(kind)) {
+				const read = connectionReadsKind(reads, READ_KIND[kind])
+				// 🚧 O13: the model's own earlier audio — a spoken reply. The
+				// line's text IS what it said, so it goes back as those words;
+				// as audio only within the lookback, and only where the pair
+				// takes audio on the model's own turns.
+				if (kind === "audio" && line.role === "assistant") {
+					if (within && read.reads && read.assistantTurns) {
+						const tokens = estimateMediaTokens(file, reads)
+						placedMedia++
+						placedTokens += tokens
+						lineTokens += tokens
+						pieces.push(mediaMarker(file.uuid))
+						asText.push("")
+					} else spokenAsWords++
+					continue
+				}
+				// A format the pair names none of, which nothing here converts
+				// (audio, video): not sent — named, with its words when heard.
+				const takes =
+					!read.accepts || read.accepts.includes(String(file.mime))
+				if (!read.reads || !takes) {
 					unreadable[kind]++
-					pieces.push(attachmentPlaceholder(file))
+					if (file.transcript) heardAsWords++
+					named(file)
 				} else if (!within) {
 					pastLookback++
-					pieces.push(attachmentPlaceholder(file))
+					named(file)
 				} else {
+					const tokens = estimateMediaTokens(file, reads)
 					placedMedia++
+					placedTokens += tokens
+					lineTokens += tokens
 					pieces.push(mediaMarker(file.uuid))
+					asText.push(attachmentPlaceholder(file))
 				}
 			} else {
 				unoffered++
-				pieces.push(attachmentPlaceholder(file))
+				named(file)
 			}
 		}
 		const text = typeof line.message === "string" ? line.message : ""
 		const lead = text.trim() ? "\n" : ""
-		return { ...line, attachments: lead + pieces.join("\n") }
+		const shown = pieces.filter(Boolean)
+		if (!shown.length && !lineTokens) return line
+		return {
+			...line,
+			attachments: lead + shown.join("\n"),
+			...(lineTokens
+				? {
+						[LINE_MEDIA_TOKENS]: lineTokens,
+						[LINE_ATTACHMENTS_AS_TEXT]:
+							lead + asText.filter(Boolean).join("\n")
+					}
+				: {})
+		}
 	})
 
 	const notes: string[] = []
 	if (placedMedia)
 		notes.push(
 			`${plural(placedMedia, "file was", "files were")} sent to the model ` +
-				`(about ${placedMedia * tokensPerImage} tokens, estimated).`
+				`(about ${placedTokens} tokens, estimated).`
 		)
 	if (pastLookback)
 		notes.push(
 			`${plural(pastLookback, "file", "files")} older than the media lookback ` +
 				`(${lookback} messages) ${pastLookback === 1 ? "was" : "were"} sent as ${pastLookback === 1 ? "its name" : "names"}.`
 		)
-	for (const kind of ["image", "pdf"] as const) {
+	for (const kind of ["image", "pdf", "audio", "video"] as const) {
 		const n = unreadable[kind]
 		if (!n) continue
-		const why = reads?.why?.[kind]
+		const why = connectionReadsKind(reads, READ_KIND[kind]).why
 		notes.push(
 			`This step can't read ${KIND_PLURAL[kind]}: ${n} sent as ${n === 1 ? "a name" : "names"}.` +
 				(why ? ` ${why}` : "")
 		)
 	}
+	if (heardAsWords)
+		notes.push(
+			`${plural(heardAsWords, "audio file was", "audio files were")} named with what ${heardAsWords === 1 ? "it says" : "they say"} (transcribed).`
+		)
+	if (spokenAsWords)
+		notes.push(
+			`${plural(spokenAsWords, "spoken reply", "spoken replies")} went back as the words said, not as audio.`
+		)
 	if (unoffered)
 		notes.push(
 			`${plural(unoffered, "file", "files")} of a type no model is sent ${unoffered === 1 ? "was" : "were"} shown as ${unoffered === 1 ? "its name" : "names"}.`
@@ -237,7 +378,7 @@ export function placeAttachments(input: PlacementInput): PlacementResult {
 		notes,
 		placed: {
 			media: placedMedia,
-			estimatedTokens: placedMedia * tokensPerImage
+			estimatedTokens: placedTokens
 		}
 	}
 }

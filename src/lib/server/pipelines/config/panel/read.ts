@@ -98,40 +98,63 @@ export async function layers(db: Db, at: Published, viewer: Viewer) {
 		return m
 	}
 
-	// The selected *named config*, resolved by the same function the runtime
-	// uses (`world.ts applyPipelineLayer` → `resolveSelectedConfig`). One
-	// mechanism on purpose: a panel that read a different table than the run
-	// would agree with the user while the model did something else — the worst
-	// class of bug in this area, because there is nothing to see.
-	const { resolveSelectedConfig } = await import(
+	/**
+	 * 🚧 What sits above the declaration (R38, PLAN-layering D5), read by the
+	 * same functions the runtime uses (`world.ts applyPipelineLayer`): the
+	 * pipeline's declared defaults, the genre's defaults' registration values
+	 * over them, the session's preset's over those, and a session's own
+	 * registration values on top (the upgrade's home for a configuration a
+	 * session had selected), with the pipeline's instance values (R50) under
+	 * the genre layer. One map, highest last — the panel's `config` source.
+	 * No configuration is read (retired, 0110).
+	 */
+	const { shippedConfigValues, shippedConfigValuesOf } = await import(
 		"$lib/server/pipelines/config/named"
 	)
-	const selectedConfig = await resolveSelectedConfig(db, at.specId, at.slug, {
-		sessionId: viewer.sessionId ?? undefined
+	const { registrationValueLayers, addressedValues } = await import(
+		"$lib/server/pipelines/registrations/values"
+	)
+	const decls = await declarations(db, at.specVersionId)
+	// The declared defaults where they depart from the declaration (a
+	// reference, a preset value) — what the shipped Default stored; a value
+	// equal to its declaration reads as the declaration's (`author`).
+	const { isDeviation } = await import("$lib/server/pipelines/config/deviations")
+	const declByKey = new Map(decls.map((d) => [addr(d.nodeKey, d.slot, d.path), d]))
+	const preset = new Map<string, unknown>(
+		[...(await shippedConfigValuesOf(db, at.specId, at.slug, at.specVersionId, decls))].filter(([key, value]) => {
+			const d = declByKey.get(key)
+			return !d || isDeviation(d as never, value)
+		})
+	)
+	const layersOf = await registrationValueLayers(db, {
+		specSlug: at.slug,
+		specId: at.specId,
+		sessionId: viewer.sessionId ?? null
 	})
-
-	const preset = new Map<string, unknown>()
-	if (selectedConfig) {
-		const values = await db
-			.select()
-			.from(schema.pipelineConfigValues)
-			.where(
-				eq(
-					schema.pipelineConfigValues.configId,
-					selectedConfig.configId
-				)
-			)
-		for (const v of values as any[])
-			preset.set(addr(v.nodeKey, v.slot, v.path ?? ""), v.value)
+	// 🚧 Which registration layer each value came from — the provenance
+	// label's words until lane 7 names the layers in the client.
+	const layerOf = new Map<string, "instance" | "genre" | "preset" | "session">()
+	for (const [name, layer] of [
+		["instance", layersOf.instance],
+		["genre", layersOf.genre],
+		["preset", layersOf.preset],
+		["session", layersOf.session]
+	] as const) {
+		const stated = addressedValues(layer, decls)
+		if (!stated.size) continue
+		const resolved = await shippedConfigValues(db, at.specId, at.slug, decls, stated)
+		for (const key of stated.keys()) {
+			preset.set(key, resolved.has(key) ? resolved.get(key) : stated.get(key))
+			layerOf.set(key, name)
+		}
 	}
-
 	return {
 		session:
 			viewer.sessionId != null
 				? scoped("session", viewer.sessionId)
 				: null,
 		preset,
-		selectedConfig
+		layerOf
 	}
 }
 
@@ -144,6 +167,10 @@ export async function listNamespaces(db: Db): Promise<NamespaceSummary[]> {
 	// A disabled plugin's pipelines are not listed (R67).
 	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
 	const off = await disabledPlugins(db)
+	// 🚧 A pipeline registrations mount states no genre (no lock): its
+	// claim is the one genre whose defaults register it (PLAN-layering D3).
+	const { soleRegisteringGenres } = await import("$lib/server/pipelines/registrations/resolve")
+	const registered = await soleRegisteringGenres(db)
 	const out: NamespaceSummary[] = []
 	for (const spec of specs as any[]) {
 		if (!spec.activeVersionId) continue
@@ -163,7 +190,12 @@ export async function listNamespaces(db: Db): Promise<NamespaceSummary[]> {
 			enabled: sub.enabled,
 			// Catalogue claims (23 §4): straight off the version row. A null
 			// row is "unclassified", which is honest.
-			taxonomy: (version.taxonomy as any) ?? null
+			taxonomy: (() => {
+				const t = (version.taxonomy as any) ?? null
+				const genre = registered.get(spec.slug)
+				if (!genre || t?.genre) return t
+				return { ...(t ?? {}), genre }
+			})()
 		})
 	}
 	return out
@@ -509,7 +541,12 @@ export async function namespaceView(
 			// list holds.
 			...(d.item ? { item: d.item } : {}),
 			...((c) => (c && !namesOnly ? { choices: c } : {}))(
-				choicesFor(d, sets, [value, d.authorDefault])
+				((c) =>
+					// 🚧 R54: a member chooses among the prompts an administrator
+					// has not hidden — the one in force stays listed.
+					c && d.control === "prompts-ref" && !viewer.isAdmin
+						? c.filter((x) => !x.hidden || x.id === value)
+						: c)(choicesFor(d, sets, [value, d.authorDefault]))
 			),
 			...(chainEntries ? { scripts: chainEntries } : {}),
 			// Where the chain runs and what can go there (D3): the seam
@@ -726,10 +763,13 @@ export async function namespaceView(
 					value: chain.preset.get(key)
 				},
 				scope,
-				configName: chain.selectedConfig?.name,
+				layer: chain.layerOf.get(key),
 				defaults: pubByCapability,
 				sets,
+				// 🚧 O7: a loadout carries the TEXT sampling only; a speech
+				// sampling slot is never "the loadout's".
 				...((d.control === "connection-ref" || d.control === "sampling-ref") &&
+				(d as { slot?: string }).slot !== "speechSampling" &&
 				nodeLoadouts.has(d.nodeKey)
 					? {
 							loadout: slotLoadoutOf(
@@ -743,6 +783,7 @@ export async function namespaceView(
 		// *Use loadout's* — a value set here over a named loadout.
 		if (
 			(d.control === "connection-ref" || d.control === "sampling-ref") &&
+			(d as { slot?: string }).slot !== "speechSampling" &&
 			source === "config" &&
 			scope === "config" &&
 			nodeLoadouts.get(d.nodeKey)
@@ -885,30 +926,10 @@ export async function namespaceView(
 		decls,
 		nodes: doc.nodes,
 		edges: doc.edges,
+		// 🚧 How a nested clause sits in a junction's branch (alternative branches, lane T3).
+		clauses: (doc.clauses ?? []).map((c) => ({ id: c.id, kind: c.kind, ...(c.clauseId ? { clauseId: c.clauseId } : {}), ...(c.clauseChain ? { clauseChain: c.clauseChain } : {}) })),
 		definitionOf
 	})
-
-	/**
-	 * The configurations on offer, minus the ones an administrator withdrew.
-	 *
-	 * R8: an administrator defines which configurations exist and a person
-	 * chooses among them, so `enabled` is the whole of what "the curated set"
-	 * means and this is where it is applied. Admins keep seeing the withdrawn
-	 * ones, marked, because one an admin has just switched off vanishing
-	 * entirely reads as deleted.
-	 *
-	 * The same rule `listSessionPresets` applies to the session picker, said
-	 * once per surface rather than in a shared helper only because the two read
-	 * different rows for different questions — but they must agree, and the
-	 * write path (`selectNamedConfig`) refuses what this hides.
-	 */
-	const configRows = (
-		await db
-			.select()
-			.from(schema.pipelineConfigs)
-			.where(eq(schema.pipelineConfigs.specId, at.specId))
-			.orderBy(asc(schema.pipelineConfigs.id))
-	).filter((c: any) => viewer.isAdmin === true || c.enabled !== false)
 
 	const sub = await subscription(db, at.specVersionId)
 
@@ -918,20 +939,14 @@ export async function namespaceView(
 		version: at.semver,
 		event: sub.event,
 		enabled: sub.enabled,
-		taxonomy: at.taxonomy,
-		configs: (configRows as any[]).map((c) => ({
-			id: c.id,
-			name: c.name,
-			isDefault: !!c.isDefault,
-			// The shipped default is immutable (one per pipeline, always
-			// present); the rest are the administrator's to edit. Nobody else
-			// owns a configuration (R8) — a person's choice is a selection.
-			readOnly: !!c.isImmutable,
-			enabled: c.enabled !== false,
-			includedActions: Array.isArray(c.includedActions)
-				? (c.includedActions as string[])
-				: null
-		})),
+		// 🚧 The registering genre where no lock claims one (PLAN-layering D3).
+		taxonomy: await (async () => {
+			const t = (at.taxonomy as any) ?? null
+			if (t?.genre) return t
+			const { soleRegisteringGenres } = await import("$lib/server/pipelines/registrations/resolve")
+			const genre = (await soleRegisteringGenres(db)).get(at.slug)
+			return genre ? { ...(t ?? {}), genre } : t
+		})(),
 		modeActions: await (async () => {
 			const { genreOfSpec, listGenreActions } = await import(
 				"$lib/server/pipelines/entities/sessionGenres"
@@ -950,29 +965,6 @@ export async function namespaceView(
 				origin: t.origin
 			}))
 		})(),
-		selectedConfig: chain.selectedConfig
-			? {
-					id: chain.selectedConfig.configId,
-					name: chain.selectedConfig.name,
-					source: chain.selectedConfig.source
-				}
-			: null,
-		/**
-		 * May this viewer change the selection, here?
-		 *
-		 * Sent because the client cannot work it out. A selection made from
-		 * inside a session is the session's and anyone who owns that session
-		 * may make it; made from anywhere else it is the *pub's*, which is
-		 * the administrator's alone — so for a non-admin outside a session
-		 * there is nothing to choose, and the picker was a live control whose
-		 * every use ended in a refusal toast.
-		 *
-		 * The same condition `selectNamedConfig` refuses on, which is the
-		 * point: this is what the server will accept, not a second opinion
-		 * about it.
-		 */
-		canSelectConfig:
-			scope === "session" ? !viewer.readOnlyBecause : viewer.isAdmin === true,
 		groups,
 		scope:
 			scope === "session" && viewer.sessionId != null

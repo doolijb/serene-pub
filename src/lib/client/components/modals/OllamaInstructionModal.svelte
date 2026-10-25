@@ -29,7 +29,7 @@
 			class="fixed inset-0 z-50 flex items-center justify-center p-4"
 		>
 			<Dialog.Content
-				class="card bg-surface-100-900 border-surface-300-700 w-[min(95vw,640px)] space-y-6 border p-6 shadow-xl"
+				class="card bg-surface-100-900 border-surface-200-800 w-[min(95vw,640px)] space-y-6 border p-6 shadow-xl"
 			>
 				<header class="flex items-center justify-between">
 					<h2 class="h2">Select model version</h2>
@@ -53,33 +53,33 @@
 							/>
 							<div class="flex-1">
 								<h3
-									class="text-primary-800 dark:text-primary-200 mb-2 font-semibold"
+									class="text-primary-ink mb-2 font-semibold"
 								>
 									Choose your model version
 								</h3>
-								<p class="text-primary-700-300 mb-3 text-sm">
+								<p class="text-primary-ink mb-3 text-sm">
 									To download <strong>{modelName}</strong>
 									, you'll need to select a specific version from
 									the Ollama library.
 								</p>
 
 								<div class="space-y-2 text-sm">
-									<p class="text-primary-700-300">
+									<p class="text-primary-ink">
 										<strong>Step 1:</strong>
 										Click the button below to open the model's
 										page on Ollama.com
 									</p>
-									<p class="text-primary-700-300">
+									<p class="text-primary-ink">
 										<strong>Step 2:</strong>
 										Browse the available versions and copy the
 										full name of the one you want
 									</p>
-									<p class="text-primary-700-300">
+									<p class="text-primary-ink">
 										<strong>Step 3:</strong>
 										Come back here and paste the name in the
 										next screen
 									</p>
-									<p class="text-primary-700-300">
+									<p class="text-primary-ink">
 										<em>
 											(Q4_K_M is generally recommended for
 											a balance between performance and

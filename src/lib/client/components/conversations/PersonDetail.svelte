@@ -7,6 +7,7 @@
 	 * and not the admin Users detail, which edits the account.
 	 */
 	import { getContext } from "svelte"
+	import { avatarSrc } from "$lib/client/utils/media"
 	import * as Icons from "@lucide/svelte"
 	import type { ConversationsPersonResponse } from "$lib/shared/sockets/conversations"
 	import { useConversations } from "$lib/client/contexts/conversations.svelte"
@@ -119,6 +120,7 @@
 		<DetailHero
 			title={name}
 			subtitle={known ? `@${known.username}` : undefined}
+			image={avatarSrc(known)}
 			letter={name}
 			chips={known?.isAdmin ? adminChip : undefined}
 			{actions}
@@ -215,7 +217,7 @@
 							>
 								{#snippet content()}
 									<span
-										class="bg-surface-200-800 text-surface-700-300 grid size-10 shrink-0 place-items-center rounded-[9px]"
+										class="bg-surface-200-800 text-surface-700-300 grid size-10 shrink-0 place-items-center rounded-base"
 									>
 										<Icons.BookOpen size={18} aria-hidden="true" />
 									</span>
@@ -232,7 +234,7 @@
 
 {#snippet lines(title: string, subtitle: string | null)}
 	<span class="min-w-0 flex-1 text-left">
-		<span class="block truncate text-[15px] font-medium">{title}</span>
+		<span class="block truncate text-lead font-medium">{title}</span>
 		{#if subtitle}
 			<span class="text-surface-600-400 block truncate text-xs">{subtitle}</span>
 		{/if}
@@ -241,7 +243,7 @@
 
 {#snippet adminChip()}
 	<span
-		class="preset-tonal-surface text-surface-700-300 rounded px-1.5 py-0.5 text-[11px] font-medium"
+		class="preset-tonal-surface text-surface-700-300 rounded px-1.5 py-0.5 text-meta font-medium"
 	>
 		Admin
 	</span>

@@ -16,7 +16,11 @@
 	import EntryWorkspace from "../EntryWorkspace.svelte"
 	import { getBookData } from "../bookData.svelte"
 	import { loreRoute } from "../loreRoute.svelte"
-	import { descriptorFor, SECTION_DESCRIPTORS } from "../sections"
+	import {
+		descriptorFor,
+		rulesListDoor,
+		SECTION_DESCRIPTORS
+	} from "../sections"
 	import type { LensProps } from "./types"
 
 	let {
@@ -30,8 +34,24 @@
 
 	let scope = $derived(bench.route.scope)
 	let section = $derived(descriptorFor(scope))
-	/** Every door the pool draws, which is what "Everything" holds. */
-	const doors = SECTION_DESCRIPTORS.filter((d) => d.id !== "all")
+	/**
+	 * Every door the pool draws, which is what "Everything" holds: core's,
+	 * then each of the book's rules lists (PLAN-lorebook-kinds §C). Every
+	 * list's rows are the book's, so all of them are here; New offers only
+	 * the lists the book draws (ruled 2026-10-21), so the rest are not
+	 * creatable from Everything.
+	 */
+	const coreDoors = SECTION_DESCRIPTORS.filter((d) => d.id !== "all")
+	let doors = $derived.by(() => {
+		const drawn = new Set(book.drawnRulesLists.map((l) => l.typeId))
+		return [
+			...coreDoors,
+			...book.rulesLists.map((list) => {
+				const door = rulesListDoor(list)
+				return drawn.has(list.typeId) ? door : { ...door, creatable: false }
+			})
+		]
+	})
 
 	function viewRelationships(castId: number) {
 		// ONE transition, one guard (#81, plan B7): two navigates in a row

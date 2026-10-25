@@ -189,7 +189,7 @@
 </script>
 
 {#snippet capabilityRow(row: CapabilityRow)}
-	<fieldset class="border-surface-200-700 rounded-lg border px-2 pb-1">
+	<fieldset class="border-surface-200-800 rounded-lg border px-2 pb-1">
 		<legend
 			class="px-1 text-sm {row.basic ? 'font-semibold' : 'font-medium'}"
 		>
@@ -218,7 +218,7 @@
 			</span>
 			{#if row.assumed}
 				<span
-					class="text-surface-600-400 border-b border-dotted text-[11px]"
+					class="text-surface-600-400 border-b border-dotted text-meta"
 					title="Nothing has tested this connection, so this is the connection type's own guess."
 				>
 					Assumed

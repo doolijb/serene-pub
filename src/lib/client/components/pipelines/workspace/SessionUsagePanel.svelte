@@ -142,7 +142,7 @@
 	     filled card, and the same preset nested in itself reads as a rendering
 	     fault rather than as a division. -->
 	<section
-		class="border-surface-300-700 flex flex-col gap-2 rounded border p-3"
+		class="border-surface-200-800 flex flex-col gap-2 rounded border p-3"
 		aria-label="What this session has used"
 	>
 		<div class="flex flex-wrap items-baseline gap-2">

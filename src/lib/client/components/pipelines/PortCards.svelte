@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * The builder inspector's two cards for the selected step or agent (owner
 	 * ruling 2026-10-12): **Receives** — what it takes from other steps — and
@@ -47,12 +48,9 @@
 				<div class="flex flex-wrap items-baseline gap-2">
 					<h3 class={LEGEND}>Carries out</h3>
 					{#if cards.effect}
-						<span
-							class="preset-tonal-surface rounded-full px-2 py-0.5 text-xs"
-							data-effect-chip
-						>
+						<Badge size="md" data-effect-chip>
 							{cards.effect}
-						</span>
+						</Badge>
 					{/if}
 				</div>
 				{@render lines(

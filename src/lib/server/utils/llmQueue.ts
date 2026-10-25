@@ -26,6 +26,15 @@ export interface LLMQueueItemInput<T> {
 	/** Adapter-specific cancellation side effect, e.g. adapter.abort(). */
 	onCancel?: () => void
 	onStatusChange?: (status: LLMQueueStatus) => void
+	/**
+	 * 🚧 Where the call waits among the queued ones (A13, R26): lower goes
+	 * first — `LLM_PRIORITY.interactive` (session creation, a person's
+	 * action), `event`, then `routine`; first-in-first-out within one. The
+	 * lane itself is unchanged: one call at a time, and the running call is
+	 * never pre-empted. Absent: the priority of the run whose work is
+	 * calling (`currentLlmPriority`).
+	 */
+	priority?: number
 }
 
 export interface LLMQueueSnapshotItem {
@@ -40,6 +49,55 @@ export interface LLMQueueSnapshotItem {
 	lorebookId?: number
 	label?: string
 	userId?: number
+	/** 🚧 The item's priority (A13): lower goes first. */
+	priority?: number
+}
+
+/**
+ * 🚧 **Model-queue priority** (A13, R26; PLAN-layering D7, 2026-10-20):
+ * session creation and a person's actions first, then event runs (a reply
+ * included), then routines — across sessions. FIFO within a priority.
+ */
+export const LLM_PRIORITY = Object.freeze({ interactive: 0, event: 1, routine: 2 })
+
+/** The trigger family of the run whose work is running here, and whether it creates a session. */
+interface RunFamilyContext {
+	family: string
+	creation?: boolean
+}
+
+/**
+ * 🚧 The run a call belongs to, carried through its async work so the queue
+ * reads its family at every enqueue site without a parameter threaded
+ * through every binding. Set by `runSpec` around a run (`withRunFamily`).
+ */
+const runFamilies = new AsyncLocalStorage<RunFamilyContext>()
+
+/** 🚧 Run `fn` as work of a run of this trigger family — every model call it queues takes that family's priority. */
+export function withRunFamily<T>(family: string, fn: () => T, opts: { creation?: boolean } = {}): T {
+	return runFamilies.run({ family, ...(opts.creation ? { creation: true } : {}) }, fn)
+}
+
+/** 🚧 The trigger family of the run whose work is calling, if any. */
+export function currentRunFamily(): string | undefined {
+	return runFamilies.getStore()?.family
+}
+
+/**
+ * 🚧 A trigger family's priority (R26): actions and session creation
+ * first, then events, then routines. A family core does not know yet (a
+ * later one, LS1) and a call made outside any run wait with events.
+ */
+export function priorityOfFamily(family: string | undefined, opts: { creation?: boolean } = {}): number {
+	if (opts.creation || family === "action") return LLM_PRIORITY.interactive
+	if (family === "routine") return LLM_PRIORITY.routine
+	return LLM_PRIORITY.event
+}
+
+/** 🚧 The priority a call queued from here takes — its run's family's (`withRunFamily`). */
+export function currentLlmPriority(): number {
+	const ctx = runFamilies.getStore()
+	return priorityOfFamily(ctx?.family, { creation: ctx?.creation })
 }
 
 export class CancelledError extends Error {
@@ -199,7 +257,12 @@ class LLMQueue {
 		}
 
 		this.runsById.set(id, run)
-		lane.queue.push(run)
+		// 🚧 By priority (A13, R26), first-in-first-out within one: after
+		// every queued call of the same or a higher priority.
+		if (item.priority === undefined) item.priority = currentLlmPriority()
+		const at = lane.queue.findIndex((r) => (r.item.priority ?? LLM_PRIORITY.event) > item.priority!)
+		if (at === -1) lane.queue.push(run)
+		else lane.queue.splice(at, 0, run)
 		item.onStatusChange?.("queued")
 		this.notify()
 
@@ -386,7 +449,8 @@ class LLMQueue {
 				messageId: run.item.messageId,
 				lorebookId: run.item.lorebookId,
 				label: run.item.label,
-				userId: run.item.userId
+				userId: run.item.userId,
+				...(run.item.priority !== undefined ? { priority: run.item.priority } : {})
 			})
 		}
 		return out

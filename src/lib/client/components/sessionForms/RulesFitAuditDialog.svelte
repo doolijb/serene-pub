@@ -55,13 +55,13 @@
 						<section>
 							<h3 class="mb-1 text-xs font-semibold uppercase tracking-wide opacity-60">What {genreName} needs</h3>
 							{#if required.length}
-								<table class="w-full text-left text-[13px]">
+								<table class="w-full text-left text-chip">
 									<tbody>
 										{#each required as r (r.kind + r.key)}
 											<tr class="border-surface-200-800 border-t">
 												<td class="py-1 pr-2">{r.key}</td>
 												<td class="py-1 pr-2 opacity-60">{KIND[r.kind] ?? r.kind}</td>
-												<td class="py-1" class:text-error-500={r.met === "missing"}>{MET[r.met]}</td>
+												<td class="py-1" class:text-error-600-400={r.met === "missing"}>{MET[r.met]}</td>
 											</tr>
 										{/each}
 									</tbody>
@@ -73,7 +73,7 @@
 						{#if optional.length}
 							<section>
 								<h3 class="mb-1 text-xs font-semibold uppercase tracking-wide opacity-60">Optional (never counted)</h3>
-								<table class="w-full text-left text-[13px]">
+								<table class="w-full text-left text-chip">
 									<tbody>
 										{#each optional as r (r.kind + r.key)}
 											<tr class="border-surface-200-800 border-t">

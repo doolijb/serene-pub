@@ -34,6 +34,13 @@ describe("adminCrumbs", () => {
 		expect(c.map((x) => x.label)).toEqual(["Admin", "Pipelines", "Events", "Session created"])
 		expect(c[2].href).toBe("/admin/pipelines/events")
 	})
+	it("files Rulesets under Play and ends on the ruleset (its id encoded)", () => {
+		const c = adminCrumbs("/admin/rulesets/acme.lab%3Aruleset%2Fsword-and-sail%401", ADMIN_NAV, {
+			current: "Sword and Sail"
+		})
+		expect(c.map((x) => x.label)).toEqual(["Admin", "Play", "Rulesets", "Sword and Sail"])
+		expect(c[2].href).toBe("/admin/rulesets")
+	})
 	it("puts a trail between the section and the page", () => {
 		const c = adminCrumbs("/admin/connections/3", ADMIN_NAV, {
 			current: "Delete",

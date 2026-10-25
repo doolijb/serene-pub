@@ -37,6 +37,10 @@
 		looseEndsCount?: number
 		/** Opens the Loose ends queue. Absent draws no line. */
 		onOpenLooseEnds?: () => void
+		/** Opens Book settings. Absent (a shared book) draws no line. */
+		onOpenSettings?: () => void
+		/** The book's rules lists under the rules' name, as the rail draws them. */
+		rulesGroup?: { label: string; facets: ScopeFacet[] } | null
 	}
 
 	let {
@@ -47,7 +51,9 @@
 		onScope,
 		onSaved,
 		looseEndsCount = 0,
-		onOpenLooseEnds
+		onOpenLooseEnds,
+		onOpenSettings,
+		rulesGroup = null
 	}: Props = $props()
 
 	let open = $state(false)
@@ -110,7 +116,7 @@
 		<span class="min-w-0 flex-1 truncate">{text}</span>
 		{#if count !== undefined}
 			<span
-				class="badge shrink-0 text-[11px] {checked
+				class="badge shrink-0 text-meta {checked
 					? 'bg-surface-300-700'
 					: 'preset-tonal-surface'}"
 			>
@@ -154,6 +160,26 @@
 							() => pickScope(facet.id)
 						)}
 					{/each}
+					{#if rulesGroup}
+						<!-- The book's rules lists, under the rules' name,
+						     as the rail's group after Views. -->
+						<p
+							class="text-surface-600-400 mt-2 px-2.5 text-xs font-semibold"
+							data-lore-rules-group
+						>
+							{rulesGroup.label}
+						</p>
+						{#each rulesGroup.facets as facet (facet.id)}
+							{@render row(
+								facet.id,
+								facet.label,
+								scopeIcon(facet.id),
+								facet.count,
+								!saved && scope === facet.id,
+								() => pickScope(facet.id)
+							)}
+						{/each}
+					{/if}
 					<div
 						class="border-surface-200-800 my-1 border-t"
 						aria-hidden="true"
@@ -169,6 +195,28 @@
 						)}
 					{/each}
 				</div>
+				{#if onOpenSettings}
+					<!-- A place, not a view: after the rows, like the
+					     rail's Book group (2026-10-21). -->
+					<div class="border-surface-200-800 mt-1 border-t pt-1">
+						<button
+							type="button"
+							class="btn btn-sm hover:preset-tonal-surface w-full justify-between"
+							title="Name, cover, rules, calendar and clock"
+							data-lore-book-settings-open
+							onclick={() => {
+								open = false
+								onOpenSettings?.()
+							}}
+						>
+							<span class="flex items-center gap-2">
+								<Icons.SlidersHorizontal size={14} aria-hidden="true" />
+								Book settings
+							</span>
+							<Icons.ChevronRight size={14} aria-hidden="true" />
+						</button>
+					</div>
+				{/if}
 				{#if onOpenLooseEnds && looseEndsCount > 0}
 					<div class="border-surface-200-800 mt-1 border-t pt-1">
 						<button

@@ -31,8 +31,6 @@ import {
 	humanizeTypeId,
 	i18nText,
 	namespaceView,
-	resetConfig,
-	selectNamedConfig,
 	optionId as optionHandle,
 	stepKeyFor,
 	writeOption,
@@ -424,45 +422,6 @@ export const pipelinesClearOption: Handler<
 	}
 }
 
-/**
- * Reset a whole configuration — every deviation at once.
- *
- * Admin-gated inside `resetConfig`, on the same grounds every config write is:
- * a configuration is the administrator's and a person's own changes are made
- * inside a session (R8). Answers on `pipelines:get` like every other mutation,
- * because one reset moves every field on screen.
- */
-export const pipelinesResetConfig: Handler<
-	Sockets.Pipelines.ResetConfig.Params,
-	Sockets.Pipelines.ResetConfig.Response
-> = {
-	event: "pipelines:resetConfig",
-	handler: async (socket, params, emitToUser) => {
-		let cleared = 0
-		try {
-			cleared = await resetConfig(
-				db,
-				params.slug,
-				await viewerFor(socket, params.sessionId, params.slug),
-				params.configId
-			)
-		} catch (err) {
-			const res = { error: refusal(err) }
-			emitToUser("pipelines:resetConfig:error", res)
-			return res
-		}
-		await emitView(
-			socket,
-			emitToUser,
-			"pipelines:get",
-			params.slug,
-			params.sessionId
-		)
-		// A reset may have cleared chains: the scripts list's use moves.
-		if (cleared) await pushScriptsAfter(socket)
-		return { cleared }
-	}
-}
 
 /**
  * The builder's Save all (22 §3): a whole draft in one request. Entries apply
@@ -547,83 +506,59 @@ export const pipelinesSetOptions: Handler<
 }
 
 /* ------------------------------------------------------------------ *
- * Named-config CRUD — the builder's save/duplicate/rename/delete
- *
- * Admin-only, on the same terms as every other structural verb: a
- * configuration is the instance's, and 05 §0a puts anything that shapes what
- * the instance runs behind the management screen rather than the sidebar.
+ * Named-config CRUD retired (R38; R50, lane F1 2026-10-21): create, rename,
+ * delete, select, reset, the notices and the configs index are gone with
+ * configurations. What an administrator sets instance-wide lands on the
+ * genre's defaults or in a pipeline's instance values (`writeOption`).
  * ------------------------------------------------------------------ */
 
-/** The spec a config verb names, refused by name rather than by id. */
-async function specForSlug(slug: string) {
-	const [spec] = await db
-		.select()
-		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, slug))
-		.limit(1)
-	if (!spec) throw new Error(`There is no pipeline called '${slug}'.`)
-	return spec
-}
-
 /**
- * A config id the caller supplied must belong to the pipeline they are looking
- * at. Ids are small integers somebody can guess; without this, guessing one
- * renames or deletes another pipeline's configuration through this one's
- * screen — the same hole `promptForOption` closes for prompts.
+ * 🚧 An administrator's own instance-wide selection of row `rowId` — on the
+ * genre's defaults (PLAN-layering D5) or in the pipeline's instance values
+ * (R50) — released by a successful delete, never held against it. Never a
+ * member's: theirs is a session override.
  */
-async function configInSpec(slug: string, configId: number) {
-	const spec = await specForSlug(slug)
-	const [row] = await db
-		.select()
-		.from(schema.pipelineConfigs)
-		.where(eq(schema.pipelineConfigs.id, configId))
-		.limit(1)
-	if (!row) throw new Error("That configuration no longer exists.")
-	if (row.specId !== spec.id)
-		throw new Error(
-			`'${row.name}' belongs to a different pipeline. Configurations are ` +
-				`namespaced to the pipeline they were written for.`
-		)
-	return row
-}
-
-/**
- * The caller's "own selection" outside a session, since the layer simplification
- * (2026-08-24): the instance-selected config's value rows pointing at a row
- * about to be deleted. Only a mutable config's — the shipped default is not
- * the admin's to release, and `delete*`'s reference check still refuses it.
- * Slot-filtered because values are arbitrary json: a params value that
- * happens to equal the row id must not be swept up as a reference.
- */
-async function ownPubConfigValues(
+async function ownGenreRefs(
+	socket: any,
 	slug: string,
 	rowId: number,
 	slots: string[]
-): Promise<any[]> {
-	if (!slots.length) return []
-	const spec = await specForSlug(slug)
-	const { resolveSelectedConfig } = await import(
-		"$lib/server/pipelines/config/named"
+) {
+	if (!socket.user?.isAdmin) return []
+	const { ownGenreValueRefs } = await import(
+		"$lib/server/pipelines/registrations/genreValues"
 	)
-	const selected = await resolveSelectedConfig(db, spec.id, slug, {})
-	if (!selected) return []
-	const [cfg] = await db
-		.select()
-		.from(schema.pipelineConfigs)
-		.where(eq(schema.pipelineConfigs.id, selected.configId))
-		.limit(1)
-	if (!cfg || (cfg as any).isImmutable) return []
-	const { inArray } = await import("drizzle-orm")
-	const rows = await db
-		.select()
-		.from(schema.pipelineConfigValues)
-		.where(
-			and(
-				eq(schema.pipelineConfigValues.configId, selected.configId),
-				inArray(schema.pipelineConfigValues.slot, slots)
-			)
+	const { instanceValueRefs } = await import(
+		"$lib/server/pipelines/registrations/instanceValues"
+	)
+	return [
+		...(await ownGenreValueRefs(db, slug, slots, rowId)),
+		...(await instanceValueRefs(db, slots)).filter((r) => r.scopeRef === slug && r.value === rowId)
+	]
+}
+
+const ignoringRefs = async (refs: { rowId: number; nodeKey: string; slot: string; path: string }[]) => {
+	const { refKeyOf } = await import("$lib/server/pipelines/registrations/values")
+	return new Set(refs.map(refKeyOf))
+}
+
+const releaseRefs = async (
+	slug: string,
+	refs: { scopeKind?: string; nodeKey: string; slot: string; path: string }[]
+) => {
+	const { releaseGenreValueRefs } = await import(
+		"$lib/server/pipelines/registrations/genreValues"
+	)
+	await releaseGenreValueRefs(db, slug, refs.filter((r) => r.scopeKind !== "instance"))
+	// 🚧 R50: the pipeline's own instance values.
+	const instance = refs.filter((r) => r.scopeKind === "instance")
+	if (instance.length) {
+		const { setInstanceValue } = await import(
+			"$lib/server/pipelines/registrations/instanceValues"
 		)
-	return (rows as any[]).filter((v) => v.value === rowId)
+		for (const r of instance)
+			await setInstanceValue(db, slug, { nodeKey: r.nodeKey, slot: r.slot, path: r.path }, undefined)
+	}
 }
 
 const adminOnly = (
@@ -658,242 +593,11 @@ const receiptsAdminOnly = (
 	return res
 }
 
-/**
- * Config refusals reach the person, on the `promptRefusal` precedent.
- *
- * The generic `refusal` deliberately swallows anything it does not recognise,
- * so an unexpected failure cannot leak internals into a toast. These messages
- * are the opposite: written for the reader, and useless in a log — "this
- * pipeline already has a configuration called 'Nighttime'" is the entire
- * answer to why the button did nothing.
- *
- * The `/pipeline/` clause carries the scoping refusals thrown by
- * `specForSlug` / `configInSpec`, which are plain Errors rather than a typed
- * class: they are refusals about a *name the caller supplied*, not about the
- * entity's own rules, so there is nothing for an entity module to own.
- */
-const configRefusal = async (err: unknown): Promise<string> => {
-	const { ConfigNotFoundError, ConfigNotUsableError } = await import(
-		"$lib/server/pipelines/config/named"
-	)
-	if (
-		err instanceof ConfigNotFoundError ||
-		err instanceof ConfigNotUsableError
-	)
-		return err.message
-	// Not a failed query: its message is SQL, and any `pipeline*` table name
-	// in it would match.
-	if (
-		err instanceof Error &&
-		!isFailedQuery(err) &&
-		/pipeline|configuration/.test(err.message)
-	)
-		return err.message
-	console.error("[pipelines] config mutation failed:", err)
-	return "That change could not be saved. The server log has the details."
-}
 
-/**
- * Which actions a preset includes, and whether it may be chosen (19 §3).
- *
- * Admin-only, like every other write to a preset: a preset decides what sessions
- * using it can do, and which presets a non-admin sees at all. The entity layer
- * holds the refusals — immutable rows, actions the mode was never offered — so
- * the answer does not depend on which door the request came through.
- */
-export const pipelinesSetPresetActions: Handler<
-	Sockets.Pipelines.SetPresetActions.Params,
-	Sockets.Pipelines.SetPresetActions.Response
-> = {
-	event: "pipelines:setPresetActions",
-	handler: async (socket, params, emitToUser) => {
-		const denied = adminOnly(
-			socket,
-			emitToUser,
-			"pipelines:setPresetActions"
-		)
-		if (denied) return denied
-		try {
-			const config = await configInSpec(params.slug, params.configId)
-			const { setPresetActions } = await import(
-				"$lib/server/pipelines/entities/sessionGenres"
-			)
-			const r = await setPresetActions(db, config.id, {
-				...(params.includedActions !== undefined
-					? { includedActions: params.includedActions }
-					: {}),
-				...(params.enabled !== undefined
-					? { enabled: params.enabled }
-					: {})
-			})
-			if (!r.ok) {
-				const res = { error: r.error }
-				emitToUser("pipelines:setPresetActions:error", res)
-				return res
-			}
-		} catch (err) {
-			const res = { error: await configRefusal(err) }
-			emitToUser("pipelines:setPresetActions:error", res)
-			return res
-		}
-		// The preset's included set and switch are what the list carries.
-		const { pushSessionPresetsAfter } = await import("./sessionAdmin")
-		await pushSessionPresetsAfter(socket)
-		await emitView(
-			socket,
-			emitToUser,
-			"pipelines:get",
-			params.slug,
-			params.sessionId
-		)
-		// Its own answer, so a form waiting on its Save hears this write.
-		const res = { slug: params.slug, configId: params.configId }
-		emitToUser("pipelines:setPresetActions", res)
-		return res
-	}
-}
 
-export const pipelinesCreateConfig: Handler<
-	Sockets.Pipelines.CreateConfig.Params,
-	Sockets.Pipelines.CreateConfig.Response
-> = {
-	event: "pipelines:createConfig",
-	handler: async (socket, params, emitToUser) => {
-		const denied = adminOnly(socket, emitToUser, "pipelines:createConfig")
-		if (denied) return denied
-		let configId: number
-		try {
-			const { createConfig, duplicateConfig } = await import(
-				"$lib/server/pipelines/config/named"
-			)
-			const spec = await specForSlug(params.slug)
-			const made =
-				params.fromConfigId != null
-					? await duplicateConfig(
-							db,
-							(
-								await configInSpec(
-									params.slug,
-									params.fromConfigId
-								)
-							).id,
-							params.name
-						)
-					: await createConfig(db, spec.id, params.name)
-			configId = made.id
-		} catch (err) {
-			const res = { error: await configRefusal(err) }
-			emitToUser("pipelines:createConfig:error", res)
-			return res
-		}
-		const view = await emitViewReturning(
-			socket,
-			emitToUser,
-			"pipelines:get",
-			params.slug,
-			params.sessionId
-		)
-		// Emitted as well as returned: `register` discards a handler's return
-		// value, so the id only reaches the client through an event. The
-		// builder uses it to select what it just made — same shape as
-		// `pipelines:clonePrompt`.
-		const res = { ...view, configId }
-		emitToUser("pipelines:createConfig", res)
-		return res
-	}
-}
 
-export const pipelinesRenameConfig: Handler<
-	Sockets.Pipelines.RenameConfig.Params,
-	Sockets.Pipelines.RenameConfig.Response
-> = {
-	event: "pipelines:renameConfig",
-	handler: async (socket, params, emitToUser) => {
-		const denied = adminOnly(socket, emitToUser, "pipelines:renameConfig")
-		if (denied) return denied
-		try {
-			const { renameConfig } = await import(
-				"$lib/server/pipelines/config/named"
-			)
-			const row = await configInSpec(params.slug, params.configId)
-			await renameConfig(db, row.id, params.name)
-		} catch (err) {
-			const res = { error: await configRefusal(err) }
-			emitToUser("pipelines:renameConfig:error", res)
-			return res
-		}
-		await emitView(
-			socket,
-			emitToUser,
-			"pipelines:get",
-			params.slug,
-			params.sessionId
-		)
-		const res = { slug: params.slug, configId: params.configId }
-		emitToUser("pipelines:renameConfig", res)
-		return res
-	}
-}
 
-export const pipelinesDeleteConfig: Handler<
-	Sockets.Pipelines.DeleteConfig.Params,
-	Sockets.Pipelines.DeleteConfig.Response
-> = {
-	event: "pipelines:deleteConfig",
-	handler: async (socket, params, emitToUser) => {
-		const denied = adminOnly(socket, emitToUser, "pipelines:deleteConfig")
-		if (denied) return denied
-		try {
-			const { deleteConfig } = await import(
-				"$lib/server/pipelines/config/named"
-			)
-			const row = await configInSpec(params.slug, params.configId)
-			await deleteConfig(db, row.id)
-		} catch (err) {
-			const res = { error: await configRefusal(err) }
-			emitToUser("pipelines:deleteConfig:error", res)
-			return res
-		}
-		await emitView(
-			socket,
-			emitToUser,
-			"pipelines:get",
-			params.slug,
-			params.sessionId
-		)
-		return {}
-	}
-}
 
-export const pipelinesSelectConfig: Handler<
-	Sockets.Pipelines.SelectConfig.Params,
-	Sockets.Pipelines.SelectConfig.Response
-> = {
-	event: "pipelines:selectConfig",
-	handler: async (socket, params, emitToUser) => {
-		try {
-			await selectNamedConfig(
-				db,
-				params.slug,
-				await viewerFor(socket, params.sessionId, params.slug),
-				params.configId,
-				params.scope
-			)
-		} catch (err) {
-			const res = { error: refusal(err) }
-			emitToUser("pipelines:selectConfig:error", res)
-			return res
-		}
-		await emitView(
-			socket,
-			emitToUser,
-			"pipelines:get",
-			params.slug,
-			params.sessionId
-		)
-		return {}
-	}
-}
 
 /* ------------------------------------------------------------------ *
  * Version notices — what publishing did to a configuration
@@ -936,71 +640,7 @@ async function noticesFor(
 	}))
 }
 
-export const pipelinesConfigNotices: Handler<
-	Sockets.Pipelines.ConfigNotices.Params,
-	Sockets.Pipelines.ConfigNotices.Response
-> = {
-	event: "pipelines:configNotices",
-	handler: async (socket, params, emitToUser) => {
-		const denied = adminOnly(socket, emitToUser, "pipelines:configNotices")
-		if (denied) return denied
-		try {
-			const config = await configInSpec(params.slug, params.configId)
-			const res = {
-				configId: config.id,
-				notices: await noticesFor(config.id)
-			}
-			emitToUser("pipelines:configNotices", res)
-			return res
-		} catch (err) {
-			const res = { error: await configRefusal(err) }
-			emitToUser("pipelines:configNotices:error", res)
-			return res
-		}
-	}
-}
 
-export const pipelinesAcknowledgeConfigNotices: Handler<
-	Sockets.Pipelines.AcknowledgeConfigNotices.Params,
-	Sockets.Pipelines.AcknowledgeConfigNotices.Response
-> = {
-	event: "pipelines:acknowledgeConfigNotices",
-	handler: async (socket, params, emitToUser) => {
-		const denied = adminOnly(
-			socket,
-			emitToUser,
-			"pipelines:acknowledgeConfigNotices"
-		)
-		if (denied) return denied
-		try {
-			// `configInSpec` first, and the acknowledgement is scoped to that
-			// row's id: the notice id arrives from the client, so the pairing
-			// is what stops one configuration's dismissal reaching another's.
-			const config = await configInSpec(params.slug, params.configId)
-			const { acknowledgeNotices } = await import(
-				"$lib/server/pipelines/config/named"
-			)
-			await acknowledgeNotices(db, config.id, params.noticeId)
-			// Answered on the read event, like every other mutation here
-			// answers on `pipelines:get`: one listener, and no chance of the
-			// banner disagreeing with the rows behind it.
-			//
-			// Lazy, for the same reason as `emitView` above: with no panel
-			// showing the banner, the pending-notice read is never paid.
-			// `register` discards what a handler returns, so this emit is the
-			// whole answer — there is nothing for the caller in the return.
-			await emitToUser("pipelines:configNotices", async () => ({
-				configId: config.id,
-				notices: await noticesFor(config.id)
-			}))
-			return { configId: config.id }
-		} catch (err) {
-			const res = { error: await configRefusal(err) }
-			emitToUser("pipelines:acknowledgeConfigNotices:error", res)
-			return res
-		}
-	}
-}
 
 /* ------------------------------------------------------------------ *
  * Prompt CRUD — clone, edit, delete, from the panel
@@ -1311,14 +951,12 @@ export const pipelinesDeletePrompt: Handler<
 			// — so the rows are read and matched in code, the same way the
 			// reference check in `deletePrompt` does.
 			//
-			// "Your own selection" has two homes since the layer
-			// simplification (2026-08-24): inside a session it is the session's
-			// override row; outside one it is the value row of the instance's
-			// selected config — released only when that config is the
-			// admin's to edit, which `deletePrompt` still guards by refusing
-			// every other reference.
+			// "Your own selection" has two homes: inside a session it is the
+			// session's override row; outside one it is an administrator's
+			// value on the genre's defaults or in the pipeline's instance
+			// values (R50) — `deletePrompt` still refuses every other
+			// reference.
 			const mine: any[] = []
-			const mineValues: any[] = []
 			if (viewer.sessionId != null) {
 				const own = await db
 					.select()
@@ -1344,56 +982,24 @@ export const pipelinesDeletePrompt: Handler<
 						)
 					)
 				mine.push(...(own as any[]).filter((o) => o.value === row.id))
-			} else if (viewer.isAdmin) {
-				const { resolveSelectedConfig } = await import(
-					"$lib/server/pipelines/config/named"
-				)
-				const selected = await resolveSelectedConfig(
-					db,
-					specId,
-					params.slug,
-					{}
-				)
-				if (selected) {
-					const [cfg] = await db
-						.select()
-						.from(schema.pipelineConfigs)
-						.where(eq(schema.pipelineConfigs.id, selected.configId))
-						.limit(1)
-					if (cfg && !(cfg as any).isImmutable) {
-						const own = await db
-							.select()
-							.from(schema.pipelineConfigValues)
-							.where(
-								and(
-									eq(
-										schema.pipelineConfigValues.configId,
-										selected.configId
-									),
-									eq(schema.pipelineConfigValues.slot, slot)
-								)
-							)
-						mineValues.push(
-							...(own as any[]).filter((v) => v.value === row.id)
-						)
-					}
-				}
 			}
 			const { deletePrompt } = await import(
 				"$lib/server/pipelines/entities/prompts"
 			)
+			// 🚧 And an administrator's own selection on the genre's defaults.
+			const ownRefs =
+				viewer.sessionId == null
+					? await ownGenreRefs(socket, params.slug, row.id, [slot])
+					: []
 			await deletePrompt(db, row.id, {
 				ignoreOverrideIds: new Set(mine.map((o) => o.id)),
-				ignoreConfigValueIds: new Set(mineValues.map((v) => v.id))
+				ignoreRegistrationRefs: await ignoringRefs(ownRefs)
 			})
+			await releaseRefs(params.slug, ownRefs)
 			for (const row of mine)
 				await db
 					.delete(schema.pipelineNodeOverrides)
 					.where(eq(schema.pipelineNodeOverrides.id, row.id))
-			for (const row of mineValues)
-				await db
-					.delete(schema.pipelineConfigValues)
-					.where(eq(schema.pipelineConfigValues.id, row.id))
 		} catch (err) {
 			const res = { error: await promptRefusal(err) }
 			emitToUser("pipelines:deletePrompt:error", res)
@@ -1592,18 +1198,12 @@ export const pipelinesDeleteVariableTemplate: Handler<
 			const { deleteVariableTemplate, variableSlotNames } = await import(
 				"$lib/server/pipelines/entities/variableTemplates"
 			)
-			const own = await ownPubConfigValues(
-				params.slug,
-				row.id,
-				await variableSlotNames(db)
-			)
+			const slots = await variableSlotNames(db)
+			const ownRefs = await ownGenreRefs(socket, params.slug, row.id, slots)
 			await deleteVariableTemplate(db, row.id, {
-				ignoreConfigValueIds: new Set(own.map((v) => v.id))
+				ignoreRegistrationRefs: await ignoringRefs(ownRefs)
 			})
-			for (const v of own)
-				await db
-					.delete(schema.pipelineConfigValues)
-					.where(eq(schema.pipelineConfigValues.id, v.id))
+			await releaseRefs(params.slug, ownRefs)
 		} catch (err) {
 			const res = { error: await layoutRefusal(err) }
 			emitToUser("pipelines:deleteVariableTemplate:error", res)
@@ -1866,18 +1466,12 @@ export const pipelinesDeleteContextTemplate: Handler<
 			// refused delete must not still clear the caller's choice.
 			const { deleteContextTemplate, contextTemplateSlotNames } =
 				await import("$lib/server/pipelines/entities/contextTemplates")
-			const own = await ownPubConfigValues(
-				params.slug,
-				row.id,
-				await contextTemplateSlotNames(db)
-			)
+			const slots = await contextTemplateSlotNames(db)
+			const ownRefs = await ownGenreRefs(socket, params.slug, row.id, slots)
 			await deleteContextTemplate(db, row.id, {
-				ignoreConfigValueIds: new Set(own.map((v) => v.id))
+				ignoreRegistrationRefs: await ignoringRefs(ownRefs)
 			})
-			for (const v of own)
-				await db
-					.delete(schema.pipelineConfigValues)
-					.where(eq(schema.pipelineConfigValues.id, v.id))
+			await releaseRefs(params.slug, ownRefs)
 		} catch (err) {
 			const res = { error: await contextTemplateRefusal(err) }
 			emitToUser("pipelines:deleteContextTemplate:error", res)
@@ -2533,15 +2127,19 @@ export const pipelinesLibraryUpdatePrompt: Handler<
 			return { error: gate.error }
 		}
 		try {
-			const { updatePrompt } = await import(
+			const { updatePrompt, setPromptHidden } = await import(
 				"$lib/server/pipelines/entities/prompts"
 			)
-			await updatePrompt(db, params.id, {
-				...(params.name !== undefined ? { name: params.name } : {}),
-				...(params.fields !== undefined
-					? { fields: params.fields }
-					: {})
-			})
+			if (params.name !== undefined || params.fields !== undefined)
+				await updatePrompt(db, params.id, {
+					...(params.name !== undefined ? { name: params.name } : {}),
+					...(params.fields !== undefined
+						? { fields: params.fields }
+						: {})
+				})
+			// 🚧 R54: the owners' choice, curated — a built-in prompt too.
+			if (typeof params.hidden === "boolean")
+				await setPromptHidden(db, params.id, params.hidden)
 		} catch (err) {
 			const res = { error: await libraryRefusal(err) }
 			emitToUser("pipelines:libraryUpdatePrompt:error", res)
@@ -6224,87 +5822,6 @@ export const pipelinesResolveCapPause: Handler<
 	}
 }
 
-/**
- * The configurations inventory (admin IA 2026-08-28): every named config
- * across every spec, with its dependents — the reverse edges no workspace can
- * show. An index, deliberately not an editor: editing stays in the owning
- * workspace, one surface per fact.
- */
-export const pipelinesConfigsIndex: Handler<
-	Sockets.Pipelines.ConfigsIndex.Params,
-	Sockets.Pipelines.ConfigsIndex.Response
-> = {
-	event: "pipelines:configsIndex",
-	handler: async (socket, _params, emitToUser) => {
-		if (!socket.user?.isAdmin) throw new Error("Unauthorized")
-		const configs = await db
-			.select()
-			.from(schema.pipelineConfigs)
-			.orderBy(asc(schema.pipelineConfigs.id))
-		const specs = await db.select().from(schema.pipelineSpecs)
-		const specById = new Map(
-			(specs as any[]).map((s) => [s.id, { slug: s.slug, name: s.name }])
-		)
-
-		// Dependents: presets whose bindings reference the config…
-		const presets = await db.select().from(schema.sessionPresets)
-		const presetCount = new Map<number, number>()
-		for (const p of presets as any[])
-			for (const b of Object.values(
-				(p.bindings ?? {}) as Record<string, { config?: number }>
-			))
-				if (b?.config != null)
-					presetCount.set(
-						b.config,
-						(presetCount.get(b.config) ?? 0) + 1
-					)
-
-		// …and sessions whose scope selection points at it.
-		const selections = await db
-			.select()
-			.from(schema.pipelineConfigSelections)
-		const sessionCount = new Map<number, number>()
-		for (const sel of selections as any[])
-			if (sel.scopeKind === "session" && sel.configId != null)
-				sessionCount.set(
-					sel.configId,
-					(sessionCount.get(sel.configId) ?? 0) + 1
-				)
-
-		// A disabled plugin's pipelines' configurations are not listed (R67).
-		const { disabledPlugins } = await import(
-			"$lib/server/plugins/disabledPlugins"
-		)
-		const off = await disabledPlugins(db)
-		const hiddenSpecs = new Set(
-			(specs as any[])
-				.filter((s) => off.owns(s.sourcePluginId))
-				.map((s) => s.id)
-		)
-		const res: Sockets.Pipelines.ConfigsIndex.Response = {
-			configs: (configs as any[])
-				.filter((c) => !hiddenSpecs.has(c.specId))
-				.map((c) => ({
-					id: c.id,
-					name: c.name,
-					specSlug: specById.get(c.specId)?.slug ?? String(c.specId),
-					specName:
-						specById.get(c.specId)?.name ??
-						specById.get(c.specId)?.slug ??
-						String(c.specId),
-					isDefault: !!c.isDefault,
-					isImmutable: !!c.isImmutable,
-					usedByPresets: presetCount.get(c.id) ?? 0,
-					usedBySessions: sessionCount.get(c.id) ?? 0,
-					updatedAt: c.updatedAt
-						? new Date(c.updatedAt).toISOString()
-						: null
-				}))
-		}
-		emitToUser("pipelines:configsIndex", res)
-		return res
-	}
-}
 
 /**
  * Stop a run.
@@ -6368,12 +5885,10 @@ export function registerPipelineHandlers(
 	)
 
 	register(socket, pipelinesList, emitToUser)
-	register(socket, pipelinesConfigsIndex, emitToUser)
 	register(socket, pipelinesGet, emitToUser)
 	register(socket, pipelinesPromptWording, emitToUser)
 	register(socket, pipelinesSetOption, emitToUser)
 	register(socket, pipelinesClearOption, emitToUser)
-	register(socket, pipelinesResetConfig, emitToUser)
 	register(socket, pipelinesSetOptions, emitToUser)
 	register(socket, pipelinesRun, emitToUser)
 	register(socket, pipelinesDocument, emitToUser)
@@ -6395,13 +5910,6 @@ export function registerPipelineHandlers(
 	register(socket, pipelinesCapPauses, emitToUser)
 	register(socket, pipelinesEventMap, emitToUser)
 	register(socket, pipelinesResolveCapPause, emitToUser)
-	register(socket, pipelinesSelectConfig, emitToUser)
-	register(socket, pipelinesCreateConfig, emitToUser)
-	register(socket, pipelinesSetPresetActions, emitToUser)
-	register(socket, pipelinesRenameConfig, emitToUser)
-	register(socket, pipelinesDeleteConfig, emitToUser)
-	register(socket, pipelinesConfigNotices, emitToUser)
-	register(socket, pipelinesAcknowledgeConfigNotices, emitToUser)
 	register(socket, pipelinesCreatePrompt, emitToUser)
 	register(socket, pipelinesClonePrompt, emitToUser)
 	register(socket, pipelinesUpdatePrompt, emitToUser)

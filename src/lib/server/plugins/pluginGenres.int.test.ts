@@ -67,7 +67,7 @@ const manifest = {
 			shape: {
 				characters: { min: 1, max: 1 },
 				personas: { min: 0, max: 1 },
-				lorebook: "required",
+				lorebook: "optional",
 				writes: { lore: false, scenes: false }
 			},
 			events: {
@@ -169,15 +169,6 @@ async function publishCreateSpec() {
 }
 
 /** What the session's attribute picker offers to add (`state:attributes`). */
-async function addable(sessionId: number, userId: number): Promise<string[]> {
-	const { stateAttributes } = await import("$lib/server/sockets/state")
-	const res: any = await stateAttributes.handler(
-		{ user: { id: userId } } as any,
-		{ sessionId } as any,
-		() => {}
-	)
-	return res.addable.map((r: { slotId: string }) => r.slotId)
-}
 
 async function session(genreId: string) {
 	const suffix = `${++n}`
@@ -248,7 +239,8 @@ describe("plugin genres (stored manifest → registries)", () => {
 		expect(getAttributeSlot("core:slot/hp@1")).toBeDefined()
 	}, 60_000)
 
-	test("disabling hides the genre from the Start listing and the attribute picker", async () => {
+	// 🚧 RF fix 8: no session adds attributes any more, so there is no picker to hide them from.
+	test("disabling hides the genre from the Start listing; sessions already on it keep running", async () => {
 		await install(true)
 		await setEnabled(true)
 		await publishCreateSpec()
@@ -256,16 +248,10 @@ describe("plugin genres (stored manifest → registries)", () => {
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
 		expect((await listOfferedGenres(testDb as unknown as Db)).some((g) => g.genreId === GENRE)).toBe(true)
-		// Adventure lets a session add attributes beyond its own.
-		const s = await session("core:genre/story")
-		expect((await addable(s.id, s.userId)).includes(ASKED)).toBe(true)
-
 		await setEnabled(false)
 		expect((await listOfferedGenres(testDb as unknown as Db)).some((g) => g.genreId === GENRE)).toBe(false)
 		// Resolution still knows it — sessions already on it keep running.
 		expect((await listSessionGenres(testDb as unknown as Db)).some((g) => g.genreId === GENRE)).toBe(true)
-		expect((await addable(s.id, s.userId)).includes(ASKED)).toBe(false)
-		expect((await addable(s.id, s.userId)).includes(RESULT)).toBe(false)
 	}, 60_000)
 
 	test("a re-sync is idempotent (an identical redeclare is not a refusal)", async () => {
@@ -275,13 +261,15 @@ describe("plugin genres (stored manifest → registries)", () => {
 		expect(getAttributeSlot(ASKED)).toBeDefined()
 	}, 60_000)
 
-	test("the session's vocabulary is the genre's two slots — not every core slot", async () => {
+	// 🚧 RF fix 8: ⏳ a stored manifest's genre slots are the genre's tool state — kept, never attributes.
+	test("the session's vocabulary is the genre's two slots, kept as its tool state — not every core slot", async () => {
 		await install(true)
 		await setEnabled(true)
 		const s = await session(GENRE)
 		const { vocabularyFor } = await import("$lib/server/state/resolve")
 		const v = await vocabularyFor(testDb as unknown as Db, s.id)
 		expect(v.entries.map((e) => e.decl.id).sort()).toEqual([RESULT, ASKED].sort())
+		expect(v.entries.map((e) => e.hostState)).toEqual(["tool", "tool"])
 	}, 60_000)
 
 	test("the count/record path writes its slots, still writes after disable, and is refused after uninstall", async () => {

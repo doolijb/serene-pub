@@ -185,7 +185,7 @@
 						{#if shownError}
 							<p
 								id="name-error"
-								class="text-error-500 mt-1 text-sm"
+								class="text-error-600-400 mt-1 text-sm"
 								role="alert"
 							>
 								{shownError}

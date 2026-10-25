@@ -219,11 +219,83 @@ export async function buildUserSettingsGet(
 			// instance's — the picker shows "use the instance default" as
 			// its own option. `effectiveLoreWriteMode` is the answer.
 			loreWriteMode: isLoreWriteMode(settings.loreWriteMode) ? settings.loreWriteMode : null,
-			effectiveLoreWriteMode: await loreWriteModeFor(db, userId)
+			effectiveLoreWriteMode: await loreWriteModeFor(db, userId),
+			routineCaps: await routineCapsView(settings)
 		}
 	}
 
 	return res
+}
+
+/**
+ * 🚧 This person's routine caps beside the system's (R11; lane 7): theirs as
+ * stored (null following the system's), and the ceiling theirs sits under.
+ */
+async function routineCapsView(settings: {
+	cronIdleTimeoutMinutes?: number | null
+	cronMaxRunsInRow?: number | null
+}): Promise<Sockets.UserSettings.RoutineCapsView> {
+	const { systemCronCaps } = await import("$lib/server/pipelines/registrations/door")
+	const system = await systemCronCaps(db as unknown as Db)
+	return {
+		idleTimeoutMinutes: settings.cronIdleTimeoutMinutes ?? null,
+		maxRunsInRow: settings.cronMaxRunsInRow ?? null,
+		system: {
+			idleTimeoutMinutes: system.idleTimeoutMinutes ?? 4320,
+			maxRunsInRow: system.maxRunsInRow ?? 12
+		}
+	}
+}
+
+/**
+ * 🚧 **Background routines** (R11; lane 7): this person's own caps on their
+ * sessions' real-time routines — the idle timeout and the most runs in a
+ * row — each a whole number at most the system's, or null to follow it.
+ * Refused in a sentence on the reply, never as a toast.
+ */
+export const userSettingsUpdateRoutineCaps: Handler<
+	Sockets.UserSettings.UpdateRoutineCaps.Params,
+	Sockets.UserSettings.UpdateRoutineCaps.Response
+> = {
+	event: "userSettings:updateRoutineCaps",
+	handler: async (socket: AuthenticatedSocket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const reply = (res: Sockets.UserSettings.UpdateRoutineCaps.Response) => {
+			emitToUser("userSettings:updateRoutineCaps", res)
+			return res
+		}
+		const { systemCronCaps } = await import("$lib/server/pipelines/registrations/door")
+		const system = await systemCronCaps(db as unknown as Db)
+		const check = (
+			v: unknown,
+			label: string,
+			min: number,
+			max: number | null | undefined
+		): number | null | string => {
+			if (v === null || v === undefined) return null
+			if (typeof v !== "number" || !Number.isInteger(v)) return `${label} is a whole number.`
+			if (v < min) return `${label} is at least ${min}.`
+			if (max != null && v > max) return `${label} is at most ${max}, the pub's limit.`
+			return v
+		}
+		const idle = check(params?.idleTimeoutMinutes, "Stop after nobody has played for (minutes)", 5, system.idleTimeoutMinutes)
+		const runs = check(params?.maxRunsInRow, "Most runs in a row", 1, system.maxRunsInRow)
+		if (typeof idle === "string" || typeof runs === "string")
+			return reply({ success: false, error: `${typeof idle === "string" ? idle : runs} Nothing was saved.` })
+		await db
+			.insert(schema.userSettings)
+			.values({ userId, cronIdleTimeoutMinutes: idle, cronMaxRunsInRow: runs })
+			.onConflictDoUpdate({
+				target: schema.userSettings.userId,
+				set: { cronIdleTimeoutMinutes: idle, cronMaxRunsInRow: runs }
+			})
+		const res = reply({
+			success: true,
+			routineCaps: await routineCapsView({ cronIdleTimeoutMinutes: idle, cronMaxRunsInRow: runs })
+		})
+		await emitToUser("userSettings:get", () => buildUserSettingsGet(userId))
+		return res
+	}
 }
 
 export const userSettingsGet: Handler<
@@ -730,6 +802,7 @@ export function registerUserSettingsHandlers(
 	register(socket, userSettingsUpdateCharaVaultIncludeNsfw, emitToUser)
 	register(socket, userSettingsUpdateShowHomePageBanner, emitToUser)
 	register(socket, userSettingsUpdateStartFavourites, emitToUser)
+	register(socket, userSettingsUpdateRoutineCaps, emitToUser)
 	register(socket, userSettingsUpdateEasyCharacterCreation, emitToUser)
 	register(socket, userSettingsUpdateShowAllCharacterFields, emitToUser)
 	register(socket, userSettingsUpdateTheme, emitToUser)

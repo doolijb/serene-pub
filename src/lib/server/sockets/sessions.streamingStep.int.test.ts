@@ -339,7 +339,7 @@ describe("the streaming step over sessions:fireTurn", () => {
 		const { res, emitted } = await reply(w, "the lair road")
 		expect((res as any)?.error).toBeUndefined()
 		expect((await runsOf(w.session.id)).map((r) => `${r.specSlug}:${r.outcome}`)).toContain(
-			"core:spec/lair-respond:ok"
+			"core:spec/lair-reply:ok"
 		)
 
 		const frames = streamedFrames(emitted)
@@ -352,22 +352,8 @@ describe("the streaming step over sessions:fireTurn", () => {
 		expect(frames.some((t) => t.startsWith("The torch gutters."))).toBe(true)
 	})
 
-	// The party speech (owner ruling 2026-09-30): the Castellan speaking for
-	// the party streams its one call's lines, and nothing else.
-	test("the Lair, with the Castellan speaking for the party, streams its lines for the party — never the planner's JSON", async () => {
-		const w = await session("core:genre/lair", { partySpeech: "castellan" })
-		const { res, emitted } = await reply(w, "the lair party road")
-		expect((res as any)?.error).toBeUndefined()
-		expect((await runsOf(w.session.id)).map((r) => `${r.specSlug}:${r.outcome}`)).toContain(
-			"core:spec/lair-respond:ok"
-		)
-		const frames = streamedFrames(emitted)
-		for (const text of frames) {
-			expect(text).not.toContain("{")
-			expect(text).not.toContain("beats")
-		}
-		expect(frames.some((t) => t.startsWith("The torch gutters."))).toBe(true)
-	})
+	// Retired with the Lair rewrite (R13, 2026-10-21): "the Castellan speaking
+	// for the party" — each delver posts its own line, the case above.
 
 	// Adventure's case until it retired (2026-10-19): Story, which took it in,
 	// streams the reply and never the reckoning's JSON after it.
@@ -390,7 +376,7 @@ describe("the streaming step over sessions:fireTurn", () => {
 		const w = await session("core:genre/lair", {})
 		const { emitted } = await reply(w, "the lair progress road")
 		const frames = progressFrames(emitted).filter(
-			(f) => f.specId === "core:spec/lair-respond"
+			(f) => f.specId === "core:spec/lair-reply"
 		)
 		// The planner's declared status reached the card, keyed to the planner.
 		expect(
@@ -402,7 +388,7 @@ describe("the streaming step over sessions:fireTurn", () => {
 		).toBe(true)
 		// No text a person reads is a node key, raw or humanized.
 		const { CORE_SPECS } = await import("@serene-pub/core-catalog")
-		const doc = CORE_SPECS.find((s) => s.slug === "core:spec/lair-respond")!.build()
+		const doc = CORE_SPECS.find((s) => s.slug === "core:spec/lair-reply")!.build()
 		const keys = new Set(
 			doc.nodes.flatMap((node: { key: string }) => [
 				node.key,

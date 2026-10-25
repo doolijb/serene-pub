@@ -16,6 +16,7 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { LAIR_LAYOUT } from "@serene-pub/core-catalog"
 import { layoutPresetSeedKey } from "$lib/shared/sessionLayout/presets"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -41,6 +42,16 @@ afterAll(async () => {
 // The genre these layouts are made for — the Lair; Story stands in as another
 // genre (Adventure and the roleplay Chat until 2026-10-19).
 const LAIR = "core:genre/lair"
+
+/**
+ * 🚧 A layout as captured from a Lair session (lair fix 2, 2026-10-22): the
+ * genre's layout sets the story's Messages settings (its tabs' composer), the
+ * session holds them, and capturing packs them for the widget drawn.
+ */
+const withStorySettings = <L extends Record<string, unknown>>(layout: L) => ({
+	...layout,
+	widgetSettings: { messages: LAIR_LAYOUT.widgetSettings!.messages }
+})
 const EVENT = "sessions:panelLayout:startedFromUpdated"
 const CHANGED_ELSEWHERE =
 	"That layout has changed since this session copied it. Start again from it, or save over those changes."
@@ -258,7 +269,7 @@ describe("Save changes to a layout this session reads as Updated", () => {
 				overwriteUpdated: true
 			})
 			expect(asked.ok).toBe(true)
-			expect((await presetRow(s.mine.id)).layout).toEqual(STATS_LEFT)
+			expect((await presetRow(s.mine.id)).layout).toEqual(withStorySettings(STATS_LEFT))
 			expect((await get(s.owner.id, s.a.id)).startedFromUpdated).toBe(false)
 			expect((await get(s.owner.id, s.b.id)).startedFromUpdated).toBe(true)
 		},
@@ -272,7 +283,7 @@ describe("Save changes to a layout this session reads as Updated", () => {
 			await set(s.owner.id, s.a.id, { layout: STATS_RIGHT })
 			const res = await update(s.owner.id, s.a.id, s.mine.id, STATS_RIGHT)
 			expect(res.ok).toBe(true)
-			expect((await presetRow(s.mine.id)).layout).toEqual(STATS_RIGHT)
+			expect((await presetRow(s.mine.id)).layout).toEqual(withStorySettings(STATS_RIGHT))
 		},
 		60_000
 	)

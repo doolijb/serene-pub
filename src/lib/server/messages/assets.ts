@@ -63,7 +63,10 @@ export async function createSessionAsset(
 		messageId: input.messageId ?? null,
 		bytes: input.bytes,
 		filename: input.filename ?? null,
-		allowDocuments: true
+		allowDocuments: true,
+		// 🚧 O4/O5: a session's asset may be a sound or a clip
+		// (`attach-audio`, a spoken reply).
+		allowMedia: true
 	})
 }
 

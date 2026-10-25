@@ -1,7 +1,8 @@
 /**
  * Every settings row lands on something: its `#target` is present, as an id,
- * a `data-field` or a SettingSwitch `name`, in the admin sources. A field
- * renamed without its row would otherwise open the page and land nowhere.
+ * a `data-field`, a SettingSwitch `name` or a SettingCard `titleId` (which
+ * renders as its title's id), in the admin sources. A field renamed without
+ * its row would otherwise open the page and land nowhere.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
@@ -32,9 +33,12 @@ describe("admin settings index", () => {
 		"$label lands on its target",
 		(row) => {
 			const target = row.href.split("#")[1]
-			const present = [`id="${target}"`, `data-field="${target}"`, `name="${target}"`].some((s) =>
-				sources.includes(s)
-			)
+			const present = [
+				`id="${target}"`,
+				`data-field="${target}"`,
+				`name="${target}"`,
+				`titleId="${target}"`
+			].some((s) => sources.includes(s))
 			expect(present, `${target} not found`).toBe(true)
 		}
 	)

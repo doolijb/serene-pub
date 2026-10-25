@@ -211,7 +211,7 @@
 
 <div
 	bind:this={host}
-	class="code-field border-surface-200-800 bg-surface-50-950 min-w-0 overflow-hidden rounded-[10px] border"
+	class="code-field border-surface-200-800 bg-surface-50-950 min-w-0 overflow-hidden rounded-base border"
 	style="--code-field-rows: {rows}"
 ></div>
 

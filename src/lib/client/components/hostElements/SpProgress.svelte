@@ -2,7 +2,10 @@
 	/** `sp-progress` — a bar; no `value` is indeterminate. */
 	import type { SpElementProps } from "./spElement.svelte"
 
-	let { attrs }: SpElementProps = $props()
+	// Only `attrs`: so core's own screens can draw the same bar directly
+	// (`<SpProgress attrs={{ value, label }} />`, STYLE-GUIDE §8) without an
+	// element around it.
+	let { attrs }: Pick<SpElementProps, "attrs"> = $props()
 	const max = $derived(Number(attrs.max) > 0 ? Number(attrs.max) : 100)
 	const value = $derived(attrs.value === null ? null : Math.min(max, Math.max(0, Number(attrs.value) || 0)))
 </script>

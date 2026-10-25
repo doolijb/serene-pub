@@ -155,11 +155,13 @@ const personOf = (u: {
 	username: string
 	displayName: string | null
 	isAdmin: boolean
+	avatarMediaId: number | null
 }): ConversationPerson => ({
 	id: u.id,
 	username: u.username,
 	displayName: u.displayName,
-	isAdmin: u.isAdmin
+	isAdmin: u.isAdmin,
+	avatarMediaId: u.avatarMediaId
 })
 
 const nameOf = (p: { username: string; displayName: string | null }) =>
@@ -197,7 +199,8 @@ async function summariesFor(
 				id: U.id,
 				username: U.username,
 				displayName: U.displayName,
-				isAdmin: U.isAdmin
+				isAdmin: U.isAdmin,
+				avatarMediaId: U.avatarMediaId
 			})
 			.from(M)
 			.innerJoin(U, eq(U.id, M.userId))
@@ -943,7 +946,8 @@ export async function people(db: Db, userId: number): Promise<ConversationPerson
 			id: U.id,
 			username: U.username,
 			displayName: U.displayName,
-			isAdmin: U.isAdmin
+			isAdmin: U.isAdmin,
+			avatarMediaId: U.avatarMediaId
 		})
 		.from(U)
 		.where(and(eq(U.isDeleted, false), ne(U.id, userId)))
@@ -1070,6 +1074,7 @@ export async function person(
 			username: U.username,
 			displayName: U.displayName,
 			isAdmin: U.isAdmin,
+			avatarMediaId: U.avatarMediaId,
 			isDeleted: U.isDeleted
 		})
 		.from(U)

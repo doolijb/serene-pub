@@ -1,10 +1,11 @@
 /**
  * The four writes.
  *
- * `writeOption` sets a value, `clearOption` resets one, `selectNamedConfig`
- * switches the whole set, and the two `*OptionGate` functions answer "may this
- * caller point this slot at this row" for the two reference kinds whose target
- * is user-authored.
+ * `writeOption` sets a value, `clearOption` resets one, `resetConfig` clears
+ * an administrator's instance-wide values at once, and the two `*OptionGate`
+ * functions answer "may this caller point this slot at this row" for the two
+ * reference kinds whose target is user-authored. (Choosing a named
+ * configuration — `selectNamedConfig` — is gone with configurations, R50.)
  *
  * **Reset deletes.** `clearOption` removes the row rather than writing the
  * inherited value into it. The difference is invisible until the day an admin
@@ -13,7 +14,7 @@
  * (F20).
  *
  * **And so does a write that lands back on the default** (ruled 2026-09-10). A
- * config stores deviations, so `writeOption` deletes the row when the value it
+ * layer stores deviations, so `writeOption` deletes the row when the value it
  * is handed equals the declaration's — the same delete `clearOption` performs,
  * reached from the other direction. Without it, dragging a slider away and back
  * would leave a row behind that resolves identically today and pins the config
@@ -73,7 +74,7 @@ async function locate(
 				db,
 				at.specVersionId,
 				decls,
-				await storedAddressKeys(db, at.specId)
+				await storedAddressKeys(db, at.specId, at.slug)
 			)
 		).find(
 			(d) => d.unplaced && optionId(secret, d.nodeKey, d.slot, d.path) === id
@@ -250,44 +251,6 @@ export async function promptOptionGate(
 }
 
 /**
- * Where an edit is allowed to land when the caller names a configuration.
- *
- * Two surfaces mean two different things by "change this", and conflating them
- * is what made the builder's configuration selector decorative: every edit
- * went to `pipeline_node_overrides` at **instance** scope, and instance
- * outranked the config (then spelled `preset`) in the scope chain — so the value followed you across
- * every configuration you switched to, and duplicating one to change a single
- * setting changed it everywhere instead.
- *
- *   - the **builder** authors *the configuration itself* (`preset` layer)
- *   - the **sidebar** overrides that configuration for you or this session
- *
- * Refusing an immutable config here rather than in the UI is the same rule the
- * prompt editor keeps: hiding a button is not what protects a shipped row.
- */
-async function configTarget(db: Db, at: Published, configId: number) {
-	const [row] = await db
-		.select()
-		.from(schema.pipelineConfigs)
-		.where(eq(schema.pipelineConfigs.id, configId))
-		.limit(1)
-	if (!row)
-		throw new OptionNotFoundError("That configuration no longer exists.")
-	if ((row as any).specId !== at.specId)
-		throw new OptionNotWritableError(
-			`That configuration belongs to a different pipeline. ` +
-				`Configurations are namespaced to the pipeline they were ` +
-				`written for.`
-		)
-	if ((row as any).isImmutable)
-		throw new OptionNotWritableError(
-			`'${(row as any).name}' is one of the configurations Serene Pub ` +
-				`ships, so it stays as written. Duplicate it and edit the copy.`
-		)
-	return row as any
-}
-
-/**
  * A chain write, checked against the hook's declaration (18 §4a/§5).
  *
  * Three refusals, each the mechanical form of a law: the value is an ordered
@@ -336,23 +299,17 @@ async function checkChain(
 }
 
 /**
- * Every address this spec stores a value at — its configs' rows and its
- * scoped overrides — as `nodeKey\u0000slot\u0000path` keys. What an
+ * Every address this spec stores a value at — its instance values, the
+ * genre's defaults' changes and its scoped overrides — as
+ * `nodeKey\u0000slot\u0000path` keys. What an
  * unplaced chain's handle is resolved over.
  */
-async function storedAddressKeys(db: Db, specId: number): Promise<string[]> {
-	const values = await db
-		.select({
-			nodeKey: schema.pipelineConfigValues.nodeKey,
-			slot: schema.pipelineConfigValues.slot,
-			path: schema.pipelineConfigValues.path
-		})
-		.from(schema.pipelineConfigValues)
-		.innerJoin(
-			schema.pipelineConfigs,
-			eq(schema.pipelineConfigs.id, schema.pipelineConfigValues.configId)
-		)
-		.where(eq(schema.pipelineConfigs.specId, specId))
+async function storedAddressKeys(db: Db, specId: number, slug: string): Promise<string[]> {
+	const { genreStoredValues } = await import("$lib/server/pipelines/registrations/genreValues")
+	const genre = await genreStoredValues(db, slug)
+	// 🚧 R50: the pipeline's instance values, where configurations were.
+	const { instanceStoredValues } = await import("$lib/server/pipelines/registrations/instanceValues")
+	const values = await instanceStoredValues(db, slug)
 	const overrides = await db
 		.select({
 			nodeKey: schema.pipelineNodeOverrides.nodeKey,
@@ -361,7 +318,7 @@ async function storedAddressKeys(db: Db, specId: number): Promise<string[]> {
 		})
 		.from(schema.pipelineNodeOverrides)
 		.where(eq(schema.pipelineNodeOverrides.specId, specId))
-	return [...(values as any[]), ...(overrides as any[])].map(
+	return [...(values as any[]), ...(overrides as any[]), ...genre].map(
 		(r) => `${r.nodeKey}\u0000${r.slot}\u0000${r.path ?? ""}`
 	)
 }
@@ -377,7 +334,8 @@ async function checkUnplacedChain(
 	db: Db,
 	specId: number,
 	decl: Decl,
-	value: unknown
+	value: unknown,
+	slug: string
 ): Promise<number[]> {
 	if (!Array.isArray(value) || value.some((v) => typeof v !== "number"))
 		throw new OptionNotWritableError(
@@ -386,21 +344,11 @@ async function checkUnplacedChain(
 	const ids = [...new Set(value as number[])]
 	if (!ids.length) return ids
 	const stored = new Set<number>()
-	const values = await db
-		.select({ value: schema.pipelineConfigValues.value })
-		.from(schema.pipelineConfigValues)
-		.innerJoin(
-			schema.pipelineConfigs,
-			eq(schema.pipelineConfigs.id, schema.pipelineConfigValues.configId)
-		)
-		.where(
-			and(
-				eq(schema.pipelineConfigs.specId, specId),
-				eq(schema.pipelineConfigValues.nodeKey, decl.nodeKey),
-				eq(schema.pipelineConfigValues.slot, decl.slot),
-				eq(schema.pipelineConfigValues.path, decl.path)
-			)
-		)
+	// 🚧 R50: the pipeline's instance values, where configurations were.
+	const { instanceStoredValues } = await import("$lib/server/pipelines/registrations/instanceValues")
+	const values = (await instanceStoredValues(db, slug)).filter(
+		(r) => r.nodeKey === decl.nodeKey && r.slot === decl.slot && r.path === decl.path
+	)
 	const overrides = await db
 		.select({ value: schema.pipelineNodeOverrides.value })
 		.from(schema.pipelineNodeOverrides)
@@ -412,7 +360,12 @@ async function checkUnplacedChain(
 				eq(schema.pipelineNodeOverrides.path, decl.path)
 			)
 		)
-	for (const r of [...(values as any[]), ...(overrides as any[])])
+	// An administrator's genre-scope change (R38) holds them too.
+	const { genreStoredValues } = await import("$lib/server/pipelines/registrations/genreValues")
+	const genre = (await genreStoredValues(db, slug)).filter(
+		(r) => r.nodeKey === decl.nodeKey && r.slot === decl.slot && r.path === decl.path
+	)
+	for (const r of [...(values as any[]), ...(overrides as any[]), ...genre])
 		if (Array.isArray(r.value))
 			for (const v of r.value) if (typeof v === "number") stored.add(v)
 	if (ids.some((v) => !stored.has(v)))
@@ -425,22 +378,39 @@ async function checkUnplacedChain(
 }
 
 /**
- * The named config a global edit lands in: the pub's selection, resolved
- * by the runtime's own resolver, then gated exactly as an explicit `configId`
- * would be — same immutability refusal, same spec check. Shipped defaults
- * refuse with the duplicate suggestion rather than silently absorbing edits.
+ * 🚧 Where an administrator's instance-wide edit of this pipeline lands
+ * (R38, R50, A15): the genre's defaults' registrations of it — or, for a
+ * pipeline no genre registers (a card action: portrait, likeness), its
+ * **instance values** (`instanceValues.ts`). Configurations are retired: an
+ * edit naming one is refused.
  */
-async function pubConfigTarget(db: Db, at: Published) {
-	const { resolveSelectedConfig } = await import(
-		"$lib/server/pipelines/config/named"
-	)
-	const selected = await resolveSelectedConfig(db, at.specId, at.slug, {})
-	if (!selected)
-		throw new OptionNotFoundError(
-			"This pipeline has no configuration yet. Publishing seeds one; if " +
-				"this persists, re-run the application's boot."
+async function globalTarget(
+	db: Db,
+	at: Published,
+	configId: number | undefined
+): Promise<
+	| { kind: "genre"; targets: import("$lib/server/pipelines/registrations/genreValues").GenreValueTarget[] }
+	| { kind: "instance" }
+> {
+	if (configId != null)
+		throw new OptionNotWritableError(
+			"Pipeline configurations are retired: a pipeline's values come from where it is " +
+				"registered — the genre's defaults, a preset — or, for one nothing registers, " +
+				"this pipeline's own values here. Change them without naming a configuration. " +
+				"Nothing was saved."
 		)
-	return await configTarget(db, at, selected.configId)
+	const { genreValueTargets } = await import("$lib/server/pipelines/registrations/genreValues")
+	const targets = await genreValueTargets(db, at.slug)
+	return targets.length ? { kind: "genre", targets } : { kind: "instance" }
+}
+
+/** The pipeline's declared default at one address — what an instance-wide value otherwise inherits. */
+async function declaredDefaultAt(db: Db, at: Published, decl: { nodeKey: string; slot: string; path: string }) {
+	const { shippedConfigValuesOf } = await import("$lib/server/pipelines/config/named")
+	const decls = await declarations(db, at.specVersionId)
+	return (await shippedConfigValuesOf(db, at.specId, at.slug, at.specVersionId, decls)).get(
+		`${decl.nodeKey}\u0000${decl.slot}\u0000${decl.path}`
+	)
 }
 
 export async function writeOption(
@@ -458,7 +428,7 @@ export async function writeOption(
 
 	if (decl.control === "scripts-chain")
 		value = decl.unplaced
-			? await checkUnplacedChain(db, at.specId, decl, value)
+			? await checkUnplacedChain(db, at.specId, decl, value, at.slug)
 			: await checkChain(db, decl, value)
 	// Emptying an unplaced chain removes it: an empty list at an address no
 	// seam declares is a row with nothing left to say.
@@ -479,13 +449,19 @@ export async function writeOption(
 		const { assertSelectable } = await import(
 			"$lib/server/pipelines/entities/prompts"
 		)
-		await assertSelectable(
+		const chosen = await assertSelectable(
 			db,
 			at.specVersionId,
 			decl.nodeKey,
 			decl.slot,
 			value
 		)
+		// 🚧 R54: a member chooses among the prompts an administrator has not
+		// hidden. The picker never offers one; a guessed id is refused here.
+		if (!viewer.isAdmin && chosen.hidden)
+			throw new OptionNotWritableError(
+				`'${chosen.name}' is not one of the prompts offered here — an administrator hid it. Nothing was saved.`
+			)
 	}
 
 	// A context template is checked the same way, and one step further: against
@@ -526,65 +502,23 @@ export async function writeOption(
 		// everyone resolving that configuration gets — and since the
 		// simplification (2026-08-24) it is the *only* global write: the
 		// former instance override layer folded into the config itself.
-		const row =
-			configId != null
-				? await configTarget(db, at, configId)
-				: await pubConfigTarget(db, at)
-
+		// 🚧 Since R38: the genre's defaults, where a genre registers it.
+		const global = await globalTarget(db, at, configId)
 		// ── setting it back to the default is a reset (ruled 2026-09-10) ──
-		//
-		// A config stores deviations, so a value equal to the declaration is not
-		// one and gets no row. Not a nicety: a stored copy resolves identically
-		// today and pins the config to the number forever after, so "I put it
-		// back" and "I explicitly chose today's default" would be the same
-		// gesture with permanently different consequences — and the panel could
-		// not tell the person which one they had just made.
-		//
-		// The delete rather than a skip, because there may be a row to remove:
-		// this is the path a slider dragged back to where it started takes.
-		//
-		// "The default" is what this config would otherwise inherit. Where the
-		// shipped config holds a different value than the declaration, the
-		// declared value is a choice like any other and keeps its row — deleted,
-		// the next boot's back-fill would hand the shipped value back.
-		const { inheritedValues } = await import(
-			"$lib/server/pipelines/config/named"
-		)
-		const inherited = (await inheritedValues(db, at.specId, row.id)).get(
-			`${decl.nodeKey}\u0000${decl.slot}\u0000${decl.path}`
-		)
-		if (!holdsRow(decl, value, inherited)) {
-			await db
-				.delete(schema.pipelineConfigValues)
-				.where(
-					and(
-						eq(schema.pipelineConfigValues.configId, row.id),
-						eq(schema.pipelineConfigValues.nodeKey, decl.nodeKey),
-						eq(schema.pipelineConfigValues.slot, decl.slot),
-						eq(schema.pipelineConfigValues.path, decl.path)
-					)
-				)
+		// A layer stores deviations: a value equal to what it would otherwise
+		// inherit (the declared defaults) is no value, so "I put it back"
+		// clears the address rather than pinning today's default forever.
+		const inherited = await declaredDefaultAt(db, at, decl)
+		const stored = holdsRow(decl, value, inherited) ? value : undefined
+		const address = { nodeKey: decl.nodeKey, slot: decl.slot, path: decl.path }
+		if (global.kind === "genre") {
+			const { setGenreValue } = await import("$lib/server/pipelines/registrations/genreValues")
+			await setGenreValue(db, global.targets, address, stored)
 			return
 		}
-
-		await db
-			.insert(schema.pipelineConfigValues)
-			.values({
-				configId: row.id,
-				nodeKey: decl.nodeKey,
-				slot: decl.slot,
-				path: decl.path,
-				value
-			})
-			.onConflictDoUpdate({
-				target: [
-					schema.pipelineConfigValues.configId,
-					schema.pipelineConfigValues.nodeKey,
-					schema.pipelineConfigValues.slot,
-					schema.pipelineConfigValues.path
-				],
-				set: { value }
-			})
+		// 🚧 R50: a pipeline no genre registers — its instance values.
+		const { setInstanceValue } = await import("$lib/server/pipelines/registrations/instanceValues")
+		await setInstanceValue(db, at.slug, address, stored)
 		return
 	}
 
@@ -639,20 +573,20 @@ export async function clearOption(
 	)
 
 	if (target.scope === "config") {
-		const row =
-			configId != null
-				? await configTarget(db, at, configId)
-				: await pubConfigTarget(db, at)
-		await db
-			.delete(schema.pipelineConfigValues)
-			.where(
-				and(
-					eq(schema.pipelineConfigValues.configId, row.id),
-					eq(schema.pipelineConfigValues.nodeKey, decl.nodeKey),
-					eq(schema.pipelineConfigValues.slot, decl.slot),
-					eq(schema.pipelineConfigValues.path, decl.path)
-				)
+		const global = await globalTarget(db, at, configId)
+		if (global.kind === "genre") {
+			const { setGenreValue } = await import("$lib/server/pipelines/registrations/genreValues")
+			await setGenreValue(
+				db,
+				global.targets,
+				{ nodeKey: decl.nodeKey, slot: decl.slot, path: decl.path },
+				undefined
 			)
+			return
+		}
+		// 🚧 R50: a pipeline no genre registers — its instance values.
+		const { setInstanceValue } = await import("$lib/server/pipelines/registrations/instanceValues")
+		await setInstanceValue(db, at.slug, { nodeKey: decl.nodeKey, slot: decl.slot, path: decl.path }, undefined)
 		return
 	}
 
@@ -717,93 +651,12 @@ export async function resetConfig(
 				"made inside a session."
 		)
 
-	const row =
-		configId != null
-			? await configTarget(db, at, configId)
-			: await pubConfigTarget(db, at)
-
-	const gone = await db
-		.delete(schema.pipelineConfigValues)
-		.where(eq(schema.pipelineConfigValues.configId, row.id))
-		.returning({ id: schema.pipelineConfigValues.id })
-	return (gone as any[]).length
-}
-
-/**
- * Record a scope's choice of named config, by row id.
- *
- * Ids are safe here where preset slugs needed to be slugs (12 §3b): a config
- * hangs off the *spec*, not the version, so publishing 1.1.0 dangles nothing —
- * and a deleted config's FK nulls the selection, which `resolveSelectedConfig`
- * reads as "fall back to the shipped default" (the rule ratified for 0.6).
- *
- * Delegates to `configs.selectConfig`, which refuses a config belonging to
- * another pipeline — the panel and the runtime share one write path the same
- * way `layers()` makes them share one read path.
- *
- * What it does NOT delegate is who may choose what (R8). Choosing is the only
- * verb a non-admin has over a configuration — they never create, rename or
- * delete one — so the two limits on it are enforced here, where the viewer is:
- * the scope they are choosing for, and whether the configuration is one the
- * administrator put on offer.
- */
-export async function selectNamedConfig(
-	db: Db,
-	slug: string,
-	viewer: Viewer,
-	configId: number,
-	scope?: "session" | "pub"
-): Promise<void> {
-	const at = await published(db, slug)
-	if (!at)
-		throw new OptionNotFoundError(
-			`There is no published pipeline called '${slug}'.`
-		)
-
-	// The two selection scopes left (ruled 2026-08-24): the session's own choice,
-	// else the pub default. From inside a session the selection is the
-	// session's; everywhere else it is the pub's, which is the admin's.
-	const target: "session" | "pub" =
-		scope ?? (viewer.sessionId != null ? "session" : "pub")
-	if (target === "pub" && !viewer.isAdmin)
-		throw new OptionNotWritableError(
-			"Only an administrator chooses the configuration for everyone on this pub."
-		)
-
-	// `scope: "session"` from a caller who is not in one — or is in someone
-	// else's, which `viewerFor` strips to `undefined`. It used to fall through
-	// to `scopeId` 0 and write a selection for session zero: accepted, stored,
-	// resolved by nobody. A refusal is the honest answer; a write that lands
-	// nowhere is the failure mode selection refusals exist to prevent.
-	if (target === "session" && viewer.sessionId == null)
-		throw new OptionNotWritableError(
-			"A configuration is chosen for a session you are in. Open the session " +
-				"you want to change and choose there."
-		)
-	if (target === "session" && viewer.readOnlyBecause)
-		throw new OptionNotWritableError(
-			`${viewer.readOnlyBecause} Nothing was saved.`
-		)
-
-	// The administrator's curation is a rule, not a hint (R8). `namespaceView`
-	// already hides a withdrawn configuration from everyone but an admin — but
-	// hiding is not what protects it, since the id arrives from the client and
-	// is a small integer somebody can guess. This refusal is.
-	const [config] = await db
-		.select()
-		.from(schema.pipelineConfigs)
-		.where(eq(schema.pipelineConfigs.id, configId))
-		.limit(1)
-	if (config && (config as any).enabled === false && !viewer.isAdmin)
-		throw new OptionNotWritableError(
-			`'${(config as any).name}' is not one of the configurations this ` +
-				`pub offers. An administrator withdrew it.`
-		)
-
-	// `!` survives the guard above rather than in spite of it: the throw is what
-	// makes it true, and TypeScript cannot see the pairing through `target`.
-	const scopeId = target === "session" ? viewer.sessionId! : 0
-
-	const { selectConfig } = await import("$lib/server/pipelines/config/named")
-	await selectConfig(db, at.specId, target, scopeId, configId, viewer.userId)
+	const global = await globalTarget(db, at, configId)
+	if (global.kind === "genre") {
+		const { resetGenreValues } = await import("$lib/server/pipelines/registrations/genreValues")
+		return await resetGenreValues(db, global.targets)
+	}
+	// 🚧 R50: a pipeline no genre registers — its instance values.
+	const { resetInstanceValues } = await import("$lib/server/pipelines/registrations/instanceValues")
+	return await resetInstanceValues(db, at.slug)
 }

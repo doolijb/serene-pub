@@ -134,24 +134,13 @@ describe("pipelines:setOptions — the batch save", () => {
 	it("applies sets and clears in one request", async () => {
 		const { pipelinesSetOptions } = await import("./pipelines")
 		const [a, b] = await twoNumericOptionIds()
-		// Select the editable copy so the refreshed view resolves against it.
-		const { selectNamedConfig } = await import(
-			"$lib/server/pipelines/config/panel"
-		)
-		await selectNamedConfig(
-			testDb as any,
-			RESPOND,
-			{ userId: adminId, isAdmin: true },
-			await ensureEditableConfig()
-		)
-
-		const configId = await ensureEditableConfig()
+		// The reply is a registered pipeline: a global batch lands on the
+		// genre's defaults (PLAN-layering D5) — no configuration to select.
 		const set = collecting()
 		const res: any = await pipelinesSetOptions.handler(
 			fakeSocket(adminId, true),
 			{
 				slug: RESPOND,
-				configId,
 				set: [
 					{ optionId: a, value: 7 },
 					{ optionId: b, value: 9 }
@@ -167,9 +156,8 @@ describe("pipelines:setOptions — the batch save", () => {
 		expect(after.find((o) => o.id === b)!.value).toBe(9)
 		// The batch answers on its own event too, after the view — what a
 		// form waiting on its Save settles on (owner ruling 2026-10-02).
-		expect(set.last("pipelines:setOptions")).toEqual({
+		expect(set.last("pipelines:setOptions")).toMatchObject({
 			slug: RESPOND,
-			configId,
 			applied: 2
 		})
 		const order = set.sent.map((e) => e.event)
@@ -181,7 +169,7 @@ describe("pipelines:setOptions — the batch save", () => {
 		const cleared = collecting()
 		const clearedRes: any = await pipelinesSetOptions.handler(
 			fakeSocket(adminId, true),
-			{ slug: RESPOND, configId, set: [], clear: [a, b] } as any,
+			{ slug: RESPOND, set: [], clear: [a, b] } as any,
 			cleared.emit
 		)
 		expect(clearedRes.error).toBeUndefined()
@@ -195,12 +183,10 @@ describe("pipelines:setOptions — the batch save", () => {
 		const [a] = await twoNumericOptionIds()
 		const out = collecting()
 
-		const configId = await ensureEditableConfig()
 		const res: any = await pipelinesSetOptions.handler(
 			fakeSocket(adminId, true),
 			{
 				slug: RESPOND,
-				configId,
 				set: [
 					{ optionId: a, value: 3 },
 					{ optionId: "opt_not_a_real_handle", value: 1 }
@@ -222,7 +208,7 @@ describe("pipelines:setOptions — the batch save", () => {
 		// Tidy the landed write.
 		await pipelinesSetOptions.handler(
 			fakeSocket(adminId, true),
-			{ slug: RESPOND, configId, set: [], clear: [a] } as any,
+			{ slug: RESPOND, set: [], clear: [a] } as any,
 			noop
 		)
 	})

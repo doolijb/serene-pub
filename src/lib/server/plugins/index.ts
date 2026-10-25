@@ -276,6 +276,19 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 		console.warn("[genres] in-app genre registration failed:", e)
 	}
 
+	// 🚧 Rulesets authored on this pub (PLAN-ruleset-editor §4), back in this
+	// process's ruleset registry from their published documents. After the
+	// stored slots (bootstrap) and the plugins, whose owners are reserved by
+	// then; before any reader of `rulesets()` answers a socket. A row this
+	// build refuses costs that one ruleset and says which; never the boot.
+	try {
+		const { registerPubRulesets } = await import("$lib/server/rulesets/pubRulesets")
+		for (const line of await registerPubRulesets(db))
+			console.warn(`[rulesets] authored ruleset not registered: ${line}`)
+	} catch (e) {
+		console.warn("[rulesets] authored ruleset registration failed:", e)
+	}
+
 	mgr.markReady()
 }
 

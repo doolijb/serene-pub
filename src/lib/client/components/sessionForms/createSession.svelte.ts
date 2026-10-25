@@ -12,7 +12,8 @@
  * proposal: it names both, and the preset wins. See `sessionsCreateHandler`.
  */
 import type { StoredSwapContribution } from "$lib/shared/swaps"
-import { howStrictChoices, rigourFor } from "$lib/shared/rulesets/rulesOffer"
+import { settingValueOf } from "@serene-pub/sdk"
+import { adoptedBookRules, howStrictChoices, rigourFor, rulesField } from "$lib/shared/rulesets/rulesOffer"
 import {
 	INITIAL_PRESET_FILLABLE_FIELDS,
 	resolvePresetFill,
@@ -153,21 +154,6 @@ export function preselectsDefaultPersona(
 	return shape.personas.preselectDefault === true
 }
 
-/**
- * Does the held lorebook answer the genre's shape? A genre that requires one
- * cannot start without it — the server refuses the create in a sentence
- * (`shapeViolations`), and a Start that is offered only to be refused is the
- * defect this guards. An optional or absent capability is satisfied by
- * anything, including nothing; `reconcileToShape` has already detached the
- * lorebook where the capability is absent.
- */
-export function lorebookSatisfied(
-	shape: GenreShape | null | undefined,
-	lorebookId: number | null | undefined
-): boolean {
-	return shape?.lorebook !== "required" || lorebookId != null
-}
-
 /** What `firstUnmetStartRule` reads: the start screen's answers, as values. */
 export interface StartReadiness {
 	genreId: string | null
@@ -175,8 +161,6 @@ export interface StartReadiness {
 	characterCount: number
 	personaCount: number
 	floors: { characters: number; personas: number }
-	shape: GenreShape | null | undefined
-	lorebookId: number | null | undefined
 }
 
 /**
@@ -194,8 +178,8 @@ export function firstUnmetStartRule(r: StartReadiness): string | null {
 			? "Add at least one character."
 			: `Add at least ${r.floors.characters} characters.`
 	if (r.personaCount < r.floors.personas) return "Choose who you play as."
-	if (!lorebookSatisfied(r.shape, r.lorebookId))
-		return "This genre needs a lorebook."
+	// No lorebook rule (RF fix 2, 2026-10-23): a session may always start
+	// without a book — its own (the phantom lorebook) is its world.
 	return null
 }
 
@@ -205,13 +189,11 @@ export function firstUnmetStartRule(r: StartReadiness): string | null {
  * start (`defaultGenreId`), and whether `sessions:create` can be sent with
  * only what such a caller knows (a character, the first persona).
  *
- * `direct` is false when the genre asks something the caller cannot answer,
- * and today that is one thing: a required lorebook. The caller then hands
- * the start screen what it knows (`prefill.characterId`, the genre and
- * preset) and the screen asks the rest — instead of creating straight away
- * and being refused with the lorebook sentence (2026-09-17: an
- * administrator-starred Adventure preset made every character card's Start
- * a refusal).
+ * `direct` was false when the genre asked something the caller could not
+ * answer — a required lorebook (2026-09-17: an administrator-starred
+ * Adventure preset made every character card's Start a refusal). ⏳ Since RF
+ * fix 2 (2026-10-23) no genre requires one — a session always has its own
+ * book — so `direct` is always true.
  */
 export function oneClickStart(
 	genres: GenreRow[],
@@ -220,11 +202,10 @@ export function oneClickStart(
 	const genreId = defaultGenreId(genres, presets) ?? STANDARD_GENRE_ID
 	const enabled = enabledPresetsFor(presets, genreId)
 	const preset = enabled.find((p) => p.isDefault) ?? enabled[0] ?? null
-	const shape = genres.find((g) => g.genreId === genreId)?.shape ?? null
 	return {
 		genreId,
 		presetId: preset?.id ?? null,
-		direct: lorebookSatisfied(shape, null)
+		direct: true
 	}
 }
 
@@ -274,8 +255,7 @@ export function genreFacts(shape: GenreShape | null | undefined): string {
 		const n = bounds(seat)
 		parts.push(n ? `${n} characters you play` : "characters you play")
 	}
-	if (shape.lorebook === "required") parts.push("lorebook required")
-	else if (shape.lorebook) parts.push("lorebook optional")
+	if (shape.lorebook) parts.push("lorebook optional")
 	if (shape.composer === "none") parts.push("you don't type messages")
 	if (shape.voice === "narrator") parts.push("a narrator tells the story")
 	return parts.join(" · ")
@@ -461,6 +441,12 @@ export interface CreateSessionInput {
 	/** Swaps to seat the session with (R40); absent or empty inherits every pin. */
 	swaps?: StoredSwapContribution[]
 	lorebookId?: number | null
+	/**
+	 * 🚧 A starter lorebook to start from (PLAN-lorebook-kinds ruling 8): copied
+	 * into the session's own notes, its Rules the session's. Never with
+	 * `lorebookId` — the kit wins and no book is sent.
+	 */
+	starterKit?: Sockets.StarterKits.Ref | null
 	/** 🚧 Rules (PLAN-rulesets §4): absent or null, the server's default (W4-A). */
 	primaryRuleset?: string | null
 	/** 🚧 How strict (§21): absent or null, the genre's default. */
@@ -508,7 +494,7 @@ export function buildCreatePayload(
 			name: input.name.trim(),
 			scenario: (input.scenario ?? "").trim(),
 			...(input.swaps?.length ? { swaps: input.swaps } : {}),
-			lorebookId: input.lorebookId ?? null,
+			lorebookId: input.starterKit ? null : (input.lorebookId ?? null),
 			genreId: input.genreId,
 			// The preset picks the genre server-side: a `genreId` above that
 			// disagrees with it loses, and a null here is the preset-less
@@ -523,7 +509,8 @@ export function buildCreatePayload(
 		characterPositions: Object.fromEntries(
 			characterIds.map((id, i) => [id, i])
 		),
-		tags: input.tags ?? []
+		tags: input.tags ?? [],
+		...(input.starterKit ? { starterKit: input.starterKit } : {})
 	}
 }
 
@@ -585,6 +572,20 @@ export class StartSessionFlow {
 	rulesPick = $state<string | null>(null)
 	/** 🚧 The person's How strict pick; null takes the genre's default. */
 	rigourPick = $state<string | null>(null)
+	/**
+	 * 🚧 The chosen lorebook's rules (its `primaryRuleset`): a session
+	 * attached to a book at creation adopts them, whatever is sent — unless
+	 * they are Freeform, every book's default, which brings none
+	 * (`adoptedRules`). Null with no book. Said by the component that holds
+	 * the lorebook list.
+	 */
+	lorebookRules = $state<string | null>(null)
+	/**
+	 * 🚧 The starter lorebook chosen on the Lorebook card instead of a book
+	 * (PLAN-lorebook-kinds ruling 8). Its rules ride `lorebookRules` (the
+	 * session adopts them the same way); the card says where they come from.
+	 */
+	starterKit = $state<Sockets.StarterKits.Ref | null>(null)
 
 	genres = $derived(latestGenres(this.rawGenres))
 	genre = $derived(
@@ -600,10 +601,15 @@ export class StartSessionFlow {
 	 */
 	/**
 	 * The How strict a preset pins (Story's Rule Based pins Rules and dice,
-	 * 2026-10-19), the default under the person's own pick.
+	 * 2026-10-19), the default under the person's own pick. A preset stores
+	 * it as a setting decision (`setting('scripts', { lock: true })` →
+	 * `{ value, lock }`), read out with the SDK's `settingValueOf` — read as
+	 * a bare string it was never found (fix7, 2026-10-23), so *The rules
+	 * decide* started on Freeform and played in words.
 	 */
 	presetRigour = $derived.by(() => {
-		const r = (this.preset?.settings as Record<string, unknown> | null | undefined)?.rigour
+		const raw = (this.preset?.settings as Record<string, unknown> | null | undefined)?.rigour
+		const r = raw === undefined ? undefined : settingValueOf(raw).value
 		return typeof r === "string" ? r : null
 	})
 	/**
@@ -625,14 +631,60 @@ export class StartSessionFlow {
 			? this.rulesPick
 			: this.rulesDefault
 	)
+	/**
+	 * 🚧 The rules the chosen book (or starter lorebook) gives the session:
+	 * its own, or null for none or a book on Freeform (`adoptedBookRules`),
+	 * when the Rules stay the person's to choose (fix7).
+	 */
+	adoptedRules = $derived(adoptedBookRules(this.lorebookRules))
+	/**
+	 * 🚧 The Rules field as the form shows it (`rulesField`): the chosen
+	 * lorebook's own rules, else the person's pick, else the default.
+	 */
+	rulesShown = $derived(
+		this.rulesOffer
+			? rulesField(
+					this.rulesOffer,
+					this.rulesNowId,
+					this.lorebookRules ? { primaryRuleset: this.lorebookRules } : null
+				)
+			: null
+	)
+	/** How strict follows the rules shown — a lorebook's when it brings its own. */
 	rigour = $derived(
 		this.rulesOffer
-			? rigourFor(this.rulesOffer, this.rulesNowId, this.rigourPick ?? this.presetRigour)
+			? rigourFor(
+					this.rulesOffer,
+					this.rulesShown?.value ?? this.rulesNowId,
+					this.rigourPick ?? this.presetRigour
+				)
 			: null
 	)
 	presetsForGenre = $derived(enabledPresetsFor(this.rawPresets, this.genreId))
 	preset = $derived(
 		this.presetsForGenre.find((p) => p.id === this.presetId) ?? null
+	)
+	/**
+	 * 🚧 **What the start form asks under the chosen preset** (R32, A10;
+	 * lane 7): the server's `PresetRow.asks` — settings open to the owner
+	 * the preset or the genre's defaults mark `askAtStart`, and those fixed
+	 * at start. Left alone, an ask is the value it shows; only an answer the
+	 * person moved is sent.
+	 */
+	asks = $derived(this.preset?.asks ?? [])
+	/** The genre fields among them; the rules (ruleset, How strict) keep their own card. */
+	genreAsks = $derived(this.asks.filter((a) => !a.rules))
+	/** The rules the session plays are fixed once it starts (R32). */
+	rulesFixed = $derived(this.asks.some((a) => a.rules && a.key === "ruleset" && a.fixed === true))
+	/**
+	 * A preset that locks How strict (Rule Based) asks nothing about it: the
+	 * server takes the locked value whatever is sent, so the form offers no
+	 * choice. Read only where the preset states its asks.
+	 */
+	rigourLocked = $derived(
+		!!this.rulesOffer &&
+			this.preset?.asks !== undefined &&
+			!this.asks.some((a) => a.rules && a.key === "rigour")
 	)
 	/** Nothing an administrator has enabled to start this genre with. */
 	noPresetsForGenre = $derived(
@@ -644,8 +696,9 @@ export class StartSessionFlow {
 
 	/**
 	 * Why Start is not offered yet, as one sentence, or null when it is: a
-	 * genre and a preset, a cast that meets the floors, and the lorebook a
-	 * genre that requires one needs (`firstUnmetStartRule`).
+	 * genre and a preset, and a cast that meets the floors
+	 * (`firstUnmetStartRule`). Never a lorebook: a session may always start
+	 * without one (RF fix 2, 2026-10-23).
 	 */
 	startBlocker = $derived(
 		firstUnmetStartRule({
@@ -653,9 +706,7 @@ export class StartSessionFlow {
 			noPresetsForGenre: this.noPresetsForGenre,
 			characterCount: this.characterIds.length,
 			personaCount: this.personaIds.length,
-			floors: this.floors,
-			shape: this.shape,
-			lorebookId: this.fields.lorebookId
+			floors: this.floors
 		})
 	)
 	/** True once nothing stands in Start's way (`startBlocker` is null). */
@@ -668,6 +719,7 @@ export class StartSessionFlow {
 		// from its own defaults.
 		this.rulesPick = null
 		this.rigourPick = null
+		this.askAnswers = {}
 		// A preset belongs to one genre, so the answer below it reopens.
 		this.presetId = null
 		this.appliedPresetId = null
@@ -675,6 +727,7 @@ export class StartSessionFlow {
 	}
 
 	choosePreset(id: number | null) {
+		if (this.presetId !== id) this.askAnswers = {}
 		this.presetId = id
 		if (id === null) {
 			this.appliedPresetId = null
@@ -690,6 +743,33 @@ export class StartSessionFlow {
 		this.fillState = result.fillState
 		this.fields = result.fields
 		this.reconcile()
+	}
+
+	/**
+	 * 🚧 The person's answers to the preset's asks, by key — held apart from
+	 * the creation pre-fill, so an ask left alone shows (and keeps) what the
+	 * preset's settings say rather than an older pre-fill's value.
+	 */
+	askAnswers = $state<Record<string, unknown>>({})
+
+	/** Answer one start-form ask (a genre field), held until Start. */
+	setAsk(key: string, value: unknown) {
+		this.askAnswers = { ...this.askAnswers, [key]: value }
+	}
+
+	/**
+	 * The genre fields Start sends: the pre-fill, with each ask the person
+	 * answered — and each ask they left alone taken OUT, so the session
+	 * inherits the preset's value through the cascade instead of storing a
+	 * pre-fill over it (R32, A10).
+	 */
+	sentGenreFields(): Record<string, unknown> {
+		const out: Record<string, unknown> = { ...this.fields.genreFields }
+		for (const ask of this.genreAsks) {
+			if (ask.key in this.askAnswers) out[ask.key] = this.askAnswers[ask.key]
+			else delete out[ask.key]
+		}
+		return out
 	}
 
 	/**
@@ -765,6 +845,8 @@ export class StartSessionFlow {
 		}
 		this.characterIds = next.characterIds
 		this.personaIds = next.personaIds
+		// A genre with no lorebook step has no place for a kit either.
+		if (!this.shape?.lorebook && this.shape) this.starterKit = null
 	}
 
 	/** The `sessions:create` body for what the flow currently holds. */
@@ -777,11 +859,14 @@ export class StartSessionFlow {
 			personaIds: this.personaIds,
 			scenario: this.fields.scenario,
 			tags: this.fields.tags,
-			genreFields: this.fields.genreFields,
+			genreFields: this.sentGenreFields(),
 			swaps: this.fields.swaps,
 			lorebookId: this.fields.lorebookId,
-			// A lorebook's rules are adopted server-side whatever is sent.
-			primaryRuleset: this.rulesOffer && this.fields.lorebookId == null ? this.rulesNowId : null,
+			starterKit: this.starterKit,
+			// A lorebook's (or a kit's) own rules are adopted server-side
+			// whatever is sent; a book on Freeform brings none, so the
+			// pick travels (fix7).
+			primaryRuleset: this.rulesOffer && !this.adoptedRules ? this.rulesNowId : null,
 			rigour: this.rigour
 		})
 	}

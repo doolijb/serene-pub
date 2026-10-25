@@ -71,7 +71,7 @@
 <!-- Selection is a RING, as on a character card: the selected row's inset
      bar would sit under the cover. -->
 <div
-	class="group bg-surface-100-900 panel-edge relative flex h-full flex-col overflow-hidden rounded-[12px] border transition-shadow hover:shadow-lg {active
+	class="group bg-surface-100-900 panel-edge relative flex h-full flex-col overflow-hidden rounded-container border transition-shadow hover:shadow-lg {active
 		? 'ring-primary-500 ring-offset-surface-50-950 ring-2 ring-offset-2'
 		: ''}"
 	role="listitem"
@@ -118,7 +118,7 @@
 			class="flex min-w-0 flex-1 flex-col gap-1 p-3 {isGroup ? 'pt-9' : ''}"
 		>
 			<span class="flex min-w-0 items-center gap-1.5">
-				<span class="truncate text-[15px] font-medium">{name}</span>
+				<span class="truncate text-lead font-medium">{name}</span>
 				{#if session.isFavorite}
 					<Icons.Star
 						size={13}
@@ -141,7 +141,7 @@
 				class="text-surface-600-400 flex min-w-0 items-center gap-1.5 text-xs"
 			>
 				{#if showGenre && session.genreName}
-					<span class="bg-surface-200-800 shrink-0 rounded-md px-1.5 text-[11px]">
+					<span class="bg-surface-200-800 shrink-0 rounded-md px-1.5 text-meta">
 						{session.genreName}
 					</span>
 				{/if}
@@ -149,7 +149,7 @@
 					<!-- Primary, "waiting on YOU" (§2), with its words: never
 					     colour alone. -->
 					<span
-						class="text-primary-700 dark:text-primary-400 flex shrink-0 items-center gap-1 font-medium"
+						class="text-primary-ink flex shrink-0 items-center gap-1 font-medium"
 						data-session-your-turn
 					>
 						<span class="bg-primary-500 size-1.5 rounded-full" aria-hidden="true"

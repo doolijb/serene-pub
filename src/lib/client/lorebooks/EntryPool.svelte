@@ -49,6 +49,12 @@
 		descriptorOf: (item: PoolItem) => SectionDescriptor
 		/** The door the list belongs to, for its empty copy and its New. */
 		descriptor: SectionDescriptor
+		/**
+		 * 🚧 The ‹Rules› library chip's word ("Vis Itineris library"), or
+		 * null where the book's rules offer this list no library — then no
+		 * chip is drawn (§C, ruling 10).
+		 */
+		libraryName?: string | null
 		bindings: BindingWithRelations[]
 		vectorizationEnabled: boolean
 		selectedKey: string | null
@@ -94,6 +100,7 @@
 		sourceOf,
 		descriptorOf,
 		descriptor,
+		libraryName = null,
 		bindings,
 		vectorizationEnabled,
 		selectedKey,
@@ -134,10 +141,15 @@
 		key: item.key,
 		// A cast member lists in All (note 12) but is never filed or filed
 		// under: the people are not lore's parents.
+		// A library piece is the rules', not the book's: never filed either.
 		draggable:
-			!readOnly && item.kind !== SCENE_KIND && item.kind !== CAST_KIND,
+			!readOnly &&
+			!item.fromLibrary &&
+			item.kind !== SCENE_KIND &&
+			item.kind !== CAST_KIND,
 		canDrop: (from: string) =>
 			item.kind !== CAST_KIND &&
+			!item.fromLibrary &&
 			canFileUnder(from, item.key, poolCtx.pool, poolCtx.newRowBranchId),
 		onDrop: (from: string) => poolCtx.reparent(from, item.key)
 	})
@@ -194,7 +206,7 @@
 	 * decided to be.
 	 */
 	function markerOf(item: PoolItem) {
-		if (item.kind === SCENE_KIND) return null
+		if (item.kind === SCENE_KIND || item.fromLibrary) return null
 		return markerFor(decisions, item.id)
 	}
 
@@ -224,7 +236,7 @@
 	<button
 		type="button"
 		class="chip gap-1 {active
-			? 'preset-tonal-primary'
+			? 'preset-pressed'
 			: 'preset-tonal-surface'}"
 		class:opacity-60={count === 0 && !active}
 		aria-pressed={active}
@@ -260,6 +272,20 @@
 				})
 		)}
 	</div>
+	{#if libraryName}
+		<!-- 🚧 The rules' library, under the book (§C, ruling 10): off each
+		     time the book opens; on, its pieces join the list, read only. -->
+		<div
+			class="flex flex-wrap gap-1"
+			role="group"
+			aria-label="Rules library"
+			data-library-chip
+		>
+			{@render chip(libraryName, facets.library, filters.library, () =>
+				onFilters({ ...filters, library: !filters.library })
+			)}
+		</div>
+	{/if}
 	<!-- Needs keywords is a filter (note 5): the same rule as the Loose
 	     ends queue's keyword chore, as a narrowing of this list. The queue
 	     itself opens from the rail's foot, or the scope popout in compact. -->
@@ -300,7 +326,7 @@
 		<button
 			type="button"
 			data-retrieval-marker={mark.label.toLowerCase()}
-			class="text-primary-500 shrink-0 rounded px-1 text-xs leading-none"
+			class="text-primary-ink shrink-0 rounded px-1 text-xs leading-none"
 			title={mark.title}
 			onclick={(e) => {
 				e.stopPropagation()
@@ -324,8 +350,8 @@
 		>
 			<Popover.Trigger
 				class="btn btn-sm preset-tonal-surface shrink-0 p-1"
-				title="More options"
-				aria-label="More options for {item.name}"
+				title="More actions"
+				aria-label="More actions for {item.name}"
 			>
 				<Icons.Ellipsis size={16} />
 			</Popover.Trigger>
@@ -357,7 +383,7 @@
 									close={() => (openMenuKey = null)}
 								/>
 							{/if}
-							<hr class="border-surface-300-700" />
+							<hr class="border-surface-200-800" />
 							<button
 								class="btn btn-sm preset-filled-error-500 w-full justify-start"
 								type="button"
@@ -392,7 +418,7 @@
 			data-entry-row
 			data-entry-key={item.key}
 			class="preset-filled-surface-100-900 hover:bg-surface-200-800 data-[drop-target]:ring-primary-500 flex items-start gap-2 rounded-lg transition-colors data-[drop-target]:ring-2"
-			class:preset-tonal-primary={selectedKey === item.key}
+			class:sidebar-row-active={selectedKey === item.key}
 			class:opacity-60={item.archived}
 			class:opacity-50={!item.archived && dimmedKeys?.has(item.key)}
 			style={depth ? `margin-left:${depth * 16}px` : undefined}
@@ -439,7 +465,9 @@
 			</div>
 			<div class="flex shrink-0 items-start gap-2 py-3 pr-3">
 				{@render retrievalMark(item)}
-				{@render rowMenu(item, source)}
+				{#if !item.fromLibrary}
+					{@render rowMenu(item, source)}
+				{/if}
 			</div>
 		</div>
 	{/if}
@@ -454,7 +482,7 @@
 			data-entry-row
 			data-entry-key={item.key}
 			class="preset-filled-surface-100-900 hover:bg-surface-200-800 data-[drop-target]:ring-primary-500 flex items-start gap-1 rounded-lg transition-colors data-[drop-target]:ring-2"
-			class:preset-tonal-primary={selectedKey === item.key}
+			class:sidebar-row-active={selectedKey === item.key}
 			class:opacity-60={item.archived}
 			class:opacity-50={!item.archived && dimmedKeys?.has(item.key)}
 			use:rowDrag={dragOptions(item)}
@@ -485,9 +513,19 @@
 				>
 					{item.content.trim().split("\n")[0] || "No content yet."}
 				</p>
-				<span class="badge preset-tonal-surface self-start text-[11px]">
-					{kindLabel(item.kind)}
-				</span>
+				<div class="flex flex-wrap gap-1">
+					<span class="badge preset-tonal-surface text-meta">
+						{kindLabel(item.kind)}
+					</span>
+					{#if item.fromLibrary && libraryName}
+						<span
+							class="badge preset-tonal-surface text-meta"
+							data-library-badge
+						>
+							{libraryName}
+						</span>
+					{/if}
+				</div>
 			</div>
 			<div class="shrink-0 pt-3 pr-3 empty:hidden">
 				{@render retrievalMark(item)}
@@ -625,7 +663,7 @@
 			>
 				<Icons.Check size={14} /> Done
 			</button>
-		{:else if items.length === 0 && filtering && facets.total > 0}
+		{:else if items.length === 0 && filtering && facets.total + (filters.library ? facets.library : 0) > 0}
 			<!-- The scope has rows; the search and filters hid all of them.
 			     The first-run copy and its New button would be wrong here. -->
 			<div
@@ -653,6 +691,26 @@
 					: undefined}
 				onCta={readOnly ? undefined : onNew}
 			/>
+			{#if libraryName && !filters.library && facets.library > 0}
+				<!-- The library has pieces for this list: one press shows
+				     them, the same switch as the chip. -->
+				<div
+					class="flex flex-col items-center gap-2 pb-6 text-center"
+					data-library-offer
+				>
+					<p class="text-surface-700-300 text-sm">
+						{facets.library}
+						{facets.library === 1 ? "is" : "are"} ready in the {libraryName}.
+					</p>
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal-surface"
+						onclick={() => onFilters({ ...filters, library: true })}
+					>
+						Show the {libraryName}
+					</button>
+				</div>
+			{/if}
 		{:else if effectiveLens === "cards"}
 			<div
 				class="grid gap-2"

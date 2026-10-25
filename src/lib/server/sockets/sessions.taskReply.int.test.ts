@@ -162,10 +162,12 @@ async function createOn(name: string, seedKey: string, characterIds: number[] = 
 
 /** The session's own task choices (the `tasks` field), over its preset's. */
 async function setTasks(sessionId: number, tasks: Record<string, "full" | "review" | "off">) {
-	const [row] = await db.select({ genreFields: schema.sessions.genreFields }).from(schema.sessions).where(eq(schema.sessions.id, sessionId))
-	const fields = { ...((row?.genreFields ?? {}) as Record<string, unknown>) }
-	fields.tasks = { v: 1, tasks: Object.fromEntries(Object.entries(tasks).map(([k, mode]) => [k, { mode }])) }
-	await db.update(schema.sessions).set({ genreFields: fields }).where(eq(schema.sessions.id, sessionId))
+	// ⏳ Written where the retired tasks live now (PLAN-layering D4).
+	const { applyLegacyTasks } = await import("$lib/server/utils/testDb")
+	await applyLegacyTasks(db, sessionId, {
+		v: 1,
+		tasks: Object.fromEntries(Object.entries(tasks).map(([k, mode]) => [k, { mode }]))
+	})
 }
 
 /** The reply's prompt for one turn, as text — the first compiled prompt of the turn. */

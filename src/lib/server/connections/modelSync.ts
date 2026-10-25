@@ -356,7 +356,10 @@ export async function syncConnectionModels(
 					name: m.name || m.model,
 					enabled: true,
 					facts: m.facts ?? {},
-					modality: m.modality ?? null
+					modality: m.modality ?? null,
+					// 🚧 O3: what the host says it reads and writes.
+					reads: m.reads ?? null,
+					writes: m.writes ?? null
 				}))
 			)
 			.onConflictDoNothing({
@@ -409,14 +412,23 @@ export async function syncConnectionModels(
 		const nextModality = offered.modality ?? null
 		const modalityChanged =
 			nextModality != null && nextModality !== (r.modality ?? null)
-		if (!renaming && !factsChanged && !modalityChanged) continue
-		if (modalityChanged) modalityRestated = true
+		// 🚧 O3: the host's stated reads/writes, under the modality's rule —
+		// a statement replaces, silence keeps what a person or an earlier
+		// listing said.
+		const sameList = (a: unknown, b: unknown) =>
+			JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+		const readsChanged = !!offered.reads && !sameList(offered.reads, r.reads)
+		const writesChanged = !!offered.writes && !sameList(offered.writes, r.writes)
+		if (!renaming && !factsChanged && !modalityChanged && !readsChanged && !writesChanged) continue
+		if (modalityChanged || readsChanged || writesChanged) modalityRestated = true
 		await db
 			.update(schema.connectionModels)
 			.set({
 				...(renaming ? { name: offered.name } : {}),
 				...(factsChanged ? { facts: nextFacts } : {}),
-				...(modalityChanged ? { modality: nextModality } : {})
+				...(modalityChanged ? { modality: nextModality } : {}),
+				...(readsChanged ? { reads: offered.reads } : {}),
+				...(writesChanged ? { writes: offered.writes } : {})
 			})
 			.where(eq(schema.connectionModels.id, r.id))
 	}

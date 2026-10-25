@@ -30,7 +30,8 @@
  * book, refused by the genre's declared writes and by lore writes Off, as
  * `scenes:create` is.
  */
-import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm"
+import type { EventCause } from "@serene-pub/sdk"
+import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { canonicalChannel } from "$lib/server/messages/channels"
 import {
@@ -259,7 +260,9 @@ async function newestLineId(
 			and(
 				eq(schema.sessionMessages.sessionId, sessionId),
 				eq(schema.sessionMessages.channel, channel),
-				gte(schema.sessionMessages.id, from)
+				gte(schema.sessionMessages.id, from),
+				// 🚧 The live history (RF fix 5).
+				isNull(schema.sessionMessages.rewindOrdinal)
 			)
 		)
 		.orderBy(desc(schema.sessionMessages.id))
@@ -281,7 +284,8 @@ async function lineBefore(
 			and(
 				eq(schema.sessionMessages.sessionId, sessionId),
 				eq(schema.sessionMessages.channel, channel),
-				sql`${schema.sessionMessages.id} < ${before}`
+				sql`${schema.sessionMessages.id} < ${before}`,
+				isNull(schema.sessionMessages.rewindOrdinal)
 			)
 		)
 		.orderBy(desc(schema.sessionMessages.id))
@@ -305,7 +309,8 @@ async function laneLineIds(
 				eq(schema.sessionMessages.sessionId, sessionId),
 				eq(schema.sessionMessages.channel, channel),
 				gte(schema.sessionMessages.id, from),
-				lte(schema.sessionMessages.id, to)
+				lte(schema.sessionMessages.id, to),
+				isNull(schema.sessionMessages.rewindOrdinal)
 			)
 		)
 	return rows.map((r) => r.id)
@@ -348,7 +353,8 @@ export async function liveRangeLineIds(
 		.where(
 			and(
 				eq(schema.sessionMessages.sessionId, sessionId),
-				gte(schema.sessionMessages.id, from)
+				gte(schema.sessionMessages.id, from),
+				isNull(schema.sessionMessages.rewindOrdinal)
 			)
 		)
 	for (const row of rows) {
@@ -953,6 +959,8 @@ export async function openScene(
 		channel?: string | null
 		atMessageId: number
 		closeAt?: number | null
+		/** 🚧 Why it opened, for the `scene-opened` it emits — a person's press unless said. */
+		cause?: EventCause
 	}
 ): Promise<LiveSceneResult> {
 	const { sessionId, userId } = params
@@ -1065,16 +1073,20 @@ export async function openScene(
 
 	if (result.closed) await proposeAndWriteCast(db, result.closed)
 	const castProposal = await proposeAndWriteCast(db, result.scene)
-	// 🚧 *Picture each new scene* (lane 2, 2026-10-19): an open scene still
-	// open (not a range filed after the fact) is the scene changing. Never
-	// the reason a scene fails to open.
-	if (closeAt == null)
-		try {
-			const { onSceneOpened } = await import("$lib/server/sessions/taskEvents")
-			await onSceneOpened(db, { sessionId, channel })
-		} catch (err) {
-			console.warn(`[scenes] Picture each new scene for session ${sessionId} was skipped:`, err)
-		}
+	/**
+	 * 🚧 The session moments (PLAN-layering D7, lane 6): the scene this
+	 * opening closed, then the scene it opened — when it is a live scene
+	 * still open (not a range filed after the fact). Registrations and
+	 * routines answer them (*Picture each new scene* is a routine on
+	 * `scene-opened`). Never the reason a scene fails to open.
+	 */
+	{
+		const { noteScene } = await import("$lib/server/pipelines/routines/moments")
+		const moment = { sessionId, userId, cause: params.cause ?? { kind: "user" as const, userId } }
+		if (result.closed)
+			await noteScene(db, { ...moment, opened: false, sceneId: result.closed.id, messageId: result.closed.closedAtMessageId })
+		if (closeAt == null) await noteScene(db, { ...moment, opened: true, sceneId: result.scene.id, messageId: at })
+	}
 	return {
 		sessionId,
 		scene: await reread(db, result.scene.id),
@@ -1115,7 +1127,13 @@ async function ownedLiveScene(db: Db, sceneId: number, userId: number) {
 /** Close the open scene at `atMessageId`, or at the channel's newest line. */
 export async function closeScene(
 	db: Db,
-	params: { sceneId: number; userId: number; atMessageId?: number | null }
+	params: {
+		sceneId: number
+		userId: number
+		atMessageId?: number | null
+		/** 🚧 Why it closed, for the `scene-closed` it emits — a person's press unless said. */
+		cause?: EventCause
+	}
 ): Promise<LiveSceneResult> {
 	const scene = await ownedLiveScene(db, params.sceneId, params.userId)
 	if (scene.closedAtMessageId != null)
@@ -1145,6 +1163,18 @@ export async function closeScene(
 		return closeWithin(tx, scene, at)
 	})
 	const castProposal = await proposeAndWriteCast(db, closed)
+	// 🚧 The session moment (PLAN-layering D7, lane 6): `scene-closed`.
+	{
+		const { noteScene } = await import("$lib/server/pipelines/routines/moments")
+		await noteScene(db, {
+			sessionId: scene.sessionId,
+			userId: params.userId,
+			cause: params.cause ?? { kind: "user", userId: params.userId },
+			opened: false,
+			sceneId: closed.id,
+			messageId: closed.closedAtMessageId
+		})
+	}
 	return {
 		sessionId: scene.sessionId,
 		scene: await reread(db, closed.id),

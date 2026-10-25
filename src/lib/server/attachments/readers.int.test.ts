@@ -89,7 +89,12 @@ describe("attachmentReaders (PGlite integration)", () => {
 			expect(r.kinds.pdf).toEqual({ allowed: true })
 			expect(r.kinds.text).toEqual({ allowed: true })
 			expect(r.calls[0].reads).toEqual(["image", "text", "pdf"])
-			expect(r.calls[0].placeholderFor).toEqual([])
+			// 🚧 O4: the Messages API sends no sound or video — those are
+			// named, and with no Transcription model set up, not heard either.
+			expect(r.calls[0].placeholderFor).toEqual(["audio", "video"])
+			expect(r.calls[0].transcribes).toBeUndefined()
+			expect(r.kinds.audio.allowed).toBe(false)
+			expect(r.kinds.audio.reason).toMatch(/^No model in this reply can read audio files\./)
 			expect(r.calls[0].connection?.type).toBe("anthropic")
 			expect(r.accepts.image).toContain("image/png")
 			expect(r.accepts.pdf).toContain("application/pdf")
@@ -110,7 +115,7 @@ describe("attachmentReaders (PGlite integration)", () => {
 			expect(r.kinds.text).toEqual({ allowed: true })
 			expect(r.accepts.image).toEqual([])
 			expect(r.calls[0].reads).toEqual(["text"])
-			expect(r.calls[0].placeholderFor).toEqual(["image", "pdf"])
+			expect(r.calls[0].placeholderFor).toEqual(["image", "pdf", "audio", "video"])
 			expect(r.calls[0].reasons.image).toBeTruthy()
 		},
 		T
@@ -214,4 +219,39 @@ describe("attachmentReaders (PGlite integration)", () => {
 			ADAPTER_MANIFEST.ollama.sendsAttachments = priorOllama
 		}
 	})
+})
+
+// ── 🚧 Sounds (O2, O4, O9) ───────────────────────────────────────────────────
+describe("attachmentReaders — sounds", () => {
+	test(
+		"a pair that hears takes audio files; a format the wire takes is offered",
+		async () => {
+			// OpenAI's own preset asserts hearing (`openai-official`).
+			const p = await pair("openai", "gpt-4o-audio-preview", { preset: "openai-official" })
+			await useDefault(p)
+			const r = await readers(await session("core:genre/story"))
+			expect(r.kinds.audio).toEqual({ allowed: true })
+			expect(r.calls[0].reads).toContain("audio")
+			expect(r.accepts.audio).toContain("audio/mpeg")
+			// Video stays named: no adapter sends one.
+			expect(r.kinds.video.allowed).toBe(false)
+		},
+		T
+	)
+
+	test(
+		"a pair that cannot hear, with a Transcription model set up, has audio heard for it",
+		async () => {
+			const hearer = await pair("openai", "whisper-1", { preset: "openai-official" })
+			const { setCapabilityDefault } = await import("$lib/server/connections/capabilityDefaults")
+			await setCapabilityDefault(db, "audio->text", hearer)
+			await useDefault(await pair("anthropic", "claude-sonnet-4-5"))
+			const r = await readers(await session("core:genre/story"))
+			expect(r.kinds.audio).toEqual({ allowed: true })
+			expect(r.calls[0].reads).not.toContain("audio")
+			expect(r.calls[0].transcribes).toEqual(["audio"])
+			expect(r.calls[0].reasons.audio).toMatch(/transcribe step hears it first/)
+		},
+		T
+	)
 })

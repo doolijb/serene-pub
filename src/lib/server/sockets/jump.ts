@@ -325,6 +325,8 @@ async function searchLorebooks(
 				),
 				// 🚧 Never a session's own notes (PLAN-rulesets §26).
 				sql`${schema.lorebooks.sessionId} IS NULL`,
+				// 🚧 A starter lorebook is a template, not a lorebook to jump into.
+				eq(schema.lorebooks.kind, "book"),
 				everyTermMatches(patterns, (pattern) => [
 					ilike(schema.lorebooks.name, pattern)
 				])
@@ -397,6 +399,8 @@ async function searchEntries(
 				eq(schema.lorebookEntries.archived, false),
 				// 🚧 Never a session's own notes (PLAN-rulesets §26).
 				sql`${schema.lorebooks.sessionId} IS NULL`,
+				// 🚧 A starter lorebook is a template, not a lorebook to jump into.
+				eq(schema.lorebooks.kind, "book"),
 				// Main's line: shared rows only (`onLineSql(…, MAIN_LINE)`).
 				onLineSql(schema.lorebookEntries.branchId, MAIN_LINE),
 				everyTermMatches(patterns, (pattern) => [

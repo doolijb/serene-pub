@@ -85,7 +85,7 @@ describe("resolve: blocks per rigour", () => {
 	test("prose — voice, sheet at index, no numbers anywhere", () => {
 		const out = runEngine(base({ rigour: "prose", owners: [ann()] }))
 		expect(Object.keys(out.blocks)).toEqual(["voice", "sheet", "pieces", "custom"])
-		expect(out.blocks.voice!.text).toBe(decl.voice.prose)
+		expect(out.blocks.voice!.text).toBe(decl.voice!.prose)
 		expect(out.blocks.sheet!.depth).toBe("index")
 		for (const b of Object.values(out.blocks)) expect(b!.text).not.toMatch(/\d/)
 		expect(out.blocks.sheet!.text).toBe("Ann — weapons: Longsword")
@@ -95,7 +95,7 @@ describe("resolve: blocks per rigour", () => {
 
 	test("mechanics — numbers, derived stats, sheet at summary, explained", () => {
 		const out = runEngine(base())
-		expect(out.blocks.voice!.text).toBe(decl.voice.mechanics)
+		expect(out.blocks.voice!.text).toBe(decl.voice!.mechanics)
 		expect(out.blocks.sheet!.depth).toBe("summary")
 		expect(out.blocks.sheet!.text).toContain("Strength: 3; Health: 20; Defense: 13; weapons: Longsword")
 		expect(out.blocks.sheet!.depths.index).toBe("Ann — Strength: 3; Health: 20; Defense: 13; weapons: Longsword")
@@ -168,9 +168,9 @@ describe("apply: checks, stacking, refusals", () => {
 
 	test("the session's bonus stacking: `sum` adds typed terms; an edge type rolls twice", () => {
 		const deltas: ProposedDelta[] = [{ owner: "character:1", op: "hit", piece: "Longsword", check: "attack", against: 15 }]
-		const sum = runEngine(base({ mode: "apply", random: face(11), deltas, conventions: { ...decl.conventions, bonuses: { types: ["item"], stacking: "sum" } } }))
+		const sum = runEngine(base({ mode: "apply", random: face(11), deltas, conventions: { ...decl.conventions!, bonuses: { types: ["item"], stacking: "sum" } } }))
 		expect(sum.explain.find((e) => e.target === "character:1.attack")!.text).toBe("d20 11 + 3 (Strength) + 2 (Longsword) + 1 (Longsword) + 1 (Longsword) = 18 vs 15")
-		const edge = runEngine(base({ mode: "apply", random: face(4, 13), deltas, conventions: { ...decl.conventions, bonuses: { types: ["gear"], stacking: "highest-per-type", edge: "gear" } } }))
+		const edge = runEngine(base({ mode: "apply", random: face(4, 13), deltas, conventions: { ...decl.conventions!, bonuses: { types: ["gear"], stacking: "highest-per-type", edge: "gear" } } }))
 		expect(edge.explain.find((e) => e.target === "character:1.attack")!.text).toBe("d20 (4, 13, edge) 13 + 3 (Strength) + 1 (Longsword) = 17 vs 15")
 	})
 
@@ -332,7 +332,7 @@ describe("dice", () => {
 		expect(() => rollDice("d", Math.random)).toThrow(/not a die/)
 	})
 	test("a check against nothing has no verdict", () => {
-		expect(degreeOf(decl.conventions.degrees, { total: 30, natural: 15 })).toBeNull()
+		expect(degreeOf(decl.conventions!.degrees!, { total: 30, natural: 15 })).toBeNull()
 	})
 })
 

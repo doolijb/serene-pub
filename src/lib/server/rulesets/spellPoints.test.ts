@@ -134,6 +134,40 @@ describe("🚧 casting: points, honoured (owner ruling ★7, P2-4)", () => {
 	})
 })
 
+describe("🚧 the pool read off the declaration (M2, 2026-10-22: VI's numbers into its declaration — M3 declares them)", () => {
+	const declared = (rest?: unknown) => {
+		const conv = conventionsFor(ruleset, settingValues(ruleset, { values: { casting: "slots" } }))
+		return { ...conv, casting: { pool: "itineris-spell-points", cost: "level", repertoire: "spells", refill: "long" }, ...(rest ? { rest } : {}) } as never
+	}
+
+	test("conventions.casting, laid by a setting's choice: a cast costs its level from the pool, whatever the setting's id", () => {
+		const out = runApply({ ...input("slots", { owners: [caster(4, 6)], deltas: [cast("Burning Hands")] }), conventions: declared() })
+		expect(out.changes.map((c) => [c.slotId, c.value])).toEqual([[SPELL_POINTS_SLOT, -1]])
+		expect(out.outcomes.map((o) => o.text)).toEqual(["Ann casts Burning Hands: Spell points −1 (3 left)"])
+	})
+
+	test("the refill is the rest the declaration names, its minutes read — never a number of the engine's", () => {
+		const conv = conventionsFor(ruleset, settingValues(ruleset))
+		const at = (minutes: number) => elapsedInUnits({ minutes }, conv.time).units
+		// Vis Itineris's own long rest: 480 minutes.
+		expect(runApply({ ...input("slots", { owners: [caster(1, 6)], elapsed: at(480) }), conventions: declared() }).changes).toContainEqual(
+			expect.objectContaining({ slotId: SPELL_POINTS_SLOT, op: "set", value: 6 })
+		)
+		expect(runApply({ ...input("slots", { owners: [caster(1, 6)], elapsed: at(470) }), conventions: declared() }).changes).toEqual([])
+		// A table whose long rest is an hour refills after an hour.
+		const hour = [{ id: "long", label: { en: "Long rest" }, minutes: 60, recharges: ["long"] }]
+		expect(runApply({ ...input("slots", { owners: [caster(1, 6)], elapsed: at(60) }), conventions: declared(hour) }).changes).toContainEqual(
+			expect.objectContaining({ slotId: SPELL_POINTS_SLOT, op: "set", value: 6 })
+		)
+	})
+
+	test("a caster with no pool is refused in the pool's own words", () => {
+		const noPool = { ...caster(4, 6), stats: [] }
+		const out = runApply({ ...input("slots", { owners: [noPool], deltas: [cast("Burning Hands")] }), conventions: declared() })
+		expect(out.rejected.map((r) => r.why)).toEqual(["Ann has no spell points to cast Burning Hands with."])
+	})
+})
+
 describe("casting: slots (the default)", () => {
 	test("a spend is the piece spent, the pool untouched; a long rest leaves the pool alone", () => {
 		const out = runApply(input("slots", { owners: [caster(4, 6)], deltas: [cast("Burning Hands")] }))

@@ -1,5 +1,7 @@
+import { SvelteMap } from "svelte/reactivity"
 import {
 	CHARACTER_LORE_TYPE_ID,
+	isDerivedEntryTypeId,
 	HISTORY_TYPE_ID,
 	ITEM_TYPE_ID,
 	LOCATION_TYPE_ID,
@@ -26,9 +28,29 @@ const LABELS: Record<string, string> = {
 	[CAST_KIND]: "Cast"
 }
 
+/**
+ * 🚧 The labels of the rules lists the workspace has been told about
+ * (`entries:types`), by derived entry type: "Weapons", never
+ * "Vis Itineris.Weapons". A type id names the same list in every book, so
+ * one map serves them all; the workspace fills it when a book's lists land.
+ */
+const RULES_LIST_LABELS = new SvelteMap<string, string>()
+
+/** Remembers what each of a book's rules lists is called. */
+export function rememberRulesListLabels(
+	lists: readonly { typeId: string; label: string }[]
+): void {
+	for (const list of lists)
+		if (RULES_LIST_LABELS.get(list.typeId) !== list.label)
+			RULES_LIST_LABELS.set(list.typeId, list.label)
+}
+
 export function kindLabel(kind: string): string {
-	const declared = LABELS[kind]
+	const declared = LABELS[kind] ?? RULES_LIST_LABELS.get(kind)
 	if (declared) return declared
-	const tail = kind.split("/").pop() ?? kind
+	// A derived entry type not told about yet: its list's id, after the dot.
+	const tail = isDerivedEntryTypeId(kind)
+		? kind.slice(kind.lastIndexOf(".") + 1)
+		: (kind.split("/").pop() ?? kind)
 	return tail.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
 }

@@ -87,9 +87,38 @@ async function activeLockedTo(genreId: string) {
 			schema.pipelineSpecVersions,
 			eq(schema.pipelineSpecVersions.specId, schema.pipelineSpecs.id)
 		)
-	return (rows as any[]).filter(
-		(r) => r.activeVersionId === r.versionId && r.inputGenre === genreId
+	// 🚧 Locked to it (⏳), or mounted by its defaults' registrations (D7).
+	const registered = new Set(
+		(
+			await testDb
+				.select({ specSlug: schema.registrations.specSlug })
+				.from(schema.registrations)
+				.where(and(eq(schema.registrations.scopeKind, "genre"), eq(schema.registrations.scopeRef, genreId)))
+		).map((r) => r.specSlug)
 	)
+	const createSlugs = new Set(
+		(
+			await testDb
+				.select({ specSlug: schema.registrations.specSlug })
+				.from(schema.registrations)
+				.where(
+					and(
+						eq(schema.registrations.scopeKind, "genre"),
+						eq(schema.registrations.scopeRef, genreId),
+						eq(schema.registrations.triggerRef, sessionEvents.sessionCreated)
+					)
+				)
+		).map((r) => r.specSlug)
+	)
+	return (rows as any[])
+		.filter(
+			(r) =>
+				r.activeVersionId === r.versionId &&
+				(r.inputGenre === genreId || (!r.inputGenre && registered.has(r.slug))) &&
+				// Core's save serves every genre; it is not the genre's own.
+				r.slug !== "core:spec/save-message"
+		)
+		.map((r) => (createSlugs.has(r.slug) ? { ...r, inputEvent: sessionEvents.sessionCreated } : r))
 }
 
 const create = (params: Record<string, unknown>, socket = asAdmin()) =>
@@ -178,12 +207,13 @@ describe("create from Adventure, everything", () => {
 		expect(createRow.genre?.family).toBe("story")
 		expect(createRow.genre?.shape).toBeTruthy()
 
-		// No copied action keeps the source genre.
+		// No copied document keeps the source genre: a lock-era one names the
+		// new genre, one mounted by registrations names none (D3).
 		for (const c of copies) {
 			const { loadDocument } = await import("$lib/server/pipelines/boot/store")
 			const doc: any = await loadDocument(testDb as any, c.versionId)
-			for (const a of doc.contributes?.actions ?? []) expect(a.genre).toBe(QUEST)
-			expect(doc.input?.genre).toBe(QUEST)
+			for (const a of doc.contributes?.actions ?? []) expect([undefined, QUEST]).toContain(a.genre)
+			expect([undefined, QUEST]).toContain(doc.input?.genre)
 		}
 	}, 120_000)
 
@@ -225,7 +255,9 @@ describe("create from Adventure, everything", () => {
 		expect(g).toBeTruthy()
 		expect(g?.name).toBe("Quest")
 		expect(g?.family).toBe("story")
-		expect(g?.slots?.length ?? 0).toBe(getGenre(STORY_GENRE_ID)?.slots?.length ?? 0)
+		// 🚧 RF fix 8: a genre brings no slots — the copy carries none, as its source carries none.
+		expect("slots" in (g ?? {})).toBe(false)
+		expect(g?.uses).toEqual(getGenre(STORY_GENRE_ID)?.uses)
 	})
 
 	test("the default layout is copied with origin pub", async () => {

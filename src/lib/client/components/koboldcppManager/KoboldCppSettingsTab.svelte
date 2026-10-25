@@ -444,7 +444,7 @@
 				href="https://github.com/LostRuins/koboldcpp/wiki"
 				target="_blank"
 				rel="noopener noreferrer"
-				class="text-surface-600-400 hover:text-primary-500 flex items-center gap-1 text-xs transition-colors"
+				class="text-surface-600-400 hover:text-primary-ink flex items-center gap-1 text-xs transition-colors"
 			>
 				<Icons.BookOpen class="h-3 w-3" />
 				Documentation
@@ -454,7 +454,7 @@
 				href="https://github.com/LostRuins/koboldcpp"
 				target="_blank"
 				rel="noopener noreferrer"
-				class="text-surface-600-400 hover:text-primary-500 flex items-center gap-1 text-xs transition-colors"
+				class="text-surface-600-400 hover:text-primary-ink flex items-center gap-1 text-xs transition-colors"
 			>
 				<Icons.Github class="h-3 w-3" />
 				GitHub
@@ -465,7 +465,7 @@
 	<!-- Reconfigure / Reset -->
 	{#if onReset}
 		<div
-			class="card bg-surface-100-800 flex items-center justify-between gap-3 p-4"
+			class="card bg-surface-100-900 flex items-center justify-between gap-3 p-4"
 		>
 			<div>
 				<p class="text-sm font-medium">
@@ -484,7 +484,7 @@
 
 	<!-- Managed: binary info + update check -->
 	{#if isManaged && koboldCppSettingsCtx.settings?.koboldCppManagedBinaryVariant}
-		<div class="card bg-surface-100-800 flex flex-col gap-4 p-4">
+		<div class="card bg-surface-100-900 flex flex-col gap-4 p-4">
 			<div class="flex items-center justify-between">
 				<h3 class="text-sm font-medium">Binary</h3>
 				{#if managedUpdateAvailable}
@@ -589,7 +589,7 @@
 
 	<!-- Managed: TTL, startup timeout, server URL, port -->
 	{#if isManaged}
-		<div class="card bg-surface-100-800 flex flex-col gap-4 p-4">
+		<div class="card bg-surface-100-900 flex flex-col gap-4 p-4">
 			<h3 class="text-sm font-medium">Managed settings</h3>
 
 			<div>
@@ -759,7 +759,7 @@
 
 	<!-- Base URL (hidden in managed mode — auto-set) -->
 	{#if !isManaged}
-		<div class="card bg-surface-100-800 flex flex-col gap-4 p-4">
+		<div class="card bg-surface-100-900 flex flex-col gap-4 p-4">
 			<div>
 				<label class="block text-sm font-medium" for="koboldBaseUrl">
 					KoboldCPP base URL
@@ -911,7 +911,7 @@
 	     rejected as a credentials mismatch even when --admin is genuinely
 	     enabled on the target. -->
 	{#if !isManaged}
-		<div class="card bg-surface-100-800 flex flex-col gap-4 p-4">
+		<div class="card bg-surface-100-900 flex flex-col gap-4 p-4">
 			<div>
 				<h3 class="text-sm font-medium">Admin API credentials</h3>
 				<p class="text-surface-700-300 mt-1 text-xs">
@@ -995,7 +995,7 @@
 
 	<!-- Directory paths. Two of them since image models got their own home:
 	     Stable Diffusion checkpoints have no business sitting under llm/. -->
-	<div class="card bg-surface-100-800 flex flex-col gap-4 p-4">
+	<div class="card bg-surface-100-900 flex flex-col gap-4 p-4">
 		<div>
 			<label class="block text-sm font-medium" for="koboldModelsDir">
 				Models directory
@@ -1063,7 +1063,7 @@
 	     answering: a managed instance spends most of its life shut down by the
 	     idle timer, which is exactly when someone comes here asking why a badge
 	     says what it says. -->
-	<div class="card bg-surface-100-800 p-4">
+	<div class="card bg-surface-100-900 p-4">
 		<h3 class="mb-3 text-sm font-medium">Active capabilities</h3>
 		{#if capabilities}
 			<div class="flex flex-wrap gap-2">
@@ -1108,7 +1108,7 @@
 			href="https://github.com/LostRuins/koboldcpp"
 			target="_blank"
 			rel="noopener noreferrer"
-			class="hover:text-primary-500 underline"
+			class="hover:text-primary-ink underline"
 		>
 			LostRuins
 		</a>

@@ -1,0 +1,2 @@
+ALTER TABLE "lorebooks" ADD COLUMN "lore_write_mode" text DEFAULT 'full' NOT NULL;--> statement-breakpoint
+ALTER TABLE "lorebooks" ADD CONSTRAINT "lorebooks_lore_write_mode_check" CHECK ("lorebooks"."lore_write_mode" IN ('full', 'review', 'off'));

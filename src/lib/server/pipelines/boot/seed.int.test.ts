@@ -331,17 +331,24 @@ describe("core's specs", () => {
 		expect(await snapshot()).toEqual(before)
 	}, 120_000)
 
-	it("locks each session spec to an event core actually registered (R-4)", async () => {
-		// The inlet lock is the one subscription there is since R-4; a lock
-		// naming an event the registry lacks is a spec answering nothing.
-		const locks = (
+	it("registers each pipeline on an event core actually registered (R-4, D7)", async () => {
+		// 🚧 What starts a pipeline on an event is a registration now (the
+		// genre's defaults, PLAN-layering D7) — and what a pipeline suits is a
+		// picker's hint: both must name an event the registry has, or the
+		// pipeline answers nothing.
+		const registeredOn = (
 			await db
-				.select({ event: schema.pipelineSpecVersions.inputEvent })
-				.from(schema.pipelineSpecVersions)
+				.select({ event: schema.registrations.triggerRef })
+				.from(schema.registrations)
+				.where(eq(schema.registrations.triggerFamily, "event"))
 		)
 			.map((r) => r.event)
 			.filter((e): e is string => !!e)
-		expect(locks.length).toBeGreaterThan(0)
+		const suited = (
+			await db.select({ suits: schema.pipelineSpecVersions.suits }).from(schema.pipelineSpecVersions)
+		).flatMap((r) => (Array.isArray(r.suits) ? r.suits : []))
+		const locks = [...new Set([...registeredOn, ...suited])]
+		expect(registeredOn.length).toBeGreaterThan(0)
 		const registered = new Set(
 			(await db.select().from(schema.pipelineEventRegistry)).map(
 				(e: any) => `${e.slug}@${e.version}`

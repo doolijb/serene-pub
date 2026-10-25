@@ -204,8 +204,13 @@ describe("which modality a transform belongs to", () => {
 		expect(modalityOfTransform("text->entities")).toBe("ner")
 	})
 
-	it("is null for a feature, and for an output no section owns", () => {
+	it("is null for a feature, and for a multi-kind output", () => {
 		expect(modalityOfTransform("tools")).toBeNull()
-		expect(modalityOfTransform("text->audio")).toBeNull()
+		expect(modalityOfTransform("text->text+audio")).toBeNull()
+	})
+
+	// 🚧 O3 (2026-10-21): `->audio` no longer maps to no modality.
+	it("files speech under `tts`", () => {
+		expect(modalityOfTransform("text->audio")).toBe("tts")
 	})
 })

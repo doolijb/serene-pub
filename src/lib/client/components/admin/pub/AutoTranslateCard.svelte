@@ -1,4 +1,5 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
 	/**
 	 * Automatic translation of the app's own interface strings.
 	 *
@@ -11,6 +12,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import SettingSwitch from "./SettingSwitch.svelte"
+	import SettingCard from "$lib/client/components/settingsTabs/SettingCard.svelte"
 	import { requireAdmin } from "./requireAdmin"
 
 	interface Props {
@@ -66,24 +68,10 @@
 	}
 </script>
 
-<section class="panel-card flex flex-col gap-3" aria-labelledby="auto-translate-heading">
-	<h2 id="auto-translate-heading" class="text-sm font-medium">
-		Automatic translation
-	</h2>
-	<p class="text-surface-600-400 text-sm">
-		Serene Pub ships no translated text. With this on, interface strings it
-		has no translation for are sent to the service below, translated once,
-		and cached forever. Only this app's own interface strings are sent —
-		never sessions, characters, personas or lore. Off, anything
-		untranslated stays in English.
-	</p>
-	<SettingSwitch
-		name="enable-auto-translate"
-		label="Automatic translation"
-		checked={systemSettingsCtx.settings?.autoTranslateEnabled ?? false}
-		onCheckedChange={(e) => save({ enabled: e.checked })}
-	/>
-	{#if systemSettingsCtx.settings?.autoTranslateEnabled}
+<!-- The service and its address follow the switch, full width under it
+     (`below`), only while it is on. -->
+{#snippet service()}
+	<div class="text-foreground flex flex-col gap-3 text-sm">
 		<Select
 			label="Translation service"
 			options={[
@@ -95,20 +83,21 @@
 		/>
 		{#if systemSettingsCtx.settings?.autoTranslateEngine === "libre"}
 			<label class="label">
-				<span class="label-text text-xs text-surface-600-400">
+				<span class="label-text text-surface-600-400 text-xs">
 					LibreTranslate URL
 				</span>
 				<input
 					class="input"
 					type="url"
 					placeholder="https://translate.example.org/translate"
+					aria-describedby="libre-url-note"
 					bind:value={endpointField}
 				/>
 			</label>
-			<p class="text-surface-600-400 text-sm">
-				Point this at your own LibreTranslate and nothing leaves your
-				network. Leave it empty to use the public instance.
-			</p>
+			<FieldHelp id="libre-url-note">
+				Your own LibreTranslate keeps everything on your network; empty
+				uses the public one.
+			</FieldHelp>
 			<button
 				type="button"
 				class="btn preset-filled-primary-500 w-fit"
@@ -117,5 +106,22 @@
 				Save URL
 			</button>
 		{/if}
-	{/if}
-</section>
+	</div>
+{/snippet}
+
+<SettingCard
+	title="Automatic translation"
+	titleId="auto-translate-heading"
+	headingLevel={2}
+	help="Interface strings with no translation are sent to a service once and kept; sessions, characters and lore never are."
+	layout="switch"
+	below={systemSettingsCtx.settings?.autoTranslateEnabled ? service : undefined}
+>
+	<SettingSwitch
+		name="enable-auto-translate"
+		label="Automatic translation"
+		labelHidden
+		checked={systemSettingsCtx.settings?.autoTranslateEnabled ?? false}
+		onCheckedChange={(e) => save({ enabled: e.checked })}
+	/>
+</SettingCard>

@@ -181,7 +181,7 @@
 			type="button"
 			class="flex items-center gap-1.5 px-3 py-1.5 text-sm {modality ===
 			s.modality
-				? 'preset-tonal-primary'
+				? 'preset-pressed'
 				: 'preset-tonal-surface'}"
 			aria-pressed={modality === s.modality}
 			onclick={() => setModality(s.modality)}
@@ -283,7 +283,7 @@
 							<!-- Outlined, never filled: the whole card is the
 						     button, so nothing inside it may look like one. -->
 							<span
-								class="border-surface-300-700 text-surface-600-400 mt-1 inline-block rounded-full border px-1.5 py-0.5 text-[11px] {active
+								class="border-surface-200-800 text-surface-600-400 mt-1 inline-block rounded-full border px-1.5 py-0.5 text-meta {active
 									? 'opacity-80'
 									: ''}"
 							>

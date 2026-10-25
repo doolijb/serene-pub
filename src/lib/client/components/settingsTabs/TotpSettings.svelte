@@ -1,4 +1,5 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
 	/**
 	 * Two-factor enrolment and management for the signed-in account (26 §10).
 	 *
@@ -116,12 +117,14 @@
 	}
 </script>
 
-<div class="card preset-filled-surface-100-900 space-y-4 p-4">
-	<div>
-		<h3 class="flex items-center gap-2 text-sm font-medium">
-			<Icons.ShieldCheck size={18} /> Two-factor authentication
+<!-- The setting-card head (STYLE-GUIDE §6.4): title, one sentence; the
+     steps below it change with where enrolment stands. -->
+<section class="panel-card space-y-4" aria-labelledby="totp-heading">
+	<div class="flex flex-col gap-1">
+		<h3 id="totp-heading" class="text-lead font-medium">
+			Two-factor authentication
 		</h3>
-		<p class="text-surface-600-400 text-sm">
+		<p class="text-surface-600-400 text-chip">
 			Require a code from an authenticator app when signing in.
 		</p>
 	</div>
@@ -132,10 +135,10 @@
 			<p class="text-sm font-semibold">
 				Save these recovery codes now — they will not be shown again.
 			</p>
-			<p class="text-surface-600-400 text-sm">
+			<FieldHelp>
 				Each one works once, and they are the only way back in if you
 				lose your authenticator.
-			</p>
+			</FieldHelp>
 			<ul
 				class="grid grid-cols-1 gap-1 font-mono text-sm @lg/view:grid-cols-2"
 			>
@@ -250,7 +253,7 @@
 					Generate new recovery codes
 				</button>
 			</div>
-			<div class="border-surface-300-700 space-y-2 border-t pt-3">
+			<div class="border-surface-200-800 space-y-2 border-t pt-3">
 				<label class="label">
 					<span class="label-text">
 						Enter a current code to turn two-factor off
@@ -290,4 +293,4 @@
 			Set up two-factor authentication
 		</button>
 	{/if}
-</div>
+</section>

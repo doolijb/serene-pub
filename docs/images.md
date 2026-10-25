@@ -61,6 +61,7 @@ Sprites need a clear background so they sit cleanly over a session. Some models 
 - **In the character's gallery.** Portraits go to the **Gallery** tab, and nothing changes until you choose one.
 - **Behind the session.** A backdrop is one picture for the whole session, shown by the **Backdrop** widget. Everyone in the session sees the same one; its owner can change or clear it. See [Session layout](./session-layout.md#the-widgets).
 - **In the sprite set.** Filled sprites go straight into the set you picked, as new pictures beside anything already there.
+- **When a scene opens**, in Story, if the routine **Picture each new scene** is on (it starts Off; see [Story › What runs between turns](./genre-story.md#what-runs-between-turns)): a picture of the new scene is posted like **Scene**'s.
 
 Every picture you make is kept in your media, like an upload.
 
@@ -76,3 +77,4 @@ If pictures stop after working before, the model may have gone from its service,
 - [Sessions](./sessions.md): the Image and Scene actions, and backdrops
 - [Connections](./connections.md): every image service, loadouts and sampling
 - [Pipelines](./pipelines.md#the-image-step): how a picture is asked for, for administrators
+- [Connections › Sound from OpenAI](./connections.md#sound-from-openai): voice notes and spoken replies, the other media a session carries

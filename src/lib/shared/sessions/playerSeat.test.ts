@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest"
-import { asksToJoin, composerWritingAs, isLivePlayerSeat, isOwnPlayerSeat, ownCardlessPlayerSeats } from "./playerSeat"
+import { asksToJoin, composerWritingAs, isLivePlayerSeat, isOwnPlayerSeat, offersSeat, ownCardlessPlayerSeats } from "./playerSeat"
 
 const card = { id: 1, personaId: 9, persona: { userId: 1, name: "Ann" }, userId: 1 }
 const named = { id: 2, personaId: null, persona: null, userId: 2, seatName: "Bo" }
@@ -61,5 +61,26 @@ describe("🚧 a genre of player seats never asks a player for a persona (2026-1
 	test("a watcher, or a genre with no player label, is still asked", () => {
 		expect(ask({ playerLabel: "Adventurer", isPlayer: false })).toBe(true)
 		expect(ask({ isPlayer: true })).toBe(true)
+	})
+})
+
+describe("🚧 a genre of player seats offers a guest who plays a seat (Lair rewrite D5, 2026-10-21)", () => {
+	const offer = (o: Partial<Parameters<typeof offersSeat>[0]> = {}) =>
+		offersSeat({ isGuest: true, personasInMode: true, seats: [], userId: 2, playerLabel: "Dungeon Master", ...o })
+	test("a seatless guest who plays is offered a seat — exactly where asksToJoin keeps quiet", () => {
+		expect(offer()).toBe(true)
+		expect(asksToJoin({ isGuest: true, personasInMode: true, seats: [], userId: 2, playerLabel: "Dungeon Master" })).toBe(false)
+	})
+	test("a seat of their own — a card or a named card-less seat — ends the offer", () => {
+		expect(offer({ seats: [{ id: 4, personaId: null, seatName: "Maren", userId: 2 }] })).toBe(false)
+		expect(offer({ seats: [{ id: 5, personaId: 9, persona: { userId: 2 } }] })).toBe(false)
+		// Somebody else's seat is not theirs.
+		expect(offer({ seats: [{ id: 6, personaId: null, seatName: "Kit", userId: 3 }] })).toBe(true)
+	})
+	test("never the owner, a watcher, a genre with no player label or no personas", () => {
+		expect(offer({ isGuest: false })).toBe(false)
+		expect(offer({ isPlayer: false })).toBe(false)
+		expect(offer({ playerLabel: null })).toBe(false)
+		expect(offer({ personasInMode: false })).toBe(false)
 	})
 })

@@ -7,7 +7,9 @@
 	 * flat, the background remover, the downloads tray — and the
 	 * detail is one model's own view (`ModelDetailView`, or `OnnxModelView`
 	 * for a local ONNX file). `PanelSplit` lays them out: at desk with
-	 * nothing open the list takes the whole view (`listFills`), opening a
+	 * nothing open the list takes the whole view (`listFills`), centred at
+	 * the list's own 560px (L7, 2026-10-24; it was the 1120px reading
+	 * width, a model card's two lines stretched across it), opening a
 	 * model splits it 340px + detail; compact shows one at a time.
 	 *
 	 * Inventory only (DESIGN-image-generation §14, 2026-10-12): the status
@@ -321,6 +323,7 @@
 		mode={vm.mode}
 		hasDetail={selected != null}
 		listFills
+		fillWidth="list"
 		listWidth="340px"
 		{toolbar}
 		{list}

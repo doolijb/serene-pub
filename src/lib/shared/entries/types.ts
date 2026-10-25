@@ -302,6 +302,23 @@ export interface EntryColumns {
 	 * the server verified writes `summarizer`), never from the payload.
 	 */
 	provenance: string
+	/**
+	 * 🚧 The rules library piece this entry was copied from (plan §C, "Edit a
+	 * copy"): `{ compendium, piece, version }`, else null. ⚠ Projected, never
+	 * written from a client — only `entries:copyFromLibrary` sets it.
+	 */
+	derivedFrom?: { compendium: string; piece: string; version: string } | null
+	/**
+	 * 🚧 What a replaced reply wrote here that stayed (RF fix 4, 2026-10-23):
+	 * the entry's **kept** lore imprints — a field (or the entry itself) a
+	 * session's run wrote, whose reply was since swiped, regenerated or
+	 * deleted after someone had changed it, so it was not taken back. The
+	 * entry's note, *Written by a reply that was since replaced*, with
+	 * **Revert** and **Keep** (`lorebooks:settleImprint`). ⚠ Projected, never
+	 * written from a client; absent when there are none, and sent by the
+	 * book's list only.
+	 */
+	keptImprints?: KeptImprint[]
 	extraJson: Record<string, any>
 	/** `'YYYY-MM-DD'` — the legacy `date` column's string, kept for the client. */
 	createdAt: string
@@ -310,6 +327,23 @@ export interface EntryColumns {
 	embedding: number[] | null
 	embeddingModel: string | null
 	vectorizedAt: Date | null
+}
+
+/**
+ * 🚧 One **kept lore imprint** on an entry, as its note says it (RF fix 4):
+ * what a replaced reply wrote that stayed because the book had moved on
+ * since. `field` is the address it wrote (`fields.standing`, `title`), and
+ * null when the reply added the entry itself; `label` is that field in the
+ * form's words. `before` is what **Revert** puts back.
+ */
+export interface KeptImprint {
+	id: number
+	field: string | null
+	label: string | null
+	before?: unknown
+	after?: unknown
+	/** When the reply wrote it (ISO). */
+	at: string
 }
 
 /**
@@ -336,6 +370,8 @@ type WritableColumns = Omit<
 	| "vectorizedAt"
 	// Who wrote the row is the server's answer — see the column.
 	| "provenance"
+	// Where a library copy came from is the server's answer too.
+	| "derivedFrom"
 >
 
 /**

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { realDateTime } from "$lib/client/utils/realTime.svelte"
+	import { avatarSrc } from "$lib/client/utils/media"
 	/**
 	 * One conversation in the Messages view (PLAN-private-messages §6.3): the
 	 * nav header with its `⋯`, the member strip, the **log** and the composer
@@ -345,6 +346,7 @@
 								title="See {personName(person)}"
 							>
 								<Avatar
+									src={avatarSrc(person)}
 									name={personName(person)}
 									fallback="initial"
 									size="xs"
@@ -434,11 +436,23 @@
 											onclick={() => onOpenPerson(author.id)}
 											aria-label="See {name}"
 										>
-											<Avatar {name} fallback="initial" size="md" decorative />
+											<Avatar
+												src={avatarSrc(author)}
+												{name}
+												fallback="initial"
+												size="md"
+												decorative
+											/>
 										</button>
 									{:else}
 										<span class="grid size-11 place-items-center">
-											<Avatar {name} fallback="initial" size="md" decorative />
+											<Avatar
+												src={avatarSrc(author)}
+												{name}
+												fallback="initial"
+												size="md"
+												decorative
+											/>
 										</span>
 									{/if}
 								{/if}
@@ -656,16 +670,16 @@
 							<li class="flex items-center gap-2">
 								<button
 									type="button"
-									class="hover:bg-surface-200-800 flex min-h-11 min-w-0 flex-1 items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left"
+									class="hover:bg-surface-200-800 flex min-h-11 min-w-0 flex-1 items-center gap-2.5 rounded-base px-2 py-1.5 text-left"
 									onclick={() => {
 										membersOpen = false
 										if (person.id !== meId) onOpenPerson(person.id)
 									}}
 									disabled={person.id === meId}
 								>
-									<Avatar name={personName(person)} fallback="initial" size="md" decorative />
+									<Avatar src={avatarSrc(person)} name={personName(person)} fallback="initial" size="md" decorative />
 									<span class="min-w-0 flex-1">
-										<span class="block truncate text-[15px] font-medium">
+										<span class="block truncate text-lead font-medium">
 											{personName(person)}{person.id === meId ? " (you)" : ""}
 										</span>
 										<span class="text-surface-600-400 block truncate text-xs">

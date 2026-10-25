@@ -480,6 +480,11 @@ describe("a way out the world changes", () => {
 describe("honour mode", () => {
 	it("the latest turn is the owner's to delete, only while it is on; an older turn never; the retake is the owner's either way", async () => {
 		const { sessionId, seat } = await table("honour", true)
+		// 🚧 Deletion needs a pipeline (RF fix 5): core's Dungeon Crawler
+		// registers none, so this table registers one — the turn rule below
+		// is what a genre that keeps its turns and deletes gets.
+		const { registerTestDeletion } = await import("$lib/server/utils/testDb")
+		await registerTestDeletion(db, sessionId)
 		const { TURN_DELETE_REFUSALS } = await import("$lib/server/messages/verbs")
 		plans = 0
 		await say(ownerId, sessionId, "Ann tries the door.")

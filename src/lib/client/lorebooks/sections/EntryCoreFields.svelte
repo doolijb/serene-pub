@@ -46,7 +46,7 @@
 			class="flex items-center gap-1 text-sm font-semibold"
 			for="{idPrefix}Name"
 		>
-			Name <span class="text-error-500">*</span>
+			Name <span class="text-error-600-400">*</span>
 			<Icons.ScanEye
 				size={13}
 				class="text-surface-600-400 relative top-[1px]"

@@ -58,14 +58,11 @@ export function capabilityForSamplingShape(
  * files itself under a heading the admin screen can render. A hand-written
  * comparison would put every unknown combo in "Other" forever.
  *
- * ⚠ `undefined` for a multi-kind output side, deliberately, and not because it
- * is hard. `text->text+image` genuinely has two vocabularies and no way to
- * choose between them; naming the first one would hand image samplers to
- * something that mostly writes prose, and the group heading would say a thing
- * that is half false. There are no such transforms today, so the cost of the
- * honest answer is zero and the cost of the guess is a wrong default nobody
- * would ever look for. Also `undefined` for anything that is not a transform
- * id at all — a feature has no output.
+ * ⚠ `undefined` for a multi-kind output side, deliberately: `text->text+audio`
+ * genuinely writes two kinds, and the group heading would say a thing that is
+ * half false. Its vocabularies are `samplingShapesForCapability`'s answer
+ * (O7) — one per kind written. Also `undefined` for anything that is not a
+ * transform id at all — a feature has no output.
  */
 export function outputKindOf(capability: string): IoKind | undefined {
 	if (!isTransformId(capability)) return undefined
@@ -98,7 +95,12 @@ export function outputKindOf(capability: string): IoKind | undefined {
 export function samplingShapeForCapability(
 	capability: string
 ): string | undefined {
-	switch (outputKindOf(capability)) {
+	return samplingShapesForCapability(capability)[0]
+}
+
+/** The sampling vocabulary one written KIND speaks, or undefined for none. */
+function samplingShapeForKind(kind: string): string | undefined {
+	switch (kind) {
 		case "text":
 			return S.textGen
 		case "image":
@@ -108,4 +110,28 @@ export function samplingShapeForCapability(
 		default:
 			return undefined
 	}
+}
+
+/**
+ * 🚧 **One sampling vocabulary per kind written** (O7, 2026-10-21), in the
+ * transform's output order: `text->text+audio` is `[text, tts]` — the reply's
+ * temperature AND the voice it speaks in. A call that writes two kinds takes
+ * two sampling slots (`generate-text@1`'s `sampling` and `speechSampling`),
+ * and every screen that shows a default's sampling shows both.
+ *
+ * `samplingShapeForCapability` is the FIRST of these — the one a loadout's
+ * own sampling column holds (`text->text+audio`'s is the text one); it used
+ * to answer `undefined` for a multi-kind side, when no call could write two.
+ * Empty for a capability with no vocabulary (`text->embedding`) and for
+ * anything that is not a transform.
+ */
+export function samplingShapesForCapability(capability: string): string[] {
+	if (!isTransformId(capability)) return []
+	const { out } = parseTransform(capability)
+	const shapes: string[] = []
+	for (const kind of out) {
+		const shape = samplingShapeForKind(kind)
+		if (shape && !shapes.includes(shape)) shapes.push(shape)
+	}
+	return shapes
 }

@@ -1,4 +1,6 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * Admin → Connections → one connection: the change form (owner ruling
 	 * 2026-09-27 — Django-style management, not the Models view nested
@@ -612,11 +614,11 @@
 				<!-- The service chip only where it says what the title has not
 				     (STYLE-GUIDE §6.4: a default name IS the service label). -->
 				{#if service.trim().toLowerCase() !== title.trim().toLowerCase()}
-					<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+					<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
 						{service}
 					</span>
 				{/if}
-				<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+				<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
 					{modalityWord(connection.modality)}
 				</span>
 				{#each held as h (h.capability)}
@@ -645,7 +647,7 @@
 				{/snippet}
 				{#if unfinished}
 					<p class="text-sm">
-						<span class="text-primary-700 dark:text-primary-300 font-medium">
+						<span class="text-primary-ink font-medium">
 							Needs an API key.
 						</span>
 						<span class="text-surface-600-400">
@@ -791,7 +793,7 @@
 						</p>
 					{/if}
 					{#if !row.models.length}
-						<p class="text-surface-600-400 text-sm">
+						<FieldHelp>
 							{#if localOnnxBlocked}
 								Nothing is downloaded to this machine, and nothing can be
 								until it can run local models.
@@ -801,7 +803,7 @@
 							{:else}
 								The host has listed no models. Refresh, or add one by name.
 							{/if}
-						</p>
+						</FieldHelp>
 					{:else if isOnnx}
 						{#each shownModels as m (m.id)}
 							{@const action = actionFor(m)}
@@ -858,9 +860,7 @@
 						>
 							<span class="text-surface-600-400 text-xs">Waiting for Save:</span>
 							{#each pendingSteps as step (step.key)}
-								<span
-									class="bg-surface-200-800 text-surface-700-300 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
-								>
+								<Badge size="md" class="text-surface-700-300 flex min-w-0 items-center gap-1">
 									<span class="min-w-0 truncate">{step.label}</span>
 									<button
 										type="button"
@@ -871,7 +871,7 @@
 									>
 										<Icons.X size={12} aria-hidden="true" />
 									</button>
-								</span>
+								</Badge>
 							{/each}
 						</div>
 					{/if}

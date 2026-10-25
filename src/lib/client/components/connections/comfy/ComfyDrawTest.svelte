@@ -229,7 +229,7 @@
 					href={mediaUrl(m.id)}
 					target="_blank"
 					rel="noopener noreferrer"
-					class="border-surface-200-700 block overflow-hidden rounded-lg border"
+					class="border-surface-200-800 block overflow-hidden rounded-lg border"
 				>
 					<img src={mediaUrl(m.id)} alt="Test drawing" class="h-auto w-full" />
 				</a>

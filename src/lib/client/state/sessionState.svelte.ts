@@ -71,6 +71,8 @@ let readError = $state<string | null>(null)
 let wordsOnly = $state(false)
 /** 🚧 The people the session's story has met (Q3-5): Scene Portraits' faces. */
 let metPeople = $state<{ entryId: number; name: string }[]>([])
+/** 🚧 The session's story clock in words (RF fix 8): the world's _when_. */
+let storyTime = $state<string | null>(null)
 
 /**
  * The writes this tab has sent and not yet heard back about, by the
@@ -168,6 +170,7 @@ function onGet(res: Sockets.State.Get.Response) {
 	// 🚧 A table that keeps no numbers (Q2-3, ★3).
 	wordsOnly = res.wordsOnly === true
 	metPeople = Array.isArray(res.metPeople) ? res.metPeople : []
+	storyTime = typeof res.storyTime === "string" && res.storyTime ? res.storyTime : null
 	loaded = true
 }
 
@@ -431,6 +434,7 @@ export function openSessionState(sessionId: number | null): void {
 	headLines = []
 	wordsOnly = false
 	metPeople = []
+	storyTime = null
 	if (sessionId != null) refresh()
 }
 
@@ -478,6 +482,10 @@ export function sessionState() {
 		/** 🚧 The people the story has met (Q3-5). */
 		get metPeople() {
 			return metPeople
+		},
+		/** 🚧 The session's story clock in words (RF fix 8). */
+		get storyTime() {
+			return storyTime
 		},
 		/* ── naming a payload ───────────────────────────────────────────
 		 * A proposal names its owner by kind and id and its item by entry id,

@@ -1,4 +1,4 @@
-import { llmQueue } from "./llmQueue"
+import { currentLlmPriority, llmQueue } from "./llmQueue"
 import type { TaskType } from "./resolveTaskConfig"
 import type { BaseConnectionAdapter } from "../connectionAdapters/BaseConnectionAdapter"
 import { resolveReasoning } from "$lib/shared/utils/reasoningDelimiters"
@@ -62,6 +62,8 @@ export async function runQueuedLLMCall({
 		sessionId,
 		lorebookId,
 		label,
+		// 🚧 The calling run's family's place in the queue (A13, R26).
+		priority: currentLlmPriority(),
 		preflight: (signal) => adapter.preflight(signal),
 		execute: async (signal) => {
 			const { completionResult, isAborted, reasoningContent } =

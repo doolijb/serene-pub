@@ -27,6 +27,7 @@
 import { getContext, setContext } from "svelte"
 import type { BindingWithRelations } from "$lib/client/components/lorebookForms/entryManager"
 import type { PoolSource } from "./sections/types"
+import type { BookLibrary } from "./libraryRows"
 
 /**
  * 🚧 **book access** (NOMENCLATURE §25, lane A3's wire word): how the reader
@@ -64,6 +65,22 @@ export interface BookData {
 	readonly suggestions: readonly Sockets.BindingSuggestions.Suggestion[]
 	/** Pairs of members that may be one person. */
 	readonly duplicates: readonly Sockets.NarrativeGraph.DuplicateCandidates.Candidate[]
+	/**
+	 * 🚧 The book's rules lists (`entries:types`), in its rules' order — every
+	 * one, drawn or not: Everything holds the rows of each.
+	 */
+	readonly rulesLists: readonly Sockets.Entries.Types.Response["types"][number][]
+	/**
+	 * The lists the book DRAWS (ruled 2026-10-21): the ones with something
+	 * in them, which are the ones the rail lists and New offers.
+	 */
+	readonly drawnRulesLists: readonly Sockets.Entries.Types.Response["types"][number][]
+	/**
+	 * 🚧 The book's rules library (`lorebooks:library`, §C ruling 10): the
+	 * pieces the library chip shows under the book, read only. Null until it
+	 * arrives, and for rules with no library.
+	 */
+	readonly library: BookLibrary | null
 	/**
 	 * Whether a list has arrived for the book: an entry type, `"scenes"` or
 	 * `"cast"`. Before it has, an empty list means "not yet", not "none".
@@ -134,6 +151,9 @@ export function staticBookData(
 		allScenes: PoolSource[]
 		suggestions: Sockets.BindingSuggestions.Suggestion[]
 		duplicates: Sockets.NarrativeGraph.DuplicateCandidates.Candidate[]
+		rulesLists: Sockets.Entries.Types.Response["types"][number][]
+		drawnRulesLists: Sockets.Entries.Types.Response["types"][number][]
+		library: BookLibrary | null
 		bookAccess: BookAccess
 	}>,
 	verbs: Partial<Pick<BookData, "refreshScenes" | "refreshCast" | "refreshRows">> = {}
@@ -169,6 +189,15 @@ export function staticBookData(
 		},
 		get duplicates() {
 			return values().duplicates ?? []
+		},
+		get rulesLists() {
+			return values().rulesLists ?? []
+		},
+		get drawnRulesLists() {
+			return values().drawnRulesLists ?? values().rulesLists ?? []
+		},
+		get library() {
+			return values().library ?? null
 		},
 		loaded(what) {
 			const v = values()

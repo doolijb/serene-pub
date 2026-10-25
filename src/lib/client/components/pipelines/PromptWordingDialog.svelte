@@ -217,13 +217,13 @@
 										{@const isReading = c.id === reading}
 										{@const inUse = c.id === inUseId}
 										<li
-											class="flex min-h-11 items-center gap-1 rounded-[10px] {isReading
+											class="flex min-h-11 items-center gap-1 rounded-base {isReading
 												? 'sidebar-row-active'
 												: 'hover:bg-surface-200-800'}"
 										>
 											<button
 												type="button"
-												class="focus-visible:ring-primary-500 min-w-0 flex-1 rounded-[10px] px-2 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none"
+												class="focus-visible:ring-primary-500 min-w-0 flex-1 rounded-base px-2 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none"
 												aria-current={isReading
 													? "true"
 													: undefined}
@@ -271,7 +271,7 @@
 
 					<!-- The wording of the one being read. -->
 					<section
-						class="bg-surface-50-950 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-[10px] p-4"
+						class="bg-surface-50-950 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-base p-4"
 						aria-label={readingLabel
 							? `Wording of ${readingLabel}`
 							: "Wording"}

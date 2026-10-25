@@ -54,9 +54,9 @@
 	}
 
 	const ROW =
-		"bg-surface-200-800 flex h-14 w-full max-w-[420px] items-center gap-3 rounded-[10px] px-2 text-left"
+		"bg-surface-200-800 flex h-14 w-full max-w-[420px] items-center gap-3 rounded-base px-2 text-left"
 	const TILE =
-		"bg-surface-300-700 text-surface-700-300 grid size-10 shrink-0 place-items-center rounded-[9px]"
+		"bg-surface-300-700 text-surface-700-300 grid size-10 shrink-0 place-items-center rounded-base"
 </script>
 
 {#snippet text(title: string)}
@@ -78,7 +78,7 @@
 		href={card.src}
 		target="_blank"
 		rel="noopener noreferrer"
-		class="block w-fit max-w-full rounded-[10px]"
+		class="block w-fit max-w-full rounded-base"
 		title="Open {card.title} full size"
 		data-attachment-card
 	>
@@ -86,7 +86,7 @@
 			src={card.thumbSrc ?? card.src}
 			alt={card.title}
 			loading="lazy"
-			class="bg-surface-200-800 block max-h-[320px] max-w-[min(320px,100%)] rounded-[10px] object-contain"
+			class="bg-surface-200-800 block max-h-[320px] max-w-[min(320px,100%)] rounded-base object-contain"
 		/>
 		<span class="sr-only">{kindLine}. Opens full size in a new tab.</span>
 	</a>

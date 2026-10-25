@@ -296,7 +296,8 @@ declare global {
 	}
 
 	interface UserCtx {
-		user: SelectUser | undefined
+		/** The signed-in row, with its avatar's address (`users:current`). */
+		user: Sockets.WithAvatarMedia<SelectUser> | undefined
 	}
 
 	interface SystemSettingsCtx {
@@ -417,6 +418,12 @@ declare global {
 		 */
 		lorebookBranchId: number | null
 		/**
+		 * 🚧 The book lock (PLAN-lorebook-kinds §A): play has written, so the
+		 * session keeps the book it reads (or its own notes, with none) —
+		 * the Lorebooks view does not offer to read another into it.
+		 */
+		lorebookFixed?: boolean
+		/**
 		 * The session's own story clock (year/month/day), or null when it
 		 * follows its line's present. Retrieval reads the book AT this date
 		 * (owner ruling 3, 2026-09-28), so the lorebook workspace needs it to
@@ -442,6 +449,29 @@ declare global {
 		 * value's record, NOMENCLATURE §6).
 		 */
 		headerNotice?: SessionHeaderNotice | null
+		/**
+		 * 🚧 **Back · Forward** in the session header's right cluster (RF fix
+		 * 5; moved out of the conversation by polish parity L1, 2026-10-24):
+		 * what the two presses read — the widget's own rule,
+		 * `rewindStripState` — and what they do. Null or absent where they
+		 * are not drawn: a host that sends no state, or a viewer who is not
+		 * the session's owner.
+		 */
+		rewind?: SessionHeaderRewind | null
+	}
+
+	/** 🚧 The header's Back · Forward (`OpenSessionCtx.rewind`). */
+	interface SessionHeaderRewind {
+		/** Greyed (`aria-disabled`, the press guarded), with why. */
+		back: { disabled: boolean; reason?: string }
+		forward: { disabled: boolean; reason?: string }
+		/** How many turns are ahead, and the words for it ("2 turns ahead"; empty with none). */
+		ahead: number
+		aheadText: string
+		/** Back: the newest turn out of the story. */
+		goBack: () => void
+		/** Forward: the newest rewound turn back into it. */
+		goForward: () => void
 	}
 
 	/** 🚧 One line the session header shows under its bar (`OpenSessionCtx.headerNotice`). */

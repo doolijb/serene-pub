@@ -15,9 +15,15 @@ import {
 	type TestDb
 } from "$lib/server/utils/testDb"
 import { moveSpritePickerSettings } from "./spritePickerMove"
+import { SPRITE_PICKER_NODE_KEY, SPRITE_PICKER_NODE_KEY_V0 } from "@serene-pub/core-catalog"
 
-const OLD = "spriteTail.show.spritePick"
-const NEW = "spritePick"
+const OLD = SPRITE_PICKER_NODE_KEY_V0
+/**
+ * The picker's key on all four specs — Story's reply's too: RF fix 3 put its
+ * picker back after the `reply` junction, once (0123), from the prose branch
+ * D7 had moved it into (0120).
+ */
+const NEW = SPRITE_PICKER_NODE_KEY
 
 let db: TestDb
 let userId: number

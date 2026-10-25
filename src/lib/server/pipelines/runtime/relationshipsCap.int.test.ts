@@ -230,57 +230,23 @@ const relationshipCounts = async (): Promise<{
 }
 
 /**
- * The config a run on this session actually resolves to.
+ * Write, or clear, one lane's ceiling — on the genre's defaults' registration
+ * of the reply (PLAN-layering D5): the instance-wide value a run reads.
  *
- * ⚠ Not the `pipeline-default:` row. A run resolves through the session's
- * selection chain, which may name a mutable configuration rather than the
- * shipped one, so a fixture writing to the immutable original could change
- * nothing and prove nothing.
- */
-const selectedConfigId = async () => {
-	const { resolveSelectedConfig } = await import(
-		"$lib/server/pipelines/config/named"
-	)
-	const selected = await resolveSelectedConfig(
-		db,
-		specRow.id,
-		STORY_RESPOND_SPEC_ID,
-		{
-			sessionId
-		}
-	)
-	expect(
-		selected,
-		`${STORY_RESPOND_SPEC_ID} resolves to no configuration`
-	).toBeTruthy()
-	return selected!.configId
-}
-
-/**
- * Write, or clear, one lane's ceiling.
- *
- * ⚠ An INSERT, not an UPDATE — which is the shape of the ruling. The corrected
- * declaration carries no default, so `reconcileConfigs` back-fills no row and
- * there is nothing to update: an untouched install has no value at this address
- * at all, which is what "uncapped" IS.
+ * The corrected declaration carries no default, so an untouched install has
+ * no value at this address at all, which is what "uncapped" IS.
  */
 const setCap = async (nodeKey: string, value: number | null) => {
-	const configId = await selectedConfigId()
-	const where = and(
-		eq(schema.pipelineConfigValues.configId, configId),
-		eq(schema.pipelineConfigValues.nodeKey, nodeKey),
-		eq(schema.pipelineConfigValues.slot, "params"),
-		eq(schema.pipelineConfigValues.path, "maxEntries")
+	const { setPipelineGenreValue } = await import(
+		"$lib/server/pipelines/registrations/genreValues"
 	)
-	await db.delete(schema.pipelineConfigValues).where(where)
-	if (value === null) return
-	await db.insert(schema.pipelineConfigValues).values({
-		configId,
-		nodeKey,
-		slot: "params",
-		path: "maxEntries",
-		value: value as any
-	})
+	const n = await setPipelineGenreValue(
+		db,
+		STORY_RESPOND_SPEC_ID,
+		{ nodeKey, slot: "params", path: "maxEntries" },
+		value === null ? undefined : value
+	)
+	expect(n, `${STORY_RESPOND_SPEC_ID} has no genre registration`).toBeGreaterThan(0)
 }
 
 describe("the relationship ceiling reaches the graph read", () => {

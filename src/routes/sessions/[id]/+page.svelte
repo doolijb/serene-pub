@@ -42,6 +42,8 @@
 	import { createSessionPageData } from "$lib/client/components/sessionPage/sessionPageData.svelte"
 	import { headerCastKeyOf } from "$lib/client/components/sessionPage/sessionPageProjections"
 	import { presetHeaderNotice } from "$lib/client/components/sessionPage/presetNotice"
+	import { rewindStripState } from "@serene-pub/core-catalog/conversation"
+	import { rewindStateWith } from "$lib/shared/sessions/rewind"
 	import { createEnvelopeSections } from "$lib/client/components/sessionPage/envelopeSections.svelte"
 	import { createActionList } from "$lib/client/components/sessionPage/actionList.svelte"
 	import {
@@ -191,6 +193,17 @@
 	const sessionUserId = $derived(session?.userId ?? null)
 	const sessionLorebookId = $derived(session?.lorebookId ?? null)
 	const sessionLorebookBranchId = $derived(session?.lorebookBranchId ?? null)
+	/**
+	 * 🚧 The book lock (PLAN-lorebook-kinds §A): the server's word at load,
+	 * or a line that is not a greeting since — so the Lorebooks view stops
+	 * offering to swap the book the moment play writes.
+	 */
+	const sessionLorebookFixed: boolean = $derived(
+		!!session?.lorebookFixed ||
+			(session?.sessionMessages ?? []).some(
+				(m) => (m.metadata as { isGreeting?: boolean } | null)?.isGreeting !== true
+			)
+	)
 	const loadedGenreId: string | null = $derived(
 		typeof (session as any)?.genreId === "string" ? (session as any).genreId : null
 	)
@@ -226,6 +239,36 @@
 	$effect(() => {
 		openSessionCtx.headerNotice = headerNotice
 	})
+	/**
+	 * 🚧 Back · Forward (RF fix 5) in the header's right cluster (polish
+	 * parity L1, 2026-10-24): the owner's two presses, read by the widget's
+	 * own rule (`rewindStripState`) off the same state the conversation's
+	 * note reads. Kept as a STRING, so the header moves only when a press's
+	 * state does, never per streamed chunk.
+	 */
+	const headerRewindKey: string = $derived.by(() => {
+		const strip = rewindStripState({
+			rewind: rewindStateWith(session, session?.sessionMessages ?? []),
+			isOwner: sessionUserId !== null && sessionUserId === userCtx.user?.id,
+			generating: data.hasGeneratingMessage,
+			story: true
+		})
+		return strip.shown
+			? JSON.stringify({ back: strip.back, forward: strip.forward, ahead: strip.ahead, aheadText: strip.aheadText })
+			: ""
+	})
+	const headerRewind: SessionHeaderRewind | null = $derived(
+		headerRewindKey
+			? {
+					...(JSON.parse(headerRewindKey) as Omit<SessionHeaderRewind, "goBack" | "goForward">),
+					goBack: () => socket.emit("sessions:rewindTurn", { sessionId }),
+					goForward: () => socket.emit("sessions:forwardTurn", { sessionId })
+				}
+			: null
+	)
+	$effect(() => {
+		openSessionCtx.rewind = headerRewind
+	})
 	$effect(() => {
 		openSessionCtx.sessionId = loadedSessionId
 		openSessionCtx.sessionName = sessionName
@@ -236,6 +279,7 @@
 				: branchOfLabel({ sessionId: sessionBranchOfId, name: sessionBranchOfName, messageId: sessionBranchOfMessageId })
 		openSessionCtx.lorebookId = sessionLorebookId
 		openSessionCtx.lorebookBranchId = sessionLorebookBranchId
+		openSessionCtx.lorebookFixed = sessionLorebookFixed
 		openSessionCtx.isOwner =
 			sessionUserId !== null && sessionUserId === userCtx.user?.id
 		// The shell's spine shows it while a view is focused over the story.
@@ -478,6 +522,7 @@
 		showTurnPicker: () => (turns.showTurnPicker = true),
 		showSpritePicker: (msg) => (controls.spriteLine = msg),
 		showAddPersona: () => (turns.showAddPersonaModal = true),
+		takeSeat: (name) => turns.takeSeat(name),
 		markActionsSeen: (keys) => actions.markActionsSeen(keys),
 		// What a tick selection may not take: captured lines and live ranges.
 		scened: () => scenes.captured,
@@ -515,6 +560,13 @@
 		send: (trayItemIds) => composer.handleSend(trayItemIds),
 		composerTray: () => composer.composerTray,
 		fireTurn: (channel) => turns.handleContinueWithNextCharacter(channel),
+		// 🚧 Back · Forward (RF fix 5): a refusal is the central toast's.
+		rewindTurn: () => {
+			if (sessionId != null) socket.emit("sessions:rewindTurn", { sessionId })
+		},
+		forwardTurn: () => {
+			if (sessionId != null) socket.emit("sessions:forwardTurn", { sessionId })
+		},
 		stateStore: () => stateStore,
 		scenePins: () => scenePins,
 		writeSpriteSet: asks.writeSpriteSet,
@@ -530,11 +582,16 @@
 		readSessionPlaces: asks.readSessionPlaces,
 		readCharacterGallery: asks.readCharacterGallery,
 		readStatTrail: asks.readStatTrail,
+		readRoutineLog: asks.readRoutineLog,
 		writeBackdrop: asks.writeBackdrop,
 		// 🚧 A seat's portrait (PLAN-sheet-widget §12, 2026-10-18).
 		writeOwnerFace: asks.writeOwnerFace,
 		// 🚧 Give to… (PLAN-dc-after-walk2 Q0-4, ★4).
-		writeGive: asks.writeGive
+		writeGive: asks.writeGive,
+		// 🚧 A tie side shown or hidden (ties on the graph, screen 2).
+		writeTieShown: asks.writeTieShown,
+		// A carry switch flipped from the Stats widget (RF fix 8).
+		writeCarry: asks.writeCarry
 	}
 	setContext(WIDGET_REQUESTS_KEY, guardWidgetRequests(buildWidgetRequestAnswerer(widgetRequestDeps)))
 
@@ -635,6 +692,7 @@
 		openSessionCtx.isOwner = false
 		openSessionCtx.isGenerating = false
 		openSessionCtx.headerNotice = null
+		openSessionCtx.rewind = null
 	})
 </script>
 

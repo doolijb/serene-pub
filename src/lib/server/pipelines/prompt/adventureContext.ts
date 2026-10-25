@@ -56,7 +56,7 @@ export interface StateLike {
 	 * which may be fewer than the declaration's (`location` on the world in
 	 * Adventure, on the cast in a genre whose characters split up).
 	 */
-	slots?: Array<{ id?: unknown; appliesTo?: unknown; earshot?: unknown }>
+	slots?: Array<{ id?: unknown; appliesTo?: unknown; earshot?: unknown; hostState?: unknown }>
 }
 
 /** The planner's document, read defensively — it is a model's answer. */
@@ -286,6 +286,14 @@ function places(state: StateLike | undefined): Array<{ name: string; values: Rec
 	})
 }
 
+/** 🚧 What the host keeps each slot as, by id (RF fix 8): `place` · `time` · `tool`; absent, one of the rules' attributes. */
+function hostRolesOf(state: StateLike | undefined): Map<string, string> {
+	const out = new Map<string, string>()
+	for (const row of Array.isArray(state?.slots) ? state.slots : [])
+		if (typeof row?.id === "string" && typeof row.hostState === "string") out.set(row.id, row.hostState)
+	return out
+}
+
 /** `0 to 20` · `one of calm, wary` · `text` — what a slot will accept. */
 function accepts(decl: AttributeSlotDecl, config: SlotConfig): string {
 	if (decl.type === "integer") {
@@ -354,9 +362,20 @@ export function stateSummary(
 ): string {
 	const nameOf = new Map(names.map((n) => [castKey(n), n]))
 	const lines: string[] = []
+	// 🚧 RF fix 8: what the host keeps as place and time reads as place and
+	// time words — never as one of the rules' attributes.
+	const roleOf = hostRolesOf(state)
 
 	const world = bag(state?.world)
-	const worldValues = present(state, "world")
+	const worldDecls = present(state, "world")
+	for (const d of worldDecls) {
+		const role = roleOf.get(d.id)
+		const v = text(valueOf(world, d))
+		if (role === "place" && v) lines.push(`The scene is at ${v}.`)
+		else if (role === "time" && v) lines.push(`It is ${v}.`)
+	}
+	const worldValues = worldDecls
+		.filter((d) => roleOf.get(d.id) !== "place" && roleOf.get(d.id) !== "time")
 		.map(
 			(d) => `${slotKey(d.id)} is ${text(valueOf(world, d)) || "not set"}`
 		)
@@ -371,9 +390,9 @@ export function stateSummary(
 		if (key === "byId") continue
 		const owned = bag(values)
 		const written = castDecls
-			.map((d) => [slotKey(d.id), text(valueOf(owned, d))] as const)
+			.map((d) => [d, text(valueOf(owned, d))] as const)
 			.filter(([, v]) => v !== "")
-			.map(([k, v]) => `${k} ${v}`)
+			.map(([d, v]) => (roleOf.get(d.id) === "place" ? `at ${v}` : `${slotKey(d.id)} ${v}`))
 			.join(", ")
 		if (written) lines.push(`${nameOf.get(key) ?? key}: ${written}.`)
 	}

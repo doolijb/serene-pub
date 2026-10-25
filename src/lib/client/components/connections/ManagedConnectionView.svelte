@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * A runtime this pub RUNS, as its connection's own view.
 	 *
@@ -676,11 +677,9 @@
 			</span>
 			{#if ollamaUpdateAvailable && ollamaLatestVersion}
 				<span class="text-surface-600-400">·</span>
-				<span
-					class="preset-tonal-primary rounded-full px-2 py-0.5 text-[11px]"
-				>
+				<Badge tone="primary" size="sm">
 					{ollamaLatestVersion} available
-				</span>
+				</Badge>
 			{/if}
 		</div>
 		{#if ollamaUpdateAvailable && !ollamaIsLocal}
@@ -717,7 +716,7 @@
 				Check for updates
 			</button>
 		</div>
-		<p class="text-surface-600-400 text-[11px]">
+		<p class="text-surface-600-400 text-meta">
 			Ollama is developed and owned by Ollama, Inc. Serene Pub is an
 			independent integration, not affiliated with or endorsed by it.
 		</p>
@@ -841,7 +840,7 @@
 					{/if}
 				</div>
 				{#if processError}
-					<p class="text-error-500 text-xs">{processError}</p>
+					<p class="text-error-600-400 text-xs">{processError}</p>
 				{/if}
 				<div class="flex min-w-0 items-center gap-2">
 					<Icons.Brain
@@ -900,11 +899,9 @@
 				{/if}
 				{#if binaryUpdateAvailable}
 					<div class="flex items-center gap-2">
-						<span
-							class="preset-tonal-primary rounded-full px-2 py-0.5 text-[11px]"
-						>
+						<Badge tone="primary" size="sm">
 							Update available
-						</span>
+						</Badge>
 						<button
 							type="button"
 							class="btn btn-sm preset-tonal"
@@ -984,7 +981,7 @@
 						     (plan 2026-09-24 C4). -->
 						<button
 							type="button"
-							class="preset-tonal-primary shrink-0 rounded-full px-2 py-0.5 text-[11px]"
+							class="preset-tonal-primary shrink-0 rounded-full px-2 py-0.5 text-meta"
 							onclick={() => (tab = "settings")}
 						>
 							Update available
@@ -1019,7 +1016,7 @@
 							Change address
 						</button>
 						<a
-							class="text-primary-500 text-xs underline"
+							class="text-primary-ink text-xs underline"
 							href="https://ollama.com/download"
 							target="_blank"
 							rel="noopener noreferrer"
@@ -1212,7 +1209,7 @@
 							     belong: dashed, because neither is a setting
 							     and both leave this screen behind. -->
 							<section
-								class="border-surface-300-700 flex flex-col gap-3 rounded-[12px] border border-dashed p-4"
+								class="border-surface-300-700 flex flex-col gap-3 rounded-container border border-dashed p-4"
 								aria-label="Leaving {label}"
 							>
 								{#if isKcpp && isManaged}
@@ -1234,7 +1231,7 @@
 								<div class="flex min-w-0 items-start gap-2">
 									<span class="min-w-0 flex-1">
 										<span
-											class="text-error-500 block text-sm"
+											class="text-error-600-400 block text-sm"
 										>
 											{isKcpp
 												? `Remove ${label} from this pub`
@@ -1274,7 +1271,7 @@
 	     this is, the chip says what it IS. Teal-tonal for a runtime this pub
 	     runs, the same chip `ConnectionRow` wears in the index. -->
 	<span
-		class="preset-tonal-tertiary shrink-0 rounded-full px-1.5 py-0.5 text-[11px]"
+		class="preset-tonal-tertiary shrink-0 rounded-full px-1.5 py-0.5 text-meta"
 	>
 		{label}
 	</span>

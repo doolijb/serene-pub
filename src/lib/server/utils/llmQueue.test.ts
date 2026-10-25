@@ -203,3 +203,61 @@ describe("llmQueue depth cap (round-11 audit fix: resource exhaustion)", () => {
 		expect(order2).toContain("nested-start")
 	})
 })
+
+describe("🚧 model-queue priority (A13, R26; PLAN-layering lane 6)", () => {
+	test("creation and actions first, then events, then routines — first-in-first-out within one; the running call is never pre-empted", async () => {
+		const { LLM_PRIORITY } = await import("./llmQueue")
+		const order: string[] = []
+		let release!: () => void
+		const gate = new Promise<void>((r) => (release = r))
+		// Something already running holds the lane while the rest queue.
+		const running = llmQueue.enqueue(
+			item({
+				priority: LLM_PRIORITY.routine,
+				execute: async () => {
+					order.push("running-routine")
+					await gate
+					return 0
+				}
+			})
+		)
+		const queued = (name: string, priority: number) =>
+			llmQueue.enqueue(
+				item({
+					priority,
+					execute: async () => {
+						order.push(name)
+						return 0
+					}
+				})
+			).done
+		const all = [
+			queued("routine-1", LLM_PRIORITY.routine),
+			queued("event-1", LLM_PRIORITY.event),
+			queued("action-1", LLM_PRIORITY.interactive),
+			queued("routine-2", LLM_PRIORITY.routine),
+			queued("event-2", LLM_PRIORITY.event),
+			queued("creation-1", LLM_PRIORITY.interactive)
+		]
+		release()
+		await Promise.all([running.done, ...all])
+		expect(order).toEqual(["running-routine", "action-1", "creation-1", "event-1", "event-2", "routine-1", "routine-2"])
+	})
+
+	test("an item with no priority takes its run's family's (withRunFamily), across sessions", async () => {
+		const { withRunFamily, currentLlmPriority, priorityOfFamily, LLM_PRIORITY } = await import("./llmQueue")
+		expect(priorityOfFamily("action")).toBe(LLM_PRIORITY.interactive)
+		expect(priorityOfFamily("event", { creation: true })).toBe(LLM_PRIORITY.interactive)
+		expect(priorityOfFamily("event")).toBe(LLM_PRIORITY.event)
+		expect(priorityOfFamily("routine")).toBe(LLM_PRIORITY.routine)
+		expect(priorityOfFamily("live")).toBe(LLM_PRIORITY.event)
+		expect(currentLlmPriority()).toBe(LLM_PRIORITY.event)
+		const seen = await withRunFamily("routine", async () => {
+			const queued = llmQueue.enqueue(item({ sessionId: 1, execute: async () => currentLlmPriority() }))
+			return { item: llmQueue.snapshot().find((s) => s.id === queued.id)?.priority, inside: await queued.done }
+		})
+		expect(seen.item).toBe(LLM_PRIORITY.routine)
+		expect(seen.inside).toBe(LLM_PRIORITY.routine)
+		expect(await withRunFamily("event", async () => currentLlmPriority(), { creation: true })).toBe(LLM_PRIORITY.interactive)
+	})
+})

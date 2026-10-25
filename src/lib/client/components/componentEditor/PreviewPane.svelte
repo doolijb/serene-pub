@@ -73,7 +73,7 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col gap-2">
-	<div class="preview-stage border-surface-200-800 relative min-h-0 flex-1 overflow-hidden rounded-[12px] border">
+	<div class="preview-stage border-surface-200-800 relative min-h-0 flex-1 overflow-hidden rounded-container border">
 		{#if url}
 			{#key url}
 				<ComponentMount

@@ -356,7 +356,7 @@ async function inletOf(sessionId: number) {
 		.from(schema.pipelineRuns)
 		.where(eq(schema.pipelineRuns.sessionId, sessionId))
 		.orderBy(asc(schema.pipelineRuns.id))
-	const run = runs.filter((r) => r.specSlug === "core:spec/lair-respond").at(-1)!
+	const run = runs.filter((r) => r.specSlug === "core:spec/lair-reply").at(-1)!
 	return ((run.receipt as any).nodes as any[]).find((n) => n.kind === "inlet")!.output
 }
 
@@ -418,22 +418,22 @@ async function viasOf(sessionId: number) {
 		.where(eq(schema.pipelineRuns.sessionId, sessionId))
 		.orderBy(asc(schema.pipelineRuns.id))
 	return runs
-		.filter((r) => r.specSlug === "core:spec/lair-respond")
+		.filter((r) => r.specSlug === "core:spec/lair-reply")
 		.map((r) => ((r.receipt as any).nodes as any[]).find((n) => n.kind === "inlet")!.output.via)
 }
 
 describe("R8 · a turn is the Castellan's run, and the party's lines are character turns", () => {
 	test("the Sanctum's beats row first, then each delver's own character turn, streamed, in order — no speakerless row on main", async () => {
 		reset()
-		const w = await session({ trustNarrator: true })
+		const w = await session({})
 		const { res, emitted } = await reply(w, "the Castellan's turn road")
 		expect((res as any)?.error).toBeUndefined()
 		// The Castellan's turn, then one character turn per named delver —
 		// fired by auto-advance off the turn order, never pressed.
 		expect(await respondRuns(w.session.id)).toEqual([
-			"core:spec/lair-respond:ok",
-			"core:spec/lair-respond:ok",
-			"core:spec/lair-respond:ok"
+			"core:spec/lair-reply:ok",
+			"core:spec/lair-reply:ok",
+			"core:spec/lair-reply:ok"
 		])
 		expect((await viasOf(w.session.id)).slice(1)).toEqual(["plan", "plan"])
 
@@ -482,73 +482,20 @@ describe("R8 · a turn is the Castellan's run, and the party's lines are charact
 		expect((await viasOf(w.session.id))[0]).not.toBe("narrate")
 	})
 
-	test("the Castellan's keeper keeps the world's books at the beats row; each character turn keeps its own delver's, at their line", async () => {
-		reset()
-		const w = await session({ trustNarrator: true })
-		await reply(w, "the keeper road")
-		// The Castellan's keeper, then one per character turn.
-		const keepers = jsonPrompts.filter((p) => p.includes("You keep the record of a delve"))
-		expect(keepers).toHaveLength(3)
-		expect(keepers[0]).toContain("The torch gutters.")
-		expect(keepers[1]).toContain("Brannoc speaks.")
-		expect(keepers[2]).toContain("Vell speaks.")
+	// Retired with the Lair rewrite (2026-10-21): the books are kept by the
+	// keeper ROUTINE after each round (`lair-keeper`, at Review by default) —
+	// no keeper runs inside the turn, at the beats row or a character's line.
+	// `sessions.lairWalk.int.test.ts` walks the routine.
 
-		const rows = await turnRows(w.session.id)
-		const beats = byChannel(rows, "sanctum")[0]!
-		const brannocRow = rows.find((r) => r.characterId === w.brannoc)!
-		const schema = await import("$lib/server/db/schema")
-		const written = await testDb
-			.select()
-			.from(schema.attributeValues)
-			.where(eq(schema.attributeValues.sessionId, w.session.id))
-		const gold = written.find((v) => v.slotId === "core:slot/gold@1")!
-		const hp = written.find((v) => v.slotId === "core:slot/hp@1")!
-		expect(gold.ownerKind).toBe("session")
-		expect(gold.validFromMessageId).toBe(beats.id)
-		expect(hp.validFromMessageId).toBe(brannocRow.id)
-		const { stateFor } = await import("$lib/server/state/resolve")
-		const state = await stateFor(testDb as any, w.session.id)
-		expect(Object.values(state.cast).map((c: any) => c?.hp)).toContain(8)
-	})
-
-	test("trust off: the world's proposal is held at the beats row, and accepting it lands there — the turn is open whole", async () => {
-		reset()
-		const w = await session({})
-		await reply(w, "the proposal road")
-		const rows = await turnRows(w.session.id)
-		const beats = byChannel(rows, "sanctum")[0]!
-		const brannocRow = rows.find((r) => r.characterId === w.brannoc)!
-		const schema = await import("$lib/server/db/schema")
-		const proposals = await testDb
-			.select()
-			.from(schema.stateProposals)
-			.where(eq(schema.stateProposals.sessionId, w.session.id))
-		const gold = proposals.find((p) => (p.payload as any)?.slotId === "core:slot/gold@1")!
-		const hp = proposals.find((p) => (p.payload as any)?.slotId === "core:slot/hp@1")!
-		expect(gold.messageId).toBe(beats.id)
-		expect(hp.messageId).toBe(brannocRow.id)
-		// Vell spoke after the beats row, in a character turn the beats row
-		// planned: the same turn, so the world's anchor is still open (the
-		// SDK turn lock's newest-turn rule, over `metadata.planRowId`).
-		const { decideProposal } = await import("$lib/server/state/write")
-		const decided = await decideProposal(testDb as any, gold.id, true)
-		expect(decided.status).toBe("accepted")
-		const [applied] = await testDb
-			.select()
-			.from(schema.attributeValues)
-			.where(eq(schema.attributeValues.id, decided.appliedId!))
-		expect(applied!.validFromMessageId).toBe(beats.id)
-	})
-
-	test("the knock: one Castellan question on main, and no beats, no voices, no keeper", async () => {
+	test("the knock: one Oracle question on main, and no beats, no voices, no keeper", async () => {
 		reset()
 		document = KNOCK
-		const w = await session({ trustNarrator: true })
+		const w = await session({})
 		const { res, emitted } = await reply(w, "the knock road")
 		expect((res as any)?.error).toBeUndefined()
 		const rows = await turnRows(w.session.id)
 		expect(rows.map((r) => [r.channel, (r.metadata as any)?.speaker, r.content])).toEqual([
-			["main", "envoy:castellan", KNOCK.knockQuestion]
+			["main", "envoy:oracle", KNOCK.knockQuestion]
 		])
 		expect(proseCalls).toEqual([])
 		expect(keeperCalls()).toBe(0)
@@ -561,7 +508,7 @@ describe("R8 · Narrate is the Castellan fired, and lands on main", () => {
 	for (const pressedOn of ["main", "sanctum"] as const) {
 		test(`from ${pressedOn}: one streamed Castellan row on main — no planner, no voices, no Sanctum row`, async () => {
 			reset()
-			const w = await session({ trustNarrator: true })
+			const w = await session({})
 			const { res, emitted } = await reply(
 				w,
 				`the narrate-from-${pressedOn} road`,
@@ -589,16 +536,8 @@ describe("R8 · Narrate is the Castellan fired, and lands on main", () => {
 			const last = await lastTurnOf(testDb as any, w.session.id)
 			expect(last.ok && last.yield.rows.map((r) => r.name)).toEqual(["Castellan"])
 			expect(last.ok && last.yield.entry).toEqual({ ref: null, via: "narrate" })
-			// The keeper kept the books on the narration: the world's change
-			// is filed at it (its only row, and the newest).
-			const schema = await import("$lib/server/db/schema")
-			const gold = (
-				await testDb
-					.select()
-					.from(schema.attributeValues)
-					.where(eq(schema.attributeValues.sessionId, w.session.id))
-			).find((v) => v.slotId === "core:slot/gold@1")
-			expect(gold?.validFromMessageId).toBe(rows[0]!.id)
+			// No books are kept in the turn: the keeper is a routine (Lair rewrite D7).
+			expect(keeperCalls()).toBe(0)
 		})
 	}
 })
@@ -621,7 +560,7 @@ async function retakeNow(w: Awaited<ReturnType<typeof session>>, label: string) 
 describe("R8 × R2 · retake of the Castellan's turn", () => {
 	test("the yield is exactly the beats row and the character turns' rows; the beats row's own Regenerate is routed to the turn", async () => {
 		reset()
-		const w = await session({ trustNarrator: true })
+		const w = await session({})
 		await reply(w, "the turn to retake")
 		const rows = await turnRows(w.session.id)
 		const { lastTurnOf } = await import("$lib/server/sessions/turnYield")
@@ -664,7 +603,7 @@ describe("R8 × R2 · retake of the Castellan's turn", () => {
 
 	test("a narration retakes as a narration", async () => {
 		reset()
-		const w = await session({ trustNarrator: true })
+		const w = await session({})
 		await reply(w, "the narration to retake", { ref: null, via: "pick" })
 		const [old] = await turnRows(w.session.id)
 		reset()
@@ -681,7 +620,7 @@ describe("R8 × R2 · retake of the Castellan's turn", () => {
 
 	test("a narration's own row Regenerate narrates again, into the same row", async () => {
 		reset()
-		const w = await session({ trustNarrator: true })
+		const w = await session({})
 		await reply(w, "the narration to regenerate", { ref: null, via: "pick" })
 		const [row] = await turnRows(w.session.id)
 		const { verbRefusal } = await import("$lib/server/messages/verbs")
@@ -756,7 +695,7 @@ describe("B15 · Pick who speaks", () => {
 			via: "pick"
 		})
 		expect((res as any)?.error).toBeUndefined()
-		expect(await respondRuns(w.session.id)).toEqual(["core:spec/lair-respond:ok"])
+		expect(await respondRuns(w.session.id)).toEqual(["core:spec/lair-reply:ok"])
 		const rows = await turnRows(w.session.id)
 		expect(rows.map((r) => [r.characterId, r.content])).toEqual([
 			[w.brannoc, "Brannoc speaks."]
@@ -764,10 +703,10 @@ describe("B15 · Pick who speaks", () => {
 		expect(rows[0]!.isNarratorResponse).toBe(false)
 		// A pick is a turn of its own, never part of a plan's.
 		expect((rows[0]!.metadata as any)?.planRowId).toBeUndefined()
-		// No planner and no Castellan keeper — one prose call, Brannoc's own
-		// voice, and his own books.
+		// No planner and no keeper — one prose call, Brannoc's own voice (the
+		// books are the keeper routine's, after the round).
 		expect(plannerCalls()).toBe(0)
-		expect(keeperCalls()).toBe(1)
+		expect(keeperCalls()).toBe(0)
 		expect(proseCalls).toEqual(["Brannoc"])
 	})
 })

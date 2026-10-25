@@ -8,6 +8,27 @@
  */
 import { rigourLabel } from "./rigourLabels"
 
+/**
+ * Every book's rules until it is told others (`lorebooks.primary_ruleset`'s
+ * default, New lorebook's pick): Freeform. 🚧 A book on them brings no rules
+ * of its own (PLAN-rulesets §4: "no ruleset" and the default are one state).
+ */
+export const BOOK_DEFAULT_RULES = "core:ruleset/freeform@1"
+
+/**
+ * 🚧 The rules a session **adopts** from a lorebook (or a starter lorebook)
+ * read in before play: the book's own — or null for a book on
+ * {@link BOOK_DEFAULT_RULES}, which brings none, so the session's own Rules
+ * stand (the person's pick, a preset's need, the genre's default): a book on
+ * Freeform never fixes a Lair (or any genre) to Words only. One rule for the
+ * start form, `sessions:create`,
+ * `sessions:setLorebook` / `sessions:update` (`rulesFromBook`) and the
+ * strict-rules refusal.
+ */
+export function adoptedBookRules(primaryRuleset: string | null | undefined): string | null {
+	return primaryRuleset && primaryRuleset !== BOOK_DEFAULT_RULES ? primaryRuleset : null
+}
+
 /** One rules choice: its id (never shown), its name and its line under the name. */
 export interface RulesChoice {
 	id: string
@@ -17,9 +38,10 @@ export interface RulesChoice {
 	recommended: boolean
 	/**
 	 * 🚧 The How strict options this ruleset plays, among the genre's
-	 * (2026-10-18, the 100-turn walk #26: the form allowed Story with Rules and
-	 * dice). A ruleset that rolls no dice (no `conventions.dice` — Story)
-	 * plays **Words only** alone. Absent: every option the genre offers.
+	 * (2026-10-18, the 100-turn walk #26: the form allowed Story with stricter
+	 * rules). A ruleset that decides nothing by its rules (no check method but
+	 * `none` — Story; 2026-10-22, never "no dice") plays **Words only** alone.
+	 * Absent: every option the genre offers.
 	 */
 	rigours?: string[]
 	/**
@@ -33,8 +55,10 @@ export interface RulesChoice {
 		rating: "incompatible" | "poor" | "ok" | "good" | "great" | "perfect"
 		group: number
 		reason: string
-		rows: { kind: string; key: string; required: boolean; met: "native" | "words" | "missing" }[]
+		rows: { kind: string; key: string; required: boolean; met: "native" | "words" | "missing"; label?: string; why?: string }[]
 		unused: string[]
+		/** 🚧 What the genre plays best with that these rules lack — each played in words, with why (RF fix 8). */
+		inWords?: { label: string; why: string }[]
 	}
 }
 
@@ -47,6 +71,8 @@ export interface GenreRulesOffer {
 	defaultId: string
 	/** How strict: the genre's options (ids) and its default. */
 	rigour: { options: string[]; default: string }
+	/** 🚧 What the genre plays best with, as one line (RF fix 8: "Plays best with a health-like number and …"); absent when it names none. */
+	playsBestWith?: string
 }
 
 /** Whether the form asks How strict at all — a genre with one option (Chat) is not asked. */
@@ -70,20 +96,21 @@ export const howStrictChoices = (
 
 /**
  * 🚧 The How strict options a ruleset plays among the genre's (2026-10-18):
- * one that rolls no dice (no `conventions.dice` — Story) plays Words only;
- * every other, all of them. Undefined when it plays every option.
+ * one that decides nothing by its rules (Story — `rulesetDecides`, 🚧
+ * 2026-10-22: a check method other than `none`, dice or not) plays Words
+ * only; every other, all of them. Undefined when it plays every option.
  */
-export function rigoursPlayed(rollsDice: boolean, options: readonly string[]): string[] | undefined {
-	if (rollsDice || !options.includes("prose")) return undefined
+export function rigoursPlayed(decides: boolean, options: readonly string[]): string[] | undefined {
+	if (decides || !options.includes("prose")) return undefined
 	return options.length > 1 ? ["prose"] : undefined
 }
 
-/** 🚧 The offer with each choice's `rigours` said, given which rulesets roll dice. */
-export function withRigoursPlayed(offer: GenreRulesOffer, rollsDice: (rulesetId: string) => boolean): GenreRulesOffer {
+/** 🚧 The offer with each choice's `rigours` said, given which rulesets decide anything by their rules. */
+export function withRigoursPlayed(offer: GenreRulesOffer, decides: (rulesetId: string) => boolean): GenreRulesOffer {
 	return {
 		...offer,
 		choices: offer.choices.map((c) => {
-			const rigours = rigoursPlayed(rollsDice(c.id), offer.rigour.options)
+			const rigours = rigoursPlayed(decides(c.id), offer.rigour.options)
 			return rigours ? { ...c, rigours } : c
 		})
 	}
@@ -103,16 +130,17 @@ export function rigourFor(offer: GenreRulesOffer, rulesId: string | null | undef
 
 /**
  * The Rules field as the form shows it: adopted from the chosen lorebook
- * (disabled, _From the lorebook: ‹name›_) — every lorebook has rules, and a
- * session attached at creation takes them — else the person's pick, else the
- * genre's default.
+ * (disabled, _From the lorebook: ‹name›_) when the book brings rules of its
+ * own (`adoptedBookRules`) — a session attached at creation takes them — else
+ * the person's pick, else the genre's default. A book on Freeform brings
+ * none, so the picker stays (fix7, 2026-10-23).
  */
 export function rulesField(
 	offer: GenreRulesOffer,
 	picked: string | null,
 	lorebook: { primaryRuleset?: string | null } | null
 ): { value: string; fromLorebook: string | null } {
-	const adopted = lorebook?.primaryRuleset ?? null
+	const adopted = adoptedBookRules(lorebook?.primaryRuleset)
 	if (adopted) {
 		const name = offer.choices.find((c) => c.id === adopted)?.name ?? "its own rules"
 		return { value: adopted, fromLorebook: `From the lorebook: ${name}` }

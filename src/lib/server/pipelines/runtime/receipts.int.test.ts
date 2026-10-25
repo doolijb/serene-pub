@@ -9,7 +9,7 @@
 
 import { describe, it, expect, beforeAll, vi } from "vitest"
 import { eq } from "drizzle-orm"
-import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
+import { createTestDb, replyStepKeys, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
 
@@ -90,6 +90,8 @@ let db: TestDb
 let sessionId: number
 let userId: number
 let characterId: number
+/** The reply's own steps, by the addresses its document gives them (Story's sit in its `reply` junction). */
+let reply: Awaited<ReturnType<typeof replyStepKeys>>
 
 beforeAll(async () => {
 	db = await createTestDb()
@@ -97,6 +99,7 @@ beforeAll(async () => {
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	await bootstrapPipelines(db)
+	reply = await replyStepKeys(db, (await import("$lib/server/pipelines/boot/bootstrap")).STORY_RESPOND_SPEC_ID)
 
 	const [user] = await db
 		.insert(schema.users)
@@ -219,11 +222,10 @@ describe("recording what a run did", () => {
 			// decides what fits belongs in the receipt. Before the reads since
 			// 2026-10-03 (history window): the history read is sized by it.
 			"contextBudget",
-			// 🚧 The session's background tasks, resolved at the HEAD of the
-			// reply since lane 2 (2026-10-19): the reply group obeys its own
-			// (*Read the lorebook*, *Read the scene*) and the tail reads the
-			// same answer. No model call.
-			"tasks",
+			// 🚧 The reply's reading duties at its HEAD (PLAN-layering lane 3,
+			// `core:task/reply-duties@1`; was the background tasks): *Read the
+			// lorebook*, *Read the scene*. No model call.
+			"reading",
 			// Spec 1.6.0: the four reads moved into an `async` block, which
 			// qualifies the keys inside it. They still each appear, and still
 			// in declaration order — the receipt is ordered by assignment, not
@@ -317,17 +319,23 @@ describe("recording what a run did", () => {
 			// between the two ever read this node.
 			"context",
 			"lines",
+			// 🚧 The transcribe step (O9): audio the reply cannot hear, heard
+			// before placement. A transcript with no audio sends nothing — a
+			// line in the trail, no model call.
+			"heard",
 			// Each line's attachments, placed for the model.
 			"attached",
 			"prompt",
-			"generate",
-			"save",
+			// 🚧 The reply, its row's fill and its face — in the `reply` junction's
+			// prose branch (D7), at the addresses the document gives them.
+			reply.generate,
+			reply.save,
 			// The sprite step (DESIGN-sprites §5, written into the spec since
 			// 2026-10-05), after the save: the picker, handed the reply's
 			// text and speaker, then the outlet. A card with no sprites runs
 			// both — the picker picks nothing and the outlet writes nothing.
-			"spritePick",
-			"spriteShow",
+			reply.spritePick,
+			reply.spriteShow,
 			// 🚧 The reply tick (live scenes §6, 2026-10-13): *Each reply
 			// advances the clock by …*, last, after the line and its face.
 			// It runs on every reply; the clock junction behind it does not
@@ -390,7 +398,7 @@ describe("recording what a run did", () => {
 			seq: 1,
 			kind: "message",
 			action: "updated",
-			nodeKey: "save",
+			nodeKey: reply.save,
 			entityId: artifacts[0].entityId
 		})
 		expect(typeof artifacts[0].entityId).toBe("number")
@@ -591,6 +599,73 @@ describe("recording what a run did", () => {
 		// The receipt in hand was not mutated.
 		expect(receipt.nodes[0].input.text.length).toBe(long.length)
 		expect(receipt.nodes[0].input.textTruncated).toBeUndefined()
+	})
+
+	it("🚧 a receipt the store refuses is kept compact, never lost (lair fix 2)", async () => {
+		// A full receipt refused — a payload no store takes, a value too odd to
+		// bind — left the run with no row at all: a finished line whose run
+		// nothing could name afterwards (the owner's Lair, 2026-10-22). The
+		// store here refuses the first write of the run's row, whatever it is.
+		const { saveReceipt, storableStrings } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
+		let refused = 0
+		const picky = new Proxy(db as any, {
+			get(target, key, receiver) {
+				if (key === "insert")
+					return (table: unknown) => {
+						if (table === schema.pipelineRuns && refused === 0) {
+							refused++
+							throw new Error("the store refused the receipt")
+						}
+						return target.insert(table)
+					}
+				return Reflect.get(target, key, receiver)
+			}
+		})
+		const receipt: any = {
+			runId: "receipt:refused",
+			specId: "core:spec/lair-reply",
+			specVersion: "1.0.0",
+			outcome: "ok",
+			triggerSource: "event",
+			seed: "receipt:refused",
+			startedAt: 0,
+			endedAt: 1,
+			notes: ["a note with half a pair \ud83d in it"],
+			nodes: [
+				{
+					seq: 0,
+					nodeKey: "say",
+					kind: "oracle",
+					definitionId: "core:oracle/generate-text@1",
+					result: "ok",
+					output: { main: "Dungeon Master: As you walk…", text: "Dungeon Master: As you walk…" }
+				}
+			],
+			emitted: [],
+			consumption: { tokens: 0, nodeExecutions: 1 }
+		}
+		const id = await saveReceipt(picky, receipt, {
+			sessionId,
+			userId,
+			artifacts: [{ kind: "message", entityId: 131, action: "updated", nodeKey: "say" }] as any
+		})
+		expect(refused).toBe(1)
+		expect(id).not.toBeNull()
+		const [row] = await db.select().from(schema.pipelineRuns).where(eq(schema.pipelineRuns.id, id!))
+		expect(row.runId).toBe("receipt:refused")
+		const stored = row.receipt as any
+		expect(stored.compact).toBe(true)
+		expect(stored.nodes[0].nodeKey).toBe("say")
+		expect(stored.nodes[0].output).toBeUndefined()
+		expect(stored.notes.at(-1)).toMatch(/^stored compact, without its nodes' payloads: the full receipt was refused \(the store refused the receipt\)/)
+		expect(stored.notes[0]).toBe("a note with half a pair \ufffd in it")
+		const artifacts = await db.select().from(schema.pipelineRunArtifacts).where(eq(schema.pipelineRunArtifacts.runId, id!))
+		expect(artifacts.map((a) => [a.kind, a.entityId])).toEqual([["message", 131]])
+		// NULs and lone surrogates read as the replacement character; a whole pair stays.
+		expect(storableStrings({ t: "a\u0000b" }).t).toBe("a\ufffdb")
+		expect(storableStrings({ t: "ok 😀" }).t).toBe("ok 😀")
 	})
 
 	it("a failed write does not fail the turn", async () => {

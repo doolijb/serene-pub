@@ -1042,6 +1042,10 @@ describe("01 §8 · the cycle guard", () => {
 			"$lib/server/pipelines/runtime/capPause"
 		)
 		const { settleSessionEvents } = await import("$lib/server/pipelines/runtime/sessionEvents")
+		// Every earlier test's queued work settled first: a straggling
+		// listener-lane dispatch under an older root would re-make that root's
+		// tree after the reset and leave it counted below.
+		await settleSessionEvents()
 		_resetLineage()
 		_resetCapPauses()
 		// `answer` writes ANOTHER block addressed to Tom firing `answer`:
@@ -1724,22 +1728,30 @@ describe("the review's rulings (2026-09-17)", () => {
 /**
  * The road's first step, walked live 2026-09-17: an Adventure session could
  * not be started without a lorebook (the genre declared `lorebook:
- * "required"`), and the refusal has to reach the person as the shape's own
- * sentence — the handler used to THROW it, and the socket layer's catch-all
- * replaces a thrown message with a constant on purpose. Adventure retired
- * 2026-10-19; the Lair is the genre that requires a lorebook now.
+ * "required"`), and a refusal has to reach the person as its own sentence —
+ * the handler used to THROW it, and the socket layer's catch-all replaces a
+ * thrown message with a constant on purpose. Adventure retired 2026-10-19,
+ * and the Lair that required a lorebook after it no longer does: ⏳
+ * `lorebook: 'required'` retired (RF fix 2, 2026-10-23) — the phantom
+ * lorebook gives every session a world, so a session may always start with
+ * no book. A refusal still reaches the person in words (below).
  */
 describe("starting a Lair session over sessions:create", () => {
-	test("a missing required lorebook is refused on sessions:create:error in the shape's sentence, and no row is made", async () => {
+	test("a Lair session with no lorebook starts: lorebookId null, no violation sentence, and no lorebook row made", async () => {
 		const schema = await import("$lib/server/db/schema")
-		const owner = await makeUser("start-refusal-owner")
+		const owner = await makeUser("start-no-book-owner")
 		const elara = await character(owner.id, "Elara")
 		const { sessionsCreateHandler } = await import("./sessions")
 		const rowsOf = async () =>
 			testDb
-				.select({ id: schema.sessions.id })
+				.select({ id: schema.sessions.id, lorebookId: schema.sessions.lorebookId })
 				.from(schema.sessions)
 				.where(eq(schema.sessions.userId, owner.id))
+		const booksOf = async () =>
+			testDb
+				.select({ id: schema.lorebooks.id })
+				.from(schema.lorebooks)
+				.where(eq(schema.lorebooks.userId, owner.id))
 		expect(await rowsOf()).toHaveLength(0)
 		const pushes: Array<{ event: string; data: any }> = []
 		const res = await sessionsCreateHandler.handler(
@@ -1758,13 +1770,21 @@ describe("starting a Lair session over sessions:create", () => {
 			},
 			(event: string, data: unknown) => pushes.push({ event, data })
 		)
-		// The ack and the error push carry the same sentence; the success
-		// event is never sent.
-		expect(res.error).toMatch(/does not fit 'Lair'.*requires a lorebook/)
-		expect(res.session).toBeUndefined()
-		expect(pushes.map((p) => p.event)).toEqual(["sessions:create:error"])
-		expect(pushes[0]!.data.error).toMatch(/requires a lorebook/)
-		expect(await rowsOf()).toHaveLength(0)
+		// No refusal, and no sentence about a lorebook anywhere: the success
+		// event is sent, the error event never is.
+		expect(res.error, res.error).toBeUndefined()
+		expect(res.session?.genreId).toBe("core:genre/lair")
+		expect(res.session?.lorebookId ?? null).toBeNull()
+		const events = pushes.map((p) => p.event)
+		expect(events).toContain("sessions:create")
+		expect(events).not.toContain("sessions:create:error")
+		expect(JSON.stringify(pushes)).not.toMatch(/requires a lorebook/)
+		// One session row, with no book; none was made for it.
+		const rows = await rowsOf()
+		expect(rows).toHaveLength(1)
+		expect(rows[0]!.id).toBe(res.session!.id)
+		expect(rows[0]!.lorebookId).toBeNull()
+		expect(await booksOf()).toHaveLength(0)
 	})
 
 	test("a genre this build does not register is refused the same way", async () => {

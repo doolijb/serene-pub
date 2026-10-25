@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SpProgress from "$lib/client/components/hostElements/SpProgress.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { getContext } from "svelte"
@@ -285,9 +286,9 @@
 	}
 
 	const BUILD_STATUS_COLOR: Record<string, string> = {
-		building: "text-primary-500",
+		building: "text-primary-ink",
 		review: "text-success-500",
-		error: "text-error-500"
+		error: "text-error-600-400"
 	}
 	const BUILD_STATUS_LABEL: Record<string, string> = {
 		building: "In progress",
@@ -360,7 +361,9 @@
 {/snippet}
 
 <!-- The view's root (STYLE-GUIDE §5.2). No tracker: Activity has no left
-     column — it is sectioned content at a reading width. -->
+     column — it is a list, centred at a list's width. The tab strip takes
+     the same width as the rows under it (PLAN-0-5-polish-parity L7,
+     2026-10-24): in Focus it ran 2000px over one card. -->
 <div class="flex h-full min-h-0 flex-col">
 	{#if showTabs}
 		<PanelTabStrip
@@ -368,11 +371,13 @@
 			bind:value={activeTab}
 			ariaLabel="Activity"
 			panelIdPrefix={tabIdPrefix}
+			class="mx-auto w-full max-w-[560px]"
 		/>
 	{/if}
 
-	<!-- Content. A reading measure, centred (notes 14): in Focus the rows ran
-	     1400px from a name on the left to its time on the right. -->
+	<!-- Content. The list's measure, centred (notes 14; 560px, a list
+	     column's ceiling, since L7): in Focus the rows ran 1400px from a name
+	     on the left to its time on the right. -->
 	<div class="min-h-0 flex-1 overflow-y-auto">
 		<div
 			id="{tabIdPrefix}-activity"
@@ -381,7 +386,7 @@
 				? `${tabIdPrefix}-activity-tab`
 				: undefined}
 			hidden={shownTab !== "activity"}
-			class="mx-auto w-full max-w-[880px]"
+			class="mx-auto w-full max-w-[560px]"
 		>
 			{#if shownTab === "activity"}
 				{#if waiting.length > 0}
@@ -415,7 +420,7 @@
 									<div class="min-w-0 flex-1">
 										{#if isOwnActivity}
 											<button
-												class="hover:text-primary-500 block w-full truncate text-left text-sm font-medium transition-colors"
+												class="hover:text-primary-ink block w-full truncate text-left text-sm font-medium transition-colors"
 												onclick={() =>
 													navigateToGraphTab(build)}
 												title="Go to graph tab"
@@ -470,23 +475,13 @@
 											{#if build.totalScenes > 0}· scene {build.sceneIndex +
 													1}/{build.totalScenes}{/if}
 										</p>
-										<div
-											class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full"
-										>
-											<div
-												class="bg-primary-500 h-full rounded-full transition-all duration-500"
-												style="width: {build.totalScenes >
-												0
-													? Math.max(
-															10,
-															Math.round(
-																(build.sceneIndex /
-																	build.totalScenes) *
-																	80
-															) + 5
-														)
-													: 5}%"
-											></div>
+										<div class="text-primary-500">
+											<SpProgress
+												attrs={{
+													value: String(build.totalScenes > 0 ? Math.max( 10, Math.round( (build.sceneIndex / build.totalScenes) * 80 ) + 5 ) : 5),
+													label: "Graph build progress"
+												}}
+											/>
 										</div>
 										{#if build.currentPair}
 											<p
@@ -551,7 +546,7 @@
 									<div class="min-w-0 flex-1">
 										{#if isOwn}
 											<button
-												class="hover:text-primary-500 block w-full truncate text-left text-sm font-medium transition-colors"
+												class="hover:text-primary-ink block w-full truncate text-left text-sm font-medium transition-colors"
 												onclick={() => {
 													sceneSummarizesCtx.setReviewSceneId(
 														activity.sceneId
@@ -591,7 +586,7 @@
 													Ready to review
 												</span>
 											{:else if activity.status === "error"}
-												· <span class="text-error-500">
+												· <span class="text-error-600-400">
 													Failed
 												</span>
 											{/if}
@@ -608,7 +603,7 @@
 							-->
 										{#if isOwn || isAdmin}
 											<button
-												class="text-surface-600-400 hover:text-error-500 shrink-0 transition-colors"
+												class="text-surface-600-400 hover:text-error-600-400 shrink-0 transition-colors"
 												onclick={() =>
 													socket.emit(
 														"activity:cancel",
@@ -647,39 +642,18 @@
 													0}/{activity.totalBatches}
 											{/if}
 										</p>
-										<div
-											class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full"
-										>
-											<div
-												class="bg-primary-500 h-full rounded-full transition-all duration-500"
-												style="width: {activity.phase ===
-												'extracting'
-													? 95
-													: activity.phase ===
-														  'naming'
-														? 90
-														: activity.totalBatches &&
-															  activity.totalBatches >
-																	1
-															? Math.max(
-																	5,
-																	Math.round(
-																		((activity.batch ??
-																			0) /
-																			activity.totalBatches) *
-																			80
-																	)
-																)
-															: activity.phase ===
-																  'synthesizing'
-																? 80
-																: 40}%"
-											></div>
+										<div class="text-primary-500">
+											<SpProgress
+												attrs={{
+													value: String(activity.phase === 'extracting' ? 95 : activity.phase === 'naming' ? 90 : activity.totalBatches && activity.totalBatches > 1 ? Math.max( 5, Math.round( ((activity.batch ?? 0) / activity.totalBatches) * 80 ) ) : activity.phase === 'synthesizing' ? 80 : 40),
+													label: "Progress"
+												}}
+											/>
 										</div>
 									</div>
 								{/if}
 								{#if activity.status === "error" && activity.errorMessage}
-									<p class="text-error-500 text-xs">
+									<p class="text-error-600-400 text-xs">
 										{activity.errorMessage}
 									</p>
 								{/if}
@@ -721,7 +695,7 @@
 									<div class="min-w-0 flex-1">
 										{#if isOwn}
 											<button
-												class="hover:text-primary-500 block w-full truncate text-left text-sm font-medium transition-colors"
+												class="hover:text-primary-ink block w-full truncate text-left text-sm font-medium transition-colors"
 												onclick={() =>
 													navigateToSessionSummarize(
 														activity
@@ -761,7 +735,7 @@
 													Ready to review
 												</span>
 											{:else if activity.status === "error"}
-												· <span class="text-error-500">
+												· <span class="text-error-600-400">
 													Failed
 												</span>
 											{/if}
@@ -776,7 +750,7 @@
 							-->
 										{#if isOwn || isAdmin}
 											<button
-												class="text-surface-600-400 hover:text-error-500 shrink-0 transition-colors"
+												class="text-surface-600-400 hover:text-error-600-400 shrink-0 transition-colors"
 												onclick={() =>
 													socket.emit(
 														"activity:cancel",
@@ -816,7 +790,7 @@
 									</p>
 								{/if}
 								{#if activity.status === "error" && activity.errorMessage}
-									<p class="text-error-500 text-xs">
+									<p class="text-error-600-400 text-xs">
 										{activity.errorMessage}
 									</p>
 								{/if}
@@ -832,7 +806,7 @@
 									<div class="min-w-0 flex-1">
 										{#if isOwn}
 											<button
-												class="hover:text-primary-500 block w-full truncate text-left text-sm font-medium transition-colors"
+												class="hover:text-primary-ink block w-full truncate text-left text-sm font-medium transition-colors"
 												onclick={() =>
 													navigateToCompileEntry(
 														activity
@@ -863,7 +837,7 @@
 													Ready to review
 												</span>
 											{:else if activity.status === "error"}
-												· <span class="text-error-500">
+												· <span class="text-error-600-400">
 													Failed
 												</span>
 											{/if}
@@ -894,33 +868,18 @@
 													0}/{activity.totalBatches}
 											{/if}
 										</p>
-										<div
-											class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full"
-										>
-											<div
-												class="bg-primary-500 h-full rounded-full transition-all duration-500"
-												style="width: {activity.phase ===
-												'synthesizing'
-													? 80
-													: activity.totalBatches &&
-														  activity.totalBatches >
-																1
-														? Math.max(
-																5,
-																Math.round(
-																	((activity.batch ??
-																		0) /
-																		activity.totalBatches) *
-																		75
-																)
-															)
-														: 40}%"
-											></div>
+										<div class="text-primary-500">
+											<SpProgress
+												attrs={{
+													value: String(activity.phase === 'synthesizing' ? 80 : activity.totalBatches && activity.totalBatches > 1 ? Math.max( 5, Math.round( ((activity.batch ?? 0) / activity.totalBatches) * 75 ) ) : 40),
+													label: "Progress"
+												}}
+											/>
 										</div>
 									</div>
 								{/if}
 								{#if activity.status === "error" && activity.errorMessage}
-									<p class="text-error-500 text-xs">
+									<p class="text-error-600-400 text-xs">
 										{activity.errorMessage}
 									</p>
 								{/if}
@@ -986,7 +945,7 @@
 				role="tabpanel"
 				aria-labelledby="{tabIdPrefix}-queue-tab"
 				hidden={shownTab !== "queue"}
-				class="mx-auto w-full max-w-[880px]"
+				class="mx-auto w-full max-w-[560px]"
 			>
 				{#if shownTab === "queue"}
 					{#if queueCount === 0}

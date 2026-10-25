@@ -33,7 +33,7 @@
 import { and, eq, isNull, notInArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { driverReasonOf } from "$lib/server/db/errors"
-import { presetBindingVerdict } from "$lib/server/pipelines/entities/presetBindings"
+import { onEvent, presetRegistrations } from "$lib/server/pipelines/registrations/resolve"
 
 export interface PresetReconcileReport {
 	/** Presets examined — enabled ones only; see `reconcilePresetBindings`. */
@@ -98,30 +98,24 @@ export async function reconcilePresetBindings(
 	for (const preset of presets) {
 		report.presets++
 		try {
-			const bindings = (preset.bindings ?? {}) as Record<
-				string,
-				{ spec?: string }
-			>
+			// 🚧 The preset's registrations (PLAN-layering D7): every one on an
+			// event whose pipeline this instance does not publish, with what
+			// answers the event instead (A11 — the same verdict the run reads).
+			const resolved = await presetRegistrations(db, preset.id)
 			const staleEvents: string[] = []
-			for (const event of Object.keys(bindings)) {
-				if (!bindings[event]?.spec) continue
-				const verdict = await presetBindingVerdict(
-					db,
-					preset,
-					preset.genreId,
-					event
-				)
-				if (verdict.via !== "fallback") continue
-				staleEvents.push(event)
+			for (const f of resolved?.fallbacks ?? []) {
+				if (staleEvents.includes(f.event)) continue
+				staleEvents.push(f.event)
 				report.stale++
+				const fallbackSpec = onEvent(resolved!.offered, f.event)[0]?.pipeline ?? null
 				await db
 					.insert(schema.sessionPresetNotices)
 					.values({
 						presetId: preset.id,
-						event,
-						boundSpec: verdict.bound,
-						reason: verdict.reason,
-						fallbackSpec: verdict.spec
+						event: f.event,
+						boundSpec: f.bound,
+						reason: f.reason,
+						fallbackSpec
 					})
 					.onConflictDoUpdate({
 						target: [
@@ -132,12 +126,54 @@ export async function reconcilePresetBindings(
 						// value of the column is that it does not move while
 						// the condition persists.
 						set: {
-							boundSpec: verdict.bound,
-							reason: verdict.reason,
-							fallbackSpec: verdict.spec,
+							boundSpec: f.bound,
+							reason: f.reason,
+							fallbackSpec,
 							lastSeenAt: new Date()
 						}
 					})
+			}
+
+			// 🚧 A11: a broken registration the preset itself makes on an
+			// action or a cadence (no event to fall back on) is said too —
+			// keyed by the registration's key, so it clears when it fits.
+			for (const st of resolved?.stale ?? []) {
+				const r = st.registration
+				if (r.origin !== "preset" || r.trigger.family === "event" || staleEvents.includes(r.key)) continue
+				staleEvents.push(r.key)
+				report.stale++
+				await db
+					.insert(schema.sessionPresetNotices)
+					.values({ presetId: preset.id, event: r.key, boundSpec: r.pipeline, reason: st.reason, fallbackSpec: null })
+					.onConflictDoUpdate({
+						target: [schema.sessionPresetNotices.presetId, schema.sessionPresetNotices.event],
+						set: { boundSpec: r.pipeline, reason: st.reason, fallbackSpec: null, lastSeenAt: new Date() }
+					})
+			}
+
+			// 🚧 R56: a routine or an action the preset runs whose pipeline
+			// needs a model nothing on this pub serves — disabled until one is
+			// set, and said here, keyed by the registration so it clears when a
+			// model is set.
+			{
+				const { unservedPipelines, disabledWhenUnserved } = await import(
+					"$lib/server/pipelines/registrations/unserved"
+				)
+				const regs = (resolved?.offered ?? []).filter((r) => disabledWhenUnserved(r) && (r.mode ?? "full") !== "off")
+				const unserved = await unservedPipelines(db, regs.map((r) => r.pipeline))
+				for (const r of regs) {
+					const missing = unserved.get(r.pipeline)
+					if (!missing || staleEvents.includes(r.key)) continue
+					staleEvents.push(r.key)
+					report.stale++
+					await db
+						.insert(schema.sessionPresetNotices)
+						.values({ presetId: preset.id, event: r.key, boundSpec: r.pipeline, reason: missing.sentence, fallbackSpec: null })
+						.onConflictDoUpdate({
+							target: [schema.sessionPresetNotices.presetId, schema.sessionPresetNotices.event],
+							set: { boundSpec: r.pipeline, reason: missing.sentence, fallbackSpec: null, lastSeenAt: new Date() }
+						})
+				}
 			}
 
 			// Everything else this preset had a notice for now resolves — or

@@ -1,0 +1,1 @@
+ALTER TABLE "narrative_relationships" ADD COLUMN "rules_run_id" text;

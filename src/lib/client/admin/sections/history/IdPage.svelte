@@ -119,7 +119,7 @@
 						<span class="text-surface-600-400 text-xs" id="record-action-label">Action</span>
 						<p aria-labelledby="record-action-label">
 							<span
-								class="{ACTION_TONE[record.action]} inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]"
+								class="{ACTION_TONE[record.action]} inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-meta"
 							>
 								<Icon size={12} aria-hidden="true" />
 								{LOGBOOK_ACTION_LABELS[record.action]}
@@ -148,7 +148,7 @@
 					<ul class="flex flex-col gap-2" aria-label="Changed fields">
 						{#each record.changes as c (c.field)}
 							<li
-								class="bg-surface-100-900 flex flex-col gap-1 rounded-[10px] px-3 py-2 text-sm @min-[36rem]/record:grid @min-[36rem]/record:grid-cols-[minmax(8rem,14rem)_1fr] @min-[36rem]/record:gap-3"
+								class="bg-surface-100-900 flex flex-col gap-1 rounded-base px-3 py-2 text-sm @min-[36rem]/record:grid @min-[36rem]/record:grid-cols-[minmax(8rem,14rem)_1fr] @min-[36rem]/record:gap-3"
 							>
 								<span class="font-medium">{c.label}</span>
 								{#if c.redacted}

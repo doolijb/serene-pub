@@ -20,7 +20,7 @@
 
 import { and, eq, not, or, sql, type SQL } from "drizzle-orm"
 import type { PgColumn } from "drizzle-orm/pg-core"
-import { channelDecls, formatChannel, parseChannel } from "@serene-pub/sdk"
+import { channelAudience, channelDecls, formatChannel, parseChannel } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { rawRows } from "$lib/server/db/rawRows"
 import { channelPrefixWhere, DEFAULT_CHANNEL, nextLane } from "$lib/server/messages/channels"
@@ -52,6 +52,27 @@ export function isPersonalChannel(shape: unknown, slug: string): boolean {
 	const bare = parseChannel(slug).slug
 	if (!bare || bare === DEFAULT_CHANNEL) return false
 	return personalSlugsOf(shape).includes(bare)
+}
+
+/**
+ * 🚧 The slugs a genre's shape declares for its **owner alone** (Lair
+ * rewrite D6, 2026-10-21; `ChannelDecl.audience: 'owner'`) — the Lair's
+ * Sanctum. Its rows, its pushes, its place in the channel list and the
+ * composer's switch are the session owner's; every other member is told
+ * nothing of it. Pipelines still read it: the filter is a reader's, at the
+ * socket, never the store's. `main` never is (the SDK refuses one).
+ */
+export function ownerOnlySlugsOf(shape: unknown): string[] {
+	return channelDecls(shape)
+		.map((d) => parseChannel(d.slug).slug)
+		.filter((slug) => slug !== DEFAULT_CHANNEL && channelAudience(shape, slug) === "owner")
+}
+
+/** Whether `slug` (any lane of it) is a channel only the session's owner reads. */
+export function isOwnerOnlyChannel(shape: unknown, slug: string): boolean {
+	const bare = parseChannel(slug).slug
+	if (!bare || bare === DEFAULT_CHANNEL) return false
+	return ownerOnlySlugsOf(shape).includes(bare)
 }
 
 /** Every channel of the shape with its lane mode, `main` first. */
@@ -214,8 +235,14 @@ export interface LaneView {
 	ownerUserId: number
 	/** True for the session's owner. */
 	isOwner: boolean
-	/** Every channel with its lane mode, `main` first. */
+	/**
+	 * Every channel this viewer has, with its lane mode, `main` first — a
+	 * channel for the owner alone (`audience: 'owner'`) is listed for the
+	 * owner only.
+	 */
 	channels: Array<{ slug: string; lanes: LaneMode }>
+	/** 🚧 The owner-alone slugs this viewer may NOT read — empty for the owner. */
+	hidden: Set<string>
 	/** Personal slug → the viewer's lane (canonical), null while they have none. */
 	mine: Map<string, string | null>
 	/** True when nothing is hidden from this viewer. */
@@ -242,7 +269,10 @@ export async function visibleChannelsFor(
 	session: { id: number; userId: number; shape: unknown },
 	userId: number
 ): Promise<LaneView> {
-	const channels = laneModesOf(session.shape)
+	const isOwner = userId === session.userId
+	// 🚧 A channel for the owner alone is no part of anybody else's session (D6).
+	const hidden = new Set(isOwner ? [] : ownerOnlySlugsOf(session.shape))
+	const channels = laneModesOf(session.shape).filter((c) => !hidden.has(c.slug))
 	const personal = channels.filter((c) => c.lanes === "personal").map((c) => c.slug)
 	const mine = new Map<string, string | null>(personal.map((slug) => [slug, null]))
 	if (personal.length) {
@@ -252,15 +282,15 @@ export async function visibleChannelsFor(
 			.where(and(eq(schema.channelLanes.sessionId, session.id), eq(schema.channelLanes.userId, userId)))
 		for (const r of rows) if (mine.has(r.slug)) mine.set(r.slug, formatChannel({ slug: r.slug, lane: r.lane }))
 	}
-	const isOwner = userId === session.userId
 	return {
 		sessionId: session.id,
 		userId,
 		ownerUserId: session.userId,
 		isOwner,
 		channels,
+		hidden,
 		mine,
-		all: isOwner || personal.length === 0
+		all: isOwner || (personal.length === 0 && hidden.size === 0)
 	}
 }
 
@@ -268,6 +298,7 @@ export async function visibleChannelsFor(
 export function laneViewAllows(view: LaneView | null, channel: string | null | undefined): boolean {
 	if (!view || view.all) return true
 	const ref = parseChannel(channel ?? DEFAULT_CHANNEL)
+	if (view.hidden?.has(ref.slug)) return false
 	if (!view.mine.has(ref.slug)) return true
 	const own = view.mine.get(ref.slug)
 	return own !== null && own !== undefined && own === formatChannel(ref)
@@ -281,6 +312,7 @@ export function laneViewAllows(view: LaneView | null, channel: string | null | u
 export function laneViewWhere(column: PgColumn, view: LaneView | null): SQL | undefined {
 	if (!view || view.all) return undefined
 	const clauses: SQL[] = []
+	for (const slug of view.hidden ?? []) clauses.push(not(channelPrefixWhere(column, slug)))
 	for (const [slug, own] of view.mine) {
 		const whole = channelPrefixWhere(column, slug)
 		clauses.push(own ? or(not(whole), eq(column, own))! : not(whole))
@@ -304,7 +336,10 @@ export async function laneReadersOf(db: Db, sessionId: number, channel: string |
 	const ref = parseChannel(channel ?? DEFAULT_CHANNEL)
 	if (!ref.slug || ref.slug === DEFAULT_CHANNEL) return null
 	const facts = await sessionLaneFacts(db, sessionId)
-	if (!facts || !isPersonalChannel(facts.shape, ref.slug)) return null
+	if (!facts) return null
+	// 🚧 The owner's alone (D6): nobody else is pushed a row of it.
+	if (isOwnerOnlyChannel(facts.shape, ref.slug)) return new Set([facts.ownerUserId])
+	if (!isPersonalChannel(facts.shape, ref.slug)) return null
 	const owner = await laneOwner(db, sessionId, formatChannel(ref))
 	const readers = new Set<number>([facts.ownerUserId])
 	if (owner !== null) readers.add(owner)

@@ -70,11 +70,19 @@ export async function canViewMedia(
 	// same picture can be worn in a second book, or be a gallery image of a
 	// card the session does not seat (review 2026-10-13). The stamp still
 	// counts, for a book's own upload no member wears yet.
-	const wornIn = await db
-		.selectDistinct({ lorebookId: schema.lorebookBindings.lorebookId })
-		.from(schema.lorebookBindings)
-		.where(eq(schema.lorebookBindings.faceMediaId, file.id))
-	const books = new Set(wornIn.map((r) => r.lorebookId))
+	// A book's **cover image** is judged the same way, by the books that wear
+	// it as their cover.
+	const [wornIn, coverOf] = await Promise.all([
+		db
+			.selectDistinct({ lorebookId: schema.lorebookBindings.lorebookId })
+			.from(schema.lorebookBindings)
+			.where(eq(schema.lorebookBindings.faceMediaId, file.id)),
+		db
+			.select({ lorebookId: schema.lorebooks.id })
+			.from(schema.lorebooks)
+			.where(eq(schema.lorebooks.coverMediaId, file.id))
+	])
+	const books = new Set([...wornIn, ...coverOf].map((r) => r.lorebookId))
 	if (file.lorebookId) books.add(file.lorebookId)
 	if (books.size) {
 		for (const bookId of books)
@@ -86,6 +94,17 @@ export async function canViewMedia(
 		for (const s of sessions)
 			if ((await checkSessionAccess(s.id, userId)).hasAccess) return true
 	}
+
+	// An account's avatar is drawn wherever the account is — the roster,
+	// sharing, conversations, the Users view — so, like the account's name,
+	// any signed-in person may see it. The route has already refused anyone
+	// signed out.
+	const [avatarOf] = await db
+		.select({ id: schema.users.id })
+		.from(schema.users)
+		.where(eq(schema.users.avatarMediaId, file.id))
+		.limit(1)
+	if (avatarOf) return true
 
 	// Shown by an attachment (PLAN-composer-attachments §6.3): a file a
 	// `core:image` / `core:file` part of a message in a session the viewer can

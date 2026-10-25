@@ -18,6 +18,7 @@
 
 import * as Icons from "@lucide/svelte"
 import {
+	isListScope,
 	LORE_LENSES,
 	type LoreLens,
 	type LoreScope
@@ -73,8 +74,11 @@ const BY_ID = {
 		label: "Graph",
 		icon: Icons.Network,
 		mount: "drawing",
-		// The scope narrows the graph's denominator (`scopeEntries`).
-		drawsScope: draws,
+		// The scope narrows the graph's denominator (`scopeEntries`). 🚧 A
+		// rules list is not drawn on the graph yet (lane C1): choosing one
+		// opens it in List (`scopeRoute`).
+		drawsScope: (scope: LoreScope) =>
+			isListScope(scope) ? "ignores" : "draws",
 		listsPool: false,
 		bypassesDayOne: true,
 		drawing: "relationships",

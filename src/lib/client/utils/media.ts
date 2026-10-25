@@ -147,6 +147,25 @@ export function avatarSrc(
 	return opts?.full ? mediaUrl(id) : mediaThumbUrl(id)
 }
 
+/**
+ * The `src` for a lorebook's **cover image** (`lorebooks.cover_media_id`), by
+ * the same rules as an avatar: thumbnail unless `full`, the joined
+ * `{ uuid, rev }` when the payload has it, else the by-id redirect.
+ */
+export function lorebookCoverSrc(
+	book:
+		| { coverMediaId?: number | null; coverMedia?: AvatarMedia | null }
+		| null
+		| undefined,
+	opts?: { full?: boolean }
+): string | undefined {
+	if (!book) return undefined
+	return avatarSrc(
+		{ avatarMediaId: book.coverMediaId, avatarMedia: book.coverMedia },
+		opts
+	)
+}
+
 /** A media row whose bytes changed while keeping its id, as `media:changed`
  *  announces it. */
 export interface MediaRevision {

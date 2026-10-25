@@ -9,7 +9,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { and, eq } from "drizzle-orm"
-import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
+import { createTestDb, replyStepKeys, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import {
 	namespaceView,
@@ -23,9 +23,13 @@ import { findLoadout } from "$lib/server/loadouts"
 import { capabilityLabel } from "@serene-pub/sdk"
 
 const SECRET = "test-instance-secret"
-/** A reply with a JSON state keeper on Extraction — the Lair's (Adventure's until 2026-10-19). */
-const LAIR = "core:spec/lair-respond"
-const KEEPER_WRITE = "keep.played.keeperWrite"
+/**
+ * A reply with a JSON step — the Lair's planner (its state keeper until the
+ * Lair rewrite made the keeper a routine, 2026-10-21; Adventure's until
+ * 2026-10-19).
+ */
+const LAIR = "core:spec/lair-reply"
+const KEEPER_WRITE = "via.turn.channel.story.pick.planned.planWrite"
 const SUMMARIZE = "core:spec/summarize-scene"
 
 let db: TestDb
@@ -33,6 +37,8 @@ let adminId: number
 let userId: number
 let sessionId: number
 let pairName: string
+/** Story's reply call, by the address its document gives it (in its `reply` junction). */
+let GENERATE: string
 
 const id = (nodeKey: string, slot: string, path = "") => optionId(SECRET, nodeKey, slot, path)
 const asAdmin = (slug: string, over: object = {}) =>
@@ -41,23 +47,13 @@ const all = (v: NamespaceView): ConfigOption[] =>
 	v.groups.flatMap((g) => [...g.front, ...g.advanced.flatMap((s) => s.options)])
 const opt = (v: NamespaceView, optionKey: string) => all(v).find((o) => o.id === optionKey)!
 
-/** Write one value straight into the selected configuration, as a config edit would. */
+/**
+ * Write one value where a global edit lands — the genre's defaults'
+ * registration of the pipeline (PLAN-layering D5); `undefined` clears it.
+ */
 async function setConfigValue(slug: string, nodeKey: string, slot: string, value: unknown) {
-	const v = await asAdmin(slug)
-	const configId = v.selectedConfig!.id
-	await db
-		.delete(schema.pipelineConfigValues)
-		.where(
-			and(
-				eq(schema.pipelineConfigValues.configId, configId),
-				eq(schema.pipelineConfigValues.nodeKey, nodeKey),
-				eq(schema.pipelineConfigValues.slot, slot)
-			)
-		)
-	if (value !== undefined)
-		await db
-			.insert(schema.pipelineConfigValues)
-			.values({ configId, nodeKey, slot, path: "", value } as any)
+	const { setPipelineValue } = await import("$lib/server/utils/testDb")
+	await setPipelineValue(db, slug, { nodeKey, slot, path: "" }, value)
 }
 
 beforeAll(async () => {
@@ -111,6 +107,7 @@ beforeAll(async () => {
 		.values({ userId: adminId, isGroup: false })
 		.returning()
 	sessionId = session!.id
+	GENERATE = (await replyStepKeys(db, STORY_RESPOND_SPEC_ID)).generate
 }, 60_000)
 
 afterAll(async () => {
@@ -134,7 +131,7 @@ describe("the Loadout picker", () => {
 		const keeper = opt(v, id(KEEPER_WRITE, "loadout"))
 		const extraction = keeper.choices!.find((c) => c.label === "Extraction")!
 		expect(extraction.description).toContain("Unfilled — falls back to Reply")
-		// The keeper answers with JSON; an untested pair has no schema door.
+		// The planner answers with JSON; an untested pair has no schema door.
 		expect(extraction.description).toContain("JSON by instruction (no schema door)")
 		for (const c of keeper.choices!)
 			expect(`${c.label} ${c.description ?? ""}`).not.toMatch(/\b(fits|partly|won't)\b/i)
@@ -149,11 +146,11 @@ describe("the Loadout picker", () => {
 	})
 
 	it("shows the selected loadout's title and resolved chain", async () => {
-		await setConfigValue(STORY_RESPOND_SPEC_ID, "generate", "loadout", {
+		await setConfigValue(STORY_RESPOND_SPEC_ID, GENERATE, "loadout", {
 			id: "core:loadout/extraction@1"
 		})
 		const v = await asAdmin(STORY_RESPOND_SPEC_ID)
-		const row = opt(v, id("generate", "loadout"))
+		const row = opt(v, id(GENERATE, "loadout"))
 		expect(row.loadout?.selected?.name).toBe("Extraction")
 		expect(row.loadout?.selected?.chain).toBe("Extraction → Reply (unfilled fallback)")
 		expect(row.valueLabel).toBe("Extraction")
@@ -162,12 +159,12 @@ describe("the Loadout picker", () => {
 
 describe("the slots beneath it", () => {
 	it("read From the <fallback> loadout (unfilled fallback) when the named one is unfilled", async () => {
-		await setConfigValue(STORY_RESPOND_SPEC_ID, "generate", "loadout", {
+		await setConfigValue(STORY_RESPOND_SPEC_ID, GENERATE, "loadout", {
 			id: "core:loadout/extraction@1"
 		})
-		await setConfigValue(STORY_RESPOND_SPEC_ID, "generate", "connection", undefined)
+		await setConfigValue(STORY_RESPOND_SPEC_ID, GENERATE, "connection", undefined)
 		const v = await asAdmin(STORY_RESPOND_SPEC_ID)
-		const conn = opt(v, id("generate", "connection"))
+		const conn = opt(v, id(GENERATE, "connection"))
 		expect(conn.provenance).toEqual({
 			source: "loadout",
 			label: "From the Reply loadout (unfilled fallback)"
@@ -176,35 +173,35 @@ describe("the slots beneath it", () => {
 	})
 
 	it("read From the Reply loadout when the named one is filled", async () => {
-		await setConfigValue(STORY_RESPOND_SPEC_ID, "generate", "loadout", { id: "core:loadout/reply@1" })
+		await setConfigValue(STORY_RESPOND_SPEC_ID, GENERATE, "loadout", { id: "core:loadout/reply@1" })
 		const v = await asAdmin(STORY_RESPOND_SPEC_ID)
-		const conn = opt(v, id("generate", "connection"))
+		const conn = opt(v, id(GENERATE, "connection"))
 		expect(conn.provenance?.label).toBe("From the Reply loadout")
 		expect(conn.inherits?.label).toBe(`From the Reply loadout — ${pairName}`)
 		expect(conn.useLoadout).toBeUndefined()
 	})
 
 	it("read Set here for an explicit pick, offering Use loadout's", async () => {
-		await setConfigValue(STORY_RESPOND_SPEC_ID, "generate", "loadout", { id: "core:loadout/reply@1" })
+		await setConfigValue(STORY_RESPOND_SPEC_ID, GENERATE, "loadout", { id: "core:loadout/reply@1" })
 		const [conn] = await db.select().from(schema.connections).limit(1)
-		await setConfigValue(STORY_RESPOND_SPEC_ID, "generate", "connection", {
+		await setConfigValue(STORY_RESPOND_SPEC_ID, GENERATE, "connection", {
 			id: String(conn!.id),
 			modelId: null
 		})
 		const v = await asAdmin(STORY_RESPOND_SPEC_ID)
-		const row = opt(v, id("generate", "connection"))
+		const row = opt(v, id(GENERATE, "connection"))
 		expect(row.provenance).toEqual({ source: "config", label: "Set here" })
 		expect(row.useLoadout).toBe("Reply")
-		await setConfigValue(STORY_RESPOND_SPEC_ID, "generate", "connection", undefined)
+		await setConfigValue(STORY_RESPOND_SPEC_ID, GENERATE, "connection", undefined)
 	})
 
 	it("read From the Reply loadout when the step names no loadout", async () => {
-		await setConfigValue(STORY_RESPOND_SPEC_ID, "generate", "loadout", null)
+		await setConfigValue(STORY_RESPOND_SPEC_ID, GENERATE, "loadout", null)
 		const v = await asAdmin(STORY_RESPOND_SPEC_ID)
-		const row = opt(v, id("generate", "connection"))
+		const row = opt(v, id(GENERATE, "connection"))
 		expect(row.provenance).toEqual({ source: "pub", label: "From the Reply loadout" })
 		expect(row.valueLabel).toBe(pairName)
-		expect(opt(v, id("generate", "loadout")).loadout?.selected).toBeUndefined()
+		expect(opt(v, id(GENERATE, "loadout")).loadout?.selected).toBeUndefined()
 	})
 })
 

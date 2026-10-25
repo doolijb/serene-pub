@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * ONE model finder — one search box over every recommended list this pub
 	 * can read and over Hugging Face, scoped by what the model is FOR and
@@ -800,8 +801,8 @@
 					role="radio"
 					aria-checked={on}
 					class="flex min-h-9 items-center rounded-full px-2.5 text-xs pointer-coarse:min-h-11 {on
-						? 'preset-tonal-primary'
-						: 'bg-surface-200-800 text-surface-700-300 hover:preset-tonal-primary'}"
+						? 'preset-pressed'
+						: 'bg-surface-200-800 text-surface-700-300 hover:bg-surface-300-700'}"
 					onclick={() => (scopeOverride = option.value)}
 				>
 					{option.label}
@@ -831,8 +832,8 @@
 						aria-checked={on}
 						title={option.disabledReason}
 						class="flex min-h-9 min-w-0 items-center rounded-full px-2.5 text-xs pointer-coarse:min-h-11 {on
-							? 'preset-tonal-primary'
-							: 'bg-surface-200-800 text-surface-700-300 hover:preset-tonal-primary'} {option.disabledReason
+							? 'preset-pressed'
+							: 'bg-surface-200-800 text-surface-700-300 hover:bg-surface-300-700'} {option.disabledReason
 							? 'opacity-70'
 							: ''}"
 						onclick={() => (destinationOverride = option.id)}
@@ -900,7 +901,7 @@
 					positioning={{ placement: "bottom-start" }}
 				>
 					<Popover.Trigger
-						class="text-primary-700 dark:text-primary-500 hover:underline"
+						class="text-primary-ink hover:underline"
 						aria-label="Change memory tier"
 						aria-expanded={tierOpen}
 					>
@@ -981,7 +982,7 @@
 				{#if onnxOnDisk && destination}
 					<button
 						type="button"
-						class="hover:preset-tonal-primary text-surface-600-400 flex min-h-9 items-center gap-2 rounded-[10px] px-1.5 text-left text-xs"
+						class="hover:preset-tonal-primary text-surface-600-400 flex min-h-9 items-center gap-2 rounded-base px-1.5 text-left text-xs"
 						onclick={() =>
 							destination &&
 							onOpenConnection?.(destination.connectionId)}
@@ -1027,7 +1028,7 @@
 								spellcheck="false"
 							/>
 							{#if hubError}
-								<p class="text-error-500 text-xs" role="alert">
+								<p class="text-error-600-400 text-xs" role="alert">
 									{hubError}
 								</p>
 							{/if}
@@ -1054,7 +1055,7 @@
 					{:else}
 						<button
 							type="button"
-							class="hover:preset-tonal-primary flex min-h-11 w-full items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left disabled:cursor-not-allowed disabled:opacity-70"
+							class="hover:preset-tonal-primary flex min-h-11 w-full items-center gap-2.5 rounded-base px-2 py-1.5 text-left disabled:cursor-not-allowed disabled:opacity-70"
 							disabled={!!destination?.disabledReason}
 							title={destination?.disabledReason}
 							onclick={() => (hubOpen = true)}
@@ -1066,7 +1067,7 @@
 								<Icons.Plus size={16} />
 							</span>
 							<span class="min-w-0 flex-1">
-								<span class="block text-[15px] font-medium">
+								<span class="block text-lead font-medium">
 									Add from Hugging Face by id
 								</span>
 								<span
@@ -1152,7 +1153,7 @@
 	<div class="panel-card flex flex-col gap-2">
 		<div class="flex items-start gap-2.5">
 			<span
-				class="preset-tonal-surface grid size-9 shrink-0 place-items-center rounded-[10px]"
+				class="preset-tonal-surface grid size-9 shrink-0 place-items-center rounded-base"
 				aria-hidden="true"
 			>
 				<Icons.Package size={18} />
@@ -1160,14 +1161,14 @@
 			<div class="flex min-w-0 flex-1 flex-col gap-0.5">
 				<div class="flex min-w-0 flex-wrap items-center gap-1.5">
 					<span
-						class="min-w-0 truncate text-[15px] font-medium"
+						class="min-w-0 truncate text-lead font-medium"
 						title={row.name}
 					>
 						{repoTitle(row.name)}
 					</span>
 					{#if row.tier}
 						<span
-							class="shrink-0 rounded-full px-2 py-0.5 text-[11px] {row
+							class="shrink-0 rounded-full px-2 py-0.5 text-meta {row
 								.tier.matches
 								? 'preset-tonal-primary'
 								: 'preset-tonal-surface'}"
@@ -1190,11 +1191,9 @@
 					Cancel
 				</button>
 			{:else if row.presence}
-				<span
-					class="preset-tonal-success shrink-0 rounded-full px-2 py-0.5 text-[11px]"
-				>
+				<Badge tone="success" size="sm" class="shrink-0">
 					{row.presence === "on_disk" ? "On disk" : "Pulled"}
-				</span>
+				</Badge>
 			{:else}
 				<button
 					type="button"
@@ -1238,7 +1237,7 @@
 						style={`width: ${Math.round(percent ?? 0)}%`}
 					></span>
 				</span>
-				<span class="text-surface-600-400 shrink-0 text-[11px]">
+				<span class="text-surface-600-400 shrink-0 text-meta">
 					{formatProgress(
 						live?.downloadedBytes,
 						live?.totalBytes,
@@ -1254,13 +1253,13 @@
 	<div class="panel-card flex flex-col gap-2">
 		<div class="flex items-start gap-2.5">
 			<span
-				class="preset-tonal-surface grid size-9 shrink-0 place-items-center rounded-[10px]"
+				class="preset-tonal-surface grid size-9 shrink-0 place-items-center rounded-base"
 				aria-hidden="true"
 			>
 				<Icons.Globe size={18} />
 			</span>
 			<div class="flex min-w-0 flex-1 flex-col gap-0.5">
-				<span class="truncate text-[15px] font-medium" title={row.name}>
+				<span class="truncate text-lead font-medium" title={row.name}>
 					{repoTitle(row.name)}
 				</span>
 				<span class="text-surface-600-400 truncate text-xs">
@@ -1300,14 +1299,12 @@
 		     was retired app-wide at 3.62:1. -->
 		<div class="flex flex-wrap items-center gap-1.5">
 			{#each shown as tag (tag)}
-				<span
-					class="preset-tonal-surface text-surface-700-300 rounded-full px-2 py-0.5 text-[11px]"
-				>
+				<Badge size="sm" class="text-surface-700-300">
 					{tag}
-				</span>
+				</Badge>
 			{/each}
 			{#if tags.length > shown.length}
-				<span class="text-surface-600-400 text-[11px]">
+				<span class="text-surface-600-400 text-meta">
 					+{tags.length - shown.length} more
 				</span>
 			{/if}

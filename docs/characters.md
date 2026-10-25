@@ -47,7 +47,7 @@ Prefer every field at once? Turn off **Easy character creation** in **Settings �
 
 ### Find a character
 
-The box at the top of the list filters as you type, matching name, description and tags. The sliders button beside it narrows the list to **All**, **Favorites**, **Personas**, or one of your tags; a chip under the box shows the filter, with an **×** to clear it. The two icons at the end switch between portrait cards (the default) and a list.
+The box at the top of the list filters as you type, matching name, description and tags. The sliders button beside it narrows the list to **All**, **Favorites**, **Personas**, or one of your tags; a chip under the box shows the filter, with an **×** to clear it. The two icons at the end switch between a list and portrait cards: docked beside the page the list is the default, and at Half or in Focus the cards are. Once you pick one, this browser remembers it at every width.
 
 Favorites sort to the top. Characters in a [folder](#favorites-folders-and-tags) are listed under its header, which collapses on click.
 
@@ -77,6 +77,8 @@ Only **Name** and **Description** are required. A field with a small eye icon is
 - **Aliases**: other names they go by. When lore is looked up, a mention of one counts as a mention of the character.
 - **Summary**: a one-line blurb, up to 200 characters, for character lists and the lorebook **Graph**. It isn't part of the prompt.
 
+Hover a field's name, or the box itself, for what it's for. **Summary** counts its characters once you are near the 200.
+
 **Show all fields**, at the bottom of the form, adds everything else a card can carry. It's remembered for next time.
 
 - On **Profile**: **Version**, **Creator** and **Category**.
@@ -85,7 +87,7 @@ Only **Name** and **Description** are required. A field with a small eye icon is
 
 Press **Save** (or **Ctrl S**) to keep your changes. While there are unsaved changes the header says **Unsaved changes**, and leaving asks **Discard unsaved changes?** first.
 
-A card is a starter: it gives enough to begin a story. Once the card is in a lorebook, it represents a **cast member** there, and what a story changes about the character is kept on that member (see [What the member tells in their own words](./lorebook-cast.md#what-the-member-tells-in-their-own-words)). When a card represents any cast members, a note over the form says how many, and in which lorebooks; each lorebook's name opens that member. If any of them retell parts of the card, such as its description or face, the note names those parts. Editing the card changes every member that still reads that part from the card; a member's retold parts stay as they are.
+A card is a starter: it gives enough to begin a story. Once the card is in a lorebook, it represents a **cast member** there, and what a story changes about the character is kept on that member (see [What the member tells in their own words](./lorebook-cast.md#what-the-member-tells-in-their-own-words)). When a card represents any cast members, a line under the name says in which lorebooks (_In 1 lorebook: Atlas of Everything_); each lorebook's name opens that member. If one retells parts of the card, such as its description or face, the line names those parts after the lorebook (_(retells description, face)_); hover the line for how many members the card represents. Editing the card changes every member that still reads that part from the card; a member's retold parts stay as they are.
 
 ### Favorites, folders and tags
 

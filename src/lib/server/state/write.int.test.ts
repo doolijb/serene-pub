@@ -25,6 +25,7 @@ import {
 } from "@serene-pub/sdk"
 import "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 let testDb: TestDb
 let dataDir: string
@@ -99,7 +100,7 @@ async function world() {
 	// A session tracks what its genre enables, and a write outside that is
 	// refused: so the world's genre brings every slot this test declared.
 	const WORLD_GENRE = `test:genre/write-${suffix}`
-	genre(WORLD_GENRE, { name: { en: "Write" }, family: "test", slots: attributeSlots(), events: {} })
+	genreKeeping(WORLD_GENRE, { name: { en: "Write" }, family: "test", slots: attributeSlots(), events: {} })
 	const [session] = await testDb
 		.insert(schema.sessions)
 		.values({ userId: user.id, isGroup: true, name: `Run ${suffix}`, genreId: WORLD_GENRE })
@@ -686,7 +687,7 @@ describe("R-15 · staleness and order (state version)", () => {
 		// genre's, not the registry's, and the default chat genre tracks nothing
 		// — `stateFor` on it reads no value at all.
 		const STALE_GENRE = "test:genre/stale"
-		genre(STALE_GENRE, {
+		genreKeeping(STALE_GENRE, {
 			name: { en: "Stale" },
 			family: "test",
 			slots: [getAttributeSlot(HP_SLOT)!, getAttributeSlot(MOOD)!],
@@ -1088,7 +1089,7 @@ describe("the one gate", () => {
 			default: false,
 			rules: [{ when: "owner.mood == 'wary'", set: "true" }]
 		})
-		genre(GATE_GENRE, {
+		genreKeeping(GATE_GENRE, {
 			name: { en: "Gate" },
 			family: "test",
 			slots: [

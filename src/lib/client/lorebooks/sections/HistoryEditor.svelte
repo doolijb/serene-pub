@@ -62,7 +62,7 @@
 				class="flex items-center gap-1 text-sm font-semibold"
 				for="heeYear"
 			>
-				Year <span class="text-error-500">*</span>
+				Year <span class="text-error-600-400">*</span>
 				<Icons.ScanEye
 					size={13}
 					class="text-surface-600-400 relative top-[1px]"
@@ -119,7 +119,7 @@
 	{#if calendarHint}
 		<p class="text-xs" aria-live="polite" data-lore-date-reads>
 			{#if calendarHint.problem}
-				<span class="text-error-700-300">{calendarHint.problem}</span>
+				<span class="text-error-600-400">{calendarHint.problem}</span>
 			{:else}
 				<span class="text-surface-700-300">Reads as</span>
 				<span class="font-semibold">{calendarHint.reads}</span>

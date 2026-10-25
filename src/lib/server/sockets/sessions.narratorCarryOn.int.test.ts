@@ -45,8 +45,10 @@ vi.mock("$lib/server/db", async () => {
  *
  * The planner names no speaker: in the Lair a named speaker is prepared as a
  * turn of their own (Adventure voiced them inside the narrator's run), and
- * auto-advance would play it as a second run. This file pins the narrator's
- * turn alone.
+ * auto-advance plays it as a second run. 🚧 Since lair fix 2 (2026-10-22) a
+ * plan naming nobody hands every AI delver a turn all the same — Elara
+ * answers each — so this file counts the narrator's PLANNED runs and the
+ * rows that are not Elara's: it pins the narrator's turn alone.
  */
 const ANSWER = JSON.stringify({
 	beats: ["The lantern gutters.", "Thunder, far off."],
@@ -301,10 +303,15 @@ async function respondRuns(sessionId: number) {
 	await settle()
 	const schema = await import("$lib/server/db/schema")
 	const runs = await testDb
-		.select({ specSlug: schema.pipelineRuns.specSlug })
+		.select({ specSlug: schema.pipelineRuns.specSlug, receipt: schema.pipelineRuns.receipt })
 		.from(schema.pipelineRuns)
 		.where(eq(schema.pipelineRuns.sessionId, sessionId))
-	return runs.filter((r) => r.specSlug === "core:spec/lair-respond").length
+	// The narrator's planned turns, never a delver's own (lair fix 2).
+	const planned = (r: { receipt: unknown }) =>
+		((r.receipt as { notes?: string[] } | null)?.notes ?? []).some((n) =>
+			n.includes("'via.turn.channel.story.pick': 'planned' fired")
+		)
+	return runs.filter((r) => r.specSlug === "core:spec/lair-reply" && planned(r)).length
 }
 
 /** A press of Continue (no entry), or of a pick, by `userId`. */
@@ -347,6 +354,9 @@ describe("B9 — Continue moves a narrator genre forward", () => {
 	test("deleting the last reply recalculates the order, and Continue then fires a narrator turn", async () => {
 		const w = await adventureSession("delete")
 		const reply = await firstReply(w)
+		// 🚧 Deletion needs a pipeline (RF fix 5): this session registers one.
+		const { registerTestDeletion } = await import("$lib/server/utils/testDb")
+		await registerTestDeletion(testDb, w.session.id)
 
 		const { sessionMessagesDeleteHandler } = await import("./sessions")
 		const { io } = recordingIo([w.owner.id])
@@ -403,13 +413,14 @@ describe("B9 — Continue moves a narrator genre forward", () => {
 		const w = await adventureSession("carry")
 		await firstReply(w)
 		const before = await respondRuns(w.session.id)
-		const rowsBefore = (await repliesOf(w.session.id)).length
+		const notElara = async () => (await repliesOf(w.session.id)).filter((r) => r.characterId !== w.elara)
+		const rowsBefore = (await notElara()).length
 
 		const res = await press(w, w.owner.id, "the carry-on")
 		expect(res.error).toBeUndefined()
 		expect(res.ok).toBe(true)
 		expect(await respondRuns(w.session.id)).toBe(before + 1)
-		const rows = await repliesOf(w.session.id)
+		const rows = await notElara()
 		expect(rows.length).toBe(rowsBefore + 1)
 		expect(rows.at(-1)!.role).toBe("assistant")
 		// And the carry-on prepares nothing after itself.

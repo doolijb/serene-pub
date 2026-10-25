@@ -8,8 +8,16 @@
  * The database is put in the state a 0.6 install holds before the migration —
  * pipelines bootstrapped, the column back with its foreign key, a value in it —
  * and the migration's own statements are run against it, read from the file
- * the app ships. Then the run's two readers are asked what the session
- * samples with: the executor's world and `resolveTaskConfig`.
+ * the app ships, then the later data upgrade that moves Story's reply onto
+ * its `reply` junction (0120), as the chain runs them. Then the run's two
+ * readers are asked what the session samples with: the executor's world and
+ * `resolveTaskConfig`.
+ *
+ * ⚠ The migration is frozen and names `generate`, the address of its day.
+ * Story's reply has called its model at `reply.prose.generate` since
+ * 2026-10-23 (D7), so the bootstrapped catalogue gives 0098 no Story step to
+ * see: the carried session is a **Guide** session, whose reply is still
+ * `generate`; the held session is a Story one, whose pick 0120 carries.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
@@ -23,6 +31,7 @@ import {
 	STORY_NARRATE_SPEC_ID,
 	STORY_RESPOND_SPEC_ID
 } from "$lib/server/pipelines/specs"
+import { GUIDE_GENRE_ID, GUIDE_RESPOND_SPEC_ID } from "@serene-pub/core-catalog"
 
 const MIGRATION = "0098_retire_session_sampling_column"
 
@@ -131,14 +140,14 @@ beforeAll(async () => {
 		.values({ username: "session-sampling-migration-user", isAdmin: false })
 		.returning()
 	userId = user!.id
-	const session = async () =>
+	const session = async (genreId?: string) =>
 		(
 			await db
 				.insert(schema.sessions)
-				.values({ userId, isGroup: false })
+				.values({ userId, isGroup: false, ...(genreId ? { genreId } : {}) } as any)
 				.returning()
 		)[0]!.id
-	carriedId = await session()
+	carriedId = await session(GUIDE_GENRE_ID)
 	heldId = await session()
 	emptyId = await session()
 
@@ -166,6 +175,11 @@ beforeAll(async () => {
 	)
 	for (const statement of file.split("--> statement-breakpoint"))
 		if (statement.trim()) await client().exec(statement)
+	// … and the chain on to today: Story's reply rows move to its prose branch (0120).
+	const { replyProseUpgrade } = await import("$lib/server/db/dataUpgrades/0120_rulesets_reply_changes")
+	await db.transaction(async (tx) => {
+		await replyProseUpgrade(tx as never)
+	})
 }, 180_000)
 
 afterAll(async () => {
@@ -177,7 +191,7 @@ describe(`${MIGRATION}: the session column becomes the session's panel row`, () 
 		const picks = await picksOf(carriedId)
 		const slugs = picks.map((p) => p.slug)
 		expect(slugs).toEqual(
-			expect.arrayContaining([STORY_RESPOND_SPEC_ID, STORY_NARRATE_SPEC_ID])
+			expect.arrayContaining([GUIDE_RESPOND_SPEC_ID, STORY_NARRATE_SPEC_ID])
 		)
 		for (const p of picks) {
 			expect(p.nodeKey).toBe("generate")
@@ -212,6 +226,9 @@ describe(`${MIGRATION}: the session column becomes the session's panel row`, () 
 		const picks = await picksOf(heldId)
 		const reply = picks.filter((p) => p.slug === STORY_RESPOND_SPEC_ID)
 		expect(reply.map((p) => p.value)).toEqual([panelPickId])
+		// … at the reply's address today, where 0120 carried it.
+		const { oracleNodeKeyOf } = await import("$lib/server/pipelines/config/world")
+		expect(reply.map((p) => p.nodeKey)).toEqual([await oracleNodeKeyOf(db as any, { slug: STORY_RESPOND_SPEC_ID })])
 		const narrate = picks.find((p) => p.slug === STORY_NARRATE_SPEC_ID)
 		expect(narrate?.value).toBe(columnPickId)
 	}, 60_000)
@@ -227,13 +244,14 @@ describe(`${MIGRATION}: the session column becomes the session's panel row`, () 
 	}, 60_000)
 
 	it("the executor samples with the carried pick, at session scope", async () => {
-		const { buildWorld } = await import("$lib/server/pipelines/config/world")
+		const { buildWorld, oracleNodeKeyOf } = await import("$lib/server/pipelines/config/world")
 		const world = await buildWorld(db, {
 			sessionId: carriedId,
-			specId: STORY_RESPOND_SPEC_ID
+			specId: GUIDE_RESPOND_SPEC_ID
 		})
-		const sourced: any = resolveConfigSources(world as any, ["generate"])
-		const at = sourced?.generate?.sampling?.[SLOT_VALUE]
+		const key = (await oracleNodeKeyOf(db as any, { slug: GUIDE_RESPOND_SPEC_ID }))!
+		const sourced: any = resolveConfigSources(world as any, [key])
+		const at = sourced?.[key]?.sampling?.[SLOT_VALUE]
 		expect(Number(at?.value)).toBe(columnPickId)
 		expect(at?.scopeKind).toBe("session")
 	}, 60_000)

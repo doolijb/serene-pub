@@ -108,7 +108,10 @@
 		return (m.parts ?? [])
 			.filter(
 				(p) =>
-					(p.type === "core:image" || p.type === "core:file") &&
+					(p.type === "core:image" ||
+						p.type === "core:audio" ||
+						p.type === "core:video" ||
+						p.type === "core:file") &&
 					p.revision === (active[String(p.step)] ?? 0) &&
 					typeof p.data?.assetId === "number"
 			)

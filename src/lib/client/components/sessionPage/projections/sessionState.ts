@@ -48,6 +48,8 @@ export interface SessionStateSource {
 	wordsOnly?: boolean
 	/** 🚧 The people the story has met (Q3-5). */
 	metPeople?: readonly { entryId: number; name: string }[]
+	/** 🚧 The session's story clock in words (RF fix 8). */
+	storyTime?: string | null
 }
 
 /** Before the store answers for THIS session: empty means "not yet", never "nothing". */
@@ -84,7 +86,11 @@ function slotOf(d: Sockets.State.SlotDescriptor): SessionStateSlotV1 {
 		// 🚧 How it reads at a table that keeps no numbers (Q2-3).
 		...(d.words?.length ? { words: d.words.map((b) => ({ upTo: b.upTo, label: b.label })) } : {}),
 		// 🚧 Drawn only while it holds something (Q3-8).
-		...(d.shownWhenSet ? { shownWhenSet: true as const } : {})
+		...(d.shownWhenSet ? { shownWhenSet: true as const } : {}),
+		// 🚧 RF fix 8: the rules' kind and hint, or what the host keeps it as.
+		...(d.kind ? { kind: d.kind } : {}),
+		...(d.shownAs ? { shownAs: d.shownAs } : {}),
+		...(d.hostState ? { hostState: d.hostState } : {})
 	}
 }
 
@@ -123,6 +129,11 @@ function ownerOf(o: Sockets.State.StateOwnerRow): SessionStateOwnerV1 {
 		...(o.face !== undefined ? { face: o.face ? { ...o.face } : null } : {}),
 		// 🚧 What the ruleset works out from the sheet (2026-10-18): armour class.
 		...(o.derived?.length ? { derived: detached(o.derived) } : {}),
+		// 🚧 The owner's tie sides (ties on the graph, screen 2).
+		...(o.ties?.length ? ({ ties: detached(o.ties) } as unknown as Partial<SessionStateOwnerV1>) : {}),
+		// 🚧 RF fix 8: what it holds, zone by zone, and its carry switches.
+		...(o.zones?.length ? { zones: detached(o.zones) } : {}),
+		...(o.carries?.length ? { carries: detached(o.carries) } : {}),
 		configs
 	}
 }
@@ -216,6 +227,7 @@ export function projectSessionState(
 		...(source.metPeople?.length
 			? { metPeople: source.metPeople.map((p) => ({ entryId: p.entryId, name: p.name })) }
 			: {}),
+		...(source.storyTime ? { storyTime: source.storyTime } : {}),
 		...((): { offers?: SessionStateOfferV1[] } => {
 			const offers = offersOf(source.proposals, owners, source.viewerUserId ?? null)
 			return offers.length ? { offers } : {}

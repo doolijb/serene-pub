@@ -558,59 +558,19 @@ export async function setSessionNodeRebind(
 		return {
 			error: `'${opts.spec}' serves '${version.inputGenre}', not this session's genre ('${session.genreId}').`
 		}
-	// …and is a pipeline this session actually runs: for some event its lock
-	// answers, the session's own resolution picks this spec — the reply
-	// through the reply path's resolver (pub binding and companion rule
-	// included), any other event through the event dispatcher's. A swap on a
-	// pipeline nothing runs here would be a choice with no effect, stored as
-	// if it had one. An action's spec is the session's whenever its action is
-	// offered, which its own listing decides — so a lock that names the action
-	// passes whatever its other events resolve to (the spec runs through the
-	// action either way). A spec with no lock at all is run by nothing and
-	// refused.
+	// …and is a pipeline this session actually runs (🚧 PLAN-layering D7):
+	// some registration in force in the session runs it — an event's, an
+	// action's or a routine's. A swap on a pipeline nothing runs here would
+	// be a choice with no effect, stored as if it had one.
 	if (opts.definitionId != null) {
-		const events = [
-			...new Set(
-				[
-					version?.inputEvent,
-					...(Array.isArray(version?.inputEvents) ? (version!.inputEvents as string[]) : [])
-				].filter((e): e is string => typeof e === "string" && !!e)
-			)
-		]
-		const { sessionEvents } = await import("@serene-pub/sdk")
-		const actionLocked = events.includes(sessionEvents.sessionAction)
-		const judged = events.filter((e) => e !== sessionEvents.sessionAction)
-		if (!events.length)
+		const { effectiveRegistrations } = await import(
+			"$lib/server/pipelines/registrations/resolve"
+		)
+		const resolved = await effectiveRegistrations(db, opts.sessionId)
+		if (!resolved?.effective.some((r) => r.pipeline === opts.spec))
 			return {
-				error: `'${opts.spec}' is not a pipeline this session runs — it answers no event.`
+				error: `'${opts.spec}' is not a pipeline this session runs — its preset and its genre register another.`
 			}
-		if (!actionLocked) {
-			const { resolveSessionEventSpec } = await import(
-				"$lib/server/pipelines/runtime/sessionEvents"
-			)
-			const { resolveSubjectSpec } = await import(
-				"$lib/server/pipelines/entities/sessionGenres"
-			)
-			let runs = false
-			for (const event of judged) {
-				const chosen =
-					event === sessionEvents.messageRespond
-						? await resolveSubjectSpec(db, session.genreId, event, {
-								sessionId: opts.sessionId
-							})
-						: await resolveSessionEventSpec(db, session.genreId, event, {
-								sessionId: opts.sessionId
-							})
-				if (chosen === opts.spec) {
-					runs = true
-					break
-				}
-			}
-			if (!runs)
-				return {
-					error: `'${opts.spec}' is not a pipeline this session runs — its preset, its genre and its own choices bind another for ${judged.join(", ")}.`
-				}
-		}
 	}
 
 	const node = await exposeOf(db, spec.activeVersionId, opts.nodeKey)

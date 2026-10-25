@@ -224,7 +224,7 @@
 	{#snippet headerExtra()}
 		{#if user}
 			<div class="flex flex-wrap items-center gap-1.5 text-xs">
-				<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+				<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
 					{roleWord(user)}
 				</span>
 				{#if isSelf}

@@ -24,9 +24,9 @@ import { STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import { groupSteps } from "$lib/server/pipelines/config/panel/groups"
 
 const SECRET = "test-instance-secret"
-/** Story's reply: the reply, then the reckoning and the sweep (2026-10-19; Adventure retired). */
+/** Story's reply: one model call since the reckoning and the sweep became routines (lane 3, 2026-10-20); 🚧 two alternatives since *Replies carry changes* (D7; grouped by branch, lane T3). */
 const STORY = "core:spec/story-respond"
-const LAIR = "core:spec/lair-respond"
+const LAIR = "core:spec/lair-reply"
 
 let db: TestDb
 let userId: number
@@ -83,68 +83,90 @@ function headings(v: NamespaceView): string[] {
 	return out
 }
 
-describe("Story's turn: one group per model call", () => {
-	/** The three calls, by the node keys the payload never names (ruled 2026-10-19). */
-	const AGENTS = [
-		{ call: "generate", heading: "Reply" },
-		{ call: "reckon.on.reckonWrite", heading: "What the reply changed" },
-		{ call: "sweep.due.sweepWrite", heading: "Look back over the story" }
-	]
+/**
+ * ⏳ Rewritten (PLAN-layering lane 5a, 2026-10-20): the reckoning and the
+ * sweep left the reply — they are **routines** now (`core:spec/story-reckoning`,
+ * `core:spec/story-sweep`, lane 3), each its own pipeline with its own panel.
+ *
+ * 🚧 Rewritten again (lane T3, 2026-10-23): *Replies carry changes* (A2's D7
+ * junction) made the reply two alternative model calls — `reply.prose.generate`
+ * and `reply.changes.generate`, one per branch of the `reply` junction. Each is
+ * its own group, headed by its branch where the two would read alike (*Reply ·
+ * prose*, *Reply · changes*); each branch's own steps sit with its call.
+ *
+ * 🚧 RF fix 3 (2026-10-23): a branch holds only its call and what reads that
+ * call's answer. The save, the commit and the line's face run once after the
+ * junction, so each is ONE step, filed once in the whole pipeline — never a
+ * copy under each call (two **Closest sprite** steps were two settings for one
+ * thing; the owner ruled no two steps' settings are ever merged into one).
+ */
+describe("Story's reply: two alternative calls, a group each", () => {
+	const PROSE = "reply.prose.generate"
+	const CHANGES = "reply.changes.generate"
+	const groupOf = (v: NamespaceView, call: string) =>
+		calls(v).find((g) => g.front.some((o) => o.id === id(call, "connection")))!
 
-	it("draws three groups — the reply, the reckoning, the sweep — then the whole pipeline", async () => {
+	it("draws a group per branch, each headed by its branch, then the whole pipeline", async () => {
 		const v = await asAdmin(STORY)
-		expect(calls(v).map((g) => g.heading)).toEqual(AGENTS.map((a) => a.heading))
+		expect(calls(v).map((g) => g.heading).sort()).toEqual(["Reply · changes", "Reply · prose"])
+		expect(groupOf(v, PROSE).heading).toBe("Reply · prose")
+		expect(groupOf(v, CHANGES).heading).toBe("Reply · changes")
 		expect(v.groups.at(-1)).toMatchObject({ kind: "pipeline", heading: "Whole pipeline" })
-		expect(v.groups.map((g) => g.key)).toEqual(v.groups.map((_, i) => `g${i}`))
-		for (const g of calls(v)) expect(g.purpose).toBeTruthy()
 	})
 
-	it("gives each group exactly its own prompt, connection and sampling", async () => {
+	it("gives the prose reply its own prompt, connection and sampling, Loadout first", async () => {
 		const v = await asAdmin(STORY)
-		const prompts: string[] = []
-		calls(v).forEach((g, i) => {
-			const a = AGENTS[i]!
-			const p = ofControl(g, "prompts-ref").map((o) => o.id)
-			expect(p).toHaveLength(1)
-			prompts.push(p[0]!)
-			expect(ofControl(g, "connection-ref").map((o) => o.id)).toEqual([id(a.call, "connection")])
-			expect(ofControl(g, "sampling-ref").map((o) => o.id)).toEqual([id(a.call, "sampling")])
-			// …and in that order: Loadout (I12), Prompt, Model, Sampling.
-			expect(g.front.slice(0, 4).map((o) => o.control)).toEqual([
-				"loadout-ref",
-				"prompts-ref",
-				"connection-ref",
-				"sampling-ref"
-			])
-		})
-		expect(new Set(prompts).size).toBe(prompts.length)
-		// No group carries another's: nothing model-shaped is left over.
-		const pipeline = v.groups.at(-1)!
-		expect(pipeline.front.filter((o) => /-ref$/.test(o.control) && o.control !== "scripts-chain")).toEqual([])
+		const g = groupOf(v, PROSE)
+		expect(ofControl(g, "prompts-ref")).toHaveLength(1)
+		expect(ofControl(g, "connection-ref").map((o) => o.id)).toEqual([id(PROSE, "connection")])
+		expect(ofControl(g, "sampling-ref").map((o) => o.id)).toEqual([id(PROSE, "sampling")])
+		expect(g.front.slice(0, 4).map((o) => o.control)).toEqual(["loadout-ref", "prompts-ref", "connection-ref", "sampling-ref"])
 	})
 
-	it("files the budget, which serves every call, under the whole pipeline", async () => {
+	/** The tail after the junction, by its steps' headings: the save, the commit, the line's face. */
+	const TAIL = ["Update message", "Apply what the reply changed", "Closest sprite", "Show sprite"]
+
+	it("keeps each branch's own steps with its call, and nothing of the tail", async () => {
 		const v = await asAdmin(STORY)
-		const [reply] = calls(v)
-		const pipeline = v.groups.at(-1)!
-		const has = (g: SettingsGroup, nodeKey: string, slot: string, path = "") =>
-			g.advanced.some((s) => s.options.some((o) => o.id === id(nodeKey, slot, path)))
-		expect(has(pipeline, "contextBudget", "params", "safetyMargin")).toBe(true)
-		expect(has(reply!, "contextBudget", "params", "safetyMargin")).toBe(false)
+		const changes = groupOf(v, CHANGES)
+		expect(ofControl(changes, "connection-ref").map((o) => o.id)).toEqual([id(CHANGES, "connection")])
+		expect(ofControl(changes, "sampling-ref").map((o) => o.id)).toEqual([id(CHANGES, "sampling")])
+		const heads = changes.advanced.map((s) => s.heading)
+		expect(heads).toContain("What a reply may change")
+		for (const g of [changes, groupOf(v, PROSE)])
+			for (const h of TAIL) expect(g.advanced.map((s) => s.heading)).not.toContain(h)
+		// The Review arm that could never run is not drawn at all.
+		expect(headings(v)).not.toContain("Propose what the reply changed")
 	})
 
-	it("shows a non-admin the same three headings, each with its own prompt and nothing to tune", async () => {
+	it("files the tail once, in the whole pipeline: one save, one commit, one Closest sprite, one Show sprite", async () => {
+		const v = await asAdmin(STORY)
+		const pipeline = v.groups.at(-1)!
+		expect(pipeline.kind).toBe("pipeline")
+		const everywhere = groupSteps(v.groups).map((s) => s.heading)
+		for (const h of TAIL) {
+			expect(pipeline.advanced.filter((s) => s.heading === h), h).toHaveLength(1)
+			expect(everywhere.filter((x) => x === h), h).toHaveLength(1)
+		}
+		// No step heading is suffixed by a branch any more: nothing clashes inside a group.
+		expect(everywhere.filter((h) => / · (prose|changes)$/.test(h))).toEqual([])
+	})
+
+	it("files the budget in the whole pipeline: it serves the turn, not one call", async () => {
+		const v = await asAdmin(STORY)
+		const holder = v.groups.find((g) => g.advanced.some((s) => s.options.some((o) => o.id === id("contextBudget", "params", "safetyMargin"))))
+		expect(holder?.kind).toBe("pipeline")
+	})
+
+	it("shows a non-admin the one group, with its prompt and nothing to tune", async () => {
 		const v = await asUser(STORY)
-		expect(v.groups.map((g) => g.heading)).toEqual(AGENTS.map((a) => a.heading))
-		v.groups.forEach((g, i) => {
-			const a = AGENTS[i]!
-			expect(ofControl(g, "prompts-ref")).toHaveLength(1)
-			for (const o of g.front.filter((f) => f.control !== "prompts-ref")) {
-				expect(o.id).toBe(id(a.call, "connection"))
-				expect(o.writable).toBe(false)
-			}
-			expect(g.advanced).toEqual([])
-		})
+		expect(v.groups).toHaveLength(1)
+		const [g] = v.groups
+		expect(ofControl(g!, "prompts-ref")).toHaveLength(1)
+		for (const o of g!.front.filter((f) => f.control !== "prompts-ref")) {
+			expect(o.writable).toBe(false)
+		}
+		expect(g!.advanced).toEqual([])
 	})
 
 	it("never numbers a heading", async () => {
@@ -181,19 +203,18 @@ describe("a heading never names a node", () => {
 })
 
 describe("Story's reply group", () => {
-	it("is the first group, headed Reply, with the reply's own prompt, connection and sampling", async () => {
+	it("leads with the prose reply's call — its own prompt, connection and sampling", async () => {
 		const v = await asAdmin(STORY_RESPOND_SPEC_ID)
-		const g = v.groups[0]!
-		expect(g.heading).toBe("Reply")
+		const g = calls(v).find((x) => x.heading === "Reply · prose")!
 		expect(g.kind).toBe("model-call")
 		expect(ofControl(g, "prompts-ref").map((o) => o.id)).toEqual([id("context", "prompts")])
-		expect(ofControl(g, "connection-ref").map((o) => o.id)).toEqual([id("generate", "connection")])
-		expect(ofControl(g, "sampling-ref").map((o) => o.id)).toEqual([id("generate", "sampling")])
+		expect(ofControl(g, "connection-ref").map((o) => o.id)).toEqual([id("reply.prose.generate", "connection")])
+		expect(ofControl(g, "sampling-ref").map((o) => o.id)).toEqual([id("reply.prose.generate", "sampling")])
 	})
 
 	it("fronts Loadout, Prompt, Model and Sampling; the lore sources' switches, labelled by their step, serve the whole pipeline", async () => {
 		const v = await asAdmin(STORY_RESPOND_SPEC_ID)
-		expect(v.groups[0]!.front.slice(0, 4).map((o) => o.control)).toEqual([
+		expect(calls(v).find((x) => x.heading === "Reply · prose")!.front.slice(0, 4).map((o) => o.control)).toEqual([
 			"loadout-ref",
 			"prompts-ref",
 			"connection-ref",
@@ -244,27 +265,24 @@ describe("the Lair's turn", () => {
 	 * The party speech (owner ruling 2026-09-30): "they are character turns,
 	 * not first delver, later delver". Each delver speaking takes ONE
 	 * character turn — a planned delver's and a picked one's alike, on one
-	 * prompt, one model and one sampling — and the Castellan speaking for
-	 * the party is its own call.
+	 * prompt, one model and one sampling. Rewritten 2026-10-21 (Lair rewrite
+	 * R13): nobody speaks for the party, so there is no party call beside it.
 	 */
-	it("shows one Character turn group, with one prompt, one model and one sampling, and the Castellan's party call beside it", async () => {
+	it("shows one Character turn group, with one prompt, one model and one sampling, and no party call", async () => {
 		const v = await asAdmin(LAIR)
 		const headings = calls(v).map((g) => g.heading)
 		expect(headings.filter((h) => h === "Character turn")).toHaveLength(1)
-		expect(headings).toContain("Castellan speaks for the party")
+		expect(headings).not.toContain("Castellan speaks for the party")
 		for (const gone of ["Voices", "First voice", "Further voices", "Picked voice"])
 			expect(headings).not.toContain(gone)
 		const turn = calls(v).find((g) => g.heading === "Character turn")!
-		expect(turn.purpose).toMatch(/each delver speaks/i)
+		expect(turn.purpose).toMatch(/every delver/i)
 		expect(ofControl(turn, "prompts-ref")).toHaveLength(1)
 		expect(ofControl(turn, "connection-ref")).toHaveLength(1)
 		expect(ofControl(turn, "sampling-ref")).toHaveLength(1)
 		// Nothing model-shaped of the character turn is left in the whole pipeline.
 		const pipeline = v.groups.find((g) => g.kind === "pipeline")!
 		expect(pipeline.front.filter((o) => o.control === "prompts-ref" || o.control === "connection-ref" || o.control === "sampling-ref")).toEqual([])
-		const party = calls(v).find((g) => g.heading === "Castellan speaks for the party")!
-		expect(party.purpose).toMatch(/one call/i)
-		expect(ofControl(party, "prompts-ref")).toHaveLength(1)
 	})
 })
 
@@ -279,41 +297,26 @@ describe("how a Model or Sampling value reads", () => {
 			}
 	})
 
-	it("reads a configured value from inside a session as the configuration's, by name", async () => {
+	it("reads a configured value from inside a session as the genre's defaults', by name", async () => {
 		const [cfg] = await db
 			.insert(schema.samplingConfigs)
 			.values({ name: "Steady narration", values: {} } as any)
 			.returning({ id: schema.samplingConfigs.id, name: schema.samplingConfigs.name })
-		const v0 = await asAdmin(STORY)
-		const selected = v0.selectedConfig!
-		// Written straight to the selected configuration's rows, as a config edit would.
-		await db
-			.delete(schema.pipelineConfigValues)
-			.where(
-				and(
-					eq(schema.pipelineConfigValues.configId, selected.id),
-					eq(schema.pipelineConfigValues.nodeKey, "generate"),
-					eq(schema.pipelineConfigValues.slot, "sampling")
-				)
-			)
-		await db.insert(schema.pipelineConfigValues).values({
-			configId: selected.id,
-			nodeKey: "generate",
-			slot: "sampling",
-			path: "",
-			value: cfg!.id
-		} as any)
+		// An administrator's instance-wide value: on the genre's defaults'
+		// registration of the reply (PLAN-layering D5), not a configuration.
+		const { setPipelineValue } = await import("$lib/server/utils/testDb")
+		await setPipelineValue(db, STORY, { nodeKey: "reply.prose.generate", slot: "sampling", path: "" }, cfg!.id)
 		const v = await asAdmin(STORY, { sessionId })
-		const sampling = calls(v)[0]!.front.find((o) => o.control === "sampling-ref")!
+		const sampling = calls(v).find((g) => g.heading === "Reply · prose")!.front.find((o) => o.control === "sampling-ref")!
 		expect(sampling.inherits).toEqual({ from: "config", label: `As configured — ${cfg!.name}` })
 		expect(sampling.provenance?.source).toBe("config")
-		expect(sampling.provenance?.label).toBe(`From the “${v.selectedConfig!.name}” configuration`)
+		expect(sampling.provenance?.label).toBe("From the genre's defaults")
 		expect(sampling.valueLabel).toBe(cfg!.name)
 	})
 })
 
 describe("a step label and a step purpose on the spec", () => {
-	it("head the group and sit under it, and a label names a step in Advanced", async () => {
+	it("a purpose sits under its group, and a label names a step in Advanced", async () => {
 		const [spec] = await db
 			.select({ versionId: schema.pipelineSpecs.activeVersionId })
 			.from(schema.pipelineSpecs)
@@ -339,7 +342,7 @@ describe("a step label and a step purpose on the spec", () => {
 		}
 		// Put back what the catalog ships once this test is done, so the
 		// shipped-spec sweeps below read the documents as they boot.
-		const shipped = await Promise.all(["generate", "prompt", "reckon.on.reckonWrite"].map(nodeRow))
+		const shipped = await Promise.all(["reply.prose.generate", "prompt"].map(nodeRow))
 		onTestFinished(async () => {
 			for (const row of shipped)
 				await db
@@ -347,26 +350,19 @@ describe("a step label and a step purpose on the spec", () => {
 					.set({ expose: row.expose as any })
 					.where(eq(schema.pipelineNodes.id, row.id))
 		})
-		await relabel("generate", {
+		await relabel("reply.prose.generate", {
 			label: "Turn writer",
 			purpose: "Writes what happens next."
 		})
 		await relabel("prompt", { label: "Writer's prompt layout" })
-		// The reckoning without its label or purpose, as a spec that sets neither.
-		const scene = await nodeRow("reckon.on.reckonWrite")
-		const { label: _label, purpose: _purpose, ...unlabelled } = (scene.expose ?? {}) as Record<string, unknown>
-		await db
-			.update(schema.pipelineNodes)
-			.set({ expose: unlabelled as any })
-			.where(eq(schema.pipelineNodes.id, scene.id))
 
+		// The prose reply's call, labelled: its group reads the label — no
+		// branch beside it now that no other group reads alike — and its
+		// purpose sits under it.
 		const v = await asAdmin(STORY)
-		const planner = calls(v)[0]!
-		expect(planner.heading).toBe("Turn writer")
+		const planner = calls(v).find((g) => g.heading === "Turn writer")!
 		expect(planner.purpose).toBe("Writes what happens next.")
-		// The status heads a call that carries no label, with no purpose under it.
-		expect(calls(v)[1]!.heading).toBe("Noting what changed")
-		expect(calls(v)[1]!.purpose).toBeUndefined()
+		expect(calls(v).map((g) => g.heading)).toContain("Reply")
 		expect(planner.advanced.map((s) => s.heading)).toContain("Writer's prompt layout")
 		// Every option of that step carries the same heading.
 		expect(groupSteps(v.groups).map((s) => s.heading)).toContain("Writer's prompt layout")

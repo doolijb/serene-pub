@@ -146,6 +146,10 @@ async function createRunSpec(
 			and(
 				eq(schema.pipelineRuns.sessionId, sessionId),
 				or(
+					// 🚧 The run a `session-created` registration started (D7)…
+					sql`${schema.pipelineRuns.registrationKey} LIKE 'session-created→%'`,
+					// …or one whose pipeline suits the event (D3), or ⏳ is locked to it.
+					sql`coalesce(${versions.suits}::jsonb, '[]'::jsonb) @> ${JSON.stringify([sessionCreated])}::jsonb`,
 					eq(versions.inputEvent, sessionCreated),
 					sql`coalesce(${versions.inputEvents}::jsonb, '[]'::jsonb) @> ${JSON.stringify([sessionCreated])}::jsonb`
 				)

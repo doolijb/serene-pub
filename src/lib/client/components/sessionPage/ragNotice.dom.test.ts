@@ -51,7 +51,19 @@ let client: ReturnType<typeof makeClientSocket>
 let app: ReturnType<typeof mount> | null = null
 let target: HTMLElement
 
+/** A Map-backed Storage: this environment's own is not one. */
+function memoryStorage() {
+	const m = new Map<string, string>()
+	return {
+		getItem: (k: string) => m.get(k) ?? null,
+		setItem: (k: string, v: string) => void m.set(k, String(v)),
+		removeItem: (k: string) => void m.delete(k),
+		clear: () => m.clear()
+	}
+}
+
 beforeEach(() => {
+	vi.stubGlobal("localStorage", memoryStorage())
 	client = makeClientSocket()
 	setSocket(client as never)
 	setInterestUser({ id: 1, isAdmin: false })
@@ -76,6 +88,7 @@ function mountNotice(isAdmin: boolean) {
 afterEach(() => {
 	if (app) unmount(app)
 	app = null
+	vi.unstubAllGlobals()
 	_resetInterestForTests()
 	setSocket(null)
 	document.body.innerHTML = ""
@@ -289,5 +302,58 @@ describe("what the notice offers", () => {
 		reply(counts(5, 0, 5))
 		expect(text()).toContain("need re-indexing")
 		expect(pressNamed(/re-index|prioritize|set up/i)).toBeUndefined()
+	})
+})
+
+/**
+ * Once a session, then an icon (polish parity L1, 2026-10-24): the line shows
+ * the first time this device opens a session it applies to; after that it is
+ * an icon in the composer's footer that opens the line again.
+ */
+describe("once a session, then an icon", () => {
+	const showButton = () =>
+		target.querySelector<HTMLButtonElement>('button[aria-label="Show the indexing notice"]')
+	const collapseButton = () =>
+		target.querySelector<HTMLButtonElement>('button[aria-label="Collapse the indexing notice"]')
+
+	test("the first open shows the line; the next open of that session shows the icon", () => {
+		reply(counts(4, 4))
+		expect(text()).toContain("Lorebook entries aren't indexed yet")
+		expect(showButton()).toBeNull()
+		// The session opens again (a fresh mount, as a page load).
+		mountNotice(false)
+		reply(counts(4, 4))
+		expect(text()).not.toContain("Lorebook entries aren't indexed yet")
+		const icon = showButton()!
+		expect(icon, "an icon stands for the notice").toBeTruthy()
+		expect(icon.getAttribute("aria-expanded")).toBe("false")
+		expect(icon.getAttribute("title")).toContain("Lorebook entries aren't indexed yet")
+		icon.click()
+		flushSync()
+		expect(text()).toContain("Lorebook entries aren't indexed yet")
+	})
+
+	test("collapsing the line makes it the icon at once", () => {
+		reply(counts(40, 28))
+		const collapse = collapseButton()!
+		expect(collapse.getAttribute("aria-expanded")).toBe("true")
+		collapse.click()
+		flushSync()
+		expect(text()).not.toContain("Indexing 12 of 40")
+		expect(showButton()).toBeTruthy()
+	})
+
+	test("another session's notice is still unread", () => {
+		reply(counts(4, 4))
+		if (app) unmount(app)
+		target.innerHTML = ""
+		app = mount(RagNotice, {
+			target,
+			props: { sessionId: 8, totalMessages: 40 },
+			context: new Map([["userCtx", { user: { id: 1, isAdmin: false } }]])
+		})
+		flushSync()
+		reply(counts(4, 4))
+		expect(text()).toContain("Lorebook entries aren't indexed yet")
 	})
 })

@@ -14,7 +14,7 @@ A **widget** is one piece of the screen with its own settings, such as **Message
 
 ### Open the editor
 
-In a session, press **Layout** at the right end of the header (on a narrow window it's just the icon, *Customize layout*). The editor's toolbar replaces the header, with two tabs:
+In a session, press **Layout** at the right end of the header (on a narrow window it's just the icon, *Customize layout*; on a phone it's **Customize layout** in the header's **⋯** menu). The editor's toolbar replaces the header, with two tabs:
 
 - **Layouts**: copy in a ready-made layout, or save yours. See [Layouts](#layouts).
 - **Arrange**: add, remove and move widgets, and open each one's settings. See [Arrange](#arrange).
@@ -57,6 +57,7 @@ Scene Portraits sits in a panel of its own to the right of the conversation, and
 | **Backdrop** | The session's backdrop: one picture that sets the scene, shown filling the widget. A pipeline can set it, or you can: **Change** opens a picker with each person in the session and the pictures in their gallery, then, under **From this session**, the pictures drawn in this session (newest first); choosing one makes it the backdrop for everyone in the session; **Clear** takes it away; **Illustrate** draws the scene as it stands and makes that the backdrop (it runs the [Scene](./sessions.md#scene) action, so it shows only where Scene is offered). Only the session's owner (or an admin) sees Illustrate, Change and Clear. With none set it says *No backdrop yet — Scene will set one, or pick an image*. Settings: **Fit** (*Fill*, which crops the edges, or *Whole picture*) and **Dim** (0 to 100: darkens the picture so text over it is easier to read). The backdrop belongs to the session, not to you: it is not your app background and not a picture on a message. |
 | **Places** | Where the scene is, what is around it and where it can go: the places of the session's lorebook, as the session reads them (its line, at its [story clock](./lorebook-time.md#the-story-clock); a place switched off or archived by then is left out). As a **List**, each place shows its category in its colour, the faces of the cast standing there, and its ways out as one line (*→ The Guardroom, The Crypt*); the place the scene is at is marked **Here**. Click a place to open it in the lorebook. As a **Map**, the same places are squares joined by arrows (an arrowhead at each end for a way that runs both ways), **Here** ringed; **+** and **−** zoom, and you scroll to move around. Click a square to see its ways, what the lorebook links to it (its keeper, say), who is there and what it holds, with **Open entry**. **Show the map** / **Show the list** switches between them for you. *This book has no places yet* and *This session reads no lorebook* say why it is empty. Settings: **View** (*List* or *Map*), **Pick out** (*Where the scene is*, *Where the cast stand* or *Both*); under **Map**, **Categories** (one per line; empty shows every place) and **Show ways out**. See [Places and maps](./lorebook-places.md). |
 | **Who's here** | The people in this session and who has it open right now. Under **Here**, a row for each person with the session open in any tab: their name (*you* on yours), the persona they write as with its face (click it to open them: their cast member if the session's lorebook has them, otherwise their card), *typing…* while they write, and *Owner* or *Guest*. Under **Away**, the session's other people, with when they were last here (*Last here 5m ago*; *Not seen lately* when the app has not seen them since it was last started). *Nobody else is here.* when you have the session to yourself. One per layout. Settings: **Faces** and **Show who is away**. See [Guests](./sessions.md#guests). |
+| **While you were away** | What the session's [routines](./sessions.md#routines) did: each run's name, when it ran, what it wrote, and why one was skipped or paused (_Skipped: already waiting_, _Paused after 12 runs in a row_), a run started by hand marked **Run now**. Runs since you last played are under **While you were away**, older ones under **Earlier**; **Refresh** reads it again. An administrator can open a run in the inspector. No layout adds it for you: add it from the tray. |
 
 A plugin can add widgets of its own, and an administrator can write new ones or clone and change these (see [Component authoring](./component-authoring.md)). Once switched on, they appear in the same tray.
 
@@ -96,8 +97,9 @@ Pictures you pinned in an earlier version (from the composer's old **Pinned imag
 These are the Messages widget's own settings:
 
 - **Composer**: *Classic card*, *Single-line pill* (one row: your face, the text, then Preview, More and a round Send), *Tall editor* (for long turns) or *Page line* (no box: you write on the page itself, in the story's own type, above a faint underline; the controls stay faint until you're writing, and Send appears once there's something to send). Send, Preview and More work the same in all four.
+- 🚧 **Composer on the other tabs**: how the field is drawn while a [channel tab](#channel-tabs) other than the first is shown, or *Same as the first tab*.
 - **Composer position**: *Bottom* or *Top*.
-- **Line width**: *Full* (the default) runs the messages across the whole widget. *Comfortable* keeps them to an easy reading width, centred.
+- **Line width**: *Column* (the default) keeps the messages and the composer to a reading column of about 76 characters of story text, centred; it grows with your story text size and never runs wider than the widget. *Full* runs them across the whole widget. *Comfortable* is a narrower column, about 640px of prose.
 - **Presentation**: *Follow the channel*, *Rows* or *Folio*. *Rows* draws each line with its avatar, name, time and controls. *Folio* reads the lines as one block of prose, the way a manuscript reads: each line is a paragraph, and a thin rule with a name marks where the speaker changes. There are no avatars, times or swipe arrows, and no scene or date markers. A line's menu, Edit and the selection controls appear at its edge when you point at it or tap it, and the composer becomes the *Page line* unless you picked another. Folio keeps your style's typeface and colours, but not its cards or bubbles. *Follow the channel*, the default, reads a widget showing a manuscript-style channel (the Writing Room's *Manuscript*) as Folio, and any other as Rows.
 - **Message order**: *Newest at the bottom* (the default) or *Newest at the top*.
 - **Show messages** / **Show composer**: hide either half. With only the log, it's a reading pane.
@@ -117,23 +119,31 @@ How a card and glass look comes from your theme, so a custom theme can restyle b
 
 ### A second Messages widget for one channel
 
-Some sessions have more than one channel. The [Lair](./genre-lair.md) has the story and the **Sanctum**, your talk with the Castellan. A layout can give a channel a widget of its own: a second **Messages** widget with its **Channel** setting on that channel. The Lair's own layout does this.
+Some sessions have more than one channel. The [Lair](./genre-lair.md) has the story and the **Sanctum**, your talk with the Castellan. A layout can give a channel a widget of its own: a second **Messages** widget with its **Channel** setting on that channel. The Lair's own layout doesn't: it shows the Sanctum as a tab of the story (see [Channel tabs](#channel-tabs)).
 
 To make one, add **Messages** from the tray and set its **Channel**, or **Duplicate** one that already has a channel.
 
 - **A copy with a channel** shows only that channel, titled with its name (*Sanctum*). What you write in it goes there, and its turn controls are that channel's own. A copy showing a manuscript-style channel reads as [Folio](#what-the-messages-widget-offers) while its **Presentation** is *Follow the channel*.
-- **A copy with no channel** shows every channel no other copy has taken. With just one Messages widget, that's the whole session, and its channel strip switches between channels.
+- **A copy with no channel** shows every channel no other copy has taken. With just one Messages widget, that's the whole session, with a tab for each channel above the log.
 - If every copy has a channel, the first one also shows the channels nobody took, so the story never disappears.
+
+### Channel tabs
+
+🚧 A Messages widget that shows two or more channels draws a **tab** for each one across its top, named by the genre: the Lair's **Story** and **Sanctum**. The log shows the tab you picked, and what you write goes there; the turn controls are that channel's. The arrow keys move between the tabs. When somebody else's line lands on a tab you aren't looking at, such as the Castellan answering in the Sanctum while you read the story, that tab shows a small dot until you open it.
+
+- **Composer on the other tabs** (a Messages setting, *Same as the first tab* by default) draws the field differently while a tab other than the first is shown. The Lair's layout sets it to *Single-line pill* for the Sanctum.
+- A channel only you may read, such as the Sanctum, is never a tab for anyone else: a guest's story shows no tabs.
+- To give a channel its own widget instead, add a second **Messages** and set its **Channel** (above): the channel leaves the first widget's tabs.
 - Each copy has its own settings and style.
 
 ### Dice inline, or as a log
 
-🚧 Some genres keep their dice on a channel of their own, **Dice** (the slug is `table`): every roll, every check and the clock's reckoning, each tied to the line it belongs to. Those lines never enter the story the AI reads. The [Dungeon Crawler](./genre-dungeon-crawler.md) is the first.
+🚧 Some genres keep their rolls and outcomes on a channel of their own, **Dice** (the slug is `table`): every roll, every check and the clock's reckoning, each tied to the line it belongs to. Those lines never enter the story the AI reads. The [Dungeon Crawler](./genre-dungeon-crawler.md) is the first.
 
-- **Inline**: set a Messages copy's **Show another channel inline** to `table`, and each dice line is drawn straight under the line it belongs to, small and with no picture or name. The copy's channel strip never offers *Dice* as somewhere to write. The Dungeon Crawler's Story is set up this way.
-- **As a log**: a Messages copy with its **Channel** set to `table` shows the dice lines on their own, oldest first.
+- **Inline**: set a Messages copy's **Show another channel inline** to `table`, and each of its lines is drawn straight under the line it belongs to, small and with no picture or name. The copy's tabs never offer *Dice* as somewhere to write. The Dungeon Crawler's Story is set up this way.
+- **As a log**: a Messages copy with its **Channel** set to `table` shows its lines on their own, oldest first.
 
-Both read the same lines. Deleting or regenerating a line takes its dice lines with it.
+Both read the same lines. Deleting or regenerating a line takes its lines on **Dice** with it.
 
 ## Layouts
 
@@ -144,7 +154,7 @@ A **layout** here is a saved arrangement you can copy into a session. The **Layo
 
 Each card has a line saying where it came from: *Genre default*, *Serene Pub*, *This pub*, the plugin's name, *You* (*You · in use here* when this session started from it), or *Shared by* and a name. A section with more than eight cards adds **All**, **Mine** and **Shared** buttons above them to narrow the list.
 
-The **genre default layout** is what this kind of session (its [genre](./genres.md)) starts with. Story's is the conversation, with the **Author's note** in the right column's rail as an icon (not docked, so the conversation keeps the page on a phone). The Guide's is the conversation on its own. Story's puts the world's stats in a strip above the conversation (**Stats** set to the world, titled *World State*), **Scene Portraits** and **Stats** docked down the right, and the **Chronicle** and **Lore entries** as icons in the left rail, ready when you want them. The Lair's puts the party's **Stats** on the left and, down the right, **Places** as a list of the dungeon's rooms, the Castellan's scratchpad (an **Annex**) and the **Sanctum**. Dungeon Crawler's opens on the **Planner** as the first of three tabs in the middle (then **Story** and **Planning notes**), so a phone starts on the Planner's questions too, with the character sheet and the journal down the right. Every other widget waits in the tray.
+The **genre default layout** is what this kind of session (its [genre](./genres.md)) starts with. Story's is the conversation, with the **Author's note** in the right column's rail as an icon (not docked, so the conversation keeps the page on a phone). The Guide's is the conversation on its own. Story's puts the world's stats in a strip above the conversation (**Stats** set to the world, titled *World State*), **Scene Portraits** and **Stats** docked down the right, and the **Chronicle** and **Lore entries** as icons in the left rail, ready when you want them. The Lair's puts the party's **Stats** on the left, the story in the middle with the **Sanctum** as a [tab](#channel-tabs) beside it, and, down the right, **Places** as a list of the dungeon's rooms over the Castellan's scratchpad (an **Annex**). A genre can also ship a layout for its guests: a guest's first visit to a Lair copies the **Party** layout instead, with a **Party** panel (the **Turn order** and **Who's here** widgets as its two tabs) where the scratchpad would be, and no Sanctum. A layout you chose as your own new-session layout still wins. Dungeon Crawler's opens on the **Planner** as the first of three tabs in the middle (then **Story** and **Planning notes**), so a phone starts on the Planner's questions too, with the character sheet and the journal down the right. Every other widget waits in the tray.
 
 A line at the top says where this session's layout came from, such as *Started from the genre default layout* or *Started from your layout "Harbour watch"*.
 
@@ -158,7 +168,7 @@ After that, the layout is the session's own copy. Changing the layout later does
 - **Start again from "*name*"** copies back the layout this session started from.
 - **Start from scratch** leaves only what a session needs (the conversation and the genre's own widgets) with every widget's settings and style back at their defaults.
 
-If the layout a session started from has changed since (a plugin or an update of Serene Pub changed it, or you saved changes into it elsewhere), its card shows **Updated** and the tab a dot. Nothing changes until you choose **Start again from "*name*"** (or **Reset to genre default layout**). For example, Chat sessions opened before Chat's default layout gained the Author's note keep their layout and show **Updated**. Reset to pick up the note, or add it from the tray. The same goes for Story and Lair sessions opened before their default layouts gained the Chronicle, Lore entries, Places and the Castellan's scratchpad.
+If the layout a session started from has changed since (a plugin or an update of Serene Pub changed it, or you saved changes into it elsewhere), its card shows **Updated** and the tab a dot. Nothing changes until you choose **Start again from "*name*"** (or **Reset to genre default layout**). For example, Chat sessions opened before Chat's default layout gained the Author's note keep their layout and show **Updated**. Reset to pick up the note, or add it from the tray. The same goes for Story and Lair sessions opened before their default layouts gained the Chronicle, Lore entries, Places and the Castellan's scratchpad, and for a Lair opened before its Sanctum became a tab of the story: it keeps its Sanctum panel until you reset.
 
 A layout can bring its own widget settings and styles: Story's asks Scene Portraits to show everyone in the scene with stat bars. Copying one in replaces your settings only where the layout brings its own.
 
@@ -301,9 +311,9 @@ The same layout adapts to the space it has. Resizing never changes what you save
 
 - **Panels stack.** Each column is its panels from top to bottom, at every width. Panels are never side by side, so nothing has to rearrange as the window narrows.
 - **Heights.** In a side column, a **Fit** panel is as tall as its content (at least 120px), a panel with a share from the divider takes its twelfths of the column, and the **Fill** panels share what's left equally. In the middle, the strips take their height (a **Fit** strip at most 40% of the middle) and the primary panel takes the rest.
-- **Widgets fill their space.** Each widget takes the full width of its panel. For a reading width, use the Messages widget's **Line width**.
+- **Widgets fill their space.** Each widget takes the full width of its panel. The Messages widget's text keeps to a reading column inside it by default; to run it the whole width, set its **Line width** to *Full*.
 - **An empty side keeps its column** as a faint strip, so adding a widget later doesn't shift the conversation. On a narrow window it's the first thing to go.
-- **The conversation stays centred.** At *Comfortable* line width, the text column is centred on the session even when one side is wider than the other. Extra window width goes to the middle; the sides keep their size.
+- **The conversation stays centred.** At *Column* or *Comfortable* line width, the text column is centred on the session even when one side is wider than the other. Extra window width goes to the middle; the sides keep their size.
 - **Tucked sides.** When the session gets too narrow for its sides and a full text column (most often because a sidebar view is open beside it), each side tucks down to its rail of icons. Click an icon to bring that panel out over the session, one at a time. Widen the session again and they're docked exactly as before.
 
 ### Phones and narrow windows

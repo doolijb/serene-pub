@@ -98,8 +98,12 @@ export function annexAtFork(annex: unknown, forkMessageId: number): Annex | null
  */
 const TIMELESS: Readonly<Record<string, readonly string[]>> = Object.freeze({ core: ["retake-quietly"] })
 
-/** The annex at a revision point, with each timeless key as it stands NOW. Pure. */
-function keepTimeless(at: Annex, now: unknown): Annex {
+/**
+ * The annex at a revision point, with each timeless key as it stands NOW.
+ * Pure. 🚧 Also what **Forward** puts back (RF fix 5, `sessions/rewind.ts`):
+ * the annex Back read, a person's timeless preference as it stands.
+ */
+export function keepTimeless(at: Annex, now: unknown): Annex {
 	const current = isPlainObject(now) ? now : {}
 	const out: Annex = { ...at }
 	for (const [owner, keys] of Object.entries(TIMELESS)) {

@@ -130,7 +130,7 @@
 	// Lorebook writes from sessions Off (plan A22): a compile folds what
 	// sessions played into the book, so it says so before any work and
 	// neither compiles nor saves.
-	const loreWrites = useLoreWritesOff()
+	const loreWrites = useLoreWritesOff(() => historyEntry?.lorebookId)
 	let canSave = $derived(
 		!loreWrites.off && editableContent.trim().length > 0 && !saving
 	)
@@ -449,7 +449,11 @@
 	<div class="space-y-4">
 		{#if loreWrites.off}
 			<!-- A review reopened after the setting moved: it cannot save. -->
-			<LoreWritesOffNotice onOpenSettings={() => onOpenChange({ open: false })} />
+			<LoreWritesOffNotice
+				by={loreWrites.by}
+				lorebookId={historyEntry?.lorebookId}
+				onOpenSettings={() => onOpenChange({ open: false })}
+			/>
 		{/if}
 		{#if hasExistingContent && hasDiff}
 			<div class="space-y-1">
@@ -464,7 +468,7 @@
 					{#each diffParts as part}
 						{#if part.removed}
 							<span
-								class="text-error-500 line-through opacity-70"
+								class="text-error-600-400 line-through opacity-70"
 							>
 								{part.value}
 							</span>
@@ -479,7 +483,7 @@
 		{/if}
 		<div class="space-y-1">
 			<label class="label text-sm font-semibold" for="compile-content">
-				Content <span class="text-error-500">*</span>
+				Content <span class="text-error-600-400">*</span>
 			</label>
 			<textarea
 				id="compile-content"
@@ -501,7 +505,7 @@
 			</p>
 		{/if}
 		{#if saveError}
-			<p class="text-error-700-300 text-sm" role="alert">{saveError}</p>
+			<p class="text-error-600-400 text-sm" role="alert">{saveError}</p>
 		{/if}
 	</div>
 {/snippet}

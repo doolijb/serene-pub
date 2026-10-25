@@ -27,6 +27,8 @@ import {
 	portrayalsLine,
 	timedOutNotice,
 	wireView,
+	routineLineOf,
+	startedByOf,
 	type InspectedRun,
 	type NodeRow,
 	type ReceiptNode
@@ -181,11 +183,14 @@ describe("where a node's values and definition came from", () => {
 		expect(rowOf(rows, "old").layers).toEqual([])
 	})
 
-	it("reads a layer spelled `preset` (the pre-rename word) as the selected config", () => {
+	it("reads the preset and genre layers of the value cascade (R38)", () => {
 		const [row] = nodeRows({
-			nodes: [{ seq: 1, nodeKey: "n", configLayers: { params: { k: "preset" } } }]
+			nodes: [{ seq: 1, nodeKey: "n", configLayers: { params: { k: "preset", g: "genre" } } }]
 		})
-		expect(row.layers[0]).toMatchObject({ layer: "config", label: "selected config" })
+		expect(row.layers).toEqual([
+			{ slot: "params", path: "k", layer: "preset", label: "preset" },
+			{ slot: "params", path: "g", layer: "genre", label: "genre default" }
+		])
 	})
 })
 
@@ -1209,5 +1214,61 @@ describe("layoutsView (2026-10-13)", () => {
 	it("is empty for a receipt that recorded none", () => {
 		expect(layoutsView(node({ main: { rendered: "x" } }))).toEqual([])
 		expect(layoutsView(null)).toEqual([])
+	})
+})
+
+/* 🚧 Routines in the inspector (PLAN-layering R9, R18, R19, R11; lane 7). */
+describe("routine lines", () => {
+	const ran = {
+		...adventure,
+		receipt: {
+			...(adventure.receipt as object),
+			triggerSource: "schedule",
+			meta: {
+				routine: {
+					name: "Note what changed",
+					for: "Ann",
+					said: "routine Note what changed, for Ann",
+					registrationKey: "after-each-round→story-reckoning",
+					cadence: "core:cadence/after-each-round@1",
+					mode: "full"
+				}
+			}
+		}
+	} as InspectedRun
+	const skipped = (reason: string, kind: "skipped" | "paused" = "skipped") =>
+		({
+			...adventure,
+			outcome: "halt",
+			haltNodeKey: null,
+			haltReason: reason,
+			receipt: {
+				outcome: "halt",
+				haltReason: reason,
+				triggerSource: "schedule",
+				meta: { routine: { [kind]: true, registrationKey: "every-n-turns→story-sweep" } },
+				nodes: []
+			}
+		}) as unknown as InspectedRun
+
+	it("a routine's run says whom it ran for", () => {
+		expect(routineLineOf(ran.receipt)).toMatchObject({ kind: "ran", said: "routine Note what changed, for Ann" })
+		expect(startedByOf(ran.receipt)).toBe("routine Note what changed, for Ann")
+		const pressed = { ...(ran.receipt as any), meta: { routine: { ...(ran.receipt as any).meta.routine, runNow: true } } }
+		expect(startedByOf(pressed)).toBe("routine Note what changed, for Ann (Run now)")
+	})
+
+	it("a skip and a pause are their own sentences", () => {
+		expect(verdict(skipped("Skipped: already waiting"))).toBe("Skipped: already waiting.")
+		expect(verdict(skipped("Skipped: the clock jumped 3 days (more than 12 hours)"))).toBe(
+			"Skipped: the clock jumped 3 days (more than 12 hours)."
+		)
+		expect(verdict(skipped("Paused after 12 runs in a row", "paused"))).toBe("Paused after 12 runs in a row.")
+		expect(routineLineOf(skipped("Skipped: already waiting").receipt)?.kind).toBe("skipped")
+	})
+
+	it("any other run has no routine line, and keeps its trigger source", () => {
+		expect(routineLineOf(adventure.receipt)).toBeNull()
+		expect(startedByOf({ triggerSource: "user" })).toBe("user")
 	})
 })

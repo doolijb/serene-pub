@@ -505,7 +505,7 @@
 										>
 											Name*
 											<span
-												class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
+												class="flex items-center opacity-50 transition-opacity duration-fast hover:opacity-100"
 												title="This field will be visible in prompts"
 												aria-label="This field will be visible in prompts"
 											>
@@ -536,7 +536,7 @@
 										/>
 										{#if validationErrors.name}
 											<p
-												class="text-error-500 mt-1 text-sm"
+												class="text-error-600-400 mt-1 text-sm"
 												id={ids.nameError}
 												role="alert"
 											>
@@ -553,7 +553,7 @@
 										>
 											Nickname (Optional)
 											<span
-												class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
+												class="flex items-center opacity-50 transition-opacity duration-fast hover:opacity-100"
 												title="This field will be visible in prompts"
 												aria-label="This field will be visible in prompts"
 											>
@@ -736,7 +736,7 @@
 									>
 										Description*
 										<span
-											class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
+											class="flex items-center opacity-50 transition-opacity duration-fast hover:opacity-100"
 											title="This field will be visible in prompts"
 											aria-label="This field will be visible in prompts"
 										>
@@ -767,7 +767,7 @@
 									></textarea>
 									{#if validationErrors.description}
 										<p
-											class="text-error-500 mt-1 text-sm"
+											class="text-error-600-400 mt-1 text-sm"
 											id={ids.descriptionError}
 											role="alert"
 										>
@@ -832,7 +832,7 @@
 									>
 										Personality (Optional)
 										<span
-											class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
+											class="flex items-center opacity-50 transition-opacity duration-fast hover:opacity-100"
 											title="This field will be visible in prompts"
 											aria-label="This field will be visible in prompts"
 										>

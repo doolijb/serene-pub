@@ -147,7 +147,7 @@
 </script>
 
 <div
-	class="bg-surface-100 dark:bg-surface-900 relative isolate flex min-h-screen items-center justify-center overflow-hidden px-4 py-12"
+	class="bg-surface-100-900 relative isolate flex min-h-screen items-center justify-center overflow-hidden px-4 py-12"
 >
 	{#if atmosphere}
 		<AtmosphereLayer definition={atmosphere} />
@@ -183,12 +183,12 @@
 			>
 				Welcome back.
 			</h1>
-			<p class="text-surface-600 dark:text-surface-400 text-[13px]">
+			<p class="text-surface-600 dark:text-surface-400 text-chip">
 				Sign in to pick up where the story left off.
 			</p>
 		</div>
 		{#if signedOutWhy}
-			<p class="preset-tonal-primary rounded-md px-3 py-2 text-[13px]" role="status">
+			<p class="preset-tonal-primary rounded-md px-3 py-2 text-chip" role="status">
 				{signedOutWhy}
 			</p>
 		{/if}
@@ -203,7 +203,7 @@
 				type="text"
 				autocomplete="username"
 				required
-				class="input bg-surface-100 dark:bg-surface-900 h-10 w-full {errors.username
+				class="input bg-surface-100-900 h-10 w-full {errors.username
 					? 'border-error-500'
 					: ''}"
 				bind:value={formData.username}
@@ -212,7 +212,7 @@
 				disabled={isLoading}
 			/>
 			{#if errors.username}
-				<p class="text-error-500 text-xs" role="alert">
+				<p class="text-error-600-400 text-xs" role="alert">
 					{errors.username}
 				</p>
 			{/if}
@@ -229,7 +229,7 @@
 					type={showPassphrase ? "text" : "password"}
 					autocomplete="current-password"
 					required
-					class="input bg-surface-100 dark:bg-surface-900 h-10 w-full pr-11 {errors.passphrase
+					class="input bg-surface-100-900 h-10 w-full pr-11 {errors.passphrase
 						? 'border-error-500'
 						: ''}"
 					bind:value={formData.passphrase}
@@ -254,7 +254,7 @@
 				</button>
 			</div>
 			{#if errors.passphrase}
-				<p class="text-error-500 text-xs" role="alert">
+				<p class="text-error-600-400 text-xs" role="alert">
 					{errors.passphrase}
 				</p>
 			{/if}
@@ -292,8 +292,10 @@
 				Document View
 			</button>
 			<span>
+				<!-- Muted like the version beside it: beta is a fact about the
+				     build, never a warning (★R4, 2026-10-24). -->
 				{__APP_VERSION__}
-				<span class="text-warning-500">beta</span>
+				<span>beta</span>
 			</span>
 		</div>
 	</form>

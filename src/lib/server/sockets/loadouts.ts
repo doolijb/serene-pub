@@ -14,6 +14,7 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
+import { afterModelChange } from "$lib/server/pipelines/registrations/unserved"
 import {
 	S,
 	TRANSFORMS,
@@ -85,25 +86,25 @@ async function usedByIndex(): Promise<
 		e.pipelines.add(specName)
 		out.set(id, e)
 	}
-	const fromConfigs = await db
-		.select({
-			value: schema.pipelineConfigValues.value,
-			nodeKey: schema.pipelineConfigValues.nodeKey,
-			specId: schema.pipelineConfigs.specId,
-			specName: schema.pipelineSpecs.name
-		})
-		.from(schema.pipelineConfigValues)
-		.innerJoin(
-			schema.pipelineConfigs,
-			eq(schema.pipelineConfigs.id, schema.pipelineConfigValues.configId)
-		)
-		.innerJoin(
-			schema.pipelineSpecs,
-			eq(schema.pipelineSpecs.id, schema.pipelineConfigs.specId)
-		)
-		.where(eq(schema.pipelineConfigValues.slot, "loadout"))
-	for (const r of fromConfigs)
-		add(idOf(r.value), r.specName, `${r.specId}\u0000${r.nodeKey}`)
+	// 🚧 R50 (0110): configurations are retired — a loadout is held by a
+	// pipeline's instance values and by registration values (genre, preset,
+	// session), each keyed by node.
+	const { registrationValueRefs } = await import("$lib/server/pipelines/registrations/values")
+	const specRows = await db
+		.select({ id: schema.pipelineSpecs.id, slug: schema.pipelineSpecs.slug, name: schema.pipelineSpecs.name })
+		.from(schema.pipelineSpecs)
+	const specBySlug = new Map(specRows.map((r) => [r.slug, r]))
+	const regPipeline = new Map<number, string>()
+	for (const r of await db
+		.select({ id: schema.registrations.id, specSlug: schema.registrations.specSlug, key: schema.registrations.key })
+		.from(schema.registrations))
+		regPipeline.set(r.id, r.specSlug ?? (r.key.split("→")[1] ?? ""))
+	for (const ref of await registrationValueRefs(db as never, ["loadout"])) {
+		const slug = ref.scopeKind === "instance" ? ref.scopeRef : (regPipeline.get(ref.rowId) ?? "")
+		const spec = [...specBySlug.values()].find((x) => x.slug === slug || x.slug.endsWith(`/${slug}`))
+		if (!spec) continue
+		add(idOf(ref.value), spec.name, `${spec.id}\u0000${ref.nodeKey}`)
+	}
 	const fromOverrides = await db
 		.select({
 			value: schema.pipelineNodeOverrides.value,
@@ -835,12 +836,13 @@ export function registerLoadoutHandlers(
 	register: (socket: any, handler: Handler<any, any>, emitToUser: Emit) => void
 ) {
 	register(socket, loadoutsList, emitToUser)
-	register(socket, loadoutsCreate, emitToUser)
-	register(socket, loadoutsUpdate, emitToUser)
-	register(socket, loadoutsDelete, emitToUser)
-	register(socket, loadoutsSetDefault, emitToUser)
-	register(socket, loadoutsMerge, emitToUser)
-	register(socket, loadoutsMakeIt, emitToUser)
+	// 🚧 R56: what is served moves with the loadouts — say so after each write.
+	register(socket, afterModelChange(loadoutsCreate), emitToUser)
+	register(socket, afterModelChange(loadoutsUpdate), emitToUser)
+	register(socket, afterModelChange(loadoutsDelete), emitToUser)
+	register(socket, afterModelChange(loadoutsSetDefault), emitToUser)
+	register(socket, afterModelChange(loadoutsMerge), emitToUser)
+	register(socket, afterModelChange(loadoutsMakeIt), emitToUser)
 	register(socket, loadoutsProposeFill, emitToUser)
 	register(socket, localModelsMatting, emitToUser)
 	register(socket, localModelsCancelMatting, emitToUser)

@@ -5,6 +5,7 @@ import {
 } from "./BaseConnectionAdapter"
 import { type CompiledPrompt } from "./types"
 import type { TextGenResult } from "$lib/server/adapters/actions"
+import type { GeneratedMediaItem } from "$lib/shared/imageGen/types"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { TokenCounters } from "../utils/TokenCounterManager"
 import { OpenAI } from "openai"
@@ -119,6 +120,35 @@ const KEYLESS_API_KEY = "none"
 /** Where the client sends a request with no `baseURL`: OpenAI's own API. */
 const OPENAI_API_URL = "https://api.openai.com/v1"
 
+/** 🚧 The voice a spoken reply uses when the speech sampling names none (O7). */
+export const OPENAI_DEFAULT_VOICE = "alloy"
+
+/**
+ * 🚧 A spoken reply off an assembled chat message (O5): OpenAI's
+ * `message.audio` — `{ id, data (base64), transcript, expires_at }` — as one
+ * media item (WAV, as asked) and its transcript. Null when the message spoke
+ * no audio.
+ */
+export function spokenReplyFrom(
+	message: unknown
+): { media: GeneratedMediaItem; transcript: string } | null {
+	const audio = (message as { audio?: Record<string, unknown> } | null)?.audio
+	const data = typeof audio?.data === "string" ? audio.data : ""
+	if (!data) return null
+	return {
+		media: {
+			kind: "audio",
+			mime: "audio/wav",
+			base64: data,
+			meta: {
+				...(typeof audio?.id === "string" ? { providerAudioId: audio.id } : {}),
+				...(typeof audio?.expires_at === "number" ? { expiresAt: audio.expires_at } : {})
+			}
+		},
+		transcript: typeof audio?.transcript === "string" ? audio.transcript.trim() : ""
+	}
+}
+
 /**
  * The key the OpenAI client is built with.
  *
@@ -164,6 +194,16 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 	 */
 	override get consumesAttachments(): boolean {
 		return true
+	}
+
+	/**
+	 * 🚧 Text, and a spoken reply (O6): `modalities: ["text","audio"]` with
+	 * `audio: {voice, format}` asks for one, and `message.audio` carries it
+	 * back with its transcript. A fact about the CODE — whether the model
+	 * speaks is `text->text+audio` and the model's writes.
+	 */
+	override get writesKinds(): readonly string[] {
+		return ["text", "audio"]
 	}
 
 	private abortController?: AbortController
@@ -228,9 +268,14 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 				CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI].baseUrl
 			)
 		const model = this.connection.model || "gpt-3.5-turbo"
-		const stream = this.streamingOn(
-			this.connection.extraJson?.stream || false
-		)
+		// 🚧 O6: a spoken reply is asked for whole. OpenAI streams audio only
+		// as raw pcm16 deltas, which nothing here can store as a file, so a
+		// request that asks for audio goes out unstreamed — the text lands
+		// with the audio, both at once (media parts land when complete).
+		const speaks = this.requestedOutputs.includes("audio")
+		const stream = speaks
+			? false
+			: this.streamingOn(this.connection.extraJson?.stream || false)
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
 
 		/**
@@ -341,6 +386,20 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 			params.tool_choice = "auto"
 		}
 
+		// 🚧 The spoken reply (O6, O7): the outputs asked for, and the voice
+		// from the speech sampling (the TTS vocabulary's `voice`; OpenAI's
+		// own default voice when it names none). WAV, which every player and
+		// the media store take as it comes.
+		if (speaks) {
+			const voice =
+				typeof this.speechSampling.voice === "string" &&
+				this.speechSampling.voice.trim()
+					? this.speechSampling.voice.trim()
+					: OPENAI_DEFAULT_VOICE
+			;(params as any).modalities = ["text", "audio"]
+			;(params as any).audio = { voice, format: "wav" }
+		}
+
 		// The composed list, already filtered by the wire rule — the ternary
 		// that stood here is `connections/stops.ts`'s job now (ruling
 		// 2026-09-10). Its reasoning is unchanged and lives there: in chat wire
@@ -445,6 +504,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 				let reasoningContent: string | undefined
 				let toolCall: ReturnType<OpenAIChatAdapter["toolCallFrom"]> =
 					null
+				let media: GeneratedMediaItem[] | undefined
 				if (
 					response.choices &&
 					response.choices[0] &&
@@ -452,6 +512,13 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 				) {
 					const message = response.choices[0].message
 					content = message.content || ""
+					// 🚧 O5: a spoken reply — the audio as a media part, and its
+					// transcript as the text when the model wrote none beside it.
+					const spoken = spokenReplyFrom(message)
+					if (spoken) {
+						media = [spoken.media]
+						if (!content && spoken.transcript) content = spoken.transcript
+					}
 					// The same two names the streaming branch reads, on the
 					// assembled message rather than a delta.
 					reasoningContent = reasoningTextFrom(message) || undefined
@@ -471,6 +538,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 					isAborted: this.isAborting,
 					reasoningContent,
 					toolCall,
+					...(media ? { media } : {}),
 					// Recorded, never acted on: see `TextGenResult.tokensCached`.
 					...cacheUsageFrom((response as any).usage)
 				}

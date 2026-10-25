@@ -18,7 +18,6 @@
  * READ — `slotAddress.int.test.ts` is the file that pins the address itself.
  */
 import { beforeAll, describe, expect, it } from "vitest"
-import { and, eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { SLOT_VALUE } from "@serene-pub/sdk"
@@ -61,39 +60,16 @@ beforeAll(async () => {
 		})
 		.returning()
 
-	// The shipped config is immutable, so a pick has to land in a copy that is
-	// then selected — same dance as `slotAddress.int.test.ts`, for the same
-	// reason: without it every write refuses and this file tests nothing.
-	const { duplicateConfig, selectConfig } = await import(
-		"$lib/server/pipelines/config/named"
+	// 🚧 R50 (lane F1): an administrator's pick for a pipeline no genre
+	// registers (the graph build) lands in its instance values — where the
+	// pub-selected configuration this file used to write went (0110).
+	const { setInstanceValue } = await import("$lib/server/pipelines/registrations/instanceValues")
+	await setInstanceValue(
+		db as never,
+		GRAPH_BUILD_SPEC_ID,
+		{ nodeKey: "building.item.perspective", slot: "connection", path: SLOT_VALUE },
+		conn.id
 	)
-	const [spec] = await db
-		.select()
-		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, GRAPH_BUILD_SPEC_ID))
-	const [shipped] = await db
-		.select()
-		.from(schema.pipelineConfigs)
-		.where(
-			and(
-				eq(schema.pipelineConfigs.specId, spec.id),
-				eq(schema.pipelineConfigs.isImmutable, true)
-			)
-		)
-	const copy = await duplicateConfig(
-		db,
-		shipped.id,
-		"Graph step template copy"
-	)
-	await selectConfig(db, spec.id, "pub", 0, copy.id, admin.id)
-
-	await db.insert(schema.pipelineConfigValues).values({
-		configId: copy.id,
-		nodeKey: "building.item.perspective",
-		slot: "connection",
-		path: SLOT_VALUE,
-		value: conn.id
-	})
 }, 60_000)
 
 describe("resolveStepConfigs", () => {

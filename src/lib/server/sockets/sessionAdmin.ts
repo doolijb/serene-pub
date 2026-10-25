@@ -8,6 +8,7 @@
  * session presets → a user picks a preset and starts a session, with optional
  * overrides.
  */
+import { hostStateFor } from "@serene-pub/sdk"
 import { sessionEvents, type SettingsSchema } from "@serene-pub/sdk"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
@@ -74,19 +75,26 @@ async function staleBindingsByPreset(
 async function effectiveIncludedActionsByPreset(
 	presets: Array<{ id: number; genreId: string; includedActions: unknown }>
 ): Promise<Map<number, Sockets.SessionAdmin.PresetIncludedAction[]>> {
+	// 🚧 What a session on each preset is offered (PLAN-layering D7): the
+	// actions its effective registrations — the genre's defaults with its
+	// changes — register, in the order the genre lists them.
+	const { presetRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
 	const offeredByGenre = new Map<string, Awaited<ReturnType<typeof listGenreActions>>>()
 	for (const genreId of new Set(presets.map((p) => p.genreId)))
 		offeredByGenre.set(genreId, await listGenreActions(db, genreId))
 	const out = new Map<number, Sockets.SessionAdmin.PresetIncludedAction[]>()
 	for (const p of presets) {
 		const offered = offeredByGenre.get(p.genreId) ?? []
-		const included = Array.isArray(p.includedActions)
-			? (p.includedActions as unknown[]).map(String)
-			: null
+		const resolved = await presetRegistrations(db, p.id)
+		const included = new Set(
+			(resolved?.offered ?? [])
+				.filter((r) => r.trigger.family === "action")
+				.map((r) => (r.trigger as { action: string }).action)
+		)
 		out.set(
 			p.id,
 			offered
-				.filter((t) => includedByPreset(included, t, offered))
+				.filter((t) => included.has(actionIdentity(t)))
 				.map((t) => ({
 					identity: actionIdentity(t),
 					key: t.key,
@@ -101,8 +109,10 @@ async function effectiveIncludedActionsByPreset(
 const presetRow = (
 	p: typeof schema.sessionPresets.$inferSelect,
 	stale?: Sockets.SessionAdmin.StaleBinding[],
-	effectiveIncludedActions?: Sockets.SessionAdmin.PresetIncludedAction[]
+	effectiveIncludedActions?: Sockets.SessionAdmin.PresetIncludedAction[],
+	registrations?: Sockets.SessionAdmin.PresetRegistrations
 ): Sockets.SessionAdmin.PresetRow => ({
+	...(registrations ? { registrations } : {}),
 	id: p.id,
 	name: p.name,
 	description: p.description ?? null,
@@ -196,6 +206,16 @@ async function buildSessionGenres(): Promise<Sockets.SessionAdmin.Genres.Respons
 			)
 			.map((r) => [r.inputGenre, r.slug])
 	)
+	// 🚧 A genre mounted by registrations has no lock: its create pipeline is
+	// the one its defaults register on `session-created` (PLAN-layering D7).
+	{
+		const { lockedEventSpec } = await import("$lib/server/pipelines/entities/presetBindings")
+		for (const m of modes)
+			if (!createSpecByGenre.has(m.genreId)) {
+				const slug = await lockedEventSpec(db, m.genreId, sessionEvents.sessionCreated)
+				if (slug) createSpecByGenre.set(m.genreId, slug)
+			}
+	}
 	const res: Sockets.SessionAdmin.Genres.Response = {
 		genres: modes.map((m) => {
 			const st = settingBy.get(m.genreId)
@@ -422,6 +442,7 @@ async function buildGenreDetail(
 			inputGenre: schema.pipelineSpecVersions.inputGenre,
 			inputEvent: schema.pipelineSpecVersions.inputEvent,
 			inputEvents: schema.pipelineSpecVersions.inputEvents,
+			suits: schema.pipelineSpecVersions.suits,
 			sourcePluginId: schema.pipelineSpecs.sourcePluginId
 		})
 		.from(schema.pipelineSpecs)
@@ -432,17 +453,39 @@ async function buildGenreDetail(
 	// A disabled plugin's pipelines are no candidate here (R67).
 	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
 	const off = await disabledPlugins(db)
+	// 🚧 A pipeline mounted by registrations has no lock (D3): it is a
+	// candidate for an event it suits, or one the genre's defaults register
+	// it on; ⏳ a locked one, for the events its lock answers in this genre.
+	const { genreRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
+	const defaults = await genreRegistrations(db, genreId)
+	const registeredOn = (slug: string, event: string) =>
+		defaults.some((d) => d.pipeline === slug && d.trigger.family === "event" && d.trigger.event === event)
 	const active = (specRows as any[]).filter(
 		(r) =>
 			r.activeVersionId === r.versionId &&
 			r.status === "published" &&
-			r.inputGenre === genreId &&
+			(r.inputGenre === genreId || !r.inputGenre) &&
 			!off.owns(r.sourcePluginId)
 	)
+	// The open action slot's candidates: the pipelines whose actions the
+	// genre's defaults register.
+	const actionPipelines = new Set(
+		defaults.filter((d) => d.trigger.family === "action").map((d) => d.pipeline)
+	)
+	const serves = (r: any, event: string): boolean =>
+		r.inputGenre
+			? answersEvent(r, event)
+			: (Array.isArray(r.suits) && r.suits.includes(event)) ||
+				registeredOn(r.slug, event) ||
+				(event === sessionEvents.sessionAction && actionPipelines.has(r.slug))
 	const events = genre.events ?? {}
 	const eventNames = new Set([
 		...Object.keys(events),
-		...active.flatMap((r) => [r.inputEvent, ...(r.inputEvents ?? [])]).filter(Boolean)
+		...defaults.flatMap((d) => (d.trigger.family === "event" ? [d.trigger.event] : [])),
+		...active
+			.filter((r) => r.inputGenre === genreId)
+			.flatMap((r) => [r.inputEvent, ...(r.inputEvents ?? [])])
+			.filter(Boolean)
 	])
 	const slots: Sockets.SessionAdmin.GenreDetail.Slot[] = [
 		...eventNames
@@ -451,7 +494,7 @@ async function buildGenreDetail(
 		required: !!events[event]?.required,
 		open: !!events[event]?.open,
 		candidates: active
-			.filter((r) => answersEvent(r, event))
+			.filter((r) => serves(r, event))
 			.map((r) => ({ slug: r.slug, name: r.name ?? r.slug }))
 	}))
 
@@ -469,7 +512,9 @@ async function buildGenreDetail(
 		.where(eq(schema.sessions.genreId, genreId))
 
 	const createSpecSlug =
-		active.find((r) => r.inputEvent === sessionEvents.sessionCreated)?.slug ??
+		active.find((r) => r.inputGenre === genreId && r.inputEvent === sessionEvents.sessionCreated)?.slug ??
+		defaults.find((d) => d.trigger.family === "event" && d.trigger.event === sessionEvents.sessionCreated)
+			?.pipeline ??
 		null
 
 	const staleByPreset = await staleBindingsByPreset(
@@ -511,7 +556,8 @@ async function buildGenreDetail(
 				shapeFields && typeof shapeFields === "object" && !Array.isArray(shapeFields)
 					? (shapeFields as SettingsSchema)
 					: {},
-			hasState: !!(declared?.slots?.length || declared?.sheets?.length),
+			// 🚧 RF fix 8: a genre brings no attributes — this says whether the host keeps a place, a time or a tool's state for it.
+			hasState: hostStateFor(declared ?? genreId).length > 0,
 			layout: layoutRow
 				? { id: layoutRow.id, slug: layoutRow.slug, name: layoutRow.name }
 				: null,
@@ -673,9 +719,33 @@ async function buildSessionPresets(
 	const off = await disabledPlugins(db)
 	const listed = (rows as any[]).filter((r) => !off.owns(r.ownerPluginId))
 	const actionsByPreset = await effectiveIncludedActionsByPreset(listed)
-	let out = listed.map((r) =>
-		presetRow(r, staleByPreset.get(r.id), actionsByPreset.get(r.id))
-	)
+	const { presetChangesByPreset } = await import("$lib/server/pipelines/registrations/presetRows")
+	const changesByPreset = await presetChangesByPreset(db, listed.map((r) => r.id))
+	// 🚧 Lane 5b: what the start form asks under each preset (R32, A10), and
+	// the numbers its card prints, derived from what it registers (§7).
+	const { startAsks } = await import("$lib/server/sessions/exposure")
+	const asksByPreset = await startAsks(db, listed)
+	const { presetDerivedNumbers } = await import("$lib/server/pipelines/registrations/derived")
+	const derivedByPreset = await presetDerivedNumbers(db, listed.map((r) => r.id))
+	// 🚧 R56: what each preset needs, and what would make it better.
+	const { presetRecommendations } = await import("$lib/server/pipelines/registrations/unserved")
+	const recommendationsByPreset = await presetRecommendations(db, listed.map((r) => r.id))
+	let out = listed.map((r) => {
+		const asks = asksByPreset.get(r.id)
+		const derived = derivedByPreset.get(r.id)
+		const recommendations = recommendationsByPreset.get(r.id)
+		return {
+			...presetRow(
+				r,
+				staleByPreset.get(r.id),
+				actionsByPreset.get(r.id),
+				changesByPreset.get(r.id) as Sockets.SessionAdmin.PresetRegistrations | undefined
+			),
+			...(asks?.length ? { asks } : {}),
+			...(derived ? { derived } : {}),
+			...(recommendations ? { recommendations } : {})
+		}
+	})
 	// The picker's cut: a non-admin sees only what they may start.
 	if (!isAdmin) {
 		const settings = await db.select().from(schema.sessionGenreSettings)
@@ -793,10 +863,10 @@ async function validateBindings(
 	const active = (specRows as any[]).filter(
 		(r) => r.activeVersionId === r.versionId && r.status === "published"
 	)
-	const events = (active.find(
-		(r) =>
-			r.inputGenre === genreId && r.inputEvent === sessionEvents.sessionCreated
-	)?.genre?.events ?? {}) as Record<
+	// 🚧 The genre's declared events, read off its listing (the create
+	// pipeline's carry — found by lock or by registration, D7).
+	const { getSessionGenre } = await import("$lib/server/pipelines/entities/sessionGenres")
+	const events = ((await getSessionGenre(db, genreId))?.events ?? {}) as Record<
 		string,
 		{ required?: boolean; open?: boolean }
 	>
@@ -809,7 +879,9 @@ async function validateBindings(
 			return `'${b.spec}' is not published on this pub, so it cannot answer '${event}'.`
 		// 🚧 Core's default save has no lock: it serves every genre (2026-10-15).
 		if (isDefaultSave(event, b.spec)) continue
-		if (spec.inputGenre !== genreId || !answersEvent(spec, event))
+		// 🚧 A pipeline mounted by registrations has no lock (D3): fit is the
+		// registration door's (lane 5b). ⏳ A locked one is judged by its lock.
+		if (spec.inputGenre && (spec.inputGenre !== genreId || !answersEvent(spec, event)))
 			return `'${b.spec}' answers '${[spec.inputEvent, ...(spec.inputEvents ?? [])].filter(Boolean).join("', '") || "nothing"}' for '${spec.inputGenre ?? "no genre"}' — it cannot bind to '${event}' of '${genreId}' (24 §4).`
 		if (b.config != null) {
 			const [config] = await db
@@ -874,7 +946,11 @@ export const sessionPresetsCreate: Handler<
 								copied.map(String)
 							).included
 						: copied,
-					defaults: (from as any).defaults
+					defaults: (from as any).defaults,
+					// 🚧 A clone is one level (R2): the source's settings and cast
+					// floor come along with its registration changes (lane 7).
+					settings: (from as any).settings ?? null,
+					castFloor: (from as any).castFloor ?? null
 				}
 			}
 		}
@@ -922,13 +998,28 @@ export const sessionPresetsCreate: Handler<
 				...base
 			})
 			.returning()
-		const res = { preset: presetRow(row as any) }
-		emitToUser("sessionPresets:create", res)
-		// LAZY, like the genre re-list above.
-		await emitToUser("sessionPresets:list", () =>
-			buildSessionPresets(!!socket.user?.isAdmin)
-		)
-		return res
+		// 🚧 The preset's changes (PLAN-layering D7, R2): a copy carries its
+		// source's changes (clone = copy); a bare preset changes nothing —
+		// it is the genre's defaults until an administrator says otherwise.
+		{
+			const { copyPresetChanges, presetChangesOfPreset } = await import(
+				"$lib/server/pipelines/registrations/presetRows"
+			)
+			if (params.fromPresetId != null) await copyPresetChanges(db, params.fromPresetId, (row as any).id)
+			const res = {
+				preset: presetRow(
+					row as any,
+					undefined,
+					undefined,
+					(await presetChangesOfPreset(db, (row as any).id)) as Sockets.SessionAdmin.PresetRegistrations
+				)
+			}
+			emitToUser("sessionPresets:create", res)
+			await emitToUser("sessionPresets:list", () =>
+				buildSessionPresets(!!socket.user?.isAdmin)
+			)
+			return res
+		}
 	}
 }
 
@@ -1015,6 +1106,73 @@ export const sessionPresetsUpdate: Handler<
 			// follows, so "the admin cleared every field" and "the admin sent
 			// no opinion" stay distinguishable.
 			if (params.defaults !== undefined) patch.defaults = params.defaults
+			// 🚧 The preset's settings (A10; lane 7): a value each, or `{ value,
+			// lock?, askAtStart? }`, checked against the genre's fields.
+			if (params.settings !== undefined) {
+				const { normalizePresetSettings } = await import("$lib/server/sessions/presetEditor")
+				const normalized = await normalizePresetSettings(db as unknown as Db, (existing as any).genreId, params.settings)
+				if (!normalized.ok) {
+					const res = { error: normalized.error }
+					emitToUser("sessionPresets:update:error", res)
+					return res
+				}
+				patch.settings = normalized.settings
+			}
+		} else if (params.settings !== undefined) {
+			const res = { error: "Shipped presets stay as shipped — duplicate one to change its settings." }
+			emitToUser("sessionPresets:update:error", res)
+			return res
+		}
+		/**
+		 * 🚧 The preset's changes (PLAN-layering D7, R2): stated whole by a
+		 * client that speaks registrations, else ⏳ read from an old client's
+		 * bindings, included set and configuration picks. Shipped presets
+		 * stay as shipped — duplicate to change them.
+		 */
+		const presetRows = await import("$lib/server/pipelines/registrations/presetRows")
+		if (params.registrations !== undefined) {
+			if ((existing as any).isImmutable) {
+				const res = { error: "Shipped presets stay as shipped — duplicate one to change what it registers." }
+				emitToUser("sessionPresets:update:error", res)
+				return res
+			}
+			const normalized = presetRows.normalizePresetChanges(params.registrations as never)
+			if (!normalized.ok) {
+				const res = { error: normalized.error }
+				emitToUser("sessionPresets:update:error", res)
+				return res
+			}
+			// 🚧 The registration door (§11-2): every registration the preset
+			// adds or changes, as it would stand, judged against what is
+			// installed and the genre it registers in — refused in a sentence.
+			const refused = await presetRows.presetChangesRefusal(
+				db,
+				{ genreId: (existing as any).genreId, name: (existing as any).name },
+				normalized.changes
+			)
+			if (refused) {
+				const res = { error: refused }
+				emitToUser("sessionPresets:update:error", res)
+				return res
+			}
+			await presetRows.writePresetChanges(db, params.id, normalized.changes)
+		} else if (
+			!(existing as any).isImmutable &&
+			(params.bindings !== undefined ||
+				params.includedActions !== undefined ||
+				params.configSelections !== undefined)
+		) {
+			await presetRows.writeLegacyPresetChanges(
+				db,
+				{ id: params.id, genreId: (existing as any).genreId },
+				{
+					bindings: (patch.bindings ?? (existing as any).bindings) as never,
+					includedActions: (patch.includedActions !== undefined
+						? patch.includedActions
+						: (existing as any).includedActions) as string[] | null,
+					configSelections: (patch.configSelections ?? (existing as any).configSelections) as never
+				}
+			)
 		}
 		/**
 		 * A patch naming nothing answers with the row.
@@ -1044,7 +1202,14 @@ export const sessionPresetsUpdate: Handler<
 				.set({ isDefault: true })
 				.where(eq(schema.sessionPresets.id, params.id))
 		}
-		const res = { preset: presetRow(row as any) }
+		const res = {
+			preset: presetRow(
+				row as any,
+				undefined,
+				undefined,
+				(await presetRows.presetChangesOfPreset(db, params.id)) as Sockets.SessionAdmin.PresetRegistrations
+			)
+		}
 		emitToUser("sessionPresets:update", res)
 		// LAZY, like the genre re-list above.
 		await emitToUser("sessionPresets:list", () =>
@@ -1085,6 +1250,8 @@ export const sessionPresetsDelete: Handler<
 		await db
 			.delete(schema.sessionPresets)
 			.where(eq(schema.sessionPresets.id, params.id))
+		// Its registration rows went with it (cascade): nothing cached may name them.
+		;(await import("$lib/server/pipelines/registrations/resolve")).invalidateRegistrations()
 		const res = { id: params.id, ok: true }
 		emitToUser("sessionPresets:delete", res)
 		// LAZY, like the genre re-list above.

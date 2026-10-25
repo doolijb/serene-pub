@@ -1,6 +1,9 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import Avatar from "$lib/client/components/Avatar.svelte"
+	import RowMenu, {
+		type RowMenuEntries
+	} from "$lib/client/components/menus/RowMenu.svelte"
 	import { getContext, tick } from "svelte"
 	// Rolled up or not (note 29): a per-device shell preference.
 	import { shellPrefs } from "$lib/client/shell/shellPrefs.svelte"
@@ -94,6 +97,64 @@
 		await tick()
 		;(next ? unfurlButton : furlButton)?.focus()
 	}
+
+	/**
+	 * 🚧 **Back · Forward** (RF fix 5): the story's history, one turn at a
+	 * time — two icon buttons at the head of the trailing cluster since
+	 * polish parity L1 (2026-10-24; they were a row of their own above the
+	 * log). The page writes what they read and do (`openSessionCtx.rewind`);
+	 * absent, they are not drawn. Greyed, never disabled (the chips' rule):
+	 * `aria-disabled` keeps each reachable, its reason in the title and, for
+	 * a screen reader, an sr-only note; the press is guarded.
+	 */
+	const rewind = $derived(openSessionCtx?.rewind ?? null)
+	const rewindId = $props.id()
+	const backTitle = $derived(
+		rewind?.back.reason ? `Back one turn — ${rewind.back.reason}` : "Back one turn"
+	)
+	const forwardTitle = $derived(
+		rewind?.forward.reason
+			? `Forward one turn — ${rewind.forward.reason}`
+			: rewind?.aheadText
+				? `Forward one turn (${rewind.aheadText})`
+				: "Forward one turn"
+	)
+
+	/**
+	 * The phone's one `⋯` (polish parity L8, 2026-10-24): below 640px of bar
+	 * the trailing cluster is the panels button, this menu and the furl, so
+	 * the session's name keeps the room. It holds what the wide bar draws as
+	 * buttons — Back and Forward (greyed with their reason, never hidden),
+	 * Settings, Layout — and the same handlers run either way.
+	 */
+	const phoneMenu = $derived<RowMenuEntries>([
+		rewind && {
+			label: "Back one turn",
+			icon: Icons.Undo2,
+			disabled: rewind.back.disabled,
+			title: backTitle,
+			onSelect: () => rewind.goBack()
+		},
+		rewind && {
+			label: "Forward one turn",
+			icon: Icons.Redo2,
+			disabled: rewind.forward.disabled,
+			title: forwardTitle,
+			onSelect: () => rewind.goForward()
+		},
+		rewind && { separator: true },
+		openSessionCtx?.sessionId != null &&
+			!!panelsCtx && {
+				label: "Session settings",
+				icon: Icons.Settings,
+				onSelect: openSessionSettings
+			},
+		{
+			label: "Customize layout",
+			icon: Icons.LayoutDashboard,
+			onSelect: () => requestLayoutEditor()
+		}
+	])
 
 	/** The face's accessible name, carrying the turn when it holds one. */
 	function faceLabel(member: OpenSessionCastMember): string {
@@ -193,6 +254,47 @@
 			<!-- The trailing cluster. Measured, because `.sp-head-lead` mirrors it:
 		     the panels button comes and goes with the session's sides. -->
 			<div class="sp-head-tools" bind:clientWidth={toolsW}>
+				{#if rewind}
+					<!-- 🚧 Back · Forward: the session owner's, first in the
+					     cluster, nearest the story's name. On a phone they are
+					     the first two items of the ⋯ below (`sp-head-wide`). -->
+					<span class="sp-head-wide sp-head-group">
+					<button
+						type="button"
+						class="btn-icon hover:preset-tonal focus-visible:preset-tonal text-foreground aria-disabled:text-surface-500 size-11 shrink-0 aria-disabled:cursor-default [&>svg]:size-5"
+						aria-label="Back one turn"
+						title={backTitle}
+						aria-disabled={rewind.back.disabled}
+						aria-describedby={rewind.back.reason ? `${rewindId}-back` : undefined}
+						data-header-rewind="back"
+						onclick={(e) => (rewind.back.disabled ? e.preventDefault() : rewind.goBack())}
+					>
+						<Icons.Undo2 aria-hidden="true" />
+					</button>
+					{#if rewind.back.reason}
+						<span id="{rewindId}-back" class="sr-only">{rewind.back.reason}</span>
+					{/if}
+					<button
+						type="button"
+						class="btn-icon hover:preset-tonal focus-visible:preset-tonal text-foreground aria-disabled:text-surface-500 size-11 shrink-0 aria-disabled:cursor-default [&>svg]:size-5"
+						aria-label="Forward one turn"
+						title={forwardTitle}
+						aria-disabled={rewind.forward.disabled}
+						aria-describedby={rewind.forward.reason || rewind.aheadText
+							? `${rewindId}-forward`
+							: undefined}
+						data-header-rewind="forward"
+						onclick={(e) => (rewind.forward.disabled ? e.preventDefault() : rewind.goForward())}
+					>
+						<Icons.Redo2 aria-hidden="true" />
+					</button>
+					{#if rewind.forward.reason || rewind.aheadText}
+						<span id="{rewindId}-forward" class="sr-only">
+							{rewind.forward.reason ?? rewind.aheadText}
+						</span>
+					{/if}
+					</span>
+				{/if}
 				<!-- The session's panels, mobile only (ruled 2026-09-10): ONE
 			     button opening a sheet that lists the side groups. Rendered
 			     only while a narrow session actually has a populated side
@@ -219,7 +321,7 @@
 				{#if openSessionCtx?.sessionId != null && panelsCtx}
 					<button
 						type="button"
-						class="btn hover:preset-tonal focus-visible:preset-tonal text-foreground flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 lg:px-2.5 [&>svg]:size-5"
+						class="sp-head-wide btn hover:preset-tonal focus-visible:preset-tonal text-foreground flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 lg:px-2.5 [&>svg]:size-5"
 						aria-label="Session settings"
 						title="Session settings"
 						onclick={openSessionSettings}
@@ -239,7 +341,7 @@
 			     opening or closing. -->
 				<button
 					type="button"
-					class="btn hover:preset-tonal focus-visible:preset-tonal text-foreground flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 lg:px-2.5 [&>svg]:size-5"
+					class="sp-head-wide btn hover:preset-tonal focus-visible:preset-tonal text-foreground flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 lg:px-2.5 [&>svg]:size-5"
 					aria-label="Customize layout"
 					title="Customize layout"
 					onclick={() => requestLayoutEditor()}
@@ -249,6 +351,20 @@
 						Layout
 					</span>
 				</button>
+
+				<!-- The phone's ⋯ (L8): Back, Forward, Settings and Layout as
+				     items, drawn only below 640px of bar (`sp-head-narrow`). -->
+				<span class="sp-head-narrow sp-head-group">
+					<RowMenu
+						label="Session"
+						triggerLabel="More actions for {sessionName ?? 'this session'}"
+						triggerTitle="More actions"
+						triggerClass="btn-icon hover:preset-tonal focus-visible:preset-tonal text-foreground size-11 shrink-0 [&>svg]:size-5"
+						horizontal
+						width={220}
+						items={phoneMenu}
+					/>
+				</span>
 
 				<!-- Roll the bar up (note 29): the quietest control here, last, at
 			     the top right. -->
@@ -337,22 +453,28 @@
 		flex: none;
 	}
 	.sp-head-lead {
-		flex: none;
-		inline-size: calc(
+		/* The mirror gives way before the name does: it starts at the
+		   cluster's width and shrinks to nothing as the window tightens, so
+		   at 1440 the name is whole and merely sits a little left of the
+		   column; only once the mirror is gone does the name ellipsize
+		   (`.sp-head-row`'s `min-inline-size: 0`). */
+		flex: 0 999 calc(
 			var(--sp-head-tools, 0px) + var(--jump-pill-width, 34px) + 0.375rem
 		);
+		min-inline-size: 0;
 	}
 
-	/* The measure the conversation column takes (see MessagesWidget's
-	   `messages.stage` part), centred in the bar so the two line up. `min-inline-size:
-	   0` is what makes a tight window ellipsize the name instead of pushing
-	   into the buttons. */
+	/* The measure the conversation column takes at its default Line width,
+	   Column (★R1; `styles/widgets.css`, the `messages.stage` part: 76ch of
+	   the story's body plus the avatar gutter), centred in the bar so the two
+	   line up. `min-inline-size: 0` is what makes a tight window ellipsize
+	   the name instead of pushing into the buttons. */
 	.sp-head-row {
 		display: flex;
 		align-items: center;
-		flex: 1;
+		flex: 1 1 auto;
 		inline-size: 100%;
-		max-inline-size: calc(var(--sp-measure, 40rem) + 3.5rem);
+		max-inline-size: calc(76 * 0.58 * 17px * var(--sp-prose-scale, 1) + 3.5rem);
 		margin-inline: auto;
 		min-inline-size: 0;
 	}
@@ -422,8 +544,57 @@
 			margin-inline: 0;
 		}
 	}
-	@container sp-head (width < 640px) {
+	/* A wrapper that only groups controls for the rules below; its children
+	   sit in the cluster's own flex row. Before them, so they win. */
+	.sp-head-group {
+		display: contents;
+	}
+	/* The phone (L8): the genre steps out, Back · Forward · Settings · Layout
+	   fold into one ⋯, and the name keeps the room. The cast stack gives way
+	   first — it clips to its first face — so the name is cut only when it is
+	   wider than the row less one 24px face, which at 412px is well past 12
+	   characters. */
+	/* A Half-width pane (640–960px): the mirror is already gone, and the
+	   trailing cluster still takes ~520px, so the identity has ~150–400px.
+	   Give way in the same order as the phone — the genre steps out, the cast
+	   clips to its first face — and the name keeps at least six rems, so it
+	   never collapses to nothing beside a whole cluster of icons. */
+	@container sp-head (width < 960px) {
 		.sp-head-genre {
+			display: none;
+		}
+		.sp-head-name {
+			flex: 1 1 auto;
+			min-inline-size: 6rem;
+		}
+		.sp-head-cast {
+			flex: 0 1 auto;
+			min-inline-size: calc(24px + 4px);
+			overflow: hidden;
+			padding: 2px;
+			margin-inline-start: calc(0.5rem - 2px);
+		}
+	}
+	@container sp-head (width < 640px) {
+		.sp-head-genre,
+		.sp-head-wide {
+			display: none;
+		}
+		.sp-head-name {
+			flex: 0 0 auto;
+			max-inline-size: calc(100% - 2.375rem);
+		}
+		.sp-head-cast {
+			flex: 0 1 auto;
+			min-inline-size: calc(24px + 4px);
+			overflow: hidden;
+			/* Room for the faces' 2px ring, which the clip would cut. */
+			padding: 2px;
+			margin-inline-start: calc(0.5rem - 2px);
+		}
+	}
+	@container sp-head (width >= 640px) {
+		.sp-head-narrow {
 			display: none;
 		}
 	}
@@ -452,7 +623,7 @@
 		border-end-end-radius: 0.5rem;
 		background: var(--color-surface-200-800);
 		opacity: 0.5;
-		transition: opacity 150ms;
+		transition: opacity var(--transition-duration-fast);
 	}
 	.sp-head-unfurl:hover,
 	.sp-head-unfurl:focus-visible {

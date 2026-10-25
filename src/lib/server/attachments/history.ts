@@ -3,7 +3,8 @@
  * `core:query/history-attachments@1` (PLAN-composer-attachments §3.5).
  *
  * For the given message ids, the files each message's ACTIVE revision shows
- * (`core:image` / `core:file` parts, in part order), as `HistoryAttachmentV1`
+ * (`core:image` / `core:audio` / `core:video` / `core:file` parts, in part
+ * order), as `HistoryAttachmentV1`
  * references keyed by message id. One query for the parts, one for the
  * files. A text file's body is read off disk up to `textFileBytes`, because a
  * text file reaches every model as text and the placement step that reads
@@ -24,8 +25,6 @@ import { attachmentKindOf } from "$lib/shared/attachments/caps"
 import { ATTACHMENT_PART_TYPES } from "./references"
 
 export const TEXT_FILE_BYTES_DEFAULT = 65536
-
-const MEDIA_KINDS = new Set(["image", "audio", "video", "document"])
 
 export async function historyAttachmentsFor(
 	db: Db,
@@ -111,9 +110,18 @@ export async function historyAttachmentsFor(
 			(typeof data.mime === "string" ? data.mime : "application/octet-stream")
 		const attachmentKind =
 			row.type === "core:image" ? "image" : attachmentKindOf(mime)
+		// 🚧 What an audio file says, when a transcribe step heard it (O9).
+		const transcript =
+			typeof file.transcript === "string" && file.transcript.trim()
+				? file.transcript.trim()
+				: null
+		const alt =
+			typeof data.alt === "string" && data.alt.trim() ? data.alt.trim() : null
 		const ref: HistoryAttachmentV1 = {
 			uuid: String(file.uuid),
-			kind: (MEDIA_KINDS.has(file.kind) ? file.kind : "document") as HistoryAttachmentV1["kind"],
+			// The stored kind, whatever it is (O1): an unknown kind passes
+			// through rather than becoming `document`.
+			kind: file.kind as HistoryAttachmentV1["kind"],
 			mime,
 			bytes: file.displayBytes ?? 0,
 			...(file.width ? { width: file.width } : {}),
@@ -125,9 +133,9 @@ export async function historyAttachmentsFor(
 					(typeof data.name === "string" ? data.name : null)
 				return name ? { filename: name } : {}
 			})(),
-			...(typeof data.alt === "string" && data.alt.trim()
-				? { text: data.alt.trim() }
-				: {}),
+			...(alt ? { text: alt } : transcript ? { text: transcript } : {}),
+			...(transcript ? { transcript } : {}),
+			...(file.durationMs ? { duration: file.durationMs / 1000 } : {}),
 			attachmentKind
 		}
 		if (attachmentKind === "text") {

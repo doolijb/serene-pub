@@ -148,7 +148,11 @@ export const HOSTED_BY = {
 	/** Documents in the message array. Same call, same shape. */
 	"text+document->text": "generateText",
 	/** img2img with the prompt left off. `editImage`'s route, minus a field. */
-	"image->image": "editImage"
+	"image->image": "editImage",
+	/** 🚧 Sound in the message array (O4) — `input_audio` parts. Per-model, so probed. */
+	"text+audio->text": "generateText",
+	/** 🚧 A spoken reply (O6): the same call, asking for audio beside the text. */
+	"text->text+audio": "generateText"
 } as const satisfies Partial<Record<KnownTransformId, ActionName>>
 
 /**

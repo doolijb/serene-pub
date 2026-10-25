@@ -951,7 +951,7 @@
 							{#each group.sprites as sprite (sprite.id)}
 								{@const src = thumb(sprite)}
 								<div
-									class="border-surface-300-700 relative h-16 w-16 overflow-hidden rounded-md border"
+									class="border-surface-200-800 relative h-16 w-16 overflow-hidden rounded-md border"
 								>
 									{#if src}
 										<img
@@ -963,7 +963,7 @@
 									{:else if isOwner}
 										<button
 											type="button"
-											class="text-surface-500 hover:text-primary-500 flex h-full w-full items-center justify-center border-2 border-dashed"
+											class="text-surface-500 hover:text-primary-ink flex h-full w-full items-center justify-center border-2 border-dashed"
 											onclick={() =>
 												uploadInto(group.label)}
 											aria-label="Upload an image for {group.label}"
@@ -990,7 +990,7 @@
 											<RowMenu
 												label={group.label}
 												width={220}
-												triggerLabel="Options for this {group.label} sprite"
+												triggerLabel="More actions for the {group.label} sprite"
 												triggerClass="bg-surface-950/60 hover:bg-surface-950/80 rounded-full p-0.5 text-white"
 												bind:open={
 													() =>
@@ -1228,7 +1228,7 @@
 			>
 				<header class="flex items-center gap-3">
 					<Icons.Trash2
-						class="text-error-500 h-5 w-5 shrink-0"
+						class="text-error-600-400 h-5 w-5 shrink-0"
 						aria-hidden="true"
 					/>
 					<h2 class="text-lg font-bold">Delete sprite</h2>
@@ -1271,7 +1271,7 @@
 			>
 				<header class="flex items-center gap-3">
 					<Icons.Trash2
-						class="text-error-500 h-5 w-5 shrink-0"
+						class="text-error-600-400 h-5 w-5 shrink-0"
 						aria-hidden="true"
 					/>
 					<h2 class="text-lg font-bold">Delete sprite set</h2>

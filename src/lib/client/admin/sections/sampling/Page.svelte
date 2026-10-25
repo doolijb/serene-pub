@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * Admin → Sampling: the changelist (owner ruling 2026-09-27 — admin
 	 * manages its objects Django-style instead of nesting a sidebar view).
@@ -233,16 +234,13 @@
 			{#if held.length || pipelines.length}
 				<span class="flex flex-wrap items-center gap-1">
 					{#each held as h (h.capability)}
-						<span
-							class="preset-tonal-primary rounded-full px-2 py-0.5 text-[11px]"
-							title="Used by the {h.label} loadout"
-						>
+						<Badge tone="primary" size="sm" title="Used by the {h.label} loadout">
 							Loadout · {h.label}
-						</span>
+						</Badge>
 					{/each}
 					{#if pipelines.length}
 						<span
-							class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5 text-[11px]"
+							class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5 text-meta"
 							title={pipelines.join(", ")}
 						>
 							{pipelines.length}

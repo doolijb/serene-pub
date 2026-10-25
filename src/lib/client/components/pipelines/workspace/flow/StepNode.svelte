@@ -36,7 +36,7 @@
 	class="flex h-full w-full items-stretch overflow-hidden rounded-md border transition-colors
 		{active
 		? 'preset-tonal-primary border-primary-500'
-		: `bg-surface-100-900 border-surface-300-700 ${wire.stepKey ? 'hover:border-primary-500/60' : 'opacity-55'}`}
+		: `bg-surface-100-900 border-surface-200-800 ${wire.stepKey ? 'hover:border-primary-500/60' : 'opacity-55'}`}
 		{wire.stepKey ? 'cursor-pointer' : 'cursor-default'}"
 	title={wire.stepKey
 		? undefined
@@ -51,7 +51,7 @@
 	<span class="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2">
 		<span class="min-w-0 flex-1">
 			<span class="flex min-w-0 items-center gap-1.5">
-				<span class="truncate text-[13px] font-medium">{wire.label}</span>
+				<span class="truncate text-chip font-medium">{wire.label}</span>
 				{#if pending}
 					<span
 						class="bg-warning-500 size-2 shrink-0 rounded-full"
@@ -59,7 +59,7 @@
 					></span>
 				{/if}
 			</span>
-			<span class="flex items-center gap-1.5 text-[11px] opacity-70">
+			<span class="flex items-center gap-1.5 text-meta opacity-70">
 				<span class="truncate font-mono">{wire.kind}</span>
 				{#if counts}
 					<span aria-hidden="true">·</span>
@@ -72,7 +72,7 @@
 		</span>
 		{#if counts?.overridden}
 			<span
-				class="preset-filled-secondary-500 shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
+				class="preset-filled-secondary-500 shrink-0 rounded-full px-1.5 py-0.5 text-meta font-semibold"
 				title="{counts.overridden} set here, not inherited"
 			>
 				{counts.overridden}
@@ -80,7 +80,7 @@
 		{/if}
 		{#if wire.toggleable}
 			<span
-				class="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold
+				class="shrink-0 rounded-full px-1.5 py-0.5 text-meta font-semibold
 					{wire.enabledDefault ? 'preset-tonal-surface' : 'preset-tonal-error'}"
 				title={wire.enabledDefault
 					? "Optional — on by default"

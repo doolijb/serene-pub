@@ -286,6 +286,19 @@ button[data-widget-part~="messages.message-name"]:hover {
 		opacity: 1;
 	}
 }
+/* The ⋮ trigger reveals the same way where there is a pointer to hover with
+   (polish parity §5.3), except on the newest line — its menu holds the last
+   run — and while its menu is open. A finger always sees it. */
+@media (hover: hover) and (pointer: fine) {
+	[data-widget-part~="messages.message"]:not([data-msg-newest]) [data-widget-part~="messages.message-options"] {
+		opacity: 0;
+		transition: opacity 120ms ease-out;
+	}
+	[data-widget-part~="messages.message"]:is(:hover, :focus-within) [data-widget-part~="messages.message-options"],
+	[data-widget-part~="messages.message-options"]:has([aria-expanded="true"]) {
+		opacity: 1;
+	}
+}
 [data-widget-part~="messages.message-menu"] {
 	display: inline-flex;
 	align-items: center;
@@ -435,17 +448,17 @@ button[data-widget-part~="messages.message-name"]:hover {
 [data-widget-part~="messages.message-disclosure-clip"] {
 	overflow: hidden;
 }
+/* An open fold inherits the line's card (STYLE-GUIDE §6.13): no box of its
+   own, its text set in under the toggle's glyph. */
 [data-widget-part~="messages.message-disclosure-panel"] {
-	padding: 0.5rem 0.625rem;
-	border-radius: 10px;
+	padding: 0.125rem 0 0.5rem 1.25rem;
 	font-family: var(--typo-base--font-family);
 	font-size: 0.8125rem;
 	line-height: 1.5;
-	background: var(--color-surface-50);
+	background: none;
 	color: var(--color-surface-700);
 }
 [data-mode="dark"] [data-widget-part~="messages.message-disclosure-panel"] {
-	background: var(--color-surface-950);
 	color: var(--color-surface-300);
 }
 
@@ -503,12 +516,6 @@ button[data-widget-part~="messages.history-marker"]:hover {
 [data-mode="dark"] button[data-widget-part~="messages.history-marker"]:hover {
 	color: var(--color-surface-300);
 }
-[data-widget-part~="messages.history-start"] {
-	color: var(--color-primary-700);
-}
-[data-mode="dark"] [data-widget-part~="messages.history-start"] {
-	color: var(--color-primary-500);
-}
 [data-widget-part~="messages.scene-title"] {
 	display: inline-flex;
 	align-items: center;
@@ -537,9 +544,10 @@ button[data-widget-part~="messages.scene-title"]:hover {
 
 /* 🚧 A scene divider (live scenes §7): one quiet line where a scene begins —
    its swatch and name in the scene's colour (`--sp-scene`, set on the item),
-   then its day, its count and its faces in muted 12px, the ⋯ at the end. A
-   rule runs from the facts to the menu so the boundary reads as a line
-   across the log, not a heading. */
+   then its day and its count in muted 12px, the ⋯ at the end (polish parity
+   L1: swatch · name · count · ⋯). Who speaks in it is the facts' tooltip; the
+   faces stay in the markup for a style that wants them, and this sheet draws
+   none. */
 [data-widget-part~="messages.scene-divider-body"] {
 	display: flex;
 	flex-wrap: wrap;
@@ -581,7 +589,7 @@ button[data-widget-part~="messages.scene-title"]:hover {
 	color: var(--color-surface-500);
 }
 [data-widget-part~="messages.scene-faces"] {
-	display: inline-flex;
+	display: none;
 	align-items: center;
 	margin-inline-start: auto;
 }
@@ -611,13 +619,11 @@ button[data-widget-part~="messages.scene-title"]:hover {
 	font-size: 0.6875rem;
 	color: var(--color-surface-500);
 }
-/* The ⋯ sits at the line's end; after the faces, beside them. */
+/* The ⋯ sits at the line's end. (A style that draws the faces gives them the
+   auto margin and the menu none, so the menu sits beside them.) */
 [data-widget-part~="messages.scene-menu"] {
 	display: inline-flex;
 	margin-inline-start: auto;
-}
-[data-widget-part~="messages.scene-faces"] + [data-widget-part~="messages.scene-menu"] {
-	margin-inline-start: 0;
 }
 /* 🚧 The divider's drag grip (lane E): quiet until the divider is hovered or
    the grip held; the drag itself is the host's (`sp-drag-handle`). */

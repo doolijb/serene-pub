@@ -1,4 +1,6 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * The Scripts tab of the admin pipeline workspace (PLAN-script-placement
 	 * D3, R-Q1 as amended): every place a script can run in this pipeline, in
@@ -53,7 +55,8 @@
 	})
 
 	const map = $derived(detail ? groupSeams(optionsOf(detail.groups)) : null)
-	const configId = $derived(detail?.selectedConfig?.id ?? null)
+	// Named configurations are retired (R38; lane 7): a seam opens on the pipeline itself.
+	const configId = null
 
 	function open(e: MouseEvent, o: Option) {
 		// A modified click is a new tab on the href; a plain one stays here.
@@ -69,7 +72,7 @@
 	<li class="flex flex-col gap-1 py-2" data-seam={o.at}>
 		<a
 			href={seamHref(slug, configId, o)}
-			class="text-surface-800-200 hover:text-primary-600-400 self-start text-sm font-semibold underline-offset-2 hover:underline focus-visible:underline"
+			class="text-surface-800-200 hover:text-primary-ink self-start text-sm font-semibold underline-offset-2 hover:underline focus-visible:underline"
 			onclick={(e) => open(e, o)}
 		>
 			{o.label}
@@ -83,9 +86,9 @@
 		{#if o.acceptsLabels?.length}
 			<div class="flex flex-wrap gap-1" aria-label="Script kinds accepted here">
 				{#each o.acceptsLabels as kind (kind)}
-					<span class="preset-tonal-surface rounded-full px-1.5 py-0.5 text-[11px]">
+					<Badge size="sm">
 						{kind}
-					</span>
+					</Badge>
 				{/each}
 			</div>
 		{/if}
@@ -100,10 +103,10 @@
 							{entry.missing ? `Missing script (#${entry.id})` : entry.name}
 						</span>
 						{#if entry.missing}
-							<span class="preset-tonal-error rounded-full px-1.5 py-0.5 text-[11px]">deleted</span>
+							<Badge tone="error" size="sm">deleted</Badge>
 						{:else if !entry.enabled}
 							<span
-								class="text-surface-600-400 text-[11px]"
+								class="text-surface-600-400 text-meta"
 								title="Disabled on the scripts page — keeps its place, does nothing."
 							>
 								off
@@ -129,11 +132,10 @@
 {:else if !map.steps.length && !map.unplaced.length}
 	<EmptyState icon={Icons.ScrollText} message="This pipeline has no place a script can run." />
 {:else}
-	<p class="text-surface-600-400 text-sm">
-		Every place a script can run, in run order, as
-		{detail?.selectedConfig ? `“${detail.selectedConfig.name}”` : "this configuration"}
-		has it. Open one to change its chain.
-	</p>
+	<FieldHelp>
+		Every place a script can run, in run order, as this pipeline's values have it. Open one to change its
+		chain.
+	</FieldHelp>
 	{#each map.steps as step (step.stepKey)}
 		<section class="panel-card flex flex-col" aria-labelledby="script-map-{step.stepKey}">
 			<h3 id="script-map-{step.stepKey}" class="text-sm font-medium">{step.heading}</h3>
@@ -149,10 +151,10 @@
 			<h3 id="script-map-unplaced" class="flex items-center gap-1.5 text-sm font-medium">
 				<Icons.Archive size={14} aria-hidden="true" /> Unplaced
 			</h3>
-			<p class="text-surface-600-400 text-xs">
+			<FieldHelp>
 				These steps no longer have the place these scripts were attached to. They are
 				skipped; a stop script here stops the reply from running.
-			</p>
+			</FieldHelp>
 			<ul class="divide-surface-200-800 flex flex-col divide-y">
 				{#each map.unplaced as o (o.id)}
 					{@render seam(o, o.step.heading)}

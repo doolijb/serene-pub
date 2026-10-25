@@ -114,7 +114,8 @@ export function createEnvelopeSections(d: EnvelopeSectionsDeps) {
 						proposals: stateStore.proposals,
 						viewerUserId: userCtx.user?.id ?? null,
 						wordsOnly: stateStore.wordsOnly,
-						metPeople: stateStore.metPeople
+						metPeople: stateStore.metPeople,
+						storyTime: stateStore.storyTime
 					},
 					sessionId
 				)

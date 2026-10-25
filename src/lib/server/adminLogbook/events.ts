@@ -710,59 +710,6 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 			return `Changed ${n} option${n === 1 ? "" : "s"}`
 		}
 	},
-	"pipelines:resetConfig": {
-		objectType: "pipeline",
-		action: "change",
-		id: (p) => p?.slug,
-		label: (p) => p?.slug,
-		when: pubScope,
-		fields: ["configId"],
-		verb: () => "Reset a configuration to its defaults"
-	},
-	"pipelines:setPresetActions": {
-		objectType: "pipeline",
-		action: "change",
-		id: (p) => p?.slug,
-		label: (p) => p?.slug,
-		when: pubScope,
-		fields: ["configId", "includedActions", "enabled"]
-	},
-	"pipelines:createConfig": {
-		objectType: "pipeline",
-		action: "change",
-		id: (p) => p?.slug,
-		label: (p) => p?.slug,
-		when: pubScope,
-		fields: ["name", "fromConfigId"],
-		verb: (p) => `Added configuration${q(p?.name)}`
-	},
-	"pipelines:renameConfig": {
-		objectType: "pipeline",
-		action: "change",
-		id: (p) => p?.slug,
-		label: (p) => p?.slug,
-		when: pubScope,
-		fields: ["configId", "name"],
-		verb: (p) => `Renamed configuration #${p?.configId} to${q(p?.name)}`
-	},
-	"pipelines:deleteConfig": {
-		objectType: "pipeline",
-		action: "change",
-		id: (p) => p?.slug,
-		label: (p) => p?.slug,
-		when: pubScope,
-		fields: ["configId"],
-		verb: (p) => `Deleted configuration #${p?.configId}`
-	},
-	"pipelines:selectConfig": {
-		objectType: "pipeline",
-		action: "change",
-		id: (p) => p?.slug,
-		label: (p) => p?.slug,
-		when: pubScope,
-		fields: ["configId", "scope"],
-		verb: (p) => `Selected configuration #${p?.configId}`
-	},
 
 	/* Writing — through a pipeline's panel (pub scope) and the library */
 	"pipelines:createPrompt": {

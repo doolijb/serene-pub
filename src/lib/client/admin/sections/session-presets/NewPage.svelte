@@ -1,10 +1,10 @@
 <script lang="ts">
 	/**
 	 * Admin › Presets › Add preset (23 §9): the add form. Nothing exists until
-	 * a Save — the explicit-save rule. Starting from an existing preset copies
-	 * its selections server-side (`fromPresetId`); starting bare inherits
-	 * every pipeline's default configuration. The bindings are set on the
-	 * change form "Save and continue editing" lands on.
+	 * a Save — the explicit-save rule. Starting from an existing preset clones
+	 * its changes and settings server-side (`fromPresetId`, one level, R2);
+	 * starting bare is the genre's defaults. What it runs is changed on the
+	 * change form "Save and continue editing" lands on (lane 7).
 	 *
 	 * `?genre=<id>` preselects the genre and `?from=<id>` the preset to copy
 	 * (a genre's change form and a preset's Duplicate land here).
@@ -119,7 +119,7 @@
 <AdminChangeForm
 	mode="add"
 	title="Add preset"
-	purpose="A preset starts bare (every pipeline at its shipped configuration) or as a copy of another of its genre. You bind its events next."
+	purpose="A preset starts as its genre's defaults, or as a clone of another preset of the genre. You change what it runs next."
 	noun="preset"
 	changelistHref="/admin/session-presets"
 	changelistLabel="Presets"
@@ -164,13 +164,13 @@
 			<AdminField
 				id="preset-new-from"
 				label="Start from"
-				help="Copy another preset's bindings, configurations and actions."
+				help="Clone another preset's changes and settings."
 			>
 				<Select
 					label="Start from"
 					labelHidden
 					options={[
-						{ value: "", label: "Nothing — shipped configurations" },
+						{ value: "", label: "Nothing — the genre's defaults" },
 						...copyCandidates.map((p) => ({ value: String(p.id), label: p.name }))
 					]}
 					bind:value={fromPresetId}

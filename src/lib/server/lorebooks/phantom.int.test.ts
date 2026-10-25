@@ -14,7 +14,8 @@ import os from "os"
 import path from "path"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { defineAttributeSlot, genre, _clearAttributeSlots } from "@serene-pub/sdk"
+import { defineAttributeSlot, _clearAttributeSlots } from "@serene-pub/sdk"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 import { LOCATION_TYPE_ID } from "$lib/shared/entries/types"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -54,7 +55,7 @@ function declareSlots() {
 			config: { of: ["clear", "storm"] }
 		})
 	]
-	genre(GENRE, { name: { en: "Phantom" }, family: "test", slots: declared, events: {} })
+	genreKeeping(GENRE, { name: { en: "Phantom" }, family: "test", slots: declared, events: {} })
 }
 
 let n = 0
@@ -121,7 +122,6 @@ describe("the session's own notes", () => {
 		expect(made.sessionId).toBe(w.session.id)
 		expect(made.name).toBe(w.session.name)
 		expect(made.primaryRuleset).toBe(STORY)
-		expect(made.compendiumMode).toBe("referenced")
 		expect(made.overlayOf).toBeNull()
 		// Twice is the same row.
 		expect((await phantomLorebookFor(testDb as any, w.session.id)).id).toBe(made.id)
@@ -393,11 +393,10 @@ describe("rulesets on existing rows", () => {
 	test("a lorebook and a session made with no ruleset read Story", async () => {
 		const w = await world({ lorebook: true })
 		const [book] = await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, w.lorebook!.id))
-		expect(book).toMatchObject({ primaryRuleset: STORY, rulesetVersion: null, compendiumMode: "referenced" })
+		expect(book).toMatchObject({ primaryRuleset: STORY, rulesetVersion: null, kind: "book" })
 		const [session] = await testDb.select().from(schema.sessions).where(eq(schema.sessions.id, w.session.id))
 		expect(session).toMatchObject({
 			primaryRuleset: STORY,
-			compendiumMode: "referenced",
 			rigour: "prose",
 			onRevision: "overwrite"
 		})
@@ -475,7 +474,7 @@ describe("wave 3: the notes routed whole (PLAN-rulesets §26)", () => {
 				config: { of: ["lit", "dark"] }
 			})
 		]
-		genre(GENRE3, { name: { en: "Phantom places" }, family: "test", slots, events: {} })
+		genreKeeping(GENRE3, { name: { en: "Phantom places" }, family: "test", slots, events: {} })
 		const w = await world()
 		await testDb.update(schema.sessions).set({ genreId: GENRE3 }).where(eq(schema.sessions.id, w.session.id))
 		const said = await w.message()
@@ -570,22 +569,17 @@ describe("wave 3: the notes routed whole (PLAN-rulesets §26)", () => {
 		])
 	})
 
-	test("Create lorebook from session carries the ruleset and compendium mode; the marks go", async () => {
+	test("Create lorebook from session carries the ruleset; the marks go", async () => {
 		const w = await world()
-		await testDb
-			.update(schema.sessions)
-			.set({ compendiumMode: "derived" })
-			.where(eq(schema.sessions.id, w.session.id))
 		const { phantomLorebookFor, createLorebookFromPhantom, sessionEntriesAsRead } = await import("./phantom")
 		const notes = await phantomLorebookFor(testDb as any, w.session.id)
-		expect(notes.compendiumMode).toBe("referenced")
 		await place(notes.id, "The cellar")
 		expect(
 			(await sessionEntriesAsRead(testDb as any, w.session.id, "session", [LOCATION_TYPE_ID]))[0]!.sessionOnly
 		).toBe(true)
 		await createLorebookFromPhantom(testDb as any, { sessionId: w.session.id, userId: w.user.id })
 		const [book] = await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, notes.id))
-		expect(book).toMatchObject({ primaryRuleset: STORY, compendiumMode: "derived", sessionId: null })
+		expect(book).toMatchObject({ primaryRuleset: STORY, kind: "book", sessionId: null })
 		const [session] = await testDb.select().from(schema.sessions).where(eq(schema.sessions.id, w.session.id))
 		expect(session!.lorebookId).toBe(notes.id)
 		const read = await sessionEntriesAsRead(testDb as any, w.session.id, "session", [LOCATION_TYPE_ID])

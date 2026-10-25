@@ -364,10 +364,10 @@
 		<div class="flex items-center gap-2">
 			<!-- Admin: pub theme toggle -->
 			{#if isAdmin && theme && isAccountsEnabled}
-				<!-- On is tonal primary, the app's "this is on" (§2.4). -->
+				<!-- On is `preset-pressed`, the app's "this is on" (§2.4). -->
 				<button
 					class="btn btn-sm text-xs {theme.isPubTheme
-						? 'preset-tonal-primary'
+						? 'preset-pressed'
 						: 'preset-tonal-surface'}"
 					aria-pressed={theme.isPubTheme}
 					onclick={() => togglePubTheme(!theme!.isPubTheme)}

@@ -30,7 +30,9 @@ import {
 	SAVE_MESSAGE_SPEC_ID,
 	_registerPackageGenre,
 	_withdrawGenre,
+	declareHostState,
 	getGenre,
+	hostStateFor,
 	sessionEvents,
 	type GenreDecl,
 	type SettingsSchema,
@@ -122,6 +124,14 @@ export function registerPubGenre(
 		events: props.events ?? source?.events ?? {}
 	} as unknown as GenreDecl
 	const registered = _registerPackageGenre(ownerOf(newId), decl)
+	// 🚧 RF fix 8: a copy keeps what the host keeps for its source's tools —
+	// the Lair's whisper and direction, the crawl's standing orders — so its
+	// pipelines write what they wrote. Never attributes; the place follows
+	// the copy's scenes on its own.
+	if (from) {
+		const kept = hostStateFor(from).filter((d) => d.genres.length)
+		if (kept.length) declareHostState(kept.map((d) => ({ slot: d.slot, role: d.role, genres: [newId], ...(d.owners ? { owners: d.owners } : {}) })))
+	}
 	pubHeld.set(newId, from)
 	return registered
 }
@@ -170,7 +180,44 @@ async function activeSpecRows(db: Db): Promise<SpecVersionRow[]> {
 			eq(schema.pipelineSpecVersions.id, schema.pipelineSpecs.activeVersionId)
 		)
 		.orderBy(asc(schema.pipelineSpecs.id))
-	return (rows as SpecVersionRow[]).filter((r) => r.activeVersionId === r.versionId)
+	const mounted = await registeredMounts(db)
+	return (rows as SpecVersionRow[])
+		.filter((r) => r.activeVersionId === r.versionId)
+		.map((r) => {
+			// 🚧 A pipeline mounted by registrations has no lock (D3): its genre
+			// and event are the genre's defaults' that register it (D7).
+			if (r.inputGenre) return r
+			const m = mounted.get(r.slug)
+			return m ? { ...r, inputGenre: m.genreId, inputEvent: r.inputEvent ?? m.event } : r
+		})
+}
+
+/**
+ * 🚧 Which genre's defaults register each pipeline, and on which event — a
+ * `session-created` registration first, so a create pipeline reads as one.
+ * The first genre wins for a pipeline several register (core's save, which
+ * the copies leave to core).
+ */
+async function registeredMounts(db: Db): Promise<Map<string, { genreId: string; event: string | null }>> {
+	const rows = await db
+		.select({
+			genreId: schema.registrations.scopeRef,
+			specSlug: schema.registrations.specSlug,
+			family: schema.registrations.triggerFamily,
+			ref: schema.registrations.triggerRef
+		})
+		.from(schema.registrations)
+		.where(and(eq(schema.registrations.scopeKind, "genre"), eq(schema.registrations.dropped, false)))
+		.orderBy(asc(schema.registrations.id))
+	const out = new Map<string, { genreId: string; event: string | null }>()
+	for (const r of rows) {
+		if (!r.specSlug) continue
+		const event = r.family === "event" ? r.ref : null
+		const had = out.get(r.specSlug)
+		if (!had) out.set(r.specSlug, { genreId: r.genreId, event })
+		else if (had.genreId === r.genreId && event === sessionEvents.sessionCreated) had.event = event
+	}
+	return out
 }
 
 const isCreateRow = (r: SpecVersionRow) =>
@@ -228,13 +275,16 @@ function rewriteDocument(
 ): SpecDocument {
 	const doc = structuredClone(source) as SpecDocument & Record<string, any>
 	doc.id = newSlug
+	// ⏳ A lock-era document keeps a lock and names its genre in places; a
+	// document mounted by registrations names none (D3) — its genre is the
+	// registrations the copy writes, never a field added here.
 	if (doc.input) doc.input = { ...doc.input, genre: newGenreId }
-	if (doc.taxonomy && typeof doc.taxonomy === "object")
+	if (doc.taxonomy && typeof doc.taxonomy === "object" && "genre" in (doc.taxonomy as object))
 		doc.taxonomy = { ...(doc.taxonomy as object), genre: newGenreId }
 	const contributes = doc.contributes as { actions?: unknown } | undefined
 	if (contributes && Array.isArray(contributes.actions))
 		contributes.actions = contributes.actions.map((a: Record<string, unknown>) => {
-			const next: Record<string, unknown> = { ...a, genre: newGenreId }
+			const next: Record<string, unknown> = { ...a, ...(a.genre !== undefined ? { genre: newGenreId } : {}) }
 			// A stated slash name lives under its spec's namespace; the
 			// derived one (`<owner>.<key>`) follows the new id by itself.
 			if (typeof a.slash === "string") {
@@ -289,14 +339,24 @@ export async function createPubGenre(
 	if (!source) refuse(`There is no genre called '${params.from}' to start from.`)
 
 	const rows = await activeSpecRows(db)
-	const create = rows.find(
-		(r) => isCreateRow(r) && r.inputGenre === params.from && r.status === "published"
-	)
+	// 🚧 The source genre's pipelines are the ones its defaults register
+	// (PLAN-layering D7) — ⏳ or, for a lock-era package genre, its locks'.
+	const { genreRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
+	const sourceRegs = await genreRegistrations(db, params.from)
+	const registered = new Set(sourceRegs.map((r) => r.pipeline))
+	const createSlug = sourceRegs.find(
+		(r) => r.trigger.family === "event" && r.trigger.event === sessionEvents.sessionCreated
+	)?.pipeline
+	const ofSource = (r: SpecVersionRow) => r.inputGenre === params.from || registered.has(r.slug)
+	const create =
+		rows.find((r) => isCreateRow(r) && r.inputGenre === params.from && r.status === "published") ??
+		rows.find((r) => r.slug === createSlug && r.status === "published")
 	if (!create)
 		refuse(`'${params.from}' has no published create pipeline to copy.`)
 	// A plugin's add-on spec locked to the source genre (a reply variant, an
 	// action pack) is the plugin's, not the genre's: only the specs that came
-	// with the genre's own create spec are copied.
+	// with the genre's own create spec are copied. Core's shared pipelines
+	// (the default save) serve every genre and are registered, never copied.
 	const copied = [
 		create!,
 		...(scope === "all"
@@ -304,8 +364,9 @@ export async function createPubGenre(
 					(r) =>
 						r !== create &&
 						r.status === "published" &&
-						r.inputGenre === params.from &&
-						r.sourcePluginId === create!.sourcePluginId
+						ofSource(r) &&
+						r.sourcePluginId === create!.sourcePluginId &&
+						r.slug !== SAVE_MESSAGE_SPEC_ID
 				)
 			: [])
 	]
@@ -344,6 +405,9 @@ export async function createPubGenre(
 		if (written.length)
 			await db.delete(schema.pipelineSpecs).where(inArray(schema.pipelineSpecs.slug, written))
 		await db.delete(schema.sessionPresets).where(eq(schema.sessionPresets.genreId, genreId))
+		await db
+			.delete(schema.registrations)
+			.where(and(eq(schema.registrations.scopeKind, "genre"), eq(schema.registrations.scopeRef, genreId)))
 		await db
 			.delete(schema.sessionLayoutPresets)
 			.where(
@@ -393,8 +457,39 @@ export async function createPubGenre(
 		for (const s of saved) await reconcileConfigs(db, s.specId, s.specVersionId, s.slug)
 
 		await insertDefaultPreset(db, params.from, genreId, label, slugMap, new Set(
-			rows.filter((r) => r.inputGenre === params.from).map((r) => r.slug)
+			rows.filter((r) => ofSource(r)).map((r) => r.slug)
 		))
+		// 🚧 The new genre's defaults (D7): the source's registrations, each on
+		// the copy of its pipeline where one was made — an action's identity
+		// follows its spec. Origin `pub`: the boot's projection leaves them be.
+		{
+			const { registrationKeyOf } = await import("@serene-pub/sdk")
+			const { rowOfDecl } = await import("$lib/server/pipelines/registrations/rows")
+			const { replaceRows } = await import("$lib/server/pipelines/registrations/write")
+			// Only what was copied — and core's save, which serves every genre:
+			// a source pipeline left behind answers for the source genre alone.
+			const kept = sourceRegs.filter(
+				(r) => slugMap.has(r.pipeline) || (r.trigger.family === "event" && isDefaultSave(r.trigger.event, r.pipeline))
+			)
+			const remapped = kept.map((r) => {
+				const pipeline = slugMap.get(r.pipeline) ?? r.pipeline
+				let trigger = r.trigger
+				if (trigger.family === "action") {
+					const hash = trigger.action.lastIndexOf("#")
+					const to = slugMap.get(trigger.action.slice(0, hash))
+					if (to) trigger = { family: "action", action: `${to}${trigger.action.slice(hash)}` }
+				}
+				const { origin: _o, changedBy: _c, ...decl } = r
+				return { ...decl, key: registrationKeyOf(trigger, pipeline), trigger, pipeline }
+			})
+			const scopeOf = { kind: "genre" as const, genreId }
+			await replaceRows(
+				db,
+				scopeOf,
+				remapped.map((d) => rowOfDecl(d as never, scopeOf, "pub")),
+				["pub"]
+			)
+		}
 		await copyDefaultLayout(db, params.from, genreId)
 
 		const [createRow] = await db
@@ -584,6 +679,10 @@ export async function updatePubGenre(
 		...(block.shape ? { shape: block.shape } : {}),
 		...(block.events ? { events: block.events } : {})
 	})
+	// 🚧 A11: the genre's registrations go back through the door — its
+	// declaration (fields, envoys) is what they were judged against.
+	const { refitAfterChange } = await import("$lib/server/pipelines/registrations/fit")
+	await refitAfterChange(db, [genreId, create.slug])
 }
 
 /**
@@ -626,11 +725,14 @@ function sessionFieldFault(fields: SettingsSchema): string | null {
 async function sourceGenreOf(db: Db, derivedFrom: number | null): Promise<string | null> {
 	if (derivedFrom == null) return null
 	const [row] = await db
-		.select({ inputGenre: schema.pipelineSpecVersions.inputGenre })
+		.select({ inputGenre: schema.pipelineSpecVersions.inputGenre, slug: schema.pipelineSpecs.slug })
 		.from(schema.pipelineSpecVersions)
+		.innerJoin(schema.pipelineSpecs, eq(schema.pipelineSpecs.id, schema.pipelineSpecVersions.specId))
 		.where(eq(schema.pipelineSpecVersions.id, derivedFrom))
 		.limit(1)
-	return ((row as { inputGenre?: string | null } | undefined)?.inputGenre ?? null) || null
+	if (row?.inputGenre) return row.inputGenre
+	// 🚧 A source mounted by registrations: the genre whose defaults register it (D7).
+	return row?.slug ? ((await registeredMounts(db)).get(row.slug)?.genreId ?? null) : null
 }
 
 /* ── boot ───────────────────────────────────────────────────────────── */

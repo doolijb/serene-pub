@@ -1,4 +1,11 @@
 /**
+ * 🚧 **Since PLAN-layering D7 (2026-10-20) a thin reader of the registrations
+ * resolver** (`pipelines/registrations/resolve.ts`): a preset binds no
+ * events — it changes the genre's defaults (R2) — and these names
+ * answer from those rows. The preset's `bindings` / `config_selections`
+ * columns are ⏳ kept unread until the RC1 squash. The note below is the
+ * contract as it stood, and still the rule for the fallback.
+ *
  * What the session's preset decided (24 §1) — read at run time, not only at
  * write time.
  *
@@ -56,6 +63,13 @@
 import { asc, eq } from "drizzle-orm"
 import { SAVE_MESSAGE_SPEC_ID, sessionEvents } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
+import {
+	genreRegistrations,
+	onEvent,
+	presetRegistrations,
+	unpublishedReason,
+	type PresetFallback as RegistrationFallback
+} from "$lib/server/pipelines/registrations/resolve"
 
 /**
  * A preset binds an event to a pipeline that cannot answer it any more.
@@ -96,23 +110,11 @@ export type PresetEventVerdict =
 	| ({ via: "fallback"; spec: string | null } & PresetFallback)
 
 /**
- * The substitution, in the shape every surface repeats it in.
- *
- * One shape rather than each reader composing its own sentence: the receipt,
- * the session banner, the admin notice and the preset list are four places
- * saying the same thing, and four hand-written versions of it is how they come
- * to say different things.
+ * The substitution, in the shape every surface repeats it in — the
+ * registrations resolver's (`PresetFallback` there), one shape for the
+ * receipt, the session banner, the admin notice and the preset list.
  */
-export interface PresetFallback {
-	presetId: number
-	/** The preset's name, because that is what an administrator recognises. */
-	preset: string
-	event: string
-	/** The slug the preset still names. */
-	bound: string
-	/** Why it does not resolve, as a sentence. */
-	reason: string
-}
+export type PresetFallback = RegistrationFallback
 
 /**
  * The preset a session was born on, or null.
@@ -140,9 +142,6 @@ export async function sessionPreset(
 		.limit(1)
 	return (preset as PresetRow | undefined) ?? null
 }
-
-const bindingsOf = (preset: PresetRow) =>
-	(preset.bindings ?? {}) as Record<string, { spec: string; config?: number }>
 
 /**
  * Does this version's inlet lock answer `event` (PLAN-turn-order §4.1)?
@@ -188,6 +187,13 @@ export async function lockedEventSpec(
 	genreId: string,
 	event: string
 ): Promise<string | null> {
+	// 🚧 The genre's defaults (PLAN-layering D7): the first registration on
+	// the event, in order (R24). The rows ARE the old locks for a package
+	// genre that declares no defaults (derived once, `genreDefaults.ts`).
+	const own = onEvent(await genreRegistrations(db, genreId), event)[0]
+	if (own) return own.pipeline
+	// ⏳ A package spec still locked to a genre whose defaults have not been
+	// projected yet (a boot that has not reached the projection).
 	const rows = await db
 		.select({
 			slug: schema.pipelineSpecs.slug,
@@ -264,11 +270,14 @@ export async function bindingRefusal(
 	const hit = (rows as any[]).find(
 		(r) => r.activeVersionId === r.versionId && r.status === "published"
 	)
-	if (!hit)
-		return `'${opts.slug}' is not published on this pub — it was removed, retired, or never installed here.`
+	if (!hit) return unpublishedReason(opts.slug)
 	// 🚧 Core's default save (owner ruling 2026-10-15) has no lock: like the
 	// built-ins it serves every genre, on `message-offered` only.
 	if (isDefaultSave(opts.event, opts.slug)) return null
+	// 🚧 A pipeline mounted by registrations has no lock (D3): what it may
+	// answer is fit, the registration door's (lane 5b). ⏳ A spec still
+	// locked is judged by its lock, as before.
+	if (!hit.inputGenre) return null
 	if (hit.inputGenre !== opts.genreId || !answersEvent(hit, opts.event))
 		return (
 			`'${opts.slug}' now answers '${hit.inputEvent ?? "nothing"}' for ` +
@@ -287,31 +296,28 @@ export async function presetBindingVerdict(
 	genreId: string,
 	event: string
 ): Promise<PresetEventVerdict> {
-	const bound = bindingsOf(preset)[event]
-	if (!bound?.spec) return { via: "none", spec: null }
-	const reason = await bindingRefusal(db, {
-		genreId,
-		event,
-		slug: bound.spec
-	})
-	if (!reason)
+	void genreId
+	const resolved = await presetRegistrations(db, preset.id)
+	if (!resolved) return { via: "none", spec: null }
+	const fallback = resolved.fallbacks.find((f) => f.event === event)
+	if (fallback)
 		return {
-			via: "preset",
-			spec: bound.spec,
-			preset: preset.name,
-			presetId: preset.id
+			via: "fallback",
+			// The layer below's answer — the genre's defaults on this event.
+			// Null here is "nothing serves", not a second failure.
+			spec: onEvent(resolved.offered, event)[0]?.pipeline ?? null,
+			...fallback
 		}
-	return {
-		via: "fallback",
-		// The genre's own answer, which is what a session on no preset runs.
-		// Null here is "nothing serves", not a second failure.
-		spec: (await lockedEventSpec(db, genreId, event)) ?? defaultEventSpec(event),
-		presetId: preset.id,
-		preset: preset.name,
-		event,
-		bound: bound.spec,
-		reason
-	}
+	// The preset decided this event when its own rows touch a registration
+	// on it — registered, changed or dropped one there.
+	const touched = new Set(resolved.rows.preset.map((r) => r.key))
+	const onIt = onEvent(resolved.offered, event)
+	const genreOnIt = onEvent(resolved.defaults, event)
+	if (onIt.some((r) => touched.has(r.key)) || genreOnIt.some((r) => touched.has(r.key)))
+		return onIt[0]
+			? { via: "preset", spec: onIt[0].pipeline, preset: preset.name, presetId: preset.id }
+			: { via: "none", spec: null }
+	return { via: "none", spec: null }
 }
 
 /**
@@ -335,26 +341,14 @@ export async function presetEventSpec(
 }
 
 /**
- * Which config the session's preset names for this spec, or null.
- *
- * Two places state it and this is their order: a binding's own `config`, which
- * is the specific answer an administrator gave for one slot, then
- * `configSelections`, which is the per-pipeline answer that also covers the
- * action specs no event binding can name.
- *
- * Unvalidated on purpose — the caller confirms the row still belongs to the
- * spec, which is the check it already performs for a session's own selection.
+ * ⏳ Which config the session's preset names for this spec — **always null**
+ * since configurations retired (R38, PLAN-layering D5): a preset's choices
+ * are its registrations' `values` now, read by `config/world.ts`. Kept so a
+ * caller still asking compiles until the RC1 squash.
  */
 export async function presetConfigForSpec(
-	db: Db,
-	opts: { sessionId: number | null | undefined; specSlug: string }
+	_db: Db,
+	_opts: { sessionId: number | null | undefined; specSlug: string }
 ): Promise<number | null> {
-	const preset = await sessionPreset(db, opts.sessionId)
-	if (!preset) return null
-	for (const bound of Object.values(bindingsOf(preset)))
-		if (bound?.spec === opts.specSlug && bound.config != null)
-			return Number(bound.config)
-	const selections = (preset.configSelections ?? {}) as Record<string, number>
-	const selected = selections[opts.specSlug]
-	return selected != null ? Number(selected) : null
+	return null
 }

@@ -190,6 +190,39 @@ export const systemSettingsUpdateScriptsEnabled: Handler<
 	}
 }
 
+/**
+ * 🚧 The system's two routine caps (R11; lane 7): the idle timeout and the
+ * most runs in a row every session's real-time routines sit under — the
+ * ceiling each person's own and each routine's caps may not exceed. Admin
+ * only; refused in a sentence on the reply.
+ */
+export const systemSettingsUpdateRoutineCaps: Handler<
+	Sockets.SystemSettings.UpdateRoutineCaps.Params,
+	Sockets.SystemSettings.UpdateRoutineCaps.Response
+> = {
+	event: "systemSettings:updateRoutineCaps",
+	handler: async (socket, params, emitToUser) => {
+		const reply = (res: Sockets.SystemSettings.UpdateRoutineCaps.Response) => {
+			emitToUser("systemSettings:updateRoutineCaps", res)
+			return res
+		}
+		if (!socket.user!.isAdmin) return reply({ success: false, error: "Only an administrator sets the pub's limits." })
+		const idle = params?.idleTimeoutMinutes
+		const runs = params?.maxRunsInRow
+		if (typeof idle !== "number" || !Number.isInteger(idle) || idle < 5)
+			return reply({ success: false, error: "Stop after nobody has played for is at least 5 minutes. Nothing was saved." })
+		if (typeof runs !== "number" || !Number.isInteger(runs) || runs < 1)
+			return reply({ success: false, error: "Most runs in a row is at least 1. Nothing was saved." })
+		await db
+			.update(schema.systemSettings)
+			.set({ cronIdleTimeoutMinutes: idle, cronMaxRunsInRow: runs })
+			.where(eq(schema.systemSettings.id, 1))
+		const res = reply({ success: true, idleTimeoutMinutes: idle, maxRunsInRow: runs })
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
+		return res
+	}
+}
+
 export const systemSettingsUpdateContextDebuggingEnabled: Handler<
 	Sockets.SystemSettings.UpdateContextDebuggingEnabled.Params,
 	Sockets.SystemSettings.UpdateContextDebuggingEnabled.Response
@@ -601,6 +634,7 @@ export function registerSystemSettingsHandlers(
 ) {
 	register(socket, systemSettingsGet, emitToUser)
 	register(socket, systemSettingsUpdateScriptsEnabled, emitToUser)
+	register(socket, systemSettingsUpdateRoutineCaps, emitToUser)
 	register(socket, systemSettingsUpdateContextDebuggingEnabled, emitToUser)
 	register(socket, systemSettingsUpdateAccountsEnabled, emitToUser)
 	register(socket, systemSettingsUpdateRequireTwoFactor, emitToUser)

@@ -24,7 +24,16 @@
 	import { completionTemplateOptions } from "$lib/client/stores/completionTemplateOptions.svelte"
 	import { sectionForModality } from "$lib/shared/constants/connectionSections"
 	import { modalityLabel } from "$lib/shared/constants/ConnectionTypes"
-	import { modelModalityChoices } from "$lib/shared/connections/modelModality"
+	import {
+		modelModalityChoices,
+		modelPurposeChoices
+	} from "$lib/shared/connections/modelModality"
+	import {
+		modelKindsOf,
+		purposeOn,
+		SINGLE_MODALITIES,
+		toggledPurpose
+	} from "$lib/shared/connections/modelKinds"
 	import { defaultLoadoutName } from "$lib/shared/loadouts/defaultLoadoutName"
 	import { shortDate, timeAgo } from "$lib/client/utils/timeAgo"
 	import { useConnectionModels } from "./useConnectionModels.svelte"
@@ -152,6 +161,27 @@
 	let modalityPick = $state<string | null>(null)
 
 	/**
+	 * 🚧 **What it's for**, as several choices (O3): Writes replies · Draws
+	 * pictures · Speaks · Hears · Sees — the ones this connection's type can
+	 * carry (`modelPurposeChoices`, the answer `connections:updateModel`
+	 * judges by). An embedding or entities model keeps its one choice (the
+	 * select below).
+	 */
+	const singlePurpose = $derived(
+		!!row?.modality && SINGLE_MODALITIES.has(row.modality)
+	)
+	const purposeChoices = $derived(
+		modelPurposeChoices(models.endpointType ?? "")
+	)
+	const kinds = $derived(
+		modelKindsOf({
+			modality: row?.modality ?? null,
+			reads: row?.reads ?? null,
+			writes: row?.writes ?? null
+		})
+	)
+
+	/**
 	 * Files on this endpoint that look like vision projectors, offered as
 	 * suggestions — the managed listing shows an mmproj GGUF as a model row
 	 * like any other, and its name is the only hint there is.
@@ -198,7 +228,7 @@
 	let confirmingRemove = $state(false)
 
 	const menuItem =
-		"hover:bg-surface-200-800 data-[highlighted]:bg-surface-200-800 flex h-9 cursor-pointer items-center justify-between gap-4 rounded-[8px] px-2.5 text-[13px]"
+		"hover:bg-surface-200-800 data-[highlighted]:bg-surface-200-800 flex h-9 cursor-pointer items-center justify-between gap-4 rounded-lg px-2.5 text-chip"
 </script>
 
 <div class="flex h-full flex-col gap-3">
@@ -374,7 +404,47 @@
 					</p>
 				</div>
 
-				{#if modalityChoices.length > 1}
+				{#if !singlePurpose && purposeChoices.length > 1}
+					<fieldset
+						class="flex flex-col gap-1"
+						aria-describedby="model-purpose-hint"
+					>
+						<legend class="text-xs font-semibold">What it's for</legend>
+						<div class="flex flex-wrap gap-x-4 gap-y-1">
+							{#each purposeChoices as purpose (purpose.key)}
+								<label class="flex items-center gap-2 text-sm">
+									<input
+										type="checkbox"
+										class="checkbox"
+										checked={purposeOn(kinds, purpose)}
+										disabled={models.busy}
+										onchange={(e) =>
+											models.patch(
+												row,
+												toggledPurpose(
+													kinds,
+													purpose,
+													e.currentTarget.checked
+												)
+											)}
+									/>
+									{purpose.label}
+								</label>
+							{/each}
+						</div>
+						<p
+							id="model-purpose-hint"
+							class="text-surface-600-400 text-xs"
+						>
+							Tick what this model does, so the right models are
+							offered for each loadout.
+							{#if kinds.reads == null}
+								What it hears and sees isn't set — the
+								connection's switches decide.
+							{/if}
+						</p>
+					</fieldset>
+				{:else if modalityChoices.length > 1}
 					<div class="flex flex-col gap-1">
 						<Select
 							label="What it's for"
@@ -541,7 +611,7 @@
 					<Portal>
 						<Menu.Positioner class="z-[1000]!">
 							<Menu.Content
-								class="bg-surface-50-950 border-surface-200-800 max-w-[90vw] min-w-56 overflow-y-auto rounded-[12px] border p-1 shadow-xl"
+								class="bg-surface-50-950 border-surface-200-800 max-w-[90vw] min-w-56 overflow-y-auto rounded-container border p-1 shadow-xl"
 							>
 								{#if !satisfiable.length}
 									<p class="text-surface-600-400 p-2 text-xs">

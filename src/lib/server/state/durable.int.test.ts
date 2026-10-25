@@ -25,9 +25,9 @@ import * as schema from "$lib/server/db/schema"
 import {
 	defineAttributeSlot,
 	derivations,
-	genre,
 	_clearAttributeSlots
 } from "@serene-pub/sdk"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -96,7 +96,7 @@ function declareSlots() {
 			config: { derivation: derivations.age.id, from: BIRTHDATE }
 		})
 	]
-	genre(GENRE, {
+	genreKeeping(GENRE, {
 		name: { en: "Durable" },
 		family: "test",
 		slots: declared,

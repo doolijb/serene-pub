@@ -443,18 +443,26 @@ describe("reveal the planning notes (D8)", () => {
 })
 
 describe("Rest (round 2)", () => {
-	it("one line on the journal folio with the clock it moved; the action is the owner's alone", async () => {
+	it("one line on the journal folio with the clock it moved; the party's night is the owner's alone", async () => {
 		const { sessionId } = await tableOfTwo("rest")
 		const { sessionsFireActionHandler } = await import("./sessions")
-		const { DUNGEON_CRAWLER_REST_SPEC_ID } = await import("@serene-pub/core-catalog")
+		// 🚧 S3 (lane G3, 2026-10-23): Vis Itineris offers its own Rest — the rules action is the
+		// one at the composer, and the crawl's night follows on the event it raises (After a rest).
+		// Routines run here only when a test turns them on: After a rest is one.
+		const { setRoutinesEnabled } = await import("$lib/server/pipelines/routines/runs")
 		const fire = async (userId: number) => {
-			const res: any = await sessionsFireActionHandler.handler(
-				fakeSocket(userId),
-				{ sessionId, action: `${DUNGEON_CRAWLER_REST_SPEC_ID}#rest`, payload: {} } as any,
-				emit
-			)
-			await settle()
-			return res
+			setRoutinesEnabled(true)
+			try {
+				const res: any = await sessionsFireActionHandler.handler(
+					fakeSocket(userId),
+					{ sessionId, action: "core:spec/rules-action#rest", payload: {} } as any,
+					emit
+				)
+				await settle()
+				return res
+			} finally {
+				setRoutinesEnabled(false)
+			}
 		}
 		// The story so far: the line the rest's table row belongs to.
 		await db
@@ -476,7 +484,13 @@ describe("Rest (round 2)", () => {
 		expect(table.map((r) => r.content)).toEqual([expect.stringMatching(/^The party rests for eight hours\./)])
 		expect((table[0]!.metadata as any)?.speaker).toBeUndefined()
 		expect((table[0]!.metadata as any)?.anchorMessageId).toBe(story.at(-1)!.id)
-		expect((await fire(guestId))?.error).toBeTruthy()
+		// 🚧 The rules' Rest is anyone's to take for themselves; the party's night is still the owner's.
+		await fire(guestId)
+		expect((await rowsOf(sessionId)).filter((r) => r.channel === "travelogue" && ((r.metadata as any)?.kind ?? "did") === "did")).toHaveLength(1)
+		// The crawl's own Rest steps aside while the rules offer one: never two Rests.
+		const { DUNGEON_CRAWLER_REST_SPEC_ID } = await import("@serene-pub/core-catalog")
+		const own: any = await sessionsFireActionHandler.handler(fakeSocket(ownerId), { sessionId, action: `${DUNGEON_CRAWLER_REST_SPEC_ID}#rest`, payload: {} } as any, emit)
+		expect(own?.error ?? own?.kind).toBeTruthy()
 	})
 })
 

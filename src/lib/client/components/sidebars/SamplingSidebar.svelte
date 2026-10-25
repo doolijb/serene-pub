@@ -597,10 +597,14 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col" use:vm.observe>
+	<!-- `listFills` (L7, 2026-10-24): nothing open, the list sits centred
+	     at its own 560px instead of beside an empty pane. -->
 	<PanelSplit
 		mode={vm.mode}
 		listWidth="340px"
 		{hasDetail}
+		listFills
+		fillWidth="list"
 		emptyMessage="Pick a sampling config, or make a new one."
 		toolbar={listToolbar}
 		list={listPane}
@@ -678,7 +682,7 @@
 											class="flex min-w-0 items-center gap-1.5"
 										>
 											<span
-												class="truncate text-[15px] font-medium"
+												class="truncate text-lead font-medium"
 											>
 												{row.name}
 											</span>
@@ -818,14 +822,16 @@
 						<h3 id="{uid}-params" class="text-sm font-semibold">
 							Parameters
 						</h3>
-						<span class="text-surface-600-400 truncate text-xs">
+						<div class="min-w-0 flex-1"></div>
+						<!-- The count at the header's right edge, 11px (polish
+						     parity L5), before the one action. -->
+						<span class="text-surface-600-400 truncate text-meta">
 							{sentSummary.on} of {sentSummary.total} sent
 						</span>
-						<div class="min-w-0 flex-1"></div>
 						<button
 							type="button"
 							class="btn btn-sm shrink-0 {chooseParams
-								? 'preset-tonal-primary'
+								? 'preset-pressed'
 								: 'preset-tonal-surface'}"
 							aria-pressed={chooseParams}
 							onclick={() => (chooseParams = !chooseParams)}

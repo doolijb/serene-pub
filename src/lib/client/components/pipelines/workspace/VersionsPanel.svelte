@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * What is actually published (22): every version, the active pointer
 	 * marked. Publishing moves a pointer; it never overwrites — a run in
@@ -44,13 +45,13 @@
 	     in a 400px column and in Focus. -->
 	<ul class="flex flex-col gap-1.5">
 		{#each versions as v (v.id)}
-			<li class="bg-surface-50-950 flex flex-col gap-1 rounded-[10px] px-3 py-2 text-sm">
+			<li class="bg-surface-50-950 flex flex-col gap-1 rounded-base px-3 py-2 text-sm">
 				<div class="flex flex-wrap items-center gap-x-2 gap-y-1">
 					<span class="font-mono font-semibold">{v.semver}</span>
 					{#if v.isActive}
-						<span class="preset-tonal-success rounded-full px-2 py-0.5 text-xs">
+						<Badge tone="success" size="md">
 							active
-						</span>
+						</Badge>
 					{/if}
 					<span class="text-surface-700-300">{v.status}</span>
 					<span class="text-surface-600-400 text-xs">

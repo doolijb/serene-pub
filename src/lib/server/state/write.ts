@@ -36,6 +36,15 @@
  * message 47 changed, and the new reply proposes its own
  * (`retractStateAnchoredTo`).
  *
+ * 🚧 **What a message changed goes with it** (RF fix 4, 2026-10-23,
+ * NOMENCLATURE §24): the same anchor carries everything a run writes — these
+ * rows, the zone snapshots (`zone_contents`), and what it wrote on a lorebook
+ * (a **lore imprint** each, `lorebooks/imprints.ts`: an entry's field, a
+ * tie's words on its row, a cast member's state, the notes' rule-fed
+ * overlay, a room or a link it filed). A swipe, a regenerate, a delete and a
+ * failed reply take all of it back by one rule; a shared book only while it
+ * is still exactly as the run left it.
+ *
  * ## The turn lock (R9)
  *
  * A change to a cast member anchors to **that character's latest message** and
@@ -94,7 +103,7 @@
  * same insert with different anchors rather than two writers.
  */
 
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm"
+import { and, asc, desc, eq, getTableColumns, inArray, isNull, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { rawRows } from "$lib/server/db/rawRows"
 import {
@@ -147,6 +156,7 @@ import {
 	type StateOwner
 } from "$lib/server/state/owners"
 import { castMemberKey, locationOwnerKey } from "$lib/server/state/keys"
+import { carries } from "$lib/server/state/carries"
 import { isCardlessPlayerSeat } from "$lib/server/sessions/seatName"
 import { sessionReadingOf, writeDatingAt } from "$lib/server/state/reading"
 import {
@@ -270,14 +280,27 @@ export async function newestMessageId(
 	db: Db,
 	sessionId: number
 ): Promise<number | null> {
+	// 🚧 The live history only (RF fix 5): a rewound row is no anchor — a
+	// write against it would go with the forward stack it belongs to. The
+	// forward stack is on the legacy row (the new model mirrors its id).
 	const rows = await db
 		.select({ id: schema.messages.id })
 		.from(schema.messages)
-		.where(eq(schema.messages.sessionId, sessionId))
+		.where(and(eq(schema.messages.sessionId, sessionId), liveMirrorSql()))
 		.orderBy(desc(schema.messages.id))
 		.limit(1)
 	return rows[0]?.id ?? null
 }
+
+/**
+ * 🚧 A `messages` row whose legacy row is in the live history (RF fix 5):
+ * the forward stack lives on `session_messages.rewind_ordinal`, and the new
+ * model shares its ids.
+ */
+const liveMirrorSql = () => sql`not exists (
+	select 1 from ${schema.sessionMessages} sm
+	where sm.id = ${schema.messages.id} and sm.rewind_ordinal is not null
+)`
 
 /**
  * The session's messages, in session order, reduced to what the lock reads.
@@ -307,7 +330,14 @@ export async function turnMessages(
 			personaId: schema.messages.personaId
 		})
 		.from(schema.messages)
-		.where(eq(schema.messages.sessionId, sessionId))
+		.where(
+			and(
+				eq(schema.messages.sessionId, sessionId),
+				// 🚧 The live history only (RF fix 5): a rewound row never
+				// holds an anchor open, nor seals one.
+				liveMirrorSql()
+			)
+		)
 		.orderBy(asc(schema.messages.id))
 	const created = rows.length
 		? await db
@@ -485,39 +515,67 @@ async function sealerName(
 }
 
 /**
- * Take back everything one message changed.
+ * Take back everything one message changed — the one retraction rule,
+ * **what a message changed goes with it** (RF fix 4, 2026-10-23,
+ * NOMENCLATURE §24).
  *
- * ⚠ **Called on REPLACEMENT, not on deletion.** A deleted message is handled by
- * the foreign keys — every anchored row cascades off `messages.id`. What the
- * database cannot see is a swipe or a regenerate, which keeps the row and its
- * id and replaces only the text: nothing is deleted, so nothing cascades, and
- * the values the old reply wrote would otherwise survive the reply itself. That
- * is the case this exists for.
+ * ⚠ **Called on REPLACEMENT** (a swipe, a regenerate, a reply that failed
+ * empty). A swipe or a regenerate keeps the row and its id and replaces only
+ * the text: nothing is deleted, so nothing cascades, and what the old reply
+ * wrote would otherwise survive the reply itself. A **delete** takes the
+ * same things back by its own road — the `messages.id` cascade for every
+ * keyed anchor, and `retractLoreAnchoredTo` (`messages/store.ts`) inside the
+ * delete's transaction for the plain-int ones — so the two behave the same.
  *
- * 🚧 **The clock moves with it** (live scenes §15 G5, 2026-10-13): the moves
- * this message carried — the keeper's under Trust the narrator, an accepted
- * clock proposal, a *Time passes…* filed against it — are taken back by
- * their steps before their rows go (`revertClockMovesAnchoredTo`), all in
- * one transaction. A reply's **tick** stays, row and move: the re-driven
- * reply never ticks again. Throws `StoryClockRefusal` with the sentence, and
- * takes nothing back, when the calendar cannot place a step back.
+ * What goes, in one transaction:
+ *
+ *  · the **values**, **configurations** and **proposals** anchored to it;
+ *  · 🚧 **the clock** (live scenes §15 G5, 2026-10-13): the moves this
+ *    message carried — the keeper's under Trust the narrator, an accepted
+ *    clock proposal, a *Time passes…* filed against it — are taken back by
+ *    their steps before their rows go (`revertClockMovesAnchoredTo`). A
+ *    reply's **tick** stays, row and move: the re-driven reply never ticks
+ *    again. Throws `StoryClockRefusal` with the sentence, and takes nothing
+ *    back, when the calendar cannot place a step back;
+ *  · 🚧 the **zone snapshots** anchored to it (`zone_contents`), so the row
+ *    before shows through, as a delete's cascade does;
+ *  · 🚧 what it wrote on a **lorebook** (`retractLoreAnchoredTo`): its lore
+ *    imprints by the one rule — the session's notes always revert, a real
+ *    book only while the field is still exactly as the run left it, else it
+ *    stays and says so (`lorebooks/imprints.ts`) — then the notes' entries
+ *    anchored to it (`source_message_id`) that carry no imprint.
+ *
+ * ⚠ A message **edit** (its prose) calls nothing here: what a reply changed
+ * is its own block, kept or undone there, never by rewording the text.
  *
  * `clockMoved`: the session's clock moved back, for the caller to announce.
- * 🚧 `changed` (live scenes §15 G14): anything at all was taken back — a
- * value, a configuration, a proposal or clock row, the clock — so the
+ * 🚧 `changed` (live scenes §15 G14): anything at all was taken back, so the
  * caller broadcasts `state:changed` once this has committed, as an outlet's
  * write does; a reply that changed nothing announces nothing.
  */
 export async function retractStateAnchoredTo(
 	db: Db,
-	messageId: number
+	messageId: number,
+	/**
+	 * 🚧 `ticks: 'take'` (RF fix 5, **Back**): the message leaves the
+	 * history, so its reply's tick goes too, row and move, as a delete's
+	 * does — and comes back with the rest on **Forward**
+	 * (`restoreRetractedState` steps the clock forward by each move taken).
+	 * Absent: a replacement's rule above, the tick stands.
+	 */
+	opts: { ticks?: "keep" | "take" } = {}
 ): Promise<{ clockMoved: boolean; changed: boolean; taken: RetractedState }> {
 	const { notATickSql, revertClockMovesAnchoredTo } = await import(
 		"$lib/server/state/clockMoves"
 	)
+	const takeTicks = opts.ticks === "take"
 	return await db.transaction(async (tx) => {
 		const t = tx as unknown as Db
-		const { sessionIds } = await revertClockMovesAnchoredTo(t, [messageId], { keepTicks: true })
+		const { sessionIds } = await revertClockMovesAnchoredTo(
+			t,
+			[messageId],
+			takeTicks ? {} : { keepTicks: true }
+		)
 		const values = await t
 			.delete(schema.attributeValues)
 			.where(eq(schema.attributeValues.validFromMessageId, messageId))
@@ -528,15 +586,76 @@ export async function retractStateAnchoredTo(
 			.returning()
 		const proposals = await t
 			.delete(schema.stateProposals)
-			.where(and(eq(schema.stateProposals.messageId, messageId), notATickSql))
+			.where(
+				takeTicks
+					? eq(schema.stateProposals.messageId, messageId)
+					: and(eq(schema.stateProposals.messageId, messageId), notATickSql)
+			)
 			.returning()
+		const zones = await t
+			.delete(schema.zoneContents)
+			.where(eq(schema.zoneContents.validFromMessageId, messageId))
+			.returning()
+		const [message] = await t
+			.select({ sessionId: schema.messages.sessionId })
+			.from(schema.messages)
+			.where(eq(schema.messages.id, messageId))
+			.limit(1)
+		const lore = message
+			? await retractLoreAnchoredTo(t, message.sessionId, [messageId])
+			: { imprints: [], phantomEntries: [], changed: false }
 		const clockMoved = sessionIds.length > 0
 		return {
 			clockMoved,
-			changed: clockMoved || values.length > 0 || configs.length > 0 || proposals.length > 0,
-			taken: { messageId, values, configs, proposals, clockSessions: sessionIds }
+			changed:
+				clockMoved ||
+				values.length > 0 ||
+				configs.length > 0 ||
+				proposals.length > 0 ||
+				zones.length > 0 ||
+				lore.changed,
+			taken: {
+				messageId,
+				values,
+				configs,
+				proposals,
+				zones,
+				imprints: lore.imprints,
+				phantomEntries: lore.phantomEntries,
+				clockSessions: sessionIds
+			}
 		}
 	})
+}
+
+/**
+ * 🚧 **What a message wrote on a lorebook, taken back** (RF fix 4): its lore
+ * imprints by the one rule (`retractImprints`), then the session's notes'
+ * entries anchored to it that no imprint covers (`source_message_id`, a
+ * plain int — written before imprints were, or by a writer that files
+ * none). The plain-int half of a retraction: `retractStateAnchoredTo` calls
+ * it on a replacement, the message store's deletes inside their own
+ * transaction (the cascade cannot reach a plain int). Hand it the `tx`.
+ */
+export async function retractLoreAnchoredTo(
+	tx: Db,
+	sessionId: number,
+	messageIds: readonly number[]
+): Promise<{
+	imprints: import("$lib/server/lorebooks/imprints").TakenImprint[]
+	phantomEntries: (typeof schema.lorebookEntries.$inferSelect)[]
+	changed: boolean
+}> {
+	if (!messageIds.length) return { imprints: [], phantomEntries: [], changed: false }
+	const { retractImprints, imprintsChanged } = await import("$lib/server/lorebooks/imprints")
+	const { takePhantomEntriesAnchoredTo } = await import("$lib/server/lorebooks/phantom")
+	const imprints = await retractImprints(tx, { messageIds })
+	const phantomEntries = await takePhantomEntriesAnchoredTo(tx, sessionId, messageIds)
+	return {
+		imprints,
+		phantomEntries,
+		changed: imprintsChanged(imprints) || phantomEntries.length > 0
+	}
 }
 
 /** What `retractStateAnchoredTo` took back, row for row — for `restoreRetractedState`. */
@@ -545,8 +664,80 @@ export interface RetractedState {
 	values: (typeof schema.attributeValues.$inferSelect)[]
 	configs: (typeof schema.attributeConfigs.$inferSelect)[]
 	proposals: (typeof schema.stateProposals.$inferSelect)[]
+	/** 🚧 The zone snapshots anchored to it. */
+	zones: (typeof schema.zoneContents.$inferSelect)[]
+	/** 🚧 What became of each lore imprint (reverted, spliced, kept, unmade). */
+	imprints: import("$lib/server/lorebooks/imprints").TakenImprint[]
+	/** 🚧 The notes' entries anchored to it with no imprint, as they were. */
+	phantomEntries: (typeof schema.lorebookEntries.$inferSelect)[]
 	/** The sessions whose own clock was stepped back. */
 	clockSessions: number[]
+}
+
+/**
+ * 🚧 What a retraction took, counted (RF fix 5): the deletion outlet's
+ * `taken` port — the values, configurations, proposals, zone snapshots,
+ * lore writes by what became of each (`reverted` · `spliced` · `kept` ·
+ * `unmade` · `dropped`), the notes' entries, and whether the clock moved
+ * back. Counts, never the rows: a listener learns what went, a receipt
+ * stays small.
+ */
+export function takenSummaryOf(taken: RetractedState, clockMoved: boolean) {
+	const imprints: Record<string, number> = {}
+	for (const t of taken.imprints ?? []) imprints[t.act] = (imprints[t.act] ?? 0) + 1
+	return {
+		values: taken.values.length,
+		configs: taken.configs.length,
+		proposals: taken.proposals.length,
+		zones: (taken.zones ?? []).length,
+		imprints,
+		notesEntries: (taken.phantomEntries ?? []).length,
+		clockMoved
+	}
+}
+
+/**
+ * 🚧 A `RetractedState` read back from JSON (RF fix 5: **Back** keeps what
+ * it took on the rewound row, `session_messages.rewind_taken`, for
+ * **Forward**): every timestamp column of every row it holds a `Date`
+ * again, so the restore's inserts take them. Null for anything that is not
+ * one. The lore imprints' own rows likewise; a made row's snapshot is
+ * revived by its subject's insert (`withDates`).
+ */
+export function reviveRetractedState(raw: unknown): RetractedState | null {
+	if (!raw || typeof raw !== "object") return null
+	const r = raw as Record<string, unknown>
+	if (typeof r.messageId !== "number") return null
+	const list = (v: unknown) => (Array.isArray(v) ? v : [])
+	const rows = <T>(table: Parameters<typeof getTableColumns>[0], v: unknown): T[] =>
+		list(v).map((row) => reviveDates(table, row)) as T[]
+	const imprintRow = (row: unknown) => reviveDates(schema.loreImprints, row)
+	return {
+		messageId: r.messageId,
+		values: rows(schema.attributeValues, r.values),
+		configs: rows(schema.attributeConfigs, r.configs),
+		proposals: rows(schema.stateProposals, r.proposals),
+		zones: rows(schema.zoneContents, r.zones),
+		phantomEntries: rows(schema.lorebookEntries, r.phantomEntries),
+		imprints: list(r.imprints).map((t) => {
+			const taken = { ...(t as Record<string, unknown>) }
+			taken.imprint = imprintRow(taken.imprint)
+			if (Array.isArray(taken.orphans)) taken.orphans = taken.orphans.map(imprintRow)
+			return taken
+		}) as RetractedState["imprints"],
+		clockSessions: list(r.clockSessions).filter((n): n is number => typeof n === "number")
+	}
+}
+
+/** One row read back from JSON: its timestamp columns `Date`s again. */
+export function reviveDates(table: Parameters<typeof getTableColumns>[0], row: unknown): Record<string, unknown> {
+	if (!row || typeof row !== "object") return {}
+	const out = { ...(row as Record<string, unknown>) }
+	for (const [key, column] of Object.entries(getTableColumns(table))) {
+		const v = out[key]
+		if ((column as { dataType?: string }).dataType === "date" && typeof v === "string") out[key] = new Date(v)
+	}
+	return out
 }
 
 /**
@@ -556,17 +747,36 @@ export interface RetractedState {
  * goes back as it was before the swipe. Whatever the failed run itself
  * anchored to the message is taken back first (a Dungeon Crawler swipe
  * re-applies its stored plan before the Narrator's call), then the rows the
- * retraction took go back, ids and all, and the clock steps forward again by
- * each move it was stepped back by. Returns whether anything changed.
+ * retraction took go back, ids and all — values, configurations,
+ * proposals, 🚧 zone snapshots, the notes' entries and every lore imprint
+ * as it stood (RF fix 4) — and the clock steps forward again by each move
+ * it was stepped back by. Returns whether anything changed.
  */
 export async function restoreRetractedState(db: Db, taken: RetractedState): Promise<boolean> {
 	const undone = await retractStateAnchoredTo(db, taken.messageId)
-	if (!taken.values.length && !taken.configs.length && !taken.proposals.length) return undone.changed
+	const zones = taken.zones ?? []
+	const imprints = taken.imprints ?? []
+	const phantomEntries = taken.phantomEntries ?? []
+	if (
+		!taken.values.length &&
+		!taken.configs.length &&
+		!taken.proposals.length &&
+		!zones.length &&
+		!imprints.length &&
+		!phantomEntries.length
+	)
+		return undone.changed
 	await db.transaction(async (tx) => {
 		const t = tx as unknown as Db
 		if (taken.configs.length) await t.insert(schema.attributeConfigs).values(taken.configs as any)
 		if (taken.values.length) await t.insert(schema.attributeValues).values(taken.values as any)
 		if (taken.proposals.length) await t.insert(schema.stateProposals).values(taken.proposals as any)
+		if (zones.length) await t.insert(schema.zoneContents).values(zones as any)
+		if (phantomEntries.length) await t.insert(schema.lorebookEntries).values(phantomEntries as any)
+		if (imprints.length) {
+			const { restoreImprints } = await import("$lib/server/lorebooks/imprints")
+			await restoreImprints(t, imprints)
+		}
 	})
 	if (!taken.clockSessions.length) return true
 	// The clock, forward again by each move it was stepped back by.
@@ -640,6 +850,11 @@ export async function validateValue(
 					`not on ${facetWords(facet)}.`
 			)
 	}
+	// 🚧 Not written for a holder who does not carry it (attribute carries, RF fix 2 item 3).
+	if (input.sessionId !== undefined && !(await carries(db, input.sessionId, input.owner, input.slotId)))
+		throw new StateRefusal(
+			`${i18nText(decl.label) ?? input.slotId} is switched off for ${input.owner.kind === "session" ? "the world" : input.owner.kind === "session_location" ? "that place" : "them"} in this session: it is not carried, so it is not changed.`
+		)
 	const config =
 		input.config ??
 		(await configFor(db, {
@@ -1963,7 +2178,8 @@ export interface ProposalDecision {
 	 * this is where it stands now (`label`, in the book's calendar). The
 	 * caller announces it — a moved clock is a time action (live scenes §4).
 	 */
-	clock?: { label: string }
+	/** The clock move an accepted clock proposal made — 🚧 with where it stood and stands (`story-clock-moved`). */
+	clock?: { label: string; from?: unknown; to?: unknown }
 	/**
 	 * `superseded` only: the targets that moved since the proposal's base —
 	 * one entry for a one-change proposal, by name (`changeTargetName`).
@@ -2045,6 +2261,15 @@ export async function decideProposal(
 		const { isOfferPayload, decideOffer } = await import("$lib/server/state/give")
 		if (isOfferPayload(proposal.payload)) {
 			const answered = await decideOffer(tx, proposal, accept, userId, mark)
+			return { status: answered.status, line: answered.line }
+		}
+		// 🚧 A held field change (ties on the graph, T2, screen 3's Set…): one
+		// field of a held entry, set by the game master — the row on the
+		// lorebook follows it on accept, through the one writer.
+		const { isHeldFieldPayload, decideHeldField } = await import("$lib/server/rulesets/ties")
+		if (isHeldFieldPayload(proposal.payload)) {
+			await assertMayDecide(tx, proposal.sessionId, { kind: "session", id: proposal.sessionId } as StateOwner, userId)
+			const answered = await decideHeldField(tx, proposal, accept, mark)
 			return { status: answered.status, line: answered.line }
 		}
 
@@ -2152,7 +2377,7 @@ async function decideClockProposal(
 				}
 			})
 			.where(eq(schema.stateProposals.id, proposal.id))
-		return { status: "accepted", clock: { label: moved.label } }
+		return { status: "accepted", clock: { label: moved.label, from: moved.from, to: moved.clock } }
 	})
 }
 

@@ -1,16 +1,18 @@
 /**
  * A room's `Exits:` line, taken apart (plan places-graph §11, B7).
  *
- * The Lair's drafting prompts (Build room, the knock's draft, File as a room)
- * still write a room's ways out as one prose line in its body —
- * `LAIR_ROOM_CONTENT_SHAPE`: `Exits: <direction> → <room>, <direction> → <room>`
- * — because a draft names rooms that may not exist yet, and how the map should
- * grow from it is the owner's open Q4. The ways between places are
- * relationships; this line is the room's own words.
+ * The Lair's rooms carry their ways out as one prose line in the body —
+ * `Exits: <direction> → <room>, <direction> → <room>` — because a room may
+ * name rooms that do not exist yet. The ways between places are
+ * relationships; this line is the room's own words. (Since the Lair rewrite,
+ * 2026-10-21, a drafted room's ways to rooms the book holds are linked by its
+ * own write — `core:script/lair-room` — and the line names them all.)
  *
  * The place editor's **Read links from the Exits line** reads it ON REQUEST
- * and offers the links it names for the person to confirm. Nothing parses it
- * at write time.
+ * and offers the links it names for the person to confirm. 🚧 And a place a
+ * pipeline files with no links of its own — the knock's typed room — has its
+ * line read AT THE WRITE (Lair rewrite D10, `host.ts exitsLineLinks`): each
+ * way to a place the book holds becomes a link, one way, in the line's words.
  *
  * ⚠ **Pure, and resolves nothing.** Which place a name answers to is the one
  * room rule's (`answeringRows`, `./describingRow`), and whether a link

@@ -18,6 +18,7 @@ import * as schema from "$lib/server/db/schema"
 import { defineAttributeSheet, genre } from "@serene-pub/sdk"
 import { STORY_GENRE_ID } from "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -50,7 +51,7 @@ const WANDERERS_SHEET = defineAttributeSheet("test:sheet/wanderers@1", {
 	label: { en: "Wanderers" },
 	slots: [{ id: LOCATION, appliesTo: ["cast"] }]
 })
-genre(WANDERERS, {
+genreKeeping(WANDERERS, {
 	name: { en: "Wanderers" },
 	family: "test",
 	sheets: [WANDERERS_SHEET],

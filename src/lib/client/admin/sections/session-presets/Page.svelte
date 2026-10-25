@@ -1,8 +1,8 @@
 <script lang="ts">
 	/**
 	 * Admin › Presets (23 §9): the changelist (note 37, Django admin) of the
-	 * bundles people pick to start a session — genre, its pipelines'
-	 * configurations, which actions come along. Filters by genre, status,
+	 * presets people pick to start a session — each one set of changes on its
+	 * genre's defaults (PLAN-layering R2). Filters by genre, status,
 	 * origin and default; bulk Make available / Hide / Delete. A row opens
 	 * its change form at `/admin/session-presets/<id>` — the address the
 	 * Pipelines view's "Manage in Admin" link targets, kept stable.
@@ -168,7 +168,7 @@
 
 <AdminChangelist
 	title="Presets"
-	purpose="The bundles a person picks to start a session: a genre, its pipelines' configurations and which actions come along. People see available presets of available genres."
+	purpose="What a person picks to start a session: one genre's defaults with a preset's changes — what runs, which routines, which settings. People see available presets of available genres."
 	{rows}
 	rowKey={(r) => r.id}
 	{columns}

@@ -1,4 +1,6 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * Admin › Plugins › one extension: the change form (note 37, Django
 	 * admin). Fieldsets:
@@ -413,7 +415,7 @@
 		{/snippet}
 		{#snippet headerExtra()}
 			<div class="flex flex-wrap items-center gap-1.5 text-xs">
-				<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5" title={status.title}>
+				<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5" title={status.title}>
 					{status.label}
 				</span>
 				{#if row!.needsReview}
@@ -459,7 +461,7 @@
 				</label>
 			</div>
 			{#each row.componentRefusals ?? [] as r (r.slug)}
-				<p class="text-error-700-300 text-xs">
+				<p class="text-error-600-400 text-xs">
 					Component “{r.slug}” isn't offered — it was {r.reason}. Install a newer build of this extension.
 				</p>
 			{/each}
@@ -515,7 +517,7 @@
 			description="Saved with the save row. A requested permission is refused until approved."
 		>
 			{#if perms.length === 0}
-				<p class="text-surface-600-400 text-sm">This extension declares no permissions.</p>
+				<FieldHelp>This extension declares no permissions.</FieldHelp>
 			{:else}
 				{#if pending.length}
 					<p class="text-warning-700-300 text-xs">
@@ -555,9 +557,9 @@
 					     (tonal: the save row owns the one filled primary). -->
 					<div class="flex flex-wrap items-center gap-2">
 						{#if consent.approve}
-							<span class="preset-tonal-primary rounded-full px-2 py-0.5 text-xs">
+							<Badge tone="primary" size="md">
 								Approval ready — saved with the save row
-							</span>
+							</Badge>
 							<button type="button" class="btn btn-sm preset-tonal-surface" onclick={() => (consent.approve = false)}>
 								Undo
 							</button>

@@ -3,6 +3,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { awaitReply } from "$lib/client/utils/awaitReply"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import {
 	STORY_CALENDAR_PRESETS,
@@ -46,6 +47,9 @@
 	let draft = $state<StoryCalendar | null>(null)
 	let check = $state<Sockets.Lorebooks.CheckCalendar.Response | null>(null)
 	let checking = $state(false)
+	/** Why the check or the save was refused, said under the editor. */
+	let refusal = $state("")
+	let saving = $state(false)
 	let confirmingFreeForm = $state(false)
 
 	let editing = $derived(draft !== null)
@@ -88,6 +92,7 @@
 	function cancel() {
 		draft = null
 		check = null
+		refusal = ""
 		confirmingFreeForm = false
 	}
 
@@ -100,6 +105,22 @@
 				if (msg.lorebookId !== lorebookId) return
 				check = msg
 				checking = false
+				refusal = ""
+			}
+		)
+	)
+	// A refused check must not leave Save waiting on an answer that is not
+	// coming (audit 2026-10-21): stop checking and say why.
+	$effect(() =>
+		declareInterest<"lorebooks:checkCalendar:error">(
+			"lorebooks:checkCalendar:error",
+			(msg) => {
+				if (!checking) return
+				checking = false
+				check = null
+				refusal =
+					(msg as { error?: string } | undefined)?.error ||
+					"The calendar could not be checked."
 			}
 		)
 	)
@@ -124,17 +145,45 @@
 
 	let stranded = $derived(check?.stranded ?? [])
 	let canSave = $derived(
-		dirty && !problems.length && !checking && check !== null && !stranded.length
+		dirty &&
+			!problems.length &&
+			!checking &&
+			!saving &&
+			check !== null &&
+			!stranded.length
 	)
 
-	function save() {
+	/**
+	 * The draft is kept until the server says the calendar landed: a row
+	 * dated between the check and the save refuses it, and the person's edit
+	 * must still be there to fix (audit 2026-10-21).
+	 */
+	async function save() {
 		if (!draft || !canSave) return
-		socket.emit("lorebooks:setCalendar", {
-			lorebookId,
-			calendar: $state.snapshot(draft) as StoryCalendar
-		})
-		draft = null
-		check = null
+		saving = true
+		refusal = ""
+		try {
+			await awaitReply({
+				socket,
+				event: "lorebooks:setCalendar",
+				params: {
+					lorebookId,
+					calendar: $state.snapshot(draft) as StoryCalendar
+				},
+				errorEvent: "lorebooks:setCalendar:error",
+				fallbackError: "The calendar could not be saved.",
+				match: (msg) => msg?.lorebookId === lorebookId
+			})
+			draft = null
+			check = null
+		} catch (err) {
+			refusal =
+				err instanceof Error && err.message
+					? err.message
+					: "The calendar could not be saved."
+		} finally {
+			saving = false
+		}
 	}
 
 	function returnToFreeForm() {
@@ -194,7 +243,7 @@
 	<div class="flex flex-wrap items-center gap-2">
 		<p
 			id="calendarHeading"
-			class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold"
+			class="text-primary-ink flex items-center gap-1.5 text-xs font-semibold"
 		>
 			<Icons.CalendarDays size={13} aria-hidden="true" />
 			Calendar
@@ -502,14 +551,14 @@
 		</fieldset>
 
 		{#if problems.length}
-			<ul class="text-error-700-300 list-disc space-y-0.5 pl-5 text-sm" role="alert">
+			<ul class="text-error-600-400 list-disc space-y-0.5 pl-5 text-sm" role="alert">
 				{#each problems as problem (problem)}
 					<li>{problem}</li>
 				{/each}
 			</ul>
 		{:else if stranded.length}
 			<div class="space-y-1" role="alert" data-lore-calendar-stranded>
-				<p class="text-error-700-300 text-sm font-semibold">
+				<p class="text-error-600-400 text-sm font-semibold">
 					{stranded.length}
 					{stranded.length === 1 ? "date does" : "dates do"} not fit this calendar
 				</p>
@@ -528,6 +577,10 @@
 					{/each}
 				</ul>
 			</div>
+		{:else if refusal}
+			<p class="text-error-600-400 text-sm" role="alert" data-lore-calendar-refusal>
+				{refusal}
+			</p>
 		{:else if check && !checking && dirty}
 			<p class="text-surface-700-300 flex items-center gap-1.5 text-sm">
 				<Icons.Check size={14} aria-hidden="true" />

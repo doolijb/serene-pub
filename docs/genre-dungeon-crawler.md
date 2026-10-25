@@ -17,7 +17,7 @@ Dungeon Crawler is in the genre picker and playable: the Planner's interview, yo
 
 **The world is generated, not written.** You don't pick a lorebook: the session keeps its own world as it goes — its places and the ways between them, the people you meet, and a cairn for anyone who falls. That world lives with the session and nowhere else. Nothing is added to your library: no characters are created and no cards are saved. If you want to keep the world for later, use **Create lorebook from session**.
 
-**The rules are a real game.** Dungeon Crawler plays by the **Vis Itineris** rules unless you choose others: checks are rolled for you, your weapons, armour, gear and spells are real items with real effects, and a table can turn the dice off (**How strict**) to play by the story alone.
+**The rules are a real game.** Dungeon Crawler is made for the **Vis Itineris** rules and picks them unless you choose others: checks are rolled for you, your weapons, armour, gear and spells are real items with real effects, and a table can turn the dice off (**How strict**) to play by the story alone. Whatever rules you choose, the crawl plays by them: their checks, their classes, their rests and what happens at zero health are theirs, and what they don't have is told in words (see [Other rules](#other-rules)).
 
 A Dungeon Crawler session needs nothing to start. You may add:
 
@@ -54,15 +54,15 @@ Before play, the Planner interviews you, one question at a time. Each question c
 - **How hard**: Gentle, Fair or Brutal. Fair is the default.
 - **The goal**: shaped together, or kept secret from you.
 
-Whether dice are rolled isn't asked here: it's the session's **How strict**, chosen when the session starts.
+Whether the rules decide isn't asked here: it's the session's **How strict**, chosen when the session starts.
 
 Then it builds **your character**:
 
 1. **A name.** Once your character has one, your messages show under that name. Playing a persona, the persona's name is your character's: the Planner doesn't ask.
-2. **A class.** The Planner offers a few that fit the world you chose.
+2. **A class.** The Planner offers a few of the rules' classes that fit the world you chose (Vis Itineris has six; see [Classes](./rulesets.md#classes)). Rules with no classes of their own let the Planner name one that fits.
 3. **A backstory**: from your persona (when you play one), told to the Planner in a line or two, or made up by the Planner.
 
-The Planner then writes your backstory, and the rules hand you the rest: your class's ability scores, your full health (your class's hit die plus your Constitution: 8 for a wizard, 12 for a fighter; you start at full) and your class's starting kit (a ranger gets a longbow, a spear, studded leather and travel gear; a wizard a staff, a dagger and six spells; and so on). The Planner tells you who you are: what they carry, what they know and what they can do. At a table of more than one, it also asks what your character does on a round you skip. After that it says what comes next: building the world, or, if the adventure has already started, that you'll join the others where they are now. The first character finished once the session's owner has answered the world's questions (the owner's own, or a friend's) builds the world straight away: where you start, a few places nearby, the people you might meet, the goal and a couple of leads. The Narrator opens the story on the **Story** channel, somewhere vivid.
+The Planner then writes your backstory, and the rules hand you the rest, from the class as the rules describe it (here, Vis Itineris): your class's ability scores, your full health (your class's hit die plus your Constitution: 8 for a wizard, 12 for a fighter; you start at full) and your class's starting kit (a ranger gets a longbow, a spear, studded leather and travel gear; a wizard a staff, a dagger and six spells; and so on). The Planner tells you who you are: what they carry, what they know and what they can do. At a table of more than one, it also asks what your character does on a round you skip. After that it says what comes next: building the world, or, if the adventure has already started, that you'll join the others where they are now. The first character finished once the session's owner has answered the world's questions (the owner's own, or a friend's) builds the world straight away: where you start, a few places nearby, the people you might meet, the goal and a couple of leads. The Narrator opens the story on the **Story** channel, somewhere vivid.
 
 **Just play**: one press, and the Planner picks everything for you, the world's settings included. If it leaves your class out, the table picks one, and its kit comes with it. It's offered with the first question only: once you've answered it, you're making your character together. A player who joins someone else's session is first asked whether to make their character together or to Just play.
 
@@ -127,7 +127,7 @@ Your Planner channel is sent to you and to the session's owner, and to nobody el
 
 ## Dice
 
-The dice belong to the session's rules (Vis Itineris, unless the session plays by others). When the Planner decides an action is risky, it asks for a check (an attack with your longbow, a climb, picking a lock) and the rules roll it: a d20 plus whatever your sheet and your items add, against a difficulty, read the rules' way (Vis Itineris's four degrees: a big miss, a miss, a hit, a great hit). A failed check changes nothing on its own: an item's effect only lands when the check goes your way, and the Narrator tells what the failure costs.
+Checks belong to the session's rules, and under Vis Itineris, the default, they are dice. Rules that decide another way (a pool of dice, cards, a spend, a contest) decide the same checks their way, and the line says how; see [How a risky moment is decided](./rulesets.md#how-a-risky-moment-is-decided). When the Planner decides an action is risky, it asks for a check by the rules' own name for it (an attack with your longbow, a climb, picking a lock) and the rules decide it: under Vis Itineris, a d20 plus whatever your sheet and your items add, against a difficulty, read its way (four degrees: a big miss, a miss, a hit, a great hit). A failed check changes nothing on its own: an item's effect only lands when the check goes your way, and the Narrator tells what the failure costs.
 
 The results show on the Story right under the Narrator's reply they decided, one line each, a check's line ending with how its number was reached:
 
@@ -141,7 +141,7 @@ A change that needs no roll shows too (_⚄ Mira: Health −3_). A roll at death
 - **Anyone else** giving to another player's character makes an **offer**: nothing moves until that player says yes. The offer shows on both sheets, and in each player's **Review** above the composer. The receiver gets **Accept** and **Decline** (_Rook Valen offers Potion of healing to Maren Holt · offered_), the giver gets **Withdraw** and never Accept (_Offered to Maren Holt — waiting for their answer_), and the table hears each answer (_Rook accepts Potion of healing from Wren._). If the giver no longer has the piece when it's accepted, the offer closes and nothing moves.
 - **Companions keep no sheet**, so they're never offered as a target. Hand them things in the story instead.
 
-**How strict.** A session can play with the dice on (the default here) or turn them off. With the dice off, nothing is rolled or counted: the Planner proposes what changes in words, the rules write it down as it was said, and the Narrator keeps numbers out of the story. Death's door is still rolled: nobody dies without a roll.
+**How strict.** A session here plays at **The rules decide** unless you choose otherwise. At **Words only** the rules decide nothing: nothing is rolled or counted: the Planner proposes what changes in words, the rules write it down as it was said, and the Narrator keeps numbers out of the story. Death's door is still rolled: nobody dies without a roll.
 
 A roll line belongs to the table, not to anyone in the story: it shows as a small line with no picture or name, and the Narrator and the Planner never read it back. The rolls live on the session's **Dice** channel, each tied to the reply it belongs to; the Story draws them inline under that reply (the Messages panel's *Show another channel inline* setting, set to `table`). Clear that setting and the Story stops drawing them; a Messages panel set to the `table` channel shows them on their own, as a log. The Narrator learns what the dice decided from a separate note placed after the story so far, never from the roll lines. Your Planner channel has table lines too: the Planner saying your character's name back, noting a standing order, or *Give me a moment to build the world*. Nobody wrote them, so there is nothing to regenerate. They already know every result, and reading the lines taught the Narrator to invent rolls of its own.
 
@@ -162,22 +162,27 @@ The rolls are real and repeatable. Nobody dies without a roll. A change the rule
 
 ## The character sheet
 
-Each character has:
+What a character's sheet holds is the session's **rules'**: the crawl brings no stats of its own. It **plays best with** a health and a level to count, and weapons, armour, gear, things used up, spells, what training lets someone do and what ails someone; rules without them play the crawl in words (see [Other rules](#other-rules)). Under Vis Itineris, the default, each character has:
 
-- **Health**, drawn as a bar out of the character's own full health (_9/15_). The Planner and Rest read the same number. At a table playing the Story rules it's words instead (see [The rules' options](#the-rules-options)).
-- **Armour class**: how hard they are to hit, worked out from their armour and Dexterity (chain mail and a shield: 18), shown right under Health. It is never stored, so it's always right, and you can't edit it. The Planner reads the same number on their sheet. Only at a table whose How strict counts numbers (**Rules** or **Rules and dice**).
-- **Level**, which rises as they earn it. Each level gained raises full health by 4, and health with it.
+- **Health**, drawn as a bar out of the character's own full health (_9/15_). The Planner and Rest read the same number. Rules that keep no health (Freeform, Wherewithal) have none: harm is told in words.
+- **Armour class**: how hard they are to hit, worked out from their armour and Dexterity (chain mail and a shield: 18), shown right under Health. It is never stored, so it's always right, and you can't edit it. The Planner reads the same number on their sheet. Only at a table whose How strict counts numbers (**Rules** or **The rules decide**).
+- **Level**, which rises as they earn it. Each level gained raises full health by what the rules give their class a level (under Vis Itineris, half the class's hit die plus one, plus the Constitution modifier: 8 for a fighter), and health with it. Rules that keep no levels raise nothing.
 - **Class**: what kind of adventurer they are.
 - **Weapons**, **Armour**, **Gear**, **Consumables**, **Spells** and **Features**: items and talents from the rules, each with what it does. A new character gets their class's starting kit; the story adds and takes away from there.
 - **Conditions**: what ails them, and for how long.
 - **Spell slots** (at a table playing spell slots, the default) or **Spell points** (at a table playing spell points; see [The rules' options](#the-rules-options)): what a caster casts with. A sheet shows only the one the table plays: switch Casting and the other row goes, and comes back, with what it held, if you switch again.
+- Vis Itineris's own: the six abilities, trained skills and the rest of its sheet, whichever its options keep.
+
+The crawl keeps a few things itself, whatever the rules, and shows them under the rules' stats (unless the sheet's **The game's own state** is set to **Hidden**):
+
+- **Location**: where they are, in the sheet's **Where and when** row. Characters can be in different places, so this belongs to each of them. Everyone starts in the first place the Planner built, and it changes when the story moves them.
 - **Standing order**: what they do on a round their player skips. Shown once the session has two seats.
-- **Location**: where they are. Characters can be in different places, so this belongs to each of them. Everyone starts in the first place the Planner built, and it changes when the story moves them.
 - **Fate**: _Alive_, _Dying_ (rolling death saves, at a table playing them), _Taken out_ or _Dead_. While a character is dying, a **Death saves** row beside it keeps the count (_1 pass, 0 failures_); the row isn't there the rest of the time.
+- The lists the crawl keeps their kit in: **Weapons**, **Armour**, **Gear**, **Consumables**, **Spells**, **Spell slots**, **Features** and **Conditions**.
 
 An empty row on the sheet reads _none_, whatever kind of row it is.
 
-The session itself keeps the **Time** (said as the day of the adventure and the hour, _Day 2, 16:30_), the **Difficulty**, whether the **Goal** is shared or secret, and the world's **Fuses**: things that will happen at a certain time unless someone stops them. Each place in the world can carry its **Ways out**: a door, a passage or a road, whether it's open, locked or hidden, any trap on it, and how long it takes to cross.
+The session itself keeps the **Time** (said as the day of the adventure and the hour, _Day 2, 16:30_, the world's **Where and when**), the **Difficulty**, whether the **Goal** is shared or secret, and the world's **Fuses**: things that will happen at a certain time unless someone stops them. Each place in the world can carry its **Ways out**: a door, a passage or a road, whether it's open, locked or hidden, any trap on it, and how long it takes to cross.
 
 Companions keep no sheet yet (see [Companions](#companions)). See [Stats and states](./stats-and-states.md).
 
@@ -194,11 +199,22 @@ With the default options (spell slots, and **At zero health: One roll at death's
 
 **The Story rules.** A session can play by the Story rules instead (words only, no numbers); the new-session form then plays **Words only** and doesn't ask How strict. Then the sheet keeps everything in words, with no number anywhere it draws:
 
-- **Health** reads _Unhurt_, _Hurt_, _Badly hurt_ or _At death's door_, with no bar and no number. You can't edit it by hand there; the story moves it.
-- **Level** and **Spell slots** aren't kept at all.
+- **Health**, **Level**, **Class** and **Spell slots** aren't kept at all: the Story rules declare no attributes, so the sheet says _This session's rules declare no attributes_ and harm is told in the story.
 - The starting kit, a potion bought, a poison caught each land on the sheet as their name and a line saying what they are (_Mace — A heavy flanged club._, _Poisoned — Sick and shaky._).
 
-The changes under each reply read in words too (_Health falls_, never _Health 10 → 8_). The Planner is asked in plain words, with none of Vis Itineris's terms, and its notes on each character say their health in words (_Mira, Cleric, unhurt_).
+The changes under each reply read in words too. The Planner is asked in plain words, with none of Vis Itineris's terms, and its notes on each character name them and where they stand (_Mira, at The Sunken Gate_), with no health or class. With no health kept, nobody reaches death's door, and a rest is told without anyone recovering.
+
+### Other rules
+
+The crawl reads the session's rules as they are, each time it needs them:
+
+- **Checks** are asked by the rules' own names and decided their way: rolled where they roll, spent or weighed where they spend or weigh (Wherewithal's dares and contests).
+- **What can change**: the Planner proposes changes to what the rules keep (their fields and their kinds of item), as well as health, class and where you are.
+- **Classes and starting kits** are the rules' own. Rules without classes give a new character no kit.
+- **A rest** takes as long as the rules' longest rest. Rules whose rests take no set time leave the clock where it is.
+- **Death's door** is the rules' rule for falling. Rules without one roll nothing: a character brought down is taken out until the party rests.
+- **Levels** raise full health only where the rules keep levels.
+- **Ways out** keep a lock or a trap's difficulty only where the rules decide checks and have ways out of their own; elsewhere they're told in words.
 
 ## Companions
 
@@ -215,7 +231,9 @@ Both are shared by the whole party, not one per character:
 
 ## Rest and time passing
 
-Pick **Rest** from the composer's actions. The party rests for eight hours: everyone alive goes back to their own full health, anyone taken out gets back up, spent spell slots come back (or, at a spell-points table, every caster's pool fills up again), and the clock moves on. No model call; the Story gets a short table line saying so, under its newest line (deleting that line takes the rest back with it), and the journal gets one too (_The party rests. Day 1, 16:30 → Day 2, 00:30._). Only the session's owner can rest the party. The Planner hears about the rest on the next turn, from the journal.
+Pick **Rest** from the composer's actions. The party rests for the rules' night (under Vis Itineris, its long rest: eight hours): everyone alive goes back to their own full health, anyone taken out gets back up, spent spell slots come back (or, at a spell-points table, every caster's pool fills up again), and the clock moves on by that long. No model call; the Story gets a short table line saying so, under its newest line (deleting that line takes the rest back with it), and the journal gets one too (_The party rests. Day 1, 16:30 → Day 2, 00:30._). The Planner hears about the rest on the next turn, from the journal.
+
+When the rules have a Rest of their own (Vis Itineris does), that's the **Rest** you see: the rules restore what they restore, and the crawl's night follows. Anyone can take it for their own character, but only the session owner's Rest is the party's night. When the rules have none, the crawl's own **Rest** is there instead, and only the session's owner can rest the party. Rules whose rests take no set time leave the clock where it is: the line says only that the party rests.
 
 ## Fixing a turn
 
@@ -226,15 +244,14 @@ There are three ways to fix a turn, and they do different things. Only the lates
 - **A swipe that fails** (the model answers nothing) leaves the reply marked failed, and your sheet, the clock and where everyone stands go back to how they were before the swipe. A failed reply is never read back to the Planner or the Narrator.
 - **A turn that fails** takes back what it changed (the clock, the sheet), and its row offers **Regenerate**: the whole turn, played again. A reply stopped before its first word reads *Stopped before a word* and is never read back either.
 - **Regenerate the last turn** (in the composer) takes the whole turn back and plays it again from the start. The Planner plans it again and the dice are rolled again, so you get a new roll line and new results. Everything the turn wrote goes with it (the sheet, the clock, its journal line, its rolls, and any place, person or cairn it added to the world), then the new turn's changes land. Your own lines stay. Only the session's owner can regenerate a turn (on your own, that's you). Regenerating one reply on its own isn't offered on the Story: a turn is always taken again whole.
-- **Delete** the latest turn only in **Honour mode**, and only as the session's owner. Turn it on in the session's settings (it's off to begin with): _Lets the host delete the latest turn, and lets players edit their own sheets by hand. Off: turns can only be retaken._ Deleting the Narrator's reply takes its roll lines, its journal line and anything it added to the world with it, and the sheet goes back, the changes it filed under a player's own line included (a wound to a seated persona, say). Nothing is played again: the round's lines are still there, so press **Continue** to take the turn afresh, or change what you said first. Deleted turns can't be brought back.
-
-With Honour mode off, the story's turns offer no **Delete** at all (only a line of the round still waiting for its turn keeps it): **Regenerate** is how a turn is taken again. An older turn offers none either, whoever asks and whatever the setting, and a delete the table refuses says why in a note (_Only the latest turn can be deleted — retake from there instead._). Your Planner channel isn't the story, so you can delete your own messages there as usual.
+- **Back** (at the top of the story) takes the whole latest round out of the story: everyone's lines, the Narrator's reply, its roll lines and journal line, and everything it changed (the sheet, the clock, anything it added to the world). **Forward** brings it back. Writing anything new replaces the rounds ahead for good. Only the session's owner presses them. See [Sessions › Back and Forward](./sessions.md#back-and-forward).
+- **Delete** is off in the Dungeon Crawler: no message offers it, on the story or in your Planner channel. Hide a line, or use Back. A table that adds a deletion pipeline (see [Session actions](./session-actions.md#deleting-a-message-needs-a-pipeline)) gets the crawl's turn rule: the latest turn only, in **Honour mode** (_Lets players edit their own sheets by hand, and the host delete the latest turn where deleting is on. Off: neither._), only as the session's owner, and the whole turn at once; an older turn never (_Only the latest turn can be deleted — retake from there instead._).
 
 With **On revision** set to **Branch**, regenerating or deleting the latest turn moves you to the new branch, where the turn is taken again (or the round waits for you); the original keeps the old turn. The branch starts from the sheets as they stood before that turn. Everything about the table comes along: every player, each person's Planner channel (each still sees only their own), the crawl's progress, and each person's layout of the session with its panels' settings (the tab names, the Planner tab on their own channel, the goal panel, the sheet). If you delete or hide your line before the round resolves, you're simply no longer counted as having declared.
 
 ## Death and endings
 
-- **Death**: a character brought to 0 health is at death's door and gets one roll (10 or more on Fair, 8 on Gentle, 12 on Brutal), unless the table plays **Death saves** (see [The rules' options](#the-rules-options)). Making it leaves them on 1 health, and their sheet's change line says so (_Maren Holt survives at death's door on 1 health_). Failing on **Gentle** takes them out of the fight until the party rests; on Fair or Brutal they die. A cairn for them stays in the world (the Planner remembers who fell, and where), and your Planner channel offers **Make a new character**: the new one arrives near where the old one fell, within a couple of rounds.
+- **Death**: a character brought to 0 health is at death's door and gets one roll by the rules' own rule for falling (under Vis Itineris, 10 or more on Fair, 8 on Gentle, 12 on Brutal), unless the table plays **Death saves** (see [The rules' options](#the-rules-options)). Rules with no rule for falling roll nothing: the character is taken out of the fight until the party rests. Making it leaves them on 1 health, and their sheet's change line says so (_Maren Holt survives at death's door on 1 health_). Failing on **Gentle** takes them out of the fight until the party rests; on Fair or Brutal they die. A cairn for them stays in the world (the Planner remembers who fell, and where), and your Planner channel offers **Make a new character**: the new one arrives near where the old one fell, within a couple of rounds.
 - **A new character** is a new seat, under the new character's own name. The fallen keeps theirs: its lines on the Story keep its name, and its cairn stands. If you were playing a persona, the persona card stays with the fallen too, and the session's settings list it under **The fallen** (its lines stay its own: there is nothing to reassign). From then on you write as the new character, so your lines on the Story, the round list and the Planner all name them, and your lines start a round as anyone's do.
 - **Reaching the goal**: the Narrator closes the chapter, a secret goal shows in **Goal & leads**, every player is told in their Planner channel, and the session's owner is asked in theirs: **Carry on**, **A new goal** (the Planner sets one that grows out of the story) or **End the adventure**. **End** has the Narrator close the adventure on the Story straight away. After the end, the session stays readable and a turn only gets a short epilogue. Someone who joins after the end is told so in their Planner channel (_This adventure has ended: the Story and the Journal stay here to read._) and isn't asked to make a character.
 
@@ -251,7 +268,7 @@ To reveal them, the owner presses **Reveal the planning notes** among the compos
 - Changing a place or a person once they're in the world: the Planner adds new places, ways and people, but a place's description, or a person's mood, stays as first written.
 - The goal and the Planner's notes, and the open leads, are kept beside the world rather than in it for now.
 - Sessions started before the rules arrived keep their characters and goal, but their old places and people aren't carried over: the Planner starts the map again from where you are.
-- Kits for the rules other than Vis Itineris.
+- Starting kits come from the rules' own classes: rules with none (Wherewithal, Freeform) start a character with what the interview gave, and nothing more.
 - Splitting the party into separate scenes. For now everyone shares one story, and anything your character couldn't know goes to your Planner channel.
 - Starting from one of your lorebooks.
 

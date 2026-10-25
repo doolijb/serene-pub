@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext, onMount } from "svelte"
+	import { avatarSrc } from "$lib/client/utils/media"
 	import InvitePanel from "$lib/client/components/userForms/InvitePanel.svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
@@ -10,6 +11,7 @@
 	import ViewToolbar from "../panels/ViewToolbar.svelte"
 	import { toolbarButtonClass } from "../panels/toolbarButton"
 	import PanelSplit from "../panels/PanelSplit.svelte"
+	import MetaLine from "../panels/MetaLine.svelte"
 	import SidebarListItem from "../SidebarListItem.svelte"
 	import RowMenu from "../menus/RowMenu.svelte"
 	import Avatar from "../Avatar.svelte"
@@ -206,9 +208,13 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col" use:vm.observe>
+	<!-- `listFills` (L7, 2026-10-24): nothing open, the list sits centred at
+	     its own 560px instead of beside an empty pane. -->
 	<PanelSplit
 		mode={vm.mode}
 		hasDetail={isCreating || isEditing || viewingUser != null}
+		listFills
+		fillWidth="list"
 		emptyMessage="Pick a user to see their account."
 	>
 		{#snippet detail()}
@@ -285,7 +291,7 @@
 						: undefined}
 				/>
 			{:else}
-				<div class="flex flex-col gap-1" role="list" aria-label="Users">
+				<div class="flex flex-col gap-2" role="list" aria-label="Users">
 					{#each filteredUsers as user (user.id)}
 						{@const name = user.displayName || user.username}
 						<SidebarListItem
@@ -297,9 +303,11 @@
 								selectedUserId === user.id}
 						>
 							{#snippet content()}
-								<!-- The row's 40px face (§6.4); an account has no
-								     picture, so it is the name's initial. -->
+								<!-- The row's anatomy (§6.4, L6): the 44px face
+								     (the account's avatar, else the name's
+								     initial), the name, one meta line. -->
 								<Avatar
+									src={avatarSrc(user)}
 									{name}
 									fallback="initial"
 									size="md"
@@ -310,21 +318,17 @@
 								>
 									<div class="min-w-0 flex-1 text-left">
 										<div
-											class="truncate text-[15px] font-medium"
+											class="truncate text-lead font-medium"
 										>
 											{name}
 										</div>
-										<div
-											class="text-surface-600-400 truncate text-xs"
-										>
-											@{user.username}
-										</div>
+										<MetaLine>@{user.username}</MetaLine>
 									</div>
 									{#if user.isAdmin}
 										<!-- A fact about the row, not an action:
 										     the neutral chip, never filled. -->
 										<span
-											class="preset-tonal-surface text-surface-700-300 shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium"
+											class="preset-tonal-surface text-surface-700-300 shrink-0 rounded px-1.5 py-0.5 text-meta font-medium"
 										>
 											Admin
 										</span>

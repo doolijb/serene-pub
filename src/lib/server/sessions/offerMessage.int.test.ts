@@ -327,6 +327,13 @@ describe("a person's message, saved through the pipeline", () => {
 				}
 			} as any)
 			.returning()
+		// 🚧 The preset's binding as the registration it is now (PLAN-layering D7).
+		const { writeLegacyPresetChanges } = await import(
+			"$lib/server/pipelines/registrations/presetRows"
+		)
+		await writeLegacyPresetChanges(db as any, { id: preset.id, genreId: "core:genre/story" }, {
+			bindings: { [sessionEvents.messageOffered]: { spec: "test:spec/chat-refusing-save" } }
+		})
 		const sessionId = await makeSession("refusing", preset.id)
 
 		const res = await send(userId, { sessionId, personaId: null, content: "Keep me." })

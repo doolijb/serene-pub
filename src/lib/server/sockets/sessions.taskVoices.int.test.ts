@@ -135,11 +135,17 @@ async function minimalWithTwo(name: string, tasks: Record<string, "full" | "off"
 		.set({
 			genreFields: {
 				...((row?.genreFields ?? {}) as Record<string, unknown>),
-				autoAdvance: "round",
-				tasks: { v: 1, tasks: Object.fromEntries(Object.entries(tasks).map(([k, mode]) => [k, { mode }])) }
+				autoAdvance: "round"
 			}
 		})
 		.where(eq(schema.sessions.id, sessionId))
+	// ⏳ The retired voices tasks, written where they live now: the genre
+	// fields `sideCast` / `narratorInterjections` (PLAN-layering D4).
+	const { applyLegacyTasks } = await import("$lib/server/utils/testDb")
+	await applyLegacyTasks(db, sessionId, {
+		v: 1,
+		tasks: Object.fromEntries(Object.entries(tasks).map(([k, mode]) => [k, { mode }]))
+	})
 	return { sessionId, ids }
 }
 

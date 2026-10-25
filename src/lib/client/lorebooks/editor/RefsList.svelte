@@ -63,14 +63,14 @@
 							</span>
 							{#if row.tag}
 								<span
-									class="badge preset-tonal-surface shrink-0 text-[11px]"
+									class="badge preset-tonal-surface shrink-0 text-meta"
 								>
 									{row.tag}
 								</span>
 							{/if}
 						</span>
 						{#each row.clauses as clause (clause)}
-							<span class="text-surface-600-400 text-[11px]">
+							<span class="text-surface-600-400 text-meta">
 								{clause}
 							</span>
 						{/each}
@@ -84,6 +84,6 @@
 		</p>
 	{/if}
 	{#each macros as line (line)}
-		<p class="text-surface-600-400 text-[11px]">{line}</p>
+		<p class="text-surface-600-400 text-meta">{line}</p>
 	{/each}
 </div>

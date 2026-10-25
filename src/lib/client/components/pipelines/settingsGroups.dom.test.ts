@@ -300,10 +300,12 @@ describe("the sidebar's scope inside a session (owner Q7)", () => {
 		expect(sessionScopeFor("core:spec/story-respond", undefined, runs)).toBeUndefined()
 	})
 
-	test("says a pipeline the session does not run is the configuration's", async () => {
+	test("says a pipeline the session does not run is the genre's defaults' (R38)", async () => {
 		await open({ sessionDoesNotRun: true }, adventureView())
 		expect(host.textContent).toContain("This session does not run this pipeline")
-		expect(host.textContent).toContain("everyone using the “Adventure” configuration")
+		expect(host.textContent).toContain("Changes here are the genre's defaults")
+		// Named configurations are retired: no Configuration picker.
+		expect(host.textContent).not.toContain("“Adventure” configuration")
 	})
 
 	test("says so read-only for someone who is not an administrator", async () => {

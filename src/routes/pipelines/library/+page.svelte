@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * The pipeline library — the admin workspace.
 	 *
@@ -580,13 +581,13 @@
 		</a>
 	</header>
 
-	<nav class="border-surface-200-700 flex flex-wrap gap-1 border-b pb-1">
+	<nav class="border-surface-200-800 flex flex-wrap gap-1 border-b pb-1">
 		{#each TABS as t (t.key)}
 			{@const Icon = t.icon}
 			<button
 				type="button"
 				class="btn btn-sm {tab === t.key
-					? 'preset-tonal-primary'
+					? 'preset-pressed'
 					: 'preset-tonal-surface'}"
 				onclick={() => (tab = t.key)}
 			>
@@ -608,7 +609,7 @@
 			{:else}
 				{#each view.pipelines as p (p.slug)}
 					<a
-						class="card bg-surface-100-800 hover:preset-tonal-primary flex items-center gap-3 p-3"
+						class="card bg-surface-100-900 hover:preset-tonal-primary flex items-center gap-3 p-3"
 						href="/admin/pipelines/{p.slug}"
 					>
 						<Icons.Workflow size={18} class="shrink-0" />
@@ -657,7 +658,7 @@
 					{/if}
 					{#each group.rows as row (row.id)}
 						{@const key = rowKey("prompt", row.id)}
-						<div class="card bg-surface-100-800 p-3">
+						<div class="card bg-surface-100-900 p-3">
 							<div class="flex items-center gap-2">
 								<button
 									type="button"
@@ -692,12 +693,9 @@
 										</span>
 									{/if}
 									{#if Object.keys(row.archived ?? {}).length}
-										<span
-											class="preset-tonal-warning shrink-0 rounded-full px-2 py-0.5 text-[11px]"
-											title={`Archived: ${Object.keys(row.archived).join(", ")}`}
-										>
+										<Badge tone="warning" size="sm" class="shrink-0" title={`Archived: ${Object.keys(row.archived).join(", ")}`}>
 											{Object.keys(row.archived).length} archived
-										</span>
+										</Badge>
 									{/if}
 								</button>
 								<button
@@ -902,7 +900,7 @@
 					{#each group.rows as row (row.id)}
 						{@const key = rowKey(kind, row.id)}
 						{@const d = draftFor(kind, row)}
-						<div class="card bg-surface-100-800 p-3">
+						<div class="card bg-surface-100-900 p-3">
 							<div class="flex items-center gap-2">
 								<button
 									type="button"
@@ -1154,14 +1152,14 @@
 										{/if}
 										{#if shown.rendered !== undefined}
 											<pre
-												class="bg-surface-200-700 max-h-64 overflow-auto rounded p-2 font-mono text-xs whitespace-pre-wrap">{shown.rendered ||
+												class="bg-surface-200-800 max-h-64 overflow-auto rounded p-2 font-mono text-xs whitespace-pre-wrap">{shown.rendered ||
 													"(renders nothing)"}</pre>
 										{/if}
 										{#if shown.messages?.length}
 											<div class="flex flex-col gap-1">
 												{#each shown.messages as m, i (i)}
 													<div
-														class="bg-surface-200-700 rounded p-2"
+														class="bg-surface-200-800 rounded p-2"
 													>
 														<p
 															class="text-surface-600-400 mb-1 text-xs font-semibold"

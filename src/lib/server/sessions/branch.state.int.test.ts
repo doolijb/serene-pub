@@ -27,6 +27,7 @@ import {
 	_clearAttributeSlots
 } from "@serene-pub/sdk"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -67,7 +68,7 @@ function declareSlots() {
 			config: { of: ["clear", "storm"] }
 		})
 	]
-	genre(GENRE, {
+	genreKeeping(GENRE, {
 		name: { en: "Branch" },
 		family: "test",
 		slots: declared,

@@ -38,9 +38,9 @@ Only administrators see the Admin icon.
 | *(top)* | **Overview**, headed **Your pub** |
 | **Pub** | General, Users (once accounts are on), Network, Data and backups, Diagnostics, History, Updates ([Pub settings](./system-settings.md)) |
 | **Models** | Loadouts, Connections, Sampling |
-| **Play** | Sessions, Genres, Presets |
+| **Play** | Sessions, Genres, Presets, Starter lorebooks ([Starter lorebooks](./lorebooks.md#starter-starter lorebooks)) |
 | **Writing** | Prompts, Context templates, Completion templates, Variable templates |
-| **Pipelines** | Pipelines, Configurations, Events, Scripts |
+| **Pipelines** | Pipelines, Events, Scripts |
 | **Extensions** | Plugins, Components |
 
 Docked, the view lists the sections, and picking one shows it with a back button at the top of the section to return to the list; in Focus the list stays beside the section. In Focus each section has its own address (`/admin/prompts`, `/admin/users/3`), so Back, bookmarks and links work.
@@ -76,7 +76,7 @@ are waiting on you. These are your notifications, and nobody else sees them. You
   history compile, is ready for you to review, or failed (a Story's **Track relationships**
   files its findings on the same graph review);
 - a goal is reached in a Story you are in, when its **Mark goals reached** is on (see
-  [Story](./genre-story.md#what-happens-around-a-reply));
+  [Story](./genre-story.md#what-runs-between-turns));
 - a model download you started finished or failed (admins);
 - a newer release of Serene Pub is out (admins; see
   [Update notifications](./system-settings.md#update-notifications)).
@@ -115,6 +115,16 @@ something is waiting on you. News that asks nothing of you lights no dot. On a p
 dot shows on the **Views** button. Administrators also get an **LLM queue** tab here, which
 lists the generation work running across the whole server.
 
+### Pop-up messages
+
+A short message at the bottom of the window tells you about something that happened out of
+sight, such as a save that finished or an action that was refused. It leaves by itself: after 8
+seconds for a problem, 4 for anything else. The same problem raised twice replaces the message
+already showing rather than stacking another. You get none for a change you can already see,
+such as flipping the **Dark mode** switch or picking a theme, and none for what Serene Pub finds
+while checking in the background: a connection that stops answering says so on its own row in
+**Connections**, and on the Admin _Needs you_ card when a loadout runs on it.
+
 ## Messages
 
 On a pub with accounts, the **Messages** icon on the rail opens your private conversations with
@@ -138,8 +148,11 @@ Focus has its own address (`/characters`, `/lorebooks`, `/settings`…), so the 
 button returns to the width you came from, and you can bookmark a view or open it in a new tab.
 Opening one of those addresses directly shows the view focused over Home. Double-clicking a
 view's rail icon also opens it in Focus. A view that is a list with a detail, such as Characters
-or Tags, shows the list beside whatever you open once it has the room. The app remembers whether
-you last used Dock or Half.
+or Tags, shows the list beside whatever you open once it has the room. Until you open something,
+the list sits in the middle of the view at a comfortable width rather than leaving an empty space
+beside it; pick a row and the list moves to the left with the row's details beside it. This is the
+same at Half and in Focus, and in **Activity**, whose tabs sit over its list in the middle of the
+view. The app remembers whether you last used Dock or Half.
 
 When a view is focused over a session, a narrow strip on the right, the **spine**, shows who is in
 the session and whether a reply is being written. Click it to go back.

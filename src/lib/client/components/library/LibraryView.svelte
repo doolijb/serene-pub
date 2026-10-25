@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	import {
 		onLibraryImported,
 		onLibraryImportFailed
@@ -639,10 +640,14 @@
 	role="region"
 	aria-label="Character library"
 >
+	<!-- `listFills` (L7, 2026-10-24): nothing picked, the grid takes the whole
+	     view instead of leaving the detail's column empty beside it. -->
 	<PanelSplit
 		mode={vm.mode}
 		hasDetail={selected !== null}
 		detailWidth="clamp(360px, 32%, 560px)"
+		listFills
+		fillWidth="whole"
 		emptyMessage="Pick a character to see it here."
 		list={listPane}
 		detail={detailPane}
@@ -812,7 +817,7 @@
 	>
 		<Popover.Trigger
 			class="btn grid size-10 shrink-0 place-items-center p-0 {filtersActive
-				? 'preset-tonal-primary'
+				? 'preset-pressed'
 				: ''}"
 			title="Source and filters"
 			aria-label="Source and filters"
@@ -823,7 +828,7 @@
 		<Portal>
 			<Popover.Positioner class="z-[1000]!">
 				<Popover.Content
-					class="card bg-surface-100-900 border-surface-300-700 w-[min(90vw,280px)] border p-2 shadow-xl"
+					class="card bg-surface-100-900 border-surface-200-800 w-[min(90vw,280px)] border p-2 shadow-xl"
 				>
 					<div
 						class="flex max-h-[min(70vh,480px)] flex-col gap-3 overflow-y-auto"
@@ -912,9 +917,7 @@
 {/snippet}
 
 {#snippet chip(label: string, clear: () => void)}
-	<span
-		class="bg-surface-200-800 text-surface-800-200 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
-	>
+	<Badge size="md" class="text-surface-800-200 flex min-w-0 items-center gap-1">
 		<span class="min-w-0 truncate">{label}</span>
 		<button
 			type="button"
@@ -925,7 +928,7 @@
 		>
 			<Icons.X size={12} aria-hidden="true" />
 		</button>
-	</span>
+	</Badge>
 {/snippet}
 
 {#snippet results()}

@@ -106,7 +106,7 @@
 <section aria-label="Other loadouts">
 	<div class="mb-2 flex items-baseline gap-2 px-0.5">
 		<h3 class="text-surface-600-400 text-xs font-medium">Other loadouts</h3>
-		<span class="text-surface-600-400 text-[11px]">
+		<span class="text-surface-600-400 text-meta">
 			{setCount
 				? `${setCount} set up · the rest optional`
 				: "all optional"}
@@ -142,7 +142,7 @@
 							: 'text-surface-600-400'}"
 						aria-hidden="true"
 					/>
-					<span class="min-w-0 truncate text-[13px] font-medium">
+					<span class="min-w-0 truncate text-chip font-medium">
 						{tile.label}
 					</span>
 				</span>
@@ -153,7 +153,7 @@
 				</span>
 				{#if tile.tagline}
 					<span
-						class="text-surface-600-400 mt-auto line-clamp-1 text-[11px]"
+						class="text-surface-600-400 mt-auto line-clamp-1 text-meta"
 					>
 						{tile.tagline}
 					</span>
@@ -173,7 +173,7 @@
 						class="text-surface-600-400 shrink-0"
 						aria-hidden="true"
 					/>
-					<span class="text-[13px] font-medium">
+					<span class="text-chip font-medium">
 						{tiles.length - limit} more
 					</span>
 				</span>

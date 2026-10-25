@@ -73,15 +73,31 @@ beforeAll(async () => {
 		"$lib/server/pipelines/config/panel/declarations"
 	)
 	const decls = await declarations(db, specVersionId)
-	const conn = decls.find((d) => d.matrixSlot === "connection")!
+	// The reply's call, by the address its document gives it — the node its
+	// budget is sized for. Neither the transcribe step (`heard`, O9, a pair and
+	// no sampling) nor Story's other alternative call (`reply.changes.*`, D7)
+	// is it, so "the first step that takes a pair" names the wrong one.
+	const { replyStepKeys } = await import("$lib/server/utils/testDb")
+	const reply = (await replyStepKeys(db, STORY_RESPOND_SPEC_ID)).generate
+	const takesSampling = (nodeKey: string) =>
+		decls.some((d) => d.slot === "sampling" && d.nodeKey === nodeKey)
+	const conn = decls.find(
+		(d) => d.matrixSlot === "connection" && d.nodeKey === reply
+	)!
+	expect(takesSampling(conn.nodeKey)).toBe(true)
 	connectionDecl = {
 		nodeKey: conn.nodeKey,
 		slot: conn.slot,
 		path: conn.path,
 		typeLabel: conn.typeLabel
 	}
+	// `slot`, not only `matrixSlot`: `speechSampling` (O6) is a sampling
+	// slot on the same step.
 	const samp = decls.find(
-		(d) => d.matrixSlot === "sampling" && d.nodeKey === conn.nodeKey
+		(d) =>
+			d.matrixSlot === "sampling" &&
+			d.slot === "sampling" &&
+			d.nodeKey === conn.nodeKey
 	)!
 	samplingDecl = { nodeKey: samp.nodeKey, slot: samp.slot, path: samp.path }
 

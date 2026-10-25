@@ -18,7 +18,7 @@
 	 * view is in Focus. Links inside the view to admin addresses move the
 	 * section instead of loading a page (`interceptAdminLink`).
 	 */
-	import { getContext, onMount, setContext, type Component } from "svelte"
+	import { getContext, onMount, setContext, untrack, type Component } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { page } from "$app/state"
 	import { adminNavFor } from "$lib/client/shell/adminNav"
@@ -39,8 +39,14 @@
 	interface Props {
 		/** The shell's close gate for this view (Layout's `viewCloseGates`). */
 		onclose?: () => Promise<boolean> | undefined
+		/**
+		 * 🚧 The shell's Escape gate for this view (Layout's
+		 * `viewEscapeGates`, RF fix 2 item 5): asked before Escape steps the
+		 * view down; false keeps it as it is.
+		 */
+		onescape?: () => Promise<boolean> | undefined
 	}
-	let { onclose = $bindable() }: Props = $props()
+	let { onclose = $bindable(), onescape = $bindable() }: Props = $props()
 
 	const systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 	const userCtx: { user: SelectUser } = getContext("userCtx")
@@ -122,6 +128,16 @@
 	 * section.
 	 */
 	let showList = $state(adminRouter.path === "/admin")
+	// 🚧 A section opened any way (a link inside a section too) is the one
+	// shown below desk width: a list left up from the Overview never
+	// replaces — and unmounts — the section when the view narrows, so its
+	// unsaved edits are never lost to a change of width (RF fix 2, item 5).
+	$effect(() => {
+		const path = adminRouter.path
+		untrack(() => {
+			if (path !== "/admin") showList = false
+		})
+	})
 
 	async function open(href: string) {
 		if (await adminRouter.go(href)) showList = false
@@ -135,21 +151,50 @@
 	 * replacing the section below desk width — and the tab asks before a
 	 * reload while anything is unsaved.
 	 */
+	type Answer = "save" | "discard" | "stay"
 	let discardOpen = $state(false)
-	let discardResolve: ((discard: boolean) => void) | null = null
-	function askDiscard(): Promise<boolean> {
-		discardResolve?.(false)
+	/** 🚧 The section on screen offers its own Save (RF fix 2, item 5). */
+	let discardCanSave = $state(false)
+	let discardSaving = $state(false)
+	let discardResolve: ((answer: Answer) => void) | null = null
+	function ask(): Promise<Answer> {
+		discardResolve?.("stay")
+		discardCanSave = adminRouter.canSaveUnsaved
 		discardOpen = true
 		return new Promise((resolve) => (discardResolve = resolve))
 	}
-	function answerDiscard(discard: boolean) {
+	function answer(a: Answer) {
 		discardOpen = false
-		discardResolve?.(discard)
+		discardResolve?.(a)
 		discardResolve = null
+	}
+	/** Save, then go on; a Save that did not land keeps the person here, its reason on the form. */
+	async function answerSave() {
+		discardSaving = true
+		const saved = await adminRouter.saveUnsaved()
+		discardSaving = false
+		answer(saved ? "save" : "stay")
+	}
+	const askDiscard = async (): Promise<boolean> => (await ask()) !== "stay"
+	/**
+	 * 🚧 Discarding without leaving (Escape steps the view down, it stays
+	 * mounted): the section is mounted afresh, so it reads what is saved.
+	 */
+	let sectionEpoch = $state(0)
+	/**
+	 * 🚧 The view's Escape gate: asks only while something is unsaved (owner,
+	 * 2026-10-23, RF fix 3) — a clean section steps down at once, unasked.
+	 */
+	async function escapeGate(): Promise<boolean> {
+		if (!adminRouter.hasUnsavedEdits) return true
+		const a = await ask()
+		if (a === "discard") sectionEpoch++
+		return a !== "stay"
 	}
 	onMount(() => {
 		adminRouter.setDiscardPrompt(askDiscard)
 		onclose = () => adminRouter.confirmDiscard()
+		onescape = escapeGate
 		return () => adminRouter.setDiscardPrompt(async () => true)
 	})
 	warnBeforeUnload(() => adminRouter.hasUnsavedEdits)
@@ -217,6 +262,13 @@
 	let loadedPath = $state<string | null>(null)
 	let layoutLoader: unknown = null
 	let notFound = $state(false)
+	/**
+	 * 🚧 The address whose section did not load (RF fix 6, 2026-10-23) — a tab
+	 * still running the build before an update asks for files that are gone.
+	 * Said in the section's place: never the section before it, left live
+	 * under the new address with the new address's params.
+	 */
+	let loadFailed = $state<string | null>(null)
 
 	$effect(() => {
 		const match = adminRouter.match
@@ -225,16 +277,21 @@
 		const route = match.route
 		if (!route) return
 		const wantLayout = route.layout ?? null
-		Promise.all([wantLayout?.(), route.page()]).then(([l, p]) => {
-			// A later click won the race: leave it be.
-			if (adminRouter.path !== path) return
-			if (wantLayout !== layoutLoader) {
-				layoutLoader = wantLayout
-				LayoutCmp = l?.default ?? null
-			}
-			PageCmp = p.default
-			loadedPath = path
-		})
+		Promise.all([wantLayout?.(), route.page()])
+			.then(([l, p]) => {
+				// A later click won the race: leave it be.
+				if (adminRouter.path !== path) return
+				if (wantLayout !== layoutLoader) {
+					layoutLoader = wantLayout
+					LayoutCmp = l?.default ?? null
+				}
+				loadFailed = null
+				PageCmp = p.default
+				loadedPath = path
+			})
+			.catch(() => {
+				if (adminRouter.path === path) loadFailed = path
+			})
 	})
 </script>
 
@@ -264,7 +321,7 @@
 				<li>
 					<a
 						href={item.action.href}
-						class="text-surface-800-200 hover:text-primary-600-400 block truncate text-[13px] underline-offset-2 hover:underline"
+						class="text-surface-800-200 hover:text-primary-ink block truncate text-chip underline-offset-2 hover:underline"
 						onclick={() => (showList = false)}
 					>
 						{item.title}
@@ -300,8 +357,12 @@
 
 {#snippet pageSnippet()}
 	{#if PageCmp}
-		{#key loadedPath}
-			<PageCmp />
+		{#key `${loadedPath}#${sectionEpoch}`}
+			<!-- 🚧 While the next section loads, the one on screen takes no input
+			     (RF fix 6): its params are already the next address's. -->
+			<div class="contents" inert={loadedPath !== adminRouter.path}>
+				<PageCmp />
+			</div>
 		{/key}
 	{/if}
 {/snippet}
@@ -323,7 +384,14 @@
 				vm.mode === "desk" ? "mt-6" : "mt-3"
 			]}
 		>
-			{#if notFound}
+			{#if loadFailed === adminRouter.path}
+				<div class="m-auto flex flex-col items-center gap-3 text-center" role="alert" data-admin-load-failed>
+					<p class="text-surface-600-400 text-sm">
+						This page did not load. If Serene Pub was just updated, reload to get the new version.
+					</p>
+					<button type="button" class="btn btn-sm preset-tonal-surface" onclick={() => location.reload()}>Reload</button>
+				</div>
+			{:else if notFound}
 				<div
 					class="m-auto flex flex-col items-center gap-3 text-center"
 				>
@@ -351,25 +419,28 @@
 	class="flex h-full min-h-0 flex-col"
 	onclickcapture={interceptAdminLink}
 >
-	{#if vm.mode === "desk"}
-		<!-- A row, so the flush section list runs the view's full height. -->
-		<div class="flex min-h-0 flex-1">
-			{@render sectionList()}
-			{@render section()}
-		</div>
-	{:else if showList}
+	{#if vm.mode !== "desk" && showList}
 		{@render sectionList()}
 	{:else}
-		<!-- The section's own header (breadcrumbs, title) is in the
-		     scroller; this one stays put so the way back is always there. -->
-		<div class="flex min-h-0 flex-1 flex-col">
-			<div class="shrink-0 px-5 pt-4">
-				<PanelNavHeader
-					title={activeLabel}
-					onBack={backToList}
-					backLabel="All sections"
-				/>
-			</div>
+		<!-- 🚧 One place for the section at every width (RF fix 2, item 5):
+		     only its neighbour changes — the flush section list at desk (a
+		     row, so the list runs the view's full height), the way back below
+		     it — so narrowing or widening the view (Escape out of Focus)
+		     never mounts the section afresh and never loses its edits. -->
+		<div class={["flex min-h-0 flex-1", vm.mode === "desk" ? "" : "flex-col"]}>
+			{#if vm.mode === "desk"}
+				{@render sectionList()}
+			{:else}
+				<!-- The section's own header (breadcrumbs, title) is in the
+				     scroller; this one stays put so the way back is always there. -->
+				<div class="shrink-0 px-5 pt-4">
+					<PanelNavHeader
+						title={activeLabel}
+						onBack={backToList}
+						backLabel="All sections"
+					/>
+				</div>
+			{/if}
 			{@render section()}
 		</div>
 	{/if}
@@ -378,10 +449,12 @@
 <AdminUnsavedChangesModal
 	open={discardOpen}
 	onOpenChange={(e) => {
-		if (!e.open) answerDiscard(false)
+		if (!e.open && !discardSaving) answer("stay")
 	}}
-	onConfirm={() => answerDiscard(true)}
-	onCancel={() => answerDiscard(false)}
+	onConfirm={() => answer("discard")}
+	onCancel={() => answer("stay")}
+	onSave={discardCanSave ? answerSave : undefined}
+	saving={discardSaving}
 />
 
 <style>

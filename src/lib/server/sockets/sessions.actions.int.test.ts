@@ -78,6 +78,7 @@ import path from "path"
 import { asc, eq } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 import type { SpecDocument } from "@serene-pub/sdk"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 let testDb: TestDb
 let dataDir: string
@@ -226,10 +227,24 @@ async function publishActionSpec(
 			.build()
 	)
 	const { saveDocument } = await import("$lib/server/pipelines/boot/store")
-	return saveDocument(testDb as any, doc, {
+	const saved = await saveDocument(testDb as any, doc, {
 		publish: true,
 		...(opts.batch ? { batch: opts.batch } : {})
 	})
+	// 🚧 A companion (the genre owner's namespace) is on by default because
+	// the genre's defaults register it (PLAN-layering D7, R33 — the companion
+	// rule, written out); another namespace's is offered, off until switched on.
+	const ns = (x: string) => x.slice(0, x.indexOf(":"))
+	if (ns(id) === ns(genre.id)) {
+		const { actionRegistration, rowOfDecl } = await import("$lib/server/pipelines/registrations/rows")
+		const { upsertRow } = await import("$lib/server/pipelines/registrations/write")
+		for (const a of declared)
+			await upsertRow(
+				testDb as any,
+				rowOfDecl(actionRegistration(`${id}#${opts.key ?? String(a.key)}`), { kind: "genre", genreId: genre.id }, "admin")
+			)
+	}
+	return saved
 }
 
 /**
@@ -247,7 +262,7 @@ async function publishFixtureGenre(
 	const { genre, spec, compile, sessionEvents } = await import("@serene-pub/sdk")
 	const C = await import("@serene-pub/contracts")
 	const { locationSlot } = await import("@serene-pub/core-catalog")
-	const decl = genre(id, {
+	const decl = genreKeeping(id, {
 		name: { en: "Fixture" },
 		family: "fixture",
 		shape: {
@@ -353,6 +368,17 @@ async function runsOf(sessionId: number): Promise<string[]> {
 	return runs.map((r) => r.specSlug as string)
 }
 
+/** A session's own registration rows (PLAN-layering D7), oldest first. */
+async function ownRows(sessionId: number) {
+	const schema = await import("$lib/server/db/schema")
+	const { and } = await import("drizzle-orm")
+	return testDb
+		.select()
+		.from(schema.registrations)
+		.where(and(eq(schema.registrations.scopeKind, "session"), eq(schema.registrations.scopeRef, String(sessionId))))
+		.orderBy(asc(schema.registrations.id))
+}
+
 const all = (v?: { primary: any[]; overflow: any[] }) => [
 	...(v?.primary ?? []),
 	...(v?.overflow ?? [])
@@ -445,8 +471,10 @@ describe("listSessionActions — audiences", () => {
 			itemGated: false
 		})
 		expect(byKey.branch).toMatchObject({ floor: true, canAct: false })
-		for (const k of ["edit", "retry", "extend", "swipe", "hide", "delete"])
+		for (const k of ["edit", "retry", "extend", "swipe", "hide"])
 			expect(byKey[k], k).toMatchObject({ itemGated: true, canAct: true })
+		// 🚧 Deletion needs a pipeline (RF fix 5): no Delete where none is registered.
+		expect(byKey.delete).toBeUndefined()
 
 		const forOwner = await sessionsActionsHandler.handler(
 			fakeSocket(owner.id),
@@ -484,9 +512,9 @@ describe("listSessionActions — placement", () => {
 			"retry",
 			"stop"
 		])
+		// 🚧 No Delete: nothing registered deletes here (RF fix 5).
 		expect(message.overflow.map((a) => a.key).sort()).toEqual([
 			"branch",
-			"delete",
 			"extend",
 			"hide",
 			"swipe"
@@ -800,16 +828,11 @@ describe("sessions:fireAction reads the declaration it was handed", () => {
 			{ userId: admin.id, isAdmin: true }
 		)
 		expect(set).toMatchObject({ ok: true, enabled: true })
-		// Stored by identity, and independent of core's.
-		const schema = await import("$lib/server/db/schema")
-		expect(
-			(
-				await testDb
-					.select({ functionKey: schema.sessionFunctions.functionKey })
-					.from(schema.sessionFunctions)
-					.where(eq(schema.sessionFunctions.sessionId, session.id))
-			).map((r) => r.functionKey)
-		).toEqual(["acme:spec/sum#sum"])
+		// Stored by identity — the session's own registration row (D7) —
+		// and independent of core's.
+		expect((await ownRows(session.id)).map((r) => [r.triggerRef, r.triggerFamily, r.dropped])).toEqual([
+			["acme:spec/sum#sum", "action", false]
+		])
 		const listed = (
 			await listSessionFunctions(testDb as any, session.id, CHAT, owner.id)
 		).filter((f) => f.key === "sum")
@@ -893,18 +916,17 @@ describe("sessions:fireAction reads the declaration it was handed", () => {
 		expect(stillOn.error ?? "").not.toMatch(/turned off|not yours/)
 	}, 60_000)
 
-	test("a session_functions row answers by identity only — a bare key names nothing (plans/31 V2)", async () => {
+	test("a session_functions row is read by nothing; the session's own registration row answers (D7)", async () => {
 		const { listSessionFunctions, setSessionFunction } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
 		const schema = await import("$lib/server/db/schema")
 		const { owner, session } = await sessionWithGuest("legacy-row")
-		// A row keyed the pre-identity way decides nothing any more: the
-		// companion default answers, and the row is not read.
+		// ⏳ The retired table decides nothing: the genre's default answers.
 		await testDb.insert(schema.sessionFunctions).values({
 			sessionId: session.id,
 			genreId: CHAT,
-			functionKey: "narrate",
+			functionKey: "core:spec/story-narrate#narrate",
 			enabled: false
 		})
 		const narrate = (
@@ -912,7 +934,7 @@ describe("sessions:fireAction reads the declaration it was handed", () => {
 		).find((f) => f.specSlug === "core:spec/story-narrate")
 		expect(narrate).toMatchObject({ enabled: true, source: "default", explicit: false })
 
-		// A write stores the identity and answers from then on.
+		// A write stores the session's own row, by identity, and answers from then on.
 		await setSessionFunction(
 			testDb as any,
 			session.id,
@@ -926,16 +948,9 @@ describe("sessions:fireAction reads the declaration it was handed", () => {
 				await listSessionFunctions(testDb as any, session.id, CHAT, owner.id)
 			).find((f) => f.specSlug === "core:spec/story-narrate")
 		).toMatchObject({ enabled: false, source: "session", explicit: true })
-		expect(
-			(
-				await testDb
-					.select({ functionKey: schema.sessionFunctions.functionKey })
-					.from(schema.sessionFunctions)
-					.where(eq(schema.sessionFunctions.sessionId, session.id))
-			)
-				.map((r) => r.functionKey)
-				.sort()
-		).toEqual(["core:spec/story-narrate#narrate", "narrate"])
+		expect((await ownRows(session.id)).map((r) => [r.key, r.triggerRef, r.dropped])).toEqual([
+			["story-narrate#narrate→story-narrate", "core:spec/story-narrate#narrate", true]
+		])
 	}, 60_000)
 
 	test("a channel filters where an action is listed, never who may fire it (W2)", async () => {
@@ -1142,9 +1157,12 @@ describe("sessions:actionsSeen", () => {
  * identity.
  */
 describe("a preset includes actions by identity (W-A)", () => {
-	test("a stored bare `summarize` two actions declare includes NEITHER; a bare key with one declarer of any origin includes that one; an identity includes its action alone", async () => {
+	test("a preset's include list is read as its registrations: an identity includes its action alone, the rest of the genre's are dropped (D7)", async () => {
 		const { listSessionFunctions } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
+		)
+		const { writeLegacyPresetChanges } = await import(
+			"$lib/server/pipelines/registrations/presetRows"
 		)
 		const schema = await import("$lib/server/db/schema")
 		const { owner, session } = await sessionWithGuest("preset-identity")
@@ -1154,19 +1172,16 @@ describe("a preset includes actions by identity (W-A)", () => {
 		await publishActionSpec("acme:spec/summarize", {
 			key: "summarize"
 		})
-		// `tally`: one declarer, an attachment — the sole-declarer rule
-		// (third pass W4+W2) promotes it regardless of origin.
 		await publishActionSpec("acme:spec/tally", { key: "tally" })
 		const [preset] = await testDb
 			.insert(schema.sessionPresets)
-			.values({
-				name: "Bare summarize",
-				genreId: CHAT,
-				bindings: {},
-				// The pre-identity shape a stored row may still carry.
-				includedActions: ["summarize", "tally"]
-			})
+			.values({ name: "Tally only", genreId: CHAT, bindings: {} })
 			.returning()
+		// An old client's include list: the identities it names, and nothing else
+		// of the genre's (a bare key names nothing any more).
+		await writeLegacyPresetChanges(testDb as any, { id: preset!.id, genreId: CHAT }, {
+			includedActions: ["acme:spec/tally#tally", "summarize"]
+		})
 		await testDb
 			.update(schema.sessions)
 			.set({ presetId: preset!.id })
@@ -1178,8 +1193,6 @@ describe("a preset includes actions by identity (W-A)", () => {
 					.filter((f) => f.key === fn)
 					.map((f) => [f.specSlug, { included: f.included, enabled: f.enabled }])
 			)
-		// A bare key two actions carry names none of them — never a
-		// namespace pick — while a bare key one attachment carries names it.
 		expect(await byIdentity("summarize")).toEqual({
 			"core:spec/test-summarize": { included: false, enabled: false },
 			"acme:spec/summarize": { included: false, enabled: false }
@@ -1189,10 +1202,9 @@ describe("a preset includes actions by identity (W-A)", () => {
 		})
 
 		// The attachment's identity names the attachment alone.
-		await testDb
-			.update(schema.sessionPresets)
-			.set({ includedActions: ["acme:spec/summarize#summarize"] })
-			.where(eq(schema.sessionPresets.id, preset!.id))
+		await writeLegacyPresetChanges(testDb as any, { id: preset!.id, genreId: CHAT }, {
+			includedActions: ["acme:spec/summarize#summarize"]
+		})
 		expect(await byIdentity("summarize")).toEqual({
 			"core:spec/test-summarize": { included: false, enabled: false },
 			"acme:spec/summarize": { included: true, enabled: true }
@@ -1293,34 +1305,13 @@ describe("a preset includes actions by identity (W-A)", () => {
 		])
 	}, 60_000)
 
-	test("pipelines:setPresetActions (the legacy squat) runs the same normaliser", async () => {
+	test("pipelines:setPresetActions (the legacy squat) is retired with configurations (R38)", async () => {
 		const { setPresetActions } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
-		const schema = await import("$lib/server/db/schema")
-		const [respond] = await testDb
-			.select({ id: schema.pipelineSpecs.id })
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/story-respond"))
-			.limit(1)
-		const [cfg] = await testDb
-			.insert(schema.pipelineConfigs)
-			.values({ specId: respond!.id, name: "Squat" })
-			.returning()
-		const refused = await setPresetActions(testDb as any, cfg!.id, {
-			includedActions: ["summarize"]
-		})
+		const refused = await setPresetActions(testDb as any, 1, { includedActions: ["narrate"] })
 		expect(refused.ok).toBe(false)
-		expect(refused.error).toMatch(/'summarize' names 2 actions here/)
-		const ok = await setPresetActions(testDb as any, cfg!.id, {
-			includedActions: ["narrate"]
-		})
-		expect(ok.ok).toBe(true)
-		const [row] = await testDb
-			.select({ includedActions: schema.pipelineConfigs.includedActions })
-			.from(schema.pipelineConfigs)
-			.where(eq(schema.pipelineConfigs.id, cfg!.id))
-		expect(row!.includedActions).toEqual(["core:spec/story-narrate#narrate"])
+		expect(refused.error).toMatch(/configurations are retired/)
 	}, 60_000)
 })
 
@@ -1349,12 +1340,7 @@ describe("R-6 narrowing at sessions:bindFunction (subjects, plans/31 V2)", () =>
 		expect(refused.error).toMatch(
 			/'greet' from 'acme:spec\/greet' is not enabled for this session/
 		)
-		expect(
-			await testDb
-				.select()
-				.from(schema.pipelineBindings)
-				.where(eq(schema.pipelineBindings.scopeId, session.id))
-		).toEqual([])
+		expect(await ownRows(session.id)).toEqual([])
 
 		// An action is served by its declarer: naming another spec for it is
 		// refused as such, not as "not enabled".
@@ -1404,14 +1390,10 @@ describe("R-6 narrowing at sessions:bindFunction (subjects, plans/31 V2)", () =>
 			noopEmit
 		)
 		expect(now.error).toBeUndefined()
-		expect(
-			(
-				await testDb
-					.select()
-					.from(schema.pipelineBindings)
-					.where(eq(schema.pipelineBindings.scopeId, session.id))
-			).map((r) => r.subject)
-		).toEqual(["acme:spec/greet#greet"])
+		// 🚧 Nothing to bind any more (D7): an action is served by its
+		// declarer, and the session's own row is the one the switch wrote.
+		expect((await ownRows(session.id)).map((r) => r.triggerRef)).toEqual(["acme:spec/greet#greet"])
+		void schema
 
 		// An enabled companion binds first time: `narrate` is on by default.
 		const companion = await sessionsBindFunctionHandler.handler(
@@ -1821,15 +1803,10 @@ describe("enabled-when (U5e)", () => {
 		expect(restored.find((a) => a.specSlug === "core:spec/test-when-optout-look")).toMatchObject({
 			enabled: true
 		})
-		// The binding itself still stands: the override left, the spec stayed.
-		const [row] = await testDb
-			.select({
-				enabledWhen: schema.pipelineBindings.enabledWhen,
-				subject: schema.pipelineBindings.subject
-			})
-			.from(schema.pipelineBindings)
-			.where(eq(schema.pipelineBindings.scopeId, session.id))
-		expect(row).toEqual({ enabledWhen: null, subject: "core:spec/test-when-look#look" })
+		// 🚧 The override rode the session's own row (D7, R31): cleared, the
+		// row had nothing left to say and went.
+		expect((await ownRows(session.id)).filter((r) => r.triggerRef === "core:spec/test-when-look#look")).toEqual([])
+		void schema
 	}, 60_000)
 
 	test("swipe on a non-newest row is refused at the verb's door with the notNewest reason; the message venue carries the item predicates", async () => {

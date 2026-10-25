@@ -21,9 +21,10 @@ describe("coreDefaultWidgets", () => {
 		// (AN1), the turn order (W1), the actions (W8), the annex (W9), the
 		// album (W2), the chronicle (W3), the places (W4) and Who's here
 		// (W10, `attendance`) joined; World State became Stats (W7). Twelve
-		// with the backdrop (DESIGN-image-generation §6.4, 2026-10-12).
+		// with the backdrop (DESIGN-image-generation §6.4, 2026-10-12);
+		// thirteen with the routine log (PLAN-layering lane 7).
 		expect(coreDefaultWidgets().map((p) => p.id).sort()).toEqual(
-			["actions", "album", "annex", "attendance", "authors-note", "backdrop", "chronicle", "lore-entries", "places", "scene-portraits", "stats", "turn-order"]
+			["actions", "album", "annex", "attendance", "authors-note", "backdrop", "chronicle", "lore-entries", "places", "routine-log", "scene-portraits", "stats", "turn-order"]
 		)
 	})
 

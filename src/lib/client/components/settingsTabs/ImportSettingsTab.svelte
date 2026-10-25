@@ -783,7 +783,7 @@
 											</span>
 											{#if session.disabledReason}
 												<span
-													class="text-error-500 text-xs"
+													class="text-error-600-400 text-xs"
 												>
 													{session.disabledReason}
 												</span>
@@ -843,7 +843,7 @@
 											</span>
 											{#if session.disabledReason}
 												<span
-													class="text-error-500 text-xs"
+													class="text-error-600-400 text-xs"
 												>
 													{session.disabledReason}
 												</span>

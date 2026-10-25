@@ -119,7 +119,7 @@
 	     here. Two Test buttons on one screen, styled differently and
 	     reporting into different places, was the shipped state. -->
 	{#if testResult?.ok === false && testResult.error}
-		<p class="text-error-500 mt-1 text-sm" role="alert">
+		<p class="text-error-600-400 mt-1 text-sm" role="alert">
 			{testResult.error}
 		</p>
 	{/if}
@@ -141,7 +141,7 @@
 			class="input {validationErrors.apiKey ? 'border-error-500' : ''}"
 		/>
 		{#if validationErrors.apiKey}
-			<p class="text-error-500 mt-1 text-sm" role="alert">
+			<p class="text-error-600-400 mt-1 text-sm" role="alert">
 				{validationErrors.apiKey}
 			</p>
 		{/if}
@@ -149,7 +149,7 @@
 
 	<details class="mt-4">
 		<summary
-			class="hover:preset-tonal-primary flex cursor-pointer items-center gap-2 rounded-[10px] px-2 py-2 text-[13px] font-medium"
+			class="hover:preset-tonal-primary flex cursor-pointer items-center gap-2 rounded-base px-2 py-2 text-chip font-medium"
 		>
 			Request settings
 		</summary>

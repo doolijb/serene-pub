@@ -1,4 +1,6 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
+	import InlineError from "$lib/client/components/InlineError.svelte"
 	import { realTime } from "$lib/client/utils/realTime.svelte"
 	/**
 	 * The support report (`admin:supportReport`) — one redacted Markdown
@@ -143,13 +145,13 @@
 
 <section class="panel-card flex flex-col gap-3" aria-labelledby="support-report-heading">
 	<h2 id="support-report-heading" class="text-sm font-medium">Support report</h2>
-	<p class="text-surface-600-400 text-sm">
+	<FieldHelp>
 		Everything a bug report needs about this pub — versions, settings,
 		connections, plugins, recent failures and server warnings — in one
 		document you can paste into an issue or give to an AI assistant. Keys,
 		passwords, email addresses, user names, addresses and home folder paths
 		are removed before it leaves the server. Read it before you share it.
-	</p>
+	</FieldHelp>
 
 	<div class="flex flex-wrap items-center gap-2">
 		<button
@@ -189,7 +191,7 @@
 	</div>
 
 	{#if failed}
-		<p class="text-error-600-400 text-sm" role="alert">{failed}</p>
+		<InlineError>{failed}</InlineError>
 	{/if}
 
 	{#if report}
@@ -197,7 +199,7 @@
 		     nothing focusable inside is unreachable otherwise). -->
 		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 		<pre
-			class="bg-surface-50-950 border-surface-200-800 max-h-96 overflow-auto rounded-[10px] border p-3 font-mono text-xs whitespace-pre-wrap break-words"
+			class="bg-surface-50-950 border-surface-200-800 max-h-96 overflow-auto rounded-base border p-3 font-mono text-xs whitespace-pre-wrap break-words"
 			tabindex="0"
 			role="region"
 			aria-label="Support report preview">{report.markdown}</pre>

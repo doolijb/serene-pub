@@ -250,13 +250,27 @@ afterAll(async () => {
 })
 
 describe("each built-in is a receipted run that emits what changed", () => {
-	it("delete: one receipt on core:spec/builtin-delete, the row gone, the loss recorded", async () => {
+	it("🚧 delete: off until a deletion pipeline is registered (RF fix 5); then one receipt on that pipeline, the row gone, the loss and what went recorded", async () => {
 		const s = await makeSession("delete")
 		const before = await row(s.replyId)
-		broadcasts.length = 0
 		const { sessionMessagesDeleteHandler } = await import(
 			"$lib/server/sockets/sessions"
 		)
+		// Off by default: nothing registered answers the deletion event, so
+		// nothing runs and the row stays.
+		const { DELETION_OFF } = await import("$lib/server/messages/deletion")
+		const off: any = await sessionMessagesDeleteHandler.handler(
+			fakeSocket(userId),
+			{ id: s.replyId },
+			emit
+		)
+		expect(off.error).toBe(DELETION_OFF)
+		expect(await row(s.replyId)).toBeTruthy()
+		const { registerTestDeletion, TEST_DELETION_SPEC_ID } = await import(
+			"$lib/server/utils/testDb"
+		)
+		await registerTestDeletion(db, s.sessionId)
+		broadcasts.length = 0
 		const res: any = await sessionMessagesDeleteHandler.handler(
 			fakeSocket(userId),
 			{ id: s.replyId },
@@ -265,9 +279,11 @@ describe("each built-in is a receipted run that emits what changed", () => {
 		expect(res.error).toBeUndefined()
 		expect(res.success).toMatch(/deleted/)
 		expect(await row(s.replyId)).toBeUndefined()
+		// The built-in no longer answers a person's Delete.
+		expect(await runsFor("core:spec/builtin-delete", s.sessionId)).toEqual([])
 
-		// One receipt, pinned to the built-in's spec, not a preview.
-		const runs = await runsFor("core:spec/builtin-delete", s.sessionId)
+		// One receipt, pinned to the registered pipeline, not a preview.
+		const runs = await runsFor(TEST_DELETION_SPEC_ID, s.sessionId)
 		expect(runs.length).toBe(1)
 		const run = runs[0]!
 		expect(run.outcome).toBe("ok")
@@ -295,6 +311,14 @@ describe("each built-in is a receipted run that emits what changed", () => {
 			role: "assistant",
 			speaker: `character:${characterId}`,
 			channel: "main"
+		})
+		// 🚧 …and what went with it, by the one retraction rule (RF fix 5).
+		expect(receipt.nodes[1].output.taken).toMatchObject({
+			values: 0,
+			configs: 0,
+			zones: 0,
+			notesEntries: 0,
+			clockMoved: false
 		})
 		// The artifact names the row as deleted.
 		const artifacts = await db
@@ -656,6 +680,8 @@ describe("floors and opt-ins", () => {
 			}
 		} as any)
 		const s = await makeSession("final", "test.final:inlet/encounter@1")
+		// 🚧 ⏳ Behind the deletion door (RF fix 5): a session that deletes at all.
+		await (await import("$lib/server/utils/testDb")).registerTestDeletion(db, s.sessionId)
 		const { sessionMessagesDeleteHandler, sessionsViewHandler } =
 			await import("$lib/server/sockets/sessions")
 		const res: any = await sessionMessagesDeleteHandler.handler(
@@ -707,6 +733,8 @@ describe("changes on the next inlet", () => {
 
 	it("a deletion reaches the next reply's inlet with its lost content, once", async () => {
 		const s = await makeSession("changes")
+		// 🚧 Deletion needs a pipeline (RF fix 5): this session registers one.
+		await (await import("$lib/server/utils/testDb")).registerTestDeletion(db, s.sessionId)
 		const lostContent = (await row(s.replyId)).content
 		const { sessionMessagesDeleteHandler } = await import(
 			"$lib/server/sockets/sessions"
@@ -783,6 +811,8 @@ describe("changes on the next inlet", () => {
 
 	it("a reply that fails at the oracle leaves the changes for the next one (W1)", async () => {
 		const s = await makeSession("changes-fail")
+		// 🚧 Deletion needs a pipeline (RF fix 5): this session registers one.
+		await (await import("$lib/server/utils/testDb")).registerTestDeletion(db, s.sessionId)
 		const { sessionMessagesDeleteHandler } = await import(
 			"$lib/server/sockets/sessions"
 		)
@@ -965,12 +995,14 @@ describe("the item rule at the write (review C1)", () => {
 
 	it("the review form for a built-in offers no target; retyping one is refused and the owner's row stands", async () => {
 		const s = await guestWithLine("review")
-		// Review on for the delete's write, as the session's own setting —
-		// the same row the panel writes.
+		// 🚧 The session's deletion pipeline (RF fix 5), and review on for its
+		// write, as the session's own setting — the same row the panel writes.
+		const { registerTestDeletion, TEST_DELETION_SPEC_ID } = await import("$lib/server/utils/testDb")
+		await registerTestDeletion(db, s.sessionId)
 		const [spec] = await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/builtin-delete"))
+			.where(eq(schema.pipelineSpecs.slug, TEST_DELETION_SPEC_ID))
 		await db.insert(schema.pipelineNodeOverrides).values({
 			specId: spec!.id,
 			scopeKind: "session",
@@ -1010,6 +1042,12 @@ describe("the item rule at the write (review C1)", () => {
 		expect(() =>
 			resolveReview(review.id, s.guest, "edit", { target: s.replyId })
 		).toThrow(/cannot change 'target'/)
+		// Nor the deletion it was handed: `asked` is the event's, whole.
+		expect(() =>
+			resolveReview(review.id, s.guest, "edit", {
+				asked: { sessionId: s.sessionId, messageId: s.replyId }
+			})
+		).toThrow(/cannot change 'asked'/)
 		expect(pendingReviewsFor(s.guest).map((r) => r.id)).toEqual([review.id])
 		expect(await row(s.replyId)).toBeTruthy()
 		expect(await row(s.guestLineId)).toBeTruthy()

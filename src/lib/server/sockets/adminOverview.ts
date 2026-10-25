@@ -28,6 +28,7 @@ import { needsReview, type PluginManifest } from "$lib/server/plugins/permission
 import { listNamespaces } from "$lib/server/pipelines/config/panel/read"
 import { attentionFor, type OverviewFacts } from "$lib/server/admin/attention"
 import { readNeededJobs } from "$lib/server/admin/jobUse"
+import { loadoutsFilledBy } from "$lib/shared/loadouts/loadoutsFilledBy"
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -88,9 +89,7 @@ export async function buildAdminOverview(): Promise<Sockets.Admin.Overview.Respo
 		connectionId: c.id,
 		name: c.name,
 		error: c.error ?? "",
-		capabilities: Object.keys(defaults).filter(
-			(id) => defaults[id]?.connectionId === c.id
-		)
+		capabilities: loadoutsFilledBy(defaults, c.id)
 	}))
 	// Defaults whose pair cannot do its job — the same judgement the
 	// Defaults screen marks its rows with.

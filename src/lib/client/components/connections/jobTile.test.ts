@@ -25,10 +25,22 @@ describe("buildJobTiles — a tile's state is the connection state", () => {
 			readinessRows(summary.entries),
 			[]
 		)
-		expect(tiles).toHaveLength(9)
+		// One tile per SDK transform but Chat: eleven, with Hearing
+		// (`text+audio->text`, O4) and Spoken reply (`text->text+audio`, O6).
+		expect(tiles).toHaveLength(11)
 		expect(tiles.every((t) => t.state === "idle")).toBe(true)
 		// Chat is the strip, not a tile.
 		expect(tiles.some((t) => t.capability === "text->text")).toBe(false)
+		expect(
+			tiles
+				.filter((t) => t.capability.includes("audio"))
+				.map((t) => [t.capability, t.label])
+		).toEqual(
+			expect.arrayContaining([
+				["text+audio->text", "Hearing"],
+				["text->text+audio", "Spoken reply"]
+			])
+		)
 	})
 
 	test("a pair that runs is ready; one that cannot is broken, with its sentence", () => {

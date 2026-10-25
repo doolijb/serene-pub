@@ -57,7 +57,7 @@
 			>
 				<header class="flex items-center gap-3">
 					<Icons.Trash2
-						class="text-error-500 h-5 w-5 shrink-0"
+						class="text-error-600-400 h-5 w-5 shrink-0"
 						aria-hidden="true"
 					/>
 					<Dialog.Title class="text-lg font-bold">{title}</Dialog.Title>

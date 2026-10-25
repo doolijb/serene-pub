@@ -259,6 +259,19 @@ const UNPRODUCED_IN_SHAPES: Deliberate[] = []
 const UNCONSUMED_OUT_SHAPES: Deliberate[] = [
 	{
 		subject: shapeSubject(
+			"core:shape/session-settings@1",
+			OUT_PORTS.filter((p) => p.shape === "core:shape/session-settings@1")
+		),
+		reason:
+			"🚧 The session's settings document, which every inlet publishes as " +
+			"`session` (A3) and `core:query/session-settings@1` reads on demand. " +
+			"Its one consumer was `core:task/resolve-tasks@1.session`, retired " +
+			"with genre tasks (PLAN-layering D4, 2026-10-20): a pipeline reads " +
+			"its settings through its own steps' params now. Delete this entry " +
+			"when a node takes the document whole again."
+	},
+	{
+		subject: shapeSubject(
 			"core:shape/turn-order@1",
 			OUT_PORTS.filter((p) => p.shape === "core:shape/turn-order@1")
 		),
@@ -408,11 +421,23 @@ const unfilledInPorts = (): string[] => {
  */
 const UNFILLED_IN_PORTS: Deliberate[] = [
 	{
-		subject: "core:task/resolve-tasks@1.preset",
+		subject: "core:outlet/delete-message@1.asked",
 		reason:
-			"The preset's pinned settings (2026-10-19): the host reads the session's " +
-			"preset row when the port is unwired, which every core spec leaves it. " +
-			"Closes when a spec hands a preset document in."
+			"🚧 A deletion pipeline's port (RF fix 5, owner ruling 2026-10-23: " +
+			"\"Deletion requires a pipeline, so it's managed by the genre\"): the " +
+			"deletion `core:event/message-deletion-asked@1` carried, wired whole " +
+			"from `core:inlet/message-deletion-asked@1.main` — the one value " +
+			"`validate()` lets fill it. Core ships no deletion pipeline by that " +
+			"ruling, so Delete is off in every core genre; the one core document " +
+			"placing the delete is the built-in's own spec, which names its row " +
+			"on `target`. Closes the day a core genre registers a deletion pipeline."
+	},
+	{
+		subject: "core:task/reply-duties@1.routine",
+		reason:
+			"A reply's duties run at `full` (PLAN-layering §4, 2026-10-20): the " +
+			"`routine` port is a routine's firing, and a reply is not a routine. " +
+			"Wired only where a routine's duties read their mode."
 	},
 	{
 		subject: "core:task/build-keeper-context@1.afterWrite",
@@ -469,6 +494,32 @@ const UNFILLED_IN_PORTS: Deliberate[] = [
 			"step, and the Castellan's narration that now uses this builder is " +
 			"Narrate — _what happens next, with no new direction_ — so it wires " +
 			"none. R13 decides what the narration reads from the Sanctum."
+	},
+	{
+		subject: "core:query/resolve-state-changes@1.keeps",
+		reason:
+			"Contract ports kept for packages; core's rewritten Lair no longer wires " +
+			"them (R13, 2026-10-21)."
+	},
+	{
+		subject: "core:query/resolve-state-changes@1.plan",
+		reason: "As above: a contract port kept for packages; core's rewritten Lair no longer wires it (R13)."
+	},
+	{
+		subject: "core:task/build-keeper-context@1.reply",
+		reason: "As above: a contract port kept for packages; core's rewritten Lair no longer wires it (R13)."
+	},
+	{
+		subject: "core:task/build-scene-context@1.plan",
+		reason: "As above: a contract port kept for packages; core's rewritten Lair no longer wires it (R13)."
+	},
+	{
+		subject: "core:task/build-scene-context@1.partySpeakers",
+		reason: "As above: a contract port kept for packages; core's rewritten Lair no longer wires it (R13)."
+	},
+	{
+		subject: "core:task/build-scene-context@1.placeSight",
+		reason: "As above: a contract port kept for packages; core's rewritten Lair no longer wires it (R13)."
 	},
 	{
 		subject: "core:outlet/create-message@1.sections",

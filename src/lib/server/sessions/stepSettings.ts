@@ -28,19 +28,25 @@
  * to its own events (§15 G19 — the turn order), every one held to the
  * same three rules.
  *
- * Read and written beside the panel, not through it: the panel shows a
- * non-admin prompts alone (`visibleTo`), which is the right line for every
- * other step. A write lands where the panel's session-scope writes land
- * (`pipeline_node_overrides`, scope `session`), so the run reads it through
- * the same chain (session → configuration → the step's own default), and a
- * value equal to what it would inherit stores no row (reset-is-delete).
+ * ⏳ **Folded into the derived settings form** (PLAN-layering lane 5b,
+ * 2026-10-20): an exposed step's parameter IS a pipeline setting with
+ * `reach: 'owner'` (`settingsForm.ts`), stored on the session's own
+ * registration row under the registration's key (A9) and resolved through
+ * the one cascade (declared defaults < the genre's defaults < the preset <
+ * the session; any layer may lock). This module is now that form's
+ * projection for the step-settings sockets the client still asks
+ * (`sessions:stepSettings` / `sessions:setStepSetting`) until lane 7 draws
+ * the form itself: the same three rules are the form's, a write is the
+ * form's `updateSetting`, and a value equal to what it inherits stores
+ * nothing (reset-is-delete). A value the step settings' old home holds
+ * (`pipeline_node_overrides`, scope `session`) is read beneath and cleared
+ * by the first write.
  */
-import { and, eq } from "drizzle-orm"
-import { getDefinition } from "@serene-pub/sdk"
-import * as schema from "$lib/server/db/schema"
+import { formFields, settingsFormBuild, stepOfField, SettingRefusal, updateSetting } from "$lib/server/sessions/settingsForm"
 
 type Field = Sockets.Sessions.Bindings.StepSettings.Field
 type Step = Sockets.Sessions.Bindings.StepSettings.Step
+type FormField = Sockets.Sessions.SettingsForm.Field
 
 /** A refusal in a sentence a person can act on. */
 export class StepSettingRefusal extends Error {}
@@ -50,176 +56,38 @@ const MODEL_SLOTS = new Set(["connection", "sampling", "loadout"])
 /** Rule 3: the controls a step setting may be. */
 const PLAIN_CONTROLS = new Set<Field["control"]>(["integer", "number", "boolean", "enum", "string"])
 
-/**
- * Whether a parameter holds a LIST of values — declared `list: true`, or
- * defaulting to one — whatever its element's control says (rule 3).
- */
-function isListField(
-	node: { definitionId: string; definitionVersion: number },
-	d: { slot: string; path: string; authorDefault?: unknown }
-): boolean {
-	if (Array.isArray(d.authorDefault)) return true
-	const def = getDefinition(`${node.definitionId}@${node.definitionVersion}`) as
-		| { slots?: Record<string, { schema?: Record<string, { list?: unknown; default?: unknown }> }> }
-		| undefined
-	const field = def?.slots?.[d.slot]?.schema?.[d.path]
-	return field?.list === true || Array.isArray(field?.default)
-}
+const sourceOf = (s: FormField["source"]): Field["source"] =>
+	s === "session" ? "session" : s === "genre" || s === "preset" ? "config" : "author"
 
-const addr = (nodeKey: string, slot: string, path: string) =>
-	`${nodeKey}\u0000${slot}\u0000${path}`
-
-/** One step setting with the address it is stored at (server-side only). */
-interface Located {
-	specId: number
-	step: Step
-	field: Field
-	slot: string
-}
-
-/**
- * 🚧 The specs bound to the session's own events (live scenes §15 G19): the
- * turn order, and any genre spec answering a session event — every event the
- * session's genre binds, resolved as a run would resolve it
- * (`resolveSessionEventSpec`), deduped by slug. Not the reply, an action or
- * the create spec: `sessionPipelines` lists those. A binding that does not
- * resolve offers nothing rather than failing the read.
- */
-async function eventBoundSpecs(db: Db, sessionId: number): Promise<string[]> {
-	const [{ getSessionGenre, STANDARD_GENRE_ID }, { resolveSessionEventSpec }, { sessionEvents }] =
-		await Promise.all([
-			import("$lib/server/pipelines/entities/sessionGenres"),
-			import("$lib/server/pipelines/runtime/sessionEvents"),
-			import("@serene-pub/sdk")
-		])
-	const [row] = await db
-		.select({ genreId: schema.sessions.genreId })
-		.from(schema.sessions)
-		.where(eq(schema.sessions.id, sessionId))
-		.limit(1)
-	const genreId = row?.genreId ?? STANDARD_GENRE_ID
-	const genre = await getSessionGenre(db, genreId).catch(() => null)
-	const skip = new Set<string>([
-		sessionEvents.sessionAction,
-		sessionEvents.messageRespond,
-		sessionEvents.sessionCreated
-	])
-	const out: string[] = []
-	for (const event of Object.keys(genre?.events ?? {})) {
-		if (skip.has(event)) continue
-		const slug = await resolveSessionEventSpec(db, genreId, event, { sessionId }).catch(() => null)
-		if (slug && !out.includes(slug)) out.push(slug)
-	}
-	return out
-}
-
-/**
- * Every step setting of the pipelines `sessionId` runs, each with where it is
- * stored. The creation pipeline is left out once the session is created —
- * its settings only applied while creating it (`CREATION_READ_ONLY_NOTE`).
- * 🚧 After them, the specs bound to the session's events (§15 G19), the
- * turn order among them, held to the same three rules: its `advise` oracle
- * runs on a model and offers nothing; who may be seated and the mention
- * rule are its story settings.
- */
-async function locateAll(db: Db, sessionId: number, userId: number): Promise<Located[]> {
-	const { sessionPipelines } = await import("$lib/server/pipelines/entities/sessionPipelines")
-	const { published, declarations, i18nText } = await import(
-		"$lib/server/pipelines/config/panel/declarations"
-	)
-	const { layers } = await import("$lib/server/pipelines/config/panel/read")
-	const { pipelines: listed } = await sessionPipelines(db, sessionId, userId)
-	const claimed = new Set(listed.map((p) => p.slug))
-	const pipelines: Array<{ slug: string; label: string; creation?: string }> = [
-		...listed,
-		...(await eventBoundSpecs(db, sessionId))
-			.filter((slug) => !claimed.has(slug))
-			.map((slug) => ({ slug, label: "" }))
-	]
-	const out: Located[] = []
-	for (const p of pipelines) {
-		if (p.creation === "created") continue
-		const at = await published(db, p.slug)
-		if (!at) continue
-		const nodes = await db
-			.select({
-				nodeKey: schema.pipelineNodes.nodeKey,
-				definitionId: schema.pipelineNodes.definitionId,
-				definitionVersion: schema.pipelineNodes.definitionVersion,
-				expose: schema.pipelineNodes.expose
-			})
-			.from(schema.pipelineNodes)
-			.where(eq(schema.pipelineNodes.specVersionId, at.specVersionId))
-		const exposed = new Map(
-			nodes
-				.filter((n) => (n.expose as { session?: boolean } | null)?.session === true)
-				.map((n) => [n.nodeKey, n])
-		)
-		if (!exposed.size) continue
-		const decls = (await declarations(db, at.specVersionId)).filter((d) =>
-			exposed.has(d.nodeKey)
-		)
-		const modelCalls = new Set(
-			decls.filter((d) => MODEL_SLOTS.has(d.matrixSlot)).map((d) => d.nodeKey)
-		)
-		const chain = await layers(db, at, { userId, isAdmin: false, sessionId })
-		const steps = new Map<string, Step>()
-		for (const d of decls) {
-			if (modelCalls.has(d.nodeKey)) continue
-			if (d.matrixSlot !== "params") continue
-			if (!PLAIN_CONTROLS.has(d.control as Field["control"])) continue
-			const node = exposed.get(d.nodeKey)!
-			// Rule 3's list (§15 G19): a `string` field declared `list: true`
-			// (the turn order's envoy list) is a list of values, though the
-			// panel's control names its element's type.
-			if (isListField(node, d)) continue
-			const key = addr(d.nodeKey, d.slot, d.path)
-			const inherited = chain.preset.has(key) ? chain.preset.get(key) : d.authorDefault
-			const own = chain.session?.has(key) === true
-			const field: Field = {
-				path: d.path,
-				label: d.label,
-				...(d.description ? { description: d.description } : {}),
-				control: d.control as Field["control"],
-				...(d.min != null ? { min: d.min } : {}),
-				...(d.max != null ? { max: d.max } : {}),
-				...(d.control === "enum"
-					? {
-							members: (
-								(d.members ?? (d.of ?? []).map((k) => ({ key: k }))) as ReadonlyArray<{
-									key: string
-									label?: string
-									description?: string
-								}>
-							).map((m) => ({
-								key: m.key,
-								label: m.label ?? m.key,
-								...(m.description ? { description: m.description } : {})
-							}))
-						}
-					: {}),
-				value: own ? chain.session!.get(key) : inherited,
-				inherited,
-				source: own ? "session" : chain.preset.has(key) ? "config" : "author"
-			}
-			let step = steps.get(d.nodeKey)
-			if (!step) {
-				step = {
-					spec: at.slug,
-					specName: p.label || at.name,
-					nodeKey: d.nodeKey,
-					definitionId: `${node.definitionId}@${node.definitionVersion}`,
-					heading:
-						i18nText((node.expose as { label?: unknown } | null)?.label) ??
-						d.stepHeading ??
-						d.typeLabel,
-					fields: []
-				}
-				steps.set(d.nodeKey, step)
-			}
-			step.fields.push(field)
-			out.push({ specId: at.specId, step, field, slot: d.slot })
+/** The step settings of the derived form: its exposed steps' plain fields, by step, as its pipelines list them. */
+async function located(db: Db, sessionId: number, userId: number) {
+	const { form } = await settingsFormBuild(db, sessionId, { userId, isAdmin: false })
+	const out: Array<{ step: Step; field: Field; formField: FormField }> = []
+	const steps = new Map<string, Step>()
+	for (const f of formFields(form)) {
+		if (f.address.kind !== "pipeline") continue
+		const at = stepOfField(f)
+		if (!at?.exposed || !PLAIN_CONTROLS.has(f.control as Field["control"])) continue
+		const key = `${at.spec}\u0000${at.nodeKey}`
+		let step = steps.get(key)
+		if (!step) {
+			step = { spec: at.spec, specName: at.specName, nodeKey: at.nodeKey, definitionId: at.definitionId, heading: at.heading, fields: [] }
+			steps.set(key, step)
 		}
+		const field: Field = {
+			path: f.address.path,
+			label: f.label,
+			...(f.description ? { description: f.description } : {}),
+			control: f.control as Field["control"],
+			...(f.min != null ? { min: f.min } : {}),
+			...(f.max != null ? { max: f.max } : {}),
+			...(f.members ? { members: f.members } : {}),
+			value: f.value,
+			inherited: f.inherited,
+			source: sourceOf(f.source)
+		}
+		step.fields.push(field)
+		out.push({ step, field, formField: f })
 	}
 	return out
 }
@@ -232,43 +100,12 @@ export async function readStepSettings(
 ): Promise<Step[]> {
 	const seen = new Set<Step>()
 	const steps: Step[] = []
-	for (const l of await locateAll(db, sessionId, userId))
+	for (const l of await located(db, sessionId, userId))
 		if (!seen.has(l.step)) {
 			seen.add(l.step)
 			steps.push(l.step)
 		}
 	return steps
-}
-
-const sameValue = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
-
-/** The value as its control takes it, or a refusal naming what it wants. */
-function checkedValue(field: Field, value: unknown): unknown {
-	const say = (what: string) =>
-		new StepSettingRefusal(`${field.label} ${what}. Nothing was saved.`)
-	const bounded = (n: number) => {
-		if (field.min != null && n < field.min) throw say(`is at least ${field.min}`)
-		if (field.max != null && n > field.max) throw say(`is at most ${field.max}`)
-		return n
-	}
-	switch (field.control) {
-		case "integer":
-			if (typeof value !== "number" || !Number.isInteger(value)) throw say("is a whole number")
-			return bounded(value)
-		case "number":
-			if (typeof value !== "number" || !Number.isFinite(value)) throw say("is a number")
-			return bounded(value)
-		case "boolean":
-			if (typeof value !== "boolean") throw say("is on or off")
-			return value
-		case "enum":
-			if (typeof value !== "string" || !(field.members ?? []).some((m) => m.key === value))
-				throw say(`is one of ${(field.members ?? []).map((m) => m.label).join(", ")}`)
-			return value
-		case "string":
-			if (typeof value !== "string" || value.length > 2000) throw say("is a line of text")
-			return value
-	}
 }
 
 /**
@@ -289,51 +126,19 @@ export async function writeStepSetting(
 		value: unknown
 	}
 ): Promise<void> {
-	const located = (await locateAll(db, opts.sessionId, opts.userId)).find(
+	const found = (await located(db, opts.sessionId, opts.userId)).find(
 		(l) => l.step.spec === opts.spec && l.step.nodeKey === opts.nodeKey && l.field.path === opts.path
 	)
-	if (!located)
+	if (!found || !found.formField.editable)
 		throw new StepSettingRefusal(
 			"That is not a setting this session's pipelines offer here. Nothing was saved."
 		)
-	const where = and(
-		eq(schema.pipelineNodeOverrides.specId, located.specId),
-		eq(schema.pipelineNodeOverrides.scopeKind, "session"),
-		eq(schema.pipelineNodeOverrides.scopeId, opts.sessionId),
-		eq(schema.pipelineNodeOverrides.nodeKey, opts.nodeKey),
-		eq(schema.pipelineNodeOverrides.slot, located.slot),
-		eq(schema.pipelineNodeOverrides.path, opts.path)
-	)
-	const value = opts.value === null ? null : checkedValue(located.field, opts.value)
-	if (value === null || sameValue(value, located.field.inherited)) {
-		await db.delete(schema.pipelineNodeOverrides).where(where)
-		return
+	try {
+		await updateSetting(db, opts.sessionId, { userId: opts.userId, isAdmin: false }, found.formField.address, opts.value ?? null)
+	} catch (err) {
+		if (err instanceof SettingRefusal) throw new StepSettingRefusal(err.message)
+		throw err
 	}
-	const now = new Date()
-	await db
-		.insert(schema.pipelineNodeOverrides)
-		.values({
-			specId: located.specId,
-			scopeKind: "session",
-			scopeId: opts.sessionId,
-			nodeKey: opts.nodeKey,
-			slot: located.slot,
-			path: opts.path,
-			value,
-			updatedBy: opts.userId,
-			updatedAt: now
-		})
-		.onConflictDoUpdate({
-			target: [
-				schema.pipelineNodeOverrides.specId,
-				schema.pipelineNodeOverrides.scopeKind,
-				schema.pipelineNodeOverrides.scopeId,
-				schema.pipelineNodeOverrides.nodeKey,
-				schema.pipelineNodeOverrides.slot,
-				schema.pipelineNodeOverrides.path
-			],
-			set: { value, updatedBy: opts.userId, updatedAt: now }
-		})
 }
 
 /** @internal Test seam: the rules a field is held to, by name. */

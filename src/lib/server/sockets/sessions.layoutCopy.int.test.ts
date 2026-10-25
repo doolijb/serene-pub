@@ -220,7 +220,8 @@ describe("the first open copies a starting point into the person's own row", () 
 			expect(res.layout).toEqual(TWO_COLUMNS)
 			expect(res.widgetSettings).toEqual({ stats: { density: "compact" } })
 			expect(res.startedFromLayoutPresetId).toBe(mine.id)
-			// It is the owner's alone: the guest still starts from the genre default.
+			// It is the owner's alone: the guest still starts from the genre's
+			// own (the Lair's guests' layout, D6).
 			const guest = await get(s.guest.id, s.session.id)
 			expect(guest.startedFromLayoutPresetId).not.toBe(mine.id)
 		},
@@ -266,6 +267,62 @@ describe("the first open copies a starting point into the person's own row", () 
 				(r) => r.userId === s.owner.id
 			)
 			expect(rows).toHaveLength(1)
+		},
+		60_000
+	)
+
+	test(
+		"🚧 a guest's first open copies the genre's guests' layout (the Lair's Party, no Sanctum); the owner's, the default",
+		async () => {
+			const def = await seed()
+			const s = await scenario()
+			const [party] = await testDb
+				.select()
+				.from(schema.sessionLayoutPresets)
+				.where(
+					and(
+						eq(schema.sessionLayoutPresets.genreId, LAIR),
+						eq(schema.sessionLayoutPresets.slug, "party")
+					)
+				)
+			expect(party?.origin).toBe("core")
+			const owner = await get(s.owner.id, s.session.id)
+			expect(owner.startedFromLayoutPresetId).toBe(def.id)
+			const guest = await get(s.guest.id, s.session.id)
+			expect(guest.startedFromLayoutPresetId).toBe(party!.id)
+			expect(guest.layout).toEqual(arrangementOf(party!.layout as Record<string, unknown>))
+			// The Party panel where the GM's Sanctum sits; no Sanctum, no scratchpad.
+			const drawn = JSON.stringify(guest.layout)
+			expect(drawn).toContain('"title":"Party"')
+			expect(drawn).toContain('"turn-order"')
+			expect(drawn).toContain('"attendance"')
+			expect(drawn).not.toContain("messages#sanctum")
+			expect(drawn).not.toContain("annex#castellan")
+			const { guestsLayoutRow } = await import("$lib/server/db/layoutPresets")
+			expect((await guestsLayoutRow(LAIR))?.id).toBe(party!.id)
+			// A genre that marks none: a guest gets the default, as before.
+			expect(await guestsLayoutRow("core:genre/story")).toBeNull()
+		},
+		60_000
+	)
+
+	test(
+		"🚧 a guest's own new-session layout still wins over the guests' layout",
+		async () => {
+			await seed()
+			const s = await scenario()
+			const theirs = await namedLayout(s.guest.id, "Guest columns", TWO_COLUMNS)
+			const { setUserLayoutDefault } = await import(
+				"$lib/server/db/userLayoutDefaults"
+			)
+			await setUserLayoutDefault({
+				userId: s.guest.id,
+				genreId: LAIR,
+				presetId: theirs.id
+			})
+			const guest = await get(s.guest.id, s.session.id)
+			expect(guest.startedFromLayoutPresetId).toBe(theirs.id)
+			expect(guest.layout).toEqual(TWO_COLUMNS)
 		},
 		60_000
 	)
@@ -319,9 +376,13 @@ describe("rows are per person per session (LA)", () => {
 
 			const scratch = await startFrom(s.owner.id, s.session.id, null)
 			expect(scratch.ok).toBe(true)
+			// 🚧 The guest's copy is the Lair's guests' layout (D6), untouched.
+			const { guestsLayoutRow } = await import("$lib/server/db/layoutPresets")
+			const party = await guestsLayoutRow(LAIR)
 			const guest = await get(s.guest.id, s.session.id)
-			expect(guest.layout).toEqual(arrangementOf(def.layout as Record<string, unknown>))
-			expect(guest.startedFromLayoutPresetId).toBe(def.id)
+			expect(guest.layout).toEqual(arrangementOf(party!.layout as Record<string, unknown>))
+			expect(guest.startedFromLayoutPresetId).toBe(party!.id)
+			expect(def.id).not.toBe(party!.id)
 			const owner = await get(s.owner.id, s.session.id)
 			expect(owner.layout).toEqual({})
 		},

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * The everyday navigator (22 §2.5): the pipeline's configurable steps as a
 	 * compact list, sectioned by the agent (settings group) each belongs to —
@@ -67,7 +68,7 @@
 		{#if section.agent && onSelectGroup}
 			<button
 				type="button"
-				class="mt-1 rounded-[10px] px-1 pt-1 pb-0.5 text-left text-xs font-medium
+				class="mt-1 rounded-base px-1 pt-1 pb-0.5 text-left text-xs font-medium
 					{section.group === activeGroup
 					? 'sidebar-row-active'
 					: 'text-surface-600-400 hover:text-surface-950-50'}"
@@ -87,7 +88,7 @@
 			{@const pend = pendingFor(step.key)}
 			<button
 				type="button"
-				class="group flex w-full items-center gap-3 rounded-[10px] p-3 text-left transition-colors
+				class="group flex w-full items-center gap-3 rounded-base p-3 text-left transition-colors
 					{isActive
 					? 'sidebar-row-active'
 					: 'bg-surface-50-950 hover:bg-surface-200-800'}"
@@ -110,12 +111,9 @@
 					></span>
 				{/if}
 				{#if counts.overridden}
-					<span
-						class="preset-tonal-primary rounded-full px-2 py-0.5 text-[11px] font-semibold"
-						title="{counts.overridden} set here, not inherited"
-					>
+					<Badge tone="primary" size="sm" class="font-semibold" title="{counts.overridden} set here, not inherited">
 						{counts.overridden}
-					</span>
+					</Badge>
 				{/if}
 			</button>
 		{/each}

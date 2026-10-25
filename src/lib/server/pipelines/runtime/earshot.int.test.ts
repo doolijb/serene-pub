@@ -15,10 +15,11 @@
  *
  * Then the Lair over the REAL reply road: Brannoc holds a whisper, and it is
  * in Brannoc's voice prompt (his character turn, planned or picked) and in no
- * other — not Vell's, not the planner's, the scene's or any keeper's.
+ * other — not Vell's, not the planner's, the scene's or the keeper's (the
+ * `lair-keeper` routine, after the round).
  *
- * The faked model answers every JSON request (planner, keeper) with one
- * document naming both delvers as speakers, and every prose request by whose
+ * The faked model answers the planner with one plan naming both delvers as
+ * speakers, the keeper with no change, and every prose request by whose
  * prompt it is: the `lair-voice` prompt opens "You are <name>,".
  */
 
@@ -46,18 +47,20 @@ const WHISPER = "core:slot/whisper@1"
 const TO_BRANNOC = "the east door is a lie"
 const TO_VELL = "keep the lamp for yourself"
 
+/** The planner's answer, in `LAIR_PLAN_SCHEMA`'s shape: both delvers named, nothing risky. */
 const PLAN = {
 	beats: ["The torch gutters."],
 	speakers: [
 		{ name: "Brannoc", intent: "check the door" },
 		{ name: "Vell", intent: "hold the light" }
 	],
+	risks: [],
 	unknownExit: "",
 	knockQuestion: "",
-	worldHints: { location: "The Old Well" },
-	values: [],
-	inventory: []
+	worldHints: { location: "The Old Well" }
 }
+/** How the keeper's prompt opens — the `lair-keeper` routine's. */
+const KEEPER = "You keep the record of a delve"
 /** Every prompt a JSON step (the planner, the keeper) was sent. */
 const jsonPrompts: string[] = []
 /** Every prose prompt, by whose voice it was written in ("other" for none). */
@@ -95,7 +98,7 @@ class FakeAdapter implements FakeTextAdapter {
 			completionResult: async (onContent: (c: string) => void) => {
 				if (json) {
 					jsonPrompts.push(prompt)
-					onContent(JSON.stringify(PLAN))
+					onContent(JSON.stringify(prompt.includes(KEEPER) ? { deltas: [] } : PLAN))
 					return
 				}
 				const who = voiceOf(prompt)
@@ -284,8 +287,11 @@ describe("the two seams, each on its own", () => {
 		expect(state.cast.byId[String(w.brannoc)].whisper).toBe(TO_BRANNOC)
 		expect(state.cast.byId[String(w.vell)].whisper).toBe(TO_VELL)
 		expect(state.slots.find((s: any) => s.id === WHISPER)?.earshot).toBe("holder")
-		// An ordinary slot says nothing.
-		expect(state.slots.find((s: any) => s.id === "core:slot/hp@1")).not.toHaveProperty("earshot")
+		// Every other slot the session keeps says nothing — the Lair's other
+		// GM tool, the standing direction, among them.
+		const others = state.slots.filter((s: any) => s.id !== WHISPER)
+		expect(others.map((s: any) => s.id)).toContain("core:slot/direction@1")
+		for (const s of others) expect(s).not.toHaveProperty("earshot")
 	})
 
 	const nobody = [
@@ -440,6 +446,17 @@ const reset = () => {
 	jsonPrompts.length = 0
 	prosePrompts.length = 0
 }
+
+/** Wait until `probe` answers truthy (every 20 ms), or fail after `ms`. */
+async function until<T>(probe: () => T | null | undefined | false, ms = 20_000): Promise<T> {
+	const end = Date.now() + ms
+	for (;;) {
+		const got = probe()
+		if (got) return got
+		if (Date.now() > end) throw new Error("waited too long")
+		await new Promise((r) => setTimeout(r, 20))
+	}
+}
 const voicePrompts = (who: string) =>
 	prosePrompts.filter((p) => p.who === who).map((p) => p.prompt)
 
@@ -447,17 +464,26 @@ describe("the Lair road · a whisper reaches its holder's voice and no other pro
 	test("a planned turn: in Brannoc's voice, never in Vell's, the planner's or the keeper's", async () => {
 		reset()
 		const w = await session()
-		// Continue — the Castellan's turn (R8: an explicit `{ ref: null }` is
-		// the Narrate press).
-		const res = await fire(w, "the planned turn")
-		expect((res as any)?.error).toBeUndefined()
+		// The keeper is a routine (after each round): on for this test.
+		const { setRoutinesEnabled } = await import("$lib/server/pipelines/routines/runs")
+		setRoutinesEnabled(true)
+		try {
+			// Continue — the Castellan's turn (R8: an explicit `{ ref: null }`
+			// is the Narrate press).
+			const res = await fire(w, "the planned turn")
+			expect((res as any)?.error).toBeUndefined()
+			// The planned character turns, then the keeper once the round is over.
+			await until(() => voicePrompts("Brannoc").length && voicePrompts("Vell").length)
+			await until(() => jsonPrompts.some((p) => p.includes(KEEPER)))
+			await (await import("$lib/server/pipelines/runtime/sessionEvents")).settleSessionEvents()
+		} finally {
+			setRoutinesEnabled(false)
+		}
 
 		const planner = jsonPrompts.filter((p) => p.includes("You plan the PARTY only"))
-		const keeper = jsonPrompts.filter((p) => p.includes("You keep the record of a delve"))
+		const keeper = jsonPrompts.filter((p) => p.includes(KEEPER))
 		expect(planner).toHaveLength(1)
-		// The Castellan's keeper (the world's books), then each planned
-		// character turn's own (owner ruling 2026-09-30).
-		expect(keeper).toHaveLength(3)
+		expect(keeper).toHaveLength(1)
 		expect(voicePrompts("Brannoc")).toHaveLength(1)
 		expect(voicePrompts("Vell")).toHaveLength(1)
 

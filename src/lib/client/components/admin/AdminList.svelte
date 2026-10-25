@@ -273,7 +273,7 @@
 				<div class="flex gap-1" role="group" aria-label="View mode">
 					<button
 						class="btn btn-sm p-2 {effectiveView === 'list'
-							? 'preset-tonal-primary'
+							? 'preset-pressed'
 							: 'preset-tonal-surface'}"
 						onclick={() => (viewPref.value = "list")}
 						title="Table view"
@@ -284,7 +284,7 @@
 					</button>
 					<button
 						class="btn btn-sm p-2 {effectiveView === 'cards'
-							? 'preset-tonal-primary'
+							? 'preset-pressed'
 							: 'preset-tonal-surface'}"
 						onclick={() => (viewPref.value = "cards")}
 						title="Card view"
@@ -318,7 +318,7 @@
 				<li>
 					<button
 						type="button"
-						class="hover:bg-surface-200-800 focus-visible:outline-primary-500 flex min-h-11 w-full items-center gap-3 rounded-[10px] px-3 py-2 text-left focus-visible:outline-2 {selected
+						class="hover:bg-surface-200-800 focus-visible:outline-primary-500 flex min-h-11 w-full items-center gap-3 rounded-base px-3 py-2 text-left focus-visible:outline-2 {selected
 							? 'sidebar-row-active'
 							: ''}"
 						aria-current={selected ? "true" : undefined}
@@ -340,7 +340,7 @@
 						</span>
 						{#if badge}
 							<span
-								class="text-surface-600-400 border-surface-200-800 shrink-0 rounded-full border px-2 py-0.5 text-[11px]"
+								class="text-surface-600-400 border-surface-200-800 shrink-0 rounded-full border px-2 py-0.5 text-meta"
 							>
 								{badge}
 							</span>

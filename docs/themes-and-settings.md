@@ -37,17 +37,18 @@ Themes are grouped as **Built-in**, **My themes** (ones you made, see [Creating 
 
 ## Your preferences: the User tab
 
-From the top:
+Each setting is a card: its name, one sentence saying what it does, and the control (beside the words on a wide screen, under them on a narrow one). From the top:
 
 - **Language**: the language the app is shown in, or **Pub default** to follow whatever an administrator has set for everyone. See [Languages](./languages.md).
 - **Time zone**: the zone real-world dates and times are shown in (when a session was last active, when an account was made). It starts as your browser's zone the first time you open the app; pick another and it follows you to every device. Times are stored the same way whatever you pick, and in-story time (a session's or lorebook's own clock) is never affected.
-- **Lorebook writes from sessions**: how your sessions may change the lorebooks you own (the stats they record, a summary, a compiled history, a graph). **Full**, **Review changes** or **Off**, or follow the pub's default. See [Lorebooks](./lorebooks.md#what-a-session-may-write).
+- **Lorebook writes from sessions**: how your sessions may change the lorebooks you own (the stats they record, a summary, a compiled history, a graph). **Full**, **Review changes** or **Off**, or follow the pub's default. A lorebook can be stricter in its own Book settings, never looser. See [Lorebooks](./lorebooks.md#what-a-session-may-write).
+- **Background routines**: limits on your sessions' [routines](./sessions.md#routines) that run on the real clock: **Stop after nobody has played for (minutes)** and **Most runs in a row**. Leave a box empty to follow the pub's limit, shown beside it; you can only set a lower one. See [Pub settings › Background routines](./system-settings.md#background-routines).
 - **Show all character fields**: the character form shows every field, including the less common ones, instead of just the usual few. See [Characters](./characters.md).
 - **Easy character creation**: on (the default), **New** in the Characters view opens a short guided creator for a character or a persona; off, it goes straight to the full form.
 - **Document View**: **Switch to Document View** opens Serene Pub's simplified, high-contrast, keyboard- and screen-reader-friendly version. **Ctrl+Shift+Y** does the same from anywhere. See [Document View](./document-view.md).
 - **Extension settings**: only when a plugin offers you choices; see [below](#extension-settings).
 - **Data import** (administrators, not on Android): **Import from SillyTavern** opens the **Import** tab. See [Importing from SillyTavern](./importing-from-sillytavern.md).
-- **User profile**: your **Display name**, the name the app and the characters call you. Up to 50 characters; press **Update** to save it. Empty it and press **Update** to go by your username again. With user accounts on, the card also has **Change passphrase** and **Logout**, and a **Two-factor authentication** card appears above it. See [Users and accounts](./users-and-accounts.md#your-own-account).
+- **User profile**: your **avatar**, the round picture shown for your account (click it or drop an image on it; the crop editor's **Save** uploads it), and your **Display name**, the name the app and the characters call you. Up to 50 characters; press **Update** to save it. Empty it and press **Update** to go by your username again. With user accounts on, the card also has **Change passphrase** and **Logout**, and a **Two-factor authentication** card appears above it. See [Users and accounts](./users-and-accounts.md#your-own-account).
 
 Switches save as soon as you flip them.
 
@@ -59,14 +60,14 @@ A choice you haven't set shows the value everyone gets: what an administrator se
 
 ## Reading and motion
 
-Two preferences under **Reading and motion** on the **Themes** tab. Unlike the theme, these are saved **in this browser only**, so your phone and your computer can differ.
+Two cards on the **Themes** tab, under the theme. Unlike the theme, these are saved **in this browser only**, so your phone and your computer can differ.
 
 - **Story text size**: 16, 17 (the default), 18 or 20. Only the story in a session changes size; names, times and the rest of the interface stay the same.
 - **Animate views**: whether opening, resizing and focusing a view animates. Your system's reduced-motion setting always wins.
 
 ## A background picture
 
-The **Background** section of the **Themes** tab puts a picture behind the app.
+The **Background** card of the **Themes** tab puts a picture behind the app.
 
 - **No background** (the first tile) is the default.
 - **Defaults** are pictures that come with Serene Pub.

@@ -148,7 +148,7 @@
 	/>
 
 	{#if error}
-		<p class="text-error-500 text-xs" role="alert" data-link-form-error>
+		<p class="text-error-600-400 text-xs" role="alert" data-link-form-error>
 			{error}
 		</p>
 	{/if}

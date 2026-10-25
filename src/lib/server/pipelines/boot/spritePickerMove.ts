@@ -96,6 +96,9 @@ export async function moveSpritePickerSettings(
 		)
 	const specIds = specRows.map((r) => r.id)
 	if (!specIds.length) return report
+	// 🚧 Story's reply kept its picker in its `reply` junction's prose branch
+	// for one pre-release day (0120, D7); RF fix 3 put it back after the
+	// junction, once (0123) — so `spritePick` is the picker on all four again.
 
 	const overrides = await db
 		.select()

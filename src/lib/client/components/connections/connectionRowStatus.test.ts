@@ -8,10 +8,12 @@ import {
 	connectionRowStatus,
 	hostOf,
 	needsAttention,
+	rowActionClass,
 	rowDefaults,
-	stateTone,
+	rowStatusClasses,
 	type RowConnection
 } from "./connectionRowStatus"
+import { loadoutsFilledBy } from "$lib/shared/loadouts/loadoutsFilledBy"
 
 const base: RowConnection = {
 	id: 1,
@@ -615,12 +617,103 @@ describe("the connection state scale", () => {
 			"broken"
 		])
 	})
+})
 
-	test("⏳ stateTone says the same roles in its transitional words", () => {
-		expect(stateTone("ready")).toBe("ok")
-		expect(stateTone("idle")).toBe("quiet")
-		expect(stateTone("unfinished")).toBe("primary")
-		expect(stateTone("busy")).toBe("warning")
-		expect(stateTone("broken")).toBe("error")
+/**
+ * ★R2 / PLAN-0-5-polish-parity L4.1 (2026-10-24): the walk's index was eight
+ * bold red rows with a gold Fix on each. A row's state is a dot and muted
+ * words; red is kept for the Admin Needs you case — broken AND a loadout runs
+ * on it.
+ */
+describe("a row wears its state quietly; red only when a loadout is blocked", () => {
+	const failing: RowConnection = {
+		...base,
+		id: 4,
+		models: [model()],
+		modelsSync: { at: "2026-10-24T10:00:00Z", error: "connection error" }
+	}
+	const fills = { "text->text": { connectionId: 4 } }
+	const elsewhere = { "text->text": { connectionId: 9 } }
+
+	test("loadoutsFilledBy reads the endpoint half, as Needs you does", () => {
+		expect(loadoutsFilledBy(fills, 4)).toEqual(["text->text"])
+		expect(loadoutsFilledBy(elsewhere, 4)).toEqual([])
+		expect(loadoutsFilledBy(undefined, 4)).toEqual([])
+		// A registration whose model is gone still points its runs here.
+		expect(
+			loadoutsFilledBy({ "text->image": { connectionId: 4 } }, 4)
+		).toEqual(["text->image"])
+	})
+
+	test("broken and nothing relies on it: quiet dot, muted words, tonal Fix", () => {
+		const status = connectionRowStatus(failing, {
+			kind: "api",
+			defaults: rowDefaults([], elsewhere)
+		})
+		expect(status.state).toBe("broken")
+		expect(status.blocked).toBeUndefined()
+		expect(status.action?.emphasis).toBe("tonal")
+		expect(rowStatusClasses(status)).toEqual({
+			dot: CONNECTION_STATE_DOT.idle,
+			text: "text-surface-600-400",
+			edge: ""
+		})
+		expect(rowActionClass(status.action!.emphasis)).toBe(
+			"preset-tonal-surface"
+		)
+	})
+
+	test("broken and it fills a loadout: the one red row, its Fix filled", () => {
+		const status = connectionRowStatus(failing, {
+			kind: "api",
+			defaults: rowDefaults([], fills)
+		})
+		expect(status.blocked).toBe(true)
+		expect(status.action).toMatchObject({ verb: "fix", emphasis: "filled" })
+		const marks = rowStatusClasses(status)
+		expect(marks.dot).toBe("bg-error-500")
+		expect(marks.text).toContain("text-error-")
+		expect(marks.edge).toContain("--color-error-500")
+		expect(rowActionClass("filled")).toBe("preset-filled-primary-500")
+	})
+
+	test("an unanswered defaults fact draws no row red", () => {
+		const status = connectionRowStatus(failing, { kind: "api" })
+		expect(status.blocked).toBeUndefined()
+	})
+
+	test("every other state is muted words beside its own dot", () => {
+		for (const state of ["ready", "idle", "unfinished", "busy"] as const) {
+			const marks = rowStatusClasses({
+				state,
+				label: "x",
+				detail: null,
+				metric: null,
+				action: null
+			})
+			expect(marks.text).toBe("text-surface-600-400")
+			expect(marks.dot).toBe(CONNECTION_STATE_DOT[state])
+			expect(marks.edge).toBe("")
+		}
+	})
+
+	test("Start is filled on the row that can start; nothing else is gold", () => {
+		const managed = { ...base, type: "koboldcpp_managed", baseUrl: null }
+		const stopped = connectionRowStatus(managed, {
+			kind: "koboldcpp-managed",
+			kcppInstall: "ready",
+			kcpp: { run: "stopped" } as any
+		})
+		expect(stopped.action).toMatchObject({ verb: "start", emphasis: "filled" })
+		const offline = connectionRowStatus(managed, {
+			kind: "koboldcpp-managed",
+			kcppInstall: "offline"
+		})
+		expect(offline.action?.emphasis).toBe("filled")
+		const noKey = connectionRowStatus(
+			{ ...base, type: "anthropic", hasCredential: false },
+			{ kind: "api" }
+		)
+		expect(noKey.action?.emphasis).not.toBe("filled")
 	})
 })

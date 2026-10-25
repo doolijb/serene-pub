@@ -195,6 +195,14 @@ export interface InputLimits {
 	 * take is a conversion into a guaranteed rejection. Held by `io.test.ts`.
 	 */
 	prefers?: readonly KnownMime[]
+	/**
+	 * 🚧 About how many prompt tokens one placed item of this kind costs the
+	 * service (O10): `perItem` for a picture or a page, `perSecond` for audio
+	 * or video. An ESTIMATE for placement and the context budget — never a
+	 * cap, so it carries no `source`. Absent: placement's own default for the
+	 * kind (`placement.ts`).
+	 */
+	cost?: { perItem?: number; perSecond?: number }
 }
 
 /**

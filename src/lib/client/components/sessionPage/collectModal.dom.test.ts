@@ -24,7 +24,7 @@ const TRAP = {
 const WHISPER = {
 	name: "Whisper",
 	collects: {
-		recipients: { label: "Who hears it", min: 1 },
+		recipients: { label: "Who hears it", min: 1, overwrites: "core:slot/whisper@1" },
 		text: { need: "required", label: "What do you whisper?" }
 	} as ListedCollects
 }
@@ -194,6 +194,19 @@ describe("CollectModal · who will and won't hear it (R10)", () => {
 		expect(reach().textContent).toBe(
 			"Vell will hear this. Brannoc and Isolde will not, and nor will the Castellan."
 		)
+	})
+
+	test("🚧 a pick that hears nothing (the Lair's Roll: who rolls) says nothing about hearing", async () => {
+		const ROLL = {
+			name: "Roll",
+			collects: {
+				recipients: { label: "Who rolls", min: 1 },
+				text: { need: "optional", label: "What do they attempt?", ifEmpty: "A roll, for whatever comes next." }
+			} as ListedCollects
+		}
+		await open(ROLL, [], { n: 0 }, { cast: PARTY, ownVoice: "Castellan" })
+		expect(document.querySelector("[data-collect-recipients] legend")?.textContent?.trim()).toBe("Who rolls")
+		expect(document.querySelectorAll("[data-collect-reach]").length).toBe(0)
 	})
 
 	test("each delver's current whisper is shown, and says it is replaced once picked", async () => {

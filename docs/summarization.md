@@ -5,7 +5,7 @@ Summarization turns stretches of a session into lorebook entries: what happened 
 It runs only when you ask. Nothing is summarized in the background, and nothing costs tokens until you start it.
 
 :::note Before you start
-The session needs a [lorebook](./lorebooks.md) to save into, and your [Lorebook writes from sessions](./lorebooks.md#what-a-session-may-write) setting must not be **Off**.
+The session needs a [lorebook](./lorebooks.md) to save into, and neither your [Lorebook writes from sessions](./lorebooks.md#what-a-session-may-write) setting nor the book's own may be **Off**.
 :::
 
 ## From a session to the graph

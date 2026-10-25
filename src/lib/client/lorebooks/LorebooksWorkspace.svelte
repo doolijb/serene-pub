@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	import { getContext, onDestroy, onMount, untrack } from "svelte"
 	import { SvelteMap } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
@@ -33,6 +34,7 @@
 	import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
 	import BookReadBy from "./BookReadBy.svelte"
 	import BookSettings from "./BookSettings.svelte"
+	import { isStarterKit } from "./starterKitCards"
 	import DayOne from "./DayOne.svelte"
 	import LensTrack from "./LensTrack.svelte"
 	import LorebookActions from "./LorebookActions.svelte"
@@ -48,6 +50,7 @@
 	import { refLinksFrom, type RefLink } from "./editor/refs"
 	import { whenBookOpens } from "./bookOpens.svelte"
 	import { setBookData, type BookAccess } from "./bookData.svelte"
+	import type { BookLibrary } from "./libraryRows"
 	import {
 		castSignature,
 		dropDeletedEntry,
@@ -94,6 +97,10 @@
 		BOOK_ENTRY_TYPES,
 		bookIsEmpty,
 		CAST_KIND,
+		drawnRulesLists as drawnListsOf,
+		rulesListFacets,
+		scopeTitle,
+		type RulesList,
 		matchSessionRoute,
 		mergeCastCount,
 		railScopes,
@@ -108,9 +115,15 @@
 		STOP_READING,
 		type SavedScopeId
 	} from "./scopes"
-	import { bookPoolItems, descriptorForKind } from "./sections"
+	import {
+		bookPoolItems,
+		descriptorForKind,
+		rulesListDoor
+	} from "./sections"
+	import { rememberRulesLists } from "./sections/derivedPiece"
 	import { castPoolItem } from "./castPool"
-	import { avatarSrc } from "$lib/client/utils/media"
+	import { avatarSrc, lorebookCoverSrc } from "$lib/client/utils/media"
+	import Avatar from "$lib/client/components/Avatar.svelte"
 	import { memberFaceSrc } from "./cast/memberFace"
 	import type { EntryDecisions } from "./markers"
 	import type { PoolSource } from "./sections/types"
@@ -168,6 +181,12 @@
 	const openSessionCtx: OpenSessionCtx = getContext("openSessionCtx")
 	const systemSettingsCtx: SystemSettingsCtx | undefined =
 		getContext("systemSettingsCtx")
+	const userCtx: { user?: SelectUser | null } | undefined =
+		getContext("userCtx")
+	/** 🚧 Admins make starter lorebooks (PLAN-lorebook-kinds ruling 5). */
+	let isAdmin = $derived(!!userCtx?.user?.isAdmin)
+	/** `LorebookActions`' own verbs: Save as starter lorebook, a book from a kit. */
+	let actions: ReturnType<typeof LorebookActions> | undefined = $state()
 
 	let lorebookList: any[] = $state([])
 	let isLoading: boolean = $state(true)
@@ -194,6 +213,21 @@
 	let counts = $state<Record<string, number> | null>(null)
 	/** Every row the book holds, so the rail can report on the whole of it. */
 	let bookRows = $state<Record<string, PoolSource[]>>({})
+	/**
+	 * 🚧 The book's rules lists (`entries:types`, PLAN-lorebook-kinds §C):
+	 * every entryable list its rules declare. Which of them the book DRAWS is
+	 * `drawnRulesLists` below (ruled 2026-10-21).
+	 */
+	let rulesLists = $state<RulesList[]>([])
+	/** Which rules the lists above were read for, so a change of Rules asks again. */
+	let rulesListsFor: string | null = null
+	/**
+	 * 🚧 The book's rules library (`lorebooks:library`, §C ruling 10): the
+	 * pieces the ‹Rules› library chip shows under the book, read only. Null
+	 * until it arrives; asked for with the lists, so a change of Rules asks
+	 * again.
+	 */
+	let library = $state<BookLibrary | null>(null)
 	/** Dated overlays on this book's entries. See `resolvedRows` below. */
 	let entryAmendments = $state<Sockets.Amendments.EntryRow[]>([])
 	/** Overlays on the CAST — the people, card included. Ruled 2026-09-23. */
@@ -245,6 +279,12 @@
 			(book?.isSharedWithMe ? "shared" : "owner")
 	)
 	let readOnly = $derived(bookAccess !== "owner")
+	/**
+	 * 🚧 The open book is a starter lorebook (PLAN-lorebook-kinds §B): edited in
+	 * place by the admin who made it, never read into a session, never
+	 * written by one — so it has no reading verb, no write mode and no Share.
+	 */
+	let bookIsKit = $derived(isStarterKit(book))
 
 	/**
 	 * Sharing (PLAN-private-messages §6.7): the owner's **Share…** while
@@ -253,12 +293,21 @@
 	 * book while the owner could share it.
 	 */
 	let canShare = $derived(
-		!!book && !readOnly && !!systemSettingsCtx?.settings?.isAccountsEnabled
+		!!book &&
+			!readOnly &&
+			!bookIsKit &&
+			!!systemSettingsCtx?.settings?.isAccountsEnabled
 	)
 	let sharing = $state(false)
 	let sharedWith = $state<ConversationPerson[]>([])
+	/**
+	 * The book being shared, as a primitive: `book` is a new object on every
+	 * `lorebooks:list` push, so an effect reading it re-asked `lorebooks:get`
+	 * after every save and blanked the line meanwhile (audit 2026-10-21).
+	 */
+	let shareBookId = $derived(canShare ? (book?.id ?? null) : null)
 	$effect(() => {
-		const id = canShare ? (book?.id ?? null) : null
+		const id = shareBookId
 		sharedWith = []
 		if (id === null) return
 		const release = declareInterest<"lorebooks:get">(
@@ -281,6 +330,20 @@
 		}
 	})
 
+	/** Book settings, from its rail row, the view picker or the ⋯ menu. */
+	function openSettings() {
+		void loreRoute.navigate({ type: "openSettings" })
+	}
+
+	/** A book's settings straight from the list: one transition, one guard. */
+	function openBookSettings(lorebookId: number) {
+		void loreRoute.navigateTo(
+			reduce(reduce(route, { type: "openBook", lorebookId }), {
+				type: "openSettings"
+			})
+		)
+	}
+
 	function handleShareConfirm(userIds: number[]) {
 		if (!book) return
 		socket.emit("lorebooks:share", { lorebookId: book.id, userIds })
@@ -297,7 +360,10 @@
 	)
 	let openSessionHasLorebook = $derived(openSessionCtx.lorebookId !== null)
 	let canOfferAttachToSession = $derived(
-		hasOpenSession && !openSessionHasLorebook
+		hasOpenSession &&
+			!openSessionHasLorebook &&
+			// The book lock: a story underway keeps its own notes.
+			!openSessionCtx.lorebookFixed
 	)
 	/** What the session reading this book is called, or nothing. */
 	let readingInto = $derived(
@@ -654,8 +720,19 @@
 		rowsReadingOnLine(sceneRows as any[], line) as PoolSource[]
 	)
 
+	/**
+	 * The lists the book draws: only where it has something in it — entries
+	 * of that kind on this line, or rows in its rules' library (ruled
+	 * 2026-10-21). A Freeform book draws none until it holds some.
+	 */
+	let drawnRulesLists = $derived(drawnListsOf(rulesLists, counts))
+	/** The doors of every one of the book's lists: Everything holds their rows. */
+	let rulesListDoors = $derived(rulesLists.map((list) => rulesListDoor(list)))
+
 	/** Every row in the book, as the pool reads them. */
-	let bookPool = $derived(bookPoolItems(resolvedRows, lineScenes))
+	let bookPool = $derived(
+		bookPoolItems(resolvedRows, lineScenes, rulesListDoors)
+	)
 
 	/**
 	 * The book, for every lens (plan B4) — read through getters, so a lens's
@@ -693,6 +770,15 @@
 		},
 		get duplicates() {
 			return castDuplicates
+		},
+		get rulesLists() {
+			return rulesLists
+		},
+		get drawnRulesLists() {
+			return drawnRulesLists
+		},
+		get library() {
+			return library
 		},
 		loaded(what) {
 			if (what === "cast") return castLoaded
@@ -1127,10 +1213,29 @@
 	)
 
 	/** The address said out loud, which is what the book chip's hover says. */
-	let crumbs = $derived(describeRoute(route, { book: book?.name }))
+	let crumbs = $derived(
+		describeRoute(route, {
+			book: book?.name,
+			scope: scopeTitle(route.scope)
+		})
+	)
 
 	let scopes = $derived(railScopes(counts))
 
+	/**
+	 * The rail's rules group (PLAN-lorebook-kinds §C): named by the book's
+	 * rules (**Vis Itineris**), one row per list the book draws. Null when it
+	 * draws none — a Freeform book with nothing in its lists looks as it
+	 * always has.
+	 */
+	let rulesGroup = $derived.by(() => {
+		const facets = rulesListFacets(rulesLists, counts)
+		if (!facets.length) return null
+		return { label: rulesName ?? "Rules", facets }
+	})
+
+	/** What the book's rules are called (`entries:types`): "Vis Itineris". */
+	let rulesName = $state<string | null>(null)
 	/**
 	 * What the line over the lens names: the scope in force and its figure
 	 * ("World lore · 41"; Everything is the book's total), or the saved scope
@@ -1142,8 +1247,13 @@
 				label: SAVED_SCOPES.find((s) => s.id === saved)?.label ?? "",
 				count: savedCounts[saved] as number | undefined
 			}
-		const facet = scopes.find((f) => f.id === route.scope)
-		return { label: facet?.label ?? "", count: facet?.count }
+		const facet = [...scopes, ...(rulesGroup?.facets ?? [])].find(
+			(f) => f.id === route.scope
+		)
+		return {
+			label: facet?.label ?? scopeTitle(route.scope),
+			count: facet?.count
+		}
 	})
 
 	/** The one chip under the compact find row; null draws none. */
@@ -1186,14 +1296,63 @@
 		return lorebookList.find((l) => l.id === id)?.name ?? "another lorebook"
 	})
 
+	/**
+	 * 🚧 The book lock (PLAN-lorebook-kinds §A): the open session's story is
+	 * underway, so it keeps the book it reads (or its own notes) — the verbs
+	 * stay in place, disabled, saying so.
+	 */
+	let readingFixed = $derived(!!openSessionCtx.lorebookFixed)
+	let readingFixedTitle = $derived(
+		openSessionCtx.lorebookId !== null
+			? `This story is underway with ${
+					lorebookList.find((l) => l.id === openSessionCtx.lorebookId)?.name ??
+					"its lorebook"
+				}, so it keeps reading it. Start a new session to read another book.`
+			: "This story is underway in its own notes. Make them a lorebook to keep them and build on them."
+	)
+
 	/** What reading this book into the open session, or stopping, does. */
 	let readingVerbTitle = $derived(
-		readingInto
-			? `Stop reading this book into ${readingInto}`
-			: otherReadBook
-				? `This session reads ${otherReadBook}; reading this book replaces it`
-				: "Read this book into the open session"
+		readingFixed
+			? readingFixedTitle
+			: readingInto
+				? `Stop reading this book into ${readingInto}`
+				: otherReadBook
+					? `This session reads ${otherReadBook}; reading this book replaces it`
+					: "Read this book into the open session"
 	)
+
+	/**
+	 * 🚧 A starter lorebook's `⋯`: settings, a lorebook made from it, and its
+	 * delete. Never a reading verb: sessions start from a kit, never read one.
+	 */
+	let kitMenu = $derived<RowMenuEntries>([
+		{
+			label: "Book settings",
+			icon: Icons.SlidersHorizontal,
+			title: "Name, cover, rules, calendar and clock",
+			onSelect: openSettings
+		},
+		{
+			label: "Make a lorebook from it",
+			icon: Icons.BookPlus,
+			title: "Start a lorebook of your own from this starter lorebook",
+			onSelect: makeBookFromOpenKit
+		},
+		{ separator: true },
+		{
+			label: "Delete starter lorebook",
+			icon: Icons.Trash2,
+			destructive: true,
+			onSelect: () => {
+				deletingId = book?.id ?? null
+			}
+		}
+	])
+
+	function makeBookFromOpenKit() {
+		if (book) actions?.makeBookFromKit(book.id, book.name)
+	}
 
 	/**
 	 * Everything about the book that is not its reading verb: the nav
@@ -1213,19 +1372,22 @@
 						}
 					}
 				]
-			: [
+			: bookIsKit
+				? kitMenu
+				: [
 		mode === "compact" &&
 			hasOpenSession && {
 				label: readingInto ? STOP_READING : READ_INTO_SESSION,
 				icon: readingInto ? Icons.BookX : Icons.BookOpen,
 				title: readingVerbTitle,
+				disabled: readingFixed,
 				onSelect: changeReading
 			},
 		{
-			label: "Settings",
+			label: "Book settings",
 			icon: Icons.SlidersHorizontal,
-			title: "What this book holds, its calendar and its clock",
-			onSelect: () => void loreRoute.navigate({ type: "openSettings" })
+			title: "Name, cover, rules, calendar and clock",
+			onSelect: openSettings
 		},
 		{
 			label: "Duplicate",
@@ -1233,6 +1395,14 @@
 			title: "Copy this book, entries, cast and all",
 			onSelect: () => {
 				duplicating = book ? { id: book.id, name: book.name } : null
+			}
+		},
+		isAdmin && {
+			label: "Save as starter lorebook",
+			icon: Icons.Package,
+			title: "Copy this book as a starter lorebook everyone on the pub can start from",
+			onSelect: () => {
+				if (book) actions?.saveAsStarterKit(book.id)
 			}
 		},
 		canShare && {
@@ -1288,6 +1458,9 @@
 
 	/** The reader's own books, then the ones shared with them. */
 	let shelf = $derived(splitSharedRows(filteredLorebooks))
+	/** 🚧 The asker's own starter lorebooks, in a group of their own. */
+	let ownBooks = $derived(shelf.own.filter((l) => !isStarterKit(l)))
+	let ownKits = $derived(shelf.own.filter((l) => isStarterKit(l)))
 
 	/**
 	 * A section is drawn unless the book is gone, and only a drawn section can
@@ -1536,7 +1709,7 @@
 
 	/** Reads this book into the open session, or stops reading it into one. */
 	function changeReading() {
-		if (!book || openSessionCtx.sessionId === null) return
+		if (!book || openSessionCtx.sessionId === null || readingFixed) return
 		if (openSessionCtx.lorebookId === book.id) handleDetachFromSession()
 		else handleAttachToSession(book.id)
 	}
@@ -1628,6 +1801,9 @@
 		if (id === null) return
 		for (const typeId of BOOK_ENTRY_TYPES)
 			socket.emit("entries:list", { lorebookId: id, typeId })
+		// The book's rules lists: their rows are asked for once the lists
+		// themselves land (`handleEntryTypes`).
+		refreshRulesLists()
 		socket.emit("scenes:listByLorebook", { lorebookId: id })
 		relationships.load()
 		socket.emit("amendments:list", { lorebookId: id })
@@ -1643,6 +1819,46 @@
 		socket.emit("bindingSuggestions:list", { lorebookId: id })
 		socket.emit("narrativeGraph:duplicateCandidates", { lorebookId: id })
 		refreshCounts()
+	}
+
+	/** Asks which lists the book's rules declare (`entries:types`). */
+	function refreshRulesLists() {
+		const id = route.lorebookId
+		if (id === null) return
+		rulesListsFor = book?.primaryRuleset ?? null
+		socket.emit("entries:types", {
+			lorebookId: id
+		} satisfies Sockets.Entries.Types.Params)
+		// The rules' library comes with its lists: both follow the Rules.
+		socket.emit("lorebooks:library", {
+			lorebookId: id
+		} satisfies Sockets.Lorebooks.Library.Params)
+	}
+
+	/** The book's rules library, for the ‹Rules› library chip and its rows. */
+	function handleLibrary(msg: Sockets.Lorebooks.Library.Response) {
+		const id = route.lorebookId
+		if (id === null || msg.lorebookId !== id) return
+		library = { name: msg.name, source: msg.source, rows: msg.rows }
+	}
+
+	/**
+	 * The book's rules lists, and then each list's rows — the whole book,
+	 * as every core kind's are (the rail and Everything report on all of it).
+	 */
+	function handleEntryTypes(msg: Sockets.Entries.Types.Response) {
+		const id = route.lorebookId
+		if (id === null || msg.lorebookId !== id) return
+		// Remembered before the rows are asked for, so each row lands on a
+		// door and a label (`descriptorForKind`, `kindLabel`).
+		rememberRulesLists(msg.types)
+		rulesLists = msg.types
+		rulesName = msg.rulesName ?? null
+		for (const list of msg.types)
+			socket.emit("entries:list", {
+				lorebookId: id,
+				typeId: list.typeId as any
+			})
 	}
 
 	function handleLorebooksList(msg: Sockets.Lorebooks.List.Response) {
@@ -2030,6 +2246,14 @@
 				interestKey("entries:counts", id),
 				handleEntryCounts
 			),
+			declareInterest<"entries:types">(
+				interestKey("entries:types", id),
+				handleEntryTypes
+			),
+			declareInterest<"lorebooks:library">(
+				interestKey("lorebooks:library", id),
+				handleLibrary
+			),
 			declareInterest<"entries:recentDecisions">(
 				interestKey("entries:recentDecisions", id),
 				handleRecentDecisions
@@ -2086,6 +2310,12 @@
 		() => openBookId,
 		(id) => {
 			bookRows = {}
+			rulesLists = []
+			rulesName = null
+			library = null
+			// The ‹Rules› library chip is off each time a book opens (owner
+			// default, 2026-10-21): the book's own entries come first.
+			poolFacets = { ...poolFacets, library: false }
 			sceneRows = []
 			castRows = []
 			castLoaded = false
@@ -2098,6 +2328,22 @@
 			refreshBook()
 		}
 	)
+
+	/**
+	 * A change of the book's Rules (Book settings) changes its lists: asked
+	 * again, with the figures, when the stored rules move under an open book.
+	 * Keyed on the rules as a primitive, so a navigation inside the book asks
+	 * nothing.
+	 */
+	let openRules = $derived(book?.primaryRuleset ?? null)
+	$effect(() => {
+		const rules = openRules
+		if (openBookId === null || rules === rulesListsFor) return
+		untrack(() => {
+			refreshRulesLists()
+			refreshCounts()
+		})
+	})
 
 	/**
 	 * ⚠ Emitted from an effect, and answered on a key the book-scoped effect
@@ -2223,6 +2469,7 @@
 			type="button"
 			class="btn btn-sm preset-tonal-surface shrink-0 gap-1"
 			title={readingVerbTitle}
+			disabled={readingFixed}
 			data-lore-book-reading
 			onclick={changeReading}
 		>
@@ -2246,7 +2493,7 @@
 		{#if railSession}
 			Read by <a
 				href="/sessions/{railSession.id}"
-				class="text-primary-700-300 font-medium underline-offset-2 hover:underline"
+				class="text-primary-ink font-medium underline-offset-2 hover:underline"
 				title="Open {railSession.name}"
 			>
 				{railSession.name}
@@ -2254,7 +2501,7 @@
 			{readingWhere} · {readingReached}{#if readingParted}
 				· <button
 					type="button"
-					class="text-primary-700-300 font-medium underline-offset-2 hover:underline"
+					class="text-primary-ink font-medium underline-offset-2 hover:underline"
 					title="Go to the line and moment the session reads"
 					data-lore-match-session
 					onclick={matchSession}
@@ -2275,14 +2522,45 @@
 		title={book?.name ?? "Lorebook"}
 		onBack={backToList}
 		backLabel="Lorebooks"
-		primaryAction={mode === "desk" && !readOnly ? readingVerb : undefined}
+		primaryAction={mode === "desk" && !readOnly && !bookIsKit
+			? readingVerb
+			: undefined}
 		menuItems={bookMenu}
 		actionsLabel={book?.name ?? "this lorebook"}
-		subtitle={readOnly ? sharedSubtitle : readingSubtitle}
+		subtitle={readOnly
+			? sharedSubtitle
+			: bookIsKit
+				? kitSubtitle
+				: readingSubtitle}
+		leading={lorebookCoverSrc(book) ? bookCover : undefined}
 	/>
 	{#if canShare}
 		<SharedWithLine people={sharedWith} class="-mt-2" />
 	{/if}
+{/snippet}
+
+{#snippet bookCover()}
+	<!-- The cover image, square (STYLE-GUIDE §6.4); only when there is one —
+	     a glyph here would only repeat the rail. -->
+	<Avatar src={lorebookCoverSrc(book)} size="sm" shape="square" decorative />
+{/snippet}
+
+{#snippet kitSubtitle()}
+	<!-- 🚧 A starter lorebook: the badge, and what people do with it. -->
+	<p
+		class="text-surface-600-400 flex min-w-0 items-center gap-1.5 text-xs"
+		data-lore-kit
+	>
+		<span
+			class="badge preset-tonal-surface shrink-0 px-1.5 py-0 text-meta"
+			data-starter-kit-badge
+		>
+			Starter lorebook
+		</span>
+		<span class="min-w-0 truncate">
+			Everyone on the pub can start a lorebook or a session from it.
+		</span>
+	</p>
 {/snippet}
 
 {#snippet sharedSubtitle()}
@@ -2349,6 +2627,7 @@
 				</div>
 				<ScopePopout
 					{scopes}
+					{rulesGroup}
 					scope={route.scope}
 					{savedCounts}
 					{saved}
@@ -2356,15 +2635,13 @@
 					onSaved={chooseSaved}
 					looseEndsCount={readOnly ? 0 : liveLooseEnds.length}
 					onOpenLooseEnds={openQueue}
+					onOpenSettings={readOnly ? undefined : openSettings}
 				/>
 				<LensTrack compact value={lens} onselect={openLens} />
 			</div>
 			{#if scopeChip}
 				<div class="flex min-w-0 items-center gap-2">
-					<span
-						class="bg-surface-200-800 text-surface-700-300 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
-						data-lore-scope-chip
-					>
+					<Badge size="md" class="text-surface-700-300 flex min-w-0 items-center gap-1" data-lore-scope-chip>
 						<span class="min-w-0 truncate">{scopeChip}</span>
 						<button
 							type="button"
@@ -2378,7 +2655,7 @@
 						>
 							<Icons.X size={12} aria-hidden="true" />
 						</button>
-					</span>
+					</Badge>
 					{#if route.scope === "cast" && !saved}
 						{@render roster()}
 					{/if}
@@ -2501,7 +2778,15 @@
 				scenes={lineScenes}
 				relationships={lineRelationshipCount}
 				{readingInto}
-				canChangeReading={hasOpenSession}
+				readBy={book.readBy ?? []}
+				primaryRuleset={book.primaryRuleset ?? null}
+				loreWriteMode={book.loreWriteMode ?? null}
+				canChangeReading={hasOpenSession && !readingFixed}
+				isStarterKit={bookIsKit}
+				onSaveAsStarterKit={isAdmin && !bookIsKit
+					? () => actions?.saveAsStarterKit(book.id)
+					: undefined}
+				onMakeBookFromKit={bookIsKit ? makeBookFromOpenKit : undefined}
 				bind:hasUnsavedChanges={tabHasUnsavedChanges}
 				onClose={() => loreRoute.navigate({ type: "closeSettings" })}
 				onChangeReading={changeReading}
@@ -2547,8 +2832,10 @@
 >
 	{#if route.lorebookId === null}
 		<!-- The list of books is a list column like every other view's, and
-		     it fills the view: nothing opens beside it (a book replaces it). -->
-		<PanelSplit mode={vm.mode} hasDetail={false} listFills>
+		     it fills the view: nothing opens beside it (a book replaces it).
+		     Centred at a list's own 560px, like every list with nothing open
+		     (L7, 2026-10-24). -->
+		<PanelSplit mode={vm.mode} hasDetail={false} listFills fillWidth="list">
 			{#snippet toolbar()}
 				<!-- The view toolbar (STYLE-GUIDE §6.3): New is the primary,
 				     Import a secondary icon button, the filter box on its own
@@ -2599,20 +2886,22 @@
 						onCta={bookSearch ? undefined : () => (creating = true)}
 					/>
 				{:else}
-					{#if shelf.own.length}
+					{#if ownBooks.length}
 					<div
 						class="flex flex-col gap-2"
 						role="list"
 						aria-label="Lorebooks"
 					>
-						{#each shelf.own as l (l.id)}
+						{#each ownBooks as l (l.id)}
 							<LorebookListItem
 								lorebook={l}
 								onclick={(lorebook) => openBook(lorebook.id)}
+								onOpenSettings={openBookSettings}
+								onDuplicate={(id, name) => (duplicating = { id, name })}
 								onDelete={(id) => (deletingId = id)}
 								bindingsCount={l.lorebookBindings?.length || 0}
 								entryCounts={l.entryCounts}
-								{hasOpenSession}
+								hasOpenSession={hasOpenSession && !readingFixed}
 								{openSessionHasLorebook}
 								isOpenSessionLorebook={openSessionCtx.lorebookId ===
 									l.id}
@@ -2621,6 +2910,34 @@
 							/>
 						{/each}
 					</div>
+					{/if}
+					{#if ownKits.length}
+						<!-- 🚧 An admin's own starter lorebooks (PLAN-lorebook-kinds
+						     §B), under their books: edited here, never read
+						     into a session. -->
+						<ListGroupLabel
+							label="Your starter lorebooks"
+							id="loreYourStarterKits"
+						/>
+						<div
+							class="flex flex-col gap-2"
+							role="list"
+							aria-labelledby="loreYourStarterKits"
+						>
+							{#each ownKits as l (l.id)}
+								<LorebookListItem
+									lorebook={l}
+									onclick={(lorebook) => openBook(lorebook.id)}
+									onOpenSettings={openBookSettings}
+									onDelete={(id) => (deletingId = id)}
+									bindingsCount={l.lorebookBindings?.length || 0}
+									entryCounts={l.entryCounts}
+									hasOpenSession={false}
+									openSessionHasLorebook={false}
+									isOpenSessionLorebook={false}
+								/>
+							{/each}
+						</div>
 					{/if}
 					{#if shelf.shared.length}
 						<!-- Read and Duplicate only (ruled Q3/Q4): never
@@ -2638,6 +2955,7 @@
 								<LorebookListItem
 									lorebook={l}
 									onclick={(lorebook) => openBook(lorebook.id)}
+									onDuplicate={(id, name) => (duplicating = { id, name })}
 									entryCounts={l.entryCounts}
 									hasOpenSession={false}
 									openSessionHasLorebook={false}
@@ -2658,6 +2976,7 @@
 		<div class="flex min-h-0 flex-1">
 			<LoreRail
 				{scopes}
+				{rulesGroup}
 				scope={route.settings ? null : route.scope}
 				{lens}
 				{search}
@@ -2669,6 +2988,8 @@
 				onScope={openScope}
 				onSaved={chooseSaved}
 				onSearch={(next) => (search = next)}
+				onOpenSettings={readOnly ? undefined : openSettings}
+				settingsOpen={!!route.settings}
 			/>
 			<div class="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-4">
 				{@render bookHeader()}
@@ -2701,6 +3022,7 @@
 </div>
 
 <LorebookActions
+	bind:this={actions}
 	bind:creating
 	bind:importing
 	bind:exportingId

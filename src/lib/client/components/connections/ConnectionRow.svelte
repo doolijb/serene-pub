@@ -34,9 +34,21 @@
 	 * The kind tile says WHERE the compute is and is tinted by kind, not by
 	 * health — a tile that changed colour with status made every row a traffic
 	 * light and left nowhere calm for the eye to rest.
+	 *
+	 * ## The DOT carries the colour; the words stay muted (★R2, 2026-10-24)
+	 *
+	 * A state is a 6px dot and 13px muted words (`rowStatusClasses`): "Stopped ·
+	 * 1 on disk", "Not reachable · 127.0.0.1:11434". Red words, a red dot and a
+	 * 3px error bar mean one thing — a loadout runs on this broken connection
+	 * (`status.blocked`, the Admin Needs you case). Fix is tonal surface but on
+	 * that row; Start is filled on the row that can start (`rowActionClass`).
 	 */
 	import * as Icons from "@lucide/svelte"
-	import { stateTone, type RowStatus } from "./connectionRowStatus"
+	import {
+		rowActionClass,
+		rowStatusClasses,
+		type RowStatus
+	} from "./connectionRowStatus"
 	import type { EndpointKind } from "./modelManagement"
 	import { connectionTypeIcon, kindIconComponent } from "./connectionTypeIcon"
 
@@ -93,22 +105,7 @@
 			: null
 	)
 
-	const tone = $derived(stateTone(status.state))
-
-	const DOT: Record<ReturnType<typeof stateTone>, string> = {
-		ok: "bg-success-500",
-		quiet: "bg-surface-400-600",
-		primary: "bg-primary-500",
-		warning: "bg-warning-500 animate-pulse",
-		error: "bg-error-500"
-	}
-	const TEXT: Record<ReturnType<typeof stateTone>, string> = {
-		ok: "text-success-800 dark:text-success-300",
-		quiet: "text-surface-600-400",
-		primary: "text-primary-900 dark:text-primary-300",
-		warning: "text-warning-800 dark:text-warning-300",
-		error: "text-error-800 dark:text-error-300"
-	}
+	const marks = $derived(rowStatusClasses(status))
 
 	/**
 	 * What the second line says after the state and the marks.
@@ -120,6 +117,10 @@
 	 */
 	const secondary = $derived(
 		(status.action ? status.metric : null) ?? status.detail
+	)
+	/** With an action, the state and its one fact as one line. */
+	const stateLine = $derived(
+		secondary ? `${status.label} · ${secondary}` : status.label
 	)
 
 	/**
@@ -133,15 +134,16 @@
 </script>
 
 <div
-	class="flex min-h-11 items-center gap-1 rounded-[10px] {selected
+	class="flex min-h-11 items-center gap-1 rounded-base {selected
 		? 'sidebar-row-active'
-		: ''}"
+		: marks.edge}"
+	data-row-blocked={status.blocked ? "" : undefined}
 >
 	<button
 		type="button"
-		class="focus-visible:ring-primary-500 flex min-w-0 flex-1 items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none {selected
+		class="focus-visible:ring-primary-500 flex min-w-0 flex-1 items-center gap-2.5 rounded-base px-2 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none {selected
 			? ''
-			: 'hover:preset-tonal-primary'}"
+			: 'hover:bg-surface-200-800'}"
 		aria-current={selected ? "true" : undefined}
 		onclick={onOpen}
 	>
@@ -154,12 +156,12 @@
 
 		<span class="min-w-0 flex-1">
 			<span class="flex min-w-0 items-center gap-1.5">
-				<span class="min-w-0 truncate text-[15px] font-medium">
+				<span class="min-w-0 truncate text-lead font-medium">
 					{title}
 				</span>
 				{#if showChip}
 					<span
-						class="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] {managed
+						class="shrink-0 rounded-full px-1.5 py-0.5 text-meta {managed
 							? 'preset-tonal-tertiary'
 							: 'border-surface-300-700 text-surface-600-400 border'}"
 					>
@@ -179,21 +181,23 @@
 			-->
 			<span class="mt-0.5 flex min-w-0 items-center gap-1.5">
 				{#if status.action}
+					<!-- "Stopped · 1 on disk": the state and its one fact as one
+					     muted line, the label first so a long reason truncates
+					     after it, never before. -->
 					<span
-						class="flex shrink-0 items-center gap-1.5 text-xs font-medium {TEXT[
-							tone
-						]}"
+						class="flex min-w-0 items-center gap-1.5 text-chip {marks.text}"
+						title={stateLine}
 					>
 						<span
-							class="size-1.5 shrink-0 rounded-full {DOT[tone]}"
+							class="size-1.5 shrink-0 rounded-full {marks.dot}"
 							aria-hidden="true"
 						></span>
-						{status.label}
+						<span class="min-w-0 truncate">{stateLine}</span>
 					</span>
 				{/if}
 				{#each defaultFor as capability (capability)}
 					<span
-						class="preset-tonal-primary text-primary-900 dark:text-primary-300 flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[11px] font-bold"
+						class="preset-tonal-primary text-primary-ink flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-meta font-bold"
 					>
 						<Icons.Star
 							size={8}
@@ -203,9 +207,9 @@
 						{capability}
 					</span>
 				{/each}
-				{#if secondary}
+				{#if secondary && !status.action}
 					<span
-						class="text-surface-600-400 min-w-0 truncate text-xs"
+						class="text-surface-600-400 min-w-0 truncate text-chip"
 						title={secondary}
 					>
 						{secondary}
@@ -229,12 +233,10 @@
 		{#if !status.action}
 			<span class="shrink-0 basis-[86px] text-right">
 				<span
-					class="flex items-center justify-end gap-1.5 text-xs font-medium {TEXT[
-						tone
-					]}"
+					class="flex items-center justify-end gap-1.5 text-chip {marks.text}"
 				>
 					<span
-						class="size-1.5 shrink-0 rounded-full {DOT[tone]}"
+						class="size-1.5 shrink-0 rounded-full {marks.dot}"
 						aria-hidden="true"
 					></span>
 					<span class="truncate">{status.label}</span>
@@ -260,10 +262,9 @@
 	{#if status.action && ActionIcon}
 		<button
 			type="button"
-			class="btn btn-sm mr-1 shrink-0 text-xs {status.action.emphasis ===
-			'tonal'
-				? 'preset-tonal-primary'
-				: 'hover:preset-tonal-surface text-surface-600-400'}"
+			class="btn btn-sm mr-1 shrink-0 text-xs {rowActionClass(
+				status.action.emphasis
+			)}"
 			onclick={() => onAction(status.action!.verb)}
 			aria-label={`${status.action.label} — ${title}`}
 		>

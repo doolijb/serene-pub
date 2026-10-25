@@ -225,6 +225,8 @@ let characterId: number
 /** The user's own presence — the round-robin needs somebody to take turns with. */
 let personaId: number
 let lorebookId: number
+/** The reply's model call, by the address its document gives it (Story's sits in its `reply` junction). */
+let GENERATE: string
 
 const fakeSocket = (uid: number) => ({ user: { id: uid }, io: {} }) as any
 const events: Array<{ event: string; data: any }> = []
@@ -335,6 +337,12 @@ beforeAll(async () => {
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	await bootstrapPipelines(db)
+	GENERATE = (
+		await (await import("$lib/server/utils/testDb")).replyStepKeys(
+			db,
+			(await import("$lib/server/pipelines/boot/bootstrap")).STORY_RESPOND_SPEC_ID
+		)
+	).generate
 
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	userId = (await createTestUser(db, "run-status")).id
@@ -438,15 +446,14 @@ describe("the live row and the session list", () => {
 			i18n: { en: "{speaker} is typing" },
 			vars: { speaker: "Jasmine" }
 		})
-		// The list's push: each change, then the end. Story's reply runs its
-		// reckoning after the reply (2026-10-19; a session with no preset
-		// takes the declared defaults, the reckoning on), so the list says
-		// that too; the row is the reply's and stops at typing.
+		// The list's push: each change, then the end. The reckoning left the
+		// reply (PLAN-layering lane 3: a routine after each round, run by the
+		// routine queue as its own run, lane 6), so the reply's run says only
+		// its own.
 		expect(listStatuses(sessionId).map(rendered)).toEqual([
 			"Jasmine is thinking",
 			"Jasmine is composing",
 			"Jasmine is typing",
-			"Noting what changed",
 			null
 		])
 		// The retired enum was never written; the status leaves with the run.
@@ -483,12 +490,11 @@ describe("the live row and the session list", () => {
 			.map((e) => rendered(e.data.status))
 		// *Thinking* included since A7: the speaker is known from the first
 		// node, so the reads' status is no longer withheld — see the first
-		// case. Then Story's reckoning, after the reply (2026-10-19).
+		// case. The reckoning is a routine now (lane 3), not the reply's.
 		expect(statuses).toEqual([
 			"Jasmine is thinking",
 			"Jasmine is composing",
-			"Jasmine is typing",
-			"Noting what changed"
+			"Jasmine is typing"
 		])
 	})
 })
@@ -527,7 +533,7 @@ describe("Stop mid-typing", () => {
 		const receipt = run!.receipt as any
 		expect(receipt.outcome).toBe("cancelled")
 		expect(receipt.lastStatus).toEqual({
-			nodeKey: "generate",
+			nodeKey: GENERATE,
 			text: {
 				i18n: { en: "{speaker} is typing" },
 				vars: { speaker: "Jasmine" }
@@ -559,10 +565,10 @@ describe("Stop mid-typing", () => {
 			receipt
 		}
 		const last = lastStatusOf(inspected)
-		expect(last?.nodeKey).toBe("generate")
+		expect(last?.nodeKey).toBe(GENERATE)
 		expect(
 			verdict(inspected, { status: renderStatusText(last!.text) })
-		).toBe("Stopped at generate on request while Jasmine is typing.")
+		).toBe(`Stopped at ${GENERATE} on request while Jasmine is typing.`)
 		// And the list heard the end.
 		expect(listStatuses(sessionId).at(-1)).toBeNull()
 	})

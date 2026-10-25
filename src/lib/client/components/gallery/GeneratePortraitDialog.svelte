@@ -78,7 +78,7 @@
 									role="radio"
 									aria-checked={count === n}
 									class="btn btn-sm min-w-10 {count === n
-										? 'preset-tonal-primary'
+										? 'preset-pressed'
 										: 'preset-tonal-surface'}"
 									onclick={() => (count = n)}
 								>

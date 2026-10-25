@@ -88,6 +88,62 @@ export const DATA_UPGRADES: DataUpgrade[] = [
 	{
 		afterMigration: "0107_story_genre",
 		load: () => import("./0107_story_genre")
+	},
+	// 🚧 Registrations (PLAN-layering D7): bindings, configurations, action
+	// toggles and genre tasks moved into the rows that say them now.
+	{
+		afterMigration: "0108_layering_registrations",
+		load: () => import("./0108_layering_registrations")
+	},
+	// 🚧 O3: each generating model's single modality → what it writes.
+	{
+		afterMigration: "0109_omni_model_kinds",
+		load: () => import("./0109_omni_model_kinds")
+	},
+	// 🚧 R50, R55 (lane F1): the pub's configuration → a pipeline's instance
+	// values; Story's `applyActionChanges` removed.
+	{
+		afterMigration: "0110_layering_follow_ups",
+		load: () => import("./0110_layering_follow_ups")
+	},
+	// 🚧 The Lair rewrite (PLAN-lair-build D11): old Lair sessions onto the
+	// Rules preset, its retired fields and specs carried or dropped.
+	{
+		afterMigration: "0112_lair_rewrite",
+		load: () => import("./0112_lair_rewrite")
+	},
+	// 🚧 Rulesets made on the pub onto check methods (PLAN-rulesets-authoring
+	// D6, lane M4): the die, bands, amounts, tags and the spell-point pool.
+	{
+		afterMigration: "0118_rulesets_check_methods",
+		load: () => import("./0118_rulesets_check_methods")
+	},
+	// 🚧 Rulesets as functions (PLAN-rulesets-functions D2, D5, lane A1): pub
+	// rulesets into the seven sections; list-slot pieces of a ruleset moved
+	// there copied into its owners' carried zones (`zone_contents`, 0119).
+	{
+		afterMigration: "0119_rulesets_functions",
+		load: () => import("./0119_rulesets_functions")
+	},
+	// 🚧 Story's reply onto its `reply.prose` branch (PLAN-rulesets-functions
+	// D7, merge M1): what is stored by node key for `generate`, `save` and
+	// the sprite steps moves to `reply.prose.<key>`.
+	{
+		afterMigration: "0120_rulesets_reply_changes",
+		load: () => import("./0120_rulesets_reply_changes")
+	},
+	// 🚧 Story's reply tail, once, after the junction (RF fix 3): the save,
+	// the sprite steps and the commit back at their top-level keys.
+	{
+		afterMigration: "0123_story_reply_tail",
+		load: () => import("./0123_story_reply_tail")
+	},
+	// 🚧 Genre slots retire (RF fix 8): a value a session held on a retired
+	// genre slot moves onto the rules' attribute of the same tag, else into
+	// the session's notes as a line; the slot's rows go.
+	{
+		afterMigration: "0126_genre_slots_retire",
+		load: () => import("./0126_genre_slots_retire")
 	}
 ]
 

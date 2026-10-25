@@ -19,6 +19,7 @@
  * and report what it refused; they never re-decide it, and a guard here would
  * only make the panel polite about a rule it cannot enforce.
  */
+import { isMediaPartType } from "@serene-pub/sdk"
 import { db } from "$lib/server/db"
 import { and, eq, desc, asc, inArray, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
@@ -186,13 +187,11 @@ async function messageReferenceCounts(): Promise<Map<number, number>> {
 
 	for (const row of rows) {
 		// The type gate matches the RENDERER, not the column: `MessagePartsView`
-		// only draws `data.assetId` for these two types, so a plugin part that
+		// only draws `data.assetId` for the media part types (🚧 `core:audio`
+		// and `core:video` since O5), so a plugin part that
 		// happens to carry an `assetId` of its own is not a reference this
 		// delete would break, and counting it would overstate the damage.
-		if (
-			row.assetId != null &&
-			(row.type === "core:image" || row.type === "core:file")
-		)
+		if (row.assetId != null && isMediaPartType(row.type))
 			note(row.assetId, row.messageId)
 		// The driver hands back a parsed value for a json column; a string is
 		// tolerated because that is driver-dependent, not contractual.
@@ -420,6 +419,47 @@ function announceChanged(
 	})
 }
 
+/**
+ * Re-send what draws this file from a payload that carries its `{ uuid, rev }`
+ * — the asker's own account (its avatar) and their lorebook list (a cover
+ * image) — so a new crop reaches the rail and the book rows without a reload.
+ * LAZY, like the announcement: a view nobody has open costs nothing.
+ */
+async function refreshWearers(
+	fileId: number,
+	socket: { user?: { id: number } | null },
+	emitToUser: (event: string, data: any) => void
+) {
+	const userId = socket.user!.id
+	const [account] = await db
+		.select({ id: schema.users.id })
+		.from(schema.users)
+		.where(
+			and(
+				eq(schema.users.id, userId),
+				eq(schema.users.avatarMediaId, fileId)
+			)
+		)
+	if (account) {
+		const { buildUsersCurrent } = await import("./users")
+		await emitToUser("users:current", () => buildUsersCurrent(userId))
+	}
+	const [cover] = await db
+		.select({ id: schema.lorebooks.id })
+		.from(schema.lorebooks)
+		.where(
+			and(
+				eq(schema.lorebooks.userId, userId),
+				eq(schema.lorebooks.coverMediaId, fileId)
+			)
+		)
+		.limit(1)
+	if (cover) {
+		const { relistLorebooks } = await import("./lorebooks")
+		await relistLorebooks(socket, emitToUser)
+	}
+}
+
 export const mediaRegenerateThumbnail: Handler<
 	Sockets.Media.RegenerateThumbnail.Params,
 	Sockets.Media.RegenerateThumbnail.Response
@@ -524,6 +564,7 @@ export const mediaSetFrame: Handler<
 		// way, and only a different URL string dislodges them.
 		await bumpFileRev(db, row.id)
 		await announceChanged(row.id, emitToUser)
+		await refreshWearers(row.id, socket, emitToUser)
 
 		const updated = (await getMedia(db, row.id)) ?? row
 		const res: Sockets.Media.SetFrame.Response = {

@@ -121,9 +121,11 @@ beforeAll(async () => {
 			values (${bookId}, ${`{{${name.toLowerCase()}}}`}, ${name}) returning id`)) as any
 		bindings[name] = Number((rows.rows ?? rows)[0].id)
 	}
+	;(await import("$lib/server/pipelines/routines/runs")).setRoutinesEnabled(true)
 }, 180_000)
 
 afterAll(async () => {
+	;(await import("$lib/server/pipelines/routines/runs")).setRoutinesEnabled(false)
 	await fs.rm(dataDir, { recursive: true, force: true }).catch(() => {})
 })
 
@@ -143,15 +145,16 @@ async function sweptSession(name: string, tasks: Record<string, "full" | "review
 	expect(res?.error, res?.error).toBeUndefined()
 	await settle()
 	const sessionId = res.session.id as number
-	const fields = {
-		tasks: {
-			v: 1,
-			// The sweep every turn, so one turn shows it.
-			groups: { sweep: { every: 1 } },
-			tasks: Object.fromEntries(Object.entries(tasks).map(([k, mode]) => [k, { mode }]))
-		}
-	}
-	await db.update(schema.sessions).set({ lorebookId: bookId, genreFields: fields }).where(eq(schema.sessions.id, sessionId))
+	await db.update(schema.sessions).set({ lorebookId: bookId }).where(eq(schema.sessions.id, sessionId))
+	// The retired task choices, where they live now: the sweep's duties and its mode.
+	const { applyLegacyTasks, setRoutineCadenceOptions } = await import("$lib/server/utils/testDb")
+	await applyLegacyTasks(db, sessionId, { v: 1, tasks: Object.fromEntries(Object.entries(tasks).map(([k, mode]) => [k, { mode }])) })
+	// The sweep every turn, so one exchange shows it — an administrator's
+	// change of its cadence's options (R36), the registration unchanged (A8).
+	const { STORY_SWEEP_SPEC_ID } = await import("@serene-pub/core-catalog")
+	const { effectiveRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
+	const sweep = (await effectiveRegistrations(db as never, sessionId))!.effective.find((r) => r.pipeline === STORY_SWEEP_SPEC_ID)!
+	await setRoutineCadenceOptions(db, sessionId, sweep.key, { n: 1 })
 	return sessionId
 }
 
@@ -178,7 +181,13 @@ const answer = (over: Record<string, unknown> = {}) => ({
 	...over
 })
 
-describe("the sweep (lane 2)", () => {
+/**
+ * 🚧 Since PLAN-layering (lanes 3, 5a, 6, 2026-10-20) the sweep is a
+ * **routine** — `core:spec/story-sweep`, every N turns — run by the routine
+ * queue once the reply has settled; the session's tasks are its duties and
+ * its mode (`applyLegacyTasks`), and *Mark goals reached* is its duty.
+ */
+describe("the sweep (lane 2; a routine since lane 6)", () => {
 	it("Track relationships files the ties it found on the Graph's review screen; a stranger is left out", async () => {
 		const sessionId = await sweptSession("sweep-ties", { relationships: "full", summary: "off", lore: "off", cast: "off", "world-state": "off" })
 		await turn(sessionId, answer({ relationships: [{ from: "Ash", to: "Bram", how: "wary allies" }, { from: "Ash", to: "Nobody Known", how: "rivals" }] }))

@@ -29,6 +29,7 @@ import {
 	SCOPE_ORDER,
 	SLOT_VALUE,
 	isTransformId,
+	scopeKindOf,
 	type ConfigWorld,
 	type OverrideRow,
 	type SlotDecl
@@ -53,19 +54,85 @@ import { unreadSlotsOf } from "$lib/server/pipelines/boot/unreadAllowList"
 import { isHeldConnectionSlot } from "$lib/server/pipelines/config/heldSlots"
 
 /**
- * The node key of a spec's model call when the caller names none — the
- * `generate` oracle every shipped text pipeline declares. A session's own
- * sampling pick is the session-scope `pipeline_node_overrides` row on this
- * node's `sampling` slot (`resolveTaskConfig`, the 0.5.3 upgrade's wiring).
+ * The node key of a model call the pipeline does not name — an ad-hoc spec
+ * (`specId` absent: the parity floor's `generate`), or a pipeline that makes
+ * no reply call. A pipeline's reply names its own: `oracleNodeKeyOf`.
  */
 export const ORACLE_NODE_KEY = "generate"
 
+/**
+ * The node a pipeline's model call is — `replyCallOf`, read off the active
+ * version's own rows: the step its context budget is sized for, when the
+ * pipeline runs it on the Reply loadout (`reply.prose.generate` for Story's
+ * reply, `generate` for Guide's). Undefined when the pipeline is unknown or
+ * makes no reply call. A session's own sampling pick is the session-scope
+ * `pipeline_node_overrides` row on this node's `sampling` slot
+ * (`resolveTaskConfig`); the instance default is projected onto it here.
+ */
+export async function oracleNodeKeyOf(
+	db: Db,
+	spec: { slug: string } | { id: number }
+): Promise<string | undefined> {
+	const [row] = await db
+		.select({ versionId: schema.pipelineSpecs.activeVersionId })
+		.from(schema.pipelineSpecs)
+		.where(
+			"slug" in spec
+				? eq(schema.pipelineSpecs.slug, spec.slug)
+				: eq(schema.pipelineSpecs.id, spec.id)
+		)
+		.limit(1)
+	if (row?.versionId == null) return undefined
+	const nodes = await db
+		.select({
+			key: schema.pipelineNodes.nodeKey,
+			definitionId: schema.pipelineNodes.definitionId,
+			config: schema.pipelineNodes.config
+		})
+		.from(schema.pipelineNodes)
+		.where(eq(schema.pipelineNodes.specVersionId, row.versionId))
+	const values = await db
+		.select({
+			nodeKey: schema.pipelinePresetValues.nodeKey,
+			slot: schema.pipelinePresetValues.slot,
+			value: schema.pipelinePresetValues.value
+		})
+		.from(schema.pipelinePresetValues)
+		.innerJoin(
+			schema.pipelinePresets,
+			eq(schema.pipelinePresets.id, schema.pipelinePresetValues.presetId)
+		)
+		.where(
+			and(
+				eq(schema.pipelinePresets.specVersionId, row.versionId),
+				eq(schema.pipelinePresets.isDefault, true),
+				eq(schema.pipelinePresetValues.slot, "loadout")
+			)
+		)
+	const { replyCallOf } = await import(
+		"$lib/server/pipelines/runtime/specShape"
+	)
+	return replyCallOf({
+		nodes: nodes as never,
+		presets: [{ slug: "default", label: "Default", default: true, values }] as never
+	})?.key
+}
+
 export interface WorldScope {
 	sessionId?: number
-	/** Which node key carries the connection slot in the spec being run. */
+	/**
+	 * Which node key carries the connection slot in the spec being run;
+	 * absent, `oracleNodeKeyOf` the spec in scope.
+	 */
 	oracleNodeKey?: string
 	/** Which pipeline is running, so its own configuration can be read. */
 	specId?: string
+	/**
+	 * 🚧 The registration that started the run (PLAN-layering D5): whose
+	 * values are the genre and preset layers. Absent: the first registration
+	 * in force that runs this pipeline.
+	 */
+	registrationKey?: string
 }
 
 /**
@@ -96,7 +163,10 @@ export async function buildWorld(
 	db: Db,
 	scope: WorldScope = {}
 ): Promise<ConfigWorld> {
-	const oracle = scope.oracleNodeKey ?? ORACLE_NODE_KEY
+	const oracle =
+		scope.oracleNodeKey ??
+		(scope.specId ? await oracleNodeKeyOf(db, { slug: scope.specId }) : undefined) ??
+		ORACLE_NODE_KEY
 
 	const [system] = await db.select().from(schema.systemSettings).limit(1)
 
@@ -274,6 +344,14 @@ export async function buildWorld(
 	 */
 	const embeddingsId = defaultConnectionFor(EMBEDDING_CAPABILITY)
 	if (embeddingsId) activeConnection[S.embeddings] = embeddingsId
+	/**
+	 * 🚧 The transcription shape (O9), named here for the reason embeddings
+	 * is: it has no sampling vocabulary for the mapper above to answer, and
+	 * its one capability is not in doubt — `audio->text`, the Transcription
+	 * loadout's default. The transcribe step's slot falls back to it.
+	 */
+	const transcriptionId = defaultConnectionFor("audio->text")
+	if (transcriptionId) activeConnection[S.transcription] = transcriptionId
 
 	/**
 	 * The same store's other half — the sampling config a step falls back to
@@ -469,7 +547,8 @@ export async function applyLoadoutLayer(
 		for (const row of overrides)
 			if (
 				row.slot === "loadout" &&
-				row.scopeKind === scopeKind &&
+				// ⏳ A retired scope word reads as the layer it became (`config` → `preset`).
+				scopeKindOf(row.scopeKind) === scopeKind &&
 				row.value != null &&
 				!named.has(row.nodeKey)
 			)
@@ -849,56 +928,117 @@ async function applyPipelineLayer(
 		push(scopeKind, scopeId, nodeKey, slot, "engine", template.engine)
 	}
 
-	// ── the selected config, as the preset layer ─────────────────────────
-	const { resolveSelectedConfig } = await import(
+	// ── 🚧 the value cascade (R38, PLAN-layering D5) ──────────────────────
+	//
+	// Configurations retired: a pipeline's values are its **declared
+	// defaults** (`author` — its `.defaults()`, every seed reference resolved
+	// to the row it names), changed by its **instance values** (R50, the
+	// administrator's on this pub, read at `genre` under the genre's own),
+	// by **the genre's defaults'** registration of it (`genre`), by **the
+	// preset's** change to that registration (`preset`) and by the session's
+	// own row for it (`session`, where the data upgrade put a configuration a
+	// session had selected). A value one layer states hides the layers below
+	// it at that address and nowhere else.
+	const { shippedConfigValues, shippedConfigValuesOf } = await import(
 		"$lib/server/pipelines/config/named"
 	)
-	const selected = await resolveSelectedConfig(db, spec.id, spec.slug, {
-		sessionId: scope.sessionId
-	})
-
-	if (selected) {
-		const values = await db
-			.select()
-			.from(schema.pipelineConfigValues)
-			.where(eq(schema.pipelineConfigValues.configId, selected.configId))
-
-		for (const v of values as any[]) {
-			if (promptSlots.has(addressOf(v.nodeKey, v.slot))) {
+	const { registrationValueLayers, addressedValues } = await import(
+		"$lib/server/pipelines/registrations/values"
+	)
+	/** One layer's values by address, every reference dereferenced as a config's was. */
+	const pushValues = async (
+		scopeKind: OverrideRow["scopeKind"],
+		scopeId: string | number | undefined,
+		values: Map<string, unknown>
+	) => {
+		for (const [key, value] of values) {
+			const [nodeKey, slot, path = ""] = key.split("\u0000") as [string, string, string?]
+			if (value === undefined || value === null) continue
+			if (promptSlots.has(addressOf(nodeKey, slot))) {
 				// A reference. The fields it names become individual paths, so
 				// per-path resolution still works above it — someone overriding
 				// one field does not pin the rest of the prompt.
-				const fields = await resolvePromptFields(db, Number(v.value))
+				if (typeof value !== "number" && !(typeof value === "string" && /^\d+$/.test(value))) continue
+				const fields = await resolvePromptFields(db, Number(value))
 				for (const [field, text] of Object.entries(fields))
-					push("config", undefined, v.nodeKey, v.slot, field, text)
+					push(scopeKind, scopeId, nodeKey, slot, field, text)
 				continue
 			}
-			if (templateSlots.has(addressOf(v.nodeKey, v.slot))) {
-				await pushTemplate(
-					"config",
-					undefined,
-					v.nodeKey,
-					v.slot,
-					v.value
-				)
+			if (templateSlots.has(addressOf(nodeKey, slot))) {
+				await pushTemplate(scopeKind, scopeId, nodeKey, slot, value)
 				continue
 			}
-			if (variableSlots.has(addressOf(v.nodeKey, v.slot))) {
+			if (variableSlots.has(addressOf(nodeKey, slot))) {
 				push(
-					"config",
-					undefined,
-					v.nodeKey,
-					v.slot,
-					v.path ?? "",
-					await derefLayout(
-						v.value,
-						variableOf(v.nodeKey, v.slot, v.path ?? "")
-					)
+					scopeKind,
+					scopeId,
+					nodeKey,
+					slot,
+					path,
+					await derefLayout(value, variableOf(nodeKey, slot, path))
 				)
 				continue
 			}
-			push("config", undefined, v.nodeKey, v.slot, v.path ?? "", v.value)
+			push(scopeKind, scopeId, nodeKey, slot, path, value)
 		}
+	}
+	/** A layer's registration values by address, a seed reference resolved to its row. */
+	const resolvedLayer = async (values: Parameters<typeof addressedValues>[0]) => {
+		const stated = addressedValues(values, allDecls)
+		if (!stated.size) return stated
+		const resolved = await shippedConfigValues(db, spec.id, spec.slug, allDecls, stated)
+		const out = new Map<string, unknown>()
+		for (const key of stated.keys()) {
+			const v = resolved.has(key) ? resolved.get(key) : stated.get(key)
+			if (v !== undefined) out.set(key, v)
+		}
+		// An address no declaration names (a plugin's own slot) keeps its value.
+		return out
+	}
+	const valueLayers = await registrationValueLayers(db, {
+		specSlug: spec.slug,
+		specId: spec.id,
+		sessionId: scope.sessionId,
+		registrationKey: scope.registrationKey
+	})
+	await pushValues("session", scope.sessionId, await resolvedLayer(valueLayers.session))
+	await pushValues("preset", undefined, await resolvedLayer(valueLayers.preset))
+	await pushValues("genre", undefined, await resolvedLayer(valueLayers.genre))
+	// 🚧 R50: the pipeline's instance values — under the genre's defaults
+	// (pushed after them at the same layer: the first match at a layer wins),
+	// over the declared defaults. A pipeline nothing registers reads these
+	// and its declared defaults, nothing else.
+	await pushValues("genre", undefined, await resolvedLayer(valueLayers.instance))
+	/**
+	 * The declared defaults, at `author` — pushed before the declarations'
+	 * own `authorDefault` below, so a value the pipeline's defaults state
+	 * wins over its node type's (first match at a scope wins).
+	 */
+	const declared = spec.activeVersionId
+		? await shippedConfigValuesOf(db, spec.id, spec.slug, spec.activeVersionId, allDecls)
+		: new Map<string, unknown>()
+	await pushValues("author", undefined, declared)
+	/**
+	 * What the declared defaults fill, by `(node, slot)`: an instance's job
+	 * default (`defaults` — the connection defaults, the prompt and layout
+	 * floors) fills a hole and never hides a pick the pipeline's own
+	 * defaults made (a background step's `sampling-background`).
+	 */
+	const declaredSlots = new Set(
+		[...declared.entries()]
+			.filter(([, v]) => v !== undefined && v !== null)
+			.map(([k]) => k.split("\u0000").slice(0, 2).join("\u0000"))
+	)
+	// The instance's connection and sampling defaults, already projected by
+	// `buildWorld` at `defaults`, step aside where the pipeline picked its own.
+	for (let i = overrides.length - 1; i >= 0; i--) {
+		const o = overrides[i]!
+		if (
+			o.scopeKind === "defaults" &&
+			(o.slot === "connection" || o.slot === "sampling") &&
+			declaredSlots.has(addressOf(o.nodeKey, o.slot))
+		)
+			overrides.splice(i, 1)
 	}
 
 	// ── individual overrides, at the scope each was written at ───────────
@@ -1032,6 +1172,8 @@ async function applyPipelineLayer(
 		// (see `promptPool.ts`).
 		const byPool = new Map<string, Record<string, string> | null>()
 		for (const d of promptDecls) {
+			// A prompt the pipeline's declared defaults pick is not a hole.
+			if (declaredSlots.has(addressOf(d.nodeKey, d.slot))) continue
 			// The pool is a property of the node's TYPE, so a declaration that
 			// cannot say which type it came from cannot be given a floor. Its
 			// slot resolves to nothing rather than to somebody else's wording,
@@ -1080,6 +1222,8 @@ async function applyPipelineLayer(
 		const shipped = new Map<string, unknown>()
 		for (const d of varDecls) {
 			if (!d.variableId) continue
+			// A layout the declared defaults pick is not a hole.
+			if (declared.get(`${addressOf(d.nodeKey, d.slot)}\u0000${d.path}`) != null) continue
 			if (!shipped.has(d.variableId))
 				shipped.set(
 					d.variableId,
@@ -1154,7 +1298,9 @@ async function connectionReads(
 		}
 	>()
 	if (!connections.length) return out
-	const { pairReads } = await import("$lib/server/attachments/readers")
+	const { pairReads, MEDIA_ATTACHMENT_KINDS, IO_KIND_OF } = await import(
+		"$lib/server/attachments/readers"
+	)
 	const { mergeEndpointModel } = await import(
 		"$lib/server/connections/models"
 	)
@@ -1170,10 +1316,32 @@ async function connectionReads(
 		const why: { image?: string; pdf?: string } = {}
 		if (verdict.image) why.image = verdict.image
 		if (verdict.pdf) why.pdf = verdict.pdf
-		const tokensPerImage = adapterIo(endpoint.type)?.tokensPerImage
+		const io = adapterIo(endpoint.type)
+		const tokensPerImage = io?.tokensPerImage
+		// 🚧 Reads by kind (O2, O10): every media kind's verdict, keyed by
+		// the media kind it is sent as (a PDF is `document`), with what one
+		// placed item costs and — for audio and video, which nothing here
+		// re-encodes — the formats the pair takes.
+		const kinds: import("@serene-pub/sdk").ConnectionReadsV1["kinds"] = {}
+		for (const kind of MEDIA_ATTACHMENT_KINDS) {
+			const ioKind = IO_KIND_OF[kind]
+			const limits = io?.in?.[ioKind as keyof NonNullable<typeof io>["in"]]
+			const cost =
+				limits?.cost ??
+				(kind === "image" && tokensPerImage ? { perItem: tokensPerImage } : undefined)
+			kinds[ioKind] = {
+				reads: verdict[kind] == null,
+				...(verdict[kind] ? { why: verdict[kind]! } : {}),
+				...(cost ? { cost } : {}),
+				...((kind === "audio" || kind === "video") && limits?.accepts?.length
+					? { accepts: [...limits.accepts] }
+					: {})
+			}
+		}
 		return {
 			image: verdict.image == null,
 			pdf: verdict.pdf == null,
+			kinds,
 			...(why.image || why.pdf ? { why } : {}),
 			...(tokensPerImage ? { tokensPerImage } : {})
 		}

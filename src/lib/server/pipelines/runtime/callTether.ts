@@ -43,6 +43,24 @@ export const IN_FLIGHT_PULSE_MS = 10_000
  */
 export const NODE_TIMEOUT_CEILING_MS = 60 * 60_000
 
+/**
+ * 🚧 **The node time ceiling for one run, by its trigger family** (LS3,
+ * PLAN-layering §14.1; 2026-10-20). Every family core runs today — events,
+ * actions, routines — takes `NODE_TIMEOUT_CEILING_MS`; the seam is that the
+ * host picks it per run, so a later family (Live, whose ceiling is the
+ * administrator's maximum call length, R45) brings its own without touching
+ * the executor. A family core does not know takes the same hour.
+ */
+export function ceilingFor(family: string | undefined): number {
+	switch (family) {
+		case "event":
+		case "action":
+		case "routine":
+		default:
+			return NODE_TIMEOUT_CEILING_MS
+	}
+}
+
 export interface CallTether {
 	/** Aborts on the run's cancel or the node's own timeout — hand it to the dispatch. */
 	readonly signal: AbortSignal | undefined

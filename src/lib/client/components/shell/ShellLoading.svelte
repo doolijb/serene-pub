@@ -92,7 +92,7 @@
 		{#each GROUPS as group, g}
 			{#if g > 0}
 				{#if railWide && group.name}
-					<div class="text-surface-500 shrink-0 px-3 pt-3.5 pb-1 text-[11px]">
+					<div class="text-surface-500 shrink-0 px-3 pt-3.5 pb-1 text-meta">
 						{group.name}
 					</div>
 				{:else}

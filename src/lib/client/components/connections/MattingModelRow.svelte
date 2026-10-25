@@ -99,17 +99,17 @@
 		<ListGroupLabel id="models-matting" label="Background remover" />
 		<div class="panel-card flex items-center gap-2">
 			<div class="min-w-0 flex-1">
-				<p class="truncate text-[15px] font-medium">{matting.name}</p>
+				<p class="truncate text-lead font-medium">{matting.name}</p>
 				<p
 					class="mt-0.5 truncate text-xs {matting.state === 'error'
-						? 'text-error-700 dark:text-error-300'
+						? 'text-error-600-400'
 						: 'text-surface-600-400'}"
 					aria-live="polite"
 				>
 					{stateLine}
 				</p>
 				{#if error}
-					<p class="text-error-700 dark:text-error-300 mt-0.5 text-xs">
+					<p class="text-error-600-400 mt-0.5 text-xs">
 						{error}
 					</p>
 				{/if}

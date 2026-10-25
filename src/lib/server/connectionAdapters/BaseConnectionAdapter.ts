@@ -327,6 +327,17 @@ function stringify(value: unknown): string {
 	}
 }
 
+/**
+ * 🚧 The `input_audio.format` word for a sound's mime, or null for one the
+ * OpenAI chat wire does not take (O4): `wav` and `mp3`, nothing else.
+ */
+export function openAIAudioFormat(mime: string): "wav" | "mp3" | null {
+	const m = mime.split(";")[0]!.trim().toLowerCase()
+	if (m === "audio/wav" || m === "audio/x-wav" || m === "audio/wave") return "wav"
+	if (m === "audio/mpeg" || m === "audio/mp3") return "mp3"
+	return null
+}
+
 // Generic interface for constructor parameters
 export interface BaseConnectionAdapterParams {
 	/**
@@ -752,9 +763,12 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 * files is the SAME object. Measured against `requestWithoutFiles` — the
 	 * request as it stands before the files go in, base64 on the wire.
 	 *
-	 * Images only: none of these declare a document format, so the reading
-	 * rule never places a PDF on them, and one that arrives anyway is refused
-	 * naming the file rather than sent as something it is not.
+	 * Images, and 🚧 sounds (O4, 2026-10-21): a WAV or MP3 becomes
+	 * `{type:"input_audio", input_audio:{data, format:"wav"|"mp3"}}` — the part
+	 * OpenAI's audio models and llama-server take. No document format: the
+	 * reading rule never places a PDF on these, and one that arrives anyway
+	 * (or a sound in another format) is refused naming the file rather than
+	 * sent as something it is not.
 	 */
 	protected async openAIChatMessagesWithFiles<
 		M extends { role?: unknown; content?: unknown }
@@ -769,10 +783,19 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 			if (!own.length) return msg
 			const parts = own.map((file) => {
 				n++
+				const audioFormat = openAIAudioFormat(file.mime)
+				if (file.kind === "audio" && audioFormat)
+					return {
+						type: "input_audio" as const,
+						input_audio: {
+							data: file.bytes.toString("base64"),
+							format: audioFormat
+						}
+					}
 				if (file.kind !== "image")
 					throw new Error(
 						`${file.filename ?? `attachment ${n}`} is ${file.mime}, and this connection type sends only ` +
-							`images alongside a prompt. It is not sent rather than sent as something it is not.`
+							`images and WAV or MP3 sound alongside a prompt. It is not sent rather than sent as something it is not.`
 					)
 				return {
 					type: "image_url" as const,
@@ -1119,6 +1142,51 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 */
 	get consumesAttachments(): boolean {
 		return false
+	}
+
+	// ── Requested outputs (O6) ──────────────────────────────────────────────
+
+	/**
+	 * 🚧 The kinds this request asks the model to WRITE, in order
+	 * (`generate-text@1`'s `outputs`, O6) — `["text"]` unless a step asked
+	 * for more — and, when audio is among them, the speech sampling's values
+	 * (`speechSampling`, the TTS vocabulary: voice, speed, …; O7).
+	 *
+	 * A `withX` seam, for the reason `withTools` gives.
+	 */
+	private suppliedOutputs: readonly string[] = ["text"]
+	private suppliedSpeech: Record<string, unknown> = {}
+
+	/** Hand over what is asked for. Returns the adapter, like its siblings. */
+	withOutputs(
+		outputs: readonly string[],
+		speech?: Record<string, unknown> | null
+	): this {
+		this.suppliedOutputs = outputs.length ? outputs : ["text"]
+		this.suppliedSpeech = speech ?? {}
+		return this
+	}
+
+	/** What this request asks the model to write. */
+	protected get requestedOutputs(): readonly string[] {
+		return this.suppliedOutputs
+	}
+
+	/** The speech sampling's values, for a request that asks for audio. */
+	protected get speechSampling(): Record<string, unknown> {
+		return this.suppliedSpeech
+	}
+
+	/**
+	 * Which kinds THIS CLASS has code to ask for and read back — the twin of
+	 * `consumesAttachments`, and the same warning: not a capability claim
+	 * (that is `text->text+audio` in the manifest, and the model's writes).
+	 * `dispatch.ts` refuses a request asking for a kind this lacks rather
+	 * than sending it without, because a reply that should have spoken and
+	 * did not reads as the model choosing silence.
+	 */
+	get writesKinds(): readonly string[] {
+		return ["text"]
 	}
 
 	// ── Tools (20 §9) ───────────────────────────────────────────────────────

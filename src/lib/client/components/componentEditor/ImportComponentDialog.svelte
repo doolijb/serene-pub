@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * Import a component (C6, P7): a share file (`.component.json`), or one
 	 * bare `.svelte` / `.ts` / `.js` file picked, dropped or pasted.
@@ -151,7 +152,7 @@
 
 	const toneClass = (tone: string) =>
 		tone === "error"
-			? "text-error-700-300"
+			? "text-error-600-400"
 			: tone === "warning"
 				? "text-warning-700-300"
 				: tone === "quiet"
@@ -267,7 +268,7 @@
 				{/if}
 
 				{#if problem}
-					<p class="text-error-700-300 text-sm" role="alert">{problem}</p>
+					<p class="text-error-600-400 text-sm" role="alert">{problem}</p>
 				{/if}
 
 				{#if phase.kind === "refused"}
@@ -280,7 +281,7 @@
 				{#if summary && view}
 					<section class="summary flex flex-col gap-3 text-sm" aria-label="What this import brings">
 						<div>
-							<p class="text-[15px] font-medium">{text(summary.label)}</p>
+							<p class="text-lead font-medium">{text(summary.label)}</p>
 							<p class="text-surface-600-400 font-mono text-xs">
 								{summary.importAs} · {summary.framework} · entry {summary.entry}
 							</p>
@@ -307,7 +308,7 @@
 								{#if view.scopes.length}
 									<span class="flex flex-wrap gap-1">
 										{#each view.scopes as s (s)}
-											<span class="preset-tonal-warning rounded-full px-2 py-0.5 font-mono text-xs">{s}</span>
+											<Badge tone="warning" size="md" class="font-mono">{s}</Badge>
 										{/each}
 									</span>
 									<span class="text-surface-600-400 mt-1 block text-xs">Each one needs your review, and is refused until then.</span>
@@ -338,7 +339,7 @@
 								</p>
 							{:else}
 								<div class="flex flex-col gap-1" role="status">
-									<p class="text-error-700-300 flex items-center gap-2 font-medium">
+									<p class="text-error-600-400 flex items-center gap-2 font-medium">
 										<Icons.CircleAlert size={16} class="shrink-0" />
 										It does not compile here ({view.compile.problems.length}
 										{view.compile.problems.length === 1 ? "problem" : "problems"}). It can still be imported and fixed in the editor; until then sessions show it as missing.

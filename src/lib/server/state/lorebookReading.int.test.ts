@@ -24,6 +24,7 @@ import { defineAttributeSlot, genre, _clearAttributeSlots } from "@serene-pub/sd
 import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -59,7 +60,7 @@ function declareSlots() {
 		config: { min: 0, max: 100 },
 		default: 20
 	})
-	genre(GENRE, {
+	genreKeeping(GENRE, {
 		name: { en: "Lorebook reading" },
 		family: "test",
 		slots: [hp],

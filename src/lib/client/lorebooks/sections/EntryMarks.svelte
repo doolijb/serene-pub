@@ -2,6 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
 	import { Priorities } from "$lib/shared/constants/Priorities"
+	import { KEPT_IMPRINT_HEADING } from "./keptImprints"
 
 	/**
 	 * The state marks every entry row carries, in one place.
@@ -52,6 +53,18 @@
 	<span class="preset-tonal-surface rounded {pad} text-xs" title="Archived">
 		<Icons.Archive size={icon} class="inline" />
 		archived
+	</span>
+{/if}
+<!-- 🚧 RF fix 4: a replaced reply wrote something here that stayed. The entry's
+     note says what, with Revert and Keep (`KeptImprintNote`). -->
+{#if entry.keptImprints?.length}
+	<span
+		class="preset-tonal-surface rounded {pad} text-xs"
+		title={KEPT_IMPRINT_HEADING}
+		data-kept-imprints-mark
+	>
+		<Icons.Undo2 size={icon} class="inline" />
+		replaced
 	</span>
 {/if}
 {#if entry.constant}

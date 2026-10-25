@@ -21,7 +21,6 @@ import {
 	genreVersion,
 	genreVersionLabel,
 	latestGenres,
-	lorebookSatisfied,
 	moveInCast,
 	oneClickStart,
 	participantFloors,
@@ -73,7 +72,7 @@ describe("buildCreatePayload", () => {
 			personaIds: [2],
 			scenario: "  A stall of lanterns.  ",
 			tags: ["noir"],
-			genreFields: { trustNarrator: true },
+			genreFields: { showDice: true },
 			swaps: [{ spec: "core:spec/story-turn-order", node: "strategy", definition: "core:task/turn-manual@1" }],
 			lorebookId: 3
 		})
@@ -86,7 +85,7 @@ describe("buildCreatePayload", () => {
 				lorebookId: 3,
 				genreId: "core:genre/story@2",
 				presetId: 7,
-				genreFields: { trustNarrator: true }
+				genreFields: { showDice: true }
 			},
 			characterIds: [4, 9],
 			personaIds: [2],
@@ -245,36 +244,22 @@ describe("participantFloors", () => {
 	})
 })
 
-describe("lorebookSatisfied", () => {
-	it("holds a genre that requires a lorebook to having one", () => {
-		expect(lorebookSatisfied({ lorebook: "required" }, null)).toBe(false)
-		expect(lorebookSatisfied({ lorebook: "required" }, undefined)).toBe(
-			false
-		)
-		expect(lorebookSatisfied({ lorebook: "required" }, 3)).toBe(true)
-	})
-
-	it("lets an optional or absent capability start without one", () => {
-		expect(lorebookSatisfied({ lorebook: "optional" }, null)).toBe(true)
-		expect(lorebookSatisfied({}, null)).toBe(true)
-		expect(lorebookSatisfied(null, null)).toBe(true)
-	})
-})
 
 /**
- * A one-click start — the wizard's character card — creates directly only
- * when the genre it would start on asks nothing the card cannot answer. An
- * administrator-starred Adventure preset made every card's Start a refusal
- * (2026-09-17): its genre requires a lorebook, and the card knows none.
+ * A one-click start — the wizard's character card — creates directly. An
+ * administrator-starred Adventure preset once made every card's Start a
+ * refusal (2026-09-17): its genre required a lorebook, and the card knew
+ * none. ⏳ Since RF fix 2 (2026-10-23) no genre requires one — a session
+ * always has its own book — so a one-click start is always direct.
  */
 describe("oneClickStart", () => {
-	const ADVENTURE = "core:genre/lair" // a lorebook-requiring genre (was Adventure, retired 2026-10-19)
+	const LAIR = "core:genre/lair" // the genre that once required a lorebook (was Adventure, retired 2026-10-19)
 	const genres = [
 		genre(STANDARD_GENRE_ID, {
 			shape: { characters: { min: 0 }, lorebook: "optional" }
 		}),
-		genre(ADVENTURE, {
-			shape: { characters: { min: 1 }, lorebook: "required" }
+		genre(LAIR, {
+			shape: { characters: { min: 1 }, lorebook: "optional" }
 		})
 	]
 
@@ -284,13 +269,13 @@ describe("oneClickStart", () => {
 		).toEqual({ genreId: STANDARD_GENRE_ID, presetId: 1, direct: true })
 	})
 
-	it("hands a lorebook-requiring genre to the start screen, genre and preset named", () => {
+	it("starts the Lair directly too: no genre requires a lorebook (RF fix 2)", () => {
 		expect(
 			oneClickStart(genres, [
 				preset({ id: 1 }),
-				preset({ id: 2, genreId: ADVENTURE, isDefault: true })
+				preset({ id: 2, genreId: LAIR, isDefault: true })
 			])
-		).toEqual({ genreId: ADVENTURE, presetId: 2, direct: false })
+		).toEqual({ genreId: LAIR, presetId: 2, direct: true })
 	})
 
 	it("falls back to the standard genre, preset-less, when nothing is registered", () => {
@@ -304,13 +289,13 @@ describe("oneClickStart", () => {
 
 /**
  * The flow's own gate, driven the way the start screen drives it: the
- * lists land, a genre is chosen, and `canStart` answers. Adventure declares
- * `lorebook: "required"` (core-catalog `genres.ts`); the start screen once
- * offered Start with no lorebook picker at all, and the server refused the
- * create in a sentence the client swallowed (2026-09-17).
+ * lists land, a genre is chosen, and `canStart` answers. ⏳ A genre that
+ * still says `lorebook: "required"` (retired RF fix 2, 2026-10-23) reads as
+ * optional: a session may always start without a book — its own (the
+ * phantom lorebook) is its world.
  */
 describe("StartSessionFlow.canStart", () => {
-	const ADVENTURE = "core:genre/lair" // a lorebook-requiring genre (was Adventure, retired 2026-10-19)
+	const LAIR = "core:genre/lair" // the genre that once required a lorebook (was Adventure, retired 2026-10-19)
 	function flowOn(genreId: string, shape: GenreRow["shape"]) {
 		const flow = new StartSessionFlow()
 		flow.rawGenres = [genre(genreId, { shape })]
@@ -323,14 +308,15 @@ describe("StartSessionFlow.canStart", () => {
 		return flow
 	}
 
-	it("refuses to start a required-lorebook genre until one is chosen", () => {
-		const flow = flowOn(ADVENTURE, {
+	it("starts a genre that still says 'required' without a lorebook, and sends a chosen one (RF fix 2)", () => {
+		const flow = flowOn(LAIR, {
 			characters: { min: 1 },
 			personas: { min: 1 },
 			lorebook: "required"
 		})
 		expect(flow.fields.lorebookId).toBeNull()
-		expect(flow.canStart).toBe(false)
+		expect(flow.canStart).toBe(true)
+		expect(flow.payload("x").session.lorebookId).toBeNull()
 		flow.fields.lorebookId = 7
 		expect(flow.canStart).toBe(true)
 		expect(flow.payload("x").session.lorebookId).toBe(7)
@@ -346,26 +332,24 @@ describe("StartSessionFlow.canStart", () => {
 		expect(flow.payload("x").session.lorebookId).toBeNull()
 	})
 
-	it("names the first unmet rule while Start is refused, and none once it is not", () => {
-		const flow = flowOn(ADVENTURE, {
+	it("names the first unmet rule while Start is refused, and none once it is not — never a lorebook", () => {
+		const flow = flowOn(LAIR, {
 			characters: { min: 1 },
 			personas: { min: 1 },
-			lorebook: "required"
+			lorebook: "optional"
 		})
 		flow.characterIds = []
 		expect(flow.startBlocker).toBe("Add at least one character.")
 		flow.characterIds = [4]
-		expect(flow.startBlocker).toBe("This genre needs a lorebook.")
-		flow.fields.lorebookId = 7
 		expect(flow.startBlocker).toBeNull()
 		expect(flow.canStart).toBe(true)
 	})
 
 	it("detaches a held lorebook when the chosen genre has no such capability", () => {
-		const flow = flowOn(ADVENTURE, {
+		const flow = flowOn(LAIR, {
 			characters: { min: 1 },
 			personas: { min: 1 },
-			lorebook: "required"
+			lorebook: "optional"
 		})
 		flow.fields.lorebookId = 7
 		flow.rawGenres = [
@@ -433,17 +417,17 @@ describe("reconcileToShape", () => {
 				{
 					characters: { min: 1, max: 1 },
 					personas: { min: 1 },
-					fields: { trustNarrator: {} }
+					fields: { showDice: {} }
 				},
 				{
-					genreFields: { trustNarrator: true, stray: 1 },
+					genreFields: { showDice: true, stray: 1 },
 					characterIds: [1, 2, 3],
 					personaIds: [7],
 					lorebookId: 4
 				}
 			)
 		).toEqual({
-			genreFields: { trustNarrator: true },
+			genreFields: { showDice: true },
 			characterIds: [1],
 			personaIds: [7],
 			lorebookId: null
@@ -811,9 +795,7 @@ describe("firstUnmetStartRule", () => {
 		noPresetsForGenre: false,
 		characterCount: 1,
 		personaCount: 1,
-		floors: { characters: 1, personas: 1 },
-		shape: { lorebook: "required" } as GenreRow["shape"],
-		lorebookId: 3
+		floors: { characters: 1, personas: 1 }
 	}
 
 	it("is null when every rule is met", () => {
@@ -851,17 +833,8 @@ describe("firstUnmetStartRule", () => {
 		)
 	})
 
-	it("asks for the lorebook a genre requires, last", () => {
-		expect(firstUnmetStartRule({ ...ready, lorebookId: null })).toBe(
-			"This genre needs a lorebook."
-		)
-		expect(
-			firstUnmetStartRule({
-				...ready,
-				lorebookId: null,
-				shape: { lorebook: "optional" } as GenreRow["shape"]
-			})
-		).toBeNull()
+	it("never asks for a lorebook: a session may always start without one (RF fix 2)", () => {
+		expect(firstUnmetStartRule(ready)).toBeNull()
 	})
 })
 
@@ -876,5 +849,72 @@ describe("preselectsDefaultPersona", () => {
 		).toBe(false)
 		expect(preselectsDefaultPersona({ personas: { min: 0, max: 0 } })).toBe(false)
 		expect(preselectsDefaultPersona({})).toBe(false)
+	})
+})
+
+/**
+ * fix7 (2026-10-23, owner: "In lair, I can't choose a ruleset"): a book on
+ * Freeform, every book's default, brings no rules of its own — the pick
+ * travels with it; a book with its own rules is still adopted server-side.
+ * A preset's How strict is stored as a setting decision (`{ value, lock }`).
+ */
+describe("StartSessionFlow — Rules beside a book, and a preset's How strict (fix7)", () => {
+	const FREEFORM = "core:ruleset/freeform@1"
+	const VIS = "core:ruleset/vis-itineris@1"
+	const LAIR = "core:genre/lair"
+	const RULES = {
+		choices: [
+			{ id: FREEFORM, name: "Freeform", subtitle: "", recommended: true, rigours: ["prose"] },
+			{ id: VIS, name: "Vis Itineris", subtitle: "", recommended: true }
+		],
+		only: false,
+		defaultId: FREEFORM,
+		rigour: { options: ["prose", "mechanics", "scripts"], default: "mechanics" }
+	}
+
+	function lairFlow(settings: Record<string, unknown> | null = null) {
+		const flow = new StartSessionFlow()
+		flow.rawGenres = [genre(LAIR, { rules: RULES } as Partial<GenreRow>)]
+		flow.rawPresets = [preset({ id: 1, genreId: LAIR, settings } as any)]
+		flow.presetsLoaded = true
+		flow.chooseGenre(LAIR)
+		flow.choosePreset(1)
+		flow.toggleCharacter(1)
+		return flow
+	}
+
+	it("a book on Freeform: the person's pick is sent, and How strict follows it", () => {
+		const flow = lairFlow()
+		flow.fields.lorebookId = 7
+		flow.lorebookRules = FREEFORM
+		expect(flow.adoptedRules).toBeNull()
+		expect(flow.rulesShown).toEqual({ value: FREEFORM, fromLorebook: null })
+		flow.rulesPick = VIS
+		const { session } = flow.payload("Into the deep")
+		expect(session.lorebookId).toBe(7)
+		expect(session.primaryRuleset).toBe(VIS)
+		expect(session.rigour).toBe("mechanics")
+	})
+
+	it("a book with its own rules: adopted, and no pick is sent", () => {
+		const flow = lairFlow()
+		flow.fields.lorebookId = 8
+		flow.lorebookRules = VIS
+		flow.rulesPick = FREEFORM
+		expect(flow.adoptedRules).toBe(VIS)
+		expect(flow.rulesShown).toEqual({ value: VIS, fromLorebook: "From the lorebook: Vis Itineris" })
+		const { session } = flow.payload("Into the deep")
+		expect(session.primaryRuleset).toBeUndefined()
+		expect(session.rigour).toBe("mechanics")
+	})
+
+	it("reads a preset's locked How strict as stored, and starts on rules that play it", () => {
+		const flow = lairFlow({ rigour: { value: "scripts", lock: true } })
+		expect(flow.presetRigour).toBe("scripts")
+		expect(flow.rulesNowId).toBe(VIS)
+		expect(flow.payload("Into the deep").session).toMatchObject({ primaryRuleset: VIS, rigour: "scripts" })
+		// A bare string still reads.
+		expect(lairFlow({ rigour: "prose" }).presetRigour).toBe("prose")
+		expect(lairFlow().presetRigour).toBeNull()
 	})
 })

@@ -511,19 +511,23 @@ describe("who may change a layout", () => {
 		expect(layoutOptions(v)).toEqual([])
 	})
 
-	it("lands an admin's global choice in the selected configuration", async () => {
+	it("lands an admin's global choice in the genre's defaults", async () => {
 		const option = await charactersOption(STORY_RESPOND_SPEC_ID)
 		expect(option.writable).toBe(true)
 
-		// The selections written by the reuse test above live as the mutable
-		// configs' own values — the only global home since the layer
-		// simplification (2026-08-24). No override row exists anywhere.
+		// The selections written by the reuse test above live on the genre's
+		// defaults' registrations (PLAN-layering D5) — an administrator's
+		// instance-wide edit of a pipeline registrations run. No override row
+		// exists anywhere.
 		const prose = (await listVariableTemplates(db, CHARACTERS)).find(
 			(r) => r.name === "Prose"
 		)!
-		const values = (
-			await db.select().from(schema.pipelineConfigValues)
-		).filter((v: any) => v.slot === "variables" && v.value === prose.id)
+		const { registrationValueRefs } = await import(
+			"$lib/server/pipelines/registrations/values"
+		)
+		const values = (await registrationValueRefs(db, ["variables"])).filter(
+			(v) => v.scopeKind === "genre" && v.value === prose.id
+		)
 		expect(values.length).toBeGreaterThan(0)
 		const overrides = await db
 			.select()
@@ -550,9 +554,14 @@ describe("deleting what you have selected", () => {
 			(r) => r.name === "Prose"
 		)!
 
-		const own = (
-			await db.select().from(schema.pipelineConfigValues)
-		).filter((v: any) => v.slot === "variables" && v.value === prose.id)
+		const { registrationValueRefs, refKeyOf } = await import(
+			"$lib/server/pipelines/registrations/values"
+		)
+		const ownRefs = async () =>
+			(await registrationValueRefs(db, ["variables"])).filter(
+				(v) => v.value === prose.id
+			)
+		const own = await ownRefs()
 		expect(own.length).toBeGreaterThan(0)
 
 		// Refused while those rows count — and the rows are still there after,
@@ -560,16 +569,13 @@ describe("deleting what you have selected", () => {
 		await expect(
 			deleteVariableTemplate(db, prose.id)
 		).rejects.toThrow(/still in use/)
-		const after = (
-			await db.select().from(schema.pipelineConfigValues)
-		).filter((v: any) => v.slot === "variables" && v.value === prose.id)
-		expect(after.length).toBe(own.length)
+		expect((await ownRefs()).length).toBe(own.length)
 
 		// Allowed once they are discounted, which is what the socket handler
 		// passes — and only then does it clear them.
 		await expect(
 			deleteVariableTemplate(db, prose.id, {
-				ignoreConfigValueIds: new Set(own.map((v: any) => v.id))
+				ignoreRegistrationRefs: new Set(own.map(refKeyOf))
 			})
 		).resolves.toBeUndefined()
 	})

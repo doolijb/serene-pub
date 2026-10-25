@@ -300,7 +300,7 @@
 {#snippet pickRow(c: Candidate)}
 	{@const checked = picked.has(keyOf(c))}
 	<label
-		class="hover:bg-surface-200-800 flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-[10px] px-2 py-1.5 {checked
+		class="hover:bg-surface-200-800 flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-base px-2 py-1.5 {checked
 			? 'sidebar-row-active'
 			: ''}"
 	>
@@ -319,13 +319,13 @@
 			/>
 		{:else}
 			<span
-				class="bg-surface-200-800 text-surface-700-300 grid size-10 shrink-0 place-items-center rounded-[9px]"
+				class="bg-surface-200-800 text-surface-700-300 grid size-10 shrink-0 place-items-center rounded-base"
 			>
 				<Icons.BookOpen size={18} aria-hidden="true" />
 			</span>
 		{/if}
 		<span class="min-w-0 flex-1 text-left">
-			<span class="block truncate text-[15px] font-medium">{c.title}</span>
+			<span class="block truncate text-lead font-medium">{c.title}</span>
 			{#if c.subtitle}
 				<span class="text-surface-600-400 block truncate text-xs">
 					{c.subtitle}

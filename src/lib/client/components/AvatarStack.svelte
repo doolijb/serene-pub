@@ -11,7 +11,10 @@
 	 *
 	 * Each face after the first is overlapped by 40% of its width, so a group
 	 * of three takes 2.2 faces' width rather than three. A cast past `max`
-	 * says how many more to a screen reader; the names are the caller's to
+	 * shows how many more as a small `+n` notch on the last face's corner
+	 * (PLAN-0-5-polish-parity L6, 2026-10-24: "max 3 + '+n'") — on the
+	 * corner, so it costs no width and a `fixedWidth` slot still lines names
+	 * up — and says it to a screen reader; the names are the caller's to
 	 * show (a row's tooltip, a card's line).
 	 */
 	type Member = Partial<SelectCharacter> | null | undefined
@@ -51,7 +54,7 @@
 </script>
 
 <span
-	class="flex shrink-0 items-center"
+	class="relative flex shrink-0 items-center"
 	style={fixedWidth ? `width: ${width}px` : undefined}
 	data-avatar-stack
 >
@@ -86,6 +89,15 @@
 		{/each}
 	{/if}
 	{#if overflow > 0}
+		<!-- Ringed in the same ground as the faces, so it reads as a notch.
+		     11px: the scale's count row (STYLE-GUIDE §3.2). -->
+		<span
+			class="bg-surface-300-700 text-surface-950-50 absolute -right-1 -bottom-1 z-10 rounded-full px-1 text-meta leading-4 font-medium tabular-nums ring-2 {ring}"
+			data-avatar-stack-more
+			aria-hidden="true"
+		>
+			+{overflow}
+		</span>
 		<span class="sr-only">and {overflow} more</span>
 	{/if}
 </span>

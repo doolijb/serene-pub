@@ -15,9 +15,17 @@
 	 * The body is ONE button that opens the connection; the action, when
 	 * there is one, is its own button under it — never a button inside a
 	 * button. Selection is the card's ring (STYLE-GUIDE §2.4).
+	 *
+	 * The state wears the row's quiet vocabulary (★R2, 2026-10-24,
+	 * `rowStatusClasses`): a 6px dot and 13px muted words, red with a 3px error
+	 * edge only when a loadout runs on a broken connection (`status.blocked`).
 	 */
 	import * as Icons from "@lucide/svelte"
-	import { stateTone, type RowStatus } from "./connectionRowStatus"
+	import {
+		rowActionClass,
+		rowStatusClasses,
+		type RowStatus
+	} from "./connectionRowStatus"
 	import type { EndpointKind } from "./modelManagement"
 	import { connectionTypeIcon, kindIconComponent } from "./connectionTypeIcon"
 
@@ -67,21 +75,7 @@
 			? (((Icons as any)[status.action.icon] as any) ?? Icons.Play)
 			: null
 	)
-	const tone = $derived(stateTone(status.state))
-	const DOT: Record<ReturnType<typeof stateTone>, string> = {
-		ok: "bg-success-500",
-		quiet: "bg-surface-400-600",
-		primary: "bg-primary-500",
-		warning: "bg-warning-500 animate-pulse",
-		error: "bg-error-500"
-	}
-	const TEXT: Record<ReturnType<typeof stateTone>, string> = {
-		ok: "text-success-800 dark:text-success-300",
-		quiet: "text-surface-600-400",
-		primary: "text-primary-900 dark:text-primary-300",
-		warning: "text-warning-800 dark:text-warning-300",
-		error: "text-error-800 dark:text-error-300"
-	}
+	const marks = $derived(rowStatusClasses(status))
 
 	const showChip = $derived(
 		!!serviceLabel &&
@@ -107,14 +101,15 @@
 <div
 	class="panel-card flex min-w-0 flex-1 flex-col !p-0 {selected
 		? 'ring-primary-500 ring-2'
-		: ''}"
+		: ''} {marks.edge}"
 	data-connection-card
+	data-row-blocked={status.blocked ? "" : undefined}
 >
 	<button
 		type="button"
-		class="focus-visible:ring-primary-500 flex min-w-0 flex-1 flex-col gap-2 rounded-[12px] p-3 text-left focus-visible:ring-2 focus-visible:outline-none {selected
+		class="focus-visible:ring-primary-500 flex min-w-0 flex-1 flex-col gap-2 rounded-container p-3 text-left focus-visible:ring-2 focus-visible:outline-none {selected
 			? ''
-			: 'hover:preset-tonal-primary'}"
+			: 'hover:bg-surface-200-800'}"
 		aria-current={selected ? "true" : undefined}
 		onclick={onOpen}
 	>
@@ -126,12 +121,12 @@
 				<KindIcon size={16} />
 			</span>
 			<span class="min-w-0 flex-1">
-				<span class="block truncate text-[15px] font-medium">
+				<span class="block truncate text-lead font-medium">
 					{title}
 				</span>
 				{#if showChip}
 					<span
-						class="mt-0.5 inline-block max-w-full truncate rounded-full px-1.5 py-0.5 align-middle text-[11px] {managed
+						class="mt-0.5 inline-block max-w-full truncate rounded-full px-1.5 py-0.5 align-middle text-meta {managed
 							? 'preset-tonal-tertiary'
 							: 'border-surface-300-700 text-surface-600-400 border'}"
 					>
@@ -143,12 +138,10 @@
 
 		<span class="flex min-w-0 items-center gap-2">
 			<span
-				class="flex min-w-0 items-center gap-1.5 text-xs font-medium {TEXT[
-					tone
-				]}"
+				class="flex min-w-0 items-center gap-1.5 text-chip {marks.text}"
 			>
 				<span
-					class="size-1.5 shrink-0 rounded-full {DOT[tone]}"
+					class="size-1.5 shrink-0 rounded-full {marks.dot}"
 					aria-hidden="true"
 				></span>
 				<span class="truncate">{status.label}</span>
@@ -176,7 +169,7 @@
 			<span class="flex min-w-0 flex-wrap items-center gap-1">
 				{#each defaultFor as capability (capability)}
 					<span
-						class="preset-tonal-primary text-primary-900 dark:text-primary-300 flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[11px] font-bold"
+						class="preset-tonal-primary text-primary-ink flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-meta font-bold"
 					>
 						<Icons.Star
 							size={8}
@@ -194,9 +187,7 @@
 		<div class="flex px-3 pb-3">
 			<button
 				type="button"
-				class="btn btn-sm text-xs {status.action.emphasis === 'tonal'
-					? 'preset-tonal-primary'
-					: 'hover:preset-tonal-surface text-surface-600-400'}"
+				class="btn btn-sm text-xs {rowActionClass(status.action.emphasis)}"
 				onclick={() => onAction(status.action!.verb)}
 				aria-label={`${status.action.label} — ${title}`}
 			>

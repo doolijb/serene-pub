@@ -257,7 +257,7 @@
 	// Lorebook writes from sessions Off (plan A22): a graph build turns what
 	// sessions played into the book, so it says so before any work and
 	// neither builds nor applies.
-	const loreWrites = useLoreWritesOff()
+	const loreWrites = useLoreWritesOff(() => lorebookId)
 	let canApply = $derived(
 		!loreWrites.off &&
 		!unnamedNode &&
@@ -587,7 +587,7 @@
 	const REL_STATUS_COLOR: Record<string, string> = {
 		active: "text-success-500",
 		resolved: "text-surface-600-400",
-		broken: "text-error-500",
+		broken: "text-error-600-400",
 		evolved: "text-warning-500"
 	}
 
@@ -608,7 +608,7 @@
 
 {#snippet confirmBlock()}
 	{#if loreWrites.off}
-		<LoreWritesOffNotice onOpenSettings={() => onOpenChange({ open: false })} />
+		<LoreWritesOffNotice by={loreWrites.by} {lorebookId} onOpenSettings={() => onOpenChange({ open: false })} />
 	{/if}
 	<p class="text-surface-700-300 mt-1 text-sm">
 		{mode === "extend"
@@ -798,7 +798,7 @@
 {#snippet reviewBlock()}
 	{#if loreWrites.off}
 		<!-- A review reopened after the setting moved: it cannot apply. -->
-		<div class="mb-4"><LoreWritesOffNotice onOpenSettings={() => onOpenChange({ open: false })} /></div>
+		<div class="mb-4"><LoreWritesOffNotice by={loreWrites.by} {lorebookId} onOpenSettings={() => onOpenChange({ open: false })} /></div>
 	{/if}
 	<p class="text-surface-700-300 -mt-1 mb-4 text-sm">
 		{activeNodes.length} new · {activeNodeUpdates.length} updated · {activeRels.length}
@@ -844,7 +844,7 @@
 				<div
 					class="bg-surface-200-800 rounded-lg border transition-opacity {update._deleted
 						? 'opacity-40'
-						: 'border-surface-300-700'}"
+						: 'border-surface-200-800'}"
 				>
 					<div class="flex items-center gap-2 px-3 py-2">
 						<span class="flex-1 truncate text-sm font-medium">
@@ -883,7 +883,7 @@
 					</div>
 					{#if update.summary !== undefined || update.nodeStateReason}
 						<div
-							class="border-surface-300-700 space-y-1 border-t px-3 py-2"
+							class="border-surface-200-800 space-y-1 border-t px-3 py-2"
 						>
 							{#if update.summary !== undefined}
 								<p class="text-sm">{update.summary}</p>
@@ -913,7 +913,7 @@
 			</p>
 		{/if}
 		{#if unnamedNode}
-			<p class="text-error-700-300 text-xs" role="status">
+			<p class="text-error-600-400 text-xs" role="status">
 				A new character needs a name before the graph can be applied.
 				Name it, or remove it.
 			</p>
@@ -940,7 +940,7 @@
 			<div
 				class="bg-surface-200-800 rounded-lg border transition-opacity {node._deleted
 					? 'opacity-40'
-					: 'border-surface-300-700'}"
+					: 'border-surface-200-800'}"
 			>
 				<div
 					class="flex cursor-pointer items-center gap-2 px-3 py-2"
@@ -966,7 +966,7 @@
 					{/if}
 					<button
 						aria-label={node._deleted ? "Restore node" : "Remove node"}
-						class="text-surface-600-400 hover:text-error-500 ml-1 shrink-0"
+						class="text-surface-600-400 hover:text-error-600-400 ml-1 shrink-0"
 						onclick={(e) => {
 							e.stopPropagation()
 							proposalNodes[i]._deleted =
@@ -990,7 +990,7 @@
 				</div>
 				{#if expandedNodeIdx === i && !node._deleted}
 					<div
-						class="border-surface-300-700 space-y-2 border-t px-3 py-2"
+						class="border-surface-200-800 space-y-2 border-t px-3 py-2"
 					>
 						<div class="space-y-1">
 							<p
@@ -1074,7 +1074,7 @@
 				class="bg-surface-200-800 rounded-lg border transition-opacity {rel._deleted ||
 				goneWith
 					? 'opacity-40'
-					: 'border-surface-300-700'}"
+					: 'border-surface-200-800'}"
 			>
 				<div
 					class="flex cursor-pointer items-center gap-2 px-3 py-2"
@@ -1091,7 +1091,7 @@
 							{nodeLabel(rel.fromTempId)}
 						</span>
 						<span class="text-surface-600-400 mx-1">→</span>
-						<span class="text-primary-500 text-xs">
+						<span class="text-primary-ink text-xs">
 							{rel.relationshipType.replace(/_/g, " ")}
 						</span>
 						<span class="text-surface-600-400 mx-1">→</span>
@@ -1138,7 +1138,7 @@
 					{:else}
 						<button
 							aria-label={rel._deleted ? "Restore relationship" : "Remove relationship"}
-							class="text-surface-600-400 hover:text-error-500 ml-1 shrink-0"
+							class="text-surface-600-400 hover:text-error-600-400 ml-1 shrink-0"
 							onclick={(e) => {
 								e.stopPropagation()
 								proposalRels[i]._deleted = !proposalRels[i]._deleted
@@ -1162,7 +1162,7 @@
 				</div>
 				{#if expandedRelIdx === i && !rel._deleted && !goneWith}
 					<div
-						class="border-surface-300-700 space-y-2 border-t px-3 py-2"
+						class="border-surface-200-800 space-y-2 border-t px-3 py-2"
 					>
 						<div class="grid grid-cols-3 gap-2">
 							<div class="space-y-1">
@@ -1289,7 +1289,7 @@
 			<div class="mt-3 max-h-[60vh] space-y-2 overflow-y-auto pr-1">
 				{#each build?.trace ?? [] as entry, i}
 					<div
-						class="bg-surface-100-900 border-surface-300-700 overflow-hidden rounded-lg border text-xs"
+						class="bg-surface-100-900 border-surface-200-800 overflow-hidden rounded-lg border text-xs"
 					>
 						<button
 							class="hover:bg-surface-200-800 flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors"
@@ -1315,7 +1315,7 @@
 						</button>
 						{#if expandedTraceIdx === i}
 							<div
-								class="divide-surface-300-700 border-surface-300-700 divide-y border-t"
+								class="divide-surface-300-700 border-surface-200-800 divide-y border-t"
 							>
 								<div class="space-y-1 p-3">
 									<p

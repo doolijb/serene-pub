@@ -82,12 +82,12 @@
 		onclick={() => onSelect(key)}
 	>
 		<span aria-hidden="true" class="w-[3px] shrink-0 {KIND_STRIPE[row.node.kind] ?? 'bg-surface-400-600'}"></span>
-		<span class="min-w-0 flex-1 truncate px-2 font-mono {dense ? 'text-[11px] leading-6' : 'text-[12px] leading-7'}">
+		<span class="min-w-0 flex-1 truncate px-2 font-mono {dense ? 'text-meta leading-6' : 'text-xs leading-7'}">
 			{shortKey(key)}
 		</span>
 		{#if mark && mark !== "removed"}
 			<span
-				class="mr-1.5 self-center rounded px-1 font-mono text-[10px] font-semibold leading-4"
+				class="mr-1.5 self-center rounded px-1 font-mono text-meta font-semibold leading-4"
 				style="background: {MARK_VAR[mark]}; color: var(--color-surface-950)"
 				title={MARK_LABEL[mark]}>{mark === "added" ? "+" : "~"}</span
 			>
@@ -107,7 +107,7 @@
 			{@const mark = markOf(row.key)}
 			<div
 				class="rounded-lg border border-dashed
-					{active ? 'border-primary-500 ring-2 ring-primary-500 ring-offset-2 ring-offset-surface-100-900' : 'border-surface-300-700'}
+					{active ? 'border-primary-500 ring-2 ring-primary-500 ring-offset-2 ring-offset-surface-100-900' : 'border-surface-200-800'}
 					{mark === 'removed' ? 'opacity-60' : ''}
 					bg-surface-100-900/60 {dense ? 'w-full' : ''}"
 			>
@@ -127,11 +127,11 @@
 						aria-current={active ? "true" : undefined}
 						onclick={() => onSelect(row.key)}
 					>
-						<span class="truncate font-mono text-[12px] font-medium">{shortKey(row.key)}</span>
-						<span class="text-surface-600-400 truncate text-[11px]">{clauseSummary(row)}</span>
+						<span class="truncate font-mono text-xs font-medium">{shortKey(row.key)}</span>
+						<span class="text-surface-600-400 truncate text-meta">{clauseSummary(row)}</span>
 					</button>
 					{#if mark}
-						<span class="rounded px-1 font-mono text-[10px] font-semibold leading-4" style="background: {MARK_VAR[mark]}; color: var(--color-surface-950)">{MARK_LABEL[mark]}</span>
+						<span class="rounded px-1 font-mono text-meta font-semibold leading-4" style="background: {MARK_VAR[mark]}; color: var(--color-surface-950)">{MARK_LABEL[mark]}</span>
 					{/if}
 					{#if !open}
 						<span class="flex shrink-0 items-center gap-[3px] pr-1" aria-hidden="true">
@@ -148,19 +148,19 @@
 					{/if}
 				</div>
 				{#if open}
-					<div class="border-surface-300-700 mx-2 mb-2 border-t border-b py-2">
+					<div class="border-surface-200-800 mx-2 mb-2 border-t border-b py-2">
 						<div class="flex flex-wrap items-start gap-x-4 gap-y-3">
 							{#each row.branches as b (b.name)}
 								{#each columnsOf(b, row.clause.kind) as col (col.label + b.name)}
 									<div class="border-surface-400-600 flex min-w-0 flex-col gap-1 border-l-2 pl-2">
 										<div class="text-surface-600-400 flex items-baseline gap-2 pb-0.5">
-											<span class="font-mono text-[10.5px]">{col.label}</span>
+											<span class="font-mono text-meta">{col.label}</span>
 											{#if b.predicate && col.label === b.name}
-												<span class="text-[10.5px]">{predicateSentence(b.predicate)}</span>
+												<span class="text-meta">{predicateSentence(b.predicate)}</span>
 											{/if}
 										</div>
 										{#if col.rows.length === 0}
-											<span class="text-surface-500 text-[11px] italic">empty</span>
+											<span class="text-surface-500 text-meta italic">empty</span>
 										{/if}
 										{@render rows(col.rows, true)}
 									</div>
@@ -174,6 +174,6 @@
 	{/each}
 {/snippet}
 
-<div class="border-surface-300-700 ml-3 flex flex-col gap-1.5 border-l-2 py-2 pl-4" role="list" aria-label="Pipeline line">
+<div class="border-surface-200-800 ml-3 flex flex-col gap-1.5 border-l-2 py-2 pl-4" role="list" aria-label="Pipeline line">
 	{@render rows(model.rows, false)}
 </div>

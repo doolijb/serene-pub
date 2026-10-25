@@ -318,7 +318,6 @@ describe("a session's creation pipeline (owner ruling 2026-09-30)", () => {
 		const options = groupOptions(res.pipeline!.groups)
 		expect(options.length).toBeGreaterThan(0)
 		expect(options.every((o) => !o.writable)).toBe(true)
-		expect(res.pipeline!.canSelectConfig).toBe(false)
 	})
 
 	test("is no card for someone who is not an administrator: nothing on it is theirs to edit", async () => {
@@ -380,30 +379,6 @@ describe("a session's creation pipeline (owner ruling 2026-09-30)", () => {
 			markCreated(adventureSessionId)
 		}
 		expect(await sessionRows()).toHaveLength(1)
-	})
-
-	test("choosing a configuration for it after creation is refused too", async () => {
-		const { pipelinesSelectConfig } = await import("./pipelines")
-		const [spec] = await testDb
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, STORY_CREATE_SPEC_ID))
-		const [config] = await testDb
-			.select()
-			.from(schema.pipelineConfigs)
-			.where(eq(schema.pipelineConfigs.specId, spec.id))
-			.limit(1)
-		const rec = recordingEmit()
-		await pipelinesSelectConfig.handler(
-			socketFor(admin.id, true),
-			{
-				slug: STORY_CREATE_SPEC_ID,
-				configId: config.id,
-				sessionId: adventureSessionId
-			},
-			rec.emit
-		)
-		expect(rec.last("pipelines:selectConfig:error")?.error).toMatch(/has been created/)
 	})
 
 	test("after creation the card names the create spec that ran, not what the binding resolves to now", async () => {
@@ -525,13 +500,9 @@ describe("instance scope is the administrator's", () => {
 		expect(rows).toHaveLength(0)
 	})
 
-	test("an admin's global edit lands in the selected configuration", async () => {
+	test("an admin's global edit lands in the genre's defaults (R38, A15)", async () => {
 		const { pipelinesSetOption } = await import("./pipelines")
 		const optionId = await firstWritableOptionId(admin.id)
-
-		// Against the shipped immutable default the write refuses with the
-		// duplicate suggestion — the layers as simplified 2026-08-24: there
-		// is no instance override row to fall back to writing.
 		const rec = recordingEmit()
 		await pipelinesSetOption.handler(
 			socketFor(admin.id, true),
@@ -542,49 +513,14 @@ describe("instance scope is the administrator's", () => {
 			},
 			rec.emit
 		)
-		expect(rec.last("pipelines:setOption:error")?.error).toMatch(
-			/Duplicate it and edit the copy/
-		)
-
-		// With a mutable configuration selected, the same write becomes that
-		// configuration's own value.
-		const { resolveSelectedConfig, duplicateConfig, selectConfig } =
-			await import("$lib/server/pipelines/config/named")
-		const [spec] = await testDb
+		expect(rec.last("pipelines:setOption:error")).toBeUndefined()
+		// An administrator's change at genre scope — no configuration, and no
+		// override row anywhere: the pub layer is gone.
+		const changes = await testDb
 			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
-		const shipped = await resolveSelectedConfig(
-			testDb as any,
-			spec.id,
-			STORY_RESPOND_SPEC_ID,
-			{}
-		)
-		const copy = await duplicateConfig(
-			testDb as any,
-			shipped!.configId,
-			"Everyone's"
-		)
-		await selectConfig(testDb as any, spec.id, "pub", 0, copy.id)
-
-		await pipelinesSetOption.handler(
-			socketFor(admin.id, true),
-			{
-				slug: STORY_RESPOND_SPEC_ID,
-				optionId,
-				value: "for everyone"
-			},
-			noopEmit
-		)
-
-		const values = await testDb
-			.select()
-			.from(schema.pipelineConfigValues)
-			.where(eq(schema.pipelineConfigValues.configId, copy.id))
-		expect((values as any[]).some((v) => v.value === "for everyone")).toBe(
-			true
-		)
-		// And no override row anywhere — the layer is gone.
+			.from(schema.registrations)
+			.where(and(eq(schema.registrations.scopeKind, "genre"), eq(schema.registrations.origin, "admin")))
+		expect(JSON.stringify(changes.map((r) => r.values))).toContain("for everyone")
 		const overrides = await testDb
 			.select()
 			.from(schema.pipelineNodeOverrides)
@@ -1186,171 +1122,11 @@ describe("prompt CRUD: administrators only, gated on the option", () => {
 })
 
 /**
- * Named-config CRUD, and the two ways it could quietly do harm.
- *
- * A configuration is the thing someone keeps — the pipeline underneath it is
- * just the backbone. So these verbs are the ones that lose work if they are
- * wrong: a duplicate that starts empty silently hands back the *defaults*
- * rather than what you were looking at, and an id check that trusts the client
- * lets a guessable integer rename or delete another pipeline's configuration
- * through this one's screen.
+ * Named-config CRUD retired (R38; R50, lane F1 2026-10-21): the sockets
+ * that created, renamed, deleted and selected configurations are gone with
+ * them — a pipeline's values live on its registrations or, for one nothing
+ * registers, in its instance values.
  */
-describe("named-config CRUD", () => {
-	const call = async (name: string, params: any, user = admin) => {
-		const mod: any = await import("./pipelines")
-		const rec = recordingEmit()
-		const res = await mod[name].handler(
-			socketFor(user.id, user === admin),
-			params,
-			rec.emit
-		)
-		return { res, rec }
-	}
-
-	const configsIn = async () => {
-		const [spec] = await testDb
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
-		return await testDb
-			.select()
-			.from(schema.pipelineConfigs)
-			.where(eq(schema.pipelineConfigs.specId, spec.id))
-	}
-
-	test("creates one, and it shows up in the view", async () => {
-		const { res } = await call("pipelinesCreateConfig", {
-			slug: STORY_RESPOND_SPEC_ID,
-			name: "Nighttime"
-		})
-		expect(res.error).toBeUndefined()
-		expect(res.configId).toBeTruthy()
-		expect((await configsIn()).map((c: any) => c.name)).toContain(
-			"Nighttime"
-		)
-	})
-
-	test("refuses a name the pipeline already uses", async () => {
-		const { res } = await call("pipelinesCreateConfig", {
-			slug: STORY_RESPOND_SPEC_ID,
-			name: "Nighttime"
-		})
-		expect(res.error).toMatch(/already has a configuration/i)
-	})
-
-	test("a duplicate carries the values, not just the name", async () => {
-		// The whole workflow is "copy the one I like, change one thing". A copy
-		// that started empty would resolve the pipeline defaults instead, which
-		// looks identical until the one thing you changed is not the only
-		// difference.
-		const source = (await configsIn()).find(
-			(c: any) => c.name === "Nighttime"
-		)!
-		await testDb.insert(schema.pipelineConfigValues).values({
-			configId: source.id,
-			nodeKey: "prompt",
-			slot: "params",
-			path: "budget",
-			value: 1234 as any
-		})
-
-		const { res } = await call("pipelinesCreateConfig", {
-			slug: STORY_RESPOND_SPEC_ID,
-			name: "Nighttime (copy)",
-			fromConfigId: source.id
-		})
-		expect(res.error).toBeUndefined()
-
-		const copied = await testDb
-			.select()
-			.from(schema.pipelineConfigValues)
-			.where(eq(schema.pipelineConfigValues.configId, res.configId))
-		expect(copied).toHaveLength(1)
-		expect(copied[0].value).toBe(1234)
-		// And the source still has its own row — a move would pass a
-		// "the copy has it" assertion just as well.
-		const stillThere = await testDb
-			.select()
-			.from(schema.pipelineConfigValues)
-			.where(eq(schema.pipelineConfigValues.configId, source.id))
-		expect(stillThere).toHaveLength(1)
-	})
-
-	test("renames, then deletes", async () => {
-		const target = (await configsIn()).find(
-			(c: any) => c.name === "Nighttime (copy)"
-		)!
-		const renamed = await call("pipelinesRenameConfig", {
-			slug: STORY_RESPOND_SPEC_ID,
-			configId: target.id,
-			name: "Daytime"
-		})
-		expect(renamed.res.error).toBeUndefined()
-		expect((await configsIn()).map((c: any) => c.name)).toContain("Daytime")
-
-		const deleted = await call("pipelinesDeleteConfig", {
-			slug: STORY_RESPOND_SPEC_ID,
-			configId: target.id
-		})
-		expect(deleted.res.error).toBeUndefined()
-		expect((await configsIn()).map((c: any) => c.name)).not.toContain(
-			"Daytime"
-		)
-	})
-
-	test("will not delete the shipped configuration", async () => {
-		const shipped = (await configsIn()).find((c: any) => c.isImmutable)
-		expect(shipped, "no immutable config to test against").toBeTruthy()
-		const { res } = await call("pipelinesDeleteConfig", {
-			slug: STORY_RESPOND_SPEC_ID,
-			configId: shipped!.id
-		})
-		expect(res.error).toMatch(/ships|default/i)
-		expect((await configsIn()).some((c: any) => c.id === shipped!.id)).toBe(
-			true
-		)
-	})
-
-	test("will not touch another pipeline's configuration", async () => {
-		// The id is a small integer the client supplies. Without the spec check
-		// this renames the narrator's configuration through the reply
-		// pipeline's screen.
-		const [narrate] = await testDb
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/story-narrate"))
-		const [foreign] = await testDb
-			.select()
-			.from(schema.pipelineConfigs)
-			.where(eq(schema.pipelineConfigs.specId, narrate.id))
-		expect(foreign, "narrate has no config to borrow").toBeTruthy()
-
-		const { res } = await call("pipelinesRenameConfig", {
-			slug: STORY_RESPOND_SPEC_ID,
-			configId: foreign.id,
-			name: "Hijacked"
-		})
-		expect(res.error).toMatch(/different pipeline/i)
-
-		const [after] = await testDb
-			.select()
-			.from(schema.pipelineConfigs)
-			.where(eq(schema.pipelineConfigs.id, foreign.id))
-		expect(after.name).toBe(foreign.name)
-	})
-
-	test("a non-admin cannot create one", async () => {
-		const { res } = await call(
-			"pipelinesCreateConfig",
-			{ slug: STORY_RESPOND_SPEC_ID, name: "Sneaky" },
-			owner
-		)
-		expect(res.error).toMatch(/admin/i)
-		expect((await configsIn()).map((c: any) => c.name)).not.toContain(
-			"Sneaky"
-		)
-	})
-})
 
 /**
  * The structural payload the builder's map draws from.
@@ -1413,7 +1189,10 @@ describe("the builder's structural payload", () => {
 			STORY_RESPOND_SPEC_ID,
 			{ userId: admin.id, isAdmin: true }
 		)
-		const generate = spec.graph.nodes.find((n: any) => n.key === "generate")
+		// The reply's model call, by the address its document gives it (Story's sits in its `reply` junction).
+		const { replyStepKeys } = await import("$lib/server/utils/testDb")
+		const key = (await replyStepKeys(testDb, STORY_RESPOND_SPEC_ID)).generate
+		const generate = spec.graph.nodes.find((n: any) => n.key === key)
 		const step = groupSteps(view.groups).find(
 			(s) => s.key === generate.stepKey
 		)

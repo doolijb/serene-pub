@@ -265,7 +265,7 @@
 			<div class="flex flex-col gap-1.5">
 				{#each pending as s (s.id)}
 					<div
-						class="border-surface-300-700 bg-surface-50-950 rounded-lg border px-3 py-2 text-xs"
+						class="border-surface-200-800 bg-surface-50-950 rounded-lg border px-3 py-2 text-xs"
 					>
 						<div
 							class="flex flex-wrap items-baseline justify-between gap-2"
@@ -284,7 +284,7 @@
 								by default.
 							-->
 							<blockquote
-								class="border-surface-300-700 text-surface-600-400 mt-1.5 border-l-2 pl-2 italic"
+								class="border-surface-200-800 text-surface-600-400 mt-1.5 border-l-2 pl-2 italic"
 							>
 								{s.exampleContext}
 							</blockquote>
@@ -375,7 +375,7 @@
 					<div class="mt-2 flex flex-col gap-1.5">
 						{#each decided as s (s.id)}
 							<div
-								class="border-surface-300-700 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs"
+								class="border-surface-200-800 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs"
 							>
 								<span class="text-surface-600-400">
 									<span class="font-medium">
@@ -402,7 +402,7 @@
 								{#if s.status === "ignored"}
 									<button
 										type="button"
-										class="text-primary-500 shrink-0 hover:underline disabled:opacity-40"
+										class="text-primary-ink shrink-0 hover:underline disabled:opacity-40"
 										disabled={busy.has(s.id)}
 										onclick={() => unignore(s.id)}
 										title="Put it back in the suggestions above"

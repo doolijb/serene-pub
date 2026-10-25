@@ -218,11 +218,13 @@ async function session(genreId: string, genreFields: Record<string, unknown>) {
 	await testDb
 		.insert(schema.sessionPersonas)
 		.values({ sessionId: row!.id, personaId: rook!.id })
+	// The master's line, as themselves: the GM holds no seat (Lair rewrite
+	// D5). A line from a seat — Rook's — is that delver's own turn, never
+	// direction.
 	await insertLegacy(testDb as unknown as Db, {
 		sessionId: row!.id,
 		role: "user",
 		content: "I open the door.",
-		personaId: rook!.id,
 		userId: owner.id
 	})
 	return { owner, session: row!, brannoc: brannoc!.id }
@@ -340,7 +342,7 @@ describe("R8 · what the Lair's rows fold", () => {
 		expect((res as any)?.error).toBeUndefined()
 		expect(
 			(await runsOf(w.session.id)).map((r) => `${r.specSlug}:${r.outcome}`)
-		).toContain("core:spec/lair-respond:ok")
+		).toContain("core:spec/lair-reply:ok")
 
 		const rows = (await turnRows(w.session.id)).filter(
 			(r) => (r.metadata as any)?.greeting !== true

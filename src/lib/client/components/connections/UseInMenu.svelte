@@ -49,11 +49,11 @@
 
 	const triggerClass = $derived(
 		variant === "row"
-			? "btn btn-sm preset-tonal-surface mr-0.5 shrink-0 text-[11px] font-semibold opacity-100 disabled:cursor-not-allowed @min-[900px]/view:opacity-0 @min-[900px]/view:group-focus-within:opacity-100 @min-[900px]/view:group-hover:opacity-100 data-[state=open]:opacity-100"
+			? "btn btn-sm preset-tonal-surface mr-0.5 shrink-0 text-meta font-semibold opacity-100 disabled:cursor-not-allowed @min-[900px]/view:opacity-0 @min-[900px]/view:group-focus-within:opacity-100 @min-[900px]/view:group-hover:opacity-100 data-[state=open]:opacity-100"
 			: "btn preset-tonal-surface w-full"
 	)
 	const menuItem =
-		"hover:bg-surface-200-800 data-[highlighted]:bg-surface-200-800 flex min-h-9 cursor-pointer items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-[13px]"
+		"hover:bg-surface-200-800 data-[highlighted]:bg-surface-200-800 flex min-h-9 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-chip"
 </script>
 
 <Menu onSelect={(details) => select(details.value)}>
@@ -73,7 +73,7 @@
 	<Portal>
 		<Menu.Positioner class="z-[1000]!">
 			<Menu.Content
-				class="bg-surface-50-950 border-surface-200-800 max-h-[70vh] w-[min(90vw,300px)] overflow-y-auto rounded-[12px] border p-1 shadow-xl"
+				class="bg-surface-50-950 border-surface-200-800 max-h-[70vh] w-[min(90vw,300px)] overflow-y-auto rounded-container border p-1 shadow-xl"
 			>
 				{#if !items.length}
 					<p class="text-surface-600-400 p-2 text-xs">
@@ -87,7 +87,7 @@
 					<Menu.ItemGroup>
 						{#if groups.length > 1}
 							<Menu.ItemGroupLabel
-								class="text-surface-600-400 px-2.5 pt-1.5 pb-0.5 text-[11px] font-semibold"
+								class="text-surface-600-400 px-2.5 pt-1.5 pb-0.5 text-meta font-semibold"
 							>
 								{group.label}
 							</Menu.ItemGroupLabel>

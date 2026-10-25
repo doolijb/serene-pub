@@ -6,7 +6,9 @@
  *
  *   xs 24 — an inline mention, a chip, the session header's faces
  *   sm 32 — a one-line chip, a relationship line, a detail's cast list
- *   md 40 — a list or picker row (characters, cast, sessions)
+ *   md 44 — a list or picker row (characters, cast, sessions); 40 until
+ *           2026-10-24, when the row became 0.5's "two lines and a face"
+ *           at the 44px row height (PLAN-0-5-polish-parity L6)
  *   lg 56 — a card's faces, a picker card in a select modal
  *   xl 72 — a detail's hero (DetailHero's tile)
  */
@@ -15,7 +17,7 @@ export type AvatarSize = "xs" | "sm" | "md" | "lg" | "xl"
 export const AVATAR_PX: Readonly<Record<AvatarSize, number>> = {
 	xs: 24,
 	sm: 32,
-	md: 40,
+	md: 44,
 	lg: 56,
 	xl: 72
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * The Models view's list column (plan 2026-10-11, the Models /
 	 * Connections split): "make my sessions work".
@@ -254,7 +255,7 @@
 									{option.label}
 								</span>
 								<span
-									class="text-surface-600-400 shrink-0 text-[11px]"
+									class="text-surface-600-400 shrink-0 text-meta"
 								>
 									{counts[option.id]}
 								</span>
@@ -312,9 +313,7 @@
 {/snippet}
 
 {#snippet chip(label: string, clear: () => void)}
-	<span
-		class="bg-surface-200-800 text-surface-700-300 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
-	>
+	<Badge size="md" class="text-surface-700-300 flex min-w-0 items-center gap-1">
 		<span class="min-w-0 truncate">{label}</span>
 		<button
 			type="button"
@@ -324,7 +323,7 @@
 		>
 			<Icons.X size={12} aria-hidden="true" />
 		</button>
-	</span>
+	</Badge>
 {/snippet}
 
 <!-- The body: the models, then the background remover. It sits in the list pane's one

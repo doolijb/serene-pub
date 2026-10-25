@@ -48,6 +48,43 @@ export interface ProbedModel {
 	 * reader never has to learn a host's dialect.
 	 */
 	modality?: string
+	/**
+	 * 🚧 What the HOST says the model reads and writes (O3): an adapter's own
+	 * `reads`/`writes` lists, else the `architecture.input_modalities` /
+	 * `output_modalities` OpenRouter (and hosts copying its shape) put on
+	 * every entry. Only for a generating model — one that writes text,
+	 * pictures or speech. Absent when the host said nothing.
+	 */
+	reads?: string[]
+	writes?: string[]
+}
+
+/** The kinds a host's modality words name, in the app's words; others are dropped. */
+const HOST_KIND: Readonly<Record<string, string>> = {
+	text: "text",
+	image: "image",
+	audio: "audio",
+	video: "video"
+}
+const kindsFrom = (v: unknown): string[] | undefined => {
+	if (!Array.isArray(v)) return undefined
+	const out = [
+		...new Set(
+			v
+				.map((k) => (typeof k === "string" ? HOST_KIND[k.trim().toLowerCase()] : undefined))
+				.filter((k): k is string => !!k)
+		)
+	]
+	return out.length ? out : undefined
+}
+
+/** A host's stated reads and writes, for a model that generates. */
+function readsWritesOf(e: Record<string, unknown>): { reads?: string[]; writes?: string[] } {
+	const arch = (e.architecture ?? null) as Record<string, unknown> | null
+	const writes = kindsFrom(e.writes) ?? kindsFrom(arch?.output_modalities)
+	if (!writes) return {}
+	const reads = kindsFrom(e.reads) ?? kindsFrom(arch?.input_modalities)
+	return { writes, ...(reads ? { reads } : {}) }
 }
 
 /** Read one entry, in any of the shapes the adapters produce. */
@@ -76,7 +113,8 @@ function readOne(entry: unknown): ProbedModel | null {
 		model,
 		name,
 		...(facts ? { facts } : {}),
-		...(modality ? { modality } : {})
+		...(modality ? { modality } : {}),
+		...(modality === "embeddings" || modality === "ner" ? {} : readsWritesOf(e))
 	}
 }
 

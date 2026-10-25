@@ -155,7 +155,7 @@ export const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set(WRITE_TOOLS.map((t)
 /**
  * 🚧 Which of the filing tools this session may call (lane 2): the ones its
  * `tools` field switched on by kind (`lorebook-write`, `image`), and
- * `remember` / `forget` whenever its *Remember things* task is on (★K). An
+ * `remember` / `forget` whenever its *Remember things* routine is not Off (★K). An
  * install-wide "everything" never includes them: a spec that wires no kinds
  * (the Guide's loop) is offered none. The advertisement and the dispatch
  * both ask this, so they cannot disagree.
@@ -164,12 +164,17 @@ export async function writeToolsAllowed(db: Db, sessionId: number | null | undef
 	const out = new Set<string>()
 	if (typeof sessionId !== "number") return out
 	const { genreFieldsFor } = await import("$lib/server/pipelines/entities/sessionGenres")
-	const { sessionTaskModes } = await import("$lib/server/sessions/tasks")
+	const { sessionRoutineMode } = await import("$lib/server/pipelines/routines/sessionRoutines")
+	const { ASSISTANT_MEMORY_SPEC_ID } = await import("@serene-pub/core-catalog")
 	const { TOOL_KINDS } = await import("./assistantTools")
-	const [fields, modes] = await Promise.all([genreFieldsFor(db, sessionId), sessionTaskModes(db, sessionId)])
+	// 🚧 *Remember things* is a routine (lane 6, R37): its mode, not a task.
+	const [fields, memory] = await Promise.all([
+		genreFieldsFor(db, sessionId),
+		sessionRoutineMode(db, sessionId, ASSISTANT_MEMORY_SPEC_ID)
+	])
 	const kinds = Array.isArray(fields.tools) ? fields.tools : []
 	for (const kind of kinds)
 		for (const name of TOOL_KINDS[String(kind)] ?? []) if (WRITE_TOOL_NAMES.has(name)) out.add(name)
-	if (modes.memory && modes.memory !== "off") for (const name of MEMORY_TOOL_NAMES) out.add(name)
+	if (memory && memory !== "off") for (const name of MEMORY_TOOL_NAMES) out.add(name)
 	return out
 }

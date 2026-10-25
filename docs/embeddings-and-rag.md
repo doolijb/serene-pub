@@ -150,13 +150,13 @@ The server log has a warning whenever the queue stops by itself.
 
 ## Understanding indexing notices
 
-Once a session passes 10 messages, a quiet line can appear above the composer when its lorebook isn't fully searchable yet:
+Once a session passes 10 messages, a quiet line can appear in the composer's bottom row when its lorebook isn't fully searchable yet. It shows as a line the first time you open the session on a device; after that it waits as a small icon beside **Attach** that opens the line again:
 
 - *Lorebook entries aren't indexed yet, so Search by meaning can't find them.*
 - *Lorebook entries were indexed with a different model and need re-indexing with ‹model›.*
 - *Indexing 12 of 40 lorebook entries.* While the queue isn't running, it says *12 of 40 lorebook entries are indexed. The rest are waiting to be indexed.*
 
-An administrator also gets the press the sentence calls for: **Re-index now** when entries need re-indexing, which puts the session at the front of the queue and re-indexes them with the current model; **Prioritize in queue** while entries are on their way, which moves the session to the front; and, when none is indexed yet, **Set up search by meaning** too, which opens **Admin › Models › Loadouts**, where the Embeddings loadout is filled. Other people see the sentence alone. **Hide for this session** hides the notice; Search by meaning still searches whatever is indexed, and **Show again** brings it back. Only the session's owner can hide it. The notice goes away by itself once every entry is indexed.
+An administrator also gets the press the sentence calls for: **Re-index now** when entries need re-indexing, which puts the session at the front of the queue and re-indexes them with the current model; **Prioritize in queue** while entries are on their way, which moves the session to the front; and, when none is indexed yet, **Set up search by meaning** too, which opens **Admin › Models › Loadouts**, where the Embeddings loadout is filled. Other people see the sentence alone. **Hide for this session** hides the notice for everyone in the session; Search by meaning still searches whatever is indexed, and the crossed-out eye left in its place brings it back. Only the session's owner can hide it. The notice goes away by itself once every entry is indexed.
 
 ### Why some short sessions never show an indexing notice
 

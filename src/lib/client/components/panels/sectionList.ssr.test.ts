@@ -248,7 +248,7 @@ describe("ListGroupLabel", () => {
 			props: { label: "Older", headingLevel: 4 }
 		}).body.replace(/<!--[^]*?-->/g, "")
 		expect(out.startsWith("<h4")).toBe(true)
-		expect(out).not.toContain("truncate text-[11px]")
+		expect(out).not.toContain("truncate text-meta")
 	})
 })
 

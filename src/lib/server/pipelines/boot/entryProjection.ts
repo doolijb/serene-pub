@@ -72,6 +72,7 @@ import { createHash } from "node:crypto"
 import { sql } from "drizzle-orm"
 import { rawRows } from "$lib/server/db/rawRows"
 import { driverReasonOf } from "$lib/server/db/errors"
+import { isDerivedEntryTypeId } from "$lib/shared/entries/types"
 
 /**
  * What Postgres said, for `report.errors`: the driver's reason under drizzle's
@@ -216,6 +217,12 @@ export function entryCheckExpression(
 		const decl = raw as any
 		if (!decl || typeof decl !== "object") continue
 		if (!SAFE_FIELD.test(field)) continue
+		// 🚧 A derived entry type's piece `name` is the row's title column
+		// (`TITLE_WIRE_FIELD`), never a copy in `fields` (`declaredFields`
+		// leaves it out), so a row is never asked to hold it there. Found by
+		// the first writer of derived rows, the starter lorebooks (2026-10-21);
+		// migration 0116 drops the CHECKs projected before this.
+		if (field === "name" && isDerivedEntryTypeId(typeId)) continue
 		const k = lit(field)
 		const get = `"fields"->${k}`
 		const present = `("fields" ? ${k} AND jsonb_typeof(${get}) <> 'null')`

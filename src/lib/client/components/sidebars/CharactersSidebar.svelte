@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	import {
 		onCardImported,
 		onImportResolved
@@ -65,12 +66,13 @@
 
 	let characterList: any[] = $state([])
 	let isLoading = $state(true)
-	// Cards, not the shared default: a character is a portrait first, and
-	// this view is the one place the artwork is the row. A stored choice
-	// still wins.
+	// Rows in the 400px dock, cards at Half and Focus (PLAN-0-5-polish-parity
+	// L6, 2026-10-24 — 0.5's behaviour: three portrait cards across a 400px
+	// column was a column of thumbnails nobody could read). A stored choice
+	// still wins at every width.
 	const viewMode = createViewMode(
 		"serene-pub:viewMode:charactersSidebar",
-		"cards"
+		() => (panelsCtx?.viewWidth === "dock" ? "list" : "cards")
 	)
 	let search = $state("")
 	let characterId: number | undefined = $state()
@@ -249,7 +251,7 @@
 	function tagDotPreset(colorPreset?: string): string {
 		return (
 			colorPreset ||
-			"bg-primary-500/20 text-primary-600 dark:text-primary-400"
+			"bg-primary-500/20 text-primary-ink"
 		)
 	}
 
@@ -1280,9 +1282,14 @@
 {/snippet}
 
 <div class="flex h-full min-h-0 flex-col" use:vm.observe>
+	<!-- `listFills` (L7, 2026-10-24): with nothing open the list sits centred
+	     — rows at their own 560px, cards at the 1120px reading width —
+	     instead of a column beside an empty pane. -->
 	<PanelSplit
 		mode={vm.mode}
 		hasDetail={isCreating || characterId != null || viewingId != null}
+		listFills
+		fillWidth={viewMode.value === "cards" ? "reading" : "list"}
 		emptyMessage="Pick a character, or create one."
 		listWidth="380px"
 	>
@@ -1499,9 +1506,7 @@
 					{#snippet chips()}
 						<!-- The one narrowing in force, said once. -->
 						{#if activeFilterLabel}
-							<span
-								class="bg-surface-200-800 text-surface-700-300 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
-							>
+							<Badge size="md" class="text-surface-700-300 flex min-w-0 items-center gap-1">
 								<span class="min-w-0 truncate">
 									{activeFilterLabel}
 								</span>
@@ -1514,7 +1519,7 @@
 								>
 									<Icons.X size={12} aria-hidden="true" />
 								</button>
-							</span>
+							</Badge>
 						{/if}
 					{/snippet}
 				</ViewToolbar>
@@ -1631,7 +1636,7 @@
 				     still shows them wherever it is scrolled to. -->
 				{#if isCardDragOver}
 					<div
-						class="border-primary-500/70 bg-surface-50-950/80 text-surface-800-200 pointer-events-none absolute inset-0 rounded-[12px] border-2 border-dashed text-sm"
+						class="border-primary-500/70 bg-surface-50-950/80 text-surface-800-200 pointer-events-none absolute inset-0 rounded-container border-2 border-dashed text-sm"
 					>
 						<p
 							class="sticky top-1/2 -translate-y-1/2 py-8 text-center"
@@ -1718,7 +1723,7 @@
 				class="fixed inset-0 z-50 flex items-center justify-center p-4"
 			>
 				<Dialog.Content
-					class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
+					class="card bg-surface-100-900 border-surface-200-800 max-w-[95vw] space-y-4 border p-4 shadow-xl"
 				>
 					<div class="p-6">
 						<h2 class="mb-2 text-lg font-bold">
@@ -1871,7 +1876,7 @@
 				class="fixed inset-0 z-50 flex items-center justify-center p-4"
 			>
 				<Dialog.Content
-					class="card bg-surface-100-900 border-surface-300-700 w-[min(95vw,420px)] border p-6 shadow-xl"
+					class="card bg-surface-100-900 border-surface-200-800 w-[min(95vw,420px)] border p-6 shadow-xl"
 					role="alertdialog"
 					aria-labelledby="delete-folder-title"
 					aria-describedby="delete-folder-description"

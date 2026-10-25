@@ -21,7 +21,8 @@
 	 * the row.
 	 */
 	import type { Snippet } from "svelte"
-	import * as Icons from "@lucide/svelte"
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
+	import InlineError from "$lib/client/components/InlineError.svelte"
 
 	interface Props {
 		/** The control's id. */
@@ -68,15 +69,9 @@
 		</p>
 	{/if}
 	{#if error}
-		<p
-			id="{id}-error"
-			class="text-error-600-400 flex items-start gap-1.5 text-xs"
-		>
-			<Icons.CircleAlert size={14} class="mt-px shrink-0" aria-hidden="true" />
-			{error}
-		</p>
+		<InlineError id="{id}-error">{error}</InlineError>
 	{/if}
 	{#if help}
-		<p id="{id}-help" class="text-surface-600-400 text-xs">{help}</p>
+		<FieldHelp id="{id}-help">{help}</FieldHelp>
 	{/if}
 </div>

@@ -283,16 +283,20 @@ describe("fork → draft → preview → publish", () => {
 		expect(gone).toEqual({ slug: FORK, discarded: true })
 	}, 60_000)
 
-	test("preview lists a culled address for a removed node; nothing written", async () => {
+	test("preview lists no configuration (retired, R50); nothing written", async () => {
 		const { pipelinesDraftPut, pipelinesDraftPreview } = await import("./pipelineDrafts")
 		const { pipelinesDocument } = await import("./pipelines")
 		const { getDefinition } = await import("@serene-pub/sdk")
 		const doc: any = await pipelinesDocument.handler(asAdmin(), { slug: FORK }, () => {})
 		const fork = await specRow(FORK)
 
-		// The sprite pair is the reply's tail: `spriteShow` reads `spritePick`
-		// and nothing reads `spriteShow`, so removing both still compiles.
-		const victim = doc.document.nodes.find((n: any) => n.key === "spritePick")
+		// The sprite pair is the reply's tail: the show reads the pick and
+		// nothing reads the show, so removing every pair still compiles —
+		// Story's reply carries one in each branch of its `reply` junction
+		// (D7). The probe sits on the reply's own picker, by its address.
+		const { replyStepKeys } = await import("$lib/server/utils/testDb")
+		const picker = (await replyStepKeys(testDb, FORK)).spritePick
+		const victim = doc.document.nodes.find((n: any) => n.key === picker)
 		expect(victim).toBeTruthy()
 		const slot = Object.keys(
 			getDefinition(`${victim.definitionId}@${victim.definitionVersion}`)!.slots!
@@ -318,7 +322,7 @@ describe("fork → draft → preview → publish", () => {
 		const without = {
 			...doc.document,
 			nodes: doc.document.nodes.filter(
-				(n: any) => !n.key.startsWith("sprite")
+				(n: any) => n.definitionId !== victim.definitionId && n.definitionId !== "core:outlet/show-sprite"
 			)
 		}
 		const put: any = await pipelinesDraftPut.handler(
@@ -338,9 +342,9 @@ describe("fork → draft → preview → publish", () => {
 		expect(Array.isArray(res.findings)).toBe(true)
 		// Same semver, different content: information, not a refusal.
 		expect(res.semverTaken).toBe(true)
-		const mine = res.affected.find((a: any) => a.configId === config!.id)
-		expect(mine.configName).toBe(config!.name)
-		expect(mine.culled).toContain(`${victim.key}.${slot}.previewProbe`)
+		// 🚧 R50 (lane F1, 0110): configurations are retired — nothing reads
+		// one, so a publish culls or back-fills none and the preview lists none.
+		expect(res.affected).toEqual([])
 		expect(rec.last("pipelines:draft:preview")?.slug).toBe(FORK)
 
 		// Nothing written.

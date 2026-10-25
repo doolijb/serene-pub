@@ -1213,7 +1213,7 @@
 			<button
 				type="button"
 				class="btn btn-sm shrink-0 gap-1 {reviewOpen
-					? 'preset-tonal-primary'
+					? 'preset-pressed'
 					: 'preset-tonal-surface'}"
 				aria-pressed={reviewOpen}
 				aria-controls="castReviewPanel"
@@ -1224,7 +1224,9 @@
 				<Icons.UserPlus size={14} aria-hidden="true" />
 				<span>Suggestions</span>
 				{#if reviewCount > 0}
-					<span class="badge preset-filled-primary-500 text-[11px]">
+					<!-- A count, not an action: the ground's own stop, so it
+					     reads on the toggle at rest and pressed (★R2). -->
+					<span class="badge bg-surface-50-950 text-meta">
 						{reviewCount}
 					</span>
 				{/if}
@@ -1368,7 +1370,7 @@
 										<span
 											class="badge {stateBadge(
 												member.state
-											).color} text-[11px]"
+											).color} text-meta"
 										>
 											{member.state}
 										</span>
@@ -1377,7 +1379,7 @@
 										<span
 											class="badge {visibilityBadge(
 												member.visibility
-											)} text-[11px]"
+											)} text-meta"
 										>
 											{member.visibility}
 										</span>
@@ -1407,7 +1409,7 @@
 							? "true"
 							: undefined}
 						class="preset-filled-surface-100-900 hover:bg-surface-200-800 focus-visible:ring-primary-500 flex w-full cursor-pointer items-center gap-3 rounded-lg p-3 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none"
-						class:preset-tonal-primary={route.castId === member.id}
+						class:sidebar-row-active={route.castId === member.id}
 						onclick={() => selectMember(member.id)}
 					>
 						<CastAvatar
@@ -1427,7 +1429,7 @@
 								{#if member.state !== "active"}
 									<span
 										class="badge {stateBadge(member.state)
-											.color} shrink-0 text-[11px]"
+											.color} shrink-0 text-meta"
 									>
 										{member.state}
 									</span>
@@ -1436,7 +1438,7 @@
 									<span
 										class="badge {visibilityBadge(
 											member.visibility
-										)} shrink-0 text-[11px]"
+										)} shrink-0 text-meta"
 									>
 										{member.visibility}
 									</span>
@@ -1447,14 +1449,14 @@
 							     read the row by. -->
 							<span class="flex items-baseline gap-2">
 								<span
-									class="text-surface-700-300 min-w-0 flex-1 truncate text-[11px]"
+									class="text-surface-700-300 min-w-0 flex-1 truncate text-meta"
 									data-cast-sentence
 								>
 									{sentence}
 								</span>
 								{#if member.tag}
 									<span
-										class="text-surface-600-400 shrink-0 font-mono text-[11px]"
+										class="text-surface-600-400 shrink-0 font-mono text-meta"
 										data-cast-tag
 									>
 										{member.tag}
@@ -1495,12 +1497,12 @@
 	mark: string,
 	toggle: () => void
 )}
-	<!-- An entry mark as a toggle, as the entry editor's ⋯ draws it: tonal
-	     primary with `aria-pressed` while ON, the check saying it without
-	     colour. -->
+	<!-- An entry mark as a toggle, as the entry editor's ⋯ draws it:
+	     `preset-pressed` with `aria-pressed` while ON, the check saying it
+	     without colour. -->
 	<button
 		class="btn btn-sm w-full justify-start {on
-			? 'preset-tonal-primary'
+			? 'preset-pressed'
 			: 'preset-tonal-surface'}"
 		type="button"
 		aria-pressed={on}
@@ -1509,7 +1511,7 @@
 	>
 		<Icon size={14} aria-hidden="true" />
 		<span>{label}</span>
-		<span class="ml-auto text-[11px] font-normal opacity-75">{hint}</span>
+		<span class="ml-auto text-meta font-normal opacity-75">{hint}</span>
 		<Icons.Check
 			size={14}
 			class="shrink-0 {on ? '' : 'invisible'}"
@@ -1528,8 +1530,8 @@
 	>
 		<Popover.Trigger
 			class="btn btn-sm preset-tonal-surface shrink-0 p-2"
-			title="More options"
-			aria-label="More options for this lore"
+			title="More actions"
+			aria-label="More actions for this lore"
 		>
 			<Icons.Ellipsis size={16} aria-hidden="true" />
 		</Popover.Trigger>
@@ -1850,7 +1852,7 @@
 			<button
 				type="button"
 				class="btn btn-sm {inspectorTab === 'suggestions'
-					? 'preset-tonal-primary'
+					? 'preset-pressed'
 					: 'preset-tonal-surface'}"
 				aria-pressed={inspectorTab === "suggestions"}
 				onclick={() => (inspectorTab = "suggestions")}
@@ -1860,7 +1862,7 @@
 			<button
 				type="button"
 				class="btn btn-sm {inspectorTab === 'duplicates'
-					? 'preset-tonal-primary'
+					? 'preset-pressed'
 					: 'preset-tonal-surface'}"
 				aria-pressed={inspectorTab === "duplicates"}
 				onclick={() => (inspectorTab = "duplicates")}

@@ -280,17 +280,21 @@ describe("groupDefaultsByOutputKind", () => {
 	const groups = groupDefaultsByOutputKind(summary.entries)
 
 	test("groups run in IO_KINDS order and carry their own counts", () => {
+		// 🚧 O6 (2026-10-21): `text->text+audio` (Spoken reply) writes two
+		// kinds, so it files under "Other" at the end rather than under either.
 		expect(groups.map((g) => g.kind)).toEqual([
 			"text",
 			"image",
 			"audio",
 			"embedding",
-			"entities"
+			"entities",
+			"other"
 		])
 		const text = groups[0]
 		expect(text.label).toBe("Text")
 		expect(text.icon).toBe("Type")
-		expect(text.total).toBe(4)
+		// + Hearing (`text+audio->text`, O4).
+		expect(text.total).toBe(5)
 		expect(text.setCount).toBe(1)
 	})
 

@@ -152,7 +152,7 @@
 									class="flex w-full flex-col items-center gap-1 rounded-lg border-2 p-1 text-xs
 										{isCurrent
 										? 'border-primary-500 preset-tonal-primary'
-										: 'border-surface-300-700 hover:border-primary-500'}"
+										: 'border-surface-200-800 hover:border-primary-500'}"
 									aria-pressed={isCurrent}
 									disabled={sending}
 									onclick={() => pick(tile.label)}

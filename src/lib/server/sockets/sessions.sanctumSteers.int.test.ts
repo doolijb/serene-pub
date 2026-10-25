@@ -17,9 +17,10 @@
  *     keeper prompt holds Sanctum talk or the scratchpad.
  *  4. **The cap.** Only the newest twelve rows of talk are read.
  *  5. **The scratchpad.** Each Sanctum reply rewrites it (a Background JSON
- *     call); the next planner and the next Sanctum reply read it; the owner
- *     edits it through its ready-made action; no person's annex view shows
- *     it.
+ *     call — the `lair-scratchpad` routine, woken by the Castellan's live
+ *     Sanctum reply; routines are on for this file); the next planner and
+ *     the next Sanctum reply read it; the owner edits it through its
+ *     ready-made action; no person's annex view shows it.
  *  6. **The bound, alone** (`unplayedTalkRows`): the greeting (a create
  *     run's row) and a beats row (a story turn's) are never talk, and
  *     `unplayedOnly` is refused on `main`.
@@ -60,15 +61,14 @@ vi.mock("$lib/server/sockets/utils/broadcastHelpers", () => ({
 }))
 
 const BEAT = "BEAT-MARK Brannoc eyes the door."
-/** What the planner answers: one delver speaks. The keeper reads the same document. */
+/** What the planner answers, in `LAIR_PLAN_SCHEMA`'s shape: one delver speaks, nothing risky. */
 const PLAN = {
 	beats: [BEAT],
 	speakers: [{ name: "Brannoc", intent: "check the door" }],
+	risks: [],
 	unknownExit: "",
 	knockQuestion: "",
-	worldHints: { location: "The Old Well" },
-	values: [],
-	inventory: []
+	worldHints: { location: "The Old Well" }
 }
 /** A plan that names nobody: a beats row, and no delver's line after it. */
 const QUIET_PLAN = { ...PLAN, speakers: [] }
@@ -111,7 +111,7 @@ class FakeAdapter {
 				: prompt.includes("You plan the PARTY only")
 					? "planner"
 					: "keeper"
-			: prompt.includes("This conversation is the Sanctum")
+			: prompt.includes("in the Sanctum, your table outside the story")
 				? "sanctum"
 				: prompt.includes("asked you to narrate what happens next")
 					? "narration"
@@ -122,6 +122,7 @@ class FakeAdapter {
 			isAborted: false,
 			completionResult: async (onContent: (c: string) => void) => {
 				if (kind === "scratchpad") return onContent(JSON.stringify({ scratchpad: PAD }))
+				if (kind === "keeper") return onContent(JSON.stringify({ deltas: [] }))
 				if (json) return onContent(JSON.stringify(plan))
 				if (kind === "sanctum") return onContent(CASTELLAN_SAYS)
 				if (kind === "narration") return onContent(NARRATION)
@@ -156,6 +157,9 @@ beforeAll(async () => {
 	await (await import("$lib/server/db/defaults")).sync()
 	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
 	await bootstrapPipelines(db)
+	// The scratchpad (and the keeper) are routines: on for this file.
+	const { setRoutinesEnabled } = await import("$lib/server/pipelines/routines/runs")
+	setRoutinesEnabled(true)
 
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	userId = (await createTestUser(db, "lair-steers")).id
@@ -191,6 +195,8 @@ beforeAll(async () => {
 }, 180_000)
 
 afterAll(async () => {
+	const { setRoutinesEnabled } = await import("$lib/server/pipelines/routines/runs")
+	setRoutinesEnabled(false)
 	await fs.rm(dataDir, { recursive: true, force: true })
 })
 
@@ -299,7 +305,7 @@ async function editScratchpad(sessionId: number, value: string) {
 
 /** Nothing of the Sanctum's reached this prompt. */
 function holdsNoTableTalk(prompt: string, ...marks: string[]) {
-	for (const m of [CASTELLAN_SAYS, PAD, EDITED, "This conversation is the Sanctum", ...marks])
+	for (const m of [CASTELLAN_SAYS, PAD, EDITED, "in the Sanctum, your table outside the story", ...marks])
 		expect(prompt).not.toContain(m)
 }
 
@@ -465,7 +471,7 @@ describe("the Castellan's scratchpad (R13)", () => {
 })
 
 describe("the unplayed talk, alone (R13 bound)", () => {
-	it("a person's Sanctum line and the reply fired there are talk; the greeting and a beats row are not", async () => {
+	it("a person's Sanctum line and the reply fired there are talk; the greeting is not, and the story's newest line bounds it", async () => {
 		const { unplayedTalkRows, storyBoundOf } = await import("$lib/server/sessions/unplayedTalk")
 		const sessionId = await createLairSession("bound")
 		const greeting = (await rowsOf(sessionId))[0]!
@@ -489,21 +495,27 @@ describe("the unplayed talk, alone (R13 bound)", () => {
 			reply.id
 		])
 
-		// A turn whose plan names nobody writes a beats row and no line after
-		// it: the bound does not move, yet the beats row is still not talk.
+		// 🚧 lair fix 2 (2026-10-22): a plan naming nobody still hands every AI
+		// delver a turn — Brannoc answers after the beats row — so the story's
+		// newest line bounds the talk, and what was said before it is played.
 		plan = QUIET_PLAN
 		await personSays(sessionId, "The torches gutter.")
 		await press(sessionId, "main")
 		const beats = (await rowsOf(sessionId)).filter((r) => r.channel === "sanctum").at(-1)!
 		expect(beats.content).toContain(BEAT)
-		expect(await storyBoundOf(db as any, sessionId)).toBeNull()
+		const bound = await storyBoundOf(db as any, sessionId)
+		expect(bound).not.toBeNull()
+		expect(bound!).toBeGreaterThan(beats.id)
+		expect((await unplayedTalkRows(db as any, sessionId, "sanctum", 12)).map((r) => r.id)).toEqual([])
+		// Talk after the bound is unplayed again; the cap keeps the newest.
+		const next = await personSays(sessionId, "BOUND-NEXT And the vault?", "sanctum")
+		const last = await personSays(sessionId, "BOUND-LAST Mind the trap.", "sanctum")
 		expect((await unplayedTalkRows(db as any, sessionId, "sanctum", 12)).map((r) => r.id)).toEqual([
-			line.id,
-			reply.id
+			next.id,
+			last.id
 		])
-		// The cap keeps the newest.
 		expect((await unplayedTalkRows(db as any, sessionId, "sanctum", 1)).map((r) => r.id)).toEqual([
-			reply.id
+			last.id
 		])
 		plan = PLAN
 	})

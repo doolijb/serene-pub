@@ -85,7 +85,7 @@
 	</label>
 
 	{#if error}
-		<p class="text-error-500 text-sm" role="alert">{error}</p>
+		<p class="text-error-600-400 text-sm" role="alert">{error}</p>
 	{/if}
 
 	<button

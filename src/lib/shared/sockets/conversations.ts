@@ -21,6 +21,9 @@ export interface ConversationPerson {
 	username: string
 	displayName: string | null
 	isAdmin?: boolean
+	/** The account's avatar (`users.avatar_media_id`); drawn by id. Absent
+	 *  from a payload that did not read it. */
+	avatarMediaId?: number | null
 }
 
 export type ConversationKind = "direct" | "group"

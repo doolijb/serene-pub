@@ -33,11 +33,12 @@
 
 import { describe, it, expect, beforeAll } from "vitest"
 import { and, eq } from "drizzle-orm"
-import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
+import { createTestDb, replyStepKeys, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { resolveConfig, SLOT_VALUE } from "@serene-pub/sdk"
 import {
 	namespaceView,
+	optionId,
 	writeOption,
 	type ConfigOption,
 	type NamespaceView
@@ -54,6 +55,8 @@ let adminId: number
 let chosenId: number
 /** The instance default — deliberately NOT the chosen one. */
 let defaultId: number
+/** The reply's model call, by the address its document gives it (Story's sits in its `reply` junction). */
+let GENERATE: string
 
 beforeAll(async () => {
 	db = await createTestDb()
@@ -125,6 +128,7 @@ beforeAll(async () => {
 		)
 	const copy = await duplicateConfig(db, shipped.id, "Slot address copy")
 	await selectConfig(db, spec.id, "pub", 0, copy.id, adminId)
+	GENERATE = (await replyStepKeys(db, STORY_RESPOND_SPEC_ID)).generate
 }, 60_000)
 
 const viewer = () => ({ userId: adminId, isAdmin: true })
@@ -139,19 +143,18 @@ const connectionOption = async (): Promise<ConfigOption> => {
 		STORY_RESPOND_SPEC_ID,
 		viewer()
 	)) as NamespaceView
-	const found = allOptions(v).find((o) => o.control === "connection-ref")
+	// The reply call's own — Story's reply has two alternative calls (D7).
+	const found = allOptions(v).find(
+		(o) => o.control === "connection-ref" && o.id === optionId(SECRET, GENERATE, "connection", "")
+	)
 	expect(found, "the respond spec should expose a connection slot").toBeTruthy()
 	return found!
 }
 
-/** The node a connection option belongs to, so the assertion can name it. */
+/** The node a connection option belongs to, so the assertion can name it — the one it was found by. */
 const nodeKeyOf = async (option: ConfigOption): Promise<string> => {
-	const [row] = await db
-		.select()
-		.from(schema.pipelineConfigValues)
-		.where(eq(schema.pipelineConfigValues.slot, "connection"))
-		.limit(1)
-	return row?.nodeKey ?? "generate"
+	expect(option.id).toBe(optionId(SECRET, GENERATE, "connection", ""))
+	return GENERATE
 }
 
 describe("a connection pick reaches the executor", () => {
@@ -166,10 +169,14 @@ describe("a connection pick reaches the executor", () => {
 			chosenId
 		)
 
-		const rows = await db
-			.select()
-			.from(schema.pipelineConfigValues)
-			.where(eq(schema.pipelineConfigValues.slot, "connection"))
+		// The reply is a registered pipeline: a global pick lands on the
+		// genre's defaults (PLAN-layering D5), at the same address.
+		const { registrationValueRefs } = await import(
+			"$lib/server/pipelines/registrations/values"
+		)
+		const rows = (await registrationValueRefs(db as any, ["connection"])).filter(
+			(r) => r.scopeKind === "genre" && r.key.startsWith("admin:")
+		)
 
 		expect(rows.length).toBeGreaterThan(0)
 		// Not `"ref"`, not `"$ref"`. One address, and it is the empty one.

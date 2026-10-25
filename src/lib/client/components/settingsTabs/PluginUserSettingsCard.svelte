@@ -19,6 +19,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 	import PluginSettingsFields from "./PluginSettingsFields.svelte"
+	import SettingCard from "./SettingCard.svelte"
 
 	const socket = useTypedSocket()
 
@@ -82,12 +83,12 @@
 </script>
 
 {#if plugins.length}
-	<div class="card preset-filled-surface-100-900 p-4">
-		<h3 class="mb-2 text-sm font-medium">Extension settings</h3>
-		<p class="text-surface-700-300 mb-3 text-sm">
-			Choices these extensions let each person make. They apply to you
-			only.
-		</p>
+	<SettingCard
+		title="Extension settings"
+		titleId="user-extension-settings-heading"
+		help="Choices these extensions let each person make; they apply to you only."
+		layout="stack"
+	>
 		<div class="flex flex-col gap-6">
 			{#each plugins as p (p.pluginId)}
 				{@const own = new Set(p.settings.own)}
@@ -140,5 +141,5 @@
 				</button>
 			</div>
 		</div>
-	</div>
+	</SettingCard>
 {/if}

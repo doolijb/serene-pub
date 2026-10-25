@@ -842,13 +842,33 @@ async function listModels(
 				models: [],
 				error: "KoboldCPP did not say which embedding model it has loaded — it may be busy."
 			}
-		const models: { model: string; name: string; modality: string }[] = []
+		const models: {
+			model: string
+			name: string
+			modality: string
+			reads?: string[]
+			writes?: string[]
+		}[] = []
+		// 🚧 O3: what the loaded text model reads, from the flags the version
+		// endpoint reports — a vision projector loaded beside it makes it SEE.
+		// Unanswered, the model states nothing (the Vision switch decides).
+		const flags = await fetch(`${baseUrl}/api/extra/version`, {
+			signal: AbortSignal.timeout(5000)
+		})
+			.then(async (r) => (r.ok ? flagsFrom(await r.json()) : null))
+			.catch(() => null)
 		// An image-only instance answers "inactive" here, which is not a model.
 		if (status.modelName && status.modelName !== KCPP_NO_TEXT_MODEL)
 			models.push({
 				model: status.modelName,
 				name: status.modelName,
-				modality: "text-gen"
+				modality: "text-gen",
+				...(flags
+					? {
+							reads: flags.vision ? ["text", "image"] : ["text"],
+							writes: ["text"]
+						}
+					: {})
 			})
 		if (image.name)
 			models.push({ model: image.name, name: image.name, modality: "image-gen" })

@@ -15,6 +15,12 @@
  * - `text` — `.txt` / `.md`, which carry no magic bytes and are accepted on a
  *   content sniff (UTF-8, no control bytes). Inlined for every model.
  * - `pdf` — stored and forwarded only, never parsed by the app.
+ * - 🚧 `audio` — MP3, WAV, OGG, FLAC, M4A, AAC, WebM sound (O4, 2026-10-21).
+ *   Sent to a pair that HEARS it, else heard by the reply's transcribe step
+ *   and named with its words (O9).
+ * - 🚧 `video` — MP4, WebM, MOV and the rest of the format table's (O4).
+ *   Declared open: no adapter sends one yet, so it reaches every call as
+ *   its name.
  *
  * EPUB, DOCX, ODT and RTF are storable media but **no model reads them** in
  * v1, so they are not offered (D5). SVG stays refused by `sniffMedia`.
@@ -22,7 +28,7 @@
 
 const MiB = 1024 * 1024
 
-export const ATTACHMENT_KINDS = ["image", "text", "pdf"] as const
+export const ATTACHMENT_KINDS = ["image", "text", "pdf", "audio", "video"] as const
 
 /** What kind of attachment a file is — R3: never a bare "kind". */
 export type AttachmentKind = (typeof ATTACHMENT_KINDS)[number]
@@ -34,7 +40,11 @@ export const ATTACHMENT_CAPS = {
 	bytesPerKind: {
 		image: 20 * MiB,
 		text: 1 * MiB,
-		pdf: 32 * MiB
+		pdf: 32 * MiB,
+		// What a hosted transcription route takes in one file (OpenAI's
+		// `/audio/transcriptions`: 25 MB) — a voice note is far under it.
+		audio: 25 * MiB,
+		video: 50 * MiB
 	} satisfies Record<AttachmentKind, number>,
 	/** The media store's own ceiling (`MAX_MEDIA_UPLOAD_BYTES`); no kind's cap
 	 *  may exceed it. */
@@ -58,12 +68,33 @@ const IMAGE_MIMES = new Set([
 	"image/gif"
 ])
 const TEXT_MIMES = new Set(["text/plain", "text/markdown"])
+/** 🚧 O4: the sounds and moving pictures the format table names. */
+const AUDIO_MIMES = new Set([
+	"audio/mpeg",
+	"audio/wav",
+	"audio/ogg",
+	"audio/flac",
+	"audio/mp4",
+	"audio/aac",
+	"audio/webm"
+])
+const VIDEO_MIMES = new Set([
+	"video/mp4",
+	"video/webm",
+	"video/quicktime",
+	"video/x-matroska",
+	"video/mpeg",
+	"video/ogg",
+	"video/x-msvideo"
+])
 
 /** The attachment kind of a SNIFFED mime, or null when it is not offered. */
 export function attachmentKindOf(mime: string): AttachmentKind | null {
 	if (IMAGE_MIMES.has(mime)) return "image"
 	if (TEXT_MIMES.has(mime)) return "text"
 	if (mime === "application/pdf") return "pdf"
+	if (AUDIO_MIMES.has(mime)) return "audio"
+	if (VIDEO_MIMES.has(mime)) return "video"
 	return null
 }
 
@@ -83,7 +114,9 @@ export function formatCap(bytes: number): string {
 const KIND_NOUN: Record<AttachmentKind, string> = {
 	image: "An image",
 	text: "A text file",
-	pdf: "A PDF"
+	pdf: "A PDF",
+	audio: "An audio file",
+	video: "A video"
 }
 
 /** The refusal for a file over its kind's cap, or null when it fits. */
@@ -98,7 +131,7 @@ export function attachmentSizeRefusal(
 
 /** The refusal for a file whose type is not offered. */
 export const ATTACHMENT_TYPE_REFUSAL =
-	"That file type can't be attached. Attach an image (PNG, JPEG, WebP, GIF), a text file (.txt, .md) or a PDF."
+	"That file type can't be attached. Attach an image (PNG, JPEG, WebP, GIF), a text file (.txt, .md), a PDF or an audio file (MP3, WAV, OGG, FLAC, M4A)."
 
 /** The refusal when the tray is full. */
 export const ATTACHMENT_COUNT_REFUSAL = `A message can carry at most ${ATTACHMENT_CAPS.filesPerMessage} files.`

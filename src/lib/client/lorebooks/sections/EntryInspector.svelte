@@ -7,6 +7,7 @@
 	import RefsList from "../editor/RefsList.svelte"
 	import { SCENE_KIND, type PoolItem } from "../poolFilter"
 	import HistorySceneList from "./HistorySceneList.svelte"
+	import KeptImprintNote from "./KeptImprintNote.svelte"
 	import { getLorePoolCtx } from "./poolContext"
 	import { kindLabel } from "./kinds"
 	import type { PoolSource, SectionDescriptor } from "./types"
@@ -49,6 +50,8 @@
 		 * the editor.
 		 */
 		showBody?: boolean
+		/** 🚧 Whoever may edit the book: the kept note's Revert and Keep (RF fix 4). */
+		mayEdit?: boolean
 		onOpenItem: (item: PoolItem) => void
 	}
 
@@ -60,6 +63,7 @@
 		pool,
 		links = [],
 		showBody = true,
+		mayEdit = false,
 		onOpenItem
 	}: Props = $props()
 
@@ -110,7 +114,7 @@
 		</ul>
 		<!-- Said here, because the confirmation is not where a reader should
 		     first learn what a delete takes with it. -->
-		<p class="text-surface-600-400 text-[11px]">
+		<p class="text-surface-600-400 text-meta">
 			Deleting this entry deletes what is filed under it.
 		</p>
 	{:else}
@@ -121,10 +125,15 @@
 	{/if}
 {/snippet}
 
+<!-- 🚧 What a replaced reply wrote on this row that stayed (RF fix 4): said
+     above the tabs, whatever the door offers, because it is about the row. -->
+{#if source.keptImprints?.length}
+	<KeptImprintNote imprints={source.keptImprints} {mayEdit} />
+{/if}
 {#if tabs.length}
 	<div
 		data-lore-inspector
-		class="border-surface-300-700 flex flex-col gap-2 border-t pt-2"
+		class="border-surface-200-800 flex flex-col gap-2 border-t pt-2"
 	>
 		<div class="flex flex-wrap gap-1" role="tablist" aria-label="Inspector">
 			{#each tabs as tab (tab.id)}
@@ -136,7 +145,7 @@
 					aria-controls="{uid}-panel"
 					data-lore-inspector-tab={tab.id}
 					class="btn btn-sm {selected === tab.id && showBody
-						? 'preset-tonal-primary'
+						? 'preset-pressed'
 						: 'preset-tonal-surface'}"
 					onclick={() => loreRoute.openInspector(tab.id)}
 				>

@@ -622,7 +622,7 @@
 			<td class="px-2 py-1.5">
 				{#if chip}
 					<span
-						class="{chip.preset} inline-block rounded px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap"
+						class="{chip.preset} inline-block rounded px-1.5 py-0.5 text-meta font-medium whitespace-nowrap"
 					>
 						{chip.label}
 					</span>
@@ -641,7 +641,7 @@
 								style={`width:${percentOf(model)}%`}
 							></span>
 						</span>
-						<span class="text-surface-600-400 text-[11px]">
+						<span class="text-surface-600-400 text-meta">
 							{percentOf(model)}%
 						</span>
 					</span>

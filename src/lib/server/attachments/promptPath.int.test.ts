@@ -535,3 +535,59 @@ describe("the action specs keep the parity guard", async () => {
 		expect(messages[0].attachments).toEqual([{ uuid: String(image.uuid) }])
 	})
 })
+
+// ── 🚧 A voice note (O2, O4, O9) ─────────────────────────────────────────────
+describe("a voice note on the prompt path", () => {
+	function wav(): Buffer {
+		const data = Buffer.alloc(32)
+		const b = Buffer.alloc(44)
+		b.write("RIFF", 0, "ascii")
+		b.writeUInt32LE(36 + data.length, 4)
+		b.write("WAVE", 8, "ascii")
+		b.write("fmt ", 12, "ascii")
+		b.writeUInt32LE(16, 16)
+		b.writeUInt16LE(1, 20)
+		b.writeUInt16LE(1, 22)
+		b.writeUInt32LE(16000, 24)
+		b.writeUInt32LE(32000, 28)
+		b.writeUInt16LE(2, 32)
+		b.writeUInt16LE(16, 34)
+		b.write("data", 36, "ascii")
+		b.writeUInt32LE(data.length, 40)
+		return Buffer.concat([b, data])
+	}
+
+	it("a pair that cannot hear is shown the note's name — and, once heard, its words", async () => {
+		await useDefault(anthropicId)
+		const { sessionId, personaId } = await newSession()
+		const first = await say(sessionId, personaId, "user", "Listen to this")
+		const { createMedia } = await import("$lib/server/media")
+		const { appendParts } = await import("$lib/server/messages/store")
+		const { mediaPartFor } = await import("./partData")
+		const created = await createMedia(db as any, {
+			userId,
+			sessionId,
+			bytes: wav(),
+			filename: "note.wav",
+			allowDocuments: true,
+			allowMedia: true
+		})
+		const part = mediaPartFor(created.file)
+		expect(part.type).toBe("core:audio")
+		await appendParts(db as any, first.id, [part])
+
+		const unheard = await render(sessionId, true)
+		const line = (payload: any) =>
+			(payload.messages as any[]).find((m) => String(m.content).includes("Listen to this"))
+		expect(line(unheard).content).toContain("[audio: note.wav]")
+		expect(line(unheard).attachments).toBeUndefined()
+
+		// The transcribe step's cache, as it writes it.
+		await db
+			.update(schema.files)
+			.set({ transcript: "Meet me at noon." })
+			.where(eq(schema.files.id, created.file.id))
+		const heard = await render(sessionId, true)
+		expect(line(heard).content).toContain('[audio: note.wav — "Meet me at noon."]')
+	})
+})

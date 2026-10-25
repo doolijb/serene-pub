@@ -14,7 +14,10 @@
  * to show the rewrite takes the code's values whole.
  *
  * Replays the real migration file against a database whose shipped
- * lair-respond config looks like an older install's, then boots again.
+ * lair-room-answer config looks like an older install's, then boots again.
+ * (The subject was lair-respond until the Lair rewrite retired it,
+ * 2026-10-21: the frozen migration still names it, and no build since
+ * writes it — as Adventure's reply before it.)
  *
  * A value that equals its declaration is never stored (the 2026-09-10 rule,
  * swept on every boot), so on a fresh install `maxMessages` and `maxMentions`
@@ -45,30 +48,25 @@ vi.mock("$lib/server/db", async () => {
 
 const SEED_PREFIX = "pipeline-default:"
 /**
- * The Lair's reply: the migration's other `place` step. Adventure's reply was
- * the subject here until it retired with Adventure (2026-10-19); the
- * migration still names it, and a fresh install no longer writes it.
+ * The Lair's *Answer the door*: one of the migration's `place` steps.
+ * Adventure's reply was the subject here until it retired with Adventure
+ * (2026-10-19), then the Lair's reply until the Lair rewrite retired it
+ * (2026-10-21); the migration still names both, and a fresh install writes
+ * neither.
  */
-const LAIR = `${SEED_PREFIX}core:spec/lair-respond`
+const LAIR = `${SEED_PREFIX}core:spec/lair-room-answer`
 const RETIRED_ADVENTURE = `${SEED_PREFIX}core:spec/adventure-respond`
+const RETIRED_LAIR_REPLY = `${SEED_PREFIX}core:spec/lair-respond`
+const RETIRED = [RETIRED_ADVENTURE, RETIRED_LAIR_REPLY]
 /** Not named by the migration: its shipped row must outlive the replay. */
 const UNLISTED = `${SEED_PREFIX}core:spec/guide-create`
 
 const PLACE = { nodeKey: "place", slot: "params", path: "path" }
-const ENTITY_SEARCH = {
-	nodeKey: "gather.entities.read",
-	slot: "params",
-	path: "maxMessages"
-}
-const MENTION_SPANS = {
-	nodeKey: "names.arm.mentions",
-	slot: "params",
-	path: "maxMentions"
-}
 type Address = typeof PLACE
 
 const ADMIN_COPY_NAME = "Lair (wave 8 test copy)"
-const ADMIN_COPY_VALUE = 7
+/** An administrator's own place path, on the copy (never the shipped one). */
+const ADMIN_COPY_VALUE = "world.party.room"
 
 const boot = async () => {
 	const { bootstrapPipelines } = await import(
@@ -189,31 +187,31 @@ describe("wave 8 retrieval re-projection", () => {
 			expect(listed).toContain(LAIR)
 			expect(listed).not.toContain(UNLISTED)
 			const ids = await shippedIds()
-			// Retired with Adventure (2026-10-19): named by the frozen migration,
-			// written by no build since.
-			expect(listed).toContain(RETIRED_ADVENTURE)
-			expect(ids.has(RETIRED_ADVENTURE)).toBe(false)
-			for (const seedKey of listed.filter((k) => k !== RETIRED_ADVENTURE))
+			// Retired with Adventure (2026-10-19) and the Lair rewrite
+			// (2026-10-21): named by the frozen migration, written by no build since.
+			for (const gone of RETIRED) {
+				expect(listed).toContain(gone)
+				expect(ids.has(gone)).toBe(false)
+			}
+			for (const seedKey of listed.filter((k) => !RETIRED.includes(k)))
 				expect(ids.has(seedKey), `${seedKey} was never written`).toBe(true)
 		},
 		60_000
 	)
 
 	it(
-		"ships lair-respond with the place path and retrieval on, on a fresh install",
+		"ships lair-room-answer with the place path, on a fresh install",
 		async () => {
 			expect(await effective(LAIR, PLACE)).toBe("world.location")
-			expect(await effective(LAIR, ENTITY_SEARCH)).toBe(20)
-			expect(await effective(LAIR, MENTION_SPANS)).toBe(8)
 		},
 		60_000
 	)
 
 	it(
-		"rewrites an older install's lair-respond default from the code, leaving an admin copy and unlisted specs alone",
+		"rewrites an older install's lair-room-answer default from the code, leaving an admin copy and unlisted specs alone",
 		async () => {
 			const shipped = await configBySeed(LAIR)
-			expect(shipped, "lair-respond has no shipped config").toBeTruthy()
+			expect(shipped, "lair-room-answer has no shipped config").toBeTruthy()
 
 			// An install written before the wave: no `place` path (the preset
 			// value on a new node), and retrieval stored at the old zero.
@@ -227,18 +225,6 @@ describe("wave 8 retrieval re-projection", () => {
 						eq(schema.pipelineConfigValues.path, PLACE.path)
 					)
 				)
-			for (const a of [ENTITY_SEARCH, MENTION_SPANS]) {
-				const existing = await rowAt(shipped.id, a)
-				if (existing)
-					await db
-						.update(schema.pipelineConfigValues)
-						.set({ value: 0 })
-						.where(eq(schema.pipelineConfigValues.id, existing.id))
-				else
-					await db
-						.insert(schema.pipelineConfigValues)
-						.values({ configId: shipped.id, ...a, value: 0 })
-			}
 
 			// An administrator's tuned copy: its own row, not immutable.
 			const [copy] = await db
@@ -254,7 +240,7 @@ describe("wave 8 retrieval re-projection", () => {
 				.insert(schema.pipelineConfigValues)
 				.values({
 					configId: copy.id,
-					...ENTITY_SEARCH,
+					...PLACE,
 					value: ADMIN_COPY_VALUE
 				})
 				.returning()
@@ -262,8 +248,6 @@ describe("wave 8 retrieval re-projection", () => {
 			// A boot alone leaves the old rows as they are: this is the gap.
 			await boot()
 			expect(await rowAt(shipped.id, PLACE)).toBeUndefined()
-			expect(await effective(LAIR, ENTITY_SEARCH)).toBe(0)
-			expect(await effective(LAIR, MENTION_SPANS)).toBe(0)
 
 			const before = await shippedIds()
 			const listed = new Set(await listedSeedKeys())
@@ -276,8 +260,6 @@ describe("wave 8 retrieval re-projection", () => {
 			expect(after.id).not.toBe(shipped.id)
 			expect(after.isImmutable).toBe(true)
 			expect(await effective(LAIR, PLACE)).toBe("world.location")
-			expect(await effective(LAIR, ENTITY_SEARCH)).toBe(20)
-			expect(await effective(LAIR, MENTION_SPANS)).toBe(8)
 
 			// The administrator's copy keeps the value it chose, in the same row.
 			const [copyAfter] = await db
@@ -287,7 +269,7 @@ describe("wave 8 retrieval re-projection", () => {
 			expect(copyAfter, "the admin copy was deleted").toBeTruthy()
 			expect(copyAfter.isImmutable).toBe(false)
 			expect(copyAfter.name).toBe(ADMIN_COPY_NAME)
-			const copyRowAfter = await rowAt(copy.id, ENTITY_SEARCH)
+			const copyRowAfter = await rowAt(copy.id, PLACE)
 			expect(copyRowAfter?.id).toBe(copyRow.id)
 			expect(copyRowAfter?.value).toBe(ADMIN_COPY_VALUE)
 

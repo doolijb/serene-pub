@@ -104,3 +104,50 @@ export function degreeOf(
 	const band = bands[index]!
 	return { band, index, five: band.five }
 }
+
+/**
+ * 🚧 `degree` moved `by` steps along the five-band rank (2026-10-22): an
+ * `adjustDegree`, a post-roll script's `shift` — clamped to the crosswalk's
+ * bands, never by declaration order (`rankOrder`).
+ */
+export function stepDegree(crosswalk: DegreeCrosswalk, degree: Degree, by: number): Degree {
+	if (!by) return degree
+	const bands = crosswalk.bands
+	const order = rankOrder(bands)
+	const at = order.indexOf(degree.index)
+	const index = order[Math.max(0, Math.min(order.length - 1, (at < 0 ? 0 : at) + by))]!
+	const band = bands[index]!
+	return { band, index, five: band.five }
+}
+
+/**
+ * 🚧 The degree a band id names (a dice pool's count, a bid's cost row, a
+ * judged outcome — 2026-10-22), then `adjust` steps; null when the crosswalk
+ * has no such band.
+ */
+export function degreeNamed(crosswalk: DegreeCrosswalk, id: string, adjust = 0): Degree | null {
+	const index = crosswalk.bands.findIndex((b) => b.id === id)
+	if (index < 0) return null
+	const band = crosswalk.bands[index]!
+	return stepDegree(crosswalk, { band, index, five: band.five }, adjust)
+}
+
+/**
+ * 🚧 The crosswalk's band for a step of the five-band scale — its first
+ * band at that step, else the nearest below it (above for `crit-fail`) — then
+ * `adjust` steps. What a pool with no count map reads (none: _fail_; any:
+ * _success_). Null for a crosswalk with no bands.
+ */
+export function degreeOfFive(crosswalk: DegreeCrosswalk, five: FiveBand, adjust = 0): Degree | null {
+	const bands = crosswalk.bands
+	if (!bands.length) return null
+	const want = FIVE_RANK[five]
+	let index = bands.findIndex((b) => b.five === five)
+	if (index < 0) {
+		const order = rankOrder(bands)
+		const below = order.filter((i) => FIVE_RANK[bands[i]!.five] <= want)
+		index = below.length ? below[below.length - 1]! : order[0]!
+	}
+	const band = bands[index]!
+	return stepDegree(crosswalk, { band, index, five: band.five }, adjust)
+}

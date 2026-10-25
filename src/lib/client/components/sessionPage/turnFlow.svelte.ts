@@ -401,6 +401,19 @@ export function createTurnFlow(d: TurnFlowDeps) {
 		})
 	}
 
+	/**
+	 * 🚧 A guest's seat, opened by name (`take-seat`, Lair rewrite D5): the
+	 * session's seat-name write, which opens a card-less player seat for a
+	 * caller with none. The server sends the updated session to every
+	 * member's page, and the composer's offer goes with the seat.
+	 */
+	function takeSeat(name: string) {
+		socket.emit("sessions:update", {
+			session: { id: sessionId } as Sockets.Sessions.Update.Params["session"],
+			seatName: name
+		})
+	}
+
 	function handleAddPersona(personaId: number) {
 		const req: Sockets.Sessions.AddPersona.Params = {
 			sessionId,
@@ -436,10 +449,14 @@ export function createTurnFlow(d: TurnFlowDeps) {
 	/**
 	 * A fire that did not start a run — a person's turn, nothing prepared —
 	 * answers on the success event with `ok: false`; no placeholder will
-	 * land to clear the in-flight flag, so it is cleared here.
+	 * land to clear the in-flight flag, so it is cleared here. 🚧 So does the
+	 * owner's Continue that only moved past a waiting player with nothing
+	 * prepared after them (`reason: 'skipped'`, Lair rewrite D5): it
+	 * succeeded, and no run follows it.
 	 */
 	function handleFireTurn(msg: Sockets.Sessions.FireTurn.Response) {
-		if (msg.sessionId !== sessionId || msg.ok) return
+		if (msg.sessionId !== sessionId) return
+		if (msg.ok && msg.reason !== "skipped") return
 		clearFireInFlight()
 	}
 
@@ -573,6 +590,7 @@ export function createTurnFlow(d: TurnFlowDeps) {
 		handleContinueWithNextCharacter,
 		handlePickTurn,
 		handleAddPersona,
+		takeSeat,
 		/** Another session opened in the page: the last one's order goes with it. */
 		reset() {
 			turnOrder = null

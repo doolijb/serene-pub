@@ -16,7 +16,7 @@
  * | `scopes.ts` | who may write what, and where the write lands |
  * | `deviations.ts` | what makes a value worth a row (one directory up) |
  * | `read.ts` | `listNamespaces` / `namespaceView` — resolved, with provenance |
- * | `write.ts` | `writeOption` / `clearOption` / `resetConfig` / `selectNamedConfig` |
+ * | `write.ts` | `writeOption` / `clearOption` / `resetConfig` |
  *
  * This barrel is the public face: import from
  * `$lib/server/pipelines/config/panel`, not from the files behind it.
@@ -32,7 +32,6 @@ export type {
 	PortLine,
 	OptionInherits,
 	OptionProvenance,
-	NamedConfigSummary,
 	NamespaceSummary,
 	NamespaceView,
 	ViewScope,
@@ -63,7 +62,6 @@ export {
 	writeOption,
 	clearOption,
 	resetConfig,
-	selectNamedConfig,
 	variableOptionGate,
 	contextTemplateOptionGate,
 	promptOptionGate

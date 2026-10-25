@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	import { getContext, onDestroy, onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
@@ -214,7 +215,7 @@
 	function tagDotPreset(colorPreset?: string): string {
 		return (
 			colorPreset ||
-			"bg-primary-500/20 text-primary-600 dark:text-primary-400"
+			"bg-primary-500/20 text-primary-ink"
 		)
 	}
 
@@ -449,8 +450,8 @@
 	}
 
 	function handleEditFromView() {
-		returnToViewId = viewingId
-		editSessionId = viewingId
+		returnToViewId = shownId
+		editSessionId = shownId
 		viewingId = null
 		showEditSessionForm = true
 	}
@@ -489,7 +490,7 @@
 		return (
 			session.id === sessionId ||
 			(vm.mode === "desk" &&
-				(session.id === viewingId ||
+				(session.id === shownId ||
 					(isEditing && session.id === editSessionId)))
 		)
 	}
@@ -512,6 +513,21 @@
 	 * nothing to show.
 	 */
 	const isEditing = $derived(showEditSessionForm && editSessionId != null)
+
+	/**
+	 * The session whose detail is showing: the one picked, else — at desk,
+	 * with no form open — the one open on the stage (PLAN-0-5-polish-parity
+	 * L7, 2026-10-24). At Half the session is right there beside the view,
+	 * and the list already marks its row; an empty pane reading "Pick a
+	 * session" beside it said the opposite. Compact keeps the list, the
+	 * open row marked, as the dock always has.
+	 */
+	const shownId = $derived(
+		viewingId ??
+			(vm.mode === "desk" && !isStarting && !isEditing
+				? (sessionId ?? null)
+				: null)
+	)
 
 	let showDeleteModal = $state(false)
 	let sessionToDelete: number | null = $state(null)
@@ -831,9 +847,9 @@
 
 	/** The row whose detail panel is showing, as the list row the list has. */
 	const viewingSession = $derived(
-		viewingId == null
+		shownId == null
 			? undefined
-			: patchedSessions.find((s) => s.id === viewingId)
+			: patchedSessions.find((s) => s.id === shownId)
 	)
 
 	onMount(() => {
@@ -895,7 +911,6 @@
 					runStatus={runStatusOf(session)}
 					active={isRowActive(session)}
 					showGenre={hasSeveralGenres}
-					layout="stack"
 					contentTitle="View session"
 					onclick={handleSessionClick}
 					onEdit={handleEditClick}
@@ -909,9 +924,7 @@
 
 <!-- A narrowing in force, as one dismissible chip (§6.3). -->
 {#snippet narrowingChip(text: string, clearLabel: string, onClear: () => void)}
-	<span
-		class="bg-surface-200-800 text-surface-700-300 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
-	>
+	<Badge size="md" class="text-surface-700-300 flex min-w-0 items-center gap-1">
 		<span class="min-w-0 truncate">{text}</span>
 		<button
 			type="button"
@@ -922,13 +935,18 @@
 		>
 			<Icons.X size={12} aria-hidden="true" />
 		</button>
-	</span>
+	</Badge>
 {/snippet}
 
 <div class="flex h-full min-h-0 flex-col" use:vm.observe>
+	<!-- `listFills` (L7, 2026-10-24): with nothing open the list sits centred
+	     at its own 560px (cards at the 1120px reading width) instead of a
+	     column beside an empty pane; picking a row moves it to the left. -->
 	<PanelSplit
 		mode={vm.mode}
-		hasDetail={isStarting || isEditing || viewingId != null}
+		hasDetail={isStarting || isEditing || shownId != null}
+		listFills
+		fillWidth={listMode.value === "cards" ? "reading" : "list"}
 		emptyMessage="Pick a session, or start one."
 		listWidth="380px"
 	>
@@ -955,15 +973,15 @@
 					showBack={vm.mode === "compact"}
 					initialTab={editSessionTab}
 				/>
-			{:else if viewingId}
-				{#key viewingId}
+			{:else if shownId}
+				{#key shownId}
 					<SessionViewPanel
-						sessionId={viewingId}
+						sessionId={shownId}
 						onBack={vm.mode === "compact"
 							? () => (viewingId = null)
 							: undefined}
 						onEdit={handleEditFromView}
-						onOpen={() => handleOpenSession(viewingId!)}
+						onOpen={() => handleOpenSession(shownId!)}
 						onViewLorebook={handleViewLorebook}
 						onDelete={handleDeleteClick}
 						onToggleFavorite={toggleFavorite}
@@ -1075,7 +1093,8 @@
 				{#snippet chips()}
 					<!-- The standing picks, always in view: a fixed three, so
 					     the row never needs to scroll sideways (§6.3). Pressed =
-					     tonal primary, the app's active-chip treatment (§2.4). -->
+					     `preset-pressed`, a surface step, ink and a 2px bar — never
+					     gold, which is the next action's (★R2, §2.4). -->
 					<div
 						class="flex min-w-0 shrink-0 items-center gap-1.5"
 						role="group"
@@ -1083,9 +1102,9 @@
 					>
 						<button
 							type="button"
-							class="rounded-full px-3 py-1 text-[13px] {activeChip ===
+							class="rounded-full px-3 py-1 text-chip {activeChip ===
 							'all'
-								? 'preset-tonal-primary'
+								? 'preset-pressed'
 								: 'preset-tonal-surface'}"
 							aria-pressed={activeChip === "all"}
 							onclick={() => pickFilter("all")}
@@ -1094,9 +1113,9 @@
 						</button>
 						<button
 							type="button"
-							class="flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] {activeChip ===
+							class="flex items-center gap-1.5 rounded-full px-3 py-1 text-chip {activeChip ===
 							'waiting'
-								? 'preset-tonal-primary'
+								? 'preset-pressed'
 								: 'preset-tonal-surface'}"
 							aria-pressed={activeChip === "waiting"}
 							onclick={() => pickFilter("waiting")}
@@ -1108,9 +1127,9 @@
 						</button>
 						<button
 							type="button"
-							class="flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] {activeChip ===
+							class="flex items-center gap-1.5 rounded-full px-3 py-1 text-chip {activeChip ===
 							'favorites'
-								? 'preset-tonal-primary'
+								? 'preset-pressed'
 								: 'preset-tonal-surface'}"
 							aria-pressed={activeChip === "favorites"}
 							onclick={() => pickFilter("favorites")}

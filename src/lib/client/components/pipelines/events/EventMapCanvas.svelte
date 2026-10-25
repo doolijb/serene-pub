@@ -104,7 +104,7 @@
 	const KINDS = ["binds", "causes", "listens"] as const
 </script>
 
-<div class="event-map-canvas border-surface-300-700 relative border-y">
+<div class="event-map-canvas border-surface-200-800 relative border-y">
 	{#if failed}
 		<p
 			class="text-surface-600-400 absolute inset-0 z-10 flex items-center justify-center px-6 text-center text-sm"

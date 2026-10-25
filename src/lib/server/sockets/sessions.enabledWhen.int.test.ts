@@ -200,24 +200,40 @@ async function character(userId: number, name: string) {
 }
 
 /**
- * A session tracks only what its genre enables (ruled 2026-09-25), and Chat
- * enables nothing and denies anything more: a test whose run moves the
- * weather runs as an Adventure, whose baseline carries Weather — or the
- * write is refused and nothing moves.
+ * The rules that keep the world's weather. A session tracks the attributes
+ * its rules declare (a genre brings none, and Freeform keeps none): a test
+ * whose run moves the weather plays these — or the write is refused and
+ * nothing moves.
  */
+const WEATHER_RULES = "test:ruleset/weather@1"
+async function weatherRules() {
+	const { defineRuleset, getRuleset } = await import("@serene-pub/sdk")
+	await import("@serene-pub/core-catalog")
+	if (!getRuleset(WEATHER_RULES))
+		defineRuleset(WEATHER_RULES, {
+			name: { en: "Weather" },
+			attributes: [{ id: "weather", slot: "core:slot/weather@1", borrowed: true, carriedBy: ["world"] }]
+		})
+	return WEATHER_RULES
+}
+
+/** The genre a test whose run moves the weather plays: Story, on {@link weatherRules}. */
 async function weatherWhenGenre() {
 	const { storyGenre } = await import("@serene-pub/core-catalog")
 	return storyGenre
 }
 
-/** A chat session with an owner, a guest, and a cast character Tom nobody portrays. */
-async function sessionWithTom(tag: string, genreId: string = CHAT) {
+/**
+ * A session with an owner, a guest, and a cast character Tom nobody
+ * portrays — playing `rules` when named.
+ */
+async function sessionWithTom(tag: string, genreId: string = CHAT, rules?: string) {
 	const schema = await import("$lib/server/db/schema")
 	const owner = await makeUser(`${tag}-owner`)
 	const guest = await makeUser(`${tag}-guest`)
 	const [session] = await testDb
 		.insert(schema.sessions)
-		.values({ userId: owner.id, isGroup: false, genreId })
+		.values({ userId: owner.id, isGroup: false, genreId, ...(rules ? { primaryRuleset: rules } : {}) })
 		.returning()
 	await testDb
 		.insert(schema.sessionGuests)
@@ -347,7 +363,25 @@ async function publishAskAndAnswer(tag: string, tom: number) {
 	const batch = new Set([askId, answerId])
 	await saveDocument(testDb as any, ask, { publish: true, batch })
 	await saveDocument(testDb as any, answer, { publish: true, batch })
+	await registerCompanions(ask, answer)
 	return { askId, answerId, askFn, answerFn }
+}
+
+/**
+ * 🚧 Story's defaults register a companion action (PLAN-layering D7, R33 —
+ * the companion rule, written out): a core-namespace action of the test's
+ * own is on in Story sessions because the genre's defaults say so.
+ */
+async function registerCompanions(...docs: SpecDocument[]) {
+	const { actionsOf } = await import("@serene-pub/sdk")
+	const { actionRegistration, rowOfDecl } = await import("$lib/server/pipelines/registrations/rows")
+	const { upsertRow } = await import("$lib/server/pipelines/registrations/write")
+	for (const doc of docs)
+		for (const a of actionsOf({ id: doc.id, contributes: doc.contributes }))
+			await upsertRow(
+				testDb as any,
+				rowOfDecl(actionRegistration(`${doc.id}#${a.key}`), { kind: "genre", genreId: "core:genre/story" }, "admin")
+			)
 }
 
 async function runsOf(sessionId: number) {
@@ -568,6 +602,7 @@ async function publishParkable() {
 			.build()
 	)
 	await saveDocument(testDb as any, doc, { publish: true })
+	await registerCompanions(doc)
 }
 
 /** Review ON for one spec's `save` node, as the session's own override. */
@@ -780,7 +815,7 @@ describe("W-A3 · a reply that moves state announces it after the list", () => {
 		)
 		const { sessionsFireTurnHandler } = await import("./sessions")
 		const weather = await weatherWhenGenre()
-		const { owner, guest, session, tom } = await sessionWithTom("state-reply", weather.id)
+		const { owner, guest, session, tom } = await sessionWithTom("state-reply", weather.id, await weatherRules())
 
 		// A reply spec of the test's own: it moves state (a proposal for the
 		// world's weather), then writes Tom's line — bound for this session.
@@ -816,21 +851,19 @@ describe("W-A3 · a reply that moves state announces it after the list", () => {
 				.build()
 		)
 		await saveDocument(testDb as any, doc, { publish: true })
-		// The session's own binding for the primary turn, as a row: the
-		// bucket `resolveSubjectVerdict` checks it against is the inlet lock
-		// plus a message write, which this spec has.
-		const [specRow] = await testDb
-			.select({ id: schema.pipelineSpecs.id })
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, specId))
-		await testDb.insert(schema.pipelineBindings).values({
-			scopeKind: "session",
-			scopeId: session.id,
-			genreId: weather.id,
-			subject: "core:event/message-respond@1",
-			specId: specRow!.id,
-			updatedBy: owner.id
-		})
+		// 🚧 The session's own registration for the primary turn (D7): the
+		// genre's reply dropped, this spec registered in its place.
+		{
+			const { eventRegistration, rowOfDecl, rowOfDrop } = await import(
+				"$lib/server/pipelines/registrations/rows"
+			)
+			const { upsertRow } = await import("$lib/server/pipelines/registrations/write")
+			const scope = { kind: "session" as const, sessionId: session.id }
+			const RESPOND = "core:event/message-respond@1"
+			await upsertRow(testDb as any, rowOfDrop(eventRegistration(RESPOND, "core:spec/story-respond").key, scope, "owner"))
+			await upsertRow(testDb as any, rowOfDecl(eventRegistration(RESPOND, specId), scope, "owner"))
+			void schema
+		}
 
 		const { io, emitted } = recordingIo([owner.id, guest.id], session.id)
 		const ownEmit = (event: string, payload: any) =>
@@ -890,7 +923,7 @@ describe("pass 3 · the trigger road announces state whatever the outcome", () =
 		)
 		const { sessionsFireActionHandler } = await import("./sessions")
 		const weather = await weatherWhenGenre()
-		const { owner, guest, session } = await sessionWithTom("state-halt", weather.id)
+		const { owner, guest, session } = await sessionWithTom("state-halt", weather.id, await weatherRules())
 
 		// Moves the weather, writes a line, then reads a form's answer a
 		// composer press never carries — the run halts at its last node
@@ -950,6 +983,7 @@ describe("pass 3 · the trigger road announces state whatever the outcome", () =
 				.build()
 		)
 		await saveDocument(testDb as any, doc, { publish: true })
+		await registerCompanions(doc)
 
 		const { io, emitted } = recordingIo([owner.id, guest.id], session.id)
 		const ownEmit = (event: string, payload: any) =>

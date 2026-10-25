@@ -295,7 +295,7 @@ describe("the Cast member page's tabs", () => {
 		expect(lore.querySelector('[name="cleOff"]')).toBeNull()
 		;(
 			lore.querySelector(
-				'button[aria-label="More options for this lore"]'
+				'button[aria-label="More actions for this lore"]'
 			) as HTMLButtonElement
 		).click()
 		await settle()

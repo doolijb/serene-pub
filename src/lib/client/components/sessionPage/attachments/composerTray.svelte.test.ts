@@ -151,6 +151,30 @@ describe("createComposerTray", () => {
 		tray.destroy()
 	})
 
+	// 🚧 O11 (2026-10-21): a ready sound plays in the tray before it is sent.
+	test("a ready audio item carries its file for the tray's player; a picture does not", () => {
+		const t = fakeTransport()
+		const tray = createComposerTray(t, { sessionId: () => 7 })
+		tray.load()
+		t.push("attachments:list", {
+			sessionId: 7,
+			tray: [
+				view(),
+				view({
+					id: "t-2",
+					position: 2,
+					filename: "note.mp3",
+					attachmentKind: "audio",
+					mime: "audio/mpeg",
+					file: { id: 9, uuid: "u-9", width: null, height: null, url: "/media/u-9", thumbUrl: "/media/u-9?v=thumb" }
+				} as any)
+			]
+		})
+		expect(tray.view[1]).toMatchObject({ kind: "audio", thumbSrc: null, previewSrc: "/media/u-9" })
+		expect(tray.view[0]).not.toHaveProperty("previewSrc")
+		tray.destroy()
+	})
+
 	test("removing a tile mid-upload stops its chunks and removes the server's item", async () => {
 		const t = fakeTransport()
 		const tray = createComposerTray(t, { sessionId: () => 7 })
@@ -183,7 +207,9 @@ describe("readersV1", () => {
 		kinds: {
 			image: { allowed: false, reason: "No model in this reply can read images." },
 			text: { allowed: true },
-			pdf: { allowed: false, reason: "No model in this reply can read PDFs." }
+			pdf: { allowed: false, reason: "No model in this reply can read PDFs." },
+			audio: { allowed: false, reason: "No model in this reply can read audio files." },
+			video: { allowed: false, reason: "No model in this reply can read videos." }
 		},
 		calls: [
 			{
@@ -195,8 +221,11 @@ describe("readersV1", () => {
 				...(connection ? { connection } : {})
 			}
 		],
-		accepts: { image: [], text: ["text/plain", ".txt", ".md"], pdf: [] },
-		limits: { filesPerMessage: 10, bytesPerKind: { image: 20 * MiB, text: MiB, pdf: 32 * MiB } }
+		accepts: { image: [], text: ["text/plain", ".txt", ".md"], pdf: [], audio: [], video: [] },
+		limits: {
+			filesPerMessage: 10,
+			bytesPerKind: { image: 20 * MiB, text: MiB, pdf: 32 * MiB, audio: 25 * MiB, video: 50 * MiB }
+		}
 	})
 
 	test("the picker's accept is the allowed kinds' formats; caps ride along", () => {

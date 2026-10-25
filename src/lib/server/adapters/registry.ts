@@ -32,6 +32,7 @@ import type { AdapterExports } from "$lib/server/connectionAdapters/BaseConnecti
 import type { ImageAdapterExports } from "$lib/server/imageAdapters/BaseImageAdapter"
 import type { EmbeddingAdapterExports } from "$lib/server/embeddingAdapters/BaseEmbeddingAdapter"
 import type { NerAdapterExports } from "$lib/server/nerAdapters/BaseNerAdapter"
+import type { TranscriptionAdapterExports } from "$lib/server/transcriptionAdapters/BaseTranscriptionAdapter"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 /** The modules that serve one connection type. At least one is always present. */
@@ -44,6 +45,11 @@ export interface AdapterModules {
 	embedding?: () => Promise<EmbeddingAdapterExports>
 	/** Loads the NER-family module — the one that can implement `extractEntities`. */
 	ner?: () => Promise<NerAdapterExports>
+	/**
+	 * 🚧 Loads the transcription-family module — the one that can implement
+	 * `transcribeAudio` (O9).
+	 */
+	transcription?: () => Promise<TranscriptionAdapterExports>
 }
 
 export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
@@ -109,7 +115,14 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 				import("../imageAdapters/GeminiImageAdapter")
 			])
 			return gemini.withGeminiImages(openai.default)
-		}
+		},
+		// 🚧 `/audio/transcriptions` on the same service (O9): OpenAI's
+		// whisper and transcribe models, and the compatible servers that
+		// answer the route. Whether a service hears is its `audio->text`
+		// switch; which model hears is the model's reads (O3).
+		transcription: async () =>
+			(await import("../transcriptionAdapters/OpenAITranscriptionAdapter"))
+				.default
 	},
 
 	[CONNECTION_TYPE.LLAMACPP]: {

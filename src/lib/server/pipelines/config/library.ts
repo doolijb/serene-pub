@@ -276,6 +276,8 @@ export interface LibraryPrompt {
 	origin?: string
 	name: string
 	isImmutable: boolean
+	/** 🚧 R54: hidden from session owners' prompt choice — an administrator's switch. */
+	hidden: boolean
 	fields: Record<string, string>
 	/**
 	 * Text for fields the slot no longer declares.
@@ -383,10 +385,9 @@ export interface LibraryView {
  * library shows every row, so a per-row query is a query per row, and the whole
  * point of this page is that it loads in one round trip.
  *
- * Config values count as well as overrides. A value on a shipped config is
- * still a pipeline selecting the row — it is *why* deleting core's rows is
- * refused — and a page that only counted overrides would tell an admin a row
- * was free and then watch the server refuse them.
+ * Registration and instance values count as well as overrides (R38, R50) —
+ * the same references the delete guards refuse on, so a page never tells an
+ * admin a row is free and then watches the server refuse them.
  */
 async function usageIndex(
 	db: Db,
@@ -407,15 +408,23 @@ async function usageIndex(
 		out.set(value, set)
 	}
 
-	const configs = await db.select().from(schema.pipelineConfigs)
-	const specOfConfig = new Map<number, number>(
-		(configs as any[]).map((c) => [c.id, c.specId])
-	)
-	for (const v of (await db
-		.select()
-		.from(schema.pipelineConfigValues)) as any[])
-		if (slots.has(v.slot))
-			note(v.value, specOfConfig.get(v.configId) ?? null)
+	// 🚧 R38, R50 (0110): configurations are retired — a row is selected by a
+	// registration's values (the genre's defaults, a preset, a session) or a
+	// pipeline's instance values, each naming its pipeline.
+	{
+		const { registrationValueRefs } = await import("$lib/server/pipelines/registrations/values")
+		const { baseKeyOf } = await import("$lib/server/pipelines/registrations/rows")
+		const specRows = (await db.select({ id: schema.pipelineSpecs.id, slug: schema.pipelineSpecs.slug }).from(schema.pipelineSpecs)) as Array<{ id: number; slug: string }>
+		const specIdOfSlug = new Map(specRows.map((r) => [r.slug, r.id]))
+		const regRows = (await db.select({ id: schema.registrations.id, key: schema.registrations.key, specSlug: schema.registrations.specSlug }).from(schema.registrations)) as Array<{ id: number; key: string; specSlug: string | null }>
+		const slugOfKey = new Map<string, string>()
+		for (const r of regRows) if (r.specSlug && !slugOfKey.has(r.key)) slugOfKey.set(r.key, r.specSlug)
+		const slugOfRow = new Map(regRows.map((r) => [r.id, r.specSlug ?? slugOfKey.get(baseKeyOf(r.key)) ?? null]))
+		for (const ref of await registrationValueRefs(db, [...slots])) {
+			const slug = ref.scopeKind === "instance" ? ref.scopeRef : slugOfRow.get(ref.rowId)
+			note(ref.value, slug ? (specIdOfSlug.get(slug) ?? null) : null)
+		}
+	}
 
 	for (const o of (await db
 		.select()
@@ -577,6 +586,7 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 				: {}),
 			name: p.name,
 			isImmutable: !!p.isImmutable,
+			hidden: p.hidden === true,
 			fields: (p.fields ?? {}) as Record<string, string>,
 			archived: (p.archivedFields ?? {}) as Record<string, string>,
 			usedBy: [...(promptUse.get(p.id) ?? [])].sort()

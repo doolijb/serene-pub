@@ -17,9 +17,13 @@
  */
 import { and, eq, inArray, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { MEDIA_PART_TYPES } from "@serene-pub/sdk"
 
-/** The part types that refer to a file by `data.assetId`. */
-export const ATTACHMENT_PART_TYPES = ["core:image", "core:file"] as const
+/**
+ * The part types that refer to a file by `data.assetId` — the SDK's
+ * `MEDIA_PART_TYPES` (🚧 `core:audio` / `core:video` since O5, 2026-10-21).
+ */
+export const ATTACHMENT_PART_TYPES = MEDIA_PART_TYPES
 
 const assetIdIs = (fileId: number) =>
 	sql`(${schema.messageParts.data}->>'assetId') = ${String(fileId)}`

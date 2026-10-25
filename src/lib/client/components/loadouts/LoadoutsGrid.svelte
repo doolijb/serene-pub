@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * The **loadouts grid** (I12; DESIGN-image-generation §14.1): one tile per
 	 * loadout, grouped by output kind as Admin › Defaults groups, the default
@@ -24,13 +25,13 @@
 		{@const GroupIcon = (Icons as any)[group.icon] ?? Icons.Boxes}
 		<section aria-label={group.label}>
 			<header
-				class="border-surface-200-700 mb-2 flex items-center gap-2 border-b pb-1"
+				class="border-surface-200-800 mb-2 flex items-center gap-2 border-b pb-1"
 			>
 				<GroupIcon size={14} class="shrink-0" aria-hidden="true" />
 				<h3 class="min-w-0 flex-1 truncate text-xs font-semibold">
 					{group.label}
 				</h3>
-				<span class="text-surface-600-400 shrink-0 text-[11px]">
+				<span class="text-surface-600-400 shrink-0 text-meta">
 					{group.tiles.length}
 				</span>
 			</header>
@@ -55,7 +56,7 @@
 									aria-hidden="true"
 								/>
 							{/if}
-							<span class="min-w-0 truncate text-[13px] font-medium">
+							<span class="min-w-0 truncate text-chip font-medium">
 								{tile.title}
 							</span>
 						</span>
@@ -68,7 +69,7 @@
 						</span>
 						{#if tile.sampling}
 							<span
-								class="text-surface-600-400 flex min-w-0 items-center gap-1 text-[11px]"
+								class="text-surface-600-400 flex min-w-0 items-center gap-1 text-meta"
 							>
 								<Icons.SlidersHorizontal
 									size={10}
@@ -80,22 +81,20 @@
 						{/if}
 						{#if tile.price}
 							<span
-								class="text-surface-600-400 truncate text-[11px]"
+								class="text-surface-600-400 truncate text-meta"
 								data-testid="loadout-tile-price"
 							>
 								{tile.price}
 							</span>
 						{/if}
 						{#if tile.chip}
-							<span
-								class="bg-surface-200-800 text-surface-700-300 max-w-full self-start truncate rounded-full px-1.5 py-0.5 text-[10px]"
-							>
+							<Badge size="sm" class="text-surface-700-300 max-w-full self-start truncate">
 								{tile.chip}
-							</span>
+							</Badge>
 						{/if}
 						{#if tile.consequence}
 							<span
-								class="text-warning-700-300 mt-auto line-clamp-2 text-[11px]"
+								class="text-warning-700-300 mt-auto line-clamp-2 text-meta"
 							>
 								{tile.consequence}
 							</span>

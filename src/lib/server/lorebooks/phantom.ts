@@ -76,8 +76,7 @@ export async function phantomOf(
 
 /**
  * The session's own notes, made on first ask (§26): named after the session,
- * owned by its owner, taking its ruleset, `referenced` (notes never
- * materialise a compendium), and overlaying its attached lorebook when it
+ * owned by its owner, taking its ruleset, and overlaying its attached lorebook when it
  * has one. An existing row's `overlay_of` follows the session's book, so a
  * session that attaches or drops a book reads its notes the right way round.
  *
@@ -109,6 +108,20 @@ export async function phantomLorebookFor(
 		// ruleset (A19): a session that changes ruleset otherwise keeps notes
 		// stamped with the one it left, and their pieces read as a stranger's.
 		const rulesetVersion = session.rulesetVersion ?? null
+		if (existing.overlayOf !== overlayOf) {
+			// The book lock (PLAN-lorebook-kinds §A) keeps a session from
+			// changing books once its notes hold anything; notes moved with
+			// content in them were written against another book.
+			const [held] = await db
+				.select({ id: schema.lorebookEntries.id })
+				.from(schema.lorebookEntries)
+				.where(eq(schema.lorebookEntries.lorebookId, existing.id))
+				.limit(1)
+			if (held)
+				console.warn(
+					`[phantom] session ${sessionId}'s notes moved from book ${existing.overlayOf} to ${overlayOf} with entries in them`
+				)
+		}
 		if (
 			existing.overlayOf !== overlayOf ||
 			existing.primaryRuleset !== session.primaryRuleset ||
@@ -132,8 +145,7 @@ export async function phantomLorebookFor(
 			sessionId,
 			overlayOf,
 			primaryRuleset: session.primaryRuleset,
-			rulesetVersion: session.rulesetVersion,
-			compendiumMode: "referenced"
+			rulesetVersion: session.rulesetVersion
 		})
 		.onConflictDoNothing()
 	const made = await phantomOf(db, sessionId)
@@ -359,6 +371,22 @@ export async function retractPhantomEntriesAnchoredTo(
 	sessionId: number,
 	messageIds: readonly number[]
 ): Promise<number[]> {
+	return (await takePhantomEntriesAnchoredTo(tx, sessionId, messageIds)).map((r) => r.id)
+}
+
+/**
+ * 🚧 The same retraction, handing back the rows as they were (RF fix 4) — so
+ * a swipe whose replacement run fails can put them back
+ * (`restoreRetractedState`). Called for every swipe, regenerate and delete
+ * (`retractLoreAnchoredTo`), after the lore imprints: a row a run filed with
+ * an imprint is already taken back by it, and this takes what carries only
+ * its anchor.
+ */
+export async function takePhantomEntriesAnchoredTo(
+	tx: Db,
+	sessionId: number,
+	messageIds: readonly number[]
+): Promise<(typeof schema.lorebookEntries.$inferSelect)[]> {
 	if (!messageIds.length) return []
 	const [phantom] = await tx
 		.select({ id: schema.lorebooks.id })
@@ -366,7 +394,7 @@ export async function retractPhantomEntriesAnchoredTo(
 		.where(eq(schema.lorebooks.sessionId, sessionId))
 		.limit(1)
 	if (!phantom) return []
-	const gone = await tx
+	return tx
 		.delete(schema.lorebookEntries)
 		.where(
 			and(
@@ -374,8 +402,7 @@ export async function retractPhantomEntriesAnchoredTo(
 				inArray(schema.lorebookEntries.sourceMessageId, [...messageIds])
 			)
 		)
-		.returning({ id: schema.lorebookEntries.id })
-	return gone.map((r) => r.id)
+		.returning()
 }
 
 /**
@@ -411,7 +438,6 @@ export async function copyPhantomToBranch(
 			overlayOf: input.created.lorebookId ?? null,
 			primaryRuleset: input.created.primaryRuleset,
 			rulesetVersion: input.created.rulesetVersion,
-			compendiumMode: "referenced",
 			storyCalendar: parent.storyCalendar,
 			storyClockYear: parent.storyClockYear,
 			storyClockMonth: parent.storyClockMonth,
@@ -487,8 +513,7 @@ export async function createLorebookFromPhantom(
 			name: schema.sessions.name,
 			lorebookId: schema.sessions.lorebookId,
 			primaryRuleset: schema.sessions.primaryRuleset,
-			rulesetVersion: schema.sessions.rulesetVersion,
-			compendiumMode: schema.sessions.compendiumMode
+			rulesetVersion: schema.sessions.rulesetVersion
 		})
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, input.sessionId))
@@ -504,15 +529,14 @@ export async function createLorebookFromPhantom(
 		await tx.execute(sql`select pg_advisory_xact_lock(${phantom.id})`)
 		await tx
 			.update(schema.lorebooks)
-			// The session's ruleset and compendium mode carry over: the
-			// notes were always `referenced`, the book is what the session is.
+			// The session's ruleset carries over: the book is what the
+			// session is.
 			.set({
 				name,
 				sessionId: null,
 				overlayOf: null,
 				primaryRuleset: session.primaryRuleset,
-				rulesetVersion: session.rulesetVersion,
-				compendiumMode: session.compendiumMode
+				rulesetVersion: session.rulesetVersion
 			})
 			.where(eq(schema.lorebooks.id, phantom.id))
 		await tx

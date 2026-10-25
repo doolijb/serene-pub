@@ -86,7 +86,7 @@
 
 <div class="flex h-full min-h-0 flex-col gap-3">
 	{#if error}
-		<p class="text-error-700-300 text-sm" role="alert">{error}</p>
+		<p class="text-error-600-400 text-sm" role="alert">{error}</p>
 	{:else if !core}
 		<p class="text-surface-600-400 flex items-center gap-2 text-sm" role="status">
 			<Icons.LoaderCircle size={14} class="animate-spin" /> Reading core's source…
@@ -114,6 +114,6 @@
 		{#if path && list.find((f) => f.path === path)?.status === "same"}
 			<p class="text-surface-600-400 text-xs">No difference in this file.</p>
 		{/if}
-		<div class="border-surface-200-800 min-h-64 flex-1 overflow-auto rounded-[10px] border" bind:this={host}></div>
+		<div class="border-surface-200-800 min-h-64 flex-1 overflow-auto rounded-base border" bind:this={host}></div>
 	{/if}
 </div>

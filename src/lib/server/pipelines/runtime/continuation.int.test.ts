@@ -182,38 +182,14 @@ beforeAll(async () => {
 			d.control === "context-template-ref" &&
 			d.nodeDefinitionId === CONTEXT_TEMPLATE_NODE_TYPE
 	)!
-	const { resolveSelectedConfig, duplicateConfig, selectConfig } =
-		await import("$lib/server/pipelines/config/named")
-	const shipped = await resolveSelectedConfig(
+	// The reply's instance-wide value: the genre's defaults (PLAN-layering D5).
+	const { setPipelineValue } = await import("$lib/server/utils/testDb")
+	await setPipelineValue(
 		db,
-		storyRespondSpec.id,
 		STORY_RESPOND_SPEC_ID,
-		{}
+		{ nodeKey: decl.nodeKey, slot: decl.slot, path: decl.path },
+		template.id
 	)
-	const copy = await duplicateConfig(
-		db,
-		shipped!.configId,
-		"Continue host"
-	)
-	await selectConfig(db, storyRespondSpec.id, "pub", 0, copy.id)
-	await db
-		.insert(schema.pipelineConfigValues)
-		.values({
-			configId: copy.id,
-			nodeKey: decl.nodeKey,
-			slot: decl.slot,
-			path: decl.path,
-			value: template.id
-		})
-		.onConflictDoUpdate({
-			target: [
-				schema.pipelineConfigValues.configId,
-				schema.pipelineConfigValues.nodeKey,
-				schema.pipelineConfigValues.slot,
-				schema.pipelineConfigValues.path
-			],
-			set: { value: template.id }
-		})
 }, 60_000)
 
 /** The turn an extend runs: a full run, carrying the partial as a prefill. */

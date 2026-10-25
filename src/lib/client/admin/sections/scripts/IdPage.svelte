@@ -1,4 +1,5 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
 	/**
 	 * Admin › Scripts › one script (18 §4d, §6a): the change form (note 37,
 	 * Django admin). Everything is a draft — name, enabled, the declared I/O
@@ -272,7 +273,7 @@
 		{#snippet headerExtra()}
 			{#if type}
 				<div class="flex flex-wrap items-center gap-1.5 text-xs">
-					<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+					<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
 						{type.name}
 					</span>
 					<span
@@ -282,7 +283,7 @@
 						{type.blastRadius}
 					</span>
 					{#if readOnly}
-						<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+						<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
 							Built-in
 						</span>
 					{/if}
@@ -343,7 +344,7 @@
 							<button
 								type="button"
 								class="chip min-h-8 rounded-full px-3 text-xs {draft.varsIn.includes(v)
-									? 'preset-tonal-primary'
+									? 'preset-pressed'
 									: 'preset-tonal-surface'}"
 								aria-pressed={draft.varsIn.includes(v)}
 								disabled={readOnly}
@@ -362,7 +363,7 @@
 								<button
 									type="button"
 									class="chip min-h-8 rounded-full px-3 text-xs {draft.varsOut.includes(v)
-										? 'preset-tonal-primary'
+										? 'preset-pressed'
 										: 'preset-tonal-surface'}"
 									aria-pressed={draft.varsOut.includes(v)}
 									disabled={readOnly}
@@ -374,9 +375,9 @@
 						</div>
 					</div>
 				{:else}
-					<p class="text-surface-600-400 text-xs">
+					<FieldHelp>
 						A verdict type rewrites nothing — its return is consumed by the hook.
-					</p>
+					</FieldHelp>
 				{/if}
 			</AdminFieldset>
 		{/if}

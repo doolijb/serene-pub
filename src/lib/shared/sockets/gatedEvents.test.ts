@@ -71,6 +71,8 @@ const MIGRATED_FAMILIES = [
 	"bindingCheck:",
 	// slices 6+7 (2026-09-15): session-adjacent and admin/config.
 	"scenes:",
+	// 🚧 Admin › Rulesets (PLAN-ruleset-editor §5): client/admin/sections/rulesets/*.
+	"rulesets:",
 	"sessionGenres:",
 	"sessionPresets:",
 	"narrativeGraph:",
@@ -83,6 +85,10 @@ const MIGRATED_FAMILIES = [
 	// born after the sweep; its consumers (the admin components pages, and the
 	// session page for `components:changed`) are on the registry by construction.
 	"components:",
+	// 🚧 2026-10-21: starter lorebooks arrive gated — the family is born after the
+	// sweep; its consumers (New lorebook, the session start form, Admin ›
+	// Starter lorebooks — lane K2) declare interest by construction.
+	"starterKits:",
 	"users:",
 	"userSettings:",
 	"systemSettings:",

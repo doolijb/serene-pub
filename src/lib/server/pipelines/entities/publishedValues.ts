@@ -9,13 +9,37 @@
  * ```
  * {
  *   session: { generating: boolean, fields: <genreFieldsFor — stored, pinned, default>,
- *              openForm: { action: string | null } | null },
+ *              openForm: { action: string | null } | null,
+ *              turn, round, lastSpeaker, turnsBy },
  *   state:   <ResolvedState — world · cast · slots · version, from stateFor>,
  *   sprites: { byId: { <characterId>: { set, label } }, <castKey>: { set, label } },
  *   backdrop: { set: boolean, mediaId: number | null },
+ *   annex:   { <annex owner, dots → _>: { <key>: value } },
+ *   rules:   { invokable: { <function id, dots → _>: true } },
  *   item?:   { id, isNewest, hidden, generating, role, mine, hasSwipes, greeting }
  * }
  * ```
+ *
+ * 🚧 `rules.invokable` (PLAN-genres-seams S3, 2026-10-23) is each
+ * **invokable** function the session's ruleset uses — what its **rules
+ * actions** offer at the composer — by the function's id
+ * (`rulesInvokableSegment`): what a registration's `when` reads as
+ * `s.rules.invokable(restFunction)`, so a genre's own Rest steps aside when
+ * the rules offer one (Story's, the Dungeon Crawler's). Absent for a function
+ * the rules do not use, so `not(isTrue(…))` holds there.
+ *
+ * 🚧 `annex` (PLAN-layering D6, lane 2's `sessionOf`) is the session's annex
+ * by owner, each owner's id with its dots written `_` (`annexOwnerSegment`) —
+ * the path `annex.<owner>.<key>` a typed condition stores. Server-side only,
+ * like every other half of this document: a condition is judged here, never
+ * shipped. Never the revision points (`annexWithoutPoints`).
+ *
+ * 🚧 `session.turn` · `round` · `lastSpeaker` · `turnsBy` (R51, R52; lane F1)
+ * are the story lane's turn tally (`routines/turnTally.ts`): turns taken so
+ * far, the round in progress (from 1), who took the last turn (a participant
+ * reference, or `narrator`; null before the first) and each speaker's turns
+ * this round — what a registration's `when`, an action's enabled-when and a
+ * script read as `sessionOf(genre).turn` and so on.
  *
  * `session.openForm` is the main channel's open form (`openFormOf`: the
  * newest unanswered, un-overtaken question) with the action that answers it,
@@ -65,6 +89,9 @@ import { itemValuesOf, type ItemValues } from "$lib/shared/actions/itemValues"
 import { publishedBackdrop, type PublishedBackdrop } from "$lib/server/sessions/backdrop"
 import * as spriteChoices from "$lib/server/sprites/choices"
 import * as sharedSprites from "$lib/shared/sprites"
+import { annexOwnerSegment } from "@serene-pub/sdk"
+import { annexWithoutPoints } from "$lib/server/sessions/annexRevisionPoints"
+import { publishedTurns } from "$lib/server/pipelines/routines/turnTally"
 
 export {
 	itemValuesOf,
@@ -78,13 +105,91 @@ export interface PublishedValues {
 		fields: Record<string, unknown>
 		/** The open form on the main channel and the action it is answered by — see the module note. */
 		openForm: { action: string | null } | null
+		/** 🚧 Turns taken on the story's lane (R51) — see the module note. */
+		turn: number
+		/** 🚧 The round in progress on the story's lane, from 1 (R52). */
+		round: number
+		/** 🚧 Who took the last turn on the story's lane: a participant reference, `narrator`, or null before any. */
+		lastSpeaker: string | null
+		/** 🚧 Each speaker's turns this round. */
+		turnsBy: Record<string, number>
 	}
 	state: ResolvedState
 	/** Each cast member's current sprite — see the module comment. */
 	sprites: PublishedSprites
 	/** The session's backdrop — see the module comment. */
 	backdrop: PublishedBackdrop
+	/** 🚧 The session's annex by owner (dots → `_`) — see the module comment. */
+	annex: Record<string, Record<string, unknown>>
+	/** 🚧 What the session's rules offer — see the module comment (S3). */
+	rules: PublishedRules
 	item?: ItemValues
+}
+
+/** 🚧 The session's rules, as a condition reads them (S3): each invokable function they use, by its id's segment. */
+export interface PublishedRules {
+	invokable: Record<string, true>
+}
+
+/**
+ * 🚧 The invokable functions a ruleset uses, published (S3): the same reading
+ * the rules actions are made from (`rulesActionsOf` — a use whose function
+ * header says `invokable`), keyed by the function's id
+ * (`rulesInvokableSegment`). Empty for no ruleset.
+ */
+export async function publishedRulesOf(ruleset: ({ id: string } & object) | undefined): Promise<PublishedRules> {
+	const invokable: Record<string, true> = {}
+	if (!ruleset) return { invokable }
+	const { functionUsesOf } = await import("$lib/server/rulesets/functionRun")
+	const { rulesInvokableSegment } = await import("@serene-pub/sdk")
+	for (const use of functionUsesOf(ruleset))
+		if (use.decl?.invokable && typeof use.ref?.ref === "string") invokable[rulesInvokableSegment(use.ref.ref)] = true
+	return { invokable }
+}
+
+/** 🚧 The session's primary ruleset's invokable functions (one indexed read). */
+async function rulesOf(db: Db, sessionId: number): Promise<PublishedRules> {
+	const [row] = await db
+		.select({ primaryRuleset: schema.sessions.primaryRuleset })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	if (!row?.primaryRuleset) return { invokable: {} }
+	const { getRuleset } = await import("@serene-pub/sdk")
+	return publishedRulesOf(getRuleset(row.primaryRuleset) as ({ id: string } & object) | undefined)
+}
+
+/**
+ * 🚧 The annex as a condition reads it (lane 2): `{ <owner with dots → _>:
+ * { <key>: value } }`, revision points left out. An owner's document that is
+ * not an object is not published.
+ */
+export function publishedAnnex(annex: unknown): Record<string, Record<string, unknown>> {
+	const out: Record<string, Record<string, unknown>> = {}
+	for (const [owner, doc] of Object.entries(annexWithoutPoints(annex)))
+		if (doc && typeof doc === "object" && !Array.isArray(doc))
+			out[annexOwnerSegment(owner)] = doc as Record<string, unknown>
+	return out
+}
+
+/** 🚧 The story lane's turn tally, published (R51, R52; one indexed read). */
+async function turnsOf(db: Db, sessionId: number) {
+	const [row] = await db
+		.select({ metadata: schema.sessions.metadata })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	return publishedTurns(row?.metadata ?? null)
+}
+
+/** The session row's annex column, published (one indexed read). */
+async function annexOf(db: Db, sessionId: number): Promise<Record<string, Record<string, unknown>>> {
+	const [row] = await db
+		.select({ annex: schema.sessions.annex })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	return publishedAnnex(row?.annex)
 }
 
 export type PublishedSprites = {
@@ -176,6 +281,9 @@ export async function sessionGenerating(
 				(h) =>
 					h.sessionId === sessionId &&
 					h.kind !== "maintenance" &&
+					// 🚧 A routine never makes the session busy (R13): a
+					// person's work goes ahead of it, never behind it.
+					h.kind !== "routine" &&
 					!own.has(h.runId)
 			)
 	)
@@ -205,7 +313,9 @@ export async function sessionGenerating(
 export async function settleBackgroundRuns(db: Db, sessionId: number, ms = 8000): Promise<void> {
 	const end = Date.now() + ms
 	for (;;) {
-		const busy = runRegistry.active().filter((h) => h.sessionId === sessionId && h.kind !== "maintenance")
+		const busy = runRegistry
+			.active()
+			.filter((h) => h.sessionId === sessionId && h.kind !== "maintenance" && h.kind !== "routine")
 		if (!busy.length || busy.some((h) => h.kind === "reply")) return
 		const [row] = await db
 			.select({ id: schema.sessionMessages.id })
@@ -246,16 +356,19 @@ export async function publishedValues(
 	sessionId: number,
 	opts: { lineage?: RunLineage; starting?: boolean } = {}
 ): Promise<PublishedValues> {
-	const [generating, fields, state, open, backdrop] = await Promise.all([
+	const [generating, fields, state, open, backdrop, annex, turns, rules] = await Promise.all([
 		sessionGenerating(db, sessionId, opts),
 		genreFieldsFor(db, sessionId),
 		stateFor(db, sessionId),
 		openFormOf(db, sessionId),
-		publishedBackdrop(db, sessionId)
+		publishedBackdrop(db, sessionId),
+		annexOf(db, sessionId),
+		turnsOf(db, sessionId),
+		rulesOf(db, sessionId)
 	])
 	const sprites = await publishedSprites(db, sessionId, state)
 	const openForm = open ? { action: open.action } : null
-	return { session: { generating, fields, openForm }, state, sprites, backdrop }
+	return { session: { generating, fields, openForm, ...turns }, state, sprites, backdrop, annex, rules }
 }
 
 /**

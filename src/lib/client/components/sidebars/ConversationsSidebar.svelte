@@ -163,10 +163,14 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col" use:vm.observe data-view="conversations">
+	<!-- `listFills` (L7, 2026-10-24): nothing open, the list sits centred
+	     at its own 560px instead of beside an empty pane. -->
 	<PanelSplit
 		mode={vm.mode}
 		listWidth="380px"
 		hasDetail={conversationId !== null || personId !== null}
+		listFills
+		fillWidth="list"
 		emptyMessage="Pick a conversation, or start one with New conversation."
 	>
 		{#snippet toolbar()}
@@ -284,7 +288,10 @@
 		{#snippet content()}
 			<span class="flex shrink-0" title={others.map(personName).join(", ")}>
 				<AvatarStack
-					members={others.map((m) => ({ name: personName(m) }))}
+					members={others.map((m) => ({
+						name: personName(m),
+						avatarMediaId: m.avatarMediaId
+					}))}
 					fallback="initial"
 					size="md"
 					max={3}
@@ -294,7 +301,7 @@
 			<div class="flex min-w-0 flex-1 flex-col gap-0.5">
 				<div class="flex min-w-0 items-center gap-1.5">
 					<span
-						class="truncate text-left text-[15px] {c.unread > 0
+						class="truncate text-left text-lead {c.unread > 0
 							? 'font-semibold'
 							: 'font-medium'}"
 					>

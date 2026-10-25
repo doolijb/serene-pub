@@ -96,7 +96,7 @@
 		{/if}
 		{#if item.category && item.source !== "charavault"}
 			<span
-				class="bg-surface-950/70 rounded-full px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm"
+				class="bg-surface-950/70 rounded-full px-2 py-0.5 text-meta font-medium text-white backdrop-blur-sm"
 			>
 				{item.category}
 			</span>

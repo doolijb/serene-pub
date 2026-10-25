@@ -3,23 +3,23 @@
 
 	/** A rounded square's radius at each step — the card's identity shape. */
 	const SQUARE_RADIUS: Readonly<Record<AvatarSize, string>> = {
-		xs: "rounded-[6px]",
-		sm: "rounded-[8px]",
-		md: "rounded-[9px]",
-		lg: "rounded-[12px]",
+		xs: "rounded-md",
+		sm: "rounded-lg",
+		md: "rounded-base",
+		lg: "rounded-container",
 		xl: "rounded-[14px]"
 	}
 
 	const DIMS: Readonly<Record<AvatarSize, string>> = {
 		xs: "size-6 min-w-6 min-h-6",
 		sm: "size-8 min-w-8 min-h-8",
-		md: "size-10 min-w-10 min-h-10",
+		md: "size-11 min-w-11 min-h-11",
 		lg: "size-14 min-w-14 min-h-14",
 		xl: "size-[72px] min-w-[72px] min-h-[72px]"
 	}
 
 	const LETTER: Readonly<Record<AvatarSize, string>> = {
-		xs: "text-[10px]",
+		xs: "text-meta",
 		sm: "text-xs",
 		md: "text-sm",
 		lg: "text-lg",
@@ -60,8 +60,9 @@
 		name?: string
 		/** What the empty tile shows: the kind's glyph, or the name's initial. */
 		fallback?: "glyph" | "initial"
-		/** Force the glyph's kind; otherwise read from `char.isPersona`. */
-		kind?: "character" | "persona"
+		/** Force the glyph's kind; otherwise read from `char.isPersona`. A
+		    lorebook's cover image falls back to the lorebook glyph. */
+		kind?: "character" | "persona" | "lorebook"
 		/** A small persona mark on the corner, for a face shown without its
 		    name beside it (a stack, a card). Drawn only for a persona. */
 		personaMark?: boolean
@@ -153,7 +154,12 @@
 				aria-hidden={decorative ? "true" : undefined}
 				data-avatar-fallback="glyph"
 			>
-				{#if isPersona}
+				{#if kind === "lorebook"}
+					<Icons.BookMarked
+						class="h-[55%] w-[55%]"
+						aria-hidden="true"
+					/>
+				{:else if isPersona}
 					<Icons.UserRound
 						class="h-[55%] w-[55%]"
 						aria-hidden="true"

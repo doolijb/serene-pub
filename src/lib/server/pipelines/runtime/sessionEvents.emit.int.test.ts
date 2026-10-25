@@ -248,6 +248,13 @@ afterAll(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true })
 })
 
+/** 🚧 A session's own registration of `pipeline` on `event` (PLAN-layering D7). */
+async function registerOnSession(sessionId: number, event: string, pipeline: string) {
+	const { eventRegistration, rowOfDecl } = await import("$lib/server/pipelines/registrations/rows")
+	const { upsertRow } = await import("$lib/server/pipelines/registrations/write")
+	await upsertRow(db as any, rowOfDecl(eventRegistration(event, pipeline), { kind: "session", sessionId }, "admin"))
+}
+
 describe("emitSessionEvent", () => {
 	it("writes one ledger row carrying the payload with its cause, and fans out to plugin listeners", async () => {
 		const { emitSessionEvent } = await import(
@@ -447,6 +454,8 @@ describe("cause at every emitter", () => {
 
 	it("a person's delete yields message-deleted with cause edit, naming the person and the run that wrote it", async () => {
 		const s = await makeSession("delete")
+		// 🚧 Deletion needs a pipeline (RF fix 5): this session registers one.
+		await (await import("$lib/server/utils/testDb")).registerTestDeletion(db, s.sessionId)
 		const { sessionMessagesDeleteHandler } = await import(
 			"$lib/server/sockets/sessions"
 		)
@@ -682,7 +691,6 @@ describe("M3 review · annex-changed is bounded, and the envoy seat emits only o
 		const { spec, compile, use, sessionEvents: ev } = await import("@serene-pub/sdk")
 		const C = await import("@serene-pub/contracts")
 		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
-		const { bindSubject } = await import("$lib/server/pipelines/entities/bindings")
 		const { MAX_RUN_DEPTH } = await import("$lib/server/pipelines/runtime/lineage")
 		// Answers annex-changed by writing the event's own payload back —
 		// which carries a fresh `at`, so every write changes the value.
@@ -696,14 +704,8 @@ describe("M3 review · annex-changed is bounded, and the envoy seat emits only o
 				.build()
 		)
 		await saveDocument(db as any, loop, { publish: true })
-		const bound = await bindSubject(db as any, {
-			scope: { kind: "session", id: s.sessionId },
-			genreId: "core:genre/story",
-			subject: ev.annexChanged,
-			specSlug: "test:spec/annex-loop",
-			userId
-		})
-		expect(bound.error).toBeUndefined()
+		// 🚧 The session registers it on the event (PLAN-layering D7).
+		await registerOnSession(s.sessionId, ev.annexChanged, "test:spec/annex-loop")
 
 		const { createHost } = await import("$lib/server/pipelines/runtime/host")
 		// `runSpec` notes every root it runs; a host wired by hand is noted here.
@@ -1018,15 +1020,8 @@ describe("E1b · a package's declared event, recorded", () => {
 				.build()
 		)
 		await saveDocument(db as any, listener, { publish: true })
-		const { bindSubject } = await import("$lib/server/pipelines/entities/bindings")
-		const bound = await bindSubject(db as any, {
-			scope: { kind: "session", id: s.sessionId },
-			genreId: "core:genre/story",
-			subject: "acme.dice:event/rolled@1",
-			specSlug: "acme.dice:spec/cheer",
-			userId
-		})
-		expect(bound.error).toBeUndefined()
+		// 🚧 The session registers it on the event (PLAN-layering D7).
+		await registerOnSession(s.sessionId, "acme.dice:event/rolled@1", "acme.dice:spec/cheer")
 		await hostFor("acme.dice:spec/respond").commit!(
 			{ event: "acme.dice:event/rolled@1", payload: { total: 7 } },
 			node

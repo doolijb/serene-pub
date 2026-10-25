@@ -76,7 +76,7 @@
 			<p class="text-surface-600-400 text-sm">{NO_DIALS_SENTENCE}</p>
 		{:else}
 			<fieldset
-				class="panel-inset flex flex-col gap-0 rounded-[10px]"
+				class="panel-inset flex flex-col gap-0 rounded-base"
 				{disabled}
 			>
 				<legend class="sr-only">Dials</legend>

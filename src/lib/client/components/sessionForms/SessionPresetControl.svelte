@@ -1,13 +1,12 @@
 <!--
 	🚧 The session's **preset** in its settings (PLAN-genre-restructure §3-5,
 	§5-3, ruled 2026-10-19): which of its genre's presets it runs, or
-	**Custom** once a choice the preset pins (its background tasks, Chat's
-	tools) differs from the preset's. Picking a preset — or **Back to** the
+	**Custom** once a choice the preset pins (Chat's tools) differs from the
+	preset's. Picking a preset — or **Back to** the
 	session's own — applies at once and clears those choices, so the preset's
 	pins apply again. Shown only when the genre offers more than one preset.
 -->
 <script lang="ts">
-	import { resolveTasks, type TaskDecl } from "@serene-pub/sdk"
 	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
@@ -19,13 +18,12 @@
 		presetId: number | null
 		/** The form's genre fields, as edited (unsaved choices count). */
 		fields: Record<string, unknown>
-		tasks: readonly TaskDecl[]
 		presets: PresetRow[]
 		disabled?: boolean
 		/** After a switch: the form drops its own copies of the pinned choices. */
 		onapplied: (presetId: number) => void
 	}
-	let { sessionId, genreId, presetId, fields, tasks, presets, disabled = false, onapplied }: Props = $props()
+	let { sessionId, genreId, presetId, fields, presets, disabled = false, onapplied }: Props = $props()
 
 	const options = $derived(presets.filter((p) => p.genreId === genreId && p.enabled && !(p as any).withdrawnAt))
 	const current = $derived(options.find((p) => p.id === presetId) ?? null)
@@ -34,12 +32,6 @@
 	const custom = $derived.by(() => {
 		if (!current) return presetId == null
 		const pins = (current.settings ?? {}) as Record<string, unknown>
-		if (fields.tasks !== undefined && tasks.length) {
-			const mine = resolveTasks(tasks, fields.tasks, pins.tasks)
-			const theirs = resolveTasks(tasks, undefined, pins.tasks)
-			if (mine.some((t, i) => t.mode !== theirs[i]!.mode || t.every !== theirs[i]!.every || t.waitForRound !== theirs[i]!.waitForRound))
-				return true
-		}
 		if (fields.tools !== undefined && pins.tools !== undefined) {
 			const a = [...((fields.tools as string[]) ?? [])].sort().join(",")
 			const b = [...((pins.tools as string[]) ?? [])].sort().join(",")
@@ -63,8 +55,11 @@
 		})
 	}
 
-	const cost = (p: PresetRow) =>
-		typeof p.callsPerTurn === "number" ? (p.callsPerTurn === 1 ? "1 call per turn" : `${p.callsPerTurn} calls per turn`) : ""
+	/** What a turn costs, derived from what the preset registers (lane 5b), ⏳ else its stored number. */
+	const cost = (p: PresetRow) => {
+		const n = p.derived?.callsPerTurn ?? p.callsPerTurn
+		return typeof n === "number" ? (n === 1 ? "1 call per turn" : `${n} calls per turn`) : ""
+	}
 </script>
 
 {#if options.length > 1}
@@ -95,7 +90,7 @@
 					data-session-preset={p.id}
 				>
 					<span>{p.name}</span>
-					{#if cost(p)}<span class="text-[11px] opacity-80">{cost(p)}</span>{/if}
+					{#if cost(p)}<span class="text-meta opacity-80">{cost(p)}</span>{/if}
 				</button>
 			{/each}
 		</div>

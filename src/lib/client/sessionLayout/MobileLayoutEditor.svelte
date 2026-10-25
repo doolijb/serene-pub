@@ -987,7 +987,7 @@
 									preset={p}
 									context={menuContext}
 									onAction={onCardAction}
-									triggerClass="text-surface-600-400 hover:bg-surface-200-800 flex size-8 shrink-0 items-center justify-center self-center rounded-[8px] pointer-coarse:size-11"
+									triggerClass="text-surface-600-400 hover:bg-surface-200-800 flex size-8 shrink-0 items-center justify-center self-center rounded-lg pointer-coarse:size-11"
 								/>
 							{/if}
 						</div>

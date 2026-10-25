@@ -61,6 +61,8 @@ export interface PromptRecord {
 	createdForSpecId: number | null
 	name: string
 	isImmutable: boolean
+	/** 🚧 Hidden from session owners' prompt choice (R54) — an administrator's switch. */
+	hidden: boolean
 	fields: Record<string, string>
 	/** Text for fields the slot no longer declares — see `reconcilePromptFields`. */
 	archivedFields: Record<string, string>
@@ -86,6 +88,7 @@ const toRecord = (r: any): PromptRecord => ({
 	createdForSpecId: r.createdForSpecId ?? null,
 	name: r.name,
 	isImmutable: !!r.isImmutable,
+	hidden: r.hidden === true,
 	fields: (r.fields ?? {}) as Record<string, string>,
 	archivedFields: (r.archivedFields ?? {}) as Record<string, string>
 })
@@ -424,6 +427,22 @@ export async function updatePrompt(
  * and no rule at all — a plugin declaring a prompts slot called `instructions`
  * had its rows deletable while a config still pointed at them.
  */
+/**
+ * 🚧 Hide a prompt from session owners' prompt choice, or offer it again
+ * (R54). An administrator's curation of the CHOICE: a built-in prompt may be
+ * hidden too (its text is still never edited in place), and a hidden prompt
+ * already chosen keeps running. Members never see this switch.
+ */
+export async function setPromptHidden(db: Db, promptId: number, hidden: boolean): Promise<PromptRecord> {
+	const [row] = await db
+		.update(schema.pipelinePrompts)
+		.set({ hidden, updatedAt: new Date() })
+		.where(eq(schema.pipelinePrompts.id, promptId))
+		.returning()
+	if (!row) throw new PromptNotFoundError("That prompt no longer exists.")
+	return toRecord(row)
+}
+
 export async function promptSlotNames(db: Db): Promise<string[]> {
 	const specs = await db.select().from(schema.pipelineSpecs)
 	const names = new Set<string>()
@@ -471,12 +490,11 @@ export async function deletePrompt(
 		 */
 		ignoreOverrideIds?: Set<number>
 		/**
-		 * Config-value rows that do not count either — the same "your own
-		 * selection" release, for the global panel: since the layer
-		 * simplification (2026-08-24) an admin's selection outside a session is
-		 * the instance config's own value row, not an override.
+		 * 🚧 Registration values that do not count (`refKeyOf`) — an
+		 * administrator's own instance-wide selection, now a change on the
+		 * genre's defaults (PLAN-layering D5).
 		 */
-		ignoreConfigValueIds?: Set<number>
+		ignoreRegistrationRefs?: Set<string>
 	} = {}
 ): Promise<void> {
 	const [row] = await db
@@ -491,35 +509,38 @@ export async function deletePrompt(
 				`It is the fallback other configurations rely on.`
 		)
 
-	// References live in two tables: named-config values and per-scope
-	// overrides, both storing the row id at a prompts slot. Values are
-	// arbitrary json, so this filters in code rather than in SQL — the
-	// tables are small and the comparison is exact.
+	// References live in per-scope overrides and in registration and
+	// instance values (R38, R50), each storing the row id at a prompts slot.
+	// Values are arbitrary json, so this filters in code rather than in SQL —
+	// the tables are small and the comparison is exact.
 	const slots = await promptSlotNames(db)
 	let referenced = false
 	if (slots.length) {
-		const values = await db
-			.select()
-			.from(schema.pipelineConfigValues)
-			.where(inArray(schema.pipelineConfigValues.slot, slots))
 		const overrides = await db
 			.select()
 			.from(schema.pipelineNodeOverrides)
 			.where(inArray(schema.pipelineNodeOverrides.slot, slots))
 		const ignored = opts.ignoreOverrideIds ?? new Set<number>()
-		const ignoredValues = opts.ignoreConfigValueIds ?? new Set<number>()
-		referenced =
-			(values as any[]).some(
-				(v) => v.value === promptId && !ignoredValues.has(v.id)
-			) ||
-			(overrides as any[]).some(
-				(o) => o.value === promptId && !ignored.has(o.id)
+		// 🚧 Configurations are retired (R50, 0110): their value rows hold nothing.
+		referenced = (overrides as any[]).some(
+			(o) => o.value === promptId && !ignored.has(o.id)
+		)
+		// 🚧 A selection carried into a registration (a preset's, a session's,
+		// the genre's defaults') holds it too (R38).
+		if (!referenced) {
+			const { registrationValueRefs, refKeyOf } = await import(
+				"$lib/server/pipelines/registrations/values"
 			)
+			const ignoredRefs = opts.ignoreRegistrationRefs ?? new Set<string>()
+			referenced = (await registrationValueRefs(db, slots)).some(
+				(r) => r.value === promptId && !ignoredRefs.has(refKeyOf(r))
+			)
+		}
 	}
 
 	if (referenced)
 		throw new PromptNotUsableError(
-			`'${row.name}' is still selected somewhere — a configuration or a ` +
+			`'${row.name}' is still selected somewhere — a pipeline, a preset or a ` +
 				`session is pointing at it. Prompts are shared by every pipeline ` +
 				`that reuses this step, so this may be a selection you made ` +
 				`elsewhere. Choose a different prompt there first, then delete ` +

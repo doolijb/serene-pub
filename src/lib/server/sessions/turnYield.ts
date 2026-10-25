@@ -18,11 +18,18 @@
  * plan row's run yields them too (`turnYieldOf`), and the newest planned
  * row's turn is the planning run's (`turnRunOf`).
  *
+ * 🚧 **A form's answer row is the asking turn's** (Lair rewrite D3,
+ * 2026-10-21): a row that answers a form on one of the turn's rows
+ * (`metadata.answersForm` — the Lair's dice row, answering a roll form the
+ * plan asked) is that turn's work too; its turn is the asking row's
+ * (`turnRunOf`) and the yield holds it, so Regenerate the last turn takes the
+ * roll forms and the dice with the plan.
+ *
  * What is NOT in it:
  *  - **a person's line** (`role: 'user'`), even one the run wrote for them —
  *    a retake never deletes what somebody said;
- *  - **rows a child run wrote** (a form's answer, an action the turn fired):
- *    each run's artifacts are its own, so the parent's yield never holds them;
+ *  - **rows any other child run wrote** (an action the turn fired): each
+ *    run's artifacts are its own, so the parent's yield never holds them;
  *  - **rows already deleted**: an artifact names an id, with no key, so a gone
  *    row is simply not found.
  *
@@ -30,7 +37,7 @@
  * (layout `span`).
  */
 
-import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm"
 import { actionsOf, envoySlugOfRef, i18nText, resolveTurnControls, type I18n } from "@serene-pub/sdk"
 import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
 import * as schema from "$lib/server/db/schema"
@@ -119,7 +126,12 @@ export async function turnRunOf(
 		.from(schema.sessionMessages)
 		.where(eq(schema.sessionMessages.id, messageId))
 		.limit(1)
-	const planRowId = (row?.metadata as { planRowId?: unknown } | null)?.planRowId
+	const meta = row?.metadata as { planRowId?: unknown; answersForm?: { messageId?: unknown } } | null
+	const planRowId = meta?.planRowId
+	// 🚧 An answer's row is the turn that asked (D3) — never a person's line:
+	// `lastTurnOf` stops at those before it asks.
+	const asked = Number(meta?.answersForm?.messageId)
+	if (Number.isInteger(asked) && asked > 0 && asked !== messageId) return turnRunOf(db, asked)
 	return creatingRunOf(db, typeof planRowId === "number" ? planRowId : messageId)
 }
 
@@ -151,7 +163,18 @@ export async function turnYieldOf(db: Db, runId: number): Promise<TurnYieldRow[]
 				created.map(String)
 			)
 		)
-	const ids = [...new Set([...created, ...planned.map((r) => r.id)])]
+	const turnIds = [...new Set([...created, ...planned.map((r) => r.id)])]
+	// 🚧 And the rows that answer a form on one of them (D3): the dice.
+	const answers = await db
+		.select({ id: schema.sessionMessages.id })
+		.from(schema.sessionMessages)
+		.where(
+			inArray(
+				sql<string>`${schema.sessionMessages.metadata}->'answersForm'->>'messageId'`,
+				turnIds.map(String)
+			)
+		)
+	const ids = [...new Set([...turnIds, ...answers.map((r) => r.id)])]
 	const rows = await db
 		.select({
 			id: schema.sessionMessages.id,
@@ -170,7 +193,9 @@ export async function turnYieldOf(db: Db, runId: number): Promise<TurnYieldRow[]
 		.where(
 			and(
 				inArray(schema.sessionMessages.id, ids),
-				ne(schema.sessionMessages.role, "user")
+				ne(schema.sessionMessages.role, "user"),
+				// 🚧 Never a row Back took out of the history (RF fix 5).
+				isNull(schema.sessionMessages.rewindOrdinal)
 			)
 		)
 		.orderBy(asc(schema.sessionMessages.id))
@@ -298,7 +323,10 @@ export async function lastTurnOf(
 		.where(
 			and(
 				eq(schema.sessionMessages.sessionId, sessionId),
-				eq(schema.sessionMessages.channel, channel)
+				eq(schema.sessionMessages.channel, channel),
+				// 🚧 The live history (RF fix 5): the newest turn is the
+				// newest one Back left.
+				isNull(schema.sessionMessages.rewindOrdinal)
 			)
 		)
 		.orderBy(desc(schema.sessionMessages.id))
@@ -417,7 +445,8 @@ export async function latestStoryTurnOf(
 			and(
 				eq(schema.sessionMessages.sessionId, sessionId),
 				eq(schema.sessionMessages.channel, channel),
-				ne(schema.sessionMessages.role, "user")
+				ne(schema.sessionMessages.role, "user"),
+				isNull(schema.sessionMessages.rewindOrdinal)
 			)
 		)
 		.orderBy(desc(schema.sessionMessages.id))

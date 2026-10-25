@@ -26,82 +26,180 @@ const SWEEP = "core:script/story-sweep"
 const SWEEP_CRIB = "core:script/story-sweep-crib"
 const SCENE = "core:script/story-scene-reading"
 
-const delta = (d: Record<string, unknown>) => ({
+/** 🚧 One change, as the reckoning's one grammar answers it (S1): every member, empty text for none. */
+const change = (d: Record<string, unknown>) => ({
 	owner: "character:4",
+	changes: "attribute",
+	attribute: "",
+	entryType: "",
 	op: "add",
-	slot: "",
-	repertoire: "",
-	piece: "",
 	value: "",
-	check: "",
-	against: 0,
+	name: "",
 	reason: "it happened",
 	...d
 })
+const entry = (entryType: string, name: string, op = "add") => change({ changes: "entry", entryType, name, op })
 
-describe("the reckoning, by mode", () => {
-	it("Review carries pieces as their own list instead of dropping them", async () => {
+/** A reply schema as `ruleset-resolve` publishes it — the rules' attributes and entry types (here, Freeform's two). */
+const replySchema = (attributes: string[], entryTypes: string[]) => ({
+	type: "object",
+	properties: {
+		message: { type: "string" },
+		changes: {
+			type: "array",
+			items: {
+				type: "object",
+				properties: {
+					attribute: { type: "string", enum: [...attributes, ""] },
+					entryType: { type: "string", enum: [...entryTypes, ""] },
+					op: { type: "string", enum: ["add", "set", "remove"] }
+				}
+			}
+		}
+	}
+})
+const FREEFORM = replySchema([], ["things", "conditions"])
+
+describe("the reckoning, by mode (S1: the rules' own change grammar)", () => {
+	it("Review carries the rules' entries as their own list instead of dropping them", async () => {
+		const out = await run(RECKON, {
+			json: { changes: [entry("things", "Rope"), entry("conditions", "Tired")], clock: [], place: [] },
+			modes: { attributes: "review", conditions: "full" },
+			state: {},
+			ruleset: { rigour: "prose" },
+			schema: FREEFORM
+		})
+		expect(out.ruled).toEqual([{ owner: "character:4", op: "add", changes: "entry", entryType: "conditions", name: "Tired", reason: "it happened" }])
+		expect(out.ruledHeld).toEqual([expect.objectContaining({ entryType: "things", name: "Rope" })])
+	})
+
+	it("what the rules keep goes to the handler, Full and Review split; what they keep nothing of is written in words", async () => {
 		const out = await run(RECKON, {
 			json: {
-				deltas: [
-					delta({ repertoire: "things", piece: "Rope" }),
-					delta({ repertoire: "conditions", piece: "Tired" })
+				changes: [
+					change({ attribute: "nerve", op: "spend", value: "2" }),
+					change({ attribute: "mood", op: "set", value: "grim" }),
+					change({ attribute: "hp", op: "spend", value: "3" }),
+					entry("troubles", "Poisoned")
 				],
 				clock: [],
 				place: []
 			},
-			modes: { attributes: "review", conditions: "full" },
-			state: {},
-			ruleset: { rigour: "prose" }
+			modes: { attributes: "full", conditions: "review" },
+			state: { cast: { byId: { "4": { hp: 10 } } } },
+			// The inlet's ruleset: its attributes (here a pool of its own) and its entry types, tagged.
+			ruleset: { rigour: "scripts", attributes: [{ id: "nerve", kind: "pool", tags: ["resource"] }], entryTypes: [{ id: "troubles", tags: ["condition"] }] },
+			schema: replySchema(["nerve"], ["troubles"])
 		})
-		expect(out.pieces).toEqual([expect.objectContaining({ repertoire: "conditions", piece: "Tired" })])
-		expect(out.piecesReview).toEqual([expect.objectContaining({ repertoire: "things", piece: "Rope" })])
+		expect(out.ruled).toEqual([{ owner: "character:4", op: "spend", changes: "attribute", attribute: "nerve", value: 2, reason: "it happened" }])
+		expect(out.ruledHeld).toEqual([expect.objectContaining({ entryType: "troubles", name: "Poisoned" })])
+		expect(out.words).toEqual([
+			{ owner: "character:4", slot: "mood", value: "grim" },
+			{ owner: "character:4", slot: "hp", value: 7 }
+		])
+		expect(out.owners).toEqual(["character:4"])
 	})
 
-	it("at scripts rigour, Full and Review split between apply and propose", async () => {
+	it("an attribute the rules only borrow is the sheets' — written in words, as the reply schema leaves it out", async () => {
 		const out = await run(RECKON, {
-			json: { deltas: [delta({ slot: "hp", op: "spend", value: "2" }), delta({ repertoire: "conditions", piece: "Poisoned" })], clock: [], place: [] },
-			modes: { attributes: "full", conditions: "review" },
-			state: {},
-			ruleset: { rigour: "scripts" }
+			json: { changes: [change({ attribute: "hp", op: "spend", value: "3" }), change({ attribute: "might", op: "add", value: "1" })], clock: [], place: [] },
+			modes: { attributes: "full" },
+			state: { cast: { byId: { "4": { hp: 9 } } } },
+			// Its own attribute (not in a reply schema: the rules are not installed), and one it borrows.
+			ruleset: { rigour: "prose", attributes: [{ id: "hp", kind: "number", tags: [], borrowed: true }, { id: "might", kind: "number", tags: [] }] },
+			schema: null
 		})
-		expect(out.scripts).toHaveLength(1)
-		expect(out.scriptsReview).toEqual([expect.objectContaining({ piece: "Poisoned" })])
-		expect(out.pieces).toBeNull()
+		expect(out.words).toEqual([{ owner: "character:4", slot: "hp", value: 6 }])
+		expect(out.ruled).toEqual([expect.objectContaining({ attribute: "might", op: "add", value: 1 })])
 	})
 
 	it("a thing the lorebook keeps as an item becomes an item line, so its supply is checked", async () => {
 		const out = await run(RECKON, {
-			json: {
-				deltas: [delta({ repertoire: "things", piece: "The Crown", op: "add", value: "1" }), delta({ repertoire: "things", piece: "Rope" })],
-				clock: [],
-				place: []
-			},
+			json: { changes: [entry("things", "The Crown"), entry("things", "Rope")], clock: [], place: [] },
 			modes: { attributes: "full" },
 			state: {},
 			ruleset: { rigour: "prose" },
+			schema: FREEFORM,
 			supply: [{ entryId: 31, name: "the crown", supply: "unique", remaining: 0 }]
 		})
 		expect(out.words).toEqual([{ owner: "character:4", entryId: 31, delta: 1 }])
-		expect(out.pieces).toEqual([expect.objectContaining({ piece: "Rope" })])
+		expect(out.ruled).toEqual([expect.objectContaining({ name: "Rope" })])
 	})
 
-	it("a task Off drops its deltas", async () => {
+	it("a duty Off drops its changes; a change naming nothing is dropped", async () => {
 		const out = await run(RECKON, {
-			json: { deltas: [delta({ repertoire: "conditions", piece: "Tired" })], clock: [], place: [] },
+			json: { changes: [entry("conditions", "Tired"), change({ attribute: "" }), entry("things", "")], clock: [], place: [] },
 			modes: { attributes: "full", conditions: "off" },
 			state: {},
-			ruleset: { rigour: "prose" }
+			ruleset: { rigour: "prose" },
+			schema: FREEFORM
 		})
-		expect(out.pieces).toBeNull()
-		expect(out.piecesReview).toBeNull()
+		expect(out.ruled).toBeNull()
+		expect(out.ruledHeld).toBeNull()
+		expect(out.words).toBeNull()
+	})
+})
+
+describe("the reckoning's crib writes the call's schema (S1)", () => {
+	const session = { sessionId: 1, cast: { sessionCharacters: [{ character: { id: 4, name: "Brannoc" } }] } }
+	const state = {
+		slots: [
+			{ id: "core:slot/hp@1", key: "hp", type: "integer" },
+			{ id: "core:slot/mood@1", key: "mood", type: "enum" },
+			{ id: "core:slot/inventory@1", key: "inventory", type: "list" },
+			{ id: "core:slot/whisper@1", key: "whisper", type: "text", earshot: "holder" },
+			{ id: "acme.pack:slot/nerve@1", key: "nerve", type: "integer" }
+		],
+		world: {},
+		cast: { byId: {} }
+	}
+	it("the rules' words and the sheets' own, by duty, in the subset every backend compiles", async () => {
+		const out = await run(RECKON_CRIB, {
+			session,
+			state,
+			reply: "Brannoc steps forward.",
+			blocks: {},
+			ruleset: { rigour: "mechanics", entryTypes: [{ id: "troubles", tags: ["condition"] }, { id: "boons", tags: ["boon"] }] },
+			modes: { attributes: "full", conditions: "review" },
+			places: [],
+			schema: replySchema(["nerve"], ["troubles", "boons"])
+		})
+		const item = out.schema.properties.changes.items
+		expect(item.properties.owner.enum).toEqual(["world", "character:4"])
+		// The rules' attribute first, then the sheets' words — never a list, never a value only its holder hears.
+		expect(item.properties.attribute.enum).toEqual(["nerve", "hp", "mood", ""])
+		expect(item.properties.entryType.enum).toEqual(["boons", "troubles", ""])
+		expect(item.properties.changes.enum).toEqual(["attribute", "entry"])
+		// No nulls anywhere: a grammar-compiling backend takes it as it is.
+		expect(JSON.stringify(out.schema)).not.toContain("null")
+		expect(out.schema.required).toEqual(["changes", "clock", "place"])
+		expect(out.fields.canChange).toContain("nerve, hp, mood")
+		expect(out.fields.canChange).toContain("kept as troubles")
+		expect(out.fields.rigourLine).toContain("propose no check")
+	})
+
+	it("a duty Off leaves its words out of the grammar", async () => {
+		const out = await run(RECKON_CRIB, {
+			session,
+			state,
+			reply: "x",
+			blocks: {},
+			ruleset: { rigour: "prose", entryTypes: [{ id: "conditions", tags: ["condition"] }] },
+			modes: { attributes: "off", conditions: "full" },
+			places: [],
+			schema: replySchema([], ["conditions"])
+		})
+		const item = out.schema.properties.changes.items
+		expect(item.properties.attribute.enum).toEqual([""])
+		expect(item.properties.entryType.enum).toEqual(["conditions", ""])
+		expect(item.properties.changes.enum).toEqual(["entry"])
 	})
 })
 
 describe("Describe new places, in the reckoning", () => {
 	const places = [{ id: 7, name: "The Gatehouse", links: [] }]
 	const answer = (name: string) => ({
-		deltas: [],
+		changes: [],
 		clock: [],
 		place: [{ name, content: "A cold stone room.", ways: ["The Gatehouse", "The Well"] }]
 	})
@@ -129,6 +227,27 @@ describe("Describe new places, in the reckoning", () => {
 		expect(on.fields.canChange).toContain("The Gatehouse")
 		const off = await run(RECKON_CRIB, { session: { sessionId: 1, cast: {} }, state: {}, reply: "x", blocks: {}, ruleset: {}, modes: {}, places })
 		expect(off.fields.canChange).toBe("nothing")
+	})
+
+	it("the crib never carries a value only its holder hears (earshot holder: the Lair's whisper)", async () => {
+		const out = await run(RECKON_CRIB, {
+			session: { sessionId: 1, cast: { sessionCharacters: [{ character: { id: 4, name: "Brannoc" } }] } },
+			state: {
+				slots: [
+					{ id: "core:slot/hp@1", key: "hp" },
+					{ id: "core:slot/whisper@1", key: "whisper", earshot: "holder" }
+				],
+				world: {},
+				cast: { byId: { "4": { hp: 20, core_hp: 20, whisper: "the east door is a lie", core_whisper: "the east door is a lie" } } }
+			},
+			reply: "Brannoc steps forward.",
+			blocks: {},
+			ruleset: {},
+			modes: { attributes: "full" }
+		})
+		expect(out.crib).toContain("Brannoc [character:4]: hp: 20; core_hp: 20")
+		expect(out.crib).not.toContain("the east door is a lie")
+		expect(out.crib).not.toContain("whisper")
 	})
 })
 

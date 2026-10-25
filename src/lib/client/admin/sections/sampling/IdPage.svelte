@@ -275,16 +275,16 @@
 		{/snippet}
 		{#snippet headerExtra()}
 			<div class="flex flex-wrap items-center gap-1.5 text-xs">
-				<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+				<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
 					{samplingModalityWord(row?.shape)}
 				</span>
 				{#if readOnly}
-					<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+					<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
 						Built-in
 					</span>
 				{/if}
 				{#if count}
-					<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+					<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
 						{count.on} of {count.total} parameters sent
 					</span>
 				{/if}

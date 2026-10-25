@@ -12,7 +12,7 @@ import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
-import { LAIR_RESPOND_SPEC_ID, STORY_RESPOND_SPEC_ID } from "@serene-pub/core-catalog"
+import { LAIR_REPLY_SPEC_ID, STORY_RESPOND_SPEC_ID } from "@serene-pub/core-catalog"
 
 let testDb: TestDb
 let dataDir: string
@@ -93,10 +93,10 @@ describe("pipelines:document", () => {
 		expect(res.version.canonicalHash).toBeTruthy()
 		expect(res.document.id).toBe(STORY_RESPOND_SPEC_ID)
 		expect(res.document.nodes.length).toBeGreaterThan(20)
-		// Story's reply gathers, iterates and forks (plan §1).
+		// Story's reply gathers and forks (plan §1); its iterating tail (the
+		// reckoning and the sweep) left it for routines (PLAN-layering lane 3).
 		const kinds = new Set(res.document.clauses.map((c: any) => c.kind))
 		expect(kinds.has("gather")).toBe(true)
-		expect(kinds.has("each")).toBe(true)
 		expect(kinds.has("junction")).toBe(true)
 		// Edges carry their ports — the half `pipelines:detail`'s graph drops.
 		expect(res.document.edges.every((e: any) => e.toPort)).toBe(true)
@@ -122,7 +122,7 @@ describe("pipelines:document", () => {
 		const res: any = await pipelinesDocument.handler(
 			socketFor(admin.id, true),
 			{
-				slug: LAIR_RESPOND_SPEC_ID,
+				slug: LAIR_REPLY_SPEC_ID,
 				versionId: story!.activeVersionId!
 			},
 			() => {}

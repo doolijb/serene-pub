@@ -35,7 +35,7 @@
 					Present:
 				</span>
 				{#each present as id (id)}
-					<span class="chip preset-tonal-primary py-0 text-[11px]">
+					<span class="chip preset-tonal-primary py-0 text-meta">
 						{pool.bindingName(id)}
 					</span>
 				{/each}
@@ -49,7 +49,7 @@
 					Mentioned:
 				</span>
 				{#each mentioned as id (id)}
-					<span class="chip preset-tonal-surface py-0 text-[11px]">
+					<span class="chip preset-tonal-surface py-0 text-meta">
 						{pool.bindingName(id)}
 					</span>
 				{/each}

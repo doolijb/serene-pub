@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * The OPENING place of the Connections view — where models run. Each row
 	 * is a connection: a service, a server somebody runs, or a runtime this
@@ -308,6 +309,7 @@
 	const live = useLiveStatus(() => rows, {
 		admin: () => isAdmin,
 		entries: () => summary.entries,
+		capabilityDefaults: () => capabilityDefaults,
 		syncing: (id) => syncingAll || syncingIds.has(id)
 	})
 	const statusOf = live.statusOf
@@ -410,7 +412,7 @@
 	{@const DoorIcon = icon}
 	<button
 		type="button"
-		class="focus-visible:ring-primary-500 flex min-h-11 w-full items-start gap-2.5 rounded-[10px] px-1.5 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none {blocked
+		class="focus-visible:ring-primary-500 flex min-h-11 w-full items-start gap-2.5 rounded-base px-1.5 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none {blocked
 			? 'cursor-not-allowed opacity-70'
 			: 'hover:preset-tonal-primary'}"
 		disabled={!!blocked}
@@ -444,7 +446,7 @@
 						<!-- A cost is not a warning: every chip is the same
 						     quiet tone, and the WORDS carry the difference. -->
 						<span
-							class="preset-tonal-surface text-surface-700-300 rounded-md px-1.5 py-0.5 text-[11px] font-medium"
+							class="preset-tonal-surface text-surface-700-300 rounded-md px-1.5 py-0.5 text-meta font-medium"
 						>
 							{trade}
 						</span>
@@ -511,7 +513,7 @@
 								</span>
 								{#if option.count !== undefined}
 									<span
-										class="text-surface-600-400 shrink-0 text-[11px]"
+										class="text-surface-600-400 shrink-0 text-meta"
 									>
 										{option.count}
 									</span>
@@ -554,9 +556,7 @@
 			<!-- The one narrowing in force, said once. At Everything there is
 			     nothing to say and the row is absent (`empty:hidden`). -->
 			{#if rows.length > 0 && activeFilterLabel}
-				<span
-					class="bg-surface-200-800 text-surface-700-300 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
-				>
+				<Badge size="md" class="text-surface-700-300 flex min-w-0 items-center gap-1">
 					<span class="min-w-0 truncate">{activeFilterLabel}</span>
 					<button
 						type="button"
@@ -566,7 +566,7 @@
 					>
 						<Icons.X size={12} aria-hidden="true" />
 					</button>
-				</span>
+				</Badge>
 			{/if}
 		{/snippet}
 	</ViewToolbar>

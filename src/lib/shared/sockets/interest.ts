@@ -240,6 +240,11 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		// nothing emits.)
 		["amendments:list", (payload) => payload?.lorebookId],
 		["entries:counts", (payload) => payload?.lorebookId],
+		// 🚧 A book's rules lists and its rules library (PLAN-lorebook-kinds
+		// §C): `lorebookId` top-level on every reply.
+		["entries:types", (payload) => payload?.lorebookId],
+		["lorebooks:library", (payload) => payload?.lorebookId],
+		["entries:copyFromLibrary", (payload) => payload?.entry?.lorebookId],
 		["entries:recentDecisions", (payload) => payload?.lorebookId],
 		["entries:delete", (payload) => payload?.lorebookId],
 		["entries:create", (payload) => payload?.entry?.lorebookId],
@@ -532,6 +537,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"state:ledger",
 	"state:attributes",
 	"state:setAttributePicks",
+	"state:setCarry",
 	"state:proposals",
 	"state:changed",
 	"state:set",
@@ -680,7 +686,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// pipelines: — slice 3 (2026-09-14). A MIXED family (26 admin-only, 28 open
 	// handlers), so it is NOT a restricted prefix. Consumers, all on the registry:
 	// client/components/pipelines/** (RunProgressCard, PipelineReviewModal,
-	// inspector/RunInspector, workspace/*, ConfigNotices, PipelineConfigOptions),
+	// inspector/RunInspector, workspace/*, PipelineConfigOptions),
 	// client/components/media/MediaManagerTab.svelte,
 	// client/components/lorebookForms/EntryFireTest.svelte,
 	// client/lorebooks/editor/retrievalReadout.svelte.ts,
@@ -692,12 +698,10 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// `reviewRequested`/`reviewClosed` and `capPauseRequested`/`capPauseClosed`
 	// travel through the review transport in sockets/pipelines.ts, which
 	// honours this set like broadcastHelpers does.
-	// Fifteen write handlers answer ONLY through the cascaded `pipelines:get`
-	// (and `acknowledgeConfigNotices` through `pipelines:configNotices`), so a
+	// The write handlers answer ONLY through the cascaded `pipelines:get`, so a
 	// view that can write must hold that key — every converted one does. Every
 	// success event of the family is listed, including the ones no client reads
 	// (`validateTemplate`, the `cancelRun`/`resolveReview` acks).
-	"pipelines:acknowledgeConfigNotices",
 	"pipelines:artifactRuns",
 	"pipelines:cancelRun",
 	"pipelines:capPauseClosed",
@@ -711,13 +715,9 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"pipelines:cloneVariableTemplate",
 	"pipelines:composite:delete",
 	"pipelines:composite:save",
-	"pipelines:configNotices",
-	"pipelines:configsIndex",
-	"pipelines:createConfig",
 	"pipelines:createContextTemplate",
 	"pipelines:createPrompt",
 	"pipelines:createScript",
-	"pipelines:deleteConfig",
 	"pipelines:deleteContextTemplate",
 	"pipelines:deletePrompt",
 	"pipelines:deleteScript",
@@ -748,8 +748,6 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"pipelines:previewTemplate",
 	"pipelines:progress",
 	"pipelines:promptWording",
-	"pipelines:renameConfig",
-	"pipelines:resetConfig",
 	"pipelines:resolveCapPause",
 	"pipelines:resolveReview",
 	"pipelines:reviewClosed",
@@ -760,11 +758,9 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"pipelines:runStarted",
 	"pipelines:runs",
 	"pipelines:scripts",
-	"pipelines:selectConfig",
 	"pipelines:sessionEntryUsage",
 	"pipelines:setOption",
 	"pipelines:setOptions",
-	"pipelines:setPresetActions",
 	"pipelines:updateContextTemplate",
 	"pipelines:updatePrompt",
 	"pipelines:updateScript",
@@ -860,6 +856,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"amendments:list",
 	"bindingCheck:result",
 	"bindingSuggestions:list",
+	"entries:copyFromLibrary",
 	"entries:counts",
 	"entries:create",
 	"entries:delete",
@@ -868,6 +865,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"entries:recentDecisions",
 	"entries:sessionEntries",
 	"entries:setMarks",
+	"entries:types",
 	"entries:update",
 	"entries:updatePositions",
 	"lorebooks:bindingList",
@@ -877,19 +875,30 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"lorebooks:createBinding",
 	"lorebooks:delete",
 	"lorebooks:duplicate",
+	// 🚧 RF fix 4 — consumer: client/lorebooks/sections/KeptImprintNote.svelte
+	// (through `awaitReply`). Its refusal stays ungated (rule 1).
+	"lorebooks:settleImprint",
 	"lorebooks:get",
 	"lorebooks:import",
 	"lorebooks:importResolve",
+	"lorebooks:library",
 	"lorebooks:lines",
 	"lorebooks:list",
 	"lorebooks:listMemberFaces",
 	"lorebooks:resolveOrCreateBindingByName",
+	"lorebooks:rulesChoices",
 	"lorebooks:setCalendar",
 	"lorebooks:setClock",
 	"lorebooks:storyTime",
 	"lorebooks:update",
 	"lorebooks:updateBinding",
 	"lorebooks:uploadMemberFace",
+	// 🚧 Starter lorebooks (PLAN-lorebook-kinds §B) — consumers: the New lorebook
+	// kit picker, the session start form, Admin › Starter lorebooks (lane K2).
+	"starterKits:clone",
+	"starterKits:delete",
+	"starterKits:list",
+	"starterKits:saveFromBook",
 
 	// Session-adjacent — slice 6 (2026-09-15): scenes, sessionGenres (restricted),
 	// sessionPresets, narrativeGraph, media, vectorization (part), taskQueue
@@ -929,6 +938,11 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"narrativeGraph:list",
 	"narrativeGraph:listMergeLogs",
 	"narrativeGraph:mergeNode",
+	// 🚧 Ties on the graph (T1–T4), lane T2: the edit panel's tie sides
+	// block (client/lorebooks/graphs/TieSidesBlock.svelte) asks for a
+	// rule-fed row's sides and files Set… — both answered to the asker.
+	"narrativeGraph:setTieSide",
+	"narrativeGraph:tieSides",
 	"narrativeGraph:undoMerge",
 	"narrativeGraph:updateRelationship",
 	"scenes:compile:complete",
@@ -960,6 +974,18 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"scenes:decideCue",
 	"scenes:processAll",
 	"scenes:openScenes",
+	// 🚧 Admin › Rulesets (PLAN-ruleset-editor §5). Consumer:
+	// client/admin/sections/rulesets/*. Their refusals stay ungated (rule 1).
+	"rulesets:askModel",
+	"rulesets:create",
+	"rulesets:delete",
+	"rulesets:detail",
+	"rulesets:list",
+	"rulesets:publish",
+	"rulesets:retire",
+	"rulesets:saveDraft",
+	"rulesets:scriptKey",
+	"rulesets:tryOut",
 	"sessionGenres:create",
 	"sessionGenres:detail",
 	"sessionGenres:list",
@@ -1083,6 +1109,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"users:current:hasPassphrase",
 	"users:current:logout",
 	"users:current:setPassphrase",
+	"users:current:updateAvatar",
 	"users:current:updateDisplayName",
 	"users:delete",
 	"users:get",

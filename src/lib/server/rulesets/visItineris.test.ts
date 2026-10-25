@@ -86,7 +86,8 @@ describe("Vis Itineris at mechanics: an attack with a weapon piece", () => {
 		expect(out.changes).toEqual([])
 		expect(out.explain[0]!.text).toBe("d20 16 vs 15")
 		const read = runResolve({ ruleset: decl, rigour: "mechanics", owners: [fighter()], actions: { "*": "swing the longsword" }, deltas: [], elapsed: 0, ties: [], turn: 1 })
-		expect(read.blocks.voice!.text).toBe(decl.voice.mechanics)
+		// 🚧 The turn economy line (M2, 2026-10-22): `actions.perTurn` read where numbers show.
+		expect(read.blocks.voice!.text).toBe(`${decl.voice!.mechanics}\nA turn holds 3 actions and a reaction.`)
 		expect(read.blocks.pieces!.text).toContain("Longsword — A long, straight blade.")
 	})
 
@@ -390,7 +391,7 @@ describe("selector families (A2): a condition on `attack` reaches `attack.melee`
 describe("degrees step by rank, never by declaration order", () => {
 	test("hit-or-miss lists Natural 1 after Success; a step up from Success is Critical", async () => {
 		const decl = await visItineris()
-		const classic = conventionsFor(decl, { degrees: "classic" }).degrees
+		const classic = conventionsFor(decl, { degrees: "classic" }).degrees!
 		expect(degreeOf(classic, { total: 16, natural: 14, against: 15 })!.band.id).toBe("success")
 		expect(degreeOf(classic, { total: 16, natural: 14, against: 15, adjust: 1 })!.band.id).toBe("critical")
 		expect(degreeOf(classic, { total: 14, natural: 14, against: 15, adjust: -1 })!.band.id).toBe("natural-one")
@@ -450,7 +451,8 @@ describe("explain words: a selector reads as words, never its id", () => {
 		const ruleset = getRuleset("core:ruleset/vis-itineris@1") as RulesetDecl
 		const input = { ruleset } as unknown as Pick<EngineInput, "ruleset">
 		expect(selectorLabel(input, null, "attack.melee")).toBe("Melee attack")
-		expect(selectorLabel(input, null, "skill.athletics")).toBe("Athletics skill")
+		// 🚧 The check reference's own words (GM's check labels; lane T3): what the roll form says.
+		expect(selectorLabel(input, null, "skill.athletics")).toBe("Athletics")
 		expect(selectorLabel(input, null, "strength-mod")).toBe("Strength modifier")
 		expect(selectorLabel(input, null, "proficiency")).toBe("Proficiency")
 		expect(selectorLabel(input, { stats: [{ selector: "hp", label: "Health" }] } as unknown as Pick<OwnerView, "stats">, "hp")).toBe("Health")

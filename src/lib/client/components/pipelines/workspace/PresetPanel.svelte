@@ -1,120 +1,91 @@
 <script lang="ts">
 	/**
-	 * Where this pipeline is used (admin IA 2026-08-28) — read-only, on
-	 * purpose. Session presets own the decisions that used to live here
-	 * (which actions come along, whether a bundle may be chosen): a preset is
-	 * the thing that binds a genre's event slots to pipelines and configs,
-	 * and editing it happens on its own page. This tab answers the reverse
-	 * question — "which presets reach for this pipeline?" — with a link out
-	 * along each edge.
+	 * **Where it runs** (admin IA 2026-08-28; 🚧 PLAN-layering §4, R2, R38,
+	 * lane 7, 2026-10-21) — read-only, on purpose: the genres whose defaults
+	 * register this pipeline, and the presets that add it, drop it or change
+	 * it, each with what it runs on. Changing a registration happens on the
+	 * preset's own page (or, for a genre's defaults, the genre's); this answers
+	 * the reverse question — "who runs this pipeline, and when?" — with a link
+	 * out along each edge. Named configurations are retired (R38).
 	 */
-	import { onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
 	import { eventDisplayName } from "$lib/client/utils/eventName"
+	import { cadenceWords } from "$lib/shared/routines/cadenceWords"
+
+	type Place = Sockets.Pipelines.RegisteredIn.Place
 
 	interface Props {
 		slug: string
-		detail: Sockets.Pipelines.NamespaceDetail | null
-		selected: Sockets.Pipelines.NamedConfig | null
+		places: Place[]
 	}
 
-	let { slug }: Props = $props()
+	let { places }: Props = $props()
 
-	type Preset = Sockets.SessionAdmin.PresetRow
-	let presets: Preset[] = $state([])
-	let loading = $state(true)
-
-	const onPresets = (res: Sockets.SessionAdmin.Presets.Response) => {
-		presets = res.presets
-		loading = false
+	/** What a registration runs on, in words. */
+	function triggerWords(p: Place): string {
+		const t = p.trigger as { family?: string; event?: string; action?: string; cadence?: { id: string; options?: Record<string, unknown> } }
+		if (t.family === "event" && t.event) return `On ${eventDisplayName(t.event).toLowerCase()}`
+		if (t.family === "action" && t.action) return `Action ${t.action.slice(t.action.lastIndexOf("#") + 1)}`
+		if (t.family === "routine" && t.cadence) return `Routine · ${cadenceWords(t.cadence, { eventName: eventDisplayName })}`
+		return "Changed"
 	}
 
-	/**
-	 * BARE — `sessionPresets:list` is not in `SCOPED_EVENTS`; this panel reads
-	 * every preset and filters for the ones that reach this pipeline itself.
-	 * Declare-then-emit in one call so the key is on the wire ahead of the
-	 * request, and held for as long as the panel is open rather than released
-	 * on the reply: the list is a cascade target, so a preset rebound
-	 * elsewhere re-sends it and this "used by" answer stays true.
-	 */
-	onMount(() => requestWithInterest("sessionPresets:list", {}, onPresets))
-
-	/** The presets whose bindings reach this pipeline, and through which slot. */
-	const using = $derived(
-		presets
-			.map((p) => ({
-				preset: p,
-				events: Object.entries(p.bindings)
-					.filter(([, b]) => b.spec === slug)
-					.map(([event, b]) => ({ event, config: b.config }))
-			}))
-			.filter((u) => u.events.length > 0)
-	)
+	const genres = $derived(places.filter((p) => p.scope === "genre"))
+	const presets = $derived(places.filter((p) => p.scope === "preset"))
 </script>
 
-<section class="panel-card flex flex-col gap-3" aria-label="Used by presets">
+<section class="panel-card flex flex-col gap-3" aria-labelledby="where-it-runs-heading" data-testid="where-it-runs">
 	<div>
-		<h3 class="text-sm font-semibold">Used by presets</h3>
+		<h3 id="where-it-runs-heading" class="text-sm font-semibold">Where it runs</h3>
 		<p class="text-surface-600-400 text-xs">
-			Session presets bind a genre's event slots to pipelines and
-			configurations — editing them happens on the preset's own page.
-			These are the ones that reach for this pipeline.
+			The genres whose defaults register this pipeline, and the presets that add, drop or change it. Change one on the
+			preset's own page.
 		</p>
 	</div>
 
-	{#if loading}
-		<p class="text-surface-600-400 text-sm">Loading…</p>
-	{:else if !using.length}
+	{#if !places.length}
 		<p class="text-surface-600-400 text-sm italic">
-			No preset binds this pipeline yet.
-			<a class="underline" href="/admin/session-presets">
-				Manage presets</a
-			>.
+			Nothing registers this pipeline yet.
+			<a class="underline" href="/admin/session-presets">Manage presets</a>.
 		</p>
 	{:else}
-		<ul class="flex flex-col gap-2">
-			{#each using as u (u.preset.id)}
-				<li
-					class="border-surface-300-700 flex flex-wrap items-center gap-2 rounded-md border p-2.5"
-				>
-					<a
-						class="min-w-0 font-semibold hover:underline"
-						href="/admin/session-presets/{u.preset.id}"
-					>
-						{u.preset.name}
-					</a>
-					{#if u.preset.isDefault}
-						<span
-							class="preset-tonal-primary rounded-full px-1.5 py-0.5 text-[11px]"
-							>default</span
-						>
-					{/if}
-					{#if !u.preset.enabled}
-						<span
-							class="preset-tonal-surface rounded-full px-1.5 py-0.5 text-[11px]"
-							>hidden</span
-						>
-					{/if}
-					<span class="flex-1"></span>
-					{#each u.events as e (e.event)}
-						<span
-							class="preset-tonal-surface rounded px-1.5 py-0.5 font-mono text-[11px]"
-							title={e.config != null
-								? `${e.event} @ config #${e.config}`
-								: `${e.event} @ shipped default`}
-						>
-							{eventDisplayName(e.event)}
-						</span>
+		{#if genres.length}
+			<div class="flex flex-col gap-1.5">
+				<p class="text-surface-600-400 text-xs font-medium">The genre's defaults</p>
+				<ul class="flex flex-col gap-1.5">
+					{#each genres as g (g.genreId + g.key)}
+						<li class="border-surface-200-800 flex flex-wrap items-center gap-2 rounded-md border p-2.5">
+							<a class="min-w-0 font-semibold hover:underline" href="/admin/session-genres/{encodeURIComponent(g.genreId)}">
+								{g.genreName}
+							</a>
+							<span class="flex-1"></span>
+							<span class="preset-tonal-surface rounded px-1.5 py-0.5 text-meta" title={g.key}>{triggerWords(g)}</span>
+						</li>
 					{/each}
-					<a
-						class="btn btn-sm preset-tonal-surface"
-						href="/admin/session-presets/{u.preset.id}"
-					>
-						<Icons.Pencil size={12} /> Edit
-					</a>
-				</li>
-			{/each}
-		</ul>
+				</ul>
+			</div>
+		{/if}
+		{#if presets.length}
+			<div class="flex flex-col gap-1.5">
+				<p class="text-surface-600-400 text-xs font-medium">Presets</p>
+				<ul class="flex flex-col gap-1.5">
+					{#each presets as p (String(p.presetId) + p.key)}
+						<li class="border-surface-200-800 flex flex-wrap items-center gap-2 rounded-md border p-2.5">
+							<a class="min-w-0 font-semibold hover:underline" href="/admin/session-presets/{p.presetId}">
+								{p.presetName}
+							</a>
+							<span class="text-surface-600-400 text-xs">{p.genreName}</span>
+							<span class="flex-1"></span>
+							<span class="preset-tonal-surface rounded px-1.5 py-0.5 text-meta" title={p.key}>
+								{p.dropped ? "Dropped" : triggerWords(p)}
+							</span>
+							<a class="btn btn-sm preset-tonal-surface" href="/admin/session-presets/{p.presetId}">
+								<Icons.Pencil size={12} aria-hidden="true" /> Edit
+							</a>
+						</li>
+					{/each}
+				</ul>
+			</div>
+		{/if}
 	{/if}
 </section>

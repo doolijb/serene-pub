@@ -193,7 +193,7 @@
 					src={imageUrl}
 					alt={item.name}
 					loading="eager"
-					class="w-full rounded-[12px] object-contain shadow-md"
+					class="w-full rounded-container object-contain shadow-md"
 				/>
 			</div>
 		{/if}

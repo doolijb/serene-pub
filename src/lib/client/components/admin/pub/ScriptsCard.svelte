@@ -3,6 +3,7 @@
 	import { getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import SettingSwitch from "./SettingSwitch.svelte"
+	import SettingCard from "$lib/client/components/settingsTabs/SettingCard.svelte"
 	import { requireAdmin } from "./requireAdmin"
 
 	const socket = useTypedSocket()
@@ -19,18 +20,20 @@
 	}
 </script>
 
-<section class="panel-card flex flex-col gap-3" aria-labelledby="scripts-heading">
-	<h2 id="scripts-heading" class="text-sm font-medium">Scripts</h2>
-	<p class="text-surface-600-400 text-sm">
-		User-authored scripts that transform pipeline runs — slop filters,
-		stop guards, reminders at a depth. Off is a recovery lever, not a
-		purge: every chain and attachment stays in place and simply does
-		nothing until this is switched back on.
-	</p>
+<!-- Titled by the switch's own words: the card IS the switch (§6.4). Off
+     is a recovery lever, not a purge — chains and attachments stay. -->
+<SettingCard
+	title="Run scripts"
+	titleId="scripts-heading"
+	headingLevel={2}
+	help="Scripts people write into pipelines; off stops every one and deletes nothing."
+	layout="switch"
+>
 	<SettingSwitch
 		name="scripts-enabled"
 		label="Run scripts"
+		labelHidden
 		checked={systemSettingsCtx.settings?.scriptsEnabled ?? true}
 		{onCheckedChange}
 	/>
-</section>
+</SettingCard>

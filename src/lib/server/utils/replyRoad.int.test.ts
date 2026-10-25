@@ -179,6 +179,8 @@ let pickedModelId: number
 let defaultSamplingId: number
 let pickedSamplingId: number
 let RESPOND: string
+/** The reply's own steps, by the addresses its document gives them (Story's sit in its `reply` junction). */
+let steps: { generate: string; save: string; spritePick?: string; spriteShow?: string }
 
 const fakeSocket = (uid: number) => ({ user: { id: uid }, io: {} }) as any
 
@@ -250,6 +252,7 @@ beforeAll(async () => {
 	)
 	await bootstrapPipelines(db)
 	RESPOND = STORY_RESPOND_SPEC_ID
+	steps = await (await import("$lib/server/utils/testDb")).replyStepKeys(db, RESPOND)
 
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	userId = (await createTestUser(db, "reply-road")).id
@@ -428,13 +431,16 @@ describe("the pipeline owns its row", () => {
 		// is made before anything costs a token.
 		expect(keys).not.toContain("speaker")
 		expect(keys[1]).toBe("placeholder")
-		expect(keys.indexOf("placeholder")).toBeLessThan(keys.indexOf("generate"))
+		expect(keys.indexOf("placeholder")).toBeLessThan(keys.indexOf(steps.generate))
 		// The save fills the row; the sprite step (DESIGN-sprites §5,
 		// written into the spec since 2026-10-05) follows it — the picker,
 		// then the outlet, which writes nothing for a card with no sprites —
 		// and last the reply tick (live scenes §6, 2026-10-13).
-		expect(keys.slice(-4)).toEqual(["save", "spritePick", "spriteShow", "tick"])
-		const spriteShow = receipt.nodes.find((n) => n.nodeKey === "spriteShow")!
+		expect(keys.slice(-4)).toEqual([steps.save, steps.spritePick, steps.spriteShow, "tick"])
+		// 🚧 RF fix 3: one tail after the reply junction — each step once, and no copy of it under a branch.
+		for (const k of [steps.save, steps.spritePick!, steps.spriteShow!]) expect(keys.filter((x) => x === k), k).toHaveLength(1)
+		expect(keys.filter((x) => /(^|\.)(save|spritePick|spriteShow)$/.test(x))).toEqual([steps.save, steps.spritePick, steps.spriteShow])
+		const spriteShow = receipt.nodes.find((n) => n.nodeKey === steps.spriteShow)!
 		expect((spriteShow.output as any).kept).toBe(true)
 		// The tick ran and decided nothing — By 0, the shipped default, is
 		// off — so the clock junction and its *Advance story clock* outlet
@@ -449,10 +455,10 @@ describe("the pipeline owns its row", () => {
 				(n) => n.definitionId === "core:outlet/advance-story-clock@1"
 			)
 		).toBe(false)
-		const generate = receipt.nodes.find((n) => n.nodeKey === "generate")!
+		const generate = receipt.nodes.find((n) => n.nodeKey === steps.generate)!
 		expect(generate.result).toBe("ok")
 		expect((generate.output as any).text).toBe(CHUNKS.join(""))
-		const save = receipt.nodes.find((n) => n.nodeKey === "save")!
+		const save = receipt.nodes.find((n) => n.nodeKey === steps.save)!
 		expect(save.definitionId).toBe("core:outlet/update-message@1")
 		expect((save.input as any).target.ids.id).toBe(row.id)
 
@@ -462,7 +468,7 @@ describe("the pipeline owns its row", () => {
 			receipt.emitted.map((e) => [e.event, e.cause, e.dry ?? false])
 		).toEqual([
 			["core:event/message-created@1", "placeholder", false],
-			["core:event/message-updated@1", "save", false]
+			["core:event/message-updated@1", steps.save, false]
 		])
 
 		// The host announced the row from the commit — the client's
@@ -494,7 +500,7 @@ describe("the pipeline owns its row", () => {
 			artifacts.map((a) => [a.kind, a.entityId, a.action, a.nodeKey])
 		).toEqual([
 			["message", row.id, "created", "placeholder"],
-			["message", row.id, "updated", "save"]
+			["message", row.id, "updated", steps.save]
 		])
 	})
 
@@ -888,9 +894,9 @@ describe("Stop is a run-level guarantee", () => {
 		expect(receipt.cancelledBy).toBe(`user:${userId}`)
 		// The oracle's row keeps its own account; the run's is the stop.
 		expect(
-			receipt.nodes.find((n) => n.nodeKey === "generate")!.result
+			receipt.nodes.find((n) => n.nodeKey === steps.generate)!.result
 		).toBe("halt")
-		expect(receipt.nodes.some((n) => n.nodeKey === "save")).toBe(false)
+		expect(receipt.nodes.some((n) => n.nodeKey === steps.save)).toBe(false)
 
 		// The row: out of the generating state, holding what had arrived, no
 		// error — and saying so: the explicit `stopped` outcome (R-15), set by
@@ -930,7 +936,7 @@ describe("Stop is a run-level guarantee", () => {
 		const frames = events
 			.filter((e) => e.event === "pipelines:progress")
 			.map((e) => e.data)
-		const generate = frames.find((f) => f.nodeKey === "generate")
+		const generate = frames.find((f) => f.nodeKey === steps.generate)
 		expect(generate, "no progress frame for the generate step").toBeTruthy()
 		// The step word is generic (B18, 2026-09-27): a node key is never
 		// shown as a status; `nodeKey` still names the step for the card.
@@ -984,7 +990,7 @@ describe("Stop is a run-level guarantee", () => {
 		expect(outcome.stopped).toBe(true)
 		expect(outcome.receipt!.outcome).toBe("cancelled")
 		expect(outcome.receipt!.cancelledBy).toBe(`user:${userId}`)
-		expect(outcome.receipt!.nodes.some((n) => n.nodeKey === "save")).toBe(
+		expect(outcome.receipt!.nodes.some((n) => n.nodeKey === steps.save)).toBe(
 			false
 		)
 		// The row's final state, whichever of the two releases landed first:
@@ -1054,7 +1060,7 @@ describe("Stop is a run-level guarantee", () => {
 		releaseStream!()
 		holdStream = null
 		const receipt = await done
-		const save = receipt.nodes.find((n) => n.nodeKey === "save")!
+		const save = receipt.nodes.find((n) => n.nodeKey === steps.save)!
 		expect(save.result).toBe("ok")
 
 		const [row] = await db
@@ -1140,7 +1146,7 @@ describe("Stop is a run-level guarantee", () => {
 		const sessionId = await makeSession("throws")
 		const restore = await sessionOverride(
 			sessionId,
-			"save",
+			steps.save,
 			"settings",
 			"review",
 			"on"
@@ -1178,7 +1184,7 @@ describe("review lands on the save, when somebody turns it on (R-21 (3))", () =>
 		const sessionId = await makeSession("review")
 		const restore = await sessionOverride(
 			sessionId,
-			"save",
+			steps.save,
 			"settings",
 			"review",
 			"on"
@@ -1194,7 +1200,7 @@ describe("review lands on the save, when somebody turns it on (R-21 (3))", () =>
 			const review = gate.pendingReviewsFor(userId)[0]!
 			// Parked at the SAVE — after the placeholder exists and the model
 			// has answered — with the reply's text in front of the reviewer.
-			expect(review.nodeKey).toBe("save")
+			expect(review.nodeKey).toBe(steps.save)
 			expect(String(review.values.text)).toBe(CHUNKS.join(""))
 			const [parked] = (await messagesOf(sessionId)).slice(-1)
 			expect(parked!.role).toBe("assistant")
@@ -1281,67 +1287,21 @@ describe("a preview performs no writes", () => {
 			skipReceipt: true
 		})
 		expect(sent.outcome).toBe("ok")
-		const generate = sent.nodes.find((n) => n.nodeKey === "generate")!
+		const generate = sent.nodes.find((n) => n.nodeKey === steps.generate)!
 		const request = (generate.request as any)?.compiledPrompt
 		expect(JSON.stringify(request?.rendered ?? request)).toBe(previewPrompt)
 	})
 })
 
 describe("one resolution per run (R-8)", () => {
-	/** The mutable copy of the shipped config, so a pick can be written. */
+	/**
+	 * The panel's global pick: on the genre's defaults' registration of the
+	 * reply (PLAN-layering D5), where an instance-wide edit of a pipeline
+	 * registrations run lands.
+	 */
 	async function pick(nodeKey: string, slot: string, value: unknown) {
-		const { duplicateConfig, selectConfig } = await import(
-			"$lib/server/pipelines/config/named"
-		)
-		const [spec] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, RESPOND))
-		const [existing] = await db
-			.select({ id: schema.pipelineConfigs.id })
-			.from(schema.pipelineConfigs)
-			.where(
-				and(
-					eq(schema.pipelineConfigs.specId, spec.id),
-					eq(schema.pipelineConfigs.name, "reply road (test)")
-				)
-			)
-		let configId = existing?.id
-		if (configId === undefined) {
-			const [shipped] = await db
-				.select()
-				.from(schema.pipelineConfigs)
-				.where(
-					and(
-						eq(schema.pipelineConfigs.specId, spec.id),
-						eq(schema.pipelineConfigs.isImmutable, true)
-					)
-				)
-			const copy = await duplicateConfig(
-				db,
-				shipped.id,
-				"reply road (test)"
-			)
-			await selectConfig(db, spec.id, "pub", 0, copy.id, userId)
-			configId = copy.id
-		}
-		await db
-			.delete(schema.pipelineConfigValues)
-			.where(
-				and(
-					eq(schema.pipelineConfigValues.configId, configId),
-					eq(schema.pipelineConfigValues.nodeKey, nodeKey),
-					eq(schema.pipelineConfigValues.slot, slot),
-					eq(schema.pipelineConfigValues.path, "")
-				)
-			)
-		await db.insert(schema.pipelineConfigValues).values({
-			configId,
-			nodeKey,
-			slot,
-			path: "",
-			value: value as any
-		})
+		const { setPipelineValue } = await import("$lib/server/utils/testDb")
+		await setPipelineValue(db as any, RESPOND, { nodeKey, slot, path: "" }, value)
 	}
 
 	const budgetOf = (receipt: any) =>
@@ -1351,10 +1311,10 @@ describe("one resolution per run (R-8)", () => {
 	it("the session's sampling pick and the panel's connection pick reach budget and wire as one answer", async () => {
 		const sessionId = await makeSession("r8")
 		// The session's own choice (tier 3, sampling only: its panel row) …
-		await sessionOverride(sessionId, "generate", "sampling", "", pickedSamplingId)
+		await sessionOverride(sessionId, steps.generate, "sampling", "", pickedSamplingId)
 		// … and the panel's pick on the generate node (tier 2, the pair).
 		await pick(
-			"generate",
+			steps.generate,
 			"connection",
 			connectionSlotValue(pickedConnectionId, pickedModelId)
 		)
@@ -1365,7 +1325,7 @@ describe("one resolution per run (R-8)", () => {
 		const receipt = outcome.receipt!
 
 		// The executor's resolution, recorded on the generate node's input.
-		const generate = receipt.nodes.find((n) => n.nodeKey === "generate")!
+		const generate = receipt.nodes.find((n) => n.nodeKey === steps.generate)!
 		expect(String((generate.input as any).connection.id)).toBe(
 			String(pickedConnectionId)
 		)
@@ -1390,9 +1350,9 @@ describe("one resolution per run (R-8)", () => {
 
 	it("the model's own context window caps budget, wire and panel through the one function", async () => {
 		const sessionId = await makeSession("r8-model")
-		await sessionOverride(sessionId, "generate", "sampling", "", pickedSamplingId)
+		await sessionOverride(sessionId, steps.generate, "sampling", "", pickedSamplingId)
 		await pick(
-			"generate",
+			steps.generate,
 			"connection",
 			connectionSlotValue(pickedConnectionId, pickedModelId)
 		)
@@ -1420,7 +1380,7 @@ describe("one resolution per run (R-8)", () => {
 		)
 		// The panel reads the pipeline config's sampling pick, so make the
 		// panel's own pick the same row the session chose.
-		await pick("generate", "sampling", pickedSamplingId)
+		await pick(steps.generate, "sampling", pickedSamplingId)
 		const view: any = await namespaceView(db, "secret", RESPOND, {
 			userId,
 			isAdmin: true

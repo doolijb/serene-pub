@@ -18,6 +18,7 @@
 import { beforeAll, describe, expect, test, vi } from "vitest"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { LAIR_LAYOUT } from "@serene-pub/core-catalog"
 import { layoutPresetSeedKey } from "$lib/shared/sessionLayout/presets"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -38,6 +39,16 @@ beforeAll(async () => {
 // tests make, and Story as "another genre" (Adventure and the roleplay Chat
 // until 2026-10-19).
 const LAIR = "core:genre/lair"
+
+/**
+ * 🚧 A layout as captured from a Lair session (lair fix 2, 2026-10-22): the
+ * genre's layout sets the story's Messages settings (its tabs' composer), the
+ * session holds them, and capturing packs them for the widget drawn.
+ */
+const withStorySettings = <L extends Record<string, unknown>>(layout: L) => ({
+	...layout,
+	widgetSettings: { messages: LAIR_LAYOUT.widgetSettings!.messages }
+})
 const STORY = "core:genre/story"
 // On screen it is a **layout**, never a "preset" (NOMENCLATURE §9): the
 // page shows these sentences verbatim.
@@ -789,7 +800,9 @@ describe("sessions:layoutPreset:update", () => {
 			await get(admin.id, adminSession.id)
 			const byAdmin = await update(admin.id, adminSession.id, open.id, STATS_RIGHT, [], true)
 			expect(byAdmin.ok).toBe(true)
-			expect((await presetRow(open.id)).layout).toEqual(STATS_RIGHT)
+			// 🚧 The admin's Lair session carries the story's settings from the
+			// genre's layout (lair fix 2: its tabs' composer), captured with it.
+			expect((await presetRow(open.id)).layout).toEqual(withStorySettings(STATS_RIGHT))
 			// …and without the admin bit, the same ask is refused.
 			const notAdmin = await update(admin.id, adminSession.id, open.id, TWO_COLUMNS, [])
 			expect(notAdmin.ok).toBe(false)

@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest"
 import {
 	bookIsEmpty,
 	CAST_KIND,
+	drawnRulesLists,
+	drawsRulesList,
+	rulesListFacets,
 	facetCounts,
 	mergeCastCount,
 	nothingMatchesLine,
@@ -578,5 +581,65 @@ describe("looseEndsLabel — the rail foot's line", () => {
 	it("counts the loose ends, singular at one", () => {
 		expect(looseEndsLabel(3)).toBe("3 loose ends")
 		expect(looseEndsLabel(1)).toBe("1 loose end")
+	})
+})
+
+describe("🚧 the book's rules lists (lane C1, ruled 2026-10-21)", () => {
+	const list = (repertoireId: string, label: string, libraryRows: number, rules = "vis-itineris") => ({
+		typeId: `core:entry/${rules}.${repertoireId}`,
+		label,
+		repertoireId,
+		piece: { type: "object" as const, fields: {} },
+		libraryRows
+	})
+	const VIS = [
+		list("weapons", "Weapons", 12),
+		list("spells", "Spells", 20),
+		list("creatures", "Creatures", 0)
+	]
+	const FREEFORM = [
+		list("things", "Things", 0, "freeform"),
+		list("conditions", "Conditions", 0, "freeform")
+	]
+
+	it("draws a list only where it has something in it", () => {
+		// Library-backed lists from the start; creatures once the book holds some.
+		expect(drawnRulesLists(VIS, {}).map((l) => l.repertoireId)).toEqual(["weapons", "spells"])
+		expect(
+			drawnRulesLists(VIS, { "core:entry/vis-itineris.creatures": 1 }).map((l) => l.repertoireId)
+		).toEqual(["weapons", "spells", "creatures"])
+		// A Freeform book draws nothing new, until it holds a thing.
+		expect(drawnRulesLists(FREEFORM, {})).toEqual([])
+		expect(
+			drawnRulesLists(FREEFORM, { "core:entry/freeform.things": 1 }).map((l) => l.label)
+		).toEqual(["Things"])
+		expect(drawsRulesList(FREEFORM[1]!, null)).toBe(false)
+	})
+
+	it("gives each drawn list its row, with the book's own figure", () => {
+		expect(rulesListFacets(VIS, { "core:entry/vis-itineris.weapons": 3 })).toEqual([
+			{ id: "list:core:entry/vis-itineris.weapons", label: "Weapons", count: 3, empty: false },
+			{ id: "list:core:entry/vis-itineris.spells", label: "Spells", count: 0, empty: true }
+		])
+		// Figures on their way are not a count of none.
+		expect(rulesListFacets(VIS, null).map((f) => f.count)).toEqual([undefined, undefined])
+	})
+
+	it("counts the lists in Everything and in the book's total", () => {
+		const counts = { [WORLD]: 2, "core:entry/vis-itineris.weapons": 3 }
+		expect(railScopes(counts).find((f) => f.id === "all")?.count).toBe(5)
+		expect(entryTotal(counts)).toBe(5)
+	})
+
+	it("a book of only list entries is not empty", () => {
+		expect(bookIsEmpty({ "core:entry/vis-itineris.weapons": 1 })).toBe(false)
+		expect(bookIsEmpty({ "core:entry/vis-itineris.weapons": 0 })).toBe(true)
+	})
+
+	it("a list's scope narrows to its kind and is called by its label", () => {
+		expect(scopeKinds("list:core:entry/vis-itineris.weapons")).toEqual([
+			"core:entry/vis-itineris.weapons"
+		])
+		expect(scopeChipLabel("list:core:entry/vis-itineris.weapons", null)).toBe("Weapons")
 	})
 })

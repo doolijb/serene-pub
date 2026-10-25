@@ -58,16 +58,41 @@ const SHIPPED_TRIGGER = 3000
 const RESPOND_SPECS = [
 	"core:spec/story-respond",
 	"core:spec/guide-respond",
-	"core:spec/lair-respond"
+	"core:spec/lair-reply"
 ]
 
 /**
- * The structured calls inside a reply (JSON out) keep the declaration's 0,
- * as the structured actions below do: Story's reckoning and sweep
- * (2026-10-19) read the story to answer a schema, not to write prose.
+ * The trigger a respond spec's author default says at each step, read off the
+ * published spec's default preset — the genre's own words, never spelled
+ * here. Most prose steps ship 0.5.3's 3000; a step whose reminder must land
+ * from the first line ships 0 on purpose:
+ * - 🚧 the Lair's Sanctum talk (lair fix 2, 2026-10-22): the Castellan's
+ *   reminder (never narrate, never write for the party) — the talk that
+ *   drifted into narrating was two messages long;
+ * - 🚧 the Lair's voice (RF fix 2, 2026-10-23): a delver's reminder says whose
+ *   turn it is — a party of one read nothing after the GM's line and answered
+ *   as the GM, "*You materialize…*".
+ *
+ * The structured calls inside a reply (JSON out) would keep the declaration's
+ * 0, as the structured actions below do. 🚧 Story's reckoning and sweep left
+ * the reply on 2026-10-20 — routines of their own (PLAN-layering §4) — so no
+ * reply carries one now.
  */
-const STRUCTURED_STEPS: Record<string, readonly string[]> = {
-	"core:spec/story-respond": ["reckon.on.reckonPrompt", "sweep.due.sweepPrompt"]
+const authorTriggersOf = async (slug: string): Promise<Record<string, unknown>> => {
+	const [spec] = await db
+		.select()
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.slug, slug))
+	const { loadDocument } = await import("$lib/server/pipelines/boot/store")
+	const doc = await loadDocument(db, spec!.activeVersionId!)
+	const preset = doc.presets.find((p) => p.default)
+	expect(preset, `${slug} ships no default preset`).toBeTruthy()
+	return Object.fromEntries(
+		preset!.values
+			.filter((v) => v.slot === "params")
+			.map((v) => [v.nodeKey, (v.value as Record<string, unknown>)?.postHistoryTokenTrigger])
+			.filter(([, trigger]) => trigger !== undefined)
+	)
 }
 
 /** Every node in the spec's active version that declares the trigger. */
@@ -85,7 +110,7 @@ const triggerNodesOf = async (slug: string) => {
 
 describe("a fresh install's post-history trigger", () => {
 	it.each(RESPOND_SPECS)(
-		"resolves to 3000 at every prose assemble step of %s",
+		"resolves to its genre's author default at every prose assemble step of %s",
 		async (slug) => {
 			const nodeKeys = await triggerNodesOf(slug)
 			expect(nodeKeys.length).toBeGreaterThan(0)
@@ -99,13 +124,16 @@ describe("a fresh install's post-history trigger", () => {
 					sourced[k]?.params?.postHistoryTokenTrigger?.value
 				])
 			)
-			const structured = STRUCTURED_STEPS[slug] ?? []
-			for (const k of structured) expect(nodeKeys, `${slug} has no ${k}`).toContain(k)
-			expect(resolved).toEqual(
-				Object.fromEntries(
-					nodeKeys.map((k) => [k, structured.includes(k) ? 0 : SHIPPED_TRIGGER])
-				)
-			)
+			const authored = await authorTriggersOf(slug)
+			// The genre says its number at every step that assembles a
+			// prompt: none falls through to the declaration's 0 unsaid.
+			expect(Object.keys(authored).sort()).toEqual([...nodeKeys].sort())
+			// 0.5.3's 3000, or 0 where the reminder lands from the first line;
+			// every respond spec ships the 3000 somewhere.
+			for (const v of Object.values(authored)) expect([SHIPPED_TRIGGER, 0]).toContain(v)
+			expect(Object.values(authored)).toContain(SHIPPED_TRIGGER)
+			// …and what the author said is what a fresh install resolves.
+			expect(resolved).toEqual(authored)
 		},
 		60_000
 	)

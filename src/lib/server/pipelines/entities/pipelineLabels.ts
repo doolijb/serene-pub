@@ -9,7 +9,9 @@
  * set of names collapses them into one.
  *
  * The genre is the active version's declared claim (`taxonomy.genre`), as
- * `pipelines:list` sends it and Admin › Pipelines' Genre column reads it;
+ * `pipelines:list` sends it and Admin › Pipelines' Genre column reads it —
+ * or, 🚧 for a pipeline registrations mount (no lock, no claim), the one genre
+ * whose defaults register it;
  * its display name is the genre's own (`listSessionGenres`, the names
  * `sessions:genres` sends), else its id.
  */
@@ -38,9 +40,15 @@ export async function pipelineLabelsById(db: Db): Promise<Map<number, string>> {
 	const genreNames = new Map(
 		(await listSessionGenres(db)).map((g) => [g.genreId, g.name])
 	)
+	// 🚧 A pipeline registrations mount has no lock, so no `taxonomy.genre`:
+	// the one genre whose defaults register it (PLAN-layering D3).
+	const { soleRegisteringGenres } = await import(
+		"$lib/server/pipelines/registrations/resolve"
+	)
+	const registered = await soleRegisteringGenres(db)
 	return new Map(
 		(rows as any[]).map((r) => {
-			const genre: string | undefined = r.taxonomy?.genre
+			const genre: string | undefined = r.taxonomy?.genre ?? registered.get(r.slug)
 			return [
 				r.id,
 				withGenre(

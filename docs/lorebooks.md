@@ -14,6 +14,8 @@ You need a session to try it in. Any session works, including one with a single 
 
 Open the **Lorebooks** view from the rail and press **New** at the top of the list of books (from inside a book, press the back arrow at the top, **Lorebooks**, first to get back to the list). Give it a name and press **Create**.
 
+When the pub has [starter lorebooks](#starter-starter lorebooks), the dialog opens with two choices at the top: **Blank**, an empty book, or **Start from a starter lorebook**, a book that starts out with a world, a cast and rules already in it. For your first book, either works.
+
 If a session is open, the dialog also offers **Read it into this session**. Leave it on: that's step 3 done for you.
 
 ### 2. Write your first entry
@@ -116,11 +118,37 @@ Pressing a row opens the entry with the field that fixes it ready to type in (th
 
 **Search this book**, the box over the scopes, filters the list as you type. **Jump** (**Ctrl K**, **⌘K** on a Mac) searches the open book too, the same way it searches whichever view is open.
 
-Everything about the book itself sits in its header, one row at the top: the book's name, with the reading line under it (see [Reading a book into a session](#reading-a-book-into-a-session)); **Read into this session** or **Stop reading** beside the name, when a session you own is open; and **⋯** for **Settings**, **Duplicate** and **Delete this lorebook** (on a narrow screen, the reading button is the first item of **⋯** instead). The back arrow at the top left, **Lorebooks**, is there at every width and goes back to the list of books, which is where you open another book, make a **New** one or **Import a lorebook** (the upload button beside **New**).
+Everything about the book itself sits in its header, one row at the top: the book's cover image (when it has one) and name, with the reading line under it (see [Reading a book into a session](#reading-a-book-into-a-session)); **Read into this session** or **Stop reading** beside the name, when a session you own is open; and **⋯** for **Book settings**, **Duplicate** and **Delete this lorebook** (on a narrow screen, the reading button is the first item of **⋯** instead). The back arrow at the top left, **Lorebooks**, is there at every width and goes back to the list of books, which is where you open another book, make a **New** one or **Import a lorebook** (the upload button beside **New**).
 
-**Book settings** describes what the book holds (how many entries of each kind, its cast, dates, scenes and lines), and holds the book's calendar and clock. There are no features to switch on: every book can do everything on these pages. Settings opens in place of the list, with no view chosen and **Show as** set aside. **Back to the entries**, or **Esc** outside a text box, returns to exactly what was open, and choosing a view, a **Show as** icon or an entry leaves Settings too. It has an address of its own, so reloading the page keeps you on it.
+**Book settings** is the book's own page: its name, picture and rules, its calendar and clock, and a readout of what it holds. Open it from **Book settings** at the foot of the views list (on a narrow screen, at the foot of the view picker), from the book's **⋯** menu, or from a book's **⋯** menu in the list of books. It opens in place of the list, with no view chosen and **Show as** set aside. **Back to the entries**, or **Esc** outside a text box, returns to exactly what was open, and choosing a view, a **Show as** icon or an entry leaves it too. It has an address of its own, so reloading the page keeps you on it.
+
+- **About this book** holds the name, description, tags and **cover image**, ready to edit: there is no Edit to press first. The cover is the square picture beside the name: click it (or drop an image on it) to choose one, and a crop editor opens before anything is uploaded; the menu under it has **Adjust crop** and **Remove image**. Nothing changes until you press **Save**; **Discard changes** puts everything back. The cover shows square in the list of books and before the name in the header; a book with none shows the lorebook icon in the list. People you share the book with see its cover too.
+- **Rules** are what the book's stories are told by: **Freeform** (words only, no numbers) unless you chose others. Every session you start on the book plays them. Picking other rules asks first, because sessions already reading the book keep the rules they started with; only new sessions take the new ones. Nothing in the book itself changes. See [Rulesets](./rulesets.md).
+- **The story's present** and **Calendar** are the book's clock and calendar; see [Time, history and branches](./lorebook-time.md).
+- **What this book holds** counts its entries, cast, dates, scenes and lines. There are no features to switch on: every book can do everything.
+- **Writes from sessions** is how much sessions may write to this book: **Full** (the default: as your own setting allows), **Review changes** or **Off**. It's saved as soon as you pick it. It can only be stricter than your own **Lorebook writes from sessions** setting; when yours is the stricter one, the card says so, with a button to it. See [What a session may write](#what-a-session-may-write).
+- **Reading into a session** names the sessions of yours that read the book, with **Read into this session** or **Stop reading** for the one that is open.
+- **This book** has **Import another lorebook** (which makes a new book from a file), **Export** (paused), **Duplicate** and **Delete**.
 
 On a wide screen the list and the editor sit side by side. Drag the divider between them to give either more room, or focus it and use the arrow keys (**Shift** for bigger steps, **Home**/**End** for the ends); double-click it to reset. The width is remembered on this device, and is the same whatever **Show as** is set to. On a narrow screen, or docked beside a session, the scope list and **Show as** fold into one row: the search box, then a button that picks the view (the views, **Pinned** and the loose ends line, each with its figure), then a button that picks **Show as**. A view other than Everything shows as a chip under the row; its **×** returns to Everything. The editor opens in place of the list. If you move away from an entry with unsaved changes, you're asked first, and reloading or closing the tab warns you too. Moving the moment bar never asks: an open edit keeps the date it was started at.
+
+## Lists from your rules
+
+A book's **Rules** can bring lists of their own: Vis Itineris has **Weapons**, **Armour**, **Gear**, **Consumables**, **Spells**, **Feats**, **Conditions** and **Creatures**; Freeform has **Things** and **Conditions**. Each list is a kind of entry with fields of its own, such as a weapon's damage and range or a spell's level, beside the name, content and keywords every entry has.
+
+A list shows in the scope list, in a group named after the rules, under **Views**, whenever it has something in it: when the book holds entries of that kind, or when the rules come with a library of them. So a Vis Itineris book shows its seven library-backed lists from the start, and **Creatures** once it holds one; a Freeform book looks as it always has until it holds a thing or a condition. Each list has its figure. Choosing one opens it in the **Show as** you are using; from **Graph**, **Lives** or **Map** it opens in **List**.
+
+To add an entry to a list, open the list and press **New**, or use **New** in **Everything**, which offers **New entry in Weapons** and so on for each list the book shows. The editor asks for the list's own fields under the usual ones, marks the ones it needs with *, and says under a field what it still needs before it can be saved (_Add damage to save this._). A list entry also has a **Supply**, like an item. Its entries are found by search, listed in **Everything**, and counted in the book's figure like any other.
+
+### Your rules' library
+
+Some rules come with a library of ready-made entries for their lists: Vis Itineris brings the **Vis Itineris library**, with weapons, armour, gear, consumables, spells, feats and conditions ready to use. (Freeform has no library, so a Freeform book has no library chip.)
+
+- **Show it when you want it.** In a list your rules have a library for, and in **Everything**, the chips over the list include one named after it, **Vis Itineris library**, with how many it has for that list. Press it to list the library's entries beside your own; press it again to put them away. It is off each time you open the book, so the list starts with what your book holds. A list with nothing of your own yet offers **Show the Vis Itineris library** in its place.
+- **Read any of them.** Each library entry carries a **Vis Itineris library** badge. Open one to read all its fields, with where it comes from (its source document and licence) above them.
+- **Edit a copy** to make it yours. The copy is your book's own entry from then on: change anything, give it keywords, file it under another entry. It replaces the library's entry in your lists, and the library keeps its original, so a later version of the library leaves your copy as you made it. Reading at a branch makes the copy on that branch.
+- **Your sessions read what your book holds.** Library entries you have not copied stay in the library: they are not counted in the book's figures or **Loose ends**, and sessions find them through the rules rather than as lore. Copy one in when you want the story to use your version of it.
+- **A book shared with you** shows its rules' library to read, the same way; copies are made by the book's owner.
 
 ## Filing entries under others
 
@@ -141,7 +169,9 @@ See [Cast and relationships](./lorebook-cast.md) for private lore, relationships
 
 ## Reading a book into a session
 
-**Read into this session**, beside the book's name or in **Settings**, makes the open session read this book. It's offered for sessions you own. A session reads one book at a time; reading this one into a session that reads another asks first. **Stop reading** takes the book out of the session and leaves the book untouched.
+**Read into this session**, beside the book's name or in **Book settings**, makes the open session read this book. It's offered for sessions you own. A session reads one book at a time; reading this one into a session that reads another asks first. **Stop reading** takes the book out of the session and leaves the book untouched.
+
+A session chooses its book before the story starts. Until anything has been played (a line beyond the greetings, or anything in the session's own notes), you can read a book in, switch to another or stop reading, and the session takes the book's [rules](./rulesets.md) with it. Once the story is underway the session keeps reading its book: the buttons say *This story is underway with ‹book›, so it keeps reading it*, and a new session can read another book. A story that started with no lorebook keeps its own notes; make them a lorebook with **Create lorebook from session** (see [Your session's own notes](#your-sessions-own-notes)).
 
 You can also choose a session's book in its settings, along with its **Line** and **Story clock** (see [Where the session reads its lorebook](./sessions.md#where-the-session-reads-its-lorebook)).
 
@@ -159,15 +189,31 @@ These records are the book owner's: guests don't see them. Detailed records are 
 
 ## What a session may write
 
-Sessions can write back to your lorebook: scenes you capture, stats recorded onto the world, links a genre draws between rooms. Your **Lorebook writes from sessions** setting, in **Settings › User**, decides how much. Where a screen can't save because of it, its notice has a **Change it in Settings › User** button that takes you there. An administrator sets the default for everyone in **Admin › General**.
+Sessions can write back to your lorebook: scenes you capture, stats recorded onto the world, links a genre draws between rooms. Two settings decide how much, and the stricter one wins:
+
+1. **Your own**: **Lorebook writes from sessions**, in **Settings › User**, for every book you own. An administrator sets the default for everyone in **Admin › General**.
+2. **The book's**: **Writes from sessions**, in the book's **Book settings**. It starts at **Full**, which leaves your own setting as the answer. Set it to **Review changes** or **Off** to keep one book stricter than the rest. It can never allow more than your own setting.
+
+A session writes at the stricter of the two; it has no setting of its own. Each place says when the other is stricter: Book settings notes it when your own setting is stricter than the book's, and a session's settings show **Lorebook writes** under the lorebook, saying whether the book or your own setting is the one holding it back, with a link to change it. Where a screen can't save because writes are off, its notice says which setting is off and has a button that takes you there.
 
 - **Full** (the default): sessions write to the lorebook as they play. Changes apply as you play; the timeline lets you go back.
 - **Review changes**: what a session changes on its own is kept in the session's own notes (see below) until you bring it into the lorebook. Value changes a session proposes wait under its reply, for you to **Accept** or **Reject**. Only the lorebook's owner decides them. What you save yourself from a review screen, such as **Summarize to Lorebook**, **Compile to Entry** or **Apply graph**, saves straight away: that screen is the review.
 - **Off**: nothing a session does writes to the lorebook. What it would have written is kept in the session's own notes instead. Summarize, compile and the graph build say so and don't start, and so does drafting or saving the summary of a scene a session captured.
 
-A session reading a lorebook someone else shared with you never writes to it: what it changes stays in its own notes. Seating a character always adds them to the cast, whatever the setting.
+A lorebook someone else shared with you can't be read into your sessions (duplicate it first), so none of your sessions writes to it. Seating a character always adds them to the cast, whatever the setting.
 
 What a session writes lands on its line, dated where its story stands. See [Stats and states](./stats-and-states.md#when-a-session-changes-the-lorebook) for stats, and [Time, history and branches](./lorebook-time.md#which-line-a-session-reads) for lines.
+
+### Changes from a replaced reply
+
+Everything a session writes to your lorebook as it plays is remembered with the reply that caused it: a place's details, the words a tie shows, someone's state on the graph, a room or a way between rooms. Regenerate or swipe that reply, go **Back** past it (or delete it, where the genre offers Delete) and the change goes with it, as long as the lorebook still says exactly what the reply wrote. **Forward** puts it back.
+
+If someone changed it since (you, by hand, or a later reply), it stays as it is now. The entry's row in the list is marked **replaced**, and the entry says **Written by a reply that was since replaced**, with one line for each thing the reply wrote: what it set, and what was there before.
+
+- **Revert** puts back what was there before the reply. For an entry the reply added, it removes the entry.
+- **Keep** leaves it as it is, and the line goes.
+
+Only the lorebook's owner can revert or keep; anyone else reading the book sees the note. What you file or change yourself, such as **File as a room** or an action you press, is yours and never goes with a reply. Under **Review changes** and **Off** a session writes to its own notes instead, and those always go back with the reply.
 
 ## Your session's own notes
 
@@ -176,7 +222,7 @@ Every session has somewhere to keep the world it plays out, even with no loreboo
 - You don't manage them: the session creates them the first time it needs them, and they are deleted with the session.
 - They aren't listed anywhere: not in **Lorebooks**, not in any picker. The session reads them alongside its lorebook, and what comes from them is marked **this session only**.
 - Only the session's owner and guests can see them.
-- Each note remembers the turn that wrote it. Deleting or regenerating that turn takes it back; [branching](./sessions.md#on-revision) a session copies its notes up to the branch point.
+- Each note remembers the turn that wrote it. Deleting, regenerating or swiping a turn takes back the notes it wrote and the changes it made to others, even ones you edited since; [branching](./sessions.md#on-revision) a session copies its notes up to the branch point.
 - Places in the notes work like any other: the session's places list shows them with the ways between them, and their stats stay in the notes with them.
 
 ### Bringing a session's changes into the lorebook
@@ -184,6 +230,25 @@ Every session has somewhere to keep the world it plays out, even with no loreboo
 When a session reads your lorebook but keeps its changes in its own notes (**Review changes**, or **Off**), select the session in **Sessions**: its panel has a **This session only** card listing what it added. Choose **Apply to the lorebook** beside one to move it into the lorebook, or **Apply all to the lorebook**. An applied entry keeps the turn that wrote it, the links between applied entries come with them, and the item leaves the card. Only the lorebook's owner can apply changes to it.
 
 To keep that world, select the session in **Sessions**, open the **⋯** menu on its panel and choose **Create lorebook from session**. A note says *Lorebook created:* and its name, and the new lorebook opens. The notes become an ordinary lorebook, named after the session, listed in **Lorebooks** and read by the session from then on. It is offered while the session reads no lorebook, and only to its owner. The new lorebook plays the session's ruleset, and nothing in the session is marked **this session only** after that.
+
+## Starter lorebooks
+
+A **starter lorebook** is a ready-made world to start from: entries, places, a cast and the rules its stories are told by. Starting from one copies the whole starter lorebook, so what you make is yours to change, and the starter lorebook stays as it was for the next person.
+
+Each starter lorebook in a list shows its name, *Rules:* and the rules it plays, a line about it, what it holds (*Holds 12 entries, 3 places and 2 cast members*) and where it comes from: *Comes with Serene Pub*, *Comes with a plugin*, or *Made by* the admin who made it.
+
+- **A lorebook from a starter lorebook.** In **Lorebooks**, press **New**, choose **Start from a starter lorebook** and pick one. The name fills in with the starter lorebook's (change it if you like), and in place of the Rules list the dialog says which rules the book plays. Press **Create**: the new book opens, with its cast's character cards made for you.
+- **A session from a starter lorebook.** On the start screen, a genre with a lorebook step offers **Start from a starter lorebook** beside your books. The session plays the starter lorebook's rules and keeps the starter lorebook in its [own notes](#your-sessions-own-notes), ready to play, and nothing appears in **Lorebooks**. Because the story starts with notes already in them, the session keeps those notes as its world; when you want to keep them as a lorebook and build on them, use **Make a lorebook from its notes** in the session's settings (or **Create lorebook from session** on its panel).
+
+### Making and managing starter lorebooks (admins)
+
+Starter lorebooks come with Serene Pub and with plugins, and administrators can make their own for everyone on the pub.
+
+- **Save as starter lorebook.** Open one of your lorebooks and choose **Save as starter lorebook** from **⋯** or from **This book** in Book settings. The starter lorebook is a copy of the book as it is now; later changes to the book stay in the book. A note names the new starter lorebook and where to find it.
+- **Your starter lorebooks.** The starter lorebooks you made are listed under your books in **Lorebooks**, in a group of their own, each with a *Starter lorebook* badge. Open one to edit it like any lorebook. Sessions start from a starter lorebook and never read it, so a starter lorebook has no **Read into this session**, and its Book settings leave out **Writes from sessions** and **Reading into a session**. Its **This starter lorebook** card offers **Make a lorebook from this starter lorebook** and **Delete starter lorebook**. Each lorebook or session started from a starter lorebook gets its own copy, so what you change reaches the ones started next.
+- **Admin › Play › Starter lorebooks** lists every starter lorebook on the pub. Starter lorebooks that come with Serene Pub or a plugin stay as they are: **Clone** makes a copy of one that you can edit. A starter lorebook an admin made offers **Clone** and **Delete** (which names the starter lorebook and asks first), and **Open in Lorebooks** for the admin who made it. Clone asks for the new starter lorebook's name.
+
+Deleting a starter lorebook takes it off every list. Lorebooks and sessions already started from it keep everything they copied.
 
 ## Sharing a lorebook
 
@@ -193,7 +258,7 @@ They get the book read-only: it appears on their shelf under **Shared with you**
 
 ## Creating, importing, duplicating and deleting
 
-**New**, over the list of books, asks for a name. Everything else, such as cast, dates and places, appears as you use it. With no books yet, the list says what a lorebook is and offers **New lorebook**.
+**New**, over the list of books, asks for a name and the book's **Rules** (**Freeform** unless you pick others; you can change them later in Book settings). Everything else, such as cast, dates and places, appears as you use it. When the pub has starter lorebooks, **Blank** and **Start from a starter lorebook** sit at the top of the dialog: pick a starter lorebook and the book starts as a copy of it, named after it and playing its rules (see [Starter lorebooks](#starter-starter lorebooks)). A book's **⋯** menu in the list has **Book settings** and **Duplicate** as well; a book shared with you has **Duplicate**. With no books yet, the list says what a lorebook is and offers **New lorebook**.
 
 The upload button beside **New** (**Import a lorebook**) reads a SillyTavern lorebook or character book file, a lorebook exported by Serene Pub 0.5, or a book Serene Pub wrote into a character card. It always makes a new book; it never fills the one you have open.
 

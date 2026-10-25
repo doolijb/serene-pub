@@ -179,7 +179,7 @@
 	function tagColorPreset(tag: { colorPreset?: string }): string {
 		return (
 			tag.colorPreset ||
-			"bg-primary-500/20 text-primary-600 dark:text-primary-400"
+			"bg-primary-500/20 text-primary-ink"
 		)
 	}
 
@@ -375,7 +375,7 @@
 												: ''}"
 										>
 											<span
-												class="chip shrink-0 text-[11px] {stroke.when
+												class="chip shrink-0 text-meta {stroke.when
 													?.mode === 'keywords'
 													? 'preset-tonal-primary'
 													: 'preset-tonal-surface'}"
@@ -417,7 +417,7 @@
 												: ''}"
 										>
 											<span
-												class="chip shrink-0 text-[11px] {stroke.when
+												class="chip shrink-0 text-meta {stroke.when
 													?.mode === 'keywords'
 													? 'preset-tonal-primary'
 													: 'preset-tonal-surface'}"
@@ -450,7 +450,7 @@
 							<div class="flex flex-col gap-2">
 								{#each statGroups as group (group.sheetId ?? "loose")}
 									<div>
-										<p class="text-surface-600-400 text-[11px]">
+										<p class="text-surface-600-400 text-meta">
 											{group.label}
 										</p>
 										<dl

@@ -683,10 +683,20 @@ export interface PluginPresetSyncReport {
 	 * not equal to what ships — so the sync leaves their content alone.
 	 */
 	kept: string[]
+	/**
+	 * 🚧 A16: `<seed key>: <why>` for each preset withdrawn because a package
+	 * it requires (`PresetDecl.requires`, version ranges) is missing,
+	 * switched off or out of range. Withdrawn, never deleted: sessions on it
+	 * keep their rows and say what is missing; it comes back when the
+	 * requirement is met.
+	 */
+	unmet?: string[]
+	/** 🚧 A11: the re-check of every registration a package names, after the sync. */
+	refit?: { checked: number; broken: number }
 }
 
 /** `plugin:<plugin id>:<declared slug>` — the idempotence key, never a row id. */
-const presetSeedKey = (pluginId: string, slug: string) =>
+export const presetSeedKey = (pluginId: string, slug: string) =>
 	`plugin:${pluginId}:${slug}`
 
 /**
@@ -858,7 +868,17 @@ export async function syncPluginPresets(
 		return row?.id ?? null
 	}
 
+	/** 🚧 A16: presets whose requirements are not met here, withdrawn after the loop. */
+	const unmetBySeed = new Map<string, string[]>()
+	const { presetRequirementFindings } = await import("$lib/server/pipelines/registrations/door")
 	for (const [seedKey, { ownerId, pluginId, decl }] of declared) {
+		const unmet = await presetRequirementFindings(
+			db,
+			Array.isArray((decl as { requires?: unknown }).requires)
+				? ((decl as { requires: unknown[] }).requires.filter((r) => typeof r === "string") as string[])
+				: []
+		)
+		if (unmet.length) unmetBySeed.set(seedKey, unmet)
 		const bindings: Record<string, { spec: string; config?: number }> = {}
 		for (const [key, b] of Object.entries(decl.bindings ?? {})) {
 			if (!b || typeof (b as any).spec !== "string") continue
@@ -1023,6 +1043,56 @@ export async function syncPluginPresets(
 			.set({ withdrawnAt: new Date() })
 			.where(eq(schema.sessionPresets.id, row.id))
 		report.withdrawn.push(row.seedKey)
+	}
+
+	// 🚧 A16: a preset whose required packages are missing, switched off or
+	// out of range is withdrawn (as a disabled package's are), never deleted;
+	// the next sync that finds them met restores it above.
+	if (unmetBySeed.size) {
+		report.unmet = []
+		for (const [seedKey, why] of unmetBySeed) {
+			const [row] = await db
+				.select({ id: schema.sessionPresets.id, withdrawnAt: schema.sessionPresets.withdrawnAt })
+				.from(schema.sessionPresets)
+				.where(eq(schema.sessionPresets.seedKey, seedKey))
+				.limit(1)
+			if (!row) continue
+			if (!row.withdrawnAt)
+				await db
+					.update(schema.sessionPresets)
+					.set({ withdrawnAt: new Date() })
+					.where(eq(schema.sessionPresets.id, row.id))
+			report.restored = report.restored.filter((k) => k !== seedKey)
+			if (!report.withdrawn.includes(seedKey)) report.withdrawn.push(seedKey)
+			report.unmet.push(`${seedKey}: ${why.join("; ")}`)
+			console.warn(`[pipelines] preset ${seedKey} is withdrawn — ${why.join("; ")}`)
+		}
+	}
+
+	// 🚧 The registrations these presets carry (PLAN-layering D7): a package
+	// genre's defaults and each shipped preset's changes, re-projected now
+	// that the rows exist. Best-effort: the presets above are written either way.
+	try {
+		const { projectRegistrations } = await import(
+			"$lib/server/pipelines/registrations/project"
+		)
+		await projectRegistrations(db)
+	} catch (err) {
+		console.warn("[pipelines] the registrations projection failed:", err)
+	}
+
+	// 🚧 A11: every registration a package names — its pipelines, its genres'
+	// — re-run through the door now that its rows moved; a broken one is left
+	// out (its preset says so) and nothing else.
+	try {
+		const packages = (plugins as any[]).map((p) => p.pluginId as string).filter(Boolean)
+		if (packages.length) {
+			const { refitAfterChange } = await import("$lib/server/pipelines/registrations/fit")
+			const r = await refitAfterChange(db, packages)
+			report.refit = { checked: r.checked, broken: r.broken.length }
+		}
+	} catch (err) {
+		console.warn("[pipelines] the registrations re-check failed:", err)
 	}
 
 	return report

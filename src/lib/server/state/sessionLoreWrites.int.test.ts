@@ -29,6 +29,7 @@ import "@serene-pub/core-catalog"
 import { HISTORY_TYPE_ID, WORLD_LORE_TYPE_ID } from "$lib/shared/entries/types"
 import { LORE_WRITES_OFF } from "$lib/shared/lorebooks/loreWriteMode"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -73,7 +74,7 @@ function declareSlots() {
 		appliesTo: ["world"],
 		config: { of: ["clear", "storm", "fog"] }
 	})
-	genre(GENRE, { name: { en: "Session lore writes" }, family: "test", slots: [hp, weather], events: {} })
+	genreKeeping(GENRE, { name: { en: "Session lore writes" }, family: "test", slots: [hp, weather], events: {} })
 }
 
 let n = 0

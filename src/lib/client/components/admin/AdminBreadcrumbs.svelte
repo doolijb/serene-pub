@@ -32,7 +32,7 @@
 </script>
 
 {#if crumbs.length}
-	<nav aria-label="Breadcrumb" class="mb-2 text-[13px]">
+	<nav aria-label="Breadcrumb" class="mb-2 text-chip">
 		<ol class="text-surface-600-400 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
 			{#each crumbs as crumb, i (i)}
 				{@const last = i === crumbs.length - 1}

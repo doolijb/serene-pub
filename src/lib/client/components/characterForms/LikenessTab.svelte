@@ -218,7 +218,7 @@
 	</p>
 	<div class="flex flex-col gap-3 sm:flex-row sm:items-start">
 		<div
-			class="bg-surface-200-800 flex h-28 w-28 shrink-0 items-center justify-center overflow-hidden rounded-[10px]"
+			class="bg-surface-200-800 flex h-28 w-28 shrink-0 items-center justify-center overflow-hidden rounded-base"
 		>
 			{#if previewSrc}
 				<img
@@ -289,7 +289,7 @@
 						<li>
 							<button
 								type="button"
-								class="bg-surface-200-800 block aspect-square w-full overflow-hidden rounded-[10px]"
+								class="bg-surface-200-800 block aspect-square w-full overflow-hidden rounded-base"
 								class:ring-2={selected}
 								class:ring-primary-500={selected}
 								class:ring-offset-2={selected}
@@ -327,7 +327,7 @@
 				id="charLikenessPrompt"
 				type="text"
 				bind:value={likeness.prompt}
-				class="input rounded-[10px]"
+				class="input rounded-base"
 				placeholder="adult woman, red braid, green cloak, freckles"
 				aria-describedby="charLikenessPromptHint"
 			/>
@@ -374,7 +374,7 @@
 				id="charLikenessNegative"
 				type="text"
 				bind:value={likeness.negative}
-				class="input rounded-[10px]"
+				class="input rounded-base"
 				placeholder="glasses, beard, modern clothes"
 				aria-describedby="charLikenessNegativeHint"
 			/>

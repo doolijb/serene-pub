@@ -71,7 +71,7 @@
 	<div class="flex flex-wrap gap-1">
 		{#each draft.participantCharacters as id, i (id)}
 			<span
-				class="chip preset-tonal-primary flex items-center gap-0.5 py-0 text-[11px]"
+				class="chip preset-tonal-primary flex items-center gap-0.5 py-0 text-meta"
 			>
 				{pool.bindingName(id)}
 				<button
@@ -122,7 +122,7 @@
 	<div class="flex flex-wrap gap-1">
 		{#each draft.mentionedCharacters as id, i (id)}
 			<span
-				class="chip preset-tonal-surface flex items-center gap-0.5 py-0 text-[11px]"
+				class="chip preset-tonal-surface flex items-center gap-0.5 py-0 text-meta"
 			>
 				{pool.bindingName(id)}
 				<button

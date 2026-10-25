@@ -43,8 +43,8 @@ const MODULES: Record<string, string> = {
 		}
 	`,
 	"virtual:by-value": `
-		import { CORE_ENTRY_TYPES, STORY_SLOTS, CORE_STAT_SHAPES } from "@serene-pub/core-catalog"
-		export const count = CORE_ENTRY_TYPES.length + STORY_SLOTS.length + CORE_STAT_SHAPES.length
+		import { CORE_ENTRY_TYPES, CORE_HOST_STATE, CORE_STAT_SHAPES } from "@serene-pub/core-catalog"
+		export const count = CORE_ENTRY_TYPES.length + CORE_HOST_STATE.length + CORE_STAT_SHAPES.length
 	`
 }
 

@@ -297,10 +297,11 @@ function leversFor(id: CapabilityId, resolved: CapabilitySet): CapabilityId[] {
 	// "Native" is each service's OWN top band, not a shared number: `grammar`
 	// tops out at 1 and `json_schema` at 2, and comparing either against a
 	// literal would credit the wrong lever — or none at all.
-	for (const via of EMULATABLE_VIA[id as FeatureId] ?? [])
+	// ⏳ Open features (LS4): the tables are keyed by the known ones.
+	for (const via of (EMULATABLE_VIA as Partial<Record<string, readonly FeatureId[]>>)[id] ?? [])
 		if (resolved[via] === topGrade(via)) out.push(via)
 	for (const [source, implied] of Object.entries(IMPLIES)) {
-		if (!implied.includes(id as FeatureId)) continue
+		if (!(implied as readonly string[]).includes(id)) continue
 		if (resolved[source as FeatureId]) out.push(source as FeatureId)
 	}
 	return [...new Set(out)]

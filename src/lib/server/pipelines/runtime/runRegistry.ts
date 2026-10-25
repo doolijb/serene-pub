@@ -30,8 +30,39 @@ import type { StatusText } from "@serene-pub/sdk"
  *    when its live row — if it has one — is among the released.
  *  · `maintenance` — nothing a person is watching from the composer; never
  *    stopped by a message's Stop. Reserved: nothing registers one yet.
+ *  · 🚧 `routine` — a routine's run (PLAN-layering D7, R13; 2026-10-20):
+ *    nobody pressed anything, so a message's Stop never reaches it and it
+ *    never makes the session "generating" — a person's work goes ahead of
+ *    it, never behind it.
  */
-export type RunKind = "reply" | "action" | "maintenance"
+export type RunKind = "reply" | "action" | "maintenance" | "routine"
+
+/**
+ * 🚧 The trigger family a registered run answers to (LS2): a reply is the
+ * `message-respond` event's run, an action a person's press (and a child a
+ * run dispatched, registered the same way), a routine a routine. R13 is
+ * worded by family: routines wait for `action` and `event` runs only, so a
+ * later family (Live) never holds them.
+ */
+export function familyOfKind(kind: RunKind): "event" | "action" | "routine" | "maintenance" {
+	switch (kind) {
+		case "reply":
+			return "event"
+		case "action":
+			return "action"
+		case "routine":
+			return "routine"
+		default:
+			return "maintenance"
+	}
+}
+
+/** 🚧 Does this session have a registered run of one of these families in flight (R13)? */
+export function sessionRunsOf(sessionId: number, families: ReadonlySet<string>): RunHandle[] {
+	return [...runs.values()].filter(
+		(h) => h.sessionId === sessionId && families.has(familyOfKind(h.kind))
+	)
+}
 
 export interface RunHandle {
 	runId: string

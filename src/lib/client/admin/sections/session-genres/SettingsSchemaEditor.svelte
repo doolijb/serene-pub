@@ -187,6 +187,7 @@
 </script>
 
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
 	/**
 	 * A `SettingsSchema` DEFINITION editor (PLAN-pipeline-canvas-and-genre-
 	 * authoring §6.2): the fields a genre's new-session form asks for, each a
@@ -253,7 +254,7 @@
 			{@const errs = problems.get(row.uid) ?? []}
 			{@const editable = !readonly && EDITABLE.has(row.type)}
 			<div
-				class="bg-surface-50-950 flex flex-col gap-2 rounded-[10px] p-3"
+				class="bg-surface-50-950 flex flex-col gap-2 rounded-base p-3"
 				role="group"
 				aria-label="Field {row.key || i + 1}"
 				data-field={row.key}
@@ -369,9 +370,9 @@
 					</label>
 				</div>
 				{#if !EDITABLE.has(row.type)}
-					<p class="text-surface-600-400 text-xs">
+					<FieldHelp>
 						A {typeLabel(row.type)} field is kept as it was declared; only its key can change here.
-					</p>
+					</FieldHelp>
 				{/if}
 				<div class="flex flex-wrap items-center gap-2">
 					<label class="flex min-h-10 items-center gap-2 text-sm">
@@ -430,7 +431,7 @@
 	</div>
 
 	<section
-		class="border-surface-300-700 flex flex-col gap-2 self-start rounded-[10px] border border-dashed p-3"
+		class="border-surface-300-700 flex flex-col gap-2 self-start rounded-base border border-dashed p-3"
 		aria-label="Preview of the new-session form"
 	>
 		<p class="text-surface-600-400 text-xs font-medium">Preview — what people fill in</p>

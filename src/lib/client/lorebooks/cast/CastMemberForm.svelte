@@ -501,13 +501,13 @@
 				{member.tag}
 			</p>
 			<div class="mt-1 flex flex-wrap items-center gap-1">
-				<span class="badge preset-tonal-surface text-[11px] capitalize">
+				<span class="badge preset-tonal-surface text-meta capitalize">
 					{member.kind}
 				</span>
 				{#if member.state !== "active"}
 					<span
 						class="badge {stateBadge(member.state)
-							.color} text-[11px]"
+							.color} text-meta"
 					>
 						{member.state}
 					</span>
@@ -516,7 +516,7 @@
 					<span
 						class="badge {visibilityBadge(
 							member.visibility
-						)} text-[11px]"
+						)} text-meta"
 					>
 						{member.visibility}
 					</span>
@@ -588,7 +588,7 @@
 										</div>
 									{/if}
 								</div>
-								<hr class="border-surface-300-700" />
+								<hr class="border-surface-200-800" />
 								<div class="flex flex-col gap-1">
 									<p class="text-sm font-semibold">
 										This book's pictures
@@ -659,7 +659,7 @@
 										</p>
 									{/if}
 								</div>
-								<hr class="border-surface-300-700" />
+								<hr class="border-surface-200-800" />
 								<button
 									class="btn btn-sm preset-tonal-surface w-full justify-start"
 									type="button"
@@ -1109,7 +1109,7 @@
 										at {momentLabel} and reads from then on.
 									</p>
 								</div>
-								<hr class="border-surface-300-700" />
+								<hr class="border-surface-200-800" />
 								<div class="flex flex-col gap-2">
 									<p
 										class="text-surface-700-300 text-xs leading-relaxed"

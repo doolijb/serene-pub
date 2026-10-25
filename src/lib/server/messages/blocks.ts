@@ -14,7 +14,7 @@
  * client, and the `answer-form` commit reads the same block the event named.
  */
 
-import { and, desc, eq, inArray, sql } from "drizzle-orm"
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	findFormBlock,
@@ -97,7 +97,10 @@ export async function openFormOf(
 		.where(
 			and(
 				eq(schema.sessionMessages.sessionId, sessionId),
-				eq(schema.sessionMessages.channel, channel)
+				eq(schema.sessionMessages.channel, channel),
+				// 🚧 The live history (RF fix 5): a rewound row's question is
+				// open nowhere.
+				isNull(schema.sessionMessages.rewindOrdinal)
 			)
 		)
 		.orderBy(desc(schema.sessionMessages.id))
@@ -301,7 +304,7 @@ function markBlock(
 	answered: FormAnswered | null
 ): MessageBlock[] {
 	return blocks.map((b) => {
-		if ((b.kind === "choices" || b.kind === "form") && b.id === id) {
+		if ((b.kind === "choices" || b.kind === "form" || b.kind === "roll") && b.id === id) {
 			if (answered) return { ...b, answered }
 			const { answered: _gone, ...open } = b
 			return open as MessageBlock

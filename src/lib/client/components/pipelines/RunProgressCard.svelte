@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SpProgress from "$lib/client/components/hostElements/SpProgress.svelte"
 	/**
 	 * A run in flight, with a way to stop it.
 	 *
@@ -203,7 +204,7 @@
 			{:else}
 				<!-- `err` and `halt` alike — neither produced a reply, and a
 				     check mark on either is the defect this fixes. -->
-				<Icons.TriangleAlert size={14} class="text-error-500 shrink-0" />
+				<Icons.TriangleAlert size={14} class="text-error-600-400 shrink-0" />
 			{/if}
 			<span class="min-w-0 flex-1 truncate text-sm capitalize">
 				{title(ended)}
@@ -288,16 +289,16 @@
 						{/if}
 					</span>
 				</div>
-				<div
-					class="bg-surface-500/20 mt-1 h-1.5 w-full overflow-hidden rounded-full"
-				>
-					<!-- No percentage means the job cannot say — a pulsing full bar
-					     reads as "working", where a 0% bar reads as "stuck". -->
-					<div
-						class="bg-primary-500 h-full transition-all duration-300"
-						class:animate-pulse={run.percent == null}
-						style="width: {run.percent ?? 100}%"
-					></div>
+				<!-- No percentage means the job cannot say: SpProgress draws its
+				     indeterminate bar, pulsing, which reads as "working" where a 0%
+				     bar reads as "stuck". -->
+				<div class="text-primary-500 mt-1" class:animate-pulse={run.percent == null}>
+					<SpProgress
+						attrs={{
+							value: run.percent == null ? null : String(run.percent),
+							label: "Run progress"
+						}}
+					/>
 				</div>
 			</div>
 			{#if !rowStops}
@@ -323,7 +324,7 @@
 			<img
 				src={preview(run)}
 				alt="Preview of the image being generated"
-				class="border-surface-200-700 mt-2 h-auto w-full rounded border"
+				class="border-surface-200-800 mt-2 h-auto w-full rounded border"
 			/>
 		{/if}
 	</div>

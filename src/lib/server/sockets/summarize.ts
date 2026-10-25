@@ -15,6 +15,7 @@ import { sessionEvents } from "@serene-pub/sdk"
 import { broadcastToSessionUsers } from "./utils/broadcastHelpers"
 import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
 import { assertOwnedBook } from "$lib/server/utils/ownedBook"
+import { strictRulesRefusal } from "$lib/server/rulesets/bookRules"
 
 /** The columns that say where a session reads its book, as one row has them. */
 type SessionLine = {
@@ -489,9 +490,36 @@ export const sessionsSetLorebookHandler: Handler<
 			throw new Error("Session not found or access denied.")
 		}
 
-		// If attaching a lorebook, verify the user owns it
+		// The book lock (PLAN-lorebook-kinds §A): once play has written, the
+		// session keeps the book it has.
+		const { bookChangeRefusal, rulesFromBook } = await import(
+			"$lib/server/sessions/bookLock"
+		)
+		const locked = await bookChangeRefusal(
+			db as unknown as Db,
+			{ id: session.id, lorebookId: session.lorebookId ?? null },
+			lorebookId
+		)
+		if (locked) throw new Error(locked)
+
+		// If attaching a lorebook, verify the user owns it — and that the
+		// session's genre plays by the book's rules, as a book chosen at the
+		// start would be checked (`strictRulesRefusal`).
 		if (lorebookId !== null) {
+			// 🚧 A starter lorebook is started from, never read (PLAN-lorebook-kinds §B).
+			const { kitReadRefusal } = await import("$lib/server/lorebooks/starterKits")
+			const kitRefusal = await kitReadRefusal(db as unknown as Db, lorebookId)
+			if (kitRefusal) throw new Error(kitRefusal)
 			await assertOwnedBook(db, userId, lorebookId)
+			const [book] = await db
+				.select({
+					name: schema.lorebooks.name,
+					primaryRuleset: schema.lorebooks.primaryRuleset
+				})
+				.from(schema.lorebooks)
+				.where(eq(schema.lorebooks.id, lorebookId))
+			const refusal = book ? strictRulesRefusal(session.genreId, book) : null
+			if (refusal) throw new Error(refusal)
 		}
 
 		// A new book starts at its most recently used line, the session's
@@ -500,6 +528,15 @@ export const sessionsSetLorebookHandler: Handler<
 		// story-time stats come with it, checked against the new book's
 		// calendar and written in one transaction under its lock.
 		const { sessionLinePatch } = await import("./sessions")
+		// Before play, the session takes the book's Rules with it (ruling 6).
+		const rules =
+			lorebookId !== null && lorebookId !== session.lorebookId
+				? await rulesFromBook(
+						db as unknown as Db,
+						{ genreId: session.genreId, rigour: session.rigour ?? null },
+						lorebookId
+					)
+				: null
 		const updated = await db.transaction(async (tx) => {
 			const linePatch = await sessionLinePatch(tx, {
 				before: {
@@ -511,7 +548,7 @@ export const sessionsSetLorebookHandler: Handler<
 			})
 			const [row] = await tx
 				.update(schema.sessions)
-				.set({ lorebookId, ...linePatch })
+				.set({ lorebookId, ...linePatch, ...(rules ?? {}) })
 				.where(eq(schema.sessions.id, sessionId))
 				.returning()
 			return row

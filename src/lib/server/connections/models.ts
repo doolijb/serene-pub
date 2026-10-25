@@ -90,6 +90,12 @@ export type ResolvedConnectionPair = SelectConnection & {
 	 */
 	connectionModelModality: string | null
 	/**
+	 * 🚧 What the model reads and writes (O3, 0109), as stated — NULL halves
+	 * gate nothing. `capabilityRefusal` judges `in ⊆ reads`, `out ⊆ writes`.
+	 */
+	connectionModelReads: string[] | null
+	connectionModelWrites: string[] | null
+	/**
 	 * What the model's own HOST declared, as capability switches — the layer
 	 * between the preset and the probe (`hostDeclaredCapabilities`). Null when
 	 * no model was merged or its host said nothing. Carried on the pair so every
@@ -217,6 +223,8 @@ export function mergeEndpointModel(
 			connectionModelName: null,
 			contextWindow: null,
 			connectionModelModality: null,
+			connectionModelReads: null,
+			connectionModelWrites: null,
 			hostCapabilities: null
 		}
 	const capabilities = layerCapabilities(endpoint, model)
@@ -252,6 +260,8 @@ export function mergeEndpointModel(
 		connectionModelName: model.name,
 		contextWindow: model.contextWindow ?? null,
 		connectionModelModality: model.modality ?? null,
+		connectionModelReads: (model.reads as string[] | null) ?? null,
+		connectionModelWrites: (model.writes as string[] | null) ?? null,
 		// The model's facts and launch options, read as switches. Resolved
 		// live like the rest of the pair, so a host that starts or stops
 		// listing `image` moves the answer on its next sync, with no cache.

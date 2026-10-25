@@ -198,7 +198,10 @@ export const PAIR_TIERS = RESOLUTION_TIERS.filter(
  */
 export const SCOPE_FOR_TIER: Record<ResolutionTier, ScopeKind> = {
 	capabilityDefault: "defaults",
-	pipelineConfig: "config",
+	// 🚧 R38 (2026-10-20): the retired named configuration's layer is the
+	// preset's now — its values arrive as registration values at `preset`
+	// (`world.ts`), and `config` is not in `SCOPE_ORDER`.
+	pipelineConfig: "preset",
 	sessionOverride: "session"
 }
 

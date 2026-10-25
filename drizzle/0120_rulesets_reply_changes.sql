@@ -1,0 +1,3 @@
+-- Custom SQL migration file, put your code below! --
+-- 0120_rulesets_reply_changes: no schema change. Its data upgrade (src/lib/server/db/dataUpgrades/0120_rulesets_reply_changes.ts) joins this migration's transaction: Story's reply config moves to its `reply.prose` branch.
+-- Keep this text unique among the migration files: the ledger matches a row to its file by the file's sha256 alone.

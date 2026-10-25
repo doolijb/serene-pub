@@ -1,4 +1,5 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
 	/**
 	 * Pub › Updates — the in-app update (docs/updating.md).
 	 *
@@ -293,12 +294,12 @@
 
 				<section class="panel-card flex flex-col gap-2" aria-labelledby="updates-safety-heading">
 					<h2 id="updates-safety-heading" class="text-sm font-medium">If something goes wrong</h2>
-					<p class="text-surface-600-400 text-sm">
+					<FieldHelp>
 						The launcher keeps this version until the new one has started properly. If it does
 						not start, the launcher puts this version back and tells you. Your data is not part
 						of the update, and a backup is taken before the new version changes it;
 						<a class="anchor" href="/admin/data">Data and backups</a> lists every backup.
-					</p>
+					</FieldHelp>
 				</section>
 			{/if}
 		{/if}

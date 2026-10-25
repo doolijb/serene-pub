@@ -18,6 +18,7 @@
  */
 
 import { isCardlessPlayerSeat } from "$lib/server/sessions/seatName"
+import { dutyModes } from "$lib/server/pipelines/runtime/duties"
 import type { Bindings, TypedReads } from "@serene-pub/sdk"
 import {
 	ok,
@@ -44,6 +45,8 @@ import {
 	checkFoldedSections,
 	// 🚧 A collected clock step's door (§15 G6), the host's own check.
 	clockStepRefusal,
+	// 🚧 D6: the rules-action inlet is bound once its contract is declared.
+	getDefinition,
 	type BandIntent,
 	type FormBlock,
 	type MessageBlock,
@@ -77,7 +80,9 @@ const STATUS = {
 	/** Reading who took part, for a scene summary. */
 	findingCast: { i18n: { en: "finding who was there" } },
 	/** A graph build's five steps — `{step}` is the step's own label. */
-	buildingGraph: { i18n: { en: "building the graph: {step}" } }
+	buildingGraph: { i18n: { en: "building the graph: {step}" } },
+	/** 🚧 O9: the transcribe step, hearing audio the reply cannot. */
+	listening: { i18n: { en: "listening to the audio" } }
 } satisfies Record<string, StatusText>
 import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 import { clockSpanWords } from "$lib/shared/lorebooks/storyDate"
@@ -118,6 +123,10 @@ import {
 	placeAttachments,
 	withAttachmentNames
 } from "$lib/server/attachments/placement"
+import {
+	planTranscription,
+	withTranscripts
+} from "$lib/server/attachments/transcription"
 import { markShownElsewhere } from "$lib/server/pipelines/ranking/shownElsewhere"
 import {
 	entityDocFreq,
@@ -214,6 +223,11 @@ import {
 	promptTokens,
 	transcriptCutNote
 } from "$lib/server/pipelines/prompt/transcriptFit"
+import {
+	fallBackMedia,
+	mediaBudgetNote,
+	placedMediaTokens
+} from "$lib/server/pipelines/prompt/mediaBudget"
 import { buildTemplateContext } from "$lib/server/pipelines/prompt/templateContext"
 import {
 	locationVariables,
@@ -1862,7 +1876,20 @@ const generateBinding = async (
 		 * REFUSES a request carrying tools that its connection or adapter
 		 * cannot send rather than sending it stripped — see there.
 		 */
-		tools: Array.isArray(input?.tools) ? input.tools : undefined
+		tools: Array.isArray(input?.tools) ? input.tools : undefined,
+		/**
+		 * 🚧 What the step asks the model to WRITE (O6) — `params.outputs`,
+		 * `["text"]` unless stated — and, for a spoken reply, the speech
+		 * sampling's values (O7). Forwarded, never interpreted: the dispatch
+		 * derives the requirement (`requirementForOutputs`) and refuses a
+		 * pair that cannot write what was asked, in words.
+		 */
+		outputs: Array.isArray((input?.params as { outputs?: unknown } | undefined)?.outputs)
+			? ((input!.params as { outputs: unknown[] }).outputs).filter(
+					(k): k is string => typeof k === "string" && !!k
+				)
+			: undefined,
+		speechSampling: (input as { speechSampling?: unknown })?.speechSampling ?? null
 	})
 
 	/**
@@ -1924,9 +1951,27 @@ const generateBinding = async (
 		// below, which the projection can remove.
 		return halt("the model returned nothing — there is no message to write")
 
+	/**
+	 * 🚧 The reply as PARTS, in order (O5): its reasoning, its prose, then
+	 * every media part the model wrote — a spoken reply's audio, stored and
+	 * referenced by the host. `main`/`text` stay the prose alone, so every
+	 * spec wired to them reads what it always read; a write wired to `parts`
+	 * (`update-message`) lands the media in the model's order.
+	 */
+	const parts: import("@serene-pub/sdk").OutputPart[] = [
+		...(result.reasoning ? [{ t: "reasoning" as const, text: result.reasoning }] : []),
+		{ t: "text" as const, text: result.text },
+		...(Array.isArray(result.media)
+			? (result.media as import("@serene-pub/sdk").MediaRef[]).map((ref) => ({
+					t: "media" as const,
+					ref
+				}))
+			: [])
+	]
 	return ok({
 		main: result.text,
 		text: result.text,
+		parts,
 		reasoning: result.reasoning,
 		// The connection *type*, not the connection: enough to answer
 		// "which provider answered this turn" from the receipt, and
@@ -2187,6 +2232,14 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			async (input: NodeInput<typeof C.sessionEvent>) => ok(input),
 			{ ports: [] }
 		),
+		// 🚧 A routine's firing (PLAN-layering D2, R9): the routine runtime
+		// shapes the session, where the routine resides, what its moment
+		// carried and the ruleset the session plays (`routines/run.ts`); the
+		// identity hands it on.
+		"core:inlet/routine@1": reads<typeof C.routine>(
+			async (input: NodeInput<typeof C.routine>) => ok(input),
+			{ ports: [] }
+		),
 		// The side-character turn (ruling 2026-09-07). Identity like its
 		// siblings: the trigger already decided who speaks and whether the
 		// lorebook knows them — `sideCharacterFact` in `sessions.ts` is what
@@ -2213,6 +2266,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		// hands it to the save spec.
 		"core:inlet/message-offered@1": reads<typeof C.messageOffered>(
 			async (input: NodeInput<typeof C.messageOffered>) => ok(input),
+			{ ports: [] }
+		),
+		// 🚧 A deletion asked (RF fix 5, owner ruling 2026-10-23): the delete
+		// handler checked the door and shaped it from the person's press; the
+		// identity hands it to the deletion pipeline the genre registered.
+		"core:inlet/message-deletion-asked@1": reads<typeof C.messageDeletionAsked>(
+			async (input: NodeInput<typeof C.messageDeletionAsked>) => ok(input),
 			{ ports: [] }
 		),
 
@@ -4552,17 +4612,21 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		/**
 		 * 🚧 The ruleset handler (PLAN-rulesets §25, §32; BACKBONE §4):
 		 * `resolve` reads a session's ruleset into labelled blocks, `apply`
-		 * validates the model's deltas, rolls from `ctx.random` (declared
-		 * randomness, so a retake with the run's seed rolls the same dice)
-		 * and writes through the state gate, `advance` passes story time.
+		 * validates the model's deltas, decides each check by its 🚧 check
+		 * method (2026-10-22: dice, a pool, cards, a comparison, a spend or a
+		 * judgement — each with its outcome block), rolling from `ctx.random`
+		 * (declared randomness, so a retake with the run's seed rolls the
+		 * same dice), and writes through the state gate, `advance` passes
+		 * story time.
 		 * The work is `$lib/server/rulesets/resolve`; the database is a
 		 * dynamic import on `set-state`'s stated terms (`bindings.state.ts`).
 		 *
 		 * The session is named by the `scope` in-port (W3-S); a spec that wires
 		 * no scope names it by the world's own owner among `owners`
 		 * (`session:<id>`), which every shipped spec's owners list carries.
-		 * The session's stored ruleset settings and the ruleset's `derived`
-		 * scripts are read inside the handler. Its blocks carry `{ priority,
+		 * The session's stored ruleset settings and the ruleset's scripts —
+		 * 🚧 every phase since 2026-10-22: effects, derived, pre-roll,
+		 * post-roll, render — are read and run inside the handler. Its blocks carry `{ priority,
 		 * depth }` and every depth's render; `rulesets/budget.ts` degrades
 		 * before it drops.
 		 */
@@ -4582,7 +4646,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 						elapsed: input?.elapsed,
 						// Whose eyes (2026-10-17): a participant reference or
 						// `gm`. Unwired: everyone's view.
-						viewer: input?.viewer
+						viewer: input?.viewer,
+						// 🚧 D3 (2026-10-23): the step's `emits` parameter — what the
+						// ruleset's functions raise is emitted after the run's
+						// receipt unless it says false. On by default.
+						emits: input?.params?.emits,
+						// 🚧 D3: the event that woke the step — the functions' `ctx.event`.
+						event: input?.event
 					},
 					{
 						random: ctx?.random,
@@ -4608,10 +4678,23 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					}
 				)
 				if ("halt" in result) return halt(result.halt)
-				return ok(result.ok)
+				// 🚧 D7: the schema a reply that carries changes answers against, on its own port.
+				return ok({ ...result.ok, replySchema: result.ok.facts?.replySchema ?? null })
 			},
-			{ ports: ["scope", "owners", "rigour", "mode", "actions", "deltas", "elapsed", "viewer"] }
+			{ ports: ["scope", "owners", "rigour", "mode", "actions", "deltas", "elapsed", "viewer", "event"], params: ["emits"] }
 		),
+		/**
+		 * 🚧 **A ruleset's action** (PLAN-rulesets-functions D6, 2026-10-23):
+		 * the inlet of the one generic `core:spec/rules-action` pipeline —
+		 * `{ session, actor, function, answer, aimedAt }`, handed on whole
+		 * like its siblings. The spec wires it into `ruleset-resolve`'s
+		 * `actions` port, which runs the invokable function with its answer
+		 * (`rulesets/resolve.ts` `invokeOf`). Bound only once its contract is
+		 * declared (lane A2's), so neither half lands without the other.
+		 */
+		...(getDefinition("core:inlet/rules-action@1")
+			? { "core:inlet/rules-action@1": reads<unknown>(async (input: unknown) => ok(input as never), { ports: [] }) }
+			: {}),
 		"core:task/concat-candidates@1":reads<typeof C.concatCandidates>(
 			async (input: NodeInput<typeof C.concatCandidates>) => {
 				const orderings: any[][] = (input?.sources ?? []).filter(
@@ -4895,11 +4978,22 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				// fitted into what the window leaves, degrade depth before
 				// drop (`rulesets/budget.ts`). Absent `blocks`, `fittedBlocks`
 				// is absent.
-				if (input?.blocks == null) return ok({ main: budget, available: budget })
+				// 🚧 `reads` (O9): what the same pair reads, by kind — the
+				// transcribe step asks it before placement, so it never
+				// resolves the reply's pair a second time.
+				const reads = readsOfDescriptor(
+					input?.connection as
+						| { metadata?: Record<string, unknown>; modelId?: unknown }
+						| null
+						| undefined
+				)
+				if (input?.blocks == null)
+					return ok({ main: budget, available: budget, reads })
 				const { fitContextBlocks } = await import("$lib/server/rulesets/budget")
 				return ok({
 					main: budget,
 					available: budget,
+					reads,
 					// Counted in the run's own tokens, as the window is.
 					fittedBlocks: fitContextBlocks(input.blocks, budget.available, ctx?.countTokens ? (t) => ctx.countTokens(t) : undefined)
 				})
@@ -5396,7 +5490,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				return ok({
 					main: result.lines,
 					messages: result.lines,
-					notes: result.notes
+					notes: result.notes,
+					// 🚧 O10: what went as media and its estimated cost — read by
+					// the receipt; `assemble` counts it per line.
+					placed: result.placed
 				})
 			},
 			{
@@ -5520,7 +5617,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				// The reminder's position, resolved against the messages that are
 				// actually going out. The context builder ships a placeholder index
 				// because the final message array does not exist when it runs.
-				const messages = input?.messages ?? []
+				let messages = input?.messages ?? []
 				const ctxPostHistory = (input?.templateContext as any)
 					?.postHistory
 				let postHistory = ctxPostHistory
@@ -5688,6 +5785,56 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				let rendered = await renderWith(messages, postHistory, authorsNote)
 
 				/**
+				 * 🚧 Placed media in the budget (O10, `prompt/mediaBudget.ts`):
+				 * what placement estimated the lines' pictures and sounds cost
+				 * is added to what was rendered; over the budget, media goes
+				 * back to its names, oldest line first, BEFORE any line is
+				 * cut — and the receipt says so. A prompt with no placed media
+				 * is untouched.
+				 */
+				let mediaFit: Record<string, unknown> | undefined
+				const mediaBudget = Number(input?.budget?.total ?? 0)
+				let mediaLeft = placedMediaTokens(messages as unknown[])
+				if (
+					mediaBudget > 0 &&
+					mediaLeft > 0 &&
+					typeof ctx?.countTokens === "function"
+				) {
+					const textSize = promptTokens(rendered, (t) => ctx.countTokens(t))
+					const over = textSize + mediaLeft - mediaBudget
+					if (over > 0) {
+						const fb = fallBackMedia(messages as any[], over, (t) =>
+							ctx.countTokens(t)
+						)
+						if (fb.files) {
+							messages = fb.lines as typeof messages
+							rendered = await renderWith(messages, postHistory, authorsNote)
+							const before = mediaLeft
+							mediaLeft = placedMediaTokens(messages as unknown[])
+							mediaFit = {
+								files: fb.files,
+								freed: fb.freed,
+								media: before,
+								measured: textSize + before,
+								budget: mediaBudget
+							}
+							rendered = {
+								...rendered,
+								notes: [
+									...(rendered.notes ?? []),
+									mediaBudgetNote({
+										files: fb.files,
+										media: before,
+										measured: textSize + before,
+										budget: mediaBudget
+									})
+								]
+							}
+						}
+					}
+				}
+
+				/**
 				 * The conversation, fitted to the window (B2, 2026-10-03;
 				 * `prompt/transcriptFit.ts`). Measured on what was RENDERED —
 				 * only this node knows the finished size — and only when that
@@ -5712,7 +5859,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					messages.length &&
 					typeof ctx?.countTokens === "function"
 				) {
-					const measured = promptTokens(rendered, count)
+					// 🚧 O10: the media still placed counts too.
+					const measured = promptTokens(rendered, count) + mediaLeft
 					const cuttable = (messages as any[]).filter(isCuttableLine)
 					// Each line's cost is only worth counting once the prompt
 					// is over: the ordinary turn pays one measurement.
@@ -5721,7 +5869,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 						tokens: cuttable.map(
 							(m) =>
 								count(`${m.name ?? ""}: ${m.message ?? ""}`) +
-								MESSAGE_SCAFFOLD_TOKENS
+								MESSAGE_SCAFFOLD_TOKENS +
+								placedMediaTokens([m])
 						),
 						total: measured,
 						budget: fitBudget
@@ -5767,7 +5916,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 									}).authorsNote
 								: authorsNote
 						rendered = await renderWith(lines, placedReminder, placedNote)
-						size = promptTokens(rendered, count)
+						size = promptTokens(rendered, count) + placedMediaTokens(lines as unknown[])
 						// The receipt's placements follow the lines that went out.
 						if (postHistoryDiag && placedReminder?.hasContent)
 							postHistoryDiag = {
@@ -5785,7 +5934,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 							tokens: rest.map(
 								(m) =>
 									count(`${m.name ?? ""}: ${m.message ?? ""}`) +
-									MESSAGE_SCAFFOLD_TOKENS
+									MESSAGE_SCAFFOLD_TOKENS +
+									placedMediaTokens([m])
 							),
 							total: size,
 							budget: fitBudget,
@@ -5878,7 +6028,12 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					 * where (B2). Undeclared, like the two above: the receipt is
 					 * the reader. Absent when everything fit.
 					 */
-					...(transcriptFit ? { transcriptFit } : {})
+					...(transcriptFit ? { transcriptFit } : {}),
+					/**
+					 * 🚧 Whether placed media fell back to names to fit (O10),
+					 * and on what numbers. Undeclared, like the three above.
+					 */
+					...(mediaFit ? { mediaFit } : {})
 				})
 			},
 			{
@@ -5999,9 +6154,59 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					"currentCharacterId",
 					"attachments",
 					"connection",
-					"sampling"
+					"sampling",
+					"speechSampling"
 				],
-				params: ["stopSequences", "streaming"]
+				params: ["stopSequences", "streaming", "outputs"]
+			}
+		),
+		/**
+		 * 🚧 **Transcribe audio** (O9) — the explicit step before placement.
+		 * Pure where it can be: which files need hearing is decided here
+		 * (`planTranscription`); nothing wanted — no audio, a call that hears
+		 * it, a cached transcript — sends nothing and hands the record on as
+		 * it came. The hearing itself is the host's (`ctx.call`): the
+		 * Transcription loadout's pair, each file read under the run's
+		 * access rule, each transcript cached on its file.
+		 */
+		"core:oracle/transcribe-audio@1": reads<typeof C.transcribeAudio>(
+			async (input: NodeInput<typeof C.transcribeAudio>, ctx: OracleCtx) => {
+				const attachments = (input?.attachments ?? {}) as Record<
+					string,
+					import("@serene-pub/sdk").HistoryAttachmentV1[]
+				>
+				const plan = planTranscription({
+					lines: (input?.messages ?? []) as any[],
+					attachments,
+					hears: (input?.hears ?? null) as import("@serene-pub/sdk").ConnectionReadsV1 | null,
+					mediaLookback: input?.params?.mediaLookback
+				})
+				if (!plan.wanted.length)
+					return ok({ main: attachments, attachments, notes: [] })
+				ctx.status?.(STATUS.listening)
+				const heard = (await ctx.call({
+					files: plan.wanted.map((f) => ({
+						uuid: f.uuid,
+						mime: f.mime,
+						...(f.filename ? { filename: f.filename } : {})
+					})),
+					connection: input?.connection ?? null,
+					language:
+						typeof input?.params?.language === "string" &&
+						input.params.language.trim()
+							? input.params.language.trim()
+							: undefined
+				})) as { transcripts?: Record<string, string>; notes?: string[] }
+				const merged = withTranscripts(attachments, heard?.transcripts ?? {})
+				return ok({
+					main: merged,
+					attachments: merged,
+					notes: Array.isArray(heard?.notes) ? heard.notes : []
+				})
+			},
+			{
+				ports: ["messages", "attachments", "hears", "connection"],
+				params: ["mediaLookback", "language"]
 			}
 		),
 		/**
@@ -6447,21 +6652,56 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * and refuse one that was added. The host resolves the list; this is
 		 * the shape.
 		 */
-		"core:task/resolve-tasks@1": reads<typeof C.resolveTasks>(
-			async (input: NodeInput<typeof C.resolveTasks>) => {
-				// 🚧 Background tasks for this turn (2026-10-19): the host resolves
-				// stored > preset > declared and adds the "when" (`sessions/tasks.ts`).
-				const sessionId = (input?.session as any)?.sessionId ?? (input as any)?.scope?.sessionId
-				const empty = { reckoning: false, sweep: false, sweepEvery: 5, waitForRound: true, tasks: [], modes: {}, scripts: false }
-				if (typeof sessionId !== "number") return ok({ main: empty, ...empty })
-				const { resolveSessionTasks } = await import("$lib/server/sessions/tasks")
-				const { db } = await import("$lib/server/db")
-				const doc = await resolveSessionTasks(db as any, sessionId, {
-					ruleset: (input?.ruleset as { rigour?: string } | null | undefined) ?? null
-				})
-				return ok({ main: doc, ...doc })
+		/**
+		 * 🚧 **Duties** (PLAN-layering §4, R5, R37; 2026-10-20) — a switch
+		 * each, the step's own params, read where its pipeline branches. A
+		 * duty that is on runs at the routine's mode (`full` applies, `review`
+		 * holds each write); off is off. Every duties step reads its
+		 * `routine` in-port; unwired (a reply's duties, as shipped) it is
+		 * `full`. Publishes `modes` keyed as the steps that read
+		 * them name them (`dutyModes`), `any`, and `main` (both).
+		 *
+		 * A duty that writes a lorebook reads Off in a session with none — the
+		 * routine runtime forces it off on the run (`noBookDutyOverrides`,
+		 * lane 6); the reply's duties write nothing.
+		 */
+		"core:task/reply-duties@1": reads<typeof C.replyDuties>(
+			async (input: NodeInput<typeof C.replyDuties>) =>
+				ok(dutyModes("core:task/reply-duties@1", input?.params, input?.routine)),
+			// 🚧 `changes` (D7): *Replies carry changes*, published as `reply-changes`.
+			{ ports: ["routine"], params: ["lore", "scene", "changes"] }
+		),
+		/**
+		 * 🚧 S2 (PLAN-genres-seams, ★B, 2026-10-23): while the session's reply
+		 * carries changes at Full, *Keep the sheets* and *Track conditions*
+		 * read Off here — the reply filed what the scene changed — and the
+		 * output's `main.ceded` says so. The session is the routine run's
+		 * (`routineRunOf`); a run no routine made reads the duties as set.
+		 */
+		"core:task/reckoning-duties@1": reads<typeof C.reckoningDuties>(
+			async (input: NodeInput<typeof C.reckoningDuties>) => {
+				const { routineRunOf } = await import("$lib/server/pipelines/routines/runs")
+				const sessionId = routineRunOf(run.runId)?.sessionId
+				const facts =
+					sessionId != null
+						? {
+								replyChanges: await (await import("$lib/server/pipelines/routines/sessionRoutines")).sessionReplyChangesMode(
+									(await import("$lib/server/db")).db as never,
+									sessionId
+								)
+							}
+						: {}
+				return ok(dutyModes("core:task/reckoning-duties@1", input?.params, input?.routine, facts))
 			},
-			{ ports: ["session", "fields", "preset", "genre", "ruleset"] }
+			{ ports: ["routine"], params: ["attributes", "conditions", "time", "placesOnMove", "timedExpiry"] }
+		),
+		"core:task/sweep-duties@1": reads<typeof C.sweepDuties>(
+			async (input: NodeInput<typeof C.sweepDuties>) =>
+				ok(dutyModes("core:task/sweep-duties@1", input?.params, input?.routine)),
+			{
+				ports: ["routine"],
+				params: ["summary", "lore", "cast", "relationships", "worldState", "scenes", "goals", "goalReached"]
+			}
 		),
 		"core:query/available-tools@1": reads<typeof C.availableTools>(
 			async (
@@ -7829,7 +8069,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				input: NodeInput<typeof C.updateMessage>,
 				ctx: OutletCtx
 			) => ok(await ctx.commit(input)),
-			{ ports: ["target", "text", "reasoning", "blocks", "sections"] }
+			{ ports: ["target", "text", "reasoning", "blocks", "sections", "parts"] }
 		),
 		/**
 		 * Bound 2026-09-17 (plans/29 R-2): the host's commit for both — bytes
@@ -8081,14 +8321,15 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				input: NodeInput<typeof C.deleteMessage>,
 				ctx: OutletCtx
 			) => {
-				const { lost, ...ids } = (await ctx.commit(input)) as {
+				const { lost, taken, ...ids } = (await ctx.commit(input)) as {
 					id: unknown
 					sessionId?: unknown
 					lost?: unknown
+					taken?: unknown
 				}
-				return ok({ status: "committed", ids, lost: lost ?? null })
+				return ok({ status: "committed", ids, lost: lost ?? null, taken: taken ?? null })
 			},
-			{ ports: ["target"] }
+			{ ports: ["target", "asked"] }
 		),
 		"core:outlet/hide-message@1": reads<typeof C.hideMessage>(
 			async (
@@ -8170,7 +8411,23 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				input: NodeInput<typeof C.createLoreEntry>,
 				ctx: OutletCtx
 			) => ok(await ctx.commit(input)),
-			{ ports: ["name", "content", "links"], params: ["entryType"] }
+			// 🚧 `fields` (Lair rewrite D2): the entry type's typed fields,
+			// checked against the type at the review gate and the commit.
+			{ ports: ["name", "content", "links", "fields"], params: ["entryType"] }
+		),
+		/**
+		 * 🚧 Change an entry of this session's lorebook (Lair rewrite D2,
+		 * 2026-10-21): its name, its content, its typed fields — `fields` a
+		 * patch, checked against the entry's own type. `entry` names it as
+		 * `link-lore-entries@1`'s `to` does (an id, a write result, a name);
+		 * the commit resolves it inside the session's book.
+		 */
+		"core:outlet/update-lore-entry@1": reads<typeof C.updateLoreEntry>(
+			async (
+				input: NodeInput<typeof C.updateLoreEntry>,
+				ctx: OutletCtx
+			) => ok(await ctx.commit(input)),
+			{ ports: ["entry", "name", "content", "fields"] }
 		),
 		/**
 		 * One link between two entries of this session's lorebook.
@@ -8527,9 +8784,11 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		async (input: NodeInput<typeof C.buildSceneContext>, ctx: TaskCtx) =>
 			mergeContext(
 				// 🚧 The party's reach (`placeSight: 'reach'`, owner ruling
-				// 2026-09-30): the Castellan speaking for the party reads the
-				// stats of the party's room and the rooms one way on, before
-				// any variable reads the state. Absent: the session's sight.
+				// 2026-09-30): the stats of the party's room and the rooms one
+				// way on, before any variable reads the state. Absent: the
+				// session's sight. ⏳ No core spec wires it since the Lair
+				// rewrite retired the Castellan speaking for the party (R13);
+				// the port is the contract's, so the host still honours it.
 				input?.placeSight === "reach" && input?.state !== undefined
 					? {
 							...asNarrator(input),

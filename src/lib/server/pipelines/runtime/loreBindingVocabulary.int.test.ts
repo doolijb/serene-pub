@@ -53,7 +53,7 @@ import os from "os"
 import path from "path"
 import { and, eq } from "drizzle-orm"
 import {
-	setConfigValue,
+	setPipelineValue,
 	type TestDb
 } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
@@ -247,29 +247,14 @@ const worldLoreLane = async () => {
 	}
 }
 
-/** See `loreAdmitThreshold.int.test.ts`: the *selected* config, not the shipped row. */
-const setThreshold = async (value: number) => {
-	const { resolveSelectedConfig } = await import(
-		"$lib/server/pipelines/config/named"
-	)
-	const selected = await resolveSelectedConfig(
+/** The threshold a run of the reply reads (the genre's defaults, PLAN-layering D5). */
+const setThreshold = async (value: number) =>
+	await setPipelineValue(
 		db,
-		respondSpecRow.id,
 		STORY_RESPOND_SPEC_ID,
-		{ sessionId }
-	)
-	expect(selected, "the reply spec resolves to no configuration").toBeTruthy()
-	// ⚠ An upsert, not the `UPDATE` this was. A config stores **deviations**
-	// (ruled 2026-09-10), so at an untouched address there is no row to update
-	// — the old form matched nothing and every case ran at the declared
-	// threshold.
-	await setConfigValue(
-		db,
-		selected!.configId,
 		{ nodeKey: WORLD_LORE_LANE, slot: "params", path: "admitThreshold" },
 		value
 	)
-}
 
 describe("the host hands retrieval the book's roster, not just the room", () => {
 	it("returns every binding's names, including the unseated one's", async () => {

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { withoutShared } from "$lib/shared/utils/sharedRows"
 	import { avatarSrc } from "$lib/client/utils/media"
+	import { isStarterKit } from "$lib/client/lorebooks/starterKitCards"
 	import { Switch, Popover, Portal, Dialog } from "@skeletonlabs/skeleton-svelte"
-	import RowMenu from "$lib/client/components/menus/RowMenu.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
@@ -14,14 +14,9 @@
 	import { onMount, onDestroy, getContext, type Component } from "svelte"
 	import { z } from "zod"
 	import CharacterUnsavedChangesModal from "../modals/CharacterUnsavedChangesModal.svelte"
-	import AvatarCropEditor from "../media/AvatarCropEditor.svelte"
+	import AvatarPicker from "../media/AvatarPicker.svelte"
 	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
-	import {
-		avatarFrameCommit,
-		type PendingAvatarFrame
-	} from "../media/avatarFrameCommit"
-	import type { MediaFrame } from "$lib/shared/media/frame"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { stableStringify } from "$lib/shared/utils/connectionDefaults"
 	import { validateStrokes, type Stroke } from "@serene-pub/sdk"
@@ -32,6 +27,7 @@
 	import { likenessOfExtensions } from "$lib/shared/characters/likeness"
 	import { socketCardStatsApi } from "./cardStatsApi"
 	import {
+		CAST_LINE_NOTE,
 		castBannerWords,
 		retoldFieldList,
 		type CastBannerMember
@@ -340,7 +336,17 @@
 	 * theme-aware background and a focus ring that is already primary — with
 	 * this view's corner radius.
 	 */
-	const FIELD_CLASS = "input rounded-[10px]"
+	const FIELD_CLASS = "input rounded-base"
+	/** Field hints, now the fields' titles (polish parity L5, STYLE-GUIDE §6.4). */
+	const ALIASES_HINT =
+		"Other names they go by; when lore is looked up, a mention of one counts as a mention of them."
+	const SHOW_ALL_FIELDS_HINT =
+		"Adds every field a character card can carry: scenario, extra greetings, example dialogues and the creator's own metadata."
+	/** The Summary's limit; its counter shows only past 80% of it (§6.4). */
+	const SUMMARY_MAX = 200
+	const summaryNearLimit = $derived(
+		editCharacterData.summary.length >= SUMMARY_MAX * 0.8
+	)
 
 	let character: Sockets.Characters.Get.Response["character"] | undefined =
 		$state(undefined)
@@ -393,7 +399,7 @@
 		const existingTag = availableTags.find((tag) => tag.name === tagName)
 		return (
 			existingTag?.colorPreset ||
-			"bg-primary-500/20 text-primary-600 dark:text-primary-400"
+			"bg-primary-500/20 text-primary-ink"
 		)
 	}
 
@@ -458,144 +464,9 @@
 		}
 	}
 
-	/**
-	 * The crop editor's answer, held until the save comes back with a media id
-	 * to attach it to — the avatar is uploaded with the character, so the file
-	 * does not exist before then. Null means "upload it as it is".
-	 */
-	let pendingFrame = $state<PendingAvatarFrame | null>(null)
-	let cropOpen = $state(false)
-	/** What the editor is measuring: an object URL for a chosen file, or the
-	 *  stored original. Object URLs are revoked when they are replaced. */
-	let cropSrc = $state("")
-	let cropObjectUrl: string | null = null
-	/** Null while cropping a file that has not been uploaded; the stored frame
-	 *  when adjusting an avatar that already exists. */
-	let cropFrame = $state<MediaFrame | null>(null)
-
-	function releaseCropUrl() {
-		if (cropObjectUrl) URL.revokeObjectURL(cropObjectUrl)
-		cropObjectUrl = null
-	}
-
-	function handleAvatarChange(details: FileAcceptDetails) {
-		const file = details.files?.[0]
-		if (!file) return
-		// Only set preview, do not upload yet
-		const previewReader = new FileReader()
-		previewReader.onload = (ev2) => {
-			editCharacterData._avatar = ev2.target?.result as string
-		}
-		previewReader.readAsDataURL(file)
-		// Store file for later upload
-		editCharacterData._avatarFile = file
-
-		// The editor measures the file itself, so the frame is in the pixels
-		// the server will store.
-		releaseCropUrl()
-		cropObjectUrl = URL.createObjectURL(file)
-		cropSrc = cropObjectUrl
-		cropFrame = null
-		pendingFrame = null
-		cropOpen = true
-	}
-
-	/** Re-crop an avatar that already exists: the file has an id, so the frame
-	 *  is sent now rather than held for the save. */
-	function adjustCrop() {
-		const media = character?.avatarMedia
-		if (!media) return
-		releaseCropUrl()
-		cropSrc = `/media/${media.uuid}?v=original&r=${media.rev}`
-		cropFrame = media.frame ?? null
-		cropOpen = true
-	}
-
-	function onCropSaved(frame: MediaFrame | null) {
-		if (editCharacterData._avatarFile) {
-			pendingFrame = { frame }
-			// Held so reopening the editor before the save shows the crop that
-			// was just chosen rather than starting over at the default.
-			cropFrame = frame
-			return
-		}
-		const mediaId = character?.avatarMediaId
-		if (!mediaId) return
-		socket.emit("media:setFrame", { mediaId, frame })
-		if (character?.avatarMedia) character.avatarMedia.frame = frame
-		toaster.success({ title: "Crop updated" })
-	}
-
-	/** The crop the save just earned the right to store. */
-	function commitPendingFrame(avatarMediaId: number | null | undefined) {
-		const commit = avatarFrameCommit(pendingFrame, avatarMediaId)
-		pendingFrame = null
-		if (commit) socket.emit("media:setFrame", commit)
-	}
-
-	/**
-	 * The hero avatar IS the upload control: it takes a click and it takes a
-	 * drop, and both land in `handleAvatarChange` — the one place a chosen file
-	 * becomes a preview, a crop source and a pending upload.
-	 */
-	let avatarInputRef = $state<HTMLInputElement | null>(null)
-	let avatarMenuOpen = $state(false)
-	let isAvatarDragOver = $state(false)
-
-	function openAvatarPicker() {
-		avatarInputRef?.click()
-	}
-
-	function handleAvatarInputChange(e: Event) {
-		const input = e.currentTarget as HTMLInputElement
-		const file = input.files?.[0]
-		if (file) handleAvatarChange({ files: [file] } as FileAcceptDetails)
-		// Cleared so choosing the same file twice in a row fires `change` again.
-		input.value = ""
-	}
-
-	function handleAvatarDragOver(e: DragEvent) {
-		// A drop only happens where the default is prevented, so this is what
-		// makes the avatar a target rather than a page the browser navigates.
-		e.preventDefault()
-		if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"
-		isAvatarDragOver = true
-	}
-
-	function handleAvatarDragLeave(e: DragEvent) {
-		const next = e.relatedTarget
-		if (
-			next instanceof Node &&
-			(e.currentTarget as HTMLElement).contains(next)
-		)
-			return
-		isAvatarDragOver = false
-	}
-
-	function handleAvatarDrop(e: DragEvent) {
-		e.preventDefault()
-		isAvatarDragOver = false
-		const file = e.dataTransfer?.files?.[0]
-		if (file) handleAvatarChange({ files: [file] } as FileAcceptDetails)
-	}
-
-	/** The crop editor, on whichever source there is: a chosen file that has
-	 *  not been uploaded, or the stored original. */
-	function openCropEditor() {
-		if (editCharacterData._avatarFile) cropOpen = true
-		else adjustCrop()
-	}
-
-	/** Drops the picked file and its preview, back to the stored avatar. */
-	function clearAvatarSelection() {
-		editCharacterData._avatarFile = undefined
-		editCharacterData._avatar = ""
-		pendingFrame = null
-		releaseCropUrl()
-		// The editor is mounted whether or not it is open, so a revoked url
-		// left here is one it would try to load.
-		cropSrc = ""
-	}
+	/** The avatar picker: it holds a new avatar's crop until the save comes
+	 *  back with the file's id (`commitPendingFrame`). */
+	let avatarPicker = $state<ReturnType<typeof AvatarPicker> | null>(null)
 
 	/** The header's title: who is being edited, or that nobody is yet. */
 	let formTitle = $derived.by(
@@ -795,7 +666,8 @@
 		const mine = isSaving
 		isSaving = false
 		if (res.character) {
-			if (mine) commitPendingFrame(res.character.avatarMediaId)
+			if (mine)
+				avatarPicker?.commitPendingFrame(res.character.avatarMediaId)
 			validationErrors = {} // Clear any validation errors on success
 			toaster.success({
 				title: "Character created",
@@ -817,7 +689,7 @@
 		if (res.character?.id !== characterId) return
 		isSaving = false
 		if (res.character) {
-			commitPendingFrame(res.character.avatarMediaId)
+			avatarPicker?.commitPendingFrame(res.character.avatarMediaId)
 			validationErrors = {} // Clear any validation errors on success
 			toaster.success({
 				title: "Character updated",
@@ -921,9 +793,11 @@
 	}
 
 	function handleLorebooksList(message: Sockets.Lorebooks.List.Response) {
-		lorebookList = withoutShared(message.lorebookList).sort(
-			(a, b) => (a.id ?? 0) - (b.id ?? 0)
-		)
+		// Books only: a shared one is read and copy only, and a starter lorebook is
+		// never read (PLAN-lorebook-kinds §B).
+		lorebookList = withoutShared(message.lorebookList)
+			.filter((l) => !isStarterKit(l))
+			.sort((a, b) => (a.id ?? 0) - (b.id ?? 0))
 	}
 
 	function handleTagsList(message: any) {
@@ -1156,7 +1030,6 @@
 		// Remove keyboard event listener and clear timeout
 		document.removeEventListener("keydown", handleKeydown)
 		clearTimeout(validationTimeout)
-		releaseCropUrl()
 	})
 
 	// Track the last initialData we processed to prevent infinite loops
@@ -1184,7 +1057,7 @@
      reaches the model. -->
 {#snippet promptBadge(hint: string)}
 	<span
-		class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
+		class="flex items-center opacity-50 transition-opacity duration-fast hover:opacity-100"
 		title={hint}
 		aria-label={hint}
 	>
@@ -1202,7 +1075,7 @@
 {#snippet removeRowButton(label: string, onRemove: () => void)}
 	<button
 		type="button"
-		class="text-surface-600-400 hover:bg-surface-200-800 hover:text-error-500 grid size-8 shrink-0 place-items-center rounded-lg"
+		class="text-surface-600-400 hover:bg-surface-200-800 hover:text-error-600-400 grid size-8 shrink-0 place-items-center rounded-lg"
 		onclick={onRemove}
 		aria-label={label}
 		title={label}
@@ -1276,47 +1149,6 @@
 			{@render saveButton()}
 		</div>
 	{/if}
-	{#if castBanner}
-		<!-- The cast banner: a note, not a warning. A card is a starter; what
-		     a story changes about the character is kept on its cast members. -->
-		<section
-			class="border-surface-200-800 flex flex-col gap-1.5 rounded-[12px] border px-3 py-2 text-sm"
-			aria-label="Cast members"
-		>
-			<p class="text-surface-800-200">
-				{castBanner.represents}
-				{#if castBanner.retells}
-					{castBanner.retells}
-				{/if}
-			</p>
-			<ul class="flex flex-wrap gap-x-3 gap-y-1">
-				{#each castMembers as member (member.castId)}
-					{@const retold = retoldFieldList(member.retold)}
-					<li>
-						{#if panelsCtx}
-							<button
-								type="button"
-								class="text-primary-600-400 underline-offset-2 hover:underline"
-								aria-label="Open this card's cast member in {member.lorebookName}"
-								onclick={() => openCastMember(member)}
-							>
-								{member.lorebookName}
-							</button>
-						{:else}
-							<span>{member.lorebookName}</span>
-						{/if}
-						{#if retold}
-							<span class="text-surface-600-400">· retells {retold}</span>
-						{/if}
-					</li>
-				{/each}
-			</ul>
-			<p class="text-surface-600-400 text-xs">
-				A card is where a character starts. What a story changes about them
-				is kept on their cast member.
-			</p>
-		</section>
-	{/if}
 	<div class="flex flex-col gap-4" role="form" aria-label={formTitle}>
 		{#if !hideAvatar}
 			<!-- The avatar IS the upload control: it takes a click, it takes a
@@ -1330,87 +1162,36 @@
 				<legend id="avatar-section" class="sr-only">
 					Avatar settings
 				</legend>
-				<div class="flex flex-col items-center gap-1.5">
-					<button
-						type="button"
-						class="border-surface-200-800 relative h-[88px] w-[88px] shrink-0 overflow-hidden rounded-[14px] border {isAvatarDragOver
-							? 'ring-primary-500 ring-2'
-							: ''}"
-						onclick={openAvatarPicker}
-						ondragover={handleAvatarDragOver}
-						ondragleave={handleAvatarDragLeave}
-						ondrop={handleAvatarDrop}
-						title="Choose an avatar image"
-						aria-label="Choose an avatar image, or drop one here"
-					>
-						{#if avatarSrc(editCharacterData, { full: true })}
-							<img
-								src={avatarSrc(editCharacterData, {
-									full: true
-								})}
-								alt=""
-								class="absolute inset-0 h-full w-full object-cover object-top"
-							/>
-						{:else}
-							<span
-								class="bg-surface-200-800 absolute inset-0 grid place-items-center"
-							>
-								<Icons.UsersRound
-									size={36}
-									class="text-surface-600-400"
-									aria-hidden="true"
-								/>
-							</span>
-						{/if}
-						<span
-							class="bg-surface-900/90 text-surface-800-200 absolute right-1 bottom-1 grid size-6 place-items-center rounded-full backdrop-blur-sm"
-						>
-							<Icons.Camera size={14} aria-hidden="true" />
-						</span>
-					</button>
-					<input
-						type="file"
-						accept="image/*"
-						class="hidden"
-						tabindex="-1"
-						bind:this={avatarInputRef}
-						onchange={handleAvatarInputChange}
-						aria-hidden="true"
-					/>
-					<RowMenu
-						label="Avatar"
-						triggerClass="btn btn-icon hover:bg-surface-200-800 data-[state=open]:bg-surface-200-800 h-7 min-h-0 w-7 p-0"
-						bind:open={avatarMenuOpen}
-						items={[
-							{
-								label: "Adjust crop",
-								icon: Icons.Crop,
-								disabled:
-									!editCharacterData._avatarFile &&
-									!character?.avatarMedia,
-								onSelect: openCropEditor
-							},
-							{
-								label: "Remove image",
-								icon: Icons.Trash2,
-								destructive: true,
-								disabled: !editCharacterData._avatarFile,
-								onSelect: clearAvatarSelection
-							}
-						]}
-					/>
-				</div>
-				<div
-					class="grid min-w-0 flex-1 grid-cols-1 gap-3 @lg/view:grid-cols-2"
-				>
-					{@render nameField()}
-					{@render nicknameField()}
+				<AvatarPicker
+					bind:this={avatarPicker}
+					bind:file={editCharacterData._avatarFile}
+					bind:preview={editCharacterData._avatar}
+					src={avatarSrc(editCharacterData, { full: true })}
+					mediaId={character?.avatarMediaId}
+					media={character?.avatarMedia}
+					subject={`${
+						editCharacterData.nickname || editCharacterData.name || "this"
+					}'s avatar`}
+					onStoredFrame={(frame) => {
+						if (character?.avatarMedia)
+							character.avatarMedia.frame = frame
+					}}
+				/>
+				<div class="flex min-w-0 flex-1 flex-col gap-2">
+					<div class="grid grid-cols-1 gap-3 @lg/view:grid-cols-2">
+						{@render nameField()}
+						{@render nicknameField()}
+					</div>
+					{@render castLine()}
 				</div>
 			</fieldset>
 		{:else}
-			<div class="grid grid-cols-1 gap-3 @lg/view:grid-cols-2">
-				{@render nameField()}
-				{@render nicknameField()}
+			<div class="flex flex-col gap-2">
+				<div class="grid grid-cols-1 gap-3 @lg/view:grid-cols-2">
+					{@render nameField()}
+					{@render nicknameField()}
+				</div>
+				{@render castLine()}
 			</div>
 		{/if}
 
@@ -1445,22 +1226,25 @@
 						>
 							Summary
 						</label>
+						<!-- The hint is the field's title, the counter only
+						     past 80% of the limit (polish parity L5). -->
 						<textarea
 							id="charSummary"
 							rows="2"
 							bind:value={editCharacterData.summary}
 							class={FIELD_CLASS}
 							placeholder="One or two sentences describing who this character is…"
-							maxlength="200"
-							aria-describedby="charSummaryHint"
+							title="A one-line blurb for character lists and the lorebook Graph; not part of the prompt."
+							maxlength={SUMMARY_MAX}
 						></textarea>
-						<p class="text-surface-600-400 mt-1 text-right text-xs">
-							{editCharacterData.summary.length} / 200
-						</p>
-						<p class="text-surface-600-400 text-xs" id="charSummaryHint">
-							A one-line blurb for character lists and the
-							lorebook Graph. Not part of the prompt.
-						</p>
+						{#if summaryNearLimit}
+							<p
+								class="text-surface-600-400 mt-1 text-right text-xs"
+								aria-live="polite"
+							>
+								{editCharacterData.summary.length} / {SUMMARY_MAX}
+							</p>
+						{/if}
 					</div>
 					<StrokeField
 						kind="description"
@@ -1512,7 +1296,7 @@
 						></textarea>
 						{#if validationErrors.description}
 							<p
-								class="text-error-500 mt-1 text-sm"
+								class="text-error-600-400 mt-1 text-sm"
 								id="description-error"
 								role="alert"
 							>
@@ -1522,13 +1306,14 @@
 						{/snippet}
 					</StrokeField>
 					{#if validationErrors.strokesDescription && editCharacterData.strokes.length}
-						<p class="text-error-500 -mt-2 text-sm" role="alert">
+						<p class="text-error-600-400 -mt-2 text-sm" role="alert">
 							{validationErrors.strokesDescription}
 						</p>
 					{/if}
 					<div class="flex flex-col">
 						<span
 							class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
+							title={ALIASES_HINT}
 						>
 							Aliases
 							{@render promptBadge(
@@ -1545,8 +1330,8 @@
 										}
 										class="{FIELD_CLASS} flex-1"
 										placeholder="Alias..."
+										title={ALIASES_HINT}
 										aria-label={`Alias ${idx + 1}`}
-										aria-describedby="charAliasesHint"
 									/>
 									{@render removeRowButton(
 										`Delete alias ${idx + 1}`,
@@ -1562,13 +1347,6 @@
 								addToArray(editCharacterData.aliases)
 							)}
 						</div>
-						<p
-							class="text-surface-600-400 mt-1 text-xs"
-							id="charAliasesHint"
-						>
-							Other names they go by. When lore is looked up, a
-							mention of one counts as a mention of them.
-						</p>
 					</div>
 				</div>
 			</section>
@@ -1637,7 +1415,7 @@
 												class="z-[1000]!"
 											>
 												<Popover.Content
-													class="tag-dropdown bg-surface-100-900 border-surface-300-700 max-h-48 w-full overflow-y-auto rounded-lg border shadow-lg"
+													class="tag-dropdown bg-surface-100-900 border-surface-200-800 max-h-48 w-full overflow-y-auto rounded-lg border shadow-lg"
 												>
 													{#if tagSearchQuery.trim() && !filteredTags.some((tag) => tag.name.toLowerCase() === tagSearchQuery.toLowerCase())}
 														<button
@@ -1901,7 +1679,7 @@
 						{/snippet}
 					</StrokeField>
 					{#if validationErrors.strokesPersonality && editCharacterData.strokes.length}
-						<p class="text-error-500 -mt-2 text-sm" role="alert">
+						<p class="text-error-600-400 -mt-2 text-sm" role="alert">
 							{validationErrors.strokesPersonality}
 						</p>
 					{/if}
@@ -2088,15 +1866,8 @@
 							}
 							class={FIELD_CLASS}
 							placeholder="Stay in character and keep replies short…"
-							aria-describedby="charPostHistoryHint"
+							title="Placed after the conversation, just before the reply; good for style reminders."
 						></textarea>
-						<p
-							class="text-surface-600-400 mt-1 text-xs"
-							id="charPostHistoryHint"
-						>
-							Placed after the conversation, just before the
-							reply. Good for style reminders.
-						</p>
 					</div>
 				</section>
 			{/if}
@@ -2240,10 +2011,12 @@
 		</div>
 
 		<!-- Its own quiet row, outside the cards: this switch changes what the
-		     cards contain, so it is not one of the things they hold. -->
+		     cards contain, so it is not one of the things they hold. What it
+		     adds is its title (polish parity L5), not a sentence under it. -->
 		<div
 			class="flex flex-col gap-1 pt-2"
 			hidden={activeFormTab === "stats" || activeFormTab === "likeness"}
+			title={SHOW_ALL_FIELDS_HINT}
 		>
 			<Switch
 				name="show-all-character-fields"
@@ -2260,16 +2033,41 @@
 				<Switch.HiddenInput />
 				<Switch.Label class="text-sm">Show all fields</Switch.Label>
 			</Switch>
-			<p
-				id="show-all-fields-description"
-				class="text-surface-600-400 text-xs"
-			>
-				Adds every field a character card can carry — scenario, extra
-				greetings, example dialogues and the creator's own metadata.
-			</p>
+			<span id="show-all-fields-description" class="sr-only">
+				{SHOW_ALL_FIELDS_HINT}
+			</span>
 		</div>
 	</div>
 </div>
+
+<!-- The cast line (polish parity L5; it was a banner card over the form): one
+     muted line under the name, each lorebook's name opening that member. How
+     many members, which retell parts of the card, and what a card is ride its
+     title. Absent outside the shell, the names are plain text. -->
+{#snippet castLine()}
+	{#if castBanner}
+		<p
+			class="text-surface-600-400 text-xs"
+			title="{castBanner.represents}{castBanner.retells
+				? ` ${castBanner.retells}`
+				: ''} {CAST_LINE_NOTE}"
+			data-cast-line
+		>
+			{castBanner.lead}
+			{#each castMembers as member, i (member.castId)}
+				{@const retold = retoldFieldList(member.retold)}
+				{#if i > 0},{" "}{/if}{#if panelsCtx}<button
+						type="button"
+						class="text-primary-ink underline-offset-2 hover:underline"
+						aria-label="Open this card's cast member in {member.lorebookName}"
+						onclick={() => openCastMember(member)}
+					>
+						{member.lorebookName}
+					</button>{:else}<span>{member.lorebookName}</span>{/if}{#if retold}{" "}(retells {retold}){/if}
+			{/each}
+		</p>
+	{/if}
+{/snippet}
 
 {#snippet nameField()}
 	<div class="flex flex-col">
@@ -2299,7 +2097,7 @@
 			aria-describedby={validationErrors.name ? "name-error" : undefined}
 		/>
 		{#if validationErrors.name}
-			<p class="text-error-500 mt-1 text-sm" id="name-error" role="alert">
+			<p class="text-error-600-400 mt-1 text-sm" id="name-error" role="alert">
 				{validationErrors.name}
 			</p>
 		{/if}
@@ -2320,11 +2118,8 @@
 			type="text"
 			bind:value={editCharacterData.nickname}
 			class={FIELD_CLASS}
-			aria-describedby="charNicknameHint"
+			placeholder="What others call them in replies"
 		/>
-		<p class="text-surface-600-400 mt-1 text-xs" id="charNicknameHint">
-			What others call them in replies.
-		</p>
 	</div>
 {/snippet}
 
@@ -2394,20 +2189,6 @@
 		</Dialog.Positioner>
 	</Portal>
 </Dialog>
-
-<!-- Mounted whether or not it is open: a dialog torn down mid-close leaves its
-     machine reading state that went with it. The source outlives the close
-     here, so it is `open` alone that opens and closes the editor. -->
-<AvatarCropEditor
-	open={cropOpen}
-	onOpenChange={(e) => (cropOpen = e.open)}
-	src={cropSrc}
-	frame={cropFrame}
-	subject={`${
-		editCharacterData.nickname || editCharacterData.name || "this"
-	}'s avatar`}
-	onSave={onCropSaved}
-/>
 
 <style>
 	.sr-only {

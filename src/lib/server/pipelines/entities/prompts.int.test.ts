@@ -464,10 +464,9 @@ describe("deleting", () => {
 		)
 	})
 
-	it("refuses one a named config still points at", async () => {
-		// A config value holding the id of a deleted row is a selection that
-		// stores cleanly and does nothing — the exact failure this file's
-		// header promises to refuse.
+	it("a named configuration's value no longer holds one (configurations retired, R50)", async () => {
+		// A config value once held the row alive; nothing reads a configuration
+		// any more, so it does not.
 		const p = await createPrompt(db, {
 			...pool,
 			name: "Held by a config",
@@ -484,9 +483,9 @@ describe("deleting", () => {
 			path: "",
 			value: p.id
 		})
-		await expect(deletePrompt(db, p.id)).rejects.toThrow(
-			/still selected/
-		)
+		// 🚧 R50 (lane F1, 0110): configurations are retired — a value a
+		// configuration stores holds nothing alive, so the delete goes through.
+		await expect(deletePrompt(db, p.id)).resolves.toBeUndefined()
 	})
 
 	it("refuses one an override still points at, then allows after the reference moves", async () => {

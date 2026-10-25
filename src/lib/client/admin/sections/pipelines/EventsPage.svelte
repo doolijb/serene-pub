@@ -1,4 +1,5 @@
 <script lang="ts">
+	import InlineError from "$lib/client/components/InlineError.svelte"
 	/**
 	 * Admin › Pipelines › Events (PLAN-turn-order §B2; note 37, Django admin):
 	 * the read-only **changelist** of every event this instance knows — core's,
@@ -171,7 +172,7 @@
 >
 	{#snippet headerExtra()}
 		{#if error}
-			<p class="text-error-600-400 text-sm" role="alert">{error}</p>
+			<InlineError>{error}</InlineError>
 		{/if}
 	{/snippet}
 </AdminChangelist>

@@ -33,7 +33,7 @@
  * process open, and `process.once("exit")` drops what is left.
  */
 
-import { count, eq } from "drizzle-orm"
+import { and, count, eq, isNull } from "drizzle-orm"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelpers"
@@ -80,7 +80,11 @@ export async function sessionRowFrame(
 		.from(schema.sessions)
 		.leftJoin(
 			schema.sessionMessages,
-			eq(schema.sessionMessages.sessionId, schema.sessions.id)
+			and(
+				eq(schema.sessionMessages.sessionId, schema.sessions.id),
+				// 🚧 The live history (RF fix 5): the list's own count.
+				isNull(schema.sessionMessages.rewindOrdinal)
+			)
 		)
 		.where(eq(schema.sessions.id, sessionId))
 		.groupBy(schema.sessions.id)

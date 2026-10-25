@@ -19,6 +19,7 @@ import * as schema from "$lib/server/db/schema"
 import { defineAttributeSlot, genre, _clearAttributeSlots } from "@serene-pub/sdk"
 import "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -69,7 +70,7 @@ async function world() {
 		config: { min: 0, max: 20 },
 		default: 20
 	})
-	genre(GENRE, { name: { en: "Write owner gone" }, family: "test", slots: [hp], events: {} })
+	genreKeeping(GENRE, { name: { en: "Write owner gone" }, family: "test", slots: [hp], events: {} })
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	const user = await createTestUser(testDb, `owner-gone-${++n}`)
 	const [book] = await testDb.insert(schema.lorebooks).values({ userId: user.id, name: `World ${n}` }).returning()

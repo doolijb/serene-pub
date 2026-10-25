@@ -352,7 +352,7 @@
 								href="https://github.com/doolijb"
 								target="_blank"
 								rel="noopener noreferrer"
-								class="text-primary-500 hover:underline"
+								class="text-primary-ink hover:underline"
 							>
 								Jody Doolittle
 							</a>

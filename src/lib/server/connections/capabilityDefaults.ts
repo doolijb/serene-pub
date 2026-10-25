@@ -191,6 +191,8 @@ export async function setCapabilityDefault(
 	capability: string,
 	patch: Partial<CapabilityDefault>
 ): Promise<void> {
+	// 🚧 R56: what a model is set for is what is served.
+	;(await import("$lib/server/pipelines/registrations/unserved")).invalidateUnserved()
 	const existing = await defaultLoadoutFor(db, capability)
 	if (!existing) {
 		// `sidesOf` (inside the claim) refuses anything that is not a

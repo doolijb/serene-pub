@@ -509,7 +509,7 @@
 
 		<div class="space-y-1">
 			<label class="label text-sm font-semibold" for="ps-content">
-				Summary <span class="text-error-500">*</span>
+				Summary <span class="text-error-600-400">*</span>
 			</label>
 			<textarea
 				id="ps-content"
@@ -519,7 +519,7 @@
 			></textarea>
 		</div>
 
-		<div class="border-surface-300-700 space-y-3 rounded-lg border p-3">
+		<div class="border-surface-200-800 space-y-3 rounded-lg border p-3">
 			<p
 				class="text-surface-600-400 text-xs font-semibold"
 			>
@@ -541,7 +541,7 @@
 						>
 							{bindingNameById.get(id) ?? `#${id}`}
 							<button
-								class="hover:text-error-500 p-1.5"
+								class="hover:text-error-600-400 p-1.5"
 								aria-label="Remove participant {bindingNameById.get(
 									id
 								) ?? id}"
@@ -587,11 +587,11 @@
 								class="chip preset-tonal-warning flex items-center gap-1 border border-dashed text-xs"
 							>
 								{p.name}
-								<span class="text-[11px] opacity-70">
+								<span class="text-meta opacity-70">
 									(new)
 								</span>
 								<button
-									class="hover:text-error-500 p-1.5"
+									class="hover:text-error-600-400 p-1.5"
 									aria-label="Remove suggested character {p.name}"
 									onclick={() =>
 										(pendingNewParticipants =
@@ -644,7 +644,7 @@
 						>
 							{bindingNameById.get(id) ?? `#${id}`}
 							<button
-								class="hover:text-error-500 p-1.5"
+								class="hover:text-error-600-400 p-1.5"
 								aria-label="Remove mention {bindingNameById.get(
 									id
 								) ?? id}"
@@ -689,11 +689,11 @@
 								class="chip preset-tonal-warning flex items-center gap-1 border border-dashed text-xs"
 							>
 								{p.name}
-								<span class="text-[11px] opacity-70">
+								<span class="text-meta opacity-70">
 									(new)
 								</span>
 								<button
-									class="hover:text-error-500 p-1.5"
+									class="hover:text-error-600-400 p-1.5"
 									aria-label="Remove suggested character {p.name}"
 									onclick={() =>
 										(pendingNewMentioned =

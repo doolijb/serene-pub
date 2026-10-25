@@ -122,7 +122,7 @@
 		<div class="flex gap-2">
 			<div class="flex flex-col gap-1">
 				<label class="text-xs font-semibold" for="dteYear">
-					Year <span class="text-error-500">*</span>
+					Year <span class="text-error-600-400">*</span>
 				</label>
 				<input
 					id="dteYear"

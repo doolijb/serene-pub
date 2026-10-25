@@ -362,11 +362,11 @@ export async function deleteVariableTemplate(
 		 */
 		ignoreOverrideIds?: Set<number>
 		/**
-		 * Config-value rows that do not count either — since the layer
-		 * simplification (2026-08-24) an admin's selection outside a session is
-		 * the instance config's own value row, not an override.
+		 * 🚧 Registration values that do not count (`refKeyOf`) — an
+		 * administrator's own instance-wide selection, now a change on the
+		 * genre's defaults (PLAN-layering D5).
 		 */
-		ignoreConfigValueIds?: Set<number>
+		ignoreRegistrationRefs?: Set<string>
 	} = {}
 ): Promise<void> {
 	const [row] = await db
@@ -387,23 +387,26 @@ export async function deleteVariableTemplate(
 	if (slots.length) {
 		// Values are arbitrary json, which Postgres will not compare with `=`, so
 		// this filters in code. The rows are few and the comparison is exact.
-		const values = await db
-			.select()
-			.from(schema.pipelineConfigValues)
-			.where(inArray(schema.pipelineConfigValues.slot, slots))
 		const overrides = await db
 			.select()
 			.from(schema.pipelineNodeOverrides)
 			.where(inArray(schema.pipelineNodeOverrides.slot, slots))
 		const ignored = opts.ignoreOverrideIds ?? new Set<number>()
-		const ignoredValues = opts.ignoreConfigValueIds ?? new Set<number>()
-		referenced =
-			(values as any[]).some(
-				(v) => v.value === templateId && !ignoredValues.has(v.id)
-			) ||
-			(overrides as any[]).some(
-				(o) => o.value === templateId && !ignored.has(o.id)
+		// 🚧 Configurations are retired (R50, 0110): their value rows hold nothing.
+		referenced = (overrides as any[]).some(
+			(o) => o.value === templateId && !ignored.has(o.id)
+		)
+		// 🚧 A selection carried into a registration (a preset's, a session's,
+		// the genre's defaults') holds it too (R38).
+		if (!referenced) {
+			const { registrationValueRefs, refKeyOf } = await import(
+				"$lib/server/pipelines/registrations/values"
 			)
+			const ignoredRefs = opts.ignoreRegistrationRefs ?? new Set<string>()
+			referenced = (await registrationValueRefs(db, slots)).some(
+				(r) => r.value === templateId && !ignoredRefs.has(refKeyOf(r))
+			)
+		}
 	}
 
 	if (referenced)

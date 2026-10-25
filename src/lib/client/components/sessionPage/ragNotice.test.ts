@@ -5,6 +5,9 @@
  */
 import { describe, expect, it } from "vitest"
 import {
+	markNoticeRead,
+	noticeRead,
+	RETRIEVAL_NOTICE_READ_KEY,
 	ragNoticeActions,
 	ragNoticeSentence,
 	ragNoticeVariant,
@@ -109,5 +112,53 @@ describe("ragNoticeActions", () => {
 			"processing"
 		] as RagNoticeVariant[])
 			expect(ragNoticeActions(variant, false)).toEqual([])
+	})
+})
+
+/**
+ * Once a session, then an icon (polish parity L1): this device remembers the
+ * sessions whose notice it has shown. A convenience — a store that fails or
+ * holds rubbish reads as "not shown", so the line shows.
+ */
+describe("the notice's read mark", () => {
+	const store = () => {
+		const m = new Map<string, string>()
+		return {
+			getItem: (k: string) => m.get(k) ?? null,
+			setItem: (k: string, v: string) => void m.set(k, v),
+			m
+		}
+	}
+
+	it("is unread until marked, per session", () => {
+		const s = store()
+		expect(noticeRead(7, s)).toBe(false)
+		markNoticeRead(7, s)
+		expect(noticeRead(7, s)).toBe(true)
+		expect(noticeRead(8, s)).toBe(false)
+	})
+
+	it("keeps one entry per session, newest last, at most 200", () => {
+		const s = store()
+		for (let i = 0; i < 205; i++) markNoticeRead(i, s)
+		markNoticeRead(10, s)
+		const ids = JSON.parse(s.m.get(RETRIEVAL_NOTICE_READ_KEY)!)
+		expect(ids).toHaveLength(200)
+		expect(ids.at(-1)).toBe(10)
+		expect(ids.filter((n: number) => n === 10)).toHaveLength(1)
+		expect(noticeRead(0, s)).toBe(false)
+	})
+
+	it("reads a broken or missing store as unread, and never throws", () => {
+		const broken = {
+			getItem: () => "{not json",
+			setItem: () => {
+				throw new Error("quota")
+			}
+		}
+		expect(noticeRead(7, broken)).toBe(false)
+		expect(() => markNoticeRead(7, broken)).not.toThrow()
+		expect(noticeRead(7, null)).toBe(false)
+		expect(() => markNoticeRead(7, null)).not.toThrow()
 	})
 })

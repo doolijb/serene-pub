@@ -18,7 +18,7 @@
 {#if first}
 	Read by <a
 		href="/sessions/{first.id}"
-		class="text-primary-700-300 font-medium underline-offset-2 hover:underline"
+		class="text-primary-ink font-medium underline-offset-2 hover:underline"
 		title="Open {nameOf(first)}"
 		data-lore-read-by
 	>

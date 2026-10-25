@@ -156,6 +156,8 @@ export async function entryIsPersons(
 	const ref = entry.ref
 	if (typeof ref !== "string") return false
 	if (ref.startsWith("user:")) return true
+	// 🚧 A card-less player seat is a person's by definition (2026-10-14).
+	if (ref.startsWith("player-seat:")) return true
 	if (!ref.startsWith("character:")) return false
 	const id = Number(ref.slice("character:".length))
 	if (!Number.isInteger(id)) return false

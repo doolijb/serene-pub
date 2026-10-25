@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * The loadout editor's **Model** card, top to bottom: what the choice
 	 * decides (one sentence), **Fill for me**'s why when it just filled, the
@@ -154,7 +155,7 @@
 
 	{#if explanation}
 		<p
-			class="bg-surface-200-800 flex items-start gap-2 rounded-[10px] px-3 py-2 text-sm"
+			class="bg-surface-200-800 flex items-start gap-2 rounded-base px-3 py-2 text-sm"
 			role="status"
 		>
 			<Icons.Wand size={14} class="mt-0.5 shrink-0" aria-hidden="true" />
@@ -173,7 +174,7 @@
 				Icons.Cable
 			)}
 			<div
-				class="border-surface-200-800 flex flex-col gap-2 rounded-[12px] border px-3 py-2.5"
+				class="border-surface-200-800 flex flex-col gap-2 rounded-container border px-3 py-2.5"
 				data-chosen-model
 			>
 				<div class="flex min-w-0 items-start gap-3">
@@ -182,17 +183,15 @@
 							Chosen
 						</span>
 						<span
-							class="block text-[15px] font-medium break-words"
+							class="block text-lead font-medium break-words"
 						>
 							{chosen.modelName}
 						</span>
 					</span>
-					<span
-						class="bg-surface-200-800 text-surface-700-300 mt-0.5 inline-flex max-w-[45%] shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs"
-					>
+					<Badge size="md" class="text-surface-700-300 mt-0.5 inline-flex max-w-[45%] shrink-0 items-center gap-1">
 						<ChosenIcon size={12} aria-hidden="true" />
 						<span class="truncate">{chosen.connectionTitle}</span>
-					</span>
+					</Badge>
 				</div>
 				{#if chosen.facts.length || factOf(chosen)}
 					<dl class="flex flex-wrap gap-x-4 gap-y-1 text-xs">
@@ -247,7 +246,7 @@
 			</div>
 		{:else}
 			<p
-				class="text-primary-700-300 flex items-start gap-2 text-sm"
+				class="text-primary-ink flex items-start gap-2 text-sm"
 				data-chosen-model
 			>
 				<span
@@ -307,9 +306,7 @@
 						data-model-filter-chips
 					>
 						{#each chips as chip (chip.key)}
-							<span
-								class="bg-surface-200-800 text-surface-800-200 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
-							>
+							<Badge size="md" class="text-surface-800-200 flex min-w-0 items-center gap-1">
 								<span class="min-w-0 truncate">{chip.label}</span>
 								<button
 									type="button"
@@ -321,7 +318,7 @@
 								>
 									<Icons.X size={12} aria-hidden="true" />
 								</button>
-							</span>
+							</Badge>
 						{/each}
 						<span
 							class="text-surface-600-400 ml-auto text-xs"
@@ -353,7 +350,7 @@
 					data-key={option.key}
 					tabindex={option.key === stopKey ? 0 : -1}
 					disabled={disabled || (!option.usable && !checked)}
-					class="focus-visible:outline-primary-500 flex min-h-11 w-full min-w-0 shrink-0 items-center gap-3 rounded-[10px] px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed {checked
+					class="focus-visible:outline-primary-500 flex min-h-11 w-full min-w-0 shrink-0 items-center gap-3 rounded-base px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed {checked
 						? 'sidebar-row-active'
 						: option.usable
 							? 'hover:bg-surface-200-800'
@@ -362,7 +359,7 @@
 					onkeydown={(e) => onKey(e, index)}
 				>
 					<span class="min-w-0 flex-1">
-						<span class="block truncate text-[15px] font-medium">
+						<span class="block truncate text-lead font-medium">
 							{option.modelName}
 						</span>
 						{#if factOf(option)}
@@ -391,14 +388,12 @@
 							</span>
 						{/if}
 					</span>
-					<span
-						class="bg-surface-200-800 text-surface-700-300 inline-flex max-w-[40%] shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs"
-					>
+					<Badge size="md" class="text-surface-700-300 inline-flex max-w-[40%] shrink-0 items-center gap-1">
 						<RowIcon size={12} aria-hidden="true" />
 						<span class="truncate">
 							{option.connectionTitle}
 						</span>
-					</span>
+					</Badge>
 				</button>
 			{:else}
 				<div
@@ -446,7 +441,7 @@
 			>
 				<span class="min-w-0 flex-1 truncate">{choice.label}</span>
 				{#if choice.count != null}
-					<span class="text-surface-600-400 shrink-0 text-[11px]">
+					<span class="text-surface-600-400 shrink-0 text-meta">
 						{choice.count}
 					</span>
 				{/if}

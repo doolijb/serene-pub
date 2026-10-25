@@ -52,7 +52,7 @@ const LOOK = "core:spec/story-look"
 const LOOK_AT_MIGRATION = "core:spec/adventure-look"
 const SHIPPED = (slug: string) => `pipeline-default:${slug}`
 /** Not named by the migration: its shipped row must outlive the replay. */
-const UNLISTED = SHIPPED("core:spec/lair-respond")
+const UNLISTED = SHIPPED("core:spec/lair-reply")
 /** Today's id for a spec the migration names by an older one. */
 const TODAY: Record<string, string> = {
 	[SHIPPED(RESPOND_AT_MIGRATION)]: SHIPPED(RESPOND),

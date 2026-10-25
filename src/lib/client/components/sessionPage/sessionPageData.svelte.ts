@@ -40,8 +40,10 @@ import type { SessionPageInbox } from "$lib/client/components/sessionPage/sessio
 import type { MessageV1 } from "@serene-pub/sdk"
 import { DEFAULT_CHANNEL, parseChannel } from "@serene-pub/sdk"
 import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
+import { REWIND_NONE_AHEAD } from "$lib/shared/sessions/rewind"
 import {
 	asksToJoin,
+	offersSeat,
 	isLivePlayerSeat,
 	ownCardlessPlayerSeats
 } from "$lib/shared/sessions/playerSeat"
@@ -438,6 +440,25 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	// with no persona system has nothing to add.
 	let showAddPersonaCTA: boolean = $derived(
 		asksToJoin({
+			isGuest,
+			personasInMode,
+			seats: session?.sessionPersonas,
+			userId: userCtx.user?.id,
+			playerLabel: sessionFrames?.genrePlayerLabel,
+			isPlayer: (session?.sessionGuests as Array<{ userId?: number; isPlayer?: boolean }> | undefined)?.find(
+				(g) => g.userId === userCtx.user?.id
+			)?.isPlayer
+		})
+	)
+
+	/**
+	 * 🚧 Whether the story's composer offers this guest a seat — name the
+	 * character they will play, or bring a persona (`offersSeat`, Lair
+	 * rewrite D5): a guest who plays, in a genre of player seats, with no
+	 * voice here yet. The other half of `asksToJoin`'s rule.
+	 */
+	let showTakeSeatCTA: boolean = $derived(
+		offersSeat({
 			isGuest,
 			personasInMode,
 			seats: session?.sessionPersonas,
@@ -875,9 +896,15 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 					...currentSession.sessionMessages,
 					sessionMessage
 				]
+				// 🚧 A new row replaced the forward stack (RF fix 5): the
+				// server deleted the turns ahead before it wrote this one.
+				const rewind = (currentSession as { rewind?: { ahead?: number } }).rewind
 				session = {
 					...currentSession,
-					sessionMessages: updatedMessages.sort((a, b) => a.id - b.id)
+					sessionMessages: updatedMessages.sort((a, b) => a.id - b.id),
+					...(rewind?.ahead
+						? { rewind: { ...rewind, ahead: 0, forward: REWIND_NONE_AHEAD } }
+						: {})
 				}
 				// Channel-driven autopopulation (21 §9): a message on a
 				// non-main channel flows in the panel that views that channel.
@@ -1237,6 +1264,9 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		},
 		get showAddPersonaCTA() {
 			return showAddPersonaCTA
+		},
+		get showTakeSeatCTA() {
+			return showTakeSeatCTA
 		},
 		get userPersonasInSession() {
 			return userPersonasInSession

@@ -222,7 +222,7 @@
 				<ul class="mt-4 flex flex-col gap-2">
 					{#each listing.backups as backup (backup.name)}
 						<li
-							class="bg-surface-50-950 flex flex-wrap items-center justify-between gap-2 rounded-[10px] px-3 py-2"
+							class="bg-surface-50-950 flex flex-wrap items-center justify-between gap-2 rounded-base px-3 py-2"
 						>
 							<div class="min-w-0">
 								<div class="font-mono text-xs break-all">
@@ -279,7 +279,7 @@
 				<ul class="flex flex-col gap-2">
 					{#each listing.setAside as dir (dir.name)}
 						<li
-							class="bg-surface-50-950 flex flex-wrap items-center justify-between gap-2 rounded-[10px] px-3 py-2"
+							class="bg-surface-50-950 flex flex-wrap items-center justify-between gap-2 rounded-base px-3 py-2"
 						>
 							<div class="min-w-0">
 								<div class="font-mono text-xs break-all">

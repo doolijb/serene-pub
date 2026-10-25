@@ -185,7 +185,7 @@
 			</span>
 		</span>
 	{:else}
-		<span class="text-surface-600-400 text-[11px]">no runs</span>
+		<span class="text-surface-600-400 text-meta">no runs</span>
 	{/if}
 {/snippet}
 
@@ -230,7 +230,7 @@
 			<button
 				type="button"
 				class="chip min-h-8 shrink-0 px-3 text-xs {failedOnly
-					? 'preset-tonal-primary'
+					? 'preset-pressed'
 					: 'preset-tonal-surface'}"
 				aria-pressed={failedOnly}
 				onclick={() => setFailedOnly(!failedOnly)}
@@ -248,7 +248,7 @@
 						<li>
 							<a
 								href="/admin/pipelines/{encodeURIComponent(r.specSlug)}"
-								class="hover:bg-surface-200-800 flex min-h-9 w-full items-center gap-2 rounded-[8px] px-2 text-left text-sm"
+								class="hover:bg-surface-200-800 flex min-h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-sm"
 							>
 								<span
 									class="size-2 shrink-0 rounded-full {r.outcome === 'ok'

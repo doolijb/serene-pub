@@ -18,6 +18,7 @@ import * as schema from "$lib/server/db/schema"
 import { attributeSlots, defineAttributeSlot, genre, _clearAttributeSlots } from "@serene-pub/sdk"
 import "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 // A file that builds a real database before it asserts anything outruns the
 // default budget under a contended sweep.
@@ -110,7 +111,7 @@ async function world() {
 	// A session tracks, and `state:get` describes, what its genre enables:
 	// so the world's genre brings every slot this test declared.
 	const WORLD_GENRE = `test:genre/ledger-${suffix}`
-	genre(WORLD_GENRE, { name: { en: "Ledger" }, family: "test", slots: attributeSlots(), events: {} })
+	genreKeeping(WORLD_GENRE, { name: { en: "Ledger" }, family: "test", slots: attributeSlots(), events: {} })
 	const [session] = await testDb
 		.insert(schema.sessions)
 		.values({ userId: user.id, isGroup: true, name: `Run ${suffix}`, genreId: WORLD_GENRE })
@@ -454,7 +455,7 @@ describe("a session tracks what its genre enables (ruled 2026-09-25)", () => {
 		declareSlots()
 		const w = await world()
 		const NONE = `test:genre/none-${w.session.id}`
-		genre(NONE, { name: { en: "None" }, family: "test", slots: [], events: {} })
+		genreKeeping(NONE, { name: { en: "None" }, family: "test", slots: [], events: {} })
 		const { eq } = await import("drizzle-orm")
 		await testDb.update(schema.sessions).set({ genreId: NONE }).where(eq(schema.sessions.id, w.session.id))
 		return w

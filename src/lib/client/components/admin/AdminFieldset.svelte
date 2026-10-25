@@ -41,7 +41,7 @@
 {#if collapsible}
 	<details class="panel-card group flex flex-col" {id} {open}>
 		<summary
-			class="-m-1 flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-[10px] p-1 focus-visible:outline-2 focus-visible:outline-primary-500"
+			class="-m-1 flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-base p-1 focus-visible:outline-2 focus-visible:outline-primary-500"
 		>
 			<Icons.ChevronRight
 				size={16}

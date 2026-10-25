@@ -88,8 +88,8 @@ describe("the shipped default", () => {
 	 * absent, so the voices map iterated the whole plan document as one speaker
 	 * and the keeper's whole document reached `resolve-state-changes` as one
 	 * change with no slot on it. Adventure retired 2026-10-19; the Lair's reply
-	 * carries the same two selections (its planner's speakers, its keeper's
-	 * write), so the pin reads it.
+	 * carries two such selections (the room the planner says nobody built, the
+	 * knock's question), so the pin reads them.
 	 *
 	 * ⚠ A PIN rather than a reproduction, and the distinction is the same one
 	 * migration ordering has: a fresh database projects whatever the preset
@@ -101,7 +101,7 @@ describe("the shipped default", () => {
 		const [lair] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/lair-respond"))
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/lair-reply"))
 		const res = await ensureDefaultConfig(
 			db,
 			lair.id,
@@ -118,8 +118,8 @@ describe("the shipped default", () => {
 							r.path === path
 					)?.value
 			)
-		expect(await at("via.turn.channel.story.pick.planned.speaking", "path")).toBe("speakers")
-		expect(await at("keep.played.keeperWrite", "path")).toBe("values,inventory")
+		expect(await at("via.turn.channel.story.pick.planned.rooms.on.exit", "path")).toBe("unknownExit")
+		expect(await at("via.turn.channel.story.pick.planned.door.knock.question", "path")).toBe("knockQuestion")
 	})
 
 	it("is created once, not once per boot", async () => {

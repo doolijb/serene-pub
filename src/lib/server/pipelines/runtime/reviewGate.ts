@@ -27,6 +27,7 @@ import { randomUUID } from "node:crypto"
 import { eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
+	fieldsFindings,
 	getDefinition,
 	reviewSchemaFor,
 	undeclaredReviewFields,
@@ -56,6 +57,12 @@ export interface PendingReview {
 	schema: SettingsSchema
 	values: Record<string, unknown>
 	requestedAt: number
+	/**
+	 * 🚧 The entry type a lore write's `fields` are held to (Lair rewrite D2):
+	 * a create's whole, a change's as a patch — read when the review parked,
+	 * so the decision checks an edit without a database read.
+	 */
+	fieldsOf?: { typeId: string; partial: boolean }
 }
 
 /** What the client renders — everything but the raw payload. */
@@ -274,8 +281,84 @@ export function resolveReview(
 			: {})
 	}
 
+	// 🚧 A lore write's typed fields, as edited, held to the entry type
+	// (Lair rewrite D2): a misfit is refused while the run stays parked —
+	// the commit would refuse it too, after the person had moved on.
+	// An approval of a draft that misfits is refused the same way: the
+	// person edits it here, or rejects it.
+	if (action !== "reject" && p.entry.fieldsOf) {
+		const misfit = lorePatchFindings(p.entry.fieldsOf, decision.payload ?? p.entry.payload)
+		if (misfit) throw new ReviewFieldRefused(misfit)
+	}
+
 	parked.delete(id)
 	p.resolve(decision)
+}
+
+/** The lore writes whose `fields` the gate holds to an entry type. */
+const LORE_FIELD_WRITES: Readonly<Record<string, boolean>> = {
+	"core:outlet/create-lore-entry": false,
+	"core:outlet/update-lore-entry": true
+}
+
+/**
+ * 🚧 Which entry type a parked lore write's `fields` are checked against
+ * (Lair rewrite D2), or undefined for any other write: a create's
+ * `entryType` param (world lore when absent), whole; a change's stored
+ * entry, by the id it names, as a patch. A change naming its entry by name
+ * is checked at the commit alone.
+ */
+async function loreFieldsOf(
+	definitionId: string,
+	payload: unknown
+): Promise<PendingReview["fieldsOf"]> {
+	const bare = definitionId.replace(/@\d+$/, "")
+	if (!(bare in LORE_FIELD_WRITES)) return undefined
+	const p = (payload ?? {}) as { params?: { entryType?: unknown }; entry?: unknown }
+	if (!LORE_FIELD_WRITES[bare]) {
+		const { WORLD_LORE_TYPE_ID } = await import("$lib/server/utils/lorebookEntries")
+		const typeId = String(p.params?.entryType ?? "").trim() || WORLD_LORE_TYPE_ID
+		return { typeId, partial: false }
+	}
+	const raw = p.entry
+	const id =
+		typeof raw === "number"
+			? raw
+			: raw && typeof raw === "object" && typeof (raw as { id?: unknown }).id === "number"
+				? ((raw as { id: number }).id)
+				: null
+	if (id === null) return undefined
+	const { db } = await import("$lib/server/db")
+	const [row] = await db
+		.select({ typeId: schema.lorebookEntries.typeId })
+		.from(schema.lorebookEntries)
+		.where(eq(schema.lorebookEntries.id, id))
+		.limit(1)
+	return row ? { typeId: row.typeId, partial: true } : undefined
+}
+
+/**
+ * 🚧 Why an edited lore write's `fields` do not fit its entry type, as one
+ * sentence — or null when they fit (or there are none). `fieldsFindings`,
+ * the one checker the commit uses too.
+ */
+export function lorePatchFindings(
+	of: { typeId: string; partial: boolean },
+	payload: unknown
+): string | null {
+	const fields = (payload as { fields?: unknown } | null)?.fields
+	if (fields === undefined || fields === null) return null
+	if (typeof fields !== "object" || Array.isArray(fields))
+		return "The fields are one object keyed by field."
+	const findings = fieldsFindings(of.typeId, fields, { partial: of.partial }).filter(
+		(f) => f.severity !== "warning"
+	)
+	if (!findings.length) return null
+	return (
+		`Those fields do not fit ${of.typeId}: ` +
+		findings.map((f) => `${f.message} (${f.fix})`).join("; ") +
+		". Nothing was saved; the write is still waiting for you."
+	)
 }
 
 /**
@@ -310,6 +393,7 @@ export function createReviewer(scope: {
 			getDefinition(req.definitionId),
 			req.payload
 		)
+		const fieldsOf = await loreFieldsOf(req.definitionId, req.payload)
 		const entry: PendingReview = {
 			id: randomUUID(),
 			userId: scope.userId,
@@ -321,7 +405,8 @@ export function createReviewer(scope: {
 			payload: req.payload,
 			schema,
 			values: valuesForForm(schema, req.payload),
-			requestedAt: Date.now()
+			requestedAt: Date.now(),
+			...(fieldsOf ? { fieldsOf } : {})
 		}
 
 		return await new Promise<ReviewDecision>((resolve) => {

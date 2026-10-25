@@ -85,6 +85,12 @@ Unless both ends are cast members, a relationship can read **Both ways**, with *
 
 On a member's page, the **Relationships** tab lists each tie with who is at the other end — their face and name as they are at the moment you're reading, which opens them — and the tie in words under it.
 
+### Relationships the rules keep
+
+When a session plays rules that keep **ties** (Romance's bonds), each person in a relationship holds their own side of it in the session, with their own numbers: how much Wren likes Mara is Wren's, and how much Mara likes Wren is Mara's. The lorebook keeps the words. A relationship whose type comes from a side is marked **from the rules** and can't be retyped here; its description and name are still yours. Open it to see **each person's side** (its words and its numbers) and **How it changed**, read from the turns that changed it. **Set…** on a number never writes it: it files a change the session reviews, and the relationship follows when the change is kept.
+
+Drawing a relationship between two people in a book a session plays makes their sides in that session. Deleting it lets those sides go; a side let go in play leaves the relationship as it is. A book the session may not write keeps its own relationship, and the session's notes hold the session's version, which the session reads instead. The same goes for a cast member's state the rules set (_missing_, say): the book keeps theirs, and the session reads its own. On a character's sheet, each tie shows its words, your own number, how the other person feels, and **Show my number to ‹name›**; the game master sees both sides.
+
 ### How relationships reach the model
 
 Relationships between cast members reach the prompt from the point of view of whoever is speaking: what they think of the others, what the others think of them, and figures the whole world knows of. Secret relationships only reach their holder. By default every such relationship is included; to make them compete for room with lore instead, give relationships a share of the budget in the reply pipeline (see [Embeddings and search by meaning](./embeddings-and-rag.md#relationships-from-the-graph)).

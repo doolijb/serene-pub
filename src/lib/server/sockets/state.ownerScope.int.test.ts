@@ -27,6 +27,7 @@ import * as schema from "$lib/server/db/schema"
 import { defineAttributeSlot, genre, getAttributeSlot, _clearAttributeSlots } from "@serene-pub/sdk"
 import "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -108,7 +109,7 @@ async function world() {
 	const spare = await holdings(user.id, `Spare ${suffix}`)
 	const theirs = await holdings(stranger.id, `Theirs ${suffix}`)
 	const GENRE = `test:genre/owner-scope-${suffix}`
-	genre(GENRE, {
+	genreKeeping(GENRE, {
 		name: { en: "Owner scope" },
 		family: "test",
 		slots: [getAttributeSlot(GRIT)!],

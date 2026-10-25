@@ -1,4 +1,5 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
 	/** Context debugging — the prompt inspector and the diagnostics behind it. */
 	import { getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
@@ -23,11 +24,11 @@
 	<h2 id="context-debugging-heading" class="text-sm font-medium">
 		Context debugging
 	</h2>
-	<p class="text-surface-600-400 text-sm">
+	<FieldHelp>
 		When on, shows the prompt inspector tab in the session UI, computes
 		full retrieval diagnostics (RAG included), and saves compiled prompt
 		metadata alongside each generated message for later inspection.
-	</p>
+	</FieldHelp>
 	<SettingSwitch
 		name="enable-context-debugging"
 		label="Context debugging"

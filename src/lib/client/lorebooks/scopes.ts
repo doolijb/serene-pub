@@ -11,6 +11,7 @@ import {
 	CHARACTER_LORE_TYPE_ID,
 	ENTRY_TYPE_IDS,
 	HISTORY_TYPE_ID,
+	isDerivedEntryTypeId,
 	ITEM_TYPE_ID,
 	LOCATION_TYPE_ID,
 	WORLD_LORE_TYPE_ID,
@@ -18,10 +19,12 @@ import {
 } from "$lib/shared/entries/types"
 import {
 	DEFAULT_LENS,
+	listScope,
+	listScopeType,
 	LORE_SCOPES,
 	reduce,
-	SCOPE_KIND,
-	SCOPE_LABELS,
+	scopeKind,
+	scopeLabel,
 	momentKey,
 	type LoreRoute,
 	type LoreScope
@@ -36,6 +39,15 @@ import {
 	type PoolItem
 } from "./poolFilter"
 import { lensDrawsScope, lensListsPool } from "./lenses/registry"
+import { kindLabel } from "./sections/kinds"
+
+/**
+ * 🚧 One list of the book's rules, as `entries:types` sends it
+ * (PLAN-lorebook-kinds §C): its derived entry type (stored form, no `@1`),
+ * its own label ("Weapons"), its piece shape, and how many pieces the rules'
+ * library offers for it.
+ */
+export type RulesList = Sockets.Entries.Types.Response["types"][number]
 
 /** The kind the count of cast members is filed under, beside the type ids. */
 export { CAST_KIND }
@@ -75,7 +87,22 @@ export function entryTotal(
 	counts: Record<string, number> | null
 ): number | undefined {
 	if (!counts) return undefined
-	return ENTRY_TYPE_IDS.reduce((total, t) => total + (counts[t] ?? 0), 0)
+	return (
+		ENTRY_TYPE_IDS.reduce((total, t) => total + (counts[t] ?? 0), 0) +
+		rulesListTotal(counts)
+	)
+}
+
+/**
+ * The entries the book holds in its rules lists — every derived entry
+ * type's figure the server sent (`entries:counts` zero-fills only the
+ * book's own lists, so nothing of another rules' is in here).
+ */
+function rulesListTotal(counts: Record<string, number>): number {
+	let total = 0
+	for (const [kind, n] of Object.entries(counts))
+		if (isDerivedEntryTypeId(kind)) total += n
+	return total
 }
 
 /**
@@ -125,7 +152,7 @@ export interface ScopeFacet {
  * the one definition of a place (decided 2026-09-28).
  */
 export function scopeKinds(scope: LoreScope): string[] {
-	const kind = SCOPE_KIND[scope]
+	const kind = scopeKind(scope)
 	return kind ? [kind] : []
 }
 
@@ -139,13 +166,15 @@ export function scopeKinds(scope: LoreScope): string[] {
  */
 function countOf(scope: LoreScope, counts: Record<string, number>): number {
 	if (scope === "all")
-		return [...POOL_KINDS, CAST_KIND].reduce(
-			(total, kind) => total + (counts[kind] ?? 0),
-			0
+		return (
+			[...POOL_KINDS, CAST_KIND].reduce(
+				(total, kind) => total + (counts[kind] ?? 0),
+				0
+			) + rulesListTotal(counts)
 		)
 	if (scope === "cast") return counts[CAST_KIND] ?? 0
 	if (scope === "places") return counts.places ?? 0
-	const kind = SCOPE_KIND[scope]
+	const kind = scopeKind(scope)
 	return kind ? (counts[kind] ?? 0) : 0
 }
 
@@ -159,12 +188,64 @@ export function railScopes(
 	counts: Record<string, number> | null
 ): ScopeFacet[] {
 	const facets = LORE_SCOPES.map((id) => ({
-		id,
-		label: SCOPE_LABELS[id],
+		id: id as LoreScope,
+		label: scopeLabel(id),
 		count: counts ? countOf(id, counts) : undefined,
 		empty: !!counts && countOf(id, counts) === 0
 	}))
 	return [...facets.filter((f) => !f.empty), ...facets.filter((f) => f.empty)]
+}
+
+/**
+ * 🚧 Whether the book draws one of its rules' lists (RULED 2026-10-21): only
+ * where it has something in it — the book holds entries of that kind on the
+ * line being read, or the rules' library has rows for it. So a Freeform book
+ * looks as it always has, and a Vis Itineris book shows its library-backed
+ * lists, its creatures once it holds some.
+ */
+export function drawsRulesList(
+	list: RulesList,
+	counts: Record<string, number> | null
+): boolean {
+	return list.libraryRows > 0 || (counts?.[list.typeId] ?? 0) > 0
+}
+
+/** The lists the book draws, in its rules' own order. */
+export function drawnRulesLists(
+	lists: readonly RulesList[],
+	counts: Record<string, number> | null
+): RulesList[] {
+	return lists.filter((list) => drawsRulesList(list, counts))
+}
+
+/**
+ * The rail's rules group: one row per list the book draws, with the book's
+ * own figure for it, in the rules' order (a list is drawn because it has
+ * something in it, so none of them sorts last). Undefined counts while the
+ * figures are on their way.
+ */
+export function rulesListFacets(
+	lists: readonly RulesList[],
+	counts: Record<string, number> | null
+): ScopeFacet[] {
+	return drawnRulesLists(lists, counts).map((list) => {
+		const count = counts ? (counts[list.typeId] ?? 0) : undefined
+		return {
+			id: listScope(list.typeId),
+			label: list.label,
+			count,
+			empty: count === 0
+		}
+	})
+}
+
+/**
+ * What a scope is called on screen: a core scope's label, or a rules list's
+ * own (its kind's label, `sections/kinds.ts`).
+ */
+export function scopeTitle(scope: LoreScope): string {
+	const typeId = listScopeType(scope)
+	return typeId ? kindLabel(typeId) : scopeLabel(scope)
 }
 
 /**
@@ -200,8 +281,15 @@ const plural = (n: number, one: string, many: string) =>
 	`${n} ${n === 1 ? one : many}`
 
 /** "30 entries · 4 reached the last turn", which is the pool said out loud. */
-export function poolSummary(count: number, reached: number | null): string {
-	const entries = plural(count, "entry", "entries")
+export function poolSummary(
+	count: number,
+	reached: number | null,
+	/** 🚧 The library pieces listed beside the book's rows, while its chip is on. */
+	library: { count: number; name: string } | null = null
+): string {
+	let entries = plural(count, "entry", "entries")
+	if (library && library.count > 0)
+		entries += ` · ${library.count} from the ${library.name}`
 	if (reached === null) return entries
 	if (reached === 0) return `${entries} · nothing reached the last turn`
 	return `${entries} · ${reached} reached the last turn`
@@ -335,7 +423,7 @@ export function scopeChipLabel(
 	saved: SavedScopeId | null
 ): string | null {
 	if (saved) return SAVED_SCOPES.find((s) => s.id === saved)?.label ?? null
-	return scope === "all" ? null : SCOPE_LABELS[scope]
+	return scope === "all" ? null : scopeTitle(scope)
 }
 
 /** "3 loose ends", the rail foot's line and the scope popout's. */
@@ -394,6 +482,9 @@ export interface FacetCounts {
 	machineWritten: number
 	/** The Needs keywords chip's figure — `needsKeywords`, the queue's rule. */
 	needsKeywords: number
+	/** 🚧 The ‹Rules› library chip's figure: library pieces this list can show. */
+	library: number
+	/** The book's own rows in the list — never a library piece. */
 	total: number
 }
 
@@ -414,9 +505,17 @@ export function facetCounts(
 		archived: 0,
 		machineWritten: 0,
 		needsKeywords: 0,
-		total: items.length
+		library: 0,
+		total: 0
 	}
 	for (const item of items) {
+		// A library piece is the rules', not the book's: it is counted by
+		// its own chip and by nothing else.
+		if (item.fromLibrary) {
+			out.library++
+			continue
+		}
+		out.total++
 		if (readInKeys.has(item.key)) out.readIn++
 		if (item.pinned) out.pinned++
 		if (item.off) out.off++

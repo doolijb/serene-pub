@@ -177,6 +177,16 @@ export interface ResolveInput {
 	 * never the joined list (2026-10-16). Absent → the old rule.
 	 */
 	viewerUserId?: number | null
+	/**
+	 * 🚧 What the person's own lines are called (`GenreDecl.playerLabel`, or
+	 * the session's override — the Lair's *Dungeon Master*), on the cast read.
+	 * With no persona to name the person, `{{user}}` is this rather than the
+	 * legacy `user` (lair fix 2, 2026-10-22): a delver's turn read the GM's
+	 * lines as `user:` while its prompt called them the Dungeon Master's, and
+	 * nothing stopped it writing as either. Absent — every genre that
+	 * declares no label — the old rule, byte for byte.
+	 */
+	playerLabel?: string
 }
 
 /**
@@ -458,7 +468,9 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 		// one is theirs — `{{user}}` is one person, never "Ann and Bo".
 		personaName:
 			viewerSeatName(sessionPersonas, input.viewerUserId) ??
-			(current ? (personaNames[0] ?? "user") : joinWithAnd(personaNames)),
+			(current
+				? (personaNames[0] ?? (input.playerLabel?.trim() || "user"))
+				: joinWithAnd(personaNames)),
 		narratorName: input.narratorName,
 		scenario: resolveScenario(input, current),
 		relationshipsPerspectives: input.relationshipsPerspectives,

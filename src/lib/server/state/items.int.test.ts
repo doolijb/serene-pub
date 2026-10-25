@@ -17,9 +17,9 @@ import * as schema from "$lib/server/db/schema"
 import {
 	attributeSlots,
 	defineAttributeSlot,
-	genre,
 	_clearAttributeSlots
 } from "@serene-pub/sdk"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 import "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -76,7 +76,7 @@ async function world() {
 		])
 		.returning()
 	const GENRE = `test:genre/items-${suffix}`
-	genre(GENRE, { name: { en: "Items" }, family: "test", slots: attributeSlots(), events: {} })
+	genreKeeping(GENRE, { name: { en: "Items" }, family: "test", slots: attributeSlots(), events: {} })
 	const [session] = await testDb
 		.insert(schema.sessions)
 		.values({ userId: user.id, isGroup: false, name: `Run ${suffix}`, genreId: GENRE })

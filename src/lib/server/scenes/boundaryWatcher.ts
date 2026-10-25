@@ -603,7 +603,9 @@ async function watch(
 			sessionId: ctx.sessionId,
 			userId: ctx.ownerId,
 			channel,
-			atMessageId: line.id
+			atMessageId: line.id,
+			// 🚧 The watcher placed it (Automatic), not a person.
+			cause: { kind: "system" }
 		})
 	} catch (err) {
 		if (!(err instanceof SceneBoundaryRefusal)) throw err

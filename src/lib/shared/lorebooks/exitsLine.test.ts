@@ -1,10 +1,11 @@
 /**
  * A room's `Exits:` line, taken apart (plan places-graph §11, B7).
  *
- * The Lair's drafting prompts still write a room's ways out as one prose line
- * (`LAIR_ROOM_CONTENT_SHAPE`: `Exits: <direction> → <room>, …`). The place
- * editor's **Read links from the Exits line** reads it on request and offers
- * the links it names; nothing parses it at write time (Q4 is open). The parser
+ * The Lair's rooms carry their ways out as one prose line (`Exits:
+ * <direction> → <room>, …`). The place editor's **Read links from the Exits
+ * line** reads it on request and offers the links it names; a place a
+ * pipeline files with no links of its own has it read at the write (Lair
+ * rewrite D10, `host.ts exitsLineLinks`). The parser
  * is pure and resolves nothing: which place a name answers to is the room
  * rule's (`locationRowOf`), and what is already linked is the Links list's.
  */

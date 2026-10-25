@@ -52,6 +52,15 @@ To connect: create an App Password at charavault.net named "Serene Pub", enter t
 
 **Run scripts** is the off switch for scripts people have written into pipelines. Turning it off deletes nothing: every script stays where it is and simply doesn't run until you turn it back on. Use it when a script misbehaves and you need the pub working first. What scripts are and where they run is in [Scripts](./scripts.md).
 
+### Background routines
+
+A **routine** is a pipeline that runs on its own between turns (see [Pipelines › Routines](./pipelines.md#routines)). The **Background routines** card sets the pub's two limits on routines that run on the real clock (every hour, daily at nine), so a session nobody plays can't keep calling a model:
+
+- **Stop after nobody has played for (minutes)**: how long a session may go without a line, an action, a form answer or a settings change before its real-time routines pause (three days unless you change it).
+- **Most runs in a row**: how many real-time routine runs a session may have since someone last played (12).
+
+These are the most anyone can set. Each person can set lower ones for their own sessions under **Settings › User › Background routines**, and an administrator can set lower ones for one routine in a session's settings. Routines that run after each turn, round or scene, or on the story clock, need someone playing anyway, so the limits don't apply to them.
+
 ### Lorebook writes from sessions
 
 How sessions may change the lorebooks they read (a stat a session records, a summary, a compiled history, a graph): **Full**, **Review changes** (the default) or **Off**, each with a line saying what it does. It's the default for everyone: a person who hasn't chosen their own in **Settings › User** follows it, and changes with it; anyone who has chosen keeps their choice. What each setting does to each kind of write is in [Lorebooks](./lorebooks.md#what-a-session-may-write) and [Stats and states](./stats-and-states.md#when-a-session-changes-the-lorebook).
@@ -104,7 +113,7 @@ Every section has a fixed heading and the whole report ends with the same facts 
 
 **History** lists every change an admin has made to this pub, newest first: when, who, what kind of change (added, changed, deleted, or an action such as starting a process), the object it touched, and a one-line summary such as *Changed default language from “en” to “fr”*. Select a change to open its own page, read-only: when, who, the action, the object and the event, then each changed field with its old and new value. Its **Open** button goes to the object (unless the change deleted it), and **This object's history** lists every change to that object.
 
-What is recorded: pub settings (General, backups policy, the KoboldCPP and Ollama runtimes, the pub theme, the CharaVault account), the tunnel, users, invites and clearing a user's two-factor, backups made and deleted, connections and their models and scripts, default loadouts, sampling configs, genres and presets, pipeline configurations and options changed for the whole pub, prompts, the three template kinds, scripts, plugins and components. A change made inside one session, or by someone who is not an admin, is not a change to the pub and is not recorded. A change that fails records nothing.
+What is recorded: pub settings (General, backups policy, the KoboldCPP and Ollama runtimes, the pub theme, the CharaVault account), the tunnel, users, invites and clearing a user's two-factor, backups made and deleted, connections and their models and scripts, default loadouts, sampling configs, genres and presets (what each preset runs, and the genre's defaults), pipeline options changed for the whole pub, prompts, the three template kinds, scripts, plugins and components. A change made inside one session, or by someone who is not an admin, is not a change to the pub and is not recorded. A change that fails records nothing.
 
 **Secrets are never written down.** Passwords, API keys, tokens and other credentials show only that they changed, never their value, and a pipeline option's value is not recorded at all because an option can hold a credential. Long values are shortened.
 
@@ -118,7 +127,7 @@ A KoboldCPP or Ollama that your pub runs for you is a **connection**, set up and
 
 ## System-wide defaults
 
-Which connection and model each kind of work uses (writing replies, embeddings, images and so on) is set by its default [loadout](./connections.md#loadouts) (a named choice of model on a connection, plus its sampling): _the Reply loadout_, _the Images loadout_, _the Embeddings loadout_ and so on. Fill them in the **Loadouts** view or in **Admin › Models › Loadouts**. Getting pictures working is in [Images](./images.md). Default sampling and pipeline configurations are chosen on their own admin pages.
+Which connection and model each kind of work uses (writing replies, embeddings, images and so on) is set by its default [loadout](./connections.md#loadouts) (a named choice of model on a connection, plus its sampling): _the Reply loadout_, _the Images loadout_, _the Embeddings loadout_ and so on. Fill them in the **Loadouts** view or in **Admin › Models › Loadouts**. Getting pictures working is in [Images](./images.md). Default sampling and each pipeline's settings are chosen on their own admin pages.
 
 ## Update notifications
 

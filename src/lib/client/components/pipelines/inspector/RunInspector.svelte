@@ -35,6 +35,8 @@
 		portrayalsLine,
 		timedOutNotice,
 		wireView,
+		routineLineOf,
+		startedByOf,
 		type InspectedRun,
 		type NodeRow
 	} from "./receiptView"
@@ -198,7 +200,7 @@
 		ok: "text-success-500",
 		halt: "text-warning-500",
 		skip: "text-surface-600-400",
-		error: "text-error-500"
+		error: "text-error-600-400"
 	}
 
 	/** "1 message, 2 files" — what the run left behind, counted by kind. */
@@ -214,7 +216,9 @@
 			.join(", ")
 	})
 
-	const triggerSource = $derived((run?.receipt as any)?.triggerSource ?? null)
+	/** "routine Note what changed, for Ann", else the receipt's trigger source (lane 7). */
+	const triggerSource = $derived(run ? startedByOf(run.receipt) : null)
+	const routineLine = $derived(run ? routineLineOf(run.receipt) : null)
 	const runNotes = $derived(((run?.receipt as any)?.notes ?? []) as string[])
 	/**
 	 * Where this run stands in a tree of runs (01 §8; U5d): the run that
@@ -293,7 +297,12 @@
 				<span>{ms(run.elapsedMs)}</span>
 				<span>{run.tokensSpent || 0} tokens</span>
 				{#if triggerSource}
-					<span>started by {triggerSource}</span>
+					<span data-run-started-by>started by {triggerSource}</span>
+				{/if}
+				{#if routineLine && routineLine.kind !== "ran"}
+					<span class="chip preset-tonal-surface rounded-full px-2 py-0.5" data-run-routine-line>
+						{routineLine.kind === "skipped" ? "routine skipped" : "routine paused"}
+					</span>
 				{/if}
 				{#if run.isPreview}
 					<span
@@ -371,7 +380,7 @@
 			<div class="flex min-h-0 flex-col gap-3 lg:flex-row">
 				<!-- ── level one: what ran, in order ───────────────────── -->
 				<ul
-					class="border-surface-300-700 flex max-h-[22rem] shrink-0 flex-col overflow-y-auto rounded-lg border lg:max-h-[34rem] lg:w-80"
+					class="border-surface-200-800 flex max-h-[22rem] shrink-0 flex-col overflow-y-auto rounded-lg border lg:max-h-[34rem] lg:w-80"
 					aria-label="Steps, in the order they ran"
 				>
 					{#each rows as row (row.seq)}
@@ -381,7 +390,7 @@
 								data-run-node
 								data-node-key={row.nodeKey}
 								aria-pressed={selected?.seq === row.seq}
-								class="border-surface-300-700/50 hover:bg-surface-200-800 flex w-full flex-col gap-0.5 border-b px-2 py-1.5 text-left last:border-b-0 {selected?.seq ===
+								class="border-surface-200-800 hover:bg-surface-200-800 flex w-full flex-col gap-0.5 border-b px-2 py-1.5 text-left last:border-b-0 {selected?.seq ===
 								row.seq
 									? 'bg-surface-200-800'
 									: ''}"
@@ -406,7 +415,7 @@
 										     stays ok; this says so in words, not
 										     only in the warning tone. -->
 										<span
-											class="chip preset-tonal-warning shrink-0 rounded-full px-1.5 py-0 text-[11px]"
+											class="chip preset-tonal-warning shrink-0 rounded-full px-1.5 py-0 text-meta"
 											data-run-refused={row.refused.length}
 											title="This step finished but turned some of its input down. Open it to read why."
 										>
@@ -415,7 +424,7 @@
 									{/if}
 									{#if row.timedOut}
 										<span
-											class="chip preset-tonal-warning shrink-0 rounded-full px-1.5 py-0 text-[11px]"
+											class="chip preset-tonal-warning shrink-0 rounded-full px-1.5 py-0 text-meta"
 											data-run-timed-out
 											title="This step ran out of time. Open it for the limit it had."
 										>
@@ -424,7 +433,7 @@
 									{/if}
 									{#if row.scripts.length}
 										<span
-											class="chip preset-tonal-surface shrink-0 rounded-full px-1.5 py-0 text-[11px]"
+											class="chip preset-tonal-surface shrink-0 rounded-full px-1.5 py-0 text-meta"
 											data-run-script-count={row.scripts.length}
 											title="Scripts ran at this step. Open it to see which."
 										>
@@ -434,7 +443,7 @@
 									{/if}
 								</span>
 								<span
-									class="text-surface-600-400 flex items-center gap-2 pl-7 text-[11px]"
+									class="text-surface-600-400 flex items-center gap-2 pl-7 text-meta"
 								>
 									<span class="min-w-0 truncate">
 										{row.definitionId}
@@ -717,7 +726,7 @@
 											>
 												<thead>
 													<tr
-														class="text-surface-600-400 border-surface-300-700 border-b text-left text-xs"
+														class="text-surface-600-400 border-surface-200-800 border-b text-left text-xs"
 													>
 														<th class="px-2 py-1.5">
 															Source
@@ -741,7 +750,7 @@
 												<tbody>
 													{#each prompt.blocks as block, i (`${block.source}-${block.name}-${i}`)}
 														<tr
-															class="border-surface-300-700/50 border-b last:border-b-0"
+															class="border-surface-200-800 border-b last:border-b-0"
 														>
 															<td
 																class="px-2 py-1.5"
@@ -789,15 +798,15 @@
 										<div class="flex flex-col gap-2">
 											{#each prompt.messages as message, i (i)}
 												<div
-													class="border-surface-300-700 rounded-lg border"
+													class="border-surface-200-800 rounded-lg border"
 												>
 													<p
-														class="text-surface-600-400 border-surface-300-700 border-b px-2 py-1 text-xs"
+														class="text-surface-600-400 border-surface-200-800 border-b px-2 py-1 text-xs"
 													>
 														{message.role}
 													</p>
 													<pre
-														class="max-h-72 overflow-auto p-2 text-[11px] whitespace-pre-wrap">{message.content}</pre>
+														class="max-h-72 overflow-auto p-2 text-meta whitespace-pre-wrap">{message.content}</pre>
 												</div>
 											{/each}
 										</div>
@@ -825,22 +834,22 @@
 									<div class="flex flex-col gap-2">
 										{#each output.texts as text (text.key)}
 											<div
-												class="border-surface-300-700 rounded-lg border"
+												class="border-surface-200-800 rounded-lg border"
 											>
 												<p
-													class="text-surface-600-400 border-surface-300-700 border-b px-2 py-1 font-mono text-[11px]"
+													class="text-surface-600-400 border-surface-200-800 border-b px-2 py-1 font-mono text-meta"
 												>
 													{text.key}
 												</p>
 												{#if text.note}
 													<p
-														class="text-surface-600-400 border-surface-300-700 border-b px-2 py-1 text-[11px]"
+														class="text-surface-600-400 border-surface-200-800 border-b px-2 py-1 text-meta"
 													>
 														{text.note}
 													</p>
 												{/if}
 												<pre
-													class="max-h-72 overflow-auto p-2 text-[11px] whitespace-pre-wrap">{text.value}</pre>
+													class="max-h-72 overflow-auto p-2 text-meta whitespace-pre-wrap">{text.value}</pre>
 											</div>
 										{/each}
 										{#if output.rest != null}
@@ -851,7 +860,7 @@
 													The rest, as JSON
 												</summary>
 												<pre
-													class="bg-surface-200-800 mt-2 max-h-72 overflow-auto rounded p-2 font-mono text-[11px]">{JSON.stringify(
+													class="bg-surface-200-800 mt-2 max-h-72 overflow-auto rounded p-2 font-mono text-meta">{JSON.stringify(
 														output.rest,
 														null,
 														2
@@ -909,10 +918,10 @@
 									     the stop lists below stand alone. -->
 									{#each wire.calls as call, i (`call-${i}`)}
 										<div
-											class="border-surface-300-700 mb-3 rounded-lg border"
+											class="border-surface-200-800 mb-3 rounded-lg border"
 										>
 											<div
-												class="border-surface-300-700 text-surface-600-400 flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b px-2 py-1 text-[11px]"
+												class="border-surface-200-800 text-surface-600-400 flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b px-2 py-1 text-meta"
 											>
 												<span
 													class="font-mono uppercase"
@@ -954,7 +963,7 @@
 														Request
 													</p>
 													<pre
-														class="bg-surface-200-800 max-h-72 overflow-auto rounded p-2 font-mono text-[11px]">{call.body}</pre>
+														class="bg-surface-200-800 max-h-72 overflow-auto rounded p-2 font-mono text-meta">{call.body}</pre>
 													<div>
 														<button
 															type="button"
@@ -980,7 +989,7 @@
 													</p>
 													{#if call.raw}
 														<pre
-															class="bg-surface-200-800 max-h-72 overflow-auto rounded p-2 font-mono text-[11px] whitespace-pre-wrap">{call.raw}</pre>
+															class="bg-surface-200-800 max-h-72 overflow-auto rounded p-2 font-mono text-meta whitespace-pre-wrap">{call.raw}</pre>
 													{:else}
 														<p
 															class="text-surface-600-400 text-xs"
@@ -991,7 +1000,7 @@
 													{/if}
 													{#if call.truncated}
 														<p
-															class="text-surface-600-400 text-[11px]"
+															class="text-surface-600-400 text-meta"
 														>
 															Kept to the first 64
 															KB. The rest of the
@@ -1020,7 +1029,7 @@
 												</div>
 												{#if call.redacted.length}
 													<p
-														class="text-surface-600-400 text-[11px]"
+														class="text-surface-600-400 text-meta"
 													>
 														Replaced before this was
 														stored: {call.redacted.join(
@@ -1038,7 +1047,7 @@
 										>
 											<thead>
 												<tr
-													class="text-surface-600-400 border-surface-300-700 border-b text-left text-xs"
+													class="text-surface-600-400 border-surface-200-800 border-b text-left text-xs"
 												>
 													<th class="px-2 py-1.5">
 														Stop sequence
@@ -1054,7 +1063,7 @@
 											<tbody>
 												{#each wire.sent as stop, i (`sent-${stop.value}-${i}`)}
 													<tr
-														class="border-surface-300-700/50 border-b last:border-b-0"
+														class="border-surface-200-800 border-b last:border-b-0"
 													>
 														<td
 															class="px-2 py-1.5 font-mono"
@@ -1080,7 +1089,7 @@
 												{/each}
 												{#each wire.dropped as stop, i (`dropped-${stop.value}-${i}`)}
 													<tr
-														class="border-surface-300-700/50 border-b last:border-b-0"
+														class="border-surface-200-800 border-b last:border-b-0"
 													>
 														<td
 															class="px-2 py-1.5 font-mono"

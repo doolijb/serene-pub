@@ -418,76 +418,8 @@ describe("pipelines:setOption — the view cascade", () => {
 	})
 })
 
-describe("pipelines:createConfig — the view that rides on an own reply", () => {
-	test("answers the caller with the view even when nobody wants pipelines:get", async () => {
-		const h = fresh()
-		const owner = h.connect("s1", ADMIN)
-		// The caller always holds its own reply's key before the request ships
-		// (the typed emit flushes the interest sync first). It does NOT hold
-		// `pipelines:get`, which is the whole difference this test pins.
-		await owner.declare("pipelines:createConfig")
-
-		await owner.fire("pipelines:createConfig", { slug: SLUG, name: "Mine" })
-
-		// Built eagerly, because the own reply carries it — and built ONCE,
-		// which is why the two answers cannot disagree.
-		expect(viewsBuilt()).toBe(1)
-		expect(events(h)).toEqual(["pipelines:createConfig"])
-		expect(h.emits[0].target).toBe("s1")
-		expect(h.emits[0].data.configId).toBe(77)
-		expect(h.emits[0].data.pipeline.slug).toBe(SLUG)
-	})
-
-	test("sends the cascade as well to a socket holding the view's key", async () => {
-		const h = fresh()
-		const owner = h.connect("s1", ADMIN)
-		await owner.declare("pipelines:createConfig", "pipelines:get")
-
-		await owner.fire("pipelines:createConfig", { slug: SLUG, name: "Mine" })
-
-		// Still one read for both emits, and in the order it has always sent
-		// them: the refreshed view, then the id that names what was made.
-		expect(viewsBuilt()).toBe(1)
-		expect(events(h)).toEqual(["pipelines:get", "pipelines:createConfig"])
-	})
-})
-
-describe("pipelines:acknowledgeConfigNotices — the notice re-read", () => {
-	test("dismisses the notice and re-reads nothing when no banner is open", async () => {
-		const h = fresh()
-		const owner = h.connect("s1", ADMIN)
-		await owner.declare("pipelines:list")
-
-		await owner.fire("pipelines:acknowledgeConfigNotices", {
-			slug: SLUG,
-			configId: 10,
-			noticeId: 3
-		})
-
-		expect(seam.queries).toContain("acknowledgeNotices")
-		expect(seam.queries).not.toContain("pendingNotices")
-		expect(h.emits).toEqual([])
-	})
-
-	test("re-reads them once for a socket that wants the list", async () => {
-		const h = fresh()
-		const owner = h.connect("s1", ADMIN)
-		await owner.declare("pipelines:configNotices")
-
-		await owner.fire("pipelines:acknowledgeConfigNotices", {
-			slug: SLUG,
-			configId: 10,
-			noticeId: 3
-		})
-
-		expect(
-			seam.queries.filter((q) => q === "pendingNotices")
-		).toHaveLength(1)
-		expect(events(h)).toEqual(["pipelines:configNotices"])
-		expect(h.emits[0].target).toBe("s1")
-		expect(h.emits[0].data).toEqual({ configId: 10, notices: [] })
-	})
-})
+// pipelines:createConfig and pipelines:acknowledgeConfigNotices retired with
+// configurations (R50, lane F1, 2026-10-21).
 
 describe("the review gate's push transport", () => {
 	test("delivers a gated push to the declaring socket, never to the room", async () => {

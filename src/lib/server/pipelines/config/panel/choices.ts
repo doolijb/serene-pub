@@ -45,6 +45,11 @@ export type ChoiceList = Array<{
 	/** 🚧 For a workflow choice: its dialect. */
 	dialect?: string
 	/**
+	 * 🚧 For a prompt choice: an administrator hid it from session owners
+	 * (R54) — offered to an administrator, never to a member.
+	 */
+	hidden?: boolean
+	/**
 	 * For a connection choice: the MODELS on that endpoint (0114) — the second
 	 * half of the pair the slot stores. Absent for every other kind of choice,
 	 * and for an endpoint that has none. See `ConfigOption.choices`.
@@ -193,6 +198,8 @@ export async function choiceSets(db: Db, specId: number) {
 			list.push({
 				id: r.id,
 				label: r.name,
+				// 🚧 R54: hidden from session owners (prompts only).
+				...(r.hidden === true ? { hidden: true } : {}),
 				// Written for another pipeline (`promptsForPipeline` drops it).
 				...(opts.markForeign &&
 				r.createdForSpecId != null &&

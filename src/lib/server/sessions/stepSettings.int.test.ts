@@ -28,6 +28,8 @@ let dataDir: string
 
 const CHAT_GENRE = "core:genre/story"
 const CHAT_RESPOND = "core:spec/story-respond"
+/** The reply's own steps, by the addresses its document gives them (Story's sit in its `reply` junction). */
+let reply: { generate: string; save: string; spritePick?: string; spriteShow?: string }
 
 beforeAll(async () => {
 	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-step-settings-int-test-"))
@@ -35,6 +37,7 @@ beforeAll(async () => {
 	testDb = (await import("$lib/server/db")).db as unknown as TestDb
 	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
 	await bootstrapPipelines(testDb as any)
+	reply = await (await import("$lib/server/utils/testDb")).replyStepKeys(testDb, CHAT_RESPOND)
 })
 
 afterAll(async () => {
@@ -66,9 +69,9 @@ describe("what a session's step settings are", () => {
 		const { readStepSettings } = await import("./stepSettings")
 		const w = await makeSession()
 		const steps = await readStepSettings(testDb as any, w.session.id, w.user.id)
-		const reply = steps.filter((s) => s.spec === CHAT_RESPOND)
+		const replySteps = steps.filter((s) => s.spec === CHAT_RESPOND)
 
-		const tick = reply.find((s) => s.nodeKey === "tick")!
+		const tick = replySteps.find((s) => s.nodeKey === "tick")!
 		expect(tick).toMatchObject({
 			definitionId: "core:task/clock-step@1",
 			heading: "Each reply advances the clock by"
@@ -85,14 +88,18 @@ describe("what a session's step settings are", () => {
 			"years"
 		])
 
-		const sprites = reply.find((s) => s.nodeKey === "spritePick")!
+		const sprites = replySteps.find((s) => s.nodeKey === reply.spritePick)!
 		expect(sprites.fields.map((f) => f.control)).toContain("boolean")
+		// 🚧 RF fix 3 (2026-10-23): ONE sprite picker, whichever branch writes the
+		// reply — never a copy per branch, each its own setting for one thing.
+		expect(replySteps.filter((s) => s.definitionId === sprites.definitionId).map((s) => s.nodeKey)).toEqual([reply.spritePick])
+		expect(new Set(replySteps.map((s) => s.heading)).size).toBe(replySteps.length)
 
 		// Nothing of a model's: the reply's own model call (`generate`) is not
 		// exposed, and no exposed step offers a connection, sampling or a
 		// prompt — every field is a plain value.
 		for (const s of steps) {
-			expect(s.nodeKey).not.toBe("generate")
+			expect(s.nodeKey).not.toBe(reply.generate)
 			for (const f of s.fields)
 				expect(["integer", "number", "boolean", "enum", "string"]).toContain(f.control)
 		}
@@ -105,14 +112,14 @@ describe("what a session's step settings are", () => {
 		const at = (await published(testDb as any, CHAT_RESPOND))!
 		const where = and(
 			eq(schema.pipelineNodes.specVersionId, at.specVersionId),
-			eq(schema.pipelineNodes.nodeKey, "generate")
+			eq(schema.pipelineNodes.nodeKey, reply.generate)
 		)
 		const [before] = await testDb.select({ expose: schema.pipelineNodes.expose }).from(schema.pipelineNodes).where(where)
 		// As the turn order's `advise` oracle is: a model call in session settings.
 		await testDb.update(schema.pipelineNodes).set({ expose: { session: true } } as any).where(where)
 		try {
 			const steps = await readStepSettings(testDb as any, w.session.id, w.user.id)
-			expect(steps.some((s) => s.spec === CHAT_RESPOND && s.nodeKey === "generate")).toBe(false)
+			expect(steps.some((s) => s.spec === CHAT_RESPOND && s.nodeKey === reply.generate)).toBe(false)
 			// The story settings beside it are still offered.
 			expect(steps.some((s) => s.spec === CHAT_RESPOND && s.nodeKey === "tick")).toBe(true)
 		} finally {
@@ -238,7 +245,7 @@ describe("setting one", () => {
 		).rejects.toThrow(/Unit is one of Minutes, Hours/)
 		// The reply's model call is no step setting, however it is asked.
 		await expect(
-			writeStepSetting(testDb as any, { ...at, nodeKey: "generate", path: "maxTokens", value: 5 })
+			writeStepSetting(testDb as any, { ...at, nodeKey: reply.generate, path: "maxTokens", value: 5 })
 		).rejects.toBeInstanceOf(StepSettingRefusal)
 	})
 })

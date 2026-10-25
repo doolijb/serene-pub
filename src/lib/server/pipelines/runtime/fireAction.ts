@@ -399,6 +399,8 @@ export async function fireAction(
 	let answeredBy: ParticipantRef = `user:${req.actor.userId}`
 	/** Whom the BLOCK addressed — what the record of the answer names; null for a question put to nobody. */
 	let blockAddressee: ParticipantRef | null = null
+	/** 🚧 A roll form's answer in words, for the answered stamp (`formFireOf`'s label). */
+	let answerWords: string | null = null
 	if (req.actor.as && !req.blockId)
 		return refused("An answer made as a participant names the form it answers.")
 	if (req.blockId) {
@@ -490,18 +492,34 @@ export async function fireAction(
 				...(match?.choice !== undefined ? { choice: match.choice, label: match.label } : {})
 			}
 		} else {
+			/**
+			 * A `form` press is its values, checked field by field; a 🚧
+			 * **roll form** press (Lair rewrite D3) is `{ check, stat, band }`,
+			 * checked by `formFireOf` against what the block offered — the
+			 * chosen band's target read off the stored block, never the press
+			 * — and its words kept for the answered stamp (`Stealth — Hard`,
+			 * `No check`).
+			 */
 			const filled = formFireOf(block, req.payload ?? {})
-			if (!filled) return refused("A form is answered with its values.")
-			const faults = checkValues(block.fields, filled.payload)
-			if (faults.length)
+			if (!filled)
 				return refused(
-					`That answer does not fit the form: ` +
-						faults.map((f) => `${f.message} (${f.fix})`).join("; ") +
-						"."
+					block.kind === "roll"
+						? "A roll is answered with one of the checks and difficulties offered, or No check."
+						: "A form is answered with its values."
 				)
+			if (block.kind === "form") {
+				const faults = checkValues(block.fields, filled.payload)
+				if (faults.length)
+					return refused(
+						`That answer does not fit the form: ` +
+							faults.map((f) => `${f.message} (${f.fix})`).join("; ") +
+							"."
+					)
+			}
 			fn = filled.fn
 			stamped = filled.action
 			payload = filled.payload
+			if (block.kind === "roll" && filled.label) answerWords = filled.label
 			form = {
 				blockId: req.blockId,
 				messageId: req.messageId,
@@ -625,7 +643,12 @@ export async function fireAction(
 			{ lineage: req.lineage }
 		)
 		if (gate.enabled) return null
-		return refused(await reasonSentence(gate.reason!, { userId: req.actor.userId }))
+		// A condition that names no reason still refuses with a sentence (never a crash on `undefined`).
+		return refused(
+			gate.reason
+				? await reasonSentence(gate.reason, { userId: req.actor.userId })
+				: "That action isn't available in this session right now."
+		)
 	}
 	/**
 	 * May THIS press fire a `world` action — the effects line at the door
@@ -801,7 +824,11 @@ export async function fireAction(
 
 	// Routing by identity (plans/31 V2): the declarer, if it still serves —
 	// the verdict is the eligibility check, and nothing else selects.
-	const routed: { spec: string | null; fallback?: Awaited<ReturnType<typeof resolveSubjectVerdict>>["fallback"] } =
+	const routed: {
+		spec: string | null
+		registrationKey?: string
+		fallback?: Awaited<ReturnType<typeof resolveSubjectVerdict>>["fallback"]
+	} =
 		annexFieldRun
 			? { spec: (await import("@serene-pub/sdk")).ANNEX_FIELD_SPEC_ID }
 			: await resolveSubjectVerdict(db, genreId, actionId, {
@@ -811,6 +838,34 @@ export async function fireAction(
 	if (annexFieldRun) payload = annexFieldRun
 	const specId = routed.spec
 	if (!specId) return refused(`Nothing serves '${actionId}' for this session's genre.`)
+
+	/**
+	 * 🚧 A ruleset's action (PLAN-rulesets-functions D6): the press read back
+	 * to the rules-action inlet's payload — which function of the session's
+	 * ruleset, what its form collected, who acts (the presser, as below) and
+	 * at whom, and the mode it runs at.
+	 */
+	let rulesInput: Awaited<ReturnType<(typeof import("$lib/server/rulesets/rulesActions"))["rulesActionInput"]>> = null
+	{
+		const { RULES_ACTION_SPEC, rulesActionInput } = await import("$lib/server/rulesets/rulesActions")
+		if (specId === RULES_ACTION_SPEC) {
+			const own = await ownPresence(db, req.sessionId, req.actor.userId)
+			const actor: ParticipantRef = req.actor.as ?? (own !== null ? `character:${own}` : `user:${req.actor.userId}`)
+			rulesInput = await rulesActionInput(db, req.sessionId, actionId, { actor, payload })
+			if (!rulesInput) return refused(`'${chosen.name}' is no action of this session's rules any more.`)
+		}
+	}
+
+	/**
+	 * 🚧 **Replace on write** (RF fix 5, owner ruling 2026-10-23): a press
+	 * that has passed every door — a GM's action, a rules action — while the
+	 * session is rewound deletes the forward stack for good before it runs.
+	 * A refused press above leaves it standing.
+	 */
+	{
+		const { discardForwardStack } = await import("$lib/server/messages/store")
+		await discardForwardStack(db, req.sessionId)
+	}
 
 	const { runSpec } = await import("$lib/server/pipelines/runtime/runTurn")
 	const runId = req.runId || randomUUID()
@@ -928,6 +983,10 @@ export async function fireAction(
 				...(routed.fallback
 					? { meta: { preset: { via: "fallback", ...routed.fallback } } }
 					: {}),
+				// 🚧 The registration that answers (D7, LS2).
+				...(routed.registrationKey
+					? { registration: { family: "action", key: routed.registrationKey } }
+					: {}),
 				sink: {
 					onProgress: (event) => req.onProgress?.({ ...event, runId, specId })
 				},
@@ -955,7 +1014,9 @@ export async function fireAction(
 					// 🚧 The ruleset the session plays (PLAN-sheet §15 C), as a
 					// turn supplies it — an action's run branches on it too (the
 					// Dungeon Crawler's sheet writes a kit by its casting rule).
-					ruleset: await (await import("$lib/server/pipelines/runtime/runTurn")).sessionRulesetInput(db, req.sessionId)
+					ruleset: await (await import("$lib/server/pipelines/runtime/runTurn")).sessionRulesetInput(db, req.sessionId),
+					// 🚧 D6: a ruleset action's `main`, function, answer, actor, aimedAt and mode.
+					...(rulesInput ?? {})
 				}
 			})
 		} catch (e) {
@@ -1019,7 +1080,7 @@ export async function fireAction(
 			// Answered once (W7): the stored block says so from here on — a
 			// second press is refused above, and the row goes out with its parts
 			// so every client greys the block without a reload.
-			const value = form.kind === "form" ? formAnswerText(payload) : null
+			const value = form.kind === "form" ? formAnswerText(payload) : answerWords
 			const answered: FormAnswered & { value?: string } = {
 				by: answeredBy,
 				at: new Date().toISOString(),

@@ -9,12 +9,13 @@
  *
  * 40px square, the filter box's height, so the find row is one even line;
  * tonal surface at rest — never bare, which on the sidebar's ground read as
- * an icon with no button around it — and tonal primary while it is ON (a
- * filter in force, a view mode chosen), the app's active-toggle treatment
- * (§2.4). Filled primary is a call to action and never means "on".
+ * an icon with no button around it — and `preset-pressed` while it is ON (a
+ * filter in force, a view mode chosen): a surface step, ink and a 2px primary
+ * bar, the app's active-toggle treatment (§2.4, ★R2 2026-10-24). Gold — filled
+ * or tonal — is the next action's and never means "on".
  */
 export function toolbarButtonClass(active = false): string {
 	return `btn grid size-10 shrink-0 place-items-center p-0 ${
-		active ? "preset-tonal-primary" : "preset-tonal-surface"
+		active ? "preset-pressed" : "preset-tonal-surface"
 	}`
 }

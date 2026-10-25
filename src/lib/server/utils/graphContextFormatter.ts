@@ -78,6 +78,8 @@ interface RelRow {
 	visibility: string
 	status: string
 	updatedAt: Date
+	/** 🚧 The run whose rules last wrote it (T2); null for a row worded by hand. */
+	rulesRunId?: string | null
 }
 
 /**
@@ -119,12 +121,19 @@ function secrecyLabel(visibility: string): string {
  */
 function relEntry(
 	r: RelRow,
-	other: NodeInfo | undefined
+	other: NodeInfo | undefined,
+	/**
+	 * 🚧 What a rule-fed row may tell (ties on the graph, T5): its words
+	 * withheld when the field they come from shares none (the tie's own name
+	 * said instead), and the numbers its held side shares.
+	 */
+	share?: TieShare
 ): GraphRelationshipEntry {
 	const entry: GraphRelationshipEntry = {
-		type: neutralizeGraphMarkers(r.relationshipType),
+		type: neutralizeGraphMarkers(share?.withholdType ?? r.relationshipType),
 		secrecy: secrecyLabel(r.visibility)
 	}
+	if (share?.numbers && Object.keys(share.numbers).length) entry.numbers = { ...share.numbers }
 	if (r.status && r.status !== "active") entry.status = r.status
 	if (other?.nodeState && other.nodeState !== "active") {
 		entry.theirState = other.nodeState
@@ -143,10 +152,14 @@ function relEntry(
  * `.push`, losing the whole section (review 2026-09-29). `fromEntries` defines
  * every key as an own property, so a name is only ever a name.
  */
+/** 🚧 What one rule-fed row may tell the model (`tieShareForRows`, T5). */
+type TieShare = { withholdType?: string; numbers?: Record<string, number> }
+
 function groupByOther(
 	rels: RelRow[],
 	nodeMap: Map<number, NodeInfo>,
-	otherSide: "to" | "from"
+	otherSide: "to" | "from",
+	share?: Map<number, TieShare>
 ): Record<string, GraphRelationshipEntry[]> {
 	const grouped = new Map<string, GraphRelationshipEntry[]>()
 	for (const r of rels) {
@@ -154,8 +167,8 @@ function groupByOther(
 		const other = nodeMap.get(otherId)
 		const name = nodeName(other, `node#${otherId}`)
 		const list = grouped.get(name)
-		if (list) list.push(relEntry(r, other))
-		else grouped.set(name, [relEntry(r, other)])
+		if (list) list.push(relEntry(r, other, share?.get(r.id)))
+		else grouped.set(name, [relEntry(r, other, share?.get(r.id))])
 	}
 	return Object.fromEntries(grouped)
 }
@@ -230,6 +243,8 @@ export interface GraphRelationshipEntry {
 	status?: string
 	theirState?: string
 	note?: string
+	/** 🚧 The numbers a rule-fed tie's held side shares with the model (T5); absent unless its fields say so. */
+	numbers?: Record<string, number>
 }
 
 /**
@@ -276,6 +291,8 @@ interface GraphLayers {
 	legendary: LegendaryLayer[]
 	/** The session's cast, as node ids. See the note where it is filled. */
 	participantNodeIds: Set<number>
+	/** 🚧 What each rule-fed row may tell (T5), by row id; rows drawn by hand are not in it. */
+	tieShare: Map<number, TieShare>
 }
 
 /**
@@ -319,8 +336,13 @@ async function sessionLine(db: Db, sessionId: number, lorebookId: number) {
 					reading.line
 				)
 			: rows.filter((r) => r.branchId == null)
-	const memberAt: MemberAt = (member) =>
-		castMemberAt(member, overlays, castReading, { keepCard: true })
+	// 🚧 ★5 (ties T3): a member's state the rules fed while the session may not write this book — its notes' rule-fed overlay.
+	const fed = (await (await import("$lib/server/rulesets/ties")).ruleFedOverlayOf(db, sessionId))?.castStates ?? null
+	const memberAt: MemberAt = (member) => {
+		const m = castMemberAt(member, overlays, castReading, { keepCard: true })
+		const state = fed?.[String(member.id)]
+		return state && "nodeState" in m ? { ...m, nodeState: state } : m
+	}
 	/** Members some overlay on the line gives a visibility. */
 	const visibilityAmended = [...overlays]
 		.filter(([, list]) => list.some((a) => "nodeVisibility" in a.fields))
@@ -666,6 +688,13 @@ async function collectGraphLayers(params: {
 		})
 	}
 
+	// 🚧 Ties on the graph (T5): what each rule-fed row may tell, from the
+	// session's held sides — words withheld, numbers shared, per field.
+	const fed = [...l1Rels, ...l2Rels, ...legendary.flatMap((l) => l.rels)].filter((r) => r.rulesRunId)
+	const tieShare = fed.length
+		? await (await import("$lib/server/rulesets/ties")).tieShareForRows(db, sessionId, fed.map((r) => r.id))
+		: new Map<number, TieShare>()
+
 	return {
 		speakerNodeId,
 		l1Rels,
@@ -673,7 +702,8 @@ async function collectGraphLayers(params: {
 		l2Rels,
 		l2NodeMap,
 		legendary,
-		participantNodeIds
+		participantNodeIds,
+		tieShare
 	}
 }
 
@@ -705,7 +735,8 @@ export async function buildGraphContextData(
 			figure.relationships = groupByOther(
 				figureLayer.rels,
 				figureLayer.nodeMap,
-				"to"
+				"to",
+				layers.tieShare
 			)
 		}
 		legendaryFigures.set(figureLayer.header, figure)
@@ -730,7 +761,8 @@ export async function buildGraphContextData(
 		graph.yourRelationships = groupByOther(
 			layers.l1Rels,
 			layers.l1NodeMap,
-			"to"
+			"to",
+			layers.tieShare
 		)
 	}
 
@@ -738,7 +770,8 @@ export async function buildGraphContextData(
 		graph.howOthersRegardYou = groupByOther(
 			layers.l2Rels,
 			layers.l2NodeMap,
-			"from"
+			"from",
+			layers.tieShare
 		)
 	}
 
@@ -864,7 +897,7 @@ export async function buildGraphRelationshipRows(
 			id: r.id,
 			lane,
 			name: nodeName(other, `node#${otherId}`),
-			entry: relEntry(r, other),
+			entry: relEntry(r, other, layers.tieShare.get(r.id)),
 			present: layers.participantNodeIds.has(otherId),
 			touchesSpeaker:
 				r.fromNodeId === layers.speakerNodeId ||
@@ -1050,6 +1083,11 @@ export async function buildCastRelationshipRows(params: {
 		)
 	})
 
+	// 🚧 Ties on the graph (T5): what each rule-fed row may tell.
+	const fed = kept.filter((r) => r.rulesRunId)
+	const tieShare = fed.length
+		? await (await import("$lib/server/rulesets/ties")).tieShareForRows(db, sessionId, fed.map((r) => r.id))
+		: new Map<number, TieShare>()
 	return kept.map((r) => {
 		const holderNode = nodeMap.get(r.fromNodeId)
 		const other = nodeMap.get(r.toNodeId)
@@ -1059,7 +1097,7 @@ export async function buildCastRelationshipRows(params: {
 			name: nodeName(holderNode, `node#${r.fromNodeId}`),
 			counterpart: nodeName(other, `node#${r.toNodeId}`),
 			entry: {
-				...relEntry(r, other),
+				...relEntry(r, other, tieShare.get(r.id)),
 				// The bare name, not the heading: "Only Marrow knows", never
 				// the heading's "(a.k.a. …)" a second time.
 				secrecy: castSecrecyLabel(

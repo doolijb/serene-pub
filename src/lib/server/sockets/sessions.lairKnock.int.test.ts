@@ -55,6 +55,10 @@ const KNOCK = {
 }
 /** What the planner answers this test with. */
 let document: Record<string, unknown> = PLAN
+/** The knock's draft prompt (`lair-knock-build`), by a phrase of its own. */
+const KNOCK_DRAFT_PROMPT = "has left the description to you"
+/** What the Castellan drafts a room as (Lair rewrite D2/D10): its body, no ways out, its typed fields. */
+const ROOM_DRAFT = { content: "Black water between pillars.", exits: [], fields: { category: "Undercroft" } }
 /** Every prose call, in order — the narrator's is the first of a turn. */
 let proseCalls = 0
 /** Every prompt a JSON step (the planner, the keeper) was sent. */
@@ -99,10 +103,13 @@ class FakeAdapter implements FakeTextAdapter {
 				onReasoning?: (c: string) => void
 			) => {
 				if (json) {
-					jsonPrompts.push(JSON.stringify(this.injected ?? ""))
+					const prompt = JSON.stringify(this.injected ?? "")
+					jsonPrompts.push(prompt)
 					// The planner reasons too — and that must NOT reach the row.
 					onReasoning?.("The planner weighs the beats.")
-					onContent(JSON.stringify(document))
+					// The knock's draft answers as a room (Lair rewrite D2: one
+					// JSON answer, its body, ways out and typed fields).
+					onContent(JSON.stringify(prompt.includes(KNOCK_DRAFT_PROMPT) ? ROOM_DRAFT : document))
 					return
 				}
 				prosePrompts.push(JSON.stringify(this.injected ?? ""))
@@ -369,7 +376,7 @@ async function storyWentOn(w: Awaited<ReturnType<typeof lair>>, n: number) {
 		async () => {
 			const runs = await runsOf(w.session.id)
 			expect(
-				runs.filter((r) => r.specSlug === "core:spec/lair-respond" && r.outcome === "ok")
+				runs.filter((r) => r.specSlug === "core:spec/lair-reply" && r.outcome === "ok")
 			).toHaveLength(n)
 		},
 		{ timeout: 30_000, interval: 200 }
@@ -383,7 +390,7 @@ const TYPED =
 	"A vaulted hall, knee-deep in black water.\n\nExits: up → The Stair\nHazards: the floor drops away mid-hall."
 
 describe("R9 · the knock asks the person to describe the room", () => {
-	test("an undescribed room knocks: a Castellan row on main, one option — Describe <room>…", async () => {
+	test("an undescribed room knocks: an Oracle row on main, one option — Describe <room>…", async () => {
 		const w = await lair()
 		reset(KNOCK)
 		await reply(w, "the knock")
@@ -396,7 +403,8 @@ describe("R9 · the knock asks the person to describe the room", () => {
 		])
 		const [row] = (await rowsOf(w.session.id)).filter((r) => r.id === knock.messageId)
 		expect(row!.channel).toBe("main")
-		expect((row!.metadata as any)?.speaker).toBe("envoy:castellan")
+		// The knock's question is mechanics: the Oracle's (Lair rewrite D4).
+		expect((row!.metadata as any)?.speaker).toBe("envoy:oracle")
 	})
 
 	test("Answer the door collects the description: optional, and empty is the Castellan's draft", async () => {
@@ -487,21 +495,24 @@ describe("R9 · the knock asks the person to describe the room", () => {
 		const { ack } = await pressKnock(w)
 		expect(ack?.error).toBeUndefined()
 		expect(ack?.parked).toBe(true)
-		// The model drafted the room — the knock-build prompt.
-		expect(proseCalls).toBe(1)
-		expect(prosePrompts[0]).toContain("has left the description to you")
+		// The model drafted the room — the knock-build prompt, as one JSON
+		// answer (Lair rewrite D2): no prose call.
+		expect(proseCalls).toBe(0)
+		expect(jsonPrompts.some((p) => p.includes(KNOCK_DRAFT_PROMPT))).toBe(true)
 		const [review] = pendingReviewsFor(w.owner.id)
 		expect(review).toMatchObject({
 			specId: "core:spec/lair-room-answer",
 			nodeKey: "room.drafted.save"
 		})
 		expect(review!.values.name).toBe("The Drowned Hall")
-		expect(review!.values.content).toBe(PROSE.join(""))
+		expect(review!.values.content).toBe(ROOM_DRAFT.content)
 		resolveReview(review!.id, w.owner.id, "approve")
 		await vi.waitFor(
 			async () => {
 				const [entry] = await roomsNamed(w.lorebookId, "The Drowned Hall")
-				expect(entry?.content).toBe(PROSE.join(""))
+				expect(entry?.content).toBe(ROOM_DRAFT.content)
+				// Its typed fields, as drafted (D2).
+				expect((entry?.fields as any)?.category).toBe("Undercroft")
 			},
 			{ timeout: 30_000, interval: 100 }
 		)
@@ -581,7 +592,7 @@ describe("R9 · the knock asks the person to describe the room", () => {
 		).toContain(ROOM_ANSWER)
 		// … the story still waits (no second turn) …
 		expect(
-			(await runsOf(w.session.id)).filter((r) => r.specSlug === "core:spec/lair-respond")
+			(await runsOf(w.session.id)).filter((r) => r.specSlug === "core:spec/lair-reply")
 		).toHaveLength(1)
 		// … and a second answer works.
 		const second = await pressKnock(w, TYPED)
@@ -607,7 +618,7 @@ describe("R9 · the knock asks the person to describe the room", () => {
 		const { lastTurnOf } = await import("$lib/server/sessions/turnYield")
 		const turn = await lastTurnOf(testDb as any, w.session.id)
 		expect(turn.ok && turn.yield.rows.map((r) => [r.messageId, r.name])).toEqual([
-			[knock.messageId, "Castellan"]
+			[knock.messageId, "Oracle"]
 		])
 	})
 })
@@ -783,6 +794,18 @@ describe("B13 · the party's room is always in view", () => {
 	})
 })
 
+/**
+ * The voice's person rule (RF fix 2, 2026-10-23) — speech in the first
+ * person, actions in the third, never a "you" — read off the seeded
+ * `lair-voice` row for `char`, escaped as the captured prompt holds it.
+ */
+async function voicePersonRule(char: string): Promise<string> {
+	const { CORE_PROMPTS } = await import("@serene-pub/core-catalog")
+	const row = CORE_PROMPTS.find((p) => p.seedKey.endsWith(":lair-voice"))!
+	const rule = row.fields.systemPrompt!.split("\n\n").find((p) => p.includes("in the first person"))!
+	return JSON.stringify(rule.replaceAll("{{char}}", char)).slice(1, -1)
+}
+
 describe("R8 · nothing narrates a turn: the planner plans the party, and a delver speaks first", () => {
 	test("the planner plans the party only; the first prose call is a delver's character turn, in the room", async () => {
 		const w = await lair()
@@ -797,7 +820,7 @@ describe("R8 · nothing narrates a turn: the planner plans the party, and a delv
 		// The first prose call of a turn is a delver's voice, never a narrator's.
 		const turn = prosePrompts[0]!
 		expect(turn).not.toContain("Write ONE short beat")
-		expect(turn).toContain("nobody narrates it for you")
+		expect(turn).toContain(await voicePersonRule("Brannoc"))
 		// The voice is shown the room it stands in (R8: `locationEntries`).
 		expect(turn).toContain("The room you are standing in")
 		expect(turn).not.toContain("{{")
@@ -835,10 +858,18 @@ describe("B6 · Answer the door links the new room to where the party stand", ()
 			} as never
 		)
 	}
+	/**
+	 * The knock's own links — `leads to` both ways. A typed room's Exits line
+	 * is linked on save too (Lair rewrite D10: `leads up to` The Stair, one
+	 * way), which is not the knock's.
+	 */
+	async function knockLinks(lorebookId: number) {
+		return (await linksOf(lorebookId)).filter((l) => l.reverseRelationshipType === "leads to")
+	}
 	const oneLink = async (w: Awaited<ReturnType<typeof lair>>, to: string) => {
 		const [hall] = await roomsNamed(w.lorebookId, "The Drowned Hall")
 		const [there] = await roomsNamed(w.lorebookId, to)
-		const links = await linksOf(w.lorebookId)
+		const links = await knockLinks(w.lorebookId)
 		expect(links).toHaveLength(1)
 		expect(links[0]).toMatchObject({
 			fromEntryId: hall!.id,
@@ -862,6 +893,13 @@ describe("B6 · Answer the door links the new room to where the party stand", ()
 		const { ack } = await pressKnock(w, TYPED)
 		expect(ack?.error).toBeUndefined()
 		await oneLink(w, "The Old Well")
+		// …and its Exits line, linked on save (D10): one way, in the line's words.
+		const [hall] = await roomsNamed(w.lorebookId, "The Drowned Hall")
+		const [stair] = await roomsNamed(w.lorebookId, "The Stair")
+		const exits = (await linksOf(w.lorebookId)).filter((l) => l.reverseRelationshipType == null)
+		expect(exits).toEqual([
+			expect.objectContaining({ fromEntryId: hall!.id, toEntryId: stair!.id, relationshipType: "leads up to" })
+		])
 		await storyWentOn(w, 3)
 		// The turn after the answer: the planner stands in the Old Well, and
 		// its ways out now include the room just built, said from the well.
@@ -932,7 +970,7 @@ describe("B6 · Answer the door links the new room to where the party stand", ()
 		const { ack } = await pressKnock(w, TYPED)
 		expect(ack?.error).toBeUndefined()
 		await oneLink(w, "The Old Well")
-		const [before] = await linksOf(w.lorebookId)
+		const [before] = await knockLinks(w.lorebookId)
 		const [hall] = await roomsNamed(w.lorebookId, "The Drowned Hall")
 		const [well] = await roomsNamed(w.lorebookId, "The Old Well")
 		const { createHost } = await import("$lib/server/pipelines/runtime/host")
@@ -959,7 +997,8 @@ describe("B6 · Answer the door links the new room to where the party stand", ()
 		expect(ack?.error).toBeUndefined()
 		const [entry] = await roomsNamed(w.lorebookId, "The Drowned Hall")
 		expect(entry!.content).toBe(TYPED)
-		expect(await linksOf(w.lorebookId)).toEqual([])
+		// No way back to a room nothing names — only the Exits line's own (D10).
+		expect(await knockLinks(w.lorebookId)).toEqual([])
 		await storyWentOn(w, 3)
 		const runs = await runsOf(w.session.id)
 		expect(

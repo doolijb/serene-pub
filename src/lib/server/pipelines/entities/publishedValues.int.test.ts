@@ -33,7 +33,7 @@ import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import { CHAT_GENRE_ID, STORY_GENRE_ID } from "@serene-pub/core-catalog"
-import { genreEnabledWhen } from "@serene-pub/sdk"
+import { defineRuleset, genreEnabledWhen, getRuleset } from "@serene-pub/sdk"
 import {
 	itemValuesFor,
 	itemValuesOf,
@@ -52,12 +52,26 @@ beforeAll(async () => {
 	await bootstrapPipelines(db)
 }, 60_000)
 
-async function session(genreId: string) {
+/**
+ * Rules that keep the world's weather: a session's attributes are its rules'
+ * (a genre brings none, and Freeform keeps none).
+ */
+const WEATHER_RULES = "test:ruleset/published-weather@1"
+function weatherRules() {
+	if (!getRuleset(WEATHER_RULES))
+		defineRuleset(WEATHER_RULES, {
+			name: { en: "Weather" },
+			attributes: [{ id: "weather", slot: "core:slot/weather@1", borrowed: true, carriedBy: ["world"] }]
+		})
+	return WEATHER_RULES
+}
+
+async function session(genreId: string, rules?: string) {
 	const tag = `pv-${++n}`
 	const user = await createTestUser(db, tag)
 	const [row] = await db
 		.insert(schema.sessions)
-		.values({ userId: user.id, isGroup: false, name: tag, genreId })
+		.values({ userId: user.id, isGroup: false, name: tag, genreId, ...(rules ? { primaryRuleset: rules } : {}) })
 		.returning()
 	const message = async (
 		over: Partial<typeof schema.sessionMessages.$inferInsert> = {}
@@ -80,7 +94,7 @@ async function session(genreId: string) {
 
 describe("state is the resolver's answer", () => {
 	it("a Story session publishes state.world.location once set, under the bare slot key a predicate names", async () => {
-		const w = await session(STORY_GENRE_ID)
+		const w = await session(STORY_GENRE_ID, weatherRules())
 		const before = await publishedValues(db, w.session.id)
 		expect(before.state.world.location).toBeUndefined()
 		// No shipped genre declares a default (review W8): Story's Look
@@ -100,9 +114,13 @@ describe("state is the resolver's answer", () => {
 		const after = await publishedValues(db, w.session.id)
 		expect(after.state.world.location).toBe("The Vale")
 		expect(after.state.world.core_location).toBe("The Vale")
-		// The rest of the resolver's vocabulary rides along.
+		// The rest of the resolver's vocabulary rides along: the rules'
+		// attributes at their defaults, and what the host keeps beside the
+		// place.
 		expect(after.state.world.weather).toBe("clear")
-		expect(after.state.slots.map((s) => s.key)).toContain("location")
+		expect(after.state.slots.map((s) => s.key)).toEqual(
+			expect.arrayContaining(["location", "weather", "inventory"])
+		)
 	}, 60_000)
 
 	it("a Chat session, whose genre declares no slots, publishes an empty world", async () => {
@@ -168,7 +186,11 @@ describe("session.fields", () => {
 			// The note goes at the end unless moved (owner ruling 2026-10-03).
 			authorsNote: { text: "", depth: 0, interval: 1, role: "system" },
 			autoAdvance: "round",
-			turnMode: "rules"
+			turnMode: "rules",
+			// Story's fields since the layering (lane 3, 2026-10-20): the voices,
+			// at their defaults (Rest follows the reckoning's mode, R55).
+			sideCast: false,
+			narratorInterjections: false
 		})
 	}, 60_000)
 })

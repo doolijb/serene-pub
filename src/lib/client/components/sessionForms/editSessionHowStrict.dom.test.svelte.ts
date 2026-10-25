@@ -1,8 +1,9 @@
 /**
- * 🚧 Edit Session › How strict (PLAN-rulesets §21; NOMENCLATURE §28): beside
- * On revision and Rules options, the genre's options in plain words, the
- * session's value selected; changing it mid-session is allowed (ruled), and
- * it is sent only when moved. A genre with one option (Chat) shows none.
+ * 🚧 Edit Session › How strict and the rules (PLAN-rulesets §21; R32;
+ * lane 7, 2026-10-21): both are the genre's settings in the derived form
+ * now. The ruleset — fixed at start — reads as its name from the genre's
+ * rules offer, read-only, with why; How strict applies at once through
+ * `sessions:updateSetting`, never with Save.
  */
 import { afterEach, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
@@ -49,7 +50,7 @@ import EditSessionForm from "./EditSessionForm.svelte"
 const GENRE = "test:genre/notes@1"
 const NOTE = { text: "It is raining.", depth: 4, interval: 1, role: "system" }
 const OFFER = {
-	choices: [],
+	choices: [{ id: "core:ruleset/freeform@1", name: "Freeform" }],
 	strict: false,
 	defaultId: "core:ruleset/freeform@1",
 	rigour: { options: ["prose", "mechanics", "scripts"], default: "mechanics" }
@@ -150,20 +151,92 @@ function save() {
 
 const unsaved = () => document.body.textContent?.includes("Unsaved changes") ?? false
 
-describe("Edit Session — How strict", () => {
-	test("the genre's options in plain words, the session's selected", async () => {
+const RULES_FORM = {
+	sessionId: 7,
+	viewer: "owner",
+	groups: [
+		{
+			kind: "genre",
+			id: "genre",
+			heading: "Notes",
+			fields: [
+				{
+					id: JSON.stringify(["genre", "ruleset"]),
+					address: { kind: "genre", key: "ruleset" },
+					label: "Rules",
+					control: "string",
+					value: "core:ruleset/freeform@1",
+					inherited: "core:ruleset/freeform@1",
+					source: "session",
+					reach: "owner",
+					fixed: true,
+					editable: false,
+					readOnlyReason: "Chosen when the session started; the rules a session plays do not change."
+				},
+				{
+					id: JSON.stringify(["genre", "rigour"]),
+					address: { kind: "genre", key: "rigour" },
+					label: "How strict",
+					control: "enum",
+					members: [
+						{ key: "prose", label: "Words only" },
+						{ key: "mechanics", label: "Rules" },
+						{ key: "scripts", label: "The rules decide" }
+					],
+					value: "mechanics",
+					inherited: "mechanics",
+					source: "session",
+					reach: "owner",
+					editable: true
+				}
+			]
+		}
+	]
+}
+
+describe("Edit Session — How strict and the rules", () => {
+	test("the rules read as their name, read-only, with why", async () => {
 		await openForm()
-		const select = field<HTMLSelectElement>("session-how-strict")
-		expect([...select.options].map((o) => o.textContent?.trim())).toEqual(["Words only", "Rules", "Rules and dice"])
-		expect(select.value).toBe("mechanics")
-		// Untouched, it is not sent.
-		const name = document.querySelector<HTMLInputElement>("input#name, input[name='name']")
-		if (name) type(name, "The lighthouse at dusk")
-		expect(save()?.session.rigour).toBeUndefined()
+		deliver("sessions:settingsForm", RULES_FORM)
+		const rules = document.querySelector<HTMLElement>(`[data-setting='${JSON.stringify(["genre", "ruleset"])}']`)!
+		expect(rules.textContent).toContain("Freeform")
+		expect(rules.textContent).toContain("Chosen when the session started")
+		expect(rules.querySelector("input, select, textarea") === null).toBe(true)
 	})
 
-	test("a genre with one way to be strict (Chat) shows none", async () => {
-		await openForm(null)
-		expect(document.getElementById("session-how-strict")).toBeNull()
+	test("How strict is never sent with Save", async () => {
+		await openForm()
+		deliver("sessions:settingsForm", RULES_FORM)
+		const name = document.querySelector<HTMLInputElement>("input#sessionName")
+		if (name) type(name, "The lighthouse at dusk")
+		expect(save()?.session.rigour).toBeUndefined()
+		expect(document.getElementById("session-how-strict") === null).toBe(true)
+	})
+
+	test("a guest is asked no settings", async () => {
+		app = mount(EditSessionForm, {
+			target: document.body,
+			props: { editSessionId: 7, showEditSessionForm: true },
+			context: new Map([["userCtx", { user: { id: 2, isAdmin: false } }]])
+		})
+		flushSync()
+		deliver("sessions:genres", { genres: [{ genreId: GENRE, shape: { fields: FIELDS }, rules: OFFER }] })
+		deliver("sessions:get#7", {
+			session: {
+				id: 7,
+				userId: 1,
+				name: "The lighthouse",
+				scenario: "",
+				genreId: GENRE,
+				genreFields: {},
+				sessionCharacters: [],
+				sessionPersonas: [],
+				sessionGuests: [{ userId: 2 }],
+				tags: []
+			}
+		})
+		await tick()
+		flushSync()
+		expect(emitted.some(([e]) => e === "sessions:settingsForm")).toBe(false)
 	})
 })

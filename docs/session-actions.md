@@ -33,7 +33,7 @@ Two actions that happen to share a key, such as Serene Pub's own and a plugin's,
 
 The message actions follow one ownership rule, checked by the server:
 
-| The message is… | Who may edit, hide, delete, regenerate, extend or swipe it |
+| The message is… | Who may edit, hide, regenerate, extend or swipe it (and delete it, where the genre offers Delete) |
 | --- | --- |
 | a persona's line | that persona's owner |
 | a character's reply | the session's owner, or whoever owns that character |
@@ -46,7 +46,7 @@ Anyone else is refused with *You don't have permission to change this message �
 Some actions don't follow that rule:
 
 - **Stop** belongs to anyone in the session.
-- **Branch from here**, **Regenerate the last turn** (the Lair), and **Narrator Response** belong to the session's owner.
+- **Branch from here**, **Regenerate the last turn** (the Lair), **Narrator Response**, and **Back** and **Forward** (the conversation's history) belong to the session's owner.
 - **Select for summary** is open to anyone in the session, on any message.
 - **Continue** and **Pick who speaks**: a guest may take the turn at the head of the order, or a turn already lined up for their own character. Taking anyone else's turn out of order is refused with *Only the session owner can take somebody else's turn out of order.*
 
@@ -100,7 +100,8 @@ Every action that changes a message is a **built-in**: Serene Pub performs the w
 | Group | Actions | A genre may… | What the write records |
 | --- | --- | --- | --- |
 | **Floors** | Stop · Branch from here · Edit | nothing: every genre has them | how much text had arrived · the fork, on the new session · the previous text |
-| **Opt-in built-ins** | Delete · Hide / Unhide · Swipe | switch one off, never replace it | what the deleted line held · which way it was hidden · the version that was showing and the one now selected |
+| **Opt-in built-ins** | Hide / Unhide · Swipe | switch one off, never replace it | which way it was hidden · the version that was showing and the one now selected |
+| **Needs a pipeline** | Delete | offer it at all, by registering a deletion pipeline (below) | what the deleted line held, and what went with it |
 | **Genre content** | Regenerate · Extend · a swipe's new version | forbid Regenerate or Extend, and supply the pipeline that writes the text | which of the three it was, from the reply's own finishing write |
 
 A genre that switches an action off removes it from the menu, and the server refuses it regardless, naming the genre. A genre can't switch off a floor: a person can always stop a reply and rewrite a line, and a session's owner can always branch.
@@ -108,6 +109,17 @@ A genre that switches an action off removes it from the menu, and the server ref
 **What a review may change.** A review on a built-in offers only what that write declares reviewable: the text of an edit, the direction of a hide, the title of a branch, nothing for a delete. Which message it's about was settled when the person asked, and the write checks again, as it lands, that they may still act on it.
 
 **What a delete leaves behind.** Deleting a line records what it held, so the *next* reply can be told what went; an edit or a swipe records the text it replaced. Once a reply has been told, the record keeps that the line was deleted and lets its content go. A reply that fails or is stopped before writing anything doesn't count as told.
+
+### Deleting a message needs a pipeline
+
+Hiding a message and going **Back** are the ways to take something out of a story (see [Sessions › Back and Forward](./sessions.md#back-and-forward)). **Delete** is off everywhere until something registers a pipeline that carries it out, and no genre Serene Pub ships does:
+
+- Delete is offered on a message only when the session's registrations hold an event pipeline on **Deletion asked** (`core:event/message-deletion-asked@1`), registered the way every other event pipeline is, so a preset can drop it.
+- Pressing Delete checks that the message is the session's and yours to change, then raises *Deletion asked* with the message, its channel and who asked. The registered pipeline does the rest. It ends in **Delete message** (`core:outlet/delete-message@1`), which removes that message and takes back everything it changed in one go. It can also put steps of its own around that: a note, a lorebook write, a question to confirm.
+- A deletion pipeline deletes only the message it was asked about. It passes what *Deletion asked* carried, whole, into Delete message's **asked** input (`asked: $.input.main`), and a pipeline that names the message any other way is refused when it's published. Who may change a message still decides who may delete it.
+- In a genre that keeps its turns (the Dungeon Crawler's Honour mode), a deletion pipeline still only reaches the latest turn, and that turn goes whole.
+
+**Back** is no deletion: the turns it takes out are kept until something new is written, and only then deleted. That's the one deletion that is on by default, and it raises nothing.
 
 ### What a branch copies
 
@@ -142,14 +154,14 @@ Portrayal is decided for every run that reaches the model, not for previews (the
 ## How a preset decides what runs
 
 :::note Admins only
-Presets and their bindings are set by an administrator. Everyone else just picks a preset on the start screen.
+Presets are set by an administrator. Everyone else picks a preset on the start screen, and switches the session's actions and routines on and off in its settings.
 :::
 
-A preset's **event bindings** decide which pipeline answers each of the genre's events (the reply, the greeting on creation, each action) and which named configuration it runs with, so two presets on one genre can differ entirely in what a turn does. Set them on the preset's page under **Admin › Presets**: bindings under *Event bindings*, the start screen's pre-filled values under *Creation defaults*.
+Each genre has **defaults**: which pipeline runs on each of its events (the reply, the greeting on creation, a form's answer), which actions its sessions offer, and which routines run between turns. A **preset** is a set of changes on those defaults: it adds a pipeline, drops one, or changes one's values or mode, so two presets on one genre can differ entirely in what a turn does. Change them on the preset's page under **Admin › Presets** (*What this preset runs*), and the start screen's pre-filled values under *Creation defaults*. See [Pipelines › Presets](./pipelines.md#presets).
 
-When several layers name a pipeline for the same event, the nearest wins: a choice made for the session itself, then the preset's binding, then an administrator's default for the whole pub, then the genre's own pipeline. A choice that has stopped being eligible (its pipeline was retired, or no longer answers this genre) is skipped and the next layer decides. No screen offers the per-session choice yet.
+What a session runs is the genre's defaults, then the preset's changes, then what the session itself switched off or on. An action the preset runs can be switched off for one session under **Edit session › Settings › Actions**; an action can also carry an **Only when…** condition, and is greyed whenever it doesn't hold.
 
-If a bound pipeline disappears (an upgrade republished it, or its plugin was removed), the session keeps working on the genre's default pipeline for that event and says so: everyone sees a banner naming the event, administrators also see which pipeline it was bound to with a link to fix it, and the preset is flagged in **Admin › Presets** until the binding resolves.
+If a pipeline a preset runs disappears or stops fitting (an upgrade changed it, or its plugin was removed), the session keeps working on what the genre's defaults run for that event and says so: everyone sees a banner naming the event, and the preset's page in **Admin › Presets** says something it runs is not available until it resolves.
 
 ## Related
 

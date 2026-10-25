@@ -48,6 +48,22 @@
  * **Needs attention** is `broken` and `unfinished` together — red and gold,
  * exactly what the words say (`needsAttention`).
  *
+ * ## A ROW wears its state quietly (★R2, PLAN-0-5-polish-parity L4.1, 2026-10-24)
+ *
+ * The walk's Connections index was eight rows of bold red "Not working" /
+ * "Not reachable" with a gold Fix on each: nothing was quiet, so nothing was
+ * loud. On the index (and the admin changelist) a state is a 6px dot and 13px
+ * muted words (`rowStatusClasses`); the dot carries the colour above, and RED —
+ * red words, a red dot, a 3px error bar — is kept for one case: a `broken`
+ * connection that fills a default loadout (`RowStatus.blocked`), the same
+ * reading as the admin Overview's **Needs you** (`loadoutsFilledBy`). A broken
+ * connection nothing relies on gets the quiet dot; its words still say what
+ * failed. **Fix** is tonal surface except on a blocked row, where it is the
+ * row's one filled primary; **Start** is filled on the row that can start.
+ * The scale itself is unchanged — `CONNECTION_STATE_DOT` / `_TEXT` still speak
+ * it for the job tiles, the strip and the readiness rows, where every pair is
+ * in use by definition.
+ *
  * ⚠ **A silent fact is left out of the row, never guessed.** Every fact here
  * comes from an event the server may not answer: a manager switched off, a host
  * that is down, a build whose handler is not written yet. Where the answer has
@@ -60,6 +76,7 @@
  * described in a comment.
  */
 import { needsCredential } from "$lib/shared/connections/credentials"
+import { loadoutsFilledBy } from "$lib/shared/loadouts/loadoutsFilledBy"
 import {
 	idleMinutes,
 	type KcppStatus,
@@ -143,7 +160,7 @@ export const CONNECTION_STATE_TEXT: Record<ConnectionState, string> = {
 	idle: "text-surface-600-400",
 	unfinished: "text-primary-900 dark:text-primary-300",
 	busy: "text-warning-800 dark:text-warning-300",
-	broken: "text-error-800 dark:text-error-300"
+	broken: "text-error-600-400"
 }
 
 /**
@@ -168,7 +185,12 @@ export interface RowStatusAction {
 	label: string
 	/** A `@lucide/svelte` export name, resolved by the component. */
 	icon: string
-	emphasis: "ghost" | "tonal"
+	/**
+	 * `filled` is the row's one filled primary (Start on the row that can
+	 * start; Fix on a blocked row); `tonal` is tonal SURFACE, never gold
+	 * (★R2); `ghost` is quiet text.
+	 */
+	emphasis: "ghost" | "tonal" | "filled"
 }
 
 export interface RowStatus {
@@ -180,6 +202,11 @@ export interface RowStatus {
 	/** The right-hand column — a count, a size, an idle time. */
 	metric: string | null
 	action: RowStatusAction | null
+	/**
+	 * `broken` AND this connection fills a default loadout — the Admin
+	 * **Needs you** case, and the only row drawn red. Present only when true.
+	 */
+	blocked?: true
 }
 
 export interface RowModel {
@@ -238,20 +265,32 @@ export interface RowStatusFacts {
 export interface RowDefaults {
 	/** Chat's default resolves to a model, on any connection. */
 	chatSet: boolean
+	/**
+	 * The pub's capability defaults as registered, read by
+	 * `loadoutsFilledBy` to tell whether a broken row is `blocked`. Absent
+	 * means not answered, and no row is drawn red.
+	 */
+	capabilityDefaults?: Readonly<
+		Record<string, { connectionId?: number | null } | null | undefined>
+	>
 }
 
 /**
- * `RowDefaults`, from the defaults summary's entries.
+ * `RowDefaults`, from the defaults summary's entries (and, for the red
+ * case, the registered defaults themselves).
  *
- * Resolved pairs only (`set`), the same reading the strip makes: a
+ * Chat reads resolved pairs only (`set`), the same reading the strip makes: a
  * registration naming just the endpoint (§10) is not a default, so it does
- * not answer chat.
+ * not answer chat. Whether a connection FILLS a loadout reads the endpoint
+ * half, as Needs you does (`loadoutsFilledBy`).
  */
 export function rowDefaults(
-	entries: readonly { capability: string; set: boolean }[]
+	entries: readonly { capability: string; set: boolean }[],
+	capabilityDefaults?: RowDefaults["capabilityDefaults"]
 ): RowDefaults {
 	return {
-		chatSet: entries.some((e) => e.capability === "text->text" && e.set)
+		chatSet: entries.some((e) => e.capability === "text->text" && e.set),
+		...(capabilityDefaults ? { capabilityDefaults } : {})
 	}
 }
 
@@ -282,7 +321,7 @@ const START: RowStatusAction = {
 	verb: "start",
 	label: "Start",
 	icon: "Play",
-	emphasis: "tonal"
+	emphasis: "filled"
 }
 /**
  * Start for an install that is switched off: the press turns the manager back
@@ -293,7 +332,7 @@ const START_OFFLINE: RowStatusAction = {
 	verb: "start-offline",
 	label: "Start",
 	icon: "Play",
-	emphasis: "tonal"
+	emphasis: "filled"
 }
 const FIX: RowStatusAction = {
 	verb: "fix",
@@ -325,6 +364,72 @@ const CHOOSE: RowStatusAction = {
 }
 
 export function connectionRowStatus(
+	connection: RowConnection,
+	facts: RowStatusFacts
+): RowStatus {
+	const status = baseRowStatus(connection, facts)
+	if (
+		status.state !== "broken" ||
+		!loadoutsFilledBy(facts.defaults?.capabilityDefaults, connection.id)
+			.length
+	)
+		return status
+	// Broken, and a loadout runs on it: the one red row, and its Fix the
+	// row's one filled primary.
+	return {
+		...status,
+		blocked: true,
+		action:
+			status.action?.verb === "fix"
+				? { ...status.action, emphasis: "filled" }
+				: status.action
+	}
+}
+
+/**
+ * The classes a ROW draws its state with — the index row, the index card and
+ * the admin changelist (see the header's "A ROW wears its state quietly").
+ *
+ * `text` is the words beside the dot; `edge` the 3px error bar a blocked row
+ * carries on its leading edge (empty otherwise). Whole literals, so
+ * Tailwind's scanner sees each one.
+ */
+export function rowStatusClasses(status: RowStatus): {
+	dot: string
+	text: string
+	edge: string
+} {
+	if (status.blocked)
+		return {
+			dot: "bg-error-500",
+			text: "text-error-600-400",
+			edge: "shadow-[inset_3px_0_0_var(--color-error-500)]"
+		}
+	return {
+		dot:
+			status.state === "broken"
+				? CONNECTION_STATE_DOT.idle
+				: CONNECTION_STATE_DOT[status.state],
+		text: "text-surface-600-400",
+		edge: ""
+	}
+}
+
+/** The button classes for a row's action, by its emphasis (★R2). */
+export function rowActionClass(
+	emphasis: RowStatusAction["emphasis"]
+): string {
+	switch (emphasis) {
+		case "filled":
+			return "preset-filled-primary-500"
+		case "tonal":
+			return "preset-tonal-surface"
+		case "ghost":
+			return "hover:preset-tonal-surface text-surface-600-400"
+	}
+}
+
+function baseRowStatus(
 	connection: RowConnection,
 	facts: RowStatusFacts
 ): RowStatus {
@@ -712,28 +817,5 @@ function apiStatus(
 		detail: host,
 		metric: plural(connection.models.length, "model"),
 		action: null
-	}
-}
-
-/**
- * ⏳ Transitional: the tone under the words `ConnectionRow`, `ConnectionCard`
- * and the admin connections page key their own class maps by. It says what
- * `CONNECTION_STATE_TONE` says in other words; it goes when those three read
- * `CONNECTION_STATE_DOT` / `CONNECTION_STATE_TEXT` instead.
- */
-export function stateTone(
-	state: ConnectionState
-): "ok" | "quiet" | "primary" | "warning" | "error" {
-	switch (state) {
-		case "ready":
-			return "ok"
-		case "idle":
-			return "quiet"
-		case "unfinished":
-			return "primary"
-		case "busy":
-			return "warning"
-		case "broken":
-			return "error"
 	}
 }

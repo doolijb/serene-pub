@@ -192,7 +192,11 @@ describe("the shipped configuration reaches a run", () => {
 		)
 		const fields = await resolvePromptFields(db, id!)
 		expect(resolved!.value).toBe(fields.systemPrompt)
-		expect(resolved!.scopeKind).toBe("defaults")
+		// 🚧 R38 (PLAN-layering D5): the pipeline's declared defaults name it
+		// — its `.defaults()` reference resolved to the pool's row — at
+		// `author`, and the instance floor at `defaults` steps aside for a
+		// pick the pipeline made.
+		expect(resolved!.scopeKind).toBe("author")
 	})
 })
 
@@ -252,9 +256,11 @@ describe("the prompts floor follows each node's own pool", () => {
 			)
 			if (id == null) continue
 			const fields = await resolvePromptFields(db, id)
+			// The declared defaults (`author`) or, where they pick nothing,
+			// the instance floor (`defaults`) — either way this step's pool.
 			const floor = world.overrides.filter(
 				(o: any) =>
-					o.scopeKind === "defaults" &&
+					(o.scopeKind === "defaults" || o.scopeKind === "author") &&
 					o.nodeKey === d.nodeKey &&
 					o.slot === "prompts"
 			)
@@ -329,42 +335,23 @@ describe("a prompt edited in the panel", () => {
 			system: "SPEAK ONLY IN RIDDLES"
 		})
 
-		const [config] = await db
-			.insert(schema.pipelineConfigs)
-			.values({ specId, name: "Riddles", isImmutable: false })
-			.returning()
-
-		const decls = await db
-			.select()
-			.from(schema.pipelineConfigValues)
-			.where(eq(schema.pipelineConfigValues.configId, config.id))
-		expect(decls).toHaveLength(0)
-
-		await db.insert(schema.pipelineConfigValues).values({
-			configId: config.id,
-			nodeKey: "context",
-			slot: "prompts",
-			path: "",
-			value: prompt.id
-		})
-
-		const { selectConfig } = await import(
-			"$lib/server/pipelines/config/named"
+		// 🚧 An administrator's pick for every session — the genre's defaults'
+		// registration of the reply, changed (A15, R38) — stores the reference.
+		const { genreValueTargets, setGenreValue, resetGenreValues } = await import(
+			"$lib/server/pipelines/registrations/genreValues"
 		)
-		await selectConfig(
-			db,
-			specId,
-			"session",
-			sessionId,
-			config.id,
-			userId
-		)
-
-		const resolved = await resolvedAt("context", "prompts", "systemPrompt")
-		expect(resolved!.value).toBe("SPEAK ONLY IN RIDDLES")
-		// A whole named configuration sits at `preset` in the chain (12 §2):
-		// under an individual override, over the instance default.
-		expect(resolved!.scopeKind).toBe("config")
+		const targets = await genreValueTargets(db as any, STORY_RESPOND_SPEC_ID)
+		expect(targets.length).toBeGreaterThan(0)
+		await setGenreValue(db as any, targets, { nodeKey: "context", slot: "prompts", path: "" }, prompt.id)
+		try {
+			const resolved = await resolvedAt("context", "prompts", "systemPrompt")
+			expect(resolved!.value).toBe("SPEAK ONLY IN RIDDLES")
+			// The genre's layer: under a session's override, over the
+			// pipeline's declared defaults.
+			expect(resolved!.scopeKind).toBe("genre")
+		} finally {
+			await resetGenreValues(db as any, targets)
+		}
 	})
 
 	it("reaches the node as text when picked as an override, too", async () => {
@@ -398,4 +385,59 @@ describe("a prompt edited in the panel", () => {
 		// layer, so a per-session pick beats the named config in that session.
 		expect(resolved!.scopeKind).toBe("session")
 	})
+})
+
+/**
+ * 🚧 A pipeline's instance values (R50, lane F1 2026-10-21): the
+ * administrator's values on this pub, under the genre layer and over the
+ * declared defaults — and the whole of what a pipeline nothing registers (a
+ * card action) reads beside its declared defaults. No configuration is read.
+ */
+describe("instance values (R50)", () => {
+	/** A plain params address the spec declares — read, never spelled (the value is not judged on the read path). */
+	const paramsAddressOf = async (slug: string) => {
+		const [spec] = await db.select().from(schema.pipelineSpecs).where(eq(schema.pipelineSpecs.slug, slug))
+		const decls = await declarationsFor(spec.activeVersionId!)
+		const decl =
+			decls.find((d) => d.slot === "params" && d.path !== "" && (d.control === "integer" || d.control === "number")) ??
+			decls.find((d) => d.slot === "params" && d.path !== "")
+		expect(decl, `${slug} declares no param`).toBeTruthy()
+		return { nodeKey: decl!.nodeKey, slot: decl!.slot, path: decl!.path }
+	}
+
+	it("a registered pipeline reads them under the genre's defaults", async () => {
+		const { setInstanceValue } = await import("$lib/server/pipelines/registrations/instanceValues")
+		const { setPipelineGenreValue } = await import("$lib/server/pipelines/registrations/genreValues")
+		const at = await paramsAddressOf(STORY_RESPOND_SPEC_ID)
+		await setInstanceValue(db as never, STORY_RESPOND_SPEC_ID, at, 4242)
+		expect((await resolvedAt(at.nodeKey, at.slot, at.path))?.value).toBe(4242)
+		// The genre's defaults (an administrator's change on them) win where both speak.
+		await setPipelineGenreValue(db as never, STORY_RESPOND_SPEC_ID, at, 4343)
+		expect((await resolvedAt(at.nodeKey, at.slot, at.path))?.value).toBe(4343)
+		await setPipelineGenreValue(db as never, STORY_RESPOND_SPEC_ID, at, undefined)
+		expect((await resolvedAt(at.nodeKey, at.slot, at.path))?.value).toBe(4242)
+		await setInstanceValue(db as never, STORY_RESPOND_SPEC_ID, at, undefined)
+		expect((await resolvedAt(at.nodeKey, at.slot, at.path))?.value).not.toBe(4242)
+	}, 60_000)
+
+	it("a pipeline nothing registers (a card action) reads its instance values, never a selected configuration", async () => {
+		const { CHARACTER_PORTRAIT_SPEC_ID } = await import("@serene-pub/core-catalog")
+		const { registrationValueLayers } = await import("$lib/server/pipelines/registrations/values")
+		const { setInstanceValue, instanceValuesOf } = await import("$lib/server/pipelines/registrations/instanceValues")
+		const at = await paramsAddressOf(CHARACTER_PORTRAIT_SPEC_ID)
+		await setInstanceValue(db as never, CHARACTER_PORTRAIT_SPEC_ID, at, 7)
+		expect(await instanceValuesOf(db as never, CHARACTER_PORTRAIT_SPEC_ID)).toEqual({ [at.nodeKey]: { [at.slot]: { [at.path]: 7 } } })
+		const layers = await registrationValueLayers(db as never, { specSlug: CHARACTER_PORTRAIT_SPEC_ID })
+		expect(layers).toEqual({
+			key: null,
+			instance: { [at.nodeKey]: { [at.slot]: { [at.path]: 7 } } },
+			genre: null,
+			preset: null,
+			session: null
+		})
+		const { buildWorld } = await import("$lib/server/pipelines/config/world")
+		const world = await buildWorld(db, { sessionId: null, specId: CHARACTER_PORTRAIT_SPEC_ID } as never)
+		const sourced = resolveConfigSources(world as any, [at.nodeKey])
+		expect(sourced[at.nodeKey]?.[at.slot]?.[at.path]?.value).toBe(7)
+	}, 60_000)
 })

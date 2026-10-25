@@ -239,10 +239,12 @@ describe("M4 · the optional model path", () => {
 		])
 		expect(out.turnOrder.strategy, JSON.stringify(out.notes)).toBe("core:oracle/turn-advise@1")
 		// Its stored receipt row says which layer answered each value (F2):
-		// the prompt from the selected config, the review switch from the
-		// node definition's own default.
+		// the prompt from the pipeline's declared defaults (what the shipped
+		// configuration held — PLAN-layering D5 reads it at `author`, no
+		// configuration layer), the review switch from the node definition's
+		// own default.
 		const layers = out.row("decide.model.advise").configLayers
-		expect(layers?.prompts?.turnAdvice).toBe("config")
+		expect(layers?.prompts?.turnAdvice).toBe("author")
 		expect(layers?.settings?.review).toBe("author")
 	})
 

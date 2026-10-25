@@ -257,7 +257,7 @@
 <div class="space-y-4 py-4">
 	{#if isManaged}
 		<!-- Subprocess status -->
-		<div class="card bg-surface-100-800 flex flex-col gap-3 p-4">
+		<div class="card bg-surface-100-900 flex flex-col gap-3 p-4">
 			<div class="flex items-center justify-between">
 				<div class="flex items-center gap-2">
 					<span
@@ -325,7 +325,7 @@
 				</div>
 			{/if}
 			{#if subStatus?.lastError}
-				<p class="text-error-500 text-xs">{subStatus.lastError}</p>
+				<p class="text-error-600-400 text-xs">{subStatus.lastError}</p>
 			{/if}
 			{#if subStatus?.startedAt}
 				<p class="text-surface-700-300 text-xs">
@@ -527,7 +527,7 @@
 	{:else if perf}
 		<!-- Status badge -->
 		<div
-			class="card bg-surface-100-800 flex items-center justify-between p-4"
+			class="card bg-surface-100-900 flex items-center justify-between p-4"
 		>
 			<span class="text-sm font-medium">Status</span>
 			<span
@@ -545,7 +545,7 @@
 		</div>
 
 		<!-- Speed stats -->
-		<div class="card bg-surface-100-800 p-4">
+		<div class="card bg-surface-100-900 p-4">
 			<h4
 				class="text-surface-600-400 mb-3 text-xs"
 			>
@@ -573,7 +573,7 @@
 
 		<!-- Last request -->
 		{#if perf.lastTokenCount > 0}
-			<div class="card bg-surface-100-800 p-4">
+			<div class="card bg-surface-100-900 p-4">
 				<h4
 					class="text-surface-600-400 mb-3 text-xs"
 				>
@@ -605,7 +605,7 @@
 		{/if}
 
 		<!-- System stats -->
-		<div class="card bg-surface-100-800 p-4">
+		<div class="card bg-surface-100-900 p-4">
 			<h4
 				class="text-surface-600-400 mb-3 text-xs"
 			>

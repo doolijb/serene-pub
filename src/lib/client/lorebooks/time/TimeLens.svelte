@@ -563,7 +563,7 @@
 			type="button"
 			class="hover:bg-surface-200-800 focus-visible:ring-primary-500 flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none {selectedKey ===
 			item.key
-				? 'preset-tonal-primary'
+				? 'sidebar-row-active'
 				: ''}"
 			aria-current={selectedKey === item.key ? "true" : undefined}
 			data-lore-time-item={item.key}
@@ -695,7 +695,7 @@
 							{/each}
 							{#if lane.items.length === 0}
 								<span
-									class="text-surface-700-300 absolute top-1/2 left-2 -translate-y-1/2 text-[11px] italic"
+									class="text-surface-700-300 absolute top-1/2 left-2 -translate-y-1/2 text-meta italic"
 								>
 									Nothing dated on this lane yet
 								</span>

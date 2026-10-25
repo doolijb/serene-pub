@@ -109,7 +109,7 @@ class FakeAdapter {
 			isAborted: false,
 			completionResult: async (onContent: (c: string) => void) => {
 				if (json) return onContent(JSON.stringify(PLAN))
-				if (prompt.includes("This conversation is the Sanctum"))
+				if (prompt.includes("in the Sanctum, your table outside the story"))
 					return onContent(CASTELLAN_SAYS)
 				if (/You are Brannoc,/.test(prompt)) return onContent("Brannoc checks the door.")
 				onContent("The torch gutters.")
@@ -300,8 +300,10 @@ describe("the Castellan talks in the Sanctum (R6)", () => {
 		expect(reply!.channel).toBe("sanctum")
 		expect(reply!.content).toBe(CASTELLAN_SAYS)
 		expect((reply!.metadata as any)?.speaker).toBe("envoy:castellan")
-		// One prose call, then the scratchpad rewrite (R13) — no planner, no keeper.
-		expect(calls.map((c) => c.json)).toEqual([false, true])
+		// One prose call — no planner, no keeper. The scratchpad rewrite (R13)
+		// is a routine of its own since the Lair rewrite (`lair-scratchpad`,
+		// woken by this reply; routines are off under the test runner).
+		expect(calls.map((c) => c.json)).toEqual([false])
 		const prompt = calls.find((c) => !c.json)!.prompt
 		// R4's seam: the Castellan knows whom it is talking with.
 		expect(prompt).toContain("talking with the Dungeon Master")
@@ -317,7 +319,7 @@ describe("the Castellan talks in the Sanctum (R6)", () => {
 			.where(
 				and(
 					eq(schema.pipelineRuns.sessionId, sessionId),
-					eq(schema.pipelineRuns.specSlug, "core:spec/lair-respond")
+					eq(schema.pipelineRuns.specSlug, "core:spec/lair-reply")
 				)
 			)
 			.orderBy(desc(schema.pipelineRuns.id))
@@ -328,7 +330,7 @@ describe("the Castellan talks in the Sanctum (R6)", () => {
 		expect(ran).toContain("via.turn.channel.sanctum.say")
 		expect(ran.some((k: string) => k.startsWith("via.turn.channel.story."))).toBe(false)
 		const { CORE_SPECS } = await import("$lib/server/pipelines/specs")
-		const doc = CORE_SPECS.find((s) => s.slug === "core:spec/lair-respond")!.build()
+		const doc = CORE_SPECS.find((s) => s.slug === "core:spec/lair-reply")!.build()
 		expect((doc.nodes.find((n: any) => n.key === "via.turn.channel.sanctum.say")?.expose as any)?.stream).toBe(true)
 	})
 
@@ -340,11 +342,11 @@ describe("the Castellan talks in the Sanctum (R6)", () => {
 		calls.length = 0
 		const res = await pressContinue(sessionId, { channel: "main" })
 		expect(res?.error, res?.error).toBeUndefined()
-		// The planner, the voice and the keeper (R8: nothing narrates). The
-		// voice and the keeper never hear the table; the planner reads the
-		// unplayed talk while Sanctum talk steers the story (R13, the default)
-		// — and never the greeting.
-		expect(calls.length).toBeGreaterThanOrEqual(3)
+		// The planner and the voice (R8: nothing narrates; the keeper is a
+		// routine since the Lair rewrite). The voice never hears the table;
+		// the planner reads the unplayed talk while Sanctum talk steers the
+		// story (R13, the default) — and never the greeting.
+		expect(calls.length).toBeGreaterThanOrEqual(2)
 		for (const c of calls) expect(c.prompt).not.toContain("Welcome, Dungeon Master")
 		const planner = calls.filter((c) => c.json && c.prompt.includes("You plan the PARTY only"))
 		expect(planner).toHaveLength(1)

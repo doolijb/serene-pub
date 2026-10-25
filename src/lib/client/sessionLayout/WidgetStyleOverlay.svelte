@@ -160,7 +160,7 @@
 			transparent
 		);
 		opacity: 0;
-		transition: opacity 120ms ease;
+		transition: opacity var(--transition-duration-fast) ease;
 	}
 	:global([data-mode="dark"]) .ws-overlay {
 		background: color-mix(

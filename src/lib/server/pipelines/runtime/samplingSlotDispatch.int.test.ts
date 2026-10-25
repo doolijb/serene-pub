@@ -41,7 +41,7 @@
 
 import { describe, it, expect, beforeAll, vi } from "vitest"
 import { and, eq } from "drizzle-orm"
-import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
+import { createTestDb, replyStepKeys, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { connectionSlotValue } from "$lib/shared/connections/slotRef"
 
@@ -236,6 +236,8 @@ let pickedModelId: number
 
 /** Spec slugs, hoisted so the pick helper and the runs cannot disagree. */
 let RESPOND: string
+/** The reply's model call, by the address its document gives it (Story's sits in its `reply` junction). */
+let GENERATE: string
 let SUMMARIZE: string
 const IMAGE = "core:spec/story-generate-image"
 
@@ -281,6 +283,15 @@ async function setSlot(
 	value: unknown | null,
 	path = ""
 ) {
+	// A pipeline registrations run reads the genre's defaults' values, not a
+	// configuration (PLAN-layering D5); ⏳ one nothing registers still reads
+	// its selected configuration.
+	const { isRegisteredPipeline } = await import("$lib/server/pipelines/registrations/values")
+	if (await isRegisteredPipeline(db as any, slug)) {
+		const { setPipelineValue } = await import("$lib/server/utils/testDb")
+		await setPipelineValue(db, slug, { nodeKey, slot, path }, value === null ? undefined : value)
+		return
+	}
 	const configId = await mutableConfigFor(slug)
 	const where = and(
 		eq(schema.pipelineConfigValues.configId, configId),
@@ -310,6 +321,7 @@ beforeAll(async () => {
 	)
 	await bootstrapPipelines(db)
 	RESPOND = STORY_RESPOND_SPEC_ID
+	GENERATE = (await replyStepKeys(db, RESPOND)).generate
 	SUMMARIZE = (await import("$lib/server/pipelines/specs/summarize"))
 		.SUMMARIZE_WORLD_SPEC_ID
 
@@ -498,8 +510,8 @@ const runRespond = async () => {
 	const { run } = await import("@serene-pub/sdk")
 
 	const doc: any = await loadPublished(db, RESPOND)
-	const generate = doc.nodes.find((n: any) => n.key === "generate")
-	expect(generate, "the reply pipeline has no `generate` node").toBeTruthy()
+	const generate = doc.nodes.find((n: any) => n.key === GENERATE)
+	expect(generate, "the reply pipeline has no model call").toBeTruthy()
 
 	return (await run(doc, {
 		world: await buildWorld(db, { specId: RESPOND }),
@@ -566,7 +578,7 @@ describe("dispatch — the reply step's own Sampling", () => {
 		// carried the reference this arrived as `null`, which reads as "the
 		// pipeline chose nothing" — and the default temperature went out
 		// instead.
-		await setSlot(RESPOND, "generate", "sampling", pickedSamplingId)
+		await setSlot(RESPOND, GENERATE, "sampling", pickedSamplingId)
 		textCalls.length = 0
 		resolveArgs = null
 		await runRespond()
@@ -591,7 +603,7 @@ describe("dispatch — the reply step's own Sampling", () => {
 		// that one is not the config store, and sending it would be the executor
 		// inventing a tier it does not own. Every node but this one therefore
 		// says nothing at all here — see the image case below.
-		await setSlot(RESPOND, "generate", "sampling", null)
+		await setSlot(RESPOND, GENERATE, "sampling", null)
 		textCalls.length = 0
 		resolveArgs = null
 		await runRespond()
@@ -629,7 +641,9 @@ describe("dispatch — the reply step's own Sampling", () => {
 			STORY_SIDE_CHARACTER_SPEC_ID
 		]) {
 			const doc: any = await loadPublished(db, slug)
-			const generate = doc.nodes.find((n: any) => n.key === "generate")
+			// The sending node, by the address the document gives it (Story's is in its `reply` junction).
+			const key = (await replyStepKeys(db, slug)).generate
+			const generate = doc.nodes.find((n: any) => n.key === key)
 			expect(generate, `${slug} has no generate node`).toBeTruthy()
 			expect(
 				generate.config.sampling,
@@ -655,7 +669,7 @@ describe("dispatch — the reply step's own Sampling", () => {
 			expect(budget.config.sampling).toEqual({
 				__ref: "slot",
 				slot: "sampling",
-				ofNode: "generate"
+				ofNode: key
 			})
 			// The same, for the render side: `prompt` picks the wire format off
 			// the connection this step sends to.
@@ -664,7 +678,7 @@ describe("dispatch — the reply step's own Sampling", () => {
 			expect(prompt.config.connection).toEqual({
 				__ref: "slot",
 				slot: "connection",
-				ofNode: "generate"
+				ofNode: key
 			})
 		}
 	})
@@ -703,7 +717,7 @@ describe("dispatch — the reply step's own Connection", () => {
 		 */
 		await setSlot(
 			RESPOND,
-			"generate",
+			GENERATE,
 			"connection",
 			connectionSlotValue(pickedConnectionId, pickedModelId)
 		)
@@ -735,7 +749,7 @@ describe("dispatch — the reply step's own Connection", () => {
 		// nothing picked is the default's own. Same value, one tier up, which is
 		// why wiring this slot changes nothing for an install that never touched
 		// the picker.
-		await setSlot(RESPOND, "generate", "connection", null)
+		await setSlot(RESPOND, GENERATE, "connection", null)
 		textCalls.length = 0
 		resolveArgs = null
 		await runRespond()
@@ -824,7 +838,7 @@ describe("dispatchImage — the render step's own Sampling", () => {
 
 	it("falls through to the image capability default when nothing is picked", async () => {
 		// `render` is not the node `world.ts` projects the legacy defaults onto
-		// (that is `generate`), so nothing resolves at this address at all and
+		// (that is a reply's call, `oracleNodeKeyOf`), so nothing resolves at this address at all and
 		// the reference really is absent — which is what keeps "the pipeline
 		// chose nothing here" sayable, and lets `resolveCapabilityTarget` answer
 		// from the tier that did choose.

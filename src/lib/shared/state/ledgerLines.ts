@@ -561,6 +561,13 @@ export function describeProposal(
 		const words = (v: unknown, or: string) => (typeof v === "string" && v.trim() ? v.trim() : or)
 		return `${words(offer.fromLabel, "Someone")} offers ${words(offer.itemName, "something")}${n} to ${words(offer.toLabel, "someone")}`
 	}
+	// 🚧 A held field change (ties on the graph, T2): one side of a tie set
+	// by the game master, named by the host as it filed it.
+	const held = payload.heldField as { field?: unknown; value?: unknown } | undefined
+	if (held && typeof held === "object") {
+		const words = (v: unknown, or: string) => (typeof v === "string" && v.trim() ? v.trim() : or)
+		return `${words(payload.ownerLabel, "Someone")} → ${words(payload.towardsLabel, "someone")}: ${words(payload.fieldLabel, String(held.field ?? "it"))} → ${String(held.value)}`
+	}
 	const owner = payload.owner as { kind: string; id: number } | undefined
 	// A change to the book comes named by the server (`ownerLabel`, plan A22):
 	// the session's own owners are all a surface can name.

@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeAll, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import { STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
-import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
+import { createTestDb, replyStepKeys, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
@@ -115,6 +115,8 @@ let userId: number
 let characterId: number
 /** The run owner's own presence in this session — their persona (0132). */
 let personaId: number
+/** The reply's own steps, by the addresses its document gives them (Story's sit in its `reply` junction). */
+let reply: Awaited<ReturnType<typeof replyStepKeys>>
 
 beforeAll(async () => {
 	db = await createTestDb()
@@ -229,38 +231,20 @@ beforeAll(async () => {
 			d.control === "context-template-ref" &&
 			d.nodeDefinitionId === CONTEXT_TEMPLATE_NODE_TYPE
 	)!
-	// The template pin lands as the selected configuration's own value —
-	// the only global home since the layer simplification (2026-08-24).
+	// 🚧 The template pin lands as an administrator's change to the genre's
+	// defaults (R38, A15) — what the pipeline panel's global write is now.
 	{
-		const { resolveSelectedConfig, duplicateConfig, selectConfig } =
-			await import("$lib/server/pipelines/config/named")
-		const shipped = await resolveSelectedConfig(
-			db,
-			storyRespondSpec.id,
-			STORY_RESPOND_SPEC_ID,
-			{}
+		const { genreValueTargets, setGenreValue } = await import(
+			"$lib/server/pipelines/registrations/genreValues"
 		)
-		const copy = await duplicateConfig(db, shipped!.configId, "Turn host")
-		await selectConfig(db, storyRespondSpec.id, "pub", 0, copy.id)
-		await db
-			.insert(schema.pipelineConfigValues)
-			.values({
-				configId: copy.id,
-				nodeKey: decl.nodeKey,
-				slot: decl.slot,
-				path: decl.path,
-				value: template.id
-			})
-			.onConflictDoUpdate({
-				target: [
-					schema.pipelineConfigValues.configId,
-					schema.pipelineConfigValues.nodeKey,
-					schema.pipelineConfigValues.slot,
-					schema.pipelineConfigValues.path
-				],
-				set: { value: template.id }
-			})
+		await setGenreValue(
+			db as any,
+			await genreValueTargets(db as any, STORY_RESPOND_SPEC_ID),
+			{ nodeKey: decl.nodeKey, slot: decl.slot, path: decl.path },
+			template.id
+		)
 	}
+	reply = await replyStepKeys(db, STORY_RESPOND_SPEC_ID)
 }, 60_000)
 
 const turn = async (over: any = {}) => {
@@ -405,8 +389,8 @@ describe("cancelling a turn", () => {
 
 		// The write node is the one after the provider. It did not run — which
 		// is the whole claim, and it is a row, not a status.
-		expect(receipt.nodes.map((n: any) => n.nodeKey)).toContain("generate")
-		expect(receipt.nodes.map((n: any) => n.nodeKey)).not.toContain("save")
+		expect(receipt.nodes.map((n: any) => n.nodeKey)).toContain(reply.generate)
+		expect(receipt.nodes.map((n: any) => n.nodeKey)).not.toContain(reply.save)
 		// The pipeline's own placeholder is the one row the turn added (09-B
 		// B4), and Stop finalised it: out of the generating state, no error —
 		// the run-level guarantee, kept by the host rather than by a node.
@@ -553,7 +537,7 @@ describe("who portrays whom on a turn", () => {
 			receipt = await turn({
 				seed: "turn:portrayals-join",
 				onNode: (e: any) => {
-					if (e.nodeKey === "save" && e.phase === "start")
+					if (e.nodeKey === reply.save && e.phase === "start")
 						saveStartedAfterJoin = seenMidRun !== null
 				}
 			})
@@ -669,11 +653,11 @@ describe("who portrays whom on a turn", () => {
 				fields: {}
 			},
 			seed: "turn:gated-portrayals",
-			preview: { atNode: "save" },
+			preview: { atNode: reply.save },
 			skipReceipt: true
 		})
 		expect(gated.outcome).toBe("halt")
-		expect(gated.haltNodeKey).toBe("save")
+		expect(gated.haltNodeKey).toBe(reply.save)
 		expect(gated.portrayals[`character:${characterId}`]).toEqual({
 			by: "ai"
 		})
@@ -710,8 +694,24 @@ describe("script chains on a turn", () => {
 			.where(
 				eq(schema.pipelineNodes.specVersionId, spec.activeVersionId!)
 			)
-		const node = (nodes as any[]).find((n) => n.definitionId === typeId)!
+		// The one on the reply's own path — Story's prose and changes branches each fill the row.
+		const node =
+			(nodes as any[]).find((n) => n.definitionId === typeId && n.nodeKey === reply.save) ??
+			(nodes as any[]).find((n) => n.definitionId === typeId)!
 		return { specId: spec.id, nodeKey: node.nodeKey }
+	}
+
+	/** 🚧 One address of the reply's scripts, as an administrator's change to the genre's defaults (R38). */
+	async function setChainAt(nodeKey: string, path: string, ids: number[] | undefined): Promise<void> {
+		const { genreValueTargets, setGenreValue } = await import(
+			"$lib/server/pipelines/registrations/genreValues"
+		)
+		await setGenreValue(
+			db as any,
+			await genreValueTargets(db as any, STORY_RESPOND_SPEC_ID),
+			{ nodeKey, slot: "scripts", path },
+			ids
+		)
 	}
 
 	async function attachChain(
@@ -721,54 +721,8 @@ describe("script chains on a turn", () => {
 		// no text for a chain to see.
 		typeId = "core:outlet/update-message"
 	): Promise<void> {
-		// Chains attach as the selected configuration's own value — the only
-		// global home since the layer simplification (2026-08-24).
-		const { specId, nodeKey } = await hookNodeKey(typeId)
-		const [spec] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.id, specId))
-			.limit(1)
-		const { resolveSelectedConfig, duplicateConfig, selectConfig } =
-			await import("$lib/server/pipelines/config/named")
-		const selected = await resolveSelectedConfig(
-			db,
-			specId,
-			(spec as any).slug,
-			{}
-		)
-		let configId = selected!.configId
-		const [cfg] = await db
-			.select()
-			.from(schema.pipelineConfigs)
-			.where(eq(schema.pipelineConfigs.id, configId))
-			.limit(1)
-		if ((cfg as any).isImmutable) {
-			const copy = await duplicateConfig(db, configId, "Chain host")
-			configId = copy.id
-			await selectConfig(db, specId, "pub", 0, configId)
-		}
-		await db
-			.delete(schema.pipelineConfigValues)
-			.where(eq(schema.pipelineConfigValues.slot, "scripts"))
-		await db
-			.insert(schema.pipelineConfigValues)
-			.values({
-				configId,
-				nodeKey,
-				slot: "scripts",
-				path: "",
-				value: ids
-			})
-			.onConflictDoUpdate({
-				target: [
-					schema.pipelineConfigValues.configId,
-					schema.pipelineConfigValues.nodeKey,
-					schema.pipelineConfigValues.slot,
-					schema.pipelineConfigValues.path
-				],
-				set: { value: ids }
-			})
+		const { nodeKey } = await hookNodeKey(typeId)
+		await setChainAt(nodeKey, "", ids)
 	}
 
 	const receiptScripts = (receipt: any) =>
@@ -891,25 +845,9 @@ describe("script chains on a turn", () => {
 	async function placeUnplaced(ids: number[]): Promise<() => Promise<void>> {
 		await attachChain([])
 		const { nodeKey } = await hookNodeKey()
-		const [row] = await db
-			.select()
-			.from(schema.pipelineConfigValues)
-			.where(eq(schema.pipelineConfigValues.slot, "scripts"))
-			.limit(1)
-		const [inserted] = await db
-			.insert(schema.pipelineConfigValues)
-			.values({
-				configId: row!.configId,
-				nodeKey,
-				slot: "scripts",
-				path: "a-point-that-is-gone",
-				value: ids
-			})
-			.returning()
+		await setChainAt(nodeKey, "a-point-that-is-gone", ids)
 		return async () => {
-			await db
-				.delete(schema.pipelineConfigValues)
-				.where(eq(schema.pipelineConfigValues.id, inserted!.id))
+			await setChainAt(nodeKey, "a-point-that-is-gone", undefined)
 		}
 	}
 

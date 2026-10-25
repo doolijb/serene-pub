@@ -51,11 +51,9 @@ import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray, isNull } from "drizzle-orm"
 import {
 	attributeSlots,
-	genreAllowsCustomAttributes,
-	genreSheets,
 	getAttributeSlot,
-	getGenre,
-	slotPickable,
+	getRuleset,
+	isHostStateSlot,
 	resolveSlotConfig,
 	slotAppliesTo,
 	type AttributeSlotDecl,
@@ -76,21 +74,21 @@ import {
 	stateFor,
 	valueOf,
 	vocabularyFor,
-	activeSeatCount,
 	defaultFor,
-	worldAttributesFor,
 	type LocationLink,
 	type SessionLinks,
 	type TrackedSlot
 } from "$lib/server/state/resolve"
 import { castMemberKey, locationOwnerKey } from "$lib/server/state/keys"
-import { offerableSlot, rulesetSettingAllows, sessionRulesets, withoutForeignRepertoire } from "$lib/server/rulesets/settings"
+import { carryableAttributes, carryKeyOf, carryRowsOf, notCarriedFor, setAttributeCarry } from "$lib/server/state/carries"
+import { sessionRulesets, withoutForeignRepertoire } from "$lib/server/rulesets/settings"
 import { repertoiresOnWire, withPiecesRead } from "$lib/server/rulesets/read"
 import { clockLedgerRows } from "$lib/server/state/clockMoves"
 import { entriesAsRead, MAIN_HEAD, placesOnReading } from "$lib/server/state/entriesOnReading"
 import {
 	earshotSlots,
 	hearingOf,
+	hears,
 	stateAsHeard,
 	valueHeard,
 	type EarshotSlots,
@@ -125,7 +123,7 @@ function refuse(
 	emitToUser: (event: string, data: any) => void,
 	event: string,
 	message: string,
-	about: { sessionId?: number } = {}
+	about: { sessionId?: number; request?: string } = {}
 ): never {
 	emitToUser(`${event}:error`, { error: message, ...about })
 	throw new Error(message)
@@ -306,6 +304,34 @@ const callerHearing = async (socket: any, sessionId: number, links: SessionLinks
  * a whisper never overwrites or clears it, so its player never reads a
  * guest's words as the owner's.
  */
+/**
+ * 🚧 Who may change it (PLAN-rulesets-functions D4, `changedBy`): a person's
+ * write to an attribute of the session's ruleset whose `changedBy` leaves
+ * them out is refused in words — the session's owner writes as the game
+ * master, anyone else as the holder. Rules-only attributes change through
+ * the rules (a function, a reply that carries changes), never by hand.
+ */
+async function changedByRefusal(socket: any, sessionId: number, slotId: unknown): Promise<string | null> {
+	if (typeof slotId !== "string") return null
+	const [row] = await db
+		.select({ primaryRuleset: schema.sessions.primaryRuleset })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	const { getRuleset } = await import("@serene-pub/sdk")
+	const ruleset = row?.primaryRuleset ? getRuleset(row.primaryRuleset) : undefined
+	if (!ruleset) return null
+	const { changedByAllows } = await import("$lib/server/rulesets/scopes")
+	const access = await checkSessionAccess(sessionId, socket.user!.id)
+	const writer = access.isOwner ? "gm" : "holder"
+	if (changedByAllows(ruleset, slotId, writer)) return null
+	const decl = getAttributeSlot(slotId)
+	const label = (decl && i18nTextIn(decl.label)) ?? slotKey(slotId)
+	return writer === "gm"
+		? `${label} changes only by the rules — a function or a reply that carries changes — never by hand.`
+		: `Only the game master or the rules change ${label}.`
+}
+
 async function unheardWrite(
 	socket: any,
 	sessionId: number,
@@ -386,7 +412,7 @@ const declaredSlots = (): AttributeSlotDecl[] =>
  */
 export const describeSlot = (
 	decl: AttributeSlotDecl,
-	tracked?: Pick<TrackedSlot, "required" | "sheetId">
+	tracked?: Pick<TrackedSlot, "required" | "sheetId" | "hostState" | "kind" | "shownAs">
 ): Sockets.State.SlotDescriptor => ({
 	slotId: decl.id,
 	key: slotKey(decl.id),
@@ -410,7 +436,11 @@ export const describeSlot = (
 			}
 		: {}),
 	// 🚧 Drawn only while it holds something (Q3-8: a crawl's death saves).
-	...((decl as { shownWhenSet?: unknown }).shownWhenSet === true ? { shownWhenSet: true as const } : {})
+	...((decl as { shownWhenSet?: unknown }).shownWhenSet === true ? { shownWhenSet: true as const } : {}),
+	// 🚧 RF fix 8: the rules' kind and hint, or what the host keeps it as — never both.
+	...(tracked?.hostState ? { hostState: tracked.hostState } : {}),
+	...(tracked?.kind ? { kind: tracked.kind } : {}),
+	...(tracked?.shownAs ? { shownAs: tracked.shownAs } : {})
 })
 
 /**
@@ -689,14 +719,19 @@ async function describeState(
 		chain: chainOf({ kind: o.kind, id: o.id }, links)
 	}))
 	const configured = await configuredPairs(chains.flatMap((c) => c.chain))
+	// 🚧 What each holder carries (attribute carries, RF fix 2 item 3).
+	const notCarried = await notCarriedFor(db, sessionId, plays)
 
 	const slots = earshotSlots(tracked)
 	for (const { owner, chain } of chains) {
 		const facet = ownerFacet(owner.kind)
+		const off = notCarried.get(carryKeyOf(owner))
 		for (const decl of declared) {
 			// A slot the owner may not carry is not an empty control on its
 			// card: it is not that owner's slot at all.
 			if (!slotAppliesTo(decl, facet)) continue
+			// 🚧 Nor one switched off for this holder: not shown.
+			if (off?.has(decl.id)) continue
 			// Nor is one the caller does not hear there (A28): a guest is
 			// offered no Whisper box on a character they do not play.
 			if (!valueHeard(hearing, slots, { owner: { kind: owner.kind, id: owner.id }, slotId: decl.id })) continue
@@ -735,6 +770,49 @@ async function describeState(
 			const rows = derived.get(`${o.kind}:${o.id}`)
 			if (rows?.length) o.derived = rows
 		}
+	}
+	// 🚧 Each character's tie sides (ties on the graph, screen 2): towards
+	// whom, the words, the numbers this viewer may see, the other side.
+	if (sheeted.length && plays.length) {
+		try {
+			const { tiesOnWire } = await import("$lib/server/rulesets/ties")
+			const ties = await tiesOnWire(db, sessionId, sheeted, { sessionOwner })
+			for (const o of sheeted) {
+				const rows = ties.get(`${o.kind}:${o.id}`)
+				if (rows?.length) o.ties = rows
+			}
+		} catch (e) {
+			console.warn(`[state] the ties of session ${sessionId} could not be read:`, e)
+		}
+	}
+
+	// 🚧 What each owner holds, zone by zone (RF fix 8): the rules' zone
+	// types, the host's carried zone among them, as this viewer may see them.
+	const rulesetId = plays[0]
+	const ruleset = rulesetId ? getRuleset(rulesetId) : undefined
+	if (ruleset) {
+		try {
+			const { zonesOnWire } = await import("$lib/server/rulesets/zones")
+			const playsHolder = (o: { kind: string; id: number }) => !!(hearing.all || hears(hearing, carryKeyOf(o)))
+			const zones = await zonesOnWire(db, sessionId, ruleset, owners, { sessionOwner, plays: playsHolder })
+			for (const o of owners) {
+				const rows = zones.get(o.key)
+				if (rows?.length) o.zones = rows
+			}
+		} catch (e) {
+			console.warn(`[state] the zones of session ${sessionId} could not be read:`, e)
+		}
+	}
+	// 🚧 Each holder's switches for the rules' optional attributes (RF fix 8):
+	// the sheet offers an attribute back once it is off — whoever plays the
+	// holder, or the session's owner.
+	if (plays.length && viewerUserId != null) {
+		const rows = (await carriesOnWire(sessionId, viewerUserId, plays, links, sessionOwner)).filter((r) => !r.required && !isHostStateSlot(r.slotId))
+		for (const o of owners)
+			for (const row of rows) {
+				const h = row.holders.find((x) => x.owner.kind === o.kind && x.owner.id === o.id)
+				if (h) (o.carries ??= []).push({ slotId: row.slotId, label: row.label, carries: h.carries, mayChange: h.mayChange })
+			}
 	}
 
 	return {
@@ -1089,10 +1167,32 @@ export const stateGet: Handler<
 			// 🚧 A table that keeps no numbers (Q2-3, ★3): its widgets draw words.
 			...((await keepsNoNumbers(sessionId)) ? { wordsOnly: true as const } : {}),
 			// 🚧 The people its story has met (Q3-5): Scene Portraits' faces.
-			metPeople: await metPeopleOf(sessionId)
+			metPeople: await metPeopleOf(sessionId),
+			// 🚧 The story clock in words (RF fix 8): the world's _when_ on a sheet.
+			...(await storyTimeWords(sessionId, links))
 		}
 		emitToUser("state:get", res)
 		return res
+	}
+}
+
+/**
+ * 🚧 The session's story clock in words (RF fix 8, 2026-10-23): where its
+ * story's now stands on its book's calendar — the _when_ of a sheet's
+ * _Where and when_ row. Nothing when the session keeps no clock.
+ */
+async function storyTimeWords(sessionId: number, links: SessionLinks): Promise<{ storyTime?: string }> {
+	try {
+		const { sessionStoryNowOf, bookCalendarOf, clockOfNow } = await import("$lib/server/state/storyTime")
+		const now = await sessionStoryNowOf(db, sessionId)
+		if (!now) return {}
+		const { formatDate } = await import("$lib/shared/lorebooks/storyDate")
+		const calendar = links.lorebookId ? await bookCalendarOf(db, links.lorebookId) : null
+		const words = formatDate(clockOfNow(now) as never, calendar)
+		return words ? { storyTime: words } : {}
+	} catch (e) {
+		console.warn(`[state] the story clock of session ${sessionId} could not be read:`, e)
+		return {}
 	}
 }
 
@@ -1147,8 +1247,12 @@ async function metPeopleOf(sessionId: number): Promise<{ entryId: number; name: 
 
 /**
  * 🚧 Does this session's table keep no numbers (PLAN-dc-after-walk2 Q2-3,
- * owner ruling ★3)? When the ruleset it plays is one of words — it declares
- * no dice (the Story ruleset). A ruleset this install does not hold says no.
+ * owner ruling ★3)? When the ruleset it plays is one of words — it decides
+ * nothing by its rules (the Story ruleset; 🚧 2026-10-22, `rulesetDecides`:
+ * a check method other than `none`, dice or not — never "declares no
+ * dice"). 🚧 RF fix 8: and declares no number of its own — rules that
+ * track numbers without deciding by them still draw them. A ruleset this
+ * install does not hold says no.
  */
 async function keepsNoNumbers(sessionId: number): Promise<boolean> {
 	const [row] = await db
@@ -1156,9 +1260,15 @@ async function keepsNoNumbers(sessionId: number): Promise<boolean> {
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	const { getRuleset } = await import("@serene-pub/sdk")
+	const { getRuleset, rulesetSections, rulesetAttributeKinds, NUMBER_ATTRIBUTE_KINDS } = await import("@serene-pub/sdk")
 	const ruleset = row?.primaryRuleset ? getRuleset(row.primaryRuleset) : undefined
-	return !!ruleset && !(ruleset.conventions as { dice?: unknown } | undefined)?.dice
+	const { rulesetDecides } = await import("$lib/server/rulesets/methods")
+	if (!ruleset || rulesetDecides(ruleset)) return false
+	// 🚧 RF fix 8: attributes are the rules' — rules that declare a number of
+	// their own (a number, a pool, a tally) keep it, deciding or not; only
+	// rules that count nothing at all are a table of words.
+	const numbers: readonly string[] = NUMBER_ATTRIBUTE_KINDS
+	return !(rulesetSections(ruleset).attributes ?? []).some((a) => (rulesetAttributeKinds(a) ?? []).some((k) => numbers.includes(k)))
 }
 
 export const stateLedger: Handler<
@@ -1268,6 +1378,9 @@ export const stateSet: Handler<
 				// Only a value the writer hears (A28): a guest never changes a whisper they cannot read.
 				const unheard = await unheardWrite(socket, sessionId, target, params.slotId)
 				if (unheard) throw new StateRefusal(unheard)
+				// 🚧 Who may change it (D4): the ruleset's `changedBy` for its own attributes.
+				const notYours = await changedByRefusal(socket, sessionId, params.slotId)
+				if (notYours) throw new StateRefusal(notYours)
 				// A lore reference names an entry of this session's lorebook (3a).
 				await assertLoreRefsInSession(db, sessionId, { value: params.value, slotId: params.slotId })
 				return setValue(
@@ -1437,7 +1550,7 @@ export const stateDecide: Handler<
 		await broadcastToSessionUsers(socket.io, sessionId, "state:changed", {
 			sessionId
 		} satisfies Sockets.State.Changed.Response)
-		if (outcome.clock) await announceClockAccepted(socket, sessionId, socket.user!.id)
+		if (outcome.clock) await announceClockAccepted(socket, sessionId, socket.user!.id, outcome.clock)
 		// 🚧 An offer answered (Give to…, ★4): the table hears how it went.
 		if (outcome.line) await sayTableLine(socket, sessionId, outcome.line)
 		return res
@@ -1520,6 +1633,59 @@ export const stateGivePiece: Handler<Sockets.State.GivePiece.Params, Sockets.Sta
 }
 
 /**
+ * 🚧 `state:showTieSide` — a tie side shown to others, or hidden again
+ * (ties on the graph, screen 2's switch; `set-tie-shown`): its holder's, or
+ * the session owner's. Refused in words; the session hears the change.
+ */
+export const stateShowTieSide: Handler<Sockets.State.ShowTieSide.Params, Sockets.State.ShowTieSide.Response> = {
+	event: "state:showTieSide",
+	handler: async (socket, params, emitToUser) => {
+		const token = typeof params?.request === "string" ? { request: params.request } : {}
+		const sessionId = params?.sessionId
+		const refuse = (error: string) => {
+			const res = { ...(typeof sessionId === "number" ? { sessionId } : {}), ...token, error }
+			emitToUser("state:showTieSide:error", res)
+			return res
+		}
+		try {
+			if (typeof sessionId !== "number" || !Number.isInteger(sessionId)) return refuse("Which session? None was named.")
+			const userId = socket.user!.id
+			const access = await checkSessionAccess(sessionId, userId)
+			if (!access.hasAccess) return refuse("Session not found.")
+			const o = params.owner as { kind?: unknown; id?: unknown } | undefined
+			if (!o || (o.kind !== "session_cast" && o.kind !== "player_seat") || typeof o.id !== "number" || !Number.isInteger(o.id))
+				return refuse("Whose side? None was named.")
+			if (typeof params.entryType !== "string" || !params.entryType || typeof params.towards !== "string" || !params.towards)
+				return refuse("Which tie? None was named.")
+			// The holder's to show, or the game master's.
+			const [session] = await db.select({ userId: schema.sessions.userId }).from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1)
+			const { seatIds, cardIds } = await ownSeatsOf(sessionId, userId)
+			const mine = o.kind === "session_cast" ? cardIds.has(o.id) : seatIds.has(o.id)
+			if (session?.userId !== userId && !mine) return refuse("Only its holder can show that side.")
+			const { setTieSideShown } = await import("$lib/server/rulesets/ties")
+			const done = await setTieSideShown(db, {
+				sessionId,
+				owner: { kind: o.kind, id: o.id },
+				entryType: params.entryType,
+				towards: params.towards,
+				shown: params.shown === true,
+				updatedBy: `user:${userId}`
+			})
+			const res = { sessionId, ...token, shown: done.shown }
+			emitToUser("state:showTieSide", res)
+			try {
+				await broadcastToSessionUsers(socket.io, sessionId, "state:changed", { sessionId } satisfies Sockets.State.Changed.Response)
+			} catch (e) {
+				console.warn("[state] showing a tie side: telling the session failed:", e)
+			}
+			return res
+		} catch (e) {
+			return refuse(e instanceof Error && e.message ? e.message : "That side could not be shown.")
+		}
+	}
+}
+
+/**
  * 🚧 An accepted **clock proposal** moved the session's story clock (live
  * scenes ★3): said the way *Advance story clock* says a move — the session's
  * row to every tab, and `session-updated` naming the clock, under the
@@ -1528,7 +1694,12 @@ export const stateGivePiece: Handler<Sockets.State.GivePiece.Params, Sockets.Sta
  * scenes §4). Best-effort: the clock moved either way. `state:changed` has
  * already gone out with the decision.
  */
-async function announceClockAccepted(socket: any, sessionId: number, userId: number) {
+async function announceClockAccepted(
+	socket: any,
+	sessionId: number,
+	userId: number,
+	move: { from?: unknown; to?: unknown } = {}
+) {
 	try {
 		const { broadcastSessionRow } = await import("$lib/server/sessions/rowPush")
 		broadcastSessionRow(socket.io, sessionId)
@@ -1544,6 +1715,16 @@ async function announceClockAccepted(socket: any, sessionId: number, userId: num
 			payload: { sessionId, changed: ["storyClock"], cause: { kind: "edit", userId } },
 			io: socket.io
 		})
+		// 🚧 The session moment (PLAN-layering D7, lane 6): once per move.
+		const { noteStoryClockMoved } = await import("$lib/server/pipelines/routines/moments")
+		await noteStoryClockMoved(db, {
+			sessionId,
+			userId,
+			cause: { kind: "edit", userId },
+			from: move.from,
+			to: move.to,
+			io: socket.io
+		})
 	} catch (err) {
 		console.warn("[state] an accepted clock move was not announced:", err)
 	}
@@ -1552,115 +1733,76 @@ async function announceClockAccepted(socket: any, sessionId: number, userId: num
 // ── What a session tracks (ruled 2026-09-25) ────────────────────────────────
 
 /**
- * 🚧 What this session tracks and where each attribute came from: the genre's
- * baseline, the world's attributes, the session's own, and everything else it
- * could add. `tracked` is the session's vocabulary as every write and read
- * sees it (`vocabularyFor`), so the picker never disagrees with the widgets.
+ * 🚧 What this session's rules bring (RF fix 8, owner ruling 2026-10-23):
+ * attributes are the rules' alone — a genre brings none and a session adds
+ * none — so Session settings › Attributes is who carries each of their
+ * optional attributes, or the sentence that the rules declare none.
  */
-/**
- * 🚧 The slots a genre declares but leaves off every sheet it has: retired
- * by it (Dungeon Crawler's `abilities` and `inventory`), so never offered in
- * the attribute picker. Empty for a genre with no sheet. Exported for tests.
- */
-export function droppedGenreSlots(genre: ReturnType<typeof getGenre>): Set<string> {
-	if (!genre) return new Set()
-	const sheets = genreSheets(genre)
-	if (!sheets.length) return new Set()
-	const onSheet = new Set(sheets.flatMap((sheet) => sheet.slots.map((entry) => entry.id)))
-	return new Set((genre.slots ?? []).map((d) => d.id).filter((id) => !onSheet.has(id)))
-}
-
 async function attributesFor(sessionId: number, userId: number): Promise<Sockets.State.Attributes.Response> {
 	const [session] = await db
 		.select({
-			genreId: schema.sessions.genreId,
-			worldAttributes: schema.sessions.worldAttributes,
 			userId: schema.sessions.userId,
 			primaryRuleset: schema.sessions.primaryRuleset,
 			rulesetSettings: schema.sessions.rulesetSettings
 		})
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
-	const genreId = session?.genreId ?? ""
-	// A slot a ruleset owns is offered only where that ruleset is played.
 	const plays = sessionRulesets(session)
-	const genre = getGenre(genreId)
-	// A genre this process does not hold offers nothing to add (fail closed,
-	// like `vocabularyFor`): its vocabulary is unknown, not "everything".
-	const customAttributes = genre ? genreAllowsCustomAttributes(genre) : false
 	const links = await sessionLinks(db, sessionId)
-	const tracked = new Set((await vocabularyFor(db, sessionId, links)).entries.map((e) => e.decl.id))
-
-	const row = (slotId: string, required?: boolean): Sockets.State.Attributes.Row => {
-		const decl = getAttributeSlot(slotId)
-		return {
-			slotId,
-			label: (decl && i18nTextIn(decl.label)) ?? slotKey(slotId),
-			tracked: tracked.has(slotId),
-			...(required ? { required: true } : {})
-		}
-	}
-	const seen = new Set<string>()
-	// 🚧 What the genre took off its own sheet (DC walk 6: Abilities and
-	// Inventory, retired for Vis Itineris's lists, still offered): a slot the
-	// genre declares but leaves off every sheet it has is still tracked — an
-	// older session reads what it holds — but never offered here, in any
-	// list. A genre with no sheet offers its declared slots as before.
-	const droppedByGenre = droppedGenreSlots(genre)
-	for (const slotId of droppedByGenre) seen.add(slotId)
-	const once = (slotId: string) => !seen.has(slotId) && !!seen.add(slotId)
-
-	// The vocabulary's own gate (`offerableSlot`, audit A20): a row here is a
-	// slot the session would read once switched on, never one it drops.
-	// 🚧 And the seat count (PLAN-sheet §14): a `minSeats` slot is not
-	// listed in a session with fewer seats, as the vocabulary drops it.
-	const seats = await activeSeatCount(db, sessionId)
-	const enoughSeats = (decl: object) => {
-		const minSeats = (decl as { minSeats?: unknown }).minSeats
-		// 🚧 The ruleset setting too (`whenRulesetSetting`): listed only where
-		// the vocabulary would read it.
-		return !(typeof minSeats === "number" && minSeats > seats) && rulesetSettingAllows(decl, session)
-	}
-	const offered = (slotId: string, from: "baseline" | "pick") => {
-		const decl = getAttributeSlot(slotId)
-		return !!decl && offerableSlot(decl, plays, from) && enoughSeats(decl)
-	}
-	const baseline: Sockets.State.Attributes.Row[] = []
-	for (const sheet of genreSheets(genreId))
-		for (const entry of sheet.slots) if (offered(entry.id, "baseline") && once(entry.id)) baseline.push(row(entry.id, entry.required))
-	for (const decl of genre?.slots ?? []) if (offered(decl.id, "baseline") && once(decl.id)) baseline.push(row(decl.id))
-
-	// Listed whether or not the session reads them, so the picker can offer
-	// them back after they were switched off.
-	const world: Sockets.State.Attributes.Row[] = []
-	const brought = await worldAttributesFor(db, links, sessionId, customAttributes)
-	for (const sheet of brought.sheets)
-		for (const entry of sheet.slots) if (offered(entry.id, "pick") && once(entry.id)) world.push(row(entry.id))
-	for (const slotId of brought.recorded) if (offered(slotId, "pick") && once(slotId)) world.push(row(slotId))
-
-	const own: Sockets.State.Attributes.Row[] = []
-	for (const slotId of tracked) if (once(slotId)) own.push(row(slotId))
-
-	// A disabled plugin's slots stay declared — sessions already tracking them
-	// keep resolving and writing (owner ruling 2026-09-26) — but a listing
-	// never offers them (R67).
-	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
-	const off = await disabledPlugins(db)
-	const addable = declaredSlots()
-		.filter((d) => !d.retired && offerableSlot(d, plays, "pick") && enoughSeats(d) && !off.ownsId(d.id) && once(d.id))
-		.map((d) => row(d.id))
-
+	const declared = carryableAttributes(plays)
+	// Optional ones only: one the rules require is no one's to switch; the host's place is never an attribute.
+	const carries = (await carriesOnWire(sessionId, userId, plays, links, session?.userId === userId)).filter((row) => !row.required && !isHostStateSlot(row.slotId))
 	return {
 		sessionId,
-		customAttributes,
-		worldAttributes: session?.worldAttributes !== false,
+		declaresAttributes: declared.size > 0,
 		canEdit: session?.userId === userId,
-		baseline,
-		world,
-		own,
-		addable: customAttributes ? addable : [],
-		rulesets: plays
+		rulesets: plays,
+		...(carries.length ? { carries } : {})
 	}
+}
+
+/**
+ * 🚧 Who carries each of the rules' attributes (attribute carries, RF fix
+ * 2 item 3): every holder its `carriedBy` names — the world, each character
+ * and player seat, each place — with their switch, and whether the caller
+ * may change it (whoever plays the holder; the session's owner, anyone).
+ */
+async function carriesOnWire(
+	sessionId: number,
+	userId: number,
+	plays: readonly string[],
+	links: Awaited<ReturnType<typeof sessionLinks>>,
+	sessionOwner: boolean
+): Promise<Sockets.State.Attributes.CarryRow[]> {
+	const attributes = [...carryableAttributes(plays).values()]
+	if (!attributes.length) return []
+	const rows = await carryRowsOf(db, sessionId)
+	const hearing = sessionOwner ? null : await hearingOf(db, sessionId, userId, links.cast, links.playerSeats)
+	type Holder = Sockets.State.Attributes.CarryHolder
+	const mayChange = (owner: Holder["owner"]) =>
+		sessionOwner || (!!hearing && (owner.kind === "session_cast" || owner.kind === "player_seat") && hears(hearing, carryKeyOf(owner)))
+	const holder = (owner: Holder["owner"], name: string, slotId: string): Holder => ({
+		owner,
+		name,
+		carries: rows.get(carryKeyOf(owner))?.get(slotId) !== false,
+		mayChange: mayChange(owner)
+	})
+	return attributes.map((a) => {
+		const holders: Holder[] = []
+		if (a.carriedBy.includes("world")) holders.push(holder({ kind: "session", id: sessionId }, "The world", a.slotId))
+		if (a.carriedBy.includes("cast")) {
+			for (const m of links.cast) holders.push(holder({ kind: "session_cast", id: m.characterId }, m.name, a.slotId))
+			for (const seat of links.playerSeats ?? []) holders.push(holder({ kind: "player_seat", id: seat.playerSeatId }, seat.name, a.slotId))
+		}
+		if (a.carriedBy.includes("location"))
+			for (const place of links.locations) holders.push(holder({ kind: "session_location", id: place.entryId }, place.name, a.slotId))
+		return {
+			slotId: a.slotId,
+			label: a.label,
+			required: a.required,
+			holders: a.required ? holders.map((h) => ({ ...h, carries: true, mayChange: false })) : holders
+		}
+	})
 }
 
 export const stateAttributes: Handler<
@@ -1676,6 +1818,11 @@ export const stateAttributes: Handler<
 	}
 }
 
+/**
+ * ⏳ Retired (RF fix 8, owner ruling 2026-10-23): a session adds no
+ * attributes and drops none — they are its rules'. Refused in words, always;
+ * a holder opts out of an optional one with `state:setCarry`.
+ */
 export const stateSetAttributePicks: Handler<
 	Sockets.State.SetAttributePicks.Params,
 	Sockets.State.SetAttributePicks.Response
@@ -1684,56 +1831,52 @@ export const stateSetAttributePicks: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const event = "state:setAttributePicks"
 		const sessionId = await scoped(socket, emitToUser, event, params?.sessionId)
-		const access = await checkSessionAccess(sessionId, socket.user!.id)
-		if (!access.isOwner)
-			refuse(emitToUser, event, "Only the session's owner can change what it tracks.", { sessionId })
-		const before = await attributesFor(sessionId, socket.user!.id)
-		if (!before.customAttributes)
-			refuse(emitToUser, event, "This session's genre tracks only its own attributes.", { sessionId })
-		const required = new Set(before.baseline.map((r) => r.slotId))
-		const [{ genreId: pickGenre } = { genreId: null }] = await db
-			.select({ genreId: schema.sessions.genreId })
+		return refuse(emitToUser, event, "This session's attributes are its rules' own: a session adds none. Whoever carries one the rules leave optional can switch it off for themselves.", { sessionId })
+	}
+}
+
+export const stateSetCarry: Handler<Sockets.State.SetCarry.Params, Sockets.State.SetCarry.Response> = {
+	event: "state:setCarry",
+	handler: async (socket, params, emitToUser) => {
+		const event = "state:setCarry"
+		// 🚧 RF fix 8: the sheet's `set-attribute-carry` names its ask; its reply and refusal carry it back.
+		const request = typeof params?.request === "string" && params.request ? params.request : undefined
+		const sessionId = await scoped(socket, emitToUser, event, params?.sessionId)
+		const about = { sessionId, ...(request ? { request } : {}) }
+		const target = owner(emitToUser, event, params?.owner)
+		if (typeof params?.slotId !== "string" || typeof params?.carries !== "boolean")
+			refuse(emitToUser, event, "Say which attribute, and whether it is carried.", about)
+		const [session] = await db
+			.select({ userId: schema.sessions.userId, primaryRuleset: schema.sessions.primaryRuleset, rulesetSettings: schema.sessions.rulesetSettings })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, sessionId))
-		const dropped = droppedGenreSlots(getGenre(pickGenre ?? ""))
-		for (const pick of params.picks ?? []) {
-			const decl = typeof pick?.slotId === "string" ? getAttributeSlot(pick.slotId) : undefined
-			if (!decl)
-				refuse(emitToUser, event, `'${String(pick?.slotId)}' is not an attribute this pub declares.`, { sessionId })
-			if (pick.enabled === true && !slotPickable(decl))
-				refuse(emitToUser, event, `${i18nTextIn(decl.label) ?? pick.slotId} is kept by Serene Pub itself, not an attribute a session picks.`, { sessionId })
-			if (pick.enabled === true && !offerableSlot(decl, before.rulesets ?? [], "pick"))
-				refuse(emitToUser, event, `${i18nTextIn(decl.label) ?? pick.slotId} belongs to a ruleset this session does not play.`, { sessionId })
-			if (pick.enabled === true && dropped.has(pick.slotId))
-				refuse(emitToUser, event, `${i18nTextIn(decl.label) ?? pick.slotId} is no longer part of this genre's sheet.`, { sessionId })
-			if (pick.enabled === false && required.has(pick.slotId))
-				refuse(emitToUser, event, `${before.baseline.find((r) => r.slotId === pick.slotId)!.label} is part of this genre and cannot be dropped.`, { sessionId })
-		}
-		await db.transaction(async (tx) => {
-			if (typeof params.worldAttributes === "boolean")
-				await tx
-					.update(schema.sessions)
-					.set({ worldAttributes: params.worldAttributes })
-					.where(eq(schema.sessions.id, sessionId))
-			for (const pick of params.picks ?? []) {
-				const same = and(
-					eq(schema.sessionAttributePicks.sessionId, sessionId),
-					eq(schema.sessionAttributePicks.slotId, pick.slotId)
-				)
-				if (pick.enabled === null) await tx.delete(schema.sessionAttributePicks).where(same)
-				else
-					await tx
-						.insert(schema.sessionAttributePicks)
-						.values({ sessionId, slotId: pick.slotId, enabled: pick.enabled })
-						.onConflictDoUpdate({
-							target: [schema.sessionAttributePicks.sessionId, schema.sessionAttributePicks.slotId],
-							set: { enabled: pick.enabled, createdAt: new Date() }
-						})
-			}
+		const plays = sessionRulesets(session)
+		const rows = await carriesOnWire(sessionId, socket.user!.id, plays, await sessionLinks(db, sessionId), session?.userId === socket.user!.id)
+		const row = rows.find((r) => r.slotId === params.slotId)
+		const holder = row?.holders.find((h) => h.owner.kind === target.kind && h.owner.id === target.id)
+		if (!row || !holder) refuse(emitToUser, event, "That is not an attribute these rules give them to carry.", about)
+		if (row!.required) refuse(emitToUser, event, `Everyone carries ${row!.label}: the rules require it.`, about)
+		if (!holder!.mayChange)
+			refuse(
+				emitToUser,
+				event,
+				target.kind === "session_cast" || target.kind === "player_seat"
+					? `Only whoever plays ${holder!.name}, or the session's owner, can change what ${holder!.name} carries.`
+					: "Only the session's owner can change what the world and its places carry.",
+				about
+			)
+		const done = await setAttributeCarry(db, {
+			sessionId,
+			owner: target,
+			slotId: params.slotId,
+			carries: params.carries,
+			plays,
+			by: `user:${socket.user!.id}`
 		})
-		const res = await attributesFor(sessionId, socket.user!.id)
+		if ("refused" in done) refuse(emitToUser, event, done.refused, about)
+		const res = { ...(await attributesFor(sessionId, socket.user!.id)), ...(request ? { request } : {}) }
 		emitToUser(event, res)
-		// What the session tracks moved: every tab reads its state afresh.
+		// What a holder carries moved: every tab reads its state afresh.
 		await broadcastToSessionUsers(socket.io, sessionId, "state:changed", {
 			sessionId
 		} satisfies Sockets.State.Changed.Response)
@@ -1810,11 +1953,13 @@ export function registerStateHandlers(
 	register(socket, stateLedger, emitToUser)
 	register(socket, stateAttributes, emitToUser)
 	register(socket, stateSetAttributePicks, emitToUser)
+	register(socket, stateSetCarry, emitToUser)
 	register(socket, stateSet, emitToUser)
 	register(socket, stateSetOwnerFace, emitToUser)
 	register(socket, stateConfigure, emitToUser)
 	register(socket, stateProposals, emitToUser)
 	register(socket, stateDecide, emitToUser)
 	register(socket, stateGivePiece, emitToUser)
+	register(socket, stateShowTieSide, emitToUser)
 	register(socket, sessionsSetRulesetSettings, emitToUser)
 }

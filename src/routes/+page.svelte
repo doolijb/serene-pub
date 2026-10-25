@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { MOTION, motionDuration } from "$lib/client/utils/motion"
 	import { page } from "$app/state"
 	import { appVersion } from "$lib/shared/constants/version"
 	import { withoutShared } from "$lib/shared/utils/sharedRows"
@@ -25,6 +26,10 @@
 	import { isAwaitingUser } from "$lib/client/sessions/sessionGroups"
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import AvatarStack from "$lib/client/components/AvatarStack.svelte"
+	import BetaNotice from "$lib/client/components/BetaNotice.svelte"
+	import MetaLine from "$lib/client/components/panels/MetaLine.svelte"
+	import ListCardToggle from "$lib/client/components/panels/ListCardToggle.svelte"
+	import { createViewMode } from "$lib/client/utils/viewMode.svelte"
 	import CharacterCreator from "$lib/client/components/modals/CharacterCreatorModal.svelte"
 	import CharacterSelectModal from "$lib/client/components/modals/CharacterSelectModal.svelte"
 	import PersonaSelectModal from "$lib/client/components/modals/PersonaSelectModal.svelte"
@@ -69,7 +74,6 @@
 		enabledPresetsFor,
 		genreVersion,
 		latestGenres,
-		lorebookSatisfied,
 		type CreateSessionInput
 	} from "$lib/client/components/sessionForms/createSession.svelte"
 	import LanguagePicker from "$lib/client/components/inputs/LanguagePicker.svelte"
@@ -522,11 +526,30 @@
 		return { members: cast }
 	}
 
-	/** "Chat · 2 hours ago" — the genre and when the last line landed. */
-	function sessionMeta(session: SessionListRow): string {
+	/**
+	 * "Story · 2 hours ago" — the genre and when the last line landed, as a
+	 * meta line's facts (the line joins them and drops an empty genre).
+	 */
+	function sessionMeta(session: SessionListRow): (string | undefined | null)[] {
 		return [session.genreName, timeAgo(new Date(lastActivityAt(session)))]
-			.filter(Boolean)
-			.join(" · ")
+	}
+
+	/**
+	 * The Characters section's shape (PLAN-0-5-polish-parity L9, 2026-10-24):
+	 * a two-column list of faces by default, 0.5's home, with the portrait
+	 * shelf behind the list/card pair. Remembered per browser, apart from
+	 * the Characters view's own choice.
+	 */
+	const homeCharactersMode = createViewMode("serene-pub:viewMode:home", "list")
+
+	/** How many characters the list shows before "New or import": 3 rows of 2. */
+	const HOME_LIST_COUNT = 5
+
+	/** A character on Home opens the Sessions view narrowed to them. */
+	function openCharacterSessions(character: { id?: number | null }) {
+		if (character.id == null) return
+		panelsCtx.digest.sessionCharacterId = character.id
+		panelsCtx.openPanel({ key: "sessions", toggle: false })
 	}
 
 	/**
@@ -1087,9 +1110,8 @@
 
 	/**
 	 * The last press of the Chat road: the chosen character, the chosen
-	 * persona, the Chat genre. A Chat preset that requires a lorebook cannot
-	 * be answered here, so that one case hands over to the start screen with
-	 * everything prefilled instead of being refused.
+	 * persona, the Chat genre. No genre requires a lorebook (RF fix 2,
+	 * 2026-10-23), so it always creates directly.
 	 *
 	 * The Library the Character step opened is put away as it fires (A2):
 	 * the session opens on its own, not under a browsing pane.
@@ -1100,15 +1122,6 @@
 		closeDock()
 		const pick = chatPick
 		const genreId = pick?.genre.genreId ?? STANDARD_GENRE_ID
-		if (pick && !lorebookSatisfied(pick.genre.shape, null)) {
-			startASession({
-				characterId: character.id,
-				personaId: selectedPersonaId,
-				genreId,
-				presetId: pick.preset.id
-			})
-			return
-		}
 		createWizardSession({
 			name: autoSessionName(
 				[character.nickname || character.name || "Character"],
@@ -1634,43 +1647,11 @@
 
 <!-- Page background content.
      The vertical padding belongs to this page: `<main>` supplies none, and the
-     first thing inside is the beta line, which has no breathing room of its
-     own. -->
+     first thing inside (the beta notice on the dashboard, the wizard's card)
+     has no breathing room of its own. -->
 <div
 	class="flex flex-1 flex-col items-center justify-center gap-4 px-2 py-8 md:px-0"
 >
-	<!-- ══ the beta line ═════════════════════════════════════════════════
-	     One quiet line above everything, on the dashboard and the wizard
-	     alike: it has to be readable on every visit without being the
-	     loudest thing on a page whose single accent belongs to "Start a
-	     session". The 400 stop carries the warning at speaking volume; the
-	     500 dot is the one place the ember runs at full strength. -->
-	<div
-		class="text-warning-800 dark:text-warning-400 flex w-full items-center gap-2 text-xs"
-	>
-		<span
-			class="bg-warning-500 h-1.5 w-1.5 shrink-0 rounded-full"
-			aria-hidden="true"
-		></span>
-		Serene Pub is in beta. Expect bugs and rapid changes.
-	</div>
-	{#if page.data?.isPrerelease}
-		<!-- A pre-release build is a preview with no guarantee: its data is not
-		     promised to carry into release candidates (ruled 2026-10-19). Said
-		     once, plainly, at the same volume as the beta line. -->
-		<div
-			class="text-warning-800 dark:text-warning-400 flex w-full items-center gap-2 text-xs"
-			data-testid="home-prerelease-notice"
-		>
-			<span
-				class="bg-warning-500 h-1.5 w-1.5 shrink-0 rounded-full"
-				aria-hidden="true"
-			></span>
-			Pre-release build {appVersion}: no guarantees. Your data may not carry
-			into release candidates, so keep backups and nothing you can't lose.
-		</div>
-	{/if}
-
 	<!-- Loading state while socket data arrives -->
 	{#if !dataReady}
 		<div
@@ -1695,6 +1676,15 @@
 	     is 700px wide. The variants below read this box. -->
 	{#if dataReady && setupComplete}
 		<div class="@container/home flex w-full flex-col gap-8">
+			<!-- ── the beta notice (★R4, 2026-10-24) ──────────────────
+			     One quiet line, on Home only: never on the wizard above its
+			     card, never warning-coloured, and the pre-release word folds
+			     into it rather than standing as a second line. Dismissible
+			     per browser and per version (`betaNotice.ts`). -->
+			<BetaNotice
+				version={appVersion}
+				prerelease={!!page.data?.isPrerelease}
+			/>
 			<!-- ── greeting ─────────────────────────────────────────── -->
 			<div
 				class="flex flex-wrap items-end justify-between gap-x-6 gap-y-4"
@@ -1705,7 +1695,7 @@
 					>
 						{greeting}
 					</h1>
-					<p class="text-surface-600-400 text-[15px]">
+					<p class="text-surface-600-400 text-lead">
 						{waitingLine}
 					</p>
 				</div>
@@ -1786,16 +1776,12 @@
 										>
 											{session.name || "Untitled session"}
 										</span>
-										<span
-											class="text-surface-600-400 truncate text-xs"
-										>
-											{sessionMeta(session)}
-										</span>
+										<MetaLine items={sessionMeta(session)} />
 									</div>
 								</div>
 								{#if last?.excerpt}
 									<p
-										class="text-surface-800-200 line-clamp-3 [font-family:var(--sp-prose)] text-[15px] leading-[1.55]"
+										class="text-surface-800-200 line-clamp-3 [font-family:var(--sp-prose)] text-lead leading-[1.55]"
 									>
 										{#if last.speakerName}
 											<span
@@ -1810,9 +1796,17 @@
 								<div class="flex-1"></div>
 								<div class="flex items-center gap-2.5">
 									{#if hint === "Your turn"}
+										<!-- A state, not a second action: tonal
+										     surface with the gold dot, so
+										     Continue stays the card's one thing
+										     to press (★R2, L4.5). -->
 										<span
-											class="chip preset-tonal-primary rounded-full text-xs"
+											class="chip preset-tonal-surface text-surface-800-200 gap-1.5 rounded-full text-xs"
 										>
+											<span
+												class="bg-primary-500 size-1.5 shrink-0 rounded-full"
+												aria-hidden="true"
+											></span>
 											Your turn
 										</span>
 									{:else if hint}
@@ -1851,116 +1845,165 @@
 			</section>
 
 			<!-- ── characters ─────────────────────────────────────────
-			     Portrait cards on a grid that counts columns off the
-			     `home` container, never the viewport: two to a row on a
-			     phone (three rows), three at 640px (two rows), then ONE row
-			     at desk width — 5, 6 or 7 across. Cells past what the row
-			     holds are hidden by index rather than clipped, so the shelf
-			     never grows a scrollbar (principle 6) and never shows half a
-			     card. The last cell is always "New or import"; the header's
-			     "All N" is the way to everyone else. -->
-			<section class="flex flex-col gap-3.5">
-				<div class="flex items-baseline justify-between gap-4">
+			     A two-column list of faces by default (PLAN-0-5-polish-parity
+			     L9, 2026-10-24; 0.5's home): the 44px round face, the name, one
+			     13px line, then "New or import" — one column on a phone. The
+			     list/card pair brings back the portrait shelf, which counts
+			     columns off the `home` container, never the viewport: two to a
+			     row on a phone (three rows), three at 640px (two rows), then ONE
+			     row at desk width — 5, 6 or 7 across. Shelf cells past what the
+			     row holds are hidden by index rather than clipped, so it never
+			     grows a scrollbar (principle 6) and never shows half a card. The
+			     last cell is always "New or import"; the header's "All N" is the
+			     way to everyone else. -->
+			<section class="flex flex-col gap-3.5" aria-labelledby="home-characters">
+				<div class="flex items-center justify-between gap-4">
 					<h2
+						id="home-characters"
 						class="[font-family:var(--typo-heading--font-family)] text-base font-semibold"
 					>
 						Characters
 					</h2>
-					{#if characters.length > 0}
-						<button
-							type="button"
-							class="text-primary-500 shrink-0 text-sm hover:underline"
-							onclick={() =>
-								panelsCtx.openPanel({
-									key: "characters",
-									toggle: false
-								})}
-						>
-							All {characters.length}
-						</button>
-					{/if}
+					<div class="flex shrink-0 items-center gap-3">
+						{#if characters.length > 0}
+							<button
+								type="button"
+								class="text-primary-ink shrink-0 text-sm hover:underline"
+								onclick={() =>
+									panelsCtx.openPanel({
+										key: "characters",
+										toggle: false
+									})}
+							>
+								All {characters.length}
+							</button>
+						{/if}
+						<ListCardToggle mode={homeCharactersMode} label="Characters" />
+					</div>
 				</div>
-				<div
-					class="grid grid-cols-2 gap-3 overflow-hidden @min-[640px]/home:grid-cols-3 @min-[900px]/home:grid-cols-5 @min-[1100px]/home:grid-cols-6 @min-[1300px]/home:grid-cols-7"
-				>
-					{#each sortedCharacters.slice(0, 6) as character, i (character.id)}
-						{@const src = avatarSrc(character)}
-						{@const tagline = characterTagline(character)}
+				{#if homeCharactersMode.value === "list"}
+					<div
+						class="grid grid-cols-1 gap-2 @min-[640px]/home:grid-cols-2"
+						data-home-characters="list"
+					>
+						{#each sortedCharacters.slice(0, HOME_LIST_COUNT) as character (character.id)}
+							{@const tagline = characterTagline(character)}
+							<button
+								type="button"
+								class="bg-surface-50-950 border-surface-200-800 hover:border-surface-300-700 flex min-h-11 min-w-0 items-center gap-3 rounded-base border px-3 py-2.5 text-left transition-colors"
+								title="Go to character sessions"
+								onclick={() => openCharacterSessions(character)}
+							>
+								<Avatar char={character} size="md" decorative />
+								<span class="flex min-w-0 flex-1 flex-col gap-0.5">
+									<span class="truncate text-lead font-medium">
+										{character.nickname ||
+											character.name ||
+											"Unknown"}
+									</span>
+									{#if tagline}
+										<MetaLine>{tagline}</MetaLine>
+									{/if}
+								</span>
+							</button>
+						{/each}
 						<button
 							type="button"
-							class="group min-w-0 flex-col gap-2 text-left {SHELF_CELL[
-								i
-							]}"
-							title="Go to character sessions"
-							onclick={() => {
-								panelsCtx.digest.sessionCharacterId =
-									character.id
-								panelsCtx.openPanel({
-									key: "sessions",
-									toggle: false
-								})
-							}}
+							class="border-surface-300-700 hover:border-surface-600 flex min-h-11 min-w-0 items-center gap-3 rounded-base border border-dashed px-3 py-2.5 text-left transition-colors"
+							onclick={() => openViewToCreate("characters")}
+						>
+							<span
+								class="border-surface-300-700 text-surface-600-400 grid size-11 shrink-0 place-items-center rounded-full border border-dashed"
+								aria-hidden="true"
+							>
+								<Icons.Plus size={18} />
+							</span>
+							<span class="flex min-w-0 flex-1 flex-col gap-0.5">
+								<span
+									class="text-surface-800-200 truncate text-lead font-medium"
+								>
+									New or import
+								</span>
+								<MetaLine>Write one or bring a card</MetaLine>
+							</span>
+						</button>
+					</div>
+				{:else}
+					<div
+						class="grid grid-cols-2 gap-3 overflow-hidden @min-[640px]/home:grid-cols-3 @min-[900px]/home:grid-cols-5 @min-[1100px]/home:grid-cols-6 @min-[1300px]/home:grid-cols-7"
+					>
+						{#each sortedCharacters.slice(0, 6) as character, i (character.id)}
+							{@const src = avatarSrc(character)}
+							{@const tagline = characterTagline(character)}
+							<button
+								type="button"
+								class="group min-w-0 flex-col gap-2 text-left {SHELF_CELL[
+									i
+								]}"
+								title="Go to character sessions"
+								onclick={() => openCharacterSessions(character)}
+							>
+								<div
+									class="bg-surface-50-950 border-surface-200-800 group-hover:border-surface-600 aspect-[3/4] overflow-hidden rounded-container border transition-colors"
+								>
+									{#if src}
+										<img
+											{src}
+											alt=""
+											class="h-full w-full object-cover object-top"
+										/>
+									{:else}
+										<div
+											class="text-surface-500 flex h-full w-full items-center justify-center"
+										>
+											<Icons.UsersRound
+												size={32}
+												aria-hidden="true"
+											/>
+										</div>
+									{/if}
+								</div>
+								<span class="flex min-w-0 flex-col">
+									<span
+										class="truncate text-sm leading-[1.4] font-medium"
+									>
+										{character.nickname ||
+											character.name ||
+											"Unknown"}
+									</span>
+									<span
+										class="text-surface-600-400 min-h-[1.4em] truncate text-xs leading-[1.4]"
+									>
+										{tagline}
+									</span>
+								</span>
+							</button>
+						{/each}
+						<button
+							type="button"
+							class="group flex min-w-0 flex-col gap-2 text-left"
+							onclick={() => openViewToCreate("characters")}
 						>
 							<div
-								class="bg-surface-50-950 border-surface-200-800 group-hover:border-surface-600 aspect-[3/4] overflow-hidden rounded-[14px] border transition-colors"
+								class="border-surface-300-700 text-surface-500 group-hover:border-surface-600 flex aspect-[3/4] items-center justify-center rounded-container border border-dashed transition-colors"
 							>
-								{#if src}
-									<img
-										{src}
-										alt=""
-										class="h-full w-full object-cover object-top"
-									/>
-								{:else}
-									<div
-										class="text-surface-500 flex h-full w-full items-center justify-center"
-									>
-										<Icons.UsersRound
-											size={32}
-											aria-hidden="true"
-										/>
-									</div>
-								{/if}
+								<Icons.Plus size={32} aria-hidden="true" />
 							</div>
 							<span class="flex min-w-0 flex-col">
 								<span
-									class="truncate text-sm leading-[1.4] font-medium"
+									class="text-surface-800-200 truncate text-sm leading-[1.4] font-medium"
 								>
-									{character.nickname ||
-										character.name ||
-										"Unknown"}
+									New or import
 								</span>
 								<span
 									class="text-surface-600-400 min-h-[1.4em] truncate text-xs leading-[1.4]"
 								>
-									{tagline}
+									Write one or bring a card
 								</span>
 							</span>
 						</button>
-					{/each}
-					<button
-						type="button"
-						class="group flex min-w-0 flex-col gap-2 text-left"
-						onclick={() => openViewToCreate("characters")}
-					>
-						<div
-							class="border-surface-300-700 text-surface-500 group-hover:border-surface-600 flex aspect-[3/4] items-center justify-center rounded-[14px] border border-dashed transition-colors"
-						>
-							<Icons.Plus size={32} aria-hidden="true" />
-						</div>
-						<span class="flex min-w-0 flex-col">
-							<span
-								class="text-surface-800-200 truncate text-sm leading-[1.4] font-medium"
-							>
-								New or import
-							</span>
-							<span
-								class="text-surface-600-400 min-h-[1.4em] truncate text-xs leading-[1.4]"
-							>
-								Write one or bring a card
-							</span>
-						</span>
-					</button>
-				</div>
+					</div>
+				{/if}
 			</section>
 
 			<!-- ── playing as ─────────────────────────────────────────── -->
@@ -1969,7 +2012,7 @@
 					class="flex flex-wrap items-center gap-2.5"
 					aria-label="Personas"
 				>
-					<span class="text-surface-600-400 mr-1 text-[13px]">
+					<span class="text-surface-600-400 mr-1 text-chip">
 						Playing as
 					</span>
 					{#each personas as persona (persona.id)}
@@ -1987,11 +2030,11 @@
 							}}
 						>
 							<Avatar char={persona} size="sm" decorative />
-							<span class="truncate text-[13px] font-medium">
+							<span class="truncate text-chip font-medium">
 								{persona.name || "Unnamed"}
 							</span>
 							{#if persona.isDefaultPersona}
-								<span class="text-surface-600-400 text-[11px]">
+								<span class="text-surface-600-400 text-meta">
 									default
 								</span>
 							{/if}
@@ -2029,7 +2072,7 @@
 	{#snippet wizardPickedFace(row: Partial<SelectCharacter>)}
 		<Avatar char={row} size="md" decorative />
 		<span class="min-w-0 flex-1">
-			<span class="block truncate text-[15px] font-medium">
+			<span class="block truncate text-lead font-medium">
 				{row.nickname || row.name || "Unnamed"}
 			</span>
 			{#if characterTagline(row)}
@@ -2057,7 +2100,7 @@
 		>
 			<!-- Progress: one bar per step still on this road. Finished steps
 			     are buttons back to themselves; later ones are inert. -->
-			<header class="border-surface-300-700 border-b px-6 py-4">
+			<header class="border-surface-200-800 border-b px-6 py-4">
 				<ol class="flex items-start gap-2" aria-label="Setup progress">
 					{#each wizardSteps as step, i (step)}
 						<li class="min-w-0 flex-1">
@@ -2114,7 +2157,7 @@
 				{#key wizardStep}
 					<div
 						class="flex flex-col gap-6 p-6 sm:p-8"
-						in:fade={{ duration: 120 }}
+						in:fade={{ duration: motionDuration(MOTION.fast) }}
 					>
 						<!-- ══ GET STARTED ══ -->
 						{#if currentWizardStep === "welcome"}
@@ -2676,7 +2719,7 @@
 									>
 										{#each serviceRoad.lines as line (line.id)}
 											<li
-												class="bg-surface-50-950 border-surface-200-800 flex flex-wrap items-center gap-3 rounded-[14px] border p-3"
+												class="bg-surface-50-950 border-surface-200-800 flex flex-wrap items-center gap-3 rounded-container border p-3"
 											>
 												{#if line.done}
 													<Icons.CircleCheck
@@ -2828,7 +2871,7 @@
 									{/if}
 								{:else}
 									<div
-										class="bg-surface-50-950 border-surface-200-800 mx-auto flex max-w-md flex-col items-center gap-3 rounded-[14px] border p-4 text-center"
+										class="bg-surface-50-950 border-surface-200-800 mx-auto flex max-w-md flex-col items-center gap-3 rounded-container border p-4 text-center"
 									>
 										<p class="text-sm">
 											{#if provider.error}
@@ -3120,7 +3163,7 @@
 										</span>
 									</button>
 									<div
-										class="bg-surface-50-950 border-surface-200-800 flex flex-col gap-1.5 rounded-[14px] border p-3"
+										class="bg-surface-50-950 border-surface-200-800 flex flex-col gap-1.5 rounded-container border p-3"
 									>
 										<span
 											class="flex items-center gap-2 font-semibold"
@@ -3297,7 +3340,7 @@
 										</span>
 									</button>
 									<div
-										class="bg-surface-50-950 border-surface-200-800 flex flex-col gap-1.5 rounded-[14px] border p-3"
+										class="bg-surface-50-950 border-surface-200-800 flex flex-col gap-1.5 rounded-container border p-3"
 									>
 										<span
 											class="flex items-center gap-2 font-semibold"
@@ -3338,7 +3381,7 @@
 			</div>
 
 			<!-- Footer: Back on the left, the screen's one primary on the right. -->
-			<footer class="border-surface-300-700 border-t px-6 py-4">
+			<footer class="border-surface-200-800 border-t px-6 py-4">
 				<div class="flex items-center justify-between gap-4">
 					<!-- Back — out of an LLM road to its doors first, else the
 					     previous step. -->

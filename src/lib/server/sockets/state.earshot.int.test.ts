@@ -25,6 +25,7 @@ import * as schema from "$lib/server/db/schema"
 import { defineAttributeSlot, genre, getAttributeSlot } from "@serene-pub/sdk"
 import "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -94,7 +95,7 @@ async function table(extra?: (seated: Seated) => any[]) {
 		default: 10
 	})
 	const GENRE = `test:genre/earshot-${suffix}`
-	genre(GENRE, {
+	genreKeeping(GENRE, {
 		name: { en: "Earshot" },
 		family: "test",
 		slots: [getAttributeSlot(WHISPER)!, getAttributeSlot(GRIT)!, ...(extra?.({ vell, ash, bram, suffix }) ?? [])],

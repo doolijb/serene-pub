@@ -1,7 +1,7 @@
 /**
- * What the indexing notice above the composer (`RagNotice.svelte`) says and
- * offers, pure so it is tested (`ragNotice.test.ts`) apart from the sockets
- * the component speaks.
+ * What the indexing notice in the composer's footer (`RagNotice.svelte`) says
+ * and offers, pure so it is tested (`ragNotice.test.ts`) apart from the
+ * sockets the component speaks.
  *
  * The vocabulary is NOMENCLATURE §11's (less-confusing H1): the feature is
  * **Search by meaning**, a lorebook entry is **indexed**, **not indexed yet**
@@ -116,5 +116,54 @@ export function ragNoticeActions(
 			]
 		case "processing":
 			return [prioritize]
+	}
+}
+
+/**
+ * Where this device keeps the sessions whose notice it has shown: the line
+ * shows the first time a session needs it, and an icon in the composer's
+ * footer stands for it after that (polish parity L1, 2026-10-24). A per-viewer
+ * convenience, never shared and never relied on: a storage that fails or
+ * forgets just shows the line again.
+ */
+export const RETRIEVAL_NOTICE_READ_KEY = "serene-pub:retrievalNoticeRead"
+
+/** How many sessions the list remembers; the oldest go first. */
+const NOTICE_READ_KEEP = 200
+
+type NoticeStore = Pick<Storage, "getItem" | "setItem">
+
+function deviceStore(): NoticeStore | null {
+	try {
+		return typeof localStorage === "undefined" ? null : localStorage
+	} catch {
+		return null
+	}
+}
+
+function readIds(store: NoticeStore): number[] {
+	const raw = store.getItem(RETRIEVAL_NOTICE_READ_KEY)
+	const parsed: unknown = raw ? JSON.parse(raw) : []
+	return Array.isArray(parsed) ? parsed.filter((n): n is number => typeof n === "number") : []
+}
+
+/** Has this device shown the notice for this session before? */
+export function noticeRead(sessionId: number, store: NoticeStore | null = deviceStore()): boolean {
+	try {
+		return !!store && readIds(store).includes(sessionId)
+	} catch {
+		return false
+	}
+}
+
+/** Remember that this device has shown the notice for this session. */
+export function markNoticeRead(sessionId: number, store: NoticeStore | null = deviceStore()): void {
+	try {
+		if (!store) return
+		const ids = readIds(store).filter((n) => n !== sessionId)
+		ids.push(sessionId)
+		store.setItem(RETRIEVAL_NOTICE_READ_KEY, JSON.stringify(ids.slice(-NOTICE_READ_KEEP)))
+	} catch {
+		// A convenience: the line shows again next time.
 	}
 }

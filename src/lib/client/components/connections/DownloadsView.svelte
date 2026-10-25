@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * Everything this pub is fetching, in ONE list.
 	 *
@@ -217,7 +218,7 @@
 							</span>
 							<span class="min-w-0 flex-1">
 								<span
-									class="block truncate text-[15px] font-medium"
+									class="block truncate text-lead font-medium"
 								>
 									{item.name}
 								</span>
@@ -280,15 +281,13 @@
 							<span class="min-w-0 flex-1">
 								<span class="flex min-w-0 items-center gap-1.5">
 									<span
-										class="min-w-0 truncate text-[15px] font-medium"
+										class="min-w-0 truncate text-lead font-medium"
 									>
 										{item.name}
 									</span>
-									<span
-										class="preset-tonal-success shrink-0 rounded-full px-1.5 py-0.5 text-[11px]"
-									>
+									<Badge tone="success" size="sm" class="shrink-0">
 										Done
-									</span>
+									</Badge>
 								</span>
 								<span
 									class="text-surface-600-400 block truncate text-xs"
@@ -327,7 +326,7 @@
 							</span>
 							<span class="min-w-0 flex-1">
 								<span
-									class="block truncate text-[15px] font-medium"
+									class="block truncate text-lead font-medium"
 								>
 									{item.name}
 								</span>
@@ -364,15 +363,13 @@
 							<span class="min-w-0 flex-1">
 								<span class="flex min-w-0 items-center gap-1.5">
 									<span
-										class="min-w-0 truncate text-[15px] font-medium"
+										class="min-w-0 truncate text-lead font-medium"
 									>
 										{item.name}
 									</span>
-									<span
-										class="preset-tonal-surface shrink-0 rounded-full px-1.5 py-0.5 text-[11px]"
-									>
+									<Badge size="sm" class="shrink-0">
 										Cancelled
-									</span>
+									</Badge>
 								</span>
 								<span
 									class="text-surface-600-400 block truncate text-xs"

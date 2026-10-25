@@ -103,6 +103,19 @@ export async function registerCoreServices() {
 		shutdown: () => tray.stopTraySweep()
 	})
 
+	// 🚧 Routines (PLAN-layering D7, lane 6): the system tick — one timer on
+	// the 5-minute wall-clock grid for every session's system-clock routines
+	// (R15). After a restart nothing runs until someone interacts with a
+	// session (R21); the timer only starts counting. Stops before the
+	// database closes (reverse order).
+	const routines = await import("$lib/server/pipelines/routines/tick")
+	registerService({
+		id: "routines",
+		label: "Routines",
+		reconcileOnBoot: () => routines.reconcileRoutinesOnBoot(),
+		shutdown: async () => routines.stopSystemTick()
+	})
+
 	const koboldcpp = await import("$lib/server/koboldcpp/subprocessManager")
 	registerService({
 		id: "koboldcpp",

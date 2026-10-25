@@ -74,23 +74,52 @@ export type {
 /** The placement step; the call its `connection` slot names is a reading call. */
 export const PLACEMENT_DEFINITION = "core:task/place-attachments"
 
+/** 🚧 The transcribe step (O9); a reply spec with one HEARS audio for its calls. */
+export const TRANSCRIBE_DEFINITION = "core:oracle/transcribe-audio"
+
+/** The capability the transcribe step's model needs. */
+export const TRANSCRIBE_CAPABILITY = "audio->text"
+
+/** The media kinds a pair is judged on, per call — every attachment kind but text. */
+export const MEDIA_ATTACHMENT_KINDS = ["image", "pdf", "audio", "video"] as const
+export type MediaAttachmentKind = (typeof MEDIA_ATTACHMENT_KINDS)[number]
+
 /** The transform each media kind needs. Text needs none. */
-const KIND_TRANSFORM = {
+const KIND_TRANSFORM: Record<MediaAttachmentKind, string> = {
 	image: "text+image->text",
-	pdf: "text+document->text"
-} as const
+	pdf: "text+document->text",
+	// 🚧 O4: a pair that HEARS — the chat wire's `input_audio` part.
+	audio: "text+audio->text",
+	// Declared open: no adapter sends a video yet.
+	video: "text+video->text"
+}
+
+/** The io kind (`AdapterIo.in`) each attachment kind is sent as. */
+export const IO_KIND_OF: Record<MediaAttachmentKind, string> = {
+	image: "image",
+	pdf: "document",
+	audio: "audio",
+	video: "video"
+}
 
 /** What the picker offers for a kind it may attach. */
 const KIND_ACCEPTS: Record<AttachmentKind, string[]> = {
 	image: ["image/png", "image/jpeg", "image/webp", "image/gif", ".png", ".jpg", ".jpeg", ".webp", ".gif"],
 	text: ["text/plain", "text/markdown", ".txt", ".md", ".markdown"],
-	pdf: ["application/pdf", ".pdf"]
+	pdf: ["application/pdf", ".pdf"],
+	audio: [
+		"audio/mpeg", "audio/wav", "audio/x-wav", "audio/ogg", "audio/flac", "audio/mp4", "audio/x-m4a", "audio/aac", "audio/webm",
+		".mp3", ".wav", ".ogg", ".oga", ".opus", ".flac", ".m4a", ".aac", ".weba"
+	],
+	video: ["video/mp4", "video/webm", "video/quicktime", ".mp4", ".m4v", ".webm", ".mov"]
 }
 
 const KIND_PLURAL: Record<AttachmentKind, string> = {
 	image: "images",
 	text: "text files",
-	pdf: "PDFs"
+	pdf: "PDFs",
+	audio: "audio files",
+	video: "videos"
 }
 
 export const NO_READING_CALLS = (kind: AttachmentKind): string =>
@@ -108,6 +137,10 @@ export const COMPLETION_WIRE = (kind: AttachmentKind): string =>
 export const PDF_NOT_ACCEPTED =
 	"This connection type doesn't take PDFs."
 
+/** 🚧 A call that cannot hear audio, which the reply's transcribe step hears for it (O9). */
+export const HEARD_FOR_IT =
+	"It is sent as what it says — the reply's transcribe step hears it first."
+
 /** The answer with nothing to ask: no session, no genre, no reply spec. */
 function answer(calls: AttachmentReadingCall[]): AttachmentReaders {
 	const kinds = {} as Record<AttachmentKind, AttachmentVerdict>
@@ -115,7 +148,13 @@ function answer(calls: AttachmentReadingCall[]): AttachmentReaders {
 	for (const kind of ATTACHMENT_KINDS) {
 		if (kind === "text") {
 			kinds.text = { allowed: true }
-		} else if (calls.some((c) => c.reads.includes(kind))) {
+		} else if (
+			calls.some(
+				(c) => c.reads.includes(kind) || c.transcribes?.includes(kind)
+			)
+		) {
+			// Read by some call (D1) — or, for audio, HEARD for one by the
+			// reply's transcribe step (O9): a voice note reaches it as words.
 			kinds[kind] = { allowed: true }
 		} else {
 			const why = calls.find((c) => c.reasons[kind])?.reasons[kind]
@@ -158,7 +197,7 @@ export async function pairReads(connection: {
 	capabilities?: unknown
 	connectionModelModality?: string | null
 	wireMode?: string | null
-}): Promise<Record<"image" | "pdf", string | null>> {
+}): Promise<Record<MediaAttachmentKind, string | null>> {
 	const { capabilityRefusal } = await import(
 		"$lib/server/pipelines/runtime/capabilityGuard"
 	)
@@ -166,7 +205,17 @@ export async function pairReads(connection: {
 		"$lib/shared/connectionAdapters/manifest"
 	)
 	const wire = connection.wireMode === "completion" ? "completion" : "chat"
-	const judge = (kind: "image" | "pdf"): string | null => {
+	const io = adapterIo(connection.type)
+	const judge = (kind: MediaAttachmentKind): string | null => {
+		// 🚧 O4: a kind the type's code cannot put on the wire is "not sent
+		// by this type" before it is a capability question — audio and
+		// video are open kinds most adapters have no part for, and their
+		// absent io row says exactly that. Images keep their old order (the
+		// capability first), which every existing sentence reads.
+		if (kind === "audio" || kind === "video") {
+			const accepts = io?.in?.[IO_KIND_OF[kind] as keyof NonNullable<typeof io>["in"]]?.accepts ?? []
+			if (!accepts.length) return NOT_SENT_BY_TYPE(kind)
+		}
 		const refused = capabilityRefusal(connection, KIND_TRANSFORM[kind] as any)
 		if (refused) return refused
 		if (!sendsAttachmentsOn(connection.type, wire))
@@ -174,13 +223,18 @@ export async function pairReads(connection: {
 				? COMPLETION_WIRE(kind)
 				: NOT_SENT_BY_TYPE(kind)
 		if (kind === "pdf") {
-			const accepts = adapterIo(connection.type)?.in?.document?.accepts ?? []
+			const accepts = io?.in?.document?.accepts ?? []
 			if (!accepts.some((m) => String(m) === "application/pdf"))
 				return PDF_NOT_ACCEPTED
 		}
 		return null
 	}
-	return { image: judge("image"), pdf: judge("pdf") }
+	return {
+		image: judge("image"),
+		pdf: judge("pdf"),
+		audio: judge("audio"),
+		video: judge("video")
+	}
 }
 
 /** What the form answer's calls are headed with in the dialog (no action names it). */
@@ -305,6 +359,11 @@ async function readingCallsOf(
 			)
 		)
 	const readKeys = new Set<string>()
+	// 🚧 O9: the spec's transcribe step, when it has one — it hears audio
+	// for every call that cannot.
+	const transcriber = graph.find(
+		(n) => n.definitionId === TRANSCRIBE_DEFINITION
+	)
 	for (const placement of graph) {
 		if (placement.definitionId !== PLACEMENT_DEFINITION) continue
 		const ref = (placement.config as Record<string, unknown> | undefined)
@@ -330,7 +389,12 @@ async function readingCallsOf(
 		if (!isSlotRef(ref)) return key
 		return at?.resolvedRefs?.connection ?? ref.ofNode ?? key
 	}
-	const slotKeys = [...new Set(nodes.map((n) => ownerOf(n.nodeKey)))]
+	const slotKeys = [
+		...new Set([
+			...nodes.map((n) => ownerOf(n.nodeKey)),
+			...(transcriber ? [transcriber.nodeKey] : [])
+		])
+	]
 	const { buildWorld } = await import("$lib/server/pipelines/config/world")
 	const world = await buildWorld(db, {
 		sessionId: input.sessionId,
@@ -352,6 +416,23 @@ async function readingCallsOf(
 	const { humanizeTypeId } = await import(
 		"$lib/server/pipelines/config/panel/declarations"
 	)
+
+	// Whether the transcribe step has a model to hear with: its own slot as
+	// the world resolves it, else the Transcription default. Asked once —
+	// the step is the spec's, not a call's.
+	let hears = false
+	if (transcriber) {
+		const tslot = sourced?.[transcriber.nodeKey]?.connection?.[""]?.value
+		const tid = slotConnectionId(tslot)
+		const heard = await resolveCapabilityTarget(db, {
+			capability: TRANSCRIBE_CAPABILITY as never,
+			pipelineConfig:
+				tid != null
+					? { connectionId: tid, connectionModelId: slotModelId(tslot) }
+					: null
+		})
+		hears = heard.ok
+	}
 
 	const calls: AttachmentReadingCall[] = []
 	for (const node of nodes) {
@@ -379,13 +460,14 @@ async function readingCallsOf(
 		const reasons: Partial<Record<AttachmentKind, string>> = {}
 		let connection: ConnectionIdentity | undefined
 		if (!target.ok) {
-			placeholderFor.push("image", "pdf")
-			reasons.image = reasons.pdf = target.problem.message
+			placeholderFor.push(...MEDIA_ATTACHMENT_KINDS)
+			for (const kind of MEDIA_ATTACHMENT_KINDS)
+				reasons[kind] = target.problem.message
 			connection = target.problem.connection
 		} else {
 			connection = connectionIdentity(target.connection)
 			const verdict = await pairReads(target.connection as any)
-			for (const kind of ["image", "pdf"] as const) {
+			for (const kind of MEDIA_ATTACHMENT_KINDS) {
 				if (verdict[kind] == null) reads.push(kind)
 				else {
 					placeholderFor.push(kind)
@@ -393,12 +475,17 @@ async function readingCallsOf(
 				}
 			}
 		}
+		// 🚧 O9: audio this call cannot hear, heard for it by the transcribe step.
+		const transcribes: AttachmentKind[] =
+			hears && placeholderFor.includes("audio") ? ["audio"] : []
+		if (transcribes.length) reasons.audio = HEARD_FOR_IT
 		calls.push({
 			key: input.title ? `${slug}#${node.nodeKey}` : node.nodeKey,
 			label,
 			reads: ATTACHMENT_KINDS.filter((k) => reads.includes(k)),
 			placeholderFor,
 			reasons,
+			...(transcribes.length ? { transcribes } : {}),
 			...(connection ? { connection } : {})
 		})
 	}

@@ -9,8 +9,13 @@ import { canViewCharacter } from "$lib/server/utils/sessionAccess"
 import { cardTakenBy } from "$lib/server/utils/castMemberCards"
 import { retoldFieldList } from "$lib/shared/lorebooks/retold"
 import { retoldUpdateProblem } from "$lib/server/lorebooks/retold"
-import { createMedia, sniffMedia } from "$lib/server/media"
-import { MediaKind, MediaVisibility } from "$lib/shared/constants/MediaVisibility"
+import { createMedia, readMedia, sniffMedia } from "$lib/server/media"
+import { storeLorebookCover, uploadedBytes } from "$lib/server/utils"
+import {
+	MediaKind,
+	MediaVariant,
+	MediaVisibility
+} from "$lib/shared/constants/MediaVisibility"
 import {
 	mapImportedEntry,
 	entryTypeIdOf,
@@ -32,6 +37,14 @@ import { withImportLimit } from "$lib/server/imports/importLimit"
 import { assertImportJsonShape } from "$lib/server/imports/jsonShape"
 import { buildLorebookExportData } from "$lib/server/utils/lorebookExportBuilder"
 import { duplicateLorebookRows } from "$lib/server/utils/lorebookDuplicate"
+import {
+	afterKitCopy,
+	bookFromKit,
+	kitRefOf,
+	resolveKit,
+	STARTER_KIT_KIND,
+	STARTER_KIT_SENTENCES
+} from "$lib/server/lorebooks/starterKits"
 import { relayToBookReaders } from "$lib/server/sockets/utils/bookReaders"
 import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
@@ -52,7 +65,8 @@ import {
 	extractCharacterUuid,
 	buildExistingCharacterComparisonData,
 	createCharacterFromParsedData,
-	overwriteCharacterFromParsedData
+	overwriteCharacterFromParsedData,
+	buildCharactersList
 } from "./characters"
 import {
 	extractPersonaUuid,
@@ -65,7 +79,10 @@ import { writeSceneCast } from "$lib/server/utils/sceneCast"
 import { assertValidParentNode } from "$lib/server/utils/bindingParent"
 import { askerOf, refusable } from "./refusable"
 import { bookLoreWriteMode } from "$lib/server/state/loreWriteMode"
-import { LORE_WRITES_OFF } from "$lib/shared/lorebooks/loreWriteMode"
+import {
+	LORE_WRITES_OFF,
+	isLoreWriteMode
+} from "$lib/shared/lorebooks/loreWriteMode"
 import { isUniqueViolation } from "$lib/server/db/errors"
 import {
 	CHARACTER_LORE_TYPE_ID,
@@ -92,9 +109,18 @@ import {
 	dropSessionLoreRefs
 } from "$lib/server/state/sessionLoreRefs"
 import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
+import { pickableRulesets } from "$lib/server/rulesets/pubRulesets"
 import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
 import { serverFailureAs } from "$lib/server/imports/importFailure"
-import { getAttributeSlot, resolveSlotConfig } from "@serene-pub/sdk"
+import {
+	getAttributeSlot,
+	getRuleset,
+	resolveSlotConfig
+} from "@serene-pub/sdk"
+import {
+	BOOK_DEFAULT_RULES,
+	bookRulesChoices
+} from "$lib/server/rulesets/genreOffer"
 import { findLinkedThatWay } from "$lib/server/utils/relationshipGuards"
 import { sanitizeRelationshipVisibility } from "$lib/server/utils/relationshipVisibility"
 import {
@@ -230,6 +256,28 @@ async function processLorebookTags(
  * (socket-interest plan, ruling 4). The handler's own reply stays eager: the
  * caller asked for it.
  */
+/** The cover image's address, as every lorebook payload joins it: what a
+ *  browser caches against, and the crop the editor opens on. */
+const COVER_MEDIA_COLUMNS = {
+	columns: { uuid: true, rev: true, frame: true }
+} as const
+
+async function coverMediaOf(
+	tx: Pick<Db, "select">,
+	coverMediaId: number | null
+): Promise<Sockets.AvatarMedia | null> {
+	if (!coverMediaId) return null
+	const [media] = await tx
+		.select({
+			uuid: schema.files.uuid,
+			rev: schema.files.rev,
+			frame: schema.files.frame
+		})
+		.from(schema.files)
+		.where(eq(schema.files.id, coverMediaId))
+	return media ?? null
+}
+
 async function buildLorebooksList(
 	userId: number
 ): Promise<Sockets.Lorebooks.List.Response> {
@@ -243,13 +291,20 @@ async function buildLorebooksList(
 		where: (l, { and, eq, inArray, isNull, or }) =>
 			and(
 				isNull(l.sessionId),
+				// 🚧 Starter lorebooks (PLAN-lorebook-kinds §B): the asker's own come
+				// back marked by their book kind, for a group of their own; no
+				// one else's kit is ever on this shelf (a kit is never shared).
 				sharedIds.length
-					? or(eq(l.userId, userId), inArray(l.id, sharedIds))
+					? or(
+							eq(l.userId, userId),
+							and(inArray(l.id, sharedIds), eq(l.kind, "book"))
+						)
 					: eq(l.userId, userId)
 			),
 		orderBy: (l, { desc }) => desc(l.name),
 		with: {
 			user: { columns: { username: true, displayName: true } },
+			coverMedia: COVER_MEDIA_COLUMNS,
 			lorebookEntries: {
 				columns: {
 					id: true,
@@ -373,6 +428,70 @@ export const lorebooksListHandler: Handler<
 	"Your lorebooks could not be listed."
 )
 
+/**
+ * 🚧 A book's **Rules** as a person may choose them (`lorebooks.primary_ruleset`):
+ * an id the instance has installed, or refused in words. Undefined when the
+ * caller sent none. NOMENCLATURE §28: the word the person reads is _rules_.
+ */
+function chosenBookRules(raw: unknown): string | undefined {
+	if (raw === undefined || raw === null) return undefined
+	if (typeof raw !== "string" || !getRuleset(raw))
+		throw new Error("Those rules aren't installed on this pub.")
+	return raw
+}
+
+/**
+ * `lorebooks:rulesChoices` — the **Rules** a book may be told by, for New
+ * lorebook and Book settings: every installed ruleset, Freeform first. No
+ * genre stands behind a book, so nothing is recommended or rated here.
+ */
+export const lorebooksRulesChoicesHandler: Handler<
+	Sockets.Lorebooks.RulesChoices.Params,
+	Sockets.Lorebooks.RulesChoices.Response
+> = refusable(
+	"lorebooks:rulesChoices",
+	async (_socket, _params, emitToUser) => {
+		const res: Sockets.Lorebooks.RulesChoices.Response = {
+			choices: bookRulesChoices(pickableRulesets()),
+			defaultId: BOOK_DEFAULT_RULES
+		}
+		if (emitToUser) emitToUser("lorebooks:rulesChoices", res)
+		return res
+	},
+	"The rules could not be listed."
+)
+
+/**
+ * 🚧 `lorebooks:library` — the book's **‹Rules› library** (PLAN-lorebook-kinds
+ * §C, ruling 10): the rules' shipped pieces for the book's entryable lists,
+ * shown under the book read-only (hidden by default) and copied into it on
+ * edit (`entries:copyFromLibrary`). Readable by whoever may read the book;
+ * empty for rules with no library. ⚠ The workspace reads it; a widget never
+ * carries a library (`server/rulesets/read.ts`).
+ */
+export const lorebooksLibraryHandler: Handler<
+	Sockets.Lorebooks.Library.Params,
+	Sockets.Lorebooks.Library.Response
+> = refusable(
+	"lorebooks:library",
+	async (socket, params: Sockets.Lorebooks.Library.Params, emitToUser) => {
+		await assertReadableBook(db, socket.user!.id, params.lorebookId, {
+			isAdmin: !!socket.user?.isAdmin
+		})
+		const { bookLibrary } = await import("$lib/server/lorebooks/rulesLists")
+		const library = await bookLibrary(db as unknown as Db, params.lorebookId)
+		const res: Sockets.Lorebooks.Library.Response = {
+			lorebookId: params.lorebookId,
+			name: library.name,
+			source: library.source,
+			rows: library.rows
+		}
+		if (emitToUser) emitToUser("lorebooks:library", res)
+		return res
+	},
+	"The book's rules library could not be read."
+)
+
 export const lorebooksCreateHandler: Handler<
 	Sockets.Lorebooks.Create.Params,
 	Sockets.Lorebooks.Create.Response
@@ -381,11 +500,45 @@ export const lorebooksCreateHandler: Handler<
 	async (socket, params: Sockets.Lorebooks.Create.Params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
+			// 🚧 Starting from a starter lorebook (PLAN-lorebook-kinds §B): the
+			// kit is copied whole into the new book, and its Rules win — the
+			// Rules param is not read.
+			const kitRef =
+				params.starterKit != null ? kitRefOf(params.starterKit) : undefined
+			const kit =
+				kitRef !== undefined
+					? await resolveKit(db as unknown as Db, kitRef)
+					: null
+			const primaryRuleset = kit ? undefined : chosenBookRules(params.primaryRuleset)
 
-			const [lorebook] = await db
-				.insert(schema.lorebooks)
-				.values({ name: params.name, userId })
-				.returning()
+			let lorebook: typeof schema.lorebooks.$inferSelect
+			if (kit) {
+				const name = params.name?.trim() || kit.name
+				const copy = await db.transaction((tx) =>
+					bookFromKit(tx, kit, { userId, name, kind: "book" })
+				)
+				await afterKitCopy(
+					copy,
+					userId,
+					socket.user?.displayName || socket.user?.username || ""
+				)
+				if (copy.cards.length && emitToUser)
+					await emitToUser("characters:list", () =>
+						buildCharactersList(userId)
+					)
+				;[lorebook] = await db
+					.select()
+					.from(schema.lorebooks)
+					.where(eq(schema.lorebooks.id, copy.lorebookId))
+			} else
+				[lorebook] = await db
+					.insert(schema.lorebooks)
+					.values({
+						name: params.name,
+						userId,
+						...(primaryRuleset ? { primaryRuleset } : {})
+					})
+					.returning()
 
 			if (emitToUser) {
 				// The refreshed list, lazily — and exactly ONE of it.
@@ -435,7 +588,8 @@ async function buildLorebookGet(
 							tag: true
 						}
 					},
-					user: { columns: { username: true, displayName: true } }
+					user: { columns: { username: true, displayName: true } },
+					coverMedia: COVER_MEDIA_COLUMNS
 				}
 			})
 		: undefined
@@ -521,6 +675,12 @@ export const lorebooksShareHandler: Handler<
 				userId,
 				params?.lorebookId
 			)
+			// 🚧 A starter lorebook is the pub's already (PLAN-lorebook-kinds §B).
+			const [{ kind } = { kind: "book" }] = await tx
+				.select({ kind: schema.lorebooks.kind })
+				.from(schema.lorebooks)
+				.where(eq(schema.lorebooks.id, book.id))
+			if (kind === STARTER_KIT_KIND) throw new Error(STARTER_KIT_SENTENCES.share)
 			return {
 				lorebookId: book.id,
 				...(await replaceShares(
@@ -576,7 +736,82 @@ export const lorebooksUpdateHandler: Handler<
 			// binding number never being reissued (see deriveNextBindingToken),
 			// so rewinding it here would silently invalidate the restore-safety
 			// proof for every merge already on record for this lorebook.
-			const { name, description, extraJson, tags } = params.lorebook
+			// `extraJson` is not written here: nothing reads a book's bag and no
+			// form edits it, so a whole row sent back from the form could only
+			// overwrite it with a stale copy (audit 2026-10-21).
+			const { tags } = params.lorebook
+			// The name as a person reads it: trimmed, never empty, within the
+			// length an import accepts. The form checks first; a socket client
+			// can send anything.
+			const name =
+				params.lorebook.name === undefined
+					? undefined
+					: String(params.lorebook.name ?? "").trim()
+			if (name !== undefined && !name)
+				throw new Error("A lorebook needs a name.")
+			if (name && name.length > LOREBOOK_IMPORT_LIMITS.maxNameChars)
+				throw new Error(
+					`A lorebook's name can be up to ${LOREBOOK_IMPORT_LIMITS.maxNameChars.toLocaleString("en-US")} characters.`
+				)
+			const description =
+				params.lorebook.description === undefined
+					? undefined
+					: String(params.lorebook.description ?? "")
+			if (
+				description &&
+				description.length > LOREBOOK_IMPORT_LIMITS.maxTextChars
+			)
+				throw new Error(
+					`A lorebook's description can be up to ${LOREBOOK_IMPORT_LIMITS.maxTextChars.toLocaleString("en-US")} characters.`
+				)
+
+			// The cover image: a picture replaces it, `null` clears it, absent
+			// leaves it. Stored BEFORE the transaction — `createMedia` writes
+			// through the outer handle, which inside it would deadlock PGlite —
+			// and only once the book is known to be the asker's, so a refused
+			// save leaves no file behind.
+			// The rules, sent on their own and only when changed — never read
+			// off the row, which the form sends back whole. A session's own
+			// notes follow their session's rules, so they take none here.
+			const primaryRuleset = chosenBookRules(params.primaryRuleset)
+			// The book's own lore write mode, the same way: sent on its own.
+			const loreWriteMode = params.loreWriteMode
+			if (loreWriteMode !== undefined && !isLoreWriteMode(loreWriteMode))
+				throw new Error("Writes from sessions are Full, Review changes or Off.")
+			if (primaryRuleset !== undefined || loreWriteMode !== undefined) {
+				const [owned] = await db
+					.select({ sessionId: schema.lorebooks.sessionId })
+					.from(schema.lorebooks)
+					.where(
+						and(
+							eq(schema.lorebooks.id, Number(params.lorebook.id)),
+							eq(schema.lorebooks.userId, userId)
+						)
+					)
+				if (!owned) throw new Error("Lorebook not found.")
+				if (owned.sessionId !== null)
+					throw new Error(
+						primaryRuleset !== undefined
+							? "A session's own notes play their session's rules."
+							: "A session's own notes follow their session's lorebook."
+					)
+			}
+
+			let coverMediaId: number | null | undefined
+			if (params.coverFile === null) coverMediaId = null
+			else if (params.coverFile !== undefined) {
+				if (!(await findOwnedBook(db, userId, params.lorebook.id)))
+					throw new Error("Lorebook not found.")
+				const coverFile = uploadedBytes(params.coverFile)
+				if (!coverFile)
+					throw new Error("No picture came with that upload.")
+				const { file } = await storeLorebookCover({
+					userId,
+					lorebookId: params.lorebook.id!,
+					coverFile
+				})
+				coverMediaId = file.id
+			}
 
 			// The row and its tags commit together (only `tx` inside). Tags
 			// are written only when the caller sent a list — an absent `tags`
@@ -589,7 +824,9 @@ export const lorebooksUpdateHandler: Handler<
 					.set({
 						...(name !== undefined ? { name } : {}),
 						...(description !== undefined ? { description } : {}),
-						...(extraJson !== undefined ? { extraJson } : {}),
+						...(coverMediaId !== undefined ? { coverMediaId } : {}),
+						...(primaryRuleset !== undefined ? { primaryRuleset } : {}),
+						...(loreWriteMode !== undefined ? { loreWriteMode } : {}),
 						// A tags-only save still touches the row — and gives the
 						// SET something to say, which drizzle requires.
 						updatedAt: sql`(CURRENT_TIMESTAMP)`
@@ -617,7 +854,11 @@ export const lorebooksUpdateHandler: Handler<
 						eq(schema.tags.id, schema.lorebookTags.tagId)
 					)
 					.where(eq(schema.lorebookTags.lorebookId, row.id))
-				return { ...row, tags: tagRows.map((t) => t.name) }
+				return {
+					...row,
+					tags: tagRows.map((t) => t.name),
+					coverMedia: await coverMediaOf(tx, row.coverMediaId)
+				}
 			})
 
 			const res: Sockets.Lorebooks.Update.Response = {
@@ -626,6 +867,11 @@ export const lorebooksUpdateHandler: Handler<
 			}
 			emitToUser("lorebooks:update", res)
 			await relistLorebooks(socket, emitToUser) // Refresh list
+			// The people it is shared with read the name and the cover off
+			// their own list, built as each of them.
+			await relayToBookReaders(socket, updated.id, "lorebooks:list", (readerId) =>
+				buildLorebooksList(readerId)
+			)
 			return res
 		} catch (error: any) {
 			console.error("Error updating lorebook:", error)
@@ -3904,6 +4150,46 @@ async function relistAfterImport(
  * CALLER's (`user_id` = asker), takes a fresh uuid and carries no share rows.
  * An administrator's read does not stretch to copying another person's book.
  */
+/**
+ * A copy made from a book SHARED with the asker wears a cover of its own: the
+ * original's file is its owner's, so the copy could neither re-crop it nor
+ * keep it once the owner deleted it (audit 2026-10-21). Same bytes and crop,
+ * the asker's own row, stamped to the copy — `characters:duplicate` gives an
+ * avatar the same treatment. A copy that cannot get its own keeps pointing at
+ * the original, which its reader may still see.
+ */
+export async function ownCopiedCover(copyId: number, userId: number) {
+	const [copy] = await db
+		.select({ coverMediaId: schema.lorebooks.coverMediaId })
+		.from(schema.lorebooks)
+		.where(eq(schema.lorebooks.id, copyId))
+	if (!copy?.coverMediaId) return
+	try {
+		const original = await readMedia(
+			db as unknown as Db,
+			copy.coverMediaId,
+			MediaVariant.ORIGINAL
+		)
+		if (!original) return
+		const created = await storeLorebookCover({
+			userId,
+			lorebookId: copyId,
+			coverFile: Buffer.from(original.bytes)
+		})
+		if (created.created && original.file.frame)
+			await db
+				.update(schema.files)
+				.set({ frame: original.file.frame })
+				.where(eq(schema.files.id, created.file.id))
+		await db
+			.update(schema.lorebooks)
+			.set({ coverMediaId: created.file.id })
+			.where(eq(schema.lorebooks.id, copyId))
+	} catch (e) {
+		console.error("lorebooks:duplicate: the copy keeps the original's cover:", e)
+	}
+}
+
 export const lorebooksDuplicateHandler: Handler<
 	Sockets.Lorebooks.Duplicate.Params,
 	Sockets.Lorebooks.Duplicate.Response
@@ -3927,6 +4213,7 @@ export const lorebooksDuplicateHandler: Handler<
 					params.name?.trim() || `${source.name} (copy)`
 				)
 			)
+			if (source.userId !== userId) await ownCopiedCover(id, userId)
 			const completedBook = await fetchCompletedLorebook(id)
 
 			await relistLorebooks(socket, emitToUser)
@@ -4024,6 +4311,8 @@ export function registerLorebookHandlers(
 	// Core lorebook handlers
 	register(socket, lorebooksListHandler, emitToUser)
 	register(socket, lorebooksCreateHandler, emitToUser)
+	register(socket, lorebooksRulesChoicesHandler, emitToUser)
+	register(socket, lorebooksLibraryHandler, emitToUser)
 	register(socket, lorebooksGetHandler, emitToUser)
 	register(socket, lorebooksShareHandler, emitToUser)
 	register(socket, lorebooksUpdateHandler, emitToUser)

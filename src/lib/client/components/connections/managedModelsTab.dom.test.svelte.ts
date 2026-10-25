@@ -121,6 +121,15 @@ function render(
 	return { target, onSetDefault }
 }
 
+/** A RowMenu item answers Skeleton's pointer sequence, not a bare click. */
+const pick = (item: HTMLElement) => {
+	item.dispatchEvent(
+		new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" })
+	)
+	item.click()
+	flushSync()
+}
+
 const button = (root: ParentNode, label: string) =>
 	[...root.querySelectorAll("button")].find(
 		(b) => b.getAttribute("aria-label") === label
@@ -178,15 +187,16 @@ describe("the managed KoboldCPP's Models tab", () => {
 
 	test("a text row can be moved to the embedding models, and an embedding row back", async () => {
 		const { target } = render()
-		const menu = (name: string) => button(target, `More actions — ${name}`)!
+		const menu = (name: string) => button(target, `More actions for ${name}`)!
 		menu("chat").click()
 		await tick()
 		flushSync()
-		const moveToEmbeddings = [...document.querySelectorAll("button")].find(
-			(b) => b.textContent?.includes("Move to embedding models")
-		)
+		// The row's ⋯ is the app's RowMenu: its items are menuitems.
+		const moveToEmbeddings = [
+			...document.querySelectorAll<HTMLElement>("[role=menuitem]")
+		].find((b) => b.textContent?.includes("Move to embedding models"))
 		expect(moveToEmbeddings).toBeTruthy()
-		moveToEmbeddings!.click()
+		pick(moveToEmbeddings!)
 		expect(emitted).toContainEqual([
 			"koboldcpp:setModelKind",
 			{ filename: "chat.gguf", kind: "embeddings" }
@@ -203,15 +213,15 @@ describe("the managed KoboldCPP's Models tab", () => {
 		).toHaveLength(0)
 		expect(button(target, "Delete")).toBeUndefined()
 
-		button(target, "More actions — chat")!.click()
+		button(target, "More actions for chat")!.click()
 		await tick()
 		flushSync()
-		const items = [...document.querySelectorAll("button")]
+		const items = [...document.querySelectorAll<HTMLElement>("[role=menuitem]")]
 		const del = items.find((b) =>
 			b.textContent?.includes("Delete from disk")
 		)!
 		expect(del.className).toContain("text-error")
-		del.click()
+		pick(del)
 		await tick()
 		flushSync()
 		expect(emitted.map(([e]) => e)).not.toContain("koboldcpp:deleteModel")

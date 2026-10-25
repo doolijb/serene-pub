@@ -273,30 +273,19 @@ describe("a summarize run, stopped at the write", () => {
 		const batchNode = (nodes as any[]).find(
 			(n) => n.definitionId === "core:oracle/summarize-batch"
 		)!
-		// The chain attaches as the selected configuration's own value — the
-		// only global home since the layer simplification (2026-08-24).
+		// The chain attaches as the pipeline's instance values — the one global
+		// home for a pipeline's own values since configurations retired (R50,
+		// 2026-10-21): declared defaults < instance < genre < preset < session.
 		{
-			const { resolveSelectedConfig, duplicateConfig, selectConfig } =
-				await import("$lib/server/pipelines/config/named")
-			const shipped = await resolveSelectedConfig(
+			const { setInstanceValue } = await import(
+				"$lib/server/pipelines/registrations/instanceValues"
+			)
+			await setInstanceValue(
 				db,
-				spec.id,
 				spec.slug,
-				{}
+				{ nodeKey: batchNode.nodeKey, slot: "scripts", path: "each-draft" },
+				[shout.id]
 			)
-			const copy = await duplicateConfig(
-				db,
-				shipped!.configId,
-				"Chain host"
-			)
-			await selectConfig(db, spec.id, "pub", 0, copy.id)
-			await db.insert(schema.pipelineConfigValues).values({
-				configId: copy.id,
-				nodeKey: batchNode.nodeKey,
-				slot: "scripts",
-				path: "each-draft",
-				value: [shout.id]
-			})
 		}
 
 		calls.length = 0

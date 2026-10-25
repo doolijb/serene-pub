@@ -1,4 +1,6 @@
 <script lang="ts">
+	import InlineError from "$lib/client/components/InlineError.svelte"
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * Admin › Genres › one genre: its change form (Django admin; admin IA
 	 * 2026-08-28, grown by B4, R66) — one genre's whole world, and the place
@@ -40,10 +42,7 @@
 		adminUnsavedEdits
 	} from "$lib/client/admin/adminRouter.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import {
-		getAdminInterestContext,
-		requestWithInterest
-	} from "$lib/client/sockets/interest.svelte"
+	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
 	import { awaitReply } from "$lib/client/utils/awaitReply"
 	import { downloadBlob } from "$lib/client/utils/downloadBlob"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
@@ -210,17 +209,6 @@
 	const eventsEditable = $derived(editable && !!defaultPreset && !defaultPreset.isImmutable)
 	const readiness = $derived(detail?.genre && editable ? genreReadiness(detail) : null)
 	const fieldProblems = $derived(rowProblems(draft.fields))
-
-	type ConfigRow = Sockets.Pipelines.ConfigsIndex.Row
-	let configs = $state<ConfigRow[]>([])
-	/**
-	 * The configurations a binding may name. The app-wide registry, not the
-	 * admin context: `pipelines:` is a MIXED family (see the preset page).
-	 */
-	$effect(() => {
-		if (!userCtx.user?.isAdmin || !eventsEditable) return
-		return requestWithInterest("pipelines:configsIndex", {}, (res) => (configs = res.configs))
-	})
 
 	/** Scroll to one of this form's cards and put focus in it. */
 	async function goToSection(section: string) {
@@ -743,7 +731,7 @@
 		{#snippet headerExtra()}
 			<div class="flex flex-wrap items-center gap-1.5 text-xs">
 				{#if genre.family}
-					<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+					<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
 						{genre.family}
 					</span>
 				{/if}
@@ -755,7 +743,7 @@
 			<section class="panel-card flex flex-col gap-3" aria-labelledby="genre-readiness-heading" id="readiness">
 				<div class="flex items-center gap-2">
 					<h2 id="genre-readiness-heading" class="text-sm font-medium">Readiness</h2>
-					<span class="text-surface-600-400 text-[11px]">
+					<span class="text-surface-600-400 text-meta">
 						{readiness.lines.filter((l) => l.done).length} of {readiness.lines.length}
 					</span>
 				</div>
@@ -913,7 +901,7 @@
 					{#if saved?.isImmutable}
 						<span class="flex min-w-0 items-center gap-1.5">
 							<span class="truncate font-medium">{row.values.name}</span>
-							<span class="preset-tonal-surface shrink-0 rounded-full px-1.5 py-0.5 text-[11px]">built-in</span>
+							<Badge size="sm" class="shrink-0">built-in</Badge>
 						</span>
 					{:else}
 						<input
@@ -951,7 +939,6 @@
 				<PresetBindingsRows
 					slots={detail.slots}
 					bind:bindings={draft.bindings}
-					{configs}
 					stale={defaultPreset.staleBindings ?? []}
 				/>
 			</AdminFieldset>
@@ -977,11 +964,11 @@
 						</a>
 					{:else if col.key === "standing"}
 						{#if slot.required}
-							<span class="preset-tonal-primary rounded-full px-2 py-0.5 text-xs">required</span>
+							<Badge tone="primary" size="md">required</Badge>
 						{:else if slot.open}
 							<span class="preset-tonal-secondary rounded-full px-2 py-0.5 text-xs">open</span>
 						{:else}
-							<span class="preset-tonal-surface rounded-full px-2 py-0.5 text-xs">optional</span>
+							<Badge size="md">optional</Badge>
 						{/if}
 					{:else if col.key === "candidates"}
 						{#if slot.candidates.length}
@@ -1015,7 +1002,7 @@
 				<div class="hidden overflow-x-auto @min-[700px]/content:block">
 					<table class="w-full text-left text-sm">
 						<thead>
-							<tr class="border-surface-300-700 border-b">
+							<tr class="border-surface-200-800 border-b">
 								<th scope="col" class="px-3 py-2 {LEGEND}">Event</th>
 								{#each detail.presets as p (p.id)}
 									<th scope="col" class="px-3 py-2 {LEGEND} whitespace-nowrap">
@@ -1029,7 +1016,7 @@
 						</thead>
 						<tbody>
 							{#each matrixSlots as s (s.event)}
-								<tr class="border-surface-300-700 border-b last:border-0">
+								<tr class="border-surface-200-800 border-b last:border-0">
 									<th scope="row" class="px-3 py-2 font-mono text-xs font-medium">
 										<a class="anchor" href={eventHref(s.event)}>{s.event}</a>
 									</th>
@@ -1112,7 +1099,7 @@
 		{#if !editable}
 			<AdminFieldset title="Shape" description="The genre's declared shape, as the server reads it." collapsible>
 				<pre
-					class="bg-surface-50-950 overflow-x-auto rounded-[10px] p-2 font-mono text-[11px]">{JSON.stringify(
+					class="bg-surface-50-950 overflow-x-auto rounded-base p-2 font-mono text-meta">{JSON.stringify(
 						genre.shape,
 						null,
 						2
@@ -1127,7 +1114,7 @@
 			<Dialog.Backdrop class="bg-surface-950/60 fixed inset-0 z-50" />
 			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
 				<Dialog.Content
-					class="bg-surface-100-900 border-surface-200-800 flex w-[30rem] max-w-full flex-col gap-3 rounded-[12px] border p-4"
+					class="bg-surface-100-900 border-surface-200-800 flex w-[30rem] max-w-full flex-col gap-3 rounded-container border p-4"
 				>
 					<Dialog.Title class="text-base font-semibold">Export {genre.name} as a plugin</Dialog.Title>
 					<Dialog.Description class="text-surface-600-400 text-sm">
@@ -1158,7 +1145,7 @@
 					<p id="genre-export-source-hint" class="text-surface-600-400 -mt-2 text-xs">
 						Adds the files a developer edits and rebuilds it from with the Serene Pub SDK. Its README lists what is left to write.
 					</p>
-					{#if exportError}<p class="text-error-600-400 text-sm" role="alert">{exportError}</p>{/if}
+					{#if exportError}<InlineError>{exportError}</InlineError>{/if}
 					<button
 						type="button"
 						class="btn btn-sm preset-filled-primary-500"

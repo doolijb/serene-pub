@@ -1,13 +1,16 @@
 /**
  * 🚧 Live scenes §15 G1–G3, at the boundary watcher: a genre's **declared
- * boundary triggers** (★9 — the Lair's *new floor*, off its summarize-scene
- * spec's `contributes.boundaryTriggers`), the genre's **place**
+ * boundary triggers** (★9 — off its summarize-scene spec's
+ * `contributes.boundaryTriggers`), the genre's **place**
  * (`SessionShape.scenes.place`, read off the state ledger as it stood at each
  * line) and the open scene's **stored cast** following the lines. No model.
  *
- * The Lair's two published rows — its create spec (the genre's shape, as
- * boot writes it) and its summarize-scene spec (the declared trigger) — are
- * written straight into the registry tables, as `bootstrapPipelines` would.
+ * No core genre declares a boundary trigger of its own (the Lair's *new
+ * floor* went with its floor slot, 2026-10-21), so G1 declares one on a TEST
+ * genre, `test:genre/delve`: its *new floor*, read off the world's `floor`.
+ * Each genre's published rows — its create spec (the genre's shape, as boot
+ * writes it) and its summarize-scene spec — are written straight into the
+ * registry tables, as `bootstrapPipelines` would.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -18,6 +21,7 @@ import * as schema from "$lib/server/db/schema"
 import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 import type { BoundaryTriggerDecl } from "@serene-pub/sdk"
+import { genreKeeping } from "$lib/server/utils/testGenre"
 
 let testDb: TestDb
 let dataDir: string
@@ -29,15 +33,29 @@ vi.mock("$lib/server/db", async () => {
 })
 
 const LAIR = "core:genre/lair"
+/** The test genre G1 declares its boundary trigger on. */
+const DELVE = "test:genre/delve"
+const DELVE_SUMMARIZE_SCENE = "test:spec/delve-summarize-scene"
+const NEW_FLOOR = {
+	key: "newFloor",
+	label: { en: "the party reached a new floor" },
+	when: { channel: "main", stateKey: "floor" }
+}
 
 beforeAll(async () => {
 	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-boundary-genre-int-test-"))
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	testDb = (await import("$lib/server/db")).db as unknown as TestDb
-	const { sessionEvents } = await import("@serene-pub/sdk")
-	const { lairGenre, lairSummarizeSceneSpec, LAIR_SUMMARIZE_SCENE_SPEC_ID } = await import(
-		"@serene-pub/core-catalog"
-	)
+	const { sessionEvents, genre: defineGenre } = await import("@serene-pub/sdk")
+	const {
+		lairGenre,
+		lairSummarizeSceneSpec,
+		LAIR_SUMMARIZE_SCENE_SPEC_ID,
+		summarizeScene,
+		GENRE_SUMMARIZE_SCENE_VERSION,
+		floorSlot,
+		locationSlot
+	} = await import("@serene-pub/core-catalog")
 	/** One published version of a slug, as the registry holds it. */
 	const publish = async (slug: string, version: Record<string, unknown>) => {
 		const [spec] = await testDb.insert(schema.pipelineSpecs).values({ slug, name: slug }).returning()
@@ -64,6 +82,28 @@ beforeAll(async () => {
 	await publish(LAIR_SUMMARIZE_SCENE_SPEC_ID, {
 		contributes: (lairSummarizeSceneSpec() as { contributes?: unknown }).contributes
 	})
+	// The test genre: the world's floor and place, and its own trigger on its
+	// summarize-scene spec — the one way a genre declares one.
+	const delve = genreKeeping(DELVE, {
+		name: { en: "Delve" },
+		family: "test",
+		shape: { channels: ["main"], scenes: { place: { stateKey: "location" } } },
+		slots: [floorSlot, locationSlot],
+		events: {},
+		summarize: { scene: DELVE_SUMMARIZE_SCENE }
+	})
+	await publish("test:spec/delve-create", {
+		inputGenre: DELVE,
+		inputEvent: sessionEvents.sessionCreated,
+		genre: { name: delve.name, family: delve.family, shape: delve.shape }
+	})
+	const delveSummarize = summarizeScene(DELVE_SUMMARIZE_SCENE, {
+		version: GENRE_SUMMARIZE_SCENE_VERSION,
+		genre: delve,
+		channels: { story: "main" },
+		boundaries: [NEW_FLOOR]
+	}) as { contributes?: unknown }
+	await publish(DELVE_SUMMARIZE_SCENE, { contributes: delveSummarize.contributes })
 }, 60_000)
 
 afterAll(async () => {
@@ -71,7 +111,7 @@ afterAll(async () => {
 })
 
 let seq = 0
-/** A person, a book, and a Lair session reading it (or a Chat one). */
+/** A person, a book, and a Lair session reading it (or another genre's; null: Chat). */
 async function makeWorld(opts: { scenes?: unknown; genreId?: string | null } = {}) {
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	const user = await createTestUser(testDb, `boundary-genre-${++seq}`)
@@ -129,9 +169,9 @@ const LOCATION = "core:slot/location@1"
 const FLOOR = "core:slot/floor@1"
 
 describe("G1 — a genre's declared boundary trigger (★9)", () => {
-	test("the session reads the Lair's from its summarize-scene spec, on unless switched off", async () => {
+	test("the session reads its genre's from the summarize-scene spec, on unless switched off", async () => {
 		const { sessionSceneContext } = await import("$lib/server/sessions/sceneSettings")
-		const w = await makeWorld()
+		const w = await makeWorld({ genreId: DELVE })
 		const ctx = await sessionSceneContext(testDb as any, w.session.id)
 		expect(ctx?.placeKey).toBe("location")
 		expect(ctx?.declaredTriggers).toEqual([
@@ -143,13 +183,18 @@ describe("G1 — a genre's declared boundary trigger (★9)", () => {
 				words: "the party reached a new floor"
 			}
 		])
-		const off = await makeWorld({ scenes: { triggers: { newFloor: false } } })
+		const off = await makeWorld({ genreId: DELVE, scenes: { triggers: { newFloor: false } } })
 		expect((await sessionSceneContext(testDb as any, off.session.id))?.declaredTriggers[0]?.on).toBe(false)
+		// The Lair declares none of its own since its rewrite: the place changing covers room to room.
+		const lair = await makeWorld()
+		const lairCtx = await sessionSceneContext(testDb as any, lair.session.id)
+		expect(lairCtx?.placeKey).toBe("location")
+		expect(lairCtx?.declaredTriggers).toEqual([])
 	}, 60_000)
 
 	test("Suggested: the floor changing between two lines cues a new scene there, in the trigger's words", async () => {
 		const { offeredSceneCues } = await import("./boundaryWatcher")
-		const w = await makeWorld()
+		const w = await makeWorld({ genreId: DELVE })
 		const m1 = await say(w.session.id, "We take the stairs.")
 		expect(await watch(w.session.id, m1.id)).toBeNull()
 		await setWorld(w.session.id, FLOOR, 2)
@@ -175,7 +220,7 @@ describe("G1 — a genre's declared boundary trigger (★9)", () => {
 
 	test("Automatic places the boundary; Manual records nothing; switched off, nothing fires", async () => {
 		const { openSceneIds } = await import("./boundaryWatcher")
-		const auto = await makeWorld({ scenes: { mode: "automatic" } })
+		const auto = await makeWorld({ genreId: DELVE, scenes: { mode: "automatic" } })
 		await say(auto.session.id, "Top floor.")
 		await setWorld(auto.session.id, FLOOR, 3)
 		const a2 = await say(auto.session.id, "Third floor.")
@@ -184,7 +229,7 @@ describe("G1 — a genre's declared boundary trigger (★9)", () => {
 		expect(await openSceneIds(testDb as any, auto.session.id)).toEqual([placed!.openedSceneId])
 
 		for (const scenes of [{ mode: "manual" }, { triggers: { newFloor: false } }]) {
-			const w = await makeWorld({ scenes })
+			const w = await makeWorld({ genreId: DELVE, scenes })
 			await say(w.session.id, "Up.")
 			await setWorld(w.session.id, FLOOR, 2)
 			const m2 = await say(w.session.id, "Down.")
@@ -237,7 +282,7 @@ describe("G1 — a genre's declared boundary trigger (★9)", () => {
 
 	test("a session's override may switch a declared key, and nothing it does not declare", async () => {
 		const { writeSceneSettings, SceneSettingsRefusal } = await import("$lib/server/sessions/sceneSettings")
-		const w = await makeWorld()
+		const w = await makeWorld({ genreId: DELVE })
 		await writeSceneSettings(testDb as any, w.session.id, { triggers: { newFloor: false } })
 		await expect(
 			writeSceneSettings(testDb as any, w.session.id, { triggers: { sanctumTalk: false } as never })

@@ -108,8 +108,8 @@
 			aria-controls="{panelIdPrefix}-{tab.value}"
 			tabindex={selected ? 0 : -1}
 			bind:this={tabRefs[tab.value]}
-			class="flex h-10 min-w-0 flex-1 items-center justify-center gap-2 border-b-2 px-1 text-[13px] {selected
-				? 'border-primary-500 text-primary-500 font-medium'
+			class="flex h-10 min-w-0 flex-1 items-center justify-center gap-2 border-b-2 px-1 text-chip {selected
+				? 'border-primary-500 text-surface-950-50 font-medium'
 				: 'text-surface-600-400 hover:text-surface-800-200 border-transparent'}"
 			onclick={() => (value = tab.value)}
 			onkeydown={(e) => handleKeydown(e, i)}
@@ -139,7 +139,7 @@
 			</span>
 			{#if tab.count != null}
 				<span
-					class="text-surface-600-400 shrink-0 text-[11px] font-normal tabular-nums"
+					class="text-surface-600-400 shrink-0 text-meta font-normal tabular-nums"
 				>
 					{tab.count}
 				</span>

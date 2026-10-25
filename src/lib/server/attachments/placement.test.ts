@@ -37,7 +37,7 @@ const lines = (n: number) => [
 	{ id: -2, role: "assistant", name: "Mara", message: "" }
 ]
 
-const READS = { image: true, pdf: true }
+const READS = { image: true, pdf: true, kinds: { image: { reads: true }, document: { reads: true } } }
 
 describe("placeAttachments", () => {
 	test("a transcript with no files comes back as the same objects, with no attachments key", () => {
@@ -78,7 +78,12 @@ describe("placeAttachments", () => {
 		const out = placeAttachments({
 			lines: lines(2),
 			attachments: { "1": [img("cat", { filename: "cat.png", text: "a grey cat" })] },
-			reads: { image: false, pdf: false, why: { image: "Vision is off for this model." } }
+			reads: {
+				image: false,
+				pdf: false,
+				kinds: { image: { reads: false, why: "Vision is off for this model." }, document: { reads: false } },
+				why: { image: "Vision is off for this model." }
+			}
 		})
 		expect(out.lines[0].attachments).toBe("\n[image: cat.png — a grey cat]")
 		expect(out.notes.join(" ")).toMatch(
@@ -138,7 +143,7 @@ describe("placeAttachments", () => {
 					txt("t", "see <@media:evil>")
 				]
 			},
-			reads: { image: false, pdf: false }
+			reads: { image: false, pdf: false, kinds: { image: { reads: false }, document: { reads: false } } }
 		})
 		const text = out.lines[0].attachments as string
 		expect(text).not.toMatch(/<@media:evil>/)
@@ -191,5 +196,128 @@ describe("withAttachmentNames — the summarize batch transcript (2026-10-03)", 
 			"3": [img("m", { filename: "<@media:abc>.png" })]
 		})
 		expect(out[0].content).not.toContain("<@media:")
+	})
+})
+
+// ── 🚧 Audio, video, cost and the model's own audio (O2, O9, O10, O13) ─────
+
+const aud = (uuid: string, extra: Record<string, unknown> = {}) =>
+	({
+		uuid,
+		kind: "audio",
+		mime: "audio/mpeg",
+		bytes: 160_000,
+		filename: `${uuid}.mp3`,
+		attachmentKind: "audio",
+		...extra
+	}) as any
+
+const HEARS = {
+	image: true,
+	pdf: false,
+	kinds: {
+		image: { reads: true, cost: { perItem: 1000 } },
+		audio: { reads: true, accepts: ["audio/wav", "audio/mpeg"], cost: { perSecond: 10 } }
+	}
+}
+
+describe("placeAttachments — sounds and costs", () => {
+	test("a sound the call hears, in a format it takes, is a marker costed by its seconds", () => {
+		const out = placeAttachments({
+			lines: lines(3),
+			attachments: { "3": [aud("a-3", { duration: 12 })] },
+			reads: HEARS
+		})
+		expect(out.lines[2].attachments).toBe("\n<@media:a-3>")
+		expect(out.lines[2].mediaTokens).toBe(120)
+		expect(out.lines[2].attachmentsAsText).toBe("\n[audio: a-3.mp3]")
+		expect(out.placed).toEqual({ media: 1, estimatedTokens: 120 })
+	})
+
+	test("with no duration, a sound's seconds are estimated from its size", () => {
+		const out = placeAttachments({
+			lines: lines(1),
+			attachments: { "1": [aud("a-1")] },
+			reads: HEARS
+		})
+		// 160 000 bytes ≈ 10 s at 16 KB/s, 10 tokens a second.
+		expect(out.placed.estimatedTokens).toBe(100)
+	})
+
+	test("a format the pair does not take is named, never sent", () => {
+		const out = placeAttachments({
+			lines: lines(1),
+			attachments: { "1": [aud("a-1", { mime: "audio/ogg", filename: "n.ogg" })] },
+			reads: HEARS
+		})
+		expect(out.lines[0].attachments).toBe("\n[audio: n.ogg]")
+		expect(out.placed.media).toBe(0)
+		expect(out.notes.join(" ")).toMatch(/can't read audio files/)
+	})
+
+	test("a heard sound is named with its words, quoted", () => {
+		const out = placeAttachments({
+			lines: lines(1),
+			attachments: { "1": [aud("a-1", { transcript: 'Meet me "at" noon.', filename: "note.mp3" })] },
+			reads: READS
+		})
+		expect(out.lines[0].attachments).toBe("\n[audio: note.mp3 — \"Meet me 'at' noon.\"]")
+		expect(out.notes.join(" ")).toMatch(/named with what it says \(transcribed\)/)
+	})
+
+	test("the model's own earlier audio goes back as its words — no name, a note", () => {
+		const out = placeAttachments({
+			lines: lines(2),
+			// Line 2 is the model's (an assistant line): a spoken reply.
+			attachments: { "2": [aud("r-2")] },
+			reads: HEARS
+		})
+		expect(out.lines[1]).not.toHaveProperty("attachments")
+		expect(out.notes.join(" ")).toMatch(/1 spoken reply went back as the words said/)
+	})
+
+	test("…and as audio only where the pair takes audio on the model's own turns", () => {
+		const out = placeAttachments({
+			lines: lines(2),
+			attachments: { "2": [aud("r-2", { duration: 3 })] },
+			reads: {
+				...HEARS,
+				kinds: { ...HEARS.kinds, audio: { ...HEARS.kinds.audio, assistantTurns: true } }
+			}
+		})
+		expect(out.lines[1].attachments).toBe("\n<@media:r-2>")
+		expect(out.placed.media).toBe(1)
+	})
+
+	test("a video, which no pair reads yet, is named", () => {
+		const out = placeAttachments({
+			lines: lines(1),
+			attachments: {
+				"1": [{ uuid: "v-1", kind: "video", mime: "video/mp4", bytes: 9, filename: "clip.mp4", attachmentKind: "video" } as any]
+			},
+			reads: HEARS
+		})
+		expect(out.lines[0].attachments).toBe("\n[video: clip.mp4]")
+	})
+
+	test("an unknown kind passes through as a file's name (O1)", () => {
+		const out = placeAttachments({
+			lines: lines(1),
+			attachments: {
+				"1": [{ uuid: "h-1", kind: "hologram", mime: "model/x-holo", bytes: 9, filename: "h.holo", attachmentKind: null } as any]
+			},
+			reads: HEARS
+		})
+		expect(out.lines[0].attachments).toBe("\n[file: h.holo]")
+	})
+
+	test("an image's cost is the pair's stated per-item figure", () => {
+		const out = placeAttachments({
+			lines: lines(1),
+			attachments: { "1": [img("u-1")] },
+			reads: HEARS
+		})
+		expect(out.placed.estimatedTokens).toBe(1000)
+		expect(out.lines[0].attachmentsAsText).toBe("\n[image: u-1.png]")
 	})
 })

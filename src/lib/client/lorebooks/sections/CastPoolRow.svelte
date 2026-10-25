@@ -25,7 +25,7 @@
 	<div class="flex min-w-0 flex-1 flex-col gap-1">
 		<div class="flex flex-wrap items-center gap-2 text-sm font-semibold">
 			<span class="min-w-[10ch] flex-1 truncate">{item.name}</span>
-			<span class="badge preset-tonal-surface shrink-0 text-[11px]">
+			<span class="badge preset-tonal-surface shrink-0 text-meta">
 				Cast
 			</span>
 		</div>

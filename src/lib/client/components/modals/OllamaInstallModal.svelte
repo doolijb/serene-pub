@@ -70,7 +70,7 @@
 			class="fixed inset-0 z-50 flex items-center justify-center p-4"
 		>
 			<Dialog.Content
-				class="card bg-surface-100-900 border-surface-300-700 w-[min(95vw,480px)] space-y-6 border p-6 shadow-xl"
+				class="card bg-surface-100-900 border-surface-200-800 w-[min(95vw,480px)] space-y-6 border p-6 shadow-xl"
 			>
 				<div class="space-y-2">
 					<div class="mb-2 flex items-center gap-3">

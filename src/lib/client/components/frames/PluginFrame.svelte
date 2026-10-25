@@ -252,7 +252,7 @@
 			class="bg-surface-50-950 absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center"
 			role="alert"
 		>
-			<Icons.TriangleAlert size={20} class="text-error-500" />
+			<Icons.TriangleAlert size={20} class="text-error-600-400" />
 			<p class="text-surface-600-400 max-w-xs text-xs">
 				This surface stopped and can't show anything. Reload the page to
 				try it again — the extension's own message is in the browser

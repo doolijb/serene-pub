@@ -337,7 +337,7 @@
 					type="button"
 					role="radio"
 					aria-checked={checked}
-					class="flex min-h-9 w-full items-center gap-2 rounded-[8px] px-2.5 text-left text-[13px] {checked
+					class="flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-chip {checked
 						? 'sidebar-row-active'
 						: 'hover:bg-surface-200-800'}"
 					onclick={() => pick(f.key, option.value || null)}
@@ -440,7 +440,7 @@
 				>
 					<Popover.Trigger
 						class="btn grid size-10 shrink-0 place-items-center p-0 {activeCount
-							? 'preset-tonal-primary'
+							? 'preset-pressed'
 							: 'preset-tonal-surface'}"
 						title="Filter {noun.plural}"
 						aria-label="Filter {noun.plural}{activeCount
@@ -453,7 +453,7 @@
 					<Portal>
 						<Popover.Positioner class="z-[1000]!">
 							<Popover.Content
-								class="card bg-surface-100-900 border-surface-300-700 w-[min(90vw,280px)] border p-2 shadow-xl"
+								class="card bg-surface-100-900 border-surface-200-800 w-[min(90vw,280px)] border p-2 shadow-xl"
 							>
 								<div class="flex max-h-[min(70vh,440px)] flex-col gap-1 overflow-y-auto">
 									{@render facetGroups()}
@@ -539,7 +539,7 @@
 				{#if pageSelected && !allSelected && paged.pageCount > 1}
 					<button
 						type="button"
-						class="text-primary-600-400 underline underline-offset-2"
+						class="text-primary-ink underline underline-offset-2"
 						onclick={selectAllMatching}
 					>
 						Select all {countNoun(filtered.length, noun)}
@@ -712,7 +712,7 @@
 					{#each visible as row (rowKey(row))}
 						{@const isSelected = selected.has(rowKey(row))}
 						<li
-							class="hover:bg-surface-200-800 flex min-h-11 items-start gap-3 rounded-[10px] px-3 py-2 {isSelected
+							class="hover:bg-surface-200-800 flex min-h-11 items-start gap-3 rounded-base px-3 py-2 {isSelected
 								? 'bg-primary-500/8'
 								: ''}"
 						>
@@ -722,7 +722,7 @@
 							<div class="min-w-0 flex-1">
 								{@render titleLink(
 									row,
-									"text-surface-950-50 block truncate text-[15px] font-medium hover:underline focus-visible:underline"
+									"text-surface-950-50 block truncate text-lead font-medium hover:underline focus-visible:underline"
 								)}
 								<div
 									class="text-surface-600-400 mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs"

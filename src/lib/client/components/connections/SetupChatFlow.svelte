@@ -253,7 +253,7 @@
 				aria-current={state === "current" ? "step" : undefined}
 			>
 				<span
-					class="grid size-5 place-items-center rounded-full text-[11px] {state ===
+					class="grid size-5 place-items-center rounded-full text-meta {state ===
 					'current'
 						? 'preset-tonal-primary ring-primary-500 ring-1'
 						: state === 'done'

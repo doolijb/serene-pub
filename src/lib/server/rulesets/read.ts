@@ -13,6 +13,7 @@
 
 import { and, eq, inArray, isNull, ne, or } from "drizzle-orm"
 import {
+	_entryTypeAsRepertoire,
 	attributeSlots,
 	getAttributeSlot,
 	getRepertoire,
@@ -38,6 +39,7 @@ import { storedRulesetSettings, type StoredRulesetSettings } from "./settings"
 import type { StateOwner } from "$lib/server/state/owners"
 import { lorebooksReadBy } from "$lib/server/lorebooks/phantom"
 import { byString, compendiumRow, loreEntriesById, type EntryText } from "./common"
+import { attributeSlotsOf, sectionsOf } from "./functionRun"
 import type { HeldPiece, HeldRepertoire, OwnerCustomField, OwnerStat, OwnerView, Tie } from "./types"
 
 type Db = Parameters<typeof stateFor>[0]
@@ -374,6 +376,12 @@ function bagOf(state: ResolvedState, ref: OwnerRef): { bag: Record<string, SlotV
 	return entry ? { bag: entry as Record<string, SlotValue>, name: entry.name, configKey: key } : null
 }
 
+/** 🚧 An entry type of a ruleset in sections, read as the repertoire its list slots hold (D5). */
+function entryTypeRepertoire(ruleset: RulesetDecl, id: string) {
+	const et = sectionsOf(ruleset).entryTypes?.find((e) => e.id === id && e.entryable !== false)
+	return et ? _entryTypeAsRepertoire(et) : undefined
+}
+
 const valueIn = (bag: Record<string, SlotValue>, slotId: string): SlotValue | undefined =>
 	bag[qualifiedSlotKey(slotId)] ?? bag[slotKey(slotId)]
 
@@ -386,7 +394,19 @@ export async function ownerViews(
 	ruleset: RulesetDecl,
 	refs: readonly OwnerRef[]
 ): Promise<OwnerView[]> {
-	const statIds = new Map(ruleset.stats.map((s) => [s.id, s]))
+	// 🚧 The ruleset's own attributes (a ruleset in sections, D2) are its
+	// stats too: each filed under the slot it names, else its derived one.
+	const statIds = new Map<string, { id: string; config?: Record<string, unknown> }>(ruleset.stats.map((s) => [s.id, s]))
+	const attributeVis = new Map<string, string>()
+	/** 🚧 The free text attributes' slots (RF fix 2, item 2): read as sentences. */
+	const proseIds = new Set<string>()
+	for (const a of sectionsOf(ruleset).attributes ?? []) {
+		const id = attributeSlotsOf(ruleset).slotOf.get(a.id)
+		if (!id) continue
+		if (!statIds.has(id)) statIds.set(id, { id, ...(a.config ? { config: a.config as Record<string, unknown> } : {}) })
+		if (a.visibility) attributeVis.set(id, a.visibility)
+		if (a.kind === "text") proseIds.add(id)
+	}
 	const views: { ref: OwnerRef; found: NonNullable<ReturnType<typeof bagOf>> }[] = []
 	for (const ref of refs) {
 		const found = bagOf(state, ref)
@@ -402,8 +422,11 @@ export async function ownerViews(
 		const stats: OwnerStat[] = []
 		const repertoires: HeldRepertoire[] = []
 		const custom: OwnerCustomField[] = []
+		// 🚧 What this holder does not carry is not read for them (attribute carries, RF fix 2 item 3).
+		const off = new Set(state.notCarried?.[found.configKey] ?? [])
 		for (const slot of state.slots) {
 			if (!slot.appliesTo.includes(ref.facet)) continue
+			if (off.has(slot.id)) continue
 			const decl = getAttributeSlot(slot.id)
 			const value = valueIn(found.bag, slot.id)
 			const config = { ...(decl?.config ?? {}), ...(state.configs?.[found.configKey]?.[slot.id] ?? {}) }
@@ -419,12 +442,15 @@ export async function ownerViews(
 					...(entry.config?.showNumbers === true || (config as Record<string, unknown>).showNumbers === true
 						? { showNumbers: true }
 						: {}),
-					...(slot.earshot === "holder" ? { holderOnly: true } : {}),
+					...(slot.earshot === "holder" || attributeVis.get(slot.id) === "holder" ? { holderOnly: true } : {}),
+					...(attributeVis.has(slot.id) ? { visibility: attributeVis.get(slot.id) } : {}),
+					...(proseIds.has(slot.id) ? { prose: true as const } : {}),
 					label: labelOf(slot),
 					...(typeof (config as Record<string, unknown>).max === "number" ? { max: (config as Record<string, unknown>).max as number } : {})
 				})
 			} else if (address?.ruleset === ruleset.id) {
-				const rep = ruleset.repertoires.find((r) => r.id === address.repertoire)
+				// 🚧 A ruleset in sections (D5): its entry types are its repertoires.
+				const rep = ruleset.repertoires.find((r) => r.id === address.repertoire) ?? entryTypeRepertoire(ruleset, address.repertoire)
 				if (rep) repertoires.push({ slotId: slot.id, repertoire: rep, pieces: heldPieces(value, entries, rep.id) })
 			} else if (address && slot.type === "list")
 				// 🚧 A repertoire of a ruleset the session does not play (PLAN §15
@@ -444,9 +470,9 @@ export async function ownerViews(
 				custom.push({ slotId: slot.id, label: labelOf(slot), value, ...(slot.earshot === "holder" ? { holderOnly: true } : {}) })
 		}
 		// Fields in the ruleset's order, repertoires in its declaration order.
-		const order = new Map(ruleset.stats.map((s, i) => [s.id, i]))
+		const order = new Map([...statIds.keys()].map((id, i) => [id, i]))
 		stats.sort((a, b) => order.get(a.slotId)! - order.get(b.slotId)!)
-		const repOrder = new Map(ruleset.repertoires.map((r, i) => [r.id, i]))
+		const repOrder = new Map([...ruleset.repertoires.map((r) => r.id), ...(sectionsOf(ruleset).entryTypes ?? []).map((e) => e.id)].map((id, i) => [id, i]))
 		repertoires.sort((a, b) => repOrder.get(a.repertoire.id)! - repOrder.get(b.repertoire.id)! || (a.slotId < b.slotId ? -1 : 1))
 		custom.sort((a, b) => byString(a.slotId, b.slotId))
 		return {
@@ -516,7 +542,18 @@ export async function tiesBetween(db: Db, session: RulesetSession, views: readon
 	const end = (node: number | null, entry: number | null) =>
 		node != null ? bindingKey.get(node) : entry != null ? entryKey.get(entry) : undefined
 	const ties: Tie[] = []
+	// 🚧 A cast tie the session's notes overlay (ties on the graph, T2: a
+	// rule-fed row of a book the session may not write) reads in the book's
+	// row's place — one perspective, one row.
+	const overlaid = new Set(
+		books.phantomId == null
+			? []
+			: rows
+					.filter((r) => r.lorebookId === books.phantomId && r.fromNodeId != null && r.toNodeId != null)
+					.map((r) => `${r.fromNodeId}>${r.toNodeId}`)
+	)
 	for (const row of rows) {
+		if (row.lorebookId !== books.phantomId && row.fromNodeId != null && row.toNodeId != null && overlaid.has(`${row.fromNodeId}>${row.toNodeId}`)) continue
 		const from = end(row.fromNodeId, row.fromEntryId)
 		const to = end(row.toNodeId, row.toEntryId)
 		if (!from || !to) continue

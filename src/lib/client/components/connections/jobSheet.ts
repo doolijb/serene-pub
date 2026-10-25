@@ -20,7 +20,8 @@
  */
 import {
 	outputKindOf,
-	samplingShapeForCapability
+	samplingShapeForCapability,
+	samplingShapesForCapability
 } from "$lib/shared/capabilities/samplingShape"
 import {
 	samplingSettingsOn,
@@ -29,6 +30,7 @@ import {
 	type SamplingPipelineUse
 } from "$lib/client/components/sidebars/samplingList"
 import { jobLabel } from "./jobPicker"
+import { S } from "@serene-pub/sdk"
 
 /** The sheet's quiet word over its title: what the title names. */
 export const SHEET_EYEBROW = "Loadout"
@@ -76,6 +78,19 @@ export function sheetSections(capability: string): SheetSection[] {
 		{ key: "where", heading: "Where this applies" }
 	]
 	return keyed.map((s, i) => ({ ...s, number: String(i + 1) }))
+}
+
+/**
+ * 🚧 O7: a job that writes more than one kind — a spoken reply — takes one
+ * sampling per kind. The sheet picks the first (how it writes); this is the
+ * line naming where the second comes from: the voice is the Narration
+ * loadout's sampling, unless a pipeline step picks its own speech sampling.
+ * Null for a job that writes one kind.
+ */
+export function speechSamplingNote(capability: string): string | null {
+	const shapes = samplingShapesForCapability(capability)
+	if (shapes.length < 2 || !shapes.includes(S.tts)) return null
+	return "How it speaks — the voice and its speed — comes from the Narration loadout's sampling, unless a step picks its own."
 }
 
 /** The sampling section's quiet line beside its heading. */

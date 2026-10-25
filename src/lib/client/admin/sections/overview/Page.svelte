@@ -271,7 +271,7 @@
 					Needs you
 				</h2>
 				{#if attention.length}
-					<span class="text-surface-600-400 text-[11px]">
+					<span class="text-surface-600-400 text-meta">
 						{attention.length}
 					</span>
 				{/if}
@@ -359,7 +359,7 @@
 						</div>
 						<ul class="flex flex-col gap-1.5">
 							{#each card.lines as line, i (i)}
-								<li class="flex items-start gap-2 text-[13px]">
+								<li class="flex items-start gap-2 text-chip">
 									<span
 										class="mt-[5.5px] size-2 shrink-0 rounded-full {DOT[
 											line.tone

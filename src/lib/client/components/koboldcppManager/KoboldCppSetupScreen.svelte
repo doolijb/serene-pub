@@ -68,7 +68,7 @@
 			disabled={saving}
 		>
 			<div
-				class="bg-primary-100-900 text-primary-600-400 rounded-lg p-2.5"
+				class="bg-primary-100-900 text-primary-ink rounded-lg p-2.5"
 			>
 				<Icons.Bot size={22} />
 			</div>
@@ -80,7 +80,7 @@
 				</p>
 			</div>
 			<span
-				class="preset-filled-primary-500 mt-auto rounded px-2 py-0.5 text-xs font-medium"
+				class="preset-tonal-primary mt-auto rounded px-2 py-0.5 text-xs font-medium"
 			>
 				Recommended
 			</span>

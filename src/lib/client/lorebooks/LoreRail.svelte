@@ -19,6 +19,9 @@
 		pinned: Icons.Pin
 	}
 
+	/** Book settings' row key, beside the scopes' and saved scopes' keys. */
+	const BOOK_SETTINGS_KEY = "book:settings"
+
 	/** A saved scope's row key, beside the scopes' own keys. */
 	export function savedKey(id: SavedScopeId): string {
 		return `saved:${id}`
@@ -38,10 +41,17 @@
 	 *
 	 * - Head: the filter box. Nothing else.
 	 * - **Views**: the seven scopes with their figures.
+	 * - 🚧 **‹Rules›** (Vis Itineris): the book's rules lists — Weapons,
+	 *   Spells… — one row per list the book draws, which is only where it has
+	 *   something in it (ruled 2026-10-21, `rulesListFacets`). Absent when it
+	 *   draws none, so a Freeform book's rail is the rail it always was.
 	 * - **Saved**: the saved scopes — Pinned — each a row like a scope's,
 	 *   current INSTEAD of one (`aria-current`), because a saved scope is a
 	 *   scope (`scopes.ts`), and choosing one opens Everything
 	 *   (`savedScopeRoute`). Future saved scopes land here.
+	 * - **Book**: **Book settings** — a place (it has a route, and Escape
+	 *   leaves it), so it is a row, current while it is open (2026-10-21,
+	 *   owner: "make the edit lorebook settings more obvious"). Owners only.
 	 * - Foot: one quiet line, "3 loose ends ›", which opens the Loose ends
 	 *   queue. The queue is a chore list, never a place, so it is not a row.
 	 *
@@ -78,6 +88,15 @@
 		onScope: (scope: LoreScope) => void
 		onSaved: (saved: SavedScopeId | null) => void
 		onSearch: (search: string) => void
+		/** Opens Book settings; absent (a book shared with the reader) draws no row. */
+		onOpenSettings?: () => void
+		/** Book settings is open: its row is the current one. */
+		settingsOpen?: boolean
+		/**
+		 * The book's rules lists, under the rules' name; null (or absent)
+		 * draws no group.
+		 */
+		rulesGroup?: { label: string; facets: ScopeFacet[] } | null
 	}
 
 	let {
@@ -92,7 +111,10 @@
 		onOpenLooseEnds,
 		onScope,
 		onSaved,
-		onSearch
+		onSearch,
+		onOpenSettings,
+		settingsOpen = false,
+		rulesGroup = null
 	}: Props = $props()
 
 	const groups = $derived<SectionGroup[]>([
@@ -105,6 +127,19 @@
 				count: facet.count
 			}))
 		},
+		...(rulesGroup
+			? [
+					{
+						label: rulesGroup.label,
+						items: rulesGroup.facets.map((facet) => ({
+							key: facet.id,
+							label: facet.label,
+							icon: scopeIcon(facet.id),
+							count: facet.count
+						}))
+					}
+				]
+			: []),
 		{
 			label: "Saved",
 			items: SAVED_SCOPES.map((s) => ({
@@ -113,12 +148,32 @@
 				icon: SAVED_SCOPE_ICONS[s.id],
 				count: savedCounts[s.id]
 			}))
-		}
+		},
+		...(onOpenSettings
+			? [
+					{
+						label: "Book",
+						items: [
+							{
+								key: BOOK_SETTINGS_KEY,
+								label: "Book settings",
+								icon: Icons.SlidersHorizontal
+							}
+						]
+					}
+				]
+			: [])
 	])
 
 	/** One row is current: the saved scope in force, else the scope. */
 	const value = $derived(
-		scope === null ? null : saved ? savedKey(saved) : scope
+		settingsOpen
+			? BOOK_SETTINGS_KEY
+			: scope === null
+				? null
+				: saved
+					? savedKey(saved)
+					: scope
 	)
 
 	const showLooseEnds = $derived(looseEndsCount > 0 && !looseEndsOpen)
@@ -132,6 +187,10 @@
 	)
 
 	function select(key: string) {
+		if (key === BOOK_SETTINGS_KEY) {
+			onOpenSettings?.()
+			return
+		}
 		const savedScope = SAVED_SCOPES.find((s) => savedKey(s.id) === key)
 		if (savedScope) {
 			onSaved(savedScope.id)

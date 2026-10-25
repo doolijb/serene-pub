@@ -165,7 +165,7 @@
 		</div>
 		<details class="mt-4">
 			<summary
-				class="hover:preset-tonal-primary flex cursor-pointer items-center gap-2 rounded-[10px] px-2 py-2 text-[13px] font-medium"
+				class="hover:preset-tonal-primary flex cursor-pointer items-center gap-2 rounded-base px-2 py-2 text-chip font-medium"
 			>
 				Request settings
 			</summary>
@@ -209,7 +209,7 @@
 		{#if draws && profileSchema && Object.keys(profileSchema).length}
 			<details class="mt-2">
 				<summary
-					class="hover:preset-tonal-primary flex cursor-pointer items-center gap-2 rounded-[10px] px-2 py-2 text-[13px] font-medium"
+					class="hover:preset-tonal-primary flex cursor-pointer items-center gap-2 rounded-base px-2 py-2 text-chip font-medium"
 				>
 					Image settings
 				</summary>

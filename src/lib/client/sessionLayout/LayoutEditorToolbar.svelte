@@ -743,7 +743,7 @@
 												context={menuContext}
 												onAction={onCardAction}
 												placement="bottom-start"
-												triggerClass="text-surface-600-400 hover:bg-surface-200-800 flex min-h-6 min-w-8 items-center justify-center rounded-[0.35rem] px-2 py-0.5 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
+												triggerClass="text-surface-600-400 hover:bg-surface-200-800 flex min-h-6 min-w-8 items-center justify-center rounded-md px-2 py-0.5 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
 											/>
 										</div>
 									{/if}

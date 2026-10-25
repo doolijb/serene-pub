@@ -43,6 +43,33 @@ const MIME_BY_EXT: Record<string, string> = {
 	md: "text/markdown"
 }
 
+/**
+ * 🚧 Sounds and moving pictures (O4, 2026-10-21): `file-type`'s extension →
+ * the format table's canonical mime (`shared/media/formats.ts`), so a stored
+ * file's mime is one the adapters' `accepts` lists can name.
+ */
+const AUDIO_MIME_BY_EXT: Record<string, string> = {
+	mp3: "audio/mpeg",
+	wav: "audio/wav",
+	ogg: "audio/ogg",
+	oga: "audio/ogg",
+	opus: "audio/ogg",
+	flac: "audio/flac",
+	m4a: "audio/mp4",
+	m4b: "audio/mp4",
+	aac: "audio/aac"
+}
+const VIDEO_MIME_BY_EXT: Record<string, string> = {
+	mp4: "video/mp4",
+	m4v: "video/mp4",
+	webm: "video/webm",
+	mov: "video/quicktime",
+	mkv: "video/x-matroska",
+	mpg: "video/mpeg",
+	ogv: "video/ogg",
+	avi: "video/x-msvideo"
+}
+
 export interface SniffResult {
 	ext: string
 	mime: string
@@ -74,7 +101,7 @@ function looksLikeText(buffer: Uint8Array): boolean {
 
 export async function sniffMedia(
 	buffer: Buffer | Uint8Array,
-	opts?: { filename?: string; allowDocuments?: boolean }
+	opts?: { filename?: string; allowDocuments?: boolean; allowMedia?: boolean }
 ): Promise<SniffResult> {
 	if (buffer.length > MAX_MEDIA_UPLOAD_BYTES) {
 		throw new Error(
@@ -92,6 +119,22 @@ export async function sniffMedia(
 			mime: MIME_BY_EXT[ext] ?? detected!.mime,
 			kind: MediaKind.IMAGE
 		}
+	}
+
+	// 🚧 O4: a sound or a moving picture, where the caller takes them (the
+	// composer's tray, a model's spoken reply). WebM and Ogg carry either:
+	// the claimed name decides between a sound and a picture — a label, never
+	// a path, so trusting it here is harmless.
+	if (opts?.allowMedia && ext) {
+		const claimed = opts.filename?.split(".").pop()?.toLowerCase()
+		if (ext === "webm" && (claimed === "weba" || detected?.mime?.startsWith("audio/")))
+			return { ext: "weba", mime: "audio/webm", kind: MediaKind.AUDIO }
+		if (ext === "ogg" && claimed === "ogv")
+			return { ext: "ogv", mime: "video/ogg", kind: MediaKind.VIDEO }
+		if (AUDIO_MIME_BY_EXT[ext])
+			return { ext, mime: AUDIO_MIME_BY_EXT[ext], kind: MediaKind.AUDIO }
+		if (VIDEO_MIME_BY_EXT[ext])
+			return { ext, mime: VIDEO_MIME_BY_EXT[ext], kind: MediaKind.VIDEO }
 	}
 
 	if (opts?.allowDocuments) {
@@ -130,7 +173,9 @@ export async function sniffMedia(
 
 	throw new Error(
 		opts?.allowDocuments
-			? "Unrecognized file type (png/jpg/webp/gif, pdf/epub/docx/odt/rtf/txt/md)"
+			? opts?.allowMedia
+				? "Unrecognized file type (png/jpg/webp/gif, pdf/epub/docx/odt/rtf/txt/md, mp3/wav/ogg/flac/m4a, mp4/webm/mov)"
+				: "Unrecognized file type (png/jpg/webp/gif, pdf/epub/docx/odt/rtf/txt/md)"
 			: "Uploaded file is not a recognized image type (png/jpg/webp/gif)"
 	)
 }

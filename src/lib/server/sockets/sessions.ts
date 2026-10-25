@@ -219,11 +219,14 @@ async function checkLorebookOwnership(
 	// 🚧 A session's own notes are never read into another session
 	// (PLAN-rulesets §26): they are found only through their session.
 	const [book] = await db
-		.select({ sessionId: schema.lorebooks.sessionId })
+		.select({ sessionId: schema.lorebooks.sessionId, kind: schema.lorebooks.kind })
 		.from(schema.lorebooks)
 		.where(eq(schema.lorebooks.id, lorebookId))
 		.limit(1)
-	return book?.sessionId == null
+	// 🚧 Nor is a starter lorebook (PLAN-lorebook-kinds §B): a session starts
+	// from one (`starterKit`), it never reads one. The callers say so first,
+	// in words (`kitReadRefusal`).
+	return book?.sessionId == null && book?.kind === "book"
 }
 
 // `checkMessageEditPermission` stood here — the item rule, evaluated on the
@@ -432,7 +435,13 @@ async function buildSessionsListFor(
 				n: count()
 			})
 			.from(schema.sessionMessages)
-			.where(inArray(schema.sessionMessages.sessionId, sessionIds))
+			.where(
+				and(
+					inArray(schema.sessionMessages.sessionId, sessionIds),
+					// 🚧 The live history (RF fix 5): a rewound row is not counted.
+					isNull(schema.sessionMessages.rewindOrdinal)
+				)
+			)
 			.groupBy(schema.sessionMessages.sessionId)
 		for (const row of countRows) messageCounts.set(row.sessionId, row.n)
 
@@ -605,6 +614,28 @@ export const sessionsTypingHandler: Handler<
 	}
 }
 
+/**
+ * 🚧 A person interacted with a session (PLAN-layering D7, R11, R21; lane 6):
+ * their press of an action or a turn control, a form's answer, a message
+ * verb — stamped when they may read the session. Resets its runs-in-a-row
+ * count and resumes its crons after a restart. Never throws.
+ */
+async function noteSocketInteraction(
+	sessionId: unknown,
+	userId: number,
+	kind: import("$lib/server/pipelines/routines/interaction").InteractionKind
+): Promise<void> {
+	if (typeof sessionId !== "number" || !Number.isInteger(sessionId)) return
+	try {
+		const access = await checkSessionAccess(sessionId, userId)
+		if (!access.hasAccess) return
+		const { noteInteraction } = await import("$lib/server/pipelines/routines/interaction")
+		await noteInteraction(db, sessionId, kind)
+	} catch (err) {
+		console.warn(`[sessions] the interaction with session ${sessionId} was not noted:`, err)
+	}
+}
+
 export const sessionsCreateHandler: Handler<
 	Sockets.Sessions.Create.Params,
 	Sockets.Sessions.Create.Response
@@ -641,7 +672,15 @@ export const sessionsCreateHandler: Handler<
 				)
 			}
 		}
-		if (params.session.lorebookId != null) {
+		// 🚧 A starter lorebook offered as the lorebook is answered in words below
+		// (`kitReadRefusal`), before this access check could say less.
+		const { kitReadRefusal, kitRefOf, resolveKit, STARTER_KIT_SENTENCES } =
+			await import("$lib/server/lorebooks/starterKits")
+		const kitAsBook =
+			params.session.lorebookId != null
+				? await kitReadRefusal(db as unknown as Db, params.session.lorebookId)
+				: null
+		if (params.session.lorebookId != null && !kitAsBook) {
 			const ownsLorebook = await checkLorebookOwnership(
 				params.session.lorebookId,
 				userId
@@ -666,6 +705,21 @@ export const sessionsCreateHandler: Handler<
 		const refuse = (error: string): Sockets.Sessions.Create.Response => {
 			emitToUser("sessions:create:error", { error })
 			return { error }
+		}
+
+		// 🚧 Starting from a starter lorebook (PLAN-lorebook-kinds ruling 8): the
+		// kit is found now, and copied into the session's notes once the
+		// session row exists. A kit is started from, never read as the book.
+		if (kitAsBook) return refuse(kitAsBook)
+		if (params.starterKit != null && params.session.lorebookId != null)
+			return refuse(STARTER_KIT_SENTENCES.kitAndBook)
+		let startKit: import("$lib/server/lorebooks/starterKits").ResolvedKit | null = null
+		if (params.starterKit != null) {
+			try {
+				startKit = await resolveKit(db as unknown as Db, kitRefOf(params.starterKit))
+			} catch (e) {
+				return refuse((e as Error).message)
+			}
 		}
 
 		// Preset resolution (23 §9): when the client starts from a preset, the
@@ -698,7 +752,10 @@ export const sessionsCreateHandler: Handler<
 				if (!preset || !preset.enabled || preset.withdrawnAt != null)
 					return refuse("That session preset is not available.")
 				presetCastFloor = (preset.castFloor as { characters?: number; personas?: number } | null) ?? null
-				presetPins = (preset.settings as Record<string, unknown> | null) ?? null
+				// 🚧 A pin's value, read through `SettingValue` (A10).
+				presetPins = preset.settings
+					? (await import("$lib/server/pipelines/entities/sessionGenres")).presetPinValues(preset.settings)
+					: null
 				// A disabled plugin's preset starts nothing (R67).
 				{
 					const { disabledPlugins } = await import(
@@ -736,6 +793,14 @@ export const sessionsCreateHandler: Handler<
 		let declaredFieldKeys: string[] = []
 		/** The genre's name, for a refusal below. */
 		let genreName: string | null = null
+		/**
+		 * 🚧 What the session is born with through the exposure cascade (R32,
+		 * A10): the genre fields the person may set (a locked one is taken
+		 * from its layer, whatever was sent) and the rules it plays — its
+		 * ruleset and rigour, fixed at start: the person's answer where open
+		 * to them, else the cascade's (Rule Based locks rigour at `scripts`).
+		 */
+		let atStart: Awaited<ReturnType<typeof import("$lib/server/sessions/exposure").resolveAtStart>> | null = null
 		{
 			const { getSessionGenre, shapeViolations, STANDARD_GENRE_ID } =
 				await import("$lib/server/pipelines/entities/sessionGenres")
@@ -773,7 +838,8 @@ export const sessionsCreateHandler: Handler<
 				const violations = shapeViolations(floored, {
 					characters: characterIds.length,
 					personas: personaIds.length,
-					hasLorebook: params.session.lorebookId != null
+					// A starter lorebook gives the session a world of its own (its notes).
+					hasLorebook: params.session.lorebookId != null || startKit != null
 				})
 				if (violations.length)
 					return refuse(
@@ -783,6 +849,26 @@ export const sessionsCreateHandler: Handler<
 					(mode.shape as any)?.fields ?? {}
 				)
 				genreName = mode.name
+			}
+			try {
+				const { resolveAtStart } = await import("$lib/server/sessions/exposure")
+				const sent = params.session as any
+				atStart = await resolveAtStart(db, {
+					genreId,
+					declared: ((mode?.shape as any)?.fields ?? {}) as Record<string, any>,
+					pins: mode?.settings,
+					presetId: sent.presetId ?? null,
+					asked: {
+						...((sent.genreFields ?? {}) as Record<string, unknown>),
+						...(typeof sent.primaryRuleset === "string" && sent.primaryRuleset.trim()
+							? { ruleset: sent.primaryRuleset.trim() }
+							: {}),
+						...(typeof sent.rigour === "string" && sent.rigour ? { rigour: sent.rigour } : {})
+					},
+					isAdmin: !!socket.user!.isAdmin
+				})
+			} catch (err) {
+				console.warn("[sessions:create] the start cascade could not be read; taking what was sent:", err)
 			}
 		}
 
@@ -834,7 +920,7 @@ export const sessionsCreateHandler: Handler<
 		// carries keys nothing declared.
 		;(sessionDataWithoutTags as any).genreFields = Object.fromEntries(
 			Object.entries(
-				((params.session as any).genreFields ?? {}) as Record<
+				(atStart?.fields ?? (params.session as any).genreFields ?? {}) as Record<
 					string,
 					unknown
 				>
@@ -842,8 +928,7 @@ export const sessionsCreateHandler: Handler<
 		)
 
 		// 🚧 Rulesets (PLAN-rulesets §4, §13, §21, §28): a session attached to
-		// a lorebook at creation ADOPTS its ruleset, version and compendium
-		// mode, whatever the client sent — refused, with the reason, when the
+		// a lorebook at creation ADOPTS its ruleset and version, whatever the client sent — refused, with the reason, when the
 		// genre plays only rulesets (`rulesets.only`) the lorebook's is not
 		// among. With no lorebook: the client's pick when it is a registered
 		// ruleset the genre allows, else the genre's default (only's first,
@@ -877,18 +962,37 @@ export const sessionsCreateHandler: Handler<
 					? `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`
 					: (names[0] ?? "")
 			}
-			if (data.lorebookId != null) {
+			// 🚧 A book's (or a kit's) own rules are adopted; one on Freeform,
+			// every book's default, brings none, and the session's own Rules
+			// stand below (fix7, 2026-10-23; `adoptedBookRules`).
+			const { adoptedBookRules } = await import("$lib/shared/rulesets/rulesOffer")
+			let adopted = false
+			if (startKit) {
+				// The kit's Rules, held to the genre's as a book's are.
+				const { kitRules } = await import("$lib/server/lorebooks/starterKits")
+				const rules = kitRules(startKit)
+				if (adoptedBookRules(rules.primaryRuleset)) {
+					if (strict && !strict.includes(rules.primaryRuleset))
+						return refuse(
+							`${genreName ?? "This genre"} plays only by ${listed(strict)} rules, and ` +
+								`the starter lorebook '${startKit.name}' uses ${rulesName(rules.primaryRuleset)} rules. ` +
+								`Choose a starter lorebook that uses ${listed(strict)}, or another genre.`
+						)
+					data.primaryRuleset = rules.primaryRuleset
+					data.rulesetVersion = rules.rulesetVersion
+					adopted = true
+				}
+			} else if (data.lorebookId != null) {
 				const [book] = await db
 					.select({
 						name: schema.lorebooks.name,
 						primaryRuleset: schema.lorebooks.primaryRuleset,
-						rulesetVersion: schema.lorebooks.rulesetVersion,
-						compendiumMode: schema.lorebooks.compendiumMode
+						rulesetVersion: schema.lorebooks.rulesetVersion
 					})
 					.from(schema.lorebooks)
 					.where(eq(schema.lorebooks.id, data.lorebookId))
 					.limit(1)
-				if (book) {
+				if (book && adoptedBookRules(book.primaryRuleset)) {
 					if (strict && !strict.includes(book.primaryRuleset))
 						return refuse(
 							`${genreName ?? "This genre"} plays only by ${listed(strict)} rules, and ` +
@@ -897,9 +1001,13 @@ export const sessionsCreateHandler: Handler<
 						)
 					data.primaryRuleset = book.primaryRuleset
 					data.rulesetVersion = book.rulesetVersion
-					data.compendiumMode = book.compendiumMode
+					adopted = true
 				}
-			} else {
+			}
+			if (!adopted) {
+				// 🚧 R32: a ruleset a layer locked is taken, whatever was sent.
+				if (atStart?.locked.includes("ruleset") && typeof atStart.rules.ruleset === "string")
+					data.primaryRuleset = atStart.rules.ruleset
 				const picked =
 					typeof data.primaryRuleset === "string" &&
 					getRuleset(data.primaryRuleset.trim()) &&
@@ -907,21 +1015,24 @@ export const sessionsCreateHandler: Handler<
 						? data.primaryRuleset.trim()
 						: null
 				data.primaryRuleset = picked ?? genreDefault ?? "core:ruleset/freeform@1"
-				if (data.compendiumMode !== "derived" && data.compendiumMode !== "referenced")
-					data.compendiumMode = "referenced"
 			}
 			const rigourOptions: readonly string[] = genre?.rigour?.options ?? ["prose"]
-			// A preset may pin the rigour (Rule Based pins `scripts`); an explicit choice wins.
-			if (typeof presetPins?.rigour === "string" && (data.rigour == null || data.rigour === "") && rigourOptions.includes(presetPins.rigour))
+			// 🚧 R32: rigour is fixed at start, through the cascade — the
+			// person's pick where it is open to them, a layer's where one
+			// locked it (Rule Based locks `scripts`), else the preset's or the
+			// genre's value.
+			if (atStart && typeof atStart.rules.rigour === "string") data.rigour = atStart.rules.rigour
+			else if (typeof presetPins?.rigour === "string" && (data.rigour == null || data.rigour === "") && rigourOptions.includes(presetPins.rigour))
 				data.rigour = presetPins.rigour
 			if (!rigourOptions.includes(data.rigour))
 				data.rigour = genre?.rigour?.default ?? "prose"
-			// 🚧 Rules that roll no dice (Story) play Words only (2026-10-18,
+			// 🚧 Rules that decide nothing (Story) play Words only (2026-10-18,
 			// the 100-turn walk #26): the form offers nothing else, and a
 			// request that names another How strict is answered with it.
 			{
 				const { rigoursPlayed } = await import("$lib/shared/rulesets/rulesOffer")
-				const played = rigoursPlayed(!!getRuleset(String(data.primaryRuleset ?? ""))?.conventions?.dice, rigourOptions)
+				const { rulesetDecides } = await import("$lib/server/rulesets/methods")
+				const played = rigoursPlayed(rulesetDecides(getRuleset(String(data.primaryRuleset ?? ""))), rigourOptions)
 				if (played && !played.includes(data.rigour)) data.rigour = played[0]!
 			}
 			const { isOnRevision, onRevisionDefaultFor } = await import(
@@ -933,6 +1044,7 @@ export const sessionsCreateHandler: Handler<
 
 		// The clock is checked and the row written in one transaction, under
 		// the book's calendar lock (`sessionLinePatch`).
+		let kitCopy: import("$lib/server/lorebooks/starterKits").KitCopy | null = null
 		const newSession = await db.transaction(async (tx) => {
 			const sessionData: InsertSession = {
 				...sessionDataWithoutTags,
@@ -958,8 +1070,38 @@ export const sessionsCreateHandler: Handler<
 				.insert(schema.sessions)
 				.values(sessionData)
 				.returning()
+			// 🚧 The kit, copied into the session's own notes (the phantom
+			// `phantomLorebookFor` would make: the session's name, owner and
+			// Rules, overlaying nothing) — with the session, or not at all.
+			if (startKit) {
+				const { bookFromKit } = await import("$lib/server/lorebooks/starterKits")
+				kitCopy = await bookFromKit(tx, startKit, {
+					userId,
+					name: row.name?.trim() || "Untitled session",
+					kind: "book",
+					sessionId: row.id
+				})
+				await tx
+					.update(schema.lorebooks)
+					.set({ primaryRuleset: row.primaryRuleset, rulesetVersion: row.rulesetVersion })
+					.where(eq(schema.lorebooks.id, kitCopy.lorebookId))
+			}
 			return row
 		})
+		// Assigned inside the transaction's callback, which narrowing cannot see.
+		const madeFromKit = kitCopy as import("$lib/server/lorebooks/starterKits").KitCopy | null
+		if (madeFromKit) {
+			const { afterKitCopy } = await import("$lib/server/lorebooks/starterKits")
+			await afterKitCopy(
+				madeFromKit,
+				userId,
+				socket.user?.displayName || socket.user?.username || ""
+			)
+			if (madeFromKit.cards.length) {
+				const { buildCharactersList } = await import("./characters")
+				await emitToUser("characters:list", () => buildCharactersList(userId))
+			}
+		}
 		// Creating until its create run is over (`sessions/creating.ts`): the
 		// window in which the create pipeline's settings still apply to it.
 		const { markCreating, markCreated } = await import(
@@ -1242,7 +1384,10 @@ async function getSessionFromDB(
 				where: (cm) =>
 					and(
 						beforeId != null ? lt(cm.id, beforeId) : undefined,
-						laneViewWhere(cm.channel, laneView)
+						laneViewWhere(cm.channel, laneView),
+						// 🚧 The live history (RF fix 5): a row Back took out
+						// never reaches a page.
+						isNull(cm.rewindOrdinal)
 					)!,
 				orderBy: (cm, { desc }) => desc(cm.id),
 				limit: limit
@@ -1290,7 +1435,10 @@ async function getSessionFromDB(
 		// Transform session tags to include tags as string array
 		const sessionWithTags = {
 			...session,
-			tags: session.sessionTags?.map((ct) => ct.tag.name) || []
+			tags: session.sessionTags?.map((ct) => ct.tag.name) || [],
+			// 🚧 The Back · Forward strip's state (RF fix 5,
+			// `SessionDossierV1.rewind`): the same for every viewer.
+			rewind: await (await import("$lib/server/sessions/rewind")).rewindStateOf(db, sessionId)
 		}
 		return sessionWithTags
 	}
@@ -1543,13 +1691,15 @@ export const sessionsModesHandler: Handler<
 		const { genreBoundaryTriggers } = await import(
 			"$lib/server/scenes/liveScenes"
 		)
-		const { i18nText, getGenre, getRuleset, rulesets } = await import("@serene-pub/sdk")
+		const { i18nText, getGenre, getRuleset } = await import("@serene-pub/sdk")
+		const { pickableRulesets } = await import("$lib/server/rulesets/pubRulesets")
 		const { genreRulesOffer } = await import("$lib/server/rulesets/genreOffer")
 		const { withRigoursPlayed } = await import("$lib/shared/rulesets/rulesOffer")
-		// 🚧 Rules that roll no dice play Words only (2026-10-18): each choice says so.
-		const rollsDice = (id: string) => !!getRuleset(id)?.conventions?.dice
+		// 🚧 Rules that decide nothing play Words only (2026-10-18): each choice says so.
+		const { rulesetDecides } = await import("$lib/server/rulesets/methods")
+		const decides = (id: string) => rulesetDecides(getRuleset(id))
 		const genres = await listOfferedGenres(db)
-		const registered = rulesets()
+		const registered = pickableRulesets()
 		const res: Sockets.Sessions.Genres.Response = {
 			// 🚧 Each genre's declared boundary triggers (live scenes ★9, §15
 			// G1) beside its shape: its summarize-scene spec's, which the
@@ -1560,7 +1710,7 @@ export const sessionsModesHandler: Handler<
 				genres.map(async (g) => {
 					const declared = await genreBoundaryTriggers(db, g.genreId).catch(() => [])
 					const offer = genreRulesOffer(getGenre(g.genreId) as any, registered)
-					const rules = offer ? withRigoursPlayed(offer, rollsDice) : null
+					const rules = offer ? withRigoursPlayed(offer, decides) : null
 					return {
 						...g,
 						...(rules ? { rules } : {}),
@@ -1638,9 +1788,6 @@ export const sessionsFunctionCandidatesHandler: Handler<
 			const { resolveSubjectSpec, STANDARD_GENRE_ID } = await import(
 				"$lib/server/pipelines/entities/sessionGenres"
 			)
-			const { subjectCandidates } = await import(
-				"$lib/server/pipelines/entities/bindings"
-			)
 			const [session] = await db
 				.select({ genreId: schema.sessions.genreId })
 				.from(schema.sessions)
@@ -1650,9 +1797,23 @@ export const sessionsFunctionCandidatesHandler: Handler<
 			// A disabled plugin's pipelines are no choice to offer (R67).
 			const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
 			const off = await disabledPlugins(db)
-			res.candidates = (await subjectCandidates(db, genreId, params.subject)).filter(
-				(c) => !off.ownsId(c)
+			// 🚧 The pipelines registered on the subject in this session
+			// (PLAN-layering D7) — what its preset offers and what its own
+			// rows add. Choosing among them is the preset's (R33).
+			const { effectiveRegistrations } = await import(
+				"$lib/server/pipelines/registrations/resolve"
 			)
+			const resolved = await effectiveRegistrations(db, params.sessionId)
+			const onSubject = (r: { trigger: { family: string; event?: string; action?: string } }) =>
+				(r.trigger.family === "event" && (r.trigger as { event: string }).event === params.subject) ||
+				(r.trigger.family === "action" && (r.trigger as { action: string }).action === params.subject)
+			res.candidates = [
+				...new Set(
+					[...(resolved?.offered ?? []), ...(resolved?.effective ?? [])]
+						.filter(onSubject as never)
+						.map((r) => r.pipeline)
+				)
+			].filter((c) => !off.ownsId(c))
 			// Narrowed to what `sessions:bindFunction` would accept at session
 			// scope (U5c review, S8): an action that is not enabled for this
 			// session is not a choice the picker should offer and the bind
@@ -1700,17 +1861,18 @@ export const sessionsBindFunctionHandler: Handler<
 			return res
 		}
 		const scopeKind = params.scope ?? "session"
-		if (scopeKind === "pub" && !socket.user!.isAdmin)
-			return fail("Only administrators bind for the whole pub.")
+		// 🚧 Pub-level bindings are retired (R33): an administrator changes
+		// the genre's defaults or a preset instead.
+		if (scopeKind === "pub")
+			return fail(
+				"Pub-wide bindings are retired: change the genre's defaults or a preset instead."
+			)
 		const access = await checkSessionAccess(params.sessionId, userId)
 		if (!access.hasAccess || !access.isOwner)
 			return fail("Session not found.")
 
 		const { STANDARD_GENRE_ID } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
-		)
-		const { bindSubject } = await import(
-			"$lib/server/pipelines/entities/bindings"
 		)
 		const { parseActionIdentity } = await import("$lib/shared/actions/identity")
 		const [session] = await db
@@ -1722,59 +1884,50 @@ export const sessionsBindFunctionHandler: Handler<
 		const identity = parseActionIdentity(params.subject)
 
 		/**
-		 * R-6's narrowing (ruled with U4, built U5c): a session's own choice is
-		 * a choice *within* what the administrator made available. At session
-		 * scope an action may be bound only if it is **enabled** for this
-		 * session — the session row, else the preset's included set, else the
-		 * companion rule, exactly as `listSessionFunctions` resolves it. A
-		 * published spec the preset leaves out is not the owner's to reach by
-		 * binding. Instance scope is the administrator's, and availability is
-		 * theirs to widen; an event subject (the primary turn) keeps the
-		 * candidate rule alone.
+		 * 🚧 Retired as a binding (PLAN-layering D7, R33, R34): what runs on
+		 * an event is the session's registrations — its preset's changes on
+		 * the genre's defaults — and a session does not rebind an event. What
+		 * stays is the action's **enabled-when override** (U5e), written as
+		 * the session's registration row's `when` (R31).
 		 */
-		if (scopeKind === "session" && params.specSlug != null && identity) {
-			const { listSessionFunctions } = await import(
-				"$lib/server/pipelines/entities/sessionGenres"
+		if (!identity && params.enabledWhen !== undefined)
+			return fail("An enabled-when override is an action's — a turn's event has no button to grey.")
+		if (!identity) {
+			const { isEventId } = await import("@serene-pub/sdk")
+			return fail(
+				isEventId(params.subject)
+					? "A session no longer rebinds an event: what answers it is the session's preset. " +
+							"Pick another preset, or ask an administrator to change this one."
+					: `'${params.subject}' is not something a binding is about — name an action by its identity ('<spec slug>#<key>').`
 			)
-			const own = (
-				await listSessionFunctions(db, params.sessionId, genreId, userId)
-			).filter((f) => f.specSlug === identity.specSlug && f.key === identity.key)
-			if (!own.length)
-				return fail(
-					`'${params.subject}' is not offered to this session's genre.`
-				)
-			if (own[0]!.specSlug !== params.specSlug)
-				return fail(
-					`'${params.specSlug}' does not serve '${params.subject}' — an action is served by its declarer.`
-				)
-			if (!own[0]!.enabled)
-				return fail(
-					`'${own[0]!.name}' from '${params.specSlug}' is not enabled for this session — ` +
-						`a session chooses among what its preset includes. Ask an administrator ` +
-						`to include it, or turn it on under Actions.`
-				)
 		}
+		const { listSessionFunctions } = await import(
+			"$lib/server/pipelines/entities/sessionGenres"
+		)
+		const own = (
+			await listSessionFunctions(db, params.sessionId, genreId, userId)
+		).filter((f) => f.specSlug === identity.specSlug && f.key === identity.key)
+		if (!own.length)
+			return fail(`'${params.subject}' is not offered to this session's genre.`)
+		if (params.specSlug != null && own[0]!.specSlug !== params.specSlug)
+			return fail(
+				`'${params.specSlug}' does not serve '${params.subject}' — an action is served by its declarer.`
+			)
+		if (params.specSlug != null && !own[0]!.enabled)
+			return fail(
+				`'${own[0]!.name}' from '${params.specSlug}' is not enabled for this session — ` +
+					`a session chooses among what its preset includes. Ask an administrator ` +
+					`to include it, or turn it on under Actions.`
+			)
 
-		/**
-		 * The enabled-when override (R-15; U5e): a predicate set that
-		 * replaces the action's own and the genre's default while it stands,
-		 * riding the session's binding row — so it needs a `specSlug` to ride
-		 * on, an action subject to be about, and is session scope's alone.
-		 * Judged with the SDK's findings, the same sentences a declaration
-		 * gets; `null` clears it; absent leaves it be.
-		 */
 		let enabledWhen: import("@serene-pub/sdk").EnabledWhen[] | null | undefined
 		if (params.enabledWhen !== undefined) {
-			if (scopeKind !== "session")
-				return fail("An enabled-when override is a session's — bind at session scope to set one.")
-			if (!identity)
-				return fail("An enabled-when override is an action's — a turn's event has no button to grey.")
+			if (params.enabledWhen !== null && params.specSlug == null)
+				return fail(
+					"An enabled-when override rides the session's binding — name the spec to bind, or clear the binding to drop the override with it."
+				)
 			if (params.enabledWhen === null) enabledWhen = null
 			else {
-				if (params.specSlug == null)
-					return fail(
-						"An enabled-when override rides the session's binding — name the spec to bind, or clear the binding to drop the override with it."
-					)
 				const { enabledWhenFindings, normalizeEnabledWhen } = await import(
 					"@serene-pub/sdk"
 				)
@@ -1782,20 +1935,14 @@ export const sessionsBindFunctionHandler: Handler<
 				if (findings.length) return fail(findings.join("; "))
 				enabledWhen = normalizeEnabledWhen(params.enabledWhen)
 			}
-		}
+		} else if (params.specSlug == null) enabledWhen = null
 
-		const { error } = await bindSubject(db, {
-			scope:
-				scopeKind === "pub"
-					? { kind: "pub", id: 0 }
-					: { kind: "session", id: params.sessionId },
-			genreId,
-			subject: params.subject,
-			specSlug: params.specSlug,
-			userId,
-			...(enabledWhen !== undefined ? { enabledWhen } : {})
-		})
-		if (error) return fail(error)
+		if (enabledWhen !== undefined) {
+			const { setSessionActionWhen } = await import(
+				"$lib/server/pipelines/registrations/sessionRows"
+			)
+			await setSessionActionWhen(db, params.sessionId, params.subject, enabledWhen, socket.user!.isAdmin ? "admin" : "owner")
+		}
 		emitToUser("sessions:bindFunction", base)
 		return base
 	}
@@ -2034,6 +2181,8 @@ export const sessionsFireActionHandler: Handler<
 	event: "sessions:fireAction",
 	handler: async (socket, params, emitToUser) =>
 		withSessionGenerationLock(params.sessionId, async () => {
+			// 🚧 A person pressed something: an interaction (R11, R21; lane 6).
+			await noteSocketInteraction(params.sessionId, socket.user!.id, params.blockId ? "form" : "action")
 			/** What the answer names: the identity when the press brought one, else the bare key it sent. */
 			const named = params.action ?? params.key ?? ""
 			/** The card's title — the action's key, the short word a person pressed. */
@@ -2394,8 +2543,9 @@ export const sessionsPipelinesHandler: Handler<
  * to its own (PLAN-genre-restructure §3-5/§5-3, ruled 2026-10-19). The
  * person's own choices that a preset pins (`tasks`, `tools`) are cleared, so
  * the new preset's pins apply — "Custom" ends here. A pinned `rigour` is a
- * column and is written. Owner only; the preset must be the session's genre,
- * enabled and not withdrawn.
+ * column and is written (only one the session's ruleset plays); the ruleset
+ * stays the one the session started with. Owner only; the preset must be the
+ * session's genre, enabled and not withdrawn.
  */
 export const sessionsSetSessionPresetHandler: Handler<
 	Sockets.Sessions.SetSessionPreset.Params,
@@ -2432,21 +2582,36 @@ export const sessionsSetSessionPresetHandler: Handler<
 		const pins = (preset.settings ?? {}) as Record<string, unknown>
 		const fields = { ...((session.genreFields ?? {}) as Record<string, unknown>) }
 		for (const k of ["tasks", "tools"]) delete fields[k]
-		const { getGenre, getRuleset } = await import("@serene-pub/sdk")
+		/**
+		 * A pinned How strict is a column and is written (PLAN-rulesets §21:
+		 * changing it mid-session is allowed — the main session's ruling of
+		 * 2026-10-20 keeps it over R32's gloss). Only one the session's rules
+		 * can play: Rule Based over Freeform keeps Words only (a value the
+		 * rules cannot play reads blank). The pin is read through
+		 * `SettingValue` — Rule Based stores `{ value: 'scripts', lock: true }`.
+		 * The ruleset itself stays the one the session started with; its own
+		 * registration rows stay too: values of a pipeline the new preset does
+		 * not run lie dormant and come back with it (A9).
+		 */
+		const { getGenre, getRuleset, settingValueOf } = await import("@serene-pub/sdk")
 		const { rigoursPlayed } = await import("$lib/shared/rulesets/rulesOffer")
+		const { rulesetDecides } = await import("$lib/server/rulesets/methods")
 		const rigourOptions: readonly string[] = (getGenre(session.genreId) as any)?.rigour?.options ?? ["prose"]
-		// Only a How strict the session's rules can play: Rule Based over
-		// Freeform keeps Words only (a value the rules cannot play reads blank).
 		const played =
-			rigoursPlayed(!!getRuleset(String(session.primaryRuleset ?? ""))?.conventions?.dice, rigourOptions) ?? rigourOptions
+			rigoursPlayed(rulesetDecides(getRuleset(String(session.primaryRuleset ?? ""))), rigourOptions) ?? rigourOptions
+		const pinned = pins.rigour !== undefined ? settingValueOf(pins.rigour as never).value : undefined
 		const rigour =
-			typeof pins.rigour === "string" && rigourOptions.includes(pins.rigour) && played.includes(pins.rigour)
-				? pins.rigour
-				: undefined
+			typeof pinned === "string" && rigourOptions.includes(pinned) && played.includes(pinned) ? pinned : undefined
 		await db
 			.update(schema.sessions)
 			.set({ presetId: preset.id, genreFields: fields, ...(rigour ? { rigour: rigour as any } : {}) })
 			.where(eq(schema.sessions.id, params.sessionId))
+		;(await import("$lib/server/pipelines/registrations/resolve")).invalidateRegistrations()
+		// 🚧 An owner's setting change is an interaction (R11, R21; lane 6).
+		{
+			const { noteInteraction } = await import("$lib/server/pipelines/routines/interaction")
+			await noteInteraction(db, params.sessionId, "setting")
+		}
 		const res = reply({ sessionId: params.sessionId, presetId: preset.id, presetName: preset.name })
 		await pushSessionToParticipants(socket.io, params.sessionId, userId)
 		return res
@@ -2468,46 +2633,23 @@ export const sessionsPresetStatusHandler: Handler<
 			stale: []
 		}
 		if (access.hasAccess) {
-			const { sessionPreset, presetBindingVerdict } = await import(
-				"$lib/server/pipelines/entities/presetBindings"
+			// 🚧 The registrations resolver's account (PLAN-layering D7): every
+			// preset registration on an event this instance cannot resolve,
+			// and what answers the event instead.
+			const { effectiveRegistrations, onEvent } = await import(
+				"$lib/server/pipelines/registrations/resolve"
 			)
-			const { STANDARD_GENRE_ID } = await import(
-				"$lib/server/pipelines/entities/sessionGenres"
-			)
-			const preset = await sessionPreset(db, params.sessionId)
-			if (preset) {
-				res.presetId = preset.id
-				res.presetName = preset.name
-				const [session] = await db
-					.select({ genreId: schema.sessions.genreId })
-					.from(schema.sessions)
-					.where(eq(schema.sessions.id, params.sessionId))
-					.limit(1)
-				// The SESSION's genre, not the preset's: a session that was
-				// upgraded to another genre is still on this preset, and
-				// judging its bindings against the genre it left would
-				// report every slot as stale.
-				const genreId = session?.genreId ?? STANDARD_GENRE_ID
-				const bindings = (preset.bindings ?? {}) as Record<
-					string,
-					{ spec?: string }
-				>
-				for (const event of Object.keys(bindings)) {
-					if (!bindings[event]?.spec) continue
-					const verdict = await presetBindingVerdict(
-						db,
-						preset,
-						genreId,
-						event
-					)
-					if (verdict.via !== "fallback") continue
+			const resolved = await effectiveRegistrations(db, params.sessionId)
+			if (resolved?.presetId != null) {
+				res.presetId = resolved.presetId
+				res.presetName = resolved.presetName
+				for (const f of resolved.fallbacks)
 					res.stale.push({
-						event,
-						bound: verdict.bound,
-						reason: verdict.reason,
-						fallbackSpec: verdict.spec
+						event: f.event,
+						bound: f.bound,
+						reason: f.reason,
+						fallbackSpec: onEvent(resolved.effective, f.event)[0]?.pipeline ?? null
 					})
-				}
 			}
 		}
 		emitToUser("sessions:presetStatus", res)
@@ -2584,7 +2726,12 @@ export const sessionsViewHandler: Handler<
 			// declares. Read from the shape rather than stored on the row —
 			// a genre gains a channel by declaring one, and a session of that
 			// genre has it from that moment.
-			res.channels = channelsOf(mode?.shape)
+			// 🚧 A channel for the owner alone (`audience: 'owner'`, Lair
+			// rewrite D6) is no part of a guest's session: not listed, not
+			// labelled, never offered to their composer's switch.
+			const { ownerOnlySlugsOf } = await import("$lib/server/channels/lanes")
+			const hiddenChannels = new Set(access.isOwner ? [] : ownerOnlySlugsOf(mode?.shape))
+			res.channels = channelsOf(mode?.shape).filter((c) => !hiddenChannels.has(c))
 			// What each is CALLED (S1): the declared label, in the viewer's
 			// language — the Lair's `sanctum` is _Sanctum_. Only the channels
 			// that declare one; the rest are named by their slug.
@@ -2594,6 +2741,7 @@ export const sessionsViewHandler: Handler<
 			// channel can draw it as Folio when its Presentation is unset.
 			const roles: Record<string, "conversation" | "folio"> = {}
 			for (const decl of channelDeclsOf(mode?.shape)) {
+				if (hiddenChannels.has(decl.slug)) continue
 				// The mirror reads a stored row as it comes (a locale map
 				// that may lack `en`); `i18nText` falls back to it anyway.
 				const label = decl.label
@@ -2960,7 +3108,9 @@ export async function sessionGenres(
 async function copyLayoutOnFirstOpen(
 	sessionId: number,
 	userId: number,
-	genreId: string
+	genreId: string,
+	/** 🚧 A guest of the session gets the genre's guests' layout, when it ships one (D6). */
+	guest = false
 ): Promise<void> {
 	const mine = and(
 		eq(schema.sessionPanelLayouts.sessionId, sessionId),
@@ -2985,7 +3135,7 @@ async function copyLayoutOnFirstOpen(
 			sessionId,
 			userId,
 			genreId,
-			layoutPresetId: await resolveNewSessionLayout(tx, userId, genreId),
+			layoutPresetId: await resolveNewSessionLayout(tx, userId, genreId, { guest }),
 			onlyIfAbsent: true
 		})
 	})
@@ -3134,7 +3284,8 @@ export const sessionsPanelLayoutGetHandler: Handler<
 			await copyLayoutOnFirstOpen(
 				params.sessionId,
 				userId,
-				await genreOfSession(params.sessionId)
+				await genreOfSession(params.sessionId),
+				!access.isOwner
 			)
 		const res = await panelLayoutAnswer(
 			params.sessionId,
@@ -3200,7 +3351,9 @@ export const sessionsMessagesPageHandler: Handler<
 					eq(schema.sessionMessages.sessionId, sessionId),
 					beforeId !== undefined ? lt(schema.sessionMessages.id, beforeId) : undefined,
 					channelWhere,
-					laneViewWhere(schema.sessionMessages.channel, laneView)
+					laneViewWhere(schema.sessionMessages.channel, laneView),
+					// 🚧 The live history (RF fix 5).
+					isNull(schema.sessionMessages.rewindOrdinal)
 				)
 			)
 			.orderBy(desc(schema.sessionMessages.id))
@@ -3253,7 +3406,9 @@ export const sessionsChannelLanesHandler: Handler<
 		const where = and(
 			eq(m.sessionId, sessionId),
 			ref.explicit ? eq(m.channel, formatChannel(ref)) : or(eq(m.channel, ref.slug), like(m.channel, `${ref.slug}:%`)),
-			laneViewWhere(m.channel, laneView)
+			laneViewWhere(m.channel, laneView),
+			// 🚧 The live history (RF fix 5).
+			isNull(m.rewindOrdinal)
 		)
 		const grouped = await db
 			.select({ channel: m.channel, count: count(m.id), latestId: max(m.id) })
@@ -4476,7 +4631,8 @@ async function buildSessionGetResponse(
 		.where(
 			and(
 				eq(schema.sessionMessages.sessionId, sessionId),
-				laneViewWhere(schema.sessionMessages.channel, laneView)
+				laneViewWhere(schema.sessionMessages.channel, laneView),
+				isNull(schema.sessionMessages.rewindOrdinal)
 			)
 		)
 
@@ -4492,7 +4648,12 @@ async function buildSessionGetResponse(
 	let olderIn: string[] | undefined
 	if (beforeId == null) {
 		const m = schema.sessionMessages
-		const where = and(eq(m.sessionId, sessionId), laneViewWhere(m.channel, laneView))
+		const where = and(
+			eq(m.sessionId, sessionId),
+			laneViewWhere(m.channel, laneView),
+			// 🚧 The live history (RF fix 5).
+			isNull(m.rewindOrdinal)
+		)
 		const ranked = db
 			.select({
 				id: m.id,
@@ -4595,6 +4756,16 @@ async function buildSessionGetResponse(
 		} catch (error) {
 			console.warn("[sessions:get] channels view failed:", error)
 		}
+	}
+
+	// 🚧 The book lock (PLAN-lorebook-kinds §A): once play has written, the
+	// forms say the session keeps its book rather than offering to move it.
+	{
+		const { playHasWritten } = await import("$lib/server/sessions/bookLock")
+		;(sessionData as any).lorebookFixed = await playHasWritten(
+			db as unknown as Db,
+			sessionId
+		)
 	}
 
 	return {
@@ -5104,6 +5275,13 @@ export const sessionsUpdateHandler: Handler<
 				// nothing, because there is no boundary left for it to have
 				// crossed.
 				if (params.session.lorebookId != null) {
+					// 🚧 A starter lorebook is started from, never read (PLAN-lorebook-kinds §B).
+					const { kitReadRefusal } = await import("$lib/server/lorebooks/starterKits")
+					const kitRefusal = await kitReadRefusal(
+						db as unknown as Db,
+						params.session.lorebookId
+					)
+					if (kitRefusal) throw new Error(kitRefusal)
 					const ownsLorebook = await checkLorebookOwnership(
 						params.session.lorebookId,
 						userId
@@ -5112,6 +5290,65 @@ export const sessionsUpdateHandler: Handler<
 						throw new Error(
 							"Access denied. You can only read a lorebook you own into a session."
 						)
+					}
+				}
+
+				// A change of book (PLAN-lorebook-kinds §A): refused once play
+				// has written (the book lock); a book read in before play is
+				// held to the genre's rules as one chosen at the start is
+				// (`strictRulesRefusal`) and gives the session its Rules
+				// (`rulesFromBook`). The book it already reads is not asked
+				// again.
+				let bookRules: Awaited<
+					ReturnType<typeof import("$lib/server/sessions/bookLock").rulesFromBook>
+				> = null
+				if (params.session.lorebookId !== undefined) {
+					const next = params.session.lorebookId ?? null
+					const [now] = await db
+						.select({
+							genreId: schema.sessions.genreId,
+							lorebookId: schema.sessions.lorebookId,
+							rigour: schema.sessions.rigour
+						})
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, params.session.id!))
+					if (now && (now.lorebookId ?? null) !== next) {
+						const { bookChangeRefusal, rulesFromBook } = await import(
+							"$lib/server/sessions/bookLock"
+						)
+						const locked = await bookChangeRefusal(
+							db as unknown as Db,
+							{ id: params.session.id!, lorebookId: now.lorebookId ?? null },
+							next
+						)
+						if (locked) throw new Error(locked)
+						if (next !== null) {
+							const [book] = await db
+								.select({
+									name: schema.lorebooks.name,
+									primaryRuleset: schema.lorebooks.primaryRuleset
+								})
+								.from(schema.lorebooks)
+								.where(eq(schema.lorebooks.id, next))
+							const { strictRulesRefusal } = await import(
+								"$lib/server/rulesets/bookRules"
+							)
+							const refusal = book
+								? strictRulesRefusal(now.genreId, book)
+								: null
+							if (refusal) throw new Error(refusal)
+							bookRules = await rulesFromBook(
+								db as unknown as Db,
+								{
+									genreId: now.genreId,
+									rigour:
+										typeof params.session.rigour === "string"
+											? params.session.rigour
+											: now.rigour
+								},
+								next
+							)
+						}
 					}
 				}
 
@@ -5197,9 +5434,44 @@ export const sessionsUpdateHandler: Handler<
 					.map((t) => t.tagId)
 					.sort()
 
-				// 🚧 How strict (PLAN-rulesets §21; changing it mid-session is
-				// allowed, ruled): one of the genre's options, or refused in a
-				// sentence that names them in the interface's words (§28).
+				// How strict may change mid-session (PLAN-rulesets §21, kept by
+				// the main session's ruling of 2026-10-20 over R32's gloss) —
+				// unless a layer above the session locks it (A10: Rule Based
+				// locks `scripts`). Sending the value it already has is no change.
+				if (rigour !== undefined && before && rigour !== before.rigour) {
+					const { genreSettingsOf } = await import("$lib/server/sessions/exposure")
+					const { settings } = await genreSettingsOf(db, params.session.id!, !!socket.user!.isAdmin)
+					const locked = settings.find((x) => x.key === "rigour")?.lockedAt
+					if (locked)
+						throw new Error(
+							`How strict is set by the session's ${locked === "preset" ? "preset" : "genre"} and cannot be changed here.`
+						)
+				}
+				// 🚧 A10, R1: a genre field locked by the genre's defaults or the
+				// preset, or one that reaches administrators only, is not the
+				// owner's to change — refused when the form would change it.
+				if (genreFieldsPatch && Object.keys(genreFieldsPatch).length) {
+					const { genreSettingsOf } = await import("$lib/server/sessions/exposure")
+					const { settings, editable } = await genreSettingsOf(db, params.session.id!, !!socket.user!.isAdmin)
+					for (const [k, v] of Object.entries(genreFieldsPatch)) {
+						if (editable.has(k)) continue
+						const s = settings.find((x) => x.key === k)
+						if (!s || JSON.stringify(s.value ?? null) === JSON.stringify(v ?? null)) {
+							delete genreFieldsPatch[k]
+							continue
+						}
+						const label = (s.decl as { label?: unknown }).label
+						const named = typeof label === "string" ? label : ((label as { en?: string } | undefined)?.en ?? k)
+						throw new Error(
+							s.lockedAt
+								? `${named} is set by the session's ${s.lockedAt === "preset" ? "preset" : "genre"} and cannot be changed here.`
+								: `${named} is changed by an administrator.`
+						)
+					}
+				}
+				// 🚧 How strict (PLAN-rulesets §21): one of the genre's options,
+				// or refused in a sentence that names them in the interface's
+				// words (§28).
 				if (rigour !== undefined) {
 					const { getGenre } = await import("@serene-pub/sdk")
 					const { STANDARD_GENRE_ID } = await import(
@@ -5273,6 +5545,9 @@ export const sessionsUpdateHandler: Handler<
 							...(lorebookId !== undefined ? { lorebookId } : {}),
 							...(onRevision !== undefined ? { onRevision } : {}),
 							...(rigour !== undefined ? { rigour } : {}),
+							// A book taken before play brings its Rules (and
+							// How strict clamped to them) — after the form's own.
+							...(bookRules ?? {}),
 							...(mergedGenreFields !== undefined
 								? { genreFields: mergedGenreFields }
 								: {}),
@@ -5411,6 +5686,27 @@ export const sessionsUpdateHandler: Handler<
 							},
 							io: socket.io
 						})
+						// 🚧 An owner's setting change is an interaction (R11,
+						// R21), and a clock they moved is a session moment
+						// (PLAN-layering D7, lane 6) — once, from where it stood.
+						const { noteInteraction } = await import("$lib/server/pipelines/routines/interaction")
+						await noteInteraction(db, params.session.id!, "setting")
+						if (changed.includes("storyClock") && before && after) {
+							const { clockOf } = await import("$lib/server/state/storyTime")
+							const from = clockOf(before as never)
+							const to = clockOf(after as never)
+							if (from && to) {
+								const { noteStoryClockMoved } = await import("$lib/server/pipelines/routines/moments")
+								await noteStoryClockMoved(db, {
+									sessionId: params.session.id!,
+									userId,
+									cause: { kind: "settings", userId },
+									from,
+									to,
+									io: socket.io
+								})
+							}
+						}
 					}
 				} catch (err) {
 					console.warn("session-updated emit failed:", err)
@@ -7195,7 +7491,8 @@ export const sessionMessagesDeleteHandler: Handler<
 				where: (cm, { eq }) => eq(cm.id, params.id)
 			})
 
-			if (!message) {
+			if (!message || message.rewindOrdinal != null) {
+				// 🚧 A row Back took out is in no history to delete from (RF fix 5).
 				const res: Sockets.SessionMessages.Delete.Response = {
 					id: params.id,
 					error: "Message not found"
@@ -7215,8 +7512,28 @@ export const sessionMessagesDeleteHandler: Handler<
 				return res
 			}
 
-			// An opt-in built-in (R-15): a genre may switch delete off, and
-			// the refusal is the law — the absent control is presentation.
+			/**
+			 * 🚧 **Deletion needs a pipeline** (RF fix 5, owner ruling
+			 * 2026-10-23): offered, and performed, only where the session's
+			 * registrations hold one on `message-deletion-asked` — core
+			 * registers none, so deleting is off by default. The press
+			 * raises the event; the registered pipeline does the work
+			 * (`messages/deletion.ts`).
+			 */
+			const { askDeletion, deletionOffered, DELETION_OFF } = await import(
+				"$lib/server/messages/deletion"
+			)
+			if (!(await deletionOffered(db, message.sessionId))) {
+				const res: Sockets.SessionMessages.Delete.Response = {
+					id: params.id,
+					error: DELETION_OFF
+				}
+				emitToUser("sessionMessages:delete", res)
+				return res
+			}
+			// ⏳ A genre's `messageVerbs.delete: false` still takes Delete away
+			// where a pipeline would offer it (R-15): presence is presentation,
+			// the refusal is the law.
 			const deleteRefusal = await verbRefusal(
 				db,
 				message.sessionId,
@@ -7235,7 +7552,10 @@ export const sessionMessagesDeleteHandler: Handler<
 			// 🚧 A genre that keeps its turns (Honour mode, owner rulings
 			// 2026-10-15): an older turn is never deleted, the latest only by
 			// the owner with Honour mode on — and a row its run wrote takes
-			// the whole turn with it, as a retake would, firing nothing.
+			// the whole turn with it, as a retake would, firing nothing. ⚠
+			// Reached only behind the door above (RF fix 5): a genre that
+			// keeps its turns and registers a deletion pipeline; the turn is
+			// deleted whole by the host's turn rule, never one row of it.
 			const turnVerdict = await turnDeleteVerdict(
 				db,
 				message.sessionId,
@@ -7304,23 +7624,16 @@ export const sessionMessagesDeleteHandler: Handler<
 				return res
 			}
 
-			// The write is core's built-in: a receipted, gate-eligible run of
-			// `core:spec/builtin-delete` that emits `message-deleted` with
-			// what the row held, for the next reply's inlet.
-			const { runBuiltIn } = await import(
-				"$lib/server/pipelines/runtime/builtins"
-			)
-			const deleted = await runBuiltIn(db, {
-				kind: "delete",
+			const deleted = await askDeletion(db, {
 				sessionId: message.sessionId,
-				actor: userId,
-				payload: { target: params.id },
+				messageId: params.id,
+				userId,
 				io: socket.io
 			})
-			if (!deleted.ok) {
+			if (!deleted.deleted) {
 				const res: Sockets.SessionMessages.Delete.Response = {
 					id: params.id,
-					error: deleted.error ?? "Failed to delete message"
+					error: deleted.refused
 				}
 				emitToUser("sessionMessages:delete", res)
 				return res
@@ -7391,6 +7704,8 @@ export const sessionMessagesRegenerateHandler: Handler<
 			return await withSessionGenerationLock(
 				messageToRegenerate.sessionId,
 				async () => {
+					// 🚧 A person pressed something: an interaction (R11, R21; lane 6).
+					await noteSocketInteraction(messageToRegenerate.sessionId, socket.user!.id, "action")
 					// see canActOnMessage — four branches.
 					const canEdit = await canActOnMessage(
 						db,
@@ -7602,6 +7917,8 @@ export const sessionMessagesExtendHandler: Handler<
 			return await withSessionGenerationLock(
 				messageToExtend.sessionId,
 				async () => {
+					// 🚧 A person pressed something: an interaction (R11, R21; lane 6).
+					await noteSocketInteraction(messageToExtend.sessionId, socket.user!.id, "action")
 					// see canActOnMessage — four branches.
 					const canEdit = await canActOnMessage(
 						db,
@@ -7801,6 +8118,8 @@ export const sessionMessagesSwipeLeftHandler: Handler<
 			// the same message could have its isGenerating/queueItemId
 			// state clobbered back to the stale pre-read values below.
 			return await withSessionGenerationLock(message.sessionId, async () => {
+				// 🚧 A person pressed something: an interaction (R11, R21; lane 6).
+				await noteSocketInteraction(message.sessionId, socket.user!.id, "action")
 				// see canActOnMessage — four branches.
 				const canEdit = await canActOnMessage(
 					db,
@@ -7941,6 +8260,8 @@ export const sessionMessagesSwipeRightHandler: Handler<
 			}
 
 			return await withSessionGenerationLock(message.sessionId, async () => {
+				// 🚧 A person pressed something: an interaction (R11, R21; lane 6).
+				await noteSocketInteraction(message.sessionId, socket.user!.id, "action")
 				// see canActOnMessage — four branches.
 				const canEdit = await canActOnMessage(
 					db,
@@ -8770,6 +9091,8 @@ export const sessionsFireTurnHandler: Handler<
 	event: "sessions:fireTurn",
 	handler: async (socket, params, emitToUser) =>
 		withSessionGenerationLock(params.sessionId, async () => {
+			// 🚧 A person pressed something: an interaction (R11, R21; lane 6).
+			await noteSocketInteraction(params.sessionId, socket.user!.id, "action")
 			const userId = socket.user!.id
 			const reply = (
 				res: Sockets.Sessions.FireTurn.Response
@@ -8799,6 +9122,18 @@ export const sessionsFireTurnHandler: Handler<
 						ok: false,
 						error: "Session not found."
 					})
+				// 🚧 A channel for the owner alone (Lair rewrite D6): no
+				// guest presses anything there.
+				if (!access.isOwner && params.channel) {
+					const { laneViewFor, laneViewAllows } = await import("$lib/server/channels/lanes")
+					const view = await laneViewFor(db, params.sessionId, userId)
+					if (view && !laneViewAllows(view, params.channel))
+						return reply({
+							sessionId: params.sessionId,
+							ok: false,
+							error: "That channel is the session owner's alone."
+						})
+				}
 				// No entry is Continue — the `advance` turn control (B7),
 				// which the genre may switch off; a pick is not this.
 				if (!params.entry) {
@@ -8820,8 +9155,8 @@ export const sessionsFireTurnHandler: Handler<
 				const { readTurnOrder, isSameChannel } = await import(
 					"@serene-pub/sdk"
 				)
-				const order = readTurnOrder(row.metadata).order
-				const head = order[0]
+				let order = readTurnOrder(row.metadata).order
+				let head = order[0]
 				/**
 				 * An entry is its reference AND its channel (lair re-plan
 				 * R5): the own voice (`ref: null`) may be prepared on more
@@ -8885,10 +9220,39 @@ export const sessionsFireTurnHandler: Handler<
 					"$lib/server/sessions/fireTurn"
 				)
 				const pressedOnMain = isSameChannel(pressedOn, "main")
-				const prepared =
+				let prepared =
 					params.entry ??
 					firstOn(pressedOn) ??
 					(pressedOnMain ? undefined : head)
+				/**
+				 * 🚧 **The GM's Continue moves past a waiting player** (Lair
+				 * rewrite D5, 2026-10-21): the owner's Continue, with a
+				 * planned turn a person plays at the head of this channel,
+				 * skips that seat (`skipWaitingTurn` — recorded on the plan,
+				 * so no recompute prepares it again) and fires what is
+				 * prepared after it. A guest's Continue skips nobody.
+				 */
+				if (!params.entry && access.isOwner && prepared && prepared.via === "plan") {
+					const { entryIsPersons } = await import("$lib/server/sessions/fireTurn")
+					if (
+						typeof prepared.ref === "string" &&
+						(await entryIsPersons(db, params.sessionId, prepared as import("@serene-pub/sdk").TurnEntryV1))
+					) {
+						const { skipWaitingTurn } = await import("$lib/server/sessions/turnPlan")
+						const after = await skipWaitingTurn(db, params.sessionId, prepared.ref, socket.io)
+						if (after) {
+							order = after.order
+							head = order[0]
+							prepared = firstOn(pressedOn)
+							if (!prepared)
+								return reply({
+									sessionId: params.sessionId,
+									ok: true,
+									reason: "skipped"
+								})
+						}
+					}
+				}
 				/**
 				 * 🚧 A guest who has moved since the story last did may carry
 				 * it on too (feature 17, D4, 2026-10-15): Dungeon Crawler's
@@ -9057,6 +9421,8 @@ export const sessionsRetakeTurnHandler: Handler<
 	event: "sessions:retakeTurn",
 	handler: async (socket, params, emitToUser) =>
 		withSessionGenerationLock(params.sessionId, async () => {
+			// 🚧 A person pressed something: an interaction (R11, R21; lane 6).
+			await noteSocketInteraction(params.sessionId, socket.user!.id, "action")
 			const userId = socket.user!.id
 			const reply = (
 				res: Sockets.Sessions.RetakeTurn.Response
@@ -9139,6 +9505,62 @@ export const sessionsRetakeTurnHandler: Handler<
 		})
 }
 
+/**
+ * 🚧 **Back · Forward** (RF fix 5, owner ruling 2026-10-23): the session's
+ * forward stack — `rewindTurn` / `forwardTurn` (`sessions/rewind.ts`) under
+ * the session's generation lock, so a press never lands mid-turn. The
+ * answer goes to the asker (`:error` for a refusal, the toast's); on a
+ * press that moved, the whole session goes to everyone in it and the row
+ * push says its new last line.
+ */
+function rewindPressHandler(
+	event: "sessions:rewindTurn" | "sessions:forwardTurn",
+	press: "rewindTurn" | "forwardTurn"
+): Handler<Sockets.Sessions.RewindTurn.Params, Sockets.Sessions.RewindTurn.Response> {
+	return {
+		event,
+		handler: async (socket, params, emitToUser) =>
+			withSessionGenerationLock(params.sessionId, async () => {
+				const userId = socket.user!.id
+				const reply = (res: Sockets.Sessions.RewindTurn.Response) => {
+					emitToUser(res.ok ? event : `${event}:error`, res)
+					return res
+				}
+				try {
+					const access = await checkSessionAccess(params.sessionId, userId)
+					if (!access.hasAccess)
+						return reply({ sessionId: params.sessionId, ok: false, error: "Session not found." })
+					await noteSocketInteraction(params.sessionId, userId, "action")
+					const rewind = await import("$lib/server/sessions/rewind")
+					const out = await rewind[press](db, {
+						sessionId: params.sessionId,
+						userId,
+						io: socket.io
+					})
+					if (!out.ok) return reply({ sessionId: params.sessionId, ok: false, error: out.error })
+					await broadcastSessionToParticipants(socket, params.sessionId, userId)
+					broadcastSessionRow(socket.io, params.sessionId)
+					return reply({
+						sessionId: params.sessionId,
+						ok: true,
+						messageIds: out.messageIds,
+						ahead: out.ahead
+					})
+				} catch (error) {
+					console.error(`Error in ${event}:`, error)
+					return reply({
+						sessionId: params.sessionId,
+						ok: false,
+						error: press === "rewindTurn" ? "Could not go back a turn." : "Could not go forward a turn."
+					})
+				}
+			})
+	}
+}
+
+export const sessionsRewindTurnHandler = rewindPressHandler("sessions:rewindTurn", "rewindTurn")
+export const sessionsForwardTurnHandler = rewindPressHandler("sessions:forwardTurn", "forwardTurn")
+
 // "Narrator" — a manually-triggered, non-character narration/environment
 // response. Deliberately outside the turn rotation: a narrator message is
 // never a sessionCharacters row, and the rotation reads narration rows out
@@ -9150,6 +9572,8 @@ export const fireNarratorResponseHandler: Handler<
 	event: "sessions:fireNarratorResponse",
 	handler: async (socket, params, emitToUser) =>
 		withSessionGenerationLock(params.sessionId, async () => {
+			// 🚧 A person pressed something: an interaction (R11, R21; lane 6).
+			await noteSocketInteraction(params.sessionId, socket.user!.id, "action")
 			/**
 			 * A press refused before its run (C2 follow-up, 2026-09-29): the
 			 * page is told, because `register` discards what a handler
@@ -9921,6 +10345,9 @@ export function registerSessionHandlers(
 	register(socket, sessionsFireTurnHandler, emitToUser)
 	// Regenerate the last turn, as a whole (lair pass R2).
 	register(socket, sessionsRetakeTurnHandler, emitToUser)
+	// 🚧 Back · Forward (RF fix 5).
+	register(socket, sessionsRewindTurnHandler, emitToUser)
+	register(socket, sessionsForwardTurnHandler, emitToUser)
 	register(socket, sessionMessagesCancelHandler, emitToUser)
 	register(socket, sessionMessageHandler, emitToUser)
 	register(socket, promptTokenCountHandler, emitToUser)

@@ -51,6 +51,7 @@
 		samplingChoiceRows,
 		samplingDefaultToast,
 		sheetSections,
+		speechSamplingNote,
 		whereSentence,
 		type OverridingPipeline
 	} from "./jobSheet"
@@ -73,6 +74,7 @@
 	const shape = $derived(samplingShapeForCapability(capability))
 	const sections = $derived(sheetSections(capability))
 	const samplingSection = $derived(sections.find((s) => s.key === "sampling"))
+	const speechNote = $derived(speechSamplingNote(capability))
 	const whereSection = $derived(sections.find((s) => s.key === "where")!)
 
 	// ── The configs, and what picks them ─────────────────────────────────────
@@ -214,6 +216,12 @@
 			</h2>
 			<span class="text-surface-600-400 text-xs">{SAMPLING_SUBLINE}</span>
 		</div>
+		{#if speechNote}
+			<!-- 🚧 O7: a job that writes and speaks takes a second sampling. -->
+			<p class="text-surface-600-400 px-1 text-xs leading-relaxed">
+				{speechNote}
+			</p>
+		{/if}
 
 		{#if !listLoaded}
 			<LoadingState message="Loading sampling configs…" />
@@ -234,7 +242,7 @@
 						type="button"
 						role="radio"
 						aria-checked={checked}
-						class="focus-visible:ring-primary-500 flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none {checked
+						class="focus-visible:ring-primary-500 flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-base px-2 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none {checked
 							? 'sidebar-row-active'
 							: 'hover:bg-surface-200-800'}"
 						aria-label={samplingChoiceLabel(row, capability)}
@@ -254,7 +262,7 @@
 						</span>
 						<span class="min-w-0 flex-1">
 							<span class="flex min-w-0 items-center gap-1.5">
-								<span class="truncate text-[15px] font-medium">
+								<span class="truncate text-lead font-medium">
 									{row.name}
 								</span>
 								{#if row.isDefault}

@@ -267,7 +267,7 @@
 >
 	<p id="{uid}-exits-title" class="font-semibold">Links from the Exits line</p>
 	<p
-		class="border-surface-300-700 text-surface-700-300 border-l-2 pl-2 text-xs break-words"
+		class="border-surface-200-800 text-surface-700-300 border-l-2 pl-2 text-xs break-words"
 		data-exits-line
 	>
 		<span class="font-medium">Exits:</span>
@@ -329,7 +329,7 @@
 							<span
 								class="badge {link.state === 'linked'
 									? 'preset-tonal-success'
-									: 'preset-tonal-surface'} shrink-0 text-[11px]"
+									: 'preset-tonal-surface'} shrink-0 text-meta"
 							>
 								{NOTE[link.state]}
 							</span>
@@ -340,7 +340,7 @@
 							{link.standing.later ? "Linked later:" : "Linked now:"}
 							{link.standing.sentence}
 							{#if link.standing.later}
-								<span class="badge preset-tonal-surface ml-1 text-[11px]">
+								<span class="badge preset-tonal-surface ml-1 text-meta">
 									{link.standing.later}
 								</span>
 							{/if}

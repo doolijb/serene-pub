@@ -30,7 +30,7 @@ import os from "os"
 import path from "path"
 import { and, eq } from "drizzle-orm"
 import {
-	setConfigValue,
+	setPipelineValue,
 	type TestDb
 } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
@@ -263,10 +263,7 @@ const setParam = async (path: string, value: unknown) =>
 	// (ruled 2026-09-10), so at an untouched address there is no row to update
 	// — the old form matched nothing and the lane stayed at the cap of 0 it
 	// ships with, which reads exactly like the mechanism being off.
-	await setConfigValue(
-		db,
-		await selectedConfigId(),
-		{ nodeKey: ENTITY_LANE, slot: "params", path },
+	await setPipelineValue(db, STORY_RESPOND_SPEC_ID, { nodeKey: ENTITY_LANE, slot: "params", path },
 		value
 	)
 

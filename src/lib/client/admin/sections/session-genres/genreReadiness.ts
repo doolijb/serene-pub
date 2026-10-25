@@ -154,15 +154,15 @@ export function genreReadiness(detail: GenreDetail): Readiness {
 		offer: { kind: "section", section: "availability", label: defaultPreset ? "Offer it" : "Pick one" }
 	})
 
-	// ── state (stats and sheets, from the registry) ──────────────────
+	// ── state (what the host keeps for it; RF fix 8: attributes are the rules') ──
 	lines.push({
 		id: "state",
 		label: "State",
 		done: !!genre?.hasState,
 		optional: true,
 		detail: genre?.hasState
-			? "Stats and sheets come from the genre it was copied from."
-			: "No stats or sheets — sessions keep no tracked state.",
+			? "Sessions keep a place, a time or a tool of the genre's own; their stats come from the rules they play."
+			: "Sessions keep no place or time of their own; their stats come from the rules they play.",
 		offer: null
 	})
 

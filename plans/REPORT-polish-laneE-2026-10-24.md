@@ -1,0 +1,28 @@
+# REPORT — polish lane E (L13.1–5 token hygiene, L8 phone header, pressed sites), 2026-10-24
+
+All seven sweeps built; svelte-check 0 errors; every touched test passes. SDK untouched; widgets.css only font-size/radius tokens. No browser, no commit.
+
+## Counts (before → after)
+1. Colour: dead pairings 43 → 0 (card grounds → `surface-100-900`; `200-700` → `200-800`; hairlines `200-700`/`300-600` → `200-800`; dashed drop zones → `300-700`; `hover:400-500` → `400-600`); hand-written light/dark pairs → paired tokens incl. `panel-card`/`panel-edge`/`panel-inset`; plain `border-surface-300-700` 159 → 27; `bg-surface-*` 46 → 40, `border-surface-*` 19 → 11; alert error text → one shade `text-error-600-400` (265).
+2. Type: `text-[11px]` 268, `[13px]` 78, `[15px]` 59, `[12px]` 10, `[10px]` 7, `[10.5px]` 4, `[14px]` 1 → 0 via `text-meta`/`text-chip`/`text-lead`/`text-xs`. Kept `[18px]`×3, `[20px]`×3, `[32px]`×1 (Display rows, no utility; §3.2 says so). widgets.css: six font tokens → three; 11 `font-size: 13px` → `var(--text-chip, 13px)`.
+3. Radii: `rounded-[10px]` 173, `[12px]` 27, `[8px]` 13 → 0; `[9px]`→base, `[7px]`→lg, `[6px]`/`[0.35rem]`→md; `[14px]` 14 → 8 (kept on Home continue card + slot, DetailHero, Avatar xl, AvatarPicker, LibraryDetail). Lamplight `--radius-base` = 0.625rem (only theme under themes/); inline `<code>` pinned to 6px. widgets.css pill spellings 34 → 0 (`--sp-w-chip-radius`).
+4. Primitives: `Badge.svelte` (52 pills in 35 files; 14 skipped), kebab: ModelRow + HistorySceneList → RowMenu; labels "More actions for {name}" in 7 files; JobsGrid's Ellipsis is "N more"; `FieldHelp.svelte` (75 paragraphs + AdminField), `InlineError.svelte` (17 + AdminField).
+5. Motion: literal Svelte durations 5 → 0; `duration-150/200` 7 → 0; component `<style>` ms literals 9 → 0; 8 bars → `SpProgress`; `softFade`/`animateHeight` deleted (unused). app.css `@theme static` `--transition-duration-fast/base/slow` → `duration-fast/base/slow` (mirror `MOTION`; comments say keep in step).
+6. L8 phone header built (Header.svelte `⋯` with Back/Forward/Settings/Layout/History). Composer footer part SKIPPED (SDK More menu holds panes only — needs an SDK change). Jump stays in the header band (not in the Views sheet today).
+7. Pressed: 45 ON branches → `preset-pressed`; 5 selected rows (EntryPool×2, CastWorkspace, GraphsWorkspace, TimeLens) → `.sidebar-row-active`; ModelFinderView gold hover → neutral.
+
+## Files
+app.css (`@theme` `--text-meta/chip/lead`, duration keys, code pin), themes/lamplight.css, styles/widgets.css, utils/motion.ts; NEW components/Badge.svelte, FieldHelp.svelte, InlineError.svelte; admin/AdminField.svelte, Header.svelte, hostElements/SpProgress.svelte (props → `attrs`), connections/ModelRow.svelte, lorebooks/sections/HistorySceneList.svelte, panels/PanelNavHeader.svelte (comment); ~300 files class-only sweeps; tests updated (none deleted): metaLine.ssr, sectionList.ssr, avatar.ssr, connectionsList.dom, managedModelsTab.dom, libraryLayer.dom, memberPage.dom, readOnlyLenses.dom, spriteReexpress.dom. STYLE-GUIDE §2.4, §2.6, §3.2, §4.1, §6.4, §6.6, §6.8, §6.16, §8, §12; NOMENCLATURE §25 (4 rows); docs/sessions.md ×3, docs/session-layout.md.
+
+## Skipped
+Alpha wells (`50-950/50` ×97), tracks/dots/dividers, PanelFilterInput's pair, CustomThemeEditor colour; outlined/secondary/tertiary/glass pills; EntryPool/CastWorkspace/EntryWorkspace popovers (toggles, not item lists); ~83 muted paragraphs that are empty/loading/status lines; widgets.css/messageLayouts.css transition ms + messageLayouts radii (out of permission); pressed sweep non-toggles (stepper dots, in-use chip, Required/here badges, LivesLens overlap, wizard ready tile) and sites outside lane B's list (pipeline-workspace chips, CharacterViewPanel tabs, StrokeList, SplitStrokesDialog, ChangeSpriteDialog, DeleteCastMemberModal) — listed ⏳ in §2.4.
+
+## Needs the owner's word
+1. One hairline: light 300→200, dark 700→800 (incl. panel-card/edge/inset). 2. 10px base radius also moves Skeleton's btn/input/select/chip/progress/meter from 6px. 3. Other themes: former literals take the theme's radius. 4. Lamplight `--text-scaling 1.067`: text-xs 12.8px, text-sm 14.9px → `text-chip` 13 ≈ xs, `text-lead` 15 ≈ sm (scale rows nearly collapse). 5. Admin/Settings intros 14.9 → 13px; 8 dismissible filter chips 4px shorter. 6. SpProgress track = 20% gold tint; unknown amount = pulsing third. 7. Rail 150→180ms; fades →130ms. 8. Every widget pill reads `--sp-w-chip-radius`. 9. 5 lorebook selected rows → `.sidebar-row-active`.
+
+## Tests (verbatim)
+~60 files each run alone under the 3G cap — every file "Test Files 1 passed (1)" (metaLine.ssr and connectionsList.dom each had 1 failure before their assertion update). @tailwindcss/node compile emits text-meta/chip/lead, duration-fast/base/slow, rounded-base/container, preset-pressed, bg-surface-100-900, `--radius-base: 0.625rem`, the code rule.
+svelte-check --threshold error (7G, NODE_OPTIONS=--max-old-space-size=6144): COMPLETED 10331 FILES 0 ERRORS 7 WARNINGS 7 FILES_WITH_PROBLEMS.
+
+## Visual walk
+Card/hairline edges light+dark (Settings, Admin, session edit; KoboldCPP tabs, pipelines/library) · radii (buttons/inputs/chips 10px; code 6px; avatars; continue cards 14; wizard 12) · 11/13/15 sizes in the dock; widget notes; composer/turn-line controls 13px · Badges (Admin, Connections, Models, Loadouts; filter chips) · help 13px; an inline error · ModelRow and History scene kebabs · progress bars ×8 · phone header 412 (name, faces, ⋯ with greyed Back/Forward + reasons, furl, Jump pill) · pressed toggles across admin/lorebooks/media/AdminList/LoadoutSheet/Collect/PipelineMap · lorebook selected rows · rail animation; reduced motion.

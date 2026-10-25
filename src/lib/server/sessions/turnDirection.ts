@@ -13,6 +13,14 @@
  * the rows before that reply, so a regenerate answers the same direction the
  * first take did. Hidden rows and rows still generating are not text anybody
  * sent. Empty when the person said nothing (a Continue on an AI turn).
+ *
+ * 🚧 **A seat's line is no direction** (Lair rewrite L4, 2026-10-21): a line
+ * sent from a seat in the scene — a persona (`personaId`) or a card-less
+ * player seat (`metadata.speaker: player-seat:<id>`) — is that delver's own
+ * turn, never what the person directing the story asked for; it is passed
+ * over (it stays a row in history, as it always was). The Lair's planner
+ * reads direction as the GM's lines alone; no other core reply reads this
+ * text.
  */
 import { and, desc, eq, lt } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
@@ -29,7 +37,9 @@ export async function turnDirectionText(
 	const rows = await db
 		.select({
 			role: schema.sessionMessages.role,
-			content: schema.sessionMessages.content
+			content: schema.sessionMessages.content,
+			personaId: schema.sessionMessages.personaId,
+			metadata: schema.sessionMessages.metadata
 		})
 		.from(schema.sessionMessages)
 		.where(
@@ -48,6 +58,8 @@ export async function turnDirectionText(
 	const mine: string[] = []
 	for (const row of rows) {
 		if (row.role !== "user") break
+		const speaker = (row.metadata as { speaker?: unknown } | null)?.speaker
+		if (row.personaId != null || (typeof speaker === "string" && speaker.startsWith("player-seat:"))) continue
 		const text = (row.content ?? "").trim()
 		if (text) mine.unshift(text)
 	}

@@ -31,7 +31,7 @@ import LensTrack from "./LensTrack.svelte"
 import LoreRail from "./LoreRail.svelte"
 import ScopePopout from "./ScopePopout.svelte"
 import { LORE_LENS_REGISTRY } from "./lenses/registry"
-import { railScopes } from "./scopes"
+import { railScopes, rulesListFacets } from "./scopes"
 
 let app: Record<string, any> | null = null
 
@@ -262,7 +262,7 @@ describe("ScopePopout — the compact scope picker", () => {
 		})
 		await settle()
 		expect(at().getAttribute("aria-label")).toBe("Views: Pinned")
-		expect(at().className).toContain("preset-tonal-primary")
+		expect(at().className).toContain("preset-pressed")
 		const checked = [
 			...document.querySelectorAll<HTMLButtonElement>(
 				'[role="radio"][aria-checked="true"]'
@@ -301,5 +301,107 @@ describe("ScopePopout — the compact scope picker", () => {
 		expect(line.textContent?.trim()).toBe("2 loose ends")
 		line.click()
 		expect(props.onOpenLooseEnds).toHaveBeenCalledOnce()
+	})
+})
+
+describe("🚧 the rail's rules group (lane C1, ruled 2026-10-21)", () => {
+	const list = (rules: string, repertoireId: string, label: string, libraryRows: number) => ({
+		typeId: `core:entry/${rules}.${repertoireId}`,
+		label,
+		repertoireId,
+		piece: { type: "object" as const, fields: {} },
+		libraryRows
+	})
+	const VIS = [
+		list("vis-itineris", "weapons", "Weapons", 12),
+		list("vis-itineris", "armour", "Armour", 8),
+		list("vis-itineris", "creatures", "Creatures", 0)
+	]
+	const FREEFORM = [
+		list("freeform", "things", "Things", 0),
+		list("freeform", "conditions", "Conditions", 0)
+	]
+
+	/** Each group's label and the rows under it, in order. */
+	function groups() {
+		return [...document.querySelectorAll<HTMLUListElement>("[data-section-list] ul")].map(
+			(ul) => ({
+				label: ul.getAttribute("aria-labelledby")
+					? (document.getElementById(ul.getAttribute("aria-labelledby")!)?.textContent?.trim() ?? "")
+					: "",
+				rows: [...ul.querySelectorAll("li > button")].map((b) =>
+					(b.textContent ?? "").replace(/\d+/g, "").trim()
+				)
+			})
+		)
+	}
+
+	function group(lists: typeof VIS, counts: Record<string, number>, label: string) {
+		const facets = rulesListFacets(lists, counts)
+		return facets.length ? { label, facets } : null
+	}
+
+	test("a Vis Itineris book draws its library-backed lists after Views, before Saved", async () => {
+		const props = railProps({ rulesGroup: group(VIS, {}, "Vis Itineris") })
+		app = mount(LoreRail, { target: target(), props })
+		await settle()
+		const labels = groups().map((g) => g.label)
+		expect(labels.indexOf("Vis Itineris")).toBe(labels.indexOf("Views") + 1)
+		expect(labels.indexOf("Saved")).toBe(labels.indexOf("Vis Itineris") + 1)
+		// Creatures has nothing in it yet: no row.
+		expect(groups().find((g) => g.label === "Vis Itineris")?.rows).toEqual([
+			"Weapons",
+			"Armour"
+		])
+		const weapons = railRows().find((b) => b.textContent?.includes("Weapons"))!
+		weapons.click()
+		expect(props.onScope).toHaveBeenCalledWith("list:core:entry/vis-itineris.weapons")
+	})
+
+	test("a Freeform book's rail draws nothing new", async () => {
+		app = mount(LoreRail, {
+			target: target(),
+			props: railProps({ rulesGroup: group(FREEFORM, {}, "Freeform") })
+		})
+		await settle()
+		expect(groups().map((g) => g.label)).toEqual(["Views", "Saved"])
+	})
+
+	test("a Freeform book with one thing in it draws Things", async () => {
+		app = mount(LoreRail, {
+			target: target(),
+			props: railProps({
+				rulesGroup: group(FREEFORM, { "core:entry/freeform.things": 1 }, "Freeform")
+			})
+		})
+		await settle()
+		expect(groups().find((g) => g.label === "Freeform")?.rows).toEqual(["Things"])
+	})
+
+	test("the compact view picker draws the same rows under the rules' name", async () => {
+		const props = {
+			scopes: SCOPES,
+			scope: "list:core:entry/vis-itineris.armour" as const,
+			savedCounts: { pinned: 0 },
+			saved: null,
+			onScope: vi.fn(),
+			onSaved: vi.fn(),
+			rulesGroup: group(VIS, {}, "Vis Itineris")
+		}
+		app = mount(ScopePopout, { target: target(), props })
+		await settle()
+		expect(document.querySelector("[data-lore-rules-group]")?.textContent?.trim()).toBe(
+			"Vis Itineris"
+		)
+		const armour = document.querySelector<HTMLButtonElement>(
+			'[role="radio"][data-lore-scope="list:core:entry/vis-itineris.armour"]'
+		)!
+		expect(armour.getAttribute("aria-checked")).toBe("true")
+		document
+			.querySelector<HTMLButtonElement>(
+				'[role="radio"][data-lore-scope="list:core:entry/vis-itineris.weapons"]'
+			)!
+			.click()
+		expect(props.onScope).toHaveBeenCalledWith("list:core:entry/vis-itineris.weapons")
 	})
 })

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SpProgress from "$lib/client/components/hostElements/SpProgress.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { getContext, onDestroy, onMount, untrack } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
@@ -25,6 +26,7 @@
 	import LinkForm from "./graphs/LinkForm.svelte"
 	import NodePanel from "./graphs/NodePanel.svelte"
 	import RelationshipFields from "./graphs/RelationshipFields.svelte"
+	import TieSidesBlock from "./graphs/TieSidesBlock.svelte"
 	import { getBookRelationships } from "./relationships.svelte"
 	import { getBookData } from "./bookData.svelte"
 	import RelationshipsCanvas from "./graphs/RelationshipsCanvas.svelte"
@@ -87,9 +89,9 @@
 	import { graphBuildReason, type LoreDrawing } from "./graphs"
 	import { lensEmptyMessage } from "./lenses/registry"
 	import {
-		SCOPE_KIND,
-		SCOPE_LABELS,
 		reduce,
+		scopeKind,
+		scopeLabel,
 		type LoreScope
 	} from "$lib/shared/lorebooks/loreRoute"
 	import { stateBadge, visibilityBadge } from "./cast/castVocabulary"
@@ -360,7 +362,7 @@
 	 * not entries at all, leaves every kind in.
 	 */
 	let scopeKinds = $derived.by(() => {
-		const kind = SCOPE_KIND[route.scope]
+		const kind = scopeKind(route.scope)
 		return kind && (ENTRY_KINDS as readonly string[]).includes(kind)
 			? [kind]
 			: [...ENTRY_KINDS]
@@ -557,7 +559,7 @@
 		drawing === "places"
 			? placeGraphHeadline(places, placeCategory)
 			: graphHeaderLine({
-					scopeLabel: SCOPE_LABELS[route.scope],
+					scopeLabel: scopeLabel(route.scope),
 					entriesWithLinks: entriesWithLinks(
 						scopeEntries,
 						visibleRelationships
@@ -790,7 +792,7 @@
 			Object.entries(book.rawRows).find(([, rows]) =>
 				rows.some((row) => row.id === node.id)
 			)?.[0]
-		const narrowsTo = SCOPE_KIND[route.scope]
+		const narrowsTo = scopeKind(route.scope)
 		const scope: LoreScope =
 			route.scope !== "cast" && (!narrowsTo || narrowsTo === kind)
 				? route.scope
@@ -1183,8 +1185,8 @@
 			</div>
 		{:else if activeBuild.status === "error"}
 			<div class="flex items-center gap-2">
-				<Icons.AlertCircle size={14} class="text-error-500 shrink-0" />
-				<span class="text-error-500 text-sm">Failed</span>
+				<Icons.AlertCircle size={14} class="text-error-600-400 shrink-0" />
+				<span class="text-error-600-400 text-sm">Failed</span>
 			</div>
 		{/if}
 	{:else}
@@ -1229,7 +1231,7 @@
 				? "Extend from this session"
 				: "Extend graph"}
 			{#if extendReadyCount > 0}
-				<span class="badge-icon preset-tonal-primary text-[11px]">
+				<span class="badge-icon preset-tonal-primary text-meta">
 					{extendReadyCount}
 				</span>
 			{/if}
@@ -1268,8 +1270,13 @@
 			pairing={linkPairingOf(rel.from.kind, rel.to.kind)}
 			whenOptions={linkWhenOptions}
 			withReason
+			typeFromTheRules={!!rel.rulesRunId}
 			onChange={(next) => (editingRel = next)}
 		/>
+		{#if rel.rulesRunId}
+			<!-- 🚧 Ties on the graph (screen 3): the held sides this row follows. -->
+			<TieSidesBlock relationshipId={rel.id} {readOnly} />
+		{/if}
 		{#if relStaleNote}
 			<p
 				class="text-warning-600-400 text-xs"
@@ -1281,7 +1288,7 @@
 			</p>
 		{/if}
 		{#if relError}
-			<p class="text-error-500 text-xs" role="alert">{relError}</p>
+			<p class="text-error-600-400 text-xs" role="alert">{relError}</p>
 		{/if}
 		<div class="flex justify-end gap-2">
 			<button
@@ -1369,7 +1376,7 @@
 					data-node-key={node.key}
 					aria-current={selectedKey === node.key ? "true" : undefined}
 					class="preset-filled-surface-100-900 hover:bg-surface-200-800 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors"
-					class:preset-tonal-primary={selectedKey === node.key}
+					class:sidebar-row-active={selectedKey === node.key}
 					onclick={() => selectNode(node)}
 				>
 					<span class="min-w-0 flex-1 truncate text-sm font-medium">
@@ -1390,7 +1397,7 @@
 						</span>
 					{:else}
 						<span
-							class="badge preset-tonal-surface shrink-0 text-[11px]"
+							class="badge preset-tonal-surface shrink-0 text-meta"
 						>
 							Entry
 						</span>
@@ -1412,7 +1419,7 @@
 			<button
 				type="button"
 				class="chip text-xs {placeCategory === null
-					? 'preset-tonal-primary'
+					? 'preset-pressed'
 					: 'preset-tonal-surface'}"
 				aria-pressed={placeCategory === null}
 				onclick={() => (placeCategoryChip = null)}
@@ -1425,7 +1432,7 @@
 				<button
 					type="button"
 					class="chip text-xs {active
-						? 'preset-tonal-primary'
+						? 'preset-pressed'
 						: 'preset-tonal-surface'}"
 					aria-pressed={active}
 					onclick={() =>
@@ -1550,7 +1557,7 @@
 			</div>
 			{#if confirmingRelDelete === selectedRel.id}
 				<div class="flex items-center gap-1" data-confirm-delete-rel>
-					<span class="text-error-500 flex-1 text-xs">
+					<span class="text-error-600-400 flex-1 text-xs">
 						Delete for good?
 					</span>
 					<button
@@ -1599,6 +1606,14 @@
 				>
 					{selectedRel.status}
 				</span>
+				{#if selectedRel.rulesRunId}
+					<!-- 🚧 Ties on the graph (screen 3): the type the rules write, marked. -->
+					<p class="flex flex-wrap items-center gap-1.5 text-xs" data-rel-from-the-rules>
+						<span class="text-surface-600-400">Relationship type</span>
+						<span class="font-semibold">{selectedRel.relationshipType}</span>
+						<span class="border-primary-500 text-primary-ink rounded-full border px-2">from the rules</span>
+					</p>
+				{/if}
 				{#if selectedRel.description}
 					<p class="text-xs">{selectedRel.description}</p>
 				{/if}
@@ -1606,6 +1621,9 @@
 					<p class="text-surface-700-300 text-xs italic">
 						Reason: {selectedRel.reason}
 					</p>
+				{/if}
+				{#if selectedRel.rulesRunId}
+					<TieSidesBlock relationshipId={selectedRel.id} {readOnly} />
 				{/if}
 			{/if}
 		</div>
@@ -1719,13 +1737,13 @@
 							1}/{activeBuild.totalScenes}
 					{/if}
 				</p>
-				<div
-					class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full"
-				>
-					<div
-						class="bg-primary-500 h-full rounded-full transition-all duration-500"
-						style="width: {buildProgressPercent}%"
-					></div>
+				<div class="text-primary-500">
+					<SpProgress
+						attrs={{
+							value: String(buildProgressPercent),
+							label: "Graph build progress"
+						}}
+					/>
 				</div>
 				<div class="flex items-center gap-2">
 					{#if activeBuild.activityId}
@@ -1775,9 +1793,9 @@
 				<div class="flex flex-wrap items-center gap-2">
 					<Icons.AlertCircle
 						size={14}
-						class="text-error-500 shrink-0"
+						class="text-error-600-400 shrink-0"
 					/>
-					<span class="text-error-500">Build failed</span>
+					<span class="text-error-600-400">Build failed</span>
 					{#if activeBuild.errorMessage}
 						<span class="text-surface-700-300 truncate text-xs">
 							{activeBuild.errorMessage}

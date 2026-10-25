@@ -9,7 +9,12 @@ import {
 	describeRoute,
 	emptyRoute,
 	fromHash,
+	isListScope,
+	listScope,
+	listScopeType,
 	reduce,
+	scopeKind,
+	scopeLabel,
 	routeFromDigest,
 	sameRoute,
 	toHash,
@@ -674,5 +679,49 @@ describe("Book settings — a flag over the route beneath it", () => {
 			"Archive of Verity",
 			"Settings"
 		])
+	})
+})
+
+describe("🚧 rules list scopes (lane C1)", () => {
+	const WEAPONS = "core:entry/vis-itineris.weapons"
+
+	it("names a list by its derived entry type, qualified", () => {
+		expect(listScope(WEAPONS)).toBe(`list:${WEAPONS}`)
+		expect(isListScope(listScope(WEAPONS))).toBe(true)
+		expect(listScopeType(listScope(WEAPONS))).toBe(WEAPONS)
+		// The seven core scopes keep their spellings, and are not lists.
+		expect(isListScope("items")).toBe(false)
+		expect(listScopeType("items")).toBeNull()
+		// A list scope names a derived entry type, nothing else.
+		expect(isListScope("list:core:entry/world-lore")).toBe(false)
+	})
+
+	it("narrows to its own kind", () => {
+		expect(scopeKind(listScope(WEAPONS))).toBe(WEAPONS)
+		expect(scopeKind("items")).toBe("core:entry/item")
+		expect(scopeKind("all")).toBeUndefined()
+	})
+
+	it("survives the address, slashes and all", () => {
+		const route = at({ scope: listScope(WEAPONS), entryId: 7, lens: "list" })
+		const hash = toHash(route)
+		expect(hash.startsWith("#lore=12/list%3Acore%3Aentry%2Fvis-itineris.weapons/7")).toBe(true)
+		expect(fromHash(hash)).toEqual(route)
+	})
+
+	it("keeps every core scope's address as it was", () => {
+		expect(toHash(at({ scope: "items" }))).toBe("#lore=12/items")
+	})
+
+	it("is called by the list's own label, never the type id", () => {
+		expect(scopeLabel(listScope(WEAPONS), "Weapons")).toBe("Weapons")
+		expect(scopeLabel(listScope(WEAPONS))).toBe("Weapons")
+		expect(scopeLabel("world")).toBe("World lore")
+		expect(
+			describeRoute(at({ scope: listScope(WEAPONS) }), {
+				book: "Brackenvale",
+				scope: "Weapons"
+			})
+		).toEqual(["Brackenvale", "Weapons"])
 	})
 })

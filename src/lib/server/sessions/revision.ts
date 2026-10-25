@@ -15,7 +15,7 @@
  * dialog names the mode in effect without knowing the rule.
  */
 
-import { and, desc, eq, like, lt } from "drizzle-orm"
+import { and, desc, eq, isNull, like, lt } from "drizzle-orm"
 import { DEFAULT_CHANNEL } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 
@@ -90,7 +90,9 @@ export async function messageBefore(
 		.where(
 			and(
 				eq(schema.sessionMessages.sessionId, sessionId),
-				lt(schema.sessionMessages.id, messageId)
+				lt(schema.sessionMessages.id, messageId),
+				// 🚧 The live history (RF fix 5).
+				isNull(schema.sessionMessages.rewindOrdinal)
 			)
 		)
 		.orderBy(desc(schema.sessionMessages.id))

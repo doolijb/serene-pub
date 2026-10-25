@@ -11,6 +11,8 @@
 	import { compareDates, formatDate } from "./sections/historyDates"
 	import StoryCalendarEditor from "./time/StoryCalendarEditor.svelte"
 	import StoryClockEditor from "./time/StoryClockEditor.svelte"
+	import BookRulesCard from "./BookRulesCard.svelte"
+	import BookWritesCard from "./BookWritesCard.svelte"
 
 	/**
 	 * Book settings: a readout of what the book holds, and the few behaviours
@@ -51,7 +53,24 @@
 		relationships: number
 		/** What the open session is called, when one reads this book. */
 		readingInto: string | null
+		/** The owner's sessions that read this book, newest first (`readBy`). */
+		readBy?: readonly { id: number; name: string | null }[]
+		/** The book's rules (`lorebooks.primary_ruleset`). */
+		primaryRuleset: string | null
+		/** The book's own lore write mode (`lorebooks.lore_write_mode`). */
+		loreWriteMode: string | null
 		canChangeReading: boolean
+		/**
+		 * 🚧 The book is a starter lorebook (PLAN-lorebook-kinds §B): sessions start
+		 * from it and never read or write it, so Writes from sessions and
+		 * Reading into a session are not drawn, and This book offers a
+		 * lorebook made from it and its delete.
+		 */
+		isStarterKit?: boolean
+		/** 🚧 An admin's ordinary book: copy it as a new starter lorebook. */
+		onSaveAsStarterKit?: () => void
+		/** 🚧 A starter lorebook: start a lorebook of the reader's own from it. */
+		onMakeBookFromKit?: () => void
 		hasUnsavedChanges: boolean
 		onClose: () => void
 		onChangeReading: () => void
@@ -74,7 +93,13 @@
 		scenes,
 		relationships,
 		readingInto,
+		readBy = [],
+		primaryRuleset,
+		loreWriteMode,
 		canChangeReading,
+		isStarterKit = false,
+		onSaveAsStarterKit,
+		onMakeBookFromKit,
 		hasUnsavedChanges = $bindable(false),
 		onClose,
 		onChangeReading,
@@ -143,6 +168,35 @@
 		return `${names.size} sessions`
 	})
 
+	/**
+	 * Who reads this book, beside the open session: the owner's other
+	 * sessions (`readBy`). "No session" only when none does — it said so
+	 * whenever the OPEN session did not, though others read it (audit
+	 * 2026-10-21).
+	 */
+	let otherReaders = $derived(
+		readBy
+			.map((r) => r.name || "an unnamed session")
+			.filter((name) => name !== readingInto)
+	)
+	const joinNames = (names: string[]) =>
+		names.length > 2
+			? `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`
+			: names.join(" and ")
+	let readingValue = $derived(
+		readingInto ??
+			(otherReaders.length ? joinNames(otherReaders) : "no session")
+	)
+	let readingExplain = $derived(
+		readingInto
+			? otherReaders.length
+				? `The open session reads this book as it plays; so does ${joinNames(otherReaders)}.`
+				: "The open session reads this book as it plays."
+			: otherReaders.length
+				? "Those sessions read this book as they play. Open a session you own to read it in there too."
+				: "No session reads this book. Open a session you own to read it in."
+	)
+
 	let lines = $derived(
 		bookReadout({
 			counts,
@@ -202,6 +256,14 @@
 
 	<EditLorebookForm {lorebookId} bind:hasUnsavedChanges={formUnsaved} />
 
+	{#if primaryRuleset}
+		<BookRulesCard {lorebookId} current={primaryRuleset} />
+	{/if}
+
+	{#if !isStarterKit}
+		<BookWritesCard {lorebookId} current={loreWriteMode} />
+	{/if}
+
 	<StoryClockEditor {branchId} {branchName} {present} {onSetClock} />
 
 	<StoryCalendarEditor
@@ -212,7 +274,7 @@
 
 	<section class="card preset-filled-surface-100-900 space-y-3 p-3">
 		<p
-			class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold"
+			class="text-primary-ink flex items-center gap-1.5 text-xs font-semibold"
 		>
 			<Icons.ListChecks size={13} aria-hidden="true" />
 			What this book holds
@@ -231,68 +293,113 @@
 		<p class="text-surface-700-300 text-sm">{READOUT_NOTE}</p>
 	</section>
 
-	<section class="card preset-filled-surface-100-900 space-y-3 p-3">
-		{@render behaviour(
-			"Reading into a session",
-			readingInto ?? "no session",
-			readingInto
-				? "The session this book is read into as it plays."
-				: "No session reads this book. Open a session you own to read it in.",
-			{
-				label: readingActionLabel(!!readingInto),
-				run: onChangeReading,
-				disabled: !canChangeReading
-			}
-		)}
-	</section>
+	{#if !isStarterKit}
+		<section class="card preset-filled-surface-100-900 space-y-3 p-3">
+			{@render behaviour(
+				"Reading into a session",
+				readingValue,
+				readingExplain,
+				{
+					label: readingActionLabel(!!readingInto),
+					run: onChangeReading,
+					disabled: !canChangeReading
+				}
+			)}
+		</section>
+	{/if}
 
 	<section class="card preset-filled-surface-100-900 space-y-3 p-3">
 		<p
-			class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold"
+			class="text-primary-ink flex items-center gap-1.5 text-xs font-semibold"
 		>
 			<Icons.Book size={13} aria-hidden="true" />
-			This book
+			{isStarterKit ? "This starter lorebook" : "This book"}
 		</p>
-		<div class="flex flex-wrap gap-2">
-			<button
-				class="btn btn-sm preset-tonal-surface"
-				type="button"
-				onclick={onImport}
-			>
-				<Icons.Upload size={14} aria-hidden="true" /> Import
-			</button>
-			<!-- Export is paused (owner ruling 2026-09-28): visible, disabled,
+		{#if isStarterKit}
+			<p class="text-surface-700-300 text-sm" data-book-settings-kit>
+				Everyone on the pub can start a lorebook or a session from this
+				starter lorebook. Each one started gets its own copy, so what you
+				change here reaches the ones started next.
+			</p>
+			<div class="flex flex-wrap gap-2">
+				{#if onMakeBookFromKit}
+					<button
+						class="btn btn-sm preset-tonal-surface"
+						type="button"
+						data-book-settings-make-book
+						onclick={onMakeBookFromKit}
+					>
+						<Icons.BookPlus size={14} aria-hidden="true" /> Make a lorebook
+						from it
+					</button>
+				{/if}
+				<button
+					class="btn btn-sm preset-filled-error-500"
+					type="button"
+					data-book-settings-delete-kit
+					onclick={onDelete}
+				>
+					<Icons.Trash2 size={14} aria-hidden="true" />
+					Delete starter lorebook
+				</button>
+			</div>
+		{:else}
+			<div class="flex flex-wrap gap-2">
+				<button
+					class="btn btn-sm preset-tonal-surface"
+					type="button"
+					onclick={onImport}
+				>
+					<!-- A NEW book from a file, never into this one (audit
+				     2026-10-21: "Import" under This book read as the latter). -->
+					<Icons.Upload size={14} aria-hidden="true" /> Import another
+					lorebook
+				</button>
+				<!-- Export is paused (owner ruling 2026-09-28): visible, disabled,
 			     and the reason sits under the row. -->
-			<button
-				class="btn btn-sm preset-tonal-surface"
-				type="button"
-				disabled
-				aria-describedby="book-settings-export-paused"
+				<button
+					class="btn btn-sm preset-tonal-surface"
+					type="button"
+					disabled
+					aria-describedby="book-settings-export-paused"
+				>
+					<Icons.Download size={14} aria-hidden="true" /> Export
+				</button>
+				<button
+					class="btn btn-sm preset-tonal-surface"
+					type="button"
+					title="Copy this book, entries, cast and all"
+					onclick={onDuplicate}
+				>
+					<Icons.Copy size={14} aria-hidden="true" /> Duplicate
+				</button>
+				{#if onSaveAsStarterKit}
+					<button
+						class="btn btn-sm preset-tonal-surface"
+						type="button"
+						title="Copy this book as a starter lorebook everyone on the pub can start from"
+						data-book-settings-save-kit
+						onclick={onSaveAsStarterKit}
+					>
+						<Icons.Package size={14} aria-hidden="true" /> Save as starter
+						lorebook
+					</button>
+				{/if}
+				<button
+					class="btn btn-sm preset-filled-error-500"
+					type="button"
+					onclick={onDelete}
+				>
+					<Icons.Trash2 size={14} aria-hidden="true" />
+					Delete “{bookName}”
+				</button>
+			</div>
+			<p
+				id="book-settings-export-paused"
+				class="text-surface-600-400 text-xs"
 			>
-				<Icons.Download size={14} aria-hidden="true" /> Export
-			</button>
-			<button
-				class="btn btn-sm preset-tonal-surface"
-				type="button"
-				title="Copy this book, entries, cast and all"
-				onclick={onDuplicate}
-			>
-				<Icons.Copy size={14} aria-hidden="true" /> Duplicate
-			</button>
-			<button
-				class="btn btn-sm preset-filled-error-500"
-				type="button"
-				onclick={onDelete}
-			>
-				<Icons.Trash2 size={14} aria-hidden="true" />
-				Delete “{bookName}”
-			</button>
-		</div>
-		<p
-			id="book-settings-export-paused"
-			class="text-surface-600-400 text-xs"
-		>
-			{LOREBOOK_EXPORT_PAUSED}
-		</p>
+				{LOREBOOK_EXPORT_PAUSED}
+			</p>
+		{/if}
 	</section>
 </div>

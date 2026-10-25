@@ -1,0 +1,3 @@
+-- Custom SQL migration file, put your code below! --
+-- 0126_genre_slots_retire: no schema change. Its data upgrade (src/lib/server/db/dataUpgrades/0126_genre_slots_retire.ts) joins this migration's transaction: values a session held on a retired genre slot (Story's health, stamina, mood, trust, time of day, weather and inventory; the Lair's, the crawl's) move onto the session's rules' attribute of the same tag or id, or into the session's notes as a line, and the slot's rows go (RF fix 8: attributes are the rules').
+-- Keep this text unique among the migration files: the ledger matches a row to its file by the file's sha256 alone.

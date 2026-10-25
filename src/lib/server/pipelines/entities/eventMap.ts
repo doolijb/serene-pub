@@ -174,17 +174,47 @@ export async function eventMap(
 				.where(eq(schema.plugins.enabled, false))
 		).map((r) => r.id)
 	)
+	/**
+	 * 🚧 What binds a spec to an event (PLAN-layering D7): the registrations
+	 * of the genre in scope (every genre's, with no scope) — ⏳ and a
+	 * lock-era package spec's lock. A pipeline mounted by registrations has
+	 * no lock; it is drawn where it is registered.
+	 */
+	const regRows = await db
+		.select({
+			scopeRef: schema.registrations.scopeRef,
+			triggerRef: schema.registrations.triggerRef,
+			specSlug: schema.registrations.specSlug
+		})
+		.from(schema.registrations)
+		.where(
+			and(
+				eq(schema.registrations.scopeKind, "genre"),
+				eq(schema.registrations.triggerFamily, "event"),
+				eq(schema.registrations.dropped, false)
+			)
+		)
+	const registeredEvents = new Map<string, Set<string>>()
+	for (const r of regRows) {
+		if (!r.specSlug || !r.triggerRef) continue
+		if (genreId != null && r.scopeRef !== genreId) continue
+		const set = registeredEvents.get(r.specSlug) ?? new Set<string>()
+		set.add(r.triggerRef)
+		registeredEvents.set(r.specSlug, set)
+	}
 	const scopeSpecs = (specRows as any[]).filter(
 		(r) =>
 			!(r.sourcePluginId != null && disabledPluginIds.has(r.sourcePluginId)) &&
 			r.activeVersionId === r.versionId &&
 			r.status === "published" &&
-			(genreId == null || r.inputGenre === genreId)
+			(genreId == null || r.inputGenre === genreId || registeredEvents.has(r.slug))
 	)
 	const locksOf = (r: any): Set<string> => {
-		const locked = new Set<string>()
-		if (r.inputEvent) locked.add(r.inputEvent)
-		for (const e of r.inputEvents ?? []) locked.add(e)
+		const locked = new Set<string>(registeredEvents.get(r.slug) ?? [])
+		if (r.inputGenre && (genreId == null || r.inputGenre === genreId)) {
+			if (r.inputEvent) locked.add(r.inputEvent)
+			for (const e of r.inputEvents ?? []) locked.add(e)
+		}
 		return locked
 	}
 	const specLabels = await pipelineLabelsById(db)

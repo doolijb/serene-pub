@@ -6,7 +6,7 @@
  * it holds.
  *
  * ⚠ Asserts only the classes that carry the behaviour (who scrolls, what
- * is pinned, the 12px gap, the 1120px cap), never the rest of the recipe.
+ * is pinned, the 12px gap, the 1120px and 560px caps), never the rest of the recipe.
  */
 import { describe, expect, test, vi } from "vitest"
 import { render } from "svelte/server"
@@ -119,5 +119,37 @@ describe("PanelSplit listFills", () => {
 		const out = split({ mode: "compact", listFills: true })
 		expect(out).not.toContain("data-panel-split-fills")
 		expect(out).not.toContain("max-w-[1120px]")
+	})
+
+	// L7 (PLAN-0-5-polish-parity, 2026-10-24): a list of rows fills at the
+	// list column's own 560px ceiling, a portrait grid uncapped.
+	test("fillWidth list: rows and toolbar centred at 560px", () => {
+		const out = split({
+			mode: "desk",
+			listFills: true,
+			fillWidth: "list",
+			toolbar: snip("TOOLBAR")
+		})
+		expect(parentDiv(out, "<p>TOOLBAR")).toContain("max-w-[560px]")
+		const cap = parentDiv(out, "<p>LIST")
+		expect(cap).toContain("max-w-[560px]")
+		expect(cap).toContain("self-center")
+		expect(out).not.toContain("max-w-[1120px] self-center")
+	})
+
+	test("fillWidth whole: no cap", () => {
+		const out = split({ mode: "desk", listFills: true, fillWidth: "whole" })
+		expect(parentDiv(out, "<p>LIST")).toContain("max-w-none")
+	})
+
+	test("fillWidth list, something open: the list is a column again", () => {
+		const out = split({
+			mode: "desk",
+			listFills: true,
+			fillWidth: "list",
+			hasDetail: true
+		})
+		expect(out).not.toContain("max-w-[560px]")
+		expect(out).toContain("DETAIL")
 	})
 })

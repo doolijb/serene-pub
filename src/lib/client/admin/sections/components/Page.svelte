@@ -1,4 +1,6 @@
 <script lang="ts">
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
+	import InlineError from "$lib/client/components/InlineError.svelte"
 	/**
 	 * Components — the admin surface for **authored components** (C6, P6):
 	 * widgets an admin writes or clones here, kept on this instance, each its
@@ -347,7 +349,7 @@
 				</p>
 			{/if}
 			{#if refusal}
-				<p class="text-error-700-300 text-sm" role="alert">{refusal}</p>
+				<InlineError>{refusal}</InlineError>
 			{/if}
 		{/snippet}
 		{#snippet cell(row, col)}
@@ -373,7 +375,7 @@
 			{#each core as c (c.slug)}
 				<li class="component-row">
 					<div class="row-main">
-						<p class="truncate text-[15px] font-medium">{c.title}</p>
+						<p class="truncate text-lead font-medium">{c.title}</p>
 						<p class="text-surface-600-400 truncate font-mono text-xs">{c.slug} · {c.framework}</p>
 					</div>
 					<div class="row-controls">
@@ -410,9 +412,9 @@
 		</ul>
 		{#if viewing}
 			<div class="core-source flex flex-col gap-2">
-				<p class="text-surface-600-400 text-xs">
+				<FieldHelp>
 					{viewing.slug} as core ships it ({viewing.catalogVersion}) — read only.
-				</p>
+				</FieldHelp>
 				{#key viewing.slug}
 					<CodeEditor
 						files={viewing.files}

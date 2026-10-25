@@ -489,7 +489,7 @@
 				aria-live="polite"
 			>
 				{#if goProblem}
-					<span class="text-error-700-300" role="alert">{goProblem}</span>
+					<span class="text-error-600-400" role="alert">{goProblem}</span>
 				{:else if "date" in goTyped}
 					Reads the book as of {formatDate(goTyped.date)}{goNote
 						? `, ${goNote}`
@@ -507,7 +507,7 @@
 	     in place. The toggle is its own button beside the branch chip, which
 	     is a button too and cannot sit inside it. -->
 	<div
-		class="{ground} flex flex-col rounded-[10px] px-3 text-xs"
+		class="{ground} flex flex-col rounded-base px-3 text-xs"
 		role="group"
 		aria-label="Moment"
 		data-lore-moment-bar
@@ -525,7 +525,7 @@
 				data-lore-moment-toggle
 			>
 				<span
-					class="min-w-0 flex-1 truncate text-[13px] font-medium"
+					class="min-w-0 flex-1 truncate text-chip font-medium"
 					data-lore-moment-words
 				>
 					{momentWords(moment)}
@@ -541,7 +541,7 @@
 			{#if moment}
 				<button
 					type="button"
-					class="text-primary-700-300 shrink-0 text-xs font-medium hover:underline"
+					class="text-primary-ink shrink-0 text-xs font-medium hover:underline"
 					onclick={returnToNow}
 					data-lore-moment-return
 				>
@@ -563,14 +563,14 @@
 	</div>
 {:else}
 	<div
-		class="{ground} flex min-h-11 flex-wrap items-center gap-x-3 gap-y-2 rounded-[10px] px-3 py-1.5 text-xs"
+		class="{ground} flex min-h-11 flex-wrap items-center gap-x-3 gap-y-2 rounded-base px-3 py-1.5 text-xs"
 		role="group"
 		aria-label="Moment"
 		data-lore-moment-bar
 		data-lore-moment-at={moment ? "moment" : "now"}
 	>
 		{@render branchChip(false)}
-		<span class="shrink-0 text-[13px] font-medium" data-lore-moment-words>
+		<span class="shrink-0 text-chip font-medium" data-lore-moment-words>
 			{momentWords(moment)}
 		</span>
 		{@render sentence(true)}

@@ -11,7 +11,7 @@
  * half-copied session visible in the list.
  */
 
-import { and, asc, eq, gte, inArray, sql } from "drizzle-orm"
+import { and, asc, eq, gte, inArray, isNull, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	insertLegacyMany,
@@ -71,7 +71,12 @@ export async function branchSession(
 	if (!fork) throw new BranchError("Branch message not found")
 
 	const allMessages = await db.query.sessionMessages.findMany({
-		where: eq(schema.sessionMessages.sessionId, sessionId),
+		// 🚧 The live history (RF fix 5): a branch never copies a row Back
+		// took out — its forward stack stays with the session it is in.
+		where: and(
+			eq(schema.sessionMessages.sessionId, sessionId),
+			isNull(schema.sessionMessages.rewindOrdinal)
+		),
 		orderBy: asc(schema.sessionMessages.id)
 	})
 	/**
@@ -148,7 +153,6 @@ export async function branchSession(
 				// (PLAN-rulesets §23: a branch keeps its session's pin).
 				primaryRuleset: original.primaryRuleset,
 				rulesetVersion: original.rulesetVersion,
-				compendiumMode: original.compendiumMode,
 				rigour: original.rigour,
 				onRevision: original.onRevision,
 				// 🚧 Whose composer the genre closed, and why, comes along with
@@ -670,4 +674,22 @@ async function copyStateRows(
 			slotId: row.slotId,
 			enabled: row.enabled
 		})
+	// 🚧 …and who carries what (attribute carries, RF fix 2 item 3): each
+	// holder's own switch, its owner remapped as the sheets' are.
+	const carries = await tx
+		.select()
+		.from(schema.attributeCarries)
+		.where(eq(schema.attributeCarries.sessionId, sessionId))
+	for (const row of carries) {
+		const ownerId = ownerIdFor(row.ownerKind, row.ownerId)
+		if (ownerId === undefined) continue
+		await tx.insert(schema.attributeCarries).values({
+			sessionId: created,
+			ownerKind: row.ownerKind,
+			ownerId,
+			slotId: row.slotId,
+			carries: row.carries,
+			updatedBy: row.updatedBy
+		})
+	}
 }

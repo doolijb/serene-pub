@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { sharedFromLine } from "$lib/shared/utils/sharedRows"
+	import { isStarterKit } from "$lib/client/lorebooks/starterKitCards"
 	import * as Icons from "@lucide/svelte"
 	import SidebarListItem from "../SidebarListItem.svelte"
+	import Avatar from "../Avatar.svelte"
+	import { lorebookCoverSrc } from "$lib/client/utils/media"
 	import RowMenu from "../menus/RowMenu.svelte"
 	import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
 	import {
@@ -38,6 +41,10 @@
 		 */
 		onAttachToSession?: (id: number) => void
 		onDetachFromSession?: (id: number) => void
+		/** Opens the book at Book settings. Owners' rows only. */
+		onOpenSettings?: (id: number) => void
+		/** Asks for a copy; the prompt names it. A shared row's one verb. */
+		onDuplicate?: (id: number, name: string) => void
 	}
 
 	let {
@@ -53,8 +60,13 @@
 		openSessionHasLorebook = false,
 		isOpenSessionLorebook = false,
 		onAttachToSession,
-		onDetachFromSession
+		onDetachFromSession,
+		onOpenSettings,
+		onDuplicate
 	}: Props = $props()
+
+	/** 🚧 A starter lorebook's row: badged, and never read into a session. */
+	let isKit = $derived(isStarterKit(lorebook))
 
 	let counts = $derived<Record<string, number>>(
 		entryCounts ?? lorebook?.entryCounts ?? {}
@@ -91,10 +103,32 @@
 >
 	{#snippet content()}
 		<div class="flex w-full items-center gap-2">
+			<!-- The book's cover image at the row step (STYLE-GUIDE §6.4):
+			     square, a book being a cover rather than a face; the book
+			     glyph when it has none. Decorative — the name is beside it. -->
+			<Avatar
+				src={lorebookCoverSrc(lorebook)}
+				size="md"
+				shape="square"
+				kind="lorebook"
+				decorative
+			/>
 			<div class="relative flex min-w-0 flex-1 gap-2">
 				<div class="relative min-w-0 flex-1">
-					<div class="truncate text-left font-semibold">
-						{lorebook.name}
+					<div class="flex min-w-0 items-center gap-1.5">
+						<span class="truncate text-left font-semibold">
+							{lorebook.name}
+						</span>
+						{#if isKit}
+							<!-- 🚧 A starter lorebook (PLAN-lorebook-kinds §B): a
+							     template people start from, never read. -->
+							<span
+								class="badge preset-tonal-surface shrink-0 px-1.5 py-0 text-meta"
+								data-starter-kit-badge
+							>
+								Starter lorebook
+							</span>
+						{/if}
 					</div>
 					{#if lorebook.isSharedWithMe}
 						<!-- Shared with the reader (PLAN-private-messages §6.7):
@@ -130,9 +164,11 @@
 		</div>
 	{/snippet}
 	{#snippet controls()}
-		{#if showControls && (onclick || onDelete)}
+		{#if showControls && (onclick || onDelete || onDuplicate)}
 			{@const sessionActions =
-				hasOpenSession && (onAttachToSession || onDetachFromSession)}
+				!isKit &&
+				hasOpenSession &&
+				(onAttachToSession || onDetachFromSession)}
 			<RowMenu
 				label="Lorebook"
 				width={260}
@@ -159,6 +195,20 @@
 								: "Read this book into the open session",
 							onSelect: () => onAttachToSession?.(lorebook.id!)
 						},
+					onOpenSettings && {
+						label: "Book settings",
+						icon: Icons.SlidersHorizontal,
+						title: "Name, cover, rules, calendar and clock",
+						onSelect: () => onOpenSettings?.(lorebook.id!)
+					},
+					onDuplicate && {
+						label: "Duplicate",
+						icon: Icons.Copy,
+						title: isKit
+							? "Copy this starter lorebook as another one"
+							: "Copy this book, entries, cast and all",
+						onSelect: () => onDuplicate?.(lorebook.id!, lorebook.name)
+					},
 					// Paused (owner ruling 2026-09-28): shown, disabled, with
 					// the reason on the row.
 					!lorebook.isSharedWithMe && {

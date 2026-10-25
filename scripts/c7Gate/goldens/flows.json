@@ -4,9 +4,9 @@
 		"edit: the field opens holding the line; the new text shows, stays, and survives a reload",
 		"swipe: a new reply is the last of its swipes and reads anew; previous shows the reply it replaced; next returns to it",
 		"actions disclosure: opens (true) and closes (false)",
-		"slash palette: offers, in order: /generate-image <what should the image show> Image | /narrate Narrate | /narrate-character Side character | /echo Echo | /retry Regenerate | /advance Continue | /pick-speaker Pick who speaks",
+		"slash palette: offers, in order: /ask Ask | /look Look | /narrate [<what should happen next>] Narrate | /rest Rest | /narrate-character Side character | /advance-time Time passes… | /retry Regenerate | /advance Continue | /pick-speaker Pick who speaks",
 		"picker: opens the host's \"who speaks next\" picker; Escape closes it",
-		"message menu: offers Edit, Regenerate, Branch from here, Extend, Swipe, Hide, Delete, Select this message for summarization, Change sprite, Inspect run; Escape closes it",
+		"message menu: offers Edit, Regenerate, Branch from here, Extend, Swipe, Hide, Select this message for summarization, Change sprite, Inspect run; Escape closes it",
 		"branch: opens the branch dialog; Escape closes it"
 	]
 }

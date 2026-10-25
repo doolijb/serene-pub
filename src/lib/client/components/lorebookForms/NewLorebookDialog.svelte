@@ -1,19 +1,40 @@
 <script lang="ts">
-	import { Dialog, Portal, Switch } from "@skeletonlabs/skeleton-svelte"
+	import {
+		Dialog,
+		Portal,
+		SegmentedControl,
+		Switch
+	} from "@skeletonlabs/skeleton-svelte"
 	import { z } from "zod"
+	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
+	import { refOfCard } from "$lib/client/lorebooks/starterKitCards"
+	import BookRulesPicker from "./BookRulesPicker.svelte"
+	import StarterKitPicker from "./StarterKitPicker.svelte"
 
 	/**
-	 * A new lorebook, and the one thing it needs.
+	 * A new lorebook: its name, and its **Rules** (PLAN-rulesets §4, §21),
+	 * which every session started on it adopts — Freeform unless another is
+	 * picked. Nothing else: every capability is available in every lorebook,
+	 * and what the workspace shows follows what the book comes to hold.
 	 *
-	 * No starting set and no preset: every capability is available in every
-	 * lorebook, so there is nothing to choose here that could be chosen wrong.
-	 * What the workspace shows follows what the book comes to hold.
+	 * 🚧 Two ways in (PLAN-lorebook-kinds §B), chosen at the top: **Blank** —
+	 * the name and the Rules — or **Start from a starter lorebook**, whose card
+	 * carries the Rules the book will play (the picker gives way to
+	 * _Rules: ‹kit's rules›_). The choice is drawn only while the pub lists a
+	 * kit; `starterKits:list` is asked while the dialog is open.
 	 */
 	interface Props {
 		open: boolean
 		onOpenChange: (e: OpenChangeDetails) => void
 		/** `attachToSession` is meaningless unless the switch was offered. */
-		onConfirm: (details: { name: string; attachToSession: boolean }) => void
+		onConfirm: (details: {
+			name: string
+			attachToSession: boolean
+			/** The ruleset id picked; the server's default when unset. */
+			primaryRuleset?: string
+			/** 🚧 The kit to copy in; its Rules win over `primaryRuleset`. */
+			starterKit?: Sockets.StarterKits.Ref
+		}) => void
 		onCancel: () => void
 		/**
 		 * Closes this and opens the import flow instead. Absent where no
@@ -46,8 +67,46 @@
 
 	let name = $state("")
 	let attachToSession = $state(true)
+	/** Empty until the picker seeds it with the default. */
+	let primaryRuleset = $state("")
 	let inputRef: HTMLInputElement | null = $state(null)
 	let validationErrors: Record<string, string> = $state({})
+
+	type Way = "blank" | "kit"
+	let way = $state<Way>("blank")
+	/** Every kit on the pub while the dialog is open; null while on its way. */
+	let kits = $state<Sockets.StarterKits.Card[] | null>(null)
+	/** The kit card chosen, by its id; "" for none. */
+	let kitId = $state("")
+	/** The name a kit filled in, so a pick only replaces a name nobody typed. */
+	let kitFilledName = ""
+	let chosenKit = $derived(
+		way === "kit" ? (kits?.find((k) => k.id === kitId) ?? null) : null
+	)
+	/** Offered only while the pub has a kit to start from. */
+	let offerKits = $derived(!!kits?.length)
+
+	// The kits, asked for while the dialog is open (the family is gated, so
+	// interest is declared with the ask; a kit saved meanwhile arrives too).
+	$effect(() => {
+		if (!open) return
+		return requestWithInterest("starterKits:list", {}, (res) => {
+			kits = res?.kits ?? []
+			if (kitId && !kits.some((k) => k.id === kitId)) kitId = ""
+			if (!kits.length) way = "blank"
+		})
+	})
+
+	function pickKit(card: Sockets.StarterKits.Card) {
+		if (!name.trim() || name === kitFilledName) {
+			name = card.name
+			kitFilledName = card.name
+		}
+		if (validationErrors.name) {
+			const { name: _name, ...rest } = validationErrors
+			validationErrors = rest
+		}
+	}
 
 	// Re-seed on each open: the dialog stays mounted, so a second open would
 	// otherwise inherit the last name typed.
@@ -55,7 +114,11 @@
 		if (open) {
 			name = ""
 			attachToSession = true
+			primaryRuleset = ""
 			validationErrors = {}
+			way = "blank"
+			kitId = ""
+			kitFilledName = ""
 		}
 	})
 
@@ -65,7 +128,9 @@
 	})
 
 	const isValid = $derived(
-		!!name.trim() && Object.keys(validationErrors).length === 0
+		!!name.trim() &&
+			Object.keys(validationErrors).length === 0 &&
+			(way === "blank" || !!chosenKit)
 	)
 
 	const shownError = $derived(validationErrors.name ?? error)
@@ -86,9 +151,16 @@
 
 	function confirm() {
 		if (!validateForm()) return
+		const starterKit = chosenKit ? refOfCard(chosenKit) : null
+		if (way === "kit" && !starterKit) return
 		onConfirm({
 			name: name.trim(),
-			attachToSession: attachToSession && canOfferAttachToSession
+			attachToSession: attachToSession && canOfferAttachToSession,
+			...(starterKit
+				? { starterKit }
+				: primaryRuleset
+					? { primaryRuleset }
+					: {})
 		})
 	}
 </script>
@@ -113,11 +185,53 @@
 						id="new-lorebook-description"
 						class="text-surface-600-400 text-sm"
 					>
-						One name is all it needs. Everything else, cast, dates,
-						nesting, branches, appears as you use it.
+						{way === "kit"
+							? "A copy of a starter lorebook, yours to change: its world, its cast and the rules its stories are told by."
+							: "A name, and the rules its stories are told by. Everything else, cast, dates, nesting, branches, appears as you use it."}
 					</p>
 				</header>
 				<article class="space-y-5">
+					{#if offerKits}
+						<!-- Two ways in, drawn only while the pub has a kit. -->
+						<SegmentedControl
+							value={way}
+							onValueChange={(d) =>
+								(way = (d.value ?? "blank") as Way)}
+						>
+							<SegmentedControl.Label class="sr-only">
+								Start from
+							</SegmentedControl.Label>
+							<SegmentedControl.Control>
+								<SegmentedControl.Indicator />
+								{#each [{ value: "blank", label: "Blank" }, { value: "kit", label: "Start from a starter lorebook" }] as option (option.value)}
+									<SegmentedControl.Item
+										value={option.value}
+										data-new-lorebook-way={option.value}
+									>
+										<SegmentedControl.ItemText>
+											{option.label}
+										</SegmentedControl.ItemText>
+										<SegmentedControl.ItemHiddenInput />
+									</SegmentedControl.Item>
+								{/each}
+							</SegmentedControl.Control>
+						</SegmentedControl>
+					{/if}
+
+					{#if way === "kit" && open}
+						<div class="space-y-2">
+							<p id="new-lorebook-kits" class="font-semibold">
+								Starter lorebook
+							</p>
+							<StarterKitPicker
+								bind:value={kitId}
+								{kits}
+								labelledby="new-lorebook-kits"
+								onpick={pickKit}
+							/>
+						</div>
+					{/if}
+
 					<div class="form-field">
 						<label for="new-lorebook-name" class="font-semibold">
 							Name
@@ -150,13 +264,45 @@
 						{#if shownError}
 							<p
 								id="new-lorebook-name-error"
-								class="text-error-500 mt-1 text-sm"
+								class="text-error-600-400 mt-1 text-sm"
 								role="alert"
 							>
 								{shownError}
 							</p>
 						{/if}
 					</div>
+
+					<!-- Rules (NOMENCLATURE §28): every session on this book
+					     plays them. Drawn only while open, so the list is asked
+					     for when it can be seen. -->
+					{#if way === "kit"}
+						{#if chosenKit}
+							<p class="text-sm" data-new-lorebook-kit-rules>
+								<span class="font-semibold">Rules:</span>
+								{chosenKit.rulesName}
+								<span
+									class="text-surface-600-400 block text-xs"
+								>
+									The book plays the starter lorebook's rules. You can
+									change them later in Book settings.
+								</span>
+							</p>
+						{/if}
+					{:else if open}
+						<div class="space-y-2">
+							<p id="new-lorebook-rules" class="font-semibold">
+								Rules
+							</p>
+							<BookRulesPicker
+								bind:value={primaryRuleset}
+								labelledby="new-lorebook-rules"
+							/>
+							<p class="text-surface-600-400 text-xs">
+								Sessions you start on this book play its rules.
+								You can change them later in Book settings.
+							</p>
+						</div>
+					{/if}
 
 					{#if canOfferAttachToSession}
 						<Switch

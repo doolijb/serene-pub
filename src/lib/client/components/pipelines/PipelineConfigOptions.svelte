@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * One pipeline's configuration, rendered from declarations — the body of
 	 * the pipeline view (05 §0a), extracted so any surface can host it: the
@@ -230,11 +231,10 @@
 				"Changes here apply to this session only, and save as you make them."
 			)
 		const lead = sessionDoesNotRun ? "This session does not run this pipeline. " : ""
-		const config = detail.selectedConfig
-			? `everyone using the “${detail.selectedConfig.name}” configuration`
-			: "everyone"
+		// 🚧 Named configurations are retired (R38; lane 7): outside a session
+		// a change is the genre's defaults of each genre that runs it.
 		if (isAdmin)
-			return `${lead}Changes here apply to ${config}.`
+			return `${lead}Changes here are the genre's defaults: every session that runs this pipeline gets them, unless its preset or the session changes them.`
 		return `${lead}Only an administrator can change it.`
 	})
 
@@ -290,12 +290,6 @@
 			sessionId,
 			...targetOf()
 		})
-	}
-
-	function chooseConfig(raw: string) {
-		const configId = parseInt(raw, 10)
-		if (Number.isNaN(configId)) return
-		socket.emit("pipelines:selectConfig", { slug, configId, sessionId })
 	}
 
 	/** Numbers arrive from `<input>` as strings; an empty box means "unset". */
@@ -962,10 +956,6 @@
 		"pipelines:clearOption:error",
 		showRefusal
 	)
-	useInterest<"pipelines:selectConfig:error">(
-		"pipelines:selectConfig:error",
-		showRefusal
-	)
 	useInterest<"pipelines:clonePrompt:error">(
 		"pipelines:clonePrompt:error",
 		showRefusal
@@ -1090,10 +1080,12 @@
 	function provenanceOf(o: Sockets.Pipelines.Option): string | undefined {
 		if (o.provenance) return o.provenance.label
 		if (o.source === "session") return "Set for this session"
+		// 🚧 `config` is the layer above the session since R38 (lane 7): the
+		// preset's changes over the genre's defaults.
 		if (o.source === "config")
 			return detail?.scope.kind === "session"
-				? `From the “${detail.selectedConfig?.name ?? "selected"}” configuration`
-				: "Set in this configuration"
+				? "From the session's preset or the genre's defaults"
+				: "Set in the genre's defaults"
 		return undefined
 	}
 
@@ -1207,12 +1199,9 @@
 				/>
 			{/if}
 			{#if draftMode && isPending(option.id)}
-				<span
-					class="preset-tonal-warning shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
-					title="Unsaved — lands with Save"
-				>
+				<Badge tone="warning" size="sm" class="shrink-0 font-semibold" title="Unsaved — lands with Save">
 					pending
-				</span>
+				</Badge>
 			{/if}
 		</div>
 
@@ -1222,7 +1211,7 @@
 			     three model-call choices read alike in every group and are
 			     explained once, by the Model row's peek. -->
 			<p
-				class="text-surface-600-400 text-[11px] leading-snug"
+				class="text-surface-600-400 text-meta leading-snug"
 				title={option.description}
 			>
 				{option.description}
@@ -1239,7 +1228,7 @@
 				{#if option.control === "prompts-ref" && option.value != null}
 					<button
 						type="button"
-						class="text-primary-700-300 w-fit text-xs underline"
+						class="text-primary-ink w-fit text-xs underline"
 						onclick={() =>
 							(wordingRow = {
 								option,
@@ -1493,7 +1482,7 @@
 
 			{#if option.prompt && editors}
 				{@const readOnly = option.prompt.readOnly}
-				<div class="bg-surface-50-950 mt-1 space-y-3 rounded-[10px] p-3">
+				<div class="bg-surface-50-950 mt-1 space-y-3 rounded-base p-3">
 					{#if readOnly}
 						<p class="text-surface-600-400 text-xs">
 							<Icons.Lock size={11} class="inline" />
@@ -1729,7 +1718,7 @@
 
 			{#if option.contextTemplate && editors}
 				{@const readOnly = option.contextTemplate.readOnly}
-				<div class="bg-surface-50-950 mt-1 space-y-3 rounded-[10px] p-3">
+				<div class="bg-surface-50-950 mt-1 space-y-3 rounded-base p-3">
 					{#if readOnly}
 						<p class="text-surface-600-400 text-xs">
 							<Icons.Lock size={11} class="inline" />
@@ -1870,7 +1859,7 @@
 
 			{#if option.variableTemplate && editors}
 				{@const readOnly = option.variableTemplate.readOnly}
-				<div class="bg-surface-50-950 mt-1 space-y-3 rounded-[10px] p-3">
+				<div class="bg-surface-50-950 mt-1 space-y-3 rounded-base p-3">
 					{#if readOnly}
 						<p class="text-surface-600-400 text-xs">
 							<Icons.Lock size={11} class="inline" />
@@ -1960,18 +1949,16 @@
 				     the seam, and the kinds that can go here — so an empty chain
 				     still says what could. -->
 				{#if option.flows}
-					<p class="text-surface-600-400 text-[11px] leading-snug">
+					<p class="text-surface-600-400 text-meta leading-snug">
 						{option.flows}
 					</p>
 				{/if}
 				{#if option.acceptsLabels?.length}
 					<div class="flex flex-wrap gap-1" aria-label="Script kinds accepted here">
 						{#each option.acceptsLabels as kind (kind)}
-							<span
-								class="preset-tonal-surface rounded-full px-1.5 py-0.5 text-[11px]"
-							>
+							<Badge size="sm">
 								{kind}
-							</span>
+							</Badge>
 						{/each}
 					</div>
 				{/if}
@@ -1995,10 +1982,10 @@
 				{/if}
 				{#each chain as entry, i (entry.id)}
 					<div
-						class="border-surface-200-700 flex items-center gap-1.5 rounded-lg border px-2 py-1"
+						class="border-surface-200-800 flex items-center gap-1.5 rounded-lg border px-2 py-1"
 					>
 						<span
-							class="text-surface-600-400 w-4 shrink-0 text-right font-mono text-[11px]"
+							class="text-surface-600-400 w-4 shrink-0 text-right font-mono text-meta"
 						>
 							{i + 1}
 						</span>
@@ -2014,27 +2001,22 @@
 								: entry.name}
 						</span>
 						{#if entry.missing}
-							<span
-								class="preset-tonal-error shrink-0 rounded-full px-1.5 py-0.5 text-[11px]"
-							>
+							<Badge tone="error" size="sm" class="shrink-0">
 								deleted
-							</span>
+							</Badge>
 						{:else}
 							{#if !entry.enabled}
 								<span
-									class="text-surface-600-400 shrink-0 text-[11px]"
+									class="text-surface-600-400 shrink-0 text-meta"
 									title="Disabled on the scripts page — keeps its place, does nothing."
 								>
 									off
 								</span>
 							{/if}
 							{#if entry.blastRadius}
-								<span
-									class="preset-tonal-warning shrink-0 rounded-full px-1.5 py-0.5 text-[11px]"
-									title="{entry.typeLabel} — what a script of this type is able to do"
-								>
+								<Badge tone="warning" size="sm" class="shrink-0" title="{entry.typeLabel} — what a script of this type is able to do">
 									{entry.blastRadius}
-								</span>
+								</Badge>
 							{/if}
 						{/if}
 						{#if !option.unplaced}
@@ -2108,7 +2090,7 @@
 					     run's connection carries join the same stop union, so
 					     the card shows the merged truth with provenance. -->
 					<div class="mt-1 flex flex-col gap-1">
-						<p class="text-surface-600-400 text-[11px]">
+						<p class="text-surface-600-400 text-meta">
 							<Icons.Plug size={11} class="inline" />
 							From connection
 							<strong>
@@ -2118,7 +2100,7 @@
 						</p>
 						{#each option.connectionScripts.entries as s (s.id)}
 							<div
-								class="border-surface-200-700 flex items-center gap-2 rounded-lg border border-dashed px-2 py-1"
+								class="border-surface-200-800 flex items-center gap-2 rounded-lg border border-dashed px-2 py-1"
 							>
 								<span
 									class="min-w-0 flex-1 truncate text-sm {s.enabled
@@ -2128,15 +2110,13 @@
 									{s.name}
 								</span>
 								{#if !s.enabled}
-									<span class="text-surface-600-400 text-[11px]">
+									<span class="text-surface-600-400 text-meta">
 										off
 									</span>
 								{/if}
-								<span
-									class="preset-tonal-surface shrink-0 rounded-full px-1.5 py-0.5 text-[11px]"
-								>
+								<Badge size="sm" class="shrink-0">
 									connection
-								</span>
+								</Badge>
 							</div>
 						{/each}
 					</div>
@@ -2370,7 +2350,7 @@
 								f.control !== "boolean" || row[f.key] !== false
 						)}
 						<div
-							class="border-surface-200-700 flex items-center gap-1.5 rounded-lg border px-2 py-1
+							class="border-surface-200-800 flex items-center gap-1.5 rounded-lg border px-2 py-1
 						{listDrag?.optionId === option.id && listDrag.from === i ? 'opacity-40' : ''}"
 							draggable="true"
 							role="listitem"
@@ -2389,7 +2369,7 @@
 							}}
 						>
 							<span
-								class="text-surface-600-400 w-4 shrink-0 cursor-grab text-right font-mono text-[11px]"
+								class="text-surface-600-400 w-4 shrink-0 cursor-grab text-right font-mono text-meta"
 								aria-hidden="true"
 							>
 								{i + 1}
@@ -2404,7 +2384,7 @@
 							{#each option.item?.fields ?? [] as field (field.key)}
 								{#if field.control === "boolean"}
 									<label
-										class="flex shrink-0 items-center gap-1 text-[11px]"
+										class="flex shrink-0 items-center gap-1 text-meta"
 										title={field.label}
 									>
 										<input
@@ -2616,7 +2596,7 @@
 	     tonal inset: a card boundary, never a smaller font (§3.3). -->
 	<section
 		class="flex min-w-0 flex-col gap-3 {headed
-			? 'bg-surface-50-950 rounded-[10px] p-3'
+			? 'bg-surface-50-950 rounded-base p-3'
 			: ''}"
 		data-settings-group={group.kind}
 		aria-labelledby={headed ? headingId(group.key) : undefined}
@@ -2638,7 +2618,7 @@
 			</header>
 		{/if}
 		{#if group.purpose}
-			<p class="text-surface-600-400 text-[13px]" data-group-purpose>
+			<p class="text-surface-600-400 text-chip" data-group-purpose>
 				{group.purpose}
 			</p>
 		{/if}
@@ -2688,7 +2668,7 @@
 				<div class="mt-2 flex flex-col gap-3">
 					{#each group.advanced as st (st.key)}
 						<fieldset
-							class="border-surface-200-800 flex min-w-0 flex-col gap-3 rounded-[10px] border p-3"
+							class="border-surface-200-800 flex min-w-0 flex-col gap-3 rounded-base border p-3"
 						>
 							<legend class="px-1 text-xs font-medium">
 								{st.heading}
@@ -2787,46 +2767,6 @@
 			{scopeNote}
 		</p>
 
-		{#if detail.configs.length}
-			<div class="panel-card mb-3 space-y-2 !p-3">
-				<p class="text-sm font-medium" aria-hidden="true">Configuration</p>
-				{#if detail.canSelectConfig}
-					<Select
-						label="Configuration"
-						labelHidden
-						class="w-full"
-						options={detail.configs.map((c) => ({
-							value: String(c.id),
-							label: `${c.isDefault ? "★ " : ""}${c.name}${
-								c.enabled ? "" : " (withdrawn)"
-							}`
-						}))}
-						value={detail.selectedConfig
-							? String(detail.selectedConfig.id)
-							: ""}
-						onValueChange={(v) => {
-							if (v) chooseConfig(v)
-						}}
-					/>
-				{:else if readOnlyBecause}
-					<!-- The session's choice, no longer changeable: the scope
-					     note above says why. -->
-					<p class="text-sm">
-						{detail.selectedConfig?.name ?? "—"}
-					</p>
-				{:else}
-					<!-- Not a disabled control: outside a session the selection is
-					     the instance's, and that one is the administrator's. -->
-					<p class="text-sm">
-						{detail.selectedConfig?.name ?? "—"}
-					</p>
-					<p class="text-surface-600-400 text-xs">
-						Chosen for this pub by an administrator. Open a session
-						to choose a different one there.
-					</p>
-				{/if}
-			</div>
-		{/if}
 	{/if}
 
 	{@render groupList()}
@@ -2843,7 +2783,7 @@
 {#snippet moreInPipelines()}
 	{#if isAdmin}
 		<a
-			class="text-primary-700-300 inline-flex min-h-11 items-center gap-1 self-start text-xs underline pointer-fine:min-h-0"
+			class="text-primary-ink inline-flex min-h-11 items-center gap-1 self-start text-xs underline pointer-fine:min-h-0"
 			href="/admin/pipelines/{encodeURIComponent(slug)}"
 		>
 			More settings in Admin › Pipelines
@@ -2915,7 +2855,7 @@
 		border-radius: 9999px;
 		background: var(--color-surface-500);
 		cursor: pointer;
-		transition: background-color 150ms;
+		transition: background-color var(--transition-duration-fast);
 	}
 	.group-switch::after {
 		content: "";
@@ -2926,7 +2866,7 @@
 		block-size: 1rem;
 		border-radius: 9999px;
 		background: var(--color-surface-50);
-		transition: transform 150ms;
+		transition: transform var(--transition-duration-base);
 	}
 	.group-switch:checked {
 		background: var(--color-primary-500);

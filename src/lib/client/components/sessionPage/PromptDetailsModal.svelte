@@ -43,7 +43,7 @@
 			class="fixed inset-0 z-50 flex items-center justify-center p-4"
 		>
 			<Dialog.Content
-				class="card bg-surface-100-900 border-surface-300-700 flex max-h-[90dvh] w-[70em] max-w-full flex-col space-y-4 border p-4 shadow-xl"
+				class="card bg-surface-100-900 border-surface-200-800 flex max-h-[90dvh] w-[70em] max-w-full flex-col space-y-4 border p-4 shadow-xl"
 			>
 				<header class="flex shrink-0 items-center justify-between">
 					<h2 class="h2">Prompt Details</h2>
@@ -84,7 +84,7 @@
 								class="flex items-center justify-between text-sm"
 							>
 								<span
-									class:text-error-500={detailsExceeded}
+									class:text-error-600-400={detailsExceeded}
 									class:text-success-500={!detailsExceeded}
 								>
 									{tokens.total.toLocaleString()} / {tokens.limit.toLocaleString()}

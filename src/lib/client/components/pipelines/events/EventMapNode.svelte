@@ -24,7 +24,7 @@
 	class="flex h-full w-full items-center gap-2 overflow-hidden rounded-md border px-2.5 transition-colors
 		{selected
 		? 'bg-surface-200-800 border-primary-500'
-		: 'bg-surface-50-950 border-surface-300-700'}
+		: 'bg-surface-50-950 border-surface-200-800'}
 		{clickable ? 'hover:border-primary-500/60 cursor-pointer' : 'cursor-default'}"
 	style={selected ? "box-shadow: inset 3px 0 0 var(--color-primary-500)" : undefined}
 	title={node.id}
@@ -40,8 +40,8 @@
 		{/if}
 	</span>
 	<span class="min-w-0 flex-1">
-		<span class="block truncate text-[13px] font-medium">{node.label}</span>
-		<span class="text-surface-600-400 flex items-center gap-1.5 text-[11px]">
+		<span class="block truncate text-chip font-medium">{node.label}</span>
+		<span class="text-surface-600-400 flex items-center gap-1.5 text-meta">
 			<span>{KIND_WORD[node.kind]}</span>
 			{#if node.kind === "event" && node.root}
 				<span aria-hidden="true">·</span>

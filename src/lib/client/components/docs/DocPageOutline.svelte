@@ -26,7 +26,7 @@
 		>
 			On this page
 		</p>
-		<ul class="border-surface-300-700 space-y-1 border-l">
+		<ul class="border-surface-200-800 space-y-1 border-l">
 			{#each entries as heading (heading.id)}
 				<li>
 					<a

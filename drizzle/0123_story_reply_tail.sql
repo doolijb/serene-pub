@@ -1,0 +1,3 @@
+-- Custom SQL migration file, put your code below! --
+-- 0123_story_reply_tail: no schema change. Its data upgrade (src/lib/server/db/dataUpgrades/0123_story_reply_tail.ts) joins this migration's transaction: Story's reply save, sprite steps and commit move back out of the reply junction's branches to one shared tail at the top-level keys (RF fix 3).
+-- Keep this text unique among the migration files: the ledger matches a row to its file by the file's sha256 alone.

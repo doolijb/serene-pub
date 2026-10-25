@@ -270,7 +270,7 @@
 						</div>
 
 						{#if mergeError}
-							<p class="text-error-500 text-xs" role="alert">
+							<p class="text-error-600-400 text-xs" role="alert">
 								{mergeError}
 							</p>
 						{/if}

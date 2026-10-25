@@ -167,7 +167,7 @@
 							{#each MODALITIES as m (m.shape)}
 								<label
 									class={[
-										"card flex cursor-pointer flex-col gap-0.5 rounded-[10px] p-3 text-sm",
+										"card flex cursor-pointer flex-col gap-0.5 rounded-base p-3 text-sm",
 										shape === m.shape
 											? "sidebar-row-active"
 											: "preset-tonal-surface"

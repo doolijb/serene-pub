@@ -24,6 +24,8 @@
 		/** The id of the sentence explaining the setting. */
 		describedBy?: string
 		disabled?: boolean
+		/** Each mode's words, when the picker is not a person's (a book's). */
+		wording?: Readonly<Record<LoreWriteMode, { label: string; description: string }>>
 		onValueChange: (mode: LoreWriteMode | null) => void
 	}
 
@@ -35,6 +37,7 @@
 		inheritDescription,
 		describedBy,
 		disabled = false,
+		wording = LORE_WRITE_MODE_CHOICES,
 		onValueChange
 	}: Props = $props()
 
@@ -42,7 +45,7 @@
 		...(inheritLabel
 			? [{ mode: null, label: inheritLabel, description: inheritDescription ?? "" }]
 			: []),
-		...LORE_WRITE_MODES.map((mode) => ({ mode, ...LORE_WRITE_MODE_CHOICES[mode] }))
+		...LORE_WRITE_MODES.map((mode) => ({ mode, ...wording[mode] }))
 	])
 </script>
 

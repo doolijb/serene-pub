@@ -1,4 +1,5 @@
 <script lang="ts">
+	import InlineError from "$lib/client/components/InlineError.svelte"
 	/**
 	 * Admin › Pipelines › Events › <event> (PLAN-turn-order §B2; note 37,
 	 * Django admin): one event's read-only **change view**. Fieldsets: the
@@ -98,7 +99,8 @@
 	let scopePresets = $state<Array<{ id: number; name: string; genreId: string }>>([])
 	let map = $state<Sockets.Pipelines.EventMap.Response["eventMap"] | null>(null)
 	let presets = $state<Sockets.SessionAdmin.PresetRow[]>([])
-	let configs = $state<Sockets.Pipelines.ConfigsIndex.Row[]>([])
+	/** Each pipeline's name, by slug — what the fieldsets print for a slug. */
+	let pipelineNames = $state<Map<string, string>>(new Map())
 	let loading = $state(true)
 	let error = $state<string | null>(null)
 	let notice = $state<string | null>(null)
@@ -165,8 +167,10 @@
 			adminInterest.requestWithInterest("sessionPresets:list", {}, (res) => {
 				presets = res.presets
 			}),
-			requestWithInterest("pipelines:configsIndex", {}, (res) => {
-				configs = res.configs
+			requestWithInterest("pipelines:list", {}, (res) => {
+				pipelineNames = new Map(
+					(res.pipelinesList ?? []).map((p: { slug: string; name: string }) => [p.slug, p.name])
+				)
 			})
 		]
 		return () => {
@@ -177,11 +181,7 @@
 	/* ── what the fieldsets show ─────────────────────────────────────── */
 
 	const genreName = (gid: string) => genres.find((g) => g.genreId === gid)?.name ?? gid
-	const specName = (slug: string) => configs.find((c) => c.specSlug === slug)?.specName ?? slug
-	const configName = (b: PresetBinding) =>
-		b.config == null
-			? "Shipped default"
-			: (configs.find((c) => c.id === b.config)?.name ?? `Configuration ${b.config}`)
+	const specName = (slug: string) => pipelineNames.get(slug) ?? slug
 
 	type GenreLine = { genreId: string; required: boolean; recordedBy?: string[] | "any" }
 	const genreLines = $derived<GenreLine[]>(
@@ -213,8 +213,7 @@
 	const bindingColumns: AdminChangelistColumn<PresetBinding>[] = [
 		{ key: "preset", label: "Preset", primary: true, text: (b) => b.presetName },
 		{ key: "genre", label: "Genre", text: (b) => genreName(b.genreId) },
-		{ key: "pipeline", label: "Pipeline", custom: true },
-		{ key: "config", label: "Configuration", text: configName }
+		{ key: "pipeline", label: "Pipeline", custom: true }
 	]
 
 	const neighbours = $derived(mapNeighbours(map, id))
@@ -264,7 +263,7 @@
 	</div>
 {:else if error && !events.length}
 	<div class="m-auto flex flex-col items-center gap-3 py-16 text-center">
-		<p class="text-error-600-400 text-sm" role="alert">{error}</p>
+		<InlineError>{error}</InlineError>
 		<a href="/admin/pipelines/events" class="btn btn-sm preset-tonal-surface">All events</a>
 	</div>
 {:else if !row}
@@ -284,7 +283,7 @@
 				<p class="text-surface-600-400 text-sm" role="status">{notice}</p>
 			{/if}
 			{#if error}
-				<p class="text-error-600-400 text-sm" role="alert">{error}</p>
+				<InlineError>{error}</InlineError>
 			{/if}
 		</AdminPageHeader>
 

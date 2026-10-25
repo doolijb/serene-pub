@@ -111,6 +111,26 @@ export async function offerMessage(db: Db, m: OfferedMessage): Promise<OfferOutc
 		const closed = await composerRefusal(db, m.sessionId, m.channel, m.userId)
 		if (closed) return { refused: `${closed} Your text was kept.` }
 	}
+	/**
+	 * 🚧 A channel for the owner alone (`audience: 'owner'`, Lair rewrite
+	 * D6): nobody else writes there — the Lair's Sanctum is the GM's table
+	 * with the Castellan, and a guest is never offered its composer.
+	 */
+	{
+		const { laneViewFor, laneViewAllows } = await import("$lib/server/channels/lanes")
+		const view = await laneViewFor(db, m.sessionId, m.userId)
+		if (view && !view.isOwner && view.hidden.size && !laneViewAllows(view, m.channel))
+			return { refused: "That channel is the session owner's alone. Your text was kept." }
+	}
+	/**
+	 * 🚧 A member's line is an interaction (PLAN-layering D7, R11, R21; lane
+	 * 6): stamped before the line lands, so the routines its turn wakes count
+	 * from it and a session's crons resume after a restart.
+	 */
+	{
+		const { noteInteraction } = await import("$lib/server/pipelines/routines/interaction")
+		await noteInteraction(db, m.sessionId, "line")
+	}
 	const { STANDARD_GENRE_ID } = await import(
 		"$lib/server/pipelines/entities/sessionGenres"
 	)

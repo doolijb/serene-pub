@@ -418,7 +418,7 @@
 				></div>
 				{#if failed}
 					<p
-						class="text-error-500 absolute inset-0 flex items-center justify-center p-4 text-center text-sm"
+						class="text-error-600-400 absolute inset-0 flex items-center justify-center p-4 text-center text-sm"
 					>
 						That image could not be loaded, so there is nothing to
 						crop.

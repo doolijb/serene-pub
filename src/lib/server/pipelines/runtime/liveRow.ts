@@ -61,6 +61,7 @@ import { joinContinuation } from "$lib/server/messages/continuation"
 import type { AuthenticatedSocket } from "$lib/server/sockets/auth"
 import { setLiveRow } from "$lib/server/pipelines/runtime/runRegistry"
 import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
+import { MessageStreamer } from "$lib/server/rulesets/replies"
 
 // db is the global Db — see db/types.d.ts
 
@@ -94,6 +95,11 @@ export interface LiveRowOptions {
 	 * empty streams nothing: the row fills when the write lands.
 	 */
 	streamingNodes?: ReadonlySet<string>
+	/**
+	 * 🚧 Of those, the JSON reply steps (`messageStreamSteps`, D7): their
+	 * stream is a JSON answer, and only its `message` reaches the row.
+	 */
+	messageStreams?: ReadonlySet<string>
 }
 
 /** The callbacks an oracle's dispatch streams into, when this call streams. */
@@ -361,8 +367,12 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 				return undefined
 			if (id === undefined) id = row
 			onPhase = attachOpts?.onPhase
+			// 🚧 D7: a JSON reply streams its `message` alone — the words, never the document.
+			const words = opts.messageStreams?.has(nodeKey) ? new MessageStreamer() : null
 			return {
-				onChunk: (chunk) => {
+				onChunk: (raw) => {
+					const chunk = words ? words.push(raw) : raw
+					if (!chunk) return
 					streamed += chunk
 					const now = Date.now()
 					if (now - lastPersistedAt < STREAM_PERSIST_THROTTLE_MS)
@@ -482,7 +492,8 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 						sessionId,
 						userId: opts.userId,
 						event: "core:event/message-completed@1",
-						payload: { sessionId, messageId: released.id, cause },
+						// 🚧 A run's live row, stopped: still a reply (`liveRow`).
+						payload: { sessionId, messageId: released.id, liveRow: true, cause },
 						io
 					})
 				}

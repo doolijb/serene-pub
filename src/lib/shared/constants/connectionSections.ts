@@ -153,18 +153,26 @@ const outputSide = (id: string): string | null => {
 	return at < 0 ? null : id.slice(at + 2)
 }
 
-/** Each section's modality, keyed by what its star transform produces. */
-const MODALITY_FOR_OUTPUT: Readonly<Record<string, string>> =
-	Object.fromEntries(
+/**
+ * Each section's modality, keyed by what its star transform produces — and
+ * 🚧 speech (O3, 2026-10-21): `…->audio` is the `tts` modality (NOMENCLATURE
+ * §10), which has no section of its own; before the sets it mapped to NO
+ * modality, so a model could not be said to speak at all.
+ */
+const MODALITY_FOR_OUTPUT: Readonly<Record<string, string>> = {
+	audio: "tts",
+	...Object.fromEntries(
 		CONNECTION_SECTIONS.map((s) => [outputSide(s.starCapability), s.modality])
 	)
+}
 
 /**
  * Which modality a transform belongs to, read off what it PRODUCES: every
  * `…->text` is text generation (vision and documents included), every
- * `…->image` is image generation. Null for a feature (`tools`, `streaming`),
- * which has no side and qualifies whatever transform it rides on, and for an
- * output no section owns (`text->audio`).
+ * `…->image` is image generation, every `…->audio` speech (`tts`). Null for a
+ * feature (`tools`, `streaming`), which has no side and qualifies whatever
+ * transform it rides on, and for an output nothing owns (a multi-kind side
+ * such as `text+audio`, judged by a model's sets instead — `modelKinds.ts`).
  *
  * The rule a connection model's own modality is judged by — see
  * `capabilityGuard.modelModalityAllows`.

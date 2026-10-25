@@ -43,8 +43,8 @@
 		headingLevel?: 2 | 3
 		/**
 		 * @deprecated The title has one size (15px, set here). The class is
-		 * still appended, but a size in it loses to `text-[15px]`, which
-		 * Tailwind emits after `text-sm`. Pass nothing.
+		 * still appended, and a size in it now wins: `text-lead` is an app.css
+		 * utility, which Tailwind emits before its own `text-sm`. Pass nothing.
 		 * The view phase removes them; do not add new uses.
 		 */
 		titleClass?: string
@@ -64,6 +64,9 @@
 		actionsLabel?: string
 		/** Anything that belongs directly beneath the title row. */
 		subtitle?: Snippet
+		/** A small picture before the title, after the back button — a
+		 *  lorebook's cover image. Never an action. */
+		leading?: Snippet
 	}
 
 	let {
@@ -75,7 +78,8 @@
 		primaryAction,
 		menuItems,
 		actionsLabel,
-		subtitle
+		subtitle,
+		leading
 	}: Props = $props()
 
 	const tag = $derived(`h${headingLevel}` as "h2" | "h3")
@@ -96,6 +100,7 @@
 				<Icons.ChevronLeft size={16} aria-hidden="true" />
 			</button>
 		{/if}
+		{@render leading?.()}
 		<!-- data-panel-title is the hook the title-width assertion selects on.
 		     Selecting on it rather than `aside h2` avoids flagging
 		     legitimately-narrow headings inside cards and list items, and
@@ -107,7 +112,7 @@
 		<svelte:element
 			this={tag}
 			data-panel-title
-			class="min-w-0 flex-1 truncate [font-family:var(--typo-heading--font-family)] text-[15px] leading-tight font-semibold {titleClass}"
+			class="min-w-0 flex-1 truncate [font-family:var(--typo-heading--font-family)] text-lead leading-tight font-semibold {titleClass}"
 		>
 			{title}
 		</svelte:element>
